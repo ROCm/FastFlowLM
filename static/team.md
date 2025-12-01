@@ -9,7 +9,9 @@ sections:
     title: "Architecture + systems + community"
     body: |
       FastFlowLM is a collaboration between academics who design NPUs, engineers who ship developer tooling,
-      and community maintainers who support thousands of builders.
+      and community maintainers who support thousands of builders. The core group includes four PhDs and three
+      B.S. graduates in Electrical and Computer Engineering with deep experience in LLM internals, parallel
+      processing, and architecture-specific software optimization.
     ctas:
       - label: "Contact us"
         href: "mailto:info@fastflowlm.com"
@@ -47,13 +49,14 @@ sections:
         role: "Distinguished Engineering Professor · University of Rhode Island"
         image: "/assets/kenqingyang.png"
         bio: |
-          Specializes in computer architecture, memory systems, and high-performance storage.
-          Previously founded VeloBit (acq. Western Digital). Advises on roadmap and performance tuning.
+          Over 30 years experiences in computer architecture and parallel processing, a serial entrepreneur successfully built 4 high tech startups based on his research results including VeloBit (acq. Western Digital) and Dapustor (currently in IPO process). 
         links:
           - label: "URI profile"
             url: "https://www.ele.uri.edu/~qyang/"
           - label: "VeloBit"
             url: "https://web.uri.edu/hpcl/from-innovation-to-successful-company/"
+          - label: "DapuStor"
+            url: "https://en.dapustor.com/"
       - name: "Zhenyu (Alfred) Xu"
         role: "Research Assistant Professor · Clemson University"
         image: "/assets/zhenyu.png"

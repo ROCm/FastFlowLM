@@ -31,41 +31,20 @@ sections:
   - type: two_column
     variant: alt
     left:
-      kicker: "Upcoming features"
-      title: "In development"
-      body: |
-        Our roadmap is shaped by community feedback and technical requirements. Check GitHub issues and discussions for the latest priorities.
-      items:
-        - heading: "Enhanced quantization"
-          body: "Support for additional quantization formats and automatic model optimization."
-        - heading: "Better observability"
-          body: "Improved telemetry, profiling tools, and performance dashboards."
-        - heading: "Extended API support"
-          body: "Additional API endpoints and improved compatibility with existing tooling."
-    right:
-      title: "Have ideas?"
-      body: |
-        We welcome community input on features and improvements. Share your ideas and feedback through GitHub discussions or Discord.
-      ctas:
-        - label: "GitHub Discussions"
-          href: "https://github.com/FastFlowLM/FastFlowLM/discussions"
-          style: primary
-          external: true
-        - label: "Open an issue"
-          href: "https://github.com/FastFlowLM/FastFlowLM/issues/new"
-          style: ghost
-          external: true
-
-  - type: two_column
-    left:
-      kicker: "Long-term vision"
+      kicker: "Roadmap"
       title: "Future directions"
-      body: |
-        FastFlowLM aims to be the go-to runtime for Ryzen™ AI NPUs, with comprehensive model support, excellent performance, and a thriving developer ecosystem.
+      body: ""
+      items:
+        - heading: "Comprehensive NPU Support"
+          body: "FastFlowLM aims to be the go-to runtime for Ryzen™ AI NPUs, offering broad model compatibility, top-tier performance, and a robust developer ecosystem."
+        - heading: "Expanding to New Architectures"
+          body: "We are actively extending platform support to additional NPU architectures, including Qualcomm, Intel, Broadcom, and more."
+        - heading: "Inference at Scale"
+          body: "Building advanced inference optimization software designed to scale seamlessly across multiple chips, cards, and to enable rack-level parallelism."
     right:
       title: "Get involved"
       body: |
-        Roadmap priorities are discussed openly in our community. Join the conversation to help shape FastFlowLM's future.
+        Roadmap priorities are discussed openly in our community, and we are actively seeking strategic partners and hardware collaborators to accelerate this work. Join the conversation to help shape FastFlowLM's future.
       ctas:
         - label: "Join Discord"
           href: "https://discord.gg/z24t23HsHF?utm_source=site"

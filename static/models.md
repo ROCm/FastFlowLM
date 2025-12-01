@@ -10,6 +10,8 @@ sections:
     body: |
       FastFlowLM curates the most requested families and publishes tuned manifests under `flm pull <model>`.
       We validate every build on Ryzen™ AI laptops and provide matching markdown cards in `docs/models`.
+      The catalog already covers 22 models spanning Gemma-3 (Vision), Qwen3, GPT-OSS 20B (MoE), DeepSeek-R1, Whisper
+      (Audio), MedGemma, and other leading open families.
     ctas:
       - label: "View model docs"
         href: "/docs/models/"

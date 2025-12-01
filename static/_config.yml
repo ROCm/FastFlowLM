@@ -29,10 +29,10 @@ defaults:
       toc: true
 
 nav_links:
-  - label: Docs
-    url: "/docs/"
   - label: Technology
     children:
+      - label: How It Works
+        url: "/how-it-works/"
       - label: Models
         url: "/models/"
       - label: Benchmarks
@@ -41,6 +41,8 @@ nav_links:
         url: "/demos/"
       - label: Test Drive
         url: "/test-drive/"
+  - label: Testimonials
+    url: "/testimonials/"
   - label: Company
     children:
       - label: Team
@@ -51,6 +53,8 @@ nav_links:
         url: "/news/"
       - label: Roadmap
         url: "/roadmap/"
+  - label: Docs
+    url: "/docs/"
 
 cta_links:
   - label: GitHub

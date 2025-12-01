@@ -7,9 +7,9 @@ sections:
   - type: hero
     id: top
     kicker: "NPU-first runtime"
-    title: "Run frontier LLMs directly on Ryzen™ AI NPUs"
+    title: "The fastest, most efficient LLM inference on NPUs"
     body: |
-      FastFlowLM delivers an Ollama-style developer experience that is tuned for AMD’s XDNA2 accelerators:
+      FastFlowLM delivers an Ollama-style developer experience tailored to tile-structured NPU accelerators:
       install in seconds, stream tokens instantly, and sustain up to 256k context windows with far better
       efficiency than GPU-first stacks.
     ctas:
@@ -71,6 +71,40 @@ sections:
                 - "Audio"
                 - "Embeddings"
                 - "MoE"
+
+  - type: media
+    variant: alt
+    kicker: "GPT-OSS on NPU"
+    title: "GPT-OSS-20B streaming fully on the Ryzen™ AI NPU"
+    media:
+      src: "/assets/gpt-oss-demo.gif"
+      alt: "GPT-OSS 20B running locally on the Ryzen AI NPU"
+      kicker: "GPT-OSS on NPU"
+      body: |
+        Runs GPT-OSS-20B at 19 TPS (token per second) with 10× GPU efficiency — the fastest MoE on any NPU.
+
+
+  - type: media
+    variant: alt
+    kicker: "Whisper on-device"
+    title: "Transcribe and summarize long-form audio locally"
+    media:
+      src: "/assets/cramer2.gif"
+      alt: "Whisper transcription and summarization demo"
+      kicker: "Whisper on-device"
+      body: |
+        Transcribe hours of audio locally — FLM runs OpenAI Whisper fully on the NPU — fast, private, and efficient.
+
+  - type: media
+    variant: alt
+    kicker: "Llama 3.2 on WebUI"
+    title: "Interact with Llama 3.2-3B through the FastFlowLM WebUI"
+    media:
+      src: "/assets/llama-demo.gif"
+      alt: "Llama 3.2 chat demo running in the FastFlowLM WebUI"
+      kicker: "Llama 3.2 on WebUI"
+      body: |
+        Runs Meta Llama 3.2-3B at 28 TPS with over 10× GPU efficiency — the fastest on any NPU.
 
   - type: two_column
     id: install

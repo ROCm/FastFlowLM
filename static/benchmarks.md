@@ -10,6 +10,10 @@ sections:
     body: |
       Every FastFlowLM release is validated on Strix Point and Halo reference designs.
       We publish the results in `docs/benchmarks` so teams can compare apples-to-apples.
+      
+      The runtime extends AMD’s native 2K context limit to 256K tokens for long-context LLMs and VLMs and, in power
+      efficiency tests, consumes 67.2× less power than the integrated GPU and 222.9× less power than the CPU on the same
+      chip while holding higher throughput.
     ctas:
       - label: "View benchmark docs"
         href: "/docs/benchmarks/"
