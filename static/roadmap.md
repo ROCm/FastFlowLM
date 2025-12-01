@@ -8,7 +8,8 @@ sections:
     kicker: "Roadmap"
     title: "What's coming next"
     body: |
-      FastFlowLM is actively developed with a focus on performance, developer experience, and expanding model support.
+      Powered by unparalleled expertise in hardware-accelerated parallel processing and deep knowledge of LLM internals, FastFlowLM is advancing the frontier of on-device AI.
+
     ctas:
       - label: "View on GitHub"
         href: "https://github.com/FastFlowLM/FastFlowLM"

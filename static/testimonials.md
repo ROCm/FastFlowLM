@@ -44,7 +44,7 @@ description: "What developers and partners are saying about FastFlowLM on NPU-fi
           <h3 class="testimonial-card__title">Feedback from AMD AI engineering leaders</h3>
         </div>
         <blockquote class="testimonial-card__quote">
-          “Getting other assistants running well on our AIE/NPU is a difficult beast. FastFlowLM’s kernels and model implementations deliver impressive performance numbers.”
+          “We’re interested in FLM. I spent considerable effort in getting Copilot up on our AIE/NPU and it is a difficult beast. Your kernels and model implementations appear to be closed source but your perf numbers seem impressive.”
         </blockquote>
         <ul class="testimonial-card__bullets">
           <li><strong>Kernel fidelity:</strong> Tile-optimized operators map directly to AMD’s AIE architecture.</li>
@@ -52,7 +52,7 @@ description: "What developers and partners are saying about FastFlowLM on NPU-fi
           <li><strong>Confidence to ship:</strong> AMD’s own field teams reference FastFlowLM in partner enablement sessions.</li>
         </ul>
         <div class="testimonial-card__source">
-          <span class="testimonial-card__name">Senior AMD AI engineering leader</span>
+          <span class="testimonial-card__name">Senior AMD AI team leaders</span>
           <span class="testimonial-card__role">Ryzen™ AI Architecture (AIE/NPU)</span>
         </div>
       </article>
@@ -65,9 +65,12 @@ description: "What developers and partners are saying about FastFlowLM on NPU-fi
         <blockquote class="testimonial-card__quote">
           “Real-time NPU inference is not just possible, but practical for everyday users.”
         </blockquote>
+        <blockquote class="testimonial-card__quote">
+          “Gaming? No time for that. How about running Llama3.1 8B on the AMD Ryzen AI Z2 Extreme NPU in the ROG Xbox Ally X Via FastFlowLM instead?" ”
+        </blockquote>        
         <ul class="testimonial-card__bullets">
-          <li><strong>Llama 3.1 8B:</strong> Demonstrated on a handheld AMD Ryzen™ AI device with steady token streaming.</li>
-          <li><strong>Thermal headroom:</strong> Runs stay under 10 W, extending battery life versus GPU-bound stacks.</li>
+          <li><strong>Llama 3.2:3B:</strong> Demonstrated on an AMD Ryzen™ AI device with steady token streaming.</li>
+          <li><strong>Thermal headroom:</strong> Runs stay under 2W, extending battery life versus GPU-bound stacks.</li>
           <li><strong>Agent workflows:</strong> Deterministic latency keeps step-by-step chains responsive in demos.</li>
         </ul>
         <div class="testimonial-card__source">
