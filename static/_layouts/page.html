@@ -1,0 +1,16 @@
+---
+layout: default
+---
+
+<div class="page-shell">
+  <div class="page__content">
+    {% if page.sections %}
+      {% for section in page.sections %}
+        {% include sections/{{ section.type }}.html section=section %}
+      {% endfor %}
+    {% else %}
+      {{ content }}
+    {% endif %}
+  </div>
+</div>
+

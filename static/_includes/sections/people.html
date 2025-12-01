@@ -1,0 +1,56 @@
+<section{% if section.id %} id="{{ section.id }}"{% endif %} class="section{% if section.variant %} section--{{ section.variant }}{% endif %}">
+  <div class="section__inner">
+    {% if section.kicker or section.title or section.body %}
+      <div class="section-header">
+        {% if section.kicker %}
+          <p class="kicker">{{ section.kicker }}</p>
+        {% endif %}
+        {% if section.title %}
+          <h2 class="headline-md">{{ section.title }}</h2>
+        {% endif %}
+        {% if section.body %}
+          <div class="copy-md">
+            {{ section.body | markdownify }}
+          </div>
+        {% endif %}
+      </div>
+    {% endif %}
+
+    {% if section.people %}
+      <div class="person-grid">
+        {% for person in section.people %}
+          <article class="person-card">
+            {% if person.image %}
+              <img src="{% if person.image contains '://' %}{{ person.image }}{% else %}{{ person.image | relative_url }}{% endif %}"
+                alt="{{ person.name | default: 'Team member' }}">
+            {% endif %}
+            {% if person.name %}
+              <h3>{{ person.name }}</h3>
+            {% endif %}
+            {% if person.role %}
+              <p class="person-role">{{ person.role }}</p>
+            {% endif %}
+            {% if person.bio %}
+              <p class="person-bio">
+                {{ person.bio }}
+              </p>
+            {% endif %}
+            {% if person.links %}
+              <div class="pill-list">
+                {% for link in person.links %}
+                  {% assign link_label = link.label | default: link.title | default: link.url %}
+                  <a class="pill-list__item"
+                    href="{% if link.url contains '://' %}{{ link.url }}{% else %}{{ link.url | relative_url }}{% endif %}"
+                    {% if link.external != false %}target="_blank" rel="noreferrer"{% endif %}>
+                    {{ link_label }}
+                  </a>
+                {% endfor %}
+              </div>
+            {% endif %}
+          </article>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </div>
+</section>
+

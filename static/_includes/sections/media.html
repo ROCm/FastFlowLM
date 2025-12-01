@@ -1,0 +1,65 @@
+<section{% if section.id %} id="{{ section.id }}"{% endif %} class="section{% if section.variant %} section--{{ section.variant }}{% endif %}">
+  <div class="section__inner">
+    {% if section.kicker or section.title or section.body %}
+      <div class="section-header">
+        {% if section.kicker %}
+          <p class="kicker">{{ section.kicker }}</p>
+        {% endif %}
+        {% if section.title %}
+          <h2 class="headline-md">{{ section.title }}</h2>
+        {% endif %}
+        {% if section.body %}
+          <div class="copy-md">
+            {{ section.body | markdownify }}
+          </div>
+        {% endif %}
+      </div>
+    {% endif %}
+
+    <article class="demo-panel">
+      {% if section.media and section.media.src %}
+        <div class="demo-panel__media">
+          <img src="{% if section.media.src contains '://' %}{{ section.media.src }}{% else %}{{ section.media.src | relative_url }}{% endif %}"
+            alt="{{ section.media.alt | default: section.title | default: 'Demo preview' }}" loading="lazy" />
+        </div>
+      {% endif %}
+
+      <div class="demo-panel__meta">
+        {% if section.media and section.media.kicker %}
+          <p class="kicker">{{ section.media.kicker }}</p>
+        {% endif %}
+
+        {% if section.media and section.media.title %}
+          <h3 class="headline-sm">{{ section.media.title }}</h3>
+        {% endif %}
+
+        {% if section.media and section.media.body %}
+          <div class="copy-md">
+            {{ section.media.body | markdownify }}
+          </div>
+        {% endif %}
+
+        {% if section.media and section.media.items %}
+          <ul class="feature-list">
+            {% for item in section.media.items %}
+              <li class="feature-list__item">
+                <span class="feature-list__bullet"></span>
+                <div>
+                  {% if item.heading %}
+                    <strong>{{ item.heading }}</strong>
+                  {% endif %}
+                  {% if item.body %}
+                    <div class="copy-md">
+                      {{ item.body | markdownify }}
+                    </div>
+                  {% endif %}
+                </div>
+              </li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+      </div>
+    </article>
+  </div>
+</section>
+

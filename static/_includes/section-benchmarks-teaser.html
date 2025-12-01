@@ -1,0 +1,48 @@
+<section class="section section--alt" id="benchmarks">
+    <div class="section__inner section-grid">
+        <div class="section-block">
+            <p class="kicker">Benchmarks</p>
+            <h2 class="headline-md">Proof on silicon, not slides</h2>
+            <p class="copy-md">
+                FastFlowLM is tuned on real Ryzen™ AI hardware with synthetic and application-level workloads.
+                Expect steady 40–80 tok/s on 7B models at < 10 W, plus deterministic latency for agentic chains. </p>
+                    <ul class="feature-list">
+                        <li class="feature-list__item">
+                            <span class="feature-list__bullet"></span>
+                            <div>
+                                <strong>Full-stack telemetry</strong>
+                                <p>Counters for NPU, CPU, and memory let you see exactly where cycles go.</p>
+                            </div>
+                        </li>
+                        <li class="feature-list__item">
+                            <span class="feature-list__bullet"></span>
+                            <div>
+                                <strong>Scenario-driven suites</strong>
+                                <p>Instruction tuning, RAG, chat, and multimodal tests mirror real workloads.</p>
+                            </div>
+                        </li>
+                    </ul>
+                    <div class="btn-row">
+                        <a class="btn btn--ghost" href="{{ '/benchmarks/' | relative_url }}">Benchmark details</a>
+                        <a class="btn btn--ghost" href="{{ '/docs/benchmarks/' | relative_url }}">View raw results</a>
+                    </div>
+        </div>
+        <div class="section-block section-block--panel">
+            <div class="metric-card">
+                <p class="metric-card__label">Llama3.2 3B @ 4-bit</p>
+                <p class="metric-card__value">72 tok/s</p>
+                <p class="metric-card__desc">Ryzen™ AI 9 HX 370 · 8 ms median latency</p>
+            </div>
+            <div class="metric-card">
+                <p class="metric-card__label">Gemma 3 4B Vision</p>
+                <p class="metric-card__value">18 fps</p>
+                <p class="metric-card__desc">Vision + text pipeline on XDNA2 with shared memory.</p>
+            </div>
+            <div class="metric-card">
+                <p class="metric-card__label">Power draw</p>
+                <p class="metric-card__value">9.6 W</p>
+                <p class="metric-card__desc">Full assistant stack vs ~45 W GPU baseline.</p>
+            </div>
+        </div>
+    </div>
+</section>

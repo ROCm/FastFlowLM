@@ -1,0 +1,58 @@
+<section class="section section--hero" id="top">
+  <div class="section__inner section-grid">
+    <div class="section-block section-block--hero">
+      <p class="kicker">NPU-first runtime</p>
+      <h1 class="headline-xl">
+        Run frontier LLMs directly on Ryzen™ AI NPUs
+      </h1>
+      <p class="copy-lg">
+        FastFlowLM delivers an Ollama-style developer experience that is tuned for AMD’s XDNA2 accelerators:
+        install in seconds, stream tokens instantly, and sustain up to 256k context windows with 10× better
+        efficiency than GPU-first stacks.
+      </p>
+      <div class="btn-row">
+        <a class="btn btn--primary" href="https://github.com/FastFlowLM/FastFlowLM/releases/latest/download/flm-setup.exe" target="_blank" rel="noreferrer">Download FastFlowLM</a>
+        <a class="btn btn--ghost" href="https://github.com/FastFlowLM/FastFlowLM" target="_blank"
+          rel="noreferrer">GitHub</a>
+      </div>
+      <ul class="stat-list">
+        <li>
+          <p class="stat-list__label">Runtime size</p>
+          <p class="stat-list__value">~16 MB</p>
+        </li>
+        <li>
+          <p class="stat-list__label">Context</p>
+          <p class="stat-list__value">Up to 256k tokens</p>
+        </li>
+        <li>
+          <p class="stat-list__label">Supported chips</p>
+          <p class="stat-list__value">Ryzen™ AI (Strix, Halo, Kraken)</p>
+        </li>
+      </ul>
+    </div>
+    <div class="section-block section-block--panel">
+      <div class="code-card">
+        <div class="code-card__header">
+          <span class="code-card__dot"></span>
+          <span class="code-card__dot"></span>
+          <span class="code-card__dot"></span>
+          <span class="code-card__title">fastflow.ps1</span>
+        </div>
+        <pre><code>Invoke-WebRequest https://github.com/FastFlowLM/FastFlowLM/releases/latest/download/flm-setup.exe `
+  -OutFile flm-setup.exe
+Start-Process .\flm-setup.exe -Wait
+
+flm pull llama3.2:1b
+flm run llama3.2:1b
+flm serve gemma3:4b --vision</code></pre>
+      </div>
+      <div class="pill-list">
+        <span class="pill-list__item">LLMs + VLMs</span>
+        <span class="pill-list__item">Embeddings</span>
+        <span class="pill-list__item">Audio + Whisper</span>
+        <span class="pill-list__item">Agentic APIs</span>
+      </div>
+    </div>
+  </div>
+</section>
+

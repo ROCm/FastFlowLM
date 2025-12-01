@@ -1,0 +1,72 @@
+<section{% if section.id %} id="{{ section.id }}" {% endif %}
+    class="section{% if section.variant %} section--{{ section.variant }}{% endif %}">
+    <div class="section__inner">
+        {% if section.kicker or section.title or section.body %}
+        <div class="section-header">
+            {% if section.kicker %}
+            <p class="kicker">{{ section.kicker }}</p>
+            {% endif %}
+            {% if section.title %}
+            <h2 class="headline-md">{{ section.title }}</h2>
+            {% endif %}
+            {% if section.body %}
+            <div class="copy-md">
+                {{ section.body | markdownify }}
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        {% if section.cards %}
+        <div class="card-grid">
+            {% for card in section.cards %}
+            <article class="card">
+                {% if card.label %}
+                <p class="card__label">{{ card.label }}</p>
+                {% endif %}
+                {% if card.title %}
+                {% if card.href %}
+                <h3>
+                    <a href="{% if card.href contains '://' %}{{ card.href }}{% else %}{{ card.href | relative_url }}{% endif %}"
+                        {% if card.external %}target="_blank" rel="noreferrer" {% endif %}>
+                        {{ card.title }}
+                    </a>
+                </h3>
+                {% else %}
+                <h3>{{ card.title }}</h3>
+                {% endif %}
+                {% endif %}
+                {% if card.body %}
+                <div class="copy-md">
+                    {{ card.body | markdownify }}
+                </div>
+                {% endif %}
+                {% if card.ctas %}
+                <div class="btn-row">
+                    {% for cta in card.ctas %}
+                    <a class="btn {% if cta.style == 'primary' %}btn--primary{% else %}btn--ghost{% endif %}"
+                        href="{% if cta.href contains '://' or cta.external %}{{ cta.href }}{% else %}{{ cta.href | relative_url }}{% endif %}"
+                        {% if cta.external %}target="_blank" rel="noreferrer" {% endif %}>
+                        {{ cta.label }}
+                    </a>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </article>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if section.ctas %}
+        <div class="btn-row">
+            {% for cta in section.ctas %}
+            <a class="btn {% if cta.style == 'primary' %}btn--primary{% else %}btn--ghost{% endif %}"
+                href="{% if cta.href contains '://' or cta.external %}{{ cta.href }}{% else %}{{ cta.href | relative_url }}{% endif %}"
+                {% if cta.external %}target="_blank" rel="noreferrer" {% endif %}>
+                {{ cta.label }}
+            </a>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+    </section>

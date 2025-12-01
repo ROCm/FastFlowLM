@@ -1,0 +1,268 @@
+<section{% if section.id %} id="{{ section.id }}" {% endif %}
+    class="section{% if section.variant %} section--{{ section.variant }}{% else %} section--hero{% endif %}">
+    <div class="section__inner{% if section.layout == 'grid' or section.right %} section-grid{% endif %}">
+        <div class="section-block section-block--hero">
+            {% if section.kicker %}
+            <p class="kicker">{{ section.kicker }}</p>
+            {% endif %}
+
+            {% if section.title %}
+            <h1 class="headline-xl">{{ section.title }}</h1>
+            {% endif %}
+
+            {% if section.body %}
+            <div class="copy-lg">
+                {{ section.body | markdownify }}
+            </div>
+            {% endif %}
+
+            {% if section.ctas %}
+            <div class="btn-row">
+                {% for cta in section.ctas %}
+                <a class="btn {% if cta.style == 'primary' %}btn--primary{% else %}btn--ghost{% endif %}"
+                    href="{% if cta.href contains '://' or cta.external %}{{ cta.href }}{% else %}{{ cta.href | relative_url }}{% endif %}"
+                    {% if cta.external %}target="_blank" rel="noreferrer" {% endif %}>
+                    {{ cta.label }}
+                </a>
+                {% endfor %}
+            </div>
+            {% endif %}
+            {% if section.stats %}
+            <ul class="stat-list">
+                {% for stat in section.stats %}
+                <li>
+                    {% if stat.label %}
+                    <p class="stat-list__label">{{ stat.label }}</p>
+                    {% endif %}
+                    {% if stat.value %}
+                    <p class="stat-list__value">{{ stat.value }}</p>
+                    {% endif %}
+                    {% if stat.body %}
+                    <p class="copy-md">{{ stat.body }}</p>
+                    {% endif %}
+                </li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+
+            {% if section.pills %}
+            <div class="pill-list">
+                {% for pill in section.pills %}
+                {% assign pill_label = pill.label | default: pill %}
+                {% assign pill_href = pill.href %}
+                {% if pill_href %}
+                <a class="pill-list__item"
+                    href="{% if pill_href contains '://' %}{{ pill_href }}{% else %}{{ pill_href | relative_url }}{% endif %}"
+                    {% if pill.external %}target="_blank" rel="noreferrer" {% endif %}>
+                    {{ pill_label }}
+                </a>
+                {% else %}
+                <span class="pill-list__item">{{ pill_label }}</span>
+                {% endif %}
+                {% endfor %}
+            </div>
+            {% endif %}
+        </div>
+
+        {% if section.right %}
+        {% if section.right.carousel %}
+        <div class="hero-carousel-wrapper">
+            <div class="hero-carousel">
+                <div class="carousel-container">
+                    <div class="carousel-track" id="carouselTrack">
+                        {% for slide in section.right.carousel.slides %}
+                        <div class="carousel-slide" data-slide-index="{{ forloop.index0 }}"
+                            data-title="{{ slide.title | escape }}" data-description="{{ slide.description | escape }}">
+                            <div class="carousel-slide-content">
+                                {% if slide.visual %}
+                                <div class="carousel-slide-visual">
+                                    {% if slide.visual.type == "npu_orbit" %}
+                                    <div class="npu-orbit">
+                                        <div class="npu-core">
+                                            <div class="npu-core-glow"></div>
+                                            <div class="npu-core-chip">
+                                                <span class="chip-title">{{ slide.visual.title | default: "Ryzen™ AI"
+                                                    }}</span>
+                                                <span class="chip-subtitle">{{ slide.visual.subtitle | default:
+                                                    "FastFlowLM Runtime" }}</span>
+                                                {% if slide.visual.metrics %}
+                                                <div class="chip-metrics">
+                                                    {% for metric in slide.visual.metrics %}
+                                                    <span>{{ metric }}</span>
+                                                    {% endfor %}
+                                                </div>
+                                                {% endif %}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {% elsif slide.visual.type == "code" %}
+                                    <div class="code-snippet" style="max-width: 100%; width: 100%;">
+                                        <div class="code-header">
+                                            <span class="code-dot code-dot-red"></span>
+                                            <span class="code-dot code-dot-amber"></span>
+                                            <span class="code-dot code-dot-green"></span>
+                                            <span class="code-title">{{ slide.visual.title | default: "PowerShell"
+                                                }}</span>
+                                        </div>
+                                        <pre><code>{{ slide.visual.content | strip | escape }}</code></pre>
+                                    </div>
+                                    {% elsif slide.visual.type == "metrics" %}
+                                    <div
+                                        style="gap: 20px; flex-direction: row; flex-wrap: wrap; justify-content: center; display: flex;">
+                                        {% for metric in slide.visual.metrics %}
+                                        <div
+                                            style="text-align: center; padding: 24px; background: rgba(255, 255, 255, 0.02); border-radius: 20px; border: 1px solid var(--border); min-width: 140px;">
+                                            <div
+                                                style="font-size: 2.2rem; font-weight: 700; color: var(--accent); margin-bottom: 8px;">
+                                                {{ metric.value }}</div>
+                                            <div style="font-size: 0.85rem; color: var(--text-muted);">{{
+                                                metric.label }}</div>
+                                        </div>
+                                        {% endfor %}
+                                    </div>
+                                    {% elsif slide.visual.type == "pills" %}
+                                    <div
+                                        style="gap: 16px; flex-direction: row; flex-wrap: wrap; justify-content: center; align-items: center; display: flex;">
+                                        {% for pill in slide.visual.pills %}
+                                        <div
+                                            style="padding: 20px 28px; background: rgba(111, 250, 207, 0.1); border-radius: 16px; border: 1px solid var(--border);">
+                                            <div style="font-size: 1.1rem; font-weight: 600; color: var(--text);">
+                                                {{ pill }}</div>
+                                        </div>
+                                        {% endfor %}
+                                    </div>
+                                    {% endif %}
+                                </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+
+                    <!-- Navigation Arrows -->
+                    <button class="carousel-nav prev" id="carouselPrev" aria-label="Previous slide">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M15 18l-6-6 6-6" />
+                        </svg>
+                    </button>
+                    <button class="carousel-nav next" id="carouselNext" aria-label="Next slide">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M9 18l6-6-6-6" />
+                        </svg>
+                    </button>
+
+                    <!-- Dots Indicator -->
+                    <div class="carousel-controls">
+                        {% for slide in section.right.carousel.slides %}
+                        <button class="carousel-dot {% if forloop.first %}active{% endif %}"
+                            data-slide="{{ forloop.index0 }}" aria-label="Slide {{ forloop.index }}"></button>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            <!-- Text content below carousel -->
+            <div class="carousel-text-content">
+                {% assign first_slide = section.right.carousel.slides[0] %}
+                <h3 class="carousel-slide-title" id="carouselTitle">{{ first_slide.title }}</h3>
+                <p class="carousel-slide-description" id="carouselDescription">{{ first_slide.description }}</p>
+            </div>
+        </div>
+        {% else %}
+        <div class="section-block section-block--panel">
+            {% if section.right.title %}
+            <h3 class="headline-sm">{{ section.right.title }}</h3>
+            {% endif %}
+
+            {% if section.right.body %}
+            <div class="copy-md">
+                {{ section.right.body | markdownify }}
+            </div>
+            {% endif %}
+
+            {% if section.right.items %}
+            <ul class="feature-list">
+                {% for item in section.right.items %}
+                <li class="feature-list__item">
+                    <span class="feature-list__bullet"></span>
+                    <div>
+                        {% if item.heading %}
+                        <strong>{{ item.heading }}</strong>
+                        {% endif %}
+                        {% if item.body %}
+                        <div class="copy-md">
+                            {{ item.body | markdownify }}
+                        </div>
+                        {% endif %}
+                    </div>
+                </li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+
+            {% if section.right.metrics %}
+            {% for metric in section.right.metrics %}
+            <div class="metric-card">
+                {% if metric.label %}
+                <p class="metric-card__label">{{ metric.label }}</p>
+                {% endif %}
+                {% if metric.value %}
+                <p class="metric-card__value">{{ metric.value }}</p>
+                {% endif %}
+                {% if metric.desc %}
+                <p class="metric-card__desc">{{ metric.desc }}</p>
+                {% endif %}
+            </div>
+            {% endfor %}
+            {% endif %}
+
+            {% if section.right.code_blocks %}
+            {% for code in section.right.code_blocks %}
+            <div class="code-card">
+                <div class="code-card__header">
+                    <span class="code-card__dot"></span>
+                    <span class="code-card__dot"></span>
+                    <span class="code-card__dot"></span>
+                    {% if code.title %}
+                    <span class="code-card__title">{{ code.title }}</span>
+                    {% endif %}
+                </div>
+                <pre><code>{{ code.content | strip | escape }}</code></pre>
+            </div>
+            {% endfor %}
+            {% endif %}
+
+            {% if section.right.pills %}
+            <div class="pill-list">
+                {% for pill in section.right.pills %}
+                {% assign pill_label = pill.label | default: pill %}
+                {% assign pill_href = pill.href %}
+                {% if pill_href %}
+                <a class="pill-list__item"
+                    href="{% if pill_href contains '://' %}{{ pill_href }}{% else %}{{ pill_href | relative_url }}{% endif %}"
+                    {% if pill.external %}target="_blank" rel="noreferrer" {% endif %}>
+                    {{ pill_label }}
+                </a>
+                {% else %}
+                <span class="pill-list__item">{{ pill_label }}</span>
+                {% endif %}
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            {% if section.right.ctas %}
+            <div class="btn-row">
+                {% for cta in section.right.ctas %}
+                <a class="btn {% if cta.style == 'primary' %}btn--primary{% else %}btn--ghost{% endif %}"
+                    href="{% if cta.href contains '://' or cta.external %}{{ cta.href }}{% else %}{{ cta.href | relative_url }}{% endif %}"
+                    {% if cta.external %}target="_blank" rel="noreferrer" {% endif %}>
+                    {{ cta.label }}
+                </a>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+    </div>
+    </section>

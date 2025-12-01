@@ -1,0 +1,125 @@
+title: "FastFlowLM"
+description: "NPU-first open LLM runtime for AMD Ryzen AI"
+url: "https://fastflowlm.com"
+baseurl: ""
+
+markdown: kramdown
+highlighter: rouge
+permalink: pretty
+
+exclude:
+  - venv
+  - build.py
+  - dev.py
+  - templates
+  - sync-layout.js
+  - docs/_config.yml
+
+defaults:
+  - scope:
+      path: ""
+      type: "pages"
+    values:
+      layout: page
+  - scope:
+      path: "docs"
+      type: "pages"
+    values:
+      layout: docs
+      toc: true
+
+nav_links:
+  - label: Docs
+    url: "/docs/"
+  - label: Technology
+    children:
+      - label: Models
+        url: "/models/"
+      - label: Benchmarks
+        url: "/benchmarks/"
+      - label: Demos
+        url: "/demos/"
+      - label: Test Drive
+        url: "/test-drive/"
+  - label: Company
+    children:
+      - label: Team
+        url: "/team/"
+      - label: Community
+        url: "/community/"
+      - label: News
+        url: "/news/"
+      - label: Roadmap
+        url: "/roadmap/"
+
+cta_links:
+  - label: GitHub
+    url: "https://github.com/FastFlowLM/FastFlowLM"
+    icon: github
+  - label: Discord
+    url: "https://discord.gg/z24t23HsHF?utm_source=site"
+    icon: discord
+  - label: Email
+    url: "mailto:info@fastflowlm.com"
+    icon: mail
+
+docs_nav:
+  - label: Overview
+    url: "/docs/"
+  - label: Install
+    url: "/docs/install/"
+  - label: Instructions
+    children:
+      - label: Overview
+        url: "/docs/instructions/"
+      - label: CLI
+        url: "/docs/instructions/cli/"
+      - label: Server Basics
+        url: "/docs/instructions/server/basics/"
+      - label: Open WebUI
+        url: "/docs/instructions/server/webui/"
+      - label: Microsoft AI Toolkit
+        url: "/docs/instructions/server/msft_AI_toolkit/"
+      - label: Obsidian
+        url: "/docs/instructions/server/obsidian/"
+      - label: RAG + LangChain
+        url: "/docs/instructions/server/rag_LangChain/"
+      - label: Web Search + LangChain
+        url: "/docs/instructions/server/websearch_LangChain/"
+  - label: Models
+    children:
+      - label: Overview
+        url: "/docs/models/"
+      - label: LLaMA
+        url: "/docs/models/llama/"
+      - label: DeepSeek
+        url: "/docs/models/deepseek/"
+      - label: Qwen
+        url: "/docs/models/qwen/"
+      - label: Gemma
+        url: "/docs/models/gemma/"
+      - label: MedGemma
+        url: "/docs/models/medgemma/"
+      - label: GPT-OSS
+        url: "/docs/models/gpt-oss/"
+      - label: LFM
+        url: "/docs/models/lfm/"
+      - label: Whisper
+        url: "/docs/models/whisper/"
+      - label: EmbeddingGemma
+        url: "/docs/models/embeddinggemma/"
+  - label: Benchmarks
+    children:
+      - label: Overview
+        url: "/docs/benchmarks/"
+      - label: LLaMA 3
+        url: "/docs/benchmarks/llama3_results/"
+      - label: Gemma 3
+        url: "/docs/benchmarks/gemma3_results/"
+      - label: Qwen 3
+        url: "/docs/benchmarks/qwen3_results/"
+      - label: GPT-OSS
+        url: "/docs/benchmarks/gpt-oss_results/"
+      - label: LFM2 1.2B
+        url: "/docs/benchmarks/lfm2:1.2b_results/"
+

@@ -1,0 +1,112 @@
+<header class="nav">
+    <div class="nav__inner">
+        <a class="nav__brand" href="{{ '/' | relative_url }}">
+            <span class="nav__brand-mark">
+                <img src="{{ '/assets/logo.png' | relative_url }}" alt="{{ site.title }}" />
+            </span>
+            <span class="nav__brand-copy">
+                <span class="nav__brand-name">{{ site.title }}</span>
+            </span>
+        </a>
+        <nav class="nav__links" aria-label="Primary">
+            {% for item in site.nav_links %}
+            {% if item.children %}
+            <div class="nav__dropdown">
+                <button class="nav__dropdown-toggle" aria-expanded="false" aria-haspopup="true">
+                    {{ item.label }}
+                    <i class="fa-solid fa-chevron-down"></i>
+                </button>
+                <div class="nav__dropdown-menu">
+                    {% for child in item.children %}
+                    {% assign href = child.url %}
+                    {% assign is_external = false %}
+                    {% if href contains '://' or href contains 'mailto:' %}
+                    {% assign is_external = true %}
+                    {% endif %}
+                    <a href="{% unless is_external %}{{ href | relative_url }}{% else %}{{ href }}{% endunless %}" {% if
+                        is_external %}target="_blank" rel="noreferrer" {% endif %}>
+                        {{ child.label }}
+                    </a>
+                    {% endfor %}
+                </div>
+            </div>
+            {% else %}
+            {% assign href = item.url %}
+            {% assign is_external = false %}
+            {% if href contains '://' or href contains 'mailto:' %}
+            {% assign is_external = true %}
+            {% endif %}
+            <a href="{% unless is_external %}{{ href | relative_url }}{% else %}{{ href }}{% endunless %}" {% if
+                is_external %}target="_blank" rel="noreferrer" {% endif %}>
+                {{ item.label }}
+            </a>
+            {% endif %}
+            {% endfor %}
+        </nav>
+        <div class="nav__actions">
+            {% for item in site.cta_links %}
+            <a class="nav__icon" href="{{ item.url }}" {% if item.url contains '://' %}target="_blank" rel="noreferrer"
+                {% endif %} aria-label="{{ item.label }}">
+                {% if item.icon == 'github' %}
+                <i class="fa-brands fa-github"></i>
+                {% elsif item.icon == 'discord' %}
+                <i class="fa-brands fa-discord"></i>
+                {% elsif item.icon == 'mail' %}
+                <i class="fa-regular fa-envelope"></i>
+                {% else %}
+                <i class="fa-solid fa-link"></i>
+                {% endif %}
+            </a>
+            {% endfor %}
+        </div>
+        <button class="nav__toggle" type="button" aria-label="Toggle navigation" aria-expanded="false" data-nav-toggle>
+            <span></span>
+            <span></span>
+        </button>
+    </div>
+    <div class="nav__mobile" data-nav-panel>
+        <div class="nav__mobile-links">
+            {% for item in site.nav_links %}
+            {% if item.children %}
+            <div class="nav__mobile-dropdown">
+                <button class="nav__mobile-dropdown-toggle" aria-expanded="false">
+                    {{ item.label }}
+                    <i class="fa-solid fa-chevron-down"></i>
+                </button>
+                <div class="nav__mobile-dropdown-menu">
+                    {% for child in item.children %}
+                    {% assign href = child.url %}
+                    {% assign is_external = false %}
+                    {% if href contains '://' or href contains 'mailto:' %}
+                    {% assign is_external = true %}
+                    {% endif %}
+                    <a href="{% unless is_external %}{{ href | relative_url }}{% else %}{{ href }}{% endunless %}" {% if
+                        is_external %}target="_blank" rel="noreferrer" {% endif %}>
+                        {{ child.label }}
+                    </a>
+                    {% endfor %}
+                </div>
+            </div>
+            {% else %}
+            {% assign href = item.url %}
+            {% assign is_external = false %}
+            {% if href contains '://' or href contains 'mailto:' %}
+            {% assign is_external = true %}
+            {% endif %}
+            <a href="{% unless is_external %}{{ href | relative_url }}{% else %}{{ href }}{% endunless %}" {% if
+                is_external %}target="_blank" rel="noreferrer" {% endif %}>
+                {{ item.label }}
+            </a>
+            {% endif %}
+            {% endfor %}
+        </div>
+        <div class="nav__mobile-cta">
+            {% for item in site.cta_links %}
+            <a class="btn btn--ghost" href="{{ item.url }}" {% if item.url contains '://' %}target="_blank"
+                rel="noreferrer" {% endif %}>
+                {{ item.label }}
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+</header>
