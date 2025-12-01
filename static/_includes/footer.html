@@ -16,6 +16,13 @@
         <p class="footer__label">Site</p>
         {% for item in site.nav_links %}
         {% assign href = item.url %}
+        {% if item.children %}
+        {% if item.label == 'Technology' and item.children.first %}
+        {% assign href = item.children.first.url %}
+        {% elsif item.label == 'Company' %}
+        {% assign href = '/team/' %}
+        {% endif %}
+        {% endif %}
         {% assign is_external = false %}
         {% if href contains '://' or href contains 'mailto:' %}
         {% assign is_external = true %}
