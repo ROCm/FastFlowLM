@@ -37,6 +37,9 @@ sections:
       title: "Coming soon"
       body: |
         News and announcements will be posted here as FastFlowLM continues to evolve.
+      items:
+        - heading: "New website was launched!"
+          body: "A new website was launched. Check it out."
     right:
       title: "Get notified"
       body: |

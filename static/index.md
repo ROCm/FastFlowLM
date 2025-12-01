@@ -7,7 +7,7 @@ sections:
   - type: hero
     id: top
     kicker: "NPU-first runtime"
-    title: "Run awesome frontier LLMs directly on Ryzen™ AI NPUs"
+    title: "Run frontier LLMs directly on Ryzen™ AI NPUs"
     body: |
       FastFlowLM delivers an Ollama-style developer experience that is tuned for AMD’s XDNA2 accelerators:
       install in seconds, stream tokens instantly, and sustain up to 256k context windows with far better

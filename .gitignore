@@ -1,2 +1,4 @@
 build
 .vscode
+__pycache__
+_site
