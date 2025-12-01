@@ -1064,6 +1064,9 @@ body.nav-open .nav__mobile {
   border: 1px solid var(--border);
   padding: var(--space-lg);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-x: hidden;
 }
 
 .docs-content h1,
@@ -1086,6 +1089,23 @@ body.nav-open .nav__mobile {
   border: 1px solid var(--border);
   overflow-x: auto;
   font-family: var(--font-mono);
+  max-width: 100%;
+  box-sizing: border-box;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.docs-content pre code {
+  background: transparent;
+  padding: 0;
+  border: none;
+  color: inherit;
+  font-size: inherit;
+  display: block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .docs-content code {
@@ -1107,8 +1127,11 @@ body.nav-open .nav__mobile {
 
 .docs-content table {
   width: 100%;
+  max-width: 100%;
   border-collapse: collapse;
   margin: 24px 0;
+  box-sizing: border-box;
+  table-layout: auto;
 }
 
 .docs-content th,
@@ -1116,17 +1139,17 @@ body.nav-open .nav__mobile {
   border: 1px solid var(--border);
   padding: 12px;
   text-align: left;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  max-width: 0;
+  color: var(--text);
 }
 
 .docs-content blockquote {
   border-left: 3px solid var(--accent);
   padding-left: 18px;
   margin-left: 0;
-  color: var(--text);
-}
-
-.docs-content th,
-.docs-content td {
   color: var(--text);
 }
 

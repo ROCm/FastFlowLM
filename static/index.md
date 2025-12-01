@@ -9,9 +9,7 @@ sections:
     kicker: "NPU-first runtime"
     title: "The fastest, most efficient LLM inference on NPUs"
     body: |
-      FastFlowLM delivers an Ollama-style developer experience tailored to tile-structured NPU accelerators:
-      install in seconds, stream tokens instantly, and sustain up to 256k context windows with far better
-      efficiency than GPU-first stacks.
+      FastFlowLM delivers an Ollama-style developer experience optimized for tile-structured NPU accelerators. Install in seconds, stream tokens instantly, and run context windows up to 256k — all with dramatically better efficiency than GPU-first stacks. Our GA release for AMD Ryzen™ AI NPUs is available today, with betas for Qualcomm Snapdragon and Intel Core Ultra coming soon.
     ctas:
       - label: "Download FastFlowLM (Windows)"
         href: "https://github.com/FastFlowLM/FastFlowLM/releases/latest/download/flm-setup.exe"
@@ -79,6 +77,7 @@ sections:
     media:
       src: "/assets/gpt-oss-demo.gif"
       alt: "GPT-OSS 20B running locally on the Ryzen AI NPU"
+      href: "https://youtu.be/sZt1WyNoL2U?si=7U3z6u6E9KF6G_Dd"
       kicker: "GPT-OSS on NPU"
       body: |
         Runs GPT-OSS-20B at 19 TPS (token per second) with 10× GPU efficiency — the fastest MoE on any NPU.
@@ -91,6 +90,7 @@ sections:
     media:
       src: "/assets/cramer2.gif"
       alt: "Whisper transcription and summarization demo"
+      href: "https://youtu.be/0t8ijUPg4A0?si=ETKdvig6lYiZb1Q_"
       kicker: "Whisper on-device"
       body: |
         Transcribe hours of audio locally — FLM runs OpenAI Whisper fully on the NPU — fast, private, and efficient.
@@ -102,6 +102,7 @@ sections:
     media:
       src: "/assets/llama-demo.gif"
       alt: "Llama 3.2 chat demo running in the FastFlowLM WebUI"
+      href: "https://youtu.be/mPrr9FLd8ps?si=vsyHkmtrBjP4s-dq"
       kicker: "Llama 3.2 on WebUI"
       body: |
         Runs Meta Llama 3.2-3B at 28 TPS with over 10× GPU efficiency — the fastest on any NPU.
@@ -199,12 +200,7 @@ sections:
 
   - type: two_column
     id: docs
-    left:
-      kicker: "Docs"
-      title: "Human-friendly docs that ship with the runtime"
-      body: |
-        Markdown docs live alongside the site, so everything shares the same navigation, typography, and deploy pipeline.
-        Benchmarks, install guides, and model cards all use the same modular components.
+    right:
       ctas:
         - label: "Dive into docs"
           href: "/docs/"
@@ -212,7 +208,7 @@ sections:
         - label: "Installation guide"
           href: "/docs/install/"
           style: ghost
-    right:
+    left:
       title: "Remote test drive"
       body: |
         No Ryzen™ AI hardware yet? Launch the hosted FastFlowLM + Open WebUI sandbox and stream from a live

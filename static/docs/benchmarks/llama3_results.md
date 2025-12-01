@@ -16,8 +16,8 @@ This section reports the performance of LLaMA 3.x on NPU with FastFlowLM (FLM).
 > - Newer versions may deliver improved performance.   
 
 <div style="display:flex; flex-wrap:wrap;">
-  <img src="assets/llama3_decoding.png" style="width:15%; min-width:300px; margin:4px;">
-  <img src="assets/llama3_prefill.png" style="width:15%; min-width:300px; margin:4px;">
+  <img src="/assets/llama3_decoding.png" style="width:15%; min-width:300px; margin:4px;">
+  <img src="/assets/llama3_prefill.png" style="width:15%; min-width:300px; margin:4px;">
 </div>
 
 ---

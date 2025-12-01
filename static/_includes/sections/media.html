@@ -19,8 +19,15 @@
     <article class="demo-panel">
       {% if section.media and section.media.src %}
         <div class="demo-panel__media">
-          <img src="{% if section.media.src contains '://' %}{{ section.media.src }}{% else %}{{ section.media.src | relative_url }}{% endif %}"
-            alt="{{ section.media.alt | default: section.title | default: 'Demo preview' }}" loading="lazy" />
+          {% if section.media.href %}
+            <a href="{{ section.media.href }}" target="_blank" rel="noopener noreferrer" class="demo-panel__media-link">
+              <img src="{% if section.media.src contains '://' %}{{ section.media.src }}{% else %}{{ section.media.src | relative_url }}{% endif %}"
+                alt="{{ section.media.alt | default: section.title | default: 'Demo preview' }}" loading="lazy" />
+            </a>
+          {% else %}
+            <img src="{% if section.media.src contains '://' %}{{ section.media.src }}{% else %}{{ section.media.src | relative_url }}{% endif %}"
+              alt="{{ section.media.alt | default: section.title | default: 'Demo preview' }}" loading="lazy" />
+          {% endif %}
         </div>
       {% endif %}
 

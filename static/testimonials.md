@@ -11,7 +11,7 @@ description: "What developers and partners are saying about FastFlowLM on NPU-fi
       <p class="kicker">Testimonials</p>
       <h1 class="headline-md">What developers, partners, and silicon teams are saying</h1>
       <p class="copy-md">
-        FastFlowLM is built hand-in-hand with Ryzen™ AI hardware teams and the developers shipping on-device copilots today.
+        FastFlowLM combines deep knowledge of LLM architecture with world-class optimization for hardware-level parallelism. The result is the industry’s first—and only—runtime truly engineered for NPU-accelerated AI inference. Our debut product, deployed on AMD’s Ryzen™ AI platform, is revolutionizing on-device intelligence with unprecedented speed, efficiency, and responsiveness.
         These stories highlight how an NPU-first runtime lands in the real world—from beta cohorts and AMD’s own AI engineering
         org to third-party benchmarking labs.
       </p>
