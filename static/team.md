@@ -8,8 +8,8 @@ sections:
     kicker: "Team"
     title: "Architecture + systems + community"
     body: |
-      FastFlowLM is a collaboration between academics who design NPUs, engineers who ship developer tooling,
-      and community maintainers who support thousands of builders. The core group includes four PhDs and three
+      FastFlowLM is a collaboration between academic researchers, software engineers,
+      and community maintainers. The core group includes four PhDs and three
       B.S. graduates in Electrical and Computer Engineering with deep experience in LLM internals, parallel
       processing, and architecture-specific software optimization.
     ctas:
@@ -49,7 +49,7 @@ sections:
         role: "Distinguished Engineering Professor · University of Rhode Island"
         image: "/assets/kenqingyang.png"
         bio: |
-          Over 30 years experiences in computer architecture and parallel processing, a serial entrepreneur successfully built 4 high tech startups based on his research results including VeloBit (acq. Western Digital) and Dapustor (currently in IPO process). 
+          With more than 30 years of experience in computer architecture and parallel processing, he is a serial entrepreneur who has successfully built four high-tech startups rooted in his research innovations—including VeloBit (acquired by Western Digital) and DapuStor (currently in the IPO process). 
         links:
           - label: "URI profile"
             url: "https://www.ele.uri.edu/~qyang/"

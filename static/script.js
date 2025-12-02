@@ -210,5 +210,62 @@
       document.addEventListener("keydown", handleKeydown);
     }
   }
+
+  // Media carousels in sections
+  document.querySelectorAll("[data-carousel]").forEach((carousel) => {
+    const track = carousel.querySelector("[data-carousel-track]");
+    const slides = carousel.querySelectorAll("[data-carousel-slide]");
+    const prev = carousel.querySelector("[data-carousel-prev]");
+    const next = carousel.querySelector("[data-carousel-next]");
+    const dots = carousel.querySelectorAll("[data-carousel-dot]");
+
+    if (!track || slides.length === 0) {
+      return;
+    }
+
+    if (slides.length <= 1) {
+      if (prev) {
+        prev.hidden = true;
+      }
+      if (next) {
+        next.hidden = true;
+      }
+      const dotsContainer = carousel.querySelector("[data-carousel-dots]");
+      if (dotsContainer) {
+        dotsContainer.hidden = true;
+      }
+      return;
+    }
+
+    let currentIndex = 0;
+
+    const update = () => {
+      track.style.transform = `translate3d(-${currentIndex * 100}%, 0, 0)`;
+      dots.forEach((dot, index) => {
+        const isActive = index === currentIndex;
+        dot.classList.toggle("is-active", isActive);
+        dot.setAttribute("aria-selected", String(isActive));
+      });
+    };
+
+    const goTo = (index) => {
+      currentIndex = (index + slides.length) % slides.length;
+      update();
+    };
+
+    if (prev) {
+      prev.addEventListener("click", () => goTo(currentIndex - 1));
+    }
+
+    if (next) {
+      next.addEventListener("click", () => goTo(currentIndex + 1));
+    }
+    dots.forEach((dot) => {
+      const targetIndex = Number(dot.dataset.carouselDot) || 0;
+      dot.addEventListener("click", () => goTo(targetIndex));
+    });
+
+    update();
+  });
 })();
 

@@ -96,14 +96,14 @@ sections:
 
   - type: media
     kicker: "Rack architecture"
-    title: "From racks to tiles"
+    title: "From chips to racks, all tiled structure"
     body: ""
     media:
       src: "/assets/architecture.png"
       alt: "Diagram of racks feeding an AIE and memory tile layout"
-      title: "Racks into an AIE + memory tile array"
+      title: "Racks of AIE + memory tile array"
       items:
-        - heading: "Racks of systems"
+        - heading: "Racks of NPU Chips"
           body: |
             The images on the left are photos of multiple server trays and chassis that host NPUs in a rack.
         - heading: "AIE compute tiles"
@@ -112,5 +112,8 @@ sections:
         - heading: "Memory tiles"
           body: |
             The darker blocks at the bottom labeled "Memory tile" show the on-chip memory region that sits alongside the AIE tiles.
+        - heading: "FastFlowLM Technology"
+          body: |
+            Our FastFlowLM software scales up and scales out naturally to rack level inferences.    
 ---
 

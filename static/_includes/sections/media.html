@@ -67,6 +67,38 @@
         {% endif %}
       </div>
     </article>
+
+    {% if section.gallery %}
+      {% assign carousel_classes = section.gallery_class %}
+      <div class="media-carousel{% if carousel_classes %} {{ carousel_classes }}{% endif %}" data-carousel>
+        <button class="media-carousel__nav media-carousel__nav--prev" type="button" aria-label="Previous image" data-carousel-prev>
+          <span aria-hidden="true">&lsaquo;</span>
+        </button>
+        <div class="media-carousel__viewport" data-carousel-viewport>
+          <div class="media-carousel__track" data-carousel-track>
+            {% for image in section.gallery %}
+              <figure class="media-carousel__slide" data-carousel-slide>
+                <img
+                  src="{% if image.src contains '://' %}{{ image.src }}{% else %}{{ image.src | relative_url }}{% endif %}"
+                  alt="{{ image.alt | default: section.title | default: 'Benchmark capture' }}"
+                  loading="lazy" />
+                {% if image.caption %}
+                  <figcaption>{{ image.caption }}</figcaption>
+                {% endif %}
+              </figure>
+            {% endfor %}
+          </div>
+        </div>
+        <button class="media-carousel__nav media-carousel__nav--next" type="button" aria-label="Next image" data-carousel-next>
+          <span aria-hidden="true">&rsaquo;</span>
+        </button>
+        <div class="media-carousel__dots" data-carousel-dots>
+          {% for image in section.gallery %}
+            <button class="media-carousel__dot{% if forloop.first %} is-active{% endif %}" type="button" aria-label="Show slide {{ forloop.index }}" data-carousel-dot="{{ forloop.index0 }}"></button>
+          {% endfor %}
+        </div>
+      </div>
+    {% endif %}
   </div>
 </section>
 

@@ -22,14 +22,16 @@ sections:
         Each manifest describes quantization, context window, tokenizer, and recommended memory,
         so there are no surprises after download.
       pills:
-        - "Llama 3.2"
-        - "Gemma 3"
-        - "DeepSeek"
-        - "Qwen 3"
-        - "GPT-OSS"
-        - "FLM MoE"
-        - "Whisper"
-        - "EmbeddingGemma"
+        - "Llama 3.x"
+        - "Gemma 3 (Vision)"
+        - "DeepSeek R-1"
+        - "Qwen 3 (Vision)"
+        - "GPT-OSS (MoE)"
+        - "LFM2 (Liquid AI)"
+        - "EmbeddingGemma (RAG)"
+        - "Whisper (Audio)"
+        - "MedGemma"
+        - "xLAM-2 (Tool-calling, Salesforce), and their corresponding Chat Templates and major API (e.g., OpenAI-compatible API)"
 
   - type: two_column
     left:

@@ -976,6 +976,111 @@ body.nav-open .nav__mobile {
   gap: var(--space-md);
 }
 
+/* Media carousels */
+.media-carousel {
+  margin-top: var(--space-lg);
+  position: relative;
+  padding: 0 var(--space-md);
+}
+
+.media-carousel__viewport {
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+
+.media-carousel__track {
+  display: flex;
+  transition: transform 0.45s ease;
+}
+
+.media-carousel__slide {
+  min-width: 100%;
+  margin: 0;
+}
+
+.media-carousel__slide img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.media-carousel__slide figcaption {
+  padding: 12px;
+  font-size: 0.9rem;
+  color: var(--text-soft);
+}
+
+.media-carousel__nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: rgba(3, 4, 10, 0.8);
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.media-carousel__nav span {
+  font-size: 1.5rem;
+  line-height: 1;
+}
+
+.media-carousel__nav:hover,
+.media-carousel__nav:focus-visible {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: var(--border-strong);
+}
+
+.media-carousel__nav--prev {
+  left: 8px;
+}
+
+.media-carousel__nav--next {
+  right: 8px;
+}
+
+.media-carousel__dots {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: var(--space-md);
+}
+
+.media-carousel__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.media-carousel__dot.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+@media (max-width: 640px) {
+  .media-carousel {
+    padding: 0;
+  }
+
+  .media-carousel__nav {
+    display: none;
+  }
+}
+
 /* Docs layout */
 .section--docs {
   padding-top: 0;
