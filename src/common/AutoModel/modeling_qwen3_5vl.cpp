@@ -27,6 +27,8 @@ void Qwen3_5VL::load_model(std::string model_path, json model_info, int default_
     this->setup_tokenizer(model_path);
     this->sampler.reset();
 
+    this->enable_tool = (model_info["size"] > 800000000)? true : false;
+
     sampler_config config;
     config.top_k = 20;
     config.top_p = 0.8;
@@ -52,7 +54,7 @@ std::string Qwen3_5VL::apply_chat_template(nlohmann::ordered_json& messages, nlo
     inputs.messages = messages;
     inputs.extra_context = this->extra_context;
     inputs.extra_context["enable_thinking"] = this->enable_think;
-    if (!tools.empty())
+    if (!tools.empty() && this->enable_tool)
         inputs.tools = tools;
     return this->chat_tmpl->apply(inputs);
 }
@@ -265,100 +267,186 @@ NonStreamResult Qwen3_5VL::parse_nstream_content(const std::string response_text
 
 // Stream
 StreamResult Qwen3_5VL::parse_stream_content(const std::string content) {
-    std::string tool_start_tag = "<tool_call>";
-    std::string tool_end_tag = "</tool_call>";
-    std::string think_start_tag = "<think>";
-    std::string think_end_tag = "</think>";
+    const std::string MARKER_THINK_START = "<think>";
+    const std::string MARKER_THINK_END = "</think>";
+    const std::string MARKER_TOOL_START = "<tool_call>";
+    const std::string MARKER_TOOL_END = "</tool_call>";
+    const std::string MARKER_FUNC_END = "</function>"; 
+
 
     StreamResult result;
-    result.type = StreamEventType::CONTENT;
+    buffer_ += content;
 
-    if (!is_in_tool_block_ && content.find(think_start_tag) != std::string::npos) {
-        current_mode_ = StreamEventType::REASONING;
-        result.type = StreamEventType::WAITING;
-        return result;
-    }
+    while (true) {
+        if (!is_in_tool_block_) {
+            size_t stray_end_pos = buffer_.find(MARKER_TOOL_END);
+            if (stray_end_pos != std::string::npos) {
+                buffer_.erase(stray_end_pos, MARKER_TOOL_END.length());
+            }
+        }
 
-    if (!is_in_tool_block_ && content.find(think_end_tag) != std::string::npos) {
-        current_mode_ = StreamEventType::CONTENT;
-        result.type = StreamEventType::WAITING;
-        return result;
-    }
+        if (!is_in_tool_block_) {
+            size_t tool_start_pos = buffer_.find(MARKER_TOOL_START);
+            if (tool_start_pos != std::string::npos) {
+                if (tool_start_pos > 0) {
+                    result.content = buffer_.substr(0, tool_start_pos);
+                    result.type = current_mode_;
+                    buffer_ = buffer_.substr(tool_start_pos);
+                    return result;
+                }
 
-    if (!is_in_tool_block_ && current_mode_ == StreamEventType::REASONING) {
-        result.type = StreamEventType::REASONING;
-        result.content = content;
-        return result;
-    }
+                is_in_tool_block_ = true;
+                buffer_ = buffer_.substr(MARKER_TOOL_START.length());
+                result.type = StreamEventType::WAITING;
+                return result;
+            }
+        }
 
-    if (content.find(tool_start_tag) != std::string::npos) {
-        is_in_tool_block_ = true;
-        tool_name_.clear();
-        result.type = StreamEventType::WAITING;
-        return result;
-    }
+        // tool calling process
+        if (is_in_tool_block_) {
+            size_t tool_end_pos = buffer_.find(MARKER_TOOL_END);
+            size_t func_end_pos = buffer_.find(MARKER_FUNC_END);
+            
+            if (tool_end_pos != std::string::npos || func_end_pos != std::string::npos) {
+                size_t actual_end_pos;
+                size_t skip_length;
 
-    if (content.find(tool_end_tag) != std::string::npos) {
-        is_in_tool_block_ = false;
+                if (tool_end_pos != std::string::npos) {
+                    actual_end_pos = tool_end_pos;
+                    skip_length = MARKER_TOOL_END.length();
+                } 
+                else {
+                    actual_end_pos = func_end_pos;
+                    skip_length = MARKER_FUNC_END.length();
+                }
 
-        try {
-            const std::string& block = tool_name_;
+                std::string block = buffer_.substr(0, actual_end_pos + skip_length);
+                buffer_ = buffer_.substr(actual_end_pos + skip_length);
+                is_in_tool_block_ = false;
 
-            // Parse function name from <function=NAME>
-            std::string func_open = "<function=";
-            size_t func_start = block.find(func_open);
-            if (func_start != std::string::npos) {
-                func_start += func_open.length();
-                size_t func_end = block.find(">", func_start);
-                if (func_end != std::string::npos) {
-                    result.tool_name = block.substr(func_start, func_end - func_start);
+                try {
+                    result.type = StreamEventType::TOOL_DONE;
+                    result.tool_id = "call_" + std::to_string(std::time(nullptr));
+
+                    // parse function name
+                    std::string func_open = "<function=";
+                    size_t func_start = block.find(func_open);
+                    if (func_start != std::string::npos) {
+                        func_start += func_open.length();
+                        size_t func_end = block.find(">", func_start);
+                        if (func_end != std::string::npos) {
+                            result.tool_name = block.substr(func_start, func_end - func_start);
+                        }
+                    }
+
+                    // parse parameters
+                    nlohmann::json args = nlohmann::json::object();
+                    std::string param_open = "<parameter=";
+                    std::string param_close = "</parameter>";
+                    size_t search_pos = 0;
+                    
+                    while (true) {
+                        size_t p_start = block.find(param_open, search_pos);
+                        if (p_start == std::string::npos) break;
+                        p_start += param_open.length();
+                        size_t p_name_end = block.find(">", p_start);
+                        if (p_name_end == std::string::npos) break;
+                        std::string param_name = block.substr(p_start, p_name_end - p_start);
+
+                        size_t val_start = p_name_end + 1;
+                        if (val_start < block.size() && block[val_start] == '\n') val_start++;
+
+                        size_t val_end = block.find(param_close, val_start);
+                        if (val_end == std::string::npos) break;
+
+                        std::string param_value = block.substr(val_start, val_end - val_start);
+                        
+                        // Enhanced trim: handle multiple newlines or spaces that the model may generate after a parameter
+                        while(!param_value.empty() && (param_value.back() == '\n' || param_value.back() == '\r' || param_value.back() == ' ')) {
+                            param_value.pop_back();
+                        }
+
+                        try {
+                            // Try to parse as native JSON type (Integer, Float, Boolean, Array, Object)
+                            args[param_name] = nlohmann::json::parse(param_value);
+                        } 
+                        catch (...) {
+                            args[param_name] = param_value;
+                        }
+
+                        search_pos = val_end + param_close.length();
+                    }
+
+                    result.tool_args_str = args.dump();
+                    return result;
+                }
+                catch (...) {
+                    result.type = StreamEventType::CONTENT;
+                    result.content = "[Error parsing tool call]";
+                    return result;
+                }
+            }
+            else {
+                result.type = StreamEventType::WAITING;
+                return result;
+            }
+        }
+
+        if (current_mode_ == StreamEventType::CONTENT) {
+            size_t think_start_pos = buffer_.find(MARKER_THINK_START);
+            if (think_start_pos != std::string::npos) {
+                if (think_start_pos > 0) {
+                    result.content = buffer_.substr(0, think_start_pos);
+                    result.type = StreamEventType::CONTENT;
+                    buffer_ = buffer_.substr(think_start_pos);
+                    return result;
+                }
+                buffer_ = buffer_.substr(MARKER_THINK_START.length());
+                current_mode_ = StreamEventType::REASONING;
+                continue;
+            }
+        }
+        else if (current_mode_ == StreamEventType::REASONING) {
+            size_t think_end_pos = buffer_.find(MARKER_THINK_END);
+            if (think_end_pos != std::string::npos) {
+                if (think_end_pos > 0) {
+                    result.content = buffer_.substr(0, think_end_pos);
+                    result.type = StreamEventType::REASONING;
+                    buffer_ = buffer_.substr(think_end_pos);
+                    return result;
+                }
+                buffer_ = buffer_.substr(MARKER_THINK_END.length());
+                current_mode_ = StreamEventType::CONTENT;
+                continue;
+            }
+        }
+
+        if (!buffer_.empty()) {
+            size_t last_lt = buffer_.rfind('<');
+            // If '<' appears at the end (possibly an incomplete <tool_call> or <think> tag)
+            if (last_lt != std::string::npos && (buffer_.length() - last_lt) <= 15) {
+                if (last_lt > 0) {
+                    // Only output the content before '<'
+                    result.content = buffer_.substr(0, last_lt);
+                    result.type = current_mode_;
+                    buffer_ = buffer_.substr(last_lt); 
+                    return result;
+                } else {
+                    // If '<' is the first character in the buffer, directly wait for the next chunk
+                    result.type = StreamEventType::WAITING;
+                    return result;
                 }
             }
 
-            // Parse parameters from <parameter=NAME>\nVALUE\n</parameter>
-            nlohmann::json args = nlohmann::json::object();
-            std::string param_open = "<parameter=";
-            std::string param_close = "</parameter>";
-            size_t search_pos = 0;
-            while (true) {
-                size_t p_start = block.find(param_open, search_pos);
-                if (p_start == std::string::npos) break;
-                p_start += param_open.length();
-                size_t p_name_end = block.find(">", p_start);
-                if (p_name_end == std::string::npos) break;
-                std::string param_name = block.substr(p_start, p_name_end - p_start);
-
-                size_t val_start = p_name_end + 1;
-                if (val_start < block.size() && block[val_start] == '\n') val_start++;
-
-                size_t val_end = block.find(param_close, val_start);
-                if (val_end == std::string::npos) break;
-
-                std::string param_value = block.substr(val_start, val_end - val_start);
-                if (!param_value.empty() && param_value.back() == '\n') param_value.pop_back();
-
-                args[param_name] = param_value;
-                search_pos = val_end + param_close.length();
-            }
-
-            result.type = StreamEventType::TOOL_DONE;
-            result.tool_id = "call_" + std::to_string(std::time(nullptr));
-            result.tool_args_str = args.dump();
+            result.content = buffer_;
+            result.type = current_mode_;
+            buffer_.clear();
+            return result;
         }
-        catch (...) {
-            result.type = StreamEventType::CONTENT;
-            result.content = "[Error parsing tool call]";
-        }
-        return result;
+
+        break;
     }
 
-    if (is_in_tool_block_) {
-        tool_name_ += content;
-        result.type = StreamEventType::WAITING;
-        return result;
-    }
-
-    result.content = content;
+    result.type = current_mode_;
     return result;
-
 }

@@ -37,6 +37,8 @@ function(add_npu_test TARGET_NAME OUTPUT_SUBDIR)
         list(APPEND base_sources ${CMAKE_SOURCE_DIR}/../../common/modules/sampler.cpp)
     endif()
 
+    list(APPEND base_sources ${CMAKE_SOURCE_DIR}/../../common/utils.cpp)
+
     # Set test output directory
     set(TEST_OUTPUT_DIR ${CMAKE_SOURCE_DIR}/../../build/${OUTPUT_SUBDIR})
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${TEST_OUTPUT_DIR})
@@ -61,6 +63,8 @@ function(add_npu_test TARGET_NAME OUTPUT_SUBDIR)
         _ENABLE_EXTENDED_ALIGNED_STORAGE
         __WINDOWS__
         DEV_BUILD
+        CMAKE_INSTALL_PREFIX="${CMAKE_SOURCE_DIR}/../../build/${OUTPUT_SUBDIR}"
+        CMAKE_XCLBIN_PREFIX="${CMAKE_SOURCE_DIR}/../../xclbins"
     )
 
     if(NPU_TEST_USE_AVX512)

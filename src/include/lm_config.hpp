@@ -46,7 +46,10 @@ class LM_Config{
         //vision specific
         std::string vision_model_weight;
         nlohmann::json _vision_config;
+        std::string audio_model_weight;        
+        nlohmann::json _audio_config;        
         bool is_vlm;
+        bool is_audio;
 
 
         nlohmann::json _json_config;
@@ -102,13 +105,15 @@ class LM_Config{
 
 
             // config for vision
-            {   
+            {
                 JSON_GET(this->vision_model_weight, this->_json_config, "vision_model_weight", "", std::string);
                 JSON_GET(this->_vision_config, this->_json_config, "vision_config", nlohmann::json::object(), nlohmann::json);
-
+                JSON_GET(this->_audio_config, this->_json_config, "audio_config", nlohmann::json::object(), nlohmann::json);
+                JSON_GET(this->audio_model_weight, this->_json_config, "audio_model_weight", "", std::string);
 
             }
             this->is_vlm = this->vision_model_weight != "";
+            this->is_audio = this->audio_model_weight != "";
 
 
             JSON_GET(this->flm_version, this->_json_config, "flm_version", "0.0.0", std::string);
@@ -119,6 +124,7 @@ class LM_Config{
             assert(this->num_hidden_layers > 0);
             assert(this->num_key_value_heads > 0);
             this->vision_model_weight = this->model_path + "/" + this->vision_model_weight;
+            this->audio_model_weight = this->model_path + "/" + this->audio_model_weight;
         }
         std::string _str(){
             std::stringstream ss;

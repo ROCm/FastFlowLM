@@ -26,6 +26,7 @@
 #include "models/qwen3_5vl/qwen3_5vl_npu.hpp"
 #include "models/gemma/gemma_npu.hpp"
 #include "models/gemma_text/gemma_text_npu.hpp"
+#include "models/gemma4e/gemma4e_npu.hpp"
 #include "models/lfm2/lfm2_npu.hpp"
 #include "models/phi4/phi4_npu.hpp"
 #include "models/gpt_oss/gpt_oss_npu.hpp"
@@ -111,6 +112,7 @@ typedef enum {
 typedef enum {
 	chat_ml,
 	harmony,
+	gemma4,
 	unknown_template
 } chat_template_type_t;
 
@@ -179,6 +181,7 @@ protected:
 	bool waiting_for_header_ = true;
 
 
+
 	void _shared_load_model(std::string model_path, json model_info, int default_context_length = -1, bool enable_preemption = false);
 	nlohmann::json _shared_setup_tokenizer(std::string model_path);
 
@@ -198,6 +201,13 @@ public:
 	virtual ~AutoModel() = default;
 
 	AutoModel(xrt::device* npu_device_inst, std::string current_model = "");
+
+	void reset_parser() {
+		buffer_.clear();
+		is_in_tool_block_ = false;
+		current_mode_ = StreamEventType::CONTENT;
+	}
+
 	/// \brief Clear the context
 	void clear_context();
 

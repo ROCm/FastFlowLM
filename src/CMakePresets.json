@@ -5,7 +5,7 @@
       "name": "common-default",
       "hidden": true,
       "cacheVariables": {
-        "FLM_VERSION": "0.9.38",
+        "FLM_VERSION": "0.9.39",
         "NPU_VERSION": "32.0.203.304"
       }
     },

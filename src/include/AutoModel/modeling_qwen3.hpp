@@ -40,6 +40,21 @@ public:
                 return false;
             }
         }
+        else if (parameter_name == "reasoning_effort") {
+            std::string reasoning_effort;
+            try {
+                reasoning_effort = std::any_cast<std::string>(value);
+                if (reasoning_effort == "high" || reasoning_effort == "medium" || reasoning_effort == "low") 
+                    this->enable_think = true;
+                else if (reasoning_effort == "none") 
+                    this->enable_think = false;                
+                else
+                    header_print("WARNING", "Reasoning effort must be 'none', 'low', 'medium' or 'high'!");
+                return true;
+            } catch (const std::bad_any_cast&) {
+                return false;
+            }
+        }
         else if (parameter_name == "toggle_think") {
             this->enable_think = !this->enable_think;
             return true;

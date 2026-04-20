@@ -18,6 +18,7 @@ parent: Local Server (Server Mode)
   - [Example: Batch Requests (Multiple Prompts)](#-example-batch-requests-multiple-prompts)
   - [Example: Use Temperature, Top-p, and Presence Penalty](#-example-use-temperature-top-p-and-presence-penalty)
   - [Example: Multi-Image Input](#-example-multi-image-input)
+  - [Example: Multi-Modal Input](#️-example-multi-modal-input)
 
 ---
 
@@ -349,6 +350,67 @@ print(response.choices[0].message.content)
 # cleanup
 del response, client
 import gc
+gc.collect()
+```
+
+---
+
+## 🎙️ Example: Multi-Modal Input
+
+Send an image and an audio file together with a text prompt to multimodal interface of `Gemma 4`.
+
+```python
+import base64
+import gc
+import sys
+from openai import OpenAI
+
+audio_path = r"C:\Users\info\OneDrive\Desktop\FLM\audio_test\audio.wav"
+image_path = r"C:\Users\info\OneDrive\Desktop\FLM\image_test\image.png"
+
+
+# Read the audio and image files and encode them as Base64 for API input
+with open(audio_path, "rb") as audio_file:
+    audio = base64.b64encode(audio_file.read()).decode("utf-8")
+with open(image_path, "rb") as image_file:
+    image = base64.b64encode(image_file.read()).decode("utf-8")
+
+
+client = OpenAI(base_url="http://127.0.0.1:52625/v1", api_key="dummykey")
+
+stream = client.chat.completions.create(
+    model="gemma4-it:e2b",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Finish two tasks: 1. Summarize the audio. 2. Describe the image."},
+                {
+                    "type": "input_audio",  
+                    "input_audio": {"data": audio},
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{image}"},
+                },
+            ],
+        }
+    ],
+    stream=True
+)
+
+print("=== STREAMING BEGIN ===")
+try:
+    for chunk in stream:
+        content = chunk.choices[0].delta.content
+        if content:
+            print(content, end="", flush=True)
+    print("\n=== STREAMING END ===")
+except Exception as e:
+    sys.stderr.write(f"\n[STREAM ERROR] {e}\n")
+
+# cleanup
+del stream, client
 gc.collect()
 ```
 

@@ -46,6 +46,7 @@ std::string Nanbeige::apply_chat_template(nlohmann::ordered_json& messages, nloh
     minja::chat_template_inputs inputs;
     inputs.add_generation_prompt = true;
     inputs.messages = messages;
+    inputs.tools = tools;
     inputs.extra_context = this->extra_context;
     return this->chat_tmpl->apply(inputs);
 }
@@ -72,7 +73,7 @@ bool Nanbeige::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input) {
         return false;
     }
     if (!input.messages.empty()) { // already a formated messages, usually from REST API
-        templated_text = this->apply_chat_template(input.messages);
+        templated_text = this->apply_chat_template(input.messages, input.tools);
     }
     else if (!input.prompt.empty()) { // a pure text, usually from the cli
         nlohmann::ordered_json messages;
@@ -242,5 +243,195 @@ std::string Nanbeige::generate_with_prompt(chat_meta_info_t& meta_info, lm_unifo
     if (this->total_tokens >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping generation...");
     }
+    return result;
+}
+
+NonStreamResult Nanbeige::parse_nstream_content(const std::string response_text) {
+    NonStreamResult result;
+
+    std::string name, arguments;
+    std::string content, reasoning_content;
+
+    std::string think_start_tag = "<think>";
+    std::string think_end_tag = "</think>";
+    std::string tool_start_tag = "<tool_call>";
+    std::string tool_end_tag = "</tool_call>";
+
+    size_t think_start_pos = response_text.find(think_start_tag);
+    size_t think_end_pos = response_text.find(think_end_tag);
+    size_t tool_start_pos = response_text.find(tool_start_tag);
+    size_t tool_end_pos = response_text.find(tool_end_tag);
+
+    bool is_reasoning = !(think_start_pos == std::string::npos || think_end_pos == std::string::npos);
+    bool is_tool = !(tool_start_pos == std::string::npos || tool_end_pos == std::string::npos);
+    bool is_content = !is_tool;
+
+    if (is_reasoning) {
+        // Find reasoning part
+        think_start_pos += think_start_tag.length();
+        std::string reasoning_str = response_text.substr(think_start_pos, think_end_pos - think_start_pos);
+        result.reasoning_content = reasoning_str;
+    }
+
+    if (is_tool) {
+        // Find tool calling part
+        tool_start_pos += tool_start_tag.length();
+        std::string json_str = response_text.substr(tool_start_pos, tool_end_pos - tool_start_pos);
+        // Parse "name" 
+        std::string key_name = "\"name\": \"";
+        size_t name_start = json_str.find(key_name);
+        if (name_start != std::string::npos) {
+            name_start += key_name.length();
+            size_t name_end = json_str.find("\"", name_start);
+            if (name_end != std::string::npos) {
+                name = json_str.substr(name_start, name_end - name_start);
+            }
+        }
+        // Parse "arguments"
+        std::string key_args = "\"arguments\":";
+        size_t args_pos = json_str.find(key_args);
+        if (args_pos != std::string::npos) {
+            size_t brace_start = json_str.find("{", args_pos);
+            size_t brace_end = json_str.rfind("}"); // Find the last closing brace
+
+            if (brace_start != std::string::npos && brace_end != std::string::npos && brace_end > brace_start) {
+                arguments = json_str.substr(brace_start, brace_end - brace_start);
+            }
+        }
+
+        result.tool_name = name;
+        result.tool_args = arguments;
+
+    }
+    else if (is_content) {
+        std::string content_str = response_text.substr(think_end_pos + think_end_tag.length());
+        result.content = content_str;
+    }
+
+    return result;
+}
+
+
+StreamResult Nanbeige::parse_stream_content(const std::string content) {
+    const std::string MARKER_THINK_START = "<think>";
+    const std::string MARKER_THINK_END = "</think>";
+    const std::string MARKER_TOOL_START = "<tool_call>";
+    const std::string MARKER_TOOL_END = "</tool_call>";
+
+    StreamResult result;
+    buffer_ += content;
+
+    while (true) {
+        // Keep data in buffer_ and wait until a complete TOOL_END is found. Never clear buffer_ midway.
+        if (is_in_tool_block_) {
+            size_t tool_end_pos = buffer_.find(MARKER_TOOL_END);
+            if (tool_end_pos != std::string::npos) {
+                std::string tool_content = buffer_.substr(0, tool_end_pos);
+                buffer_ = buffer_.substr(tool_end_pos + MARKER_TOOL_END.length());
+                is_in_tool_block_ = false;
+
+                try {
+                    auto j = nlohmann::json::parse(tool_content);
+                    result.type = StreamEventType::TOOL_DONE;
+                    result.tool_id = "generate_id()";
+
+                    if (j.contains("name")) {
+                        result.tool_name = j["name"].get<std::string>();
+                    }
+                    if (j.contains("arguments")) {
+                        if (j["arguments"].is_string()) {
+                            result.tool_args_str = j["arguments"].get<std::string>();
+                        } else {
+                            result.tool_args_str = j["arguments"].dump();
+                        }
+                    }
+                    return result;
+                } catch (...) {
+                    result.type = StreamEventType::CONTENT;
+                    result.content = "[Error parsing tool call]";
+                    return result;
+                }
+            } else {
+                result.type = StreamEventType::WAITING;
+                return result;
+            }
+        }
+
+        // tool start
+        size_t tool_start_pos = buffer_.find(MARKER_TOOL_START);
+        if (tool_start_pos != std::string::npos) {
+            if (tool_start_pos > 0) {
+                result.content = buffer_.substr(0, tool_start_pos);
+                result.type = current_mode_;
+                buffer_ = buffer_.substr(tool_start_pos);
+                return result;
+            }
+            is_in_tool_block_ = true;
+            buffer_ = buffer_.substr(MARKER_TOOL_START.length());
+            continue; 
+        }
+
+        if (current_mode_ == StreamEventType::CONTENT) {
+            size_t think_start_pos = buffer_.find(MARKER_THINK_START);
+            if (think_start_pos != std::string::npos) {
+                if (think_start_pos > 0) {
+                    result.content = buffer_.substr(0, think_start_pos);
+                    result.type = StreamEventType::CONTENT;
+                    buffer_ = buffer_.substr(think_start_pos);
+                    return result;
+                }
+                buffer_ = buffer_.substr(MARKER_THINK_START.length());
+                current_mode_ = StreamEventType::REASONING;
+                continue;
+            }
+        } else if (current_mode_ == StreamEventType::REASONING) {
+            size_t think_end_pos = buffer_.find(MARKER_THINK_END);
+            if (think_end_pos != std::string::npos) {
+                if (think_end_pos > 0) {
+                    result.content = buffer_.substr(0, think_end_pos);
+                    result.type = StreamEventType::REASONING;
+                    buffer_ = buffer_.substr(think_end_pos);
+                    return result;
+                }
+                buffer_ = buffer_.substr(MARKER_THINK_END.length());
+                current_mode_ = StreamEventType::CONTENT;
+                continue;
+            }
+        }
+
+        // 4. Safe Flush mechanism: Handle fragmented tag headers
+        // E.g., if the current chunk ends with "<too", keep "<too" in the buffer to prevent truncation
+        std::vector<std::string> active_markers;
+        if (current_mode_ == StreamEventType::CONTENT) {
+            active_markers.push_back(MARKER_THINK_START);
+            active_markers.push_back(MARKER_TOOL_START);
+        } else if (current_mode_ == StreamEventType::REASONING) {
+            active_markers.push_back(MARKER_THINK_END);
+            active_markers.push_back(MARKER_TOOL_START);
+        }
+
+        size_t safe_flush_len = buffer_.length();
+        for (const auto& marker : active_markers) {
+            for (size_t i = 1; i <= marker.length() && i <= buffer_.length(); ++i) {
+                if (buffer_.compare(buffer_.length() - i, i, marker, 0, i) == 0) {
+                    safe_flush_len = std::min(safe_flush_len, buffer_.length() - i);
+                }
+            }
+        }
+
+        if (safe_flush_len > 0) {
+            result.content = buffer_.substr(0, safe_flush_len);
+            result.type = current_mode_;
+            buffer_ = buffer_.substr(safe_flush_len);
+            return result;
+        } else if (buffer_.length() > 0) {
+            result.type = StreamEventType::WAITING;
+            return result;
+        }
+
+        break;
+    }
+
+    result.type = current_mode_;
     return result;
 }

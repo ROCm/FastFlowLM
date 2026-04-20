@@ -114,10 +114,9 @@ sudo apt install ./fastflowlm*.deb
    ulimit -l
    ```
 - If not `unlimited`, add to `/etc/security/limits.conf`:
-   ```
-   *    soft    memlock    unlimited
-   *    hard    memlock    unlimited
-   ```
+
+   `*    soft    memlock    unlimited`   
+   `*    hard    memlock    unlimited`
 - Reboot system
 
 ---

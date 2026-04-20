@@ -2,7 +2,7 @@
 /// \brief embedding class
 /// \author FastFlowLM Team
 /// \date 2025-06-24
-/// \version 0.9.24
+/// \version 0.9.10
 /// \note This is a header file for the embedding class.
 
 #pragma once
@@ -27,7 +27,7 @@ public:
     Embedding(int vocab_size, int d_model){
         this->vocab_size = vocab_size;
         this->d_model = d_model;
-        this->w.resize(vocab_size * d_model);
+        this->w.resize((size_t)vocab_size * d_model);
         this->y.resize(d_model);
     }
 
@@ -35,7 +35,7 @@ public:
     /// \param x the input tensor
     /// \return the output tensor
     vdtype forward(int x){
-        this->y.copy_from(this->w.begin() + x * this->d_model, this->d_model);
+        this->y.copy_from(this->w.begin() + (size_t)x * this->d_model, this->d_model);
         return this->y;
     }
 
@@ -44,7 +44,7 @@ public:
     /// \param y the output tensor
     /// \return the output tensor
     vdtype forward(int x, vdtype& y){
-        y.copy_from(this->w.begin() + x * this->d_model, this->d_model);
+        y.copy_from(this->w.begin() + (size_t)x * this->d_model, this->d_model);
         return y;
     }
 

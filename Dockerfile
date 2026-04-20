@@ -43,6 +43,7 @@ RUN apt update && apt install -y \
     libswresample-dev \
     libswscale-dev \
     libxrt-dev \
+    nasm \
     ninja-build \
     patchelf \
     pkg-config \

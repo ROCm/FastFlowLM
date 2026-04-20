@@ -7,7 +7,10 @@
 #pragma once
 
 #include "typedef.hpp"
+#include <cstdint>
 #include <deque>
+#include <random>
+#include <unordered_map>
 
 /// \brief sampler config
 /// \param temperature the temperature
@@ -27,6 +30,9 @@ typedef struct sampler_config_{
     int rep_penalty_window = 64;
     int freq_penalty_window = 64;  // Window size for frequency penalty
     int repeat_last_n = 64;
+    bool use_optimized_sampling = true;
+    bool has_rng_seed = false;
+    uint64_t rng_seed = 0;
 } sampler_config;
 
 //typedef std::pair<float, int> logits_t;
@@ -60,12 +66,19 @@ public:
     size_t freq_penalty_window;
     size_t rep_penalty_window;
     size_t repeat_last_n;
+    
+    std::unordered_map<int, int> token_counts_sparse;
+
+    std::mt19937_64 rng_{};
+    std::uniform_real_distribution<float> uniform_dist_{0.0f, 1.0f};
+    bool use_optimized_sampling = true;
 
     /// \brief Constructor
     /// \param in_features the input features
     /// \param config the configuration
-    Sampler(){};
+    Sampler() = default;
     Sampler(int in_features, sampler_config& config);
+    void set_seed(uint64_t seed);
 
     /// \brief Reset the penalties
     /// \note The function will reset the penalties
@@ -76,13 +89,19 @@ public:
     void reset_penalties();
 
     void softmax_inplace();
+    void softmax_with_topp_minp(float top_p_threshold, float min_p_threshold);
+    
     void sampler_penalty_apply();
+    void sampler_penalty_apply_sparse();
+    
     void sampler_topk_apply(int k);
     void sampler_topp_apply(float p);
     void sampler_minp_apply(float p);
     void sampler_temp_apply(float temp);
     int sample_from_probs();
     void ring_buffer_update(int sampled_index);
+    void ring_buffer_update_sparse(int sampled_index);
+    
     /// \brief Sample the token
     /// \param x the input buffer
     /// \return the sampled token

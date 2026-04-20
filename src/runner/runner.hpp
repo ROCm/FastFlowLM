@@ -50,6 +50,7 @@ class Runner {
         std::string tag;
         int max_prefill_len;
         bool asr;
+        bool asr_supported;
         bool embed;
         model_list supported_models;
         ModelDownloader& downloader;

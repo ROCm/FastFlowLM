@@ -86,6 +86,12 @@ void brief_print_message_request(nlohmann::json request) {
                             contentItem["image_url"]["url"] = utf8_truncate_middle(image_url, 10, 10);
                         }
                     }
+                    else if (contentItem.contains("type") && contentItem["type"] == "input_audio") {
+                        std::string audio_base64 = contentItem["input_audio"]["data"].get<std::string>();
+                        if (audio_base64.size() > 20) {
+                            contentItem["input_audio"]["data"] = utf8_truncate_middle(audio_base64, 10, 10);
+                        }
+                    }
                 }
             }
             // Handle legacy "images" array

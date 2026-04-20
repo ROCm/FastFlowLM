@@ -132,6 +132,8 @@ docs_nav:
         url: "/docs/models/lfm/"
       - label: Microsoft/Phi
         url: "/docs/models/phi/"
+      - label: Nanbeige
+        url: "/docs/models/nanbeige/"
       - label: Whisper
         url: "/docs/models/whisper/"
       - label: EmbeddingGemma
@@ -144,6 +146,8 @@ docs_nav:
         url: "/docs/benchmarks/llama3_results/"
       - label: Gemma3
         url: "/docs/benchmarks/gemma3_results/"
+      - label: Gemma4
+        url: "/docs/benchmarks/gemma4_results/"
       - label: Qwen2.5
         url: "/docs/benchmarks/qwen2.5_results/"
       - label: Qwen3
@@ -156,3 +160,5 @@ docs_nav:
         url: "/docs/benchmarks/lfm2_results/"
       - label: Microsoft/Phi4
         url: "/docs/benchmarks/phi4_results/"
+      - label: Nanbeige4.1
+        url: "/docs/benchmarks/nanbeige4.1_results/"

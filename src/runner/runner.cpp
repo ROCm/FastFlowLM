@@ -41,35 +41,6 @@ Runner::Runner(model_list& supported_models, ModelDownloader& downloader, progra
 
     this->npu_device_inst = xrt::device(0);
 
-
-    if (this->embed) {
-        header_print("Warning", "Embed model not supported in CLI; Use 'flm serve -e 1'");
-    }
-
-#ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
-    if (this->asr) {
-        // load asr model
-        std::string whisper_tag = "whisper-v3:turbo";
-        if (!this->downloader.is_model_downloaded(whisper_tag)) {
-            this->downloader.pull_model(whisper_tag);
-        }
-        this->whisper_engine = std::make_unique<Whisper>(&this->npu_device_inst);
-        auto [new_whisper_tag, whisper_model_info] = this->supported_models.get_model_info(whisper_tag);
-        std::string whisper_model_path = this->supported_models.get_model_path(new_whisper_tag);
-        try {
-            this->whisper_engine->load_model(whisper_model_path, whisper_model_info, this->preemption);
-        }
-        catch (const std::exception& e) {
-            header_print("ERROR", "Failed to load ASR model: " + std::string(e.what()));
-            exit(EXIT_FAILURE);
-        }
-    }
-#else
-    if (this->asr) {
-        header_print("Error", "ASR models are not supported in this build");
-    }
-#endif
-
     if (args.ctx_length != -1) {
         this->ctx_length = args.ctx_length >= 512 ? args.ctx_length : 512;
     } 
@@ -84,10 +55,13 @@ Runner::Runner(model_list& supported_models, ModelDownloader& downloader, progra
     this->auto_chat_engine = std::move(auto_model.second);
     
     this->tag = auto_model.first;
+
     if (!this->downloader.is_model_downloaded(this->tag)) {
         this->downloader.pull_model(this->tag);
     }
     auto [new_tag, model_info] = this->supported_models.get_model_info(this->tag);
+    this->asr_supported = model_info.contains("asr") && model_info["asr"];
+    // header_print("ASR", asr_supported);
     this->auto_chat_engine->configure_parameter("img_pre_resize", this->img_pre_resize);
     try {
         this->auto_chat_engine->load_model(this->supported_models.get_model_path(new_tag), model_info, this->ctx_length, this->preemption);
@@ -105,6 +79,44 @@ Runner::Runner(model_list& supported_models, ModelDownloader& downloader, progra
     }
 
     this->generate_limit = -1;
+
+
+    if (this->embed) {
+        header_print("Warning", "Embed model not supported in CLI; Use 'flm serve -e 1'");
+    }
+
+    header_print("FLM", "Loading model: " << this->tag);
+
+#ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
+    if (this->asr) {
+        // check if multi-modal model with ASR support is loaded, if not, load the default whisper model for ASR
+        if (!asr_supported) 
+        {
+            header_print("FLM", "The loaded model does not support ASR. Loading default Whisper model for ASR...");
+            std::string whisper_tag = "whisper-v3:turbo";
+            if (!this->downloader.is_model_downloaded(whisper_tag)) {
+                this->downloader.pull_model(whisper_tag);
+            }
+            this->whisper_engine = std::make_unique<Whisper>(&this->npu_device_inst);
+            auto [new_whisper_tag, whisper_model_info] = this->supported_models.get_model_info(whisper_tag);
+            std::string whisper_model_path = this->supported_models.get_model_path(new_whisper_tag);
+            try {
+                this->whisper_engine->load_model(whisper_model_path, whisper_model_info, this->preemption);
+            }
+            catch (const std::exception& e) {
+                header_print("ERROR", "Failed to load ASR model: " + std::string(e.what()));
+                exit(EXIT_FAILURE);
+            }
+        }
+        else {
+            header_print("FLM", "The loaded model (" + this->tag + ") already supports ASR. No additional ASR model is needed.");
+        }
+    }
+#else
+    if (this->asr) {
+        header_print("Error", "ASR models are not supported in this build");
+    }
+#endif
 }
 
 
@@ -259,7 +271,12 @@ void Runner::run() {
                 }
                 else if (filename.find(".wav") != std::string::npos || filename.find(".mp3") != std::string::npos || filename.find(".ogg") != std::string::npos || filename.find(".m4a") != std::string::npos) {
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
-                    if (this->asr) {
+                    if (this->asr_supported) {
+                        // gemma4 process
+                        uniformed_input.audios.push_back(filename);
+                        uniformed_input.audio_payload_types.push_back(FILE_NAME);
+                    }
+                    else if (this->asr) {
                         // check if the file exists
                         if (!std::filesystem::exists(filename)) {
                             header_print("FLM", "Error: Could not open file: " << filename);

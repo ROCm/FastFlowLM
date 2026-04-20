@@ -75,6 +75,7 @@ if(NOT WIN32)
 
     set_source_files_properties(
         ${CMAKE_SOURCE_DIR}/common/image_process_utils/imageprocAVX512.cpp
+        ${CMAKE_SOURCE_DIR}/common/audio_process_utils/audioprocAVX512.cpp
         PROPERTIES
         COMPILE_OPTIONS "-mavx512f;-mavx512dq;-mavx512vl;-mavx512bw;-mfma"
     )
@@ -177,6 +178,7 @@ target_link_libraries(flm PUBLIC
     qwen3_5vl_npu
     gemma_npu
     gemma_text_npu
+    gemma4e_npu
     gpt_oss_npu
     whisper_npu
     gemma_embedding

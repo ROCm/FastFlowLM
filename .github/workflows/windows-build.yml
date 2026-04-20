@@ -82,7 +82,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
-          zip_name="fastflowlm-windows-${version}.zip"
+          zip_name="fastflowlm_${version}_windows_amd64.zip"
 
           # Zip the downloaded artifact payload once for the GitHub Release asset.
           cd release-assets
@@ -93,6 +93,6 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: Release ${{ github.ref_name }}
-          files: fastflowlm-windows-*.zip
+          files: fastflowlm_*.zip
           overwrite_files: true
           fail_on_unmatched_files: true

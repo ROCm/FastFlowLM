@@ -24,5 +24,6 @@ has_children: true
 - [gpt-oss](gpt-oss/)
 - [LiquidAI/LFM](lfm/)
 - [Phi](phi/)
+- [Nanbeige](nanbeige/)
 - [Whisper](whisper/)
 - [Embedding Gemma](embeddinggemma/)

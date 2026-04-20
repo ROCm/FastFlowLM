@@ -250,6 +250,53 @@ The `-r` option determines image's height:
 
 ---
 
+## 🧩 Model Card: [Qwen3.5-0.8B](https://huggingface.co/Qwen/Qwen3.5-0.8B)
+
+- **Type:** Image-Text-to-Text
+- **Think:** Toggleable
+- **Tool Calling Support:** No  
+- **Base Model:** [Qwen/Qwen3.5-0.8B](https://huggingface.co/Qwen/Qwen3.5-0.8B)
+- **Quantization:** Q4_1
+- **Max Context Length:** 256k tokens  
+- **Default Context Length:** 32k tokens ([change default](https://fastflowlm.com/docs/instructions/cli/#-change-default-context-length-max))  
+- **[Set Context Length at Launch](https://fastflowlm.com/docs/instructions/cli/#-set-context-length-at-launch)**
+
+▶️ Run with FastFlowLM in PowerShell:  
+
+```shell
+flm run qwen3.5:0.8b
+```
+
+▶️ Image Resize Options
+
+You can control image resizing when running or serving the model using the `--img-pre-resize` flag or simply `-r`:
+
+```shell
+flm run qwen3.5:0.8b -r 1
+```
+
+```shell
+flm serve qwen3.5:0.8b -r 1
+```
+
+The `-r` option determines image's height:
+
+- 0: original size 
+- 1: height = 480 px 
+- 2: height = 720 px (default)
+- 3: height = 1080 px
+- 4: height = 1440 px 
+                 
+> Don't worry—if your image is already smaller than the setup, it keeps its original resolution! ✨
+
+📝 **Note**
+
+- Optimal sampling parameters for generation vary depending on the task. Check the [Qwen3.5-0.8B model card](https://huggingface.co/Qwen/Qwen3.5-0.8B#using-qwen35-via-the-chat-completions-api) for details.
+- Image understanding adapts to image size. Image TTFT can range from under 1 second to ~200 seconds depending on resolution. Use lower-resolution images (720p or below) unless high resolution is required (e.g. OCR on small text).
+- Video understanding is not supported yet.
+
+---
+
 ## 🧩 Model Card: [Qwen3.5-2B](https://huggingface.co/Qwen/Qwen3.5-2B)
 
 - **Type:** Image-Text-to-Text

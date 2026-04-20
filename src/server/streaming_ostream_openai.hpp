@@ -300,6 +300,9 @@ public:
             send_response(buffer, false);
             buffer.clear();
         }
+        if (stream_stop_reason == stop_reason_t::TOOL_DETECTED) {
+            meta_info.stop_reason = stream_stop_reason;
+        }
         send_final_response(meta_info);
     }
 
@@ -416,6 +419,7 @@ private:
         }
         json delta;
         if (result.type == StreamEventType::TOOL_DONE) {
+            stream_stop_reason = stop_reason_t::TOOL_DETECTED;
             delta = {
                 {"tool_calls", json::array({
                     {
@@ -512,6 +516,7 @@ private:
     std::string system_fingerprint;
     ///@brief First chunk flag
     bool first_chunk;
+    stop_reason_t stream_stop_reason = stop_reason_t::EOT_DETECTED;
 
     std::unique_ptr<harmony_filter> harmony_filter_inst;
 };
