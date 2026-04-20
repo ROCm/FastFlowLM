@@ -302,13 +302,22 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input) {
       
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
 
+    // find the last image token index
+    int last_image_token_index = -1;
+    for (int i = 0; i < tokens.size(); i++) {
+        if ((tokens[i] == image_token_id || tokens[i] == boi_token_id)) {
+            last_image_token_index = i;
+        }
+    }
+    last_image_token_index++; // plus the end of image tokens
+
     // hardware
     gemma4e_multi_modal_payload_t multi_modal_payload;
     multi_modal_payload.image_payload = image_payload;
     multi_modal_payload.audio_payload = audio_payload;
 
     if (image_payload.num_images > 0 || audio_payload.num_audios > 0) {
-        return this->_shared_insert(meta_info, tokens, &multi_modal_payload);
+        return this->_shared_insert(meta_info, tokens, &multi_modal_payload, last_image_token_index);
     } 
     else {
         return this->_shared_insert(meta_info, tokens, nullptr);
