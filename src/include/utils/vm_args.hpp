@@ -25,6 +25,7 @@ inline void print_help(po::options_description& general) {
     std::cout << "  serve <model_tag>   - Start the  server" << std::endl;
     std::cout << "  pull <model_tag>    - Download model files if not present" << std::endl;
     std::cout << "  remove <model_tag>  - Remove a model" << std::endl;
+    std::cout << "  check <model_tag>   - Check a model" << std::endl;
     std::cout << "  list                - List all available models" << std::endl;
     std::cout << "  version             - Show version information" << std::endl;
     std::cout << "  help                - Show this help message" << std::endl;
@@ -208,7 +209,7 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
         }
 
         // Validate command-specific requirements
-        if (parsed_args.command == "run" || parsed_args.command == "pull" || parsed_args.command == "remove") {
+        if (parsed_args.command == "run" || parsed_args.command == "pull" || parsed_args.command == "remove" || parsed_args.command == "check") {
             if (parsed_args.model_tag.empty()) {
                 std::cerr << "Error: Model tag is required for command '" << parsed_args.command << "'" << std::endl;
                 return false;

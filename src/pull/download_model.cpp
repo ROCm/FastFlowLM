@@ -14,6 +14,8 @@
 #include "picosha2.h" 
 #include "sha1.hpp"
 
+namespace download_utils {
+
 /// \brief Calculates the SHA256 hash of a file.
 /// \param file_path The path to the file.
 /// \return A string representing the hex digest of the hash, or an empty string on error.
@@ -46,8 +48,6 @@ std::string calculate_git_blob_oid(const std::string& file_path) {
     sha1.update(blob_data);
     return sha1.final();
 }
-
-namespace download_utils {
 
 // Global variable to track if progress bar was shown
 static bool g_progress_bar_shown = false;

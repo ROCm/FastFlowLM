@@ -15,6 +15,9 @@
 
 namespace download_utils {
 
+std::string calculate_file_sha256(const std::string& file_path);
+std::string calculate_git_blob_oid(const std::string& file_path);
+
 // Cursor control functions
 void hide_cursor();
 void show_cursor();

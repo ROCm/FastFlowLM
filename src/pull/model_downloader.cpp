@@ -392,4 +392,71 @@ bool ModelDownloader::remove_model(const std::string& model_tag, bool sub_proces
         header_print("ERROR", "Exception during model removal: " + std::string(e.what()));
         return false;
     }
-} 
+}
+
+/// \brief Check hash of model files
+/// \param model_tag the model tag
+/// \return true if all files are present and compatible, false otherwise
+bool ModelDownloader::check_model(const std::string& model_tag, bool sub_process_mode) {
+    auto [new_model_tag, model_info] = supported_models.get_model_info(model_tag);
+    header_print("FLM", "Checking model: " + new_model_tag + "...\n");
+
+    if (!is_model_downloaded(new_model_tag, sub_process_mode)) {
+        header_print("FLM", "Model not exist or not compatible: " + new_model_tag);
+        header_print("FLM", "Please use `flm pull " + new_model_tag + "` to download the model.");
+        return true;
+    }
+    else {
+        std::vector<std::string> model_files = model_info["files"];
+        std::string model_path = supported_models.get_model_path(new_model_tag);
+        std::string file_url = model_info["file_url"];
+        // GET HF api/models
+        std::string hf_response = download_utils::download_string(file_url);
+        nlohmann::json hf_model_infos = nlohmann::json::parse(hf_response);
+
+        bool any_error = false;
+        for (const auto& filename : model_files) {
+            header_print("FLM", "Checking file: " + filename + "...");
+
+            auto it = std::find_if(
+                hf_model_infos.begin(),
+                hf_model_infos.end(),
+                [&](const nlohmann::json& f) {
+                    return f["path"] == filename;
+                }
+            );
+            if (it == hf_model_infos.end()) {
+                continue;
+            }
+            const auto& file = *it;
+            std::string local_path = get_model_file_path(model_path, filename);
+
+            bool is_lfs = file.contains("lfs");
+            std::string oid_ref = is_lfs ? file["lfs"]["oid"] : file["oid"];
+            std::string local_oid = is_lfs ? download_utils::calculate_file_sha256(local_path) : download_utils::calculate_git_blob_oid(local_path);
+
+            if (local_oid == oid_ref) {
+                header_print("FLM", "Success!");
+            }
+            else {
+                header_print("FLM", "Fail!");
+                header_print("FLM", "Removing corrupted file: " + filename + "...");
+
+                if (std::filesystem::remove(local_path)) {
+                    header_print("FLM", "Successfully removed " + filename + "!");
+                } 
+                else {
+                    header_print("ERROR", "Failed to remove corrupted file: " + filename);
+                }
+                any_error = true;
+            }
+        }
+        if (any_error) {
+            header_print("FLM", "Model check completed with errors. Please use `flm pull " + new_model_tag + "` to re-download corrupted files.");
+        }
+        else {
+            header_print("FLM", "Model check completed successfully. All files are present and compatible.");
+        }
+    }
+    return true;
+}

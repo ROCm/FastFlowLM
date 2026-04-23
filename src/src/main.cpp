@@ -498,7 +498,7 @@ int main(int argc, char* argv[]) {
         return stable_stack ? 0 : 1;
     }
 
-    if (parsed_args.command == "run" || parsed_args.command == "serve" || parsed_args.command == "pull" || parsed_args.command == "remove" || parsed_args.command == "bench") {
+    if (parsed_args.command == "run" || parsed_args.command == "serve" || parsed_args.command == "pull" || parsed_args.command == "remove" || parsed_args.command == "check" || parsed_args.command == "bench") {
       if (parsed_args.model_tag != "model-faker" && (!availble_models.is_model_supported(parsed_args.model_tag))) {
             header_print("ERROR", "Model not found: " << parsed_args.model_tag << "; Please check with `flm list` and try again.");
             return 1;
@@ -647,6 +647,9 @@ int main(int argc, char* argv[]) {
         else if (parsed_args.command == "remove") {
             // Remove the model, this will be used to remove the model
             downloader.remove_model(parsed_args.model_tag);
+        }
+        else if (parsed_args.command == "check") {
+            downloader.check_model(parsed_args.model_tag);
         }
         else if (parsed_args.command == "list") {
             // List the models, this will be used to list the models
