@@ -38,6 +38,7 @@ inline void print_help(po::options_description& general) {
     std::cout << "\tflm run llama3.2:1b --asr 1" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --pmode balanced" << std::endl;
     std::cout << "\tflm pull llama3.2:1b --force" << std::endl;
+    std::cout << "\tflm check llama3.2:1b" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --ctx-len 8192" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --socket 10" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --q-len 10" << std::endl;
