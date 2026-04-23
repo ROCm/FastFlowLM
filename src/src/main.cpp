@@ -529,22 +529,36 @@ int main(int argc, char* argv[]) {
 
 #ifndef _WIN32
     // Raise memlock limit to accommodate the model being loaded
-    if ((parsed_args.command == "run" || parsed_args.command == "serve" || parsed_args.command == "bench") &&
-        parsed_args.model_tag != "model-faker" && !parsed_args.model_tag.empty()) {
-        auto [resolved_tag, model_info] = availble_models.get_model_info(parsed_args.model_tag);
-        if (model_info.contains("size")) {
-            rlim_t model_size = model_info["size"].get<uint64_t>();
-            // Add 512MB overhead for working memory beyond the model itself
-            rlim_t required = model_size + (512ULL * 1024 * 1024);
-            struct rlimit rl;
-            if (getrlimit(RLIMIT_MEMLOCK, &rl) == 0) {
-                if (rl.rlim_cur != RLIM_INFINITY && rl.rlim_cur < required) {
-                    struct rlimit rl_new = { required, required };
-                    if (setrlimit(RLIMIT_MEMLOCK, &rl_new) == 0) {
-                        header_print_g("Linux", "Memlock Limit: raised to " << (required / 1024 / 1024) << " MB for " << resolved_tag);
-                    } else {
-                        header_print("Linux", "Warning: could not raise memlock limit to " << (required / 1024 / 1024) << " MB");
-                    }
+    if ((parsed_args.command == "run" || parsed_args.command == "serve" || parsed_args.command == "bench")) {
+        rlim_t model_size = 0;
+        rlim_t asr_size = 0;
+        rlim_t embedding_size = 0;
+
+        if (parsed_args.model_tag != "model-faker" && !parsed_args.model_tag.empty()) {
+            auto [resolved_tag, model_info] = availble_models.get_model_info(parsed_args.model_tag);
+            if (model_info.contains("size")) {
+                model_size = model_info["size"].get<uint64_t>();
+            }
+        }
+        if (parsed_args.asr) {
+            asr_size = 1000000000;
+            header_print_g("FLM", "ASR mode enabled: reserving additional 1GB of memory");
+        }
+        if (parsed_args.embed) {
+            embedding_size = 300000000;
+            header_print_g("FLM", "Embedding mode enabled: reserving additional 300MB of memory");
+        }
+
+        // Add 512MB overhead for working memory beyond the model itself
+        rlim_t required = model_size + asr_size + embedding_size + (512ULL * 1024 * 1024);
+        struct rlimit rl;
+        if (getrlimit(RLIMIT_MEMLOCK, &rl) == 0) {
+            if (rl.rlim_cur != RLIM_INFINITY && rl.rlim_cur < required) {
+                struct rlimit rl_new = { required, required };
+                if (setrlimit(RLIMIT_MEMLOCK, &rl_new) == 0) {
+                    header_print_g("Linux", "Memlock Limit: raised to " << (required / 1024 / 1024) << " MB");
+                } else {
+                    header_print("Linux", "Warning: could not raise memlock limit to " << (required / 1024 / 1024) << " MB");
                 }
             }
         }
