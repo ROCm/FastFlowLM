@@ -50,7 +50,7 @@ std::string Llama3::apply_chat_template(nlohmann::ordered_json& messages, nlohma
     return this->chat_tmpl->apply(inputs);
 }
 
-bool Llama3::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input) {
+bool Llama3::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
     // preprocess
     this->profiler_list[TKOEN_ENCODE_TIME].start();
     std::string templated_text;
@@ -79,7 +79,7 @@ bool Llama3::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input) {
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
     // hardware
 
-    return this->_shared_insert(meta_info, tokens);
+    return this->_shared_insert(meta_info, tokens, is_cancelled);
 }
 
 
@@ -140,7 +140,7 @@ std::string DeepSeek_r1_8b::apply_chat_template(nlohmann::ordered_json& messages
     return this->chat_tmpl->apply(inputs);
 }
 
-bool DeepSeek_r1_8b::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input) {
+bool DeepSeek_r1_8b::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
     // preprocess
     this->profiler_list[TKOEN_ENCODE_TIME].start();
     std::string templated_text;
@@ -169,7 +169,7 @@ bool DeepSeek_r1_8b::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& inp
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
     // hardware
 
-    return this->_shared_insert(meta_info, tokens);
+    return this->_shared_insert(meta_info, tokens, is_cancelled);
 }
 
 std::string DeepSeek_r1_8b::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {

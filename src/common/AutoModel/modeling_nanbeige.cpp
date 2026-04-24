@@ -64,7 +64,7 @@ std::string Nanbeige::nanbeige_filter(int token) {
     return token_str;
 }
 
-bool Nanbeige::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input) {
+bool Nanbeige::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
     // preprocess
     this->profiler_list[TKOEN_ENCODE_TIME].start();
     std::string templated_text;
@@ -95,7 +95,7 @@ bool Nanbeige::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input) {
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
     // hardware
 
-    return this->_shared_insert(meta_info, tokens);
+    return this->_shared_insert(meta_info, tokens, is_cancelled);
 }
 
 

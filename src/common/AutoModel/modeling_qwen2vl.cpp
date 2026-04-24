@@ -54,7 +54,7 @@ std::string Qwen2VL::apply_chat_template(nlohmann::ordered_json& messages, nlohm
     return this->chat_tmpl->apply(inputs);
 }
 
-bool Qwen2VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input) {
+bool Qwen2VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
     // preprocess
     constexpr int image_soft_token_id = 151655;
     this->profiler_list[TKOEN_ENCODE_TIME].start();
@@ -229,9 +229,9 @@ bool Qwen2VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input) {
     last_image_token_index++; // plus the end of image tokens
     // hardware
     if (image_payload.num_images > 0){
-        return this->_shared_insert(meta_info, tokens, &image_payload, last_image_token_index);
+        return this->_shared_insert(meta_info, tokens, is_cancelled, &image_payload, last_image_token_index);
     }else{
-        return this->_shared_insert(meta_info, tokens, nullptr);
+        return this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
     }
 
 }

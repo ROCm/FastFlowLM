@@ -349,6 +349,46 @@ void HttpSession::write_response_from_callback() {
     write_response();
 }
 
+void HttpSession::set_cancellation_token(std::shared_ptr<CancellationToken> token) {
+    cancellation_token_ = token;
+    start_client_disconnect_monitor(token);
+}
+
+void HttpSession::start_client_disconnect_monitor(std::shared_ptr<CancellationToken> token) {
+    if (!token || token->cancelled() || !socket_.is_open()) {
+        return;
+    }
+
+    auto self = shared_from_this();
+    socket_.async_wait(tcp::socket::wait_read,
+        [self, token](beast::error_code ec) {
+            if (!token || token->cancelled() || token->completed()) {
+                return;
+            }
+
+            if (ec) {
+                if (ec != net::error::operation_aborted && !token->completed()) {
+                    token->cancel();
+                    header_print("🔴 ", "Client socket wait failed; cancelling active request: " + ec.message());
+                }
+                return;
+            }
+
+            char peek_buffer = 0;
+            boost::system::error_code peek_ec;
+            std::size_t bytes_read = self->socket_.receive(
+                net::buffer(&peek_buffer, 1),
+                boost::asio::socket_base::message_peek,
+                peek_ec);
+
+            if ((peek_ec || bytes_read == 0) && !token->completed()) {
+                token->cancel();
+                header_print("🔴 ", "Client disconnected; cancelling active request");
+                return;
+            }
+        });
+}
+
 ///@brief write streaming response
 ///@param data the data
 ///@param is_final the is final
@@ -421,7 +461,7 @@ void HttpSession::send_chunk_data(const json& data, bool is_final) {
     net::write(socket_, net::buffer(http_chunk), ec);
     
     if (ec) {
-        if (cancellation_token_) {
+        if (cancellation_token_ && !cancellation_token_->completed()) {
             cancellation_token_->cancel(); 
         }
 
@@ -686,7 +726,7 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
         register_active_request(request_id, cancellation_token);
 
         // catch is_deferred 
-        auto send_response = [res_ptr, session, this, request_id, needs_npu, is_deferred](const json& response_data) {
+        auto send_response = [res_ptr, session, this, request_id, needs_npu, is_deferred, cancellation_token](const json& response_data) {
             auto& response_ref = *res_ptr;
             http::status status = http::status::ok;
 
@@ -707,6 +747,7 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
             response_ref.body() = response_data.dump();
             response_ref.set(http::field::content_type, "application/json");
             response_ref.prepare_payload();
+            cancellation_token->complete();
             unregister_active_request(request_id);
 
             if (needs_npu) {
@@ -718,7 +759,11 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
             }
         };
 
-        auto send_streaming_response = [session, this, request_id, needs_npu](const json& data, bool is_final) {
+        auto send_streaming_response = [session, this, request_id, needs_npu, cancellation_token](const json& data, bool is_final) {
+            if (is_final) {
+                cancellation_token->complete();
+            }
+
             if (session) {
                 session->write_streaming_response(data, is_final);
             }
@@ -735,6 +780,7 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
             it->second(req_ref, send_response, send_streaming_response, session, cancellation_token);
         }
         catch (const std::exception& e) {
+            cancellation_token->complete();
             unregister_active_request(request_id);
 
             res_ref.result(http::status::internal_server_error);
@@ -751,6 +797,7 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
             }
         }
         catch (...) {
+            cancellation_token->complete();
             unregister_active_request(request_id);
 
             res_ref.result(http::status::internal_server_error);

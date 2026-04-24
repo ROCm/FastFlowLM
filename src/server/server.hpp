@@ -69,18 +69,26 @@ using StreamCallback = std::function<void(const std::string&)>;
 // Cancellation token for request cancellation
 struct CancellationToken {
     std::atomic<bool> is_cancelled;
+    std::atomic<bool> is_completed;
     std::weak_ptr<HttpSession> session;
     
-    CancellationToken(std::shared_ptr<HttpSession> s) : is_cancelled(false), session(s) {}
+    CancellationToken(std::shared_ptr<HttpSession> s) : is_cancelled(false), is_completed(false), session(s) {}
     
     void cancel() {
         is_cancelled.store(true);
     }
+    void complete() {
+        is_completed.store(true);
+    }
     void reset() noexcept { 
         is_cancelled.store(false, std::memory_order_relaxed); 
+        is_completed.store(false, std::memory_order_relaxed);
     }
     bool cancelled() const {
         return is_cancelled.load();
+    }
+    bool completed() const {
+        return is_completed.load();
     }
 };
 
@@ -176,14 +184,13 @@ public:
     void write_streaming_response(const json& data, bool is_final);
     void close_connection();
     void write_response_from_callback();
-    void set_cancellation_token(std::shared_ptr<CancellationToken> token) {
-        cancellation_token_ = token;
-    }
+    void set_cancellation_token(std::shared_ptr<CancellationToken> token);
 private:
     void read_request(bool cors);
     void handle_request(bool cors);
     void write_response();
     void send_chunk_data(const json& data, bool is_final);
+    void start_client_disconnect_monitor(std::shared_ptr<CancellationToken> token);
     
     ///@brief socket
     tcp::socket socket_;

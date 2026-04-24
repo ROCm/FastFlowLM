@@ -87,7 +87,7 @@ std::string Phi4::apply_chat_template(nlohmann::ordered_json& messages, nlohmann
     return this->chat_tmpl->apply(inputs);
 }
 
-bool Phi4::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input) {
+bool Phi4::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
     // preprocess
     this->profiler_list[TKOEN_ENCODE_TIME].start();
     std::string templated_text;
@@ -109,7 +109,7 @@ bool Phi4::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input) {
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
     // hardware
 
-    return this->_shared_insert(meta_info, tokens);
+    return this->_shared_insert(meta_info, tokens, is_cancelled);
 }
 
 

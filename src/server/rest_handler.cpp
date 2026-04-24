@@ -940,8 +940,17 @@ void RestHandler::handle_openai_chat_completion(const json& request,
 
             header_print("FLM", "Start prefill...");
             try {
-                bool success = auto_chat_engine->insert(meta_info, uniformed_input);
+                bool success = auto_chat_engine->insert(meta_info, uniformed_input, [&] { return cancellation_token->cancelled(); });
                 if (!success) {
+                    if (meta_info.stop_reason == CANCEL_DETECTED || cancellation_token->cancelled()) {
+                        meta_info.stop_reason = CANCEL_DETECTED;
+                        header_print("❌ ", "Prefill Cancelled!");
+                        ostream.finalize(meta_info);
+                        this->auto_chat_engine->clear_context();
+                        this->prompt_cache.reset();
+                        return;
+                    }
+
                     json error_response = {
                         {"error", {
                         {"message", "Max length reached!"},
@@ -968,21 +977,30 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                 this->auto_chat_engine->clear_context();
                 return;
             }
-            ostream.finalize(meta_info);
-
             if (meta_info.stop_reason == CANCEL_DETECTED) {
-                header_print("FLM", "Generation Cancelled!");
+                header_print("❌ ", "Generation Cancelled!");
                 this->prompt_cache.reset();
             }
+                        
+            ostream.finalize(meta_info);
         }
         else {
             this->auto_chat_engine->clear_context();
             nullstream nstream;
+            json response;
             std::string response_text;
             header_print("FLM", "Start prefill...");
             try {
-                bool success = auto_chat_engine->insert(meta_info, uniformed_input);
+                bool success = auto_chat_engine->insert(meta_info, uniformed_input, [&] { return cancellation_token->cancelled(); });
                 if (!success) {
+                    if (meta_info.stop_reason == CANCEL_DETECTED || cancellation_token->cancelled()) {
+                        meta_info.stop_reason = CANCEL_DETECTED;
+                        header_print("❌ ", "Prefill Cancelled!");
+                        send_response(response);
+                        this->auto_chat_engine->clear_context();
+                        this->prompt_cache.reset();
+                        return;
+                    }
                     json error_response = {
                         {"error", {
                         {"message", "Max length reached!"},
@@ -1011,7 +1029,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
             }
             // check response_text
             json choices = build_nstream_response(response_text);
-            json response = {
+            response = {
                 {"id", "fastflowlm-chat-completion"},
                 {"object", "chat.completion"},
                 {"created", static_cast<long long>(std::time(nullptr))},
@@ -1029,6 +1047,9 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                 }},
                 {"service_tier", "default"}
             };
+            if (meta_info.stop_reason == CANCEL_DETECTED) {
+                header_print("❌ ", "Generation Cancelled!");
+            }
             send_response(response);
             this->prompt_cache.reset();
         }

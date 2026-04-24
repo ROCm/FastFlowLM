@@ -190,8 +190,8 @@ protected:
 	/// \param tokens the tokens to insert
 	/// \param payload the payload, it shall not be used as this function is only used for chunkwised insertion, no image allowed
 	/// \return true if the tokens were inserted successfully, false otherwise
-	bool _shared_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, void* payload = nullptr, int first_len_run = 0);
-	buffer<bf16> _chunked_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, void* payload = nullptr, int first_len_run = 0);
+	bool _shared_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled = [] { return false; }, void* payload = nullptr, int first_len_run = 0);
+	buffer<bf16> _chunked_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled = [] { return false; }, void* payload = nullptr, int first_len_run = 0);
 	std::string _shared_generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled = [] { return false; });
 
 	StreamResult _shared_think_tool_calling_pasrsed(const std::string content);
@@ -352,7 +352,7 @@ public:
 	/// \param tokens the tokens
 	/// \param is_system_prompt the is system prompt
 	/// \return true if the tokens are inserted successfully, false otherwise
-	virtual bool insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input) = 0;
+	virtual bool insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled = [] { return false; }) = 0;
 
 	/// \brief Generate the tokens with prompt
 	virtual std::string generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os = std::cout) = 0;

@@ -60,7 +60,7 @@ std::string Gemma4e::apply_chat_template(nlohmann::ordered_json& messages, nlohm
     return this->chat_tmpl->apply(inputs);
 }
 
-bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input) {
+bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
     this->profiler_list[TKOEN_ENCODE_TIME].start();
     std::string templated_text;
     
@@ -317,10 +317,10 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input) {
     multi_modal_payload.audio_payload = audio_payload;
 
     if (image_payload.num_images > 0 || audio_payload.num_audios > 0) {
-        return this->_shared_insert(meta_info, tokens, &multi_modal_payload, last_image_token_index);
+        return this->_shared_insert(meta_info, tokens, is_cancelled, &multi_modal_payload, last_image_token_index);
     } 
     else {
-        return this->_shared_insert(meta_info, tokens, nullptr);
+        return this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
     }
 }
 

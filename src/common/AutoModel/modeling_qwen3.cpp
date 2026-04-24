@@ -57,7 +57,7 @@ std::string Qwen3::apply_chat_template(nlohmann::ordered_json& messages, nlohman
     return this->chat_tmpl->apply(inputs);
 }
 
-bool Qwen3::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input) {
+bool Qwen3::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
     // preprocess
     this->profiler_list[TKOEN_ENCODE_TIME].start();
     std::string templated_text;
@@ -85,7 +85,7 @@ bool Qwen3::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input) {
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
     // hardware
 
-    return this->_shared_insert(meta_info, tokens);
+    return this->_shared_insert(meta_info, tokens, is_cancelled);
 }
 
 std::string Qwen3::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
@@ -213,7 +213,7 @@ std::string Qwen3_IT::apply_chat_template(nlohmann::ordered_json& messages, nloh
     return this->chat_tmpl->apply(inputs);
 }
 
-bool Qwen3_IT::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input) {
+bool Qwen3_IT::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
     // preprocess
     this->profiler_list[TKOEN_ENCODE_TIME].start();
     std::string templated_text;
@@ -239,7 +239,7 @@ bool Qwen3_IT::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input) {
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
     // hardware
 
-    return this->_shared_insert(meta_info, tokens);
+    return this->_shared_insert(meta_info, tokens, is_cancelled);
 }
 
 std::string Qwen3_IT::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
@@ -404,7 +404,7 @@ std::string Qwen3_TK::apply_chat_template(nlohmann::ordered_json& messages, nloh
     return this->chat_tmpl->apply(inputs);
 }
 
-bool Qwen3_TK::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input) {
+bool Qwen3_TK::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
     // preprocess
     this->profiler_list[TKOEN_ENCODE_TIME].start();
     std::string templated_text;
@@ -430,7 +430,7 @@ bool Qwen3_TK::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input) {
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
     // hardware
 
-    return this->_shared_insert(meta_info, tokens);
+    return this->_shared_insert(meta_info, tokens, is_cancelled);
 }
 
 std::string Qwen3_TK::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
@@ -562,7 +562,7 @@ std::string DeepSeek_r1_0528_8b::apply_chat_template(nlohmann::ordered_json& mes
     return this->chat_tmpl->apply(inputs);
 }
 
-bool DeepSeek_r1_0528_8b::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input) {
+bool DeepSeek_r1_0528_8b::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
     // preprocess
     this->profiler_list[TKOEN_ENCODE_TIME].start();
     std::string templated_text;
@@ -588,7 +588,7 @@ bool DeepSeek_r1_0528_8b::insert(chat_meta_info_t& meta_info, lm_uniform_input_t
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
     // hardware
 
-    return this->_shared_insert(meta_info, tokens);
+    return this->_shared_insert(meta_info, tokens, is_cancelled);
 }
 
 std::string DeepSeek_r1_0528_8b::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {

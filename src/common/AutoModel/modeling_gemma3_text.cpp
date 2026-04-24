@@ -53,7 +53,7 @@ std::string Gemma3_Text_Only::apply_chat_template(nlohmann::ordered_json& messag
     return this->chat_tmpl->apply(inputs);
 }
 
-bool Gemma3_Text_Only::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input) {
+bool Gemma3_Text_Only::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
     // preprocess
     this->profiler_list[TKOEN_ENCODE_TIME].start();
     std::string templated_text;
@@ -82,7 +82,7 @@ bool Gemma3_Text_Only::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& i
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
     // hardware
 
-    return this->_shared_insert(meta_info, tokens);
+    return this->_shared_insert(meta_info, tokens, is_cancelled);
 }
 
 std::string Gemma3_Text_Only::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {

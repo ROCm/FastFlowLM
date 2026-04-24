@@ -53,7 +53,7 @@ std::string GPT_OSS::apply_chat_template(nlohmann::ordered_json& messages, nlohm
     return this->chat_tmpl->apply(inputs);
 }
 json tools;
-bool GPT_OSS::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input)
+bool GPT_OSS::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled)
 {
     // preprocess
     this->profiler_list[TKOEN_ENCODE_TIME].start();
@@ -77,7 +77,7 @@ bool GPT_OSS::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input)
     std::vector<int> tokens = this->tokenizer->encode(templated_text);
 
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
-    return this->_shared_insert(meta_info, tokens);
+    return this->_shared_insert(meta_info, tokens, is_cancelled);
 
 }
 

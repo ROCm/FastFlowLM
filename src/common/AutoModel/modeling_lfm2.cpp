@@ -55,7 +55,7 @@ std::string LFM2::apply_chat_template(nlohmann::ordered_json& messages, nlohmann
     return this->chat_tmpl->apply(inputs, opt);
 }
 
-bool LFM2::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input) {
+bool LFM2::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
     // preprocess
     this->profiler_list[TKOEN_ENCODE_TIME].start();
     std::string templated_text;
@@ -85,7 +85,7 @@ bool LFM2::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input) {
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
     // hardware
     
-    return this->_shared_insert(meta_info, tokens);
+    return this->_shared_insert(meta_info, tokens, is_cancelled);
 }
 
 
@@ -318,7 +318,7 @@ std::string LFM2_5_TK::apply_chat_template(nlohmann::ordered_json& messages, nlo
     return this->chat_tmpl->apply(inputs, opt);
 }
 
-bool LFM2_5_TK::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input) {
+bool LFM2_5_TK::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
     // preprocess
     this->profiler_list[TKOEN_ENCODE_TIME].start();
     std::string templated_text;
