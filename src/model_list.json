@@ -130,7 +130,7 @@
                     "audio",
                     "transcription"
                 ],
-                "footprint": 6.0
+                "footprint": 9.1
             }
         },        
         "qwen3.5": {
