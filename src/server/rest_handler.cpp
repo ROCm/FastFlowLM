@@ -124,10 +124,22 @@ static json normalize_template(json messages) {
                             break;
                         }
                     }
+                    if (image_url.substr(0, 5) == "data:") {
+                        header_print("Warning", "Unsupported image format, skipping this image.");
+                        continue;
+                    }
+                    if (image_url.empty()) {
+                        header_print("Warning", "Empty image, skipping this image.");
+                        continue;
+                    }
                     merged_images.push_back(image_url);
                 }
                 else if (contentItem.contains("type") && contentItem["type"] == "input_audio") {
                     std::string audio_base64 = contentItem["input_audio"]["data"].get<std::string>();
+                    if (audio_base64.empty()) {
+                        header_print("Warning", "Empty audio, skipping this audio.");
+                        continue;
+                    }
                     merged_audio.push_back(audio_base64);
                 }
             }
