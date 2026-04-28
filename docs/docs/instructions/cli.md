@@ -292,18 +292,18 @@ flm serve llama3.2:1b --preemption 1
 
 ### 🧩 Change Prefill Chunk Size at Launch
 
-The `--prefill-chunk-len` flag controls how many tokens are processed per chunk during the prefill phase of inference.
+The `--prefill-chunk-len` flag controls how many tokens are processed per chunk during the prefill phase of inference (default: 4096).
 
 For **CLI mode**:
 
 ```shell
-flm run llama3.2:1b --prefill-chunk-len 512
+flm run llama3.2:1b --prefill-chunk-len 8192
 ```
 
 For **Server mode**:
 
 ```shell
-flm serve llama3.2:1b --prefill-chunk-len 512
+flm serve llama3.2:1b --prefill-chunk-len 8192
 ```
 
 ---
