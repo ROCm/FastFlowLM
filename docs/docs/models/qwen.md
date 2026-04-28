@@ -43,7 +43,7 @@ flm run qwen3:0.6b
 ▶️ Run with FastFlowLM in PowerShell:  
 
 ```shell
-flm run qwen3:0.6b
+flm run qwen3:1.7b
 ```
 
 📝 **Note:**

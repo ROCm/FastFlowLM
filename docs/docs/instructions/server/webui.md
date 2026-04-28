@@ -14,7 +14,8 @@ parent: Local Server (Server Mode)
   - [ Example: Multi Models Comparison Enabled by FLM Queuing](#-example-multi-models-comparison-enabled-by-flm-queuing)  
   - [ Example: Agentic AI Web Search with FastFlowLM](#-example-agentic-ai-web-search-with-fastflowlm)  
   - [ Example: Local Private Database with RAG + FastFlowLM](#️-example-local-private-database-with-rag--fastflowlm)
-  
+  - [ Example: Add FLM Custom Parameters](#️-example-add-flm-custom-parameters)
+
 ---
 
 # 🧩 Run Open WebUI with FastFlowLM
@@ -395,5 +396,34 @@ Follow the quick setup at **[here](#-run-open-webui-with-fastflowlm)**.
 
 🧑 User: "How to use Open WebUI with Docker?"  
 🤖 Assistant: *Here are the steps from the knowledge base `Open WebUI Documentation`...*  
+
+---
+
+### 🛠️ Example: Add FLM Custom Parameters
+
+This example shows how to add FastFlowLM custom parameters in Open WebUI. We use `gemma4-it:e4b` as the example model.
+
+Gemma4 supports a configurable visual token budget, which controls how many tokens are used to represent an image. FLM uses a custom parameter `image-max-tokens` to support this feature. By passing this value through FLM, you can adjust the image token budget for each query in Open WebUI and balance image detail against response speed. For more details, see [Variable Image Resolution](https://huggingface.co/google/gemma-4-E4B-it#5-variable-image-resolution).
+
+
+### 🌐 Step 1: Run Open WebUI with FastFlowLM
+
+Follow the quick setup guide **[here](#-run-open-webui-with-fastflowlm)** to start Open WebUI and connect it to FastFlowLM.
+
+### ➕ Step 2: Add a Custom Parameter
+
+1. In the top-left model selector, choose `gemma4-it:e4b`.
+2. In the top-right corner of Open WebUI, click the **`Control`** icon to open the parameter list.
+3. Scroll to the bottom of the parameter list and click **`Add Custom Parameter`**.
+4. Fill in the custom parameter details:
+   - **custom_param_name**: `image-max-tokens`
+   - **custom_param_value**: `560` (see [Variable Image Resolution](https://huggingface.co/google/gemma-4-E4B-it#5-variable-image-resolution) for details)
+
+### 🖼️ Step 3: Chat with an Image
+
+Send a message with an image attachment in Open WebUI. 
+
+Use a higher visual token budget for tasks that need more image detail, such as OCR, or a lower visual token budget for faster responses, such as a quick image description.
+
 
 ---
