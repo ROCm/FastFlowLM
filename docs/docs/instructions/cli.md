@@ -158,9 +158,17 @@ Delete a model from local storage:
 flm remove llama3.2:3b
 ```
 
+### ✅ Check a Downloaded Model
+
+Verify the file hashes for a downloaded model:
+
+```shell
+flm check llama3.2:3b
+```
+
 ---
 
-### 🖧 Start Server Mode (Local)
+### 🚀 Start Server Mode (Local)
 
 Launch FastFlowLM as a local REST API server (also support OpenAI API):
 
@@ -170,7 +178,7 @@ flm serve llama3.2:1b
 
 ---
 
-### 🖧 Show Server Port 
+### 🔌 Show Server Port 
 
 Show current FLM port (default) in PowerShell:  
   
@@ -525,3 +533,19 @@ You can also change the `default_context_length` setting.
 > - **gemma3:4b** → up to **128k** tokens
 > - **gemma3:1b** → up to **32k** tokens
 > - **llama3.x** → up to **128k** tokens
+
+### 🧩 Change Prefill Chunk Size
+
+The `--prefill-chunk-len` flag controls how many tokens are processed per chunk during the prefill phase of inference.
+
+For **CLI mode**:
+
+```shell
+flm run llama3.2:1b --prefill-chunk-len 512
+```
+
+For **Server mode**:
+
+```shell
+flm serve llama3.2:1b --prefill-chunk-len 512
+```
