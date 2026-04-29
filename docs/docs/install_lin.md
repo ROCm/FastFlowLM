@@ -123,7 +123,44 @@ sudo apt install ./fastflowlm*.deb
 
 ### Ubuntu 26.04, Arch, and Others
 
-Check this [https://lemonade-server.ai/flm_npu_linux.html](https://lemonade-server.ai/flm_npu_linux.html)
+For Ubuntu 26.04 and other distributions, check this [Linux NPU setup guide](https://lemonade-server.ai/flm_npu_linux.html).
+
+#### Arch Linux
+
+Arch users need the kernel driver, matching kernel headers, XRT, and the AMD XDNA XRT plugin:
+
+```sh
+sudo pacman -Syu
+sudo pacman -S linux-headers linux-firmware-other xrt xrt-plugin-amdxdna
+```
+
+Install `amdxdna-dkms` from the AUR using your preferred AUR workflow, then reboot. If needed, rebuild the DKMS module for the running kernel:
+
+```sh
+sudo dkms autoinstall -k "$(uname -r)"
+sudo depmod -a
+sudo reboot
+```
+
+If you need to rebuild a specific DKMS version, check `dkms status` and use that version explicitly.
+
+After rebooting, confirm the DKMS module is selected:
+
+```sh
+modinfo -F filename amdxdna
+```
+
+The path should contain `updates/dkms`. If it points under `kernel/drivers/accel/amdxdna/`, the stock in-tree driver is still being used.
+
+Then confirm XRT can see the NPU:
+
+```sh
+xrt-smi examine
+```
+
+If `flm validate` passes but `flm run` fails with `No such device with index '0'`, XRT does not see a device. Make sure `xrt-plugin-amdxdna` is installed and `xrt-smi examine` lists the NPU.
+
+> **Arch firmware note:** Some `linux-firmware-other` versions ship both 1.0 and 1.1 NPU firmware for `17f0_10`. On stock Linux 6.19, forcing `npu.sbin.zst` to 1.1 firmware can make the NPU disappear because the in-tree driver expects the older firmware protocol. Use `amdxdna-dkms` or a newer kernel that supports the protocol-7 firmware path, then verify `flm validate` reports firmware `1.1.x`.
 
 ---
 
@@ -157,6 +194,8 @@ You should see output similar to:
 [Linux]  NPU FW Version: 1.1.2.64
 [Linux]  Memlock Limit: infinity
 ```
+
+On Linux, `flm validate` checks the kernel DRM path. `flm run` uses XRT. If validation succeeds but running a model fails with `No such device with index '0'`, run `xrt-smi examine` and install the XRT AMD XDNA plugin for your distribution.
 
 ---
 

@@ -51,6 +51,12 @@ flm run llama3.2:1b
 
 > `flm` is short for FastFlowLM. If the model isn't available locally, it will be downloaded automatically. This launches FastFlowLM in CLI mode.
 
+> **Linux note:** `flm validate` checks the kernel DRM device, while `flm run` opens the NPU through XRT. If validation succeeds but `flm run` fails with `No such device with index '0'`, confirm XRT can see the NPU:
+> ```shell
+> xrt-smi examine
+> ```
+> On Arch Linux, install `xrt-plugin-amdxdna` in addition to `xrt` and the `amdxdna` driver. See the [Linux install guide](/docs/install_lin/) for the full driver and firmware checklist.
+
 ---
 
 ### ⬇️ Pull a Model (Download Only)
