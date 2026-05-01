@@ -48,7 +48,8 @@ if(CMAKE_CXX_STANDARD LESS 17)
 endif()
 
 add_subdirectory(${CMAKE_SOURCE_DIR}/../third_party/tokenizers-cpp
-                 ${CMAKE_BINARY_DIR}/tokenizers-cpp)
+                 ${CMAKE_BINARY_DIR}/tokenizers-cpp
+                 EXCLUDE_FROM_ALL)
 
 # ———————————————————————————————————————————————
 # Gather your sources
@@ -323,10 +324,14 @@ if(WIN32)
         DEPENDS flm
     )
 else()
+    if(NOT CMAKE_INSTALL_LIBDIR)
+        set(CMAKE_INSTALL_LIBDIR "lib")
+    endif()
+
     file(GLOB so_libs "${CMAKE_SOURCE_DIR}/lib/*.so")
-    install(FILES ${so_libs} DESTINATION lib)
+    install(FILES ${so_libs} DESTINATION "${CMAKE_INSTALL_LIBDIR}/flm")
     set_target_properties(flm PROPERTIES
-        INSTALL_RPATH "$ORIGIN/../lib")
+        INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}/flm")
 endif()
 install(TARGETS flm
     RUNTIME DESTINATION bin
