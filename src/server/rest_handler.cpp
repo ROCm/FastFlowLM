@@ -917,32 +917,43 @@ void RestHandler::handle_openai_chat_completion(const json& request,
         current_messages = normalize_messages(current_messages);
         current_messages = normalize_template(current_messages);
         
-        json messages;
+        json messages = current_messages;
+        json tools_to_insert = tools;
 
         // see if we can use prompt cache
         if (model != model_used_for_last_message) { // switch models will clear context
             this->prompt_cache.update_checksum(current_messages);
+            this->prompt_cache.update_tool_checksum(tools);
             model_used_for_last_message = model;
-            messages = current_messages;
         }
         else {
             if (prompt_cache.can_use_cache(current_messages, auto_chat_engine->get_chat_template_type())) {
-                header_print("FLM", "Use cached prompt!");
-                // only keep the last message for insertion
-                messages.push_back(current_messages.back());
+                json cached_tools = this->prompt_cache.tool_checksum(tools);
+                if (!prompt_cache.can_use_tool_cache()) {
+                    auto_chat_engine->clear_context();
+                    this->prompt_cache.update_checksum(current_messages);
+                    this->prompt_cache.update_tool_checksum(tools);
+                }
+                else {
+                    header_print("FLM", "Use cached prompt!");
+                    // only keep the last message for insertion
+                    messages = json::array();
+                    messages.push_back(current_messages.back());
+                    tools_to_insert = cached_tools;
+                }
             }
             else {
                 // cannot use cache, clear and re-insert all
                 auto_chat_engine->clear_context();
                 this->prompt_cache.update_checksum(current_messages);
-                messages = current_messages;
+                this->prompt_cache.update_tool_checksum(tools);
             }
         }
 
         chat_meta_info_t meta_info;
         lm_uniform_input_t uniformed_input;
         uniformed_input.messages = messages;
-        uniformed_input.tools = tools;
+        uniformed_input.tools = tools_to_insert;
         meta_info.load_duration = (uint64_t)time_utils::duration_ns(load_start_time, load_end_time).first;
         meta_info.max_prefill_len = this->prefill_chunk_len;
         if (stream){
@@ -1056,6 +1067,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                     {"prompt_tokens", meta_info.prompt_tokens},
                     {"completion_tokens", meta_info.generated_tokens},
                     {"total_tokens", meta_info.prompt_tokens + meta_info.generated_tokens},
+                    {"kv_token_occupancy_rate", (float)this->auto_chat_engine->get_current_context_length() / (float)this->auto_chat_engine->get_max_length() * 100},
                     {"load_duration", static_cast<double>(meta_info.load_duration) / 1'000'000'000},
                     {"prefill_duration_ttft", static_cast<double>(meta_info.prefill_duration) / 1'000'000'000},
                     {"decoding_duration", static_cast<double>(meta_info.decoding_duration) / 1'000'000'000},
