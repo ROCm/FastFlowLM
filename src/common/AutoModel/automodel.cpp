@@ -162,7 +162,7 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
 
     auto prefill_end_time = this->profiler_list[PREFILL_TIME].stop(tokens.size());
     meta_info.prefill_duration = (uint64_t)time_utils::duration_ns(prefill_start_time, prefill_end_time).first;
-    meta_info.prompt_tokens = tokens.size();
+    meta_info.prompt_tokens = tokens.size() + 1;
 
     if (meta_info.stop_reason == CANCEL_DETECTED) {
         return false;
@@ -276,6 +276,7 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
         this->profiler_list[TKOEN_DECODE_TIME].stop(1);
         this->token_history.push_back(sampled_token);
         if (this->is_eos(sampled_token)){
+            meta_info.generated_tokens++;
             this->lm_engine->forward(last_sampled_token);
             break;
         }
