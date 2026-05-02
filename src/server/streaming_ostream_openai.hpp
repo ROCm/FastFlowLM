@@ -490,7 +490,7 @@ private:
                 {"total_tokens", meta_info.prompt_tokens + meta_info.generated_tokens},
                 {"active_kv_tokens", this->auto_chat_engine->get_current_context_length()},
                 {"max_kv_token_capacity", this->auto_chat_engine->get_max_length()},
-                {"kv_token_occupancy_rate_percent", (float)this->auto_chat_engine->get_current_context_length() / (float)this->auto_chat_engine->get_max_length() * 100},
+                {"kv_token_occupancy_rate_percentage", (float)this->auto_chat_engine->get_current_context_length() / (float)this->auto_chat_engine->get_max_length() * 100},
                 {"load_duration", static_cast<double>(meta_info.load_duration) / 1'000'000'000},
                 {"prefill_duration_ttft", static_cast<double>(meta_info.prefill_duration) / 1'000'000'000},
                 {"decoding_duration", static_cast<double>(meta_info.decoding_duration) / 1'000'000'000},
