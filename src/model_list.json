@@ -89,11 +89,11 @@
                     "quantization_level": "Q4_1"
                 },
                 "label": [
+                    "audio",
                     "vision",
                     "reasoning",
                     "tool-calling",
-                    "audio",
-                    "transcription"
+                    "chat-transcription"
                 ],
                 "footprint": 6.0
             },
@@ -124,11 +124,11 @@
                     "quantization_level": "Q4_1"
                 },
                 "label": [
+                    "audio",
                     "vision",
                     "reasoning",
                     "tool-calling",
-                    "audio",
-                    "transcription"
+                    "chat-transcription"
                 ],
                 "footprint": 9.1
             }
@@ -471,6 +471,7 @@
                     "quantization_level": "Q4_1"
                 },
                 "label":[
+                    "audio",
                     "realtime-transcription",
                     "transcription"
                 ],
