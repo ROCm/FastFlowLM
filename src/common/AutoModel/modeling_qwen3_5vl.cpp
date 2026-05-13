@@ -219,54 +219,116 @@ std::string Qwen3_5VL::generate_with_prompt(chat_meta_info_t& meta_info, lm_unif
 NonStreamResult Qwen3_5VL::parse_nstream_content(const std::string response_text) {
     NonStreamResult result;
 
-    std::string name, arguments;
-
     std::string start_tag = "<tool_call>";
     std::string end_tag = "</tool_call>";
+    std::string func_end_tag = "</function>";
 
     size_t start_pos = response_text.find(start_tag);
     size_t end_pos = response_text.find(end_tag);
 
-    if (start_pos == std::string::npos || end_pos == std::string::npos) {
+    if (start_pos == std::string::npos) {
         // pure content
         result.content = response_text;
         return result;
     }
 
     start_pos += start_tag.length();
-    std::string json_str = response_text.substr(start_pos, end_pos - start_pos);
 
-    // Parse "name" 
-    std::string key_name = "\"name\": \"";
-    size_t name_start = json_str.find(key_name);
-    if (name_start != std::string::npos) {
-        name_start += key_name.length();
-        size_t name_end = json_str.find("\"", name_start);
-        if (name_end != std::string::npos) {
-            name = json_str.substr(name_start, name_end - name_start);
+    if (end_pos == std::string::npos) {
+        end_pos = response_text.find(func_end_tag, start_pos);
+        if (end_pos != std::string::npos) {
+            end_pos += func_end_tag.length();
+        }
+        else {
+            end_pos = response_text.length();
         }
     }
 
-    // Parse "arguments"
-    std::string key_args = "\"arguments\":";
-    size_t args_pos = json_str.find(key_args);
-    if (args_pos != std::string::npos) {
-        size_t brace_start = json_str.find("{", args_pos);
-        size_t brace_end = json_str.rfind("}"); // Find the last closing brace
+    std::string block = response_text.substr(start_pos, end_pos - start_pos);
 
-        if (brace_start != std::string::npos && brace_end != std::string::npos && brace_end > brace_start) {
-            arguments = json_str.substr(brace_start, brace_end - brace_start);
+    auto trim_tool_value = [](std::string value) {
+        while (!value.empty() && (value.front() == '\n' || value.front() == '\r' || value.front() == ' ' || value.front() == '\t')) {
+            value.erase(0, 1);
+        }
+        while (!value.empty() && (value.back() == '\n' || value.back() == '\r' || value.back() == ' ' || value.back() == '\t')) {
+            value.pop_back();
+        }
+        return value;
+    };
+
+    std::string func_open = "<function=";
+    size_t func_start = block.find(func_open);
+    if (func_start != std::string::npos) {
+        func_start += func_open.length();
+        size_t func_name_end = block.find(">", func_start);
+        if (func_name_end != std::string::npos) {
+            result.tool_name = sanitize_tool_argument_json_strings(block.substr(func_start, func_name_end - func_start));
         }
     }
 
-    result.tool_name = name;
-    result.tool_args = arguments;
+    nlohmann::json args = nlohmann::json::object();
+    std::string param_open = "<parameter=";
+    std::string param_close = "</parameter>";
+    size_t search_pos = 0;
+
+    while (true) {
+        size_t param_start = block.find(param_open, search_pos);
+        if (param_start == std::string::npos) break;
+
+        param_start += param_open.length();
+        size_t param_name_end = block.find(">", param_start);
+        if (param_name_end == std::string::npos) break;
+
+        std::string param_name = block.substr(param_start, param_name_end - param_start);
+        size_t value_start = param_name_end + 1;
+        size_t value_end = block.find(param_close, value_start);
+
+        size_t next_param_pos = block.find(param_open, value_start);
+        size_t func_boundary_pos = block.find(func_end_tag, value_start);
+
+        auto use_earlier_boundary = [&value_end](size_t boundary_pos) {
+            if (boundary_pos != std::string::npos && (value_end == std::string::npos || boundary_pos < value_end)) {
+                value_end = boundary_pos;
+            }
+        };
+
+        use_earlier_boundary(next_param_pos);
+        use_earlier_boundary(func_boundary_pos);
+
+        if (value_end == std::string::npos) {
+            value_end = block.length();
+        }
+
+        std::string param_value = trim_tool_value(block.substr(value_start, value_end - value_start));
+
+        try {
+            args[param_name] = nlohmann::json::parse(param_value);
+        }
+        catch (...) {
+            args[param_name] = param_value;
+        }
+
+        search_pos = value_end;
+        if (block.compare(value_end, param_close.length(), param_close) == 0) {
+            search_pos += param_close.length();
+        }
+    }
+
+    result.tool_args = args.dump();
 
     return result;
 }
 
 // Stream
 StreamResult Qwen3_5VL::parse_stream_content(const std::string content) {
+    return parse_stream_content_impl(content, false);
+}
+
+StreamResult Qwen3_5VL::parse_stream_content_final(const std::string content) {
+    return parse_stream_content_impl(content, true);
+}
+
+StreamResult Qwen3_5VL::parse_stream_content_impl(const std::string content, bool is_final) {
     const std::string MARKER_THINK_START = "<think>";
     const std::string MARKER_THINK_END = "</think>";
     const std::string MARKER_TOOL_START = "<tool_call>";
@@ -307,15 +369,15 @@ StreamResult Qwen3_5VL::parse_stream_content(const std::string content) {
             size_t tool_end_pos = buffer_.find(MARKER_TOOL_END);
             size_t func_end_pos = buffer_.find(MARKER_FUNC_END);
             
-            if (tool_end_pos != std::string::npos || func_end_pos != std::string::npos) {
-                size_t actual_end_pos;
-                size_t skip_length;
+            if (tool_end_pos != std::string::npos || func_end_pos != std::string::npos || (is_final && !buffer_.empty())) {
+                size_t actual_end_pos = buffer_.size();
+                size_t skip_length = 0;
 
                 if (tool_end_pos != std::string::npos) {
                     actual_end_pos = tool_end_pos;
                     skip_length = MARKER_TOOL_END.length();
                 } 
-                else {
+                else if (func_end_pos != std::string::npos) {
                     actual_end_pos = func_end_pos;
                     skip_length = MARKER_FUNC_END.length();
                 }
@@ -335,7 +397,7 @@ StreamResult Qwen3_5VL::parse_stream_content(const std::string content) {
                         func_start += func_open.length();
                         size_t func_end = block.find(">", func_start);
                         if (func_end != std::string::npos) {
-                            result.tool_name = block.substr(func_start, func_end - func_start);
+                            result.tool_name = sanitize_tool_argument_json_strings(block.substr(func_start, func_end - func_start));
                         }
                     }
 
@@ -356,7 +418,26 @@ StreamResult Qwen3_5VL::parse_stream_content(const std::string content) {
                         size_t val_start = p_name_end + 1;
                         if (val_start < block.size() && block[val_start] == '\n') val_start++;
 
-                        size_t val_end = block.find(param_close, val_start);
+                        size_t param_close_pos = block.find(param_close, val_start);
+                        size_t val_end = param_close_pos;
+
+                        size_t next_param_pos = block.find(param_open, val_start);
+                        size_t func_boundary_pos = block.find(MARKER_FUNC_END, val_start);
+                        size_t tool_boundary_pos = block.find(MARKER_TOOL_END, val_start);
+
+                        auto use_earlier_boundary = [&val_end](size_t boundary_pos) {
+                            if (boundary_pos != std::string::npos && (val_end == std::string::npos || boundary_pos < val_end)) {
+                                val_end = boundary_pos;
+                            }
+                        };
+
+                        use_earlier_boundary(next_param_pos);
+                        use_earlier_boundary(func_boundary_pos);
+                        use_earlier_boundary(tool_boundary_pos);
+
+                        if (val_end == std::string::npos && is_final) {
+                            val_end = block.size();
+                        }
                         if (val_end == std::string::npos) break;
 
                         std::string param_value = block.substr(val_start, val_end - val_start);
@@ -374,9 +455,10 @@ StreamResult Qwen3_5VL::parse_stream_content(const std::string content) {
                             args[param_name] = param_value;
                         }
 
-                        search_pos = val_end + param_close.length();
+                        search_pos = param_close_pos != std::string::npos && val_end == param_close_pos
+                            ? val_end + param_close.length()
+                            : val_end;
                     }
-
                     result.tool_args_str = args.dump();
                     return result;
                 }

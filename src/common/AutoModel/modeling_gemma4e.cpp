@@ -8,7 +8,6 @@
 
 #include "AutoModel/modeling_gemma4e.hpp"
 #include "metrices.hpp"
-#include "error_measure.hpp" //TODO: FIXME: remove later
 
 
 /************              Gemma4e family            **************/
@@ -377,7 +376,7 @@ NonStreamResult Gemma4e::parse_nstream_content(const std::string response_text) 
         // Split into Name and Arguments
         size_t brace_pos = tool_content.find('{');
         if (brace_pos != std::string::npos) {
-            result.tool_name = tool_content.substr(0, brace_pos);
+            result.tool_name = sanitize_tool_argument_json_strings(tool_content.substr(0, brace_pos));
             
             // Keep the {} brackets for the arguments
             std::string args_str = tool_content.substr(brace_pos);
@@ -394,7 +393,7 @@ NonStreamResult Gemma4e::parse_nstream_content(const std::string response_text) 
             std::regex key_regex("([{,])\\s*([a-zA-Z0-9_]+)\\s*:");
             args_str = std::regex_replace(args_str, key_regex, "$1\"$2\":");
 
-            result.tool_args = args_str;
+            result.tool_args = sanitize_tool_argument_json_strings(args_str);
         } else {
             // Fallback if no arguments were provided
             result.tool_name = tool_content;
@@ -455,8 +454,8 @@ StreamResult Gemma4e::parse_stream_content(const std::string content) {
 
                 size_t brace_pos = tool_content.find('{');
                 if (brace_pos != std::string::npos) {
-                    result.tool_name = tool_content.substr(0, brace_pos);
-                    
+                    result.tool_name = sanitize_tool_argument_json_strings(tool_content.substr(0, brace_pos));
+
                     std::string args_str = tool_content.substr(brace_pos);
                     
                     // Convert custom quote tags to standard double quotes
@@ -467,10 +466,10 @@ StreamResult Gemma4e::parse_stream_content(const std::string content) {
                     }
 
                     // Wrap unquoted keys in double quotes
-                    // Because we kept the '{', this regex will now correctly trigger for the FIRST key too
                     std::regex key_regex("([{,])\\s*([a-zA-Z0-9_]+)\\s*:");
                     args_str = std::regex_replace(args_str, key_regex, "$1\"$2\":");
-                    
+                    args_str = sanitize_tool_argument_json_strings(args_str);
+
                     result.tool_args_str = args_str;
                 } 
                 else {

@@ -35,6 +35,7 @@
 #include "modules/sampler.hpp"
 #include "utils/utils.hpp"
 #include "utils/profiler.hpp"
+#include "utils/json_check.hpp"
 #include "tensor_utils/q4_npu_eXpress.hpp"
 #include "npu_utils/npu_utils.hpp"
 #include "minja/chat-template.hpp"
@@ -395,6 +396,16 @@ public:
 		result.type = StreamEventType::CONTENT; 
 		result.content = content;
 
+		return result;
+	}
+
+	virtual StreamResult parse_stream_content_final(const std::string content) {
+		if (!content.empty()) {
+			return parse_stream_content(content);
+		}
+
+		StreamResult result;
+		result.type = StreamEventType::WAITING;
 		return result;
 	}
 };

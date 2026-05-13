@@ -336,11 +336,11 @@ StreamResult Nanbeige::parse_stream_content(const std::string content) {
                     result.tool_id = "generate_id()";
 
                     if (j.contains("name")) {
-                        result.tool_name = j["name"].get<std::string>();
+                        result.tool_name = sanitize_tool_argument_json_strings(j["name"].get<std::string>());
                     }
                     if (j.contains("arguments")) {
                         if (j["arguments"].is_string()) {
-                            result.tool_args_str = j["arguments"].get<std::string>();
+                            result.tool_args_str = sanitize_tool_argument_json_strings(j["arguments"].get<std::string>());
                         } else {
                             result.tool_args_str = j["arguments"].dump();
                         }

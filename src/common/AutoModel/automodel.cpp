@@ -291,6 +291,7 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
     if (this->total_tokens >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping generation...");
     }
+    header_print("FLM", "Model RAW Output: " + result);
     return result;
 }
 
@@ -340,12 +341,12 @@ StreamResult AutoModel::_shared_think_tool_calling_pasrsed(const std::string con
                     result.tool_id = "generate_id()";
 
                     if (j.contains("name")) {
-                        result.tool_name = j["name"].get<std::string>();
+                        result.tool_name = sanitize_tool_argument_json_strings(j["name"].get<std::string>());
                     }
 
                     if (j.contains("arguments")) {
                         if (j["arguments"].is_string()) {
-                            result.tool_args_str = j["arguments"].get<std::string>();
+                            result.tool_args_str = sanitize_tool_argument_json_strings(j["arguments"].get<std::string>());
                         }
                         else {
                             result.tool_args_str = j["arguments"].dump();

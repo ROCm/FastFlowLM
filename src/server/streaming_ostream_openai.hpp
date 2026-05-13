@@ -297,8 +297,11 @@ public:
     void finalize(chat_meta_info_t& meta_info) {
         // Send all remaining content, including incomplete sequences
         if (!buffer.empty()) {
-            send_response(buffer, false);
+            send_response(buffer, false, true);
             buffer.clear();
+        }
+        else {
+            send_response("", false, true);
         }
         if (stream_stop_reason == stop_reason_t::TOOL_DETECTED) {
             meta_info.stop_reason = stream_stop_reason;
@@ -409,11 +412,13 @@ private:
     ///@brief Send the response
     ///@param content the content
     ///@param is_final the is final
-    void send_response(const std::string& content, bool is_final) {
+    void send_response(const std::string& content, bool is_final, bool parser_final = false) {
         static int index = 0;
         json response;
 
-        StreamResult result = auto_chat_engine->parse_stream_content(content);
+        StreamResult result = parser_final
+            ? auto_chat_engine->parse_stream_content_final(content)
+            : auto_chat_engine->parse_stream_content(content);
         if (result.type == StreamEventType::WAITING) {
             return;
         }
@@ -433,6 +438,9 @@ private:
                     }
                 })}
             };
+            header_print("FLM", "Tool name: " + result.tool_name);
+            header_print("FLM", "Tool args: " + result.tool_args_str);
+            header_print("FLM", "Tool JSON: " + delta["tool_calls"][0]["function"].dump());
         }
         else if (result.type == StreamEventType::REASONING) {
             delta = {

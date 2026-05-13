@@ -112,15 +112,15 @@ void brief_print_message_request(nlohmann::json request) {
         }
     }
 
-    if (request.contains("message")){
-        std::string content = request["message"]["content"].get<std::string>();
-        if (content.size() > 20) {
-            request["message"]["content"] = utf8_truncate_middle(content, 10, 10);
-        }
+    // TODO: improve tools logging like only print the tool name and elide the arguments
+    // TODO: Support debug level
+    if (request.contains("tools")) {
+        request["tools"] = "...";
     }
-    header_print("LOG", "Body: ");
-    std::cout << request.dump(4) << std::endl;
 
+    header_print("LOG", "Body: ");
+    std::string brief_body = request.dump(4);
+    std::cout << brief_body << std::endl;
 }
 
 ///@brief brief print request
