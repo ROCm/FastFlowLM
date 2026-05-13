@@ -114,9 +114,9 @@ void brief_print_message_request(nlohmann::json request) {
 
     // TODO: improve tools logging like only print the tool name and elide the arguments
     // TODO: Support debug level
-    // if (request.contains("tools")) {
-    //     request["tools"] = "...";
-    // }
+    if (request.contains("tools")) {
+        request["tools"] = "...";
+    }
 
     header_print("LOG", "Body: ");
     std::string brief_body = request.dump(4);

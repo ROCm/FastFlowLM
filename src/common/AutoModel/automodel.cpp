@@ -291,6 +291,7 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
     if (this->total_tokens >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping generation...");
     }
+    header_print("FLM", "Model RAW Output: " + result);
     return result;
 }
 
