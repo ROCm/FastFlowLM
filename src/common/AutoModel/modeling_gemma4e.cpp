@@ -9,6 +9,54 @@
 #include "AutoModel/modeling_gemma4e.hpp"
 #include "metrices.hpp"
 
+namespace {
+std::string normalize_gemma4e_tool_args(std::string args_str) {
+    const std::string custom_quote_tag = "<|\"|>";
+
+    size_t quote_pos = 0;
+    while ((quote_pos = args_str.find(custom_quote_tag, quote_pos)) != std::string::npos) {
+        args_str.replace(quote_pos, custom_quote_tag.length(), "\"");
+        quote_pos += 1;
+    }
+
+    bool in_string = false;
+    bool escaped = false;
+    for (char& ch : args_str) {
+        if (ch == '\\' && in_string) {
+            escaped = !escaped;
+            continue;
+        }
+
+        if ((ch == '"' || ch == '`') && !escaped) {
+            ch = '"';
+            in_string = !in_string;
+        }
+        escaped = false;
+    }
+
+    std::regex missing_key_end_quote_regex("([{,])\\s*\"([a-zA-Z0-9_]+)\\s*:\\s*([^,}\\]]+)(?=\\s*[,}\\]])");
+    args_str = std::regex_replace(args_str, missing_key_end_quote_regex, "$1\"$2\":\"$3\"");
+
+    std::regex key_regex("([{,])\\s*([a-zA-Z0-9_]+)\\s*:");
+    args_str = std::regex_replace(args_str, key_regex, "$1\"$2\":");
+
+    std::regex bare_string_value_regex(":\\s*(?!true\\b|false\\b|null\\b)([a-zA-Z_][a-zA-Z0-9_ -]*)(?=\\s*[,}\\]])");
+    args_str = std::regex_replace(args_str, bare_string_value_regex, ":\"$1\"");
+
+    size_t first_non_space = args_str.find_first_not_of(" \t\r\n");
+    size_t last_non_space = args_str.find_last_not_of(" \t\r\n");
+    if (first_non_space != std::string::npos && last_non_space != std::string::npos &&
+        first_non_space + 1 < args_str.size() && last_non_space > 0 &&
+        args_str[first_non_space] == '{' && args_str[first_non_space + 1] == '{' &&
+        args_str[last_non_space] == '}' && args_str[last_non_space - 1] == '}') {
+        args_str.erase(last_non_space, 1);
+        args_str.erase(first_non_space, 1);
+    }
+
+    return sanitize_tool_argument_json_strings(args_str);
+}
+}
+
 
 /************              Gemma4e family            **************/
 Gemma4e::Gemma4e(xrt::device* npu_device_inst) : AutoModel(npu_device_inst, "Gemma4e") {}
@@ -346,7 +394,6 @@ NonStreamResult Gemma4e::parse_nstream_content(const std::string response_text) 
     std::string tool_start_tag = "<|tool_call>";
     std::string tool_end_tag = "<tool_call|>";
     std::string tool_resp_tag = "<|tool_response>";
-    std::string custom_quote_tag = "<|\"|>";
 
     size_t think_start_pos = response_text.find(think_start_tag);
     size_t think_end_pos = response_text.find(think_end_tag);
@@ -381,19 +428,7 @@ NonStreamResult Gemma4e::parse_nstream_content(const std::string response_text) 
             // Keep the {} brackets for the arguments
             std::string args_str = tool_content.substr(brace_pos);
 
-            // Convert custom quote tags <|"|> to standard double quotes "
-            size_t quote_pos = 0;
-            while ((quote_pos = args_str.find(custom_quote_tag, quote_pos)) != std::string::npos) {
-                args_str.replace(quote_pos, custom_quote_tag.length(), "\"");
-                quote_pos += 1;
-            }
-
-            // Wrap unquoted keys in double quotes to create valid JSON
-            // e.g., {query:"ai"} -> {"query":"ai"}
-            std::regex key_regex("([{,])\\s*([a-zA-Z0-9_]+)\\s*:");
-            args_str = std::regex_replace(args_str, key_regex, "$1\"$2\":");
-
-            result.tool_args = sanitize_tool_argument_json_strings(args_str);
+            result.tool_args = normalize_gemma4e_tool_args(args_str);
         } else {
             // Fallback if no arguments were provided
             result.tool_name = tool_content;
@@ -428,7 +463,6 @@ StreamResult Gemma4e::parse_stream_content(const std::string content) {
     const std::string MARKER_TOOL_START = "<|tool_call>";
     const std::string MARKER_TOOL_END = "<tool_call|>";
     const std::string MARKER_TOOL_RESP = "<|tool_response>";
-    const std::string MARKER_CUSTOM_QUOTE = "<|\"|>"; 
 
     StreamResult result;
     buffer_ += content;
@@ -458,19 +492,7 @@ StreamResult Gemma4e::parse_stream_content(const std::string content) {
 
                     std::string args_str = tool_content.substr(brace_pos);
                     
-                    // Convert custom quote tags to standard double quotes
-                    size_t quote_pos = 0;
-                    while ((quote_pos = args_str.find(MARKER_CUSTOM_QUOTE, quote_pos)) != std::string::npos) {
-                        args_str.replace(quote_pos, MARKER_CUSTOM_QUOTE.length(), "\"");
-                        quote_pos += 1; 
-                    }
-
-                    // Wrap unquoted keys in double quotes
-                    std::regex key_regex("([{,])\\s*([a-zA-Z0-9_]+)\\s*:");
-                    args_str = std::regex_replace(args_str, key_regex, "$1\"$2\":");
-                    args_str = sanitize_tool_argument_json_strings(args_str);
-
-                    result.tool_args_str = args_str;
+                    result.tool_args_str = normalize_gemma4e_tool_args(args_str);
                 } 
                 else {
                     result.tool_name = tool_content;
