@@ -921,32 +921,20 @@ void RestHandler::handle_openai_chat_completion(const json& request,
         json tools_to_insert = tools;
 
         // see if we can use prompt cache
+        bool can_use_prompt_cache = false;
         if (model != model_used_for_last_message) { // switch models will clear context
-            this->prompt_cache.update_checksum(current_messages);
+            this->prompt_cache.update_message_checksum(current_messages);
             this->prompt_cache.update_tool_checksum(tools);
             model_used_for_last_message = model;
         }
         else {
-            if (prompt_cache.can_use_cache(current_messages, auto_chat_engine->get_chat_template_type())) {
-                json cached_tools = this->prompt_cache.tool_checksum(tools);
-                if (!prompt_cache.can_use_tool_cache()) {
-                    auto_chat_engine->clear_context();
-                    this->prompt_cache.update_checksum(current_messages);
-                    this->prompt_cache.update_tool_checksum(tools);
-                }
-                else {
-                    header_print("FLM", "Use cached prompt!");
-                    // only keep the last message for insertion
-                    messages = json::array();
-                    messages.push_back(current_messages.back());
-                    tools_to_insert = cached_tools;
-                }
+            can_use_prompt_cache = prompt_cache.can_use_cache(current_messages, auto_chat_engine->get_chat_template_type(), tools);
+            if (can_use_prompt_cache) {
+                header_print("FLM", "Use cached prompt!");
             }
             else {
                 // cannot use cache, clear and re-insert all
                 auto_chat_engine->clear_context();
-                this->prompt_cache.update_checksum(current_messages);
-                this->prompt_cache.update_tool_checksum(tools);
             }
         }
 
@@ -988,12 +976,14 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                     };
                     send_response(error_response);
                     this->auto_chat_engine->clear_context();
+                    this->prompt_cache.reset();
                     return;
                 }
             } catch (const std::exception& e) {
                 json error_response = {{"error", e.what()}};
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
+                this->prompt_cache.reset();
                 return;
             }
             header_print("FLM", "Start generating...");
@@ -1003,6 +993,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                 json error_response = {{"error", e.what()}};
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
+                this->prompt_cache.reset();
                 return;
             }
             if (meta_info.stop_reason == CANCEL_DETECTED) {
@@ -1013,7 +1004,6 @@ void RestHandler::handle_openai_chat_completion(const json& request,
             ostream.finalize(meta_info);
         }
         else {
-            this->auto_chat_engine->clear_context();
             nullstream nstream;
             json response;
             std::string response_text;
@@ -1038,12 +1028,14 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                     };
                     send_response(error_response);
                     this->auto_chat_engine->clear_context();
+                    this->prompt_cache.reset();
                     return;
                 }
             } catch (const std::exception& e) {
                 json error_response = {{"error", e.what()}};
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
+                this->prompt_cache.reset();
                 return;
             }
             header_print("FLM", "Start generating...");
@@ -1053,6 +1045,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                 json error_response = {{"error", e.what()}};
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
+                this->prompt_cache.reset();
                 return;
             }
             // check response_text
@@ -1078,9 +1071,9 @@ void RestHandler::handle_openai_chat_completion(const json& request,
             };
             if (meta_info.stop_reason == CANCEL_DETECTED) {
                 header_print("❌ ", "Generation Cancelled!");
+                this->prompt_cache.reset();
             }
             send_response(response);
-            this->prompt_cache.reset();
         }
 
     } catch (const std::exception& e) {
