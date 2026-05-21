@@ -1,3 +1,7 @@
+// Copied from https://github.com/google/minja/blob/main/include/minja/chat-template.hpp Commit 5be6f88
+ 
+
+
 /*
     Copyright 2024 Google LLC
 
@@ -22,9 +26,9 @@
 #include <string>
 #include <vector>
 
-#include "nlohmann/json.hpp"
+#include <nlohmann/json.hpp>
 
-using o_json = nlohmann::ordered_json;
+using json = nlohmann::ordered_json;
 
 namespace minja {
 
@@ -121,26 +125,26 @@ class chat_template {
 
         const std::string user_needle = "<User Needle>";
         const std::string sys_needle = "<System Needle>";
-        const o_json dummy_str_user_msg = {{"role", "user"}, {"content", user_needle}};
-        const o_json dummy_typed_user_msg = {{"role", "user"}, {"content", o_json::array({{{"type", "text"}, {"text", user_needle}}})}};
+        const json dummy_str_user_msg = {{"role", "user"}, {"content", user_needle}};
+        const json dummy_typed_user_msg = {{"role", "user"}, {"content", json::array({{{"type", "text"}, {"text", user_needle}}})}};
 
         caps_.requires_typed_content =
-            !contains(try_raw_render(o_json::array({dummy_str_user_msg}), {}, false), user_needle)
-            && contains(try_raw_render(o_json::array({dummy_typed_user_msg}), {}, false), user_needle);
+            !contains(try_raw_render(json::array({dummy_str_user_msg}), {}, false), user_needle)
+            && contains(try_raw_render(json::array({dummy_typed_user_msg}), {}, false), user_needle);
 
         const auto dummy_user_msg = caps_.requires_typed_content
             ? dummy_typed_user_msg
             : dummy_str_user_msg;
-        const o_json needle_system_msg = {
+        const json needle_system_msg = {
             {"role", "system"},
-            {"content", caps_.requires_typed_content ? o_json::array({{{"type", "text"}, {"text", sys_needle}}}) : o_json(sys_needle)},
+            {"content", caps_.requires_typed_content ? json::array({{{"type", "text"}, {"text", sys_needle}}}) : json(sys_needle)},
         };
 
         caps_.supports_system_role = contains(try_raw_render({needle_system_msg, dummy_user_msg,}, {}, false), sys_needle);
 
-        auto out = try_raw_render(o_json::array({
+        auto out = try_raw_render(json::array({
             dummy_user_msg
-        }), o_json::array({
+        }), json::array({
             {
                 {"name", "some_tool"},
                 {"type", "function"},
@@ -155,22 +159,34 @@ class chat_template {
                                 {"description", "Some argument."},
                             }},
                         }},
-                        {"required", o_json::array({ "arg" })},
+                        {"required", json::array({ "arg" })},
                     }},
                 }},
             },
         }), false);
         caps_.supports_tools = contains(out, "some_tool");
 
-        auto make_tool_calls_msg = [&](const o_json & tool_calls) {
-            return o_json {
+        const auto render_with_content = [&](const json & content) {
+            const json assistant_msg {{"role", "assistant"}, {"content", content}};
+            // Render two assistant messages as some templates like QwQ-32B are handling
+            // the content differently depending on whether it's the last message or not
+            // (to remove the <think> tag in all but the last message).
+            return try_raw_render(json::array({dummy_user_msg, assistant_msg, dummy_user_msg, assistant_msg}), {}, false);
+        };
+        auto out_empty = render_with_content("");
+        auto out_null = render_with_content(json());
+        caps_.requires_non_null_content = contains(out_empty, user_needle) && !contains(out_null, user_needle);
+        
+        json j_null;
+        auto make_tool_calls_msg = [&](const json & tool_calls) {
+            return json {
                 {"role", "assistant"},
-                {"content", nullptr},
+                {"content", caps_.requires_non_null_content? "" : j_null},
                 {"tool_calls", tool_calls},
             };
         };
-        auto make_tool_call = [](const std::string & tool_name, const o_json & arguments) {
-            return o_json {
+        auto make_tool_call = [](const std::string & tool_name, const json & arguments) {
+            return json {
                 {"id", "call_1___"},
                 {"type", "function"},
                 {"function", {
@@ -179,39 +195,36 @@ class chat_template {
                 }},
             };
         };
-        const o_json dummy_args_obj {{"argument_needle", "print('Hello, World!')"}};
+        const json dummy_args_obj {{"argument_needle", "print('Hello, World!')"}};
 
         // Note: the arguments are rendered in both cases, but may be double-escaped, which we don't want.
-        out = try_raw_render(o_json::array({
+        out = try_raw_render(json::array({
             dummy_user_msg,
-            make_tool_calls_msg(o_json::array({make_tool_call("ipython", dummy_args_obj.dump())})),
+            make_tool_calls_msg(json::array({make_tool_call("ipython", dummy_args_obj.dump())})),
         }), {}, false);
-        auto tool_call_renders_str_arguments = contains(out, "\"argument_needle\":") || contains(out, "'argument_needle':");
-        out = try_raw_render(o_json::array({
+        auto tool_call_renders_str_arguments = contains(out, "<parameter=argument_needle>") || contains(out, "\"argument_needle\":") || contains(out, "'argument_needle':");
+        out = try_raw_render(json::array({
             dummy_user_msg,
-            make_tool_calls_msg(o_json::array({make_tool_call("ipython", dummy_args_obj)})),
+            make_tool_calls_msg(json::array({make_tool_call("ipython", dummy_args_obj)})),
         }), {}, false);
-        auto tool_call_renders_obj_arguments = contains(out, "\"argument_needle\":") || contains(out, "'argument_needle':");
+        auto tool_call_renders_obj_arguments = contains(out, "<parameter=argument_needle>") || contains(out, "\"argument_needle\":") || contains(out, "'argument_needle':");
 
         caps_.supports_tool_calls = tool_call_renders_str_arguments || tool_call_renders_obj_arguments;
         caps_.requires_object_arguments = !tool_call_renders_str_arguments && tool_call_renders_obj_arguments;
-        auto out_empty = try_raw_render(o_json::array({dummy_user_msg, {{"role", "assistant"}, {"content", ""}}}), {}, false);
-        auto out_null = try_raw_render(o_json::array({dummy_user_msg, {{"role", "assistant"}, {"content", nullptr}}}), {}, false);
-        caps_.requires_non_null_content = contains(out_empty, user_needle) && !contains(out_null, user_needle);
 
         if (caps_.supports_tool_calls) {
-            auto dummy_args = caps_.requires_object_arguments ? dummy_args_obj : o_json(dummy_args_obj.dump());
+            auto dummy_args = caps_.requires_object_arguments ? dummy_args_obj : json(dummy_args_obj.dump());
             auto tc1 = make_tool_call("test_tool1", dummy_args);
             auto tc2 = make_tool_call("test_tool2", dummy_args);
-            auto out = try_raw_render(o_json::array({
+            auto out = try_raw_render(json::array({
                 dummy_user_msg,
-                make_tool_calls_msg(o_json::array({tc1, tc2})),
+                make_tool_calls_msg(json::array({tc1, tc2})),
             }), {}, false);
             caps_.supports_parallel_tool_calls = contains(out, "test_tool1") && contains(out, "test_tool2");
 
-            out = try_raw_render(o_json::array({
+            out = try_raw_render(json::array({
                 dummy_user_msg,
-                make_tool_calls_msg(o_json::array({tc1})),
+                make_tool_calls_msg(json::array({tc1})),
                 {
                     {"role", "tool"},
                     {"name", "test_tool1"},
@@ -225,24 +238,24 @@ class chat_template {
 
         try {
             if (!caps_.supports_tools) {
-                const o_json user_msg {
+                const json user_msg {
                     {"role", "user"},
                     {"content", "Hey"},
                 };
-                const o_json args {
+                const json args {
                     {"arg1", "some_value"},
                 };
-                const o_json tool_call_msg {
+                const json tool_call_msg {
                     {"role", "assistant"},
-                    {"content", nullptr},
-                    {"tool_calls", o_json::array({
+                    {"content", caps_.requires_non_null_content ? "" : j_null},
+                    {"tool_calls", json::array({
                         {
                             // TODO: detect if requires numerical id or fixed length == 6 like Nemo
                             {"id", "call_1___"},
                             {"type", "function"},
                             {"function", {
                                 {"name", "tool_name"},
-                                {"arguments", (caps_.requires_object_arguments ? args : o_json(minja::Value(args).dump(-1, /* to_json= */ true)))},
+                                {"arguments", (caps_.requires_object_arguments ? args : json(minja::Value(args).dump(-1, /* to_json= */ true)))},
                             }},
                         },
                     })},
@@ -250,13 +263,13 @@ class chat_template {
                 std::string prefix, full;
                 {
                     chat_template_inputs inputs;
-                    inputs.messages = o_json::array({user_msg});
+                    inputs.messages = json::array({user_msg});
                     inputs.add_generation_prompt = true;
                     prefix = apply(inputs);
                 }
                 {
                     chat_template_inputs inputs;
-                    inputs.messages = o_json::array({user_msg, tool_call_msg});
+                    inputs.messages = json::array({user_msg, tool_call_msg});
                     inputs.add_generation_prompt = false;
                     full = apply(inputs);
                 }
@@ -321,7 +334,7 @@ class chat_template {
         const chat_template_inputs & inputs,
         const chat_template_options & opts = chat_template_options()) const
     {
-        o_json actual_messages;
+        json actual_messages;
 
         auto has_tools = inputs.tools.is_array() && !inputs.tools.empty();
         auto has_tool_calls = false;
@@ -357,9 +370,9 @@ class chat_template {
         );
 
         if (needs_polyfills) {
-            actual_messages = o_json::array();
+            actual_messages = json::array();
 
-            auto add_message = [&](const o_json & msg) {
+            auto add_message = [&](const json & msg) {
                 if (polyfill_typed_content && msg.contains("content") && !msg.at("content").is_null() && msg.at("content").is_string()) {
                     actual_messages.push_back({
                         {"role", msg.at("role")},
@@ -384,7 +397,7 @@ class chat_template {
                 }
             };
 
-            o_json adjusted_messages;
+            json adjusted_messages;
             if (polyfill_tools) {
                 adjusted_messages = add_system(inputs.messages,
                     "You can call any of the following tools to satisfy the user's requests: " + minja::Value(inputs.tools).dump(2, /* to_json= */ true) +
@@ -408,7 +421,7 @@ class chat_template {
                                 auto & arguments = function.at("arguments");
                                 if (arguments.is_string()) {
                                     try {
-                                        arguments = o_json::parse(arguments.get<std::string>());
+                                        arguments = json::parse(arguments.get<std::string>());
                                     } catch (const std::exception & ecvt) {
                                         fprintf(stderr, "Failed to parse arguments: %s\n", ecvt.what());
                                     }
@@ -417,13 +430,13 @@ class chat_template {
                         }
                     }
                     if (polyfill_tool_calls) {
-                        auto tool_calls = o_json::array();
+                        auto tool_calls = json::array();
                         for (const auto & tool_call : message.at("tool_calls")) {
                             if (tool_call.at("type") != "function") {
                                 continue;
                             }
                             const auto & function = tool_call.at("function");
-                            auto tc = o_json {
+                            auto tc = json {
                                 {"name", function.at("name")},
                                 {"arguments", function.at("arguments")},
                             };
@@ -432,7 +445,7 @@ class chat_template {
                             }
                             tool_calls.push_back(tc);
                         }
-                        auto obj = o_json {
+                        auto obj = json {
                             {"tool_calls", tool_calls},
                         };
                         if (message.contains("content")) {
@@ -447,8 +460,8 @@ class chat_template {
                 }
                 if (polyfill_tool_responses && role == "tool") {
                     message["role"] = "user";
-                    auto obj = o_json {
-                        {"tool_response", o_json::object()},
+                    auto obj = json {
+                        {"tool_response", json::object()},
                     };
                     if (message.contains("name")) {
                         obj["tool_response"]["tool"] = message.at("name");
@@ -485,7 +498,7 @@ class chat_template {
             actual_messages = inputs.messages;
         }
 
-        auto context = minja::Context::make(o_json({
+        auto context = minja::Context::make(json({
             {"messages", actual_messages},
             {"add_generation_prompt", inputs.add_generation_prompt},
         }));
@@ -520,16 +533,16 @@ class chat_template {
     }
 
     static nlohmann::ordered_json add_system(const nlohmann::ordered_json & messages, const std::string & system_prompt) {
-        o_json messages_with_system = messages;
+        json messages_with_system = messages;
 
         if (!messages_with_system.empty() && messages_with_system[0].at("role") == "system") {
             std::string existing_system = messages_with_system.at(0).at("content");
-            messages_with_system[0] = o_json {
+            messages_with_system[0] = json {
                 {"role", "system"},
                 {"content", existing_system + "\n\n" + system_prompt},
             };
         } else {
-            messages_with_system.insert(messages_with_system.begin(), o_json {
+            messages_with_system.insert(messages_with_system.begin(), json {
                 {"role", "system"},
                 {"content", system_prompt},
             });
