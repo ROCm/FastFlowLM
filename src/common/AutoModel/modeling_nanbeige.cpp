@@ -84,14 +84,6 @@ bool Nanbeige::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, st
 
     std::vector<int> tokens = this->tokenizer->encode(templated_text);
 
-    std::cout << std::endl;
-
-    // some models are very sensitive to this bos token, such as lfm2
-    if (this->is_first_prompt == false) {
-        tokens.erase(tokens.begin()); // remove bos token in multi round conversation
-    }
-    this->is_first_prompt = false; // always set to false if the insert is ever called
-
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
     // hardware
 

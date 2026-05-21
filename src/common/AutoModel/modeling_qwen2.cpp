@@ -72,10 +72,7 @@ bool Qwen2::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::
     }
 
     std::vector<int> tokens = this->tokenizer->encode(templated_text);
-    if (this->is_first_prompt == false) {
-        tokens.insert(tokens.begin(), 198);
-    }
-    this->is_first_prompt = false;
+
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
     // hardware
 
@@ -91,110 +88,4 @@ std::string Qwen2::generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_
         return "";
     }
     return this->_shared_generate(meta_info, length_limit, os);
-}
-
-// Non-stream
-NonStreamResult Qwen2::parse_nstream_content(const std::string response_text) {
-    NonStreamResult result;
-
-    std::string name, arguments;
-
-    std::string start_tag = "<tool_call>";
-    std::string end_tag = "</tool_call>";
-
-    size_t start_pos = response_text.find(start_tag);
-    size_t end_pos = response_text.find(end_tag);
-
-    if (start_pos == std::string::npos || end_pos == std::string::npos) {
-        // pure content
-        result.content = response_text;
-        return result;
-    }
-
-    start_pos += start_tag.length();
-    std::string json_str = response_text.substr(start_pos, end_pos - start_pos);
-
-    // Parse "name" 
-    std::string key_name = "\"name\": \"";
-    size_t name_start = json_str.find(key_name);
-    if (name_start != std::string::npos) {
-        name_start += key_name.length();
-        size_t name_end = json_str.find("\"", name_start);
-        if (name_end != std::string::npos) {
-            name = json_str.substr(name_start, name_end - name_start);
-        }
-    }
-
-    // Parse "arguments"
-    std::string key_args = "\"arguments\":";
-    size_t args_pos = json_str.find(key_args);
-    if (args_pos != std::string::npos) {
-        size_t brace_start = json_str.find("{", args_pos);
-        size_t brace_end = json_str.rfind("}"); // Find the last closing brace
-
-        if (brace_start != std::string::npos && brace_end != std::string::npos && brace_end > brace_start) {
-            arguments = json_str.substr(brace_start, brace_end - brace_start);
-        }
-    }
-
-    result.tool_name = name;
-    result.tool_args = arguments;
-
-    return result;
-}
-
-// Stream
-StreamResult Qwen2::parse_stream_content(const std::string content) {
-    std::string tool_start_tag = "<tool_call>";
-    std::string tool_end_tag = "</tool_call>";
-
-    StreamResult result;
-    result.type = StreamEventType::CONTENT; 
-
-    if (content.find(tool_start_tag) != std::string::npos) {
-        is_in_tool_block_ = true;
-        tool_name_.clear();
-        result.type = StreamEventType::WAITING;
-        return result;
-    }
-
-    if (content.find("</tool_call>") != std::string::npos) {
-        is_in_tool_block_ = false;
-
-        try {
-            auto j = nlohmann::json::parse(tool_name_);
-
-            result.type = StreamEventType::TOOL_DONE;
-            //result.tool_id = generate_id();
-            result.tool_id = "call_" + std::to_string(std::time(nullptr));
-
-            if (j.contains("name")) {
-                result.tool_name = j["name"].get<std::string>();
-            }
-
-            if (j.contains("arguments")) {
-                if (j["arguments"].is_string()) {
-                    result.tool_args_str = j["arguments"].get<std::string>();
-                }
-                else {
-                    result.tool_args_str = j["arguments"].dump();
-                }
-            }
-        }
-        catch (...) {
-            result.type = StreamEventType::CONTENT;
-            result.content = "[Error parsing tool call]";
-        }
-        return result;
-    }
-
-    if (is_in_tool_block_) {
-        tool_name_ += content;
-        result.type = StreamEventType::WAITING; 
-        return result;
-    }
-
-    result.content = content;
-    return result;
-
 }

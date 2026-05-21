@@ -29,6 +29,10 @@ class DeepSeek_r1_8b : public AutoModel {
 private:
     std::string current_model = "DeepSeek_r1_8b";
     int think_marker_id;
+    int think_start_id = 128013; // placeholder token id for "<think>"
+    int think_end_id = 128014;   // placeholder token id for "</think>"
+    int newline_id = 198;        // token id for "\n"
+    int double_newline_id = 271; // token id for "\n\n"
     void setup_tokenizer(std::string model_path);
 
 public:

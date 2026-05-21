@@ -16,6 +16,11 @@ private:
     bool enable_think = false;
     bool enable_tool = false;
     
+    int think_start_id = 151667;
+    int think_end_id = 151668;
+
+    // bool skip_push_history = false;
+
     void setup_tokenizer(std::string model_path);
 
 public:
@@ -97,6 +102,8 @@ private:
     std::string current_model = "Qwen3_TK";
 
     int think_marker_id;
+    int think_start_id = 151667;
+    int think_end_id = 151668;
 
     void setup_tokenizer(std::string model_path);
 
@@ -120,7 +127,9 @@ private:
     std::string current_model = "DeepSeek_r1_0528_8b";
 
     int think_marker_id;
-
+    int think_start_id = 151667;
+    int think_end_id = 151668;
+    
     void setup_tokenizer(std::string model_path);
 
 public:

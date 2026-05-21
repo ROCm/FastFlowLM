@@ -26,6 +26,8 @@ private:
 
     bool enable_think = false;
     bool enable_tool = false;
+    int think_start_id = 248068;
+    int think_end_id = 248069;
     void setup_tokenizer(std::string model_path);
     
     // Image processing functionality

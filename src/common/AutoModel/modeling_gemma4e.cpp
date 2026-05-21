@@ -301,9 +301,107 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
       
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
 
-    // find the last image token index
+    // ----------------------------------------------------------------------
+    // Prompt-cache aware multi-modal alignment.
+    //
+    // AutoModel::_shared_insert prefix-matches `tokens` against `token_history`
+    // and erases the matched prefix before prefilling. Without intervention,
+    // the multi-modal payload (which carries pixels/spectrograms for the
+    // WHOLE prompt, including images/audios from earlier turns that are
+    // already in the KV cache) would be misaligned with the surviving image
+    // and audio tokens. Compute the prefix-skip here, drop fully-cached
+    // leading images/audios from the payloads, and trim `tokens` so
+    // _shared_insert's own prefix check becomes a no-op.
+    // ----------------------------------------------------------------------
+    {
+        const size_t hist_size = this->token_history.size();
+        const size_t cmp_n = std::min(hist_size, tokens.size());
+        size_t skip_count = 0;
+        for (size_t i = 0; i < cmp_n; i++) {
+            if (tokens[i] == this->token_history[i]) {
+                skip_count++;
+            } else {
+                break;
+            }
+        }
+
+        if (skip_count > 0 && (image_payload.num_images > 0 || audio_payload.num_audios > 0)) {
+            // Count modal soft-tokens that landed inside the cached prefix.
+            int skipped_image_tokens = 0;
+            int skipped_audio_tokens = 0;
+            for (size_t i = 0; i < skip_count; i++) {
+                if (tokens[i] == image_token_id) skipped_image_tokens++;
+                else if (tokens[i] == audio_token_id) skipped_audio_tokens++;
+            }
+
+            // Walk images in order; each image's soft-token block is either
+            // entirely inside the cached prefix or not at all (chat-template
+            // boundaries never split a single image's block).
+            size_t images_to_drop = 0;
+            {
+                int consumed = 0;
+                for (unsigned i = 0; i < image_payload.num_images; i++) {
+                    const int n = static_cast<int>(image_payload.num_soft_tokens_per_image[i]);
+                    if (consumed + n <= skipped_image_tokens) {
+                        consumed += n;
+                        images_to_drop++;
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            // Same for audios.
+            size_t audios_to_drop = 0;
+            {
+                int consumed = 0;
+                for (unsigned i = 0; i < audio_payload.num_audios; i++) {
+                    const int n = static_cast<int>(audio_payload.num_soft_tokens_per_audio[i]);
+                    if (consumed + n <= skipped_audio_tokens) {
+                        consumed += n;
+                        audios_to_drop++;
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            auto drop_front = [](auto& vec, size_t n) {
+                if (n == 0) return;
+                if (n >= vec.size()) { vec.clear(); return; }
+                vec.erase(vec.begin(), vec.begin() + n);
+            };
+
+            if (images_to_drop > 0) {
+                drop_front(image_payload.image_patch__element_per_patch, images_to_drop);
+                drop_front(image_payload.valid_patch_size_per_image,     images_to_drop);
+                drop_front(image_payload.pixel_values,                   images_to_drop);
+                drop_front(image_payload.image_grid_pairs_per_image,     images_to_drop);
+                drop_front(image_payload.num_soft_tokens_per_image,      images_to_drop);
+                image_payload.num_images -= static_cast<unsigned>(images_to_drop);
+                header_print("FLM",
+                    "Prompt-cache hit: dropped " << images_to_drop
+                    << " cached image(s) from payload");
+            }
+
+            if (audios_to_drop > 0) {
+                drop_front(audio_payload.mel_spectrograms,                audios_to_drop);
+                drop_front(audio_payload.mel_spectrogram_frames_per_audio, audios_to_drop);
+                drop_front(audio_payload.mel_spectrogram_bins_per_audio,   audios_to_drop);
+                drop_front(audio_payload.num_soft_tokens_per_audio,        audios_to_drop);
+                audio_payload.num_audios -= static_cast<unsigned>(audios_to_drop);
+                header_print("FLM",
+                    "Prompt-cache hit: dropped " << audios_to_drop
+                    << " cached audio(s) from payload");
+            }
+
+            tokens.erase(tokens.begin(), tokens.begin() + skip_count);
+        }
+    }
+
+    // find the last image token index (relative to the (possibly) trimmed tokens)
     int last_image_token_index = -1;
-    for (int i = 0; i < tokens.size(); i++) {
+    for (int i = 0; i < (int)tokens.size(); i++) {
         if ((tokens[i] == image_token_id || tokens[i] == boi_token_id)) {
             last_image_token_index = i;
         }
@@ -324,7 +422,107 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
 }
 
 std::string Gemma4e::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
-    return this->_shared_generate(meta_info, length_limit, os, is_cancelled);
+    std::vector<int> sampled_tokens;
+    std::string result;
+    if (length_limit > 0){
+        sampled_tokens.reserve(length_limit);
+    }
+    else{
+        sampled_tokens.reserve(4096);
+    }
+    assert(this->last_token != -1);
+
+    stop_reason_t reason = EOT_DETECTED;
+    int last_sampled_token = this->last_token;
+
+    // Skip pushing reasoning-related tokens (<|channel>...<channel|> Pattern: 100 ... 101) into token_history. 
+    bool in_think_block = false;
+    bool skip_next_newline_after_think = false;
+    auto push_history_filtered = [&](int token) {
+        if (skip_next_newline_after_think) {
+            skip_next_newline_after_think = false;
+        }
+        if (token == this->think_start_id) {
+            in_think_block = true;
+            return;
+        }
+        if (in_think_block) {
+            if (token == this->think_end_id) {
+                in_think_block = false;
+                skip_next_newline_after_think = true;
+            }
+            return;
+        }
+        if (token == 1) { // skip tool eos token
+            return;
+        }
+        this->token_history.push_back(token);
+    };
+    push_history_filtered(this->last_token);
+
+    if (this->is_normal_token(last_sampled_token) && last_sampled_token != -1){
+        std::string token_str = this->tokenizer->run_time_decoder(last_sampled_token);
+        result += token_str;
+        os << token_str << std::flush;
+
+    }
+    if (this->is_eos(last_sampled_token)){
+        return result;
+    }
+    this->profiler_list[DECODING_TIME].reset();
+    this->profiler_list[TKOEN_DECODE_TIME].reset();
+    if (this->total_tokens >= this->MAX_L){
+        header_print("WARNING", "Max length reached, stopping generation...");
+        reason = MAX_LENGTH_REACHED;
+        return result;
+    }
+    while (this->total_tokens < this->MAX_L){
+        if (is_cancelled()) {
+            reason = CANCEL_DETECTED;
+            // reset stream content 
+            buffer_.clear();
+            current_mode_ = StreamEventType::CONTENT;
+            tool_name_.clear();
+            is_in_tool_block_ = false;
+            break;
+        }
+        this->profiler_list[DECODING_TIME].start();
+        buffer<bf16> y = this->lm_engine->forward(last_sampled_token);
+        this->profiler_list[DECODING_TIME].stop(1);
+
+        this->profiler_list[SAMPLING_TIME].start();
+        int sampled_token = this->sampler->sample(y);
+        this->profiler_list[SAMPLING_TIME].stop(1);
+        this->total_tokens++;
+        last_sampled_token = sampled_token;
+
+        this->profiler_list[TKOEN_DECODE_TIME].start();
+        if (this->is_normal_token(sampled_token)){ // filter out special tokens
+            std::string token_str = this->tokenizer->run_time_decoder(sampled_token);
+            os << token_str << std::flush;
+            result += token_str;
+        }
+        this->profiler_list[TKOEN_DECODE_TIME].stop(1);
+        push_history_filtered(sampled_token);
+        if (this->is_eos(sampled_token)){
+            meta_info.generated_tokens++;
+            this->lm_engine->forward(last_sampled_token);
+            break;
+        }
+        meta_info.generated_tokens++;
+        if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)){
+            reason = MAX_LENGTH_REACHED;
+            break;
+        }
+    }
+    meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
+    meta_info.stop_reason = reason;
+    if (this->total_tokens >= this->MAX_L){
+        header_print("WARNING", "Max length reached, stopping generation...");
+    }
+    std::cout << std::endl;
+    header_print("FLM", "Model RAW Output: \n" + result);
+    return result;
 }
 
 std::string Gemma4e::generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os) {

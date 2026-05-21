@@ -142,7 +142,6 @@ protected:
 	xrt::device* npu_device_inst = nullptr;
 	std::unique_ptr<npu_xclbin_manager> npu = nullptr;
 	bool enable_preemption = false;
-	bool is_first_prompt; // for remove bos token in multi-round conversation
 
 	uint32_t MAX_L = 0;
 	int last_token = -1;

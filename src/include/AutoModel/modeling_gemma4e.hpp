@@ -33,6 +33,9 @@ private:
     static constexpr int audio_token_id = 258881; // audio token id
     static constexpr int eoa_token_id = 258883; // end of audio token id
 
+    static constexpr int think_start_id = 100;
+    static constexpr int think_end_id = 101;
+
     bool enable_think = false;
     bool enable_tool = false;
     void setup_tokenizer(std::string model_path);

@@ -81,111 +81,248 @@ bool GPT_OSS::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
 
 }
 
-
 std::string GPT_OSS::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
-    const std::string MARKER_TOOL_START = "<|start|>assistant<|channel|>commentary";
-    bool is_constrained_mode = false;
-
     os << "<|start|>" << std::flush;
     os << "assistant" << std::flush;
-    std::string result = this->_shared_generate(meta_info, length_limit, os, is_cancelled);
-    //std::vector<int> sampled_tokens;
-    //std::string result;
-    //if (length_limit > 0) {
-    //    sampled_tokens.reserve(length_limit);
-    //}
-    //else {
-    //    sampled_tokens.reserve(4096);
-    //}
-    //assert(this->last_token != -1);
+    std::vector<int> sampled_tokens;
+    std::string result;
+    if (length_limit > 0){
+        sampled_tokens.reserve(length_limit);
+    }
+    else{
+        sampled_tokens.reserve(4096);
+    }
+    assert(this->last_token != -1);
 
-    //stop_reason_t reason = EOT_DETECTED;
-    //int last_sampled_token = this->last_token;
-    //this->token_history.push_back(this->last_token);
-    //auto decoding_start_time = time_utils::now();
-    //if (this->is_normal_token(last_sampled_token) && last_sampled_token != -1) {
-    //    std::string token_str = this->tokenizer->run_time_decoder(last_sampled_token);
-    //    result += token_str;
-    //    os << token_str << std::flush;
+    stop_reason_t reason = EOT_DETECTED;
+    int last_sampled_token = this->last_token;
 
-    //}
-    //if (this->is_eos(last_sampled_token)) {
-    //    return result;
-    //}
-    //this->profiler_list[TKOEN_DECODE_TIME].stop(1);
-    //if (this->total_tokens >= this->MAX_L) {
-    //    header_print("WARNING", "Max length reached, stopping generation...");
-    //    reason = MAX_LENGTH_REACHED;
-    //    return result;
-    //}
-    //while (this->total_tokens < this->MAX_L) {
-    //    if (is_cancelled()) {
-    //        reason = CANCEL_DETECTED;
-    //        // reset stream content 
-    //        buffer_.clear();
-    //        current_mode_ = StreamEventType::CONTENT;
-    //        waiting_for_header_ = true;
-    //        break;
-    //    }
-    //    this->profiler_list[DECODING_TIME].start();
-    //    buffer<bf16> y = this->lm_engine->forward(last_sampled_token);
-    //    this->profiler_list[DECODING_TIME].stop(1);
+    // Skip pushing reasoning-related tokens (<|channel|>analysis<|message|>The user says "hi". The assistant should respond politely. We can greet back.<|end|><|start|>assistant) into token_history.
+    // 35644: analysis, 200005: <|channel|>, 200008: <|message|>, 200007: <|end|>, 200006: <|start|>, 173781: assistant
+    // State machine to drop the entire analysis block including the trailing <|end|><|start|>assistant.
+    enum SkipState { SKIP_NONE, SKIP_SAW_CHANNEL, SKIP_IN_ANALYSIS, SKIP_SAW_END, SKIP_SAW_START };
+    SkipState skip_state = SKIP_NONE;
+    auto push_history_filtered = [&](int token) {
+        switch (skip_state) {
+            case SKIP_NONE:
+                if (token == 200005) { // <|channel|>
+                    skip_state = SKIP_SAW_CHANNEL;
+                    return; // hold back until we know which channel this is
+                }
+                if (token == 200002)
+                    return; // skip <|return|>
+                this->token_history.push_back(token);
+                return;
+            case SKIP_SAW_CHANNEL:
+                if (token == 35644) { // analysis -> begin skipping
+                    skip_state = SKIP_IN_ANALYSIS;
+                    return;
+                }
+                // Not the analysis channel: flush the held <|channel|> and current token.
+                this->token_history.push_back(200005);
+                this->token_history.push_back(token);
+                skip_state = SKIP_NONE;
+                return;
+            case SKIP_IN_ANALYSIS:
+                if (token == 200007) { // <|end|>
+                    skip_state = SKIP_SAW_END;
+                }
+                return; // drop everything inside the analysis block
+            case SKIP_SAW_END:
+                if (token == 200006) { // <|start|>
+                    skip_state = SKIP_SAW_START;
+                    return;
+                }
+                // Unexpected token after <|end|>; resume normal handling.
+                skip_state = SKIP_NONE;
+                this->token_history.push_back(token);
+                return;
+            case SKIP_SAW_START:
+                if (token == 173781) { // assistant -> finished skipping the header
+                    skip_state = SKIP_NONE;
+                    return;
+                }
+                // Unexpected: resume normal handling.
+                skip_state = SKIP_NONE;
+                this->token_history.push_back(token);
+                return;
+        }
+    };
 
-    //    this->profiler_list[SAMPLING_TIME].start();
-    //    // if MARKER_TOOL_START found 
-    //    
-    //    if (!is_constrained_mode) {
-    //        if (result.length() >= MARKER_TOOL_START.length() &&
-    //            result.compare(result.length() - MARKER_TOOL_START.length(), MARKER_TOOL_START.length(), MARKER_TOOL_START) == 0) {
-    //            is_constrained_mode = true;
-    //            reset_tool_grammar_state();
-    //            header_print("INFO", "<|start|>assistant<|channel|>commentary detected! Switching to Constrained Decoding.");
-    //        }
-    //    }
+    push_history_filtered(this->last_token);
+    if (this->is_normal_token(last_sampled_token) && last_sampled_token != -1){
+        std::string token_str = this->tokenizer->run_time_decoder(last_sampled_token);
+        result += token_str;
+        os << token_str << std::flush;
 
-    //    int sampled_token;
-    //    if (is_constrained_mode) {
-    //        sampled_token = _sample_in_tool(y);
-    //        if (current_state == STATE_COMPLETE) {
-    //            is_constrained_mode = false;
-    //            header_print("INFO", "Constrained Decoding complete, returning to normal mode");
-    //        }
-    //    }
-    //    else
-    //        sampled_token = this->sampler->sample(y);
-    //    this->profiler_list[SAMPLING_TIME].stop(1);
-    //    this->total_tokens++;
-    //    last_sampled_token = sampled_token;
+    }
+    if (this->is_eos(last_sampled_token)){
+        return result;
+    }
+    this->profiler_list[DECODING_TIME].reset();
+    this->profiler_list[TKOEN_DECODE_TIME].reset();
+    if (this->total_tokens >= this->MAX_L){
+        header_print("WARNING", "Max length reached, stopping generation...");
+        reason = MAX_LENGTH_REACHED;
+        return result;
+    }
+    while (this->total_tokens < this->MAX_L){
+        if (is_cancelled()) {
+            reason = CANCEL_DETECTED;
+            // reset stream content 
+            buffer_.clear();
+            current_mode_ = StreamEventType::CONTENT;
+            tool_name_.clear();
+            is_in_tool_block_ = false;
+            break;
+        }
+        this->profiler_list[DECODING_TIME].start();
+        buffer<bf16> y = this->lm_engine->forward(last_sampled_token);
+        this->profiler_list[DECODING_TIME].stop(1);
 
-    //    this->profiler_list[TKOEN_DECODE_TIME].start();
-    //    this->profiler_list[TKOEN_DECODE_TIME].stop(1);
-    //    if (this->is_normal_token(sampled_token)) { // filter out special tokens
-    //        std::string token_str = this->tokenizer->run_time_decoder(sampled_token);
-    //        os << token_str << std::flush;
-    //        result += token_str;
-    //    }
-    //    this->token_history.push_back(sampled_token);
-    //    if (this->is_eos(sampled_token)) {
-    //        this->lm_engine->forward(last_sampled_token);
-    //        break;
-    //    }
-    //    meta_info.generated_tokens++;
-    //    if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)) {
-    //        reason = MAX_LENGTH_REACHED;
-    //        break;
-    //    }
-    //}
+        this->profiler_list[SAMPLING_TIME].start();
+        int sampled_token = this->sampler->sample(y);
+        this->profiler_list[SAMPLING_TIME].stop(1);
+        this->total_tokens++;
+        last_sampled_token = sampled_token;
 
-    //auto decoding_end_time = time_utils::now();
-    //meta_info.decoding_duration = (uint64_t)time_utils::duration_ns(decoding_start_time, decoding_end_time).first;
-    //meta_info.stop_reason = reason;
-    //if (this->total_tokens >= this->MAX_L) {
-    //    header_print("WARNING", "Max length reached, stopping generation...");
-    //}
+        this->profiler_list[TKOEN_DECODE_TIME].start();
+        if (this->is_normal_token(sampled_token)){ // filter out special tokens
+            std::string token_str = this->tokenizer->run_time_decoder(sampled_token);
+            os << token_str << std::flush;
+            result += token_str;
+        }
+        this->profiler_list[TKOEN_DECODE_TIME].stop(1);
+        push_history_filtered(sampled_token);
+        if (this->is_eos(sampled_token)){
+            meta_info.generated_tokens++;
+            this->lm_engine->forward(last_sampled_token);
+            break;
+        }
+        meta_info.generated_tokens++;
+        if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)){
+            reason = MAX_LENGTH_REACHED;
+            break;
+        }
+    }
+    meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
+    meta_info.stop_reason = reason;
+    if (this->total_tokens >= this->MAX_L){
+        header_print("WARNING", "Max length reached, stopping generation...");
+    }
+    std::cout << std::endl;
+    header_print("FLM", "Model RAW Output: \n" + result);
 
     os << "<|end|>" << std::flush;
     return "<|start|>assistant" + result + "<|end|>";
 }
+
+/*
+// std::string GPT_OSS::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
+//     const std::string MARKER_TOOL_START = "<|start|>assistant<|channel|>commentary";
+//     bool is_constrained_mode = false;
+
+//     os << "<|start|>" << std::flush;
+//     os << "assistant" << std::flush;
+//     std::string result = this->_shared_generate(meta_info, length_limit, os, is_cancelled);
+//     //std::vector<int> sampled_tokens;
+//     //std::string result;
+//     //if (length_limit > 0) {
+//     //    sampled_tokens.reserve(length_limit);
+//     //}
+//     //else {
+//     //    sampled_tokens.reserve(4096);
+//     //}
+//     //assert(this->last_token != -1);
+
+//     //stop_reason_t reason = EOT_DETECTED;
+//     //int last_sampled_token = this->last_token;
+//     //this->token_history.push_back(this->last_token);
+//     //auto decoding_start_time = time_utils::now();
+//     //if (this->is_normal_token(last_sampled_token) && last_sampled_token != -1) {
+//     //    std::string token_str = this->tokenizer->run_time_decoder(last_sampled_token);
+//     //    result += token_str;
+//     //    os << token_str << std::flush;
+
+//     //}
+//     //if (this->is_eos(last_sampled_token)) {
+//     //    return result;
+//     //}
+//     //this->profiler_list[TKOEN_DECODE_TIME].stop(1);
+//     //if (this->total_tokens >= this->MAX_L) {
+//     //    header_print("WARNING", "Max length reached, stopping generation...");
+//     //    reason = MAX_LENGTH_REACHED;
+//     //    return result;
+//     //}
+//     //while (this->total_tokens < this->MAX_L) {
+//     //    if (is_cancelled()) {
+//     //        reason = CANCEL_DETECTED;
+//     //        // reset stream content 
+//     //        buffer_.clear();
+//     //        current_mode_ = StreamEventType::CONTENT;
+//     //        waiting_for_header_ = true;
+//     //        break;
+//     //    }
+//     //    this->profiler_list[DECODING_TIME].start();
+//     //    buffer<bf16> y = this->lm_engine->forward(last_sampled_token);
+//     //    this->profiler_list[DECODING_TIME].stop(1);
+
+//     //    this->profiler_list[SAMPLING_TIME].start();
+//     //    // if MARKER_TOOL_START found 
+//     //    
+//     //    if (!is_constrained_mode) {
+//     //        if (result.length() >= MARKER_TOOL_START.length() &&
+//     //            result.compare(result.length() - MARKER_TOOL_START.length(), MARKER_TOOL_START.length(), MARKER_TOOL_START) == 0) {
+//     //            is_constrained_mode = true;
+//     //            reset_tool_grammar_state();
+//     //            header_print("INFO", "<|start|>assistant<|channel|>commentary detected! Switching to Constrained Decoding.");
+//     //        }
+//     //    }
+
+//     //    int sampled_token;
+//     //    if (is_constrained_mode) {
+//     //        sampled_token = _sample_in_tool(y);
+//     //        if (current_state == STATE_COMPLETE) {
+//     //            is_constrained_mode = false;
+//     //            header_print("INFO", "Constrained Decoding complete, returning to normal mode");
+//     //        }
+//     //    }
+//     //    else
+//     //        sampled_token = this->sampler->sample(y);
+//     //    this->profiler_list[SAMPLING_TIME].stop(1);
+//     //    this->total_tokens++;
+//     //    last_sampled_token = sampled_token;
+
+//     //    this->profiler_list[TKOEN_DECODE_TIME].start();
+//     //    this->profiler_list[TKOEN_DECODE_TIME].stop(1);
+//     //    if (this->is_normal_token(sampled_token)) { // filter out special tokens
+//     //        std::string token_str = this->tokenizer->run_time_decoder(sampled_token);
+//     //        os << token_str << std::flush;
+//     //        result += token_str;
+//     //    }
+//     //    this->token_history.push_back(sampled_token);
+//     //    if (this->is_eos(sampled_token)) {
+//     //        this->lm_engine->forward(last_sampled_token);
+//     //        break;
+//     //    }
+//     //    meta_info.generated_tokens++;
+//     //    if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)) {
+//     //        reason = MAX_LENGTH_REACHED;
+//     //        break;
+//     //    }
+//     //}
+
+//     //auto decoding_end_time = time_utils::now();
+//     //meta_info.decoding_duration = (uint64_t)time_utils::duration_ns(decoding_start_time, decoding_end_time).first;
+//     //meta_info.stop_reason = reason;
+//     //if (this->total_tokens >= this->MAX_L) {
+//     //    header_print("WARNING", "Max length reached, stopping generation...");
+//     //}
+
+//     os << "<|end|>" << std::flush;
+//     return "<|start|>assistant" + result + "<|end|>";
+// }
+*/
 
 std::string GPT_OSS::generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os) {
     if (!this->insert(meta_info, input)) {

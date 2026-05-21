@@ -202,7 +202,9 @@ bool Qwen2VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     // update the tokens to include the image tokens
     std::vector<int> tokens;
     int total_image_tokens = 0;
-    for (int i = 0; i < input.images.size(); i++) {
+    // Use image_payload.images.size() (not input.images.size()), because on
+    // the REST API path images come from `messages` and input.images is empty.
+    for (size_t i = 0; i < image_payload.images.size(); i++) {
         total_image_tokens += image_payload.images[i].grid_h * image_payload.images[i].grid_w;
     }
     tokens.reserve(tokens_init.size() + total_image_tokens);
@@ -219,9 +221,78 @@ bool Qwen2VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     }
 
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
-    // process image first
+
+    // ----------------------------------------------------------------------
+    // Prompt-cache aware image alignment.
+    //
+    // AutoModel::_shared_insert prefix-matches `tokens` against `token_history`
+    // and erases the matched prefix before prefilling. Without intervention,
+    // the image payload (pixels for the WHOLE prompt, including already-cached
+    // images from earlier turns) would be misaligned with the surviving image
+    // tokens. Compute the prefix-skip here, drop fully-cached leading images
+    // from image_payload, and trim `tokens` so _shared_insert's own prefix
+    // check is a no-op.
+    // ----------------------------------------------------------------------
+    {
+        const size_t hist_size = this->token_history.size();
+        const size_t cmp_n = std::min(hist_size, tokens.size());
+        size_t skip_count = 0;
+        for (size_t i = 0; i < cmp_n; i++) {
+            if (tokens[i] == this->token_history[i]) {
+                skip_count++;
+            } else {
+                break;
+            }
+        }
+
+        if (skip_count > 0 && !image_payload.images.empty()) {
+            int skipped_image_tokens = 0;
+            for (size_t i = 0; i < skip_count; i++) {
+                if (tokens[i] == image_soft_token_id) skipped_image_tokens++;
+            }
+
+            size_t images_to_drop = 0;
+            size_t bf16_to_drop = 0;
+            int consumed_image_tokens = 0;
+            for (const auto& img : image_payload.images) {
+                const int img_tokens = (img.grid_h * img.grid_w) / 4;
+                const size_t img_bf16 =
+                    static_cast<size_t>(img.grid_h) * QWEN2_PATCH_SIZE *
+                    static_cast<size_t>(img.grid_w) * QWEN2_PATCH_SIZE *
+                    3u * QWEN2_TEMPORAL_PATCH_SIZE;
+                if (consumed_image_tokens + img_tokens <= skipped_image_tokens) {
+                    consumed_image_tokens += img_tokens;
+                    bf16_to_drop += img_bf16;
+                    images_to_drop++;
+                } else {
+                    break;
+                }
+            }
+
+            if (images_to_drop > 0) {
+                image_payload.images.erase(
+                    image_payload.images.begin(),
+                    image_payload.images.begin() + images_to_drop);
+                image_payload.num_images -= static_cast<int>(images_to_drop);
+                if (bf16_to_drop >= image_payload._data__processed.size()) {
+                    image_payload._data__processed.clear();
+                } else {
+                    image_payload._data__processed.erase(
+                        image_payload._data__processed.begin(),
+                        image_payload._data__processed.begin() + bf16_to_drop);
+                }
+                header_print_g("FLM",
+                    "Prompt-cache hit: dropped " + std::to_string(images_to_drop)
+                    + " cached image(s) from payload");
+            }
+
+            tokens.erase(tokens.begin(), tokens.begin() + skip_count);
+        }
+    }
+
+    // process image first (relative to the (possibly) trimmed tokens)
     int last_image_token_index = -1;
-    for (int i = 0; i < tokens.size(); i++) {
+    for (int i = 0; i < (int)tokens.size(); i++) {
         if (tokens[i] == image_soft_token_id) {
             last_image_token_index = i;
         }

@@ -77,19 +77,130 @@ bool Qwen3::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::
 
     std::vector<int> tokens = this->tokenizer->encode(templated_text);
 
-    if (this->is_first_prompt == false) {
-        tokens.insert(tokens.begin(), 198);
-    }
-    this->is_first_prompt = false;
-
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
     // hardware
 
-    return this->_shared_insert(meta_info, tokens, is_cancelled);
+    bool success = this->_shared_insert(meta_info, tokens, is_cancelled);
+
+    // Remove the trailing reasoning placeholder appended by the chat template when
+    // thinking is disabled: "<think>\n\n</think>\n\n" -> token ids 151667 271 151668 271.
+    {
+        auto& hist = this->token_history;
+        size_t n = hist.size();
+        if (n >= 4 &&
+            hist[n - 4] == this->think_start_id &&
+            hist[n - 3] == 271 &&
+            hist[n - 2] == this->think_end_id &&
+            hist[n - 1] == 271) {
+            hist.resize(n - 4);
+        }
+    }
+
+    return success;
 }
 
 std::string Qwen3::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
-    return this->_shared_generate(meta_info, length_limit, os, is_cancelled);
+    std::vector<int> sampled_tokens;
+    std::string result;
+    if (length_limit > 0){
+        sampled_tokens.reserve(length_limit);
+    }
+    else{
+        sampled_tokens.reserve(4096);
+    }
+    assert(this->last_token != -1);
+
+    stop_reason_t reason = EOT_DETECTED;
+    int last_sampled_token = this->last_token;
+
+    // Skip pushing reasoning-related tokens (<think>...</think> and the trailing "\n\n" Pattern: 151667 271 151668 271) into token_history. 
+    bool in_think_block = false;
+    bool skip_next_newline_after_think = false;
+    auto push_history_filtered = [&](int token) {
+        if (skip_next_newline_after_think) {
+            skip_next_newline_after_think = false;
+            if (token == 271) {
+                return; // skip the "\n\n" right after </think>
+            }
+        }
+        if (token == this->think_start_id) {
+            in_think_block = true;
+            return;
+        }
+        if (in_think_block) {
+            if (token == this->think_end_id) {
+                in_think_block = false;
+                skip_next_newline_after_think = true;
+            }
+            return;
+        }
+        this->token_history.push_back(token);
+    };
+
+    push_history_filtered(this->last_token);
+    if (this->is_normal_token(last_sampled_token) && last_sampled_token != -1){
+        std::string token_str = this->tokenizer->run_time_decoder(last_sampled_token);
+        result += token_str;
+        os << token_str << std::flush;
+
+    }
+    if (this->is_eos(last_sampled_token)){
+        return result;
+    }
+    this->profiler_list[DECODING_TIME].reset();
+    this->profiler_list[TKOEN_DECODE_TIME].reset();
+    if (this->total_tokens >= this->MAX_L){
+        header_print("WARNING", "Max length reached, stopping generation...");
+        reason = MAX_LENGTH_REACHED;
+        return result;
+    }
+    while (this->total_tokens < this->MAX_L){
+        if (is_cancelled()) {
+            reason = CANCEL_DETECTED;
+            // reset stream content 
+            buffer_.clear();
+            current_mode_ = StreamEventType::CONTENT;
+            tool_name_.clear();
+            is_in_tool_block_ = false;
+            break;
+        }
+        this->profiler_list[DECODING_TIME].start();
+        buffer<bf16> y = this->lm_engine->forward(last_sampled_token);
+        this->profiler_list[DECODING_TIME].stop(1);
+
+        this->profiler_list[SAMPLING_TIME].start();
+        int sampled_token = this->sampler->sample(y);
+        this->profiler_list[SAMPLING_TIME].stop(1);
+        this->total_tokens++;
+        last_sampled_token = sampled_token;
+
+        this->profiler_list[TKOEN_DECODE_TIME].start();
+        if (this->is_normal_token(sampled_token)){ // filter out special tokens
+            std::string token_str = this->tokenizer->run_time_decoder(sampled_token);
+            os << token_str << std::flush;
+            result += token_str;
+        }
+        this->profiler_list[TKOEN_DECODE_TIME].stop(1);
+        push_history_filtered(sampled_token);
+        if (this->is_eos(sampled_token)){
+            meta_info.generated_tokens++;
+            this->lm_engine->forward(last_sampled_token);
+            break;
+        }
+        meta_info.generated_tokens++;
+        if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)){
+            reason = MAX_LENGTH_REACHED;
+            break;
+        }
+    }
+    meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
+    meta_info.stop_reason = reason;
+    if (this->total_tokens >= this->MAX_L){
+        header_print("WARNING", "Max length reached, stopping generation...");
+    }
+    std::cout << std::endl;
+    header_print("FLM", "Model RAW Output: \n" + result);
+    return result;
 }
 
 std::string Qwen3::generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os) {
@@ -232,10 +343,7 @@ bool Qwen3_IT::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, st
     }
 
     std::vector<int> tokens = this->tokenizer->encode(templated_text);
-    if (this->is_first_prompt == false) {
-        tokens.insert(tokens.begin(), 198);
-    }
-    this->is_first_prompt = false;
+
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
     // hardware
 
@@ -423,20 +531,126 @@ bool Qwen3_TK::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, st
     }
 
     std::vector<int> tokens = this->tokenizer->encode(templated_text);
-      if (this->is_first_prompt == false) {
-        tokens.insert(tokens.begin(), 198);
-    }
-    this->is_first_prompt = false;
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
     // hardware
+    bool success = this->_shared_insert(meta_info, tokens, is_cancelled);
 
-    return this->_shared_insert(meta_info, tokens, is_cancelled);
+    // Remove the starting reasoning placeholder appended by the chat template: "<think>\n" -> token ids 151667 198.
+    {
+        auto& hist = this->token_history;
+        size_t n = hist.size();
+        if (n >= 2 &&
+            hist[n - 2] == this->think_start_id &&
+            hist[n - 1] == 198) {
+            hist.resize(n - 2);
+        }
+    }
+
+    return success;
+
 }
 
 std::string Qwen3_TK::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
+    std::vector<int> sampled_tokens;
     std::string result;
     os << "<think>\n\n";
-    result = this->_shared_generate(meta_info, length_limit, os, is_cancelled);
+    if (length_limit > 0){
+        sampled_tokens.reserve(length_limit);
+    }
+    else{
+        sampled_tokens.reserve(4096);
+    }
+    assert(this->last_token != -1);
+
+    stop_reason_t reason = EOT_DETECTED;
+    int last_sampled_token = this->last_token;
+
+    // The chat template already emits <think> before generation, so the model
+    // is always inside the reasoning block at the start. Skip pushing every
+    // token into token_history until (and including) think_end_id is produced;
+    // also drop the immediate "\n\n" (271) after </think>.
+    bool reasoning_done = false;
+    bool skip_next_newline_after_think = false;
+    auto push_history_filtered = [&](int token) {
+        if (!reasoning_done) {
+            if (token == this->think_end_id) {
+                reasoning_done = true;
+                skip_next_newline_after_think = true;
+            }
+            return; // skip everything up to and including </think>
+        }
+        if (skip_next_newline_after_think) {
+            skip_next_newline_after_think = false;
+            if (token == 271) { // skip the "\n\n" right after </think>
+                return;
+            }
+        }
+        this->token_history.push_back(token);
+    };
+
+    push_history_filtered(this->last_token);
+    if (this->is_normal_token(last_sampled_token) && last_sampled_token != -1){
+        std::string token_str = this->tokenizer->run_time_decoder(last_sampled_token);
+        result += token_str;
+        os << token_str << std::flush;
+
+    }
+    if (this->is_eos(last_sampled_token)){
+        return result;
+    }
+    this->profiler_list[DECODING_TIME].reset();
+    this->profiler_list[TKOEN_DECODE_TIME].reset();
+    if (this->total_tokens >= this->MAX_L){
+        header_print("WARNING", "Max length reached, stopping generation...");
+        reason = MAX_LENGTH_REACHED;
+        return result;
+    }
+    while (this->total_tokens < this->MAX_L){
+        if (is_cancelled()) {
+            reason = CANCEL_DETECTED;
+            // reset stream content 
+            buffer_.clear();
+            current_mode_ = StreamEventType::CONTENT;
+            tool_name_.clear();
+            is_in_tool_block_ = false;
+            break;
+        }
+        this->profiler_list[DECODING_TIME].start();
+        buffer<bf16> y = this->lm_engine->forward(last_sampled_token);
+        this->profiler_list[DECODING_TIME].stop(1);
+
+        this->profiler_list[SAMPLING_TIME].start();
+        int sampled_token = this->sampler->sample(y);
+        this->profiler_list[SAMPLING_TIME].stop(1);
+        this->total_tokens++;
+        last_sampled_token = sampled_token;
+
+        this->profiler_list[TKOEN_DECODE_TIME].start();
+        if (this->is_normal_token(sampled_token)){ // filter out special tokens
+            std::string token_str = this->tokenizer->run_time_decoder(sampled_token);
+            os << token_str << std::flush;
+            result += token_str;
+        }
+        this->profiler_list[TKOEN_DECODE_TIME].stop(1);
+        push_history_filtered(sampled_token);
+        if (this->is_eos(sampled_token)){
+            meta_info.generated_tokens++;
+            this->lm_engine->forward(last_sampled_token);
+            break;
+        }
+        meta_info.generated_tokens++;
+        if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)){
+            reason = MAX_LENGTH_REACHED;
+            break;
+        }
+    }
+    meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
+    meta_info.stop_reason = reason;
+    if (this->total_tokens >= this->MAX_L){
+        header_print("WARNING", "Max length reached, stopping generation...");
+    }
+    std::cout << std::endl;
+    header_print("FLM", "Model RAW Output: \n" + result);
     result = "<think>\n\n" + result;
     return result;
 }
@@ -581,10 +795,7 @@ bool DeepSeek_r1_0528_8b::insert(chat_meta_info_t& meta_info, lm_uniform_input_t
     }
 
     std::vector<int> tokens = this->tokenizer->encode(templated_text);
-    if (this->is_first_prompt == false) {
-        tokens.insert(tokens.begin(), 198);
-    }
-    this->is_first_prompt = false;
+
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
     // hardware
 
@@ -592,7 +803,106 @@ bool DeepSeek_r1_0528_8b::insert(chat_meta_info_t& meta_info, lm_uniform_input_t
 }
 
 std::string DeepSeek_r1_0528_8b::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
-    std::string result = this->_shared_generate(meta_info, length_limit, os, is_cancelled);
+    std::vector<int> sampled_tokens;
+    std::string result;
+    if (length_limit > 0){
+        sampled_tokens.reserve(length_limit);
+    }
+    else{
+        sampled_tokens.reserve(4096);
+    }
+    assert(this->last_token != -1);
+
+    stop_reason_t reason = EOT_DETECTED;
+    int last_sampled_token = this->last_token;
+
+    // Skip pushing reasoning-related tokens (<think>...</think> and the trailing "\n" Pattern: 151667 ... 151668 198) into token_history.
+    bool in_think_block = false;
+    bool skip_next_newline_after_think = false;
+    auto push_history_filtered = [&](int token) {
+        if (skip_next_newline_after_think) {
+            skip_next_newline_after_think = false;
+            if (token == 198) {
+                return; // skip the "\n" right after </think>
+            }
+        }
+        if (token == this->think_start_id) {
+            in_think_block = true;
+            return;
+        }
+        if (in_think_block) {
+            if (token == this->think_end_id) {
+                in_think_block = false;
+                skip_next_newline_after_think = true;
+            }
+            return;
+        }
+        this->token_history.push_back(token);
+    };
+
+    push_history_filtered(this->last_token);
+    if (this->is_normal_token(last_sampled_token) && last_sampled_token != -1){
+        std::string token_str = this->tokenizer->run_time_decoder(last_sampled_token);
+        result += token_str;
+        os << token_str << std::flush;
+
+    }
+    if (this->is_eos(last_sampled_token)){
+        return result;
+    }
+    this->profiler_list[DECODING_TIME].reset();
+    this->profiler_list[TKOEN_DECODE_TIME].reset();
+    if (this->total_tokens >= this->MAX_L){
+        header_print("WARNING", "Max length reached, stopping generation...");
+        reason = MAX_LENGTH_REACHED;
+        return result;
+    }
+    while (this->total_tokens < this->MAX_L){
+        if (is_cancelled()) {
+            reason = CANCEL_DETECTED;
+            // reset stream content 
+            buffer_.clear();
+            current_mode_ = StreamEventType::CONTENT;
+            tool_name_.clear();
+            is_in_tool_block_ = false;
+            break;
+        }
+        this->profiler_list[DECODING_TIME].start();
+        buffer<bf16> y = this->lm_engine->forward(last_sampled_token);
+        this->profiler_list[DECODING_TIME].stop(1);
+
+        this->profiler_list[SAMPLING_TIME].start();
+        int sampled_token = this->sampler->sample(y);
+        this->profiler_list[SAMPLING_TIME].stop(1);
+        this->total_tokens++;
+        last_sampled_token = sampled_token;
+
+        this->profiler_list[TKOEN_DECODE_TIME].start();
+        if (this->is_normal_token(sampled_token)){ // filter out special tokens
+            std::string token_str = this->tokenizer->run_time_decoder(sampled_token);
+            os << token_str << std::flush;
+            result += token_str;
+        }
+        this->profiler_list[TKOEN_DECODE_TIME].stop(1);
+        push_history_filtered(sampled_token);
+        if (this->is_eos(sampled_token)){
+            meta_info.generated_tokens++;
+            this->lm_engine->forward(last_sampled_token);
+            break;
+        }
+        meta_info.generated_tokens++;
+        if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)){
+            reason = MAX_LENGTH_REACHED;
+            break;
+        }
+    }
+    meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
+    meta_info.stop_reason = reason;
+    if (this->total_tokens >= this->MAX_L){
+        header_print("WARNING", "Max length reached, stopping generation...");
+    }
+    std::cout << std::endl;
+    header_print("FLM", "Model RAW Output: \n" + result);
     return result;
 }
 

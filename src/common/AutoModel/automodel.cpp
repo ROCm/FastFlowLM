@@ -18,7 +18,6 @@ AutoModel::AutoModel(xrt::device* npu_device_inst, std::string current_model) {
     }
     this->last_prefill_time = { 0, "us" };
     this->token_history.reserve(MAX_L);
-    this->is_first_prompt = true;
 }
 
 
@@ -147,6 +146,33 @@ void AutoModel::_shared_load_model(std::string model_path, json model_info, int 
 
 bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled, void* payload, int first_len_run) {
 
+    // print token history
+    // header_print("DEBUG", "Current token history: ");
+    // for (size_t i = 0; i < this->token_history.size(); i++) {
+    //     std::cout << this->token_history[i] << " ";
+    // }
+    // std::cout << std::endl;
+    // // print tokens to insert
+    // header_print("DEBUG", "Tokens to insert: ");
+    // for (size_t i = 0; i < tokens.size(); i++) {
+    //     std::cout << tokens[i] <<  " ";
+    // }
+    // std::cout << std::endl;
+
+    // prefix check for tokens and token history to see if we can skip some tokens
+    const size_t idx = this->token_history.size();
+    size_t skip_count = 0;
+    for (size_t i = 0; i < idx; i++) {
+        if (tokens[i] == this->token_history[i]) {
+            skip_count++;
+        } 
+        else {
+            break;
+        }
+    }
+    tokens.erase(tokens.begin(), tokens.begin() + skip_count);
+
+
     if (this->total_tokens + tokens.size() >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping prefilling...");
         return false;
@@ -162,13 +188,13 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
 
     auto prefill_end_time = this->profiler_list[PREFILL_TIME].stop(tokens.size());
     meta_info.prefill_duration = (uint64_t)time_utils::duration_ns(prefill_start_time, prefill_end_time).first;
-    meta_info.prompt_tokens = tokens.size() + 1;
+    meta_info.prompt_tokens = tokens.size();
 
     if (meta_info.stop_reason == CANCEL_DETECTED) {
         return false;
     }
 
-    this->total_tokens += tokens.size() + 1;
+    this->total_tokens += tokens.size();
     if (this->total_tokens >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping prefilling...");
     }
@@ -291,7 +317,8 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
     if (this->total_tokens >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping generation...");
     }
-    header_print("FLM", "Model RAW Output: " + result);
+    std::cout << std::endl;
+    header_print("FLM", "Model RAW Output: \n" + result);
     return result;
 }
 
@@ -432,7 +459,6 @@ void AutoModel::clear_context() {
         this->profiler_list[i].reset();
     }
     this->last_prefill_time = { 0, "us" };
-    this->is_first_prompt = true;
 }
 
 

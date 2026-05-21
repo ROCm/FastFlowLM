@@ -37,6 +37,9 @@ public:
 
 class LFM2_5_TK : public AutoModel {
 private:
+    int think_start_id = 64400;
+    int think_end_id = 64401;
+
     void setup_tokenizer(std::string model_path);
     inline std::string _replace_space(std::string& text){
         static std::string to_replace = "Ġ";
