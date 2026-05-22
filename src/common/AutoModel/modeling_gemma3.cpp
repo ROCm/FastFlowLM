@@ -61,7 +61,7 @@ bool Gemma3::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std:
     }
     if (!input.messages.empty()) { // already a formated messages, usually from REST API
         templated_text = this->apply_chat_template(input.messages);
-        std::cout << "Templated text after applying chat template: \n" << templated_text << std::endl; // Debug print
+        // std::cout << "Templated text after applying chat template: \n" << templated_text << std::endl; // Debug print
     }
     else if (!input.prompt.empty()) { // a pure text, usually from the cli
         nlohmann::ordered_json messages;
