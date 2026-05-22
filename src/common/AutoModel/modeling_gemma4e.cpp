@@ -213,10 +213,7 @@ struct Gemma4eArgsParser {
             return terminators.find(s[k]) != std::string::npos;
         };
 
-        // QUOTE-mode only: honor JSON-style backslash escapes. In MARKER and
-        // BARE modes the model emits literal text (e.g. Windows paths like
-        // `C:\Users\nock9\Desktop`), so backslashes there are NOT escapes —
-        // they're literal characters and get JSON-escaped to `\\`.
+        // QUOTE-mode only: honor JSON-style backslash escapes verbatim.
         auto consume_quote_escape = [&](std::string& out) {
             // s[i] == '\\'
             if (i + 1 >= s.size()) {
@@ -250,26 +247,69 @@ struct Gemma4eArgsParser {
             ++i;
         };
 
+        // For MARKER and BARE modes we first collect the raw content, then
+        // JSON-encode it. Backslash policy is decided per-string:
+        //   - if every `\` is followed by a valid JSON escape char, treat
+        //     them as escapes (so e.g. `\n` becomes a real newline)
+        //   - otherwise treat every `\` as a literal char (so Windows paths
+        //     like `C:\Users\nock9\Desktop\abc.txt` are preserved verbatim)
+        auto is_escape_char = [](char c) {
+            return c == '"' || c == '\\' || c == '/' ||
+                   c == 'b' || c == 'f' || c == 'n' ||
+                   c == 'r' || c == 't' || c == 'u';
+        };
+        auto encode_raw = [&](const std::string& raw, std::string& out) {
+            bool all_valid = true;
+            for (size_t k = 0; k < raw.size(); ++k) {
+                if (raw[k] == '\\') {
+                    if (k + 1 >= raw.size() || !is_escape_char(raw[k + 1])) {
+                        all_valid = false;
+                        break;
+                    }
+                    ++k;
+                }
+            }
+            for (size_t k = 0; k < raw.size(); ++k) {
+                char c = raw[k];
+                if (c == '\\' && all_valid && k + 1 < raw.size()) {
+                    char nc = raw[k + 1];
+                    if (nc == 'u' && k + 5 < raw.size() &&
+                        std::isxdigit(static_cast<unsigned char>(raw[k + 2])) &&
+                        std::isxdigit(static_cast<unsigned char>(raw[k + 3])) &&
+                        std::isxdigit(static_cast<unsigned char>(raw[k + 4])) &&
+                        std::isxdigit(static_cast<unsigned char>(raw[k + 5]))) {
+                        out.append(raw, k, 6);
+                        k += 5;
+                    } else {
+                        out.push_back('\\');
+                        out.push_back(nc);
+                        ++k;
+                    }
+                } else {
+                    json_escape_char(out, c);
+                }
+            }
+        };
+
         std::string value;
+        std::string raw;       // used in MARKER / BARE modes
         int depth = 0;
         while (i < s.size()) {
             if (mode == MARKER) {
                 if (match_marker(i)) {
                     size_t after = i + marker_len;
                     if (is_terminator(after)) { i = after; break; }
-                    for (size_t m = 0; m < marker_len; ++m) {
-                        json_escape_char(value, quote_marker_lit[m]);
-                    }
+                    raw.append(quote_marker_lit, marker_len);
                     i = after;
                     continue;
                 }
                 if (s[i] == '"') {
                     if (is_terminator(i + 1)) { ++i; break; }
-                    json_escape_char(value, s[i]);
+                    raw.push_back(s[i]);
                     ++i;
                     continue;
                 }
-                json_escape_char(value, s[i]);
+                raw.push_back(s[i]);
                 ++i;
                 continue;
             }
@@ -288,9 +328,7 @@ struct Gemma4eArgsParser {
             if (match_marker(i)) {
                 size_t after = i + marker_len;
                 if (depth == 0 && is_terminator(after)) { i = after; break; }
-                for (size_t m = 0; m < marker_len; ++m) {
-                    json_escape_char(value, quote_marker_lit[m]);
-                }
+                raw.append(quote_marker_lit, marker_len);
                 i = after;
                 continue;
             }
@@ -298,8 +336,12 @@ struct Gemma4eArgsParser {
             if (depth == 0 && terminators.find(c) != std::string::npos) break;
             if (c == '{' || c == '[' || c == '(') ++depth;
             else if ((c == '}' || c == ']' || c == ')') && depth > 0) --depth;
-            json_escape_char(value, c);
+            raw.push_back(c);
             ++i;
+        }
+
+        if (mode != QUOTE) {
+            encode_raw(raw, value);
         }
 
         std::string out = "\"";
