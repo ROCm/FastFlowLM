@@ -213,11 +213,11 @@ struct Gemma4eArgsParser {
             return terminators.find(s[k]) != std::string::npos;
         };
 
-        // Handle a backslash escape sequence inside a string. The model uses
-        // these JSON-style escapes (e.g. `\n` for newline) and we want to
-        // preserve them in the output JSON. For unknown escapes, fall back to
-        // escaping the backslash itself so the output stays well-formed.
-        auto consume_backslash_escape = [&](std::string& out) {
+        // QUOTE-mode only: honor JSON-style backslash escapes. In MARKER and
+        // BARE modes the model emits literal text (e.g. Windows paths like
+        // `C:\Users\nock9\Desktop`), so backslashes there are NOT escapes —
+        // they're literal characters and get JSON-escaped to `\\`.
+        auto consume_quote_escape = [&](std::string& out) {
             // s[i] == '\\'
             if (i + 1 >= s.size()) {
                 json_escape_char(out, s[i]);
@@ -233,7 +233,6 @@ struct Gemma4eArgsParser {
                     i += 2;
                     return;
                 case 'u': {
-                    // \uXXXX — pass through if 4 hex digits follow
                     if (i + 5 < s.size() &&
                         std::isxdigit(static_cast<unsigned char>(s[i + 2])) &&
                         std::isxdigit(static_cast<unsigned char>(s[i + 3])) &&
@@ -247,7 +246,6 @@ struct Gemma4eArgsParser {
                 }
                 default: break;
             }
-            // Unknown escape: keep the backslash as a literal char.
             json_escape_char(out, s[i]);
             ++i;
         };
@@ -271,10 +269,6 @@ struct Gemma4eArgsParser {
                     ++i;
                     continue;
                 }
-                if (s[i] == '\\') {
-                    consume_backslash_escape(value);
-                    continue;
-                }
                 json_escape_char(value, s[i]);
                 ++i;
                 continue;
@@ -282,7 +276,7 @@ struct Gemma4eArgsParser {
             if (mode == QUOTE) {
                 char c = s[i];
                 if (c == '\\') {
-                    consume_backslash_escape(value);
+                    consume_quote_escape(value);
                     continue;
                 }
                 if (c == '"') { ++i; break; }
@@ -302,10 +296,6 @@ struct Gemma4eArgsParser {
             }
             char c = s[i];
             if (depth == 0 && terminators.find(c) != std::string::npos) break;
-            if (c == '\\') {
-                consume_backslash_escape(value);
-                continue;
-            }
             if (c == '{' || c == '[' || c == '(') ++depth;
             else if ((c == '}' || c == ']' || c == ')') && depth > 0) --depth;
             json_escape_char(value, c);
