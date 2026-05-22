@@ -434,6 +434,11 @@ std::string Qwen3_5VL::generate_with_prompt(chat_meta_info_t& meta_info, lm_unif
     if (!this->insert(meta_info, input)) {
         return "";
     }
+    header_print("FLM", "Prompt inserted, starting generation...");
+    qwen3_5vl_npu* qwen35_engine = dynamic_cast<qwen3_5vl_npu*>(this->lm_engine.get());
+    int checkpoint_idx = qwen35_engine->checkpoint();
+    int restore_idx = qwen35_engine->restore();
+    header_print_r("FLM", "Checkpoint before generation: " << checkpoint_idx << ", restore point: " << restore_idx << ", user context length: " << this->token_history.size());
     if (this->enable_think) {
         os << "<think>\n" << std::flush;
     }

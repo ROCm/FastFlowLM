@@ -107,7 +107,8 @@ public:
     /// \return the current context length
     int get_current_context_length() override;
 
-
+    int checkpoint();
+    int restore();
 
     // parameters for vision process in qwen3.5 vl
 
