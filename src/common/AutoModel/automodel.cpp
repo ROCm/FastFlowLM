@@ -210,7 +210,7 @@ buffer<bf16> AutoModel::_chunked_insert(chat_meta_info_t& meta_info, std::vector
     max_prefill_len = 1 << static_cast<int>(std::ceil(std::log2(max_prefill_len)));
     buffer<bf16> y;
     if (max_prefill_len < 512) {
-        y = this->lm_engine->prefill(tokens, nullptr);
+        y = this->lm_engine->prefill(tokens, payload);
     }
     else{
         if (first_len_run > 0) {
