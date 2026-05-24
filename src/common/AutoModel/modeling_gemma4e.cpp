@@ -303,7 +303,11 @@ struct Gemma4eArgsParser {
                     i = after;
                     continue;
                 }
-                if (s[i] == '"') {
+                if (s[i] == '"' || s[i] == '`') {
+                    // The model occasionally substitutes a plain `"` or even
+                    // a backtick `` ` `` for the closing <|"|> marker. Treat
+                    // either as a close only when followed by a terminator,
+                    // so they remain valid string content otherwise.
                     if (is_terminator(i + 1)) { ++i; break; }
                     raw.push_back(s[i]);
                     ++i;
@@ -699,32 +703,38 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     // ----------------------------------------------------------------------
     // Prompt-cache aware multi-modal alignment.
     //
-    // AutoModel::_shared_insert prefix-matches `tokens` against `token_history`
-    // and erases the matched prefix before prefilling. Without intervention,
-    // the multi-modal payload (which carries pixels/spectrograms for the
-    // WHOLE prompt, including images/audios from earlier turns that are
-    // already in the KV cache) would be misaligned with the surviving image
-    // and audio tokens. Compute the prefix-skip here, drop fully-cached
-    // leading images/audios from the payloads, and trim `tokens` so
-    // _shared_insert's own prefix check becomes a no-op.
+    // AutoModel::_shared_insert prefix-matches `tokens` against `checkpoint_his`
+    // over the FULL length of `checkpoint_his`. If every token matches, it
+    // erases that prefix before prefilling; otherwise it calls clear_context()
+    // and skips nothing. We must NOT erase `tokens` here -- _shared_insert
+    // needs the untrimmed sequence to run that very check. What we DO need
+    // to fix up locally is the multi-modal payload (which carries
+    // pixels/spectrograms for the WHOLE prompt, including images/audios from
+    // earlier turns that are already cached): drop the fully-cached leading
+    // images/audios so the surviving payload aligns with the surviving soft
+    // tokens after _shared_insert performs its own erase.
     // ----------------------------------------------------------------------
+    size_t prefix_skip_count = 0;
     {
-        const size_t hist_size = this->token_history.size();
-        const size_t cmp_n = std::min(hist_size, tokens.size());
-        size_t skip_count = 0;
-        for (size_t i = 0; i < cmp_n; i++) {
-            if (tokens[i] == this->token_history[i]) {
-                skip_count++;
+        const size_t idx = this->checkpoint_his.size();
+        for (size_t i = 0; i < idx; i++) {
+            if (i < tokens.size() && tokens[i] == this->checkpoint_his[i]) {
+                prefix_skip_count++;
             } else {
                 break;
             }
         }
+        // Must match the entirety of checkpoint_his, otherwise _shared_insert
+        // will clear the context and not skip anything.
+        if (prefix_skip_count != idx) {
+            prefix_skip_count = 0;
+        }
 
-        if (skip_count > 0 && (image_payload.num_images > 0 || audio_payload.num_audios > 0)) {
+        if (prefix_skip_count > 0 && (image_payload.num_images > 0 || audio_payload.num_audios > 0)) {
             // Count modal soft-tokens that landed inside the cached prefix.
             int skipped_image_tokens = 0;
             int skipped_audio_tokens = 0;
-            for (size_t i = 0; i < skip_count; i++) {
+            for (size_t i = 0; i < prefix_skip_count; i++) {
                 if (tokens[i] == image_token_id) skipped_image_tokens++;
                 else if (tokens[i] == audio_token_id) skipped_audio_tokens++;
             }
@@ -789,16 +799,15 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
                     "Prompt-cache hit: dropped " << audios_to_drop
                     << " cached audio(s) from payload");
             }
-
-            tokens.erase(tokens.begin(), tokens.begin() + skip_count);
         }
     }
 
-    // find the last image token index (relative to the (possibly) trimmed tokens)
+    // find the last image token index, expressed relative to the tokens that
+    // will SURVIVE _shared_insert's prefix erase (i.e. shifted by -prefix_skip_count).
     int last_image_token_index = -1;
-    for (int i = 0; i < (int)tokens.size(); i++) {
+    for (int i = static_cast<int>(prefix_skip_count); i < (int)tokens.size(); i++) {
         if ((tokens[i] == image_token_id || tokens[i] == boi_token_id)) {
-            last_image_token_index = i;
+            last_image_token_index = i - static_cast<int>(prefix_skip_count);
         }
     }
     last_image_token_index++; // plus the end of image tokens
@@ -808,13 +817,22 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     multi_modal_payload.image_payload = image_payload;
     multi_modal_payload.audio_payload = audio_payload;
 
+    int restore_idx = -1;
+    gemma4e_npu *gemma4e_engine = dynamic_cast<gemma4e_npu*>(this->lm_engine.get());
+    const bool has_multimodal = image_payload.num_images > 0 || audio_payload.num_audios > 0;
 
-    if (image_payload.num_images > 0 || audio_payload.num_audios > 0) {
-        return this->_shared_insert(meta_info, tokens, is_cancelled, &multi_modal_payload, last_image_token_index);
-    } 
-    else {
-        return this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
+    if (meta_info.restore_allowed) {
+        restore_idx = gemma4e_engine->restore();
+        this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
     }
+
+    bool success = has_multimodal
+        ? this->_shared_insert(meta_info, tokens, is_cancelled, &multi_modal_payload, last_image_token_index)
+        : this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
+
+    checkpoint_his = token_history;
+    int checkpoint_idx = gemma4e_engine->checkpoint();
+    return success;
 }
 
 std::string Gemma4e::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
@@ -831,30 +849,7 @@ std::string Gemma4e::generate(chat_meta_info_t& meta_info, int length_limit, std
     stop_reason_t reason = EOT_DETECTED;
     int last_sampled_token = this->last_token;
 
-    // Skip pushing reasoning-related tokens (<|channel>...<channel|> Pattern: 100 ... 101) into token_history. 
-    bool in_think_block = false;
-    bool skip_next_newline_after_think = false;
-    auto push_history_filtered = [&](int token) {
-        if (skip_next_newline_after_think) {
-            skip_next_newline_after_think = false;
-        }
-        if (token == this->think_start_id) {
-            in_think_block = true;
-            return;
-        }
-        if (in_think_block) {
-            if (token == this->think_end_id) {
-                in_think_block = false;
-                skip_next_newline_after_think = true;
-            }
-            return;
-        }
-        if (token == 1) { // skip tool eos token
-            return;
-        }
-        this->token_history.push_back(token);
-    };
-    push_history_filtered(this->last_token);
+    this->token_history.push_back(last_token);
 
     if (this->is_normal_token(last_sampled_token) && last_sampled_token != -1){
         std::string token_str = this->tokenizer->run_time_decoder(last_sampled_token);
@@ -899,7 +894,7 @@ std::string Gemma4e::generate(chat_meta_info_t& meta_info, int length_limit, std
             result += token_str;
         }
         this->profiler_list[TKOEN_DECODE_TIME].stop(1);
-        push_history_filtered(sampled_token);
+        this->token_history.push_back(sampled_token);
         if (this->is_eos(sampled_token)){
             meta_info.generated_tokens++;
             this->lm_engine->forward(last_sampled_token);
@@ -918,6 +913,15 @@ std::string Gemma4e::generate(chat_meta_info_t& meta_info, int length_limit, std
     }
     std::cout << std::endl;
     header_print("FLM", "Model RAW Output: \n" + result);
+    
+    if (!this->enable_think) {
+        gemma4e_npu *gemma4e_engine = dynamic_cast<gemma4e_npu*>(this->lm_engine.get());
+        int checkpoint_idx = gemma4e_engine->checkpoint();
+        // copy the token history at the checkpoint except the last one token, which is the start token for generation and should not be included in the checkpoint history
+        checkpoint_his = token_history;
+        checkpoint_his.pop_back();       
+    }
+    
     return result;
 }
 

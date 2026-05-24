@@ -135,6 +135,17 @@
         std::cout << "\033[32m[" << header << "]  " << oss.str() << "\033[0m" << std::endl; \
     } while (0)
 
+
+/// \brief header_print_g macro, in green color
+/// \param header the header of the message
+/// \param msg the message to log
+#define header_print_b(header, msg) \
+    do { \
+        std::ostringstream oss; \
+        oss << msg; \
+        std::cout << "\033[34m[" << header << "]  " << oss.str() << "\033[0m" << std::endl; \
+    } while (0)
+
 /// \brief box_print macro
 /// \param msg the message to log
 /// \param width the width of the box

@@ -184,27 +184,33 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
     // ----------------------------------------------------------------------
     // Prompt-cache aware image alignment.
     //
-    // AutoModel::_shared_insert prefix-matches `tokens` against `token_history`
-    // and erases the matched prefix before prefilling. Without intervention,
-    // the image payload (pixels for the WHOLE prompt, including already-cached
-    // images from earlier turns) would be misaligned with the surviving image
-    // tokens. Compute the prefix-skip here, drop fully-cached leading images
-    // from image_payload, and trim `tokens` so _shared_insert's own prefix
-    // check is a no-op.
+    // AutoModel::_shared_insert prefix-matches `tokens` against `checkpoint_his`
+    // over the FULL length of `checkpoint_his`. If every token matches, it
+    // erases that prefix before prefilling; otherwise it calls clear_context()
+    // and skips nothing. We must NOT erase `tokens` here -- _shared_insert
+    // needs the untrimmed sequence to run that very check. What we DO need to
+    // fix up locally is the image payload (pixels for the WHOLE prompt,
+    // including already-cached images from earlier turns): drop the
+    // fully-cached leading images so the surviving payload aligns with the
+    // surviving image tokens after _shared_insert performs its own erase.
     // ----------------------------------------------------------------------
+    size_t prefix_skip_count = 0;
     {
-        const size_t hist_size = this->token_history.size();
-        const size_t cmp_n = std::min(hist_size, tokens.size());
-        size_t skip_count = 0;
-        for (size_t i = 0; i < cmp_n; i++) {
-            if (tokens[i] == this->token_history[i]) {
-                skip_count++;
+        const size_t idx = this->checkpoint_his.size();
+        for (size_t i = 0; i < idx; i++) {
+            if (i < tokens.size() && tokens[i] == this->checkpoint_his[i]) {
+                prefix_skip_count++;
             } else {
                 break;
             }
         }
+        // Must match the entirety of checkpoint_his, otherwise _shared_insert
+        // will clear the context and not skip anything.
+        if (prefix_skip_count != idx) {
+            prefix_skip_count = 0;
+        }
 
-        if (skip_count > 0 && !image_payload.images.empty()) {
+        if (prefix_skip_count > 0 && !image_payload.images.empty()) {
             // Per-image bf16 footprint depends on runtime patch/temporal
             // config carried by the engine.
             auto* eng = reinterpret_cast<qwen3_5vl_npu*>(this->lm_engine.get());
@@ -212,7 +218,7 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
             const unsigned temporal_patch = eng->QWEN3_5_TEMPORAL_PATCH_SIZE;
 
             int skipped_image_tokens = 0;
-            for (size_t i = 0; i < skip_count; i++) {
+            for (size_t i = 0; i < prefix_skip_count; i++) {
                 if (tokens[i] == image_soft_token_id) skipped_image_tokens++;
             }
 
@@ -250,79 +256,46 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
                     "Prompt-cache hit: dropped " << images_to_drop
                     << " cached image(s) from payload");
             }
-
-            tokens.erase(tokens.begin(), tokens.begin() + skip_count);
         }
     }
 
-    // find the last image token index (relative to the (possibly) trimmed tokens)
+    // find the last image token index, expressed relative to the tokens that
+    // will SURVIVE _shared_insert's prefix erase (i.e. shifted by -prefix_skip_count).
     int last_image_token_index = -1;
-    for (int i = 0; i < (int)tokens.size(); i++) {
+    for (int i = static_cast<int>(prefix_skip_count); i < (int)tokens.size(); i++) {
         if (tokens[i] == image_soft_token_id) {
-            last_image_token_index = i;
+            last_image_token_index = i - static_cast<int>(prefix_skip_count);
         }
     }
     last_image_token_index++; // plus the end of image tokens
 
 
     // hardware
-    if (image_payload.num_images > 0){
-        bool success =  this->_shared_insert(meta_info, tokens, is_cancelled, &image_payload, last_image_token_index);
-        {
-            auto& hist = this->token_history;
-            size_t n = hist.size();
-            if (this->enable_think) {
-                if (n >= 2 &&
-                    hist[n - 2] == this->think_start_id &&
-                    hist[n - 1] == 198) {
-                    hist.resize(n - 2);
-                }
-            }
-            else {
-                if (n >= 4 &&
-                    hist[n - 4] == this->think_start_id &&
-                    hist[n - 3] == 271 &&
-                    hist[n - 2] == this->think_end_id &&
-                    hist[n - 1] == 271) {
-                    hist.resize(n - 4);
-                }
-            }
+    int restore_idx = -1;
+    qwen3_5vl_npu *qwen3_5vl_engine = dynamic_cast<qwen3_5vl_npu*>(this->lm_engine.get());
+    const bool has_images = image_payload.num_images > 0;
 
-        }
-        return success;
-    }else{
-        bool success = this->_shared_insert(meta_info, tokens, is_cancelled);
-        {
-            auto& hist = this->token_history;
-            size_t n = hist.size();
-            if (this->enable_think) {
-                if (n >= 2 &&
-                    hist[n - 2] == this->think_start_id &&
-                    hist[n - 1] == 198) {
-                    hist.resize(n - 2);
-                }
-            }
-            else {
-                if (n >= 4 &&
-                    hist[n - 4] == this->think_start_id &&
-                    hist[n - 3] == 271 &&
-                    hist[n - 2] == this->think_end_id &&
-                    hist[n - 1] == 271) {
-                    hist.resize(n - 4);
-                }
-            }
-
-        }
-        return success;
+    if (meta_info.restore_allowed) {
+        restore_idx = qwen3_5vl_engine->restore();
+        this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
     }
+
+    size_t n = tokens.size();
+    tokens.resize(n - (this->enable_think ? 2 : 4));
+
+    bool success = has_images
+        ? this->_shared_insert(meta_info, tokens, is_cancelled, &image_payload, last_image_token_index)
+        : this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
+
+    checkpoint_his = token_history;
+    int checkpoint_idx = qwen3_5vl_engine->checkpoint();
+    return success;
 }
 
 std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
     std::vector<int> sampled_tokens;
     std::string result;
-    if (this->enable_think) {
-        os << "<think>\n" << std::flush;
-    }
+
     if (length_limit > 0){
         sampled_tokens.reserve(length_limit);
     }
@@ -330,47 +303,62 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
         sampled_tokens.reserve(4096);
     }
     assert(this->last_token != -1);
-
     stop_reason_t reason = EOT_DETECTED;
-    int last_sampled_token = this->last_token;
 
-    // The chat template already emits <think> before generation, so the model
-    // is always inside the reasoning block at the start. Skip pushing every
-    // token into token_history until (and including) think_end_id is produced;
-    // also drop the immediate "\n\n" (271) after </think>.
-    bool reasoning_done = false;
-    bool skip_next_newline_after_think = false;
-    auto push_history_filtered = [&](int token) {
-        if (this->enable_think) {
-            if (!reasoning_done) {
-                if (token == this->think_end_id) {
-                    reasoning_done = true;
-                    skip_next_newline_after_think = true;
-                }
-                return; // skip everything up to and including </think>
-            }
-            if (skip_next_newline_after_think) {
-                skip_next_newline_after_think = false;
-                if (token == 271) { // skip the "\n\n" right after </think>
-                    return;
-                }
-            }
-        }
-        this->token_history.push_back(token);
-    };
-
-    push_history_filtered(this->last_token);
-    if (this->is_normal_token(last_sampled_token) && last_sampled_token != -1){
-        std::string token_str = this->tokenizer->run_time_decoder(last_sampled_token);
+    this->profiler_list[DECODING_TIME].reset();
+    this->profiler_list[TKOEN_DECODE_TIME].reset();
+    std::string token_str;
+    int sampled_token;
+    if(this->enable_think) {
+        this->token_history.push_back(think_start_id);
+        this->profiler_list[DECODING_TIME].start();
+        this->lm_engine->forward(think_start_id);
+        this->profiler_list[DECODING_TIME].stop(1);
+        token_str = this->tokenizer->run_time_decoder(think_start_id);
         result += token_str;
         os << token_str << std::flush;
 
+        // \n
+        this->token_history.push_back(198);
+        this->profiler_list[DECODING_TIME].start();
+        buffer<bf16> y = this->lm_engine->forward(198);
+        this->profiler_list[DECODING_TIME].stop(1);
+        token_str = this->tokenizer->run_time_decoder(198);
+        result += token_str;
+        sampled_token = this->sampler->sample(y);
+        os << token_str << std::flush;
     }
-    if (this->is_eos(last_sampled_token)){
-        return result;
+    else{
+        this->token_history.push_back(think_start_id);
+        this->lm_engine->forward(think_start_id);
+        token_str = this->tokenizer->run_time_decoder(think_start_id);
+
+        // \n\n
+        this->token_history.push_back(271);
+        this->profiler_list[DECODING_TIME].start();
+        this->lm_engine->forward(271);
+        this->profiler_list[DECODING_TIME].stop(1);
+        token_str = this->tokenizer->run_time_decoder(271);
+        
+        this->token_history.push_back(think_end_id);
+        this->profiler_list[DECODING_TIME].start();
+        this->lm_engine->forward(think_end_id);
+        this->profiler_list[DECODING_TIME].stop(1);
+        token_str = this->tokenizer->run_time_decoder(think_end_id);
+
+        this->token_history.push_back(271);
+        this->profiler_list[DECODING_TIME].start();
+        buffer<bf16> y = this->lm_engine->forward(271);
+        this->profiler_list[DECODING_TIME].stop(1);
+        token_str = this->tokenizer->run_time_decoder(271);
+        sampled_token = this->sampler->sample(y);
     }
-    this->profiler_list[DECODING_TIME].reset();
-    this->profiler_list[TKOEN_DECODE_TIME].reset();
+    this->total_tokens++;
+    int last_sampled_token = sampled_token;
+    token_str = this->tokenizer->run_time_decoder(last_sampled_token);
+    result += token_str;
+    os << token_str << std::flush;
+
     if (this->total_tokens >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping generation...");
         reason = MAX_LENGTH_REACHED;
@@ -403,7 +391,7 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
             result += token_str;
         }
         this->profiler_list[TKOEN_DECODE_TIME].stop(1);
-        push_history_filtered(sampled_token);
+        this->token_history.push_back(sampled_token);
         if (this->is_eos(sampled_token)){
             meta_info.generated_tokens++;
             this->lm_engine->forward(last_sampled_token);
@@ -421,9 +409,6 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
         header_print("WARNING", "Max length reached, stopping generation...");
     }
     
-    if(this->enable_think) {
-        result = "<think>\n" + result;
-    } 
     std::cout << std::endl;
     header_print("FLM", "Model RAW Output: \n" + result);
     

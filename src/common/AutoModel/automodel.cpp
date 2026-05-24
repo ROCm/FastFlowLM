@@ -148,8 +148,8 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
 
     // print token history
     // header_print("DEBUG", "Current token history: ");
-    // for (size_t i = 0; i < this->token_history.size(); i++) {
-    //     std::cout << this->token_history[i] << " ";
+    // for (size_t i = 0; i < this->checkpoint_his.size(); i++) {
+    //     std::cout << this->checkpoint_his[i] << " ";
     // }
     // std::cout << std::endl;
     // // print tokens to insert
@@ -160,15 +160,19 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
     // std::cout << std::endl;
 
     // prefix check for tokens and token history to see if we can skip some tokens
-    const size_t idx = this->token_history.size();
+    const size_t idx = this->checkpoint_his.size();
     size_t skip_count = 0;
     for (size_t i = 0; i < idx; i++) {
-        if (tokens[i] == this->token_history[i]) {
+        if (tokens[i] == checkpoint_his[i]) {
             skip_count++;
         } 
         else {
             break;
         }
+    }
+    if (skip_count != idx) {
+        clear_context();
+        skip_count = 0;
     }
     tokens.erase(tokens.begin(), tokens.begin() + skip_count);
 
@@ -452,6 +456,7 @@ void AutoModel::clear_context() {
     this->total_tokens = 0;
     this->last_token = -1;
     this->token_history.clear();
+    this->checkpoint_his.clear();
     this->lm_engine->clear_context();
     this->total_tokens = 0;
     this->sampler->reset_penalties();

@@ -1037,6 +1037,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
         current_messages = normalize_template(current_messages);
 
         // see if we can use prompt cache
+        chat_meta_info_t meta_info;
         bool can_use_prompt_cache = false;
         if (model != model_used_for_last_message) { // switch models will clear context
             this->prompt_cache.update_message_checksum(current_messages);
@@ -1046,6 +1047,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
         else {
             can_use_prompt_cache = prompt_cache.can_use_cache(current_messages, auto_chat_engine->get_chat_template_type(), tools);
             if (can_use_prompt_cache) {
+                meta_info.restore_allowed = true;
                 header_print("FLM", "Use cached prompt!");
             }
             else {
@@ -1058,7 +1060,6 @@ void RestHandler::handle_openai_chat_completion(const json& request,
             current_messages = convert_tool_responses_gemma4(current_messages);
         }
 
-        chat_meta_info_t meta_info;
         lm_uniform_input_t uniformed_input;
         uniformed_input.messages = current_messages;
         uniformed_input.tools = tools;

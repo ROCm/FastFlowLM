@@ -99,8 +99,9 @@ struct chat_meta_info_t {
     uint64_t prefill_duration; // in nanoseconds
     uint64_t decoding_duration; // in nanoseconds
     stop_reason_t stop_reason;
+	bool restore_allowed;
 
-	chat_meta_info_t() : max_prefill_len(0), prompt_tokens(0), generated_tokens(0), total_duration(0), load_duration(0), prefill_duration(0), decoding_duration(0), stop_reason(EOT_DETECTED) {}
+	chat_meta_info_t() : max_prefill_len(0), prompt_tokens(0), generated_tokens(0), total_duration(0), load_duration(0), prefill_duration(0), decoding_duration(0), stop_reason(EOT_DETECTED), restore_allowed(false) {}
 };
 
 typedef enum {
@@ -141,6 +142,8 @@ protected:
 	xrt::device* npu_device_inst = nullptr;
 	std::unique_ptr<npu_xclbin_manager> npu = nullptr;
 	bool enable_preemption = false;
+    std::vector<int> checkpoint_his;
+
 
 	uint32_t MAX_L = 0;
 	int last_token = -1;
