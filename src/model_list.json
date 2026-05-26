@@ -567,14 +567,14 @@
         "medgemma": {
             "4b": {
                 "name": "Medgemma-4B-NPU2",
-                "url": "https://huggingface.co/FastFlowLM/medgemma-4b-it-NPU2/resolve/v0.9.23-optimize-vision",
-                "file_url": "https://huggingface.co/api/models/FastFlowLM/medgemma-4b-it-NPU2/tree/v0.9.23-optimize-vision",
+                "url": "https://huggingface.co/FastFlowLM/medgemma-4b-it-NPU2/resolve/main",
+                "file_url": "https://huggingface.co/api/models/FastFlowLM/medgemma-4b-it-NPU2/tree/main",
                 "modified_at": "2025-05-30T00:00:00Z",
                 "size": 4000000000,
                 "default_context_length": 65536,
                 "max_prefill_len": 4096,
                 "vlm": true,
-                "flm_min_version": "0.9.23",
+                "flm_min_version": "0.9.43",
                 "files": [
                     "config.json",
                     "model.q4nx",
@@ -605,7 +605,7 @@
                 "default_context_length": 65536,
                 "max_prefill_len": 4096,
                 "vlm": true,
-                "flm_min_version": "0.9.34",
+                "flm_min_version": "0.9.43",
                 "files": [
                     "config.json",
                     "model.q4nx",
@@ -702,11 +702,11 @@
         "deepseek-r1": {
             "8b": {
                 "name": "Deepseek-R1-Distill-Llama-8B-NPU2",
-                "url": "https://huggingface.co/FastFlowLM/Deepseek-R1-Distill-Llama-8B-NPU2/resolve/v0.9.21-merge-lm-head",
-                "file_url": "https://huggingface.co/api/models/FastFlowLM/Deepseek-R1-Distill-Llama-8B-NPU2/tree/v0.9.21-merge-lm-head",
+                "url": "https://huggingface.co/FastFlowLM/Deepseek-R1-Distill-Llama-8B-NPU2/resolve/main",
+                "file_url": "https://huggingface.co/api/models/FastFlowLM/Deepseek-R1-Distill-Llama-8B-NPU2/tree/main",
                 "modified_at": "2025-05-30T00:00:00Z",
                 "size": 8000000000,
-                "flm_min_version": "0.9.21",
+                "flm_min_version": "0.9.43",
                 "files": [
                     "config.json",
                     "model.q4nx",
