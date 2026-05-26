@@ -103,9 +103,11 @@ bool ModelDownloader::pull_model(const std::string& model_tag, bool force_redown
             return true;
         }
 
-        // If force, remove the model first
+        // If force, verify existing files and remove only corrupted ones,
+        // instead of wiping the whole model directory. Files that pass
+        // verification will be reused; missing/corrupted ones get re-downloaded.
         if (force_redownload) {
-            remove_model(new_model_tag);
+            verify_and_clean_files(new_model_tag);
         }
         
         // Get missing files
@@ -466,6 +468,7 @@ bool ModelDownloader::verify_and_clean_files(const std::string& model_tag, bool 
             // remove; treat as an error so the caller knows a re-pull is needed.
             if (!file_exists(local_path)) {
                 any_error = true;
+                header_print("FLM", "File missing: " + filename);
                 continue;
             }
 
