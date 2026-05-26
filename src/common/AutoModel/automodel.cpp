@@ -148,8 +148,8 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
 
     // print token history
     // header_print("DEBUG", "Current token history: ");
-    // for (size_t i = 0; i < this->checkpoint_his.size(); i++) {
-    //     std::cout << this->checkpoint_his[i] << " ";
+    // for (size_t i = 0; i < this->token_history.size(); i++) {
+    //     std::cout << this->token_history[i] << " ";
     // }
     // std::cout << std::endl;
     // // print tokens to insert
@@ -160,10 +160,10 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
     // std::cout << std::endl;
 
     // prefix check for tokens and token history to see if we can skip some tokens
-    const size_t idx = this->checkpoint_his.size();
+    const size_t idx = this->token_history.size();
     size_t skip_count = 0;
     for (size_t i = 0; i < idx; i++) {
-        if (tokens[i] == checkpoint_his[i]) {
+        if (tokens[i] == this->token_history[i]) {
             skip_count++;
         } 
         else {
