@@ -30,7 +30,7 @@ flm serve gemma3:4b --embed 1 # Load the embedding model (embed-gemma:300m) in t
 
 Send file(s) to `POST /v1/embeddings` via any OpenAI Client or Open WebUI.
 
-> see more API details here → [/v1/embeddings/](https://platform.openai.com/docs/api-reference/embeddings)
+> see more API details here → [/v1/embeddings/](https://developers.openai.com/api/reference/python/resources/embeddings/methods/create)
 
 **Example 1**: OpenAI Client
 
