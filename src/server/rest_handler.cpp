@@ -1093,7 +1093,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
             current_messages = convert_tool_responses_gemma4(current_messages);
         }
 
-        std::cout << "FLM current_messages: \n" << current_messages.dump(4) << std::endl;
+        // std::cout << "FLM current_messages: \n" << current_messages.dump(4) << std::endl;
 
         lm_uniform_input_t uniformed_input;
         uniformed_input.messages = current_messages;
