@@ -37,7 +37,7 @@ jobs:
     - name: Get version from git describe
       id: get_version
       run: |
-        VERSION=$(git describe --tags --always)
+        VERSION=$(git describe --tags --always | sed 's/^v//')
         echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
     - name: Get short SHA
@@ -150,7 +150,7 @@ jobs:
       - name: Get version from git describe
         id: get_version
         run: |
-          VERSION=$(git describe --tags --always)
+          VERSION=$(git describe --tags --always | sed 's/^v//')
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
       - name: Download all portable artifacts
