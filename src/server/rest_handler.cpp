@@ -1089,10 +1089,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
             else {
                 // cannot use cache, clear and re-insert all
                 header_print("FLM", "Prompt cache miss.");
-                header_print("FLM", "Matched " + std::to_string(cache_info.matched_rounds) +
-                    " leading rounds; cached " + std::to_string(cache_info.cached_rounds) +
-                    ", request " + std::to_string(cache_info.total_rounds) +
-                    ", tools " + (cache_info.tools_matched ? "matched." : "changed."));
+                header_print("FLM", "Clearing context...");
                 auto_chat_engine->clear_context();
             }
         }
@@ -1101,7 +1098,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
             current_messages = convert_tool_responses_gemma4(current_messages);
         }
 
-        std::cout << "FLM current_messages: \n" << current_messages.dump(4) << std::endl;
+        // std::cout << "FLM current_messages: \n" << current_messages.dump(4) << std::endl;
 
         lm_uniform_input_t uniformed_input;
         uniformed_input.messages = current_messages;
