@@ -52,24 +52,31 @@ int main(int argc, char* argv[]) {
     chat_meta_info_t meta_info;
     lm_uniform_input_t uniformed_input;
     chat->set_topk(1);
+    chat->configure_parameter("enable_think", false);
 
     if (short_prompt) {
-        uniformed_input.prompt = "Hello! How are you? Where is the capital of France?";
+        uniformed_input.prompt = "What are these?";
+        uniformed_input.images.push_back("../../../tb_files/panda.png");
+        uniformed_input.images.push_back("../../../tb_files/puppy.png");
         std::cout << "Prompt: " << uniformed_input.prompt << std::endl;
         std::cout << "Response: ";
         chat->start_total_timer();
-        std::string response = chat->generate_with_prompt(meta_info, uniformed_input, 1024, std::cout);
+        chat->insert(meta_info, uniformed_input);
+        std::string response = chat->generate(meta_info, 1024, std::cout);
         chat->stop_total_timer();
         std::cout << std::endl;
         std::cout << std::endl;
 
-        return 0;
         std::cout << chat->show_profile() << std::endl;
+
+        return 0;
         uniformed_input.prompt = "How far is it from Beijing?";
+        meta_info.restore_allowed = true;
         std::cout << "Prompt: " << uniformed_input.prompt << std::endl;
         std::cout << "Response: " << std::endl;
         chat->start_total_timer();
-        response = chat->generate_with_prompt(meta_info, uniformed_input, 1024, std::cout);
+        chat->insert(meta_info, uniformed_input);
+        response = chat->generate(meta_info, 1024, std::cout);
         chat->stop_total_timer();
         std::cout << std::endl;
         std::cout << std::endl;
@@ -79,7 +86,8 @@ int main(int argc, char* argv[]) {
         std::cout << "Prompt: " << uniformed_input.prompt << std::endl;
         std::cout << "Response: " << std::endl;
         chat->start_total_timer();
-        response = chat->generate_with_prompt(meta_info, uniformed_input, 1024, std::cout);
+        chat->insert(meta_info, uniformed_input);
+        response = chat->generate(meta_info, 1024, std::cout);
         chat->stop_total_timer();
         std::cout << std::endl;
         std::cout << std::endl;
