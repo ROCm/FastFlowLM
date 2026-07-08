@@ -695,6 +695,61 @@ else()
                 message(WARNING \"XRT libraries not found in /usr/lib or /usr/lib/x86_64-linux-gnu\")
             endif()
         ")
+        # Copy FFTW libraries while preserving symlinks so the portable
+        # distribution does not depend on libfftw3 being installed on the host.
+        install(CODE "
+            # Collect FFTW shared objects from the standard library locations
+            set(FFTW_FILES \"\")
+            foreach(SEARCH_DIR \"/usr/lib\" \"/usr/lib/x86_64-linux-gnu\")
+                file(GLOB DIR_FFTW \"\${SEARCH_DIR}/libfftw3*.so*\")
+                list(APPEND FFTW_FILES \${DIR_FFTW})
+            endforeach()
+
+            if(FFTW_FILES)
+                foreach(LIB_FILE \${FFTW_FILES})
+                    get_filename_component(LIB_NAME \"\${LIB_FILE}\" NAME)
+                    set(DEST_FILE \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/lib/\${LIB_NAME}\")
+
+                    if(IS_SYMLINK \"\${LIB_FILE}\")
+                        file(READ_SYMLINK \"\${LIB_FILE}\" LINK_TARGET)
+                        message(STATUS \"Creating symlink: \${LIB_NAME} -> \${LINK_TARGET}\")
+                        execute_process(
+                            COMMAND \${CMAKE_COMMAND} -E create_symlink \"\${LINK_TARGET}\" \"\${DEST_FILE}\"
+                        )
+                    else()
+                        message(STATUS \"Copying: \${LIB_NAME}\")
+                        file(COPY \"\${LIB_FILE}\" DESTINATION \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/lib/\"
+                             FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
+                                             GROUP_READ GROUP_EXECUTE
+                                             WORLD_READ WORLD_EXECUTE)
+                    endif()
+                endforeach()
+
+                # Patch FFTW libraries to use \$ORIGIN as RPATH so any transitive
+                # dependencies resolve from the bundled lib/ directory.
+                find_program(PATCHELF_EXECUTABLE patchelf)
+                if(PATCHELF_EXECUTABLE)
+                    file(GLOB FFTW_LIBS \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/lib/libfftw3*.so.*\")
+                    foreach(FFTW_LIB \${FFTW_LIBS})
+                        if(NOT IS_SYMLINK \"\${FFTW_LIB}\")
+                            get_filename_component(FFTW_LIB_NAME \"\${FFTW_LIB}\" NAME)
+                            message(STATUS \"Setting RPATH on \${FFTW_LIB_NAME}\")
+                            execute_process(
+                                COMMAND \${PATCHELF_EXECUTABLE} --set-rpath \"\$ORIGIN\" \"\${FFTW_LIB}\"
+                                RESULT_VARIABLE RET
+                            )
+                            if(NOT RET EQUAL 0)
+                                message(WARNING \"Failed to set RPATH on \${FFTW_LIB_NAME}\")
+                            endif()
+                        endif()
+                    endforeach()
+                else()
+                    message(STATUS \"patchelf not found, skipping RPATH patching for FFTW libraries\")
+                endif()
+            else()
+                message(WARNING \"FFTW libraries not found in /usr/lib or /usr/lib/x86_64-linux-gnu\")
+            endif()
+        ")
     endif()
 
     if(FLM_PORTABLE_BUILD)

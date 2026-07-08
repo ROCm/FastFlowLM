@@ -125,6 +125,7 @@ jobs:
           echo "✅ FLM built successfully with portable distribution" >> $GITHUB_STEP_SUMMARY
           echo "✅ FFmpeg statically linked (no external FFmpeg dependencies)" >> $GITHUB_STEP_SUMMARY
           echo "✅ XRT and XDNA plugin bundled with distribution" >> $GITHUB_STEP_SUMMARY
+          echo "✅ FFTW (libfftw3) bundled with distribution" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## Build Configuration" >> $GITHUB_STEP_SUMMARY
           echo "- **FFmpeg**: Statically linked (built from source)" >> $GITHUB_STEP_SUMMARY
