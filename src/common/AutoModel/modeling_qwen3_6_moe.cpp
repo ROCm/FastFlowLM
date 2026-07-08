@@ -84,10 +84,8 @@ bool Qwen3_6_MOE::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input,
                 header_print("ERROR", "Skipping image that failed to load: " << img_str);
                 continue;
             }
-            header_print("info", "Loaded " << img_str);
 
             preprocess_image(image, image_payload._data__processed);
-            header_print("info", "Processed " << img_str);
             if (image.grid_h <= 0 || image.grid_w <= 0) {
                 header_print("ERROR", "Skipping image that failed to preprocess: " << img_str);
                 continue;

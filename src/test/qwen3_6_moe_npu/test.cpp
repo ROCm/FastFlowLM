@@ -58,6 +58,9 @@ int main(int argc, char* argv[]) {
         uniformed_input.prompt = "What are these?";
         uniformed_input.images.push_back("../../../tb_files/panda.png");
         uniformed_input.images.push_back("../../../tb_files/puppy.png");
+        // uniformed_input.images.push_back("../../../tb_files/mj_icon.jpg");
+        // uniformed_input.images.push_back("../../../tb_files/google_icon.png");
+        // uniformed_input.images.push_back("../../../tb_files/pcb.jpg");
         std::cout << "Prompt: " << uniformed_input.prompt << std::endl;
         std::cout << "Response: ";
         chat->start_total_timer();
