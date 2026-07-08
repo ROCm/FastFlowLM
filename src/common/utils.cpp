@@ -44,7 +44,7 @@ std::string find_model_list() {
         return exe_relative_path;
     }
 
-    // 4. Check current working directory
+    // Linux Portable
     if (std::filesystem::exists("model_list.json")) {
         return "model_list.json";
     }
@@ -56,7 +56,7 @@ std::string find_model_list() {
 std::string find_xclbin_path() {
     std::string xclbin_prefix = CMAKE_XCLBIN_PREFIX;
 
-    // 1. Check FLM_CONFIG_PATH environment variable
+    // Check FLM_CONFIG_PATH environment variable
     const char* env_path = std::getenv("FLM_XCLBIN_PATH");
     if (env_path && *env_path) {
         // Remove possible "/xclbins" or "/xclbins/" from the end of the path
@@ -76,23 +76,25 @@ std::string find_xclbin_path() {
         }
     }
 
-    // 2. Check for install prefix
+#ifndef _WIN32
+    // Linux: Portable
+    if (std::filesystem::exists("xclbins")) {
+        return ".";
+    }
+
+    // Linux: install
     std::string installed_path = xclbin_prefix;
     if (std::filesystem::exists(installed_path)) {
         return installed_path;
     }
-
-    // 3. Check relative to executable
+#else
+    // Windows: Check relative to executable
     std::string exe_dir = get_executable_directory();
     std::string exe_relative_path = exe_dir;
     if (std::filesystem::exists(exe_relative_path)) {
         return exe_relative_path;
     }
-
-    // 4. Check current working directory
-    if (std::filesystem::exists("xclbins")) {
-        return "xclbins";
-    }
+#endif
 
     // If not found, throw an error
     throw std::runtime_error("xclbins not found. Please set FLM_XCLBIN_PATH or place it next to the executable.");
