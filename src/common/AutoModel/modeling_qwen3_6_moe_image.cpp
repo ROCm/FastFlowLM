@@ -8,10 +8,11 @@
 #include "AutoModel/modeling_qwen3_6_moe.hpp"
 
 qwen3_6_moe_image_t Qwen3_6_MOE::load_image(const std::string& filename) {
-    qwen3_6_moe_image_t empty_result;
+    qwen3_6_moe_image_t empty_result{};
     image_data_t decoded;
     image_data_t reordered;
     if (!image_reader_.load_image(filename, decoded)) {
+        header_print("ERROR", "Qwen3_6_MOE failed to load image: " << filename);
         return empty_result;
     }
 
@@ -48,13 +49,14 @@ qwen3_6_moe_image_t Qwen3_6_MOE::load_image(const std::string& filename) {
     }
 
     if (!image_reader_.reorder_hwc_to_chw(decoded, reordered)) {
+        header_print("ERROR", "Qwen3_6_MOE failed to reorder image (HWC->CHW): " << filename);
         image_reader_.recycle(decoded);
         return empty_result;
     }
 
     image_reader_.recycle(decoded);
 
-    qwen3_6_moe_image_t result;
+    qwen3_6_moe_image_t result{};
     result.width = reordered.width;
     result.height = reordered.height;
     result._data = std::move(reordered.pixels);
@@ -63,10 +65,11 @@ qwen3_6_moe_image_t Qwen3_6_MOE::load_image(const std::string& filename) {
 }
 
 qwen3_6_moe_image_t Qwen3_6_MOE::load_image_base64(const std::string& base64_string) {
-    qwen3_6_moe_image_t empty_result;
+    qwen3_6_moe_image_t empty_result{};
     image_data_t decoded;
     image_data_t reordered;
     if (!image_reader_.load_image_base64(base64_string, decoded)) {
+        header_print("ERROR", "Qwen3_6_MOE failed to decode base64 image");
         return empty_result;
     }
 
@@ -103,13 +106,14 @@ qwen3_6_moe_image_t Qwen3_6_MOE::load_image_base64(const std::string& base64_str
         }
     }
     if (!image_reader_.reorder_hwc_to_chw(decoded, reordered)) {
+        header_print("ERROR", "Qwen3_6_MOE failed to reorder base64 image (HWC->CHW)");
         image_reader_.recycle(decoded);
         return empty_result;
     }
 
     image_reader_.recycle(decoded);
 
-    qwen3_6_moe_image_t result;
+    qwen3_6_moe_image_t result{};
     result.width = reordered.width;
     result.height = reordered.height;
     result._data = std::move(reordered.pixels);
@@ -127,6 +131,13 @@ void Qwen3_6_MOE::smart_resize(
     int min_pixels,
     int max_pixels
 ) {
+    if (height <= 0 || width <= 0) {
+        header_print("ERROR", "Qwen3_6_MOE smart_resize got invalid image size ("
+            << width << "x" << height << "); likely a failed image load");
+        h_bar = 0;
+        w_bar = 0;
+        return;
+    }
     double aspect_ratio = static_cast<double>(std::max(height, width)) /
                           static_cast<double>(std::min(height, width));
     if (aspect_ratio > 200.0) {
@@ -162,9 +173,20 @@ void Qwen3_6_MOE::preprocess_image(qwen3_6_moe_image_t& image, std::vector<bf16>
     const int width = image.width;
     const int height = image.height;
     const int channels = 3; // RGB
-    int resized_height;
-    int resized_width;
+    int resized_height = 0;
+    int resized_width = 0;
     // do the automatically resizing in here
+
+    if (width <= 0 || height <= 0) {
+        header_print("ERROR", "Qwen3_6_MOE preprocess_image skipped: invalid image size ("
+            << width << "x" << height << "); check the image path/data");
+        image.width_resized = 0;
+        image.height_resized = 0;
+        image.grid_h = 0;
+        image.grid_w = 0;
+        image._data.free();
+        return;
+    }
 
     qwen3_6_moe_npu* lm_engine_qwen3_6_ptr = reinterpret_cast<qwen3_6_moe_npu*>(this->lm_engine.get());
     smart_resize(
@@ -175,6 +197,17 @@ void Qwen3_6_MOE::preprocess_image(qwen3_6_moe_image_t& image, std::vector<bf16>
         lm_engine_qwen3_6_ptr->QWEN3_6_MOE_SHORTEST_EDGE,
         lm_engine_qwen3_6_ptr->QWEN3_6_MOE_LONGEST_EDGE
     );
+
+    if (resized_height <= 0 || resized_width <= 0) {
+        header_print("ERROR", "Qwen3_6_MOE preprocess_image skipped: smart_resize produced ("
+            << resized_width << "x" << resized_height << ")");
+        image.width_resized = 0;
+        image.height_resized = 0;
+        image.grid_h = 0;
+        image.grid_w = 0;
+        image._data.free();
+        return;
+    }
     // std::cout << "resized_height "<< resized_height << " resized_width " << resized_width <<std::endl;
 
     // Cache size calculations for efficiency

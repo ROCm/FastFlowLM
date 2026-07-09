@@ -80,8 +80,16 @@ bool Qwen3_6_MOE::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input,
         // time_utils::time_point preprocess_start = time_utils::now();
         for(const auto& img_str : input.images){
             qwen3_6_moe_image_t image = this->load_image(img_str);
+            if (image.width <= 0 || image.height <= 0) {
+                header_print("ERROR", "Skipping image that failed to load: " << img_str);
+                continue;
+            }
 
             preprocess_image(image, image_payload._data__processed);
+            if (image.grid_h <= 0 || image.grid_w <= 0) {
+                header_print("ERROR", "Skipping image that failed to preprocess: " << img_str);
+                continue;
+            }
             // Push the image AFTER preprocessing so grid_h and grid_w are set
             image_payload.images.push_back(image);
             image_payload.num_images++;
