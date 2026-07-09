@@ -135,10 +135,10 @@
         "qwen3.5": {
             "0.8b": {
                 "name": "Qwen3.5-0.8B-NPU2",
-                "url": "https://huggingface.co/FastFlowLM/Qwen3.5-0.8B-NPU2/resolve/test_chat_template",
-                "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.5-0.8B-NPU2/tree/test_chat_template",
+                "url": "https://huggingface.co/FastFlowLM/Qwen3.5-0.8B-NPU2",
+                "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.5-0.8B-NPU2/tree/main",
                 "size": 800000000,
-                "flm_min_version": "0.9.43",
+                "flm_min_version": "0.9.45",
                 "files": [
                     "config.json",
                     "model.q4nx",
@@ -165,10 +165,10 @@
             },
             "2b": {
                 "name": "Qwen3.5-2B-NPU2",
-                "url": "https://huggingface.co/FastFlowLM/Qwen3.5-2B-NPU2/resolve/test_chat_template",
-                "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.5-2B-NPU2/tree/test_chat_template",
+                "url": "https://huggingface.co/FastFlowLM/Qwen3.5-2B-NPU2",
+                "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.5-2B-NPU2/tree/main",
                 "size": 2000000000,
-                "flm_min_version": "0.9.43",
+                "flm_min_version": "0.9.45",
                 "files": [
                     "config.json",
                     "model.q4nx",
@@ -196,10 +196,10 @@
             },
             "4b": {
                 "name": "Qwen3.5-4B-NPU2",
-                "url": "https://huggingface.co/FastFlowLM/Qwen3.5-4B-NPU2/resolve/test_chat_template",
-                "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.5-4B-NPU2/tree/test_chat_template",
+                "url": "https://huggingface.co/FastFlowLM/Qwen3.5-4B-NPU2",
+                "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.5-4B-NPU2/tree/main",
                 "size": 4000000000,
-                "flm_min_version": "0.9.43",
+                "flm_min_version": "0.9.45",
                 "files": [
                     "config.json",
                     "model.q4nx",
@@ -227,10 +227,10 @@
             },
             "9b":{
                 "name": "Qwen3.5-9B-NPU2",
-                "url": "https://huggingface.co/FastFlowLM/Qwen3.5-9B-NPU2/resolve/test_chat_template",
-                "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.5-9B-NPU2/tree/test_chat_template",
+                "url": "https://huggingface.co/FastFlowLM/Qwen3.5-9B-NPU2",
+                "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.5-9B-NPU2/tree/main",
                 "size": 9000000000,
-                "flm_min_version": "0.9.43",
+                "flm_min_version": "0.9.45",
                 "files": [
                     "config.json",
                     "model.q4nx",

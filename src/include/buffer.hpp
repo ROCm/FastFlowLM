@@ -14,7 +14,6 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
-#include <memory>
 
 #define __XRT__
 
@@ -356,6 +355,11 @@ public:
     /// \brief shallow copy constructor
     /// \param other the other buffer
     buffer(const buffer& other) : bytes(other) {}
+
+    /// \brief move constructor
+    /// \param other the other buffer
+    /// \note Transfers ownership (owned_data_/owned_bo_) so a returned buffer does not dangle.
+    buffer(buffer&& other) noexcept : bytes(std::move(other)) {}
 
 #ifdef __XRT__
     /// \brief constructor
