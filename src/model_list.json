@@ -264,7 +264,7 @@
                 "url": "https://huggingface.co/FastFlowLM/Qwen3.6-35B-A3B-NPU2",
                 "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.6-35B-A3B-NPU2/tree/main",
                 "size": 35000000000,
-                "flm_min_version": "0.9.43",
+                "flm_min_version": "0.9.45",
                 "files": [
                     "config.json",
                     "model.q4nx",
@@ -287,7 +287,7 @@
                     "vision",
                     "reasoning"
                 ],
-                "footprint": 1.4
+                "footprint": 22.6
             }
         },        
         "lfm2": {
