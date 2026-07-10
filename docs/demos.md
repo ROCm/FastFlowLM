@@ -16,9 +16,6 @@ sections:
         href: "https://www.youtube.com/@FastFlowLM-YT/playlists"
         style: primary
         external: true
-      - label: "Remote test drive"
-        href: "/test-drive/"
-        style: ghost
 
   - type: media
     variant: alt

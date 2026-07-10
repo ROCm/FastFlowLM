@@ -27,7 +27,7 @@ Run large language models — now with **Vision**, **Audio**, **Embedding** and 
 
   🐧 **[Linux Getting Started Guide](./docs/linux-getting-started.md)**
 
-  📖 **[Docs](https://fastflowlm.com/docs)** | 📺 **[Demos](https://www.youtube.com/playlist?list=PLf87s9UUZrJoDdz639Yc6w1UTyJ4cFHZ1)** | 🧪 **[Test Drive](https://fastflowlm.com/docs/#-test-drive-remote-demo)** | 💬 **[Discord](https://discord.gg/z24t23HsHF)** 
+  📖 **[Docs](https://fastflowlm.com/docs)** | 📺 **[Demos](https://www.youtube.com/playlist?list=PLf87s9UUZrJoDdz639Yc6w1UTyJ4cFHZ1)** | 💬 **[Discord](https://discord.gg/z24t23HsHF)** 
 
 ---
 

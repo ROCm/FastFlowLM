@@ -48,8 +48,6 @@ nav_links:
         url: "/benchmarks/"
       - label: Demos
         url: "/demos/"
-      - label: Test Drive
-        url: "/test-drive/"
   - label: Testimonials
     url: "/testimonials/"
   - label: Company

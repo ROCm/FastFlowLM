@@ -28,9 +28,6 @@ sections:
       - label: "Demos"
         href: "/demos/"
         style: ghost
-      - label: "Test Drive"
-        href: "/test-drive/"
-        style: ghost
       - label: "Discord"
         href: "https://discord.gg/z24t23HsHF?utm_source=site"
         style: ghost
@@ -221,6 +218,10 @@ sections:
 
   - type: two_column
     id: docs
+    left:
+      title: "Dive into the docs"
+      body: |
+        Everything you need to install FastFlowLM, pick a model, and start streaming on your Ryzen™ AI NPU.
     right:
       ctas:
         - label: "Dive into docs"
@@ -228,20 +229,6 @@ sections:
           style: primary
         - label: "Installation guide"
           href: "/docs/install/"
-          style: ghost
-    left:
-      title: "Remote test drive"
-      body: |
-        No Ryzen™ AI hardware yet? Launch the hosted FastFlowLM + Open WebUI sandbox and stream from a live
-        AMD Ryzen™ AI box (Kraken Point).
-      items:
-        - heading: "Live hardware"
-          body: "Same builds we use internally, refreshed with every release."
-        - heading: "Guest access"
-          body: "Instant login with rotating demo credentials."
-      ctas:
-        - label: "Launch test drive"
-          href: "/test-drive/"
           style: ghost
 ---
 
