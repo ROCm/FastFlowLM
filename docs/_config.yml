@@ -40,26 +40,18 @@ defaults:
 nav_links:
   - label: Technology
     children:
-      - label: How It Works
-        url: "/how-it-works/"
       - label: Models
         url: "/models/"
       - label: Benchmarks
         url: "/benchmarks/"
       - label: Demos
         url: "/demos/"
-  - label: Testimonials
-    url: "/testimonials/"
   - label: Company
     children:
       - label: Team
         url: "/team/"
-      - label: Community
-        url: "/community/"
       - label: News
         url: "/news/"
-      - label: Roadmap
-        url: "/roadmap/"
   - label: Docs
     url: "/docs/"
 
