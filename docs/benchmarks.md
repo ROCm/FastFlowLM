@@ -54,30 +54,5 @@ sections:
       alt: "Gemma3 4B benchmark overview of power efficiency (TPS/W) for both prefill and decoding"
       title: "Ultra-high power efficiency"
 
-
-  # - type: media
-  #   variant: alt
-  #   kicker: "Qualcomm reference telemetry"
-  #   # title: "Documenting partner power + thermal sweeps"
-  #   media:
-  #     # title: "Power, temp, and workload overlays"
-  #     body: |
-  #   gallery:
-  #     - src: "/assets/bench/qualcomm15.png"
-  #       alt: "Qualcomm benchmark instrumentation on a reference laptop"
-  #     - src: "/assets/bench/qualcomm14-1.png"
-  #       alt: "Qualcomm bench capture 1"
-  #     - src: "/assets/bench/qualcomm14-2.png"
-  #       alt: "Qualcomm bench capture 2"
-  #     - src: "/assets/bench/qualcomm14-3.png"
-  #       alt: "Qualcomm bench capture 3"
-  #     - src: "/assets/bench/qualcomm14-4.png"
-  #       alt: "Qualcomm bench capture 4"
-  #   items:
-  #     - heading: "On-device telemetry"
-  #       body: "Photos include wattage, temperature, and throughput overlays straight from the Qualcomm reference UI."
-  #     - heading: "Replayable sessions"
-  #       body: "Visual artifacts are stored next to CSV logs so OEM teams can validate every published datapoint."
-
 ---
 

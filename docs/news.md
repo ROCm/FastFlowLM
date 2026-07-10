@@ -93,7 +93,7 @@ sections:
       This isn't a "someday" promise. It is working **right now.**
 
       * **Powering AMD:** FastFlowLM is the chosen AI runtime software engine inside the official **[AMD Lemonade Server](https://lemonade-server.ai/)** 🍋, bringing production-ready NPU AI capability to developers and partners.
-      * **Expanding Platform Support:** FastFlowLM is also prepared for next-generation Qualcomm devices and additional NPU platforms.
+      * **Expanding Platform Support:** FastFlowLM continues to deepen support across the AMD Ryzen™ AI NPU lineup (Strix, Strix Halo, Kraken).
 
       ---
 
