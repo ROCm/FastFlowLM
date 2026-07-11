@@ -15,6 +15,7 @@ Browse detailed NPU benchmark results for each major model family supported by F
 - [Qwen2.5](qwen2.5_results/)
 - [Qwen3](qwen3_results/)
 - [Qwen3.5](qwen3.5_results/)
+- [Qwen3.6](qwen3.6_results/)
 - [gpt-oss](gpt-oss_results/)
 - [LiquidAI/LFM2](lfm2_results/)
 - [Microsoft/Phi4](phi4_results/)
