@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <sstream>
 #include <memory>
+#include <utility>
 #include <vector>
 #include <iostream>
 #include <string>
@@ -24,6 +25,7 @@
 #include "models/qwen2vl/qwen2vl_npu.hpp"
 #include "models/qwen3vl/qwen3vl_npu.hpp"
 #include "models/qwen3_5vl/qwen3_5vl_npu.hpp"
+#include "models/qwen3_6_moe/qwen3_6_moe_npu.hpp"
 #include "models/gemma/gemma_npu.hpp"
 #include "models/gemma_text/gemma_text_npu.hpp"
 #include "models/gemma4e/gemma4e_npu.hpp"
@@ -63,6 +65,7 @@ struct NonStreamResult {
 	std::string reasoning_content;
 	std::string tool_name;
 	std::string tool_args;
+	std::vector<std::pair<std::string, std::string>> tool_calls_list; // (name, args) for multiple tool calls
 };
 
 typedef enum {

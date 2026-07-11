@@ -10,7 +10,7 @@ ifeq ($(OS),Windows_NT)
 all:
 	@$(PWSH) "if (!(Test-Path '$(BUILD_DIR)')) { New-Item -ItemType Directory -Path '$(BUILD_DIR)' }"
 	@$(PWSH) "if (!(Test-Path '$(OUT_DIR)'))   { New-Item -ItemType Directory -Path '$(OUT_DIR)' }"
-	@$(PWSH) "cmake --preset windows-default"
+	@$(PWSH) "cmake --preset windows-vs18"
 	@$(PWSH) "cmake --build build --preset windows-default"
 
 run:

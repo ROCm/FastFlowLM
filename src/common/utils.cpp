@@ -31,23 +31,25 @@ std::string find_model_list() {
         }
     }
 
-    // 2. Check for install prefix
+#ifndef _WIN32
+    // Linux: Portable
+    if (std::filesystem::exists("model_list.json")) {
+        return "model_list.json";
+    }
+
+    // Linux: install
     std::string installed_path = install_prefix + "/share/flm/model_list.json";
     if (std::filesystem::exists(installed_path)) {
         return installed_path;
     }
-
-    // 3. Check relative to executable
+#else
+    // Windows: Check relative to executable
     std::string exe_dir = get_executable_directory();
     std::string exe_relative_path = exe_dir + "/model_list.json";
     if (std::filesystem::exists(exe_relative_path)) {
         return exe_relative_path;
     }
-
-    // Linux Portable
-    if (std::filesystem::exists("model_list.json")) {
-        return "model_list.json";
-    }
+#endif
 
     // If not found, throw an error
     throw std::runtime_error("model_list.json not found. Please set FLM_CONFIG_PATH or place it next to the executable.");

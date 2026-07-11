@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+#
+# home_install.sh — replicate `cmake --install` into a user-writable prefix
+# (no sudo required). Produces the exact same layout under $FLM_PREFIX as a
+# system install would under /opt/fastflowlm, and emits an env script that
+# points the relocated binary at its data files and runtime libraries.
+#
+# Usage:
+#   ./home_install.sh                # build (if needed) + install to ~/flm_exe
+#   ./home_install.sh --no-build     # install an existing build/ tree only
+#   FLM_PREFIX=/path ./home_install.sh
+#
+set -euo pipefail
+
+# ---- configuration ---------------------------------------------------------
+SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SRC_DIR/.." && pwd)"
+FLM_PREFIX="${FLM_PREFIX:-$HOME/flm_exe}"
+BUILD_DIR="${BUILD_DIR:-$REPO_DIR/build}"
+PRESET="${PRESET:-linux-default}"
+# Where XRT (the AMD NPU runtime) is installed. Override if non-standard.
+XRT_DIR="${XRT_DIR:-/opt/xilinx/xrt}"
+
+DO_BUILD=1
+for arg in "$@"; do
+    case "$arg" in
+        --no-build) DO_BUILD=0 ;;
+        -h|--help)
+            grep '^#' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+            exit 0 ;;
+        *) echo "Unknown argument: $arg" >&2; exit 1 ;;
+    esac
+done
+
+echo "[home_install] repo:    $REPO_DIR"
+echo "[home_install] prefix:  $FLM_PREFIX"
+echo "[home_install] build:   $BUILD_DIR"
+
+# ---- build (optional) ------------------------------------------------------
+if [[ "$DO_BUILD" -eq 1 ]]; then
+    if [[ ! -f "$BUILD_DIR/build.ninja" && ! -f "$BUILD_DIR/CMakeCache.txt" ]]; then
+        echo "[home_install] configuring (preset: $PRESET) ..."
+        cmake -S "$SRC_DIR" -B "$BUILD_DIR" --preset "$PRESET"
+    fi
+    echo "[home_install] building ..."
+    cmake --build "$BUILD_DIR"
+else
+    echo "[home_install] --no-build: skipping configure/build"
+fi
+
+if [[ ! -d "$BUILD_DIR" ]]; then
+    echo "[home_install] ERROR: build dir '$BUILD_DIR' does not exist. Run without --no-build first." >&2
+    exit 1
+fi
+
+# ---- install into the home prefix -----------------------------------------
+# This runs the same install rules as a system install, just relocated.
+# It populates:
+#   $FLM_PREFIX/bin/flm
+#   $FLM_PREFIX/lib/flm/*.so
+#   $FLM_PREFIX/share/flm/model_list.json
+#   $FLM_PREFIX/share/flm/xclbins/
+echo "[home_install] installing to $FLM_PREFIX ..."
+cmake --install "$BUILD_DIR" --prefix "$FLM_PREFIX"
+
+# ---- emit the environment script ------------------------------------------
+ENV_SCRIPT="$FLM_PREFIX/flm_env.sh"
+echo "[home_install] writing env script: $ENV_SCRIPT"
+cat > "$ENV_SCRIPT" <<EOF
+#!/usr/bin/env bash
+# flm_env.sh — initialize the environment for the relocated FastFlowLM install.
+# Source this before running flm:   source "$ENV_SCRIPT"
+#
+# The binary was compiled with CMAKE_INSTALL_PREFIX baked in (e.g. /opt/fastflowlm),
+# so when relocated it relies on these env vars to locate its data and libraries.
+
+FLM_PREFIX="$FLM_PREFIX"
+XRT_DIR="$XRT_DIR"
+
+# 1. Data files (consumed by utils::find_model_list / utils::find_xclbin_path).
+export FLM_CONFIG_PATH="\$FLM_PREFIX/share/flm/model_list.json"
+export FLM_XCLBIN_PATH="\$FLM_PREFIX/share/flm"
+
+# 2. Runtime libraries. The flm binary already has RPATH \$ORIGIN/../lib/flm for
+#    its bundled .so files, but XRT's libs (libxrt_coreutil.so, etc.) are found
+#    via XRT's own setup or LD_LIBRARY_PATH.
+if [[ -f "\$XRT_DIR/setup.sh" ]]; then
+    # XRT's setup.sh exports XILINX_XRT, PATH and LD_LIBRARY_PATH for the NPU.
+    source "\$XRT_DIR/setup.sh"
+else
+    echo "[flm_env] WARNING: \$XRT_DIR/setup.sh not found; falling back to LD_LIBRARY_PATH" >&2
+    export LD_LIBRARY_PATH="\$XRT_DIR/lib:\${LD_LIBRARY_PATH:-}"
+fi
+# Belt-and-suspenders: also expose the bundled libs explicitly.
+export LD_LIBRARY_PATH="\$FLM_PREFIX/lib/flm:\${LD_LIBRARY_PATH:-}"
+
+# 3. Put flm on PATH.
+export PATH="\$FLM_PREFIX/bin:\$PATH"
+export FLM_MODEL_PATH="/scratch"
+
+echo "[flm_env] FastFlowLM environment ready (prefix: \$FLM_PREFIX)"
+EOF
+chmod +x "$ENV_SCRIPT"
+
+echo
+echo "[home_install] Done."
+echo "  Run:    source \"$ENV_SCRIPT\" && flm --help"
+echo "  Or:     source \"$ENV_SCRIPT\" && flm run <model>"

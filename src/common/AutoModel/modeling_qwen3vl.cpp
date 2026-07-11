@@ -290,48 +290,57 @@ std::string Qwen3VL::generate_with_prompt(chat_meta_info_t& meta_info, lm_unifor
 NonStreamResult Qwen3VL::parse_nstream_content(const std::string response_text) {
     NonStreamResult result;
 
-    std::string name, arguments;
+    const std::string tool_start_tag = "<tool_call>";
+    const std::string tool_end_tag = "</tool_call>";
 
-    std::string start_tag = "<tool_call>";
-    std::string end_tag = "</tool_call>";
+    size_t search_from = 0;
+    while (true) {
+        size_t start_pos = response_text.find(tool_start_tag, search_from);
+        if (start_pos == std::string::npos) break;
 
-    size_t start_pos = response_text.find(start_tag);
-    size_t end_pos = response_text.find(end_tag);
+        size_t block_content_start = start_pos + tool_start_tag.length();
+        size_t end_pos = response_text.find(tool_end_tag, block_content_start);
+        size_t block_end = (end_pos != std::string::npos) ? end_pos : response_text.length();
+        search_from = (end_pos != std::string::npos) ? end_pos + tool_end_tag.length() : block_end;
 
-    if (start_pos == std::string::npos || end_pos == std::string::npos) {
-        // pure content
+        std::string json_str = response_text.substr(block_content_start, block_end - block_content_start);
+
+        std::string name, arguments;
+        try {
+            auto j = nlohmann::json::parse(json_str);
+            if (j.contains("name")) name = j["name"].get<std::string>();
+            if (j.contains("arguments")) {
+                arguments = j["arguments"].is_string()
+                    ? j["arguments"].get<std::string>()
+                    : j["arguments"].dump();
+            }
+        } catch (...) {
+            std::string key_name = "\"name\": \"";
+            size_t ns = json_str.find(key_name);
+            if (ns != std::string::npos) {
+                ns += key_name.length();
+                size_t ne = json_str.find("\"", ns);
+                if (ne != std::string::npos) name = json_str.substr(ns, ne - ns);
+            }
+            std::string key_args = "\"arguments\":";
+            size_t ap = json_str.find(key_args);
+            if (ap != std::string::npos) {
+                size_t bs = json_str.find("{", ap);
+                size_t be = json_str.rfind("}");
+                if (bs != std::string::npos && be != std::string::npos && be > bs)
+                    arguments = json_str.substr(bs, be - bs + 1);
+            }
+        }
+
+        result.tool_calls_list.emplace_back(name, arguments);
+    }
+
+    if (result.tool_calls_list.empty()) {
         result.content = response_text;
-        return result;
+    } else {
+        result.tool_name = result.tool_calls_list[0].first;
+        result.tool_args = result.tool_calls_list[0].second;
     }
-
-    start_pos += start_tag.length();
-    std::string json_str = response_text.substr(start_pos, end_pos - start_pos);
-
-    // Parse "name" 
-    std::string key_name = "\"name\": \"";
-    size_t name_start = json_str.find(key_name);
-    if (name_start != std::string::npos) {
-        name_start += key_name.length();
-        size_t name_end = json_str.find("\"", name_start);
-        if (name_end != std::string::npos) {
-            name = json_str.substr(name_start, name_end - name_start);
-        }
-    }
-
-    // Parse "arguments"
-    std::string key_args = "\"arguments\":";
-    size_t args_pos = json_str.find(key_args);
-    if (args_pos != std::string::npos) {
-        size_t brace_start = json_str.find("{", args_pos);
-        size_t brace_end = json_str.rfind("}"); // Find the last closing brace
-
-        if (brace_start != std::string::npos && brace_end != std::string::npos && brace_end > brace_start) {
-            arguments = json_str.substr(brace_start, brace_end - brace_start);
-        }
-    }
-
-    result.tool_name = name;
-    result.tool_args = arguments;
 
     return result;
 }

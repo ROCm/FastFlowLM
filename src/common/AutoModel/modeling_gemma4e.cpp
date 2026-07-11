@@ -967,17 +967,33 @@ NonStreamResult Gemma4e::parse_nstream_content(const std::string response_text) 
 
     // 2. Parse Tool Calling
     if (is_tool) {
-        size_t start = tool_start_pos + tool_start_tag.length();
-        if (tool_end_pos == std::string::npos || tool_end_pos < start) {
-            tool_end_pos = response_text.find(tool_resp_tag, start);
-            if (tool_end_pos == std::string::npos) {
-                tool_end_pos = response_text.length();
+        size_t search_from = 0;
+        while (true) {
+            size_t start_pos = response_text.find(tool_start_tag, search_from);
+            if (start_pos == std::string::npos) break;
+
+            size_t block_content_start = start_pos + tool_start_tag.length();
+            size_t end_pos = response_text.find(tool_end_tag, block_content_start);
+
+            size_t block_end;
+            if (end_pos != std::string::npos) {
+                block_end = end_pos;
+                search_from = end_pos + tool_end_tag.length();
+            } else {
+                size_t resp_pos = response_text.find(tool_resp_tag, block_content_start);
+                block_end = (resp_pos != std::string::npos) ? resp_pos : response_text.length();
+                search_from = block_end;
             }
+
+            std::string tool_content = response_text.substr(block_content_start, block_end - block_content_start);
+            auto parsed_tool = parse_gemma4e_tool_content(tool_content);
+            result.tool_calls_list.emplace_back(parsed_tool.first, parsed_tool.second.dump());
         }
-        std::string tool_content = response_text.substr(start, tool_end_pos - start);
-        auto parsed_tool = parse_gemma4e_tool_content(tool_content);
-        result.tool_name = parsed_tool.first;
-        result.tool_args = parsed_tool.second.dump();
+
+        if (!result.tool_calls_list.empty()) {
+            result.tool_name = result.tool_calls_list[0].first;
+            result.tool_args = result.tool_calls_list[0].second;
+        }
     }
     // 3. Parse Normal Content
     else {

@@ -514,24 +514,42 @@ json RestHandler::build_nstream_response(std::string response_text) {
     message["role"] = "assistant";
 
     bool is_reasoning = !result.reasoning_content.empty();
-    bool is_tool_call = !result.tool_name.empty();
+    bool is_tool_call = !result.tool_calls_list.empty() || !result.tool_name.empty();
 
     if (is_reasoning) {
         message["reasoning_content"] = result.reasoning_content;
     }
 
     if (is_tool_call) {
-        message["tool_calls"] = json::array({
-            {
+        json tool_calls_json = json::array();
+        if (!result.tool_calls_list.empty()) {
+            int idx = 0;
+            for (const auto& tc : result.tool_calls_list) {
+                tool_calls_json.push_back({
+                    {"index", idx++},
+                    {"id", "call_" + std::to_string(std::time(nullptr)) + "_" + std::to_string(idx)},
+                    {"type", "function"},
+                    {"function", {
+                        {"name", tc.first},
+                        {"arguments", tc.second}
+                    }}
+                });
+            }
+        } else {
+            tool_calls_json.push_back({
                 {"index", 0},
-                {"id", "call_" + std::to_string(std::time(nullptr))}, 
+                {"id", "call_" + std::to_string(std::time(nullptr))},
                 {"type", "function"},
                 {"function", {
                     {"name", result.tool_name},
                     {"arguments", result.tool_args}
                 }}
-            }
-        });
+            });
+        }
+        message["tool_calls"] = tool_calls_json;
+        if (!result.content.empty()) {
+            message["content"] = result.content;
+        }
     }
     else {
         message["content"] = result.content;
@@ -1077,13 +1095,19 @@ void RestHandler::handle_openai_chat_completion(const json& request,
             model_used_for_last_message = model;
         }
         else {
-            can_use_prompt_cache = prompt_cache.can_use_cache(current_messages, auto_chat_engine->get_chat_template_type(), tools);
+            cache_match_info_t cache_info;
+            can_use_prompt_cache = prompt_cache.can_use_cache(current_messages, auto_chat_engine->get_chat_template_type(), tools, cache_info);
             if (can_use_prompt_cache) {
                 meta_info.restore_allowed = true;
                 header_print("FLM", "Use cached prompt!");
+                header_print("FLM", "Matched " + std::to_string(cache_info.matched_rounds) +
+                    " out of " + std::to_string(cache_info.total_rounds) + " rounds (" +
+                    std::to_string(cache_info.total_rounds - cache_info.matched_rounds) + " new to prefill).");
             }
             else {
                 // cannot use cache, clear and re-insert all
+                header_print("FLM", "Prompt cache miss.");
+                header_print("FLM", "Clearing context...");
                 auto_chat_engine->clear_context();
             }
         }
