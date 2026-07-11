@@ -23,6 +23,7 @@ std::string find_model_list() {
     std::string install_prefix = CMAKE_INSTALL_PREFIX;
 
     // 1. Check FLM_CONFIG_PATH environment variable
+    // header_print("FLMPATH", "HERE111");
     const char* env_path = std::getenv("FLM_CONFIG_PATH");
     if (env_path && *env_path) {
         if (std::filesystem::exists(env_path)) {
@@ -33,8 +34,13 @@ std::string find_model_list() {
 
 #ifndef _WIN32
     // Linux: Portable
-    if (std::filesystem::exists("model_list.json")) {
-        return "model_list.json";
+    // if (std::filesystem::exists("model_list.json")) {
+    //     return "model_list.json";
+    // }
+    std::string exe_dir = get_executable_directory();
+    std::string exe_relative_path = exe_dir + "/model_list.json";
+    if (std::filesystem::exists(exe_relative_path)) {
+        return exe_relative_path;
     }
 
     // Linux: install
@@ -80,10 +86,14 @@ std::string find_xclbin_path() {
 
 #ifndef _WIN32
     // Linux: Portable
-    if (std::filesystem::exists("xclbins")) {
-        return ".";
+    // if (std::filesystem::exists("xclbins")) {
+    //     return ".";
+    // }
+    std::string exe_dir = get_executable_directory();
+    std::string exe_relative_path = exe_dir;
+    if (std::filesystem::exists(exe_relative_path)) {
+        return exe_relative_path;
     }
-
     // Linux: install
     std::string installed_path = xclbin_prefix;
     if (std::filesystem::exists(installed_path)) {
