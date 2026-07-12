@@ -144,6 +144,8 @@ docs_nav:
         url: "/docs/benchmarks/qwen3_results/"
       - label: Qwen3.5
         url: "/docs/benchmarks/qwen3.5_results/"
+      - label: Qwen3.6
+        url: "/docs/benchmarks/qwen3.6_results/"
       - label: gpt-oss
         url: "/docs/benchmarks/gpt-oss_results/"
       - label: LiquidAI/LFM2
