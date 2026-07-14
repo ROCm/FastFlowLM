@@ -134,17 +134,16 @@
         },        
         "qwen3.5-omni": {
             "4b": {
-                "name": "Qwen3.5-omni-NPU2",
-                "url": "https://huggingface.co/FastFlowLM/Qwen3.5-0.8B-NPU2",
-                "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.5-0.8B-NPU2/tree/main",
-                "size": 800000000,
+                "name": "Qwen3.5-OMNI-NPU2",
+                "url": "https://huggingface.co/alfxu-amd/Qwen3.5-OMNI-NPU2",
+                "file_url": "https://huggingface.co/api/models/alfxu-amd/Qwen3.5-OMNI-NPU2/tree/main",
+                "size": 400000000,
                 "flm_min_version": "0.9.45",
                 "files": [
                     "config.json",
                     "model.q4nx",
                     "tokenizer.json",
                     "tokenizer_config.json",
-                    "vision_weight.q4nx",
                     "chat_template.jinja"
                 ],
                 "vlm": true,
@@ -152,13 +151,14 @@
                 "max_prefill_len": 4096,
                 "details": {
                     "format": "NPU2",
-                    "family": "qwen3.5",
+                    "family": "qwen3.5-omni",
                     "think": true,
-                    "parameter_size": "0.8B",
-                    "quantization_level": "Q4_1"
+                    "parameter_size": "4B",
+                    "quantization_level": "Q8_0"
                 },
                 "label": [
                     "vision",
+                    "audio",
                     "reasoning"
                 ],
                 "footprint": 1.4

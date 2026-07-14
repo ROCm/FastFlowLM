@@ -68,6 +68,17 @@ void Qwen3_5_Omni::load_model(std::string model_path, json model_info, int defau
     this->lm_config = std::make_unique<LM_Config>();
     this->lm_config->from_pretrained(this->model_path);
 
+    // The omni thinker vocab lives in thinker_config.text_config, so the
+    // top-level "vocab_size" is 0. Resolve it here so every downstream reader
+    // (set_sampler, set_topk, ...) sees the real vocab instead of 0.
+    {
+        const auto& jc = this->lm_config->_json_config;
+        if (jc.contains("thinker_config") && jc["thinker_config"].contains("text_config")) {
+            this->lm_config->vocab_size =
+                json_u32(jc["thinker_config"]["text_config"], "vocab_size", this->lm_config->vocab_size);
+        }
+    }
+
     if (this->npu_device_inst == nullptr) {
         header_print("ERROR", "NPU device instance is nullptr");
         exit(1);
@@ -96,20 +107,19 @@ void Qwen3_5_Omni::load_model(std::string model_path, json model_info, int defau
         this->engine->load_weights(q4nx);
     }
     this->engine->clear_context();
-    header_print("FLM", "Model loaded");
 
     this->tokenizer = std::make_unique<Tokenizer>(this->model_path);
     this->setup_tokenizer(this->model_path);
 
     // default greedy-ish sampler (overridable via set_* helpers)
     sampler_config config;
-    config.top_k = 20;
+    config.top_k = 10;
     config.top_p = 0.8f;
     config.min_p = 0.0f;
     config.temperature = 0.7f;
     config.rep_penalty = 1.0f;
     config.freq_penalty = 1.0f;
-    config.pre_penalty = 1.5f;
+    config.pre_penalty = 1.0f;
     this->set_sampler(config);
 
     this->is_model_loaded = true;
@@ -203,6 +213,7 @@ bool Qwen3_5_Omni::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input
         messages.push_back(content);
         templated_text = this->apply_chat_template(messages);
     }
+
 
     std::vector<int> tokens_init = this->tokenizer->encode(templated_text);
 
@@ -347,14 +358,7 @@ buffer<bf16> Qwen3_5_Omni::say(std::string wav_out_path) {
 
 void Qwen3_5_Omni::set_sampler(sampler_config& sampler_config) {
     if (this->sampler != nullptr) this->sampler.reset();
-    // The omni thinker vocab lives in thinker_config.text_config; fall back to
-    // lm_config->vocab_size (top-level) if not present.
-    uint32_t vocab = this->lm_config->vocab_size;
-    const auto& jc = this->lm_config->_json_config;
-    if (jc.contains("thinker_config") && jc["thinker_config"].contains("text_config")) {
-        vocab = json_u32(jc["thinker_config"]["text_config"], "vocab_size", vocab);
-    }
-    this->sampler = std::make_unique<Sampler>((int)vocab, sampler_config);
+    this->sampler = std::make_unique<Sampler>((int)this->lm_config->vocab_size, sampler_config);
 }
 
 void Qwen3_5_Omni::clear_context() {

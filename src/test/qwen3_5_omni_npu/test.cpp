@@ -23,7 +23,7 @@ int main(int argc, char* argv[]) {
     desc.add_options()("model,m", arg_utils::po::value<std::string>()->required(), "Model file");
     desc.add_options()("Short,s", arg_utils::po::value<bool>()->default_value(true), "Short Prompt");
     desc.add_options()("Preemption,p", arg_utils::po::value<bool>()->default_value(false), "Preemption");
-    desc.add_options()("Length,l", arg_utils::po::value<int>()->default_value(256), "Max generation length");
+    desc.add_options()("Length,l", arg_utils::po::value<int>()->default_value(8192), "Max generation length");
     arg_utils::po::store(arg_utils::po::parse_command_line(argc, argv, desc), vm);
 
     std::string tag = vm["model"].as<std::string>();
@@ -53,16 +53,22 @@ int main(int argc, char* argv[]) {
     chat->load_model(model_path, model_info, -1, preemption);
     header_print("info", "Model loaded");
 
-    return 0;
 
     chat_meta_info_t meta_info;
     lm_uniform_input_t uniformed_input;
     chat->set_topk(1); // deterministic (greedy) for a smoke test
 
+    constexpr bool use_image = false;
+
     if (short_prompt) {
-        uniformed_input.prompt = "What are these?";
-        uniformed_input.images.push_back("../../../tb_files/panda.png");
-        uniformed_input.audios.push_back("../../../tb_files/nvidia.mp3");
+        if constexpr (use_image) {
+            uniformed_input.prompt = "What are these?";
+            uniformed_input.images.push_back("../../../tb_files/panda.png");
+            uniformed_input.audios.push_back("../../../tb_files/nvidia.mp3");
+        }
+        else {
+            uniformed_input.prompt = "Is Alibaba a good company?";
+        }
     } else {
         uniformed_input.prompt = "Hello, introduce yourself briefly.";
     }
