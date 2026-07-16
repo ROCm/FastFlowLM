@@ -98,8 +98,12 @@ private:
     float    vision_image_mean      = 0.5f;
     float    vision_image_std       = 0.5f;
 
-    // audio input resample rate
-    int audio_resample_rate = 16000;
+    // // audio input resample rate
+    int audio_resample_rate = 16000; //TODO: load from config
+
+
+
+
 
     // ----- owned engine (not a causal_lm; inherited lm_engine stays null) -----
     std::unique_ptr<qwen3_5_omni> engine = nullptr;

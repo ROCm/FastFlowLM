@@ -68,6 +68,11 @@ int main(int argc, char* argv[]) {
         }
         else {
             uniformed_input.prompt = "Is Alibaba a good company?";
+            uniformed_input.images.push_back("../../../tb_files/mj_icon.jpg");
+            uniformed_input.images.push_back("../../../tb_files/google_icon.png");
+            uniformed_input.images.push_back("../../../tb_files/pcb.jpg");
+            uniformed_input.images.push_back("../../../tb_files/panda.png");
+
         }
     } else {
         uniformed_input.prompt = "Hello, introduce yourself briefly.";

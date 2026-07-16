@@ -184,7 +184,7 @@ void Qwen3_5_Omni::preprocess_image(
     image.width_resized = resized_width;
     image.height_resized = resized_height;
     image_grid_pair = { static_cast<int>(grid_h), static_cast<int>(grid_w) };
-    valid_patch_size = grid_h * grid_w;
+    
     num_soft_tokens = (grid_h * grid_w) / (this->merge_size * this->merge_size);
     image._data.free();
 }

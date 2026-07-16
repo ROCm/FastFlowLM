@@ -29,11 +29,8 @@ typedef struct {
 } qwen3_5_omni_image_t;
 
 typedef struct {
-    // original raw data
-    std::vector<std::pair<int, int>> image_patch__element_per_patch; // [num_of_image][width, height]
-    std::vector<uint32_t> valid_patch_size_per_image; // [num_of_image], the unpadded size per image
-    std::vector<std::vector<bf16>> pixel_values; // [num_of_image][image_size], where image_size = height_resized * width_resized * 3
-    std::vector< std::vector<int>> image_grid_pairs_per_image; // [num_of_image][num_of_position_id][x, y]
+    std::vector<bf16> _processed_pixel_values; // [num_of_image][1d array of processed image values]
+    std::vector< std::vector<int>> image_grid_h_w;  //[num_of_images][grid_h, grid_w]
     std::vector<unsigned int> num_soft_tokens_per_image; // [num_of_image]
     unsigned int num_images;
 }qwen3_5_omni_image_payload_t;

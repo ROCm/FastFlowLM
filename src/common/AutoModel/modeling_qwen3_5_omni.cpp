@@ -13,6 +13,12 @@ static uint32_t json_u32(const nlohmann::json& j, const char* key, uint32_t dflt
     return dflt;
 }
 
+
+static float json_fp32(const nlohmann::json& j, const char* key, float dflt) {
+    if (j.contains(key) && !j[key].is_null()) return j[key].get<float>();
+    return dflt;
+}
+
 void Qwen3_5_Omni::setup_tokenizer(std::string model_path) {
     std::string tokenizer_config_path = model_path + "/tokenizer_config.json";
     std::ifstream fs_config(tokenizer_config_path, std::ios::in | std::ios::binary);
@@ -96,10 +102,20 @@ void Qwen3_5_Omni::load_model(std::string model_path, json model_info, int defau
     const auto& jc = this->lm_config->_json_config;
     if (jc.contains("thinker_config") && jc["thinker_config"].contains("vision_config")) {
         const auto& vc = jc["thinker_config"]["vision_config"];
+        const nlohmann::json &vision_config = this->lm_config->_json_config["vision_config"];
+
         this->patch_size          = json_u32(vc, "patch_size", this->patch_size);
         this->temporal_patch_size = json_u32(vc, "temporal_patch_size", this->temporal_patch_size);
-        this->merge_size          = json_u32(vc, "spatial_merge_size", this->merge_size);
+
+
+        this->merge_size          = json_u32(vision_config, "merge_size", this->merge_size);
+        this->shortest_edge       = json_u32(vision_config, "shortest_edge", this->shortest_edge);
+        this->longest_edge        = json_u32(vision_config, "longest_edge", this->longest_edge);
+        this->vision_rescale_factor = json_fp32(vision_config, "rescale_factor", this->vision_rescale_factor);
+        this->vision_image_mean = json_fp32(vision_config, "rescale_mean", this->vision_image_mean);
+        this->vision_image_std = json_fp32(vision_config, "rescale_std", this->vision_image_std);
     }
+
 
     this->engine = std::make_unique<qwen3_5_omni>(*this->lm_config, this->npu.get(), this->MAX_L);
     {
@@ -130,6 +146,11 @@ void Qwen3_5_Omni::load_model(std::string model_path, json model_info, int defau
     for (size_t i = 0; i < PROFILER_TYPE_NUM; i++) {
         this->profiler_list[i].reset();
     }
+
+
+
+
+
 }
 
 std::string Qwen3_5_Omni::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools) {
@@ -161,13 +182,11 @@ bool Qwen3_5_Omni::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input
         std::vector<int> grid_pair;
         uint32_t valid_patch_size = 0;
         uint32_t num_soft_tokens = 0;
-        std::vector<bf16> pixel_values;
-        this->preprocess_image(image, pixel_values, grid_pair, valid_patch_size, num_soft_tokens);
-        image_payload.pixel_values.push_back(std::move(pixel_values));
-        image_payload.image_grid_pairs_per_image.push_back(grid_pair);
-        image_payload.valid_patch_size_per_image.push_back(valid_patch_size);
+     
+        this->preprocess_image(image, image_payload._processed_pixel_values, grid_pair, valid_patch_size, num_soft_tokens);
+     
+        image_payload.image_grid_h_w.push_back(grid_pair);
         image_payload.num_soft_tokens_per_image.push_back(num_soft_tokens);
-        image_payload.image_patch__element_per_patch.push_back({image.width_resized, image.height_resized});
         image_payload.num_images++;
     }
 
