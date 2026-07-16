@@ -113,13 +113,13 @@ void Qwen3_5_Omni::load_model(std::string model_path, json model_info, int defau
 
     // default greedy-ish sampler (overridable via set_* helpers)
     sampler_config config;
-    config.top_k = 10;
-    config.top_p = 0.8f;
-    config.min_p = 0.0f;
-    config.temperature = 0.7f;
-    config.rep_penalty = 1.0f;
-    config.freq_penalty = 1.0f;
-    config.pre_penalty = 1.0f;
+    config.top_k = 20;
+    config.top_p = 0.8;
+    config.min_p = 0.0;
+    config.temperature = 0.7;
+    config.rep_penalty = 1.0;
+    config.freq_penalty = 1.0;
+    config.pre_penalty = 1.5f;
     this->set_sampler(config);
 
     this->is_model_loaded = true;
