@@ -144,7 +144,8 @@
                     "model.q4nx",
                     "tokenizer.json",
                     "tokenizer_config.json",
-                    "chat_template.jinja"
+                    "chat_template.jinja",
+                    "vision_weight.q4nx"
                 ],
                 "vlm": true,
                 "default_context_length": 32768,
