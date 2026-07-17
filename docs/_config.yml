@@ -44,8 +44,8 @@ nav_links:
         url: "/models/"
       - label: Benchmarks
         url: "/benchmarks/"
-      - label: Demos
-        url: "/demos/"
+      # - label: Demos
+      #   url: "/demos/"
   - label: Company
     children:
       - label: Team

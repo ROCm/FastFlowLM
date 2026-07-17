@@ -40,7 +40,7 @@ sections:
       - label: "Context"
         value: "Up to 256k tokens"
       - label: "Supported chips"
-        value: "Ryzen™ AI (Strix, Strix Halo, Kraken)"
+        value: "Ryzen™ AI (Strix, Strix Halo, Kraken, Gorgon)"
     right:
       carousel:
         slides:
@@ -96,7 +96,7 @@ sections:
       href: "https://youtu.be/TT7WZOeqxQY?si=DUpdyw_xNBYfEZNz"
       kicker: "Qwen3.6-MoE on NPU"
       body: |
-        The fastest Qwen3.6-35B-A3B MoE implementation on any NPU—built for both Windows and Linux.
+        The fastest Qwen3.6-35B-A3B MoE implementation on any NPU—built for both Windows and Linux (Linux in this deomo).
 
   - type: media
     variant: alt
