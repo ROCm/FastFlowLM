@@ -477,7 +477,16 @@ int main(int argc, char* argv[]) {
     
     // Get the command, model tag, and force flag
     std::string exe_dir = utils::get_executable_directory();
-    std::string config_path = utils::find_model_list();
+    std::string config_path;
+    try {
+        config_path = utils::find_model_list();
+        header_print("FLM", "Fetching models from: " + config_path);
+    }
+    catch (const std::exception& e) {
+        std::cerr << e.what() << std::endl;
+        return 1;
+    }
+
     // Get the models directory from environment variable or default
     std::string models_dir = utils::get_models_directory();
 
