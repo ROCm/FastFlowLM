@@ -46,12 +46,6 @@ nav_links:
         url: "/benchmarks/"
       # - label: Demos
       #   url: "/demos/"
-  - label: Company
-    children:
-      - label: Team
-        url: "/team/"
-      - label: News
-        url: "/news/"
   - label: Docs
     url: "/docs/"
 
