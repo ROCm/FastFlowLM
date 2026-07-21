@@ -35,6 +35,13 @@ SOURCES += ../../common/modules/sampler.cpp
 HEADERS += ../../include/models/qwen3_5_omni/qwen3_5_omni.hpp
 HEADERS += ../../include/AutoModel/modeling_qwen3_5_omni.hpp
 
+# omni mode is default;
+# 0: text
+# 1: images
+# 2: audios
+# 3: omni
+TYPE ?= 3
+
 
 ifeq ($(WSL), 0)
 
@@ -66,7 +73,7 @@ clean:
 
 test: $(BUILD_DIR)/test_qwen3_5_omni_npu
 	cp ../../model_list.json $(BUILD_DIR)/model_list.json
-	cd $(BUILD_DIR) && export LD_LIBRARY_PATH=../../../lib && ./test_qwen3_5_omni_npu --model qwen3.5-omni
+	cd $(BUILD_DIR) && export LD_LIBRARY_PATH=../../../lib && ./test_qwen3_5_omni_npu --model qwen3.5-omni --type $(TYPE)
 
 -include $(DEPS)
 .PHONY: all clean test

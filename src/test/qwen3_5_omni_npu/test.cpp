@@ -21,14 +21,16 @@ int main(int argc, char* argv[]) {
     arg_utils::po::options_description desc("Allowed options");
     arg_utils::po::variables_map vm;
     desc.add_options()("model,m", arg_utils::po::value<std::string>()->required(), "Model file");
-    desc.add_options()("Short,s", arg_utils::po::value<bool>()->default_value(true), "Short Prompt");
+    desc.add_options()("type,t", arg_utils::po::value<int>()->default_value(0), "\t0: text mode\n\t1: image only\n\t2: audio only:\n\t3: omni mode\n\t");
     desc.add_options()("Preemption,p", arg_utils::po::value<bool>()->default_value(false), "Preemption");
+    desc.add_options()("Greedy,g", arg_utils::po::value<bool>()->default_value(true), "Greedy decoding");
     desc.add_options()("Length,l", arg_utils::po::value<int>()->default_value(8192), "Max generation length");
     arg_utils::po::store(arg_utils::po::parse_command_line(argc, argv, desc), vm);
 
     std::string tag = vm["model"].as<std::string>();
-    bool short_prompt = vm["Short"].as<bool>();
+    int type = vm["type"].as<int>();
     bool preemption = vm["Preemption"].as<bool>();
+    bool greedy = vm["Greedy"].as<bool>();
     int length_limit = vm["Length"].as<int>();
     std::cout << "Model: " << tag << std::endl;
 
@@ -56,30 +58,37 @@ int main(int argc, char* argv[]) {
 
     chat_meta_info_t meta_info;
     lm_uniform_input_t uniformed_input;
-    chat->set_topk(1); // deterministic (greedy) for a smoke test
+    if (greedy) {
+        chat->set_topk(1); // deterministic (greedy) for a smoke test
+    }
 
-    constexpr bool use_image = true;
-
-    if (short_prompt) {
-        if constexpr (use_image) {
-            // uniformed_input.prompt = "Describe image 1 to 4; Translate image 5 to Chinese";
-            // uniformed_input.images.push_back("../../../tb_files/mj_icon.jpg");
-            // uniformed_input.images.push_back("../../../tb_files/pcb.jpg");
-            // uniformed_input.images.push_back("../../../tb_files/panda.png");
-            // uniformed_input.images.push_back("../../../tb_files/google_icon.png");
-            // uniformed_input.images.push_back("../../../tb_files/german.png");
-        // uniformed_input.images.push_back("../../../tb_files/longImage.jpg");            
-            //uniformed_input.prompt = "Is Alibaba a good company?";
+    switch(type){
+        case 0:
+            uniformed_input.prompt = "Is Alibaba a good company?";
+            break;
+        case 1:
+            uniformed_input.prompt = "Describe image 1 to 4; Translate image 5 to Chinese";
+            uniformed_input.images.push_back("../../../tb_files/mj_icon.jpg");
+            uniformed_input.images.push_back("../../../tb_files/pcb.jpg");
+            uniformed_input.images.push_back("../../../tb_files/panda.png");
+            uniformed_input.images.push_back("../../../tb_files/google_icon.png");
+            uniformed_input.images.push_back("../../../tb_files/german.png");
+            break;
+        case 2:
             uniformed_input.prompt = "Transcribe the following speech segment in its original language. Follow these specific instructions for formatting the answer:\n* Only output the transcription, with no newlines.\n* When transcribing numbers, write the digits, i.e. write 1.7 and not one point seven, and write 3 instead of three.";
             uniformed_input.audios.push_back("../../../tb_files/Demos_sample-data_journal.wav");     
             uniformed_input.audios.push_back("../../../tb_files/nvidia.mp3");   
             uniformed_input.audios.push_back("../../../tb_files/tenyears_00_curry_128kb.mp3");                   
-        }
-        else {
-            uniformed_input.prompt = "Is Alibaba a good company?";
-        }
-    } else {
-        uniformed_input.prompt = "Hello, introduce yourself briefly.";
+            break;
+        case 3:
+            uniformed_input.prompt = "Answer the question and further describe what is in the image.";
+            uniformed_input.images.push_back("../../../tb_files/Zootopia.jpg");
+            uniformed_input.audios.push_back("../../../tb_files/Recording.wav");
+            break;
+
+        default:
+            header_print("info", "Unknown test type, exit 0;");
+            exit(0);
     }
 
     std::cout << "Prompt: " << uniformed_input.prompt << std::endl;
