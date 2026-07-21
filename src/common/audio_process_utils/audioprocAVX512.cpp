@@ -552,7 +552,7 @@ namespace avx512 {
         int count,
         float floor)
     {
-        constexpr float log_base_inv = (Base > 1) ? (1.0f / std::log(static_cast<float>(Base))) : 1.0f;
+        const float log_base_inv = (Base > 1) ? (1.0f / std::log(static_cast<float>(Base))) : 1.0f;
         const __m512 v_floor       = _mm512_set1_ps(floor);
         const __m512 v_log_base_inv = _mm512_set1_ps(log_base_inv);
         int i = 0;

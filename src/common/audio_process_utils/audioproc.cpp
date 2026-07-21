@@ -541,7 +541,7 @@ namespace audioproc {
         int count,
         float floor)
     {
-        constexpr float log_base_inv = (Base > 1) ? (1.0f / std::log(static_cast<float>(Base))) : 1.0f;
+        const float log_base_inv = (Base > 1) ? (1.0f / std::log(static_cast<float>(Base))) : 1.0f;
         for (int i = 0; i < count; i++) {
             float x = UseClamp ? std::max(in[i], floor) : (in[i] + floor);
             out[i] = (Base > 1) ? std::log(x) * log_base_inv : std::log(x);
