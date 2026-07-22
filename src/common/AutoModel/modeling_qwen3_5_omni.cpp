@@ -375,10 +375,10 @@ bool Qwen3_5_Omni::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input
         }
         if (prefix_skip_count != idx) {
             prefix_skip_count = 0;
-            this->engine->clear_context();
-            this->checkpoint_his.clear();
-            this->total_tokens = 0;
-            this->token_history.clear();
+            // this->engine->clear_context();
+            // this->checkpoint_his.clear();
+            // this->total_tokens = 0;
+            // this->token_history.clear();
         }
     }
 
@@ -688,11 +688,14 @@ void Qwen3_5_Omni::clear_context() {
     this->total_tokens = 0;
     this->last_token = -1;
     this->token_history.clear();
+    this->checkpoint_his.clear();
     this->engine->clear_context();
-    if (this->sampler != nullptr) this->sampler->reset_penalties();
+    this->total_tokens = 0;
+    this->sampler->reset_penalties();
     for (size_t i = 0; i < PROFILER_TYPE_NUM; i++) {
         this->profiler_list[i].reset();
     }
+    this->last_prefill_time = { 0, "us" };
 }
 
 void Qwen3_5_Omni::set_max_length(unsigned int new_max) {
