@@ -83,6 +83,14 @@ public:
                     target_size = 1080;
                 } else if (this->image_pre_resize <= 4) {
                     target_size = 1440;
+                } else if (this->image_pre_resize <= 5) {
+                    target_size = 2160;
+                } else if (this->image_pre_resize <= 6) {
+                    target_size = 2880;
+                } else if (this->image_pre_resize <= 7) {
+                    target_size = 3240;
+                } else if (this->image_pre_resize <= 8) {
+                    target_size = 4320;
                 } else {
                     this->image_pre_resize = 0;
                     target_size = 0;
