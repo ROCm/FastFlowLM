@@ -64,6 +64,58 @@ public:
     std::string show_profile() override;
     std::pair<std::string, std::vector<int>> get_history() override;
 
+        /// \brief Configure a parameter with type-erased value
+	/// \param parameter_name the name of the parameter
+	/// \param value the value to set (can be any type)
+	/// \return true if the parameter was configured successfully, false otherwise
+	bool configure_parameter(std::string parameter_name, const std::any& value) override{
+		if (parameter_name == "system_prompt") {
+			try {
+				this->user_system_prompt = std::any_cast<std::string>(value);
+				this->extra_context["user_system_prompt"] = this->user_system_prompt;
+				return true;
+			} catch (const std::bad_any_cast&) {
+				return false;
+			}
+		}
+        else if (parameter_name == "img_pre_resize") {
+            try {
+                this->image_pre_resize = std::any_cast<int>(value);
+                int target_size;
+                if (this->image_pre_resize <= 0) {
+                    target_size = 0;
+                } else if (this->image_pre_resize == 1) {
+                    target_size = 480;
+                } else if (this->image_pre_resize <= 2) {
+                    target_size = 720;
+                } else if (this->image_pre_resize <= 3) {
+                    target_size = 1080;
+                } else if (this->image_pre_resize <= 4) {
+                    target_size = 1440;
+                } else if (this->image_pre_resize <= 5) {
+                    target_size = 2160;
+                } else if (this->image_pre_resize <= 6) {
+                    target_size = 2880;
+                } else if (this->image_pre_resize <= 7) {
+                    target_size = 3240;
+                } else if (this->image_pre_resize <= 8) {
+                    target_size = 4320;
+                } else {
+                    this->image_pre_resize = 0;
+                    target_size = 0;
+                }
+                if (this->image_pre_resize > 0) {
+                    header_print_r("FLM", "Qwen2VL pre-resize image height to " + std::to_string(target_size) + " pixels if larger than that");
+                }
+                return true;
+            } catch (const std::bad_any_cast&) {
+                return false;
+            }
+        }
+		return false;
+	}
+
+
 private:
     int think_start_id = 248068;
     int think_end_id = 248069;
@@ -76,6 +128,7 @@ private:
     void setup_tokenizer(std::string model_path);
 
     // ----- image preprocessing (modeling_qwen3_5_omni_image.cpp) -----
+    int image_pre_resize = 0;
     ImageReader image_reader_;
     qwen3_5_omni_image_t load_image(const std::string& filename);
     qwen3_5_omni_image_t load_image_base64(const std::string& base64_string);
