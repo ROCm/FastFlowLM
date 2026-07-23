@@ -354,9 +354,9 @@ bool Qwen3_5_Omni::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input
     }
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
 
-    header_print("FLM", "Prompt tokens: " << tokens.size()
-        << " (images: " << image_payload.num_images << ", soft image tokens: " << total_image_tokens
-        << "; audios: " << audio_payload.num_audios << ", soft audio tokens: " << total_audio_tokens << ")");
+    // header_print("FLM", "Prompt tokens: " << tokens.size()
+    //     << " (images: " << image_payload.num_images << ", soft image tokens: " << total_image_tokens
+    //     << "; audios: " << audio_payload.num_audios << ", soft audio tokens: " << total_audio_tokens << ")");
 
     // ---- prompt-cache prefix matching ----
     // Compute how many leading tokens are already in the cached KV state
