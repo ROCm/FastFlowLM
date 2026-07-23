@@ -51,7 +51,7 @@ qwen3_5_omni_image_t Qwen3_5_Omni::load_image(const std::string& filename) {
             float ratio = static_cast<float>(max_height) / static_cast<float>(decoded.height);
             int target_width = static_cast<int>(static_cast<float>(decoded.width) * ratio);
             int target_height = max_height;
-            header_print_r("FLM", "Qwen3_5VL resizing image from (" + std::to_string(decoded.width) + ", " + std::to_string(decoded.height) + ") to (" + std::to_string(target_width) + ", " + std::to_string(target_height) + ")\n");
+            header_print_r("FLM", "Qwen3_5-Omni resizing image from (" + std::to_string(decoded.width) + ", " + std::to_string(decoded.height) + ") to (" + std::to_string(target_width) + ", " + std::to_string(target_height) + ")\n");
             if (image_reader_.resize_image(decoded, target_width, target_height, resized_image)) {
                 image_reader_.recycle(decoded);
                 decoded = std::move(resized_image);

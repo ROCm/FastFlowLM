@@ -105,7 +105,7 @@ public:
                     target_size = 0;
                 }
                 if (this->image_pre_resize > 0) {
-                    header_print_r("FLM", "Qwen3-Omni pre-resize image height to " + std::to_string(target_size) + " pixels if larger than that");
+                    header_print_r("FLM", "Qwen3_5-Omni pre-resize image height to " + std::to_string(target_size) + " pixels if larger than that");
                 }
                 return true;
             } catch (const std::bad_any_cast&) {
