@@ -117,12 +117,7 @@ class LM_Config{
 
 
             JSON_GET(this->flm_version, this->_json_config, "flm_version", "0.0.0", std::string);
-            assert(this->vocab_size > 0);
-            assert(this->hidden_size > 0);
-            assert(this->intermediate_size > 0);
-            assert(this->num_attention_heads > 0);
-            assert(this->num_hidden_layers > 0);
-            assert(this->num_key_value_heads > 0);
+      
             this->vision_model_weight = this->model_path + "/" + this->vision_model_weight;
             this->audio_model_weight = this->model_path + "/" + this->audio_model_weight;
         }
