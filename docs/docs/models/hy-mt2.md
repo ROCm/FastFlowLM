@@ -26,7 +26,9 @@ flm run hy-mt2:1.8b
 
 **Prompt Format**
 
-Hy-MT2 is a dedicated translation model, not a general-purpose chat model — it has no default system prompt. Put the translation instruction and source text in a single **user message**:
+Hy-MT2 is a dedicated translation model, not a general-purpose chat model — it has no default system prompt. There are two ways to prompt it:
+
+**Option 1: instruction + text in a single user message**
 
     将以下文本翻译为{TARGET_LANG}，注意只需要输出翻译后的结果，不要额外解释：
 
@@ -37,3 +39,14 @@ or, in English:
     Translate the following segment into {TARGET_LANG}, without additional explanation.
 
     {TEXT}
+
+**Option 2: instruction as the system prompt, text as the user message**
+
+Pin the translation instruction as the system prompt so it isn't re-prefilled every turn, then send only the source text as the user message:
+
+```json
+{"role": "system", "content": "将以下文本翻译为英语，注意只需要输出翻译后的结果，不要额外解释。输出必须全部使用英语，不要输出源语言或原文"},
+{"role": "user", "content": "{TEXT}"}
+```
+
+This is the recommended format in server mode for multi-turn or repeated translation calls (e.g. batch translating subtitle lines), since the instruction's prefill cost is paid once instead of once per request.
