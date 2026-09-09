@@ -276,6 +276,8 @@ BenchmarkResults_t run_benchmarks(std::string model_tag, std::string bench_confi
     auto [new_tag, model_info] = availble_models.get_model_info(model_tag);
     std::pair<std::string, std::unique_ptr<AutoModel>> auto_model = get_auto_model(new_tag, availble_models, &npu_device_inst);
     auto_chat_engine = std::move(auto_model.second);
+    if (model_tag.starts_with("hy-mt2"))
+        bench_config["max_length"] = 16384;
     int max_len = bench_config["max_length"];
     if (max_len < 8192)
         max_len = 8192;
