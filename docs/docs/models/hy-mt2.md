@@ -12,7 +12,7 @@ parent: Models
 - **Tool Calling Support:** No
 - **Base Model:** [tencent/Hy-MT2-1.8B](https://huggingface.co/tencent/Hy-MT2-1.8B)
 - **Quantization:** Q4_0
-- **Max Context Length:** 256k tokens
+- **Max Context Length:** 16k tokens
 - **Default Context Length:** 512 tokens ([change default](https://fastflowlm.com/docs/instructions/cli/#-change-default-context-length-max))
 - **[Set Context Length at Launch](https://fastflowlm.com/docs/instructions/cli/#-set-context-length-at-launch)**
 
