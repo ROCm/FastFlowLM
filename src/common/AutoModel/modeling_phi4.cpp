@@ -85,6 +85,7 @@ void Phi4::load_model(std::string model_path, json model_info,
         uses_corelib_aie4_ = false;
         aie4_poisoned_ = false;
         corelib_runtime_.reset();
+        aie4_corelib_path_.clear();
         if (switching_from_aie4) is_model_loaded = false;
 #endif
         _shared_load_model(model_path, model_info, default_context_length, enable_preemption);
@@ -133,6 +134,9 @@ void Phi4::load_model(std::string model_path, json model_info,
             sampler.reset();
             ConfigureSampler(*this);
 
+            const auto corelib_path = std::filesystem::absolute(
+                flm::corelib::CorelibApi::ResolveLibraryPath(
+                    utils::get_executable_directory())).lexically_normal();
             std::unique_ptr<causal_lm> engine;
 #if defined(FLM_CORELIB_TESTING)
             if (!engine_factory_for_testing_) throw std::logic_error("test engine factory is not installed");
@@ -146,11 +150,13 @@ void Phi4::load_model(std::string model_path, json model_info,
             corelib_runtime_ = std::move(runtime);
 #endif
             engine->clear_context();
+            aie4_corelib_path_ = corelib_path;
             lm_engine = std::move(engine);
             uses_corelib_aie4_ = true;
         } catch (...) {
             lm_engine.reset();
             corelib_runtime_.reset();
+            aie4_corelib_path_.clear();
             tokenizer.reset();
             sampler.reset();
             lm_config.reset();
@@ -286,6 +292,17 @@ std::string Phi4::generate_aie4(chat_meta_info_t& meta_info,
     return result;
 }
 #endif
+
+std::string Phi4::show_profile() {
+    std::string profile = AutoModel::show_profile();
+#if defined(FLM_ENABLE_CORELIB_AIE4)
+    if (uses_corelib_aie4_) {
+        profile += "    Backend:           corelib_aie4_gguf\n";
+        profile += "    Corelib DLL:       " + aie4_corelib_path_.string() + "\n";
+    }
+#endif
+    return profile;
+}
 
 void Phi4::clear_context() {
 #if defined(FLM_ENABLE_CORELIB_AIE4)

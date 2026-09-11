@@ -30,6 +30,7 @@ private:
     bool aie4_poisoned_ = false;
     int aie4_generation_budget_ = 0;
     std::shared_ptr<flm::corelib::CorelibRuntime> corelib_runtime_;
+    std::filesystem::path aie4_corelib_path_;
 #endif
 
 #if defined(FLM_CORELIB_TESTING)
@@ -53,6 +54,7 @@ public:
         return false;
 #endif
     }
+    std::string show_profile() override;
     void clear_context() override;
     bool insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input,
                 std::function<bool()> is_cancelled = [] { return false; }) override;

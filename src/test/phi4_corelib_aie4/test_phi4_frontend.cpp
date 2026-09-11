@@ -17,6 +17,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <cstdlib>
 
 namespace {
 
@@ -281,6 +282,31 @@ void TestCorelibAie4GgufBuildsOnlyTheCorelibEngine() {
     TEST_REQUIRE(g_factory.aie4_calls == 1);
     TEST_REQUIRE(model->uses_corelib_aie4());
     TEST_REQUIRE(!Phi4FrontendTestAccess::HasLegacyNpu(*model));
+}
+
+void TestAie4ProfileNamesBackendAndAbsoluteCorelibDllWithoutChangingLegacyProfile() {
+    TempPackage package;
+    FactoryScope scope;
+    const auto dll = std::filesystem::absolute(package.path() / "ryzenai_corelib.dll");
+#ifdef _WIN32
+    _putenv_s("FLM_AIE4_CORELIB_PATH", dll.string().c_str());
+#else
+    setenv("FLM_AIE4_CORELIB_PATH", dll.string().c_str(), 1);
+#endif
+    auto aie4 = Load(package, ModelInfo("corelib_aie4_gguf"), -1, false, nullptr);
+    const auto aie4_profile = aie4->show_profile();
+    RequireContains(aie4_profile, "corelib_aie4_gguf");
+    RequireContains(aie4_profile, dll.string());
+
+    auto legacy = Load(package, ModelInfo());
+    const auto legacy_profile = legacy->show_profile();
+    TEST_REQUIRE(legacy_profile.find("corelib_aie4_gguf") == std::string::npos);
+    TEST_REQUIRE(legacy_profile.find(dll.string()) == std::string::npos);
+#ifdef _WIN32
+    _putenv_s("FLM_AIE4_CORELIB_PATH", "");
+#else
+    unsetenv("FLM_AIE4_CORELIB_PATH");
+#endif
 }
 
 void TestNoManifestOnnxConvertedWeightOrCachePathIsOpened() {
@@ -636,6 +662,7 @@ int main() {
     RunTest(TestAbsentBackendStillBuildsQ4nxPhi4Npu, "TestAbsentBackendStillBuildsQ4nxPhi4Npu");
     RunTest(TestEnabledBuildStartsAndRunsLegacyPhi4WhenCorelibDllIsMissing, "TestEnabledBuildStartsAndRunsLegacyPhi4WhenCorelibDllIsMissing");
     RunTest(TestCorelibAie4GgufBuildsOnlyTheCorelibEngine, "TestCorelibAie4GgufBuildsOnlyTheCorelibEngine");
+    RunTest(TestAie4ProfileNamesBackendAndAbsoluteCorelibDllWithoutChangingLegacyProfile, "TestAie4ProfileNamesBackendAndAbsoluteCorelibDllWithoutChangingLegacyProfile");
     RunTest(TestNoManifestOnnxConvertedWeightOrCachePathIsOpened, "TestNoManifestOnnxConvertedWeightOrCachePathIsOpened");
     RunTest(TestUnknownAndNonStringBackendAreErrors, "TestUnknownAndNonStringBackendAreErrors");
     RunTest(TestInvalidPackageFailsBeforeRuntimeAndDeviceCreation, "TestInvalidPackageFailsBeforeRuntimeAndDeviceCreation");
