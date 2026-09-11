@@ -89,6 +89,14 @@ void TestValidV3HeaderMetadataDirectoryAndAlignment() {
     TEST_REQUIRE(!metadata.add_bos_token);
 }
 
+void TestOmittedAlignmentUsesGgufDefault32() {
+    gguf_fixture::TempFile file;
+    auto package = Open(SplitFixture().RemoveMetadata("general.alignment"),
+                        file, "default-alignment");
+    TEST_REQUIRE(package->RequireF32(
+        "f32", std::array<std::int64_t, 1>{48}).values.size() == 48);
+}
+
 void TestEveryMetadataScalarStringAndArrayEncodingCanBeSkippedSafely() {
     gguf_fixture::TempFile file;
     auto package = Open(SplitFixture().AddEverySkippableMetadataType(), file,
@@ -119,9 +127,14 @@ void TestCountProductAlignmentAndOffsetOverflowFail() {
     RequireContains(OpenFailure(SplitFixture(), Mutation::OffsetOverflow, "offset-overflow"), "overflow");
 }
 
-void TestZeroAndNonPowerOfTwoAlignmentFail() {
+void TestPresentMalformedAlignmentFails() {
     RequireContains(OpenFailure(SplitFixture(), Mutation::ZeroAlignment, "zero-align"), "alignment");
     RequireContains(OpenFailure(SplitFixture(), Mutation::NonPowerOfTwoAlignment, "bad-align"), "alignment");
+
+    auto wrong_type = SplitFixture().SetMetadata(
+        "general.alignment", std::int32_t{-32}).Write("wrong-align-type");
+    RequireMismatch(RequireThrows([&] { Phi4GgufPackage::Open(wrong_type.path); }),
+                    "general.alignment", "INT32", "unsigned integer metadata");
 }
 
 void TestDuplicateTensorNamesFail() {
@@ -226,7 +239,7 @@ void TestRejectsWrongArchitectureAndEveryDimension() {
     const std::vector<Case> cases = {
         {"general.architecture", std::string("llama"), "llama", "phi3"},
         {"phi3.block_count", std::uint32_t{31}, "31", "32"},
-        {"phi3.context_length", std::uint32_t{4095}, "4095", "4096"},
+        {"phi3.context_length", std::uint32_t{131071}, "131071", "131072"},
         {"phi3.embedding_length", std::uint32_t{3071}, "3071", "3072"},
         {"phi3.feed_forward_length", std::uint32_t{8191}, "8191", "8192"},
         {"phi3.attention.head_count", std::uint32_t{23}, "23", "24"},
@@ -308,15 +321,26 @@ void TestRequiresTiedQ8TokenEmbeddingAsLmHead() {
                     "token_embd.weight", "missing", "present tensor");
 }
 
-void TestRequiresOriginal4096WindowAndRejectsLongRopeBranch() {
+void TestRequiresOriginal4096WindowAndValidatesLongRopeFactors() {
     auto wrong_file = Builder().SetMetadata("phi3.rope.scaling.original_context_length", std::uint32_t{8192}).AddFullContractTensors().Write("long-window");
     auto wrong = Phi4GgufPackage::Open(wrong_file.path);
     RequireMismatch(RequireThrows([&] { wrong->ValidatePhi4Contract(gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig()); }),
                     "phi3.rope.scaling.original_context_length", "8192", "4096");
-    auto long_file = Builder().AddFullContractTensors().AddTensor("rope_factors_long.weight", {48}, gguf_fixture::kF32).Write("long-rope");
-    auto long_rope = Phi4GgufPackage::Open(long_file.path);
-    RequireMismatch(RequireThrows([&] { long_rope->ValidatePhi4Contract(gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig()); }),
-                    "rope_factors_long.weight", "present", "absent");
+
+    auto valid_file = Builder().AddFullContractTensors().AddTensor(
+        "rope_factors_long.weight", {48}, gguf_fixture::kF32).Write("long-rope");
+    auto valid = Phi4GgufPackage::Open(valid_file.path);
+    valid->ValidatePhi4Contract(gguf_fixture::ValidConfig(),
+                               gguf_fixture::ValidTokenizer(),
+                               gguf_fixture::ValidTokenizerConfig());
+
+    auto malformed_file = Builder().AddFullContractTensors().AddTensor(
+        "rope_factors_long.weight", {47}, gguf_fixture::kF32).Write("bad-long-rope");
+    auto malformed = Phi4GgufPackage::Open(malformed_file.path);
+    RequireMismatch(RequireThrows([&] { malformed->ValidatePhi4Contract(
+                        gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(),
+                        gguf_fixture::ValidTokenizerConfig()); }),
+                    "rope_factors_long.weight", "[47]", "[48]");
 }
 
 void TestValidatesOptionalShortRopeFactorsAsF32Length48() {
@@ -339,6 +363,15 @@ void TestRejectsNonFiniteOrNonPositiveRopeValues() {
                             "finite positive value");
         }
     }
+}
+
+void TestOmittedHeadDimUsesHiddenSizeDividedByAttentionHeads() {
+    ContractFixture fixture;
+    auto config = gguf_fixture::ValidConfig();
+    config.erase("head_dim");
+    fixture.package->ValidatePhi4Contract(
+        config, gguf_fixture::ValidTokenizer(),
+        gguf_fixture::ValidTokenizerConfig());
 }
 
 void TestRejectsConfigDisagreement() {
@@ -406,6 +439,17 @@ void TestDerivesStopSetFromGgufConfigAndTokenizerIds() {
     }
 }
 
+void TestAcceptsPinnedDynamicRoleChatTemplate() {
+    ContractFixture fixture;
+    auto tokenizer_config = gguf_fixture::ValidTokenizerConfig();
+    tokenizer_config["chat_template"] =
+        "{% for message in messages %}{{ '<|' + message['role'] + '|>' + "
+        "message['content'] + '<|end|>' }}{% endfor %}"
+        "{% if add_generation_prompt %}{{ '<|assistant|>' }}{% endif %}";
+    fixture.package->ValidatePhi4Contract(
+        gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), tokenizer_config);
+}
+
 void TestRejectsTokenizerVocabularyEosBosAndMarkerDisagreement() {
     ContractFixture fixture;
 
@@ -414,7 +458,7 @@ void TestRejectsTokenizerVocabularyEosBosAndMarkerDisagreement() {
     RequireMismatch(RequireThrows([&] { fixture.package->ValidatePhi4Contract(
                         gguf_fixture::ValidConfig(), tokenizer,
                         gguf_fixture::ValidTokenizerConfig()); }),
-                    "tokenizer.json distinct vocabulary ID count", "200063", "200064");
+                    "tokenizer.json distinct vocabulary ID count", "200028", "200029");
 
     for (const auto& [invalid_id, actual, expected] : std::array{
              std::tuple<nlohmann::json, std::string, std::string>{-1, "-1", "0..200063"},
@@ -431,11 +475,16 @@ void TestRejectsTokenizerVocabularyEosBosAndMarkerDisagreement() {
     }
 
     tokenizer = gguf_fixture::ValidTokenizer();
-    tokenizer["added_tokens"].erase(tokenizer["added_tokens"].begin() + 1);
+    auto& added = tokenizer["added_tokens"];
+    const auto highest = std::find_if(added.begin(), added.end(), [](const auto& item) {
+        return item.at("id") == 200028;
+    });
+    TEST_REQUIRE(highest != added.end());
+    added.erase(highest);
     RequireMismatch(RequireThrows([&] { fixture.package->ValidatePhi4Contract(
                         gguf_fixture::ValidConfig(), tokenizer,
                         gguf_fixture::ValidTokenizerConfig()); }),
-                    "tokenizer.json maximum vocabulary ID", "200062", "200063");
+                    "tokenizer.json maximum vocabulary ID", "200027", "200028");
 
     auto bos_file = Builder().SetMetadata("tokenizer.ggml.add_bos_token", true)
                         .AddFullContractTensors().Write("wrong-gguf-bos");
@@ -499,10 +548,11 @@ void TestValidationCreatesNoCorelibObjects() {
 int main() {
 #define RUN(name) RunTest(name, #name)
     RUN(TestValidV3HeaderMetadataDirectoryAndAlignment);
+    RUN(TestOmittedAlignmentUsesGgufDefault32);
     RUN(TestEveryMetadataScalarStringAndArrayEncodingCanBeSkippedSafely);
     RUN(TestTruncatedHeaderMetadataStringArrayAndTensorDirectoryFail);
     RUN(TestCountProductAlignmentAndOffsetOverflowFail);
-    RUN(TestZeroAndNonPowerOfTwoAlignmentFail);
+    RUN(TestPresentMalformedAlignmentFails);
     RUN(TestDuplicateTensorNamesFail);
     RUN(TestOutOfFileAndOverlappingTensorRangesFail);
     RUN(TestUnsupportedUnskippableMetadataTypeFails);
@@ -516,12 +566,14 @@ int main() {
     RUN(TestRejectsMissingWrongTypeWrongShapeAndWrongLengthForEveryTensorRole);
     RUN(TestRejectsMixedQuantizationAndOutputWeightPresence);
     RUN(TestRequiresTiedQ8TokenEmbeddingAsLmHead);
-    RUN(TestRequiresOriginal4096WindowAndRejectsLongRopeBranch);
+    RUN(TestRequiresOriginal4096WindowAndValidatesLongRopeFactors);
     RUN(TestValidatesOptionalShortRopeFactorsAsF32Length48);
     RUN(TestRejectsNonFiniteOrNonPositiveRopeValues);
+    RUN(TestOmittedHeadDimUsesHiddenSizeDividedByAttentionHeads);
     RUN(TestRejectsConfigDisagreement);
     RUN(TestRejectsFiniteWrongRmsValue);
     RUN(TestDerivesStopSetFromGgufConfigAndTokenizerIds);
+    RUN(TestAcceptsPinnedDynamicRoleChatTemplate);
     RUN(TestRejectsTokenizerVocabularyEosBosAndMarkerDisagreement);
     RUN(TestValidationCreatesNoCorelibObjects);
 #undef RUN

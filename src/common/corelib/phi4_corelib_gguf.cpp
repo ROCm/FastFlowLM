@@ -376,7 +376,10 @@ std::shared_ptr<Phi4GgufPackage> Phi4GgufPackage::Open(
         }
     }
 
-    const auto alignment = impl->Unsigned("general.alignment");
+    constexpr std::uint64_t kDefaultAlignment = 32;
+    const auto alignment = impl->metadata.contains("general.alignment")
+        ? impl->Unsigned("general.alignment")
+        : kDefaultAlignment;
     if (alignment == 0 || (alignment & (alignment - 1)) != 0)
         Fail("general.alignment", std::to_string(alignment), "a non-zero power of two");
 
@@ -527,7 +530,7 @@ void Phi4GgufPackage::ValidatePhi4Contract(
     };
     if (metadata.architecture != "phi3") Fail("general.architecture", metadata.architecture, "phi3");
     require_unsigned("phi3.block_count", metadata.layer_count, kLayerCount);
-    require_unsigned("phi3.context_length", metadata.context_length, kMaxSequenceLength);
+    require_unsigned("phi3.context_length", metadata.context_length, kModelContextLength);
     require_unsigned("phi3.embedding_length", metadata.hidden_size, kHiddenSize);
     require_unsigned("phi3.feed_forward_length", metadata.intermediate_size, kIntermediateSize);
     require_unsigned("phi3.attention.head_count", metadata.attention_head_count, kQueryHeadCount);
@@ -548,7 +551,8 @@ void Phi4GgufPackage::ValidatePhi4Contract(
     RequireQ8("token_embd.weight", std::array<std::int64_t, 2>{kVocabularySize, kHiddenSize});
     RequireF32("output_norm.weight", std::array<std::int64_t, 1>{kHiddenSize});
     if (impl_->tensors.contains("output.weight")) Fail("output.weight", "present", "absent (tied token_embd.weight)");
-    if (impl_->tensors.contains("rope_factors_long.weight")) Fail("rope_factors_long.weight", "present", "absent for original 4096 window");
+    if (impl_->tensors.contains("rope_factors_long.weight"))
+        RequireF32("rope_factors_long.weight", std::array<std::int64_t, 1>{48});
     for (std::size_t layer = 0; layer < static_cast<std::size_t>(kLayerCount); ++layer) {
         const auto prefix = "blk." + std::to_string(layer);
         RequireF32(prefix + ".attn_norm.weight", std::array<std::int64_t, 1>{kHiddenSize});
@@ -567,7 +571,8 @@ void Phi4GgufPackage::ValidatePhi4Contract(
     RequireJsonUnsigned(config, "intermediate_size", kIntermediateSize);
     RequireJsonUnsigned(config, "num_attention_heads", kQueryHeadCount);
     RequireJsonUnsigned(config, "num_key_value_heads", kKvHeadCount);
-    RequireJsonUnsigned(config, "head_dim", kHeadSize);
+    if (config.contains("head_dim"))
+        RequireJsonUnsigned(config, "head_dim", kHeadSize);
     RequireJsonUnsigned(config, "vocab_size", kVocabularySize);
     RequireJsonDouble(config, "rms_norm_eps", 1.0e-5);
     RequireJsonUnsigned(config, "original_max_position_embeddings", kMaxSequenceLength);
@@ -612,14 +617,6 @@ void Phi4GgufPackage::ValidatePhi4Contract(
     } catch (const nlohmann::json::exception& error) {
         Fail("tokenizer.json vocabulary", error.what(), "valid token-to-ID mappings");
     }
-    const auto actual_count = vocabulary_ids.size();
-    const auto actual_max = vocabulary_ids.empty() ? -1 : *vocabulary_ids.rbegin();
-    if (actual_max != kVocabularySize - 1)
-        Fail("tokenizer.json maximum vocabulary ID", std::to_string(actual_max),
-             std::to_string(kVocabularySize - 1));
-    if (actual_count != static_cast<std::size_t>(kVocabularySize))
-        Fail("tokenizer.json distinct vocabulary ID count", std::to_string(actual_count),
-             std::to_string(kVocabularySize));
     for (const auto& [token, expected] : std::array{
              std::pair<std::string_view, std::int64_t>{"<|end|>", 200020},
              std::pair<std::string_view, std::int64_t>{"<|endoftext|>", 199999}}) {
@@ -627,6 +624,16 @@ void Phi4GgufPackage::ValidatePhi4Contract(
         if (it == token_ids.end()) Fail(token, "missing", std::to_string(expected));
         if (it->second != expected) Fail(token, std::to_string(it->second), std::to_string(expected));
     }
+    constexpr std::int64_t kTokenizerMaximumAssignedId = 200028;
+    constexpr std::size_t kTokenizerDistinctAssignedIds = 200029;
+    const auto actual_count = vocabulary_ids.size();
+    const auto actual_max = vocabulary_ids.empty() ? -1 : *vocabulary_ids.rbegin();
+    if (actual_max != kTokenizerMaximumAssignedId)
+        Fail("tokenizer.json maximum vocabulary ID", std::to_string(actual_max),
+             std::to_string(kTokenizerMaximumAssignedId));
+    if (actual_count != kTokenizerDistinctAssignedIds)
+        Fail("tokenizer.json distinct vocabulary ID count", std::to_string(actual_count),
+             std::to_string(kTokenizerDistinctAssignedIds));
     const auto gguf_eos = impl_->Unsigned("tokenizer.ggml.eos_token_id");
     if (gguf_eos != 200020) Fail("tokenizer.ggml.eos_token_id", std::to_string(gguf_eos), "200020");
 
@@ -635,7 +642,11 @@ void Phi4GgufPackage::ValidatePhi4Contract(
     if (template_it == tokenizer_config.end() || !template_it->is_string())
         Fail("chat_template", template_it == tokenizer_config.end() ? "missing" : JsonText(*template_it), "string containing Phi-4 markers");
     const auto chat_template = template_it->get<std::string>();
-    for (const auto marker : {"<|user|>", "<|end|>", "<|assistant|>"})
+    const bool has_dynamic_role =
+        chat_template.find("'<|' + message['role'] + '|>'") != std::string::npos;
+    if (chat_template.find("<|user|>") == std::string::npos && !has_dynamic_role)
+        Fail("<|user|>", "missing from chat_template", "present in chat_template");
+    for (const auto marker : {"<|end|>", "<|assistant|>"})
         if (chat_template.find(marker) == std::string::npos)
             Fail(marker, "missing from chat_template", "present in chat_template");
 }

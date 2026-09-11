@@ -239,7 +239,7 @@ private:
         AddMetadata("general.architecture", std::string("phi3"));
         AddMetadata("general.alignment", std::uint32_t{32});
         AddMetadata("phi3.block_count", std::uint32_t{32});
-        AddMetadata("phi3.context_length", std::uint32_t{4096});
+        AddMetadata("phi3.context_length", std::uint32_t{131072});
         AddMetadata("phi3.embedding_length", std::uint32_t{3072});
         AddMetadata("phi3.feed_forward_length", std::uint32_t{8192});
         AddMetadata("phi3.attention.head_count", std::uint32_t{24});
@@ -281,10 +281,12 @@ private:
         auto metadata = metadata_;
         auto tensors = tensors_;
         std::uint32_t alignment = alignment_;
-        if (mutation_ == Mutation::ZeroAlignment) alignment = 0;
-        if (mutation_ == Mutation::NonPowerOfTwoAlignment) alignment = 24;
-        for (auto& entry : metadata)
-            if (entry.first == "general.alignment") entry.second = alignment;
+        if (mutation_ == Mutation::ZeroAlignment ||
+            mutation_ == Mutation::NonPowerOfTwoAlignment) {
+            alignment = mutation_ == Mutation::ZeroAlignment ? 0 : 24;
+            for (auto& entry : metadata)
+                if (entry.first == "general.alignment") entry.second = alignment;
+        }
         if (mutation_ == Mutation::DuplicateName && !tensors.empty()) tensors.push_back(tensors.front());
         if (mutation_ == Mutation::DtypeMismatch && !tensors.empty()) tensors.front().type = kF32;
         if (mutation_ == Mutation::ShapeMismatch && !tensors.empty()) tensors.front().logical_shape[0]--;
@@ -386,14 +388,22 @@ inline nlohmann::json ValidConfig() {
 
 inline nlohmann::json ValidTokenizer() {
     nlohmann::json vocab = nlohmann::json::object();
-    for (int id = 0; id < 200062; ++id) vocab["t" + std::to_string(id)] = id;
+    for (int id = 0; id < 200019; ++id) vocab["t" + std::to_string(id)] = id;
     vocab["<|endoftext|>"] = 199999;
     vocab["<|end|>"] = 200020;
     return {{"model", {{"vocab", std::move(vocab)}}},
             {"added_tokens", nlohmann::json::array({
-                {{"id", 200062}, {"content", "added-a"}},
-                {{"id", 200063}, {"content", "added-b"}},
+                {{"id", 200019}, {"content", "<|assistant|>"}},
                 {{"id", 200020}, {"content", "<|end|>"}},
+                {{"id", 200021}, {"content", "<|user|>"}},
+                {{"id", 200022}, {"content", "<|system|>"}},
+                {{"id", 200023}, {"content", "<|tool|>"}},
+                {{"id", 200024}, {"content", "<|/tool|>"}},
+                {{"id", 200025}, {"content", "<|tool_call|>"}},
+                {{"id", 200026}, {"content", "<|/tool_call|>"}},
+                {{"id", 200027}, {"content", "<|tool_response|>"}},
+                {{"id", 200028}, {"content", "<|tag|>"}},
+                {{"id", 200018}, {"content", "<|endofprompt|>"}},
                 {{"id", 199999}, {"content", "<|endoftext|>"}}})}};
 }
 
