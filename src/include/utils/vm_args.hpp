@@ -134,15 +134,14 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
 
         // Help has highest priority
         if (vm.count("help")) {
-            // Custom help formatting to match the desired style
             print_help(general);
-            return false; // Exit after showing help
+            parsed_args.command = "help";
+            return true;
         }
 
         if (vm.count("version")) {
-            // Custom help formatting to match the desired style
-            std::cout << "FLM v" << __FLM_VERSION__ << std::endl;
-            return false; // Exit after showing help
+            parsed_args.command = "version";
+            return true;
         }
 
         // Extract command
@@ -152,7 +151,7 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
             // Handle help and version commands directly
             if (parsed_args.command == "help") {
                 print_help(general);
-                return false; // Exit after showing help
+                return true;
             }
             
             if (parsed_args.command == "version") {
