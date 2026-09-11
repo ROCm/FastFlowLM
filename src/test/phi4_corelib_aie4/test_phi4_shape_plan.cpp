@@ -3,6 +3,7 @@
 #include "test_support.hpp"
 
 #include <algorithm>
+#include <array>
 #include <memory>
 #include <string>
 
@@ -14,20 +15,26 @@ std::shared_ptr<CorelibApi> Api() {
     return CorelibApi::ResolveForTest(fake_corelib::Resolver());
 }
 
-void TestShapePlanQueriesRows1Through4096AtGroup64() {
+void TestShapePlanQueriesOnlyExecutionBucketsAndMapsEveryRow() {
     fake_corelib::Reset();
     const auto plan = Phi4ShapePlan::Build(Api());
     const auto& state = fake_corelib::GetState();
-    TEST_REQUIRE(state.matmul_pad_calls.size() == 3 * 4096 + 1);
-    TEST_REQUIRE(state.rows_pad_calls.size() == 2 * 4096);
-    TEST_REQUIRE(state.mha_pad_calls.size() == 4096);
-    for (std::size_t row = 1; row <= 4096; ++row) {
-        TEST_REQUIRE(state.matmul_pad_calls[(row - 1) * 3].m == static_cast<std::int64_t>(row));
-        TEST_REQUIRE(state.matmul_pad_calls[(row - 1) * 3].group_size == 64);
-        TEST_REQUIRE(state.rows_pad_calls[(row - 1) * 2].group_size == 64);
-        TEST_REQUIRE(state.mha_pad_calls[row - 1].m == static_cast<std::int64_t>(row));
+    constexpr std::array<std::int64_t, 8> buckets{
+        1, 64, 128, 256, 512, 1024, 2048, 4096};
+    TEST_REQUIRE(state.matmul_pad_calls.size() == 3 * buckets.size() + 1);
+    TEST_REQUIRE(state.rows_pad_calls.size() == 2 * buckets.size());
+    TEST_REQUIRE(state.mha_pad_calls.size() == buckets.size());
+    for (std::size_t index = 0; index < buckets.size(); ++index) {
+        TEST_REQUIRE(state.matmul_pad_calls[index * 3].m == buckets[index]);
+        TEST_REQUIRE(state.matmul_pad_calls[index * 3].group_size == 64);
+        TEST_REQUIRE(state.rows_pad_calls[index * 2].m == buckets[index]);
+        TEST_REQUIRE(state.rows_pad_calls[index * 2 + 1].m == buckets[index]);
+        TEST_REQUIRE(state.mha_pad_calls[index].m == buckets[index]);
     }
+    TEST_REQUIRE(plan.ForRows(2).query_rows == 64);
     TEST_REQUIRE(plan.ForRows(65).query_rows == 128);
+    TEST_REQUIRE(plan.ForRows(257).query_rows == 512);
+    TEST_REQUIRE(plan.ForRows(4095).query_rows == 4096);
 }
 
 void TestShapePlanUsesExactQKvOutputSsmlpRmsAndLmHeadDimensions() {
@@ -92,7 +99,7 @@ void TestShapePlanFailureNamesHelperAndLogicalShape() {
 
 int main() {
 #define RUN_TEST(name) RunTest(&name, #name)
-    RUN_TEST(TestShapePlanQueriesRows1Through4096AtGroup64);
+    RUN_TEST(TestShapePlanQueriesOnlyExecutionBucketsAndMapsEveryRow);
     RUN_TEST(TestShapePlanUsesExactQKvOutputSsmlpRmsAndLmHeadDimensions);
     RUN_TEST(TestShapePlanBuildsFlatMhaDescriptor24_8_128_4096_96);
     RUN_TEST(TestShapePlanRejectsPaddedKOrNChanges);

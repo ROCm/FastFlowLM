@@ -3,6 +3,7 @@
 #include "models/phi4/phi4_corelib_constants.hpp"
 
 #include <algorithm>
+#include <array>
 #include <stdexcept>
 #include <string>
 
@@ -39,8 +40,10 @@ Phi4ShapePlan Phi4ShapePlan::Build(
     plan.lm_head_desc_ = {kHiddenSize, kVocabularySize,
                           kRequantizedGroupSize, false};
     plan.rows_.reserve(kMaxSequenceLength);
+    constexpr std::array<std::int64_t, 8> execution_rows{
+        1, 64, 128, 256, 512, 1024, 2048, 4096};
 
-    for (std::int64_t rows = 1; rows <= kMaxSequenceLength; ++rows) {
+    for (const auto rows : execution_rows) {
         Phi4RowExtents extents{};
         extents.query_rows = MatmulRows(api, rows, kHiddenSize,
                                         kQueryDimension, "query");
@@ -82,7 +85,8 @@ Phi4ShapePlan Phi4ShapePlan::Build(
             plan.maximum_extents_.rmsnorm_rows, extents.rmsnorm_rows);
         plan.maximum_extents_.flat_mha_rows = std::max(
             plan.maximum_extents_.flat_mha_rows, extents.flat_mha_rows);
-        plan.rows_.push_back(extents);
+        while (plan.rows_.size() < static_cast<std::size_t>(rows))
+            plan.rows_.push_back(extents);
     }
 
     (void)MatmulRows(api, 1, kHiddenSize, kVocabularySize, "lm_head");

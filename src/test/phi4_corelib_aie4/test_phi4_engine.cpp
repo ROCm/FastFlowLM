@@ -242,9 +242,21 @@ void TestEachLayerOrdersQKVThenMhaThenOThenSsmlpOnOneStream() {
     TEST_REQUIRE(std::all_of(calls.begin(), calls.end(), [&](const auto& c) { return c.stream == stream; }));
 }
 
+void TestPrefillStagesTheSameFp32EmbeddingIntoHiddenAndResidual() {
+    Harness h;
+    fake_corelib::GetState().tensor_writes.clear();
+    std::vector<int> ids{1, 2};
+    (void)h.engine->prefill(ids);
+    const auto& writes = fake_corelib::GetState().tensor_writes;
+    TEST_REQUIRE(writes.size() >= 2);
+    TEST_REQUIRE(writes[0].source_type == ryzenai_corelib_data_type_fp32);
+    TEST_REQUIRE(writes[1].source_type == ryzenai_corelib_data_type_fp32);
+    TEST_REQUIRE(writes[0].count == writes[1].count);
+}
+
 void TestBuffersAreZeroPaddedBeforeSubmissionForEachRowBucket() {
     Harness h([](auto& state) {
-        state.pad_row_overrides["matmul-1024"][2] = 96;
+        state.pad_row_overrides["matmul-1024"][64] = 96;
     });
     fake_corelib::GetState().tensor_writes.clear();
     std::vector<int> ids{1, 2};
@@ -518,6 +530,7 @@ int main() {
     RUN_TEST(TestDecodeUsesOneRowAndAdvancesPosition);
     RUN_TEST(TestVProjectionWritesWindowAtPositionTimes128);
     RUN_TEST(TestEachLayerOrdersQKVThenMhaThenOThenSsmlpOnOneStream);
+    RUN_TEST(TestPrefillStagesTheSameFp32EmbeddingIntoHiddenAndResidual);
     RUN_TEST(TestBuffersAreZeroPaddedBeforeSubmissionForEachRowBucket);
     RUN_TEST(TestForwardSynchronizesBeforeHostReadAndLmHeadRead);
     RUN_TEST(TestKVCachesRemainFixedAt8By4096By128);

@@ -128,11 +128,11 @@ struct phi4_corelib_aie4::Impl {
         auto rows=std::max({e.query_rows,e.kv_rows,e.output_rows,
                             e.ssmlp_rows,e.rmsnorm_rows});
         std::vector<float> input(static_cast<std::size_t>(rows*kHiddenSize),0);std::copy(decoded.begin(),decoded.end(),input.begin());
-        std::vector<std::uint16_t> zeros(static_cast<std::size_t>(rows*kHiddenSize),0);
+
         auto lease=runtime->AcquireExecution();bool submitted=false;
         try{
             api->Check(api->functions().tensor_write(hidden.get(),ryzenai_corelib_data_type_fp32,input.data(),input.size(),0),"ryzenai_corelib_tensor_write hidden");
-            api->Check(api->functions().tensor_write(residual.get(),ryzenai_corelib_data_type_bf16,zeros.data(),zeros.size(),0),"ryzenai_corelib_tensor_write residual padding");
+            api->Check(api->functions().tensor_write(residual.get(),ryzenai_corelib_data_type_fp32,input.data(),input.size(),0),"ryzenai_corelib_tensor_write residual embedding");
             const auto rms_status=api->functions().rmsnorm(
                 stream.get(),hidden.get(),ids.size(),first_norm.get(),hidden.get());
             submitted=rms_status==ryzenai_corelib_status_success ||
