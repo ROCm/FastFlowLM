@@ -58,7 +58,10 @@ ryzenai_corelib_status CorelibError::status() const noexcept { return status_; }
 const std::string& CorelibError::call() const noexcept { return call_; }
 const std::string& CorelibError::detail() const noexcept { return detail_; }
 
-CorelibApi::CorelibApi(Resolver resolver) : resolver_(std::move(resolver)) {
+CorelibApi::CorelibApi(Resolver resolver,
+                       std::filesystem::path loaded_library_path)
+    : resolver_(std::move(resolver)),
+      loaded_library_path_(std::move(loaded_library_path)) {
     void* version_symbol = resolver_("ryzenai_corelib_get_version");
     if (!version_symbol) {
         throw std::runtime_error("missing corelib symbol: ryzenai_corelib_get_version");
@@ -86,9 +89,11 @@ CorelibApi::CorelibApi(Resolver resolver) : resolver_(std::move(resolver)) {
 #undef FLM_RESOLVE_CORELIB_FUNCTION
 }
 
-std::shared_ptr<CorelibApi> CorelibApi::ResolveForTest(Resolver resolver) {
+std::shared_ptr<CorelibApi> CorelibApi::ResolveForTest(
+    Resolver resolver, std::filesystem::path loaded_library_path) {
     if (!resolver) throw std::invalid_argument("corelib resolver is empty");
-    return std::shared_ptr<CorelibApi>(new CorelibApi(std::move(resolver)));
+    return std::shared_ptr<CorelibApi>(new CorelibApi(
+        std::move(resolver), std::move(loaded_library_path)));
 }
 
 std::shared_ptr<CorelibApi> CorelibApi::Load(const std::filesystem::path& dll) {
@@ -113,7 +118,7 @@ std::shared_ptr<CorelibApi> CorelibApi::Load(const std::filesystem::path& dll) {
         return reinterpret_cast<void*>(
             GetProcAddress(static_cast<HMODULE>(module.get()), terminated.c_str()));
     };
-    return ResolveForTest(std::move(resolver));
+    return ResolveForTest(std::move(resolver), absolute_dll);
 #endif
 }
 
@@ -138,6 +143,9 @@ std::filesystem::path CorelibApi::ResolveLibraryPath(
 
 const CorelibFunctions& CorelibApi::functions() const noexcept { return functions_; }
 CorelibVersion CorelibApi::runtime_version() const noexcept { return runtime_version_; }
+const std::filesystem::path& CorelibApi::loaded_library_path() const noexcept {
+    return loaded_library_path_;
+}
 
 void CorelibApi::Check(ryzenai_corelib_status status,
                        std::string_view call) const {

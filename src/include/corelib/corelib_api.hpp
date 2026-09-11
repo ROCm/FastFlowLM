@@ -81,22 +81,26 @@ class CorelibApi final {
 public:
     using Resolver = std::function<void*(std::string_view)>;
     static std::shared_ptr<CorelibApi> Load(const std::filesystem::path& dll);
-    static std::shared_ptr<CorelibApi> ResolveForTest(Resolver resolver);
+    static std::shared_ptr<CorelibApi> ResolveForTest(
+        Resolver resolver, std::filesystem::path loaded_library_path = {});
     static std::filesystem::path ResolveLibraryPath(
         const std::filesystem::path& executable_dir);
     const CorelibFunctions& functions() const noexcept;
     CorelibVersion runtime_version() const noexcept;
+    const std::filesystem::path& loaded_library_path() const noexcept;
     void Check(ryzenai_corelib_status status, std::string_view call) const;
     void RegisterObject() const noexcept;
     void Release(void* object) const noexcept;
     std::size_t live_object_count() const noexcept;
 
 private:
-    explicit CorelibApi(Resolver resolver);
+    explicit CorelibApi(Resolver resolver,
+                        std::filesystem::path loaded_library_path = {});
 
     Resolver resolver_;
     CorelibFunctions functions_{};
     CorelibVersion runtime_version_{};
+    std::filesystem::path loaded_library_path_;
     mutable std::atomic<std::size_t> live_object_count_{0};
 };
 

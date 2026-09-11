@@ -24,6 +24,7 @@ public:
 #endif
     std::unique_lock<std::mutex> AcquireExecution();
     const std::shared_ptr<CorelibApi>& api() const noexcept;
+    const std::filesystem::path& loaded_library_path() const noexcept;
 
 private:
     explicit CorelibRuntime(std::shared_ptr<CorelibApi> api);

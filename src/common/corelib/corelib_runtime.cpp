@@ -94,4 +94,9 @@ const std::shared_ptr<CorelibApi>& CorelibRuntime::api() const noexcept {
     return api_;
 }
 
+const std::filesystem::path& CorelibRuntime::loaded_library_path() const noexcept {
+    static const std::filesystem::path empty;
+    return api_ ? api_->loaded_library_path() : empty;
+}
+
 }  // namespace flm::corelib
