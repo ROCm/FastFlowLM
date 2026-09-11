@@ -122,7 +122,7 @@ set(PHI4_FRONTEND_SOURCES
     "${FLM_SOURCE_DIR}/common/AutoModel/modeling_phi4.cpp")
 
 add_executable(test_phi4_frontend
-    test_phi4_frontend.cpp
+    test_phi4_frontend.cpp fake_corelib.cpp
     ${PHI4_FRONTEND_SOURCES}
     ${CORELIB_SOURCES}
     "${FLM_SOURCE_DIR}/common/corelib/phi4_corelib_gguf.cpp")

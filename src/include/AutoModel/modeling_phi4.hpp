@@ -30,7 +30,6 @@ private:
     bool aie4_poisoned_ = false;
     int aie4_generation_budget_ = 0;
     std::shared_ptr<flm::corelib::CorelibRuntime> corelib_runtime_;
-    std::filesystem::path aie4_corelib_path_;
 #endif
 
 #if defined(FLM_CORELIB_TESTING)

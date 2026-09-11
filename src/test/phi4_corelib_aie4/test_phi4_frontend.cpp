@@ -1,5 +1,8 @@
 #include "test_support.hpp"
 #include "gguf_fixture.hpp"
+#if defined(FLM_ENABLE_CORELIB_AIE4)
+#include "fake_corelib.hpp"
+#endif
 #include "utils/file_access.hpp"
 
 #include <AutoModel/modeling_phi4.hpp>
@@ -214,6 +217,12 @@ public:
     static const std::string& EosToken(const Phi4& model) { return model.eos_token; }
     static const std::vector<int>& EosTokenIds(const Phi4& model) { return model.eos_token_ids; }
     static bool HasBosToken(const Phi4& model) { return model.has_bos_token; }
+#if defined(FLM_ENABLE_CORELIB_AIE4)
+    static void SetRuntime(Phi4& model,
+                           std::shared_ptr<flm::corelib::CorelibRuntime> runtime) {
+        model.corelib_runtime_ = std::move(runtime);
+    }
+#endif
 };
 } // namespace flm::phi4::testing
 
@@ -284,30 +293,43 @@ void TestCorelibAie4GgufBuildsOnlyTheCorelibEngine() {
     TEST_REQUIRE(!Phi4FrontendTestAccess::HasLegacyNpu(*model));
 }
 
-void TestAie4ProfileNamesBackendAndAbsoluteCorelibDllWithoutChangingLegacyProfile() {
+#if defined(FLM_ENABLE_CORELIB_AIE4)
+void TestAie4ProfileUsesCachedRuntimeDllPathAfterEnvironmentChanges() {
     TempPackage package;
     FactoryScope scope;
-    const auto dll = std::filesystem::absolute(package.path() / "ryzenai_corelib.dll");
+    fake_corelib::Reset();
+    const auto dll_a = std::filesystem::absolute(package.path() / "runtime-a.dll");
+    const auto dll_b = std::filesystem::absolute(package.path() / "runtime-b.dll");
+    auto api = flm::corelib::CorelibApi::ResolveForTest(
+        fake_corelib::Resolver(), dll_a);
+    auto runtime = flm::corelib::CorelibRuntime::CreateForTest(std::move(api));
+
 #ifdef _WIN32
-    _putenv_s("FLM_AIE4_CORELIB_PATH", dll.string().c_str());
+    _putenv_s("FLM_AIE4_CORELIB_PATH", dll_b.string().c_str());
 #else
-    setenv("FLM_AIE4_CORELIB_PATH", dll.string().c_str(), 1);
+    setenv("FLM_AIE4_CORELIB_PATH", dll_b.string().c_str(), 1);
 #endif
     auto aie4 = Load(package, ModelInfo("corelib_aie4_gguf"), -1, false, nullptr);
+    Phi4FrontendTestAccess::SetRuntime(*aie4, runtime);
     const auto aie4_profile = aie4->show_profile();
     RequireContains(aie4_profile, "corelib_aie4_gguf");
-    RequireContains(aie4_profile, dll.string());
+    RequireContains(aie4_profile, dll_a.string());
+    TEST_REQUIRE(aie4_profile.find(dll_b.string()) == std::string::npos);
 
     auto legacy = Load(package, ModelInfo());
     const auto legacy_profile = legacy->show_profile();
     TEST_REQUIRE(legacy_profile.find("corelib_aie4_gguf") == std::string::npos);
-    TEST_REQUIRE(legacy_profile.find(dll.string()) == std::string::npos);
+    TEST_REQUIRE(legacy_profile.find(dll_a.string()) == std::string::npos);
+    aie4.reset();
+    runtime.reset();
+    flm::corelib::CorelibRuntime::ShutdownProcess();
 #ifdef _WIN32
     _putenv_s("FLM_AIE4_CORELIB_PATH", "");
 #else
     unsetenv("FLM_AIE4_CORELIB_PATH");
 #endif
 }
+#endif
 
 void TestNoManifestOnnxConvertedWeightOrCachePathIsOpened() {
     TempPackage package;
@@ -662,7 +684,7 @@ int main() {
     RunTest(TestAbsentBackendStillBuildsQ4nxPhi4Npu, "TestAbsentBackendStillBuildsQ4nxPhi4Npu");
     RunTest(TestEnabledBuildStartsAndRunsLegacyPhi4WhenCorelibDllIsMissing, "TestEnabledBuildStartsAndRunsLegacyPhi4WhenCorelibDllIsMissing");
     RunTest(TestCorelibAie4GgufBuildsOnlyTheCorelibEngine, "TestCorelibAie4GgufBuildsOnlyTheCorelibEngine");
-    RunTest(TestAie4ProfileNamesBackendAndAbsoluteCorelibDllWithoutChangingLegacyProfile, "TestAie4ProfileNamesBackendAndAbsoluteCorelibDllWithoutChangingLegacyProfile");
+    RunTest(TestAie4ProfileUsesCachedRuntimeDllPathAfterEnvironmentChanges, "TestAie4ProfileUsesCachedRuntimeDllPathAfterEnvironmentChanges");
     RunTest(TestNoManifestOnnxConvertedWeightOrCachePathIsOpened, "TestNoManifestOnnxConvertedWeightOrCachePathIsOpened");
     RunTest(TestUnknownAndNonStringBackendAreErrors, "TestUnknownAndNonStringBackendAreErrors");
     RunTest(TestInvalidPackageFailsBeforeRuntimeAndDeviceCreation, "TestInvalidPackageFailsBeforeRuntimeAndDeviceCreation");
