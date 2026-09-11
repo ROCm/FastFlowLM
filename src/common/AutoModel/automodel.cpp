@@ -157,6 +157,16 @@ void AutoModel::_shared_initialize_legacy_npu(bool enable_preemption) {
     this->enable_preemption = enable_preemption;
 }
 
+std::string AutoModel::generate_with_prompt(
+    chat_meta_info_t& meta_info,
+    lm_uniform_input_t& input,
+    int length_limit,
+    std::ostream& os,
+    std::function<bool()> is_cancelled) {
+    if (!insert(meta_info, input, is_cancelled)) return {};
+    return generate(meta_info, length_limit, os, std::move(is_cancelled));
+}
+
 bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled, void* payload, int first_len_run) {
 
     // print token history
@@ -227,6 +237,14 @@ buffer<bf16> AutoModel::_chunked_insert(chat_meta_info_t& meta_info, std::vector
     max_prefill_len = 1 << static_cast<int>(std::ceil(std::log2(max_prefill_len)));
     buffer<bf16> y;
     if (max_prefill_len < 512) {
+        if (is_cancelled()) {
+            meta_info.stop_reason = CANCEL_DETECTED;
+            buffer_.clear();
+            current_mode_ = StreamEventType::CONTENT;
+            tool_name_.clear();
+            is_in_tool_block_ = false;
+            return y;
+        }
         y = this->lm_engine->prefill(tokens, payload);
     }
     else{
@@ -238,19 +256,18 @@ buffer<bf16> AutoModel::_chunked_insert(chat_meta_info_t& meta_info, std::vector
         }
         int chunks = (tokens.size() + max_prefill_len - 1) / max_prefill_len;
         for (int i = 0; i < chunks; i++) {
+            int start = i * max_prefill_len;
+            int end = std::min(static_cast<int>(tokens.size()), (i + 1) * max_prefill_len);
+            std::vector<int> chunk_tokens(tokens.begin() + start, tokens.begin() + end);
+            header_print("FLM", "Prefill chunk " + std::to_string(i+1) + "/" + std::to_string(chunks) + " with " + std::to_string(chunk_tokens.size()) + " tokens");
             if (is_cancelled()) {
                 meta_info.stop_reason = CANCEL_DETECTED;
-                // reset stream content 
                 buffer_.clear();
                 current_mode_ = StreamEventType::CONTENT;
                 tool_name_.clear();
                 is_in_tool_block_ = false;
                 break;
             }
-            int start = i * max_prefill_len;
-            int end = std::min(static_cast<int>(tokens.size()), (i + 1) * max_prefill_len);
-            std::vector<int> chunk_tokens(tokens.begin() + start, tokens.begin() + end);
-            header_print("FLM", "Prefill chunk " + std::to_string(i+1) + "/" + std::to_string(chunks) + " with " + std::to_string(chunk_tokens.size()) + " tokens");
             buffer<bf16> chunk_y = this->lm_engine->prefill(chunk_tokens, (i == 0)? payload : nullptr);
             if (i == chunks - 1) {
                 y = chunk_y;

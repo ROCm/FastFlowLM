@@ -79,9 +79,11 @@ void Phi4::load_model(std::string model_path, json model_info,
     const Phi4Backend backend = ResolveBackend(model_info);
     if (backend == Phi4Backend::LegacyNpu2) {
 #if defined(FLM_ENABLE_CORELIB_AIE4)
+        const bool switching_from_aie4 = uses_corelib_aie4_;
         uses_corelib_aie4_ = false;
         aie4_poisoned_ = false;
         corelib_runtime_.reset();
+        if (switching_from_aie4) is_model_loaded = false;
 #endif
         _shared_load_model(model_path, model_info, default_context_length, enable_preemption);
         std::unique_ptr<causal_lm> engine;
@@ -168,10 +170,18 @@ void Phi4::setup_tokenizer(const std::string& model_path,
     if (!config.contains("chat_template") || !config["chat_template"].is_string())
         throw std::invalid_argument("Phi-4 tokenizer_config.json requires a string chat_template");
 
+    const bool aie4 = verified_tokenizer_config != nullptr;
+    std::string configured_eos;
+    if (!aie4) {
+        if (!config.contains("eos_token") || !config["eos_token"].is_string())
+            throw std::invalid_argument("Phi-4 tokenizer_config.json requires a string eos_token");
+        configured_eos = config["eos_token"].get<std::string>();
+    }
     auto chat = std::make_unique<minja::chat_template>(
-        config["chat_template"].get<std::string>(), "", "");
+        config["chat_template"].get<std::string>(), "",
+        aie4 ? "" : configured_eos);
     std::vector<int> eos;
-    if (verified_tokenizer_config) {
+    if (aie4) {
         // ValidatePhi4Contract proved these exact independent sources.
         eos = {200020, 199999};
     } else {
@@ -184,7 +194,7 @@ void Phi4::setup_tokenizer(const std::string& model_path,
     }
     has_bos_token = false;
     bos_token_id = -1;
-    eos_token.clear();
+    eos_token = std::move(configured_eos);
     eos_token_ids = std::move(eos);
     chat_tmpl = std::move(chat);
     user_system_prompt.clear();

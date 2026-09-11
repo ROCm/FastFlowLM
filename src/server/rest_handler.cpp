@@ -843,7 +843,9 @@ void RestHandler::handle_chat(const json& request,
             //std::string response_text = auto_chat_engine->generate_with_prompt(meta_info, uniformed_input, length_limit, std::cout);
             std::string response_text;
             try {
-                response_text = auto_chat_engine->generate_with_prompt(meta_info, uniformed_input, length_limit, nstream);
+                response_text = auto_chat_engine->generate_with_prompt(
+                    meta_info, uniformed_input, length_limit, nstream,
+                    [&] { return cancellation_token && cancellation_token->cancelled(); });
             } catch (const std::exception& e) {
                 json error_response = ExceptionResponse(e);
                 send_response(error_response);

@@ -383,6 +383,12 @@ public:
 
 	/// \brief Generate the tokens with prompt
 	virtual std::string generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os = std::cout) = 0;
+	std::string generate_with_prompt(
+		chat_meta_info_t& meta_info,
+		lm_uniform_input_t& input,
+		int length_limit,
+		std::ostream& os,
+		std::function<bool()> is_cancelled);
 
 	/// \brief Configure a parameter with type-erased value
 	/// \param parameter_name the name of the parameter

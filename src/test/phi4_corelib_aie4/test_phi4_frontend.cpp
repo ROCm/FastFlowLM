@@ -86,6 +86,7 @@ public:
         Write(path_ / "config.json", gguf_fixture::ValidConfig());
         Write(path_ / "tokenizer.json", gguf_fixture::ValidTokenizer());
         auto tokenizer_config = gguf_fixture::ValidTokenizerConfig();
+        tokenizer_config["eos_token"] = "<legacy-eos>";
         tokenizer_config["eos_token_id"] = nlohmann::json::array({200020, 199999});
         Write(path_ / "tokenizer_config.json", tokenizer_config);
         auto gguf = gguf_fixture::Builder().AddFullContractTensors(false).Write("frontend");
@@ -198,6 +199,9 @@ public:
         Phi4::engine_poisoned_for_testing_ = {};
     }
     static bool HasLegacyNpu(const Phi4& model) { return model.npu != nullptr; }
+    static const std::string& EosToken(const Phi4& model) { return model.eos_token; }
+    static const std::vector<int>& EosTokenIds(const Phi4& model) { return model.eos_token_ids; }
+    static bool HasBosToken(const Phi4& model) { return model.has_bos_token; }
 };
 } // namespace flm::phi4::testing
 
@@ -333,7 +337,9 @@ void TestOmittedZeroAndNegativeSentinelBudgetsCapAtRemainingWindow() {
 void TestCancellationBeforePrefillSubmitsNothing() {
     TempPackage package; FactoryScope scope; auto model = ReadyAie4(package);
     g_encoded_tokens = {1, 2}; auto meta = Meta(); auto input = Input();
-    TEST_REQUIRE(!model->insert(meta, input, [] { return true; }));
+    int checks = 0;
+    TEST_REQUIRE(!model->insert(meta, input, [&] { return ++checks >= 2; }));
+    TEST_REQUIRE(checks >= 2);
     TEST_REQUIRE(g_factory.engine->prefill_calls == 0);
     TEST_REQUIRE(meta.stop_reason == CANCEL_DETECTED);
 }
@@ -353,6 +359,43 @@ void TestCancellationReturnsOnlyAfterSynchronize() {
     // Fake calls are synchronous by construction: observing one completed call
     // before cancellation proves no work remains outstanding at return.
     TestCancellationBetweenDecodeStepsStopsWithCancelReason();
+}
+
+void TestNonStreamingChatGenerateWithPromptForwardsCancellation() {
+    TempPackage package; FactoryScope scope; auto model = ReadyAie4(package);
+    g_encoded_tokens = {1, 2}; auto meta = Meta(); auto input = Input();
+    std::ostringstream output;
+    int checks = 0;
+    AutoModel* endpoint_model = model.get();
+    const auto response = endpoint_model->generate_with_prompt(
+        meta, input, 4096, output, [&] { return ++checks >= 2; });
+    TEST_REQUIRE(response.empty());
+    TEST_REQUIRE(meta.stop_reason == CANCEL_DETECTED);
+    TEST_REQUIRE(g_factory.engine->prefill_calls == 0);
+}
+
+void TestLegacyTokenizerContractIsPreserved() {
+    TempPackage package; FactoryScope scope; auto legacy = Load(package, ModelInfo());
+    TEST_REQUIRE(Phi4FrontendTestAccess::EosToken(*legacy) == "<legacy-eos>");
+    TEST_REQUIRE(Phi4FrontendTestAccess::EosTokenIds(*legacy) ==
+                 std::vector<int>({200020, 199999}));
+
+    auto aie4 = ReadyAie4(package);
+    TEST_REQUIRE(Phi4FrontendTestAccess::EosTokenIds(*aie4) ==
+                 std::vector<int>({200020, 199999}));
+    TEST_REQUIRE(!Phi4FrontendTestAccess::HasBosToken(*aie4));
+}
+
+void TestSamePathBackendSwitchForcesLegacyInitialization() {
+    TempPackage package; FactoryScope scope;
+    Phi4 model(reinterpret_cast<flm_rt::device*>(1));
+    model.load_model(package.path().string(), ModelInfo("corelib_aie4_gguf"));
+    TEST_REQUIRE(model.uses_corelib_aie4());
+    TEST_REQUIRE(!Phi4FrontendTestAccess::HasLegacyNpu(model));
+    model.load_model(package.path().string(), ModelInfo());
+    TEST_REQUIRE(!model.uses_corelib_aie4());
+    TEST_REQUIRE(Phi4FrontendTestAccess::HasLegacyNpu(model));
+    TEST_REQUIRE(g_factory.legacy_calls == 1);
 }
 
 void TestPostSubmitErrorReturns500ClearsConversationAndLeavesModelPoisoned() {
@@ -428,6 +471,9 @@ int main() {
     RunTest(TestCancellationBeforePrefillSubmitsNothing, "TestCancellationBeforePrefillSubmitsNothing");
     RunTest(TestCancellationBetweenDecodeStepsStopsWithCancelReason, "TestCancellationBetweenDecodeStepsStopsWithCancelReason");
     RunTest(TestCancellationReturnsOnlyAfterSynchronize, "TestCancellationReturnsOnlyAfterSynchronize");
+    RunTest(TestNonStreamingChatGenerateWithPromptForwardsCancellation, "TestNonStreamingChatGenerateWithPromptForwardsCancellation");
+    RunTest(TestLegacyTokenizerContractIsPreserved, "TestLegacyTokenizerContractIsPreserved");
+    RunTest(TestSamePathBackendSwitchForcesLegacyInitialization, "TestSamePathBackendSwitchForcesLegacyInitialization");
     RunTest(TestPostSubmitErrorReturns500ClearsConversationAndLeavesModelPoisoned, "TestPostSubmitErrorReturns500ClearsConversationAndLeavesModelPoisoned");
     RunTest(TestPoisonedModelReturns500UntilReload, "TestPoisonedModelReturns500UntilReload");
     RunTest(TestEosSelfTerminatesWithoutAnExtraDecode, "TestEosSelfTerminatesWithoutAnExtraDecode");
