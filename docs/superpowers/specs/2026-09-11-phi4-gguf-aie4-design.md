@@ -186,8 +186,9 @@ Validation occurs before device weight creation wherever possible. The package m
 - every required norm present in the supported floating type;
 - `output.weight` is absent and `token_embd.weight` is used for both embedding and LM head, as in the pinned model;
 - tokenizer vocabulary size agrees with GGUF;
-- EOS IDs include 200020 and 199999;
-- BOS behavior agrees;
+- `tokenizer.json` maps `<|end|>` to 200020 and `<|endoftext|>` to 199999;
+- GGUF identifies 200020 as its EOS token and `config.json` identifies 199999, so the frontend stop set is their explicit union `{200020, 199999}`;
+- `tokenizer_config.json` has `add_bos_token == false` and the frontend does not prepend `config.json`'s BOS token;
 - the chat template contains the required Phi-4 user, end, and assistant markers.
 
 The error names the model field or tensor, its actual value, and the expected value. The loader does not repair, reinterpret, or silently accept a mismatch.
