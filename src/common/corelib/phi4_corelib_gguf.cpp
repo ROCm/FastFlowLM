@@ -208,17 +208,40 @@ std::string JsonText(const nlohmann::json& value) {
     return value.dump();
 }
 
-template <typename T>
-void RequireJson(const nlohmann::json& object, std::string_view key,
-                 const T& expected) {
+void RequireJsonString(const nlohmann::json& object, std::string_view key,
+                       std::string_view expected) {
     const auto it = object.find(std::string(key));
-    if (it == object.end()) Fail(key, "missing", nlohmann::json(expected).dump());
-    try {
-        if (it->template get<T>() != expected)
-            Fail(key, JsonText(*it), nlohmann::json(expected).dump());
-    } catch (const nlohmann::json::exception&) {
-        Fail(key, JsonText(*it), nlohmann::json(expected).dump());
+    if (it == object.end() || !it->is_string())
+        Fail(key, it == object.end() ? "missing" : JsonText(*it), std::string(expected));
+    const auto actual = it->get_ref<const std::string&>();
+    if (actual != expected) Fail(key, actual, std::string(expected));
+}
+
+void RequireJsonBoolean(const nlohmann::json& object, std::string_view key,
+                        bool expected) {
+    const auto it = object.find(std::string(key));
+    if (it == object.end() || !it->is_boolean())
+        Fail(key, it == object.end() ? "missing" : JsonText(*it), expected ? "true" : "false");
+    const auto actual = it->get<bool>();
+    if (actual != expected) Fail(key, actual ? "true" : "false", expected ? "true" : "false");
+}
+
+void RequireJsonUnsigned(const nlohmann::json& object, std::string_view key,
+                         std::uint64_t expected) {
+    const auto it = object.find(std::string(key));
+    if (it == object.end()) Fail(key, "missing", std::to_string(expected));
+    std::uint64_t actual;
+    if (it->is_number_unsigned()) {
+        actual = it->get<std::uint64_t>();
+    } else if (it->is_number_integer()) {
+        const auto signed_value = it->get<std::int64_t>();
+        if (signed_value < 0)
+            Fail(key, JsonText(*it), "non-negative integer " + std::to_string(expected));
+        actual = static_cast<std::uint64_t>(signed_value);
+    } else {
+        Fail(key, JsonText(*it), "integer " + std::to_string(expected));
     }
+    if (actual != expected) Fail(key, std::to_string(actual), std::to_string(expected));
 }
 
 void RequireJsonDouble(const nlohmann::json& object, std::string_view key,
@@ -432,6 +455,9 @@ FloatTensorView Phi4GgufPackage::RequireF32(
     const auto expected_length = TensorByteLength(kTypeF32, expected_shape, name);
     if (tensor.bytes.size() != expected_length)
         Fail(name, std::to_string(tensor.bytes.size()) + " bytes", std::to_string(expected_length) + " bytes");
+    const auto address = reinterpret_cast<std::uintptr_t>(tensor.bytes.data());
+    if (tensor.absolute_offset % alignof(float) != 0 || address % alignof(float) != 0)
+        Fail(name, "address/offset not aligned", "alignment 4");
     return {tensor.name,
             {reinterpret_cast<const float*>(tensor.bytes.data()),
              tensor.bytes.size() / sizeof(float)},
@@ -533,21 +559,36 @@ void Phi4GgufPackage::ValidatePhi4Contract(
     if (impl_->tensors.contains("rope_factors_short.weight"))
         RequireF32("rope_factors_short.weight", std::array<std::int64_t, 1>{48});
 
-    RequireJson(config, "model_type", std::string("phi3"));
-    RequireJson(config, "num_hidden_layers", int(kLayerCount));
-    RequireJson(config, "hidden_size", int(kHiddenSize));
-    RequireJson(config, "intermediate_size", int(kIntermediateSize));
-    RequireJson(config, "num_attention_heads", int(kQueryHeadCount));
-    RequireJson(config, "num_key_value_heads", int(kKvHeadCount));
-    RequireJson(config, "head_dim", int(kHeadSize));
-    RequireJson(config, "vocab_size", int(kVocabularySize));
+    RequireJsonString(config, "model_type", "phi3");
+    RequireJsonUnsigned(config, "num_hidden_layers", kLayerCount);
+    RequireJsonUnsigned(config, "hidden_size", kHiddenSize);
+    RequireJsonUnsigned(config, "intermediate_size", kIntermediateSize);
+    RequireJsonUnsigned(config, "num_attention_heads", kQueryHeadCount);
+    RequireJsonUnsigned(config, "num_key_value_heads", kKvHeadCount);
+    RequireJsonUnsigned(config, "head_dim", kHeadSize);
+    RequireJsonUnsigned(config, "vocab_size", kVocabularySize);
     RequireJsonDouble(config, "rms_norm_eps", 1.0e-5);
-    RequireJson(config, "original_max_position_embeddings", int(kMaxSequenceLength));
-    RequireJson(config, "eos_token_id", 199999);
+    RequireJsonUnsigned(config, "original_max_position_embeddings", kMaxSequenceLength);
+    RequireJsonUnsigned(config, "eos_token_id", 199999);
 
     std::set<std::int64_t> vocabulary_ids;
     std::map<std::string, std::int64_t, std::less<>> token_ids;
-    const auto add_token = [&](const std::string& token, std::int64_t id) {
+    const auto add_token = [&](const std::string& token, const nlohmann::json& encoded_id) {
+        const std::string field = "tokenizer.json token ID " + token;
+        std::uint64_t unsigned_id;
+        if (encoded_id.is_number_unsigned()) {
+            unsigned_id = encoded_id.get<std::uint64_t>();
+        } else if (encoded_id.is_number_integer()) {
+            const auto signed_id = encoded_id.get<std::int64_t>();
+            if (signed_id < 0)
+                Fail(field, std::to_string(signed_id), "0..200063");
+            unsigned_id = static_cast<std::uint64_t>(signed_id);
+        } else {
+            Fail(field, JsonText(encoded_id), "integer in 0..200063");
+        }
+        if (unsigned_id >= static_cast<std::uint64_t>(kVocabularySize))
+            Fail(field, std::to_string(unsigned_id), "0..200063");
+        const auto id = static_cast<std::int64_t>(unsigned_id);
         const auto [it, inserted] = token_ids.emplace(token, id);
         if (!inserted && it->second != id)
             Fail(token, std::to_string(id), std::to_string(it->second));
@@ -556,28 +597,27 @@ void Phi4GgufPackage::ValidatePhi4Contract(
     try {
         const auto& vocab = tokenizer.at("model").at("vocab");
         if (!vocab.is_object()) Fail("tokenizer.json model.vocab", JsonText(vocab), "object mapping tokens to IDs");
-        for (auto it = vocab.begin(); it != vocab.end(); ++it) {
-            const auto id = it.value().get<std::int64_t>();
-            add_token(it.key(), id);
-        }
+        for (auto it = vocab.begin(); it != vocab.end(); ++it)
+            add_token(it.key(), it.value());
         const auto added = tokenizer.find("added_tokens");
         if (added != tokenizer.end()) {
             if (!added->is_array()) Fail("tokenizer.json added_tokens", JsonText(*added), "array");
             for (const auto& item : *added) {
-                const auto id = item.at("id").get<std::int64_t>();
                 const auto content = item.at("content").get<std::string>();
-                add_token(content, id);
+                add_token(content, item.at("id"));
             }
         }
     } catch (const nlohmann::json::exception& error) {
         Fail("tokenizer.json vocabulary", error.what(), "valid token-to-ID mappings");
     }
     const auto actual_count = vocabulary_ids.size();
-    const auto actual_max_plus_one = vocabulary_ids.empty() ? 0 : *vocabulary_ids.rbegin() + 1;
+    const auto actual_max = vocabulary_ids.empty() ? -1 : *vocabulary_ids.rbegin();
+    if (actual_max != kVocabularySize - 1)
+        Fail("tokenizer.json maximum vocabulary ID", std::to_string(actual_max),
+             std::to_string(kVocabularySize - 1));
     if (actual_count != static_cast<std::size_t>(kVocabularySize))
-        Fail("tokenizer.json distinct vocabulary ID count", std::to_string(actual_count), std::to_string(kVocabularySize));
-    if (actual_max_plus_one != kVocabularySize)
-        Fail("tokenizer.json maximum ID plus one", std::to_string(actual_max_plus_one), std::to_string(kVocabularySize));
+        Fail("tokenizer.json distinct vocabulary ID count", std::to_string(actual_count),
+             std::to_string(kVocabularySize));
     for (const auto& [token, expected] : std::array{
              std::pair<std::string_view, std::int64_t>{"<|end|>", 200020},
              std::pair<std::string_view, std::int64_t>{"<|endoftext|>", 199999}}) {
@@ -588,7 +628,7 @@ void Phi4GgufPackage::ValidatePhi4Contract(
     const auto gguf_eos = impl_->Unsigned("tokenizer.ggml.eos_token_id");
     if (gguf_eos != 200020) Fail("tokenizer.ggml.eos_token_id", std::to_string(gguf_eos), "200020");
 
-    RequireJson(tokenizer_config, "add_bos_token", false);
+    RequireJsonBoolean(tokenizer_config, "add_bos_token", false);
     const auto template_it = tokenizer_config.find("chat_template");
     if (template_it == tokenizer_config.end() || !template_it->is_string())
         Fail("chat_template", template_it == tokenizer_config.end() ? "missing" : JsonText(*template_it), "string containing Phi-4 markers");

@@ -61,10 +61,14 @@ target_include_directories(test_real_corelib PRIVATE
 target_compile_definitions(test_real_corelib PRIVATE RYZENAI_CORELIB_STATIC=1)
 
 add_executable(test_phi4_gguf
-    test_phi4_gguf.cpp "${FLM_SOURCE_DIR}/common/corelib/phi4_corelib_gguf.cpp")
+    test_phi4_gguf.cpp fake_corelib.cpp
+    "${FLM_SOURCE_DIR}/common/corelib/corelib_api.cpp"
+    "${FLM_SOURCE_DIR}/common/corelib/phi4_corelib_gguf.cpp")
 target_include_directories(test_phi4_gguf PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}"
-    "${FLM_SOURCE_DIR}/include")
+    "${FLM_SOURCE_DIR}/include"
+    "${RYZENAI_CORELIB_INCLUDE_DIR}")
+target_compile_definitions(test_phi4_gguf PRIVATE RYZENAI_CORELIB_STATIC=1)
 
 # Compile the actual production frontend translation unit in both feature modes.
 # Empty declaration-only FFmpeg headers isolate this compile check from an

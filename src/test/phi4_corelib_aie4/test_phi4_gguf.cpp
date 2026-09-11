@@ -1,4 +1,6 @@
 #include "gguf_fixture.hpp"
+#include "fake_corelib.hpp"
+#include "corelib/corelib_api.hpp"
 #include "models/phi4/phi4_corelib_constants.hpp"
 #include "models/phi4/phi4_corelib_gguf.hpp"
 #include "test_support.hpp"
@@ -10,6 +12,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -28,6 +31,41 @@ std::string OpenFailure(Builder builder, Mutation mutation,
                         std::string_view label) {
     auto file = builder.Apply(mutation).Write(label);
     return RequireThrows([&] { Phi4GgufPackage::Open(file.path); });
+}
+
+void RequireMismatch(std::string_view error, std::string_view field,
+                     std::string_view actual, std::string_view expected) {
+    RequireContains(error, field);
+    RequireContains(error, "actual " + std::string(actual));
+    RequireContains(error, "expected " + std::string(expected));
+}
+
+void RequireDiagnostic(std::string_view error, std::string_view field) {
+    RequireContains(error, field);
+    RequireContains(error, "actual");
+    RequireContains(error, "expected");
+}
+
+struct TensorRole {
+    std::string name;
+    std::vector<std::uint64_t> shape;
+    std::uint32_t type;
+};
+
+std::vector<TensorRole> RequiredTensorRoles() {
+    std::vector<TensorRole> roles = {
+        {"token_embd.weight", {200064, 3072}, gguf_fixture::kQ8_0},
+        {"output_norm.weight", {3072}, gguf_fixture::kF32}};
+    for (std::size_t layer = 0; layer < 32; ++layer) {
+        const auto prefix = "blk." + std::to_string(layer);
+        roles.push_back({prefix + ".attn_norm.weight", {3072}, gguf_fixture::kF32});
+        roles.push_back({prefix + ".ffn_norm.weight", {3072}, gguf_fixture::kF32});
+        roles.push_back({prefix + ".attn_qkv.weight", {5120, 3072}, gguf_fixture::kQ8_0});
+        roles.push_back({prefix + ".attn_output.weight", {3072, 3072}, gguf_fixture::kQ8_0});
+        roles.push_back({prefix + ".ffn_up.weight", {16384, 3072}, gguf_fixture::kQ8_0});
+        roles.push_back({prefix + ".ffn_down.weight", {3072, 8192}, gguf_fixture::kQ8_0});
+    }
+    return roles;
 }
 
 Builder SplitFixture() {
@@ -149,6 +187,14 @@ void TestViewsPointIntoTheReadOnlyMapping() {
     const auto second = package->RequireF32("f32", std::array<std::int64_t, 1>{48});
     TEST_REQUIRE(first.values.data() == second.values.data());
     TEST_REQUIRE(first.values.size() == 48);
+
+    auto misaligned_file = Builder().AddTensor("misaligned-f32", {48}, gguf_fixture::kF32)
+                               .Apply(Mutation::MisalignedF32).Write("misaligned-f32");
+    auto misaligned = Phi4GgufPackage::Open(misaligned_file.path);
+    const auto error = RequireThrows([&] {
+        misaligned->RequireF32("misaligned-f32", std::array<std::int64_t, 1>{48});
+    });
+    RequireMismatch(error, "misaligned-f32", "address", "alignment 4");
 }
 
 struct ContractFixture {
@@ -177,7 +223,7 @@ void TestRejectsWrongArchitectureAndEveryDimension() {
         auto package = Phi4GgufPackage::Open(file.path);
         const auto error = RequireThrows([&] { package->ValidatePhi4Contract(
             gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig()); });
-        RequireContains(error, field); RequireContains(error, "actual"); RequireContains(error, "expected");
+        RequireDiagnostic(error, field);
     }
 }
 
@@ -192,40 +238,47 @@ void TestRejectsMissingWrongTypeWrongShapeAndWrongLengthForEveryTensorRole() {
         valid.package->RequireQ8(prefix + ".ffn_up.weight", std::array<std::int64_t, 2>{16384, 3072});
         valid.package->RequireQ8(prefix + ".ffn_down.weight", std::array<std::int64_t, 2>{3072, 8192});
     }
-    std::vector<std::string> required_names = {"token_embd.weight", "output_norm.weight"};
-    for (std::size_t layer = 0; layer < 32; ++layer) {
-        const auto prefix = "blk." + std::to_string(layer);
-        required_names.push_back(prefix + ".attn_norm.weight");
-        required_names.push_back(prefix + ".ffn_norm.weight");
-        required_names.push_back(prefix + ".attn_qkv.weight");
-        required_names.push_back(prefix + ".attn_output.weight");
-        required_names.push_back(prefix + ".ffn_up.weight");
-        required_names.push_back(prefix + ".ffn_down.weight");
-    }
     const nlohmann::json unused;
-    for (const auto& name : required_names) {
-        auto file = Builder().AddFullContractTensors().RemoveTensor(name).Write("missing-role");
-        auto package = Phi4GgufPackage::Open(file.path);
-        const auto error = RequireThrows([&] {
-            package->ValidatePhi4Contract(unused, unused, unused);
+    for (const auto& role : RequiredTensorRoles()) {
+        auto missing_file = Builder().AddFullContractTensors().RemoveTensor(role.name).Write("missing-role");
+        auto missing = Phi4GgufPackage::Open(missing_file.path);
+        RequireMismatch(RequireThrows([&] { missing->ValidatePhi4Contract(unused, unused, unused); }),
+                        role.name, "missing", "present tensor");
+
+        const auto wrong_type = role.type == gguf_fixture::kQ8_0
+                                    ? gguf_fixture::kF32 : gguf_fixture::kQ8_0;
+        auto type_file = Builder().AddFullContractTensors()
+                             .MutateTensor(role.name, wrong_type, role.shape).Write("wrong-type");
+        auto type_package = Phi4GgufPackage::Open(type_file.path);
+        RequireMismatch(RequireThrows([&] { type_package->ValidatePhi4Contract(unused, unused, unused); }),
+                        role.name, wrong_type == gguf_fixture::kF32 ? "F32" : "Q8_0",
+                        role.type == gguf_fixture::kF32 ? "F32" : "Q8_0");
+
+        auto wrong_shape = role.shape;
+        --wrong_shape.front();
+        auto shape_file = Builder().AddFullContractTensors()
+                              .MutateTensor(role.name, role.type, wrong_shape).Write("wrong-shape");
+        auto shape_package = Phi4GgufPackage::Open(shape_file.path);
+        const auto shape_error = RequireThrows([&] {
+            shape_package->ValidatePhi4Contract(unused, unused, unused);
         });
-        RequireContains(error, name); RequireContains(error, "actual missing"); RequireContains(error, "expected");
+        RequireContains(shape_error, role.name);
+        RequireContains(shape_error, "actual [");
+        RequireContains(shape_error, "expected [");
+
+        auto length_file = Builder().AddFullContractTensors()
+                               .TruncateTensorPayload(role.name).Write("wrong-length");
+        const auto length_error = RequireThrows([&] { Phi4GgufPackage::Open(length_file.path); });
+        RequireMismatch(length_error, role.name + " range", "out-of-file range",
+                        "range within mapped file");
     }
-    auto type_file = Builder().AddFullContractTensors().MutateTensor("blk.0.attn_output.weight", gguf_fixture::kF32, {3072,3072}).Write("wrong-type");
-    auto type_package = Phi4GgufPackage::Open(type_file.path);
-    auto error = RequireThrows([&] { type_package->ValidatePhi4Contract(gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig()); });
-    RequireContains(error, "blk.0.attn_output.weight"); RequireContains(error, "actual F32"); RequireContains(error, "expected Q8_0");
-    auto shape_file = Builder().AddFullContractTensors().MutateTensor("blk.0.ffn_down.weight", gguf_fixture::kQ8_0, {3072,8160}).Write("wrong-shape");
-    auto shape_package = Phi4GgufPackage::Open(shape_file.path);
-    error = RequireThrows([&] { shape_package->ValidatePhi4Contract(gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig()); });
-    RequireContains(error, "blk.0.ffn_down.weight"); RequireContains(error, "actual"); RequireContains(error, "expected");
-    RequireContains(OpenFailure(Builder().AddTensor("x", {32}, gguf_fixture::kQ8_0), Mutation::PayloadLengthMismatch, "wrong-length"), "range");
 }
 
 void TestRejectsMixedQuantizationAndOutputWeightPresence() {
     auto mixed_file = Builder().AddFullContractTensors().MutateTensor("token_embd.weight", gguf_fixture::kF32, {200064,3072}).Write("mixed");
     auto mixed = Phi4GgufPackage::Open(mixed_file.path);
-    RequireContains(RequireThrows([&] { mixed->ValidatePhi4Contract(gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig()); }), "token_embd.weight");
+    RequireMismatch(RequireThrows([&] { mixed->ValidatePhi4Contract(gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig()); }),
+                    "token_embd.weight", "F32", "Q8_0");
     auto output_file = Builder().AddFullContractTensors().AddTensor("output.weight", {200064,3072}, gguf_fixture::kQ8_0).Write("output-weight");
     auto output = Phi4GgufPackage::Open(output_file.path);
     const auto error = RequireThrows([&] { output->ValidatePhi4Contract(gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig()); });
@@ -235,16 +288,19 @@ void TestRejectsMixedQuantizationAndOutputWeightPresence() {
 void TestRequiresTiedQ8TokenEmbeddingAsLmHead() {
     auto file = Builder().AddFullContractTensors().RemoveTensor("token_embd.weight").Write("untied");
     auto package = Phi4GgufPackage::Open(file.path);
-    RequireContains(RequireThrows([&] { package->ValidatePhi4Contract(gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig()); }), "token_embd.weight");
+    RequireMismatch(RequireThrows([&] { package->ValidatePhi4Contract(gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig()); }),
+                    "token_embd.weight", "missing", "present tensor");
 }
 
 void TestRequiresOriginal4096WindowAndRejectsLongRopeBranch() {
     auto wrong_file = Builder().SetMetadata("phi3.rope.scaling.original_context_length", std::uint32_t{8192}).AddFullContractTensors().Write("long-window");
     auto wrong = Phi4GgufPackage::Open(wrong_file.path);
-    RequireContains(RequireThrows([&] { wrong->ValidatePhi4Contract(gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig()); }), "phi3.rope.scaling.original_context_length");
+    RequireMismatch(RequireThrows([&] { wrong->ValidatePhi4Contract(gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig()); }),
+                    "phi3.rope.scaling.original_context_length", "8192", "4096");
     auto long_file = Builder().AddFullContractTensors().AddTensor("rope_factors_long.weight", {48}, gguf_fixture::kF32).Write("long-rope");
     auto long_rope = Phi4GgufPackage::Open(long_file.path);
-    RequireContains(RequireThrows([&] { long_rope->ValidatePhi4Contract(gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig()); }), "rope_factors_long.weight");
+    RequireMismatch(RequireThrows([&] { long_rope->ValidatePhi4Contract(gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig()); }),
+                    "rope_factors_long.weight", "present", "absent");
 }
 
 void TestValidatesOptionalShortRopeFactorsAsF32Length48() {
@@ -253,7 +309,8 @@ void TestValidatesOptionalShortRopeFactorsAsF32Length48() {
     absent->ValidatePhi4Contract(gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig());
     auto wrong_file = Builder().AddFullContractTensors(false).AddTensor("rope_factors_short.weight", {47}, gguf_fixture::kF32).Write("wrong-short-rope");
     auto wrong = Phi4GgufPackage::Open(wrong_file.path);
-    RequireContains(RequireThrows([&] { wrong->ValidatePhi4Contract(gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig()); }), "rope_factors_short.weight");
+    RequireDiagnostic(RequireThrows([&] { wrong->ValidatePhi4Contract(gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig()); }),
+                      "rope_factors_short.weight");
 }
 
 void TestRejectsNonFiniteOrNonPositiveRopeValues() {
@@ -261,7 +318,8 @@ void TestRejectsNonFiniteOrNonPositiveRopeValues() {
         for (const float value : {0.0f, -1.0f, std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN()}) {
             auto file = Builder().SetMetadata(field, value).AddFullContractTensors().Write("bad-rope-value");
             auto package = Phi4GgufPackage::Open(file.path);
-            RequireContains(RequireThrows([&] { package->ValidatePhi4Contract(gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig()); }), field);
+            RequireDiagnostic(RequireThrows([&] { package->ValidatePhi4Contract(gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig()); }),
+                              field);
         }
     }
 }
@@ -272,36 +330,140 @@ void TestRejectsConfigDisagreement() {
         {"model_type", "other"}, {"num_hidden_layers", 31}, {"hidden_size", 3071},
         {"intermediate_size", 8191}, {"num_attention_heads", 23}, {"num_key_value_heads", 7},
         {"head_dim", 127}, {"vocab_size", 200063}, {"rms_norm_eps", 2.0e-5},
-        {"original_max_position_embeddings", 4095}};
+        {"original_max_position_embeddings", 4095},
+        {"hidden_size", 3072.0},
+        {"hidden_size", std::uint64_t{4294970368ULL}},
+        {"eos_token_id", 199999.0}};
     for (const auto& [field, value] : cases) {
         auto config = gguf_fixture::ValidConfig(); config[field] = value;
         const auto error = RequireThrows([&] { fixture.package->ValidatePhi4Contract(config, gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig()); });
-        RequireContains(error, field); RequireContains(error, "actual"); RequireContains(error, "expected");
+        RequireDiagnostic(error, field);
     }
 }
 
 void TestDerivesStopSetFromGgufConfigAndTokenizerIds() {
     ContractFixture fixture;
-    fixture.package->ValidatePhi4Contract(gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig());
+    fixture.package->ValidatePhi4Contract(gguf_fixture::ValidConfig(),
+        gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig());
+
+    auto gguf_file = Builder().SetMetadata("tokenizer.ggml.eos_token_id", std::uint32_t{1})
+                         .AddFullContractTensors().Write("wrong-gguf-eos");
+    auto gguf = Phi4GgufPackage::Open(gguf_file.path);
+    RequireMismatch(RequireThrows([&] { gguf->ValidatePhi4Contract(
+                        gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(),
+                        gguf_fixture::ValidTokenizerConfig()); }),
+                    "tokenizer.ggml.eos_token_id", "1", "200020");
+
+    auto config = gguf_fixture::ValidConfig();
+    config["eos_token_id"] = 1;
+    RequireMismatch(RequireThrows([&] { fixture.package->ValidatePhi4Contract(
+                        config, gguf_fixture::ValidTokenizer(),
+                        gguf_fixture::ValidTokenizerConfig()); }),
+                    "eos_token_id", "1", "199999");
+
+    for (const auto& [token, expected] : std::array{
+             std::pair<std::string, int>{"<|end|>", 200020},
+             std::pair<std::string, int>{"<|endoftext|>", 199999}}) {
+        auto tokenizer = gguf_fixture::ValidTokenizer();
+        tokenizer["model"]["vocab"][token] = 1;
+        for (auto& added : tokenizer["added_tokens"])
+            if (added["content"] == token) added["id"] = 1;
+        RequireMismatch(RequireThrows([&] { fixture.package->ValidatePhi4Contract(
+                            gguf_fixture::ValidConfig(), tokenizer,
+                            gguf_fixture::ValidTokenizerConfig()); }),
+                        token, "1", std::to_string(expected));
+    }
 }
 
 void TestRejectsTokenizerVocabularyEosBosAndMarkerDisagreement() {
     ContractFixture fixture;
+
     auto tokenizer = gguf_fixture::ValidTokenizer();
-    tokenizer["model"]["vocab"]["<|end|>"] = 1;
-    RequireContains(RequireThrows([&] { fixture.package->ValidatePhi4Contract(gguf_fixture::ValidConfig(), tokenizer, gguf_fixture::ValidTokenizerConfig()); }), "<|end|>");
-    auto config = gguf_fixture::ValidConfig(); config["eos_token_id"] = 1;
-    RequireContains(RequireThrows([&] { fixture.package->ValidatePhi4Contract(config, gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig()); }), "eos_token_id");
-    auto tokenizer_config = gguf_fixture::ValidTokenizerConfig(); tokenizer_config["add_bos_token"] = true;
-    RequireContains(RequireThrows([&] { fixture.package->ValidatePhi4Contract(gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), tokenizer_config); }), "add_bos_token");
-    tokenizer_config = gguf_fixture::ValidTokenizerConfig(); tokenizer_config["chat_template"] = "<|user|><|assistant|>";
-    RequireContains(RequireThrows([&] { fixture.package->ValidatePhi4Contract(gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), tokenizer_config); }), "<|end|>");
+    tokenizer["model"]["vocab"].erase("t0");
+    RequireMismatch(RequireThrows([&] { fixture.package->ValidatePhi4Contract(
+                        gguf_fixture::ValidConfig(), tokenizer,
+                        gguf_fixture::ValidTokenizerConfig()); }),
+                    "tokenizer.json distinct vocabulary ID count", "200063", "200064");
+
+    for (const auto& [invalid_id, actual, expected] : std::array{
+             std::tuple<nlohmann::json, std::string, std::string>{-1, "-1", "0..200063"},
+             std::tuple<nlohmann::json, std::string, std::string>{200064, "200064", "0..200063"},
+             std::tuple<nlohmann::json, std::string, std::string>{
+                 std::numeric_limits<std::uint64_t>::max(), "18446744073709551615", "0..200063"},
+             std::tuple<nlohmann::json, std::string, std::string>{0.0, "0.0", "integer in 0..200063"}}) {
+        tokenizer = gguf_fixture::ValidTokenizer();
+        tokenizer["model"]["vocab"]["t0"] = invalid_id;
+        RequireMismatch(RequireThrows([&] { fixture.package->ValidatePhi4Contract(
+                            gguf_fixture::ValidConfig(), tokenizer,
+                            gguf_fixture::ValidTokenizerConfig()); }),
+                        "tokenizer.json token ID", actual, expected);
+    }
+
+    tokenizer = gguf_fixture::ValidTokenizer();
+    tokenizer["added_tokens"].erase(tokenizer["added_tokens"].begin() + 1);
+    RequireMismatch(RequireThrows([&] { fixture.package->ValidatePhi4Contract(
+                        gguf_fixture::ValidConfig(), tokenizer,
+                        gguf_fixture::ValidTokenizerConfig()); }),
+                    "tokenizer.json maximum vocabulary ID", "200062", "200063");
+
+    auto bos_file = Builder().SetMetadata("tokenizer.ggml.add_bos_token", true)
+                        .AddFullContractTensors().Write("wrong-gguf-bos");
+    auto bos = Phi4GgufPackage::Open(bos_file.path);
+    RequireMismatch(RequireThrows([&] { bos->ValidatePhi4Contract(
+                        gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(),
+                        gguf_fixture::ValidTokenizerConfig()); }),
+                    "tokenizer.ggml.add_bos_token", "true", "false");
+
+    auto tokenizer_config = gguf_fixture::ValidTokenizerConfig();
+    tokenizer_config["add_bos_token"] = true;
+    RequireMismatch(RequireThrows([&] { fixture.package->ValidatePhi4Contract(
+                        gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(),
+                        tokenizer_config); }),
+                    "add_bos_token", "true", "false");
+    tokenizer_config = gguf_fixture::ValidTokenizerConfig();
+    tokenizer_config["chat_template"] = "<|user|><|assistant|>";
+    RequireMismatch(RequireThrows([&] { fixture.package->ValidatePhi4Contract(
+                        gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(),
+                        tokenizer_config); }),
+                    "<|end|>", "missing from chat_template", "present in chat_template");
+}
+
+void TestRejectsFiniteWrongRmsValue() {
+    auto file = Builder().SetMetadata("phi3.attention.layer_norm_rms_epsilon", 2.0e-5f)
+                    .AddFullContractTensors().Write("wrong-rms");
+    auto package = Phi4GgufPackage::Open(file.path);
+    const auto error = RequireThrows([&] { package->ValidatePhi4Contract(
+        gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(),
+        gguf_fixture::ValidTokenizerConfig()); });
+    RequireContains(error, "phi3.attention.layer_norm_rms_epsilon");
+    RequireContains(error, "actual 0.000020");
+    RequireContains(error, "expected 0.000010");
 }
 
 void TestValidationCreatesNoCorelibObjects() {
+    fake_corelib::Reset();
+    auto api = flm::corelib::CorelibApi::ResolveForTest(fake_corelib::Resolver());
+    fake_corelib::GetState().call_counts.clear();
+
     ContractFixture fixture;
-    fixture.package->ValidatePhi4Contract(gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig());
+    auto config = gguf_fixture::ValidConfig();
+    config["hidden_size"] = 1;
+    RequireMismatch(RequireThrows([&] { fixture.package->ValidatePhi4Contract(
+                        config, gguf_fixture::ValidTokenizer(),
+                        gguf_fixture::ValidTokenizerConfig()); }),
+                    "hidden_size", "1", "3072");
+
+    for (const auto name : {"ryzenai_corelib_create_stream",
+                            "ryzenai_corelib_create_device_tensor",
+                            "ryzenai_corelib_create_tensor_window",
+                            "ryzenai_corelib_matmul_bf16_weights_create_gguf_requantized",
+                            "ryzenai_corelib_ssmlp_bf16_weights_create_gguf_requantized",
+                            "ryzenai_corelib_rmsnorm_bf16_weights_create_scale"})
+        TEST_REQUIRE(fake_corelib::GetState().call_counts[name] == 0);
+    TEST_REQUIRE(fake_corelib::GetState().live_objects == 0);
+    (void)api;
 }
+
 }  // namespace
 
 int main() {
@@ -328,6 +490,7 @@ int main() {
     RUN(TestValidatesOptionalShortRopeFactorsAsF32Length48);
     RUN(TestRejectsNonFiniteOrNonPositiveRopeValues);
     RUN(TestRejectsConfigDisagreement);
+    RUN(TestRejectsFiniteWrongRmsValue);
     RUN(TestDerivesStopSetFromGgufConfigAndTokenizerIds);
     RUN(TestRejectsTokenizerVocabularyEosBosAndMarkerDisagreement);
     RUN(TestValidationCreatesNoCorelibObjects);

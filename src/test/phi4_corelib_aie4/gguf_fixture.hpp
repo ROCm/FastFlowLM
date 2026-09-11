@@ -36,6 +36,7 @@ enum class Mutation {
     DtypeMismatch,
     ShapeMismatch,
     PayloadLengthMismatch,
+    MisalignedF32,
 };
 
 struct ArrayValue {
@@ -186,6 +187,11 @@ public:
         return *this;
     }
 
+    Builder& TruncateTensorPayload(std::string name) {
+        truncated_tensor_ = std::move(name);
+        return *this;
+    }
+
     Builder& AddEverySkippableMetadataType() {
         AddMetadata("skip.u8", std::uint8_t{1});
         AddMetadata("skip.i8", std::int8_t{-1});
@@ -282,6 +288,20 @@ private:
         if (mutation_ == Mutation::DuplicateName && !tensors.empty()) tensors.push_back(tensors.front());
         if (mutation_ == Mutation::DtypeMismatch && !tensors.empty()) tensors.front().type = kF32;
         if (mutation_ == Mutation::ShapeMismatch && !tensors.empty()) tensors.front().logical_shape[0]--;
+        if (!truncated_tensor_.empty()) {
+            const auto it = std::find_if(tensors.begin(), tensors.end(), [&](const Tensor& tensor) {
+                return tensor.name == truncated_tensor_;
+            });
+            if (it == tensors.end()) throw std::runtime_error("fixture tensor not found: " + truncated_tensor_);
+            Tensor target = std::move(*it);
+            tensors.erase(it);
+            tensors.push_back(std::move(target));
+        }
+        if (mutation_ == Mutation::MisalignedF32) {
+            alignment = 1;
+            for (auto& entry : metadata)
+                if (entry.first == "general.alignment") entry.second = std::uint32_t{1};
+        }
 
         std::vector<std::byte> out;
         Append(out, std::uint32_t{0x46554747}); Append(out, std::uint32_t{3});
@@ -297,6 +317,7 @@ private:
             }
         }
         std::uint64_t running = 0;
+        std::vector<std::size_t> encoded_offset_positions;
         for (std::size_t index = 0; index < tensors.size(); ++index) {
             auto& tensor = tensors[index];
             if (mutation_ == Mutation::ProductOverflow && index == 0)
@@ -320,16 +341,25 @@ private:
             Append(out, static_cast<std::uint32_t>(tensor.logical_shape.size()));
             for (auto it = tensor.logical_shape.rbegin(); it != tensor.logical_shape.rend(); ++it)
                 Append(out, *it);
-            Append(out, tensor.type); Append(out, tensor.offset);
+            Append(out, tensor.type);
+            encoded_offset_positions.push_back(out.size());
+            Append(out, tensor.offset);
         }
         if (mutation_ == Mutation::TruncatedDirectory && !out.empty()) {
             out.pop_back(); return {std::move(out), static_cast<std::uint64_t>(out.size())};
         }
         const auto data_start = alignment == 0 ? static_cast<std::uint64_t>(out.size())
             : (static_cast<std::uint64_t>(out.size()) + alignment - 1) & ~(std::uint64_t(alignment) - 1);
+        if (mutation_ == Mutation::MisalignedF32 && !tensors.empty()) {
+            const std::uint64_t offset = (1 + alignof(float) - data_start % alignof(float)) % alignof(float);
+            const auto encoded = std::bit_cast<std::array<std::byte, sizeof(offset)>>(offset);
+            std::copy(encoded.begin(), encoded.end(), out.begin() + encoded_offset_positions.front());
+            running = std::max(running, offset + TensorBytes(tensors.front()));
+        }
         out.resize(static_cast<std::size_t>(data_start), std::byte{0});
         std::uint64_t file_size = data_start + running;
-        if (mutation_ == Mutation::PayloadLengthMismatch && file_size > data_start) --file_size;
+        if ((mutation_ == Mutation::PayloadLengthMismatch || !truncated_tensor_.empty()) &&
+            file_size > data_start) --file_size;
         if (mutation_ == Mutation::TruncatedString) {
             const auto impossible = std::bit_cast<std::array<std::byte, sizeof(std::uint64_t)>>(
                 std::numeric_limits<std::uint64_t>::max());
@@ -342,6 +372,7 @@ private:
     std::vector<std::pair<std::string, MetadataValue>> metadata_;
     std::vector<Tensor> tensors_;
     Mutation mutation_ = Mutation::None;
+    std::string truncated_tensor_;
 };
 
 inline nlohmann::json ValidConfig() {
