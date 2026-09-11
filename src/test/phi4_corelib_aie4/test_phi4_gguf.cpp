@@ -40,10 +40,13 @@ void RequireMismatch(std::string_view error, std::string_view field,
     RequireContains(error, "expected " + std::string(expected));
 }
 
-void RequireDiagnostic(std::string_view error, std::string_view field) {
-    RequireContains(error, field);
-    RequireContains(error, "actual");
-    RequireContains(error, "expected");
+std::string ShapeText(const std::vector<std::uint64_t>& shape) {
+    std::string result = "[";
+    for (std::size_t index = 0; index < shape.size(); ++index) {
+        if (index != 0) result += ',';
+        result += std::to_string(shape[index]);
+    }
+    return result + ']';
 }
 
 struct TensorRole {
@@ -139,9 +142,9 @@ void TestRequireQ8AndRequireF32ReportNameActualAndExpected() {
     gguf_fixture::TempFile file;
     auto package = Open(SplitFixture(), file, "requires");
     auto error = RequireThrows([&] { package->RequireQ8("f32", std::array<std::int64_t, 1>{48}); });
-    RequireContains(error, "f32"); RequireContains(error, "actual F32"); RequireContains(error, "expected Q8_0");
+    RequireMismatch(error, "f32", "F32", "Q8_0");
     error = RequireThrows([&] { package->RequireF32("f32", std::array<std::int64_t, 1>{47}); });
-    RequireContains(error, "f32"); RequireContains(error, "48"); RequireContains(error, "47");
+    RequireMismatch(error, "f32", "[48]", "[47]");
 }
 
 void TestAttentionQkvReturnsThreeZeroCopyWholeRowViews() {
@@ -177,7 +180,9 @@ void TestSplitRejectsNonIntegralQ8RowBoundary() {
     builder.AddTensor("blk.0.attn_qkv.weight", {5120, 3073}, gguf_fixture::kQ8_0);
     auto file = builder.Write("bad-row");
     auto package = Phi4GgufPackage::Open(file.path);
-    RequireContains(RequireThrows([&] { package->AttentionQkv(0); }), "row");
+    RequireMismatch(RequireThrows([&] { package->AttentionQkv(0); }),
+                    "blk.0.attn_qkv.weight", "3073",
+                    "Q8_0 whole-row width divisible by 32");
 }
 
 void TestViewsPointIntoTheReadOnlyMapping() {
@@ -212,18 +217,31 @@ void TestAcceptsExactPhi3Phi4Contract() {
 }
 
 void TestRejectsWrongArchitectureAndEveryDimension() {
-    const std::vector<std::pair<std::string, gguf_fixture::MetadataValue>> cases = {
-        {"general.architecture", std::string("llama")}, {"phi3.block_count", std::uint32_t{31}},
-        {"phi3.context_length", std::uint32_t{4095}}, {"phi3.embedding_length", std::uint32_t{3071}},
-        {"phi3.feed_forward_length", std::uint32_t{8191}}, {"phi3.attention.head_count", std::uint32_t{23}},
-        {"phi3.attention.head_count_kv", std::uint32_t{7}}, {"phi3.rope.dimension_count", std::uint32_t{95}},
-        {"tokenizer.ggml.tokens", gguf_fixture::ArrayValue{0, 200063, std::vector<std::byte>(200063)}}};
-    for (const auto& [field, value] : cases) {
-        auto file = Builder().SetMetadata(field, value).AddFullContractTensors().Write("wrong-field");
+    struct Case {
+        std::string field;
+        gguf_fixture::MetadataValue value;
+        std::string actual;
+        std::string expected;
+    };
+    const std::vector<Case> cases = {
+        {"general.architecture", std::string("llama"), "llama", "phi3"},
+        {"phi3.block_count", std::uint32_t{31}, "31", "32"},
+        {"phi3.context_length", std::uint32_t{4095}, "4095", "4096"},
+        {"phi3.embedding_length", std::uint32_t{3071}, "3071", "3072"},
+        {"phi3.feed_forward_length", std::uint32_t{8191}, "8191", "8192"},
+        {"phi3.attention.head_count", std::uint32_t{23}, "23", "24"},
+        {"phi3.attention.head_count_kv", std::uint32_t{7}, "7", "8"},
+        {"phi3.rope.dimension_count", std::uint32_t{95}, "95", "96"},
+        {"tokenizer.ggml.tokens",
+         gguf_fixture::ArrayValue{0, 200063, std::vector<std::byte>(200063)},
+         "200063", "200064"}};
+    for (const auto& test_case : cases) {
+        auto file = Builder().SetMetadata(test_case.field, test_case.value)
+                        .AddFullContractTensors().Write("wrong-field");
         auto package = Phi4GgufPackage::Open(file.path);
         const auto error = RequireThrows([&] { package->ValidatePhi4Contract(
             gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig()); });
-        RequireDiagnostic(error, field);
+        RequireMismatch(error, test_case.field, test_case.actual, test_case.expected);
     }
 }
 
@@ -262,9 +280,7 @@ void TestRejectsMissingWrongTypeWrongShapeAndWrongLengthForEveryTensorRole() {
         const auto shape_error = RequireThrows([&] {
             shape_package->ValidatePhi4Contract(unused, unused, unused);
         });
-        RequireContains(shape_error, role.name);
-        RequireContains(shape_error, "actual [");
-        RequireContains(shape_error, "expected [");
+        RequireMismatch(shape_error, role.name, ShapeText(wrong_shape), ShapeText(role.shape));
 
         auto length_file = Builder().AddFullContractTensors()
                                .TruncateTensorPayload(role.name).Write("wrong-length");
@@ -282,7 +298,7 @@ void TestRejectsMixedQuantizationAndOutputWeightPresence() {
     auto output_file = Builder().AddFullContractTensors().AddTensor("output.weight", {200064,3072}, gguf_fixture::kQ8_0).Write("output-weight");
     auto output = Phi4GgufPackage::Open(output_file.path);
     const auto error = RequireThrows([&] { output->ValidatePhi4Contract(gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig()); });
-    RequireContains(error, "output.weight"); RequireContains(error, "actual present"); RequireContains(error, "expected absent");
+    RequireMismatch(error, "output.weight", "present", "absent (tied token_embd.weight)");
 }
 
 void TestRequiresTiedQ8TokenEmbeddingAsLmHead() {
@@ -309,8 +325,8 @@ void TestValidatesOptionalShortRopeFactorsAsF32Length48() {
     absent->ValidatePhi4Contract(gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig());
     auto wrong_file = Builder().AddFullContractTensors(false).AddTensor("rope_factors_short.weight", {47}, gguf_fixture::kF32).Write("wrong-short-rope");
     auto wrong = Phi4GgufPackage::Open(wrong_file.path);
-    RequireDiagnostic(RequireThrows([&] { wrong->ValidatePhi4Contract(gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig()); }),
-                      "rope_factors_short.weight");
+    RequireMismatch(RequireThrows([&] { wrong->ValidatePhi4Contract(gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig()); }),
+                    "rope_factors_short.weight", "[47]", "[48]");
 }
 
 void TestRejectsNonFiniteOrNonPositiveRopeValues() {
@@ -318,26 +334,41 @@ void TestRejectsNonFiniteOrNonPositiveRopeValues() {
         for (const float value : {0.0f, -1.0f, std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN()}) {
             auto file = Builder().SetMetadata(field, value).AddFullContractTensors().Write("bad-rope-value");
             auto package = Phi4GgufPackage::Open(file.path);
-            RequireDiagnostic(RequireThrows([&] { package->ValidatePhi4Contract(gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig()); }),
-                              field);
+            RequireMismatch(RequireThrows([&] { package->ValidatePhi4Contract(gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig()); }),
+                            field, std::to_string(static_cast<double>(value)),
+                            "finite positive value");
         }
     }
 }
 
 void TestRejectsConfigDisagreement() {
     ContractFixture fixture;
-    const std::vector<std::pair<std::string, nlohmann::json>> cases = {
-        {"model_type", "other"}, {"num_hidden_layers", 31}, {"hidden_size", 3071},
-        {"intermediate_size", 8191}, {"num_attention_heads", 23}, {"num_key_value_heads", 7},
-        {"head_dim", 127}, {"vocab_size", 200063}, {"rms_norm_eps", 2.0e-5},
-        {"original_max_position_embeddings", 4095},
-        {"hidden_size", 3072.0},
-        {"hidden_size", std::uint64_t{4294970368ULL}},
-        {"eos_token_id", 199999.0}};
-    for (const auto& [field, value] : cases) {
-        auto config = gguf_fixture::ValidConfig(); config[field] = value;
-        const auto error = RequireThrows([&] { fixture.package->ValidatePhi4Contract(config, gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig()); });
-        RequireDiagnostic(error, field);
+    struct Case {
+        std::string field;
+        nlohmann::json value;
+        std::string actual;
+        std::string expected;
+    };
+    const std::vector<Case> cases = {
+        {"model_type", "other", "other", "phi3"},
+        {"num_hidden_layers", 31, "31", "32"},
+        {"hidden_size", 3071, "3071", "3072"},
+        {"intermediate_size", 8191, "8191", "8192"},
+        {"num_attention_heads", 23, "23", "24"},
+        {"num_key_value_heads", 7, "7", "8"},
+        {"head_dim", 127, "127", "128"},
+        {"vocab_size", 200063, "200063", "200064"},
+        {"rms_norm_eps", 2.0e-5, "2e-05", "0.000010"},
+        {"original_max_position_embeddings", 4095, "4095", "4096"},
+        {"hidden_size", 3072.0, "3072.0", "integer 3072"},
+        {"hidden_size", std::uint64_t{4294970368ULL}, "4294970368", "3072"},
+        {"eos_token_id", 199999.0, "199999.0", "integer 199999"}};
+    for (const auto& test_case : cases) {
+        auto config = gguf_fixture::ValidConfig();
+        config[test_case.field] = test_case.value;
+        const auto error = RequireThrows([&] { fixture.package->ValidatePhi4Contract(
+            config, gguf_fixture::ValidTokenizer(), gguf_fixture::ValidTokenizerConfig()); });
+        RequireMismatch(error, test_case.field, test_case.actual, test_case.expected);
     }
 }
 
@@ -435,9 +466,8 @@ void TestRejectsFiniteWrongRmsValue() {
     const auto error = RequireThrows([&] { package->ValidatePhi4Contract(
         gguf_fixture::ValidConfig(), gguf_fixture::ValidTokenizer(),
         gguf_fixture::ValidTokenizerConfig()); });
-    RequireContains(error, "phi3.attention.layer_norm_rms_epsilon");
-    RequireContains(error, "actual 0.000020");
-    RequireContains(error, "expected 0.000010");
+    RequireMismatch(error, "phi3.attention.layer_norm_rms_epsilon",
+                    "0.000020", "0.000010");
 }
 
 void TestValidationCreatesNoCorelibObjects() {
