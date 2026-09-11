@@ -229,6 +229,22 @@ void TestExecutionLeaseSerializesTwoThreads() {
     CorelibRuntime::ShutdownProcess();
 }
 
+void TestShutdownReleasesExecutionLockBeforeDestroyingRuntimeOwner() {
+    fake_corelib::Reset();
+    bool destroyed = false;
+    bool destroyed_while_locked = false;
+    CorelibRuntime::SetDestructionObserverForTest([&](bool execution_lock_held) {
+        destroyed = true;
+        destroyed_while_locked = execution_lock_held;
+    });
+    auto runtime = CorelibRuntime::CreateForTest(ValidApi());
+    runtime.reset();
+    CorelibRuntime::ShutdownProcess();
+    CorelibRuntime::SetDestructionObserverForTest({});
+    TEST_REQUIRE(destroyed);
+    TEST_REQUIRE(!destroyed_while_locked);
+}
+
 void TestCleanupRunsAfterTheLastObjectAndOnlyOnce() {
     fake_corelib::Reset();
     const auto runtime = CorelibRuntime::CreateForTest(ValidApi());
@@ -273,6 +289,7 @@ int main() {
     RUN_TEST(TestEveryUniqueObjectReleasesExactlyOnceAfterMoves);
     RUN_TEST(TestRuntimeRunsDependencySelftestAndRequiresDeviceContext);
     RUN_TEST(TestExecutionLeaseSerializesTwoThreads);
+    RUN_TEST(TestShutdownReleasesExecutionLockBeforeDestroyingRuntimeOwner);
     RUN_TEST(TestCleanupRunsAfterTheLastObjectAndOnlyOnce);
 #undef RUN_TEST
     return 0;

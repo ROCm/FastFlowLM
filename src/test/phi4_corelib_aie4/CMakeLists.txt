@@ -58,7 +58,8 @@ target_include_directories(test_corelib_api PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}"
     "${FLM_SOURCE_DIR}/include"
     "${RYZENAI_CORELIB_INCLUDE_DIR}")
-target_compile_definitions(test_corelib_api PRIVATE RYZENAI_CORELIB_STATIC=1)
+target_compile_definitions(test_corelib_api PRIVATE
+    RYZENAI_CORELIB_STATIC=1 FLM_CORELIB_TESTING=1)
 
 add_executable(test_real_corelib test_real_corelib.cpp ${CORELIB_SOURCES})
 target_include_directories(test_real_corelib PRIVATE
