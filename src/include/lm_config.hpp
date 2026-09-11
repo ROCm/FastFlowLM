@@ -8,6 +8,7 @@
 
 #include "typedef.hpp"
 #include "utils/utils.hpp"
+#include "utils/file_access.hpp"
 #include "nlohmann/json.hpp"
 #include <filesystem>
 
@@ -99,7 +100,9 @@ class LM_Config{
 
         /// \brief read model_path/config.json into _json_config
         void _load_json(){
-            std::ifstream file(this->model_path + "/config.json");
+            const auto config_path = std::filesystem::path(this->model_path) / "config.json";
+            flm::file_access::ObserveOpen(config_path);
+            std::ifstream file(config_path);
             if (!file.is_open()){
                 std::cerr << "Failed to open file: " << this->model_path << std::endl;
                 exit(1);

@@ -1,5 +1,6 @@
 #include "test_support.hpp"
 #include "gguf_fixture.hpp"
+#include "utils/file_access.hpp"
 
 #include <AutoModel/modeling_phi4.hpp>
 #include "server.hpp"
@@ -145,7 +146,11 @@ void ExpectRequestError(F&& action, int code, bool cleared, std::string_view tex
 
 } // namespace
 
-Tokenizer::Tokenizer(const std::string&) { is_doubled_encoded = false; }
+Tokenizer::Tokenizer(const std::string& model_path) {
+    flm::file_access::ObserveOpen(
+        std::filesystem::path(model_path) / "tokenizer.json");
+    is_doubled_encoded = false;
+}
 Tokenizer::~Tokenizer() = default;
 std::vector<int> Tokenizer::encode(const std::string&) { return g_encoded_tokens; }
 std::string Tokenizer::decode(const std::vector<int>&) { return "decoded"; }
@@ -179,7 +184,7 @@ public:
     static void InstallFactory() {
         g_factory = {};
         g_opened_paths.clear();
-        flm::phi4::testing::SetFileOpenObserver([](const auto& path) {
+        flm::file_access::SetOpenObserver([](const auto& path) {
             g_opened_paths.push_back(path);
         });
         Phi4::engine_factory_for_testing_ =
@@ -202,7 +207,7 @@ public:
     static void RemoveFactory() {
         Phi4::engine_factory_for_testing_ = {};
         Phi4::engine_poisoned_for_testing_ = {};
-        flm::phi4::testing::SetFileOpenObserver({});
+        flm::file_access::SetOpenObserver({});
     }
     static bool HasLegacyNpu(const Phi4& model) { return model.npu != nullptr; }
     static const std::string& EosToken(const Phi4& model) { return model.eos_token; }
@@ -294,8 +299,8 @@ void TestNoManifestOnnxConvertedWeightOrCachePathIsOpened() {
     }
     std::sort(names.begin(), names.end());
     TEST_REQUIRE(names == std::vector<std::string>({
-        "Phi-4-mini-instruct.Q8_0.gguf", "config.json", "tokenizer.json",
-        "tokenizer_config.json"}));
+        "Phi-4-mini-instruct.Q8_0.gguf", "config.json", "config.json",
+        "tokenizer.json", "tokenizer.json", "tokenizer_config.json"}));
 }
 
 void TestUnknownAndNonStringBackendAreErrors() {
@@ -539,18 +544,20 @@ void TestCancellationAndCapacityErrorsLeaveTheServerQueueUsable() {
     TempPackage package;
     FactoryScope scope;
     auto model = ReadyAie4(package);
-    NPURequestQueue queue(2);
+    NPURequestCoordinator coordinator(3);
     bool cancelled = false;
     bool capacity_failed = false;
     bool queued_request_ran = false;
+    int completion_callbacks = 0;
+    int accelerator_releases = 0;
 
-    TEST_REQUIRE(queue.try_enqueue([&] {
+    TEST_REQUIRE(coordinator.try_enqueue([&] {
         auto meta = Meta();
         auto input = Input(1);
         g_encoded_tokens = {1};
         cancelled = !model->insert(meta, input, [] { return true; });
     }));
-    TEST_REQUIRE(queue.try_enqueue([&] {
+    TEST_REQUIRE(coordinator.try_enqueue([&] {
         auto meta = Meta();
         auto input = Input(1);
         g_encoded_tokens.assign(4095, 1);
@@ -559,21 +566,38 @@ void TestCancellationAndCapacityErrorsLeaveTheServerQueueUsable() {
             capacity_failed = error.http_code() == 400;
         }
     }));
-    TEST_REQUIRE(!queue.try_enqueue([&] { queued_request_ran = true; }));
-
-    TEST_REQUIRE(queue.run_next());
-    TEST_REQUIRE(cancelled);
-    TEST_REQUIRE(queue.try_enqueue([&] {
+    TEST_REQUIRE(coordinator.try_enqueue([&] {
         auto meta = Meta();
         auto input = Input(1);
         g_encoded_tokens = {1};
         queued_request_ran = model->insert(meta, input);
     }));
-    TEST_REQUIRE(queue.run_next());
+    TEST_REQUIRE(!coordinator.try_enqueue([] {}));
+
+    std::function<void(std::function<void()>)> execute;
+    const auto complete = [&] {
+        ++completion_callbacks;
+        coordinator.complete_current(execute, [&] { ++accelerator_releases; },
+                                     std::chrono::milliseconds(0));
+    };
+    execute = [&](std::function<void()> task) {
+        NPURequestCompletionGuard completion(complete);
+        task();
+        completion.complete();
+        completion.complete();
+    };
+    {
+        NPURequestCompletionGuard active_request_completion(complete);
+        active_request_completion.complete();
+        active_request_completion.complete();
+    }
+
+    TEST_REQUIRE(cancelled);
     TEST_REQUIRE(capacity_failed);
-    TEST_REQUIRE(queue.run_next());
     TEST_REQUIRE(queued_request_ran);
-    TEST_REQUIRE(queue.empty());
+    TEST_REQUIRE(coordinator.empty());
+    TEST_REQUIRE(completion_callbacks == 4);
+    TEST_REQUIRE(accelerator_releases == 1);
 }
 
 } // namespace

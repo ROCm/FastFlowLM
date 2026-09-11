@@ -578,25 +578,15 @@ void WebServer::do_accept() {
 
 ///@brief process_next_npu_request Handles one queued NPU task at a time
 void WebServer::process_next_npu_request() {
-    if (npu_request_queue_.empty()) {
-        NPUAccessManager::release_npu_access();
-        return; // Queue is empty, NPU is free
-    }
-
-    // NPU cooldown before running the next queued task.
-    constexpr auto npu_cooldown = std::chrono::milliseconds(333);
-    std::this_thread::sleep_for(npu_cooldown);
-
-    auto task = npu_request_queue_.take_next();
-    if (!task) {
-        NPUAccessManager::release_npu_access();
-        return;
-    }
-    const auto remaining = npu_request_queue_.size();
-    header_print("🟡 ", "Dequeuing NPU request (" + std::to_string(remaining) + " remaining)...");
-
-    // Post the task to be executed by the io_context.
-    net::post(ioc, std::move(task));
+    npu_request_coordinator_.complete_current(
+        [this](NPURequestCoordinator::Task task) {
+            const auto remaining = npu_request_coordinator_.size();
+            header_print("🟡 ", "Dequeuing NPU request (" +
+                std::to_string(remaining) + " remaining)...");
+            net::post(ioc, std::move(task));
+        },
+        [] { NPUAccessManager::release_npu_access(); },
+        std::chrono::milliseconds(333));
 }
 
 ///@brief handle request
@@ -788,13 +778,13 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
         return false;
     }
 
-    if (!npu_request_queue_.try_enqueue([this, process_task]() {
+    if (!npu_request_coordinator_.try_enqueue([this, process_task]() {
             process_task(true);
         })) {
         res.result(http::status::service_unavailable);
         res.body() = json{
             {"error", "NPU is in use and request queue is full (limit: " +
-                std::to_string(npu_request_queue_.capacity()) +
+                std::to_string(npu_request_coordinator_.capacity()) +
                 "). Please try again later."}
         }.dump();
         res.set(http::field::content_type, "application/json");
@@ -804,8 +794,8 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
     }
 
     header_print("🕒 ", "NPU busy, request queued (" +
-        std::to_string(npu_request_queue_.size()) + "/" +
-        std::to_string(npu_request_queue_.capacity()) + "): " + key);
+        std::to_string(npu_request_coordinator_.size()) + "/" +
+        std::to_string(npu_request_coordinator_.capacity()) + "): " + key);
     return true;
 }
 

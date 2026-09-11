@@ -1,6 +1,7 @@
 #include "models/phi4/phi4_corelib_gguf.hpp"
 
 #include "models/phi4/phi4_corelib_constants.hpp"
+#include "utils/file_access.hpp"
 
 #define NOMINMAX
 #include <windows.h>
@@ -331,6 +332,7 @@ Phi4GgufPackage::~Phi4GgufPackage() = default;
 std::shared_ptr<Phi4GgufPackage> Phi4GgufPackage::Open(
     const std::filesystem::path& gguf_path) {
     auto impl = std::make_unique<Impl>();
+    flm::file_access::ObserveOpen(gguf_path);
     impl->file = CreateFileW(gguf_path.c_str(), GENERIC_READ, FILE_SHARE_READ,
                              nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (impl->file == INVALID_HANDLE_VALUE)
