@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <bit>
+#include <chrono>
 #include <cstring>
 #include <memory>
+#include <thread>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -343,6 +345,14 @@ struct TypedFake<Tag, Result (*)(Args...)> {
                              std::is_same_v<Tag, ssmlp_tag> ||
                              std::is_same_v<Tag, rmsnorm_tag> ||
                              std::is_same_v<Tag, flat_mha_tag>) {
+            if (state.statuses.contains("test_observe_dispatch_concurrency")) {
+                const int active = ++state.active_leases;
+                int maximum = state.maximum_active_leases.load();
+                while (active > maximum &&
+                       !state.maximum_active_leases.compare_exchange_weak(maximum, active)) {}
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                --state.active_leases;
+            }
             const auto status = Status(Tag::name);
             if (status != ryzenai_corelib_status_success) return status;
             fake_corelib::DispatchRecord record{};
@@ -366,6 +376,16 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             if (record.output && static_cast<FakeObject*>(record.output)->kind == "window")
                 record.window_offset = static_cast<FakeObject*>(record.output)->window_offset;
             state.dispatches.push_back(record);
+            if constexpr (std::is_same_v<Tag, matmul_tag>) {
+                auto* output = static_cast<FakeObject*>(record.output);
+                if (output && output->shape == std::vector<std::int64_t>({1, 200064})) {
+                    EnsureStorage(*output);
+                    const auto value = Bf16(1.0f);
+                    std::memcpy(output->storage->bytes->data() +
+                                    output->window_offset * TypeBytes(output->data_type),
+                                &value, sizeof(value));
+                }
+            }
             state.work_in_flight = true;
             if (state.fail_after_submit == Tag::name) return ryzenai_corelib_status_failure;
             return ryzenai_corelib_status_success;

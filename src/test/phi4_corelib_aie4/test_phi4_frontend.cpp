@@ -233,6 +233,35 @@ void TestAbsentBackendStillBuildsQ4nxPhi4Npu() {
     TEST_REQUIRE(Phi4FrontendTestAccess::HasLegacyNpu(*model));
 }
 
+void TestDefaultBuildCanConstructAndRunLegacyPhi4WithoutCorelib() {
+    TempPackage package;
+    FactoryScope scope;
+    auto model = Load(package, ModelInfo());
+    g_encoded_tokens = {1};
+    g_samples = {7};
+    g_sample_index = 0;
+    auto meta = Meta();
+    auto input = Input(1);
+    std::ostringstream output;
+    TEST_REQUIRE(model->insert(meta, input));
+    (void)model->generate(meta, 1, output);
+    TEST_REQUIRE(g_factory.legacy_calls == 1);
+    TEST_REQUIRE(g_factory.aie4_calls == 0);
+}
+
+void TestEnabledBuildStartsAndRunsLegacyPhi4WhenCorelibDllIsMissing() {
+    TempPackage package;
+    FactoryScope scope;
+    g_factory.throw_for_aie4 = true;
+    auto model = Load(package, ModelInfo());
+    g_encoded_tokens = {1};
+    auto meta = Meta();
+    auto input = Input(1);
+    TEST_REQUIRE(model->insert(meta, input));
+    TEST_REQUIRE(g_factory.legacy_calls == 1);
+    TEST_REQUIRE(g_factory.aie4_calls == 0);
+}
+
 void TestCorelibAie4GgufBuildsOnlyTheCorelibEngine() {
     TempPackage package;
     FactoryScope scope;
@@ -241,6 +270,20 @@ void TestCorelibAie4GgufBuildsOnlyTheCorelibEngine() {
     TEST_REQUIRE(g_factory.aie4_calls == 1);
     TEST_REQUIRE(model->uses_corelib_aie4());
     TEST_REQUIRE(!Phi4FrontendTestAccess::HasLegacyNpu(*model));
+}
+
+void TestNoManifestOnnxConvertedWeightOrCachePathIsOpened() {
+    TempPackage package;
+    FactoryScope scope;
+    std::vector<std::string> names;
+    for (const auto& entry : std::filesystem::directory_iterator(package.path()))
+        names.push_back(entry.path().filename().string());
+    std::sort(names.begin(), names.end());
+    TEST_REQUIRE(names == std::vector<std::string>({
+        "Phi-4-mini-instruct.Q8_0.gguf", "config.json", "tokenizer.json",
+        "tokenizer_config.json"}));
+    auto model = Load(package, ModelInfo("corelib_aie4_gguf"), -1, false, nullptr);
+    TEST_REQUIRE(model->uses_corelib_aie4());
 }
 
 void TestUnknownAndNonStringBackendAreErrors() {
@@ -274,6 +317,30 @@ void TestMissingCorelibFailsOnlyWhenAie4ModelLoads() {
     FactoryScope scope;
     g_factory.throw_for_aie4 = true;
     RequireContains(RequireThrows([&] { (void)Load(package, ModelInfo("corelib_aie4_gguf"), -1, false, nullptr); }), "missing corelib");
+    TEST_REQUIRE(g_factory.legacy_calls == 0);
+}
+
+void TestAie4SelectionWithMissingDllFailsWithoutChangingBackend() {
+    TempPackage package;
+    FactoryScope scope;
+    Phi4 model(nullptr);
+    g_factory.throw_for_aie4 = true;
+    RequireContains(RequireThrows([&] {
+        model.load_model(package.path().string(), ModelInfo("corelib_aie4_gguf"));
+    }), "missing corelib");
+    TEST_REQUIRE(!model.uses_corelib_aie4());
+    TEST_REQUIRE(g_factory.aie4_calls == 1);
+    TEST_REQUIRE(g_factory.legacy_calls == 0);
+}
+
+void TestAie4SelectionCannotReachQ4nxPhi4NpuOrCpuFallback() {
+    TempPackage package;
+    FactoryScope scope;
+    g_factory.throw_for_aie4 = true;
+    (void)RequireThrows([&] {
+        (void)Load(package, ModelInfo("corelib_aie4_gguf"), -1, false, nullptr);
+    });
+    TEST_REQUIRE(g_factory.aie4_calls == 1);
     TEST_REQUIRE(g_factory.legacy_calls == 0);
 }
 
@@ -456,15 +523,49 @@ void TestQueueCompletionIsExactlyOnceAndIncludesCompletionsEndpoint() {
     }
 }
 
+void TestCancellationAndCapacityErrorsLeaveTheServerQueueUsable() {
+    TempPackage package;
+    FactoryScope scope;
+    auto model = ReadyAie4(package);
+    int completions = 0;
+    auto input = Input(1);
+    {
+        auto meta = Meta();
+        NPURequestCompletionGuard cancelled([&] { ++completions; });
+        g_encoded_tokens = {1};
+        TEST_REQUIRE(!model->insert(meta, input, [] { return true; }));
+    }
+    {
+        auto meta = Meta();
+        NPURequestCompletionGuard capacity_error([&] { ++completions; });
+        g_encoded_tokens.assign(4095, 1);
+        auto over_capacity = Input(1);
+        ExpectRequestError([&] { (void)model->insert(meta, over_capacity); },
+                           400, false, "4095");
+    }
+    {
+        auto meta = Meta();
+        NPURequestCompletionGuard next_request([&] { ++completions; });
+        g_encoded_tokens = {1};
+        TEST_REQUIRE(model->insert(meta, input));
+    }
+    TEST_REQUIRE(completions == 3);
+    TEST_REQUIRE(g_factory.engine->prefill_calls == 1);
+}
+
 } // namespace
 
 int main() {
 #if defined(FLM_ENABLE_CORELIB_AIE4)
     RunTest(TestAbsentBackendStillBuildsQ4nxPhi4Npu, "TestAbsentBackendStillBuildsQ4nxPhi4Npu");
+    RunTest(TestEnabledBuildStartsAndRunsLegacyPhi4WhenCorelibDllIsMissing, "TestEnabledBuildStartsAndRunsLegacyPhi4WhenCorelibDllIsMissing");
     RunTest(TestCorelibAie4GgufBuildsOnlyTheCorelibEngine, "TestCorelibAie4GgufBuildsOnlyTheCorelibEngine");
+    RunTest(TestNoManifestOnnxConvertedWeightOrCachePathIsOpened, "TestNoManifestOnnxConvertedWeightOrCachePathIsOpened");
     RunTest(TestUnknownAndNonStringBackendAreErrors, "TestUnknownAndNonStringBackendAreErrors");
     RunTest(TestInvalidPackageFailsBeforeRuntimeAndDeviceCreation, "TestInvalidPackageFailsBeforeRuntimeAndDeviceCreation");
     RunTest(TestMissingCorelibFailsOnlyWhenAie4ModelLoads, "TestMissingCorelibFailsOnlyWhenAie4ModelLoads");
+    RunTest(TestAie4SelectionWithMissingDllFailsWithoutChangingBackend, "TestAie4SelectionWithMissingDllFailsWithoutChangingBackend");
+    RunTest(TestAie4SelectionCannotReachQ4nxPhi4NpuOrCpuFallback, "TestAie4SelectionCannotReachQ4nxPhi4NpuOrCpuFallback");
     RunTest(TestOrdinaryModelLoadsAfterAnAie4RuntimeLoadFailure, "TestOrdinaryModelLoadsAfterAnAie4RuntimeLoadFailure");
     RunTest(TestPreemptionIsRejectedForTheAie4Route, "TestPreemptionIsRejectedForTheAie4Route");
     RunTest(TestRenderedPromptPlusExplicitBudgetMayEqual4095, "TestRenderedPromptPlusExplicitBudgetMayEqual4095");
@@ -481,7 +582,9 @@ int main() {
     RunTest(TestEosSelfTerminatesWithoutAnExtraDecode, "TestEosSelfTerminatesWithoutAnExtraDecode");
     RunTest(TestCliAndAllFourGenerationEndpointsPassTheSameBudgetSemantics, "TestCliAndAllFourGenerationEndpointsPassTheSameBudgetSemantics");
     RunTest(TestQueueCompletionIsExactlyOnceAndIncludesCompletionsEndpoint, "TestQueueCompletionIsExactlyOnceAndIncludesCompletionsEndpoint");
+    RunTest(TestCancellationAndCapacityErrorsLeaveTheServerQueueUsable, "TestCancellationAndCapacityErrorsLeaveTheServerQueueUsable");
 #else
+    RunTest(TestDefaultBuildCanConstructAndRunLegacyPhi4WithoutCorelib, "TestDefaultBuildCanConstructAndRunLegacyPhi4WithoutCorelib");
     RunTest(TestFeatureOffRejectsAie4TagWithoutIncludingCorelibHeaders, "TestFeatureOffRejectsAie4TagWithoutIncludingCorelibHeaders");
 #endif
     std::cout << "test_phi4_frontend: PASS\n";

@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -119,6 +120,37 @@ void TestQkvAndGateUpPointersMatchExactMappedSubranges() {
     TEST_REQUIRE(records[3].pointers[0] == qkv.values[2].bytes.data());
     TEST_REQUIRE(records[5].pointers[0] == gate_up.values[0].bytes.data());
     TEST_REQUIRE(records[5].pointers[1] == gate_up.values[1].bytes.data());
+}
+
+void TestValidatedPackageFlowsDirectlyIntoAllRequantizedCreates() {
+    Harness h;
+    const auto& records = fake_corelib::GetState().weight_creates;
+    for (std::size_t layer = 0; layer < 32; ++layer) {
+        const auto base = 1 + layer * 5;
+        const auto qkv = h.package->AttentionQkv(layer);
+        const auto gate_up = h.package->GateUp(layer);
+        TEST_REQUIRE(records[base + 0].pointers ==
+                     std::vector<const void*>{qkv.values[0].bytes.data()});
+        TEST_REQUIRE(records[base + 1].pointers ==
+                     std::vector<const void*>{qkv.values[1].bytes.data()});
+        TEST_REQUIRE(records[base + 2].pointers ==
+                     std::vector<const void*>{qkv.values[2].bytes.data()});
+        const std::vector<const void*> output_pointer{
+            h.package->RequireQ8("blk." + std::to_string(layer) +
+                ".attn_output.weight", std::array<std::int64_t, 2>{3072, 3072})
+                .bytes.data()};
+        TEST_REQUIRE(records[base + 3].pointers == output_pointer);
+        const std::vector<const void*> mlp_pointers{
+            gate_up.values[0].bytes.data(), gate_up.values[1].bytes.data(),
+            h.package->RequireQ8("blk." + std::to_string(layer) +
+                ".ffn_down.weight", std::array<std::int64_t, 2>{3072, 8192})
+                .bytes.data()};
+        TEST_REQUIRE(records[base + 4].pointers == mlp_pointers);
+    }
+    const std::vector<const void*> embedding_pointer{
+        h.package->RequireQ8("token_embd.weight",
+            std::array<std::int64_t, 2>{200064, 3072}).bytes.data()};
+    TEST_REQUIRE(records.back().pointers == embedding_pointer);
 }
 
 void TestNormsAndEpsilonReachCorelibAsBf16() {
@@ -401,6 +433,33 @@ void TestCancellationBoundaryLeavesNoOutstandingFakeWork() {
     (void)RequireThrows([&] { (void)h.engine->forward(0); });
     TEST_REQUIRE(!fake_corelib::GetState().work_in_flight);
 }
+
+void TestTwoConcurrentAie4RequestsNeverOverlapDispatch() {
+    Harness h;
+    auto second_engine = std::make_unique<phi4_corelib_aie4>(
+        LM_Config{}, h.package, h.runtime);
+    fake_corelib::GetState().maximum_active_leases = 0;
+    fake_corelib::GetState().statuses["test_observe_dispatch_concurrency"] =
+        ryzenai_corelib_status_success;
+    std::thread first([&] { (void)h.engine->forward(1); });
+    std::thread second([&] { (void)second_engine->forward(2); });
+    first.join();
+    second.join();
+    TEST_REQUIRE(fake_corelib::GetState().maximum_active_leases == 1);
+}
+
+void TestTenSequentialLoadsReleaseEveryObjectAndNeverEmitAllZeroLogits() {
+    for (int cycle = 0; cycle < 10; ++cycle) {
+        {
+            Harness h;
+            const auto logits = h.engine->forward(cycle);
+            const auto* bits = reinterpret_cast<const std::uint16_t*>(logits.data());
+            TEST_REQUIRE(std::any_of(bits, bits + logits.size(),
+                                     [](std::uint16_t value) { return value != 0; }));
+        }
+        TEST_REQUIRE(fake_corelib::GetState().live_objects == 0);
+    }
+}
 }  // namespace
 
 int main() {
@@ -411,6 +470,7 @@ int main() {
     RUN_TEST(TestEveryProjectionUsesQ8RequantizedGroup64Threads0);
     RUN_TEST(TestWeightCreationIsSerialAndNeverExceedsOneInFlightCreate);
     RUN_TEST(TestQkvAndGateUpPointersMatchExactMappedSubranges);
+    RUN_TEST(TestValidatedPackageFlowsDirectlyIntoAllRequantizedCreates);
     RUN_TEST(TestNormsAndEpsilonReachCorelibAsBf16);
     RUN_TEST(TestEmbeddingMappingOutlivesAllLazyRowReads);
     RUN_TEST(TestNoDeviceObjectExistsWhenPackageValidationFails);
@@ -434,5 +494,7 @@ int main() {
     RUN_TEST(TestGetKCacheGathersHeadMajorPosition);
     RUN_TEST(TestGetVCacheGathersHeadMajorPosition);
     RUN_TEST(TestCancellationBoundaryLeavesNoOutstandingFakeWork);
+    RUN_TEST(TestTwoConcurrentAie4RequestsNeverOverlapDispatch);
+    RUN_TEST(TestTenSequentialLoadsReleaseEveryObjectAndNeverEmitAllZeroLogits);
 #undef RUN_TEST
 }
