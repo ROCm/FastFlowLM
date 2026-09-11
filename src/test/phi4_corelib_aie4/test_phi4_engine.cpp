@@ -64,12 +64,13 @@ void TestEngineAllocatesMaximaAcrossAllRowsAndConsumers() {
         state.pad_row_overrides["matmul-3072"][2048] = 5000;
         state.pad_row_overrides["matmul-1024"][2048] = 6000;
         state.pad_row_overrides["ssmlp"][2048] = 7000;
+        state.pad_row_overrides["rmsnorm"][2048] = 8000;
         state.pad_row_overrides["mha"][2048] = 9000;
     });
     const auto& tensors = fake_corelib::GetState().tensor_creates;
-    TEST_REQUIRE(tensors[0].shape == std::vector<std::int64_t>({7000, 3072}));
-    TEST_REQUIRE(tensors[1].shape == std::vector<std::int64_t>({7000, 3072}));
-    TEST_REQUIRE(tensors[2].shape == std::vector<std::int64_t>({7000, 3072}));
+    TEST_REQUIRE(tensors[0].shape == std::vector<std::int64_t>({8000, 3072}));
+    TEST_REQUIRE(tensors[1].shape == std::vector<std::int64_t>({8000, 3072}));
+    TEST_REQUIRE(tensors[2].shape == std::vector<std::int64_t>({8000, 3072}));
     TEST_REQUIRE(tensors[3].shape == std::vector<std::int64_t>({9000, 3072}));
     TEST_REQUIRE(tensors[4].shape == std::vector<std::int64_t>({9000, 1024}));
     TEST_REQUIRE(tensors[5].shape == std::vector<std::int64_t>({9000, 3072}));

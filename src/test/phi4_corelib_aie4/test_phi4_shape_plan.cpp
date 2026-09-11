@@ -19,14 +19,12 @@ void TestShapePlanQueriesRows1Through4096AtGroup64() {
     const auto plan = Phi4ShapePlan::Build(Api());
     const auto& state = fake_corelib::GetState();
     TEST_REQUIRE(state.matmul_pad_calls.size() == 3 * 4096 + 1);
-    TEST_REQUIRE(state.rows_pad_calls.size() == 4096);
+    TEST_REQUIRE(state.rows_pad_calls.size() == 2 * 4096);
     TEST_REQUIRE(state.mha_pad_calls.size() == 4096);
     for (std::size_t row = 1; row <= 4096; ++row) {
         TEST_REQUIRE(state.matmul_pad_calls[(row - 1) * 3].m == static_cast<std::int64_t>(row));
         TEST_REQUIRE(state.matmul_pad_calls[(row - 1) * 3].group_size == 64);
-        TEST_REQUIRE(state.rows_pad_calls[row - 1].helper == "ssmlp");
-        TEST_REQUIRE(state.rows_pad_calls[row - 1].group_size == 64);
-        TEST_REQUIRE(plan.ForRows(row).rmsnorm_rows == static_cast<std::int64_t>(row));
+        TEST_REQUIRE(state.rows_pad_calls[(row - 1) * 2].group_size == 64);
         TEST_REQUIRE(state.mha_pad_calls[row - 1].m == static_cast<std::int64_t>(row));
     }
     TEST_REQUIRE(plan.ForRows(65).query_rows == 128);
@@ -45,8 +43,8 @@ void TestShapePlanUsesExactQKvOutputSsmlpRmsAndLmHeadDimensions() {
     TEST_REQUIRE(state.rows_pad_calls[0].helper == "ssmlp");
     TEST_REQUIRE(state.rows_pad_calls[0].k == 3072);
     TEST_REQUIRE(state.rows_pad_calls[0].n == 8192);
-    TEST_REQUIRE(plan.ForRows(1).rmsnorm_rows == 1);
-    TEST_REQUIRE(plan.ForRows(4096).rmsnorm_rows == 4096);
+    TEST_REQUIRE(state.rows_pad_calls[1].helper == "rmsnorm");
+    TEST_REQUIRE(state.rows_pad_calls[1].k == 3072);
     const auto& lm = state.matmul_pad_calls.back();
     TEST_REQUIRE(lm.m == 1 && lm.k == 3072 && lm.n == 200064 && lm.group_size == 64);
     TEST_REQUIRE(plan.lm_head_desc().k == 3072);

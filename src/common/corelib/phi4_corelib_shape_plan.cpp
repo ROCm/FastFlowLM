@@ -57,11 +57,12 @@ Phi4ShapePlan Phi4ShapePlan::Build(
                        &extents.ssmlp_rows, kHiddenSize, kIntermediateSize,
                        kRequantizedGroupSize), ssmlp_call);
 
-        // RMSNorm tiles only M and its public contract preserves the caller's
-        // row extent. Avoid the metadata-only helper here: the pinned
-        // DynamicDispatch implementation dereferences its intentionally absent
-        // XRT context when a shape requires more than one tile.
         extents.rmsnorm_rows = rows;
+        const std::string rms_call =
+            "ryzenai_corelib_rmsnorm_bf16_pad_rows [" + std::to_string(rows) +
+            ",3072]";
+        api->Check(api->functions().rmsnorm_pad_rows(
+                       &extents.rmsnorm_rows, kHiddenSize), rms_call);
 
         extents.flat_mha_rows = rows;
         const std::string mha_call =
