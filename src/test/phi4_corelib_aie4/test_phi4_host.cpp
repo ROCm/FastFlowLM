@@ -38,7 +38,7 @@ TensorView ThreeRows() {
 }
 
 GgufPhi4Metadata Metadata(double attention = 1.0) {
-    return {"phi3", 32, 3072, 8192, 24, 8, 4096, 96, 10000.0,
+    return {"phi3", 32, 3072, 8192, 24, 8, 131072, 96, 10000.0,
             attention, 4096, 200064, false};
 }
 

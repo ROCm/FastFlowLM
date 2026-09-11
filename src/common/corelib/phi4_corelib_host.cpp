@@ -98,7 +98,8 @@ std::vector<std::uint16_t> ConvertF32ToBf16(std::span<const float> values) {
 RopeTables BuildShortRopeTables(
     const GgufPhi4Metadata& metadata,
     std::optional<FloatTensorView> short_factors) {
-    if (metadata.context_length != static_cast<std::uint64_t>(kMaxSequenceLength) ||
+    if (metadata.context_length < static_cast<std::uint64_t>(kMaxSequenceLength) ||
+        metadata.rope_original_context_length != static_cast<std::uint64_t>(kMaxSequenceLength) ||
         metadata.rope_dimension_count != static_cast<std::uint64_t>(kRopeDimension) ||
         !std::isfinite(metadata.rope_frequency_base) || metadata.rope_frequency_base <= 0 ||
         !std::isfinite(metadata.rope_attention_factor)) {
