@@ -55,6 +55,52 @@ inline bool requires_npu_access(const std::string& method, const std::string& pa
            path == "/v1/audio/transcriptions" || path == "/v1/embeddings";
 }
 
+class NPURequestQueue final {
+public:
+    explicit NPURequestQueue(std::size_t capacity = 10) : capacity_(capacity) {}
+    void set_capacity(std::size_t capacity) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        capacity_ = capacity;
+    }
+    bool try_enqueue(std::function<void()> task) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (tasks_.size() >= capacity_) return false;
+        tasks_.push(std::move(task));
+        return true;
+    }
+    std::function<void()> take_next() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (tasks_.empty()) return {};
+        auto task = std::move(tasks_.front());
+        tasks_.pop();
+        return task;
+    }
+#if defined(FLM_CORELIB_TESTING)
+    bool run_next() {
+        auto task = take_next();
+        if (!task) return false;
+        task();
+        return true;
+    }
+#endif
+    bool empty() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return tasks_.empty();
+    }
+    std::size_t size() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return tasks_.size();
+    }
+    std::size_t capacity() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return capacity_;
+    }
+private:
+    mutable std::mutex mutex_;
+    std::queue<std::function<void()>> tasks_;
+    std::size_t capacity_;
+};
+
 class NPURequestCompletionGuard final {
 public:
     explicit NPURequestCompletionGuard(std::function<void()> completion)
@@ -143,7 +189,7 @@ public:
     void set_max_connections(size_t max_conns) { max_connections_ = max_conns; }
     void set_request_timeout(std::chrono::seconds timeout) { request_timeout_ = timeout; }
     void set_io_threads(size_t num_threads) { io_thread_count_ = num_threads; }
-    void set_npu_queue_length(size_t q_len) { max_npu_queue_ = q_len; }
+    void set_npu_queue_length(size_t q_len) { npu_request_queue_.set_capacity(q_len); }
     // Maximum accepted HTTP request body size (in bytes)
     void set_max_body_size_bytes(std::size_t bytes) { max_body_size_bytes_ = bytes; }
     std::size_t get_max_body_size_bytes() const { return max_body_size_bytes_; }
@@ -188,7 +234,6 @@ private:
     std::chrono::seconds request_timeout_ = std::chrono::seconds(600); // 5 minutes
     size_t io_thread_count_ = 5;
     std::size_t max_body_size_bytes_ = 256ull * 1024 * 1024; // 256 MB default
-    size_t max_npu_queue_ = 10;
 
     // Request tracking
     mutable std::mutex active_requests_mutex_;
@@ -197,8 +242,7 @@ private:
     // Connection tracking
     std::atomic<size_t> active_connections_{0};
     std::vector<std::thread> io_threads_;
-    std::queue<std::function<void()>> npu_request_queue_;
-    std::mutex npu_queue_mutex_;
+    NPURequestQueue npu_request_queue_;
     // Friend declaration for HttpSession to access private members
     friend class HttpSession;
 };

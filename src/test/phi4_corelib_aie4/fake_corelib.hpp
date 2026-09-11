@@ -7,6 +7,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -58,6 +59,7 @@ struct WeightCreateRecord {
 };
 
 struct DispatchRecord {
+    std::thread::id thread_id;
     std::string kind;
     void* stream;
     void* input;

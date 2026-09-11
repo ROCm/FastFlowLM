@@ -48,6 +48,9 @@ std::uint32_t ResolveContext(const json& model_info, int requested) {
 }
 
 nlohmann::json ReadJson(const std::filesystem::path& path) {
+#if defined(FLM_CORELIB_TESTING)
+    flm::phi4::testing::ObserveFileOpen(path);
+#endif
     std::ifstream input(path, std::ios::binary);
     if (!input) throw std::runtime_error("Cannot open " + path.string());
     try {
@@ -68,6 +71,18 @@ void ConfigureSampler(Phi4& model) {
 } // namespace
 
 #if defined(FLM_CORELIB_TESTING)
+namespace flm::phi4::testing {
+namespace {
+FileOpenObserver file_open_observer;
+}
+void SetFileOpenObserver(FileOpenObserver observer) {
+    file_open_observer = std::move(observer);
+}
+void ObserveFileOpen(const std::filesystem::path& path) {
+    if (file_open_observer) file_open_observer(path);
+}
+} // namespace flm::phi4::testing
+
 Phi4::EngineFactoryForTesting Phi4::engine_factory_for_testing_;
 std::function<bool(const causal_lm*)> Phi4::engine_poisoned_for_testing_;
 #endif
@@ -117,6 +132,9 @@ void Phi4::load_model(std::string model_path, json model_info,
         const auto config = ReadJson(root / "config.json");
         const auto tokenizer_json = ReadJson(root / "tokenizer.json");
         const auto tokenizer_config = ReadJson(root / "tokenizer_config.json");
+#if defined(FLM_CORELIB_TESTING)
+        flm::phi4::testing::ObserveFileOpen(root / kAie4Gguf);
+#endif
         auto package = flm::phi4::Phi4GgufPackage::Open(root / kAie4Gguf);
         package->ValidatePhi4Contract(config, tokenizer_json, tokenizer_config);
 

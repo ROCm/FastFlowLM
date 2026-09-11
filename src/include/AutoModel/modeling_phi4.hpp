@@ -10,7 +10,12 @@
 #if defined(FLM_CORELIB_TESTING)
 #include <filesystem>
 #include <functional>
-namespace flm::phi4::testing { class Phi4FrontendTestAccess; }
+namespace flm::phi4::testing {
+class Phi4FrontendTestAccess;
+using FileOpenObserver = std::function<void(const std::filesystem::path&)>;
+void SetFileOpenObserver(FileOpenObserver observer);
+void ObserveFileOpen(const std::filesystem::path& path);
+}
 #endif
 
 class Phi4 : public AutoModel {

@@ -578,37 +578,25 @@ void WebServer::do_accept() {
 
 ///@brief process_next_npu_request Handles one queued NPU task at a time
 void WebServer::process_next_npu_request() {
-    {
-        std::lock_guard<std::mutex> lock(npu_queue_mutex_);
     if (npu_request_queue_.empty()) {
         NPUAccessManager::release_npu_access();
         return; // Queue is empty, NPU is free
-    }
     }
 
     // NPU cooldown before running the next queued task.
     constexpr auto npu_cooldown = std::chrono::milliseconds(333);
     std::this_thread::sleep_for(npu_cooldown);
 
-    std::function<void()> task;
-    size_t remaining = 0;
-    {
-        std::lock_guard<std::mutex> lock(npu_queue_mutex_);
-        if (npu_request_queue_.empty()) {
-            NPUAccessManager::release_npu_access();
-            return;
-        }
-
-        task = npu_request_queue_.front();
-        npu_request_queue_.pop();
-        remaining = npu_request_queue_.size();
+    auto task = npu_request_queue_.take_next();
+    if (!task) {
+        NPUAccessManager::release_npu_access();
+        return;
     }
-
+    const auto remaining = npu_request_queue_.size();
     header_print("🟡 ", "Dequeuing NPU request (" + std::to_string(remaining) + " remaining)...");
 
-    // Post the task to be executed by the io_context
-    net::post(ioc, task);
- 
+    // Post the task to be executed by the io_context.
+    net::post(ioc, std::move(task));
 }
 
 ///@brief handle request
@@ -800,28 +788,25 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
         return false;
     }
 
-    //const int NPU_QUEUE_LIMIT = 10;
-    std::lock_guard<std::mutex> lock(npu_queue_mutex_);
-
-    if (npu_request_queue_.size() >= max_npu_queue_) {
+    if (!npu_request_queue_.try_enqueue([this, process_task]() {
+            process_task(true);
+        })) {
         res.result(http::status::service_unavailable);
         res.body() = json{
-            {"error", "NPU is in use and request queue is full (limit: " + std::to_string(max_npu_queue_) + "). Please try again later."}
+            {"error", "NPU is in use and request queue is full (limit: " +
+                std::to_string(npu_request_queue_.capacity()) +
+                "). Please try again later."}
         }.dump();
         res.set(http::field::content_type, "application/json");
         res.prepare_payload();
         header_print("🚫 ", "NPU busy and queue full, request denied: " + key);
         return false;
     }
-    else {
-        // Create a new lambda to bind process_task(true)
-        npu_request_queue_.push([this, process_task]() {
-            process_task(true);
-            });
-        header_print("🕒 ", "NPU busy, request queued (" + std::to_string(npu_request_queue_.size()) + "/" + std::to_string(max_npu_queue_) + "): " + key);
 
-        return true;
-    }
+    header_print("🕒 ", "NPU busy, request queued (" +
+        std::to_string(npu_request_queue_.size()) + "/" +
+        std::to_string(npu_request_queue_.capacity()) + "): " + key);
+    return true;
 }
 
 ///@brief create lm server

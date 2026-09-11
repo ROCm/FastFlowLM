@@ -12,6 +12,7 @@
 
 namespace {
 fake_corelib::State state;
+std::recursive_mutex state_mutex;
 thread_local std::string current_detail;
 
 struct FakeStorage {
@@ -100,6 +101,7 @@ struct TypedFake;
 template <typename Tag, typename Result, typename... Args>
 struct TypedFake<Tag, Result (*)(Args...)> {
     static Result Invoke(Args... args) {
+        std::unique_lock<std::recursive_mutex> state_lock(state_mutex);
         ++state.call_counts[std::string(Tag::name)];
         state.call_log.emplace_back(Tag::name);
         auto arguments = std::forward_as_tuple(args...);
@@ -350,12 +352,15 @@ struct TypedFake<Tag, Result (*)(Args...)> {
                 int maximum = state.maximum_active_leases.load();
                 while (active > maximum &&
                        !state.maximum_active_leases.compare_exchange_weak(maximum, active)) {}
+                state_lock.unlock();
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                state_lock.lock();
                 --state.active_leases;
             }
             const auto status = Status(Tag::name);
             if (status != ryzenai_corelib_status_success) return status;
             fake_corelib::DispatchRecord record{};
+            record.thread_id = std::this_thread::get_id();
             record.kind = std::is_same_v<Tag, matmul_tag> ? "matmul" :
                           std::is_same_v<Tag, ssmlp_tag> ? "ssmlp" :
                           std::is_same_v<Tag, rmsnorm_tag> ? "rmsnorm" : "mha";
@@ -431,6 +436,7 @@ namespace fake_corelib {
 State& GetState() { return state; }
 
 void Reset() {
+    std::lock_guard<std::recursive_mutex> lock(state_mutex);
     state.version = {0, 3, 0};
     state.selftest_status = ryzenai_corelib_status_success;
     state.default_status = ryzenai_corelib_status_success;
@@ -469,6 +475,7 @@ void Reset() {
 
 flm::corelib::CorelibApi::Resolver Resolver() {
     return [](std::string_view name) -> void* {
+        std::lock_guard<std::recursive_mutex> lock(state_mutex);
         state.resolution_order.emplace_back(name);
         ++state.resolution_counts[std::string(name)];
         if (name == state.missing_symbol) return nullptr;
@@ -485,9 +492,13 @@ std::vector<ryzenai_corelib_status> CallEveryResolvedFunction(
     return statuses;
 }
 
-void* MakeObject() { return NewObject(); }
+void* MakeObject() {
+    std::lock_guard<std::recursive_mutex> lock(state_mutex);
+    return NewObject();
+}
 
 void EnterLease() {
+    std::lock_guard<std::recursive_mutex> lock(state_mutex);
     const int active = ++state.active_leases;
     int maximum = state.maximum_active_leases.load();
     while (active > maximum &&
@@ -495,6 +506,7 @@ void EnterLease() {
 }
 
 void LeaveLease() {
+    std::lock_guard<std::recursive_mutex> lock(state_mutex);
     --state.active_leases;
     state.lifetime_events.emplace_back("lease_leave");
 }

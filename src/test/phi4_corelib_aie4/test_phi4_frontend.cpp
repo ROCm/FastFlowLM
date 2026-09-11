@@ -21,6 +21,7 @@ namespace {
 
 std::vector<int> g_encoded_tokens;
 std::vector<int> g_samples;
+std::vector<std::filesystem::path> g_opened_paths;
 std::size_t g_sample_index{};
 
 class FakeEngine final : public causal_lm {
@@ -177,6 +178,10 @@ class Phi4FrontendTestAccess final {
 public:
     static void InstallFactory() {
         g_factory = {};
+        g_opened_paths.clear();
+        flm::phi4::testing::SetFileOpenObserver([](const auto& path) {
+            g_opened_paths.push_back(path);
+        });
         Phi4::engine_factory_for_testing_ =
             [](bool aie4, const LM_Config&, npu_xclbin_manager*,
                const std::filesystem::path&, std::uint32_t limit) {
@@ -197,6 +202,7 @@ public:
     static void RemoveFactory() {
         Phi4::engine_factory_for_testing_ = {};
         Phi4::engine_poisoned_for_testing_ = {};
+        flm::phi4::testing::SetFileOpenObserver({});
     }
     static bool HasLegacyNpu(const Phi4& model) { return model.npu != nullptr; }
     static const std::string& EosToken(const Phi4& model) { return model.eos_token; }
@@ -275,15 +281,21 @@ void TestCorelibAie4GgufBuildsOnlyTheCorelibEngine() {
 void TestNoManifestOnnxConvertedWeightOrCachePathIsOpened() {
     TempPackage package;
     FactoryScope scope;
+    auto model = Load(package, ModelInfo("corelib_aie4_gguf"), -1, false, nullptr);
+    TEST_REQUIRE(model->uses_corelib_aie4());
     std::vector<std::string> names;
-    for (const auto& entry : std::filesystem::directory_iterator(package.path()))
-        names.push_back(entry.path().filename().string());
+    for (const auto& path : g_opened_paths) {
+        const auto text = path.generic_string();
+        TEST_REQUIRE(text.find("manifest") == std::string::npos);
+        TEST_REQUIRE(text.find("onnx") == std::string::npos);
+        TEST_REQUIRE(text.find("converted") == std::string::npos);
+        TEST_REQUIRE(text.find("cache") == std::string::npos);
+        names.push_back(path.filename().string());
+    }
     std::sort(names.begin(), names.end());
     TEST_REQUIRE(names == std::vector<std::string>({
         "Phi-4-mini-instruct.Q8_0.gguf", "config.json", "tokenizer.json",
         "tokenizer_config.json"}));
-    auto model = Load(package, ModelInfo("corelib_aie4_gguf"), -1, false, nullptr);
-    TEST_REQUIRE(model->uses_corelib_aie4());
 }
 
 void TestUnknownAndNonStringBackendAreErrors() {
@@ -527,30 +539,41 @@ void TestCancellationAndCapacityErrorsLeaveTheServerQueueUsable() {
     TempPackage package;
     FactoryScope scope;
     auto model = ReadyAie4(package);
-    int completions = 0;
-    auto input = Input(1);
-    {
+    NPURequestQueue queue(2);
+    bool cancelled = false;
+    bool capacity_failed = false;
+    bool queued_request_ran = false;
+
+    TEST_REQUIRE(queue.try_enqueue([&] {
         auto meta = Meta();
-        NPURequestCompletionGuard cancelled([&] { ++completions; });
+        auto input = Input(1);
         g_encoded_tokens = {1};
-        TEST_REQUIRE(!model->insert(meta, input, [] { return true; }));
-    }
-    {
+        cancelled = !model->insert(meta, input, [] { return true; });
+    }));
+    TEST_REQUIRE(queue.try_enqueue([&] {
         auto meta = Meta();
-        NPURequestCompletionGuard capacity_error([&] { ++completions; });
+        auto input = Input(1);
         g_encoded_tokens.assign(4095, 1);
-        auto over_capacity = Input(1);
-        ExpectRequestError([&] { (void)model->insert(meta, over_capacity); },
-                           400, false, "4095");
-    }
-    {
+        try { (void)model->insert(meta, input); }
+        catch (const ModelRequestError& error) {
+            capacity_failed = error.http_code() == 400;
+        }
+    }));
+    TEST_REQUIRE(!queue.try_enqueue([&] { queued_request_ran = true; }));
+
+    TEST_REQUIRE(queue.run_next());
+    TEST_REQUIRE(cancelled);
+    TEST_REQUIRE(queue.try_enqueue([&] {
         auto meta = Meta();
-        NPURequestCompletionGuard next_request([&] { ++completions; });
+        auto input = Input(1);
         g_encoded_tokens = {1};
-        TEST_REQUIRE(model->insert(meta, input));
-    }
-    TEST_REQUIRE(completions == 3);
-    TEST_REQUIRE(g_factory.engine->prefill_calls == 1);
+        queued_request_ran = model->insert(meta, input);
+    }));
+    TEST_REQUIRE(queue.run_next());
+    TEST_REQUIRE(capacity_failed);
+    TEST_REQUIRE(queue.run_next());
+    TEST_REQUIRE(queued_request_ran);
+    TEST_REQUIRE(queue.empty());
 }
 
 } // namespace

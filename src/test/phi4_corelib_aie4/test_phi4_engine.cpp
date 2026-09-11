@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <barrier>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -441,11 +443,49 @@ void TestTwoConcurrentAie4RequestsNeverOverlapDispatch() {
     fake_corelib::GetState().maximum_active_leases = 0;
     fake_corelib::GetState().statuses["test_observe_dispatch_concurrency"] =
         ryzenai_corelib_status_success;
-    std::thread first([&] { (void)h.engine->forward(1); });
-    std::thread second([&] { (void)second_engine->forward(2); });
+    fake_corelib::GetState().dispatches.clear();
+    std::barrier start(3);
+    std::thread first([&] { start.arrive_and_wait(); (void)h.engine->forward(1); });
+    std::thread second([&] { start.arrive_and_wait(); (void)second_engine->forward(2); });
+    start.arrive_and_wait();
     first.join();
     second.join();
+
+    const auto& dispatches = fake_corelib::GetState().dispatches;
     TEST_REQUIRE(fake_corelib::GetState().maximum_active_leases == 1);
+    TEST_REQUIRE(dispatches.size() == 388);
+    const auto first_request = dispatches.front().thread_id;
+    TEST_REQUIRE(first_request != dispatches.back().thread_id);
+    TEST_REQUIRE(std::all_of(dispatches.begin(), dispatches.begin() + 194,
+                             [&](const auto& call) {
+                                 return call.thread_id == first_request;
+                             }));
+    TEST_REQUIRE(std::all_of(dispatches.begin() + 194, dispatches.end(),
+                             [&](const auto& call) {
+                                 return call.thread_id != first_request;
+                             }));
+
+    // Prove the fake itself does not serialize or race when the runtime lease is
+    // intentionally bypassed: the overlap detector must report both calls.
+    fake_corelib::GetState().dispatches.clear();
+    fake_corelib::GetState().maximum_active_leases = 0;
+    std::barrier unsafe_start(3);
+    std::atomic<bool> unsafe_calls_succeeded{true};
+    const auto invoke_without_lease = [&] {
+        unsafe_start.arrive_and_wait();
+        if (h.runtime->api()->functions().rmsnorm(
+                nullptr, nullptr, 1, nullptr, nullptr) !=
+            ryzenai_corelib_status_success)
+            unsafe_calls_succeeded = false;
+    };
+    std::thread unsafe_first(invoke_without_lease);
+    std::thread unsafe_second(invoke_without_lease);
+    unsafe_start.arrive_and_wait();
+    unsafe_first.join();
+    unsafe_second.join();
+    TEST_REQUIRE(unsafe_calls_succeeded);
+    TEST_REQUIRE(fake_corelib::GetState().maximum_active_leases == 2);
+    TEST_REQUIRE(fake_corelib::GetState().dispatches.size() == 2);
 }
 
 void TestTenSequentialLoadsReleaseEveryObjectAndNeverEmitAllZeroLogits() {
