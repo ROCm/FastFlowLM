@@ -82,12 +82,12 @@ public:
     void complete_current(const Scheduler& schedule,
                           const std::function<void()>& release,
                           std::chrono::milliseconds cooldown) {
-        if (cooldown.count() > 0) std::this_thread::sleep_for(cooldown);
         auto task = take_next();
         if (!task) {
             release();
             return;
         }
+        if (cooldown.count() > 0) std::this_thread::sleep_for(cooldown);
         schedule(std::move(task));
     }
     bool empty() const {

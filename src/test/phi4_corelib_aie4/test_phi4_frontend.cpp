@@ -540,6 +540,35 @@ void TestQueueCompletionIsExactlyOnceAndIncludesCompletionsEndpoint() {
     }
 }
 
+void TestQueueCompletionReleasesImmediatelyOrDelaysQueuedHandoff() {
+    constexpr auto cooldown = std::chrono::milliseconds(100);
+
+    NPURequestCoordinator empty;
+    bool released = false;
+    const auto empty_start = std::chrono::steady_clock::now();
+    empty.complete_current([](auto) { TEST_REQUIRE(false); },
+                           [&] { released = true; }, cooldown);
+    const auto empty_elapsed = std::chrono::steady_clock::now() - empty_start;
+    TEST_REQUIRE(released);
+    TEST_REQUIRE(empty_elapsed < std::chrono::milliseconds(50));
+
+    NPURequestCoordinator queued;
+    bool handed_off = false;
+    bool released_while_queued = false;
+    TEST_REQUIRE(queued.try_enqueue([] {}));
+    const auto queued_start = std::chrono::steady_clock::now();
+    queued.complete_current(
+        [&](auto task) {
+            handed_off = true;
+            task();
+        },
+        [&] { released_while_queued = true; }, cooldown);
+    const auto queued_elapsed = std::chrono::steady_clock::now() - queued_start;
+    TEST_REQUIRE(handed_off);
+    TEST_REQUIRE(!released_while_queued);
+    TEST_REQUIRE(queued_elapsed >= std::chrono::milliseconds(75));
+}
+
 void TestCancellationAndCapacityErrorsLeaveTheServerQueueUsable() {
     TempPackage package;
     FactoryScope scope;
@@ -629,6 +658,7 @@ int main() {
     RunTest(TestEosSelfTerminatesWithoutAnExtraDecode, "TestEosSelfTerminatesWithoutAnExtraDecode");
     RunTest(TestCliAndAllFourGenerationEndpointsPassTheSameBudgetSemantics, "TestCliAndAllFourGenerationEndpointsPassTheSameBudgetSemantics");
     RunTest(TestQueueCompletionIsExactlyOnceAndIncludesCompletionsEndpoint, "TestQueueCompletionIsExactlyOnceAndIncludesCompletionsEndpoint");
+    RunTest(TestQueueCompletionReleasesImmediatelyOrDelaysQueuedHandoff, "TestQueueCompletionReleasesImmediatelyOrDelaysQueuedHandoff");
     RunTest(TestCancellationAndCapacityErrorsLeaveTheServerQueueUsable, "TestCancellationAndCapacityErrorsLeaveTheServerQueueUsable");
 #else
     RunTest(TestDefaultBuildCanConstructAndRunLegacyPhi4WithoutCorelib, "TestDefaultBuildCanConstructAndRunLegacyPhi4WithoutCorelib");
