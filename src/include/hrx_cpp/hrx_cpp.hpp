@@ -113,10 +113,32 @@ inline bool hrx_report(hrx_status_t s, const char* where) {
 // Executable cache: build one HRX XADX executable per distinct executable
 // identity (xclbin + control program + host patch table) and resolve its export
 // ordinal once.
+//
+// Ownership / lifetime (context-exhaustion fix)
+// ---------------------------------------------------------------------------
+// Every executable is created with HRX_AMDXDNA_CONTEXT_MODE_CREATE, i.e. it is
+// backed by its own NPU hardware context. That pool is small: on the Windows
+// MCDM path the 314 driver runs out after enough distinct executables and
+// hrx_stream_wait then fails with
+//   D3DKMTCreateContextVirtual failed with 0xc01e0009
+// (the Linux amdxdna path fails the analogous BO allocation with errno 11 /
+// EAGAIN). A single long generation stays bounded because decode revisits the
+// same control sequences, but a `flm serve` sweep that loads many models used
+// to leak every model's executables forever: the cache was a process-wide map
+// that was never pruned on model unload, so contexts accumulated across the
+// sweep until the driver was exhausted -- exactly the "running out of contexts"
+// failure seen at gemma4-e4b after many prior models.
+//
+// Executables are therefore reference counted. Each npu_app that dispatches a
+// given (xclbin, ctrl_seq) holds exactly one reference for it; when the owning
+// model's engine objects are destroyed (model unload / model switch in serve)
+// the npu_app releases its references and, once the last owner drops, the
+// executable is destroyed and its hardware context returned to the driver.
 // ---------------------------------------------------------------------------
 struct CachedExe {
     hrx_executable_t exe = nullptr;
     uint32_t ord = 0;
+    size_t refs = 0;  // number of npu_app owners; released when it reaches 0
 };
 
 inline void append_key_bytes(std::string& key, const void* data, size_t byte_count) {
@@ -127,20 +149,37 @@ inline void append_key_bytes(std::string& key, const void* data, size_t byte_cou
     }
 }
 
-inline hrx_executable_t build_or_get_executable(
-    const std::vector<uint8_t>& xclbin_bytes, const uint32_t* cc, size_t n,
-    uint32_t* ord_out) {
-    static std::mutex mu;
-    static std::unordered_map<std::string, CachedExe> cache;
+inline std::mutex& exe_cache_mu() {
+    static std::mutex m;
+    return m;
+}
+inline std::unordered_map<std::string, CachedExe>& exe_cache() {
+    static std::unordered_map<std::string, CachedExe> c;
+    return c;
+}
+inline std::string make_exe_key(const std::vector<uint8_t>& xclbin_bytes,
+                                const uint32_t* cc, size_t n) {
     std::string key;
-    key.reserve(xclbin_bytes.size() + n * sizeof(uint32_t) +
-                2 * sizeof(uint64_t));
+    key.reserve(xclbin_bytes.size() + n * sizeof(uint32_t) + 2 * sizeof(uint64_t));
     append_key_bytes(key, xclbin_bytes.data(), xclbin_bytes.size());
     append_key_bytes(key, cc, n * sizeof(uint32_t));
-    std::lock_guard<std::mutex> lk(mu);
+    return key;
+}
+
+// Build (or fetch the cached) executable for (xclbin, cc). Does NOT change the
+// reference count; callers manage ownership with retain_executable /
+// release_executable below. Returns nullptr on create failure (never cached, so
+// a later call can retry instead of dispatching a silent no-op).
+inline hrx_executable_t lookup_or_build_executable(
+    const std::vector<uint8_t>& xclbin_bytes, const uint32_t* cc, size_t n,
+    uint32_t* ord_out, std::string* key_out) {
+    std::string key = make_exe_key(xclbin_bytes, cc, n);
+    std::lock_guard<std::mutex> lk(exe_cache_mu());
+    auto& cache = exe_cache();
     auto it = cache.find(key);
     if (it != cache.end()) {
         if (ord_out) *ord_out = it->second.ord;
+        if (key_out) *key_out = std::move(key);
         return it->second.exe;
     }
     hrx_const_byte_span_t xclbin = {xclbin_bytes.data(), xclbin_bytes.size()};
@@ -176,9 +215,49 @@ inline hrx_executable_t build_or_get_executable(
         hrx_executable_release(exe);
         exe = nullptr;
     }
-    cache.emplace(std::move(key), CachedExe{exe, ord});
+    if (exe) {
+        cache.emplace(key, CachedExe{exe, ord, 0});
+    }
     if (ord_out) *ord_out = ord;
+    if (key_out) *key_out = std::move(key);
     return exe;
+}
+
+// Add one owner reference to the cached executable identified by key.
+inline void retain_executable(const std::string& key) {
+    std::lock_guard<std::mutex> lk(exe_cache_mu());
+    auto& cache = exe_cache();
+    auto it = cache.find(key);
+    if (it != cache.end()) ++it->second.refs;
+}
+
+// Drop one owner reference; when the last owner drops the executable is
+// destroyed and its hardware context is returned to the driver.
+inline void release_executable(const std::string& key) {
+    hrx_executable_t to_free = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(exe_cache_mu());
+        auto& cache = exe_cache();
+        auto it = cache.find(key);
+        if (it == cache.end()) return;
+        if (it->second.refs > 0) --it->second.refs;
+        if (it->second.refs == 0) {
+            to_free = it->second.exe;
+            cache.erase(it);
+        }
+    }
+    if (to_free) {
+        hrx_executable_release(to_free);
+    }
+}
+
+// Backward-compatible entry point (no ownership tracking). Retained for any
+// caller that does not manage executable lifetime; prefer the
+// lookup_or_build/retain/release trio used by npu_app.
+inline hrx_executable_t build_or_get_executable(
+    const std::vector<uint8_t>& xclbin_bytes, const uint32_t* cc, size_t n,
+    uint32_t* ord_out) {
+    return lookup_or_build_executable(xclbin_bytes, cc, n, ord_out, nullptr);
 }
 
 // ---------------------------------------------------------------------------

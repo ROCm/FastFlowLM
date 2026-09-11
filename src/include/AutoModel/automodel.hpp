@@ -16,6 +16,8 @@
 #include <string>
 #include <type_traits>
 #include <any>
+#include <cstdlib>
+#include <cstring>
 #include "typedef.hpp"
 #include "causal_lm.hpp"
 #include "lm_config.hpp"
@@ -150,8 +152,18 @@ protected:
     std::vector<int> checkpoint_his;
 	/// \brief dump the undecorated model output to stdout once a turn ends
 	/// \note on by default; models whose turns are short and driven in bulk (the
-	///       hunyuan translator) turn it off so the log is not doubled.
+	///       hunyuan translator) turn it off so the log is not doubled. Those
+	///       models should seed this from env_forces_raw_output() so diagnostics
+	///       can opt back in without changing the interactive default.
 	bool log_raw_output = true;
+	/// \brief whether FLM_LOG_RAW_OUTPUT forces the "Model RAW Output:" dump on
+	/// \note the qualification harness and numerical-match anchor per-turn parsing
+	///       on that marker, so they set FLM_LOG_RAW_OUTPUT=1 to re-enable it for
+	///       models that quiet it by default; unset/empty/"0" leave the default.
+	static bool env_forces_raw_output() {
+		const char* value = std::getenv("FLM_LOG_RAW_OUTPUT");
+		return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
+	}
 	/// \brief run one more forward on the eos token once a turn ends
 	/// \note this keeps the kv cache aligned with token_history so a following
 	///       turn can append to it. Models that rewind or clear between turns

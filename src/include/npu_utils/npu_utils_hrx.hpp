@@ -36,6 +36,7 @@
 #include <iostream>
 #include <sstream>
 #include <map>
+#include <unordered_set>
 #include <stdio.h>
 #ifndef __WINDOWS__
 #include <fcntl.h>
@@ -77,6 +78,30 @@ private:
     hrx_executable_t exe;  // HRX direct executable built from ctrl_seq->dump()
     uint32_t exe_ord;      // resolved "MLIR_AIE" export ordinal
     std::unique_ptr<npu_sequence> ctrl_seq;
+    // Executable-cache keys this app owns a reference for. Each distinct
+    // (xclbin, ctrl_seq) this app dispatches contributes one reference; they are
+    // all released in the destructor so the backing NPU hardware contexts are
+    // returned when the owning model is unloaded (see hrx_cpp.hpp).
+    std::unordered_set<std::string> exe_keys_;
+
+    ///@brief Transfer all state from `o` and leave it empty (owning no
+    ///       executable references) so its destructor releases nothing.
+    void move_from(npu_app&& o) noexcept {
+        device_gen = o.device_gen;
+        device = o.device;
+        context = o.context;
+        kernel_name = std::move(o.kernel_name);
+        enable_preemption = o.enable_preemption;
+        module_valid = o.module_valid;
+        module_version = o.module_version;
+        exe = o.exe;
+        exe_ord = o.exe_ord;
+        ctrl_seq = std::move(o.ctrl_seq);
+        exe_keys_ = std::move(o.exe_keys_);
+        o.exe = nullptr;
+        o.module_valid = false;
+        o.exe_keys_.clear();
+    }
 
     ///@brief Setup the kernel
     ///@note Builds (or fetches a cached) HRX XADX executable directly from the
@@ -86,12 +111,19 @@ private:
         assert(data.first != nullptr);
         assert(data.second > 0);
         assert(this->context != nullptr);
-        this->exe = hrx::build_or_get_executable(
+        std::string exe_key;
+        this->exe = hrx::lookup_or_build_executable(
             this->context->xclbin_bytes(), data.first, data.second,
-            &this->exe_ord);
+            &this->exe_ord, &exe_key);
         if (this->exe == nullptr){
             header_print_r("ERROR", "Failed to build HRX executable from ctrl_seq");
             exit(1);
+        }
+        // Take one reference the first time this app uses this executable; the
+        // destructor drops all of them so the hardware context is freed on
+        // model unload instead of leaking for the process lifetime.
+        if (this->exe_keys_.insert(exe_key).second) {
+            hrx::retain_executable(exe_key);
         }
         this->module_valid = true;
         this->module_version = this->ctrl_seq->sequence_version();
@@ -152,6 +184,31 @@ public:
         this->exe_ord = 0;
         this->ctrl_seq = std::make_unique<npu_sequence>(device_gen, enable_preemption);
         this->module_version = 0xFF;
+    }
+
+    ///@brief Destructor: release this app's executable references so their NPU
+    ///       hardware contexts are freed when the owning model is unloaded.
+    ~npu_app(){
+        for (const auto& k : this->exe_keys_) hrx::release_executable(k);
+    }
+
+    // npu_app owns HRX executable references, so it is move-only (copies are
+    // already deleted by the unique_ptr member). Declaring the destructor above
+    // suppresses the implicit move operations, so define them explicitly and
+    // transfer ownership of the executable keys, leaving the moved-from object
+    // with none (so it releases nothing).
+    npu_app(const npu_app&) = delete;
+    npu_app& operator=(const npu_app&) = delete;
+
+    npu_app(npu_app&& other) noexcept { this->move_from(std::move(other)); }
+
+    npu_app& operator=(npu_app&& other) noexcept {
+        if (this != &other) {
+            for (const auto& k : this->exe_keys_) hrx::release_executable(k);
+            this->exe_keys_.clear();
+            this->move_from(std::move(other));
+        }
+        return *this;
     }
 
   
