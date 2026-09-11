@@ -34,6 +34,9 @@
 #include "utils/vm_args.hpp"
 #include <boost/program_options.hpp>
 #include "benchmarking.hpp"
+#ifdef FLM_ENABLE_CORELIB_AIE4
+#include "corelib/corelib_runtime.hpp"
+#endif
 
 #ifndef _WIN32
 #include <fcntl.h>
@@ -716,6 +719,9 @@ int main(int argc, char* argv[]) {
             return 1;
         }
         // Return 0 if the command is valid
+#ifdef FLM_ENABLE_CORELIB_AIE4
+        flm::corelib::CorelibRuntime::ShutdownProcess();
+#endif
         return 0;
     } catch (const std::exception& e) {
         // If an error occurs, this will be used to show the error

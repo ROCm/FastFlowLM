@@ -54,6 +54,17 @@
       }
     },
     {
+      "name": "windows-aie4",
+      "displayName": "Windows AIE4",
+      "description": "Windows build with optional dynamically loaded ryzenai-corelib support",
+      "inherits": "windows-default",
+      "binaryDir": "${sourceDir}/build-aie4",
+      "cacheVariables": {
+        "FLM_ENABLE_CORELIB_AIE4": "ON",
+        "RYZENAI_CORELIB_INCLUDE_DIR": "$env{RYZENAI_CORELIB_INCLUDE_DIR}"
+      }
+    },
+    {
       "name": "windows-vs18",
       "displayName": "Windows VS18",
       "description": "Configuration for Windows using Visual Studio 18 2026",
@@ -83,6 +94,14 @@
       "displayName": "Windows Default Build",
       "description": "Build Windows preset in Release with parallel jobs",
       "configurePreset": "windows-default",
+      "configuration": "Release",
+      "jobs": 4
+    },
+    {
+      "name": "windows-aie4",
+      "displayName": "Windows AIE4 Build",
+      "description": "Build the optional dynamically loaded AIE4 runtime in Release",
+      "configurePreset": "windows-aie4",
       "configuration": "Release",
       "jobs": 4
     }
