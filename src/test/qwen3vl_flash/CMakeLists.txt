@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(qwen3vl_npu VERSION 1.0.0 LANGUAGES CXX)
+project(qwen3vl_flash VERSION 1.0.0 LANGUAGES CXX)
 
 include(${CMAKE_CURRENT_LIST_DIR}/../CMakeLists.txt)
 npu_test_setup()
@@ -13,8 +13,8 @@ else()
 endif()
 
 add_npu_test(
-    test_qwen3vl_npu
-    test/qwen3vl_npu
+    test_qwen3vl_flash
+    test/qwen3vl_flash
     USE_AUTOMODEL
     USE_TOKENIZER
     USE_SAMPLER
@@ -27,21 +27,21 @@ add_npu_test(
         "${CMAKE_SOURCE_DIR}/../../common/image/image_reader.cpp"
 )
 
-target_compile_definitions(test_qwen3vl_npu PUBLIC
+target_compile_definitions(test_qwen3vl_flash PUBLIC
     USEAVX512=1
 )
 
 # Add OpenMP compiler flags if available
 if(OpenMP_CXX_FOUND)
-    target_compile_options(test_qwen3vl_npu PUBLIC
+    target_compile_options(test_qwen3vl_flash PUBLIC
         $<$<CXX_COMPILER_ID:MSVC>:/openmp>
         $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-fopenmp>
     )
 endif()
 
-target_link_libraries(test_qwen3vl_npu PUBLIC
-    qwen3vl_npu
+target_link_libraries(test_qwen3vl_flash PUBLIC
     qwen3vl_flash
+    qwen3vl_npu
     xrt_coreutil
     avformat
     avcodec
@@ -52,12 +52,12 @@ target_link_libraries(test_qwen3vl_npu PUBLIC
 
 # Link OpenMP if available
 if(OpenMP_CXX_FOUND)
-    target_link_libraries(test_qwen3vl_npu PUBLIC OpenMP::OpenMP_CXX)
+    target_link_libraries(test_qwen3vl_flash PUBLIC OpenMP::OpenMP_CXX)
 endif()
 
 # Add test target
-add_custom_target(test_qwen3vl_npu_target
-    DEPENDS test_qwen3vl_npu
-    COMMENT "Building test_qwen3vl_npu executable"
+add_custom_target(test_qwen3vl_flash_target
+    DEPENDS test_qwen3vl_flash
+    COMMENT "Building test_qwen3vl_flash executable"
 )
 

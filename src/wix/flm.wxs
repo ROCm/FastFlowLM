@@ -114,6 +114,9 @@
       <Component Id="Comp_qwen3vl_npu.dll" Guid="*">
         <File Id="File_qwen3vl_npu.dll" Source="$(SourceDir)\qwen3vl_npu.dll" KeyPath="yes" />
       </Component>
+      <Component Id="Comp_qwen3vl_flash.dll" Guid="*">
+        <File Id="File_qwen3vl_flash.dll" Source="$(SourceDir)\qwen3vl_flash.dll" KeyPath="yes" />
+      </Component>
       <Component Id="Comp_qwen3_5vl_npu.dll" Guid="*">
         <File Id="File_qwen3_5vl_npu.dll" Source="$(SourceDir)\qwen3_5vl_npu.dll" KeyPath="yes" />
       </Component>

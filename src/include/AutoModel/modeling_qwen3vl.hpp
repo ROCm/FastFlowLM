@@ -43,6 +43,14 @@ private:
     
     void preprocess_image(qwen3vl_image_t& image,  std::vector<bf16> &pixel_values);
 
+protected:
+    /// \brief Build the engine that backs this wrapper.
+    /// \note  The Qwen3-VL checkpoint is served by two engines that share this
+    ///        whole wrapper -- the tokenizer, chat template, sampler and image
+    ///        preprocessing are identical -- and differ only in how they run
+    ///        prefill on the NPU. This is the single seam between them.
+    virtual void create_engine();
+
 public:
     Qwen3VL(flm_rt::device* npu_device_inst);
 
@@ -108,6 +116,21 @@ public:
         }
 		return false;
 	}
+};
+
+
+/************              Qwen3VL_Flash            **************/
+/// Same checkpoint and same wrapper as Qwen3VL, backed by the qwen3vl_flash
+/// engine: prefill runs on one fused overlay (6 dequant+mm columns + 1
+/// attention CU) instead of swapping the array between mm.xclbin and
+/// attn.xclbin every layer, and the vision encoder overlaps the text prefill
+/// setup. Tuned for short contexts; Qwen3VL stays the general-purpose path.
+class Qwen3VL_Flash : public Qwen3VL {
+protected:
+    void create_engine() override;
+
+public:
+    Qwen3VL_Flash(flm_rt::device* npu_device_inst) : Qwen3VL(npu_device_inst) {}
 };
 
 

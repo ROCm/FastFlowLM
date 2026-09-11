@@ -61,6 +61,7 @@ Source: "qwen2_npu.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "qwen2vl_npu.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "qwen3_npu.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "qwen3vl_npu.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "qwen3vl_flash.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "qwen3_5vl_npu.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "qwen3_5_omni_npu.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "qwen3_6_moe_npu.dll"; DestDir: "{app}"; Flags: ignoreversion
