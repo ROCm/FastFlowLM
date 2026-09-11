@@ -109,12 +109,63 @@ target_compile_options(test_phi4_engine PRIVATE
 target_link_directories(test_phi4_engine PRIVATE "${XRT_INCLUDE_DIR}/../lib")
 target_link_libraries(test_phi4_engine PRIVATE xrt_coreutil)
 
-# Compile the actual production frontend translation unit in both feature modes.
+set(PHI4_FRONTEND_SOURCES
+    "${FLM_SOURCE_DIR}/common/AutoModel/automodel.cpp"
+    "${FLM_SOURCE_DIR}/common/AutoModel/modeling_phi4.cpp")
+
+add_executable(test_phi4_frontend
+    test_phi4_frontend.cpp
+    ${PHI4_FRONTEND_SOURCES}
+    ${CORELIB_SOURCES}
+    "${FLM_SOURCE_DIR}/common/corelib/phi4_corelib_gguf.cpp")
+target_include_directories(test_phi4_frontend PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}"
+    "${FLM_SOURCE_DIR}/include"
+    "${FLM_SOURCE_DIR}/server"
+    "${FLM_SOURCE_DIR}/pull"
+    "${FLM_SOURCE_DIR}/runner"
+    "${FLM_SOURCE_DIR}/../third_party/tokenizers-cpp/include"
+    "${RYZENAI_CORELIB_INCLUDE_DIR}"
+    "${BOOST_INCLUDE_DIR}"
+    "${XRT_INCLUDE_DIR}")
+target_compile_definitions(test_phi4_frontend PRIVATE
+    FLM_ENABLE_CORELIB_AIE4=1 FLM_CORELIB_TESTING=1
+    RYZENAI_CORELIB_STATIC=1 DEV_BUILD=1 __WINDOWS__ USEAVX2=1
+    DISABLE_ABI_CHECK=1 _ENABLE_EXTENDED_ALIGNED_STORAGE
+    WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(test_phi4_frontend PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>:/wd4005 /wd4244>)
+target_link_directories(test_phi4_frontend PRIVATE "${XRT_INCLUDE_DIR}/../lib")
+target_link_libraries(test_phi4_frontend PRIVATE xrt_coreutil)
+
+add_executable(test_phi4_frontend_off
+    test_phi4_frontend.cpp
+    ${PHI4_FRONTEND_SOURCES})
+target_include_directories(test_phi4_frontend_off PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}"
+    "${FLM_SOURCE_DIR}/include"
+    "${FLM_SOURCE_DIR}/server"
+    "${FLM_SOURCE_DIR}/pull"
+    "${FLM_SOURCE_DIR}/runner"
+    "${FLM_SOURCE_DIR}/../third_party/tokenizers-cpp/include"
+    "${BOOST_INCLUDE_DIR}"
+    "${XRT_INCLUDE_DIR}")
+target_compile_definitions(test_phi4_frontend_off PRIVATE
+    FLM_CORELIB_TESTING=1 DEV_BUILD=1 __WINDOWS__ USEAVX2=1
+    DISABLE_ABI_CHECK=1 _ENABLE_EXTENDED_ALIGNED_STORAGE
+    WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(test_phi4_frontend_off PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>:/wd4005 /wd4244>)
+target_link_directories(test_phi4_frontend_off PRIVATE "${XRT_INCLUDE_DIR}/../lib")
+target_link_libraries(test_phi4_frontend_off PRIVATE xrt_coreutil)
+
+# Compile the actual production frontend translation units in both feature modes.
 # Empty declaration-only FFmpeg headers isolate this compile check from an
 # unrelated optional SDK that is absent on the standalone test host.
 set(FRONTEND_STUB_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/frontend-compile-stubs")
 foreach(STUB_HEADER IN ITEMS
         libavcodec/avcodec.h
+        libavformat/avformat.h
         libswscale/swscale.h
         libavutil/imgutils.h
         libavutil/frame.h
@@ -125,7 +176,11 @@ foreach(STUB_HEADER IN ITEMS
   file(WRITE "${FRONTEND_STUB_INCLUDE_DIR}/${STUB_HEADER}" "#pragma once\n")
 endforeach()
 
-set(FLM_PRODUCTION_FRONTEND_SOURCES "${FLM_SOURCE_DIR}/src/main.cpp")
+set(FLM_PRODUCTION_FRONTEND_SOURCES
+    ${PHI4_FRONTEND_SOURCES}
+    "${FLM_SOURCE_DIR}/runner/runner.cpp"
+    "${FLM_SOURCE_DIR}/server/rest_handler.cpp"
+    "${FLM_SOURCE_DIR}/server/server.cpp")
 function(add_frontend_compile_guard TARGET_NAME ENABLE_CORELIB)
   add_library(${TARGET_NAME} OBJECT ${FLM_PRODUCTION_FRONTEND_SOURCES})
   target_include_directories(${TARGET_NAME} PRIVATE
@@ -164,4 +219,6 @@ add_test(NAME test_phi4_gguf COMMAND test_phi4_gguf)
 add_test(NAME test_phi4_host COMMAND test_phi4_host)
 add_test(NAME test_phi4_shape_plan COMMAND test_phi4_shape_plan)
 add_test(NAME test_phi4_engine COMMAND test_phi4_engine)
+add_test(NAME test_phi4_frontend COMMAND test_phi4_frontend)
+add_test(NAME test_phi4_frontend_off COMMAND test_phi4_frontend_off)
 set_tests_properties(test_real_corelib PROPERTIES SKIP_RETURN_CODE 77)

@@ -47,8 +47,35 @@ extern std::mutex g_npu_access_mutex;
 extern std::atomic<bool> g_npu_in_use;
 extern std::atomic<int> g_npu_active_requests;
 
-// Helper function to check if an endpoint requires NPU access
-bool requires_npu_access(const std::string& method, const std::string& path);
+// Helper function to check if an endpoint requires serialized accelerator access.
+inline bool requires_npu_access(const std::string& method, const std::string& path) {
+    if (method != "POST") return false;
+    return path == "/api/generate" || path == "/api/chat" ||
+           path == "/v1/chat/completions" || path == "/v1/completions" ||
+           path == "/v1/audio/transcriptions" || path == "/v1/embeddings";
+}
+
+class NPURequestCompletionGuard final {
+public:
+    explicit NPURequestCompletionGuard(std::function<void()> completion)
+        : completion_(std::move(completion)) {}
+    NPURequestCompletionGuard(const NPURequestCompletionGuard&) = delete;
+    NPURequestCompletionGuard& operator=(const NPURequestCompletionGuard&) = delete;
+    NPURequestCompletionGuard(NPURequestCompletionGuard&& other) noexcept
+        : completion_(std::move(other.completion_)), active_(other.active_) {
+        other.active_ = false;
+    }
+    NPURequestCompletionGuard& operator=(NPURequestCompletionGuard&&) = delete;
+    ~NPURequestCompletionGuard() { complete(); }
+    void complete() noexcept {
+        if (!active_) return;
+        active_ = false;
+        try { if (completion_) completion_(); } catch (...) {}
+    }
+private:
+    std::function<void()> completion_;
+    bool active_ = true;
+};
 
 ///@brief get current time string, format: hh:mm:ss mm:dd:yyyy
 ///@return the current time string

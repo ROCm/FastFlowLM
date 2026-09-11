@@ -16,6 +16,8 @@
 #include <string>
 #include <type_traits>
 #include <any>
+#include <optional>
+#include <stdexcept>
 #include "typedef.hpp"
 #include "causal_lm.hpp"
 #include "lm_config.hpp"
@@ -128,9 +130,25 @@ struct lm_uniform_input_t {
 	std::vector<std::string> audios;
 	std::vector<input_payload_type_t> audio_payload_types;
 	nlohmann::ordered_json tools;
+	std::optional<int> requested_max_new_tokens;
 };
 
+inline std::optional<int> normalize_requested_max_new_tokens(
+	std::optional<int> requested) {
+	return requested.has_value() && *requested > 0 ? requested : std::nullopt;
+}
+
 using json = nlohmann::ordered_json;
+
+class ModelRequestError final : public std::runtime_error {
+public:
+	ModelRequestError(int http_code, bool session_cleared, std::string message);
+	int http_code() const noexcept;
+	bool session_cleared() const noexcept;
+private:
+	int http_code_;
+	bool session_cleared_;
+};
 
 class AutoModel {
 protected:
@@ -188,6 +206,8 @@ protected:
 
 
 	void _shared_load_model(std::string model_path, json model_info, int default_context_length = -1, bool enable_preemption = false);
+	void _shared_initialize_model_state(std::string model_path, json model_info, int context_length);
+	void _shared_initialize_legacy_npu(bool enable_preemption);
 	nlohmann::json _shared_setup_tokenizer(std::string model_path);
 
 	/// \brief Insert tokens into the model
@@ -219,6 +239,8 @@ public:
 	/// \brief Get the current model
 	/// \return the current model
 	std::string get_current_model();
+
+	virtual bool uses_corelib_aie4() const noexcept { return false; }
 
 	/// \brief Get the current context length
 	/// \return the current context length

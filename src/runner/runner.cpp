@@ -358,6 +358,8 @@ void Runner::run() {
             chat_meta_info_t meta_info;
             meta_info.max_prefill_len = this->prefill_chunk_len;
             uniformed_input.prompt = input;
+            uniformed_input.requested_max_new_tokens =
+                normalize_requested_max_new_tokens(this->generate_limit);
             
             this->auto_chat_engine->start_total_timer();
             

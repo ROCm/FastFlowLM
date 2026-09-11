@@ -20,6 +20,21 @@
 #include <random>
 #include "server.hpp"
 
+namespace {
+json ModelErrorResponse(const ModelRequestError& error) {
+    return {{"error", {{"message", error.what()},
+                       {"type", "model_error"},
+                       {"code", error.http_code()},
+                       {"session_cleared", error.session_cleared()}}}};
+}
+
+json ExceptionResponse(const std::exception& error) {
+    if (const auto* model_error = dynamic_cast<const ModelRequestError*>(&error))
+        return ModelErrorResponse(*model_error);
+    return {{"error", error.what()}};
+}
+}
+
 ///@brief Normalize messages by merging consecutive user messages (like Ollama does)
 ///@param messages the original messages
 ///@return normalized messages with consecutive user messages merged
@@ -655,6 +670,11 @@ void RestHandler::handle_generate(const json& request,
       
         chat_meta_info_t meta_info;
         lm_uniform_input_t uniformed_input;
+        uniformed_input.requested_max_new_tokens =
+            normalize_requested_max_new_tokens(
+                request.contains("max_tokens")
+                    ? std::optional<int>(request.at("max_tokens").get<int>())
+                    : std::nullopt);
         meta_info.max_prefill_len = this->prefill_chunk_len;
         meta_info.load_duration = (uint64_t)time_utils::duration_ns(load_start_time, load_end_time).first;
         header_print("FLM", "Start generating...");
@@ -665,7 +685,7 @@ void RestHandler::handle_generate(const json& request,
             streaming_ostream ostream(model, send_streaming_response, false);
             uniformed_input.prompt = prompt;
             try {
-                bool success = auto_chat_engine->insert(meta_info, uniformed_input);
+                bool success = auto_chat_engine->insert(meta_info, uniformed_input, [&] { return cancellation_token && cancellation_token->cancelled(); });
                 if (!success){
                     json error_response = {{"error", "Max length reached"}};
                     send_response(error_response);
@@ -673,15 +693,15 @@ void RestHandler::handle_generate(const json& request,
                     return;
                 }
             } catch (const std::exception& e) {
-                json error_response = {{"error", e.what()}};
+                json error_response = ExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
             }
             try {
-                auto_chat_engine->generate(meta_info, length_limit, ostream);
+                auto_chat_engine->generate(meta_info, length_limit, ostream, [&] { return cancellation_token && cancellation_token->cancelled(); });
             } catch (const std::exception& e) {
-                json error_response = {{"error", e.what()}};
+                json error_response = ExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -698,7 +718,7 @@ void RestHandler::handle_generate(const json& request,
             std::ostream ostream(&obuf);
             uniformed_input.prompt = prompt;
             try {
-                bool success = auto_chat_engine->insert(meta_info, uniformed_input);
+                bool success = auto_chat_engine->insert(meta_info, uniformed_input, [&] { return cancellation_token && cancellation_token->cancelled(); });
                 if (!success){
                     json error_response = {{"error", "Max length reached"}};
                     send_response(error_response);
@@ -706,15 +726,15 @@ void RestHandler::handle_generate(const json& request,
                     return;
                 }
             } catch (const std::exception& e) {
-                json error_response = {{"error", e.what()}};
+                json error_response = ExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
             }
             try {
-                auto_chat_engine->generate(meta_info, length_limit, ostream);
+                auto_chat_engine->generate(meta_info, length_limit, ostream, [&] { return cancellation_token && cancellation_token->cancelled(); });
             } catch (const std::exception& e) {
-                json error_response = {{"error", e.what()}};
+                json error_response = ExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -738,7 +758,7 @@ void RestHandler::handle_generate(const json& request,
             send_response(response);
         }
     } catch (const std::exception& e) {
-        json error_response = {{"error", e.what()}};
+        json error_response = ExceptionResponse(e);
         send_response(error_response);
     }
 }
@@ -772,6 +792,11 @@ void RestHandler::handle_chat(const json& request,
         
         chat_meta_info_t meta_info;
         lm_uniform_input_t uniformed_input;
+        uniformed_input.requested_max_new_tokens =
+            normalize_requested_max_new_tokens(
+                options.contains("num_predict")
+                    ? std::optional<int>(options.at("num_predict").get<int>())
+                    : std::nullopt);
         meta_info.load_duration = (uint64_t)time_utils::duration_ns(load_start_time, load_end_time).first;
         meta_info.max_prefill_len = this->prefill_chunk_len;
         header_print("FLM", "Start generating...");
@@ -781,7 +806,7 @@ void RestHandler::handle_chat(const json& request,
             streaming_ostream ostream(model, send_streaming_response, true);  // true for chat format
             uniformed_input.messages = messages;
             try {
-                bool success = auto_chat_engine->insert(meta_info, uniformed_input);
+                bool success = auto_chat_engine->insert(meta_info, uniformed_input, [&] { return cancellation_token && cancellation_token->cancelled(); });
                 if (!success){
                     json error_response = {{"error", "Max length reached"}};
                     send_response(error_response);
@@ -789,21 +814,16 @@ void RestHandler::handle_chat(const json& request,
                     return;
                 }
             } catch (const std::exception& e) {
-                json error_response = {{"error", e.what()}};
+                json error_response = ExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
             }
             try {
-                bool success = auto_chat_engine->insert(meta_info, uniformed_input);
-                if (!success){
-                    json error_response = {{"error", "Max length reached"}};
-                    send_response(error_response);
-                    this->auto_chat_engine->clear_context();
-                    return;
-                }
+                auto_chat_engine->generate(meta_info, length_limit, ostream,
+                    [&] { return cancellation_token && cancellation_token->cancelled(); });
             } catch (const std::exception& e) {
-                json error_response = {{"error", e.what()}};
+                json error_response = ExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -825,7 +845,7 @@ void RestHandler::handle_chat(const json& request,
             try {
                 response_text = auto_chat_engine->generate_with_prompt(meta_info, uniformed_input, length_limit, nstream);
             } catch (const std::exception& e) {
-                json error_response = {{"error", e.what()}};
+                json error_response = ExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -857,7 +877,7 @@ void RestHandler::handle_chat(const json& request,
             this->auto_chat_engine->clear_context();
         }
     } catch (const std::exception& e) {
-        json error_response = {{"error", e.what()}};
+        json error_response = ExceptionResponse(e);
         send_response(error_response);
     }
 }
@@ -915,7 +935,7 @@ void RestHandler::handle_embeddings(const json& request,
         send_response(response);
     }
     catch (const std::exception& e) {
-        json error_response = {{"error", e.what()}};
+        json error_response = ExceptionResponse(e);
         send_response(error_response);
     }
 }
@@ -931,7 +951,7 @@ void RestHandler::handle_models(const json& request,
         json models = supported_models.get_all_models_ollama();
         send_response(models);
     } catch (const std::exception& e) {
-        json error_response = {{"error", e.what()}};
+        json error_response = ExceptionResponse(e);
         send_response(error_response);
     }
 }
@@ -1020,7 +1040,7 @@ void RestHandler::handle_ps(const json& request,
         // std::cout << "response: " << response.dump(4) << std::endl;
         send_response(response);
     } catch (const std::exception& e) {
-        json error_response = {{"error", e.what()}};
+        json error_response = ExceptionResponse(e);
         send_response(error_response);
     }
 }
@@ -1146,13 +1166,22 @@ void RestHandler::handle_openai_chat_completion(const json& request,
         lm_uniform_input_t uniformed_input;
         uniformed_input.messages = current_messages;
         uniformed_input.tools = tools;
+        const std::optional<int> openai_chat_budget = request.contains("max_tokens")
+            ? std::optional<int>(request.at("max_tokens").get<int>())
+            : request.contains("max_completion_tokens")
+                ? std::optional<int>(request.at("max_completion_tokens").get<int>())
+                : std::nullopt;
+        uniformed_input.requested_max_new_tokens =
+            normalize_requested_max_new_tokens(openai_chat_budget);
         meta_info.load_duration = (uint64_t)time_utils::duration_ns(load_start_time, load_end_time).first;
         meta_info.max_prefill_len = this->prefill_chunk_len;
         if (stream){
             // Create a wrapper callback that passes the pre-formatted SSE string directly
             cancellation_token->reset();
             auto_chat_engine->reset_parser();
-            auto openai_stream_callback = [&send_streaming_response](const std::string& data, bool is_final) {
+            bool stream_started = false;
+            auto openai_stream_callback = [&send_streaming_response, &stream_started](const std::string& data, bool is_final) {
+                stream_started = true;
                 json data_json = data;
                 send_streaming_response(data_json, is_final);
                 };
@@ -1184,7 +1213,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                     return;
                 }
             } catch (const std::exception& e) {
-                json error_response = {{"error", e.what()}};
+                json error_response = ExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 this->prompt_cache.reset();
@@ -1193,8 +1222,18 @@ void RestHandler::handle_openai_chat_completion(const json& request,
             header_print("FLM", "Start generating...");
             try {
                 auto_chat_engine->generate(meta_info, length_limit, ostream, [&] { return cancellation_token->cancelled(); });
+            } catch (const ModelRequestError& error) {
+                const json error_response = ModelErrorResponse(error);
+                if (stream_started) {
+                    send_streaming_response(json("data: " + error_response.dump() + "\n\n"), false);
+                    send_streaming_response(json("data: [DONE]\n\n"), true);
+                } else {
+                    send_response(error_response);
+                }
+                if (error.session_cleared()) this->prompt_cache.reset();
+                return;
             } catch (const std::exception& e) {
-                json error_response = {{"error", e.what()}};
+                json error_response = ExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 this->prompt_cache.reset();
@@ -1236,7 +1275,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                     return;
                 }
             } catch (const std::exception& e) {
-                json error_response = {{"error", e.what()}};
+                json error_response = ExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 this->prompt_cache.reset();
@@ -1246,7 +1285,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
             try {
                 response_text = auto_chat_engine->generate(meta_info, length_limit, nstream, [&] { return cancellation_token->cancelled(); });
             } catch (const std::exception& e) {
-                json error_response = {{"error", e.what()}};
+                json error_response = ExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 this->prompt_cache.reset();
@@ -1389,18 +1428,25 @@ void RestHandler::handle_openai_completion(const json& request,
         chat_meta_info_t meta_info;
         meta_info.max_prefill_len = this->prefill_chunk_len;
         lm_uniform_input_t uniformed_input;
+        uniformed_input.requested_max_new_tokens =
+            normalize_requested_max_new_tokens(
+                request.contains("max_tokens")
+                    ? std::optional<int>(request.at("max_tokens").get<int>())
+                    : std::nullopt);
         header_print("FLM", "Start generating...");
 
         if (stream) {
             // Create a wrapper callback that passes the pre-formatted SSE string directly
-            auto openai_stream_callback = [&send_streaming_response](const std::string& data, bool is_final) {
+            bool stream_started = false;
+            auto openai_stream_callback = [&send_streaming_response, &stream_started](const std::string& data, bool is_final) {
+                stream_started = true;
                 json data_json = data;
                 send_streaming_response(data_json, is_final);
                 };
             streaming_ostream_openai ostream(model, openai_stream_callback);  // streaming in completion format
             uniformed_input.prompt = prompt;
             try {
-                bool success = auto_chat_engine->insert(meta_info, uniformed_input);
+                bool success = auto_chat_engine->insert(meta_info, uniformed_input, [&] { return cancellation_token && cancellation_token->cancelled(); });
                 if (!success) {
                     json error_response = { {"error", "Max length reached"} };
                     send_response(error_response);
@@ -1408,15 +1454,24 @@ void RestHandler::handle_openai_completion(const json& request,
                     return;
                 }
             } catch (const std::exception& e) {
-                json error_response = {{"error", e.what()}};
+                json error_response = ExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
             }
             try {
-                auto_chat_engine->generate(meta_info, length_limit, ostream);
+                auto_chat_engine->generate(meta_info, length_limit, ostream, [&] { return cancellation_token && cancellation_token->cancelled(); });
+            } catch (const ModelRequestError& error) {
+                const json error_response = ModelErrorResponse(error);
+                if (stream_started) {
+                    send_streaming_response(json("data: " + error_response.dump() + "\n\n"), false);
+                    send_streaming_response(json("data: [DONE]\n\n"), true);
+                } else {
+                    send_response(error_response);
+                }
+                return;
             } catch (const std::exception& e) {
-                json error_response = {{"error", e.what()}};
+                json error_response = ExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -1431,7 +1486,7 @@ void RestHandler::handle_openai_completion(const json& request,
             std::ostream ostream(&obuf);
             uniformed_input.prompt = prompt;
             try {
-                bool success = auto_chat_engine->insert(meta_info, uniformed_input);
+                bool success = auto_chat_engine->insert(meta_info, uniformed_input, [&] { return cancellation_token && cancellation_token->cancelled(); });
                 if (!success) {
                     json error_response = { {"error", "Max length reached"} };
                     send_response(error_response);
@@ -1439,15 +1494,15 @@ void RestHandler::handle_openai_completion(const json& request,
                     return;
                 }
             } catch (const std::exception& e) {
-                json error_response = {{"error", e.what()}};
+                json error_response = ExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
             }
             try {
-                auto_chat_engine->generate(meta_info, length_limit, ostream);
+                auto_chat_engine->generate(meta_info, length_limit, ostream, [&] { return cancellation_token && cancellation_token->cancelled(); });
             } catch (const std::exception& e) {
-                json error_response = {{"error", e.what()}};
+                json error_response = ExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
