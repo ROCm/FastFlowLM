@@ -60,6 +60,12 @@ target_include_directories(test_real_corelib PRIVATE
     "${RYZENAI_CORELIB_INCLUDE_DIR}")
 target_compile_definitions(test_real_corelib PRIVATE RYZENAI_CORELIB_STATIC=1)
 
+add_executable(test_phi4_gguf
+    test_phi4_gguf.cpp "${FLM_SOURCE_DIR}/common/corelib/phi4_corelib_gguf.cpp")
+target_include_directories(test_phi4_gguf PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}"
+    "${FLM_SOURCE_DIR}/include")
+
 # Compile the actual production frontend translation unit in both feature modes.
 # Empty declaration-only FFmpeg headers isolate this compile check from an
 # unrelated optional SDK that is absent on the standalone test host.
@@ -111,4 +117,5 @@ add_frontend_compile_guard(phi4_frontend_compile_on TRUE)
 include(CTest)
 add_test(NAME test_corelib_api COMMAND test_corelib_api)
 add_test(NAME test_real_corelib COMMAND test_real_corelib)
+add_test(NAME test_phi4_gguf COMMAND test_phi4_gguf)
 set_tests_properties(test_real_corelib PROPERTIES SKIP_RETURN_CODE 77)
