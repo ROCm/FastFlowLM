@@ -56,6 +56,10 @@ if(FLM_ENABLE_CORELIB_AIE4)
         message(FATAL_ERROR "FLM_ENABLE_CORELIB_AIE4 currently requires Windows")
     endif()
     find_path(RYZENAI_CORELIB_INCLUDE_DIR NAMES ryzenai/corelib.h REQUIRED)
+    find_path(FLM_CORELIB_BOOST_INCLUDE_DIR NAMES boost/any.hpp
+        HINTS "$ENV{CONDA_PREFIX}/Library/include"
+              "$ENV{USERPROFILE}/anaconda3/Library/include"
+              "C:/dev/boost_1_88_0" REQUIRED)
 endif()
 
 if(FLM_USE_HRX)
@@ -283,7 +287,8 @@ if(FLM_ENABLE_CORELIB_AIE4)
     include("${CMAKE_SOURCE_DIR}/common/corelib/corelib_sources.cmake")
     add_library(flm_corelib_aie4 STATIC ${FLM_CORELIB_AIE4_SOURCES})
     target_include_directories(flm_corelib_aie4 PUBLIC
-        "${CMAKE_SOURCE_DIR}/include" "${RYZENAI_CORELIB_INCLUDE_DIR}")
+        "${CMAKE_SOURCE_DIR}/include" "${RYZENAI_CORELIB_INCLUDE_DIR}"
+        "${XRT_INCLUDE_DIR}" "${FLM_CORELIB_BOOST_INCLUDE_DIR}")
     target_compile_definitions(flm_corelib_aie4 PUBLIC FLM_ENABLE_CORELIB_AIE4=1)
     target_link_libraries(flm PRIVATE flm_corelib_aie4)
 endif()

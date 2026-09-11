@@ -70,6 +70,45 @@ target_include_directories(test_phi4_gguf PRIVATE
     "${RYZENAI_CORELIB_INCLUDE_DIR}")
 target_compile_definitions(test_phi4_gguf PRIVATE RYZENAI_CORELIB_STATIC=1)
 
+add_executable(test_phi4_host
+    test_phi4_host.cpp
+    "${FLM_SOURCE_DIR}/common/corelib/phi4_corelib_host.cpp")
+target_include_directories(test_phi4_host PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}"
+    "${FLM_SOURCE_DIR}/include")
+
+add_executable(test_phi4_shape_plan
+    test_phi4_shape_plan.cpp fake_corelib.cpp
+    "${FLM_SOURCE_DIR}/common/corelib/corelib_api.cpp"
+    "${FLM_SOURCE_DIR}/common/corelib/phi4_corelib_shape_plan.cpp")
+target_include_directories(test_phi4_shape_plan PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}"
+    "${FLM_SOURCE_DIR}/include"
+    "${RYZENAI_CORELIB_INCLUDE_DIR}")
+target_compile_definitions(test_phi4_shape_plan PRIVATE RYZENAI_CORELIB_STATIC=1)
+
+add_executable(test_phi4_engine
+    test_phi4_engine.cpp fake_corelib.cpp
+    "${FLM_SOURCE_DIR}/common/corelib/corelib_api.cpp"
+    "${FLM_SOURCE_DIR}/common/corelib/corelib_runtime.cpp"
+    "${FLM_SOURCE_DIR}/common/corelib/phi4_corelib_gguf.cpp"
+    "${FLM_SOURCE_DIR}/common/corelib/phi4_corelib_host.cpp"
+    "${FLM_SOURCE_DIR}/common/corelib/phi4_corelib_shape_plan.cpp"
+    "${FLM_SOURCE_DIR}/common/corelib/phi4_corelib_aie4.cpp")
+target_include_directories(test_phi4_engine PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}"
+    "${FLM_SOURCE_DIR}/include"
+    "${RYZENAI_CORELIB_INCLUDE_DIR}"
+    "${BOOST_INCLUDE_DIR}"
+    "${XRT_INCLUDE_DIR}")
+target_compile_definitions(test_phi4_engine PRIVATE
+    RYZENAI_CORELIB_STATIC=1 USEAVX2=1 DISABLE_ABI_CHECK=1
+    _ENABLE_EXTENDED_ALIGNED_STORAGE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(test_phi4_engine PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>:/wd4005 /wd4244>)
+target_link_directories(test_phi4_engine PRIVATE "${XRT_INCLUDE_DIR}/../lib")
+target_link_libraries(test_phi4_engine PRIVATE xrt_coreutil)
+
 # Compile the actual production frontend translation unit in both feature modes.
 # Empty declaration-only FFmpeg headers isolate this compile check from an
 # unrelated optional SDK that is absent on the standalone test host.
@@ -122,4 +161,7 @@ include(CTest)
 add_test(NAME test_corelib_api COMMAND test_corelib_api)
 add_test(NAME test_real_corelib COMMAND test_real_corelib)
 add_test(NAME test_phi4_gguf COMMAND test_phi4_gguf)
+add_test(NAME test_phi4_host COMMAND test_phi4_host)
+add_test(NAME test_phi4_shape_plan COMMAND test_phi4_shape_plan)
+add_test(NAME test_phi4_engine COMMAND test_phi4_engine)
 set_tests_properties(test_real_corelib PROPERTIES SKIP_RETURN_CODE 77)

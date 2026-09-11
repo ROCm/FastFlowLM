@@ -12,6 +12,69 @@
 
 namespace fake_corelib {
 
+struct MatmulPadCall {
+    std::int64_t m;
+    std::int64_t k;
+    std::int64_t n;
+    std::uint32_t group_size;
+};
+
+struct RowsPadCall {
+    std::string helper;
+    std::int64_t m;
+    std::int64_t k;
+    std::int64_t n;
+    std::uint32_t group_size;
+};
+
+struct MhaPadCall {
+    std::int64_t m;
+    ryzenai_corelib_flat_mha_bf16_desc desc;
+};
+
+struct TensorCreateRecord {
+    ryzenai_corelib_data_type data_type;
+    std::vector<std::int64_t> shape;
+    void* object;
+};
+
+struct TensorWindowRecord {
+    void* parent;
+    std::vector<std::int64_t> shape;
+    std::size_t offset;
+    void* object;
+};
+
+struct WeightCreateRecord {
+    std::string kind;
+    std::int64_t k;
+    std::int64_t n;
+    std::uint32_t group_size;
+    std::uint32_t threads;
+    std::vector<const void*> pointers;
+    std::vector<std::uint16_t> norm0;
+    std::vector<std::uint16_t> norm1;
+    std::uint16_t epsilon{};
+};
+
+struct DispatchRecord {
+    std::string kind;
+    void* stream;
+    void* input;
+    void* output;
+    std::int64_t rows;
+    std::int64_t position;
+    std::size_t window_offset;
+};
+
+struct TensorWriteRecord {
+    void* tensor;
+    ryzenai_corelib_data_type source_type;
+    std::size_t count;
+    std::size_t offset;
+    bool all_zero;
+};
+
 struct State {
     flm::corelib::CorelibVersion version{0, 3, 0};
     ryzenai_corelib_status selftest_status{ryzenai_corelib_status_success};
@@ -30,6 +93,22 @@ struct State {
     std::atomic<int> cleanup_calls{0};
     std::atomic<int> active_leases{0};
     std::atomic<int> maximum_active_leases{0};
+    std::vector<MatmulPadCall> matmul_pad_calls;
+    std::vector<RowsPadCall> rows_pad_calls;
+    std::vector<MhaPadCall> mha_pad_calls;
+    std::int64_t pad_multiple{64};
+    std::int64_t matmul_k_delta{0};
+    std::int64_t matmul_n_delta{0};
+    std::vector<TensorCreateRecord> tensor_creates;
+    std::vector<TensorWindowRecord> tensor_windows;
+    std::vector<WeightCreateRecord> weight_creates;
+    std::vector<DispatchRecord> dispatches;
+    std::vector<TensorWriteRecord> tensor_writes;
+    std::vector<std::string> call_log;
+    std::atomic<int> active_weight_creates{0};
+    std::atomic<int> maximum_active_weight_creates{0};
+    bool work_in_flight{false};
+    std::string fail_after_submit;
 };
 
 State& GetState();
