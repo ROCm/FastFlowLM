@@ -65,6 +65,12 @@ struct ResolvedModelFile {
     std::string hash;
 };
 
+bool uses_pinned_aie4_integrity(const nlohmann::json& model_info) {
+    const auto details = model_info.find("details");
+    return details != model_info.end() && details->is_object() &&
+           details->value("execution_backend", std::string()) == "corelib_aie4_gguf";
+}
+
 }  // namespace
 
 ModelFileSource resolve_file_source(const nlohmann::json& model_info,
@@ -150,22 +156,25 @@ ModelDownloader::ModelDownloader(model_list& models)
 /// \param model_tag the model tag
 /// \return true if the model is downloaded, false otherwise
 ModelDownloader::ModelStatus ModelDownloader::is_model_downloaded(const std::string& model_tag, bool sub_process_mode, bool fast_check) {
-    auto missing_files = get_missing_files(model_tag);
+    const auto [new_model_tag, model_info] = supported_models.get_model_info(model_tag);
+    const bool strict_integrity = uses_pinned_aie4_integrity(model_info);
+    auto missing_files = get_missing_files(new_model_tag);
     bool is_config_file_missing = std::find(missing_files.begin(), missing_files.end(), "config.json") != missing_files.end();
     ModelStatus modelstatus = ModelStatus::Missing;
 
     if (!is_config_file_missing) {
-        modelstatus = check_model_compatibility(model_tag, sub_process_mode);
+        modelstatus = check_model_compatibility(new_model_tag, sub_process_mode);
 
         if (modelstatus == ModelStatus::Outdated) {
             if (!fast_check) {
                 header_print("FLM", "Checking outdated files...");
-                verify_and_clean_files(model_tag, false, sub_process_mode);
+                verify_and_clean_files(new_model_tag, false, sub_process_mode);
             }
         }
         else if (modelstatus == ModelStatus::Ready) {
             if (!missing_files.empty() ||
-                (!fast_check && !verify_and_clean_files(model_tag, false, sub_process_mode))) {
+                (strict_integrity && !fast_check &&
+                 !verify_and_clean_files(new_model_tag, false, sub_process_mode))) {
                 modelstatus = ModelStatus::Missing;
             }
         }
@@ -180,8 +189,12 @@ ModelDownloader::ModelStatus ModelDownloader::check_model_compatibility(const st
     auto [new_model_tag, model_info] = supported_models.get_model_info(model_tag);
     LM_Config config;
     config.from_pretrained(this->supported_models.get_model_path(new_model_tag));
-    std::string flm_version = config.flm_version;
     std::string flm_min_version = model_info["flm_min_version"];
+    // The pinned Microsoft frontend config is upstream-native and intentionally
+    // has no FLM version. Its catalog contract supplies the compatibility floor.
+    std::string flm_version = uses_pinned_aie4_integrity(model_info)
+        ? flm_min_version
+        : config.flm_version;
     int l_l, m_l, r_l; //left, middle, right on local version
     int l_r, m_r, r_r; //left, middle, right on requried version
     int l_f, m_f, r_f; //left, middle, right on flm version
@@ -236,9 +249,11 @@ bool ModelDownloader::pull_model(const std::string& model_tag, bool use_modelsco
                 }
                 break;
             case ModelStatus::Missing:
-                // Preserve valid finals, but remove corrupt finals before deciding
-                // which files need to be downloaded.
-                verify_and_clean_files(new_model_tag, use_modelscope, true);
+                if (uses_pinned_aie4_integrity(model_info)) {
+                    // Preserve valid finals, but remove corrupt pinned finals before
+                    // deciding which files need to be downloaded.
+                    verify_and_clean_files(new_model_tag, use_modelscope, true);
+                }
                 break;
             case ModelStatus::Outdated:
                 break;
@@ -277,7 +292,8 @@ bool ModelDownloader::pull_model(const std::string& model_tag, bool use_modelsco
         float sum_fize_size = download_list.second;
         if (downloads.empty()) {
             header_print("FLM", "No files to download for model: " + new_model_tag);
-            return verify_and_clean_files(new_model_tag, use_modelscope);
+            return !uses_pinned_aie4_integrity(model_info) ||
+                   verify_and_clean_files(new_model_tag, use_modelscope);
         }
         
         header_print("FLM", "Downloading " + std::to_string(downloads.size()) + " missing files...");
@@ -300,7 +316,8 @@ bool ModelDownloader::pull_model(const std::string& model_tag, bool use_modelsco
             // Verify every final file using the same pinned metadata used to download it.
             auto final_missing = get_missing_files(new_model_tag);
             const bool verified = final_missing.empty() &&
-                                  verify_and_clean_files(new_model_tag, use_modelscope);
+                (!uses_pinned_aie4_integrity(model_info) ||
+                 verify_and_clean_files(new_model_tag, use_modelscope));
             if (verified) {
                 header_print("FLM", "All files verified successfully.");
             } else {
@@ -512,9 +529,21 @@ bool ModelDownloader::remove_model(const std::string& model_tag, bool sub_proces
 /// \return true if all files are present and compatible, false otherwise
 bool ModelDownloader::check_model(const std::string& model_tag, bool use_modelscope, bool sub_process_mode) {
     auto [new_model_tag, model_info] = supported_models.get_model_info(model_tag);
+    if (use_modelscope && model_info.contains("file_sources")) {
+        try {
+            resolve_file_source(
+                model_info, model_info.at("files").at(0).get<std::string>(), true);
+        }
+        catch (const std::exception& error) {
+            header_print("ERROR", error.what());
+            return false;
+        }
+    }
     header_print("FLM", "Checking model: " + new_model_tag + "...\n");
 
-    ModelStatus status = is_model_downloaded(new_model_tag, sub_process_mode);
+    // check_model owns the one full integrity pass below. Status discovery must
+    // remain presence/version-only so a pinned 4.1 GB model is not hashed twice.
+    ModelStatus status = is_model_downloaded(new_model_tag, sub_process_mode, true);
     switch (status) {
         case ModelStatus::Missing:
             header_print("FLM", "Model not found: " + new_model_tag);
