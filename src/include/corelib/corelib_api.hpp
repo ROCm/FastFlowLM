@@ -2,6 +2,11 @@
 
 #include <ryzenai/corelib.h>
 
+#if RYZENAI_CORELIB_VERSION_MAJOR != 0 || RYZENAI_CORELIB_VERSION_MINOR != 3 || \
+    RYZENAI_CORELIB_VERSION_PATCH != 0
+#error "FastFlowLM requires ryzenai-corelib headers exactly 0.3.0"
+#endif
+
 #include <atomic>
 #include <cstddef>
 #include <cstdint>

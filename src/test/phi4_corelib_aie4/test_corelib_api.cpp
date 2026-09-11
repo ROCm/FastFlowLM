@@ -79,6 +79,32 @@ void TestEveryRequiredSymbolIsResolvedExactlyOnce() {
     }
 }
 
+void TestEveryResolvedFakeFunctionUsesItsExactAbi() {
+    fake_corelib::Reset();
+    const auto api = ValidApi();
+    fake_corelib::GetState().call_counts.clear();
+    fake_corelib::GetState().default_status = ryzenai_corelib_status_bad_argument;
+    fake_corelib::GetState().selftest_status = ryzenai_corelib_status_bad_argument;
+    const auto statuses = fake_corelib::CallEveryResolvedFunction(api->functions());
+    TEST_REQUIRE(statuses.size() == 20);
+    TEST_REQUIRE(std::all_of(statuses.begin(), statuses.end(), [](auto status) {
+        return status == ryzenai_corelib_status_bad_argument;
+    }));
+    TEST_REQUIRE(fake_corelib::GetState().call_counts.size() == 26);
+    for (const auto& [name, count] : fake_corelib::GetState().call_counts) {
+        (void)name;
+        TEST_REQUIRE(count == 1);
+    }
+
+    fake_corelib::GetState().statuses["ryzenai_corelib_tensor_write"] =
+        ryzenai_corelib_status_unsupported;
+    TEST_REQUIRE(api->functions().tensor_write(
+                     nullptr, ryzenai_corelib_data_type_bf16, nullptr, 0, 0) ==
+                 ryzenai_corelib_status_unsupported);
+    TEST_REQUIRE(fake_corelib::GetState()
+                     .call_counts["ryzenai_corelib_tensor_write"] == 2);
+}
+
 void TestMissingSymbolNamesTheSymbolAndUnloadsTheDll() {
     fake_corelib::Reset();
     fake_corelib::GetState().missing_symbol = "ryzenai_corelib_create_stream";
@@ -238,6 +264,7 @@ int main() {
     RUN_TEST(TestExactlyVersion030IsAccepted);
     RUN_TEST(TestMajorMinorAndPatchMismatchesAreRejectedWithBothVersions);
     RUN_TEST(TestEveryRequiredSymbolIsResolvedExactlyOnce);
+    RUN_TEST(TestEveryResolvedFakeFunctionUsesItsExactAbi);
     RUN_TEST(TestMissingSymbolNamesTheSymbolAndUnloadsTheDll);
     RUN_TEST(TestCorelibErrorCopiesStatusCallAndThreadLocalDetail);
     RUN_TEST(TestEnvironmentPathMustBeAnAbsoluteDllPath);
