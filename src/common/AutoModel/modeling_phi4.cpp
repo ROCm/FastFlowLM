@@ -171,15 +171,11 @@ void Phi4::setup_tokenizer(const std::string& model_path,
         throw std::invalid_argument("Phi-4 tokenizer_config.json requires a string chat_template");
 
     const bool aie4 = verified_tokenizer_config != nullptr;
-    std::string configured_eos;
-    if (!aie4) {
-        if (!config.contains("eos_token") || !config["eos_token"].is_string())
-            throw std::invalid_argument("Phi-4 tokenizer_config.json requires a string eos_token");
-        configured_eos = config["eos_token"].get<std::string>();
-    }
+    // Preserve the legacy Phi-4 contract: minja receives no textual BOS/EOS.
+    // AIE4 also disables automatic BOS, with stop IDs supplied only after the
+    // cross-source package contract has been validated.
     auto chat = std::make_unique<minja::chat_template>(
-        config["chat_template"].get<std::string>(), "",
-        aie4 ? "" : configured_eos);
+        config["chat_template"].get<std::string>(), "", "");
     std::vector<int> eos;
     if (aie4) {
         // ValidatePhi4Contract proved these exact independent sources.
@@ -194,7 +190,7 @@ void Phi4::setup_tokenizer(const std::string& model_path,
     }
     has_bos_token = false;
     bos_token_id = -1;
-    eos_token = std::move(configured_eos);
+    eos_token.clear();
     eos_token_ids = std::move(eos);
     chat_tmpl = std::move(chat);
     user_system_prompt.clear();

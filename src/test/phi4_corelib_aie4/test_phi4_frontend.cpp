@@ -376,7 +376,9 @@ void TestNonStreamingChatGenerateWithPromptForwardsCancellation() {
 
 void TestLegacyTokenizerContractIsPreserved() {
     TempPackage package; FactoryScope scope; auto legacy = Load(package, ModelInfo());
-    TEST_REQUIRE(Phi4FrontendTestAccess::EosToken(*legacy) == "<legacy-eos>");
+    // Main's legacy Phi-4 frontend intentionally did not pass the textual EOS
+    // token into minja and retained an empty eos_token string.
+    TEST_REQUIRE(Phi4FrontendTestAccess::EosToken(*legacy).empty());
     TEST_REQUIRE(Phi4FrontendTestAccess::EosTokenIds(*legacy) ==
                  std::vector<int>({200020, 199999}));
 
