@@ -92,8 +92,12 @@ struct phi4_corelib_aie4::Impl {
             mlp_weights[i]=UniqueSsMlpWeights(api,raw);
         }
         lm_weights=mm(embedding,kHiddenSize,kVocabularySize,"token_embd.weight");
-        const auto& e=plan.ForRows(kMaxSequenceLength);
-        auto rows=std::max({e.query_rows,e.output_rows,e.ssmlp_rows,e.rmsnorm_rows});
+        const auto& e=plan.maximum_extents();
+        const auto rows=std::max({e.query_rows,e.kv_rows,e.output_rows,
+                                  e.ssmlp_rows,e.rmsnorm_rows});
+        const auto query_rows=std::max(e.query_rows,e.flat_mha_rows);
+        const auto key_rows=std::max(e.kv_rows,e.flat_mha_rows);
+        const auto attention_rows=std::max(e.flat_mha_rows,e.output_rows);
         auto tensor=[&](ryzenai_corelib_data_type type,std::initializer_list<std::int64_t> dims,const char* label){
             std::vector<std::int64_t> shape(dims);void* p=nullptr;
             api->Check(api->functions().create_device_tensor(type,shape.data(),shape.size(),&p),std::string("ryzenai_corelib_create_device_tensor ")+label);
@@ -102,9 +106,9 @@ struct phi4_corelib_aie4::Impl {
         hidden=tensor(ryzenai_corelib_data_type_bf16,{rows,kHiddenSize},"hidden");
         residual=tensor(ryzenai_corelib_data_type_bf16,{rows,kHiddenSize},"residual");
         skip=tensor(ryzenai_corelib_data_type_bf16,{rows,kHiddenSize},"skip");
-        q=tensor(ryzenai_corelib_data_type_bf16,{e.query_rows,kQueryDimension},"query");
-        k=tensor(ryzenai_corelib_data_type_bf16,{e.kv_rows,kKvDimension},"key");
-        attention=tensor(ryzenai_corelib_data_type_bf16,{e.flat_mha_rows,kQueryDimension},"attention");
+        q=tensor(ryzenai_corelib_data_type_bf16,{query_rows,kQueryDimension},"query");
+        k=tensor(ryzenai_corelib_data_type_bf16,{key_rows,kKvDimension},"key");
+        attention=tensor(ryzenai_corelib_data_type_bf16,{attention_rows,kQueryDimension},"attention");
         lm_input=tensor(ryzenai_corelib_data_type_bf16,{1,kHiddenSize},"lm input");
         logits=tensor(ryzenai_corelib_data_type_bf16,{1,kVocabularySize},"logits");
         cosine=tensor(ryzenai_corelib_data_type_fp32,{kMaxSequenceLength,48},"cosine");
@@ -121,14 +125,19 @@ struct phi4_corelib_aie4::Impl {
         if(ids.size()>max_length||position+ids.size()>max_length||position+ids.size()>kMaxSequenceLength)throw std::out_of_range("Phi-4 request exceeds configured context capacity");
         if(!prefill&&position+ids.size()>kMaxDecodeWindow)throw std::out_of_range("Phi-4 decode window stops at position 4095");
         auto decoded=DecodeEmbeddingRowsQ8(embedding,ids);const auto&e=plan.ForRows(ids.size());
-        auto rows=std::max({e.query_rows,e.output_rows,e.ssmlp_rows,e.rmsnorm_rows});
+        auto rows=std::max({e.query_rows,e.kv_rows,e.output_rows,
+                            e.ssmlp_rows,e.rmsnorm_rows});
         std::vector<float> input(static_cast<std::size_t>(rows*kHiddenSize),0);std::copy(decoded.begin(),decoded.end(),input.begin());
         std::vector<std::uint16_t> zeros(static_cast<std::size_t>(rows*kHiddenSize),0);
         auto lease=runtime->AcquireExecution();bool submitted=false;
         try{
             api->Check(api->functions().tensor_write(hidden.get(),ryzenai_corelib_data_type_fp32,input.data(),input.size(),0),"ryzenai_corelib_tensor_write hidden");
             api->Check(api->functions().tensor_write(residual.get(),ryzenai_corelib_data_type_bf16,zeros.data(),zeros.size(),0),"ryzenai_corelib_tensor_write residual padding");
-            api->Check(api->functions().rmsnorm(stream.get(),hidden.get(),ids.size(),first_norm.get(),hidden.get()),"ryzenai_corelib_rmsnorm_bf16 initial");submitted=true;
+            const auto rms_status=api->functions().rmsnorm(
+                stream.get(),hidden.get(),ids.size(),first_norm.get(),hidden.get());
+            submitted=rms_status==ryzenai_corelib_status_success ||
+                      rms_status==ryzenai_corelib_status_failure;
+            api->Check(rms_status,"ryzenai_corelib_rmsnorm_bf16 initial");
             void* res=residual.get();void* sk=skip.get();
             for(std::size_t i=0;i<kLayerCount;++i){
                 api->Check(api->functions().matmul(stream.get(),hidden.get(),ids.size(),q_weights[i].get(),q.get()),"ryzenai_corelib_matmul_bf16 query layer "+std::to_string(i));
@@ -148,7 +157,26 @@ struct phi4_corelib_aie4::Impl {
             buffer<bf16> out(kVocabularySize);api->Check(api->functions().tensor_read(logits.get(),ryzenai_corelib_data_type_bf16,out.data(),out.size(),0),"ryzenai_corelib_tensor_read logits");position+=static_cast<int>(ids.size());return out;
         }catch(...){if(submitted){(void)api->functions().stream_synchronize(stream.get());poisoned=true;position=0;saved.reset();}throw;}
     }
-    buffer<bf16> read_cache(bool is_k,int layer,int index){usable();if(layer<0||layer>=kLayerCount||index<0||index>=kMaxSequenceLength)throw std::out_of_range("Phi-4 cache index is out of range");auto lease=runtime->AcquireExecution();api->Check(api->functions().stream_synchronize(stream.get()),"ryzenai_corelib_stream_synchronize cache read");buffer<bf16> out(kKvHeadCount*kHeadSize);api->Check(api->functions().tensor_read(is_k?k_cache[layer].get():v_cache[layer].get(),ryzenai_corelib_data_type_bf16,out.data(),out.size(),static_cast<std::size_t>(index)*128),"ryzenai_corelib_tensor_read cache");return out;}
+    buffer<bf16> read_cache(bool is_k,int layer,int index){
+        usable();
+        if(layer<0||layer>=kLayerCount||index<0||index>=kMaxSequenceLength)
+            throw std::out_of_range("Phi-4 cache index is out of range");
+        auto lease=runtime->AcquireExecution();
+        api->Check(api->functions().stream_synchronize(stream.get()),
+                   "ryzenai_corelib_stream_synchronize cache read");
+        buffer<bf16> out(kKvHeadCount*kHeadSize);
+        void* cache=is_k?k_cache[layer].get():v_cache[layer].get();
+        for(std::size_t head=0;head<kKvHeadCount;++head){
+            const auto offset=(head*kMaxSequenceLength+
+                               static_cast<std::size_t>(index))*kHeadSize;
+            api->Check(api->functions().tensor_read(
+                           cache,ryzenai_corelib_data_type_bf16,
+                           out.data()+head*kHeadSize,kHeadSize,offset),
+                       "ryzenai_corelib_tensor_read cache head "+
+                           std::to_string(head));
+        }
+        return out;
+    }
 };
 
 phi4_corelib_aie4::phi4_corelib_aie4(LM_Config c,std::shared_ptr<Phi4GgufPackage> p,std::shared_ptr<CorelibRuntime> r,std::uint32_t m):impl_(std::make_unique<Impl>(std::move(c),std::move(p),std::move(r),m)){}

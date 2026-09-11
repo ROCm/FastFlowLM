@@ -99,6 +99,8 @@ struct State {
     std::int64_t pad_multiple{64};
     std::int64_t matmul_k_delta{0};
     std::int64_t matmul_n_delta{0};
+    std::unordered_map<std::string,
+        std::unordered_map<std::int64_t, std::int64_t>> pad_row_overrides;
     std::vector<TensorCreateRecord> tensor_creates;
     std::vector<TensorWindowRecord> tensor_windows;
     std::vector<WeightCreateRecord> weight_creates;

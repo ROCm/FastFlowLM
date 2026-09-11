@@ -2,6 +2,7 @@
 
 #include "models/phi4/phi4_corelib_constants.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 #include <string>
 
@@ -69,6 +70,18 @@ Phi4ShapePlan Phi4ShapePlan::Build(
             ",24,8,128,4096,96]";
         api->Check(api->functions().flat_mha_pad_rows(
                        &extents.flat_mha_rows, &plan.attention_desc_), mha_call);
+        plan.maximum_extents_.query_rows = std::max(
+            plan.maximum_extents_.query_rows, extents.query_rows);
+        plan.maximum_extents_.kv_rows = std::max(
+            plan.maximum_extents_.kv_rows, extents.kv_rows);
+        plan.maximum_extents_.output_rows = std::max(
+            plan.maximum_extents_.output_rows, extents.output_rows);
+        plan.maximum_extents_.ssmlp_rows = std::max(
+            plan.maximum_extents_.ssmlp_rows, extents.ssmlp_rows);
+        plan.maximum_extents_.rmsnorm_rows = std::max(
+            plan.maximum_extents_.rmsnorm_rows, extents.rmsnorm_rows);
+        plan.maximum_extents_.flat_mha_rows = std::max(
+            plan.maximum_extents_.flat_mha_rows, extents.flat_mha_rows);
         plan.rows_.push_back(extents);
     }
 
@@ -81,6 +94,10 @@ const Phi4RowExtents& Phi4ShapePlan::ForRows(std::size_t live_rows) const {
         throw std::out_of_range("Phi-4 live rows must be in 1..4096");
     }
     return rows_[live_rows - 1];
+}
+
+const Phi4RowExtents& Phi4ShapePlan::maximum_extents() const noexcept {
+    return maximum_extents_;
 }
 
 const ryzenai_corelib_flat_mha_bf16_desc&

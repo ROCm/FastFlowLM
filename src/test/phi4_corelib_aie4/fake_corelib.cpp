@@ -12,12 +12,18 @@ namespace {
 fake_corelib::State state;
 thread_local std::string current_detail;
 
+struct FakeStorage {
+    std::size_t byte_size{};
+    std::unique_ptr<std::vector<std::byte>> bytes;
+};
+
 struct FakeObject {
     std::string kind;
     ryzenai_corelib_data_type data_type{ryzenai_corelib_data_type_bf16};
     std::vector<std::int64_t> shape;
     std::size_t byte_size{};
     std::size_t window_offset{};
+    std::shared_ptr<FakeStorage> storage;
 };
 
 void* NewObject(std::string kind = "generic") {
@@ -43,10 +49,30 @@ std::size_t TypeBytes(ryzenai_corelib_data_type type) {
     return RYZENAI_CORELIB_DATA_TYPE_BITS(type) / 8;
 }
 
+std::int64_t PaddedRows(std::string_view helper, std::int64_t rows) {
+    const auto helpers = state.pad_row_overrides.find(std::string(helper));
+    if (helpers != state.pad_row_overrides.end()) {
+        const auto found = helpers->second.find(rows);
+        if (found != helpers->second.end()) return found->second;
+    }
+    if (rows == 1 || state.pad_multiple <= 0) return rows;
+    return (rows + state.pad_multiple - 1) / state.pad_multiple * state.pad_multiple;
+}
+
 std::uint16_t Bf16(float value) {
     std::uint32_t bits = std::bit_cast<std::uint32_t>(value);
     bits += 0x7fffU + ((bits >> 16) & 1U);
     return static_cast<std::uint16_t>(bits >> 16);
+}
+
+float FloatFromBf16(std::uint16_t value) {
+    return std::bit_cast<float>(static_cast<std::uint32_t>(value) << 16);
+}
+
+void EnsureStorage(FakeObject& object) {
+    if (!object.storage->bytes)
+        object.storage->bytes = std::make_unique<std::vector<std::byte>>(
+            object.storage->byte_size, std::byte{0});
 }
 
 void ObserveCreateConcurrency() {
@@ -121,6 +147,8 @@ struct TypedFake<Tag, Result (*)(Args...)> {
                 object->data_type = type;
                 object->shape.assign(shape, shape + shape_len);
                 object->byte_size = Elements(object->shape) * TypeBytes(type);
+                object->storage = std::make_shared<FakeStorage>();
+                object->storage->byte_size = object->byte_size;
                 *out = object;
                 state.tensor_creates.push_back({type, object->shape, object});
             }
@@ -135,10 +163,14 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             if (out) *out = nullptr;
             if (status == ryzenai_corelib_status_success && out && shape) {
                 auto* object = static_cast<FakeObject*>(NewObject("window"));
-                if (parent) object->data_type = static_cast<FakeObject*>(parent)->data_type;
+                if (parent) {
+                    const auto* parent_object = static_cast<FakeObject*>(parent);
+                    object->data_type = parent_object->data_type;
+                    object->storage = parent_object->storage;
+                    object->window_offset = parent_object->window_offset + offset;
+                }
                 object->shape.assign(shape, shape + shape_len);
                 object->byte_size = Elements(object->shape) * TypeBytes(object->data_type);
-                object->window_offset = offset;
                 *out = object;
                 state.tensor_windows.push_back({parent, object->shape, offset, object});
             }
@@ -166,12 +198,54 @@ struct TypedFake<Tag, Result (*)(Args...)> {
                                        [](unsigned char value) { return value == 0; });
             }
             state.tensor_writes.push_back({std::get<0>(arguments), type, count, offset, all_zero});
+            auto* object = static_cast<FakeObject*>(std::get<0>(arguments));
+            if (status == ryzenai_corelib_status_success && object && source) {
+                const auto target_offset = (object->window_offset + offset) *
+                                           TypeBytes(object->data_type);
+                if (!all_zero || object->storage->bytes) EnsureStorage(*object);
+                if (object->storage->bytes) {
+                    auto* target = object->storage->bytes->data() + target_offset;
+                    if (object->data_type == type) {
+                        std::memcpy(target, source, count * TypeBytes(type));
+                    } else if (object->data_type == ryzenai_corelib_data_type_bf16 &&
+                               type == ryzenai_corelib_data_type_fp32) {
+                        const auto* values = static_cast<const float*>(source);
+                        for (std::size_t i = 0; i < count; ++i) {
+                            const auto converted = Bf16(values[i]);
+                            std::memcpy(target + i * sizeof(converted), &converted,
+                                        sizeof(converted));
+                        }
+                    }
+                }
+            }
             return status;
         } else if constexpr (std::is_same_v<Tag, tensor_read_tag>) {
             const auto status = Status(Tag::name);
-            if (status == ryzenai_corelib_status_success && std::get<2>(arguments)) {
-                std::memset(std::get<2>(arguments), 0,
-                            std::get<3>(arguments) * TypeBytes(std::get<1>(arguments)));
+            auto* object = static_cast<FakeObject*>(std::get<0>(arguments));
+            const auto destination_type = std::get<1>(arguments);
+            void* destination = std::get<2>(arguments);
+            const auto count = std::get<3>(arguments);
+            const auto offset = std::get<4>(arguments);
+            if (status == ryzenai_corelib_status_success && destination) {
+                std::memset(destination, 0, count * TypeBytes(destination_type));
+                if (object && object->storage && object->storage->bytes) {
+                    const auto source_offset = (object->window_offset + offset) *
+                                               TypeBytes(object->data_type);
+                    const auto* source = object->storage->bytes->data() + source_offset;
+                    if (object->data_type == destination_type) {
+                        std::memcpy(destination, source,
+                                    count * TypeBytes(destination_type));
+                    } else if (object->data_type == ryzenai_corelib_data_type_bf16 &&
+                               destination_type == ryzenai_corelib_data_type_fp32) {
+                        auto* values = static_cast<float*>(destination);
+                        for (std::size_t i = 0; i < count; ++i) {
+                            std::uint16_t encoded;
+                            std::memcpy(&encoded, source + i * sizeof(encoded),
+                                        sizeof(encoded));
+                            values[i] = FloatFromBf16(encoded);
+                        }
+                    }
+                }
             }
             return status;
         } else if constexpr (std::is_same_v<Tag, matmul_pad_shape_tag>) {
@@ -183,8 +257,7 @@ struct TypedFake<Tag, Result (*)(Args...)> {
                                                n ? *n : -1, group});
             const auto status = Status(Tag::name);
             if (status == ryzenai_corelib_status_success) {
-                if (m && state.pad_multiple > 0 && *m != 1)
-                    *m = (*m + state.pad_multiple - 1) / state.pad_multiple * state.pad_multiple;
+                if (m) *m = PaddedRows(n && *n == 1024 ? "matmul-1024" : "matmul-3072", *m);
                 if (k) *k += state.matmul_k_delta;
                 if (n) *n += state.matmul_n_delta;
             }
@@ -194,24 +267,24 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             state.rows_pad_calls.push_back({"ssmlp", m ? *m : -1,
                 std::get<1>(arguments), std::get<2>(arguments), std::get<3>(arguments)});
             const auto status = Status(Tag::name);
-            if (status == ryzenai_corelib_status_success && m && state.pad_multiple > 0 && *m != 1)
-                *m = (*m + state.pad_multiple - 1) / state.pad_multiple * state.pad_multiple;
+            if (status == ryzenai_corelib_status_success && m)
+                *m = PaddedRows("ssmlp", *m);
             return status;
         } else if constexpr (std::is_same_v<Tag, rmsnorm_pad_rows_tag>) {
             auto* m = std::get<0>(arguments);
             state.rows_pad_calls.push_back({"rmsnorm", m ? *m : -1,
                 std::get<1>(arguments), 0, 0});
             const auto status = Status(Tag::name);
-            if (status == ryzenai_corelib_status_success && m && state.pad_multiple > 0 && *m != 1)
-                *m = (*m + state.pad_multiple - 1) / state.pad_multiple * state.pad_multiple;
+            if (status == ryzenai_corelib_status_success && m)
+                *m = PaddedRows("rmsnorm", *m);
             return status;
         } else if constexpr (std::is_same_v<Tag, flat_mha_pad_rows_tag>) {
             auto* m = std::get<0>(arguments);
             auto* desc = std::get<1>(arguments);
             state.mha_pad_calls.push_back({m ? *m : -1, desc ? *desc : ryzenai_corelib_flat_mha_bf16_desc{}});
             const auto status = Status(Tag::name);
-            if (status == ryzenai_corelib_status_success && m && state.pad_multiple > 0 && *m != 1)
-                *m = (*m + state.pad_multiple - 1) / state.pad_multiple * state.pad_multiple;
+            if (status == ryzenai_corelib_status_success && m)
+                *m = PaddedRows("mha", *m);
             return status;
         } else if constexpr (std::is_same_v<Tag, matmul_weights_create_gguf_requantized_tag>) {
             const auto status = Status(Tag::name);
@@ -361,6 +434,7 @@ void Reset() {
     state.pad_multiple = 64;
     state.matmul_k_delta = 0;
     state.matmul_n_delta = 0;
+    state.pad_row_overrides.clear();
     state.tensor_creates.clear();
     state.tensor_windows.clear();
     state.weight_creates.clear();

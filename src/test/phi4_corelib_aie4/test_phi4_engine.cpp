@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -26,8 +28,9 @@ struct Harness {
     std::shared_ptr<Phi4GgufPackage> package;
     std::unique_ptr<phi4_corelib_aie4> engine;
 
-    Harness() {
+    explicit Harness(std::function<void(fake_corelib::State&)> configure = {}) {
         fake_corelib::Reset();
+        if (configure) configure(fake_corelib::GetState());
         runtime = CorelibRuntime::CreateForTest(
             CorelibApi::ResolveForTest(fake_corelib::Resolver()));
         package = Phi4GgufPackage::Open(FullPackagePath());
@@ -51,6 +54,23 @@ void TestEngineCreatesOneStreamAndPersistentHelperSizedTensors() {
     TEST_REQUIRE(state.tensor_creates[4].shape == std::vector<std::int64_t>({4096, 1024}));
     TEST_REQUIRE(state.tensor_creates[6].shape == std::vector<std::int64_t>({1, 3072}));
     TEST_REQUIRE(state.tensor_creates[7].shape == std::vector<std::int64_t>({1, 200064}));
+}
+
+void TestEngineAllocatesMaximaAcrossAllRowsAndConsumers() {
+    Harness h([](auto& state) {
+        state.pad_row_overrides["matmul-3072"][2048] = 5000;
+        state.pad_row_overrides["matmul-1024"][2048] = 6000;
+        state.pad_row_overrides["ssmlp"][2048] = 7000;
+        state.pad_row_overrides["rmsnorm"][2048] = 8000;
+        state.pad_row_overrides["mha"][2048] = 9000;
+    });
+    const auto& tensors = fake_corelib::GetState().tensor_creates;
+    TEST_REQUIRE(tensors[0].shape == std::vector<std::int64_t>({8000, 3072}));
+    TEST_REQUIRE(tensors[1].shape == std::vector<std::int64_t>({8000, 3072}));
+    TEST_REQUIRE(tensors[2].shape == std::vector<std::int64_t>({8000, 3072}));
+    TEST_REQUIRE(tensors[3].shape == std::vector<std::int64_t>({9000, 3072}));
+    TEST_REQUIRE(tensors[4].shape == std::vector<std::int64_t>({9000, 1024}));
+    TEST_REQUIRE(tensors[5].shape == std::vector<std::int64_t>({9000, 3072}));
 }
 
 void TestEngineCreates129Matmul32SsmlpAndOneRmsNormWeight() {
@@ -189,13 +209,15 @@ void TestEachLayerOrdersQKVThenMhaThenOThenSsmlpOnOneStream() {
 }
 
 void TestBuffersAreZeroPaddedBeforeSubmissionForEachRowBucket() {
-    Harness h;
+    Harness h([](auto& state) {
+        state.pad_row_overrides["matmul-1024"][2] = 96;
+    });
     fake_corelib::GetState().tensor_writes.clear();
     std::vector<int> ids{1, 2};
     (void)h.engine->prefill(ids);
     const auto& writes = fake_corelib::GetState().tensor_writes;
-    TEST_REQUIRE(writes[0].count == 64 * 3072);
-    TEST_REQUIRE(writes[1].count == 64 * 3072);
+    TEST_REQUIRE(writes[0].count == 96 * 3072);
+    TEST_REQUIRE(writes[1].count == 96 * 3072);
     TEST_REQUIRE(writes[1].all_zero);
 }
 
@@ -260,11 +282,20 @@ void TestCheckpointRestoreChangesOnlyLogicalPosition() {
 
 void TestPreSubmitFailureIsRecoverable() {
     Harness h;
-    fake_corelib::GetState().statuses["ryzenai_corelib_rmsnorm_bf16"] = ryzenai_corelib_status_failure;
+    fake_corelib::GetState().statuses["ryzenai_corelib_rmsnorm_bf16"] = ryzenai_corelib_status_bad_argument;
     RequireContains(RequireThrows([&] { (void)h.engine->forward(0); }), "rmsnorm");
     TEST_REQUIRE(!h.engine->poisoned());
     fake_corelib::GetState().statuses.erase("ryzenai_corelib_rmsnorm_bf16");
     (void)h.engine->forward(0);
+}
+
+void TestInitialRmsNormPostSubmitFailureSynchronizesAndPoisons() {
+    Harness h;
+    fake_corelib::GetState().fail_after_submit = "ryzenai_corelib_rmsnorm_bf16";
+    RequireContains(RequireThrows([&] { (void)h.engine->forward(0); }), "rmsnorm");
+    TEST_REQUIRE(h.engine->poisoned());
+    TEST_REQUIRE(!fake_corelib::GetState().work_in_flight);
+    TEST_REQUIRE(fake_corelib::GetState().call_counts["ryzenai_corelib_stream_synchronize"] == 1);
 }
 
 void TestPostSubmitFailureSynchronizesThenPoisonsAndClearsState() {
@@ -295,6 +326,75 @@ void TestPoisonedInstanceRejectsEveryLaterEntryPoint() {
     RequireContains(RequireThrows([&] { (void)h.engine->prefill(ids); }), "poisoned");
 }
 
+void TestFakeTensorWindowRetainsAndPropagatesParentStorage() {
+    fake_corelib::Reset();
+    auto api = CorelibApi::ResolveForTest(fake_corelib::Resolver());
+    const std::array<std::int64_t, 1> parent_shape{16};
+    void* parent = nullptr;
+    api->Check(api->functions().create_device_tensor(
+        ryzenai_corelib_data_type_bf16, parent_shape.data(), parent_shape.size(), &parent),
+        "create parent");
+    const std::array<std::uint16_t, 4> original{11, 22, 33, 44};
+    api->Check(api->functions().tensor_write(parent, ryzenai_corelib_data_type_bf16,
+                                              original.data(), original.size(), 4),
+               "write parent");
+    const std::array<std::int64_t, 1> window_shape{4};
+    void* window = nullptr;
+    api->Check(api->functions().create_tensor_window(
+        parent, window_shape.data(), window_shape.size(), 4, &window), "create window");
+    std::array<std::uint16_t, 4> read{};
+    api->Check(api->functions().tensor_read(window, ryzenai_corelib_data_type_bf16,
+                                             read.data(), read.size(), 0), "read window");
+    TEST_REQUIRE(read == original);
+    const std::array<std::uint16_t, 2> replacement{77, 88};
+    api->Check(api->functions().tensor_write(window, ryzenai_corelib_data_type_bf16,
+                                              replacement.data(), replacement.size(), 1),
+               "write window");
+    std::array<std::uint16_t, 4> reread{};
+    api->Check(api->functions().tensor_read(parent, ryzenai_corelib_data_type_bf16,
+                                             reread.data(), reread.size(), 4), "read parent");
+    TEST_REQUIRE((reread == std::array<std::uint16_t, 4>{11, 77, 88, 44}));
+    api->Release(parent);
+    reread.fill(0);
+    api->Check(api->functions().tensor_read(window, ryzenai_corelib_data_type_bf16,
+                                             reread.data(), reread.size(), 0), "reread retained window");
+    TEST_REQUIRE((reread == std::array<std::uint16_t, 4>{11, 77, 88, 44}));
+    api->Release(window);
+    TEST_REQUIRE(fake_corelib::GetState().live_objects == 0);
+}
+
+void WriteCacheRow(Harness& h, std::size_t tensor_index, int position,
+                   std::uint16_t base) {
+    auto& record = fake_corelib::GetState().tensor_creates[tensor_index];
+    for (std::size_t head = 0; head < 8; ++head) {
+        std::array<std::uint16_t, 128> values{};
+        values.fill(static_cast<std::uint16_t>(base + head));
+        h.runtime->api()->Check(h.runtime->api()->functions().tensor_write(
+            record.object, ryzenai_corelib_data_type_bf16, values.data(), values.size(),
+            (head * 4096 + position) * 128), "seed cache row");
+    }
+}
+
+void TestGetKCacheGathersHeadMajorPosition() {
+    Harness h;
+    WriteCacheRow(h, 10, 7, 100);
+    const auto result = h.engine->get_k_cache(0, 7);
+    const auto* bits = reinterpret_cast<const std::uint16_t*>(result.data());
+    for (std::size_t head = 0; head < 8; ++head)
+        for (std::size_t i = 0; i < 128; ++i)
+            TEST_REQUIRE(bits[head * 128 + i] == 100 + head);
+}
+
+void TestGetVCacheGathersHeadMajorPosition() {
+    Harness h;
+    WriteCacheRow(h, 11, 9, 200);
+    const auto result = h.engine->get_v_cache(0, 9);
+    const auto* bits = reinterpret_cast<const std::uint16_t*>(result.data());
+    for (std::size_t head = 0; head < 8; ++head)
+        for (std::size_t i = 0; i < 128; ++i)
+            TEST_REQUIRE(bits[head * 128 + i] == 200 + head);
+}
+
 void TestCancellationBoundaryLeavesNoOutstandingFakeWork() {
     Harness h;
     fake_corelib::GetState().fail_after_submit = "ryzenai_corelib_ssmlp_bf16";
@@ -306,6 +406,7 @@ void TestCancellationBoundaryLeavesNoOutstandingFakeWork() {
 int main() {
 #define RUN_TEST(name) RunTest(&name, #name)
     RUN_TEST(TestEngineCreatesOneStreamAndPersistentHelperSizedTensors);
+    RUN_TEST(TestEngineAllocatesMaximaAcrossAllRowsAndConsumers);
     RUN_TEST(TestEngineCreates129Matmul32SsmlpAndOneRmsNormWeight);
     RUN_TEST(TestEveryProjectionUsesQ8RequantizedGroup64Threads0);
     RUN_TEST(TestWeightCreationIsSerialAndNeverExceedsOneInFlightCreate);
@@ -325,9 +426,13 @@ int main() {
     RUN_TEST(TestClearContextResetsLogicalPositionWithoutRecreatingWeights);
     RUN_TEST(TestCheckpointRestoreChangesOnlyLogicalPosition);
     RUN_TEST(TestPreSubmitFailureIsRecoverable);
+    RUN_TEST(TestInitialRmsNormPostSubmitFailureSynchronizesAndPoisons);
     RUN_TEST(TestPostSubmitFailureSynchronizesThenPoisonsAndClearsState);
     RUN_TEST(TestSynchronizeFailurePoisonsAndClearsState);
     RUN_TEST(TestPoisonedInstanceRejectsEveryLaterEntryPoint);
+    RUN_TEST(TestFakeTensorWindowRetainsAndPropagatesParentStorage);
+    RUN_TEST(TestGetKCacheGathersHeadMajorPosition);
+    RUN_TEST(TestGetVCacheGathersHeadMajorPosition);
     RUN_TEST(TestCancellationBoundaryLeavesNoOutstandingFakeWork);
 #undef RUN_TEST
 }
