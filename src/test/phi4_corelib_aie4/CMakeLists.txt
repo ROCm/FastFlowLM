@@ -16,6 +16,13 @@ find_path(XRT_INCLUDE_DIR NAMES xrt/xrt_bo.h
     HINTS "$ENV{XRT_INCLUDE_DIR}"
           "${CMAKE_CURRENT_LIST_DIR}/../../../../xrt_package/xrt/include"
           "C:/dev/XRT/src/runtime_src/core/include" REQUIRED)
+find_path(CURL_INCLUDE_DIR NAMES curl/curl.h
+    HINTS "$ENV{CONDA_PREFIX}/Library/include"
+          "$ENV{USERPROFILE}/anaconda3/Library/include" REQUIRED)
+find_library(CURL_LIBRARY NAMES libcurl curl
+    HINTS "$ENV{CONDA_PREFIX}/Library/lib"
+          "$ENV{USERPROFILE}/anaconda3/Library/lib" REQUIRED)
+find_package(CURL REQUIRED)
 set(FLM_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/../..")
 set(CORELIB_SOURCES
     "${FLM_SOURCE_DIR}/common/corelib/corelib_api.cpp"
@@ -138,6 +145,29 @@ target_compile_options(test_phi4_frontend PRIVATE
 target_link_directories(test_phi4_frontend PRIVATE "${XRT_INCLUDE_DIR}/../lib")
 target_link_libraries(test_phi4_frontend PRIVATE xrt_coreutil)
 
+add_executable(test_model_downloader
+    test_model_downloader.cpp
+    "${FLM_SOURCE_DIR}/pull/download_model.cpp"
+    "${FLM_SOURCE_DIR}/pull/model_downloader.cpp"
+    "${FLM_SOURCE_DIR}/common/utils.cpp")
+target_include_directories(test_model_downloader PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}"
+    "${FLM_SOURCE_DIR}/include"
+    "${FLM_SOURCE_DIR}/pull"
+    "${BOOST_INCLUDE_DIR}"
+    "${XRT_INCLUDE_DIR}")
+target_compile_definitions(test_model_downloader PRIVATE
+    FLM_SOURCE_DIR="${FLM_SOURCE_DIR}"
+    CMAKE_INSTALL_PREFIX="${FLM_SOURCE_DIR}/build"
+    CMAKE_XCLBIN_PREFIX="${FLM_SOURCE_DIR}/xclbins"
+    __FLM_VERSION__="1.0.3"
+    __NPU_VERSION__="0.0.0.0"
+    DEV_BUILD=1 __WINDOWS__ USEAVX2=1 DISABLE_ABI_CHECK=1 _ENABLE_EXTENDED_ALIGNED_STORAGE
+    WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(test_model_downloader PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>:/wd4005 /wd4244>)
+target_link_libraries(test_model_downloader PRIVATE CURL::libcurl)
+
 add_executable(test_phi4_frontend_off
     test_phi4_frontend.cpp
     ${PHI4_FRONTEND_SOURCES})
@@ -221,4 +251,5 @@ add_test(NAME test_phi4_shape_plan COMMAND test_phi4_shape_plan)
 add_test(NAME test_phi4_engine COMMAND test_phi4_engine)
 add_test(NAME test_phi4_frontend COMMAND test_phi4_frontend)
 add_test(NAME test_phi4_frontend_off COMMAND test_phi4_frontend_off)
+add_test(NAME test_model_downloader COMMAND test_model_downloader)
 set_tests_properties(test_real_corelib PROPERTIES SKIP_RETURN_CODE 77)

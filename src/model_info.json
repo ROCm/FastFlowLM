@@ -3300,5 +3300,31 @@
             "xetHash": "7c4d2da22b3de2ed3f3eae66c7034386df6a3c5d81039ad4a1c8067e7eaf0069",
             "path": "vision_weights.q4nx"
         }
+    ],
+    "phi4-mini-it-aie4:4b": [
+        {
+            "type": "file",
+            "path": "Phi-4-mini-instruct.Q8_0.gguf",
+            "size": 4084611040,
+            "sha256": "26188c6050d525376a88b04514c236c5e28a36730f1e936f2a00314212b7ba42"
+        },
+        {
+            "type": "file",
+            "path": "tokenizer.json",
+            "size": 15524095,
+            "sha256": "382cc235b56c725945e149cc25f191da667c836655efd0857b004320e90e91ea"
+        },
+        {
+            "type": "file",
+            "path": "tokenizer_config.json",
+            "size": 2932,
+            "sha256": "9c9b6bc0c94d95f69f826c41069a3e8b387ac3ced89601d201886e99240ac9db"
+        },
+        {
+            "type": "file",
+            "path": "config.json",
+            "size": 2504,
+            "sha256": "ac65d86061d3d0d704ee2511fd0eb8713ef19eb6eedba17c3080a4165d5b933b"
+        }
     ]
 }

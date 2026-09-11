@@ -10,6 +10,134 @@
 #include <sstream>
 #include <iomanip>
 #include <fstream>
+#include <cctype>
+#include <unordered_set>
+
+namespace {
+
+std::string percent_encode_filename(std::string_view filename) {
+    static constexpr char kHex[] = "0123456789ABCDEF";
+    std::string encoded;
+    for (const unsigned char ch : filename) {
+        if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+            (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' || ch == '.' || ch == '~') {
+            encoded.push_back(static_cast<char>(ch));
+        } else {
+            encoded.push_back('%');
+            encoded.push_back(kHex[ch >> 4]);
+            encoded.push_back(kHex[ch & 0x0f]);
+        }
+    }
+    return encoded;
+}
+
+bool is_hex_revision(const std::string& revision) {
+    return revision.size() == 40 &&
+           std::all_of(revision.begin(), revision.end(), [](unsigned char ch) {
+               return std::isxdigit(ch) != 0;
+           });
+}
+
+nlohmann::json load_model_file_records(const std::string& model_tag) {
+    std::ifstream stream(utils::find_model_info());
+    if (!stream.is_open()) {
+        throw std::runtime_error("model_info.json could not be opened");
+    }
+    return nlohmann::json::parse(stream).at(model_tag);
+}
+
+const nlohmann::json& find_file_record(const nlohmann::json& records,
+                                       const std::string& filename) {
+    const auto record = std::find_if(records.begin(), records.end(), [&](const auto& value) {
+        return value.at("path") == filename;
+    });
+    if (record == records.end()) {
+        throw std::runtime_error("missing model_info record for " + filename);
+    }
+    return *record;
+}
+
+struct ResolvedModelFile {
+    ModelFileSource source;
+    std::uint64_t size;
+    bool is_lfs;
+    download_utils::HashAlgorithm hash_algorithm;
+    std::string hash;
+};
+
+}  // namespace
+
+ModelFileSource resolve_file_source(const nlohmann::json& model_info,
+                                    std::string_view filename,
+                                    bool use_modelscope) {
+    if (model_info.contains("file_sources")) {
+        if (use_modelscope) {
+            throw std::runtime_error("pinned Hugging Face per-file sources are required; --modelscope is not supported");
+        }
+        const auto& sources = model_info.at("file_sources");
+        if (!sources.is_object()) {
+            throw std::runtime_error("file_sources must be an object");
+        }
+        std::unordered_set<std::string> files;
+        for (const auto& file : model_info.at("files")) {
+            files.insert(file.get<std::string>());
+        }
+        for (const auto& [key, value] : sources.items()) {
+            if (!files.contains(key)) {
+                throw std::runtime_error("unknown file_sources key: " + key);
+            }
+            if (!value.is_object() || value.size() != 2 ||
+                !value.contains("url") || !value.at("url").is_string() ||
+                value.at("url").get<std::string>().empty()) {
+                throw std::runtime_error("file source requires exactly a non-empty string url and revision");
+            }
+            if (!value.contains("revision") || !value.at("revision").is_string() ||
+                !is_hex_revision(value.at("revision").get<std::string>())) {
+                throw std::runtime_error("file source revision must be a 40-character hexadecimal string");
+            }
+        }
+        const auto override = sources.find(std::string(filename));
+        if (override != sources.end()) {
+            const std::string base = override->at("url");
+            const std::string revision = override->at("revision");
+            return {base + "/resolve/" + revision + "/" +
+                        percent_encode_filename(filename) + "?download=true",
+                    revision};
+        }
+    }
+
+    const std::string base_url = use_modelscope
+        ? model_info.at("ms_url").get<std::string>()
+        : model_info.at("url").get<std::string>();
+    if (base_url.find("resolve") != std::string::npos) {
+        return {base_url + "/" + std::string(filename) + "?download=true", {}};
+    }
+    return {base_url + "/resolve/main/" + std::string(filename) + "?download=true", {}};
+}
+
+namespace {
+
+ResolvedModelFile resolve_model_file(const nlohmann::json& model_info,
+                                     const nlohmann::json& records,
+                                     const std::string& filename,
+                                     bool use_modelscope) {
+    const auto& record = find_file_record(records, filename);
+    const bool is_lfs = record.contains("lfs");
+    const bool has_explicit_sha256 = record.contains("sha256");
+    return {
+        resolve_file_source(model_info, filename, use_modelscope),
+        record.at("size").get<std::uint64_t>(),
+        is_lfs,
+        has_explicit_sha256 || is_lfs
+            ? download_utils::HashAlgorithm::Sha256
+            : download_utils::HashAlgorithm::GitBlobSha1,
+        has_explicit_sha256
+            ? record.at("sha256").get<std::string>()
+            : (is_lfs ? record.at("lfs").at("oid").get<std::string>()
+                      : record.at("oid").get<std::string>())};
+}
+
+}  // namespace
 
 /// \brief Constructor
 /// \param models the model list
@@ -32,13 +160,14 @@ ModelDownloader::ModelStatus ModelDownloader::is_model_downloaded(const std::str
         if (modelstatus == ModelStatus::Outdated) {
             if (!fast_check) {
                 header_print("FLM", "Checking outdated files...");
-                verify_and_clean_files(model_tag, sub_process_mode);
+                verify_and_clean_files(model_tag, false, sub_process_mode);
             }
         }
-        else if (modelstatus == ModelStatus::Ready && !missing_files.empty()) {
-            // config.json is present and the version check passed, but other
-            // files (e.g. weights) are still missing.
-            modelstatus = ModelStatus::Missing;
+        else if (modelstatus == ModelStatus::Ready) {
+            if (!missing_files.empty() ||
+                (!fast_check && !verify_and_clean_files(model_tag, false, sub_process_mode))) {
+                modelstatus = ModelStatus::Missing;
+            }
         }
     }
     return modelstatus;
@@ -89,6 +218,10 @@ bool ModelDownloader::pull_model(const std::string& model_tag, bool use_modelsco
         auto [new_model_tag, model_info] = supported_models.get_model_info(model_tag);
         std::string model_name = model_info["name"];
         std::string model_server = use_modelscope ? "ModelScope" : "HuggingFace";
+        if (use_modelscope && model_info.contains("file_sources")) {
+            // Validate this before any ready-state early return.
+            resolve_file_source(model_info, model_info.at("files").at(0).get<std::string>(), true);
+        }
         
         header_print("FLM", "Pulling model from " + model_server + "...");
         header_print("FLM", "Model: " + new_model_tag);
@@ -101,9 +234,11 @@ bool ModelDownloader::pull_model(const std::string& model_tag, bool use_modelsco
                     header_print("FLM", "Model already downloaded. Use --force to re-download.");
                     return true;
                 }
-                verify_and_clean_files(new_model_tag, use_modelscope);
                 break;
             case ModelStatus::Missing:
+                // Preserve valid finals, but remove corrupt finals before deciding
+                // which files need to be downloaded.
+                verify_and_clean_files(new_model_tag, use_modelscope, true);
                 break;
             case ModelStatus::Outdated:
                 break;
@@ -137,12 +272,12 @@ bool ModelDownloader::pull_model(const std::string& model_tag, bool use_modelsco
         }
         
         // Build download list
-        auto download_list = build_download_list(new_model_tag, use_modelscope);
+        auto download_list = build_download_list(new_model_tag, use_modelscope, force_redownload);
         auto downloads = download_list.first;
         float sum_fize_size = download_list.second;
         if (downloads.empty()) {
             header_print("FLM", "No files to download for model: " + new_model_tag);
-            return true; // Return true since all files are already present
+            return verify_and_clean_files(new_model_tag, use_modelscope);
         }
         
         header_print("FLM", "Downloading " + std::to_string(downloads.size()) + " missing files...");
@@ -162,17 +297,16 @@ bool ModelDownloader::pull_model(const std::string& model_tag, bool use_modelsco
         if (success) {
             header_print("FLM", "Model downloaded successfully!");
             
-            // Verify download
+            // Verify every final file using the same pinned metadata used to download it.
             auto final_missing = get_missing_files(new_model_tag);
-            if (final_missing.empty()) {
+            const bool verified = final_missing.empty() &&
+                                  verify_and_clean_files(new_model_tag, use_modelscope);
+            if (verified) {
                 header_print("FLM", "All files verified successfully.");
             } else {
-                header_print("WARNING", "Some files may be missing after download:");
-                for (const auto& file : final_missing) {
-                    std::cout << "  - " << file << std::endl;
-                }
+                header_print("WARNING", "Some files are missing or failed verification after download.");
             }
-            return true;
+            return verified;
         } else {
             header_print("ERROR", "Failed to download model files.");
             return false;
@@ -285,82 +419,39 @@ std::string ModelDownloader::get_model_file_path(const std::string& model_path, 
 /// \brief Build the download list
 /// \param model_tag the model tag
 /// \return the download list
-std::pair<nlohmann::json, float> ModelDownloader::build_download_list(const std::string& model_tag, bool modelscope) {
-    
+std::pair<nlohmann::json, float> ModelDownloader::build_download_list(
+    const std::string& model_tag, bool modelscope, bool force_redownload) {
     nlohmann::json downloads = nlohmann::json::array();
     float sum_file_size = 0;
 
-    try {
-        auto [new_model_tag, model_info] = supported_models.get_model_info(model_tag);
-        std::string base_url = modelscope ? model_info["ms_url"] : model_info["url"];
-        std::string model_name = model_info["name"];
-        std::string file_url = model_info["file_url"];
-        std::vector<std::string> model_files = model_info["files"];
-        
-        // Create model directory
-        std::string model_path = supported_models.get_model_path(new_model_tag);
-        std::filesystem::create_directories(model_path);
-        
-        nlohmann::json hf_model_infos;
-        // GET HF api/models
-        // if (modelscope == 0) {
-        //     std::string hf_response = download_utils::download_string(file_url);
-        //     hf_model_infos = nlohmann::json::parse(hf_response);
-        // }
-        // else {
-        std::string model_info_path = utils::find_model_info();
-        std::ifstream model_info_file(model_info_path);
-        nlohmann::json model_info_json = nlohmann::json::parse(model_info_file);
-        hf_model_infos = model_info_json.at(new_model_tag);
-        // }
+    auto [new_model_tag, model_info] = supported_models.get_model_info(model_tag);
+    const std::vector<std::string> model_files = model_info.at("files");
+    const std::string model_path = supported_models.get_model_path(new_model_tag);
+    std::filesystem::create_directories(model_path);
+    const nlohmann::json records = load_model_file_records(new_model_tag);
 
-        for (const auto& filename : model_files) {
-            auto it = std::find_if(
-                hf_model_infos.begin(),
-                hf_model_infos.end(),
-                [&](const nlohmann::json& f) {
-                    return f["path"] == filename;
-                }
-            );
-            if (it == hf_model_infos.end()) {
-                continue;
-            }
-
-            const auto& file = *it;
-            std::string local_path = get_model_file_path(model_path, filename);
-
-            if (!file_exists(local_path)) {
-                std::string url;
-                if (std::string(base_url).find("resolve") != std::string::npos) { // resolve provided , may from a specific branch
-                    url = base_url + "/" + filename + "?download=true";
-                }
-                else {
-                    url = base_url + "/resolve/main/" + filename + "?download=true";
-                }
-                // header_print("URL", url);
-                bool is_lfs = file.contains("lfs");
-                std::string oid = is_lfs ? file["lfs"]["oid"] : file["oid"];
-                float file_size = static_cast<float>(file["size"]) / 1024 / 1024;
-                sum_file_size += file_size;
-
-                nlohmann::json entry = {
-                    {"file", filename},
-                    {"size", file_size},
-                    {"url", url},
-                    {"localpath", local_path},
-                    {"oid", oid},
-                    {"is_lfs", is_lfs},
-                };
-                downloads.push_back(entry);
-            }
-
+    for (const auto& filename : model_files) {
+        const std::string local_path = get_model_file_path(model_path, filename);
+        if (!force_redownload && file_exists(local_path)) {
+            continue;
         }
-    } 
-    catch (const std::exception& e) {
-        header_print("ERROR", "Error building download list: " + std::string(e.what()));
-    }
 
-    return std::make_pair(downloads, sum_file_size);
+        const auto file = resolve_model_file(model_info, records, filename, modelscope);
+        const float file_size = static_cast<float>(file.size) / 1024 / 1024;
+        sum_file_size += file_size;
+        downloads.push_back({
+            {"file", filename},
+            {"size", file_size},
+            {"expected_size", file.size},
+            {"url", file.source.url},
+            {"localpath", local_path},
+            {"oid", file.hash},
+            {"is_lfs", file.is_lfs},
+            {"hash_algorithm", file.hash_algorithm == download_utils::HashAlgorithm::Sha256
+                                   ? "sha256" : "git_blob_sha1"},
+        });
+    }
+    return {downloads, sum_file_size};
 }
 
 /// \brief Remove a model and all its files
@@ -428,11 +519,11 @@ bool ModelDownloader::check_model(const std::string& model_tag, bool use_modelsc
         case ModelStatus::Missing:
             header_print("FLM", "Model not found: " + new_model_tag);
             header_print("FLM", "Use `flm pull " + new_model_tag + "` to download it.");
-            return true;
+            return false;
         case ModelStatus::Incompatible:
             header_print("FLM", "Model is incompatible with this version of FastFlowLM: " + new_model_tag);
             header_print("FLM", "Use `flm pull " + new_model_tag + "` to re-download it.");
-            return true;
+            return false;
         case ModelStatus::Outdated:
         case ModelStatus::Ready: {
             bool ok = verify_and_clean_files(new_model_tag, use_modelscope, sub_process_mode);
@@ -440,10 +531,10 @@ bool ModelDownloader::check_model(const std::string& model_tag, bool use_modelsc
                 header_print("FLM", "Model check completed with errors. Use `flm pull " + new_model_tag + "` to re-download corrupted files.");
             else
                 header_print("FLM", "Model check completed successfully. All files are present and compatible.");
-            return true;
+            return ok;
         }
     }
-    return true;
+    return false;
 }
 
 /// \brief Verify each model file's hash against HuggingFace metadata and
@@ -457,37 +548,15 @@ bool ModelDownloader::verify_and_clean_files(const std::string& model_tag, bool 
         auto [new_model_tag, model_info] = supported_models.get_model_info(model_tag);
         std::vector<std::string> model_files = model_info["files"];
         std::string model_path = supported_models.get_model_path(new_model_tag);
-        std::string file_url = model_info["file_url"];
-
-        nlohmann::json hf_model_infos;
-        // GET HF api/models
-        // if (use_modelscope == 0) {
-        //     std::string hf_response = download_utils::download_string(file_url);
-        //     hf_model_infos = nlohmann::json::parse(hf_response);
-        // }
-        // else {
-        std::string model_info_path = utils::find_model_info();
-        std::ifstream model_info_file(model_info_path);
-        nlohmann::json model_info_json = nlohmann::json::parse(model_info_file);
-        hf_model_infos = model_info_json.at(new_model_tag);
-        // }
+        const nlohmann::json records = load_model_file_records(new_model_tag);
 
         for (const auto& filename : model_files) {
             if (!sub_process_mode) {
                 header_print("FLM", "Checking file: " + filename + "...");
             }
 
-            auto it = std::find_if(
-                hf_model_infos.begin(),
-                hf_model_infos.end(),
-                [&](const nlohmann::json& f) {
-                    return f["path"] == filename;
-                }
-            );
-            if (it == hf_model_infos.end()) {
-                continue;
-            }
-            const auto& file = *it;
+            const auto file = resolve_model_file(
+                model_info, records, filename, use_modelscope);
             std::string local_path = get_model_file_path(model_path, filename);
 
             // If the file isn't present locally, there's nothing to verify or
@@ -498,11 +567,15 @@ bool ModelDownloader::verify_and_clean_files(const std::string& model_tag, bool 
                 continue;
             }
 
-            bool is_lfs = file.contains("lfs");
-            std::string oid_ref = is_lfs ? file["lfs"]["oid"] : file["oid"];
-            std::string local_oid = is_lfs ? download_utils::calculate_file_sha256(local_path) : download_utils::calculate_git_blob_oid(local_path);
+            const std::string local_oid =
+                file.hash_algorithm == download_utils::HashAlgorithm::Sha256
+                    ? download_utils::calculate_file_sha256(local_path)
+                    : download_utils::calculate_git_blob_oid(local_path);
+            std::error_code size_error;
+            const auto local_size = std::filesystem::file_size(local_path, size_error);
+            const bool size_matches = !size_error && local_size == file.size;
 
-            if (local_oid == oid_ref) {
+            if (size_matches && local_oid == file.hash) {
                 if (!sub_process_mode) {
                     header_print("FLM", "Success!");
                 }

@@ -469,6 +469,47 @@
                 "footprint": 3.4
             }
         },
+        "phi4-mini-it-aie4": {
+            "4b": {
+                "name": "phi4-mini-it-aie4",
+                "url": "https://huggingface.co/unsloth/Phi-4-mini-instruct-GGUF/resolve/78eb92a46fc37e6b524df991ed9aca9bc6aa7b80",
+                "file_url": "https://huggingface.co/api/models/unsloth/Phi-4-mini-instruct-GGUF/tree/78eb92a46fc37e6b524df991ed9aca9bc6aa7b80",
+                "size": 4100140571,
+                "default_context_length": 4096,
+                "max_prefill_len": 4096,
+                "details": {
+                    "family": "phi4",
+                    "think": false,
+                    "think_toggleable": false,
+                    "parameter_size": "4B",
+                    "quantization_level": "Q8_0 -> AIE4 group-64",
+                    "execution_backend": "corelib_aie4_gguf"
+                },
+                "flm_min_version": "1.0.3",
+                "vlm": false,
+                "files": [
+                    "Phi-4-mini-instruct.Q8_0.gguf",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "config.json"
+                ],
+                "file_sources": {
+                    "tokenizer.json": {
+                        "url": "https://huggingface.co/microsoft/Phi-4-mini-instruct",
+                        "revision": "cfbefacb99257ffa30c83adab238a50856ac3083"
+                    },
+                    "tokenizer_config.json": {
+                        "url": "https://huggingface.co/microsoft/Phi-4-mini-instruct",
+                        "revision": "cfbefacb99257ffa30c83adab238a50856ac3083"
+                    },
+                    "config.json": {
+                        "url": "https://huggingface.co/microsoft/Phi-4-mini-instruct",
+                        "revision": "cfbefacb99257ffa30c83adab238a50856ac3083"
+                    }
+                },
+                "footprint": 4.1
+            }
+        },
         "embed-gemma": {
             "300m": {
                 "name": "Embedding-Gemma-300M-NPU2",
