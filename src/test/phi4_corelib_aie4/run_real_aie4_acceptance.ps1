@@ -21,13 +21,17 @@ $env:PATH="$(Join-Path $root 'src/lib/xrt');$(Join-Path $root 'src/lib');$runtim
 New-Item -ItemType Directory -Force $outDir | Out-Null
 $record=[ordered]@{started=(Get-Date).ToString('o');passed=$false;commands=@();host=[ordered]@{};provenance=[ordered]@{};files=@();cli=[ordered]@{};rest=[ordered]@{};performance=[ordered]@{};failures=@()}
 function Cmd([string]$line,[scriptblock]$body){$start=Get-Date;try{&$body;$ec=$LASTEXITCODE;if($null-eq$ec){$ec=0}}catch{$ec=1;$record.failures+=($_|Out-String);throw}finally{$record.commands+=@([ordered]@{command=$line;exit_code=$ec;seconds=((Get-Date)-$start).TotalSeconds})}}
-function Post([string]$path,$body){try{$r=Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port$path" -Method Post -ContentType 'application/json' -Body ($body|ConvertTo-Json -Depth 8 -Compress);return [ordered]@{status=[int]$r.StatusCode;text=$r.Content;json=($r.Content|ConvertFrom-Json)}}catch{if($_.Exception.Response){$resp=$_.Exception.Response;$reader=New-Object IO.StreamReader($resp.GetResponseStream());$text=$reader.ReadToEnd();return [ordered]@{status=[int]$resp.StatusCode;text=$text;json=($text|ConvertFrom-Json)}};throw}}
-# A JSON body must never be passed to curl as an inline argument: PowerShell's
-# native-argument quoting strips the double quotes and the server receives a
-# malformed object. Every body goes to a file and curl reads it with "@file".
+function Post([string]$path,$body,[int]$TimeoutSec=900){try{$r=Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port$path" -Method Post -ContentType 'application/json' -TimeoutSec $TimeoutSec -Body ($body|ConvertTo-Json -Depth 8 -Compress);return [ordered]@{status=[int]$r.StatusCode;text=$r.Content;json=($r.Content|ConvertFrom-Json)}}catch{if($_.Exception.Response){$resp=$_.Exception.Response;$reader=New-Object IO.StreamReader($resp.GetResponseStream());$text=$reader.ReadToEnd();return [ordered]@{status=[int]$resp.StatusCode;text=$text;json=($text|ConvertFrom-Json)}};throw}}
+# Two things must never reach curl as inline arguments. A JSON body loses its
+# double quotes to PowerShell's native-argument quoting and the server sees a
+# malformed object, so every body goes to a file and is read back with "@file".
+# A header value containing a space is split into two arguments, so the second
+# half is taken as another URL ("Could not resolve host: application"); the
+# colon form without a space carries the same meaning and cannot split.
+$ContentTypeArg='Content-Type:application/json'
 function BodyFile([string]$name,$body){$p=Join-Path $outDir $name;Set-Content -Path $p -Value ($body|ConvertTo-Json -Depth 8 -Compress) -Encoding ASCII -NoNewline;return $p}
-function CurlStream([string]$name,[string]$path,$body){$f=BodyFile $name $body;return (&curl.exe -sS -N -H 'Content-Type: application/json' -d "@$f" "http://127.0.0.1:$Port$path"|Out-String)}
-function CurlBackground([string]$name,[string]$path,$body,[string]$outFile){$f=BodyFile $name $body;return (Start-Process curl.exe -ArgumentList @('-sS','-N','-H','Content-Type: application/json','-d',"@$f","http://127.0.0.1:$Port$path") -RedirectStandardOutput $outFile -PassThru)}
+function CurlStream([string]$name,[string]$path,$body){$f=BodyFile $name $body;$out=(&curl.exe -sS -N -H $ContentTypeArg -d "@$f" "http://127.0.0.1:$Port$path" 2>&1|Out-String);if($LASTEXITCODE-ne 0){throw "curl failed ($LASTEXITCODE) for ${path}: $out"};if($out-match 'Could not resolve host'){throw "curl argument splitting for ${path}: $out"};return $out}
+function CurlBackground([string]$name,[string]$path,$body,[string]$outFile){$f=BodyFile $name $body;return (Start-Process curl.exe -ArgumentList @('-sS','-N','-H',$ContentTypeArg,'-d',"@$f","http://127.0.0.1:$Port$path") -RedirectStandardOutput $outFile -PassThru)}
 try{
  $record.host.computer=$env:COMPUTERNAME;$record.host.cpu=(Get-CimInstance Win32_Processor).Name;$record.host.npu=(Get-CimInstance Win32_PnPEntity|Where-Object Name -match 'NPU|Neural').Name;$os=Get-CimInstance Win32_OperatingSystem;$record.host.windows="$($os.Caption) $($os.Version) build $($os.BuildNumber)";$record.host.power=(powercfg /getactivescheme|Out-String).Trim()
  $record.provenance.fastflow=(git -C $root rev-parse HEAD).Trim();$coreRoot=(Resolve-Path (Join-Path $runtime '..')).Path;$record.provenance.corelib=(git -C $coreRoot rev-parse HEAD).Trim();$record.provenance.corelib_abi='0.3.0';$record.provenance.gguf_revision='78eb92a46fc37e6b524df991ed9aca9bc6aa7b80';$record.provenance.tokenizer_revision='cfbefacb99257ffa30c83adab238a50856ac3083';$record.provenance.corelib_sha256=(Get-FileHash $core -Algorithm SHA256).Hash.ToLower()
@@ -79,13 +83,13 @@ json.dump({'prompts':prompts,'one_process':one,'cycles':cycles},open(out,'w',enc
   foreach($s in @($apiStream,$oaStream)){if($s-match '"error"'){throw "streaming response returned an error: $s"}}
   $cancelOut=Join-Path $outDir 'cancel-stream.txt'
   $cp=CurlBackground 'body-cancel.json' '/api/chat' @{model=$Model;request_id='accept-cancel';messages=@(@{role='user';content='Count upward for a long time.'});stream=$true;options=@{num_predict=1024}} $cancelOut
-  Start-Sleep -Milliseconds 1500;$cancel=Post '/api/cancel' @{request_id='accept-cancel'};$cp.WaitForExit(120000)|Out-Null
+  Start-Sleep -Milliseconds 1500;$cancel=Post '/api/cancel' @{request_id='accept-cancel'};if(-not$cp.WaitForExit(300000)){$cp.Kill();throw 'the cancelled stream did not end'}
   $recovery=Post '/api/chat' @{model=$Model;messages=@(@{role='user';content='What is 2+2?'});stream=$false;options=@{num_predict=8}}
   if(-not$cancel.json.cancelled-or$recovery.status-ne 200){throw 'cancellation recovery failed'}
   $probe=Post '/api/chat' @{model=$Model;messages=@(@{role='user';content='x'});stream=$false;options=@{num_predict=1}};$pt=[int]$probe.json.prompt_eval_count;$remaining=4095-$pt
   $bOut=Join-Path $outDir 'boundary-stream.txt'
   $bp=CurlBackground 'body-boundary.json' '/api/chat' @{model=$Model;request_id='boundary4095';messages=@(@{role='user';content='x'});stream=$true;options=@{num_predict=$remaining}} $bOut
-  Start-Sleep -Milliseconds 1500;$bcancel=Post '/api/cancel' @{request_id='boundary4095'};$bp.WaitForExit(120000)|Out-Null
+  Start-Sleep -Milliseconds 1500;$bcancel=Post '/api/cancel' @{request_id='boundary4095'};if(-not$bp.WaitForExit(300000)){$bp.Kill();throw 'the cancelled 4095 stream did not end'}
   $b4096=Post '/api/chat' @{model=$Model;messages=@(@{role='user';content='x'});stream=$false;options=@{num_predict=($remaining+1)}}
   if(-not$bcancel.json.cancelled-or$b4096.status-ne 400){throw "boundary behavior failed: 4095 cancelled=$($bcancel.json.cancelled) 4096 status=$($b4096.status)"}
   $record.rest=[ordered]@{api_chat_nonstream=$apiNon;openai_nonstream=$oaNon;api_chat_stream=$apiStream;openai_stream=$oaStream;cancellation=$cancel;recovery=$recovery;prompt_tokens=$pt;boundary4095_cancel=$bcancel;boundary4096=$b4096}
