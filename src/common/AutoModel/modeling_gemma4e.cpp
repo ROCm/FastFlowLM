@@ -412,12 +412,48 @@ std::pair<std::string, json> parse_gemma4e_tool_content(std::string tool_content
 /************              Gemma4e family            **************/
 Gemma4e::Gemma4e(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "Gemma4e") {}
 
+void Gemma4e::create_engine() {
+    this->lm_engine = std::make_unique<gemma4e_npu>(*this->lm_config, this->npu.get(), this->MAX_L);
+}
+
+/// Reads the shared set of engine constants off a concrete engine type.
+/// gemma4e_npu and gemma4e_flash are unrelated types that happen to expose the
+/// same member names, so this is templated rather than taking a common base.
+template <typename EngineT>
+static gemma4e_engine_config_t read_gemma4e_engine_config(causal_lm* engine) {
+    EngineT* e = dynamic_cast<EngineT*>(engine);
+    assert(e != nullptr && "engine_config() called on a wrapper whose engine type does not match");
+    return gemma4e_engine_config_t{
+        e->GEMMA4E_VISION_PATCH_SIZE,
+        e->GEMMA4E_POOLING_KERNEL_SIZE,
+        e->GEMMA4E_VISION_RESCALE_FACTOR,
+        e->GEMMA4E_VISION_IMAGE_MEAN,
+        e->GEMMA4E_VISION_IMAGE_STD,
+        e->Gemma4E_Audio_resample_rate,
+        e->Gemma4E_Audio_conv2d_kernel_size,
+        e->Gemma4E_Audio_conv2d_Stride,
+        e->Gemma4e_Audio_conv2d_Padding,
+    };
+}
+
+gemma4e_engine_config_t Gemma4e::engine_config() const {
+    return read_gemma4e_engine_config<gemma4e_npu>(this->lm_engine.get());
+}
+
+gemma4e_engine_config_t Gemma4e_Flash::engine_config() const {
+    return read_gemma4e_engine_config<gemma4e_flash>(this->lm_engine.get());
+}
+
+void Gemma4e_Flash::create_engine() {
+    this->lm_engine = std::make_unique<gemma4e_flash>(*this->lm_config, this->npu.get(), this->MAX_L);
+}
+
 void Gemma4e::load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption) {
     
     this->_shared_load_model(model_path, model_info, default_context_length, enable_preemption);
     
     this->q4nx = std::make_unique<Q4NX>(this->model_path);
-    this->lm_engine = std::make_unique<gemma4e_npu>(*this->lm_config, this->npu.get(), this->MAX_L);
+    this->create_engine();
 
     this->lm_engine->load_weights(*this->q4nx);
     //free the q4nx
@@ -524,15 +560,20 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
             }
             // Process Audios
             if (message.contains("audios")) {
-                gemma4e_npu *gemma4e_engine = dynamic_cast<gemma4e_npu*>(this->lm_engine.get());
+                const gemma4e_engine_config_t gemma4e_engine = this->engine_config();
                 for (auto& aud : message["audios"]) {
                     std::string audio_str = aud.get<std::string>();
-                    audio_data_t audio_data = this->load_audio_base64(audio_str, gemma4e_engine->Gemma4E_Audio_resample_rate, MonoDownmixMode::MEAN);
+                    audio_data_t audio_data = this->load_audio_base64(audio_str, gemma4e_engine.Gemma4E_Audio_resample_rate, MonoDownmixMode::MEAN);
                     if (audio_data.channels > 1) {
                         std::cerr << "only mono audio is supported." << std::endl;
                         exit(-1);
                     }
                     std::vector<audio_data_t> clipped_audio_data = this->clip_audio_length(audio_data, max_support_audio_length_seconds);
+                    if (this->max_audio_chunks > 0 && (int)clipped_audio_data.size() > this->max_audio_chunks) {
+                        header_print_g("FLM", "Audio in message is " + std::to_string((int)clipped_audio_data.size())
+                            + " chunks long; cutting off after the first " + std::to_string(this->max_audio_chunks) + ".");
+                        clipped_audio_data.resize(this->max_audio_chunks);
+                    }
                     audio_data_list.insert(audio_data_list.end(), clipped_audio_data.begin(), clipped_audio_data.end());
                     total_audio_clips += clipped_audio_data.size();
                     if (clipped_audio_data.size() > 1) {
@@ -554,10 +595,10 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     }
     else { // CLI Processing
         if (input.audios.size() > 0) {
-            gemma4e_npu *gemma4e_engine = dynamic_cast<gemma4e_npu*>(this->lm_engine.get());
+            const gemma4e_engine_config_t gemma4e_engine = this->engine_config();
             for (int i = 0; i < input.audios.size(); i++) {
                 std::string audio_str = input.audios[i];
-                audio_data_t audio_data = this->load_audio(audio_str, gemma4e_engine->Gemma4E_Audio_resample_rate, MonoDownmixMode::MEAN); 
+                audio_data_t audio_data = this->load_audio(audio_str, gemma4e_engine.Gemma4E_Audio_resample_rate, MonoDownmixMode::MEAN); 
                 
                 if (audio_data.channels > 1) {
                     std::cerr << "only mono audio is supported, but got " << audio_data.original_channels << " channels. Please convert it to mono first." << std::endl;
@@ -566,6 +607,11 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
 
                 // apply clipping
                 std::vector<audio_data_t> clipped_audio_data = this->clip_audio_length(audio_data, max_support_audio_length_seconds);
+                if (this->max_audio_chunks > 0 && (int)clipped_audio_data.size() > this->max_audio_chunks) {
+                    header_print_g("FLM", "Audio[" + std::to_string(i) + "] is " + std::to_string((int)clipped_audio_data.size())
+                        + " chunks long; cutting off after the first " + std::to_string(this->max_audio_chunks) + ".");
+                    clipped_audio_data.resize(this->max_audio_chunks);
+                }
                 audio_data_list.insert(audio_data_list.end(), clipped_audio_data.begin(), clipped_audio_data.end());
                 total_audio_clips += clipped_audio_data.size();
                 
@@ -600,11 +646,11 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     if (!audio_data_list.empty()) {
         this->extract_spectrogram(audio_data_list, audio_payload);
 
-        gemma4e_npu *gemma4e_engine = dynamic_cast<gemma4e_npu*>(this->lm_engine.get());
-        const unsigned int conv2d_kernel = gemma4e_engine->Gemma4E_Audio_conv2d_kernel_size;
-        const unsigned int conv2d_stride = gemma4e_engine->Gemma4E_Audio_conv2d_Stride;
-        const unsigned int conv2d_padding = gemma4e_engine->Gemma4e_Audio_conv2d_Padding;
-        const unsigned int max_audio_seq_length = max_support_audio_length_seconds * gemma4e_engine->Gemma4E_Audio_resample_rate;    
+        const gemma4e_engine_config_t gemma4e_engine = this->engine_config();
+        const unsigned int conv2d_kernel = gemma4e_engine.Gemma4E_Audio_conv2d_kernel_size;
+        const unsigned int conv2d_stride = gemma4e_engine.Gemma4E_Audio_conv2d_Stride;
+        const unsigned int conv2d_padding = gemma4e_engine.Gemma4e_Audio_conv2d_Padding;
+        const unsigned int max_audio_seq_length = max_support_audio_length_seconds * gemma4e_engine.Gemma4E_Audio_resample_rate;    
         
         constexpr float frame_length_ms = 20.0f;
         constexpr float hop_length_ms   = 10.0f;
@@ -821,11 +867,10 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     multi_modal_payload.audio_payload = audio_payload;
 
     int restore_idx = -1;
-    gemma4e_npu *gemma4e_engine = dynamic_cast<gemma4e_npu*>(this->lm_engine.get());
     const bool has_multimodal = image_payload.num_images > 0 || audio_payload.num_audios > 0;
 
     if (meta_info.restore_allowed) {
-        restore_idx = gemma4e_engine->restore();
+        restore_idx = this->lm_engine->restore();
         this->total_tokens = restore_idx;
         this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
     }
@@ -836,7 +881,7 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
 
     if (this->enable_think) {
         checkpoint_his = token_history;
-        int checkpoint_idx = gemma4e_engine->checkpoint();
+        int checkpoint_idx = this->lm_engine->checkpoint();
     }
     
     return success;
@@ -922,8 +967,7 @@ std::string Gemma4e::generate(chat_meta_info_t& meta_info, int length_limit, std
     header_print("FLM", "Model RAW Output: \n" + result);
     
     if (!this->enable_think) {
-        gemma4e_npu *gemma4e_engine = dynamic_cast<gemma4e_npu*>(this->lm_engine.get());
-        int checkpoint_idx = gemma4e_engine->checkpoint();
+        int checkpoint_idx = this->lm_engine->checkpoint();
         // copy the token history at the checkpoint except the last one token, which is the start token for generation and should not be included in the checkpoint history
         checkpoint_his = token_history;
         checkpoint_his.pop_back();       
@@ -940,9 +984,8 @@ std::string Gemma4e::generate_with_prompt(chat_meta_info_t& meta_info, lm_unifor
         os << "<think>\n" << std::flush;
     }
 
-    gemma4e_npu *gemma4e_engine = dynamic_cast<gemma4e_npu*>(this->lm_engine.get());
-    int checkpoint_idx = gemma4e_engine->checkpoint();
-    int restore_idx = gemma4e_engine->restore();
+    int checkpoint_idx = this->lm_engine->checkpoint();
+    int restore_idx = this->lm_engine->restore();
     header_print_r("FLM", "Checkpoint before generation: " << checkpoint_idx << ", restore point: " << restore_idx << ", user context length: " << this->token_history.size());
     return this->_shared_generate(meta_info, length_limit, os);
 }

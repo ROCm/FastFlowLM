@@ -42,7 +42,7 @@ int main(int argc, char* argv[]) {
     nlohmann::json model_info = model_info_pair.second;
     std::cout << "Model path: " << model_path << std::endl;
 
-    std::unique_ptr<AutoModel> chat = std::make_unique<Gemma4e>(&npu_device_global);
+    std::unique_ptr<AutoModel> chat = std::make_unique<Gemma4e_Flash>(&npu_device_global);
     std::cout << "Chat model initialized" << std::endl;
     npu_device_global = flm_rt::device(0);
     std::cout << "NPU Device initialized: " << npu_device_global.get_info<flm_rt::info::device::name>() << std::endl;
@@ -60,8 +60,9 @@ int main(int argc, char* argv[]) {
             uniformed_input.prompt = "Hello, introduce yourself briefly.";
             break;
         case 1:
-            uniformed_input.prompt = "What are these image?";
+            uniformed_input.prompt = "Describe the image briefly in 16 tokens";
             uniformed_input.images.push_back("../../../tb_files/amd_256s.png");
+            length_limit = 16;
             break;
         case 2:
             uniformed_input.prompt = "Transcribe the following speech segment in its original language. Follow these specific instructions for formatting the answer:\n* Only output the transcription, with no newlines.\n* When transcribing numbers, write the digits, i.e. write 1.7 and not one point seven, and write 3 instead of three.";

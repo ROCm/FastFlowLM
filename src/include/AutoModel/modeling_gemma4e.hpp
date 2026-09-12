@@ -22,6 +22,23 @@
 #include <iostream>
 
 /************              Qwen3VL_4b            **************/
+/// \brief Engine constants the Gemma4e wrapper needs from its backing engine.
+/// \note  gemma4e_npu and gemma4e_flash are unrelated sibling types (both derive
+///        straight from causal_lm), so the wrapper cannot downcast to one concrete
+///        engine. Each subclass reads these through its own engine_config()
+///        override instead. Field names mirror the engine members exactly.
+struct gemma4e_engine_config_t {
+    unsigned int GEMMA4E_VISION_PATCH_SIZE;
+    unsigned int GEMMA4E_POOLING_KERNEL_SIZE;
+    float        GEMMA4E_VISION_RESCALE_FACTOR;
+    float        GEMMA4E_VISION_IMAGE_MEAN;
+    float        GEMMA4E_VISION_IMAGE_STD;
+    int          Gemma4E_Audio_resample_rate;
+    unsigned int Gemma4E_Audio_conv2d_kernel_size;
+    unsigned int Gemma4E_Audio_conv2d_Stride;
+    unsigned int Gemma4e_Audio_conv2d_Padding;
+};
+
 class Gemma4e : public AutoModel {
 private:
     // some model specific template variables
@@ -52,7 +69,15 @@ private:
     std::vector<audio_data_t> clip_audio_length(audio_data_t& audio, double max_duration_second);
     void extract_spectrogram(std::vector<audio_data_t>& audio_inputs, gemma4e_audio_payload_t& audio_payload);
 
+protected:
+    /// Protected so Gemma4e_Flash can lower the default; see its constructor.
     int image_softtoken_budget = 280; // set a default value
+
+    /// Max number of max_support_audio_length_seconds chunks kept per audio input.
+    /// -1 keeps every chunk, i.e. the whole clip. Gemma4e_Flash sets it to 1 so a
+    /// long clip is cut off after the first 30 s instead of overrunning its context.
+    int max_audio_chunks = -1;
+private:
 
     int debug_count= 0;
 
@@ -78,6 +103,16 @@ private:
 
 
 
+
+protected:
+    /// \brief Reads the engine constants the wrapper needs.
+    /// \note  Overridden by Gemma4e_Flash to read them off the flash engine.
+    virtual gemma4e_engine_config_t engine_config() const;
+
+    /// \brief Builds the engine behind this wrapper; load_model() calls it.
+    /// \note  Overridden by Gemma4e_Flash to swap in the flash engine. Everything
+    ///        else -- weights, tokenizer, sampler, chat template -- is identical.
+    virtual void create_engine();
 
 public:
     Gemma4e(flm_rt::device* npu_device_inst);
@@ -155,4 +190,26 @@ public:
 
 		return false;
 	}
+};
+
+
+/************              Gemma4e_Flash            **************/
+/// Same checkpoint and same wrapper as Gemma4e, backed by the gemma4e_flash
+/// engine. gemma4e_flash is currently a byte-for-byte copy of gemma4e_npu and
+/// is the engine being tuned for short input prompts; Gemma4e stays the
+/// general-purpose path.
+class Gemma4e_Flash : public Gemma4e {
+protected:
+    void create_engine() override;
+    gemma4e_engine_config_t engine_config() const override;
+
+public:
+    Gemma4e_Flash(flm_rt::device* npu_device_inst) : Gemma4e(npu_device_inst) {
+        // Flash targets short prompts, so it defaults to the smallest supported
+        // image budget instead of the 280 Gemma4e uses. Still overridable via
+        // the "image_max_tokens" setting, same as the base wrapper.
+        this->image_softtoken_budget = 70;
+        // Flash's context is short, so keep only the first 30 s chunk of any audio.
+        this->max_audio_chunks = 1;
+    }
 };

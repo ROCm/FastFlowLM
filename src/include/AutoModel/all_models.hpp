@@ -44,6 +44,7 @@ typedef enum {
     gemma3,
     gemma3_text,
     gemma4e,
+    gemma4e_flash,
     gemma4_12b,
     gpt_oss,
     lfm2,
@@ -74,6 +75,7 @@ inline std::pair<std::string, std::unique_ptr<AutoModel>> get_auto_model(const s
         {"gemma3", SupportedModelFamily::gemma3},
         {"gemma3-text", SupportedModelFamily::gemma3_text},
         {"gemma4e", SupportedModelFamily::gemma4e},
+        {"gemma4e-flash", SupportedModelFamily::gemma4e_flash},
         {"gemma4-12b", SupportedModelFamily::gemma4_12b},
         {"gpt-oss", SupportedModelFamily::gpt_oss},
         {"lfm2", SupportedModelFamily::lfm2},
@@ -128,6 +130,9 @@ inline std::pair<std::string, std::unique_ptr<AutoModel>> get_auto_model(const s
             break;
         case SupportedModelFamily::gemma4e:
             auto_chat_engine = std::make_unique<Gemma4e>(npu_device_inst);
+            break;
+        case SupportedModelFamily::gemma4e_flash:
+            auto_chat_engine = std::make_unique<Gemma4e_Flash>(npu_device_inst);
             break;
         case SupportedModelFamily::gemma4_12b:
             auto_chat_engine = std::make_unique<Gemma4_12B>(npu_device_inst);

@@ -68,7 +68,7 @@ int main(int argc, char* argv[]) {
     chat->set_topk(1);
 
     if (short_prompt) {
-        uniformed_input.prompt = "Describe this image in brief?";
+        uniformed_input.prompt = "Describe this image in brief in less than 16 tokens.";
         // uniformed_input.prompt = "Who are you?";
         //uniformed_input.images.push_back("C:/Users/alfred/Projects/FastFlowLM_Dev/libraries/panda.png");
         uniformed_input.images.push_back("../../../tb_files/amd_256s.png");

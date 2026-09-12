@@ -489,6 +489,178 @@
             "path": "vision_weight.q4nx"
         }
     ],
+    "gemma4e-flash:e2b": [
+        {
+            "type": "file",
+            "oid": "da9be47b91174e0a1580d01be5d18bc6f7d916f2",
+            "size": 1671,
+            "path": ".gitattributes"
+        },
+        {
+            "type": "file",
+            "oid": "45209d4fb7c00301e1e5a22e5c62db044a33a9b8",
+            "size": 26676,
+            "path": "README.md"
+        },
+        {
+            "type": "file",
+            "oid": "3eab7fc10cc24fac2ef4ffd5edd07539f4498406",
+            "size": 951607832,
+            "lfs": {
+                "oid": "48d4632ee75ba1fdf40b8369d5961b1edfc86152e51d585aa6bd37b31f6f4895",
+                "size": 951607832,
+                "pointerSize": 134
+            },
+            "xetHash": "90c4f39e6908591ca9e04a3c425a3b677498226519890caf16441dfa4fd08796",
+            "path": "audio_weight.q4nx"
+        },
+        {
+            "type": "file",
+            "oid": "c19999a347da729cf62806a8ddb7eb8e315223b5",
+            "size": 17336,
+            "path": "chat_template.jinja"
+        },
+        {
+            "type": "file",
+            "oid": "51a20dbc7844107d06280c51882dbad273f1a9c4",
+            "size": 7528,
+            "path": "config.json"
+        },
+        {
+            "type": "file",
+            "oid": "b5c5211e33a86e9e7011a2966f02661bebd1779b",
+            "size": 4671875302,
+            "lfs": {
+                "oid": "aaca4bf5592804f0752c9f5fb7b4cce2f517fd869ef1d8181b209c8b6dbf2a87",
+                "size": 4671875302,
+                "pointerSize": 135
+            },
+            "xetHash": "bb04ca22fc4ff8ba66da6df265edb2e786d372819062ae864a07eb2ec3bcac01",
+            "path": "model.q4nx"
+        },
+        {
+            "type": "file",
+            "oid": "1ff9f3e3439a939b971f9919e821bf87e835a503",
+            "size": 32169626,
+            "lfs": {
+                "oid": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f",
+                "size": 32169626,
+                "pointerSize": 133
+            },
+            "xetHash": "c62336ad134cad6f154d84eb0e5a5fa9ca17cd665ef3ba5ac4fd02b1486760b4",
+            "path": "tokenizer.json"
+        },
+        {
+            "type": "file",
+            "oid": "ffb748a26e6b354a68f838a2b2de58f90b77b3a5",
+            "size": 2138,
+            "lfs": {
+                "oid": "e592c513cc86edf9962b9a4072f034c20f3c1facfbb2f1c60de8391774c4786e",
+                "size": 2138,
+                "pointerSize": 129
+            },
+            "xetHash": "c90c8ccb1f65ddd48c2f692f0d79ca739beda1ebf247754476a7085f24caece8",
+            "path": "tokenizer_config.json"
+        },
+        {
+            "type": "file",
+            "oid": "043952458924a62843bbb97be1e53d8e51ec2061",
+            "size": 337159264,
+            "lfs": {
+                "oid": "40afff1f6328316add06a1b890f7835f8df246efdebbea84d84ebf513e1c3de6",
+                "size": 337159264,
+                "pointerSize": 134
+            },
+            "xetHash": "56f36ff8463a41c7c409f861fab05e599cc924e872c40582ca0f1ca192bfaa00",
+            "path": "vision_weight.q4nx"
+        }
+    ],
+    "gemma4e-flash:e4b": [
+        {
+            "type": "file",
+            "oid": "da9be47b91174e0a1580d01be5d18bc6f7d916f2",
+            "size": 1671,
+            "path": ".gitattributes"
+        },
+        {
+            "type": "file",
+            "oid": "644ed83706f49d94a417ffe7544b3bc211acf28b",
+            "size": 26713,
+            "path": "README.md"
+        },
+        {
+            "type": "file",
+            "oid": "16ebb04b8679f9440cc119967088bae0f16cf265",
+            "size": 956326424,
+            "lfs": {
+                "oid": "944fbd6cca496801437df8f98ed4c592f6a3b9b1d097d95b0723b218d4e27c47",
+                "size": 956326424,
+                "pointerSize": 134
+            },
+            "xetHash": "366e484bb9b24eedb0c577b8ea6c99c917bb15975d2bdb07f0a493bed470bfeb",
+            "path": "audio_weight.q4nx"
+        },
+        {
+            "type": "file",
+            "oid": "c19999a347da729cf62806a8ddb7eb8e315223b5",
+            "size": 17336,
+            "path": "chat_template.jinja"
+        },
+        {
+            "type": "file",
+            "oid": "07a6fb2f7c407853d83725b513ab1fc2d165e6a5",
+            "size": 7229,
+            "path": "config.json"
+        },
+        {
+            "type": "file",
+            "oid": "2d7552b56ed78bee6e6126f772c8a3d6b0102f71",
+            "size": 7142621252,
+            "lfs": {
+                "oid": "356d155beeee7f8a6008163957963e3df609bbb1c2d6b9c18ba1859906aab924",
+                "size": 7142621252,
+                "pointerSize": 135
+            },
+            "xetHash": "1d132fc07fae6fb60892ae6555291e25cde1fcb2ab8aa27b566f4ecc40052a41",
+            "path": "model.q4nx"
+        },
+        {
+            "type": "file",
+            "oid": "1ff9f3e3439a939b971f9919e821bf87e835a503",
+            "size": 32169626,
+            "lfs": {
+                "oid": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f",
+                "size": 32169626,
+                "pointerSize": 133
+            },
+            "xetHash": "c62336ad134cad6f154d84eb0e5a5fa9ca17cd665ef3ba5ac4fd02b1486760b4",
+            "path": "tokenizer.json"
+        },
+        {
+            "type": "file",
+            "oid": "ffb748a26e6b354a68f838a2b2de58f90b77b3a5",
+            "size": 2138,
+            "lfs": {
+                "oid": "e592c513cc86edf9962b9a4072f034c20f3c1facfbb2f1c60de8391774c4786e",
+                "size": 2138,
+                "pointerSize": 129
+            },
+            "xetHash": "c90c8ccb1f65ddd48c2f692f0d79ca739beda1ebf247754476a7085f24caece8",
+            "path": "tokenizer_config.json"
+        },
+        {
+            "type": "file",
+            "oid": "671fcf66dbc87361178934219c6563f0efde3ce9",
+            "size": 956326592,
+            "lfs": {
+                "oid": "9b943744723fb611adb54c2d4e74f3c0ccaf763d8cec0f2156903c91a5dc1d65",
+                "size": 956326592,
+                "pointerSize": 134
+            },
+            "xetHash": "3710dcbad9cd8d4eb57a3d49b43743ec518e5d85e290fb8736da0f03b6effa45",
+            "path": "vision_weight.q4nx"
+        }
+    ],
     "gemma4-it:12b": [
         {
             "type": "file",
