@@ -5,6 +5,7 @@
 /// \version 0.9.24
 /// \note This file contains the debug utilities for the FastFlowLM project.
 #pragma once
+#include <chrono>
 #include <iostream>
 #include <iomanip>
 #include <sstream>
@@ -180,4 +181,17 @@ inline std::string size_t_to_string(size_t size){
     } else {
         return std::to_string(size / (1024 * 1024 * 1024)) + "G";
     }
+}
+
+/// \brief Report how long loading a model took.
+/// \param started the time point captured immediately before load_model
+/// \note Model load is the one phase no profiler covers, and on backends that
+/// repack weights at load it dominates the time to a first usable prompt. Call
+/// this from every path that loads a model so the CLI and the server agree.
+inline void report_load_time(std::chrono::steady_clock::time_point started) {
+    const double seconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    std::ostringstream message;
+    message << std::fixed << std::setprecision(2) << "Model loaded in " << seconds << " s";
+    header_print("FLM", message.str());
 }
