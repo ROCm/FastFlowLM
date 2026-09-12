@@ -87,6 +87,14 @@ private:
     std::unique_ptr<xrt::ext::kernel> kernel;
     std::unique_ptr<npu_sequence> ctrl_seq;
 
+    // Set by load_insts(). The instructions then travel as a buffer argument
+    // rather than inside a module, so this path uses a plain xrt::kernel and
+    // ctrl_seq stays unused.
+    bool precompiled_insts;
+    std::unique_ptr<xrt::kernel> insts_kernel;
+    std::unique_ptr<xrt::bo> insts_bo;
+    size_t insts_bytes;
+
     uint32_t _gen_elf(char** elf_buf, std::pair<uint32_t*, size_t>& instruction_data){
         uint32_t elf_buf_size = aiebu_assembler_get_elf(
             aiebu_assembler_buffer_type_blob_instr_transaction,
@@ -167,6 +175,8 @@ public:
         this->elf = nullptr;
         this->kernel = nullptr;
         this->module_version = 0xFF;
+        this->precompiled_insts = false;
+        this->insts_bytes = 0;
     }
 
     ///@brief Constructor, this shall not invoke by user, it shall only be invoked by npu_app_manager
@@ -183,6 +193,8 @@ public:
         this->kernel = nullptr;
         this->ctrl_seq = std::make_unique<npu_sequence>(device_gen, enable_preemption);
         this->module_version = 0xFF;
+        this->precompiled_insts = false;
+        this->insts_bytes = 0;
     }
 
   
@@ -199,6 +211,41 @@ public:
         this->kernel = std::make_unique<xrt::ext::kernel>(*this->context, *this->module, this->kernel_name);
         this->module_valid = true;
         this->module_version = this->ctrl_seq->sequence_version(); // force sync the sequence version
+    }
+
+    ///@brief Run a precompiled instruction sequence in place of a generated one
+    ///@param insts_name a transaction binary, as emitted by aiecc --npu-insts-name
+    ///@note The xclbin still supplies the static configuration through the
+    ///     hardware context. Only the instruction stream comes from the file,
+    ///     and this app then generates no sequence of its own.
+    void load_insts(std::string insts_name){
+        std::ifstream fin(insts_name, std::ios::binary | std::ios::ate);
+        if (fin.is_open() == false) {
+            header_print_r("ERROR", "Failed to open instruction binary: " << insts_name);
+            exit(1);
+        }
+        std::streamsize size = fin.tellg();
+        if (size <= 0) {
+            header_print_r("ERROR", "Empty instruction binary: " << insts_name);
+            exit(1);
+        }
+        fin.seekg(0, std::ios::beg);
+        std::vector<char> blob(static_cast<size_t>(size));
+        fin.read(blob.data(), size);
+        fin.close();
+
+        this->insts_kernel = std::make_unique<xrt::kernel>(*this->context, this->kernel_name);
+        // Argument 1 is the instruction buffer; its group id is what selects
+        // the memory bank the firmware fetches instructions from.
+        this->insts_bo = std::make_unique<xrt::bo>(
+            *this->device, static_cast<size_t>(size),
+            xrt::bo::flags::cacheable, this->insts_kernel->group_id(1)
+        );
+        std::memcpy(this->insts_bo->map<char*>(), blob.data(), static_cast<size_t>(size));
+        this->insts_bo->sync(XCL_BO_SYNC_BO_TO_DEVICE);
+        this->insts_bytes = static_cast<size_t>(size);
+        this->precompiled_insts = true;
+        LOG_VERBOSE(2, "Loaded " << this->insts_bytes << " bytes of instructions from " << insts_name);
     }
 
     void store_elf(std::string elf_name){
@@ -223,6 +270,12 @@ public:
     ///@see xrt::run
     template<typename... BoArgs>
     ert_cmd_state operator()(BoArgs&&... args){
+        if (this->precompiled_insts) {
+            auto run = this->insts_kernel->operator()(3, *this->insts_bo, (uint32_t)this->insts_bytes, args.bo()...);
+            ert_cmd_state state = run.wait();
+            LOG_VERBOSE(2, "ending state: " << this->cmd_state_map[state]);
+            return state;
+        }
         if (this->module_valid == false || this->ctrl_seq->sequence_valid() == false || this->module_version != this->ctrl_seq->sequence_version()) {
             this->_setup_kernel();
         }
@@ -238,14 +291,17 @@ public:
     ///@see xrt::run
     template<typename... BoArgs>
     ert_cmd_state safe_run(BoArgs&&... args){
-        if (this->module_valid == false || this->ctrl_seq->sequence_valid() == false || this->module_version != this->ctrl_seq->sequence_version()) {
+        if (this->precompiled_insts == false &&
+            (this->module_valid == false || this->ctrl_seq->sequence_valid() == false || this->module_version != this->ctrl_seq->sequence_version())) {
             this->_setup_kernel();
         }
         std::array<bytes*, sizeof...(BoArgs)> bo_args = { &args... };
         for (size_t i = 0; i < sizeof...(args); i++){
             bo_args[i]->sync_to_device();
         }
-        auto run = this->kernel->operator()(3, 0, 0, args.bo()...);
+        auto run = this->precompiled_insts
+            ? this->insts_kernel->operator()(3, *this->insts_bo, (uint32_t)this->insts_bytes, args.bo()...)
+            : this->kernel->operator()(3, 0, 0, args.bo()...);
         ert_cmd_state state = run.wait();
         for (size_t i = 0; i < sizeof...(args); i++){
             bo_args[i]->sync_from_device();
@@ -260,13 +316,19 @@ public:
     ///@see xrt::run
     template<typename... BoArgs>
     xrt::run create_run(BoArgs&&... args){
-        if (this->module_valid == false || this->ctrl_seq->sequence_valid() == false || this->module_version != this->ctrl_seq->sequence_version()) {
+        if (this->precompiled_insts == false &&
+            (this->module_valid == false || this->ctrl_seq->sequence_valid() == false || this->module_version != this->ctrl_seq->sequence_version())) {
             this->_setup_kernel();
         }
-        xrt::run run = xrt::run(*this->kernel);
+        xrt::run run = this->precompiled_insts ? xrt::run(*this->insts_kernel) : xrt::run(*this->kernel);
         run.set_arg(0, 3);
-        run.set_arg(1, 0);
-        run.set_arg(2, 0);
+        if (this->precompiled_insts) {
+            run.set_arg(1, *this->insts_bo);
+            run.set_arg(2, (uint32_t)this->insts_bytes);
+        } else {
+            run.set_arg(1, 0);
+            run.set_arg(2, 0);
+        }
         std::array<bytes*, sizeof...(BoArgs)> bo_args = { &args... };
         for (size_t i = 0; i < sizeof...(args); i++){
             run.set_arg(3 + i, bo_args[i]->bo());
