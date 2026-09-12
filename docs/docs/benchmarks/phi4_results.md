@@ -68,24 +68,31 @@ These are **descriptive measurements from a single acceptance run**, not a bench
 
 | Metric | Value | Conditions |
 |---|---|---|
-| Model load to serving | **44.2 / 47.4 / 49.1 s** | three consecutive fresh `flm serve` processes, timed from launch to the first successful `/api/version`. Broken down below. |
+| Model load to serving | **5.1 / 5.3 s** | fresh `flm serve` processes, timed from launch to the first successful `/api/version`. Was 44–49 s at the accepted commit; see below. |
 | Cold TTFT | **4.21 s** | first prompt in a fresh process; includes one-time kernel and ELF setup |
 | Warm TTFT | **65.0 ms** | subsequent prompts in the same process |
 | Decode, REST | **21.3 tok/s** | `/api/chat`, 16 generated tokens |
 | Decode, warm CLI session | **35.8 tok/s** | 10 prompts in one loaded process |
 
-### Where the ~45 s of startup goes
+### Startup: 45 s → 5 s
 
-Measured with `FLM_AIE4_PROFILE_LOAD=1`, two fresh `flm serve` processes:
+The acceptance run measured 44–49 s to serving. Profiling it with `FLM_AIE4_PROFILE_LOAD=1` found two independent costs, both since fixed:
 
-| Phase | Time | Share |
+| Phase | Before | After |
 |---|---|---|
-| Startup integrity check — SHA-256 over the 4 GB GGUF and the three small files | **~28 s** | 62% |
-| Weight requantization — 161 objects from Q8_0, serially | **15.3 / 14.9 s** | 33% |
-| Shape plan | 0.05 s | |
-| GGUF resolve, host prep, device tensors | < 0.2 s | |
+| Startup integrity check — SHA-256 over the 4 GB GGUF | ~28 s (62%) | **0 s** — not run |
+| Weight requantization — 161 objects from Q8_0 | 15.3 / 14.9 s | **2.5 / 3.0 s** |
+| Shape plan | 0.05 s | 0.05 s |
+| GGUF resolve, host prep, device tensors | < 0.2 s | < 0.2 s |
+| **Process launch to serving** | **44.9 / 46.3 s** | **5.1 / 5.3 s** |
 
-Two things follow. First, `load_model` itself is only **16.8 / 16.0 s**; the majority of what a user waits through happens before the engine is even constructed. Second, the integrity check is far slower than the work requires: `Get-FileHash -Algorithm SHA256` over the same 4 GB file on the same machine takes **3.67 s**, against ~28 s for `calculate_file_sha256`, which uses a portable pure-C++ SHA-256 with no hardware acceleration. That ~8× gap is not specific to this model or this backend — it is paid on every startup check and every pull, for every model.
+The integrity check was re-hashing every pinned file on every launch — a pull-time concern on the startup path. `flm pull` and `flm check` still verify in full; only the run and serve paths were changed to ask for status alone.
+
+The packer was being given a threads hint of 0, which corelib treats as ONE deliberately. This requantizing path is compute-bound and scales with the hint, so 8 brings it to 2.5–3.0 s — within range of the 2.2 s that `python/phi4_driver.py` reports for the same 161 weights, and reached **without** the 8-concurrent-creates configuration whose failure mode is documented in corelib's header (2 of 10 loads producing all-zero output, attribution open). The creates remain serialized.
+
+Output was re-verified after the change: `2+2` → `4`, `capital of France` → `Paris`, `primary color` → `Red.`, and a correct one-sentence description of AMD. No degeneration, no all-zero output.
+
+Separately, and **not** fixed: `calculate_file_sha256` uses a portable pure-C++ SHA-256 with no hardware acceleration, and takes ~28 s over 4 GB where `Get-FileHash` on the same machine takes **3.67 s**. That ~8× gap is not specific to this model or backend — it is still paid by `flm pull` and `flm check` for every model.
 
 **Do not read the per-process cold cycles as throughput.** Ten fresh-process cycles generating 8 tokens each reported 3.70–20.26 tok/s decode and 1.09–3.65 tok/s prefill. Every one of those pays the one-time setup inside its own measurement window, so the average describes start-up cost, not steady-state speed.
 
