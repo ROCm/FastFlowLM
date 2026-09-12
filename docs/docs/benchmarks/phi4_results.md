@@ -68,11 +68,24 @@ These are **descriptive measurements from a single acceptance run**, not a bench
 
 | Metric | Value | Conditions |
 |---|---|---|
-| Model load to serving | **44.2 / 47.4 / 49.1 s** | three consecutive fresh `flm serve` processes, timed from launch to the first successful `/api/version`. All 161 weights are requantized from Q8_0 at load. |
+| Model load to serving | **44.2 / 47.4 / 49.1 s** | three consecutive fresh `flm serve` processes, timed from launch to the first successful `/api/version`. Broken down below. |
 | Cold TTFT | **4.21 s** | first prompt in a fresh process; includes one-time kernel and ELF setup |
 | Warm TTFT | **65.0 ms** | subsequent prompts in the same process |
 | Decode, REST | **21.3 tok/s** | `/api/chat`, 16 generated tokens |
 | Decode, warm CLI session | **35.8 tok/s** | 10 prompts in one loaded process |
+
+### Where the ~45 s of startup goes
+
+Measured with `FLM_AIE4_PROFILE_LOAD=1`, two fresh `flm serve` processes:
+
+| Phase | Time | Share |
+|---|---|---|
+| Startup integrity check — SHA-256 over the 4 GB GGUF and the three small files | **~28 s** | 62% |
+| Weight requantization — 161 objects from Q8_0, serially | **15.3 / 14.9 s** | 33% |
+| Shape plan | 0.05 s | |
+| GGUF resolve, host prep, device tensors | < 0.2 s | |
+
+Two things follow. First, `load_model` itself is only **16.8 / 16.0 s**; the majority of what a user waits through happens before the engine is even constructed. Second, the integrity check is far slower than the work requires: `Get-FileHash -Algorithm SHA256` over the same 4 GB file on the same machine takes **3.67 s**, against ~28 s for `calculate_file_sha256`, which uses a portable pure-C++ SHA-256 with no hardware acceleration. That ~8× gap is not specific to this model or this backend — it is paid on every startup check and every pull, for every model.
 
 **Do not read the per-process cold cycles as throughput.** Ten fresh-process cycles generating 8 tokens each reported 3.70–20.26 tok/s decode and 1.09–3.65 tok/s prefill. Every one of those pays the one-time setup inside its own measurement window, so the average describes start-up cost, not steady-state speed.
 
