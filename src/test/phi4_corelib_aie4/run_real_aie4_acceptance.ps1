@@ -4,7 +4,10 @@ param(
   [string]$CorelibDll = 'C:/Users/chiz/work/ryzenai-corelib/install/bin/ryzenai_corelib.dll',
   [string]$Output = 'src/build-aie4/phi4-gguf-aie4-acceptance.json',
   [int]$Port = 52625,
-  [string]$Python = 'python'
+  [string]$Python = 'python',
+  # Diagnostics only: skips the 16-minute CLI matrix so the REST phase can be
+  # iterated on quickly. A record produced this way can never report success.
+  [switch]$SkipCli
 )
 $ErrorActionPreference='Stop'
 $root=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
@@ -20,8 +23,106 @@ $runtime=Split-Path $core
 $env:PATH="$(Join-Path $root 'src/lib/xrt');$(Join-Path $root 'src/lib');$runtime;C:/Users/chiz/.conda/envs/hybrid-llm/Library/bin;C:/Users/chiz/work/hybrid-llm/install/xrt_package/xrt;$env:PATH"
 New-Item -ItemType Directory -Force $outDir | Out-Null
 $record=[ordered]@{started=(Get-Date).ToString('o');passed=$false;commands=@();host=[ordered]@{};provenance=[ordered]@{};files=@();cli=[ordered]@{};rest=[ordered]@{};performance=[ordered]@{};failures=@()}
-function Cmd([string]$line,[scriptblock]$body){$start=Get-Date;try{&$body;$ec=$LASTEXITCODE;if($null-eq$ec){$ec=0}}catch{$ec=1;$record.failures+=($_|Out-String);throw}finally{$record.commands+=@([ordered]@{command=$line;exit_code=$ec;seconds=((Get-Date)-$start).TotalSeconds})}}
-function Post([string]$path,$body,[int]$TimeoutSec=900){try{$r=Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port$path" -Method Post -ContentType 'application/json' -TimeoutSec $TimeoutSec -Body ($body|ConvertTo-Json -Depth 8 -Compress);return [ordered]@{status=[int]$r.StatusCode;text=$r.Content;json=($r.Content|ConvertFrom-Json)}}catch{if($_.Exception.Response){$resp=$_.Exception.Response;$reader=New-Object IO.StreamReader($resp.GetResponseStream());$text=$reader.ReadToEnd();return [ordered]@{status=[int]$resp.StatusCode;text=$text;json=($text|ConvertFrom-Json)}};throw}}
+# Progress markers go to stdout so a run that stalls can be located from the
+# transcript alone; a silent 30-minute stall is indistinguishable from work.
+function Mark([string]$m){Write-Host ("[mark] "+(Get-Date).ToString('HH:mm:ss.fff')+" "+$m)}
+# ConvertTo-Json cannot be used on the record as a whole. Some of the values it
+# holds are live .NET objects whose property graphs loop back on themselves, and
+# ConvertTo-Json expands such a graph until -Depth runs out, which allocates tens
+# of gigabytes and never returns. This was confirmed on both Windows PowerShell
+# 5.1 and PowerShell 7.0.0 (3.4 GB and still climbing when killed) — moving to a
+# newer engine does not avoid it, so do not remove this. This emitter walks
+# the record itself: it refuses to descend past $script:JsonMaxDepth, and it
+# refuses to re-enter an object that is already an ancestor of the current node.
+# ConvertTo-Json is still used, but only ever on a single scalar string.
+$script:JsonMaxDepth=10
+function JsonScalar($s){return (ConvertTo-Json -InputObject ([string]$s))}
+function EmitJson($v,[string]$label,[int]$level,$ancestors){
+  if($null -eq $v){return 'null'}
+  if($v -is [string]){return (JsonScalar $v)}
+  if($v -is [bool]){if($v){return 'true'}else{return 'false'}}
+  if($v -is [datetime]){return (JsonScalar $v.ToString('o'))}
+  if($v -is [double] -or $v -is [single]){if([double]::IsNaN($v)-or[double]::IsInfinity($v)){return 'null'};return (([double]$v).ToString('R',[Globalization.CultureInfo]::InvariantCulture))}
+  if($v -is [ValueType] -and $v -isnot [char] -and $v -isnot [Enum]){return (([string]$v))}
+  if($level -ge $script:JsonMaxDepth){return (JsonScalar $v)}
+  # The ancestor test exists for live .NET objects, whose property graphs loop.
+  # It deliberately does not apply to a PSCustomObject: ConvertFrom-Json only
+  # ever builds trees, and every object it produces shares one singleton base
+  # instance, so testing those would report every nested JSON object as a loop.
+  $bo=$null;try{$bo=$v.PSObject.BaseObject}catch{}
+  $next=$ancestors
+  if($null -ne $bo -and $bo -isnot [System.Management.Automation.PSCustomObject]){
+    foreach($a in $ancestors){if([object]::ReferenceEquals($a,$bo)){return (JsonScalar '<cycle>')}}
+    # The ancestor list must be built with Add, not with "+". Adding an array
+    # with "+" splices its elements in, which would put every element of an
+    # array on the ancestor list and make each of them look like a loop.
+    $next=New-Object Collections.ArrayList
+    if($null -ne $ancestors){[void]$next.AddRange($ancestors)}
+    [void]$next.Add($bo)
+  }
+  $parts=New-Object Collections.ArrayList
+  if($v -is [System.Collections.IDictionary]){
+    foreach($k in @($v.Keys)){
+      $sw=[Diagnostics.Stopwatch]::StartNew()
+      [void]$parts.Add((JsonScalar $k)+':'+(EmitJson $v[$k] "$label.$k" ($level+1) $next))
+      if($level -lt 2){Mark ("json {0}.{1} in {2:N1}s" -f $label,$k,$sw.Elapsed.TotalSeconds)}
+    }
+    return '{'+($parts -join ',')+'}'
+  }
+  if($v -is [System.Collections.IEnumerable]){
+    foreach($e in $v){[void]$parts.Add((EmitJson $e "$label[]" ($level+1) $next))}
+    return '['+($parts -join ',')+']'
+  }
+  $props=@($v.PSObject.Properties)
+  if($props.Count -gt 0){
+    foreach($p in $props){
+      $pv=$null;try{$pv=$p.Value}catch{$pv="<unreadable: $($_.Exception.Message)>"}
+      [void]$parts.Add((JsonScalar $p.Name)+':'+(EmitJson $pv "$label.$($p.Name)" ($level+1) $next))
+    }
+    return '{'+($parts -join ',')+'}'
+  }
+  return (JsonScalar $v)
+}
+function WriteRecord($rec,[string]$path){
+  [IO.File]::WriteAllText($path,"{`r`n",[Text.Encoding]::UTF8)
+  $first=$true
+  foreach($k in @($rec.Keys)){
+    $sw=[Diagnostics.Stopwatch]::StartNew()
+    try{$t=EmitJson $rec[$k] $k 1 (New-Object Collections.ArrayList)}catch{$t=JsonScalar ("<unserializable: "+$_.Exception.Message+">")}
+    if(-not$first){[IO.File]::AppendAllText($path,",`r`n",[Text.Encoding]::UTF8)}
+    $first=$false
+    [IO.File]::AppendAllText($path,('  "{0}": {1}' -f $k,$t),[Text.Encoding]::UTF8)
+    Mark ("json section {0} written in {1:N1}s" -f $k,$sw.Elapsed.TotalSeconds)
+  }
+  [IO.File]::AppendAllText($path,"`r`n}`r`n",[Text.Encoding]::UTF8)
+}
+# Piping an ErrorRecord to Out-String yields nothing but a newline under some
+# host configurations, which would record a failure with no reason attached.
+function ErrText($e){
+  $parts=@("$($e.Exception.GetType().FullName): $($e.Exception.Message)")
+  $rendered=($e|Out-String);if(-not [string]::IsNullOrWhiteSpace($rendered)){$parts+=$rendered.Trim()}
+  if($e.InvocationInfo -and $e.InvocationInfo.PositionMessage){$parts+=$e.InvocationInfo.PositionMessage.Trim()}
+  if($e.ScriptStackTrace){$parts+=$e.ScriptStackTrace.Trim()}
+  return ($parts -join "`n")
+}
+function Cmd([string]$line,[scriptblock]$body){$start=Get-Date;try{&$body;$ec=$LASTEXITCODE;if($null-eq$ec){$ec=0}}catch{$ec=1;$t=ErrText $_;$record.failures+=$t;Mark ("FAILURE in ${line}: "+$t);throw}finally{$record.commands+=@([ordered]@{command=$line;exit_code=$ec;seconds=((Get-Date)-$start).TotalSeconds})}}
+# A non-2xx reply is an error in both engines, but the two expose it
+# differently: Windows PowerShell hands back a WebResponse to read a stream
+# from, PowerShell 7 hands back an HttpResponseMessage and puts the body in
+# ErrorDetails. An expected 400 must not depend on which engine is running.
+function Post([string]$path,$body,[int]$TimeoutSec=900){
+  try{$r=Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port$path" -Method Post -ContentType 'application/json' -TimeoutSec $TimeoutSec -Body ($body|ConvertTo-Json -Depth 8 -Compress);return [ordered]@{status=[int]$r.StatusCode;text=$r.Content;json=($r.Content|ConvertFrom-Json)}}
+  catch{
+    $resp=$_.Exception.Response
+    if($null -eq $resp){throw}
+    $text=$null
+    if($_.ErrorDetails -and $_.ErrorDetails.Message){$text=$_.ErrorDetails.Message}
+    elseif($resp.PSObject.Methods['GetResponseStream']){$text=(New-Object IO.StreamReader($resp.GetResponseStream())).ReadToEnd()}
+    elseif($resp.Content){$text=$resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()}
+    $json=$null;if(-not [string]::IsNullOrWhiteSpace($text)){try{$json=$text|ConvertFrom-Json}catch{}}
+    return [ordered]@{status=[int]$resp.StatusCode;text=$text;json=$json}
+  }
+}
 # Two things must never reach curl as inline arguments. A JSON body loses its
 # double quotes to PowerShell's native-argument quoting and the server sees a
 # malformed object, so every body goes to a file and is read back with "@file".
@@ -71,32 +172,46 @@ for i,q in enumerate(prompts):cycles.append({'prompt':q,**run(['/set gen-lim 8',
 json.dump({'prompts':prompts,'one_process':one,'cycles':cycles},open(out,'w',encoding='utf8'),indent=2)
 '@
  $pyPath=Join-Path $outDir 'accept_cli.py';$cliPath=Join-Path $outDir 'accept_cli.json';Set-Content -Path $pyPath -Value $py -Encoding UTF8
+ Mark 'starting CLI matrix'
+ if($SkipCli){$record.skipped_cli=$true;Mark 'CLI matrix SKIPPED (diagnostic run, cannot pass)'}else{
  Cmd 'python accept_cli.py (10 prompts + 10 cycles)' {&$Python $pyPath $exe $Model $cliPath;if($LASTEXITCODE-ne 0){throw 'CLI matrix failed'}};$record.cli=Get-Content -Raw $cliPath|ConvertFrom-Json
- $allCli=$record.cli.one_process.text;if($allCli-notmatch '(?m)\b4\b'){throw 'CLI arithmetic answer missing 4'};if($allCli-notmatch '(?i)AMD|semiconductor|processor|comput'){throw 'CLI AMD answer irrelevant'};if($allCli-notmatch 'corelib_aie4_gguf' -or $allCli-notmatch [regex]::Escape($core)){throw 'CLI backend/DLL proof missing'};if($allCli-match 'nan|-nan\(ind\)'){throw 'CLI profile reported a nan speed'};foreach($c in $record.cli.cycles){if($c.exit_code-ne 0 -or $c.text-notmatch 'Tokens:\s*[1-9]'){throw "CLI cycle failed: $($c.prompt)"}}
+ Mark 'CLI matrix done'
+ $allCli=$record.cli.one_process.text;if($allCli-notmatch '(?m)\b4\b'){throw 'CLI arithmetic answer missing 4'};if($allCli-notmatch '(?i)AMD|semiconductor|processor|comput'){throw 'CLI AMD answer irrelevant'};if($allCli-notmatch 'corelib_aie4_gguf' -or $allCli-notmatch [regex]::Escape($core)){throw 'CLI backend/DLL proof missing'};if($allCli-match 'nan|-nan\(ind\)'){throw 'CLI profile reported a nan speed'};foreach($c in $record.cli.cycles){if($c.exit_code-ne 0 -or $c.text-notmatch 'Tokens:\s*[1-9]'){throw "CLI cycle failed: $($c.prompt)"}}}
  $serverLog=Join-Path $outDir 'accept-server.log';$serverErr=Join-Path $outDir 'accept-server.err.log';$server=Start-Process $exe -ArgumentList @('serve',$Model,'--port',$Port) -WorkingDirectory $root -RedirectStandardOutput $serverLog -RedirectStandardError $serverErr -PassThru
  try{for($i=0;$i-lt 300;$i++){try{$v=Invoke-RestMethod "http://127.0.0.1:$Port/api/version";break}catch{Start-Sleep -Milliseconds 200}};if(-not$v){throw 'server not ready'}
+  Mark 'server ready'
   $apiNon=Post '/api/chat' @{model=$Model;messages=@(@{role='user';content='What is 2+2?'});stream=$false;options=@{num_predict=16}}
+  Mark 'api_chat_nonstream done'
   $oaNon=Post '/v1/chat/completions' @{model=$Model;messages=@(@{role='user';content='What does AMD do?'});stream=$false;max_tokens=24}
+  Mark 'openai_nonstream done'
   $apiStream=CurlStream 'body-api-stream.json' '/api/chat' @{model=$Model;messages=@(@{role='user';content='Say hello.'});stream=$true;options=@{num_predict=8}}
+  Mark 'api_chat_stream done'
   $oaStream=CurlStream 'body-openai-stream.json' '/v1/chat/completions' @{model=$Model;messages=@(@{role='user';content='Name one GPU use.'});stream=$true;max_tokens=12}
+  Mark 'openai_stream done'
   if($apiNon.status-ne 200-or$oaNon.status-ne 200-or[string]::IsNullOrWhiteSpace($apiStream)-or[string]::IsNullOrWhiteSpace($oaStream)){throw 'REST API matrix failed'}
   foreach($s in @($apiStream,$oaStream)){if($s-match '"error"'){throw "streaming response returned an error: $s"}}
   $cancelOut=Join-Path $outDir 'cancel-stream.txt'
   $cp=CurlBackground 'body-cancel.json' '/api/chat' @{model=$Model;request_id='accept-cancel';messages=@(@{role='user';content='Count upward for a long time.'});stream=$true;options=@{num_predict=1024}} $cancelOut
   Start-Sleep -Milliseconds 1500;$cancel=Post '/api/cancel' @{request_id='accept-cancel'};if(-not$cp.WaitForExit(300000)){$cp.Kill();throw 'the cancelled stream did not end'}
+  Mark 'cancellation done'
   $recovery=Post '/api/chat' @{model=$Model;messages=@(@{role='user';content='What is 2+2?'});stream=$false;options=@{num_predict=8}}
   if(-not$cancel.json.cancelled-or$recovery.status-ne 200){throw 'cancellation recovery failed'}
+  Mark 'recovery done'
   $probe=Post '/api/chat' @{model=$Model;messages=@(@{role='user';content='x'});stream=$false;options=@{num_predict=1}};$pt=[int]$probe.json.prompt_eval_count;$remaining=4095-$pt
+  Mark "probe done prompt_tokens=$pt remaining=$remaining"
   $bOut=Join-Path $outDir 'boundary-stream.txt'
   $bp=CurlBackground 'body-boundary.json' '/api/chat' @{model=$Model;request_id='boundary4095';messages=@(@{role='user';content='x'});stream=$true;options=@{num_predict=$remaining}} $bOut
   Start-Sleep -Milliseconds 1500;$bcancel=Post '/api/cancel' @{request_id='boundary4095'};if(-not$bp.WaitForExit(300000)){$bp.Kill();throw 'the cancelled 4095 stream did not end'}
+  Mark 'boundary 4095 cancel done'
   $b4096=Post '/api/chat' @{model=$Model;messages=@(@{role='user';content='x'});stream=$false;options=@{num_predict=($remaining+1)}}
+  Mark "boundary 4096 done status=$($b4096.status)"
   if(-not$bcancel.json.cancelled-or$b4096.status-ne 400){throw "boundary behavior failed: 4095 cancelled=$($bcancel.json.cancelled) 4096 status=$($b4096.status)"}
   $record.rest=[ordered]@{api_chat_nonstream=$apiNon;openai_nonstream=$oaNon;api_chat_stream=$apiStream;openai_stream=$oaStream;cancellation=$cancel;recovery=$recovery;prompt_tokens=$pt;boundary4095_cancel=$bcancel;boundary4096=$b4096}
   $decodeTps=$null;if([double]$apiNon.json.eval_duration -gt 0){$decodeTps=[double]$apiNon.json.eval_count*1e9/[double]$apiNon.json.eval_duration}
   if($null-eq$decodeTps){throw 'decode duration was not reported; decode throughput cannot be recorded'}
   $record.performance=[ordered]@{load_ns=$apiNon.json.load_duration;cold_ttft_ns=$apiNon.json.prompt_eval_duration;warm_ttft_ns=$probe.json.prompt_eval_duration;decode_tokens=$apiNon.json.eval_count;decode_duration_ns=$apiNon.json.eval_duration;decode_tokens_per_second=$decodeTps}
- }finally{if($server-and-not$server.HasExited){Stop-Process -Id $server.Id -Force};$record.rest.server_log=(Get-Content -Raw $serverLog -ErrorAction SilentlyContinue)}
+ }finally{if($server-and-not$server.HasExited){Stop-Process -Id $server.Id -Force};Mark 'server stopped';$record.rest.server_log=(Get-Content -Raw $serverLog -ErrorAction SilentlyContinue)}
  if($record.rest.server_log-match '(?i)CPU fallback|phi4_npu|Q4NX'){throw 'fallback backend appeared in server log'}
+ if($SkipCli){throw 'diagnostic -SkipCli run: the CLI matrix was not executed, so this record cannot report success'}
  $record.passed=$true
-}catch{$record.failures+=($_|Out-String);throw}finally{$record.finished=(Get-Date).ToString('o');$record|ConvertTo-Json -Depth 12|Set-Content $outPath -Encoding UTF8}
+}catch{$t=ErrText $_;$record.failures+=$t;Mark ('FAILURE: '+$t);throw}finally{$record.finished=(Get-Date).ToString('o');Mark 'writing record';WriteRecord $record $outPath;Mark 'record written'}
