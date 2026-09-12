@@ -5,7 +5,12 @@
 #include "models/phi4/phi4_corelib_shape_plan.hpp"
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <cstdlib>
+#include <iomanip>
+#include <iostream>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -17,12 +22,46 @@ using namespace flm::corelib;
 std::string Name(std::size_t i, const char* suffix) {
     return "blk." + std::to_string(i) + suffix;
 }
+
+/// Load-time phase accounting. Model load on this backend is dominated by
+/// requantizing every weight from Q8_0, and without a breakdown there is no way
+/// to tell that from disk I/O or from shape planning. Set FLM_AIE4_PROFILE_LOAD
+/// to print it; the timer itself always runs, it costs five clock reads.
+struct LoadPhases {
+    std::chrono::steady_clock::time_point mark{std::chrono::steady_clock::now()};
+    double shape_plan{}, tensor_resolve{}, host_prep{}, weight_create{}, device_tensors{};
+
+    double Lap() {
+        const auto now = std::chrono::steady_clock::now();
+        const double seconds = std::chrono::duration<double>(now - mark).count();
+        mark = now;
+        return seconds;
+    }
+
+    void Report() const {
+        const char* enabled = std::getenv("FLM_AIE4_PROFILE_LOAD");
+        if (!enabled || !*enabled || *enabled == '0') return;
+        const double total = shape_plan + tensor_resolve + host_prep +
+                             weight_create + device_tensors;
+        std::ostringstream out;
+        out << std::fixed << std::setprecision(2)
+            << "[FLM]  AIE4 load: " << total << " s total"
+            << "  (shape plan " << shape_plan
+            << ", GGUF resolve " << tensor_resolve
+            << ", host prep " << host_prep
+            << ", weight requantize " << weight_create
+            << ", device tensors " << device_tensors << ")";
+        std::cout << out.str() << std::endl;
+    }
+};
 }
 
 struct phi4_corelib_aie4::Impl {
     std::shared_ptr<Phi4GgufPackage> package;
     std::shared_ptr<CorelibRuntime> runtime;
     std::shared_ptr<const CorelibApi> api;
+    // Declared before `plan` so it starts before the initializer list builds it.
+    LoadPhases phases;
     Phi4ShapePlan plan;
     std::uint32_t max_length;
     int position{};
@@ -46,6 +85,7 @@ struct phi4_corelib_aie4::Impl {
         if (!runtime || !api) throw std::invalid_argument("corelib runtime is null");
         if (!maximum || maximum > kMaxSequenceLength)
             throw std::invalid_argument("Phi-4 maximum length must be in 1..4096");
+        phases.shape_plan = phases.Lap();
 
         // Validate and capture every mapped span before the first device create.
         embedding = package->RequireQ8("token_embd.weight", std::array<std::int64_t,2>{kVocabularySize,kHiddenSize});
@@ -60,6 +100,7 @@ struct phi4_corelib_aie4::Impl {
             ow[i]=package->RequireQ8(Name(i,".attn_output.weight"),std::array<std::int64_t,2>{kHiddenSize,kHiddenSize});
             dw[i]=package->RequireQ8(Name(i,".ffn_down.weight"),std::array<std::int64_t,2>{kHiddenSize,kIntermediateSize});
         }
+        phases.tensor_resolve = phases.Lap();
         std::optional<FloatTensorView> factors;
         try { factors=package->RequireF32("rope_factors_short.weight",std::array<std::int64_t,1>{48}); }
         catch (const std::runtime_error&) {}
@@ -70,6 +111,7 @@ struct phi4_corelib_aie4::Impl {
         const std::array<float,1> epsf{kRmsEpsilon}; auto eps=ConvertF32ToBf16(epsf);
 
         first_norm_scale = an[0];
+        phases.host_prep = phases.Lap();
         auto lease=runtime->AcquireExecution(); void* raw=nullptr;
         api->Check(api->functions().create_stream(&raw),"ryzenai_corelib_create_stream"); stream=UniqueStream(api,raw);
         auto mm=[&](const TensorView& tv,std::int64_t kk,std::int64_t nn,const std::string& label){
@@ -90,6 +132,7 @@ struct phi4_corelib_aie4::Impl {
             mlp_weights[i]=UniqueSsMlpWeights(api,raw);
         }
         lm_weights=mm(embedding,kHiddenSize,kVocabularySize,"token_embd.weight");
+        phases.weight_create = phases.Lap();
         const auto& e=plan.maximum_extents();
         const auto rows=std::max({e.query_rows,e.kv_rows,e.output_rows,
                                   e.ssmlp_rows});
@@ -114,6 +157,8 @@ struct phi4_corelib_aie4::Impl {
         for(std::size_t i=0;i<kLayerCount;++i){k_cache[i]=tensor(ryzenai_corelib_data_type_bf16,{8,4096,128},"K cache");v_cache[i]=tensor(ryzenai_corelib_data_type_bf16,{8,4096,128},"V cache");}
         api->Check(api->functions().tensor_write(cosine.get(),ryzenai_corelib_data_type_fp32,rope.cosine.data(),rope.cosine.size(),0),"ryzenai_corelib_tensor_write cosine");
         api->Check(api->functions().tensor_write(sine.get(),ryzenai_corelib_data_type_fp32,rope.sine.data(),rope.sine.size(),0),"ryzenai_corelib_tensor_write sine");
+        phases.device_tensors = phases.Lap();
+        phases.Report();
     }
 
     void usable() const {if(poisoned)throw std::runtime_error("Phi-4 corelib engine is poisoned");}

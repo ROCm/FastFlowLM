@@ -21,6 +21,19 @@
 #include <thread>
 #include <chrono>
 
+namespace {
+/// \brief Report how long loading the model took.
+/// \note Model load is the one phase no profiler covers, and on backends that
+/// repack weights at load it dominates the time to first usable prompt.
+void report_load_time(std::chrono::steady_clock::time_point started) {
+    const double seconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    std::ostringstream message;
+    message << std::fixed << std::setprecision(2) << "Model loaded in " << seconds << " s";
+    header_print("FLM", message.str());
+}
+}  // namespace
+
 /// \brief Command map for command line input
 std::map<std::string, runner_cmd_t> cmd_map = {
     {"/set", CMD_SET},
@@ -73,7 +86,9 @@ Runner::Runner(model_list& supported_models, ModelDownloader& downloader, progra
     // header_print("ASR", asr_supported);
     this->auto_chat_engine->configure_parameter("img_pre_resize", this->img_pre_resize);
     try {
+        const auto load_started = std::chrono::steady_clock::now();
         this->auto_chat_engine->load_model(this->supported_models.get_model_path(new_tag), model_info, this->ctx_length, this->preemption);
+        report_load_time(load_started);
     }
     catch (const std::exception& e) {
         header_print("ERROR", "Failed to load model: " + std::string(e.what()));
@@ -452,7 +467,9 @@ void Runner::cmd_load(std::vector<std::string>& input_list) {
         auto [new_tag, model_info] = this->supported_models.get_model_info(this->tag);
         this->auto_chat_engine->configure_parameter("img_pre_resize", this->img_pre_resize);
         try {
+            const auto load_started = std::chrono::steady_clock::now();
             this->auto_chat_engine->load_model(this->supported_models.get_model_path(new_tag), model_info, this->ctx_length, this->preemption);
+            report_load_time(load_started);
         }
         catch (const std::exception& e) {
             header_print("ERROR", "Failed to load model: " + std::string(e.what()));
