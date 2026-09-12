@@ -252,6 +252,7 @@ std::string Phi4::generate_aie4(chat_meta_info_t& meta_info,
     std::string result;
     meta_info.stop_reason = EOT_DETECTED;
     int generated = 0;
+    profiler_list[DECODING_TIME].reset();
     while (last_token != -1 && generated < aie4_generation_budget_) {
         if (is_cancelled()) {
             meta_info.stop_reason = CANCEL_DETECTED;
@@ -280,9 +281,13 @@ std::string Phi4::generate_aie4(chat_meta_info_t& meta_info,
             meta_info.stop_reason = CANCEL_DETECTED;
             break;
         }
+        profiler_list[DECODING_TIME].start();
         auto logits = lm_engine->forward(token);
+        profiler_list[DECODING_TIME].stop(1);
         last_token = sampler->sample(logits);
     }
+    meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(
+        profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
     return result;
 }
 #endif

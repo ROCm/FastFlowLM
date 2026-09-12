@@ -19,7 +19,9 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
+#include <chrono>
 #include <cstdlib>
 
 namespace {
@@ -36,6 +38,7 @@ public:
     buffer<bf16> forward(int token) override {
         ++forward_calls;
         forwarded.push_back(token);
+        if (forward_delay.count()) std::this_thread::sleep_for(forward_delay);
         if (fail_forward) {
             poisoned_state = true;
             throw std::runtime_error("submitted inference failed");
@@ -72,6 +75,7 @@ public:
     bool fail_prefill{};
     bool fail_forward{};
     bool poisoned_state{};
+    std::chrono::microseconds forward_delay{0};
     std::vector<int> forwarded;
 };
 
@@ -564,6 +568,24 @@ void TestEosSelfTerminatesWithoutAnExtraDecode() {
     TEST_REQUIRE(meta.stop_reason == EOT_DETECTED);
 }
 
+void TestAie4DecodeTimeAndSpeedAreMeasured() {
+    // The AIE4 route has its own decode loop, so it must record DECODING_TIME
+    // itself. Without that the profile reports "0 us" and a nan speed, and the
+    // hardware acceptance record has no decode throughput to publish.
+    TempPackage package; FactoryScope scope; auto model = ReadyAie4(package);
+    g_encoded_tokens = {1}; g_samples = {11, 12, 13, 200020}; g_sample_index = 0;
+    auto meta = Meta(); auto input = Input(); std::ostringstream output;
+    TEST_REQUIRE(model->insert(meta, input));
+    g_factory.engine->forward_delay = std::chrono::microseconds(2000);
+    (void)model->generate(meta, 10, output);
+    TEST_REQUIRE(g_factory.engine->forward_calls == 3);
+    TEST_REQUIRE(meta.decoding_duration > 0);
+    const auto profile = model->show_profile();
+    TEST_REQUIRE(profile.find("nan") == std::string::npos);
+    TEST_REQUIRE(profile.find("inf") == std::string::npos);
+    TEST_REQUIRE(profile.find("Decoding time:       0 ") == std::string::npos);
+}
+
 void TestCliAndAllFourGenerationEndpointsPassTheSameBudgetSemantics() {
     for (const auto raw : {std::optional<int>{}, std::optional<int>{0}, std::optional<int>{-2}, std::optional<int>{17}}) {
         const auto expected = raw && *raw > 0 ? raw : std::nullopt;
@@ -705,6 +727,7 @@ int main() {
     RunTest(TestPostSubmitErrorReturns500ClearsConversationAndLeavesModelPoisoned, "TestPostSubmitErrorReturns500ClearsConversationAndLeavesModelPoisoned");
     RunTest(TestPoisonedModelReturns500UntilReload, "TestPoisonedModelReturns500UntilReload");
     RunTest(TestEosSelfTerminatesWithoutAnExtraDecode, "TestEosSelfTerminatesWithoutAnExtraDecode");
+    RunTest(TestAie4DecodeTimeAndSpeedAreMeasured, "TestAie4DecodeTimeAndSpeedAreMeasured");
     RunTest(TestCliAndAllFourGenerationEndpointsPassTheSameBudgetSemantics, "TestCliAndAllFourGenerationEndpointsPassTheSameBudgetSemantics");
     RunTest(TestQueueCompletionIsExactlyOnceAndIncludesCompletionsEndpoint, "TestQueueCompletionIsExactlyOnceAndIncludesCompletionsEndpoint");
     RunTest(TestQueueCompletionReleasesImmediatelyOrDelaysQueuedHandoff, "TestQueueCompletionReleasesImmediatelyOrDelaysQueuedHandoff");
