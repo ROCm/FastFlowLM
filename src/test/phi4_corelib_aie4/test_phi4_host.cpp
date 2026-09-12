@@ -92,6 +92,45 @@ void TestLazyEmbeddingRejectsNegativeAndOutOfRangeIds() {
                     "Q8_0");
 }
 
+void TestHostRmsNormUsesDoubleAccumulationAndMatchesReferenceBits() {
+    const std::array<float, 4> input{
+        std::bit_cast<float>(0xBE8BBBACu),
+        std::bit_cast<float>(0xBCCC9DE0u),
+        std::bit_cast<float>(0xBFED682Fu),
+        std::bit_cast<float>(0xC2CD01EDu)};
+    const std::array<float, 4> scale{1.0f, 1.0f, 1.0f, 1.0f};
+    std::array<float, 4> output{};
+    HostRmsNorm(input, scale, 1, 4, 1.0e-5f, output);
+    constexpr std::array<std::uint32_t, 4> expected{
+        0xBBAE75DBu, 0xB9FF7820u, 0xBD143451u, 0xBFFFF50Bu};
+    for (std::size_t i = 0; i < output.size(); ++i)
+        TEST_REQUIRE(std::bit_cast<std::uint32_t>(output[i]) == expected[i]);
+}
+
+void TestHostRmsNormRejectsZeroAndShapeErrors() {
+    std::array<float, 2> input{1.0f, 2.0f};
+    std::array<float, 2> scale{1.0f, 1.0f};
+    std::array<float, 2> output{};
+    RequireContains(RequireThrows([&] { HostRmsNorm(input, scale, 0, 2, 1.0e-5f, output); }), "positive");
+    RequireContains(RequireThrows([&] { HostRmsNorm(input, scale, 1, 0, 1.0e-5f, output); }), "positive");
+    RequireContains(RequireThrows([&] { HostRmsNorm(input, std::span<const float>(scale).first(1), 1, 2, 1.0e-5f, output); }), "shape");
+    RequireContains(RequireThrows([&] { HostRmsNorm(input, scale, 1, 2, -1.0f, output); }), "epsilon");
+}
+
+void TestHostRmsNormMatchesPr706Bf16BoundaryReference() {
+    constexpr std::size_t width = 3072;
+    std::vector<float> input(width, 0.03125f);
+    input[0] = 1024.0f;
+    std::vector<float> scale(width, 1.0f);
+    std::vector<float> output(width);
+    HostRmsNorm(input, scale, 1, width, 1.0e-5f, output);
+    const auto bf16 = ConvertF32ToBf16(output);
+    TEST_REQUIRE(std::bit_cast<std::uint32_t>(output[0]) == 0x425DB3C3u);
+    TEST_REQUIRE(std::bit_cast<std::uint32_t>(output[1]) == 0x3ADDB3C3u);
+    TEST_REQUIRE(bf16[0] == 0x425e);
+    TEST_REQUIRE(bf16[1] == 0x3ade);
+}
+
 void TestF32ToBf16UsesRoundToNearestEven() {
     const std::array values{
         std::bit_cast<float>(std::uint32_t{0x3f808000}),
@@ -135,6 +174,9 @@ int main() {
     RUN_TEST(TestLazyEmbeddingDecodesOnlyRequestedRows);
     RUN_TEST(TestLazyEmbeddingPreservesRequestOrderAndDuplicates);
     RUN_TEST(TestLazyEmbeddingRejectsNegativeAndOutOfRangeIds);
+    RUN_TEST(TestHostRmsNormUsesDoubleAccumulationAndMatchesReferenceBits);
+    RUN_TEST(TestHostRmsNormRejectsZeroAndShapeErrors);
+    RUN_TEST(TestHostRmsNormMatchesPr706Bf16BoundaryReference);
     RUN_TEST(TestF32ToBf16UsesRoundToNearestEven);
     RUN_TEST(TestRopeTablesUseFloat64IntermediatesAndFloat32Outputs);
     RUN_TEST(TestRopeTablesApplyShortFactorsAndAttentionFactor);

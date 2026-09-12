@@ -22,13 +22,12 @@ void TestShapePlanQueriesOnlyExecutionBucketsAndMapsEveryRow() {
     constexpr std::array<std::int64_t, 8> buckets{
         1, 64, 128, 256, 512, 1024, 2048, 4096};
     TEST_REQUIRE(state.matmul_pad_calls.size() == 3 * buckets.size() + 1);
-    TEST_REQUIRE(state.rows_pad_calls.size() == 2 * buckets.size());
+    TEST_REQUIRE(state.rows_pad_calls.size() == buckets.size());
     TEST_REQUIRE(state.mha_pad_calls.size() == buckets.size());
     for (std::size_t index = 0; index < buckets.size(); ++index) {
         TEST_REQUIRE(state.matmul_pad_calls[index * 3].m == buckets[index]);
         TEST_REQUIRE(state.matmul_pad_calls[index * 3].group_size == 64);
-        TEST_REQUIRE(state.rows_pad_calls[index * 2].m == buckets[index]);
-        TEST_REQUIRE(state.rows_pad_calls[index * 2 + 1].m == buckets[index]);
+        TEST_REQUIRE(state.rows_pad_calls[index].m == buckets[index]);
         TEST_REQUIRE(state.mha_pad_calls[index].m == buckets[index]);
     }
     TEST_REQUIRE(plan.ForRows(2).query_rows == 64);
@@ -50,8 +49,6 @@ void TestShapePlanUsesExactQKvOutputSsmlpRmsAndLmHeadDimensions() {
     TEST_REQUIRE(state.rows_pad_calls[0].helper == "ssmlp");
     TEST_REQUIRE(state.rows_pad_calls[0].k == 3072);
     TEST_REQUIRE(state.rows_pad_calls[0].n == 8192);
-    TEST_REQUIRE(state.rows_pad_calls[1].helper == "rmsnorm");
-    TEST_REQUIRE(state.rows_pad_calls[1].k == 3072);
     const auto& lm = state.matmul_pad_calls.back();
     TEST_REQUIRE(lm.m == 1 && lm.k == 3072 && lm.n == 200064 && lm.group_size == 64);
     TEST_REQUIRE(plan.lm_head_desc().k == 3072);

@@ -80,6 +80,42 @@ std::vector<float> DecodeEmbeddingRowsQ8(
     return result;
 }
 
+void HostRmsNorm(
+    std::span<const float> input,
+    std::span<const float> scale,
+    std::int64_t rows,
+    std::int64_t width,
+    float epsilon,
+    std::span<float> output) {
+    if (rows <= 0 || width <= 0)
+        throw std::invalid_argument("Phi-4 RMSNorm rows and width must be positive");
+    const auto row_count = static_cast<std::size_t>(rows);
+    const auto row_width = static_cast<std::size_t>(width);
+    if (row_count > std::numeric_limits<std::size_t>::max() / row_width)
+        throw std::invalid_argument("Phi-4 RMSNorm shape overflow");
+    const auto elements = row_count * row_width;
+    if (input.size() != elements || output.size() != elements ||
+        scale.size() != row_width)
+        throw std::invalid_argument("Phi-4 RMSNorm shape mismatch");
+    if (!std::isfinite(epsilon) || epsilon < 0.0f)
+        throw std::invalid_argument("Phi-4 RMSNorm epsilon must be finite and nonnegative");
+
+    for (std::size_t row = 0; row < row_count; ++row) {
+        const auto base = row * row_width;
+        double sum_of_squares = 0.0;
+        for (std::size_t column = 0; column < row_width; ++column) {
+            const double value = input[base + column];
+            sum_of_squares += value * value;
+        }
+        const float mean_square = static_cast<float>(
+            sum_of_squares / static_cast<double>(width));
+        const float denominator = std::sqrt(mean_square + epsilon);
+        for (std::size_t column = 0; column < row_width; ++column)
+            output[base + column] =
+                (input[base + column] / denominator) * scale[column];
+    }
+}
+
 std::vector<std::uint16_t> ConvertF32ToBf16(std::span<const float> values) {
     std::vector<std::uint16_t> result;
     result.reserve(values.size());

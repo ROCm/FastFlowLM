@@ -12,7 +12,6 @@ struct TensorTag {};
 struct TensorWindowTag {};
 struct MatMulWeightsTag {};
 struct SsMlpWeightsTag {};
-struct RmsNormWeightsTag {};
 
 template <typename Tag>
 class UniqueObject final {
@@ -59,6 +58,5 @@ using UniqueTensor = UniqueObject<TensorTag>;
 using UniqueTensorWindow = UniqueObject<TensorWindowTag>;
 using UniqueMatMulWeights = UniqueObject<MatMulWeightsTag>;
 using UniqueSsMlpWeights = UniqueObject<SsMlpWeightsTag>;
-using UniqueRmsNormWeights = UniqueObject<RmsNormWeightsTag>;
 
 }  // namespace flm::corelib

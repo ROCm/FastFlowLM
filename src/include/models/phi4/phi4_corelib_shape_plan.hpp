@@ -14,7 +14,6 @@ struct Phi4RowExtents {
     std::int64_t kv_rows;
     std::int64_t output_rows;
     std::int64_t ssmlp_rows;
-    std::int64_t rmsnorm_rows;
     std::int64_t flat_mha_rows;
 };
 

@@ -63,8 +63,7 @@ void TestEngineAllocatesMaximaAcrossAllRowsAndConsumers() {
     Harness h([](auto& state) {
         state.pad_row_overrides["matmul-3072"][2048] = 5000;
         state.pad_row_overrides["matmul-1024"][2048] = 6000;
-        state.pad_row_overrides["ssmlp"][2048] = 7000;
-        state.pad_row_overrides["rmsnorm"][2048] = 8000;
+        state.pad_row_overrides["ssmlp"][2048] = 8000;
         state.pad_row_overrides["mha"][2048] = 9000;
     });
     const auto& tensors = fake_corelib::GetState().tensor_creates;
@@ -76,19 +75,18 @@ void TestEngineAllocatesMaximaAcrossAllRowsAndConsumers() {
     TEST_REQUIRE(tensors[5].shape == std::vector<std::int64_t>({9000, 3072}));
 }
 
-void TestEngineCreates129Matmul32SsmlpAndOneRmsNormWeight() {
+void TestEngineCreatesExactly129MatmulAnd32SsmlpWeights() {
     Harness h;
     const auto& records = fake_corelib::GetState().weight_creates;
-    TEST_REQUIRE(records.size() == 162);
+    TEST_REQUIRE(records.size() == 161);
     TEST_REQUIRE(std::count_if(records.begin(), records.end(), [](const auto& r) { return r.kind == "matmul"; }) == 129);
     TEST_REQUIRE(std::count_if(records.begin(), records.end(), [](const auto& r) { return r.kind == "ssmlp"; }) == 32);
-    TEST_REQUIRE(std::count_if(records.begin(), records.end(), [](const auto& r) { return r.kind == "rmsnorm"; }) == 1);
+    TEST_REQUIRE(std::none_of(records.begin(), records.end(), [](const auto& r) { return r.kind == "rmsnorm"; }));
 }
 
 void TestEveryProjectionUsesQ8RequantizedGroup64Threads0() {
     Harness h;
     for (const auto& record : fake_corelib::GetState().weight_creates) {
-        if (record.kind == "rmsnorm") continue;
         TEST_REQUIRE(record.group_size == 64);
         TEST_REQUIRE(record.threads == 0);
     }
@@ -100,9 +98,8 @@ void TestWeightCreationIsSerialAndNeverExceedsOneInFlightCreate() {
     Harness h;
     TEST_REQUIRE(fake_corelib::GetState().maximum_active_weight_creates == 1);
     const auto& records = fake_corelib::GetState().weight_creates;
-    TEST_REQUIRE(records.front().kind == "rmsnorm");
     for (std::size_t layer = 0; layer < 32; ++layer) {
-        const auto base = 1 + layer * 5;
+        const auto base = layer * 5;
         TEST_REQUIRE(records[base + 0].kind == "matmul");
         TEST_REQUIRE(records[base + 1].kind == "matmul");
         TEST_REQUIRE(records[base + 2].kind == "matmul");
@@ -117,18 +114,18 @@ void TestQkvAndGateUpPointersMatchExactMappedSubranges() {
     const auto qkv = h.package->AttentionQkv(0);
     const auto gate_up = h.package->GateUp(0);
     const auto& records = fake_corelib::GetState().weight_creates;
-    TEST_REQUIRE(records[1].pointers[0] == qkv.values[0].bytes.data());
-    TEST_REQUIRE(records[2].pointers[0] == qkv.values[1].bytes.data());
-    TEST_REQUIRE(records[3].pointers[0] == qkv.values[2].bytes.data());
-    TEST_REQUIRE(records[5].pointers[0] == gate_up.values[0].bytes.data());
-    TEST_REQUIRE(records[5].pointers[1] == gate_up.values[1].bytes.data());
+    TEST_REQUIRE(records[0].pointers[0] == qkv.values[0].bytes.data());
+    TEST_REQUIRE(records[1].pointers[0] == qkv.values[1].bytes.data());
+    TEST_REQUIRE(records[2].pointers[0] == qkv.values[2].bytes.data());
+    TEST_REQUIRE(records[4].pointers[0] == gate_up.values[0].bytes.data());
+    TEST_REQUIRE(records[4].pointers[1] == gate_up.values[1].bytes.data());
 }
 
 void TestValidatedPackageFlowsDirectlyIntoAllRequantizedCreates() {
     Harness h;
     const auto& records = fake_corelib::GetState().weight_creates;
     for (std::size_t layer = 0; layer < 32; ++layer) {
-        const auto base = 1 + layer * 5;
+        const auto base = layer * 5;
         const auto qkv = h.package->AttentionQkv(layer);
         const auto gate_up = h.package->GateUp(layer);
         TEST_REQUIRE(records[base + 0].pointers ==
@@ -155,13 +152,12 @@ void TestValidatedPackageFlowsDirectlyIntoAllRequantizedCreates() {
     TEST_REQUIRE(records.back().pointers == embedding_pointer);
 }
 
-void TestNormsAndEpsilonReachCorelibAsBf16() {
+void TestFusedNormsAndEpsilonReachCorelibAsBf16() {
     Harness h;
     const auto expected = flm::phi4::ConvertF32ToBf16(std::array<float, 1>{1.0e-5f})[0];
     const auto& records = fake_corelib::GetState().weight_creates;
-    TEST_REQUIRE(records.front().epsilon == expected);
     for (std::size_t layer = 0; layer < 32; ++layer) {
-        const auto& record = records[1 + layer * 5 + 4];
+        const auto& record = records[layer * 5 + 4];
         TEST_REQUIRE(record.epsilon == expected);
         TEST_REQUIRE(record.norm0.size() == 3072);
         TEST_REQUIRE(record.norm1.size() == 3072);
@@ -220,18 +216,18 @@ void TestVProjectionWritesWindowAtPositionTimes128() {
     TEST_REQUIRE(windows.size() == 32);
     TEST_REQUIRE(windows.front().shape == std::vector<std::int64_t>({8, 4089, 128}));
     TEST_REQUIRE(windows.front().offset == 7 * 128);
-    TEST_REQUIRE(fake_corelib::GetState().dispatches[3].window_offset == 7 * 128);
+    TEST_REQUIRE(fake_corelib::GetState().dispatches[2].window_offset == 7 * 128);
 }
 
 void TestEachLayerOrdersQKVThenMhaThenOThenSsmlpOnOneStream() {
     Harness h;
     (void)h.engine->forward(1);
     const auto& calls = fake_corelib::GetState().dispatches;
-    TEST_REQUIRE(calls.size() == 194);
+    TEST_REQUIRE(calls.size() == 193);
     const void* stream = calls.front().stream;
-    TEST_REQUIRE(calls.front().kind == "rmsnorm");
+    TEST_REQUIRE(calls.front().kind == "matmul");
     for (std::size_t layer = 0; layer < 32; ++layer) {
-        const std::size_t base = 1 + layer * 6;
+        const std::size_t base = layer * 6;
         TEST_REQUIRE(calls[base + 0].kind == "matmul");
         TEST_REQUIRE(calls[base + 1].kind == "matmul");
         TEST_REQUIRE(calls[base + 2].kind == "matmul");
@@ -328,20 +324,11 @@ void TestCheckpointRestoreChangesOnlyLogicalPosition() {
 
 void TestPreSubmitFailureIsRecoverable() {
     Harness h;
-    fake_corelib::GetState().statuses["ryzenai_corelib_rmsnorm_bf16"] = ryzenai_corelib_status_bad_argument;
-    RequireContains(RequireThrows([&] { (void)h.engine->forward(0); }), "rmsnorm");
+    fake_corelib::GetState().statuses["ryzenai_corelib_tensor_write"] = ryzenai_corelib_status_bad_argument;
+    RequireContains(RequireThrows([&] { (void)h.engine->forward(0); }), "tensor_write");
     TEST_REQUIRE(!h.engine->poisoned());
-    fake_corelib::GetState().statuses.erase("ryzenai_corelib_rmsnorm_bf16");
+    fake_corelib::GetState().statuses.erase("ryzenai_corelib_tensor_write");
     (void)h.engine->forward(0);
-}
-
-void TestInitialRmsNormPostSubmitFailureSynchronizesAndPoisons() {
-    Harness h;
-    fake_corelib::GetState().fail_after_submit = "ryzenai_corelib_rmsnorm_bf16";
-    RequireContains(RequireThrows([&] { (void)h.engine->forward(0); }), "rmsnorm");
-    TEST_REQUIRE(h.engine->poisoned());
-    TEST_REQUIRE(!fake_corelib::GetState().work_in_flight);
-    TEST_REQUIRE(fake_corelib::GetState().call_counts["ryzenai_corelib_stream_synchronize"] == 1);
 }
 
 void TestPostSubmitFailureSynchronizesThenPoisonsAndClearsState() {
@@ -465,14 +452,14 @@ void TestTwoConcurrentAie4RequestsNeverOverlapDispatch() {
 
     const auto& dispatches = fake_corelib::GetState().dispatches;
     TEST_REQUIRE(fake_corelib::GetState().maximum_active_leases == 1);
-    TEST_REQUIRE(dispatches.size() == 388);
+    TEST_REQUIRE(dispatches.size() == 386);
     const auto first_request = dispatches.front().thread_id;
     TEST_REQUIRE(first_request != dispatches.back().thread_id);
-    TEST_REQUIRE(std::all_of(dispatches.begin(), dispatches.begin() + 194,
+    TEST_REQUIRE(std::all_of(dispatches.begin(), dispatches.begin() + 193,
                              [&](const auto& call) {
                                  return call.thread_id == first_request;
                              }));
-    TEST_REQUIRE(std::all_of(dispatches.begin() + 194, dispatches.end(),
+    TEST_REQUIRE(std::all_of(dispatches.begin() + 193, dispatches.end(),
                              [&](const auto& call) {
                                  return call.thread_id != first_request;
                              }));
@@ -485,7 +472,7 @@ void TestTwoConcurrentAie4RequestsNeverOverlapDispatch() {
     std::atomic<bool> unsafe_calls_succeeded{true};
     const auto invoke_without_lease = [&] {
         unsafe_start.arrive_and_wait();
-        if (h.runtime->api()->functions().rmsnorm(
+        if (h.runtime->api()->functions().matmul(
                 nullptr, nullptr, 1, nullptr, nullptr) !=
             ryzenai_corelib_status_success)
             unsafe_calls_succeeded = false;
@@ -518,12 +505,12 @@ int main() {
 #define RUN_TEST(name) RunTest(&name, #name)
     RUN_TEST(TestEngineCreatesOneStreamAndPersistentHelperSizedTensors);
     RUN_TEST(TestEngineAllocatesMaximaAcrossAllRowsAndConsumers);
-    RUN_TEST(TestEngineCreates129Matmul32SsmlpAndOneRmsNormWeight);
+    RUN_TEST(TestEngineCreatesExactly129MatmulAnd32SsmlpWeights);
     RUN_TEST(TestEveryProjectionUsesQ8RequantizedGroup64Threads0);
     RUN_TEST(TestWeightCreationIsSerialAndNeverExceedsOneInFlightCreate);
     RUN_TEST(TestQkvAndGateUpPointersMatchExactMappedSubranges);
     RUN_TEST(TestValidatedPackageFlowsDirectlyIntoAllRequantizedCreates);
-    RUN_TEST(TestNormsAndEpsilonReachCorelibAsBf16);
+    RUN_TEST(TestFusedNormsAndEpsilonReachCorelibAsBf16);
     RUN_TEST(TestEmbeddingMappingOutlivesAllLazyRowReads);
     RUN_TEST(TestNoDeviceObjectExistsWhenPackageValidationFails);
     RUN_TEST(TestPrefillDecodesEmbeddingRowsAndAdvancesPosition);
@@ -539,7 +526,6 @@ int main() {
     RUN_TEST(TestClearContextResetsLogicalPositionWithoutRecreatingWeights);
     RUN_TEST(TestCheckpointRestoreChangesOnlyLogicalPosition);
     RUN_TEST(TestPreSubmitFailureIsRecoverable);
-    RUN_TEST(TestInitialRmsNormPostSubmitFailureSynchronizesAndPoisons);
     RUN_TEST(TestPostSubmitFailureSynchronizesThenPoisonsAndClearsState);
     RUN_TEST(TestSynchronizeFailurePoisonsAndClearsState);
     RUN_TEST(TestPoisonedInstanceRejectsEveryLaterEntryPoint);

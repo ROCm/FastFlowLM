@@ -40,9 +40,6 @@
     X(ssmlp_weights_create_gguf_requantized,                                       \
       ryzenai_corelib_ssmlp_bf16_weights_create_gguf_requantized)                  \
     X(ssmlp, ryzenai_corelib_ssmlp_bf16)                                           \
-    X(rmsnorm_weights_create_scale, ryzenai_corelib_rmsnorm_bf16_weights_create_scale) \
-    X(rmsnorm_pad_rows, ryzenai_corelib_rmsnorm_bf16_pad_rows)                     \
-    X(rmsnorm, ryzenai_corelib_rmsnorm_bf16)                                       \
     X(flat_mha_pad_rows, ryzenai_corelib_flat_mha_bf16_pad_rows)                   \
     X(flat_mha, ryzenai_corelib_flat_mha_bf16)                                     \
     X(cleanup, ryzenai_corelib_cleanup)

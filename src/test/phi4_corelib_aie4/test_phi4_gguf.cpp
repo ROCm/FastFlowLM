@@ -536,8 +536,7 @@ void TestValidationCreatesNoCorelibObjects() {
                             "ryzenai_corelib_create_device_tensor",
                             "ryzenai_corelib_create_tensor_window",
                             "ryzenai_corelib_matmul_bf16_weights_create_gguf_requantized",
-                            "ryzenai_corelib_ssmlp_bf16_weights_create_gguf_requantized",
-                            "ryzenai_corelib_rmsnorm_bf16_weights_create_scale"})
+                            "ryzenai_corelib_ssmlp_bf16_weights_create_gguf_requantized"})
         TEST_REQUIRE(fake_corelib::GetState().call_counts[name] == 0);
     TEST_REQUIRE(fake_corelib::GetState().live_objects == 0);
     (void)api;

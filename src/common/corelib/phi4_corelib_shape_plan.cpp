@@ -60,13 +60,6 @@ Phi4ShapePlan Phi4ShapePlan::Build(
                        &extents.ssmlp_rows, kHiddenSize, kIntermediateSize,
                        kRequantizedGroupSize), ssmlp_call);
 
-        extents.rmsnorm_rows = rows;
-        const std::string rms_call =
-            "ryzenai_corelib_rmsnorm_bf16_pad_rows [" + std::to_string(rows) +
-            ",3072]";
-        api->Check(api->functions().rmsnorm_pad_rows(
-                       &extents.rmsnorm_rows, kHiddenSize), rms_call);
-
         extents.flat_mha_rows = rows;
         const std::string mha_call =
             "ryzenai_corelib_flat_mha_bf16_pad_rows [" + std::to_string(rows) +
@@ -81,8 +74,6 @@ Phi4ShapePlan Phi4ShapePlan::Build(
             plan.maximum_extents_.output_rows, extents.output_rows);
         plan.maximum_extents_.ssmlp_rows = std::max(
             plan.maximum_extents_.ssmlp_rows, extents.ssmlp_rows);
-        plan.maximum_extents_.rmsnorm_rows = std::max(
-            plan.maximum_extents_.rmsnorm_rows, extents.rmsnorm_rows);
         plan.maximum_extents_.flat_mha_rows = std::max(
             plan.maximum_extents_.flat_mha_rows, extents.flat_mha_rows);
         while (plan.rows_.size() < static_cast<std::size_t>(rows))

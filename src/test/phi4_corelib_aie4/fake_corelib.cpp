@@ -274,14 +274,6 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             if (status == ryzenai_corelib_status_success && m)
                 *m = PaddedRows("ssmlp", *m);
             return status;
-        } else if constexpr (std::is_same_v<Tag, rmsnorm_pad_rows_tag>) {
-            auto* m = std::get<0>(arguments);
-            state.rows_pad_calls.push_back({"rmsnorm", m ? *m : -1,
-                std::get<1>(arguments), 0, 0});
-            const auto status = Status(Tag::name);
-            if (status == ryzenai_corelib_status_success && m)
-                *m = PaddedRows("rmsnorm", *m);
-            return status;
         } else if constexpr (std::is_same_v<Tag, flat_mha_pad_rows_tag>) {
             auto* m = std::get<0>(arguments);
             auto* desc = std::get<1>(arguments);
@@ -323,29 +315,11 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             if (status == ryzenai_corelib_status_success && out) *out = NewObject("ssmlp_weights");
             --state.active_weight_creates;
             return status;
-        } else if constexpr (std::is_same_v<Tag, rmsnorm_weights_create_scale_tag>) {
-            const auto status = Status(Tag::name);
-            auto* desc = std::get<0>(arguments);
-            auto* out = std::get<2>(arguments);
-            if (out) *out = nullptr;
-            ObserveCreateConcurrency();
-            if (desc) {
-                fake_corelib::WeightCreateRecord record{"rmsnorm", desc->k, 0, 0, 0, {}};
-                record.epsilon = Bf16(desc->epsilon);
-                if (std::get<1>(arguments))
-                    record.norm0.assign(static_cast<const std::uint16_t*>(std::get<1>(arguments)),
-                                        static_cast<const std::uint16_t*>(std::get<1>(arguments)) + desc->k);
-                state.weight_creates.push_back(std::move(record));
-            }
-            if (status == ryzenai_corelib_status_success && out) *out = NewObject("rmsnorm_weights");
-            --state.active_weight_creates;
-            return status;
         } else if constexpr (std::is_same_v<Tag, stream_synchronize_tag>) {
             state.work_in_flight = false;
             return Status(Tag::name);
         } else if constexpr (std::is_same_v<Tag, matmul_tag> ||
                              std::is_same_v<Tag, ssmlp_tag> ||
-                             std::is_same_v<Tag, rmsnorm_tag> ||
                              std::is_same_v<Tag, flat_mha_tag>) {
             if (state.statuses.contains("test_observe_dispatch_concurrency")) {
                 const int active = ++state.active_leases;
@@ -362,8 +336,7 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             fake_corelib::DispatchRecord record{};
             record.thread_id = std::this_thread::get_id();
             record.kind = std::is_same_v<Tag, matmul_tag> ? "matmul" :
-                          std::is_same_v<Tag, ssmlp_tag> ? "ssmlp" :
-                          std::is_same_v<Tag, rmsnorm_tag> ? "rmsnorm" : "mha";
+                          std::is_same_v<Tag, ssmlp_tag> ? "ssmlp" : "mha";
             record.stream = std::get<0>(arguments);
             if constexpr (std::is_same_v<Tag, matmul_tag>) {
                 record.input = std::get<1>(arguments); record.rows = std::get<2>(arguments);
@@ -371,9 +344,6 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             } else if constexpr (std::is_same_v<Tag, ssmlp_tag>) {
                 record.input = std::get<1>(arguments); record.rows = std::get<3>(arguments);
                 record.output = std::get<6>(arguments);
-            } else if constexpr (std::is_same_v<Tag, rmsnorm_tag>) {
-                record.input = std::get<1>(arguments); record.rows = std::get<2>(arguments);
-                record.output = std::get<4>(arguments);
             } else {
                 record.input = std::get<2>(arguments); record.rows = std::get<4>(arguments);
                 record.position = std::get<5>(arguments); record.output = std::get<10>(arguments);

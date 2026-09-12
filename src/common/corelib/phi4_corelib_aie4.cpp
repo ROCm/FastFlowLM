@@ -29,13 +29,13 @@ struct phi4_corelib_aie4::Impl {
     std::optional<int> saved;
     bool poisoned{};
     UniqueStream stream;
-    UniqueRmsNormWeights first_norm;
     std::array<UniqueMatMulWeights, kLayerCount> q_weights, k_weights, v_weights, o_weights;
     std::array<UniqueSsMlpWeights, kLayerCount> mlp_weights;
     UniqueMatMulWeights lm_weights;
     UniqueTensor hidden, residual, skip, q, k, attention, lm_input, logits, cosine, sine;
     std::array<UniqueTensor, kLayerCount> k_cache, v_cache;
     TensorView embedding;
+    FloatTensorView first_norm_scale;
 
     Impl(LM_Config, std::shared_ptr<Phi4GgufPackage> pkg,
          std::shared_ptr<CorelibRuntime> rt, std::uint32_t maximum)
@@ -69,11 +69,9 @@ struct phi4_corelib_aie4::Impl {
         for(std::size_t i=0;i<kLayerCount;++i){an_bf[i]=ConvertF32ToBf16(an[i].values);fn_bf[i]=ConvertF32ToBf16(fn[i].values);}
         const std::array<float,1> epsf{kRmsEpsilon}; auto eps=ConvertF32ToBf16(epsf);
 
+        first_norm_scale = an[0];
         auto lease=runtime->AcquireExecution(); void* raw=nullptr;
         api->Check(api->functions().create_stream(&raw),"ryzenai_corelib_create_stream"); stream=UniqueStream(api,raw);
-        ryzenai_corelib_rmsnorm_bf16_weights_desc rd{kHiddenSize,kRmsEpsilon}; raw=nullptr;
-        api->Check(api->functions().rmsnorm_weights_create_scale(&rd,an_bf[0].data(),&raw),"ryzenai_corelib_rmsnorm_bf16_weights_create_scale blk.0.attn_norm.weight");
-        first_norm=UniqueRmsNormWeights(api,raw);
         auto mm=[&](const TensorView& tv,std::int64_t kk,std::int64_t nn,const std::string& label){
             ryzenai_corelib_matmul_bf16_weights_desc d{kk,nn,kRequantizedGroupSize,false};
             ryzenai_corelib_matmul_bf16_gguf_components c{tv.bytes.data(),ryzenai_corelib_gguf_quant_type_q8_0}; void* p=nullptr;
@@ -94,7 +92,7 @@ struct phi4_corelib_aie4::Impl {
         lm_weights=mm(embedding,kHiddenSize,kVocabularySize,"token_embd.weight");
         const auto& e=plan.maximum_extents();
         const auto rows=std::max({e.query_rows,e.kv_rows,e.output_rows,
-                                  e.ssmlp_rows,e.rmsnorm_rows});
+                                  e.ssmlp_rows});
         const auto query_rows=std::max(e.query_rows,e.flat_mha_rows);
         const auto key_rows=std::max(e.kv_rows,e.flat_mha_rows);
         const auto attention_rows=std::max(e.flat_mha_rows,e.output_rows);
@@ -125,22 +123,26 @@ struct phi4_corelib_aie4::Impl {
         if(ids.size()>max_length||position+ids.size()>max_length||position+ids.size()>kMaxSequenceLength)throw std::out_of_range("Phi-4 request exceeds configured context capacity");
         if(!prefill&&position+ids.size()>kMaxDecodeWindow)throw std::out_of_range("Phi-4 decode window stops at position 4095");
         auto decoded=DecodeEmbeddingRowsQ8(embedding,ids);const auto&e=plan.ForRows(ids.size());
-        auto rows=std::max({e.query_rows,e.kv_rows,e.output_rows,
-                            e.ssmlp_rows,e.rmsnorm_rows});
-        std::vector<float> input(static_cast<std::size_t>(rows*kHiddenSize),0);std::copy(decoded.begin(),decoded.end(),input.begin());
+        auto rows=std::max({e.query_rows,e.kv_rows,e.output_rows,e.ssmlp_rows});
+        std::vector<float> normalized(decoded.size());
+        HostRmsNorm(decoded,first_norm_scale.values,ids.size(),kHiddenSize,
+                    kRmsEpsilon,normalized);
+        std::vector<float> input(static_cast<std::size_t>(rows*kHiddenSize),0);
+        std::vector<float> residual_input(static_cast<std::size_t>(rows*kHiddenSize),0);
+        std::copy(normalized.begin(),normalized.end(),input.begin());
+        std::copy(decoded.begin(),decoded.end(),residual_input.begin());
 
         auto lease=runtime->AcquireExecution();bool submitted=false;
         try{
             api->Check(api->functions().tensor_write(hidden.get(),ryzenai_corelib_data_type_fp32,input.data(),input.size(),0),"ryzenai_corelib_tensor_write hidden");
-            api->Check(api->functions().tensor_write(residual.get(),ryzenai_corelib_data_type_fp32,input.data(),input.size(),0),"ryzenai_corelib_tensor_write residual embedding");
-            const auto rms_status=api->functions().rmsnorm(
-                stream.get(),hidden.get(),ids.size(),first_norm.get(),hidden.get());
-            submitted=rms_status==ryzenai_corelib_status_success ||
-                      rms_status==ryzenai_corelib_status_failure;
-            api->Check(rms_status,"ryzenai_corelib_rmsnorm_bf16 initial");
+            api->Check(api->functions().tensor_write(residual.get(),ryzenai_corelib_data_type_fp32,residual_input.data(),residual_input.size(),0),"ryzenai_corelib_tensor_write residual embedding");
             void* res=residual.get();void* sk=skip.get();
             for(std::size_t i=0;i<kLayerCount;++i){
-                api->Check(api->functions().matmul(stream.get(),hidden.get(),ids.size(),q_weights[i].get(),q.get()),"ryzenai_corelib_matmul_bf16 query layer "+std::to_string(i));
+                const auto query_status=api->functions().matmul(
+                    stream.get(),hidden.get(),ids.size(),q_weights[i].get(),q.get());
+                submitted=submitted || query_status==ryzenai_corelib_status_success ||
+                          query_status==ryzenai_corelib_status_failure;
+                api->Check(query_status,"ryzenai_corelib_matmul_bf16 query layer "+std::to_string(i));
                 api->Check(api->functions().matmul(stream.get(),hidden.get(),ids.size(),k_weights[i].get(),k.get()),"ryzenai_corelib_matmul_bf16 key layer "+std::to_string(i));
                 std::array<std::int64_t,3> shape{8,kMaxSequenceLength-position,128};void* p=nullptr;
                 api->Check(api->functions().create_tensor_window(v_cache[i].get(),shape.data(),shape.size(),static_cast<std::size_t>(position)*128,&p),"ryzenai_corelib_create_tensor_window V");UniqueTensorWindow win(api,p);
