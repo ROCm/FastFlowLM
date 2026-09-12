@@ -21,19 +21,6 @@
 #include <thread>
 #include <chrono>
 
-namespace {
-/// \brief Report how long loading the model took.
-/// \note Model load is the one phase no profiler covers, and on backends that
-/// repack weights at load it dominates the time to first usable prompt.
-void report_load_time(std::chrono::steady_clock::time_point started) {
-    const double seconds =
-        std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
-    std::ostringstream message;
-    message << std::fixed << std::setprecision(2) << "Model loaded in " << seconds << " s";
-    header_print("FLM", message.str());
-}
-}  // namespace
-
 /// \brief Command map for command line input
 std::map<std::string, runner_cmd_t> cmd_map = {
     {"/set", CMD_SET},

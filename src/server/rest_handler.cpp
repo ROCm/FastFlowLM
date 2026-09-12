@@ -415,7 +415,9 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag) {
         auto [new_ensure_tag, model_info] = supported_models.get_model_info(ensure_tag);
         auto_chat_engine->configure_parameter("img_pre_resize", this->img_pre_resize);
         try {
+            const auto load_started = std::chrono::steady_clock::now();
             auto_chat_engine->load_model(supported_models.get_model_path(new_ensure_tag), model_info, ctx_length, preemption);
+            report_load_time(load_started);
         }
         catch (const std::exception& e) {
             header_print("ERROR", "Failed to load model: " + std::string(e.what()));
