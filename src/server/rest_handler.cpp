@@ -402,7 +402,7 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag) {
         std::pair<std::string, std::unique_ptr<AutoModel>> auto_model = get_auto_model(ensure_tag, this->supported_models, &this->npu_device_inst);
         auto_chat_engine = std::move(auto_model.second);
         ensure_tag = auto_model.first;
-        switch (downloader.is_model_downloaded(ensure_tag)) {
+        switch (downloader.is_model_downloaded(ensure_tag, false, /*fast_check=*/true)) {
             case ModelDownloader::ModelStatus::Ready:
                 break;
             case ModelDownloader::ModelStatus::Outdated:
@@ -441,7 +441,7 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag) {
 void RestHandler::ensure_asr_model_loaded(const std::string& model_tag) {
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
     std::string ensure_tag = model_tag;
-    switch (downloader.is_model_downloaded(ensure_tag)) {
+    switch (downloader.is_model_downloaded(ensure_tag, false, /*fast_check=*/true)) {
         case ModelDownloader::ModelStatus::Ready:
             break;
         case ModelDownloader::ModelStatus::Outdated:
@@ -473,7 +473,7 @@ void RestHandler::ensure_asr_model_loaded(const std::string& model_tag) {
 void RestHandler::ensure_embed_model_loaded(const std::string& model_tag) {
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
     std::string ensure_tag = model_tag;
-    switch (this->downloader.is_model_downloaded(ensure_tag)) {
+    switch (this->downloader.is_model_downloaded(ensure_tag, false, /*fast_check=*/true)) {
         case ModelDownloader::ModelStatus::Ready:
             break;
         case ModelDownloader::ModelStatus::Outdated:

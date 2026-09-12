@@ -117,7 +117,7 @@ struct phi4_corelib_aie4::Impl {
         auto mm=[&](const TensorView& tv,std::int64_t kk,std::int64_t nn,const std::string& label){
             ryzenai_corelib_matmul_bf16_weights_desc d{kk,nn,kRequantizedGroupSize,false};
             ryzenai_corelib_matmul_bf16_gguf_components c{tv.bytes.data(),ryzenai_corelib_gguf_quant_type_q8_0}; void* p=nullptr;
-            api->Check(api->functions().matmul_weights_create_gguf_requantized(&d,&c,0,&p),"ryzenai_corelib_matmul_bf16_weights_create_gguf_requantized "+label);
+            api->Check(api->functions().matmul_weights_create_gguf_requantized(&d,&c,kRequantizeThreads,&p),"ryzenai_corelib_matmul_bf16_weights_create_gguf_requantized "+label);
             return UniqueMatMulWeights(api,p);
         };
         for(std::size_t i=0;i<kLayerCount;++i){
@@ -128,7 +128,7 @@ struct phi4_corelib_aie4::Impl {
             const auto& next=i+1<kLayerCount?an_bf[i+1]:final_bf;
             ryzenai_corelib_ssmlp_bf16_weights_desc d{kHiddenSize,kIntermediateSize,kRequantizedGroupSize};
             ryzenai_corelib_ssmlp_bf16_gguf_components c{eps.data(),fn_bf[i].data(),next.data(),gu[i].values[0].bytes.data(),gu[i].values[1].bytes.data(),dw[i].bytes.data(),ryzenai_corelib_gguf_quant_type_q8_0}; raw=nullptr;
-            api->Check(api->functions().ssmlp_weights_create_gguf_requantized(&d,&c,0,&raw),"ryzenai_corelib_ssmlp_bf16_weights_create_gguf_requantized layer "+std::to_string(i));
+            api->Check(api->functions().ssmlp_weights_create_gguf_requantized(&d,&c,kRequantizeThreads,&raw),"ryzenai_corelib_ssmlp_bf16_weights_create_gguf_requantized layer "+std::to_string(i));
             mlp_weights[i]=UniqueSsMlpWeights(api,raw);
         }
         lm_weights=mm(embedding,kHiddenSize,kVocabularySize,"token_embd.weight");

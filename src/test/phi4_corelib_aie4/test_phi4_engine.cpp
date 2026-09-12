@@ -1,4 +1,5 @@
 #include "models/phi4/phi4_corelib_aie4.hpp"
+#include "models/phi4/phi4_corelib_constants.hpp"
 #include "models/phi4/phi4_corelib_host.hpp"
 #include "fake_corelib.hpp"
 #include "gguf_fixture.hpp"
@@ -84,11 +85,17 @@ void TestEngineCreatesExactly129MatmulAnd32SsmlpWeights() {
     TEST_REQUIRE(std::none_of(records.begin(), records.end(), [](const auto& r) { return r.kind == "rmsnorm"; }));
 }
 
-void TestEveryProjectionUsesQ8RequantizedGroup64Threads0() {
+void TestEveryProjectionUsesQ8RequantizedGroup64WithThreadHint() {
+    // corelib treats threads 0 as ONE deliberately, and this requantizing path
+    // is compute-bound and scales with the hint. The hint is per-create; the
+    // creates themselves stay serialized, which
+    // TestWeightCreationIsSerialAndNeverExceedsOneInFlightCreate pins --
+    // corelib records 8 CONCURRENT creates on this entry point failing 2 of 10
+    // with all-zero output, against 0 of 10 serialized.
     Harness h;
     for (const auto& record : fake_corelib::GetState().weight_creates) {
         TEST_REQUIRE(record.group_size == 64);
-        TEST_REQUIRE(record.threads == 0);
+        TEST_REQUIRE(record.threads == flm::phi4::kRequantizeThreads);
     }
     TEST_REQUIRE(fake_corelib::GetState().call_counts["ryzenai_corelib_matmul_bf16_weights_create_gguf"] == 0);
     TEST_REQUIRE(fake_corelib::GetState().call_counts["ryzenai_corelib_ssmlp_bf16_weights_create_gguf"] == 0);
@@ -506,7 +513,7 @@ int main() {
     RUN_TEST(TestEngineCreatesOneStreamAndPersistentHelperSizedTensors);
     RUN_TEST(TestEngineAllocatesMaximaAcrossAllRowsAndConsumers);
     RUN_TEST(TestEngineCreatesExactly129MatmulAnd32SsmlpWeights);
-    RUN_TEST(TestEveryProjectionUsesQ8RequantizedGroup64Threads0);
+    RUN_TEST(TestEveryProjectionUsesQ8RequantizedGroup64WithThreadHint);
     RUN_TEST(TestWeightCreationIsSerialAndNeverExceedsOneInFlightCreate);
     RUN_TEST(TestQkvAndGateUpPointersMatchExactMappedSubranges);
     RUN_TEST(TestValidatedPackageFlowsDirectlyIntoAllRequantizedCreates);

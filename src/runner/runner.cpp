@@ -58,7 +58,7 @@ Runner::Runner(model_list& supported_models, ModelDownloader& downloader, progra
     
     this->tag = auto_model.first;
 
-    switch (this->downloader.is_model_downloaded(this->tag)) {
+    switch (this->downloader.is_model_downloaded(this->tag, false, /*fast_check=*/true)) {
         case ModelDownloader::ModelStatus::Ready:
             break;
         case ModelDownloader::ModelStatus::Outdated:
@@ -435,7 +435,7 @@ void Runner::cmd_load(std::vector<std::string>& input_list) {
     if (model_name != this->tag) {
         this->tag = model_name;
 
-        switch (this->downloader.is_model_downloaded(this->tag)) {
+        switch (this->downloader.is_model_downloaded(this->tag, false, /*fast_check=*/true)) {
             case ModelDownloader::ModelStatus::Ready:
                 break;
             case ModelDownloader::ModelStatus::Outdated:
