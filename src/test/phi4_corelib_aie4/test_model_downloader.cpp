@@ -290,6 +290,29 @@ void TestCheckHashesPinnedFilesExactlyOnce() {
     TEST_REQUIRE(CountOccurrences(output.str(), "Checking file:") == 4);
 }
 
+void TestStartupStatusDoesNotRehashButCheckStillDoes() {
+    // Re-hashing the 4 GB GGUF on every launch cost ~28 s, 62% of startup, and
+    // buys nothing a pull-time verification has not already established. The
+    // run/serve paths ask for status only; `flm check` remains the full check.
+    DownloaderFixture fixture;
+    fixture.WriteValidFiles();
+    ModelDownloader downloader(fixture.models);
+
+    std::ostringstream fast;
+    auto* previous = std::cout.rdbuf(fast.rdbuf());
+    const auto fast_status = downloader.is_model_downloaded("test-model:1b", false, true);
+    std::cout.rdbuf(previous);
+    TEST_REQUIRE(fast_status == ModelDownloader::ModelStatus::Ready);
+    TEST_REQUIRE(CountOccurrences(fast.str(), "Checking file:") == 0);
+
+    std::ostringstream full;
+    previous = std::cout.rdbuf(full.rdbuf());
+    const bool ok = downloader.check_model("test-model:1b", false, false);
+    std::cout.rdbuf(previous);
+    TEST_REQUIRE(ok);
+    TEST_REQUIRE(CountOccurrences(full.str(), "Checking file:") == 4);
+}
+
 download_utils::DownloadRequest Request(const fs::path& source, const fs::path& destination,
                                         std::uint64_t size, std::string hash) {
     return {FileUrl(source), destination, size, download_utils::HashAlgorithm::Sha256, std::move(hash)};
@@ -358,6 +381,7 @@ int main() {
     RunTest(TestPullAndCheckRejectModelscopeBeforePinnedReadyStateChecks,
             "modelscope rejection");
     RunTest(TestCheckHashesPinnedFilesExactlyOnce, "single check verification");
+    RunTest(TestStartupStatusDoesNotRehashButCheckStillDoes, "startup status skips rehash");
     RunTest(TestResumeAppendsToPartThenAtomicallyPromotes, "resume and promote");
     RunTest(TestWrongSizeOrHashNeverReplacesAValidFinalFile, "invalid transfer isolation");
     RunTest(TestInterruptedTransferKeepsPartForNextResume, "interrupted transfer");
