@@ -136,17 +136,19 @@ public:
     int restore() override;
 
     /// \brief The prefill operations a plugin may override
-    /// \note Per-layer keys are "layers.<i>.<role>" for every role in flm::role
-    ///       except lm_head, which is model level. Argument order per role:
+    /// \note Keys are "layers.<i>.<role>" for every layer and each role below,
+    ///       whose arguments arrive in the order given:
     ///         self_attn.{q,k,v}_proj   (out, hidden_state, qkv_weights)
     ///         self_attn.o_proj         (out, attn_out, o_weights)
+    ///         self_attn.core           (out, q, kv_cache)
     ///         mlp.{gate,up}_proj       (out, hidden_state, weights)
     ///         mlp.down_proj            (out, hid, down_weights)
-    ///         self_attn.core           (out, q, kv_cache)
-    ///         dequant.*                (dequantized_weights, quantized_weights)
-    ///       The weight buffer a projection receives is the framework's own
-    ///       dequant output. Its layout is an implementation detail: an override
-    ///       is expected to bring weights of its own and ignore that argument.
+    ///         dequant.{qkv,o,gate,up,down}  (dequantized_weights, quantized_weights)
+    ///       Decode does not go through these; layer.xclbin reads the quantized
+    ///       weights directly.
+    /// \note The weight buffer a projection receives is the engine's own dequant
+    ///       output. Its layout is an implementation detail: an override is
+    ///       expected to bring weights of its own and ignore that argument.
     flm::op_registry* ops() override;
 
     // parameters for vision preprocessing in Gemma4e

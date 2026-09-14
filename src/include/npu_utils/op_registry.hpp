@@ -45,8 +45,6 @@ inline constexpr std::string_view dequant_o    = "dequant.o";
 inline constexpr std::string_view dequant_gate = "dequant.gate";
 inline constexpr std::string_view dequant_up   = "dequant.up";
 inline constexpr std::string_view dequant_down = "dequant.down";
-
-inline constexpr std::string_view lm_head = "lm_head";
 }  // namespace role
 
 /// \brief An override that consumes a dispatch and does nothing.
