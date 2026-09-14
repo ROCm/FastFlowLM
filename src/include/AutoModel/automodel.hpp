@@ -215,6 +215,12 @@ protected:
 
 
 	void _shared_load_model(std::string model_path, json model_info, int default_context_length = -1, bool enable_preemption = false);
+
+	/// \brief Give the plugins named in FLM_PLUGIN a chance to override operations
+	/// \note Call once the engine exists and before its weights are loaded: the
+	///       engine declares its operations in its constructor, and load_weights
+	///       skips work whose consumers a plugin has taken over.
+	void _load_operator_plugins();
 	nlohmann::json _shared_setup_tokenizer(std::string model_path);
 
 	/// \brief Insert tokens into the model

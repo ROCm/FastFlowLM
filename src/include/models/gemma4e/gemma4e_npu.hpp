@@ -135,6 +135,20 @@ public:
     int checkpoint() override;
     int restore() override;
 
+    /// \brief The prefill operations a plugin may override
+    /// \note Per-layer keys are "layers.<i>.<role>" for every role in flm::role
+    ///       except lm_head, which is model level. Argument order per role:
+    ///         self_attn.{q,k,v}_proj   (out, hidden_state, qkv_weights)
+    ///         self_attn.o_proj         (out, attn_out, o_weights)
+    ///         mlp.{gate,up}_proj       (out, hidden_state, weights)
+    ///         mlp.down_proj            (out, hid, down_weights)
+    ///         self_attn.core           (out, q, kv_cache)
+    ///         dequant.*                (dequantized_weights, quantized_weights)
+    ///       The weight buffer a projection receives is the framework's own
+    ///       dequant output. Its layout is an implementation detail: an override
+    ///       is expected to bring weights of its own and ignore that argument.
+    flm::op_registry* ops() override;
+
     // parameters for vision preprocessing in Gemma4e
     unsigned int GEMMA4E_VISION_MAX_POSITION_EMBEDDINGS;
     unsigned int GEMMA4E_VISION_NUM_HIDDEN_LAYERS;

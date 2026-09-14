@@ -6,6 +6,23 @@
 /// \note This is a source file for the auto_model class
 
 #include "AutoModel/automodel.hpp"
+#include "flm_plugin.hpp"
+
+
+void AutoModel::_load_operator_plugins() {
+    flm::op_registry* ops = this->lm_engine ? this->lm_engine->ops() : nullptr;
+    if (ops == nullptr) return;
+    const std::string xclbin_path = utils::path_join(
+        this->lm_config->exec_path, "xclbins", this->lm_config->model_name);
+    flm::plugin_context ctx{
+        ops,
+        this->npu.get(),
+        this->model_path.c_str(),
+        this->lm_config->model_name.c_str(),
+        xclbin_path.c_str(),
+    };
+    flm::load_plugins_from_env(ctx);
+}
 
 
 AutoModel::AutoModel(flm_rt::device* npu_device_inst, std::string current_model) {
