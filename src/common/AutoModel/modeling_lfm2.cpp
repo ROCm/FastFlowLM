@@ -18,11 +18,7 @@ void LFM2::load_model(std::string model_path, json model_info, int default_conte
     this->q4nx = std::make_unique<Q4NX>(this->model_path);
     // model_type == llama
     this->lm_engine = std::make_unique<lfm2_npu>(*this->lm_config, this->npu.get(), this->MAX_L);
-
-    this->lm_engine->load_weights(*this->q4nx);
-
-    //free the q4nx
-    this->q4nx.reset();
+    this->_load_engine_weights();
     this->lm_engine->clear_context();
     this->setup_tokenizer(model_path);
     this->sampler.reset();
@@ -273,11 +269,7 @@ void LFM2_5_TK::load_model(std::string model_path, json model_info, int default_
     this->q4nx = std::make_unique<Q4NX>(this->model_path);
     // model_type == llama
     this->lm_engine = std::make_unique<lfm2_npu>(*this->lm_config, this->npu.get(), this->MAX_L);
-
-    this->lm_engine->load_weights(*this->q4nx);
-
-    //free the q4nx
-    this->q4nx.reset();
+    this->_load_engine_weights();
     this->lm_engine->clear_context();
     this->setup_tokenizer(model_path);
     this->sampler.reset();

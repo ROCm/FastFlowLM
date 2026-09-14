@@ -14,8 +14,7 @@ void GPT_OSS::load_model(std::string model_path, json model_info, int default_co
     this->_shared_load_model(model_path, model_info, default_context_length, enable_preemption);
     this->q4nx = std::make_unique<Q4NX>(this->model_path);
     this->lm_engine = std::make_unique<gpt_oss_npu>(*this->lm_config, this->npu.get(), this->MAX_L);
-    this->lm_engine->load_weights(*this->q4nx);
-    this->q4nx.reset();
+    this->_load_engine_weights();
     this->tokenizer = std::make_unique<Tokenizer>(model_path);
 
     this->setup_tokenizer(model_path);

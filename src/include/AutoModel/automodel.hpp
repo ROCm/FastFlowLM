@@ -218,9 +218,14 @@ protected:
 
 	/// \brief Give the plugins named in FLM_PLUGIN a chance to override operations
 	/// \note Call once the engine exists and before its weights are loaded: the
-	///       engine declares its operations in its constructor, and load_weights
-	///       skips work whose consumers a plugin has taken over.
+	///       engine declares its operations in its constructor, and an override
+	///       must be in place before anything dispatches through it.
 	void _load_operator_plugins();
+
+	/// \brief Bring the engine up: load plugins, read the weights, release the file
+	/// \note Every model calls this immediately after constructing its engine.
+	///       Keeping it in one place is what makes a plugin apply to all of them.
+	void _load_engine_weights();
 	nlohmann::json _shared_setup_tokenizer(std::string model_path);
 
 	/// \brief Insert tokens into the model
