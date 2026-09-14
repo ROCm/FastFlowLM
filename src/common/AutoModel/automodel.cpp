@@ -25,6 +25,13 @@ void AutoModel::_load_operator_plugins() {
 }
 
 
+void AutoModel::_load_engine_weights() {
+    this->_load_operator_plugins();
+    this->lm_engine->load_weights(*this->q4nx);
+    this->q4nx.reset();
+}
+
+
 AutoModel::AutoModel(flm_rt::device* npu_device_inst, std::string current_model) {
     this->npu_device_inst = npu_device_inst;
     this->current_model = current_model;
