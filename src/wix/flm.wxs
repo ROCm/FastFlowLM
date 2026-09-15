@@ -9,8 +9,11 @@
   Not ported 1:1 from flm.iss:
     - The interactive "model storage location" / "server port" wizard pages are
       not reproduced. FLM_MODEL_PATH and FLM_SERVE_PORT are written with the
-      same defaults Inno used (%USERPROFILE%\.flm and 52625) but are not
-      prompted for during install.
+      same defaults Inno used (<user profile>\.flm and 52625) but are not
+      prompted for during install. The model path can still be overridden on
+      the command line with FLMMODELPATH=<dir>.
+      FLM_MODEL_PATH is written per-user (HKCU), not machine-wide; see the
+      comment above Env_ModelPath for why.
     - The desktop shortcuts ("flm run" / "flm serve") are an opt-in MSI
       feature (Level="1000", not installed by default) instead of an
       unchecked wizard checkbox, since there is no custom UI here to host one.
@@ -18,7 +21,7 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
 
-  <?define SourceDir = "..\inno"?>
+  <?define SourceDir = ".\package"?>
   <?define XclbinsDir = "..\xclbins"?>
 
   <Package Name="flm"
@@ -58,6 +61,31 @@
     <!-- Environment: FLM_MODEL_PATH, FLM_SERVE_PORT, PATH -->
     <!-- Attached to the main exe's component so it is set/removed with install/uninstall. -->
 
+    <!--
+      FLM_MODEL_PATH is a per-user Environment entry (System="no" below, i.e.
+      HKCU, not HKLM\...\Session Manager\Environment).
+
+      A machine-wide value containing "%USERPROFILE%" is wrong by construction:
+      USERPROFILE is itself a per-user variable, so one HKLM value can't mean
+      the right thing for every account on the machine, and it ends up
+      expanded against SYSTEM's own profile: C:\Windows\system32\config\
+      systemprofile\.flm, which the real logged-on user can't write to
+      ("create_directories: Access is denied.").
+
+      Writing to HKCU instead sidesteps the whole class of problem: each user
+      has their own HKCU, so "%USERPROFILE%\.flm" only ever needs to be right
+      for the one user it's stored under, and Windows expands it lazily when
+      that user's own session environment is built. Worst case for an
+      unattended SYSTEM-context install (SCCM/GPO, no interactive user) is
+      that the value lands in SYSTEM's own hive and no real user gets it set,
+      which is harmless since flm already falls back to the same default
+      (<user profile>\.flm) when the variable is unset.
+
+      FLMMODELPATH is still available as a command-line override:
+        msiexec /i flm-setup.msi FLMMODELPATH="D:\flm"
+    -->
+    <Property Id="FLMMODELPATH" Value="%USERPROFILE%\.flm" Secure="yes" />
+
     <!-- Features -->
     <Feature Id="MainFeature" Title="flm" Level="1">
       <ComponentGroupRef Id="MainComponents" />
@@ -74,7 +102,7 @@
       <Component Id="Comp_flm.exe" Guid="*">
         <File Id="File_flm.exe" Source="$(SourceDir)\flm.exe" KeyPath="yes" />
         <Environment Id="Env_Path" Name="PATH" Value="[INSTALLFOLDER]" Part="last" Action="set" System="yes" Permanent="no" />
-        <Environment Id="Env_ModelPath" Name="FLM_MODEL_PATH" Value="%USERPROFILE%\.flm" Action="set" System="yes" Permanent="no" />
+        <Environment Id="Env_ModelPath" Name="FLM_MODEL_PATH" Value="[FLMMODELPATH]" Action="set" System="no" Permanent="no" />
         <Environment Id="Env_ServePort" Name="FLM_SERVE_PORT" Value="52625" Action="set" System="yes" Permanent="no" />
       </Component>
 
@@ -114,6 +142,9 @@
       <Component Id="Comp_qwen3vl_npu.dll" Guid="*">
         <File Id="File_qwen3vl_npu.dll" Source="$(SourceDir)\qwen3vl_npu.dll" KeyPath="yes" />
       </Component>
+      <Component Id="Comp_qwen3vl_flash.dll" Guid="*">
+        <File Id="File_qwen3vl_flash.dll" Source="$(SourceDir)\qwen3vl_flash.dll" KeyPath="yes" />
+      </Component>
       <Component Id="Comp_qwen3_5vl_npu.dll" Guid="*">
         <File Id="File_qwen3_5vl_npu.dll" Source="$(SourceDir)\qwen3_5vl_npu.dll" KeyPath="yes" />
       </Component>
@@ -128,6 +159,9 @@
       </Component>
       <Component Id="Comp_gemma4e_npu.dll" Guid="*">
         <File Id="File_gemma4e_npu.dll" Source="$(SourceDir)\gemma4e_npu.dll" KeyPath="yes" />
+      </Component>
+      <Component Id="Comp_gemma4e_flash.dll" Guid="*">
+        <File Id="File_gemma4e_flash.dll" Source="$(SourceDir)\gemma4e_flash.dll" KeyPath="yes" />
       </Component>
       <Component Id="Comp_gemma4e_12b_npu.dll" Guid="*">
         <File Id="File_gemma4e_12b_npu.dll" Source="$(SourceDir)\gemma4_12b_npu.dll" KeyPath="yes" />

@@ -411,12 +411,14 @@ target_link_libraries(flm PUBLIC
     qwen2vl_npu
     qwen3_npu
     qwen3vl_npu
+    qwen3vl_flash
     qwen3_5vl_npu
     qwen3_5_omni_npu
     qwen3_6_moe_npu
     gemma_npu
     gemma_text_npu
     gemma4e_npu
+    gemma4e_flash
     gemma4_12b_npu
     gpt_oss_npu
     whisper_npu
@@ -425,10 +427,18 @@ target_link_libraries(flm PUBLIC
     phi4_npu
     nanbeige_npu
     hunyuan_npu
+    # flm's own code calls nothing in the four shared-runtime libs below -- the
+    # engine .so above do -- so the linker's default --as-needed drops them from
+    # DT_NEEDED entirely. The engines then have to find MHA/Dequant/... in some
+    # other engine that happened to compile a copy of them, whichever one comes
+    # first in DT_NEEDED. That silently ran a stale MHA for every model until the
+    # copy's owner was rebuilt. Keep the real libraries in the link map.
+    $<$<NOT:$<BOOL:${WIN32}>>:-Wl,--no-as-needed>
     dequant
     gemm
     lm_head
     mha
+    $<$<NOT:$<BOOL:${WIN32}>>:-Wl,--as-needed>
 )
 
 # Link the selected NPU runtime after the detail model libraries above so their

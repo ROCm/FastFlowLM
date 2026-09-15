@@ -191,7 +191,6 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
     }
     tokens.erase(tokens.begin(), tokens.begin() + skip_count);
 
-
     if (this->total_tokens + tokens.size() >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping prefilling...");
         return false;

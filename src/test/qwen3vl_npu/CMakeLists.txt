@@ -41,6 +41,7 @@ endif()
 
 target_link_libraries(test_qwen3vl_npu PUBLIC
     qwen3vl_npu
+    qwen3vl_flash
     xrt_coreutil
     avformat
     avcodec

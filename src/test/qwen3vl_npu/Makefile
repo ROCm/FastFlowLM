@@ -33,6 +33,8 @@ HEADERS += ../../include/qwen3vl/qwen3vl_npu.hpp
 ifeq ($(WSL), 0)
 
 LDFLAGS += -lqwen3vl_npu
+# modeling_qwen3vl.cpp serves both wrappers, so both engines must be linked.
+LDFLAGS += -lqwen3vl_flash
 LDFLAGS += -lavformat -lavcodec -lavutil -lswscale -lswresample
 
 CPP_SOURCES := $(filter %.cpp,$(SOURCES))

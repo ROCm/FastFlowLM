@@ -13,12 +13,20 @@
 /************              Qwen3VL family            **************/
 Qwen3VL::Qwen3VL(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "Qwen3VL") {}
 
+void Qwen3VL::create_engine() {
+    this->lm_engine = std::make_unique<qwen3vl_npu>(*this->lm_config, this->npu.get(), this->MAX_L);
+}
+
+void Qwen3VL_Flash::create_engine() {
+    this->lm_engine = std::make_unique<qwen3vl_flash>(*this->lm_config, this->npu.get(), this->MAX_L);
+}
+
 void Qwen3VL::load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption) {
     this->_shared_load_model(model_path, model_info, default_context_length, enable_preemption);
     
     this->q4nx = std::make_unique<Q4NX>(this->model_path);
     // lm_config->get<std::string>("model_type", "") == qwen3
-    this->lm_engine = std::make_unique<qwen3vl_npu>(*this->lm_config, this->npu.get(), this->MAX_L);
+    this->create_engine();
 
     this->lm_engine->load_weights(*this->q4nx);
     //free the q4nx
@@ -56,25 +64,19 @@ std::string Qwen3VL::apply_chat_template(nlohmann::ordered_json& messages, nlohm
     return this->chat_tmpl->apply(inputs);
 }
 
-bool Qwen3VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
-    // preprocess
-    constexpr int image_soft_token_id = 151655;
-    this->profiler_list[TKOEN_ENCODE_TIME].start();
-    std::string templated_text;
+bool Qwen3VL::_build_vl_tokens(lm_uniform_input_t& input,
+                               qwen3vl_image_payload_t& image_payload,
+                               std::vector<int>& tokens) {
     if (input.messages.empty() && input.prompt.empty()) {
         header_print("WARNING", "No messages or prompt provided");
         return false;
     }
 
-    constexpr bool DEBUG_IMAGE_PREPROCESS = false;
-    qwen3vl_image_payload_t image_payload;
+    this->profiler_list[TKOEN_ENCODE_TIME].start();
+    std::string templated_text;
+
     image_payload.num_images = 0;
     if (input.images.size() > 0) {
-
-
-        // header_print("info", "Processing images...");
-        
-        // time_utils::time_point preprocess_start = time_utils::now();
         for(const auto& img_str : input.images){
             qwen3vl_image_t image = this->load_image(img_str);
             if (image.width <= 0 || image.height <= 0) {
@@ -172,7 +174,6 @@ bool Qwen3VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     std::vector<int> tokens_init = this->tokenizer->encode(templated_text);
 
     // update the tokens to include the image tokens
-    std::vector<int> tokens;
     int total_image_tokens = 0;
     // Use image_payload.images.size() (not input.images.size()), because on
     // the REST API path images come from `messages` and input.images is empty.
@@ -182,9 +183,9 @@ bool Qwen3VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     tokens.reserve(tokens_init.size() + total_image_tokens);
     int image_counter = 0;
     for (int i = 0; i < tokens_init.size(); i++) {
-        if (tokens_init[i] == image_soft_token_id) {
+        if (tokens_init[i] == IMAGE_SOFT_TOKEN_ID) {
             for (int j = 0; j < image_payload.images[image_counter].grid_h * image_payload.images[image_counter].grid_w / 4; j++) {
-                tokens.push_back(image_soft_token_id);
+                tokens.push_back(IMAGE_SOFT_TOKEN_ID);
             }
             image_counter++;
         } else {
@@ -193,6 +194,16 @@ bool Qwen3VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     }
 
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
+    return true;
+}
+
+bool Qwen3VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
+    constexpr int image_soft_token_id = IMAGE_SOFT_TOKEN_ID;
+    qwen3vl_image_payload_t image_payload;
+    std::vector<int> tokens;
+    if (!this->_build_vl_tokens(input, image_payload, tokens)) {
+        return false;
+    }
 
     // ----------------------------------------------------------------------
     // Prompt-cache aware image alignment.
@@ -414,6 +425,253 @@ StreamResult Qwen3VL::parse_stream_content(const std::string content) {
     result.content = content;
     return result;
 
+}
+
+
+/************              Qwen3VL_Flash            **************/
+
+int Qwen3VL_Flash::_pin_system_prefix(const std::string& system_text) {
+    // Full clear — drop any previous pin before building the new one.
+    this->lm_engine->clear_context();
+    this->token_history.clear();
+    this->total_tokens = 0;
+    this->last_token = -1;
+    this->system_tokens = 0;
+    this->system_his.clear();
+    this->pinned_system_text = system_text;
+
+    if (system_text.empty()) {
+        return 0;
+    }
+
+    // Find how many tokens the system turn plus the opening of the user turn
+    // share across different user texts (the variable part). Template two
+    // otherwise identical prompts that differ only in the first character of
+    // the user message and take the longest common prefix.
+    auto templated = [&](const std::string& user_text) {
+        nlohmann::ordered_json messages = nlohmann::ordered_json::array();
+        messages.push_back({ {"role", "system"}, {"content", system_text} });
+        messages.push_back({ {"role", "user"}, {"content", user_text} });
+        return this->apply_chat_template(messages);
+    };
+    std::vector<int> probe_a = this->tokenizer->encode(templated("A"));
+    std::vector<int> probe_b = this->tokenizer->encode(templated("\xe4\xbd\xa0")); // U+4F60, CJK probe
+
+    size_t shared = 0;
+    while (shared < probe_a.size() && shared < probe_b.size() && probe_a[shared] == probe_b[shared]) {
+        shared++;
+    }
+    if (shared == 0) {
+        header_print("WARNING", "Qwen3VL_Flash: could not isolate a reusable system prefix, every turn will prefill in full");
+        return 0;
+    }
+
+    std::vector<int> tokens(probe_a.begin(), probe_a.begin() + shared);
+    chat_meta_info_t pin_meta;
+    pin_meta.restore_allowed = false;
+    if (!this->_shared_insert(pin_meta, tokens, [] { return false; }, nullptr)) {
+        this->lm_engine->clear_context();
+        this->token_history.clear();
+        return 0;
+    }
+
+    this->system_his = this->token_history;
+    this->checkpoint_his = this->token_history;
+    this->lm_engine->checkpoint();
+    this->system_tokens = static_cast<int>(shared);
+
+    // Reset profilers so the pin prefill does not count against the first turn.
+    for (size_t i = 0; i < PROFILER_TYPE_NUM; i++) {
+        this->profiler_list[i].reset();
+    }
+
+    header_print("FLM", "Qwen3VL_Flash: system prefix pinned (" + std::to_string(this->system_tokens) + " tokens).");
+    return this->system_tokens;
+}
+
+void Qwen3VL_Flash::_reset_turn() {
+    if (this->system_tokens > 0) {
+        // Rewind to the pinned system prefix instead of clearing from scratch.
+        this->total_tokens = static_cast<uint32_t>(this->lm_engine->restore());
+        this->token_history = this->system_his;
+        this->checkpoint_his = this->system_his;
+    } else {
+        this->lm_engine->clear_context();
+        this->token_history.clear();
+        this->total_tokens = 0;
+    }
+    this->sampler->reset_penalties();
+    this->last_token = -1;
+    this->reset_parser();
+    this->tool_name_.clear();
+    this->profiler_list[PREFILL_TIME].reset();
+    this->profiler_list[DECODING_TIME].reset();
+    this->profiler_list[SAMPLING_TIME].reset();
+    this->profiler_list[TKOEN_ENCODE_TIME].reset();
+    this->profiler_list[TKOEN_DECODE_TIME].reset();
+}
+
+bool Qwen3VL_Flash::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
+    // Extract the system text from the incoming messages (first message only).
+    std::string sys_text;
+    if (!input.messages.empty() && input.messages[0].value("role", "") == "system") {
+        const auto& content = input.messages[0]["content"];
+        if (content.is_string()) {
+            sys_text = content.get<std::string>();
+        } else if (content.is_array()) {
+            for (const auto& item : content) {
+                if (item.value("type", "") == "text") {
+                    sys_text += item.value("text", "");
+                }
+            }
+        }
+    }
+
+    // Re-pin only when the system text actually changed (or is being set for
+    // the first time). The initial state has pinned_system_text == "" and
+    // system_tokens == 0, so the first request with a system prompt triggers
+    // a pin; subsequent requests with the same text skip straight to _reset_turn.
+    if (sys_text != this->pinned_system_text) {
+        this->_pin_system_prefix(sys_text);
+    }
+
+    this->_reset_turn();
+
+    qwen3vl_image_payload_t image_payload;
+    std::vector<int> tokens;
+    if (!this->_build_vl_tokens(input, image_payload, tokens)) {
+        return false;
+    }
+
+    if (tokens.size() >= this->MAX_L) {
+        header_print("WARNING", "Prompt does not fit in the context window, stopping prefilling...");
+        return false;
+    }
+
+    // When a system prefix is pinned the engine's kv cache already holds those
+    // tokens (restored by _reset_turn). Strip them from the front of `tokens`
+    // so we only prefill the part the engine has not seen yet.
+    int skip = 0;
+    if (this->system_tokens > 0
+        && static_cast<int>(tokens.size()) > this->system_tokens) {
+        bool prefix_matches = std::equal(
+            this->system_his.begin(), this->system_his.end(), tokens.begin());
+        if (prefix_matches) {
+            skip = this->system_tokens;
+        }
+    }
+
+    // The vision encoder runs once, on the chunk that carries the payload, so
+    // that chunk has to be long enough to hold every image soft token.
+    int first_len_run = 0;
+    for (int i = static_cast<int>(tokens.size()) - 1; i >= 0; i--) {
+        if (tokens[i] == IMAGE_SOFT_TOKEN_ID) {
+            first_len_run = std::max(0, i + 1 - skip);
+            break;
+        }
+    }
+
+    this->token_history = tokens;
+    std::vector<int> tokens_to_prefill(tokens.begin() + skip, tokens.end());
+
+    auto prefill_start_time = this->profiler_list[PREFILL_TIME].start();
+    buffer<bf16> y = this->_chunked_insert(
+        meta_info, tokens_to_prefill, is_cancelled,
+        image_payload.num_images > 0 ? &image_payload : nullptr,
+        first_len_run);
+    auto prefill_end_time = this->profiler_list[PREFILL_TIME].stop(tokens_to_prefill.size());
+
+    meta_info.prefill_duration = (uint64_t)time_utils::duration_ns(prefill_start_time, prefill_end_time).first;
+    meta_info.prompt_tokens = static_cast<int>(tokens.size()); // report full prompt length to caller
+
+    if (meta_info.stop_reason == CANCEL_DETECTED) {
+        return false;
+    }
+
+    this->total_tokens = static_cast<uint32_t>(tokens.size());
+
+    this->profiler_list[SAMPLING_TIME].start();
+    this->last_token = this->sampler->sample(y);
+    this->profiler_list[SAMPLING_TIME].stop(1);
+    return true;
+}
+
+std::string Qwen3VL_Flash::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
+    std::string result;
+    if (this->last_token == -1) {
+        header_print("ERROR", "generate() called without a successful insert()");
+        meta_info.stop_reason = ERROR_DETECTED;
+        return result;
+    }
+
+    auto emit = [&](int token) {
+        if (!this->is_normal_token(token)) {
+            return;
+        }
+        std::string token_str = this->tokenizer->run_time_decoder(token);
+        result += token_str;
+        os << token_str << std::flush;
+    };
+
+    stop_reason_t reason = EOT_DETECTED;
+    int last_sampled_token = this->last_token;
+    this->token_history.push_back(last_sampled_token);
+    emit(last_sampled_token);
+
+    if (!this->is_eos(last_sampled_token) && this->total_tokens < this->MAX_L) {
+        while (true) {
+            if (is_cancelled()) {
+                reason = CANCEL_DETECTED;
+                this->reset_parser();
+                this->tool_name_.clear();
+                break;
+            }
+
+            this->profiler_list[DECODING_TIME].start();
+            buffer<bf16> y = this->lm_engine->forward(last_sampled_token);
+            this->profiler_list[DECODING_TIME].stop(1);
+
+            this->profiler_list[SAMPLING_TIME].start();
+            last_sampled_token = this->sampler->sample(y);
+            this->profiler_list[SAMPLING_TIME].stop(1);
+            this->total_tokens++;
+
+            this->profiler_list[TKOEN_DECODE_TIME].start();
+            emit(last_sampled_token);
+            this->profiler_list[TKOEN_DECODE_TIME].stop(1);
+
+            this->token_history.push_back(last_sampled_token);
+            meta_info.generated_tokens++;
+
+            if (this->is_eos(last_sampled_token)) {
+                break;
+            }
+            if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)) {
+                reason = MAX_LENGTH_REACHED;
+                break;
+            }
+            if (this->total_tokens >= this->MAX_L) {
+                header_print("WARNING", "Max length reached, stopping generation...");
+                reason = MAX_LENGTH_REACHED;
+                break;
+            }
+        }
+    }
+
+    meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
+    meta_info.stop_reason = reason;
+    if (this->log_raw_output) {
+        std::cout << std::endl;
+        header_print("FLM", "Model RAW Output: \n" + result);
+    }
+    return result;
+}
+
+std::string Qwen3VL_Flash::generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os) {
+    if (!this->insert(meta_info, input)) {
+        return "";
+    }
+    return this->generate(meta_info, length_limit, os);
 }
 
 

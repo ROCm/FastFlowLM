@@ -37,12 +37,14 @@ typedef enum {
     qwen3_it,
     qwen3_tk,
     qwen3vl,
+    qwen3vl_flash,
     qwen3_5,
     qwen3_5_omni,
     qwen3_6_moe,
     gemma3,
     gemma3_text,
     gemma4e,
+    gemma4e_flash,
     gemma4_12b,
     gpt_oss,
     lfm2,
@@ -66,12 +68,14 @@ inline std::pair<std::string, std::unique_ptr<AutoModel>> get_auto_model(const s
         {"qwen3-it", SupportedModelFamily::qwen3_it},
         {"qwen3-tk", SupportedModelFamily::qwen3_tk},
         {"qwen3vl", SupportedModelFamily::qwen3vl},
+        {"qwen3vl-flash", SupportedModelFamily::qwen3vl_flash},
         {"qwen3.5", SupportedModelFamily::qwen3_5},
         {"qwen3.5-omni", SupportedModelFamily::qwen3_5_omni},
         {"qwen3.6-moe", SupportedModelFamily::qwen3_6_moe},
         {"gemma3", SupportedModelFamily::gemma3},
         {"gemma3-text", SupportedModelFamily::gemma3_text},
         {"gemma4e", SupportedModelFamily::gemma4e},
+        {"gemma4e-flash", SupportedModelFamily::gemma4e_flash},
         {"gemma4-12b", SupportedModelFamily::gemma4_12b},
         {"gpt-oss", SupportedModelFamily::gpt_oss},
         {"lfm2", SupportedModelFamily::lfm2},
@@ -127,6 +131,9 @@ inline std::pair<std::string, std::unique_ptr<AutoModel>> get_auto_model(const s
         case SupportedModelFamily::gemma4e:
             auto_chat_engine = std::make_unique<Gemma4e>(npu_device_inst);
             break;
+        case SupportedModelFamily::gemma4e_flash:
+            auto_chat_engine = std::make_unique<Gemma4e_Flash>(npu_device_inst);
+            break;
         case SupportedModelFamily::gemma4_12b:
             auto_chat_engine = std::make_unique<Gemma4_12B>(npu_device_inst);
             break;
@@ -135,6 +142,9 @@ inline std::pair<std::string, std::unique_ptr<AutoModel>> get_auto_model(const s
             break;
         case SupportedModelFamily::qwen3vl:
             auto_chat_engine = std::make_unique<Qwen3VL>(npu_device_inst);
+            break;
+        case SupportedModelFamily::qwen3vl_flash:
+            auto_chat_engine = std::make_unique<Qwen3VL_Flash>(npu_device_inst);
             break;
         case SupportedModelFamily::qwen3_5:
             auto_chat_engine = std::make_unique<Qwen3_5VL>(npu_device_inst);

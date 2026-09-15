@@ -21,5 +21,6 @@ Browse detailed NPU benchmark results for each major model family supported by F
 - [Microsoft/Phi4](phi4_results/)
 - [Nanbeige4.1](nanbeige4.1_results/)
 - [SmolVLA](smolvla_results/)
+- [Hy-MT2](hy-mt2_results/)
 
 Each page includes decoding and prefill speed metrics (tokens per second) and notes about the test setup and hardware. 

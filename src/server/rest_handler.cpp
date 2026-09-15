@@ -1115,7 +1115,25 @@ void RestHandler::handle_openai_chat_completion(const json& request,
         // see if we can use prompt cache
         chat_meta_info_t meta_info;
         bool can_use_prompt_cache = false;
-        if (model != model_used_for_last_message) { // switch models will clear context
+        if (auto_chat_engine->single_turn) {
+            // reject multi-turn requests: any assistant message in the history
+            // means the caller is trying to continue a prior turn, which this
+            // model cannot support.
+            bool has_assistant_msg = false;
+            for (const auto& msg : current_messages) {
+                if (msg.value("role", "") == "assistant") {
+                    has_assistant_msg = true;
+                    break;
+                }
+            }
+            if (has_assistant_msg) {
+                header_print("Warning", "Single-turn model received multi-turn request (assistant messages detected). Rejecting.");
+                json error_response = {{"error", "This model only supports single-turn requests. Multi-turn conversation history (assistant messages) is not allowed."}};
+                send_response(error_response);
+                return;
+            }
+        }
+        else if (model != model_used_for_last_message) { // switch models will clear context
             this->prompt_cache.update_message_checksum(current_messages);
             this->prompt_cache.update_tool_checksum(tools);
             model_used_for_last_message = model;

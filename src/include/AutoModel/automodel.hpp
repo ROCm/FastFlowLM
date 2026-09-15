@@ -26,11 +26,13 @@
 #include "models/qwen3/qwen3_npu.hpp"
 #include "models/qwen2vl/qwen2vl_npu.hpp"
 #include "models/qwen3vl/qwen3vl_npu.hpp"
+#include "models/qwen3vl_flash/qwen3vl_flash.hpp"
 #include "models/qwen3_5vl/qwen3_5vl_npu.hpp"
 #include "models/qwen3_6_moe/qwen3_6_moe_npu.hpp"
 #include "models/gemma/gemma_npu.hpp"
 #include "models/gemma_text/gemma_text_npu.hpp"
 #include "models/gemma4e/gemma4e_npu.hpp"
+#include "models/gemma4e_flash/gemma4e_flash.hpp"
 #include "models/gemma4_12b/gemma4_12b_npu.hpp"
 #include "models/lfm2/lfm2_npu.hpp"
 #include "models/phi4/phi4_npu.hpp"
@@ -230,6 +232,11 @@ protected:
 
 public:
 	//************ Shared by all models *************/
+
+	/// \brief true if this model clears the kv cache on every insert() and
+	///        does not preserve context across turns (e.g. qwen3vl_flash).
+	bool single_turn = false;
+
 	virtual ~AutoModel() = default;
 
 	AutoModel(flm_rt::device* npu_device_inst, std::string current_model = "");

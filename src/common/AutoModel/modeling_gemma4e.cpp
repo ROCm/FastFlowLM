@@ -412,12 +412,248 @@ std::pair<std::string, json> parse_gemma4e_tool_content(std::string tool_content
 /************              Gemma4e family            **************/
 Gemma4e::Gemma4e(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "Gemma4e") {}
 
+void Gemma4e::create_engine() {
+    this->lm_engine = std::make_unique<gemma4e_npu>(*this->lm_config, this->npu.get(), this->MAX_L);
+}
+
+/// Reads the shared set of engine constants off a concrete engine type.
+/// gemma4e_npu and gemma4e_flash are unrelated types that happen to expose the
+/// same member names, so this is templated rather than taking a common base.
+template <typename EngineT>
+static gemma4e_engine_config_t read_gemma4e_engine_config(causal_lm* engine) {
+    EngineT* e = dynamic_cast<EngineT*>(engine);
+    assert(e != nullptr && "engine_config() called on a wrapper whose engine type does not match");
+    return gemma4e_engine_config_t{
+        e->GEMMA4E_VISION_PATCH_SIZE,
+        e->GEMMA4E_POOLING_KERNEL_SIZE,
+        e->GEMMA4E_VISION_RESCALE_FACTOR,
+        e->GEMMA4E_VISION_IMAGE_MEAN,
+        e->GEMMA4E_VISION_IMAGE_STD,
+        e->Gemma4E_Audio_resample_rate,
+        e->Gemma4E_Audio_conv2d_kernel_size,
+        e->Gemma4E_Audio_conv2d_Stride,
+        e->Gemma4e_Audio_conv2d_Padding,
+    };
+}
+
+gemma4e_engine_config_t Gemma4e::engine_config() const {
+    return read_gemma4e_engine_config<gemma4e_npu>(this->lm_engine.get());
+}
+
+gemma4e_engine_config_t Gemma4e_Flash::engine_config() const {
+    return read_gemma4e_engine_config<gemma4e_flash>(this->lm_engine.get());
+}
+
+void Gemma4e_Flash::create_engine() {
+    this->lm_engine = std::make_unique<gemma4e_flash>(*this->lm_config, this->npu.get(), this->MAX_L);
+}
+
+int Gemma4e_Flash::_pin_system_prefix(const std::string& system_text) {
+    this->lm_engine->clear_context();
+    this->token_history.clear();
+    this->checkpoint_his.clear();
+    this->total_tokens = 0;
+    this->last_token = -1;
+    this->system_tokens = 0;
+    this->system_his.clear();
+    this->pinned_system_text = system_text;
+
+    if (system_text.empty()) {
+        return 0;
+    }
+
+    // Find the longest token prefix shared by all prompts that carry this
+    // system turn. Template two otherwise-identical prompts that differ only
+    // in the first character of the user message and take the common prefix.
+    auto templated = [&](const std::string& user_text) {
+        nlohmann::ordered_json messages = nlohmann::ordered_json::array();
+        messages.push_back({ {"role", "system"}, {"content", system_text} });
+        messages.push_back({ {"role", "user"}, {"content", user_text} });
+        return this->apply_chat_template(messages);
+    };
+    std::vector<int> probe_a = this->tokenizer->encode(templated("A"));
+    std::vector<int> probe_b = this->tokenizer->encode(templated("\xe4\xbd\xa0")); // U+4F60, CJK probe
+
+    size_t shared = 0;
+    while (shared < probe_a.size() && shared < probe_b.size() && probe_a[shared] == probe_b[shared]) {
+        shared++;
+    }
+    if (shared == 0) {
+        header_print("WARNING", "Gemma4e_Flash: could not isolate a reusable system prefix, every turn will prefill in full");
+        return 0;
+    }
+
+    std::vector<int> tokens(probe_a.begin(), probe_a.begin() + shared);
+    chat_meta_info_t pin_meta;
+    pin_meta.restore_allowed = false;
+    if (!this->_shared_insert(pin_meta, tokens, [] { return false; }, nullptr)) {
+        this->lm_engine->clear_context();
+        this->token_history.clear();
+        this->checkpoint_his.clear();
+        return 0;
+    }
+
+    this->system_his = this->token_history;
+    this->checkpoint_his = this->token_history;
+    this->lm_engine->checkpoint();
+    this->system_tokens = static_cast<int>(shared);
+
+    for (size_t i = 0; i < PROFILER_TYPE_NUM; i++) {
+        this->profiler_list[i].reset();
+    }
+
+    header_print("FLM", "Gemma4e_Flash: system prefix pinned (" + std::to_string(this->system_tokens) + " tokens).");
+    return this->system_tokens;
+}
+
+void Gemma4e_Flash::_reset_turn() {
+    if (this->system_tokens > 0) {
+        this->total_tokens = static_cast<uint32_t>(this->lm_engine->restore());
+        this->token_history = this->system_his;
+        this->checkpoint_his = this->system_his;
+    } else {
+        this->lm_engine->clear_context();
+        this->token_history.clear();
+        this->checkpoint_his.clear();
+        this->total_tokens = 0;
+    }
+    this->sampler->reset_penalties();
+    this->last_token = -1;
+    this->reset_parser();
+    this->tool_name_.clear();
+    this->profiler_list[PREFILL_TIME].reset();
+    this->profiler_list[DECODING_TIME].reset();
+    this->profiler_list[SAMPLING_TIME].reset();
+    this->profiler_list[TKOEN_ENCODE_TIME].reset();
+    this->profiler_list[TKOEN_DECODE_TIME].reset();
+}
+
+bool Gemma4e_Flash::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
+    // Extract system text from the first message (if present).
+    std::string sys_text;
+    if (!input.messages.empty() && input.messages[0].value("role", "") == "system") {
+        const auto& content = input.messages[0]["content"];
+        if (content.is_string()) {
+            sys_text = content.get<std::string>();
+        } else if (content.is_array()) {
+            for (const auto& item : content) {
+                if (item.value("type", "") == "text") {
+                    sys_text += item.value("text", "");
+                }
+            }
+        }
+    }
+
+    if (sys_text != this->pinned_system_text) {
+        this->_pin_system_prefix(sys_text);
+    }
+
+    this->_reset_turn();
+
+    // Disable the prompt-cache restore path in the parent: _reset_turn() has
+    // already positioned the engine at the correct starting point (pin or
+    // clear). The parent's token_history now holds the pinned prefix, so
+    // _shared_insert's own prefix-match will skip those tokens automatically.
+    meta_info.restore_allowed = false;
+
+    return Gemma4e::insert(meta_info, input, is_cancelled);
+}
+
+std::string Gemma4e_Flash::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
+    std::string result;
+    assert(this->last_token != -1);
+
+    stop_reason_t reason = EOT_DETECTED;
+    int last_sampled_token = this->last_token;
+
+    this->token_history.push_back(last_token);
+
+    if (this->is_normal_token(last_sampled_token) && last_sampled_token != -1) {
+        std::string token_str = this->tokenizer->run_time_decoder(last_sampled_token);
+        result += token_str;
+        os << token_str << std::flush;
+    }
+    if (this->is_eos(last_sampled_token)) {
+        meta_info.stop_reason = reason;
+        return result;
+    }
+    this->profiler_list[DECODING_TIME].reset();
+    this->profiler_list[TKOEN_DECODE_TIME].reset();
+    if (this->total_tokens >= this->MAX_L) {
+        header_print("WARNING", "Max length reached, stopping generation...");
+        meta_info.stop_reason = MAX_LENGTH_REACHED;
+        return result;
+    }
+
+    while (this->total_tokens < this->MAX_L) {
+        if (is_cancelled()) {
+            reason = CANCEL_DETECTED;
+            buffer_.clear();
+            current_mode_ = StreamEventType::CONTENT;
+            tool_name_.clear();
+            is_in_tool_block_ = false;
+            break;
+        }
+
+        this->profiler_list[DECODING_TIME].start();
+        buffer<bf16> y = this->lm_engine->forward(last_sampled_token);
+        this->profiler_list[DECODING_TIME].stop(1);
+
+        this->profiler_list[SAMPLING_TIME].start();
+        int sampled_token = this->sampler->sample(y);
+        this->profiler_list[SAMPLING_TIME].stop(1);
+        this->total_tokens++;
+        last_sampled_token = sampled_token;
+
+        this->profiler_list[TKOEN_DECODE_TIME].start();
+        if (this->is_normal_token(sampled_token)) {
+            std::string token_str = this->tokenizer->run_time_decoder(sampled_token);
+            os << token_str << std::flush;
+            result += token_str;
+        }
+        this->profiler_list[TKOEN_DECODE_TIME].stop(1);
+
+        this->token_history.push_back(sampled_token);
+        meta_info.generated_tokens++;
+
+        if (this->is_eos(sampled_token)) {
+            // Single-turn: no forward_on_eos needed — kv cache is discarded
+            // by _reset_turn() at the start of every new request.
+            break;
+        }
+        if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)) {
+            reason = MAX_LENGTH_REACHED;
+            break;
+        }
+    }
+
+    meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
+    meta_info.stop_reason = reason;
+    if (this->total_tokens >= this->MAX_L) {
+        header_print("WARNING", "Max length reached, stopping generation...");
+    }
+    std::cout << std::endl;
+    header_print("FLM", "Model RAW Output: \n" + result);
+
+    // Single-turn: do not checkpoint here — the only checkpoint that matters
+    // is the pinned system prefix, which _pin_system_prefix() already owns.
+
+    return result;
+}
+
+std::string Gemma4e_Flash::generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os) {
+    if (!this->insert(meta_info, input)) {
+        return "";
+    }
+    return this->generate(meta_info, length_limit, os);
+}
+
 void Gemma4e::load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption) {
     
     this->_shared_load_model(model_path, model_info, default_context_length, enable_preemption);
     
     this->q4nx = std::make_unique<Q4NX>(this->model_path);
-    this->lm_engine = std::make_unique<gemma4e_npu>(*this->lm_config, this->npu.get(), this->MAX_L);
+    this->create_engine();
 
     this->lm_engine->load_weights(*this->q4nx);
     //free the q4nx
@@ -524,15 +760,20 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
             }
             // Process Audios
             if (message.contains("audios")) {
-                gemma4e_npu *gemma4e_engine = dynamic_cast<gemma4e_npu*>(this->lm_engine.get());
+                const gemma4e_engine_config_t gemma4e_engine = this->engine_config();
                 for (auto& aud : message["audios"]) {
                     std::string audio_str = aud.get<std::string>();
-                    audio_data_t audio_data = this->load_audio_base64(audio_str, gemma4e_engine->Gemma4E_Audio_resample_rate, MonoDownmixMode::MEAN);
+                    audio_data_t audio_data = this->load_audio_base64(audio_str, gemma4e_engine.Gemma4E_Audio_resample_rate, MonoDownmixMode::MEAN);
                     if (audio_data.channels > 1) {
                         std::cerr << "only mono audio is supported." << std::endl;
                         exit(-1);
                     }
                     std::vector<audio_data_t> clipped_audio_data = this->clip_audio_length(audio_data, max_support_audio_length_seconds);
+                    if (this->max_audio_chunks > 0 && (int)clipped_audio_data.size() > this->max_audio_chunks) {
+                        header_print_g("FLM", "Audio in message is " + std::to_string((int)clipped_audio_data.size())
+                            + " chunks long; cutting off after the first " + std::to_string(this->max_audio_chunks) + ".");
+                        clipped_audio_data.resize(this->max_audio_chunks);
+                    }
                     audio_data_list.insert(audio_data_list.end(), clipped_audio_data.begin(), clipped_audio_data.end());
                     total_audio_clips += clipped_audio_data.size();
                     if (clipped_audio_data.size() > 1) {
@@ -554,10 +795,10 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     }
     else { // CLI Processing
         if (input.audios.size() > 0) {
-            gemma4e_npu *gemma4e_engine = dynamic_cast<gemma4e_npu*>(this->lm_engine.get());
+            const gemma4e_engine_config_t gemma4e_engine = this->engine_config();
             for (int i = 0; i < input.audios.size(); i++) {
                 std::string audio_str = input.audios[i];
-                audio_data_t audio_data = this->load_audio(audio_str, gemma4e_engine->Gemma4E_Audio_resample_rate, MonoDownmixMode::MEAN); 
+                audio_data_t audio_data = this->load_audio(audio_str, gemma4e_engine.Gemma4E_Audio_resample_rate, MonoDownmixMode::MEAN); 
                 
                 if (audio_data.channels > 1) {
                     std::cerr << "only mono audio is supported, but got " << audio_data.original_channels << " channels. Please convert it to mono first." << std::endl;
@@ -566,6 +807,11 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
 
                 // apply clipping
                 std::vector<audio_data_t> clipped_audio_data = this->clip_audio_length(audio_data, max_support_audio_length_seconds);
+                if (this->max_audio_chunks > 0 && (int)clipped_audio_data.size() > this->max_audio_chunks) {
+                    header_print_g("FLM", "Audio[" + std::to_string(i) + "] is " + std::to_string((int)clipped_audio_data.size())
+                        + " chunks long; cutting off after the first " + std::to_string(this->max_audio_chunks) + ".");
+                    clipped_audio_data.resize(this->max_audio_chunks);
+                }
                 audio_data_list.insert(audio_data_list.end(), clipped_audio_data.begin(), clipped_audio_data.end());
                 total_audio_clips += clipped_audio_data.size();
                 
@@ -600,11 +846,11 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     if (!audio_data_list.empty()) {
         this->extract_spectrogram(audio_data_list, audio_payload);
 
-        gemma4e_npu *gemma4e_engine = dynamic_cast<gemma4e_npu*>(this->lm_engine.get());
-        const unsigned int conv2d_kernel = gemma4e_engine->Gemma4E_Audio_conv2d_kernel_size;
-        const unsigned int conv2d_stride = gemma4e_engine->Gemma4E_Audio_conv2d_Stride;
-        const unsigned int conv2d_padding = gemma4e_engine->Gemma4e_Audio_conv2d_Padding;
-        const unsigned int max_audio_seq_length = max_support_audio_length_seconds * gemma4e_engine->Gemma4E_Audio_resample_rate;    
+        const gemma4e_engine_config_t gemma4e_engine = this->engine_config();
+        const unsigned int conv2d_kernel = gemma4e_engine.Gemma4E_Audio_conv2d_kernel_size;
+        const unsigned int conv2d_stride = gemma4e_engine.Gemma4E_Audio_conv2d_Stride;
+        const unsigned int conv2d_padding = gemma4e_engine.Gemma4e_Audio_conv2d_Padding;
+        const unsigned int max_audio_seq_length = max_support_audio_length_seconds * gemma4e_engine.Gemma4E_Audio_resample_rate;    
         
         constexpr float frame_length_ms = 20.0f;
         constexpr float hop_length_ms   = 10.0f;
@@ -821,11 +1067,10 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     multi_modal_payload.audio_payload = audio_payload;
 
     int restore_idx = -1;
-    gemma4e_npu *gemma4e_engine = dynamic_cast<gemma4e_npu*>(this->lm_engine.get());
     const bool has_multimodal = image_payload.num_images > 0 || audio_payload.num_audios > 0;
 
     if (meta_info.restore_allowed) {
-        restore_idx = gemma4e_engine->restore();
+        restore_idx = this->lm_engine->restore();
         this->total_tokens = restore_idx;
         this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
     }
@@ -836,7 +1081,7 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
 
     if (this->enable_think) {
         checkpoint_his = token_history;
-        int checkpoint_idx = gemma4e_engine->checkpoint();
+        int checkpoint_idx = this->lm_engine->checkpoint();
     }
     
     return success;
@@ -922,8 +1167,7 @@ std::string Gemma4e::generate(chat_meta_info_t& meta_info, int length_limit, std
     header_print("FLM", "Model RAW Output: \n" + result);
     
     if (!this->enable_think) {
-        gemma4e_npu *gemma4e_engine = dynamic_cast<gemma4e_npu*>(this->lm_engine.get());
-        int checkpoint_idx = gemma4e_engine->checkpoint();
+        int checkpoint_idx = this->lm_engine->checkpoint();
         // copy the token history at the checkpoint except the last one token, which is the start token for generation and should not be included in the checkpoint history
         checkpoint_his = token_history;
         checkpoint_his.pop_back();       
@@ -940,9 +1184,8 @@ std::string Gemma4e::generate_with_prompt(chat_meta_info_t& meta_info, lm_unifor
         os << "<think>\n" << std::flush;
     }
 
-    gemma4e_npu *gemma4e_engine = dynamic_cast<gemma4e_npu*>(this->lm_engine.get());
-    int checkpoint_idx = gemma4e_engine->checkpoint();
-    int restore_idx = gemma4e_engine->restore();
+    int checkpoint_idx = this->lm_engine->checkpoint();
+    int restore_idx = this->lm_engine->restore();
     header_print_r("FLM", "Checkpoint before generation: " << checkpoint_idx << ", restore point: " << restore_idx << ", user context length: " << this->token_history.size());
     return this->_shared_generate(meta_info, length_limit, os);
 }

@@ -175,15 +175,17 @@ void Gemma4e::preprocess_image(
 {
 
     //std::cout << "hit preprocess_image, image size: " << image.width << "x" << image.height << ", pixel count: " << (image.width * image.height) << std::endl;
-    gemma4e_npu *lm_engine_gemma4e_ptr = reinterpret_cast<gemma4e_npu *>(this->lm_engine.get());
-    int max_patches = this->image_softtoken_budget * lm_engine_gemma4e_ptr->GEMMA4E_POOLING_KERNEL_SIZE * lm_engine_gemma4e_ptr->GEMMA4E_POOLING_KERNEL_SIZE;
+    // Was a reinterpret_cast to gemma4e_npu, which silently misreads a gemma4e_flash
+    // engine; engine_config() dispatches to the right concrete type instead.
+    const gemma4e_engine_config_t engine_cfg = this->engine_config();
+    int max_patches = this->image_softtoken_budget * engine_cfg.GEMMA4E_POOLING_KERNEL_SIZE * engine_cfg.GEMMA4E_POOLING_KERNEL_SIZE;
 
     // first, do_resize
     std::vector<uint8_t> resized_image_data = aspect_ratio_preserving_resize(
         image,
-        lm_engine_gemma4e_ptr->GEMMA4E_VISION_PATCH_SIZE,
+        engine_cfg.GEMMA4E_VISION_PATCH_SIZE,
         max_patches,
-        lm_engine_gemma4e_ptr->GEMMA4E_POOLING_KERNEL_SIZE
+        engine_cfg.GEMMA4E_POOLING_KERNEL_SIZE
     );
 
     // step 2, rescale and normaliuze
@@ -196,14 +198,14 @@ void Gemma4e::preprocess_image(
         resized_image_data.data(),
         rescaled_and_normalized_bufer.data(),
         image.width_resized, image.height_resized, 3,
-        true, lm_engine_gemma4e_ptr->GEMMA4E_VISION_RESCALE_FACTOR,
-        false, lm_engine_gemma4e_ptr->GEMMA4E_VISION_IMAGE_MEAN, lm_engine_gemma4e_ptr->GEMMA4E_VISION_IMAGE_STD
+        true, engine_cfg.GEMMA4E_VISION_RESCALE_FACTOR,
+        false, engine_cfg.GEMMA4E_VISION_IMAGE_MEAN, engine_cfg.GEMMA4E_VISION_IMAGE_STD
     );
 
-    auto patch_height = image.height_resized / lm_engine_gemma4e_ptr->GEMMA4E_VISION_PATCH_SIZE;
-    auto patch_width = image.width_resized / lm_engine_gemma4e_ptr->GEMMA4E_VISION_PATCH_SIZE;
+    auto patch_height = image.height_resized / engine_cfg.GEMMA4E_VISION_PATCH_SIZE;
+    auto patch_width = image.width_resized / engine_cfg.GEMMA4E_VISION_PATCH_SIZE;
     int num_patches = patch_height * patch_width;
-    int patch_size = lm_engine_gemma4e_ptr->GEMMA4E_VISION_PATCH_SIZE;
+    int patch_size = engine_cfg.GEMMA4E_VISION_PATCH_SIZE;
     int num_channels = 3;
     int elements_per_patch = patch_size * patch_size * num_channels;
 
@@ -232,7 +234,7 @@ void Gemma4e::preprocess_image(
 
 
 
-        num_soft_tokens =  num_patches / (  lm_engine_gemma4e_ptr->GEMMA4E_POOLING_KERNEL_SIZE * lm_engine_gemma4e_ptr->GEMMA4E_POOLING_KERNEL_SIZE);
+        num_soft_tokens =  num_patches / (  engine_cfg.GEMMA4E_POOLING_KERNEL_SIZE * engine_cfg.GEMMA4E_POOLING_KERNEL_SIZE);
         
 
     }
