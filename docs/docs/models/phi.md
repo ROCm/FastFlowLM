@@ -83,4 +83,10 @@ Backend selection is still explicit: it comes from `execution_backend` in the mo
 
 Detection can be overridden with `FLM_PLATFORM=aie2p|aie4`. It is a testing knob: pointing the catalog at hardware you do not have moves the failure from tag resolution down into the model load.
 
+### Naming the backend yourself
+
+The two engines are registered backends, `flm_npu` and `corelib_aie4_gguf`, and you can name one with `--backend`, with `FLM_BACKEND`, or with a `"backend"` field on an `/api/chat` or `/api/generate` request. The [CLI reference](../instructions/cli.md) has the full precedence table.
+
+This does not widen what the hardware can run: a tag that resolved to the aie2p entry supports `flm_npu` alone, and the aie4 entry supports `corelib_aie4_gguf` alone. Asking for the other one fails immediately, with a message naming what the entry does support, instead of failing deep inside an engine that was never going to work. Use `FLM_PLATFORM` if what you meant was a different catalog entry.
+
 ---

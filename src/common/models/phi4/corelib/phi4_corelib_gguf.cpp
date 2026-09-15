@@ -1,6 +1,6 @@
-#include "models/phi4/phi4_corelib_gguf.hpp"
+#include "models/phi4/corelib/phi4_corelib_gguf.hpp"
 
-#include "models/phi4/phi4_corelib_constants.hpp"
+#include "models/phi4/corelib/phi4_corelib_constants.hpp"
 #include "utils/file_access.hpp"
 
 #define NOMINMAX

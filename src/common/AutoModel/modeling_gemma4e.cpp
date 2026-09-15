@@ -412,17 +412,9 @@ std::pair<std::string, json> parse_gemma4e_tool_content(std::string tool_content
 /************              Gemma4e family            **************/
 Gemma4e::Gemma4e(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "Gemma4e") {}
 
-void Gemma4e::load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption) {
+void Gemma4e::load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption, const std::string& backend) {
     
-    this->_shared_load_model(model_path, model_info, default_context_length, enable_preemption);
-    
-    this->q4nx = std::make_unique<Q4NX>(this->model_path);
-    this->lm_engine = std::make_unique<gemma4e_npu>(*this->lm_config, this->npu.get(), this->MAX_L);
-
-    this->lm_engine->load_weights(*this->q4nx);
-    //free the q4nx
-    this->q4nx.reset();
-    this->lm_engine->clear_context();
+    this->_shared_load_backend(model_path, model_info, default_context_length, enable_preemption, backend);
     this->setup_tokenizer(model_path);
     this->sampler.reset();
 
@@ -524,7 +516,7 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
             }
             // Process Audios
             if (message.contains("audios")) {
-                gemma4e_npu *gemma4e_engine = dynamic_cast<gemma4e_npu*>(this->lm_engine.get());
+                gemma4e_npu *gemma4e_engine = dynamic_cast<gemma4e_npu*>(this->lm_engine);
                 for (auto& aud : message["audios"]) {
                     std::string audio_str = aud.get<std::string>();
                     audio_data_t audio_data = this->load_audio_base64(audio_str, gemma4e_engine->Gemma4E_Audio_resample_rate, MonoDownmixMode::MEAN);
@@ -554,7 +546,7 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     }
     else { // CLI Processing
         if (input.audios.size() > 0) {
-            gemma4e_npu *gemma4e_engine = dynamic_cast<gemma4e_npu*>(this->lm_engine.get());
+            gemma4e_npu *gemma4e_engine = dynamic_cast<gemma4e_npu*>(this->lm_engine);
             for (int i = 0; i < input.audios.size(); i++) {
                 std::string audio_str = input.audios[i];
                 audio_data_t audio_data = this->load_audio(audio_str, gemma4e_engine->Gemma4E_Audio_resample_rate, MonoDownmixMode::MEAN); 
@@ -600,7 +592,7 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     if (!audio_data_list.empty()) {
         this->extract_spectrogram(audio_data_list, audio_payload);
 
-        gemma4e_npu *gemma4e_engine = dynamic_cast<gemma4e_npu*>(this->lm_engine.get());
+        gemma4e_npu *gemma4e_engine = dynamic_cast<gemma4e_npu*>(this->lm_engine);
         const unsigned int conv2d_kernel = gemma4e_engine->Gemma4E_Audio_conv2d_kernel_size;
         const unsigned int conv2d_stride = gemma4e_engine->Gemma4E_Audio_conv2d_Stride;
         const unsigned int conv2d_padding = gemma4e_engine->Gemma4e_Audio_conv2d_Padding;
@@ -821,7 +813,7 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     multi_modal_payload.audio_payload = audio_payload;
 
     int restore_idx = -1;
-    gemma4e_npu *gemma4e_engine = dynamic_cast<gemma4e_npu*>(this->lm_engine.get());
+    gemma4e_npu *gemma4e_engine = dynamic_cast<gemma4e_npu*>(this->lm_engine);
     const bool has_multimodal = image_payload.num_images > 0 || audio_payload.num_audios > 0;
 
     if (meta_info.restore_allowed) {
@@ -919,7 +911,7 @@ std::string Gemma4e::generate(chat_meta_info_t& meta_info, int length_limit, std
     header_print("FLM", "Model RAW Output: \n" + result);
     
     if (!this->enable_think) {
-        gemma4e_npu *gemma4e_engine = dynamic_cast<gemma4e_npu*>(this->lm_engine.get());
+        gemma4e_npu *gemma4e_engine = dynamic_cast<gemma4e_npu*>(this->lm_engine);
         int checkpoint_idx = gemma4e_engine->checkpoint();
         // copy the token history at the checkpoint except the last one token, which is the start token for generation and should not be included in the checkpoint history
         checkpoint_his = token_history;
@@ -937,7 +929,7 @@ std::string Gemma4e::generate_with_prompt(chat_meta_info_t& meta_info, lm_unifor
         os << "<think>\n" << std::flush;
     }
 
-    gemma4e_npu *gemma4e_engine = dynamic_cast<gemma4e_npu*>(this->lm_engine.get());
+    gemma4e_npu *gemma4e_engine = dynamic_cast<gemma4e_npu*>(this->lm_engine);
     int checkpoint_idx = gemma4e_engine->checkpoint();
     int restore_idx = gemma4e_engine->restore();
     header_print_r("FLM", "Checkpoint before generation: " << checkpoint_idx << ", restore point: " << restore_idx << ", user context length: " << this->token_history.size());

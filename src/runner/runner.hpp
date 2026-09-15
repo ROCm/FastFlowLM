@@ -65,6 +65,8 @@ class Runner {
         int ctx_length;
         std::string system_prompt;
         bool preemption;
+        /// \brief the --backend value, empty when the flag was not given
+        std::string backend;
         int img_pre_resize;
         // CLI instance for interactive input
         CLIWide cli;

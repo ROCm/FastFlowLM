@@ -508,6 +508,9 @@
                     "tokenizer_config.json"
                 ],
                 "footprint": 3.4,
+                "supported_backends": [
+                    "flm_npu"
+                ],
                 "supported_platforms": [
                     "aie2p",
                     "aie4"
@@ -515,6 +518,9 @@
                 "platform_overrides": {
                     "aie4": {
                         "name": "phi4-mini-it-aie4",
+                        "supported_backends": [
+                            "corelib_aie4_gguf"
+                        ],
                         "url": "https://huggingface.co/unsloth/Phi-4-mini-instruct-GGUF/resolve/78eb92a46fc37e6b524df991ed9aca9bc6aa7b80",
                         "file_url": "https://huggingface.co/api/models/unsloth/Phi-4-mini-instruct-GGUF/tree/78eb92a46fc37e6b524df991ed9aca9bc6aa7b80",
                         "size": 4100140571,

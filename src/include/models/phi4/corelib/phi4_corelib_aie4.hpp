@@ -3,7 +3,7 @@
 #include "causal_lm.hpp"
 #include "corelib/corelib_runtime.hpp"
 #include "lm_config.hpp"
-#include "models/phi4/phi4_corelib_gguf.hpp"
+#include "models/phi4/corelib/phi4_corelib_gguf.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -22,6 +22,10 @@ public:
     buffer<bf16> forward(int id) override;
     buffer<bf16> prefill(std::vector<int>& ids, void* payload = nullptr) override;
     void set_context_length(int length) override;
+    /// \brief unsupported; this engine's weights come from its GGUF package
+    /// \note Present only because causal_lm.hpp is a frozen ABI. See the
+    ///       definition and AutoModel/model_backend.hpp.
+    /// \throws std::runtime_error always
     void load_weights(Q4NX&) override;
     void update_max_length(std::uint32_t max_length) override;
     void clear_context() override;

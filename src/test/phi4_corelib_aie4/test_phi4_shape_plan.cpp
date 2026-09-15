@@ -1,4 +1,4 @@
-#include "models/phi4/phi4_corelib_shape_plan.hpp"
+#include "models/phi4/corelib/phi4_corelib_shape_plan.hpp"
 #include "fake_corelib.hpp"
 #include "test_support.hpp"
 

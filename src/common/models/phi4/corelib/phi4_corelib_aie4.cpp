@@ -1,8 +1,8 @@
-#include "models/phi4/phi4_corelib_aie4.hpp"
+#include "models/phi4/corelib/phi4_corelib_aie4.hpp"
 #include "corelib/corelib_object.hpp"
-#include "models/phi4/phi4_corelib_constants.hpp"
-#include "models/phi4/phi4_corelib_host.hpp"
-#include "models/phi4/phi4_corelib_shape_plan.hpp"
+#include "models/phi4/corelib/phi4_corelib_constants.hpp"
+#include "models/phi4/corelib/phi4_corelib_host.hpp"
+#include "models/phi4/corelib/phi4_corelib_shape_plan.hpp"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -231,6 +231,11 @@ phi4_corelib_aie4::~phi4_corelib_aie4()=default;
 buffer<bf16> phi4_corelib_aie4::forward(int id){return impl_->run(std::span<const int>(&id,1),false);}
 buffer<bf16> phi4_corelib_aie4::prefill(std::vector<int>&ids,void*){return impl_->run(ids,true);}
 void phi4_corelib_aie4::set_context_length(int n){impl_->usable();if(n<0||static_cast<std::uint32_t>(n)>impl_->max_length)throw std::out_of_range("Phi-4 context length is out of range");impl_->position=n;}
+// An ABI shim, not a capability. load_weights is pure virtual in causal_lm.hpp,
+// which is frozen because the engine libraries in src/lib/<runtime> are prebuilt
+// against it. Nothing calls this: FlmNpuBackend loads weights through the
+// concrete engine type, and this engine's weights come from the GGUF package it
+// was constructed with. See AutoModel/model_backend.hpp.
 void phi4_corelib_aie4::load_weights(Q4NX&){impl_->usable();throw std::runtime_error("Phi-4 AIE4 weights are loaded only from GGUF");}
 void phi4_corelib_aie4::update_max_length(std::uint32_t n){impl_->usable();if(!n||n>kMaxSequenceLength||n<static_cast<std::uint32_t>(impl_->position))throw std::out_of_range("Phi-4 maximum length is invalid");impl_->max_length=n;}
 void phi4_corelib_aie4::clear_context(){impl_->usable();impl_->position=0;impl_->saved.reset();}

@@ -175,7 +175,7 @@ void Gemma4e::preprocess_image(
 {
 
     //std::cout << "hit preprocess_image, image size: " << image.width << "x" << image.height << ", pixel count: " << (image.width * image.height) << std::endl;
-    gemma4e_npu *lm_engine_gemma4e_ptr = reinterpret_cast<gemma4e_npu *>(this->lm_engine.get());
+    gemma4e_npu *lm_engine_gemma4e_ptr = reinterpret_cast<gemma4e_npu *>(this->lm_engine);
     int max_patches = this->image_softtoken_budget * lm_engine_gemma4e_ptr->GEMMA4E_POOLING_KERNEL_SIZE * lm_engine_gemma4e_ptr->GEMMA4E_POOLING_KERNEL_SIZE;
 
     // first, do_resize

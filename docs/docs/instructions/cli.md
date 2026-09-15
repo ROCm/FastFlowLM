@@ -232,6 +232,32 @@ flm serve llama3.2:1b --ctx-len 8192
 
 ---
 
+### 🔀 Choose an Execution Backend
+
+Some models can run on more than one engine. `phi4-mini-it`, for example, runs on FastFlowLM's own NPU kernels (`flm_npu`) on Strix/Krackan, and on ryzenai-corelib (`corelib_aie4_gguf`) on Medusa. Each model declares the backends it supports; unless you say otherwise you get the one its catalog entry names, which is what every earlier release did.
+
+Select one explicitly with `--backend`:
+
+```shell
+flm run   phi4-mini-it:4b --backend flm_npu
+flm serve phi4-mini-it:4b --backend corelib_aie4_gguf
+```
+
+**Precedence**, highest first:
+
+| # | Source | |
+|---|---|---|
+| 1 | `--backend <id>` | the flag above, or a `"backend"` field on an `/api/chat` or `/api/generate` request |
+| 2 | `FLM_BACKEND=<id>` | environment variable, for a whole shell session |
+| 3 | the model catalog | `execution_backend` on the resolved entry |
+| 4 | `flm_npu` | the default |
+
+A per-request `"backend"` overrides `--backend` for that request, and reloads the model if it differs from the one already loaded — exactly as asking for a different model does.
+
+Asking for a backend a model does not support, or one this build does not ship, fails at load with a message listing what is actually available. There is no silent fallback to another engine or to the CPU.
+
+---
+
 ### 🖧 Set Server Port at Launch
 
 Set a custom port at launch:

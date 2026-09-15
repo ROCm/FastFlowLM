@@ -246,7 +246,7 @@ void print_result(const BenchmarkResults_t& results) {
     std::cout << "\n";
 }
 
-BenchmarkResults_t run_benchmarks(std::string model_tag, std::string bench_config_file, model_list& availble_models, int iterations, flm_rt::device* npu_device){
+BenchmarkResults_t run_benchmarks(std::string model_tag, std::string bench_config_file, model_list& availble_models, int iterations, flm_rt::device* npu_device, const std::string& backend = ""){
     BenchmarkResults_t results;
     json bench_config;
     // this is used for our benchmarking, not for public use.
@@ -278,7 +278,7 @@ BenchmarkResults_t run_benchmarks(std::string model_tag, std::string bench_confi
     int max_len = bench_config["max_length"];
     if (max_len < 8192)
         max_len = 8192;
-    auto_chat_engine->load_model(availble_models.get_model_path(model_tag), model_info, max_len, false);
+    auto_chat_engine->load_model(availble_models.get_model_path(model_tag), model_info, max_len, false, backend);
     std::string input_text = bench_config["input_text"];
     auto [num_tokens, benchmark_text] = auto_chat_engine->prepare_benchmark(input_text);
 
