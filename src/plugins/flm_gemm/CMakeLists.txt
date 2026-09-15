@@ -36,7 +36,9 @@ target_link_directories(flm_gemm_plugin PRIVATE ${FLM_ENGINE_LIB_DIR})
 
 # SafeTensors reads the packed weight sidecars; the rest of the override API is
 # header only.
-target_link_libraries(flm_gemm_plugin PRIVATE q4_npu_eXpress)
+# gemm is the shipped mm overlay's sequence generator, which FLM_GEMM_MODE=bf16
+# drives directly so the port's kernel can be taken out of a comparison.
+target_link_libraries(flm_gemm_plugin PRIVATE q4_npu_eXpress gemm)
 
 if(FLM_USE_HRX)
     target_link_libraries(flm_gemm_plugin PRIVATE hrx::hrx)
