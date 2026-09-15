@@ -194,6 +194,7 @@ public:
 
 
 /************              Gemma4e_Flash            **************/
+#if FLM_HAS_GEMMA4E_FLASH
 /// Same checkpoint and same wrapper as Gemma4e, backed by the gemma4e_flash
 /// engine. gemma4e_flash is currently a byte-for-byte copy of gemma4e_npu and
 /// is the engine being tuned for short input prompts; Gemma4e stays the
@@ -248,3 +249,4 @@ public:
         return Gemma4e::apply_chat_template(messages, no_tools);
     }
 };
+#endif

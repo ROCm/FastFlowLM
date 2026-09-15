@@ -136,6 +136,7 @@ public:
 
 
 /************              Qwen3VL_Flash            **************/
+#if FLM_HAS_QWEN3VL_FLASH
 /// Same checkpoint and same wrapper as Qwen3VL, backed by the qwen3vl_flash
 /// engine: prefill runs on one fused overlay (6 dequant+mm columns + 1
 /// attention CU) instead of swapping the array between mm.xclbin and
@@ -186,6 +187,7 @@ public:
         return Qwen3VL::apply_chat_template(messages, no_tools);
     }
 };
+#endif
 
 
 /************              Qwen3VL_Thinking            **************/

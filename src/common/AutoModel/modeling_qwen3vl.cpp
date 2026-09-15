@@ -17,10 +17,6 @@ void Qwen3VL::create_engine() {
     this->lm_engine = std::make_unique<qwen3vl_npu>(*this->lm_config, this->npu.get(), this->MAX_L);
 }
 
-void Qwen3VL_Flash::create_engine() {
-    this->lm_engine = std::make_unique<qwen3vl_flash>(*this->lm_config, this->npu.get(), this->MAX_L);
-}
-
 void Qwen3VL::load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption) {
     this->_shared_load_model(model_path, model_info, default_context_length, enable_preemption);
     
@@ -429,6 +425,11 @@ StreamResult Qwen3VL::parse_stream_content(const std::string content) {
 
 
 /************              Qwen3VL_Flash            **************/
+#if FLM_HAS_QWEN3VL_FLASH
+
+void Qwen3VL_Flash::create_engine() {
+    this->lm_engine = std::make_unique<qwen3vl_flash>(*this->lm_config, this->npu.get(), this->MAX_L);
+}
 
 int Qwen3VL_Flash::_pin_system_prefix(const std::string& system_text) {
     // Full clear — drop any previous pin before building the new one.
@@ -673,6 +674,8 @@ std::string Qwen3VL_Flash::generate_with_prompt(chat_meta_info_t& meta_info, lm_
     }
     return this->generate(meta_info, length_limit, os);
 }
+
+#endif
 
 
 /************              Qwen3VL_Thinking            **************/

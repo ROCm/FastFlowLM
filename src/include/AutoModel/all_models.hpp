@@ -132,7 +132,13 @@ inline std::pair<std::string, std::unique_ptr<AutoModel>> get_auto_model(const s
             auto_chat_engine = std::make_unique<Gemma4e>(npu_device_inst);
             break;
         case SupportedModelFamily::gemma4e_flash:
+#if FLM_HAS_GEMMA4E_FLASH
             auto_chat_engine = std::make_unique<Gemma4e_Flash>(npu_device_inst);
+#else
+            header_print_r("ERROR", "Model family 'gemma4e-flash' is not available in this build.");
+            auto_chat_engine = std::make_unique<Llama3>(npu_device_inst);
+            new_model_tag = "llama3.2:1b";
+#endif
             break;
         case SupportedModelFamily::gemma4_12b:
             auto_chat_engine = std::make_unique<Gemma4_12B>(npu_device_inst);
@@ -144,7 +150,13 @@ inline std::pair<std::string, std::unique_ptr<AutoModel>> get_auto_model(const s
             auto_chat_engine = std::make_unique<Qwen3VL>(npu_device_inst);
             break;
         case SupportedModelFamily::qwen3vl_flash:
+#if FLM_HAS_QWEN3VL_FLASH
             auto_chat_engine = std::make_unique<Qwen3VL_Flash>(npu_device_inst);
+#else
+            header_print_r("ERROR", "Model family 'qwen3vl-flash' is not available in this build.");
+            auto_chat_engine = std::make_unique<Llama3>(npu_device_inst);
+            new_model_tag = "llama3.2:1b";
+#endif
             break;
         case SupportedModelFamily::qwen3_5:
             auto_chat_engine = std::make_unique<Qwen3_5VL>(npu_device_inst);
