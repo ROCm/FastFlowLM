@@ -1,94 +1,138 @@
 # Operator plugins
 
-A plugin replaces individual operations of a model engine with your own
-implementation, without rebuilding `flm` or any of the engine libraries. The
-engine declares the operations it runs; a plugin binds an override to the ones
-it wants and dispatches them however it likes.
+This directory demonstrates the plugin mechanism for the FastFlowLM engine.
+Plugins let you override individual operators in the end-to-end model without
+rebuilding `flm` or any engine library.
 
-```
-flm serve gemma4-it:e2b            # engine's own operators
-FLM_PLUGIN=./my_plugin.so flm serve gemma4-it:e2b   # yours, where you bound them
-```
+We demonstrate it with a plugin in [`flm_gemm/`](flm_gemm) that overrides two
+operators in Gemma4 E2B: dequant and matrix multiplication. It enables two
+options, independently:
 
-`FLM_PLUGIN` takes several paths separated by `:` (`;` on Windows). They are
-loaded in order, after the engine is constructed and before its weights are
-read, which is the only window in which overrides may be registered.
+- **Offline dequant.** Stops dequantizing the prefill weights at run time.
+  Already-dequantized weights (bf16 or bfp16, depending on the option below) are
+  loaded from disk and the dequant step is overridden with a no-op. Faster
+  prefill, more disk and more memory.
+- **New IRON bfp16 GEMM.** Replaces FastFlowLM's matrix multiplication with an
+  open-source implementation from IRON, whose source is
+  [here](https://github.com/amd/IRON/tree/main/iron/operators/flm/gemm). It is a
+  faster kernel than stock. It operates on bfp16 (block floating point) where the
+  original operates on bf16, so the dequant operator has to be replaced too.
 
-## Writing one
+![prefill medians](assets/prefill.png)
+
+## Overriding an operator
+
+A plugin is a shared library with one entry point. `FLM_PLUGIN` names the
+function the engine calls once the model exists and before its weights load:
 
 ```cpp
-#include "flm_plugin.hpp"
-
-class my_up_proj : public flm::op_override {
-public:
-    flm::op_result create_run(const flm::op_call& call) override {
-        // call.args are the buffers the default receives, in its order.
-        // call.layer and call.extent say which layer and how many rows.
-        my_app_(*call.args[1], my_weights_[call.layer], *call.args[0]);
-        return flm::op_result();          // done, nothing to wait on
-    }
-};
-
-static void register_overrides(const flm::plugin_context& ctx) {
-    ctx.ops->override_op("layers.*.mlp.up_proj", std::make_shared<my_up_proj>(ctx));
+void register_overrides(const flm::plugin_context& ctx) {
+    auto hook = std::make_shared<flm_gemm_override>(ctx);
+    const size_t bound = hook->bind(*ctx.ops, hook);
+    ...
 }
+
 FLM_PLUGIN(register_overrides)
 ```
 
-An override owns everything it needs: it registers its own xclbin through
-`ctx.npu`, creates its own apps, loads its own instruction streams and allocates
-its own weights. `flm_gemm/` is a complete worked example.
+Operators are named. `flm_gemm` binds itself to each projection of each layer,
+and to the dequant steps that feed them:
 
-### Keys
+```cpp
+bound += ops.override_op(flm::op_key((int)layer, roles[r]), self);
 
-A key is `layers.<i>.<role>`, or just `<role>` for a model-level operation. `*`
-in place of a whole dot-separated segment matches every value of it. The roles
-an engine may declare are listed in `flm::role`; which of them it actually
-declares is per model and documented on the model's header. `list_ops()` returns
-the set at run time, and `override_op` throws on a key that matches nothing, so
-a typo fails at registration rather than running unaccelerated.
+for (std::string_view dq : { flm::role::dequant_qkv, flm::role::dequant_o,
+                             flm::role::dequant_gate, flm::role::dequant_up,
+                             flm::role::dequant_down }) {
+    ops.override_op(flm::op_key((int)layer, dq), self);
+}
+```
 
-### Returning from `create_run`
+An override implements one method. It is handed the buffers the engine's own
+operator would have received, and runs whatever it likes:
 
-| return | meaning |
-|---|---|
-| `op_result(run)` | the caller starts and waits on this run |
-| `op_result()` | the work is already finished |
-| `op_result::decline()` | not served, run the default for this call |
+```cpp
+flm::op_result create_run(const flm::op_call& call) override {
+    ...
+    // IRON's argument order is A, B, C; the engine's is C, A, B.
+    app(*call.args[1], b, *call.args[0]);
+    return flm::op_result();
+}
+```
 
-`decline()` is how an override restricts itself to the shapes it supports; the
-engine falls back per call, with no configuration.
+Returning `flm::op_result::decline()` instead hands the call back to the engine,
+per dispatch — which is how `flm_gemm` restricts itself to the shapes it has
+instruction streams for.
 
-`call.blocking` tells you the caller will do nothing until the work completes,
-so you may run it synchronously and return an empty result instead of building a
-run object.
+Turning an operator *off* is the same mechanism with nothing in it. With offline
+dequant selected, the weights are already in place, so the dequant override
+returns having done nothing:
 
-### Disabling a step
+```cpp
+void _dequant(const flm::op_call& call, layer_entry& layer) {
+    if (this->mode_ != weight_mode::dequant) return;  // the weights are already there
+    ...
+}
+```
 
-Overriding a step with something that returns an empty `op_result` removes it.
-`flm::no_op_override` does exactly that. This is how a plugin that brings its own
-weights switches off the engine's dequantization — and note the hazard: if
-anything still reads the buffers that step filled, it reads stale data. An
-override that declines some calls must therefore keep the dequant step alive for
-exactly those calls, which is easiest to get right by having one object serve
-both, as `flm_gemm/` does.
+## Prefill weights
 
-Removing a step does not free the buffers it wrote. The engine cannot know that
-an override will never decline, so the staging stays allocated.
+Offline dequant needs the weights dequantized ahead of time, next to
+`model.q4nx`. `flm_gemm/tools/dequantize.py` writes them:
 
-## Building one
+```bash
+cd flm_gemm/tools
+python3 dequantize.py <model_dir> --mode bf16 --only ""
+IRON_PATH=<iron> python3 dequantize.py <model_dir> --mode bfp --only "mlp."
+IRON_PATH=<iron> python3 dequantize.py <model_dir> --mode bfp --only "self_attn." \
+    --out model.dq_bfp_attn
+```
 
-Follow `flm_gemm/CMakeLists.txt`. Two requirements:
+`--mode bf16` writes what the engine's `dequant.xclbin` would have written, for
+the stock GEMM (3.45 GiB). `--mode bfp` writes the packed form the IRON GEMM
+takes (1.94 GiB), calling the operator's own packer so the layout cannot drift
+from the kernel's — which is why that mode needs an IRON checkout while `bf16`
+needs only numpy.
 
-**Link with `-Wl,-Bsymbolic-functions`.** `npu_app` and the classes around it are
-header only, so every engine library carries its own copy of their inline code
-as a weak symbol. Without this flag your calls bind to whichever library the
-loader saw first, which may have been built against a different revision of
-those headers, and the objects you construct are laid out for someone else. The
-failure is a crash inside XRT with no obvious cause.
+These sidecars are also the reference for `FLM_DEQUANT_VERIFY=1`, which checks
+every buffer the dequant produces against them, byte for byte.
 
-**Match the toolchain.** A plugin and `flm` exchange C++ objects across the
-`dlopen` boundary, so both must be built with the same compiler and standard
-library — the same constraint that already holds between `flm` and the engine
-libraries it links. `flm_plugin_abi_version` catches a plugin built against a
-different override interface, but nothing catches a toolchain mismatch.
+## Reproducing the numbers
+
+One build, one environment variable per configuration:
+
+```bash
+cmake -DFLM_BUILD_PLUGINS=ON . && ninja flm flm_gemm_plugin
+export FLM_PLUGIN=$PWD/plugins/flm_gemm/flm_gemm_plugin.so
+
+flm serve gemma4-it:e2b                            # new GEMM, run-time dequant
+FLM_GEMM_MODE=bf16  flm serve gemma4-it:e2b        # stock GEMM, offline dequant
+FLM_GEMM_MODE=bfp16 flm serve gemma4-it:e2b        # new GEMM, offline dequant
+FLM_GEMM_OFF=1      flm serve gemma4-it:e2b        # stock, plugin registers nothing
+```
+
+Time a 247-token prompt against each and read `prompt_eval_duration`. Run-to-run
+spread is about 2%, so differences below ~40 ms need several runs to see. The
+chart above is medians of 6–8 timed repeats after a discarded warm-up; regenerate
+it with `flm_gemm/tools/plot_prefill.py`, which holds the medians as literals.
+
+`flm_gemm/README.md` has the artifacts each mode needs and how to check a new
+weight shape.
+
+## What a plugin can do
+
+An override owns its dispatch completely. It registers its own xclbins through
+the `npu_xclbin_manager` it is handed, creates its own apps, loads its own
+instruction streams and allocates its own weights — all through public headers,
+so it is built against the public tree and needs no engine source. It may return
+a run for the caller to wait on, return having already done the work, or decline
+and let the engine proceed.
+
+What the engine keeps is the schedule: which operators exist, in what order they
+run, and which buffers they are given. A plugin changes what happens at a step,
+not the shape of the model.
+
+Operators are addressed by key — `layers.<i>.<role>`, with `*` matching a whole
+segment — and the set is declared by the engine, so `override_op` on an unknown
+key throws at registration rather than silently never firing. `list_ops()`
+returns it.
