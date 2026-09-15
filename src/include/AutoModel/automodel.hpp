@@ -16,21 +16,36 @@
 #include <string>
 #include <type_traits>
 #include <any>
+#include <cstdlib>
+#include <cstring>
 #include "typedef.hpp"
 #include "causal_lm.hpp"
 #include "lm_config.hpp"
+
+#ifndef FLM_HAS_QWEN3VL_FLASH
+#define FLM_HAS_QWEN3VL_FLASH 1
+#endif
+
+#ifndef FLM_HAS_GEMMA4E_FLASH
+#define FLM_HAS_GEMMA4E_FLASH 1
+#endif
+
 #include "models/llama/llama_npu.hpp"
 #include "models/qwen2/qwen2_npu.hpp"
 #include "models/qwen3/qwen3_npu.hpp"
 #include "models/qwen2vl/qwen2vl_npu.hpp"
 #include "models/qwen3vl/qwen3vl_npu.hpp"
+#if FLM_HAS_QWEN3VL_FLASH
 #include "models/qwen3vl_flash/qwen3vl_flash.hpp"
+#endif
 #include "models/qwen3_5vl/qwen3_5vl_npu.hpp"
 #include "models/qwen3_6_moe/qwen3_6_moe_npu.hpp"
 #include "models/gemma/gemma_npu.hpp"
 #include "models/gemma_text/gemma_text_npu.hpp"
 #include "models/gemma4e/gemma4e_npu.hpp"
+#if FLM_HAS_GEMMA4E_FLASH
 #include "models/gemma4e_flash/gemma4e_flash.hpp"
+#endif
 #include "models/gemma4_12b/gemma4_12b_npu.hpp"
 #include "models/lfm2/lfm2_npu.hpp"
 #include "models/phi4/phi4_npu.hpp"
@@ -152,8 +167,18 @@ protected:
     std::vector<int> checkpoint_his;
 	/// \brief dump the undecorated model output to stdout once a turn ends
 	/// \note on by default; models whose turns are short and driven in bulk (the
-	///       hunyuan translator) turn it off so the log is not doubled.
+	///       hunyuan translator) turn it off so the log is not doubled. Those
+	///       models should seed this from env_forces_raw_output() so diagnostics
+	///       can opt back in without changing the interactive default.
 	bool log_raw_output = true;
+	/// \brief whether FLM_LOG_RAW_OUTPUT forces the "Model RAW Output:" dump on
+	/// \note the qualification harness and numerical-match anchor per-turn parsing
+	///       on that marker, so they set FLM_LOG_RAW_OUTPUT=1 to re-enable it for
+	///       models that quiet it by default; unset/empty/"0" leave the default.
+	static bool env_forces_raw_output() {
+		const char* value = std::getenv("FLM_LOG_RAW_OUTPUT");
+		return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
+	}
 	/// \brief run one more forward on the eos token once a turn ends
 	/// \note this keeps the kv cache aligned with token_history so a following
 	///       turn can append to it. Models that rewind or clear between turns

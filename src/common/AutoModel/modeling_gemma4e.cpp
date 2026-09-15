@@ -440,6 +440,7 @@ gemma4e_engine_config_t Gemma4e::engine_config() const {
     return read_gemma4e_engine_config<gemma4e_npu>(this->lm_engine.get());
 }
 
+#if FLM_HAS_GEMMA4E_FLASH
 gemma4e_engine_config_t Gemma4e_Flash::engine_config() const {
     return read_gemma4e_engine_config<gemma4e_flash>(this->lm_engine.get());
 }
@@ -647,6 +648,7 @@ std::string Gemma4e_Flash::generate_with_prompt(chat_meta_info_t& meta_info, lm_
     }
     return this->generate(meta_info, length_limit, os);
 }
+#endif
 
 void Gemma4e::load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption) {
     

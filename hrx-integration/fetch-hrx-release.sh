@@ -80,15 +80,18 @@ actual_sha="$(sha256sum "$tarball" | awk '{print $1}')"
 # Public package ships as .tar.zst (fall back to gzip for legacy assets).
 # Decompress zstd via the standalone binary piped into tar, so extraction does
 # not depend on tar being built with its zstd plugin, and fail with a clear
-# message when the zstd package is not installed.
+# message when the zstd package is not installed. Do not preserve archive mtimes:
+# some HRX archives can carry future-dated entries, and CMake records imported
+# package configs as regeneration inputs. Future config mtimes make Ninja rerun
+# CMake until it aborts with "build.ninja still dirty after 100 tries".
 case "$HRX_RELEASE_ASSET" in
   *.tar.zst)
     command -v zstd >/dev/null 2>&1 ||
       die "zstd is required to extract $HRX_RELEASE_ASSET but was not found on PATH (install the 'zstd' package)"
-    zstd -dc "$tarball" | tar -C "$out_dir" -xf -
+    zstd -dc "$tarball" | tar -m -C "$out_dir" -xf -
     ;;
-  *.tar.gz|*.tgz) tar -C "$out_dir" -xzf "$tarball" ;;
-  *) tar -C "$out_dir" -xf "$tarball" ;;
+  *.tar.gz|*.tgz) tar -m -C "$out_dir" -xzf "$tarball" ;;
+  *) tar -m -C "$out_dir" -xf "$tarball" ;;
 esac
 
 # Locate the HRX CMake package config; its dir feeds find_package(hrx CONFIG).
