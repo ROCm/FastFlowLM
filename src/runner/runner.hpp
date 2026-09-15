@@ -44,7 +44,8 @@ typedef enum {
 /// \brief Runner class
 class Runner {
     public: 
-        Runner(model_list& supported_models, ModelDownloader& downloader, program_args_t& args);
+        Runner(model_list& supported_models, ModelDownloader& downloader, program_args_t& args,
+               flm_rt::device* npu_device);
         void run();
     private:
         std::string tag;
@@ -67,7 +68,9 @@ class Runner {
         int img_pre_resize;
         // CLI instance for interactive input
         CLIWide cli;
-        flm_rt::device npu_device_inst;
+        // Owned by main(); on an AIE4 build this is corelib's device, which
+        // must not be duplicated.
+        flm_rt::device* npu_device_inst;
 
         /// \brief Command functions
         void cmd_set(std::vector<std::string>& input_list);

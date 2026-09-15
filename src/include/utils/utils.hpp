@@ -9,10 +9,14 @@
 #include "typedef.hpp"
 #include "buffer.hpp"
 #include "debug_utils.hpp"
+#include "device_runtime.hpp"
+#include "nlohmann/json.hpp"
 #include <chrono>
 #include <iostream>
 #include <fstream>
 #include <filesystem>
+#include <stdexcept>
+#include <string>
 #ifdef _WIN32
 #include <windows.h>
 #include <shlobj.h>

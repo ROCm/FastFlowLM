@@ -56,6 +56,11 @@ if(FLM_ENABLE_CORELIB_AIE4)
         message(FATAL_ERROR "FLM_ENABLE_CORELIB_AIE4 currently requires Windows")
     endif()
     find_path(RYZENAI_CORELIB_INCLUDE_DIR NAMES ryzenai/corelib.h REQUIRED)
+    # The main binary needs ryzenai::corelib::GetDevice(), a C++ entry point the
+    # C ABI does not expose, so corelib is linked in rather than dlopened.
+    find_library(RYZENAI_CORELIB_LIBRARY NAMES ryzenai_corelib corelib
+        HINTS "${RYZENAI_CORELIB_INCLUDE_DIR}/../lib"
+              "$ENV{RYZENAI_CORELIB_LIB_DIR}" REQUIRED)
     find_path(FLM_CORELIB_BOOST_INCLUDE_DIR NAMES boost/any.hpp
         HINTS "$ENV{CONDA_PREFIX}/Library/include"
               "$ENV{USERPROFILE}/anaconda3/Library/include"
@@ -294,7 +299,12 @@ if(FLM_ENABLE_CORELIB_AIE4)
     target_include_directories(flm_corelib_aie4 PUBLIC
         "${CMAKE_SOURCE_DIR}/include" "${RYZENAI_CORELIB_INCLUDE_DIR}"
         "${XRT_INCLUDE_DIR}" "${FLM_CORELIB_BOOST_INCLUDE_DIR}")
-    target_compile_definitions(flm_corelib_aie4 PUBLIC FLM_ENABLE_CORELIB_AIE4=1)
+    # RYZENAI_CORELIB_STATIC drops the vendor header's dllimport decoration;
+    # FLM_CORELIB_LINK_STATIC is what tells our own code the symbols are linked
+    # in and must be bound directly instead of through LoadLibrary.
+    target_compile_definitions(flm_corelib_aie4 PUBLIC
+        FLM_ENABLE_CORELIB_AIE4=1 RYZENAI_CORELIB_STATIC=1 FLM_CORELIB_LINK_STATIC=1)
+    target_link_libraries(flm_corelib_aie4 PUBLIC "${RYZENAI_CORELIB_LIBRARY}")
     target_link_libraries(flm PRIVATE flm_corelib_aie4)
 endif()
 

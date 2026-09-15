@@ -246,7 +246,7 @@ void print_result(const BenchmarkResults_t& results) {
     std::cout << "\n";
 }
 
-BenchmarkResults_t run_benchmarks(std::string model_tag, std::string bench_config_file, model_list& availble_models, int iterations){
+BenchmarkResults_t run_benchmarks(std::string model_tag, std::string bench_config_file, model_list& availble_models, int iterations, flm_rt::device* npu_device){
     BenchmarkResults_t results;
     json bench_config;
     // this is used for our benchmarking, not for public use.
@@ -267,14 +267,13 @@ BenchmarkResults_t run_benchmarks(std::string model_tag, std::string bench_confi
         input_file.close();
     }
 
-    flm_rt::device npu_device_inst = flm_rt::device(0);
     std::unique_ptr<AutoModel> auto_chat_engine;
     if (!availble_models.is_model_supported(model_tag)) {
         header_print_r("ERROR", "Model not found: " << model_tag << "; Please check with `flm list` and try again.");
         return results;
     }
     auto [new_tag, model_info] = availble_models.get_model_info(model_tag);
-    std::pair<std::string, std::unique_ptr<AutoModel>> auto_model = get_auto_model(new_tag, availble_models, &npu_device_inst);
+    std::pair<std::string, std::unique_ptr<AutoModel>> auto_model = get_auto_model(new_tag, availble_models, npu_device);
     auto_chat_engine = std::move(auto_model.second);
     int max_len = bench_config["max_length"];
     if (max_len < 8192)

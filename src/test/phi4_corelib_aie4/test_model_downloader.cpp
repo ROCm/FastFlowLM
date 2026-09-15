@@ -12,9 +12,27 @@
 namespace {
 namespace fs = std::filesystem;
 
-constexpr const char* kAie4Tag = "phi4-mini-it-aie4:4b";
+// One tag now covers both NPU generations; the catalog picks the artifacts.
+constexpr const char* kAie4Tag = "phi4-mini-it:4b";
+// The AIE4 build still installs under its own directory and reads its own
+// model_info.json record set, so those two names stay distinct from the tag.
+constexpr const char* kAie4ModelInfoKey = "phi4-mini-it-aie4:4b";
+constexpr const char* kAie4DirName = "phi4-mini-it-aie4";
 constexpr const char* kUnslothRevision = "78eb92a46fc37e6b524df991ed9aca9bc6aa7b80";
 constexpr const char* kMicrosoftRevision = "cfbefacb99257ffa30c83adab238a50856ac3083";
+
+/// \brief the shipped catalog entry as one platform resolves it
+/// \param platform "aie2p" or "aie4"
+/// \param tag the model tag to resolve
+/// \note Goes through model_list so these tests exercise the real
+///       filter-and-merge path rather than the raw JSON.
+nlohmann::json ResolvedModel(const std::string& platform, const char* tag) {
+    std::string path = FLM_SOURCE_DIR "/model_list.json";
+    std::string exe_dir = ".";
+    model_list models(path, exe_dir, platform);
+    TEST_REQUIRE(models.is_model_supported(tag));
+    return models.get_model_info(tag).second;
+}
 
 nlohmann::json ReadJson(const fs::path& path) {
     std::ifstream stream(path);
@@ -61,27 +79,25 @@ std::string FileUrl(const fs::path& path) {
 }
 
 void TestAie4CatalogHasExactlyFourFilesAndExpectedDirectoryName() {
-    const auto catalog = ReadJson(FLM_SOURCE_DIR "/model_list.json");
-    const auto& model = catalog.at("models").at("phi4-mini-it-aie4").at("4b");
+    const auto model = ResolvedModel("aie4", kAie4Tag);
     const std::vector<std::string> expected = {
         "Phi-4-mini-instruct.Q8_0.gguf", "tokenizer.json",
         "tokenizer_config.json", "config.json"};
-    TEST_REQUIRE(model.at("name") == "phi4-mini-it-aie4");
+    TEST_REQUIRE(model.at("name") == kAie4DirName);
+    TEST_REQUIRE(model.at("model_info_key") == kAie4ModelInfoKey);
     TEST_REQUIRE(model.at("files").get<std::vector<std::string>>() == expected);
     TEST_REQUIRE(model.at("size").get<std::uint64_t>() == 4100140571ULL);
 }
 
 void TestGgufUrlContainsUnslothRevisionAndFilename() {
-    const auto catalog = ReadJson(FLM_SOURCE_DIR "/model_list.json");
-    const auto& model = catalog.at("models").at("phi4-mini-it-aie4").at("4b");
+    const auto model = ResolvedModel("aie4", kAie4Tag);
     const auto source = resolve_file_source(model, "Phi-4-mini-instruct.Q8_0.gguf", false);
     TEST_REQUIRE(source.url == std::string("https://huggingface.co/unsloth/Phi-4-mini-instruct-GGUF/resolve/") +
                                   kUnslothRevision + "/Phi-4-mini-instruct.Q8_0.gguf?download=true");
 }
 
 void TestThreeFrontendUrlsContainMicrosoftRevisionAndFilename() {
-    const auto catalog = ReadJson(FLM_SOURCE_DIR "/model_list.json");
-    const auto& model = catalog.at("models").at("phi4-mini-it-aie4").at("4b");
+    const auto model = ResolvedModel("aie4", kAie4Tag);
     for (const std::string filename : {"tokenizer.json", "tokenizer_config.json", "config.json"}) {
         const auto source = resolve_file_source(model, filename, false);
         TEST_REQUIRE(source.url == std::string("https://huggingface.co/microsoft/Phi-4-mini-instruct/resolve/") +
@@ -90,8 +106,11 @@ void TestThreeFrontendUrlsContainMicrosoftRevisionAndFilename() {
 }
 
 void TestExistingSingleSourceEntryKeepsItsCurrentUrl() {
-    const auto catalog = ReadJson(FLM_SOURCE_DIR "/model_list.json");
-    const auto& model = catalog.at("models").at("phi4-mini-it").at("4b");
+    // The same tag on aie2p: the AIE4 override must not leak onto Strix.
+    const auto model = ResolvedModel("aie2p", kAie4Tag);
+    TEST_REQUIRE(model.at("name") == "Phi4-mini-Instruct-NPU2");
+    TEST_REQUIRE(!model.contains("file_sources"));
+    TEST_REQUIRE(!model.contains("model_info_key"));
     const auto source = resolve_file_source(model, "config.json", false);
     TEST_REQUIRE(source.url ==
                  "https://huggingface.co/FastFlowLM/Phi4-mini-Instruct-NPU2/resolve/main/config.json?download=true");
@@ -117,17 +136,18 @@ void TestUnknownFileSourceKeyAndMissingUrlOrRevisionFail() {
 
 void TestActualAie4CatalogTreatsPinnedConfigWithoutFlmVersionAsCompatible() {
     const auto root = TempDirectory("actual-catalog-version");
-    const auto committed = ReadJson(FLM_SOURCE_DIR "/model_list.json");
-    const auto model = committed.at("models").at("phi4-mini-it-aie4").at("4b");
+    // Take the merged AIE4 entry and re-home it in a temp catalog. It carries no
+    // supported_platforms any more, so the default (aie2p) constructor keeps it.
+    const auto model = ResolvedModel("aie4", kAie4Tag);
     const nlohmann::json catalog = {
         {"model_path", "models"},
-        {"models", {{"phi4-mini-it-aie4", {{"4b", model}}}}}};
+        {"models", {{"phi4-mini-it", {{"4b", model}}}}}};
     const auto catalog_path = root / "model_list.json";
     Write(catalog_path, catalog.dump());
     std::string catalog_string = catalog_path.string();
     std::string root_string = root.string();
     model_list models(catalog_string, root_string);
-    const auto model_path = root / "models" / "phi4-mini-it-aie4";
+    const auto model_path = root / "models" / kAie4DirName;
     for (const auto& filename : model.at("files")) {
         Write(model_path / filename.get<std::string>(), "placeholder");
     }
@@ -141,7 +161,7 @@ void TestActualAie4CatalogTreatsPinnedConfigWithoutFlmVersionAsCompatible() {
 
 void TestModelInfoHasExactSizeAndSha256ForEveryRequiredFile() {
     const auto all_info = ReadJson(FLM_SOURCE_DIR "/model_info.json");
-    const auto& records = all_info.at(kAie4Tag);
+    const auto& records = all_info.at(kAie4ModelInfoKey);
     const std::vector<std::tuple<std::string, std::uint64_t, std::string>> expected = {
         {"Phi-4-mini-instruct.Q8_0.gguf", 4084611040ULL, "26188c6050d525376a88b04514c236c5e28a36730f1e936f2a00314212b7ba42"},
         {"tokenizer.json", 15524095ULL, "382cc235b56c725945e149cc25f191da667c836655efd0857b004320e90e91ea"},

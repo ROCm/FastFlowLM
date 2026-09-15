@@ -34,7 +34,8 @@ using StreamResponseCallback = std::function<void(const json&, bool)>; // data, 
 
 class RestHandler {
 public:
-    RestHandler(model_list& models, ModelDownloader& downloader, program_args_t& args);
+    RestHandler(model_list& models, ModelDownloader& downloader, program_args_t& args,
+                flm_rt::device* npu_device);
     ~RestHandler();
 
     void handle_show(const json& request,
@@ -120,7 +121,9 @@ private:
     std::unique_ptr<Whisper> whisper_engine;
     std::unique_ptr<AutoEmbeddingModel> auto_embedding_engine;
 #endif
-    flm_rt::device npu_device_inst;
+    // Owned by main(); on an AIE4 build this is corelib's device, which must
+    // not be duplicated.
+    flm_rt::device* npu_device_inst;
     model_list& supported_models;
     ModelDownloader& downloader;
     std::string current_model_tag;

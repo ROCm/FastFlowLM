@@ -24,10 +24,13 @@
                     "parameter_size": "3B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "reasoning"
                 ],
-                "footprint": 3.1
+                "footprint": 3.1,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             }
         },
         "qwen3vl-it": {
@@ -59,7 +62,10 @@
                     "vision",
                     "tool-calling"
                 ],
-                "footprint": 3.9
+                "footprint": 3.9,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             }
         },
         "gemma4-it": {
@@ -97,7 +103,10 @@
                     "tool-calling",
                     "chat-transcription"
                 ],
-                "footprint": 6.0
+                "footprint": 6.0,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             },
             "e4b": {
                 "name": "Gemma4-E4B-IT-NPU2",
@@ -133,9 +142,12 @@
                     "tool-calling",
                     "chat-transcription"
                 ],
-                "footprint": 9.1
+                "footprint": 9.1,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             }
-        },        
+        },
         "qwen3.5": {
             "0.8b": {
                 "name": "Qwen3.5-0.8B-NPU2",
@@ -166,7 +178,10 @@
                     "vision",
                     "reasoning"
                 ],
-                "footprint": 1.4
+                "footprint": 1.4,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             },
             "2b": {
                 "name": "Qwen3.5-2B-NPU2",
@@ -198,7 +213,10 @@
                     "reasoning",
                     "tool-calling"
                 ],
-                "footprint": 3.2
+                "footprint": 3.2,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             },
             "4b": {
                 "name": "Qwen3.5-4B-NPU2",
@@ -230,9 +248,12 @@
                     "reasoning",
                     "tool-calling"
                 ],
-                "footprint": 5.2
+                "footprint": 5.2,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             },
-            "9b":{
+            "9b": {
                 "name": "Qwen3.5-9B-NPU2",
                 "url": "https://huggingface.co/FastFlowLM/Qwen3.5-9B-NPU2/resolve/flm_q4k_high_precision",
                 "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.5-9B-NPU2/tree/flm_q4k_high_precision",
@@ -262,10 +283,12 @@
                     "reasoning",
                     "tool-calling"
                 ],
-                "footprint": 8.94
+                "footprint": 8.94,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             }
         },
-
         "qwen3.6-moe": {
             "35b-a3b": {
                 "name": "Qwen3.6-35B-A3B-NPU2",
@@ -297,7 +320,10 @@
                     "reasoning",
                     "tool-calling"
                 ],
-                "footprint": 24.3
+                "footprint": 24.3,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             }
         },
         "lfm2": {
@@ -325,7 +351,10 @@
                     "tokenizer.json",
                     "tokenizer_config.json"
                 ],
-                "footprint": 0.96
+                "footprint": 0.96,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             },
             "2.6b": {
                 "name": "LFM2-2.6B-NPU2",
@@ -351,7 +380,10 @@
                     "tokenizer.json",
                     "tokenizer_config.json"
                 ],
-                "footprint": 1.8
+                "footprint": 1.8,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             }
         },
         "lfm2-trans": {
@@ -379,7 +411,10 @@
                     "tokenizer.json",
                     "tokenizer_config.json"
                 ],
-                "footprint": 1.8
+                "footprint": 1.8,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             }
         },
         "lfm2.5-it": {
@@ -407,7 +442,10 @@
                     "tokenizer.json",
                     "tokenizer_config.json"
                 ],
-                "footprint": 0.96
+                "footprint": 0.96,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             }
         },
         "lfm2.5-tk": {
@@ -436,10 +474,13 @@
                     "tokenizer_config.json",
                     "chat_template.jinja"
                 ],
-                "label":[
+                "label": [
                     "reasoning"
                 ],
-                "footprint": 0.96
+                "footprint": 0.96,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             }
         },
         "phi4-mini-it": {
@@ -466,48 +507,48 @@
                     "tokenizer.json",
                     "tokenizer_config.json"
                 ],
-                "footprint": 3.4
-            }
-        },
-        "phi4-mini-it-aie4": {
-            "4b": {
-                "name": "phi4-mini-it-aie4",
-                "url": "https://huggingface.co/unsloth/Phi-4-mini-instruct-GGUF/resolve/78eb92a46fc37e6b524df991ed9aca9bc6aa7b80",
-                "file_url": "https://huggingface.co/api/models/unsloth/Phi-4-mini-instruct-GGUF/tree/78eb92a46fc37e6b524df991ed9aca9bc6aa7b80",
-                "size": 4100140571,
-                "default_context_length": 4096,
-                "max_prefill_len": 4096,
-                "details": {
-                    "family": "phi4",
-                    "think": false,
-                    "think_toggleable": false,
-                    "parameter_size": "4B",
-                    "quantization_level": "Q8_0 -> AIE4 group-64",
-                    "execution_backend": "corelib_aie4_gguf"
-                },
-                "flm_min_version": "1.0.3",
-                "vlm": false,
-                "files": [
-                    "Phi-4-mini-instruct.Q8_0.gguf",
-                    "tokenizer.json",
-                    "tokenizer_config.json",
-                    "config.json"
+                "footprint": 3.4,
+                "supported_platforms": [
+                    "aie2p",
+                    "aie4"
                 ],
-                "file_sources": {
-                    "tokenizer.json": {
-                        "url": "https://huggingface.co/microsoft/Phi-4-mini-instruct",
-                        "revision": "cfbefacb99257ffa30c83adab238a50856ac3083"
-                    },
-                    "tokenizer_config.json": {
-                        "url": "https://huggingface.co/microsoft/Phi-4-mini-instruct",
-                        "revision": "cfbefacb99257ffa30c83adab238a50856ac3083"
-                    },
-                    "config.json": {
-                        "url": "https://huggingface.co/microsoft/Phi-4-mini-instruct",
-                        "revision": "cfbefacb99257ffa30c83adab238a50856ac3083"
+                "platform_overrides": {
+                    "aie4": {
+                        "name": "phi4-mini-it-aie4",
+                        "url": "https://huggingface.co/unsloth/Phi-4-mini-instruct-GGUF/resolve/78eb92a46fc37e6b524df991ed9aca9bc6aa7b80",
+                        "file_url": "https://huggingface.co/api/models/unsloth/Phi-4-mini-instruct-GGUF/tree/78eb92a46fc37e6b524df991ed9aca9bc6aa7b80",
+                        "size": 4100140571,
+                        "default_context_length": 4096,
+                        "details": {
+                            "quantization_level": "Q8_0 -> AIE4 group-64",
+                            "execution_backend": "corelib_aie4_gguf"
+                        },
+                        "flm_min_version": "1.0.3",
+                        "files": [
+                            "Phi-4-mini-instruct.Q8_0.gguf",
+                            "tokenizer.json",
+                            "tokenizer_config.json",
+                            "config.json"
+                        ],
+                        "file_sources": {
+                            "tokenizer.json": {
+                                "url": "https://huggingface.co/microsoft/Phi-4-mini-instruct",
+                                "revision": "cfbefacb99257ffa30c83adab238a50856ac3083"
+                            },
+                            "tokenizer_config.json": {
+                                "url": "https://huggingface.co/microsoft/Phi-4-mini-instruct",
+                                "revision": "cfbefacb99257ffa30c83adab238a50856ac3083"
+                            },
+                            "config.json": {
+                                "url": "https://huggingface.co/microsoft/Phi-4-mini-instruct",
+                                "revision": "cfbefacb99257ffa30c83adab238a50856ac3083"
+                            }
+                        },
+                        "footprint": 4.1,
+                        "ms_url": null,
+                        "model_info_key": "phi4-mini-it-aie4:4b"
                     }
-                },
-                "footprint": 4.1
+                }
             }
         },
         "embed-gemma": {
@@ -532,10 +573,13 @@
                     "parameter_size": "300M",
                     "quantization_level": "none"
                 },
-                "label":[
+                "label": [
                     "embeddings"
                 ],
-                "footprint": 0.62
+                "footprint": 0.62,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             }
         },
         "whisper-v3": {
@@ -561,12 +605,15 @@
                     "parameter_size": "1B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "audio",
                     "realtime-transcription",
                     "transcription"
                 ],
-                "footprint": 0.62
+                "footprint": 0.62,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             }
         },
         "gemma3": {
@@ -593,7 +640,10 @@
                     "parameter_size": "1B",
                     "quantization_level": "Q4_1"
                 },
-                "footprint": 1.2
+                "footprint": 1.2,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             },
             "4b": {
                 "name": "Gemma3-4B-NPU2",
@@ -620,10 +670,13 @@
                     "parameter_size": "4B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "vision"
                 ],
-                "footprint": 4.5
+                "footprint": 4.5,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             }
         },
         "translategemma": {
@@ -652,10 +705,13 @@
                     "parameter_size": "4B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "vision"
                 ],
-                "footprint": 4.5
+                "footprint": 4.5,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             }
         },
         "medgemma": {
@@ -684,10 +740,13 @@
                     "parameter_size": "4B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "vision"
                 ],
-                "footprint": 4.5
+                "footprint": 4.5,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             }
         },
         "medgemma1.5": {
@@ -716,10 +775,13 @@
                     "parameter_size": "4B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "vision"
                 ],
-                "footprint": 4.5
+                "footprint": 4.5,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             }
         },
         "llama3.2": {
@@ -745,7 +807,10 @@
                     "parameter_size": "1B",
                     "quantization_level": "Q4_1"
                 },
-                "footprint": 1.3
+                "footprint": 1.3,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             },
             "3b": {
                 "name": "Llama-3.2-3B-NPU2",
@@ -769,7 +834,10 @@
                     "parameter_size": "3B",
                     "quantization_level": "Q4_1"
                 },
-                "footprint": 2.7
+                "footprint": 2.7,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             }
         },
         "llama3.1": {
@@ -795,7 +863,10 @@
                     "parameter_size": "8B",
                     "quantization_level": "Q4_1"
                 },
-                "footprint": 5.4
+                "footprint": 5.4,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             }
         },
         "deepseek-r1": {
@@ -821,10 +892,13 @@
                     "parameter_size": "8B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "reasoning"
                 ],
-                "footprint": 5.4
+                "footprint": 5.4,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             }
         },
         "deepseek-r1-0528": {
@@ -851,10 +925,13 @@
                     "parameter_size": "8B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "reasoning"
                 ],
-                "footprint": 5.6
+                "footprint": 5.6,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             }
         },
         "qwen3": {
@@ -881,10 +958,13 @@
                     "parameter_size": "0.6B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "reasoning"
                 ],
-                "footprint": 0.66
+                "footprint": 0.66,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             },
             "1.7b": {
                 "name": "Qwen3-1.7B-NPU2",
@@ -909,10 +989,13 @@
                     "parameter_size": "1.7B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "reasoning"
                 ],
-                "footprint": 1.6
+                "footprint": 1.6,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             },
             "4b": {
                 "name": "Qwen3-4B-NPU2",
@@ -937,11 +1020,14 @@
                     "parameter_size": "4B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "reasoning",
                     "tool-calling"
                 ],
-                "footprint": 3.1
+                "footprint": 3.1,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             },
             "8b": {
                 "name": "Qwen3-8B-NPU2",
@@ -966,11 +1052,14 @@
                     "parameter_size": "8B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "reasoning",
                     "tool-calling"
                 ],
-                "footprint": 5.6
+                "footprint": 5.6,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             }
         },
         "qwen3-tk": {
@@ -997,11 +1086,14 @@
                     "parameter_size": "4B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "reasoning",
                     "tool-calling"
                 ],
-                "footprint": 3.1
+                "footprint": 3.1,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             }
         },
         "qwen3-it": {
@@ -1028,10 +1120,13 @@
                     "parameter_size": "4B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "tool-calling"
                 ],
-                "footprint": 3.1
+                "footprint": 3.1,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             }
         },
         "gpt-oss": {
@@ -1058,10 +1153,13 @@
                     "parameter_size": "20B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "reasoning"
                 ],
-                "footprint": 14.0
+                "footprint": 14.0,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             }
         },
         "gpt-oss-sg": {
@@ -1088,10 +1186,13 @@
                     "parameter_size": "20B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "reasoning"
                 ],
-                "footprint": 14.0
+                "footprint": 14.0,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             }
         },
         "qwen2.5-it": {
@@ -1118,7 +1219,10 @@
                     "parameter_size": "3B",
                     "quantization_level": "Q4_0"
                 },
-                "footprint": 2.5
+                "footprint": 2.5,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             }
         },
         "qwen2.5vl-it": {
@@ -1147,10 +1251,13 @@
                     "parameter_size": "3B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "vision"
                 ],
-                "footprint": 3.8
+                "footprint": 3.8,
+                "supported_platforms": [
+                    "aie2p"
+                ]
             }
         }
     }

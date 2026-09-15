@@ -37,7 +37,12 @@ std::shared_ptr<CorelibRuntime> CorelibRuntime::GetOrCreate(
     const std::filesystem::path& executable_dir) {
     std::lock_guard lock(process_mutex);
     if (!process_runtime) {
+#if defined(FLM_CORELIB_LINK_STATIC)
+        (void)executable_dir;
+        auto api = CorelibApi::LoadStatic();
+#else
         auto api = CorelibApi::Load(CorelibApi::ResolveLibraryPath(executable_dir));
+#endif
         process_runtime = CreateReady(std::move(api));
     }
     return process_runtime;

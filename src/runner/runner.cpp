@@ -38,10 +38,9 @@ std::map<std::string, runner_cmd_t> cmd_map = {
 /// \param supported_models - the list of supported models
 /// \param downloader - the downloader for the models
 /// \param tag - the tag of the model to load
-Runner::Runner(model_list& supported_models, ModelDownloader& downloader, program_args_t& args)
-    : supported_models(supported_models), downloader(downloader), tag(args.model_tag), modelscope(args.modelscope), asr(args.asr), embed(args.embed), img_pre_resize(args.img_pre_resize), preemption(args.preemption) {
-
-    this->npu_device_inst = flm_rt::device(0);
+Runner::Runner(model_list& supported_models, ModelDownloader& downloader, program_args_t& args,
+               flm_rt::device* npu_device)
+    : supported_models(supported_models), downloader(downloader), tag(args.model_tag), modelscope(args.modelscope), asr(args.asr), embed(args.embed), img_pre_resize(args.img_pre_resize), preemption(args.preemption), npu_device_inst(npu_device) {
 
     if (args.ctx_length != -1) {
         this->ctx_length = args.ctx_length >= 512 ? args.ctx_length : 512;
@@ -53,7 +52,7 @@ Runner::Runner(model_list& supported_models, ModelDownloader& downloader, progra
     if (this->auto_chat_engine != nullptr) {
         this->auto_chat_engine.reset();
     }
-    std::pair<std::string, std::unique_ptr<AutoModel>> auto_model = get_auto_model(this->tag, this->supported_models, &this->npu_device_inst);
+    std::pair<std::string, std::unique_ptr<AutoModel>> auto_model = get_auto_model(this->tag, this->supported_models, this->npu_device_inst);
     this->auto_chat_engine = std::move(auto_model.second);
     
     this->tag = auto_model.first;
@@ -121,7 +120,7 @@ Runner::Runner(model_list& supported_models, ModelDownloader& downloader, progra
                     header_print("ERROR", "Whisper is incompatible with this version of FastFlowLM, skipping... ");
                     return;
             }
-            this->whisper_engine = std::make_unique<Whisper>(&this->npu_device_inst);
+            this->whisper_engine = std::make_unique<Whisper>(this->npu_device_inst);
             auto [new_whisper_tag, whisper_model_info] = this->supported_models.get_model_info(whisper_tag);
             std::string whisper_model_path = this->supported_models.get_model_path(new_whisper_tag);
             try {
@@ -429,7 +428,7 @@ void Runner::cmd_status(std::vector<std::string>& input_list) {
 void Runner::cmd_load(std::vector<std::string>& input_list) {
     std::string model_name = input_list[1];
 
-    std::pair<std::string, std::unique_ptr<AutoModel>> auto_model = get_auto_model(model_name, this->supported_models, &this->npu_device_inst);
+    std::pair<std::string, std::unique_ptr<AutoModel>> auto_model = get_auto_model(model_name, this->supported_models, this->npu_device_inst);
     model_name = auto_model.first;
 
     if (model_name != this->tag) {
