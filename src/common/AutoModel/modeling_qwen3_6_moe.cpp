@@ -13,17 +13,8 @@
 /************              Qwen3_6_MOE family            **************/
 Qwen3_6_MOE::Qwen3_6_MOE(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "Qwen3_6_MOE") {}
 
-void Qwen3_6_MOE::load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption) {
-    this->_shared_load_model(model_path, model_info, default_context_length, enable_preemption);
-
-    this->q4nx = std::make_unique<Q4NX>(this->model_path);
-    // lm_config->get<std::string>("model_type", "") == qwen3
-    this->lm_engine = std::make_unique<qwen3_6_moe_npu>(*this->lm_config, this->npu.get(), this->MAX_L);
-
-    this->lm_engine->load_weights(*this->q4nx);
-    //free the q4nx
-    this->q4nx.reset();
-    this->lm_engine->clear_context();
+void Qwen3_6_MOE::load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption, const std::string& backend) {
+    this->_shared_load_backend(model_path, model_info, default_context_length, enable_preemption, backend);
     this->setup_tokenizer(model_path);
     this->sampler.reset();
 
@@ -229,7 +220,7 @@ bool Qwen3_6_MOE::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input,
         if (prefix_skip_count > 0 && !image_payload.images.empty()) {
             // Per-image bf16 footprint depends on runtime patch/temporal
             // config carried by the engine.
-            auto* eng = reinterpret_cast<qwen3_6_moe_npu*>(this->lm_engine.get());
+            auto* eng = reinterpret_cast<qwen3_6_moe_npu*>(this->lm_engine);
             const unsigned patch_size = eng->QWEN3_6_MOE_PATCH_SIZE;
             const unsigned temporal_patch = eng->QWEN3_6_MOE_TEMPORAL_PATCH_SIZE;
 
@@ -288,7 +279,7 @@ bool Qwen3_6_MOE::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input,
 
     // hardware
     int restore_idx = -1;
-    qwen3_6_moe_npu *qwen3_6_moe_engine = dynamic_cast<qwen3_6_moe_npu*>(this->lm_engine.get());
+    qwen3_6_moe_npu *qwen3_6_moe_engine = dynamic_cast<qwen3_6_moe_npu*>(this->lm_engine);
     const bool has_images = image_payload.num_images > 0;
 
     if (meta_info.restore_allowed) {
@@ -438,7 +429,7 @@ std::string Qwen3_6_MOE::generate_with_prompt(chat_meta_info_t& meta_info, lm_un
         return "";
     }
     header_print("FLM", "Prompt inserted, starting generation...");
-    qwen3_6_moe_npu* qwen36_engine = dynamic_cast<qwen3_6_moe_npu*>(this->lm_engine.get());
+    qwen3_6_moe_npu* qwen36_engine = dynamic_cast<qwen3_6_moe_npu*>(this->lm_engine);
     int checkpoint_idx = qwen36_engine->checkpoint();
     int restore_idx = qwen36_engine->restore();
     header_print_r("FLM", "Checkpoint before generation: " << checkpoint_idx << ", restore point: " << restore_idx << ", user context length: " << this->token_history.size());

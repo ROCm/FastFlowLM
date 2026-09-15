@@ -40,7 +40,7 @@ std::map<std::string, runner_cmd_t> cmd_map = {
 /// \param tag - the tag of the model to load
 Runner::Runner(model_list& supported_models, ModelDownloader& downloader, program_args_t& args,
                flm_rt::device* npu_device)
-    : supported_models(supported_models), downloader(downloader), tag(args.model_tag), modelscope(args.modelscope), asr(args.asr), embed(args.embed), img_pre_resize(args.img_pre_resize), preemption(args.preemption), npu_device_inst(npu_device) {
+    : supported_models(supported_models), downloader(downloader), tag(args.model_tag), modelscope(args.modelscope), asr(args.asr), embed(args.embed), img_pre_resize(args.img_pre_resize), preemption(args.preemption), backend(args.backend), npu_device_inst(npu_device) {
 
     if (args.ctx_length != -1) {
         this->ctx_length = args.ctx_length >= 512 ? args.ctx_length : 512;
@@ -73,7 +73,7 @@ Runner::Runner(model_list& supported_models, ModelDownloader& downloader, progra
     this->auto_chat_engine->configure_parameter("img_pre_resize", this->img_pre_resize);
     try {
         const auto load_started = std::chrono::steady_clock::now();
-        this->auto_chat_engine->load_model(this->supported_models.get_model_path(new_tag), model_info, this->ctx_length, this->preemption);
+        this->auto_chat_engine->load_model(this->supported_models.get_model_path(new_tag), model_info, this->ctx_length, this->preemption, this->backend);
         report_load_time(load_started);
     }
     catch (const std::exception& e) {
@@ -454,7 +454,7 @@ void Runner::cmd_load(std::vector<std::string>& input_list) {
         this->auto_chat_engine->configure_parameter("img_pre_resize", this->img_pre_resize);
         try {
             const auto load_started = std::chrono::steady_clock::now();
-            this->auto_chat_engine->load_model(this->supported_models.get_model_path(new_tag), model_info, this->ctx_length, this->preemption);
+            this->auto_chat_engine->load_model(this->supported_models.get_model_path(new_tag), model_info, this->ctx_length, this->preemption, this->backend);
             report_load_time(load_started);
         }
         catch (const std::exception& e) {

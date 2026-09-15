@@ -117,8 +117,12 @@ target_compile_options(test_phi4_engine PRIVATE
 target_link_directories(test_phi4_engine PRIVATE "${XRT_INCLUDE_DIR}/../lib")
 target_link_libraries(test_phi4_engine PRIVATE xrt_coreutil)
 
+# The backend registry is part of the frontend now; builtin_backends.cpp is not,
+# because it names every prebuilt engine library. test_phi4_frontend.cpp supplies
+# its own empty register_builtin_backends and registers stubs instead.
 set(PHI4_FRONTEND_SOURCES
     "${FLM_SOURCE_DIR}/common/AutoModel/automodel.cpp"
+    "${FLM_SOURCE_DIR}/common/AutoModel/model_backend.cpp"
     "${FLM_SOURCE_DIR}/common/AutoModel/modeling_phi4.cpp")
 
 add_executable(test_phi4_frontend
@@ -209,6 +213,7 @@ endforeach()
 
 set(FLM_PRODUCTION_FRONTEND_SOURCES
     ${PHI4_FRONTEND_SOURCES}
+    "${FLM_SOURCE_DIR}/common/AutoModel/builtin_backends.cpp"
     "${FLM_SOURCE_DIR}/runner/runner.cpp"
     "${FLM_SOURCE_DIR}/server/rest_handler.cpp"
     "${FLM_SOURCE_DIR}/server/server.cpp")
@@ -232,6 +237,8 @@ function(add_frontend_compile_guard TARGET_NAME ENABLE_CORELIB)
   target_compile_options(${TARGET_NAME} PRIVATE
       $<$<CXX_COMPILER_ID:MSVC>:/wd4005 /wd4244>)
   if(ENABLE_CORELIB)
+    target_sources(${TARGET_NAME} PRIVATE
+        "${FLM_SOURCE_DIR}/common/models/phi4/corelib/phi4_corelib_backend.cpp")
     target_compile_definitions(${TARGET_NAME} PRIVATE
         FLM_ENABLE_CORELIB_AIE4=1)
     target_include_directories(${TARGET_NAME} PRIVATE

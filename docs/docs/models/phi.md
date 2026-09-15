@@ -81,4 +81,10 @@ Phi-4-mini itself supports 128k, and the existing `phi4-mini-it:4b` tag defaults
 
 Backend selection is still explicit: it comes from `execution_backend` in the model catalog, never from a filename or a quantization level. What the build decides is *which catalog entry* the tag resolves to — the generation this binary was built for picks between the NPU2/Q4NX entry and this one, and from there the backend is whatever that entry declares. Once this entry is selected, there is no fallback: if corelib is missing, unloadable, or the wrong version, the tag **fails to load with a diagnostic** rather than quietly running on CPU or on the NPU2/Q4NX backend.
 
+### Naming the backend yourself
+
+The two engines are registered backends, `flm_npu` and `corelib_aie4_gguf`, and you can name one with `--backend`, with `FLM_BACKEND`, or with a `"backend"` field on an `/api/chat` or `/api/generate` request. The [CLI reference](../instructions/cli.md) has the full precedence table.
+
+This does not widen what the hardware can run: a tag that resolved to the aie2p entry supports `flm_npu` alone, and the aie4 entry supports `corelib_aie4_gguf` alone. Asking for the other one fails immediately, with a message naming what the entry does support, instead of failing deep inside an engine that was never going to work. If what you meant was the other catalog entry, that is a different build of FLM, not a different flag.
+
 ---

@@ -32,7 +32,7 @@ public:
     ~Qwen3_5_Omni() override = default;
 
     /// \brief Load config + weights and set up tokenizer / sampler.
-    void load_model(std::string model_path, json model_info, int default_context_length = -1, bool enable_preemption = false) override;
+    void load_model(std::string model_path, json model_info, int default_context_length = -1, bool enable_preemption = false, const std::string& backend = "") override;
 
     /// \brief Apply the chat template to the messages.
     std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object()) override;

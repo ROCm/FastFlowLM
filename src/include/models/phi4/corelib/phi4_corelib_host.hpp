@@ -1,6 +1,6 @@
 #pragma once
 
-#include "models/phi4/phi4_corelib_gguf.hpp"
+#include "models/phi4/corelib/phi4_corelib_gguf.hpp"
 
 #include <cstdint>
 #include <optional>

@@ -493,17 +493,24 @@ struct CorelibProcessGuard {
 ///@brief open the NPU device that every engine in this process shares
 ///@param exe_dir the executable directory, used to locate corelib
 ///@return the shared device, or nullptr when no NPU could be opened
-///@note With the AIE4 build the device belongs to corelib, so corelib is brought
-///      up here for every command. Without it the device is a function-local
-///      static, which keeps the lifetime tied to the process exactly as the
-///      per-Runner devices used to be. A machine with no NPU must still be able
+///@note With the AIE4 build corelib is brought up here for every command, but no
+///      flm device is returned (see the TODO below). Without it the device is a
+///      function-local static, which keeps the lifetime tied to the process
+///      exactly as the per-Runner devices used to be. A machine with no NPU must still be able
 ///      to run `flm list`/`pull`/`version`, so failure is a null pointer, not an
 ///      error.
 static flm_rt::device* acquire_npu_device([[maybe_unused]] const std::string& exe_dir) {
     try {
 #ifdef FLM_ENABLE_CORELIB_AIE4
+        // TODO: FIXME - corelib's device is not a drop-in for the flm device the
+        // AutoModel engines expect; the two ownership models conflict, so there is
+        // no supported way to hand corelib's device out here yet. Until that is
+        // resolved, an AIE4 build brings corelib up for the corelib engines and
+        // reports no flm device, i.e. it runs no flm models.
         flm::corelib::CorelibRuntime::GetOrCreate(std::filesystem::path(exe_dir));
-        return const_cast<flm_rt::device*>(&ryzenai::corelib::GetDevice());
+        // TODO: FIXME - should be enable once corelib is update
+        // return const_cast<flm_rt::device*>(&ryzenai::corelib::GetDevice());
+        return nullptr;
 #else
         static flm_rt::device npu_device = flm_rt::device(0);
         return &npu_device;
@@ -710,7 +717,7 @@ int main(int argc, char* argv[]) {
         }
 
         if (parsed_args.command == "bench") {
-            benchmarking::BenchmarkResults_t results = benchmarking::run_benchmarks(parsed_args.model_tag, parsed_args.input_file_name, availble_models, parsed_args.iterations, npu_device);
+            benchmarking::BenchmarkResults_t results = benchmarking::run_benchmarks(parsed_args.model_tag, parsed_args.input_file_name, availble_models, parsed_args.iterations, npu_device, parsed_args.backend);
         }
         else if (parsed_args.command == "run") {
             check_and_notify_new_version();

@@ -1,60 +1,39 @@
 /// \file modeling_phi4.hpp
-/// \brief Phi-4 frontend and backend routing
+/// \brief Phi-4 frontend
+/// \note Phi-4 runs on either of two engines -- FastFlowLM's own NPU kernels or
+///       ryzenai-corelib on AIE4 -- but this class knows nothing about either.
+///       Which engine to build, and every rule for driving it, lives behind
+///       flm::backend::ModelBackend; see AutoModel/model_backend.hpp.
 #pragma once
 #include "AutoModel/automodel.hpp"
 
-#if defined(FLM_ENABLE_CORELIB_AIE4)
-#include "corelib/corelib_runtime.hpp"
-#endif
-
 #if defined(FLM_CORELIB_TESTING)
-#include <filesystem>
-#include <functional>
 namespace flm::phi4::testing { class Phi4FrontendTestAccess; }
 #endif
 
 class Phi4 : public AutoModel {
 private:
-    void setup_tokenizer(const std::string& model_path,
-                         const nlohmann::json* verified_tokenizer_config = nullptr);
-#if defined(FLM_ENABLE_CORELIB_AIE4)
-    void validate_aie4_capacity(std::size_t rendered_tokens,
-                               std::optional<int> requested) const;
-    bool engine_is_poisoned() const noexcept;
-    void clear_after_inference_failure(bool poisoned);
-    std::string generate_aie4(chat_meta_info_t& meta_info,
-                              std::ostream& os,
-                              std::function<bool()> is_cancelled);
-
-    bool uses_corelib_aie4_ = false;
-    bool aie4_poisoned_ = false;
-    int aie4_generation_budget_ = 0;
-    std::shared_ptr<flm::corelib::CorelibRuntime> corelib_runtime_;
-#endif
-
 #if defined(FLM_CORELIB_TESTING)
-    using EngineFactoryForTesting = std::function<std::unique_ptr<causal_lm>(
-        bool, const LM_Config&, npu_xclbin_manager*,
-        const std::filesystem::path&, std::uint32_t)>;
-    static EngineFactoryForTesting engine_factory_for_testing_;
-    static std::function<bool(const causal_lm*)> engine_poisoned_for_testing_;
+    /// \note The tokenizer contract is only observable from inside the class,
+    ///       and the suite that checks it is not allowed to change it.
     friend class flm::phi4::testing::Phi4FrontendTestAccess;
 #endif
+
+    /// \brief Build the tokenizer, chat template and stop ids
+    /// \param model_path the model directory
+    /// \note Phi-4's contract differs from the shared one: minja receives no
+    ///       textual BOS/EOS, and there is no automatic BOS token.
+    void setup_tokenizer(const std::string& model_path);
+
+    /// \brief Turn a failed inference into a request error, clearing the session
+    /// \throws ModelRequestError 500, always
+    [[noreturn]] void fail_inference();
 
 public:
     explicit Phi4(flm_rt::device* npu_device_inst);
     void load_model(std::string model_path, json model_info,
                     int default_context_length = -1,
-                    bool enable_preemption = false) override;
-    bool uses_corelib_aie4() const noexcept override {
-#if defined(FLM_ENABLE_CORELIB_AIE4)
-        return uses_corelib_aie4_;
-#else
-        return false;
-#endif
-    }
-    std::string show_profile() override;
-    void clear_context() override;
+                    bool enable_preemption = false, const std::string& backend = "") override;
     bool insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input,
                 std::function<bool()> is_cancelled = [] { return false; }) override;
     std::string generate(chat_meta_info_t& meta_info, int length_limit,

@@ -5,7 +5,13 @@
 #endif
 #include "utils/file_access.hpp"
 
+#include <AutoModel/model_backend.hpp>
 #include <AutoModel/modeling_phi4.hpp>
+#if defined(FLM_ENABLE_CORELIB_AIE4)
+#include <corelib/corelib_runtime.hpp>
+#include <models/phi4/corelib/phi4_corelib_backend.hpp>
+#include <models/phi4/corelib/phi4_corelib_gguf.hpp>
+#endif
 #include "server.hpp"
 
 #include <algorithm>
@@ -23,6 +29,14 @@
 #include <vector>
 #include <chrono>
 #include <cstdlib>
+
+/// \brief the builtin set, emptied
+/// \note The real one lives in builtin_backends.cpp and names every engine, and
+///       with them the prebuilt libraries this suite deliberately does not link.
+///       Each test registers the backends it needs instead.
+namespace flm::backend {
+void register_builtin_backends(BackendRegistry&) {}
+}  // namespace flm::backend
 
 namespace {
 
@@ -84,7 +98,93 @@ struct FactoryState {
     int aie4_calls{};
     bool throw_for_aie4{};
     FakeEngine* engine{};
+#if defined(FLM_ENABLE_CORELIB_AIE4)
+    /// \brief the runtime the corelib stub reports as its detail()
+    std::shared_ptr<flm::corelib::CorelibRuntime> runtime;
+#endif
 } g_factory;
+
+/// \brief a backend wrapping FakeEngine, with a policy the test dictates
+/// \note This is the seam the old engine_factory_for_testing_ hook used to be.
+///       Registering it under a real backend id means the frontend, AutoModel
+///       and the registry all run their production code paths; only the engine
+///       and, for corelib, the loaded library are faked.
+class StubBackend final : public flm::backend::ModelBackend {
+public:
+    StubBackend(std::string id, std::uint32_t context_length)
+        : id_(std::move(id)),
+          engine_(std::make_unique<FakeEngine>(context_length)) {
+        g_factory.engine = engine_.get();
+    }
+
+    causal_lm& engine() override { return *engine_; }
+    std::string id() const override { return id_; }
+    std::string detail() const override { return detail_; }
+    std::uint32_t max_decode_length() const override { return decode_limit_; }
+    bool supports_preemption() const override { return supports_preemption_; }
+    bool forwards_past_eos() const override { return forwards_past_eos_; }
+    bool poisoned() const noexcept override { return engine_->poisoned_state; }
+    std::optional<std::vector<int>> forced_eos_ids() const override {
+        return forced_eos_ids_;
+    }
+
+    std::string detail_;
+    std::uint32_t decode_limit_{};
+    bool supports_preemption_{true};
+    bool forwards_past_eos_{true};
+    std::optional<std::vector<int>> forced_eos_ids_;
+
+private:
+    std::string id_;
+    std::unique_ptr<FakeEngine> engine_;
+};
+
+/// \brief the FastFlowLM NPU backend, with its engine faked
+std::unique_ptr<flm::backend::ModelBackend> MakeFlmNpuStub(
+    const flm::backend::BackendContext& context) {
+    ++g_factory.legacy_calls;
+    return std::make_unique<StubBackend>(std::string(flm::backend::kDefaultBackendId),
+                                         context.context_length);
+}
+
+#if defined(FLM_ENABLE_CORELIB_AIE4)
+/// \brief read a JSON file, recording the open for the file-access audit
+nlohmann::json ReadObserved(const std::filesystem::path& path) {
+    flm::file_access::ObserveOpen(path);
+    std::ifstream input(path, std::ios::binary);
+    if (!input) throw std::runtime_error("Cannot open " + path.string());
+    return nlohmann::json::parse(input);
+}
+
+/// \brief the corelib AIE4 backend, with its engine and runtime faked
+/// \note Everything CorelibAie4Backend does before it touches the device is
+///       repeated verbatim, so a mismatched package still fails with nothing
+///       allocated and the file-access audit still sees the real reads.
+std::unique_ptr<flm::backend::ModelBackend> MakeCorelibAie4Stub(
+    const flm::backend::BackendContext& context) {
+    const std::filesystem::path root(context.model_path);
+    const auto config = ReadObserved(root / "config.json");
+    const auto tokenizer_json = ReadObserved(root / "tokenizer.json");
+    const auto tokenizer_config = ReadObserved(root / "tokenizer_config.json");
+    auto package = flm::phi4::Phi4GgufPackage::Open(
+        root / "Phi-4-mini-instruct.Q8_0.gguf");
+    package->ValidatePhi4Contract(config, tokenizer_json, tokenizer_config);
+
+    ++g_factory.aie4_calls;
+    if (g_factory.throw_for_aie4) throw std::runtime_error("missing corelib");
+
+    auto backend = std::make_unique<StubBackend>(
+        std::string(flm::phi4::kCorelibAie4BackendId), context.context_length);
+    backend->decode_limit_ = flm::phi4::kCorelibAie4DecodeLimit;
+    backend->supports_preemption_ = false;
+    backend->forwards_past_eos_ = false;
+    backend->forced_eos_ids_ = std::vector<int>({200020, 199999});
+    if (g_factory.runtime) {
+        backend->detail_ = g_factory.runtime->loaded_library_path().string();
+    }
+    return backend;
+}
+#endif
 
 class TempPackage final {
 public:
@@ -187,56 +287,56 @@ std::string get_executable_directory() { return std::filesystem::current_path().
 }
 
 namespace flm::phi4::testing {
+/// \brief reads the tokenizer contract Phi4 keeps to itself
+/// \note Nothing here writes: the seam the tests drive the model through is the
+///       backend registry, not this class.
 class Phi4FrontendTestAccess final {
 public:
-    static void InstallFactory() {
-        g_factory = {};
-        g_opened_paths.clear();
-        flm::file_access::SetOpenObserver([](const auto& path) {
-            g_opened_paths.push_back(path);
-        });
-        Phi4::engine_factory_for_testing_ =
-            [](bool aie4, const LM_Config&, npu_xclbin_manager*,
-               const std::filesystem::path&, std::uint32_t limit) {
-                if (aie4) {
-                    ++g_factory.aie4_calls;
-                    if (g_factory.throw_for_aie4) throw std::runtime_error("missing corelib");
-                } else {
-                    ++g_factory.legacy_calls;
-                }
-                auto result = std::make_unique<FakeEngine>(limit);
-                g_factory.engine = result.get();
-                return std::unique_ptr<causal_lm>(std::move(result));
-            };
-        Phi4::engine_poisoned_for_testing_ = [](const causal_lm* engine) {
-            return static_cast<const FakeEngine*>(engine)->poisoned_state;
-        };
-    }
-    static void RemoveFactory() {
-        Phi4::engine_factory_for_testing_ = {};
-        Phi4::engine_poisoned_for_testing_ = {};
-        flm::file_access::SetOpenObserver({});
-    }
     static bool HasLegacyNpu(const Phi4& model) { return model.npu != nullptr; }
     static const std::string& EosToken(const Phi4& model) { return model.eos_token; }
     static const std::vector<int>& EosTokenIds(const Phi4& model) { return model.eos_token_ids; }
     static bool HasBosToken(const Phi4& model) { return model.has_bos_token; }
-#if defined(FLM_ENABLE_CORELIB_AIE4)
-    static void SetRuntime(Phi4& model,
-                           std::shared_ptr<flm::corelib::CorelibRuntime> runtime) {
-        model.corelib_runtime_ = std::move(runtime);
-    }
-#endif
 };
 } // namespace flm::phi4::testing
 
 namespace {
 using flm::phi4::testing::Phi4FrontendTestAccess;
 
+/// \brief the backend ids this suite drives
+constexpr const char* kFlmNpu = "flm_npu";
+constexpr const char* kCorelibAie4 = "corelib_aie4_gguf";
+
+/// \brief Point the phi4 family's backends at the stubs for one test
+/// \note replace_backend, not register_backend: every test re-arms the registry,
+///       which is process-wide. The OFF build deliberately registers no corelib
+///       backend, which is what makes rejecting its id observable.
 struct FactoryScope {
-    FactoryScope() { Phi4FrontendTestAccess::InstallFactory(); }
-    ~FactoryScope() { Phi4FrontendTestAccess::RemoveFactory(); }
+    FactoryScope() {
+        g_factory = {};
+        g_opened_paths.clear();
+        flm::file_access::SetOpenObserver([](const auto& path) {
+            g_opened_paths.push_back(path);
+        });
+        auto& registry = flm::backend::BackendRegistry::instance();
+        registry.replace_backend("phi4", kFlmNpu, MakeFlmNpuStub);
+#if defined(FLM_ENABLE_CORELIB_AIE4)
+        registry.replace_backend("phi4", kCorelibAie4, MakeCorelibAie4Stub,
+                                 flm::phi4::corelib_aie4_traits());
+#endif
+    }
+    ~FactoryScope() {
+        flm::file_access::SetOpenObserver({});
+#if defined(FLM_ENABLE_CORELIB_AIE4)
+        g_factory.runtime.reset();
+#endif
+    }
 };
+
+/// \brief which backend a loaded model ended up on
+bool OnCorelibAie4(const AutoModel& model) {
+    return model.backend_id() == kCorelibAie4;
+}
+bool OnFlmNpu(const AutoModel& model) { return model.backend_id() == kFlmNpu; }
 
 std::unique_ptr<Phi4> Load(const TempPackage& package,
                            nlohmann::ordered_json info,
@@ -254,7 +354,7 @@ void TestAbsentBackendStillBuildsQ4nxPhi4Npu() {
     auto model = Load(package, ModelInfo());
     TEST_REQUIRE(g_factory.legacy_calls == 1);
     TEST_REQUIRE(g_factory.aie4_calls == 0);
-    TEST_REQUIRE(!model->uses_corelib_aie4());
+    TEST_REQUIRE(OnFlmNpu(*model));
     TEST_REQUIRE(Phi4FrontendTestAccess::HasLegacyNpu(*model));
 }
 
@@ -293,7 +393,7 @@ void TestCorelibAie4GgufBuildsOnlyTheCorelibEngine() {
     auto model = Load(package, ModelInfo("corelib_aie4_gguf"), -1, false, nullptr);
     TEST_REQUIRE(g_factory.legacy_calls == 0);
     TEST_REQUIRE(g_factory.aie4_calls == 1);
-    TEST_REQUIRE(model->uses_corelib_aie4());
+    TEST_REQUIRE(OnCorelibAie4(*model));
     TEST_REQUIRE(!Phi4FrontendTestAccess::HasLegacyNpu(*model));
 }
 
@@ -313,8 +413,11 @@ void TestAie4ProfileUsesCachedRuntimeDllPathAfterEnvironmentChanges() {
 #else
     setenv("FLM_AIE4_CORELIB_PATH", dll_b.string().c_str(), 1);
 #endif
+    // The backend caches the runtime it was built with; a later environment
+    // change must not move the path it reports.
+    g_factory.runtime = runtime;
     auto aie4 = Load(package, ModelInfo("corelib_aie4_gguf"), -1, false, nullptr);
-    Phi4FrontendTestAccess::SetRuntime(*aie4, runtime);
+    g_factory.runtime.reset();
     const auto aie4_profile = aie4->show_profile();
     RequireContains(aie4_profile, "corelib_aie4_gguf");
     RequireContains(aie4_profile, dll_a.string());
@@ -339,7 +442,7 @@ void TestNoManifestOnnxConvertedWeightOrCachePathIsOpened() {
     TempPackage package;
     FactoryScope scope;
     auto model = Load(package, ModelInfo("corelib_aie4_gguf"), -1, false, nullptr);
-    TEST_REQUIRE(model->uses_corelib_aie4());
+    TEST_REQUIRE(OnCorelibAie4(*model));
     std::vector<std::string> names;
     for (const auto& path : g_opened_paths) {
         const auto text = path.generic_string();
@@ -358,7 +461,8 @@ void TestNoManifestOnnxConvertedWeightOrCachePathIsOpened() {
 void TestUnknownAndNonStringBackendAreErrors() {
     TempPackage package;
     FactoryScope scope;
-    RequireContains(RequireThrows([&] { (void)Load(package, ModelInfo("other")); }), "Unknown");
+    RequireContains(RequireThrows([&] { (void)Load(package, ModelInfo("other")); }),
+                    "not compiled into this build");
     RequireContains(RequireThrows([&] { (void)Load(package, ModelInfo(7)); }), "string");
     TEST_REQUIRE(g_factory.legacy_calls == 0 && g_factory.aie4_calls == 0);
 }
@@ -369,7 +473,7 @@ void TestFeatureOffRejectsAie4TagWithoutIncludingCorelibHeaders() {
     FactoryScope scope;
     RequireContains(RequireThrows([&] {
         (void)Load(package, ModelInfo("corelib_aie4_gguf"), -1, false, nullptr);
-    }), "This binary was built without Phi-4 AIE4 corelib support");
+    }), "not compiled into this build");
     TEST_REQUIRE(g_factory.legacy_calls == 0 && g_factory.aie4_calls == 0);
 #endif
 }
@@ -397,7 +501,7 @@ void TestAie4SelectionWithMissingDllFailsWithoutChangingBackend() {
     RequireContains(RequireThrows([&] {
         model.load_model(package.path().string(), ModelInfo("corelib_aie4_gguf"));
     }), "missing corelib");
-    TEST_REQUIRE(!model.uses_corelib_aie4());
+    TEST_REQUIRE(model.backend_id().empty());
     TEST_REQUIRE(g_factory.aie4_calls == 1);
     TEST_REQUIRE(g_factory.legacy_calls == 0);
 }
@@ -421,7 +525,7 @@ void TestOrdinaryModelLoadsAfterAnAie4RuntimeLoadFailure() {
     g_factory.throw_for_aie4 = false;
     auto ordinary = Load(package, ModelInfo());
     TEST_REQUIRE(g_factory.legacy_calls == 1);
-    TEST_REQUIRE(!ordinary->uses_corelib_aie4());
+    TEST_REQUIRE(OnFlmNpu(*ordinary));
 }
 
 void TestPreemptionIsRejectedForTheAie4Route() {
@@ -528,10 +632,10 @@ void TestSamePathBackendSwitchForcesLegacyInitialization() {
     TempPackage package; FactoryScope scope;
     Phi4 model(reinterpret_cast<flm_rt::device*>(1));
     model.load_model(package.path().string(), ModelInfo("corelib_aie4_gguf"));
-    TEST_REQUIRE(model.uses_corelib_aie4());
+    TEST_REQUIRE(OnCorelibAie4(model));
     TEST_REQUIRE(!Phi4FrontendTestAccess::HasLegacyNpu(model));
     model.load_model(package.path().string(), ModelInfo());
-    TEST_REQUIRE(!model.uses_corelib_aie4());
+    TEST_REQUIRE(OnFlmNpu(model));
     TEST_REQUIRE(Phi4FrontendTestAccess::HasLegacyNpu(model));
     TEST_REQUIRE(g_factory.legacy_calls == 1);
 }
@@ -569,9 +673,9 @@ void TestEosSelfTerminatesWithoutAnExtraDecode() {
 }
 
 void TestAie4DecodeTimeAndSpeedAreMeasured() {
-    // The AIE4 route has its own decode loop, so it must record DECODING_TIME
-    // itself. Without that the profile reports "0 us" and a nan speed, and the
-    // hardware acceptance record has no decode throughput to publish.
+    // AIE4 used to have a decode loop of its own that recorded nothing, so the
+    // profile reported "0 us" and a nan speed. It now shares _shared_generate;
+    // this keeps the hardware acceptance record's decode throughput honest.
     TempPackage package; FactoryScope scope; auto model = ReadyAie4(package);
     g_encoded_tokens = {1}; g_samples = {11, 12, 13, 200020}; g_sample_index = 0;
     auto meta = Meta(); auto input = Input(); std::ostringstream output;

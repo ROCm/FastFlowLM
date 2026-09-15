@@ -338,7 +338,7 @@ static json convert_tool_responses_gemma4(json messages) {
 ///@return the rest handler
 RestHandler::RestHandler(model_list& models, ModelDownloader& downloader, program_args_t& args,
                          flm_rt::device* npu_device)
-    : supported_models(models), downloader(downloader), default_model_tag(args.model_tag), current_model_tag(""), modelscope(args.modelscope), asr(args.asr), embed(args.embed), img_pre_resize(args.img_pre_resize), preemption(args.preemption), npu_device_inst(npu_device){
+    : supported_models(models), downloader(downloader), default_model_tag(args.model_tag), current_model_tag(""), modelscope(args.modelscope), asr(args.asr), embed(args.embed), img_pre_resize(args.img_pre_resize), preemption(args.preemption), backend(args.backend), npu_device_inst(npu_device){
 
     if (args.ctx_length != -1) {
         this->ctx_length = args.ctx_length >= 512 ? args.ctx_length : 512;
@@ -392,9 +392,14 @@ RestHandler::~RestHandler() = default;
 
 ///@brief Ensure the model is loaded
 ///@param model_tag the model tag
-bool RestHandler::ensure_model_loaded(const std::string& model_tag) {
+bool RestHandler::ensure_model_loaded(const std::string& model_tag,
+                                      const std::string& request_backend) {
+    // A per-request "backend" overrides --backend; either one differing from
+    // what is loaded forces a reload, exactly as a different model tag does.
+    const std::string requested_backend =
+        request_backend.empty() ? this->backend : request_backend;
     std::string ensure_tag = model_tag;
-    if (current_model_tag != ensure_tag) {
+    if (current_model_tag != ensure_tag || current_backend != requested_backend) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         if (auto_chat_engine != nullptr) {
             auto_chat_engine.reset();
@@ -416,7 +421,7 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag) {
         auto_chat_engine->configure_parameter("img_pre_resize", this->img_pre_resize);
         try {
             const auto load_started = std::chrono::steady_clock::now();
-            auto_chat_engine->load_model(supported_models.get_model_path(new_ensure_tag), model_info, ctx_length, preemption);
+            auto_chat_engine->load_model(supported_models.get_model_path(new_ensure_tag), model_info, ctx_length, preemption, requested_backend);
             report_load_time(load_started);
         }
         catch (const std::exception& e) {
@@ -433,6 +438,7 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag) {
             this->prefill_chunk_len = model_info["max_prefill_len"].get<int>();;
         }
         current_model_tag = ensure_tag;
+        current_backend = requested_backend;
     }
     return true;
 }
@@ -659,12 +665,13 @@ void RestHandler::handle_generate(const json& request,
         std::string prompt = request["prompt"];
         bool stream = request.value("stream", true);
         std::string model = request.value("model", current_model_tag);
+        const std::string request_backend = request.value("backend", std::string());
         json options = request.value("options", json::object());
        
         int length_limit = request.value("max_tokens", 4096);
         auto load_start_time = time_utils::now();
         // TODO: Use Another Check Function avoid loading again
-        if (!ensure_model_loaded(model)) {
+        if (!ensure_model_loaded(model, request_backend)) {
             json error_response = {{"error", "Failed to load " + model + " model!"}};
             send_response(error_response);
             return;
@@ -778,11 +785,12 @@ void RestHandler::handle_chat(const json& request,
         nlohmann::ordered_json messages = request["messages"];
         bool stream = request.value("stream", false);
         std::string model = request.value("model", current_model_tag);
+        const std::string request_backend = request.value("backend", std::string());
         json options = request.value("options", json::object());
         int length_limit = options.value("num_predict", 4096);
 
         auto load_start_time = time_utils::now();
-        if (!ensure_model_loaded(model)) {
+        if (!ensure_model_loaded(model, request_backend)) {
             json error_response = {{"error", "Failed to load " + model + " model!"}};
             send_response(error_response);
             return;

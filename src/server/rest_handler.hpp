@@ -109,7 +109,8 @@ public:
         std::shared_ptr<CancellationToken> cancellation_token = nullptr);
 
 private:
-    bool ensure_model_loaded(const std::string& model_tag);
+    bool ensure_model_loaded(const std::string& model_tag,
+                             const std::string& request_backend = "");
     void ensure_asr_model_loaded(const std::string& model_tag);
     void ensure_embed_model_loaded(const std::string& model_tag);
     void configure_chat_engine_parameters(const json& options, const json& request);
@@ -138,5 +139,9 @@ private:
     int img_pre_resize;
     std::string last_question;
     bool preemption;
+    /// \brief the --backend value, empty when the flag was not given
+    std::string backend;
+    /// \brief the backend the currently loaded model was asked for
+    std::string current_backend;
     PromptCache prompt_cache;
 };
