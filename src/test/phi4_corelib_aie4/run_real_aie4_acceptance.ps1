@@ -1,6 +1,6 @@
 param(
   [string]$FlmExe = 'src/build-aie4/Release/flm.exe',
-  [string]$Model = 'phi4-mini-it-aie4:4b',
+  [string]$Model = 'phi4-mini-it:4b',
   [string]$CorelibDll = 'C:/Users/chiz/work/ryzenai-corelib/install/bin/ryzenai_corelib.dll',
   [string]$Output = 'src/build-aie4/phi4-gguf-aie4-acceptance.json',
   [int]$Port = 52625,
@@ -16,6 +16,8 @@ $core=(Resolve-Path $CorelibDll).Path
 $outPath=[IO.Path]::GetFullPath((Join-Path $root $Output))
 $outDir=Split-Path $outPath
 $modelDir=Join-Path $env:USERPROFILE '.flm/models/phi4-mini-it-aie4'
+# Inert when flm.exe was built with FLM_ENABLE_CORELIB_AIE4 (corelib is linked
+# in there); still used by the DLL-loading test binaries in this directory.
 $env:FLM_AIE4_CORELIB_PATH=$core
 $env:FLM_CONFIG_PATH=Join-Path $root 'src/model_list.json'
 $env:FLM_XCLBIN_PATH=Join-Path $root 'src'

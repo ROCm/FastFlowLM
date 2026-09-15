@@ -11,6 +11,7 @@
 #include "model_downloader.hpp"
 #include "update.hpp"
 #include "utils/utils.hpp"
+#include "utils/npu_platform.hpp"
 #include "program_args.hpp"
 #include "minja/chat-template.hpp"
 #include <cstring>
@@ -36,6 +37,7 @@
 #include "benchmarking.hpp"
 #ifdef FLM_ENABLE_CORELIB_AIE4
 #include "corelib/corelib_runtime.hpp"
+#include "corelib/corelib_device.hpp"
 #endif
 
 #ifndef _WIN32
@@ -165,8 +167,9 @@ void signal_handler(int signal) {
 ///@param models the model list
 ///@param default_tag the default tag
 ///@param port the port to listen on, default is 52625, same with the ollama server
+///@param npu_device the NPU device owned by main, shared with the handler
 ///@return the server
-std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader& downloader, program_args_t& args);
+std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader& downloader, program_args_t& args, flm_rt::device* npu_device);
 
 #ifdef _WIN32
 std::string get_driver_version(const std::string& device_name) {
@@ -225,6 +228,10 @@ static bool sanity_check_npu_stack(bool quiet, bool json_output = false) {
         {"ready", true}
     };
     validation_json["platform"] = "linux";
+    // detect_npu_platform is cached, so this reports exactly the generation the
+    // catalog was filtered for in main().
+    validation_json["npu_platform"] =
+        std::string(utils::platform_id(utils::detect_npu_platform(nullptr)));
     // Check kernel version
     struct utsname u_name;
     if (uname(&u_name) != 0) {
@@ -330,10 +337,12 @@ static bool sanity_check_npu_stack(bool quiet, bool json_output = false) {
         get_info.buffer = (unsigned long)&query_aie_metadata;
         if (ioctl(fd, DRM_IOCTL_AMDXDNA_GET_INFO, &get_info) == 0) {
             device_entry["cols"] = query_aie_metadata.cols;
-            if (query_aie_metadata.cols < 8) {
+            // 8+ columns is aie2p (Strix/Krackan), 3 is aie4 (Medusa Point).
+            // Anything else is a part we have no kernels for.
+            if (!utils::is_known_column_count(static_cast<int>(query_aie_metadata.cols))) {
                 enough_cols = false;
                 if (print_human) {
-                    header_print_r("ERROR", "NPU " + dev_name + " does not have enough columns (" << query_aie_metadata.cols << " < 8)");
+                    header_print_r("ERROR", "NPU " + dev_name + " reports an unsupported column count (" << query_aie_metadata.cols << "); expected 3 or 8 or more");
                 }
             }
         }
@@ -400,6 +409,10 @@ static bool sanity_check_npu_stack(bool quiet, bool json_output = false) {
     }
     validation_json["memlock_ok"] = memlock_ok;
 
+    if (print_human) {
+        header_print_g("Linux", "NPU platform: " << validation_json["npu_platform"].get<std::string>());
+    }
+
     bool overall_ok = amd_device_found && kernel_ok && all_fw_ok && enough_cols && memlock_ok;
     validation_json["ready"] = overall_ok;
     if (json_output) {
@@ -413,6 +426,8 @@ static bool sanity_check_npu_stack(bool quiet, bool json_output = false) {
         {"platform", "windows"},
         {"amd_device_found", true},
         {"npu_driver_ok", true},
+        {"npu_platform",
+         std::string(utils::platform_id(utils::detect_npu_platform(nullptr)))},
         {"ready", true}
     };
     std::string npu_arch = identify_npu_arch();
@@ -449,6 +464,7 @@ static bool sanity_check_npu_stack(bool quiet, bool json_output = false) {
     if (print_human) {
         header_print_g("Windows", "NPU: " << npu_arch);
         header_print_g("Windows", "NPU dirver version: " << drv);
+        header_print_g("Windows", "NPU platform: " << validation_json["npu_platform"].get<std::string>());
     }
 
     if (json_output) {
@@ -458,6 +474,52 @@ static bool sanity_check_npu_stack(bool quiet, bool json_output = false) {
 #endif
 }
 
+
+#ifdef FLM_ENABLE_CORELIB_AIE4
+/// \brief brings corelib up for the process and tears it down on every exit path
+/// \note main() has early `return 1`s and a catch-all, so the teardown has to be
+///       a destructor rather than a trailing call. A failed shutdown must not
+///       mask whatever the program was already reporting, hence the swallow.
+struct CorelibProcessGuard {
+    ~CorelibProcessGuard() {
+        try {
+            flm::corelib::CorelibRuntime::ShutdownProcess();
+        } catch (const std::exception& e) {
+            std::cerr << "Warning: corelib shutdown failed: " << e.what() << std::endl;
+        } catch (...) {
+            std::cerr << "Warning: corelib shutdown failed" << std::endl;
+        }
+    }
+};
+#endif
+
+///@brief open the NPU device that every engine in this process shares
+///@param exe_dir the executable directory, used to locate corelib
+///@return the shared device, or nullptr when no NPU could be opened
+///@note With the AIE4 build the device belongs to corelib, so corelib is brought
+///      up here for every command. Without it the device is a function-local
+///      static, which keeps the lifetime tied to the process exactly as the
+///      per-Runner devices used to be. A machine with no NPU must still be able
+///      to run `flm list`/`pull`/`version`, so failure is a null pointer, not an
+///      error.
+static flm_rt::device* acquire_npu_device([[maybe_unused]] const std::string& exe_dir) {
+    try {
+#ifdef FLM_ENABLE_CORELIB_AIE4
+        flm::corelib::CorelibRuntime::GetOrCreate(std::filesystem::path(exe_dir));
+        return const_cast<flm_rt::device*>(&ryzenai::corelib::GetDevice());
+#else
+        static flm_rt::device npu_device = flm_rt::device(0);
+        return &npu_device;
+#endif
+    } catch (const std::exception& e) {
+        DO_VERBOSE(1, {
+            header_print("FLM", "No NPU device available: " << e.what());
+        });
+        return nullptr;
+    } catch (...) {
+        return nullptr;
+    }
+}
 
 ///@brief main function
 ///@param argc the number of arguments
@@ -494,8 +556,43 @@ int main(int argc, char* argv[]) {
     // Get the models directory from environment variable or default
     std::string models_dir = utils::get_models_directory();
 
-    
-    model_list availble_models(config_path, models_dir);
+#ifdef FLM_ENABLE_CORELIB_AIE4
+    // Declared before anything that can return so the destructor covers the
+    // early exits and the catch-all below.
+    CorelibProcessGuard corelib_guard;
+#endif
+
+    // One device for the whole process, opened before the catalog so the
+    // catalog can be filtered to what this NPU generation can actually run.
+    flm_rt::device* npu_device = acquire_npu_device(exe_dir);
+    std::string platform_detail;
+    const utils::npu_platform platform =
+        utils::detect_npu_platform(npu_device, &platform_detail);
+
+    model_list availble_models(config_path, models_dir,
+                               std::string(utils::platform_id(platform)));
+
+    const bool print_status = !parsed_args.json_output && !parsed_args.sub_process_mode;
+    if (print_status &&
+        (parsed_args.command == "run" || parsed_args.command == "serve" ||
+         parsed_args.command == "bench" || parsed_args.command == "validate")) {
+        header_print("FLM", "NPU platform: " << utils::platform_id(platform)
+                                             << " (" << platform_detail << ")");
+    }
+
+    // The aie4 build of phi4-mini-it installs under its own directory name, so
+    // on any other platform that directory is no longer reachable by a tag and
+    // `flm remove` cannot clean it up. Point it out; never delete it.
+    if (print_status && platform != utils::npu_platform::aie4) {
+        const std::filesystem::path stale_dir =
+            std::filesystem::path(availble_models.get_model_root_path()) / "phi4-mini-it-aie4";
+        std::error_code stale_ec;
+        if (std::filesystem::exists(stale_dir, stale_ec)) {
+            header_print("FLM", "Note: " << stale_dir.string()
+                                         << " is an AIE4-only model and is unused on this NPU; "
+                                            "delete it manually to reclaim the space.");
+        }
+    }
     
     // Extract parsed values
     bool got_power_mode = (parsed_args.power_mode != "performance"); // Check if user explicitly set power mode
@@ -615,11 +712,11 @@ int main(int argc, char* argv[]) {
         }
 
         if (parsed_args.command == "bench") {
-            benchmarking::BenchmarkResults_t results = benchmarking::run_benchmarks(parsed_args.model_tag, parsed_args.input_file_name, availble_models, parsed_args.iterations);
+            benchmarking::BenchmarkResults_t results = benchmarking::run_benchmarks(parsed_args.model_tag, parsed_args.input_file_name, availble_models, parsed_args.iterations, npu_device);
         }
         else if (parsed_args.command == "run") {
             check_and_notify_new_version();
-            Runner runner(availble_models, downloader, parsed_args);
+            Runner runner(availble_models, downloader, parsed_args, npu_device);
             runner.run();
 
         } else if (parsed_args.command == "serve") {
@@ -632,7 +729,7 @@ int main(int argc, char* argv[]) {
             } else {
                 header_print("FLM", "Using user-specified port: " << port);
             }
-            auto server = create_lm_server(availble_models, downloader, parsed_args);
+            auto server = create_lm_server(availble_models, downloader, parsed_args, npu_device);
             server->set_max_connections(parsed_args.max_socket_connections);           // Allow up to 10 concurrent connections
             server->set_io_threads(10);          // Allow up to 5 io threads
             server->set_npu_queue_length(parsed_args.max_npu_queue);           // Allow up to 10 concurrent queue
@@ -718,10 +815,7 @@ int main(int argc, char* argv[]) {
             std::cerr << "Use --help for usage information" << std::endl;
             return 1;
         }
-        // Return 0 if the command is valid
-#ifdef FLM_ENABLE_CORELIB_AIE4
-        flm::corelib::CorelibRuntime::ShutdownProcess();
-#endif
+        // Return 0 if the command is valid; corelib_guard shuts corelib down.
         return 0;
     } catch (const std::exception& e) {
         // If an error occurs, this will be used to show the error

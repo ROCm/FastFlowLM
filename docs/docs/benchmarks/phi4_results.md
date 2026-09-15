@@ -44,7 +44,7 @@ AMD Ryzen™ AI 7 350 (Kraken Point) with 32 GB DRAM; performance is comparable 
 
 ---
 
-## 🧪 Phi-4-mini-instruct Q8_0 GGUF on AIE4 (`phi4-mini-it-aie4:4b`)
+## 🧪 Phi-4-mini-instruct Q8_0 GGUF on AIE4 (`phi4-mini-it:4b`, resolved for AIE4)
 
 These are **descriptive measurements from a single acceptance run**, not a benchmark sweep and not a pass threshold. They are not comparable to the tables above: the prompts here are 4–10 tokens, whereas those tables sweep 1k–32k, so the per-token rates are dominated by fixed overhead rather than by context length.
 

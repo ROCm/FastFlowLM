@@ -296,5 +296,6 @@ class model_list;
 ///@param default_tag the default tag
 ///@param port the port to listen on, default is 52625, same with the ollama server
 ///@return the server
-std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader& downloader, program_args_t& args);
+std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader& downloader, program_args_t& args,
+                                            flm_rt::device* npu_device);
 

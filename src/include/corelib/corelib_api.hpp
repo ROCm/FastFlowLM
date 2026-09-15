@@ -78,6 +78,13 @@ class CorelibApi final {
 public:
     using Resolver = std::function<void*(std::string_view)>;
     static std::shared_ptr<CorelibApi> Load(const std::filesystem::path& dll);
+#if defined(FLM_CORELIB_LINK_STATIC)
+    /// \brief bind to the corelib linked into this binary
+    /// \return the API bound to the linked symbols
+    /// \note The static build has no DLL to pick, so FLM_AIE4_CORELIB_PATH has
+    ///       nothing to select and is reported as ignored.
+    static std::shared_ptr<CorelibApi> LoadStatic();
+#endif
     static std::shared_ptr<CorelibApi> ResolveForTest(
         Resolver resolver, std::filesystem::path loaded_library_path = {});
     static std::filesystem::path ResolveLibraryPath(

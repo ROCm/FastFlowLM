@@ -56,12 +56,13 @@
     {
       "name": "windows-aie4",
       "displayName": "Windows AIE4",
-      "description": "Windows build with optional dynamically loaded ryzenai-corelib support",
+      "description": "Windows build with statically linked ryzenai-corelib AIE4 support",
       "inherits": "windows-default",
       "binaryDir": "${sourceDir}/build-aie4",
       "cacheVariables": {
         "FLM_ENABLE_CORELIB_AIE4": "ON",
-        "RYZENAI_CORELIB_INCLUDE_DIR": "$env{RYZENAI_CORELIB_INCLUDE_DIR}"
+        "RYZENAI_CORELIB_INCLUDE_DIR": "$env{RYZENAI_CORELIB_INCLUDE_DIR}",
+        "RYZENAI_CORELIB_LIBRARY": "$env{RYZENAI_CORELIB_LIBRARY}"
       }
     },
     {

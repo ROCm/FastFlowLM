@@ -38,12 +38,20 @@ bool is_hex_revision(const std::string& revision) {
            });
 }
 
-nlohmann::json load_model_file_records(const std::string& model_tag) {
+/// \brief load the pinned per-file records describing a model's download
+/// \param model_info the resolved catalog entry
+/// \param model_tag the resolved "family:size" tag
+/// \note A model whose artifacts differ per NPU generation shares one tag across
+///       platforms, so its entry names the record set explicitly via
+///       "model_info_key"; everything else is keyed by its tag.
+nlohmann::json load_model_file_records(const nlohmann::json& model_info,
+                                       const std::string& model_tag) {
+    const std::string key = model_info.value("model_info_key", model_tag);
     std::ifstream stream(utils::find_model_info());
     if (!stream.is_open()) {
         throw std::runtime_error("model_info.json could not be opened");
     }
-    return nlohmann::json::parse(stream).at(model_tag);
+    return nlohmann::json::parse(stream).at(key);
 }
 
 const nlohmann::json& find_file_record(const nlohmann::json& records,
@@ -445,7 +453,7 @@ std::pair<nlohmann::json, float> ModelDownloader::build_download_list(
     const std::vector<std::string> model_files = model_info.at("files");
     const std::string model_path = supported_models.get_model_path(new_model_tag);
     std::filesystem::create_directories(model_path);
-    const nlohmann::json records = load_model_file_records(new_model_tag);
+    const nlohmann::json records = load_model_file_records(model_info, new_model_tag);
 
     for (const auto& filename : model_files) {
         const std::string local_path = get_model_file_path(model_path, filename);
@@ -577,7 +585,7 @@ bool ModelDownloader::verify_and_clean_files(const std::string& model_tag, bool 
         auto [new_model_tag, model_info] = supported_models.get_model_info(model_tag);
         std::vector<std::string> model_files = model_info["files"];
         std::string model_path = supported_models.get_model_path(new_model_tag);
-        const nlohmann::json records = load_model_file_records(new_model_tag);
+        const nlohmann::json records = load_model_file_records(model_info, new_model_tag);
 
         for (const auto& filename : model_files) {
             if (!sub_process_mode) {

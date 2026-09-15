@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <iostream>
 #include <sstream>
 #include <utility>
 
@@ -121,6 +122,30 @@ std::shared_ptr<CorelibApi> CorelibApi::Load(const std::filesystem::path& dll) {
     return ResolveForTest(std::move(resolver), absolute_dll);
 #endif
 }
+
+#if defined(FLM_CORELIB_LINK_STATIC)
+std::shared_ptr<CorelibApi> CorelibApi::LoadStatic() {
+    const char* configured = std::getenv("FLM_AIE4_CORELIB_PATH");
+    if (configured && *configured) {
+        std::cerr << "[FLM]  Ignoring FLM_AIE4_CORELIB_PATH: corelib is linked "
+                     "into this build, so there is no DLL to select."
+                  << std::endl;
+    }
+    // Resolve through the same name-keyed resolver the DLL path uses, so the
+    // version check and the missing-symbol diagnostics stay identical.
+    Resolver resolver = [](std::string_view name) -> void* {
+#define FLM_STATIC_CORELIB_SYMBOL(member, symbol)                                  \
+        if (name == std::string_view(#symbol)) {                                   \
+            return reinterpret_cast<void*>(&::symbol);                             \
+        }
+        FLM_CORELIB_FUNCTIONS(FLM_STATIC_CORELIB_SYMBOL)
+#undef FLM_STATIC_CORELIB_SYMBOL
+        return nullptr;
+    };
+    return ResolveForTest(std::move(resolver),
+                          std::filesystem::path("<statically linked>"));
+}
+#endif
 
 std::filesystem::path CorelibApi::ResolveLibraryPath(
     const std::filesystem::path& executable_dir) {

@@ -26,14 +26,14 @@ flm run phi4-mini-it:4b
 
 ## 🧪 Model Card: Phi-4-mini-instruct on AIE4 (developer preview)
 
-- **Tag:** `phi4-mini-it-aie4:4b`
-- **Backend:** `corelib_aie4_gguf` — runs on AIE4 through AMD's `ryzenai_corelib.dll`
+- **Tag:** `phi4-mini-it:4b` — the same tag as the NPU2 build. FastFlowLM detects the NPU generation at startup (3 AIE columns = AIE4 / Medusa Point, 8 = AIE2P / Strix / Krackan Point) and resolves the tag to the artifacts that generation can run. There is no separate AIE4 tag; `flm list` on an AIE4 machine shows only the models it can run.
+- **Backend:** `corelib_aie4_gguf` — runs on AIE4 through AMD's `ryzenai_corelib`
 - **Source format:** GGUF, read directly. No ONNX model, no tensor manifest, and no converted or packed weight file is produced or shipped.
 - **Quantization:** GGML `Q8_0` in the file, requantized to **group 64** while the weights are packed for the device, through corelib's explicit `*_create_gguf_requantized` entry points. This is a **lossy** second quantization step and it is not reversible; output will differ from the Q8_0 source.
 - **Usable generation window:** 4095 tokens — the rendered prompt plus the requested output together, so the largest admissible prompt is 4094. An over-capacity request is rejected with HTTP 400 *before* any work is submitted to the device. Note this is far below the model's 128k context; see below for why.
-- **Availability:** Windows only, and this is a **developer build**. The AIE4 runtime is not packaged by the MSI or Inno installer; you supply the DLL yourself.
+- **Availability:** Windows only, and this is a **developer build**. The AIE4 runtime is not packaged by the MSI or Inno installer; you build against corelib yourself.
 
-This tag pulls from two pinned repositories, because the GGUF publisher does not ship the tokenizer files FastFlowLM's tokenizer frontend consumes:
+On AIE4 this tag pulls from two pinned repositories, because the GGUF publisher does not ship the tokenizer files FastFlowLM's tokenizer frontend consumes:
 
 | File | Repository | Revision |
 |---|---|---|
@@ -56,21 +56,17 @@ cmake --preset windows-aie4          # sets FLM_ENABLE_CORELIB_AIE4=ON, builds i
 cmake --build --preset windows-aie4
 ```
 
-The `windows-aie4` preset reads `RYZENAI_CORELIB_INCLUDE_DIR` from the environment, so set it before configuring. The configure step also locates a Boost include directory, and hard-errors if the option is enabled on a non-Windows host. Everything else — XRT, FFmpeg, curl, FFTW — is the ordinary FastFlowLM dependency set; the AIE4 option does not relax any of it.
+The `windows-aie4` preset reads `RYZENAI_CORELIB_INCLUDE_DIR` and `RYZENAI_CORELIB_LIBRARY` from the environment, so set both before configuring. The configure step also locates a Boost include directory, and hard-errors if the option is enabled on a non-Windows host. Everything else — XRT, FFmpeg, curl, FFTW — is the ordinary FastFlowLM dependency set; the AIE4 option does not relax any of it.
 
 ### Pointing FastFlowLM at the runtime
 
-`flm.exe` never links `ryzenai_corelib.lib`; the DLL is resolved and loaded at run time, by absolute path:
+An AIE4 build (`-DFLM_ENABLE_CORELIB_AIE4=ON`) **links corelib in**, because the NPU device the whole process shares comes from corelib's `ryzenai::corelib::GetDevice()` rather than from a device FastFlowLM opens itself. Point the build at the library with `RYZENAI_CORELIB_INCLUDE_DIR` and `RYZENAI_CORELIB_LIBRARY`. `FLM_AIE4_CORELIB_PATH` selects a DLL only in the older dynamically loading configuration; in an AIE4 build it is ignored, and `flm` says so if it is set.
 
-1. `FLM_AIE4_CORELIB_PATH`, if set. It must be an **absolute path to a `.dll` file** — a relative path or a directory is rejected outright.
-2. Otherwise `<directory containing flm.exe>\aie4\ryzenai_corelib.dll`.
-
-The corelib ABI is still pre-1.0, so FastFlowLM requires an **exact `0.3.0`** match on major, minor and patch. The version is queried before any other entry point, so a mismatched runtime reports a version error rather than a missing symbol. The DLL's own dependency directory must be reachable on `PATH`.
+The corelib ABI is still pre-1.0, so FastFlowLM requires an **exact `0.3.0`** match on major, minor and patch. The version is queried before any other entry point, so a mismatched runtime reports a version error rather than a missing symbol. Corelib's own dependency directory must be reachable on `PATH`.
 
 ```powershell
-$env:FLM_AIE4_CORELIB_PATH = 'C:/path/to/ryzenai_corelib.dll'
-flm pull phi4-mini-it-aie4:4b
-flm run  phi4-mini-it-aie4:4b
+flm pull phi4-mini-it:4b
+flm run  phi4-mini-it:4b
 ```
 
 ### Why the context is 4096, and why the usable window is one less
@@ -83,6 +79,8 @@ Phi-4-mini itself supports 128k, and the existing `phi4-mini-it:4b` tag defaults
 
 ### No fallback
 
-Backend selection is explicit: it comes from `execution_backend` in the model catalog and is never inferred from hardware, filename, or quantization level. If corelib is missing, unloadable, or the wrong version, this tag **fails to load with a diagnostic** — it will not quietly fall back to CPU or to the NPU2/Q4NX backend. A build without AIE4 support, and an AIE4 build with no DLL present, both still start and run every other model, including `phi4-mini-it:4b`.
+Backend selection is still explicit: it comes from `execution_backend` in the model catalog, never from a filename or a quantization level. What the hardware decides is *which catalog entry* the tag resolves to — the detected NPU generation picks between the NPU2/Q4NX entry and this one, and from there the backend is whatever that entry declares. Once this entry is selected, there is no fallback: if corelib is missing, unloadable, or the wrong version, the tag **fails to load with a diagnostic** rather than quietly running on CPU or on the NPU2/Q4NX backend.
+
+Detection can be overridden with `FLM_PLATFORM=aie2p|aie4`. It is a testing knob: pointing the catalog at hardware you do not have moves the failure from tag resolution down into the model load.
 
 ---

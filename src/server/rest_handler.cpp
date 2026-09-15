@@ -336,9 +336,9 @@ static json convert_tool_responses_gemma4(json messages) {
 ///@param embed whether to enable embedding
 
 ///@return the rest handler
-RestHandler::RestHandler(model_list& models, ModelDownloader& downloader, program_args_t& args)
-    : supported_models(models), downloader(downloader), default_model_tag(args.model_tag), current_model_tag(""), modelscope(args.modelscope), asr(args.asr), embed(args.embed), img_pre_resize(args.img_pre_resize), preemption(args.preemption){
-    this->npu_device_inst = flm_rt::device(0);
+RestHandler::RestHandler(model_list& models, ModelDownloader& downloader, program_args_t& args,
+                         flm_rt::device* npu_device)
+    : supported_models(models), downloader(downloader), default_model_tag(args.model_tag), current_model_tag(""), modelscope(args.modelscope), asr(args.asr), embed(args.embed), img_pre_resize(args.img_pre_resize), preemption(args.preemption), npu_device_inst(npu_device){
 
     if (args.ctx_length != -1) {
         this->ctx_length = args.ctx_length >= 512 ? args.ctx_length : 512;
@@ -399,7 +399,7 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag) {
         if (auto_chat_engine != nullptr) {
             auto_chat_engine.reset();
         }
-        std::pair<std::string, std::unique_ptr<AutoModel>> auto_model = get_auto_model(ensure_tag, this->supported_models, &this->npu_device_inst);
+        std::pair<std::string, std::unique_ptr<AutoModel>> auto_model = get_auto_model(ensure_tag, this->supported_models, this->npu_device_inst);
         auto_chat_engine = std::move(auto_model.second);
         ensure_tag = auto_model.first;
         switch (downloader.is_model_downloaded(ensure_tag, false, /*fast_check=*/true)) {
@@ -422,8 +422,9 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag) {
         catch (const std::exception& e) {
             header_print("ERROR", "Failed to load model: " + std::string(e.what()));
             this->auto_chat_engine.reset();
-            this->npu_device_inst.reset();
-            this->npu_device_inst = flm_rt::device(0);
+            // The device is owned by main() and shared with every engine, so it
+            // is deliberately left alone here; releasing the failed engine is
+            // what frees the hardware context.
             this->current_model_tag = "model-faker";
             return false;
         }
@@ -453,7 +454,7 @@ void RestHandler::ensure_asr_model_loaded(const std::string& model_tag) {
             this->asr = false;
             return;
     }
-    this->whisper_engine = std::make_unique<Whisper>(&this->npu_device_inst);
+    this->whisper_engine = std::make_unique<Whisper>(this->npu_device_inst);
     auto [new_ensure_tag, whisper_model_info] = this->supported_models.get_model_info(ensure_tag);
     std::string whisper_model_path = this->supported_models.get_model_path(new_ensure_tag);
     try {
@@ -485,7 +486,7 @@ void RestHandler::ensure_embed_model_loaded(const std::string& model_tag) {
             this->embed = false;
             return;
     }
-    auto [embedding_model_tag, auto_embedding_engine] = get_auto_embedding_model(ensure_tag, &this->npu_device_inst);
+    auto [embedding_model_tag, auto_embedding_engine] = get_auto_embedding_model(ensure_tag, this->npu_device_inst);
     this->auto_embedding_engine = std::move(auto_embedding_engine);
     auto [new_embedding_model_tag, embedding_model_info] = this->supported_models.get_model_info(embedding_model_tag);
     std::string embedding_model_path = this->supported_models.get_model_path(new_embedding_model_tag);
