@@ -252,6 +252,11 @@ file(GLOB SOURCES "src/*.cpp" "runner/*.cpp" "common/*.cpp" "common/*/*.cpp" "se
 file(GLOB HEADERS "include/*.hpp" "runner/*.hpp" "common/*.hpp" "common/*/*.hpp" "server/*.hpp" "pull/*.hpp")
 list(FILTER SOURCES EXCLUDE REGEX ".*/common/corelib/.*\\.cpp$")
 
+# Model sources live two levels deeper than the globs above reach, so pull
+# them in explicitly; the corelib half is built separately, below.
+include("${CMAKE_SOURCE_DIR}/common/models/models_sources.cmake")
+list(APPEND SOURCES ${FLM_MODELS_FLM_SOURCES})
+
 # Exclude files that depend on missing libraries for Linux
 if(NOT WIN32)
     # list(FILTER SOURCES EXCLUDE REGEX ".*modeling_gemma3\\.cpp$")
