@@ -63,9 +63,15 @@ public:
         const std::filesystem::path root(context.model_path);
         const auto config = ReadJson(root / "config.json");
         const auto tokenizer_json = ReadJson(root / "tokenizer.json");
-        const auto tokenizer_config = ReadJson(root / "tokenizer_config.json");
+        // The frontend already parsed this one and passes it down, so the file
+        // is opened once per load and the directory layout stays its knowledge.
+        if (context.tokenizer_config == nullptr) {
+            throw std::runtime_error(
+                "Phi-4 AIE4 backend needs the frontend's tokenizer_config.json");
+        }
         auto package = Phi4GgufPackage::Open(root / kAie4Gguf);
-        package->ValidatePhi4Contract(config, tokenizer_json, tokenizer_config);
+        package->ValidatePhi4Contract(config, tokenizer_json,
+                                      *context.tokenizer_config);
 
         runtime_ = corelib::CorelibRuntime::GetOrCreate(
             utils::get_executable_directory());

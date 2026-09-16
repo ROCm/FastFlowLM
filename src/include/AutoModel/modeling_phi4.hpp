@@ -23,7 +23,10 @@ private:
     /// \param model_path the model directory
     /// \note Phi-4's contract differs from the shared one: minja receives no
     ///       textual BOS/EOS, and there is no automatic BOS token.
-    void setup_tokenizer(const std::string& model_path);
+    /// \brief build the chat template and stop ids from an already-parsed
+    ///        tokenizer_config.json
+    /// \param config the parse load_model handed to the backend as well
+    void setup_tokenizer(const nlohmann::json& config);
 
     /// \brief Turn a failed inference into a request error, clearing the session
     /// \throws ModelRequestError 500, always

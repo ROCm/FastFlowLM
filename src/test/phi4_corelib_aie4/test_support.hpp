@@ -32,12 +32,30 @@ std::string RequireThrows(Callable&& callable) {
     throw std::runtime_error("expected exception was not thrown");
 }
 
+/// \brief how many tests have failed so far in this binary
+/// \note Exiting on the first failure hides every later one, so a suite with
+///       three broken tests looks like a suite with one and each fix uncovers
+///       the next. Keep going and fail the process at the end instead.
+inline int& FailureCount() {
+    static int failures = 0;
+    return failures;
+}
+
 inline void RunTest(void (*test)(), const char* name) {
     try {
         test();
         std::cout << "PASS " << name << '\n';
     } catch (const std::exception& error) {
         std::cerr << "FAIL " << name << ": " << error.what() << '\n';
-        std::exit(1);
+        // Every main here ends with an unconditional "PASS" and return 0, so
+        // the process exit code has to be forced from here. atexit runs after
+        // main returns, which is late enough to have counted every test.
+        if (++FailureCount() == 1) {
+            std::atexit([] {
+                std::cerr << FailureCount() << " test(s) FAILED\n";
+                std::cerr.flush();
+                std::_Exit(1);
+            });
+        }
     }
 }

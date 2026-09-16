@@ -226,7 +226,7 @@ protected:
 	///       for the frontend is the tokenizer, the chat template and the sampler.
 	/// \throws std::runtime_error if the backend is unknown, unavailable for the
 	///         model, or cannot honour the requested preemption/context length
-	void _shared_load_backend(std::string model_path, json model_info, int default_context_length = -1, bool enable_preemption = false, const std::string& requested_backend = "");
+	void _shared_load_backend(std::string model_path, json model_info, int default_context_length = -1, bool enable_preemption = false, const std::string& requested_backend = "", const nlohmann::json* tokenizer_config = nullptr);
 
 	/// \brief Drop the conversation after a failed inference
 	/// \param poisoned whether the engine can no longer be driven at all

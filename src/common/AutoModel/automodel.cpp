@@ -157,7 +157,8 @@ void AutoModel::_shared_initialize_model_state(
 void AutoModel::_shared_load_backend(std::string model_path, json model_info,
                                      int default_context_length,
                                      bool enable_preemption,
-                                     const std::string& requested_backend) {
+                                     const std::string& requested_backend,
+                                     const nlohmann::json* tokenizer_config) {
     if (!model_info.contains("details") ||
         !model_info["details"].contains("family")) {
         throw std::runtime_error("Model entry has no details.family");
@@ -217,6 +218,7 @@ void AutoModel::_shared_load_backend(std::string model_path, json model_info,
         context.device = this->npu_device_inst;
         context.context_length = static_cast<std::uint32_t>(context_length);
         context.enable_preemption = this->enable_preemption;
+        context.tokenizer_config = tokenizer_config;
 
         this->backend_ = registry.create(family, id, context);
         this->lm_engine = &this->backend_->engine();

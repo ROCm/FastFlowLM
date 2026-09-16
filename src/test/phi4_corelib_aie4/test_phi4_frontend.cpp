@@ -165,10 +165,16 @@ std::unique_ptr<flm::backend::ModelBackend> MakeCorelibAie4Stub(
     const std::filesystem::path root(context.model_path);
     const auto config = ReadObserved(root / "config.json");
     const auto tokenizer_json = ReadObserved(root / "tokenizer.json");
-    const auto tokenizer_config = ReadObserved(root / "tokenizer_config.json");
+    // tokenizer_config.json arrives already parsed from the frontend, exactly
+    // as it does for the real backend, so the audit sees a single open.
+    if (context.tokenizer_config == nullptr) {
+        throw std::runtime_error(
+            "Phi-4 AIE4 backend needs the frontend's tokenizer_config.json");
+    }
     auto package = flm::phi4::Phi4GgufPackage::Open(
         root / "Phi-4-mini-instruct.Q8_0.gguf");
-    package->ValidatePhi4Contract(config, tokenizer_json, tokenizer_config);
+    package->ValidatePhi4Contract(config, tokenizer_json,
+                                  *context.tokenizer_config);
 
     ++g_factory.aie4_calls;
     if (g_factory.throw_for_aie4) throw std::runtime_error("missing corelib");

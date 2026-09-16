@@ -45,6 +45,11 @@ struct BackendContext {
     flm_rt::device* device = nullptr;
     std::uint32_t context_length = 0;
     bool enable_preemption = false;
+    /// \brief the frontend's parse of tokenizer_config.json
+    /// \note Supplied here rather than read by the backend, so the model
+    ///       directory layout stays the frontend's knowledge and the file is
+    ///       opened once per load. null for families that have no such file.
+    const nlohmann::json* tokenizer_config = nullptr;
 };
 
 /// \brief what a backend needs from the frontend *before* it can be built

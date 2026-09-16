@@ -42,17 +42,22 @@ Phi4::Phi4(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "Phi4")
 void Phi4::load_model(std::string model_path, json model_info,
                       int default_context_length, bool enable_preemption,
                       const std::string& backend) {
+    // Read once here and hand the parse to both consumers. The backend needs it
+    // to cross-validate its package and the tokenizer setup below needs it for
+    // the chat template, but the model directory layout is this frontend's
+    // knowledge -- a backend that opens the directory itself duplicates both
+    // the read and that knowledge.
+    const nlohmann::json tokenizer_config =
+        ReadJson(std::filesystem::path(model_path) / "tokenizer_config.json");
     this->_shared_load_backend(model_path, model_info, default_context_length,
-                               enable_preemption, backend);
-    this->setup_tokenizer(model_path);
+                               enable_preemption, backend, &tokenizer_config);
+    this->setup_tokenizer(tokenizer_config);
     this->sampler.reset();
     ConfigureSampler(*this);
     for (auto& item : profiler_list) item.reset();
 }
 
-void Phi4::setup_tokenizer(const std::string& model_path) {
-    const nlohmann::json config =
-        ReadJson(std::filesystem::path(model_path) / "tokenizer_config.json");
+void Phi4::setup_tokenizer(const nlohmann::json& config) {
     if (!config.contains("chat_template") || !config["chat_template"].is_string())
         throw std::invalid_argument("Phi-4 tokenizer_config.json requires a string chat_template");
 
