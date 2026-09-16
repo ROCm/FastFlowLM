@@ -11,10 +11,12 @@
 #include <ostream>
 #include <streambuf>
 #include <functional>
+#include <exception>
 #include <string>
 #include <vector>
 #include <random>
 #include <sstream>
+#include "openai_tool_policy.hpp"
 #include <iomanip>
 #include <nlohmann/json.hpp>
 #include "AutoModel/automodel.hpp"
@@ -73,7 +75,6 @@ public:
         }
         send_final_response(meta_info);
     }
- 
 
 private:
     ///@brief Generate a unique stream ID
@@ -265,8 +266,17 @@ public:
     ///@brief StreamCallback
     using StreamCallback = std::function<void(const std::string&, bool)>;
 
-    streaming_buf_openai_chat(const std::string& model, AutoModel* auto_chat_engine, StreamCallback callback)
-        : model_name(model), auto_chat_engine(auto_chat_engine), stream_callback(callback), first_chunk(true) {
+    streaming_buf_openai_chat(const std::string& model,
+                              AutoModel* auto_chat_engine,
+                              StreamCallback callback,
+                              openai_tools::ToolPolicy tool_policy,
+                              openai_tools::StreamOptions stream_options)
+        : model_name(model),
+          auto_chat_engine(auto_chat_engine),
+          stream_callback(callback),
+          first_chunk(true),
+          tool_policy(std::move(tool_policy)),
+          stream_options(stream_options) {
         // Generate a unique ID for this stream
         generate_stream_id();
         generate_created();
@@ -311,6 +321,12 @@ public:
             meta_info.stop_reason = stream_stop_reason;
         }
         send_final_response(meta_info);
+    }
+
+    void rethrow_contract_error() const {
+        if (contract_error) {
+            std::rethrow_exception(contract_error);
+        }
     }
 
 
@@ -428,19 +444,22 @@ private:
         json delta;
         if (result.type == StreamEventType::TOOL_DONE) {
             stream_stop_reason = stop_reason_t::TOOL_DETECTED;
-            delta = {
-                {"tool_calls", json::array({
-                    {
-                        {"index", index++},
-                        {"id", result.tool_id},
-                        {"type", "function"},
-                        {"function", {
-                            {"name", result.tool_name},
-                            {"arguments", result.tool_args_str} 
-                        }}
-                    }
-                })}
+            json tool_call = {
+                {"index", index++},
+                {"id", result.tool_id},
+                {"type", "function"},
+                {"function", {
+                    {"name", result.tool_name},
+                    {"arguments", result.tool_args_str}
+                }}
             };
+            try {
+                openai_tools::validate_streamed_tool_call(tool_call, tool_policy);
+            } catch (...) {
+                contract_error = std::current_exception();
+                throw;
+            }
+            delta = {{"tool_calls", json::array({std::move(tool_call)})}};
             header_print("FLM", "Tool name: " + result.tool_name);
             header_print("FLM", "Tool args: " + result.tool_args_str);
             header_print("FLM", "Tool JSON: " + delta["tool_calls"][0]["function"].dump());
@@ -474,6 +493,10 @@ private:
             })}
         };
 
+        if (stream_options.include_usage) {
+            response["usage"] = nullptr;
+        }
+
         stream_callback("data: " + response.dump() + "\n\n", is_final);
     }
 
@@ -494,8 +517,22 @@ private:
                     //{"logprobs", nullptr},
                     {"finish_reason", stop_reason_to_string(meta_info.stop_reason)}
                 }
-            })},
-            {"usage", {
+            })}
+        };
+        if (stream_options.include_usage) {
+            final_response["usage"] = nullptr;
+        }
+        stream_callback("data: " + final_response.dump() + "\n\n", false);
+
+        if (stream_options.include_usage) {
+            json usage_response = {
+                {"id", stream_id},
+                {"object", "chat.completion.chunk"},
+                {"created", created},
+                {"model", model_name},
+                {"system_fingerprint", system_fingerprint},
+                {"choices", json::array()},
+                {"usage", {
                 {"prompt_tokens", meta_info.prompt_tokens},
                 {"completion_tokens", meta_info.generated_tokens},
                 {"total_tokens", meta_info.prompt_tokens + meta_info.generated_tokens},
@@ -507,10 +544,10 @@ private:
                 {"decoding_duration", static_cast<double>(meta_info.decoding_duration) / 1'000'000'000},
                 {"prefill_speed_tps", static_cast<double>(meta_info.prompt_tokens) / static_cast<double>(meta_info.prefill_duration) * 1'000'000'000},
                 {"decoding_speed_tps", static_cast<double>(meta_info.generated_tokens) / static_cast<double>(meta_info.decoding_duration) * 1'000'000'000},
-            }}
-        };
-        stream_callback("data: " + final_response.dump() + "\n\n", false);
-        std::cout << "ChatCompletionChunk: " << final_response << std::endl;
+                }}
+            };
+            stream_callback("data: " + usage_response.dump() + "\n\n", false);
+        }
         // Send the [DONE] message
         stream_callback("data: [DONE]\n\n", true);
     }
@@ -533,6 +570,9 @@ private:
     stop_reason_t stream_stop_reason = stop_reason_t::EOT_DETECTED;
     ///@brief tool_calls delta index, scoped to this stream
     int index = 0;
+    openai_tools::ToolPolicy tool_policy;
+    openai_tools::StreamOptions stream_options;
+    std::exception_ptr contract_error;
 
     std::unique_ptr<harmony_filter> harmony_filter_inst;
 };
@@ -544,12 +584,23 @@ private:
 ///@return the streaming ostream
 class streaming_ostream_openai_chat : public std::ostream {
 public:
-    streaming_ostream_openai_chat(const std::string& model, AutoModel* auto_chat_engine, streaming_buf_openai_chat::StreamCallback callback)
-        : std::ostream(&buf), buf(model, auto_chat_engine, callback) {}
+    streaming_ostream_openai_chat(const std::string& model,
+                                  AutoModel* auto_chat_engine,
+                                  streaming_buf_openai_chat::StreamCallback callback,
+                                  openai_tools::ToolPolicy tool_policy,
+                                  openai_tools::StreamOptions stream_options)
+        : std::ostream(&buf),
+          buf(model, auto_chat_engine, std::move(callback), std::move(tool_policy), stream_options) {
+        exceptions(std::ios::badbit | std::ios::failbit);
+    }
 
     ///@brief Finalize the chat
     void finalize(chat_meta_info_t& meta_info) {
         buf.finalize(meta_info);
+    }
+
+    void rethrow_contract_error() const {
+        buf.rethrow_contract_error();
     }
 
 private:
