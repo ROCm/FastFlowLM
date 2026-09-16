@@ -249,9 +249,12 @@ void AutoModel::_shared_after_inference_failure(bool poisoned) {
 
 void AutoModel::_shared_guard_poisoned() const {
     if (this->backend_ && this->backend_->poisoned()) {
+        // Same condition as the throw in the frontend's inference-failure path,
+        // so it says the same thing: one poisoned model must not be described
+        // two ways depending on whether this is the request that broke it.
         throw ModelRequestError(500, true,
             "Backend '" + this->backend_->id() +
-            "' failed and the model must be reloaded");
+            "' failed; unload/reload is required because the model is poisoned");
     }
 }
 
@@ -423,6 +426,7 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
 
     }
     if (this->is_eos(last_sampled_token)){
+        meta_info.stop_reason = reason;
         return result;
     }
     this->profiler_list[DECODING_TIME].reset();
@@ -432,9 +436,18 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
     if (this->total_tokens >= decode_cap){
         header_print("WARNING", "Max length reached, stopping generation...");
         reason = MAX_LENGTH_REACHED;
+        meta_info.stop_reason = reason;
         return result;
     }
-    while (this->total_tokens < decode_cap){
+    while (true){
+        // Running out of window is a truncation, not the model choosing to
+        // stop, and the caller has to be able to tell those apart: this is
+        // what becomes `done_reason` over the API. Testing the cap here rather
+        // than in the loop condition is what records it.
+        if (this->total_tokens >= decode_cap){
+            reason = MAX_LENGTH_REACHED;
+            break;
+        }
         if (is_cancelled()) {
             reason = CANCEL_DETECTED;
             // reset stream content 

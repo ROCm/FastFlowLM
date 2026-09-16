@@ -595,8 +595,11 @@ void TestCancellationBetweenDecodeStepsStopsWithCancelReason() {
     g_encoded_tokens = {1}; g_samples = {11, 12}; g_sample_index = 0;
     auto meta = Meta(); auto input = Input(); std::ostringstream output;
     TEST_REQUIRE(model->insert(meta, input));
-    int checks = 0;
-    (void)model->generate(meta, 10, output, [&] { return checks++ == 2; });
+    // Cancel once a decode step has actually happened, rather than after a
+    // fixed number of polls: how often the loop consults the predicate is its
+    // own business, but it must not dispatch another forward once cancelled.
+    (void)model->generate(meta, 10, output,
+                          [&] { return g_factory.engine->forward_calls >= 1; });
     TEST_REQUIRE(meta.stop_reason == CANCEL_DETECTED);
     TEST_REQUIRE(g_factory.engine->forward_calls == 1);
 }
