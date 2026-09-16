@@ -3,6 +3,7 @@
 #include "models/phi4/corelib/phi4_corelib_constants.hpp"
 #include "models/phi4/corelib/phi4_corelib_host.hpp"
 #include "models/phi4/corelib/phi4_corelib_shape_plan.hpp"
+#include "models/phi4/corelib/phi4_corelib_weight_cache.hpp"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -10,6 +11,8 @@
 #include <iomanip>
 #include <iostream>
 #include <atomic>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <mutex>
 #include <thread>
@@ -34,6 +37,8 @@ std::string Name(std::size_t i, const char* suffix) {
 struct LoadPhases {
     std::chrono::steady_clock::time_point mark{std::chrono::steady_clock::now()};
     double shape_plan{}, tensor_resolve{}, host_prep{}, weight_create{}, device_tensors{};
+    double cache_write{};
+    bool from_cache{};
 
     double Lap() {
         const auto now = std::chrono::steady_clock::now();
@@ -46,7 +51,7 @@ struct LoadPhases {
         const char* enabled = std::getenv("FLM_AIE4_PROFILE_LOAD");
         if (!enabled || !*enabled || *enabled == '0') return;
         const double total = shape_plan + tensor_resolve + host_prep +
-                             weight_create + device_tensors;
+                             weight_create + device_tensors + cache_write;
         std::ostringstream out;
         out << std::fixed << std::setprecision(2)
             << "[FLM]  AIE4 load: " << total << " s total"
@@ -54,7 +59,12 @@ struct LoadPhases {
             << ", GGUF resolve " << tensor_resolve
             << ", host prep " << host_prep
             << ", weight requantize " << weight_create
-            << ", device tensors " << device_tensors << ")";
+            << ", device tensors " << device_tensors << ")"
+            << (from_cache ? "  [weights from cache]"
+                           : (cache_write > 0.0 ? "  [cache written in " +
+                                 [&]{ std::ostringstream w; w << std::fixed
+                                      << std::setprecision(2) << cache_write; return w.str(); }() + " s]"
+                                               : std::string()));
         std::cout << out.str() << std::endl;
     }
 };
@@ -162,14 +172,39 @@ struct phi4_corelib_aie4::Impl {
                 }
             }
         };
-        const std::size_t workers=std::min(kWeightCreateConcurrency,creates.size());
-        std::vector<std::thread> pool;
-        pool.reserve(workers>0?workers-1:0);
-        for(std::size_t t=1;t<workers;++t) pool.emplace_back(run_creates);
-        run_creates();
-        for(auto& worker:pool) worker.join();
-        if(first_failure) std::rethrow_exception(first_failure);
+        // A cache hit replaces every create above with a mapped slice, which is
+        // the whole point: the refit is paid once per GGUF rather than once per
+        // launch. A miss, a stale key or any failure just packs as normal.
+        const auto cache_directory = WeightCacheDirectory(package->Path().parent_path());
+        const auto cache_key = cache_directory
+            ? std::optional<WeightCacheKey>(MakeWeightCacheKey(
+                  package->Path(), api->runtime_version().major,
+                  api->runtime_version().minor, api->runtime_version().patch,
+                  kRequantizedGroupSize, creates.size()))
+            : std::nullopt;
+        bool loaded_from_cache = false;
+        if (cache_directory && cache_key) {
+            if (const auto index = ReadWeightCacheIndex(*cache_directory, *cache_key)) {
+                loaded_from_cache = LoadWeightsFromCache(
+                    WeightCacheDataPath(*cache_directory), index->spans);
+            }
+        }
+
+        if (!loaded_from_cache) {
+            const std::size_t workers=std::min(kWeightCreateConcurrency,creates.size());
+            std::vector<std::thread> pool;
+            pool.reserve(workers>0?workers-1:0);
+            for(std::size_t t=1;t<workers;++t) pool.emplace_back(run_creates);
+            run_creates();
+            for(auto& worker:pool) worker.join();
+            if(first_failure) std::rethrow_exception(first_failure);
+        }
         phases.weight_create = phases.Lap();
+        phases.from_cache = loaded_from_cache;
+        if (cache_directory && cache_key && !loaded_from_cache) {
+            WriteWeightCache(*cache_directory, *cache_key);
+            phases.cache_write = phases.Lap();
+        }
         const auto& e=plan.maximum_extents();
         const auto rows=std::max({e.query_rows,e.kv_rows,e.output_rows,
                                   e.ssmlp_rows});
@@ -196,6 +231,136 @@ struct phi4_corelib_aie4::Impl {
         api->Check(api->functions().tensor_write(sine.get(),ryzenai_corelib_data_type_fp32,rope.sine.data(),rope.sine.size(),0),"ryzenai_corelib_tensor_write sine");
         phases.device_tensors = phases.Lap();
         phases.Report();
+    }
+
+    /// \brief the weight slot order the cache is written and read in
+    /// \param slot 0..160: five per layer, then the LM head
+    /// \note Both directions walk this same order, so an index entry always
+    ///       refers to the weight it was written from. The creates complete out
+    ///       of order, but they are *assigned* by this index, not by completion.
+    static bool SlotIsMatmul(std::size_t slot) { return slot % 5 != 4 || slot == kLayerCount * 5; }
+
+    ryzenai_corelib_matmul_bf16_weights_desc MatmulDescAt(std::size_t slot) const {
+        if (slot == kLayerCount * 5)
+            return {kHiddenSize, kVocabularySize, kRequantizedGroupSize, false};
+        switch (slot % 5) {
+            case 0: return {kHiddenSize, kQueryDimension, kRequantizedGroupSize, false};
+            case 1:
+            case 2: return {kHiddenSize, kKvDimension, kRequantizedGroupSize, false};
+            default: return {kHiddenSize, kHiddenSize, kRequantizedGroupSize, false};
+        }
+    }
+
+    void* WeightHandleAt(std::size_t slot) const {
+        if (slot == kLayerCount * 5) return lm_weights.get();
+        const auto layer = slot / 5;
+        switch (slot % 5) {
+            case 0: return q_weights[layer].get();
+            case 1: return k_weights[layer].get();
+            case 2: return v_weights[layer].get();
+            case 3: return o_weights[layer].get();
+            default: return mlp_weights[layer].get();
+        }
+    }
+
+    void AssignWeightAt(std::size_t slot, void* handle) {
+        if (slot == kLayerCount * 5) { lm_weights = UniqueMatMulWeights(api, handle); return; }
+        const auto layer = slot / 5;
+        switch (slot % 5) {
+            case 0: q_weights[layer] = UniqueMatMulWeights(api, handle); break;
+            case 1: k_weights[layer] = UniqueMatMulWeights(api, handle); break;
+            case 2: v_weights[layer] = UniqueMatMulWeights(api, handle); break;
+            case 3: o_weights[layer] = UniqueMatMulWeights(api, handle); break;
+            default: mlp_weights[layer] = UniqueSsMlpWeights(api, handle); break;
+        }
+    }
+
+    /// \brief bind every weight from the cache file instead of packing
+    /// \return true when all of them loaded; false leaves nothing bound
+    /// \note Any failure abandons the whole attempt rather than packing the
+    ///       remainder: a half-cached model is not a state worth having, and
+    ///       the caller simply packs. corelib rejects a slice that is not
+    ///       exactly what the descriptor packs to, so a stale file is caught
+    ///       here rather than becoming confident nonsense.
+    bool LoadWeightsFromCache(const std::filesystem::path& data_path,
+                              const std::vector<CachedWeightSpan>& spans) {
+        const auto path = data_path.string();
+        const std::size_t total = kLayerCount * 5 + 1;
+        if (spans.size() != total) return false;
+        for (std::size_t slot = 0; slot < total; ++slot) {
+            void* handle = nullptr;
+            ryzenai_corelib_status status;
+            if (SlotIsMatmul(slot)) {
+                const auto desc = MatmulDescAt(slot);
+                status = api->functions().matmul_weights_create_from_file(
+                    &desc, path.c_str(), spans[slot].offset, spans[slot].size, &handle);
+            } else {
+                const ryzenai_corelib_ssmlp_bf16_weights_desc desc{
+                    kHiddenSize, kIntermediateSize, kRequantizedGroupSize};
+                status = api->functions().ssmlp_weights_create_from_file(
+                    &desc, path.c_str(), spans[slot].offset, spans[slot].size, &handle);
+            }
+            if (status != ryzenai_corelib_status_success || handle == nullptr) {
+                ReleaseAllWeights();
+                return false;
+            }
+            AssignWeightAt(slot, handle);
+        }
+        return true;
+    }
+
+    void ReleaseAllWeights() {
+        for (std::size_t layer = 0; layer < kLayerCount; ++layer) {
+            q_weights[layer] = {}; k_weights[layer] = {};
+            v_weights[layer] = {}; o_weights[layer] = {};
+            mlp_weights[layer] = {};
+        }
+        lm_weights = {};
+    }
+
+    /// \brief copy the packed bytes out and write them beside the model
+    /// \note Best effort: a cache that cannot be written is not a load failure,
+    ///       it only means the next launch packs again. The index is written
+    ///       last, so a data file without a matching index is never used.
+    void WriteWeightCache(const std::filesystem::path& directory,
+                          const WeightCacheKey& key) {
+        try {
+            std::error_code error;
+            std::filesystem::create_directories(directory, error);
+            const auto data_path = WeightCacheDataPath(directory);
+            const auto temporary = data_path.string() + ".tmp";
+            std::vector<CachedWeightSpan> spans;
+            spans.reserve(kLayerCount * 5 + 1);
+            {
+                std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+                if (!output) return;
+                std::vector<char> buffer;
+                std::uint64_t offset = 0;
+                for (std::size_t slot = 0; slot < kLayerCount * 5 + 1; ++slot) {
+                    std::size_t size = 0;
+                    if (api->functions().weights_copy_data(
+                            WeightHandleAt(slot), nullptr, 0, &size) !=
+                        ryzenai_corelib_status_success || size == 0) return;
+                    buffer.resize(size);
+                    if (api->functions().weights_copy_data(
+                            WeightHandleAt(slot), buffer.data(), buffer.size(), &size) !=
+                        ryzenai_corelib_status_success) return;
+                    output.write(buffer.data(), static_cast<std::streamsize>(size));
+                    if (!output) return;
+                    spans.push_back({offset, static_cast<std::uint64_t>(size)});
+                    offset += size;
+                }
+            }
+            std::filesystem::rename(temporary, data_path, error);
+            if (error) { std::filesystem::remove(temporary, error); return; }
+            if (!WriteWeightCacheIndex(directory, key, spans)) {
+                // No index means the data file would never be used; drop it
+                // rather than leave the space occupied.
+                std::filesystem::remove(data_path, error);
+            }
+        } catch (...) {
+            // Caching is an optimisation; never let it fail a load.
+        }
     }
 
     void usable() const {if(poisoned)throw std::runtime_error("Phi-4 corelib engine is poisoned");}

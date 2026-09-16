@@ -40,7 +40,7 @@ void TestVersionIsResolvedBeforeEveryOtherSymbol() {
     fake_corelib::Reset();
     ValidApi();
     const auto& order = fake_corelib::GetState().resolution_order;
-    TEST_REQUIRE(order.size() == 23);
+    TEST_REQUIRE(order.size() == 26);
     TEST_REQUIRE(order.front() == "ryzenai_corelib_get_version");
 }
 
@@ -71,7 +71,7 @@ void TestMajorMinorAndPatchMismatchesAreRejectedWithBothVersions() {
 void TestEveryRequiredSymbolIsResolvedExactlyOnce() {
     fake_corelib::Reset();
     ValidApi();
-    TEST_REQUIRE(fake_corelib::GetState().resolution_counts.size() == 23);
+    TEST_REQUIRE(fake_corelib::GetState().resolution_counts.size() == 26);
     for (const auto& [name, count] : fake_corelib::GetState().resolution_counts) {
         (void)name;
         TEST_REQUIRE(count == 1);
@@ -85,11 +85,11 @@ void TestEveryResolvedFakeFunctionUsesItsExactAbi() {
     fake_corelib::GetState().default_status = ryzenai_corelib_status_bad_argument;
     fake_corelib::GetState().selftest_status = ryzenai_corelib_status_bad_argument;
     const auto statuses = fake_corelib::CallEveryResolvedFunction(api->functions());
-    TEST_REQUIRE(statuses.size() == 17);
+    TEST_REQUIRE(statuses.size() == 20);
     TEST_REQUIRE(std::all_of(statuses.begin(), statuses.end(), [](auto status) {
         return status == ryzenai_corelib_status_bad_argument;
     }));
-    TEST_REQUIRE(fake_corelib::GetState().call_counts.size() == 23);
+    TEST_REQUIRE(fake_corelib::GetState().call_counts.size() == 26);
     for (const auto& [name, count] : fake_corelib::GetState().call_counts) {
         (void)name;
         TEST_REQUIRE(count == 1);

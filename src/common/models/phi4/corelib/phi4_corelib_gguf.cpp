@@ -265,6 +265,7 @@ struct Phi4GgufPackage::Impl {
         std::uint64_t absolute_offset;
     };
 
+    std::filesystem::path path;
     HANDLE file = INVALID_HANDLE_VALUE;
     HANDLE mapping = nullptr;
     const std::byte* data = nullptr;
@@ -332,6 +333,7 @@ Phi4GgufPackage::~Phi4GgufPackage() = default;
 std::shared_ptr<Phi4GgufPackage> Phi4GgufPackage::Open(
     const std::filesystem::path& gguf_path) {
     auto impl = std::make_unique<Impl>();
+    impl->path = gguf_path;
     flm::file_access::ObserveOpen(gguf_path);
     impl->file = CreateFileW(gguf_path.c_str(), GENERIC_READ, FILE_SHARE_READ,
                              nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -503,6 +505,8 @@ ProjectionViews Phi4GgufPackage::GateUp(std::size_t layer) const {
     result.values[1] = {fused.name, fused.bytes.subspan(8192 * row_bytes, 8192 * row_bytes), {8192, 3072}, kTypeQ8_0};
     return result;
 }
+
+const std::filesystem::path& Phi4GgufPackage::Path() const { return impl_->path; }
 
 GgufPhi4Metadata Phi4GgufPackage::Metadata() const {
     return {impl_->String("general.architecture"),

@@ -102,7 +102,8 @@ add_executable(test_phi4_engine
     "${FLM_SOURCE_DIR}/common/models/phi4/corelib/phi4_corelib_gguf.cpp"
     "${FLM_SOURCE_DIR}/common/models/phi4/corelib/phi4_corelib_host.cpp"
     "${FLM_SOURCE_DIR}/common/models/phi4/corelib/phi4_corelib_shape_plan.cpp"
-    "${FLM_SOURCE_DIR}/common/models/phi4/corelib/phi4_corelib_aie4.cpp")
+    "${FLM_SOURCE_DIR}/common/models/phi4/corelib/phi4_corelib_aie4.cpp"
+    "${FLM_SOURCE_DIR}/common/models/phi4/corelib/phi4_corelib_weight_cache.cpp")
 target_include_directories(test_phi4_engine PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}"
     "${FLM_SOURCE_DIR}/include"

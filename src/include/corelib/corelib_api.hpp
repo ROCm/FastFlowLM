@@ -35,10 +35,15 @@
     X(matmul_pad_shape, ryzenai_corelib_matmul_bf16_pad_shape)                     \
     X(matmul_weights_create_gguf_requantized,                                      \
       ryzenai_corelib_matmul_bf16_weights_create_gguf_requantized)                 \
+    X(matmul_weights_create_from_file,                                             \
+      ryzenai_corelib_matmul_bf16_weights_create_from_file)                        \
     X(matmul, ryzenai_corelib_matmul_bf16)                                         \
     X(ssmlp_pad_rows, ryzenai_corelib_ssmlp_bf16_pad_rows)                         \
     X(ssmlp_weights_create_gguf_requantized,                                       \
       ryzenai_corelib_ssmlp_bf16_weights_create_gguf_requantized)                  \
+    X(ssmlp_weights_create_from_file,                                              \
+      ryzenai_corelib_ssmlp_bf16_weights_create_from_file)                         \
+    X(weights_copy_data, ryzenai_corelib_weights_copy_data)                        \
     X(ssmlp, ryzenai_corelib_ssmlp_bf16)                                           \
     X(flat_mha_pad_rows, ryzenai_corelib_flat_mha_bf16_pad_rows)                   \
     X(flat_mha, ryzenai_corelib_flat_mha_bf16)                                     \

@@ -77,6 +77,14 @@ struct TensorWriteRecord {
     bool all_zero;
 };
 
+/// rief one ..._weights_create_from_file call
+struct WeightFromFileRecord {
+    std::string kind;
+    std::string path;
+    std::uint64_t offset{};
+    std::uint64_t size{};
+};
+
 struct State {
     flm::corelib::CorelibVersion version{0, 3, 0};
     ryzenai_corelib_status selftest_status{ryzenai_corelib_status_success};
@@ -106,6 +114,7 @@ struct State {
     std::vector<TensorCreateRecord> tensor_creates;
     std::vector<TensorWindowRecord> tensor_windows;
     std::vector<WeightCreateRecord> weight_creates;
+    std::vector<WeightFromFileRecord> weight_from_file;
     std::vector<DispatchRecord> dispatches;
     std::vector<TensorWriteRecord> tensor_writes;
     std::vector<std::string> call_log;

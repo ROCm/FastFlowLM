@@ -22,6 +22,9 @@ struct FakeStorage {
 
 struct FakeObject {
     std::string kind;
+    /// byte the fake's packed bytes are filled with, so a cached blob can be
+    /// told apart from a freshly packed one and a round trip can be checked
+    unsigned char fill{};
     ryzenai_corelib_data_type data_type{ryzenai_corelib_data_type_bf16};
     std::vector<std::int64_t> shape;
     std::size_t byte_size{};
@@ -34,6 +37,20 @@ void* NewObject(std::string kind = "generic") {
     auto* object = new FakeObject;
     object->kind = std::move(kind);
     return object;
+}
+
+/// \brief the size the fake claims a packed weight has
+/// \note Only has to be deterministic and descriptor-derived: corelib rejects
+///       a cached slice whose length is not exactly what the descriptor packs
+///       to, and this is what lets a test exercise that.
+std::size_t PackedSize(std::int64_t k, std::int64_t n) {
+    return static_cast<std::size_t>(k) * static_cast<std::size_t>(n) / 2 + 64;
+}
+
+/// \brief a byte that identifies which source range a weight was packed from
+unsigned char FillFor(const void* source) {
+    return static_cast<unsigned char>(
+        (reinterpret_cast<std::uintptr_t>(source) >> 4) & 0xFF);
 }
 
 ryzenai_corelib_status Status(std::string_view name) {
@@ -305,7 +322,12 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             SimulatePackingWork(state_lock);
             if (desc && components) state.weight_creates.push_back({"matmul", desc->k, desc->n,
                 desc->group_size, std::get<2>(arguments), {components->blocks}});
-            if (status == ryzenai_corelib_status_success && out) *out = NewObject("matmul_weights");
+            if (status == ryzenai_corelib_status_success && out) {
+                *out = NewObject("matmul_weights");
+                auto* object = static_cast<FakeObject*>(*out);
+                object->byte_size = PackedSize(desc ? desc->k : 0, desc ? desc->n : 0);
+                object->fill = FillFor(components ? components->blocks : nullptr);
+            }
             --state.active_weight_creates;
             return status;
         } else if constexpr (std::is_same_v<Tag, ssmlp_weights_create_gguf_requantized_tag>) {
@@ -327,8 +349,52 @@ struct TypedFake<Tag, Result (*)(Args...)> {
                                                            static_cast<const std::uint16_t*>(components->norm1) + desc->k);
                 state.weight_creates.push_back(std::move(record));
             }
-            if (status == ryzenai_corelib_status_success && out) *out = NewObject("ssmlp_weights");
+            if (status == ryzenai_corelib_status_success && out) {
+                *out = NewObject("ssmlp_weights");
+                auto* object = static_cast<FakeObject*>(*out);
+                object->byte_size = PackedSize(desc ? desc->k : 0, desc ? desc->n : 0);
+                object->fill = FillFor(components ? components->gate_blocks : nullptr);
+            }
             --state.active_weight_creates;
+            return status;
+        } else if constexpr (std::is_same_v<Tag, weights_copy_data_tag>) {
+            // Two-call protocol: NULL out learns the size, then the caller
+            // calls again with a buffer of at least that many bytes.
+            auto* weights = static_cast<FakeObject*>(std::get<0>(arguments));
+            auto* out = std::get<1>(arguments);
+            const auto out_size = std::get<2>(arguments);
+            auto* size = std::get<3>(arguments);
+            const std::size_t packed = weights ? weights->byte_size : 0;
+            if (size) *size = packed;
+            const auto status = Status(Tag::name);
+            if (status != ryzenai_corelib_status_success) return status;
+            if (out == nullptr) return status;
+            if (out_size < packed) return ryzenai_corelib_status_failure;
+            std::memset(out, weights ? weights->fill : 0, packed);
+            return status;
+        } else if constexpr (std::is_same_v<Tag, matmul_weights_create_from_file_tag> ||
+                             std::is_same_v<Tag, ssmlp_weights_create_from_file_tag>) {
+            const auto status = Status(Tag::name);
+            auto* desc = std::get<0>(arguments);
+            const char* path = std::get<1>(arguments);
+            const auto offset = std::get<2>(arguments);
+            const auto size = std::get<3>(arguments);
+            auto* out = std::get<4>(arguments);
+            if (out) *out = nullptr;
+            const bool matmul =
+                std::is_same_v<Tag, matmul_weights_create_from_file_tag>;
+            state.weight_from_file.push_back({matmul ? "matmul" : "ssmlp",
+                path ? path : "", offset, size});
+            // corelib rejects a slice that is not exactly what the descriptor
+            // packs to, because a truncated blob is still a plausible one.
+            if (desc && size != PackedSize(desc->k, desc->n)) {
+                return ryzenai_corelib_status_failure;
+            }
+            if (status == ryzenai_corelib_status_success && out) {
+                *out = NewObject(matmul ? "matmul_weights" : "ssmlp_weights");
+                auto* object = static_cast<FakeObject*>(*out);
+                object->byte_size = static_cast<std::size_t>(size);
+            }
             return status;
         } else if constexpr (std::is_same_v<Tag, stream_synchronize_tag>) {
             state.work_in_flight = false;
@@ -449,6 +515,7 @@ void Reset() {
     state.tensor_creates.clear();
     state.tensor_windows.clear();
     state.weight_creates.clear();
+    state.weight_from_file.clear();
     state.dispatches.clear();
     state.tensor_writes.clear();
     state.call_log.clear();

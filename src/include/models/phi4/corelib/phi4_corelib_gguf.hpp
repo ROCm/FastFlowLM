@@ -63,6 +63,9 @@ public:
     ProjectionViews AttentionQkv(std::size_t layer) const;
     ProjectionViews GateUp(std::size_t layer) const;
     GgufPhi4Metadata Metadata() const;
+    /// \brief the file this package was opened from
+    /// \note Used to key the packed-weight cache on the GGUF's identity.
+    const std::filesystem::path& Path() const;
     void ValidatePhi4Contract(
         const nlohmann::json& config,
         const nlohmann::json& tokenizer,

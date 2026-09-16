@@ -1,6 +1,10 @@
 #include "models/phi4/corelib/phi4_corelib_aie4.hpp"
 #include "models/phi4/corelib/phi4_corelib_constants.hpp"
 #include "models/phi4/corelib/phi4_corelib_host.hpp"
+#include "models/phi4/corelib/phi4_corelib_weight_cache.hpp"
+#include <filesystem>
+#include <fstream>
+#include <nlohmann/json.hpp>
 #include "fake_corelib.hpp"
 #include "gguf_fixture.hpp"
 #include "test_support.hpp"
@@ -10,6 +14,7 @@
 #include <atomic>
 #include <barrier>
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
 #include <memory>
 #include <string>
@@ -27,10 +32,30 @@ const std::filesystem::path& FullPackagePath() {
     return file.path;
 }
 
+/// \brief scoped FLM_AIE4_WEIGHT_CACHE, restored on the way out
+struct ScopedWeightCache {
+    std::string previous;
+    bool had_previous{};
+    explicit ScopedWeightCache(const std::string& value) {
+        if (const char* existing = std::getenv("FLM_AIE4_WEIGHT_CACHE")) {
+            previous = existing; had_previous = true;
+        }
+        _putenv_s("FLM_AIE4_WEIGHT_CACHE", value.c_str());
+    }
+    ~ScopedWeightCache() {
+        if (had_previous) _putenv_s("FLM_AIE4_WEIGHT_CACHE", previous.c_str());
+        else _putenv_s("FLM_AIE4_WEIGHT_CACHE", "");
+    }
+};
+
 struct Harness {
     std::shared_ptr<CorelibRuntime> runtime;
     std::shared_ptr<Phi4GgufPackage> package;
     std::unique_ptr<phi4_corelib_aie4> engine;
+    // Off unless a test asks for it: a cache written by one test would
+    // otherwise make every later one load instead of pack, and the packing
+    // assertions would silently stop testing anything.
+    ScopedWeightCache no_cache{"0"};
 
     explicit Harness(std::function<void(fake_corelib::State&)> configure = {}) {
         fake_corelib::Reset();
@@ -143,6 +168,95 @@ void TestWeightCreationRunsConcurrentlyWithinItsBudget() {
     TEST_REQUIRE(CreateFrom({
         h.package->RequireQ8("token_embd.weight",
             std::array<std::int64_t, 2>{200064, 3072}).bytes.data()}).kind == "matmul");
+}
+
+/// \brief the packed weights survive a round trip through the cache
+/// \note The point of the cache is that the second load does not requantize.
+///       Packing is what model load is, so "did it pack" is the assertion:
+///       zero creates and 161 slices bound from the file.
+void TestWeightCacheReplacesPackingOnTheSecondLoad() {
+    const auto directory = std::filesystem::temp_directory_path() /
+        "flm-weight-cache-roundtrip";
+    std::error_code ignored;
+    std::filesystem::remove_all(directory, ignored);
+    std::filesystem::create_directories(directory, ignored);
+    ScopedWeightCache cache(directory.string());
+
+    {   // first load: packs, and leaves a cache behind
+        fake_corelib::Reset();
+        auto runtime = CorelibRuntime::CreateForTest(
+            CorelibApi::ResolveForTest(fake_corelib::Resolver()));
+        auto package = Phi4GgufPackage::Open(FullPackagePath());
+        auto engine = std::make_unique<phi4_corelib_aie4>(LM_Config{}, package, runtime);
+        TEST_REQUIRE(fake_corelib::GetState().weight_creates.size() == 161);
+        TEST_REQUIRE(fake_corelib::GetState().weight_from_file.empty());
+        engine.reset(); package.reset(); runtime.reset();
+        CorelibRuntime::ShutdownProcess();
+    }
+    TEST_REQUIRE(std::filesystem::exists(
+        flm::phi4::WeightCacheDataPath(directory)));
+
+    {   // second load: binds every weight from the file, packs nothing
+        fake_corelib::Reset();
+        auto runtime = CorelibRuntime::CreateForTest(
+            CorelibApi::ResolveForTest(fake_corelib::Resolver()));
+        auto package = Phi4GgufPackage::Open(FullPackagePath());
+        auto engine = std::make_unique<phi4_corelib_aie4>(LM_Config{}, package, runtime);
+        const auto& state = fake_corelib::GetState();
+        TEST_REQUIRE(state.weight_creates.empty());
+        TEST_REQUIRE(state.weight_from_file.size() == 161);
+        // Slices must be contiguous and in slot order, or an entry would bind
+        // the bytes of a different weight.
+        std::uint64_t expected_offset = 0;
+        for (const auto& record : state.weight_from_file) {
+            TEST_REQUIRE(record.offset == expected_offset);
+            TEST_REQUIRE(record.size > 0);
+            expected_offset += record.size;
+        }
+        TEST_REQUIRE(state.weight_from_file[4].kind == "ssmlp");
+        TEST_REQUIRE(state.weight_from_file[0].kind == "matmul");
+        TEST_REQUIRE(state.weight_from_file.back().kind == "matmul");
+        engine.reset(); package.reset(); runtime.reset();
+        CorelibRuntime::ShutdownProcess();
+    }
+    std::filesystem::remove_all(directory, ignored);
+}
+
+/// \brief a cache that no longer matches its GGUF is ignored, not used
+void TestStaleWeightCacheFallsBackToPacking() {
+    const auto directory = std::filesystem::temp_directory_path() /
+        "flm-weight-cache-stale";
+    std::error_code ignored;
+    std::filesystem::remove_all(directory, ignored);
+    std::filesystem::create_directories(directory, ignored);
+    ScopedWeightCache cache(directory.string());
+    {
+        fake_corelib::Reset();
+        auto runtime = CorelibRuntime::CreateForTest(
+            CorelibApi::ResolveForTest(fake_corelib::Resolver()));
+        auto package = Phi4GgufPackage::Open(FullPackagePath());
+        auto engine = std::make_unique<phi4_corelib_aie4>(LM_Config{}, package, runtime);
+        engine.reset(); package.reset(); runtime.reset();
+        CorelibRuntime::ShutdownProcess();
+    }
+    // Rewrite the index with a key that cannot match: a different corelib.
+    const auto index_path = directory / "phi4-aie4-weights.json";
+    auto document = nlohmann::json::parse(std::ifstream(index_path), nullptr, false);
+    TEST_REQUIRE(!document.is_discarded());
+    document["corelib_minor"] = 99;
+    { std::ofstream out(index_path, std::ios::binary | std::ios::trunc);
+      out << document.dump(); }
+
+    fake_corelib::Reset();
+    auto runtime = CorelibRuntime::CreateForTest(
+        CorelibApi::ResolveForTest(fake_corelib::Resolver()));
+    auto package = Phi4GgufPackage::Open(FullPackagePath());
+    auto engine = std::make_unique<phi4_corelib_aie4>(LM_Config{}, package, runtime);
+    TEST_REQUIRE(fake_corelib::GetState().weight_from_file.empty());
+    TEST_REQUIRE(fake_corelib::GetState().weight_creates.size() == 161);
+    engine.reset(); package.reset(); runtime.reset();
+    CorelibRuntime::ShutdownProcess();
+    std::filesystem::remove_all(directory, ignored);
 }
 
 void TestQkvAndGateUpPointersMatchExactMappedSubranges() {
@@ -546,6 +660,8 @@ int main() {
     RUN_TEST(TestEngineCreatesExactly129MatmulAnd32SsmlpWeights);
     RUN_TEST(TestEveryProjectionUsesQ8RequantizedGroup64WithThreadHint);
     RUN_TEST(TestWeightCreationRunsConcurrentlyWithinItsBudget);
+    RUN_TEST(TestWeightCacheReplacesPackingOnTheSecondLoad);
+    RUN_TEST(TestStaleWeightCacheFallsBackToPacking);
     RUN_TEST(TestQkvAndGateUpPointersMatchExactMappedSubranges);
     RUN_TEST(TestValidatedPackageFlowsDirectlyIntoAllRequantizedCreates);
     RUN_TEST(TestFusedNormsAndEpsilonReachCorelibAsBf16);
