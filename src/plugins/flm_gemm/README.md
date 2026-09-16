@@ -17,17 +17,17 @@ buffers come to 75 MiB.
 ## Modes
 
 `FLM_GEMM_MODE` trades memory for prefill time, and lets the two replacements be
-measured apart. Prefill of a 247-token prompt on Strix, against 929 ms for the
+measured apart. Prefill of a 247-token prompt on Strix, against 922 ms for the
 untouched engine:
 
 | mode | weights | dequant | GEMM | median | resident |
 |---|---|---|---|---|---|
-| `dequant` (default) | q4, per chunk on device | `DequantBFP` | `flm.GEMM` | 882 ms | 75 MiB |
-| `bf16` | `model.dq_bf16`, resident | none | shipped `mm` | 726 ms | 3501 MiB |
-| `bfp16` | `model.dq_bfp`, resident | none | `flm.GEMM` | 670 ms | 1969 MiB |
+| `dequant` (default) | q4, per chunk on device | `DequantBFP` | `flm.GEMM` | 880 ms | 75 MiB |
+| `bf16` | `model.dq_bf16`, resident | none | shipped `mm` | 732 ms | 3501 MiB |
+| `bfp16` | `model.dq_bfp`, resident | none | `flm.GEMM` | 674 ms | 1969 MiB |
 
 Read down the table: dropping the dequant from the timed path is worth about
-203 ms, and replacing the kernel a further 56 ms. The default gives most of the
+190 ms, and replacing the kernel a further 59 ms. The default gives most of the
 first back in exchange for keeping the weights 4-bit, because the prefill loop
 touches every weight exactly once per request, so a per-chunk dequant does the
 same total work a resident one does -- just on every request instead of once.
@@ -53,6 +53,16 @@ FLM_DequantBFP_K<K>_N<N>_engine_run<R>p<P>_<tag>.bin   gate and up, interleaved
 Both operators take their shape at run time, so each needs only one xclbin and
 E2B's ten weight shapes fit comfortably inside the driver's budget of 16
 hardware contexts.
+
+The `<config>` tag names the tuning an operator was built at and gains a field
+whenever that gains a knob, so the plugin reads it off whichever xclbin it finds
+rather than spelling it out. A stream is matched by that stem followed by
+`_M<M>_K<K>_N<N>`.
+
+A layer the plugin would otherwise serve but whose shape has no instruction
+stream is a **hard error** at load, naming the layer, the projection and the
+shape. Falling back silently would leave the model correct and merely slower,
+which is the kind of build mistake that goes unnoticed.
 
 The dequant streams must be built with **`qw_layout=engine`**. The engine's
 loader runs `reorder_cpy` over each projection, which interleaves pairs of
@@ -82,7 +92,7 @@ the operators save.
 
 | variable | effect |
 |---|---|
-| `FLM_GEMM_CONFIG` | operator configuration tag, default `tn64_ma32_emf_floor_npu2` |
+| `FLM_GEMM_CONFIG` | pick one GEMM xclbin by stem, when the directory holds several |
 | `FLM_GEMM_OFF` | leave every projection on the engine's own operators |
 | `FLM_DEQUANT_VERIFY` | compare every dequantized buffer against `model.dq_bfp` |
 
