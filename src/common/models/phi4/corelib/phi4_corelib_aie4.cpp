@@ -38,6 +38,7 @@ struct LoadPhases {
     std::chrono::steady_clock::time_point mark{std::chrono::steady_clock::now()};
     double shape_plan{}, tensor_resolve{}, host_prep{}, weight_create{}, device_tensors{};
     double cache_write{};
+    std::uint64_t cache_reclaimed{};
     bool from_cache{};
 
     double Lap() {
@@ -64,7 +65,11 @@ struct LoadPhases {
                            : (cache_write > 0.0 ? "  [cache written in " +
                                  [&]{ std::ostringstream w; w << std::fixed
                                       << std::setprecision(2) << cache_write; return w.str(); }() + " s]"
-                                               : std::string()));
+                                               : std::string()))
+            << (cache_reclaimed > 0
+                    ? "  [reclaimed " + std::to_string(cache_reclaimed / (1024 * 1024)) +
+                          " MB of stale cache]"
+                    : std::string());
         std::cout << out.str() << std::endl;
     }
 };
@@ -202,6 +207,10 @@ struct phi4_corelib_aie4::Impl {
         phases.weight_create = phases.Lap();
         phases.from_cache = loaded_from_cache;
         if (cache_directory && cache_key && !loaded_from_cache) {
+            // Whatever is there did not match, or it would have been used.
+            // Reclaim it now rather than leaving two gigabytes of dead cache
+            // around until some later write happens to succeed.
+            phases.cache_reclaimed = RemoveWeightCache(*cache_directory);
             WriteWeightCache(*cache_directory, *cache_key);
             phases.cache_write = phases.Lap();
         }

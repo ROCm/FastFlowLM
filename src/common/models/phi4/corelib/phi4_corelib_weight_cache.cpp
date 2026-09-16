@@ -66,6 +66,20 @@ WeightCacheKey MakeWeightCacheKey(const std::filesystem::path& gguf_path,
     return key;
 }
 
+std::uint64_t RemoveWeightCache(const std::filesystem::path& directory) {
+    std::uint64_t reclaimed = 0;
+    const std::string index(kIndexName);
+    const std::string data(kDataName);
+    for (const auto& name : {data, data + ".tmp", index, index + ".tmp"}) {
+        std::error_code error;
+        const auto path = directory / name;
+        const auto size = std::filesystem::file_size(path, error);
+        if (error) continue;
+        if (std::filesystem::remove(path, error) && !error) reclaimed += size;
+    }
+    return reclaimed;
+}
+
 std::optional<WeightCacheIndex> ReadWeightCacheIndex(
     const std::filesystem::path& directory, const WeightCacheKey& expected) {
     try {

@@ -247,6 +247,10 @@ void TestStaleWeightCacheFallsBackToPacking() {
     { std::ofstream out(index_path, std::ios::binary | std::ios::trunc);
       out << document.dump(); }
 
+    const auto stale_data = flm::phi4::WeightCacheDataPath(directory);
+    const auto stale_size = std::filesystem::file_size(stale_data, ignored);
+    TEST_REQUIRE(stale_size > 0);
+
     fake_corelib::Reset();
     auto runtime = CorelibRuntime::CreateForTest(
         CorelibApi::ResolveForTest(fake_corelib::Resolver()));
@@ -254,8 +258,40 @@ void TestStaleWeightCacheFallsBackToPacking() {
     auto engine = std::make_unique<phi4_corelib_aie4>(LM_Config{}, package, runtime);
     TEST_REQUIRE(fake_corelib::GetState().weight_from_file.empty());
     TEST_REQUIRE(fake_corelib::GetState().weight_creates.size() == 161);
+    // The stale file must not simply be ignored: it is two gigabytes, and it
+    // is replaced by a cache written from this load rather than left behind.
+    const auto fresh_size = std::filesystem::file_size(stale_data, ignored);
+    TEST_REQUIRE(fresh_size > 0);
+    const auto index = flm::phi4::ReadWeightCacheIndex(
+        directory, flm::phi4::MakeWeightCacheKey(package->Path(), 0, 3, 0, 64, 161));
+    TEST_REQUIRE(index.has_value());
     engine.reset(); package.reset(); runtime.reset();
     CorelibRuntime::ShutdownProcess();
+    std::filesystem::remove_all(directory, ignored);
+}
+
+/// \brief a cache nobody will use is deleted rather than left occupying disk
+void TestStaleWeightCacheIsReclaimed() {
+    const auto directory = std::filesystem::temp_directory_path() /
+        "flm-weight-cache-reclaim";
+    std::error_code ignored;
+    std::filesystem::remove_all(directory, ignored);
+    std::filesystem::create_directories(directory, ignored);
+
+    // A data file and index from "some other model", plus the temporary an
+    // interrupted write would have left behind.
+    const auto data = flm::phi4::WeightCacheDataPath(directory);
+    { std::ofstream out(data, std::ios::binary); out << std::string(4096, 'x'); }
+    { std::ofstream out(directory / "phi4-aie4-weights.json", std::ios::binary); out << "{}"; }
+    { std::ofstream out(data.string() + ".tmp", std::ios::binary); out << std::string(2048, 'y'); }
+
+    const auto reclaimed = flm::phi4::RemoveWeightCache(directory);
+    TEST_REQUIRE(reclaimed >= 4096 + 2048);
+    TEST_REQUIRE(!std::filesystem::exists(data));
+    TEST_REQUIRE(!std::filesystem::exists(directory / "phi4-aie4-weights.json"));
+    TEST_REQUIRE(!std::filesystem::exists(data.string() + ".tmp"));
+    // Removing a cache that is not there is not an error.
+    TEST_REQUIRE(flm::phi4::RemoveWeightCache(directory) == 0);
     std::filesystem::remove_all(directory, ignored);
 }
 
@@ -662,6 +698,7 @@ int main() {
     RUN_TEST(TestWeightCreationRunsConcurrentlyWithinItsBudget);
     RUN_TEST(TestWeightCacheReplacesPackingOnTheSecondLoad);
     RUN_TEST(TestStaleWeightCacheFallsBackToPacking);
+    RUN_TEST(TestStaleWeightCacheIsReclaimed);
     RUN_TEST(TestQkvAndGateUpPointersMatchExactMappedSubranges);
     RUN_TEST(TestValidatedPackageFlowsDirectlyIntoAllRequantizedCreates);
     RUN_TEST(TestFusedNormsAndEpsilonReachCorelibAsBf16);

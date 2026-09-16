@@ -83,4 +83,14 @@ bool WriteWeightCacheIndex(const std::filesystem::path& directory,
 /// \brief the cache file itself, beside its index
 std::filesystem::path WeightCacheDataPath(const std::filesystem::path& directory);
 
+/// \brief delete a cache that is not going to be used
+/// \param directory the cache directory
+/// \return how many bytes were reclaimed
+/// \note Called before repacking, so a cache that no longer matches its GGUF
+///       stops occupying two gigabytes from the moment it is known to be
+///       useless rather than from whenever the next write happens to succeed.
+///       Also clears the temporaries an interrupted write leaves behind.
+///       Never throws: failing to delete is not a reason to fail a load.
+std::uint64_t RemoveWeightCache(const std::filesystem::path& directory);
+
 }  // namespace flm::phi4
