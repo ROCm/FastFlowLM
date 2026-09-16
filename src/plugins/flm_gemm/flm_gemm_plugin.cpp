@@ -421,29 +421,68 @@ private:
         this->dequant_.run(k, n, qw, this->staging_[r]);
     }
 
-    std::string _stream_path(const shape_key& s) const {
-        std::string name = "FLM_GEMM_M" + std::to_string(s.m) + "_K" + std::to_string(s.k)
-                           + "_N" + std::to_string(s.n) + "_" + this->config_;
-        if (s.gelu) name += "_epigelu";
-        return (std::filesystem::path(this->artifact_dir_) / (name + ".bin")).string();
+    /// \brief Find the GEMM xclbin and every instruction stream built against it.
+    /// \note The xclbin's stem is the configuration tag each stream is prefixed
+    ///       with, so it is read off disk rather than spelled out here: the tag
+    ///       names the tuning the operator was built at and gains a field
+    ///       whenever that gains a knob. Only M, K and N are parsed out, and the
+    ///       file each shape came from is kept rather than rebuilt.
+    void _scan_instruction_streams() {
+        const char* want = std::getenv("FLM_GEMM_CONFIG");
+        for (const auto& entry : std::filesystem::directory_iterator(this->artifact_dir_)) {
+            const std::string stem = entry.path().stem().string();
+            if (entry.path().extension() != ".xclbin") continue;
+            if (stem.rfind("FLM_GEMM_", 0) != 0) continue;
+            // A stream's stem carries _M<digits>; a configuration's never does.
+            if (stem.find("_M") != std::string::npos) continue;
+            if (want != nullptr && stem != want) continue;
+            this->xclbin_ = entry.path().string();
+            this->config_ = stem;
+        }
+        if (this->xclbin_.empty()) return;
+
+        for (const auto& entry : std::filesystem::directory_iterator(this->artifact_dir_)) {
+            if (entry.path().extension() != ".bin") continue;
+            const std::string stem = entry.path().stem().string();
+            if (stem.rfind(this->config_, 0) != 0) continue;
+            unsigned m = 0, k = 0, n = 0;
+            if (std::sscanf(stem.c_str() + this->config_.size(), "_M%u_K%u_N%u", &m, &k, &n) != 3) continue;
+            const shape_key key{ m, k, n, stem.find("_epigelu") != std::string::npos };
+            this->streams_.insert(key);
+            this->stream_files_[key] = entry.path().string();
+        }
     }
 
-    void _scan_instruction_streams() {
-        this->xclbin_ = (std::filesystem::path(this->artifact_dir_)
-                         / ("FLM_GEMM_" + this->config_ + ".xclbin")).string();
-        if (!std::filesystem::exists(this->xclbin_)) return;
-        const std::string prefix = "FLM_GEMM_M";
-        const std::string suffix = "_" + this->config_;
-        for (const auto& entry : std::filesystem::directory_iterator(this->artifact_dir_)) {
-            const std::string name = entry.path().filename().string();
-            if (name.rfind(prefix, 0) != 0 || entry.path().extension() != ".bin") continue;
-            const std::string stem = entry.path().stem().string();
-            const bool gelu = stem.size() > 8 && stem.compare(stem.size() - 8, 8, "_epigelu") == 0;
-            const std::string body = stem.substr(0, stem.size() - (gelu ? 8 : 0));
-            if (body.size() < suffix.size() || body.compare(body.size() - suffix.size(), suffix.size(), suffix) != 0) continue;
-            unsigned m = 0, k = 0, n = 0;
-            if (std::sscanf(body.c_str(), "FLM_GEMM_M%u_K%u_N%u", &m, &k, &n) != 3) continue;
-            this->streams_.insert(shape_key{ m, k, n, gelu });
+    /// \brief Refuse to serve a layer whose artifacts are incomplete.
+    /// \note Without this a missing shape silently shrinks coverage: the layer
+    ///       falls back to the engine, the model stays correct, and the only
+    ///       symptom is that prefill is slower than it should be. M is not
+    ///       checked here -- a chunk arriving at a length nothing was built for
+    ///       is a run-time fallback, not a broken build.
+    void _require_artifacts(const layer_entry& l, size_t layer) const {
+        const std::string where = "layers." + std::to_string(layer) + ".";
+        auto fail = [&](const std::string& what, std::string_view role, uint32_t k, uint32_t n) {
+            throw std::runtime_error("FLMGEMM: no " + what + " for " + where + std::string(role)
+                                     + " (K=" + std::to_string(k) + " N=" + std::to_string(n)
+                                     + "); rebuild the artifacts for this model's shapes");
+        };
+        for (size_t r = 0; r < roles.size(); r++) {
+            if (!l.slots[r].has_value()) continue;
+            if (l.skip && (r == R_K || r == R_V)) continue;
+            const slot& s = *l.slots[r];
+            bool any = false;
+            for (const shape_key& stream : this->streams_) {
+                any = any || (stream.k == s.k && stream.n == s.n && stream.gelu == wants_gelu(r));
+            }
+            if (!any) fail("GEMM instruction stream", roles[r], s.k, s.n);
+            if (this->mode_ != weight_mode::dequant) continue;
+            const bool fused = l.qkv_n != 0 && (r == R_Q || r == R_K || r == R_V);
+            if (fused) continue;
+            if (!this->dequant_.has(s.k, s.n)) fail("dequant instruction stream", roles[r], s.k, s.n);
+        }
+        if (this->mode_ == weight_mode::dequant && l.qkv_n != 0
+            && !this->dequant_.has(l.slots[R_Q]->k, l.qkv_n)) {
+            fail("dequant instruction stream", "self_attn.qkv", l.slots[R_Q]->k, l.qkv_n);
         }
     }
 
@@ -493,6 +532,11 @@ private:
                           ? 0
                           : l.slots[R_Q]->n + l.slots[R_K]->n + l.slots[R_V]->n;
             if (l.qkv_n != 0 && !this->dequant_.has(l.slots[R_Q]->k, l.qkv_n)) l.qkv_n = 0;
+            // Only once qkv_n has settled: whether q, k and v are dequantized
+            // together decides which shapes the layer needs.
+            if (this->mode_ != weight_mode::bf16) {
+                this->_require_artifacts(l, (size_t)(&l - this->layers_.data()));
+            }
             this->_place_projections(l);
             l.served_m = this->_served_m(l);
         }
@@ -557,7 +601,7 @@ private:
                     const shape_key key{ m, layer.slots[r]->k, layer.slots[r]->n, wants_gelu(r) };
                     if (this->apps_.count(key)) continue;
                     npu_app app = this->app_manager_->create_app();
-                    app.load_insts(this->_stream_path(key));
+                    app.load_insts(this->stream_files_.at(key));
                     this->apps_.emplace(key, std::move(app));
                 }
             }
@@ -654,6 +698,7 @@ private:
     std::string config_;
     std::string xclbin_;
     std::set<shape_key> streams_;
+    std::map<shape_key, std::string> stream_files_;
     device_dequant dequant_;
     std::vector<layer_entry> layers_;
     std::map<shape_key, npu_app> apps_;
