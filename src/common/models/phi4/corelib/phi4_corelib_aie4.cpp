@@ -9,6 +9,10 @@
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
+#include <atomic>
+#include <functional>
+#include <mutex>
+#include <thread>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -120,18 +124,51 @@ struct phi4_corelib_aie4::Impl {
             api->Check(api->functions().matmul_weights_create_gguf_requantized(&d,&c,kRequantizeThreads,&p),"ryzenai_corelib_matmul_bf16_weights_create_gguf_requantized "+label);
             return UniqueMatMulWeights(api,p);
         };
+        // Each create reads its own mapped range and writes its own array slot,
+        // so they are independent. Collect them first, then run the list across
+        // a small pool -- packing is the whole of model load and it is the one
+        // phase with nothing to serialize.
+        std::vector<std::function<void()>> creates;
+        creates.reserve(kLayerCount * 5 + 1);
         for(std::size_t i=0;i<kLayerCount;++i){
-            q_weights[i]=mm(qkv[i].values[0],kHiddenSize,kQueryDimension,Name(i,".q"));
-            k_weights[i]=mm(qkv[i].values[1],kHiddenSize,kKvDimension,Name(i,".k"));
-            v_weights[i]=mm(qkv[i].values[2],kHiddenSize,kKvDimension,Name(i,".v"));
-            o_weights[i]=mm(ow[i],kHiddenSize,kHiddenSize,Name(i,".attn_output.weight"));
-            const auto& next=i+1<kLayerCount?an_bf[i+1]:final_bf;
-            ryzenai_corelib_ssmlp_bf16_weights_desc d{kHiddenSize,kIntermediateSize,kRequantizedGroupSize};
-            ryzenai_corelib_ssmlp_bf16_gguf_components c{eps.data(),fn_bf[i].data(),next.data(),gu[i].values[0].bytes.data(),gu[i].values[1].bytes.data(),dw[i].bytes.data(),ryzenai_corelib_gguf_quant_type_q8_0}; raw=nullptr;
-            api->Check(api->functions().ssmlp_weights_create_gguf_requantized(&d,&c,kRequantizeThreads,&raw),"ryzenai_corelib_ssmlp_bf16_weights_create_gguf_requantized layer "+std::to_string(i));
-            mlp_weights[i]=UniqueSsMlpWeights(api,raw);
+            creates.push_back([&,i]{ q_weights[i]=mm(qkv[i].values[0],kHiddenSize,kQueryDimension,Name(i,".q")); });
+            creates.push_back([&,i]{ k_weights[i]=mm(qkv[i].values[1],kHiddenSize,kKvDimension,Name(i,".k")); });
+            creates.push_back([&,i]{ v_weights[i]=mm(qkv[i].values[2],kHiddenSize,kKvDimension,Name(i,".v")); });
+            creates.push_back([&,i]{ o_weights[i]=mm(ow[i],kHiddenSize,kHiddenSize,Name(i,".attn_output.weight")); });
+            creates.push_back([&,i]{
+                const auto& next=i+1<kLayerCount?an_bf[i+1]:final_bf;
+                ryzenai_corelib_ssmlp_bf16_weights_desc d{kHiddenSize,kIntermediateSize,kRequantizedGroupSize};
+                ryzenai_corelib_ssmlp_bf16_gguf_components c{eps.data(),fn_bf[i].data(),next.data(),gu[i].values[0].bytes.data(),gu[i].values[1].bytes.data(),dw[i].bytes.data(),ryzenai_corelib_gguf_quant_type_q8_0};
+                void* p=nullptr;
+                api->Check(api->functions().ssmlp_weights_create_gguf_requantized(&d,&c,kRequantizeThreads,&p),"ryzenai_corelib_ssmlp_bf16_weights_create_gguf_requantized layer "+std::to_string(i));
+                mlp_weights[i]=UniqueSsMlpWeights(api,p);
+            });
         }
-        lm_weights=mm(embedding,kHiddenSize,kVocabularySize,"token_embd.weight");
+        creates.push_back([&]{ lm_weights=mm(embedding,kHiddenSize,kVocabularySize,"token_embd.weight"); });
+
+        std::atomic<std::size_t> next_create{0};
+        std::mutex failure_mutex;
+        std::exception_ptr first_failure;
+        const auto run_creates=[&]{
+            for(std::size_t k=next_create++;k<creates.size();k=next_create++){
+                try { creates[k](); }
+                catch(...){
+                    std::lock_guard<std::mutex> lock(failure_mutex);
+                    if(!first_failure) first_failure=std::current_exception();
+                    // Stop the others: the first diagnostic is the useful one,
+                    // and a package that fails one create fails the load.
+                    next_create=creates.size();
+                    return;
+                }
+            }
+        };
+        const std::size_t workers=std::min(kWeightCreateConcurrency,creates.size());
+        std::vector<std::thread> pool;
+        pool.reserve(workers>0?workers-1:0);
+        for(std::size_t t=1;t<workers;++t) pool.emplace_back(run_creates);
+        run_creates();
+        for(auto& worker:pool) worker.join();
+        if(first_failure) std::rethrow_exception(first_failure);
         phases.weight_create = phases.Lap();
         const auto& e=plan.maximum_extents();
         const auto rows=std::max({e.query_rows,e.kv_rows,e.output_rows,

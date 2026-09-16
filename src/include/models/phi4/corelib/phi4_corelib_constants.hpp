@@ -17,13 +17,17 @@ inline constexpr std::int64_t kMaxSequenceLength = 4096;
 inline constexpr std::int64_t kModelContextLength = 131072;
 inline constexpr std::int64_t kMaxDecodeWindow = 4095;
 inline constexpr std::uint32_t kRequantizedGroupSize = 64;
-/// Intra-packer threads for the Q8_0 requantizing creates. corelib treats 0 as
-/// ONE deliberately; this path is compute-bound and scales with the hint.
-///
-/// This is the per-create hint, NOT concurrent creates. corelib documents that
-/// loading a model with 8 CONCURRENT creates on this entry point failed 2 of 10
-/// with all-zero output, against 0 of 10 serialized, with attribution open. The
-/// creates therefore stay serialized.
-inline constexpr std::uint32_t kRequantizeThreads = 8;
+/// Intra-packer thread hint for one Q8_0 requantizing create. corelib treats 0
+/// as ONE deliberately. Packing many weights at once is the bigger lever and
+/// belongs to the caller, so the parallelism is taken below as concurrent
+/// creates instead; asking for both would oversubscribe the machine.
+inline constexpr std::uint32_t kRequantizeThreads = 0;
+
+/// How many weight creates run at once. The 161 creates are independent -- each
+/// reads its own mapped range of the GGUF and produces its own object -- so
+/// this is the parallelism that actually shortens load. Real threads rather
+/// than a packer hint, so it is not subject to whatever thread limits the
+/// surrounding environment imposes on the packer.
+inline constexpr std::size_t kWeightCreateConcurrency = 8;
 inline constexpr float kRmsEpsilon = 1.0e-5f;
 }  // namespace flm::phi4

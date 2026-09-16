@@ -85,6 +85,19 @@ void ObserveCreateConcurrency() {
            !state.maximum_active_weight_creates.compare_exchange_weak(maximum, active)) {}
 }
 
+/// \brief stand in for the packing a real create spends its time on
+/// \param state_lock the fake state mutex, held by the caller
+/// \note Every fake entry point holds the state mutex for its whole body, so
+///       without releasing it here the creates would serialise no matter how
+///       many threads the engine used, and the concurrency could not be
+///       observed -- or exercised. Real packing touches only its own mapped
+///       range, which is exactly what is modelled by stepping outside.
+void SimulatePackingWork(std::unique_lock<std::recursive_mutex>& state_lock) {
+    state_lock.unlock();
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    state_lock.lock();
+}
+
 #define FLM_DEFINE_FAKE_TAG(member, symbol)                                        \
     struct member##_tag {                                                          \
         static constexpr std::string_view name = #symbol;                          \
@@ -289,6 +302,7 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             auto* out = std::get<3>(arguments);
             if (out) *out = nullptr;
             ObserveCreateConcurrency();
+            SimulatePackingWork(state_lock);
             if (desc && components) state.weight_creates.push_back({"matmul", desc->k, desc->n,
                 desc->group_size, std::get<2>(arguments), {components->blocks}});
             if (status == ryzenai_corelib_status_success && out) *out = NewObject("matmul_weights");
@@ -301,6 +315,7 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             auto* out = std::get<3>(arguments);
             if (out) *out = nullptr;
             ObserveCreateConcurrency();
+            SimulatePackingWork(state_lock);
             if (desc && components) {
                 fake_corelib::WeightCreateRecord record{"ssmlp", desc->k, desc->n,
                     desc->group_size, std::get<2>(arguments),
