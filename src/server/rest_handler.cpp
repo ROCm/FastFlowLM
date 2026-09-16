@@ -818,13 +818,7 @@ void RestHandler::handle_chat(const json& request,
                 return;
             }
             try {
-                bool success = auto_chat_engine->insert(meta_info, uniformed_input);
-                if (!success){
-                    json error_response = {{"error", "Max length reached"}};
-                    send_response(error_response);
-                    this->auto_chat_engine->clear_context();
-                    return;
-                }
+                auto_chat_engine->generate(meta_info, length_limit, ostream);
             } catch (const std::exception& e) {
                 json error_response = {{"error", e.what()}};
                 send_response(error_response);
