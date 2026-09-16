@@ -22,7 +22,7 @@ untouched engine:
 
 | mode | weights | dequant | GEMM | median | resident |
 |---|---|---|---|---|---|
-| `dequant` (default) | q4, per chunk on device | `DequantBFP` | `flm.GEMM` | 883 ms | 75 MiB |
+| `dequant` (default) | q4, per chunk on device | `DequantBFP` | `flm.GEMM` | 882 ms | 75 MiB |
 | `bf16` | `model.dq_bf16`, resident | none | shipped `mm` | 726 ms | 3501 MiB |
 | `bfp16` | `model.dq_bfp`, resident | none | `flm.GEMM` | 670 ms | 1969 MiB |
 
