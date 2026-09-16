@@ -1,7 +1,8 @@
 # FLMGEMM override
 
 Runs Gemma4 E2B's prefill projections on the `flm.GEMM` and `flm.DequantBFP`
-operators from [IRON](https://github.com/Xilinx/mlir-aie), in place of the
+operators from [IRON](https://github.com/amd/IRON/tree/devel/iron/operators/flm),
+in place of the
 engine's `mm.xclbin` and `dequant.xclbin`. Both operators are open source and
 compiled out of tree, so this is also the path by which a rebuilt or retuned
 operator reaches a running model: build it, drop the artifacts next to the
@@ -16,17 +17,17 @@ buffers come to 75 MiB.
 ## Modes
 
 `FLM_GEMM_MODE` trades memory for prefill time, and lets the two replacements be
-measured apart. Prefill of a 247-token prompt on Strix, against 939 ms for the
+measured apart. Prefill of a 247-token prompt on Strix, against 929 ms for the
 untouched engine:
 
 | mode | weights | dequant | GEMM | median | resident |
 |---|---|---|---|---|---|
-| `dequant` (default) | q4, per chunk on device | `DequantBFP` | `flm.GEMM` | ~880 ms | 75 MiB |
-| `bf16` | `model.dq_bf16`, resident | none | shipped `mm` | 734 ms | 3501 MiB |
+| `dequant` (default) | q4, per chunk on device | `DequantBFP` | `flm.GEMM` | 883 ms | 75 MiB |
+| `bf16` | `model.dq_bf16`, resident | none | shipped `mm` | 726 ms | 3501 MiB |
 | `bfp16` | `model.dq_bfp`, resident | none | `flm.GEMM` | 670 ms | 1969 MiB |
 
 Read down the table: dropping the dequant from the timed path is worth about
-205 ms, and replacing the kernel a further 64 ms. The default gives most of the
+203 ms, and replacing the kernel a further 56 ms. The default gives most of the
 first back in exchange for keeping the weights 4-bit, because the prefill loop
 touches every weight exactly once per request, so a per-chunk dequant does the
 same total work a resident one does -- just on every request instead of once.

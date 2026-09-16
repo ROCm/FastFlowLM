@@ -14,7 +14,7 @@ options, independently:
   prefill, more disk and more memory.
 - **New IRON bfp16 GEMM.** Replaces FastFlowLM's matrix multiplication with an
   open-source implementation from IRON, whose source is
-  [here](https://github.com/amd/IRON/tree/main/iron/operators/flm/gemm). It is a
+  [here](https://github.com/amd/IRON/tree/devel/iron/operators/flm/gemm). It is a
   faster kernel than stock. It operates on bfp16 (block floating point) where the
   original operates on bf16, so the dequant operator has to be replaced too.
 
@@ -112,9 +112,19 @@ FLM_GEMM_OFF=1      flm serve gemma4-it:e2b        # stock, plugin registers not
 ```
 
 Time a 247-token prompt against each and read `prompt_eval_duration`. Run-to-run
-spread is about 2%, so differences below ~40 ms need several runs to see. The
-chart above is medians of 6–8 timed repeats after a discarded warm-up; regenerate
-it with `flm_gemm/tools/plot_prefill.py`, which holds the medians as literals.
+spread is about 2%, so differences below ~40 ms need several runs to see.
+
+`bench3.sh` in the internal tree does the timing and prints one
+`<label>: median <ms>` line per configuration, which is what the chart is drawn
+from:
+
+```bash
+{ ./bench3.sh stock
+  ./bench3.sh dequant $P
+  ./bench3.sh bf16    $P FLM_GEMM_MODE=bf16
+  ./bench3.sh bfp16   $P FLM_GEMM_MODE=bfp16; } | grep median > runs.txt
+python3 flm_gemm/tools/plot_prefill.py < runs.txt
+```
 
 `flm_gemm/README.md` has the artifacts each mode needs and how to check a new
 weight shape.
