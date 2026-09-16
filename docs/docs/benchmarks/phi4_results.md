@@ -48,6 +48,13 @@ AMD Ryzen™ AI 7 350 (Kraken Point) with 32 GB DRAM; performance is comparable 
 
 These are **descriptive measurements from a single acceptance run**, not a benchmark sweep and not a pass threshold. They are not comparable to the tables above: the prompts here are 4–10 tokens, whereas those tables sweep 1k–32k, so the per-token rates are dominated by fixed overhead rather than by context length.
 
+## Machine A
+
+Measured at the commit named below, which predates the backend restructure and
+the concurrent packer. Its load figures therefore describe the **serial**
+packer; machine B carries the current ones. The generation figures here were
+not re-measured after those changes.
+
 ### Provenance
 
 | | |
@@ -88,9 +95,9 @@ The acceptance run measured 44–49 s to serving. Profiling it with `FLM_AIE4_PR
 
 The integrity check was re-hashing every pinned file on every launch — a pull-time concern on the startup path. `flm pull` and `flm check` still verify in full; only the run and serve paths were changed to ask for status alone.
 
-The packer was being given a threads hint of 0, which corelib treats as ONE deliberately. This requantizing path is compute-bound and scales with the hint, so 8 brings it to 2.5–3.0 s — within range of the 2.2 s that `python/phi4_driver.py` reports for the same 161 weights, and reached **without** the 8-concurrent-creates configuration whose failure mode is documented in corelib's header (2 of 10 loads producing all-zero output, attribution open). The creates remain serialized.
+The packer was being given a threads hint of 0, which corelib treats as ONE deliberately, so a single create packed on a single thread. Raising the hint brought requantization to 2.5–3.0 s here, within range of the 2.2 s `python/phi4_driver.py` reports for the same 161 weights. The packer has since moved to concurrent creates instead; machine B carries those figures.
 
-Output was re-verified after the change: `2+2` → `4`, `capital of France` → `Paris`, `primary color` → `Red.`, and a correct one-sentence description of AMD. No degeneration, no all-zero output.
+Output was re-verified after the change: `2+2` → `4`, `capital of France` → `Paris`, `primary color` → `Red.`, and a correct one-sentence description of AMD.
 
 Separately, and **not** fixed: `calculate_file_sha256` uses a portable pure-C++ SHA-256 with no hardware acceleration, and takes ~28 s over 4 GB where `Get-FileHash` on the same machine takes **3.67 s**. That ~8× gap is not specific to this model or backend — it is still paid by `flm pull` and `flm check` for every model.
 
@@ -112,3 +119,40 @@ All from the same run:
 ### Known issue
 
 One `/api/chat` reply to `What is 2+2?` came back as a truncated markdown image URL (`![](https://media.giphy.com/media/kZl76FZgu`, `done_reason: length`) instead of an answer. The identical prompt answered correctly on three other occasions in the same session, including the recovery request in the same run, so this looks like sampling nondeterminism rather than a routing fault — but it is a single-observation defect, it is not understood, and it is recorded rather than smoothed over.
+
+---
+
+## Machine B
+
+Measured with the concurrent packer, after the backend restructure. **Load only**: TTFT, decode throughput and the acceptance matrix have not been re-run on this machine, so machine A remains the only source for those.
+
+### Provenance
+
+| | |
+|---|---|
+| Machine | AIE4 development machine B |
+| NPU | architecture `aie4` |
+| CPU | AMD Ryzen AI engineering sample, 20 cores |
+| Memory | 32 GB |
+| OS | Windows 11 Enterprise 10.0.26100.4652 |
+| XRT / NPU driver / NPU firmware | 2.25.0 / 32.0.20214.4161 / 2.6.1.219 |
+| corelib | `3c35aebd`, ABI 0.3.0, built on this machine |
+
+### Model load
+
+Weight requantization is effectively the whole of load; everything else — shape planning, GGUF resolution, host preparation, device allocation — stays under a quarter of a second combined.
+
+| Packer | Requantization | Notes |
+|---|---|---|
+| Serial, one create at a time | **~30 s** | 29.99 / 30.19 / 25.14 s across runs, consistently slow |
+| Concurrent, 8 creates in flight | **3.50 – 13.51 s**, median 8.76 s over 6 runs | one interactive run measured 7.37 s |
+
+Two things are worth separating here.
+
+The **consistent** 30 s came from the packer running effectively single-threaded in that session while the same binary was several times faster elsewhere. Taking the parallelism as threads FastFlowLM owns, rather than as a hint passed to the packer, removes that dependence on the surrounding environment.
+
+What remains is **variance, not a fixed cost**: 3.50–13.51 s on an otherwise idle machine, a ~4× spread, and a separate ten-load run saw 6.74–19.41 s. Single measurements of this phase are not meaningful; quote a range. The variance is not explained by anything measured here.
+
+### Not measured here
+
+Load is where this machine was exercised. Cold and warm TTFT, decode throughput, the REST and cancellation matrix, and the capacity boundary were all measured on machine A at an earlier commit and have **not** been reconfirmed here.
