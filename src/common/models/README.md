@@ -124,10 +124,12 @@ engine type, never through a `causal_lm*`.
 - Take the GGUF package and the `CorelibRuntime` by `shared_ptr` in the constructor
   and hold both for the engine's lifetime. corelib objects must not outlive the
   API they were created from.
-- Serialize weight creation. corelib documents that 8 *concurrent*
-  `*_create_gguf_requantized` calls failed 2 of 10 with all-zero output against
-  0 of 10 serialized. Pass the thread hint (`kRequantizeThreads`) to each create;
-  do not run creates in parallel. See
+- Create weights concurrently. Requantizing the 161 weights is effectively the
+  whole of model load, and the creates are independent — each reads its own
+  mapped range and produces its own object — so they run across a pool
+  (`kWeightCreateConcurrency`). The per-create thread hint
+  (`kRequantizeThreads`) stays at corelib's default of one so the two forms of
+  parallelism do not multiply into an oversubscribed machine. See
   [`phi4_corelib_constants.hpp`](../../include/models/phi4/corelib/phi4_corelib_constants.hpp).
 - Expose `bool poisoned() const noexcept`. A corelib failure mid-decode usually
   leaves device state that only a reload can clear; the backend surfaces this and
