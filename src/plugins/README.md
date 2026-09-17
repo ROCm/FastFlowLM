@@ -5,18 +5,21 @@ Plugins let you override individual operators in the end-to-end model without
 rebuilding `flm` or any engine library.
 
 We demonstrate it with a plugin in [`flm_gemm/`](flm_gemm) that overrides two
-operators in Gemma4 E2B: dequant and matrix multiplication. It enables two
-options, independently:
+operators in Gemma4 E2B: dequant and matrix multiplication. It adds two options,
+independently selectable:
 
 - **Offline dequant.** Stops dequantizing the prefill weights at run time.
   Already-dequantized weights (bf16 or bfp16, depending on the option below) are
-  loaded from disk and the dequant step is overridden with a no-op. Faster
-  prefill, more disk and more memory.
-- **New IRON bfp16 GEMM.** Replaces FastFlowLM's matrix multiplication with an
-  open-source implementation from IRON, whose source is
-  [here](https://github.com/amd/IRON/tree/devel/iron/operators/flm/gemm). It is a
-  faster kernel than stock. It operates on bfp16 (block floating point) where the
-  original operates on bf16, so the dequant operator has to be replaced too.
+  loaded from disk and the dequant step is overridden with a no-op. It trades
+  disk and memory for prefill time.
+- **IRON bfp16 GEMM.** Runs the projections on an open-source matrix
+  multiplication from IRON, whose source is
+  [here](https://github.com/amd/IRON/tree/devel/iron/operators/flm/gemm). It
+  operates on bfp16 (block floating point) rather than bf16, so it needs its
+  weights in that format and the dequant operator is replaced along with it.
+
+Prefill of a 247-token prompt on Strix, for each combination, measured on
+FastFlowLM v1.0.5:
 
 ![prefill medians](assets/prefill.png)
 
@@ -92,18 +95,18 @@ nothing was built for is a run-time fallback to the engine.
 
 | variable | effect |
 |---|---|
-| `FLM_GEMM_MODE` | `dequant` (default), `bf16` or `bfp16` — see the chart |
-| `FLM_GEMM_OFF` | leave every projection on the engine's own operators |
+| `FLM_GEMM_MODE` | `dequant` (default), `bf16` or `bfp16` — which weights the GEMM reads |
+| `FLM_GEMM_OFF` | register nothing, leaving FastFlowLM's operators in place |
 | `FLM_GEMM_CONFIG` | pick one GEMM xclbin by stem, when several are present |
 | `FLM_DEQUANT_VERIFY` | check every dequantized buffer against the sidecar, byte for byte |
 
 ## Prefill weights
 
 The two offline modes read weights a converter dequantized ahead of time, next
-to `model.q4nx`. `--mode bf16` writes what the engine's `dequant.xclbin` would
-have written, which is what the shipped GEMM reads (3.45 GiB); `--mode bfp`
-writes the packed form the IRON GEMM takes (1.94 GiB), calling the operator's
-own packer so the layout cannot drift from the kernel's.
+to `model.q4nx`. `--mode bf16` writes what `dequant.xclbin` would have written,
+in the layout FastFlowLM's GEMM reads (3.45 GiB); `--mode bfp` writes the packed
+form the IRON bfp16 GEMM takes (1.94 GiB), calling that operator's own packer so
+the layout cannot drift from its kernel's.
 
 They are also the reference for `FLM_DEQUANT_VERIFY=1`, which checks every
 buffer the dequant produces against them, byte for byte.
@@ -132,7 +135,8 @@ FLM_PLUGIN=$PWD/plugins/flm_gemm/flm_gemm_plugin.so ./flm serve gemma4-it:e2b
 ```
 
 Send a 247-token prompt to `/api/generate` and read `prompt_eval_duration`,
-setting `FLM_GEMM_MODE` for each configuration. Discard the first response and
+setting `FLM_GEMM_MODE` for each configuration and `FLM_GEMM_OFF=1` for the
+unmodified engine. Discard the first response and
 take the median of the rest; run-to-run spread is about 2%, so differences below
 ~40 ms need several runs to see.
 
