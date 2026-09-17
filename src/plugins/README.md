@@ -17,6 +17,9 @@ independently selectable:
   [here](https://github.com/amd/IRON/tree/devel/iron/operators/flm/gemm). It
   operates on bfp16 (block floating point) rather than bf16, so it needs its
   weights in that format and the dequant operator is replaced along with it.
+  The FastFlowLM v1.0.5 matrix multiplication emulates bf16 multiplication 
+  using bfp16 internally, so swapping the open-source IRON bfp16
+  implementation retains bit-equivalence.
 
 Prefill of a 247-token prompt on Strix, for each combination, measured on
 FastFlowLM v1.0.5:
