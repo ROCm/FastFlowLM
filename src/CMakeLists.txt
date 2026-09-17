@@ -5,6 +5,8 @@ if(POLICY CMP0207)
     cmake_policy(SET CMP0207 NEW)
 endif()
 
+include(CTest)
+
 if(NOT DEFINED FLM_VERSION)
     message(FATAL_ERROR "FLM_VERSION must be specified externally. Use -DFLM_VERSION=<version> when running cmake.")
 endif()
@@ -898,3 +900,7 @@ install(FILES model_info.json DESTINATION "${FLM_SHARE_DESTINATION}")
 # xclbins, which are loaded by shared libraries need to be in location
 # relative to the executable, so we install them relative to the binary.
 install(DIRECTORY xclbins DESTINATION "${FLM_SHARE_DESTINATION}")
+
+if(BUILD_TESTING)
+    add_subdirectory(test/openai_tool_policy)
+endif()
