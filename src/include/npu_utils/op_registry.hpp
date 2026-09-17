@@ -2,8 +2,13 @@
 /// \brief The set of model operations that can be overridden, and the binding
 ///        of an override to them.
 /// \note  A model engine declares its operations once, at construction. The key
-///        space is therefore enumerable and fixed: override() on an unknown key
-///        throws rather than silently never firing.
+///        space is therefore enumerable and fixed: override_op() on an unknown
+///        key throws rather than silently never firing.
+/// \note  Nothing here names an operation or spells a key. Both are the
+///        engine's: it may have layers, blocks, a nest of them or none, and it
+///        publishes whatever vocabulary its own header documents. All this
+///        needs is that keys be unique and that each operation's dispatch sites
+///        be numbered densely from zero.
 #pragma once
 
 #include <algorithm>
@@ -19,46 +24,20 @@
 
 namespace flm {
 
-/// \brief Compose the key of a per-layer operation, e.g. "layers.12.mlp.up_proj".
-inline std::string op_key(int layer, std::string_view role) {
-    if (layer < 0) return std::string(role);
-    return "layers." + std::to_string(layer) + "." + std::string(role);
-}
-
-/// \brief Roles of the operations a model may declare.
-/// \note  A role names the operation, not the tensor it reads: dequant.qkv
-///        produces one buffer from three tensors, and self_attn.core reads no
-///        weight at all.
-namespace role {
-inline constexpr std::string_view q_proj    = "self_attn.q_proj";
-inline constexpr std::string_view k_proj    = "self_attn.k_proj";
-inline constexpr std::string_view v_proj    = "self_attn.v_proj";
-inline constexpr std::string_view o_proj    = "self_attn.o_proj";
-inline constexpr std::string_view attn_core = "self_attn.core";
-
-inline constexpr std::string_view gate_proj = "mlp.gate_proj";
-inline constexpr std::string_view up_proj   = "mlp.up_proj";
-inline constexpr std::string_view down_proj = "mlp.down_proj";
-
-inline constexpr std::string_view dequant_qkv  = "dequant.qkv";
-inline constexpr std::string_view dequant_o    = "dequant.o";
-inline constexpr std::string_view dequant_gate = "dequant.gate";
-inline constexpr std::string_view dequant_up   = "dequant.up";
-inline constexpr std::string_view dequant_down = "dequant.down";
-}  // namespace role
-
 template <typename App>
 class op_registry_t {
 public:
-    explicit op_registry_t(int layer_count) : layer_count_(layer_count) {}
+    /// \param site_count the largest dispatch-site index any operation will use
+    explicit op_registry_t(int site_count) : site_count_(site_count) {}
 
-    /// \brief Declare that `app` implements `role` for `layer`.
-    /// \note  Engine-side. Several layers may share one app, and several apps
-    ///        may serve one role in different layers; both are resolved here so
-    ///        that neither the apps nor an override have to know about it.
-    void declare(std::string_view role, int layer, App& app) {
-        app._declare_op(std::string(role), this->layer_count_, &this->extent_);
-        this->slots_.emplace(op_key(layer, role), slot{ &app, layer });
+    /// \brief Declare that `app` implements operation `name` at site `index`,
+    ///        reachable by a plugin as `key`.
+    /// \note  Engine-side. Several sites may share one app, and several apps may
+    ///        serve one name at different sites; both are resolved here, so
+    ///        neither the apps nor an override have to know about it.
+    void declare(std::string key, std::string_view name, int index, App& app) {
+        app._declare_op(std::string(name), this->site_count_, &this->extent_);
+        this->slots_.emplace(std::move(key), slot{ &app, index });
     }
 
     /// \brief Publish the geometry of the chunk about to be processed.
@@ -82,7 +61,7 @@ public:
         size_t bound = 0;
         for (auto& [declared, s] : this->slots_) {
             if (!_matches(key, declared)) continue;
-            s.app->_set_op_override(s.layer, hook.get());
+            s.app->_set_op_override(s.index, hook.get());
             bound++;
         }
         if (bound == 0) {
@@ -98,7 +77,7 @@ public:
 private:
     struct slot {
         App* app;
-        int layer;
+        int index;
     };
 
     static bool _matches(std::string_view pattern, std::string_view key) {
@@ -115,7 +94,7 @@ private:
         return p >= pattern.size() && k >= key.size();
     }
 
-    int layer_count_;
+    int site_count_;
     op_extent extent_;
     std::map<std::string, slot> slots_;
     std::vector<std::shared_ptr<op_override>> hooks_;
