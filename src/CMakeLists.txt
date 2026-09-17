@@ -48,12 +48,15 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 # ———————————————————————————————————————————————
 option(FLM_USE_HRX "Use the HRX amdxdna NPU runtime instead of XRT (0=XRT default, 1=HRX)" OFF)
 option(FLM_PORTABLE_BUILD "Build portable distribution with bundled runtime libraries" OFF)
-option(FLM_ENABLE_CORELIB_AIE4
-       "Enable Phi-4 Q8_0 GGUF execution through ryzenai-corelib" OFF)
+# The two NPU generations do not share an engine: aie2p (Strix / Krackan) runs
+# FastFlowLM's own kernels, aie4 runs ryzenai-corelib. A build carries
+# one of the two, so this option selects the target hardware, not an extra.
+option(FLM_ENABLE_AIE4
+       "Target AIE4 through ryzenai-corelib instead of aie2p" OFF)
 
-if(FLM_ENABLE_CORELIB_AIE4)
+if(FLM_ENABLE_AIE4)
     if(NOT WIN32)
-        message(FATAL_ERROR "FLM_ENABLE_CORELIB_AIE4 currently requires Windows")
+        message(FATAL_ERROR "FLM_ENABLE_AIE4 currently requires Windows")
     endif()
     find_path(RYZENAI_CORELIB_INCLUDE_DIR NAMES ryzenai/corelib.h REQUIRED)
     # The main binary needs ryzenai::corelib::GetDevice(), a C++ entry point the
@@ -255,12 +258,12 @@ add_subdirectory(${CMAKE_SOURCE_DIR}/../third_party/tokenizers-cpp
 # ———————————————————————————————————————————————
 file(GLOB SOURCES "src/*.cpp" "runner/*.cpp" "common/*.cpp" "common/*/*.cpp" "server/*.cpp" "pull/*.cpp" )
 file(GLOB HEADERS "include/*.hpp" "runner/*.hpp" "common/*.hpp" "common/*/*.hpp" "server/*.hpp" "pull/*.hpp")
-list(FILTER SOURCES EXCLUDE REGEX ".*/common/corelib/.*\\.cpp$")
+list(FILTER SOURCES EXCLUDE REGEX ".*/common/aie4/.*\\.cpp$")
 
 # Model sources live two levels deeper than the globs above reach, so pull
-# them in explicitly; the corelib half is built separately, below.
+# them in explicitly; the aie4 half is built separately, below.
 include("${CMAKE_SOURCE_DIR}/common/models/models_sources.cmake")
-list(APPEND SOURCES ${FLM_MODELS_FLM_SOURCES})
+list(APPEND SOURCES ${FLM_MODELS_AIE2P_SOURCES})
 
 # Exclude files that depend on missing libraries for Linux
 if(NOT WIN32)
@@ -293,19 +296,19 @@ endif()
 
 add_executable(flm ${SOURCES} ${HEADERS})
 
-if(FLM_ENABLE_CORELIB_AIE4)
-    include("${CMAKE_SOURCE_DIR}/common/corelib/corelib_sources.cmake")
-    add_library(flm_corelib_aie4 STATIC ${FLM_CORELIB_AIE4_SOURCES})
-    target_include_directories(flm_corelib_aie4 PUBLIC
+if(FLM_ENABLE_AIE4)
+    include("${CMAKE_SOURCE_DIR}/common/aie4/aie4_sources.cmake")
+    add_library(flm_aie4 STATIC ${FLM_AIE4_SOURCES})
+    target_include_directories(flm_aie4 PUBLIC
         "${CMAKE_SOURCE_DIR}/include" "${RYZENAI_CORELIB_INCLUDE_DIR}"
         "${XRT_INCLUDE_DIR}" "${FLM_CORELIB_BOOST_INCLUDE_DIR}")
     # RYZENAI_CORELIB_STATIC drops the vendor header's dllimport decoration;
     # FLM_CORELIB_LINK_STATIC is what tells our own code the symbols are linked
     # in and must be bound directly instead of through LoadLibrary.
-    target_compile_definitions(flm_corelib_aie4 PUBLIC
-        FLM_ENABLE_CORELIB_AIE4=1 RYZENAI_CORELIB_STATIC=1 FLM_CORELIB_LINK_STATIC=1)
-    target_link_libraries(flm_corelib_aie4 PUBLIC "${RYZENAI_CORELIB_LIBRARY}")
-    target_link_libraries(flm PRIVATE flm_corelib_aie4)
+    target_compile_definitions(flm_aie4 PUBLIC
+        FLM_ENABLE_AIE4=1 RYZENAI_CORELIB_STATIC=1 FLM_CORELIB_LINK_STATIC=1)
+    target_link_libraries(flm_aie4 PUBLIC "${RYZENAI_CORELIB_LIBRARY}")
+    target_link_libraries(flm PRIVATE flm_aie4)
 endif()
 
 if(WIN32)

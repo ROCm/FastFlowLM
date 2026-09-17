@@ -1,10 +1,12 @@
 /// \file model_backend.hpp
 /// \brief Named execution backends for a model family
-/// \note A model family can have more than one engine behind it: Phi-4 runs
-///       either on FastFlowLM's own NPU kernels or on ryzenai-corelib. Both are
-///       causal_lm subclasses, but they differ in how they are built and in how
-///       they must be driven. A ModelBackend owns one engine and states those
-///       differences, so the frontends stay backend-agnostic.
+/// \note A backend *is* a piece of hardware. aie2p (Strix / Krackan) runs
+///       FastFlowLM's own NPU kernels; aie4 runs ryzenai-corelib. Both
+///       are causal_lm subclasses, but they differ in how they are built and in
+///       how they must be driven. A ModelBackend owns one engine and states
+///       those differences, so the frontends stay backend-agnostic. A backend id
+///       is therefore a platform id (utils::platform_id), and a future non-NPU
+///       target would join the same namespace rather than open a second axis.
 /// \note This seam deliberately sits *above* causal_lm. The engine libraries in
 ///       src/lib/<runtime> are prebuilt against causal_lm.hpp, so that header is
 ///       a frozen ABI: adding or reordering a virtual there would silently shift
@@ -28,10 +30,15 @@ class npu_xclbin_manager;
 
 namespace flm::backend {
 
-/// \brief the id every model family falls back on
-/// \note This is FastFlowLM's own NPU engine path, i.e. what every catalog
-///       entry without an explicit backend has always used.
-inline constexpr const char* kDefaultBackendId = "flm_npu";
+/// \brief FastFlowLM's own NPU kernels, on Strix / Krackan Point
+/// \note Matches utils::platform_id(npu_platform::aie2p). Every model family
+///       registers this one; it is what a machine without aie4 silicon runs.
+inline constexpr const char* kAie2pBackendId = "aie2p";
+
+/// \brief ryzenai-corelib, on AIE4
+/// \note Matches utils::platform_id(npu_platform::aie4). Only compiled in when
+///       FLM_ENABLE_AIE4 is on, and only for families that have a corelib engine.
+inline constexpr const char* kAie4BackendId = "aie4";
 
 /// \brief everything a backend factory needs to build its engine
 /// \note Assembled by the frontend once the shared model state is initialized,
@@ -75,7 +82,7 @@ public:
     /// \brief the engine this backend owns
     virtual causal_lm& engine() = 0;
 
-    /// \brief the registered id of this backend, e.g. "flm_npu"
+    /// \brief the registered id of this backend, e.g. "aie2p"
     virtual std::string id() const = 0;
 
     /// \brief one line of provenance for `flm show`, empty when there is none
@@ -88,8 +95,8 @@ public:
     virtual bool supports_preemption() const { return true; }
 
     /// \brief whether the engine wants one more forward() after an EOS token
-    /// \note The FastFlowLM engines use it to keep their KV cache in step;
-    ///       corelib rejects a decode past its own limit, so it opts out.
+    /// \note The aie2p engines use it to keep their KV cache in step; the aie4
+    ///       engines reject a decode past corelib's own limit, so they opt out.
     virtual bool forwards_past_eos() const { return true; }
 
     /// \brief whether the engine has failed in a way that needs a full reload
@@ -159,24 +166,22 @@ private:
 ///       both the family names and the engine types.
 void register_builtin_backends(BackendRegistry& registry);
 
-/// \brief the backend ids a catalog entry allows
-/// \param model_info the resolved model_list.json entry
-/// \return the "supported_backends" array, or a single-element list holding
-///         details.execution_backend (or kDefaultBackendId) when it is absent
-/// \note The fallback is what keeps pre-existing catalogs meaning what they did.
-std::vector<std::string> supported_backends(const nlohmann::ordered_json& model_info);
-
 /// \brief decide which backend to run a model on
 /// \param family the model family, as in details.family
-/// \param model_info the resolved model_list.json entry
+/// \param platform the detected hardware's id, e.g. utils::platform_id(...)
 /// \param requested the --backend value, empty when the flag was not given
 /// \param source if non-null, receives a human-readable reason for the choice
 /// \return the resolved backend id
-/// \throws std::runtime_error naming the allowed ids when the choice is invalid
-/// \note Precedence: --backend, then FLM_BACKEND, then details.execution_backend,
-///       then kDefaultBackendId.
+/// \throws std::runtime_error naming the registered ids when nothing matches
+/// \note Precedence: --backend, then FLM_BACKEND, then the detected hardware.
+///       The catalog no longer names a backend: model_list has already pruned
+///       itself to the entries this hardware can run, so a per-entry backend
+///       list could only restate `platform`.
+/// \note `platform` arrives as a string rather than a utils::npu_platform so
+///       that this header stays free of the NPU runtime includes, which is what
+///       lets test/model_backend build without an XRT toolchain.
 std::string resolve_backend_id(const std::string& family,
-                               const nlohmann::ordered_json& model_info,
+                               const std::string& platform,
                                const std::string& requested = "",
                                std::string* source = nullptr);
 

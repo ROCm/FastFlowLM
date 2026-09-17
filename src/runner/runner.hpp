@@ -70,8 +70,9 @@ class Runner {
         int img_pre_resize;
         // CLI instance for interactive input
         CLIWide cli;
-        // Owned by main(); on an AIE4 build this is corelib's device, which
-        // must not be duplicated.
+        // Owned by main(); on an aie4 build it comes from corelib, on an aie2p
+        // build main opens it directly. Either way there is one per process and
+        // it must not be duplicated.
         flm_rt::device* npu_device_inst;
 
         /// \brief Command functions

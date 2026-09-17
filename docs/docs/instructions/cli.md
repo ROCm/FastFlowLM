@@ -234,13 +234,20 @@ flm serve llama3.2:1b --ctx-len 8192
 
 ### 🔀 Choose an Execution Backend
 
-Some models can run on more than one engine. `phi4-mini-it`, for example, runs on FastFlowLM's own NPU kernels (`flm_npu`) on aie2p parts, and on ryzenai-corelib (`corelib_aie4_gguf`) on aie4 parts. Each model declares the backends it supports; unless you say otherwise you get the one its catalog entry names, which is what every earlier release did.
+**A backend is a piece of hardware.** There are two:
 
-Select one explicitly with `--backend`:
+| id | hardware | engine |
+|---|---|---|
+| `aie2p` | Strix / Krackan Point | FastFlowLM's own NPU kernels |
+| `aie4` | AIE4 | AMD's ryzenai-corelib |
+
+You normally never set this. A build targets one NPU generation — `FLM_ENABLE_AIE4` selects AIE4, otherwise AIE2P — and `flm run` prints it as `NPU platform: aie2p`. That platform *is* the backend. A model family has at most one engine per generation, so there is nothing to choose between.
+
+The flag exists for overriding the detection, and for the targets that will join this list later:
 
 ```shell
-flm run   phi4-mini-it:4b --backend flm_npu
-flm serve phi4-mini-it:4b --backend corelib_aie4_gguf
+flm run   phi4-mini-it:4b --backend aie2p
+flm serve phi4-mini-it:4b --backend aie4
 ```
 
 **Precedence**, highest first:
@@ -249,12 +256,13 @@ flm serve phi4-mini-it:4b --backend corelib_aie4_gguf
 |---|---|---|
 | 1 | `--backend <id>` | the flag above, or a `"backend"` field on an `/api/chat` or `/api/generate` request |
 | 2 | `FLM_BACKEND=<id>` | environment variable, for a whole shell session |
-| 3 | the model catalog | `execution_backend` on the resolved entry |
-| 4 | `flm_npu` | the default |
+| 3 | the detected NPU | what `flm validate` reports |
 
 A per-request `"backend"` overrides `--backend` for that request, and reloads the model if it differs from the one already loaded — exactly as asking for a different model does.
 
-Asking for a backend a model does not support, or one this build does not ship, fails at load with a message listing what is actually available. There is no silent fallback to another engine or to the CPU.
+Asking for a backend this build does not ship fails at load with a message listing what is actually available. There is no silent fallback to another engine or to the CPU. Note that a release is built for one NPU generation: on hardware it was not built for, `run`, `serve` and `bench` refuse up front, and `flm validate` still reports what it found.
+
+> A build carries the engines for one generation only, so there is no flag that moves it to the other catalog entry — that is a different build of FLM.
 
 ---
 

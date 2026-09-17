@@ -2,10 +2,13 @@
 /// \brief The backend registry and the rules for picking a backend
 /// \note  Deliberately free of NPU hardware and of any prebuilt engine library:
 ///        every backend here is a stub, so this builds and runs on Linux CI
-///        where the phi4_corelib_aie4 suite cannot. register_builtin_backends
+///        where the phi4_aie4 suite cannot. register_builtin_backends
 ///        is stubbed out below for the same reason.
+/// \note  A backend id is a hardware id: "aie2p", "aie4", and one day "gpu".
+///        The stubs below use those names because the resolution rules are
+///        about hardware, not about which engine happens to serve it.
 #include "AutoModel/model_backend.hpp"
-#include "../phi4_corelib_aie4/test_support.hpp"
+#include "../phi4_aie4/test_support.hpp"
 
 #include <cstdlib>
 #include <memory>
@@ -14,10 +17,10 @@
 using flm::backend::BackendContext;
 using flm::backend::BackendRegistry;
 using flm::backend::BackendTraits;
-using flm::backend::kDefaultBackendId;
+using flm::backend::kAie2pBackendId;
+using flm::backend::kAie4BackendId;
 using flm::backend::ModelBackend;
 using flm::backend::resolve_backend_id;
-using flm::backend::supported_backends;
 
 /// \brief the builtin set, emptied
 /// \note The real one lives in builtin_backends.cpp and pulls in every engine
@@ -53,12 +56,6 @@ flm::backend::BackendFactory StubFactory(std::string id) {
 /// \brief a registry that is not the process-wide one
 BackendRegistry MakeRegistry() { return BackendRegistry(); }
 
-nlohmann::ordered_json Entry(nlohmann::ordered_json details = nlohmann::ordered_json::object()) {
-    nlohmann::ordered_json info = nlohmann::ordered_json::object();
-    info["details"] = std::move(details);
-    return info;
-}
-
 /// \brief scoped setenv/unsetenv for FLM_BACKEND
 class ScopedBackendEnv {
 public:
@@ -81,49 +78,47 @@ public:
 
 void test_register_and_create() {
     auto registry = MakeRegistry();
-    registry.register_backend("phi4", "flm_npu", StubFactory("flm_npu"));
-    registry.register_backend("phi4", "corelib_aie4_gguf",
-                              StubFactory("corelib_aie4_gguf"),
+    registry.register_backend("phi4", kAie2pBackendId, StubFactory("aie2p"));
+    registry.register_backend("phi4", kAie4BackendId, StubFactory("aie4"),
                               BackendTraits{false, false, 4096});
 
-    TEST_REQUIRE(registry.has("phi4", "flm_npu"));
+    TEST_REQUIRE(registry.has("phi4", "aie2p"));
     TEST_REQUIRE(!registry.has("phi4", "bogus"));
-    TEST_REQUIRE(!registry.has("llama3", "flm_npu"));
+    TEST_REQUIRE(!registry.has("llama3", "aie2p"));
 
     // available() is sorted, which is what makes the error messages stable.
     const auto ids = registry.available("phi4");
     TEST_REQUIRE(ids.size() == 2);
-    TEST_REQUIRE(ids[0] == "corelib_aie4_gguf");
-    TEST_REQUIRE(ids[1] == "flm_npu");
+    TEST_REQUIRE(ids[0] == "aie2p");
+    TEST_REQUIRE(ids[1] == "aie4");
     TEST_REQUIRE(registry.available("llama3").empty());
 
     BackendContext context;
-    auto backend = registry.create("phi4", "corelib_aie4_gguf", context);
+    auto backend = registry.create("phi4", "aie4", context);
     TEST_REQUIRE(backend != nullptr);
-    TEST_REQUIRE(backend->id() == "corelib_aie4_gguf");
+    TEST_REQUIRE(backend->id() == "aie4");
 }
 
 void test_traits_are_kept_per_backend() {
     auto registry = MakeRegistry();
-    registry.register_backend("phi4", "flm_npu", StubFactory("flm_npu"));
-    registry.register_backend("phi4", "corelib_aie4_gguf",
-                              StubFactory("corelib_aie4_gguf"),
+    registry.register_backend("phi4", kAie2pBackendId, StubFactory("aie2p"));
+    registry.register_backend("phi4", kAie4BackendId, StubFactory("aie4"),
                               BackendTraits{false, false, 4096});
 
-    // The defaults describe the FastFlowLM NPU engines.
-    const auto npu = registry.traits("phi4", "flm_npu");
-    TEST_REQUIRE(npu.needs_npu_xclbin);
-    TEST_REQUIRE(npu.supports_preemption);
-    TEST_REQUIRE(npu.max_context_length == 0);
+    // The defaults describe the FastFlowLM NPU engines, i.e. aie2p.
+    const auto aie2p = registry.traits("phi4", kAie2pBackendId);
+    TEST_REQUIRE(aie2p.needs_npu_xclbin);
+    TEST_REQUIRE(aie2p.supports_preemption);
+    TEST_REQUIRE(aie2p.max_context_length == 0);
 
-    const auto corelib = registry.traits("phi4", "corelib_aie4_gguf");
-    TEST_REQUIRE(!corelib.needs_npu_xclbin);
-    TEST_REQUIRE(!corelib.supports_preemption);
-    TEST_REQUIRE(corelib.max_context_length == 4096);
+    const auto aie4 = registry.traits("phi4", kAie4BackendId);
+    TEST_REQUIRE(!aie4.needs_npu_xclbin);
+    TEST_REQUIRE(!aie4.supports_preemption);
+    TEST_REQUIRE(aie4.max_context_length == 4096);
 }
 
 void test_backend_defaults() {
-    StubBackend backend("flm_npu");
+    StubBackend backend(kAie2pBackendId);
     TEST_REQUIRE(backend.detail().empty());
     TEST_REQUIRE(backend.max_decode_length() == 0);
     TEST_REQUIRE(backend.supports_preemption());
@@ -134,137 +129,116 @@ void test_backend_defaults() {
 
 void test_duplicate_registration_is_rejected() {
     auto registry = MakeRegistry();
-    registry.register_backend("phi4", "flm_npu", StubFactory("first"));
+    registry.register_backend("phi4", kAie2pBackendId, StubFactory("first"));
     const std::string message = RequireThrows([&] {
-        registry.register_backend("phi4", "flm_npu", StubFactory("second"));
+        registry.register_backend("phi4", kAie2pBackendId, StubFactory("second"));
     });
     RequireContains(message, "already registered");
 
     BackendContext context;
-    TEST_REQUIRE(registry.create("phi4", "flm_npu", context)->id() == "first");
+    TEST_REQUIRE(registry.create("phi4", kAie2pBackendId, context)->id() == "first");
 
-    RequireThrows([&] { registry.register_backend("", "flm_npu", StubFactory("x")); });
+    RequireThrows([&] { registry.register_backend("", kAie2pBackendId, StubFactory("x")); });
     RequireThrows([&] { registry.register_backend("phi4", "", StubFactory("x")); });
     RequireThrows([&] { registry.register_backend("phi4", "x", nullptr); });
 }
 
 void test_replace_backend_is_the_test_seam() {
     auto registry = MakeRegistry();
-    registry.register_backend("phi4", "flm_npu", StubFactory("real"));
-    registry.replace_backend("phi4", "flm_npu", StubFactory("stub"));
+    registry.register_backend("phi4", kAie2pBackendId, StubFactory("real"));
+    registry.replace_backend("phi4", kAie2pBackendId, StubFactory("stub"));
 
     BackendContext context;
-    TEST_REQUIRE(registry.create("phi4", "flm_npu", context)->id() == "stub");
+    TEST_REQUIRE(registry.create("phi4", kAie2pBackendId, context)->id() == "stub");
     TEST_REQUIRE(registry.available("phi4").size() == 1);
 
     // It also registers a backend that was not there before.
-    registry.replace_backend("llama3", "flm_npu", StubFactory("fresh"));
-    TEST_REQUIRE(registry.create("llama3", "flm_npu", context)->id() == "fresh");
+    registry.replace_backend("llama3", kAie2pBackendId, StubFactory("fresh"));
+    TEST_REQUIRE(registry.create("llama3", kAie2pBackendId, context)->id() == "fresh");
 }
 
 void test_unknown_id_names_what_exists() {
     auto registry = MakeRegistry();
-    registry.register_backend("phi4", "flm_npu", StubFactory("flm_npu"));
+    registry.register_backend("phi4", kAie2pBackendId, StubFactory("aie2p"));
 
     BackendContext context;
     const std::string message =
         RequireThrows([&] { registry.create("phi4", "bogus", context); });
     RequireContains(message, "bogus");
-    RequireContains(message, "flm_npu");
+    RequireContains(message, "aie2p");
 
     const std::string empty =
-        RequireThrows([&] { registry.create("llama3", "flm_npu", context); });
+        RequireThrows([&] { registry.create("llama3", kAie2pBackendId, context); });
     RequireContains(empty, "(none)");
 }
 
-void test_supported_backends_falls_back() {
-    // No key at all: what the entry has always run on.
-    TEST_REQUIRE(supported_backends(Entry()) ==
-                 std::vector<std::string>{kDefaultBackendId});
+void test_the_hardware_is_the_default() {
+    auto& registry = BackendRegistry::instance();
+    registry.replace_backend("phi4", kAie2pBackendId, StubFactory("aie2p"));
+    registry.replace_backend("phi4", kAie4BackendId, StubFactory("aie4"));
 
-    // execution_backend alone still narrows the entry to itself.
-    const auto corelib = Entry({{"execution_backend", "corelib_aie4_gguf"}});
-    TEST_REQUIRE(supported_backends(corelib) ==
-                 std::vector<std::string>{"corelib_aie4_gguf"});
+    std::string source;
 
-    // An explicit list wins over execution_backend.
-    auto both = corelib;
-    both["supported_backends"] = {"flm_npu", "corelib_aie4_gguf"};
-    TEST_REQUIRE(supported_backends(both).size() == 2);
-
-    auto malformed = Entry();
-    malformed["supported_backends"] = nlohmann::ordered_json::array();
-    RequireThrows([&] { supported_backends(malformed); });
-    malformed["supported_backends"] = {1, 2};
-    RequireThrows([&] { supported_backends(malformed); });
-    RequireThrows([&] {
-        supported_backends(Entry({{"execution_backend", 7}}));
-    });
+    // Nothing overrides it, so the machine decides -- and it decides both ways,
+    // which is the whole point of collapsing backend onto hardware.
+    TEST_REQUIRE(resolve_backend_id("phi4", "aie2p", "", &source) == kAie2pBackendId);
+    TEST_REQUIRE(source == "detected hardware");
+    TEST_REQUIRE(resolve_backend_id("phi4", "aie4", "", &source) == kAie4BackendId);
+    TEST_REQUIRE(source == "detected hardware");
 }
 
 void test_resolution_precedence() {
     auto& registry = BackendRegistry::instance();
-    registry.replace_backend("phi4", "flm_npu", StubFactory("flm_npu"));
-    registry.replace_backend("phi4", "corelib_aie4_gguf",
-                             StubFactory("corelib_aie4_gguf"));
-
-    auto info = Entry();
-    info["supported_backends"] = {"flm_npu", "corelib_aie4_gguf"};
+    registry.replace_backend("phi4", kAie2pBackendId, StubFactory("aie2p"));
+    registry.replace_backend("phi4", kAie4BackendId, StubFactory("aie4"));
 
     std::string source;
-    // 4. nothing says anything -> the default
-    TEST_REQUIRE(resolve_backend_id("phi4", info, "", &source) == kDefaultBackendId);
-    TEST_REQUIRE(source == "default");
-
-    // 3. the catalog
-    auto catalog = info;
-    catalog["details"]["execution_backend"] = "corelib_aie4_gguf";
-    TEST_REQUIRE(resolve_backend_id("phi4", catalog, "", &source) ==
-                 "corelib_aie4_gguf");
-    TEST_REQUIRE(source == "model catalog");
-
     {
-        // 2. FLM_BACKEND beats the catalog
-        ScopedBackendEnv env("flm_npu");
-        TEST_REQUIRE(resolve_backend_id("phi4", catalog, "", &source) == "flm_npu");
+        // FLM_BACKEND beats the detected hardware.
+        ScopedBackendEnv env(kAie4BackendId);
+        TEST_REQUIRE(resolve_backend_id("phi4", "aie2p", "", &source) == kAie4BackendId);
         TEST_REQUIRE(source == "FLM_BACKEND");
 
-        // 1. --backend beats both
-        TEST_REQUIRE(resolve_backend_id("phi4", catalog, "corelib_aie4_gguf",
-                                        &source) == "corelib_aie4_gguf");
+        // --backend beats both.
+        TEST_REQUIRE(resolve_backend_id("phi4", "aie2p", kAie2pBackendId, &source) ==
+                     kAie2pBackendId);
         TEST_REQUIRE(source == "--backend");
     }
 
     // An empty FLM_BACKEND is the same as an unset one.
     ScopedBackendEnv empty("");
-    TEST_REQUIRE(resolve_backend_id("phi4", info, "", &source) == kDefaultBackendId);
+    TEST_REQUIRE(resolve_backend_id("phi4", "aie4", "", &source) == kAie4BackendId);
+    TEST_REQUIRE(source == "detected hardware");
 }
 
 void test_resolution_rejects_with_a_readable_message() {
     auto& registry = BackendRegistry::instance();
-    registry.replace_backend("phi4", "flm_npu", StubFactory("flm_npu"));
+    registry.replace_backend("llama3", kAie2pBackendId, StubFactory("aie2p"));
 
-    // Registered for the family, but this entry does not allow it.
-    auto info = Entry();
-    info["supported_backends"] = {"flm_npu"};
-    const std::string not_allowed = RequireThrows(
-        [&] { resolve_backend_id("phi4", info, "corelib_aie4_gguf"); });
-    RequireContains(not_allowed, "--backend");
-    RequireContains(not_allowed, "It supports: flm_npu");
-
-    // Allowed by the entry, but this build does not have it.
-    auto allowed = Entry();
-    allowed["supported_backends"] = {"flm_npu", "not_built"};
-    const std::string not_built =
-        RequireThrows([&] { resolve_backend_id("phi4", allowed, "not_built"); });
+    // A family with no engine for this hardware: the message has to name both
+    // what was asked for and what the build does have.
+    const std::string not_built = RequireThrows(
+        [&] { resolve_backend_id("llama3", "aie2p", kAie4BackendId); });
+    RequireContains(not_built, "--backend");
     RequireContains(not_built, "not compiled into this build");
-    RequireContains(not_built, "flm_npu");
+    RequireContains(not_built, "aie2p");
+
+    // Same for hardware nobody has an engine for yet.
+    const std::string unknown_hardware =
+        RequireThrows([&] { resolve_backend_id("llama3", "gpu"); });
+    RequireContains(unknown_hardware, "detected hardware");
+    RequireContains(unknown_hardware, "gpu");
 
     // The env var gets named in the message too, so the user can find it.
     ScopedBackendEnv env("bogus");
     const std::string from_env =
-        RequireThrows([&] { resolve_backend_id("phi4", info, ""); });
+        RequireThrows([&] { resolve_backend_id("llama3", "aie2p"); });
     RequireContains(from_env, "FLM_BACKEND");
+
+    // And a family that has nothing at all still says so rather than crashing.
+    const std::string no_family =
+        RequireThrows([&] { resolve_backend_id("nosuchfamily", "aie2p"); });
+    RequireContains(no_family, "(none)");
 }
 
 }  // namespace
@@ -276,7 +250,7 @@ int main() {
     RunTest(test_duplicate_registration_is_rejected, "duplicate registration is rejected");
     RunTest(test_replace_backend_is_the_test_seam, "replace_backend is the test seam");
     RunTest(test_unknown_id_names_what_exists, "unknown id names what exists");
-    RunTest(test_supported_backends_falls_back, "supported_backends falls back");
+    RunTest(test_the_hardware_is_the_default, "the hardware is the default");
     RunTest(test_resolution_precedence, "resolution precedence");
     RunTest(test_resolution_rejects_with_a_readable_message,
             "resolution rejects with a readable message");

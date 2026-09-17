@@ -2,11 +2,11 @@
 /// \brief Platform filtering / override merging in model_list, plus the
 ///        npu_platform helpers and a sweep of the shipped catalog.
 /// \note  Deliberately free of NPU hardware: everything here is catalog logic,
-///        so it builds and runs on Linux CI where the phi4_corelib_aie4 suite
+///        so it builds and runs on Linux CI where the phi4_aie4 suite
 ///        cannot.
 #include "model_list.hpp"
 #include "utils/npu_platform.hpp"
-#include "../phi4_corelib_aie4/test_support.hpp"
+#include "../phi4_aie4/test_support.hpp"
 
 #include <cstdlib>
 #include <fstream>
@@ -36,7 +36,6 @@ void test_aie2p_entry_is_unchanged() {
     TEST_REQUIRE(tag == kPhiTag);
     TEST_REQUIRE(info.at("name") == "Phi4-mini-Instruct-NPU2");
     TEST_REQUIRE(info.contains("ms_url"));
-    TEST_REQUIRE(!info.at("details").contains("execution_backend"));
     TEST_REQUIRE(!info.contains("file_sources"));
     TEST_REQUIRE(info.at("default_context_length") == 32768);
     TEST_REQUIRE(info.at("flm_min_version") == "0.9.25");
@@ -56,7 +55,6 @@ void test_aie4_entry_is_merged() {
     TEST_REQUIRE(tag == kPhiTag);
     // The override wins where it speaks...
     TEST_REQUIRE(info.at("name") == "phi4-mini-it-aie4");
-    TEST_REQUIRE(info.at("details").at("execution_backend") == "corelib_aie4_gguf");
     TEST_REQUIRE(info.at("default_context_length") == 4096);
     TEST_REQUIRE(info.at("flm_min_version") == "1.0.3");
     TEST_REQUIRE(info.at("model_info_key") == "phi4-mini-it-aie4:4b");
@@ -70,6 +68,10 @@ void test_aie4_entry_is_merged() {
     // Bookkeeping keys never reach the caller.
     TEST_REQUIRE(!info.contains("supported_platforms"));
     TEST_REQUIRE(!info.contains("platform_overrides"));
+    // And the entry names no backend: the hardware it was selected for is the
+    // backend, so there is nothing left for the catalog to say about it.
+    TEST_REQUIRE(!info.contains("supported_backends"));
+    TEST_REQUIRE(!info.at("details").contains("execution_backend"));
 }
 
 void test_pruned_lookups_do_not_throw() {
@@ -105,15 +107,37 @@ void test_shipped_catalog_is_well_formed() {
     for (const auto& [family, sizes] : catalog.at("models").items()) {
         for (const auto& [size, entry] : sizes.items()) {
             const std::string tag = family + ":" + size;
-            TEST_REQUIRE(entry.contains("supported_platforms"));
-            const auto& supported = entry.at("supported_platforms");
-            if (!supported.is_array() || supported.empty()) {
-                throw std::runtime_error(tag + ": supported_platforms must be a non-empty array");
+
+            // Nothing in the catalog names a backend any more.
+            if (entry.contains("supported_backends")) {
+                throw std::runtime_error(tag + ": supported_backends is retired");
             }
-            for (const auto& value : supported) {
-                if (!value.is_string() ||
-                    !utils::parse_platform(value.get<std::string>()).has_value()) {
-                    throw std::runtime_error(tag + ": unknown platform in supported_platforms");
+            if (entry.contains("details") &&
+                entry.at("details").contains("execution_backend")) {
+                throw std::runtime_error(tag + ": execution_backend is retired");
+            }
+
+            // An entry is only tagged if it runs somewhere other than aie2p, so
+            // the common case is no key at all. A key that says only ["aie2p"]
+            // is not wrong, just noise, and this keeps it from creeping back.
+            const nlohmann::json supported =
+                entry.value("supported_platforms", nlohmann::json::array());
+            if (entry.contains("supported_platforms")) {
+                if (!supported.is_array() || supported.empty()) {
+                    throw std::runtime_error(tag + ": supported_platforms must be a non-empty array");
+                }
+                bool beyond_aie2p = false;
+                for (const auto& value : supported) {
+                    if (!value.is_string() ||
+                        !utils::parse_platform(value.get<std::string>()).has_value()) {
+                        throw std::runtime_error(tag + ": unknown platform in supported_platforms");
+                    }
+                    if (value.get<std::string>() != "aie2p") beyond_aie2p = true;
+                }
+                if (!beyond_aie2p) {
+                    throw std::runtime_error(
+                        tag + ": supported_platforms says only aie2p, which is "
+                              "the default -- drop the key");
                 }
             }
             if (!entry.contains("platform_overrides")) continue;
@@ -141,21 +165,35 @@ void test_shipped_catalog_is_well_formed() {
 }
 
 void test_missing_key_means_aie2p_only() {
-    // A catalog written before supported_platforms existed must keep its
-    // original meaning rather than vanishing or leaking onto aie4.
+    // An untagged entry is aie2p-only. That is the rule the shipped catalog
+    // leans on -- only aie4 support gets a tag -- so it is worth pinning down
+    // from both sides: the untagged entry must appear on aie2p and must not
+    // leak onto aie4.
     const auto path = std::filesystem::temp_directory_path() /
                       "flm_legacy_model_list.json";
-    nlohmann::json legacy = {
+    nlohmann::json untagged = {
         {"model_path", "models"},
-        {"models", {{"legacy", {{"1b", {{"name", "Legacy"}}}}}}}};
+        {"models",
+         {{"legacy", {{"1b", {{"name", "Legacy"}}}}},
+          {"both",
+           {{"1b",
+             {{"name", "Both"},
+              {"supported_platforms", {"aie2p", "aie4"}}}}}}}}};
     {
         std::ofstream out(path);
-        out << legacy.dump(2);
+        out << untagged.dump(2);
     }
     std::string list_path = path.string();
     std::string exe_dir = ".";
+
     model_list aie2p(list_path, exe_dir, "aie2p");
     TEST_REQUIRE(aie2p.is_model_supported("legacy:1b"));
+    TEST_REQUIRE(aie2p.is_model_supported("both:1b"));
+
+    model_list aie4(list_path, exe_dir, "aie4");
+    TEST_REQUIRE(!aie4.is_model_supported("legacy:1b"));
+    TEST_REQUIRE(aie4.is_model_supported("both:1b"));
+
     std::filesystem::remove(path);
 }
 

@@ -60,7 +60,7 @@
       "inherits": "windows-default",
       "binaryDir": "${sourceDir}/build-aie4",
       "cacheVariables": {
-        "FLM_ENABLE_CORELIB_AIE4": "ON",
+        "FLM_ENABLE_AIE4": "OFF",
         "RYZENAI_CORELIB_INCLUDE_DIR": "$env{RYZENAI_CORELIB_INCLUDE_DIR}",
         "RYZENAI_CORELIB_LIBRARY": "$env{RYZENAI_CORELIB_LIBRARY}"
       }

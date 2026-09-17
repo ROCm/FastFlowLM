@@ -1,0 +1,35 @@
+#pragma once
+
+#include "models/phi4/aie4/phi4_aie4_gguf.hpp"
+
+#include <cstdint>
+#include <optional>
+#include <span>
+#include <vector>
+
+namespace flm::phi4 {
+
+struct RopeTables {
+    std::vector<float> cosine;
+    std::vector<float> sine;
+};
+
+std::vector<float> DecodeEmbeddingRowsQ8(
+    const TensorView& embedding,
+    std::span<const int> token_ids);
+
+void HostRmsNorm(
+    std::span<const float> input,
+    std::span<const float> scale,
+    std::int64_t rows,
+    std::int64_t width,
+    float epsilon,
+    std::span<float> output);
+
+std::vector<std::uint16_t> ConvertF32ToBf16(std::span<const float> values);
+
+RopeTables BuildShortRopeTables(
+    const GgufPhi4Metadata& metadata,
+    std::optional<FloatTensorView> short_factors);
+
+}  // namespace flm::phi4

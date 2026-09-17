@@ -35,9 +35,9 @@
 #include "utils/vm_args.hpp"
 #include <boost/program_options.hpp>
 #include "benchmarking.hpp"
-#ifdef FLM_ENABLE_CORELIB_AIE4
-#include "corelib/corelib_runtime.hpp"
-#include "corelib/corelib_device.hpp"
+#ifdef FLM_ENABLE_AIE4
+#include "aie4/corelib_runtime.hpp"
+#include "aie4/corelib_device.hpp"
 #endif
 
 #ifndef _WIN32
@@ -472,13 +472,13 @@ static bool sanity_check_npu_stack(bool quiet, bool json_output = false) {
 }
 
 
-#ifdef FLM_ENABLE_CORELIB_AIE4
+#ifdef FLM_ENABLE_AIE4
 /// \brief brings corelib up for the process and tears it down on every exit path
 /// \note main() has early `return 1`s and a catch-all, so the teardown has to be
 ///       a destructor rather than a trailing call. A failed shutdown must not
 ///       mask whatever the program was already reporting, hence the swallow.
-struct CorelibProcessGuard {
-    ~CorelibProcessGuard() {
+struct Aie4ProcessGuard {
+    ~Aie4ProcessGuard() {
         try {
             flm::corelib::CorelibRuntime::ShutdownProcess();
         } catch (const std::exception& e) {
@@ -488,33 +488,17 @@ struct CorelibProcessGuard {
         }
     }
 };
-#endif
-
-///@brief open the NPU device that every engine in this process shares
-///@param exe_dir the executable directory, used to locate corelib
-///@return the shared device, or nullptr when no NPU could be opened
-///@note With the AIE4 build corelib is brought up here for every command, but no
-///      flm device is returned (see the TODO below). Without it the device is a
-///      function-local static, which keeps the lifetime tied to the process
-///      exactly as the per-Runner devices used to be. A machine with no NPU must still be able
-///      to run `flm list`/`pull`/`version`, so failure is a null pointer, not an
-///      error.
-static flm_rt::device* acquire_npu_device([[maybe_unused]] const std::string& exe_dir) {
-    try {
-#ifdef FLM_ENABLE_CORELIB_AIE4
-        // TODO: FIXME - corelib's device is not a drop-in for the flm device the
-        // AutoModel engines expect; the two ownership models conflict, so there is
-        // no supported way to hand corelib's device out here yet. Until that is
-        // resolved, an AIE4 build brings corelib up for the corelib engines and
-        // reports no flm device, i.e. it runs no flm models.
-        flm::corelib::CorelibRuntime::GetOrCreate(std::filesystem::path(exe_dir));
-        // TODO: FIXME - should be enable once corelib is update
-        // return const_cast<flm_rt::device*>(&ryzenai::corelib::GetDevice());
-        return nullptr;
 #else
+///@brief open the NPU device that every engine in this process shares
+///@return the shared device, or nullptr when no NPU could be opened
+///@note Function-local static, so the lifetime is tied to the process exactly as
+///      the per-Runner devices used to be. A machine with no NPU must still be
+///      able to run `flm list`/`pull`/`version`, so failure is a null pointer,
+///      not an error.
+static flm_rt::device* open_npu_device() {
+    try {
         static flm_rt::device npu_device = flm_rt::device(0);
         return &npu_device;
-#endif
     } catch (const std::exception& e) {
         DO_VERBOSE(1, {
             header_print("FLM", "No NPU device available: " << e.what());
@@ -524,6 +508,7 @@ static flm_rt::device* acquire_npu_device([[maybe_unused]] const std::string& ex
         return nullptr;
     }
 }
+#endif
 
 ///@brief main function
 ///@param argc the number of arguments
@@ -560,15 +545,30 @@ int main(int argc, char* argv[]) {
     // Get the models directory from environment variable or default
     std::string models_dir = utils::get_models_directory();
 
-#ifdef FLM_ENABLE_CORELIB_AIE4
+    // One NPU runtime for the whole process, brought up before the catalog so
+    // the catalog can be filtered to what this NPU generation can actually run.
+    // Which runtime that is follows from the build, not from a decision here:
+    // aie2p opens its own device, aie4 gets one from corelib.
+#ifdef FLM_ENABLE_AIE4
     // Declared before anything that can return so the destructor covers the
     // early exits and the catch-all below.
-    CorelibProcessGuard corelib_guard;
+    Aie4ProcessGuard aie4_guard;
+    try {
+        flm::corelib::CorelibRuntime::GetOrCreate(std::filesystem::path(exe_dir));
+    } catch (const std::exception& e) {
+        DO_VERBOSE(1, { header_print("FLM", "corelib unavailable: " << e.what()); });
+    }
+    // TODO: FIXME - corelib's device is not a drop-in for the flm device the
+    // AutoModel engines expect; the two ownership models conflict, so there is
+    // no supported way to hand corelib's device out here yet. Until that is
+    // resolved an AIE4 build reports no flm device, which is harmless because
+    // the aie4 backend does not drive the NPU through one.
+    //   flm_rt::device* npu_device =
+    //       const_cast<flm_rt::device*>(&ryzenai::corelib::GetDevice());
+    flm_rt::device* npu_device = nullptr;
+#else
+    flm_rt::device* npu_device = open_npu_device();
 #endif
-
-    // One device for the whole process, opened before the catalog so the
-    // catalog can be filtered to what this NPU generation can actually run.
-    flm_rt::device* npu_device = acquire_npu_device(exe_dir);
 
     // Which generation this binary is for is decided by FLM_ENABLE_AIE4 at
     // build time: aie2p and aie4 share no engine, so a build has one of them
@@ -579,9 +579,10 @@ int main(int argc, char* argv[]) {
                                std::string(utils::platform_id(platform)));
 
     const bool print_status = !parsed_args.json_output && !parsed_args.sub_process_mode;
-    if (print_status &&
-        (parsed_args.command == "run" || parsed_args.command == "serve" ||
-         parsed_args.command == "bench" || parsed_args.command == "validate")) {
+    const bool needs_npu =
+        parsed_args.command == "run" || parsed_args.command == "serve" ||
+        parsed_args.command == "bench" || parsed_args.command == "validate";
+    if (print_status && needs_npu) {
         header_print("FLM", "NPU platform: " << utils::platform_id(platform));
     }
 

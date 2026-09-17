@@ -27,7 +27,7 @@ flm run phi4-mini-it:4b
 ## 🧪 Model Card: Phi-4-mini-instruct on AIE4 (developer preview)
 
 - **Tag:** `phi4-mini-it:4b` — the same tag as the NPU2 build. A build targets one NPU generation (`FLM_ENABLE_AIE4` selects AIE4, otherwise AIE2P / Strix / Krackan Point), and the tag resolves to the artifacts that generation can run. There is no separate AIE4 tag; `flm list` on an AIE4 build shows only the models it can run.
-- **Backend:** `corelib_aie4_gguf` — runs on AIE4 through AMD's `ryzenai_corelib`
+- **Backend:** `aie4` — the backend is the hardware, and on AIE4 FastFlowLM drives it through AMD's `ryzenai_corelib`
 - **Source format:** GGUF, read directly. No ONNX model, no tensor manifest, and no converted or packed weight file is produced or shipped.
 - **Quantization:** GGML `Q8_0` in the file, requantized to **group 64** while the weights are packed for the device, through corelib's explicit `*_create_gguf_requantized` entry points. This is a **lossy** second quantization step and it is not reversible; output will differ from the Q8_0 source.
 - **Usable generation window:** 4095 tokens — the rendered prompt plus the requested output together, so the largest admissible prompt is 4094. An over-capacity request is rejected with HTTP 400 *before* any work is submitted to the device. Note this is far below the model's 128k context; see below for why.
@@ -52,7 +52,7 @@ From `FastFlowLM/src`, in a Visual Studio developer command prompt:
 
 ```powershell
 $env:RYZENAI_CORELIB_INCLUDE_DIR = 'C:/path/to/ryzenai-corelib/install/include'
-cmake --preset windows-aie4          # sets FLM_ENABLE_CORELIB_AIE4=ON, builds into src/build-aie4
+cmake --preset windows-aie4          # sets FLM_ENABLE_AIE4=ON, builds into src/build-aie4
 cmake --build --preset windows-aie4
 ```
 
@@ -60,7 +60,7 @@ The `windows-aie4` preset reads `RYZENAI_CORELIB_INCLUDE_DIR` and `RYZENAI_COREL
 
 ### Pointing FastFlowLM at the runtime
 
-An AIE4 build (`-DFLM_ENABLE_CORELIB_AIE4=ON`) **links corelib in**, because the NPU device the whole process shares comes from corelib's `ryzenai::corelib::GetDevice()` rather than from a device FastFlowLM opens itself. Point the build at the library with `RYZENAI_CORELIB_INCLUDE_DIR` and `RYZENAI_CORELIB_LIBRARY`. `FLM_AIE4_CORELIB_PATH` selects a DLL only in the older dynamically loading configuration; in an AIE4 build it is ignored, and `flm` says so if it is set.
+An AIE4 build (`-DFLM_ENABLE_AIE4=ON`) **links corelib in**, because the NPU device the whole process shares comes from corelib's `ryzenai::corelib::GetDevice()` rather than from a device FastFlowLM opens itself. Point the build at the library with `RYZENAI_CORELIB_INCLUDE_DIR` and `RYZENAI_CORELIB_LIBRARY`. `FLM_AIE4_CORELIB_PATH` selects a DLL only in the older dynamically loading configuration; in an AIE4 build it is ignored, and `flm` says so if it is set.
 
 The corelib ABI is still pre-1.0, so FastFlowLM requires an **exact `0.3.0`** match on major, minor and patch. The version is queried before any other entry point, so a mismatched runtime reports a version error rather than a missing symbol. Corelib's own dependency directory must be reachable on `PATH`.
 
@@ -79,12 +79,12 @@ Phi-4-mini itself supports 128k, and the existing `phi4-mini-it:4b` tag defaults
 
 ### No fallback
 
-Backend selection is still explicit: it comes from `execution_backend` in the model catalog, never from a filename or a quantization level. What the build decides is *which catalog entry* the tag resolves to — the generation this binary was built for picks between the NPU2/Q4NX entry and this one, and from there the backend is whatever that entry declares. Once this entry is selected, there is no fallback: if corelib is missing, unloadable, or the wrong version, the tag **fails to load with a diagnostic** rather than quietly running on CPU or on the NPU2/Q4NX backend.
+Backend selection follows the build, never a filename or a quantization level. The generation this binary was built for decides two things at once: *which catalog entry* the tag resolves to — the NPU2/Q4NX entry on aie2p, this one on aie4 — and which backend runs it, because the backend id and the platform id are the same string. Once this entry is selected, there is no fallback: if corelib is missing, unloadable, or the wrong version, the tag **fails to load with a diagnostic** rather than quietly running on CPU or on the NPU2/Q4NX backend.
 
 ### Naming the backend yourself
 
-The two engines are registered backends, `flm_npu` and `corelib_aie4_gguf`, and you can name one with `--backend`, with `FLM_BACKEND`, or with a `"backend"` field on an `/api/chat` or `/api/generate` request. The [CLI reference](../instructions/cli.md) has the full precedence table.
+The two engines are registered under the hardware they run on, `aie2p` and `aie4`, and you can name one with `--backend`, with `FLM_BACKEND`, or with a `"backend"` field on an `/api/chat` or `/api/generate` request. The [CLI reference](../instructions/cli.md) has the full precedence table.
 
-This does not widen what the hardware can run: a tag that resolved to the aie2p entry supports `flm_npu` alone, and the aie4 entry supports `corelib_aie4_gguf` alone. Asking for the other one fails immediately, with a message naming what the entry does support, instead of failing deep inside an engine that was never going to work. If what you meant was the other catalog entry, that is a different build of FLM, not a different flag.
+This does not widen what the hardware can run. A given release is built for one NPU generation, so only that generation's backend is compiled in; asking for the other one fails immediately, naming what this build actually has, instead of failing deep inside an engine that was never going to work. If what you meant was the other catalog entry, that is a different build of FLM, not a different flag.
 
 ---

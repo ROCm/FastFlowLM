@@ -73,10 +73,19 @@ struct ResolvedModelFile {
     std::string hash;
 };
 
-bool uses_pinned_aie4_integrity(const nlohmann::json& model_info) {
-    const auto details = model_info.find("details");
-    return details != model_info.end() && details->is_object() &&
-           details->value("execution_backend", std::string()) == "corelib_aie4_gguf";
+/// \brief whether an entry's files come from pinned upstream revisions
+/// \param model_info the resolved model_list.json entry
+/// \return true when the entry carries a "file_sources" map
+/// \note These entries are assembled from third-party repos at a fixed commit
+///       rather than published by FastFlowLM, so every file is hash-verified
+///       against the same pinned metadata it was downloaded with. The aie4
+///       Phi-4 GGUF is the only such entry today, but the rule is about how the
+///       files are sourced, not about which backend consumes them.
+bool uses_pinned_upstream_integrity(const nlohmann::json& model_info) {
+    // Presence, not contents: resolve_file_source decides the same way, and a
+    // malformed map should fail there rather than quietly downgrade an entry to
+    // the unverified path here.
+    return model_info.contains("file_sources");
 }
 
 }  // namespace
@@ -165,7 +174,7 @@ ModelDownloader::ModelDownloader(model_list& models)
 /// \return true if the model is downloaded, false otherwise
 ModelDownloader::ModelStatus ModelDownloader::is_model_downloaded(const std::string& model_tag, bool sub_process_mode, bool fast_check) {
     const auto [new_model_tag, model_info] = supported_models.get_model_info(model_tag);
-    const bool strict_integrity = uses_pinned_aie4_integrity(model_info);
+    const bool strict_integrity = uses_pinned_upstream_integrity(model_info);
     auto missing_files = get_missing_files(new_model_tag);
     bool is_config_file_missing = std::find(missing_files.begin(), missing_files.end(), "config.json") != missing_files.end();
     ModelStatus modelstatus = ModelStatus::Missing;
@@ -200,7 +209,7 @@ ModelDownloader::ModelStatus ModelDownloader::check_model_compatibility(const st
     std::string flm_min_version = model_info["flm_min_version"];
     // The pinned Microsoft frontend config is upstream-native and intentionally
     // has no FLM version. Its catalog contract supplies the compatibility floor.
-    std::string flm_version = uses_pinned_aie4_integrity(model_info)
+    std::string flm_version = uses_pinned_upstream_integrity(model_info)
         ? flm_min_version
         : config.flm_version;
     int l_l, m_l, r_l; //left, middle, right on local version
@@ -257,7 +266,7 @@ bool ModelDownloader::pull_model(const std::string& model_tag, bool use_modelsco
                 }
                 break;
             case ModelStatus::Missing:
-                if (uses_pinned_aie4_integrity(model_info)) {
+                if (uses_pinned_upstream_integrity(model_info)) {
                     // Preserve valid finals, but remove corrupt pinned finals before
                     // deciding which files need to be downloaded.
                     verify_and_clean_files(new_model_tag, use_modelscope, true);
@@ -300,7 +309,7 @@ bool ModelDownloader::pull_model(const std::string& model_tag, bool use_modelsco
         float sum_fize_size = download_list.second;
         if (downloads.empty()) {
             header_print("FLM", "No files to download for model: " + new_model_tag);
-            return !uses_pinned_aie4_integrity(model_info) ||
+            return !uses_pinned_upstream_integrity(model_info) ||
                    verify_and_clean_files(new_model_tag, use_modelscope);
         }
         
@@ -324,7 +333,7 @@ bool ModelDownloader::pull_model(const std::string& model_tag, bool use_modelsco
             // Verify every final file using the same pinned metadata used to download it.
             auto final_missing = get_missing_files(new_model_tag);
             const bool verified = final_missing.empty() &&
-                (!uses_pinned_aie4_integrity(model_info) ||
+                (!uses_pinned_upstream_integrity(model_info) ||
                  verify_and_clean_files(new_model_tag, use_modelscope));
             if (verified) {
                 header_print("FLM", "All files verified successfully.");

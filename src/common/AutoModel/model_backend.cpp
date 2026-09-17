@@ -25,34 +25,12 @@ std::string Join(const std::vector<std::string>& ids) {
     return out.str();
 }
 
-/// \brief the catalog's own backend choice for an entry
-/// \param model_info the resolved model_list.json entry
-/// \return details.execution_backend, or empty when the entry does not set it
-std::string CatalogBackend(const nlohmann::ordered_json& model_info) {
-    const auto details = model_info.find("details");
-    if (details == model_info.end() || !details->is_object()) return {};
-    const auto backend = details->find("execution_backend");
-    if (backend == details->end()) return {};
-    if (!backend->is_string()) {
-        throw std::runtime_error(
-            "details.execution_backend must be a string");
-    }
-    return backend->get<std::string>();
-}
-
 /// \brief read FLM_BACKEND
 /// \return the override, or empty when it is unset
 std::string EnvBackend() {
     const char* configured = std::getenv("FLM_BACKEND");
     if (!configured || !*configured) return {};
     return configured;
-}
-
-bool Contains(const std::vector<std::string>& ids, const std::string& id) {
-    for (const auto& candidate : ids) {
-        if (candidate == id) return true;
-    }
-    return false;
 }
 
 }  // namespace
@@ -137,36 +115,10 @@ std::unique_ptr<ModelBackend> BackendRegistry::create(
     return lookup(family, id).factory(context);
 }
 
-std::vector<std::string> supported_backends(const nlohmann::ordered_json& model_info) {
-    const auto listed = model_info.find("supported_backends");
-    if (listed != model_info.end()) {
-        if (!listed->is_array() || listed->empty()) {
-            throw std::runtime_error(
-                "supported_backends must be a non-empty array");
-        }
-        std::vector<std::string> ids;
-        ids.reserve(listed->size());
-        for (const auto& entry : *listed) {
-            if (!entry.is_string()) {
-                throw std::runtime_error(
-                    "supported_backends must hold strings");
-            }
-            ids.push_back(entry.get<std::string>());
-        }
-        return ids;
-    }
-
-    // No list: the entry allows exactly what it has always run on.
-    const std::string catalog = CatalogBackend(model_info);
-    return {catalog.empty() ? std::string(kDefaultBackendId) : catalog};
-}
-
 std::string resolve_backend_id(const std::string& family,
-                               const nlohmann::ordered_json& model_info,
+                               const std::string& platform,
                                const std::string& requested,
                                std::string* source) {
-    const std::vector<std::string> allowed = supported_backends(model_info);
-
     std::string chosen;
     std::string chosen_source;
     if (!requested.empty()) {
@@ -175,20 +127,11 @@ std::string resolve_backend_id(const std::string& family,
     } else if (std::string env = EnvBackend(); !env.empty()) {
         chosen = std::move(env);
         chosen_source = "FLM_BACKEND";
-    } else if (std::string catalog = CatalogBackend(model_info);
-               !catalog.empty()) {
-        chosen = std::move(catalog);
-        chosen_source = "model catalog";
     } else {
-        chosen = kDefaultBackendId;
-        chosen_source = "default";
+        chosen = platform;
+        chosen_source = "detected hardware";
     }
 
-    if (!Contains(allowed, chosen)) {
-        throw std::runtime_error(
-            "Backend '" + chosen + "' (from " + chosen_source +
-            ") is not available for this model. It supports: " + Join(allowed));
-    }
     if (!BackendRegistry::instance().has(family, chosen)) {
         throw std::runtime_error(
             "Backend '" + chosen + "' (from " + chosen_source +

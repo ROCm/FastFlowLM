@@ -6,6 +6,7 @@
 /// \note This is a source file for the auto_model class
 
 #include "AutoModel/automodel.hpp"
+#include "utils/npu_platform.hpp"
 
 
 ModelRequestError::ModelRequestError(
@@ -167,8 +168,12 @@ void AutoModel::_shared_load_backend(std::string model_path, json model_info,
 
     auto& registry = flm::backend::BackendRegistry::instance();
     std::string source;
+    // The backend *is* the hardware, and which generation this binary has
+    // engines for is fixed at build time, so that is the default.
+    const std::string platform =
+        std::string(utils::platform_id(utils::build_npu_platform()));
     const std::string id = flm::backend::resolve_backend_id(
-        family, model_info, requested_backend, &source);
+        family, platform, requested_backend, &source);
 
     // Same model on the same backend is a no-op; a different backend is a real
     // reload even when the path has not changed.

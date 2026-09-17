@@ -268,8 +268,9 @@ class model_list {
         /// \param entry the size entry
         /// \param tag the "family:size" tag, used only in error messages
         /// \return true if the entry runs on this->platform_
-        /// \note An entry that says nothing is aie2p-only, so catalogs written
-        ///       before this key existed keep their original meaning.
+        /// \note An entry that says nothing is aie2p-only. aie2p is what every
+        ///       model runs on, so the catalog only tags the exceptions: an
+        ///       entry needs "supported_platforms" exactly when it runs on aie4.
         bool entry_supports(const nlohmann::json& entry, const std::string& tag) const {
             const auto supported = entry.find("supported_platforms");
             if (supported == entry.end()) return this->platform_ == "aie2p";

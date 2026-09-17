@@ -27,10 +27,7 @@
                 "label": [
                     "reasoning"
                 ],
-                "footprint": 3.1,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 3.1
             }
         },
         "qwen3vl-it": {
@@ -62,10 +59,7 @@
                     "vision",
                     "tool-calling"
                 ],
-                "footprint": 3.9,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 3.9
             }
         },
         "gemma4-it": {
@@ -103,10 +97,7 @@
                     "tool-calling",
                     "chat-transcription"
                 ],
-                "footprint": 6.0,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 6.0
             },
             "e4b": {
                 "name": "Gemma4-E4B-IT-NPU2",
@@ -142,10 +133,7 @@
                     "tool-calling",
                     "chat-transcription"
                 ],
-                "footprint": 9.1,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 9.1
             }
         },
         "qwen3.5": {
@@ -178,10 +166,7 @@
                     "vision",
                     "reasoning"
                 ],
-                "footprint": 1.4,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 1.4
             },
             "2b": {
                 "name": "Qwen3.5-2B-NPU2",
@@ -213,10 +198,7 @@
                     "reasoning",
                     "tool-calling"
                 ],
-                "footprint": 3.2,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 3.2
             },
             "4b": {
                 "name": "Qwen3.5-4B-NPU2",
@@ -248,10 +230,7 @@
                     "reasoning",
                     "tool-calling"
                 ],
-                "footprint": 5.2,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 5.2
             },
             "9b": {
                 "name": "Qwen3.5-9B-NPU2",
@@ -283,10 +262,7 @@
                     "reasoning",
                     "tool-calling"
                 ],
-                "footprint": 8.94,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 8.94
             }
         },
         "qwen3.6-moe": {
@@ -320,10 +296,7 @@
                     "reasoning",
                     "tool-calling"
                 ],
-                "footprint": 24.3,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 24.3
             }
         },
         "lfm2": {
@@ -351,10 +324,7 @@
                     "tokenizer.json",
                     "tokenizer_config.json"
                 ],
-                "footprint": 0.96,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 0.96
             },
             "2.6b": {
                 "name": "LFM2-2.6B-NPU2",
@@ -380,10 +350,7 @@
                     "tokenizer.json",
                     "tokenizer_config.json"
                 ],
-                "footprint": 1.8,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 1.8
             }
         },
         "lfm2-trans": {
@@ -411,10 +378,7 @@
                     "tokenizer.json",
                     "tokenizer_config.json"
                 ],
-                "footprint": 1.8,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 1.8
             }
         },
         "lfm2.5-it": {
@@ -442,10 +406,7 @@
                     "tokenizer.json",
                     "tokenizer_config.json"
                 ],
-                "footprint": 0.96,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 0.96
             }
         },
         "lfm2.5-tk": {
@@ -477,10 +438,7 @@
                 "label": [
                     "reasoning"
                 ],
-                "footprint": 0.96,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 0.96
             }
         },
         "phi4-mini-it": {
@@ -508,9 +466,6 @@
                     "tokenizer_config.json"
                 ],
                 "footprint": 3.4,
-                "supported_backends": [
-                    "flm_npu"
-                ],
                 "supported_platforms": [
                     "aie2p",
                     "aie4"
@@ -518,16 +473,12 @@
                 "platform_overrides": {
                     "aie4": {
                         "name": "phi4-mini-it-aie4",
-                        "supported_backends": [
-                            "corelib_aie4_gguf"
-                        ],
                         "url": "https://huggingface.co/unsloth/Phi-4-mini-instruct-GGUF/resolve/78eb92a46fc37e6b524df991ed9aca9bc6aa7b80",
                         "file_url": "https://huggingface.co/api/models/unsloth/Phi-4-mini-instruct-GGUF/tree/78eb92a46fc37e6b524df991ed9aca9bc6aa7b80",
                         "size": 4100140571,
                         "default_context_length": 4096,
                         "details": {
-                            "quantization_level": "Q8_0 -> AIE4 group-64",
-                            "execution_backend": "corelib_aie4_gguf"
+                            "quantization_level": "Q8_0 -> AIE4 group-64"
                         },
                         "flm_min_version": "1.0.3",
                         "files": [
@@ -582,10 +533,7 @@
                 "label": [
                     "embeddings"
                 ],
-                "footprint": 0.62,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 0.62
             }
         },
         "whisper-v3": {
@@ -616,10 +564,7 @@
                     "realtime-transcription",
                     "transcription"
                 ],
-                "footprint": 0.62,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 0.62
             }
         },
         "gemma3": {
@@ -646,10 +591,7 @@
                     "parameter_size": "1B",
                     "quantization_level": "Q4_1"
                 },
-                "footprint": 1.2,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 1.2
             },
             "4b": {
                 "name": "Gemma3-4B-NPU2",
@@ -679,10 +621,7 @@
                 "label": [
                     "vision"
                 ],
-                "footprint": 4.5,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 4.5
             }
         },
         "translategemma": {
@@ -714,10 +653,7 @@
                 "label": [
                     "vision"
                 ],
-                "footprint": 4.5,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 4.5
             }
         },
         "medgemma": {
@@ -749,10 +685,7 @@
                 "label": [
                     "vision"
                 ],
-                "footprint": 4.5,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 4.5
             }
         },
         "medgemma1.5": {
@@ -784,10 +717,7 @@
                 "label": [
                     "vision"
                 ],
-                "footprint": 4.5,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 4.5
             }
         },
         "llama3.2": {
@@ -813,10 +743,7 @@
                     "parameter_size": "1B",
                     "quantization_level": "Q4_1"
                 },
-                "footprint": 1.3,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 1.3
             },
             "3b": {
                 "name": "Llama-3.2-3B-NPU2",
@@ -840,10 +767,7 @@
                     "parameter_size": "3B",
                     "quantization_level": "Q4_1"
                 },
-                "footprint": 2.7,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 2.7
             }
         },
         "llama3.1": {
@@ -869,10 +793,7 @@
                     "parameter_size": "8B",
                     "quantization_level": "Q4_1"
                 },
-                "footprint": 5.4,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 5.4
             }
         },
         "deepseek-r1": {
@@ -901,10 +822,7 @@
                 "label": [
                     "reasoning"
                 ],
-                "footprint": 5.4,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 5.4
             }
         },
         "deepseek-r1-0528": {
@@ -934,10 +852,7 @@
                 "label": [
                     "reasoning"
                 ],
-                "footprint": 5.6,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 5.6
             }
         },
         "qwen3": {
@@ -967,10 +882,7 @@
                 "label": [
                     "reasoning"
                 ],
-                "footprint": 0.66,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 0.66
             },
             "1.7b": {
                 "name": "Qwen3-1.7B-NPU2",
@@ -998,10 +910,7 @@
                 "label": [
                     "reasoning"
                 ],
-                "footprint": 1.6,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 1.6
             },
             "4b": {
                 "name": "Qwen3-4B-NPU2",
@@ -1030,10 +939,7 @@
                     "reasoning",
                     "tool-calling"
                 ],
-                "footprint": 3.1,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 3.1
             },
             "8b": {
                 "name": "Qwen3-8B-NPU2",
@@ -1062,10 +968,7 @@
                     "reasoning",
                     "tool-calling"
                 ],
-                "footprint": 5.6,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 5.6
             }
         },
         "qwen3-tk": {
@@ -1096,10 +999,7 @@
                     "reasoning",
                     "tool-calling"
                 ],
-                "footprint": 3.1,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 3.1
             }
         },
         "qwen3-it": {
@@ -1129,10 +1029,7 @@
                 "label": [
                     "tool-calling"
                 ],
-                "footprint": 3.1,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 3.1
             }
         },
         "gpt-oss": {
@@ -1162,10 +1059,7 @@
                 "label": [
                     "reasoning"
                 ],
-                "footprint": 14.0,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 14.0
             }
         },
         "gpt-oss-sg": {
@@ -1195,10 +1089,7 @@
                 "label": [
                     "reasoning"
                 ],
-                "footprint": 14.0,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 14.0
             }
         },
         "qwen2.5-it": {
@@ -1225,10 +1116,7 @@
                     "parameter_size": "3B",
                     "quantization_level": "Q4_0"
                 },
-                "footprint": 2.5,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 2.5
             }
         },
         "qwen2.5vl-it": {
@@ -1260,10 +1148,7 @@
                 "label": [
                     "vision"
                 ],
-                "footprint": 3.8,
-                "supported_platforms": [
-                    "aie2p"
-                ]
+                "footprint": 3.8
             }
         }
     }
