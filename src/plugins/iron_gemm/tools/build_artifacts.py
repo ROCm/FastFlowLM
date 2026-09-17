@@ -1,6 +1,10 @@
-"""Build the IRON artifacts this plugin dispatches, for Gemma4 E2B.
+"""Build the IRON artifacts this plugin dispatches, for one model.
 
-    IRON_PATH=<iron> python3 build_artifacts.py
+    IRON_PATH=<iron> python3 build_artifacts.py <model_dir> [--m 256]
+
+The shapes come from the model's own weights, the same way the plugin derives
+them: one side of every projection is the hidden size and the other follows from
+the q4nx tensor's byte count. So a new model needs no edit here.
 
 Both operators take their shape as a runtime parameter, so each contributes one
 xclbin and one instruction stream per shape -- which is what keeps a model's
@@ -12,7 +16,10 @@ so it consumes the engine's per-layer weight buffer in place.
 The artifacts committed alongside this plugin were built at IRON 3b9e4bb1b.
 """
 
+import argparse
+import json
 import os
+import struct
 import sys
 
 sys.path.insert(0, os.environ.get("IRON_PATH", ""))
@@ -20,44 +27,52 @@ sys.path.insert(0, os.environ.get("IRON_PATH", ""))
 from iron.operators.flm.dequant.op import DequantBFP  # noqa: E402
 from iron.operators.flm.gemm.op import GEMM  # noqa: E402
 
-D, I, SKIP_I = 1536, 6144, 12288
-DQ, DK = 4096, 512
-SWA_DQ, SWA_DK = 2048, 256
-M = 256
-
-# Every prefill GEMM of Gemma4-E2B as (K, N, epilogue). Only gate activates.
-GEMM_SHAPES = [
-    (D, DQ, "none"), (D, SWA_DQ, "none"),            # q
-    (D, DK, "none"), (D, SWA_DK, "none"),            # k, v
-    (DQ, D, "none"), (SWA_DQ, D, "none"),            # o
-    (D, I, "none"), (D, I, "gelu"),                  # up, gate
-    (D, SKIP_I, "none"), (D, SKIP_I, "gelu"),        # up, gate on skip layers
-    (I, D, "none"), (SKIP_I, D, "none"),             # down
-]
-
-# The dequant shapes those need. q, k and v are dequantized together at their
-# combined width -- they are adjacent out-features and the packed order is
-# column-block-major over N, so one dispatch feeds all three. gate and up are
-# interleaved in the layer's buffer every RUN out-features, so they stride.
+# The loader alternates up and gate every RUN out-features.
 RUN, PERIOD = 512, 1024
-DEQUANT_SHAPES = [
-    (D, DQ + 2 * DK, False), (D, SWA_DQ + 2 * SWA_DK, False),   # q, k, v
-    (D, DQ, False), (D, SWA_DQ, False),                          # q alone, skip layers
-    (DQ, D, False), (SWA_DQ, D, False),                          # o
-    (D, I, True), (D, SKIP_I, True),                             # gate, up
-    (I, D, False), (SKIP_I, D, False),                           # down
-]
+
+
+def shapes(model_dir):
+    """(gemm, dequant) shape sets for every projection the plugin dispatches."""
+    cfg = json.load(open(os.path.join(model_dir, "config.json")))
+    d = cfg["hidden_size"]
+    non_skip = cfg["num_hidden_layers"] - cfg["num_kv_shared_layers"]
+
+    with open(os.path.join(model_dir, "model.q4nx"), "rb") as f:
+        (n,) = struct.unpack("<Q", f.read(8))
+        header = json.loads(f.read(n))
+
+    def other(layer, proj):
+        meta = header[f"model.layers.{layer}.{proj}.weight"]
+        lo, hi = meta["data_offsets"]
+        return (hi - lo) * 8 // 5 // d
+
+    gemm, dequant = set(), set()
+    for layer in range(cfg["num_hidden_layers"]):
+        dq, dk = other(layer, "self_attn.q_proj"), other(layer, "self_attn.k_proj")
+        inter = other(layer, "mlp.up_proj")
+
+        gemm |= {(d, dq, "none"), (d, dk, "none"), (dq, d, "none"),
+                 (d, inter, "none"), (d, inter, "gelu"), (inter, d, "none")}
+        # q, k and v are dequantized together where the layer has all three;
+        # the kv-sharing layers hold only q.
+        dequant |= {(d, dq if layer >= non_skip else dq + 2 * dk, False),
+                    (dq, d, False), (inter, d, False), (d, inter, True)}
+    return sorted(gemm), sorted(dequant)
 
 
 def main():
-    ops = [GEMM(M=M, K=k, N=n, rounding="floor", epilogue=epi) for k, n, epi in GEMM_SHAPES]
+    ap = argparse.ArgumentParser()
+    ap.add_argument("model_dir")
+    ap.add_argument("--m", type=int, default=256, help="padded chunk length")
+    args = ap.parse_args()
+
+    gemm, dequant = shapes(args.model_dir)
+    ops = [GEMM(M=args.m, K=k, N=n, rounding="floor", epilogue=epi) for k, n, epi in gemm]
     ops += [
-        DequantBFP(
-            K=k, N=n,
-            run_out_features=RUN if il else None,
-            run_period_out_features=PERIOD if il else None,
-        )
-        for k, n, il in DEQUANT_SHAPES
+        DequantBFP(K=k, N=n,
+                   run_out_features=RUN if il else None,
+                   run_period_out_features=PERIOD if il else None)
+        for k, n, il in dequant
     ]
 
     for i, op in enumerate(ops, 1):

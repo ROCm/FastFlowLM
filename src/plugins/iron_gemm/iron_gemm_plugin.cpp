@@ -501,8 +501,14 @@ private:
 
         std::ifstream config_file((model / "config.json").string());
         if (!config_file.is_open()) return false;
-        const uint32_t hidden = nlohmann::json::parse(config_file).value("hidden_size", 0u);
+        const nlohmann::json cfg = nlohmann::json::parse(config_file);
+        const uint32_t hidden = cfg.value("hidden_size", 0u);
         if (hidden == 0) return false;
+        // The engine's loader omits k and v on the layers that share a kv cache,
+        // and those are the last ones. Stated rather than inferred: E4B's MLP is
+        // the same width on every layer, so there is nothing to infer it from.
+        const int non_skip = (int)cfg.value("num_hidden_layers", 0u)
+                             - (int)cfg.value("num_kv_shared_layers", 0u);
 
         SafeTensors q4(q4_path);
         for (int layer = 0;; layer++) {
@@ -523,13 +529,9 @@ private:
         }
         if (this->layers_.empty()) return false;
 
-        uint32_t narrowest = 0;
-        for (const layer_entry& l : this->layers_) {
-            if (!l.slots[R_UP].has_value()) continue;
-            if (narrowest == 0 || l.slots[R_UP]->n < narrowest) narrowest = l.slots[R_UP]->n;
-        }
-        for (layer_entry& l : this->layers_) {
-            l.skip = l.slots[R_UP]->n > narrowest;
+        for (size_t i = 0; i < this->layers_.size(); i++) {
+            layer_entry& l = this->layers_[i];
+            l.skip = (int)i >= non_skip;
             // Where the buffer holds k and v, one dispatch covers all three.
             l.qkv_n = (l.skip || this->mode_ != weight_mode::dequant)
                           ? 0
