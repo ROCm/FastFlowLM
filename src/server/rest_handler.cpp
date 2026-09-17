@@ -1303,13 +1303,14 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                 {"choices", choices},
                 {"usage", {
                     {"prompt_tokens", meta_info.prompt_tokens},
+                    {"prompt_tokens_details", {{"cached_tokens", meta_info.cached_prompt_tokens}}},
                     {"completion_tokens", meta_info.generated_tokens},
                     {"total_tokens", meta_info.prompt_tokens + meta_info.generated_tokens},
                     {"kv_token_occupancy_rate_percentage", (float)this->auto_chat_engine->get_current_context_length() / (float)this->auto_chat_engine->get_max_length() * 100},
                     {"load_duration", static_cast<double>(meta_info.load_duration) / 1'000'000'000},
                     {"prefill_duration_ttft", static_cast<double>(meta_info.prefill_duration) / 1'000'000'000},
                     {"decoding_duration", static_cast<double>(meta_info.decoding_duration) / 1'000'000'000},
-                    {"prefill_speed_tps", static_cast<double>(meta_info.prompt_tokens) / static_cast<double>(meta_info.prefill_duration) * 1'000'000'000},
+                    {"prefill_speed_tps", static_cast<double>(meta_info.prompt_tokens - meta_info.cached_prompt_tokens) / static_cast<double>(meta_info.prefill_duration) * 1'000'000'000},
                     {"decoding_speed_tps", static_cast<double>(meta_info.generated_tokens) / static_cast<double>(meta_info.decoding_duration) * 1'000'000'000},
                 }},
                 {"service_tier", "default"}
@@ -1511,6 +1512,7 @@ void RestHandler::handle_openai_completion(const json& request,
                 })},
                 {"usage", {
                     {"prompt_tokens", meta_info.prompt_tokens},
+                    {"prompt_tokens_details", {{"cached_tokens", meta_info.cached_prompt_tokens}}},
                     {"completion_tokens", meta_info.generated_tokens},
                     {"total_tokens", meta_info.prompt_tokens + meta_info.generated_tokens}
                 }}
