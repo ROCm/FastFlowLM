@@ -21,7 +21,8 @@
 /// layer's weight buffer in place.
 ///
 /// Environment:
-///   FLM_GEMM_CONFIG    operator configuration tag, default tn64_ma32_emf_floor_npu2
+///   FLM_GEMM_CONFIG    pick one GEMM xclbin by stem, when several are present
+///   FLM_GEMM_MODE      dequant (default), bf16 or bfp16; where the weights come from
 ///   FLM_GEMM_OFF       set to leave every projection on the engine's own operators
 ///   FLM_DEQUANT_VERIFY compare each dequantized buffer against model.dq_bfp
 

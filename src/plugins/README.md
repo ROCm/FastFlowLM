@@ -75,6 +75,28 @@ void _dequant(const flm::op_call& call, layer_entry& layer) {
 }
 ```
 
+## What it needs on disk
+
+Next to the model's xclbins, both operators' artifacts — one xclbin each, since
+they take their shape at run time, plus one instruction stream per shape:
+
+```
+FLM_GEMM_<config>.xclbin                    FLM_DequantBFP_<config>.xclbin
+FLM_GEMM_<config>_M<M>_K<K>_N<N>.bin        FLM_DequantBFP_K<K>_N<N>_engine_<config>.bin
+```
+
+`<config>` names the tuning the operator was built at, so the plugin reads it
+off whichever xclbin it finds rather than spelling it out. A shape the plugin
+would otherwise serve but has no stream for is a hard error at load; an M
+nothing was built for is a run-time fallback to the engine.
+
+| variable | effect |
+|---|---|
+| `FLM_GEMM_MODE` | `dequant` (default), `bf16` or `bfp16` — see the chart |
+| `FLM_GEMM_OFF` | leave every projection on the engine's own operators |
+| `FLM_GEMM_CONFIG` | pick one GEMM xclbin by stem, when several are present |
+| `FLM_DEQUANT_VERIFY` | check every dequantized buffer against the sidecar, byte for byte |
+
 ## Prefill weights
 
 Offline dequant needs the weights dequantized ahead of time, next to
@@ -125,9 +147,6 @@ from:
   ./bench3.sh bfp16   $P FLM_GEMM_MODE=bfp16; } | grep median > runs.txt
 python3 flm_gemm/tools/plot_prefill.py < runs.txt
 ```
-
-`flm_gemm/README.md` has the artifacts each mode needs and how to check a new
-weight shape.
 
 ## What a plugin can do
 
