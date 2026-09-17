@@ -4,7 +4,7 @@ This directory demonstrates the plugin mechanism for the FastFlowLM engine.
 Plugins let you override individual operators in the end-to-end model without
 rebuilding `flm` or any engine library.
 
-We demonstrate it with a plugin in [`flm_gemm/`](flm_gemm) that overrides two
+We demonstrate it with a plugin in [`iron_gemm/`](iron_gemm) that overrides two
 operators in Gemma4 E2B: dequant and matrix multiplication. It adds two options,
 independently selectable:
 
@@ -33,7 +33,7 @@ function the engine calls once the model exists and before its weights load:
 
 ```cpp
 void register_overrides(const flm::plugin_context& ctx) {
-    auto hook = std::make_shared<flm_gemm_override>(ctx);
+    auto hook = std::make_shared<iron_gemm_override>(ctx);
     const size_t bound = hook->bind(*ctx.ops, hook);
     ...
 }
@@ -41,7 +41,7 @@ void register_overrides(const flm::plugin_context& ctx) {
 FLM_PLUGIN(register_overrides)
 ```
 
-Operators are named. `flm_gemm` binds itself to each projection of each layer,
+Operators are named. `iron_gemm` binds itself to each projection of each layer,
 and to the dequant steps that feed them:
 
 ```cpp
@@ -67,7 +67,7 @@ flm::op_result create_run(const flm::op_call& call) override {
 ```
 
 Returning `flm::op_result::decline()` instead hands the call back to the engine,
-per dispatch — which is how `flm_gemm` restricts itself to the shapes it has
+per dispatch — which is how `iron_gemm` restricts itself to the shapes it has
 instruction streams for.
 
 Turning an operator *off* is the same mechanism with nothing in it. With offline
@@ -98,10 +98,10 @@ nothing was built for is a run-time fallback to the engine.
 
 | variable | effect |
 |---|---|
-| `FLM_GEMM_MODE` | `dequant` (default), `bf16` or `bfp16` — which weights the GEMM reads |
-| `FLM_GEMM_OFF` | register nothing, leaving FastFlowLM's operators in place |
-| `FLM_GEMM_CONFIG` | pick one GEMM xclbin by stem, when several are present |
-| `FLM_DEQUANT_VERIFY` | check every dequantized buffer against the sidecar, byte for byte |
+| `IRON_GEMM_MODE` | `dequant` (default), `bf16` or `bfp16` — which weights the GEMM reads |
+| `IRON_GEMM_OFF` | register nothing, leaving FastFlowLM's operators in place |
+| `IRON_GEMM_CONFIG` | pick one GEMM xclbin by stem, when several are present |
+| `IRON_DEQUANT_VERIFY` | check every dequantized buffer against the sidecar, byte for byte |
 
 ## Prefill weights
 
@@ -111,7 +111,7 @@ in the layout FastFlowLM's GEMM reads (3.45 GiB); `--mode bfp` writes the packed
 form the IRON bfp16 GEMM takes (1.94 GiB), calling that operator's own packer so
 the layout cannot drift from its kernel's.
 
-They are also the reference for `FLM_DEQUANT_VERIFY=1`, which checks every
+They are also the reference for `IRON_DEQUANT_VERIFY=1`, which checks every
 buffer the dequant produces against them, byte for byte.
 
 ## Reproducing the numbers
@@ -122,7 +122,7 @@ With an IRON checkout set up and its environment sourced:
 IRON=<iron checkout>  MODEL=<model dir>  FLM=<this checkout>/src
 
 # 1. build both operators, 22 shapes for Gemma4 E2B
-cd $FLM/plugins/flm_gemm/tools
+cd $FLM/plugins/iron_gemm/tools
 IRON_PATH=$IRON python3 build_artifacts.py
 cp build/FLM_*.xclbin build/FLM_*.bin $FLM/xclbins/Gemma4-E2B-IT-NPU2/
 
@@ -133,12 +133,12 @@ IRON_PATH=$IRON python3 dequantize.py $MODEL --mode bfp --only "self_attn." \
     --out model.dq_bfp_attn
 
 # 3. build flm with the plugin, and serve
-cd $FLM/build && cmake -DFLM_BUILD_PLUGINS=ON .. && ninja flm flm_gemm_plugin
-FLM_PLUGIN=$PWD/plugins/flm_gemm/flm_gemm_plugin.so ./flm serve gemma4-it:e2b
+cd $FLM/build && cmake -DFLM_BUILD_PLUGINS=ON .. && ninja flm iron_gemm_plugin
+FLM_PLUGIN=$PWD/plugins/iron_gemm/iron_gemm_plugin.so ./flm serve gemma4-it:e2b
 ```
 
 Send a 247-token prompt to `/api/generate` and read `prompt_eval_duration`,
-setting `FLM_GEMM_MODE` for each configuration and `FLM_GEMM_OFF=1` for the
+setting `IRON_GEMM_MODE` for each configuration and `IRON_GEMM_OFF=1` for the
 unmodified engine. Discard the first response and
 take the median of the rest; run-to-run spread is about 2%, so differences below
 ~40 ms need several runs to see.
