@@ -120,16 +120,16 @@ With an IRON checkout set up and its environment sourced:
 
 ```bash
 IRON=<iron checkout>  MODEL=<model dir>  FLM=<this checkout>/src
+TOOLS=$FLM/plugins/iron_gemm/tools     # the three scripts below live here
 
 # 1. build both operators, 22 shapes for Gemma4 E2B
-cd $FLM/plugins/iron_gemm/tools
-IRON_PATH=$IRON python3 build_artifacts.py
+cd $TOOLS && IRON_PATH=$IRON python3 $TOOLS/build_artifacts.py
 cp build/FLM_*.xclbin build/FLM_*.bin $FLM/xclbins/Gemma4-E2B-IT-NPU2/
 
 # 2. only for the offline modes: pre-dequantized weights
-python3 dequantize.py $MODEL --mode bf16 --only ""
-IRON_PATH=$IRON python3 dequantize.py $MODEL --mode bfp --only "mlp."
-IRON_PATH=$IRON python3 dequantize.py $MODEL --mode bfp --only "self_attn." \
+python3 $TOOLS/dequantize.py $MODEL --mode bf16 --only ""
+IRON_PATH=$IRON python3 $TOOLS/dequantize.py $MODEL --mode bfp --only "mlp."
+IRON_PATH=$IRON python3 $TOOLS/dequantize.py $MODEL --mode bfp --only "self_attn." \
     --out model.dq_bfp_attn
 
 # 3. build flm with the plugin, and serve
@@ -139,11 +139,10 @@ FLM_PLUGIN=$PWD/plugins/iron_gemm/iron_gemm_plugin.so ./flm serve gemma4-it:e2b
 
 Send a 247-token prompt to `/api/generate` and read `prompt_eval_duration`,
 setting `IRON_GEMM_MODE` for each configuration and `IRON_GEMM_OFF=1` for the
-unmodified engine. Discard the first response and
-take the median of the rest; run-to-run spread is about 2%, so differences below
+unmodified engine. Discard the first response and take the median of the rest; run-to-run spread is about 2%, so differences below
 ~40 ms need several runs to see.
 
-`tools/plot_prefill.py` draws the chart above from one `<label>: median <ms>`
+`$TOOLS/plot_prefill.py` draws the chart above from one `<label>: median <ms>`
 line per configuration on stdin.
 
 ## What a plugin can do

@@ -18,7 +18,6 @@ void AutoModel::_load_operator_plugins() {
         ops,
         this->npu.get(),
         this->model_path.c_str(),
-        this->lm_config->model_name.c_str(),
         xclbin_path.c_str(),
     };
     flm::load_plugins_from_env(ctx);

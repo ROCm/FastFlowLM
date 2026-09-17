@@ -47,8 +47,7 @@ struct plugin_context {
     op_registry* ops;          ///< the engine's declared operations
     npu_xclbin_manager* npu;   ///< the one device manager; a plugin registers its xclbins here
     const char* model_path;    ///< directory holding the model's weights
-    const char* model_name;    ///< directory name under xclbins/, e.g. "Gemma4-E2B-IT-NPU2"
-    const char* xclbin_path;   ///< directory holding the model's xclbins, where a plugin's belong too
+    const char* xclbin_path;   ///< directory holding this model's xclbins, where a plugin's belong too
 };
 
 using plugin_abi_version_fn = int (*)();
