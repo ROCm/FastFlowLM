@@ -41,16 +41,18 @@
 
 #include "flm_plugin.hpp"
 #include "lm_config.hpp"
+#include "models/gemma4e/gemma4e_npu.hpp"
 #include "modules/gemm.hpp"
 #include "nlohmann/json.hpp"
 #include "tensor_utils/safe_tensors.hpp"
 
 namespace {
 
-/// \brief Roles this plugin serves, in the order the per-layer table stores them.
-constexpr std::array<std::string_view, 7> roles = {
-    flm::role::q_proj, flm::role::k_proj, flm::role::v_proj, flm::role::o_proj,
-    flm::role::gate_proj, flm::role::up_proj, flm::role::down_proj,
+/// \brief The operations this plugin serves, in the order its per-layer table
+///        stores them. The names and the key spelling are Gemma4e's.
+constexpr std::array<std::string_view, 7> names = {
+    gemma4e_ops::op::q_proj, gemma4e_ops::op::k_proj, gemma4e_ops::op::v_proj, gemma4e_ops::op::o_proj,
+    gemma4e_ops::op::gate_proj, gemma4e_ops::op::up_proj, gemma4e_ops::op::down_proj,
 };
 
 constexpr size_t R_Q = 0, R_K = 1, R_V = 2, R_O = 3, R_GATE = 4, R_UP = 5, R_DOWN = 6;
@@ -217,33 +219,33 @@ public:
         size_t bound = 0;
         for (size_t layer = 0; layer < this->layers_.size(); layer++) {
             if (!this->_active(this->layers_[layer])) continue;
-            for (size_t r = 0; r < roles.size(); r++) {
+            for (size_t r = 0; r < names.size(); r++) {
                 if (!this->layers_[layer].slots[r].has_value()) continue;
-                bound += ops.override_op(flm::op_key((int)layer, roles[r]), self);
+                bound += ops.override_op(gemma4e_ops::key((int)layer, names[r]), self);
             }
-            for (std::string_view dq : { flm::role::dequant_qkv, flm::role::dequant_o,
-                                         flm::role::dequant_gate, flm::role::dequant_up,
-                                         flm::role::dequant_down }) {
-                ops.override_op(flm::op_key((int)layer, dq), self);
+            for (std::string_view dq : { gemma4e_ops::op::dequant_qkv, gemma4e_ops::op::dequant_o,
+                                         gemma4e_ops::op::dequant_gate, gemma4e_ops::op::dequant_up,
+                                         gemma4e_ops::op::dequant_down }) {
+                ops.override_op(gemma4e_ops::key((int)layer, dq), self);
             }
         }
         return bound;
     }
 
     flm::op_result create_run(const flm::op_call& call) override {
-        layer_entry& layer = this->layers_[call.layer];
+        layer_entry& layer = this->layers_[call.index];
         const bool serves = (this->mode_ == weight_mode::bf16)
                                 ? layer.any_m
                                 : layer.served_m.count(call.extent.padded) != 0;
 
-        if (call.role.rfind("dequant.", 0) == 0) {
+        if (call.name.rfind("dequant.", 0) == 0) {
             if (!serves) return flm::op_result::decline();
             this->_dequant(call, layer);
             return flm::op_result();
         }
         if (!serves) return flm::op_result::decline();
-        const size_t r = this->_role_index(call.role);
-        if (r == roles.size() || !layer.slots[r].has_value()) return flm::op_result::decline();
+        const size_t r = this->_name_index(call.name);
+        if (r == names.size() || !layer.slots[r].has_value()) return flm::op_result::decline();
         const slot& s = *layer.slots[r];
         bytes& b = this->_weights(layer, r);
         if (this->mode_ == weight_mode::bf16) return this->_run_mm(call, s, r, b);
@@ -267,13 +269,13 @@ private:
         size_t offset;  ///< where this projection starts in the layer's weight buffer
     };
     struct layer_entry {
-        std::array<std::optional<slot>, roles.size()> slots;
-        std::array<std::optional<flm_rt::bo>, roles.size()> views;  ///< cut on first dispatch
+        std::array<std::optional<slot>, names.size()> slots;
+        std::array<std::optional<flm_rt::bo>, names.size()> views;  ///< cut on first dispatch
         /// \brief What each projection's GEMM reads, where that is not the whole
         ///        staging buffer. q, k and v share one, at their own offsets.
-        std::array<std::optional<flm_rt::bo>, roles.size()> b_bo;
-        std::array<std::optional<buffer<u8>>, roles.size()> b_view;
-        std::array<buffer<u8>, roles.size()> resident;  ///< filled once, in a resident mode
+        std::array<std::optional<flm_rt::bo>, names.size()> b_bo;
+        std::array<std::optional<buffer<u8>>, names.size()> b_view;
+        std::array<buffer<u8>, names.size()> resident;  ///< filled once, in a resident mode
         std::set<uint32_t> served_m;  ///< M values every role of this layer can run
         bool any_m = false;           ///< the shipped kernel takes M at run time
         bool skip = false;            ///< the engine's buffer holds no k or v here
@@ -346,12 +348,12 @@ private:
             layer_entry& l = this->layers_[layer];
             if (this->mode_ != weight_mode::bf16 && l.served_m.empty()) continue;
             bool complete = true;
-            for (size_t r = 0; r < roles.size(); r++) {
+            for (size_t r = 0; r < names.size(); r++) {
                 if (!l.slots[r].has_value()) continue;
                 if (l.skip && (r == R_K || r == R_V)) continue;
                 SafeTensors* src = this->_sidecar(r);
                 const std::string name = "model.layers." + std::to_string(layer) + "."
-                                         + std::string(roles[r]) + ".weight" + suffix;
+                                         + std::string(names[r]) + ".weight" + suffix;
                 if (src == nullptr || !src->has_tensor(name)) { complete = false; continue; }
                 const size_t bytes = src->get_tensor_metadata(name).byte_size;
                 l.resident[r] = this->_alloc_mgr()->create_bo_buffer<u8>(bytes);
@@ -370,46 +372,46 @@ private:
         return (r <= R_O) ? this->sc_attn_.get() : this->sc_mlp_.get();
     }
 
-    size_t _role_index(std::string_view role) const {
-        for (size_t i = 0; i < roles.size(); i++) {
-            if (roles[i] == role) return i;
+    size_t _name_index(std::string_view name) const {
+        for (size_t i = 0; i < names.size(); i++) {
+            if (names[i] == name) return i;
         }
-        return roles.size();
+        return names.size();
     }
 
     /// \brief Which projections a dequant step produces.
     /// \note dequant.qkv covers three, because the engine dequantizes q, k and v
     ///       into one buffer; the GEMM needs them packed separately.
-    static size_t _covered(std::string_view role, std::array<size_t, 3>& out) {
-        if (role == flm::role::dequant_qkv) { out = { R_Q, R_K, R_V }; return 3; }
-        if (role == flm::role::dequant_o) { out[0] = R_O; return 1; }
-        if (role == flm::role::dequant_gate) { out[0] = R_GATE; return 1; }
-        if (role == flm::role::dequant_up) { out[0] = R_UP; return 1; }
+    static size_t _covered(std::string_view name, std::array<size_t, 3>& out) {
+        if (name == gemma4e_ops::op::dequant_qkv) { out = { R_Q, R_K, R_V }; return 3; }
+        if (name == gemma4e_ops::op::dequant_o) { out[0] = R_O; return 1; }
+        if (name == gemma4e_ops::op::dequant_gate) { out[0] = R_GATE; return 1; }
+        if (name == gemma4e_ops::op::dequant_up) { out[0] = R_UP; return 1; }
         out[0] = R_DOWN;
         return 1;
     }
 
     void _dequant(const flm::op_call& call, layer_entry& layer) {
         if (this->mode_ != weight_mode::dequant) return;  // the weights are already there
-        if (call.role == flm::role::dequant_qkv && layer.qkv_n != 0) {
+        if (call.name == gemma4e_ops::op::dequant_qkv && layer.qkv_n != 0) {
             // q, k and v are adjacent out-features, so one dispatch at their
             // combined width writes all three in the order the GEMMs read them.
             const slot& q = *layer.slots[R_Q];
             this->_run_one(call, layer, R_Q, q.k, layer.qkv_n, q.offset);
             if (this->verify_) {
-                for (size_t r : { R_Q, R_K, R_V }) this->_verify(call.layer, r, layer);
+                for (size_t r : { R_Q, R_K, R_V }) this->_verify(call.index, r, layer);
             }
             return;
         }
         std::array<size_t, 3> covered{};
-        const size_t count = _covered(call.role, covered);
+        const size_t count = _covered(call.name, covered);
         for (size_t i = 0; i < count; i++) {
             const size_t r = covered[i];
             if (!layer.slots[r].has_value()) continue;
             if (layer.skip && (r == R_K || r == R_V)) continue;
             const slot& s = *layer.slots[r];
             this->_run_one(call, layer, r, s.k, s.n, s.offset);
-            if (this->verify_) this->_verify(call.layer, r, layer);
+            if (this->verify_) this->_verify(call.index, r, layer);
         }
     }
 
@@ -467,7 +469,7 @@ private:
                                      + " (K=" + std::to_string(k) + " N=" + std::to_string(n)
                                      + "); rebuild the artifacts for this model's shapes");
         };
-        for (size_t r = 0; r < roles.size(); r++) {
+        for (size_t r = 0; r < names.size(); r++) {
             if (!l.slots[r].has_value()) continue;
             if (l.skip && (r == R_K || r == R_V)) continue;
             const slot& s = *l.slots[r];
@@ -475,11 +477,11 @@ private:
             for (const auto& [stream, unused] : this->stream_files_) {
                 any = any || (stream.k == s.k && stream.n == s.n && stream.gelu == wants_gelu(r));
             }
-            if (!any) fail("GEMM instruction stream", roles[r], s.k, s.n);
+            if (!any) fail("GEMM instruction stream", names[r], s.k, s.n);
             if (this->mode_ != weight_mode::dequant) continue;
             const bool fused = l.qkv_n != 0 && (r == R_Q || r == R_K || r == R_V);
             if (fused) continue;
-            if (!this->dequant_.has(s.k, s.n)) fail("dequant instruction stream", roles[r], s.k, s.n);
+            if (!this->dequant_.has(s.k, s.n)) fail("dequant instruction stream", names[r], s.k, s.n);
         }
         if (this->mode_ == weight_mode::dequant && l.qkv_n != 0
             && !this->dequant_.has(l.slots[R_Q]->k, l.qkv_n)) {
@@ -506,9 +508,9 @@ private:
         for (int layer = 0;; layer++) {
             layer_entry entry;
             bool any = false;
-            for (size_t r = 0; r < roles.size(); r++) {
+            for (size_t r = 0; r < names.size(); r++) {
                 const std::string name = "model.layers." + std::to_string(layer) + "."
-                                         + std::string(roles[r]) + ".weight";
+                                         + std::string(names[r]) + ".weight";
                 if (!q4.has_tensor(name)) continue;
                 const size_t bytes = q4.get_tensor_metadata(name).byte_size;
                 const uint32_t other = (uint32_t)(bytes * 8 / 5 / hidden);
@@ -568,7 +570,7 @@ private:
     /// \brief M values at which every one of a layer's projections can run.
     std::set<uint32_t> _served_m(const layer_entry& l) const {
         std::optional<std::set<uint32_t>> served;
-        for (size_t r = 0; r < roles.size(); r++) {
+        for (size_t r = 0; r < names.size(); r++) {
             if (!l.slots[r].has_value()) continue;
             if (l.skip && (r == R_K || r == R_V)) continue;
             const slot& s = *l.slots[r];
@@ -596,7 +598,7 @@ private:
         for (const layer_entry& layer : this->layers_) {
             if (!this->_active(layer)) continue;
             for (uint32_t m : layer.served_m) {
-                for (size_t r = 0; r < roles.size(); r++) {
+                for (size_t r = 0; r < names.size(); r++) {
                     if (!layer.slots[r].has_value()) continue;
                     if (layer.skip && (r == R_K || r == R_V)) continue;
                     const shape_key key{ m, layer.slots[r]->k, layer.slots[r]->n, wants_gelu(r) };
@@ -612,7 +614,7 @@ private:
     /// \brief One packed buffer per role, reused by every layer, sized for the widest.
     void _allocate_staging() {
         size_t total = 0;
-        for (size_t r = 0; r < roles.size(); r++) {
+        for (size_t r = 0; r < names.size(); r++) {
             size_t widest = 0;
             for (const layer_entry& l : this->layers_) {
                 if (!this->_active(l) || !l.slots[r].has_value()) continue;
@@ -672,7 +674,7 @@ private:
         SafeTensors* src = this->_sidecar(r);
         if (src == nullptr) return;
         const std::string name = "model.layers." + std::to_string(layer) + "."
-                                 + std::string(roles[r]) + ".weight.dq_bfp";
+                                 + std::string(names[r]) + ".weight.dq_bfp";
         if (!src->has_tensor(name)) return;
         const size_t bytes = src->get_tensor_metadata(name).byte_size;
         std::vector<u8> expected(bytes);
@@ -683,7 +685,7 @@ private:
         for (size_t i = 0; i < bytes; i++) {
             if (produced.data()[i] != expected[i]) bad++;
         }
-        const std::string what = "layer " + std::to_string(layer) + " " + std::string(roles[r])
+        const std::string what = "layer " + std::to_string(layer) + " " + std::string(names[r])
                                  + " K=" + std::to_string(s.k) + " N=" + std::to_string(s.n);
         if (bad) {
             header_print_r("ERROR", what + ": " + std::to_string(bad) + " of "
@@ -702,7 +704,7 @@ private:
     device_dequant dequant_;
     std::vector<layer_entry> layers_;
     std::map<shape_key, npu_app> apps_;
-    std::array<buffer<u8>, roles.size()> staging_;
+    std::array<buffer<u8>, names.size()> staging_;
     weight_mode mode_ = weight_mode::dequant;
     plugin_config mm_config_;
     std::unique_ptr<Gemm> mm_gemm_;

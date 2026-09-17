@@ -82,8 +82,8 @@ struct op_extent {
 ///       not interpret them, and an override is free to ignore them and use
 ///       weights it brought itself.
 struct op_call {
-    std::string_view role;        ///< operation name without the layer prefix, e.g. "mlp.up_proj"
-    int layer;                    ///< layer index, or -1 for a model-level operation
+    std::string_view name;        ///< the operation's name, as the engine declared it
+    int index;                    ///< which of the engine's dispatch sites for that name
     op_extent extent;             ///< geometry of the sequence chunk being processed
     bool blocking;                ///< the caller waits on this dispatch and overlaps nothing with it
     std::span<bytes* const> args;
@@ -105,7 +105,7 @@ public:
 };
 
 template <typename App>
-class app_layer_ref;
+class app_index_ref;
 
 /// \brief Per-layer override table, mixed into the backend's npu_app.
 ///
@@ -115,46 +115,48 @@ class app_layer_ref;
 template <typename App>
 class overridable_app {
 public:
-    /// \brief Bind this app to a layer for the duration of one dispatch.
-    app_layer_ref<App> at(int layer) { return app_layer_ref<App>(static_cast<App*>(this), layer); }
+    /// \brief Bind this app to one dispatch site for the duration of one call.
+    /// \note What an index means is the engine's business -- a layer, a block, a
+    ///       position in a flattened nest. All this needs is that it be dense.
+    app_index_ref<App> at(int index) { return app_index_ref<App>(static_cast<App*>(this), index); }
 
-    const std::string& op_role() const { return this->op_role_; }
+    const std::string& op_name() const { return this->op_name_; }
 
     /// \note Called by op_registry; not part of the override-author surface.
-    void _declare_op(std::string role, int layer_count, const op_extent* extent) {
-        this->op_role_ = std::move(role);
-        this->op_overrides_.resize(static_cast<size_t>(layer_count) + 1, nullptr);
+    void _declare_op(std::string name, int index_count, const op_extent* extent) {
+        this->op_name_ = std::move(name);
+        this->op_overrides_.resize(static_cast<size_t>(index_count) + 1, nullptr);
         this->op_extent_ = extent;
     }
 
     /// \note Called by op_registry; not part of the override-author surface.
-    void _set_op_override(int layer, op_override* hook) {
-        op_override*& slot = this->op_overrides_.at(static_cast<size_t>(layer + 1));
+    void _set_op_override(int index, op_override* hook) {
+        op_override*& slot = this->op_overrides_.at(static_cast<size_t>(index + 1));
         this->op_override_count_ += (hook != nullptr) - (slot != nullptr);
         slot = hook;
     }
 
     const op_extent* _op_extent() const { return this->op_extent_; }
 
-    op_override* _op_override(int layer) const {
+    op_override* _op_override(int index) const {
         if (this->op_override_count_ == 0) return nullptr;
-        const size_t i = static_cast<size_t>(layer + 1);
+        const size_t i = static_cast<size_t>(index + 1);
         if (i >= this->op_overrides_.size()) return nullptr;
         return this->op_overrides_[i];
     }
 
 protected:
-    std::string op_role_;
-    std::vector<op_override*> op_overrides_;  ///< indexed by layer + 1, so -1 addresses model-level ops
+    std::string op_name_;
+    std::vector<op_override*> op_overrides_;  ///< indexed by index + 1, so -1 addresses a lone site
     int op_override_count_ = 0;
     const op_extent* op_extent_ = nullptr;    ///< owned by the registry, refreshed once per chunk
 };
 
-/// \brief An npu_app bound to a layer index, as returned by npu_app::at().
+/// \brief An npu_app bound to one dispatch site, as returned by npu_app::at().
 template <typename App>
-class app_layer_ref {
+class app_index_ref {
 public:
-    app_layer_ref(App* app, int layer) : app_(app), layer_(layer) {}
+    app_index_ref(App* app, int index) : app_(app), index_(index) {}
 
     template <typename... BoArgs>
     ert_cmd_state operator()(BoArgs&&... args) {
@@ -174,16 +176,16 @@ public:
 private:
     template <typename... BoArgs>
     op_result _dispatch(bool blocking, BoArgs&&... args) {
-        op_override* hook = this->app_->_op_override(this->layer_);
+        op_override* hook = this->app_->_op_override(this->index_);
         if (hook == nullptr) return op_result::decline();
         std::array<bytes*, sizeof...(BoArgs)> bo_args = { static_cast<bytes*>(&args)... };
-        op_call call{ this->app_->op_role(), this->layer_, *this->app_->_op_extent(),
+        op_call call{ this->app_->op_name(), this->index_, *this->app_->_op_extent(),
                       blocking, std::span<bytes* const>(bo_args) };
         return hook->create_run(call);
     }
 
     App* app_;
-    int layer_;
+    int index_;
 };
 
 }  // namespace flm
