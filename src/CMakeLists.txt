@@ -414,6 +414,7 @@ target_link_libraries(flm PUBLIC
     qwen3_5vl_npu
     qwen3_5_omni_npu
     qwen3_6_moe_npu
+    qwen3_8mtp_npu
     gemma_npu
     gemma_text_npu
     gemma4e_npu

@@ -20,6 +20,7 @@
 #include "modeling_qwen3_5vl.hpp"
 #include "modeling_qwen3_5_omni.hpp"
 #include "modeling_qwen3_6_moe.hpp"
+#include "modeling_qwen3_8mtp.hpp"
 #include "modeling_nanbeige.hpp"
 #include "modeling_gemma4e.hpp"
 #include "modeling_hunyuan.hpp"
@@ -40,6 +41,7 @@ typedef enum {
     qwen3_5,
     qwen3_5_omni,
     qwen3_6_moe,
+    qwen3_8mtp,
     gemma3,
     gemma3_text,
     gemma4e,
@@ -69,6 +71,7 @@ inline std::pair<std::string, std::unique_ptr<AutoModel>> get_auto_model(const s
         {"qwen3.5", SupportedModelFamily::qwen3_5},
         {"qwen3.5-omni", SupportedModelFamily::qwen3_5_omni},
         {"qwen3.6-moe", SupportedModelFamily::qwen3_6_moe},
+        {"qwen3-8mtp", SupportedModelFamily::qwen3_8mtp},
         {"gemma3", SupportedModelFamily::gemma3},
         {"gemma3-text", SupportedModelFamily::gemma3_text},
         {"gemma4e", SupportedModelFamily::gemma4e},
@@ -144,6 +147,9 @@ inline std::pair<std::string, std::unique_ptr<AutoModel>> get_auto_model(const s
             break;
         case SupportedModelFamily::qwen3_6_moe:
             auto_chat_engine = std::make_unique<Qwen3_6_MOE>(npu_device_inst);
+            break;
+        case SupportedModelFamily::qwen3_8mtp:
+            auto_chat_engine = std::make_unique<Qwen3_8MTP>(npu_device_inst);
             break;
         case SupportedModelFamily::lfm2:
             auto_chat_engine = std::make_unique<LFM2>(npu_device_inst);

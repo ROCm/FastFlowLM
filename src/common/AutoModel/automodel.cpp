@@ -294,16 +294,98 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
         reason = MAX_LENGTH_REACHED;
         return result;
     }
+    // Speculation is only sound under greedy sampling: the engine accepts a
+    // draft by comparing it against the base model's argmax, so the tokens it
+    // returns are argmax tokens. Honouring a temperature, top-p or a
+    // repetition penalty while taking that path would silently replace the
+    // user's sampler with greedy decoding -- the output stays fluent, so
+    // nothing would ever flag it. Anything but top_k == 1 stays on the
+    // ordinary loop, which is also where sample_greedy() already routes.
+    //
+    // supports_speculation() is defaulted to false on causal_lm, so every
+    // engine but qwen3_8mtp answers false here and keeps the ordinary loop.
+    // Evaluated once per generate(), not per token.
+    const bool spec_enabled =
+        this->lm_engine->supports_speculation() && this->sampler &&
+        this->sampler->top_k == 1 && this->sampler->rep_penalty == 1.0f &&
+        this->sampler->freq_penalty == 0.0f && this->sampler->pre_penalty == 0.0f;
+    // Draft depth. Named because it is also the hit-rate denominator: if the
+    // request and the accounting were two separate literals, tuning one would
+    // silently skew the metric that says whether the tuning helped.
+    // The engine clamps to its own MTP_STEPS and may draft fewer.
+    const int SPEC_MAX_DRAFT = 7;
+    if (spec_enabled) {
+        header_print("FLM", "Speculative decoding enabled (MTP draft head)");
+    }
+
+    // One accepted token, handled exactly as the single-token path handles a
+    // sampled one. Returns false when the loop must stop.
+    //
+    // Shared rather than duplicated on purpose: a speculative branch with its
+    // own copy of the streaming, history and eos checks is how a batch ends up
+    // emitting text past a stop token.
+    auto consume = [&](int token) -> bool {
+        this->total_tokens++;
+        last_sampled_token = token;
+
+        this->profiler_list[TKOEN_DECODE_TIME].start();
+        if (this->is_normal_token(token)){ // filter out special tokens
+            std::string token_str = this->tokenizer->run_time_decoder(token);
+            os << token_str << std::flush;
+            result += token_str;
+        }
+        this->profiler_list[TKOEN_DECODE_TIME].stop(1);
+        this->token_history.push_back(token);
+        if (this->is_eos(token)){
+            meta_info.generated_tokens++;
+            if (this->forward_on_eos) {
+                this->lm_engine->forward(token);
+            }
+            return false;
+        }
+        meta_info.generated_tokens++;
+        if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)){
+            reason = MAX_LENGTH_REACHED;
+            return false;
+        }
+        return this->total_tokens < this->MAX_L;
+    };
+
     while (this->total_tokens < this->MAX_L){
         if (is_cancelled()) {
             reason = CANCEL_DETECTED;
-            // reset stream content 
+            // reset stream content
             buffer_.clear();
             current_mode_ = StreamEventType::CONTENT;
             tool_name_.clear();
             is_in_tool_block_ = false;
             break;
         }
+
+        if (spec_enabled) {
+            this->profiler_list[DECODING_TIME].start();
+            std::vector<int> accepted =
+                this->lm_engine->speculate(last_sampled_token, SPEC_MAX_DRAFT);
+            // Charge the cycle to however many tokens came out of it, so
+            // tok/s stays comparable with the non-speculative path.
+            this->profiler_list[DECODING_TIME].stop(
+                accepted.empty() ? 1 : (int)accepted.size());
+
+            if (!accepted.empty()) {
+                // The engine has already committed these to its caches -- they
+                // must not be re-fed through forward(). An eos mid-batch stops
+                // here and the rest are dropped.
+                bool go_on = true;
+                for (int tok : accepted) {
+                    if (!(go_on = consume(tok))) break;
+                }
+                if (!go_on) break;
+                continue;
+            }
+            // Empty means the engine declined this step (head not primed, no
+            // headroom under MAX_L). Fall through to the ordinary path.
+        }
+
         this->profiler_list[DECODING_TIME].start();
         buffer<bf16> y = this->lm_engine->forward(last_sampled_token);
         this->profiler_list[DECODING_TIME].stop(1);
@@ -311,29 +393,8 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
         this->profiler_list[SAMPLING_TIME].start();
         int sampled_token = this->sampler->sample(y);
         this->profiler_list[SAMPLING_TIME].stop(1);
-        this->total_tokens++;
-        last_sampled_token = sampled_token;
 
-        this->profiler_list[TKOEN_DECODE_TIME].start();
-        if (this->is_normal_token(sampled_token)){ // filter out special tokens
-            std::string token_str = this->tokenizer->run_time_decoder(sampled_token);
-            os << token_str << std::flush;
-            result += token_str;
-        }
-        this->profiler_list[TKOEN_DECODE_TIME].stop(1);
-        this->token_history.push_back(sampled_token);
-        if (this->is_eos(sampled_token)){
-            meta_info.generated_tokens++;
-            if (this->forward_on_eos) {
-                this->lm_engine->forward(last_sampled_token);
-            }
-            break;
-        }
-        meta_info.generated_tokens++;
-        if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)){
-            reason = MAX_LENGTH_REACHED;
-            break;
-        }
+        if (!consume(sampled_token)) break;
     }
     meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
     meta_info.stop_reason = reason;
