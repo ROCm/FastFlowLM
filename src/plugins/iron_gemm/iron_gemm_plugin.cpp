@@ -192,7 +192,7 @@ public:
             if (!this->_setup_mm(ctx)) return;
         } else {
             this->_scan_instruction_streams();
-            if (this->streams_.empty()) return;
+            if (this->stream_files_.empty()) return;
             // A resident mode never dispatches the dequant, so it does not
             // register its xclbin either, leaving that hardware context free.
             if (this->mode_ == weight_mode::dequant) {
@@ -450,7 +450,6 @@ private:
             unsigned m = 0, k = 0, n = 0;
             if (std::sscanf(stem.c_str() + this->config_.size(), "_M%u_K%u_N%u", &m, &k, &n) != 3) continue;
             const shape_key key{ m, k, n, stem.find("_epigelu") != std::string::npos };
-            this->streams_.insert(key);
             this->stream_files_[key] = entry.path().string();
         }
     }
@@ -473,7 +472,7 @@ private:
             if (l.skip && (r == R_K || r == R_V)) continue;
             const slot& s = *l.slots[r];
             bool any = false;
-            for (const shape_key& stream : this->streams_) {
+            for (const auto& [stream, unused] : this->stream_files_) {
                 any = any || (stream.k == s.k && stream.n == s.n && stream.gelu == wants_gelu(r));
             }
             if (!any) fail("GEMM instruction stream", roles[r], s.k, s.n);
@@ -577,7 +576,7 @@ private:
             if (this->mode_ == weight_mode::dequant && !fused
                 && !this->dequant_.has(s.k, s.n)) return {};
             std::set<uint32_t> ms;
-            for (const shape_key& stream : this->streams_) {
+            for (const auto& [stream, unused] : this->stream_files_) {
                 if (stream.k == s.k && stream.n == s.n && stream.gelu == wants_gelu(r)) ms.insert(stream.m);
             }
             if (!served.has_value()) {
@@ -699,7 +698,6 @@ private:
     std::string artifact_dir_;
     std::string config_;
     std::string xclbin_;
-    std::set<shape_key> streams_;
     std::map<shape_key, std::string> stream_files_;
     device_dequant dequant_;
     std::vector<layer_entry> layers_;

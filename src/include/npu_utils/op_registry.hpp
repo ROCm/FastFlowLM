@@ -47,14 +47,6 @@ inline constexpr std::string_view dequant_up   = "dequant.up";
 inline constexpr std::string_view dequant_down = "dequant.down";
 }  // namespace role
 
-/// \brief An override that consumes a dispatch and does nothing.
-/// \note  Bind this to the dequant roles when the overrides that replace the
-///        consumers of the dequantized buffers bring their own weights.
-class no_op_override : public op_override {
-public:
-    op_result create_run(const op_call&) override { return op_result(); }
-};
-
 template <typename App>
 class op_registry_t {
 public:
@@ -101,25 +93,6 @@ public:
         }
         this->hooks_.push_back(std::move(hook));
         return bound;
-    }
-
-    bool is_overridden(std::string_view key) const {
-        auto it = this->slots_.find(std::string(key));
-        if (it == this->slots_.end()) return false;
-        return it->second.app->_op_override(it->second.layer) != nullptr;
-    }
-
-    /// \brief Whether every operation matching `key` carries an override.
-    /// \note  An engine uses this to skip work whose only consumer is gone, such
-    ///        as allocating the buffers a dequant step would have filled.
-    bool all_overridden(std::string_view key) const {
-        size_t matched = 0;
-        for (const auto& [declared, s] : this->slots_) {
-            if (!_matches(key, declared)) continue;
-            if (s.app->_op_override(s.layer) == nullptr) return false;
-            matched++;
-        }
-        return matched > 0;
     }
 
 private:
