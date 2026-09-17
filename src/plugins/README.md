@@ -99,54 +99,45 @@ nothing was built for is a run-time fallback to the engine.
 
 ## Prefill weights
 
-Offline dequant needs the weights dequantized ahead of time, next to
-`model.q4nx`. `flm_gemm/tools/dequantize.py` writes them:
+The two offline modes read weights a converter dequantized ahead of time, next
+to `model.q4nx`. `--mode bf16` writes what the engine's `dequant.xclbin` would
+have written, which is what the shipped GEMM reads (3.45 GiB); `--mode bfp`
+writes the packed form the IRON GEMM takes (1.94 GiB), calling the operator's
+own packer so the layout cannot drift from the kernel's.
 
-```bash
-cd flm_gemm/tools
-python3 dequantize.py <model_dir> --mode bf16 --only ""
-IRON_PATH=<iron> python3 dequantize.py <model_dir> --mode bfp --only "mlp."
-IRON_PATH=<iron> python3 dequantize.py <model_dir> --mode bfp --only "self_attn." \
-    --out model.dq_bfp_attn
-```
-
-`--mode bf16` writes what the engine's `dequant.xclbin` would have written, for
-the stock GEMM (3.45 GiB). `--mode bfp` writes the packed form the IRON GEMM
-takes (1.94 GiB), calling the operator's own packer so the layout cannot drift
-from the kernel's — which is why that mode needs an IRON checkout while `bf16`
-needs only numpy.
-
-These sidecars are also the reference for `FLM_DEQUANT_VERIFY=1`, which checks
-every buffer the dequant produces against them, byte for byte.
+They are also the reference for `FLM_DEQUANT_VERIFY=1`, which checks every
+buffer the dequant produces against them, byte for byte.
 
 ## Reproducing the numbers
 
-One build, one environment variable per configuration:
+With an IRON checkout set up and its environment sourced:
 
 ```bash
-cmake -DFLM_BUILD_PLUGINS=ON . && ninja flm flm_gemm_plugin
-export FLM_PLUGIN=$PWD/plugins/flm_gemm/flm_gemm_plugin.so
+IRON=<iron checkout>  MODEL=<model dir>  FLM=<this checkout>/src
 
-flm serve gemma4-it:e2b                            # new GEMM, run-time dequant
-FLM_GEMM_MODE=bf16  flm serve gemma4-it:e2b        # stock GEMM, offline dequant
-FLM_GEMM_MODE=bfp16 flm serve gemma4-it:e2b        # new GEMM, offline dequant
-FLM_GEMM_OFF=1      flm serve gemma4-it:e2b        # stock, plugin registers nothing
+# 1. build both operators, 22 shapes for Gemma4 E2B
+cd $FLM/plugins/flm_gemm/tools
+IRON_PATH=$IRON python3 build_artifacts.py
+cp build/FLM_*.xclbin build/FLM_*.bin $FLM/xclbins/Gemma4-E2B-IT-NPU2/
+
+# 2. only for the offline modes: pre-dequantized weights
+python3 dequantize.py $MODEL --mode bf16 --only ""
+IRON_PATH=$IRON python3 dequantize.py $MODEL --mode bfp --only "mlp."
+IRON_PATH=$IRON python3 dequantize.py $MODEL --mode bfp --only "self_attn." \
+    --out model.dq_bfp_attn
+
+# 3. build flm with the plugin, and serve
+cd $FLM/build && cmake -DFLM_BUILD_PLUGINS=ON .. && ninja flm flm_gemm_plugin
+FLM_PLUGIN=$PWD/plugins/flm_gemm/flm_gemm_plugin.so ./flm serve gemma4-it:e2b
 ```
 
-Time a 247-token prompt against each and read `prompt_eval_duration`. Run-to-run
-spread is about 2%, so differences below ~40 ms need several runs to see.
+Send a 247-token prompt to `/api/generate` and read `prompt_eval_duration`,
+setting `FLM_GEMM_MODE` for each configuration. Discard the first response and
+take the median of the rest; run-to-run spread is about 2%, so differences below
+~40 ms need several runs to see.
 
-`bench3.sh` in the internal tree does the timing and prints one
-`<label>: median <ms>` line per configuration, which is what the chart is drawn
-from:
-
-```bash
-{ ./bench3.sh stock
-  ./bench3.sh dequant $P
-  ./bench3.sh bf16    $P FLM_GEMM_MODE=bf16
-  ./bench3.sh bfp16   $P FLM_GEMM_MODE=bfp16; } | grep median > runs.txt
-python3 flm_gemm/tools/plot_prefill.py < runs.txt
-```
+`tools/plot_prefill.py` draws the chart above from one `<label>: median <ms>`
+line per configuration on stdin.
 
 ## What a plugin can do
 
