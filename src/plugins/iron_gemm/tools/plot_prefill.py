@@ -2,8 +2,8 @@
 
     ./bench3.sh stock                              >  runs.txt
     ./bench3.sh dequant $P                         >> runs.txt
-    ./bench3.sh bf16    $P FLM_GEMM_MODE=bf16      >> runs.txt
-    ./bench3.sh bfp16   $P FLM_GEMM_MODE=bfp16     >> runs.txt
+    ./bench3.sh bf16    $P IRON_GEMM_MODE=bf16      >> runs.txt
+    ./bench3.sh bfp16   $P IRON_GEMM_MODE=bfp16     >> runs.txt
     python3 plot_prefill.py < runs.txt
 """
 
@@ -56,6 +56,6 @@ for side in ("top", "right", "left", "bottom"):
     ax.spines[side].set_visible(False)
 
 fig.tight_layout()
-out = os.environ.get("FLM_PLOT", "prefill.png")
+out = os.environ.get("IRON_PLOT", "prefill.png")
 fig.savefig(out, facecolor=fig.get_facecolor())
 print(f"wrote {out}")

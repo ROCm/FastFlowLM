@@ -1,5 +1,5 @@
-/// \file flm_gemm_plugin.cpp
-/// \brief Runs Gemma4 E2B's prefill projections on IRON's FLMGEMM and DequantBFP.
+/// \file iron_gemm_plugin.cpp
+/// \brief Runs Gemma4 E2B's prefill projections on IRON's GEMM and DequantBFP.
 ///
 /// A worked example of the override API. Everything here uses public headers
 /// only: both operators are compiled out of tree by IRON, and the plugin brings
@@ -12,19 +12,20 @@
 ///
 /// Artifacts expected next to the model's xclbins:
 ///   FLM_GEMM_<config>.xclbin
-///   FLM_GEMM_M<M>_K<K>_N<N>_<config>[_epigelu].bin
-///   FLM_DequantBFP_<tag>.xclbin
-///   FLM_DequantBFP_K<K>_N<N>_engine[_run<R>p<P>]_<tag>.bin
+///   FLM_GEMM_<config>_M<M>_K<K>_N<N>[_epi<act>].bin
+///   FLM_DequantBFP_<config>.xclbin
+///   FLM_DequantBFP_K<K>_N<N>[_run<R>p<P>]_<config>.bin
+/// The FLM_ prefixes are IRON's, from each operator's own artifact naming.
 ///
 /// The dequant streams must be built with qw_layout=engine: they read the block
 /// order the engine's loader writes to DRAM, so the operator consumes the
 /// layer's weight buffer in place.
 ///
 /// Environment:
-///   FLM_GEMM_CONFIG    pick one GEMM xclbin by stem, when several are present
-///   FLM_GEMM_MODE      dequant (default), bf16 or bfp16; where the weights come from
-///   FLM_GEMM_OFF       set to leave every projection on the engine's own operators
-///   FLM_DEQUANT_VERIFY compare each dequantized buffer against model.dq_bfp
+///   IRON_GEMM_CONFIG    pick one GEMM xclbin by stem, when several are present
+///   IRON_GEMM_MODE      dequant (default), bf16 or bfp16; where the weights come from
+///   IRON_GEMM_OFF       set to leave every projection on the engine's own operators
+///   IRON_DEQUANT_VERIFY compare each dequantized buffer against model.dq_bfp
 
 #include <array>
 #include <cstdint>
@@ -94,7 +95,7 @@ enum class weight_mode {
 };
 
 inline weight_mode read_mode() {
-    const char* m = std::getenv("FLM_GEMM_MODE");
+    const char* m = std::getenv("IRON_GEMM_MODE");
     if (m == nullptr) return weight_mode::dequant;
     const std::string name(m);
     if (name == "bfp16") return weight_mode::bfp16;
@@ -180,11 +181,11 @@ private:
     npu_app_manager* mgr_ = nullptr;
 };
 
-class flm_gemm_override : public flm::op_override {
+class iron_gemm_override : public flm::op_override {
 public:
-    flm_gemm_override(const flm::plugin_context& ctx) : npu_(*ctx.npu) {
+    iron_gemm_override(const flm::plugin_context& ctx) : npu_(*ctx.npu) {
         this->artifact_dir_ = ctx.xclbin_path;
-        const char* tag = std::getenv("FLM_GEMM_CONFIG");
+        const char* tag = std::getenv("IRON_GEMM_CONFIG");
         this->config_ = (tag != nullptr) ? tag : "tn64_ma32_emf_floor_npu2";
         this->mode_ = read_mode();
         if (this->mode_ == weight_mode::bf16) {
@@ -429,7 +430,7 @@ private:
     ///       whenever that gains a knob. Only M, K and N are parsed out, and the
     ///       file each shape came from is kept rather than rebuilt.
     void _scan_instruction_streams() {
-        const char* want = std::getenv("FLM_GEMM_CONFIG");
+        const char* want = std::getenv("IRON_GEMM_CONFIG");
         for (const auto& entry : std::filesystem::directory_iterator(this->artifact_dir_)) {
             const std::string stem = entry.path().stem().string();
             if (entry.path().extension() != ".xclbin") continue;
@@ -541,7 +542,7 @@ private:
             this->_place_projections(l);
             l.served_m = this->_served_m(l);
         }
-        this->verify_ = std::getenv("FLM_DEQUANT_VERIFY") != nullptr;
+        this->verify_ = std::getenv("IRON_DEQUANT_VERIFY") != nullptr;
         if (this->verify_ || this->mode_ != weight_mode::dequant) this->_open_sidecars(model);
         return true;
     }
@@ -714,8 +715,8 @@ private:
 };
 
 void register_overrides(const flm::plugin_context& ctx) {
-    if (std::getenv("FLM_GEMM_OFF") != nullptr) return;
-    auto hook = std::make_shared<flm_gemm_override>(ctx);
+    if (std::getenv("IRON_GEMM_OFF") != nullptr) return;
+    auto hook = std::make_shared<iron_gemm_override>(ctx);
     if (!hook->ready()) {
         header_print("warning", "FLMGEMM plugin idle: artifacts missing");
         return;

@@ -906,5 +906,5 @@ install(DIRECTORY xclbins DESTINATION "${FLM_SHARE_DESTINATION}")
 # need artifacts and packed weights that are produced out of tree.
 option(FLM_BUILD_PLUGINS "Build the reference operator plugins" OFF)
 if(FLM_BUILD_PLUGINS)
-    add_subdirectory(plugins/flm_gemm)
+    add_subdirectory(plugins/iron_gemm)
 endif()
