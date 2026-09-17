@@ -1199,9 +1199,28 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                 };
             streaming_ostream_openai_chat ostream(model, auto_chat_engine.get(), openai_stream_callback);  // streaming in chat completion format
 
+            // write_streaming_response() only sends the HTTP headers on its first
+            // call, which cannot happen until the first token is generated. On a
+            // long prompt that leaves the client with zero bytes for minutes, so
+            // it cannot tell a working server from a dead one and times out.
+            // ':' lines are SSE comments: clients ignore them, but they put the
+            // headers on the wire and keep the connection demonstrably alive.
+            // is_cancelled() is already called once per prefill chunk, so it
+            // carries the heartbeat without new plumbing.
+            send_streaming_response(json(": flm prefill started\n\n"), false);
+            auto last_beat = std::chrono::steady_clock::now();
+            auto prefill_tick = [&]() {
+                auto now = std::chrono::steady_clock::now();
+                if (now - last_beat >= std::chrono::seconds(5)) {
+                    last_beat = now;
+                    send_streaming_response(json(": flm prefilling\n\n"), false);
+                }
+                return cancellation_token->cancelled();
+            };
+
             header_print("FLM", "Start prefill...");
             try {
-                bool success = auto_chat_engine->insert(meta_info, uniformed_input, [&] { return cancellation_token->cancelled(); });
+                bool success = auto_chat_engine->insert(meta_info, uniformed_input, prefill_tick);
                 if (!success) {
                     if (meta_info.stop_reason == CANCEL_DETECTED || cancellation_token->cancelled()) {
                         meta_info.stop_reason = CANCEL_DETECTED;
