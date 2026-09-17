@@ -18,11 +18,12 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 # Bench label -> how the bar reads. Two independent options, so four points.
+BASE = "FastFlowLM v1.0.5"
 NAMES = {
-    "stock": "stock",
-    "bf16": "stock\n+ offline dequant",
-    "dequant": "new bfp16 GEMM",
-    "bfp16": "new bfp16 GEMM\n+ offline dequant",
+    "stock": BASE,
+    "bf16": f"{BASE}\n+ offline dequant",
+    "dequant": "IRON bfp16 GEMM",
+    "bfp16": "IRON bfp16 GEMM\n+ offline dequant",
 }
 
 runs = dict(re.findall(r"^(\S+): median ([\d.]+)", sys.stdin.read(), re.M))
@@ -34,7 +35,7 @@ labels = [b[0] for b in bars]
 values = [b[1] for b in bars]
 
 plt.style.use("dark_background")
-fig, ax = plt.subplots(figsize=(4.4, 2.6), dpi=220)
+fig, ax = plt.subplots(figsize=(4.8, 2.6), dpi=220)
 ax.barh(range(len(values)), values, color=sns.color_palette("mako_r", len(values)),
         height=0.66, edgecolor="none", zorder=3)
 
@@ -43,7 +44,7 @@ for i, value in enumerate(values):
             fontsize=8, fontweight="bold")
 
 ax.set_yticks(range(len(labels)))
-ax.set_yticklabels(labels, fontsize=7.5, linespacing=1.4)
+ax.set_yticklabels(labels, fontsize=7, linespacing=1.4)
 ax.invert_yaxis()
 ax.set_xlim(0, max(values) * 1.16)
 ax.set_xlabel("prefill (ms, median)", fontsize=7.5)
