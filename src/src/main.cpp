@@ -11,6 +11,7 @@
 #include "model_downloader.hpp"
 #include "update.hpp"
 #include "utils/utils.hpp"
+#include "utils/npu_platform.hpp"
 #include "program_args.hpp"
 #include "minja/chat-template.hpp"
 #include <cstring>
@@ -34,6 +35,10 @@
 #include "utils/vm_args.hpp"
 #include <boost/program_options.hpp>
 #include "benchmarking.hpp"
+#ifdef FLM_ENABLE_RAI
+#include "rai/corelib_runtime.hpp"
+#include "rai/corelib_device.hpp"
+#endif
 
 #ifndef _WIN32
 #include <fcntl.h>
@@ -162,8 +167,9 @@ void signal_handler(int signal) {
 ///@param models the model list
 ///@param default_tag the default tag
 ///@param port the port to listen on, default is 52625, same with the ollama server
+///@param npu_device the NPU device owned by main, shared with the handler
 ///@return the server
-std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader& downloader, program_args_t& args);
+std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader& downloader, program_args_t& args, flm_rt::device* npu_device);
 
 #ifdef _WIN32
 std::string get_driver_version(const std::string& device_name) {
@@ -222,6 +228,9 @@ static bool sanity_check_npu_stack(bool quiet, bool json_output = false) {
         {"ready", true}
     };
     validation_json["platform"] = "linux";
+    // The same build-time generation the catalog was filtered for in main().
+    validation_json["npu_platform"] =
+        std::string(utils::platform_id(utils::build_npu_platform()));
     // Check kernel version
     struct utsname u_name;
     if (uname(&u_name) != 0) {
@@ -384,6 +393,10 @@ static bool sanity_check_npu_stack(bool quiet, bool json_output = false) {
     }
     validation_json["memlock_ok"] = memlock_ok;
 
+    if (print_human) {
+        header_print_g("Linux", "NPU platform: " << validation_json["npu_platform"].get<std::string>());
+    }
+
     bool overall_ok = amd_device_found && kernel_ok && all_fw_ok && enough_cols && memlock_ok;
     validation_json["ready"] = overall_ok;
     if (json_output) {
@@ -397,6 +410,8 @@ static bool sanity_check_npu_stack(bool quiet, bool json_output = false) {
         {"platform", "windows"},
         {"amd_device_found", true},
         {"npu_driver_ok", true},
+        {"npu_platform",
+         std::string(utils::platform_id(utils::build_npu_platform()))},
         {"ready", true}
     };
     std::string npu_arch = identify_npu_arch();
@@ -433,6 +448,7 @@ static bool sanity_check_npu_stack(bool quiet, bool json_output = false) {
     if (print_human) {
         header_print_g("Windows", "NPU: " << npu_arch);
         header_print_g("Windows", "NPU dirver version: " << drv);
+        header_print_g("Windows", "NPU platform: " << validation_json["npu_platform"].get<std::string>());
     }
 
     if (json_output) {
@@ -442,6 +458,44 @@ static bool sanity_check_npu_stack(bool quiet, bool json_output = false) {
 #endif
 }
 
+
+#ifdef FLM_ENABLE_RAI
+/// \brief brings corelib up for the process and tears it down on every exit path
+/// \note main() has early `return 1`s and a catch-all, so the teardown has to be
+///       a destructor rather than a trailing call. A failed shutdown must not
+///       mask whatever the program was already reporting, hence the swallow.
+struct RaiProcessGuard {
+    ~RaiProcessGuard() {
+        try {
+            flm::corelib::CorelibRuntime::ShutdownProcess();
+        } catch (const std::exception& e) {
+            std::cerr << "Warning: corelib shutdown failed: " << e.what() << std::endl;
+        } catch (...) {
+            std::cerr << "Warning: corelib shutdown failed" << std::endl;
+        }
+    }
+};
+#else
+///@brief open the NPU device that every engine in this process shares
+///@return the shared device, or nullptr when no NPU could be opened
+///@note Function-local static, so the lifetime is tied to the process exactly as
+///      the per-Runner devices used to be. A machine with no NPU must still be
+///      able to run `flm list`/`pull`/`version`, so failure is a null pointer,
+///      not an error.
+static flm_rt::device* open_npu_device() {
+    try {
+        static flm_rt::device npu_device = flm_rt::device(0);
+        return &npu_device;
+    } catch (const std::exception& e) {
+        DO_VERBOSE(1, {
+            header_print("FLM", "No NPU device available: " << e.what());
+        });
+        return nullptr;
+    } catch (...) {
+        return nullptr;
+    }
+}
+#endif
 
 ///@brief main function
 ///@param argc the number of arguments
@@ -499,8 +553,60 @@ int main(int argc, char* argv[]) {
     // Get the models directory from environment variable or default
     std::string models_dir = utils::get_models_directory();
 
-    
-    model_list availble_models(config_path, models_dir);
+    // One NPU runtime for the whole process, brought up before the catalog so
+    // the catalog can be filtered to what this NPU generation can actually run.
+    // Which runtime that is follows from the build, not from a decision here:
+    // the flm backend opens its own device, rai gets one from corelib.
+#ifdef FLM_ENABLE_RAI
+    // Declared before anything that can return so the destructor covers the
+    // early exits and the catch-all below.
+    RaiProcessGuard rai_guard;
+    try {
+        flm::corelib::CorelibRuntime::GetOrCreate(std::filesystem::path(exe_dir));
+    } catch (const std::exception& e) {
+        DO_VERBOSE(1, { header_print("FLM", "corelib unavailable: " << e.what()); });
+    }
+    // TODO: FIXME - corelib's device is not a drop-in for the flm device the
+    // AutoModel engines expect; the two ownership models conflict, so there is
+    // no supported way to hand corelib's device out here yet. Until that is
+    // resolved a rai build reports no flm device, which is harmless because
+    // the rai backend does not drive the NPU through one.
+    //   flm_rt::device* npu_device =
+    //       const_cast<flm_rt::device*>(&ryzenai::corelib::GetDevice());
+    flm_rt::device* npu_device = nullptr;
+#else
+    flm_rt::device* npu_device = open_npu_device();
+#endif
+
+    // Which generation this binary is for is decided by FLM_ENABLE_RAI at
+    // build time: the two generations share no engine, so a build has one of
+    // them and there is nothing to detect.
+    constexpr utils::npu_platform platform = utils::build_npu_platform();
+
+    model_list availble_models(config_path, models_dir,
+                               std::string(utils::platform_id(platform)));
+
+    const bool print_status = !parsed_args.json_output && !parsed_args.sub_process_mode;
+    const bool needs_npu =
+        parsed_args.command == "run" || parsed_args.command == "serve" ||
+        parsed_args.command == "bench" || parsed_args.command == "validate";
+    if (print_status && needs_npu) {
+        header_print("FLM", "NPU platform: " << utils::platform_id(platform));
+    }
+
+    // The rai build of phi4-mini-it installs under its own directory name, so
+    // on any other platform that directory is no longer reachable by a tag and
+    // `flm remove` cannot clean it up. Point it out; never delete it.
+    if (print_status && platform != utils::npu_platform::aie_next) {
+        const std::filesystem::path stale_dir =
+            std::filesystem::path(availble_models.get_model_root_path()) / "phi4-mini-it-rai";
+        std::error_code stale_ec;
+        if (std::filesystem::exists(stale_dir, stale_ec)) {
+            header_print("FLM", "Note: " << stale_dir.string()
+                                         << " is a rai-only model and is unused on this NPU; "
+                                            "delete it manually to reclaim the space.");
+        }
+    }
     
     // Extract parsed values
     bool got_power_mode = (parsed_args.power_mode != "performance"); // Check if user explicitly set power mode
@@ -602,11 +708,11 @@ int main(int argc, char* argv[]) {
         }
 
         if (parsed_args.command == "bench") {
-            benchmarking::BenchmarkResults_t results = benchmarking::run_benchmarks(parsed_args.model_tag, parsed_args.input_file_name, availble_models, parsed_args.iterations);
+            benchmarking::BenchmarkResults_t results = benchmarking::run_benchmarks(parsed_args.model_tag, parsed_args.input_file_name, availble_models, parsed_args.iterations, npu_device, parsed_args.backend);
         }
         else if (parsed_args.command == "run") {
             check_and_notify_new_version();
-            Runner runner(availble_models, downloader, parsed_args);
+            Runner runner(availble_models, downloader, parsed_args, npu_device);
             runner.run();
 
         } else if (parsed_args.command == "serve") {
@@ -619,7 +725,7 @@ int main(int argc, char* argv[]) {
             } else {
                 header_print("FLM", "Using user-specified port: " << port);
             }
-            auto server = create_lm_server(availble_models, downloader, parsed_args);
+            auto server = create_lm_server(availble_models, downloader, parsed_args, npu_device);
             server->set_max_connections(parsed_args.max_socket_connections);           // Allow up to 10 concurrent connections
             server->set_io_threads(10);          // Allow up to 5 io threads
             server->set_npu_queue_length(parsed_args.max_npu_queue);           // Allow up to 10 concurrent queue
@@ -705,7 +811,7 @@ int main(int argc, char* argv[]) {
             std::cerr << "Use --help for usage information" << std::endl;
             return 1;
         }
-        // Return 0 if the command is valid
+        // Return 0 if the command is valid; corelib_guard shuts corelib down.
         return 0;
     } catch (const std::exception& e) {
         // If an error occurs, this will be used to show the error

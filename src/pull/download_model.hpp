@@ -7,6 +7,8 @@
 #pragma once
 
 #include <string>
+#include <filesystem>
+#include <cstdint>
 #include <vector>
 #include <memory>
 #include <functional>
@@ -14,6 +16,16 @@
 #include "nlohmann/json.hpp"
 
 namespace download_utils {
+
+enum class HashAlgorithm { Sha256, GitBlobSha1 };
+
+struct DownloadRequest {
+    std::string url;
+    std::filesystem::path destination;
+    std::uint64_t expected_size;
+    HashAlgorithm hash_algorithm;
+    std::string expected_hash;
+};
 
 std::string calculate_file_sha256(const std::string& file_path);
 std::string calculate_git_blob_oid(const std::string& file_path);
@@ -34,6 +46,11 @@ int progress_callback(void* clientp, double dltotal, double dlnow, double ultota
 // Download a file from URL to a local file
 bool download_file(const std::string& url, const std::string& local_path, bool is_lfs, std::string remote_oid,
                    std::function<void(double)> progress_cb = nullptr);
+
+// Download to a same-directory temporary file, verify it, then atomically promote it.
+bool download_file_atomic(
+    const DownloadRequest& request,
+    std::function<void(double)> progress_cb = nullptr);
 
 // Download content from URL to a string
 std::string download_string(const std::string& url);

@@ -14,17 +14,8 @@
 /************              Qwen2VL family            **************/
 Qwen2VL::Qwen2VL(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "Qwen2VL") {}
 
-void Qwen2VL::load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption) {
-    this->_shared_load_model(model_path, model_info, default_context_length, enable_preemption);
-    
-    this->q4nx = std::make_unique<Q4NX>(this->model_path);
-    // lm_config->get<std::string>("model_type", "") == qwen2
-    this->lm_engine = std::make_unique<qwen2vl_npu>(*this->lm_config, this->npu.get(), this->MAX_L);
-
-    this->lm_engine->load_weights(*this->q4nx);
-    //free the q4nx
-    this->q4nx.reset();
-    this->lm_engine->clear_context();
+void Qwen2VL::load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption, const std::string& backend) {
+    this->_shared_load_backend(model_path, model_info, default_context_length, enable_preemption, backend);
     this->setup_tokenizer(model_path);
     this->sampler.reset();
 

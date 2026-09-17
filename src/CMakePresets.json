@@ -54,6 +54,18 @@
       }
     },
     {
+      "name": "windows-rai",
+      "displayName": "Windows RAI",
+      "description": "Windows build with statically linked ryzenai-corelib support",
+      "inherits": "windows-default",
+      "binaryDir": "${sourceDir}/build-rai",
+      "cacheVariables": {
+        "FLM_ENABLE_RAI": "OFF",
+        "RYZENAI_CORELIB_INCLUDE_DIR": "$env{RYZENAI_CORELIB_INCLUDE_DIR}",
+        "RYZENAI_CORELIB_LIBRARY": "$env{RYZENAI_CORELIB_LIBRARY}"
+      }
+    },
+    {
       "name": "windows-vs18",
       "displayName": "Windows VS18",
       "description": "Configuration for Windows using Visual Studio 18 2026",
@@ -83,6 +95,14 @@
       "displayName": "Windows Default Build",
       "description": "Build Windows preset in Release with parallel jobs",
       "configurePreset": "windows-default",
+      "configuration": "Release",
+      "jobs": 4
+    },
+    {
+      "name": "windows-rai",
+      "displayName": "Windows RAI Build",
+      "description": "Build the optional ryzenai-corelib runtime in Release",
+      "configurePreset": "windows-rai",
       "configuration": "Release",
       "jobs": 4
     }

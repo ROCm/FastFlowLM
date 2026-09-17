@@ -191,7 +191,7 @@ void Qwen3_5VL::preprocess_image(qwen3_5vl_image_t& image, std::vector<bf16> &pi
     int resized_width;    
     // do the automatically resizing in here 
 
-    qwen3_5vl_npu* lm_engine_qwen3_5_ptr = reinterpret_cast<qwen3_5vl_npu*>(this->lm_engine.get());
+    qwen3_5vl_npu* lm_engine_qwen3_5_ptr = reinterpret_cast<qwen3_5vl_npu*>(this->lm_engine);
     smart_resize(
         height, width,
         resized_height, resized_width,

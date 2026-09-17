@@ -34,7 +34,8 @@ using StreamResponseCallback = std::function<void(const json&, bool)>; // data, 
 
 class RestHandler {
 public:
-    RestHandler(model_list& models, ModelDownloader& downloader, program_args_t& args);
+    RestHandler(model_list& models, ModelDownloader& downloader, program_args_t& args,
+                flm_rt::device* npu_device);
     ~RestHandler();
 
     void handle_show(const json& request,
@@ -108,7 +109,8 @@ public:
         std::shared_ptr<CancellationToken> cancellation_token = nullptr);
 
 private:
-    bool ensure_model_loaded(const std::string& model_tag);
+    bool ensure_model_loaded(const std::string& model_tag,
+                             const std::string& request_backend = "");
     void ensure_asr_model_loaded(const std::string& model_tag);
     void ensure_embed_model_loaded(const std::string& model_tag);
     void configure_chat_engine_parameters(const json& options, const json& request);
@@ -120,7 +122,9 @@ private:
     std::unique_ptr<Whisper> whisper_engine;
     std::unique_ptr<AutoEmbeddingModel> auto_embedding_engine;
 #endif
-    flm_rt::device npu_device_inst;
+    // Owned by main(); on a rai build this is corelib's device, which must
+    // not be duplicated.
+    flm_rt::device* npu_device_inst;
     model_list& supported_models;
     ModelDownloader& downloader;
     std::string current_model_tag;
@@ -135,5 +139,9 @@ private:
     int img_pre_resize;
     std::string last_question;
     bool preemption;
+    /// \brief the --backend value, empty when the flag was not given
+    std::string backend;
+    /// \brief the backend the currently loaded model was asked for
+    std::string current_backend;
     PromptCache prompt_cache;
 };

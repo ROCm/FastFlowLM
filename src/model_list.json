@@ -58,7 +58,7 @@
                     "parameter_size": "3B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "reasoning"
                 ],
                 "footprint": 3.1
@@ -407,7 +407,7 @@
                 ],
                 "footprint": 5.0
             },
-            "9b":{
+            "9b": {
                 "name": "Qwen3.5-9B-NPU2",
                 "url": "https://huggingface.co/FastFlowLM/Qwen3.5-9B-NPU2/resolve/flm_q4k_high_precision",
                 "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.5-9B-NPU2/tree/flm_q4k_high_precision",
@@ -440,7 +440,6 @@
                 "footprint": 8.7
             }
         },
-
         "qwen3.6-moe": {
             "35b-a3b": {
                 "name": "Qwen3.6-35B-A3B-NPU2",
@@ -611,7 +610,7 @@
                     "tokenizer_config.json",
                     "chat_template.jinja"
                 ],
-                "label":[
+                "label": [
                     "reasoning"
                 ],
                 "footprint": 0.96
@@ -641,7 +640,47 @@
                     "tokenizer.json",
                     "tokenizer_config.json"
                 ],
-                "footprint": 3.4
+                "footprint": 3.4,
+                "supported_platforms": [
+                    "stx",
+                    "aie_next"
+                ],
+                "platform_overrides": {
+                    "aie_next": {
+                        "name": "phi4-mini-it-rai",
+                        "url": "https://huggingface.co/unsloth/Phi-4-mini-instruct-GGUF/resolve/78eb92a46fc37e6b524df991ed9aca9bc6aa7b80",
+                        "file_url": "https://huggingface.co/api/models/unsloth/Phi-4-mini-instruct-GGUF/tree/78eb92a46fc37e6b524df991ed9aca9bc6aa7b80",
+                        "size": 4100140571,
+                        "default_context_length": 4096,
+                        "details": {
+                            "quantization_level": "Q8_0 -> group-64"
+                        },
+                        "flm_min_version": "1.0.3",
+                        "files": [
+                            "Phi-4-mini-instruct.Q8_0.gguf",
+                            "tokenizer.json",
+                            "tokenizer_config.json",
+                            "config.json"
+                        ],
+                        "file_sources": {
+                            "tokenizer.json": {
+                                "url": "https://huggingface.co/microsoft/Phi-4-mini-instruct",
+                                "revision": "cfbefacb99257ffa30c83adab238a50856ac3083"
+                            },
+                            "tokenizer_config.json": {
+                                "url": "https://huggingface.co/microsoft/Phi-4-mini-instruct",
+                                "revision": "cfbefacb99257ffa30c83adab238a50856ac3083"
+                            },
+                            "config.json": {
+                                "url": "https://huggingface.co/microsoft/Phi-4-mini-instruct",
+                                "revision": "cfbefacb99257ffa30c83adab238a50856ac3083"
+                            }
+                        },
+                        "footprint": 4.1,
+                        "ms_url": null,
+                        "model_info_key": "phi4-mini-it-rai:4b"
+                    }
+                }
             }
         },
         "embed-gemma": {
@@ -666,7 +705,7 @@
                     "parameter_size": "300M",
                     "quantization_level": "none"
                 },
-                "label":[
+                "label": [
                     "embeddings"
                 ],
                 "footprint": 0.62
@@ -695,7 +734,7 @@
                     "parameter_size": "1B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "audio",
                     "realtime-transcription",
                     "transcription"
@@ -754,7 +793,7 @@
                     "parameter_size": "4B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "vision"
                 ],
                 "footprint": 4.5
@@ -786,7 +825,7 @@
                     "parameter_size": "4B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "vision"
                 ],
                 "footprint": 4.5
@@ -818,7 +857,7 @@
                     "parameter_size": "4B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "vision"
                 ],
                 "footprint": 4.5
@@ -850,7 +889,7 @@
                     "parameter_size": "4B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "vision"
                 ],
                 "footprint": 4.5
@@ -955,7 +994,7 @@
                     "parameter_size": "8B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "reasoning"
                 ],
                 "footprint": 5.4
@@ -985,7 +1024,7 @@
                     "parameter_size": "8B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "reasoning"
                 ],
                 "footprint": 5.6
@@ -1015,7 +1054,7 @@
                     "parameter_size": "0.6B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "reasoning"
                 ],
                 "footprint": 0.66
@@ -1043,7 +1082,7 @@
                     "parameter_size": "1.7B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "reasoning"
                 ],
                 "footprint": 1.6
@@ -1071,7 +1110,7 @@
                     "parameter_size": "4B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "reasoning",
                     "tool-calling"
                 ],
@@ -1100,7 +1139,7 @@
                     "parameter_size": "8B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "reasoning",
                     "tool-calling"
                 ],
@@ -1131,7 +1170,7 @@
                     "parameter_size": "4B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "reasoning",
                     "tool-calling"
                 ],
@@ -1162,7 +1201,7 @@
                     "parameter_size": "4B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "tool-calling"
                 ],
                 "footprint": 3.1
@@ -1192,7 +1231,7 @@
                     "parameter_size": "20B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "reasoning"
                 ],
                 "footprint": 14.0
@@ -1222,7 +1261,7 @@
                     "parameter_size": "20B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "reasoning"
                 ],
                 "footprint": 14.0
@@ -1281,7 +1320,7 @@
                     "parameter_size": "3B",
                     "quantization_level": "Q4_1"
                 },
-                "label":[
+                "label": [
                     "vision"
                 ],
                 "footprint": 3.8

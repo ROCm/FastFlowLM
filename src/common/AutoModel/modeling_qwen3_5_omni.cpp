@@ -63,7 +63,7 @@ void Qwen3_5_Omni::setup_tokenizer(std::string model_path) {
     this->extra_context["user_system_prompt"] = this->user_system_prompt;
 }
 
-void Qwen3_5_Omni::load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption) {
+void Qwen3_5_Omni::load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption, const std::string& backend) {
     if (this->is_model_loaded && this->model_path == model_path) {
         header_print("FLM", "Model already loaded: " << this->model_path);
         return;

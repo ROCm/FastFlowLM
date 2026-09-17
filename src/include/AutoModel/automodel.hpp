@@ -6,6 +6,7 @@
 /// \note This is a header file for the auto_model class
 #pragma once
 
+#include <algorithm>
 #include <ctime>
 #include <iomanip>
 #include <sstream>
@@ -16,9 +17,12 @@
 #include <string>
 #include <type_traits>
 #include <any>
+#include <optional>
+#include <stdexcept>
 #include "typedef.hpp"
 #include "causal_lm.hpp"
 #include "lm_config.hpp"
+#include "AutoModel/model_backend.hpp"
 #include "models/llama/llama_npu.hpp"
 #include "models/qwen2/qwen2_npu.hpp"
 #include "models/qwen3/qwen3_npu.hpp"
@@ -142,17 +146,35 @@ struct lm_uniform_input_t {
 	std::vector<std::string> audios;
 	std::vector<input_payload_type_t> audio_payload_types;
 	nlohmann::ordered_json tools;
+	std::optional<int> requested_max_new_tokens;
 };
 
+inline std::optional<int> normalize_requested_max_new_tokens(
+	std::optional<int> requested) {
+	return requested.has_value() && *requested > 0 ? requested : std::nullopt;
+}
+
 using json = nlohmann::ordered_json;
+
+class ModelRequestError final : public std::runtime_error {
+public:
+	ModelRequestError(int http_code, bool session_cleared, std::string message);
+	int http_code() const noexcept;
+	bool session_cleared() const noexcept;
+private:
+	int http_code_;
+	bool session_cleared_;
+};
 
 class AutoModel {
 protected:
 	std::string model_path = "";
-	std::unique_ptr<causal_lm> lm_engine = nullptr;
+	/// \brief the execution backend, which owns the engine
+	std::unique_ptr<flm::backend::ModelBackend> backend_ = nullptr;
+	/// \brief a non-owning view of backend_'s engine, or null when none is loaded
+	causal_lm* lm_engine = nullptr;
 	std::unique_ptr<Tokenizer> tokenizer = nullptr;
 	std::unique_ptr<Sampler> sampler = nullptr;
-	std::unique_ptr<Q4NX> q4nx = nullptr;
 	bool is_model_loaded = false;
 	std::string current_model = "";
 	std::vector<int> token_history;
@@ -215,14 +237,57 @@ protected:
 
 
 	void _shared_load_model(std::string model_path, json model_info, int default_context_length = -1, bool enable_preemption = false);
+	void _shared_initialize_model_state(std::string model_path, json model_info, int context_length);
+	void _shared_initialize_legacy_npu(bool enable_preemption);
 	nlohmann::json _shared_setup_tokenizer(std::string model_path);
+
+	/// \brief Load a model onto its chosen backend
+	/// \param model_path the model directory
+	/// \param model_info the resolved model_list.json entry
+	/// \param default_context_length the requested context length, or -1 for the catalog default
+	/// \param enable_preemption whether preemption was asked for
+	/// \param requested_backend the --backend value, empty when it was not given
+	/// \note Resolves the backend, initializes the shared state, builds the
+	///       backend through the registry and points lm_engine at its engine.
+	///       Every frontend calls this instead of doing it by hand; what is left
+	///       for the frontend is the tokenizer, the chat template and the sampler.
+	/// \throws std::runtime_error if the backend is unknown, unavailable for the
+	///         model, or cannot honour the requested preemption/context length
+	void _shared_load_backend(std::string model_path, json model_info, int default_context_length = -1, bool enable_preemption = false, const std::string& requested_backend = "", const nlohmann::json* tokenizer_config = nullptr);
+
+	/// \brief Drop the conversation after a failed inference
+	/// \param poisoned whether the engine can no longer be driven at all
+	/// \note A poisoned engine is not asked to clear its context; only a reload
+	///       can recover it.
+	void _shared_after_inference_failure(bool poisoned);
+
+	/// \brief Refuse to use an engine that needs a reload
+	/// \throws ModelRequestError 500 when the backend reports itself poisoned
+	void _shared_guard_poisoned() const;
+
+	/// \brief The most tokens the loaded model may hold
+	/// \return MAX_L, lowered to the backend's own decode limit when it has one
+	uint32_t decode_cap() const {
+		const uint32_t backend_cap =
+			backend_ ? backend_->max_decode_length() : 0;
+		return backend_cap == 0 ? MAX_L : std::min(MAX_L, backend_cap);
+	}
 
 	/// \brief Insert tokens into the model
 	/// \param meta_info the meta information of the chat
 	/// \param tokens the tokens to insert
 	/// \param payload the payload, it shall not be used as this function is only used for chunkwised insertion, no image allowed
 	/// \return true if the tokens were inserted successfully, false otherwise
-	bool _shared_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled = [] { return false; }, void* payload = nullptr, int first_len_run = 0);
+	bool _shared_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled = [] { return false; }, void* payload = nullptr, int first_len_run = 0, std::optional<int> requested_max_new_tokens = std::nullopt);
+
+	/// \brief Reject a request that cannot fit in the backend's decode limit
+	/// \param rendered_tokens the length of the rendered prompt
+	/// \param requested the caller's max_new_tokens, if any
+	/// \note Only backends that declare a hard decode limit of their own are
+	///       checked; the FastFlowLM engines are bounded by MAX_L alone and keep
+	///       their existing behaviour of truncating rather than refusing.
+	/// \throws ModelRequestError 400 when prompt plus output cannot fit
+	void _shared_validate_capacity(std::size_t rendered_tokens, std::optional<int> requested) const;
 	buffer<bf16> _chunked_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled = [] { return false; }, void* payload = nullptr, int first_len_run = 0);
 	std::string _shared_generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled = [] { return false; });
 
@@ -262,6 +327,12 @@ public:
 	/// \brief Get the current model
 	/// \return the current model
 	std::string get_current_model();
+
+	/// \brief Get the id of the backend the model is loaded on
+	/// \return the backend id, or empty when no model is loaded
+	virtual std::string backend_id() const noexcept {
+		return backend_ ? backend_->id() : std::string();
+	}
 
 	/// \brief Get the current context length
 	/// \return the current context length
@@ -407,7 +478,7 @@ public:
 
 	//************ Unique for each model *************/
 	
-	virtual void load_model(std::string model_path, json model_info, int default_context_length = -1, bool enable_preemption = false) {}
+	virtual void load_model(std::string model_path, json model_info, int default_context_length = -1, bool enable_preemption = false, const std::string& backend = "") {}
 	virtual std::string generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled = [] { return false; }) = 0;
 	virtual chat_template_type_t get_chat_template_type() {
 		return chat_template_type_t::chat_ml;
@@ -431,6 +502,12 @@ public:
 
 	/// \brief Generate the tokens with prompt
 	virtual std::string generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os = std::cout) = 0;
+	std::string generate_with_prompt(
+		chat_meta_info_t& meta_info,
+		lm_uniform_input_t& input,
+		int length_limit,
+		std::ostream& os,
+		std::function<bool()> is_cancelled);
 
 	/// \brief Configure a parameter with type-erased value
 	/// \param parameter_name the name of the parameter

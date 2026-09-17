@@ -48,6 +48,27 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 # ———————————————————————————————————————————————
 option(FLM_USE_HRX "Use the HRX amdxdna NPU runtime instead of XRT (0=XRT default, 1=HRX)" OFF)
 option(FLM_PORTABLE_BUILD "Build portable distribution with bundled runtime libraries" OFF)
+# Where the kernels come from. FastFlowLM's own flow and ryzenai-corelib share
+# no engine, so a build links one or the other; this option is not an extra.
+# It also fixes the NPU generation the build targets -- see utils/npu_platform.hpp.
+option(FLM_ENABLE_RAI
+       "Reach kernels through ryzenai-corelib instead of FastFlowLM's own flow" OFF)
+
+if(FLM_ENABLE_RAI)
+    if(NOT WIN32)
+        message(FATAL_ERROR "FLM_ENABLE_RAI currently requires Windows")
+    endif()
+    find_path(RYZENAI_CORELIB_INCLUDE_DIR NAMES ryzenai/corelib.h REQUIRED)
+    # The main binary needs ryzenai::corelib::GetDevice(), a C++ entry point the
+    # C ABI does not expose, so corelib is linked in rather than dlopened.
+    find_library(RYZENAI_CORELIB_LIBRARY NAMES ryzenai_corelib corelib
+        HINTS "${RYZENAI_CORELIB_INCLUDE_DIR}/../lib"
+              "$ENV{RYZENAI_CORELIB_LIB_DIR}" REQUIRED)
+    find_path(FLM_CORELIB_BOOST_INCLUDE_DIR NAMES boost/any.hpp
+        HINTS "$ENV{CONDA_PREFIX}/Library/include"
+              "$ENV{USERPROFILE}/anaconda3/Library/include"
+              "C:/dev/boost_1_88_0" REQUIRED)
+endif()
 
 if(FLM_USE_HRX)
     set(FLM_RUNTIME_NAME "hrx")
@@ -237,6 +258,10 @@ add_subdirectory(${CMAKE_SOURCE_DIR}/../third_party/tokenizers-cpp
 # ———————————————————————————————————————————————
 file(GLOB SOURCES "src/*.cpp" "runner/*.cpp" "common/*.cpp" "common/*/*.cpp" "server/*.cpp" "pull/*.cpp" )
 file(GLOB HEADERS "include/*.hpp" "runner/*.hpp" "common/*.hpp" "common/*/*.hpp" "server/*.hpp" "pull/*.hpp")
+list(FILTER SOURCES EXCLUDE REGEX ".*/common/rai/.*\\.cpp$")
+
+# Model sources live two levels deeper than the globs above reach. Only the rai
+# half exists as loose sources; it is built separately, below.
 
 # Exclude files that depend on missing libraries for Linux
 if(NOT WIN32)
@@ -268,6 +293,21 @@ endif()
 
 
 add_executable(flm ${SOURCES} ${HEADERS})
+
+if(FLM_ENABLE_RAI)
+    include("${CMAKE_SOURCE_DIR}/common/rai/rai_sources.cmake")
+    add_library(flm_rai STATIC ${FLM_RAI_SOURCES})
+    target_include_directories(flm_rai PUBLIC
+        "${CMAKE_SOURCE_DIR}/include" "${RYZENAI_CORELIB_INCLUDE_DIR}"
+        "${XRT_INCLUDE_DIR}" "${FLM_CORELIB_BOOST_INCLUDE_DIR}")
+    # RYZENAI_CORELIB_STATIC drops the vendor header's dllimport decoration;
+    # FLM_CORELIB_LINK_STATIC is what tells our own code the symbols are linked
+    # in and must be bound directly instead of through LoadLibrary.
+    target_compile_definitions(flm_rai PUBLIC
+        FLM_ENABLE_RAI=1 RYZENAI_CORELIB_STATIC=1 FLM_CORELIB_LINK_STATIC=1)
+    target_link_libraries(flm_rai PUBLIC "${RYZENAI_CORELIB_LIBRARY}")
+    target_link_libraries(flm PRIVATE flm_rai)
+endif()
 
 if(WIN32)
     if(VCPKG_TOOLCHAIN)
