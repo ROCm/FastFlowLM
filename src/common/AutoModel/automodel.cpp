@@ -6,6 +6,29 @@
 /// \note This is a source file for the auto_model class
 
 #include "AutoModel/automodel.hpp"
+#include "flm_plugin.hpp"
+
+
+void AutoModel::_load_operator_plugins() {
+    flm::op_registry* ops = this->lm_engine ? this->lm_engine->ops() : nullptr;
+    if (ops == nullptr) return;
+    const std::string xclbin_path = utils::path_join(
+        this->lm_config->exec_path, "xclbins", this->lm_config->model_name);
+    flm::plugin_context ctx{
+        ops,
+        this->npu.get(),
+        this->model_path.c_str(),
+        xclbin_path.c_str(),
+    };
+    flm::load_plugins_from_env(ctx);
+}
+
+
+void AutoModel::_load_engine_weights() {
+    this->_load_operator_plugins();
+    this->lm_engine->load_weights(*this->q4nx);
+    this->q4nx.reset();
+}
 
 
 AutoModel::AutoModel(flm_rt::device* npu_device_inst, std::string current_model) {

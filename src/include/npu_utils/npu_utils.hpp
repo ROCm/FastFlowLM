@@ -15,3 +15,5 @@
 #else
 #include "npu_utils_xrt.hpp"
 #endif
+
+#include "op_registry.hpp"

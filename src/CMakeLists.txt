@@ -898,3 +898,13 @@ install(FILES model_info.json DESTINATION "${FLM_SHARE_DESTINATION}")
 # xclbins, which are loaded by shared libraries need to be in location
 # relative to the executable, so we install them relative to the binary.
 install(DIRECTORY xclbins DESTINATION "${FLM_SHARE_DESTINATION}")
+
+# ———————————————————————————————————————————————
+# Operator plugins
+# ———————————————————————————————————————————————
+# Reference overrides, built on the public API only. Off by default because they
+# need artifacts and packed weights that are produced out of tree.
+option(FLM_BUILD_PLUGINS "Build the reference operator plugins" OFF)
+if(FLM_BUILD_PLUGINS)
+    add_subdirectory(plugins/iron_gemm)
+endif()

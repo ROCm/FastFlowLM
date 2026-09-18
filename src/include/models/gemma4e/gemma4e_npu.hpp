@@ -19,6 +19,36 @@
 #include <immintrin.h>  // For AVX intrinsics
 #endif
 
+/// \brief The operations this engine declares, and how their keys are spelled.
+/// \note Both belong to the model, not to the plugin API: another engine may
+///       have no layers, or a nest of them, and names its own operations.
+namespace gemma4e_ops {
+
+namespace op {
+inline constexpr std::string_view q_proj    = "self_attn.q_proj";
+inline constexpr std::string_view k_proj    = "self_attn.k_proj";
+inline constexpr std::string_view v_proj    = "self_attn.v_proj";
+inline constexpr std::string_view o_proj    = "self_attn.o_proj";
+inline constexpr std::string_view attn_core = "self_attn.core";
+
+inline constexpr std::string_view gate_proj = "mlp.gate_proj";
+inline constexpr std::string_view up_proj   = "mlp.up_proj";
+inline constexpr std::string_view down_proj = "mlp.down_proj";
+
+inline constexpr std::string_view dequant_qkv  = "dequant.qkv";
+inline constexpr std::string_view dequant_o    = "dequant.o";
+inline constexpr std::string_view dequant_gate = "dequant.gate";
+inline constexpr std::string_view dequant_up   = "dequant.up";
+inline constexpr std::string_view dequant_down = "dequant.down";
+}  // namespace op
+
+/// \brief Key of `name` on layer `layer`, which is this engine's dispatch site.
+inline std::string key(int layer, std::string_view name) {
+    return "layers." + std::to_string(layer) + "." + std::string(name);
+}
+
+}  // namespace gemma4e_ops
+
 // some helper functions for convenience
 constexpr int GEMMA4E_IS_GLOBAL_MASK = 0x00000001;
 constexpr int GEMMA4E_IS_SKIP_MASK = 0x00000002;
@@ -134,6 +164,22 @@ public:
 
     int checkpoint() override;
     int restore() override;
+
+    /// \brief The prefill operations a plugin may override
+    /// \note Keys are gemma4e_ops::key(layer, name) for every layer and each name in
+    ///       gemma4e::op, whose arguments arrive in the order given:
+    ///         self_attn.{q,k,v}_proj   (out, hidden_state, qkv_weights)
+    ///         self_attn.o_proj         (out, attn_out, o_weights)
+    ///         self_attn.core           (out, q, kv_cache)
+    ///         mlp.{gate,up}_proj       (out, hidden_state, weights)
+    ///         mlp.down_proj            (out, hid, down_weights)
+    ///         dequant.{qkv,o,gate,up,down}  (dequantized_weights, quantized_weights)
+    ///       Decode does not go through these; layer.xclbin reads the quantized
+    ///       weights directly.
+    /// \note The weight buffer a projection receives is the engine's own dequant
+    ///       output. Its layout is an implementation detail: an override is
+    ///       expected to bring weights of its own and ignore that argument.
+    flm::op_registry* ops() override;
 
     // parameters for vision preprocessing in Gemma4e
     unsigned int GEMMA4E_VISION_MAX_POSITION_EMBEDDINGS;

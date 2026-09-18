@@ -27,10 +27,7 @@ void Qwen3VL::load_model(std::string model_path, json model_info, int default_co
     this->q4nx = std::make_unique<Q4NX>(this->model_path);
     // lm_config->get<std::string>("model_type", "") == qwen3
     this->create_engine();
-
-    this->lm_engine->load_weights(*this->q4nx);
-    //free the q4nx
-    this->q4nx.reset();
+    this->_load_engine_weights();
     this->lm_engine->clear_context();
     this->setup_tokenizer(model_path);
     this->sampler.reset();

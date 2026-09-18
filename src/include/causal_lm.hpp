@@ -11,11 +11,20 @@
 #include "utils/utils.hpp"
 #include "buffer.hpp"
 
+class npu_app;
+namespace flm {
+    template <typename App> class op_registry_t;
+}
+
 /// \brief causal_lm class
 class causal_lm {
 public:
     causal_lm(){}
     virtual ~causal_lm(){}
+
+    /// \brief The operations of this engine that a plugin may override
+    /// \return nullptr if the engine declares none
+    virtual flm::op_registry_t<npu_app>* ops() { return nullptr; }
 
     /// \brief forward the causal_lm
     /// \param ids the ids
