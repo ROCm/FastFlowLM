@@ -26,6 +26,78 @@ FastFlowLM v1.0.5:
 
 ![prefill medians](assets/prefill.png)
 
+## What the mechanism consists of
+
+- **Common infrastructure**, public: [`flm_plugin.hpp`](../include/flm_plugin.hpp)
+  (plugin loading, `flm::plugin_context`, the `FLM_PLUGIN` macro),
+  [`npu_utils/op_override.hpp`](../include/npu_utils/op_override.hpp)
+  (`op_override`, `op_result`, `op_call`) and
+  [`npu_utils/op_registry.hpp`](../include/npu_utils/op_registry.hpp)
+  (`op_registry` and its key matching).
+- **Operator names**, per-model and public: each model's header names the
+  operators it dispatches — for Gemma4, `gemma4e_ops::op::*` and the
+  `gemma4e_ops::key()` that composes a layer index with one, in
+  [`models/gemma4e/gemma4e_npu.hpp`](../include/models/gemma4e/gemma4e_npu.hpp).
+  A plugin includes that header and hooks the keys it wants.
+- **The binding of those names to dispatch sites**, inside the per-model engine
+  library. That is the only part a plugin author never sees.
+- **The plugin**, a standalone shared library loaded at run time.
+
+Loading is generic across models. *Declaring* operators is opt-in per model:
+`causal_lm::ops()` returns `nullptr` by default, and Gemma4 E2B/E4B is the only
+engine that declares any so far. A plugin loaded against any other model
+registers nothing.
+
+If `FLM_PLUGIN` is unset, no operator is overridden and behavior is unchanged.
+The engine builds its registry either way; a dispatch with no hook installed
+costs one null check.
+
+## A minimal plugin
+
+```cpp
+#include <memory>
+
+#include "flm_plugin.hpp"                   // op_override, plugin_context, FLM_PLUGIN
+#include "models/gemma4e/gemma4e_npu.hpp"   // gemma4e_ops::key, gemma4e_ops::op
+
+class my_dequant : public flm::op_override {
+public:
+    flm::op_result create_run(const flm::op_call& call) override {
+        // ...
+    }
+};
+
+void register_my_plugin(const flm::plugin_context& ctx) {
+    int layer = 0;
+    ctx.ops->override_op(gemma4e_ops::key(layer, gemma4e_ops::op::dequant_qkv),
+                         std::make_shared<my_dequant>());
+}
+
+FLM_PLUGIN(register_my_plugin)
+```
+
+It needs no engine source and no engine library to link against:
+
+```bash
+g++ -std=c++20 -fPIC -shared -O2 \
+    -mavx -mavx2 -mavx512f -mavx512dq -mavx512vl -mavx512bw -mfma \
+    -I<flm>/src/include -I/opt/xilinx/xrt/include \
+    -Wl,-Bsymbolic-functions \
+    my_plugin.cpp -o my_plugin.so
+```
+
+Neither flag group is optional. `typedef.hpp` has inline functions returning
+`__m256`/`__m512`, so compiling without the AVX flags changes their ABI relative
+to the engine. And `npu_app` and the classes around it are header only, so every
+engine library carries its own weak copy of their inline code;
+`-Wl,-Bsymbolic-functions` is what keeps the plugin's calls bound to its own.
+
+Then load it — `:`-separated (`;` on Windows), so several may load at once:
+
+```bash
+FLM_PLUGIN=/path/to/my_plugin.so flm serve gemma4-it:e2b
+```
+
 ## Overriding an operator
 
 A plugin is a shared library with one entry point. `FLM_PLUGIN` names the
@@ -41,16 +113,16 @@ void register_overrides(const flm::plugin_context& ctx) {
 FLM_PLUGIN(register_overrides)
 ```
 
-Operators are named. `iron_gemm` binds itself to each projection of each layer,
-and to the dequant steps that feed them:
+Operators are named by the model. `iron_gemm` binds itself to each projection of
+each layer, and to the dequant steps that feed them:
 
 ```cpp
-bound += ops.override_op(flm::op_key((int)layer, roles[r]), self);
+bound += ops.override_op(gemma4e_ops::key((int)layer, names[r]), self);
 
-for (std::string_view dq : { flm::role::dequant_qkv, flm::role::dequant_o,
-                             flm::role::dequant_gate, flm::role::dequant_up,
-                             flm::role::dequant_down }) {
-    ops.override_op(flm::op_key((int)layer, dq), self);
+for (std::string_view dq : { gemma4e_ops::op::dequant_qkv, gemma4e_ops::op::dequant_o,
+                             gemma4e_ops::op::dequant_gate, gemma4e_ops::op::dequant_up,
+                             gemma4e_ops::op::dequant_down }) {
+    ops.override_op(gemma4e_ops::key((int)layer, dq), self);
 }
 ```
 
@@ -158,7 +230,10 @@ What the engine keeps is the schedule: which operators exist, in what order they
 run, and which buffers they are given. A plugin changes what happens at a step,
 not the shape of the model.
 
-Operators are addressed by key — `layers.<i>.<role>`, with `*` matching a whole
-segment — and the set is declared by the engine, so `override_op` on an unknown
-key throws at registration rather than silently never firing. `list_ops()`
-returns it.
+Operators are addressed by key, with `*` matching a whole dot-separated segment.
+The key space is the model's own — Gemma4 spells it `layers.<i>.<operator>`, so
+`layers.*.mlp.up_proj` takes that projection on every layer — but nothing in the
+API requires layers, or any particular shape. The set is declared by the engine,
+so `override_op` on an unknown key throws at registration rather than silently
+never firing; the message lists every declared key, which is the quickest way to
+discover a model's vocabulary. `list_ops()` returns it.
