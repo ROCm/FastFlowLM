@@ -120,7 +120,6 @@ jobs:
         retention-days: 14
 
   build-HRX-portable:
-    if: false  # TODO: temporarily disabled, re-enable when ready
     runs-on: ubuntu-latest
     strategy:
       matrix:

@@ -11,6 +11,7 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -30,14 +31,24 @@
 /// \note A copy (or mapping) does not duplicate the underlying memory; it only maps the pointer.
 class bytes {
 protected:
+    // HRX engines (IRON) use shared_ptr so copies keep the BO mapped. Unique_ptr
+    // copies drop ownership and leave data_ dangling across the .so boundary.
+#if defined(FLM_USE_HRX)
+    std::shared_ptr<uint8_t[]> owned_data_;
+#else
     std::unique_ptr<uint8_t[]> owned_data_;
+#endif
     uint8_t* data_;
     size_t size_;
     bool is_owner_;
 #ifdef FLM_DEVICE_BUFFER
     bool is_bo_owner_;
     flm_rt::bo* bo_;
+#if defined(FLM_USE_HRX)
+    std::shared_ptr<flm_rt::bo> owned_bo_;
+#else
     std::unique_ptr<flm_rt::bo> owned_bo_;
+#endif
 #endif
 
 public:
@@ -52,11 +63,19 @@ public:
 
     /// \brief copy constructor
     /// \param other the other bytes
+#if defined(FLM_USE_HRX)
+    bytes(const bytes& other) : owned_data_(other.owned_data_), data_(other.data_), size_(other.size_), is_owner_(other.is_owner_)
+#ifdef FLM_DEVICE_BUFFER
+        , is_bo_owner_(other.is_bo_owner_), bo_(other.bo_), owned_bo_(other.owned_bo_)
+#endif
+    {}
+#else
     bytes(const bytes& other) : owned_data_(nullptr), data_(other.data_), size_(other.size_), is_owner_(false)
 #ifdef FLM_DEVICE_BUFFER
         , is_bo_owner_(false), bo_(other.bo_), owned_bo_(nullptr)
 #endif
     {}
+#endif
 
     /// \brief move constructor
     /// \param other the other bytes
@@ -86,7 +105,11 @@ public:
     {
         if (size > 0 && size < 8ull * 1024 * 1024 * 1024){
             try {
+#if defined(FLM_USE_HRX)
+                owned_data_ = std::shared_ptr<uint8_t[]>(new uint8_t[size]());
+#else
                 owned_data_ = std::make_unique<uint8_t[]>(size);
+#endif
             }
             catch (const std::bad_alloc& e) {
                 throw std::runtime_error(std::string("Failed to allocate bytes of size ") + std::to_string(size) + ": " + e.what());
@@ -128,10 +151,14 @@ public:
             throw std::runtime_error("Invalid size for bytes allocation");
         }
         size_t alignment = 1024 * 1024;
-        int padded_size = (size + alignment - 1) / alignment * alignment; // 1MB alignment
+        size_t padded_size = (size + alignment - 1) / alignment * alignment; // 1MB alignment
 
         try {
+#if defined(FLM_USE_HRX)
+            owned_bo_ = std::make_shared<flm_rt::ext::bo>(device, padded_size);
+#else
             owned_bo_ = std::make_unique<flm_rt::ext::bo>(device, padded_size);
+#endif
         }
         catch (const std::exception& e) {
             throw std::runtime_error(std::string("Failed to allocate flm_rt::ext::bo: ") + e.what());
@@ -169,6 +196,17 @@ public:
     /// \param other the other bytes
     bytes& operator=(const bytes& other) {
         if (this != &other) {
+#if defined(FLM_USE_HRX)
+            owned_data_ = other.owned_data_;
+            data_ = other.data_;
+            size_ = other.size_;
+            is_owner_ = other.is_owner_;
+#ifdef FLM_DEVICE_BUFFER
+            owned_bo_ = other.owned_bo_;
+            is_bo_owner_ = other.is_bo_owner_;
+            bo_ = other.bo_;
+#endif
+#else
             if (is_owner_){
                 owned_data_.reset();
             }
@@ -181,6 +219,7 @@ public:
             }
             is_bo_owner_ = false;
             bo_ = other.bo_;
+#endif
 #endif
         }
         return *this;
@@ -257,7 +296,11 @@ public:
             throw std::runtime_error("Cannot resize to zero size");
         }
         try {
+#if defined(FLM_USE_HRX)
+            owned_data_.reset(new uint8_t[new_size]());
+#else
             owned_data_.reset(new uint8_t[new_size]);
+#endif
         }
         catch (const std::bad_alloc& e) {
             throw std::runtime_error(std::string("Failed to allocate bytes of size ") + std::to_string(new_size) + ": " + e.what());
@@ -301,6 +344,8 @@ public:
     /// \brief is bo owner
     /// \return the is bo owner
     bool is_bo_owner() const { return is_bo_owner_; }
+
+    bool has_bo() const { return bo_ != nullptr; }
 
     /// \brief sync to device (host writes -> device)
 #if defined(FLM_USE_HRX)

@@ -61,6 +61,10 @@ endif()
 # and HRX-built .so/.dll/.lib never collide (see src/lib/xrt and src/lib/hrx).
 set(FLM_ENGINE_LIB_DIR "${CMAKE_SOURCE_DIR}/lib/${FLM_RUNTIME_NAME}")
 
+# The flash engine libs (qwen3vl_flash, gemma4e_flash) are always shipped in
+# src/lib/${FLM_RUNTIME_NAME} for every backend, so their model families are
+# always compiled in -- no probe/gate/macro needed.
+
 # ———————————————————————————————————————————————
 # NPU runtime discovery.
 #   HRX: consumed from its public CMake package via find_package(hrx).
@@ -403,22 +407,29 @@ if(MSVC)
     target_link_libraries(flm PUBLIC ${STATIC_LIBS})
 endif()
 
-# Link your custom libraries (these may still be DLLs if no static versions available)
-target_link_libraries(flm PUBLIC
+set(FLM_ENGINE_LINK_LIBS
     q4_npu_eXpress
     llama_npu
     qwen2_npu
     qwen2vl_npu
     qwen3_npu
     qwen3vl_npu
-    qwen3vl_flash
+)
+
+list(APPEND FLM_ENGINE_LINK_LIBS qwen3vl_flash)
+
+list(APPEND FLM_ENGINE_LINK_LIBS
     qwen3_5vl_npu
     qwen3_5_omni_npu
     qwen3_6_moe_npu
     gemma_npu
     gemma_text_npu
     gemma4e_npu
-    gemma4e_flash
+)
+
+list(APPEND FLM_ENGINE_LINK_LIBS gemma4e_flash)
+
+list(APPEND FLM_ENGINE_LINK_LIBS
     gemma4_12b_npu
     gpt_oss_npu
     whisper_npu
@@ -427,6 +438,11 @@ target_link_libraries(flm PUBLIC
     phi4_npu
     nanbeige_npu
     hunyuan_npu
+)
+
+# Link your custom libraries (these may still be DLLs if no static versions available)
+target_link_libraries(flm PUBLIC
+    ${FLM_ENGINE_LINK_LIBS}
     # flm's own code calls nothing in the four shared-runtime libs below -- the
     # engine .so above do -- so the linker's default --as-needed drops them from
     # DT_NEEDED entirely. The engines then have to find MHA/Dequant/... in some
