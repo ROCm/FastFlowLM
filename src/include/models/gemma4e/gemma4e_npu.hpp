@@ -40,6 +40,11 @@ inline constexpr std::string_view dequant_o    = "dequant.o";
 inline constexpr std::string_view dequant_gate = "dequant.gate";
 inline constexpr std::string_view dequant_up   = "dequant.up";
 inline constexpr std::string_view dequant_down = "dequant.down";
+
+/// \brief The fused decode step for one layer (attention and MLP together),
+///        one dispatch per token. The engine picks which per-type app serves
+///        a layer, as it already does for self_attn.core.
+inline constexpr std::string_view decode_layer = "decode.layer";
 }  // namespace op
 
 /// \brief Key of `name` on layer `layer`, which is this engine's dispatch site.
@@ -174,8 +179,11 @@ public:
     ///         mlp.{gate,up}_proj       (out, hidden_state, weights)
     ///         mlp.down_proj            (out, hid, down_weights)
     ///         dequant.{qkv,o,gate,up,down}  (dequantized_weights, quantized_weights)
-    ///       Decode does not go through these; layer.xclbin reads the quantized
-    ///       weights directly.
+    ///         decode.layer             (hidden_state_inout, proj_weights, rms_weights,
+    ///                                   rope_rms_weights, kv_cache)
+    ///       The engine batches every layer's run into one runlist per token by
+    ///       default. An override bound to decode.layer joins that batch, so a
+    ///       non-blocking call must return a deferred run rather than run eagerly.
     /// \note The weight buffer a projection receives is the engine's own dequant
     ///       output. Its layout is an implementation detail: an override is
     ///       expected to bring weights of its own and ignore that argument.

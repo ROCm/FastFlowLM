@@ -51,6 +51,14 @@ public:
 
     bool declined() const { return this->declined_; }
 
+    /// \brief Whether this holds a run, as opposed to already finished or declined.
+    /// \note For batching into an existing schedule (e.g. a runlist); an override
+    ///       author does not need this.
+    bool has_run() const { return this->run_.has_value(); }
+
+    /// \brief The wrapped run. Only valid when has_run() is true.
+    flm_rt::run& run() { return *this->run_; }
+
     void start() {
         if (this->run_.has_value()) this->run_->start();
     }
