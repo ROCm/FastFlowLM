@@ -29,48 +29,44 @@ FastFlowLM v1.0.5:
 ## What the mechanism consists of
 
 - **Common infrastructure**, public: [`flm_plugin.hpp`](../include/flm_plugin.hpp)
-  (plugin loading, `flm::plugin_context`, the `FLM_PLUGIN` macro),
-  [`npu_utils/op_override.hpp`](../include/npu_utils/op_override.hpp)
-  (`op_override`, `op_result`, `op_call`) and
-  [`npu_utils/op_registry.hpp`](../include/npu_utils/op_registry.hpp)
-  (`op_registry` and its key matching).
-- **Operator names**, per-model and public: each model's header names the
-  operators it dispatches — for Gemma4, `gemma4e_ops::op::*` and the
-  `gemma4e_ops::key()` that composes a layer index with one, in
+  (plugin loading, `flm::plugin_context`, the `FLM_PLUGIN` macro) and
+  [`npu_utils/hook_registry.hpp`](../include/npu_utils/hook_registry.hpp)
+  (`flm::hook_registry`, `flm::hook_result`).
+- **Operator names and signatures**, per-model and public: each model's header
+  names the operators it dispatches and the exact function signature each one
+  resolves to — for Gemma4, `gemma4e_ops::op::*` and the `gemma4e_ops::*_sig_t`
+  typedefs, in
   [`models/gemma4e/gemma4e_npu.hpp`](../include/models/gemma4e/gemma4e_npu.hpp).
-  A plugin includes that header and hooks the keys it wants.
-- **The binding of those names to dispatch sites**, inside the per-model engine
-  library. That is the only part a plugin author never sees.
+  A plugin includes that header and binds the names it wants.
+- **The resolving of those names at dispatch sites**, inside the per-model
+  engine library, in the engine's own constructor. That is the only part a
+  plugin author never sees.
 - **The plugin**, a standalone shared library loaded at run time.
 
-Loading is generic across models. *Declaring* operators is opt-in per model:
-`causal_lm::ops()` returns `nullptr` by default, and Gemma4 E2B/E4B is the only
-engine that declares any so far. A plugin loaded against any other model
-registers nothing.
+Loading is generic across models: `flm::plugin_context::npu` carries a
+`flm::hook_registry` (`npu->hooks`) that exists before any model engine does,
+so plugins load and bind names to it first, and each engine resolves whichever
+names it declares against that same registry when it is constructed. An
+engine that declares no operators is unaffected either way. Gemma4 E2B/E4B is
+the only engine that declares any so far.
 
-If `FLM_PLUGIN` is unset, no operator is overridden and behavior is unchanged.
-The engine builds its registry either way; a dispatch with no hook installed
-costs one null check.
+If `FLM_PLUGIN` is unset, no operator is overridden and behavior is unchanged:
+`hook_registry::resolve()` returns the engine's own default callable untouched
+when nothing was bound under that name.
 
 ## A minimal plugin
 
 ```cpp
-#include <memory>
-
-#include "flm_plugin.hpp"                   // op_override, plugin_context, FLM_PLUGIN
-#include "models/gemma4e/gemma4e_npu.hpp"   // gemma4e_ops::key, gemma4e_ops::op
-
-class my_dequant : public flm::op_override {
-public:
-    flm::op_result create_run(const flm::op_call& call) override {
-        // ...
-    }
-};
+#include "flm_plugin.hpp"                   // plugin_context, FLM_PLUGIN
+#include "models/gemma4e/gemma4e_npu.hpp"   // gemma4e_ops::op::*, *_sig_t
 
 void register_my_plugin(const flm::plugin_context& ctx) {
-    int layer = 0;
-    ctx.ops->override_op(gemma4e_ops::key(layer, gemma4e_ops::op::dequant_qkv),
-                         std::make_shared<my_dequant>());
+    ctx.npu->hooks.override_op<gemma4e_ops::dequant_sig_t>(
+        gemma4e_ops::op::dequant_qkv[0],  // e_gemma4e_swa_layer
+        [](bytes& dequantized, bytes& quantized, int64_t layer, int64_t padded) {
+            // ...
+            return flm::hook_result<ert_cmd_state>(ERT_CMD_STATE_COMPLETED);
+        });
 }
 
 FLM_PLUGIN(register_my_plugin)
@@ -101,54 +97,65 @@ FLM_PLUGIN=/path/to/my_plugin.so flm serve gemma4-it:e2b
 ## Overriding an operator
 
 A plugin is a shared library with one entry point. `FLM_PLUGIN` names the
-function the engine calls once the model exists and before its weights load:
+function the engine calls once the NPU device exists and before any model
+engine is constructed:
 
 ```cpp
 void register_overrides(const flm::plugin_context& ctx) {
-    auto hook = std::make_shared<iron_gemm_override>(ctx);
-    const size_t bound = hook->bind(*ctx.ops, hook);
+    auto state = std::make_shared<iron_gemm_state>(ctx);
+    if (!state->ready()) return;
+
+    flm::hook_registry& hooks = ctx.npu->hooks;
+    hooks.override_op<gemma4e_ops::proj_sig_t>(gemma4e_ops::op::q_swa_proj,
+        [state](bytes& out, bytes& in, bytes& w, int64_t layer, int64_t padded) {
+            return state->run_proj_sync(R_Q, out, in, w, layer, padded);
+        });
     ...
 }
 
 FLM_PLUGIN(register_overrides)
 ```
 
-Operators are named by the model. `iron_gemm` binds itself to each projection of
-each layer, and to the dequant steps that feed them:
+Operators are named by the model, one name per app: sliding-window and global
+attention run different kernels, so `iron_gemm` binds the same role to both
+their names rather than one name shared across both. `k`/`v` and the fused
+decode layer's `.async` names build a run to start and wait on later, so they
+resolve to a different signature (`ert_cmd_state` vs `xrt::run`) than the rest.
+
+An override is a callable matching the exact signature its name resolves to.
+It is handed the buffers the engine's own operator would have received, plus
+the layer index and the M or context length that call ran at, and returns a
+real result, `skip()` (nothing further for the caller to start or wait on), or
+`defer()` (fall through to the engine's own implementation):
 
 ```cpp
-bound += ops.override_op(gemma4e_ops::key((int)layer, names[r]), self);
-
-for (std::string_view dq : { gemma4e_ops::op::dequant_qkv, gemma4e_ops::op::dequant_o,
-                             gemma4e_ops::op::dequant_gate, gemma4e_ops::op::dequant_up,
-                             gemma4e_ops::op::dequant_down }) {
-    ops.override_op(gemma4e_ops::key((int)layer, dq), self);
-}
-```
-
-An override implements one method. It is handed the buffers the engine's own
-operator would have received, and runs whatever it likes:
-
-```cpp
-flm::op_result create_run(const flm::op_call& call) override {
-    ...
+flm::hook_result<ert_cmd_state> run_proj_sync(size_t r, bytes& out, bytes& in, bytes& weights,
+                                              int64_t layer_idx, int64_t padded_arg) {
+    const uint32_t padded = (uint32_t)padded_arg;
+    layer_entry& layer = this->layers_[(size_t)layer_idx];
+    if (!layer.served_m.count(padded) || !layer.slots[r].has_value()) {
+        return flm::hook_result<ert_cmd_state>::defer();
+    }
+    const slot& s = *layer.slots[r];
+    bytes& b = this->_weights(layer, r);
+    npu_app& app = this->apps_.at(shape_key{ padded, s.k, s.n, wants_gelu(r) });
     // IRON's argument order is A, B, C; the engine's is C, A, B.
-    app(*call.args[1], b, *call.args[0]);
-    return flm::op_result();
+    return app(in, b, out);
 }
 ```
 
-Returning `flm::op_result::decline()` instead hands the call back to the engine,
-per dispatch — which is how `iron_gemm` restricts itself to the shapes it has
-instruction streams for.
+`defer()` is how `iron_gemm` restricts itself to the shapes it has instruction
+streams for — every other layer or M falls back to the engine's own operator,
+per dispatch.
 
-Turning an operator *off* is the same mechanism with nothing in it. With offline
-dequant selected, the weights are already in place, so the dequant override
-returns having done nothing:
+Turning an operator *off* is the same mechanism with nothing in it. With
+offline dequant selected, the weights are already in place, so the dequant
+override defers immediately:
 
 ```cpp
-void _dequant(const flm::op_call& call, layer_entry& layer) {
-    if (this->mode_ != weight_mode::dequant) return;  // the weights are already there
+flm::hook_result<ert_cmd_state> run_dequant(dequant_matrix m, bytes& /*dequantized*/, bytes& quantized,
+                                            int64_t layer_idx, int64_t /*padded*/) {
+    if (this->mode_ != weight_mode::dequant) return flm::hook_result<ert_cmd_state>::defer();  // the weights are already there
     ...
 }
 ```
@@ -222,18 +229,19 @@ line per configuration on stdin.
 An override owns its dispatch completely. It registers its own xclbins through
 the `npu_xclbin_manager` it is handed, creates its own apps, loads its own
 instruction streams and allocates its own weights — all through public headers,
-so it is built against the public tree and needs no engine source. It may return
-a run for the caller to wait on, return having already done the work, or decline
-and let the engine proceed.
+so it is built against the public tree and needs no engine source. It may
+return a run for the caller to wait on, return having already done the work
+(`skip()`), or defer and let the engine proceed.
 
-What the engine keeps is the schedule: which operators exist, in what order they
-run, and which buffers they are given. A plugin changes what happens at a step,
-not the shape of the model.
+What the engine keeps is the schedule: which operators exist, in what order
+they run, and which buffers they are given. A plugin changes what happens at
+a step, not the shape of the model.
 
-Operators are addressed by key, with `*` matching a whole dot-separated segment.
-The key space is the model's own — Gemma4 spells it `layers.<i>.<operator>`, so
-`layers.*.mlp.up_proj` takes that projection on every layer — but nothing in the
-API requires layers, or any particular shape. The set is declared by the engine,
-so `override_op` on an unknown key throws at registration rather than silently
-never firing; the message lists every declared key, which is the quickest way to
-discover a model's vocabulary. `list_ops()` returns it.
+Operators are addressed by a plain name, one per app the engine dispatches —
+sliding-window and global attention are different names, since they are
+different kernels, not the same one distinguished by an argument. The set of
+names and their signatures is declared by the model's own public header;
+`override_op<Sig>` throws at bind time if a signature does not match what the
+engine later resolves under that name, and `hook_registry::check_all_resolved()`
+throws if a plugin bound a name the engine never resolved at all — both are
+the quickest way to find a typo.
