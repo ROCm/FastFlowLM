@@ -472,10 +472,31 @@ int main(int argc, char* argv[]) {
     // Parse command line arguments using Boost Program Options
     program_args_t parsed_args;
     if (!arg_utils::parse_options(argc, argv, parsed_args)) {
-        return 1; // Help was already printed by Boost Program Options
+        return 1;
     }
 
-    
+    if (parsed_args.command == "help") {
+        return 0;
+    }
+
+    if (parsed_args.command == "version") {
+        if (parsed_args.json_output) {
+            std::cout << "{ \"version\": \"" << __FLM_VERSION__ << "\" }" << std::endl;
+        } else {
+            std::cout << "FLM v" << __FLM_VERSION__ << std::endl;
+        }
+        return 0;
+    }
+
+    if (parsed_args.command == "port") {
+        if (parsed_args.json_output) {
+            std::cout << "{ \"port\": " << utils::get_server_port(parsed_args.port) << " }" << std::endl;
+        } else {
+            std::cout << "Server Port: " << utils::get_server_port(parsed_args.port) << std::endl;
+        }
+        return 0;
+    }
+
     // Get the command, model tag, and force flag
     std::string exe_dir = utils::get_executable_directory();
     std::string config_path;
@@ -577,24 +598,6 @@ int main(int argc, char* argv[]) {
 #endif
 
     // code for all commands:
-    
-    if (parsed_args.command == "version") {
-        if (parsed_args.json_output) {
-            std::cout << "{ \"version\": \"" << __FLM_VERSION__ << "\" }" << std::endl;
-        } else {
-            std::cout << "FLM v" << __FLM_VERSION__ << std::endl;
-        }
-        return 0;
-    }
-
-    if (parsed_args.command == "port"){
-        if (parsed_args.json_output) {
-            std::cout << "{ \"port\": " << utils::get_server_port(parsed_args.port) << " }" << std::endl;
-        } else {
-            std::cout << "Server Port: " << utils::get_server_port(parsed_args.port) << std::endl;
-        }
-        return 0;
-    }
 
     if (parsed_args.preemption){
         header_print("FLM", "Allowing high priority tasks to preempt FLM!");
