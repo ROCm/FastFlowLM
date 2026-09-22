@@ -59,7 +59,6 @@
 #include "aiebu/aiebu.h"
 
 #include "npu_instr_utils.hpp"
-#include "op_override.hpp"
 
 
 class npu_app_manager;
@@ -71,7 +70,7 @@ class npu_xclbin_manager;
 ///@param context the pointer to the context
 ///@param kernel_name the name of the kernel
 ///@see xrt::kernel, xrt::device
-class npu_app : public flm::overridable_app<npu_app> {
+class npu_app {
 public:
     // Exposed so a plugin can build XRT objects (xrt::kernel, xrt::bo,
     // xrt::run) directly, for dispatch mechanisms this class does not itself

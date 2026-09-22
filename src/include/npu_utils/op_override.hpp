@@ -2,18 +2,15 @@
 // implementation. An override owns everything it needs to run -- xclbin,
 // instruction streams, weights -- through the public npu_utils surface; the
 // framework only tells it which operation is being dispatched and hands it
-// the buffers the default implementation would have received.
+// the arguments the call site built for it.
 #pragma once
 
-#include <array>
-#include <cstddef>
-#include <memory>
+#include <cstdint>
 #include <optional>
 #include <span>
-#include <string>
 #include <string_view>
 #include <utility>
-#include <vector>
+#include <variant>
 
 #include "buffer.hpp"
 // The runtime alias flm_rt lives under a different name in the two trees this
@@ -26,27 +23,19 @@
 
 namespace flm {
 
-// An override is not obliged to be exactly one NPU dispatch, so its result
-// is one of three states: holds a run (the caller starts and waits on it),
-// empty (the override already finished the work itself), or declined (the
-// caller must run the default implementation instead).
+// Outcome of a hook's create_run(): defer to the default implementation,
+// skip it (the hook already did the work itself, or it genuinely does not
+// apply -- e.g. a dequant step whose weights are already in the right
+// form), or hand back a run for the caller to start and wait on, or add to
+// a runlist.
 class op_result {
 public:
-    op_result() : declined_(false) {}
-    explicit op_result(flm_rt::run run) : run_(std::move(run)), declined_(false) {}
+    static op_result defer() { return op_result(state::defer); }
+    static op_result skip() { return op_result(state::skip); }
+    explicit op_result(flm_rt::run run) : state_(state::run), run_(std::move(run)) {}
 
-    static op_result decline() {
-        op_result r;
-        r.declined_ = true;
-        return r;
-    }
-
-    bool declined() const { return this->declined_; }
-
-    // For batching into an existing schedule (e.g. a runlist); an override
-    // author does not need this.
-    bool has_run() const { return this->run_.has_value(); }
-
+    bool should_defer() const { return this->state_ == state::defer; }
+    bool has_run() const { return this->state_ == state::run; }
     flm_rt::run& run() { return *this->run_; }
 
     void start() {
@@ -59,124 +48,63 @@ public:
     }
 
 private:
+    enum class state { defer, skip, run };
+    explicit op_result(state s) : state_(s) {}
+
+    state state_;
     std::optional<flm_rt::run> run_;
-    bool declined_;
 };
 
-// Geometry of the sequence chunk a prefill dispatch is part of. Every
-// projection's M is `padded`; the engine refreshes this once per chunk,
-// before the first operation of that chunk runs.
-struct op_extent {
-    uint32_t padded = 0;      ///< rows dispatched, padded up to the engine's row granularity
-    uint32_t effective = 0;   ///< rows of `padded` that hold real tokens
-    uint32_t offset = 0;      ///< row at which this chunk's tokens begin
-};
+// One argument to a hook: a buffer, or a plain integer (a layer index,
+// a length, anything a specific operation's contract calls for).
+using op_arg = std::variant<bytes*, int64_t>;
 
-// One dispatch of a named model operation. `args` are the buffers the default
-// implementation receives, in the default's own order -- part of each
-// operation's documented contract, not normalised across operations. The
-// framework does not interpret them; an override may ignore them and use
-// weights it brought itself.
+// One dispatch of a named model operation, passed to a bound hook's
+// create_run(). `args` is exactly the operation's argument list -- how
+// many, in what order, and which are buffers versus integers is specific
+// to `name` and documented alongside it, the same way a plain function's
+// signature is documented. The framework does not interpret them.
 struct op_call {
-    std::string_view name;        ///< the operation's name, as the engine declared it
-    int index;                    ///< which of the engine's dispatch sites for that name
-    op_extent extent;             ///< geometry of the sequence chunk being processed
-    bool blocking;                ///< the caller waits on this dispatch and overlaps nothing with it
-    std::span<bytes* const> args;
+    std::string_view name;
+    bool blocking;    ///< the caller waits on this dispatch and overlaps nothing with it
+    std::span<const op_arg> args;
 };
 
 // User-supplied replacement for one or more model operations.
 class op_override {
 public:
     virtual ~op_override() = default;
-
-    // Return op_result::decline() to fall back to the default implementation
-    // for this call. When call.blocking is set, the caller does nothing until
-    // the work finishes, so an override may run it synchronously and return
-    // an empty op_result instead of materialising a run object.
     virtual op_result create_run(const op_call& call) = 0;
 };
 
-template <typename App>
-class app_index_ref;
-
-// Per-layer override table, mixed into the backend's npu_app. CRTP rather
-// than virtual dispatch: npu_app's call operators are variadic templates
-// over buffer types, which cannot be virtual, and the unoverridden path
-// must stay a single predictable branch.
-template <typename App>
-class overridable_app {
-public:
-    // What an index means is the engine's business -- a layer, a block, a
-    // position in a flattened nest. All this needs is that it be dense.
-    app_index_ref<App> at(int index) { return app_index_ref<App>(static_cast<App*>(this), index); }
-
-    const std::string& op_name() const { return this->op_name_; }
-
-    // Called by op_registry; not part of the override-author surface.
-    void _declare_op(std::string name, int index_count, const op_extent* extent) {
-        this->op_name_ = std::move(name);
-        this->op_overrides_.resize(static_cast<size_t>(index_count) + 1, nullptr);
-        this->op_extent_ = extent;
+// Runs `call` through `hook` if bound, else through `default_call` (a
+// niladic callable the call site writes, e.g. `[&]{ return app(x, w); }`,
+// covering whatever arguments the default implementation actually takes --
+// not necessarily the same ones `call.args` carries for the hook).
+// `hook` is a pointer op_registry::resolve() already produced; resolving
+// by name happens once, not on this path.
+template <typename DefaultCall>
+ert_cmd_state dispatch(op_override* hook, const op_call& call, DefaultCall&& default_call) {
+    if (hook != nullptr) {
+        op_result result = hook->create_run(call);
+        if (!result.should_defer()) {
+            result.start();
+            return result.wait();
+        }
     }
+    return default_call();
+}
 
-    // Called by op_registry; not part of the override-author surface.
-    void _set_op_override(int index, op_override* hook) {
-        op_override*& slot = this->op_overrides_.at(static_cast<size_t>(index + 1));
-        this->op_override_count_ += (hook != nullptr) - (slot != nullptr);
-        slot = hook;
+// Non-blocking counterpart: returns a run from `hook` if it accepted the
+// call, else one freshly created from `default_call`. A hook bound to a
+// runlist-eligible site must return a run here, never op_result::skip().
+template <typename DefaultCreateRun>
+op_result dispatch_async(op_override* hook, const op_call& call, DefaultCreateRun&& default_create_run) {
+    if (hook != nullptr) {
+        op_result result = hook->create_run(call);
+        if (!result.should_defer()) return result;
     }
-
-    const op_extent* _op_extent() const { return this->op_extent_; }
-
-    op_override* _op_override(int index) const {
-        if (this->op_override_count_ == 0) return nullptr;
-        const size_t i = static_cast<size_t>(index + 1);
-        if (i >= this->op_overrides_.size()) return nullptr;
-        return this->op_overrides_[i];
-    }
-
-protected:
-    std::string op_name_;
-    std::vector<op_override*> op_overrides_;  ///< indexed by index + 1, so -1 addresses a lone site
-    int op_override_count_ = 0;
-    const op_extent* op_extent_ = nullptr;    ///< owned by the registry, refreshed once per chunk
-};
-
-// An npu_app bound to one dispatch site, as returned by npu_app::at().
-template <typename App>
-class app_index_ref {
-public:
-    app_index_ref(App* app, int index) : app_(app), index_(index) {}
-
-    template <typename... BoArgs>
-    ert_cmd_state operator()(BoArgs&&... args) {
-        op_result result = this->_dispatch(true, std::forward<BoArgs>(args)...);
-        if (result.declined()) return (*this->app_)(std::forward<BoArgs>(args)...);
-        result.start();
-        return result.wait();
-    }
-
-    template <typename... BoArgs>
-    op_result create_run(BoArgs&&... args) {
-        op_result result = this->_dispatch(false, std::forward<BoArgs>(args)...);
-        if (result.declined()) return op_result(this->app_->create_run(std::forward<BoArgs>(args)...));
-        return result;
-    }
-
-private:
-    template <typename... BoArgs>
-    op_result _dispatch(bool blocking, BoArgs&&... args) {
-        op_override* hook = this->app_->_op_override(this->index_);
-        if (hook == nullptr) return op_result::decline();
-        std::array<bytes*, sizeof...(BoArgs)> bo_args = { static_cast<bytes*>(&args)... };
-        op_call call{ this->app_->op_name(), this->index_, *this->app_->_op_extent(),
-                      blocking, std::span<bytes* const>(bo_args) };
-        return hook->create_run(call);
-    }
-
-    App* app_;
-    int index_;
-};
+    return op_result(default_create_run());
+}
 
 }  // namespace flm

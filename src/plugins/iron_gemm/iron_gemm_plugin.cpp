@@ -57,6 +57,13 @@ constexpr std::array<std::string_view, 7> names = {
 
 constexpr size_t R_Q = 0, R_K = 1, R_V = 2, R_O = 3, R_GATE = 4, R_UP = 5, R_DOWN = 6;
 
+// Every call's trailing two arguments are the layer index and the M this
+// call ran at (dequant has neither engine concept, but carries them anyway
+// for consistency with the projections whose shape they gate).
+inline int64_t layer_of(const flm::op_call& call) { return std::get<int64_t>(call.args[call.args.size() - 2]); }
+inline uint32_t padded_of(const flm::op_call& call) { return (uint32_t)std::get<int64_t>(call.args.back()); }
+inline bytes& buf(const flm::op_call& call, size_t i) { return *std::get<bytes*>(call.args[i]); }
+
 // Whether a role's weight matrix has the hidden size on its K side.
 constexpr bool k_is_hidden(size_t r) { return r != R_O && r != R_DOWN; }
 
@@ -205,52 +212,44 @@ public:
         else { this->_create_apps(); this->_load_resident(); }
     }
 
-    // Bind every projection the plugin can serve, and the dequant steps that
-    // feed them. A layer is taken whole or not at all: a layer split between
-    // two xclbins pays a context switch at every crossing, which costs more
-    // than the operators save. The same hook takes the layer's dequant steps,
-    // because the projections read what they produce.
-    size_t bind(flm::op_registry& ops, std::shared_ptr<flm::op_override> self) const {
-        size_t bound = 0;
-        for (size_t layer = 0; layer < this->layers_.size(); layer++) {
-            if (!this->_active(this->layers_[layer])) continue;
-            for (size_t r = 0; r < names.size(); r++) {
-                if (!this->layers_[layer].slots[r].has_value()) continue;
-                bound += ops.override_op(gemma4e_ops::key((int)layer, names[r]), self);
-            }
-            for (std::string_view dq : { gemma4e_ops::op::dequant_qkv, gemma4e_ops::op::dequant_o,
-                                         gemma4e_ops::op::dequant_gate, gemma4e_ops::op::dequant_up,
-                                         gemma4e_ops::op::dequant_down }) {
-                ops.override_op(gemma4e_ops::key((int)layer, dq), self);
-            }
+    // Binds every projection and dequant step this plugin serves, once per
+    // name -- every layer's calls arrive at the same hook, telling layers
+    // apart via the layer index each call carries. create_run() declines a
+    // layer/shape combination it doesn't cover.
+    void bind(flm::op_registry& ops, std::shared_ptr<flm::op_override> self) const {
+        for (std::string_view name : names) ops.override_op(name, self);
+        for (std::string_view name : { gemma4e_ops::op::dequant_qkv, gemma4e_ops::op::dequant_o,
+                                       gemma4e_ops::op::dequant_gate, gemma4e_ops::op::dequant_up,
+                                       gemma4e_ops::op::dequant_down }) {
+            ops.override_op(name, self);
         }
-        return bound;
     }
 
     flm::op_result create_run(const flm::op_call& call) override {
-        layer_entry& layer = this->layers_[call.index];
+        const int64_t layer_idx = layer_of(call);
+        layer_entry& layer = this->layers_[(size_t)layer_idx];
         const bool serves = (this->mode_ == weight_mode::bf16)
                                 ? layer.any_m
-                                : layer.served_m.count(call.extent.padded) != 0;
+                                : layer.served_m.count(padded_of(call)) != 0;
 
         if (call.name.rfind("dequant.", 0) == 0) {
-            if (!serves) return flm::op_result::decline();
-            this->_dequant(call, layer);
-            return flm::op_result();
+            if (!serves) return flm::op_result::defer();
+            this->_dequant(call, layer, (int)layer_idx);
+            return flm::op_result::skip();
         }
-        if (!serves) return flm::op_result::decline();
+        if (!serves) return flm::op_result::defer();
         const size_t r = this->_name_index(call.name);
-        if (r == names.size() || !layer.slots[r].has_value()) return flm::op_result::decline();
+        if (r == names.size() || !layer.slots[r].has_value()) return flm::op_result::defer();
         const slot& s = *layer.slots[r];
         bytes& b = this->_weights(layer, r);
         if (this->mode_ == weight_mode::bf16) return this->_run_mm(call, s, r, b);
-        npu_app& app = this->apps_.at(shape_key{ call.extent.padded, s.k, s.n, wants_gelu(r) });
+        npu_app& app = this->apps_.at(shape_key{ padded_of(call), s.k, s.n, wants_gelu(r) });
         // IRON's argument order is A, B, C; the engine's is C, A, B.
         if (call.blocking) {
-            app(*call.args[1], b, *call.args[0]);
-            return flm::op_result();
+            app(buf(call, 1), b, buf(call, 0));
+            return flm::op_result::skip();
         }
-        return flm::op_result(app.create_run(*call.args[1], b, *call.args[0]));
+        return flm::op_result(app.create_run(buf(call, 1), b, buf(call, 0)));
     }
 
     bool ready() const {
@@ -303,18 +302,19 @@ private:
     flm::op_result _run_mm(const flm::op_call& call, const slot& s, size_t r, bytes& b) {
         const auto key = std::make_tuple(s.k, s.n, wants_gelu(r));
         mm_app& ma = this->mm_apps_[key];
-        if (ma.m != call.extent.padded) {
+        const uint32_t padded = padded_of(call);
+        if (ma.m != padded) {
             if (ma.m == 0) ma.app = this->mm_mgr_->create_app();
-            this->mm_gemm_->generate_seq(ma.app.seq(), call.extent.padded, s.k, s.n, 0, false,
+            this->mm_gemm_->generate_seq(ma.app.seq(), padded, s.k, s.n, 0, false,
                                          wants_gelu(r) ? Gemm::GeLU : Gemm::NO_Activation, 0);
-            ma.m = call.extent.padded;
+            ma.m = padded;
         }
         // mm's argument order is the engine's own: C, A, B.
         if (call.blocking) {
-            ma.app(*call.args[0], *call.args[1], b);
-            return flm::op_result();
+            ma.app(buf(call, 0), buf(call, 1), b);
+            return flm::op_result::skip();
         }
-        return flm::op_result(ma.app.create_run(*call.args[0], *call.args[1], b));
+        return flm::op_result(ma.app.create_run(buf(call, 0), buf(call, 1), b));
     }
 
     bool _active(const layer_entry& l) const { return !l.served_m.empty() || l.any_m; }
@@ -383,7 +383,7 @@ private:
         return 1;
     }
 
-    void _dequant(const flm::op_call& call, layer_entry& layer) {
+    void _dequant(const flm::op_call& call, layer_entry& layer, int layer_idx) {
         if (this->mode_ != weight_mode::dequant) return;  // the weights are already there
         if (call.name == gemma4e_ops::op::dequant_qkv && layer.qkv_n != 0) {
             // q, k and v are adjacent out-features, so one dispatch at their
@@ -391,7 +391,7 @@ private:
             const slot& q = *layer.slots[R_Q];
             this->_run_one(call, layer, R_Q, q.k, layer.qkv_n, q.offset);
             if (this->verify_) {
-                for (size_t r : { R_Q, R_K, R_V }) this->_verify(call.index, r, layer);
+                for (size_t r : { R_Q, R_K, R_V }) this->_verify(layer_idx, r, layer);
             }
             return;
         }
@@ -403,14 +403,14 @@ private:
             if (layer.skip && (r == R_K || r == R_V)) continue;
             const slot& s = *layer.slots[r];
             this->_run_one(call, layer, r, s.k, s.n, s.offset);
-            if (this->verify_) this->_verify(call.index, r, layer);
+            if (this->verify_) this->_verify(layer_idx, r, layer);
         }
     }
 
     void _run_one(const flm::op_call& call, layer_entry& layer, size_t r,
                   uint32_t k, uint32_t n, size_t offset) {
         if (!layer.views[r].has_value()) {
-            layer.views[r].emplace(call.args[1]->bo(), this->dequant_.reads(k, n), offset);
+            layer.views[r].emplace(buf(call, 1).bo(), this->dequant_.reads(k, n), offset);
         }
         buffer<u8> qw(*layer.views[r]);
         this->dequant_.run(k, n, qw, this->staging_[r]);
@@ -713,12 +713,8 @@ void register_overrides(const flm::plugin_context& ctx) {
         header_print("warning", "FLMGEMM plugin idle: artifacts missing");
         return;
     }
-    const size_t bound = hook->bind(*ctx.ops, hook);
-    if (bound == 0) {
-        header_print("warning", "FLMGEMM plugin idle: no layer fully covered");
-        return;
-    }
-    header_print_g("info", "FLMGEMM serving " + std::to_string(bound) + " projections");
+    hook->bind(*ctx.ops, hook);
+    header_print_g("info", "FLMGEMM active");
 }
 
 }  // namespace

@@ -15,7 +15,7 @@
 ///   };
 ///
 ///   static void register_overrides(const flm::plugin_context& ctx) {
-///       ctx.ops->override_op("layers.*.mlp.up_proj", std::make_shared<my_gemm>(*ctx.npu));
+///       ctx.ops->override_op("mlp.up_proj", std::make_shared<my_gemm>(*ctx.npu));
 ///   }
 ///   FLM_PLUGIN(register_overrides)
 /// \endcode

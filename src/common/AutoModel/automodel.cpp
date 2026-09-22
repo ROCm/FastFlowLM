@@ -21,6 +21,7 @@ void AutoModel::_load_operator_plugins() {
         xclbin_path.c_str(),
     };
     flm::load_plugins_from_env(ctx);
+    this->lm_engine->resolve_overrides();
 }
 
 

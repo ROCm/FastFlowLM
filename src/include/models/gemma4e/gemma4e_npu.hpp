@@ -54,16 +54,6 @@ inline constexpr std::string_view lm_head = "lm_head";
 inline constexpr std::string_view audio_conv1d = "audio.conv1d";
 }  // namespace op
 
-// Key of `name` on layer `layer`, which is this engine's dispatch site.
-inline std::string key(int layer, std::string_view name) {
-    return "layers." + std::to_string(layer) + "." + std::string(name);
-}
-
-// Key of `name` on audio layer `layer`, the audio encoder's dispatch site.
-inline std::string audio_key(int layer, std::string_view name) {
-    return "audio.layers." + std::to_string(layer) + "." + std::string(name);
-}
-
 }  // namespace gemma4e_ops
 
 // some helper functions for convenience
@@ -182,27 +172,27 @@ public:
     int checkpoint() override;
     int restore() override;
 
-    // The operations a plugin may override. Keys are gemma4e_ops::key(layer, name)
-    // for every layer and each name in gemma4e_ops::op, args in the order given:
-    //   self_attn.{q,k,v}_proj   (out, hidden_state, qkv_weights)
-    //   self_attn.o_proj         (out, attn_out, o_weights)
-    //   self_attn.core           (out, q, kv_cache)
-    //   mlp.{gate,up}_proj       (out, hidden_state, weights)
-    //   mlp.down_proj            (out, hid, down_weights)
-    //   dequant.{qkv,o,gate,up,down}  (dequantized_weights, quantized_weights)
+    // A name in gemma4e_ops::op covers every layer; op_call::args is the
+    // buffers below, in order, then trailing int64 scalars:
+    //   self_attn.{q,k,v}_proj   (out, hidden_state, qkv_weights, layer, padded)
+    //   self_attn.o_proj         (out, attn_out, o_weights, layer, padded)
+    //   self_attn.core           (out, q, kv_cache, layer, padded)
+    //   mlp.{gate,up}_proj       (out, hidden_state, weights, layer, padded)
+    //   mlp.down_proj            (out, hid, down_weights, layer, padded)
+    //   dequant.{qkv,o,gate,up,down}  (dequantized_weights, quantized_weights, layer, padded)
     //   decode.layer             (hidden_state_inout, proj_weights, rms_weights,
-    //                             rope_rms_weights, kv_cache)
+    //                             rope_rms_weights, kv_cache, layer, context_len)
     //   lm_head                  (logits, lm_head_weights, hidden_state)
-    // The audio encoder's operations are keyed by gemma4e_ops::audio_key instead:
-    //   audio.conv1d             (conv1d_output, conv1d_input, conv1d_weights)
-    //
-    // The engine batches every layer's run into one runlist per token by
-    // default; an override bound to decode.layer or lm_head joins that batch,
-    // so a non-blocking call must return a deferred run rather than run eagerly.
-    // The weight buffer a projection receives is the engine's own dequant
-    // output, an implementation detail -- an override brings weights of its
-    // own and ignores that argument.
+    //   audio.conv1d             (conv1d_output, conv1d_input, conv1d_weights, layer)
+    // `padded` is the M every projection in this call ran at (prefill chunk
+    // size or engine row granularity). The engine batches every layer's run
+    // into one runlist per token by default; a hook bound to decode.layer or
+    // lm_head joins that batch, so a non-blocking call must return a
+    // deferred run rather than run eagerly. The weight buffer a projection
+    // receives is the engine's own dequant output, an implementation detail
+    // -- a hook brings weights of its own and ignores that argument.
     flm::op_registry* ops() override;
+    void resolve_overrides() override;
 
     // parameters for vision preprocessing in Gemma4e
     unsigned int GEMMA4E_VISION_MAX_POSITION_EMBEDDINGS;
