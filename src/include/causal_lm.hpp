@@ -11,26 +11,11 @@
 #include "utils/utils.hpp"
 #include "buffer.hpp"
 
-class npu_app;
-namespace flm {
-    class op_registry;
-}
-
 /// \brief causal_lm class
 class causal_lm {
 public:
     causal_lm(){}
     virtual ~causal_lm(){}
-
-    /// \brief The operations of this engine that a plugin may override
-    /// \return nullptr if the engine declares none
-    virtual flm::op_registry* ops() { return nullptr; }
-
-    // Reads back which operations a plugin bound, once every plugin has
-    // registered (see flm_plugin.hpp) and before any weight is touched. A
-    // model overriding ops() should override this too, to resolve each
-    // declared name once rather than on every dispatch.
-    virtual void resolve_overrides() {}
 
     /// \brief forward the causal_lm
     /// \param ids the ids

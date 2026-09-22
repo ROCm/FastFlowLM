@@ -18,7 +18,11 @@ void Gemma3_Text_Only::load_model(std::string model_path, json model_info, int d
     this->q4nx = std::make_unique<Q4NX>(this->model_path);
     // model_type == gemma_text_only
     this->lm_engine = std::make_unique<gemma_text_npu>(*this->lm_config, this->npu.get(), this->MAX_L);
-    this->_load_engine_weights();
+
+    this->lm_engine->load_weights(*this->q4nx);
+
+    //free the q4nx
+    this->q4nx.reset();
     this->lm_engine->clear_context();
     this->setup_tokenizer(model_path);
     this->sampler.reset();

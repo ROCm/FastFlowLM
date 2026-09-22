@@ -24,25 +24,67 @@
 // layers, or a nest of them, and names its own operations.
 namespace gemma4e_ops {
 
+// One shape per call-site convention. A hook always returns
+// flm::hook_result<R>: a real result, skip() (the operation already
+// happened, nothing further to do), or defer() (run the engine's own
+// implementation). R is ert_cmd_state for a blocking call site, xrt::run
+// for one that builds a run to start/wait later.
+using proj_sig_t = flm::hook_result<ert_cmd_state>(bytes& out, bytes& in, bytes& weights, int64_t layer, int64_t padded);
+using proj_async_sig_t = flm::hook_result<xrt::run>(bytes& out, bytes& in, bytes& weights, int64_t layer, int64_t padded);
+using attn_core_sig_t = flm::hook_result<ert_cmd_state>(bytes& out, bytes& q, bytes& kv_cache, int64_t layer, int64_t padded);
+using dequant_sig_t = flm::hook_result<ert_cmd_state>(bytes& dequantized, bytes& quantized, int64_t layer, int64_t padded);
+using decode_layer_sig_t = flm::hook_result<ert_cmd_state>(bytes& hidden_state_inout, bytes& proj_weights,
+    bytes& rms_weights, bytes& rope_rms_weights, bytes& kv_cache, int64_t layer, int64_t context_len);
+using decode_layer_async_sig_t = flm::hook_result<xrt::run>(bytes& hidden_state_inout, bytes& proj_weights,
+    bytes& rms_weights, bytes& rope_rms_weights, bytes& kv_cache, int64_t layer, int64_t context_len);
+using lm_head_sig_t = flm::hook_result<xrt::run>(bytes& logits, bytes& lm_head_weights, bytes& hidden_state);
+using audio_conv1d_sig_t = flm::hook_result<ert_cmd_state>(bytes& out, bytes& in, bytes& weights, int64_t layer);
+
+// Every operation, one name and one typedef each: sliding-window and global
+// attention run different kernels, and a skip layer's mlp is a different
+// (double-wide) sequence, so each gets its own rather than sharing one
+// distinguished by argument. decode.layer additionally has a plain and an
+// ".async" name, since the engine dispatches it both ways depending on
+// whether NPU preemption is enabled.
 namespace op {
-// q/k/v/o projections and self-attention core: one app for sliding-window
-// layers, one for global-attention layers -- different kernels, not a
-// parameter of the same one. Index with is_swa_layer(type) ? 0 : 1.
-inline constexpr std::string_view q_proj[2]    = { "self_attn.q_proj.swa",    "self_attn.q_proj.global" };
-inline constexpr std::string_view k_proj[2]    = { "self_attn.k_proj.swa",    "self_attn.k_proj.global" };
-inline constexpr std::string_view v_proj[2]    = { "self_attn.v_proj.swa",    "self_attn.v_proj.global" };
-inline constexpr std::string_view o_proj[2]    = { "self_attn.o_proj.swa",    "self_attn.o_proj.global" };
-inline constexpr std::string_view attn_core[2] = { "self_attn.core.swa",      "self_attn.core.global" };
+using q_swa_proj_func_t = proj_sig_t;
+using q_global_proj_func_t = proj_sig_t;
+using k_swa_proj_func_t = proj_async_sig_t;
+using k_global_proj_func_t = proj_async_sig_t;
+using v_swa_proj_func_t = proj_async_sig_t;
+using v_global_proj_func_t = proj_async_sig_t;
+using o_swa_proj_func_t = proj_sig_t;
+using o_global_proj_func_t = proj_sig_t;
+using swa_attn_core_func_t = attn_core_sig_t;
+using global_attn_core_func_t = attn_core_sig_t;
+inline constexpr std::string_view q_swa_proj = "self_attn.q_proj.swa";
+inline constexpr std::string_view q_global_proj = "self_attn.q_proj.global";
+inline constexpr std::string_view k_swa_proj = "self_attn.k_proj.swa";
+inline constexpr std::string_view k_global_proj = "self_attn.k_proj.global";
+inline constexpr std::string_view v_swa_proj = "self_attn.v_proj.swa";
+inline constexpr std::string_view v_global_proj = "self_attn.v_proj.global";
+inline constexpr std::string_view o_swa_proj = "self_attn.o_proj.swa";
+inline constexpr std::string_view o_global_proj = "self_attn.o_proj.global";
+inline constexpr std::string_view swa_attn_core = "self_attn.core.swa";
+inline constexpr std::string_view global_attn_core = "self_attn.core.global";
 
-// mlp projections: a skip layer runs a double-wide mlp, a different
-// sequence over the same buffers. Index with is_skip_layer(type) ? 1 : 0.
-inline constexpr std::string_view gate_proj[2] = { "mlp.gate_proj", "mlp.gate_proj.skip" };
-inline constexpr std::string_view up_proj[2]   = { "mlp.up_proj",   "mlp.up_proj.skip" };
-inline constexpr std::string_view down_proj[2] = { "mlp.down_proj", "mlp.down_proj.skip" };
+using gate_proj_func_t = proj_sig_t;
+using gate_skip_proj_func_t = proj_sig_t;
+using up_proj_func_t = proj_sig_t;
+using up_skip_proj_func_t = proj_sig_t;
+using down_proj_func_t = proj_sig_t;
+using down_skip_proj_func_t = proj_sig_t;
+inline constexpr std::string_view gate_proj = "mlp.gate_proj";
+inline constexpr std::string_view gate_skip_proj = "mlp.gate_proj.skip";
+inline constexpr std::string_view up_proj = "mlp.up_proj";
+inline constexpr std::string_view up_skip_proj = "mlp.up_proj.skip";
+inline constexpr std::string_view down_proj = "mlp.down_proj";
+inline constexpr std::string_view down_skip_proj = "mlp.down_proj.skip";
 
-// dequant and the fused decode layer: one app per gemma4e_layer_type_t.
-// Index with int(type) (e_gemma4e_swa_layer=0, e_gemma4e_global_layer=1,
-// e_gemma4e_swa_layer_skip=2, e_gemma4e_global_layer_skip=3).
+// One dequant call per gemma4e_layer_type_t, matching the engine's own
+// apps[4][matrix] table. Index with int(type) (e_gemma4e_swa_layer=0,
+// e_gemma4e_global_layer=1, e_gemma4e_swa_layer_skip=2, e_gemma4e_global_layer_skip=3).
+using dequant_func_t = dequant_sig_t;
 inline constexpr std::string_view dequant_qkv[4]  = { "dequant.qkv.swa",  "dequant.qkv.global",
                                                       "dequant.qkv.swa_skip",  "dequant.qkv.global_skip" };
 inline constexpr std::string_view dequant_o[4]    = { "dequant.o.swa",    "dequant.o.global",
@@ -53,15 +95,33 @@ inline constexpr std::string_view dequant_up[4]   = { "dequant.up.swa",   "dequa
                                                       "dequant.up.swa_skip",   "dequant.up.global_skip" };
 inline constexpr std::string_view dequant_down[4] = { "dequant.down.swa", "dequant.down.global",
                                                       "dequant.down.swa_skip", "dequant.down.global_skip" };
-inline constexpr std::string_view decode_layer[4] = { "decode.layer.swa", "decode.layer.global",
-                                                      "decode.layer.swa_skip", "decode.layer.global_skip" };
 
-// One dispatch site each, so neither needs a layer-type index.
+using swa_layer_func_t = decode_layer_sig_t;
+using global_layer_func_t = decode_layer_sig_t;
+using swa_skip_layer_func_t = decode_layer_sig_t;
+using global_skip_layer_func_t = decode_layer_sig_t;
+using swa_layer_async_func_t = decode_layer_async_sig_t;
+using global_layer_async_func_t = decode_layer_async_sig_t;
+using swa_skip_layer_async_func_t = decode_layer_async_sig_t;
+using global_skip_layer_async_func_t = decode_layer_async_sig_t;
+inline constexpr std::string_view swa_layer = "decode.layer.swa";
+inline constexpr std::string_view global_layer = "decode.layer.global";
+inline constexpr std::string_view swa_skip_layer = "decode.layer.swa_skip";
+inline constexpr std::string_view global_skip_layer = "decode.layer.global_skip";
+inline constexpr std::string_view swa_layer_async = "decode.layer.swa.async";
+inline constexpr std::string_view global_layer_async = "decode.layer.global.async";
+inline constexpr std::string_view swa_skip_layer_async = "decode.layer.swa_skip.async";
+inline constexpr std::string_view global_skip_layer_async = "decode.layer.global_skip.async";
+
+using lm_head_func_t = lm_head_sig_t;
 inline constexpr std::string_view lm_head = "lm_head";
+
+using audio_conv1d_func_t = audio_conv1d_sig_t;
 inline constexpr std::string_view audio_conv1d = "audio.conv1d";
 }  // namespace op
 
 }  // namespace gemma4e_ops
+
 
 // some helper functions for convenience
 constexpr int GEMMA4E_IS_GLOBAL_MASK = 0x00000001;
@@ -178,30 +238,6 @@ public:
 
     int checkpoint() override;
     int restore() override;
-
-    // Each name in gemma4e_ops::op is one dispatch point (one app, in the
-    // engine's own sense: sliding-window and global attention run different
-    // kernels, so they get different names, not a shared one distinguished
-    // by argument). Every name still covers many layers, told apart by the
-    // layer index each call carries. op_call::args is the buffers below,
-    // in order, then trailing int64 scalars:
-    //   self_attn.{q,k,v,o}_proj (out, hidden_state or attn_out, weights, layer, padded)
-    //   self_attn.core           (out, q, kv_cache, layer, padded)
-    //   mlp.{gate,up,down}_proj  (out, hidden_state or hid, weights, layer, padded)
-    //   dequant.{qkv,o,gate,up,down}  (dequantized_weights, quantized_weights, layer, padded)
-    //   decode.layer             (hidden_state_inout, proj_weights, rms_weights,
-    //                             rope_rms_weights, kv_cache, layer, context_len)
-    //   lm_head                  (logits, lm_head_weights, hidden_state)
-    //   audio.conv1d             (conv1d_output, conv1d_input, conv1d_weights, layer)
-    // `padded` is the M every projection in this call ran at (prefill chunk
-    // size or engine row granularity). The engine batches every layer's run
-    // into one runlist per token by default; a hook bound to decode.layer or
-    // lm_head joins that batch, so a non-blocking call must return a
-    // deferred run rather than run eagerly. The weight buffer a projection
-    // receives is the engine's own dequant output, an implementation detail
-    // -- a hook brings weights of its own and ignores that argument.
-    flm::op_registry* ops() override;
-    void resolve_overrides() override;
 
     // parameters for vision preprocessing in Gemma4e
     unsigned int GEMMA4E_VISION_MAX_POSITION_EMBEDDINGS;

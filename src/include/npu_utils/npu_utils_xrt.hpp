@@ -59,6 +59,7 @@
 #include "aiebu/aiebu.h"
 
 #include "npu_instr_utils.hpp"
+#include "hook_registry.hpp"
 
 
 class npu_app_manager;
@@ -552,7 +553,11 @@ private:
     npu_device npu_gen;
 public:
     constexpr static int max_xclbins = 16; // This is hard constraint from the XRT driver
-    
+
+    // A plugin binds overrides here (see flm_plugin.hpp); the engine resolves
+    // them in its own constructor.
+    flm::hook_registry hooks;
+
     ///@brief Constructor, this shall not invoke by user, it shall only be invoked by main
     ///@param device the npu device
     ///@param device_id the device id

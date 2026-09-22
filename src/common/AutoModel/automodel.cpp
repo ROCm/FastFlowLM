@@ -9,29 +9,6 @@
 #include "flm_plugin.hpp"
 
 
-void AutoModel::_load_operator_plugins() {
-    flm::op_registry* ops = this->lm_engine ? this->lm_engine->ops() : nullptr;
-    if (ops == nullptr) return;
-    const std::string xclbin_path = utils::path_join(
-        this->lm_config->exec_path, "xclbins", this->lm_config->model_name);
-    flm::plugin_context ctx{
-        ops,
-        this->npu.get(),
-        this->model_path.c_str(),
-        xclbin_path.c_str(),
-    };
-    flm::load_plugins_from_env(ctx);
-    this->lm_engine->resolve_overrides();
-}
-
-
-void AutoModel::_load_engine_weights() {
-    this->_load_operator_plugins();
-    this->lm_engine->load_weights(*this->q4nx);
-    this->q4nx.reset();
-}
-
-
 AutoModel::AutoModel(flm_rt::device* npu_device_inst, std::string current_model) {
     this->npu_device_inst = npu_device_inst;
     this->current_model = current_model;
@@ -162,6 +139,11 @@ void AutoModel::_shared_load_model(std::string model_path, json model_info, int 
         exit(1);
     }
     this->npu = std::make_unique<npu_xclbin_manager>(npu_device::device_npu2, this->npu_device_inst, enable_preemption);
+    // Plugins bind overrides on npu->hooks; every model engine below resolves
+    // them in its own constructor, so plugins must load before any engine exists.
+    const std::string xclbin_path = utils::path_join(this->lm_config->exec_path, "xclbins", this->lm_config->model_name);
+    flm::plugin_context plugin_ctx{ this->npu.get(), this->model_path.c_str(), xclbin_path.c_str() };
+    flm::load_plugins_from_env(plugin_ctx);
     this->enable_preemption = enable_preemption;
     // Single-turn models (e.g. dedicated translation models) don't support arbitrary
     // context length overrides, so always fall back to the model's own default.

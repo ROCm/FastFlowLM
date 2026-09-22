@@ -409,7 +409,10 @@ void Gemma4_12B::load_model(std::string model_path, json model_info, int default
 
     this->q4nx = std::make_unique<Q4NX>(this->model_path);
     this->lm_engine = std::make_unique<gemma4_12b_npu>(*this->lm_config, this->npu.get(), this->MAX_L);
-    this->_load_engine_weights();
+
+    this->lm_engine->load_weights(*this->q4nx);
+    // free the q4nx
+    this->q4nx.reset();
     // The soft token budget is a preprocessing constant (processor_config.json
     // image_seq_length / image_processor.max_soft_tokens), read by the engine
     // along with the rest of the image front end parameters.

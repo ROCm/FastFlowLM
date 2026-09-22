@@ -1,21 +1,20 @@
 /// \file flm_plugin.hpp
 /// \brief Loading user supplied operator overrides from a shared library.
 /// \note  A plugin is a shared library exporting flm_plugin_abi_version() and
-///        flm_plugin_register(). Point FLM_PLUGIN at it and flm loads it after
-///        the model engine exists and before any weight is touched, which is the
-///        window in which a plugin may register overrides and allocate its own
-///        weights.
+///        flm_plugin_register(). Point FLM_PLUGIN at it and flm loads it right
+///        after the NPU device is ready and before any model engine is
+///        constructed, which is the window in which a plugin may register
+///        overrides and allocate its own weights.
 ///
 /// A minimal plugin:
 /// \code
 ///   #include "flm_plugin.hpp"
 ///
-///   class my_gemm : public flm::op_override {
-///       flm::op_result create_run(const flm::op_call& call) override { ... }
-///   };
-///
 ///   static void register_overrides(const flm::plugin_context& ctx) {
-///       ctx.ops->override_op("mlp.up_proj", std::make_shared<my_gemm>(*ctx.npu));
+///       ctx.npu->hooks.override_op<my_op_func_t>("mlp.up_proj",
+///           [ctx](bytes& out, bytes& in, bytes& weights, int layer, int m) {
+///               return flm::hook_result<ert_cmd_state>(...);
+///           });
 ///   }
 ///   FLM_PLUGIN(register_overrides)
 /// \endcode
@@ -44,8 +43,7 @@ inline constexpr int plugin_abi_version = 1;
 
 /// \brief What a plugin is given when it registers.
 struct plugin_context {
-    op_registry* ops;          ///< the engine's declared operations
-    npu_xclbin_manager* npu;   ///< the one device manager; a plugin registers its xclbins here
+    npu_xclbin_manager* npu;   ///< the one device manager; also holds the hook registry (npu->hooks)
     const char* model_path;    ///< directory holding the model's weights
     const char* xclbin_path;   ///< directory holding this model's xclbins, where a plugin's belong too
 };
