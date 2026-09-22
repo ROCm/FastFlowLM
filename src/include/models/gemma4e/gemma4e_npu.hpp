@@ -45,11 +45,24 @@ inline constexpr std::string_view dequant_down = "dequant.down";
 ///        one dispatch per token. The engine picks which per-type app serves
 ///        a layer, as it already does for self_attn.core.
 inline constexpr std::string_view decode_layer = "decode.layer";
+
+/// \brief The vocab projection, one dispatch per token. The engine has only
+///        one dispatch site for this, so its key carries no layer index.
+inline constexpr std::string_view lm_head = "lm_head";
+
+/// \brief The audio encoder's depthwise conv1d, one dispatch per audio layer
+///        per audio clip in the batch (see gemma4e_ops::audio_key).
+inline constexpr std::string_view audio_conv1d = "audio.conv1d";
 }  // namespace op
 
 /// \brief Key of `name` on layer `layer`, which is this engine's dispatch site.
 inline std::string key(int layer, std::string_view name) {
     return "layers." + std::to_string(layer) + "." + std::string(name);
+}
+
+/// \brief Key of `name` on audio layer `layer`, the audio encoder's dispatch site.
+inline std::string audio_key(int layer, std::string_view name) {
+    return "audio.layers." + std::to_string(layer) + "." + std::string(name);
 }
 
 }  // namespace gemma4e_ops
@@ -181,12 +194,17 @@ public:
     ///         dequant.{qkv,o,gate,up,down}  (dequantized_weights, quantized_weights)
     ///         decode.layer             (hidden_state_inout, proj_weights, rms_weights,
     ///                                   rope_rms_weights, kv_cache)
+    ///         lm_head                  (logits, lm_head_weights, hidden_state)
     ///       The engine batches every layer's run into one runlist per token by
-    ///       default. An override bound to decode.layer joins that batch, so a
-    ///       non-blocking call must return a deferred run rather than run eagerly.
+    ///       default. An override bound to decode.layer or lm_head joins that
+    ///       batch, so a non-blocking call must return a deferred run rather
+    ///       than run eagerly.
     /// \note The weight buffer a projection receives is the engine's own dequant
     ///       output. Its layout is an implementation detail: an override is
     ///       expected to bring weights of its own and ignore that argument.
+    /// \note The audio encoder's operations are keyed by gemma4e_ops::audio_key,
+    ///       not gemma4e_ops::key -- a separate dispatch-site index space:
+    ///         audio.conv1d              (conv1d_output, conv1d_input, conv1d_weights)
     flm::op_registry* ops() override;
 
     // parameters for vision preprocessing in Gemma4e
