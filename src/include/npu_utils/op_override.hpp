@@ -5,10 +5,13 @@
 // the arguments the call site built for it.
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <span>
 #include <string_view>
+#include <tuple>
+#include <type_traits>
 #include <utility>
 #include <variant>
 
@@ -106,5 +109,78 @@ op_result dispatch_async(op_override* hook, const op_call& call, DefaultCreateRu
     }
     return op_result(default_create_run());
 }
+
+// Whether T is one of the buffer types a hook's args and a default
+// implementation both take, as opposed to a plain integer (a layer index,
+// a length) meant for the hook alone.
+template <typename T>
+inline constexpr bool is_op_buffer_v = std::is_base_of_v<bytes, std::remove_cv_t<std::remove_reference_t<T>>>;
+
+// `name` resolved to `hook` (if any) and bound to `app`, the default it
+// falls back to. Built once, from op_registry::resolve(); called at each
+// dispatch site the same way `app` itself would be, with any trailing
+// plain integers (a layer index, a chunk size) a hook needs appended --
+// `app` never sees those, only the buffer arguments do.
+template <typename App>
+class bound_op {
+public:
+    bound_op() = default;
+    bound_op(std::string_view name, op_override* hook, App& app)
+        : name_(name), hook_(hook), app_(&app) {}
+
+    template <typename... Args>
+    ert_cmd_state operator()(Args&&... args) {
+        const std::array<op_arg, sizeof...(Args)> a{ _to_arg(args)... };
+        if (this->hook_ != nullptr) {
+            op_result result = this->hook_->create_run({ this->name_, true, a });
+            if (!result.should_defer()) {
+                result.start();
+                return result.wait();
+            }
+        }
+        return this->_default(args...);
+    }
+
+    template <typename... Args>
+    op_result create_run(Args&&... args) {
+        const std::array<op_arg, sizeof...(Args)> a{ _to_arg(args)... };
+        if (this->hook_ != nullptr) {
+            op_result result = this->hook_->create_run({ this->name_, false, a });
+            if (!result.should_defer()) return result;
+        }
+        return op_result(this->_default_run(args...));
+    }
+
+private:
+    template <typename T>
+    static op_arg _to_arg(T& v) {
+        if constexpr (is_op_buffer_v<T>) return op_arg(static_cast<bytes*>(&v));
+        else return op_arg(static_cast<int64_t>(v));
+    }
+
+    // Only the buffer arguments reach `app_`; a trailing layer index or
+    // chunk size is for the hook alone.
+    template <typename T>
+    static auto _buffer_ref(T& v) {
+        if constexpr (is_op_buffer_v<T>) return std::tuple<T&>(v);
+        else return std::tuple<>();
+    }
+
+    template <typename... Args>
+    ert_cmd_state _default(Args&... args) {
+        return std::apply([this](auto&... bufs) { return (*this->app_)(bufs...); },
+                          std::tuple_cat(_buffer_ref(args)...));
+    }
+
+    template <typename... Args>
+    auto _default_run(Args&... args) {
+        return std::apply([this](auto&... bufs) { return this->app_->create_run(bufs...); },
+                          std::tuple_cat(_buffer_ref(args)...));
+    }
+
+    std::string_view name_;
+    op_override* hook_ = nullptr;
+    App* app_ = nullptr;
+};
 
 }  // namespace flm

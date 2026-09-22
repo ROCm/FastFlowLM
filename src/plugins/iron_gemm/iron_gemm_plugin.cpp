@@ -49,13 +49,29 @@
 namespace {
 
 // The operations this plugin serves, in the order its per-layer table
-// stores them. The names and the key spelling are Gemma4e's.
+// stores them. These are the sidecar's own weight-tensor names, not the
+// engine's op-dispatch names (op_names below) -- the two happen to share a
+// root but the op names carry a layer-kind suffix these do not.
 constexpr std::array<std::string_view, 7> names = {
-    gemma4e_ops::op::q_proj, gemma4e_ops::op::k_proj, gemma4e_ops::op::v_proj, gemma4e_ops::op::o_proj,
-    gemma4e_ops::op::gate_proj, gemma4e_ops::op::up_proj, gemma4e_ops::op::down_proj,
+    "self_attn.q_proj", "self_attn.k_proj", "self_attn.v_proj", "self_attn.o_proj",
+    "mlp.gate_proj", "mlp.up_proj", "mlp.down_proj",
 };
 
 constexpr size_t R_Q = 0, R_K = 1, R_V = 2, R_O = 3, R_GATE = 4, R_UP = 5, R_DOWN = 6;
+
+// Every op name a role may be dispatched under. The engine gives
+// sliding-window and global attention (and a skip layer's double-wide mlp)
+// separate op names for the same GEMM shape; this plugin tells layers apart
+// by the layer index each call carries instead, so it binds every variant
+// of a role to the same hook.
+constexpr const std::string_view* op_names[names.size()] = {
+    gemma4e_ops::op::q_proj, gemma4e_ops::op::k_proj, gemma4e_ops::op::v_proj, gemma4e_ops::op::o_proj,
+    gemma4e_ops::op::gate_proj, gemma4e_ops::op::up_proj, gemma4e_ops::op::down_proj,
+};
+constexpr const std::string_view* dequant_op_names[5] = {
+    gemma4e_ops::op::dequant_qkv, gemma4e_ops::op::dequant_o, gemma4e_ops::op::dequant_gate,
+    gemma4e_ops::op::dequant_up, gemma4e_ops::op::dequant_down,
+};
 
 // Every call's trailing two arguments are the layer index and the M this
 // call ran at (dequant has neither engine concept, but carries them anyway
@@ -212,16 +228,18 @@ public:
         else { this->_create_apps(); this->_load_resident(); }
     }
 
-    // Binds every projection and dequant step this plugin serves, once per
-    // name -- every layer's calls arrive at the same hook, telling layers
-    // apart via the layer index each call carries. create_run() declines a
-    // layer/shape combination it doesn't cover.
+    // Binds every projection and dequant step this plugin serves, under
+    // every variant name the engine dispatches it as -- every layer's calls
+    // arrive at the same hook, telling layers apart via the layer index each
+    // call carries. create_run() declines a layer/shape combination it
+    // doesn't cover.
     void bind(flm::op_registry& ops, std::shared_ptr<flm::op_override> self) const {
-        for (std::string_view name : names) ops.override_op(name, self);
-        for (std::string_view name : { gemma4e_ops::op::dequant_qkv, gemma4e_ops::op::dequant_o,
-                                       gemma4e_ops::op::dequant_gate, gemma4e_ops::op::dequant_up,
-                                       gemma4e_ops::op::dequant_down }) {
-            ops.override_op(name, self);
+        for (const std::string_view* variants : op_names) {
+            ops.override_op(variants[0], self);
+            ops.override_op(variants[1], self);
+        }
+        for (const std::string_view* variants : dequant_op_names) {
+            for (int t = 0; t < 4; t++) ops.override_op(variants[t], self);
         }
     }
 
@@ -366,7 +384,7 @@ private:
 
     size_t _name_index(std::string_view name) const {
         for (size_t i = 0; i < names.size(); i++) {
-            if (names[i] == name) return i;
+            if (op_names[i][0] == name || op_names[i][1] == name) return i;
         }
         return names.size();
     }
@@ -375,17 +393,23 @@ private:
     // because the engine dequantizes q, k and v into one buffer; the GEMM
     // needs them packed separately.
     static size_t _covered(std::string_view name, std::array<size_t, 3>& out) {
-        if (name == gemma4e_ops::op::dequant_qkv) { out = { R_Q, R_K, R_V }; return 3; }
-        if (name == gemma4e_ops::op::dequant_o) { out[0] = R_O; return 1; }
-        if (name == gemma4e_ops::op::dequant_gate) { out[0] = R_GATE; return 1; }
-        if (name == gemma4e_ops::op::dequant_up) { out[0] = R_UP; return 1; }
+        const auto is = [&](const std::string_view* variants) {
+            for (int t = 0; t < 4; t++) if (variants[t] == name) return true;
+            return false;
+        };
+        if (is(gemma4e_ops::op::dequant_qkv)) { out = { R_Q, R_K, R_V }; return 3; }
+        if (is(gemma4e_ops::op::dequant_o)) { out[0] = R_O; return 1; }
+        if (is(gemma4e_ops::op::dequant_gate)) { out[0] = R_GATE; return 1; }
+        if (is(gemma4e_ops::op::dequant_up)) { out[0] = R_UP; return 1; }
         out[0] = R_DOWN;
         return 1;
     }
 
     void _dequant(const flm::op_call& call, layer_entry& layer, int layer_idx) {
         if (this->mode_ != weight_mode::dequant) return;  // the weights are already there
-        if (call.name == gemma4e_ops::op::dequant_qkv && layer.qkv_n != 0) {
+        const bool is_qkv = call.name == gemma4e_ops::op::dequant_qkv[0] || call.name == gemma4e_ops::op::dequant_qkv[1]
+                          || call.name == gemma4e_ops::op::dequant_qkv[2] || call.name == gemma4e_ops::op::dequant_qkv[3];
+        if (is_qkv && layer.qkv_n != 0) {
             // q, k and v are adjacent out-features, so one dispatch at their
             // combined width writes all three in the order the GEMMs read them.
             const slot& q = *layer.slots[R_Q];

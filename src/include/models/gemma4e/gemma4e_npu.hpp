@@ -25,32 +25,39 @@
 namespace gemma4e_ops {
 
 namespace op {
-inline constexpr std::string_view q_proj    = "self_attn.q_proj";
-inline constexpr std::string_view k_proj    = "self_attn.k_proj";
-inline constexpr std::string_view v_proj    = "self_attn.v_proj";
-inline constexpr std::string_view o_proj    = "self_attn.o_proj";
-inline constexpr std::string_view attn_core = "self_attn.core";
+// q/k/v/o projections and self-attention core: one app for sliding-window
+// layers, one for global-attention layers -- different kernels, not a
+// parameter of the same one. Index with is_swa_layer(type) ? 0 : 1.
+inline constexpr std::string_view q_proj[2]    = { "self_attn.q_proj.swa",    "self_attn.q_proj.global" };
+inline constexpr std::string_view k_proj[2]    = { "self_attn.k_proj.swa",    "self_attn.k_proj.global" };
+inline constexpr std::string_view v_proj[2]    = { "self_attn.v_proj.swa",    "self_attn.v_proj.global" };
+inline constexpr std::string_view o_proj[2]    = { "self_attn.o_proj.swa",    "self_attn.o_proj.global" };
+inline constexpr std::string_view attn_core[2] = { "self_attn.core.swa",      "self_attn.core.global" };
 
-inline constexpr std::string_view gate_proj = "mlp.gate_proj";
-inline constexpr std::string_view up_proj   = "mlp.up_proj";
-inline constexpr std::string_view down_proj = "mlp.down_proj";
+// mlp projections: a skip layer runs a double-wide mlp, a different
+// sequence over the same buffers. Index with is_skip_layer(type) ? 1 : 0.
+inline constexpr std::string_view gate_proj[2] = { "mlp.gate_proj", "mlp.gate_proj.skip" };
+inline constexpr std::string_view up_proj[2]   = { "mlp.up_proj",   "mlp.up_proj.skip" };
+inline constexpr std::string_view down_proj[2] = { "mlp.down_proj", "mlp.down_proj.skip" };
 
-inline constexpr std::string_view dequant_qkv  = "dequant.qkv";
-inline constexpr std::string_view dequant_o    = "dequant.o";
-inline constexpr std::string_view dequant_gate = "dequant.gate";
-inline constexpr std::string_view dequant_up   = "dequant.up";
-inline constexpr std::string_view dequant_down = "dequant.down";
+// dequant and the fused decode layer: one app per gemma4e_layer_type_t.
+// Index with int(type) (e_gemma4e_swa_layer=0, e_gemma4e_global_layer=1,
+// e_gemma4e_swa_layer_skip=2, e_gemma4e_global_layer_skip=3).
+inline constexpr std::string_view dequant_qkv[4]  = { "dequant.qkv.swa",  "dequant.qkv.global",
+                                                      "dequant.qkv.swa_skip",  "dequant.qkv.global_skip" };
+inline constexpr std::string_view dequant_o[4]    = { "dequant.o.swa",    "dequant.o.global",
+                                                      "dequant.o.swa_skip",    "dequant.o.global_skip" };
+inline constexpr std::string_view dequant_gate[4] = { "dequant.gate.swa", "dequant.gate.global",
+                                                      "dequant.gate.swa_skip", "dequant.gate.global_skip" };
+inline constexpr std::string_view dequant_up[4]   = { "dequant.up.swa",   "dequant.up.global",
+                                                      "dequant.up.swa_skip",   "dequant.up.global_skip" };
+inline constexpr std::string_view dequant_down[4] = { "dequant.down.swa", "dequant.down.global",
+                                                      "dequant.down.swa_skip", "dequant.down.global_skip" };
+inline constexpr std::string_view decode_layer[4] = { "decode.layer.swa", "decode.layer.global",
+                                                      "decode.layer.swa_skip", "decode.layer.global_skip" };
 
-// The fused decode step for one layer (attention and MLP together), one
-// dispatch per token.
-inline constexpr std::string_view decode_layer = "decode.layer";
-
-// The vocab projection, one dispatch per token. The engine has only one
-// dispatch site for this, so its key carries no layer index.
+// One dispatch site each, so neither needs a layer-type index.
 inline constexpr std::string_view lm_head = "lm_head";
-
-// The audio encoder's depthwise conv1d, one dispatch per audio layer per
-// audio clip in the batch (see gemma4e_ops::audio_key).
 inline constexpr std::string_view audio_conv1d = "audio.conv1d";
 }  // namespace op
 
@@ -172,13 +179,15 @@ public:
     int checkpoint() override;
     int restore() override;
 
-    // A name in gemma4e_ops::op covers every layer; op_call::args is the
-    // buffers below, in order, then trailing int64 scalars:
-    //   self_attn.{q,k,v}_proj   (out, hidden_state, qkv_weights, layer, padded)
-    //   self_attn.o_proj         (out, attn_out, o_weights, layer, padded)
+    // Each name in gemma4e_ops::op is one dispatch point (one app, in the
+    // engine's own sense: sliding-window and global attention run different
+    // kernels, so they get different names, not a shared one distinguished
+    // by argument). Every name still covers many layers, told apart by the
+    // layer index each call carries. op_call::args is the buffers below,
+    // in order, then trailing int64 scalars:
+    //   self_attn.{q,k,v,o}_proj (out, hidden_state or attn_out, weights, layer, padded)
     //   self_attn.core           (out, q, kv_cache, layer, padded)
-    //   mlp.{gate,up}_proj       (out, hidden_state, weights, layer, padded)
-    //   mlp.down_proj            (out, hid, down_weights, layer, padded)
+    //   mlp.{gate,up,down}_proj  (out, hidden_state or hid, weights, layer, padded)
     //   dequant.{qkv,o,gate,up,down}  (dequantized_weights, quantized_weights, layer, padded)
     //   decode.layer             (hidden_state_inout, proj_weights, rms_weights,
     //                             rope_rms_weights, kv_cache, layer, context_len)
