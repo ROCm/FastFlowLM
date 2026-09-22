@@ -1,11 +1,8 @@
-/// \file op_override.hpp
-/// \brief Interface for replacing an individual model operation with a user
-///        supplied implementation.
-/// \note  An override owns everything it needs to run: its own xclbin, its own
-///        instruction streams and its own weights, all obtained through the
-///        public npu_utils surface. The framework only tells it which operation
-///        is being dispatched and hands it the buffers the default would have
-///        received.
+// Interface for replacing one model operation with a user-supplied
+// implementation. An override owns everything it needs to run -- xclbin,
+// instruction streams, weights -- through the public npu_utils surface; the
+// framework only tells it which operation is being dispatched and hands it
+// the buffers the default implementation would have received.
 #pragma once
 
 #include <array>
@@ -29,15 +26,10 @@
 
 namespace flm {
 
-/// \brief Outcome of an overridden dispatch.
-///
-/// Three states, distinguished because an override is not obliged to be exactly
-/// one NPU dispatch:
-///   - holds a run: the usual case, started and waited on by the caller;
-///   - empty: the override already finished the work (on the host, or across
-///     several dispatches it waited on itself);
-///   - declined: the override does not serve this call, so the caller must run
-///     the default implementation instead.
+// An override is not obliged to be exactly one NPU dispatch, so its result
+// is one of three states: holds a run (the caller starts and waits on it),
+// empty (the override already finished the work itself), or declined (the
+// caller must run the default implementation instead).
 class op_result {
 public:
     op_result() : declined_(false) {}
@@ -51,12 +43,10 @@ public:
 
     bool declined() const { return this->declined_; }
 
-    /// \brief Whether this holds a run, as opposed to already finished or declined.
-    /// \note For batching into an existing schedule (e.g. a runlist); an override
-    ///       author does not need this.
+    // For batching into an existing schedule (e.g. a runlist); an override
+    // author does not need this.
     bool has_run() const { return this->run_.has_value(); }
 
-    /// \brief The wrapped run. Only valid when has_run() is true.
     flm_rt::run& run() { return *this->run_; }
 
     void start() {
@@ -73,22 +63,20 @@ private:
     bool declined_;
 };
 
-/// \brief Geometry of the sequence chunk a prefill dispatch is part of.
-/// \note Every projection's M is `padded`. The engine refreshes this once per
-///       chunk, before the first operation of that chunk runs.
+// Geometry of the sequence chunk a prefill dispatch is part of. Every
+// projection's M is `padded`; the engine refreshes this once per chunk,
+// before the first operation of that chunk runs.
 struct op_extent {
     uint32_t padded = 0;      ///< rows dispatched, padded up to the engine's row granularity
     uint32_t effective = 0;   ///< rows of `padded` that hold real tokens
     uint32_t offset = 0;      ///< row at which this chunk's tokens begin
 };
 
-/// \brief One dispatch of a named model operation.
-///
-/// \note `args` are the buffers the default implementation receives, in the
-///       default's own order. That order is part of each operation's documented
-///       contract; it is not normalised across operations. The framework does
-///       not interpret them, and an override is free to ignore them and use
-///       weights it brought itself.
+// One dispatch of a named model operation. `args` are the buffers the default
+// implementation receives, in the default's own order -- part of each
+// operation's documented contract, not normalised across operations. The
+// framework does not interpret them; an override may ignore them and use
+// weights it brought itself.
 struct op_call {
     std::string_view name;        ///< the operation's name, as the engine declared it
     int index;                    ///< which of the engine's dispatch sites for that name
@@ -97,47 +85,42 @@ struct op_call {
     std::span<bytes* const> args;
 };
 
-/// \brief User supplied replacement for one or more model operations.
+// User-supplied replacement for one or more model operations.
 class op_override {
 public:
     virtual ~op_override() = default;
 
-    /// \brief Handle one dispatch.
-    /// \return an op_result; return op_result::decline() to fall back to the
-    ///         default implementation for this particular call.
-    /// \note When call.blocking is set the caller does nothing until the work
-    ///       finishes, so an override may run it synchronously and return an
-    ///       empty op_result. That avoids materialising a run object, which is
-    ///       the more expensive of the two dispatch paths.
+    // Return op_result::decline() to fall back to the default implementation
+    // for this call. When call.blocking is set, the caller does nothing until
+    // the work finishes, so an override may run it synchronously and return
+    // an empty op_result instead of materialising a run object.
     virtual op_result create_run(const op_call& call) = 0;
 };
 
 template <typename App>
 class app_index_ref;
 
-/// \brief Per-layer override table, mixed into the backend's npu_app.
-///
-/// \note CRTP rather than virtual dispatch: npu_app's call operators are
-///       variadic templates over buffer types, which cannot be virtual, and the
-///       unoverridden path must stay a single predictable branch.
+// Per-layer override table, mixed into the backend's npu_app. CRTP rather
+// than virtual dispatch: npu_app's call operators are variadic templates
+// over buffer types, which cannot be virtual, and the unoverridden path
+// must stay a single predictable branch.
 template <typename App>
 class overridable_app {
 public:
-    /// \brief Bind this app to one dispatch site for the duration of one call.
-    /// \note What an index means is the engine's business -- a layer, a block, a
-    ///       position in a flattened nest. All this needs is that it be dense.
+    // What an index means is the engine's business -- a layer, a block, a
+    // position in a flattened nest. All this needs is that it be dense.
     app_index_ref<App> at(int index) { return app_index_ref<App>(static_cast<App*>(this), index); }
 
     const std::string& op_name() const { return this->op_name_; }
 
-    /// \note Called by op_registry; not part of the override-author surface.
+    // Called by op_registry; not part of the override-author surface.
     void _declare_op(std::string name, int index_count, const op_extent* extent) {
         this->op_name_ = std::move(name);
         this->op_overrides_.resize(static_cast<size_t>(index_count) + 1, nullptr);
         this->op_extent_ = extent;
     }
 
-    /// \note Called by op_registry; not part of the override-author surface.
+    // Called by op_registry; not part of the override-author surface.
     void _set_op_override(int index, op_override* hook) {
         op_override*& slot = this->op_overrides_.at(static_cast<size_t>(index + 1));
         this->op_override_count_ += (hook != nullptr) - (slot != nullptr);
@@ -160,7 +143,7 @@ protected:
     const op_extent* op_extent_ = nullptr;    ///< owned by the registry, refreshed once per chunk
 };
 
-/// \brief An npu_app bound to one dispatch site, as returned by npu_app::at().
+// An npu_app bound to one dispatch site, as returned by npu_app::at().
 template <typename App>
 class app_index_ref {
 public:

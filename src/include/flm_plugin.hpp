@@ -59,7 +59,7 @@ inline constexpr char plugin_path_separator = ';';
 inline constexpr char plugin_path_separator = ':';
 #endif
 
-/// \brief Load one plugin and let it register its overrides.
+// Load one plugin and let it register its overrides.
 /// \throws std::runtime_error if the library cannot be loaded, lacks the entry
 ///         points, or was built against a different override interface.
 inline void load_plugin(const plugin_context& ctx, const std::string& path) {
@@ -88,7 +88,7 @@ inline void load_plugin(const plugin_context& ctx, const std::string& path) {
     reg(&ctx);
 }
 
-/// \brief Load every plugin named in FLM_PLUGIN, separated by ':' (';' on Windows).
+// Load every plugin named in FLM_PLUGIN, separated by ':' (';' on Windows).
 inline void load_plugins_from_env(const plugin_context& ctx) {
     const char* env = std::getenv("FLM_PLUGIN");
     if (env == nullptr || *env == '\0') return;
@@ -107,7 +107,7 @@ inline void load_plugins_from_env(const plugin_context& ctx) {
 
 }  // namespace flm
 
-/// \brief Define a plugin's entry points around a registration function.
+// Defines a plugin's entry points around a registration function.
 #define FLM_PLUGIN(register_function)                                            \
     extern "C" int flm_plugin_abi_version() { return flm::plugin_abi_version; }  \
     extern "C" void flm_plugin_register(const flm::plugin_context* ctx) {        \

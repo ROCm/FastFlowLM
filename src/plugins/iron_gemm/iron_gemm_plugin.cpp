@@ -48,8 +48,8 @@
 
 namespace {
 
-/// \brief The operations this plugin serves, in the order its per-layer table
-///        stores them. The names and the key spelling are Gemma4e's.
+// The operations this plugin serves, in the order its per-layer table
+// stores them. The names and the key spelling are Gemma4e's.
 constexpr std::array<std::string_view, 7> names = {
     gemma4e_ops::op::q_proj, gemma4e_ops::op::k_proj, gemma4e_ops::op::v_proj, gemma4e_ops::op::o_proj,
     gemma4e_ops::op::gate_proj, gemma4e_ops::op::up_proj, gemma4e_ops::op::down_proj,
@@ -57,26 +57,25 @@ constexpr std::array<std::string_view, 7> names = {
 
 constexpr size_t R_Q = 0, R_K = 1, R_V = 2, R_O = 3, R_GATE = 4, R_UP = 5, R_DOWN = 6;
 
-/// \brief Whether a role's weight matrix has the hidden size on its K side.
+// Whether a role's weight matrix has the hidden size on its K side.
 constexpr bool k_is_hidden(size_t r) { return r != R_O && r != R_DOWN; }
 
 constexpr bool wants_gelu(size_t r) { return r == R_GATE; }
 
-/// \brief Out-features of one up-or-gate run in the engine's layer buffer.
+// Out-features of one up-or-gate run in the engine's layer buffer.
 constexpr uint32_t UPGATE_RUN = 512;
 
-/// \brief Out-features per column block, from the GEMM's B tiling.
+// Out-features per column block, from the GEMM's B tiling.
 constexpr uint32_t N_TILE = 64;
 
-/// \brief bfp16ebs8 packs 8 values into 9 bytes; q4nx holds 5 bits per weight.
+// bfp16ebs8 packs 8 values into 9 bytes; q4nx holds 5 bits per weight.
 constexpr size_t packed_bytes(uint32_t k, uint32_t n) { return (size_t)k * n / 8 * 9; }
 constexpr size_t q4_bytes(uint32_t k, uint32_t n) { return (size_t)k * n * 5 / 8; }
 
-/// \brief LM_Config without the executable-path lookup.
-/// \note from_pretrained() resolves exec_path through utils::find_xclbin_path,
-///       which lives in the flm binary rather than a shared library and so is
-///       not linkable from here. The plugin is handed the xclbin directory
-///       already, so it fills the paths itself and does the rest.
+// LM_Config without the executable-path lookup. from_pretrained() resolves
+// exec_path through utils::find_xclbin_path, which lives in the flm binary
+// rather than a shared library and so is not linkable from here. The plugin
+// is handed the xclbin directory already, so it fills the paths itself.
 struct plugin_config : LM_Config {
     void load(const std::string& model, const std::string& xclbin_dir) {
         this->model_path = model;
@@ -89,7 +88,6 @@ struct plugin_config : LM_Config {
     }
 };
 
-/// \brief Where the weights the GEMM reads come from.
 enum class weight_mode {
     dequant,  ///< 4-bit in DRAM, dequantized per layer per chunk on the device
     bfp16,    ///< packed bfp16ebs8 read once from a sidecar and held resident
@@ -105,7 +103,7 @@ inline weight_mode read_mode() {
     return weight_mode::dequant;
 }
 
-/// \brief One GEMM instruction stream, identified by the problem it was built for.
+// One GEMM instruction stream, identified by the problem it was built for.
 struct shape_key {
     uint32_t m, k, n;
     bool gelu;
@@ -114,11 +112,10 @@ struct shape_key {
     }
 };
 
-/// \brief IRON's DequantBFP, reading the engine's own per-layer weight buffer.
-///
-/// \note One xclbin covers every shape -- K and N are runtime parameters -- so
-///       each shape costs only an instruction stream, which matters against a
-///       budget of 16 hardware contexts.
+// IRON's DequantBFP, reading the engine's own per-layer weight buffer. One
+// xclbin covers every shape -- K and N are runtime parameters -- so each
+// shape costs only an instruction stream, which matters against a budget of
+// 16 hardware contexts.
 class device_dequant {
 public:
     void setup(npu_xclbin_manager& npu, const std::string& artifact_dir) {
@@ -154,14 +151,13 @@ public:
 
     size_t shapes() const { return this->apps_.size(); }
 
-    /// \brief Dequantize from `qw` into `packed`.
-    /// \note The operator reads from offset 0, so `qw` must be a view starting at
-    ///       the projection, not at the layer.
+    // qw must be a view starting at the projection, not at the layer: the
+    // operator reads from offset 0.
     void run(uint32_t k, uint32_t n, bytes& qw, bytes& packed) {
         this->apps_.at(std::make_pair(k, n)).app(qw, packed);
     }
 
-    /// \brief Bytes the operator reads, spanning the gaps of an interleaved matrix.
+    // Bytes the operator reads, spanning the gaps of an interleaved matrix.
     size_t reads(uint32_t k, uint32_t n) const {
         const shape& sh = this->apps_.at(std::make_pair(k, n));
         const size_t cb = q4_bytes(k, N_TILE);
@@ -209,12 +205,11 @@ public:
         else { this->_create_apps(); this->_load_resident(); }
     }
 
-    /// \brief Bind every projection the plugin can serve, and the dequant steps
-    ///        that feed them.
-    /// \note A layer is taken whole or not at all: a layer split between two
-    ///       xclbins pays a context switch at every crossing, which costs more
-    ///       than the operators save. The same hook takes the layer's dequant
-    ///       steps, because the projections read what they produce.
+    // Bind every projection the plugin can serve, and the dequant steps that
+    // feed them. A layer is taken whole or not at all: a layer split between
+    // two xclbins pays a context switch at every crossing, which costs more
+    // than the operators save. The same hook takes the layer's dequant steps,
+    // because the projections read what they produce.
     size_t bind(flm::op_registry& ops, std::shared_ptr<flm::op_override> self) const {
         size_t bound = 0;
         for (size_t layer = 0; layer < this->layers_.size(); layer++) {
@@ -271,8 +266,8 @@ private:
     struct layer_entry {
         std::array<std::optional<slot>, names.size()> slots;
         std::array<std::optional<flm_rt::bo>, names.size()> views;  ///< cut on first dispatch
-        /// \brief What each projection's GEMM reads, where that is not the whole
-        ///        staging buffer. q, k and v share one, at their own offsets.
+        // What each projection's GEMM reads, where that is not the whole
+        // staging buffer. q, k and v share one, at their own offsets.
         std::array<std::optional<flm_rt::bo>, names.size()> b_bo;
         std::array<std::optional<buffer<u8>>, names.size()> b_view;
         std::array<buffer<u8>, names.size()> resident;  ///< filled once, in a resident mode
@@ -282,16 +277,16 @@ private:
         uint32_t qkv_n = 0;           ///< combined width of one q, k, v dequant; 0 when q runs alone
     };
 
-    /// \brief One app on the shipped mm overlay, with the M its sequence was built for.
+    // One app on the shipped mm overlay, with the M its sequence was built for.
     struct mm_app {
         npu_app app;
         uint32_t m = 0;
     };
 
-    /// \brief Adopt the shipped mm overlay so the port's kernel can be taken out
-    ///        of the comparison while the pre-dequantized weights stay in.
-    /// \note register_xclbin returns the engine's existing manager for the same
-    ///       file, so this costs no hardware context.
+    // Adopt the shipped mm overlay so the port's kernel can be taken out of
+    // the comparison while the pre-dequantized weights stay in.
+    // register_xclbin returns the engine's existing manager for the same
+    // file, so this costs no hardware context.
     bool _setup_mm(const flm::plugin_context& ctx) {
         const std::string mm = (std::filesystem::path(this->artifact_dir_) / "mm.xclbin").string();
         if (!std::filesystem::exists(mm)) return false;
@@ -301,11 +296,10 @@ private:
         return this->mm_mgr_ != nullptr;
     }
 
-    /// \brief Dispatch one projection on the shipped mm overlay.
-    /// \note The weight offset is always zero: the plugin holds a buffer per
-    ///       projection, and the dequant layout's leading term is
-    ///       (n / 128) * 128 * K, so one projection's slice is a prefix rather
-    ///       than something that has to be indexed out of a combined buffer.
+    // The weight offset is always zero: the plugin holds a buffer per
+    // projection, and the dequant layout's leading term is (n / 128) * 128 * K,
+    // so one projection's slice is a prefix rather than something that has to
+    // be indexed out of a combined buffer.
     flm::op_result _run_mm(const flm::op_call& call, const slot& s, size_t r, bytes& b) {
         const auto key = std::make_tuple(s.k, s.n, wants_gelu(r));
         mm_app& ma = this->mm_apps_[key];
@@ -325,22 +319,20 @@ private:
 
     bool _active(const layer_entry& l) const { return !l.served_m.empty() || l.any_m; }
 
-    /// \brief Whichever manager can allocate; any of them reaches the same device.
+    // Whichever manager can allocate; any of them reaches the same device.
     npu_app_manager* _alloc_mgr() const {
         return this->app_manager_ != nullptr ? this->app_manager_ : this->mm_mgr_;
     }
 
-    /// \brief The buffer holding role `r`'s weights for this layer.
     bytes& _weights(layer_entry& l, size_t r) {
         if (this->mode_ != weight_mode::dequant) return l.resident[r];
         if (l.b_view[r].has_value()) return *l.b_view[r];
         return this->staging_[r];
     }
 
-    /// \brief Read every projection's weights from the sidecar, once.
-    /// \note The whole model at once: the prefill loop touches every weight
-    ///       exactly once per request in a fixed order, so there is no reuse for
-    ///       a smaller cache to exploit.
+    // Reads every projection's weights from the sidecar, once: the prefill
+    // loop touches each weight exactly once per request in a fixed order, so
+    // there is no reuse for a smaller cache to exploit.
     void _load_resident() {
         const char* suffix = (this->mode_ == weight_mode::bfp16) ? ".dq_bfp" : ".dq_bf16";
         size_t total = 0;
@@ -379,9 +371,9 @@ private:
         return names.size();
     }
 
-    /// \brief Which projections a dequant step produces.
-    /// \note dequant.qkv covers three, because the engine dequantizes q, k and v
-    ///       into one buffer; the GEMM needs them packed separately.
+    // Which projections a dequant step produces. dequant.qkv covers three,
+    // because the engine dequantizes q, k and v into one buffer; the GEMM
+    // needs them packed separately.
     static size_t _covered(std::string_view name, std::array<size_t, 3>& out) {
         if (name == gemma4e_ops::op::dequant_qkv) { out = { R_Q, R_K, R_V }; return 3; }
         if (name == gemma4e_ops::op::dequant_o) { out[0] = R_O; return 1; }
@@ -415,7 +407,6 @@ private:
         }
     }
 
-    /// \brief Dequantize one run of out-features into the staging buffer for `r`.
     void _run_one(const flm::op_call& call, layer_entry& layer, size_t r,
                   uint32_t k, uint32_t n, size_t offset) {
         if (!layer.views[r].has_value()) {
@@ -425,12 +416,12 @@ private:
         this->dequant_.run(k, n, qw, this->staging_[r]);
     }
 
-    /// \brief Find the GEMM xclbin and every instruction stream built against it.
-    /// \note The xclbin's stem is the configuration tag each stream is prefixed
-    ///       with, so it is read off disk rather than spelled out here: the tag
-    ///       names the tuning the operator was built at and gains a field
-    ///       whenever that gains a knob. Only M, K and N are parsed out, and the
-    ///       file each shape came from is kept rather than rebuilt.
+    // Finds the GEMM xclbin and every instruction stream built against it.
+    // The xclbin's stem is the configuration tag each stream is prefixed
+    // with, so it is read off disk rather than spelled out here: the tag
+    // names the tuning the operator was built at and gains a field whenever
+    // that gains a knob. Only M, K and N are parsed out, and the file each
+    // shape came from is kept rather than rebuilt.
     void _scan_instruction_streams() {
         const char* want = std::getenv("IRON_GEMM_CONFIG");
         for (const auto& entry : std::filesystem::directory_iterator(this->artifact_dir_)) {
@@ -456,12 +447,12 @@ private:
         }
     }
 
-    /// \brief Refuse to serve a layer whose artifacts are incomplete.
-    /// \note Without this a missing shape silently shrinks coverage: the layer
-    ///       falls back to the engine, the model stays correct, and the only
-    ///       symptom is that prefill is slower than it should be. M is not
-    ///       checked here -- a chunk arriving at a length nothing was built for
-    ///       is a run-time fallback, not a broken build.
+    // Refuses to serve a layer whose artifacts are incomplete. Without this a
+    // missing shape silently shrinks coverage: the layer falls back to the
+    // engine, the model stays correct, and the only symptom is that prefill
+    // is slower than it should be. M is not checked here -- a chunk arriving
+    // at a length nothing was built for is a run-time fallback, not a broken
+    // build.
     void _require_artifacts(const layer_entry& l, size_t layer) const {
         const std::string where = "layers." + std::to_string(layer) + ".";
         auto fail = [&](const std::string& what, std::string_view role, uint32_t k, uint32_t n) {
@@ -489,11 +480,11 @@ private:
         }
     }
 
-    /// \brief Work out each layer's shapes and where its projections sit.
-    /// \note Shapes come from the model's own weight metadata, so the plugin
-    ///       never has to decide whether a layer is sliding-window or global.
-    ///       Only the double-wide MLP has to be recognised, because that is what
-    ///       tells it the layer's buffer holds no k or v.
+    // Works out each layer's shapes and where its projections sit. Shapes
+    // come from the model's own weight metadata, so the plugin never has to
+    // decide whether a layer is sliding-window or global. Only the
+    // double-wide MLP has to be recognised, because that is what tells it
+    // the layer's buffer holds no k or v.
     bool _plan_layers(const flm::plugin_context& ctx) {
         const std::filesystem::path model(ctx.model_path);
         const std::string q4_path = (model / "model.q4nx").string();
@@ -550,10 +541,10 @@ private:
         return true;
     }
 
-    /// \brief Byte offset of each projection inside the engine's per-layer buffer.
-    /// \note Mirrors the order the engine's loader writes: q, then k and v where
-    ///       the layer has them, o, then up and gate interleaved UPGATE_RUN
-    ///       out-features at a time, then down.
+    // Byte offset of each projection inside the engine's per-layer buffer.
+    // Mirrors the order the engine's loader writes: q, then k and v where the
+    // layer has them, o, then up and gate interleaved UPGATE_RUN out-features
+    // at a time, then down.
     void _place_projections(layer_entry& l) const {
         const uint32_t d = l.slots[R_Q]->k;
         size_t at = 0;
@@ -569,7 +560,7 @@ private:
         l.slots[R_DOWN]->offset = at;
     }
 
-    /// \brief M values at which every one of a layer's projections can run.
+    // M values at which every one of a layer's projections can run.
     std::set<uint32_t> _served_m(const layer_entry& l) const {
         std::optional<std::set<uint32_t>> served;
         for (size_t r = 0; r < names.size(); r++) {
@@ -613,7 +604,7 @@ private:
         }
     }
 
-    /// \brief One packed buffer per role, reused by every layer, sized for the widest.
+    // One packed buffer per role, reused by every layer, sized for the widest.
     void _allocate_staging() {
         size_t total = 0;
         for (size_t r = 0; r < names.size(); r++) {
@@ -635,11 +626,11 @@ private:
                      + " MiB over " + std::to_string(this->dequant_.shapes()) + " dequant shapes");
     }
 
-    /// \brief Point k and v at their share of the buffer q was dequantized into.
-    /// \note The packed order is column-block-major over N, so the three land
-    ///       one after another and a sub-buffer is all the GEMM needs -- the same
-    ///       thing the shipped mm expresses as a weight_offset. Every boundary is
-    ///       a whole number of column blocks, which at these K is page aligned.
+    // Points k and v at their share of the buffer q was dequantized into.
+    // The packed order is column-block-major over N, so the three land one
+    // after another and a sub-buffer is all the GEMM needs -- the same thing
+    // the shipped mm expresses as a weight_offset. Every boundary is a whole
+    // number of column blocks, which at these K is page aligned.
     void _cut_b_views() {
         for (layer_entry& l : this->layers_) {
             if (l.qkv_n == 0 || !this->_active(l)) continue;
@@ -666,10 +657,9 @@ private:
         if (std::filesystem::exists(attn)) this->sc_attn_ = std::make_unique<SafeTensors>(attn);
     }
 
-    /// \brief Compare a freshly dequantized buffer against the packed sidecar.
-    /// \note For bringing a new shape up. A wrong offset or stride yields a
-    ///       buffer of the right size holding real weight values in the wrong
-    ///       order, and the model still generates fluent text.
+    // For bringing a new shape up: a wrong offset or stride yields a buffer
+    // of the right size holding real weight values in the wrong order, and
+    // the model still generates fluent text.
     void _verify(int layer, size_t r, layer_entry& l) {
         const slot& s = *l.slots[r];
         bytes& produced = l.b_view[r].has_value() ? (bytes&)*l.b_view[r] : (bytes&)this->staging_[r];

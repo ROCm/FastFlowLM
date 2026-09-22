@@ -1,14 +1,12 @@
-/// \file op_registry.hpp
-/// \brief The set of model operations that can be overridden, and the binding
-///        of an override to them.
-/// \note  A model engine declares its operations once, at construction. The key
-///        space is therefore enumerable and fixed: override_op() on an unknown
-///        key throws rather than silently never firing.
-/// \note  Nothing here names an operation or spells a key. Both are the
-///        engine's: it may have layers, blocks, a nest of them or none, and it
-///        publishes whatever vocabulary its own header documents. All this
-///        needs is that keys be unique and that each operation's dispatch sites
-///        be numbered densely from zero.
+// The set of model operations that can be overridden, and the binding of an
+// override to them. A model engine declares its operations once, at
+// construction, so the key space is fixed: override_op() on an unknown key
+// throws rather than silently never firing.
+//
+// Nothing here names an operation or spells a key -- that's the engine's:
+// it may have layers, blocks, a nest of them or none. All this needs is that
+// keys be unique and that each operation's dispatch sites be numbered
+// densely from zero.
 #pragma once
 
 #include <algorithm>
@@ -27,24 +25,22 @@ namespace flm {
 template <typename App>
 class op_registry_t {
 public:
-    /// \param site_count the largest dispatch-site index any operation will use
+    // site_count: the largest dispatch-site index any operation will use.
     explicit op_registry_t(int site_count) : site_count_(site_count) {}
 
-    /// \brief Declare that `app` implements operation `name` at site `index`,
-    ///        reachable by a plugin as `key`.
-    /// \note  Engine-side. Several sites may share one app, and several apps may
-    ///        serve one name at different sites; both are resolved here, so
-    ///        neither the apps nor an override have to know about it.
+    // Declare that `app` implements operation `name` at site `index`,
+    // reachable by a plugin as `key`. Several sites may share one app, and
+    // several apps may serve one name at different sites; both are resolved
+    // here, so neither the apps nor an override have to know about it.
     void declare(std::string key, std::string_view name, int index, App& app) {
         app._declare_op(std::string(name), this->site_count_, &this->extent_);
         this->slots_.emplace(std::move(key), slot{ &app, index });
     }
 
-    /// \brief Publish the geometry of the chunk about to be processed.
-    /// \note Engine-side, once per chunk. Every op_call of that chunk carries it.
+    // Publish the geometry of the chunk about to be processed, once per
+    // chunk; every op_call of that chunk carries it.
     void set_extent(const op_extent& extent) { this->extent_ = extent; }
 
-    /// \brief Every declared key, in lexicographic order.
     std::vector<std::string> list_ops() const {
         std::vector<std::string> keys;
         keys.reserve(this->slots_.size());
@@ -52,11 +48,10 @@ public:
         return keys;
     }
 
-    /// \brief Route `hook` to every operation matching `key`.
-    /// \param key a declared key, or a pattern whose '*' matches one whole
-    ///        dot-separated segment, e.g. "layers.*.mlp.up_proj".
-    /// \return the number of operations bound.
-    /// \throws std::runtime_error if `key` matches nothing.
+    // Routes `hook` to every operation matching `key`, a declared key or a
+    // pattern whose '*' matches one whole dot-separated segment (e.g.
+    // "layers.*.mlp.up_proj"). Returns the number of operations bound;
+    // throws std::runtime_error if `key` matches nothing.
     size_t override_op(std::string_view key, std::shared_ptr<op_override> hook) {
         size_t bound = 0;
         for (auto& [declared, s] : this->slots_) {
