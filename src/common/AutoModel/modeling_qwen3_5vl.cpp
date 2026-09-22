@@ -496,7 +496,16 @@ NonStreamResult Qwen3_5VL::parse_nstream_content(const std::string response_text
             if (func_end_pos != std::string::npos) {
                 block_end = func_end_pos + func_end_tag.length();
             } else {
-                block_end = response_text.length();
+                // Neither closing tag is present, so generation stopped inside
+                // the call -- almost always because it hit the output limit
+                // while writing a large argument. Taking the remainder here
+                // fabricates a complete-looking call from a partial one: the
+                // arguments JSON is well formed, because it is rebuilt from the
+                // parsed parameters, so the client cannot tell it is truncated
+                // and runs it. A heredoc cut mid-body becomes an unterminated
+                // `cat <<EOF`. Drop the block instead; the response still
+                // carries finish_reason "length", which is the honest signal.
+                break;
             }
             search_from = block_end;
         }
