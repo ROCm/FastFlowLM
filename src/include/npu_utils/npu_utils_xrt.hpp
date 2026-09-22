@@ -72,13 +72,17 @@ class npu_xclbin_manager;
 ///@param kernel_name the name of the kernel
 ///@see xrt::kernel, xrt::device
 class npu_app : public flm::overridable_app<npu_app> {
-private:
-    // from external
+public:
+    // Exposed so a plugin can build XRT objects (xrt::kernel, xrt::bo,
+    // xrt::run) directly, for dispatch mechanisms this class does not itself
+    // provide.
     xrt::hw_context* context;
     xrt::device* device;
     std::string kernel_name;
     npu_device device_gen;
     bool enable_preemption;
+
+private:
 
     // self-managed
     bool module_valid;
@@ -234,19 +238,28 @@ public:
         std::vector<char> blob(static_cast<size_t>(size));
         fin.read(blob.data(), size);
         fin.close();
+        this->load_insts_from_memory(blob.data(), blob.size());
+        LOG_VERBOSE(2, "Loaded " << this->insts_bytes << " bytes of instructions from " << insts_name);
+    }
 
+    ///@brief Same as load_insts(), for instructions already in memory --
+    ///     e.g. generated fresh each call, not staged to disk.
+    void load_insts_from_memory(const void* data, size_t size){
+        if (size == 0) {
+            header_print_r("ERROR", "Empty instruction buffer");
+            exit(1);
+        }
         this->insts_kernel = std::make_unique<xrt::kernel>(*this->context, this->kernel_name);
         // Argument 1 is the instruction buffer; its group id is what selects
         // the memory bank the firmware fetches instructions from.
         this->insts_bo = std::make_unique<xrt::bo>(
-            *this->device, static_cast<size_t>(size),
+            *this->device, size,
             xrt::bo::flags::cacheable, this->insts_kernel->group_id(1)
         );
-        std::memcpy(this->insts_bo->map<char*>(), blob.data(), static_cast<size_t>(size));
+        std::memcpy(this->insts_bo->map<char*>(), data, size);
         this->insts_bo->sync(XCL_BO_SYNC_BO_TO_DEVICE);
-        this->insts_bytes = static_cast<size_t>(size);
+        this->insts_bytes = size;
         this->precompiled_insts = true;
-        LOG_VERBOSE(2, "Loaded " << this->insts_bytes << " bytes of instructions from " << insts_name);
     }
 
     void store_elf(std::string elf_name){

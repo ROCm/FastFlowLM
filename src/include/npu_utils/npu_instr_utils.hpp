@@ -181,6 +181,14 @@ class npu_sequence{
             this->instr_version++;
         }
 
+        ///@brief Same as from_file(..., is_binary=true), for words already in memory.
+        void from_vector(std::vector<uint32_t> words){
+            this->npu_seq = std::move(words);
+            this->seq2cmds();
+            this->is_valid = true;
+            this->instr_version++;
+        }
+
         /// @brief  write out the npu sequence to a file
         /// @param filename 
         void write_out_sequence(std::string filename){
