@@ -13,7 +13,8 @@ weight shapes inside the driver's budget of 16 hardware contexts.
 The dequant operator reads the block order FastFlowLM's loader writes to DRAM,
 so it consumes the engine's per-layer weight buffer in place.
 
-The artifacts committed alongside this plugin were built at IRON 3b9e4bb1b.
+Writes to ./build; copy its contents next to the model's own xclbins (the
+plugin's xclbin_path) before running flm with this plugin loaded.
 """
 
 import argparse

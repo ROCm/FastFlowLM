@@ -5,3 +5,8 @@ __pycache__
 _site
 .jekyll-metadata
 *.csv
+
+# iron_gemm's own artifacts (src/plugins/iron_gemm/tools/build_artifacts.py):
+# built by the user from IRON, not shipped.
+src/xclbins/*/FLM_GEMM_*
+src/xclbins/*/FLM_DequantBFP_*
