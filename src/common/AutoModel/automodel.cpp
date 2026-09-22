@@ -215,7 +215,11 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
 
     auto prefill_end_time = this->profiler_list[PREFILL_TIME].stop(tokens.size());
     meta_info.prefill_duration = (uint64_t)time_utils::duration_ns(prefill_start_time, prefill_end_time).first;
-    meta_info.prompt_tokens = tokens.size();
+    // `tokens` was trimmed to the uncached suffix above, so add the prefix served
+    // from the KV cache back on: usage.prompt_tokens is the whole prompt, and the
+    // cached part is reported separately rather than subtracted.
+    meta_info.cached_prompt_tokens = static_cast<int>(skip_count);
+    meta_info.prompt_tokens = static_cast<int>(skip_count + tokens.size());
 
     if (meta_info.stop_reason == CANCEL_DETECTED) {
         return false;

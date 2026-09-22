@@ -583,6 +583,9 @@ bool Qwen3VL_Flash::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& inpu
 
     meta_info.prefill_duration = (uint64_t)time_utils::duration_ns(prefill_start_time, prefill_end_time).first;
     meta_info.prompt_tokens = static_cast<int>(tokens.size()); // report full prompt length to caller
+    // The pinned system prefix is already in the kv cache, so it is part of the
+    // prompt but was not prefilled on this turn.
+    meta_info.cached_prompt_tokens = skip;
 
     if (meta_info.stop_reason == CANCEL_DETECTED) {
         return false;

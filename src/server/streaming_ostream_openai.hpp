@@ -207,6 +207,7 @@ private:
             })},
             {"usage", {
                 {"prompt_tokens", meta_info.prompt_tokens},
+                {"prompt_tokens_details", {{"cached_tokens", meta_info.cached_prompt_tokens}}},
                 {"completion_tokens", meta_info.generated_tokens},
                 {"total_tokens", meta_info.prompt_tokens + meta_info.generated_tokens}
             }}
@@ -497,6 +498,7 @@ private:
             })},
             {"usage", {
                 {"prompt_tokens", meta_info.prompt_tokens},
+                {"prompt_tokens_details", {{"cached_tokens", meta_info.cached_prompt_tokens}}},
                 {"completion_tokens", meta_info.generated_tokens},
                 {"total_tokens", meta_info.prompt_tokens + meta_info.generated_tokens},
                 {"active_kv_tokens", this->auto_chat_engine->get_current_context_length()},
@@ -505,7 +507,7 @@ private:
                 {"load_duration", static_cast<double>(meta_info.load_duration) / 1'000'000'000},
                 {"prefill_duration_ttft", static_cast<double>(meta_info.prefill_duration) / 1'000'000'000},
                 {"decoding_duration", static_cast<double>(meta_info.decoding_duration) / 1'000'000'000},
-                {"prefill_speed_tps", static_cast<double>(meta_info.prompt_tokens) / static_cast<double>(meta_info.prefill_duration) * 1'000'000'000},
+                {"prefill_speed_tps", static_cast<double>(meta_info.prompt_tokens - meta_info.cached_prompt_tokens) / static_cast<double>(meta_info.prefill_duration) * 1'000'000'000},
                 {"decoding_speed_tps", static_cast<double>(meta_info.generated_tokens) / static_cast<double>(meta_info.decoding_duration) * 1'000'000'000},
             }}
         };
