@@ -40,6 +40,18 @@ using decode_layer_async_sig_t = flm::hook_result<xrt::run>(bytes& hidden_state_
 using lm_head_sig_t = flm::hook_result<xrt::run>(bytes& logits, bytes& lm_head_weights, bytes& hidden_state);
 using audio_conv1d_sig_t = flm::hook_result<ert_cmd_state>(bytes& out, bytes& in, bytes& weights, int64_t layer);
 
+// The vision and audio encoders' own generated sequences take (in, weights,
+// out) -- the reverse of the decode path's (out, in, weights) -- so these get
+// their own shapes rather than reusing proj_sig_t/proj_async_sig_t.
+using layer_proj_sig_t = flm::hook_result<ert_cmd_state>(bytes& in, bytes& weights, bytes& out, int64_t layer, int64_t padded);
+using layer_proj_async_sig_t = flm::hook_result<xrt::run>(bytes& in, bytes& weights, bytes& out, int64_t layer, int64_t padded);
+// A one-shot embedding/projection step: no layer loop, so no layer or padded argument.
+using embed_sig_t = flm::hook_result<ert_cmd_state>(bytes& in, bytes& weights, bytes& out);
+// Vision attention takes q/k/v as three separate buffers, not one kv_cache.
+using vision_attn_core_sig_t = flm::hook_result<xrt::run>(bytes& out, bytes& q, bytes& k, bytes& v, int64_t layer, int64_t padded);
+// The background weight-preload run's sequence takes no buffer arguments at all.
+using preload_sig_t = flm::hook_result<xrt::run>();
+
 // Every operation, one name and one typedef each: sliding-window and global
 // attention run different kernels, and a skip layer's mlp is a different
 // (double-wide) sequence, so each gets its own rather than sharing one
@@ -118,6 +130,76 @@ inline constexpr std::string_view lm_head = "lm_head";
 
 using audio_conv1d_func_t = audio_conv1d_sig_t;
 inline constexpr std::string_view audio_conv1d = "audio.conv1d";
+
+// The vision encoder: one patch-embedding step, then one attention block and
+// one mlp per hidden layer, then one projection into the language model's
+// embedding space.
+using vision_patch_embed_func_t = embed_sig_t;
+using vision_pos_embed_dim0_func_t = embed_sig_t;
+using vision_pos_embed_dim1_func_t = embed_sig_t;
+using vision_q_proj_func_t = layer_proj_async_sig_t;
+using vision_k_proj_func_t = layer_proj_async_sig_t;
+using vision_v_proj_func_t = layer_proj_async_sig_t;
+using vision_attn_core_func_t = vision_attn_core_sig_t;
+using vision_o_proj_func_t = layer_proj_sig_t;
+using vision_gate_proj_func_t = layer_proj_async_sig_t;
+using vision_up_proj_func_t = layer_proj_async_sig_t;
+using vision_down_proj_func_t = layer_proj_sig_t;
+using vision_to_language_proj_func_t = embed_sig_t;
+inline constexpr std::string_view vision_patch_embed = "vision.patch_embed";
+inline constexpr std::string_view vision_pos_embed_dim0 = "vision.pos_embed.dim0";
+inline constexpr std::string_view vision_pos_embed_dim1 = "vision.pos_embed.dim1";
+inline constexpr std::string_view vision_q_proj = "vision.q_proj";
+inline constexpr std::string_view vision_k_proj = "vision.k_proj";
+inline constexpr std::string_view vision_v_proj = "vision.v_proj";
+inline constexpr std::string_view vision_attn_core = "vision.attn_core";
+inline constexpr std::string_view vision_o_proj = "vision.o_proj";
+inline constexpr std::string_view vision_gate_proj = "vision.mlp.gate_proj";
+inline constexpr std::string_view vision_up_proj = "vision.mlp.up_proj";
+inline constexpr std::string_view vision_down_proj = "vision.mlp.down_proj";
+inline constexpr std::string_view vision_to_language_proj = "vision.to_language_proj";
+
+// The audio encoder: one sub-sample projection step, then one attention
+// block, one conv1d block (its own start/end pointwise projections; the
+// depthwise conv1d itself is audio_conv1d above) and one FFN pair per hidden
+// layer, then a pre-encode projection and one into the language model's
+// embedding space.
+using audio_sub_sample_proj_func_t = embed_sig_t;
+using audio_q_proj_func_t = layer_proj_async_sig_t;
+using audio_k_proj_func_t = layer_proj_async_sig_t;
+using audio_v_proj_func_t = layer_proj_async_sig_t;
+using audio_o_proj_func_t = layer_proj_sig_t;
+using audio_ffn_up_proj_func_t = layer_proj_async_sig_t;
+using audio_ffn_down_proj_func_t = layer_proj_sig_t;
+using audio_conv1d_start_proj_func_t = layer_proj_sig_t;
+using audio_conv1d_end_proj_func_t = layer_proj_sig_t;
+using audio_pre_encode_proj_func_t = embed_sig_t;
+using audio_to_language_proj_func_t = embed_sig_t;
+inline constexpr std::string_view audio_sub_sample_proj = "audio.sub_sample_proj";
+inline constexpr std::string_view audio_q_proj = "audio.q_proj";
+inline constexpr std::string_view audio_k_proj = "audio.k_proj";
+inline constexpr std::string_view audio_v_proj = "audio.v_proj";
+inline constexpr std::string_view audio_o_proj = "audio.o_proj";
+inline constexpr std::string_view audio_ffn_up_proj = "audio.ffn.up_proj";
+inline constexpr std::string_view audio_ffn_down_proj = "audio.ffn.down_proj";
+inline constexpr std::string_view audio_conv1d_start_proj = "audio.conv1d.start_proj";
+inline constexpr std::string_view audio_conv1d_end_proj = "audio.conv1d.end_proj";
+inline constexpr std::string_view audio_pre_encode_proj = "audio.pre_encode_proj";
+inline constexpr std::string_view audio_to_language_proj = "audio.to_language_proj";
+
+// The per-layer-input (PLI) path: a model-wide down projection run once per
+// batch, and a gate/up pair run at the end of every layer.
+using pli_down_proj_func_t = embed_sig_t;
+using pli_gate_proj_func_t = layer_proj_sig_t;
+using pli_up_proj_func_t = layer_proj_sig_t;
+inline constexpr std::string_view pli_down_proj = "pli.down_proj";
+inline constexpr std::string_view pli_gate_proj = "pli.gate_proj";
+inline constexpr std::string_view pli_up_proj = "pli.up_proj";
+
+// The background run that preloads the next layer's weights while the
+// current token executes. Its sequence takes no buffer arguments.
+using layer_pre_load_func_t = preload_sig_t;
+inline constexpr std::string_view layer_pre_load = "engine.layer_pre_load";
 }  // namespace op
 
 }  // namespace gemma4e_ops
