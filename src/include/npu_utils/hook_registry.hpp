@@ -20,6 +20,8 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
+#include <utility>
 
 namespace flm {
 
@@ -36,11 +38,27 @@ public:
     bool is_skip() const { return disposition_ == hook_disposition::skip; }
     T&& value() && { return std::move(*value_); }
 
+    // skip() becomes nullopt; a caller that only cares whether there is a
+    // run to start/wait on can use this instead of checking is_skip() itself.
+    std::optional<T> to_optional() && {
+        if (this->is_skip()) return std::nullopt;
+        return std::move(*this).value();
+    }
+
 private:
     explicit hook_result(hook_disposition d) : disposition_(d) {}
     hook_disposition disposition_;
     std::optional<T> value_;
 };
+
+namespace detail {
+
+template <size_t Keep, typename F, typename Tuple, size_t... I>
+decltype(auto) call_prefix(F&& f, Tuple&& t, std::index_sequence<I...>) {
+    return std::forward<F>(f)(std::get<I>(std::forward<Tuple>(t))...);
+}
+
+}  // namespace detail
 
 class hook_registry {
 public:
@@ -71,6 +89,34 @@ public:
             auto result = override_fn(args...);
             return result.is_defer() ? default_fn(args...) : result;
         };
+    }
+
+    // Same as resolve(), but for the common case where the default is App's
+    // own operator(), called with Sig's last N arguments dropped -- the
+    // scalar metadata (layer index, M or context length) a default
+    // implementation never needs. See resolve_drop_trailing_async() for a
+    // default that builds a run to start/wait on instead.
+    template <typename Sig, size_t N, typename App>
+    std::function<Sig> resolve_drop_trailing(std::string_view name, App& app) {
+        return this->resolve<Sig>(name, std::function<Sig>([&app](auto&&... args) {
+            constexpr size_t keep = sizeof...(args) - N;
+            return detail::call_prefix<keep>(
+                [&app](auto&&... kept) { return app(std::forward<decltype(kept)>(kept)...); },
+                std::forward_as_tuple(std::forward<decltype(args)>(args)...),
+                std::make_index_sequence<keep>{});
+        }));
+    }
+
+    // Same as resolve_drop_trailing(), but the default is App's create_run().
+    template <typename Sig, size_t N, typename App>
+    std::function<Sig> resolve_drop_trailing_async(std::string_view name, App& app) {
+        return this->resolve<Sig>(name, std::function<Sig>([&app](auto&&... args) {
+            constexpr size_t keep = sizeof...(args) - N;
+            return detail::call_prefix<keep>(
+                [&app](auto&&... kept) { return app.create_run(std::forward<decltype(kept)>(kept)...); },
+                std::forward_as_tuple(std::forward<decltype(args)>(args)...),
+                std::make_index_sequence<keep>{});
+        }));
     }
 
     // Throws if a plugin bound a name the engine never resolved -- almost
