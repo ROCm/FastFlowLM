@@ -61,8 +61,14 @@ if(FLM_ENABLE_RAI)
     # A conda/pip prefix keeps its import libs beside the headers; a CMake
     # install prefix puts them in lib/ or lib64/ depending on the distribution,
     # so both are offered rather than assuming either.
+    # lib/ is where this repository already keeps the binaries it vendors, so a
+    # corelib dropped in beside them is found without anyone passing a path.
+    # It is searched first: a build that has deliberately been given a corelib
+    # should use that one rather than whatever an unrelated prefix happens to
+    # hold.
     find_library(RYZENAI_CORELIB_LIBRARY NAMES ryzenai_corelib corelib
-        HINTS "${RYZENAI_CORELIB_INCLUDE_DIR}/../lib"
+        HINTS "${CMAKE_SOURCE_DIR}/lib"
+              "${RYZENAI_CORELIB_INCLUDE_DIR}/../lib"
               "${RYZENAI_CORELIB_INCLUDE_DIR}/../lib64"
               "$ENV{RYZENAI_CORELIB_LIB_DIR}" REQUIRED)
     # XRT's xrt/detail/any.h selects boost::any over std::any whenever
