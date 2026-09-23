@@ -31,7 +31,7 @@ namespace gemma4e_ops {
 // for one that builds a run to start/wait later.
 using proj_sig_t = flm::hook_result<ert_cmd_state>(bytes& out, bytes& in, bytes& weights, int64_t layer, int64_t padded);
 using proj_async_sig_t = flm::hook_result<xrt::run>(bytes& out, bytes& in, bytes& weights, int64_t layer, int64_t padded);
-using attn_core_sig_t = flm::hook_result<ert_cmd_state>(bytes& out, bytes& q, bytes& kv_cache, int64_t layer, int64_t padded);
+using attn_core_sig_t = flm::hook_result<ert_cmd_state>(bytes& out, bytes& q, bytes& kv_cache, int64_t layer, int64_t padded, int64_t l_begin_chunked);
 using dequant_sig_t = flm::hook_result<ert_cmd_state>(bytes& dequantized, bytes& quantized, int64_t layer, int64_t padded);
 using decode_layer_sig_t = flm::hook_result<ert_cmd_state>(bytes& hidden_state_inout, bytes& proj_weights,
     bytes& rms_weights, bytes& rope_rms_weights, bytes& kv_cache, int64_t layer, int64_t context_len);
