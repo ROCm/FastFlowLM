@@ -21,18 +21,24 @@ This is a contributor document. For *using* a backend once it exists — `--back
 
 | | |
 |---|---|
-| **Platform** | Windows only. `FLM_ENABLE_RAI` is rejected at configure time elsewhere ([`CMakeLists.txt:54`](../../CMakeLists.txt#L54)). |
+| **Platform** | Windows and Linux. Both configure and build; only Windows has been run on hardware, and the `src/test/phi4_rai` suite is still Windows-only. |
 | **Hardware** | An aie_next NPU. There is no simulator; a wrong shape shows up as garbage output, not an error. |
 | **corelib headers** | Exactly **0.5.0**. [`corelib_api.hpp`](../../include/rai/corelib_api.hpp) `#error`s on any other version — deliberately, because the C ABI has changed shape between patch releases. |
 | **Weights** | A GGUF the vendor kernels can requantize. Phi-4 uses Q8_0; the corelib entry points are `*_create_gguf_requantized`. |
 
 Configure with:
 
-```powershell
+```shell
 cmake -B build -S src -DFLM_ENABLE_RAI=ON
 # RYZENAI_CORELIB_INCLUDE_DIR / RYZENAI_CORELIB_LIB_DIR are found automatically
-# when they are on the default paths; otherwise pass them.
+# when they are on the default paths; otherwise pass them. The library lookup
+# searches lib/ and lib64/ beside the headers as well as RYZENAI_CORELIB_LIB_DIR.
 ```
+
+Boost is looked up only on Windows: XRT's `xrt/detail/any.h` falls back to
+`boost::any` whenever `__cplusplus` reads below 201703L, which MSVC does
+unless handed `/Zc:__cplusplus`. GCC and Clang report C++20 honestly, so that
+branch is never taken and there is nothing to find.
 
 That builds the `flm_rai` static library and links it into `flm`. The
 library carries `FLM_ENABLE_RAI=1` as a **PUBLIC** compile definition, so

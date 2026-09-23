@@ -55,19 +55,29 @@ option(FLM_ENABLE_RAI
        "Reach kernels through ryzenai-corelib instead of FastFlowLM's own flow" OFF)
 
 if(FLM_ENABLE_RAI)
-    if(NOT WIN32)
-        message(FATAL_ERROR "FLM_ENABLE_RAI currently requires Windows")
-    endif()
     find_path(RYZENAI_CORELIB_INCLUDE_DIR NAMES ryzenai/corelib.h REQUIRED)
     # The main binary needs ryzenai::corelib::GetDevice(), a C++ entry point the
     # C ABI does not expose, so corelib is linked in rather than dlopened.
+    # A conda/pip prefix keeps its import libs beside the headers; a CMake
+    # install prefix puts them in lib/ or lib64/ depending on the distribution,
+    # so both are offered rather than assuming either.
     find_library(RYZENAI_CORELIB_LIBRARY NAMES ryzenai_corelib corelib
         HINTS "${RYZENAI_CORELIB_INCLUDE_DIR}/../lib"
+              "${RYZENAI_CORELIB_INCLUDE_DIR}/../lib64"
               "$ENV{RYZENAI_CORELIB_LIB_DIR}" REQUIRED)
-    find_path(FLM_CORELIB_BOOST_INCLUDE_DIR NAMES boost/any.hpp
-        HINTS "$ENV{CONDA_PREFIX}/Library/include"
-              "$ENV{USERPROFILE}/anaconda3/Library/include"
-              "C:/dev/boost_1_88_0" REQUIRED)
+    # XRT's xrt/detail/any.h selects boost::any over std::any whenever
+    # __cplusplus reads below 201703L. MSVC reports 199711L regardless of /std
+    # unless it is handed /Zc:__cplusplus, so a Windows build has to supply
+    # Boost headers that nothing else on the rai path wants. GCC and Clang
+    # report C++20 honestly, so that branch is never taken there and there is
+    # nothing to find -- which is why this is a Windows-only lookup rather than
+    # a dependency of the rai backend.
+    if(WIN32)
+        find_path(FLM_CORELIB_BOOST_INCLUDE_DIR NAMES boost/any.hpp
+            HINTS "$ENV{CONDA_PREFIX}/Library/include"
+                  "$ENV{USERPROFILE}/anaconda3/Library/include"
+                  "C:/dev/boost_1_88_0" REQUIRED)
+    endif()
 endif()
 
 if(FLM_USE_HRX)
@@ -298,14 +308,29 @@ if(FLM_ENABLE_RAI)
     include("${CMAKE_SOURCE_DIR}/common/rai/rai_sources.cmake")
     add_library(flm_rai STATIC ${FLM_RAI_SOURCES})
     target_include_directories(flm_rai PUBLIC
-        "${CMAKE_SOURCE_DIR}/include" "${RYZENAI_CORELIB_INCLUDE_DIR}"
-        "${XRT_INCLUDE_DIR}" "${FLM_CORELIB_BOOST_INCLUDE_DIR}")
+        "${CMAKE_SOURCE_DIR}/include" "${RYZENAI_CORELIB_INCLUDE_DIR}")
+    # XRT headers come from whichever discovery above succeeded: pkg-config sets
+    # XRT_INCLUDE_DIRS, the Windows and /opt/xilinx fallbacks set the singular
+    # XRT_INCLUDE_DIR. Same choice the flm target makes below -- naming only the
+    # singular one here left flm_rai with no XRT headers at all on Linux.
+    if(NOT WIN32 AND XRT_FOUND)
+        target_include_directories(flm_rai PUBLIC ${XRT_INCLUDE_DIRS})
+    else()
+        target_include_directories(flm_rai PUBLIC ${XRT_INCLUDE_DIR})
+    endif()
+    # Only Windows looks this one up; see the find_path above for why.
+    if(FLM_CORELIB_BOOST_INCLUDE_DIR)
+        target_include_directories(flm_rai PUBLIC "${FLM_CORELIB_BOOST_INCLUDE_DIR}")
+    endif()
     # RYZENAI_CORELIB_STATIC drops the vendor header's dllimport decoration;
     # FLM_CORELIB_LINK_STATIC is what tells our own code the symbols are linked
-    # in and must be bound directly instead of through LoadLibrary.
+    # in and must be bound directly instead of through LoadLibrary/dlopen.
     target_compile_definitions(flm_rai PUBLIC
         FLM_ENABLE_RAI=1 RYZENAI_CORELIB_STATIC=1 FLM_CORELIB_LINK_STATIC=1)
-    target_link_libraries(flm_rai PUBLIC "${RYZENAI_CORELIB_LIBRARY}")
+    # CMAKE_DL_LIBS is -ldl on Linux and empty on Windows: corelib_api.cpp still
+    # compiles its dlopen path in a statically linked build, so the symbols have
+    # to resolve even though nothing calls them here.
+    target_link_libraries(flm_rai PUBLIC "${RYZENAI_CORELIB_LIBRARY}" ${CMAKE_DL_LIBS})
     target_link_libraries(flm PRIVATE flm_rai)
 endif()
 

@@ -31,7 +31,7 @@ flm run phi4-mini-it:4b
 - **Source format:** GGUF, read directly. No ONNX model, no tensor manifest, and no converted or packed weight file is produced or shipped.
 - **Quantization:** GGML `Q8_0` in the file, requantized to **group 64** while the weights are packed for the device, through corelib's explicit `*_create_gguf_requantized` entry points. This is a **lossy** second quantization step and it is not reversible; output will differ from the Q8_0 source.
 - **Usable generation window:** 4095 tokens — the rendered prompt plus the requested output together, so the largest admissible prompt is 4094. An over-capacity request is rejected with HTTP 400 *before* any work is submitted to the device. Note this is far below the model's 128k context; see below for why.
-- **Availability:** Windows only, and this is a **developer build**. The rai runtime is not packaged by the MSI or Inno installer; you build against corelib yourself.
+- **Availability:** Windows and Linux, and this is a **developer build**. The rai runtime is not packaged by the MSI, Inno or snap installer; you build against corelib yourself.
 
 On rai this tag pulls from two pinned repositories, because the GGUF publisher does not ship the tokenizer files FastFlowLM's tokenizer frontend consumes:
 
@@ -52,17 +52,29 @@ From `FastFlowLM/src`, in a Visual Studio developer command prompt:
 
 ```powershell
 $env:RYZENAI_CORELIB_INCLUDE_DIR = 'C:/path/to/ryzenai-corelib/install/include'
-cmake --preset windows-rai          # sets FLM_ENABLE_RAI=ON, builds into src/build-rai
+$env:RYZENAI_CORELIB_LIBRARY = 'C:/path/to/ryzenai-corelib/install/lib/ryzenai_corelib.lib'
+cmake --preset windows-rai -DFLM_ENABLE_RAI=ON   # builds into src/build-rai
 cmake --build --preset windows-rai
 ```
 
-The `windows-rai` preset reads `RYZENAI_CORELIB_INCLUDE_DIR` and `RYZENAI_CORELIB_LIBRARY` from the environment, so set both before configuring. The configure step also locates a Boost include directory, and hard-errors if the option is enabled on a non-Windows host. Everything else — XRT, FFmpeg, curl, FFTW — is the ordinary FastFlowLM dependency set; the rai option does not relax any of it.
+or, on Linux:
+
+```shell
+export RYZENAI_CORELIB_INCLUDE_DIR=/path/to/ryzenai-corelib/install/include
+export RYZENAI_CORELIB_LIBRARY=/path/to/ryzenai-corelib/install/lib/libryzenai_corelib.so
+cmake --preset linux-rai -DFLM_ENABLE_RAI=ON     # builds into src/build-rai
+cmake --build --preset linux-rai
+```
+
+Both presets read `RYZENAI_CORELIB_INCLUDE_DIR` and `RYZENAI_CORELIB_LIBRARY` from the environment, so set both before configuring. They ship with `FLM_ENABLE_RAI` off so that the preset still configures on a machine without corelib, which is why the option is passed on the command line above. The configure step additionally locates a Boost include directory on Windows only — XRT's `xrt/detail/any.h` reaches for `boost::any` when `__cplusplus` reads below 201703L, which MSVC does unless it is handed `/Zc:__cplusplus`; GCC and Clang report C++20 honestly, so nothing there needs Boost. Everything else — XRT, FFmpeg, curl, FFTW — is the ordinary FastFlowLM dependency set; the rai option does not relax any of it.
+
+The `src/test/phi4_rai` suite is still Windows-only and is not configured on Linux; a Linux build is a compile-and-link path, not a tested one.
 
 ### Pointing FastFlowLM at the runtime
 
-A rai build (`-DFLM_ENABLE_RAI=ON`) **links corelib in**, because the NPU device the whole process shares comes from corelib's `ryzenai::corelib::GetDevice()` rather than from a device FastFlowLM opens itself. Point the build at the library with `RYZENAI_CORELIB_INCLUDE_DIR` and `RYZENAI_CORELIB_LIBRARY`. `FLM_RAI_CORELIB_PATH` selects a DLL only in the older dynamically loading configuration; in a statically linked rai build it is ignored, and `flm` says so if it is set.
+A rai build (`-DFLM_ENABLE_RAI=ON`) **links corelib in**, because the NPU device the whole process shares comes from corelib's `ryzenai::corelib::GetDevice()` rather than from a device FastFlowLM opens itself. Point the build at the library with `RYZENAI_CORELIB_INCLUDE_DIR` and `RYZENAI_CORELIB_LIBRARY`. `FLM_RAI_CORELIB_PATH` selects a shared library (`.dll` on Windows, `.so` elsewhere) only in the older dynamically loading configuration; in a statically linked rai build it is ignored, and `flm` says so if it is set.
 
-The corelib ABI is still pre-1.0, so FastFlowLM requires an **exact `0.3.0`** match on major, minor and patch. The version is queried before any other entry point, so a mismatched runtime reports a version error rather than a missing symbol. Corelib's own dependency directory must be reachable on `PATH`.
+The corelib ABI is still pre-1.0, so FastFlowLM requires an **exact `0.3.0`** match on major, minor and patch. The version is queried before any other entry point, so a mismatched runtime reports a version error rather than a missing symbol. Corelib's own dependency directory must be reachable on `PATH` (Windows) or `LD_LIBRARY_PATH` (Linux).
 
 ```powershell
 flm pull phi4-mini-it:4b

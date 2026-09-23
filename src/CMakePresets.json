@@ -32,6 +32,18 @@
       }
     },
     {
+      "name": "linux-rai",
+      "displayName": "Linux RAI",
+      "description": "Linux build with statically linked ryzenai-corelib support",
+      "inherits": "linux-default",
+      "binaryDir": "${sourceDir}/build-rai",
+      "cacheVariables": {
+        "FLM_ENABLE_RAI": "OFF",
+        "RYZENAI_CORELIB_INCLUDE_DIR": "$env{RYZENAI_CORELIB_INCLUDE_DIR}",
+        "RYZENAI_CORELIB_LIBRARY": "$env{RYZENAI_CORELIB_LIBRARY}"
+      }
+    },
+    {
       "name": "linux-snap",
       "displayName": "Linux Snap Build",
       "description": "Configuration for building inside a snapcraft part",
@@ -95,6 +107,14 @@
       "displayName": "Windows Default Build",
       "description": "Build Windows preset in Release with parallel jobs",
       "configurePreset": "windows-default",
+      "configuration": "Release",
+      "jobs": 4
+    },
+    {
+      "name": "linux-rai",
+      "displayName": "Linux RAI Build",
+      "description": "Build the optional ryzenai-corelib runtime in Release",
+      "configurePreset": "linux-rai",
       "configuration": "Release",
       "jobs": 4
     },

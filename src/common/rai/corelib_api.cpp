@@ -12,6 +12,8 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#else
+#include <dlfcn.h>
 #endif
 
 namespace flm::corelib {
@@ -45,13 +47,33 @@ std::string ErrorText(std::string_view call,
     return result;
 }
 
-bool HasDllExtension(const std::filesystem::path& path) {
+/// \brief what a shared library is called on this platform
+/// \note Only the spelling changes between platforms, so the extension and the
+///       file name are named once here rather than at each of the three places
+///       that used to write ".dll" inline. FLM_RAI_CORELIB_PATH is validated
+///       against the same constants, so the diagnostic cannot describe a
+///       different suffix from the one actually required.
+constexpr std::string_view kSharedLibraryExtension =
+#ifdef _WIN32
+    ".dll";
+#else
+    ".so";
+#endif
+
+constexpr std::string_view kCorelibLibraryName =
+#ifdef _WIN32
+    "ryzenai_corelib.dll";
+#else
+    "libryzenai_corelib.so";
+#endif
+
+bool HasSharedLibraryExtension(const std::filesystem::path& path) {
     std::string extension = path.extension().string();
     std::transform(extension.begin(), extension.end(), extension.begin(),
                    [](unsigned char value) {
                        return static_cast<char>(std::tolower(value));
                    });
-    return extension == ".dll";
+    return extension == kSharedLibraryExtension;
 }
 }  // namespace
 
@@ -106,18 +128,15 @@ std::shared_ptr<CorelibApi> CorelibApi::ResolveForTest(
         std::move(resolver), std::move(loaded_library_path)));
 }
 
-std::shared_ptr<CorelibApi> CorelibApi::Load(const std::filesystem::path& dll) {
-#ifndef _WIN32
-    (void)dll;
-    throw std::runtime_error("ryzenai-corelib loading currently requires Windows");
-#else
-    const std::filesystem::path absolute_dll = std::filesystem::absolute(dll);
+std::shared_ptr<CorelibApi> CorelibApi::Load(const std::filesystem::path& library) {
+    const std::filesystem::path absolute_library = std::filesystem::absolute(library);
+#ifdef _WIN32
     HMODULE raw_module = LoadLibraryExW(
-        absolute_dll.c_str(), nullptr,
+        absolute_library.c_str(), nullptr,
         LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
     if (!raw_module) {
-        throw std::runtime_error("failed to load corelib DLL '" +
-                                 absolute_dll.string() + "' (Windows error " +
+        throw std::runtime_error("failed to load corelib library '" +
+                                 absolute_library.string() + "' (Windows error " +
                                  std::to_string(GetLastError()) + ")");
     }
     auto module = std::shared_ptr<void>(raw_module, [](void* handle) {
@@ -128,8 +147,27 @@ std::shared_ptr<CorelibApi> CorelibApi::Load(const std::filesystem::path& dll) {
         return reinterpret_cast<void*>(
             GetProcAddress(static_cast<HMODULE>(module.get()), terminated.c_str()));
     };
-    return ResolveForTest(std::move(resolver), absolute_dll);
+#else
+    // RTLD_LOCAL so corelib's symbols do not join the global namespace: this
+    // process also links XRT directly, and a corelib built against a different
+    // one must not be able to satisfy our XRT calls. RTLD_NOW because a missing
+    // symbol has to surface here, next to the path that was loaded, rather than
+    // at the first dispatch.
+    void* raw_module = ::dlopen(absolute_library.c_str(), RTLD_NOW | RTLD_LOCAL);
+    if (!raw_module) {
+        const char* reason = ::dlerror();
+        throw std::runtime_error("failed to load corelib library '" +
+                                 absolute_library.string() + "' (" +
+                                 (reason ? reason : "unknown dlopen failure") + ")");
+    }
+    auto module = std::shared_ptr<void>(
+        raw_module, [](void* handle) { ::dlclose(handle); });
+    Resolver resolver = [module](std::string_view name) -> void* {
+        const std::string terminated(name);
+        return ::dlsym(module.get(), terminated.c_str());
+    };
 #endif
+    return ResolveForTest(std::move(resolver), absolute_library);
 }
 
 #if defined(FLM_CORELIB_LINK_STATIC)
@@ -163,16 +201,18 @@ std::filesystem::path CorelibApi::ResolveLibraryPath(
         const std::filesystem::path path(configured);
         if (!path.is_absolute()) {
             throw std::runtime_error(
-                "FLM_RAI_CORELIB_PATH must be an absolute .dll path");
+                "FLM_RAI_CORELIB_PATH must be an absolute " +
+                std::string(kSharedLibraryExtension) + " path");
         }
-        if (!path.has_filename() || !HasDllExtension(path)) {
+        if (!path.has_filename() || !HasSharedLibraryExtension(path)) {
             throw std::runtime_error(
-                "FLM_RAI_CORELIB_PATH must name an absolute .dll file");
+                "FLM_RAI_CORELIB_PATH must name an absolute " +
+                std::string(kSharedLibraryExtension) + " file");
         }
         return path;
     }
     return std::filesystem::absolute(executable_dir / "rai" /
-                                     "ryzenai_corelib.dll");
+                                     kCorelibLibraryName);
 }
 
 const CorelibFunctions& CorelibApi::functions() const noexcept { return functions_; }

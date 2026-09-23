@@ -82,7 +82,10 @@ struct CorelibFunctions {
 class CorelibApi final {
 public:
     using Resolver = std::function<void*(std::string_view)>;
-    static std::shared_ptr<CorelibApi> Load(const std::filesystem::path& dll);
+    /// \brief load corelib from a shared library at run time
+    /// \note LoadLibraryEx on Windows, dlopen elsewhere. Unused by a build that
+    ///       links corelib in (see LoadStatic), but still compiled there.
+    static std::shared_ptr<CorelibApi> Load(const std::filesystem::path& library);
 #if defined(FLM_CORELIB_LINK_STATIC)
     /// \brief bind to the corelib linked into this binary
     /// \return the API bound to the linked symbols

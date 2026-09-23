@@ -3,8 +3,18 @@
 #include "models/phi4/rai/phi4_rai_constants.hpp"
 #include "utils/file_access.hpp"
 
+#ifdef _WIN32
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
+#else
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -266,8 +276,15 @@ struct Phi4GgufPackage::Impl {
     };
 
     std::filesystem::path path;
+    // The mapping handles differ by platform; everything below them -- `data`,
+    // `size` and the parsed tables -- does not, so only these two lines and the
+    // destructor and Open() below are conditional.
+#ifdef _WIN32
     HANDLE file = INVALID_HANDLE_VALUE;
     HANDLE mapping = nullptr;
+#else
+    int file = -1;
+#endif
     const std::byte* data = nullptr;
     std::uint64_t size = 0;
     std::map<std::string, TensorRecord, std::less<>> tensors;
@@ -275,9 +292,17 @@ struct Phi4GgufPackage::Impl {
     std::map<std::string, std::uint32_t, std::less<>> metadata_types;
 
     ~Impl() {
+#ifdef _WIN32
         if (data) UnmapViewOfFile(data);
         if (mapping) CloseHandle(mapping);
         if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+#else
+        // munmap takes the size the mapping was made with, so it has to run
+        // before anything clears `size`; nothing here does.
+        if (data)
+            ::munmap(const_cast<std::byte*>(data), static_cast<std::size_t>(size));
+        if (file >= 0) ::close(file);
+#endif
     }
 
     std::span<const std::byte> bytes() const {
@@ -335,6 +360,7 @@ std::shared_ptr<Phi4GgufPackage> Phi4GgufPackage::Open(
     auto impl = std::make_unique<Impl>();
     impl->path = gguf_path;
     flm::file_access::ObserveOpen(gguf_path);
+#ifdef _WIN32
     impl->file = CreateFileW(gguf_path.c_str(), GENERIC_READ, FILE_SHARE_READ,
                              nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (impl->file == INVALID_HANDLE_VALUE)
@@ -354,6 +380,33 @@ std::shared_ptr<Phi4GgufPackage> Phi4GgufPackage::Open(
     if (!impl->data)
         throw std::runtime_error("GGUF mapping: actual MapViewOfFile failure " +
                                  std::to_string(GetLastError()) + ", expected FILE_MAP_READ view");
+#else
+    // The POSIX half of the same three steps: open, size, map read-only. errno
+    // stands in for GetLastError() -- the numbers differ but the shape of the
+    // message does not, so a failure reads the same on either platform.
+    // O_CLOEXEC because a GGUF stays mapped for the life of the engine and must
+    // not leak into anything the process spawns.
+    impl->file = ::open(gguf_path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (impl->file < 0)
+        throw std::runtime_error("GGUF file: actual open failure " +
+                                 std::to_string(errno) + ", expected readable file");
+    struct ::stat status {};
+    if (::fstat(impl->file, &status) != 0 || status.st_size <= 0 ||
+        static_cast<unsigned long long>(status.st_size) >
+            std::numeric_limits<std::size_t>::max())
+        Fail("GGUF file size",
+             std::to_string(static_cast<long long>(status.st_size)),
+             "positive mappable size");
+    impl->size = static_cast<std::uint64_t>(status.st_size);
+    // MAP_PRIVATE, not MAP_SHARED: the mapping is read-only and nothing writes
+    // back, and a private mapping does not pin the pages against another writer.
+    void* view = ::mmap(nullptr, static_cast<std::size_t>(impl->size), PROT_READ,
+                        MAP_PRIVATE, impl->file, 0);
+    if (view == MAP_FAILED)
+        throw std::runtime_error("GGUF mapping: actual mmap failure " +
+                                 std::to_string(errno) + ", expected PROT_READ view");
+    impl->data = static_cast<const std::byte*>(view);
+#endif
 
     const auto file = impl->bytes();
     Cursor cursor(file);
