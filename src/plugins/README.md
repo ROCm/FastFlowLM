@@ -21,8 +21,8 @@ independently selectable:
   using bfp16 internally, so swapping the open-source IRON bfp16
   implementation retains bit-equivalence.
 
-Prefill of a 247-token prompt on Strix, unmodified vs. the IRON bfp16 GEMM,
-measured on FastFlowLM v1.0.5:
+Prefill of a 247-token prompt on Strix, for each combination, measured on
+FastFlowLM v1.0.5:
 
 ![prefill medians](assets/prefill.png)
 
