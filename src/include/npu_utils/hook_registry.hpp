@@ -1,14 +1,13 @@
 // A plugin overrides one operation by binding a function to its name. The
 // engine looks up that name once, at construction, and gets back a callable
-// with the exact signature it would have called directly -- there is no
-// override at all past that point, just a function pointer.
+// with the operation's exact signature; every call after that goes straight
+// through this callable, a plain function pointer.
 //
-// A bound function returns hook_result<R>: done(value) to hand back a real
-// result, skip() to say the operation happened and there is nothing further
-// for the caller to do, or defer() to fall through to the engine's own
-// implementation. skip() only matters to a caller that would otherwise do
-// something with the value (e.g. start()/wait() an xrt::run); a caller that
-// already discards its result can ignore the distinction.
+// A bound function returns hook_result<R>: done(value) hands back a real
+// result, skip() means the operation ran with nothing further for the caller
+// to do, and defer() falls through to the engine's own implementation.
+// skip() matters to callers that use the value to start()/wait() a run (e.g.
+// xrt::run); callers that discard the result can ignore skip() vs done().
 #pragma once
 
 #include <any>
@@ -38,8 +37,8 @@ public:
     bool is_skip() const { return disposition_ == hook_disposition::skip; }
     T&& value() && { return std::move(*value_); }
 
-    // skip() becomes nullopt; a caller that only cares whether there is a
-    // run to start/wait on can use this instead of checking is_skip() itself.
+    // Turns skip() into nullopt, for callers that only need to know whether
+    // there is a run to start/wait on.
     std::optional<T> to_optional() && {
         if (this->is_skip()) return std::nullopt;
         return std::move(*this).value();
@@ -91,11 +90,11 @@ public:
         };
     }
 
-    // Same as resolve(), but for the common case where the default is App's
-    // own operator(), called with Sig's last N arguments dropped -- the
-    // scalar metadata (layer index, M or context length) a default
-    // implementation never needs. See resolve_drop_trailing_async() for a
-    // default that builds a run to start/wait on instead.
+    // Same as resolve(), for the common case where the default is App's own
+    // operator(), called with Sig's last N arguments dropped: the scalar
+    // metadata (layer index, M or context length) a default implementation
+    // never needs. resolve_drop_trailing_async() is the async equivalent,
+    // whose default builds a run to start/wait on.
     template <typename Sig, size_t N, typename App>
     std::function<Sig> resolve_drop_trailing(std::string_view name, App& app) {
         return this->resolve<Sig>(name, std::function<Sig>([&app](auto&&... args) {
