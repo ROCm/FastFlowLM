@@ -276,6 +276,40 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
     assert(this->last_token != -1);
 
     stop_reason_t reason = EOT_DETECTED;
+
+    // Speculation is only sound under greedy sampling: the engine accepts a
+    // draft by comparing it against the base model's argmax, so the tokens it
+    // returns are argmax tokens. Honouring a temperature, top-p or a
+    // repetition penalty while taking that path would silently replace the
+    // user's sampler with greedy decoding -- the output stays fluent, so
+    // nothing would ever flag it. Anything but top_k == 1 stays on the
+    // ordinary loop.
+    //
+    // Note sample_greedy() still applies penalties when repeat_last_n != 0,
+    // and they reorder the logits before the argmax -- so top_k == 1 alone
+    // does NOT make the sampler's choice equal the model's argmax. All four
+    // conditions are load-bearing.
+    //
+    // supports_speculation() is defaulted to false on causal_lm, so every
+    // engine but qwen3_8mtp answers false here and keeps the ordinary loop.
+    // Evaluated once per generate(), not per token.
+    const bool spec_enabled =
+        this->lm_engine->supports_speculation() && this->sampler &&
+        this->sampler->top_k == 1 && this->sampler->rep_penalty == 1.0f &&
+        this->sampler->freq_penalty == 0.0f && this->sampler->pre_penalty == 0.0f;
+    // Draft depth. Named because it is also the hit-rate denominator: if the
+    // request and the accounting were two separate literals, tuning one would
+    // silently skew the metric that says whether the tuning helped.
+    // The engine clamps to its own MTP_STEPS and may draft fewer.
+    const int SPEC_MAX_DRAFT = 7;
+    // Announce BEFORE the first token is streamed. header_print writes to
+    // std::cout while tokens go to `os`; when a caller passes std::cout for
+    // both, a banner emitted once decoding is under way splits the output
+    // mid-sentence ("The[FLM] Speculative decoding enabled...").
+    if (spec_enabled) {
+        header_print("FLM", "Speculative decoding enabled (MTP draft head)");
+    }
+
     int last_sampled_token = this->last_token;
     this->token_history.push_back(this->last_token);
     if (this->is_normal_token(last_sampled_token) && last_sampled_token != -1){
@@ -293,29 +327,6 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
         header_print("WARNING", "Max length reached, stopping generation...");
         reason = MAX_LENGTH_REACHED;
         return result;
-    }
-    // Speculation is only sound under greedy sampling: the engine accepts a
-    // draft by comparing it against the base model's argmax, so the tokens it
-    // returns are argmax tokens. Honouring a temperature, top-p or a
-    // repetition penalty while taking that path would silently replace the
-    // user's sampler with greedy decoding -- the output stays fluent, so
-    // nothing would ever flag it. Anything but top_k == 1 stays on the
-    // ordinary loop, which is also where sample_greedy() already routes.
-    //
-    // supports_speculation() is defaulted to false on causal_lm, so every
-    // engine but qwen3_8mtp answers false here and keeps the ordinary loop.
-    // Evaluated once per generate(), not per token.
-    const bool spec_enabled =
-        this->lm_engine->supports_speculation() && this->sampler &&
-        this->sampler->top_k == 1 && this->sampler->rep_penalty == 1.0f &&
-        this->sampler->freq_penalty == 0.0f && this->sampler->pre_penalty == 0.0f;
-    // Draft depth. Named because it is also the hit-rate denominator: if the
-    // request and the accounting were two separate literals, tuning one would
-    // silently skew the metric that says whether the tuning helped.
-    // The engine clamps to its own MTP_STEPS and may draft fewer.
-    const int SPEC_MAX_DRAFT = 7;
-    if (spec_enabled) {
-        header_print("FLM", "Speculative decoding enabled (MTP draft head)");
     }
 
     // One accepted token, handled exactly as the single-token path handles a
@@ -370,6 +381,22 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
             // tok/s stays comparable with the non-speculative path.
             this->profiler_list[DECODING_TIME].stop(
                 accepted.empty() ? 1 : (int)accepted.size());
+
+            // Cycle 1 opened by feeding the prompt window through the draft
+            // head to prime its KV cache -- prefill-shaped work that happened
+            // to run inside a speculate() call, so the decode clock above was
+            // running for it. Move it. Cycle 2 onward the head is already
+            // caught up and this is 0, which is why the transfer is driven by
+            // the engine rather than by a "first cycle" test here: after a
+            // context clear there is a new cycle 1, and only the engine knows.
+            //
+            // Time only, no token count: those rows are prompt positions the
+            // prefill counter has already been charged for once.
+            if (const uint64_t prime_us =
+                    this->lm_engine->last_speculation_prime_us()) {
+                this->profiler_list[DECODING_TIME].add_time(-(int64_t)prime_us);
+                this->profiler_list[PREFILL_TIME].add_time((int64_t)prime_us);
+            }
 
             if (!accepted.empty()) {
                 // The engine has already committed these to its caches -- they
@@ -595,6 +622,18 @@ std::string AutoModel::show_model_info() {
 /// \brief Show the profile
 /// \note The function will show the profile
 /// \note The function will return the profile
+/// \note "Total time" is wall clock around insert() + generate(), while every
+///       other row is a narrow window inside it, so the rows do not partition
+///       the run. The "Untimed" row at the bottom is the remainder, and it is
+///       printed precisely because that gap used to be invisible: Qwen3.8's
+///       think preamble spent ~13 s of a 24 s run in four forward() calls
+///       that _shared_generate()'s DECODING_TIME.reset() then discarded, and
+///       nothing in this block said so.
+/// \note The four narrow rows are only comparable with Total on a single-turn
+///       run. DECODING_TIME is reset at the top of every _shared_generate()
+///       while PREFILL_TIME and TOTAL_TIME accumulate across turns, so a
+///       multi-turn session over-reports "Untimed" by the decode time of
+///       every turn but the last.
 std::string AutoModel::show_profile() {
     std::stringstream ss;
     int total_tokens = this->lm_engine->get_current_context_length();
@@ -606,12 +645,29 @@ std::string AutoModel::show_profile() {
     ss << "    Decoding time:       " << time.first << " " << time.second << std::endl;
     time = this->profiler_list[PREFILL_TIME].get_total_time();
     ss << "    Prefill time:        " << time.first << " " << time.second << std::endl;
-    // time = this->profiler_list[SAMPLING_TIME].get_total_time();
-    // ss << "    Sampling time:       " << time.first << " " << time.second << std::endl;
-    // time = this->profiler_list[TKOEN_ENCODE_TIME].get_total_time();
-    // ss << "    Token encoding time: " << time.first << " " << time.second << std::endl;
-    // time = this->profiler_list[TKOEN_DECODE_TIME].get_total_time();
-    // ss << "    Token decoding time: " << time.first << " " << time.second << std::endl;
+    time = this->profiler_list[SAMPLING_TIME].get_total_time();
+    ss << "    Sampling time:       " << time.first << " " << time.second << std::endl;
+    time = this->profiler_list[TKOEN_ENCODE_TIME].get_total_time();
+    ss << "    Token encoding time: " << time.first << " " << time.second << std::endl;
+    time = this->profiler_list[TKOEN_DECODE_TIME].get_total_time();
+    ss << "    Token decoding time: " << time.first << " " << time.second << std::endl;
+    // Same unit for all five before subtracting: get_total_time() re_unit()s
+    // each one independently, so their .first fields are not commensurable.
+    const float total_us = time_utils::cast_to_us(this->profiler_list[TOTAL_TIME].get_total_time()).first;
+    if (total_us > 0.0f) {
+        float timed_us = 0.0f;
+        for (profiler_type p : {DECODING_TIME, PREFILL_TIME, SAMPLING_TIME,
+                                TKOEN_ENCODE_TIME, TKOEN_DECODE_TIME})
+            timed_us += time_utils::cast_to_us(this->profiler_list[p].get_total_time()).first;
+        // re_unit() only scales upward, so a negative remainder would print as
+        // a seven-digit microsecond count. Scale the magnitude and put the
+        // sign back: negative is not an error to hide, it is the multi-turn
+        // case above announcing itself.
+        const float gap_us = total_us - timed_us;
+        time = time_utils::re_unit(std::make_pair(std::abs(gap_us), "us"));
+        ss << "    Untimed:             " << (gap_us < 0.0f ? -time.first : time.first)
+           << " " << time.second << std::endl;
+    }
     ss << "    Average decoding speed:       " << this->profiler_list[DECODING_TIME].get_average_speed() << " tokens/s" << std::endl;
     ss << "    Average prefill  speed:       " << this->profiler_list[PREFILL_TIME].get_average_speed() << " tokens/s" << std::endl;
     // ss << "    Average sampling speed:       " << this->profiler_list[SAMPLING_TIME].get_average_speed() << " tokens/s" << std::endl;

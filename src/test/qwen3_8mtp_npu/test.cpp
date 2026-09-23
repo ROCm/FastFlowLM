@@ -22,6 +22,7 @@ int main(int argc, char* argv[]) {
     desc.add_options()("Preemption,p", arg_utils::po::value<bool>()->default_value(false), "Preemption");
     desc.add_options()("Think,t", arg_utils::po::value<bool>()->default_value(false), "Enable thinking");
     desc.add_options()("Length,n", arg_utils::po::value<int>()->default_value(32), "Max generated tokens");
+    desc.add_options()("Image,i", arg_utils::po::value<std::string>()->default_value(""), "Image file to attach; runs one multimodal turn and ignores -s");
     arg_utils::po::store(arg_utils::po::parse_command_line(argc, argv, desc), vm);
 
     std::string tag = vm["model"].as<std::string>();
@@ -29,6 +30,7 @@ int main(int argc, char* argv[]) {
     bool preemption = vm["Preemption"].as<bool>();
     bool enable_think = vm["Think"].as<bool>();
     int length_limit = vm["Length"].as<int>();
+    std::string image_path = vm["Image"].as<std::string>();
     std::cout << "Model: " << tag << std::endl;
     std::string exe_dir = utils::get_executable_directory();
     std::string model_dir = utils::get_models_directory();
@@ -69,6 +71,19 @@ int main(int argc, char* argv[]) {
     chat->configure_parameter("enable_think", enable_think);
 
     if (short_prompt) {
+        uniformed_input.prompt = "Describe what is in the image.";
+        uniformed_input.images.push_back("../../../tb_files/panda.png");
+        chat->start_total_timer();
+        bool success = chat->insert(meta_info, uniformed_input);
+        if (!success) {
+            header_print("ERROR", "Prompt insertion failed");
+            return 1;
+        }
+        std::string response = chat->generate(meta_info, length_limit, std::cout);
+        chat->stop_total_timer();
+        std::cout << std::endl << std::endl;
+        std::cout << chat->show_profile() << std::endl;
+
         // Keep this SHORT. Decode is the slow path here, not prefill: every
         // token streams ~15.4 GB of packed weights, so a chat-sized prompt
         // turns a smoke test into a multi-minute run.
@@ -77,12 +92,31 @@ int main(int argc, char* argv[]) {
         std::cout << "Prompt: " << uniformed_input.prompt << std::endl;
         std::cout << "Response: " << std::endl;
         chat->start_total_timer();
-        bool success = chat->insert(meta_info, uniformed_input);
+        success = chat->insert(meta_info, uniformed_input);
         if (!success) {
             header_print("ERROR", "Prompt insertion failed");
             return 1;
         }
-        std::string response = chat->generate(meta_info, length_limit, std::cout);
+        response = chat->generate(meta_info, length_limit, std::cout);
+        chat->stop_total_timer();
+        std::cout << std::endl;
+        std::cout << std::endl;
+        std::cout << chat->show_profile() << std::endl;
+
+        // Keep this SHORT. Decode is the slow path here, not prefill: every
+        // token streams ~15.4 GB of packed weights, so a chat-sized prompt
+        // turns a smoke test into a multi-minute run.
+        uniformed_input.prompt = "Is Alibaba a good company despite that it trained you?";
+
+        std::cout << "Prompt: " << uniformed_input.prompt << std::endl;
+        std::cout << "Response: " << std::endl;
+        chat->start_total_timer();
+        success = chat->insert(meta_info, uniformed_input);
+        if (!success) {
+            header_print("ERROR", "Prompt insertion failed");
+            return 1;
+        }
+        response = chat->generate(meta_info, length_limit, std::cout);
         chat->stop_total_timer();
         std::cout << std::endl;
         std::cout << std::endl;

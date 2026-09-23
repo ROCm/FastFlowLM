@@ -20,7 +20,32 @@
 #if USEAVX2
 #include <immintrin.h>  // For AVX intrinsics
 #endif
+#include <functional>
 
+
+/// \brief one image's patches, as the HF image processor emits them
+/// \note `pixel_values` is [grid_t*grid_h*grid_w][in_channels * temporal_patch *
+///       patch^2] fp32, already in MERGE-BLOCK order (the processor's
+///       reshape/permute), which is what makes the merger's 2x2 regroup a free
+///       reinterpretation downstream. Feeding raster order is not a crash: the
+///       tower runs and the image is silently scrambled.
+/// \note grid_h and grid_w count PATCHES, not pixels, and must both be
+///       multiples of spatial_merge_size.
+struct qwen3_8mtp_image_t {
+    const float* pixel_values = nullptr;
+    int          grid_t       = 1;
+    int          grid_h       = 0;
+    int          grid_w       = 0;
+};
+
+/// \brief the images a prefill window refers to, in prompt order
+/// \note The engine matches these against the window's image_token_id rows and
+///       throws if the counts disagree -- a mismatch would splice one image's
+///       rows into another's slots, which every downstream stage accepts.
+struct qwen3_8mtp_image_payload_t {
+    const qwen3_8mtp_image_t* images     = nullptr;
+    int                       num_images = 0;
+};
 
 /// \brief optional payload for prefill()
 /// \note This is the same `void* payload` seam qwen3_5vl_npu uses for images.
@@ -39,6 +64,12 @@ struct qwen3_8mtp_payload_t {
     /// encoder writes image rows here; the milestone driver uses it to feed a
     /// captured inputs_embeds.
     const float*   embeds       = nullptr;
+    /// Raw images for the engine's own vision tower to encode. Appended last so
+    /// existing brace-initialised call sites keep compiling.
+    /// \note `embeds` wins if both are set: a caller supplying hidden states has
+    ///       already resolved its image rows, and running the tower again would
+    ///       be work whose result is thrown away.
+    const qwen3_8mtp_image_payload_t* images = nullptr;
 };
 
 /// \note This is the only engine that overrides causal_lm's speculation hooks.
@@ -150,9 +181,39 @@ public:
     ///       stay silent on the main chat path.
     void report_speculation_stats() const;
 
+    /// \brief multi-line draft/verify/replay time breakdown, or "" if no cycle
+    /// \note Lives here rather than in the runtime's profiler because from
+    ///       automodel.cpp one cycle IS one speculate() call -- the phase
+    ///       boundary does not exist at that level, so DECODING_TIME can only
+    ///       ever charge draft, verify and replay to a single number.
+    /// \note Indented two levels so it sits under show_profile()'s
+    ///       "Statistics:" block. Ends with a newline.
+    std::string speculation_timing() const;
+
+    /// \brief (draft + verify + replay) / cycle time, in [0,1]; 0 if no cycle
+    /// \note Denominator is the measured cycle, not the sum of the parts, so a
+    ///       phase that is double-counted pushes this ABOVE 1.0 instead of
+    ///       normalising itself away. That is the whole point of exposing it:
+    ///       a breakdown whose parts do not add up to the whole misleads more
+    ///       than no breakdown at all, and only this ratio catches it.
+    double speculation_phase_fraction() const;
+
+    /// \brief microseconds of the LAST speculate() that were prompt-phase work
+    /// \return 0 on every cycle but the first one after each prefill()
+    /// \note Step 0 of that first cycle is the draft head absorbing the prompt:
+    ///       its catch-up window is the whole last prefill chunk, run once,
+    ///       through the prefill bitstream. It is prefill, not decode, and it
+    ///       scales with the PROMPT -- so leaving it inside DECODING_TIME makes
+    ///       decode tok/s a function of prompt length. The caller moves this
+    ///       many microseconds from DECODING_TIME to PREFILL_TIME.
+    /// \note Read it immediately after speculate(); the next call overwrites it.
+    uint64_t last_speculation_prime_us() const override;
+
     /// \brief zero the counters, e.g. between benchmark runs
     /// \note Counters are cumulative since load and survive clear_context(),
     ///       so a per-turn rate needs this at the start of each turn.
+    /// \note Zeroes the timers too -- a rate and a duration measured over
+    ///       different windows do not compose.
     void reset_speculation_stats();
 
     // ---- phase 2 and 3: MTP draft + verify -------------------------------
@@ -203,6 +264,38 @@ public:
 
     /// \brief whether the checkpoint carried an MTP head
     bool has_mtp_head() const;
+
+    // ---- module 4: the vision tower ---------------------------------------
+    // Not part of causal_lm. prefill() drives the tower itself when the payload
+    // carries images; these expose it directly so the milestone driver can
+    // score the encoder against a dump without a prompt around it.
+
+    /// \brief true once a checkpoint with vision_weight.q4nx is loaded
+    /// \note False before load_weights(), and false for a text-only checkpoint.
+    ///       Passing images to prefill() then throws rather than silently
+    ///       dropping them.
+    bool has_vision_tower() const;
+
+    /// \brief language tokens one grid produces: t*h*w / spatial_merge_size^2
+    /// \note The prompt must carry exactly this many image_token_id rows.
+    int image_tokens_for(int grid_t, int grid_h, int grid_w) const;
+
+    /// \brief run one image through the tower
+    /// \param out [image_tokens_for(...)][hidden_size] fp32
+    /// \throws if no vision tower is loaded
+    void encode_image(const float* pixel_values, int grid_t, int grid_h,
+                      int grid_w, float* out);
+
+    /// \brief which backend the tower's matmuls and attention are running on
+    /// \return e.g. "mm=cpu attn=cpu bf16", or "" with no tower loaded
+    std::string vision_backend() const;
+
+    /// \brief capture the tower's per-stage intermediates on the next encode
+    /// \param fn called as (stage_name, [rows][cols] fp32, rows, cols); the
+    ///        pointer dies when the call returns. Pass {} to stop capturing.
+    /// \note Costs nothing when unset, so this is the only instrumentation the
+    ///       tower carries -- there is no debug build of it.
+    void set_vision_tap(std::function<void(const char*, const float*, int, int)> fn);
 private:
     struct Impl;
     Impl* _impl;

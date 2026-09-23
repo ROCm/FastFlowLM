@@ -6,6 +6,8 @@
 /// \note This class is a virtual class for causal language models
 /// \note All other models should inherit from this class so that they can be used in the same way.
 #pragma once
+#include <cstdint>
+
 #include "tensor_utils/q4_npu_eXpress.hpp"
 #include "tensor_2d.hpp"
 #include "utils/utils.hpp"
@@ -107,4 +109,17 @@ public:
     /// \note The engine has already committed these tokens to its caches. The
     ///       caller must not re-feed them through forward().
     virtual std::vector<int> speculate(int last_token, int max_draft) { return {}; }
+
+    /// \brief how much of the last speculate() was prompt-phase, in microseconds
+    /// \return 0 by default, and 0 on any cycle that did no prompt-phase work
+    /// \note A draft head keeps its own KV cache, and on the first cycle after
+    ///       a prefill that cache is empty: the cycle opens by re-absorbing the
+    ///       prompt window before it drafts anything. That pass costs what a
+    ///       prefill costs and scales with the prompt, but it happens inside a
+    ///       speculate() call, where the caller's decode timer is running.
+    ///       Engines that can tell the two apart report the split here so the
+    ///       caller can move it to its prefill bucket; engines that cannot
+    ///       return 0 and lose nothing, since the time is already counted.
+    /// \note Valid only until the next speculate().
+    virtual uint64_t last_speculation_prime_us() const { return 0; }
 };
