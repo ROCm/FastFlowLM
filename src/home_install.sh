@@ -45,6 +45,32 @@ PRESET="${PRESET_FROM_ENV:-linux-default}"
 # Where XRT (the AMD NPU runtime) is installed. Override if non-standard.
 XRT_DIR="${XRT_DIR:-/opt/xilinx/xrt}"
 
+# XRT does not reach its own plugins through DT_NEEDED. It dlopens libxrt_core,
+# the libxrt_driver_xdna NPU driver and the rest at run time from a path it
+# builds as $XILINX_XRT/lib/x86_64-linux-gnu/<lib>, and when XILINX_XRT is unset
+# it guesses that root three directories above wherever libxrt_coreutil happened
+# to be loaded from. Any second copy of XRT on LD_LIBRARY_PATH sends the guess
+# somewhere with no lib/x86_64-linux-gnu under it, and then the NPU comes up
+# with no driver plugin: corelib reports "no AIE4 hw_context (unordered_map::at)"
+# and even a bare xrt::device(0) fails with "No such library .../libxrt_core.so.2".
+# That bites the rai build hardest, because it bundles no XRT of its own.
+#
+# So resolve the root here rather than leaving it to the guess, and accept a
+# candidate only if the directory XRT will actually dlopen from exists -- that
+# way a wrong answer surfaces at install time instead of at the first NPU call.
+detect_xrt_root() {
+    local cand
+    for cand in "${XILINX_XRT:-}" "$XRT_DIR" /usr/local /usr; do
+        [[ -n "$cand" ]] || continue
+        if [[ -f "$cand/lib/x86_64-linux-gnu/libxrt_core.so.2" ]]; then
+            printf '%s\n' "$cand"
+            return 0
+        fi
+    done
+    return 1
+}
+XRT_ROOT="$(detect_xrt_root || true)"
+
 DO_BUILD=1
 WANT_RAI=0
 for arg in "$@"; do
@@ -229,6 +255,14 @@ if [[ -f "$CACHE_FILE" ]] && grep -q '^FLM_ENABLE_RAI:BOOL=ON' "$CACHE_FILE"; th
 fi
 
 # ---- emit the environment script ------------------------------------------
+if [[ -n "$XRT_ROOT" ]]; then
+    echo "[home_install] XRT runtime root: $XRT_ROOT"
+else
+    echo "[home_install] WARNING: found no XRT install providing" >&2
+    echo "[home_install]          lib/x86_64-linux-gnu/libxrt_core.so.2; the NPU will be" >&2
+    echo "[home_install]          unavailable unless \$XRT_DIR/setup.sh supplies it." >&2
+fi
+
 ENV_SCRIPT="$FLM_PREFIX/flm_env.sh"
 echo "[home_install] writing env script: $ENV_SCRIPT"
 cat > "$ENV_SCRIPT" <<EOF
@@ -241,6 +275,7 @@ cat > "$ENV_SCRIPT" <<EOF
 
 FLM_PREFIX="$FLM_PREFIX"
 XRT_DIR="$XRT_DIR"
+XRT_ROOT="$XRT_ROOT"
 
 # 1. Data files (consumed by utils::find_model_list / utils::find_xclbin_path).
 export FLM_CONFIG_PATH="\$FLM_PREFIX/share/flm/model_list.json"
@@ -249,12 +284,28 @@ export FLM_XCLBIN_PATH="\$FLM_PREFIX/share/flm"
 # 2. Runtime libraries. The flm binary already has RPATH \$ORIGIN/../lib/flm for
 #    its bundled .so files, but XRT's libs (libxrt_coreutil.so, etc.) are found
 #    via XRT's own setup or LD_LIBRARY_PATH.
+#
+#    XILINX_XRT has to be exported, not merely inherited. XRT dlopens libxrt_core
+#    and the libxrt_driver_xdna NPU plugin from \$XILINX_XRT/lib/x86_64-linux-gnu,
+#    and when the variable is unset it guesses that root three directories above
+#    wherever libxrt_coreutil was loaded from -- so a second XRT anywhere on
+#    LD_LIBRARY_PATH can aim the guess at a directory that holds no plugins at
+#    all. Nothing reports a missing root: the NPU just comes up with no driver,
+#    corelib says "no AIE4 hw_context (unordered_map::at)" and xrt::device(0)
+#    says "No such library .../libxrt_core.so.2". home_install.sh resolved
+#    XRT_ROOT by requiring that plugin directory to exist, so pinning it here
+#    keeps the guess from ever running. The same directory goes on
+#    LD_LIBRARY_PATH so the linked-in libxrt_coreutil comes from that install too.
 if [[ -f "\$XRT_DIR/setup.sh" ]]; then
-    # XRT's setup.sh exports XILINX_XRT, PATH and LD_LIBRARY_PATH for the NPU.
+    # A real XRT install knows its own layout; let it speak for itself.
+    # setup.sh exports XILINX_XRT, PATH and LD_LIBRARY_PATH for the NPU.
     source "\$XRT_DIR/setup.sh"
+elif [[ -n "\$XRT_ROOT" ]]; then
+    export XILINX_XRT="\$XRT_ROOT"
+    export LD_LIBRARY_PATH="\$XRT_ROOT/lib/x86_64-linux-gnu:\${LD_LIBRARY_PATH:-}"
 else
-    echo "[flm_env] WARNING: \$XRT_DIR/setup.sh not found; falling back to LD_LIBRARY_PATH" >&2
-    export LD_LIBRARY_PATH="\$XRT_DIR/lib:\${LD_LIBRARY_PATH:-}"
+    echo "[flm_env] WARNING: no XRT runtime found at install time and" >&2
+    echo "[flm_env]          \$XRT_DIR/setup.sh is missing; the NPU will be unavailable." >&2
 fi
 # Belt-and-suspenders: also expose the bundled libs explicitly. Both engine
 # directories are listed because the layout depends on the runtime backend
