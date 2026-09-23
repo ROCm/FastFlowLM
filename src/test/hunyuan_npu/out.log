@@ -1,0 +1,209 @@
+cp ../../model_list.json ../../build/test/hunyuan_npu/model_list.json
+cd ../../build/test/hunyuan_npu && ./test_hunyuan --model hy-mt2:1.8b --warmup 1 --count 40 --Length 512 --pin 1 --csv bench.csv
+Model: hy-mt2:1.8b
+[info]  Initializing chat model...
+Model path: /scratch/alfxu/models/Hy-MT2-1.8B-NPU2
+[FLM]  Loading model: /scratch/alfxu/models/Hy-MT2-1.8B-NPU2
+  Model: 
+    model_name:             Hy-MT2-1.8B-NPU2
+    compatible_flm_version: >= 0.0.0
+    head_dim:               128
+    hidden_size:            2048
+    hidden_act:             silu
+    intermediate_size:      6144
+    num_attention_heads:    16
+    num_hidden_layers:      32
+    num_key_value_heads:    4
+    pretraining_tp:         1
+    rms_norm_eps:           1e-05
+
+[31m[FLM]  Creating checkpoint at context length 32[0m
+System prompt: 29 tokens, 32 pinned in the KV cache in 130.8 ms
+Corpus: 40 measured turns, preceded by 1 discarded warm-up turns, length limit 512
+
+[warm 1/1]  time prefill     34.1 ms | decode     17.6 ms | e2e     51.7 ms |   34 ptok |    1 tok |  56.74 tok/s
+
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[ 1/40]  in   好
+[ 1/40]  out  Good
+[ 1/40]  time prefill     34.6 ms | decode     17.2 ms | e2e     51.8 ms |   34 ptok |    1 tok |  58.30 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[ 2/40]  in   牛啊
+[ 2/40]  out  Wow
+[ 2/40]  time prefill     49.3 ms | decode     17.2 ms | e2e     66.5 ms |   35 ptok |    1 tok |  58.24 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[ 3/40]  in   太强了
+[ 3/40]  out  Too strong
+[ 3/40]  time prefill     64.2 ms | decode     34.6 ms | e2e     98.8 ms |   36 ptok |    2 tok |  57.81 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[ 4/40]  in   这波稳了
+[ 4/40]  out  This one is solid.
+[ 4/40]  time prefill     79.0 ms | decode     86.1 ms | e2e    165.1 ms |   37 ptok |    5 tok |  58.09 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[ 5/40]  in   主播加油啊
+[ 5/40]  out  Hey, streamer, keep it up!
+[ 5/40]  time prefill     65.2 ms | decode    155.2 ms | e2e    220.4 ms |   36 ptok |    9 tok |  57.99 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[ 6/40]  in   这操作真的秀
+[ 6/40]  out  This operation is really impressive
+[ 6/40]  time prefill     79.1 ms | decode     86.8 ms | e2e    165.9 ms |   37 ptok |    5 tok |  57.60 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[ 7/40]  in   前方高能请注意
+[ 7/40]  out  Please pay close attention ahead
+[ 7/40]  time prefill     64.6 ms | decode     86.0 ms | e2e    150.6 ms |   36 ptok |    5 tok |  58.13 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[ 8/40]  in   这个技能太离谱了
+[ 8/40]  out  This skill is too absurd.
+[ 8/40]  time prefill    110.8 ms | decode    104.7 ms | e2e    215.5 ms |   39 ptok |    6 tok |  57.30 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[ 9/40]  in   弹幕护体主播别慌张
+[ 9/40]  out  The streamer with the barrier of bullet comments, don't panic.
+[ 9/40]  time prefill    121.9 ms | decode    245.1 ms | e2e    367.0 ms |   41 ptok |   14 tok |  57.11 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[10/40]  in   这局翻盘的希望还有吗
+[10/40]  out  Is there still hope for a turnaround in this game?
+[10/40]  time prefill    124.6 ms | decode    213.0 ms | e2e    337.5 ms |   40 ptok |   12 tok |  56.35 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[11/40]  in   主播今天状态明显好多了
+[11/40]  out  The streamer is much better today.
+[11/40]  time prefill    109.0 ms | decode    138.3 ms | e2e    247.3 ms |   39 ptok |    8 tok |  57.83 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[12/40]  in   这个皮肤是新出的限定款吗
+[12/40]  out  Is this skin a newly released limited edition?
+[12/40]  time prefill    124.6 ms | decode    157.2 ms | e2e    281.8 ms |   40 ptok |    9 tok |  57.27 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[13/40]  in   刚进直播间发生了什么好戏吗
+[13/40]  out  What interesting thing happened when I first entered the live streaming room?
+[13/40]  time prefill    131.2 ms | decode    229.4 ms | e2e    360.6 ms |   41 ptok |   13 tok |  56.68 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[14/40]  in   兄弟们把公屏打在保护上谢谢了
+[14/40]  out  Brothers, put the protection on the public screen. Thank you.
+[14/40]  time prefill    130.7 ms | decode    247.7 ms | e2e    378.5 ms |   44 ptok |   14 tok |  56.51 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[15/40]  in   这波团战的处理堪称教科书级别啊
+[15/40]  out  The handling of this group battle is truly textbook-level.
+[15/40]  time prefill    127.8 ms | decode    194.5 ms | e2e    322.2 ms |   42 ptok |   11 tok |  56.57 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[16/40]  in   主播能不能把麦克风的音量调大一点
+[16/40]  out  Can the host increase the volume of the microphone a bit?
+[16/40]  time prefill    128.2 ms | decode    212.1 ms | e2e    340.3 ms |   42 ptok |   12 tok |  56.58 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[17/40]  in   我这边画面有点卡顿是不是网络的问题
+[17/40]  out  Is it a network issue? The video on my end is a bit glitchy.
+[17/40]  time prefill    127.1 ms | decode    321.4 ms | e2e    448.5 ms |   42 ptok |   18 tok |  56.01 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[18/40]  in   今天的直播时长会不会延到很晚才结束呢
+[18/40]  out  Will the live broadcast today last until very late?
+[18/40]  time prefill    128.5 ms | decode    177.6 ms | e2e    306.1 ms |   44 ptok |   10 tok |  56.31 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[19/40]  in   这个版本更新之后英雄的手感变得完全不同
+[19/40]  out  After this update, the feel of the heroes is completely different.
+[19/40]  time prefill    129.3 ms | decode    227.7 ms | e2e    357.0 ms |   42 ptok |   13 tok |  57.09 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[20/40]  in   弹幕翻译最好短一点太长的话根本来不及看完
+[20/40]  out  The bullet comments should be as short as possible; if they are too long, there's simply no time to read them all.
+[20/40]  time prefill    129.2 ms | decode    455.1 ms | e2e    584.3 ms |   44 ptok |   26 tok |  57.13 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[21/40]  in   希望主播复盘一下刚才那波团战是哪里出的问题
+[21/40]  out  I hope the streamer can review where the problems occurred in that team battle just now.
+[21/40]  time prefill    132.0 ms | decode    316.4 ms | e2e    448.4 ms |   46 ptok |   18 tok |  56.89 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[22/40]  in   新来的观众可能不太清楚规则谁能帮忙解释一下吗
+[22/40]  out  The new audience may not be very clear about the rules. Could someone help explain them?
+[22/40]  time prefill    127.0 ms | decode    315.3 ms | e2e    442.4 ms |   45 ptok |   18 tok |  57.08 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[23/40]  in   这个礼物的特效直接把整个游戏画面给挡住了看不清
+[23/40]  out  The special effect of this gift completely covers the entire game screen, making it impossible to see clearly.
+[23/40]  time prefill    129.8 ms | decode    351.2 ms | e2e    481.0 ms |   47 ptok |   20 tok |  56.94 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[24/40]  in   主播刚才说的那个配置单能不能发下我也想照着装一台
+[24/40]  out  Can I get the configuration sheet the anchor just mentioned? I would like to set up one machine according to it too.
+[24/40]  time prefill    127.6 ms | decode    422.0 ms | e2e    549.6 ms |   47 ptok |   24 tok |  56.87 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[25/40]  in   海外的朋友如果觉得翻译有问题欢迎在弹幕里直接指出来
+[25/40]  out  If friends abroad think there are issues with the translation, they are welcome to point them out directly in the comments.
+[25/40]  time prefill    133.1 ms | decode    403.9 ms | e2e    537.0 ms |   48 ptok |   23 tok |  56.94 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[26/40]  in   这段解说的语速实在太快了翻译系统跟不跟得上都是个问题
+[26/40]  out  The speed of this narration is really too fast; whether the translation system can keep up or not is a question.
+[26/40]  time prefill    129.0 ms | decode    410.3 ms | e2e    539.3 ms |   49 ptok |   23 tok |  56.06 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[27/40]  in   刚才那一波如果不是打野及时赶到支援估计整个团队就要崩了
+[27/40]  out  If the jungler hadn't arrived in time to provide support during that wave, the entire team might have collapsed.
+[27/40]  time prefill    130.0 ms | decode    405.8 ms | e2e    535.8 ms |   48 ptok |   23 tok |  56.67 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[28/40]  in   主播能不能考虑把游戏内的音效调低一点人声听起来更清楚些呢
+[28/40]  out  Could the streamer consider lowering the sound effects in the game a bit, so the voice sounds clearer?
+[28/40]  time prefill    131.3 ms | decode    371.5 ms | e2e    502.8 ms |   51 ptok |   21 tok |  56.53 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[29/40]  in   每次更新之后都要重新适应一遍手感希望这次改动不要太夸张才好
+[29/40]  out  After each update, it's necessary to adapt to the feel again. Hopefully, these changes won't be too extreme.
+[29/40]  time prefill    128.7 ms | decode    424.5 ms | e2e    553.3 ms |   48 ptok |   24 tok |  56.53 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[30/40]  in   弹幕里问模型加载花了多长时间的朋友可以看一下主播刚才贴的日志
+[30/40]  out  Friends who asked how long it took for the model to load in the comments can take a look at the logs posted by the streamer just now.
+[30/40]  time prefill    128.4 ms | decode    534.9 ms | e2e    663.2 ms |   49 ptok |   30 tok |  56.09 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[31/40]  in   这场比赛打到现在双方的经济差距其实并不大关键还是看下一波团战吧
+[31/40]  out  The economic gap between the two sides in this match isn't very large yet; the key will be in the next group battle.
+[31/40]  time prefill    126.1 ms | decode    460.0 ms | e2e    586.1 ms |   51 ptok |   26 tok |  56.52 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[32/40]  in   有没有懂技术的兄弟解释一下为什么同样的模型在我的电脑上跑得这么慢
+[32/40]  out  Is there anyone who understands technology to explain why the same model runs so slowly on my computer?
+[32/40]  time prefill    126.4 ms | decode    339.0 ms | e2e    465.4 ms |   49 ptok |   19 tok |  56.05 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[33/40]  in   主播刚才那句话翻译得不太准确因为原文其实带着一点开玩笑的语气在里面
+[33/40]  out  The anchor's sentence was not translated accurately because the original text actually had a slightly playful tone.
+[33/40]  time prefill    126.1 ms | decode    343.1 ms | e2e    469.2 ms |   50 ptok |   19 tok |  55.38 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[34/40]  in   如果只是简单的日常对话翻译起来问题不大但是遇到梗和缩写就很容易翻车了
+[34/40]  out  If it's just simple daily conversation translation, it's not a big problem. But when it comes to memes and abbreviations, it can easily go wrong.
+[34/40]  time prefill    131.0 ms | decode    566.3 ms | e2e    697.3 ms |   50 ptok |   32 tok |  56.50 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[35/40]  in   建议主播把这段测试的完整日志保存下来回头分析一下到底是哪个环节最耗时间
+[35/40]  out  It is recommended that the streamer save the complete log of this test and analyze it later to determine which part takes the most time.
+[35/40]  time prefill    130.0 ms | decode    485.5 ms | e2e    615.4 ms |   51 ptok |   27 tok |  55.62 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[36/40]  in   刚才有观众问这个模型能不能同时处理中文和日文的弹幕答案是可以但速度会慢些
+[36/40]  out  A viewer asked whether this model could handle both Chinese and Japanese comment sections simultaneously. The answer is yes, but the speed will be slower.
+[36/40]  time prefill    130.7 ms | decode    492.2 ms | e2e    622.8 ms |   55 ptok |   28 tok |  56.89 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[37/40]  in   这一局从开局的对线到中期的团战再到最后的高地攻防每个阶段都有可以改进的地方
+[37/40]  out  There are areas for improvement in every stage—from the initial matchup at the start, to the group battles in the middle, and finally to the high ground attack and defense at the end.
+[37/40]  time prefill    129.5 ms | decode    689.1 ms | e2e    818.7 ms |   56 ptok |   39 tok |  56.59 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[38/40]  in   希望以后的版本能把弹幕翻译的延迟再压低一点这样海外的观众就能几乎实时跟上直播
+[38/40]  out  It is hoped that future versions will further reduce the delay in translating bullet comments, so that overseas viewers can follow the live broadcast almost in real time.
+[38/40]  time prefill    128.6 ms | decode    530.9 ms | e2e    659.5 ms |   55 ptok |   30 tok |  56.51 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[39/40]  in   刚进直播间就看到主播在打决胜局虽然不太清楚前面发生了什么看这个气氛应该是激烈的
+[39/40]  out  As soon as I entered the live streaming room, I saw the streamer playing the decisive match. Although I'm not very clear about what happened before, judging by the atmosphere, it was quite intense.
+[39/40]  time prefill    130.5 ms | decode    735.6 ms | e2e    866.1 ms |   54 ptok |   41 tok |  55.74 tok/s
+[31m[FLM]  Restoring checkpoint at context length 32[0m
+[40/40]  in   这次测试想看看在长文本输入情况下首次响应的时间会不会明显变长以及解码速度是否稳定
+[40/40]  out  This test aims to determine whether the time to first response becomes significantly longer with long text inputs, and whether the decoding speed remains stable.
+[40/40]  time prefill    130.6 ms | decode    480.0 ms | e2e    610.6 ms |   54 ptok |   27 tok |  56.25 tok/s
+
+=== Statistics over 40 measured turns (1 warm-up turns run and discarded first) ===
+  metric                      mean    stddev      cv%       min       p50       p90       p95       p99       max
+  end-to-end (ms)           428.24    199.75    46.64     51.76    448.41    659.53    697.34    866.08    866.08
+  prefill (ms)              116.13     26.29    22.64     34.60    128.22    131.00    131.29    133.06    133.06
+  decode (ms)               312.11    180.82    57.94     17.15    316.40    530.89    566.34    735.61    735.61
+  generated (tok)            17.65     10.15    57.49      1.00     18.00     30.00     32.00     41.00     41.00
+  decode speed (tok/s)       56.84      0.73     1.29     55.38     56.67     57.99     58.13     58.30     58.30
+  e2e speed (tok/s)          38.02      7.72    20.30     15.04     40.50     45.23     45.89     47.64     47.64
+
+  -- where a turn goes --
+  npu prefill (ms)          114.94     26.09    22.70     33.82    126.74    129.61    129.81    131.94    131.94
+  npu decode (ms)           307.32    177.76    57.84     17.01    311.86    522.34    557.48    722.44    722.44
+  sampling (ms)               4.64      2.91    62.60      0.25      4.41      8.38      9.34     12.24     12.24
+  encode+template (ms)        0.56      0.15    26.42      0.36      0.53      0.80      0.85      0.89      0.89
+  detokenize (ms)             0.19      0.14    76.10      0.00      0.17      0.39      0.40      0.62      0.62
+  unaccounted (ms)            0.59      0.18    29.68      0.30      0.59      0.80      0.89      0.91      0.91
+
+  First-prompt prefill:  34.60 ms (first measured turn; with --warmup 0 this also carries the cold-start cost)
+  Measured wall clock:   17.13 s
+  Tokens generated:      706
+  Aggregate throughput:  41.22 tok/s
+  Empty outputs:         0 / 40
+  Per-turn CSV:          bench.csv

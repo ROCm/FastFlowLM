@@ -19,6 +19,7 @@ parent: Local Server (Server Mode)
   - [Example: Use Temperature, Top-p, and Presence Penalty](#-example-use-temperature-top-p-and-presence-penalty)
   - [Example: Multi-Image Input](#-example-multi-image-input)   
   - [Example: Multi-Modal Input](#️-example-multi-modal-input)   
+  - [Example: Flash Models (Single-Turn, Pinned System Prompt)](#-example-flash-models-single-turn-pinned-system-prompt)   
 
 ---
 
@@ -415,3 +416,72 @@ gc.collect()
 ```
 
 ---
+
+## ⚡ Example: Flash Models (Single-Turn, Pinned System Prompt)
+
+**Flash** models — `gemma4e-flash:e2b`, `gemma4e-flash:e4b`, and `qwen3vl-flash:4b` — trade context length for a much faster time-to-first-token. They are built for high-throughput, short, independent requests: classification, captioning, extraction, routing.
+
+They are **single-turn**: every request starts from a clean KV state, so earlier turns are not carried over. The system prompt is the one exception — it is prefilled once and cached, so keep it fixed and vary only the user message (and, for vision models, the image).
+
+Below, the same system prompt is pinned across requests that each caption a **different** image. The system-prompt KV is prefilled once on the first request; every request after that reuses it, so only the new image and text need to be prefilled — expect noticeably lower latency from the second request onward.
+
+```python
+import time
+import base64
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://127.0.0.1:52625/v1",
+    api_key="dummykey",  # FLM runs locally; the key is not checked
+)
+
+# Keep everything fixed in the system prompt — it is prefilled once and
+# reused across requests. Vary only the user message and image.
+SYSTEM_PROMPT = "You are a concise assistant. Describe the image in one short sentence."
+
+image_paths = [
+    r"C:\Users\info\OneDrive\Desktop\FLM\image_test\image0.jpg",
+    r"C:\Users\info\OneDrive\Desktop\FLM\image_test\image1.png",
+]
+
+for path in image_paths:
+    with open(path, "rb") as image_file:
+        image = base64.b64encode(image_file.read()).decode("utf-8")
+
+    print(f"\n> {path}")
+    start = time.time()
+    stream = client.chat.completions.create(
+        model="qwen3vl-flash:4b",
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},  # same every time — its KV is cached after the first call
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this image."},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpg;base64,{image}"}},
+                ],
+            },
+        ],
+        stream=True,
+    )
+    for chunk in stream:
+        delta = chunk.choices[0].delta.content
+        if delta:
+            print(delta, end="", flush=True)
+    print(f"\n[time to first response: {time.time() - start:.2f}s]")
+    # 1st image: pays the full system-prompt prefill cost.
+    # 2nd image onward: system-prompt KV is reused from cache — expect lower latency.
+
+# cleanup
+del stream, client
+import gc
+gc.collect()
+```
+
+> ⚠️ Do **not** append the reply to `messages` and send it back, as in the [multi-turn example](#-example-multi-turn-chat-conversation-history) — the history is discarded, and it only wastes your 1k budget.  
+> 🧠 Changing the system prompt discards the pinned prefix and re-prefills it. Alternating between two different system prompts defeats the optimization entirely.  
+> 📏 Context is **fixed at 1k tokens** for every flash model; context-length overrides are ignored.  
+> 🔧 **Tool calling is not supported** — any `tools` you pass are dropped.  
+> 🖼️ `gemma4e-flash` defaults to the smallest visual token budget (70) and keeps only the **first 30 seconds** of an audio clip. `qwen3vl-flash` always downscales images to a **256 px longer side**.  
+
+For the full per-model details, see the [`gemma4e-flash:e2b`](https://fastflowlm.com/docs/models/gemma/#-model-card-gemma-4-e2b-it--flash), [`gemma4e-flash:e4b`](https://fastflowlm.com/docs/models/gemma/#-model-card-gemma-4-e4b-it--flash), and [`qwen3vl-flash:4b`](https://fastflowlm.com/docs/models/qwen/#-model-card-qwen3-vl-4b-instruct--flash) model cards.

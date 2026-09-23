@@ -112,7 +112,7 @@ private:
     void ensure_asr_model_loaded(const std::string& model_tag);
     void ensure_embed_model_loaded(const std::string& model_tag);
     void configure_chat_engine_parameters(const json& options, const json& request);
-    json build_nstream_response(std::string response_text);
+    json build_nstream_response(std::string response_text, chat_meta_info_t& meta_info);
 
 
     std::unique_ptr<AutoModel> auto_chat_engine;

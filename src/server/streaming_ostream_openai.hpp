@@ -207,6 +207,7 @@ private:
             })},
             {"usage", {
                 {"prompt_tokens", meta_info.prompt_tokens},
+                {"prompt_tokens_details", {{"cached_tokens", meta_info.cached_prompt_tokens}}},
                 {"completion_tokens", meta_info.generated_tokens},
                 {"total_tokens", meta_info.prompt_tokens + meta_info.generated_tokens}
             }}
@@ -303,7 +304,11 @@ public:
         else {
             send_response("", false, true);
         }
-        if (stream_stop_reason == stop_reason_t::TOOL_DETECTED) {
+        // Only promote to a tool-call finish reason on an otherwise clean stop;
+        // length/cancel/error must win, so a truncated or aborted generation is
+        // never reported to the client as a complete tool call.
+        if (stream_stop_reason == stop_reason_t::TOOL_DETECTED
+            && meta_info.stop_reason == stop_reason_t::EOT_DETECTED) {
             meta_info.stop_reason = stream_stop_reason;
         }
         send_final_response(meta_info);
@@ -493,6 +498,7 @@ private:
             })},
             {"usage", {
                 {"prompt_tokens", meta_info.prompt_tokens},
+                {"prompt_tokens_details", {{"cached_tokens", meta_info.cached_prompt_tokens}}},
                 {"completion_tokens", meta_info.generated_tokens},
                 {"total_tokens", meta_info.prompt_tokens + meta_info.generated_tokens},
                 {"active_kv_tokens", this->auto_chat_engine->get_current_context_length()},
@@ -501,7 +507,7 @@ private:
                 {"load_duration", static_cast<double>(meta_info.load_duration) / 1'000'000'000},
                 {"prefill_duration_ttft", static_cast<double>(meta_info.prefill_duration) / 1'000'000'000},
                 {"decoding_duration", static_cast<double>(meta_info.decoding_duration) / 1'000'000'000},
-                {"prefill_speed_tps", static_cast<double>(meta_info.prompt_tokens) / static_cast<double>(meta_info.prefill_duration) * 1'000'000'000},
+                {"prefill_speed_tps", static_cast<double>(meta_info.prompt_tokens - meta_info.cached_prompt_tokens) / static_cast<double>(meta_info.prefill_duration) * 1'000'000'000},
                 {"decoding_speed_tps", static_cast<double>(meta_info.generated_tokens) / static_cast<double>(meta_info.decoding_duration) * 1'000'000'000},
             }}
         };

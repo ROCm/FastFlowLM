@@ -28,6 +28,8 @@ private:
     bool enable_tool = false;
     int think_start_id = 248068;
     int think_end_id = 248069;
+    static constexpr int tool_start_token_id = 248058;
+    
     void setup_tokenizer(std::string model_path);
     
     // Image processing functionality
@@ -64,6 +66,13 @@ private:
     StreamResult parse_stream_content_impl(const std::string content, bool is_final);
 
 public:
+
+    /// \note Qwen3.5-VL opens every tool call with <tool_call>, so masking that
+    ///       one token is enough to honour tool_choice=none. Gated on enable_tool
+    ///       to match apply_chat_template, which only renders tools when it is set.
+    int get_tool_start_token_id() const override {
+        return this->enable_tool ? tool_start_token_id : -1;
+    }
 
     /// \brief Configure a parameter with type-erased value
 	/// \param parameter_name the name of the parameter

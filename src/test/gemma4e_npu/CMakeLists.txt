@@ -49,6 +49,8 @@ target_link_directories(test_gemma4e_npu PUBLIC
 
 target_link_libraries(test_gemma4e_npu PUBLIC
     gemma4e_npu
+    # modeling_gemma4e.cpp serves both wrappers, so both engines must be linked.
+    gemma4e_flash
     xrt_coreutil
     avformat
     avcodec

@@ -33,6 +33,9 @@ public:
     std::string generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os = std::cout) override;
     std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object()) override;
     StreamResult parse_stream_content(const std::string content);
+    bool check_using_checkpint() {
+		return false;
+	}
 };
 
 class LFM2_5_TK : public AutoModel {

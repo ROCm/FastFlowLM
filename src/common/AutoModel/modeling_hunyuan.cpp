@@ -10,6 +10,7 @@
 
 /************              hunyuan-dense family            **************/
 Hunyuan::Hunyuan(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "Hunyuan") {
+    this->single_turn = true;
     // the translator emits one short line per turn and the caller already has it
     // from the stream / return value, so the raw dump would only double the log
     this->log_raw_output = false;

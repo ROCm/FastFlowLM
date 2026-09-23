@@ -24,12 +24,14 @@
 #include "models/qwen3/qwen3_npu.hpp"
 #include "models/qwen2vl/qwen2vl_npu.hpp"
 #include "models/qwen3vl/qwen3vl_npu.hpp"
+#include "models/qwen3vl_flash/qwen3vl_flash.hpp"
 #include "models/qwen3_5vl/qwen3_5vl_npu.hpp"
 #include "models/qwen3_6_moe/qwen3_6_moe_npu.hpp"
 #include "models/qwen3_8mtp/qwen3_8mtp_npu.hpp"
 #include "models/gemma/gemma_npu.hpp"
 #include "models/gemma_text/gemma_text_npu.hpp"
 #include "models/gemma4e/gemma4e_npu.hpp"
+#include "models/gemma4e_flash/gemma4e_flash.hpp"
 #include "models/gemma4_12b/gemma4_12b_npu.hpp"
 #include "models/lfm2/lfm2_npu.hpp"
 #include "models/phi4/phi4_npu.hpp"
@@ -96,9 +98,19 @@ inline std::string stop_reason_to_string(stop_reason_t reason){
     }
 }
 
+/// \brief What the request allows the model to do about tool calls.
+/// \note Only the two modes the server parses today; "required" and the
+///       per-function object form are reported as unsupported and fall back
+///       to TOOL_CHOICE_AUTO.
+typedef enum {
+	TOOL_CHOICE_AUTO,   // the model may emit tool calls (default)
+	TOOL_CHOICE_NONE    // tool call tokens are masked out of the logits
+} tool_choice_t;
+
 struct chat_meta_info_t {
 	int max_prefill_len;
-    int prompt_tokens;
+    int prompt_tokens;        // whole prompt, cached prefix included
+    int cached_prompt_tokens; // subset of prompt_tokens served from the KV cache
     int generated_tokens;
     uint64_t total_duration; // in nanoseconds
     uint64_t load_duration; // in nanoseconds
@@ -106,8 +118,9 @@ struct chat_meta_info_t {
     uint64_t decoding_duration; // in nanoseconds
     stop_reason_t stop_reason;
 	bool restore_allowed;
+	tool_choice_t tool_choice;
 
-	chat_meta_info_t() : max_prefill_len(0), prompt_tokens(0), generated_tokens(0), total_duration(0), load_duration(0), prefill_duration(0), decoding_duration(0), stop_reason(EOT_DETECTED), restore_allowed(false) {}
+	chat_meta_info_t() : max_prefill_len(0), prompt_tokens(0), cached_prompt_tokens(0), generated_tokens(0), total_duration(0), load_duration(0), prefill_duration(0), decoding_duration(0), stop_reason(EOT_DETECTED), restore_allowed(false), tool_choice(TOOL_CHOICE_AUTO) {}
 };
 
 typedef enum {
@@ -158,6 +171,10 @@ protected:
 	///       turn can append to it. Models that rewind or clear between turns
 	///       throw that state away anyway, so for them it is a wasted step.
 	bool forward_on_eos = true;
+	/// \brief whether this instance is running under `flm serve`
+	/// \note off by default (`flm run`); the server sets it via set_server_mode()
+	///       so that serve-only diagnostics don't show up in the CLI.
+	bool is_server_mode = false;
 
 
 	uint32_t MAX_L = 0;
@@ -211,10 +228,22 @@ protected:
 	buffer<bf16> _chunked_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled = [] { return false; }, void* payload = nullptr, int first_len_run = 0);
 	std::string _shared_generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled = [] { return false; });
 
+	/// \brief Push the tool start token out of contention before sampling.
+	/// \param y the logits of the token about to be sampled
+	/// \param meta_info the meta information of the chat, carrying the tool choice
+	/// \note No-op unless the request asked for tool_choice=none and this model
+	///       reports a tool start token, so the default path is untouched.
+	void _apply_tool_choice_mask(buffer<bf16>& y, const chat_meta_info_t& meta_info);
+
 	StreamResult _shared_think_tool_calling_pasrsed(const std::string content);
 
 public:
 	//************ Shared by all models *************/
+
+	/// \brief true if this model clears the kv cache on every insert() and
+	///        does not preserve context across turns (e.g. qwen3vl_flash).
+	bool single_turn = false;
+
 	virtual ~AutoModel() = default;
 
 	AutoModel(flm_rt::device* npu_device_inst, std::string current_model = "");
@@ -227,6 +256,10 @@ public:
 
 	/// \brief Clear the context
 	virtual void clear_context();
+
+	/// \brief Mark this instance as running under `flm serve` (vs. `flm run`)
+	/// \param value true if running under `flm serve`
+	void set_server_mode(bool value) { is_server_mode = value; }
 
 	/// \brief Get the current model
 	/// \return the current model
@@ -380,6 +413,17 @@ public:
 	virtual std::string generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled = [] { return false; }) = 0;
 	virtual chat_template_type_t get_chat_template_type() {
 		return chat_template_type_t::chat_ml;
+	}
+	virtual bool check_using_checkpint() {
+		return true;
+	}
+
+	/// \brief The token that opens a tool call for this model
+	/// \return the token id, or -1 if this model has no single such token
+	/// \note Models that report an id can have tool calling suppressed through
+	///       tool_choice=none; the rest keep emitting tool calls either way.
+	virtual int get_tool_start_token_id() const {
+		return -1;
 	}
 	/// \brief Insert the tokens
 	/// \param tokens the tokens

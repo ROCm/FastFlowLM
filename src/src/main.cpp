@@ -234,21 +234,7 @@ static bool sanity_check_npu_stack(bool quiet, bool json_output = false) {
         }
         return false;
     }
-    int major, minor;
-    sscanf(u_name.release, "%d.%d", &major, &minor);
-    bool kernel_ok = (major > 6) || (major == 6 && minor >= 17);
     validation_json["kernel"] = u_name.release;
-    validation_json["kernel_ok"] = kernel_ok;
-    if (!kernel_ok) {
-        if (print_human) {
-            header_print_r("ERROR", "Kernel version incompatible with this version of FLM. Please update your kernel!");
-        }
-        validation_json["ready"] = false;
-        if (json_output) {
-            std::cout << validation_json.dump(4) << std::endl;
-        }
-        return false;
-    }
     if (print_human) {
         header_print("Linux", "Kernel: " << u_name.release);
     }
@@ -258,6 +244,7 @@ static bool sanity_check_npu_stack(bool quiet, bool json_output = false) {
     bool enough_cols = true;
     bool amd_device_found = false;
     bool drm_version_ok = true;
+    bool kernel_ok = true;
 
     for (int i = 0; i < 16; ++i) {
         std::string dev_name = "/dev/accel/accel" + std::to_string(i);
@@ -472,10 +459,31 @@ int main(int argc, char* argv[]) {
     // Parse command line arguments using Boost Program Options
     program_args_t parsed_args;
     if (!arg_utils::parse_options(argc, argv, parsed_args)) {
-        return 1; // Help was already printed by Boost Program Options
+        return 1;
     }
 
-    
+    if (parsed_args.command == "help") {
+        return 0;
+    }
+
+    if (parsed_args.command == "version") {
+        if (parsed_args.json_output) {
+            std::cout << "{ \"version\": \"" << __FLM_VERSION__ << "\" }" << std::endl;
+        } else {
+            std::cout << "FLM v" << __FLM_VERSION__ << std::endl;
+        }
+        return 0;
+    }
+
+    if (parsed_args.command == "port") {
+        if (parsed_args.json_output) {
+            std::cout << "{ \"port\": " << utils::get_server_port(parsed_args.port) << " }" << std::endl;
+        } else {
+            std::cout << "Server Port: " << utils::get_server_port(parsed_args.port) << std::endl;
+        }
+        return 0;
+    }
+
     // Get the command, model tag, and force flag
     std::string exe_dir = utils::get_executable_directory();
     std::string config_path;
@@ -577,24 +585,6 @@ int main(int argc, char* argv[]) {
 #endif
 
     // code for all commands:
-    
-    if (parsed_args.command == "version") {
-        if (parsed_args.json_output) {
-            std::cout << "{ \"version\": \"" << __FLM_VERSION__ << "\" }" << std::endl;
-        } else {
-            std::cout << "FLM v" << __FLM_VERSION__ << std::endl;
-        }
-        return 0;
-    }
-
-    if (parsed_args.command == "port"){
-        if (parsed_args.json_output) {
-            std::cout << "{ \"port\": " << utils::get_server_port(parsed_args.port) << " }" << std::endl;
-        } else {
-            std::cout << "Server Port: " << utils::get_server_port(parsed_args.port) << std::endl;
-        }
-        return 0;
-    }
 
     if (parsed_args.preemption){
         header_print("FLM", "Allowing high priority tasks to preempt FLM!");

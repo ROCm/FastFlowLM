@@ -185,6 +185,35 @@ The `-r` option determines the image's height:
 
 ---
 
+## 🧩 Model Card: [Qwen3-VL-4B-Instruct — Flash](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct)
+
+- **Type:** Image-Text-to-Text
+- **Think:** No
+- **Tool Calling Support:** No  
+- **Base Model:** [Qwen/Qwen3-VL-4B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct)
+- **Quantization:** Q4_1
+- **Max Context Length:** 1k tokens  
+- **Default Context Length:** 1k tokens (fixed, see note below)
+
+▶️ Run with FastFlowLM in PowerShell:  
+
+```shell
+flm run qwen3vl-flash:4b
+```
+
+⚡ **Note — what "Flash" changes:**
+
+- Same checkpoint as `qwen3vl-it:4b`, served by a different engine. Prefill runs on a single fused NPU overlay instead of swapping between the matmul and attention overlays every layer, which cuts time-to-first-token on short prompts.
+- **Prefill speed: ~350 tokens/s** at a 128-token prompt — the short-prompt case Flash is tuned for.
+- **Decode speed is unchanged.** Flash only changes how prefill runs, so generation tokens/s matches `qwen3vl-it:4b` — see the [Qwen3 benchmarks](https://fastflowlm.com/docs/benchmarks/qwen3_results/).
+- **Single-turn.** Every request starts from a clean KV state — earlier turns are not carried over. A system prompt is the one exception: it is pinned on first use and reused on later requests, so it is not re-prefilled on every call.
+- **Context length is fixed at 1k tokens.** Context-length overrides are ignored for this model.
+- **Tool calling is not supported.** Any tools passed with the request are dropped.
+- **Images are always downscaled to a 256 px longer side** to fit the short context. The `--img-pre-resize` / `-r` option is ignored. Images already smaller than 256 px keep their original resolution.
+- **Example usage:** [Flash models in server mode](https://fastflowlm.com/docs/instructions/server/openapi/#-example-flash-models-single-turn-pinned-system-prompt)
+
+---
+
 ## 🧩 Model Card: [Qwen2.5-3B-Instruct](https://huggingface.co/Qwen/Qwen2.5-3B-Instruct)
 
 - **Type:** Text-to-Text

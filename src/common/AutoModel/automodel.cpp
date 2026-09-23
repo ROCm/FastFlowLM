@@ -139,10 +139,19 @@ void AutoModel::_shared_load_model(std::string model_path, json model_info, int 
     }
     this->npu = std::make_unique<npu_xclbin_manager>(npu_device::device_npu2, this->npu_device_inst, enable_preemption);
     this->enable_preemption = enable_preemption;
+    // Single-turn models (e.g. dedicated translation models) don't support arbitrary
+    // context length overrides, so always fall back to the model's own default.
+    bool single_turn = model_info.contains("label") &&
+        std::find(model_info["label"].begin(), model_info["label"].end(), "single-turn") != model_info["label"].end();
     // Set context length: use provided value if not -1, otherwise use model default
-    if (default_context_length != -1) {
+    if (default_context_length != -1 && single_turn) {
+        header_print("FLM", "Single-turn model, 1k max context length allowed only!");
+        this->MAX_L = model_info["default_context_length"];
+    }
+    else if (default_context_length != -1) {
         this->MAX_L = default_context_length;
-    } else {
+    }
+    else {
         this->MAX_L = model_info["default_context_length"];
     }
     
@@ -183,12 +192,13 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
         }
     }
     if (skip_count != idx) {
-        header_print("FLM", "System prompt changed! Clearing context...");
+        if (is_server_mode) {
+            header_print("FLM", "Conversation context diverged from cache, clearing context...");
+        }
         clear_context();
         skip_count = 0;
     }
     tokens.erase(tokens.begin(), tokens.begin() + skip_count);
-
 
     if (this->total_tokens + tokens.size() >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping prefilling...");
@@ -205,7 +215,11 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
 
     auto prefill_end_time = this->profiler_list[PREFILL_TIME].stop(tokens.size());
     meta_info.prefill_duration = (uint64_t)time_utils::duration_ns(prefill_start_time, prefill_end_time).first;
-    meta_info.prompt_tokens = tokens.size();
+    // `tokens` was trimmed to the uncached suffix above, so add the prefix served
+    // from the KV cache back on: usage.prompt_tokens is the whole prompt, and the
+    // cached part is reported separately rather than subtracted.
+    meta_info.cached_prompt_tokens = static_cast<int>(skip_count);
+    meta_info.prompt_tokens = static_cast<int>(skip_count + tokens.size());
 
     if (meta_info.stop_reason == CANCEL_DETECTED) {
         return false;
@@ -216,6 +230,7 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
         header_print("WARNING", "Max length reached, stopping prefilling...");
     }
     this->profiler_list[SAMPLING_TIME].start();
+    this->_apply_tool_choice_mask(y, meta_info);
     this->last_token = this->sampler->sample(y);
     this->profiler_list[SAMPLING_TIME].stop(1);
     return true;
@@ -262,6 +277,20 @@ buffer<bf16> AutoModel::_chunked_insert(chat_meta_info_t& meta_info, std::vector
         }
     }
     return y;
+}
+
+void AutoModel::_apply_tool_choice_mask(buffer<bf16>& y, const chat_meta_info_t& meta_info) {
+    if (meta_info.tool_choice != TOOL_CHOICE_NONE) {
+        return;
+    }
+    const int tool_start_token_id = this->get_tool_start_token_id();
+    if (tool_start_token_id < 0 || (size_t)tool_start_token_id >= y.size()) {
+        return;
+    }
+    // A large negative logit rather than -inf: every sampling path either takes
+    // the argmax or runs this through softmax, and a finite value can never turn
+    // into the inf - inf that would poison the whole distribution.
+    y[tool_start_token_id] = bf16(-1e30f);
 }
 
 std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
@@ -418,6 +447,7 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
         this->profiler_list[DECODING_TIME].stop(1);
 
         this->profiler_list[SAMPLING_TIME].start();
+        this->_apply_tool_choice_mask(y, meta_info);
         int sampled_token = this->sampler->sample(y);
         this->profiler_list[SAMPLING_TIME].stop(1);
 
