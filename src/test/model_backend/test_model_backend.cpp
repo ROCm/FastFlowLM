@@ -13,6 +13,7 @@
 
 #include <cstdlib>
 #include <memory>
+#include <algorithm>
 #include <string>
 
 using flm::backend::BackendContext;
@@ -173,20 +174,20 @@ void test_unknown_id_names_what_exists() {
     RequireContains(empty, "(none)");
 }
 
-void test_the_build_default_is_the_default() {
+void test_the_catalog_entry_is_the_default() {
     auto& registry = BackendRegistry::instance();
     registry.replace_backend("phi4", kFlmBackendId, StubFactory("flm"));
     registry.replace_backend("phi4", kRaiBackendId, StubFactory("rai"));
 
     std::string source;
 
-    // Nothing overrides it, so the build's own default decides. It is passed
-    // in rather than detected: which kernel provider a binary links is fixed
-    // at compile time, and this function has no business asking hardware.
+    // Nothing overrides it, so the entry decides. Both flows are registered
+    // for this family at once, which is the point: they are two ways to run
+    // phi4 on one machine, not two machines.
     TEST_REQUIRE(resolve_backend_id("phi4", "flm", "", &source) == kFlmBackendId);
-    TEST_REQUIRE(source == "build default");
+    TEST_REQUIRE(source == "model catalog");
     TEST_REQUIRE(resolve_backend_id("phi4", "rai", "", &source) == kRaiBackendId);
-    TEST_REQUIRE(source == "build default");
+    TEST_REQUIRE(source == "model catalog");
 }
 
 void test_resolution_precedence() {
@@ -196,7 +197,7 @@ void test_resolution_precedence() {
 
     std::string source;
     {
-        // FLM_BACKEND beats the build default.
+        // FLM_BACKEND beats what the entry asked for.
         ScopedBackendEnv env(kRaiBackendId);
         TEST_REQUIRE(resolve_backend_id("phi4", "flm", "", &source) == kRaiBackendId);
         TEST_REQUIRE(source == "FLM_BACKEND");
@@ -210,7 +211,39 @@ void test_resolution_precedence() {
     // An empty FLM_BACKEND is the same as an unset one.
     ScopedBackendEnv empty("");
     TEST_REQUIRE(resolve_backend_id("phi4", "rai", "", &source) == kRaiBackendId);
-    TEST_REQUIRE(source == "build default");
+    TEST_REQUIRE(source == "model catalog");
+}
+
+void test_adding_rai_leaves_the_flm_families_alone() {
+    auto& registry = BackendRegistry::instance();
+    registry.replace_backend("llama3", kFlmBackendId, StubFactory("flm"));
+    registry.replace_backend("phi4", kFlmBackendId, StubFactory("flm"));
+    registry.replace_backend("phi4", kRaiBackendId, StubFactory("rai"));
+
+    // This is the shape of a corelib build: rai for the one family that has a
+    // corelib engine, flm for that family too, and flm alone everywhere else.
+    // Linking rai must not disturb any of the families it says nothing about.
+    std::string source;
+    TEST_REQUIRE(resolve_backend_id("llama3", kFlmBackendId, "", &source) ==
+                 kFlmBackendId);
+    TEST_REQUIRE(source == "model catalog");
+    TEST_REQUIRE(resolve_backend_id("phi4", kRaiBackendId, "", &source) ==
+                 kRaiBackendId);
+    TEST_REQUIRE(source == "model catalog");
+
+    // rai is registered, but not for llama3, and nothing quietly substitutes
+    // another flow: asking for one backend and silently getting a different
+    // one would be worse than an error. The catalog cannot ask for this in
+    // practice -- model_list prunes an entry whose flow is missing -- so a
+    // throw here means a real mismatch rather than a packaging gap.
+    RequireThrows([&] { resolve_backend_id("llama3", kRaiBackendId); });
+    RequireThrows(
+        [&] { resolve_backend_id("llama3", kFlmBackendId, kRaiBackendId); });
+
+    // Every backend the build links, whichever family registered it.
+    const auto ids = registry.backend_ids();
+    TEST_REQUIRE(std::find(ids.begin(), ids.end(), kFlmBackendId) != ids.end());
+    TEST_REQUIRE(std::find(ids.begin(), ids.end(), kRaiBackendId) != ids.end());
 }
 
 void test_resolution_rejects_with_a_readable_message() {
@@ -222,13 +255,13 @@ void test_resolution_rejects_with_a_readable_message() {
     const std::string not_built = RequireThrows(
         [&] { resolve_backend_id("llama3", "flm", kRaiBackendId); });
     RequireContains(not_built, "--backend");
-    RequireContains(not_built, "not compiled into this build");
+    RequireContains(not_built, "is not available for model family");
     RequireContains(not_built, "flm");
 
     // Same for a provider nobody has an engine for yet.
     const std::string unknown_provider =
         RequireThrows([&] { resolve_backend_id("llama3", "gpu"); });
-    RequireContains(unknown_provider, "build default");
+    RequireContains(unknown_provider, "model catalog");
     RequireContains(unknown_provider, "gpu");
 
     // The env var gets named in the message too, so the user can find it.
@@ -252,8 +285,10 @@ int main() {
     RunTest(test_duplicate_registration_is_rejected, "duplicate registration is rejected");
     RunTest(test_replace_backend_is_the_test_seam, "replace_backend is the test seam");
     RunTest(test_unknown_id_names_what_exists, "unknown id names what exists");
-    RunTest(test_the_build_default_is_the_default, "the build default is the default");
+    RunTest(test_the_catalog_entry_is_the_default, "the catalog entry is the default");
     RunTest(test_resolution_precedence, "resolution precedence");
+    RunTest(test_adding_rai_leaves_the_flm_families_alone,
+            "adding rai leaves the flm families alone");
     RunTest(test_resolution_rejects_with_a_readable_message,
             "resolution rejects with a readable message");
     std::cout << "All model backend tests passed\n";

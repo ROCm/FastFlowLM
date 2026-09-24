@@ -205,11 +205,14 @@ void AutoModel::_shared_load_backend(std::string model_path, json model_info,
 
     auto& registry = flm::backend::BackendRegistry::instance();
     std::string source;
-    // A build links one kernel flow, so that is the default when neither
-    // --backend nor FLM_BACKEND says otherwise.
+    // The entry carries the kernel flow its artifacts were built for -- the
+    // weights differ between flows, so this belongs to the model rather than
+    // to the build. model_list wrote it there from the tag the entry was
+    // found under; --backend and FLM_BACKEND still win over it.
+    const std::string catalog_backend = model_info.value(
+        flm::backend::kBackendKey, std::string(flm::backend::kFlmBackendId));
     const std::string id = flm::backend::resolve_backend_id(
-        family, flm::backend::build_default_backend_id(), requested_backend,
-        &source);
+        family, catalog_backend, requested_backend, &source);
 
     // Same model on the same backend is a no-op; a different backend is a real
     // reload even when the path has not changed.

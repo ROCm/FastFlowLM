@@ -5,6 +5,7 @@
 #include "utils/utils.hpp"
 
 #include <cstdlib>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -109,6 +110,19 @@ bool BackendRegistry::has(const std::string& family,
     return per_family != factories_.end() && per_family->second.count(id) != 0;
 }
 
+std::vector<std::string> BackendRegistry::backend_ids() const {
+    std::lock_guard lock(mutex_);
+    std::set<std::string> ids;
+    for (const auto& [family, per_family] : factories_) {
+        (void)family;
+        for (const auto& [id, entry] : per_family) {
+            (void)entry;
+            ids.insert(id);
+        }
+    }
+    return {ids.begin(), ids.end()};
+}
+
 std::unique_ptr<ModelBackend> BackendRegistry::create(
     const std::string& family, const std::string& id,
     const BackendContext& context) const {
@@ -129,15 +143,15 @@ std::string resolve_backend_id(const std::string& family,
         chosen_source = "FLM_BACKEND";
     } else {
         chosen = fallback;
-        chosen_source = "build default";
+        chosen_source = "model catalog";
     }
 
-    if (!BackendRegistry::instance().has(family, chosen)) {
+    auto& registry = BackendRegistry::instance();
+    if (!registry.has(family, chosen)) {
         throw std::runtime_error(
             "Backend '" + chosen + "' (from " + chosen_source +
-            ") is not compiled into this build of flm. Model family '" +
-            family + "' provides: " +
-            Join(BackendRegistry::instance().available(family)));
+            ") is not available for model family '" + family +
+            "'. It provides: " + Join(registry.available(family)));
     }
 
     if (source) *source = chosen_source;

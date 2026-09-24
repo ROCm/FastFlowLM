@@ -8,6 +8,7 @@
 #include "runner.hpp"
 #include "server.hpp"
 #include "model_list.hpp"
+#include "AutoModel/model_backend.hpp"
 #include "model_downloader.hpp"
 #include "update.hpp"
 #include "utils/utils.hpp"
@@ -228,9 +229,9 @@ static bool sanity_check_npu_stack(bool quiet, bool json_output = false) {
         {"ready", true}
     };
     validation_json["platform"] = "linux";
-    // The same build-time generation the catalog was filtered for in main().
+    // The same generation the catalog was filtered for in main().
     validation_json["npu_platform"] =
-        std::string(utils::platform_id(utils::build_npu_platform()));
+        std::string(utils::platform_id(utils::get_device()));
     // Check kernel version
     struct utsname u_name;
     if (uname(&u_name) != 0) {
@@ -411,7 +412,7 @@ static bool sanity_check_npu_stack(bool quiet, bool json_output = false) {
         {"amd_device_found", true},
         {"npu_driver_ok", true},
         {"npu_platform",
-         std::string(utils::platform_id(utils::build_npu_platform()))},
+         std::string(utils::platform_id(utils::get_device()))},
         {"ready", true}
     };
     std::string npu_arch = identify_npu_arch();
@@ -627,13 +628,15 @@ int main(int argc, char* argv[]) {
     flm_rt::device* npu_device = open_npu_device(&npu_open_error);
 #endif
 
-    // Which generation this binary is for is decided by FLM_ENABLE_RAI at
-    // build time: the two generations share no engine, so a build has one of
-    // them and there is nothing to detect.
-    constexpr utils::npu_platform platform = utils::build_npu_platform();
+    // Two things decide what this binary can run, and they are independent.
+    // The generation is the machine's, answered by the device itself, and says
+    // which artifacts run here at all; the backend ids are the kernel flows
+    // that were linked in, and a tag names its own flow.
+    const utils::npu_platform platform = utils::get_device();
 
-    model_list availble_models(config_path, models_dir,
-                               std::string(utils::platform_id(platform)));
+    model_list availble_models(
+        config_path, models_dir, std::string(utils::platform_id(platform)),
+        flm::backend::BackendRegistry::instance().backend_ids());
 
     const bool print_status = !parsed_args.json_output && !parsed_args.sub_process_mode;
     const bool needs_npu =
@@ -659,20 +662,6 @@ int main(int argc, char* argv[]) {
                                           : ": " + npu_open_error));
     }
 
-    // The rai build of phi4-mini-it installs under its own directory name, so
-    // on any other platform that directory is no longer reachable by a tag and
-    // `flm remove` cannot clean it up. Point it out; never delete it.
-    if (print_status && platform != utils::npu_platform::aie_next) {
-        const std::filesystem::path stale_dir =
-            std::filesystem::path(availble_models.get_model_root_path()) / "phi4-mini-it-rai";
-        std::error_code stale_ec;
-        if (std::filesystem::exists(stale_dir, stale_ec)) {
-            header_print("FLM", "Note: " << stale_dir.string()
-                                         << " is a rai-only model and is unused on this NPU; "
-                                            "delete it manually to reclaim the space.");
-        }
-    }
-    
     // Extract parsed values
     bool got_power_mode = (parsed_args.power_mode != "performance"); // Check if user explicitly set power mode
     bool stable_stack = false;

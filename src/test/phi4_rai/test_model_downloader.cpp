@@ -12,24 +12,29 @@
 namespace {
 namespace fs = std::filesystem;
 
-// One tag now covers both NPU generations; the catalog picks the artifacts.
-constexpr const char* kRaiTag = "phi4-mini-it:4b";
-// The rai build still installs under its own directory and reads its own
-// model_info.json record set, so those two names stay distinct from the tag.
+// The corelib model is packaged differently from its FastFlowLM namesake --
+// a Q8_0 GGUF against an NPU2/Q4NX build -- so it is a separate tag, and the
+// "-rai" suffix is what routes it to the corelib kernels.
+constexpr const char* kRaiTag = "phi4-mini-it-rai:4b";
+constexpr const char* kFlmTag = "phi4-mini-it:4b";
+// The tag is the model_info.json key and the directory name, so all three read
+// alike and nothing has to redirect between them.
 constexpr const char* kRaiModelInfoKey = "phi4-mini-it-rai:4b";
 constexpr const char* kRaiDirName = "phi4-mini-it-rai";
 constexpr const char* kUnslothRevision = "78eb92a46fc37e6b524df991ed9aca9bc6aa7b80";
 constexpr const char* kMicrosoftRevision = "cfbefacb99257ffa30c83adab238a50856ac3083";
 
-/// \brief the shipped catalog entry as one platform resolves it
-/// \param platform "stx" or "aie_next"
+/// \brief the shipped catalog entry as the machine that can run it resolves it
 /// \param tag the model tag to resolve
-/// \note Goes through model_list so these tests exercise the real
-///       filter-and-merge path rather than the raw JSON.
-nlohmann::json ResolvedModel(const std::string& platform, const char* tag) {
+/// \param platform the NPU generation to resolve it for
+/// \note Goes through model_list so these tests exercise the real filtering
+///       path rather than the raw JSON, with a corelib build's backend list --
+///       a tag whose flow this build lacks, or whose silicon this is not, is
+///       pruned.
+nlohmann::json ResolvedModel(const char* tag, const char* platform) {
     std::string path = FLM_SOURCE_DIR "/model_list.json";
     std::string exe_dir = ".";
-    model_list models(path, exe_dir, platform);
+    model_list models(path, exe_dir, platform, {"flm", "rai"});
     TEST_REQUIRE(models.is_model_supported(tag));
     return models.get_model_info(tag).second;
 }
@@ -79,25 +84,28 @@ std::string FileUrl(const fs::path& path) {
 }
 
 void TestRaiCatalogHasExactlyFourFilesAndExpectedDirectoryName() {
-    const auto model = ResolvedModel("aie_next", kRaiTag);
+    const auto model = ResolvedModel(kRaiTag, "aie_next");
     const std::vector<std::string> expected = {
         "Phi-4-mini-instruct.Q8_0.gguf", "tokenizer.json",
         "tokenizer_config.json", "config.json"};
     TEST_REQUIRE(model.at("name") == kRaiDirName);
-    TEST_REQUIRE(model.at("model_info_key") == kRaiModelInfoKey);
+    // The tag is the key, so there is nothing to redirect.
+    TEST_REQUIRE(!model.contains("model_info_key"));
+    TEST_REQUIRE(std::string(kRaiTag) == kRaiModelInfoKey);
+    TEST_REQUIRE(model.at("backend") == "rai");
     TEST_REQUIRE(model.at("files").get<std::vector<std::string>>() == expected);
     TEST_REQUIRE(model.at("size").get<std::uint64_t>() == 4100140571ULL);
 }
 
 void TestGgufUrlContainsUnslothRevisionAndFilename() {
-    const auto model = ResolvedModel("aie_next", kRaiTag);
+    const auto model = ResolvedModel(kRaiTag, "aie_next");
     const auto source = resolve_file_source(model, "Phi-4-mini-instruct.Q8_0.gguf", false);
     TEST_REQUIRE(source.url == std::string("https://huggingface.co/unsloth/Phi-4-mini-instruct-GGUF/resolve/") +
                                   kUnslothRevision + "/Phi-4-mini-instruct.Q8_0.gguf?download=true");
 }
 
 void TestThreeFrontendUrlsContainMicrosoftRevisionAndFilename() {
-    const auto model = ResolvedModel("aie_next", kRaiTag);
+    const auto model = ResolvedModel(kRaiTag, "aie_next");
     for (const std::string filename : {"tokenizer.json", "tokenizer_config.json", "config.json"}) {
         const auto source = resolve_file_source(model, filename, false);
         TEST_REQUIRE(source.url == std::string("https://huggingface.co/microsoft/Phi-4-mini-instruct/resolve/") +
@@ -106,8 +114,10 @@ void TestThreeFrontendUrlsContainMicrosoftRevisionAndFilename() {
 }
 
 void TestExistingSingleSourceEntryKeepsItsCurrentUrl() {
-    // The same tag on stx: the aie_next override must not leak onto Strix.
-    const auto model = ResolvedModel("stx", kRaiTag);
+    // The FastFlowLM phi4, which a corelib build still lists and still runs on
+    // the flm kernels: nothing about the corelib tag may reach it.
+    const auto model = ResolvedModel(kFlmTag, "aie2p");
+    TEST_REQUIRE(model.at("backend") == "flm");
     TEST_REQUIRE(model.at("name") == "Phi4-mini-Instruct-NPU2");
     TEST_REQUIRE(!model.contains("file_sources"));
     TEST_REQUIRE(!model.contains("model_info_key"));
@@ -136,17 +146,19 @@ void TestUnknownFileSourceKeyAndMissingUrlOrRevisionFail() {
 
 void TestActualRaiCatalogTreatsPinnedConfigWithoutFlmVersionAsCompatible() {
     const auto root = TempDirectory("actual-catalog-version");
-    // Take the merged aie_next entry and re-home it in a temp catalog. It carries no
-    // supported_platforms any more, so the default (stx) constructor keeps it.
-    const auto model = ResolvedModel("aie_next", kRaiTag);
+    // Take the resolved entry and re-home it in a temp catalog, under the same
+    // family: the tag is what says these are corelib artifacts.
+    const auto model = ResolvedModel(kRaiTag, "aie_next");
     const nlohmann::json catalog = {
         {"model_path", "models"},
-        {"models", {{"phi4-mini-it", {{"4b", model}}}}}};
+        {"models", {{"phi4-mini-it-rai", {{"4b", model}}}}}};
     const auto catalog_path = root / "model_list.json";
     Write(catalog_path, catalog.dump());
     std::string catalog_string = catalog_path.string();
     std::string root_string = root.string();
-    model_list models(catalog_string, root_string);
+    // The tag names the corelib flow and the entry the next generation, so say
+    // both are here.
+    model_list models(catalog_string, root_string, "aie_next", {"flm", "rai"});
     const auto model_path = root / "models" / kRaiDirName;
     for (const auto& filename : model.at("files")) {
         Write(model_path / filename.get<std::string>(), "placeholder");

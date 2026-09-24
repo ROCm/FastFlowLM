@@ -6,11 +6,23 @@ only model on this path today, so every file named below has a `phi4` counterpar
 you can read straight through.
 
 A backend names *where the kernels come from*: `flm` is FastFlowLM's own kernel
-flow, `rai` is corelib. That is a separate axis from which silicon a build
-targets, which is `utils::npu_platform` (`stx`, `aie_next`). The two line up
-one-to-one today — a rai build is an aie_next build — but they are different
-questions and they get different names, so that the day they stop lining up is
-not the day every string in the tree starts lying.
+flow, `rai` is corelib. That is a separate axis from which silicon the host has,
+which is `utils::npu_platform` (`aie2p`, `aie_next`) and is answered at run time
+by `utils::get_device()`. They are genuinely independent: a build links every
+flow it was configured with, and several flows can serve one generation. Keying
+either axis off the other is how adding corelib once took the FastFlowLM models
+away.
+
+`get_device()` is a **stand-in** until the real probe lands, and it consults
+nothing: it returns `default_npu_platform()`. Not the environment, and *not*
+whether corelib was linked — linking corelib says what kernels this binary has,
+never what silicon it is running on, and an install that lists a model it
+cannot run is worse than one that lists nothing. So the constant *is* the
+answer, for every build: change it and rebuild to move a whole install to the
+other generation, and the probe replaces the one function.
+
+It is **`aie_next`** today, while the corelib path is being brought up. Read
+the next paragraph before being surprised by what `flm list` shows.
 
 This is a contributor document. For *using* a backend once it exists — `--backend`,
 `FLM_BACKEND`, precedence — see [`docs/docs/instructions/cli.md`](../../../docs/docs/instructions/cli.md).
@@ -241,48 +253,69 @@ Also register the FLM-side engine if the family has one:
 
 ## 6. The catalog
 
-Two files, and both must agree.
+Two files, and both of them must agree.
 
-**[`model_list.json`](../../model_list.json)** — the entry. Phi-4 shares one tag
-across both NPU generations, so the aie_next artifacts arrive as a
-`platform_overrides.aie_next` patch:
+**[`model_list.json`](../../model_list.json)** is the one catalog. Every install
+ships it and every build reads it; what differs between installs is how much of
+it survives [`model_list::apply_support_filter`](../../include/model_list.hpp),
+which drops every entry this machine or this build cannot run. A model that is
+offered nowhere is the same to a user as a model that does not exist, so both
+axes prune:
+
+| the entry is dropped when | said by |
+|---|---|
+| the host is not silicon the entry names | `"supported_platforms"` on the entry |
+| the build did not link the kernel flow the entry needs | the **family name**: a family ending in `-rai` is corelib's, everything else is FastFlowLM's |
+
+So the corelib flavour of a model is **its own top-level family**, named
+`<family>-rai`, sitting beside the stock one rather than patching it:
 
 ```jsonc
-"<family>": {
+"<family>-rai": {
   "<size>": {
-    "supported_platforms": ["stx", "aie_next"],
-    "platform_overrides": {
-      "aie_next": {
-        "name": "<dir name under models/>",
-        "url": "...", "file_url": "...", "size": 4100140571,
-        "default_context_length": 4096,
-        "files": ["<weights>.gguf", "tokenizer.json", "tokenizer_config.json", "config.json"],
-        "file_sources": { "tokenizer.json": { "url": "...", "revision": "..." } },
-        "model_info_key": "<family>-rai:<size>",
-        "ms_url": null
-      }
-    }
+    "supported_platforms": ["aie_next"],
+    "name": "<dir name under models/>",
+    "url": "...", "file_url": "...", "size": 4100140571,
+    "default_context_length": 4096,
+    "files": ["<weights>.gguf", "tokenizer.json", "tokenizer_config.json", "config.json"],
+    "file_sources": { "tokenizer.json": { "url": "...", "revision": "..." } }
   }
 }
 ```
 
 Points that are easy to get wrong:
 
-- The patch is a **JSON merge-patch**: arrays replace wholesale, and `null`
-  *deletes* a key — that is what `"ms_url": null` is doing.
-- `supported_platforms` is pruned at load, and **only aie_next support needs a
-  tag**: an entry that omits the key is stx-only, which is the overwhelming
-  majority. Do not write `["stx"]`; it restates the default.
-- **The entry names no backend.** There is no `supported_backends` and no
-  `details.execution_backend` — both are retired. By the time an entry reaches
-  the loader it has already been filtered to the platform this build targets,
-  and the build links exactly one kernel flow, so there is nothing left for the
-  entry to decide. `--backend` and `FLM_BACKEND` override that default, and are
-  checked against the registry, not against the entry.
+- **The family name is the mechanism.** Nothing in the file says `rai`;
+  `model_list` reads the `-rai` suffix off the tag and stamps the answer onto
+  the entry as `"backend"`, which is what
+  [`AutoModel`](../AutoModel/automodel.cpp) later reads. Do not write `backend`
+  by hand — it is derived, and a hand-written one is overwritten.
+  `--backend` and `FLM_BACKEND` still override it, and are checked against the
+  registry. The plural `supported_backends` and `details.execution_backend` are
+  retired, as are `supported_backend` and `platform_overrides`.
+- **`supported_platforms` is required on every shipped entry**, and
+  `src/test/model_list_platform` fails if one is missing or disagrees with its
+  family name. Omitting it is legal — it means *every* generation, which is what
+  a catalog written before the key meant — but a shipped entry should say what
+  it was built for. All 42 FastFlowLM entries are `["aie2p"]`; the corelib one
+  is `["aie_next"]`.
+- Separate families mean **separate tags**, so no `model_info_key` redirect is
+  needed: `model_info.json` keys the corelib records under `<family>-rai:<size>`
+  directly, which is also the tag a user types.
 - `file_sources` pins a per-file origin + revision when the weights and the
   tokenizer come from different repos (very common with GGUF mirrors).
-- `model_info_key` redirects the downloader to a differently-named record set,
-  which is needed exactly because the tag is shared across platforms.
+- The two keys are checked independently, and **the platform is checked first
+  and for everyone**. On today's `aie_next` default that means a corelib build
+  offers `phi4-mini-it-rai` and nothing else, and a build *without* corelib
+  offers **nothing at all** — the 42 FastFlowLM entries are pruned by the
+  generation, and the corelib entry by the kernels it would need. That is the
+  cost of bringing up the next generation before its probe exists, and it is
+  reversed by setting `default_npu_platform()` back to `aie2p`, which gives
+  both builds the same 42 tags and neither the corelib one.
+- An empty catalog is therefore an ordinary state, not a crash: `model_list`
+  prints one line naming the generation and the linked kernels, `flm list` says
+  it found nothing, `flm run` says the tag is not found, and `flm --help` still
+  works. A build that aborted here could not even tell you why.
 
 **[`model_info.json`](../../model_info.json)** — one record per file, with `size`
 and `sha256`. The downloader refuses anything it cannot match
@@ -349,5 +382,6 @@ Check, in order:
 - [ ] `BackendTraits` is `inline` in the header
 - [ ] registered in `builtin_backends.cpp` under `#if defined(FLM_ENABLE_RAI)`
 - [ ] no `#if FLM_ENABLE_RAI` anywhere in the frontend
-- [ ] `model_list.json` + `model_info.json` agree, including `model_info_key`
+- [ ] `model_list.json` and `model_info.json` agree, the corelib family is
+      named `-rai` and its `supported_platforms` says `aie_next`
 - [ ] frozen headers untouched

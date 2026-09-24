@@ -49,15 +49,17 @@ XRT_DIR="${XRT_DIR:-/opt/xilinx/xrt}"
 # the libxrt_driver_xdna NPU driver and the rest at run time from a path it
 # builds as $XILINX_XRT/lib/x86_64-linux-gnu/<lib>, and when XILINX_XRT is unset
 # it guesses that root three directories above wherever libxrt_coreutil happened
-# to be loaded from. Any second copy of XRT on LD_LIBRARY_PATH sends the guess
-# somewhere with no lib/x86_64-linux-gnu under it, and then the NPU comes up
-# with no driver plugin: corelib reports "no AIE4 hw_context (unordered_map::at)"
-# and even a bare xrt::device(0) fails with "No such library .../libxrt_core.so.2".
-# That bites the rai build hardest, because it bundles no XRT of its own.
+# to be loaded from. A rai install bundles no XRT for that guess to land on, so
+# it names the root instead, and accepts a candidate only if the directory XRT
+# will actually dlopen from exists -- that way a wrong answer surfaces at
+# install time instead of at the first NPU call.
 #
-# So resolve the root here rather than leaving it to the guess, and accept a
-# candidate only if the directory XRT will actually dlopen from exists -- that
-# way a wrong answer surfaces at install time instead of at the first NPU call.
+# A stock install is left to the guess, exactly as it always was: its prefix
+# carries its own XRT in the layout XRT expects, and the guess lands on it.
+# Naming a root there, or putting a second XRT ahead of it on LD_LIBRARY_PATH,
+# is what made a stock prefix report "No such library
+# /home/$USER/lib/x86_64-linux-gnu/libxrt_core.so.2" and then "No such device
+# with index '0'" on a machine whose NPU was fine.
 detect_xrt_root() {
     local cand
     for cand in "${XILINX_XRT:-}" "$XRT_DIR" /usr/local /usr; do
@@ -69,7 +71,6 @@ detect_xrt_root() {
     done
     return 1
 }
-XRT_ROOT="$(detect_xrt_root || true)"
 
 DO_BUILD=1
 WANT_RAI=0
@@ -87,6 +88,11 @@ done
 if [[ "$WANT_RAI" -eq 1 && -z "$PRESET_FROM_ENV" ]]; then
     PRESET="linux-rai-on"
 fi
+
+# Empty unless this is a rai install; see detect_xrt_root above for why only
+# that half wants an answer.
+XRT_ROOT=""
+[[ "$WANT_RAI" -eq 1 ]] && XRT_ROOT="$(detect_xrt_root || true)"
 
 # A rai install and a stock one differ in the binary and in the libraries staged
 # beside it, but occupy identical paths, so sharing a prefix means whichever ran
@@ -189,6 +195,11 @@ fi
 echo "[home_install] installing to $FLM_PREFIX ..."
 cmake --install "$BUILD_DIR" --prefix "$FLM_PREFIX"
 
+# An earlier split shipped a second catalog, model_list_rai.json, beside this
+# one; a prefix that still holds it would answer "what can this install run"
+# twice, with the stale copy winning nothing but confusion.
+rm -f "$FLM_PREFIX/share/flm/model_list_rai.json"
+
 # ---- stage the rai (ryzenai-corelib) runtime -------------------------------
 # A corelib-backed build links libryzenai_corelib.so, which no install rule
 # covers: CMake only globs lib/<runtime> for engine libraries, and corelib is
@@ -201,8 +212,22 @@ cmake --install "$BUILD_DIR" --prefix "$FLM_PREFIX"
 # prefix self-contained. The dynamic loader searches LD_LIBRARY_PATH (set by the
 # env script below) before DT_RUNPATH, so these copies take precedence over the
 # build-time paths baked into the binaries.
+#
+# Keyed on --rai rather than on the cache: a stock install has to be the stock
+# install main ships, and reading the flag out of whichever build tree happened
+# to be lying around made a plain ./home_install.sh drop libryzenai_corelib.so
+# and a 400 MB libdyn_dispatch_core.so into ~/flm_exe, where the bundled XRT
+# then had company it could not cope with. A tree that disagrees with the mode
+# gets a warning instead.
 CACHE_FILE="$BUILD_DIR/CMakeCache.txt"
-if [[ -f "$CACHE_FILE" ]] && grep -q '^FLM_ENABLE_RAI:BOOL=ON' "$CACHE_FILE"; then
+if [[ "$WANT_RAI" -eq 0 ]]; then
+    if [[ -f "$CACHE_FILE" ]] && grep -q '^FLM_ENABLE_RAI:BOOL=ON' "$CACHE_FILE"; then
+        echo "[home_install] WARNING: $BUILD_DIR was configured with FLM_ENABLE_RAI=ON," >&2
+        echo "[home_install]          but this is a stock install: no corelib runtime is" >&2
+        echo "[home_install]          staged and the env script is the stock one. Re-run" >&2
+        echo "[home_install]          with --rai for a corelib install." >&2
+    fi
+elif [[ -f "$CACHE_FILE" ]] && grep -q '^FLM_ENABLE_RAI:BOOL=ON' "$CACHE_FILE"; then
     # HRX puts engine libs in lib/flm; the portable and XRT layouts use lib/.
     if grep -q '^FLM_USE_HRX:BOOL=ON' "$CACHE_FILE"; then
         RAI_LIB_DEST="$FLM_PREFIX/lib/flm"
@@ -252,34 +277,35 @@ if [[ -f "$CACHE_FILE" ]] && grep -q '^FLM_ENABLE_RAI:BOOL=ON' "$CACHE_FILE"; th
         echo "[home_install]   + libdyn_bins.so (dlopen'd AIE4 kernel package)"
         install -m 0755 "$DD_CORE_DIR/libdyn_bins.so" "$RAI_LIB_DEST/"
     fi
+else
+    echo "[home_install] ERROR: --rai, but $BUILD_DIR was not configured with" >&2
+    echo "               FLM_ENABLE_RAI=ON, so there is no corelib runtime to" >&2
+    echo "               stage. Drop --no-build, or point BUILD_DIR at a rai tree." >&2
+    exit 1
 fi
 
 # ---- emit the environment script ------------------------------------------
-if [[ -n "$XRT_ROOT" ]]; then
-    echo "[home_install] XRT runtime root: $XRT_ROOT"
-else
-    echo "[home_install] WARNING: found no XRT install providing" >&2
-    echo "[home_install]          lib/x86_64-linux-gnu/libxrt_core.so.2; the NPU will be" >&2
-    echo "[home_install]          unavailable unless \$XRT_DIR/setup.sh supplies it." >&2
+if [[ "$WANT_RAI" -eq 1 ]]; then
+    if [[ -n "$XRT_ROOT" ]]; then
+        echo "[home_install] XRT runtime root: $XRT_ROOT"
+    else
+        echo "[home_install] WARNING: found no XRT install providing" >&2
+        echo "[home_install]          lib/x86_64-linux-gnu/libxrt_core.so.2; the NPU will be" >&2
+        echo "[home_install]          unavailable unless \$XRT_DIR/setup.sh supplies it." >&2
+    fi
 fi
 
-ENV_SCRIPT="$FLM_PREFIX/flm_env.sh"
-echo "[home_install] writing env script: $ENV_SCRIPT"
-cat > "$ENV_SCRIPT" <<EOF
-#!/usr/bin/env bash
-# flm_env.sh — initialize the environment for the relocated FastFlowLM install.
-# Source this before running flm:   source "$ENV_SCRIPT"
-#
-# The binary was compiled with CMAKE_INSTALL_PREFIX baked in (e.g. /opt/fastflowlm),
-# so when relocated it relies on these env vars to locate its data and libraries.
-
-FLM_PREFIX="$FLM_PREFIX"
-XRT_DIR="$XRT_DIR"
+# Section 2 of the env script is the one place the two installs genuinely
+# differ, so it is composed here instead of branched on inside the generated
+# file. The stock text is main's, to the character: a stock prefix carries its
+# own XRT in the layout XRT expects and reaches it through the binary's RUNPATH,
+# and every extra hint that was added for rai -- the XILINX_XRT pin, $FLM_PREFIX
+# /lib ahead of it on LD_LIBRARY_PATH -- only got in its way. A rai prefix has
+# the opposite need: no XRT of its own, and corelib plus DynamicDispatch staged
+# beside the binary.
+if [[ "$WANT_RAI" -eq 1 ]]; then
+    XRT_ENV_BLOCK="$(cat <<RAI_ENV
 XRT_ROOT="$XRT_ROOT"
-
-# 1. Data files (consumed by utils::find_model_list / utils::find_xclbin_path).
-export FLM_CONFIG_PATH="\$FLM_PREFIX/share/flm/model_list.json"
-export FLM_XCLBIN_PATH="\$FLM_PREFIX/share/flm"
 
 # 2. Runtime libraries. The flm binary already has RPATH \$ORIGIN/../lib/flm for
 #    its bundled .so files, but XRT's libs (libxrt_coreutil.so, etc.) are found
@@ -288,14 +314,14 @@ export FLM_XCLBIN_PATH="\$FLM_PREFIX/share/flm"
 #    XILINX_XRT has to be exported, not merely inherited. XRT dlopens libxrt_core
 #    and the libxrt_driver_xdna NPU plugin from \$XILINX_XRT/lib/x86_64-linux-gnu,
 #    and when the variable is unset it guesses that root three directories above
-#    wherever libxrt_coreutil was loaded from -- so a second XRT anywhere on
-#    LD_LIBRARY_PATH can aim the guess at a directory that holds no plugins at
-#    all. Nothing reports a missing root: the NPU just comes up with no driver,
-#    corelib says "no AIE4 hw_context (unordered_map::at)" and xrt::device(0)
-#    says "No such library .../libxrt_core.so.2". home_install.sh resolved
-#    XRT_ROOT by requiring that plugin directory to exist, so pinning it here
-#    keeps the guess from ever running. The same directory goes on
-#    LD_LIBRARY_PATH so the linked-in libxrt_coreutil comes from that install too.
+#    wherever libxrt_coreutil was loaded from. A rai build bundles no XRT for the
+#    guess to land on, so pin the root home_install.sh resolved -- it accepted
+#    that root only because the plugin directory exists -- and put the same
+#    directory on LD_LIBRARY_PATH so the linked-in libxrt_coreutil comes from
+#    that install too. Without the pin nothing reports a missing root: the NPU
+#    just comes up with no driver, corelib says "no AIE4 hw_context
+#    (unordered_map::at)" and xrt::device(0) says "No such library
+#    .../libxrt_core.so.2".
 if [[ -f "\$XRT_DIR/setup.sh" ]]; then
     # A real XRT install knows its own layout; let it speak for itself.
     # setup.sh exports XILINX_XRT, PATH and LD_LIBRARY_PATH for the NPU.
@@ -314,6 +340,44 @@ fi
 # applies. This has to precede DT_RUNPATH, which still points at the machine
 # the libraries were built on.
 export LD_LIBRARY_PATH="\$FLM_PREFIX/lib:\$FLM_PREFIX/lib/flm:\${LD_LIBRARY_PATH:-}"
+RAI_ENV
+)"
+else
+    XRT_ENV_BLOCK="$(cat <<'STOCK_ENV'
+# 2. Runtime libraries. The flm binary already has RPATH $ORIGIN/../lib/flm for
+#    its bundled .so files, but XRT's libs (libxrt_coreutil.so, etc.) are found
+#    via XRT's own setup or LD_LIBRARY_PATH.
+if [[ -f "$XRT_DIR/setup.sh" ]]; then
+    # XRT's setup.sh exports XILINX_XRT, PATH and LD_LIBRARY_PATH for the NPU.
+    source "$XRT_DIR/setup.sh"
+else
+    echo "[flm_env] WARNING: $XRT_DIR/setup.sh not found; falling back to LD_LIBRARY_PATH" >&2
+    export LD_LIBRARY_PATH="$XRT_DIR/lib:${LD_LIBRARY_PATH:-}"
+fi
+# Belt-and-suspenders: also expose the bundled libs explicitly.
+export LD_LIBRARY_PATH="$FLM_PREFIX/lib/flm:${LD_LIBRARY_PATH:-}"
+STOCK_ENV
+)"
+fi
+
+ENV_SCRIPT="$FLM_PREFIX/flm_env.sh"
+echo "[home_install] writing env script: $ENV_SCRIPT"
+cat > "$ENV_SCRIPT" <<EOF
+#!/usr/bin/env bash
+# flm_env.sh — initialize the environment for the relocated FastFlowLM install.
+# Source this before running flm:   source "$ENV_SCRIPT"
+#
+# The binary was compiled with CMAKE_INSTALL_PREFIX baked in (e.g. /opt/fastflowlm),
+# so when relocated it relies on these env vars to locate its data and libraries.
+
+FLM_PREFIX="$FLM_PREFIX"
+XRT_DIR="$XRT_DIR"
+
+# 1. Data files (consumed by utils::find_model_list / utils::find_xclbin_path).
+export FLM_CONFIG_PATH="\$FLM_PREFIX/share/flm/model_list.json"
+export FLM_XCLBIN_PATH="\$FLM_PREFIX/share/flm"
+
+$XRT_ENV_BLOCK
 
 # 3. Put flm on PATH.
 export PATH="\$FLM_PREFIX/bin:\$PATH"

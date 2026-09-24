@@ -26,7 +26,7 @@ flm run phi4-mini-it:4b
 
 ## 🧪 Model Card: Phi-4-mini-instruct on the rai backend (developer preview)
 
-- **Tag:** `phi4-mini-it:4b` — the same tag as the NPU2 build. A build targets one NPU generation (`FLM_ENABLE_RAI` selects `aie_next`, otherwise `stx` / Strix / Krackan Point), and the tag resolves to the artifacts that generation can run. There is no separate tag for it; `flm list` on a rai build shows only the models it can run.
+- **Tag:** `phi4-mini-it-rai:4b` — its own tag, beside `phi4-mini-it:4b`, which stays the NPU2/Q4NX build. They are two entries in the one catalog, `model_list.json`, describing two different packages, and nothing about one is a patch on the other. Two things decide whether an install offers this one, and **the first is the machine**: `supported_platforms` says `aie_next` here and `aie2p` there, checked against the generation FastFlowLM reads from the device, so on shipping silicon this tag is not listed even by a build that has corelib compiled in. Only then does the second apply — whether corelib's kernels were linked at all, which the `-rai` suffix on the family name is what asks for. `utils::get_device()` is still a stand-in and currently answers `aie_next` for every build, so a corelib developer build offers this tag and not the NPU2 one; a build without corelib on the same setting offers no models at all, and says so.
 - **Backend:** `rai` — the backend names the kernel provider; FastFlowLM reaches these kernels through AMD's `ryzenai_corelib`
 - **Source format:** GGUF, read directly. No ONNX model, no tensor manifest, and no converted or packed weight file is produced or shipped.
 - **Quantization:** GGML `Q8_0` in the file, requantized to **group 64** while the weights are packed for the device, through corelib's explicit `*_create_gguf_requantized` entry points. This is a **lossy** second quantization step and it is not reversible; output will differ from the Q8_0 source.
@@ -91,12 +91,12 @@ Phi-4-mini itself supports 128k, and the existing `phi4-mini-it:4b` tag defaults
 
 ### No fallback
 
-Backend selection follows the build, never a filename or a quantization level. What this binary was built for decides two things: *which catalog entry* the tag resolves to — the NPU2/Q4NX entry on `stx`, this one on `aie_next` — and which backend runs it, since a build links exactly one kernel flow. Once this entry is selected, there is no fallback: if corelib is missing, unloadable, or the wrong version, the tag **fails to load with a diagnostic** rather than quietly running on CPU or on the NPU2/Q4NX backend.
+Backend selection follows the tag, never a filename or a quantization level. The `-rai` suffix *is* the request for corelib's kernels, and the entry's `supported_platforms` decides whether this machine is offered it at all. There is nothing to fall back to and nothing to resolve between: `phi4-mini-it:4b` and `phi4-mini-it-rai:4b` are separate tags, so asking for one never gets you the other. Once this tag is selected, there is no fallback: if corelib is missing, unloadable, or the wrong version, the tag **fails to load with a diagnostic** rather than quietly running on CPU or on the NPU2/Q4NX backend.
 
 ### Naming the backend yourself
 
 The two engines are registered under the kernel provider they use, `flm` and `rai`, and you can name one with `--backend`, with `FLM_BACKEND`, or with a `"backend"` field on an `/api/chat` or `/api/generate` request. The [CLI reference](../instructions/cli.md) has the full precedence table.
 
-This does not widen what the hardware can run. A given release is built for one NPU generation, so only that generation's backend is compiled in; asking for the other one fails immediately, naming what this build actually has, instead of failing deep inside an engine that was never going to work. If what you meant was the other catalog entry, that is a different build of FLM, not a different flag.
+This does not widen what the hardware can run. A given release is built for one NPU generation, so only that generation's backend is compiled in; asking for the other one fails immediately, naming what this build actually has, instead of failing deep inside an engine that was never going to work. If what you meant was the other package, ask for its tag — and if the tag is not listed, that is a different build of FLM, not a different flag.
 
 ---

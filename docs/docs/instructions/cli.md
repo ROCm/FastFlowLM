@@ -241,7 +241,7 @@ flm serve llama3.2:1b --ctx-len 8192
 | `flm` | FastFlowLM's own NPU kernels | Strix / Krackan Point |
 | `rai` | AMD's ryzenai-corelib | the next NPU generation |
 
-You normally never set this. A build links one kernel flow — `FLM_ENABLE_RAI` selects `rai`, otherwise `flm` — and that is the default. `flm run` separately prints the silicon it was built for as `NPU platform: stx`. A model family has at most one engine per backend, so there is nothing to choose between.
+You normally never set this. The model tag already names the flow — a family ending in `-rai` wants corelib's kernels, everything else FastFlowLM's — and `flm list` only ever offers you tags this build and this machine can actually run. `flm run` separately prints the silicon as `NPU platform: aie_next`. A model family has at most one engine per backend, so there is nothing to choose between.
 
 The flag exists for overriding the detection, and for the targets that will join this list later:
 
