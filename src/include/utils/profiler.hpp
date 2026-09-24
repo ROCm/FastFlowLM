@@ -39,6 +39,18 @@ public:
         return end_time;
     }
 
+    /// \brief add (or, when negative, remove) time without running the clock
+    /// \param us microseconds to fold into the total
+    /// \note For moving a measured interval between buckets: an interval that
+    ///       was timed inside one phase but belongs to another cannot be
+    ///       re-measured, only transferred, and start()/stop() cannot express
+    ///       that. Clamped at zero, so a transfer that overshoots empties the
+    ///       bucket instead of wrapping the unsigned total into nonsense.
+    void add_time(int64_t us){
+        double t = (double)this->total_time.first + (double)us;
+        this->total_time.first = t > 0.0 ? (float)t : 0.0f;
+    }
+
     /// \brief reset the profiler
     void reset(){
         this->start_time = time_utils::now();

@@ -475,6 +475,38 @@
                 "footprint": 22.1
             }
         },
+        "qwen3.8-mtp": {
+            "27b": {
+                "name": "Qwen3.8-27B-NPU2",
+                "url": "https://huggingface.co/FastFlowLM/Qwen3.8-27B-NPU2",
+                "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.8-27B-NPU2/tree/main",
+                "ms_url": "https://modelscope.cn/models/amd/Qwen3.8-27B-NPU2",
+                "size": 27000000000,
+                "flm_min_version": "1.0.3",
+                "files": [
+                    "config.json",
+                    "model.q4nx",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "chat_template.jinja"
+                ],
+                "vlm": false,
+                "default_context_length": 4096,
+                "max_prefill_len": 256,
+                "details": {
+                    "format": "NPU2",
+                    "family": "qwen3.8-mtp",
+                    "think": true,
+                    "parameter_size": "27B",
+                    "quantization_level": "Q4_K"
+                },
+                "label": [
+                    "reasoning",
+                    "tool-calling"
+                ],
+                "footprint": 17.1
+            }
+        },
         "lfm2": {
             "1.2b": {
                 "name": "LFM2-1.2B-NPU2",

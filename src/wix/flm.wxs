@@ -4,7 +4,9 @@
   Ports src/inno/flm.iss (Inno Setup) to an MSI package.
 
   Build (from src/wix):
-    wix build Package.wxs -arch x64 -ext WixToolset.UI.wixext -out flm-setup.msi
+    ./build.ps1
+  which stages package\ and then runs
+    wix build flm.wxs -arch x64 -ext WixToolset.UI.wixext -out flm-setup.msi
 
   Not ported 1:1 from flm.iss:
     - The interactive "model storage location" / "server port" wizard pages are
@@ -24,7 +26,7 @@
   <?define SourceDir = ".\package"?>
   <?define XclbinsDir = "..\xclbins"?>
 
-  <Package Name="flm"
+  <Package Name="FLM"
            Manufacturer="FastFlowLM"
            Version="1.0.6"
            UpgradeCode="5A5B2872-1E63-4934-9F57-088554CF4959"
@@ -42,6 +44,20 @@
     <Property Id="ARPURLINFOABOUT" Value="https://www.fastflowlm.com" />
 
     <WixVariable Id="WixUILicenseRtf" Value="$(SourceDir)\terms.rtf" />
+    <!--
+      Wizard branding. Both must be BMP (the MSI Bitmap control cannot render
+      a PNG) and sized to the slots WixUI reserves for them:
+        installer.bmp  493x312 - welcome/exit dialog background. WixUI prints
+                                 the title and description over this starting
+                                 at x=135, so keep artwork left of that.
+        top.bmp         493x58 - banner across the top of every other dialog.
+                                 Its own title text starts at x=15, so keep
+                                 artwork to the right.
+      Paths are relative to src/wix, which build.ps1 makes the working
+      directory before invoking `wix build`.
+    -->
+    <WixVariable Id="WixUIDialogBmp" Value=".\installer.bmp" />
+    <WixVariable Id="WixUIBannerBmp" Value=".\top.bmp" />
     <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
     <ui:WixUI Id="WixUI_InstallDir" />
 

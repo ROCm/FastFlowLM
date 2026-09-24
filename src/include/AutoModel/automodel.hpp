@@ -27,6 +27,7 @@
 #include "models/qwen3vl_flash/qwen3vl_flash.hpp"
 #include "models/qwen3_5vl/qwen3_5vl_npu.hpp"
 #include "models/qwen3_6_moe/qwen3_6_moe_npu.hpp"
+#include "models/qwen3_8mtp/qwen3_8mtp_npu.hpp"
 #include "models/gemma/gemma_npu.hpp"
 #include "models/gemma_text/gemma_text_npu.hpp"
 #include "models/gemma4e/gemma4e_npu.hpp"
