@@ -475,27 +475,30 @@ struct RaiProcessGuard {
         }
     }
 };
-#else
+#endif
+
 ///@brief open the NPU device that every engine in this process shares
+///@param why if non-null, receives why the device could not be opened
 ///@return the shared device, or nullptr when no NPU could be opened
 ///@note Function-local static, so the lifetime is tied to the process exactly as
 ///      the per-Runner devices used to be. A machine with no NPU must still be
 ///      able to run `flm list`/`pull`/`version`, so failure is a null pointer,
 ///      not an error.
-static flm_rt::device* open_npu_device() {
+static flm_rt::device* open_npu_device(std::string* why) {
     try {
         static flm_rt::device npu_device = flm_rt::device(0);
         return &npu_device;
     } catch (const std::exception& e) {
+        if (why) *why = e.what();
         DO_VERBOSE(1, {
             header_print("FLM", "No NPU device available: " << e.what());
         });
         return nullptr;
     } catch (...) {
+        if (why) *why = "unknown error";
         return nullptr;
     }
 }
-#endif
 
 ///@brief main function
 ///@param argc the number of arguments
@@ -561,21 +564,67 @@ int main(int argc, char* argv[]) {
     // Declared before anything that can return so the destructor covers the
     // early exits and the catch-all below.
     RaiProcessGuard rai_guard;
+    // Declared out here so the early exits below still see a device, and so a
+    // corelib that fails to come up leaves it null rather than undefined.
+    flm_rt::device* npu_device = nullptr;
+    // Kept so the reason survives into a release build. VERBOSE is a
+    // compile-time macro, so every DO_VERBOSE below is compiled out and a user
+    // is left with "NPU device instance is nullptr" -- raised much later, by
+    // whichever model reaches for the device first -- and nothing to act on.
+    std::string npu_open_error;
+    // Set when corelib failed but a direct device was opened anyway: the rai
+    // backend is gone, the rest of the build is not.
+    std::string corelib_note;
     try {
-        flm::corelib::CorelibRuntime::GetOrCreate(std::filesystem::path(exe_dir));
+        const auto runtime =
+            flm::corelib::CorelibRuntime::GetOrCreate(std::filesystem::path(exe_dir));
+        // corelib opens the NPU for this process, so take its device rather
+        // than opening a second one: a buffer object created against a
+        // different xrt::device for the same NPU binds without error and then
+        // never completes. GetOrCreate holds the runtime process-wide, so the
+        // device stays valid until RaiProcessGuard tears it down at exit.
+        npu_device = flm::corelib::SharedDevice(*runtime);
+        if (npu_device == nullptr) {
+            npu_open_error =
+                "corelib started but reports no NPU device on this machine";
+            DO_VERBOSE(1, {
+                header_print("FLM", "corelib reports no NPU device on this machine");
+            });
+        }
     } catch (const std::exception& e) {
+        // A box with no NPU must still run `flm list`/`pull`/`version`, so this
+        // stays a null device rather than an error, as in the non-rai path.
+        npu_open_error = std::string("corelib unavailable: ") + e.what();
         DO_VERBOSE(1, { header_print("FLM", "corelib unavailable: " << e.what()); });
     }
-    // TODO: FIXME - corelib's device is not a drop-in for the flm device the
-    // AutoModel engines expect; the two ownership models conflict, so there is
-    // no supported way to hand corelib's device out here yet. Until that is
-    // resolved a rai build reports no flm device, which is harmless because
-    // the rai backend does not drive the NPU through one.
-    //   flm_rt::device* npu_device =
-    //       const_cast<flm_rt::device*>(&ryzenai::corelib::GetDevice());
-    flm_rt::device* npu_device = nullptr;
+    if (npu_device == nullptr) {
+        // corelib having no device is a reason for the rai backend to be
+        // unavailable, not for the process to have no NPU at all. Every other
+        // family is served by the flm backend, which opens its own device and
+        // never touches corelib -- so opening one directly keeps those models
+        // working instead of failing the whole process over a backend they do
+        // not use. On a box whose NPU has no creatable AIE4 hw_context this is
+        // the difference between "rai is unavailable" and "flm has no NPU".
+        //
+        // This does not bring back the two-device bug, where a buffer created
+        // against a second xrt::device for the same NPU bound without error and
+        // then never completed. That needed corelib to be live and holding a
+        // device of its own; here it has none, so the process still ends up
+        // with exactly one.
+        corelib_note = npu_open_error;
+        std::string raw_error;
+        npu_device = open_npu_device(&raw_error);
+        if (npu_device != nullptr) {
+            npu_open_error.clear();
+        } else {
+            npu_open_error += "; opening the NPU directly also failed: " + raw_error;
+            corelib_note.clear();
+        }
+    }
 #else
-    flm_rt::device* npu_device = open_npu_device();
+    std::string npu_open_error;
+    std::string corelib_note;
+    flm_rt::device* npu_device = open_npu_device(&npu_open_error);
 #endif
 
     // Which generation this binary is for is decided by FLM_ENABLE_RAI at
@@ -592,6 +641,22 @@ int main(int argc, char* argv[]) {
         parsed_args.command == "bench" || parsed_args.command == "validate";
     if (print_status && needs_npu) {
         header_print("FLM", "NPU platform: " << utils::platform_id(platform));
+    }
+
+    // Say once, here, why there is no device. The commands below cannot run
+    // without one, and the message they eventually produce names the symptom
+    // rather than the cause: it is raised from whichever model first reaches
+    // for the device, long after the runtime that failed to come up.
+    if (print_status && needs_npu && !corelib_note.empty()) {
+        header_print("FLM", "rai backend unavailable ("
+                                << corelib_note
+                                << "); opened the NPU directly");
+    }
+    if (needs_npu && npu_device == nullptr) {
+        header_print("ERROR", "No NPU device available"
+                                  << (npu_open_error.empty()
+                                          ? std::string()
+                                          : ": " + npu_open_error));
     }
 
     // The rai build of phi4-mini-it installs under its own directory name, so

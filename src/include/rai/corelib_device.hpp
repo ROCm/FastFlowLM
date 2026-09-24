@@ -1,13 +1,12 @@
 /// \file corelib_device.hpp
-/// \brief Access to the xrt::device that ryzenai-corelib owns.
+/// \brief Access to the NPU device that ryzenai-corelib owns.
 /// \note  FastFlowLM consumes corelib through the C ABI in <ryzenai/corelib.h>
-///        (see corelib_api.hpp), which has no device accessor: the device lives
-///        behind corelib's C++ entry point ryzenai::corelib::GetDevice(). The
-///        declaration is reproduced here rather than pulled from a corelib C++
-///        header so that this tree keeps depending on exactly one corelib header;
-///        it resolves at link time against the statically linked corelib
-///        (RYZENAI_CORELIB_STATIC), so a signature drift is a link error, not a
-///        silent mismatch.
+///        (see corelib_api.hpp), and ryzenai_corelib_get_device() is the device
+///        accessor in it. corelib's own ryzenai::corelib::GetDevice() is an
+///        inline wrapper around that same call rather than an exported entry
+///        point, so there is nothing to link against and no reason to reach for
+///        the C++ layer: going through CorelibApi keeps every corelib call in
+///        this tree on one resolved function table.
 #pragma once
 
 #if defined(FLM_USE_HRX)
@@ -15,11 +14,28 @@
 #endif
 
 #include "device_runtime.hpp"
+#include "rai/corelib_runtime.hpp"
 
-namespace ryzenai::corelib {
+namespace flm::corelib {
 
-/// \brief the device corelib initialized; valid until ryzenai_corelib_cleanup()
-/// \return corelib's device, shared with every FLM engine
-const xrt::device& GetDevice();
+/// \brief the device corelib dispatches on, shared with every engine here
+/// \param runtime an initialized corelib runtime
+/// \return corelib's device, or nullptr when this machine has no NPU
+/// \note Valid until ryzenai_corelib_cleanup(); the process runtime outlives
+///       every use of the returned pointer.
+/// \note flm_rt is an alias for xrt on this path, so corelib's device already
+///       has the type the engines take. corelib hands it out const and the
+///       engines want it mutable; the constness is cast away rather than a
+///       second device opened, because a buffer object created against a
+///       different xrt::device for the same NPU binds without error and then
+///       never completes.
+inline flm_rt::device* SharedDevice(const CorelibRuntime& runtime) noexcept {
+    const void* device = runtime.api()->functions().get_device();
+    if (device == nullptr) {
+        return nullptr;
+    }
+    return const_cast<flm_rt::device*>(
+        reinterpret_cast<const flm_rt::device*>(device));
+}
 
-}  // namespace ryzenai::corelib
+}  // namespace flm::corelib
