@@ -44,6 +44,15 @@
       }
     },
     {
+      "name": "linux-rai-on",
+      "displayName": "Linux RAI (enabled)",
+      "description": "Linux build with the ryzenai-corelib kernel backend turned on. Builds into build/ like every other preset. Point it at a corelib prefix once with -DRYZENAI_CORELIB_ROOT=<prefix>, or drop the headers into include/ and libryzenai_corelib.so into lib/.",
+      "inherits": "linux-default",
+      "cacheVariables": {
+        "FLM_ENABLE_RAI": "ON"
+      }
+    },
+    {
       "name": "linux-snap",
       "displayName": "Linux Snap Build",
       "description": "Configuration for building inside a snapcraft part",
@@ -115,6 +124,14 @@
       "displayName": "Linux RAI Build",
       "description": "Build the optional ryzenai-corelib runtime in Release",
       "configurePreset": "linux-rai",
+      "configuration": "Release",
+      "jobs": 4
+    },
+    {
+      "name": "linux-rai-on",
+      "displayName": "Linux RAI Build (enabled)",
+      "description": "Build the ryzenai-corelib kernel backend in Release",
+      "configurePreset": "linux-rai-on",
       "configuration": "Release",
       "jobs": 4
     },

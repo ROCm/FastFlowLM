@@ -55,14 +55,30 @@ option(FLM_ENABLE_RAI
        "Reach kernels through ryzenai-corelib instead of FastFlowLM's own flow" OFF)
 
 if(FLM_ENABLE_RAI)
-    find_path(RYZENAI_CORELIB_INCLUDE_DIR NAMES ryzenai/corelib.h REQUIRED)
+    # The corelib prefix lives outside this repository, so its headers have to
+    # be found rather than assumed. The hints mirror the library lookup below:
+    # a header tree vendored into include/ wins, then a prefix named by
+    # RYZENAI_CORELIB_ROOT, and failing both the standard CMake search still
+    # honours CMAKE_PREFIX_PATH. Without the hints every configure has to be
+    # handed a prefix on the command line, which is the only reason the rai
+    # build ever needed an environment variable.
+    find_path(RYZENAI_CORELIB_INCLUDE_DIR NAMES ryzenai/corelib.h
+        HINTS "${CMAKE_SOURCE_DIR}/include"
+              "${RYZENAI_CORELIB_ROOT}/include"
+              "$ENV{RYZENAI_CORELIB_ROOT}/include" REQUIRED)
     # The main binary needs ryzenai::corelib::GetDevice(), a C++ entry point the
     # C ABI does not expose, so corelib is linked in rather than dlopened.
     # A conda/pip prefix keeps its import libs beside the headers; a CMake
     # install prefix puts them in lib/ or lib64/ depending on the distribution,
     # so both are offered rather than assuming either.
+    # lib/ is where this repository already keeps the binaries it vendors, so a
+    # corelib dropped in beside them is found without anyone passing a path.
+    # It is searched first: a build that has deliberately been given a corelib
+    # should use that one rather than whatever an unrelated prefix happens to
+    # hold.
     find_library(RYZENAI_CORELIB_LIBRARY NAMES ryzenai_corelib corelib
-        HINTS "${RYZENAI_CORELIB_INCLUDE_DIR}/../lib"
+        HINTS "${CMAKE_SOURCE_DIR}/lib"
+              "${RYZENAI_CORELIB_INCLUDE_DIR}/../lib"
               "${RYZENAI_CORELIB_INCLUDE_DIR}/../lib64"
               "$ENV{RYZENAI_CORELIB_LIB_DIR}" REQUIRED)
     # XRT's xrt/detail/any.h selects boost::any over std::any whenever
