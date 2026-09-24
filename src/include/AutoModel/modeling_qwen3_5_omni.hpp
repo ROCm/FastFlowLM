@@ -10,7 +10,7 @@
 #pragma once
 
 #include "AutoModel/automodel.hpp" // base class + shared types
-#include "models/qwen3_5_omni/qwen3_5_omni.hpp"
+#include "models/qwen3_5_omni/flm/aie2p/qwen3_5_omni.hpp"
 
 #include "image/image_reader.hpp"
 #include "audio/audio_reader.hpp"

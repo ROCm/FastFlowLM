@@ -71,7 +71,7 @@ target_compile_definitions(test_real_corelib PRIVATE RYZENAI_CORELIB_STATIC=1)
 add_executable(test_phi4_gguf
     test_phi4_gguf.cpp fake_corelib.cpp
     "${FLM_SOURCE_DIR}/common/rai/corelib_api.cpp"
-    "${FLM_SOURCE_DIR}/common/models/phi4/rai/phi4_rai_gguf.cpp")
+    "${FLM_SOURCE_DIR}/common/models/phi4/rai/aie_next/phi4_rai_gguf.cpp")
 target_include_directories(test_phi4_gguf PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}"
     "${FLM_SOURCE_DIR}/include"
@@ -80,7 +80,7 @@ target_compile_definitions(test_phi4_gguf PRIVATE RYZENAI_CORELIB_STATIC=1)
 
 add_executable(test_phi4_host
     test_phi4_host.cpp
-    "${FLM_SOURCE_DIR}/common/models/phi4/rai/phi4_rai_host.cpp")
+    "${FLM_SOURCE_DIR}/common/models/phi4/rai/aie_next/phi4_rai_host.cpp")
 target_include_directories(test_phi4_host PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}"
     "${FLM_SOURCE_DIR}/include")
@@ -88,7 +88,7 @@ target_include_directories(test_phi4_host PRIVATE
 add_executable(test_phi4_shape_plan
     test_phi4_shape_plan.cpp fake_corelib.cpp
     "${FLM_SOURCE_DIR}/common/rai/corelib_api.cpp"
-    "${FLM_SOURCE_DIR}/common/models/phi4/rai/phi4_rai_shape_plan.cpp")
+    "${FLM_SOURCE_DIR}/common/models/phi4/rai/aie_next/phi4_rai_shape_plan.cpp")
 target_include_directories(test_phi4_shape_plan PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}"
     "${FLM_SOURCE_DIR}/include"
@@ -99,11 +99,11 @@ add_executable(test_phi4_engine
     test_phi4_engine.cpp fake_corelib.cpp
     "${FLM_SOURCE_DIR}/common/rai/corelib_api.cpp"
     "${FLM_SOURCE_DIR}/common/rai/corelib_runtime.cpp"
-    "${FLM_SOURCE_DIR}/common/models/phi4/rai/phi4_rai_gguf.cpp"
-    "${FLM_SOURCE_DIR}/common/models/phi4/rai/phi4_rai_host.cpp"
-    "${FLM_SOURCE_DIR}/common/models/phi4/rai/phi4_rai_shape_plan.cpp"
-    "${FLM_SOURCE_DIR}/common/models/phi4/rai/phi4_rai.cpp"
-    "${FLM_SOURCE_DIR}/common/models/phi4/rai/phi4_rai_weight_cache.cpp")
+    "${FLM_SOURCE_DIR}/common/models/phi4/rai/aie_next/phi4_rai_gguf.cpp"
+    "${FLM_SOURCE_DIR}/common/models/phi4/rai/aie_next/phi4_rai_host.cpp"
+    "${FLM_SOURCE_DIR}/common/models/phi4/rai/aie_next/phi4_rai_shape_plan.cpp"
+    "${FLM_SOURCE_DIR}/common/models/phi4/rai/aie_next/phi4_rai.cpp"
+    "${FLM_SOURCE_DIR}/common/models/phi4/rai/aie_next/phi4_rai_weight_cache.cpp")
 target_include_directories(test_phi4_engine PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}"
     "${FLM_SOURCE_DIR}/include"
@@ -130,7 +130,7 @@ add_executable(test_phi4_frontend
     test_phi4_frontend.cpp fake_corelib.cpp
     ${PHI4_FRONTEND_SOURCES}
     ${CORELIB_SOURCES}
-    "${FLM_SOURCE_DIR}/common/models/phi4/rai/phi4_rai_gguf.cpp")
+    "${FLM_SOURCE_DIR}/common/models/phi4/rai/aie_next/phi4_rai_gguf.cpp")
 target_include_directories(test_phi4_frontend PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}"
     "${FLM_SOURCE_DIR}/include"
@@ -239,7 +239,7 @@ function(add_frontend_compile_guard TARGET_NAME ENABLE_CORELIB)
       $<$<CXX_COMPILER_ID:MSVC>:/wd4005 /wd4244>)
   if(ENABLE_CORELIB)
     target_sources(${TARGET_NAME} PRIVATE
-        "${FLM_SOURCE_DIR}/common/models/phi4/rai/phi4_rai_backend.cpp")
+        "${FLM_SOURCE_DIR}/common/models/phi4/rai/aie_next/phi4_rai_backend.cpp")
     target_compile_definitions(${TARGET_NAME} PRIVATE
         FLM_ENABLE_RAI=1)
     target_include_directories(${TARGET_NAME} PRIVATE

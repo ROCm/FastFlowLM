@@ -1,4 +1,4 @@
-#include "models/phi4/rai/phi4_rai_host.hpp"
+#include "models/phi4/rai/aie_next/phi4_rai_host.hpp"
 #include "test_support.hpp"
 
 #include <array>

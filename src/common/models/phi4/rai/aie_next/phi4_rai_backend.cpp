@@ -1,10 +1,10 @@
 /// \file phi4_rai_backend.cpp
 /// \brief The ryzenai-corelib backend for Phi-4
-#include "models/phi4/rai/phi4_rai_backend.hpp"
+#include "models/phi4/rai/aie_next/phi4_rai_backend.hpp"
 
 #include "rai/corelib_runtime.hpp"
-#include "models/phi4/rai/phi4_rai.hpp"
-#include "models/phi4/rai/phi4_rai_gguf.hpp"
+#include "models/phi4/rai/aie_next/phi4_rai.hpp"
+#include "models/phi4/rai/aie_next/phi4_rai_gguf.hpp"
 #include "utils/file_access.hpp"
 #include "utils/utils.hpp"
 

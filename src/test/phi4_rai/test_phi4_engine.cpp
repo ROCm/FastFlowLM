@@ -1,7 +1,7 @@
-#include "models/phi4/rai/phi4_rai.hpp"
-#include "models/phi4/rai/phi4_rai_constants.hpp"
-#include "models/phi4/rai/phi4_rai_host.hpp"
-#include "models/phi4/rai/phi4_rai_weight_cache.hpp"
+#include "models/phi4/rai/aie_next/phi4_rai.hpp"
+#include "models/phi4/rai/aie_next/phi4_rai_constants.hpp"
+#include "models/phi4/rai/aie_next/phi4_rai_host.hpp"
+#include "models/phi4/rai/aie_next/phi4_rai_weight_cache.hpp"
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>

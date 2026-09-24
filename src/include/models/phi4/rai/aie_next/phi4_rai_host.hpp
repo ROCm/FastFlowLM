@@ -1,6 +1,6 @@
 #pragma once
 
-#include "models/phi4/rai/phi4_rai_gguf.hpp"
+#include "models/phi4/rai/aie_next/phi4_rai_gguf.hpp"
 
 #include <cstdint>
 #include <optional>

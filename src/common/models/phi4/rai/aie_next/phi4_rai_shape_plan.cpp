@@ -1,6 +1,6 @@
-#include "models/phi4/rai/phi4_rai_shape_plan.hpp"
+#include "models/phi4/rai/aie_next/phi4_rai_shape_plan.hpp"
 
-#include "models/phi4/rai/phi4_rai_constants.hpp"
+#include "models/phi4/rai/aie_next/phi4_rai_constants.hpp"
 
 #include <algorithm>
 #include <array>

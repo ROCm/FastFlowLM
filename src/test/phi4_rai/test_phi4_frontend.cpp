@@ -9,8 +9,8 @@
 #include <AutoModel/modeling_phi4.hpp>
 #if defined(FLM_ENABLE_RAI)
 #include <rai/corelib_runtime.hpp>
-#include <models/phi4/rai/phi4_rai_backend.hpp>
-#include <models/phi4/rai/phi4_rai_gguf.hpp>
+#include <models/phi4/rai/aie_next/phi4_rai_backend.hpp>
+#include <models/phi4/rai/aie_next/phi4_rai_gguf.hpp>
 #endif
 #include "server.hpp"
 

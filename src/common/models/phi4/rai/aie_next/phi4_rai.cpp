@@ -1,9 +1,9 @@
-#include "models/phi4/rai/phi4_rai.hpp"
+#include "models/phi4/rai/aie_next/phi4_rai.hpp"
 #include "rai/corelib_object.hpp"
-#include "models/phi4/rai/phi4_rai_constants.hpp"
-#include "models/phi4/rai/phi4_rai_host.hpp"
-#include "models/phi4/rai/phi4_rai_shape_plan.hpp"
-#include "models/phi4/rai/phi4_rai_weight_cache.hpp"
+#include "models/phi4/rai/aie_next/phi4_rai_constants.hpp"
+#include "models/phi4/rai/aie_next/phi4_rai_host.hpp"
+#include "models/phi4/rai/aie_next/phi4_rai_shape_plan.hpp"
+#include "models/phi4/rai/aie_next/phi4_rai_weight_cache.hpp"
 #include <algorithm>
 #include <array>
 #include <chrono>

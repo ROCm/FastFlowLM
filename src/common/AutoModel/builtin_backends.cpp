@@ -9,7 +9,7 @@
 #include "AutoModel/model_backend.hpp"
 
 #if defined(FLM_ENABLE_RAI)
-#include "models/phi4/rai/phi4_rai_backend.hpp"
+#include "models/phi4/rai/aie_next/phi4_rai_backend.hpp"
 #endif
 
 namespace flm::backend {

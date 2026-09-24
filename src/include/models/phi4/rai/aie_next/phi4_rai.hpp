@@ -3,7 +3,7 @@
 #include "causal_lm.hpp"
 #include "rai/corelib_runtime.hpp"
 #include "lm_config.hpp"
-#include "models/phi4/rai/phi4_rai_gguf.hpp"
+#include "models/phi4/rai/aie_next/phi4_rai_gguf.hpp"
 
 #include <cstdint>
 #include <memory>

@@ -30,8 +30,8 @@ SOURCES += ../../common/audio/audio_reader.cpp
 SOURCES += ../../common/tokenizer/tokenizer.cpp
 SOURCES += ../../common/modules/sampler.cpp
 
-HEADERS += ../../include/models/gemma4e_flash/gemma4e_flash.hpp
-HEADERS += ../../include/models/gemma4e/gemma4e_npu.hpp
+HEADERS += ../../include/models/gemma4e_flash/flm/aie2p/gemma4e_flash.hpp
+HEADERS += ../../include/models/gemma4e/flm/aie2p/gemma4e_npu.hpp
 
 # Test task selection; text mode is default
 # 0: text

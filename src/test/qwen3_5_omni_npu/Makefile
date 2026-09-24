@@ -32,7 +32,7 @@ SOURCES += ../../common/audio/audio_reader.cpp
 SOURCES += ../../common/tokenizer/tokenizer.cpp
 SOURCES += ../../common/modules/sampler.cpp
 
-HEADERS += ../../include/models/qwen3_5_omni/qwen3_5_omni.hpp
+HEADERS += ../../include/models/qwen3_5_omni/flm/aie2p/qwen3_5_omni.hpp
 HEADERS += ../../include/AutoModel/modeling_qwen3_5_omni.hpp
 
 # omni mode is default;

@@ -1,6 +1,6 @@
 /// \file phi4_rai_weight_cache.cpp
 /// \brief On-disk cache of the packed weights
-#include "models/phi4/rai/phi4_rai_weight_cache.hpp"
+#include "models/phi4/rai/aie_next/phi4_rai_weight_cache.hpp"
 
 #include <nlohmann/json.hpp>
 

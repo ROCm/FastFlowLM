@@ -1,34 +1,35 @@
-/// \file qwen3vl_flash.hpp
-/// \brief qwen3vl_flash class
+/// \file llama_npu.hpp
+/// \brief llama_npu class
 /// \author FastFlowLM Team
-/// \date 2026-09-10
+/// \date 2026-01-23
 /// \version 0.9.28
-/// \note This is a header file for the qwen3vl_flash class
-///
-/// qwen3vl_flash is a second engine for the same Qwen3-VL checkpoint as
-/// qwen3vl_npu. It runs prefill on a single fused overlay -- columns 0-5 a
-/// dequant+mm array, columns 6-7 one attention CU (mha_d128_q4_1cu) -- instead
-/// of reconfiguring the array between mm.xclbin and attn.xclbin twice per
-/// layer, and overlaps the vision encoder with the text prefill setup. It is
-/// tuned for short contexts; qwen3vl_npu remains the general-purpose engine.
-///
-/// The image payload types and the QWEN3_* preprocessing constants are shared
-/// with qwen3vl_npu, so this header pulls them in rather than redefining them:
-/// the application builds one qwen3vl_image_payload_t and hands it to either
-/// engine.
+/// \note This is a header file for the llama_npu class
 #pragma once
-#include "models/qwen3vl/qwen3vl_npu.hpp"
+#include "lm_config.hpp"
+#include "npu_utils/npu_utils.hpp"
+#include "tensor_utils/q4_npu_eXpress.hpp"
+#include "models/nanbeige/flm/aie2p/nanbeige_npu_sequence.hpp"
+#include "modules/embedding.hpp"
+#include "modules/lm_head.hpp"
+#include "modules/gemm.hpp"
+#include "modules/dequant.hpp"
+#include "tensor_2d.hpp"
+#include "utils/utils.hpp"
+#include "causal_lm.hpp"
+#if USEAVX2
+#include <immintrin.h>  // For AVX intrinsics
+#endif
 
 
-class qwen3vl_flash : public causal_lm{
+class nanbeige_npu : public causal_lm{
 public:
-    /// \brief  initialize the qwen3vl_flash
+    /// \brief  initialize the nanbeige_npu
     /// \param config the configuration
     /// \param npu_instance the npu instance
-    qwen3vl_flash(LM_Config config, npu_xclbin_manager *npu_instance, int MAX_L = 4096);
-    ~qwen3vl_flash();
+    nanbeige_npu(LM_Config config, npu_xclbin_manager *npu_instance, int MAX_L = 4096);
+    ~nanbeige_npu();
 
-    /// \brief forward the qwen3vl_flash
+    /// \brief forward the nanbeige_npu
     /// \param ids the ids
     /// \return the output tensor
     buffer<bf16> forward(int ids) override;
@@ -66,7 +67,9 @@ public:
     int get_current_context_length() override;
     int checkpoint() override;
     int restore() override;
+
 private:
     struct Impl;
     Impl* _impl;
 };
+

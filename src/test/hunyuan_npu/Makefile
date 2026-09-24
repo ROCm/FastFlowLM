@@ -41,7 +41,7 @@ SOURCES += ../../common/AutoModel/modeling_hunyuan.cpp
 SOURCES += ../../common/tokenizer/tokenizer.cpp
 SOURCES += ../../common/modules/sampler.cpp
 
-HEADERS += ../../include/models/hunyuan/hunyuan_npu.hpp
+HEADERS += ../../include/models/hunyuan/flm/aie2p/hunyuan_npu.hpp
 HEADERS += ../../include/AutoModel/modeling_hunyuan.hpp
 HEADERS += bench_samples.hpp
 

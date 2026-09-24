@@ -81,20 +81,27 @@ entries, not in the backend id.
 ## 2. Lay out the files
 
 ```
-src/include/models/<model>/rai/  headers for the corelib implementation
-src/common/models/<model>/rai/   the corelib implementation
+src/include/models/<model>/<backend>/<platform>/  headers
+src/common/models/<model>/<backend>/<platform>/   the implementation
 ```
 
-The folders are named after the kernel provider, not the silicon. FastFlowLM's
-own engines have no folder here — they ship as prebuilt libraries under
-`lib/<runtime>/` and their headers stay at `models/<model>/`. Headers mirror the
-source split, so an `#include` says which provider it belongs to
-(`models/phi4/rai/phi4_rai_gguf.hpp` against `models/phi4/phi4_npu.hpp`), and a
-grep for `models/<model>/rai/` finds everything the rai path pulls in.
+Both axes from the top of this document appear in the path, in that order: the
+family owns the directory, the kernel provider comes next, and the silicon
+generation last — `phi4/rai/aie_next/` for the corelib implementation, and
+`phi4/flm/aie2p/` for the FastFlowLM one. Nothing keys one axis off the other;
+the path just records both answers, so a family that gains a second provider or
+a second generation grows a sibling folder instead of a conditional.
+
+FastFlowLM's own engines have no *sources* here — they ship as prebuilt libraries
+under `lib/<runtime>/` — but their headers follow the same three levels. Headers
+mirror the source split, so an `#include` says which provider and which silicon
+it belongs to (`models/phi4/rai/aie_next/phi4_rai_gguf.hpp` against
+`models/phi4/flm/aie2p/phi4_npu.hpp`), and a grep for `models/<model>/rai/` finds
+everything the rai path pulls in.
 
 **Do not edit any `CMakeLists.txt` for this.** [`models_sources.cmake`](models_sources.cmake)
-globs `*/rai/*.cpp`, and that glob is what `flm_rai` compiles. Creating the
-folder is the whole registration step.
+globs `*/rai/*/*.cpp` — every platform under every family's rai folder — and that
+glob is what `flm_rai` compiles. Creating the folder is the whole registration step.
 
 Phi-4's rai side is five translation units, and the split is worth copying:
 
@@ -113,7 +120,7 @@ without hardware.
 
 ## 3. The engine: a `causal_lm` subclass
 
-Model it on [`phi4_rai.hpp`](../../include/models/phi4/rai/phi4_rai.hpp).
+Model it on [`phi4_rai.hpp`](../../include/models/phi4/rai/aie_next/phi4_rai.hpp).
 Two rules matter more than the rest.
 
 ### `causal_lm.hpp` is a frozen ABI
@@ -158,7 +165,7 @@ engine type, never through a `causal_lm*`.
   (`kWeightCreateConcurrency`). The per-create thread hint
   (`kRequantizeThreads`) stays at corelib's default of one so the two forms of
   parallelism do not multiply into an oversubscribed machine. See
-  [`phi4_rai_constants.hpp`](../../include/models/phi4/rai/phi4_rai_constants.hpp).
+  [`phi4_rai_constants.hpp`](../../include/models/phi4/rai/aie_next/phi4_rai_constants.hpp).
 - Expose `bool poisoned() const noexcept`. A corelib failure mid-decode usually
   leaves device state that only a reload can clear; the backend surfaces this and
   `AutoModel` turns it into a 500 that asks for an unload/reload.
@@ -172,7 +179,7 @@ engine type, never through a `causal_lm*`.
 [`ModelBackend`](../../include/AutoModel/model_backend.hpp) owns one engine **and
 every rule for driving it**. Its defaults describe the FastFlowLM NPU engines, so
 you override only what differs. Phi-4's corelib backend
-([`phi4_rai_backend.cpp`](phi4/rai/phi4_rai_backend.cpp)) overrides six:
+([`phi4_rai_backend.cpp`](phi4/rai/aie_next/phi4_rai_backend.cpp)) overrides six:
 
 | override | corelib value | why |
 |---|---|---|
@@ -373,7 +380,7 @@ Check, in order:
 
 ## Checklist
 
-- [ ] `src/common/models/<model>/rai/` created (no CMake edit)
+- [ ] `src/common/models/<model>/rai/<platform>/` created (no CMake edit)
 - [ ] GGUF/host layers hold no corelib types
 - [ ] `load_weights` is a documented throwing shim
 - [ ] weight creates are serialized, with the thread hint passed

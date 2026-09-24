@@ -30,7 +30,7 @@ SOURCES += ../../common/audio/audio_reader.cpp
 SOURCES += ../../common/tokenizer/tokenizer.cpp
 SOURCES += ../../common/modules/sampler.cpp
 
-HEADERS += ../../include/models/gemma4_12b/gemma4_12b_npu.hpp
+HEADERS += ../../include/models/gemma4_12b/flm/aie2p/gemma4_12b_npu.hpp
 HEADERS += ../../include/AutoModel/modeling_gemma4_12b.hpp
 
 ifeq ($(WSL), 0)

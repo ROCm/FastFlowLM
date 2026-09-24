@@ -15,7 +15,7 @@
 /// them in rather than redefining them: the application builds one
 /// gemma4e_image_payload_t and hands it to either engine.
 #pragma once
-#include "models/gemma4e/gemma4e_npu.hpp"
+#include "models/gemma4e/flm/aie2p/gemma4e_npu.hpp"
 
 class gemma4e_flash : public causal_lm{
 public:

@@ -35,9 +35,13 @@ Every model has two layers:
 
 Before writing any wrapper code, these artifacts must exist:
 
-- **Engine header** — `include/models/<model>/<model>_npu.hpp`
+- **Engine header** — `include/models/<model>/flm/aie2p/<model>_npu.hpp`
   Declares `class <model>_npu : public causal_lm` plus any model-specific payload
-  structs (image / audio descriptors for omni models).
+  structs (image / audio descriptors for omni models). The path carries both axes
+  after the family: `flm` is the kernel provider (FastFlowLM's own flow) and
+  `aie2p` the silicon generation. A model reaching its kernels through corelib on
+  the newer generation sits at `<model>/rai/aie_next/` instead; see
+  [`common/models/README.md`](common/models/README.md).
 - **Engine library**
   - Linux: `lib/xrt/lib<model>_npu.so` and, if the HRX runtime is used,
     `lib/hrx/lib<model>_npu.so`
@@ -195,8 +199,8 @@ by `<|"|>` that need a normalizing rewrite pass before `nlohmann::json::parse`.
 `include/AutoModel/automodel.hpp` — add the engine include next to the others:
 
 ```cpp
-#include "models/gemma4e/gemma4e_npu.hpp"
-#include "models/gemma4_12b/gemma4_12b_npu.hpp"
+#include "models/gemma4e/flm/aie2p/gemma4e_npu.hpp"
+#include "models/gemma4_12b/flm/aie2p/gemma4_12b_npu.hpp"
 ```
 
 > Watch for symbol collisions with sibling engines (e.g. `is_swa_layer` overloads).
@@ -429,7 +433,7 @@ flm serve gemma4-12b:12b     # then exercise /v1/chat/completions, streaming, an
 
 ## Checklist
 
-- [ ] `include/models/<model>/<model>_npu.hpp` present, exports verified with `nm -DC`
+- [ ] `include/models/<model>/flm/aie2p/<model>_npu.hpp` present, exports verified with `nm -DC`
 - [ ] `lib/xrt/lib<model>_npu.so` (and `lib/hrx/`, `.dll` + `.lib` for Windows)
 - [ ] `xclbins/<ModelName>/` present, name matches `model_list.json`
 - [ ] `include/AutoModel/modeling_<model>.hpp`

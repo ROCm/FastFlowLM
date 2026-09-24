@@ -1,8 +1,8 @@
 #include "gguf_fixture.hpp"
 #include "fake_corelib.hpp"
 #include "rai/corelib_api.hpp"
-#include "models/phi4/rai/phi4_rai_constants.hpp"
-#include "models/phi4/rai/phi4_rai_gguf.hpp"
+#include "models/phi4/rai/aie_next/phi4_rai_constants.hpp"
+#include "models/phi4/rai/aie_next/phi4_rai_gguf.hpp"
 #include "test_support.hpp"
 
 #include <cmath>

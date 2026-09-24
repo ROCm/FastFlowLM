@@ -576,6 +576,10 @@ int main(int argc, char* argv[]) {
     // Set when corelib failed but a direct device was opened anyway: the rai
     // backend is gone, the rest of the build is not.
     std::string corelib_note;
+
+
+    header_print("DEBUG", "RAI enabled!");
+
     try {
         const auto runtime =
             flm::corelib::CorelibRuntime::GetOrCreate(std::filesystem::path(exe_dir));
@@ -588,15 +592,16 @@ int main(int argc, char* argv[]) {
         if (npu_device == nullptr) {
             npu_open_error =
                 "corelib started but reports no NPU device on this machine";
-            DO_VERBOSE(1, {
-                header_print("FLM", "corelib reports no NPU device on this machine");
-            });
+            header_print("DEBUG", "corelib reports no NPU device on this machine");
+        }
+        else {
+            header_print("DEBUG", "got device from corelib");
         }
     } catch (const std::exception& e) {
         // A box with no NPU must still run `flm list`/`pull`/`version`, so this
         // stays a null device rather than an error, as in the non-rai path.
         npu_open_error = std::string("corelib unavailable: ") + e.what();
-        DO_VERBOSE(1, { header_print("FLM", "corelib unavailable: " << e.what()); });
+        header_print("FLM", "corelib unavailable: " << e.what());
     }
     if (npu_device == nullptr) {
         // corelib having no device is a reason for the rai backend to be
@@ -642,9 +647,6 @@ int main(int argc, char* argv[]) {
     const bool needs_npu =
         parsed_args.command == "run" || parsed_args.command == "serve" ||
         parsed_args.command == "bench" || parsed_args.command == "validate";
-    if (print_status && needs_npu) {
-        header_print("FLM", "NPU platform: " << utils::platform_id(platform));
-    }
 
     // Say once, here, why there is no device. The commands below cannot run
     // without one, and the message they eventually produce names the symptom

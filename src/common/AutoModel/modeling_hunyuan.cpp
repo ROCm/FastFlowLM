@@ -6,7 +6,7 @@
 /// \note AutoModel wrapper for the `hunyuan-dense` engine (Hy-MT2-1.8B).
 
 #include "AutoModel/modeling_hunyuan.hpp"
-#include "models/hunyuan/hunyuan_npu.hpp"
+#include "models/hunyuan/flm/aie2p/hunyuan_npu.hpp"
 
 /************              hunyuan-dense family            **************/
 Hunyuan::Hunyuan(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "Hunyuan") {
