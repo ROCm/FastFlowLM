@@ -29,7 +29,7 @@
 ///       state the engine must never see, and keeping it out of the shared
 ///       header is what lets the engine struct stay a POD across the .so
 ///       boundary.
-typedef struct {
+struct qwen3_8mtp_host_image_t {
     int width = 0;
     int height = 0;
     int width_resized = 0;   ///< assigned by preprocess_image
@@ -39,7 +39,7 @@ typedef struct {
     int grid_w = 0;
 
     bytes _data;             ///< uint8 (3, H, W); freed by preprocess_image
-} qwen3_8mtp_host_image_t;
+};
 
 
 /************              Qwen3_8MTP            **************/
