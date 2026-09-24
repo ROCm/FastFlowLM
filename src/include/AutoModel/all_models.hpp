@@ -74,7 +74,7 @@ inline std::pair<std::string, std::unique_ptr<AutoModel>> get_auto_model(const s
         {"qwen3.5", SupportedModelFamily::qwen3_5},
         {"qwen3.5-omni", SupportedModelFamily::qwen3_5_omni},
         {"qwen3.6-moe", SupportedModelFamily::qwen3_6_moe},
-        {"qwen3-8mtp", SupportedModelFamily::qwen3_8mtp},
+        {"qwen3.8-mtp", SupportedModelFamily::qwen3_8mtp},
         {"gemma3", SupportedModelFamily::gemma3},
         {"gemma3-text", SupportedModelFamily::gemma3_text},
         {"gemma4e", SupportedModelFamily::gemma4e},

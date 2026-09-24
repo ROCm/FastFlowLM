@@ -475,7 +475,7 @@
                 "footprint": 22.1
             }
         },
-        "qwen3-8mtp": {
+        "qwen3.8-mtp": {
             "27b": {
                 "name": "Qwen3.8-27B-NPU2",
                 "url": "https://huggingface.co/FastFlowLM/Qwen3.8-27B-NPU2",
@@ -495,7 +495,7 @@
                 "max_prefill_len": 256,
                 "details": {
                     "format": "NPU2",
-                    "family": "qwen3-8mtp",
+                    "family": "qwen3.8-mtp",
                     "think": true,
                     "parameter_size": "27B",
                     "quantization_level": "Q4_K"

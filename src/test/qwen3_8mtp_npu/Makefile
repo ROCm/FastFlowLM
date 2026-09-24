@@ -99,7 +99,7 @@ test: $(BUILD_DIR)/test_qwen3_8mtp_npu
 	cd $(BUILD_DIR) && export LD_LIBRARY_PATH=../../../lib/xrt \
 	    && export FLM_Q38_MTP_CPU=$(MTP_CPU) \
 	    && export FLM_Q38_MTP_PREFILL=$(MTP_PREFILL) \
-	    && ./test_qwen3_8mtp_npu --model qwen3-8mtp:27b -s $(PROMPT) -n $(NTOK)
+	    && ./test_qwen3_8mtp_npu --model qwen3.8-mtp:27b -s $(PROMPT) -n $(NTOK)
 
 -include $(DEPS)
 .PHONY: all clean test verify verify_preprocess
@@ -125,7 +125,7 @@ clean:
 
 test: directories $(BUILD_DIR)/test_qwen3_8mtp_npu.exe
 	cp ../../model_list.json $(BUILD_DIR)/model_list.json
-	cd $(BUILD_DIR) && ${PWSH} -Command "\$$env:PATH = '..\..\..\lib;' + \$$env:PATH; .\test_qwen3_8mtp_npu.exe -m qwen3-8mtp:27b -s 1 -p 0 -n 16"
+	cd $(BUILD_DIR) && ${PWSH} -Command "\$$env:PATH = '..\..\..\lib;' + \$$env:PATH; .\test_qwen3_8mtp_npu.exe -m qwen3.8-mtp:27b -s 1 -p 0 -n 16"
 
 .PHONY: all clean test directories
 
