@@ -437,7 +437,7 @@ void gemma4e_pli_prefill_context::pre_pass(
     // the down projection reads the token embeddings, which start life in the residual
     memcpy(bufs->hidden_state_buffer.data() + (size_t)s.L_offset * D, bufs->residual_buffer.data() + (size_t)s.L_offset * D, (size_t)s.L_effective * D * sizeof(bf16));
     bufs->hidden_state_buffer.sync_to_device();
-    this->pli_down_proj(bufs->hidden_state_buffer, pli_down_weights, bufs->pli_down_buffer);
+    FLM_OVERRIDE(pli_down_proj, this->pli_down_proj(bufs->hidden_state_buffer, pli_down_weights, bufs->pli_down_buffer), this->desc, s);
     bufs->pli_down_buffer.sync_from_device();
 
     gemma4e_cpu_func::_elementwise_scale_batch(bufs->pli_down_buffer.data(), 1.0 / sqrtf((float)D), PLI_D * num_hidden_layers, s.L_effective, s.L_offset);
@@ -457,14 +457,14 @@ void gemma4e_pli_prefill_context::layer_pass(
     const int PLI_D = desc->PLI_D;
     const int num_hidden_layers = desc->num_hidden_layers;
 
-    this->pli_gate_proj(bufs->hidden_state_buffer, pli_gate_up_weights, bufs->pli_gate_buffer);
+    FLM_OVERRIDE(pli_gate_proj, this->pli_gate_proj(bufs->hidden_state_buffer, pli_gate_up_weights, bufs->pli_gate_buffer), this->desc, layer_idx, s);
     bufs->pli_gate_buffer.sync_from_device();
 
     // this layer's slice of the per-layer embeddings gates the projection
     gemma4e_cpu_func::_elementwise_mul_batch(bufs->pli_hid_buffer.data(), bufs->pli_gate_buffer.data(), bufs->pli_embed_buffer.data() + (size_t)layer_idx * PLI_D, PLI_D, num_hidden_layers * PLI_D, s.L_effective, s.L_offset, s.L_offset, s.L_offset);
 
     bufs->pli_hid_buffer.sync_to_device();
-    this->pli_up_proj(bufs->pli_hid_buffer, pli_gate_up_weights, bufs->hidden_state_buffer);
+    FLM_OVERRIDE(pli_up_proj, this->pli_up_proj(bufs->pli_hid_buffer, pli_gate_up_weights, bufs->hidden_state_buffer), this->desc, layer_idx, s);
     bufs->hidden_state_buffer.sync_from_device();
 
     gemma4e_cpu_func::_rms_norm_batch(bufs->hidden_state_buffer.data(), bufs->hidden_state_buffer.data(), pli_final_norm.data(), D, D, s.L_effective, s.L_offset, s.L_offset);

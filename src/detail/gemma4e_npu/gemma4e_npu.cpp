@@ -362,7 +362,7 @@ buffer<bf16> gemma4e_npu::Impl::forward(int ids){
     utils::print_matrix(this->logits_valid, vocab_size);
     )
 
-    this->pre_load_run = this->layer_pre_load.create_run(); // create run for the preload xclbin, which has an empty sequence and will be used to preload the next layer's weights in the background while the current token is being processed
+    this->pre_load_run = FLM_OVERRIDE(layer_pre_load, this->layer_pre_load.create_run()); // create run for the preload xclbin, which has an empty sequence and will be used to preload the next layer's weights in the background while the current token is being processed
     this->pre_load_run.start();
     is_preload_launched = true;
     return this->logits_valid;
@@ -398,16 +398,16 @@ buffer<bf16> gemma4e_npu::Impl::_prefill_with_mv(std::vector<int>& ids, void* pa
             // int test_layer = 15;
             switch(layer_types[l]){
                 case e_gemma4e_global_layer:
-                    this->global_layer(this->x, this->proj_weights[l], this->rms_weights[l], this->rope_rms_weights[l], this->kv_caches[l]);
+                    FLM_OVERRIDE(global_layer_mv, this->global_layer(this->x, this->proj_weights[l], this->rms_weights[l], this->rope_rms_weights[l], this->kv_caches[l]), layer_types[l], l);
                     break;
                 case e_gemma4e_swa_layer:
-                    this->swa_layer(this->x, this->proj_weights[l], this->rms_weights[l], this->rope_rms_weights[l], this->kv_caches[l]);
+                    FLM_OVERRIDE(swa_layer_mv, this->swa_layer(this->x, this->proj_weights[l], this->rms_weights[l], this->rope_rms_weights[l], this->kv_caches[l]), layer_types[l], l);
                     break;
                 case e_gemma4e_global_layer_skip:
-                    this->global_skip_layer(this->x, this->proj_weights[l], this->rms_weights[l], this->rope_rms_weights[l], this->kv_caches[last_global_kv_cache_layer_idx]);
+                    FLM_OVERRIDE(global_skip_layer_mv, this->global_skip_layer(this->x, this->proj_weights[l], this->rms_weights[l], this->rope_rms_weights[l], this->kv_caches[last_global_kv_cache_layer_idx]), layer_types[l], l);
                     break;
                 case e_gemma4e_swa_layer_skip:
-                    this->swa_skip_layer(this->x, this->proj_weights[l], this->rms_weights[l], this->rope_rms_weights[l], this->kv_caches[last_swa_kv_cache_layer_idx]);
+                    FLM_OVERRIDE(swa_skip_layer_mv, this->swa_skip_layer(this->x, this->proj_weights[l], this->rms_weights[l], this->rope_rms_weights[l], this->kv_caches[last_swa_kv_cache_layer_idx]), layer_types[l], l);
                     break;
             }
             DEBUG_BLOCK(2,
@@ -562,7 +562,7 @@ buffer<bf16> gemma4e_npu::Impl::_prefill_with_mm(std::vector<int>& ids, void* pa
     get_logits(predict);
     this->set_context_length(this->current_context_length + s.L_effective);
 
-    this->pre_load_run = this->layer_pre_load.create_run();
+    this->pre_load_run = FLM_OVERRIDE(layer_pre_load, this->layer_pre_load.create_run());
     this->pre_load_run.start();
     is_preload_launched = true;
     return logits_valid;
@@ -656,6 +656,7 @@ void gemma4e_npu::Impl::load_weights(Q4NX& q4nx){
         this->proj_weights[layer_idx].sync_to_device();
         this->rms_weights[layer_idx].sync_to_device();
         this->rope_rms_weights[layer_idx].sync_to_device();
+        FLM_OVERRIDE(layer_weights_loaded, (void)0, &this->desc, layer_idx);
         DEBUG_BLOCK(1,
         header_print("info", "Finished loading weights for layer " + std::to_string(layer_idx));
         )
@@ -666,6 +667,7 @@ void gemma4e_npu::Impl::load_weights(Q4NX& q4nx){
 
     this->pli_down_weights.sync_to_device();
     this->lm_head_weights.sync_to_device();
+    FLM_OVERRIDE(head_weights_loaded, (void)0, &this->desc);
 
     DEBUG_BLOCK(1,
     header_print("info", "Finished loading all layer weights");

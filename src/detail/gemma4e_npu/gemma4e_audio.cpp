@@ -1,3 +1,4 @@
+#include "flm_override.hpp"
 #include "gemma4e_audio.hpp"
 
 #include <thread>
@@ -209,7 +210,7 @@ void Gemma4e_AudioEncoder::conv1d_layer(
     )
     conv1d_start_proj_input.sync_to_device();
     audio_conv_pw_1_weight[layer_idx].sync_to_device();
-    conv1d_start_proj_app(conv1d_start_proj_input, audio_conv_pw_1_weight[layer_idx], conv1d_start_proj_output);
+    FLM_OVERRIDE(audio_conv1d_start_proj, conv1d_start_proj_app(conv1d_start_proj_input, audio_conv_pw_1_weight[layer_idx], conv1d_start_proj_output), layer_idx);
     conv1d_start_proj_output.sync_from_device();
     #ifdef DEBUG_PRINT_ENCODE_ERROR_METRICS
     {
@@ -302,7 +303,7 @@ void Gemma4e_AudioEncoder::conv1d_layer(
 
         conv1d_input.sync_to_device();
         audio_conv1d_weight[layer_idx].sync_to_device();
-        conv1d_app(conv1d_output, conv1d_input,audio_conv1d_weight[layer_idx]   );
+        FLM_OVERRIDE(audio_conv1d, conv1d_app(conv1d_output, conv1d_input,audio_conv1d_weight[layer_idx]   ), layer_idx);
         conv1d_output.sync_from_device();
     }
 
@@ -391,7 +392,7 @@ void Gemma4e_AudioEncoder::conv1d_layer(
 
     conv1d_end_proj_input.sync_to_device();
     audio_conv_pw_2_weight[layer_idx].sync_to_device();
-    conv1d_end_proj_app(conv1d_end_proj_input, audio_conv_pw_2_weight[layer_idx], conv1d_end_proj_output);
+    FLM_OVERRIDE(audio_conv1d_end_proj, conv1d_end_proj_app(conv1d_end_proj_input, audio_conv_pw_2_weight[layer_idx], conv1d_end_proj_output), layer_idx);
     conv1d_end_proj_output.sync_from_device();
 
     simd_add(conv1d_end_proj_output.data(), residual.data(), hidden_state.data(),
@@ -471,9 +472,9 @@ void Gemma4e_AudioEncoder::ffn_layer(
     );
 
     //ffn_up_proj_app(ffn_up_proj_input, cur_ffn_up_weight, ffn_up_proj_output_down_input);
-    auto ffn_up_proj_run = ffn_up_proj_app.create_run(
+    auto ffn_up_proj_run = FLM_OVERRIDE(audio_ffn_up_proj, ffn_up_proj_app.create_run(
         ffn_up_proj_input,cur_ffn_up_weight, ffn_up_proj_output_down_input
-    );
+    ));
     ffn_up_proj_input.sync_to_device();
     cur_ffn_up_weight.sync_to_device();
     ffn_up_proj_run.start();
@@ -505,7 +506,7 @@ void Gemma4e_AudioEncoder::ffn_layer(
 
     ffn_up_proj_output_down_input.sync_to_device();
     cur_ffn_down_weight.sync_to_device();
-    ffn_down_proj_app(ffn_up_proj_output_down_input,cur_ffn_down_weight, ffn_down_proj_output );
+    FLM_OVERRIDE(audio_ffn_down_proj, ffn_down_proj_app(ffn_up_proj_output_down_input,cur_ffn_down_weight, ffn_down_proj_output ));
     ffn_down_proj_output.sync_from_device();
 
     // perform a post_layer_nrom
@@ -1602,7 +1603,7 @@ std::vector<bf16> Gemma4e_AudioEncoder::encode(void* audio_payload_ptr){
 
     audio_embedding_projection_input.sync_to_device();
     this->audio_embedding_projection_weight.sync_to_device();
-    sub_sampleConvProjection_app( audio_embedding_projection_input, audio_embedding_projection_weight, audio_embedding_projection_output);
+    FLM_OVERRIDE(audio_sub_sample_proj, sub_sampleConvProjection_app( audio_embedding_projection_input, audio_embedding_projection_weight, audio_embedding_projection_output));
     audio_embedding_projection_output.sync_from_device();
 
     #ifdef DEBUG_PRINT_ENCODE_ERROR_METRICS
@@ -1834,9 +1835,9 @@ std::vector<bf16> Gemma4e_AudioEncoder::encode(void* audio_payload_ptr){
             );
         }
 
-        auto q_proj_run = q_proj_app.create_run(
+        auto q_proj_run = FLM_OVERRIDE(audio_q_proj, q_proj_app.create_run(
             q_proj_input, this->audio_attn_q_weight[layer_id], q_proj_output
-        );
+        ), layer_id);
 
         q_proj_input.sync_to_device();
         this->audio_attn_q_weight[layer_id].sync_to_device();
@@ -1866,9 +1867,9 @@ std::vector<bf16> Gemma4e_AudioEncoder::encode(void* audio_payload_ptr){
             );
             k_proj_input.sync_to_device();
 
-            auto k_proj_run =  k_proj_app.create_run(
+            auto k_proj_run = FLM_OVERRIDE(audio_k_proj, k_proj_app.create_run(
                 k_proj_input, this->audio_attn_k_weight[layer_id], k_proj_output
-            );
+            ), layer_id);
 
         q_proj_run.wait();
         q_proj_output.sync_from_device();
@@ -1899,9 +1900,9 @@ std::vector<bf16> Gemma4e_AudioEncoder::encode(void* audio_payload_ptr){
                 seq_len * Padded_GEMMA4E_Audio_HIDDEN_SIZE
             );
             v_proj_input.sync_to_device();
-            auto v_proj_run =  v_proj_app.create_run(
+            auto v_proj_run = FLM_OVERRIDE(audio_v_proj, v_proj_app.create_run(
                 v_proj_input, this->audio_attn_v_weight[layer_id], v_proj_output
-            );
+            ), layer_id);
         k_proj_run.wait();
         k_proj_output.sync_from_device();
 
@@ -2054,7 +2055,7 @@ std::vector<bf16> Gemma4e_AudioEncoder::encode(void* audio_payload_ptr){
         );
         o_output_proj_input.sync_to_device();
         this->audio_attn_o_weight[layer_id].sync_to_device();
-        o_proj_app(o_output_proj_input, this->audio_attn_o_weight[layer_id], o_output_proj_output);
+        FLM_OVERRIDE(audio_o_proj, o_proj_app(o_output_proj_input, this->audio_attn_o_weight[layer_id], o_output_proj_output), layer_id);
         o_output_proj_output.sync_from_device();
 
         simd_rms_norm(
@@ -2219,7 +2220,7 @@ std::vector<bf16> Gemma4e_AudioEncoder::encode(void* audio_payload_ptr){
 
     audio_pre_encode_input.sync_to_device();
     this->audio_pre_encode_weight.sync_to_device();
-    audio_pre_encode_proj_app( audio_pre_encode_input, audio_pre_encode_weight, audio_pre_encode_output);
+    FLM_OVERRIDE(audio_pre_encode_proj, audio_pre_encode_proj_app( audio_pre_encode_input, audio_pre_encode_weight, audio_pre_encode_output));
     audio_pre_encode_output.sync_from_device();
 
     #ifdef DEBUG_PRINT_ENCODE_ERROR_METRICS
@@ -2251,7 +2252,7 @@ std::vector<bf16> Gemma4e_AudioEncoder::encode(void* audio_payload_ptr){
 
     audio_to_language_project_input.sync_to_device();
     this->audio_to_language_projection_weight.sync_to_device();
-    audio_to_language_proj_app(audio_to_language_project_input, this->audio_to_language_projection_weight, audio_to_language_project_output);
+    FLM_OVERRIDE(audio_to_language_proj, audio_to_language_proj_app(audio_to_language_project_input, this->audio_to_language_projection_weight, audio_to_language_project_output));
     audio_to_language_project_output.sync_from_device();
 
     #ifdef DEBUG_PRINT_ENCODE_ERROR_METRICS

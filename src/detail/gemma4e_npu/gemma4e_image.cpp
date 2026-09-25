@@ -1,3 +1,4 @@
+#include "flm_override.hpp"
 #include "gemma4e_image.hpp"
 
 #include <thread>
@@ -679,7 +680,7 @@ std::vector<bf16> Gemma4e_ImageEncoder::encode( void* image_payload_ptr)
     #endif
     patch_emb_input.sync_to_device();
     patch_embd_weight.sync_to_device();
-    patch_embedding_app(patch_emb_input,patch_embd_weight, patch_emb_output  );
+    FLM_OVERRIDE(vision_patch_embed, patch_embedding_app(patch_emb_input,patch_embd_weight, patch_emb_output  ));
     patch_emb_output.sync_from_device();
     #if DEBUG_PRINT_ENCODE_TIME_DETAIL
         auto patch_emb_end_time = std::chrono::high_resolution_clock::now();
@@ -777,13 +778,13 @@ std::vector<bf16> Gemma4e_ImageEncoder::encode( void* image_payload_ptr)
     // now, we do the
     one_shot_buffer.sync_to_device();
     patch_embedder_position_embedding_table.sync_to_device();
-    patch_embedder_posisiton_embedding_dim_0_app(one_shot_buffer, patch_embedder_position_embedding_table, position_embedding_table_output);
+    FLM_OVERRIDE(vision_pos_embed_dim0, patch_embedder_posisiton_embedding_dim_0_app(one_shot_buffer, patch_embedder_position_embedding_table, position_embedding_table_output));
     position_embedding_table_output.sync_from_device();
 
     // dim2
     one_shot_buffer.sync_to_device();
     patch_embedder_position_embedding_table.sync_to_device();
-    patch_embedder_posisiton_embedding_dim_1_app(one_shot_buffer, patch_embedder_position_embedding_table, position_embedding_table_output);
+    FLM_OVERRIDE(vision_pos_embed_dim1, patch_embedder_posisiton_embedding_dim_1_app(one_shot_buffer, patch_embedder_position_embedding_table, position_embedding_table_output));
     position_embedding_table_output.sync_from_device();
 
     // now, compare with the python reference
@@ -1026,9 +1027,9 @@ std::vector<bf16> Gemma4e_ImageEncoder::encode( void* image_payload_ptr)
             memset(q_projection_input.data() + seq_len * Padded_GEMMA4E_VISION_HIDDEN_SIZE, 0, (seq_len_padded - seq_len)* Padded_GEMMA4E_VISION_HIDDEN_SIZE * sizeof(bf16));
             q_projection_input.sync_to_device();
 
-        auto q_proj_run = this->q_proj_app.create_run(
+        auto q_proj_run = FLM_OVERRIDE(vision_q_proj, this->q_proj_app.create_run(
             q_projection_input, q_proj_weight[layer_idx], q_projection_output
-        );
+        ), layer_idx);
 
         q_projection_input.sync_to_device();
         this->q_proj_weight[layer_idx].sync_to_device();
@@ -1061,9 +1062,9 @@ std::vector<bf16> Gemma4e_ImageEncoder::encode( void* image_payload_ptr)
 
         k_projection_input.sync_to_device();
         this->k_proj_weight[layer_idx].sync_to_device();
-        auto k_proj_run = this->k_proj_app.create_run(
+        auto k_proj_run = FLM_OVERRIDE(vision_k_proj, this->k_proj_app.create_run(
             k_projection_input, k_proj_weight[layer_idx], k_projection_output
-        );
+        ), layer_idx);
         k_proj_run.start();
 
             generate_mm_sequence<bf16, bf16>(*this->v_proj_app.seq(),
@@ -1093,9 +1094,9 @@ std::vector<bf16> Gemma4e_ImageEncoder::encode( void* image_payload_ptr)
 
         v_projection_input.sync_to_device();
         this->v_proj_weight[layer_idx].sync_to_device();
-        auto v_proj_run = this->v_proj_app.create_run(
+        auto v_proj_run = FLM_OVERRIDE(vision_v_proj, this->v_proj_app.create_run(
             v_projection_input, v_proj_weight[layer_idx], v_projection_output
-        );
+        ), layer_idx);
         v_proj_run.start();
             // apply norm for q, and k
             simd_rms_norm(
@@ -1192,9 +1193,9 @@ std::vector<bf16> Gemma4e_ImageEncoder::encode( void* image_payload_ptr)
         }
         #endif
 
-        auto attention_run = this->flash_attention_app.create_run(
+        auto attention_run = FLM_OVERRIDE(vision_attn_core, this->flash_attention_app.create_run(
             attention_output, q_projection_output, k_projection_output, v_projection_output
-        );
+        ));
         q_projection_output.sync_to_device();
         k_projection_output.sync_to_device();
         v_projection_output.sync_to_device();
@@ -1260,7 +1261,7 @@ std::vector<bf16> Gemma4e_ImageEncoder::encode( void* image_payload_ptr)
 
         attention_output.sync_to_device();
         this->o_proj_weight[layer_idx].sync_to_device();
-        o_proj_app(attention_output, this->o_proj_weight[layer_idx], o_projection_output );
+        FLM_OVERRIDE(vision_o_proj, o_proj_app(attention_output, this->o_proj_weight[layer_idx], o_projection_output ), layer_idx);
         o_projection_output.sync_from_device();
 
         simd_rms_norm(
@@ -1400,9 +1401,9 @@ std::vector<bf16> Gemma4e_ImageEncoder::encode( void* image_payload_ptr)
 
         gate_input.sync_to_device();
         this->gate_proj_weight[layer_idx].sync_to_device();
-        auto gate_proj_run = this->gate_proj_app.create_run(
+        auto gate_proj_run = FLM_OVERRIDE(vision_gate_proj, this->gate_proj_app.create_run(
             gate_input, gate_proj_weight[layer_idx], gate_output
-        );
+        ), layer_idx);
         gate_proj_run.start();
 
             simd_clamp(
@@ -1453,9 +1454,9 @@ std::vector<bf16> Gemma4e_ImageEncoder::encode( void* image_payload_ptr)
 
         up_input.sync_to_device();
         this->up_proj_weight[layer_idx].sync_to_device();
-        auto up_proj_run = this->up_proj_app.create_run(
+        auto up_proj_run = FLM_OVERRIDE(vision_up_proj, this->up_proj_app.create_run(
             up_input, up_proj_weight[layer_idx], up_output
-        );
+        ), layer_idx);
         up_proj_run.start();
 
             generate_mm_sequence<bf16, bf16>(*this->down_proj_app.seq(),
@@ -1535,7 +1536,7 @@ std::vector<bf16> Gemma4e_ImageEncoder::encode( void* image_payload_ptr)
 
         gate_output.sync_to_device();
         this->down_proj_weight[layer_idx].sync_to_device();
-        this->down_proj_app(gate_output, this->down_proj_weight[layer_idx], down_output);
+        FLM_OVERRIDE(vision_down_proj, this->down_proj_app(gate_output, this->down_proj_weight[layer_idx], down_output), layer_idx);
         down_output.sync_from_device();
 
         #if DEBUG_PRINT_ENCODE_ERROR_METRICS
@@ -1818,7 +1819,7 @@ std::vector<bf16> Gemma4e_ImageEncoder::encode( void* image_payload_ptr)
 
     language_embed_input.sync_to_device();
     this->vision_to_language_input_projection_weight.sync_to_device();
-    this->vision_to_language_input_projection_app(language_embed_input, this->vision_to_language_input_projection_weight, language_embed_output);
+    FLM_OVERRIDE(vision_to_language_proj, this->vision_to_language_input_projection_app(language_embed_input, this->vision_to_language_input_projection_weight, language_embed_output));
     language_embed_output.sync_from_device();
 
     #if DEBUG_PRINT_ENCODE_ERROR_METRICS
