@@ -100,12 +100,14 @@ std::string Phi4::apply_chat_template(nlohmann::ordered_json& messages,
     return chat_tmpl->apply(inputs);
 }
 
-void Phi4::fail_inference() {
+void Phi4::fail_inference(const std::string& detail) {
     const bool poisoned = backend_ && backend_->poisoned();
     _shared_after_inference_failure(poisoned);
-    throw ModelRequestError(500, true, poisoned
+    std::string message = poisoned
         ? "Inference failed; unload/reload is required because the model is poisoned"
-        : "Inference failed; the current conversation was cleared");
+        : "Inference failed; the current conversation was cleared";
+    if (!detail.empty()) message += " (" + detail + ")";
+    throw ModelRequestError(500, true, message);
 }
 
 bool Phi4::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input,
@@ -133,6 +135,8 @@ bool Phi4::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input,
                               0, input.requested_max_new_tokens);
     } catch (const ModelRequestError&) {
         throw;
+    } catch (const std::exception& error) {
+        fail_inference(error.what());
     } catch (...) {
         fail_inference();
     }
@@ -146,6 +150,8 @@ std::string Phi4::generate(chat_meta_info_t& meta_info, int length_limit,
         return _shared_generate(meta_info, length_limit, os, std::move(is_cancelled));
     } catch (const ModelRequestError&) {
         throw;
+    } catch (const std::exception& error) {
+        fail_inference(error.what());
     } catch (...) {
         fail_inference();
     }

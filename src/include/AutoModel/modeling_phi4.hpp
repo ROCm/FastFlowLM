@@ -30,7 +30,10 @@ private:
 
     /// \brief Turn a failed inference into a request error, clearing the session
     /// \throws ModelRequestError 500, always
-    [[noreturn]] void fail_inference();
+    /// \param detail the backend's own message, when the failure carried one
+    /// \note The detail is appended to the thrown message. Without it the
+    ///       corelib label that names the failing op is lost at the catch.
+    [[noreturn]] void fail_inference(const std::string& detail = {});
 
 public:
     explicit Phi4(flm_rt::device* npu_device_inst);
