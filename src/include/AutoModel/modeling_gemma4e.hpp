@@ -111,15 +111,17 @@ protected:
     /// \note  Overridden by Gemma4e_Flash to read them off the flash engine.
     virtual gemma4e_engine_config_t engine_config() const;
 
-    /// \brief Builds the engine behind this wrapper; load_model() calls it.
-    /// \note  Overridden by Gemma4e_Flash to swap in the flash engine. Everything
-    ///        else -- weights, tokenizer, sampler, chat template -- is identical.
-    virtual void create_engine();
+    /// \note Gemma4e and Gemma4e_Flash share this whole wrapper -- weights,
+    ///       tokenizer, sampler, chat template -- and differ only in the engine
+    ///       behind it. Which one to build is no longer decided here: the two
+    ///       are separate families in the catalog ("gemma4e" and
+    ///       "gemma4e-flash") and each registers its own backend, so the
+    ///       registry picks the engine. See AutoModel/builtin_backends.cpp.
 
 public:
     Gemma4e(flm_rt::device* npu_device_inst);
 
-    void load_model(std::string model_path, json model_inf, int default_context_length = -1, bool enable_preemption = false) override;
+    void load_model(std::string model_path, json model_inf, int default_context_length = -1, bool enable_preemption = false, const std::string& backend = "") override;
     bool insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled = [] { return false; }) override;
     std::string generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled = [] { return false; }) override;
     std::string generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os = std::cout) override;
@@ -229,7 +231,6 @@ private:
     void _reset_turn();
 
 protected:
-    void create_engine() override;
     gemma4e_engine_config_t engine_config() const override;
 
 public:

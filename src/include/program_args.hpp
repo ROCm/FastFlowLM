@@ -19,6 +19,7 @@ struct program_args_t {
     bool embed = false;
     bool json_output = false;
     int ctx_length = -1; // let model decide
+    std::string backend = ""; // let the catalog decide; see AutoModel/model_backend.hpp
     int prefill_chunk_len = -1; // let model decide
 
     // handling input file

@@ -6,7 +6,7 @@
 /// \note AutoModel wrapper for the `hunyuan-dense` engine (Hy-MT2-1.8B).
 
 #include "AutoModel/modeling_hunyuan.hpp"
-#include "models/hunyuan/hunyuan_npu.hpp"
+#include "models/hunyuan/flm/aie2p/hunyuan_npu.hpp"
 
 /************              hunyuan-dense family            **************/
 Hunyuan::Hunyuan(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "Hunyuan") {
@@ -19,18 +19,8 @@ Hunyuan::Hunyuan(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "
     this->forward_on_eos = false;
 }
 
-void Hunyuan::load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption) {
-    this->_shared_load_model(model_path, model_info, default_context_length, enable_preemption);
-
-    this->q4nx = std::make_unique<Q4NX>(this->model_path);
-    this->lm_engine = std::make_unique<hunyuan_npu>(*this->lm_config, this->npu.get(), this->MAX_L);
-
-    this->lm_engine->load_weights(*this->q4nx);
-
-    // free the mmap'd weights immediately
-    this->q4nx.reset();
-
-    this->lm_engine->clear_context();
+void Hunyuan::load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption, const std::string& backend) {
+    this->_shared_load_backend(model_path, model_info, default_context_length, enable_preemption, backend);
     this->setup_tokenizer(model_path);
     this->sampler.reset();
 
@@ -158,7 +148,7 @@ bool Hunyuan::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
             // rewind to the pinned system turn instead of clearing: _shared_insert
             // then prefix-matches against the history and prefills only the tail.
             // The token history has to move back with the cache or that match fails.
-            hunyuan_npu* engine = dynamic_cast<hunyuan_npu*>(this->lm_engine.get());
+            hunyuan_npu* engine = dynamic_cast<hunyuan_npu*>(this->lm_engine);
             this->total_tokens = engine->restore();
             this->token_history = this->system_his;
             this->checkpoint_his = this->system_his;
@@ -231,7 +221,7 @@ int Hunyuan::_pin_system_prefix(const std::string& system_text) {
     // prompt is prefix-matched against
     this->system_his = this->token_history;
     this->checkpoint_his = this->token_history;
-    hunyuan_npu* engine = dynamic_cast<hunyuan_npu*>(this->lm_engine.get());
+    hunyuan_npu* engine = dynamic_cast<hunyuan_npu*>(this->lm_engine);
     engine->checkpoint();
     this->system_tokens = static_cast<int>(shared);
 

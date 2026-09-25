@@ -232,6 +232,40 @@ flm serve llama3.2:1b --ctx-len 8192
 
 ---
 
+### 🔀 Choose an Execution Backend
+
+**A backend names where the kernels come from.** There are two:
+
+| id | kernels | ships on |
+|---|---|---|
+| `flm` | FastFlowLM's own NPU kernels | Strix / Krackan Point |
+| `rai` | AMD's ryzenai-corelib | the next NPU generation |
+
+You normally never set this. The model tag already names the flow — a family ending in `-rai` wants corelib's kernels, everything else FastFlowLM's — and `flm list` only ever offers you tags this build and this machine can actually run. `flm run` separately prints the silicon as `NPU platform: aie_next`. A model family has at most one engine per backend, so there is nothing to choose between.
+
+The flag exists for overriding the detection, and for the targets that will join this list later:
+
+```shell
+flm run   phi4-mini-it:4b --backend flm
+flm serve phi4-mini-it:4b --backend rai
+```
+
+**Precedence**, highest first:
+
+| # | Source | |
+|---|---|---|
+| 1 | `--backend <id>` | the flag above, or a `"backend"` field on an `/api/chat` or `/api/generate` request |
+| 2 | `FLM_BACKEND=<id>` | environment variable, for a whole shell session |
+| 3 | the detected NPU | what `flm validate` reports |
+
+A per-request `"backend"` overrides `--backend` for that request, and reloads the model if it differs from the one already loaded — exactly as asking for a different model does.
+
+Asking for a backend this build does not ship fails at load with a message listing what is actually available. There is no silent fallback to another engine or to the CPU. Note that a release is built for one NPU generation: on hardware it was not built for, `run`, `serve` and `bench` refuse up front, and `flm validate` still reports what it found.
+
+> A build carries the engines for one generation only, so there is no flag that moves it to the other catalog entry — that is a different build of FLM.
+
+---
+
 ### 🖧 Set Server Port at Launch
 
 Set a custom port at launch:

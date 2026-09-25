@@ -32,6 +32,27 @@
       }
     },
     {
+      "name": "linux-rai",
+      "displayName": "Linux RAI",
+      "description": "Linux build with statically linked ryzenai-corelib support",
+      "inherits": "linux-default",
+      "binaryDir": "${sourceDir}/build-rai",
+      "cacheVariables": {
+        "FLM_ENABLE_RAI": "OFF",
+        "RYZENAI_CORELIB_INCLUDE_DIR": "$env{RYZENAI_CORELIB_INCLUDE_DIR}",
+        "RYZENAI_CORELIB_LIBRARY": "$env{RYZENAI_CORELIB_LIBRARY}"
+      }
+    },
+    {
+      "name": "linux-rai-on",
+      "displayName": "Linux RAI (enabled)",
+      "description": "Linux build with the ryzenai-corelib kernel backend turned on. Builds into build/ like every other preset. Point it at a corelib prefix once with -DRYZENAI_CORELIB_ROOT=<prefix>, or drop the headers into include/ and libryzenai_corelib.so into lib/.",
+      "inherits": "linux-default",
+      "cacheVariables": {
+        "FLM_ENABLE_RAI": "ON"
+      }
+    },
+    {
       "name": "linux-snap",
       "displayName": "Linux Snap Build",
       "description": "Configuration for building inside a snapcraft part",
@@ -51,6 +72,18 @@
       "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "windows-rai",
+      "displayName": "Windows RAI",
+      "description": "Windows build with statically linked ryzenai-corelib support",
+      "inherits": "windows-default",
+      "binaryDir": "${sourceDir}/build-rai",
+      "cacheVariables": {
+        "FLM_ENABLE_RAI": "OFF",
+        "RYZENAI_CORELIB_INCLUDE_DIR": "$env{RYZENAI_CORELIB_INCLUDE_DIR}",
+        "RYZENAI_CORELIB_LIBRARY": "$env{RYZENAI_CORELIB_LIBRARY}"
       }
     },
     {
@@ -83,6 +116,30 @@
       "displayName": "Windows Default Build",
       "description": "Build Windows preset in Release with parallel jobs",
       "configurePreset": "windows-default",
+      "configuration": "Release",
+      "jobs": 4
+    },
+    {
+      "name": "linux-rai",
+      "displayName": "Linux RAI Build",
+      "description": "Build the optional ryzenai-corelib runtime in Release",
+      "configurePreset": "linux-rai",
+      "configuration": "Release",
+      "jobs": 4
+    },
+    {
+      "name": "linux-rai-on",
+      "displayName": "Linux RAI Build (enabled)",
+      "description": "Build the ryzenai-corelib kernel backend in Release",
+      "configurePreset": "linux-rai-on",
+      "configuration": "Release",
+      "jobs": 4
+    },
+    {
+      "name": "windows-rai",
+      "displayName": "Windows RAI Build",
+      "description": "Build the optional ryzenai-corelib runtime in Release",
+      "configurePreset": "windows-rai",
       "configuration": "Release",
       "jobs": 4
     }

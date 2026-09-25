@@ -61,12 +61,13 @@ protected:
                           qwen3vl_image_payload_t& image_payload,
                           std::vector<int>& tokens);
 
-    /// \brief Build the engine that backs this wrapper.
-    /// \note  The Qwen3-VL checkpoint is served by two engines that share this
-    ///        whole wrapper -- the tokenizer, chat template, sampler and image
-    ///        preprocessing are identical -- and differ only in how they run
-    ///        prefill on the NPU. This is the single seam between them.
-    virtual void create_engine();
+    /// \note The Qwen3-VL checkpoint is served by two engines that share this
+    ///       whole wrapper -- the tokenizer, chat template, sampler and image
+    ///       preprocessing are identical -- and differ only in how they run
+    ///       prefill on the NPU. Which one to build is no longer a seam here:
+    ///       the two are separate families in the catalog ("qwen3vl" and
+    ///       "qwen3vl-flash") and each registers its own backend, so the
+    ///       registry picks the engine. See AutoModel/builtin_backends.cpp.
 
     /// \brief Longer-side target (pixels) that load_image/load_image_base64 must
     ///        resize every decoded image to, applied before the user-configured
@@ -76,7 +77,7 @@ protected:
 public:
     Qwen3VL(flm_rt::device* npu_device_inst);
 
-    void load_model(std::string model_path, json model_inf, int default_context_length = -1, bool enable_preemption = false) override;
+    void load_model(std::string model_path, json model_inf, int default_context_length = -1, bool enable_preemption = false, const std::string& backend = "") override;
     //void toggle_enable_think() override;
     bool insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled = [] { return false; }) override;
     std::string generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled = [] { return false; }) override;
@@ -176,8 +177,6 @@ private:
     int _pin_system_prefix(const std::string& system_text);
 
 protected:
-    void create_engine() override;
-
     /// \brief The flash engine is tuned for short contexts, so every image is
     ///        forced down to a 256px longer side regardless of img_pre_resize.
     int _forced_long_side() const override { return 256; }

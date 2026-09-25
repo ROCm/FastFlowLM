@@ -213,7 +213,7 @@ void Qwen3_6_MOE::preprocess_image(qwen3_6_moe_image_t& image, std::vector<bf16>
         return;
     }
 
-    qwen3_6_moe_npu* lm_engine_qwen3_6_ptr = reinterpret_cast<qwen3_6_moe_npu*>(this->lm_engine.get());
+    qwen3_6_moe_npu* lm_engine_qwen3_6_ptr = reinterpret_cast<qwen3_6_moe_npu*>(this->lm_engine);
     smart_resize(
         height, width,
         resized_height, resized_width,

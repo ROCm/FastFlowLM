@@ -44,7 +44,8 @@ typedef enum {
 /// \brief Runner class
 class Runner {
     public: 
-        Runner(model_list& supported_models, ModelDownloader& downloader, program_args_t& args);
+        Runner(model_list& supported_models, ModelDownloader& downloader, program_args_t& args,
+               flm_rt::device* npu_device);
         void run();
     private:
         std::string tag;
@@ -64,10 +65,15 @@ class Runner {
         int ctx_length;
         std::string system_prompt;
         bool preemption;
+        /// \brief the --backend value, empty when the flag was not given
+        std::string backend;
         int img_pre_resize;
         // CLI instance for interactive input
         CLIWide cli;
-        flm_rt::device npu_device_inst;
+        // Owned by main(); on a rai build it comes from corelib, on an flm
+        // build main opens it directly. Either way there is one per process and
+        // it must not be duplicated.
+        flm_rt::device* npu_device_inst;
 
         /// \brief Command functions
         void cmd_set(std::vector<std::string>& input_list);

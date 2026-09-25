@@ -8,9 +8,11 @@
 #include "runner.hpp"
 #include "server.hpp"
 #include "model_list.hpp"
+#include "AutoModel/model_backend.hpp"
 #include "model_downloader.hpp"
 #include "update.hpp"
 #include "utils/utils.hpp"
+#include "utils/npu_platform.hpp"
 #include "program_args.hpp"
 #include "minja/chat-template.hpp"
 #include <cstring>
@@ -34,6 +36,10 @@
 #include "utils/vm_args.hpp"
 #include <boost/program_options.hpp>
 #include "benchmarking.hpp"
+#ifdef FLM_ENABLE_RAI
+#include "rai/corelib_runtime.hpp"
+#include "rai/corelib_device.hpp"
+#endif
 
 #ifndef _WIN32
 #include <fcntl.h>
@@ -162,8 +168,9 @@ void signal_handler(int signal) {
 ///@param models the model list
 ///@param default_tag the default tag
 ///@param port the port to listen on, default is 52625, same with the ollama server
+///@param npu_device the NPU device owned by main, shared with the handler
 ///@return the server
-std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader& downloader, program_args_t& args);
+std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader& downloader, program_args_t& args, flm_rt::device* npu_device);
 
 #ifdef _WIN32
 std::string get_driver_version(const std::string& device_name) {
@@ -209,6 +216,38 @@ std::string identify_npu_arch() {
 
 static bool sanity_check_npu_stack(bool quiet, bool json_output = false) {
     bool print_human = !quiet && !json_output;
+#ifdef FLM_ENABLE_RAI
+    // Everything below reads the NPU's geometry and this process's memlock
+    // limit from the driver and holds them against what FastFlowLM's own kernel
+    // flow needs. A corelib build does not use that flow. corelib owns device
+    // setup and brings the NPU up itself -- main() already reports whether that
+    // worked, and says why when it did not -- so these checks answer a question
+    // this build does not ask, against a threshold that describes FastFlowLM's
+    // own kernels rather than the parts corelib supports. Left in, they fail a
+    // working rai install on hardware corelib runs on perfectly well.
+    //
+    // The JSON keeps the shape callers already parse, but reports the checks as
+    // skipped rather than claiming they passed: "ready" here means "this build
+    // does not gate on the stock stack". A caller that wants to know whether the
+    // NPU actually came up should look at whether flm opened a device.
+    if (json_output) {
+        nlohmann::json validation_json = {
+            {"object", "npu_stack_validation"},
+#ifdef _WIN32
+            {"platform", "windows"},
+#else
+            {"platform", "linux"},
+#endif
+            {"backend", "rai"},
+            {"checks_skipped", true},
+            {"ready", true}
+        };
+        std::cout << validation_json.dump(4) << std::endl;
+    } else if (print_human) {
+        header_print("FLM", "corelib backend: skipping NPU stack checks (corelib owns device setup)");
+    }
+    return true;
+#else
 #ifndef _WIN32
     nlohmann::json validation_json = {
         {"object", "npu_stack_validation"},
@@ -222,6 +261,9 @@ static bool sanity_check_npu_stack(bool quiet, bool json_output = false) {
         {"ready", true}
     };
     validation_json["platform"] = "linux";
+    // The same generation the catalog was filtered for in main().
+    validation_json["npu_platform"] =
+        std::string(utils::platform_id(utils::get_device()));
     // Check kernel version
     struct utsname u_name;
     if (uname(&u_name) != 0) {
@@ -384,6 +426,10 @@ static bool sanity_check_npu_stack(bool quiet, bool json_output = false) {
     }
     validation_json["memlock_ok"] = memlock_ok;
 
+    if (print_human) {
+        header_print_g("Linux", "NPU platform: " << validation_json["npu_platform"].get<std::string>());
+    }
+
     bool overall_ok = amd_device_found && kernel_ok && all_fw_ok && enough_cols && memlock_ok;
     validation_json["ready"] = overall_ok;
     if (json_output) {
@@ -397,6 +443,8 @@ static bool sanity_check_npu_stack(bool quiet, bool json_output = false) {
         {"platform", "windows"},
         {"amd_device_found", true},
         {"npu_driver_ok", true},
+        {"npu_platform",
+         std::string(utils::platform_id(utils::get_device()))},
         {"ready", true}
     };
     std::string npu_arch = identify_npu_arch();
@@ -433,6 +481,7 @@ static bool sanity_check_npu_stack(bool quiet, bool json_output = false) {
     if (print_human) {
         header_print_g("Windows", "NPU: " << npu_arch);
         header_print_g("Windows", "NPU dirver version: " << drv);
+        header_print_g("Windows", "NPU platform: " << validation_json["npu_platform"].get<std::string>());
     }
 
     if (json_output) {
@@ -440,8 +489,50 @@ static bool sanity_check_npu_stack(bool quiet, bool json_output = false) {
     }
     return true;
 #endif
+#endif // FLM_ENABLE_RAI
 }
 
+
+#ifdef FLM_ENABLE_RAI
+/// \brief brings corelib up for the process and tears it down on every exit path
+/// \note main() has early `return 1`s and a catch-all, so the teardown has to be
+///       a destructor rather than a trailing call. A failed shutdown must not
+///       mask whatever the program was already reporting, hence the swallow.
+struct RaiProcessGuard {
+    ~RaiProcessGuard() {
+        try {
+            flm::corelib::CorelibRuntime::ShutdownProcess();
+        } catch (const std::exception& e) {
+            std::cerr << "Warning: corelib shutdown failed: " << e.what() << std::endl;
+        } catch (...) {
+            std::cerr << "Warning: corelib shutdown failed" << std::endl;
+        }
+    }
+};
+#endif
+
+///@brief open the NPU device that every engine in this process shares
+///@param why if non-null, receives why the device could not be opened
+///@return the shared device, or nullptr when no NPU could be opened
+///@note Function-local static, so the lifetime is tied to the process exactly as
+///      the per-Runner devices used to be. A machine with no NPU must still be
+///      able to run `flm list`/`pull`/`version`, so failure is a null pointer,
+///      not an error.
+static flm_rt::device* open_npu_device(std::string* why) {
+    try {
+        static flm_rt::device npu_device = flm_rt::device(0);
+        return &npu_device;
+    } catch (const std::exception& e) {
+        if (why) *why = e.what();
+        DO_VERBOSE(1, {
+            header_print("FLM", "No NPU device available: " << e.what());
+        });
+        return nullptr;
+    } catch (...) {
+        if (why) *why = "unknown error";
+        return nullptr;
+    }
+}
 
 ///@brief main function
 ///@param argc the number of arguments
@@ -499,9 +590,105 @@ int main(int argc, char* argv[]) {
     // Get the models directory from environment variable or default
     std::string models_dir = utils::get_models_directory();
 
-    
-    model_list availble_models(config_path, models_dir);
-    
+    // One NPU runtime for the whole process, brought up before the catalog so
+    // the catalog can be filtered to what this NPU generation can actually run.
+    // Which runtime that is follows from the build, not from a decision here:
+    // the flm backend opens its own device, rai gets one from corelib.
+#ifdef FLM_ENABLE_RAI
+    // Declared before anything that can return so the destructor covers the
+    // early exits and the catch-all below.
+    RaiProcessGuard rai_guard;
+    // Declared out here so the early exits below still see a device, and so a
+    // corelib that fails to come up leaves it null rather than undefined.
+    flm_rt::device* npu_device = nullptr;
+    // Kept so the reason survives into a release build. VERBOSE is a
+    // compile-time macro, so every DO_VERBOSE below is compiled out and a user
+    // is left with "NPU device instance is nullptr" -- raised much later, by
+    // whichever model reaches for the device first -- and nothing to act on.
+    std::string npu_open_error;
+    // Set when corelib failed but a direct device was opened anyway: the rai
+    // backend is gone, the rest of the build is not.
+    std::string corelib_note;
+
+    try {
+        const auto runtime =
+            flm::corelib::CorelibRuntime::GetOrCreate(std::filesystem::path(exe_dir));
+        // corelib opens the NPU for this process, so take its device rather
+        // than opening a second one: a buffer object created against a
+        // different xrt::device for the same NPU binds without error and then
+        // never completes. GetOrCreate holds the runtime process-wide, so the
+        // device stays valid until RaiProcessGuard tears it down at exit.
+        npu_device = flm::corelib::SharedDevice(*runtime);
+        if (npu_device == nullptr)
+            npu_open_error =
+                "corelib started but reports no NPU device on this machine";
+    } catch (const std::exception& e) {
+        // A box with no NPU must still run `flm list`/`pull`/`version`, so this
+        // stays a null device rather than an error, as in the non-rai path.
+        npu_open_error = std::string("corelib unavailable: ") + e.what();
+        header_print("FLM", "corelib unavailable: " << e.what());
+    }
+    if (npu_device == nullptr) {
+        // corelib having no device is a reason for the rai backend to be
+        // unavailable, not for the process to have no NPU at all. Every other
+        // family is served by the flm backend, which opens its own device and
+        // never touches corelib -- so opening one directly keeps those models
+        // working instead of failing the whole process over a backend they do
+        // not use. On a box whose NPU has no creatable AIE_NEXT hw_context this is
+        // the difference between "rai is unavailable" and "flm has no NPU".
+        //
+        // This does not bring back the two-device bug, where a buffer created
+        // against a second xrt::device for the same NPU bound without error and
+        // then never completed. That needed corelib to be live and holding a
+        // device of its own; here it has none, so the process still ends up
+        // with exactly one.
+        corelib_note = npu_open_error;
+        std::string raw_error;
+        npu_device = open_npu_device(&raw_error);
+        if (npu_device != nullptr) {
+            npu_open_error.clear();
+        } else {
+            npu_open_error += "; opening the NPU directly also failed: " + raw_error;
+            corelib_note.clear();
+        }
+    }
+#else
+    std::string npu_open_error;
+    std::string corelib_note;
+    flm_rt::device* npu_device = open_npu_device(&npu_open_error);
+#endif
+
+    // Two things decide what this binary can run, and they are independent.
+    // The generation is the machine's, answered by the device itself, and says
+    // which artifacts run here at all; the backend ids are the kernel flows
+    // that were linked in, and a tag names its own flow.
+    const utils::npu_platform platform = utils::get_device();
+
+    model_list availble_models(
+        config_path, models_dir, std::string(utils::platform_id(platform)),
+        flm::backend::BackendRegistry::instance().backend_ids());
+
+    const bool print_status = !parsed_args.json_output && !parsed_args.sub_process_mode;
+    const bool needs_npu =
+        parsed_args.command == "run" || parsed_args.command == "serve" ||
+        parsed_args.command == "bench" || parsed_args.command == "validate";
+
+    // Say once, here, why there is no device. The commands below cannot run
+    // without one, and the message they eventually produce names the symptom
+    // rather than the cause: it is raised from whichever model first reaches
+    // for the device, long after the runtime that failed to come up.
+    if (print_status && needs_npu && !corelib_note.empty()) {
+        header_print("FLM", "rai backend unavailable ("
+                                << corelib_note
+                                << "); opened the NPU directly");
+    }
+    if (needs_npu && npu_device == nullptr) {
+        header_print("ERROR", "No NPU device available"
+                                  << (npu_open_error.empty()
+                                          ? std::string()
+                                          : ": " + npu_open_error));
+    }
+
     // Extract parsed values
     bool got_power_mode = (parsed_args.power_mode != "performance"); // Check if user explicitly set power mode
     bool stable_stack = false;
@@ -602,11 +789,11 @@ int main(int argc, char* argv[]) {
         }
 
         if (parsed_args.command == "bench") {
-            benchmarking::BenchmarkResults_t results = benchmarking::run_benchmarks(parsed_args.model_tag, parsed_args.input_file_name, availble_models, parsed_args.iterations);
+            benchmarking::BenchmarkResults_t results = benchmarking::run_benchmarks(parsed_args.model_tag, parsed_args.input_file_name, availble_models, parsed_args.iterations, npu_device, parsed_args.backend);
         }
         else if (parsed_args.command == "run") {
             check_and_notify_new_version();
-            Runner runner(availble_models, downloader, parsed_args);
+            Runner runner(availble_models, downloader, parsed_args, npu_device);
             runner.run();
 
         } else if (parsed_args.command == "serve") {
@@ -619,7 +806,7 @@ int main(int argc, char* argv[]) {
             } else {
                 header_print("FLM", "Using user-specified port: " << port);
             }
-            auto server = create_lm_server(availble_models, downloader, parsed_args);
+            auto server = create_lm_server(availble_models, downloader, parsed_args, npu_device);
             server->set_max_connections(parsed_args.max_socket_connections);           // Allow up to 10 concurrent connections
             server->set_io_threads(10);          // Allow up to 5 io threads
             server->set_npu_queue_length(parsed_args.max_npu_queue);           // Allow up to 10 concurrent queue
@@ -705,7 +892,7 @@ int main(int argc, char* argv[]) {
             std::cerr << "Use --help for usage information" << std::endl;
             return 1;
         }
-        // Return 0 if the command is valid
+        // Return 0 if the command is valid; corelib_guard shuts corelib down.
         return 0;
     } catch (const std::exception& e) {
         // If an error occurs, this will be used to show the error

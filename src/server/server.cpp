@@ -156,19 +156,6 @@ int NPUAccessManager::get_active_npu_requests() {
     return g_npu_active_requests.load();
 }
 
-// Helper function to check if an endpoint requires NPU access
-bool requires_npu_access(const std::string& method, const std::string& path) {
-    // NPU-intensive endpoints that should be restricted to one user at a time
-    if (method == "POST") {
-        return path == "/api/generate" || 
-               path == "/api/chat" || 
-               path == "/v1/chat/completions" ||
-               path == "/v1/audio/transcriptions" ||
-               path == "/v1/embeddings";
-    }
-    return false;
-}
-
 ///@brief HttpSession class implementation
 ///@param socket the socket
 ///@param server the server
@@ -591,37 +578,15 @@ void WebServer::do_accept() {
 
 ///@brief process_next_npu_request Handles one queued NPU task at a time
 void WebServer::process_next_npu_request() {
-    {
-        std::lock_guard<std::mutex> lock(npu_queue_mutex_);
-    if (npu_request_queue_.empty()) {
-        NPUAccessManager::release_npu_access();
-        return; // Queue is empty, NPU is free
-    }
-    }
-
-    // NPU cooldown before running the next queued task.
-    constexpr auto npu_cooldown = std::chrono::milliseconds(333);
-    std::this_thread::sleep_for(npu_cooldown);
-
-    std::function<void()> task;
-    size_t remaining = 0;
-    {
-        std::lock_guard<std::mutex> lock(npu_queue_mutex_);
-        if (npu_request_queue_.empty()) {
-            NPUAccessManager::release_npu_access();
-            return;
-        }
-
-        task = npu_request_queue_.front();
-        npu_request_queue_.pop();
-        remaining = npu_request_queue_.size();
-    }
-
-    header_print("🟡 ", "Dequeuing NPU request (" + std::to_string(remaining) + " remaining)...");
-
-    // Post the task to be executed by the io_context
-    net::post(ioc, task);
- 
+    npu_request_coordinator_.complete_current(
+        [this](NPURequestCoordinator::Task task) {
+            const auto remaining = npu_request_coordinator_.size();
+            header_print("🟡 ", "Dequeuing NPU request (" +
+                std::to_string(remaining) + " remaining)...");
+            net::post(ioc, std::move(task));
+        },
+        [] { NPUAccessManager::release_npu_access(); },
+        std::chrono::milliseconds(333));
 }
 
 ///@brief handle request
@@ -684,6 +649,9 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
     auto process_task = [this, it, req_ptr, res_ptr, session, needs_npu, key, is_json](bool is_deferred) {
         auto& req_ref = *req_ptr;
         auto& res_ref = *res_ptr;
+        NPURequestCompletionGuard completion([this, needs_npu] {
+            if (needs_npu) process_next_npu_request();
+        });
 
         // Parse JSON request body
         json request_json;
@@ -704,10 +672,6 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
 
             // Only write from callback when deferred
             if (is_deferred && session) session->write_response_from_callback();
-
-            if (needs_npu) {
-                this->process_next_npu_request();
-            }
             return;
         }
 
@@ -737,10 +701,9 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
 
                 if (code == 400) {
                     status = http::status::bad_request;
+                } else if (code == 500) {
+                    status = http::status::internal_server_error;
                 }
-                //else if () {
-
-                //}
             }
 
             response_ref.result(status);
@@ -749,10 +712,6 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
             response_ref.prepare_payload();
             cancellation_token->complete();
             unregister_active_request(request_id);
-
-            if (needs_npu) {
-                this->process_next_npu_request();
-            }
 
             if (is_deferred && session) {
                 session->write_response_from_callback();
@@ -769,10 +728,6 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
             }
             if (is_final) {
                 unregister_active_request(request_id);
-
-                if (needs_npu) {
-                    this->process_next_npu_request();
-                }
             }
         };
 
@@ -788,10 +743,6 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
             res_ref.set(http::field::content_type, "application/json");
             res_ref.prepare_payload();
 
-            if (needs_npu) {
-                this->process_next_npu_request();
-            }
-
             if (is_deferred && session) {
                 session->write_response_from_callback();
             }
@@ -804,10 +755,6 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
             res_ref.body() = json{ {"error", "Unknown handler exception"} }.dump();
             res_ref.set(http::field::content_type, "application/json");
             res_ref.prepare_payload();
-
-            if (needs_npu) {
-                this->process_next_npu_request();
-            }
 
             if (is_deferred && session) {
                 session->write_response_from_callback();
@@ -831,28 +778,25 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
         return false;
     }
 
-    //const int NPU_QUEUE_LIMIT = 10;
-    std::lock_guard<std::mutex> lock(npu_queue_mutex_);
-
-    if (npu_request_queue_.size() >= max_npu_queue_) {
+    if (!npu_request_coordinator_.try_enqueue([this, process_task]() {
+            process_task(true);
+        })) {
         res.result(http::status::service_unavailable);
         res.body() = json{
-            {"error", "NPU is in use and request queue is full (limit: " + std::to_string(max_npu_queue_) + "). Please try again later."}
+            {"error", "NPU is in use and request queue is full (limit: " +
+                std::to_string(npu_request_coordinator_.capacity()) +
+                "). Please try again later."}
         }.dump();
         res.set(http::field::content_type, "application/json");
         res.prepare_payload();
         header_print("🚫 ", "NPU busy and queue full, request denied: " + key);
         return false;
     }
-    else {
-        // Create a new lambda to bind process_task(true)
-        npu_request_queue_.push([this, process_task]() {
-            process_task(true);
-            });
-        header_print("🕒 ", "NPU busy, request queued (" + std::to_string(npu_request_queue_.size()) + "/" + std::to_string(max_npu_queue_) + "): " + key);
 
-        return true;
-    }
+    header_print("🕒 ", "NPU busy, request queued (" +
+        std::to_string(npu_request_coordinator_.size()) + "/" +
+        std::to_string(npu_request_coordinator_.capacity()) + "): " + key);
+    return true;
 }
 
 ///@brief create lm server
@@ -861,9 +805,10 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
 ///@param default_tag the default tag
 ///@param port the port
 ///@return the server
-std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader& downloader, program_args_t& args) {
+std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader& downloader, program_args_t& args,
+                                            flm_rt::device* npu_device) {
     auto server = std::make_unique<WebServer>(args.host, args.port, args.cors);
-    auto rest_handler = std::make_shared<RestHandler>(models, downloader, args);
+    auto rest_handler = std::make_shared<RestHandler>(models, downloader, args, npu_device);
     
     // Register Ollama-compatible routes
     server->register_handler("POST", "/api/show",

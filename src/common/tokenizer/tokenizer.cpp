@@ -4,6 +4,7 @@
 /// \date 2025-06-24
 /// \version 0.9.10
 #include "tokenizer/tokenizer.hpp"
+#include "utils/file_access.hpp"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -15,6 +16,8 @@
 /// \brief Constructor
 /// \param model_path the model path
 Tokenizer::Tokenizer(const std::string& model_path) {
+    flm::file_access::ObserveOpen(
+        std::filesystem::path(model_path) / "tokenizer.json");
     #ifdef _WIN32
     std::ifstream fs(model_path + "\\tokenizer.json", std::ios::in | std::ios::binary);
     #else

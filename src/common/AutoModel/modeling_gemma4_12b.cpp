@@ -403,26 +403,19 @@ std::pair<std::string, json> parse_gemma4_12b_tool_content(std::string tool_cont
 /************              Gemma4_12B family            **************/
 Gemma4_12B::Gemma4_12B(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "Gemma4_12B") {}
 
-void Gemma4_12B::load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption) {
+void Gemma4_12B::load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption, const std::string& backend) {
 
-    this->_shared_load_model(model_path, model_info, default_context_length, enable_preemption);
+    this->_shared_load_backend(model_path, model_info, default_context_length, enable_preemption, backend);
 
-    this->q4nx = std::make_unique<Q4NX>(this->model_path);
-    this->lm_engine = std::make_unique<gemma4_12b_npu>(*this->lm_config, this->npu.get(), this->MAX_L);
-
-    this->lm_engine->load_weights(*this->q4nx);
-    // free the q4nx
-    this->q4nx.reset();
     // The soft token budget is a preprocessing constant (processor_config.json
     // image_seq_length / image_processor.max_soft_tokens), read by the engine
     // along with the rest of the image front end parameters.
     {
-        gemma4_12b_npu* engine = dynamic_cast<gemma4_12b_npu*>(this->lm_engine.get());
+        gemma4_12b_npu* engine = dynamic_cast<gemma4_12b_npu*>(this->lm_engine);
         if (engine != nullptr && engine->GEMMA4_12B_vision_max_soft_tokens > 0){
             this->image_softtoken_budget = (int)engine->GEMMA4_12B_vision_max_soft_tokens;
         }
     }
-    this->lm_engine->clear_context();
     this->setup_tokenizer(model_path);
     this->sampler.reset();
 
@@ -545,7 +538,7 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
         }
             // Process Audios
             if (message.contains("audios")) {
-                gemma4_12b_npu *gemma4e_engine = dynamic_cast<gemma4_12b_npu*>(this->lm_engine.get()); 
+                gemma4_12b_npu *gemma4e_engine = dynamic_cast<gemma4_12b_npu*>(this->lm_engine); 
                 for (auto& aud : message["audios"]) {
                     std::string audio_str = aud.get<std::string>();
                     audio_data_t audio_data = this->load_audio_base64(audio_str, gemma4e_engine->GEMMA4_12B_audio_sampling_rate, MonoDownmixMode::RMS);
@@ -597,7 +590,7 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
     else { // a pure text, usually from the cli
         // nlohmann::ordered_json messages;
         if(input.audios.size() > 0){
-            gemma4_12b_npu *gemma4e_engine = dynamic_cast<gemma4_12b_npu*>(this->lm_engine.get());  
+            gemma4_12b_npu *gemma4e_engine = dynamic_cast<gemma4_12b_npu*>(this->lm_engine);  
 
             for (int i = 0; i < input.audios.size(); i++) {
                 std::string audio_str = input.audios[i];
@@ -859,7 +852,7 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
 
     // hardware
     int restore_idx = -1;
-    gemma4_12b_npu *gemma4_12b_engine = dynamic_cast<gemma4_12b_npu*>(this->lm_engine.get());
+    gemma4_12b_npu *gemma4_12b_engine = dynamic_cast<gemma4_12b_npu*>(this->lm_engine);
 
     if (meta_info.restore_allowed) {
         restore_idx = gemma4_12b_engine->restore();
@@ -1009,7 +1002,7 @@ std::string Gemma4_12B::generate(chat_meta_info_t& meta_info, int length_limit, 
     return result;
 
     // if (!this->enable_think) {
-    //     gemma4_12b_npu *gemma4_12b_engine = dynamic_cast<gemma4_12b_npu*>(this->lm_engine.get());
+    //     gemma4_12b_npu *gemma4_12b_engine = dynamic_cast<gemma4_12b_npu*>(this->lm_engine);
     //     int checkpoint_idx = gemma4_12b_engine->checkpoint();
     //     // copy the token history at the checkpoint except the last one token, which is the start
     //     // token for generation and should not be included in the checkpoint history

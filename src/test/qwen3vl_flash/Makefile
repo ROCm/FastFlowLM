@@ -26,8 +26,8 @@ SOURCES += ../../common/image/image_reader.cpp
 SOURCES += ../../common/tokenizer/tokenizer.cpp
 SOURCES += ../../common/modules/sampler.cpp
 
-HEADERS += ../../include/models/qwen3vl_flash/qwen3vl_flash.hpp
-HEADERS += ../../include/models/qwen3vl/qwen3vl_npu.hpp
+HEADERS += ../../include/models/qwen3vl_flash/flm/aie2p/qwen3vl_flash.hpp
+HEADERS += ../../include/models/qwen3vl/flm/aie2p/qwen3vl_npu.hpp
 
 
 ifeq ($(WSL), 0)

@@ -47,8 +47,88 @@ extern std::mutex g_npu_access_mutex;
 extern std::atomic<bool> g_npu_in_use;
 extern std::atomic<int> g_npu_active_requests;
 
-// Helper function to check if an endpoint requires NPU access
-bool requires_npu_access(const std::string& method, const std::string& path);
+// Helper function to check if an endpoint requires serialized accelerator access.
+inline bool requires_npu_access(const std::string& method, const std::string& path) {
+    if (method != "POST") return false;
+    return path == "/api/generate" || path == "/api/chat" ||
+           path == "/v1/chat/completions" || path == "/v1/completions" ||
+           path == "/v1/audio/transcriptions" || path == "/v1/embeddings";
+}
+
+class NPURequestCoordinator final {
+public:
+    using Task = std::function<void()>;
+    using Scheduler = std::function<void(Task)>;
+
+    explicit NPURequestCoordinator(std::size_t capacity = 10)
+        : capacity_(capacity) {}
+    void set_capacity(std::size_t capacity) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        capacity_ = capacity;
+    }
+    bool try_enqueue(Task task) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (tasks_.size() >= capacity_) return false;
+        tasks_.push(std::move(task));
+        return true;
+    }
+    Task take_next() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (tasks_.empty()) return {};
+        auto task = std::move(tasks_.front());
+        tasks_.pop();
+        return task;
+    }
+    void complete_current(const Scheduler& schedule,
+                          const std::function<void()>& release,
+                          std::chrono::milliseconds cooldown) {
+        auto task = take_next();
+        if (!task) {
+            release();
+            return;
+        }
+        if (cooldown.count() > 0) std::this_thread::sleep_for(cooldown);
+        schedule(std::move(task));
+    }
+    bool empty() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return tasks_.empty();
+    }
+    std::size_t size() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return tasks_.size();
+    }
+    std::size_t capacity() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return capacity_;
+    }
+private:
+    mutable std::mutex mutex_;
+    std::queue<Task> tasks_;
+    std::size_t capacity_;
+};
+
+class NPURequestCompletionGuard final {
+public:
+    explicit NPURequestCompletionGuard(std::function<void()> completion)
+        : completion_(std::move(completion)) {}
+    NPURequestCompletionGuard(const NPURequestCompletionGuard&) = delete;
+    NPURequestCompletionGuard& operator=(const NPURequestCompletionGuard&) = delete;
+    NPURequestCompletionGuard(NPURequestCompletionGuard&& other) noexcept
+        : completion_(std::move(other.completion_)), active_(other.active_) {
+        other.active_ = false;
+    }
+    NPURequestCompletionGuard& operator=(NPURequestCompletionGuard&&) = delete;
+    ~NPURequestCompletionGuard() { complete(); }
+    void complete() noexcept {
+        if (!active_) return;
+        active_ = false;
+        try { if (completion_) completion_(); } catch (...) {}
+    }
+private:
+    std::function<void()> completion_;
+    bool active_ = true;
+};
 
 ///@brief get current time string, format: hh:mm:ss mm:dd:yyyy
 ///@return the current time string
@@ -116,7 +196,7 @@ public:
     void set_max_connections(size_t max_conns) { max_connections_ = max_conns; }
     void set_request_timeout(std::chrono::seconds timeout) { request_timeout_ = timeout; }
     void set_io_threads(size_t num_threads) { io_thread_count_ = num_threads; }
-    void set_npu_queue_length(size_t q_len) { max_npu_queue_ = q_len; }
+    void set_npu_queue_length(size_t q_len) { npu_request_coordinator_.set_capacity(q_len); }
     // Maximum accepted HTTP request body size (in bytes)
     void set_max_body_size_bytes(std::size_t bytes) { max_body_size_bytes_ = bytes; }
     std::size_t get_max_body_size_bytes() const { return max_body_size_bytes_; }
@@ -161,7 +241,6 @@ private:
     std::chrono::seconds request_timeout_ = std::chrono::seconds(600); // 5 minutes
     size_t io_thread_count_ = 5;
     std::size_t max_body_size_bytes_ = 256ull * 1024 * 1024; // 256 MB default
-    size_t max_npu_queue_ = 10;
 
     // Request tracking
     mutable std::mutex active_requests_mutex_;
@@ -170,8 +249,7 @@ private:
     // Connection tracking
     std::atomic<size_t> active_connections_{0};
     std::vector<std::thread> io_threads_;
-    std::queue<std::function<void()>> npu_request_queue_;
-    std::mutex npu_queue_mutex_;
+    NPURequestCoordinator npu_request_coordinator_;
     // Friend declaration for HttpSession to access private members
     friend class HttpSession;
 };
@@ -218,5 +296,6 @@ class model_list;
 ///@param default_tag the default tag
 ///@param port the port to listen on, default is 52625, same with the ollama server
 ///@return the server
-std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader& downloader, program_args_t& args);
+std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader& downloader, program_args_t& args,
+                                            flm_rt::device* npu_device);
 

@@ -42,6 +42,7 @@ inline void print_help(po::options_description& general) {
     std::cout << "\tflm pull llama3.2:1b --modelscope 1" << std::endl;
     std::cout << "\tflm check llama3.2:1b" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --ctx-len 8192" << std::endl;
+    std::cout << "\tflm run phi4-mini-it:4b --backend flm_npu" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --prefill-chunk-len 8192" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --socket 10" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --q-len 10" << std::endl;
@@ -92,6 +93,8 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
              "Output in JSON format (for list, validate, version commands)")
             ("ctx-len,c", po::value<int>(&parsed_args.ctx_length)->default_value(-1),
              "Set context length")
+            ("backend", po::value<std::string>(&parsed_args.backend)->default_value(""),
+             "Execution backend to run the model on (default: the model's own). Overrides FLM_BACKEND")
             ("prefill-chunk-len,pcl", po::value<int>(&parsed_args.prefill_chunk_len)->default_value(-1),
              "Set prefill chunk length")
             ("img-pre-resize,r", po::value<int>(&parsed_args.img_pre_resize)->default_value(2),

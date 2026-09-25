@@ -283,7 +283,7 @@ void Gemma4_12B::preprocess_image(
 {
 
     //std::cout << "hit preprocess_image, image size: " << image.width << "x" << image.height << ", pixel count: " << (image.width * image.height) << std::endl;
-    gemma4_12b_npu *lm_engine_gemma4e_ptr = reinterpret_cast<gemma4_12b_npu *>(this->lm_engine.get());
+    gemma4_12b_npu *lm_engine_gemma4e_ptr = reinterpret_cast<gemma4_12b_npu *>(this->lm_engine);
     int max_patches = this->image_softtoken_budget * lm_engine_gemma4e_ptr->GEMMA4_12B_vision_pooling_kernel_size * lm_engine_gemma4e_ptr->GEMMA4_12B_vision_pooling_kernel_size;
  
     // first, do_resize

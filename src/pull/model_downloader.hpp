@@ -14,6 +14,17 @@
 #include <vector>
 #include <string>
 #include <iostream>
+#include <string_view>
+
+struct ModelFileSource {
+    std::string url;
+    std::string revision;
+};
+
+ModelFileSource resolve_file_source(
+    const nlohmann::json& model_info,
+    std::string_view filename,
+    bool use_modelscope);
 
 class ModelDownloader {
 public:
@@ -59,7 +70,8 @@ private:
     std::string get_model_file_path(const std::string& model_path, const std::string& filename);
     
     // Build download URLs for model files
-    std::pair<nlohmann::json, float> build_download_list(const std::string& model_tag, bool modelscope=0);
+    std::pair<nlohmann::json, float> build_download_list(
+        const std::string& model_tag, bool modelscope=0, bool force_redownload=false);
 
     // bool check_model_compatibility(const std::string& model_tag);
     ModelStatus check_model_compatibility(const std::string& model_tag, bool sub_process_mode=0);

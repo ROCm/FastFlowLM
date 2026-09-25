@@ -6,7 +6,7 @@
 /// \note This is a source file for the Gemma_Embedding class
 
 #include "AutoEmbeddingModel/modeling_gemma_embedding.hpp"
-#include "models/gemma_embedding/gemma_embedding.hpp"
+#include "models/gemma_embedding/flm/aie2p/gemma_embedding.hpp"
 
 Gemma_Embedding::Gemma_Embedding(flm_rt::device* npu_device_inst) : AutoEmbeddingModel(npu_device_inst, "embed-gemma:300m") {
 }

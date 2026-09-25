@@ -6,7 +6,42 @@
 /// \note This is a source file for the auto_model class
 
 #include "AutoModel/automodel.hpp"
+#include "utils/npu_platform.hpp"
 
+namespace {
+
+/// \brief the context length a model should actually be loaded with
+/// \param model_info the catalog entry
+/// \param default_context_length the --ctx-len value, or -1 when not given
+/// \return the resolved length
+/// \note Single-turn models -- dedicated translation models, say -- do not
+///       support an arbitrary override, so they always get their own default.
+int resolve_context_length(const nlohmann::ordered_json& model_info,
+                           int default_context_length) {
+    if (default_context_length == -1) {
+        return model_info["default_context_length"].get<int>();
+    }
+    const bool single_turn =
+        model_info.contains("label") &&
+        std::find(model_info["label"].begin(), model_info["label"].end(),
+                  "single-turn") != model_info["label"].end();
+    if (single_turn) {
+        header_print("FLM", "Single-turn model, 1k max context length allowed only!");
+        return model_info["default_context_length"].get<int>();
+    }
+    return default_context_length;
+}
+
+}  // namespace
+
+
+ModelRequestError::ModelRequestError(
+    int http_code, bool session_cleared, std::string message)
+    : std::runtime_error(std::move(message)),
+      http_code_(http_code), session_cleared_(session_cleared) {}
+
+int ModelRequestError::http_code() const noexcept { return http_code_; }
+bool ModelRequestError::session_cleared() const noexcept { return session_cleared_; }
 
 AutoModel::AutoModel(flm_rt::device* npu_device_inst, std::string current_model) {
     this->npu_device_inst = npu_device_inst;
@@ -106,16 +141,23 @@ nlohmann::json AutoModel::_shared_setup_tokenizer(std::string model_path) {
         this->bos_token_id = -1;
     }
     this->eos_token = tokenizer_config["eos_token"].get<std::string>();
-    if (!tokenizer_config["eos_token_id"].is_array()) {
-        header_print("ERROR", "eos_token_id is missing or not an array in tokenizer_config.json");
-        exit(1);
-    }
-    for (auto& token : tokenizer_config["eos_token_id"]) {
-        if (!token.is_number_integer()) {
-            header_print("ERROR", "eos_token_id must be an array of integers in tokenizer_config.json");
+    // A backend that cross-validated its own package knows the stop ids better
+    // than tokenizer_config.json does.
+    if (const auto forced = this->backend_ ? this->backend_->forced_eos_ids()
+                                           : std::nullopt) {
+        this->eos_token_ids = *forced;
+    } else {
+        if (!tokenizer_config["eos_token_id"].is_array()) {
+            header_print("ERROR", "eos_token_id is missing or not an array in tokenizer_config.json");
             exit(1);
         }
-        this->eos_token_ids.push_back(token.get<int>());
+        for (auto& token : tokenizer_config["eos_token_id"]) {
+            if (!token.is_number_integer()) {
+                header_print("ERROR", "eos_token_id must be an array of integers in tokenizer_config.json");
+                exit(1);
+            }
+            this->eos_token_ids.push_back(token.get<int>());
+        }
     }
     this->user_system_prompt = "";
     this->extra_context["user_system_prompt"] = this->user_system_prompt;
@@ -128,44 +170,175 @@ void AutoModel::_shared_load_model(std::string model_path, json model_info, int 
         header_print("FLM", "Model already loaded: " << this->model_path);
         return;
     }
+    const int context_length =
+        resolve_context_length(model_info, default_context_length);
+    this->_shared_initialize_model_state(
+        std::move(model_path), std::move(model_info), context_length);
+    this->_shared_initialize_legacy_npu(enable_preemption);
+}
 
-    this->model_path = model_path;
+void AutoModel::_shared_initialize_model_state(
+    std::string model_path, json, int context_length) {
+    this->model_path = std::move(model_path);
     header_print("FLM", "Loading model: " << this->model_path);
     this->lm_config = std::make_unique<LM_Config>();
     this->lm_config->from_pretrained(this->model_path);
-    if (this->npu_device_inst == nullptr) {
-        header_print("ERROR", "NPU device instance is nullptr");
-        exit(1);
-    }
-    this->npu = std::make_unique<npu_xclbin_manager>(npu_device::device_npu2, this->npu_device_inst, enable_preemption);
-    this->enable_preemption = enable_preemption;
-    // Single-turn models (e.g. dedicated translation models) don't support arbitrary
-    // context length overrides, so always fall back to the model's own default.
-    bool single_turn = model_info.contains("label") &&
-        std::find(model_info["label"].begin(), model_info["label"].end(), "single-turn") != model_info["label"].end();
-    // Set context length: use provided value if not -1, otherwise use model default
-    if (default_context_length != -1 && single_turn) {
-        header_print("FLM", "Single-turn model, 1k max context length allowed only!");
-        this->MAX_L = model_info["default_context_length"];
-    }
-    else if (default_context_length != -1) {
-        this->MAX_L = default_context_length;
-    }
-    else {
-        this->MAX_L = model_info["default_context_length"];
-    }
-    
+    this->MAX_L = context_length;
     this->is_model_loaded = true;
-
     this->token_history.clear();
     this->token_history.reserve(this->MAX_L);
     this->tokenizer = std::make_unique<Tokenizer>(this->model_path);
-
     this->last_token = -1;
     this->total_tokens = 0;
 }
 
-bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled, void* payload, int first_len_run) {
+void AutoModel::_shared_load_backend(std::string model_path, json model_info,
+                                     int default_context_length,
+                                     bool enable_preemption,
+                                     const std::string& requested_backend,
+                                     const nlohmann::json* tokenizer_config) {
+    if (!model_info.contains("details") ||
+        !model_info["details"].contains("family")) {
+        throw std::runtime_error("Model entry has no details.family");
+    }
+    const std::string family = model_info["details"]["family"].get<std::string>();
+
+    auto& registry = flm::backend::BackendRegistry::instance();
+    std::string source;
+    // The entry carries the kernel flow its artifacts were built for -- the
+    // weights differ between flows, so this belongs to the model rather than
+    // to the build. model_list wrote it there from the tag the entry was
+    // found under; --backend and FLM_BACKEND still win over it.
+    const std::string catalog_backend = model_info.value(
+        flm::backend::kBackendKey, std::string(flm::backend::kFlmBackendId));
+    const std::string id = flm::backend::resolve_backend_id(
+        family, catalog_backend, requested_backend, &source);
+
+    // Same model on the same backend is a no-op; a different backend is a real
+    // reload even when the path has not changed.
+    if (this->is_model_loaded && this->model_path == model_path &&
+        this->backend_ && this->backend_->id() == id) {
+        header_print("FLM", "Model already loaded: " << this->model_path);
+        return;
+    }
+
+    const auto traits = registry.traits(family, id);
+    if (enable_preemption && !traits.supports_preemption) {
+        throw std::invalid_argument(
+            "Backend '" + id + "' does not support preemption");
+    }
+    const int context_length =
+        resolve_context_length(model_info, default_context_length);
+    if (traits.max_context_length != 0 &&
+        (context_length < 1 ||
+         static_cast<std::uint32_t>(context_length) > traits.max_context_length)) {
+        throw std::out_of_range(
+            "Backend '" + id + "' context length must be in 1.." +
+            std::to_string(traits.max_context_length));
+    }
+
+    // Tear the old model down before building the new one: the engines hold
+    // device memory, and a half-loaded model must never look loaded.
+    this->backend_.reset();
+    this->lm_engine = nullptr;
+    this->is_model_loaded = false;
+
+    try {
+        this->_shared_initialize_model_state(
+            std::move(model_path), model_info, context_length);
+        if (traits.needs_npu_xclbin) {
+            this->_shared_initialize_legacy_npu(enable_preemption);
+        } else {
+            this->npu.reset();
+            this->enable_preemption = false;
+        }
+
+        flm::backend::BackendContext context;
+        context.model_path = this->model_path;
+        context.model_info = model_info;
+        context.config = this->lm_config.get();
+        context.npu = this->npu.get();
+        context.device = this->npu_device_inst;
+        context.context_length = static_cast<std::uint32_t>(context_length);
+        context.enable_preemption = this->enable_preemption;
+        context.tokenizer_config = tokenizer_config;
+
+        this->backend_ = registry.create(family, id, context);
+        this->lm_engine = &this->backend_->engine();
+    } catch (...) {
+        this->backend_.reset();
+        this->lm_engine = nullptr;
+        this->tokenizer.reset();
+        this->sampler.reset();
+        this->lm_config.reset();
+        this->is_model_loaded = false;
+        throw;
+    }
+    header_print("FLM", "Backend: " << id << " (from " << source << ")");
+}
+
+void AutoModel::_shared_after_inference_failure(bool poisoned) {
+    this->total_tokens = 0;
+    this->last_token = -1;
+    this->token_history.clear();
+    this->checkpoint_his.clear();
+    // A poisoned engine cannot be driven at all, not even to clear itself.
+    if (!poisoned && this->lm_engine) {
+        try { this->lm_engine->clear_context(); } catch (...) {}
+    }
+    if (this->sampler) this->sampler->reset_penalties();
+    this->reset_parser();
+}
+
+void AutoModel::_shared_guard_poisoned() const {
+    if (this->backend_ && this->backend_->poisoned()) {
+        // Same condition as the throw in the frontend's inference-failure path,
+        // so it says the same thing: one poisoned model must not be described
+        // two ways depending on whether this is the request that broke it.
+        throw ModelRequestError(500, true,
+            "Backend '" + this->backend_->id() +
+            "' failed; unload/reload is required because the model is poisoned");
+    }
+}
+
+void AutoModel::_shared_initialize_legacy_npu(bool enable_preemption) {
+    if (this->npu_device_inst == nullptr) {
+        header_print("ERROR", "NPU device instance is nullptr");
+        exit(1);
+    }
+    this->npu = std::make_unique<npu_xclbin_manager>(
+        npu_device::device_npu2, this->npu_device_inst, enable_preemption);
+    this->enable_preemption = enable_preemption;
+}
+
+std::string AutoModel::generate_with_prompt(
+    chat_meta_info_t& meta_info,
+    lm_uniform_input_t& input,
+    int length_limit,
+    std::ostream& os,
+    std::function<bool()> is_cancelled) {
+    if (!insert(meta_info, input, is_cancelled)) return {};
+    return generate(meta_info, length_limit, os, std::move(is_cancelled));
+}
+
+void AutoModel::_shared_validate_capacity(std::size_t rendered_tokens,
+                                          std::optional<int> requested) const {
+    if (!this->backend_ || this->backend_->max_decode_length() == 0) return;
+    const std::size_t cap = this->decode_cap();
+    const auto normalized = normalize_requested_max_new_tokens(requested);
+    if (rendered_tokens >= cap ||
+        (normalized && static_cast<std::size_t>(*normalized) > cap - rendered_tokens)) {
+        std::ostringstream message;
+        message << "Request exceeds the " << cap
+                << "-token limit of backend '" << this->backend_->id()
+                << "': rendered prompt has " << rendered_tokens << " tokens";
+        if (normalized) message << " and requested output has " << *normalized << " tokens";
+        throw ModelRequestError(400, false, message.str());
+    }
+}
+
+bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled, void* payload, int first_len_run, std::optional<int> requested_max_new_tokens) {
+    this->_shared_validate_capacity(tokens.size(), requested_max_new_tokens);
 
     // print token history
     // header_print("DEBUG", "Current token history: ");
@@ -246,6 +419,14 @@ buffer<bf16> AutoModel::_chunked_insert(chat_meta_info_t& meta_info, std::vector
     }
     buffer<bf16> y;
     if (max_prefill_len < 512) {
+        if (is_cancelled()) {
+            meta_info.stop_reason = CANCEL_DETECTED;
+            buffer_.clear();
+            current_mode_ = StreamEventType::CONTENT;
+            tool_name_.clear();
+            is_in_tool_block_ = false;
+            return y;
+        }
         y = this->lm_engine->prefill(tokens, payload);
     }
     else{
@@ -257,22 +438,24 @@ buffer<bf16> AutoModel::_chunked_insert(chat_meta_info_t& meta_info, std::vector
         }
         int chunks = (tokens.size() + max_prefill_len - 1) / max_prefill_len;
         for (int i = 0; i < chunks; i++) {
+            int start = i * max_prefill_len;
+            int end = std::min(static_cast<int>(tokens.size()), (i + 1) * max_prefill_len);
+            std::vector<int> chunk_tokens(tokens.begin() + start, tokens.begin() + end);
+            header_print("FLM", "Prefill chunk " + std::to_string(i+1) + "/" + std::to_string(chunks) + " with " + std::to_string(chunk_tokens.size()) + " tokens");
             if (is_cancelled()) {
                 meta_info.stop_reason = CANCEL_DETECTED;
-                // reset stream content 
                 buffer_.clear();
                 current_mode_ = StreamEventType::CONTENT;
                 tool_name_.clear();
                 is_in_tool_block_ = false;
                 break;
             }
-            int start = i * max_prefill_len;
-            int end = std::min(static_cast<int>(tokens.size()), (i + 1) * max_prefill_len);
-            std::vector<int> chunk_tokens(tokens.begin() + start, tokens.begin() + end);
-            header_print("FLM", "Prefill chunk " + std::to_string(i+1) + "/" + std::to_string(chunks) + " with " + std::to_string(chunk_tokens.size()) + " tokens");
             buffer<bf16> chunk_y = this->lm_engine->prefill(chunk_tokens, (i == 0)? payload : nullptr);
             if (i == chunks - 1) {
-                y = chunk_y;
+                // Moved, not copied: buffer's copy is shallow and does not take
+                // ownership, so a copy of logits the engine owns (the rai
+                // engines return them that way) dangles once chunk_y goes.
+                y = std::move(chunk_y);
             }
         }
     }
@@ -314,16 +497,28 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
 
     }
     if (this->is_eos(last_sampled_token)){
+        meta_info.stop_reason = reason;
         return result;
     }
     this->profiler_list[DECODING_TIME].reset();
     this->profiler_list[TKOEN_DECODE_TIME].reset();
-    if (this->total_tokens >= this->MAX_L){
+    // Some backends refuse to decode past a limit of their own, below MAX_L.
+    const uint32_t decode_cap = this->decode_cap();
+    if (this->total_tokens >= decode_cap){
         header_print("WARNING", "Max length reached, stopping generation...");
         reason = MAX_LENGTH_REACHED;
+        meta_info.stop_reason = reason;
         return result;
     }
-    while (this->total_tokens < this->MAX_L){
+    while (true){
+        // Running out of window is a truncation, not the model choosing to
+        // stop, and the caller has to be able to tell those apart: this is
+        // what becomes `done_reason` over the API. Testing the cap here rather
+        // than in the loop condition is what records it.
+        if (this->total_tokens >= decode_cap){
+            reason = MAX_LENGTH_REACHED;
+            break;
+        }
         if (is_cancelled()) {
             reason = CANCEL_DETECTED;
             // reset stream content 
@@ -354,7 +549,12 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
         this->token_history.push_back(sampled_token);
         if (this->is_eos(sampled_token)){
             meta_info.generated_tokens++;
-            if (this->forward_on_eos) {
+            // The FastFlowLM engines want one more forward() to keep their KV
+            // cache in step. Two things can say no: a frontend whose cache is
+            // discarded anyway (forward_on_eos), and a backend that caps its
+            // own decode and would reject the call.
+            if (this->forward_on_eos &&
+                (!this->backend_ || this->backend_->forwards_past_eos())) {
                 this->lm_engine->forward(last_sampled_token);
             }
             break;
@@ -367,7 +567,7 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
     }
     meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
     meta_info.stop_reason = reason;
-    if (this->total_tokens >= this->MAX_L){
+    if (this->total_tokens >= decode_cap){
         header_print("WARNING", "Max length reached, stopping generation...");
     }
     if (this->log_raw_output) {
@@ -508,6 +708,12 @@ void AutoModel::clear_context() {
     this->last_token = -1;
     this->token_history.clear();
     this->checkpoint_his.clear();
+    // A poisoned engine would throw; drop the conversation and leave it alone
+    // so the caller can still reload.
+    if (this->backend_ && this->backend_->poisoned()) {
+        if (this->sampler) this->sampler->reset_penalties();
+        return;
+    }
     this->lm_engine->clear_context();
     this->total_tokens = 0;
     this->sampler->reset_penalties();
@@ -587,6 +793,14 @@ std::string AutoModel::show_profile() {
     // ss << "    Average token encoding speed: " << this->profiler_list[TKOEN_ENCODE_TIME].get_average_speed() << " tokens/s" << std::endl;
     // ss << "    Average token decoding speed: " << this->profiler_list[TKOEN_DECODE_TIME].get_average_speed() << " tokens/s" << std::endl;
     // ss << "    Average overall speed:        " << this->profiler_list[TOTAL_TIME].get_average_speed() << " tokens/s" << std::endl;
+
+    if (this->backend_) {
+        ss << "    Backend:             " << this->backend_->id() << std::endl;
+        const std::string detail = this->backend_->detail();
+        if (!detail.empty()) {
+            ss << "    Backend detail:      " << detail << std::endl;
+        }
+    }
 
     return ss.str();
 }
