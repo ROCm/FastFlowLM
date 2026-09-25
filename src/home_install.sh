@@ -267,14 +267,14 @@ elif [[ -f "$CACHE_FILE" ]] && grep -q '^FLM_ENABLE_RAI:BOOL=ON' "$CACHE_FILE"; 
     # returns -- no warning, no error.
     #
     # It only exists when DD was configured with DD_MDS_IN_BINS_DLL=ON, which
-    # moves every transaction/mds/*.elf -- i.e. the whole AIE4 kernel set -- out
+    # moves every transaction/mds/*.elf -- i.e. the whole AIE_NEXT kernel set -- out
     # of the static transaction lib and into this library. Skipping it leaves
-    # the AIE4 shape table empty, and the first matmul dies with
+    # the AIE_NEXT shape table empty, and the first matmul dies with
     #   Target Shape (K: 3072, N: 3072, Gs: 64) ... not supported in this
     #   supported shape list. Shape list size: 0
     # which reads like an unsupported model rather than a missing file.
     if [[ -n "$DD_CORE_DIR" && -f "$DD_CORE_DIR/libdyn_bins.so" ]]; then
-        echo "[home_install]   + libdyn_bins.so (dlopen'd AIE4 kernel package)"
+        echo "[home_install]   + libdyn_bins.so (dlopen'd AIE_NEXT kernel package)"
         install -m 0755 "$DD_CORE_DIR/libdyn_bins.so" "$RAI_LIB_DEST/"
     fi
 else
@@ -319,7 +319,7 @@ XRT_ROOT="$XRT_ROOT"
 #    that root only because the plugin directory exists -- and put the same
 #    directory on LD_LIBRARY_PATH so the linked-in libxrt_coreutil comes from
 #    that install too. Without the pin nothing reports a missing root: the NPU
-#    just comes up with no driver, corelib says "no AIE4 hw_context
+#    just comes up with no driver, corelib says "no AIE_NEXT hw_context
 #    (unordered_map::at)" and xrt::device(0) says "No such library
 #    .../libxrt_core.so.2".
 if [[ -f "\$XRT_DIR/setup.sh" ]]; then
