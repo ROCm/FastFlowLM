@@ -44,6 +44,7 @@ std::vector<int> g_encoded_tokens;
 std::vector<int> g_samples;
 std::vector<std::filesystem::path> g_opened_paths;
 std::size_t g_sample_index{};
+int g_unowned_samples{};
 
 class FakeEngine final : public causal_lm {
 public:
@@ -287,7 +288,11 @@ Sampler::Sampler(int features, sampler_config& config)
     logits.resize(1); counters.resize(1); token_positions.resize(1, -1);
 }
 void Sampler::reset_penalties() {}
-int Sampler::sample(buffer<bf16>&) {
+int Sampler::sample(buffer<bf16>& logits) {
+    // FakeEngine hands back logits it allocated, as the rai engines do. buffer's
+    // copy is shallow and non-owning, so a buffer that no longer owns them by the
+    // time they are sampled is reading memory its owner has already freed.
+    if (!logits.is_owner()) ++g_unowned_samples;
     if (g_sample_index < g_samples.size()) return g_samples[g_sample_index++];
     return 7;
 }
@@ -387,6 +392,24 @@ void TestDefaultBuildCanConstructAndRunLegacyPhi4WithoutCorelib() {
     (void)model->generate(meta, 1, output);
     TEST_REQUIRE(g_factory.legacy_calls == 1);
     TEST_REQUIRE(g_factory.rai_calls == 0);
+}
+
+void TestPrefillLogitsAreStillOwnedWhenSampled() {
+    TempPackage package;
+    FactoryScope scope;
+    auto model = Load(package, ModelInfo());
+    g_encoded_tokens = {1, 2, 3};
+    g_samples = {7};
+    g_sample_index = 0;
+    g_unowned_samples = 0;
+    auto meta = Meta();
+    // A prefill limit of 512 or more takes the chunked path, where the logits
+    // are handed out of the last chunk.
+    meta.max_prefill_len = 4096;
+    auto input = Input(1);
+    TEST_REQUIRE(model->insert(meta, input));
+    TEST_REQUIRE(g_factory.engine->prefill_calls == 1);
+    TEST_REQUIRE(g_unowned_samples == 0);
 }
 
 void TestEnabledBuildStartsAndRunsLegacyPhi4WhenCorelibDllIsMissing() {
@@ -864,6 +887,7 @@ int main() {
     RunTest(TestCancellationAndCapacityErrorsLeaveTheServerQueueUsable, "TestCancellationAndCapacityErrorsLeaveTheServerQueueUsable");
 #else
     RunTest(TestDefaultBuildCanConstructAndRunLegacyPhi4WithoutCorelib, "TestDefaultBuildCanConstructAndRunLegacyPhi4WithoutCorelib");
+    RunTest(TestPrefillLogitsAreStillOwnedWhenSampled, "TestPrefillLogitsAreStillOwnedWhenSampled");
     RunTest(TestFeatureOffRejectsRaiTagWithoutIncludingCorelibHeaders, "TestFeatureOffRejectsRaiTagWithoutIncludingCorelibHeaders");
 #endif
     std::cout << "test_phi4_frontend: PASS\n";
