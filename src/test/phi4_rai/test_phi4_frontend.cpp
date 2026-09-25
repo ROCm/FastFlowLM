@@ -480,7 +480,7 @@ void TestUnknownBackendIsAnError() {
     // engine is constructed.
     const auto message = RequireThrows(
         [&] { (void)Load(package, ModelInfo(), -1, false, nullptr, "other"); });
-    RequireContains(message, "not compiled into this build");
+    RequireContains(message, "is not available for model family 'phi4'");
     RequireContains(message, "other");
     TEST_REQUIRE(g_factory.legacy_calls == 0 && g_factory.rai_calls == 0);
 }
@@ -489,9 +489,11 @@ void TestFeatureOffRejectsRaiTagWithoutIncludingCorelibHeaders() {
 #if !defined(FLM_ENABLE_RAI)
     TempPackage package;
     FactoryScope scope;
-    RequireContains(RequireThrows([&] {
+    const auto message = RequireThrows([&] {
         (void)Load(package, ModelInfo(), -1, false, nullptr, kRai);
-    }), "not compiled into this build");
+    });
+    RequireContains(message, "is not available for model family 'phi4'");
+    RequireContains(message, "It provides: flm");
     TEST_REQUIRE(g_factory.legacy_calls == 0 && g_factory.rai_calls == 0);
 #endif
 }
