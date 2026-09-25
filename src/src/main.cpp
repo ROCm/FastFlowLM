@@ -610,9 +610,6 @@ int main(int argc, char* argv[]) {
     // backend is gone, the rest of the build is not.
     std::string corelib_note;
 
-
-    header_print("DEBUG", "RAI enabled!");
-
     try {
         const auto runtime =
             flm::corelib::CorelibRuntime::GetOrCreate(std::filesystem::path(exe_dir));
@@ -622,14 +619,9 @@ int main(int argc, char* argv[]) {
         // never completes. GetOrCreate holds the runtime process-wide, so the
         // device stays valid until RaiProcessGuard tears it down at exit.
         npu_device = flm::corelib::SharedDevice(*runtime);
-        if (npu_device == nullptr) {
+        if (npu_device == nullptr)
             npu_open_error =
                 "corelib started but reports no NPU device on this machine";
-            header_print("DEBUG", "corelib reports no NPU device on this machine");
-        }
-        else {
-            header_print("DEBUG", "got device from corelib");
-        }
     } catch (const std::exception& e) {
         // A box with no NPU must still run `flm list`/`pull`/`version`, so this
         // stays a null device rather than an error, as in the non-rai path.
