@@ -535,6 +535,7 @@ void TestValidationCreatesNoCorelibObjects() {
     for (const auto name : {"ryzenai_corelib_create_stream",
                             "ryzenai_corelib_create_device_tensor",
                             "ryzenai_corelib_create_tensor_window",
+                            "ryzenai_corelib_create_host_view",
                             "ryzenai_corelib_matmul_bf16_weights_create_gguf_requantized",
                             "ryzenai_corelib_ssmlp_bf16_weights_create_gguf_requantized"})
         TEST_REQUIRE(fake_corelib::GetState().call_counts[name] == 0);

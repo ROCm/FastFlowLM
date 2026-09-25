@@ -77,12 +77,24 @@ void TestEngineCreatesOneStreamAndPersistentHelperSizedTensors() {
     Harness h;
     const auto& state = fake_corelib::GetState();
     TEST_REQUIRE(state.call_counts.at("ryzenai_corelib_create_stream") == 1);
-    TEST_REQUIRE(state.tensor_creates.size() == 74);
+    TEST_REQUIRE(state.tensor_creates.size() == 72);
     TEST_REQUIRE(state.tensor_creates[0].shape == std::vector<std::int64_t>({4096, 3072}));
     TEST_REQUIRE(state.tensor_creates[3].shape == std::vector<std::int64_t>({4096, 3072}));
     TEST_REQUIRE(state.tensor_creates[4].shape == std::vector<std::int64_t>({4096, 1024}));
     TEST_REQUIRE(state.tensor_creates[6].shape == std::vector<std::int64_t>({1, 3072}));
     TEST_REQUIRE(state.tensor_creates[7].shape == std::vector<std::int64_t>({1, 200064}));
+}
+
+void TestRopeTablesAreHostViewsNotDeviceTensors() {
+    Harness h;
+    const auto& views = fake_corelib::GetState().host_view_creates;
+    TEST_REQUIRE(views.size() == 2);
+    for (const auto& view : views) {
+        TEST_REQUIRE(view.data_type == ryzenai_corelib_data_type_fp32);
+        TEST_REQUIRE(view.shape == std::vector<std::int64_t>({4096, 48}));
+    }
+    (void)h.engine->forward(1);
+    TEST_REQUIRE(!h.engine->poisoned());
 }
 
 void TestEngineAllocatesMaximaAcrossAllRowsAndConsumers() {
@@ -389,7 +401,7 @@ void TestPrefillDecodesEmbeddingRowsAndAdvancesPosition() {
     const auto logits = h.engine->prefill(ids);
     TEST_REQUIRE(logits.size() == 200064);
     TEST_REQUIRE(h.engine->get_current_context_length() == 3);
-    TEST_REQUIRE(fake_corelib::GetState().tensor_writes[2].source_type == ryzenai_corelib_data_type_fp32);
+    TEST_REQUIRE(fake_corelib::GetState().tensor_writes[0].source_type == ryzenai_corelib_data_type_fp32);
 }
 
 void TestDecodeUsesOneRowAndAdvancesPosition() {
@@ -608,9 +620,19 @@ void WriteCacheRow(Harness& h, std::size_t tensor_index, int position,
     }
 }
 
+/// \brief index of layer 0's K cache; its V cache is the next create
+std::size_t FirstCacheCreate() {
+    const auto& creates = fake_corelib::GetState().tensor_creates;
+    const auto found = std::find_if(creates.begin(), creates.end(), [](const auto& record) {
+        return record.shape == std::vector<std::int64_t>({8, 4096, 128});
+    });
+    TEST_REQUIRE(found != creates.end());
+    return static_cast<std::size_t>(found - creates.begin());
+}
+
 void TestGetKCacheGathersHeadMajorPosition() {
     Harness h;
-    WriteCacheRow(h, 10, 7, 100);
+    WriteCacheRow(h, FirstCacheCreate(), 7, 100);
     const auto result = h.engine->get_k_cache(0, 7);
     const auto* bits = reinterpret_cast<const std::uint16_t*>(result.data());
     for (std::size_t head = 0; head < 8; ++head)
@@ -620,7 +642,7 @@ void TestGetKCacheGathersHeadMajorPosition() {
 
 void TestGetVCacheGathersHeadMajorPosition() {
     Harness h;
-    WriteCacheRow(h, 11, 9, 200);
+    WriteCacheRow(h, FirstCacheCreate() + 1, 9, 200);
     const auto result = h.engine->get_v_cache(0, 9);
     const auto* bits = reinterpret_cast<const std::uint16_t*>(result.data());
     for (std::size_t head = 0; head < 8; ++head)
@@ -704,6 +726,7 @@ void TestTenSequentialLoadsReleaseEveryObjectAndNeverEmitAllZeroLogits() {
 int main() {
 #define RUN_TEST(name) RunTest(&name, #name)
     RUN_TEST(TestEngineCreatesOneStreamAndPersistentHelperSizedTensors);
+    RUN_TEST(TestRopeTablesAreHostViewsNotDeviceTensors);
     RUN_TEST(TestEngineAllocatesMaximaAcrossAllRowsAndConsumers);
     RUN_TEST(TestEngineCreatesExactly129MatmulAnd32SsmlpWeights);
     RUN_TEST(TestEveryProjectionUsesQ8RequantizedGroup64WithThreadHint);

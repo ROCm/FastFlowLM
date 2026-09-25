@@ -220,6 +220,23 @@ struct TypedFake<Tag, Result (*)(Args...)> {
                 state.tensor_windows.push_back({parent, object->shape, offset, object});
             }
             return status;
+        } else if constexpr (std::is_same_v<Tag, create_host_view_tag>) {
+            const auto status = Status(Tag::name);
+            const auto type = std::get<0>(arguments);
+            const auto* shape = std::get<1>(arguments);
+            const auto shape_len = std::get<2>(arguments);
+            const void* data = std::get<3>(arguments);
+            auto* out = std::get<4>(arguments);
+            if (out) *out = nullptr;
+            if (status == ryzenai_corelib_status_success && out && shape && data) {
+                auto* object = static_cast<FakeObject*>(NewObject("host_view"));
+                object->data_type = type;
+                object->shape.assign(shape, shape + shape_len);
+                object->byte_size = Elements(object->shape) * TypeBytes(type);
+                *out = object;
+                state.host_view_creates.push_back({type, object->shape, object});
+            }
+            return status;
         } else if constexpr (std::is_same_v<Tag, tensor_get_byte_size_tag>) {
             const auto status = Status(Tag::name);
             if (status == ryzenai_corelib_status_success && std::get<0>(arguments) && std::get<1>(arguments))
@@ -434,6 +451,16 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             }
             const auto status = Status(Tag::name);
             if (status != ryzenai_corelib_status_success) return status;
+            if constexpr (std::is_same_v<Tag, flat_mha_tag>) {
+                // Real corelib reads the rotary tables on the host and rejects
+                // anything but a host view for them.
+                for (void* table : {std::get<5>(arguments), std::get<6>(arguments)}) {
+                    if (!table || static_cast<FakeObject*>(table)->kind != "host_view") {
+                        state.detail = "handle is not a class RyzenAI::CoreLib::HostView";
+                        return ryzenai_corelib_status_bad_argument;
+                    }
+                }
+            }
             fake_corelib::DispatchRecord record{};
             record.thread_id = std::this_thread::get_id();
             record.kind = std::is_same_v<Tag, matmul_tag> ? "matmul" :
@@ -543,6 +570,7 @@ void Reset() {
     state.matmul_n_delta = 0;
     state.pad_row_overrides.clear();
     state.tensor_creates.clear();
+    state.host_view_creates.clear();
     state.tensor_windows.clear();
     state.weight_creates.clear();
     state.weight_from_file.clear();

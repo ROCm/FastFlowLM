@@ -126,6 +126,7 @@ struct State {
     std::unordered_map<std::string,
         std::unordered_map<std::int64_t, std::int64_t>> pad_row_overrides;
     std::vector<TensorCreateRecord> tensor_creates;
+    std::vector<TensorCreateRecord> host_view_creates;
     std::vector<TensorWindowRecord> tensor_windows;
     std::vector<WeightCreateRecord> weight_creates;
     std::vector<WeightFromFileRecord> weight_from_file;
