@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <fstream>
 #include <limits>
 #include <memory>
@@ -563,7 +564,10 @@ int main() {
     RUN(TestViewsPointIntoTheReadOnlyMapping);
     RUN(TestAcceptsExactPhi3Phi4Contract);
     RUN(TestRejectsWrongArchitectureAndEveryDimension);
-    RUN(TestRejectsMissingWrongTypeWrongShapeAndWrongLengthForEveryTensorRole);
+    // Opt-in: it writes four full-size (~4 GB) fixtures for every tensor role,
+    // with up to five alive at once, which a shared build box cannot absorb.
+    if (std::getenv("FLM_PHI4_GGUF_EVERY_ROLE"))
+        RUN(TestRejectsMissingWrongTypeWrongShapeAndWrongLengthForEveryTensorRole);
     RUN(TestRejectsMixedQuantizationAndOutputWeightPresence);
     RUN(TestRequiresTiedQ8TokenEmbeddingAsLmHead);
     RUN(TestRequiresOriginal4096WindowAndValidatesLongRopeFactors);
