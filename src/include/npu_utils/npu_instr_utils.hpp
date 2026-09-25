@@ -143,6 +143,18 @@ class npu_sequence{
         ///@note The function will read the npu sequence from the file and parse it
         ///@note If the file is not found, the function will throw an error
         ///@warning If the from_file is false, the function will not check if the filename is valid, and the npu sequence is empty
+        ///@brief Take the npu sequence from words already in memory.
+        ///@param words the sequence, one uint32_t per instruction word
+        ///@note For a sequence a generator produces per dispatch, where
+        ///      writing it to a file first would be the only other option.
+        void from_vector(const std::vector<uint32_t>& words){
+            this->npu_seq = words;
+            // Without these dump() would rebuild npu_seq from the (empty) cmds
+            // list, and the app would keep the kernel it already built.
+            this->is_valid = true;
+            this->instr_version++;
+        }
+
         void from_file(std::string filename, bool is_binary = true){
             std::ifstream instr_file(filename, std::ios::binary);
             if (!instr_file.is_open()){
