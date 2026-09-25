@@ -1,11 +1,5 @@
 # Builds the Gemma4e engine from source, in place of the prebuilt
 # lib/<backend>/libgemma4e_npu.so that ships for every other model.
-#
-# The engine does not compile against ../include. It carries its own generation
-# of the runtime headers under detail/include, which is what the prebuilt
-# engines were built against: ../include lacks weight_desc.hpp entirely and its
-# npu_utils.hpp and buffer.hpp differ by several hundred lines. Putting
-# detail/include first keeps this target on one consistent set.
 
 set(GEMMA4E_ENGINE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 
@@ -22,7 +16,7 @@ list(APPEND GEMMA4E_SHARED_SOURCES "${GEMMA4E_ENGINE_DIR}/vision_common/norm.cpp
 add_library(gemma4e_npu SHARED ${GEMMA4E_SOURCES} ${GEMMA4E_SHARED_SOURCES})
 
 target_include_directories(gemma4e_npu BEFORE PRIVATE
-    "${GEMMA4E_ENGINE_DIR}/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../include"
 )
 if(NOT WIN32)
     target_include_directories(gemma4e_npu PRIVATE /opt/xilinx/xrt/include)
