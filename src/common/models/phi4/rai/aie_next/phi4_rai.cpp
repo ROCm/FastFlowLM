@@ -90,7 +90,16 @@ struct phi4_rai::Impl {
     std::array<UniqueMatMulWeights, kLayerCount> q_weights, k_weights, v_weights, o_weights;
     std::array<UniqueSsMlpWeights, kLayerCount> mlp_weights;
     UniqueMatMulWeights lm_weights;
-    UniqueTensor hidden, residual, skip, q, k, attention, lm_input, logits, cosine, sine;
+    UniqueTensor hidden, residual, skip, q, k, attention, lm_input, logits;
+    /// \brief the rotary tables, kept for the life of the engine
+    /// \note The host views below borrow these bytes rather than copying them,
+    ///       so this must outlive them. Declared first on purpose: members are
+    ///       destroyed in reverse declaration order.
+    RopeTables rope;
+    /// \note flat_mha reads the rotary tables on the host to build the table
+    ///       the kernel binds; they never reach the device. corelib takes them
+    ///       as host views and rejects a device tensor in these slots.
+    UniqueHostView cosine, sine;
     std::array<UniqueTensor, kLayerCount> k_cache, v_cache;
     TensorView embedding;
     FloatTensorView first_norm_scale;
@@ -125,7 +134,7 @@ struct phi4_rai::Impl {
         std::optional<FloatTensorView> factors;
         try { factors=package->RequireF32("rope_factors_short.weight",std::array<std::int64_t,1>{48}); }
         catch (const std::runtime_error&) {}
-        auto rope=BuildShortRopeTables(package->Metadata(),factors);
+        rope=BuildShortRopeTables(package->Metadata(),factors);
         auto final_bf=ConvertF32ToBf16(final_norm.values);
         std::array<std::vector<std::uint16_t>,kLayerCount> an_bf,fn_bf;
         for(std::size_t i=0;i<kLayerCount;++i){an_bf[i]=ConvertF32ToBf16(an[i].values);fn_bf[i]=ConvertF32ToBf16(fn[i].values);}
@@ -239,11 +248,14 @@ struct phi4_rai::Impl {
         attention=tensor(ryzenai_corelib_data_type_bf16,{attention_rows,kQueryDimension},"attention");
         lm_input=tensor(ryzenai_corelib_data_type_bf16,{1,kHiddenSize},"lm input");
         logits=tensor(ryzenai_corelib_data_type_bf16,{1,kVocabularySize},"logits");
-        cosine=tensor(ryzenai_corelib_data_type_fp32,{kMaxSequenceLength,48},"cosine");
-        sine=tensor(ryzenai_corelib_data_type_fp32,{kMaxSequenceLength,48},"sine");
         for(std::size_t i=0;i<kLayerCount;++i){k_cache[i]=tensor(ryzenai_corelib_data_type_bf16,{8,4096,128},"K cache");v_cache[i]=tensor(ryzenai_corelib_data_type_bf16,{8,4096,128},"V cache");}
-        api->Check(api->functions().tensor_write(cosine.get(),ryzenai_corelib_data_type_fp32,rope.cosine.data(),rope.cosine.size(),0),"ryzenai_corelib_tensor_write cosine");
-        api->Check(api->functions().tensor_write(sine.get(),ryzenai_corelib_data_type_fp32,rope.sine.data(),rope.sine.size(),0),"ryzenai_corelib_tensor_write sine");
+        auto host_view=[&](const std::vector<float>& values,const char* label){
+            std::array<std::int64_t,2> shape{kMaxSequenceLength,48};void* p=nullptr;
+            api->Check(api->functions().create_host_view(ryzenai_corelib_data_type_fp32,shape.data(),shape.size(),values.data(),&p),std::string("ryzenai_corelib_create_host_view ")+label);
+            return UniqueHostView(api,p);
+        };
+        cosine=host_view(rope.cosine,"cosine");
+        sine=host_view(rope.sine,"sine");
         phases.device_tensors = phases.Lap();
         phases.Report();
     }
@@ -439,7 +451,8 @@ struct phi4_rai::Impl {
                 api->Check(api->functions().matmul(stream.get(),hidden_kv.get(),v_weights[i].get(),win.get()),"ryzenai_corelib_matmul_bf16 value layer "+std::to_string(i));
                 api->Check(api->functions().flat_mha(stream.get(),&plan.attention_desc(),q_mha.get(),k_mha.get(),position,cosine.get(),sine.get(),k_cache[i].get(),v_cache[i].get(),attention_mha.get()),"ryzenai_corelib_flat_mha_bf16 layer "+std::to_string(i));
                 api->Check(api->functions().matmul(stream.get(),attention_mm.get(),o_weights[i].get(),hidden_out.get()),"ryzenai_corelib_matmul_bf16 output layer "+std::to_string(i));
-                api->Check(api->functions().ssmlp(stream.get(),hidden_mlp.get(),res,mlp_weights[i].get(),sk,hidden_mlp.get()),"ryzenai_corelib_ssmlp_bf16 layer "+std::to_string(i));std::swap(res,sk);
+                api->Check(api->functions().ssmlp(stream.get(),hidden_mlp.get(),res,mlp_weights[i].get(),sk,hidden_mlp.get()),"ryzenai_corelib_ssmlp_bf16 layer "+std::to_string(i));
+                std::swap(res,sk);
             }
             api->Check(api->functions().stream_synchronize(stream.get()),"ryzenai_corelib_stream_synchronize hidden");
             std::vector<std::uint16_t> row(kHiddenSize);api->Check(api->functions().tensor_read(hidden.get(),ryzenai_corelib_data_type_bf16,row.data(),row.size(),(ids.size()-1)*kHiddenSize),"ryzenai_corelib_tensor_read final hidden row");

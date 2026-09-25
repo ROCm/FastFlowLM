@@ -28,6 +28,7 @@
     X(stream_synchronize, ryzenai_corelib_stream_synchronize)                      \
     X(create_device_tensor, ryzenai_corelib_create_device_tensor)                  \
     X(create_tensor_window, ryzenai_corelib_create_tensor_window)                  \
+    X(create_host_view, ryzenai_corelib_create_host_view)                          \
     X(tensor_write, ryzenai_corelib_tensor_write)                                  \
     X(tensor_read, ryzenai_corelib_tensor_read)                                    \
     X(tensor_get_byte_size, ryzenai_corelib_tensor_get_byte_size)                  \

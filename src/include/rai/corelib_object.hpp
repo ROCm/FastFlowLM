@@ -12,6 +12,7 @@ struct TensorTag {};
 struct TensorWindowTag {};
 struct MatMulWeightsTag {};
 struct SsMlpWeightsTag {};
+struct HostViewTag {};
 
 template <typename Tag>
 class UniqueObject final {
@@ -58,5 +59,8 @@ using UniqueTensor = UniqueObject<TensorTag>;
 using UniqueTensorWindow = UniqueObject<TensorWindowTag>;
 using UniqueMatMulWeights = UniqueObject<MatMulWeightsTag>;
 using UniqueSsMlpWeights = UniqueObject<SsMlpWeightsTag>;
+/// \note A host view borrows the caller's bytes and never copies them, so
+///       whatever owns those bytes must outlive the view.
+using UniqueHostView = UniqueObject<HostViewTag>;
 
 }  // namespace flm::corelib
