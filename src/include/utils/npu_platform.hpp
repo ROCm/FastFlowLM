@@ -43,7 +43,13 @@ constexpr std::string_view platform_id(npu_platform platform) {
 ///       offers nothing here. That is not a broken install, it is an install
 ///       for silicon none of its models were built for, and model_list says so
 ///       in one line. Set this back to aie2p to get those 42 models back.
-constexpr npu_platform default_npu_platform() { return npu_platform::aie_next; }
+constexpr npu_platform default_npu_platform() { 
+#if defined(FLM_ENABLE_RAI)
+    return npu_platform::aie_next; 
+#else
+    return npu_platform::aie2p; 
+#endif
+}
 
 /// \brief ask the machine which NPU generation it has
 /// \return the generation of the NPU in this host
