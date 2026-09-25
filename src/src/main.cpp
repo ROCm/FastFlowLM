@@ -216,6 +216,38 @@ std::string identify_npu_arch() {
 
 static bool sanity_check_npu_stack(bool quiet, bool json_output = false) {
     bool print_human = !quiet && !json_output;
+#ifdef FLM_ENABLE_RAI
+    // Everything below reads the NPU's geometry and this process's memlock
+    // limit from the driver and holds them against what FastFlowLM's own kernel
+    // flow needs. A corelib build does not use that flow. corelib owns device
+    // setup and brings the NPU up itself -- main() already reports whether that
+    // worked, and says why when it did not -- so these checks answer a question
+    // this build does not ask, against a threshold that describes FastFlowLM's
+    // own kernels rather than the parts corelib supports. Left in, they fail a
+    // working rai install on hardware corelib runs on perfectly well.
+    //
+    // The JSON keeps the shape callers already parse, but reports the checks as
+    // skipped rather than claiming they passed: "ready" here means "this build
+    // does not gate on the stock stack". A caller that wants to know whether the
+    // NPU actually came up should look at whether flm opened a device.
+    if (json_output) {
+        nlohmann::json validation_json = {
+            {"object", "npu_stack_validation"},
+#ifdef _WIN32
+            {"platform", "windows"},
+#else
+            {"platform", "linux"},
+#endif
+            {"backend", "rai"},
+            {"checks_skipped", true},
+            {"ready", true}
+        };
+        std::cout << validation_json.dump(4) << std::endl;
+    } else if (print_human) {
+        header_print("FLM", "corelib backend: skipping NPU stack checks (corelib owns device setup)");
+    }
+    return true;
+#else
 #ifndef _WIN32
     nlohmann::json validation_json = {
         {"object", "npu_stack_validation"},
@@ -457,6 +489,7 @@ static bool sanity_check_npu_stack(bool quiet, bool json_output = false) {
     }
     return true;
 #endif
+#endif // FLM_ENABLE_RAI
 }
 
 
@@ -609,7 +642,7 @@ int main(int argc, char* argv[]) {
         // family is served by the flm backend, which opens its own device and
         // never touches corelib -- so opening one directly keeps those models
         // working instead of failing the whole process over a backend they do
-        // not use. On a box whose NPU has no creatable AIE4 hw_context this is
+        // not use. On a box whose NPU has no creatable AIE_NEXT hw_context this is
         // the difference between "rai is unavailable" and "flm has no NPU".
         //
         // This does not bring back the two-device bug, where a buffer created
