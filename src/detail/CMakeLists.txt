@@ -40,8 +40,8 @@ if(NOT MSVC)
         -mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma
         -ffast-math
     )
-    # The Makefile builds with -march=native. It bakes the build host's ISA into
-    # the library, so a redistributable build has to turn it off.
+    # -march=native bakes the build host's ISA into the library, which a package
+    # then carries onto machines that fault on it. The internal Makefile uses it.
     if(FLM_ENGINE_NATIVE_ARCH)
         target_compile_options(gemma4e_npu PRIVATE -march=native)
     endif()
@@ -79,6 +79,12 @@ else()
     else()
         target_link_libraries(gemma4e_npu PRIVATE aiebu)
     endif()
+endif()
+
+if(WIN32)
+    # MSVC resolves every symbol when it links a DLL. q4nx and mha stay prebuilt,
+    # so name them; their import libs sit in FLM_ENGINE_LIB_DIR.
+    target_link_libraries(gemma4e_npu PRIVATE q4_npu_eXpress mha)
 endif()
 
 if(NOT WIN32)

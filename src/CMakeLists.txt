@@ -63,7 +63,7 @@ set(FLM_ENGINE_LIB_DIR "${CMAKE_SOURCE_DIR}/lib/${FLM_RUNTIME_NAME}")
 
 # Gemma4e is the one engine built from source here; the rest stay prebuilt.
 option(FLM_BUILD_GEMMA4E "Build the Gemma4e engine from src/detail instead of using the prebuilt" ON)
-option(FLM_ENGINE_NATIVE_ARCH "Build the from-source engine with -march=native" ON)
+option(FLM_ENGINE_NATIVE_ARCH "Build the from-source engine with -march=native (host-specific, not redistributable)" OFF)
 set(FLM_ENGINE_VERBOSE 0 CACHE STRING "VERBOSE level for the from-source engine")
 set(FLM_ENGINE_DEBUG_LEVEL 0 CACHE STRING "DEBUG_LEVEL for the from-source engine")
 set(FLM_OVERRIDE_FLAGS "" CACHE STRING "Extra compile flags for the from-source engine (see include/flm_override.hpp)")
