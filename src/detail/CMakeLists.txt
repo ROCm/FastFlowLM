@@ -64,12 +64,6 @@ else()
     else()
         target_link_libraries(gemma4e_npu PRIVATE xrt_coreutil aiebu_static)
     endif()
-    # The HRX path links no Boost: no engine source uses it there.
-    find_package(Boost CONFIG REQUIRED COMPONENTS program_options filesystem)
-    target_link_libraries(gemma4e_npu PRIVATE
-        Boost::program_options
-        Boost::filesystem
-    )
 endif()
 
 if(NOT WIN32)
