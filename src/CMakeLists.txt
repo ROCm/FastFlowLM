@@ -61,6 +61,13 @@ endif()
 # and HRX-built .so/.dll/.lib never collide (see src/lib/xrt and src/lib/hrx).
 set(FLM_ENGINE_LIB_DIR "${CMAKE_SOURCE_DIR}/lib/${FLM_RUNTIME_NAME}")
 
+# Gemma4e is the one engine built from source here; the rest stay prebuilt.
+option(FLM_BUILD_GEMMA4E "Build the Gemma4e engine from src/detail instead of using the prebuilt" ON)
+option(FLM_ENGINE_NATIVE_ARCH "Build the from-source engine with -march=native" ON)
+set(FLM_ENGINE_VERBOSE 0 CACHE STRING "VERBOSE level for the from-source engine")
+set(FLM_ENGINE_DEBUG_LEVEL 0 CACHE STRING "DEBUG_LEVEL for the from-source engine")
+set(FLM_OVERRIDE_FLAGS "" CACHE STRING "Extra compile flags for the from-source engine (see include/flm_override.hpp)")
+
 # ———————————————————————————————————————————————
 # NPU runtime discovery.
 #   HRX: consumed from its public CMake package via find_package(hrx).
@@ -403,6 +410,12 @@ if(MSVC)
     target_link_libraries(flm PUBLIC ${STATIC_LIBS})
 endif()
 
+# Defines the gemma4e_npu target, which the link list below then resolves to
+# instead of the prebuilt of the same name.
+if(FLM_BUILD_GEMMA4E)
+    add_subdirectory(detail)
+endif()
+
 # Link your custom libraries (these may still be DLLs if no static versions available)
 target_link_libraries(flm PUBLIC
     q4_npu_eXpress
@@ -469,6 +482,17 @@ else()
         set_target_properties(flm PROPERTIES
             BUILD_RPATH "${FLM_ENGINE_LIB_DIR}")
     endif()
+endif()
+
+# The source-built engine sits in the build tree rather than lib/<backend>, and
+# has to precede it: a prebuilt of the same name is still sitting there.
+if(FLM_BUILD_GEMMA4E AND NOT WIN32)
+    get_target_property(_flm_build_rpath flm BUILD_RPATH)
+    if(NOT _flm_build_rpath)
+        set(_flm_build_rpath "")
+    endif()
+    set_target_properties(flm PROPERTIES
+        BUILD_RPATH "${CMAKE_BINARY_DIR}/engines;${_flm_build_rpath}")
 endif()
 
 if(WIN32 AND VCPKG_TOOLCHAIN)
@@ -627,7 +651,15 @@ else()
     endif()
 
     file(GLOB so_libs "${FLM_ENGINE_LIB_DIR}/*.so*")
-    install(FILES ${so_libs} DESTINATION "${FLM_ENGINE_LIB_DESTINATION}")
+    # Installed from the glob unless a source build supersedes one of them. The
+    # name still has to reach _flm_engine_names below, so filter a copy.
+    set(_flm_prebuilt_libs ${so_libs})
+    if(FLM_BUILD_GEMMA4E)
+        list(FILTER _flm_prebuilt_libs EXCLUDE REGEX "/libgemma4e_npu\\.so[^/]*$")
+        set_target_properties(gemma4e_npu PROPERTIES INSTALL_RPATH "${FLM_ENGINE_INSTALL_RPATH}")
+        install(TARGETS gemma4e_npu LIBRARY DESTINATION "${FLM_ENGINE_LIB_DESTINATION}")
+    endif()
+    install(FILES ${_flm_prebuilt_libs} DESTINATION "${FLM_ENGINE_LIB_DESTINATION}")
     set_target_properties(flm PROPERTIES INSTALL_RPATH "${FLM_FLM_INSTALL_RPATH}")
 
     # Engine .so file names, used below to keep them out of the flm dependency

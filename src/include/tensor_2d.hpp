@@ -18,6 +18,8 @@ private:
     uint32_t offset;
     std::vector<buffer<T>> temp;
 public:
+    tensor_2d() : D(0), offset(0) {buf = nullptr;}
+
     /// \brief constructor
     /// \param D the dimension of the tensor
     /// \param offset the offset of the tensor
@@ -32,6 +34,14 @@ public:
 
     /// \brief assign the buffer to the tensor_2d
     /// \param buf the buffer to assign
+    /// \brief assign the buffer, setting its row width and offset
+    /// \param buf the buffer to assign
+    void assign(buffer<T> &buf, uint32_t D, uint32_t offset = 0){
+        this->D = D;
+        this->offset = offset;
+        assign(buf);
+    }
+
     void assign(buffer<T> &buf){
         this->buf = &buf;
         temp.resize(buf.size() / D);

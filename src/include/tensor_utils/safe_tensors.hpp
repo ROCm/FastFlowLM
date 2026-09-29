@@ -2,7 +2,7 @@
 /// \brief SafeTensors class
 /// \author FastFlowLM Team
 /// \date 2025-06-24
-/// \version 0.9.24
+/// \version 0.9.10
 /// \note This class is used to load weights from a safe-tensors file.
 #pragma once
 
@@ -54,6 +54,20 @@ public:
     /// \param weights_name the weights name
     /// \return the weights name
     std::string load_weights(bytes& weight_buffer, std::string weights_name);
+
+    /// \brief Load the weights with offset
+    /// \param weight_buffer the weight buffer
+    /// \param weights_name the weights name
+    /// \param byte_offset the byte offset in the weight buffer
+    /// \return the weights name
+    std::string load_weights(bytes& weight_buffer, std::string weights_name, size_t byte_offset);
+
+    /// \brief Check whether a tensor is present in the file
+    /// \param tensor_name the tensor name
+    /// \return true if the tensor exists
+    /// \note get_tensor_metadata exits on a missing tensor, so use this to probe
+    ///       for optional weights.
+    bool has_tensor(std::string tensor_name);
 
     /// \brief Get the tensor metadata
     /// \param tensor_name the tensor name

@@ -16,6 +16,8 @@
 #ifdef _WIN32
 #include <windows.h>
 #endif
+// bf16 has to be constructible from float for the engine sources.
+#define BIOVAULT_BFLOAT16_CONVERTING_CONSTRUCTORS
 #include "biovault_bfloat16.h"
 
 typedef float f32;

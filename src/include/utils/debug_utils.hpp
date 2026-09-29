@@ -125,6 +125,9 @@
         std::cerr << "\033[31m[" << header << "]  " << oss.str() << "\033[0m" << std::endl; \
     } while (0)
 
+/// \brief Compile out a block unless DEBUG_LEVEL selects it.
+#define DEBUG_BLOCK(level, operations) if (level <= DEBUG_LEVEL) { operations }
+
     
 /// \brief header_print_g macro, in green color
 /// \param header the header of the message
