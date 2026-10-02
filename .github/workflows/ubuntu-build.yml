@@ -1,4 +1,4 @@
-name: Build Packages
+name: Build Deb Packages
 
 on:
   push:

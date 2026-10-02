@@ -33,10 +33,20 @@ SOURCES += ../../common/modules/sampler.cpp
 HEADERS += ../../include/gemma4e/gemma4e_npu_sequence.hpp
 HEADERS += ../../include/gemma4e/gemma4e_npu.hpp
 
+# Test task selection; text mode is default
+# 0: text
+# 1: images
+# 2: audios
+# 3: omni (image + audio)
+# 4: long prompt from prompt.txt (prefill only)
+TYPE ?= 1
+
 
 ifeq ($(WSL), 0)
 
 LDFLAGS += -lgemma4e_npu
+# modeling_gemma4e.cpp serves both wrappers, so both engines must be linked.
+LDFLAGS += -lgemma4e_flash
 LDFLAGS += -lavformat -lavcodec -lavutil -lswscale -lswresample
 LDFLAGS += -lfftw3f
 
@@ -61,7 +71,7 @@ clean:
 
 test: $(BUILD_DIR)/test_gemma4e_npu
 	cp ../../model_list.json $(BUILD_DIR)/model_list.json
-	cd $(BUILD_DIR) && export LD_LIBRARY_PATH=../../../lib && ./test_gemma4e_npu --model gemma4-it:e2b -s 1
+	cd $(BUILD_DIR) && export LD_LIBRARY_PATH=../../../lib && ./test_gemma4e_npu --model gemma4-it:e4b --type $(TYPE)
 
 -include $(DEPS)
 .PHONY: all clean test
@@ -87,7 +97,7 @@ clean:
 
 test: directories $(BUILD_DIR)/test_gemma4e_npu.exe
 	cp ../../model_list.json $(BUILD_DIR)/model_list.json
-	cd $(BUILD_DIR) && ${PWSH} -Command "\$$env:PATH = '..\..\..\lib;' + \$$env:PATH; .\test_gemma4e_npu.exe -m gemma4-it:e2b -s 1 -p 0"
+	cd $(BUILD_DIR) && ${PWSH} -Command "\$$env:PATH = '..\..\..\lib;' + \$$env:PATH; .\test_gemma4e_npu.exe -m gemma4-it:e2b -t $(TYPE) -p 0"
 
 .PHONY: all clean test directories
 

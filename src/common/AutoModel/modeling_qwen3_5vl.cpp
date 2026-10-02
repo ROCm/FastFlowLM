@@ -342,6 +342,8 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
         this->profiler_list[DECODING_TIME].stop(1);
         token_str = this->tokenizer->run_time_decoder(198);
         result += token_str;
+        // First token of the reasoning block.
+        this->_apply_tool_choice_mask(y, meta_info);
         sampled_token = this->sampler->sample(y);
         os << token_str << std::flush;
     }
@@ -368,6 +370,9 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
         buffer<bf16> y = this->lm_engine->forward(271);
         this->profiler_list[DECODING_TIME].stop(1);
         token_str = this->tokenizer->run_time_decoder(271);
+        // First real token after the forced empty think block -- the model would
+        // open a tool call right here, so it needs the mask too.
+        this->_apply_tool_choice_mask(y, meta_info);
         sampled_token = this->sampler->sample(y);
     }
     this->total_tokens++;
@@ -397,6 +402,9 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
         this->profiler_list[DECODING_TIME].stop(1);
 
         this->profiler_list[SAMPLING_TIME].start();
+        // Qwen3_5VL runs its own decode loop instead of _shared_generate, so the
+        // tool_choice mask has to be applied here as well as in _shared_insert.
+        this->_apply_tool_choice_mask(y, meta_info);
         int sampled_token = this->sampler->sample(y);
         this->profiler_list[SAMPLING_TIME].stop(1);
         this->total_tokens++;

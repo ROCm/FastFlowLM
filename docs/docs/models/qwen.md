@@ -175,6 +175,10 @@ The `-r` option determines the image's height:
 - 2: height = 720 px (default)
 - 3: height = 1080 px
 - 4: height = 1440 px 
+- 5: height = 2160 px 
+- 6: height = 2880 px 
+- 7: height = 3240 px 
+- 8: height = 4320 px 
                  
 > Don't worry—if your image is already smaller than the setup, it keeps its original resolution! ✨
 
@@ -182,6 +186,35 @@ The `-r` option determines the image's height:
 
 - Image understanding adapts to image size. Image TTFT can range from under 1 second to ~200 seconds depending on resolution. Use lower-resolution images (720p or below) unless high resolution is required (e.g. OCR on small text).
 - Video understanding is not supported yet.
+
+---
+
+## 🧩 Model Card: [Qwen3-VL-4B-Instruct — Flash](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct)
+
+- **Type:** Image-Text-to-Text
+- **Think:** No
+- **Tool Calling Support:** No  
+- **Base Model:** [Qwen/Qwen3-VL-4B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct)
+- **Quantization:** Q4_1
+- **Max Context Length:** 1k tokens  
+- **Default Context Length:** 1k tokens (fixed, see note below)
+
+▶️ Run with FastFlowLM in PowerShell:  
+
+```shell
+flm run qwen3vl-flash:4b
+```
+
+⚡ **Note — what "Flash" changes:**
+
+- Same checkpoint as `qwen3vl-it:4b`, served by a different engine. Prefill runs on a single fused NPU overlay instead of swapping between the matmul and attention overlays every layer, which cuts time-to-first-token on short prompts.
+- **Prefill speed: ~350 tokens/s** at a 128-token prompt — the short-prompt case Flash is tuned for.
+- **Decode speed is unchanged.** Flash only changes how prefill runs, so generation tokens/s matches `qwen3vl-it:4b` — see the [Qwen3 benchmarks](https://fastflowlm.com/docs/benchmarks/qwen3_results/).
+- **Single-turn.** Every request starts from a clean KV state — earlier turns are not carried over. A system prompt is the one exception: it is pinned on first use and reused on later requests, so it is not re-prefilled on every call.
+- **Context length is fixed at 1k tokens.** Context-length overrides are ignored for this model.
+- **Tool calling is not supported.** Any tools passed with the request are dropped.
+- **Images are always downscaled to a 256 px longer side** to fit the short context. The `--img-pre-resize` / `-r` option is ignored. Images already smaller than 256 px keep their original resolution.
+- **Example usage:** [Flash models in server mode](https://fastflowlm.com/docs/instructions/server/openapi/#-example-flash-models-single-turn-pinned-system-prompt)
 
 ---
 
@@ -240,6 +273,10 @@ The `-r` option determines the image's height:
 - 2: height = 720 px (default)
 - 3: height = 1080 px
 - 4: height = 1440 px 
+- 5: height = 2160 px 
+- 6: height = 2880 px 
+- 7: height = 3240 px 
+- 8: height = 4320 px 
                  
 > Don't worry—if your image is already smaller than the setup, it keeps its original resolution! ✨
 
@@ -286,6 +323,10 @@ The `-r` option determines the image's height:
 - 2: height = 720 px (default)
 - 3: height = 1080 px
 - 4: height = 1440 px 
+- 5: height = 2160 px 
+- 6: height = 2880 px 
+- 7: height = 3240 px 
+- 8: height = 4320 px 
                  
 > Don't worry—if your image is already smaller than the setup, it keeps its original resolution! ✨
 
@@ -333,6 +374,10 @@ The `-r` option determines the image's height:
 - 2: height = 720 px (default)
 - 3: height = 1080 px
 - 4: height = 1440 px 
+- 5: height = 2160 px 
+- 6: height = 2880 px 
+- 7: height = 3240 px 
+- 8: height = 4320 px 
                  
 > Don't worry—if your image is already smaller than the setup, it keeps its original resolution! ✨
 
@@ -380,6 +425,10 @@ The `-r` option determines the image's height:
 - 2: height = 720 px (default)
 - 3: height = 1080 px
 - 4: height = 1440 px 
+- 5: height = 2160 px 
+- 6: height = 2880 px 
+- 7: height = 3240 px 
+- 8: height = 4320 px 
                  
 > Don't worry—if your image is already smaller than the setup, it keeps its original resolution! ✨
 
@@ -427,6 +476,10 @@ The `-r` option determines the image's height:
 - 2: height = 720 px (default)
 - 3: height = 1080 px 
 - 4: height = 1440 px 
+- 5: height = 2160 px 
+- 6: height = 2880 px 
+- 7: height = 3240 px 
+- 8: height = 4320 px 
                  
 > Don't worry—if your image is already smaller than the setup, it keeps its original resolution! ✨
 
@@ -474,11 +527,88 @@ The `-r` option determines the image's height:
 - 2: height = 720 px (default)
 - 3: height = 1080 px 
 - 4: height = 1440 px 
+- 5: height = 2160 px 
+- 6: height = 2880 px 
+- 7: height = 3240 px 
+- 8: height = 4320 px 
                  
 > Don't worry—if your image is already smaller than the setup, it keeps its original resolution! ✨
 
 📝 **Note**
 
 - Optimal sampling parameters for generation vary depending on the task. Check the [Qwen3.6-35B-A3B model card](https://huggingface.co/Qwen/Qwen3.6-35B-A3B#using-qwen36-via-the-chat-completions-api) for details.
+- Image understanding adapts to image size. Image TTFT can range from under 1 second to ~200 seconds depending on resolution. Use lower-resolution images (720p or below) unless high resolution is required (e.g. OCR on small text).
+- Video understanding is not supported yet.
+
+---
+
+## 🧩 Model Card: [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B)
+
+- **Type:** Image-Text-to-Text
+- **Think:** Yes
+- **Tool Calling Support:** Yes  
+- **Speculative Decoding:** Yes — built-in MTP draft head (see note below)
+- **Base Model:** [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B)
+- **Quantization:** Q4_K
+- **Max Context Length:** 8k tokens  
+- **Default Context Length:** 4k tokens ([change default](https://fastflowlm.com/docs/instructions/cli/#-change-default-context-length-max))  
+- **[Set Context Length at Launch](https://fastflowlm.com/docs/instructions/cli/#-set-context-length-at-launch)**
+
+
+▶️ Run with FastFlowLM in PowerShell:  
+
+```shell
+flm run qwen3.8-mtp:27b
+```
+
+▶️ Serve with FastFlowLM in PowerShell:  
+
+```shell
+flm serve qwen3.8-mtp:27b
+```
+
+▶️ Image Resize Options
+
+You can control image resizing when running or serving the model using the `--img-pre-resize` flag or simply `-r`:
+
+```shell
+flm run qwen3.8-mtp:27b -r 1
+```
+
+```shell
+flm serve qwen3.8-mtp:27b -r 1
+```
+
+The `-r` option determines the image's height:
+
+- 0: original size 
+- 1: height = 480 px 
+- 2: height = 720 px (default)
+- 3: height = 1080 px 
+- 4: height = 1440 px 
+- 5: height = 2160 px 
+- 6: height = 2880 px 
+- 7: height = 3240 px 
+- 8: height = 4320 px 
+                 
+> Don't worry—if your image is already smaller than the setup, it keeps its original resolution! ✨
+
+⚡ **Note — MTP speculative decoding:**
+
+Qwen3.8 ships with a **multi-token prediction (MTP) head** — a small draft model trained alongside the main network. FastFlowLM runs it on the NPU:
+
+1. The MTP head **drafts** several candidate tokens in one shot.
+2. The full model **verifies** them in a single pass.
+3. Accepted drafts are kept; the first rejected one is replaced by the base model's own choice, and drafting restarts from there.
+
+What that means in practice:
+
+- **Faster decoding, same output.** Verification is an exact compare against what the base model would have emitted, so every token you receive is a token the base model would have produced on its own. Speculation changes throughput, not quality.
+- **Gains are prompt-dependent.** Predictable, low-entropy stretches — code, structured output, long reasoning chains — see the highest draft acceptance. Highly creative or surprising text accepts fewer drafts and converges toward ordinary decode speed.
+- **Nothing to configure.** Speculation is driven by the engine; there is no flag to set and no API change.
+
+📝 **Note:**
+
+- Optimal sampling parameters for generation vary depending on the task. Check the [Qwen3.8-27B model card](https://huggingface.co/Qwen/Qwen3.8-27B#api-usage) for details.
 - Image understanding adapts to image size. Image TTFT can range from under 1 second to ~200 seconds depending on resolution. Use lower-resolution images (720p or below) unless high resolution is required (e.g. OCR on small text).
 - Video understanding is not supported yet.

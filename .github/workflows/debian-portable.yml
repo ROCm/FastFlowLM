@@ -1,4 +1,4 @@
-name: Portable
+name: Build Linux Portable
 
 on:
   push:
@@ -94,6 +94,119 @@ jobs:
       with:
         name: portable
         path: fastflowlm_${{ steps.get_version.outputs.version }}_linux.tar.gz
+        retention-days: 7
+        if-no-files-found: error
+
+    - name: Collect FFmpeg logs
+      if: always()
+      shell: bash
+      run: |
+        set -euxo pipefail
+        OUT="${RUNNER_TEMP}/ffmpeg-logs"
+        mkdir -p "${OUT}"
+        find "${GITHUB_WORKSPACE}" -type f \
+          \( -name "configure.log" -o -name "build.log" -o -name "config.log" \) \
+          -path "*/ffmpeg-build/*" \
+          -print \
+          -exec cp --parents {} "${OUT}" \; || true
+
+    - name: Upload FFmpeg logs artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ffmpeg-logs-${{ github.job }}-run${{ github.run_number }}-attempt${{ github.run_attempt }}
+        path: ${{ runner.temp }}/ffmpeg-logs
+        if-no-files-found: warn
+        retention-days: 14
+
+  build-HRX-portable:
+    # Temporarily disabled.
+    if: false
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - distro: "debian"
+            version: "13"
+
+    container:
+      image: ghcr.io/rocm/fastflowlm/build-environment:${{ matrix.distro }}${{ matrix.version }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        fetch-depth: 0
+
+    - name: Configure git safe directory
+      run: git config --global --add safe.directory $(pwd)
+
+    - name: Get version from git describe
+      id: get_version
+      run: |
+        VERSION=$(git describe --tags --always | sed 's/^v//')
+        echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+    - name: Upgrade Rust toolchain
+      run: |
+        apt-get update
+        apt-get install -y uuid-dev nasm patchelf zstd
+        apt-get install -y --no-install-recommends curl ca-certificates
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+          sh -s -- -y --profile minimal --default-toolchain stable
+        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+    - name: Fetch pinned HRX release
+      id: hrx
+      run: ./hrx-integration/fetch-hrx-release.sh
+
+    - name: Build FLM HRX portable distribution
+      run: |
+        cd src
+        cmake --preset linux-portable \
+          -DFLM_USE_HRX=ON \
+          -DCMAKE_PREFIX_PATH="${{ steps.hrx.outputs.prefix }}"
+        cmake --build build -j$(nproc)
+
+    - name: Create installation package
+      run: |
+        cd src/build
+        DESTDIR=$PWD/install cmake --install .
+
+        # Rename binary and wrapper for portable layout
+        mv install/opt/fastflowlm/flm install/opt/fastflowlm/flm-real
+        mv install/opt/fastflowlm/flm-wrapper.sh install/opt/fastflowlm/flm
+        chmod +x install/opt/fastflowlm/flm
+
+        # Strip debug symbols to reduce binary size (111MB → 33MB)
+        # --strip-debug removes debug info while keeping stack trace capability
+        strip --strip-debug install/opt/fastflowlm/flm-real
+
+    - name: Create portable tarball
+      env:
+        VERSION: ${{ steps.get_version.outputs.version }}
+      run: |
+        cd src/build/install/opt/fastflowlm
+        tar czf $GITHUB_WORKSPACE/HRX_fastflowlm_${VERSION}_linux.tar.gz \
+          flm \
+          flm-real \
+          lib/ \
+          xclbins/ \
+          model_list.json \
+          model_info.json
+        echo "Created tarball with symlinks preserved"
+        # This build selects the HRX backend, so confirm libhrx is bundled.
+        tar tzf $GITHUB_WORKSPACE/HRX_fastflowlm_${VERSION}_linux.tar.gz | grep libhrx
+
+    - name: Upload portable build artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: HRX-portable
+        path: HRX_fastflowlm_${{ steps.get_version.outputs.version }}_linux.tar.gz
         retention-days: 7
         if-no-files-found: error
 

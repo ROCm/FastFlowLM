@@ -551,7 +551,12 @@ bool Qwen3_5_Omni::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input
 
     auto prefill_end = this->profiler_list[PREFILL_TIME].stop(tokens.size());
     meta_info.prefill_duration = (uint64_t)time_utils::duration_ns(prefill_start, prefill_end).first;
-    meta_info.prompt_tokens = tokens.size(); 
+    // As in AutoModel::_shared_insert, `tokens` holds only the uncached suffix, so
+    // the cached prefix is added back to report the whole prompt. The relevant count
+    // is `skip_count`, which is what was erased from `tokens` above -- not the earlier
+    // `prefix_skip_count`, which only trims the multi-modal payload.
+    meta_info.cached_prompt_tokens = static_cast<int>(skip_count);
+    meta_info.prompt_tokens = static_cast<int>(skip_count + tokens.size());
 
     this->total_tokens += tokens.size();
 

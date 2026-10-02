@@ -20,8 +20,10 @@
 #include "modeling_qwen3_5vl.hpp"
 #include "modeling_qwen3_5_omni.hpp"
 #include "modeling_qwen3_6_moe.hpp"
+#include "modeling_qwen3_8mtp.hpp"
 #include "modeling_nanbeige.hpp"
 #include "modeling_gemma4e.hpp"
+#include "modeling_hunyuan.hpp"
 #include "modeling_gemma4_12b.hpp"
 #include "model_list.hpp"
 #include "nlohmann/json.hpp"
@@ -36,18 +38,22 @@ typedef enum {
     qwen3_it,
     qwen3_tk,
     qwen3vl,
+    qwen3vl_flash,
     qwen3_5,
     qwen3_5_omni,
     qwen3_6_moe,
+    qwen3_8mtp,
     gemma3,
     gemma3_text,
     gemma4e,
+    gemma4e_flash,
     gemma4_12b,
     gpt_oss,
     lfm2,
     lfm2_5_tk,
     phi4,
     nanbeige,
+    hunyuan,
     error_whiper,
     error_embedding
 } SupportedModelFamily;
@@ -64,12 +70,15 @@ inline std::pair<std::string, std::unique_ptr<AutoModel>> get_auto_model(const s
         {"qwen3-it", SupportedModelFamily::qwen3_it},
         {"qwen3-tk", SupportedModelFamily::qwen3_tk},
         {"qwen3vl", SupportedModelFamily::qwen3vl},
+        {"qwen3vl-flash", SupportedModelFamily::qwen3vl_flash},
         {"qwen3.5", SupportedModelFamily::qwen3_5},
         {"qwen3.5-omni", SupportedModelFamily::qwen3_5_omni},
         {"qwen3.6-moe", SupportedModelFamily::qwen3_6_moe},
+        {"qwen3.8-mtp", SupportedModelFamily::qwen3_8mtp},
         {"gemma3", SupportedModelFamily::gemma3},
         {"gemma3-text", SupportedModelFamily::gemma3_text},
         {"gemma4e", SupportedModelFamily::gemma4e},
+        {"gemma4e-flash", SupportedModelFamily::gemma4e_flash},
         {"gemma4-12b", SupportedModelFamily::gemma4_12b},
         {"gpt-oss", SupportedModelFamily::gpt_oss},
         {"lfm2", SupportedModelFamily::lfm2},
@@ -77,6 +86,7 @@ inline std::pair<std::string, std::unique_ptr<AutoModel>> get_auto_model(const s
         {"qwen2vl", SupportedModelFamily::qwen2vl},
         {"phi4", SupportedModelFamily::phi4},
         {"nanbeige", SupportedModelFamily::nanbeige},
+        {"hunyuan", SupportedModelFamily::hunyuan},
         {"whisper-v3", SupportedModelFamily::error_whiper},
         {"embed-gemma", SupportedModelFamily::error_embedding}
     };
@@ -124,6 +134,9 @@ inline std::pair<std::string, std::unique_ptr<AutoModel>> get_auto_model(const s
         case SupportedModelFamily::gemma4e:
             auto_chat_engine = std::make_unique<Gemma4e>(npu_device_inst);
             break;
+        case SupportedModelFamily::gemma4e_flash:
+            auto_chat_engine = std::make_unique<Gemma4e_Flash>(npu_device_inst);
+            break;
         case SupportedModelFamily::gemma4_12b:
             auto_chat_engine = std::make_unique<Gemma4_12B>(npu_device_inst);
             break;
@@ -132,6 +145,9 @@ inline std::pair<std::string, std::unique_ptr<AutoModel>> get_auto_model(const s
             break;
         case SupportedModelFamily::qwen3vl:
             auto_chat_engine = std::make_unique<Qwen3VL>(npu_device_inst);
+            break;
+        case SupportedModelFamily::qwen3vl_flash:
+            auto_chat_engine = std::make_unique<Qwen3VL_Flash>(npu_device_inst);
             break;
         case SupportedModelFamily::qwen3_5:
             auto_chat_engine = std::make_unique<Qwen3_5VL>(npu_device_inst);
@@ -142,6 +158,9 @@ inline std::pair<std::string, std::unique_ptr<AutoModel>> get_auto_model(const s
         case SupportedModelFamily::qwen3_6_moe:
             auto_chat_engine = std::make_unique<Qwen3_6_MOE>(npu_device_inst);
             break;
+        case SupportedModelFamily::qwen3_8mtp:
+            auto_chat_engine = std::make_unique<Qwen3_8MTP>(npu_device_inst);
+            break;
         case SupportedModelFamily::lfm2:
             auto_chat_engine = std::make_unique<LFM2>(npu_device_inst);
             break;
@@ -150,6 +169,9 @@ inline std::pair<std::string, std::unique_ptr<AutoModel>> get_auto_model(const s
             break;
         case SupportedModelFamily::nanbeige:
             auto_chat_engine = std::make_unique<Nanbeige>(npu_device_inst);
+            break;
+        case SupportedModelFamily::hunyuan:
+            auto_chat_engine = std::make_unique<Hunyuan>(npu_device_inst);
             break;
         case SupportedModelFamily::phi4:
             auto_chat_engine = std::make_unique<Phi4>(npu_device_inst);

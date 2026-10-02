@@ -124,6 +124,8 @@ docs_nav:
         url: "/docs/models/embeddinggemma/"
       - label: SmolVLA
         url: "/docs/models/smolvla/"
+      - label: Hy-MT2
+        url: "/docs/models/hy-mt2/"
   - label: Benchmarks
     children:
       - label: Overview
@@ -142,6 +144,8 @@ docs_nav:
         url: "/docs/benchmarks/qwen3.5_results/"
       - label: Qwen3.6
         url: "/docs/benchmarks/qwen3.6_results/"
+      - label: Qwen3.8
+        url: "/docs/benchmarks/qwen3.8_results/"
       - label: gpt-oss
         url: "/docs/benchmarks/gpt-oss_results/"
       - label: LiquidAI/LFM2
@@ -152,3 +156,5 @@ docs_nav:
         url: "/docs/benchmarks/nanbeige4.1_results/"
       - label: SmolVLA
         url: "/docs/benchmarks/smolvla_results/"
+      - label: Hy-MT2
+        url: "/docs/benchmarks/hy-mt2_results/"

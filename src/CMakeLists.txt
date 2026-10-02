@@ -61,6 +61,10 @@ endif()
 # and HRX-built .so/.dll/.lib never collide (see src/lib/xrt and src/lib/hrx).
 set(FLM_ENGINE_LIB_DIR "${CMAKE_SOURCE_DIR}/lib/${FLM_RUNTIME_NAME}")
 
+# The flash engine libs (qwen3vl_flash, gemma4e_flash) are always shipped in
+# src/lib/${FLM_RUNTIME_NAME} for every backend, so their model families are
+# always compiled in -- no probe/gate/macro needed.
+
 # ———————————————————————————————————————————————
 # NPU runtime discovery.
 #   HRX: consumed from its public CMake package via find_package(hrx).
@@ -403,20 +407,30 @@ if(MSVC)
     target_link_libraries(flm PUBLIC ${STATIC_LIBS})
 endif()
 
-# Link your custom libraries (these may still be DLLs if no static versions available)
-target_link_libraries(flm PUBLIC
+set(FLM_ENGINE_LINK_LIBS
     q4_npu_eXpress
     llama_npu
     qwen2_npu
     qwen2vl_npu
     qwen3_npu
     qwen3vl_npu
+)
+
+list(APPEND FLM_ENGINE_LINK_LIBS qwen3vl_flash)
+
+list(APPEND FLM_ENGINE_LINK_LIBS
     qwen3_5vl_npu
     qwen3_5_omni_npu
     qwen3_6_moe_npu
+    qwen3_8mtp_npu
     gemma_npu
     gemma_text_npu
     gemma4e_npu
+)
+
+list(APPEND FLM_ENGINE_LINK_LIBS gemma4e_flash)
+
+list(APPEND FLM_ENGINE_LINK_LIBS
     gemma4_12b_npu
     gpt_oss_npu
     whisper_npu
@@ -424,10 +438,24 @@ target_link_libraries(flm PUBLIC
     lfm2_npu
     phi4_npu
     nanbeige_npu
+    hunyuan_npu
+)
+
+# Link your custom libraries (these may still be DLLs if no static versions available)
+target_link_libraries(flm PUBLIC
+    ${FLM_ENGINE_LINK_LIBS}
+    # flm's own code calls nothing in the four shared-runtime libs below -- the
+    # engine .so above do -- so the linker's default --as-needed drops them from
+    # DT_NEEDED entirely. The engines then have to find MHA/Dequant/... in some
+    # other engine that happened to compile a copy of them, whichever one comes
+    # first in DT_NEEDED. That silently ran a stale MHA for every model until the
+    # copy's owner was rebuilt. Keep the real libraries in the link map.
+    $<$<NOT:$<BOOL:${WIN32}>>:-Wl,--no-as-needed>
     dequant
     gemm
     lm_head
     mha
+    $<$<NOT:$<BOOL:${WIN32}>>:-Wl,--as-needed>
 )
 
 # Link the selected NPU runtime after the detail model libraries above so their
@@ -637,21 +665,28 @@ else()
     # LD_LIBRARY_PATH, and for the .deb XRT is an external dependency resolved
     # from the system.
     if(FLM_USE_HRX)
-        find_program(PATCHELF_EXECUTABLE patchelf REQUIRED)
-        install(CODE "
-            set(_flm_engine_names \"${_flm_engine_names}\")
-            foreach(_flm_name \${_flm_engine_names})
-                set(_flm_lib \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${FLM_ENGINE_LIB_DESTINATION}/\${_flm_name}\")
-                if(EXISTS \"\${_flm_lib}\" AND NOT IS_SYMLINK \"\${_flm_lib}\")
-                    execute_process(
-                        COMMAND \"${PATCHELF_EXECUTABLE}\" --set-rpath \"${FLM_ENGINE_INSTALL_RPATH}\" \"\${_flm_lib}\"
-                        RESULT_VARIABLE _flm_patchelf_rc)
-                    if(NOT _flm_patchelf_rc EQUAL 0)
-                        message(FATAL_ERROR \"patchelf --set-rpath failed for \${_flm_lib}\")
+        # Not REQUIRED at configure time: patchelf is only needed to install an HRX
+        # build, so demanding it up front would block a plain `cmake --build`.
+        find_program(PATCHELF_EXECUTABLE patchelf)
+        if(PATCHELF_EXECUTABLE)
+            install(CODE "
+                set(_flm_engine_names \"${_flm_engine_names}\")
+                foreach(_flm_name \${_flm_engine_names})
+                    set(_flm_lib \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${FLM_ENGINE_LIB_DESTINATION}/\${_flm_name}\")
+                    if(EXISTS \"\${_flm_lib}\" AND NOT IS_SYMLINK \"\${_flm_lib}\")
+                        execute_process(
+                            COMMAND \"${PATCHELF_EXECUTABLE}\" --set-rpath \"${FLM_ENGINE_INSTALL_RPATH}\" \"\${_flm_lib}\"
+                            RESULT_VARIABLE _flm_patchelf_rc)
+                        if(NOT _flm_patchelf_rc EQUAL 0)
+                            message(FATAL_ERROR \"patchelf --set-rpath failed for \${_flm_lib}\")
+                        endif()
                     endif()
-                endif()
-            endforeach()
-        ")
+                endforeach()
+            ")
+        else()
+            message(WARNING "patchelf not found: this HRX build can be compiled but not installed. Install patchelf and re-run CMake configure before `cmake --install`.")
+            install(CODE "message(FATAL_ERROR \"patchelf not found at configure time; it is required to install an HRX build. Install patchelf and re-run CMake configure.\")")
+        endif()
     endif()
 
     # Portable build ships a small wrapper as `flm`; the packaging step renames the

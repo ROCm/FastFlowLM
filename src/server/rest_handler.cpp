@@ -386,6 +386,7 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag) {
         }
         std::pair<std::string, std::unique_ptr<AutoModel>> auto_model = get_auto_model(ensure_tag, this->supported_models, &this->npu_device_inst);
         auto_chat_engine = std::move(auto_model.second);
+        auto_chat_engine->set_server_mode(true);
         ensure_tag = auto_model.first;
         switch (downloader.is_model_downloaded(ensure_tag)) {
             case ModelDownloader::ModelStatus::Ready:
@@ -531,7 +532,7 @@ void RestHandler::configure_chat_engine_parameters(const json& options, const js
     }
 }
 
-json RestHandler::build_nstream_response(std::string response_text) {
+json RestHandler::build_nstream_response(std::string response_text, chat_meta_info_t& meta_info) {
     // Get tool info
     NonStreamResult result = auto_chat_engine->parse_nstream_content(response_text);
 
@@ -581,13 +582,21 @@ json RestHandler::build_nstream_response(std::string response_text) {
     }
 
 
+    // Follow meta_info for the finish reason, same as the streaming path.
+    // A tool call is only visible after parsing the generated text, so promote
+    // the stop reason here; every other case (length, cancel, error) is already
+    // carried by meta_info and takes precedence, since a truncated or aborted
+    // generation must not be reported to the client as a complete tool call.
+    if (is_tool_call && meta_info.stop_reason == stop_reason_t::EOT_DETECTED) {
+        meta_info.stop_reason = stop_reason_t::TOOL_DETECTED;
+    }
     // Construct the final choice object
     return json::array({
         {
             {"index", 0},
             {"message", message},
             {"logprobs", nullptr},
-            {"finish_reason", is_tool_call ? "tool_calls" : "stop"}
+            {"finish_reason", stop_reason_to_string(meta_info.stop_reason)}
         }
     });
 }
@@ -1098,6 +1107,18 @@ void RestHandler::handle_openai_chat_completion(const json& request,
         json tools = request.value("tools", json::array());
         json options = request.value("options", json::object());
 
+        // Only "auto" and "none" are honoured; "required" and the per-function
+        // object form are not implemented yet, and a request asking for one is
+        // served as "auto" rather than refused.
+        json tool_choice = request.value("tool_choice", json("auto"));
+        tool_choice_t tool_choice_mode = TOOL_CHOICE_AUTO;
+        if (tool_choice.is_string() && tool_choice.get<std::string>() == "none") {
+            tool_choice_mode = TOOL_CHOICE_NONE;
+        }
+        else if (!(tool_choice.is_string() && tool_choice.get<std::string>() == "auto")) {
+            header_print("Warning", "Unsupported tool_choice " + tool_choice.dump() + ", falling back to auto.");
+        }
+
         auto load_start_time = time_utils::now();
         if (!ensure_model_loaded(model)) {
             json error_response = {{"error", "Failed to load " + model + " model!"}};
@@ -1114,7 +1135,25 @@ void RestHandler::handle_openai_chat_completion(const json& request,
         // see if we can use prompt cache
         chat_meta_info_t meta_info;
         bool can_use_prompt_cache = false;
-        if (model != model_used_for_last_message) { // switch models will clear context
+        if (auto_chat_engine->single_turn) {
+            // reject multi-turn requests: any assistant message in the history
+            // means the caller is trying to continue a prior turn, which this
+            // model cannot support.
+            bool has_assistant_msg = false;
+            for (const auto& msg : current_messages) {
+                if (msg.value("role", "") == "assistant") {
+                    has_assistant_msg = true;
+                    break;
+                }
+            }
+            if (has_assistant_msg) {
+                header_print("Warning", "Single-turn model received multi-turn request (assistant messages detected). Rejecting.");
+                json error_response = {{"error", "This model only supports single-turn requests. Multi-turn conversation history (assistant messages) is not allowed."}};
+                send_response(error_response);
+                return;
+            }
+        }
+        else if (model != model_used_for_last_message) { // switch models will clear context
             this->prompt_cache.update_message_checksum(current_messages);
             this->prompt_cache.update_tool_checksum(tools);
             model_used_for_last_message = model;
@@ -1125,9 +1164,10 @@ void RestHandler::handle_openai_chat_completion(const json& request,
             if (can_use_prompt_cache) {
                 meta_info.restore_allowed = true;
                 header_print("FLM", "Use cached prompt!");
-                header_print("FLM", "Matched " + std::to_string(cache_info.matched_rounds) +
+                size_t matched_rounds = cache_info.matched_rounds + (auto_chat_engine->check_using_checkpint() ? 0 : 1);
+                header_print("FLM", "Matched " + std::to_string(matched_rounds) +
                     " out of " + std::to_string(cache_info.total_rounds) + " messages (" +
-                    std::to_string(cache_info.total_rounds - cache_info.matched_rounds) + " new to prefill).");
+                    std::to_string(cache_info.total_rounds - matched_rounds) + " new to prefill).");
             }
             else {
                 // cannot use cache, clear and re-insert all
@@ -1148,6 +1188,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
         uniformed_input.tools = tools;
         meta_info.load_duration = (uint64_t)time_utils::duration_ns(load_start_time, load_end_time).first;
         meta_info.max_prefill_len = this->prefill_chunk_len;
+        meta_info.tool_choice = tool_choice_mode;
         if (stream){
             // Create a wrapper callback that passes the pre-formatted SSE string directly
             cancellation_token->reset();
@@ -1253,7 +1294,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                 return;
             }
             // check response_text
-            json choices = build_nstream_response(response_text);
+            json choices = build_nstream_response(response_text, meta_info);
             response = {
                 {"id", "fastflowlm-chat-completion"},
                 {"object", "chat.completion"},
@@ -1262,13 +1303,14 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                 {"choices", choices},
                 {"usage", {
                     {"prompt_tokens", meta_info.prompt_tokens},
+                    {"prompt_tokens_details", {{"cached_tokens", meta_info.cached_prompt_tokens}}},
                     {"completion_tokens", meta_info.generated_tokens},
                     {"total_tokens", meta_info.prompt_tokens + meta_info.generated_tokens},
                     {"kv_token_occupancy_rate_percentage", (float)this->auto_chat_engine->get_current_context_length() / (float)this->auto_chat_engine->get_max_length() * 100},
                     {"load_duration", static_cast<double>(meta_info.load_duration) / 1'000'000'000},
                     {"prefill_duration_ttft", static_cast<double>(meta_info.prefill_duration) / 1'000'000'000},
                     {"decoding_duration", static_cast<double>(meta_info.decoding_duration) / 1'000'000'000},
-                    {"prefill_speed_tps", static_cast<double>(meta_info.prompt_tokens) / static_cast<double>(meta_info.prefill_duration) * 1'000'000'000},
+                    {"prefill_speed_tps", static_cast<double>(meta_info.prompt_tokens - meta_info.cached_prompt_tokens) / static_cast<double>(meta_info.prefill_duration) * 1'000'000'000},
                     {"decoding_speed_tps", static_cast<double>(meta_info.generated_tokens) / static_cast<double>(meta_info.decoding_duration) * 1'000'000'000},
                 }},
                 {"service_tier", "default"}
@@ -1465,11 +1507,12 @@ void RestHandler::handle_openai_completion(const json& request,
                         {"text", response_text},
                         {"index", 0},
                         {"logprobs", nullptr},
-                        {"finish_reason", "stop"}
+                        {"finish_reason", stop_reason_to_string(meta_info.stop_reason)}
                     }
                 })},
                 {"usage", {
                     {"prompt_tokens", meta_info.prompt_tokens},
+                    {"prompt_tokens_details", {{"cached_tokens", meta_info.cached_prompt_tokens}}},
                     {"completion_tokens", meta_info.generated_tokens},
                     {"total_tokens", meta_info.prompt_tokens + meta_info.generated_tokens}
                 }}

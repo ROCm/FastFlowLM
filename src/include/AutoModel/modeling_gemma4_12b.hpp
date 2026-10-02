@@ -44,6 +44,8 @@ private:
     static constexpr int audio_token_id = 258881; // audio token id
     static constexpr int eoa_token_id = 258883; // end of audio token id
 
+    static constexpr int tool_start_token_id = 48;
+
     ImageReader image_reader_;
     gemma4_12b_image_t load_image(const std::string& filename);
     gemma4_12b_image_t load_image_base64(const std::string& base64_string);
@@ -109,6 +111,14 @@ public:
     StreamResult parse_stream_content_final(const std::string content) override;
     chat_template_type_t get_chat_template_type() override {
         return chat_template_type_t::gemma4;
+    }
+
+    /// \note Gemma4-12B opens every tool call with <|tool_call>, so masking that
+    ///       one token is enough to honour tool_choice=none. Unlike Gemma4e there
+    ///       is no size-dependent enable_tool gate -- this checkpoint always
+    ///       supports tool calling, so the id is reported unconditionally.
+    int get_tool_start_token_id() const override {
+        return tool_start_token_id;
     }
 
     /// \brief Configure a parameter with type-erased value
