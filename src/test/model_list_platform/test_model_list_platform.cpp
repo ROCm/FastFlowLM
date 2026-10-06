@@ -116,28 +116,23 @@ void test_a_corelib_build_offers_the_corelib_phi4() {
     TEST_REQUIRE(corelib_on_aie2p.get_model_info(kPhiTag).second.at("backend") == "flm");
 }
 
-void test_a_catalog_can_filter_down_to_nothing() {
-    // The other corner of the same rule, and the one that reads like a bug if
-    // it is not stated: a build with only the FastFlowLM kernels, on silicon
-    // none of the FastFlowLM entries name. Every aie2p entry is pruned by the
-    // generation and the one aie_next entry by the kernels it would need, so
-    // the install offers nothing -- and that is a legible state, not a crash.
-    // It says so on stderr and keeps going; the commands fail one at a time,
-    // which is what makes `flm --help` still work on such a build.
-    auto nothing = open_catalog("aie_next", {"flm"});
-    TEST_REQUIRE(nothing.all_tags.empty());
-    TEST_REQUIRE(!nothing.is_model_supported(kPhiTag));
-    TEST_REQUIRE(!nothing.is_model_supported(kRaiTag));
-    TEST_REQUIRE(!nothing.is_model_supported("llama3.2:1b"));
-    // Asking anyway is an error with a reason, not a fallback to a model that
-    // is not there.
-    bool threw = false;
-    try {
-        (void)nothing.get_model_info(kPhiTag);
-    } catch (const std::exception&) {
-        threw = true;
+void test_aie_next_offers_only_ported_flm_families() {
+    // A build with only the FastFlowLM kernels, on aie_next silicon. Every
+    // aie2p-only entry is pruned by the generation and the aie_next entry by
+    // the kernels it would need; what is left is the FastFlowLM families that
+    // have an aie_next engine.
+    auto next = open_catalog("aie_next", {"flm"});
+    // the family alias ("qwen3.6-moe") is a tag too
+    for (const auto& tag : next.all_tags) {
+        TEST_REQUIRE(tag.rfind("qwen3.6-moe", 0) == 0);
     }
-    TEST_REQUIRE(threw);
+    TEST_REQUIRE(next.is_model_supported("qwen3.6-moe:35b-a3b"));
+    TEST_REQUIRE(!next.is_model_supported(kPhiTag));
+    TEST_REQUIRE(!next.is_model_supported(kRaiTag));
+    TEST_REQUIRE(!next.is_model_supported("llama3.2:1b"));
+    // Asking anyway falls back to a model that is offered, as on any
+    // non-empty catalog, never to the pruned one.
+    TEST_REQUIRE(next.get_model_info(kPhiTag).first.rfind("qwen3.6-moe", 0) == 0);
 }
 
 void test_the_tag_name_decides_the_backend() {
@@ -294,10 +289,13 @@ void test_shipped_catalog_is_well_formed() {
             }
             TEST_REQUIRE(named.size() <= kAllPlatforms.size());
 
-            // corelib runs on the next generation and the FastFlowLM kernels on
-            // what is shipping, so a tag that says one and a platform key that
-            // says the other describes a package nothing can run.
-            if (rai_family != (named.count("aie_next") != 0)) {
+            // corelib runs on the next generation only. A FastFlowLM package
+            // always runs on what is shipping, and may also name aie_next once
+            // its family has an aie_next engine (same weights, other kernels).
+            const bool consistent =
+                rai_family ? named == std::set<std::string>{"aie_next"}
+                           : named.count("aie2p") != 0;
+            if (!consistent) {
                 throw std::runtime_error(
                     tag + ": the tag name and supported_platforms disagree "
                           "about which generation this package is for");
@@ -323,8 +321,8 @@ int main() {
             "a corelib build offers the corelib phi4");
     RunTest(test_the_tag_name_decides_the_backend,
             "the tag name decides the backend");
-    RunTest(test_a_catalog_can_filter_down_to_nothing,
-            "a catalog can filter down to nothing");
+    RunTest(test_aie_next_offers_only_ported_flm_families,
+            "aie_next offers only the ported flm families");
     RunTest(test_an_entry_is_pruned_by_the_silicon_it_names,
             "an entry is pruned by the silicon it names");
     RunTest(test_missing_key_means_every_generation,

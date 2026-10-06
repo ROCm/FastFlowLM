@@ -25,7 +25,7 @@ namespace {
 template <class Engine>
 void RegisterFlm(BackendRegistry& registry, const char* family) {
     registry.register_backend(family, kFlmBackendId,
-                              flm_factory<Engine>());
+                              flm_factory<Engine>(), flm_traits<Engine>());
 }
 
 }  // namespace

@@ -44,7 +44,7 @@ constexpr std::string_view platform_id(npu_platform platform) {
 ///       for silicon none of its models were built for, and model_list says so
 ///       in one line. Set this back to aie2p to get those 42 models back.
 constexpr npu_platform default_npu_platform() { 
-#if defined(FLM_ENABLE_RAI)
+#if defined(FLM_ENABLE_RAI) || defined(FLM_NPU_AIE_NEXT)
     return npu_platform::aie_next; 
 #else
     return npu_platform::aie2p; 

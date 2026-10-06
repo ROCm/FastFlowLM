@@ -32,7 +32,11 @@
 #include "models/qwen3vl/flm/aie2p/qwen3vl_npu.hpp"
 #include "models/qwen3vl_flash/flm/aie2p/qwen3vl_flash.hpp"
 #include "models/qwen3_5vl/flm/aie2p/qwen3_5vl_npu.hpp"
+#if defined(FLM_NPU_AIE_NEXT)
+#include "models/qwen3_6_moe/flm/aie_next/qwen3_6_moe_npu.hpp"
+#else
 #include "models/qwen3_6_moe/flm/aie2p/qwen3_6_moe_npu.hpp"
+#endif
 #include "models/qwen3_8mtp/flm/aie2p/qwen3_8mtp_npu.hpp"
 #include "models/gemma/flm/aie2p/gemma_npu.hpp"
 #include "models/gemma_text/flm/aie2p/gemma_text_npu.hpp"

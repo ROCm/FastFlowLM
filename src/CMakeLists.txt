@@ -107,6 +107,33 @@ endif()
 # and HRX-built .so/.dll/.lib never collide (see src/lib/xrt and src/lib/hrx).
 set(FLM_ENGINE_LIB_DIR "${CMAKE_SOURCE_DIR}/lib/${FLM_RUNTIME_NAME}")
 
+# ———————————————————————————————————————————————
+# NPU platform. aie2p is every engine in lib/<runtime>. aie_next swaps in the
+# engines that have an aie_next build, from lib/<runtime>/aie_next: same file
+# name, same class, same header shape (include/models/<m>/flm/aie_next/), so
+# the frontend is unchanged. Families without one keep their aie2p engine; the
+# catalog's supported_platforms is what keeps them off aie_next silicon.
+# ———————————————————————————————————————————————
+set(FLM_NPU_PLATFORM "aie2p" CACHE STRING "NPU platform the flm engines are built for (aie2p or aie_next)")
+set_property(CACHE FLM_NPU_PLATFORM PROPERTY STRINGS aie2p aie_next)
+set(FLM_NEXT_ENGINE_LIBS "")
+set(FLM_ENGINE_RPATH "${FLM_ENGINE_LIB_DIR}")
+if(FLM_NPU_PLATFORM STREQUAL "aie_next")
+    if(FLM_USE_HRX OR WIN32)
+        message(FATAL_ERROR "FLM_NPU_PLATFORM=aie_next is Linux/XRT only for now")
+    endif()
+    set(FLM_NEXT_ENGINE_LIB_DIR "${FLM_ENGINE_LIB_DIR}/aie_next")
+    file(GLOB FLM_NEXT_ENGINE_LIBS "${FLM_NEXT_ENGINE_LIB_DIR}/*.so")
+    if(NOT FLM_NEXT_ENGINE_LIBS)
+        message(FATAL_ERROR "FLM_NPU_PLATFORM=aie_next but ${FLM_NEXT_ENGINE_LIB_DIR} has no engine .so")
+    endif()
+    add_compile_definitions(FLM_NPU_AIE_NEXT=1)
+    message(STATUS "FLM NPU platform: aie_next (engines from ${FLM_NEXT_ENGINE_LIB_DIR})")
+    set(FLM_ENGINE_RPATH "${FLM_NEXT_ENGINE_LIB_DIR};${FLM_ENGINE_LIB_DIR}")
+elseif(NOT FLM_NPU_PLATFORM STREQUAL "aie2p")
+    message(FATAL_ERROR "FLM_NPU_PLATFORM must be aie2p or aie_next, got '${FLM_NPU_PLATFORM}'")
+endif()
+
 # The flash engine libs (qwen3vl_flash, gemma4e_flash) are always shipped in
 # src/lib/${FLM_RUNTIME_NAME} for every backend, so their model families are
 # always compiled in -- no probe/gate/macro needed.
@@ -323,6 +350,14 @@ endif()
 
 add_executable(flm ${SOURCES} ${HEADERS})
 
+# An aie_next flm links other engines, so it must not land on the stock one in
+# build/: the stock tree would then take it for up to date.
+if(FLM_NPU_PLATFORM STREQUAL "aie_next")
+    set_target_properties(flm PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+        RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}")
+endif()
+
 if(FLM_ENABLE_RAI)
     include("${CMAKE_SOURCE_DIR}/common/rai/rai_sources.cmake")
     add_library(flm_rai STATIC ${FLM_RAI_SOURCES})
@@ -460,6 +495,7 @@ if(WIN32 AND NOT VCPKG_TOOLCHAIN)
 endif()
 
 target_link_directories(flm PUBLIC
+    ${FLM_NEXT_ENGINE_LIB_DIR}  # aie_next engines, searched first so they win (empty on aie2p)
     ${FLM_ENGINE_LIB_DIR}       # per-backend prebuilt engine libs (lib/xrt or lib/hrx)
     ${CMAKE_SOURCE_DIR}/lib     # shared third-party runtime libs (ffmpeg/curl/fftw/... on Windows)
     ${FFMPEG_LIBRARY_DIRS}
@@ -563,7 +599,7 @@ else()
     endif()
     if(NOT WIN32)
         set_target_properties(flm PROPERTIES
-            BUILD_RPATH "${FLM_ENGINE_LIB_DIR}")
+            BUILD_RPATH "${FLM_ENGINE_RPATH}")
     endif()
 endif()
 
@@ -723,6 +759,12 @@ else()
     endif()
 
     file(GLOB so_libs "${FLM_ENGINE_LIB_DIR}/*.so*")
+    # aie_next: its engines replace the aie2p ones of the same name
+    foreach(_next_lib ${FLM_NEXT_ENGINE_LIBS})
+        get_filename_component(_next_name "${_next_lib}" NAME)
+        list(FILTER so_libs EXCLUDE REGEX "/${_next_name}$")
+        list(APPEND so_libs "${_next_lib}")
+    endforeach()
     install(FILES ${so_libs} DESTINATION "${FLM_ENGINE_LIB_DESTINATION}")
     set_target_properties(flm PROPERTIES INSTALL_RPATH "${FLM_FLM_INSTALL_RPATH}")
 

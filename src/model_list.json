@@ -456,7 +456,7 @@
 
         "qwen3.6-moe": {
             "35b-a3b": {
-                "supported_platforms": ["aie2p"],
+                "supported_platforms": ["aie2p", "aie_next"],
                 "name": "Qwen3.6-35B-A3B-NPU2",
                 "url": "https://huggingface.co/FastFlowLM/Qwen3.6-35B-A3B-NPU2/resolve/flm_q4k_high_precision",
                 "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.6-35B-A3B-NPU2/tree/flm_q4k_high_precision",
