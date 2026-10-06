@@ -53,6 +53,16 @@
       }
     },
     {
+      "name": "linux-aie-next",
+      "displayName": "Linux aie_next",
+      "description": "Linux build for the aie_next NPU: the flm engines that have an aie_next build come from lib/xrt/aie_next. Its own build tree, so it never overwrites the stock flm. See home_install_aie_next.sh.",
+      "inherits": "linux-default",
+      "binaryDir": "${sourceDir}/build_aie_next",
+      "cacheVariables": {
+        "FLM_NPU_PLATFORM": "aie_next"
+      }
+    },
+    {
       "name": "linux-snap",
       "displayName": "Linux Snap Build",
       "description": "Configuration for building inside a snapcraft part",

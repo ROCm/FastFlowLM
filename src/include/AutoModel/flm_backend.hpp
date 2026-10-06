@@ -11,9 +11,26 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 
 namespace flm::backend {
+
+/// \brief whether Engine is built from the frontend's device
+/// \note The aie_next engines have no xclbin manager: they take the device the
+///       frontend opened, and must never open one of their own. The aie2p
+///       engines take an npu_xclbin_manager instead.
+template <class Engine>
+inline constexpr bool kTakesDevice =
+    std::is_constructible_v<Engine, LM_Config, flm_rt::device*, int>;
+
+/// \brief the traits an flm engine registers with
+template <class Engine>
+BackendTraits flm_traits() {
+    BackendTraits traits;
+    traits.needs_npu_xclbin = !kTakesDevice<Engine>;
+    return traits;
+}
 
 /// \brief the flm backend for a FastFlowLM NPU engine
 /// \tparam Engine the concrete engine type, e.g. phi4_npu
@@ -28,16 +45,27 @@ public:
         if (!context.config) {
             throw std::runtime_error("flm backend needs an LM_Config");
         }
-        if (!context.npu) {
+        if constexpr (kTakesDevice<Engine>) {
+            if (!context.device) {
+                throw std::runtime_error("flm backend needs the NPU device");
+            }
+        } else if (!context.npu) {
             throw std::runtime_error("flm backend needs an NPU instance");
         }
 
         // Scoped: the packed weights are copied into the engine, and the
         // several hundred MB they occupy are freed before load_model returns.
         Q4NX q4nx(context.model_path);
-        auto engine = std::make_unique<Engine>(
-            *context.config, context.npu,
-            static_cast<int>(context.context_length));
+        std::unique_ptr<Engine> engine;
+        if constexpr (kTakesDevice<Engine>) {
+            engine = std::make_unique<Engine>(
+                *context.config, context.device,
+                static_cast<int>(context.context_length));
+        } else {
+            engine = std::make_unique<Engine>(
+                *context.config, context.npu,
+                static_cast<int>(context.context_length));
+        }
         engine->load_weights(q4nx);
         engine->clear_context();
         engine_ = std::move(engine);
