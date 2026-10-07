@@ -965,6 +965,52 @@
                 "footprint": 0.62
             }
         },
+        "embeddinggemma-2": {
+            "740m": {
+                "supported_platforms": ["aie2p"],
+                "name": "embeddinggemma-2",
+                "url": "https://huggingface.co/google/embeddinggemma-2",
+                "file_url": "https://huggingface.co/api/models/google/embeddinggemma-2/tree/main",
+                "size": 1488915288,
+                "flm_min_version": "1.0.5",
+                "files": [
+                    "config.json",
+                    "model.safetensors",
+                    "tokenizer.json",
+                    "tokenizer_config.json"
+                ],
+                "file_sources": {
+                    "config.json": {
+                        "url": "https://huggingface.co/google/embeddinggemma-2",
+                        "revision": "914f7f89142e33e77833254d9c9b90c3cef7303b"
+                    },
+                    "model.safetensors": {
+                        "url": "https://huggingface.co/google/embeddinggemma-2",
+                        "revision": "914f7f89142e33e77833254d9c9b90c3cef7303b"
+                    },
+                    "tokenizer.json": {
+                        "url": "https://huggingface.co/google/embeddinggemma-2",
+                        "revision": "914f7f89142e33e77833254d9c9b90c3cef7303b"
+                    },
+                    "tokenizer_config.json": {
+                        "url": "https://huggingface.co/google/embeddinggemma-2",
+                        "revision": "914f7f89142e33e77833254d9c9b90c3cef7303b"
+                    }
+                },
+                "default_context_length": 2048,
+                "details": {
+                    "format": "safetensors",
+                    "family": "embeddinggemma-2",
+                    "think": false,
+                    "parameter_size": "740M",
+                    "quantization_level": "BF16"
+                },
+                "label": [
+                    "embeddings"
+                ],
+                "footprint": 1.5
+            }
+        },
         "d3": {
             "edge": {
                 "supported_platforms": ["aie2p"],

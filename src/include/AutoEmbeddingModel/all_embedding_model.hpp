@@ -18,6 +18,8 @@
 inline std::string complete_simple_embedding_tag(std::string model_tag) {
     if (model_tag == "embed-gemma:300m")
         return "embed-gemma:300m";
+    else if (model_tag == "embeddinggemma-2")
+        return "embeddinggemma-2:740m";
     else
         return model_tag;
 }
@@ -33,12 +35,16 @@ inline std::pair<std::string, std::unique_ptr<AutoEmbeddingModel>> get_auto_embe
 
     std::unique_ptr<AutoEmbeddingModel> auto_embedding_engine = nullptr;
     std::string new_model_tag = complete_simple_embedding_tag(model_tag);
-    #if defined(FLM_ENABLE_IRON)
-    if (backend == flm::backend::kIronBackendId)
-        auto_embedding_engine = std::make_unique<IronEmbedding>(npu_device_inst);
-    else
-    #endif
-    if (gemma_embed_tags.count(model_tag)) // tag
+    if (new_model_tag == "embeddinggemma-2:740m") {
+#if defined(FLM_ENABLE_IRON)
+        if (backend.empty() || backend == flm::backend::kIronBackendId)
+            auto_embedding_engine = std::make_unique<IronEmbedding>(npu_device_inst);
+        else
+#endif
+            throw std::runtime_error(
+                "EmbeddingGemma 2 requires the IRON backend");
+    }
+    else if (gemma_embed_tags.count(model_tag)) // tag
         auto_embedding_engine = std::make_unique<Gemma_Embedding>(npu_device_inst);
     else {
         new_model_tag = "embed-gemma:300m"; // No arguments, use default tag

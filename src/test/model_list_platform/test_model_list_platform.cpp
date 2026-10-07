@@ -19,6 +19,7 @@ namespace {
 constexpr const char* kCatalogPath = FLM_TEST_MODEL_LIST_PATH;
 constexpr const char* kPhiTag = "phi4-mini-it:4b";
 constexpr const char* kCoreTag = "phi4-mini-it-core:4b";
+constexpr const char* kEmbeddingGemma2Tag = "embeddinggemma-2:740m";
 
 /// \brief every generation the build knows about, for the catalog sweep
 const std::set<std::string> kAllPlatforms = {
@@ -114,6 +115,20 @@ void test_a_corelib_build_offers_the_corelib_phi4() {
     TEST_REQUIRE(!corelib_on_aie2p.is_model_supported(kCoreTag));
     TEST_REQUIRE(corelib_on_aie2p.is_model_supported(kPhiTag));
     TEST_REQUIRE(corelib_on_aie2p.get_model_info(kPhiTag).second.at("backend") == "flm");
+}
+
+void test_embeddinggemma_2_requires_iron() {
+    auto stock = open_stock();
+    TEST_REQUIRE(!stock.is_model_supported(kEmbeddingGemma2Tag));
+
+    auto iron = open_catalog("aie2p", {"flm", "iron"});
+    TEST_REQUIRE(iron.is_model_supported(kEmbeddingGemma2Tag));
+    TEST_REQUIRE(iron.rectify_model_tag("embeddinggemma-2") == kEmbeddingGemma2Tag);
+
+    const auto [tag, info] = iron.get_model_info(kEmbeddingGemma2Tag);
+    TEST_REQUIRE(tag == kEmbeddingGemma2Tag);
+    TEST_REQUIRE(info.at("backend") == "iron");
+    TEST_REQUIRE(info.at("details").at("family") == "embeddinggemma-2");
 }
 
 void test_a_catalog_can_filter_down_to_nothing() {
@@ -324,6 +339,8 @@ int main() {
             "stock build offers phi4 with its own artifacts");
     RunTest(test_a_corelib_build_offers_the_corelib_phi4,
             "a corelib build offers the corelib phi4");
+    RunTest(test_embeddinggemma_2_requires_iron,
+            "EmbeddingGemma 2 requires iron");
     RunTest(test_the_tag_name_decides_the_backend,
             "the tag name decides the backend");
     RunTest(test_a_catalog_can_filter_down_to_nothing,

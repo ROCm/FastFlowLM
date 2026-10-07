@@ -46,13 +46,18 @@ The FastFlowLM tokenizer and chat metadata must name the same model variant as
 the IRON checkpoint. In particular, use Llama 3.2 1B Instruct metadata with an
 Instruct checkpoint, and base-model metadata with the base checkpoint.
 
-## EmbeddingGemma
+## EmbeddingGemma 2
 
-IRON loads a directory that contains `model.safetensors` and `tokenizer.json`:
+EmbeddingGemma 2 is available only in builds that enable the IRON backend. Pull
+the model from its public repository and serve it as an embedding-only model:
 
 ```bash
-export FLM_IRON_EMBEDDING_PATH=/path/to/embeddinggemma-2
-flm serve llama3.2:1b --embed 1 --backend iron
+flm pull embeddinggemma-2
+flm serve embeddinggemma-2 --backend iron
+
+curl -H 'Content-Type: application/json' \
+	-d '{"model":"embeddinggemma-2","input":"Hello"}' \
+	http://127.0.0.1:52625/v1/embeddings
 ```
 
 The embedding endpoint passes text and its query or document task to the IRON

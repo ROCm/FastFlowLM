@@ -9,7 +9,7 @@
 class IronEmbedding final : public AutoEmbeddingModel {
 public:
     explicit IronEmbedding(flm_rt::device* device)
-        : AutoEmbeddingModel(device, "embed-gemma:300m") {}
+        : AutoEmbeddingModel(device, "embeddinggemma-2:740m") {}
 
     void load_model(std::string model_path, json, bool enable_preemption) override;
     std::vector<float> embed(std::string& text,
