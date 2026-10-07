@@ -47,6 +47,8 @@ inline constexpr const char* kFlmBackendId = "flm";
 ///       build still runs every flm model with the flm kernels.
 inline constexpr const char* kCoreBackendId = "core";
 
+inline constexpr const char* kIronBackendId = "iron";
+
 /// \brief the entry key naming the kernel flow an entry's artifacts need
 /// \note Written onto the entry by model_list, which derives it from the tag,
 ///       rather than read from model_list.json: the tag is what decides, and

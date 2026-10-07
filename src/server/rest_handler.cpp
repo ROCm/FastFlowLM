@@ -779,7 +779,8 @@ void RestHandler::ensure_embed_model_loaded(const std::string& model_tag) {
             this->embed = false;
             return;
     }
-    auto [embedding_model_tag, auto_embedding_engine] = get_auto_embedding_model(ensure_tag, this->npu_device_inst);
+    auto [embedding_model_tag, auto_embedding_engine] =
+        get_auto_embedding_model(ensure_tag, this->npu_device_inst, this->backend);
     this->auto_embedding_engine = std::move(auto_embedding_engine);
     auto [new_embedding_model_tag, embedding_model_info] = this->supported_models.get_model_info(embedding_model_tag);
     std::string embedding_model_path = this->supported_models.get_model_path(new_embedding_model_tag);

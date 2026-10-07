@@ -6,8 +6,13 @@
 /// \note This is a header file for get_auto_embedding_model func
 #pragma once
 
+#include "AutoModel/model_backend.hpp"
+
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
 #include "modeling_gemma_embedding.hpp"
+#if defined(FLM_ENABLE_IRON)
+#include "modeling_iron_embedding.hpp"
+#endif
 #endif
 
 inline std::string complete_simple_embedding_tag(std::string model_tag) {
@@ -18,7 +23,7 @@ inline std::string complete_simple_embedding_tag(std::string model_tag) {
 }
 
 
-inline std::pair<std::string, std::unique_ptr<AutoEmbeddingModel>> get_auto_embedding_model(const std::string& model_tag, flm_rt::device* npu_device_inst) {
+inline std::pair<std::string, std::unique_ptr<AutoEmbeddingModel>> get_auto_embedding_model(const std::string& model_tag, flm_rt::device* npu_device_inst, const std::string& backend = "") {
 
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
     static std::unordered_set<std::string> gemma_embed_tags = {
@@ -28,6 +33,11 @@ inline std::pair<std::string, std::unique_ptr<AutoEmbeddingModel>> get_auto_embe
 
     std::unique_ptr<AutoEmbeddingModel> auto_embedding_engine = nullptr;
     std::string new_model_tag = complete_simple_embedding_tag(model_tag);
+    #if defined(FLM_ENABLE_IRON)
+    if (backend == flm::backend::kIronBackendId)
+        auto_embedding_engine = std::make_unique<IronEmbedding>(npu_device_inst);
+    else
+    #endif
     if (gemma_embed_tags.count(model_tag)) // tag
         auto_embedding_engine = std::make_unique<Gemma_Embedding>(npu_device_inst);
     else {
