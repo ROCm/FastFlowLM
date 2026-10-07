@@ -9,6 +9,8 @@ from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
+import aie.utils as aie_utils
+from aie.iron.device import from_name
 from ml_dtypes import bfloat16
 
 
@@ -52,6 +54,7 @@ def load_embedding(command):
 
 
 def main():
+    aie_utils.set_current_device(from_name("npu2", n_cols=8))
     model = None
     while True:
         command = receive()

@@ -17,7 +17,7 @@ the source build:
 ```bash
 source /opt/xilinx/xrt/setup.sh
 export FLM_IRON_PYTHON=/scratch/roesti/IRON/.venv/bin/python
-export PYTHONPATH=/scratch/roesti/FastFlowLM/python
+export PYTHONPATH=/scratch/roesti/FastFlowLM/python:${PYTHONPATH:-}
 ```
 
 An installed build places `flm_iron` under `share/flm/python`. Add that directory
@@ -31,11 +31,20 @@ metadata. IRON loads a separate checkpoint directory that contains
 
 ```bash
 export FLM_IRON_MODEL_PATH=/path/to/llama3.2-1b
-flm run llama3.2:1b --backend iron --ctx-len 32768
+flm serve llama3.2:1b --backend iron --ctx-len 2048
+
+curl -H 'Content-Type: application/json' \
+	-d '{"model":"llama3.2:1b","messages":[{"role":"user","content":"Hello"}],"max_tokens":8}' \
+	http://127.0.0.1:52625/v1/chat/completions
 ```
 
 The context length must be a multiple of 2048 and cannot exceed 32768.
-Preemption is unavailable.
+XRT locks the model arena. Increase the process memlock limit before using a
+context whose arena exceeds the current limit. Preemption is unavailable.
+
+The FastFlowLM tokenizer and chat metadata must name the same model variant as
+the IRON checkpoint. In particular, use Llama 3.2 1B Instruct metadata with an
+Instruct checkpoint, and base-model metadata with the base checkpoint.
 
 ## EmbeddingGemma
 
@@ -52,7 +61,7 @@ encoder. The worker returns the normalized 768-element float32 embedding.
 ## Protocol
 
 FastFlowLM and the worker exchange length-prefixed JSON headers and raw binary
-payloads over pipes. Llama requests contain the complete token history and
-return bfloat16 logits. Embedding requests contain UTF-8 text and return
-float32 values. Worker errors poison the backend, so FastFlowLM requires a model
-reload after a process or protocol failure.
+payloads over a Unix socket pair. Llama requests contain the complete token
+history and return bfloat16 logits. Embedding requests contain UTF-8 text and
+return float32 values. Worker errors poison the backend, so FastFlowLM requires
+a model reload after a process or protocol failure.
