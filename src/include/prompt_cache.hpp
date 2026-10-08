@@ -173,9 +173,11 @@ public:
         // (in order) at the start of the new conversation, allowing rounds
         // produced by other backends (cloud) to be appended without
         // invalidating the locally-built KV cache prefix.
-        const size_t prefix_len = messages.size() - 2;
+        // Bound by the full incoming length, not length-2. Requiring two *new*
+        // messages made a resend of an unchanged conversation miss every time,
+        // which is exactly what a client sends after a timeout.
         const bool can_use_message =
-            message_checksums_.size() <= prefix_len &&
+            message_checksums_.size() <= messages.size() &&
             matched == message_checksums_.size();
         const bool can_use_tools = tool_checksums_ == new_tool_checksums;
         info.tools_matched = can_use_tools;
