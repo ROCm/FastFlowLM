@@ -317,9 +317,12 @@ jobs:
           VERSION=$(git describe --tags --always | sed 's/^v//')
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
-      - name: Download all portable artifacts
+      # By name: this run also publishes the models-from-source and HRX
+      # tarballs, and neither belongs in the default release asset set.
+      - name: Download portable artifact
         uses: actions/download-artifact@v4
         with:
+          name: portable
           path: portable
 
       - name: Upload Binaries to Release
@@ -328,4 +331,28 @@ jobs:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ github.ref }}
           file_glob: true
-          file: portable/**/*.gz
+          file: portable/fastflowlm_*_linux.tar.gz
+
+  # The HRX build ships as a preview, so it gets its own release job: a failed
+  # HRX build leaves the release without the HRX asset instead of holding back
+  # the default one.
+  release-hrx:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    needs: build-HRX-portable
+    if: github.ref_type == 'tag'
+    steps:
+      - name: Download HRX portable artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: HRX-portable
+          path: portable
+
+      - name: Upload HRX Binaries to Release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ github.ref }}
+          file_glob: true
+          file: portable/HRX_fastflowlm_*_linux.tar.gz

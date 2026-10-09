@@ -381,3 +381,40 @@ jobs:
             flm-setup.msi
           overwrite_files: true
           fail_on_unmatched_files: true
+
+  # The HRX build ships as a preview, so it gets its own release job: a failed
+  # HRX build leaves the release without the HRX asset instead of holding back
+  # the default ones.
+  release-hrx:
+    runs-on: ubuntu-latest
+    needs: build-windows-portable-hrx
+    if: github.ref_type == 'tag'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download HRX portable artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: HRX-fastflowlm-windows-${{ github.sha }}
+          path: hrx-dist
+
+      - name: Create HRX release zip
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          zip_name="HRX_fastflowlm_${version}_windows_amd64.zip"
+
+          # Same layout as the default zip: flm.exe and its DLLs at the top level.
+          cd hrx-dist
+          zip -r "../${zip_name}" .
+
+      - name: Upload HRX assets to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          files: |
+            HRX_fastflowlm_*.zip
+          overwrite_files: true
+          fail_on_unmatched_files: true
