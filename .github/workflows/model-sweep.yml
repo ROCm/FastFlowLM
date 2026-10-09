@@ -17,10 +17,10 @@ name: Model Sweep
 # matrix job each, so a failure in one modality does not hide the others and
 # "Re-run failed jobs" restarts only what actually broke.
 #
-# Each platform is swept against the default portable build and the HRX build.
-# Commit sweeps also run Gemma 4 against separate Linux and Windows packages
-# that build model engines from source. Releases do not ship these additional
-# artifacts.
+# Each platform is swept against the default portable build and the HRX build;
+# releases ship both, the HRX one as a preview under an HRX_ prefix. Commit
+# sweeps also run Gemma 4 against separate Linux and Windows packages that
+# build model engines from source. Releases do not ship those.
 
 on:
   pull_request:
@@ -159,10 +159,18 @@ jobs:
               echo "::warning::Release ${tag} has no fastflowlm_*_windows_amd64.zip asset; skipping the Windows sweep."
             fi
 
-            # Releases ship no HRX assets today, so the HRX sweeps only ever
-            # run off CI artifacts. Say so rather than leaving a dispatch
-            # looking like it swept everything.
-            echo "::notice::HRX sweeps are skipped in release mode; ${tag} ships no HRX_* assets."
+            # HRX assets ship from v1.0.8 on, and a failed HRX build leaves a
+            # release without them, so their absence is a notice, not a warning.
+            if printf '%s\n' "${assets}" | grep -q '^HRX_fastflowlm_.*_linux\.tar\.gz$'; then
+              echo "linux_hrx_ready=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "::notice::Release ${tag} has no HRX_fastflowlm_*_linux.tar.gz asset; skipping the Linux HRX sweep."
+            fi
+            if printf '%s\n' "${assets}" | grep -q '^HRX_fastflowlm_.*_windows_amd64\.zip$'; then
+              echo "windows_hrx_ready=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "::notice::Release ${tag} has no HRX_fastflowlm_*_windows_amd64.zip asset; skipping the Windows HRX sweep."
+            fi
             exit 0
           fi
 
@@ -474,8 +482,7 @@ jobs:
   # succeeded gets swept, independently of the other.
   sweep-linux-hrx:
     needs: resolve-build
-    # Only ever set in run mode: no release carries an HRX asset, so a
-    # dispatch leaves this unset and the job skips.
+    # Unset when no Linux HRX build could be resolved, whichever mode we are in.
     if: needs.resolve-build.outputs.linux_hrx_ready == 'true'
     runs-on: [self-hosted, linux, x64, npu, sweep]
     timeout-minutes: 120
@@ -505,9 +512,13 @@ jobs:
           # blob:none makes git fetch only the blobs the sparse paths need.
           filter: blob:none
 
+      # Exactly one of the next two steps runs. Both land the same
+      # HRX_fastflowlm_<version>_linux.tar.gz in build-artifact/.
+
       # Same shape as the default artifact, under the HRX- name and holding a
       # single HRX_-prefixed tarball.
       - name: Download Linux HRX portable build (CI run)
+        if: needs.resolve-build.outputs.mode == 'run'
         uses: dawidd6/action-download-artifact@v25
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -515,6 +526,15 @@ jobs:
           name: HRX-portable
           path: build-artifact
           if_no_artifact_found: fail
+
+      - name: Download Linux HRX portable build (release ${{ needs.resolve-build.outputs.release_tag }})
+        if: needs.resolve-build.outputs.mode == 'release'
+        uses: robinraju/release-downloader@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ needs.resolve-build.outputs.release_tag }}
+          fileName: "HRX_fastflowlm_*_linux.tar.gz"
+          out-file-path: build-artifact
 
       - name: Unpack Linux HRX portable build
         run: |
@@ -760,8 +780,7 @@ jobs:
   # sweep-windows but has its own readiness flag.
   sweep-windows-hrx:
     needs: resolve-build
-    # Only ever set in run mode: no release carries an HRX asset, so a
-    # dispatch leaves this unset and the job skips.
+    # Unset when no Windows HRX build could be resolved, whichever mode we are in.
     if: needs.resolve-build.outputs.windows_hrx_ready == 'true'
     runs-on: [self-hosted, windows, x64, npu, sweep]
     timeout-minutes: 120
@@ -794,10 +813,14 @@ jobs:
           New-Item -ItemType Directory -Force $modelPath | Out-Null
           "FLM_MODEL_PATH=$modelPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      # Exactly one of the next two steps runs. Both leave flm.exe and its DLLs
+      # at the top level of flm-windows/, which is where the verify step looks.
+
       # Same payload as the default Windows portable artifact, under the HRX-
       # prefixed name: flm.exe and its DLLs at the top level, with the HRX op
       # libraries and hrx.dll overlaid.
       - name: Download Windows HRX portable build (CI run)
+        if: needs.resolve-build.outputs.mode == 'run'
         uses: dawidd6/action-download-artifact@v25
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -805,6 +828,18 @@ jobs:
           name: HRX-fastflowlm-windows-${{ github.sha }}
           path: flm-windows
           if_no_artifact_found: fail
+
+      # The HRX release zip is that same artifact zipped from inside the
+      # directory, so extracting it in place reproduces the CI layout.
+      - name: Download Windows HRX portable build (release ${{ needs.resolve-build.outputs.release_tag }})
+        if: needs.resolve-build.outputs.mode == 'release'
+        uses: robinraju/release-downloader@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ needs.resolve-build.outputs.release_tag }}
+          fileName: "HRX_fastflowlm_*_windows_amd64.zip"
+          out-file-path: flm-windows
+          extract: true
 
       - name: Verify FLM binary runs
         shell: powershell
