@@ -129,8 +129,13 @@ struct CorelibModel::Impl {
 
     void Clear() {
         Usable();
-        auto lease = runtime->AcquireExecution();
-        ResetModel();
+        // A seekable model never reads its cache past the position, so nothing needs clearing.
+        if (spec.rewind == Rewind::kSeek) {
+            history.clear();
+        } else {
+            auto lease = runtime->AcquireExecution();
+            ResetModel();
+        }
         saved.reset();
     }
 

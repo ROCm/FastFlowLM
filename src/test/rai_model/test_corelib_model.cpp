@@ -407,8 +407,25 @@ void TestAReplayRewindResetsAndReplays() {
 
 // --- clear ---------------------------------------------------------------------
 
-void TestClearResetsAndDropsTheCheckpoint() {
+void TestClearingASeekModelDropsTheSequenceWithoutAReset() {
     Harness h(kFromStart, 4096);
+    auto ids = Ids(10);
+    (void)h.engine->prefill(ids);
+    (void)h.engine->checkpoint();
+    const auto resets = Resets();
+    h.engine->clear_context();
+    TEST_REQUIRE(Resets() == resets);
+    TEST_REQUIRE(h.engine->get_current_context_length() == 0);
+    TEST_REQUIRE(h.engine->restore() == -1);
+    const auto forwards = S().model_forwards.size();
+    auto next = Ids(3);
+    (void)h.engine->prefill(next);
+    TEST_REQUIRE(S().model_forwards.size() == forwards + 1);
+    TEST_REQUIRE(Last().rows == 3 && Last().position == 0);
+}
+
+void TestClearingAReplayModelResets() {
+    Harness h(kReplay, 4096);
     auto ids = Ids(10);
     (void)h.engine->prefill(ids);
     (void)h.engine->checkpoint();
@@ -457,7 +474,8 @@ int main() {
     RUN(TestAReplayCheckpointKeepsNoSnapshot);
     RUN(TestAReplayRestoreResetsAndReplays);
     RUN(TestAReplayRewindResetsAndReplays);
-    RUN(TestClearResetsAndDropsTheCheckpoint);
+    RUN(TestClearingASeekModelDropsTheSequenceWithoutAReset);
+    RUN(TestClearingAReplayModelResets);
 #undef RUN
     std::cout << "All CorelibModel tests passed\n";
     return 0;
