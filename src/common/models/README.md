@@ -5,8 +5,9 @@ kernels through ryzenai-corelib. There are two ways, and the first is the one
 to reach for:
 
 - **corelib runs the model whole** (it ships `ryzenai_corelib_model_<name>`):
-  write one `ModelSpec` and hand it to `flm::rai::Factory` — see §2a. Qwen3,
-  Qwen3.5, Qwen3.6 and Gemma 4 are built this way, each in one short
+  write one `BackendSpec` (its `.model` is the `ModelSpec`) and hand it to
+  `flm::rai::Factory` — see §2a. Qwen3, Qwen3.5, Qwen3.6 and Gemma 4 are built
+  this way, each in one short
   `<model>_rai_backend.cpp`.
 - **corelib has only the ops**: write the engine yourself, op by op, as
   Phi-4 does — the rest of this document, from §2 on, walks through it.

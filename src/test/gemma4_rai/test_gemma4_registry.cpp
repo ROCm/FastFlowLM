@@ -18,6 +18,7 @@
 #include <iostream>
 #include <memory>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -152,6 +153,26 @@ void TestContextFitsStopsAtTheValidated16384() {
     TEST_REQUIRE(!flm::gemma4::ContextFits(10000));
     TEST_REQUIRE(!flm::gemma4::ContextFits(20480));
     TEST_REQUIRE(!flm::gemma4::ContextFits(131072));
+}
+
+void TestTheFactoryReadsTheShippedPackagesTokensAndContextRule() {
+    TempPackage package;
+    FakeRuntimeScope runtime;
+    {
+        Request request(package, 8192);
+        auto backend = flm::gemma4::rai_factory()(request.context);
+        auto eos = backend->forced_eos_ids().value_or(std::vector<int>{});
+        std::sort(eos.begin(), eos.end());
+        TEST_REQUIRE((eos == std::vector<int>{1, 106}));
+        TEST_REQUIRE(backend->forced_bos_id() == 2);
+        TEST_REQUIRE(backend->max_decode_length() == 8192 - 1);
+    }
+    TEST_REQUIRE(runtime.nothing_created());
+    Request refused(package, 5000);
+    RequireContains(RequireThrows<std::out_of_range>(
+                        [&] { (void)flm::gemma4::rai_factory()(refused.context); }),
+                    "multiple of 4096");
+    TEST_REQUIRE(runtime.nothing_created());
 }
 
 /// \brief the source with its comments removed
@@ -568,6 +589,7 @@ int main() {
     RUN_TEST(TestTraitsComeBackOutOfTheRegistryUnchanged);
     RUN_TEST(TestTheTraitsCeilingIsTheEnginesOwnLimit);
     RUN_TEST(TestContextFitsStopsAtTheValidated16384);
+    RUN_TEST(TestTheFactoryReadsTheShippedPackagesTokensAndContextRule);
 
     RUN_TEST(TestFunctionBodyStopsAtTheFunctionItNames);
     RUN_TEST(TestStripCommentsDoesNotEatCode);

@@ -204,6 +204,19 @@ void TestAMissingTokenizerConfigIsNamedBeforeTheWeightsAreOpened() {
     TEST_REQUIRE(WeightLoads() == 0);
 }
 
+void TestAConfigJsonThatIsNotAnObjectIsNamed() {
+    Runtime r;
+    Package p({"m.gguf"});
+    p.Write("tokenizer_config.json", R"({"eos_token": "<eos>"})");
+    p.Write("tokenizer.json", R"({"added_tokens": [{"id": 1, "content": "<eos>"}]})");
+    p.Write("config.json", "[1, 2]");
+    auto spec = Spec();
+    spec.eos_ids.clear();
+    RequireContains(RequireThrows([&] { (void)flm::rai::Factory(spec)(Context(p, 4096)); }),
+                    "config.json");
+    TEST_REQUIRE(WeightLoads() == 0);
+}
+
 void TestDestroyingTheBackendReleasesEveryCorelibObject() {
     Runtime r;
     Package p({"m.gguf"});
@@ -239,6 +252,7 @@ int main() {
     RUN(TestTheBackendReportsWhatTheSpecStates);
     RUN(TestWithoutSpecEosIdsThePackagesAreRead);
     RUN(TestAMissingTokenizerConfigIsNamedBeforeTheWeightsAreOpened);
+    RUN(TestAConfigJsonThatIsNotAnObjectIsNamed);
     RUN(TestDestroyingTheBackendReleasesEveryCorelibObject);
     RUN(TestPoisonedFollowsTheEngine);
 #undef RUN

@@ -73,9 +73,8 @@
 namespace {
 
 /// \brief the BOS id every real Gemma 4 package states, from three sources
-/// \note The same constant test_gemma4_backend.cpp carries, for the same
-///       reason: it is what the TEST expects the files to say, hand-written
-///       from verified-gguf-facts.md and never read back out of the subject.
+/// \note It is what the TEST expects the files to say, hand-written from
+///       verified-gguf-facts.md and never read back out of the subject.
 constexpr int kBosId = 2;
 constexpr const char* kBosToken = "<bos>";
 
@@ -347,12 +346,10 @@ void TestBosIsAnAddedSpecialTokenSoTheTextFormIsNeverSplit() {
 }  // namespace
 
 int main() {
-    // BEFORE ANYTHING ELSE, and for the same reason the other two real-file
-    // binaries do it: the weight cache defaults to the MODEL DIRECTORY, and
-    // the directories below are read-only packages under
-    // C:/Users/chiz/work/models. Nothing here constructs an engine, so
-    // nothing should ever consult it -- which is exactly when a default is
-    // worth pinning.
+    // BEFORE ANYTHING ELSE. Gemma 4 keeps no weight cache; only Phi-4's
+    // engine reads this variable, and nothing here constructs an engine. It
+    // stays pinned off so no cache could ever be written into the read-only
+    // packages under C:/Users/chiz/work/models.
 #ifdef _WIN32
     _putenv_s("FLM_RAI_WEIGHT_CACHE", "0");
 #else

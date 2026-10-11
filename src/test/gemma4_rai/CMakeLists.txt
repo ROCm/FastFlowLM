@@ -12,15 +12,9 @@ endif()
 
 include_directories("${FLM_SOURCE_DIR}/include" "${FLM_SOURCE_DIR}/test/phi4_rai")
 
-# Every Gemma 4 test target is declared here up front, each guarded on the
-# existence of its own .cpp, so later tasks add only their source file and
-# never edit this file -- two agents touching this CMakeLists at once is
-# exactly the collision a previous attempt on this project produced.
-#
-# Order and provenance (see docs/superpowers/plans/2026-09-22-gemma4-rai.md,
-# Stage A and Stage C):
-#   test_gemma4_frontend  Task A3
-#   test_gemma4_tokenizer Task R5
+# The Gemma 4 test targets:
+#   test_gemma4_frontend  the Gemma4e frontend, over a stub engine
+#   test_gemma4_tokenizer the shipped tokenizer stack on the real packages
 #   test_gemma4_registry  the rai backend, registered under gemma4e
 
 # --- test_gemma4_frontend (Task A3) --------------------------------------
@@ -31,8 +25,8 @@ include_directories("${FLM_SOURCE_DIR}/include" "${FLM_SOURCE_DIR}/test/phi4_rai
 # any.h pulls in boost/any.hpp) but not the corelib header itself, since the
 # frontend never includes rai/corelib_api.hpp directly.
 if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/test_gemma4_frontend.cpp")
-    # Not REQUIRED: a configure run that only wants test_gemma4_host (or any
-    # other dependency-free target) must not be blocked by this target's
+    # Not REQUIRED: a configure run that only wants another target here
+    # must not be blocked by this target's
     # probes. Absence is reported below -- loudly, and as a ctest FAILURE --
     # rather than failing the whole configure.
     #
@@ -78,11 +72,11 @@ if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/test_gemma4_frontend.cpp")
         target_link_libraries(test_gemma4_frontend PRIVATE xrt_coreutil)
         add_test(NAME test_gemma4_frontend COMMAND test_gemma4_frontend)
     else()
-        # LOUD AT CONFIGURE, AND RED AT CTEST -- the treatment C6 gave
-        # test_gemma4_shape_plan and C7 gave test_gemma4_engine, arriving here
-        # last. message(STATUS) alone is visible while configuring and
-        # invisible afterwards: the ctest run that follows says "100% tests
-        # passed" and nothing in it names the target that was never compiled.
+        # LOUD AT CONFIGURE, AND RED AT CTEST -- the convention every block
+        # in this file follows. message(STATUS) alone is visible while
+        # configuring and invisible afterwards: the ctest run that follows
+        # says "100% tests passed" and nothing in it names the target that
+        # was never compiled.
         # A green run that covers less than it appears to is the same species
         # as the vacuous test, the self-confirming fixture and the stale .exe,
         # and this project has now been bitten by all four.
@@ -175,7 +169,7 @@ if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/test_gemma4_tokenizer.cpp")
             # third_party/tokenizers-cpp/CMakeLists.txt's own list.
             ntdll wsock32 ws2_32 Bcrypt iphlpapi userenv psapi)
         add_test(NAME test_gemma4_tokenizer COMMAND test_gemma4_tokenizer)
-        # Opt-in on the real packages, exactly like test_gemma4_real_gguf.
+        # Opt-in on the real packages: without them it exits 77, a skip.
         set_tests_properties(test_gemma4_tokenizer PROPERTIES SKIP_RETURN_CODE 77)
     else()
         # LOUD AT CONFIGURE, AND RED AT CTEST -- the convention every block in

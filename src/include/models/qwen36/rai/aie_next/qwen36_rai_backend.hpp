@@ -10,7 +10,6 @@
 namespace flm::qwen36 {
 
 inline constexpr std::uint32_t kRaiContextLimit = 262144;
-inline constexpr std::uint32_t kRaiDecodeLimit = kRaiContextLimit - 1;
 
 inline flm::backend::BackendTraits rai_traits() {
     flm::backend::BackendTraits traits;

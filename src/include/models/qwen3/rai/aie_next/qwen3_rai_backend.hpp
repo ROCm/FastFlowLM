@@ -12,9 +12,6 @@ namespace flm::qwen3 {
 /// \brief the largest context this backend can hold
 inline constexpr std::uint32_t kRaiContextLimit = 4096;
 
-/// \brief the largest number of tokens corelib will decode
-inline constexpr std::uint32_t kRaiDecodeLimit = 4095;
-
 /// \brief what the frontend must know before building this backend
 /// \note Inline so the registry can reject a request before the engine exists.
 inline flm::backend::BackendTraits rai_traits() {

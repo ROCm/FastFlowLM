@@ -2,6 +2,7 @@
 #include "rai/corelib_model_backend.hpp"
 
 #include "rai/corelib_runtime.hpp"
+#include "utils/file_access.hpp"
 #include "utils/utils.hpp"
 
 #include <algorithm>
@@ -18,6 +19,7 @@ namespace flm::rai {
 namespace {
 
 nlohmann::json ReadJson(const std::filesystem::path& path) {
+    flm::file_access::ObserveOpen(path);
     std::ifstream input(path, std::ios::binary);
     if (!input) throw std::runtime_error("Cannot open " + path.string());
     try {
@@ -122,7 +124,11 @@ PackageTokens ReadPackageTokens(const BackendSpec& spec,
         out.eos.push_back(require("eos_token"));
         const auto model_config = root / "config.json";
         if (std::filesystem::exists(model_config)) {
-            const auto listed = ReadJson(model_config).value("eos_token_id", nlohmann::json());
+            const auto document = ReadJson(model_config);
+            if (!document.is_object())
+                throw std::runtime_error(name + " " + model_config.string() +
+                                         " is not a JSON object");
+            const auto listed = document.value("eos_token_id", nlohmann::json());
             std::vector<int> ids;
             if (listed.is_number_integer()) ids.push_back(listed.get<int>());
             if (listed.is_array())
