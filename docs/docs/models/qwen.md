@@ -117,6 +117,8 @@ The same corelib path also runs `gemma4-it-rai:e2b` and `gemma4-it-rai:e4b` (tex
     - **Checkpoints take host memory.** A checkpoint (what lets a conversation rewind without replaying) copies the KV cache into host memory, in whole 4096-token pages up to the current position: about 80 MiB per filled page, so up to about 5 GiB at a full 262144-token context.
 - **`gemma4-it-rai:e2b` / `gemma4-it-rai:e4b` — up to 16384 tokens**, the length corelib has validated paged Gemma 4 to, and never past the GGUF's own `gemma4.context_length`. The default is 16384. Up to 4096 any length works; above 4096 the context must be a multiple of 4096. The KV cache for the whole context is allocated up front, when the model loads.
 
+Qwen3, Qwen3.5, Qwen3.6 and Gemma 4 run as corelib's own models, which pack their weights on every load: there is no packed-weight cache beside the GGUF. A `<gguf name>.rai-weights.bin` / `.json` pair left there by an earlier build is no longer read and can be deleted.
+
 ```powershell
 flm pull qwen3-rai:4b
 flm run  qwen3-rai:4b

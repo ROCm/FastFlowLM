@@ -1,9 +1,15 @@
 # Adding a model on the rai backend
 
 How to bring up a new model family on **rai**, the backend that reaches its
-kernels through ryzenai-corelib, using Phi-4 as the worked example. Qwen3, Gemma 4
-and Qwen3.5 follow the same layout, but every file named below has a `phi4`
-counterpart you can read straight through.
+kernels through ryzenai-corelib. There are two ways, and the first is the one
+to reach for:
+
+- **corelib runs the model whole** (it ships `ryzenai_corelib_model_<name>`):
+  write one `ModelSpec` and hand it to `flm::rai::Factory` — see §2a. Qwen3,
+  Qwen3.5, Qwen3.6 and Gemma 4 are built this way, each in one short
+  `<model>_rai_backend.cpp`.
+- **corelib has only the ops**: write the engine yourself, op by op, as
+  Phi-4 does — the rest of this document, from §2 on, walks through it.
 
 A backend names *where the kernels come from*: `flm` is FastFlowLM's own kernel
 flow, `rai` is corelib. That is a separate axis from which silicon the host has,
@@ -35,7 +41,7 @@ This is a contributor document. For *using* a backend once it exists — `--back
 |---|---|
 | **Platform** | Windows and Linux. Both configure and build; only Windows has been run on hardware, and the `src/test/phi4_rai` suite is still Windows-only. |
 | **Hardware** | An aie_next NPU. There is no simulator; a wrong shape shows up as garbage output, not an error. |
-| **corelib headers** | The corelib ABI is still pre-1.0, so FastFlowLM requires an **exact `0.26.0`** match on major, minor and patch. [`corelib_api.hpp`](../../include/rai/corelib_api.hpp) `#error`s on any other version — deliberately, because the C ABI has changed shape between patch releases. The version is queried before any other entry point, so a mismatched runtime reports a version error rather than a missing symbol. corelib's default build gives one `ryzenai_corelib_model_<name>` library per model, carrying its kernels, which must sit beside corelib. Each engine enables its model's kernel bundle on the stream it opens. |
+| **corelib headers** | The corelib ABI is still pre-1.0, so FastFlowLM requires an **exact `0.26.0`** match on major, minor and patch. [`corelib_api.hpp`](../../include/rai/corelib_api.hpp) `#error`s on any other version — deliberately, because the C ABI has changed shape between patch releases. The version is queried before any other entry point, so a mismatched runtime reports a version error rather than a missing symbol. corelib's default build gives one `ryzenai_corelib_model_<name>` library per model, carrying its kernels, which must sit beside corelib. A per-op engine (Phi-4) enables its model's kernel bundle on the stream it opens; a model corelib runs whole enables its own. |
 | **Weights** | A GGUF the vendor kernels can requantize. Phi-4 uses Q8_0; each weight is a `*_weights_create` call whose qweight source states `gguf_q8_0`. |
 
 Configure with:
@@ -75,6 +81,47 @@ architecture needs a new family.
 A family has at most one backend per provider. If you find yourself wanting two
 engines behind the same provider, the choice belongs in the catalog as two
 entries, not in the backend id.
+
+---
+
+## 2a. A model corelib runs whole
+
+[`rai/corelib_model.hpp`](../../include/rai/corelib_model.hpp) is a `causal_lm`
+over `ryzenai_corelib_model_*`; [`rai/corelib_model_backend.hpp`](../../include/rai/corelib_model_backend.hpp)
+is the `ModelBackend` around it. A family needs only its spec:
+
+```cpp
+flm::backend::BackendFactory rai_factory() {
+    return rai::Factory({
+        .model = {"qwen3", "Qwen3", kRaiContextLimit, rai::Continuation::kFromStart,
+                  rai::Rewind::kSeek},
+        .context_rule = "1..4096",
+        .eos_ids = {151645, 151643},
+    });
+}
+```
+
+Two fields say how the model behaves, and both come from what corelib's driver
+accepts (read its `models/<Name>.cpp`):
+
+| field | value | when |
+|---|---|---|
+| `continuation` | `kAnywhere` | the driver takes `rows > 1` at any position |
+| | `kFromStart` | only at position 0; a later prompt re-runs the conversation |
+| | `kFromPage` | at 0 or on a 4096-row page boundary of a paged cache |
+| `rewind` | `kSeek` | attention only: each pass states its position |
+| | `kSnapshot` | recurrent state in state slots: `model_state_save/restore` |
+| | `kReplay` | recurrent state outside any slot: reset and replay |
+
+Leave `eos_ids` empty to read the stop tokens from the package, and set
+`read_bos` when `tokenizer_config.json` names a BOS but no id states it.
+corelib packs the weights on every load; there is no packed-weight cache on
+this path.
+
+The header (`<model>_rai_backend.hpp`) keeps the `inline rai_traits()` and the
+context constants; registration in `builtin_backends.cpp` is unchanged.
+Tests: [`test/rai_model/`](../../test/rai_model/) covers the engine and the
+backend against the fake corelib; a new family adds no engine test of its own.
 
 ---
 
