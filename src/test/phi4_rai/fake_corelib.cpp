@@ -205,11 +205,14 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             return Status(Tag::name);
         } else if constexpr (std::is_same_v<Tag, model_weights_create_path_tag>) {
             const auto status = Status(Tag::name);
+            state.model_names.emplace_back(std::get<0>(arguments) ? std::get<0>(arguments) : "");
+            state.model_weights_path = std::get<1>(arguments) ? std::get<1>(arguments) : "";
             auto* out = std::get<2>(arguments);
             if (out) *out = status == ryzenai_corelib_status_success ? NewObject("model_weights") : nullptr;
             return status;
         } else if constexpr (std::is_same_v<Tag, model_create_tag>) {
             const auto status = Status(Tag::name);
+            state.model_names.emplace_back(std::get<0>(arguments) ? std::get<0>(arguments) : "");
             const auto* options = std::get<2>(arguments);
             auto* out = std::get<3>(arguments);
             state.model_max_sequence_length = options ? options->max_sequence_length : 0;
@@ -725,6 +728,8 @@ void Reset() {
     state.state_saves = 0;
     state.state_restores = 0;
     state.model_forwards.clear();
+    state.model_names.clear();
+    state.model_weights_path.clear();
 }
 
 flm::corelib::CorelibApi::Resolver Resolver() {

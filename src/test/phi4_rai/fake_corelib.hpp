@@ -153,6 +153,9 @@ struct State {
     std::size_t state_saves{};
     std::size_t state_restores{};
     std::vector<ModelForwardRecord> model_forwards;
+    /// \brief the name passed to model_weights_create_path, then to every model_create
+    std::vector<std::string> model_names;
+    std::string model_weights_path;
 };
 
 State& GetState();
