@@ -8,10 +8,10 @@ repository, so most of the work is standing up that prefix.
 Written against the working install on this machine. Paths use `$P` for the
 dependency prefix (here `/home/alfxu/ddprefix`); substitute your own.
 
-> **Status:** at corelib 0.11.0 the rai backend has been run on hardware on
-> Windows only. The Linux build configures and links against this layout, but
-> it has not been run end to end on Linux at this revision. The
-> [Known issues](#known-issues) are from an earlier Linux bring-up.
+> **Status:** the rai backend has been run on hardware on Windows only. The
+> steps below are updated for corelib 0.26.0, but they have not been run end
+> to end on Linux at this revision. The [Known issues](#known-issues) are from
+> an earlier Linux bring-up.
 
 ---
 
@@ -29,48 +29,44 @@ step 4 and installing XRT itself.
 
 ---
 
-## 1. Dependency prefix: DynamicDispatch, then corelib
+## 1. Dependency prefix: corelib
 
-This is the hard part and it is already written up in **`$P/BUILD-NOTES.md`** —
-read that first. It records the two things that actually matter (the required
-DD branch, and `BUILD_SHARED_LIBS=ON` for DD), the sudo-free dependency prefix,
-the non-PIC link traps, and the exact `cmake` command lines for both projects.
-
-Do not re-derive it. The short version:
+corelib no longer links DynamicDispatch, so there is no DD prefix to
+build first. **`$P/BUILD-NOTES.md`** still records the sudo-free dependency
+prefix and the non-PIC link traps; its DynamicDispatch steps no longer apply.
 
 ```bash
 P=/home/alfxu/ddprefix      # your dependency prefix
 
-# DynamicDispatch -> $P/install-dds     (see BUILD-NOTES.md for the full line)
-cmake -S DynamicDispatch -B build-dds ... -DCMAKE_INSTALL_PREFIX=$P/install-dds
-cmake --build build-dds -j"$(nproc)" --target install
-
 # ryzenai-corelib -> $P/install-corelib
 cmake -S ryzenai-corelib -B build-corelib -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX=$P/install-corelib \
-  -DRYZENAI_CORELIB_STAGE_RUNTIME_DLLS=OFF \
-  -DCMAKE_PREFIX_PATH="$P/install-dds;$P/shim;$P/root/usr;$P/root/usr/lib/x86_64-linux-gnu;/opt/xilinx/xrt"
-cmake --build build-corelib -j"$(nproc)"
+  -DCMAKE_PREFIX_PATH="$P/shim;$P/root/usr;$P/root/usr/lib/x86_64-linux-gnu;/opt/xilinx/xrt"
+cmake --build build-corelib -j"$(nproc)" --target install
 ```
 
+The default build installs `libryzenai_corelib.so` and one
+`libryzenai_corelib_model_<name>.so` per model, each carrying that model's
+kernels. corelib loads a model library only from the directory it was itself
+loaded from, so those libraries must sit beside it; nothing else is needed at
+run time, no kernel store and no environment variable.
+
 **Version must match exactly.** `src/include/rai/corelib_api.hpp` has a
-`#error` for anything other than corelib **0.11.0**:
+`#error` for anything other than corelib **0.26.0**:
 
 ```bash
 grep -E 'CORELIB_VERSION_(MAJOR|MINOR|PATCH)' \
   $P/install-corelib/include/ryzenai/corelib.h
 ```
 
-Must print `0`, `11`, `0`. (`BUILD-NOTES.md` still says 0.4.0 in its opening
-line — that text is stale; the installed headers are 0.11.0.) The headers must
-also be from after the weight API became one `*_weights_create` per operator;
-an older 0.11.0 checkout fails the FastFlowLM build on those symbols.
+Must print `0`, `26`, `0`. (`BUILD-NOTES.md` still says 0.4.0 in its opening
+line — that text is stale.)
 
 ### Verify corelib before going further
 
 ```bash
 source /opt/xilinx/xrt/setup.sh
-export LD_LIBRARY_PATH=$P/install-dds/lib:$P/install-corelib/lib:/opt/xilinx/xrt/lib:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=$P/install-corelib/lib:/opt/xilinx/xrt/lib:$LD_LIBRARY_PATH
 $P/build-corelib/tests/ryzenai_corelib_tests
 ```
 
@@ -98,8 +94,9 @@ What the flags do:
 
 - `--rai` selects the `linux-rai-on` preset (`-DFLM_ENABLE_RAI=ON`) and installs
   to `/scratch/$USER/flm_exe_rai` rather than `~/flm_exe`. A rai prefix stages
-  corelib and DynamicDispatch, which are far too large for a home directory, and
-  a rai build and a stock one would otherwise overwrite each other.
+  corelib and every `libryzenai_corelib_model_*.so` beside it, whose model
+  kernels are far too large for a home directory, and a rai build and a stock
+  one would otherwise overwrite each other.
 - `FLM_PREFIX=/path` overrides the install location.
 - `--no-build` installs an existing `build/` tree without rebuilding.
 
@@ -121,10 +118,11 @@ from the corelib *build tree*, not a stripped or patched copy:
 
 ```bash
 objdump -p src/lib/libryzenai_corelib.so | grep RUNPATH
-# -> /home/alfxu/ddprefix/install-dds/lib:/opt/xilinx/xrt/lib:
+# -> should name /opt/xilinx/xrt/lib
 ```
 
-Without that RUNPATH it will not find DynamicDispatch at run time.
+Without that RUNPATH it will not find XRT at run time. Copy every
+`libryzenai_corelib_model_*.so` into `src/lib/` beside it too.
 
 ### Rebuilding after a source change
 
@@ -150,7 +148,7 @@ rm -f /scratch/$USER/flm_exe_rai/lib/libxrt_coreutil.so.2
 ```
 
 This is a known bug in the installer's `ldd` staging walk
-(`home_install.sh:251-261`), not yet fixed. A rai prefix deliberately bundles no
+(`home_install.sh:247-256`), not yet fixed. A rai prefix deliberately bundles no
 XRT — `flm_env.sh` pins `XILINX_XRT` to the real root instead — so the staged
 copy is wrong by construction.
 
@@ -239,6 +237,9 @@ shape is a dead end.
 | `RYZENAI_CORELIB_SAFE_MODE` | force staging buffers, no host-pointer import |
 | `RYZENAI_CORELIB_NO_RUN_POOL` | disable run-object reuse |
 | `RYZENAI_CORELIB_NO_CRASH_HANDLER` | leave crashes to the debugger |
+| `RYZENAI_CORELIB_FALLBACK_PROFILE=1` | when a stream is released, report host (CPU fallback) time per artifact; no output means nothing fell back |
+| `RYZENAI_CORELIB_MAX_RUNS_IN_FLIGHT` | how many runs of one kernel a stream lets run ahead (64 unset, `0` for no cap) |
+| `RYZENAI_CORELIB_KERNELS_ROOT` | a kernel store to load from, for corelib development only; every model library already carries its kernels, so a normal run sets nothing |
 
 ### Other rough edges
 

@@ -13,6 +13,7 @@
 #include "models/phi4/rai/aie_next/phi4_rai_backend.hpp"
 #include "models/qwen3/rai/aie_next/qwen3_rai_backend.hpp"
 #include "models/qwen35/rai/aie_next/qwen35_rai_backend.hpp"
+#include "models/qwen36/rai/aie_next/qwen36_rai_backend.hpp"
 #endif
 
 namespace flm::backend {
@@ -70,6 +71,9 @@ void register_builtin_backends(BackendRegistry& registry) {
     registry.register_backend("qwen3.5", flm::backend::kRaiBackendId,
                               flm::qwen35::rai_factory(),
                               flm::qwen35::rai_traits());
+    registry.register_backend("qwen3.6-moe", flm::backend::kRaiBackendId,
+                              flm::qwen36::rai_factory(),
+                              flm::qwen36::rai_traits());
 #endif
 }
 

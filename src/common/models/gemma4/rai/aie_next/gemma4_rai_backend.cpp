@@ -132,11 +132,12 @@ public:
             throw std::invalid_argument(
                 "Gemma 4 rai does not support preemption");
         }
-        if (context.context_length < 1 ||
-            context.context_length > kRaiContextLimit) {
+        if (!ContextFits(context.context_length)) {
             throw std::out_of_range(
-                "Gemma 4 rai context length must be in 1..4096");
+                "Gemma 4 rai context length must be in 1..4096, or a multiple of 4096 up to " +
+                std::to_string(kMaxPagedContext));
         }
+        context_length_ = context.context_length;
 
         // 2-3. Read and cross-validate EVERY source of truth before the
         //      runtime is acquired or the engine built, so a mismatched
@@ -201,7 +202,9 @@ public:
                         : std::string();
     }
 
-    std::uint32_t max_decode_length() const override { return kRaiDecodeLimit; }
+    std::uint32_t max_decode_length() const override {
+        return context_length_ > 0 ? context_length_ - 1 : 0;
+    }
 
     bool supports_preemption() const override { return false; }
 
@@ -222,6 +225,7 @@ public:
 
 private:
     /// \brief read from the package at construction; see the constructor
+    std::uint32_t context_length_{};
     std::vector<int> forced_eos_ids_;
     /// \brief read from the package at construction; see the constructor
     int forced_bos_id_{};

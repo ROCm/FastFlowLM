@@ -40,7 +40,9 @@ public:
     /// \param runtime the corelib runtime this engine's objects belong to
     /// \param config the frontend's model configuration; not read for shape,
     ///        every dimension comes from the GGUF
-    /// \param max_length the context this engine is built for, 1..4096
+    /// \param max_length the context this engine is built for: 1..4096, or a
+    ///        multiple of 4096 up to kMaxPagedContext, and no longer than the
+    ///        GGUF's own `gemma4.context_length`
     gemma4_rai(std::shared_ptr<Gemma4GgufPackage> package,
                std::shared_ptr<corelib::CorelibRuntime> runtime,
                const LM_Config& config,
@@ -64,9 +66,11 @@ public:
     buffer<bf16> forward(int id) override;
     /// \brief one multi-token pass: `ids` in, softcapped logits for the last
     ///        position out
-    /// \note Same path as `forward`. Attention ships no chunked prefill, so a
-    ///       multi-row request at a non-zero position re-runs the tokens behind
-    ///       it together with `ids` from position 0.
+    /// \note Same path as `forward`. A multi-row pass must start at position 0
+    ///       or, on a paged cache, on a page boundary, so a multi-row request
+    ///       at any other position re-runs the tokens behind it from the
+    ///       nearest such start together with `ids`: from position 0 unpaged,
+    ///       from the current page's first row paged.
     /// \throws std::invalid_argument for an empty request, or a continuation
     ///         whose earlier tokens this engine does not hold
     /// \throws std::out_of_range as `forward`

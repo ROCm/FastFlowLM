@@ -734,6 +734,8 @@ inline Builder MakeBuilder(const FixtureOptions& options) {
     builder.SetMetadata("gemma4.attention.shared_kv_layers",
                        static_cast<std::uint32_t>(options.shared_kv_layers));
     builder.SetMetadata("gemma4.attention.sliding_window", std::uint32_t{512});
+    // Both shipped files state 131072.
+    builder.SetMetadata("gemma4.context_length", std::uint32_t{131072});
     // 9.999999974752427e-07f is the exact float32 bit pattern the real files
     // carry for 1e-6 -- see verified-gguf-facts.md's "one value the plan
     // never stated". Not Phi-4's 1e-5 (phi4_rai_constants.hpp's kRmsEpsilon).

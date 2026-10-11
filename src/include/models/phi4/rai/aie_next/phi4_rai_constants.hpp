@@ -19,7 +19,7 @@ inline constexpr std::int64_t kMaxDecodeWindow = 4095;
 inline constexpr std::uint32_t kRequantizedGroupSize = 64;
 /// Intra-packer thread hint for one Q8_0 requantizing create, passed as
 /// weights_options.fast_packer_threads. 0 lets corelib choose (8 threads at
-/// 0.11.0), so with kWeightCreateConcurrency creates in flight the packer
+/// 0.25.0), so with kWeightCreateConcurrency creates in flight the packer
 /// threads multiply; 1 keeps each create serial.
 inline constexpr std::uint32_t kRequantizeThreads = 0;
 

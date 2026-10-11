@@ -1450,7 +1450,7 @@
             "url": "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/0314792d7f1f7e229411f620751375812bb9faf2",
             "file_url": "https://huggingface.co/api/models/unsloth/gemma-4-E2B-it-GGUF/tree/0314792d7f1f7e229411f620751375812bb9faf2",
             "size": 5080530526,
-            "default_context_length": 4096,
+            "default_context_length": 16384,
             "max_prefill_len": 4096,
             "details": {
                 "family": "gemma4e",
@@ -1501,7 +1501,7 @@
             "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/bfc15c382204943c3a8fff0c750b94ae2364d7a3",
             "file_url": "https://huggingface.co/api/models/unsloth/gemma-4-E4B-it-GGUF/tree/bfc15c382204943c3a8fff0c750b94ae2364d7a3",
             "size": 8225131325,
-            "default_context_length": 4096,
+            "default_context_length": 16384,
             "max_prefill_len": 4096,
             "details": {
                 "family": "gemma4e",
@@ -1586,6 +1586,58 @@
             },
             "footprint": 11.0,
             "model_info_key": "qwen3.5-rai:9b",
+            "label": [
+                "reasoning",
+                "tool-calling"
+            ]
+        }
+    },
+        "qwen3.6-moe-rai":     {
+        "35b-a3b": {
+            "supported_platforms": [
+                "aie_next"
+            ],
+            "name": "Qwen3.6-35B-A3B",
+            "url": "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/a483e9e6cbd595906af30beda3187c2663a1118c",
+            "file_url": "https://huggingface.co/api/models/unsloth/Qwen3.6-35B-A3B-GGUF/tree/a483e9e6cbd595906af30beda3187c2663a1118c",
+            "size": 36915976470,
+            "default_context_length": 4096,
+            "max_prefill_len": 4096,
+            "details": {
+                "family": "qwen3.6-moe",
+                "think": true,
+                "parameter_size": "35B",
+                "quantization_level": "Q8_0 -> group-32"
+            },
+            "flm_min_version": "1.0.6",
+            "vlm": false,
+            "files": [
+                "Qwen3.6-35B-A3B-Q8_0.gguf",
+                "tokenizer.json",
+                "tokenizer_config.json",
+                "config.json",
+                "chat_template.jinja"
+            ],
+            "file_sources": {
+                "tokenizer.json": {
+                    "url": "https://huggingface.co/Qwen/Qwen3.6-35B-A3B",
+                    "revision": "995ad96eacd98c81ed38be0c5b274b04031597b0"
+                },
+                "tokenizer_config.json": {
+                    "url": "https://huggingface.co/Qwen/Qwen3.6-35B-A3B",
+                    "revision": "995ad96eacd98c81ed38be0c5b274b04031597b0"
+                },
+                "config.json": {
+                    "url": "https://huggingface.co/Qwen/Qwen3.6-35B-A3B",
+                    "revision": "995ad96eacd98c81ed38be0c5b274b04031597b0"
+                },
+                "chat_template.jinja": {
+                    "url": "https://huggingface.co/Qwen/Qwen3.6-35B-A3B",
+                    "revision": "995ad96eacd98c81ed38be0c5b274b04031597b0"
+                }
+            },
+            "footprint": 36.9,
+            "model_info_key": "qwen3.6-moe-rai:35b-a3b",
             "label": [
                 "reasoning",
                 "tool-calling"

@@ -85,6 +85,18 @@ void TestEngineCreatesOneStreamAndPersistentHelperSizedTensors() {
     TEST_REQUIRE(state.tensor_creates[7].shape == std::vector<std::int64_t>({1, 200064}));
 }
 
+void TestStreamEnablesThePhi4MiniBundleBeforeAnyKernelQuery() {
+    Harness h;
+    const auto& state = fake_corelib::GetState();
+    TEST_REQUIRE(state.kernel_bundles == std::vector<std::string>({"phi4mini"}));
+    const auto& log = state.call_log;
+    const auto created = std::find(log.begin(), log.end(), "ryzenai_corelib_create_stream");
+    const auto enabled = std::find(log.begin(), log.end(), "ryzenai_corelib_stream_enable_kernel_bundle");
+    const auto queried = std::find(log.begin(), log.end(), "ryzenai_corelib_matmul_bf16_enum_kernels");
+    TEST_REQUIRE(queried != log.end());
+    TEST_REQUIRE(created < enabled && enabled < queried);
+}
+
 void TestRopeTablesAreHostViewsNotDeviceTensors() {
     Harness h;
     const auto& views = fake_corelib::GetState().host_view_creates;
@@ -431,6 +443,16 @@ void TestVProjectionWritesWindowAtPositionTimes128() {
     TEST_REQUIRE(fake_corelib::GetState().dispatches[2].window_offset == 7 * 128);
 }
 
+void TestTheVProjectionWritesTheCacheThroughAStridedWindow() {
+    Harness h;
+    (void)h.engine->forward(1);
+    const auto& windows = fake_corelib::GetState().tensor_windows;
+    const auto v = std::find_if(windows.begin(), windows.end(),
+                                [](const auto& w) { return w.shape.size() == 3; });
+    TEST_REQUIRE(v != windows.end());
+    TEST_REQUIRE(v->strides == std::vector<std::int64_t>({4096 * 128, 128, 1}));
+}
+
 void TestEachLayerOrdersQKVThenMhaThenOThenSsmlpOnOneStream() {
     Harness h;
     (void)h.engine->forward(1);
@@ -586,7 +608,7 @@ void TestFakeTensorWindowRetainsAndPropagatesParentStorage() {
     const std::array<std::int64_t, 1> window_shape{4};
     void* window = nullptr;
     api->Check(api->functions().create_tensor_window(
-        parent, window_shape.data(), window_shape.size(), 4, &window), "create window");
+        parent, window_shape.data(), window_shape.size(), 4, nullptr, 0, &window), "create window");
     std::array<std::uint16_t, 4> read{};
     api->Check(api->functions().tensor_read(window, ryzenai_corelib_data_type_bf16,
                                              read.data(), read.size(), 0), "read window");
@@ -726,6 +748,7 @@ void TestTenSequentialLoadsReleaseEveryObjectAndNeverEmitAllZeroLogits() {
 int main() {
 #define RUN_TEST(name) RunTest(&name, #name)
     RUN_TEST(TestEngineCreatesOneStreamAndPersistentHelperSizedTensors);
+    RUN_TEST(TestStreamEnablesThePhi4MiniBundleBeforeAnyKernelQuery);
     RUN_TEST(TestRopeTablesAreHostViewsNotDeviceTensors);
     RUN_TEST(TestEngineAllocatesMaximaAcrossAllRowsAndConsumers);
     RUN_TEST(TestEngineCreatesExactly129MatmulAnd32SsmlpWeights);
@@ -742,6 +765,7 @@ int main() {
     RUN_TEST(TestPrefillDecodesEmbeddingRowsAndAdvancesPosition);
     RUN_TEST(TestDecodeUsesOneRowAndAdvancesPosition);
     RUN_TEST(TestVProjectionWritesWindowAtPositionTimes128);
+    RUN_TEST(TestTheVProjectionWritesTheCacheThroughAStridedWindow);
     RUN_TEST(TestEachLayerOrdersQKVThenMhaThenOThenSsmlpOnOneStream);
     RUN_TEST(TestPrefillStagesTheSameFp32EmbeddingIntoHiddenAndResidual);
     RUN_TEST(TestBuffersAreZeroPaddedBeforeSubmissionForEachRowBucket);

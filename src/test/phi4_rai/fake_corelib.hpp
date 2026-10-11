@@ -44,6 +44,7 @@ struct TensorWindowRecord {
     std::vector<std::int64_t> shape;
     std::size_t offset;
     void* object;
+    std::vector<std::int64_t> strides;
 };
 
 struct WeightCreateRecord {
@@ -85,6 +86,12 @@ struct WeightFromFileRecord {
     std::string path;
     std::uint64_t offset{};
     std::uint64_t size{};
+};
+
+struct ModelForwardRecord {
+    std::size_t rows{};
+    std::size_t position{};
+    bool logits{};
 };
 
 struct State {
@@ -135,10 +142,17 @@ struct State {
     std::vector<DispatchRecord> dispatches;
     std::vector<TensorWriteRecord> tensor_writes;
     std::vector<std::string> call_log;
+    std::vector<std::string> kernel_bundles;
     std::atomic<int> active_weight_creates{0};
     std::atomic<int> maximum_active_weight_creates{0};
     bool work_in_flight{false};
     std::string fail_after_submit;
+    std::int64_t model_max_sequence_length{-1};
+    std::int64_t model_vocab{8};
+    std::size_t model_creates{};
+    std::size_t state_saves{};
+    std::size_t state_restores{};
+    std::vector<ModelForwardRecord> model_forwards;
 };
 
 State& GetState();

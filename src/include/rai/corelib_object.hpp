@@ -3,6 +3,7 @@
 #include "rai/corelib_api.hpp"
 
 #include <memory>
+#include <string>
 #include <utility>
 
 namespace flm::corelib {
@@ -16,6 +17,9 @@ struct SsMlpWeightsTag {};
 struct RmsNormWeightsTag {};
 struct PleWeightsTag {};
 struct DwConvWeightsTag {};
+struct ModelTag {};
+struct ModelWeightsTag {};
+struct ModelSnapshotTag {};
 
 template <typename Tag>
 class UniqueObject final {
@@ -68,5 +72,23 @@ using UniqueSsMlpWeights = UniqueObject<SsMlpWeightsTag>;
 using UniqueRmsNormWeights = UniqueObject<RmsNormWeightsTag>;
 using UniquePleWeights = UniqueObject<PleWeightsTag>;
 using UniqueDwConvWeights = UniqueObject<DwConvWeightsTag>;
+using UniqueModel = UniqueObject<ModelTag>;
+using UniqueModelWeights = UniqueObject<ModelWeightsTag>;
+using UniqueModelSnapshot = UniqueObject<ModelSnapshotTag>;
+
+/// \brief a stream on the PDI pair that resolves the kernels `bundle` ships
+/// \note A new stream resolves no kernel at all: every enumeration comes back
+///       empty and every dispatch runs on the host until a bundle is enabled,
+///       so this has to precede the shape plan and the weights.
+inline UniqueStream OpenModelStream(const std::shared_ptr<const CorelibApi>& api,
+                                    int prefill_pdi, int token_pdi, const char* bundle) {
+    void* raw = nullptr;
+    api->Check(api->functions().create_stream(prefill_pdi, token_pdi, &raw),
+               "ryzenai_corelib_create_stream");
+    UniqueStream stream(api, raw);
+    api->Check(api->functions().stream_enable_kernel_bundle(stream.get(), bundle),
+               std::string("ryzenai_corelib_stream_enable_kernel_bundle ") + bundle);
+    return stream;
+}
 
 }  // namespace flm::corelib

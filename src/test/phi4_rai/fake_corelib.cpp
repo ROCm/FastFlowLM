@@ -29,6 +29,7 @@ struct FakeObject {
     std::vector<std::int64_t> shape;
     std::size_t byte_size{};
     std::size_t window_offset{};
+    std::vector<std::int64_t> strides;
     std::shared_ptr<FakeStorage> storage;
 };
 
@@ -198,6 +199,52 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             auto* out = std::get<2>(arguments);
             if (out) *out = status == ryzenai_corelib_status_success ? NewObject("stream") : nullptr;
             return status;
+        } else if constexpr (std::is_same_v<Tag, stream_enable_kernel_bundle_tag>) {
+            const char* model = std::get<1>(arguments);
+            state.kernel_bundles.emplace_back(model ? model : "");
+            return Status(Tag::name);
+        } else if constexpr (std::is_same_v<Tag, model_weights_create_path_tag>) {
+            const auto status = Status(Tag::name);
+            auto* out = std::get<2>(arguments);
+            if (out) *out = status == ryzenai_corelib_status_success ? NewObject("model_weights") : nullptr;
+            return status;
+        } else if constexpr (std::is_same_v<Tag, model_create_tag>) {
+            const auto status = Status(Tag::name);
+            const auto* options = std::get<2>(arguments);
+            auto* out = std::get<3>(arguments);
+            state.model_max_sequence_length = options ? options->max_sequence_length : 0;
+            ++state.model_creates;
+            if (out) *out = status == ryzenai_corelib_status_success ? NewObject("model") : nullptr;
+            return status;
+        } else if constexpr (std::is_same_v<Tag, model_info_get_tag>) {
+            auto* out = std::get<1>(arguments);
+            if (out) {
+                constexpr std::int64_t kPage = 4096;
+                const auto wanted = std::max<std::int64_t>(state.model_max_sequence_length, 1);
+                *out = {state.model_vocab, (wanted + kPage - 1) / kPage * kPage, 16, 4};
+            }
+            return Status(Tag::name);
+        } else if constexpr (std::is_same_v<Tag, model_forward_tag>) {
+            const auto* options = std::get<5>(arguments);
+            state.model_forwards.push_back(
+                {std::get<3>(arguments),
+                 options ? options->position : RYZENAI_CORELIB_POSITION_CONTINUE,
+                 options && options->logits});
+            if (options && options->logits)
+                std::fill_n(options->logits,
+                            std::min<std::size_t>(options->logits_capacity,
+                                                  static_cast<std::size_t>(state.model_vocab)),
+                            0.5f);
+            return Status(Tag::name);
+        } else if constexpr (std::is_same_v<Tag, model_state_save_tag>) {
+            const auto status = Status(Tag::name);
+            ++state.state_saves;
+            auto* out = std::get<1>(arguments);
+            if (out) *out = status == ryzenai_corelib_status_success ? NewObject("snapshot") : nullptr;
+            return status;
+        } else if constexpr (std::is_same_v<Tag, model_state_restore_tag>) {
+            ++state.state_restores;
+            return Status(Tag::name);
         } else if constexpr (std::is_same_v<Tag, create_device_tensor_tag>) {
             const auto status = Status(Tag::name);
             const auto type = std::get<0>(arguments);
@@ -222,7 +269,7 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             const auto* shape = std::get<1>(arguments);
             const auto shape_len = std::get<2>(arguments);
             const auto offset = std::get<3>(arguments);
-            auto* out = std::get<4>(arguments);
+            auto* out = std::get<6>(arguments);
             if (out) *out = nullptr;
             if (status == ryzenai_corelib_status_success && out && shape) {
                 auto* object = static_cast<FakeObject*>(NewObject("window"));
@@ -234,8 +281,11 @@ struct TypedFake<Tag, Result (*)(Args...)> {
                 }
                 object->shape.assign(shape, shape + shape_len);
                 object->byte_size = Elements(object->shape) * TypeBytes(object->data_type);
+                const auto* strides = std::get<4>(arguments);
+                const auto strides_len = std::get<5>(arguments);
+                if (strides) object->strides.assign(strides, strides + strides_len);
                 *out = object;
-                state.tensor_windows.push_back({parent, object->shape, offset, object});
+                state.tensor_windows.push_back({parent, object->shape, offset, object, object->strides});
             }
             return status;
         } else if constexpr (std::is_same_v<Tag, create_host_view_tag>) {
@@ -522,6 +572,21 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             }
             const auto status = Status(Tag::name);
             if (status != ryzenai_corelib_status_success) return status;
+            if constexpr (std::is_same_v<Tag, matmul_tag>) {
+                // Like corelib: a 3-D output is the cache-writing form and must
+                // be a strided window [k * head, head, 1] with k >= its rows.
+                const auto* output = static_cast<FakeObject*>(std::get<3>(arguments));
+                if (output && output->shape.size() == 3) {
+                    const auto& strides = output->strides;
+                    const auto head = output->shape[2];
+                    if (head <= 0 || strides.size() != 3 || strides[2] != 1 || strides[1] != head ||
+                        strides[0] % head != 0 || strides[0] / head < output->shape[1]) {
+                        state.detail = "a cache-writing 3-D output must be a window with strides "
+                                       "[max_seq * head_size, head_size, 1]";
+                        return ryzenai_corelib_status_bad_argument;
+                    }
+                }
+            }
             if constexpr (std::is_same_v<Tag, flat_mha_tag>) {
                 // Real corelib reads the rotary tables on the host and rejects
                 // anything but a host view for them.
@@ -649,10 +714,17 @@ void Reset() {
     state.dispatches.clear();
     state.tensor_writes.clear();
     state.call_log.clear();
+    state.kernel_bundles.clear();
     state.active_weight_creates = 0;
     state.maximum_active_weight_creates = 0;
     state.work_in_flight = false;
     state.fail_after_submit.clear();
+    state.model_max_sequence_length = -1;
+    state.model_vocab = 8;
+    state.model_creates = 0;
+    state.state_saves = 0;
+    state.state_restores = 0;
+    state.model_forwards.clear();
 }
 
 flm::corelib::CorelibApi::Resolver Resolver() {

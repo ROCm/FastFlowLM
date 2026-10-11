@@ -89,6 +89,9 @@ constexpr const char* kRai = "rai";
 constexpr int kRealEosId = 106;
 constexpr const char* kRealEosToken = "<turn|>";
 
+/// \brief the other stop id real packages list in config.json (`<eos>`)
+constexpr int kRealConfigEosId = 1;
+
 /// \brief the BOS id every real Gemma 4 package states, from three sources
 /// \note `tokenizer.ggml.bos_token_id` in the GGUF, `text_config.bos_token_id`
 ///       in config.json -- NOT the top level, which is where the EOS lives and
@@ -423,7 +426,7 @@ void TestTraitsAreReadableWithoutConstructingAnEngine() {
     const auto traits = flm::gemma4::rai_traits();
     TEST_REQUIRE(!traits.needs_npu_xclbin);
     TEST_REQUIRE(!traits.supports_preemption);
-    TEST_REQUIRE(traits.max_context_length == 4096);
+    TEST_REQUIRE(traits.max_context_length == 16384);
     // Nothing above touched corelib, a GGUF or the filesystem, which is the
     // property that lets the frontend consult it while it is still ASSEMBLING
     // the BackendContext -- before any engine exists to ask.
@@ -439,16 +442,22 @@ void TestTraitsComeBackOutOfTheRegistryUnchanged() {
 }
 
 void TestTheTraitsCeilingIsTheEnginesOwnLimit() {
-    // Two numbers that must not drift apart: the frontend rejects an
-    // over-long context against the TRAITS, and the engine rejects it again
-    // against kMaxSequenceLength. A traits ceiling above the engine's would
-    // pass the frontend and throw out of the engine constructor instead.
+    // The frontend rejects an over-long context against the TRAITS. The
+    // engine accepts the same ceiling: 1..4096 unpaged, or whole pages up to
+    // kMaxPagedContext.
     TEST_REQUIRE(flm::gemma4::kRaiContextLimit ==
-                 static_cast<std::uint32_t>(flm::gemma4::kMaxSequenceLength));
-    TEST_REQUIRE(flm::gemma4::kRaiDecodeLimit ==
-                 static_cast<std::uint32_t>(flm::gemma4::kMaxDecodeWindow));
+                 static_cast<std::uint32_t>(flm::gemma4::kMaxPagedContext));
     TEST_REQUIRE(flm::gemma4::kRaiDecodeLimit + 1 ==
                  flm::gemma4::kRaiContextLimit);
+}
+
+void TestContextFitsStopsAtTheValidated16384() {
+    TEST_REQUIRE(flm::gemma4::ContextFits(4096));
+    TEST_REQUIRE(flm::gemma4::ContextFits(8192));
+    TEST_REQUIRE(flm::gemma4::ContextFits(16384));
+    TEST_REQUIRE(!flm::gemma4::ContextFits(10000));
+    TEST_REQUIRE(!flm::gemma4::ContextFits(20480));
+    TEST_REQUIRE(!flm::gemma4::ContextFits(131072));
 }
 
 // ---------------------------------------------------------------------------
@@ -476,6 +485,17 @@ void TestAnOverLongContextIsRejectedBeforeAnythingIsOpened() {
     Request request(package, /*context_length=*/4097);
     const auto error = RequireThrows([&] { (void)Build(request.context); });
     RequireContains(error, "4096");
+    TEST_REQUIRE(audit.names.empty());
+    TEST_REQUIRE(runtime.nothing_created());
+}
+
+void TestAContextPastThePagedCeilingIsRejectedBeforeAnythingIsOpened() {
+    TempPackage package(E2bFixture(), {"gemma-4-E2B-it-Q8_0.gguf"});
+    FakeRuntimeScope runtime;
+    OpenAudit audit;
+    Request request(package, /*context_length=*/20480);
+    RequireContains(RequireThrows([&] { (void)Build(request.context); }),
+                    "16384");
     TEST_REQUIRE(audit.names.empty());
     TEST_REQUIRE(runtime.nothing_created());
 }
@@ -614,7 +634,8 @@ void TestAPackageWithNoGgufIsNamedRatherThanGuessedAt() {
 ///       that a package stating `bos_token` and no `bos_token_id` -- which is
 ///       every real Gemma 4 package -- killed the process in the frontend.
 void RequireTheSevenOverrides(flm::backend::ModelBackend& backend,
-                              int expected_eos, int expected_bos) {
+                              const std::vector<int>& expected_eos,
+                              int expected_bos) {
     TEST_REQUIRE(backend.id() == std::string(flm::backend::kRaiBackendId));
     TEST_REQUIRE(backend.id() == std::string("rai"));
     // The provenance line in `flm show`: the library the runtime ACTUALLY
@@ -628,7 +649,7 @@ void RequireTheSevenOverrides(flm::backend::ModelBackend& backend,
     TEST_REQUIRE(!backend.poisoned());
     const auto eos = backend.forced_eos_ids();
     TEST_REQUIRE(eos.has_value());
-    TEST_REQUIRE(*eos == std::vector<int>{expected_eos});
+    TEST_REQUIRE(*eos == expected_eos);
     // The seventh. Without it AutoModel::_shared_setup_tokenizer exits the
     // process on any package that names `bos_token` without stating an id --
     // which is what both shipped Google packages do.
@@ -641,7 +662,7 @@ void TestTheSevenOverridesOnASyntheticE2bPackage() {
     TempPackage package(E2bFixture(), {"gemma-4-E2B-it-Q8_0.gguf"});
     FakeRuntimeScope runtime;
     auto backend = Build(Request(package).context);
-    RequireTheSevenOverrides(*backend, kRealEosId, kRealBosId);
+    RequireTheSevenOverrides(*backend, {kRealEosId}, kRealBosId);
     TEST_REQUIRE(runtime.live_objects() > runtime.baseline_objects);
 }
 
@@ -652,7 +673,7 @@ void TestTheSevenOverridesOnASyntheticE4bPackage() {
     TempPackage package(E4bFixture(), {"gemma-4-E4B-it-Q8_0.gguf"});
     FakeRuntimeScope runtime;
     auto backend = Build(Request(package).context);
-    RequireTheSevenOverrides(*backend, kE4bEosId, kE4bBosId);
+    RequireTheSevenOverrides(*backend, {kE4bEosId}, kE4bBosId);
 }
 
 void TestTheBackendOwnsTheEngineItReportsOn() {
@@ -1113,8 +1134,10 @@ void TestTripwireOneTheAieNextFallbackIsGemma4AndItsFamilyCanLoad() {
     auto& registry = flm::backend::BackendRegistry::instance();
     TEST_REQUIRE(registry.has(family, kRai));
     const auto traits = registry.traits(family, kRai);
-    TEST_REQUIRE(traits.max_context_length ==
-                 info.at("default_context_length").get<std::uint32_t>());
+    const auto default_context =
+        info.at("default_context_length").get<std::uint32_t>();
+    TEST_REQUIRE(default_context <= traits.max_context_length);
+    TEST_REQUIRE(flm::gemma4::ContextFits(default_context));
 }
 
 void TestTripwireOneAnUnresolvableTagStillLoadsRatherThanThrowing() {
@@ -1137,7 +1160,7 @@ void TestTripwireOneAnUnresolvableTagStillLoadsRatherThanThrowing() {
     auto backend = flm::backend::BackendRegistry::instance().create(
         family, kRai, request.context);
     TEST_REQUIRE(backend->id() == std::string(kRai));
-    TEST_REQUIRE(backend->max_decode_length() == 4095);
+    TEST_REQUIRE(backend->max_decode_length() == context_length - 1);
 }
 
 void TestTripwireOneStxIsUnaffected() {
@@ -1367,7 +1390,8 @@ void RequireRealPackageLoads(const std::filesystem::path& gguf,
     // them. The BOS half is the one that matters most here: Google's
     // tokenizer_config.json does not state it, so this is the assertion that
     // says the value the frontend will use really did come off these files.
-    RequireTheSevenOverrides(*backend, kRealEosId, kRealBosId);
+    // config.json lists eos_token_id [1, 106], so <eos> stops generation too.
+    RequireTheSevenOverrides(*backend, {kRealEosId, kRealConfigEosId}, kRealBosId);
     auto* engine = dynamic_cast<flm::gemma4::gemma4_rai*>(&backend->engine());
     TEST_REQUIRE(engine != nullptr);
     TEST_REQUIRE(engine->weight_slot_count() == expected_slots);
@@ -1424,9 +1448,11 @@ int main() {
     RUN_TEST(TestTraitsAreReadableWithoutConstructingAnEngine);
     RUN_TEST(TestTraitsComeBackOutOfTheRegistryUnchanged);
     RUN_TEST(TestTheTraitsCeilingIsTheEnginesOwnLimit);
+    RUN_TEST(TestContextFitsStopsAtTheValidated16384);
 
     RUN_TEST(TestPreemptionIsRejectedBeforeAnythingIsOpened);
     RUN_TEST(TestAnOverLongContextIsRejectedBeforeAnythingIsOpened);
+    RUN_TEST(TestAContextPastThePagedCeilingIsRejectedBeforeAnythingIsOpened);
     RUN_TEST(TestAZeroContextIsRejectedBeforeAnythingIsOpened);
     RUN_TEST(TestAMismatchedConfigJsonIsRejectedAndNoDeviceObjectIsCreated);
     RUN_TEST(TestABadPackageIsDiagnosedBeforeTheRuntimeIsAcquired);

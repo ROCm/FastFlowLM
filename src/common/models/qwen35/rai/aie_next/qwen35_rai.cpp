@@ -122,15 +122,7 @@ public:
         const int layers = cfg->layers;
 
         auto lease = this->runtime->AcquireExecution();
-        void* raw = nullptr;
-        api->Check(api->functions().create_stream(kPrefillPdi, kTokenPdi, &raw),
-                   "ryzenai_corelib_create_stream");
-        stream = UniqueStream(api, raw);
-        const char* root = api->functions().stream_get_kernels_root(stream.get());
-        if (!root || !*root)
-            throw std::runtime_error(
-                "this stream has no kernel root. Set RYZENAI_CORELIB_DD_ROOT to the existing "
-                "DynamicDispatch checkout; corelib reads kernels from its transaction/mds");
+        stream = corelib::OpenModelStream(api, kPrefillPdi, kTokenPdi, "qwen35");
 
         const auto matmul = ShapeGrid::Matmul(*api, stream.get());
         const auto sigmoid = ShapeGrid::MatmulAct(
@@ -269,10 +261,13 @@ private:
     }
 
     UniqueTensor Window(void* parent, std::initializer_list<std::int64_t> shape, std::size_t offset,
-                        const char* label) {
+                        const char* label, std::initializer_list<std::int64_t> strides = {}) {
         std::vector<std::int64_t> dims(shape);
+        std::vector<std::int64_t> steps(strides);
         void* created = nullptr;
-        api->Check(api->functions().create_tensor_window(parent, dims.data(), dims.size(), offset, &created),
+        api->Check(api->functions().create_tensor_window(parent, dims.data(), dims.size(), offset,
+                                                         steps.empty() ? nullptr : steps.data(),
+                                                         steps.size(), &created),
                    label);
         return UniqueTensor(api, created);
     }
@@ -585,7 +580,7 @@ private:
                             io.dw_q.get(), io.dw_k.get(), io.dw_v.get(), io.conv[1 - side].get()),
                    "dwconv");
         api->Check(f.linear_attention(stream.get(), &lin_desc, io.state[side].get(), io.dw_q.get(), io.dw_k.get(),
-                                      io.dw_v.get(), io.g_live.get(), io.beta_live.get(), io.lin_out.get(),
+                                      io.dw_v.get(), io.g_live.get(), io.beta_live.get(), 1, io.lin_out.get(),
                                       io.state[1 - side].get()),
                    "linear attention");
         api->Check(f.rmsnorm(stream.get(), io.lin_out.get(), weights.norm.get(), io.lin_out.get()),
@@ -604,7 +599,8 @@ private:
         auto& v_row = io.v_rows[static_cast<std::size_t>(position)];
         if (!v_row) {
             v_row = Window(io.v_cache.get(), {cfg->kv_heads, 1, cfg->head_dim},
-                           static_cast<std::size_t>(position) * cfg->head_dim, "v row");
+                           static_cast<std::size_t>(position) * cfg->head_dim, "v row",
+                           {kMaxSequenceLength * cfg->head_dim, cfg->head_dim, 1});
         }
         api->Check(f.matmul(stream.get(), hidden, weights.q.get(), io.q_raw.get()), "q");
         api->Check(f.matmul(stream.get(), hidden, weights.k.get(), io.k_live.get()), "k");

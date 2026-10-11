@@ -586,6 +586,50 @@ void TestPleRowsRoundUpToAShippedBucket() {
 /// few columns wider is a different artifact. The plan must not take it as
 /// covering the logical shape. The N side and the K side are broken
 /// independently, so a fix that only compared one would not pass this.
+/// \brief the paged kernels corelib 0.26's gemma4 bundle ships: the decode
+///        step and the page-sized chunk, nothing in between
+void ShipPagedChunkOnly(const Gemma4Config& config) {
+    auto& state = fake_corelib::GetState();
+    for (const auto head : {config.head_dim, config.global_head_dim}) {
+        for (const std::int64_t rows : {std::int64_t{1}, flm::gemma4::kPageSize}) {
+            state.shipped_paged.push_back(
+                {config.q_heads, config.kv_heads, rows, head, flm::gemma4::kPageSize});
+        }
+    }
+}
+
+void TestAPagedPlanSizesAttentionFromFlatMhaAtPositionZero() {
+    fake_corelib::Reset();
+    auto api = Api();
+    auto* stream = fake_corelib::MakeStreamForTest();
+    const auto config = E2bConfigForTest();
+    ShipFullGrid(config);
+    ShipPagedChunkOnly(config);
+    const auto plan = Gemma4ShapePlan::Build(api, stream, config, 2 * flm::gemma4::kPageSize);
+    TEST_REQUIRE(plan.ForRows(19, /*swa=*/true).flat_mha_rows == 64);
+    TEST_REQUIRE(plan.ForRows(100, /*swa=*/false).flat_mha_rows == 128);
+    TEST_REQUIRE(plan.ForRows(4096, /*swa=*/true).flat_mha_rows == 4096);
+}
+
+void TestAPagedPlanRefusesAGridWithoutThePageSizedChunk() {
+    fake_corelib::Reset();
+    auto api = Api();
+    auto* stream = fake_corelib::MakeStreamForTest();
+    const auto config = E2bConfigForTest();
+    ShipFullGrid(config);
+    for (const auto head : {config.head_dim, config.global_head_dim}) {
+        fake_corelib::GetState().shipped_paged.push_back(
+            {config.q_heads, config.kv_heads, 1, head, flm::gemma4::kPageSize});
+    }
+    std::string error;
+    try {
+        (void)Gemma4ShapePlan::Build(api, stream, config, 2 * flm::gemma4::kPageSize);
+    } catch (const std::runtime_error& e) {
+        error = e.what();
+    }
+    RequireContains(error, "paged_mha chunk has no kernel");
+}
+
 void TestPlanRejectsAGridWithoutItsExactKAndN() {
     const auto config = E2bConfigForTest();
     RequireGridBreaks(config, [&config](auto& state) {
@@ -619,13 +663,13 @@ void TestFakeRejectsAWindowThatDoesNotFitItsParent() {
     // 16 elements starting 16 in: exactly reaches the end, so it is legal.
     const std::int64_t window_shape[] = {2, 8};
     ryzenai_corelib_tensor_ptr fits = nullptr;
-    TEST_REQUIRE(fns.create_tensor_window(parent, window_shape, 2, 16, &fits) ==
+    TEST_REQUIRE(fns.create_tensor_window(parent, window_shape, 2, 16, nullptr, 0, &fits) ==
                  ryzenai_corelib_status_success);
     TEST_REQUIRE(fits != nullptr);
 
     // The same shape 8 elements further along runs 8 past the end.
     ryzenai_corelib_tensor_ptr overruns = nullptr;
-    TEST_REQUIRE(fns.create_tensor_window(parent, window_shape, 2, 24, &overruns) !=
+    TEST_REQUIRE(fns.create_tensor_window(parent, window_shape, 2, 24, nullptr, 0, &overruns) !=
                  ryzenai_corelib_status_success);
     TEST_REQUIRE(overruns == nullptr);
 
@@ -717,9 +761,9 @@ void TestFakeRejectsSsmlpOperandsThatAliasOneAllocation() {
                  ryzenai_corelib_status_success);
     ryzenai_corelib_tensor_ptr front = nullptr;
     ryzenai_corelib_tensor_ptr back = nullptr;
-    TEST_REQUIRE(fns.create_tensor_window(parent, shape, 2, 0, &front) ==
+    TEST_REQUIRE(fns.create_tensor_window(parent, shape, 2, 0, nullptr, 0, &front) ==
                  ryzenai_corelib_status_success);
-    TEST_REQUIRE(fns.create_tensor_window(parent, shape, 2, 64 * 1536, &back) ==
+    TEST_REQUIRE(fns.create_tensor_window(parent, shape, 2, 64 * 1536, nullptr, 0, &back) ==
                  ryzenai_corelib_status_success);
     // THE POINT: distinct handles, one allocation.
     TEST_REQUIRE(front != back);
@@ -834,6 +878,8 @@ int main() {
     RUN_TEST(TestDispatchRecordsCarryTheDescriptorTheyRanWith);
     RUN_TEST(TestE4bGroupDirectionAndLmHeadPlan);
     RUN_TEST(TestPleRowsRoundUpToAShippedBucket);
+    RUN_TEST(TestAPagedPlanSizesAttentionFromFlatMhaAtPositionZero);
+    RUN_TEST(TestAPagedPlanRefusesAGridWithoutThePageSizedChunk);
     RUN_TEST(TestPlanRejectsAGridWithoutItsExactKAndN);
     RUN_TEST(TestFakeRejectsAWindowThatDoesNotFitItsParent);
     RUN_TEST(TestFakeBoundsChecksTensorWriteAndRead);

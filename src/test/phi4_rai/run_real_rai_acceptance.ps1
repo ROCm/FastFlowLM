@@ -1,7 +1,7 @@
 param(
   [string]$FlmExe = 'src/build-rai/Release/flm.exe',
   [string]$Model = 'phi4-mini-it:4b',
-  [string]$CorelibDll = 'C:/Users/chiz/work/ryzenai-corelib/install/bin/ryzenai_corelib.dll',
+  [string]$CorelibDll = 'C:/Users/chiz/work/ryzenai-corelib-0.25/install/bin/ryzenai_corelib.dll',
   [string]$Output = 'src/build-rai/phi4-gguf-rai-acceptance.json',
   [int]$Port = 52625,
   [string]$Python = 'python',
@@ -137,7 +137,7 @@ function CurlStream([string]$name,[string]$path,$body){$f=BodyFile $name $body;$
 function CurlBackground([string]$name,[string]$path,$body,[string]$outFile){$f=BodyFile $name $body;return (Start-Process curl.exe -ArgumentList @('-sS','-N','-H',$ContentTypeArg,'-d',"@$f","http://127.0.0.1:$Port$path") -RedirectStandardOutput $outFile -PassThru)}
 try{
  $record.host.computer=$env:COMPUTERNAME;$record.host.cpu=(Get-CimInstance Win32_Processor).Name;$record.host.npu=(Get-CimInstance Win32_PnPEntity|Where-Object Name -match 'NPU|Neural').Name;$os=Get-CimInstance Win32_OperatingSystem;$record.host.windows="$($os.Caption) $($os.Version) build $($os.BuildNumber)";$record.host.power=(powercfg /getactivescheme|Out-String).Trim()
- $gitRev={param($d) if(-not (Test-Path $d)){return 'unknown'};$keep=$ErrorActionPreference;$ErrorActionPreference='SilentlyContinue';$r=$null;try{$r=(& git -C $d rev-parse HEAD 2>$null | Select-Object -First 1)}catch{$r=$null};$ErrorActionPreference=$keep;$global:LASTEXITCODE=0;if([string]::IsNullOrWhiteSpace($r)){'unknown'}else{([string]$r).Trim()}};$record.provenance.fastflow=(& $gitRev $root);$coreRoot=(Resolve-Path (Join-Path $runtime '..')).Path;$record.provenance.corelib=(& $gitRev $coreRoot);$record.provenance.corelib_abi='0.5.0';$record.provenance.gguf_revision='78eb92a46fc37e6b524df991ed9aca9bc6aa7b80';$record.provenance.tokenizer_revision='cfbefacb99257ffa30c83adab238a50856ac3083';$record.provenance.corelib_sha256=(Get-FileHash $core -Algorithm SHA256).Hash.ToLower()
+ $gitRev={param($d) if(-not (Test-Path $d)){return 'unknown'};$keep=$ErrorActionPreference;$ErrorActionPreference='SilentlyContinue';$r=$null;try{$r=(& git -C $d rev-parse HEAD 2>$null | Select-Object -First 1)}catch{$r=$null};$ErrorActionPreference=$keep;$global:LASTEXITCODE=0;if([string]::IsNullOrWhiteSpace($r)){'unknown'}else{([string]$r).Trim()}};$record.provenance.fastflow=(& $gitRev $root);$coreRoot=(Resolve-Path (Join-Path $runtime '..')).Path;$record.provenance.corelib=(& $gitRev $coreRoot);$record.provenance.corelib_abi='0.25.0';$record.provenance.gguf_revision='78eb92a46fc37e6b524df991ed9aca9bc6aa7b80';$record.provenance.tokenizer_revision='cfbefacb99257ffa30c83adab238a50856ac3083';$record.provenance.corelib_sha256=(Get-FileHash $core -Algorithm SHA256).Hash.ToLower()
  Cmd "$exe check $Model" {&$exe check $Model|Out-Host;if($LASTEXITCODE-ne 0){throw 'check failed'}}
  # The packed-weight cache is written into the model directory, so a second run
  # finds two more files there. They are derived, not downloaded: name them and

@@ -288,6 +288,11 @@ Gemma4Config ConfigFromMetadata(const flm::rai::GgufFile& file) {
 
     const auto sliding_window =
         static_cast<std::int64_t>(file.Unsigned("gemma4.attention.sliding_window"));
+    // A file that does not state its context gets one page, as corelib's
+    // driver does.
+    const auto context_length = file.HasMetadata("gemma4.context_length")
+        ? static_cast<std::int64_t>(file.Unsigned("gemma4.context_length"))
+        : kMaxSequenceLength;
     const auto eps =
         static_cast<float>(file.Number("gemma4.attention.layer_norm_rms_epsilon"));
     const auto rope_theta = file.Number("gemma4.rope.freq_base");
@@ -361,6 +366,7 @@ Gemma4Config ConfigFromMetadata(const flm::rai::GgufFile& file) {
     config.group = row.group;
     config.head_group = row.head_group;
     config.ple_group = row.ple_group;
+    config.context_length = context_length;
     return config;
 }
 

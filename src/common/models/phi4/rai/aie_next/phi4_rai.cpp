@@ -138,8 +138,8 @@ struct phi4_rai::Impl {
 
         first_norm_scale = an[0];
         phases.host_prep = phases.Lap();
-        auto lease=runtime->AcquireExecution(); void* raw=nullptr;
-        api->Check(api->functions().create_stream(kPrefillPdi,kTokenPdi,&raw),"ryzenai_corelib_create_stream"); stream=UniqueStream(api,raw);
+        auto lease=runtime->AcquireExecution();
+        stream=corelib::OpenModelStream(api,kPrefillPdi,kTokenPdi,"phi4mini");
         // Now that the stream exists the padding helpers can be asked. Every
         // extent below is therefore an extent *for this stream's PDI pair*.
         plan=Phi4ShapePlan::Build(api,stream.get());
@@ -426,7 +426,7 @@ struct phi4_rai::Impl {
             const auto& extents=plan.ForRows(ids.size());
             auto view=[&](void* parent,std::int64_t rows,std::int64_t cols,const char* label){
                 std::array<std::int64_t,2> shape{rows,cols};void* p=nullptr;
-                api->Check(api->functions().create_tensor_window(parent,shape.data(),shape.size(),0,&p),std::string("ryzenai_corelib_create_tensor_window ")+label);
+                api->Check(api->functions().create_tensor_window(parent,shape.data(),shape.size(),0,nullptr,0,&p),std::string("ryzenai_corelib_create_tensor_window ")+label);
                 return UniqueTensorWindow(api,p);
             };
             const auto hidden_q=view(hidden.get(),extents.query_rows,kHiddenSize,"hidden@query");
@@ -452,8 +452,8 @@ struct phi4_rai::Impl {
                 // The gm exception: a cache write takes its position from the
                 // bound buffer's base, so this window stays a position, not an
                 // extent -- its height is what bounds the rows that land there.
-                std::array<std::int64_t,3> shape{8,kMaxSequenceLength-position,128};void* p=nullptr;
-                api->Check(api->functions().create_tensor_window(v_cache[i].get(),shape.data(),shape.size(),static_cast<std::size_t>(position)*128,&p),"ryzenai_corelib_create_tensor_window V");UniqueTensorWindow win(api,p);
+                std::array<std::int64_t,3> shape{8,kMaxSequenceLength-position,128};const std::array<std::int64_t,3> strides{kMaxSequenceLength*128,128,1};void* p=nullptr;
+                api->Check(api->functions().create_tensor_window(v_cache[i].get(),shape.data(),shape.size(),static_cast<std::size_t>(position)*128,strides.data(),strides.size(),&p),"ryzenai_corelib_create_tensor_window V");UniqueTensorWindow win(api,p);
                 api->Check(api->functions().matmul(stream.get(),hidden_kv.get(),v_weights[i].get(),win.get()),"ryzenai_corelib_matmul_bf16 value layer "+std::to_string(i));
                 api->Check(api->functions().flat_mha(stream.get(),&plan.attention_desc(),q_mha.get(),k_mha.get(),position,cosine.get(),sine.get(),k_cache[i].get(),v_cache[i].get(),attention_mha.get()),"ryzenai_corelib_flat_mha_bf16 layer "+std::to_string(i));
                 api->Check(api->functions().matmul(stream.get(),attention_mm.get(),o_weights[i].get(),hidden_out.get()),"ryzenai_corelib_matmul_bf16 output layer "+std::to_string(i));

@@ -357,6 +357,61 @@ if(FLM_ENABLE_RAI)
     # to resolve even though nothing calls them here.
     target_link_libraries(flm_rai PUBLIC "${RYZENAI_CORELIB_LIBRARY}" ${CMAKE_DL_LIBS})
     target_link_libraries(flm PRIVATE flm_rai)
+    # corelib loads each ryzenai_corelib_model_<name>.dll, which carries that
+    # model's kernels, only from the directory ryzenai_corelib.dll itself was
+    # loaded from, so both have to land beside flm.exe.
+    if(WIN32)
+        get_filename_component(FLM_CORELIB_LIB_DIR "${RYZENAI_CORELIB_LIBRARY}" DIRECTORY)
+        file(GLOB FLM_CORELIB_RUNTIME_DLLS
+            "${FLM_CORELIB_LIB_DIR}/../bin/ryzenai_corelib.dll"
+            "${FLM_CORELIB_LIB_DIR}/../bin/ryzenai_corelib_model_*.dll")
+        list(FILTER FLM_CORELIB_RUNTIME_DLLS EXCLUDE REGEX "ryzenai_corelib_model_dummy\\.dll$")
+        if(FLM_CORELIB_RUNTIME_DLLS)
+            add_custom_command(TARGET flm POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    ${FLM_CORELIB_RUNTIME_DLLS} $<TARGET_FILE_DIR:flm>)
+        else()
+            message(WARNING "No ryzenai_corelib DLLs under ${FLM_CORELIB_LIB_DIR}/../bin; "
+                            "copy them beside flm.exe by hand")
+        endif()
+    endif()
+endif()
+
+# ———————————————————————————————————————————————
+# Opt-in Windows dependency prefix.
+#
+# Windows otherwise has exactly two routes for Boost/curl/FFmpeg: a vcpkg
+# toolchain, or the bare CI runner's hardcoded C:/dev paths and CI-specific
+# library names. A developer box with neither can point this at one prefix
+# laid out as <prefix>/include + <prefix>/lib -- in practice a conda env's
+# Library dir (conda-forge boost, libcurl, ffmpeg) -- and each block that
+# applies the CI runner's include dirs, definitions, link dirs and library
+# names switches to it.
+# Empty (the default) leaves both existing routes exactly as they were.
+# FFTW is not taken from the prefix on any route: its header (include/fftw3.h)
+# and import libs (lib/libfftw3*-3.lib) are vendored in this tree.
+# ———————————————————————————————————————————————
+set(FLM_WIN_DEPS_PREFIX "" CACHE PATH
+    "Windows only: take Boost/curl/FFmpeg from <prefix>/include and <prefix>/lib (e.g. a conda env's Library dir) instead of the CI runner's C:/dev paths")
+if(FLM_WIN_DEPS_PREFIX)
+    if(NOT WIN32)
+        message(FATAL_ERROR "FLM_WIN_DEPS_PREFIX is a Windows-only route")
+    endif()
+    if(VCPKG_TOOLCHAIN)
+        message(FATAL_ERROR "FLM_WIN_DEPS_PREFIX and a vcpkg toolchain are two "
+                            "different dependency routes; use one")
+    endif()
+    # The library names a conda-forge Library dir ships: unversioned Boost and
+    # curl import libs (both are DLL builds), FFmpeg import libs.
+    set(FLM_WIN_DEPS_PREFIX_LIBS
+        avformat avcodec avutil swscale swresample libcurl boost_program_options)
+    foreach(_flm_dep IN LISTS FLM_WIN_DEPS_PREFIX_LIBS)
+        if(NOT EXISTS "${FLM_WIN_DEPS_PREFIX}/lib/${_flm_dep}.lib")
+            message(FATAL_ERROR "FLM_WIN_DEPS_PREFIX: missing "
+                                "${FLM_WIN_DEPS_PREFIX}/lib/${_flm_dep}.lib")
+        endif()
+    endforeach()
+    message(STATUS "Windows deps from prefix: ${FLM_WIN_DEPS_PREFIX}")
 endif()
 
 if(WIN32)
@@ -373,6 +428,8 @@ if(WIN32)
         find_package(FFTW3f CONFIG REQUIRED)
         find_package(FFTW3l CONFIG REQUIRED)
     endif()
+    # A third, opt-in route (FLM_WIN_DEPS_PREFIX, declared above) takes Boost,
+    # curl and FFmpeg from one local prefix, wired next to each CI-runner block.
     # Otherwise (the bare self-hosted CI runner) there is no vcpkg toolchain and
     # no Boost in vcpkg: Boost is a standalone b2 build under C:/dev/boost_1_88_0
     # and curl/ffmpeg/fftw are linked by raw name from the vcpkg lib dir. That
@@ -424,12 +481,14 @@ if(NOT FLM_USE_HRX)
     endif()
 endif()
 
-if(WIN32 AND NOT VCPKG_TOOLCHAIN)
+if(WIN32 AND NOT VCPKG_TOOLCHAIN AND NOT FLM_WIN_DEPS_PREFIX)
     # Bare CI runner: standalone Boost + vcpkg headers by absolute path.
     target_include_directories(flm PUBLIC
         C:/dev/boost_1_88_0
         C:/dev/vcpkg/installed/x64-windows/include/
     )
+elseif(FLM_WIN_DEPS_PREFIX)
+    target_include_directories(flm PUBLIC "${FLM_WIN_DEPS_PREFIX}/include")
 endif()
 
 target_compile_definitions(flm PUBLIC
@@ -456,12 +515,21 @@ if(WIN32)
     )
 endif()
 
-if(WIN32 AND NOT VCPKG_TOOLCHAIN)
+if(WIN32 AND NOT VCPKG_TOOLCHAIN AND NOT FLM_WIN_DEPS_PREFIX)
     # Bare CI runner: statically link the standalone Boost + curl.
     target_compile_definitions(flm PUBLIC
         CURL_STATICLIB
         BOOST_ALL_NO_LIB
         BOOST_ALL_STATIC_LINK
+    )
+elseif(FLM_WIN_DEPS_PREFIX)
+    # conda-forge Boost and curl are DLL builds. program_options exports data
+    # (boost::program_options::arg, options_description::m_default_line_length)
+    # that only resolves through dllimport, so BOOST_ALL_STATIC_LINK would leave
+    # it unresolved at link time; CURL_STATICLIB would mis-declare curl likewise.
+    target_compile_definitions(flm PUBLIC
+        BOOST_ALL_NO_LIB
+        BOOST_ALL_DYN_LINK
     )
 endif()
 
@@ -480,12 +548,14 @@ if(NOT FLM_USE_HRX)
     endif()
 endif()
 
-if(WIN32 AND NOT VCPKG_TOOLCHAIN)
+if(WIN32 AND NOT VCPKG_TOOLCHAIN AND NOT FLM_WIN_DEPS_PREFIX)
     # Bare CI runner: standalone Boost stage libs + vcpkg import libs.
     target_link_directories(flm PUBLIC
         C:/dev/boost_1_88_0/stage/lib
         C:/dev/vcpkg/installed/x64-windows/lib
     )
+elseif(FLM_WIN_DEPS_PREFIX)
+    target_link_directories(flm PUBLIC "${FLM_WIN_DEPS_PREFIX}/lib")
 endif()
 
 # Link static libraries first
@@ -601,6 +671,17 @@ if(WIN32 AND VCPKG_TOOLCHAIN)
         FFTW3::fftw3
         FFTW3::fftw3f
         FFTW3::fftw3l
+    )
+elseif(WIN32 AND FLM_WIN_DEPS_PREFIX)
+    # Local prefix: the names it ships (checked at configure time above). FFTW
+    # is the tree's vendored lib/libfftw3*-3, as on the CI runner. flm itself
+    # calls only fftwf_* and no prebuilt engine DLL imports FFTW, so the double
+    # and long-double libs contribute no import; they stay for parity.
+    target_link_libraries(flm PUBLIC
+        ${FLM_WIN_DEPS_PREFIX_LIBS}
+        libfftw3-3
+        libfftw3f-3
+        libfftw3l-3
     )
 elseif(WIN32)
     # Bare CI runner: link the native deps by raw name from the standalone Boost

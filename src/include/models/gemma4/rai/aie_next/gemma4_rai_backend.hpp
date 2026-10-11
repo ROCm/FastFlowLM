@@ -19,25 +19,17 @@
 namespace flm::gemma4 {
 
 /// \brief the largest context this backend can hold
-/// \note THE ENGINE'S OWN CONSTANT, not a second copy of it. `gemma4_rai`'s
-///       Impl refuses a `max_length` above `kMaxSequenceLength` and allocates
-///       every KV cache and rotary table at exactly that extent, so a traits
-///       ceiling written independently could drift above what the engine will
-///       accept -- and the frontend checks the TRAITS, before the factory
-///       runs, so the drift would surface as a load that passes the frontend's
-///       range check and then throws out of the engine constructor.
+/// \note THE ENGINE'S OWN CONSTANT. A context in 1..4096 stays on flat_mha.
+///       Above that the engine pages at kPageSize, up to kMaxPagedContext.
 inline constexpr std::uint32_t kRaiContextLimit =
-    static_cast<std::uint32_t>(kMaxSequenceLength);
+    static_cast<std::uint32_t>(kMaxPagedContext);
 
-/// \brief the largest number of tokens corelib will decode
-/// \note Likewise `kMaxDecodeWindow`, one below the context: the last position
-///       in the window has to be readable, so a decode that filled it would
-///       have nowhere to put the next token.
+/// \brief one below the longest context: the last position has to be readable
 inline constexpr std::uint32_t kRaiDecodeLimit =
-    static_cast<std::uint32_t>(kMaxDecodeWindow);
+    static_cast<std::uint32_t>(kMaxPagedContext - 1);
 
 /// \brief what the frontend must know before building this backend
-/// \return no xclbin, no preemption, 4096-token context ceiling
+/// \return no xclbin, no preemption, 16384-token context ceiling
 /// \note Pure data, and inline on purpose: `AutoModel::_shared_load_backend`
 ///       reads it while assembling the BackendContext -- that is, BEFORE any
 ///       engine exists -- so it cannot be a virtual on ModelBackend. Being in

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "models/gemma4/rai/aie_next/gemma4_rai_constants.hpp"
+
 #include <array>
 #include <cstdint>
 #include <filesystem>
@@ -194,6 +196,7 @@ struct Gemma4Config {
     std::int32_t bos_token_id;
     bool add_bos;
     std::uint32_t group, head_group, ple_group;     // from the row
+    std::int64_t context_length = kMaxPagedContext;  // gemma4.context_length
 
     /// \brief the head size a layer's attention runs at -- `head_dim` if it
     ///        slides, `global_head_dim` if it is full-attention

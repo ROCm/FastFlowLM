@@ -236,6 +236,17 @@ std::vector<std::string> Kinds(std::size_t from = 0) {
     return kinds;
 }
 
+void TestStreamEnablesTheQwen3BundleBeforeAnyKernelQuery() {
+    Harness h;
+    const auto& state = fake_corelib::GetState();
+    TEST_REQUIRE(state.kernel_bundles == std::vector<std::string>({"qwen3"}));
+    const auto& log = state.call_log;
+    const auto enabled = std::find(log.begin(), log.end(), "ryzenai_corelib_stream_enable_kernel_bundle");
+    const auto queried = std::find(log.begin(), log.end(), "ryzenai_corelib_matmul_bf16_enum_kernels");
+    TEST_REQUIRE(queried != log.end());
+    TEST_REQUIRE(enabled < queried);
+}
+
 void TestLoadPacksEveryWeightAtItsGroup() {
     Harness h;
     const auto& state = fake_corelib::GetState();
@@ -295,6 +306,18 @@ void TestDecodeRunsOneRowAtThePosition() {
     // v_proj writes the V cache at row 3 of every head.
     TEST_REQUIRE(dispatches[before + 2].window_offset == 3 * 128);
     TEST_REQUIRE(h.engine->get_current_context_length() == 4);
+}
+
+void TestTheVProjectionWritesTheCacheThroughAStridedWindow() {
+    Harness h;
+    (void)h.engine->forward(1);
+    const auto& windows = fake_corelib::GetState().tensor_windows;
+    const auto v = std::find_if(windows.begin(), windows.end(),
+                                [](const auto& w) { return w.shape.size() == 3; });
+    TEST_REQUIRE(v != windows.end());
+    TEST_REQUIRE(v->strides.size() == 3 && v->strides[2] == 1);
+    TEST_REQUIRE(v->strides[1] == v->shape[2]);
+    TEST_REQUIRE(v->strides[0] == 4096 * v->strides[1]);
 }
 
 void TestContinuingPrefillReplaysTheConversationFromZero() {
@@ -382,9 +405,13 @@ int main() {
     RunTest(TestUntiedPackageReadsOutputWeight, "untied package reads output.weight");
     RunTest(TestContractMismatchesAreNamed, "contract mismatches are named");
     RunTest(TestWrongArchitectureAndMissingTensorsAreRefused, "wrong architecture and missing tensors are refused");
+    RunTest(TestStreamEnablesTheQwen3BundleBeforeAnyKernelQuery,
+            "stream enables the qwen3 bundle before any kernel query");
     RunTest(TestLoadPacksEveryWeightAtItsGroup, "load packs every weight at its group");
     RunTest(TestPrefillRunsEightDispatchesALayerAtTheBucket, "prefill runs eight dispatches a layer at the bucket");
     RunTest(TestDecodeRunsOneRowAtThePosition, "decode runs one row at the position");
+    RunTest(TestTheVProjectionWritesTheCacheThroughAStridedWindow,
+            "the V projection writes the cache through a strided window");
     RunTest(TestContinuingPrefillReplaysTheConversationFromZero, "continuing prefill replays from zero");
     RunTest(TestRestoreRewindsTheReplayHistory, "restore rewinds the replay history");
     RunTest(TestUnknownHistoryCannotBeContinued, "unknown history cannot be continued");

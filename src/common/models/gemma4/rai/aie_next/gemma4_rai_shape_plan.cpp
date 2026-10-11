@@ -138,11 +138,27 @@ ryzenai_corelib_flat_mha_bf16_desc BuildAttentionDesc(const Gemma4Config& config
     return desc;
 }
 
+ryzenai_corelib_paged_mha_bf16_desc AsPaged(const ryzenai_corelib_flat_mha_bf16_desc& flat,
+                                            std::int64_t context) {
+    ryzenai_corelib_paged_mha_bf16_desc desc{};
+    desc.num_heads = flat.num_heads;
+    desc.kv_num_heads = flat.kv_num_heads;
+    desc.head_size = flat.head_size;
+    desc.max_seq = context;
+    desc.page_size = kPageSize;
+    desc.rope_dim = flat.rope_dim;
+    desc.window = flat.window;
+    desc.kv_shared = flat.kv_shared;
+    desc.scale = flat.scale;
+    return desc;
+}
+
 }  // namespace
 
 Gemma4ShapePlan Gemma4ShapePlan::Build(
     const std::shared_ptr<const corelib::CorelibApi>& api,
-    ryzenai_corelib_stream_ptr stream, const Gemma4Config& config) {
+    ryzenai_corelib_stream_ptr stream, const Gemma4Config& config,
+    std::int64_t context) {
     if (!api) throw std::invalid_argument("Gemma4ShapePlan corelib API is null");
     if (!stream) throw std::invalid_argument("Gemma4ShapePlan stream is null");
 
@@ -153,6 +169,17 @@ Gemma4ShapePlan Gemma4ShapePlan::Build(
         for (const bool shared : {false, true}) {
             plan.attention_descs_[DescIndex(swa, shared)] =
                 BuildAttentionDesc(config, swa, shared);
+        }
+    }
+    plan.paged_ = context > kPageSize;
+    if (plan.paged_) {
+        if (context > kMaxPagedContext || context % kPageSize != 0) {
+            throw std::invalid_argument(
+                "Gemma 4 paged context must be a multiple of 4096 up to " +
+                std::to_string(kMaxPagedContext));
+        }
+        for (std::size_t index = 0; index < plan.attention_descs_.size(); ++index) {
+            plan.paged_descs_[index] = AsPaged(plan.attention_descs_[index], context);
         }
     }
 
@@ -175,10 +202,26 @@ Gemma4ShapePlan Gemma4ShapePlan::Build(
     plan.full_rows_.reserve(static_cast<std::size_t>(kMaxSequenceLength));
     const auto matmul = corelib::ShapeGrid::Matmul(*api, stream);
     const auto ssmlp_grid = corelib::ShapeGrid::SsMlp(*api, stream, true);
-    const auto sliding_mha = corelib::ShapeGrid::FlatMha(
-        *api, stream, plan.attention_descs_[DescIndex(true, false)]);
-    const auto full_mha = corelib::ShapeGrid::FlatMha(
-        *api, stream, plan.attention_descs_[DescIndex(false, false)]);
+    // A multi-row pass at position 0 is attention over the first page, and
+    // corelib's paged_mha runs it on flat_mha's own prefill kernel at the
+    // pass's rows; every later chunk is a whole page on the paged kernel. So
+    // the row extents come from flat_mha's grid even on a paged cache, and
+    // the paged grid only has to carry the one page-sized chunk.
+    const auto sliding_mha =
+        corelib::ShapeGrid::FlatMha(*api, stream, plan.attention_descs_[DescIndex(true, false)]);
+    const auto full_mha =
+        corelib::ShapeGrid::FlatMha(*api, stream, plan.attention_descs_[DescIndex(false, false)]);
+    if (plan.paged_) {
+        for (const bool swa : {true, false}) {
+            const auto paged = corelib::ShapeGrid::PagedMha(
+                *api, stream, plan.paged_descs_[DescIndex(swa, false)]);
+            const char* what = swa ? "sliding paged_mha chunk" : "full paged_mha chunk";
+            if (corelib::CoveringRows(paged, kPageSize, 0, 0, -1, what) != kPageSize) {
+                throw std::runtime_error(std::string(what) + " has no kernel at exactly " +
+                                         std::to_string(kPageSize) + " rows");
+            }
+        }
+    }
 
     for (const auto rows : kExecutionRows) {
         // ssmlp: gelu (activation = 1) with the post-feedforward norm SET
@@ -319,6 +362,11 @@ const Gemma4RowExtents& Gemma4ShapePlan::ForRows(std::size_t live_rows, bool swa
 const ryzenai_corelib_flat_mha_bf16_desc&
 Gemma4ShapePlan::attention_desc(bool swa, bool shared) const noexcept {
     return attention_descs_[DescIndex(swa, shared)];
+}
+
+const ryzenai_corelib_paged_mha_bf16_desc&
+Gemma4ShapePlan::paged_attention_desc(bool swa, bool shared) const noexcept {
+    return paged_descs_[DescIndex(swa, shared)];
 }
 
 std::int64_t Gemma4ShapePlan::lm_head_rows() const noexcept { return lm_head_rows_; }

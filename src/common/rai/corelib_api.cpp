@@ -170,13 +170,54 @@ std::shared_ptr<CorelibApi> CorelibApi::Load(const std::filesystem::path& librar
     return ResolveForTest(std::move(resolver), absolute_library);
 }
 
+#ifdef _WIN32
+namespace {
+std::filesystem::path ModuleFileName(HMODULE module) {
+    if (!module) return {};
+    // Long paths exist; grow until the name fits rather than truncate silently.
+    std::wstring buffer(MAX_PATH, L'\0');
+    for (;;) {
+        const DWORD written = GetModuleFileNameW(
+            module, buffer.data(), static_cast<DWORD>(buffer.size()));
+        if (written == 0) return {};
+        if (written < buffer.size()) {
+            buffer.resize(written);
+            return std::filesystem::path(buffer);
+        }
+        buffer.resize(buffer.size() * 2);
+    }
+}
+}  // namespace
+#endif
+
+std::filesystem::path CorelibApi::LoadedModulePath(const wchar_t* name) {
+#ifdef _WIN32
+    if (!name || !*name) return {};
+    return ModuleFileName(GetModuleHandleW(name));
+#else
+    (void)name;
+    return {};
+#endif
+}
+
 #if defined(FLM_CORELIB_LINK_STATIC)
 std::shared_ptr<CorelibApi> CorelibApi::LoadStatic() {
+    // An import library still leaves a DLL bound by the loader's search order;
+    // report which copy that was. Asked by name: without dllimport, a linked
+    // symbol's address is the import thunk inside this executable.
+    const std::filesystem::path linked_from = LoadedModulePath(L"ryzenai_corelib.dll");
+    const bool separate_dll = !linked_from.empty();
     const char* configured = std::getenv("FLM_RAI_CORELIB_PATH");
     if (configured && *configured) {
-        std::cerr << "[FLM]  Ignoring FLM_RAI_CORELIB_PATH: corelib is linked "
-                     "into this build, so there is no DLL to select."
-                  << std::endl;
+        std::cerr << "[FLM]  Ignoring FLM_RAI_CORELIB_PATH: this build binds "
+                     "corelib at link time"
+                  << (separate_dll ? ", and the Windows loader has already "
+                                     "loaded it from '" + linked_from.string() + "'"
+                                   : "")
+                  << "." << std::endl;
+    }
+    if (separate_dll) {
+        std::cerr << "[FLM]  corelib: " << linked_from.string() << std::endl;
     }
     // Resolve through the same name-keyed resolver the DLL path uses, so the
     // version check and the missing-symbol diagnostics stay identical.
@@ -190,7 +231,8 @@ std::shared_ptr<CorelibApi> CorelibApi::LoadStatic() {
         return nullptr;
     };
     return ResolveForTest(std::move(resolver),
-                          std::filesystem::path("<statically linked>"));
+                          separate_dll ? linked_from
+                                       : std::filesystem::path("<statically linked>"));
 }
 #endif
 

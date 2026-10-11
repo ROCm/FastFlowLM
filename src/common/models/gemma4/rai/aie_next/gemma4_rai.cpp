@@ -20,6 +20,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iostream>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -194,6 +195,13 @@ struct gemma4_rai::Impl {
     std::shared_ptr<const CorelibApi> api;
     Gemma4Config shape;
     std::uint32_t max_length;
+    /// \brief context longer than one flat_mha window: paged KV, PDI (8, 33)
+    bool paged{};
+    /// \brief rows the KV cache and rotary tables hold
+    /// \note Unpaged this stays kMaxSequenceLength even when the caller asked
+    ///       for less, which is the pitch flat_mha addresses. Paged it is the
+    ///       constructed context, a whole number of pages.
+    std::uint32_t cache_rows{};
     int position{};
     std::optional<int> saved;
     bool poisoned{};
@@ -328,9 +336,19 @@ struct gemma4_rai::Impl {
           api(runtime ? runtime->api() : nullptr), max_length(maximum) {
         if (!package) throw std::invalid_argument("Gemma 4 GGUF package is null");
         if (!runtime || !api) throw std::invalid_argument("corelib runtime is null");
-        if (!maximum || maximum > kMaxSequenceLength)
-            throw std::invalid_argument("Gemma 4 maximum length must be in 1..4096");
+        if (!ContextFits(maximum)) {
+            throw std::invalid_argument(
+                "Gemma 4 maximum length must be in 1..4096, or a multiple of 4096 up to " +
+                std::to_string(kMaxPagedContext));
+        }
+        paged = maximum > static_cast<std::uint32_t>(kPageSize);
+        cache_rows = paged ? maximum : static_cast<std::uint32_t>(kMaxSequenceLength);
         shape = shape_override ? std::move(*shape_override) : package->Config();
+        if (paged && static_cast<std::int64_t>(maximum) > shape.context_length) {
+            throw std::invalid_argument(
+                "Gemma 4 maximum length " + std::to_string(maximum) +
+                " is past this GGUF's context of " + std::to_string(shape.context_length));
+        }
 
         const auto& cfg = shape;
         const auto& file = package->File();
@@ -526,11 +544,11 @@ struct gemma4_rai::Impl {
         // the ELF set, and a shape exists under one pair and not another), so
         // the plan cannot exist before a stream does.
         auto lease = runtime->AcquireExecution();
-        void* raw_stream = nullptr;
-        api->Check(api->functions().create_stream(kPrefillPdi, kTokenPdi, &raw_stream),
-                   "ryzenai_corelib_create_stream");
-        stream = UniqueStream(api, raw_stream);
-        plan = Gemma4ShapePlan::Build(api, stream.get(), cfg);
+        const int token_pdi = paged ? kPagedTokenPdi : kTokenPdi;
+        stream = corelib::OpenModelStream(api, kPrefillPdi, token_pdi, "gemma4");
+        plan = Gemma4ShapePlan::Build(api, stream.get(), cfg,
+                                      paged ? static_cast<std::int64_t>(maximum)
+                                            : kMaxSequenceLength);
 
         // ---- the slot table
         std::vector<WeightSlot> slots;
@@ -804,8 +822,14 @@ struct gemma4_rai::Impl {
             // THE WIDTH IS THE OWNING LAYER'S OWN HEAD. A layer below
             // `kv_layers` owns cache `index`, so this is layer `cache`'s head.
             const auto head = cfg.LayerHeadDim(cache);
-            k_cache.push_back(bf16({cfg.kv_heads, rows, head}, "K cache"));
-            v_cache.push_back(bf16({cfg.kv_heads, rows, head}, "V cache"));
+            if (paged) {
+                const auto pages = static_cast<std::int64_t>(cache_rows) / kPageSize;
+                k_cache.push_back(bf16({pages, cfg.kv_heads, kPageSize, head}, "K cache"));
+                v_cache.push_back(bf16({pages, cfg.kv_heads, kPageSize, head}, "V cache"));
+            } else {
+                k_cache.push_back(bf16({cfg.kv_heads, rows, head}, "K cache"));
+                v_cache.push_back(bf16({cfg.kv_heads, rows, head}, "V cache"));
+            }
         }
     }
 
@@ -837,7 +861,8 @@ struct gemma4_rai::Impl {
         const auto& cfg = shape;
         const auto view = [&](UniqueHostView& destination, std::int64_t head_dim,
                               const std::vector<float>& values, const char* label) {
-            const std::array<std::int64_t, 2> dims{kMaxSequenceLength, head_dim / 2};
+            const std::array<std::int64_t, 2> dims{static_cast<std::int64_t>(cache_rows),
+                                                   head_dim / 2};
             void* created = nullptr;
             api->Check(api->functions().create_host_view(
                            ryzenai_corelib_data_type_fp32, dims.data(), dims.size(),
@@ -846,14 +871,15 @@ struct gemma4_rai::Impl {
             destination = UniqueHostView(api, created);
         };
         // Base `rope_theta_swa` (1e4) over the sliding head, NO factors.
-        auto sliding = MakeRopeTables(cfg.head_dim, cfg.rope_theta_swa, kMaxSequenceLength);
+        const auto rope_rows = static_cast<std::int64_t>(cache_rows);
+        auto sliding = MakeRopeTables(cfg.head_dim, cfg.rope_theta_swa, rope_rows);
         rope_cos_sliding = std::move(sliding.cos);
         rope_sin_sliding = std::move(sliding.sin);
         view(cos_sliding, cfg.head_dim, rope_cos_sliding, "sliding cos");
         view(sin_sliding, cfg.head_dim, rope_sin_sliding, "sliding sin");
         // Base `rope_theta` (1e6) over the full head, WITH `rope_freqs.weight`
         // as a per-pair frequency DIVISOR.
-        auto full = MakeRopeTables(cfg.global_head_dim, cfg.rope_theta, kMaxSequenceLength,
+        auto full = MakeRopeTables(cfg.global_head_dim, cfg.rope_theta, rope_rows,
                                    factors.values);
         rope_cos_full = std::move(full.cos);
         rope_sin_full = std::move(full.sin);
@@ -862,10 +888,10 @@ struct gemma4_rai::Impl {
     }
 
     /// \brief run every slot's `pack()` across a small pool
-    /// \note TWO FORMS OF PARALLELISM THAT MUST NOT MULTIPLY. Each create is
-    ///       submitted at `kRequantizeThreads` (0 -- corelib's default of
-    ///       one) while `kWeightCreateConcurrency` of them run at once, so
-    ///       the total is the pool size and not the product. The reference
+    /// \note TWO FORMS OF PARALLELISM THAT MULTIPLY. Each create is
+    ///       submitted at `kRequantizeThreads` (0 -- corelib picks, 8 packer
+    ///       threads at 0.25.0) while `kWeightCreateConcurrency` of them run
+    ///       at once, so up to the product runs together. The reference
     ///       driver packs strictly serially and says why (an open,
     ///       unattributed corelib defect correlating concurrent creates with
     ///       all-zero device output); this follows Phi-4's shape instead,
@@ -1001,10 +1027,12 @@ struct gemma4_rai::Impl {
 
     /// \brief create a window onto `parent`, naming it in any failure
     UniqueTensorWindow Window(void* parent, std::vector<std::int64_t> dims,
-                              std::size_t offset, const char* label) {
+                              std::size_t offset, const char* label,
+                              std::vector<std::int64_t> strides = {}) {
         void* created = nullptr;
-        api->Check(api->functions().create_tensor_window(parent, dims.data(), dims.size(),
-                                                         offset, &created),
+        api->Check(api->functions().create_tensor_window(parent, dims.data(), dims.size(), offset,
+                                                         strides.empty() ? nullptr : strides.data(),
+                                                         strides.size(), &created),
                    std::string("ryzenai_corelib_create_tensor_window ") + label);
         return UniqueTensorWindow(api, created);
     }
@@ -1021,13 +1049,27 @@ struct gemma4_rai::Impl {
     /// a supported shape costs.
     ///
     /// DECODE IS NOT PADDED: an M == 1 kernel ships for every operator here.
-    static std::int64_t PaddedRowsFor(std::int64_t rows) {
+    std::int64_t PaddedRowsFor(std::int64_t rows) const {
         if (rows <= 1) return 1;
+        // A paged chunk past page 0 is only correct at a full page.
+        if (paged && position > 0 && rows <= kPageSize) return kPageSize;
         for (const std::int64_t bucket : {128, 256, 512, 1024, 2048, 3072, 4096}) {
             if (rows <= bucket) return bucket;
         }
         throw std::out_of_range("Gemma 4 cannot run " + std::to_string(rows) +
                                 " rows: the largest shipped prefill kernel is 4096");
+    }
+
+    /// \brief byte-element offset of one KV row inside its cache
+    std::size_t CacheOffset(std::int64_t kv_head, std::int64_t index,
+                            std::int64_t head) const {
+        if (!paged) {
+            return static_cast<std::size_t>((kv_head * kMaxSequenceLength + index) * head);
+        }
+        const auto page = index / kPageSize;
+        const auto row = index % kPageSize;
+        return static_cast<std::size_t>(
+            ((page * shape.kv_heads + kv_head) * kPageSize + row) * head);
     }
 
     /// \brief every operator agrees that `padded` is the extent it runs at
@@ -1113,11 +1155,12 @@ struct gemma4_rai::Impl {
         // WHERE V'S PROJECTION LANDS, AND IT IS HEAD-MAJOR BECAUSE THE CACHE
         // IS. A cache is [kv_heads, max_seq, head]; a projection's ordinary
         // output is [rows, kv_heads * head], token-major. Those are the same
-        // bytes only when there is ONE KV head. With more, the norm would have
-        // to read a head's rows at a stride, and a window is an offset and a
-        // shape with no stride at all -- so the staging buffer has to be
-        // written head-major in the first place, which only the scattering
-        // kernel can do, and a 3-D output is what asks for it.
+        // bytes only when there is ONE KV head. With more, one head's rows sit
+        // `kv_heads * head` apart in the token-major output, while V's norm
+        // below reads each head as a dense [rows, head] plane at an offset --
+        // so the staging buffer has to be written head-major in the first
+        // place. Only the scattering kernel can do that, and a 3-D output, a
+        // window strided [max_seq * head, head, 1], is what asks for it.
         //
         // AT EXACTLY ONE KV HEAD A PLAIN 2-D OUTPUT IS USED INSTEAD, and that
         // is not merely an optimization: with one head there is nothing to
@@ -1128,7 +1171,8 @@ struct gemma4_rai::Impl {
         geometry.v_dest =
             cfg.kv_heads == 1
                 ? Window(v_buf.get(), {padded, head}, 0, "v")
-                : Window(v_buf.get(), {cfg.kv_heads, kMaxSequenceLength, head}, 0, "v");
+                : Window(v_buf.get(), {cfg.kv_heads, kMaxSequenceLength, head}, 0, "v",
+                         {kMaxSequenceLength * head, head, 1});
         // QK-Norm normalizes ONE HEAD, so its row count is tokens x heads.
         geometry.q_heads_in =
             Window(q_buf.get(), {padded * cfg.q_heads, head}, 0, "q heads");
@@ -1258,21 +1302,23 @@ struct gemma4_rai::Impl {
         // the reference driver has this one and not the other, and a future
         // caller that decouples them would otherwise lose the only check that
         // is about the thing the kernel actually addresses.
-        if (position < 0 || position + padded > kMaxSequenceLength) {
+        const auto cache_limit = static_cast<std::int64_t>(cache_rows);
+        if (position < 0 || position + padded > cache_limit) {
             throw std::out_of_range(
                 std::to_string(rows) + " rows at position " + std::to_string(position) +
                 " run a " + std::to_string(padded) + "-row kernel, which reaches row " +
                 std::to_string(position + padded) + " of a " +
-                std::to_string(kMaxSequenceLength) + "-row cache");
+                std::to_string(cache_limit) + "-row cache");
         }
-        // THERE IS NO CHUNKED PREFILL. `flat_mha_bf16` rejects a multi-row
-        // call at a non-zero position itself -- but as the SIXTH dispatch of a
-        // layer, which is the abort described above rather than an exception.
-        if (rows > 1 && position != 0) {
+        // Chunked prefill is paged only, and only on a page boundary.
+        // flat_mha rejects a multi-row call at a non-zero position itself, but
+        // as the sixth dispatch of a layer, which aborts the process.
+        const bool page_chunk = paged && position > 0 && position % kPageSize == 0;
+        if (rows > 1 && position != 0 && !page_chunk) {
             throw std::invalid_argument(
                 std::to_string(rows) + " rows at position " + std::to_string(position) +
-                ": attention ships no chunked prefill, so a multi-row pass must start "
-                "at position 0 and a continuation is one row at a time");
+                ": a multi-row pass must start at position 0" +
+                (paged ? " or on a 4096-row page boundary" : ""));
         }
         RequireOneRowExtent(padded);
 
@@ -1345,9 +1391,7 @@ struct gemma4_rai::Impl {
             for (std::int64_t kv_head = 0; kv_head < cfg.kv_heads; ++kv_head) {
                 windows.push_back(Window(
                     v_cache[static_cast<std::size_t>(layer)].get(), {padded, head},
-                    static_cast<std::size_t>(kv_head * kMaxSequenceLength * head +
-                                             position * head),
-                    "V cache"));
+                    CacheOffset(kv_head, position, head), "V cache"));
             }
         }
 
@@ -1432,20 +1476,27 @@ struct gemma4_rai::Impl {
                 // TWO ROTARY PAIRS, AND `swa` SELECTS. One pair used
                 // everywhere still converges to fluent text.
                 const auto owner = static_cast<std::size_t>(cfg.layer_cache_owner[slot]);
-                dispatch(api->functions().flat_mha(
-                             stream.get(),
-                             // SELECT, NEVER MUTATE. The plan holds four
-                             // immutable descriptors keyed (geometry, cache
-                             // role); there is deliberately no one-argument
-                             // accessor, so a loop that forgot the cache role
-                             // would not compile.
-                             &plan.attention_desc(swa, /*shared=*/!owns),
-                             kind.q_attn.get(), kind.k_attn.get(), position,
-                             (swa ? cos_sliding : cos_full).get(),
-                             (swa ? sin_sliding : sin_full).get(),
-                             k_cache[owner].get(), v_cache[owner].get(),
-                             kind.attn.get()),
-                         "ryzenai_corelib_flat_mha_bf16", index);
+                void* cos = (swa ? cos_sliding : cos_full).get();
+                void* sin = (swa ? sin_sliding : sin_full).get();
+                if (plan.paged()) {
+                    dispatch(api->functions().paged_mha(
+                                 stream.get(), &plan.paged_attention_desc(swa, /*shared=*/!owns),
+                                 kind.q_attn.get(), kind.k_attn.get(), position, cos, sin,
+                                 k_cache[owner].get(), v_cache[owner].get(), kind.attn.get()),
+                             "ryzenai_corelib_paged_mha_bf16", index);
+                } else {
+                    dispatch(api->functions().flat_mha(
+                                 stream.get(),
+                                 // SELECT, NEVER MUTATE. The plan holds four
+                                 // immutable descriptors keyed (geometry, cache
+                                 // role); there is deliberately no one-argument
+                                 // accessor, so a loop that forgot the cache role
+                                 // would not compile.
+                                 &plan.attention_desc(swa, /*shared=*/!owns),
+                                 kind.q_attn.get(), kind.k_attn.get(), position, cos, sin,
+                                 k_cache[owner].get(), v_cache[owner].get(), kind.attn.get()),
+                             "ryzenai_corelib_flat_mha_bf16", index);
+                }
                 dispatch(api->functions().matmul(stream.get(), kind.attn.get(),
                                                  weights.o.get(), hidden_w.get()),
                          "ryzenai_corelib_matmul_bf16 output", index);
@@ -1597,14 +1648,64 @@ struct gemma4_rai::Impl {
             // continuation that no longer exists. Every accessor is behind
             // `usable()`, so this is defence rather than something a caller
             // can observe.
+            //
+            // ONE EXCEPTION. A paged prefill chunk past page 0 can come back
+            // non-finite from an intermittent kernel defect: the chunk
+            // rewrites only its own page, and `position` has not moved, so
+            // RunPrompt may run that same chunk again. Unpaged passes and
+            // page 0 still poison. The message text is RequireFinite's.
+            bool retry = false;
+            try {
+                throw;
+            } catch (const std::exception& error) {
+                retry = paged && position > 0 &&
+                        std::string(error.what()).find("non-finite") != std::string::npos;
+            } catch (...) {
+            }
             if (submitted) {
                 (void)api->functions().stream_synchronize(stream.get());
-                poisoned = true;
-                position = 0;
-                saved.reset();
+                if (!retry) {
+                    poisoned = true;
+                    position = 0;
+                    saved.reset();
+                }
             }
             throw;
         }
+    }
+
+    /// \brief one prompt, one page at a time when the cache is paged
+    /// \note Starts at `position`, which is 0 or a page boundary when `ids`
+    ///       holds more than one row.
+    buffer<bf16> RunPrompt(std::span<const int> ids) {
+        if (!paged || ids.size() <= 1 ||
+            (position == 0 && static_cast<std::int64_t>(ids.size()) <= kPageSize))
+            return Run(ids);
+        buffer<bf16> out;
+        const auto step = static_cast<std::size_t>(kPageSize);
+        for (std::size_t start = 0; start < ids.size(); start += step) {
+            const auto count = std::min(step, ids.size() - start);
+            const auto chunk = ids.subspan(start, count);
+            if (position == 0) {
+                out = Run(chunk);
+                continue;
+            }
+            for (int attempt = 1;; ++attempt) {
+                try {
+                    out = Run(chunk);
+                    break;
+                } catch (const std::runtime_error& error) {
+                    const bool again =
+                        std::string(error.what()).find("non-finite") != std::string::npos &&
+                        attempt < kPagedChunkAttempts;
+                    if (!again) throw;
+                    std::cout << "[FLM]  Gemma 4 paged prefill at position " << position
+                              << " came back non-finite; running it again (" << attempt
+                              << " of " << kPagedChunkAttempts << ")" << std::endl;
+                }
+            }
+        }
+        return out;
     }
 
     /// \brief refuse a non-finite result, naming where it came from
@@ -1630,7 +1731,8 @@ struct gemma4_rai::Impl {
     buffer<bf16> ReadCache(bool is_k, int layer, int index) {
         usable();
         const auto& cfg = shape;
-        if (layer < 0 || layer >= cfg.layers || index < 0 || index >= kMaxSequenceLength)
+        if (layer < 0 || layer >= cfg.layers || index < 0 ||
+            index >= static_cast<int>(cache_rows))
             throw std::out_of_range("Gemma 4 cache index is out of range");
         // THE CACHE A LAYER READS IS ITS OWNER'S, not its own index. Twenty of
         // E2B's layers own none at all.
@@ -1643,8 +1745,7 @@ struct gemma4_rai::Impl {
         buffer<bf16> out(static_cast<std::size_t>(cfg.kv_heads * head));
         void* cache = (is_k ? k_cache : v_cache)[owner].get();
         for (std::int64_t kv_head = 0; kv_head < cfg.kv_heads; ++kv_head) {
-            const auto offset = static_cast<std::size_t>(
-                (kv_head * kMaxSequenceLength + index) * head);
+            const auto offset = CacheOffset(kv_head, index, head);
             api->Check(api->functions().tensor_read(
                            cache, ryzenai_corelib_data_type_bf16,
                            out.data() + kv_head * head, static_cast<std::size_t>(head),
@@ -1692,23 +1793,27 @@ buffer<bf16> gemma4_rai::prefill(std::vector<int>& ids, void*) {
     auto& impl = *impl_;
     if (impl.position == 0 || ids.size() <= 1) {
         if (impl.position == 0) impl.history.clear();
-        auto out = impl.Run(std::span<const int>(ids.data(), ids.size()));
+        auto out = impl.RunPrompt(std::span<const int>(ids.data(), ids.size()));
         impl.history.insert(impl.history.end(), ids.begin(), ids.end());
         return out;
     }
-    // A multi-row continuation re-runs the whole conversation from position 0.
+    // A multi-row pass starts at position 0 or, on a paged cache, on a page
+    // boundary. So a continuation re-runs the rows since the nearest such
+    // start ahead of its own: the whole conversation unpaged, and on a paged
+    // cache only the current page's rows, none at all on a boundary.
     impl.usable();
     if (impl.history.size() != static_cast<std::size_t>(impl.position))
         throw std::invalid_argument("Gemma 4 cannot continue from position " +
                                     std::to_string(impl.position) +
                                     " without the tokens behind it");
-    std::vector<int> tokens = impl.history;
-    tokens.insert(tokens.end(), ids.begin(), ids.end());
     const int resume = impl.position;
-    impl.position = 0;
+    const int from = impl.paged ? resume - resume % static_cast<int>(kPageSize) : 0;
+    std::vector<int> tokens(impl.history.begin() + from, impl.history.end());
+    tokens.insert(tokens.end(), ids.begin(), ids.end());
+    impl.position = from;
     try {
-        auto out = impl.Run(std::span<const int>(tokens.data(), tokens.size()));
-        impl.history = std::move(tokens);
+        auto out = impl.RunPrompt(std::span<const int>(tokens.data(), tokens.size()));
+        impl.history.insert(impl.history.end(), ids.begin(), ids.end());
         return out;
     } catch (...) {
         if (!impl.poisoned) impl.position = resume;
@@ -1739,7 +1844,7 @@ void gemma4_rai::load_weights(Q4NX&) {
 
 void gemma4_rai::update_max_length(std::uint32_t max_length) {
     impl_->usable();
-    if (!max_length || max_length > kMaxSequenceLength ||
+    if (!max_length || max_length > impl_->cache_rows ||
         max_length < static_cast<std::uint32_t>(impl_->position))
         throw std::out_of_range("Gemma 4 maximum length is invalid");
     impl_->max_length = max_length;

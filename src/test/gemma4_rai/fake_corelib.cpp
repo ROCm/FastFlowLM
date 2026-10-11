@@ -31,6 +31,10 @@ fake_corelib::State state;
 ///       nothing here promises one entry point never calls another.
 std::recursive_mutex state_mutex;
 
+/// \brief what `get_last_error_message` reports; set only by refusals that
+///        carry corelib's own wording
+std::string last_error;
+
 /// \brief the backing allocation a tensor and all its windows share
 ///
 /// Held by shared_ptr so that a window (and a window of a window) keeps the
@@ -48,6 +52,8 @@ struct FakeObject {
     /// \brief offset from the ROOT allocation, in elements, accumulated
     ///        through however many levels of window
     std::size_t window_offset{};
+    /// \brief the strides a window was created with, empty for dense
+    std::vector<std::int64_t> strides;
     std::shared_ptr<FakeStorage> storage;
     /// \brief the packed N a matmul weights object was created for
     /// \note What lets a matmul dispatch pick the SAME `"matmul-<n>"` helper
@@ -400,7 +406,7 @@ struct TypedFake<Tag, Result (*)(Args...)> {
         } else if constexpr (std::is_same_v<Tag, status_to_string_tag>) {
             return "success";
         } else if constexpr (std::is_same_v<Tag, get_last_error_message_tag>) {
-            return "";
+            return last_error.c_str();
         } else if constexpr (std::is_same_v<Tag, stream_get_kernels_root_tag>) {
             static const char kKernelsRoot[] = "";
             return kKernelsRoot;
@@ -462,12 +468,17 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             *out = object;
             state.host_view_creates.push_back({type, object->shape, object});
             return ryzenai_corelib_status_success;
+        } else if constexpr (std::is_same_v<Tag, stream_enable_kernel_bundle_tag>) {
+            const char* model = std::get<1>(arguments);
+            state.kernel_bundles.push_back(
+                {std::get<0>(arguments), model ? model : "", state.enum_calls.size()});
+            return ryzenai_corelib_status_success;
         } else if constexpr (std::is_same_v<Tag, create_tensor_window_tag>) {
             void* parent = std::get<0>(arguments);
             const auto* shape = std::get<1>(arguments);
             const auto shape_len = std::get<2>(arguments);
             const auto offset = std::get<3>(arguments);
-            auto* out = std::get<4>(arguments);
+            auto* out = std::get<6>(arguments);
             if (out) *out = nullptr;
             if (!out || !shape) return ryzenai_corelib_status_bad_argument;
             ryzenai_corelib_data_type data_type = ryzenai_corelib_data_type_bf16;
@@ -498,8 +509,12 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             object->window_offset = window_offset;
             object->shape = window_shape;
             object->byte_size = Elements(object->shape) * TypeBytes(object->data_type);
+            const auto* strides = std::get<4>(arguments);
+            const auto strides_len = std::get<5>(arguments);
+            if (strides) object->strides.assign(strides, strides + strides_len);
             *out = object;
-            state.tensor_windows.push_back({parent, object->shape, offset, object});
+            state.tensor_windows.push_back(
+                {parent, object->shape, offset, object, object->strides});
             return ryzenai_corelib_status_success;
         } else if constexpr (std::is_same_v<Tag, tensor_get_byte_size_tag>) {
             auto* object = static_cast<FakeObject*>(std::get<0>(arguments));
@@ -577,6 +592,20 @@ struct TypedFake<Tag, Result (*)(Args...)> {
                     for (std::size_t i = 0; i < count; ++i) out[i] = as_bf16;
                 } else {
                     std::memset(destination, 0, count * TypeBytes(destination_type));
+                }
+            }
+            return ryzenai_corelib_status_success;
+        } else if constexpr (std::is_same_v<Tag, paged_mha_enum_kernels_tag>) {
+            // A context above one page plans against this grid, not
+            // flat_mha's, so an empty answer leaves every prefill bucket
+            // without a kernel.
+            auto fn = std::get<1>(arguments);
+            if (fn && state.shipped_paged.empty()) {
+                fn(std::get<2>(arguments), 0, 0, 0, -1, 0, 0, 0, 0);
+            } else if (fn) {
+                for (const auto& shipped : state.shipped_paged) {
+                    fn(std::get<2>(arguments), 0, shipped.heads, shipped.kv_heads, shipped.m, 0,
+                       shipped.head_size, shipped.page_size, 0);
                 }
             }
             return ryzenai_corelib_status_success;
@@ -910,7 +939,8 @@ struct TypedFake<Tag, Result (*)(Args...)> {
                              std::is_same_v<Tag, ssmlp_tag> ||
                              std::is_same_v<Tag, rmsnorm_tag> ||
                              std::is_same_v<Tag, ple_tag> ||
-                             std::is_same_v<Tag, flat_mha_tag>) {
+                             std::is_same_v<Tag, flat_mha_tag> ||
+                             std::is_same_v<Tag, paged_mha_tag>) {
             // THE INJECTED MID-CHAIN REFUSAL, BEFORE ANY VALIDATION AND
             // BEFORE THE RECORD. See State::fail_dispatch_at: this is the
             // only way a test can reach the engine's catch block, which is
@@ -957,6 +987,20 @@ struct TypedFake<Tag, Result (*)(Args...)> {
                 if (!RowsAgree({input, output}) || !OnGrid(helper, input) ||
                     !OnGrid(helper, output))
                     return ryzenai_corelib_status_bad_argument;
+                // Like corelib: a 3-D output is the cache-writing form and
+                // must be a strided window [k * head, head, 1] with k >= its
+                // rows. A dense window over the whole cache is refused too.
+                if (output && RankOf(output) == 3) {
+                    const auto* object = static_cast<FakeObject*>(output);
+                    const auto& strides = object->strides;
+                    const auto head = object->shape[2];
+                    if (head <= 0 || strides.size() != 3 || strides[2] != 1 || strides[1] != head ||
+                        strides[0] % head != 0 || strides[0] / head < object->shape[1]) {
+                        last_error = "a cache-writing 3-D output must be a window with "
+                                     "strides [max_seq * head_size, head_size, 1]";
+                        return ryzenai_corelib_status_bad_argument;
+                    }
+                }
             } else if constexpr (std::is_same_v<Tag, ssmlp_tag>) {
                 void* input = std::get<1>(arguments);
                 void* residual = std::get<2>(arguments);
@@ -1037,8 +1081,10 @@ struct TypedFake<Tag, Result (*)(Args...)> {
                 // one -- but recording it is what makes the reference
                 // driver's load-time guard (gemma4_driver.py:1670-1690)
                 // portable to a test.
-                record.has_mha_desc = desc != nullptr;
-                if (desc) record.mha_desc = *desc;
+                if constexpr (std::is_same_v<Tag, flat_mha_tag>) {
+                    record.has_mha_desc = desc != nullptr;
+                    if (desc) record.mha_desc = *desc;
+                }
                 // THE ROTARY PAIR AND THE TWO CACHES. Not row-bearing, so not
                 // in `operands` and not checked here -- retained so that "this
                 // layer roped with the sliding table and attended over cache
@@ -1054,15 +1100,21 @@ struct TypedFake<Tag, Result (*)(Args...)> {
                     if (!table || static_cast<FakeObject*>(table)->kind != "host_view")
                         return ryzenai_corelib_status_bad_argument;
                 }
-                if (!RowsAgree({q, k, out}) || !OnGrid("mha", q) ||
-                    !OnGrid("mha", k) || !OnGrid("mha", out))
+                // paged_mha has no pad helper, so there is no answer set to
+                // put its rows on.
+                if (!RowsAgree({q, k, out}))
                     return ryzenai_corelib_status_bad_argument;
+                if constexpr (std::is_same_v<Tag, flat_mha_tag>) {
+                    if (!OnGrid("mha", q) || !OnGrid("mha", k) || !OnGrid("mha", out))
+                        return ryzenai_corelib_status_bad_argument;
+                }
             }
-            record.kind = std::is_same_v<Tag, matmul_tag>     ? "matmul"
-                          : std::is_same_v<Tag, ssmlp_tag>    ? "ssmlp"
-                          : std::is_same_v<Tag, rmsnorm_tag>  ? "rmsnorm"
-                          : std::is_same_v<Tag, ple_tag>      ? "ple"
-                                                              : "mha";
+            record.kind = std::is_same_v<Tag, matmul_tag>      ? "matmul"
+                          : std::is_same_v<Tag, ssmlp_tag>     ? "ssmlp"
+                          : std::is_same_v<Tag, rmsnorm_tag>   ? "rmsnorm"
+                          : std::is_same_v<Tag, ple_tag>       ? "ple"
+                          : std::is_same_v<Tag, paged_mha_tag> ? "paged_mha"
+                                                               : "mha";
             record.stream = std::get<0>(arguments);
             record.operands = operands;
             record.operand_storage.reserve(operands.size());
@@ -1158,10 +1210,12 @@ ryzenai_corelib_status NoteMhaRows(ryzenai_corelib_stream_ptr stream,
 void Reset() {
     std::lock_guard<std::recursive_mutex> lock(state_mutex);
     state.enum_calls.clear();
+    state.kernel_bundles.clear();
     state.explicit_grid = false;
     state.shipped_matmul.clear();
     state.shipped_ssmlp.clear();
     state.shipped_mha.clear();
+    state.shipped_paged.clear();
     state.matmul_pad_calls.clear();
     state.rows_pad_calls.clear();
     state.mha_pad_calls.clear();
@@ -1184,6 +1238,7 @@ void Reset() {
     state.fail_dispatch_at.reset();
     state.read_returns_nonfinite = false;
     state.nonfinite_read_index.reset();
+    last_error.clear();
 }
 
 flm::corelib::CorelibApi::Resolver Resolver() {

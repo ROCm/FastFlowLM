@@ -1,5 +1,6 @@
 #pragma once
 
+#include "models/gemma4/rai/aie_next/gemma4_rai_constants.hpp"
 #include "models/gemma4/rai/aie_next/gemma4_rai_gguf.hpp"
 #include "rai/corelib_api.hpp"
 
@@ -77,9 +78,14 @@ public:
     ///        pair a stream was opened with selects the ELF set, and a shape
     ///        exists under one pair and not another
     /// \param config the model's shape, read off its GGUF (Task C5)
+    /// \param context the engine's context. Above kPageSize the plan is paged:
+    ///        attention descriptors carry that window and a kPageSize page.
     static Gemma4ShapePlan Build(
         const std::shared_ptr<const corelib::CorelibApi>& api,
-        ryzenai_corelib_stream_ptr stream, const Gemma4Config& config);
+        ryzenai_corelib_stream_ptr stream, const Gemma4Config& config,
+        std::int64_t context = kMaxSequenceLength);
+
+    bool paged() const noexcept { return paged_; }
 
     /// \param live_rows the live (unpadded) row count a caller wants extents
     ///        for, 1..4096
@@ -103,6 +109,11 @@ public:
     ///       a compile error. Callers that genuinely want the owning one say
     ///       `attention_desc(swa, /*shared=*/false)`.
     const ryzenai_corelib_flat_mha_bf16_desc& attention_desc(
+        bool swa, bool shared) const noexcept;
+
+    /// \note Valid only when paged() is true. Same (geometry, cache role)
+    ///       index as attention_desc.
+    const ryzenai_corelib_paged_mha_bf16_desc& paged_attention_desc(
         bool swa, bool shared) const noexcept;
 
     /// \brief the padded row extent lm_head's matmul runs at -- the leading
@@ -135,6 +146,8 @@ private:
     /// \note Materialized once in Build() and never written again. See the
     ///       class comment for why four and not two.
     std::array<ryzenai_corelib_flat_mha_bf16_desc, 4> attention_descs_{};
+    std::array<ryzenai_corelib_paged_mha_bf16_desc, 4> paged_descs_{};
+    bool paged_{false};
 };
 
 }  // namespace flm::gemma4

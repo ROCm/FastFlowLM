@@ -1,6 +1,6 @@
 /// \file kernel_grid.hpp
 /// \brief The shapes a corelib stream can actually run
-/// \note corelib 0.11 reports shipped kernels and rounds nothing. A reported
+/// \note corelib reports shipped kernels and rounds nothing. A reported
 ///       M below zero is a test double meaning "every requested M ships
 ///       exactly"; a real corelib never says that.
 #pragma once
@@ -99,6 +99,31 @@ public:
         FlatCtx ctx{&grid, &desc};
         api.Check(api.functions().flat_mha_enum_kernels(stream, &OnFlatMha, &ctx),
                   "ryzenai_corelib_flat_mha_bf16_enum_kernels");
+        // A decode step is seq_len_q == 1, and that ELF has six numeric fields.
+        // enum_kernels declines the ambiguous ones, so the callback can miss
+        // every token kernel and the smallest reported prefill M is 64.
+        // flat_mha still dispatches M=1 and puts the KV bucket in seq_pad
+        // (the 64 in ..._8_1_1_64_256_4096_scale1). Record the row, or a
+        // one-token step is rounded up to that prefill kernel and refused.
+        if (!grid.wildcard && !grid.Has(1, 0, 0, -1)) grid.shapes.push_back({1, 0, 0, 0});
+        return grid;
+    }
+
+    /// \brief paged attention kernels whose page matches `desc.page_size`
+    static ShapeGrid PagedMha(const CorelibApi& api, ryzenai_corelib_stream_ptr stream,
+                              const ryzenai_corelib_paged_mha_bf16_desc& desc) {
+        ShapeGrid grid;
+        PagedCtx ctx{&grid, &desc};
+        api.Check(api.functions().paged_mha_enum_kernels(stream, &OnPagedMha, &ctx),
+                  "ryzenai_corelib_paged_mha_bf16_enum_kernels");
+        // A decode step is seq_len_q == 1, and paged_mha puts the KV bucket in
+        // seq_pad: ..._8_1_1_64_256_4096, where 1 is the query rows and 64 is
+        // seq_pad. corelib 0.25 reads that six-field name as a token kernel
+        // and walks the decode PDI, so Gemma 4's p33 decode kernel is
+        // reported. A corelib that does not report M=1 would round a decode
+        // up to the smallest prefill kernel (64) and refuse it, so M=1 is
+        // still recorded; Has() keeps it from being added twice.
+        if (!grid.wildcard && !grid.Has(1, 0, 0, -1)) grid.shapes.push_back({1, 0, 0, 0});
         return grid;
     }
 
@@ -110,6 +135,10 @@ private:
     struct FlatCtx {
         ShapeGrid* grid;
         const ryzenai_corelib_flat_mha_bf16_desc* desc;
+    };
+    struct PagedCtx {
+        ShapeGrid* grid;
+        const ryzenai_corelib_paged_mha_bf16_desc* desc;
     };
 
     static bool OnMatmul(void* ctx, int, std::int64_t m, std::int64_t k, std::int64_t n,
@@ -149,6 +178,20 @@ private:
              head_size != desc->head_size || max_seq != desc->max_seq ||
              window != keyed_window || kv_shared != (desc->kv_shared != 0) ||
              !scale_matches))
+            return true;
+        pack->grid->shapes.push_back({seq_len_q, 0, 0, 0});
+        return true;
+    }
+
+    static bool OnPagedMha(void* ctx, int, std::int64_t heads, std::int64_t kv_heads,
+                           std::int64_t seq_len_q, std::int64_t, std::int64_t head_size,
+                           std::int64_t page_size, std::int64_t) {
+        auto* pack = static_cast<PagedCtx*>(ctx);
+        if (seq_len_q < 0) pack->grid->wildcard = true;
+        const auto* desc = pack->desc;
+        if (seq_len_q >= 0 &&
+            (heads != desc->num_heads || kv_heads != desc->kv_num_heads ||
+             head_size != desc->head_size || page_size != desc->page_size))
             return true;
         pack->grid->shapes.push_back({seq_len_q, 0, 0, 0});
         return true;

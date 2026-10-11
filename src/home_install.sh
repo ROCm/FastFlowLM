@@ -13,8 +13,8 @@
 #
 # --rai installs to /scratch/$USER/flm_exe_rai rather than ~/flm_exe: a rai
 # build and a stock one would otherwise overwrite each other, and the corelib
-# and DynamicDispatch libraries staged into a rai prefix are far too large for a
-# home directory. Falls back to ~/flm_exe_rai with no scratch space, and
+# library staged into a rai prefix is far too large for a home directory.
+# Falls back to ~/flm_exe_rai with no scratch space, and
 # FLM_PREFIX overrides either default.
 #
 # --rai selects the linux-rai-on preset. Point that build at a corelib prefix
@@ -100,9 +100,8 @@ XRT_ROOT=""
 # and lets the two env scripts be sourced independently.
 #
 # That default lives on scratch rather than under $HOME: a rai install also
-# carries libryzenai_corelib.so and the DynamicDispatch core it links against,
-# which together dwarf the rest of the tree and do not belong in a home
-# directory. $HOME is the fallback for a machine with no scratch space.
+# carries libryzenai_corelib.so, whose built-in model kernels dwarf the rest of
+# the tree and do not belong in a home directory. $HOME is the fallback for a machine with no scratch space.
 RAI_PREFIX_DEFAULT="/scratch/$USER/flm_exe_rai"
 [[ -d "/scratch/$USER" ]] || RAI_PREFIX_DEFAULT="$HOME/flm_exe_rai"
 if [[ -n "$FLM_PREFIX_FROM_ENV" ]]; then
@@ -203,10 +202,10 @@ rm -f "$FLM_PREFIX/share/flm/model_list_rai.json"
 # ---- stage the rai (ryzenai-corelib) runtime -------------------------------
 # A corelib-backed build links libryzenai_corelib.so, which no install rule
 # covers: CMake only globs lib/<runtime> for engine libraries, and corelib is
-# not one of those. Copying it alone is still not enough -- it reaches
-# libdyn_dispatch_core.so through an absolute RUNPATH into the out-of-tree
-# DynamicDispatch prefix it was built against, so the install would break as
-# soon as that directory moved.
+# not one of those. Copying it alone is still not enough -- any non-system
+# library it links is reached through an absolute RUNPATH into the prefix it
+# was built against, so the install would break as soon as that directory
+# moved.
 #
 # Copy corelib together with every non-system library it pulls in, leaving the
 # prefix self-contained. The dynamic loader searches LD_LIBRARY_PATH (set by the
@@ -216,7 +215,7 @@ rm -f "$FLM_PREFIX/share/flm/model_list_rai.json"
 # Keyed on --rai rather than on the cache: a stock install has to be the stock
 # install main ships, and reading the flag out of whichever build tree happened
 # to be lying around made a plain ./home_install.sh drop libryzenai_corelib.so
-# and a 400 MB libdyn_dispatch_core.so into ~/flm_exe, where the bundled XRT
+# and its dependencies into ~/flm_exe, where the bundled XRT
 # then had company it could not cope with. A tree that disagrees with the mode
 # gets a warning instead.
 CACHE_FILE="$BUILD_DIR/CMakeCache.txt"
@@ -247,36 +246,22 @@ elif [[ -f "$CACHE_FILE" ]] && grep -q '^FLM_ENABLE_RAI:BOOL=ON' "$CACHE_FILE"; 
     install -m 0755 "$CORELIB" "$RAI_LIB_DEST/"
     # ldd resolves the whole transitive chain, so filtering out the system
     # directories here leaves exactly the libraries that ship with the build.
-    DD_CORE_DIR=""
     while read -r _soname _arrow dep _addr; do
         case "$dep" in
             /lib/*|/lib64/*|/usr/lib/*|/usr/lib64/*|"") continue ;;
         esac
         [[ -f "$dep" ]] || continue
-        if [[ "$(basename "$dep")" == libdyn_dispatch_core.so* ]]; then
-            DD_CORE_DIR="$(dirname "$dep")"
-        fi
         echo "[home_install]   + $(basename "$dep")"
         install -m 0755 "$dep" "$RAI_LIB_DEST/"
     done < <(ldd "$CORELIB" | grep '=>' || true)
 
-    # libdyn_bins.so is invisible to the ldd walk above: nothing declares it as
-    # a DT_NEEDED. DynamicDispatch dlopen()s it at runtime, from the directory
-    # holding libdyn_dispatch_core.so (it dladdr()s itself to find that dir),
-    # and when the file is absent Transaction::load_large_txn_ops_dll() just
-    # returns -- no warning, no error.
-    #
-    # It only exists when DD was configured with DD_MDS_IN_BINS_DLL=ON, which
-    # moves every transaction/mds/*.elf -- i.e. the whole AIE_NEXT kernel set -- out
-    # of the static transaction lib and into this library. Skipping it leaves
-    # the AIE_NEXT shape table empty, and the first matmul dies with
-    #   Target Shape (K: 3072, N: 3072, Gs: 64) ... not supported in this
-    #   supported shape list. Shape list size: 0
-    # which reads like an unsupported model rather than a missing file.
-    if [[ -n "$DD_CORE_DIR" && -f "$DD_CORE_DIR/libdyn_bins.so" ]]; then
-        echo "[home_install]   + libdyn_bins.so (dlopen'd AIE_NEXT kernel package)"
-        install -m 0755 "$DD_CORE_DIR/libdyn_bins.so" "$RAI_LIB_DEST/"
-    fi
+    # Each model is its own library carrying its kernels, which corelib loads
+    # only from the directory it was itself loaded from.
+    for plugin in "$(dirname "$CORELIB")"/*ryzenai_corelib_model_*.so; do
+        [[ -f "$plugin" ]] || continue
+        echo "[home_install]   + $(basename "$plugin")"
+        install -m 0755 "$plugin" "$RAI_LIB_DEST/"
+    done
 else
     echo "[home_install] ERROR: --rai, but $BUILD_DIR was not configured with" >&2
     echo "               FLM_ENABLE_RAI=ON, so there is no corelib runtime to" >&2
@@ -301,8 +286,7 @@ fi
 # own XRT in the layout XRT expects and reaches it through the binary's RUNPATH,
 # and every extra hint that was added for rai -- the XILINX_XRT pin, $FLM_PREFIX
 # /lib ahead of it on LD_LIBRARY_PATH -- only got in its way. A rai prefix has
-# the opposite need: no XRT of its own, and corelib plus DynamicDispatch staged
-# beside the binary.
+# the opposite need: no XRT of its own, and corelib staged beside the binary.
 if [[ "$WANT_RAI" -eq 1 ]]; then
     XRT_ENV_BLOCK="$(cat <<RAI_ENV
 XRT_ROOT="$XRT_ROOT"
@@ -336,8 +320,7 @@ fi
 # Belt-and-suspenders: also expose the bundled libs explicitly. Both engine
 # directories are listed because the layout depends on the runtime backend
 # (HRX uses lib/flm, XRT and portable builds use lib), and a rai build stages
-# libryzenai_corelib.so plus its DynamicDispatch dependency into whichever one
-# applies. This has to precede DT_RUNPATH, which still points at the machine
+# libryzenai_corelib.so (plus any model plugins) into whichever one applies. This has to precede DT_RUNPATH, which still points at the machine
 # the libraries were built on.
 export LD_LIBRARY_PATH="\$FLM_PREFIX/lib:\$FLM_PREFIX/lib/flm:\${LD_LIBRARY_PATH:-}"
 RAI_ENV

@@ -25,6 +25,7 @@ void TestConfigFromMetadataReadsE2b() {
     TEST_REQUIRE(cfg.kv_heads == 1);
     TEST_REQUIRE(cfg.kv_layers == 15);
     TEST_REQUIRE(cfg.sliding_window == 512);
+    TEST_REQUIRE(cfg.context_length == 131072);
     TEST_REQUIRE(cfg.vocab == 262144);
     TEST_REQUIRE(cfg.rope_theta == 1000000.0);
     TEST_REQUIRE(cfg.rope_theta_swa == 10000.0);
@@ -50,6 +51,21 @@ void TestConfigFromMetadataReadsE4b() {
     TEST_REQUIRE(cfg.kv_layers == 24);
     TEST_REQUIRE(cfg.LayerHeadDim(5) == 512);
     TEST_REQUIRE(cfg.ple_dim == 256);
+}
+
+void TestContextLengthIsReadFromTheFile() {
+    auto builder = gemma4_fixture::MakeBuilder(gemma4_fixture::E2bOptions());
+    builder.SetMetadata("gemma4.context_length", std::uint32_t{8192});
+    auto file = GgufFile::Open(builder.Write());
+    TEST_REQUIRE(ConfigFromMetadata(*file).context_length == 8192);
+}
+
+void TestAFileWithoutAContextLengthGetsOnePage() {
+    auto builder = gemma4_fixture::MakeBuilder(gemma4_fixture::E2bOptions());
+    builder.RemoveMetadata("gemma4.context_length");
+    auto file = GgufFile::Open(builder.Write());
+    TEST_REQUIRE(!file->HasMetadata("gemma4.context_length"));
+    TEST_REQUIRE(ConfigFromMetadata(*file).context_length == 4096);
 }
 
 // THE ONE THAT MATTERS. gemma4.attention.shared_kv_layers is the file's
@@ -322,6 +338,8 @@ int main() {
 #define RUN_TEST(name) RunTest(&name, #name)
     RUN_TEST(TestConfigFromMetadataReadsE2b);
     RUN_TEST(TestConfigFromMetadataReadsE4b);
+    RUN_TEST(TestContextLengthIsReadFromTheFile);
+    RUN_TEST(TestAFileWithoutAContextLengthGetsOnePage);
     RUN_TEST(TestKvLayersIsBlockCountMinusTheFilesSharingCount);
     RUN_TEST(TestHeadDimKeysAreNotReadTheObviousWayRound);
     RUN_TEST(TestTensorCountIsSixPlusSeventeenPerLayer);

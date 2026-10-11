@@ -107,9 +107,15 @@ flm run qwen3:8b
 - **Backend:** `rai` — one engine for all four sizes. The GGUF's own metadata selects the size and is cross-checked against it.
 - **Source format:** GGUF `Q8_0`, read directly. Every weight is requantized to **group 64** while it is packed, except the 0.6B lm_head, which packs at **group 32**.
 - **Usable generation window:** 4095 tokens, prompt plus output. Over-capacity requests are rejected with HTTP 400 before any work reaches the device.
-- **Availability:** developer build against corelib 0.11.0 — see [Phi-4 on the rai backend](phi.md).
+- **Availability:** developer build against corelib 0.26.0 — see [Phi-4 on the rai backend](phi.md).
 
-The same corelib path also runs `gemma4-it-rai:e2b`, `gemma4-it-rai:e4b` (text only) and `qwen3.5-rai:9b`.
+The same corelib path also runs `gemma4-it-rai:e2b` and `gemma4-it-rai:e4b` (text only), `qwen3.5-rai:9b` and `qwen3.6-moe-rai:35b-a3b` (text only). Qwen3 and Qwen3.5 stay at 4096; the other two go further:
+
+- **`qwen3.6-moe-rai:35b-a3b` — up to 262144 tokens.** The default is 4096; raise it with `--ctx-len` (`-c`). Long contexts have three costs:
+    - **Memory, up front.** The KV cache is allocated when the model is created, at the full capacity you ask for (rounded up to whole 4096-token pages), whether or not a conversation ever fills it: about 20 KiB per token (10 attention layers × 2 KV heads × 256 × BF16, for K and V), so 262144 tokens is about 5 GiB on top of the weights.
+    - **Long prompts run at decode speed.** A prompt is one forward call, but only its first 4096 tokens from position 0 run as a single pass; every token after them, and every later turn's prompt, is stepped one row at a time, at about decode speed. corelib measures decode at about 26 tokens/s at a shallow context, slowing by about 2.4 ms per token for each further 4096-token page (about 18 tokens/s at 32k). So a 100k-token prompt takes on the order of an hour: about 64 minutes even at the shallow rate, and nearer two hours once the per-page slowdown is counted (an extrapolation; corelib's measurements stop at 32k). FastFlowLM also still sends a prompt in chunks of at most 4096 tokens (`max_prefill_len`), so a long prompt is a one-pass first chunk followed by stepped ones.
+    - **Checkpoints take host memory.** A checkpoint (what lets a conversation rewind without replaying) copies the KV cache into host memory, in whole 4096-token pages up to the current position: about 80 MiB per filled page, so up to about 5 GiB at a full 262144-token context.
+- **`gemma4-it-rai:e2b` / `gemma4-it-rai:e4b` — up to 16384 tokens**, the length corelib has validated paged Gemma 4 to, and never past the GGUF's own `gemma4.context_length`. The default is 16384. Up to 4096 any length works; above 4096 the context must be a multiple of 4096. The KV cache for the whole context is allocated up front, when the model loads.
 
 ```powershell
 flm pull qwen3-rai:4b

@@ -35,7 +35,7 @@ This is a contributor document. For *using* a backend once it exists — `--back
 |---|---|
 | **Platform** | Windows and Linux. Both configure and build; only Windows has been run on hardware, and the `src/test/phi4_rai` suite is still Windows-only. |
 | **Hardware** | An aie_next NPU. There is no simulator; a wrong shape shows up as garbage output, not an error. |
-| **corelib headers** | Exactly **0.11.0**, from after the weight API became one `*_weights_create` per operator. [`corelib_api.hpp`](../../include/rai/corelib_api.hpp) `#error`s on any other version — deliberately, because the C ABI has changed shape between patch releases. |
+| **corelib headers** | The corelib ABI is still pre-1.0, so FastFlowLM requires an **exact `0.26.0`** match on major, minor and patch. [`corelib_api.hpp`](../../include/rai/corelib_api.hpp) `#error`s on any other version — deliberately, because the C ABI has changed shape between patch releases. The version is queried before any other entry point, so a mismatched runtime reports a version error rather than a missing symbol. corelib's default build gives one `ryzenai_corelib_model_<name>` library per model, carrying its kernels, which must sit beside corelib. Each engine enables its model's kernel bundle on the stream it opens. |
 | **Weights** | A GGUF the vendor kernels can requantize. Phi-4 uses Q8_0; each weight is a `*_weights_create` call whose qweight source states `gguf_q8_0`. |
 
 Configure with:
@@ -166,7 +166,7 @@ engine type, never through a `causal_lm*`.
   mapped range and produces its own object — so they run across a pool
   (`kWeightCreateConcurrency`). The per-create thread hint
   (`kRequantizeThreads`) goes to corelib as `fast_packer_threads`: 0 lets corelib
-  choose (8 threads at 0.11.0), 1 keeps each create serial. The two multiply,
+  choose (8 threads), 1 keeps each create serial. The two multiply,
   so pick them together. See
   [`phi4_rai_constants.hpp`](../../include/models/phi4/rai/aie_next/phi4_rai_constants.hpp).
 - Expose `bool poisoned() const noexcept`. A corelib failure mid-decode usually

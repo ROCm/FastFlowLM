@@ -59,6 +59,15 @@ bool Qwen3_6_MOE::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input,
         header_print("WARNING", "No messages or prompt provided");
         return false;
     }
+    if (this->backend_id() == flm::backend::kRaiBackendId) {
+        bool has_image = !input.images.empty();
+        for (const auto& item : input.messages) {
+            if (item.contains("images") && !item["images"].empty()) has_image = true;
+        }
+        if (has_image)
+            throw ModelRequestError(400, false,
+                "Qwen3.6 on backend 'rai' runs text only; this request has images");
+    }
 
     constexpr bool DEBUG_IMAGE_PREPROCESS = false;
     qwen3_6_moe_image_payload_t image_payload;
@@ -279,11 +288,10 @@ bool Qwen3_6_MOE::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input,
 
     // hardware
     int restore_idx = -1;
-    qwen3_6_moe_npu *qwen3_6_moe_engine = dynamic_cast<qwen3_6_moe_npu*>(this->lm_engine);
     const bool has_images = image_payload.num_images > 0;
 
     if (meta_info.restore_allowed) {
-        restore_idx = qwen3_6_moe_engine->restore();
+        restore_idx = this->lm_engine->restore();
         this->total_tokens = restore_idx;
         this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
     }
@@ -296,7 +304,7 @@ bool Qwen3_6_MOE::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input,
         : this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
 
     checkpoint_his = token_history;
-    int checkpoint_idx = qwen3_6_moe_engine->checkpoint();
+    int checkpoint_idx = this->lm_engine->checkpoint();
     return success;
 }
 
@@ -317,6 +325,16 @@ std::string Qwen3_6_MOE::generate(chat_meta_info_t& meta_info, int length_limit,
     this->profiler_list[TKOEN_DECODE_TIME].reset();
     std::string token_str;
     int sampled_token;
+    // Some backends refuse to decode past a limit of their own, below MAX_L.
+    const uint32_t decode_cap = this->decode_cap();
+    // insert() trimmed the opening of the think block; it is decoded here, and
+    // every one of those steps occupies the context.
+    const uint32_t forced = this->enable_think ? 2 : 4;
+    if (this->total_tokens + forced >= decode_cap) {
+        header_print("WARNING", "Max length reached, stopping generation...");
+        meta_info.stop_reason = MAX_LENGTH_REACHED;
+        return result;
+    }
     if(this->enable_think) {
         this->token_history.push_back(think_start_id);
         this->profiler_list[DECODING_TIME].start();
@@ -366,19 +384,20 @@ std::string Qwen3_6_MOE::generate(chat_meta_info_t& meta_info, int length_limit,
         this->_apply_tool_choice_mask(y, meta_info);
         sampled_token = this->sampler->sample(y);
     }
-    this->total_tokens++;
+    this->total_tokens += forced;
     meta_info.generated_tokens++;
     int last_sampled_token = sampled_token;
     token_str = this->tokenizer->run_time_decoder(last_sampled_token);
     result += token_str;
     os << token_str << std::flush;
 
-    if (this->total_tokens >= this->MAX_L){
-        header_print("WARNING", "Max length reached, stopping generation...");
-        reason = MAX_LENGTH_REACHED;
-        return result;
-    }
-    while (this->total_tokens < this->MAX_L){
+    while (true){
+        // Running out of window is a truncation, not the model choosing to
+        // stop; testing here rather than in the loop condition records it.
+        if (this->total_tokens >= decode_cap){
+            reason = MAX_LENGTH_REACHED;
+            break;
+        }
         if (is_cancelled()) {
             reason = CANCEL_DETECTED;
             // reset stream content
@@ -411,7 +430,10 @@ std::string Qwen3_6_MOE::generate(chat_meta_info_t& meta_info, int length_limit,
         this->token_history.push_back(sampled_token);
         if (this->is_eos(sampled_token)){
             meta_info.generated_tokens++;
-            this->lm_engine->forward(last_sampled_token);
+            if (this->forward_on_eos &&
+                (!this->backend_ || this->backend_->forwards_past_eos())) {
+                this->lm_engine->forward(last_sampled_token);
+            }
             break;
         }
         meta_info.generated_tokens++;
@@ -422,7 +444,7 @@ std::string Qwen3_6_MOE::generate(chat_meta_info_t& meta_info, int length_limit,
     }
     meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
     meta_info.stop_reason = reason;
-    if (this->total_tokens >= this->MAX_L){
+    if (this->total_tokens >= decode_cap){
         header_print("WARNING", "Max length reached, stopping generation...");
     }
 
@@ -437,9 +459,8 @@ std::string Qwen3_6_MOE::generate_with_prompt(chat_meta_info_t& meta_info, lm_un
         return "";
     }
     header_print("FLM", "Prompt inserted, starting generation...");
-    qwen3_6_moe_npu* qwen36_engine = dynamic_cast<qwen3_6_moe_npu*>(this->lm_engine);
-    int checkpoint_idx = qwen36_engine->checkpoint();
-    int restore_idx = qwen36_engine->restore();
+    int checkpoint_idx = this->lm_engine->checkpoint();
+    int restore_idx = this->lm_engine->restore();
     header_print_r("FLM", "Checkpoint before generation: " << checkpoint_idx << ", restore point: " << restore_idx << ", user context length: " << this->token_history.size());
     if (this->enable_think) {
         os << "<think>\n" << std::flush;

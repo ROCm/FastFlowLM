@@ -123,10 +123,7 @@ struct qwen3_rai::Impl {
         phases.host_prep = phases.Lap();
 
         auto lease = runtime->AcquireExecution();
-        void* raw = nullptr;
-        api->Check(api->functions().create_stream(kPrefillPdi, kTokenPdi, &raw),
-                   "ryzenai_corelib_create_stream");
-        stream = UniqueStream(api, raw);
+        stream = corelib::OpenModelStream(api, kPrefillPdi, kTokenPdi, "qwen3");
         plan = Qwen3ShapePlan::Build(api, stream.get(), *c);
         phases.shape_plan = phases.Lap();
 
@@ -465,7 +462,7 @@ struct qwen3_rai::Impl {
             const auto view = [&](void* parent, std::int64_t r, std::int64_t cols, const char* label) {
                 const std::array<std::int64_t, 2> shape{r, cols};
                 void* p = nullptr;
-                api->Check(f.create_tensor_window(parent, shape.data(), shape.size(), 0, &p),
+                api->Check(f.create_tensor_window(parent, shape.data(), shape.size(), 0, nullptr, 0, &p),
                            std::string("ryzenai_corelib_create_tensor_window ") + label);
                 return UniqueTensorWindow(api, p);
             };
@@ -498,9 +495,12 @@ struct qwen3_rai::Impl {
                 // this pass's first row, whose height bounds what lands there.
                 const std::array<std::int64_t, 3> v_shape{c->kv_heads, kMaxSequenceLength - position,
                                                           c->head_dim};
+                const std::array<std::int64_t, 3> v_strides{kMaxSequenceLength * c->head_dim,
+                                                            c->head_dim, 1};
                 void* p = nullptr;
                 api->Check(f.create_tensor_window(v_cache[i].get(), v_shape.data(), v_shape.size(),
-                                                  static_cast<std::size_t>(position * c->head_dim), &p),
+                                                  static_cast<std::size_t>(position * c->head_dim),
+                                                  v_strides.data(), v_strides.size(), &p),
                            "ryzenai_corelib_create_tensor_window V");
                 const UniqueTensorWindow v_window(api, p);
                 api->Check(f.matmul(stream.get(), hidden_w.get(), v_weights[i].get(), v_window.get()),

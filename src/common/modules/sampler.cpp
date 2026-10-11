@@ -215,33 +215,38 @@ void Sampler::sampler_penalty_apply_sparse() {
 }
 
 void Sampler::sampler_topk_apply(int k) {
-    if (k == 0) {
+    k = std::min(k, in_features);
+    if (k <= 0) {
         return;
     }
 
-    logits_list_t pairs;
-    pairs.resize(in_features);
-    for (int i = 0; i < in_features; i++) {
-        pairs[i].logits = this->logits[i];
-        pairs[i].token_id = i;
-        pairs[i].prob = 0.0f;
+    // bf16 logits tie exactly often enough to matter over a 100k+ vocab, so a
+    // bare `>` would leave the winner of a tie to the selection's internals.
+    // Lowest id wins instead: the order is reproducible and matches
+    // sample_greedy()'s argmax.
+    const auto ranks_before = [](const logits_t& a, const logits_t& b) {
+        if (a.logits != b.logits) { return a.logits > b.logits; }
+        return a.token_id < b.token_id;
+    };
+
+    // One pass with a k-entry heap whose front is the worst survivor, instead of
+    // materialising and partially sorting a vocab-sized array every token.
+    auto& top = this->top_k_logits;
+    top.clear();
+    top.reserve(k);
+    for (int i = 0; i < k; i++) {
+        top.push_back(logits_t{ this->logits[i], i, 0.0f });
     }
-
-    std::partial_sort(
-        pairs.begin(),
-        pairs.begin() + k,
-        pairs.end(),
-        [](const logits_t& a, const logits_t& b) {
-            // bf16 logits tie exactly often enough to matter over a 100k+ vocab,
-            // and partial_sort is not stable, so a bare `>` leaves the winner of a
-            // tie down to the sort's internals. Lowest id wins instead: the order
-            // is then reproducible and matches sample_greedy()'s argmax.
-            if (a.logits != b.logits) { return a.logits > b.logits; }
-            return a.token_id < b.token_id;
+    std::make_heap(top.begin(), top.end(), ranks_before);
+    for (int i = k; i < in_features; i++) {
+        // ids only grow, so a logit equal to the worst survivor's never displaces it
+        if (this->logits[i] > top.front().logits) {
+            std::pop_heap(top.begin(), top.end(), ranks_before);
+            top.back() = logits_t{ this->logits[i], i, 0.0f };
+            std::push_heap(top.begin(), top.end(), ranks_before);
         }
-    );
-
-    this->top_k_logits.assign(pairs.begin(), pairs.begin() + k);
+    }
+    std::sort_heap(top.begin(), top.end(), ranks_before);
 }
 
 void Sampler::sampler_topp_apply(float p) {

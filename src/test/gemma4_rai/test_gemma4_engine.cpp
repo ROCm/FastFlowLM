@@ -153,7 +153,8 @@ struct Harness {
     Gemma4Config shape;
 
     explicit Harness(const Fixture& fixture,
-                     const std::function<void(Gemma4Config&)>& adjust = {}) {
+                     const std::function<void(Gemma4Config&)>& adjust = {},
+                     std::uint32_t maximum = 4096) {
         fake_corelib::Reset();
         runtime = CorelibRuntime::CreateForTest(
             CorelibApi::ResolveForTest(fake_corelib::Resolver()));
@@ -162,7 +163,7 @@ struct Harness {
             shape = package->Config();
             if (adjust) adjust(shape);
             engine = gemma4_rai::CreateWithShapeForTest(package, runtime,
-                                                        LM_Config{}, shape);
+                                                        LM_Config{}, shape, maximum);
         } catch (...) {
             // A CONSTRUCTOR THAT THROWS NEVER RUNS ITS DESTRUCTOR, so without
             // this the process-wide runtime survives the failed test and
@@ -204,6 +205,15 @@ void TestLoadWeightsThrowsAndNamesGguf() {
     // message has to say where weights actually come from, or the next reader
     // implements it.
     RequireContains(error, "Gemma 4");
+}
+
+void TestStreamEnablesTheGemma4BundleBeforeAnyKernelQuery() {
+    Harness h(E2bFixture());
+    const auto& state = fake_corelib::GetState();
+    TEST_REQUIRE(state.kernel_bundles.size() == 1);
+    TEST_REQUIRE(state.kernel_bundles[0].model == "gemma4");
+    TEST_REQUIRE(state.kernel_bundles[0].enum_calls_before == 0);
+    TEST_REQUIRE(!state.enum_calls.empty());
 }
 
 void TestAFreshEngineIsNotPoisonedAndStartsAtPositionZero() {
@@ -1162,7 +1172,7 @@ void TestPleAndRmsNormAreRecordedAsDispatchesInSequence() {
     const auto window = [&](void* parent, std::int64_t rows, std::int64_t columns) {
         const std::int64_t shape[2] = {rows, columns};
         void* object = nullptr;
-        TEST_REQUIRE(functions.create_tensor_window(parent, shape, 2, 0, &object) ==
+        TEST_REQUIRE(functions.create_tensor_window(parent, shape, 2, 0, nullptr, 0, &object) ==
                      ryzenai_corelib_status_success);
         return object;
     };
@@ -2283,6 +2293,18 @@ void RequireVNormWritesTheCache(const Fixture& fixture) {
 void TestE2bVNormWritesTheCacheOncePerKvHead() { RequireVNormWritesTheCache(E2bFixture()); }
 void TestE4bVNormWritesTheCacheOncePerKvHead() { RequireVNormWritesTheCache(E4bFixture()); }
 
+void TestE4bVProjectionLandsThroughAStridedWindow() {
+    Harness h(E4bFixture());
+    (void)h.engine->forward(1);
+    const auto& windows = fake_corelib::GetState().tensor_windows;
+    const auto v = std::find_if(windows.begin(), windows.end(),
+                                [](const auto& w) { return w.shape.size() == 3; });
+    TEST_REQUIRE(v != windows.end());
+    TEST_REQUIRE(v->strides.size() == 3 && v->strides[2] == 1);
+    TEST_REQUIRE(v->strides[1] == v->shape[2]);
+    TEST_REQUIRE(v->strides[0] == 4096 * v->strides[1]);
+}
+
 /// \brief every attention dispatch gets its own geometry's rotary pair, its
 ///        owner's caches, and the descriptor for its cache role
 ///
@@ -2646,6 +2668,78 @@ void TestAMultiRowContinuationReplaysFromPositionZero() {
     std::vector<int> again{23, 29};
     (void)harness.engine->prefill(again);
     TEST_REQUIRE(harness.engine->get_current_context_length() == 8);
+}
+
+/// \brief (position, rows) of every paged_mha dispatch from index `from` on
+std::vector<std::pair<std::int64_t, std::int64_t>> PagedAttentionSince(std::size_t from) {
+    const auto& dispatches = fake_corelib::GetState().dispatches;
+    std::vector<std::pair<std::int64_t, std::int64_t>> passes;
+    for (std::size_t i = from; i < dispatches.size(); ++i) {
+        if (dispatches[i].kind == "paged_mha")
+            passes.emplace_back(dispatches[i].mha_position, dispatches[i].rows);
+    }
+    return passes;
+}
+
+/// \brief a paged continuation on a page boundary runs only its own rows
+/// \note The server sends a long prompt `max_prefill_len` (4096) tokens at a
+///       time, so every call after the first lands on a page boundary.
+///       Replaying from position 0 there made each call cost the whole
+///       prompt so far.
+void TestAPagedContinuationOnAPageBoundaryRunsOnlyItsOwnPage() {
+    Harness harness(E2bFixture(), {}, 8192);
+    const auto layers = static_cast<std::size_t>(harness.shape.layers);
+    std::vector<int> first(4096, 5);
+    (void)harness.engine->prefill(first);
+    TEST_REQUIRE(harness.engine->get_current_context_length() == 4096);
+    const auto page0 = PagedAttentionSince(0);
+    TEST_REQUIRE(page0.size() == layers);
+    for (const auto& [position, rows] : page0) TEST_REQUIRE(position == 0 && rows == 4096);
+
+    const auto before = fake_corelib::GetState().dispatches.size();
+    std::vector<int> second(4096, 7);
+    (void)harness.engine->prefill(second);
+    TEST_REQUIRE(harness.engine->get_current_context_length() == 8192);
+    TEST_REQUIRE(!harness.engine->poisoned());
+    const auto page1 = PagedAttentionSince(before);
+    TEST_REQUIRE(page1.size() == layers);
+    for (const auto& [position, rows] : page1) TEST_REQUIRE(position == 4096 && rows == 4096);
+}
+
+/// \brief off a page boundary a paged continuation re-runs its page, and
+///        inside page 0 that is the whole conversation
+void TestAPagedContinuationOffAPageBoundaryReplaysFromItsPage() {
+    Harness harness(E2bFixture(), {}, 8192);
+    const auto layers = static_cast<std::size_t>(harness.shape.layers);
+
+    std::vector<int> short_prompt{2, 5, 9};
+    (void)harness.engine->prefill(short_prompt);
+    (void)harness.engine->forward(17);
+    auto before = fake_corelib::GetState().dispatches.size();
+    std::vector<int> more{11, 13};
+    (void)harness.engine->prefill(more);
+    TEST_REQUIRE(harness.engine->get_current_context_length() == 6);
+    const auto in_page0 = PagedAttentionSince(before);
+    TEST_REQUIRE(in_page0.size() == layers);
+    for (const auto& [position, rows] : in_page0) TEST_REQUIRE(position == 0 && rows == 128);
+
+    harness.engine->clear_context();
+    std::vector<int> long_prompt(4100, 5);
+    (void)harness.engine->prefill(long_prompt);
+    TEST_REQUIRE(harness.engine->get_current_context_length() == 4100);
+    before = fake_corelib::GetState().dispatches.size();
+    (void)harness.engine->prefill(more);
+    TEST_REQUIRE(harness.engine->get_current_context_length() == 4102);
+    TEST_REQUIRE(!harness.engine->poisoned());
+    const auto in_page1 = PagedAttentionSince(before);
+    TEST_REQUIRE(in_page1.size() == layers);
+    for (const auto& [position, rows] : in_page1) TEST_REQUIRE(position == 4096 && rows == 4096);
+
+    // And the rows it re-ran are the engine's own: one more continuation
+    // still finds every token behind it.
+    std::vector<int> last{19, 23, 29};
+    (void)harness.engine->prefill(last);
+    TEST_REQUIRE(harness.engine->get_current_context_length() == 4105);
 }
 
 // ---------------------------------------------------------------------------
@@ -3472,7 +3566,7 @@ void TestTheHostRejectionsAreRaisedOutsideTheTry() {
         "Gemma 4 request contains no token IDs",
         "outside the vocabulary of ",
         "Gemma 4 request exceeds configured context capacity",
-        "ships no chunked prefill",
+        "a multi-row pass must start at position 0",
         "RequireOneRowExtent(padded);",
     };
     for (const auto rejection : kRejections) {
@@ -3656,11 +3750,30 @@ void TestAPoisonedEngineStillTearsDownInOrder() {
                                   tensors);
     TEST_REQUIRE(harness.runtime->api()->live_object_count() == 0);
 }
+
+void TestAContextPastTheGgufsOwnIsRefused() {
+    ScopedWeightCache no_cache{"0"};
+    RuntimeScope teardown;
+    fake_corelib::Reset();
+    auto runtime = CorelibRuntime::CreateForTest(
+        CorelibApi::ResolveForTest(fake_corelib::Resolver()));
+    auto package = Gemma4GgufPackage::Open(E2bFixture().path);
+    auto shape = package->Config();
+    shape.context_length = 8192;
+    const auto error = RequireThrows([&] {
+        (void)gemma4_rai::CreateWithShapeForTest(package, runtime, LM_Config{}, shape, 12288);
+    });
+    RequireContains(error, "past this GGUF's context of 8192");
+    package.reset();
+    runtime.reset();
+    CorelibRuntime::ShutdownProcess();
+}
 }  // namespace
 
 int main() {
 #define RUN_TEST(name) RunTest(&name, #name)
     RUN_TEST(TestLoadWeightsThrowsAndNamesGguf);
+    RUN_TEST(TestStreamEnablesTheGemma4BundleBeforeAnyKernelQuery);
     RUN_TEST(TestAFreshEngineIsNotPoisonedAndStartsAtPositionZero);
     RUN_TEST(TestE2bHoldsTenWeightsPerOwningLayerAndSixPerSharingOne);
     RUN_TEST(TestE4bHoldsTenWeightsPerOwningLayerAndSixPerSharingOne);
@@ -3691,6 +3804,7 @@ int main() {
     RUN_TEST(TestE4bEveryLayerBindsItsOwnGeometrysWidths);
     RUN_TEST(TestE2bVNormWritesTheCacheOncePerKvHead);
     RUN_TEST(TestE4bVNormWritesTheCacheOncePerKvHead);
+    RUN_TEST(TestE4bVProjectionLandsThroughAStridedWindow);
     RUN_TEST(TestE2bAttentionBindsItsOwnRotaryPairAndItsOwnersCaches);
     RUN_TEST(TestE4bAttentionBindsItsOwnRotaryPairAndItsOwnersCaches);
     RUN_TEST(TestTheReturnedLogitsAreSoftcapped);
@@ -3700,6 +3814,8 @@ int main() {
     RUN_TEST(TestACacheReadResolvesThroughTheOwner);
     RUN_TEST(TestTheHostRejectionsFireBeforeAnyDispatch);
     RUN_TEST(TestAMultiRowContinuationReplaysFromPositionZero);
+    RUN_TEST(TestAPagedContinuationOnAPageBoundaryRunsOnlyItsOwnPage);
+    RUN_TEST(TestAPagedContinuationOffAPageBoundaryReplaysFromItsPage);
     RUN_TEST(TestE2bSecondLoadOfTheSameGgufBindsFromTheCache);
     RUN_TEST(TestE4bSecondLoadOfTheSameGgufBindsFromTheCache);
     RUN_TEST(TestACacheWrittenForE2bIsNotBoundForE4b);
@@ -3723,5 +3839,6 @@ int main() {
     RUN_TEST(TestE4bARefusedFirstDispatchDoesNotPoison);
     RUN_TEST(TestTheHostRejectionsAreRaisedOutsideTheTry);
     RUN_TEST(TestAPoisonedEngineStillTearsDownInOrder);
+    RUN_TEST(TestAContextPastTheGgufsOwnIsRefused);
 #undef RUN_TEST
 }

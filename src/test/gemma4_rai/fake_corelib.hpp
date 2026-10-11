@@ -306,6 +306,11 @@ struct ShippedMha {
     bool kv_shared, scale_one;
 };
 
+/// \brief one paged attention kernel `paged_mha_enum_kernels` reports
+struct ShippedPaged {
+    std::int64_t heads, kv_heads, m, head_size, page_size;
+};
+
 /// \brief one `ryzenai_corelib_matmul_bf16_weights_create_*` call
 /// \note The WHOLE descriptor, because `group_size` is the field C7 must get
 ///       right and it is the one nothing else in this codebase can observe:
@@ -490,6 +495,8 @@ struct TensorWindowRecord {
     std::vector<std::int64_t> shape;
     std::size_t offset;
     void* object;
+    /// \brief the strides the window was created with, empty for dense
+    std::vector<std::int64_t> strides;
 };
 
 /// \brief one `ryzenai_corelib_tensor_write` call
@@ -685,6 +692,13 @@ struct DispatchRecord {
     void* weights{nullptr};
 };
 
+/// \brief one `ryzenai_corelib_stream_enable_kernel_bundle` call
+struct KernelBundleRecord {
+    void* stream{};
+    std::string model;
+    std::size_t enum_calls_before{};
+};
+
 /// \note EVERY MEMBER IS WRITTEN UNDER ONE MUTEX inside the fake, because
 ///       the engine packs its weights across a pool of threads
 ///       (`kWeightCreateConcurrency`). A reader -- i.e. a test -- runs after
@@ -700,6 +714,7 @@ struct DispatchRecord {
 struct State {
     /// \brief every `..._enum_kernels` call, in order
     std::vector<EnumKernelsCall> enum_calls;
+    std::vector<KernelBundleRecord> kernel_bundles;
     /// \brief report exactly the `shipped_*` kernels instead of "every M"
     /// \note What makes a plan's kernel QUERY observable: the plan filters
     ///       the reported set itself, so the only thing a test can see is
@@ -708,6 +723,8 @@ struct State {
     std::vector<ShippedMatmul> shipped_matmul;
     std::vector<ShippedSsMlp> shipped_ssmlp;
     std::vector<ShippedMha> shipped_mha;
+    /// \brief report exactly these paged kernels; empty reports "every M"
+    std::vector<ShippedPaged> shipped_paged;
     std::vector<MatmulPadCall> matmul_pad_calls;
     std::vector<RowsPadCall> rows_pad_calls;
     std::vector<MhaPadCall> mha_pad_calls;

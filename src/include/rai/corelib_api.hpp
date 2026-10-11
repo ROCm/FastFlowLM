@@ -2,9 +2,9 @@
 
 #include <ryzenai/corelib.h>
 
-#if RYZENAI_CORELIB_VERSION_MAJOR != 0 || RYZENAI_CORELIB_VERSION_MINOR != 11 || \
+#if RYZENAI_CORELIB_VERSION_MAJOR != 0 || RYZENAI_CORELIB_VERSION_MINOR != 26 || \
     RYZENAI_CORELIB_VERSION_PATCH != 0
-#error "FastFlowLM requires ryzenai-corelib headers exactly 0.11.0"
+#error "FastFlowLM requires ryzenai-corelib headers exactly 0.26.0"
 #endif
 
 #include <atomic>
@@ -35,6 +35,7 @@
     X(tensor_get_data_type, ryzenai_corelib_tensor_get_data_type)                  \
     X(stream_get_kernels_root, ryzenai_corelib_stream_get_kernels_root)            \
     X(stream_set_kernels_root, ryzenai_corelib_stream_set_kernels_root)            \
+    X(stream_enable_kernel_bundle, ryzenai_corelib_stream_enable_kernel_bundle)    \
     X(weights_slice, ryzenai_corelib_weights_slice)                                \
     X(matmul_enum_kernels, ryzenai_corelib_matmul_bf16_enum_kernels)               \
     X(matmul_weights_create, ryzenai_corelib_matmul_bf16_weights_create)           \
@@ -51,9 +52,18 @@
     X(ple, ryzenai_corelib_ple_bf16)                                               \
     X(flat_mha_enum_kernels, ryzenai_corelib_flat_mha_bf16_enum_kernels)           \
     X(flat_mha, ryzenai_corelib_flat_mha_bf16)                                     \
+    X(paged_mha_enum_kernels, ryzenai_corelib_paged_mha_bf16_enum_kernels)         \
+    X(paged_mha, ryzenai_corelib_paged_mha_bf16)                                   \
     X(linear_attention, ryzenai_corelib_linear_attention_bf16)                     \
     X(dwconv_weights_create, ryzenai_corelib_dwconv_bf16_weights_create)           \
     X(dwconv, ryzenai_corelib_dwconv_bf16)                                         \
+    X(model_info_get, ryzenai_corelib_model_info_get)                              \
+    X(model_forward, ryzenai_corelib_model_forward)                                \
+    X(model_reset, ryzenai_corelib_model_reset)                                    \
+    X(model_weights_create_path, ryzenai_corelib_model_weights_create_path)        \
+    X(model_create, ryzenai_corelib_model_create)                                  \
+    X(model_state_save, ryzenai_corelib_model_state_save)                          \
+    X(model_state_restore, ryzenai_corelib_model_state_restore)                    \
     X(cleanup, ryzenai_corelib_cleanup)
 
 namespace flm::corelib {
@@ -96,10 +106,17 @@ public:
 #if defined(FLM_CORELIB_LINK_STATIC)
     /// \brief bind to the corelib linked into this binary
     /// \return the API bound to the linked symbols
-    /// \note The static build has no DLL to pick, so FLM_RAI_CORELIB_PATH has
-    ///       nothing to select and is reported as ignored.
+    /// \note The static build has no library to pick, so FLM_RAI_CORELIB_PATH
+    ///       has nothing to select and is reported as ignored. On Windows an
+    ///       import library still leaves a DLL that the loader binds before
+    ///       main, so loaded_library_path() reports the module the linked
+    ///       symbols live in.
     static std::shared_ptr<CorelibApi> LoadStatic();
 #endif
+    /// \brief the file of the module this process has loaded under `name`
+    /// \return an absolute path, or empty when no such module is loaded or the
+    ///         platform has no way to ask
+    static std::filesystem::path LoadedModulePath(const wchar_t* name);
     static std::shared_ptr<CorelibApi> ResolveForTest(
         Resolver resolver, std::filesystem::path loaded_library_path = {});
     static std::filesystem::path ResolveLibraryPath(

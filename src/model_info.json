@@ -4070,5 +4070,37 @@
             "size": 3126,
             "sha256": "d0883072e01861ed0b2d47be3c16c36a8e81c224c7ffaa310c6558fb3f932b05"
         }
+    ],
+    "qwen3.6-moe-rai:35b-a3b": [
+        {
+            "type": "file",
+            "path": "Qwen3.6-35B-A3B-Q8_0.gguf",
+            "size": 36903140320,
+            "sha256": "d1a395809f65a43a13ad119eb4e7acdef1ac6d68120f39902c8ab96e72794a59"
+        },
+        {
+            "type": "file",
+            "path": "tokenizer.json",
+            "size": 12807982,
+            "sha256": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42"
+        },
+        {
+            "type": "file",
+            "path": "tokenizer_config.json",
+            "size": 16718,
+            "sha256": "5186f0defcd7f232382c7f0aebcd2252d073bb921ab240e407b7ae8745d2b29b"
+        },
+        {
+            "type": "file",
+            "path": "config.json",
+            "size": 3686,
+            "sha256": "93a4693fa9d8392fbfccd4b3c9873f4bfdcb14fdede978b123d07d19675efe99"
+        },
+        {
+            "type": "file",
+            "path": "chat_template.jinja",
+            "size": 7764,
+            "sha256": "e84f32a23fdda27689f868aa4a1a5621f41133e51a48d7f3efcbea2839574259"
+        }
     ]
 }

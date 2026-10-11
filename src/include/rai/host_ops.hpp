@@ -23,4 +23,7 @@ void RmsNorm(std::span<const float> input, std::span<const float> scale,
 /// \brief round-to-nearest-even F32 -> BF16, NaN kept quiet
 std::vector<std::uint16_t> F32ToBf16(std::span<const float> values);
 
+/// \brief the same conversion into a caller's buffer of values.size() elements
+void F32ToBf16(std::span<const float> values, std::span<std::uint16_t> output);
+
 }  // namespace flm::rai
