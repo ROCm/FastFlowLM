@@ -45,3 +45,5 @@ function(add_rai_model_test name)
 endfunction()
 
 add_rai_model_test(test_corelib_model)
+add_rai_model_test(test_corelib_model_backend
+    "${FLM_SOURCE_DIR}/common/rai/corelib_model_backend.cpp")
