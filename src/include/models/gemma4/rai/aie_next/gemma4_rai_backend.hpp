@@ -1,49 +1,41 @@
 /// \file gemma4_rai_backend.hpp
 /// \brief The ryzenai-corelib backend for Gemma 4 (E2B and E4B)
-/// \note Compiled only when FLM_ENABLE_RAI is on. A ModelBackend owns one
-///       engine AND every rule for driving it, so everything that would
-///       otherwise have to become a rai special case inside the gemma4e
-///       frontend -- the 4095-token decode window, the no-preemption rule, the
-///       package-verified EOS ids, the poisoning state -- is stated here
-///       instead. The frontend stays backend-agnostic: there is no
-///       `#if FLM_ENABLE_RAI` anywhere under src/common/AutoModel/ except
-///       builtin_backends.cpp, which is the one file that knows both a family
-///       name and an engine type.
+/// \note Compiled only when FLM_ENABLE_RAI is on.
 #pragma once
 
 #include "AutoModel/model_backend.hpp"
-#include "models/gemma4/rai/aie_next/gemma4_rai_constants.hpp"
 
 #include <cstdint>
 
 namespace flm::gemma4 {
 
-/// \brief the largest context this backend can hold
-/// \note THE ENGINE'S OWN CONSTANT. A context in 1..4096 stays on flat_mha.
-///       Above that the engine pages at kPageSize, up to kMaxPagedContext.
-inline constexpr std::uint32_t kRaiContextLimit =
-    static_cast<std::uint32_t>(kMaxPagedContext);
+/// \brief rows in one page of the paged KV cache, and the longest unpaged context
+inline constexpr std::uint32_t kPageSize = 4096;
+
+/// \brief the longest context validated on hardware
+/// \note corelib pages Gemma 4 up to the model's own 131072 and refuses past a
+///       GGUF's smaller gemma4.context_length; 16384 is what was validated.
+inline constexpr std::uint32_t kRaiContextLimit = 16384;
 
 /// \brief one below the longest context: the last position has to be readable
-inline constexpr std::uint32_t kRaiDecodeLimit =
-    static_cast<std::uint32_t>(kMaxPagedContext - 1);
+inline constexpr std::uint32_t kRaiDecodeLimit = kRaiContextLimit - 1;
 
-/// \brief what the frontend must know before building this backend
-/// \return no xclbin, no preemption, 16384-token context ceiling
-/// \note Pure data, and inline on purpose: `AutoModel::_shared_load_backend`
-///       reads it while assembling the BackendContext -- that is, BEFORE any
-///       engine exists -- so it cannot be a virtual on ModelBackend. Being in
-///       the header also lets a test read it without linking the engine.
+/// \return true when `length` is 1..4096, or a multiple of kPageSize up to kRaiContextLimit
+inline bool ContextFits(std::uint32_t length) {
+    if (length < 1 || length > kRaiContextLimit) return false;
+    return length <= kPageSize || length % kPageSize == 0;
+}
+
+/// \note Inline: AutoModel reads it while assembling the BackendContext,
+///       before any engine exists.
 inline flm::backend::BackendTraits rai_traits() {
     flm::backend::BackendTraits traits;
-    traits.needs_npu_xclbin = false;      // no xclbin manager is built
-    traits.supports_preemption = false;   // rejected before the factory runs
-    traits.max_context_length = kRaiContextLimit;  // likewise
+    traits.needs_npu_xclbin = false;
+    traits.supports_preemption = false;
+    traits.max_context_length = kRaiContextLimit;
     return traits;
 }
 
-/// \brief a factory building the rai backend
-/// \return a factory suitable for BackendRegistry::register_backend
 flm::backend::BackendFactory rai_factory();
 
 }  // namespace flm::gemma4
