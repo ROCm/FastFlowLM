@@ -31,32 +31,18 @@
     X(create_host_view, ryzenai_corelib_create_host_view)                          \
     X(tensor_write, ryzenai_corelib_tensor_write)                                  \
     X(tensor_read, ryzenai_corelib_tensor_read)                                    \
-    X(tensor_get_byte_size, ryzenai_corelib_tensor_get_byte_size)                  \
-    X(tensor_get_data_type, ryzenai_corelib_tensor_get_data_type)                  \
-    X(stream_get_kernels_root, ryzenai_corelib_stream_get_kernels_root)            \
-    X(stream_set_kernels_root, ryzenai_corelib_stream_set_kernels_root)            \
     X(stream_enable_kernel_bundle, ryzenai_corelib_stream_enable_kernel_bundle)    \
-    X(weights_slice, ryzenai_corelib_weights_slice)                                \
     X(matmul_enum_kernels, ryzenai_corelib_matmul_bf16_enum_kernels)               \
     X(matmul_weights_create, ryzenai_corelib_matmul_bf16_weights_create)           \
     X(matmul, ryzenai_corelib_matmul_bf16)                                         \
-    X(matmul_act, ryzenai_corelib_matmul_act_bf16)                                 \
     X(matmul_act_enum_kernels, ryzenai_corelib_matmul_act_bf16_enum_kernels)       \
     X(ssmlp_enum_kernels, ryzenai_corelib_ssmlp_bf16_enum_kernels)                 \
     X(ssmlp_weights_create, ryzenai_corelib_ssmlp_bf16_weights_create)             \
     X(weights_copy_data, ryzenai_corelib_weights_copy_data)                        \
     X(ssmlp, ryzenai_corelib_ssmlp_bf16)                                           \
-    X(rmsnorm_weights_create, ryzenai_corelib_rmsnorm_bf16_weights_create)         \
-    X(rmsnorm, ryzenai_corelib_rmsnorm_bf16)                                       \
-    X(ple_weights_create, ryzenai_corelib_ple_bf16_weights_create)                 \
-    X(ple, ryzenai_corelib_ple_bf16)                                               \
     X(flat_mha_enum_kernels, ryzenai_corelib_flat_mha_bf16_enum_kernels)           \
     X(flat_mha, ryzenai_corelib_flat_mha_bf16)                                     \
     X(paged_mha_enum_kernels, ryzenai_corelib_paged_mha_bf16_enum_kernels)         \
-    X(paged_mha, ryzenai_corelib_paged_mha_bf16)                                   \
-    X(linear_attention, ryzenai_corelib_linear_attention_bf16)                     \
-    X(dwconv_weights_create, ryzenai_corelib_dwconv_bf16_weights_create)           \
-    X(dwconv, ryzenai_corelib_dwconv_bf16)                                         \
     X(model_info_get, ryzenai_corelib_model_info_get)                              \
     X(model_forward, ryzenai_corelib_model_forward)                                \
     X(model_reset, ryzenai_corelib_model_reset)                                    \

@@ -165,9 +165,6 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             return current_detail.c_str();
         } else if constexpr (std::is_same_v<Tag, selftest_dependencies_tag>) {
             return state.selftest_status;
-        } else if constexpr (std::is_same_v<Tag, stream_get_kernels_root_tag>) {
-            static const char kKernelsRoot[] = "";
-            return kKernelsRoot;
         } else if constexpr (std::is_same_v<Tag, get_device_tag>) {
             // 0.5.0 answers "is there an NPU" with the device pointer itself,
             // NULL when there is none. The fake has no device to hand out, so
@@ -307,16 +304,6 @@ struct TypedFake<Tag, Result (*)(Args...)> {
                 *out = object;
                 state.host_view_creates.push_back({type, object->shape, object});
             }
-            return status;
-        } else if constexpr (std::is_same_v<Tag, tensor_get_byte_size_tag>) {
-            const auto status = Status(Tag::name);
-            if (status == ryzenai_corelib_status_success && std::get<0>(arguments) && std::get<1>(arguments))
-                *std::get<1>(arguments) = static_cast<FakeObject*>(std::get<0>(arguments))->byte_size;
-            return status;
-        } else if constexpr (std::is_same_v<Tag, tensor_get_data_type_tag>) {
-            const auto status = Status(Tag::name);
-            if (status == ryzenai_corelib_status_success && std::get<0>(arguments) && std::get<1>(arguments))
-                *std::get<1>(arguments) = static_cast<FakeObject*>(std::get<0>(arguments))->data_type;
             return status;
         } else if constexpr (std::is_same_v<Tag, tensor_write_tag>) {
             const auto status = Status(Tag::name);
@@ -524,23 +511,6 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             }
             --state.active_weight_creates;
             return status;
-        } else if constexpr (std::is_same_v<Tag, rmsnorm_weights_create_tag>) {
-            const auto status = Status(Tag::name);
-            const auto* desc = std::get<0>(arguments);
-            const auto* sources = std::get<1>(arguments);
-            const auto count = std::get<2>(arguments);
-            auto* out = std::get<4>(arguments);
-            if (out) *out = nullptr;
-            const auto* scale = static_cast<const std::uint16_t*>(
-                SourceData(sources, count, ryzenai_corelib_weights_role_scale));
-            if (desc) {
-                fake_corelib::WeightCreateRecord record{"rmsnorm", desc->k, 0, 0, 0, {scale}};
-                record.epsilon = Bf16(desc->epsilon);
-                if (scale) record.norm0.assign(scale, scale + desc->k);
-                state.weight_creates.push_back(std::move(record));
-            }
-            if (status == ryzenai_corelib_status_success && out) *out = NewObject("rmsnorm_weights");
-            return status;
         } else if constexpr (std::is_same_v<Tag, weights_copy_data_tag>) {
             // Two-call protocol: NULL out learns the size, then the caller
             // calls again with a buffer of at least that many bytes.
@@ -561,8 +531,7 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             return Status(Tag::name);
         } else if constexpr (std::is_same_v<Tag, matmul_tag> ||
                              std::is_same_v<Tag, ssmlp_tag> ||
-                             std::is_same_v<Tag, flat_mha_tag> ||
-                             std::is_same_v<Tag, rmsnorm_tag>) {
+                             std::is_same_v<Tag, flat_mha_tag>) {
             if (state.statuses.contains("test_observe_dispatch_concurrency")) {
                 const int active = ++state.active_leases;
                 int maximum = state.maximum_active_leases.load();
@@ -603,13 +572,12 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             fake_corelib::DispatchRecord record{};
             record.thread_id = std::this_thread::get_id();
             record.kind = std::is_same_v<Tag, matmul_tag> ? "matmul" :
-                          std::is_same_v<Tag, ssmlp_tag> ? "ssmlp" :
-                          std::is_same_v<Tag, rmsnorm_tag> ? "rmsnorm" : "mha";
+                          std::is_same_v<Tag, ssmlp_tag> ? "ssmlp" : "mha";
             record.stream = std::get<0>(arguments);
             // 0.5.0 removed the row count from every dispatch: M is the leading
             // extent of the operand that was bound. Read it back off the input
             // so the recorded value still means what the tests assert about it.
-            if constexpr (std::is_same_v<Tag, matmul_tag> || std::is_same_v<Tag, rmsnorm_tag>) {
+            if constexpr (std::is_same_v<Tag, matmul_tag>) {
                 record.input = std::get<1>(arguments);
                 record.output = std::get<3>(arguments);
             } else if constexpr (std::is_same_v<Tag, ssmlp_tag>) {
