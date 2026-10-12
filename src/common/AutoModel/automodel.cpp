@@ -400,7 +400,7 @@ void AutoModel::_shared_validate_capacity(std::size_t rendered_tokens,
 }
 
 bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled, void* payload, int first_len_run, std::optional<int> requested_max_new_tokens,
-                        bool record_sampled_token) {
+                        bool record_sampled_token, bool capture_logprobs) {
     // Disarmed here, before anything that can return early: every request goes
     // through this function, and a request that does not ask for logprobs must
     // not inherit the arming of an earlier one. Arming happens where the
@@ -481,6 +481,11 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
         header_print("WARNING", "Max length reached, stopping prefilling...");
     }
     this->profiler_list[SAMPLING_TIME].start();
+    // A caller whose first token of the answer is this draw arms the capture
+    // here, after the disarming above -- a thrown-away draw never is.
+    if (capture_logprobs && record_sampled_token) {
+        this->_request_logprobs_capture(meta_info);
+    }
     this->last_token = this->_sample(y, meta_info, record_sampled_token);
     meta_info.insert_sample_pending = true;
     this->profiler_list[SAMPLING_TIME].stop(1);

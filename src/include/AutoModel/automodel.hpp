@@ -317,7 +317,7 @@ protected:
 	/// \param payload the payload, it shall not be used as this function is only used for chunkwised insertion, no image allowed
 	/// \return true if the tokens were inserted successfully, false otherwise
 	bool _shared_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled = [] { return false; }, void* payload = nullptr, int first_len_run = 0, std::optional<int> requested_max_new_tokens = std::nullopt,
-                         bool record_sampled_token = true);
+                         bool record_sampled_token = true, bool capture_logprobs = false);
 
 	/// \brief Reject a request that cannot fit in the backend's decode limit
 	/// \param rendered_tokens the length of the rendered prompt
