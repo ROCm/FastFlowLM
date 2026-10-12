@@ -436,7 +436,13 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
             break;
         }
     }
-    if (skip_count != idx) {
+    // A request that matches the whole history leaves nothing to prefill, and
+    // then there are no logits to draw from: the sampler would read an empty
+    // buffer. It happens when a request repeats the previous one exactly and
+    // that answer added nothing to the history -- a single-turn Qwen3.5 model
+    // with the think block prefilled and max_tokens=1. Recurrent state cannot
+    // be stepped back by one token, so treat it like a divergence.
+    if (skip_count != idx || skip_count == tokens.size()) {
         if (is_server_mode) {
             header_print("FLM", "Conversation context diverged from cache, clearing context...");
         }
