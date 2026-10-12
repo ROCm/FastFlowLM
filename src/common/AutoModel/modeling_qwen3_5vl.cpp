@@ -341,6 +341,11 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
         token_str = this->tokenizer->run_time_decoder(198);
         result += token_str;
         // First token of the reasoning block.
+        // No capture here: this draw is the first token of the reasoning
+        // block, and that lands in reasoning_content, not in content. OpenAI's
+        // logprobs.content describes the tokens of message.content, so a
+        // report from here would name a token the caller cannot find in the
+        // text it was given. Requests with think:true get logprobs: null.
         sampled_token = this->_sample(y, meta_info);
         os << token_str << std::flush;
     }
@@ -369,6 +374,7 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
         buffer<bf16> y = this->lm_engine->forward(271);
         this->profiler_list[DECODING_TIME].stop(1);
         token_str = this->tokenizer->run_time_decoder(271);
+        this->_request_logprobs_capture(meta_info);
         sampled_token = this->_sample(y, meta_info);
     }
     this->total_tokens++;
@@ -377,6 +383,12 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
     token_str = this->tokenizer->run_time_decoder(last_sampled_token);
     result += token_str;
     os << token_str << std::flush;
+    // Recorded where the token reaches the caller's text, not where it was
+    // drawn, and under the same filter the loop below uses: a token the engine
+    // would have dropped must not get an entry either.
+    if (this->is_normal_token(last_sampled_token)) {
+        this->_record_top_logprobs(meta_info, last_sampled_token);
+    }
 
     if (this->total_tokens >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping generation...");
@@ -403,6 +415,7 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
             std::string token_str = this->tokenizer->run_time_decoder(sampled_token);
             os << token_str << std::flush;
             result += token_str;
+            this->_record_top_logprobs(meta_info, sampled_token);
         }
         this->profiler_list[TKOEN_DECODE_TIME].stop(1);
         this->token_history.push_back(sampled_token);
