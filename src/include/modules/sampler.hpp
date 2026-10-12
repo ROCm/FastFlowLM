@@ -51,6 +51,29 @@ public:
     int in_features;
     std::vector<int> counters;
     logits_list_t top_k_logits;
+
+    /// Set by the model for a request that asked for logprobs, and cleared at
+    /// the start of every request whether it asked or not. It stays set for
+    /// the whole request: every token that reaches the caller's text needs its
+    /// own distribution. A request that does not ask never arms it, so it pays
+    /// nothing.
+    bool capture_top_logprobs = false;
+    /// How many entries to keep. Bounded by the caller, OpenAI allows 20.
+    int capture_count = 0;
+
+    /// The top entries by logit at the moment of the capture, and the
+    /// log-sum-exp of the WHOLE vocabulary at the same moment.
+    ///
+    /// Sorted by logit and cut to the count the caller asked for, so it is NOT
+    /// the list the draw used and the drawn token need not be in it: with
+    /// top_logprobs: 1 and a draw at rank 3 it is not. That is what `chosen`
+    /// is for. Entries behind the top-p and min-p cut are listed although they
+    /// had no chance of being drawn.
+    logits_list_t captured_top_k;
+    /// Set by the capture, cleared when a request arms it. Guards against
+    /// reading values that belong to an earlier draw or request.
+    bool captured = false;
+    float captured_logsumexp = 0.0f;
     float rep_penalty;
     float freq_penalty;
     float pre_penalty;
@@ -106,9 +129,18 @@ public:
     ///        and frequency windows
     /// \note Pass false for a draw the caller throws away. Such a token was
     ///       never generated text, and counting it pushes the tokens that
-    ///       follow it down -- by rep_penalty + freq_penalty each time it
-    ///       occurs.
+    ///       follow it down -- by count * freq_penalty + pre_penalty each time
+    ///       it occurs.
     int sample_greedy(buffer<bf16>& x, bool record_in_history = true);
+
+    /// \brief Capture the current top-k if a request asked for it
+    /// \note Called by the sampling paths right after the top-k is settled and
+    ///       before the temperature. Stays armed until the next request
+    ///       disarms it; `captured` marks that this draw has values.
+    void capture_if_requested();
+    /// \brief log-sum-exp over the whole vocabulary
+    /// \note Reads this->logits, which the sampling paths have filled by then
+    float log_sum_exp_all() const;
 
     void sampler_topk_apply(int k);
     void sampler_topp_apply(float p);
