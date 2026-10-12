@@ -102,7 +102,13 @@ public:
     ///       Going through the general path would allocate and partial_sort a
     ///       vocab-sized array of triples and run three full-vocab softmaxes for
     ///       a result that never depends on any of it.
-    int sample_greedy(buffer<bf16>& x, const std::vector<uint32_t>* allowed = nullptr);
+    /// \param record_in_history whether the drawn token joins the repetition
+    ///        and frequency windows
+    /// \note Pass false for a draw the caller throws away. Such a token was
+    ///       never generated text, and counting it pushes the tokens that
+    ///       follow it down -- by count * freq_penalty + pre_penalty each time
+    ///       it occurs.
+    int sample_greedy(buffer<bf16>& x, const std::vector<uint32_t>* allowed = nullptr, bool record_in_history = true);
 
     void sampler_topk_apply(int k);
     void sampler_topp_apply(float p);
@@ -117,7 +123,9 @@ public:
     /// \param allowed optional bitmask, bit i of word i/32 set when token i may be
     ///        sampled; applied to the sampler's own copy of the logits
     /// \return the sampled token
-    int sample(buffer<bf16>& x, const std::vector<uint32_t>* allowed = nullptr);
+    /// \param record_in_history whether the drawn token joins the repetition
+    ///        and frequency windows; see sample_greedy
+    int sample(buffer<bf16>& x, const std::vector<uint32_t>* allowed = nullptr, bool record_in_history = true);
 
     /// \brief Push every token the bitmask does not allow to -inf in this->logits
     void sampler_allowed_apply(const std::vector<uint32_t>* allowed);
