@@ -287,8 +287,19 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
         this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
     }
 
-    size_t n = tokens.size();
-    tokens.resize(n - (this->enable_think ? 2 : 4));
+    // The template ends with the opening of the assistant turn and, without
+    // thinking, an empty think block. Normally the prefill stops before that
+    // block, so the checkpoint below sits where the next turn of the
+    // conversation will diverge, and generate() feeds the block one forward()
+    // at a time. A single-turn model never comes back to that checkpoint, so
+    // the four extra decode steps buy nothing: prefill the block with the
+    // prompt, and the token drawn from the prefill logits is already the first
+    // token of the answer.
+    this->think_block_prefilled = this->single_turn && !this->enable_think;
+    if (!this->think_block_prefilled) {
+        size_t n = tokens.size();
+        tokens.resize(n - (this->enable_think ? 2 : 4));
+    }
 
     // The draw below is thrown away: generate() force-feeds the think block and
     // samples again. It must not enter the repetition and frequency windows --
@@ -322,7 +333,12 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
     this->profiler_list[TKOEN_DECODE_TIME].reset();
     std::string token_str;
     int sampled_token;
-    if(this->enable_think) {
+    if (this->think_block_prefilled) {
+        // insert() prefilled the empty think block; _shared_insert drew the
+        // answer's first token from those logits, mask applied.
+        sampled_token = this->last_token;
+    }
+    else if(this->enable_think) {
         this->token_history.push_back(think_start_id);
         this->profiler_list[DECODING_TIME].start();
         this->lm_engine->forward(think_start_id);
