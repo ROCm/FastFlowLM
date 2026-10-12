@@ -232,7 +232,15 @@ void AutoModel::_shared_load_model(std::string model_path, json model_info, int 
 }
 
 void AutoModel::_shared_initialize_model_state(
-    std::string model_path, json, int context_length) {
+    std::string model_path, json model_info, int context_length) {
+    // The catalog marks a model single-turn with a label, and some classes set
+    // the flag themselves. Only ever switched on here, so an entry without the
+    // label does not override a class that knows it is single-turn.
+    if (model_info.contains("label") &&
+        std::find(model_info["label"].begin(), model_info["label"].end(),
+                  "single-turn") != model_info["label"].end()) {
+        this->single_turn = true;
+    }
     this->model_path = std::move(model_path);
     header_print("FLM", "Loading model: " << this->model_path);
     this->lm_config = std::make_unique<LM_Config>();
