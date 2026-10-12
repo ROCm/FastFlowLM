@@ -301,15 +301,18 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
         tokens.resize(n - (this->enable_think ? 2 : 4));
     }
 
-    // The draw below is thrown away: generate() force-feeds the think block and
-    // samples again. It must not enter the repetition and frequency windows --
-    // it was never generated text, and for a model that answers without a
-    // thinking block the token predicted here IS the answer letter. Counting it
-    // pushes that letter down by count * freq_penalty + pre_penalty at the position
-    // where it matters, so the model's preferred answer arrives penalised.
+    // Unless the think block was prefilled, the draw below is thrown away:
+    // generate() force-feeds the block and samples again. Such a draw must not
+    // enter the repetition and frequency windows -- it was never generated
+    // text, and for a model that answers without a thinking block the token
+    // predicted here IS the answer letter. Counting it pushes that letter down
+    // by count * freq_penalty + pre_penalty at the position where it matters.
+    // With the block prefilled the draw is the answer's first token, so it is
+    // counted, and it is the draw a logprobs request has to capture.
+    const bool real_draw = this->think_block_prefilled;
     bool success = has_images
-        ? this->_shared_insert(meta_info, tokens, is_cancelled, &image_payload, last_image_token_index, std::nullopt, false)
-        : this->_shared_insert(meta_info, tokens, is_cancelled, nullptr, 0, std::nullopt, false);
+        ? this->_shared_insert(meta_info, tokens, is_cancelled, &image_payload, last_image_token_index, std::nullopt, real_draw, real_draw)
+        : this->_shared_insert(meta_info, tokens, is_cancelled, nullptr, 0, std::nullopt, real_draw, real_draw);
 
     checkpoint_his = token_history;
     int checkpoint_idx = this->lm_engine->checkpoint();
