@@ -395,7 +395,17 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
         reason = MAX_LENGTH_REACHED;
         return result;
     }
-    while (this->total_tokens < this->MAX_L){
+    while (true){
+        // The first token is drawn before the loop, so the limit can already be
+        // reached here -- with max_tokens=1 it always is. Checked only after a
+        // draw, the loop would draw and emit one token past the limit.
+        if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)){
+            reason = MAX_LENGTH_REACHED;
+            break;
+        }
+        if (this->total_tokens >= this->MAX_L){
+            break;
+        }
         if (is_cancelled()) {
             reason = CANCEL_DETECTED;
             break;
@@ -425,10 +435,6 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
             break;
         }
         meta_info.generated_tokens++;
-        if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)){
-            reason = MAX_LENGTH_REACHED;
-            break;
-        }
     }
     meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
     meta_info.stop_reason = reason;
