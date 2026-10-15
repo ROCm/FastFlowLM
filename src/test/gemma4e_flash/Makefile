@@ -17,6 +17,7 @@
 
 
 SOURCES += test.cpp
+SOURCES += ../../common/AutoModel/model_backend.cpp
 SOURCES += ../../common/AutoModel/automodel.cpp
 SOURCES += ../../common/AutoModel/modeling_gemma4e.cpp
 SOURCES += ../../common/AutoModel/modeling_gemma4e_image.cpp

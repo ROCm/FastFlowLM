@@ -7,7 +7,15 @@
 #include "utils/utils.hpp"
 #include "utils/vm_args.hpp"
 #include "AutoModel/modeling_qwen3_5_omni.hpp"
+#include "AutoModel/flm_backend.hpp"
 #include "model_list.hpp"
+
+/// \note automodel.cpp reaches engines through the backend registry, but
+///       this model builds its engine itself: there is nothing to register.
+namespace flm::backend {
+void register_builtin_backends(BackendRegistry&) {
+}
+}  // namespace flm::backend
 
 xrt::device npu_device_global;
 

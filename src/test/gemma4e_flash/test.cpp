@@ -3,7 +3,17 @@
 #include "utils/utils.hpp"
 #include "utils/vm_args.hpp"
 #include "AutoModel/modeling_gemma4e.hpp"
+#include "AutoModel/flm_backend.hpp"
 #include "model_list.hpp"
+
+/// \note builtin_backends.cpp names every engine and so links every prebuilt
+///       library; this harness registers just the ones it drives.
+namespace flm::backend {
+void register_builtin_backends(BackendRegistry& registry) {
+    registry.register_backend("gemma4e", kFlmBackendId, flm_factory<gemma4e_npu>());
+    registry.register_backend("gemma4e-flash", kFlmBackendId, flm_factory<gemma4e_flash>());
+}
+}  // namespace flm::backend
 
 flm_rt::device npu_device_global;
 

@@ -16,6 +16,7 @@
 -include ../common.mk
 
 
+SOURCES += ../../common/AutoModel/model_backend.cpp
 SOURCES += $(wildcard ../../common/AutoModel/automodel.cpp)
 SOURCES += $(wildcard ../../common/AutoModel/modeling_nanbeige.cpp)
 SOURCES += $(wildcard ../../common/tokenizer/tokenizer.cpp)

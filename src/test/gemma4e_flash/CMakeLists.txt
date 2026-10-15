@@ -20,6 +20,7 @@ add_npu_test(
     USE_SAMPLER
     USE_AVX512
     SOURCES
+        "${CMAKE_SOURCE_DIR}/../../common/AutoModel/model_backend.cpp"
         "${CMAKE_SOURCE_DIR}/../../common/AutoModel/modeling_gemma4e.cpp"
         "${CMAKE_SOURCE_DIR}/../../common/AutoModel/modeling_gemma4e_image.cpp"
         "${CMAKE_SOURCE_DIR}/../../common/AutoModel/modeling_gemma4e_audio.cpp"

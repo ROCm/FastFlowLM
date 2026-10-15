@@ -17,6 +17,7 @@
 
 
 SOURCES += test.cpp
+SOURCES += ../../common/AutoModel/model_backend.cpp
 SOURCES += ../../common/AutoModel/automodel.cpp
 SOURCES += ../../common/AutoModel/modeling_qwen3vl.cpp
 SOURCES += ../../common/AutoModel/modeling_qwen3vl_image.cpp
