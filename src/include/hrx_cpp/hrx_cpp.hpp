@@ -103,8 +103,11 @@ public:
     // then calls hrx_gpu_shutdown(), which destroys the device and its heap.
     ~Runtime();
 
+    bool shutdown();
+
 private:
     Runtime() = default;
+    bool release();
 };
 
 inline Runtime& rt() {
@@ -401,15 +404,16 @@ inline std::unordered_map<hrx_buffer_t, BufCoh>& buf_coh() {
     return m;
 }
 
-inline Runtime::~Runtime() {
-    if (!stream && !runtime_owns_shutdown()) return;
+inline bool Runtime::release() {
+    if (!stream && !runtime_owns_shutdown()) return true;
+    bool failed = false;
     // hrx_stream_create() retains the device, and hrx_gpu_shutdown() does not
     // release streams, so drop this stream first.
     if (stream) hrx_stream_release(stream);
     stream = nullptr;
     if (runtime_owns_shutdown()) {
         // No hrx_device_release(): hrx_gpu_shutdown() already owns that reference.
-        hrx_report(hrx_gpu_shutdown(), "hrx_gpu_shutdown");
+        failed = hrx_report(hrx_gpu_shutdown(), "hrx_gpu_shutdown");
         runtime_owns_shutdown() = false;
     }
     dev = nullptr;
@@ -417,6 +421,28 @@ inline Runtime::~Runtime() {
     if (std::getenv("HRX_DEBUG"))
         std::fprintf(stderr, "[hrx] device+stream released (Runtime@%p)\n",
                      (void*)this);
+    return !failed;
+}
+
+inline Runtime::~Runtime() { release(); }
+
+inline bool Runtime::shutdown() {
+    std::vector<hrx_executable_t> unowned;
+    {
+        std::scoped_lock lk(exe_cache_mu(), buf_coh_mu());
+        size_t owned = 0;
+        for (const auto& entry : exe_cache()) owned += entry.second.refs > 0;
+        if (owned || !buf_coh().empty()) {
+            std::fprintf(stderr, "[hrx] shutdown refused: %zu executables and %zu buffers alive\n",
+                         owned, buf_coh().size());
+            return false;
+        }
+        for (const auto& entry : exe_cache()) unowned.push_back(entry.second.exe);
+        exe_cache().clear();
+    }
+    for (hrx_executable_t exe : unowned) hrx_executable_release(exe);
+    if (stream) hrx_report(hrx_stream_synchronize(stream), "Runtime::shutdown hrx_stream_synchronize");
+    return release();
 }
 
 // ---------------------------------------------------------------------------
