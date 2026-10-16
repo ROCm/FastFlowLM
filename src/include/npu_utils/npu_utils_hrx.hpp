@@ -240,7 +240,7 @@ public:
         hrx::run run(this->exe, this->exe_ord);
         std::array<bytes*, sizeof...(BoArgs)> bo_args = { &args... };
         for (size_t i = 0; i < sizeof...(args); i++){
-            run.add_binding(bo_args[i]->bo().handle(), bo_args[i]->bo().size());
+            run.add_binding(bo_args[i]->bo());
         }
         run.start();
         ert_cmd_state state = run.wait();
@@ -263,7 +263,7 @@ public:
         }
         hrx::run run(this->exe, this->exe_ord);
         for (size_t i = 0; i < sizeof...(args); i++){
-            run.add_binding(bo_args[i]->bo().handle(), bo_args[i]->bo().size());
+            run.add_binding(bo_args[i]->bo());
         }
         run.start();
         ert_cmd_state state = run.wait();
@@ -288,7 +288,7 @@ public:
         // (3,0,0) opcode scalars are encoded in the TXN stream, not as bindings.
         std::array<bytes*, sizeof...(BoArgs)> bo_args = { &args... };
         for (size_t i = 0; i < sizeof...(args); i++){
-            run.add_binding(bo_args[i]->bo().handle(), bo_args[i]->bo().size());
+            run.add_binding(bo_args[i]->bo());
         }
         return run;
     }

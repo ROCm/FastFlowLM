@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "hrx_amdxdna.h"
+#include "hrx_coh_ranges.hpp"
 #include "hrx_runtime.h"
 
 // ---- ert_cmd_state: command states that FLM's npu_utils returns/maps.
@@ -372,12 +373,12 @@ public:
 // coherence is kept purely with clflush-style range ops. The correctness
 // comes entirely from GATING those ops per buffer:
 //
-//   host_dirty : the host wrote bytes that are not yet on the device. Must be
-//                flushed (h2d) before any dispatch reads the buffer, and only
-//                then.  Cleared by the flush.
-//   dev_dirty  : a dispatch wrote bytes that are not yet visible to the host.
-//                Must be invalidated (d2h) before the host reads, and only
-//                then.  Cleared by the invalidate.
+//   host_dirty : host writes that are not yet on the device. Each entry is a
+//                byte range. A dispatch flushes only the ranges it binds, and
+//                leaves every other range dirty. Slices of one allocation do
+//                not share a single flag.
+//   dev_dirty  : device writes that are not yet visible to the host. Invalidate
+//                removes only the range the host is about to read.
 //
 // Why gating matters (this is the multi-turn bug):
 //   * Unconditional flush-before-dispatch pushes a STALE host copy over a
@@ -389,8 +390,9 @@ public:
 // single turn the bits happen to line up either way, but turn>1 reuses buffers
 // whose bits diverge, which is why only later turns broke.
 struct BufCoh {
-    bool host_dirty = true;   // freshly-allocated content must reach the device once
-    bool dev_dirty = false;
+    // Fresh allocations start with the whole buffer in host_dirty. See ext::bo.
+    std::vector<coh_range> host_dirty;
+    std::vector<coh_range> dev_dirty;
 };
 inline std::mutex& buf_coh_mu() {
     static std::mutex m;
@@ -427,9 +429,35 @@ public:
     hrx_buffer_t hbuf_ = nullptr;
     void* mapped_ = nullptr;
     size_t size_ = 0;
+    // Byte offset of this buffer within hbuf_. Slices share the parent
+    // allocation; dispatches bind (handle, bind_offset_, size_).
+    size_t bind_offset_ = 0;
     bool owns_ = false;
 
     bo() = default;
+
+    // XRT sub-buffer shape: bo(parent, size, offset). Does not own hbuf_.
+    // offset is relative to the parent slice. The range must lie inside it.
+    bo(bo& parent, size_t size, size_t offset) : owns_(false) {
+        if (offset > parent.size_ || size > parent.size_ - offset ||
+            offset > static_cast<size_t>(-1) - parent.bind_offset_) {
+            throw std::runtime_error("hrx::bo: sub-buffer is outside its parent");
+        }
+        hbuf_ = parent.hbuf_;
+        mapped_ = parent.mapped_ == nullptr
+                      ? nullptr
+                      : static_cast<uint8_t*>(parent.mapped_) + offset;
+        size_ = size;
+        bind_offset_ = parent.bind_offset_ + offset;
+    }
+
+    // xrt::bo::get_handle() is a pointer-like object. Slices of one allocation
+    // share it; bind_offset_ is what tells them apart.
+    struct handle_ref {
+        hrx_buffer_t h = nullptr;
+        hrx_buffer_t get() const { return h; }
+    };
+    handle_ref get_handle() const { return {hbuf_}; }
     virtual ~bo() {
         if (owns_ && hbuf_) {
             {
@@ -456,25 +484,31 @@ public:
     // contents and defer the actual h2d flush to the dispatch that consumes the
     // buffer.
     void flush() {
-        if (!hbuf_) return;
+        if (!hbuf_ || size_ == 0) return;
         std::lock_guard<std::mutex> lk(buf_coh_mu());
         BufCoh& st = buf_coh()[hbuf_];
-        st.host_dirty = true;
-        st.dev_dirty = false;  // host is now the source of truth
+        // The host owns this slice now. Drop any device-dirty cover of it
+        // without invalidating: the next flush will publish the host bytes.
+        coh_range_take(st.dev_dirty, bind_offset_, size_);
+        coh_range_add(st.host_dirty, bind_offset_, size_);
     }
-    // sync_from_device(): the host wants to read. Only invalidate if a dispatch
-    // actually produced new device data (dev_dirty); otherwise this would drop
-    // the host's own writes.
+    // sync_from_device(): the host wants to read. Invalidate only the device
+    // writes that overlap this slice. A sibling slice stays dev_dirty.
     void invalidate() {
-        if (!hbuf_) return;
+        if (!hbuf_ || size_ == 0) return;
         std::lock_guard<std::mutex> lk(buf_coh_mu());
         BufCoh& st = buf_coh()[hbuf_];
-        if (st.dev_dirty) {
-            hrx_status_t s = hrx_buffer_invalidate_range(hbuf_, 0, size_);
+        std::vector<coh_range> pending =
+            coh_range_take(st.dev_dirty, bind_offset_, size_);
+        for (const coh_range& range : pending) {
+            hrx_status_t s =
+                hrx_buffer_invalidate_range(hbuf_, range.offset, range.length);
+            // Put a failed range back and keep going. Returning here would drop
+            // every later range: it is already out of dev_dirty, and it has
+            // not been invalidated.
             if (hrx_report(s, "bo::invalidate hrx_buffer_invalidate_range")) {
-                return;
+                coh_range_add(st.dev_dirty, range.offset, range.length);
             }
-            st.dev_dirty = false;
         }
     }
 };
@@ -517,7 +551,9 @@ public:
         // host_dirty so the gated h2d flushes them to the device exactly once.
         {
             std::lock_guard<std::mutex> lk(buf_coh_mu());
-            buf_coh()[hbuf_] = BufCoh{/*host_dirty=*/true, /*dev_dirty=*/false};
+            BufCoh state;
+            coh_range_add(state.host_dirty, 0, sz);
+            buf_coh()[hbuf_] = std::move(state);
         }
     }
 };
@@ -526,44 +562,44 @@ public:
 // ---------------------------------------------------------------------------
 // run / runlist
 // ---------------------------------------------------------------------------
-// Gated host->device flush for a dispatch's bindings: flush only the buffers the
-// host has dirtied (host_dirty), exactly once, right before the device reads
-// them. Device-owned buffers (host_dirty == false) are left untouched so they
-// are never clobbered. Mirrors the shim's "h2d only dirty inputs" phase.
+// Gated host->device flush for a dispatch's bindings. Each binding flushes
+// only the host-dirty ranges it covers. A second slice of the same allocation
+// keeps its own dirty range for a later dispatch. Device-owned ranges are not
+// flushed, so a stale host copy cannot clobber them.
 inline bool hrx_h2d_bindings(const std::vector<hrx_buffer_ref_t>& binds) {
     bool err = false;
     std::lock_guard<std::mutex> lk(buf_coh_mu());
     auto& coh = buf_coh();
     for (const auto& b : binds) {
-        if (!b.buffer) continue;
+        if (!b.buffer || b.length == 0) continue;
         BufCoh& st = coh[b.buffer];
-        if (st.host_dirty) {
+        std::vector<coh_range> pending =
+            coh_range_take(st.host_dirty, b.offset, b.length);
+        for (const coh_range& range : pending) {
             hrx_status_t s =
-                hrx_buffer_flush_range(b.buffer, b.offset, b.length);
+                hrx_buffer_flush_range(b.buffer, range.offset, range.length);
             if (hrx_report(s, "run::record hrx_buffer_flush_range")) {
+                coh_range_add(st.host_dirty, range.offset, range.length);
                 err = true;
-                continue;
             }
-            st.host_dirty = false;
         }
     }
     return err;
 }
 
 // After a dispatch completes, the device holds the freshest copy of every bound
-// buffer: clear host_dirty and mark dev_dirty so the next host read invalidates
-// (lazily, via sync_from_device). Mirrors the shim's post-dispatch readback
-// bookkeeping. We over-approximate by treating every binding as a potential
-// output; that is safe because an extra dev_dirty only triggers a redundant
-// invalidate that re-reads identical bytes.
+// range. Drop that range from host_dirty and record it as dev_dirty so the next
+// host read of the same range invalidates. A sibling slice is unchanged.
+// Every binding is treated as a potential output. An extra dev_dirty range only
+// triggers a redundant invalidate of those bytes.
 inline void hrx_mark_dispatched(const std::vector<hrx_buffer_ref_t>& binds) {
     std::lock_guard<std::mutex> lk(buf_coh_mu());
     auto& coh = buf_coh();
     for (const auto& b : binds) {
-        if (!b.buffer) continue;
+        if (!b.buffer || b.length == 0) continue;
         BufCoh& st = coh[b.buffer];
-        st.host_dirty = false;
-        st.dev_dirty = true;
+        coh_range_take(st.host_dirty, b.offset, b.length);
+        coh_range_add(st.dev_dirty, b.offset, b.length);
     }
 }
 
@@ -581,6 +617,10 @@ public:
 
     void add_binding(hrx_buffer_t b, size_t size) {
         binds_.push_back({b, 0, size});
+    }
+
+    void add_binding(const bo& b) {
+        binds_.push_back({b.handle(), b.bind_offset_, b.size()});
     }
 
     bool record() {
