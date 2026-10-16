@@ -248,5 +248,6 @@ public:
     bool load_audio(std::string& audio_path);
     bool load_audio(std::vector<uint8_t>& audio_data);
     std::pair<std::string, std::string> generate(whisper_task_type_t task, bool enable_time_stamp, bool return_time_stamp, std::ostream& os);
+    float get_audio_duration() { return _S2T_(this->audio_buffer.size()); }
     void setup_tokenizer(std::string model_path);
 };

@@ -124,6 +124,9 @@ std::pair<std::string, std::string> Whisper::generate(whisper_task_type_t task, 
     }
     while (current_idx < length){
         bool allow_force_time_stamp = true;
+        // Length of result up to the last timestamp decoded in this chunk.
+        // The next chunk restarts at that timestamp and re-decodes what follows.
+        size_t committed_length = std::string::npos;
         // std::cout << "Chunk " << _S2T_(current_idx) << "s to " << _S2T_(current_idx + l_this_round) << "s" << std::endl;
         float time_offset = _S2T_(current_idx);
         
@@ -210,6 +213,7 @@ std::pair<std::string, std::string> Whisper::generate(whisper_task_type_t task, 
             if (enable_time_stamp && _is_time_stemp(last_idx)){
                 last_time_stamp = last_idx;
                 watching_dog = 16;
+                committed_length = result.size();
             }
          
             if (last_idx == 50257){
@@ -233,6 +237,10 @@ std::pair<std::string, std::string> Whisper::generate(whisper_task_type_t task, 
             float end_time = _get_time(last_time_stamp);
             if (end_time == 0){
                 end_time = 30;
+            }
+            else if (committed_length != std::string::npos){
+                // Drop text after the last timestamp; the next chunk transcribes it again.
+                result.resize(committed_length);
             }
             l_this_round = end_time * FS;
         }
