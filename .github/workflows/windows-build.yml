@@ -402,9 +402,63 @@ jobs:
   #         path: src/wix/output/flm-setup.msi
   #         if-no-files-found: error
 
-  release:
+  # Fails if a package bundles or links GPL/non-free code (see
+  # .github/script/license_gate.py). Releases depend on it. HRX is gated
+  # separately so it can't hold back the default release, and vice versa.
+  license-gate:
     runs-on: ubuntu-latest
     needs: [build-windows-portable, build-windows-msi]
+    steps:
+      - name: Checkout license gate
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/script
+
+      - name: Install msitools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends msitools
+
+      - name: Download fastflowlm-windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: fastflowlm-windows-${{ github.sha }}
+          path: packages/fastflowlm-windows-${{ github.sha }}
+
+      - name: Download models-from-source-fastflowlm-windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: models-from-source-fastflowlm-windows-${{ github.sha }}
+          path: packages/models-from-source-fastflowlm-windows-${{ github.sha }}
+
+      - name: Download fastflowlm-windows-msi artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: fastflowlm-windows-msi-${{ github.sha }}
+          path: packages/fastflowlm-windows-msi-${{ github.sha }}
+
+      - name: Check package licenses
+        run: python3 .github/script/license_gate.py packages
+
+  license-gate-hrx:
+    runs-on: ubuntu-latest
+    needs: build-windows-portable-hrx
+    steps:
+      - name: Checkout license gate
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/script
+
+      - name: Download HRX-fastflowlm-windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: HRX-fastflowlm-windows-${{ github.sha }}
+          path: packages/HRX-fastflowlm-windows-${{ github.sha }}
+
+      - name: Check package licenses
+        run: python3 .github/script/license_gate.py packages
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [build-windows-portable, build-windows-msi, license-gate]
     if: github.ref_type == 'tag'
     permissions:
       contents: write
@@ -446,7 +500,7 @@ jobs:
   # the default ones.
   release-hrx:
     runs-on: ubuntu-latest
-    needs: build-windows-portable-hrx
+    needs: [build-windows-portable-hrx, license-gate-hrx]
     if: github.ref_type == 'tag'
     permissions:
       contents: write

@@ -662,6 +662,16 @@ if(FLM_BUILD_GEMMA4E AND NOT WIN32)
         BUILD_RPATH "${CMAKE_BINARY_DIR}/engines;${_flm_build_rpath}")
 endif()
 
+# A statically linked FFmpeg leaves no trace the packaging license gate
+# (.github/script/license_gate.py) can see, so check the source build's license
+# here: it must stay LGPL (no --enable-gpl / --enable-nonfree).
+if(FFMPEG_BUILT_FROM_SOURCE)
+    file(STRINGS "${FFMPEG_BUILD_DIR}/configure.log" _flm_ffmpeg_license REGEX "^License: ")
+    if(NOT _flm_ffmpeg_license MATCHES "^License: LGPL")
+        message(FATAL_ERROR "FFmpeg source build must be LGPL, configure reported: '${_flm_ffmpeg_license}'")
+    endif()
+endif()
+
 if(WIN32 AND VCPKG_TOOLCHAIN)
     # Local/managed vcpkg: link the imported targets from the CONFIG packages
     # found above (versioned import-lib names resolved automatically).

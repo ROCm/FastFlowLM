@@ -1,0 +1,8 @@
+# Known license-gate findings that are accepted for now. Each line is
+#   <Python regex matched against the finding text><TAB><reason>
+# Keep this list short and give every entry a reason and an exit plan.
+
+# The .deb packages link the distro FFmpeg, which Debian and Ubuntu configure
+# with --enable-gpl. Goes away when FFmpeg is replaced with permissive
+# decoders (images: libjpeg-turbo + libspng; audio: dr_libs/opus + libsamplerate).
+^flm-[a-z]+[0-9.]+-[0-9a-f]+-deb[/:].*(links system FFmpeg|Depends lib(av|sw))	distro FFmpeg in .deb; removed by the FFmpeg replacement
