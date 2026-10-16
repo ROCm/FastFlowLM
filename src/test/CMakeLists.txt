@@ -28,7 +28,9 @@ function(add_npu_test TARGET_NAME OUTPUT_SUBDIR)
 
     set(base_sources "")
     if(NPU_TEST_USE_AUTOMODEL)
-        list(APPEND base_sources ${CMAKE_SOURCE_DIR}/../../common/AutoModel/automodel.cpp)
+        # automodel.cpp parses output and constrains decoding with the chat library
+        include(${CMAKE_SOURCE_DIR}/../../common/chat/chat_sources.cmake)
+        list(APPEND base_sources ${CMAKE_SOURCE_DIR}/../../common/AutoModel/automodel.cpp ${FLM_CHAT_SOURCES})
     endif()
     if(NPU_TEST_USE_TOKENIZER)
         list(APPEND base_sources ${CMAKE_SOURCE_DIR}/../../common/tokenizer/tokenizer.cpp)
@@ -118,4 +120,7 @@ function(add_npu_test TARGET_NAME OUTPUT_SUBDIR)
         ntdll wsock32 ws2_32 Bcrypt
         iphlpapi userenv psapi
     )
+    if(NPU_TEST_USE_AUTOMODEL)
+        target_link_libraries(${TARGET_NAME} PRIVATE flm_xgrammar)
+    endif()
 endfunction()

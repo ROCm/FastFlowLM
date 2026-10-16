@@ -19,6 +19,7 @@
 
 SOURCES += test.cpp
 SOURCES += ../../common/AutoModel/automodel.cpp
+SOURCES += $(CHAT_SOURCES)
 SOURCES += ../../common/AutoModel/modeling_gemma3.cpp
 SOURCES += ../../common/AutoModel/modeling_gemma3_image.cpp
 SOURCES += ../../common/image/image_reader.cpp

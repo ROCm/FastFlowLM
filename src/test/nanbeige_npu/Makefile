@@ -17,6 +17,7 @@
 
 
 SOURCES += $(wildcard ../../common/AutoModel/automodel.cpp)
+SOURCES += $(CHAT_SOURCES)
 SOURCES += $(wildcard ../../common/AutoModel/modeling_nanbeige.cpp)
 SOURCES += $(wildcard ../../common/tokenizer/tokenizer.cpp)
 SOURCES += $(wildcard ../../common/modules/sampler.cpp)

@@ -36,8 +36,9 @@ public:
     std::string generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled = [] { return false; }) override;
     std::string generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os = std::cout) override;
     std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object()) override;
-    NonStreamResult parse_nstream_content(const std::string response_text);
-    StreamResult parse_stream_content(const std::string content);
+    bool thinking_enabled() const override {
+        return this->enable_think;
+    }
 
     /// \brief Override configure_parameter to handle Qwen3-specific parameters
     bool configure_parameter(std::string parameter_name, const std::any& value) override {
@@ -85,7 +86,6 @@ public:
 class Qwen3_IT : public AutoModel {
 private:
     std::string current_model = "Qwen3_IT";
-    static constexpr int tool_start_token_id = 151657;
 
     void setup_tokenizer(std::string model_path);
 
@@ -98,18 +98,10 @@ public:
     std::string generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled = [] { return false; }) override;
     std::string generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os = std::cout) override;
     std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object()) override;
-    NonStreamResult parse_nstream_content(const std::string response_text);
-    StreamResult parse_stream_content(const std::string content);
     bool check_using_checkpint() {
 		return false;
 	}
 
-    /// \note Qwen3-IT opens every tool call with <tool_call>, so masking that one
-    ///       token is enough to honour tool_choice=none. Reported unconditionally
-    ///       -- unlike the VL/MoE wrappers this class has no enable_tool gate.
-    int get_tool_start_token_id() const override {
-        return tool_start_token_id;
-    }
 };
 
 class Qwen3_TK : public AutoModel {
@@ -131,8 +123,6 @@ public:
     std::string generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled = [] { return false; }) override;
     std::string generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os = std::cout) override;
     std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object()) override;
-    NonStreamResult parse_nstream_content(const std::string response_text);
-    StreamResult parse_stream_content(const std::string content);
     };
 
 
@@ -156,6 +146,4 @@ public:
     std::string generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled = [] { return false; }) override;
     std::string generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os = std::cout) override;
     std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object()) override;
-    NonStreamResult parse_nstream_content(const std::string response_text);
-    StreamResult parse_stream_content(const std::string content);
 };

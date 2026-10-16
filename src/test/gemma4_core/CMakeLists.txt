@@ -53,11 +53,14 @@ if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/test_gemma4_frontend.cpp")
         HINTS "$ENV{CONDA_PREFIX}/Library/include"
               "$ENV{USERPROFILE}/anaconda3/Library/include")
     if(XRT_INCLUDE_DIR AND BOOST_INCLUDE_DIR)
+        # automodel.cpp parses output and constrains decoding with the chat library
+        include("${FLM_SOURCE_DIR}/common/chat/chat_sources.cmake")
         add_executable(test_gemma4_frontend
             test_gemma4_frontend.cpp
             "${FLM_SOURCE_DIR}/common/AutoModel/automodel.cpp"
             "${FLM_SOURCE_DIR}/common/AutoModel/model_backend.cpp"
-            "${FLM_SOURCE_DIR}/common/AutoModel/modeling_gemma4e.cpp")
+            "${FLM_SOURCE_DIR}/common/AutoModel/modeling_gemma4e.cpp"
+            ${FLM_CHAT_SOURCES})
         target_include_directories(test_gemma4_frontend PRIVATE
             "${CMAKE_CURRENT_LIST_DIR}"
             "${FLM_SOURCE_DIR}/include"
@@ -69,7 +72,7 @@ if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/test_gemma4_frontend.cpp")
         target_compile_options(test_gemma4_frontend PRIVATE
             $<$<CXX_COMPILER_ID:MSVC>:/wd4005 /wd4244>)
         target_link_directories(test_gemma4_frontend PRIVATE "${XRT_INCLUDE_DIR}/../lib")
-        target_link_libraries(test_gemma4_frontend PRIVATE xrt_coreutil)
+        target_link_libraries(test_gemma4_frontend PRIVATE xrt_coreutil flm_xgrammar)
         add_test(NAME test_gemma4_frontend COMMAND test_gemma4_frontend)
     else()
         # LOUD AT CONFIGURE, AND RED AT CTEST -- the convention every block

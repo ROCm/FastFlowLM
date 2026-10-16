@@ -8,6 +8,9 @@
 #include "AutoModel/automodel.hpp"
 #include "utils/npu_platform.hpp"
 
+#include <filesystem>
+#include <limits>
+
 namespace {
 
 /// \brief the context length a model should actually be loaded with
@@ -179,7 +182,39 @@ nlohmann::json AutoModel::_shared_setup_tokenizer(std::string model_path) {
     }
     this->user_system_prompt = "";
     this->extra_context["user_system_prompt"] = this->user_system_prompt;
+    this->_detect_chat_format(tokenizer_config["chat_template"].get<std::string>());
     return tokenizer_config;
+}
+
+void AutoModel::_detect_chat_format(const std::string& template_src) {
+    auto is_token = [this](const std::string& text) {
+        std::vector<int> ids = this->tokenizer->encode(text);
+        if (this->has_bos_token && !ids.empty() && ids.front() == this->bos_token_id) {
+            ids.erase(ids.begin());
+        }
+        return ids.size() == 1;
+    };
+    this->chat_format = chat_format_detect(template_src, is_token);
+
+    // markers that hand the turn to a tool end generation like eos does
+    std::string stops;
+    for (const std::string& marker : this->chat_format.extra_stops) {
+        std::vector<int> ids = this->tokenizer->encode(marker);
+        if (this->has_bos_token && !ids.empty() && ids.front() == this->bos_token_id) {
+            ids.erase(ids.begin());
+        }
+        if (ids.size() != 1) {
+            header_print("WARNING", "Stop marker " << marker << " is not a single token, generation will not stop on it");
+            continue;
+        }
+        if (!this->is_eos(ids[0])) {
+            this->eos_token_ids.push_back(ids[0]);
+        }
+        stops += " " + marker;
+    }
+    header_print("FLM", "Chat format: " << chat_format_name(this->chat_format.kind)
+                 << (this->chat_format.has_reasoning() ? " with reasoning" : "")
+                 << (stops.empty() ? "" : ", also stops at" + stops));
 }
 
 
@@ -306,7 +341,6 @@ void AutoModel::_shared_after_inference_failure(bool poisoned) {
         try { this->lm_engine->clear_context(); } catch (...) {}
     }
     if (this->sampler) this->sampler->reset_penalties();
-    this->reset_parser();
 }
 
 void AutoModel::_shared_guard_poisoned() const {
@@ -358,6 +392,8 @@ void AutoModel::_shared_validate_capacity(std::size_t rendered_tokens,
 
 bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled, void* payload, int first_len_run, std::optional<int> requested_max_new_tokens) {
     this->_shared_validate_capacity(tokens.size(), requested_max_new_tokens);
+
+    this->_begin_turn(meta_info, tokens);
 
     // print token history
     // header_print("DEBUG", "Current token history: ");
@@ -422,8 +458,8 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
         header_print("WARNING", "Max length reached, stopping prefilling...");
     }
     this->profiler_list[SAMPLING_TIME].start();
-    this->_apply_tool_choice_mask(y, meta_info);
-    this->last_token = this->sampler->sample(y);
+    this->last_token = this->_sample(y, meta_info);
+    meta_info.insert_sample_pending = true;
     this->profiler_list[SAMPLING_TIME].stop(1);
     return true;
 }
@@ -440,10 +476,6 @@ buffer<bf16> AutoModel::_chunked_insert(chat_meta_info_t& meta_info, std::vector
     if (max_prefill_len < 512) {
         if (is_cancelled()) {
             meta_info.stop_reason = CANCEL_DETECTED;
-            buffer_.clear();
-            current_mode_ = StreamEventType::CONTENT;
-            tool_name_.clear();
-            is_in_tool_block_ = false;
             return y;
         }
         y = this->lm_engine->prefill(tokens, payload);
@@ -470,10 +502,6 @@ buffer<bf16> AutoModel::_chunked_insert(chat_meta_info_t& meta_info, std::vector
             header_print("FLM", "Prefill chunk " + std::to_string(i+1) + "/" + std::to_string(chunks) + " with " + std::to_string(chunk_tokens.size()) + " tokens");
             if (is_cancelled()) {
                 meta_info.stop_reason = CANCEL_DETECTED;
-                buffer_.clear();
-                current_mode_ = StreamEventType::CONTENT;
-                tool_name_.clear();
-                is_in_tool_block_ = false;
                 break;
             }
             buffer<bf16> chunk_y = this->lm_engine->prefill(chunk_tokens, (i == 0)? payload : nullptr);
@@ -488,18 +516,113 @@ buffer<bf16> AutoModel::_chunked_insert(chat_meta_info_t& meta_info, std::vector
     return y;
 }
 
-void AutoModel::_apply_tool_choice_mask(buffer<bf16>& y, const chat_meta_info_t& meta_info) {
-    if (meta_info.tool_choice != TOOL_CHOICE_NONE) {
-        return;
+void AutoModel::_begin_turn(chat_meta_info_t& meta_info, const std::vector<int>& prompt_tokens) {
+    // keep the end of the prompt as the model sees it: generation continues from
+    // there, so it tells the output parser whether a reasoning block is already open
+    constexpr size_t PROMPT_TAIL_TOKENS = 32;
+    meta_info.prompt_tail.clear();
+    for (size_t i = prompt_tokens.size() > PROMPT_TAIL_TOKENS ? prompt_tokens.size() - PROMPT_TAIL_TOKENS : 0;
+         i < prompt_tokens.size(); i++) {
+        try {
+            meta_info.prompt_tail += this->tokenizer->run_time_decoder(prompt_tokens[i]);
+        } catch (const std::runtime_error&) {
+            // added tokens outside the byte map, e.g. DeepSeek's <｜Assistant｜>,
+            // are stored as plain text; the full decoder handles them
+            meta_info.prompt_tail += this->tokenizer->decode({prompt_tokens[i]});
+        }
     }
-    const int tool_start_token_id = this->get_tool_start_token_id();
-    if (tool_start_token_id < 0 || (size_t)tool_start_token_id >= y.size()) {
-        return;
+    if (meta_info.constraint) {
+        meta_info.constraint->start(chat_format_prefill(this->chat_format, meta_info.prompt_tail));
     }
-    // A large negative logit rather than -inf: every sampling path either takes
-    // the argmax or runs this through softmax, and a finite value can never turn
-    // into the inf - inf that would poison the whole distribution.
-    y[tool_start_token_id] = bf16(-1e30f);
+}
+
+int AutoModel::_sample(buffer<bf16>& logits, chat_meta_info_t& meta_info) {
+    decode_constraint* constraint = meta_info.constraint.get();
+    const bool masked = constraint != nullptr && constraint->fill_mask(this->constraint_mask_);
+    // The mask goes to the sampler, which applies it to its own copy: the logits
+    // live in the engine's device-mapped buffer and are never written here.
+    int token = this->sampler->sample(logits, masked ? &this->constraint_mask_ : nullptr);
+    auto allowed = [this](size_t i) {
+        return i / 32 < this->constraint_mask_.size() && ((this->constraint_mask_[i / 32] >> (i % 32)) & 1u);
+    };
+    if (masked && (token < 0 || !allowed(static_cast<size_t>(token)))) {
+        // Only happens when the logits themselves are broken (NaN everywhere
+        // makes the argmax land on 0): stay inside the grammar regardless.
+        int first = -1;
+        int best = -1;
+        float best_logit = -std::numeric_limits<float>::infinity();
+        for (size_t i = 0; i < logits.size(); i++) {
+            if (!allowed(i)) {
+                continue;
+            }
+            const float v = static_cast<float>(logits[i]);
+            if (first < 0) first = static_cast<int>(i);
+            if (v > best_logit) {  // NaN never compares greater
+                best = static_cast<int>(i);
+                best_logit = v;
+            }
+        }
+        if (first < 0) {
+            // nothing allowed at all: keep the sample, the constraint gives itself up on it
+            header_print("WARNING", "The decoding constraint allows no token here, keeping sampled token " << token);
+        } else {
+            header_print("WARNING", "Sampled token " << token << " is outside the decoding constraint, using "
+                         << (best >= 0 ? best : first) << " instead");
+            token = best >= 0 ? best : first;
+        }
+    }
+    if (constraint != nullptr) {
+        constraint->accept(token);
+    }
+    meta_info.insert_sample_pending = false;
+    return token;
+}
+
+void AutoModel::_force_token(chat_meta_info_t& meta_info, int token) {
+    this->_skip_insert_sample(meta_info);
+    if (meta_info.constraint) {
+        meta_info.constraint->accept_forced(token);
+    }
+}
+
+void AutoModel::_skip_insert_sample(chat_meta_info_t& meta_info) {
+    if (meta_info.constraint && meta_info.insert_sample_pending) {
+        meta_info.constraint->rollback(1);
+    }
+    meta_info.insert_sample_pending = false;
+}
+
+std::shared_ptr<decode_constraint> AutoModel::make_constraint(const chat_constraint_request& request) {
+    chat_vocab vocab;
+    vocab.size = static_cast<size_t>(this->sampler->in_features);
+    vocab.encode = [this](const std::string& text) {
+        std::vector<int> ids = this->tokenizer->encode(text);
+        if (this->has_bos_token && !ids.empty() && ids.front() == this->bos_token_id) {
+            ids.erase(ids.begin());
+        }
+        return ids;
+    };
+    vocab.stop_tokens = this->eos_token_ids;
+    vocab.tokenizer_json = (std::filesystem::path(this->model_path) / "tokenizer.json").string();
+
+    auto engine = [this, &vocab]() -> chat_grammar_engine& {
+        if (!this->grammar_engine_ || this->grammar_engine_path_ != vocab.tokenizer_json) {
+            auto start = time_utils::now();
+            this->grammar_engine_ = std::make_unique<chat_grammar_engine>(vocab, this->chat_format);
+            this->grammar_engine_path_ = vocab.tokenizer_json;
+            header_print("FLM", "Grammar engine ready in "
+                         << time_utils::duration_ns(start, time_utils::now()).first / 1000000 << " ms");
+        }
+        return *this->grammar_engine_;
+    };
+    // thinking turned off on the model, not just in the request: the grammar must
+    // not offer a reasoning block either, or a model kept from its first choice of
+    // token (Gemma4 before a JSON answer) escapes into one
+    chat_constraint_request effective = request;
+    if (!this->thinking_enabled()) {
+        effective.allow_reasoning = false;
+    }
+    return chat_make_constraint(this->chat_format, effective, vocab, engine);
 }
 
 std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
@@ -549,11 +672,6 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
         }
         if (is_cancelled()) {
             reason = CANCEL_DETECTED;
-            // reset stream content 
-            buffer_.clear();
-            current_mode_ = StreamEventType::CONTENT;
-            tool_name_.clear();
-            is_in_tool_block_ = false;
             break;
         }
         this->profiler_list[DECODING_TIME].start();
@@ -561,8 +679,7 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
         this->profiler_list[DECODING_TIME].stop(1);
 
         this->profiler_list[SAMPLING_TIME].start();
-        this->_apply_tool_choice_mask(y, meta_info);
-        int sampled_token = this->sampler->sample(y);
+        int sampled_token = this->_sample(y, meta_info);
         this->profiler_list[SAMPLING_TIME].stop(1);
         this->total_tokens++;
         last_sampled_token = sampled_token;
@@ -605,126 +722,6 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
         std::cout << std::endl;
         header_print("FLM", "Model RAW Output: \n" + result);
     }
-    return result;
-}
-
-StreamResult AutoModel::_shared_think_tool_calling_pasrsed(const std::string content) {
-    const std::string MARKER_THINK_START = "<think>";
-    const std::string MARKER_THINK_END = "</think>";
-    const std::string MARKER_TOOL_START = "<tool_call>";
-    const std::string MARKER_TOOL_END = "</tool_call>";
-
-    StreamResult result;
-    buffer_ += content;
-
-    while (true) {
-        // check tool calling
-        if (!is_in_tool_block_) {
-            size_t tool_start_pos = buffer_.find(MARKER_TOOL_START);
-            if (tool_start_pos != std::string::npos) {
-                // find the <tool_call> and output the content before it
-                if (tool_start_pos > 0) {
-                    result.content = buffer_.substr(0, tool_start_pos);
-                    result.type = current_mode_;
-                    buffer_ = buffer_.substr(tool_start_pos);
-                    return result;
-                }
-
-                // go to tool calling
-                is_in_tool_block_ = true;
-                tool_name_.clear();
-                buffer_ = buffer_.substr(MARKER_TOOL_START.length());
-                result.type = StreamEventType::WAITING;
-                return result;
-            }
-        }
-
-        // tool calling process
-        if (is_in_tool_block_) {
-            size_t tool_end_pos = buffer_.find(MARKER_TOOL_END);
-            if (tool_end_pos != std::string::npos) {
-                tool_name_ += buffer_.substr(0, tool_end_pos);
-                buffer_ = buffer_.substr(tool_end_pos + MARKER_TOOL_END.length());
-                is_in_tool_block_ = false;
-
-                try {
-                    auto j = nlohmann::json::parse(tool_name_);
-
-                    result.type = StreamEventType::TOOL_DONE;
-                    result.tool_id = "call_" + std::to_string(std::time(nullptr));
-
-                    if (j.contains("name")) {
-                        result.tool_name = j["name"].get<std::string>();
-                    }
-
-                    if (j.contains("arguments")) {
-                        if (j["arguments"].is_string()) {
-                            result.tool_args_str = j["arguments"].get<std::string>();
-                        }
-                        else {
-                            result.tool_args_str = j["arguments"].dump();
-                        }
-                    }
-
-                    return result;
-                }
-                catch (...) {
-                    result.type = StreamEventType::CONTENT;
-                    result.content = "[Error parsing tool call]";
-                    return result;
-                }
-            }
-            else {
-                tool_name_ += buffer_;
-                buffer_.clear();
-                result.type = StreamEventType::WAITING;
-                return result;
-            }
-        }
-
-        // normal and reasoning
-        if (current_mode_ == StreamEventType::CONTENT) {
-            size_t think_start_pos = buffer_.find(MARKER_THINK_START);
-
-            if (think_start_pos != std::string::npos) {
-                if (think_start_pos > 0) {
-                    result.content = buffer_.substr(0, think_start_pos);
-                    result.type = StreamEventType::CONTENT;
-                    buffer_ = buffer_.substr(think_start_pos);
-                    return result;
-                }
-                buffer_ = buffer_.substr(MARKER_THINK_START.length());
-                current_mode_ = StreamEventType::REASONING;
-                continue;
-            }
-        }
-        else if (current_mode_ == StreamEventType::REASONING) {
-            size_t think_end_pos = buffer_.find(MARKER_THINK_END);
-
-            if (think_end_pos != std::string::npos) {
-                if (think_end_pos > 0) {
-                    result.content = buffer_.substr(0, think_end_pos);
-                    result.type = StreamEventType::REASONING;
-                    buffer_ = buffer_.substr(think_end_pos);
-                    return result;
-                }
-                buffer_ = buffer_.substr(MARKER_THINK_END.length());
-                current_mode_ = StreamEventType::CONTENT;
-                continue;
-            }
-        }
-
-        if (!buffer_.empty()) {
-            result.content = buffer_;
-            result.type = current_mode_;
-            buffer_.clear();
-            return result;
-        }
-
-        break;
-    }
-
-    result.type = current_mode_;
     return result;
 }
 

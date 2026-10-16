@@ -21,10 +21,10 @@ that, on both endpoints:
 * ``usage.total_tokens == usage.prompt_tokens +
   usage.completion_tokens`` on every turn.
 
-It deliberately does NOT assert anything about
-``stream_options.include_usage`` or about ``usage`` being present (as
-``null`` or otherwise) on intermediate streaming chunks -- that
-behaviour belongs to a different, unmerged branch.
+Streaming requests set ``stream_options.include_usage``, as an OpenAI
+client must to get usage on a stream. The streaming test also checks
+the shape OpenAI defines for it: every chunk carries ``usage``, null
+on all but one final chunk that has no choices and the real usage.
 
 Usage
 -----
@@ -237,25 +237,43 @@ def extract_streamed_reply_and_usage(
 
     The assistant reply is reassembled by concatenating every
     ``choices[0].delta.content`` piece in order. The final usage is
-    taken from the last chunk that carries a non-null ``usage``
-    object, per the OpenAI streaming contract.
+    taken from the last chunk, which per the OpenAI streaming contract
+    for ``stream_options.include_usage`` is the only one with a
+    non-null ``usage`` and has an empty ``choices`` list; every chunk
+    before it must carry ``usage: null``.
     """
+    if not chunks:
+        raise AssertionError("the stream carried no chunks")
     content_parts = []
-    final_usage = None
-    for chunk in chunks:
+    for index, chunk in enumerate(chunks):
+        if "usage" not in chunk:
+            raise AssertionError(
+                f"streamed chunk {index} has no 'usage' key although "
+                f"include_usage was set: {chunk!r}"
+            )
+        is_last = index == len(chunks) - 1
+        if not is_last and chunk["usage"] is not None:
+            raise AssertionError(
+                f"streamed chunk {index} carries a non-null 'usage' before "
+                f"the final usage chunk: {chunk!r}"
+            )
         choices = chunk.get("choices") or []
         if choices:
             delta = choices[0].get("delta") or {}
             piece = delta.get("content")
             if isinstance(piece, str):
                 content_parts.append(piece)
-        usage = chunk.get("usage")
-        if isinstance(usage, dict):
-            final_usage = usage
-    if final_usage is None:
+    final_chunk = chunks[-1]
+    final_usage = final_chunk["usage"]
+    if not isinstance(final_usage, dict):
         raise AssertionError(
-            "no streamed chunk carried a non-null 'usage' object; "
+            "the final streamed chunk carries no 'usage' object; "
             f"chunks were: {chunks!r}"
+        )
+    if final_chunk.get("choices") != []:
+        raise AssertionError(
+            "the final usage chunk must have an empty 'choices' list: "
+            f"{final_chunk!r}"
         )
     return "".join(content_parts), final_usage
 
@@ -393,6 +411,7 @@ def run_pinned_prefix_checks(
         }
         if stream:
             payload["stream"] = True
+            payload["stream_options"] = {"include_usage": True}
         body = post_json(url, payload, timeout)
         if stream:
             _, usage = extract_streamed_reply_and_usage(parse_sse_chunks(body))
@@ -469,6 +488,7 @@ def run_streaming_test(endpoint: str, model: str, timeout: float) -> None:
         "temperature": TEMPERATURE,
         "max_tokens": MAX_TOKENS,
         "stream": True,
+        "stream_options": {"include_usage": True},
     }
     turn1_body = post_json(url, turn1_payload, timeout)
     turn1_chunks = parse_sse_chunks(turn1_body)

@@ -17,6 +17,7 @@
 
 
 SOURCES += $(wildcard ../../common/AutoModel/automodel.cpp)
+SOURCES += $(CHAT_SOURCES)
 SOURCES += $(wildcard ../../common/AutoModel/modeling_gpt_oss.cpp)
 SOURCES += $(wildcard ../../include/AutoModel/automodel.hpp)
 SOURCES += $(wildcard ../../include/AutoModel/modeling_gpt_oss.hpp)

@@ -28,7 +28,6 @@ private:
 
     void setup_tokenizer(std::string model_path);
 
-    StreamResult parse_stream_content_impl(const std::string content, bool is_final);
 
     static constexpr int boc_token_id = 100; // begin of channel token id
     static constexpr int eoc_token_id = 101; // end of channel token id
@@ -44,7 +43,6 @@ private:
     static constexpr int audio_token_id = 258881; // audio token id
     static constexpr int eoa_token_id = 258883; // end of audio token id
 
-    static constexpr int tool_start_token_id = 48;
 
     ImageReader image_reader_;
     gemma4_12b_image_t load_image(const std::string& filename);
@@ -106,20 +104,13 @@ public:
     std::string generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled = [] { return false; }) override;
     std::string generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os = std::cout) override;
     std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object()) override;
-    NonStreamResult parse_nstream_content(const std::string response_text) override;
-    StreamResult parse_stream_content(const std::string content) override;
-    StreamResult parse_stream_content_final(const std::string content) override;
     chat_template_type_t get_chat_template_type() override {
         return chat_template_type_t::gemma4;
     }
-
-    /// \note Gemma4-12B opens every tool call with <|tool_call>, so masking that
-    ///       one token is enough to honour tool_choice=none. Unlike Gemma4e there
-    ///       is no size-dependent enable_tool gate -- this checkpoint always
-    ///       supports tool calling, so the id is reported unconditionally.
-    int get_tool_start_token_id() const override {
-        return tool_start_token_id;
+    bool thinking_enabled() const override {
+        return this->enable_think;
     }
+
 
     /// \brief Configure a parameter with type-erased value
     /// \param parameter_name the name of the parameter

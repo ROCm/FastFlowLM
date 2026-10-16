@@ -205,6 +205,22 @@ del stream, client
 gc.collect()
 ```
 
+As with OpenAI, a stream reports no token usage unless you ask for it with `stream_options={"include_usage": True}` (`stream_usage=True` in LangChain). Then every chunk carries `usage: null`, and one last chunk before `data: [DONE]` has an empty `choices` list and the usage of the whole request. On `/v1/chat/completions` that usage also includes FLM's timing and KV cache figures (`prefill_speed_tps`, `decoding_speed_tps`, `active_kv_tokens`, ...). Since that last chunk has no choices, guard `chunk.choices` before indexing it:
+
+```python
+stream = client.chat.completions.create(
+    model="llama3.2:1b",
+    messages=[{"role": "user", "content": "Hi!"}],
+    stream=True,
+    stream_options={"include_usage": True},
+)
+for chunk in stream:
+    if chunk.choices and chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="", flush=True)
+    if chunk.usage:
+        print(f"\n{chunk.usage.prompt_tokens} prompt + {chunk.usage.completion_tokens} completion tokens")
+```
+
 ---
 
 ## 📄 Example: Use a File as the Prompt

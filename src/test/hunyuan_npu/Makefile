@@ -37,6 +37,7 @@ endif
 SOURCES += test.cpp
 SOURCES += bench_prefill.cpp
 SOURCES += ../../common/AutoModel/automodel.cpp
+SOURCES += $(CHAT_SOURCES)
 SOURCES += ../../common/AutoModel/modeling_hunyuan.cpp
 SOURCES += ../../common/tokenizer/tokenizer.cpp
 SOURCES += ../../common/modules/sampler.cpp

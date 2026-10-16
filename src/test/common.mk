@@ -77,6 +77,14 @@ LDFLAGS += -ltokenizers_cpp -ltokenizers_c -lsentencepiece
 LDFLAGS += $(RUNTIME_LDFLAGS)
 DEPENDENCY_LDFLAGS += -lmha -ldequant -lgemm -llm_head -lq4_npu_eXpress
 
+# automodel.cpp parses output and constrains decoding with the chat library: a
+# harness that builds it adds $(CHAT_SOURCES), and gets the main build's xgrammar
+CHAT_SOURCES := $(wildcard ../../common/chat/*.cpp)
+XGRAMMAR_DIR := ../../../third_party/xgrammar
+CXX_FLAGS += -I$(XGRAMMAR_DIR)/include -isystem $(XGRAMMAR_DIR)/3rdparty/dlpack/include
+CXX_FLAGS += -DXGRAMMAR_ENABLE_CPPTRACE=0
+DEPENDENCY_LDFLAGS += $(if $(filter %/automodel.cpp,$(SOURCES)),-L../../build -lflm_xgrammar)
+
 
 SOURCES += ../../common/utils.cpp
 

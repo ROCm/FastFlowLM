@@ -30,7 +30,6 @@ private:
     bool enable_tool = false;
     static constexpr int think_start_id = 248068;
     static constexpr int think_end_id = 248069;
-    static constexpr int tool_start_token_id = 248058;
 
     void setup_tokenizer(std::string model_path);
 
@@ -65,20 +64,9 @@ public:
     std::string generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled = [] { return false; }) override;
     std::string generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os = std::cout) override;
     std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object()) override;
-    NonStreamResult parse_nstream_content(const std::string response_text) override;
-    StreamResult parse_stream_content(const std::string content) override;
-    StreamResult parse_stream_content_final(const std::string content) override;
 
-private:
-    StreamResult parse_stream_content_impl(const std::string content, bool is_final);
-
-public:
-
-    /// \note MiniCPM-V opens every tool call with <tool_call>, so masking that
-    ///       one token is enough to honour tool_choice=none. Gated on enable_tool
-    ///       to match apply_chat_template, which only renders tools when it is set.
-    int get_tool_start_token_id() const override {
-        return this->enable_tool ? tool_start_token_id : -1;
+    bool thinking_enabled() const override {
+        return this->enable_think;
     }
 
     /// \brief Configure a parameter with type-erased value

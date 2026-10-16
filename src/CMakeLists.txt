@@ -289,6 +289,13 @@ add_subdirectory(${CMAKE_SOURCE_DIR}/../third_party/tokenizers-cpp
                  EXCLUDE_FROM_ALL)
 
 # ———————————————————————————————————————————————
+# xgrammar: the grammar engine behind constrained decoding (tool_choice,
+# response_format), shared with the test harnesses. The chat sources themselves
+# come in with the common/*/*.cpp glob below.
+# ———————————————————————————————————————————————
+include("${CMAKE_SOURCE_DIR}/common/chat/chat_sources.cmake")
+
+# ———————————————————————————————————————————————
 # Gather your sources
 # ———————————————————————————————————————————————
 file(GLOB SOURCES "src/*.cpp" "runner/*.cpp" "common/*.cpp" "common/*/*.cpp" "server/*.cpp" "pull/*.cpp" )
@@ -606,6 +613,8 @@ list(APPEND FLM_ENGINE_LINK_LIBS
 )
 
 # Link your custom libraries (these may still be DLLs if no static versions available)
+target_link_libraries(flm PRIVATE flm_xgrammar)
+
 target_link_libraries(flm PUBLIC
     ${FLM_ENGINE_LINK_LIBS}
     # flm's own code calls nothing in the four shared-runtime libs below -- the

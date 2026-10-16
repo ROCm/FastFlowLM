@@ -257,7 +257,7 @@ Sampler::Sampler(int features, sampler_config& config)
     logits.resize(1); counters.resize(1); token_positions.resize(1, -1);
 }
 void Sampler::reset_penalties() {}
-int Sampler::sample(buffer<bf16>&) {
+int Sampler::sample(buffer<bf16>&, const std::vector<uint32_t>*) {
     if (g_sample_index < g_samples.size()) return g_samples[g_sample_index++];
     return 7;
 }

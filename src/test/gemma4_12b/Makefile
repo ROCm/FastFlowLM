@@ -20,6 +20,7 @@ TYPE ?= 3
 
 SOURCES += test.cpp
 SOURCES += ../../common/AutoModel/automodel.cpp
+SOURCES += $(CHAT_SOURCES)
 SOURCES += ../../common/AutoModel/modeling_gemma4_12b.cpp
 SOURCES += ../../common/AutoModel/modeling_gemma4_12b_image.cpp
 SOURCES += ../../common/AutoModel/modeling_gemma4_12b_audio.cpp

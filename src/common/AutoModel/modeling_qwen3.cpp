@@ -144,6 +144,8 @@ std::string Qwen3::decode(chat_meta_info_t& meta_info, int length_limit, std::os
             return result;
         }
         this->token_history.push_back(think_start_id);
+        // fed for the KV cache only, it never reaches the output
+        this->_skip_insert_sample(meta_info);
         this->lm_engine->forward(think_start_id);
         token_str = this->tokenizer->run_time_decoder(think_start_id);
 
@@ -165,7 +167,7 @@ std::string Qwen3::decode(chat_meta_info_t& meta_info, int length_limit, std::os
         buffer<bf16> y = this->lm_engine->forward(271);
         this->profiler_list[DECODING_TIME].stop(1);
         token_str = this->tokenizer->run_time_decoder(271);
-        sampled_token = this->sampler->sample(y);
+        sampled_token = this->_sample(y, meta_info);
 
         // All four went through the engine, so all four occupy the context.
         this->total_tokens += 4;
@@ -197,11 +199,6 @@ std::string Qwen3::decode(chat_meta_info_t& meta_info, int length_limit, std::os
     while (this->total_tokens < decode_cap){
         if (is_cancelled()) {
             reason = CANCEL_DETECTED;
-            // reset stream content 
-            buffer_.clear();
-            current_mode_ = StreamEventType::CONTENT;
-            tool_name_.clear();
-            is_in_tool_block_ = false;
             break;
         }
         this->profiler_list[DECODING_TIME].start();
@@ -209,7 +206,7 @@ std::string Qwen3::decode(chat_meta_info_t& meta_info, int length_limit, std::os
         this->profiler_list[DECODING_TIME].stop(1);
 
         this->profiler_list[SAMPLING_TIME].start();
-        int sampled_token = this->sampler->sample(y);
+        int sampled_token = this->_sample(y, meta_info);
         this->profiler_list[SAMPLING_TIME].stop(1);
         this->total_tokens++;
         last_sampled_token = sampled_token;
@@ -251,89 +248,6 @@ std::string Qwen3::generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_
         return "";
     }
     return this->_shared_generate(meta_info, length_limit, os);
-}
-
-static void qwen3_parse_tool_blocks(const std::string& response_text, NonStreamResult& result) {
-    const std::string tool_start_tag = "<tool_call>";
-    const std::string tool_end_tag = "</tool_call>";
-
-    size_t search_from = 0;
-    while (true) {
-        size_t start_pos = response_text.find(tool_start_tag, search_from);
-        if (start_pos == std::string::npos) break;
-
-        size_t block_content_start = start_pos + tool_start_tag.length();
-        size_t end_pos = response_text.find(tool_end_tag, block_content_start);
-        size_t block_end = (end_pos != std::string::npos) ? end_pos : response_text.length();
-        search_from = (end_pos != std::string::npos) ? end_pos + tool_end_tag.length() : block_end;
-
-        std::string json_str = response_text.substr(block_content_start, block_end - block_content_start);
-
-        std::string name, arguments;
-        try {
-            auto j = nlohmann::json::parse(json_str);
-            if (j.contains("name")) name = j["name"].get<std::string>();
-            if (j.contains("arguments")) {
-                arguments = j["arguments"].is_string()
-                    ? j["arguments"].get<std::string>()
-                    : j["arguments"].dump();
-            }
-        } catch (...) {
-            // fallback: manual string extraction
-            std::string key_name = "\"name\": \"";
-            size_t ns = json_str.find(key_name);
-            if (ns != std::string::npos) {
-                ns += key_name.length();
-                size_t ne = json_str.find("\"", ns);
-                if (ne != std::string::npos) name = json_str.substr(ns, ne - ns);
-            }
-            std::string key_args = "\"arguments\":";
-            size_t ap = json_str.find(key_args);
-            if (ap != std::string::npos) {
-                size_t bs = json_str.find("{", ap);
-                size_t be = json_str.rfind("}");
-                if (bs != std::string::npos && be != std::string::npos && be > bs)
-                    arguments = json_str.substr(bs, be - bs + 1);
-            }
-        }
-
-        result.tool_calls_list.emplace_back(name, arguments);
-    }
-
-    if (!result.tool_calls_list.empty()) {
-        result.tool_name = result.tool_calls_list[0].first;
-        result.tool_args = result.tool_calls_list[0].second;
-    }
-}
-
-NonStreamResult Qwen3::parse_nstream_content(const std::string response_text) {
-    NonStreamResult result;
-
-    const std::string think_start_tag = "<think>";
-    const std::string think_end_tag = "</think>";
-    const std::string tool_start_tag = "<tool_call>";
-
-    size_t think_start_pos = response_text.find(think_start_tag);
-    size_t think_end_pos = response_text.find(think_end_tag);
-    bool is_reasoning = (think_start_pos != std::string::npos && think_end_pos != std::string::npos);
-
-    if (is_reasoning) {
-        size_t start = think_start_pos + think_start_tag.length();
-        result.reasoning_content = response_text.substr(start, think_end_pos - start);
-    }
-
-    qwen3_parse_tool_blocks(response_text, result);
-
-    if (result.tool_calls_list.empty()) {
-        size_t content_start = is_reasoning ? think_end_pos + think_end_tag.length() : 0;
-        result.content = response_text.substr(content_start);
-    }
-
-    return result;
-}
-
-StreamResult Qwen3::parse_stream_content(const std::string content) {
-    return _shared_think_tool_calling_pasrsed(content);
 }
 
 /************              Qwen3_IT family            **************/
@@ -405,74 +319,6 @@ std::string Qwen3_IT::generate_with_prompt(chat_meta_info_t& meta_info, lm_unifo
         return "";
     }
     return this->_shared_generate(meta_info, length_limit, os);
-}
-
-// Non-stream
-NonStreamResult Qwen3_IT::parse_nstream_content(const std::string response_text) {
-    NonStreamResult result;
-
-    qwen3_parse_tool_blocks(response_text, result);
-
-    if (result.tool_calls_list.empty()) {
-        result.content = response_text;
-    }
-
-    return result;
-}
-
-// Stream
-StreamResult Qwen3_IT::parse_stream_content(const std::string content) {
-    std::string tool_start_tag = "<tool_call>";
-    std::string tool_end_tag = "</tool_call>";
-
-    StreamResult result;
-    result.type = StreamEventType::CONTENT; 
-
-    if (content.find(tool_start_tag) != std::string::npos) {
-        is_in_tool_block_ = true;
-        tool_name_.clear();
-        result.type = StreamEventType::WAITING;
-        return result;
-    }
-
-    if (content.find("</tool_call>") != std::string::npos) {
-        is_in_tool_block_ = false;
-
-        try {
-            auto j = nlohmann::json::parse(tool_name_);
-
-            result.type = StreamEventType::TOOL_DONE;
-            result.tool_id = "call_" + std::to_string(std::time(nullptr));
-
-            if (j.contains("name")) {
-                result.tool_name = j["name"].get<std::string>();
-            }
-
-            if (j.contains("arguments")) {
-                if (j["arguments"].is_string()) {
-                    result.tool_args_str = j["arguments"].get<std::string>();
-                }
-                else {
-                    result.tool_args_str = j["arguments"].dump();
-                }
-            }
-        }
-        catch (...) {
-            result.type = StreamEventType::CONTENT;
-            result.content = "[Error parsing tool call]";
-        }
-        return result;
-    }
-
-    if (is_in_tool_block_) {
-        tool_name_ += content;
-        result.type = StreamEventType::WAITING; 
-        return result;
-    }
-
-    result.content = content;
-    return result;
-
 }
 
 /************              Qwen3_TK family            **************/
@@ -571,6 +417,7 @@ std::string Qwen3_TK::generate(chat_meta_info_t& meta_info, int length_limit, st
 
     this->token_history.push_back(think_start_id);
     this->profiler_list[DECODING_TIME].start();
+    this->_force_token(meta_info, think_start_id);
     this->lm_engine->forward(think_start_id);
     this->profiler_list[DECODING_TIME].stop(1);
     token_str = this->tokenizer->run_time_decoder(think_start_id);
@@ -580,11 +427,12 @@ std::string Qwen3_TK::generate(chat_meta_info_t& meta_info, int length_limit, st
     // \n
     this->token_history.push_back(198);
     this->profiler_list[DECODING_TIME].start();
+    this->_force_token(meta_info, 198);
     buffer<bf16> y = this->lm_engine->forward(198);
     this->profiler_list[DECODING_TIME].stop(1);
     token_str = this->tokenizer->run_time_decoder(198);
     result += token_str;
-    sampled_token = this->sampler->sample(y);
+    sampled_token = this->_sample(y, meta_info);
     os << token_str << std::flush;
 
     this->total_tokens++;
@@ -603,11 +451,6 @@ std::string Qwen3_TK::generate(chat_meta_info_t& meta_info, int length_limit, st
     while (this->total_tokens < this->MAX_L){
         if (is_cancelled()) {
             reason = CANCEL_DETECTED;
-            // reset stream content 
-            buffer_.clear();
-            current_mode_ = StreamEventType::CONTENT;
-            tool_name_.clear();
-            is_in_tool_block_ = false;
             break;
         }
         this->profiler_list[DECODING_TIME].start();
@@ -615,7 +458,7 @@ std::string Qwen3_TK::generate(chat_meta_info_t& meta_info, int length_limit, st
         this->profiler_list[DECODING_TIME].stop(1);
 
         this->profiler_list[SAMPLING_TIME].start();
-        int sampled_token = this->sampler->sample(y);
+        int sampled_token = this->_sample(y, meta_info);
         this->profiler_list[SAMPLING_TIME].stop(1);
         this->total_tokens++;
         last_sampled_token = sampled_token;
@@ -654,36 +497,6 @@ std::string Qwen3_TK::generate_with_prompt(chat_meta_info_t& meta_info, lm_unifo
         return "";
     }
     return this->generate(meta_info, length_limit, os);
-}
-
-NonStreamResult Qwen3_TK::parse_nstream_content(const std::string response_text) {
-    NonStreamResult result;
-
-    const std::string think_start_tag = "<think>";
-    const std::string think_end_tag = "</think>";
-
-    size_t think_start_pos = response_text.find(think_start_tag);
-    size_t think_end_pos = response_text.find(think_end_tag);
-    bool is_reasoning = (think_start_pos != std::string::npos && think_end_pos != std::string::npos);
-
-    if (is_reasoning) {
-        size_t start = think_start_pos + think_start_tag.length();
-        result.reasoning_content = response_text.substr(start, think_end_pos - start);
-    }
-
-    qwen3_parse_tool_blocks(response_text, result);
-
-    if (result.tool_calls_list.empty()) {
-        size_t content_start = is_reasoning ? think_end_pos + think_end_tag.length() : 0;
-        result.content = response_text.substr(content_start);
-    }
-
-    return result;
-}
-
-
-StreamResult Qwen3_TK::parse_stream_content(const std::string content) {
-    return _shared_think_tool_calling_pasrsed(content);
 }
 
 /************              DeepSeek_r1_0528_8b family            **************/
@@ -792,11 +605,6 @@ std::string DeepSeek_r1_0528_8b::generate(chat_meta_info_t& meta_info, int lengt
     while (this->total_tokens < this->MAX_L){
         if (is_cancelled()) {
             reason = CANCEL_DETECTED;
-            // reset stream content 
-            buffer_.clear();
-            current_mode_ = StreamEventType::CONTENT;
-            tool_name_.clear();
-            is_in_tool_block_ = false;
             break;
         }
         this->profiler_list[DECODING_TIME].start();
@@ -804,7 +612,7 @@ std::string DeepSeek_r1_0528_8b::generate(chat_meta_info_t& meta_info, int lengt
         this->profiler_list[DECODING_TIME].stop(1);
 
         this->profiler_list[SAMPLING_TIME].start();
-        int sampled_token = this->sampler->sample(y);
+        int sampled_token = this->_sample(y, meta_info);
         this->profiler_list[SAMPLING_TIME].stop(1);
         this->total_tokens++;
         last_sampled_token = sampled_token;
@@ -843,76 +651,4 @@ std::string DeepSeek_r1_0528_8b::generate_with_prompt(chat_meta_info_t& meta_inf
         return "";
     }
     return this->_shared_generate(meta_info, length_limit, os);
-}
-
-NonStreamResult DeepSeek_r1_0528_8b::parse_nstream_content(const std::string response_text) {
-    NonStreamResult result;
-
-    std::string content, reasoning_content;
-
-    std::string think_start_tag = "<think>";
-    std::string think_end_tag = "</think>";
-
-    size_t think_start_pos = response_text.find(think_start_tag);
-    size_t think_end_pos = response_text.find(think_end_tag);
-
-
-    think_start_pos += think_start_tag.length();
-    std::string reasoning_str = response_text.substr(think_start_pos, think_end_pos - think_start_pos);
-    result.reasoning_content = reasoning_str;
-
-    std::string content_str = response_text.substr(think_end_pos + think_end_tag.length());
-    result.content = content_str;
-
-    return result;
-}
-
-
-StreamResult DeepSeek_r1_0528_8b::parse_stream_content(const std::string content) {
-    const std::string MARKER_THINK_START = "<think>";
-    const std::string MARKER_THINK_END = "</think>";
-
-    StreamResult result;
-    buffer_ += content;
-
-    while (true) {
-        if (current_mode_ == StreamEventType::CONTENT) {
-            // Check for the start of a thought block
-            size_t pos = buffer_.find(MARKER_THINK_START);
-
-            if (pos != std::string::npos) {
-                // Emit content before the tag
-                result.content += buffer_.substr(0, pos);
-                result.type = StreamEventType::CONTENT;
-
-                // Remove "<think>\n" and switch mode
-                buffer_ = buffer_.substr(pos + MARKER_THINK_START.length());
-                current_mode_ = StreamEventType::REASONING;
-                continue;
-            }
-        }
-        else if (current_mode_ == StreamEventType::REASONING) {
-            // Check for the end of a thought block
-            size_t pos = buffer_.find(MARKER_THINK_END);
-
-            if (pos != std::string::npos) {
-                // Emit content before the tag
-                result.content += buffer_.substr(0, pos);
-                result.type = StreamEventType::REASONING;
-
-                // Remove "</think>\n" and switch mode
-                buffer_ = buffer_.substr(pos + MARKER_THINK_END.length());
-                current_mode_ = StreamEventType::CONTENT;
-                continue;
-            }
-        }
-
-        // Flush remaining buffer
-        result.content += buffer_;
-        result.type = current_mode_;
-        buffer_.clear();
-        break;
-    }
-
-    return result;
 }

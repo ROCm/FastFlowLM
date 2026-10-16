@@ -20,6 +20,7 @@
 
 SOURCES += test.cpp
 SOURCES += ../../common/AutoModel/automodel.cpp
+SOURCES += $(CHAT_SOURCES)
 SOURCES += ../../common/AutoModel/modeling_qwen3_5_omni.cpp
 SOURCES += ../../common/AutoModel/modeling_qwen3_5_omni_image.cpp
 SOURCES += ../../common/AutoModel/modeling_qwen3_5_omni_audio.cpp

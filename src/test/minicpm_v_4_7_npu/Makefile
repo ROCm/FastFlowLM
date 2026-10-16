@@ -15,6 +15,7 @@ LENGTH ?= 256
 
 SOURCES += test.cpp
 SOURCES += ../../common/AutoModel/automodel.cpp
+SOURCES += $(CHAT_SOURCES)
 SOURCES += ../../common/AutoModel/model_backend.cpp
 SOURCES += ../../common/AutoModel/modeling_minicpm_v.cpp
 # Image support. modeling_minicpm_v_image.cpp holds the slicing, the PIL-exact

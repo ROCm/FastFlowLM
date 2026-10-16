@@ -18,6 +18,7 @@
 
 SOURCES += test.cpp
 SOURCES += ../../common/AutoModel/automodel.cpp
+SOURCES += $(CHAT_SOURCES)
 SOURCES += ../../common/AutoModel/modeling_gemma4e.cpp
 SOURCES += ../../common/AutoModel/modeling_gemma4e_image.cpp
 SOURCES += ../../common/AutoModel/modeling_gemma4e_audio.cpp

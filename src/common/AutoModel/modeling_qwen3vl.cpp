@@ -296,121 +296,6 @@ std::string Qwen3VL::generate_with_prompt(chat_meta_info_t& meta_info, lm_unifor
     return this->_shared_generate(meta_info, length_limit, os);
 }
 
-// Non-stream
-NonStreamResult Qwen3VL::parse_nstream_content(const std::string response_text) {
-    NonStreamResult result;
-
-    const std::string tool_start_tag = "<tool_call>";
-    const std::string tool_end_tag = "</tool_call>";
-
-    size_t search_from = 0;
-    while (true) {
-        size_t start_pos = response_text.find(tool_start_tag, search_from);
-        if (start_pos == std::string::npos) break;
-
-        size_t block_content_start = start_pos + tool_start_tag.length();
-        size_t end_pos = response_text.find(tool_end_tag, block_content_start);
-        size_t block_end = (end_pos != std::string::npos) ? end_pos : response_text.length();
-        search_from = (end_pos != std::string::npos) ? end_pos + tool_end_tag.length() : block_end;
-
-        std::string json_str = response_text.substr(block_content_start, block_end - block_content_start);
-
-        std::string name, arguments;
-        try {
-            auto j = nlohmann::json::parse(json_str);
-            if (j.contains("name")) name = j["name"].get<std::string>();
-            if (j.contains("arguments")) {
-                arguments = j["arguments"].is_string()
-                    ? j["arguments"].get<std::string>()
-                    : j["arguments"].dump();
-            }
-        } catch (...) {
-            std::string key_name = "\"name\": \"";
-            size_t ns = json_str.find(key_name);
-            if (ns != std::string::npos) {
-                ns += key_name.length();
-                size_t ne = json_str.find("\"", ns);
-                if (ne != std::string::npos) name = json_str.substr(ns, ne - ns);
-            }
-            std::string key_args = "\"arguments\":";
-            size_t ap = json_str.find(key_args);
-            if (ap != std::string::npos) {
-                size_t bs = json_str.find("{", ap);
-                size_t be = json_str.rfind("}");
-                if (bs != std::string::npos && be != std::string::npos && be > bs)
-                    arguments = json_str.substr(bs, be - bs + 1);
-            }
-        }
-
-        result.tool_calls_list.emplace_back(name, arguments);
-    }
-
-    if (result.tool_calls_list.empty()) {
-        result.content = response_text;
-    } else {
-        result.tool_name = result.tool_calls_list[0].first;
-        result.tool_args = result.tool_calls_list[0].second;
-    }
-
-    return result;
-}
-
-// Stream
-StreamResult Qwen3VL::parse_stream_content(const std::string content) {
-    std::string tool_start_tag = "<tool_call>";
-    std::string tool_end_tag = "</tool_call>";
-
-    StreamResult result;
-    result.type = StreamEventType::CONTENT;
-
-    if (content.find(tool_start_tag) != std::string::npos) {
-        is_in_tool_block_ = true;
-        tool_name_.clear();
-        result.type = StreamEventType::WAITING;
-        return result;
-    }
-
-    if (content.find("</tool_call>") != std::string::npos) {
-        is_in_tool_block_ = false;
-
-        try {
-            auto j = nlohmann::json::parse(tool_name_);
-
-            result.type = StreamEventType::TOOL_DONE;
-            result.tool_id = "call_" + std::to_string(std::time(nullptr));
-
-            if (j.contains("name")) {
-                result.tool_name = j["name"].get<std::string>();
-            }
-
-            if (j.contains("arguments")) {
-                if (j["arguments"].is_string()) {
-                    result.tool_args_str = j["arguments"].get<std::string>();
-                }
-                else {
-                    result.tool_args_str = j["arguments"].dump();
-                }
-            }
-        }
-        catch (...) {
-            result.type = StreamEventType::CONTENT;
-            result.content = "[Error parsing tool call]";
-        }
-        return result;
-    }
-
-    if (is_in_tool_block_) {
-        tool_name_ += content;
-        result.type = StreamEventType::WAITING;
-        return result;
-    }
-
-    result.content = content;
-    return result;
-
-}
-
-
 /************              Qwen3VL_Flash            **************/
 
 int Qwen3VL_Flash::_pin_system_prefix(const std::string& system_text) {
@@ -485,8 +370,6 @@ void Qwen3VL_Flash::_reset_turn() {
     }
     this->sampler->reset_penalties();
     this->last_token = -1;
-    this->reset_parser();
-    this->tool_name_.clear();
     this->profiler_list[PREFILL_TIME].reset();
     this->profiler_list[DECODING_TIME].reset();
     this->profiler_list[SAMPLING_TIME].reset();
@@ -555,6 +438,7 @@ bool Qwen3VL_Flash::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& inpu
     }
 
     this->token_history = tokens;
+    this->_begin_turn(meta_info, tokens);
     std::vector<int> tokens_to_prefill(tokens.begin() + skip, tokens.end());
 
     auto prefill_start_time = this->profiler_list[PREFILL_TIME].start();
@@ -577,7 +461,8 @@ bool Qwen3VL_Flash::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& inpu
     this->total_tokens = static_cast<uint32_t>(tokens.size());
 
     this->profiler_list[SAMPLING_TIME].start();
-    this->last_token = this->sampler->sample(y);
+    this->last_token = this->_sample(y, meta_info);
+    meta_info.insert_sample_pending = true;
     this->profiler_list[SAMPLING_TIME].stop(1);
     return true;
 }
@@ -608,8 +493,6 @@ std::string Qwen3VL_Flash::generate(chat_meta_info_t& meta_info, int length_limi
         while (true) {
             if (is_cancelled()) {
                 reason = CANCEL_DETECTED;
-                this->reset_parser();
-                this->tool_name_.clear();
                 break;
             }
 
@@ -618,7 +501,7 @@ std::string Qwen3VL_Flash::generate(chat_meta_info_t& meta_info, int length_limi
             this->profiler_list[DECODING_TIME].stop(1);
 
             this->profiler_list[SAMPLING_TIME].start();
-            last_sampled_token = this->sampler->sample(y);
+            last_sampled_token = this->_sample(y, meta_info);
             this->profiler_list[SAMPLING_TIME].stop(1);
             this->total_tokens++;
 

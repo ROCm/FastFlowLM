@@ -184,10 +184,6 @@ std::string DeepSeek_r1_8b::generate(chat_meta_info_t& meta_info, int length_lim
     while (this->total_tokens < this->MAX_L){
         if (is_cancelled()) {
             reason = CANCEL_DETECTED;
-            buffer_.clear();
-            current_mode_ = StreamEventType::CONTENT;
-            tool_name_.clear();
-            is_in_tool_block_ = false;
             break;
         }
         this->profiler_list[DECODING_TIME].start();
@@ -195,7 +191,7 @@ std::string DeepSeek_r1_8b::generate(chat_meta_info_t& meta_info, int length_lim
         this->profiler_list[DECODING_TIME].stop(1);
 
         this->profiler_list[SAMPLING_TIME].start();
-        int sampled_token = this->sampler->sample(y);
+        int sampled_token = this->_sample(y, meta_info);
         this->profiler_list[SAMPLING_TIME].stop(1);
         this->total_tokens++;
         last_sampled_token = sampled_token;
@@ -235,75 +231,4 @@ std::string DeepSeek_r1_8b::generate_with_prompt(chat_meta_info_t& meta_info, lm
         return "";
     }
     return this->generate(meta_info, length_limit, os);
-}
-
-NonStreamResult DeepSeek_r1_8b::parse_nstream_content(const std::string response_text) {
-    NonStreamResult result;
-
-    std::string content, reasoning_content;
-
-    std::string think_start_tag = "<think>";
-    std::string think_end_tag = "</think>";
-
-    size_t think_start_pos = response_text.find(think_start_tag);
-    size_t think_end_pos = response_text.find(think_end_tag);
-
-
-    think_start_pos += think_start_tag.length();
-    std::string reasoning_str = response_text.substr(think_start_pos, think_end_pos - think_start_pos);
-    result.reasoning_content = reasoning_str;
-
-    std::string content_str = response_text.substr(think_end_pos + think_end_tag.length());
-    result.content = content_str;
-
-    return result;
-}
-
-StreamResult DeepSeek_r1_8b::parse_stream_content(const std::string content) {
-    const std::string MARKER_THINK_START = "<think>";
-    const std::string MARKER_THINK_END = "</think>";
-
-    StreamResult result;
-    buffer_ += content;
-
-    while (true) {
-        if (current_mode_ == StreamEventType::CONTENT) {
-            // Check for the start of a thought block
-            size_t pos = buffer_.find(MARKER_THINK_START);
-
-            if (pos != std::string::npos) {
-                // Emit content before the tag
-                result.content += buffer_.substr(0, pos);
-                result.type = StreamEventType::CONTENT;
-
-                // Remove "<think>\n" and switch mode
-                buffer_ = buffer_.substr(pos + MARKER_THINK_START.length());
-                current_mode_ = StreamEventType::REASONING;
-                continue;
-            }
-        }
-        else if (current_mode_ == StreamEventType::REASONING) {
-            // Check for the end of a thought block
-            size_t pos = buffer_.find(MARKER_THINK_END);
-
-            if (pos != std::string::npos) {
-                // Emit content before the tag
-                result.content += buffer_.substr(0, pos);
-                result.type = StreamEventType::REASONING;
-
-                // Remove "</think>\n" and switch mode
-                buffer_ = buffer_.substr(pos + MARKER_THINK_END.length());
-                current_mode_ = StreamEventType::CONTENT;
-                continue;
-            }
-        }
-
-        // Flush remaining buffer
-        result.content += buffer_;
-        result.type = current_mode_;
-        buffer_.clear();
-        break;
-    }
-
-    return result;
 }

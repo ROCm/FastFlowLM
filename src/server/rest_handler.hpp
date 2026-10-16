@@ -14,6 +14,8 @@
 #include "AutoEmbeddingModel/all_embedding_model.hpp"
 #endif
 #include "model_list.hpp"
+#include "chat/chat_parser.hpp"
+#include "chat/chat_stream.hpp"
 #include "program_args.hpp"
 
 
@@ -114,7 +116,8 @@ private:
     void ensure_asr_model_loaded(const std::string& model_tag);
     void ensure_embed_model_loaded(const std::string& model_tag);
     void configure_chat_engine_parameters(const json& options, const json& request);
-    json build_nstream_response(std::string response_text, chat_meta_info_t& meta_info);
+    json build_nstream_response(const std::string& response_text, chat_meta_info_t& meta_info,
+                                const chat_parse_options& parse_options);
 
 
     std::unique_ptr<AutoModel> auto_chat_engine;

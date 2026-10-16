@@ -357,7 +357,7 @@ void Sampler::ring_buffer_update_sparse(int sampled_index) {
 /// \brief Sample the token
 /// \param x the input buffer
 /// \return the sampled token
-int Sampler::sample_greedy(buffer<bf16>& x) {
+int Sampler::sample_greedy(buffer<bf16>& x, const std::vector<uint32_t>* allowed) {
     const bool penalties_active =
         (this->repeat_last_n != 0) &&
         (this->rep_penalty != 1.0f || this->freq_penalty != 0.0f || this->pre_penalty != 0.0f);
@@ -365,9 +365,10 @@ int Sampler::sample_greedy(buffer<bf16>& x) {
     float best = -std::numeric_limits<float>::infinity();
     int best_id = 0;
 
-    if (penalties_active) {
+    if (penalties_active || allowed != nullptr) {
         // penalties reorder the logits, so they have to land before the argmax.
-        // that needs the fp32 copy, but nothing past it does.
+        // that needs the fp32 copy, but nothing past it does. A mask needs the
+        // copy too: x is the engine's buffer and is never written.
         #if USEAVX2
         const int simd_width = 8;
         int i = 0;
@@ -384,7 +385,10 @@ int Sampler::sample_greedy(buffer<bf16>& x) {
             this->logits[i] = x[i];
         }
         #endif
-        sampler_penalty_apply_sparse();
+        if (penalties_active) {
+            sampler_penalty_apply_sparse();
+        }
+        sampler_allowed_apply(allowed);
         for (int i = 0; i < in_features; i++) {
             if (this->logits[i] > best) {
                 best = this->logits[i];
@@ -447,10 +451,30 @@ int Sampler::sample_greedy(buffer<bf16>& x) {
     return best_id;
 }
 
-int Sampler::sample(buffer<bf16>& x) {
+void Sampler::sampler_allowed_apply(const std::vector<uint32_t>* allowed) {
+    if (allowed == nullptr) {
+        return;
+    }
+    const float banned = -std::numeric_limits<float>::infinity();
+    const size_t words = allowed->size();
+    for (int word = 0; word * 32 < in_features; word++) {
+        const uint32_t bits = static_cast<size_t>(word) < words ? (*allowed)[word] : 0u;
+        if (bits == 0xFFFFFFFFu) {
+            continue;
+        }
+        const int end = std::min(in_features, (word + 1) * 32);
+        for (int i = word * 32; i < end; i++) {
+            if (!((bits >> (i % 32)) & 1u)) {
+                this->logits[i] = banned;
+            }
+        }
+    }
+}
+
+int Sampler::sample(buffer<bf16>& x, const std::vector<uint32_t>* allowed) {
     // PRNG is seeded once at construction, no per-call seeding needed
     if (this->top_k == 1) {
-        return sample_greedy(x);
+        return sample_greedy(x, allowed);
     }
 
     // COPY FROM `x` → `this->logits[]`
@@ -474,6 +498,7 @@ int Sampler::sample(buffer<bf16>& x) {
     #endif
 
     sampler_penalty_apply_sparse();
+    sampler_allowed_apply(allowed);
     sampler_topk_apply(this->top_k);
     if (this->use_optimized_sampling) {
         softmax_with_topp_minp(this->top_p, this->min_p);

@@ -25,9 +25,10 @@ Every model has two layers:
    (`lib<model>_npu.so` / `<model>_npu.dll`). You normally do **not** write this; it
    comes from the kernel/IRON project.
 2. **The AutoModel wrapper** — `class <Model> : public AutoModel`. This is what you
-   write. It owns the tokenizer, sampler, chat template, prompt cache and the
-   streaming / tool-call parsers, and drives the engine through
-   `prefill()` / `forward()` / `checkpoint()` / `restore()`.
+   write. It owns the tokenizer, sampler, chat template and prompt cache, and
+   drives the engine through `prefill()` / `forward()` / `checkpoint()` / `restore()`.
+   Reasoning and tool-call parsing is not per model: the shared chat library
+   (`common/chat/`) detects the format from the chat template.
 
 ---
 
@@ -93,14 +94,11 @@ void load_model(std::string model_path, json model_info,
                 int default_context_length, bool enable_preemption) override;
 chat_template_type_t get_chat_template_type() override;   // chat_ml | harmony | gemma4
 bool configure_parameter(std::string name, const std::any& value) override;
-NonStreamResult parse_nstream_content(const std::string response_text) override;
-StreamResult parse_stream_content(const std::string content) override;
-StreamResult parse_stream_content_final(const std::string content) override;
+bool thinking_enabled() const override;                    // models with a thinking switch
 ```
 
-Also declare the private helpers the base class expects you to supply:
-`setup_tokenizer(std::string model_path)` and, if you have a streaming parser, a
-shared `parse_stream_content_impl(const std::string, bool is_final)`.
+Also declare the private helper the base class expects you to supply:
+`setup_tokenizer(std::string model_path)`.
 
 ---
 
@@ -182,12 +180,21 @@ keys per message rather than failing.
 restore. `generate_with_prompt` is just `insert()` → optional `"<think>\n"` banner →
 `generate()`.
 
-### 2g. Stream & tool-call parsers
+A model with its own decode loop (e.g. one that holds the think prefix back from
+`insert()` and feeds it in `generate()`, like `modeling_qwen3_5vl.cpp` and
+`modeling_minicpm_v.cpp`) must keep the decoding constraint in step:
 
-Map the model's marker vocabulary to `StreamResult` / `NonStreamResult`. Gemma4, for
-example, uses `<|channel>thought` / `<channel|>` for reasoning and
-`<|tool_call>` / `<tool_call|>` for tool calls, with relaxed-JSON arguments delimited
-by `<|"|>` that need a normalizing rewrite pass before `nlohmann::json::parse`.
+- sample every token with `_sample(y, meta_info)`, never `sampler->sample()` directly;
+- report each preamble token that is part of the output with `_force_token()`;
+- call `_skip_insert_sample()` before feeding preamble tokens that never reach the
+  output (the empty think block when thinking is off).
+
+### 2g. Reasoning & tool-call format
+
+Nothing to write if the chat template uses a format `chat_format_detect()` in
+`common/chat/chat_format.cpp` already knows (`<think>`, Hermes JSON or Qwen XML
+`<tool_call>`, LFM2, Gemma4, Harmony). The server log prints the detected one at load
+(`Chat format: ...`); a new marker vocabulary is added there, not in the model.
 
 ---
 

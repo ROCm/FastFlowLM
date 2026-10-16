@@ -16,6 +16,7 @@
 -include ../common.mk
 
 SOURCES += $(wildcard ../../common/AutoModel/automodel.cpp)
+SOURCES += $(CHAT_SOURCES)
 SOURCES += $(wildcard ../../common/AutoModel/modeling_phi4.cpp)
 SOURCES += $(wildcard ../../include/AutoModel/automodel.hpp)
 SOURCES += $(wildcard ../../include/AutoModel/modeling_phi4.hpp)

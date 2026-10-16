@@ -102,7 +102,7 @@ public:
     ///       Going through the general path would allocate and partial_sort a
     ///       vocab-sized array of triples and run three full-vocab softmaxes for
     ///       a result that never depends on any of it.
-    int sample_greedy(buffer<bf16>& x);
+    int sample_greedy(buffer<bf16>& x, const std::vector<uint32_t>* allowed = nullptr);
 
     void sampler_topk_apply(int k);
     void sampler_topp_apply(float p);
@@ -113,7 +113,12 @@ public:
     void ring_buffer_update_sparse(int sampled_index);
     
     /// \brief Sample the token
-    /// \param x the input buffer
+    /// \param x the input buffer, only read
+    /// \param allowed optional bitmask, bit i of word i/32 set when token i may be
+    ///        sampled; applied to the sampler's own copy of the logits
     /// \return the sampled token
-    int sample(buffer<bf16>& x);
+    int sample(buffer<bf16>& x, const std::vector<uint32_t>* allowed = nullptr);
+
+    /// \brief Push every token the bitmask does not allow to -inf in this->logits
+    void sampler_allowed_apply(const std::vector<uint32_t>* allowed);
 };

@@ -89,6 +89,7 @@ void Phi4::setup_tokenizer(const nlohmann::json& config) {
     chat_tmpl = std::move(chat);
     user_system_prompt.clear();
     extra_context["user_system_prompt"] = user_system_prompt;
+    _detect_chat_format(config["chat_template"].get<std::string>());
 }
 
 std::string Phi4::apply_chat_template(nlohmann::ordered_json& messages,

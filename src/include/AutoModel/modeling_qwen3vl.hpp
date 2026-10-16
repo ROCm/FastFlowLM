@@ -41,7 +41,6 @@ private:
 
 protected:
     static constexpr int IMAGE_SOFT_TOKEN_ID = 151655;
-    static constexpr int TOOL_START_TOKEN_ID = 151657;
 
     qwen3vl_image_t load_image(const std::string& filename);
     qwen3vl_image_t load_image_base64(const std::string& base64_string);
@@ -83,17 +82,10 @@ public:
     std::string generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled = [] { return false; }) override;
     std::string generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os = std::cout) override;
     std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object()) override;
-    NonStreamResult parse_nstream_content(const std::string response_text);
-    StreamResult parse_stream_content(const std::string content);
     bool check_using_checkpint() {
 		return false;
 	}
 
-    /// \note Qwen3-VL opens every tool call with <tool_call>, so masking that one
-    ///       token is enough to honour tool_choice=none.
-    int get_tool_start_token_id() const override {
-        return TOOL_START_TOKEN_ID;
-    }
 
     /// \brief Configure a parameter with type-erased value
 	/// \param parameter_name the name of the parameter

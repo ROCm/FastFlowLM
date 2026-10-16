@@ -18,6 +18,7 @@
 
 
 SOURCES += ../../common/AutoModel/automodel.cpp
+SOURCES += $(CHAT_SOURCES)
 SOURCES += ../../common/AutoModel/modeling_qwen2vl.cpp
 SOURCES += ../../common/AutoModel/modeling_qwen2vl_image.cpp
 SOURCES += ../../common/image_process_utils/imageproc.cpp

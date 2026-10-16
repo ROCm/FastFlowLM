@@ -1,3 +1,6 @@
 [submodule "third_party/tokenizers-cpp"]
 	path = third_party/tokenizers-cpp
 	url = https://github.com/mlc-ai/tokenizers-cpp
+[submodule "third_party/xgrammar"]
+	path = third_party/xgrammar
+	url = https://github.com/mlc-ai/xgrammar

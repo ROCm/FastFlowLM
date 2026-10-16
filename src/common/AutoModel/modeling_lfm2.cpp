@@ -84,176 +84,6 @@ std::string LFM2::generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_i
     return this->generate(meta_info, length_limit, os);
 }
 
-StreamResult LFM2::parse_stream_content(const std::string content) {
-    const std::string TOOL_START = "<|tool_call_start|>";
-    const std::string TOOL_END = "<|tool_call_end|>";
-
-    StreamResult result;
-    buffer_ += content;  
-
-    while (true) {
-        if (!is_in_tool_block_) {
-            size_t tool_start_pos = buffer_.find(TOOL_START);
-
-            if (tool_start_pos != std::string::npos) {
-                if (tool_start_pos > 0) {
-                    result.content = buffer_.substr(0, tool_start_pos);
-                    result.type = StreamEventType::CONTENT;
-                    buffer_ = buffer_.substr(tool_start_pos);
-                    return result;
-                }
-
-                is_in_tool_block_ = true;
-                tool_name_.clear();
-                buffer_ = buffer_.substr(TOOL_START.length());
-                result.type = StreamEventType::WAITING;
-                return result;
-            }
-            else {
-                if (!buffer_.empty()) {
-                    result.content = buffer_;
-                    result.type = StreamEventType::CONTENT;
-                    buffer_.clear();
-                    return result;
-                }
-                break;
-            }
-        }
-
-        if (is_in_tool_block_) {
-            size_t tool_end_pos = buffer_.find(TOOL_END);
-
-            if (tool_end_pos != std::string::npos) {
-                tool_name_ += buffer_.substr(0, tool_end_pos);
-                buffer_ = buffer_.substr(tool_end_pos + TOOL_END.length());
-                is_in_tool_block_ = false;
-
-                std::string raw = tool_name_;
-
-                size_t start = raw.find_first_not_of(" \t\n\r[");
-                if (start == std::string::npos) {
-                    result.type = StreamEventType::CONTENT;
-                    result.content = "[Error: Empty tool call]";
-                    return result;
-                }
-                raw = raw.substr(start);
-
-                size_t pos_open = raw.find('(');
-                if (pos_open == std::string::npos) {
-                    result.type = StreamEventType::CONTENT;
-                    result.content = "[Error: No function bracket found]";
-                    return result;
-                }
-
-                std::string fn_name = raw.substr(0, pos_open);
-                size_t name_end = fn_name.find_last_not_of(" \t\n\r");
-                fn_name = fn_name.substr(0, name_end + 1);
-
-                int paren_count = 0;
-                size_t pos_close = pos_open;
-                for (size_t i = pos_open; i < raw.length(); ++i) {
-                    if (raw[i] == '(') paren_count++;
-                    if (raw[i] == ')') {
-                        paren_count--;
-                        if (paren_count == 0) {
-                            pos_close = i;
-                            break;
-                        }
-                    }
-                }
-
-                std::string args_part = raw.substr(pos_open + 1, pos_close - pos_open - 1);
-
-                json args_json = json::object();
-
-                size_t pos = 0;
-                while (pos < args_part.length()) {
-                    while (pos < args_part.length() &&
-                        (args_part[pos] == ' ' || args_part[pos] == ',' ||
-                            args_part[pos] == '\t' || args_part[pos] == '\n')) {
-                        pos++;
-                    }
-                    if (pos >= args_part.length()) break;
-
-                    size_t eq_pos = args_part.find('=', pos);
-                    if (eq_pos == std::string::npos) break;
-
-                    std::string key = args_part.substr(pos, eq_pos - pos);
-                    size_t key_start = key.find_first_not_of(" \t\n\r");
-                    size_t key_end = key.find_last_not_of(" \t\n\r");
-                    if (key_start != std::string::npos) {
-                        key = key.substr(key_start, key_end - key_start + 1);
-                    }
-
-                    pos = eq_pos + 1;
-                    while (pos < args_part.length() &&
-                        (args_part[pos] == ' ' || args_part[pos] == '\t')) {
-                        pos++;
-                    }
-
-                    std::string value;
-                    if (pos < args_part.length() && args_part[pos] == '"') {
-                        pos++; 
-                        size_t value_end = pos;
-                        while (value_end < args_part.length() && args_part[value_end] != '"') {
-                            if (args_part[value_end] == '\\') value_end++; 
-                            value_end++;
-                        }
-                        value = args_part.substr(pos, value_end - pos);
-                        pos = value_end + 1; 
-                        args_json[key] = value;
-                    }
-                    else {
-                        size_t value_end = pos;
-                        while (value_end < args_part.length() &&
-                            args_part[value_end] != ',' && args_part[value_end] != ')') {
-                            value_end++;
-                        }
-                        value = args_part.substr(pos, value_end - pos);
-                        size_t v_start = value.find_first_not_of(" \t\n\r");
-                        size_t v_end = value.find_last_not_of(" \t\n\r");
-                        if (v_start != std::string::npos) {
-                            value = value.substr(v_start, v_end - v_start + 1);
-                        }
-                        args_json[key] = value;
-                        pos = value_end;
-                    }
-                }
-
-                size_t next_tool_start = pos_close + 1;
-                while (next_tool_start < raw.length() &&
-                    (raw[next_tool_start] == ',' || raw[next_tool_start] == ' ' ||
-                        raw[next_tool_start] == '\t' || raw[next_tool_start] == '\n' ||
-                        raw[next_tool_start] == ']')) {
-                    next_tool_start++;
-                }
-
-                if (next_tool_start < raw.length()) {
-                    buffer_ = TOOL_START + "[" + raw.substr(next_tool_start) + "]" + TOOL_END + buffer_;
-                }
-
-                result.type = StreamEventType::TOOL_DONE;
-                result.tool_id = "call_" + std::to_string(std::time(nullptr));
-                result.tool_name = fn_name;
-                result.tool_args_str = args_json.dump();
-
-                return result;
-
-            }
-            else {
-                tool_name_ += buffer_;
-                buffer_.clear();
-                result.type = StreamEventType::WAITING;
-                return result;
-            }
-        }
-    }
-
-    result.type = StreamEventType::WAITING;
-    return result;
-}
-
-
 /***********              LFM2_5_TK family            ***********/
 LFM2_5_TK::LFM2_5_TK(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "LFM2_5_TK") {}
 
@@ -358,6 +188,7 @@ std::string LFM2_5_TK::generate(chat_meta_info_t& meta_info, int length_limit, s
 
     this->token_history.push_back(think_start_id);
     this->profiler_list[DECODING_TIME].start();
+    this->_force_token(meta_info, think_start_id);
     this->lm_engine->forward(think_start_id);
     this->profiler_list[DECODING_TIME].stop(1);
     token_str = this->tokenizer->run_time_decoder(think_start_id);
@@ -367,11 +198,12 @@ std::string LFM2_5_TK::generate(chat_meta_info_t& meta_info, int length_limit, s
     // \n
     this->token_history.push_back(708);
     this->profiler_list[DECODING_TIME].start();
+    this->_force_token(meta_info, 708);
     buffer<bf16> y = this->lm_engine->forward(708);
     this->profiler_list[DECODING_TIME].stop(1);
     token_str = this->tokenizer->run_time_decoder(708);
     result += token_str;
-    sampled_token = this->sampler->sample(y);
+    sampled_token = this->_sample(y, meta_info);
     os << token_str << std::flush;
 
     this->total_tokens++;
@@ -389,11 +221,6 @@ std::string LFM2_5_TK::generate(chat_meta_info_t& meta_info, int length_limit, s
     while (this->total_tokens < this->MAX_L){
         if (is_cancelled()) {
             reason = CANCEL_DETECTED;
-            // reset stream content 
-            buffer_.clear();
-            current_mode_ = StreamEventType::CONTENT;
-            tool_name_.clear();
-            is_in_tool_block_ = false;
             break;
         }
         this->profiler_list[DECODING_TIME].start();
@@ -401,7 +228,7 @@ std::string LFM2_5_TK::generate(chat_meta_info_t& meta_info, int length_limit, s
         this->profiler_list[DECODING_TIME].stop(1);
 
         this->profiler_list[SAMPLING_TIME].start();
-        int sampled_token = this->sampler->sample(y);
+        int sampled_token = this->_sample(y, meta_info);
         this->profiler_list[SAMPLING_TIME].stop(1);
         this->total_tokens++;
         last_sampled_token = sampled_token;
@@ -440,239 +267,4 @@ std::string LFM2_5_TK::generate_with_prompt(chat_meta_info_t& meta_info, lm_unif
         return "";
     }
     return this->generate(meta_info, length_limit, os);
-}
-
-NonStreamResult LFM2_5_TK::parse_nstream_content(const std::string response_text) {
-    NonStreamResult result;
-
-    std::string content, reasoning_content;
-
-    std::string think_start_tag = "<think>";
-    std::string think_end_tag = "</think>";
-
-    size_t think_start_pos = response_text.find(think_start_tag);
-    size_t think_end_pos = response_text.find(think_end_tag);
-
-
-    think_start_pos += think_start_tag.length();
-    std::string reasoning_str = response_text.substr(think_start_pos, think_end_pos - think_start_pos);
-    result.reasoning_content = reasoning_str;
-
-    std::string content_str = response_text.substr(think_end_pos + think_end_tag.length());
-    result.content = content_str;
-
-    return result;
-}
-
-StreamResult LFM2_5_TK::parse_stream_content(const std::string content) {
-    const std::string TOOL_START = "<|tool_call_start|>";
-    const std::string TOOL_END = "<|tool_call_end|>";
-    const std::string MARKER_THINK_START = "<think>";
-    const std::string MARKER_THINK_END = "</think>";
-
-    StreamResult result;
-    buffer_ += content;  
-
-    while (true) {
-        if (!is_in_tool_block_) {
-            size_t tool_start_pos = buffer_.find(TOOL_START);
-
-            if (tool_start_pos != std::string::npos) {
-                if (tool_start_pos > 0) {
-                    result.content = buffer_.substr(0, tool_start_pos);
-                    result.type = current_mode_;
-                    buffer_ = buffer_.substr(tool_start_pos);
-                    return result;
-                }
-
-                is_in_tool_block_ = true;
-                tool_name_.clear();
-                buffer_ = buffer_.substr(TOOL_START.length());
-                result.type = StreamEventType::WAITING;
-                return result;
-            }
-            //else {
-            //    if (!buffer_.empty()) {
-            //        result.content = buffer_;
-            //        result.type = StreamEventType::CONTENT;
-            //        buffer_.clear();
-            //        return result;
-            //    }
-            //    break;
-            //}
-        }
-
-        if (is_in_tool_block_) {
-            size_t tool_end_pos = buffer_.find(TOOL_END);
-
-            if (tool_end_pos != std::string::npos) {
-                tool_name_ += buffer_.substr(0, tool_end_pos);
-                buffer_ = buffer_.substr(tool_end_pos + TOOL_END.length());
-                is_in_tool_block_ = false;
-
-                std::string raw = tool_name_;
-
-                size_t start = raw.find_first_not_of(" \t\n\r[");
-                if (start == std::string::npos) {
-                    result.type = StreamEventType::CONTENT;
-                    result.content = "[Error: Empty tool call]";
-                    return result;
-                }
-                raw = raw.substr(start);
-
-                size_t pos_open = raw.find('(');
-                if (pos_open == std::string::npos) {
-                    result.type = StreamEventType::CONTENT;
-                    result.content = "[Error: No function bracket found]";
-                    return result;
-                }
-
-                std::string fn_name = raw.substr(0, pos_open);
-                size_t name_end = fn_name.find_last_not_of(" \t\n\r");
-                fn_name = fn_name.substr(0, name_end + 1);
-
-                int paren_count = 0;
-                size_t pos_close = pos_open;
-                for (size_t i = pos_open; i < raw.length(); ++i) {
-                    if (raw[i] == '(') paren_count++;
-                    if (raw[i] == ')') {
-                        paren_count--;
-                        if (paren_count == 0) {
-                            pos_close = i;
-                            break;
-                        }
-                    }
-                }
-
-                std::string args_part = raw.substr(pos_open + 1, pos_close - pos_open - 1);
-
-                json args_json = json::object();
-
-                size_t pos = 0;
-                while (pos < args_part.length()) {
-                    while (pos < args_part.length() &&
-                        (args_part[pos] == ' ' || args_part[pos] == ',' ||
-                            args_part[pos] == '\t' || args_part[pos] == '\n')) {
-                        pos++;
-                    }
-                    if (pos >= args_part.length()) break;
-
-                    size_t eq_pos = args_part.find('=', pos);
-                    if (eq_pos == std::string::npos) break;
-
-                    std::string key = args_part.substr(pos, eq_pos - pos);
-                    size_t key_start = key.find_first_not_of(" \t\n\r");
-                    size_t key_end = key.find_last_not_of(" \t\n\r");
-                    if (key_start != std::string::npos) {
-                        key = key.substr(key_start, key_end - key_start + 1);
-                    }
-
-                    pos = eq_pos + 1;
-                    while (pos < args_part.length() &&
-                        (args_part[pos] == ' ' || args_part[pos] == '\t')) {
-                        pos++;
-                    }
-
-                    std::string value;
-                    if (pos < args_part.length() && args_part[pos] == '"') {
-                        pos++; 
-                        size_t value_end = pos;
-                        while (value_end < args_part.length() && args_part[value_end] != '"') {
-                            if (args_part[value_end] == '\\') value_end++; 
-                            value_end++;
-                        }
-                        value = args_part.substr(pos, value_end - pos);
-                        pos = value_end + 1; 
-                        args_json[key] = value;
-                    }
-                    else {
-                        size_t value_end = pos;
-                        while (value_end < args_part.length() &&
-                            args_part[value_end] != ',' && args_part[value_end] != ')') {
-                            value_end++;
-                        }
-                        value = args_part.substr(pos, value_end - pos);
-                        size_t v_start = value.find_first_not_of(" \t\n\r");
-                        size_t v_end = value.find_last_not_of(" \t\n\r");
-                        if (v_start != std::string::npos) {
-                            value = value.substr(v_start, v_end - v_start + 1);
-                        }
-                        args_json[key] = value;
-                        pos = value_end;
-                    }
-                }
-
-                size_t next_tool_start = pos_close + 1;
-                while (next_tool_start < raw.length() &&
-                    (raw[next_tool_start] == ',' || raw[next_tool_start] == ' ' ||
-                        raw[next_tool_start] == '\t' || raw[next_tool_start] == '\n' ||
-                        raw[next_tool_start] == ']')) {
-                    next_tool_start++;
-                }
-
-                if (next_tool_start < raw.length()) {
-                    buffer_ = TOOL_START + "[" + raw.substr(next_tool_start) + "]" + TOOL_END + buffer_;
-                }
-
-                result.type = StreamEventType::TOOL_DONE;
-                result.tool_id = "call_" + std::to_string(std::time(nullptr));
-                result.tool_name = fn_name;
-                result.tool_args_str = args_json.dump();
-
-                return result;
-
-            }
-            else {
-                tool_name_ += buffer_;
-                buffer_.clear();
-                result.type = StreamEventType::WAITING;
-                return result;
-            }
-        }
-
-        // normal and reasoning
-        if (current_mode_ == StreamEventType::CONTENT) {
-            size_t think_start_pos = buffer_.find(MARKER_THINK_START);
-
-            if (think_start_pos != std::string::npos) {
-                if (think_start_pos > 0) {
-                    result.content = buffer_.substr(0, think_start_pos);
-                    result.type = StreamEventType::CONTENT;
-                    buffer_ = buffer_.substr(think_start_pos);
-                    return result;
-                }
-                buffer_ = buffer_.substr(MARKER_THINK_START.length());
-                current_mode_ = StreamEventType::REASONING;
-                continue;
-            }
-        }
-        else if (current_mode_ == StreamEventType::REASONING) {
-            size_t think_end_pos = buffer_.find(MARKER_THINK_END);
-
-            if (think_end_pos != std::string::npos) {
-                if (think_end_pos > 0) {
-                    result.content = buffer_.substr(0, think_end_pos);
-                    result.type = StreamEventType::REASONING;
-                    buffer_ = buffer_.substr(think_end_pos);
-                    return result;
-                }
-                buffer_ = buffer_.substr(MARKER_THINK_END.length());
-                current_mode_ = StreamEventType::CONTENT;
-                continue;
-            }
-        }
-
-        if (!buffer_.empty()) {
-            result.content = buffer_;
-            result.type = current_mode_;
-            buffer_.clear();
-            return result;
-        }
-
-        break;
-
-    }
-
-    result.type = current_mode_;
-    return result;
 }

@@ -709,10 +709,8 @@ class SweepTask:
                     f"stream exceeded the {self.args.request_timeout:.0f}s "
                     f"request timeout after {len(output_content)} characters"
                 )
-            # FLM attaches usage to the final chunk, which also carries a
-            # choices entry with a null delta. Read it before the choices
-            # guard below, so a server that instead sends usage on its own
-            # terminal chunk (the stock OpenAI shape) still gets picked up.
+            # With include_usage the usage arrives on its own terminal chunk
+            # with no choices, so read it before the choices guard below.
             if getattr(chunk, "usage", None):
                 usage = chunk.usage
             if not chunk.choices:
@@ -736,6 +734,8 @@ class SweepTask:
             model=model,
             messages=messages,
             stream=stream,
+            # a stream reports usage only when asked, as OpenAI's does
+            **({"stream_options": {"include_usage": True}} if stream else {}),
             **self.completion_kwargs(),
         )
         if stream:

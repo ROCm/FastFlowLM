@@ -52,33 +52,13 @@
 #include "tensor_utils/q4_npu_eXpress.hpp"
 #include "npu_utils/npu_utils.hpp"
 #include "minja/chat-template.hpp"
+#include "chat/chat_format.hpp"
+#include "chat/chat_constraint.hpp"
+#include "chat/chat_grammar.hpp"
 #include <nlohmann/json.hpp>
 
 // Forward declaration
 struct CancellationToken;
-
-enum class StreamEventType {
-	WAITING,        
-	CONTENT,        
-	REASONING,      
-	TOOL_DONE,
-};
-
-struct StreamResult {
-	StreamEventType type;
-	std::string content;       
-	std::string tool_id;       
-	std::string tool_name;     
-	std::string tool_args_str; 
-};
-
-struct NonStreamResult {
-	std::string content;
-	std::string reasoning_content;
-	std::string tool_name;
-	std::string tool_args;
-	std::vector<std::pair<std::string, std::string>> tool_calls_list; // (name, args) for multiple tool calls
-};
 
 typedef enum {
     EOT_DETECTED, 
@@ -105,15 +85,6 @@ inline std::string stop_reason_to_string(stop_reason_t reason){
     }
 }
 
-/// \brief What the request allows the model to do about tool calls.
-/// \note Only the two modes the server parses today; "required" and the
-///       per-function object form are reported as unsupported and fall back
-///       to TOOL_CHOICE_AUTO.
-typedef enum {
-	TOOL_CHOICE_AUTO,   // the model may emit tool calls (default)
-	TOOL_CHOICE_NONE    // tool call tokens are masked out of the logits
-} tool_choice_t;
-
 struct chat_meta_info_t {
 	int max_prefill_len;
     int prompt_tokens;        // whole prompt, cached prefix included
@@ -125,9 +96,17 @@ struct chat_meta_info_t {
     uint64_t decoding_duration; // in nanoseconds
     stop_reason_t stop_reason;
 	bool restore_allowed;
-	tool_choice_t tool_choice;
+	/// \brief Restricts sampling for this request (tool_choice, response_format); may be null
+	std::shared_ptr<decode_constraint> constraint;
+	/// \brief insert() sampled a token that generate() has not used yet
+	/// \note Models that make the model emit preamble tokens in generate()
+	///       throw that sample away; _force_token() takes it back out of the constraint.
+	bool insert_sample_pending = false;
+	/// \brief Decoded tail of the prompt as fed to the model; the output parser
+	///        reads it to tell whether generation starts inside a reasoning block
+	std::string prompt_tail;
 
-	chat_meta_info_t() : max_prefill_len(0), prompt_tokens(0), cached_prompt_tokens(0), generated_tokens(0), total_duration(0), load_duration(0), prefill_duration(0), decoding_duration(0), stop_reason(EOT_DETECTED), restore_allowed(false), tool_choice(TOOL_CHOICE_AUTO) {}
+	chat_meta_info_t() : max_prefill_len(0), prompt_tokens(0), cached_prompt_tokens(0), generated_tokens(0), total_duration(0), load_duration(0), prefill_duration(0), decoding_duration(0), stop_reason(EOT_DETECTED), restore_allowed(false) {}
 };
 
 typedef enum {
@@ -217,6 +196,7 @@ protected:
 	uint32_t total_tokens = 0;
 	std::unique_ptr<LM_Config> lm_config = nullptr;
 	std::unique_ptr<minja::chat_template> chat_tmpl = nullptr;
+	chat_format_spec chat_format;
 
 	std::string bos_token;
     std::string eos_token;
@@ -243,18 +223,13 @@ protected:
 	std::vector<profiler> profiler_list;
 	time_utils::time_with_unit last_prefill_time;
 
-	std::string tool_name_; 
-	bool is_in_tool_block_ = false;
-	std::string buffer_;
-	StreamEventType current_mode_ = StreamEventType::CONTENT;
-	bool waiting_for_header_ = true;
-
-
 
 	void _shared_load_model(std::string model_path, json model_info, int default_context_length = -1, bool enable_preemption = false);
 	void _shared_initialize_model_state(std::string model_path, json model_info, int context_length);
 	void _shared_initialize_legacy_npu(bool enable_preemption);
 	nlohmann::json _shared_setup_tokenizer(std::string model_path);
+	/// \brief Detect chat_format from the template; the tokenizer and bos id must be set up
+	void _detect_chat_format(const std::string& template_src);
 
 	/// \brief Load a model onto its chosen backend
 	/// \param model_path the model directory
@@ -306,14 +281,35 @@ protected:
 	buffer<bf16> _chunked_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled = [] { return false; }, void* payload = nullptr, int first_len_run = 0);
 	std::string _shared_generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled = [] { return false; });
 
-	/// \brief Push the tool start token out of contention before sampling.
-	/// \param y the logits of the token about to be sampled
-	/// \param meta_info the meta information of the chat, carrying the tool choice
-	/// \note No-op unless the request asked for tool_choice=none and this model
-	///       reports a tool start token, so the default path is untouched.
-	void _apply_tool_choice_mask(buffer<bf16>& y, const chat_meta_info_t& meta_info);
+	/// \brief Note where this turn's output starts, once the prompt is final
+	/// \param meta_info the request; gets the prompt tail, and its constraint is started
+	/// \param prompt_tokens the whole prompt as the model sees it
+	/// \note Every insert() calls this before sampling the first token.
+	void _begin_turn(chat_meta_info_t& meta_info, const std::vector<int>& prompt_tokens);
 
-	StreamResult _shared_think_tool_calling_pasrsed(const std::string content);
+	/// \brief Sample the next token under the request's constraint
+	/// \param logits the logits of the token about to be sampled, masked in place
+	/// \param meta_info the request, carrying the constraint
+	/// \return the sampled token, already reported to the constraint
+	int _sample(buffer<bf16>& logits, chat_meta_info_t& meta_info);
+
+	/// \brief Report a token the model is made to emit rather than samples
+	/// \note For the think preamble some generate()s feed after insert(); the
+	///       constraint has to see it like any generated text. The first forced
+	///       token of a turn also drops the sample insert() made, which such a
+	///       generate() never uses.
+	void _force_token(chat_meta_info_t& meta_info, int token);
+
+	/// \brief Drop the sample insert() made when generate() feeds tokens instead
+	/// \note For preamble tokens that never reach the output, like the empty
+	///       think block fed when thinking is off: the constraint does not see
+	///       them, as the output parser does not either.
+	void _skip_insert_sample(chat_meta_info_t& meta_info);
+	/// \brief Scratch bitmask the constraint fills before each sample
+	std::vector<uint32_t> constraint_mask_;
+	/// \brief Grammar compiler over this model's vocabulary, built on first use
+	std::unique_ptr<chat_grammar_engine> grammar_engine_;
+	std::string grammar_engine_path_;
 
 public:
 	//************ Shared by all models *************/
@@ -325,12 +321,6 @@ public:
 	virtual ~AutoModel();
 
 	AutoModel(flm_rt::device* npu_device_inst, std::string current_model = "");
-
-	void reset_parser() {
-		buffer_.clear();
-		is_in_tool_block_ = false;
-		current_mode_ = StreamEventType::CONTENT;
-	}
 
 	/// \brief Clear the context
 	virtual void clear_context();
@@ -495,20 +485,29 @@ public:
 	
 	virtual void load_model(std::string model_path, json model_info, int default_context_length = -1, bool enable_preemption = false, const std::string& backend = "") {}
 	virtual std::string generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled = [] { return false; }) = 0;
+	/// \brief Turn structure of the prompt, used by the prompt cache only
+	/// \note Output parsing goes by get_chat_format(), not by this
 	virtual chat_template_type_t get_chat_template_type() {
 		return chat_template_type_t::chat_ml;
+	}
+	/// \brief How this model writes reasoning and tool calls
+	/// \note Detected from the chat template and the tokenizer when the tokenizer is set up
+	const chat_format_spec& get_chat_format() const {
+		return this->chat_format;
 	}
 	virtual bool check_using_checkpint() {
 		return true;
 	}
-
-	/// \brief The token that opens a tool call for this model
-	/// \return the token id, or -1 if this model has no single such token
-	/// \note Models that report an id can have tool calling suppressed through
-	///       tool_choice=none; the rest keep emitting tool calls either way.
-	virtual int get_tool_start_token_id() const {
-		return -1;
+	/// \brief Whether the chat template is rendered with thinking on
+	/// \note Only models with a thinking switch override this; the rest reason or
+	///       not as their template decides, which the constraint leaves alone.
+	virtual bool thinking_enabled() const {
+		return true;
 	}
+
+	/// \brief Build the sampling constraint a request asks for
+	/// \return null when the request needs no constraint
+	std::shared_ptr<decode_constraint> make_constraint(const chat_constraint_request& request);
 	/// \brief Insert the tokens
 	/// \param tokens the tokens
 	/// \param is_system_prompt the is system prompt
@@ -549,31 +548,6 @@ public:
 
 	virtual std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object()) = 0;
 
-	virtual NonStreamResult parse_nstream_content(const std::string response_text) {
-		NonStreamResult result;
-		result.content = response_text;
-		return result;
-	}
-
-	virtual StreamResult parse_stream_content(const std::string content) {
-		//header_print("AUTOMODEL PARSING", content);
-
-		StreamResult result;
-		result.type = StreamEventType::CONTENT; 
-		result.content = content;
-
-		return result;
-	}
-
-	virtual StreamResult parse_stream_content_final(const std::string content) {
-		if (!content.empty()) {
-			return parse_stream_content(content);
-		}
-
-		StreamResult result;
-		result.type = StreamEventType::WAITING;
-		return result;
-	}
 };
 
 

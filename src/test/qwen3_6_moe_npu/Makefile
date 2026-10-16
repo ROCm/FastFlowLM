@@ -14,6 +14,7 @@
 
 
 SOURCES += $(wildcard ../../common/AutoModel/automodel.cpp)
+SOURCES += $(CHAT_SOURCES)
 SOURCES += $(wildcard ../../common/AutoModel/modeling_qwen3_6_moe.cpp)
 SOURCES += $(wildcard ../../common/AutoModel/modeling_qwen3_6_moe_image.cpp)
 SOURCES += $(wildcard ../../common/image_process_utils/imageproc.cpp)
