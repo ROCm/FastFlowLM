@@ -1,0 +1,15 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+#
+# zizmor configuration
+# Reference: https://docs.zizmor.sh/configuration/
+# Local scan: zizmor --config .github/scan_tools_configs/zizmor.yml .
+#
+# Zizmor configuration for this repository's security scans.
+#
+# This file defines the complete scanner policy;
+# Keep repository-specific suppressions and tuning here.
+#
+# Add rule-specific settings and suppressions under `rules:`.
+
+rules: {}

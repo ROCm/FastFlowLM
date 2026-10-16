@@ -1,0 +1,23 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+#
+# trivy configuration
+# Reference: https://trivy.dev/latest/docs/references/configuration/config-file/
+# Local scan: trivy fs --config .github/scan_tools_configs/trivy.yml .
+#
+# Trivy configuration for this repository's security scans.
+#
+# This file defines the complete scanner policy;
+# Keep repository-specific suppressions and tuning here.
+
+# Environment and generated-output exclusions support local scans; these
+# paths are absent from clean CI checkouts.
+scan:
+  skip-dirs:
+    - .git
+    - .venv*
+    - venv*
+    - build
+    - dist
+    - node_modules
+    - __pycache__
