@@ -17,7 +17,6 @@
 -include ../common.mk
 
 SOURCES += test.cpp
-SOURCES += ../../common/AutoModel/automodel.cpp
 SOURCES += ../../common/modules/sampler.cpp
 SOURCES += ../../common/tokenizer/tokenizer.cpp
 SOURCES += ../../common/whisper/modeling_whisper_audio.cpp

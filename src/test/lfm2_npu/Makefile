@@ -16,6 +16,7 @@
 -include ../common.mk
 
 
+SOURCES += ../../common/AutoModel/model_backend.cpp
 SOURCES += $(wildcard ../../common/AutoModel/automodel.cpp)
 SOURCES += $(wildcard ../../common/AutoModel/modeling_lfm2.cpp)
 SOURCES += $(wildcard ../../include/AutoModel/automodel.hpp)

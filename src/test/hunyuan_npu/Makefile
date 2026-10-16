@@ -36,6 +36,7 @@ endif
 
 SOURCES += test.cpp
 SOURCES += bench_prefill.cpp
+SOURCES += ../../common/AutoModel/model_backend.cpp
 SOURCES += ../../common/AutoModel/automodel.cpp
 SOURCES += ../../common/AutoModel/modeling_hunyuan.cpp
 SOURCES += ../../common/tokenizer/tokenizer.cpp

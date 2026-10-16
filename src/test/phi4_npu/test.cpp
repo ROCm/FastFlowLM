@@ -7,9 +7,18 @@
 #include "utils/utils.hpp"
 #include "utils/vm_args.hpp"
 #include "AutoModel/modeling_phi4.hpp"
+#include "AutoModel/flm_backend.hpp"
 #include "model_list.hpp"
 #include "utils/vm_args.hpp"
 #include "metrices.hpp"
+
+/// \note builtin_backends.cpp names every engine and so links every prebuilt
+///       library; this harness registers just the ones it drives.
+namespace flm::backend {
+void register_builtin_backends(BackendRegistry& registry) {
+    registry.register_backend("phi4", kFlmBackendId, flm_factory<phi4_npu>());
+}
+}  // namespace flm::backend
 
 flm_rt::device npu_device_global;
 
