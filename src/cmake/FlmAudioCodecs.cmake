@@ -36,11 +36,12 @@ if(CMAKE_C_COMPILER)
 endif()
 
 # Short working directories keep MSBuild under Windows' 260-char MAX_PATH on
-# CI runners with deep work directories (see FlmImageCodecs.cmake).
-function(_flm_audio_project name url sha256 byproduct)
+# CI runners with deep work directories (see FlmImageCodecs.cmake). `urls` is
+# a list of mirrors tried in order; the SHA-256 pins the exact tarball.
+function(_flm_audio_project name urls sha256 byproduct)
     set(_work ${CMAKE_BINARY_DIR}/ac/${name})
     ExternalProject_Add(flm_${name}
-        URL ${url}
+        URL ${urls}
         URL_HASH SHA256=${sha256}
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
         EXCLUDE_FROM_ALL TRUE
@@ -56,14 +57,14 @@ function(_flm_audio_project name url sha256 byproduct)
 endfunction()
 
 _flm_audio_project(opus
-    https://downloads.xiph.org/releases/opus/opus-1.6.1.tar.gz
+    "https://downloads.xiph.org/releases/opus/opus-1.6.1.tar.gz;https://ftp.osuosl.org/pub/xiph/releases/opus/opus-1.6.1.tar.gz"
     6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1
     ${_flm_opus_lib}
     -DOPUS_BUILD_PROGRAMS=OFF
     -DOPUS_INSTALL_PKG_CONFIG_MODULE=OFF
     -DOPUS_INSTALL_CMAKE_CONFIG_MODULE=OFF)
 _flm_audio_project(ogg
-    https://downloads.xiph.org/releases/ogg/libogg-1.3.6.tar.gz
+    "https://github.com/xiph/ogg/releases/download/v1.3.6/libogg-1.3.6.tar.gz;https://downloads.xiph.org/releases/ogg/libogg-1.3.6.tar.gz;https://ftp.osuosl.org/pub/xiph/releases/ogg/libogg-1.3.6.tar.gz"
     83e6704730683d004d20e21b8f7f55dcb3383cdf84c0daedf30bde175f774638
     ${_flm_ogg_lib}
     -DINSTALL_DOCS=OFF)
@@ -71,7 +72,7 @@ _flm_audio_project(ogg
 # CMake 4 rejects; let it configure under 3.5 policies (older CMake ignores
 # this variable).
 _flm_audio_project(vorbis
-    https://downloads.xiph.org/releases/vorbis/libvorbis-1.3.7.tar.gz
+    "https://github.com/xiph/vorbis/releases/download/v1.3.7/libvorbis-1.3.7.tar.gz;https://downloads.xiph.org/releases/vorbis/libvorbis-1.3.7.tar.gz;https://ftp.osuosl.org/pub/xiph/releases/vorbis/libvorbis-1.3.7.tar.gz"
     0e982409a9c3fc82ee06e08205b1355e5c6aa4c36bca58146ef399621b0ce5ab
     "${_flm_vorbis_lib};${_flm_vorbisfile_lib}"
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5)
