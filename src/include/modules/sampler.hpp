@@ -102,7 +102,13 @@ public:
     ///       Going through the general path would allocate and partial_sort a
     ///       vocab-sized array of triples and run three full-vocab softmaxes for
     ///       a result that never depends on any of it.
-    int sample_greedy(buffer<bf16>& x);
+    /// \param record_in_history whether the drawn token joins the repetition
+    ///        and frequency windows
+    /// \note Pass false for a draw the caller throws away. Such a token was
+    ///       never generated text, and counting it pushes the tokens that
+    ///       follow it down -- by rep_penalty + freq_penalty each time it
+    ///       occurs.
+    int sample_greedy(buffer<bf16>& x, bool record_in_history = true);
 
     void sampler_topk_apply(int k);
     void sampler_topp_apply(float p);
@@ -115,5 +121,7 @@ public:
     /// \brief Sample the token
     /// \param x the input buffer
     /// \return the sampled token
-    int sample(buffer<bf16>& x);
+    /// \param record_in_history whether the drawn token joins the repetition
+    ///        and frequency windows; see sample_greedy
+    int sample(buffer<bf16>& x, bool record_in_history = true);
 };

@@ -357,7 +357,7 @@ void Sampler::ring_buffer_update_sparse(int sampled_index) {
 /// \brief Sample the token
 /// \param x the input buffer
 /// \return the sampled token
-int Sampler::sample_greedy(buffer<bf16>& x) {
+int Sampler::sample_greedy(buffer<bf16>& x, bool record_in_history) {
     const bool penalties_active =
         (this->repeat_last_n != 0) &&
         (this->rep_penalty != 1.0f || this->freq_penalty != 0.0f || this->pre_penalty != 0.0f);
@@ -443,14 +443,16 @@ int Sampler::sample_greedy(buffer<bf16>& x) {
 
     // callers that inspect the surviving candidates still get a consistent view
     this->top_k_logits.assign(1, logits_t{ best, best_id, 1.0f });
-    ring_buffer_update_sparse(best_id);
+    if (record_in_history) {
+        ring_buffer_update_sparse(best_id);
+    }
     return best_id;
 }
 
-int Sampler::sample(buffer<bf16>& x) {
+int Sampler::sample(buffer<bf16>& x, bool record_in_history) {
     // PRNG is seeded once at construction, no per-call seeding needed
     if (this->top_k == 1) {
-        return sample_greedy(x);
+        return sample_greedy(x, record_in_history);
     }
 
     // COPY FROM `x` → `this->logits[]`
@@ -490,7 +492,9 @@ int Sampler::sample(buffer<bf16>& x) {
     }
 
     int sampled_index = sample_from_probs();
-    ring_buffer_update_sparse(sampled_index);
+    if (record_in_history) {
+        ring_buffer_update_sparse(sampled_index);
+    }
 
     return sampled_index;
 }

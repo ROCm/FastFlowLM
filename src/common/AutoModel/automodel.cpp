@@ -356,7 +356,8 @@ void AutoModel::_shared_validate_capacity(std::size_t rendered_tokens,
     }
 }
 
-bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled, void* payload, int first_len_run, std::optional<int> requested_max_new_tokens) {
+bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled, void* payload, int first_len_run, std::optional<int> requested_max_new_tokens,
+                        bool record_sampled_token) {
     this->_shared_validate_capacity(tokens.size(), requested_max_new_tokens);
 
     // print token history
@@ -423,7 +424,7 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
     }
     this->profiler_list[SAMPLING_TIME].start();
     this->_apply_tool_choice_mask(y, meta_info);
-    this->last_token = this->sampler->sample(y);
+    this->last_token = this->sampler->sample(y, record_sampled_token);
     this->profiler_list[SAMPLING_TIME].stop(1);
     return true;
 }

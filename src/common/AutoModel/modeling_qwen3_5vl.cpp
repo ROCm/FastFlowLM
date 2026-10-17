@@ -290,9 +290,15 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
     size_t n = tokens.size();
     tokens.resize(n - (this->enable_think ? 2 : 4));
 
+    // The draw below is thrown away: generate() force-feeds the think block and
+    // samples again. It must not enter the repetition and frequency windows --
+    // it was never generated text, and for a model that answers without a
+    // thinking block the token predicted here IS the answer letter. Counting it
+    // pushes that letter down by count * freq_penalty + pre_penalty at the position
+    // where it matters, so the model's preferred answer arrives penalised.
     bool success = has_images
-        ? this->_shared_insert(meta_info, tokens, is_cancelled, &image_payload, last_image_token_index)
-        : this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
+        ? this->_shared_insert(meta_info, tokens, is_cancelled, &image_payload, last_image_token_index, std::nullopt, false)
+        : this->_shared_insert(meta_info, tokens, is_cancelled, nullptr, 0, std::nullopt, false);
 
     checkpoint_his = token_history;
     int checkpoint_idx = this->lm_engine->checkpoint();
