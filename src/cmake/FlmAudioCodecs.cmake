@@ -67,10 +67,14 @@ _flm_audio_project(ogg
     83e6704730683d004d20e21b8f7f55dcb3383cdf84c0daedf30bde175f774638
     ${_flm_ogg_lib}
     -DINSTALL_DOCS=OFF)
+# libvorbis 1.3.7 declares cmake_minimum_required(VERSION 2.8.12), which
+# CMake 4 rejects; let it configure under 3.5 policies (older CMake ignores
+# this variable).
 _flm_audio_project(vorbis
     https://downloads.xiph.org/releases/vorbis/libvorbis-1.3.7.tar.gz
     0e982409a9c3fc82ee06e08205b1355e5c6aa4c36bca58146ef399621b0ce5ab
-    "${_flm_vorbis_lib};${_flm_vorbisfile_lib}")
+    "${_flm_vorbis_lib};${_flm_vorbisfile_lib}"
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5)
 ExternalProject_Add_StepDependencies(flm_vorbis configure flm_ogg)
 
 # The include directory must exist at configure time for the imported targets.
