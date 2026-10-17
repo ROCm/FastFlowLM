@@ -39,9 +39,6 @@ endif()
 target_link_libraries(test_gemma4_12b PUBLIC
     gemma4_12b_npu
     xrt_coreutil
-    avformat
-    avcodec
-    avutil
     zlib    
 )
 

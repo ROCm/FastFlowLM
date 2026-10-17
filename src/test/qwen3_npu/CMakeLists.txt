@@ -17,10 +17,6 @@ add_npu_test(
 target_link_libraries(test_qwen3_npu PUBLIC
     qwen3_npu
     xrt_coreutil
-    avformat
-    avcodec
-    avutil
-    swscale
     zlib
 )
 

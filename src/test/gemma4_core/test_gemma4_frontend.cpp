@@ -225,14 +225,14 @@ lm_uniform_input_t TextInput(const std::string& prompt) {
 //   - SafeTensors, ImageMemoryPool/ImageReader, AudioReader: value members
 //     Gemma4e (or the headers it drags in) constructs and destroys as part of
 //     an ordinary object lifetime. Their real implementations open weight
-//     files or decode through FFmpeg; a text-only test never calls into them,
+//     files or decode media (libjpeg-turbo/libopus/...); a text-only test never calls into them,
 //     so only construction/destruction needs to link.
 //   - Gemma4e's own load_image/load_image_base64/preprocess_image/load_audio/
 //     load_audio_base64/clip_audio_length/extract_spectrogram: implemented in
 //     modeling_gemma4e_image.cpp and modeling_gemma4e_audio.cpp, which this
 //     target deliberately does not compile (task A3 is scoped to the
 //     dynamic_cast helper in modeling_gemma4e.cpp only, and pulling those two
-///    files in would pull in FFmpeg). insert() still *calls* these on the
+///    files in would pull in the image/audio codec libraries). insert() still *calls* these on the
 //     image/audio branches, so the symbols must exist; a text-only run never
 //     takes those branches, so the bodies are never exercised.
 // ---------------------------------------------------------------------------

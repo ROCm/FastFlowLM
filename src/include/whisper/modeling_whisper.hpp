@@ -15,14 +15,6 @@
 #include "utils/profiler.hpp"
 #include "lm_config.hpp"
 #include "tensor_utils/q4_npu_eXpress.hpp"
-// FFmpeg includes for image processing only
-extern "C" {
-#include <libavcodec/avcodec.h>
-#include <libswscale/swscale.h>
-#include <libavutil/imgutils.h>
-#include <libavutil/frame.h>
-#include <libavutil/pixfmt.h>
-}
 
 #include <vector>
 #include "typedef.hpp"

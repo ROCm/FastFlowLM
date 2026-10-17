@@ -50,9 +50,6 @@ endif()
 target_link_libraries(test_qwen3_5_omni_npu PUBLIC
     qwen3_5_omni_npu
     xrt_coreutil
-    avformat
-    avcodec
-    avutil
     zlib
 )
 
