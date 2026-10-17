@@ -356,7 +356,15 @@ void AutoModel::_shared_validate_capacity(std::size_t rendered_tokens,
     }
 }
 
-bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled, void* payload, int first_len_run, std::optional<int> requested_max_new_tokens) {
+bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled, void* payload, int first_len_run, std::optional<int> requested_max_new_tokens,
+                        bool record_sampled_token) {
+    // Disarmed here, before anything that can return early: every request goes
+    // through this function, and a request that does not ask for logprobs must
+    // not inherit the arming of an earlier one. Arming happens where the
+    // recording happens, which for Qwen3.5-VL is its own generate().
+    this->sampler->capture_top_logprobs = false;
+    this->sampler->captured = false;
+
     this->_shared_validate_capacity(tokens.size(), requested_max_new_tokens);
 
     // print token history
@@ -423,7 +431,7 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
     }
     this->profiler_list[SAMPLING_TIME].start();
     this->_apply_tool_choice_mask(y, meta_info);
-    this->last_token = this->sampler->sample(y);
+    this->last_token = this->sampler->sample(y, record_sampled_token);
     this->profiler_list[SAMPLING_TIME].stop(1);
     return true;
 }
@@ -500,6 +508,77 @@ void AutoModel::_apply_tool_choice_mask(buffer<bf16>& y, const chat_meta_info_t&
     // the argmax or runs this through softmax, and a finite value can never turn
     // into the inf - inf that would poison the whole distribution.
     y[tool_start_token_id] = bf16(-1e30f);
+}
+
+/// True when nlohmann::json can serialise this string.
+///
+/// A token can be the start of a multi-byte sequence: decoded on its own it is
+/// not valid text, and json::dump() throws on it. Asking the same library that
+/// would throw is exact, where a hand-written UTF-8 check is only an
+/// approximation of what it accepts.
+static bool is_serialisable(const std::string& s) {
+    try {
+        (void)json(s).dump();
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+void AutoModel::_request_logprobs_capture(chat_meta_info_t& meta_info) {
+    // Once per request: the sampler stays armed for all of it, because every
+    // token that reaches the caller's text needs its own distribution.
+    if (!meta_info.want_logprobs || meta_info.logprobs_armed) {
+        return;
+    }
+    meta_info.logprobs_armed = true;
+    this->sampler->captured = false;
+    this->sampler->capture_count = meta_info.top_logprobs_count;
+    this->sampler->capture_top_logprobs = true;
+}
+
+void AutoModel::_record_top_logprobs(chat_meta_info_t& meta_info, int sampled_token) {
+    if (!meta_info.want_logprobs || !this->sampler || !this->sampler->captured) {
+        return;
+    }
+
+    // The sampler's logits are not touched by the sampling -- only
+    // top_k_logits is -- so the value here and the captured logsumexp come
+    // from the same moment.
+    const float lse = this->sampler->captured_logsumexp;
+    auto entry_for = [&](int id) {
+        top_logprob_t e;
+        e.token_id = id;
+        // True log-probability: logit - logsumexp over the WHOLE vocabulary,
+        // not one renormalised over the entries shown. The two differ whenever
+        // top_k is smaller than the vocabulary, which is always.
+        e.logprob = this->sampler->logits[id] - lse;
+        const std::string raw = this->tokenizer
+            ? this->tokenizer->run_time_decoder(id)
+            : std::string();
+        // Decode here, not in the REST handler: that one has no tokenizer.
+        // As unsigned: `char` is signed on x86-64, so a byte above 0x7F would
+        // land here as a negative number, and OpenAI defines `bytes` as
+        // integers 0-255. A client rebuilding the text from them would fail on
+        // every umlaut, every CJK character, every emoji.
+        for (unsigned char c : raw) {
+            e.bytes.push_back(c);
+        }
+        e.token = is_serialisable(raw) ? raw : std::string();
+        return e;
+    };
+
+    logprobs_entry_t entry;
+    if (sampled_token >= 0 && sampled_token < static_cast<int>(this->sampler->logits.size())) {
+        entry.chosen = entry_for(sampled_token);
+    }
+    const auto& src = this->sampler->captured_top_k;
+    const size_t limit = std::min<size_t>(meta_info.top_logprobs_count, src.size());
+    entry.alternatives.reserve(limit);
+    for (size_t i = 0; i < limit; i++) {
+        entry.alternatives.push_back(entry_for(src[i].token_id));
+    }
+    meta_info.logprobs_entries.push_back(std::move(entry));
 }
 
 std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
