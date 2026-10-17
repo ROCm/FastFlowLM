@@ -20,6 +20,9 @@
 #include "dr_libs/dr_flac.h"
 #define DR_MP3_IMPLEMENTATION
 #define DR_MP3_NO_STDIO
+// Decode in float. Without this dr_mp3 synthesizes 16-bit PCM and converts it,
+// which quantizes quiet recordings audibly (~35 dB SNR on 16 kHz speech).
+#define DR_MP3_FLOAT_OUTPUT
 #include "dr_libs/dr_mp3.h"
 
 #include <opus/opus_multistream.h>
@@ -45,8 +48,15 @@ bool has_bytes(const uint8_t* data, size_t size, size_t offset, const char* magi
     return offset + len <= size && std::memcmp(data + offset, magic, len) == 0;
 }
 
+// Real audio sits between telephony (8 kHz) and 384 kHz. Rejecting rates
+// outside a generous range also bounds what resampling can amplify: a header
+// claiming 1 Hz would otherwise turn a 0.5 MB upload into gigabytes at 16 kHz.
+constexpr int kMinSampleRate = 4000;
+constexpr int kMaxSampleRate = 768000;
+
 bool valid_layout(int sample_rate, int channels) {
-    return sample_rate > 0 && channels > 0 && channels <= kMaxChannels;
+    return sample_rate >= kMinSampleRate && sample_rate <= kMaxSampleRate &&
+           channels > 0 && channels <= kMaxChannels;
 }
 
 // ———————————————————————————————————————————————
