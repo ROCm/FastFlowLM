@@ -26,9 +26,10 @@
 #include <immintrin.h>  // For AVX intrinsics
 
 // Decoding, downmix and resampling go through AudioReader. Whisper expects
-// 16 kHz mono; stereo is averaged (0.5 L + 0.5 R), which is what the previous
-// FFmpeg path produced, but samples now stay float instead of passing through
-// 16-bit PCM.
+// 16 kHz mono; stereo is averaged (0.5 L + 0.5 R). The samples then pass
+// through 16-bit PCM exactly as the previous FFmpeg path did (swresample's
+// float -> s16 conversion, then s16 / 32768), so Whisper sees the same input
+// it always has.
 static std::vector<float> load_whisper_audio(AudioReader& reader, const uint8_t* data, size_t size,
                                              const std::string& what) {
     constexpr int TARGET_SAMPLE_RATE = 16000;
@@ -37,6 +38,10 @@ static std::vector<float> load_whisper_audio(AudioReader& reader, const uint8_t*
                          : reader.load_audio(what, audio, TARGET_SAMPLE_RATE, MonoDownmixMode::MEAN);
     if (!ok) {
         throw std::runtime_error("Could not decode audio " + what);
+    }
+    for (float& s : audio.samples) {
+        const long q = std::lrint(s * 32768.0f);
+        s = static_cast<float>(std::clamp(q, -32768L, 32767L)) / 32768.0f;
     }
     return std::move(audio.samples);
 }
