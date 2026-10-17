@@ -78,11 +78,16 @@ private:
     static constexpr int FS = 16000;
     static constexpr int WINDOW_LENGTH = 30; // seconds
     static constexpr int WINDOW_SAMPLES = FS * WINDOW_LENGTH;
+    static constexpr int MAX_L = 448;
     static constexpr int start_of_transcript = 50258;
+    static constexpr int first_language_token = 50259;
+    static constexpr int last_language_token = 50358;
     static constexpr int start_of_prev_token = 50362;
     static constexpr int no_time_stamp_token = 50364;
     static constexpr int translate_token = 50359;
     static constexpr int transcribe_token = 50360;
+    static constexpr int eot_token = 50257;
+    static constexpr int max_initial_time_stamp = 50;  // <|1.00|>, as openai-whisper
     typedef enum {
         PREFILL_TIME,
         DECODING_TIME,
@@ -151,51 +156,15 @@ private:
     }
 
     int _sample_in_language(buffer<bf16>& logits);
+    int _language_token(const std::string& language);
 
     int _sample_in_time_stamp(buffer<bf16>& logits);
-
-    inline bool _is_valid_utf8(const std::string& input) {
-        size_t i = 0;
-        while (i < input.size()) {
-            unsigned char c = input[i];
-            size_t width;
-    
-            // --- Validate UTF-8 codepoint ---
-            if (c < 0x80) {
-                // Single byte ASCII character
-                width = 1;
-            }
-            else if ((c & 0xE0) == 0xC0) {
-                // 2-byte character
-                if (i + 1 >= input.size()) return false;
-                // Check that second byte is a valid continuation byte
-                if ((input[i+1] & 0xC0) != 0x80) return false;
-                width = 2;
-            }
-            else if ((c & 0xF0) == 0xE0) {
-                // 3-byte character
-                if (i + 2 >= input.size()) return false;
-                // Check that second and third bytes are valid continuation bytes
-                if ((input[i+1] & 0xC0) != 0x80 || (input[i+2] & 0xC0) != 0x80) return false;
-                width = 3;
-            }
-            else if ((c & 0xF8) == 0xF0) {
-                // 4-byte character
-                if (i + 3 >= input.size()) return false;
-                // Check that second, third, and fourth bytes are valid continuation bytes
-                if ((input[i+1] & 0xC0) != 0x80 || (input[i+2] & 0xC0) != 0x80 || (input[i+3] & 0xC0) != 0x80) return false;
-                width = 4;
-            }
-            else {
-                // Invalid UTF-8 byte
-                return false;
-            }
-    
-            i += width;
+    void _apply_time_stamp_rules(buffer<bf16>& logits, int prev_idx, int last_idx, int last_time_stamp_idx);
+    inline void _mask(buffer<bf16>& logits, int begin, int end){
+        for (int i = begin; i < end; i++){
+            logits[i] = -0x1.FEp127f;
         }
-        return true;
     }
-
 
     std::string _offset_time_stamp(std::string& time_stamp, float offset){
         float time;
@@ -217,6 +186,9 @@ public:
     //void toggle_enable_think() override;
     bool load_audio(std::string& audio_path);
     bool load_audio(std::vector<uint8_t>& audio_data);
-    std::pair<std::string, std::string> generate(whisper_task_type_t task, bool enable_time_stamp, bool return_time_stamp, std::ostream& os);
+    /// \param language ISO 639-1 code (e.g. "en"); empty to detect it per window
+    /// \param prompt text to condition the decoder on, as OpenAI's `prompt`
+    std::pair<std::string, std::string> generate(whisper_task_type_t task, bool enable_time_stamp, bool return_time_stamp, std::ostream& os,
+                                                 const std::string& language = "", const std::string& prompt = "");
     void setup_tokenizer(std::string model_path);
 };

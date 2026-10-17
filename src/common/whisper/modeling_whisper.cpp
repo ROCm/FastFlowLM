@@ -108,7 +108,8 @@ bool Whisper::load_audio(std::vector<uint8_t>& audio_data) {
     return true;
 }
 
-std::pair<std::string, std::string> Whisper::generate(whisper_task_type_t task, bool enable_time_stamp, bool return_time_stamp, std::ostream& os) {
+std::pair<std::string, std::string> Whisper::generate(whisper_task_type_t task, bool enable_time_stamp, bool return_time_stamp, std::ostream& os,
+                                                      const std::string& language, const std::string& prompt) {
     int length = this->audio_buffer.size();
     int current_idx = 0;
     int overlapping_samples = 5 * FS; // 
@@ -122,8 +123,23 @@ std::pair<std::string, std::string> Whisper::generate(whisper_task_type_t task, 
         header_print("Error", "Return_time_stamp is true but timestamp is not enabled!");
         return std::make_pair("", "");
     }
+    const int requested_language = language.empty() ? -1 : this->_language_token(language);
+    std::vector<int> prompt_tokens;
+    if (!prompt.empty()) {
+        // As openai-whisper: leading space, and at most half the context.
+        prompt_tokens = this->tokenizer->encode(" " + prompt);
+        std::erase_if(prompt_tokens, [](int token) { return token >= 50257; });  // text only
+        const size_t max_prompt_tokens = MAX_L / 2 - 1;
+        if (prompt_tokens.size() > max_prompt_tokens) {
+            prompt_tokens.erase(prompt_tokens.begin(), prompt_tokens.end() - max_prompt_tokens);
+        }
+    }
+    const int prefix_length = prompt_tokens.empty() ? 0 : 1 + (int)prompt_tokens.size();
+    auto emit = [&](const std::string& text) {
+        os << text << std::flush;
+        result += text;
+    };
     while (current_idx < length){
-        bool allow_force_time_stamp = true;
         // std::cout << "Chunk " << _S2T_(current_idx) << "s to " << _S2T_(current_idx + l_this_round) << "s" << std::endl;
         float time_offset = _S2T_(current_idx);
         
@@ -144,19 +160,24 @@ std::pair<std::string, std::string> Whisper::generate(whisper_task_type_t task, 
         this->whisper_engine->clear_context();
         this->sampler->reset_penalties();
 
-        last_idx = start_of_transcript; // the first token is fixed
+        if (!prompt_tokens.empty()) {
+            this->whisper_engine->decode_audio(start_of_prev_token);
+            for (int token : prompt_tokens) {
+                this->whisper_engine->decode_audio(token);
+            }
+        }
+        last_idx = start_of_transcript;
         buffer<bf16> logits = this->whisper_engine->decode_audio(last_idx);
-        last_idx = this->_sample_in_language(logits);
+        last_idx = requested_language >= 0 ? requested_language : this->_sample_in_language(logits);
       
         // std::cout << "Language detected: " << this->tokenizer->run_time_decoder(last_idx) << "(" << langmap::to_language_name(this->tokenizer->run_time_decoder(last_idx)) << ")" << std::endl;
         language_detected = this->tokenizer->run_time_decoder(last_idx);
+        // The prompt is <|startoftranscript|><|lang|><|task|>.
+        this->whisper_engine->decode_audio(last_idx);
 
         if (task == e_translate) {
-            //header_print("info", "translate is not supported! Do transcribe instead!");
-            //task = e_transcribe;
-            //buffer<bf16> logits = this->whisper_engine->decode_audio(50259); // en
-            //logits = this->whisper_engine->decode_audio(translate_token);
-            //last_idx = this->_sample_in_time_stamp(logits);
+            buffer<bf16> logits = this->whisper_engine->decode_audio(translate_token);
+            last_idx = this->_sample_in_time_stamp(logits);
         }
         else if (task == e_transcribe) {
             buffer<bf16> logits = this->whisper_engine->decode_audio(transcribe_token);
@@ -182,45 +203,49 @@ std::pair<std::string, std::string> Whisper::generate(whisper_task_type_t task, 
             os << token_str << std::flush;
         }
         
-        int watching_dog = 16;
-        for (int i = 0; i < 448 - 3; i++){
+        // A full window is followed by one that starts at its last timestamp,
+        // so text after that timestamp would be decoded twice. Hold it, with
+        // the timestamp that opens it, until a timestamp closes it, and drop
+        // both if none does.
+        const bool full_window = enable_time_stamp && l_this_round == WINDOW_SAMPLES;
+        std::string pending;
+        last_time_stamp = this->token_time_map_offset;
+        int prev_idx = -1;
+        int window_time_stamp = enable_time_stamp ? last_idx : -1;
+        for (int i = 0; i < MAX_L - 4 - prefix_length; i++){
             buffer<bf16> logits = this->whisper_engine->decode_audio(last_idx);
-            if (watching_dog == 0 && allow_force_time_stamp){
-                last_idx = this->_sample_in_time_stamp(logits);
-                watching_dog = 16;
+            if (enable_time_stamp){
+                this->_apply_time_stamp_rules(logits, prev_idx, last_idx, window_time_stamp);
             }
-            else{
-                last_idx = this->sampler->sample(logits);
-                if (watching_dog > 0){
-                    watching_dog--;
-                }
-            }
+            prev_idx = last_idx;
+            last_idx = this->sampler->sample(logits);
             std::string token_str = this->tokenizer->run_time_decoder(last_idx);
             
             if (_is_normal_token(last_idx)){
-                os << token_str << std::flush;
-                result += token_str;
-            }
-            else if (return_time_stamp && _is_time_stemp(last_idx)){
-                std::string offset_time_stamp = this->_offset_time_stamp(token_str, time_offset);
-                os << offset_time_stamp << std::flush;
-                result += offset_time_stamp;
+                if (full_window){
+                    pending += token_str;
+                }
+                else{
+                    emit(token_str);
+                }
             }
 
             if (enable_time_stamp && _is_time_stemp(last_idx)){
+                std::string ts = return_time_stamp ? this->_offset_time_stamp(token_str, time_offset) : "";
+                if (full_window && _is_time_stemp(prev_idx)){
+                    pending = ts;
+                }
+                else{
+                    emit(pending);
+                    pending.clear();
+                    emit(ts);
+                }
                 last_time_stamp = last_idx;
-                watching_dog = 16;
+                window_time_stamp = last_idx;
             }
          
             if (last_idx == 50257){
                 break;
-            }
-
-            if (!_is_valid_utf8(token_str)){
-                allow_force_time_stamp = false;
-            }
-            else {
-                allow_force_time_stamp = true;
             }
         }
 
@@ -232,6 +257,8 @@ std::pair<std::string, std::string> Whisper::generate(whisper_task_type_t task, 
         if (enable_time_stamp){
             float end_time = _get_time(last_time_stamp);
             if (end_time == 0){
+                // No timestamp to resume from: keep the text, skip the window.
+                emit(pending);
                 end_time = 30;
             }
             l_this_round = end_time * FS;
@@ -252,8 +279,9 @@ void Whisper::_build_time_map(){
     this->token_time_map.clear();
     auto ids = this->tokenizer->encode("<|0.00|>");
     this->token_time_map_offset = ids[0];
-    for (float time = 0; time <= 30.00; time += 0.02){
-        this->token_time_map.push_back(time);
+    // <|0.00|> to <|30.00|>: 1501 tokens. Summing 0.02f drifts and stops at 29.98.
+    for (int i = 0; i <= WINDOW_LENGTH * 50; i++){
+        this->token_time_map.push_back(i / 50.0f);
     }
 
     this->total_time_stamps = this->token_time_map.size();
@@ -271,12 +299,38 @@ int Whisper::_sample_in_language(buffer<bf16>& logits){
 
 }
 
+int Whisper::_language_token(const std::string& language){
+    std::vector<int> ids = this->tokenizer->encode("<|" + language + "|>");
+    if (ids.size() != 1 || ids[0] < first_language_token || ids[0] > last_language_token){
+        throw std::invalid_argument("unsupported language: " + language);
+    }
+    return ids[0];
+}
+
 int Whisper::_sample_in_time_stamp(buffer<bf16>& logits){
-    for (int i = 0; i < this->token_time_map_offset; i++){
-        logits[i] = -0x1.FEp127f;
-    }
-    for (int i = this->total_time_stamps + this->token_time_map_offset; i < logits.size(); i++){
-        logits[i] = -0x1.FEp127f;
-    }
+    // The first timestamp of a window, no later than <|1.00|>.
+    this->_mask(logits, 0, this->token_time_map_offset);
+    this->_mask(logits, this->token_time_map_offset + max_initial_time_stamp + 1, logits.size());
     return this->sampler->sample(logits);
+}
+
+// openai-whisper's ApplyTimestampRules: timestamps come in pairs around
+// text, a segment is not empty, and time never goes back.
+void Whisper::_apply_time_stamp_rules(buffer<bf16>& logits, int prev_idx, int last_idx, int last_time_stamp_idx){
+    const int begin = this->token_time_map_offset;
+    const int end = begin + this->total_time_stamps;
+    const bool last_was_time_stamp = _is_time_stemp(last_idx);
+    const bool penultimate_was_time_stamp = prev_idx < 0 || _is_time_stemp(prev_idx);
+    if (last_was_time_stamp){
+        if (penultimate_was_time_stamp){
+            this->_mask(logits, begin, end);  // a segment needs text
+        }
+        else{
+            this->_mask(logits, 0, eot_token);  // a closed segment: timestamp or EOT
+        }
+    }
+    if (last_time_stamp_idx >= 0){
+        int lowest = (last_was_time_stamp && !penultimate_was_time_stamp) ? last_time_stamp_idx : last_time_stamp_idx + 1;
+        this->_mask(logits, begin, std::min(lowest, end));
+    }
 }

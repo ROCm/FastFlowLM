@@ -979,6 +979,12 @@ std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader&
                 json request_json;
                 request_json["model"] = parts["model"].content;
                 request_json["file"] = parts["file"].content;
+                for (const char* field : {"language", "prompt"}) {
+                    auto it = parts.find(field);
+                    if (it != parts.end()) {
+                        request_json[field] = it->second.content;
+                    }
+                }
                 rest_handler->handle_openai_audio_transcriptions(request_json, send_response, send_streaming_response, cancellation_token);
         });
 

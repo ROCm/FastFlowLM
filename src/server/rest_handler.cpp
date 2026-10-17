@@ -1426,17 +1426,23 @@ void RestHandler::handle_openai_audio_transcriptions(const json& request,
         std::string model = request["model"];
         std::string file_content = request["file"].get<std::string>();
         std::vector<uint8_t> audio_raw(file_content.begin(), file_content.end());
+        std::string language = request.value("language", "");
+        std::string prompt = request.value("prompt", "");
         bool stream = request.value("stream", false);
         json response;
         if (this->asr) {
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
             this->whisper_engine->load_audio(audio_raw);
             header_print("FLM", "Transforming audio to text...");
-            // Show text
-            std::cout << "Audio content: " << std::flush;
-            std::pair<std::string, std::string> audio_result = this->whisper_engine->generate(Whisper::whisper_task_type_t::e_transcribe, true, false, std::cout);
+            // Transcripts are user speech: log them only when FLM_LOG_RAW_OUTPUT asks.
+            const char* log_env = std::getenv("FLM_LOG_RAW_OUTPUT");
+            const bool log_transcript = log_env != nullptr && log_env[0] != '\0' && std::strcmp(log_env, "0") != 0;
+            std::ostream no_log(nullptr);
+            std::ostream& transcript_log = log_transcript ? std::cout : no_log;
+            transcript_log << "Audio content: " << std::flush;
+            std::pair<std::string, std::string> audio_result = this->whisper_engine->generate(Whisper::whisper_task_type_t::e_transcribe, true, false, transcript_log, language, prompt);
             std::string audio_context = audio_result.first;
-            std::cout << std::endl;
+            transcript_log << std::endl;
 #else
             throw std::runtime_error("ASR models are not supported in this build");
             std::string audio_context;
