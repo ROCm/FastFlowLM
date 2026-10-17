@@ -17,6 +17,8 @@ constexpr int kFilterSize = 32;
 constexpr int kPhaseShift = 10;
 constexpr double kCutoff = 0.97;
 constexpr double kKaiserBeta = 9.0;
+// M_PI is not standard (MSVC needs _USE_MATH_DEFINES).
+constexpr double kPi = 3.14159265358979323846;
 
 // Zeroth-order modified Bessel function of the first kind (power series).
 double bessel_i0(double x) {
@@ -43,9 +45,9 @@ std::vector<float> build_filter_bank(double factor, int taps, int phases) {
     double norm = 0.0;
     for (int ph = 0; ph <= phases; ++ph) {
         for (int i = 0; i < taps; ++i) {
-            const double x = M_PI * ((i - center) - static_cast<double>(ph) / phases) * factor;
+            const double x = kPi * ((i - center) - static_cast<double>(ph) / phases) * factor;
             double y = x == 0.0 ? 1.0 : std::sin(x) / x;
-            const double w = 2.0 * x / (factor * taps * M_PI);
+            const double w = 2.0 * x / (factor * taps * kPi);
             y *= bessel_i0(kKaiserBeta * std::sqrt(std::max(1.0 - w * w, 0.0)));
             row[i] = y;
             if (ph == 0) {
