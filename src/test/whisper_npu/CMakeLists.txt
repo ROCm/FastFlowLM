@@ -29,11 +29,6 @@ target_link_libraries(test_whisper_npu PUBLIC
     whisper_npu
     xrt_coreutil
     aiebu_static
-    avformat
-    avcodec
-    avutil
-    swscale
-    swresample
     zlib
     libboost_program_options-vc143-mt-x64-1_88
 )

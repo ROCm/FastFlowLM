@@ -21,6 +21,9 @@ SOURCES += ../../common/AutoModel/automodel.cpp
 SOURCES += ../../common/modules/sampler.cpp
 SOURCES += ../../common/tokenizer/tokenizer.cpp
 SOURCES += ../../common/whisper/modeling_whisper_audio.cpp
+SOURCES += ../../common/audio/audio_reader.cpp
+SOURCES += ../../common/audio/audio_decoder.cpp
+SOURCES += ../../common/audio/audio_resampler.cpp
 SOURCES += ../../common/whisper/modeling_whisper.cpp
 
 HEADERS += ../../include/llama/whisper_npu.hpp
@@ -35,7 +38,7 @@ ifeq ($(WSL), 0)
 # Use g++-13 directly without CMake
 
 LDFLAGS += -lwhisper_npu
-LDFLAGS += -lavformat -lavcodec -lavutil -lswscale -lswresample
+LDFLAGS += -lvorbisfile -lvorbis -logg -lopus
 
 
 CPP_SOURCES := $(filter %.cpp,$(SOURCES))

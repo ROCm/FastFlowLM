@@ -112,6 +112,19 @@ function(add_npu_test TARGET_NAME OUTPUT_SUBDIR)
         target_link_libraries(${TARGET_NAME} PRIVATE flm_image_codecs)
     endif()
 
+    # AudioReader (also used by Whisper) decodes with libopus/libvorbis/dr_libs
+    # (see src/cmake/FlmAudioCodecs.cmake).
+    if(NPU_TEST_SOURCES MATCHES "audio/audio_reader\\.cpp|whisper/modeling_whisper_audio\\.cpp")
+        include(${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../cmake/FlmAudioCodecs.cmake)
+        target_sources(${TARGET_NAME} PRIVATE
+            ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../common/audio/audio_decoder.cpp
+            ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../common/audio/audio_resampler.cpp)
+        if(NOT NPU_TEST_SOURCES MATCHES "audio/audio_reader\\.cpp")
+            target_sources(${TARGET_NAME} PRIVATE ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../common/audio/audio_reader.cpp)
+        endif()
+        target_link_libraries(${TARGET_NAME} PRIVATE flm_audio_codecs)
+    endif()
+
     target_link_libraries(${TARGET_NAME} PRIVATE
         q4_npu_eXpress
         lm_head

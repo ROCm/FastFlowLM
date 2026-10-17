@@ -294,6 +294,8 @@ add_subdirectory(${CMAKE_SOURCE_DIR}/../third_party/tokenizers-cpp
 
 # JPEG/PNG decoding for ImageReader: static libjpeg-turbo + vendored lodepng.
 include(${CMAKE_SOURCE_DIR}/cmake/FlmImageCodecs.cmake)
+# Audio decoding for AudioReader: static libopus/libogg/libvorbis + vendored dr_libs.
+include(${CMAKE_SOURCE_DIR}/cmake/FlmAudioCodecs.cmake)
 
 # ———————————————————————————————————————————————
 # Gather your sources
@@ -749,7 +751,7 @@ endif()
 target_link_libraries(flm PRIVATE
     tokenizers_cpp
 )
-target_link_libraries(flm PRIVATE flm_image_codecs)
+target_link_libraries(flm PRIVATE flm_image_codecs flm_audio_codecs)
 
 if(WIN32)
     target_link_libraries(flm PRIVATE

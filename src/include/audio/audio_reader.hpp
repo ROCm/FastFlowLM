@@ -55,7 +55,7 @@ public:
     ~AudioReader();
 
     /// Load audio from a file, decode, resample to target_sample_rate, and convert to mono float32.
-    /// Supports any format FFmpeg can demux (mp3, wav, flac, ogg, etc.).
+    /// Supports WAV, FLAC, MP3, Ogg (Vorbis/Opus/FLAC) and WebM/Matroska (Opus); see audio_decoder.hpp.
     /// @param filename          path to the audio file
     /// @param out_audio         output struct filled with samples and metadata
     /// @param target_sample_rate desired output sample rate (default 16000)
@@ -75,7 +75,7 @@ public:
     bool clip_audio_length(audio_data_t& audio, double max_duration_second);
 
 private:
-    bool decode_audio(struct AVFormatContext* format_ctx, audio_data_t& out_audio, int target_sample_rate, MonoDownmixMode downmix);
+    bool decode_audio(const uint8_t* data, size_t size, audio_data_t& out_audio, int target_sample_rate, MonoDownmixMode downmix);
 };
 
 

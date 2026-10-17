@@ -52,10 +52,6 @@ target_link_libraries(test_gemma4e_flash PUBLIC
     # modeling_gemma4e.cpp serves both wrappers, so both engines must be linked.
     gemma4e_npu
     xrt_coreutil
-    avformat
-    avcodec
-    avutil
-    swresample
     zlib
 )
 

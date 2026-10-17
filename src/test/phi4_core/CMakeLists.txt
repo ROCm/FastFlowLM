@@ -166,21 +166,6 @@ target_link_directories(test_phi4_frontend_off PRIVATE "${XRT_INCLUDE_DIR}/../li
 target_link_libraries(test_phi4_frontend_off PRIVATE xrt_coreutil)
 
 # Compile the actual production frontend translation units in both feature modes.
-# Empty declaration-only FFmpeg headers isolate this compile check from an
-# unrelated optional SDK that is absent on the standalone test host.
-set(FRONTEND_STUB_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/frontend-compile-stubs")
-foreach(STUB_HEADER IN ITEMS
-        libavcodec/avcodec.h
-        libavformat/avformat.h
-        libswscale/swscale.h
-        libavutil/imgutils.h
-        libavutil/frame.h
-        libavutil/pixfmt.h)
-  get_filename_component(STUB_PARENT
-      "${FRONTEND_STUB_INCLUDE_DIR}/${STUB_HEADER}" DIRECTORY)
-  file(MAKE_DIRECTORY "${STUB_PARENT}")
-  file(WRITE "${FRONTEND_STUB_INCLUDE_DIR}/${STUB_HEADER}" "#pragma once\n")
-endforeach()
 
 set(FLM_PRODUCTION_FRONTEND_SOURCES
     ${PHI4_FRONTEND_SOURCES}
@@ -196,7 +181,6 @@ function(add_frontend_compile_guard TARGET_NAME ENABLE_CORELIB)
       "${FLM_SOURCE_DIR}/server"
       "${FLM_SOURCE_DIR}/pull"
       "${FLM_SOURCE_DIR}/../third_party/tokenizers-cpp/include"
-      "${FRONTEND_STUB_INCLUDE_DIR}"
       "${BOOST_INCLUDE_DIR}"
       "${XRT_INCLUDE_DIR}")
   target_compile_definitions(${TARGET_NAME} PRIVATE
