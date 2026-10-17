@@ -196,7 +196,15 @@ void AutoModel::_shared_load_model(std::string model_path, json model_info, int 
 }
 
 void AutoModel::_shared_initialize_model_state(
-    std::string model_path, json, int context_length) {
+    std::string model_path, json model_info, int context_length) {
+    // The catalog marks a model single-turn with a label, and some classes set
+    // the flag themselves. Only ever switched on here, so an entry without the
+    // label does not override a class that knows it is single-turn.
+    if (model_info.contains("label") &&
+        std::find(model_info["label"].begin(), model_info["label"].end(),
+                  "single-turn") != model_info["label"].end()) {
+        this->single_turn = true;
+    }
     this->model_path = std::move(model_path);
     header_print("FLM", "Loading model: " << this->model_path);
     this->lm_config = std::make_unique<LM_Config>();
@@ -383,7 +391,13 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
             break;
         }
     }
-    if (skip_count != idx) {
+    // A request that matches the whole history leaves nothing to prefill, and
+    // then there are no logits to draw from: the sampler would read an empty
+    // buffer. It happens when a request repeats the previous one exactly and
+    // that answer added nothing to the history -- a single-turn Qwen3.5 model
+    // with the think block prefilled and max_tokens=1. Recurrent state cannot
+    // be stepped back by one token, so treat it like a divergence.
+    if (skip_count != idx || skip_count == tokens.size()) {
         if (is_server_mode) {
             header_print("FLM", "Conversation context diverged from cache, clearing context...");
         }
