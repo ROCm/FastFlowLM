@@ -8,6 +8,9 @@
 
 #include "modules/sampler.hpp"
 
+#include <array>
+#include <cstring>
+#include <numeric>
 #include <deque>
 #include <algorithm>  // for std::sort
 #include <chrono>
@@ -354,10 +357,112 @@ void Sampler::ring_buffer_update_sparse(int sampled_index) {
     this->total_tokens++;
 }
 
+namespace {
+/// exp() for every value a bf16 can hold.
+///
+/// The logits arrive as bf16 from the engine and the widening to fp32 is
+/// exact, so this->logits can only take 65536 distinct values. Looking the
+/// exponential up is the same number std::exp would return -- precomputed,
+/// not approximated -- and it turns a quarter of a million exp() calls into as
+/// many reads. 512 KB, which fits in L2.
+const std::array<double, 65536>& bf16_exp_table() {
+    static const std::array<double, 65536> table = [] {
+        std::array<double, 65536> t{};
+        for (uint32_t b = 0; b < 65536; b++) {
+            const uint32_t bits = b << 16;
+            float f;
+            std::memcpy(&f, &bits, sizeof(f));
+            t[b] = std::exp(static_cast<double>(f));
+        }
+        return t;
+    }();
+    return table;
+}
+}  // namespace
+
+float Sampler::log_sum_exp_all() const {
+    if (this->logits.empty()) {
+        return 0.0f;
+    }
+    const auto& table = bf16_exp_table();
+    double sum = 0.0;
+    for (int i = 0; i < this->in_features; i++) {
+        uint32_t bits;
+        std::memcpy(&bits, &this->logits[i], sizeof(bits));
+        // The low 16 bits are non-zero for anything the penalties moved off
+        // the bf16 grid; those take the exact call. The branch predicts well
+        // and costs nothing measurable.
+        sum += (bits & 0xFFFFu) != 0u
+            ? std::exp(static_cast<double>(this->logits[i]))
+            : table[bits >> 16];
+    }
+    if (std::isfinite(sum) && sum > 0.0) {
+        return static_cast<float>(std::log(sum));
+    }
+    // Nothing on the bf16 grid produced a usable sum -- reachable only for a
+    // logit beyond about +-700, where exp overflows a double. Fall back to the
+    // shifted form. Note what it does NOT cover: +-inf and NaN are not
+    // meaningful here either way, and a logit of +inf would come back as 0.
+    float max_logit = -std::numeric_limits<float>::infinity();
+    for (float v : this->logits) {
+        if (v > max_logit) {
+            max_logit = v;
+        }
+    }
+    if (!std::isfinite(max_logit)) {
+        return 0.0f;
+    }
+    double shifted = 0.0;
+    for (float v : this->logits) {
+        shifted += std::exp(static_cast<double>(v) - max_logit);
+    }
+    return max_logit + static_cast<float>(std::log(shifted));
+}
+
+void Sampler::capture_if_requested() {
+    if (!this->capture_top_logprobs) {
+        return;
+    }
+    // Own top-N by logit, taken from the full logits rather than from
+    // top_k_logits: the report should not depend on the sampler's top_k, and
+    // the greedy path keeps only one entry there.
+    const int n = std::min(this->capture_count, this->in_features);
+    this->captured_top_k.clear();
+    this->captured_logsumexp = this->log_sum_exp_all();
+    if (n > 0 && static_cast<size_t>(n) <= this->top_k_logits.size()) {
+        // top_k_logits is already sorted by logit with the same tie-break, so
+        // its beginning IS the top-n. No second sort, no vocab-sized index
+        // vector -- which matters because this runs once per token.
+        this->captured_top_k.assign(this->top_k_logits.begin(),
+                                    this->top_k_logits.begin() + n);
+    } else if (n > 0) {
+        std::vector<int> idx(this->in_features);
+        std::iota(idx.begin(), idx.end(), 0);
+        // Same order as sampler_topk_apply: bf16 logits over 100k+ entries
+        // are often equal, partial_sort is not stable, and a tie broken
+        // differently would put another token at the top than the one the
+        // draw would have taken.
+        std::partial_sort(idx.begin(), idx.begin() + n, idx.end(),
+                          [this](int a, int b) {
+                              if (this->logits[a] != this->logits[b]) {
+                                  return this->logits[a] > this->logits[b];
+                              }
+                              return a < b;
+                          });
+        this->captured_top_k.reserve(n);
+        for (int i = 0; i < n; i++) {
+            this->captured_top_k.push_back(logits_t{ this->logits[idx[i]], idx[i], 0.0f });
+        }
+    }
+    // Stays armed: every token that reaches the caller's text needs its own
+    // distribution. `captured` marks that THIS draw has one.
+    this->captured = true;
+}
+
 /// \brief Sample the token
 /// \param x the input buffer
 /// \return the sampled token
-int Sampler::sample_greedy(buffer<bf16>& x) {
+int Sampler::sample_greedy(buffer<bf16>& x, bool record_in_history) {
     const bool penalties_active =
         (this->repeat_last_n != 0) &&
         (this->rep_penalty != 1.0f || this->freq_penalty != 0.0f || this->pre_penalty != 0.0f);
@@ -443,14 +548,40 @@ int Sampler::sample_greedy(buffer<bf16>& x) {
 
     // callers that inspect the surviving candidates still get a consistent view
     this->top_k_logits.assign(1, logits_t{ best, best_id, 1.0f });
-    ring_buffer_update_sparse(best_id);
+    if (this->capture_top_logprobs) {
+        // log_sum_exp_all() reads this->logits, which the branch above only
+        // fills when penalties are active. Fill it here the same way sample()
+        // does: the logits come back in device-mapped memory where
+        // element-at-a-time reads are punishing, so this pulls eight at a time.
+        if (!penalties_active) {
+            #if USEAVX2
+            const int simd_width = 8;
+            int i = 0;
+            for (; i <= in_features - simd_width; i += simd_width) {
+                __m128i bf16_vals_x = _mm_loadu_si128((__m128i*)&x[i]);
+                _mm256_storeu_ps(&this->logits[i], bf16o_fp32(bf16_vals_x));
+            }
+            for (; i < in_features; i++) {
+                this->logits[i] = x[i];
+            }
+            #else
+            for (int i = 0; i < in_features; i++) {
+                this->logits[i] = x[i];
+            }
+            #endif
+        }
+        this->capture_if_requested();
+    }
+    if (record_in_history) {
+        ring_buffer_update_sparse(best_id);
+    }
     return best_id;
 }
 
-int Sampler::sample(buffer<bf16>& x) {
+int Sampler::sample(buffer<bf16>& x, bool record_in_history) {
     // PRNG is seeded once at construction, no per-call seeding needed
     if (this->top_k == 1) {
-        return sample_greedy(x);
+        return sample_greedy(x, record_in_history);
     }
 
     // COPY FROM `x` → `this->logits[]`
@@ -475,6 +606,8 @@ int Sampler::sample(buffer<bf16>& x) {
 
     sampler_penalty_apply_sparse();
     sampler_topk_apply(this->top_k);
+
+    this->capture_if_requested();
     if (this->use_optimized_sampling) {
         softmax_with_topp_minp(this->top_p, this->min_p);
         sampler_temp_apply(this->temperature);
@@ -490,7 +623,9 @@ int Sampler::sample(buffer<bf16>& x) {
     }
 
     int sampled_index = sample_from_probs();
-    ring_buffer_update_sparse(sampled_index);
+    if (record_in_history) {
+        ring_buffer_update_sparse(sampled_index);
+    }
 
     return sampled_index;
 }

@@ -586,6 +586,124 @@ void RestHandler::configure_chat_engine_parameters(const json& options, const js
     }
 }
 
+/// Read the caller's logprobs wish into meta_info, for the chat shape.
+///
+/// OpenAI: `logprobs` is a boolean, and `top_logprobs` (0-20) says how many
+/// alternatives to list. Without `top_logprobs`, only the chosen token's own
+/// logprob is reported and the alternatives stay empty.
+static void read_logprobs_request(const json& request, chat_meta_info_t& meta_info) {
+    if (!request.contains("logprobs") || !request["logprobs"].is_boolean()) {
+        return;
+    }
+    meta_info.want_logprobs = request["logprobs"].get<bool>();
+    if (!meta_info.want_logprobs) {
+        return;
+    }
+    if (request.contains("top_logprobs") && request["top_logprobs"].is_number_integer()) {
+        meta_info.top_logprobs_count = std::clamp(request["top_logprobs"].get<int>(), 0, 20);
+    }
+}
+
+/// The same for the legacy completions shape, where `logprobs` is an INTEGER:
+/// N asks for the N most likely tokens, 0-5, and there is no `top_logprobs`.
+/// Zero is a valid request -- it asks for the drawn token's own logprob with
+/// no alternatives -- and the drawn token is always reported.
+///
+/// A boolean is not accepted here: the SDKs send the integer, and a generous
+/// dialect would become a contract that clients come to rely on.
+static void read_legacy_logprobs_request(const json& request, chat_meta_info_t& meta_info) {
+    if (!request.contains("logprobs") || !request["logprobs"].is_number_integer()) {
+        return;
+    }
+    const int n = request["logprobs"].get<int>();
+    meta_info.want_logprobs = n >= 0;
+    meta_info.top_logprobs_count = std::clamp(n, 0, 5);
+}
+
+static json top_logprob_to_json(const top_logprob_t& e) {
+    return json{
+        {"token", e.token},
+        {"token_id", e.token_id},
+        {"bytes", e.bytes},
+        {"logprob", e.logprob},
+    };
+}
+
+/// The OpenAI logprobs object for the answer.
+///
+/// One entry per token of message.content, in the same order, so a client that
+/// pairs entries with tokens stays aligned.
+///
+/// `logprob` is the natural logarithm of the token's probability over the
+/// WHOLE vocabulary, after the repetition, frequency and presence penalties and
+/// before the temperature, top-k, top-p and min-p. The entries listed
+/// therefore do NOT sum to 1 -- the rest of the vocabulary lies outside the
+/// list. Comparing two entries gives the same answer whether you use logprob
+/// or the raw logit, because both differ by the same constant.
+///
+/// A request with think:true gets null: the tokens of the reasoning block land
+/// in reasoning_content, not in content, and this field describes content.
+static json logprobs_from_meta(const chat_meta_info_t& meta_info) {
+    if (!meta_info.want_logprobs || meta_info.logprobs_entries.empty()) {
+        return nullptr;
+    }
+    json content = json::array();
+    for (const auto& entry : meta_info.logprobs_entries) {
+        json alternatives = json::array();
+        for (const auto& e : entry.alternatives) {
+            alternatives.push_back(top_logprob_to_json(e));
+        }
+        json chosen = top_logprob_to_json(entry.chosen);
+        chosen["top_logprobs"] = alternatives;
+        content.push_back(std::move(chosen));
+    }
+    return json{{"content", content}};
+}
+
+/// The same information in the legacy completions shape, which pairs one entry
+/// per token rather than nesting them.
+static json legacy_logprobs_from_meta(const chat_meta_info_t& meta_info) {
+    if (!meta_info.want_logprobs || meta_info.logprobs_entries.empty()) {
+        return nullptr;
+    }
+    json tokens = json::array();
+    json token_logprobs = json::array();
+    json top_logprobs = json::array();
+    json text_offset = json::array();
+    int offset = 0;
+    for (const auto& entry : meta_info.logprobs_entries) {
+        tokens.push_back(entry.chosen.token);
+        token_logprobs.push_back(entry.chosen.logprob);
+        json per_token = json::object();
+        for (const auto& e : entry.alternatives) {
+            // This shape keys by the token string and has no `bytes`, so a
+            // token that is not valid UTF-8 on its own would be keyed by ""
+            // and overwrite the previous one. Those are left out.
+            if (e.token.empty()) {
+                continue;
+            }
+            per_token[e.token] = e.logprob;
+        }
+        top_logprobs.push_back(std::move(per_token));
+        text_offset.push_back(offset);
+        // OpenAI counts characters here. Counting the bytes that are not
+        // continuation bytes gives exactly that, and it stays right when one
+        // character is split across two tokens: it is counted once, at the
+        // token carrying its first byte.
+        for (int b : entry.chosen.bytes) {
+            if ((b & 0xC0) != 0x80) {
+                offset++;
+            }
+        }
+    }
+    return json{
+        {"tokens", tokens},
+        {"token_logprobs", token_logprobs},
+        {"top_logprobs", top_logprobs},
+        {"text_offset", text_offset},
+    };
+}
+
 json RestHandler::build_nstream_response(std::string response_text, chat_meta_info_t& meta_info) {
     // Get tool info
     NonStreamResult result = auto_chat_engine->parse_nstream_content(response_text);
@@ -649,7 +767,10 @@ json RestHandler::build_nstream_response(std::string response_text, chat_meta_in
         {
             {"index", 0},
             {"message", message},
-            {"logprobs", nullptr},
+            // A tool call puts nothing in message.content, so there are no
+            // tokens for a logprobs object to describe. Same for a mixed
+            // answer that carries both text and a call.
+            {"logprobs", is_tool_call ? json(nullptr) : logprobs_from_meta(meta_info)},
             {"finish_reason", stop_reason_to_string(meta_info.stop_reason)}
         }
     });
@@ -1197,6 +1318,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
 
         // see if we can use prompt cache
         chat_meta_info_t meta_info;
+        read_logprobs_request(request, meta_info);
         bool can_use_prompt_cache = false;
         if (auto_chat_engine->single_turn) {
             // reject multi-turn requests: any assistant message in the history
@@ -1513,6 +1635,7 @@ void RestHandler::handle_openai_completion(const json& request,
         configure_chat_engine_parameters(options, request);
 
         chat_meta_info_t meta_info;
+        read_legacy_logprobs_request(request, meta_info);
         meta_info.max_prefill_len = this->prefill_chunk_len;
         lm_uniform_input_t uniformed_input;
         uniformed_input.requested_max_new_tokens =
@@ -1606,7 +1729,7 @@ void RestHandler::handle_openai_completion(const json& request,
                     {
                         {"text", response_text},
                         {"index", 0},
-                        {"logprobs", nullptr},
+                        {"logprobs", legacy_logprobs_from_meta(meta_info)},
                         {"finish_reason", stop_reason_to_string(meta_info.stop_reason)}
                     }
                 })},
