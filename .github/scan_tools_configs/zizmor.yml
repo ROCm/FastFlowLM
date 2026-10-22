@@ -10,6 +10,24 @@
 # This file defines the complete scanner policy;
 # Keep repository-specific suppressions and tuning here.
 #
+# Zizmor has no ignore file. Suppress a finding with:
+#
+#   1. An inline comment naming the rule:
+#          run: | # zizmor: ignore[template-injection] input is validated
+#
+#   2. `rules.<rule-id>.ignore` with `<file>[:<line>[:<col>]]`:
+#          rules:
+#            template-injection:
+#              ignore:
+#                - safe.yml
+#
+#   3. `rules.<rule-id>.disable: true` to disable a rule repository-wide.
+#
 # Add rule-specific settings and suppressions under `rules:`.
 
-rules: {}
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        # Security owns this workflow and moves the v1 tag.
+        ROCm/rocm-security-gh/.github/workflows/security-baseline.yml: ref-pin
