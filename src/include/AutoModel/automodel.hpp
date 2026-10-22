@@ -85,8 +85,42 @@ inline std::string stop_reason_to_string(stop_reason_t reason){
     }
 }
 
+/// One entry of the reported distribution.
+///
+/// A struct of its own rather than Sampler::logits_t: this header should not
+/// have to know about the sampler.
+struct top_logprob_t {
+    int token_id = -1;
+    std::string token;       ///< decoded; empty when the bytes are not valid UTF-8
+    std::vector<int> bytes;  ///< the token's raw bytes, as OpenAI reports them
+    float logprob = 0.0f;    ///< logit - logsumexp over the whole vocabulary
+};
+
+/// One token of the answer, with the distribution it was drawn from.
+///
+/// The chosen token has its own entry, independent of how many alternatives
+/// were asked for: a draw at rank 3 must still be named when the caller asked
+/// for one alternative.
+struct logprobs_entry_t {
+    top_logprob_t chosen;
+    std::vector<top_logprob_t> alternatives;
+};
+
 struct chat_meta_info_t {
 	int max_prefill_len;
+
+	/// Whether and how many alternatives the caller asked for. Every token
+	/// that reaches message.content is described, in that order.
+	bool want_logprobs = false;
+	int top_logprobs_count = 0;
+
+	/// One entry per token that reached the caller's text, in that order --
+	/// the same order and the same count as the tokens of message.content.
+	/// Each carries the token that was drawn plus its alternatives.
+	std::vector<logprobs_entry_t> logprobs_entries;
+
+	/// Guards the once-per-request rule for arming the sampler.
+	bool logprobs_armed = false;
     int prompt_tokens;        // whole prompt, cached prefix included
     int cached_prompt_tokens; // subset of prompt_tokens served from the KV cache
     int generated_tokens;
@@ -263,12 +297,27 @@ protected:
 		return backend_cap == 0 ? MAX_L : std::min(MAX_L, backend_cap);
 	}
 
+	/// \brief Ask the sampler to capture a distribution for this request
+	/// \param meta_info carries the request's wish
+	/// \note Call before a draw that will also be counted. A draw whose token
+	///       is thrown away must not be captured -- the numbers would describe
+	///       a position the answer does not come from.
+	void _request_logprobs_capture(chat_meta_info_t& meta_info);
+
+	/// \brief Append one entry for a token that reached the caller's text
+	/// \param meta_info carries it to the REST handler
+	/// \param sampled_token the token the sampler just chose
+	/// \note Call where the token is written to the response, not where it was
+	///       drawn: a token the engine filters out, and EOS, get no entry.
+	void _record_top_logprobs(chat_meta_info_t& meta_info, int sampled_token);
+
 	/// \brief Insert tokens into the model
 	/// \param meta_info the meta information of the chat
 	/// \param tokens the tokens to insert
 	/// \param payload the payload, it shall not be used as this function is only used for chunkwised insertion, no image allowed
 	/// \return true if the tokens were inserted successfully, false otherwise
-	bool _shared_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled = [] { return false; }, void* payload = nullptr, int first_len_run = 0, std::optional<int> requested_max_new_tokens = std::nullopt);
+	bool _shared_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled = [] { return false; }, void* payload = nullptr, int first_len_run = 0, std::optional<int> requested_max_new_tokens = std::nullopt,
+                         bool record_sampled_token = true);
 
 	/// \brief Reject a request that cannot fit in the backend's decode limit
 	/// \param rendered_tokens the length of the rendered prompt
@@ -290,8 +339,10 @@ protected:
 	/// \brief Sample the next token under the request's constraint
 	/// \param logits the logits of the token about to be sampled, masked in place
 	/// \param meta_info the request, carrying the constraint
+	/// \param record_in_history whether the token joins the sampler's repetition
+	///        and frequency windows; false for a draw the caller throws away
 	/// \return the sampled token, already reported to the constraint
-	int _sample(buffer<bf16>& logits, chat_meta_info_t& meta_info);
+	int _sample(buffer<bf16>& logits, chat_meta_info_t& meta_info, bool record_in_history = true);
 
 	/// \brief Report a token the model is made to emit rather than samples
 	/// \note For the think preamble some generate()s feed after insert(); the
