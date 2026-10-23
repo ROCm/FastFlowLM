@@ -28,6 +28,10 @@ private:
     bool enable_tool = false;
     int think_start_id = 248068;
     int think_end_id = 248069;
+    /// Set by insert() when it prefilled the empty think block together with
+    /// the prompt; generate() then takes the first token from that draw
+    /// instead of feeding the block one forward() at a time.
+    bool think_block_prefilled = false;
     
     void setup_tokenizer(std::string model_path);
     
