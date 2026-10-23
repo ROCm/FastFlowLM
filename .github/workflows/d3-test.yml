@@ -1,0 +1,543 @@
+name: D3 Test
+
+# Asks the d3 decision model (d3:lite) a fixed-seed sample of MMMU-Pro vision
+# questions on real NPU hardware whenever the decision or image code changes.
+# Nothing is rebuilt here: like the ASR test, this tests the portable builds
+# that "Build Linux Portable" and "Build Windows Packages" produce for the same
+# commit, default and HRX alike.
+#
+# .github/script/build_d3_mmmu_eval.py draws the questions on the runner from
+# the MMMU/MMMU_Pro dataset on Hugging Face (the "vision" test split, kept in
+# the runner's Hugging Face cache), and .github/script/d3_mmmu_test.py asks
+# them through POST /v1/systemone. D3_MMMU_REVISION pins the dataset commit;
+# with a branch name, the questions change when the dataset does, but the
+# build under test and its baseline still get the same ones, since one job
+# draws them for both.
+#
+# On a pull request, main's latest build runs first on the same machine and
+# becomes the baseline. The run fails if any question goes unanswered, if
+# fewer than 90% of the questions get the baseline's answer, or if more than
+# 3 fewer are answered correctly. d3-lite is close to chance on this set, so
+# agreement with main is the check that matters. Pushes to main and the weekly
+# run have no baseline build: they only require every question to be
+# answered, and report the accuracy.
+#
+# The trigger paths are the decision model and its contract, its NPU library
+# and kernels, the image decoders and processor it shares with the vision
+# chat models, and the server files that host /v1/systemone. Those server
+# files also hold every other endpoint, so any change to them runs this test
+# too. The pull_request and push path lists must stay identical.
+#
+# A manual dispatch tests the dispatched ref's commit, or a pull request's
+# builds when given its number.
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'src/common/AutoDecisionModel/**'
+      - 'src/include/AutoDecisionModel/**'
+      - 'src/common/decision/**'
+      - 'src/include/decision/**'
+      - 'src/include/models/d3/**'
+      - 'src/lib/xrt/*d3_npu*'
+      - 'src/lib/hrx/*d3_npu*'
+      - 'src/xclbins/D3-Lite-NPU2/**'
+      - 'src/common/image/**'
+      - 'src/include/image/**'
+      - 'src/common/image_process_utils/**'
+      - 'src/include/image_process_utils/**'
+      - 'src/cmake/FlmImageCodecs.cmake'
+      - 'src/server/rest_handler.cpp'
+      - 'src/server/server.cpp'
+      - '.github/script/build_d3_mmmu_eval.py'
+      - '.github/script/d3_mmmu_test.py'
+      - '.github/script/d3_mmmu_summary.py'
+      - '.github/script/sweep_decision.py'
+      - '.github/script/sweep_common.py'
+      - '.github/workflows/d3-test.yml'
+  push:
+    branches: [ main ]
+    paths:
+      - 'src/common/AutoDecisionModel/**'
+      - 'src/include/AutoDecisionModel/**'
+      - 'src/common/decision/**'
+      - 'src/include/decision/**'
+      - 'src/include/models/d3/**'
+      - 'src/lib/xrt/*d3_npu*'
+      - 'src/lib/hrx/*d3_npu*'
+      - 'src/xclbins/D3-Lite-NPU2/**'
+      - 'src/common/image/**'
+      - 'src/include/image/**'
+      - 'src/common/image_process_utils/**'
+      - 'src/include/image_process_utils/**'
+      - 'src/cmake/FlmImageCodecs.cmake'
+      - 'src/server/rest_handler.cpp'
+      - 'src/server/server.cpp'
+      - '.github/script/build_d3_mmmu_eval.py'
+      - '.github/script/d3_mmmu_test.py'
+      - '.github/script/d3_mmmu_summary.py'
+      - '.github/script/sweep_decision.py'
+      - '.github/script/sweep_common.py'
+      - '.github/workflows/d3-test.yml'
+  schedule:
+    - cron: '47 4 * * 2'  # Tuesdays 04:47 UTC
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "Pull request number whose builds to test (blank = the dispatched ref)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  # Needed to list and download artifacts from the build workflow runs.
+  actions: read
+
+# Only the newest commit on a ref is worth an NPU machine. The event name keeps
+# the weekly run and a push to main from cancelling each other.
+concurrency:
+  group: d3-test-${{ github.ref }}-${{ github.event_name }}-${{ inputs.pr }}
+  cancel-in-progress: true
+
+env:
+  D3_MODEL: d3:lite
+  D3_MMMU_REVISION: main
+  D3_MMMU_SEED: "0"
+  D3_MMMU_COUNT: "60"
+
+jobs:
+  # Waits on a hosted runner for the build runs under test, the same way the
+  # ASR test's resolve-build does, and pins each to a run id so a stale
+  # artifact from an earlier push can never be tested. For a pull request it
+  # also finds main's latest successful build as the baseline. Outputs one
+  # JSON list of builds per platform, which the test jobs expand into their
+  # matrix.
+  resolve-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    outputs:
+      linux_run_id: ${{ steps.resolve.outputs.linux_run_id }}
+      windows_run_id: ${{ steps.resolve.outputs.windows_run_id }}
+      linux_base_run_id: ${{ steps.resolve.outputs.linux_base_run_id }}
+      windows_base_run_id: ${{ steps.resolve.outputs.windows_base_run_id }}
+      linux_builds: ${{ steps.resolve.outputs.linux_builds }}
+      windows_builds: ${{ steps.resolve.outputs.windows_builds }}
+
+    steps:
+      - name: Wait for the portable builds
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ inputs.pr }}
+          # A pull_request run records the PR head commit in head_sha, while
+          # github.sha is the synthetic merge commit. Try both. On a push, a
+          # dispatch or the weekly run only the second is set; for the weekly
+          # run it is main's latest commit, built by that commit's push.
+          CANDIDATE_SHAS: ${{ github.event.pull_request.head.sha }} ${{ github.sha }}
+          WANT_BASELINE: ${{ github.event_name == 'pull_request' || inputs.pr != '' }}
+        run: |
+          set -euo pipefail
+
+          POLL_SECONDS=20
+          APPEAR_DEADLINE=$(( SECONDS + 10 * 60 ))
+          FINISH_DEADLINE=$(( SECONDS + 80 * 60 ))
+          linux_builds='[]'
+          windows_builds='[]'
+
+          if [ -n "${PR_NUMBER}" ]; then
+            CANDIDATE_SHAS=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')
+            echo "Testing pull request #${PR_NUMBER} at ${CANDIDATE_SHAS}."
+          fi
+
+          # Newest run for whichever candidate SHA matches, or empty.
+          find_run() {
+            local workflow="$1" sha run_id
+            for sha in ${CANDIDATE_SHAS}; do
+              run_id=$(gh api \
+                "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?head_sha=${sha}&per_page=100" \
+                --jq 'if (.workflow_runs | length) == 0 then "" else (.workflow_runs | sort_by(.run_number) | last | .id) end')
+              if [ -n "${run_id}" ]; then
+                printf '%s' "${run_id}"
+                return 0
+              fi
+            done
+          }
+
+          list_artifacts() {
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/$1/artifacts?per_page=100" \
+              --jq '.artifacts[] | select(.expired | not) | .name'
+          }
+
+          # main's newest successful push build that still has its artifacts.
+          # Sets base_run_id and base_artifacts, both empty when there is none.
+          # Not called in $(...), which would lose the assignments.
+          base_run_id=""
+          base_artifacts=""
+          find_base() {
+            local workflow="$1" run_id
+            base_run_id=""
+            base_artifacts=""
+            for run_id in $(gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?branch=main&event=push&status=success&per_page=10" \
+              --jq '.workflow_runs[].id'); do
+              base_artifacts=$(list_artifacts "${run_id}")
+              if [ -n "${base_artifacts}" ]; then
+                base_run_id="${run_id}"
+                return 0
+              fi
+            done
+          }
+
+          # Appends {artifact, base_artifact, platform} to the named list when
+          # the run published an artifact matching the pattern. An artifact
+          # exists only if its build job got all the way through, so a failed
+          # HRX build drops just the HRX test. base_artifact is empty when
+          # there is no baseline build of that kind.
+          add_build() {
+            local list="$1" artifacts="$2" pattern="$3" platform="$4" name base
+            name=$(printf '%s\n' "${artifacts}" | grep -E "${pattern}" | head -n 1 || true)
+            if [ -z "${name}" ]; then
+              echo "::warning::No ${platform} portable artifact was published; skipping that test."
+              return 0
+            fi
+            base=$(printf '%s\n' "${base_artifacts}" | grep -E "${pattern}" | head -n 1 || true)
+            echo "  ${platform}: ${name} (baseline: ${base:-none})"
+            printf -v "${list}" '%s' "$(jq -c --arg a "${name}" --arg b "${base}" --arg p "${platform}" \
+              '. + [{artifact: $a, base_artifact: $b, platform: $p}]' <<< "${!list}")"
+          }
+
+          wait_for_build() {
+            local workflow="$1" platform="$2" default_pattern="$3" hrx_pattern="$4"
+            local run_id="" status artifacts
+
+            while :; do
+              run_id=$(find_run "${workflow}")
+              [ -n "${run_id}" ] && break
+              if [ "${SECONDS}" -ge "${APPEAR_DEADLINE}" ]; then
+                echo "::warning::No ${workflow} run appeared for this commit; skipping ${platform}."
+                return 1
+              fi
+              echo "Waiting for a ${workflow} run to appear..."
+              sleep "${POLL_SECONDS}"
+            done
+
+            while :; do
+              status=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq '.status')
+              [ "${status}" = "completed" ] && break
+              if [ "${SECONDS}" -ge "${FINISH_DEADLINE}" ]; then
+                echo "::warning::${workflow} run ${run_id} is still ${status}; skipping ${platform}."
+                return 1
+              fi
+              echo "${workflow} run ${run_id} is ${status}; checking again in ${POLL_SECONDS}s."
+              sleep "${POLL_SECONDS}"
+            done
+
+            artifacts=$(list_artifacts "${run_id}")
+            echo "${workflow} run ${run_id} published:"
+            printf '%s\n' "${artifacts}" | sed 's/^/  /'
+            echo "${platform}_run_id=${run_id}" >> "$GITHUB_OUTPUT"
+
+            base_artifacts=""
+            if [ "${WANT_BASELINE}" = "true" ]; then
+              find_base "${workflow}"
+              if [ -n "${base_run_id}" ]; then
+                echo "Baseline: main's ${workflow} run ${base_run_id}."
+                echo "${platform}_base_run_id=${base_run_id}" >> "$GITHUB_OUTPUT"
+              else
+                echo "::warning::No ${workflow} build of main has artifacts left; ${platform} runs without a baseline."
+              fi
+            fi
+
+            # Fully anchored, so neither pattern matches the other's artifact,
+            # the models-from-source one, or "fastflowlm-windows-msi-<sha>".
+            add_build "${platform}_builds" "${artifacts}" "${default_pattern}" "${platform}"
+            add_build "${platform}_builds" "${artifacts}" "${hrx_pattern}" "${platform}-hrx"
+          }
+
+          wait_for_build debian-portable.yml linux \
+            '^portable$' '^HRX-portable$' || true
+          wait_for_build windows-build.yml windows \
+            '^fastflowlm-windows-[0-9a-f]+$' '^HRX-fastflowlm-windows-[0-9a-f]+$' || true
+
+          {
+            echo "linux_builds=${linux_builds}"
+            echo "windows_builds=${windows_builds}"
+          } >> "$GITHUB_OUTPUT"
+
+          # One missing platform is a warning above; nothing at all to test
+          # would otherwise leave a green check that tested nothing.
+          if [ "${linux_builds}" = "[]" ] && [ "${windows_builds}" = "[]" ]; then
+            # The Linux portable artifact is kept for 7 days, so a weekly run
+            # after a quiet week on main can find nothing left to download.
+            echo "::error::No portable build was found, so nothing was tested. Build artifacts expire, so for an older commit, rerun the build workflows first."
+            exit 1
+          fi
+
+  d3-linux:
+    name: d3 (${{ matrix.build.platform }})
+    needs: resolve-build
+    if: needs.resolve-build.outputs.linux_builds != '[]'
+    runs-on: [self-hosted, linux, x64, npu, sweep]
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        build: ${{ fromJSON(needs.resolve-build.outputs.linux_builds) }}
+
+    env:
+      # Weights are expected at $FLM_MODEL_PATH/models/<ModelName>
+      FLM_MODEL_PATH: /scratch
+      # Next to the weights, so the dataset's Parquet files are downloaded once
+      # per runner and dataset revision.
+      HF_HOME: /scratch/huggingface
+
+    steps:
+      # Only the scripts; this job compiles nothing.
+      - name: Checkout test scripts
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/script
+          filter: blob:none
+
+      - name: Download ${{ matrix.build.platform }} portable build
+        uses: dawidd6/action-download-artifact@v25
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          run_id: ${{ needs.resolve-build.outputs.linux_run_id }}
+          name: ${{ matrix.build.artifact }}
+          path: build-artifact
+          if_no_artifact_found: fail
+
+      - name: Download baseline build
+        if: matrix.build.base_artifact != ''
+        uses: dawidd6/action-download-artifact@v25
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          run_id: ${{ needs.resolve-build.outputs.linux_base_run_id }}
+          name: ${{ matrix.build.base_artifact }}
+          path: base-artifact
+          if_no_artifact_found: fail
+
+      - name: Unpack portable builds
+        run: |
+          set -euo pipefail
+          for build in build base; do
+            [ -d "${build}-artifact" ] || continue
+            mkdir -p "flm-${build}"
+            tarball=$(ls "${build}"-artifact/*_linux.tar.gz)
+            echo "Using tarball: ${tarball}"
+            tar xzf "${tarball}" -C "flm-${build}"
+            chmod +x "flm-${build}/flm" "flm-${build}/flm-real"
+            "flm-${build}/flm" version
+          done
+          echo "FLM_BIN=${GITHUB_WORKSPACE}/flm-build/flm" >> "$GITHUB_ENV"
+
+      # A no-op once the weights are on the runner.
+      - name: Pull model
+        run: |
+          set -euo pipefail
+          "${FLM_BIN}" pull "${D3_MODEL}"
+
+      - name: Set up Python virtualenv
+        run: |
+          set -euo pipefail
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          for attempt in 1 2 3; do
+            .venv/bin/python -m pip install --no-cache-dir openai huggingface_hub pyarrow && break
+            if [ "${attempt}" -eq 3 ]; then
+              exit 1
+            fi
+          done
+
+      - name: Draw the MMMU-Pro vision questions
+        run: |
+          set -euo pipefail
+          .venv/bin/python .github/script/build_d3_mmmu_eval.py --out d3-mmmu-pro \
+            --revision "${D3_MMMU_REVISION}" --seed "${D3_MMMU_SEED}" --count "${D3_MMMU_COUNT}"
+
+      # The baseline's own failures are reported in its results, not here:
+      # what matters is how the build under test compares with it.
+      - name: Run d3 test on the baseline
+        if: matrix.build.base_artifact != ''
+        run: |
+          .venv/bin/python .github/script/d3_mmmu_test.py \
+            --flm-bin "${GITHUB_WORKSPACE}/flm-base/flm" \
+            --platform "${{ matrix.build.platform }}" \
+            --models "${D3_MODEL}" \
+            --eval-dir d3-mmmu-pro \
+            --output-dir d3-baseline || true
+
+      - name: Run d3 test
+        run: |
+          set -euo pipefail
+          args=(--flm-bin "${FLM_BIN}" --platform "${{ matrix.build.platform }}"
+                --models "${D3_MODEL}" --eval-dir d3-mmmu-pro --output-dir d3-results)
+          baseline=$(ls d3-baseline/*_results.json 2>/dev/null || true)
+          [ -n "${baseline}" ] && args+=(--baseline "${baseline}")
+          .venv/bin/python .github/script/d3_mmmu_test.py "${args[@]}"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: d3-test-${{ matrix.build.platform }}-${{ github.run_number }}
+          path: |
+            d3-results/
+            d3-baseline/
+            d3-mmmu-pro/manifest.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  d3-windows:
+    name: d3 (${{ matrix.build.platform }})
+    needs: resolve-build
+    if: needs.resolve-build.outputs.windows_builds != '[]'
+    runs-on: [self-hosted, windows, x64, npu, sweep]
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        build: ${{ fromJSON(needs.resolve-build.outputs.windows_builds) }}
+
+    steps:
+      - name: Checkout test scripts
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/script
+          filter: blob:none
+
+      # The dataset's Parquet files stay in the default Hugging Face cache in
+      # the runner's profile, like the weights in .flm.
+      - name: Resolve model path
+        shell: powershell
+        run: |
+          $modelPath = Join-Path $env:USERPROFILE ".flm"
+          New-Item -ItemType Directory -Force $modelPath | Out-Null
+          "FLM_MODEL_PATH=$modelPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      # The artifacts hold flm.exe and its DLLs at the top level.
+      - name: Download ${{ matrix.build.platform }} portable build
+        uses: dawidd6/action-download-artifact@v25
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          run_id: ${{ needs.resolve-build.outputs.windows_run_id }}
+          name: ${{ matrix.build.artifact }}
+          path: flm-build
+          if_no_artifact_found: fail
+
+      - name: Download baseline build
+        if: matrix.build.base_artifact != ''
+        uses: dawidd6/action-download-artifact@v25
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          run_id: ${{ needs.resolve-build.outputs.windows_base_run_id }}
+          name: ${{ matrix.build.base_artifact }}
+          path: flm-base
+          if_no_artifact_found: fail
+
+      - name: Verify FLM binaries run
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          foreach ($build in "flm-build", "flm-base") {
+            $flm = Join-Path $env:GITHUB_WORKSPACE "$build\flm.exe"
+            if (Test-Path $flm) { & $flm version }
+            elseif ($build -eq "flm-build") { throw "flm.exe not found at $flm" }
+          }
+          "FLM_BIN=$(Join-Path $env:GITHUB_WORKSPACE 'flm-build\flm.exe')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      # A no-op once the weights are on the runner.
+      - name: Pull model
+        shell: powershell
+        run: |
+          & $env:FLM_BIN pull $env:D3_MODEL
+          # A native command's exit code does not trip ErrorActionPreference.
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Set up Python virtualenv
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv\Scripts\python.exe -m pip install openai huggingface_hub pyarrow
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Draw the MMMU-Pro vision questions
+        shell: powershell
+        run: |
+          & ".\.venv\Scripts\python.exe" .github\script\build_d3_mmmu_eval.py --out d3-mmmu-pro `
+            --revision $env:D3_MMMU_REVISION --seed $env:D3_MMMU_SEED --count $env:D3_MMMU_COUNT
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # See the Linux job: the baseline's own failures do not fail this job.
+      - name: Run d3 test on the baseline
+        if: matrix.build.base_artifact != ''
+        shell: powershell
+        run: |
+          & ".\.venv\Scripts\python.exe" .github\script\d3_mmmu_test.py `
+            --flm-bin (Join-Path $env:GITHUB_WORKSPACE "flm-base\flm.exe") `
+            --platform "${{ matrix.build.platform }}" `
+            --models $env:D3_MODEL `
+            --eval-dir d3-mmmu-pro `
+            --output-dir d3-baseline
+          exit 0
+
+      - name: Run d3 test
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $cmdArgs = @(
+            ".github\script\d3_mmmu_test.py",
+            "--flm-bin", $env:FLM_BIN,
+            "--platform", "${{ matrix.build.platform }}",
+            "--models", $env:D3_MODEL,
+            "--eval-dir", "d3-mmmu-pro",
+            "--output-dir", "d3-results"
+          )
+          $baseline = Get-ChildItem d3-baseline\*_results.json -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($baseline) { $cmdArgs += @("--baseline", $baseline.FullName) }
+          & ".\.venv\Scripts\python.exe" $cmdArgs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: d3-test-${{ matrix.build.platform }}-${{ github.run_number }}
+          path: |
+            d3-results/
+            d3-baseline/
+            d3-mmmu-pro/manifest.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  # One report for the whole run, the platforms side by side. Each job's own
+  # report is in its artifact. Reporting only, so it stays on a GitHub-hosted
+  # runner.
+  summary:
+    runs-on: ubuntu-latest
+    needs: [resolve-build, d3-linux, d3-windows]
+    if: always() && needs.resolve-build.result == 'success'
+    steps:
+      - name: Checkout test scripts
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/script
+          filter: blob:none
+
+      - name: Download results
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: d3-test-*-${{ github.run_number }}
+          path: d3-artifacts
+
+      - name: Write job summary
+        run: |
+          set -euo pipefail
+          python3 .github/script/d3_mmmu_summary.py d3-artifacts >> "$GITHUB_STEP_SUMMARY"
