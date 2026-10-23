@@ -50,6 +50,138 @@ std::string Qwen3_5VL::apply_chat_template(nlohmann::ordered_json& messages, nlo
     return this->chat_tmpl->apply(inputs);
 }
 
+
+/************              prefix slots            **************/
+namespace {
+constexpr int kImageSoftTokenId = 248056;
+/// a boundary closer to the start than this is not worth a slot: re-prefilling it is cheap
+constexpr size_t kMinBoundaryTokens = 512;
+/// K/V rows the slots may hold in total (each row costs a few KB per model, so this bounds the memory)
+constexpr size_t kMaxSavedRows = 65536;
+
+size_t lcp_len(const std::vector<int>& a, const std::vector<int>& b) {
+    const size_t n = std::min(a.size(), b.size());
+    size_t i = 0;
+    while (i < n && a[i] == b[i]) i++;
+    return i;
+}
+
+size_t count_image_runs(const std::vector<int>& tokens, size_t len) {
+    size_t runs = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (tokens[i] == kImageSoftTokenId && (i == 0 || tokens[i - 1] != kImageSoftTokenId)) {
+            runs++;
+        }
+    }
+    return runs;
+}
+
+uint64_t hash_bytes(const void* data, size_t bytes, uint64_t h) {
+    const uint8_t* p = static_cast<const uint8_t*>(data);
+    size_t i = 0;
+    for (; i + 8 <= bytes; i += 8) {
+        uint64_t w;
+        std::memcpy(&w, p + i, 8);
+        h = (h ^ w) * 0x100000001b3ull;
+        h ^= h >> 29;
+    }
+    for (; i < bytes; i++) {
+        h = (h ^ p[i]) * 0x100000001b3ull;
+    }
+    return h;
+}
+} // namespace
+
+qwen3_5vl_npu* Qwen3_5VL::slot_engine() const {
+    return dynamic_cast<qwen3_5vl_npu*>(this->lm_engine);
+}
+
+void Qwen3_5VL::_prefix_slots_forget_all() {
+    if (qwen3_5vl_npu* eng = this->slot_engine()) {
+        for (const auto& slot : this->prefix_slots_) {
+            eng->drop_checkpoint_slot(slot.id);
+        }
+    }
+    this->prefix_slots_.clear();
+    this->live_tokens_.clear();
+}
+
+void Qwen3_5VL::clear_context() {
+    this->_prefix_slots_forget_all();
+    this->AutoModel::clear_context();
+}
+
+void Qwen3_5VL::_prefix_slot_save(const std::vector<int>& tokens, const std::vector<uint64_t>& image_hashes, bool boundary, int kv_from) {
+    qwen3_5vl_npu* eng = this->slot_engine();
+    if (eng == nullptr || tokens.empty()) {
+        return;
+    }
+    for (auto& slot : this->prefix_slots_) {
+        if (slot.tokens == tokens) { // same prompt, same state: nothing to save
+            slot.last_used = ++this->prefix_clock_;
+            slot.boundary = slot.boundary || boundary;
+            return;
+        }
+    }
+    const size_t rows = tokens.size() - static_cast<size_t>(kv_from);
+    if (rows > kMaxSavedRows) {
+        return;
+    }
+    // least recently used first, boundary slots last
+    auto evict_one = [&]() {
+        size_t victim = 0;
+        for (size_t i = 1; i < this->prefix_slots_.size(); i++) {
+            const auto& a = this->prefix_slots_[i];
+            const auto& b = this->prefix_slots_[victim];
+            if (a.boundary != b.boundary ? !a.boundary : a.last_used < b.last_used) {
+                victim = i;
+            }
+        }
+        eng->drop_checkpoint_slot(this->prefix_slots_[victim].id);
+        this->prefix_slots_.erase(this->prefix_slots_.begin() + victim);
+    };
+    auto saved_rows = [&]() {
+        size_t total = rows;
+        for (const auto& slot : this->prefix_slots_) total += slot.tokens.size() - static_cast<size_t>(slot.kv_from);
+        return total;
+    };
+    while (!this->prefix_slots_.empty() && saved_rows() > kMaxSavedRows) {
+        evict_one();
+    }
+    int id = -1;
+    for (int candidate = 0; candidate < qwen3_5vl_npu::NUM_CHECKPOINT_SLOTS && id < 0; candidate++) {
+        bool used = false;
+        for (const auto& slot : this->prefix_slots_) {
+            used = used || slot.id == candidate;
+        }
+        if (!used) id = candidate;
+    }
+    while (id < 0) { // all slots in use
+        evict_one();
+        for (int candidate = 0; candidate < qwen3_5vl_npu::NUM_CHECKPOINT_SLOTS && id < 0; candidate++) {
+            bool used = false;
+            for (const auto& slot : this->prefix_slots_) {
+                used = used || slot.id == candidate;
+            }
+            if (!used) id = candidate;
+        }
+    }
+    if (eng->checkpoint_slot(id, kv_from) != static_cast<int>(tokens.size())) {
+        header_print("WARNING", "Prefix slot " << id << " saved at an unexpected length, dropping it");
+        eng->drop_checkpoint_slot(id);
+        return;
+    }
+    prefix_slot_t slot;
+    slot.id = id;
+    slot.tokens = tokens;
+    slot.kv_from = kv_from;
+    const size_t runs = std::min(count_image_runs(tokens, tokens.size()), image_hashes.size());
+    slot.image_hashes.assign(image_hashes.begin(), image_hashes.begin() + runs);
+    slot.last_used = ++this->prefix_clock_;
+    slot.boundary = boundary;
+    this->prefix_slots_.push_back(std::move(slot));
+}
+
 bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
     // preprocess
     constexpr int image_soft_token_id = 248056;
@@ -201,6 +333,90 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
     // fully-cached leading images so the surviving payload aligns with the
     // surviving image tokens after _shared_insert performs its own erase.
     // ----------------------------------------------------------------------
+    // ---- prefix slots: resume from the longest saved prefix of this prompt ----
+    const size_t trim_tokens = this->enable_think ? 2 : 4;
+    qwen3_5vl_npu* slot_eng = this->slot_engine();
+    const bool slot_mode = slot_eng != nullptr && meta_info.restore_allowed && tokens.size() > trim_tokens;
+    size_t match_len = 0;
+    std::vector<int> full_tokens;          // what this prompt leaves in the engine
+    std::vector<uint64_t> image_hashes;    // content of each of its images
+    if (slot_eng != nullptr && !slot_mode) {
+        // the single-checkpoint path below moves the engine on without telling the table
+        this->_prefix_slots_forget_all();
+    }
+    if (slot_mode) {
+        full_tokens.assign(tokens.begin(), tokens.end() - trim_tokens);
+        {
+            const size_t patch = slot_eng->QWEN3_5_PATCH_SIZE;
+            const size_t temporal = slot_eng->QWEN3_5_TEMPORAL_PATCH_SIZE;
+            size_t offset = 0;
+            for (const auto& img : image_payload.images) {
+                const size_t count = static_cast<size_t>(img.grid_h) * patch * static_cast<size_t>(img.grid_w) * patch * 3u * temporal;
+                uint64_t h = 0xcbf29ce484222325ull ^ (static_cast<uint64_t>(img.grid_h) << 32 | static_cast<uint64_t>(img.grid_w));
+                if (offset + count <= image_payload._data__processed.size()) {
+                    h = hash_bytes(image_payload._data__processed.data() + offset, count * sizeof(bf16), h);
+                }
+                image_hashes.push_back(h);
+                offset += count;
+            }
+        }
+        int best = -1;
+        int best_ancestor = -1;  // slot that puts the head under `best` back, when the engine no longer holds it
+        for (size_t i = 0; i < this->prefix_slots_.size(); i++) {
+            const prefix_slot_t& slot = this->prefix_slots_[i];
+            const size_t len = slot.tokens.size();
+            // strictly shorter than the prompt: at least one token must be prefilled to get logits
+            if (len == 0 || len >= full_tokens.size() || len <= match_len) continue;
+            if (!std::equal(slot.tokens.begin(), slot.tokens.end(), full_tokens.begin())) continue;
+            if (slot.image_hashes.size() > image_hashes.size() ||
+                !std::equal(slot.image_hashes.begin(), slot.image_hashes.end(), image_hashes.begin())) continue;
+            int ancestor = -1;
+            const size_t head = static_cast<size_t>(slot.kv_from);
+            if (head > 0 && lcp_len(this->live_tokens_, slot.tokens) < head) {
+                // the rows before kv_from are not in the engine: a self-contained slot must supply them
+                for (size_t j = 0; j < this->prefix_slots_.size(); j++) {
+                    const prefix_slot_t& other = this->prefix_slots_[j];
+                    if (other.kv_from == 0 && other.tokens.size() >= head &&
+                        std::equal(slot.tokens.begin(), slot.tokens.begin() + head, other.tokens.begin())) {
+                        ancestor = static_cast<int>(j);
+                        break;
+                    }
+                }
+                if (ancestor < 0) continue;
+            }
+            best = static_cast<int>(i);
+            best_ancestor = ancestor;
+            match_len = len;
+        }
+        if (best >= 0) {
+            prefix_slot_t& slot = this->prefix_slots_[best];
+            bool restored = true;
+            if (best_ancestor >= 0) {
+                prefix_slot_t& anchor = this->prefix_slots_[best_ancestor];
+                restored = slot_eng->restore_slot_kv(anchor.id) == static_cast<int>(anchor.tokens.size());
+                anchor.last_used = ++this->prefix_clock_;
+            }
+            restored = restored && slot_eng->restore_slot(slot.id) == static_cast<int>(match_len);
+            if (!restored) {
+                header_print("WARNING", "Prefix slot " << slot.id << " could not be restored, prefilling from scratch");
+                this->clear_context();
+                match_len = 0;
+            } else {
+                slot.last_used = ++this->prefix_clock_;
+                this->total_tokens = match_len;
+                this->token_history = slot.tokens;
+                this->live_tokens_ = slot.tokens;
+                // a cold prompt starts with an empty penalty history (clear_context); resuming
+                // must too, or the tokens of earlier requests change what this one generates
+                this->sampler->reset_penalties();
+                header_print("FLM", "Prefix slot " << slot.id << ": resuming at " << match_len << " of " << full_tokens.size() << " tokens");
+            }
+        } else {
+            this->clear_context();
+            header_print("FLM", "No saved prefix matches, prefilling " << full_tokens.size() << " tokens");
+        }
+    }
+
     size_t prefix_skip_count = 0;
     {
         const size_t idx = this->checkpoint_his.size();
@@ -215,6 +431,9 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
         // will clear the context and not skip anything.
         if (prefix_skip_count != idx) {
             prefix_skip_count = 0;
+        }
+        if (slot_mode) {
+            prefix_skip_count = match_len;
         }
 
         if (prefix_skip_count > 0 && !image_payload.images.empty()) {
@@ -281,14 +500,68 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
     int restore_idx = -1;
     const bool has_images = image_payload.num_images > 0;
 
-    if (meta_info.restore_allowed) {
+    if (!slot_mode && meta_info.restore_allowed) {
         restore_idx = this->lm_engine->restore();
         this->total_tokens = restore_idx;
         this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
     }
 
     size_t n = tokens.size();
-    tokens.resize(n - (this->enable_think ? 2 : 4));
+    tokens.resize(n - trim_tokens);
+
+    if (slot_mode) {
+        bool success = true;
+        uint64_t head_prefill_ns = 0;
+        // Save the end of system + tools while prefilling, so a prompt that shares
+        // only that part (another conversation, a side request) can resume there.
+        size_t boundary = 0;
+        {
+            const std::vector<int> marker = this->tokenizer->encode("<|im_start|>user");
+            for (size_t i = 1; i + marker.size() <= full_tokens.size() && !marker.empty(); i++) {
+                if (std::equal(marker.begin(), marker.end(), full_tokens.begin() + i)) {
+                    boundary = i;
+                    break;
+                }
+            }
+            if (boundary < kMinBoundaryTokens) boundary = 0;
+        }
+        if (!has_images && boundary > match_len && boundary < full_tokens.size()) {
+            std::vector<int> head(full_tokens.begin(), full_tokens.begin() + boundary);
+            chat_meta_info_t head_meta;
+            head_meta.max_prefill_len = meta_info.max_prefill_len;
+            success = this->_shared_insert(head_meta, head, is_cancelled, nullptr, 0, std::nullopt, false);
+            if (success) {
+                head_prefill_ns = head_meta.prefill_duration;
+                this->live_tokens_.assign(full_tokens.begin(), full_tokens.begin() + boundary);
+                this->_prefix_slot_save(this->live_tokens_, {}, true, 0);
+            } else {
+                meta_info.stop_reason = head_meta.stop_reason;
+            }
+        }
+        if (success) {
+            success = has_images
+                ? this->_shared_insert(meta_info, tokens, is_cancelled, &image_payload, last_image_token_index)
+                : this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
+        }
+        if (!success) {
+            this->clear_context(); // cancelled or failed half way: the engine holds part of a prompt
+            return false;
+        }
+        // the second pass only saw the tokens after the boundary slot as new
+        meta_info.cached_prompt_tokens = static_cast<int>(match_len);
+        meta_info.prefill_duration += head_prefill_ns;
+        this->live_tokens_ = full_tokens;
+        // the end of this prompt keeps only what follows the shared head, when a slot holds that head
+        int kv_from = 0;
+        for (const auto& slot : this->prefix_slots_) {
+            if (boundary > 0 && slot.kv_from == 0 && slot.tokens.size() == boundary &&
+                std::equal(slot.tokens.begin(), slot.tokens.end(), full_tokens.begin())) {
+                kv_from = static_cast<int>(boundary);
+            }
+        }
+        this->_prefix_slot_save(full_tokens, image_hashes, false, kv_from);
+        return true;
+    }
 
     bool success = has_images
         ? this->_shared_insert(meta_info, tokens, is_cancelled, &image_payload, last_image_token_index)

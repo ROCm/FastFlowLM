@@ -391,10 +391,15 @@ void AutoModel::_shared_validate_capacity(std::size_t rendered_tokens,
     }
 }
 
-bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled, void* payload, int first_len_run, std::optional<int> requested_max_new_tokens) {
+bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled, void* payload, int first_len_run, std::optional<int> requested_max_new_tokens, bool sample_next) {
     this->_shared_validate_capacity(tokens.size(), requested_max_new_tokens);
 
-    this->_begin_turn(meta_info, tokens);
+    // a prefill-only pass (sample_next false) is the head of a longer prompt: the
+    // turn, its constraint and the sampler's penalty history all belong to the
+    // pass that finishes the prompt
+    if (sample_next) {
+        this->_begin_turn(meta_info, tokens);
+    }
 
     // print token history
     // header_print("DEBUG", "Current token history: ");
@@ -457,6 +462,9 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
     this->total_tokens += tokens.size();
     if (this->total_tokens >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping prefilling...");
+    }
+    if (!sample_next) {
+        return true;
     }
     this->profiler_list[SAMPLING_TIME].start();
     this->last_token = this->_sample(y, meta_info);

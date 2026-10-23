@@ -110,6 +110,35 @@ public:
     int checkpoint() override;
     int restore() override;
 
+    // ---- multi-slot checkpoints --------------------------------------------
+    // NOT virtual on purpose: causal_lm's vtable is shared by every engine .so,
+    // so a new virtual there forces all of them to be rebuilt in lockstep (see
+    // the ABI WARNING in causal_lm.hpp). The caller reaches these through the
+    // concrete class, the way it already reaches the vision parameters.
+
+    /// \brief how many checkpoint slots the engine keeps; slot 0 is checkpoint()/restore()
+    static constexpr int NUM_CHECKPOINT_SLOTS = 8;
+
+    /// \brief save the recurrent state, the context length and attention K/V rows into `slot`
+    /// \param kv_from first position whose K/V rows are saved with the slot (clamped to the
+    ///        context length); 0 makes the slot self-contained, anything above it leaves the
+    ///        rows before it to the caller, who must have them in place when restoring
+    /// \return the context length saved, or -1 for a bad slot
+    int checkpoint_slot(int slot, int kv_from);
+
+    /// \brief go back to what `slot` saved: state, length, and K/V rows from its kv_from on
+    /// \return the restored context length, or -1 if the slot holds nothing
+    /// \note Rows past the restored length are zeroed.
+    int restore_slot(int slot);
+
+    /// \brief write back only the K/V rows `slot` saved, leaving the state and the length alone
+    /// \return the context length of the slot, or -1 if the slot holds nothing
+    /// \note For putting the shared head of a prompt back under a slot that keeps only its tail.
+    int restore_slot_kv(int slot);
+
+    /// \brief forget a slot
+    void drop_checkpoint_slot(int slot);
+
     // parameters for vision process in qwen3.5 vl
 
     unsigned int QWEN3_5_PATCH_SIZE;

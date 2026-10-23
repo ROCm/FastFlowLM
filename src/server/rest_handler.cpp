@@ -1242,8 +1242,21 @@ void RestHandler::handle_openai_chat_completion(const json& request,
             // resets the cache whenever it replaces the engine, so the first
             // request on a new engine is a miss.
             cache_match_info_t cache_info;
-            can_use_prompt_cache = prompt_cache.can_use_cache(current_messages, auto_chat_engine->get_chat_template_type(), tools, cache_info);
-            if (can_use_prompt_cache) {
+            const bool engine_manages_cache = auto_chat_engine->manages_prefix_cache();
+            if (engine_manages_cache) {
+                // The model matches the rendered tokens against the prefixes it
+                // saved and prefills the rest; a message-level miss must not
+                // clear the context it would resume from. It logs what it reused.
+                can_use_prompt_cache = true;
+                meta_info.restore_allowed = true;
+            }
+            else {
+                can_use_prompt_cache = prompt_cache.can_use_cache(current_messages, auto_chat_engine->get_chat_template_type(), tools, cache_info);
+            }
+            if (engine_manages_cache) {
+                // nothing to clear
+            }
+            else if (can_use_prompt_cache) {
                 meta_info.restore_allowed = true;
                 header_print("FLM", "Use cached prompt!");
                 size_t matched_rounds = cache_info.matched_rounds + (auto_chat_engine->check_using_checkpint() ? 0 : 1);
