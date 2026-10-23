@@ -223,6 +223,8 @@ class SweepTask:
     name = "sweep"
     needs_asr = False
     needs_embed = False
+    # A decision model tag (e.g. "d3:lite") served with --decision; empty for none.
+    needs_decision = ""
     csv_header: list[str] = []
 
     @staticmethod
@@ -320,6 +322,8 @@ class SweepTask:
             "-a", "1" if self.needs_asr else "0",
             "-e", "1" if self.needs_embed else "0",
         ]
+        if self.needs_decision:
+            cmd += ["--decision", self.needs_decision]
         self.log_event(
             "server_start",
             detail=" ".join(cmd),

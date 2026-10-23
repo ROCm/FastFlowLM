@@ -212,7 +212,7 @@ jobs:
       # others mid-sweep.
       fail-fast: false
       matrix:
-        # sweep_embedding.py and sweep_audio.py are ready and tested, but stay
+        # sweep_embedding.py, sweep_audio.py and sweep_decision.py are ready and tested, but stay
         # out of the matrix until llm and vision have proven themselves against
         # real hardware. Add them back here to enable them; nothing else needs
         # to change.
@@ -513,7 +513,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # sweep_embedding.py and sweep_audio.py are ready and tested, but stay
+        # sweep_embedding.py, sweep_audio.py and sweep_decision.py are ready and tested, but stay
         # out of the matrix until llm and vision have proven themselves against
         # real hardware. Add them back here to enable them; nothing else needs
         # to change.
