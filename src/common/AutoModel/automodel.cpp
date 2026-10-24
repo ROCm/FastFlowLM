@@ -391,7 +391,8 @@ void AutoModel::_shared_validate_capacity(std::size_t rendered_tokens,
     }
 }
 
-bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled, void* payload, int first_len_run, std::optional<int> requested_max_new_tokens) {
+bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled, void* payload, int first_len_run, std::optional<int> requested_max_new_tokens,
+                        bool record_sampled_token) {
     this->_shared_validate_capacity(tokens.size(), requested_max_new_tokens);
 
     this->_begin_turn(meta_info, tokens);
@@ -459,7 +460,7 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
         header_print("WARNING", "Max length reached, stopping prefilling...");
     }
     this->profiler_list[SAMPLING_TIME].start();
-    this->last_token = this->_sample(y, meta_info);
+    this->last_token = this->_sample(y, meta_info, record_sampled_token);
     meta_info.insert_sample_pending = true;
     this->profiler_list[SAMPLING_TIME].stop(1);
     return true;
@@ -537,12 +538,12 @@ void AutoModel::_begin_turn(chat_meta_info_t& meta_info, const std::vector<int>&
     }
 }
 
-int AutoModel::_sample(buffer<bf16>& logits, chat_meta_info_t& meta_info) {
+int AutoModel::_sample(buffer<bf16>& logits, chat_meta_info_t& meta_info, bool record_in_history) {
     decode_constraint* constraint = meta_info.constraint.get();
     const bool masked = constraint != nullptr && constraint->fill_mask(this->constraint_mask_);
     // The mask goes to the sampler, which applies it to its own copy: the logits
     // live in the engine's device-mapped buffer and are never written here.
-    int token = this->sampler->sample(logits, masked ? &this->constraint_mask_ : nullptr);
+    int token = this->sampler->sample(logits, masked ? &this->constraint_mask_ : nullptr, record_in_history);
     auto allowed = [this](size_t i) {
         return i / 32 < this->constraint_mask_.size() && ((this->constraint_mask_[i / 32] >> (i % 32)) & 1u);
     };

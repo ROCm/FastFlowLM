@@ -268,7 +268,8 @@ protected:
 	/// \param tokens the tokens to insert
 	/// \param payload the payload, it shall not be used as this function is only used for chunkwised insertion, no image allowed
 	/// \return true if the tokens were inserted successfully, false otherwise
-	bool _shared_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled = [] { return false; }, void* payload = nullptr, int first_len_run = 0, std::optional<int> requested_max_new_tokens = std::nullopt);
+	bool _shared_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled = [] { return false; }, void* payload = nullptr, int first_len_run = 0, std::optional<int> requested_max_new_tokens = std::nullopt,
+                         bool record_sampled_token = true);
 
 	/// \brief Reject a request that cannot fit in the backend's decode limit
 	/// \param rendered_tokens the length of the rendered prompt
@@ -290,8 +291,10 @@ protected:
 	/// \brief Sample the next token under the request's constraint
 	/// \param logits the logits of the token about to be sampled, masked in place
 	/// \param meta_info the request, carrying the constraint
+	/// \param record_in_history whether the token joins the sampler's repetition
+	///        and frequency windows; false for a draw the caller throws away
 	/// \return the sampled token, already reported to the constraint
-	int _sample(buffer<bf16>& logits, chat_meta_info_t& meta_info);
+	int _sample(buffer<bf16>& logits, chat_meta_info_t& meta_info, bool record_in_history = true);
 
 	/// \brief Report a token the model is made to emit rather than samples
 	/// \note For the think preamble some generate()s feed after insert(); the
