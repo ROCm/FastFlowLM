@@ -26,6 +26,7 @@ sections:
         - "Qwen3.8 (Vision and MTP speculative decoding)"
         - "Qwen3.6 (Vision and MoE)"
         - "Gemma 4 (omni)"
+        - "Nemotron Bolt (NVIDIA, tool use)"
         - "Qwen3.5 (Vision)"
         - "Qwen 3 (Vision)"
         - "MiniCPM-V 4.7 (Vision)"

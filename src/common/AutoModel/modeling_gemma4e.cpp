@@ -269,14 +269,45 @@ void Gemma4e::setup_tokenizer(std::string model_path) {
 }
 
 std::string Gemma4e::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools) {
+    // Same as Gemma4_12B: the Gemma4 template emits unquoted keys (argument_needle:<|"|>...<|"|>), which
+    // minja's capability probe does not recognize, so it would wrongly polyfill tool calls and tool
+    // responses into a generic JSON blob. The template handles them natively.
+    minja::chat_template_options opt;
+    opt.polyfill_tools = false;
+    opt.polyfill_tool_calls = false;
+    opt.polyfill_tool_responses = false;
+    opt.polyfill_object_arguments = false;
+
+    // The template raises if tool_calls[].function.arguments is a string, but OpenAI-style clients send it
+    // serialized. Deserialize it here (what polyfill_object_arguments would do).
+    nlohmann::ordered_json normalized = messages;
+    for (auto& message : normalized) {
+        if (!message.is_object() || !message.contains("tool_calls")) continue;
+        for (auto& tool_call : message["tool_calls"]) {
+            if (!tool_call.is_object() || !tool_call.contains("function")) continue;
+            auto& function = tool_call["function"];
+            if (!function.is_object() || !function.contains("arguments")) continue;
+            auto& arguments = function["arguments"];
+            if (!arguments.is_string()) continue;
+            auto raw = arguments.get<std::string>();
+            if (raw.empty()) {
+                arguments = nlohmann::ordered_json::object();
+                continue;
+            }
+            auto parsed = nlohmann::ordered_json::parse(raw, nullptr, /* allow_exceptions= */ false);
+            if (parsed.is_object()) arguments = parsed;
+        }
+    }
+
     minja::chat_template_inputs inputs;
     inputs.add_generation_prompt = true;
-    inputs.messages = messages;
+    inputs.messages = normalized;
     inputs.extra_context = this->extra_context;
     inputs.extra_context["enable_thinking"] = this->enable_think;
+    inputs.extra_context["conversational_mode"] = this->conversational_mode;
     if (!tools.empty())
         inputs.tools = tools;
-    return this->chat_tmpl->apply(inputs);
+    return this->chat_tmpl->apply(inputs, opt);
 }
 
 bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {

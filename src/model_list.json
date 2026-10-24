@@ -244,6 +244,45 @@
                 "footprint": 9.4
             }
         },
+        "nemotron-bolt": {
+            "e4b": {
+                "supported_platforms": ["aie2p"],
+                "name": "Nemotron-3.5-Bolt-E4B-NPU2",
+                "url": "https://huggingface.co/FastFlowLM/Nemotron-3.5-Bolt-E4B-NPU2",
+                "file_url": "https://huggingface.co/api/models/FastFlowLM/Nemotron-3.5-Bolt-E4B-NPU2/tree/main",
+                "ms_url": "https://modelscope.cn/models/amd/Nemotron-3.5-Bolt-E4B-NPU2",
+                "size": 4000000000,
+                "flm_min_version": "1.0.11",
+                "files": [
+                    "config.json",
+                    "model.q4nx",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "vision_weight.q4nx",
+                    "audio_weight.q4nx",
+                    "chat_template.jinja"
+                ],
+                "vlm": true,
+                "asr": true,
+                "default_context_length": 32768,
+                "max_prefill_len": 4096,
+                "details": {
+                    "format": "NPU2",
+                    "family": "gemma4e",
+                    "think": true,
+                    "parameter_size": "8B",
+                    "quantization_level": "Q4_1"
+                },
+                "label": [
+                    "audio",
+                    "vision",
+                    "reasoning",
+                    "tool-calling",
+                    "chat-transcription"
+                ],
+                "footprint": 9.1
+            }
+        },
         "gemma4e-flash": {
             "e2b": {
                 "supported_platforms": ["aie2p"],

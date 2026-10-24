@@ -689,6 +689,10 @@ void RestHandler::configure_chat_engine_parameters(const json& options, const js
         std::string reasoning_effort = request["reasoning_effort"];
         auto_chat_engine->configure_parameter("reasoning_effort", reasoning_effort);
     }
+    if (has_value(request, "conversational_mode")) {
+        bool conversational_mode = request["conversational_mode"];
+        auto_chat_engine->configure_parameter("conversational_mode", conversational_mode);
+    }
 
     if (has_value(request, "image-max-tokens")) {
         int image_max_tokens = request["image-max-tokens"];

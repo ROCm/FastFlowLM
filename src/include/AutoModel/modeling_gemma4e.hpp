@@ -56,6 +56,8 @@ private:
 
     bool enable_think = false;
     bool enable_tool = false;
+    // Nemotron-3.5-Bolt chat-template switch (spoken-style system instruction); stock Gemma4 templates ignore it
+    bool conversational_mode = false;
     void setup_tokenizer(std::string model_path);
     
     // Image processing functionality
@@ -166,6 +168,14 @@ public:
         else if (parameter_name == "toggle_think") {
             this->enable_think = !this->enable_think;
             return true;
+        }
+        else if (parameter_name == "conversational_mode") {
+            try {
+                this->conversational_mode = std::any_cast<bool>(value);
+                return true;
+            } catch (const std::bad_any_cast&) {
+                return false;
+            }
         }
         else if (parameter_name == "system_prompt") {
             try {

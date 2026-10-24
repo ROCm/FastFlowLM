@@ -31,3 +31,4 @@ has_children: true
 - [SmolVLA](smolvla/)
 - [Hy-MT2](hy-mt2/)
 - [MiniCPM](minicpm/)
+- [Nemotron Bolt](nemotron-bolt/)
