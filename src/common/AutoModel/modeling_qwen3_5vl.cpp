@@ -287,12 +287,32 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
         this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
     }
 
-    size_t n = tokens.size();
-    tokens.resize(n - (this->enable_think ? 2 : 4));
+    // The template ends with the opening of the assistant turn and, without
+    // thinking, an empty think block. Normally the prefill stops before that
+    // block, so the checkpoint below sits where the next turn of the
+    // conversation will diverge, and generate() feeds the block one forward()
+    // at a time. A single-turn model never comes back to that checkpoint, so
+    // the four extra decode steps buy nothing: prefill the block with the
+    // prompt, and the token drawn from the prefill logits is already the first
+    // token of the answer.
+    this->think_block_prefilled = this->single_turn && !this->enable_think;
+    if (!this->think_block_prefilled) {
+        size_t n = tokens.size();
+        tokens.resize(n - (this->enable_think ? 2 : 4));
+    }
 
+    // Unless the think block was prefilled, the draw below is thrown away:
+    // generate() force-feeds the block and samples again. Such a draw must not
+    // enter the repetition and frequency windows -- it was never generated
+    // text, and for a model that answers without a thinking block the token
+    // predicted here IS the answer letter. Counting it pushes that letter down
+    // by count * freq_penalty + pre_penalty at the position where it matters.
+    // With the block prefilled the draw is the answer's first token, so it is
+    // counted, and it is the draw a logprobs request has to capture.
+    const bool real_draw = this->think_block_prefilled;
     bool success = has_images
-        ? this->_shared_insert(meta_info, tokens, is_cancelled, &image_payload, last_image_token_index)
-        : this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
+        ? this->_shared_insert(meta_info, tokens, is_cancelled, &image_payload, last_image_token_index, std::nullopt, real_draw, real_draw)
+        : this->_shared_insert(meta_info, tokens, is_cancelled, nullptr, 0, std::nullopt, real_draw, real_draw);
 
     checkpoint_his = token_history;
     int checkpoint_idx = this->lm_engine->checkpoint();
@@ -316,7 +336,16 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
     this->profiler_list[TKOEN_DECODE_TIME].reset();
     std::string token_str;
     int sampled_token;
-    if(this->enable_think) {
+    if (this->think_block_prefilled) {
+        // insert() prefilled the empty think block; _shared_insert drew the
+        // answer's first token from those logits, under the constraint. That
+        // draw is kept, so nothing is rolled back: the constraint started
+        // behind the closed block (the prompt tail ends with it) and has
+        // already accepted the token.
+        sampled_token = this->last_token;
+        meta_info.insert_sample_pending = false;
+    }
+    else if(this->enable_think) {
         this->token_history.push_back(think_start_id);
         this->profiler_list[DECODING_TIME].start();
         this->_force_token(meta_info, think_start_id);
@@ -335,6 +364,11 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
         token_str = this->tokenizer->run_time_decoder(198);
         result += token_str;
         // First token of the reasoning block.
+        // No capture here: this draw is the first token of the reasoning
+        // block, and that lands in reasoning_content, not in content. OpenAI's
+        // logprobs.content describes the tokens of message.content, so a
+        // report from here would name a token the caller cannot find in the
+        // text it was given. Requests with think:true get logprobs: null.
         sampled_token = this->_sample(y, meta_info);
         os << token_str << std::flush;
     }
@@ -363,6 +397,7 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
         buffer<bf16> y = this->lm_engine->forward(271);
         this->profiler_list[DECODING_TIME].stop(1);
         token_str = this->tokenizer->run_time_decoder(271);
+        this->_request_logprobs_capture(meta_info);
         sampled_token = this->_sample(y, meta_info);
     }
     this->total_tokens++;
@@ -371,13 +406,29 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
     token_str = this->tokenizer->run_time_decoder(last_sampled_token);
     result += token_str;
     os << token_str << std::flush;
+    // Recorded where the token reaches the caller's text, not where it was
+    // drawn, and under the same filter the loop below uses: a token the engine
+    // would have dropped must not get an entry either.
+    if (this->is_normal_token(last_sampled_token)) {
+        this->_record_top_logprobs(meta_info, last_sampled_token);
+    }
 
     if (this->total_tokens >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping generation...");
         reason = MAX_LENGTH_REACHED;
         return result;
     }
-    while (this->total_tokens < this->MAX_L){
+    while (true){
+        // The first token is drawn before the loop, so the limit can already be
+        // reached here -- with max_tokens=1 it always is. Checked only after a
+        // draw, the loop would draw and emit one token past the limit.
+        if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)){
+            reason = MAX_LENGTH_REACHED;
+            break;
+        }
+        if (this->total_tokens >= this->MAX_L){
+            break;
+        }
         if (is_cancelled()) {
             reason = CANCEL_DETECTED;
             break;
@@ -397,6 +448,7 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
             std::string token_str = this->tokenizer->run_time_decoder(sampled_token);
             os << token_str << std::flush;
             result += token_str;
+            this->_record_top_logprobs(meta_info, sampled_token);
         }
         this->profiler_list[TKOEN_DECODE_TIME].stop(1);
         this->token_history.push_back(sampled_token);
@@ -406,10 +458,6 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
             break;
         }
         meta_info.generated_tokens++;
-        if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)){
-            reason = MAX_LENGTH_REACHED;
-            break;
-        }
     }
     meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
     meta_info.stop_reason = reason;
