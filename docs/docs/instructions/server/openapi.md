@@ -325,6 +325,37 @@ gc.collect()
 
 ---
 
+## 🎲 Example: Token Log Probabilities
+
+`/v1/chat/completions` returns per-token log probabilities as OpenAI does. Set `logprobs=True`, and `top_logprobs` (0–20) for the most likely alternatives at each position:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://127.0.0.1:52625/v1", api_key="flm")
+
+response = client.chat.completions.create(
+    model="llama3.2:1b",
+    messages=[{"role": "user", "content": "Say hello."}],
+    logprobs=True,
+    top_logprobs=2,
+)
+
+for t in response.choices[0].logprobs.content:
+    alternatives = ", ".join(f"{a.token!r} {a.logprob:.3f}" for a in t.top_logprobs)
+    print(f"{t.token!r:12} {t.logprob:8.4f}   [{alternatives}]")
+```
+
+Streaming works the same way: each content chunk carries `choices[0].logprobs.content` for the tokens in that chunk.
+
+- The log probabilities are the model's own distribution, before temperature, top-k/top-p, penalties, or the grammar from `tool_choice` / `response_format` are applied. Under a grammar, the chosen token can be one the model itself thought unlikely.
+- Only `content` has log probabilities. Tokens of `reasoning_content` and of tool calls are left out, and chunks that carry them have `logprobs: null`.
+- `bytes` is `null` for special tokens such as end-of-turn, which can appear among `top_logprobs`. A token that holds only part of a UTF-8 character is named by its bytes, for example `"bytes:\xe4\xbd"`.
+- `qwen3.8-mtp` does not support log probabilities. Its speculative decoding commits tokens the server never samples, and requests with `logprobs` get HTTP 400.
+- `top_logprobs` without `logprobs=True`, or outside 0–20, gets HTTP 400.
+
+---
+
 ## 📷 Example: Multi-Image Input
 
 Send multiple images together with a text prompt.  

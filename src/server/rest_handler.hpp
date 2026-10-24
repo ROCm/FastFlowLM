@@ -32,6 +32,7 @@ using json = nlohmann::ordered_json;
 
 // Forward declaration
 struct CancellationToken;
+class chat_logprobs_aligner;
 
 ///@brief Stream callback type for sending streaming responses
 using StreamResponseCallback = std::function<void(const json&, bool)>; // data, is_final
@@ -128,7 +129,8 @@ private:
     void ensure_decision_model_loaded(const std::string& model_tag);
     void configure_chat_engine_parameters(const json& options, const json& request);
     json build_nstream_response(const std::string& response_text, chat_meta_info_t& meta_info,
-                                const chat_parse_options& parse_options);
+                                const chat_parse_options& parse_options,
+                                chat_logprobs_aligner* logprobs = nullptr);
 
 
     std::unique_ptr<AutoModel> auto_chat_engine;

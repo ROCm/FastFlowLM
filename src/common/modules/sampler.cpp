@@ -357,7 +357,7 @@ void Sampler::ring_buffer_update_sparse(int sampled_index) {
 /// \brief Sample the token
 /// \param x the input buffer
 /// \return the sampled token
-int Sampler::sample_greedy(buffer<bf16>& x, const std::vector<uint32_t>* allowed) {
+int Sampler::sample_greedy(buffer<bf16>& x, const std::vector<uint32_t>* allowed, sample_logprobs_t* logprobs) {
     const bool penalties_active =
         (this->repeat_last_n != 0) &&
         (this->rep_penalty != 1.0f || this->freq_penalty != 0.0f || this->pre_penalty != 0.0f);
@@ -365,10 +365,11 @@ int Sampler::sample_greedy(buffer<bf16>& x, const std::vector<uint32_t>* allowed
     float best = -std::numeric_limits<float>::infinity();
     int best_id = 0;
 
-    if (penalties_active || allowed != nullptr) {
+    if (penalties_active || allowed != nullptr || logprobs != nullptr) {
         // penalties reorder the logits, so they have to land before the argmax.
         // that needs the fp32 copy, but nothing past it does. A mask needs the
-        // copy too: x is the engine's buffer and is never written.
+        // copy too: x is the engine's buffer and is never written. So do
+        // logprobs, which read the whole vocabulary a second time.
         #if USEAVX2
         const int simd_width = 8;
         int i = 0;
@@ -385,6 +386,9 @@ int Sampler::sample_greedy(buffer<bf16>& x, const std::vector<uint32_t>* allowed
             this->logits[i] = x[i];
         }
         #endif
+        if (logprobs != nullptr) {
+            raw_logprobs_apply(*logprobs);
+        }
         if (penalties_active) {
             sampler_penalty_apply_sparse();
         }
@@ -471,10 +475,51 @@ void Sampler::sampler_allowed_apply(const std::vector<uint32_t>* allowed) {
     }
 }
 
-int Sampler::sample(buffer<bf16>& x, const std::vector<uint32_t>* allowed) {
+void Sampler::raw_logprobs_apply(sample_logprobs_t& logprobs) {
+    float max_l = -std::numeric_limits<float>::infinity();
+    for (int i = 0; i < in_features; i++) {
+        max_l = std::max(max_l, this->logits[i]);
+    }
+    double sum = 0.0;
+    for (int i = 0; i < in_features; i++) {
+        sum += std::exp(this->logits[i] - max_l);
+    }
+    logprobs.log_norm = max_l + static_cast<float>(std::log(sum));
+
+    // Same order as sampler_topk_apply(): higher logit first, lowest id on a tie
+    const auto ranks_before = [](const token_logprob_t& a, const token_logprob_t& b) {
+        if (a.logprob != b.logprob) { return a.logprob > b.logprob; }
+        return a.token_id < b.token_id;
+    };
+    const int k = std::min(logprobs.top_n, in_features);
+    auto& top = logprobs.top;
+    top.clear();
+    if (k <= 0) {
+        return;
+    }
+    // Holds logits until the end, logprobs only once the heap is sorted
+    top.reserve(k);
+    for (int i = 0; i < k; i++) {
+        top.push_back(token_logprob_t{ i, this->logits[i] });
+    }
+    std::make_heap(top.begin(), top.end(), ranks_before);
+    for (int i = k; i < in_features; i++) {
+        if (this->logits[i] > top.front().logprob) {
+            std::pop_heap(top.begin(), top.end(), ranks_before);
+            top.back() = token_logprob_t{ i, this->logits[i] };
+            std::push_heap(top.begin(), top.end(), ranks_before);
+        }
+    }
+    std::sort_heap(top.begin(), top.end(), ranks_before);
+    for (auto& t : top) {
+        t.logprob -= logprobs.log_norm;
+    }
+}
+
+int Sampler::sample(buffer<bf16>& x, const std::vector<uint32_t>* allowed, sample_logprobs_t* logprobs) {
     // PRNG is seeded once at construction, no per-call seeding needed
     if (this->top_k == 1) {
-        return sample_greedy(x, allowed);
+        return sample_greedy(x, allowed, logprobs);
     }
 
     // COPY FROM `x` → `this->logits[]`
@@ -497,6 +542,9 @@ int Sampler::sample(buffer<bf16>& x, const std::vector<uint32_t>* allowed) {
     }
     #endif
 
+    if (logprobs != nullptr) {
+        raw_logprobs_apply(*logprobs);
+    }
     sampler_penalty_apply_sparse();
     sampler_allowed_apply(allowed);
     sampler_topk_apply(this->top_k);

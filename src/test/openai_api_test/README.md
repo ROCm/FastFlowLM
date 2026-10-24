@@ -35,6 +35,7 @@ Each case prints `PASS`, `FAIL` or `SKIP`. The exit code is non-zero if anything
 | `test_reasoning.py` | `think: true` → `reasoning_content`, `think: false` / `reasoning_effort: "none"` → none, reasoning streamed before content, switch is per request, reasoning in history is accepted |
 | `test_tool_calls.py` | `auto` / `required` / forced function / `none`, `parallel_tool_calls: false`, ids, arguments are JSON matching the tool schema (typed: integer, number, boolean, enum, arrays), `strict: false`, streamed call deltas, a tool round trip |
 | `test_response_format.py` | `json_object`, `json_schema` (flat, enum, Pydantic `$defs`/`$ref`, `const`/`anyOf`/bounds/`pattern`), streamed, with and without thinking, schema vs. `auto` tools, `text` |
+| `test_logprobs.py` | `logprobs` / `top_logprobs` shape in both modes, greedy token heads its `top_logprobs`, entries spell the content and nothing else (no reasoning, no tool call markup), stream and non-stream report the same tokens, malformed values get 400 |
 | `test_errors.py` | Every malformed `tool_choice` / `response_format` gets HTTP 400 with an OpenAI error body, streaming too, and the server keeps serving |
 
 Some cases skip by design:
