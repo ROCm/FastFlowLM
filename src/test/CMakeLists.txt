@@ -97,7 +97,8 @@ function(add_npu_test TARGET_NAME OUTPUT_SUBDIR)
 
     # Basic link settings for test
     target_link_directories(${TARGET_NAME} PUBLIC
-        ${CMAKE_SOURCE_DIR}/../../lib
+        # the XRT-built engine libs; the HRX ones sit beside them in lib/hrx
+        ${CMAKE_SOURCE_DIR}/../../lib/xrt
         ${XRT_LIB_DIR}
         ${CMAKE_SOURCE_DIR}/../../build/tokenizer/lib
         C:/dev/boost_1_88_0/stage/lib

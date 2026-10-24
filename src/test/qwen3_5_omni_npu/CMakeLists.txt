@@ -24,6 +24,7 @@ add_npu_test(
     USE_SAMPLER
     USE_AVX512
     SOURCES
+        "${CMAKE_SOURCE_DIR}/../../common/AutoModel/model_backend.cpp"
         ${CMAKE_SOURCE_DIR}/../../common/AutoModel/modeling_qwen3_5_omni.cpp
         ${CMAKE_SOURCE_DIR}/../../common/AutoModel/modeling_qwen3_5_omni_image.cpp
         ${CMAKE_SOURCE_DIR}/../../common/AutoModel/modeling_qwen3_5_omni_audio.cpp

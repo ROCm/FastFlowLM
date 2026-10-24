@@ -13,6 +13,7 @@
 -include ../common.mk
 
 
+SOURCES += ../../common/AutoModel/model_backend.cpp
 SOURCES += $(wildcard ../../common/AutoModel/automodel.cpp)
 SOURCES += $(CHAT_SOURCES)
 SOURCES += $(wildcard ../../common/AutoModel/modeling_qwen3_6_moe.cpp)

@@ -11,6 +11,7 @@ add_npu_test(
     USE_TOKENIZER
     USE_SAMPLER
     SOURCES
+        "${CMAKE_SOURCE_DIR}/../../common/AutoModel/model_backend.cpp"
         "${CMAKE_SOURCE_DIR}/../../common/AutoModel/modeling_qwen2vl.cpp"
         "${CMAKE_SOURCE_DIR}/../../common/AutoModel/modeling_qwen2vl_image.cpp"
         "${CMAKE_SOURCE_DIR}/../../common/image_process_utils/imageproc.cpp"
