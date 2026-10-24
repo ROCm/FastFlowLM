@@ -138,3 +138,50 @@ are accepted; web addresses, file paths, corrupt images and videos are refused w
 Attention runs on the NPU from 1,536 tokens, as for d3-lite (measured break-even for d3-nano: about 1,550 tokens).
 At 31,491 tokens that is 3.3× faster than attention on the CPU (27 s against 91 s) with no measurable change in
 accuracy. A prompt of 32,769 tokens is refused.
+
+## ⚡ d3-mini on the NPU
+
+Accuracy and latency of `d3:mini` (vllm-sr/d3-mini v3.1.3, package D3-Mini-NPU2), same machine and settings as above.
+
+> **Note:**
+> - Latency is per request at the engine (no HTTP), median of 3 runs in each of 2 processes; the NPU is bimodal per process (about ±15%). Rows of 16,116 tokens and more are real documentation text, one request each.
+
+### Accuracy against the upstream BF16 model
+
+| Set | Questions | NPU (FLM) |
+|---|---:|---:|
+| Hand-built request set (up to 4,096 tokens), top-1 agreement with BF16 | 725 | 97.0% |
+| Same set, final hidden state cosine to BF16 (median) | 725 | 0.9994 |
+| Long prompts, 835 to 31,545 tokens, top-1 agreement with BF16 | 30 | 96.7% |
+| Long prompts, final hidden state cosine to BF16 (min over lengths) | 30 | 0.988 |
+| Decision Index public suite, seeded round-robin sample (800 requests, 42 benchmarks): mean benchmark score | 800 | 61.3% (BF16: 62.6%) |
+| Same requests, top-1 agreement with BF16 (choice answers) | 7,028 | 96.8% |
+
+Prompts, token ids and answer objects follow the upstream runtime. On the Decision Index sample the mean benchmark
+score is 1.25 points below the upstream BF16 model (standard error 0.75; about 19 requests per benchmark, so a single
+benchmark is very noisy). This is a sample, not the full suite, and the same sampling as for d3-nano, not the d3-lite
+subset. The GPTQ calibration prompts (300 synthetic questions) contain no Decision Index data.
+
+### Images (d3-mini)
+
+Image requests agree with the upstream BF16 model on 58 of 60 answers (96.7%; 31 hand-built requests with 64 × 64 to
+2000 × 1500 images, one to several images each; median probability difference 0.024). PNG, JPEG and WebP data URLs
+are accepted; web addresses, file paths, corrupt images and videos are refused with HTTP 422.
+
+### Latency
+
+| Request | Median (ms) |
+|---|---:|
+| 1 question, 128 tokens | 473 |
+| 1 question, 330 tokens | 536 |
+| 1 question, 1,024 tokens | 1315 |
+| 1 question, 2,048 tokens | 2597 |
+| 1 question, 4,096 tokens | 5280 |
+| 1 question, 16,116 tokens | 25900 |
+| 1 question, 31,545 tokens | 62900 |
+| 1 question, 32,768 tokens | 66500 |
+| 4 questions, 330 tokens each | 1767 |
+| 16 questions, 330 tokens each | 6575 |
+
+Attention runs on the NPU from 1,536 tokens, as for d3-lite (measured break-even for d3-mini: about 1,536 tokens; at
+4,096 tokens the NPU attention makes a request 17% faster, 5.3 s against 6.3 s). A prompt of 32,769 tokens is refused.

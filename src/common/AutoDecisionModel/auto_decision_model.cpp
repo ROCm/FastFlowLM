@@ -14,7 +14,7 @@
 #include "models/d3/flm/aie2p/d3_npu.hpp"   // d3_image_payload (the d3_npu class only with FLM_HAS_D3_NPU)
 #include "utils/utils.hpp"
 
-std::unordered_set<std::string> decisionModelTags = {"d3:lite", "d3:nano"};
+std::unordered_set<std::string> decisionModelTags = {"d3:lite", "d3:nano", "d3:mini"};
 
 namespace {
 

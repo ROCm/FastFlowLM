@@ -887,6 +887,38 @@
                     "decision"
                 ],
                 "footprint": 2.0
+            },
+            "mini": {
+                "supported_platforms": ["aie2p"],
+                "name": "D3-Mini-NPU2",
+                "url": "https://huggingface.co/FastFlowLM/D3-Mini-NPU2",
+                "file_url": "https://huggingface.co/api/models/FastFlowLM/D3-Mini-NPU2/tree/main",
+                "ms_url": "https://modelscope.cn/models/amd/D3-Mini-NPU2",
+                "size": 3430000000,
+                "flm_min_version": "1.0.11",
+                "files": [
+                    "config.json",
+                    "model.q4nx",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "chat_template.jinja",
+                    "decision_config.json",
+                    "readout.safetensors",
+                    "vision_weight.q4nx"
+                ],
+                "default_context_length": 32768,
+                "max_prefill_len": 32768,
+                "details": {
+                    "format": "NPU2",
+                    "family": "d3",
+                    "think": false,
+                    "parameter_size": "4B",
+                    "quantization_level": "Q4_K"
+                },
+                "label":[
+                    "decision"
+                ],
+                "footprint": 3.5
             }
         },
         "whisper-v3": {

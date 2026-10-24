@@ -772,7 +772,7 @@ int main(int argc, char* argv[]) {
             header_print_g("FLM", "Embedding mode enabled: reserving additional 300MB of memory");
         }
         if (!parsed_args.decision.empty()) {
-            // the decision model's own weights (d3:lite 0.56 GB, d3:nano 1.34 GB in the catalog's size) plus
+            // the decision model's own weights (d3:lite 0.56 GB, d3:nano 1.34 GB, d3:mini 3.43 GB in the catalog's size) plus
             // 1 GB for scratch (a 4096-row pass; bigger prompts allocate per call) and the fp32 readout
             uint64_t decision_size = 0;
             auto [decision_tag, decision_info] = availble_models.get_model_info(parsed_args.decision);
