@@ -67,7 +67,7 @@ A request that sends no sampling fields uses the model's own defaults, which dif
 | Models | `presence_penalty` at load |
 |---|---|
 | `qwen3.5:*`, `qwen3.5-core:*`, `qwen3.6-moe:35b-a3b`, `qwen3.6-moe-core:35b-a3b`, `qwen3.8-mtp:27b`, `minicpm-v-4.7:1b` | 1.5 |
-| `gemma4-it:*`, `gemma4-it-core:*`, `gemma4e-flash:*`, `nemotron-bolt:e4b` | 1.0 |
+| `gemma4-it:*`, `gemma4-it-core:*`, `gemma4e-flash:*`, `nemotron3.5-bolt:e4b` | 1.0 |
 | every other model | 0 |
 
 Sending `presence_penalty=0` turns the default off, and it stays off until the model is reloaded (see *Settings stick* above).
