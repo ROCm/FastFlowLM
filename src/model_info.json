@@ -3981,7 +3981,7 @@
             "sha256": "3df0849d23c68f1176d00adc25beb915ade1e6127f8192baaa28f96018a63369"
         }
     ],
-    "nemotron-bolt:e4b": [
+    "nemotron3.5-bolt:e4b": [
         {
             "type": "file",
             "oid": "b0e8de60c7fda6fa44dcdf4182cf29703effe2ab",
