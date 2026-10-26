@@ -20,15 +20,15 @@ int failures = 0;
     } while (0)
 
 /// \brief a state the fake engine fills; `alive` counts the ones that exist, to see that dropping a slot frees it
-class fake_state final : public engine_state {
+class fake_state final {
 public:
     static inline int alive = 0;
     fake_state(size_t fixed, size_t row) : fixed_(fixed), row_(row) { alive++; }
-    ~fake_state() override { alive--; }
+    ~fake_state() { alive--; }
     bool filled = false;
-    bool valid() const override { return filled; }
-    size_t bytes() const override { return filled ? estimate_bytes(context_length, kv_from) : 0; }
-    size_t estimate_bytes(int length, int from) const override { return fixed_ + static_cast<size_t>(std::max(length - from, 0)) * row_; }
+    int context_length = 0;
+    int kv_from = 0;
+    size_t estimate_bytes(int length, int from) const { return fixed_ + static_cast<size_t>(std::max(length - from, 0)) * row_; }
 
 private:
     size_t fixed_, row_;
@@ -44,39 +44,41 @@ public:
     size_t state_bytes = 1u << 20;      // 1 MiB per snapshot
     bool fail_restore = false;
 
-    std::unique_ptr<engine_state> new_state() { return std::make_unique<fake_state>(state_bytes, row_bytes); }
-    int read_state(engine_state& state, int kv_from) {
-        auto& s = static_cast<fake_state&>(state);
+    fake_state* new_state() { return new fake_state(state_bytes, row_bytes); }
+    int read_state(fake_state& s, int kv_from) {
         calls.push_back("read");
         s.filled = true;
         s.context_length = length;
         s.kv_from = std::clamp(kv_from, 0, length);
         return length;
     }
-    int write_state(const engine_state& state) {
+    int write_state(const fake_state& state) {
         calls.push_back("write");
-        if (fail_restore || !state.valid()) return -1;
+        if (fail_restore || !state.filled) return -1;
         length = state.context_length;
         return length;
     }
-    int write_state_kv(const engine_state& state) {
+    int write_state_kv(const fake_state& state) {
         calls.push_back("write_kv");
-        return state.valid() ? state.context_length : -1;
+        return state.filled ? state.context_length : -1;
     }
 };
 
-/// \brief what PrefixSlotCache is attached to (prefix_causal_lm in the server)
-class fake_io final : public prefix_state_io {
-public:
-    explicit fake_io(fake_engine* e) : e_(e) {}
-    std::unique_ptr<engine_state> new_state() override { return e_->new_state(); }
-    int read_state(engine_state& s, int kv_from) override { return e_->read_state(s, kv_from); }
-    int write_state(const engine_state& s) override { return e_->write_state(s); }
-    int write_state_kv(const engine_state& s) override { return e_->write_state_kv(s); }
-
-private:
-    fake_engine* e_;
-};
+/// \brief the flm_state_api table of the fake engine, as a library would export it
+static const flm_state_api* fake_api() {
+    static const flm_state_api api = {
+        FLM_STATE_API_VERSION, sizeof(flm_state_api),
+        [](void* e) { return reinterpret_cast<flm_state*>(static_cast<fake_engine*>(e)->new_state()); },
+        [](flm_state* s) { delete reinterpret_cast<fake_state*>(s); },
+        [](void* e, flm_state* s, int kv_from) { return static_cast<fake_engine*>(e)->read_state(*reinterpret_cast<fake_state*>(s), kv_from); },
+        [](void* e, const flm_state* s) { return static_cast<fake_engine*>(e)->write_state(*reinterpret_cast<const fake_state*>(s)); },
+        [](void* e, const flm_state* s) { return static_cast<fake_engine*>(e)->write_state_kv(*reinterpret_cast<const fake_state*>(s)); },
+        [](const flm_state* s) { return reinterpret_cast<const fake_state*>(s)->context_length; },
+        [](const flm_state* s) { return reinterpret_cast<const fake_state*>(s)->kv_from; },
+        [](const flm_state* s, int length, int from) { return reinterpret_cast<const fake_state*>(s)->estimate_bytes(length, from); },
+    };
+    return &api;
+}
 
 std::vector<int> seq(int from, int count) {
     std::vector<int> v(count);
@@ -110,7 +112,7 @@ size_t resume(PrefixSlotCache& cache, const std::vector<int>& prompt, const std:
 PrefixSlotCache make(fake_engine& e, int mb = -1, int slots = -1) {
     PrefixSlotCache cache;
     cache.configure(mb, slots);
-    cache.attach(std::make_unique<fake_io>(&e));
+    cache.attach(&e, fake_api());
     return cache;
 }
 

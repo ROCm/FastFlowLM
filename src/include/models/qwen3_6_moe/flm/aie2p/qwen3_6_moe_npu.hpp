@@ -15,6 +15,7 @@
 #include "tensor_2d.hpp"
 #include "utils/utils.hpp"
 #include "causal_lm.hpp"
+#include "flm_state_api.h"
 #if USEAVX2
 #include <immintrin.h>  // For AVX intrinsics
 #endif
@@ -109,14 +110,6 @@ public:
     int checkpoint() override;
     int restore() override;
 
-    // ---- saved states (see engine_state.hpp) --------------------------------
-    // The engine holds no copy of its own context: read_state() copies the live one into a caller's
-    // state, write_state() puts one back. checkpoint()/restore() keep one private copy for the legacy
-    // single-checkpoint path.
-    std::unique_ptr<engine_state> new_state() override;
-    int read_state(engine_state& state, int kv_from) override;
-    int write_state(const engine_state& state) override;
-    int write_state_kv(const engine_state& state) override;
     // parameters for vision process in qwen3.5 vl
 
     unsigned int QWEN3_6_MOE_PATCH_SIZE;
@@ -152,3 +145,5 @@ private:
     Impl* _impl;
 };
 
+/// \brief the saved-state table of this engine (flm_state_api.h); nullptr if `engine` is not a qwen3_6_moe_npu
+extern "C" const flm_state_api* qwen3_6_moe_state_api(void* engine);

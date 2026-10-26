@@ -1,9 +1,9 @@
 /// \file prefix_slot_cache.hpp
 /// \brief Token-level prefix cache over a few saved engine states, shared by every model family that can save one
-/// \note The cache owns the snapshots ("slots"): each one is an engine_state (what the engine cannot rewind, plus the
-///       attention K/V rows after a chosen position) read out of the engine with causal_lm::read_state. It remembers
+/// \note The cache owns the snapshots ("slots"): each one is an opaque flm_state (what the engine cannot rewind, plus the
+///       attention K/V rows after a chosen position) read out of the engine with flm_state_api::state_read. It remembers
 ///       which tokens each was saved after, resumes a new prompt from the longest one that is a prefix of it
-///       (causal_lm::write_state), and decides what to throw away when memory or slots run out. The engine only ever
+///       (flm_state_api::state_write), and decides what to throw away when memory or slots run out. The engine only ever
 ///       holds the context it is running: it has no slot numbers, no slot count and no cache policy.
 ///       It does not know any model: the model wrapper hands it tokens and image hashes, and the engine.
 #pragma once
@@ -13,18 +13,23 @@
 #include <memory>
 #include <vector>
 
-#include "engine_state.hpp"
+#include "flm_state_api.h"
 
-/// \brief the four things the cache asks of an engine (a causal_lm: see prefix_causal_lm.hpp); a seam so the cache
-///        and its unit test build without the NPU runtime. Mirrors causal_lm::new_state / read_state / write_state /
-///        write_state_kv one to one.
-class prefix_state_io {
+/// \brief one saved engine context: owns an opaque flm_state, freed through the engine library that made it
+class saved_state {
 public:
-    virtual ~prefix_state_io() = default;
-    virtual std::unique_ptr<engine_state> new_state() = 0;
-    virtual int read_state(engine_state& state, int kv_from) = 0;
-    virtual int write_state(const engine_state& state) = 0;
-    virtual int write_state_kv(const engine_state& state) = 0;
+    saved_state(const flm_state_api* api, flm_state* state) : api_(api), state_(state) {}
+    saved_state(saved_state&& o) noexcept : api_(o.api_), state_(o.state_) { o.state_ = nullptr; }
+    saved_state(const saved_state&) = delete;
+    saved_state& operator=(const saved_state&) = delete;
+    ~saved_state() { if (state_) api_->state_free(state_); }
+    flm_state* get() const { return state_; }
+    int context_length() const { return api_->state_context_length(state_); }
+    int kv_from() const { return api_->state_kv_from(state_); }
+    size_t estimate_bytes(int length, int from) const { return api_->state_estimate_bytes(state_, length, from); }
+private:
+    const flm_state_api* api_;
+    flm_state* state_;
 };
 
 /// \brief 64-bit content hash of a byte range, continuing from `seed`
@@ -67,10 +72,10 @@ public:
         cache_mb_ = cache_mb;
         slots_ = slots;
     }
-    /// \brief attach the engine (nullptr detaches); slots of a former engine are forgotten
-    /// \note The engine must implement the state methods of causal_lm (new_state() != nullptr), else nothing is saved.
-    void attach(std::unique_ptr<prefix_state_io> engine);
-    bool enabled() const { return engine_ != nullptr && slots_ != 0; }
+    /// \brief attach the engine and the state table its library exports (nullptr api detaches); slots of a former engine are forgotten
+    /// \note The engine's library exports a flm_state_api (see flm_state_api.h); without one nothing is saved.
+    void attach(void* engine, const flm_state_api* api);
+    bool enabled() const { return engine_ != nullptr && api_ != nullptr && slots_ != 0; }
 
     /// \brief result of resume()
     struct resume_t {
@@ -105,20 +110,21 @@ public:
 
 private:
     struct slot_t {
-        std::unique_ptr<engine_state> state; // what the engine held after `tokens`, with its length and kv_from
+        std::unique_ptr<saved_state> state;  // what the engine held after `tokens`, with its length and kv_from
         std::vector<int> tokens;             // what the slot was saved after
         std::vector<uint64_t> image_hashes;  // content of the images inside `tokens`
         uint64_t last_used = 0;
         bool boundary = false;               // end of system + tools; evicted last
         /// first position whose K/V rows the slot holds
-        int kv_from() const { return state->kv_from; }
+        int kv_from() const { return state->kv_from(); }
     };
 
     size_t budget_bytes() const;
     size_t slot_limit() const;
     size_t count_image_runs(const std::vector<int>& tokens, size_t len) const;
 
-    std::unique_ptr<prefix_state_io> engine_;
+    void* engine_ = nullptr;           // the engine (causal_lm*), opaque to the cache
+    const flm_state_api* api_ = nullptr;
     std::vector<slot_t> slots_table_;
     std::vector<int> live_tokens_;
     uint64_t clock_ = 0;

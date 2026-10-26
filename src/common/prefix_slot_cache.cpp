@@ -60,9 +60,10 @@ size_t PrefixSlotCache::count_image_runs(const std::vector<int>& tokens, size_t 
     return runs;
 }
 
-void PrefixSlotCache::attach(std::unique_ptr<prefix_state_io> engine) {
+void PrefixSlotCache::attach(void* engine, const flm_state_api* api) {
     forget_all();
-    engine_ = std::move(engine);
+    engine_ = api ? engine : nullptr;
+    api_ = api;
     announced_ = false;
 }
 
@@ -121,10 +122,10 @@ PrefixSlotCache::resume_t PrefixSlotCache::resume(const std::vector<int>& full_t
     bool restored = true;
     if (best_ancestor >= 0) {
         slot_t& anchor = slots_table_[best_ancestor];
-        restored = engine_->write_state_kv(*anchor.state) == static_cast<int>(anchor.tokens.size());
+        restored = api_->state_write_kv(engine_, anchor.state->get()) == static_cast<int>(anchor.tokens.size());
         anchor.last_used = ++clock_;
     }
-    restored = restored && engine_->write_state(*slot.state) == static_cast<int>(match_len);
+    restored = restored && api_->state_write(engine_, slot.state->get()) == static_cast<int>(match_len);
     if (!restored) {
         header_print("WARNING", "Prefix snapshot of " << match_len << " tokens could not be restored, prefilling from scratch");
         forget_all();
@@ -163,10 +164,11 @@ void PrefixSlotCache::save(const std::vector<int>& tokens, const std::vector<uin
         }
     }
     // an empty state of the engine's kind: it tells what a snapshot costs before the engine pays for the copy
-    std::unique_ptr<engine_state> state = engine_->new_state();
-    if (!state) {
+    flm_state* raw = api_->state_new(engine_);
+    if (!raw) {
         return; // the engine cannot save its context
     }
+    auto state = std::make_unique<saved_state>(api_, raw);
     kv_from = std::clamp(kv_from, 0, static_cast<int>(tokens.size()));
     if (!announced_) {
         announced_ = true;
@@ -176,7 +178,7 @@ void PrefixSlotCache::save(const std::vector<int>& tokens, const std::vector<uin
     }
     const size_t budget = budget_bytes();
     const size_t limit = slot_limit();
-    auto cost = [](const engine_state& s, size_t length, int from) { return s.estimate_bytes(static_cast<int>(length), from); };
+    auto cost = [](const saved_state& s, size_t length, int from) { return s.estimate_bytes(static_cast<int>(length), from); };
     const size_t new_cost = cost(*state, tokens.size(), kv_from);
     if (new_cost > budget) {
         // this prompt alone does not fit; say so once, since nothing would ever be reused
@@ -193,7 +195,7 @@ void PrefixSlotCache::save(const std::vector<int>& tokens, const std::vector<uin
         return e.kv_from() > 0 && b.kv_from() == 0 && b.tokens.size() == static_cast<size_t>(e.kv_from()) && has_prefix(e.tokens, b.tokens);
     };
     // the slot that supplies the head rows of the slot being saved must survive the eviction below
-    const engine_state* protected_state = nullptr;
+    const saved_state* protected_state = nullptr;
     if (kv_from > 0) {
         for (const auto& slot : slots_table_) {
             if (slot.kv_from() == 0 && slot.tokens.size() == static_cast<size_t>(kv_from) && has_prefix(tokens, slot.tokens)) {
@@ -265,7 +267,7 @@ void PrefixSlotCache::save(const std::vector<int>& tokens, const std::vector<uin
     if (slots_table_.size() >= limit) {
         return;
     }
-    if (engine_->read_state(*state, kv_from) != static_cast<int>(tokens.size())) {
+    if (api_->state_read(engine_, state->get(), kv_from) != static_cast<int>(tokens.size())) {
         header_print("WARNING", "Prefix snapshot of " << tokens.size() << " tokens was read at an unexpected length, dropping it");
         return;
     }
