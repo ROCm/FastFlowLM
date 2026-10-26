@@ -32,7 +32,7 @@ void Qwen3_6_MOE::_attach_prefix_cache() {
 }
 
 void Qwen3_6_MOE::clear_context() {
-    this->prefix_cache_.forget_all();
+    this->prefix_cache_.clear_live(); // the saved snapshots belong to other conversations too: keep them
     this->AutoModel::clear_context();
 }
 
