@@ -7,6 +7,7 @@
 
 
 #include "AutoModel/modeling_qwen3_5vl.hpp"
+#include "prefix_causal_lm.hpp"
 #include "metrices.hpp"
 
 
@@ -67,7 +68,7 @@ void Qwen3_5VL::_attach_prefix_cache() {
         this->prefix_cache_.attach(nullptr);
         return;
     }
-    this->prefix_cache_.attach(std::make_unique<prefix_engine_adapter<qwen3_5vl_npu>>(engine));
+    this->prefix_cache_.attach(std::make_unique<prefix_causal_lm>(engine));
 }
 
 void Qwen3_5VL::clear_context() {

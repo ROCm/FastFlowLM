@@ -7,11 +7,13 @@
 /// \note All other models should inherit from this class so that they can be used in the same way.
 #pragma once
 #include <cstdint>
+#include <memory>
 
 #include "tensor_utils/q4_npu_eXpress.hpp"
 #include "tensor_2d.hpp"
 #include "utils/utils.hpp"
 #include "buffer.hpp"
+#include "engine_state.hpp"
 
 /// \brief causal_lm class
 class causal_lm {
@@ -122,4 +124,31 @@ public:
     ///       return 0 and lose nothing, since the time is already counted.
     /// \note Valid only until the next speculate().
     virtual uint64_t last_speculation_prime_us() const { return 0; }
+
+    // ---- saved states (see engine_state.hpp) ------------------------------
+    // Defaulted, not pure: only engines that can save their context override these. The vtable
+    // warning above applies: these four took the vtable past the end of every engine .so built
+    // without them, so a caller must only use them on an engine it knows was built with them.
+
+    /// \brief an empty state of this engine's kind, to be filled by read_state()
+    /// \return nullptr if the engine cannot save its context
+    /// \note Allocates nothing big: read_state() sizes the buffers.
+    virtual std::unique_ptr<engine_state> new_state() { return nullptr; }
+
+    /// \brief copy the engine's live context into `state`
+    /// \param state made by this engine's new_state(); filled in place, its buffers reused when they fit
+    /// \param kv_from first position whose attention K/V rows are copied (clamped to the context length);
+    ///        0 makes the state self-contained
+    /// \return the context length read, or -1 if `state` is not this engine's
+    virtual int read_state(engine_state& state, int kv_from) { return -1; }
+
+    /// \brief put `state` back into the engine: recurrent state, context length, and K/V rows from its
+    ///        kv_from on; rows past the context length are zeroed
+    /// \return the context length written, or -1 if `state` is empty or not this engine's
+    virtual int write_state(const engine_state& state) { return -1; }
+
+    /// \brief write back only the K/V rows `state` holds, leaving the recurrent state and the length alone
+    /// \return the context length of `state`, or -1 if it is empty or not this engine's
+    /// \note For putting the shared head of a prompt back under a state that keeps only its tail.
+    virtual int write_state_kv(const engine_state& state) { return -1; }
 };

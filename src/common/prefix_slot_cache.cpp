@@ -46,8 +46,7 @@ size_t PrefixSlotCache::budget_bytes() const {
 size_t PrefixSlotCache::slot_limit() const {
     if (slots_ == 0) return 0; // --prefix-slots 0: off
     const size_t requested = slots_ > 0 ? static_cast<size_t>(slots_) : kDefaultPrefixSlots;
-    const size_t engine_slots = ops_ ? static_cast<size_t>(std::max(ops_->max_slots() - kFirstSlot, 0)) : 0;
-    return std::min(requested, engine_slots);
+    return std::min(requested, static_cast<size_t>(kMaxSlots));
 }
 
 size_t PrefixSlotCache::count_image_runs(const std::vector<int>& tokens, size_t len) const {
@@ -61,27 +60,21 @@ size_t PrefixSlotCache::count_image_runs(const std::vector<int>& tokens, size_t 
     return runs;
 }
 
-void PrefixSlotCache::attach(std::unique_ptr<prefix_engine_ops> ops) {
+void PrefixSlotCache::attach(std::unique_ptr<prefix_state_io> engine) {
     forget_all();
-    ops_ = std::move(ops);
-    row_bytes_ = state_bytes_ = 0;
+    engine_ = std::move(engine);
     announced_ = false;
 }
 
 void PrefixSlotCache::forget_all() {
-    if (ops_) {
-        for (const auto& slot : slots_table_) {
-            ops_->drop_checkpoint_slot(slot.id);
-        }
-    }
-    slots_table_.clear();
+    slots_table_.clear(); // the states are ours: their memory goes with them
     live_tokens_.clear();
 }
 
 int PrefixSlotCache::end_kv_from(const std::vector<int>& tokens, size_t boundary) const {
     if (boundary == 0) return 0;
     for (const auto& slot : slots_table_) {
-        if (slot.kv_from == 0 && slot.tokens.size() == boundary && has_prefix(tokens, slot.tokens)) {
+        if (slot.kv_from() == 0 &&slot.tokens.size() == boundary && has_prefix(tokens, slot.tokens)) {
             return static_cast<int>(boundary);
         }
     }
@@ -91,7 +84,7 @@ int PrefixSlotCache::end_kv_from(const std::vector<int>& tokens, size_t boundary
 PrefixSlotCache::resume_t PrefixSlotCache::resume(const std::vector<int>& full_tokens, const std::vector<uint64_t>& image_hashes,
                                                   std::vector<int>& matched_tokens) {
     resume_t result;
-    if (!ops_) return result;
+    if (!engine_) return result;
     int best = -1;
     int best_ancestor = -1;  // slot that puts the head under `best` back, when the engine no longer holds it
     size_t match_len = 0;
@@ -104,12 +97,12 @@ PrefixSlotCache::resume_t PrefixSlotCache::resume(const std::vector<int>& full_t
         if (slot.image_hashes.size() > image_hashes.size() ||
             !std::equal(slot.image_hashes.begin(), slot.image_hashes.end(), image_hashes.begin())) continue;
         int ancestor = -1;
-        const size_t head = static_cast<size_t>(slot.kv_from);
+        const size_t head = static_cast<size_t>(slot.kv_from());
         if (head > 0 && lcp_len(live_tokens_, slot.tokens) < head) {
             // the rows before kv_from are not in the engine: a self-contained slot must supply them
             for (size_t j = 0; j < slots_table_.size(); j++) {
                 const slot_t& other = slots_table_[j];
-                if (other.kv_from == 0 && other.tokens.size() >= head &&
+                if (other.kv_from() == 0 &&other.tokens.size() >= head &&
                     std::equal(slot.tokens.begin(), slot.tokens.begin() + head, other.tokens.begin())) {
                     ancestor = static_cast<int>(j);
                     break;
@@ -128,27 +121,26 @@ PrefixSlotCache::resume_t PrefixSlotCache::resume(const std::vector<int>& full_t
     bool restored = true;
     if (best_ancestor >= 0) {
         slot_t& anchor = slots_table_[best_ancestor];
-        restored = ops_->restore_slot_kv(anchor.id) == static_cast<int>(anchor.tokens.size());
+        restored = engine_->write_state_kv(*anchor.state) == static_cast<int>(anchor.tokens.size());
         anchor.last_used = ++clock_;
     }
-    restored = restored && ops_->restore_slot(slot.id) == static_cast<int>(match_len);
+    restored = restored && engine_->write_state(*slot.state) == static_cast<int>(match_len);
     if (!restored) {
-        header_print("WARNING", "Prefix slot " << slot.id << " could not be restored, prefilling from scratch");
+        header_print("WARNING", "Prefix snapshot of " << match_len << " tokens could not be restored, prefilling from scratch");
         forget_all();
         return result;
     }
     slot.last_used = ++clock_;
     live_tokens_ = slot.tokens;
     matched_tokens = slot.tokens;
-    header_print("FLM", "Prefix slot " << slot.id << ": resuming at " << match_len << " of " << full_tokens.size() << " tokens");
+    header_print("FLM", "Prefix cache: resuming at " << match_len << " of " << full_tokens.size() << " tokens");
     result.resumed = true;
     result.match_len = match_len;
-    result.slot_id = slot.id;
     return result;
 }
 
 void PrefixSlotCache::save(const std::vector<int>& tokens, const std::vector<uint64_t>& image_hashes, bool boundary, int kv_from) {
-    if (!ops_ || tokens.empty() || slot_limit() == 0) {
+    if (!engine_ || tokens.empty() || slot_limit() == 0) {
         return;
     }
     for (auto& slot : slots_table_) {
@@ -170,19 +162,22 @@ void PrefixSlotCache::save(const std::vector<int>& tokens, const std::vector<uin
             }
         }
     }
-    if (row_bytes_ == 0) {
-        row_bytes_ = ops_->row_bytes();
-        state_bytes_ = ops_->state_bytes();
+    // an empty state of the engine's kind: it tells what a snapshot costs before the engine pays for the copy
+    std::unique_ptr<engine_state> state = engine_->new_state();
+    if (!state) {
+        return; // the engine cannot save its context
     }
+    kv_from = std::clamp(kv_from, 0, static_cast<int>(tokens.size()));
     if (!announced_) {
         announced_ = true;
+        const size_t fixed = state->estimate_bytes(0, 0);
         header_print("FLM", "Prefix cache: up to " << slot_limit() << " snapshots in " << (budget_bytes() >> 20)
-                     << " MiB (a saved row costs " << row_bytes_ / 1024 << " KiB, a snapshot's state " << (state_bytes_ >> 20) << " MiB)");
+                     << " MiB (a saved row costs " << (state->estimate_bytes(1, 0) - fixed) / 1024 << " KiB, a snapshot's state " << (fixed >> 20) << " MiB)");
     }
     const size_t budget = budget_bytes();
     const size_t limit = slot_limit();
-    auto cost = [&](size_t length, int from) { return state_bytes_ + (length - static_cast<size_t>(from)) * row_bytes_; };
-    const size_t new_cost = cost(tokens.size(), kv_from);
+    auto cost = [](const engine_state& s, size_t length, int from) { return s.estimate_bytes(static_cast<int>(length), from); };
+    const size_t new_cost = cost(*state, tokens.size(), kv_from);
     if (new_cost > budget) {
         // this prompt alone does not fit; say so once, since nothing would ever be reused
         if (!warned_too_big_) {
@@ -195,21 +190,21 @@ void PrefixSlotCache::save(const std::vector<int>& tokens, const std::vector<uin
 
     // `e` keeps only the rows after kv_from; `b` is the self-contained slot that holds the ones before
     auto is_parent = [&](const slot_t& b, const slot_t& e) {
-        return e.kv_from > 0 && b.kv_from == 0 && b.tokens.size() == static_cast<size_t>(e.kv_from) && has_prefix(e.tokens, b.tokens);
+        return e.kv_from() > 0 && b.kv_from() == 0 && b.tokens.size() == static_cast<size_t>(e.kv_from()) && has_prefix(e.tokens, b.tokens);
     };
     // the slot that supplies the head rows of the slot being saved must survive the eviction below
-    int protected_id = -1;
+    const engine_state* protected_state = nullptr;
     if (kv_from > 0) {
         for (const auto& slot : slots_table_) {
-            if (slot.kv_from == 0 && slot.tokens.size() == static_cast<size_t>(kv_from) && has_prefix(tokens, slot.tokens)) {
-                protected_id = slot.id;
+            if (slot.kv_from() == 0 && slot.tokens.size() == static_cast<size_t>(kv_from) && has_prefix(tokens, slot.tokens)) {
+                protected_state = slot.state.get();
             }
         }
     }
     // `a` is superseded when a longer prompt of the same conversation was saved after it: that one can serve
     // every request `a` could except replaying `a`'s own prompt, so `a` is the cheapest thing to lose
     auto superseded_by = [&](const slot_t& a, const std::vector<int>& longer, int longer_kv_from, const std::vector<uint64_t>& longer_images) {
-        return !a.boundary && longer.size() > a.tokens.size() && longer_kv_from <= a.kv_from && has_prefix(longer, a.tokens) &&
+        return !a.boundary && longer.size() > a.tokens.size() && longer_kv_from <= a.kv_from() && has_prefix(longer, a.tokens) &&
                a.image_hashes.size() <= longer_images.size() && std::equal(a.image_hashes.begin(), a.image_hashes.end(), longer_images.begin());
     };
 
@@ -223,7 +218,6 @@ void PrefixSlotCache::save(const std::vector<int>& tokens, const std::vector<uin
     auto evict_one = [&]() -> bool {
         auto drop_at = [&](size_t i, const char* why) {
             header_print("FLM", "Prefix cache: dropping " << why << " (" << slots_table_[i].tokens.size() << " tokens)");
-            ops_->drop_checkpoint_slot(slots_table_[i].id);
             slots_table_.erase(slots_table_.begin() + i);
         };
         const size_t n = slots_table_.size();
@@ -237,11 +231,11 @@ void PrefixSlotCache::save(const std::vector<int>& tokens, const std::vector<uin
         auto older = [&](int candidate, int current) { return current < 0 || slots_table_[candidate].last_used < slots_table_[current].last_used; };
         for (size_t i = 0; i < n; i++) {
             const auto& a = slots_table_[i];
-            if (a.id == protected_id || has_dependents[i]) continue;
+            if (a.state.get() == protected_state || has_dependents[i]) continue;
             bool old = superseded_by(a, tokens, kv_from, image_hashes);
             for (size_t j = 0; j < n && !old; j++) {
                 const auto& b = slots_table_[j];
-                old = j != i && superseded_by(a, b.tokens, b.kv_from, b.image_hashes);
+                old = j != i && superseded_by(a, b.tokens, b.kv_from(), b.image_hashes);
             }
             if (old && older(static_cast<int>(i), stale)) stale = static_cast<int>(i);
             if (!a.boundary && older(static_cast<int>(i), end_leaf)) end_leaf = static_cast<int>(i);
@@ -260,7 +254,7 @@ void PrefixSlotCache::save(const std::vector<int>& tokens, const std::vector<uin
     };
     auto total_cost = [&]() {
         size_t total = new_cost;
-        for (const auto& slot : slots_table_) total += cost(slot.tokens.size(), slot.kv_from);
+        for (const auto& slot : slots_table_) total += cost(*slot.state, slot.tokens.size(), slot.kv_from());
         return total;
     };
     while (!slots_table_.empty() && (total_cost() > budget || slots_table_.size() >= limit)) {
@@ -268,26 +262,16 @@ void PrefixSlotCache::save(const std::vector<int>& tokens, const std::vector<uin
             return; // everything left is needed by this slot: do not save it
         }
     }
-    int id = -1;
-    for (int candidate = kFirstSlot; candidate < ops_->max_slots() && id < 0; candidate++) {
-        bool used = false;
-        for (const auto& slot : slots_table_) {
-            used = used || slot.id == candidate;
-        }
-        if (!used) id = candidate;
-    }
-    if (id < 0 || slots_table_.size() >= limit) {
+    if (slots_table_.size() >= limit) {
         return;
     }
-    if (ops_->checkpoint_slot(id, kv_from) != static_cast<int>(tokens.size())) {
-        header_print("WARNING", "Prefix slot " << id << " saved at an unexpected length, dropping it");
-        ops_->drop_checkpoint_slot(id);
+    if (engine_->read_state(*state, kv_from) != static_cast<int>(tokens.size())) {
+        header_print("WARNING", "Prefix snapshot of " << tokens.size() << " tokens was read at an unexpected length, dropping it");
         return;
     }
     slot_t slot;
-    slot.id = id;
+    slot.state = std::move(state);
     slot.tokens = tokens;
-    slot.kv_from = kv_from;
     const size_t runs = std::min(count_image_runs(tokens, tokens.size()), image_hashes.size());
     slot.image_hashes.assign(image_hashes.begin(), image_hashes.begin() + runs);
     slot.last_used = ++clock_;

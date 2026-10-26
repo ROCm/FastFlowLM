@@ -1,9 +1,11 @@
 /// \file prefix_slot_cache.hpp
-/// \brief Token-level prefix cache over a few saved engine snapshots, shared by every model family that has them
-/// \note An engine keeps up to N snapshots ("slots") of the state it cannot rewind (recurrent layers) plus the attention
-///       K/V rows after a chosen position. This class remembers which tokens each slot was saved after, resumes a new
-///       prompt from the longest slot that is a prefix of it, and decides what to throw away when memory or slots run out.
-///       It does not know any model: the model wrapper hands it tokens and image hashes, and an adapter to its engine.
+/// \brief Token-level prefix cache over a few saved engine states, shared by every model family that can save one
+/// \note The cache owns the snapshots ("slots"): each one is an engine_state (what the engine cannot rewind, plus the
+///       attention K/V rows after a chosen position) read out of the engine with causal_lm::read_state. It remembers
+///       which tokens each was saved after, resumes a new prompt from the longest one that is a prefix of it
+///       (causal_lm::write_state), and decides what to throw away when memory or slots run out. The engine only ever
+///       holds the context it is running: it has no slot numbers, no slot count and no cache policy.
+///       It does not know any model: the model wrapper hands it tokens and image hashes, and the engine.
 #pragma once
 #include <algorithm>
 #include <cstddef>
@@ -11,39 +13,18 @@
 #include <memory>
 #include <vector>
 
-/// \brief what the cache needs from an engine; each engine class is adapted to it (see prefix_engine_adapter)
-class prefix_engine_ops {
-public:
-    virtual ~prefix_engine_ops() = default;
-    /// \brief save state, length and K/V rows from kv_from into a slot; returns the length saved, -1 on a bad slot
-    virtual int checkpoint_slot(int slot, int kv_from) = 0;
-    /// \brief go back to a slot (state, length, K/V rows from its kv_from, zero after); returns the length, -1 if empty
-    virtual int restore_slot(int slot) = 0;
-    /// \brief write back only the K/V rows a slot saved
-    virtual int restore_slot_kv(int slot) = 0;
-    virtual void drop_checkpoint_slot(int slot) = 0;
-    /// \brief host bytes of one saved K/V row, and of one slot's recurrent state
-    virtual size_t row_bytes() = 0;
-    virtual size_t state_bytes() = 0;
-    /// \brief how many slots the engine has
-    virtual int max_slots() = 0;
-};
+#include "engine_state.hpp"
 
-/// \brief adapts an engine class that has the slot methods under the usual names
-template <class Engine>
-class prefix_engine_adapter final : public prefix_engine_ops {
+/// \brief the four things the cache asks of an engine (a causal_lm: see prefix_causal_lm.hpp); a seam so the cache
+///        and its unit test build without the NPU runtime. Mirrors causal_lm::new_state / read_state / write_state /
+///        write_state_kv one to one.
+class prefix_state_io {
 public:
-    explicit prefix_engine_adapter(Engine* engine) : engine_(engine) {}
-    int checkpoint_slot(int slot, int kv_from) override { return engine_->checkpoint_slot(slot, kv_from); }
-    int restore_slot(int slot) override { return engine_->restore_slot(slot); }
-    int restore_slot_kv(int slot) override { return engine_->restore_slot_kv(slot); }
-    void drop_checkpoint_slot(int slot) override { engine_->drop_checkpoint_slot(slot); }
-    size_t row_bytes() override { return engine_->checkpoint_row_bytes(); }
-    size_t state_bytes() override { return engine_->checkpoint_state_bytes(); }
-    int max_slots() override { return Engine::NUM_CHECKPOINT_SLOTS; }
-
-private:
-    Engine* engine_;
+    virtual ~prefix_state_io() = default;
+    virtual std::unique_ptr<engine_state> new_state() = 0;
+    virtual int read_state(engine_state& state, int kv_from) = 0;
+    virtual int write_state(const engine_state& state) = 0;
+    virtual int write_state_kv(const engine_state& state) = 0;
 };
 
 /// \brief 64-bit content hash of a byte range, continuing from `seed`
@@ -71,8 +52,8 @@ std::vector<uint64_t> prefix_image_hashes(const Payload& payload, size_t patch, 
 
 class PrefixSlotCache {
 public:
-    /// \brief engine slot 0 is the model's single checkpoint()/restore(); the cache hands out 1 and up only
-    static constexpr int kFirstSlot = 1;
+    /// \brief most snapshots --prefix-slots may ask for
+    static constexpr int kMaxSlots = 32;
 
     /// \brief the placeholder token id of images; slots count the image runs they contain
     int image_token_id = -1;
@@ -87,16 +68,16 @@ public:
         slots_ = slots;
     }
     /// \brief attach the engine (nullptr detaches); slots of a former engine are forgotten
-    void attach(std::unique_ptr<prefix_engine_ops> ops);
-    bool enabled() const { return ops_ != nullptr && slots_ != 0; }
+    /// \note The engine must implement the state methods of causal_lm (new_state() != nullptr), else nothing is saved.
+    void attach(std::unique_ptr<prefix_state_io> engine);
+    bool enabled() const { return engine_ != nullptr && slots_ != 0; }
 
     /// \brief result of resume()
     struct resume_t {
         bool resumed = false;      ///< the engine now holds a slot's state
         size_t match_len = 0;      ///< tokens of the prompt it covers
-        int slot_id = -1;
     };
-    /// \brief resume from the longest saved prefix of `full_tokens` and restore the engine to it
+    /// \brief resume from the longest saved prefix of `full_tokens` and write that state back into the engine
     /// \param full_tokens what the prompt leaves in the engine
     /// \param image_hashes content hash of each image of the prompt, in order
     /// \param matched_tokens set to the tokens of the slot used (what the engine now holds)
@@ -104,7 +85,7 @@ public:
     /// \note On a restore failure every slot is forgotten and resumed is false.
     resume_t resume(const std::vector<int>& full_tokens, const std::vector<uint64_t>& image_hashes, std::vector<int>& matched_tokens);
 
-    /// \brief take a slot at the engine's current position; `tokens` is what the engine holds
+    /// \brief read the engine's current context into a new slot; `tokens` is what the engine holds
     /// \param boundary true for the end of system + tools (kv_from 0, evicted last)
     /// \param kv_from first position whose K/V rows the slot saves (0 = self-contained)
     void save(const std::vector<int>& tokens, const std::vector<uint64_t>& image_hashes, bool boundary, int kv_from);
@@ -124,26 +105,25 @@ public:
 
 private:
     struct slot_t {
-        int id = 0;                          // engine slot
+        std::unique_ptr<engine_state> state; // what the engine held after `tokens`, with its length and kv_from
         std::vector<int> tokens;             // what the slot was saved after
         std::vector<uint64_t> image_hashes;  // content of the images inside `tokens`
-        int kv_from = 0;                     // first position whose K/V rows the slot holds
         uint64_t last_used = 0;
         bool boundary = false;               // end of system + tools; evicted last
+        /// first position whose K/V rows the slot holds
+        int kv_from() const { return state->kv_from; }
     };
 
     size_t budget_bytes() const;
     size_t slot_limit() const;
     size_t count_image_runs(const std::vector<int>& tokens, size_t len) const;
 
-    std::unique_ptr<prefix_engine_ops> ops_;
+    std::unique_ptr<prefix_state_io> engine_;
     std::vector<slot_t> slots_table_;
     std::vector<int> live_tokens_;
     uint64_t clock_ = 0;
     int cache_mb_ = -1;
     int slots_ = -1;
-    size_t row_bytes_ = 0;
-    size_t state_bytes_ = 0;
     bool announced_ = false;
     bool warned_too_big_ = false;
 };
