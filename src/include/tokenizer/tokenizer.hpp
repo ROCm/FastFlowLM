@@ -10,6 +10,7 @@
 #include <vector>
 #include <unordered_map>
 #include <memory>
+#include <mutex>
 #include "nlohmann/json.hpp"
 #include "tokenizers_cpp.h"
 #include "typedef.hpp"
@@ -66,7 +67,17 @@ public:
     std::string run_time_decoder(int answer_token);
     bool is_doubled_encoded;
 
+    /// \brief Number of UTF-8 bytes of the text one token stands for (byte-level BPE vocabularies).
+    /// \note  The tokenizers C API has no offsets mapping; with these lengths a token's end offset in
+    ///        the (NFC-normalized) text is the running sum, which is all prefix_bidir state splitting needs.
+    ///        Added tokens (<|im_start|>, <think>, ...) count their literal text. Throws for vocabularies
+    ///        that are not byte-level, and for ids outside the vocabulary.
+    size_t token_byte_length(int id);
+
 private:
+    std::once_flag byte_len_once_;
+    std::vector<uint8_t> byte_len_;           //!< per id, built on first use
+    std::unordered_map<int, size_t> added_len_; //!< tokenizer.json "added_tokens": id -> bytes of the literal content
     std::unique_ptr<tokenizers::Tokenizer> tokenizer;
     std::unordered_map<uint32_t, uint8_t> inv_map;
 

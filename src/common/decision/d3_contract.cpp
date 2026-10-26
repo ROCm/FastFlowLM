@@ -2,11 +2,13 @@
 /// \brief The d3 System One contract (see d3_contract.hpp). Upstream names are kept in comments so
 ///        each function can be read side by side with d3_format.py / d3_runtime.py / d3_server.py.
 #include "decision/d3_contract.hpp"
+#include "decision/py_math.hpp"
 
 #include <algorithm>
 #include <cfenv>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <set>
 
 namespace flm::d3 {
@@ -167,6 +169,17 @@ std::string render_image(const PyValue& state, const Question& q, const std::vec
     return chat_text(SYSTEM_PROMPT, user);
 }
 
+std::string render_video(const PyValue& state, const Question& q, const std::vector<std::string>& codes,
+                         int n_images, int n_videos) {
+    // video_messages: the image items, then the video items, then the text
+    if (n_videos < 1) throw ContractError("a video prompt takes at least 1 video, got " + std::to_string(n_videos));
+    std::string user;
+    for (int i = 0; i < n_images; i++) user += std::string("<|vision_start|>") + IMAGE_TOKEN + "<|vision_end|>";
+    for (int i = 0; i < n_videos; i++) user += std::string("<|vision_start|>") + VIDEO_TOKEN + "<|vision_end|>";
+    user += user_prompt(state, q, codes);
+    return chat_text(SYSTEM_PROMPT, user);
+}
+
 namespace {
 
 /// Python's `f"{n:,}"`
@@ -317,6 +330,39 @@ void identify(const std::string& d, std::string& format, int& width, int& height
 
 }  // namespace
 
+std::string split_data_url(const std::string& url, const std::string& media, std::string& text) {
+    // _split_data_url: everything before the first comma is lower-cased and stripped of surrounding whitespace
+    const size_t comma = url.find(',');
+    std::string head = url.substr(0, comma == std::string::npos ? url.size() : comma);
+    const auto ws = [](char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f'; };
+    while (!head.empty() && ws(head.back())) head.pop_back();
+    size_t lead = 0;
+    while (lead < head.size() && ws(head[lead])) lead++;
+    head = head.substr(lead);
+    for (char& c : head) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    const std::string opening = "data:" + media + "/", closing = ";base64";
+    if (comma == std::string::npos || head.compare(0, opening.size(), opening) != 0 ||
+        head.size() < opening.size() + closing.size() ||
+        head.compare(head.size() - closing.size(), closing.size(), closing) != 0) {
+        throw ContractError("expected a base64 data URL: data:" + media + "/<type>;base64,<data>");
+    }
+    text = url.substr(comma + 1);
+    return head.substr(opening.size(), head.size() - opening.size() - closing.size());
+}
+
+std::string decode_base64(const std::string& text, long long limit) {
+    if (limit > 0 && code_points(text) > static_cast<size_t>(4 * ((limit + 2) / 3))) {
+        throw ContractError("the encoded data exceeds the " + thousands(limit) + " byte limit");
+    }
+    std::string data;
+    if (!b64decode_strict(text, data)) throw ContractError("the data URL does not hold valid base64");
+    if (limit > 0 && static_cast<long long>(data.size()) > limit) {
+        throw ContractError("the decoded data has " + thousands(static_cast<long long>(data.size())) +
+                            " bytes, over the " + thousands(limit) + " byte limit");
+    }
+    return data;
+}
+
 ImageFile inspect_image(const PyValue& value) {
     if (!value.is_string() || value.text.compare(0, 5, "data:") != 0) {
         throw ContractError("strict mode: images must be given as a data: URL string, not a file path, web "
@@ -431,18 +477,6 @@ std::vector<float> readout_probabilities(const float* hidden, const float* reado
 }
 
 namespace {
-
-/// Python's built-in `sum()` over floats: since 3.12 it is Neumaier-compensated, so a plain loop
-/// differs from upstream in the last bits.
-struct PySum {
-    double s = 0.0, c = 0.0;
-    void add(double x) {
-        double t = s + x;
-        c += std::fabs(s) >= std::fabs(x) ? (s - t) + x : (x - t) + s;
-        s = t;
-    }
-    double value() const { return (c != 0.0 && std::isfinite(c)) ? s + c : s; }
-};
 
 /// `d3_format.normalized`
 std::vector<double> normalized(const std::vector<double>& probabilities, size_t expected) {
@@ -560,14 +594,33 @@ std::vector<std::string> Prepared::runnable() const {
     return out;
 }
 
-Prepared prepare(const PyValue& body, const std::vector<std::string>& codes,
-                 const std::function<void(size_t, const ImageFile&)>& decode) {
+const PyValue& check_request(const PyValue& body, const PrepareOptions& options) {
+    const bool limited = !options.unsupported_for.empty();
+    const bool composed = limited && options.composed;
+    const std::string refusal_tail = !options.answers.empty()
+        ? " by this build of " + options.unsupported_for + " (it answers " + options.answers + ")"
+        : composed
+        ? " by this build of " + options.unsupported_for +
+              " (it answers choice, noul, score and box questions about text and images)"
+        : " by this build of " + options.unsupported_for +
+              " (it answers choice, noul and score questions about text and images)";
     // d3_server.Decider.arguments
     if (!body.is_object()) {
         throw RequestError("expected a JSON object such as {\"questions\": {...}, \"state\": ...}");
     }
+    if (limited) {
+        // upstream's own server does not take these fields either; here the refusal says why
+        for (const char* name : {"assets", "long_context"}) {
+            const PyValue* v = body.get(name);
+            if (v && v->truthy()) {
+                if (composed && std::string(name) == "assets") continue;   // validated with the composed request
+                throw RequestError(std::string(name) + " is not supported" + refusal_tail);
+            }
+        }
+    }
     std::vector<std::string> unknown;
     for (const auto& m : body.members) {
+        if (limited && (m.first == "assets" || m.first == "long_context")) continue;   // falsy: nothing asked for
         if (std::find(std::begin(ACCEPTED_FIELDS), std::end(ACCEPTED_FIELDS), m.first) == std::end(ACCEPTED_FIELDS)) {
             unknown.push_back(m.first);
         }
@@ -579,13 +632,52 @@ Prepared prepare(const PyValue& body, const std::vector<std::string>& codes,
             if (i) names += ", ";
             names += repr(PyValue::string(unknown[i]));
         }
-        throw RequestError(names + " not understood; a request may carry state, questions, images, videos, model");
+        throw RequestError(names + " not understood; a request may carry state, questions, images, videos, " +
+                           (limited ? "assets, long_context, " : "") + "model");
     }
     const PyValue* questions = body.get("questions");
     if (!questions || !questions->is_object() || questions->members.empty()) {
         throw RequestError("questions is required: an object of one or more question IDs, each to a question");
     }
+    if (limited) {
+        for (const auto& m : questions->members) {
+            const PyValue* kind = m.second.is_object() ? m.second.get("type") : nullptr;
+            if (!kind || !kind->is_string() || (kind->text != "box" && kind->text != "track")) continue;
+            if (composed && !options.refuse_video_questions) continue;   // answered per question (video_needed, or a refusal)
+            if (composed && kind->text == "box") {
+                const PyValue* at = m.second.get("at");
+                if (!at || at->is_null()) continue;   // a box on the request's images: composed
+                throw RequestError("question " + repr(PyValue::string(m.first)) +
+                                   ": a box at a moment of a video is not supported" + refusal_tail);
+            }
+            throw RequestError("question " + repr(PyValue::string(m.first)) + ": " + kind->text +
+                               " questions are not supported" + refusal_tail);
+        }
+    }
+    return *questions;
+}
+
+void add_reasons(ojson& answers) {
+    for (auto& a : answers) {
+        if (!a.is_object() || !a.contains("error") || a.contains("reason")) continue;
+        const std::string error = a["error"].is_string() ? a["error"].get<std::string>() : std::string();
+        a["reason"] = error == "max_length_exceeded" ? "question_tokens"
+                      : error == "invalid_model_output" ? "model_output" : "question_malformed";
+    }
+}
+
+Prepared prepare(const PyValue& body, const std::vector<std::string>& codes,
+                 const std::function<void(size_t, const ImageFile&)>& decode, const PrepareOptions& options) {
+    const bool limited = !options.unsupported_for.empty();
+    const std::string refusal_tail = " by this build of " + options.unsupported_for +
+                                     (!options.answers.empty()
+                                          ? " (it answers " + options.answers + ")"
+                                          : options.composed
+                                          ? " (it answers choice, noul, score and box questions about text and images)"
+                                          : " (it answers choice, noul and score questions about text and images)");
+    const PyValue* questions = &check_request(body, options);
     Prepared p;
+    p.reasons = options.reasons;
     // MEDIA_FIELDS in order: every image is loaded (strict) before videos are looked at
     for (const char* name : {"images", "videos"}) {
         const PyValue* items = body.get(name);
@@ -593,8 +685,25 @@ Prepared prepare(const PyValue& body, const std::vector<std::string>& codes,
         if (!items->is_array()) throw RequestError(std::string(name) + " takes a list of base64 data URLs");
         if (items->items.empty()) continue;   // `loader(items) or None`: an empty list is the text path
         if (std::string(name) == "videos") {
-            // upstream answers the same way for a checkpoint without the video path
-            throw RequestError("video inputs are not available: this FastFlowLM build runs d3 on text and images");
+            if (!options.load_video) {
+                // upstream answers the same way for a checkpoint without the video path
+                if (limited) throw RequestError("videos are not supported" + refusal_tail);
+                throw RequestError("video inputs are not available: this FastFlowLM build runs d3 on text and images");
+            }
+            // D3.load_videos: every video loaded in order; "videos[i]: <reason>"
+            for (size_t i = 0; i < items->items.size(); i++) {
+                try {
+                    p.videos.push_back(options.load_video(i, items->items[i]));
+                } catch (const video::VideoBackendUnavailable& e) {
+                    throw RequestError(e.what());   // "video inputs are not available: ..."
+                } catch (const video::VideoError& e) {
+                    throw RequestError("videos[" + std::to_string(i) + "]: " + e.what());
+                } catch (const ContractError& e) {
+                    throw RequestError("videos[" + std::to_string(i) + "]: " + e.what());
+                }
+            }
+            p.has_videos = true;
+            continue;
         }
         for (size_t i = 0; i < items->items.size(); i++) {
             try {
@@ -618,6 +727,7 @@ Prepared prepare(const PyValue& body, const std::vector<std::string>& codes,
     } catch (const ContractError& e) {
         throw RequestError(e.what());
     }
+    p.state = state;
     // _prepare_images: every image's input tokens first (the processor's resize)
     for (const auto& f : p.images) {
         std::pair<int, int> hw;
@@ -631,12 +741,50 @@ Prepared prepare(const PyValue& body, const std::vector<std::string>& codes,
         p.image_tokens.push_back(gh * gw / (IMAGE_MERGE_SIZE * IMAGE_MERGE_SIZE));
     }
     const int n_images = static_cast<int>(p.images.size());
+    // _prepare_videos: the processor's grid per video, the request's token budget, the placeholders' texts
+    const int n_videos = static_cast<int>(p.videos.size());
+    if (n_videos > 0) {
+        long long planned = 0;
+        for (const auto& clip : p.videos) {
+            try {
+                p.video_grids.push_back(video::plan_video_grid(clip->n, clip->height, clip->width, options.video_config));
+            } catch (const video::VideoError& e) {
+                throw RequestError(std::string("video rejected by the processor: ") + e.what());
+            }
+            planned += p.video_grids.back().tokens();
+        }
+        try {
+            video::check_video_token_budget(planned);
+        } catch (const video::VideoError& e) {
+            throw RequestError(e.what());
+        }
+        for (size_t v = 0; v < p.videos.size(); v++) {
+            const video::VideoClip& clip = *p.videos[v];
+            const video::VideoGrid& g = p.video_grids[v];
+            const std::vector<double> times = video::group_timestamps(clip.indices, clip.fps);
+            p.video_texts.push_back(video::video_placeholder(times, g.tokens_per_group(), /*expand=*/false));
+            p.video_runs.emplace_back(times.size(), g.tokens_per_group());
+        }
+    }
     for (const auto& m : questions->members) {
         const std::string& key = m.first;
         p.keys.push_back(key);
         try {
             Question q = normalize_question(m.second);
-            if (n_images == 0) {
+            if (n_videos > 0) {
+                std::string text = render_video(state, q, codes, n_images, n_videos);
+                const auto count = [&](const char* token) {
+                    int n = 0;
+                    for (size_t at = text.find(token); at != std::string::npos; at = text.find(token, at + 1)) n++;
+                    return n;
+                };
+                if (count(IMAGE_TOKEN) != n_images || count(VIDEO_TOKEN) != n_videos) {
+                    p.errors[key] = error_answer(q.kind, "invalid_question",
+                                                 "the state or question contains a literal image or video placeholder token");
+                    continue;
+                }
+                p.texts[key] = std::move(text);
+            } else if (n_images == 0) {
                 p.texts[key] = render(state, q, codes);
             } else {
                 std::string text = render_image(state, q, codes, n_images);
@@ -658,7 +806,57 @@ Prepared prepare(const PyValue& body, const std::vector<std::string>& codes,
     return p;
 }
 
-void tokenize(Prepared& p, const std::function<std::vector<int>(const std::string&)>& encode, int max_length) {
+const char* const STATE_MARK = "State:\n";
+const char* const QUESTION_MARK = "\n\nQuestion:\n";
+
+size_t state_end_byte(const std::string& text, const PyValue& state) {
+    // `body = describe(state) if state not in (None, "") else "(empty)"`
+    const bool empty = state.is_null() || (state.is_string() && state.text.empty());
+    const std::string body = empty ? std::string(EMPTY_STATE) : describe(state);
+    const std::string needle = std::string(STATE_MARK) + body + QUESTION_MARK;
+    const size_t start = text.find(needle);
+    if (start == std::string::npos) {
+        throw ContractError("rendered prompt has no state segment followed by the question block");
+    }
+    return start + std::strlen(STATE_MARK) + body.size();
+}
+
+int state_token_count(const std::vector<int>& ids, const std::function<size_t(int)>& token_bytes, size_t end) {
+    int n = 0;
+    size_t stop = 0;
+    for (int id : ids) {
+        stop += token_bytes(id);
+        if (stop > end) break;   // this token reaches past the state segment: question block
+        n++;
+    }
+    if (n < 1) throw ContractError("empty state segment");
+    return n;
+}
+
+int state_block_length(const std::string& text, const PyValue& state, const std::vector<int>& ids,
+                       const std::function<std::vector<int>(const std::string&)>& encode,
+                       const std::function<size_t(int)>& token_bytes, int media, int expanded_length,
+                       std::map<std::string, size_t>* segment_cache) {
+    const std::string segment = text.substr(0, state_end_byte(text, state));
+    size_t end = 0;
+    auto hit = segment_cache ? segment_cache->find(segment) : std::map<std::string, size_t>::iterator();
+    if (segment_cache && hit != segment_cache->end()) {
+        end = hit->second;
+    } else {
+        for (int id : encode(segment)) end += token_bytes(id);
+        if (segment_cache) (*segment_cache)[segment] = end;
+    }
+    const int count = state_token_count(ids, token_bytes, end) + media;
+    if (!(0 < count && count < expanded_length)) {
+        throw std::runtime_error("a " + std::to_string(expanded_length) + "-token prompt cannot have a " +
+                                 std::to_string(count) + "-token state block");
+    }
+    return count;
+}
+
+void tokenize(Prepared& p, const std::function<std::vector<int>(const std::string&)>& encode, int max_length,
+              const std::function<size_t(int)>& token_bytes) {
+    std::map<std::string, size_t> segment_cache;
     int pad = -1, visual = 0;
     if (!p.images.empty()) {
         const std::vector<int> one = encode(IMAGE_TOKEN);
@@ -666,18 +864,37 @@ void tokenize(Prepared& p, const std::function<std::vector<int>(const std::strin
         pad = one[0];
         for (int n : p.image_tokens) visual += n;
     }
+    // videos: each `<|video_pad|>` of a prompt becomes the tokens of that video's text (the stamps, the markers and
+    // one run of input tokens per temporal group): `_prepare_videos`' `expanded`
+    int video_pad = -1;
+    size_t video_tokens = 0;
+    if (!p.videos.empty()) {
+        const std::vector<int> one = encode(VIDEO_TOKEN);
+        if (one.size() != 1) throw std::runtime_error("the tokenizer does not keep <|video_pad|> as one token");
+        video_pad = one[0];
+        p.video_ids.clear();
+        for (size_t v = 0; v < p.video_texts.size(); v++) {
+            // one pad per group is tokenized, then expanded: the same ids as tokenizing the expanded text
+            p.video_ids.push_back(video::expand_pad_runs(encode(p.video_texts[v]), video_pad, p.video_runs[v]));
+            video_tokens += p.video_ids.back().size();
+        }
+    }
     for (const auto& key : p.keys) {
         auto t = p.texts.find(key);
         if (t == p.texts.end()) continue;
         std::vector<int> ids = encode(t->second);
-        if (pad >= 0) {
-            // each placeholder becomes its image's run of input tokens, in image order
+        const std::vector<int> plain = token_bytes ? ids : std::vector<int>();   // before the media expansion
+        if (pad >= 0 || video_pad >= 0) {
+            // each placeholder becomes its image's run of input tokens / its video's tokens, in order
             std::vector<int> expanded;
-            expanded.reserve(ids.size() + visual);
-            size_t image = 0;
+            expanded.reserve(ids.size() + visual + video_tokens);
+            size_t image = 0, vid = 0;
             for (int id : ids) {
-                if (id == pad && image < p.image_tokens.size()) {
+                if (pad >= 0 && id == pad && image < p.image_tokens.size()) {
                     expanded.insert(expanded.end(), p.image_tokens[image++], pad);
+                } else if (video_pad >= 0 && id == video_pad && vid < p.video_ids.size()) {
+                    expanded.insert(expanded.end(), p.video_ids[vid].begin(), p.video_ids[vid].end());
+                    vid++;
                 } else {
                     expanded.push_back(id);
                 }
@@ -685,14 +902,25 @@ void tokenize(Prepared& p, const std::function<std::vector<int>(const std::strin
             ids = std::move(expanded);
         }
         if (max_length > 0 && static_cast<int>(ids.size()) > max_length) {
-            const std::string images = pad >= 0 ? " (" + std::to_string(visual) + " for " +
-                                                      std::to_string(p.images.size()) + " image(s))"
-                                                : std::string();
+            std::string media;
+            if (video_pad >= 0) {
+                media = " (" + std::to_string(static_cast<size_t>(visual) + video_tokens) + " for " +
+                        std::to_string(p.images.size()) + " image(s) and " + std::to_string(p.videos.size()) + " video(s))";
+            } else if (pad >= 0) {
+                media = " (" + std::to_string(visual) + " for " + std::to_string(p.images.size()) + " image(s))";
+            }
             p.errors[key] = error_answer(p.questions.at(key).kind, "max_length_exceeded",
-                                         "the question prompt has " + std::to_string(ids.size()) + " tokens" + images +
+                                         "the question prompt has " + std::to_string(ids.size()) + " tokens" + media +
                                              ", over the maximum context length of " +
                                              std::to_string(max_length) + " tokens; nothing was truncated");
             continue;
+        }
+        if (token_bytes) {
+            // media placeholders all lie inside the state block: each one grows into its run of input tokens
+            const int media = (pad >= 0 ? visual - static_cast<int>(p.images.size()) : 0) +
+                              (video_pad >= 0 ? static_cast<int>(video_tokens) - static_cast<int>(p.videos.size()) : 0);
+            p.state_len[key] = state_block_length(t->second, p.state, plain, encode, token_bytes, media,
+                                                  static_cast<int>(ids.size()), &segment_cache);
         }
         p.sequences[key] = std::move(ids);
     }
@@ -708,9 +936,10 @@ ojson invalid_questions(const Prepared& p) {
 }
 
 ojson respond(const Prepared& p, const std::map<std::string, std::vector<double>>& probabilities,
-              const std::string& model_name) {
+              const std::string& model_name, bool state_once) {
     ojson answers = ojson::object();
     size_t tokens = 0;
+    int state_block = 0;   // prefix_bidir: the state block, counted once
     for (const auto& key : p.keys) {
         auto e = p.errors.find(key);
         if (e != p.errors.end()) {
@@ -718,17 +947,64 @@ ojson respond(const Prepared& p, const std::map<std::string, std::vector<double>
             continue;
         }
         const Question& q = p.questions.at(key);
-        tokens += p.sequences.at(key).size();
+        const size_t length = p.sequences.at(key).size();
+        const auto split = p.state_len.find(key);
+        if (state_once && split != p.state_len.end()) {
+            if (state_block == 0) state_block = split->second;
+            tokens += length - split->second;
+        } else {
+            tokens += length;
+        }
         try {
             answers[key] = product_answer(q, probabilities.at(key));
         } catch (const ContractError& ex) {
             answers[key] = error_answer(q.kind, "invalid_model_output", ex.what());
         }
     }
+    if (p.reasons) add_reasons(answers);
     ojson out = ojson::object();
     out["model"] = model_name;
     out["answers"] = answers;
-    out["usage"] = {{"input_tokens", tokens}, {"output_tokens", 0}};
+    out["usage"] = {{"input_tokens", tokens + state_block}, {"output_tokens", 0}};
+    return out;
+}
+
+EngineStateRequest plain_state_request(const Prepared& p, std::vector<EngineImage> images, int image_token_id) {
+    const auto keys = p.runnable();
+    if (keys.empty()) throw std::runtime_error("no runnable question");
+    EngineStateRequest request;
+    const std::vector<int>& first = p.sequences.at(keys.front());
+    const int s = p.state_len.at(keys.front());
+    request.state_ids.assign(first.begin(), first.begin() + s);
+    for (const auto& k : keys) {
+        const std::vector<int>& seq = p.sequences.at(k);
+        const int sk = p.state_len.at(k);
+        if (sk != s || static_cast<size_t>(sk) >= seq.size() || !std::equal(request.state_ids.begin(), request.state_ids.end(), seq.begin())) {
+            throw std::runtime_error("the questions of a request do not share the state block's tokens");
+        }
+        EngineBlock block;
+        block.tag = k;
+        block.ids.assign(seq.begin() + s, seq.end());
+        block.readout_from_end = {0};
+        request.blocks.push_back(std::move(block));
+    }
+    request.image_token_id = image_token_id;
+    request.images = std::move(images);
+    for (size_t i = 0; i < request.images.size(); i++) request.state_image_ids.push_back(static_cast<int>(i));
+    return request;
+}
+
+std::map<std::string, std::vector<double>> plain_probabilities(const Prepared& p, const std::vector<std::vector<float>>& hidden,
+                                                               const float* readout, int hidden_size, float temperature) {
+    const auto keys = p.runnable();
+    if (hidden.size() != keys.size()) throw std::runtime_error("the engine returned a different number of questions");
+    std::map<std::string, std::vector<double>> out;
+    for (size_t i = 0; i < keys.size(); i++) {
+        if (hidden[i].size() != static_cast<size_t>(hidden_size)) throw std::runtime_error("the engine returned a row of the wrong width");
+        const int count = static_cast<int>(p.questions.at(keys[i]).keys.size());
+        const auto probs = readout_probabilities(hidden[i].data(), readout, hidden_size, count, temperature);
+        out[keys[i]] = std::vector<double>(probs.begin(), probs.end());
+    }
     return out;
 }
 

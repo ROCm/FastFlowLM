@@ -303,7 +303,7 @@ Sampler::Sampler(int features, sampler_config& config)
     logits.resize(1); counters.resize(1); token_positions.resize(1, -1);
 }
 void Sampler::reset_penalties() {}
-int Sampler::sample(buffer<bf16>& logits, const std::vector<uint32_t>*) {
+int Sampler::sample(buffer<bf16>& logits, const std::vector<uint32_t>*, sample_logprobs_t*) {
     // FakeEngine hands back logits it allocated, as the core engines do. buffer's
     // copy is shallow and non-owning, so a buffer that no longer owns them by the
     // time they are sampled is reading memory its owner has already freed.

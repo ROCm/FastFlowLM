@@ -42,6 +42,13 @@ Tokenizer::Tokenizer(const std::string& model_path) {
     std::string decoder_type;
     nlohmann::json data_json = nlohmann::json::parse(data);
     JSON_GET(decoder_type, data_json["decoder"], "type", "ByteLevel", std::string);
+    if (data_json.contains("added_tokens") && data_json["added_tokens"].is_array()) {
+        for (const auto& t : data_json["added_tokens"]) {
+            if (t.contains("id") && t.contains("content")) {
+                added_len_[t["id"].get<int>()] = t["content"].get<std::string>().size();
+            }
+        }
+    }
     if (decoder_type == "ByteLevel") {
         this->is_doubled_encoded = true;
     }
@@ -172,4 +179,38 @@ std::string Tokenizer::decode(const std::vector<int>& tokens) {
 /// \return the decoded text
 std::string Tokenizer::run_time_decoder(int answer_token) {
     return this->cpt_to_utf8(this->tokenizer->IdToToken(answer_token));
+}
+
+/// \brief Number of UTF-8 bytes of the text one token stands for
+size_t Tokenizer::token_byte_length(int id) {
+    std::call_once(byte_len_once_, [this]() {
+        if (!this->is_doubled_encoded) throw std::runtime_error("token_byte_length needs a byte-level vocabulary");
+        const auto inv = this->make_inverse_byte_map();
+        size_t n = this->tokenizer->GetVocabSize();
+        for (const auto& a : added_len_) n = std::max<size_t>(n, static_cast<size_t>(a.first) + 1);
+        std::vector<uint8_t> lens(n, 0);
+        for (size_t i = 0; i < n; i++) {
+            auto added = added_len_.find(static_cast<int>(i));
+            if (added != added_len_.end()) {
+                lens[i] = static_cast<uint8_t>(std::min<size_t>(added->second, 255));
+                continue;
+            }
+            // byte-level text: one byte per codepoint of the token string (GPT-2 alphabet); a codepoint
+            // outside the alphabet cannot occur in a regular token, count its UTF-8 bytes
+            const std::string tok = this->tokenizer->IdToToken(static_cast<int32_t>(i));
+            size_t bytes = 0;
+            for (size_t k = 0; k < tok.size();) {
+                const unsigned char c = tok[k];
+                const size_t w = c < 0x80 ? 1 : (c & 0xE0) == 0xC0 ? 2 : (c & 0xF0) == 0xE0 ? 3 : 4;
+                uint32_t cp = w == 1 ? c : (c & (0xFF >> (w + 1)));
+                for (size_t j = 1; j < w && k + j < tok.size(); j++) cp = (cp << 6) | (tok[k + j] & 0x3F);
+                bytes += inv.count(cp) ? 1 : w;
+                k += w;
+            }
+            lens[i] = static_cast<uint8_t>(std::min<size_t>(bytes, 255));
+        }
+        this->byte_len_ = std::move(lens);
+    });
+    if (id < 0 || static_cast<size_t>(id) >= byte_len_.size()) throw std::runtime_error("token id outside the vocabulary");
+    return byte_len_[id];
 }

@@ -773,15 +773,21 @@ int main(int argc, char* argv[]) {
         }
         if (!parsed_args.decision.empty()) {
             // the decision model's own weights (d3:lite 0.56 GB, d3:nano 1.34 GB, d3:mini 3.43 GB in the catalog's size) plus
-            // 1 GB for scratch (a 4096-row pass; bigger prompts allocate per call) and the fp32 readout
+            // its scratch: 1 GB by default (a 4096-row pass; bigger prompts allocate per call) and the fp32 readout. A
+            // catalog entry whose 32,768-token pass needs far more (d3:turbo, 27B: ~7.3 GB of pass scratch and ~1.4 GB of
+            // transients, audit estimate) says so in "scratch" (bytes).
             uint64_t decision_size = 0;
+            uint64_t decision_scratch = 1000000000;
             auto [decision_tag, decision_info] = availble_models.get_model_info(parsed_args.decision);
             if (decision_info.contains("size")) {
                 decision_size = decision_info["size"].get<uint64_t>();
             }
-            embedding_size += decision_size + 1000000000;
+            if (decision_info.contains("scratch")) {
+                decision_scratch = decision_info["scratch"].get<uint64_t>();
+            }
+            embedding_size += decision_size + decision_scratch;
             header_print_g("FLM", "Decision model enabled: reserving additional "
-                                      << ((decision_size + 1000000000) / 1000000) << " MB of memory");
+                                      << ((decision_size + decision_scratch) / 1000000) << " MB of memory");
         }
 
         // Add 512MB overhead for working memory beyond the model itself

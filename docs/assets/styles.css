@@ -1548,20 +1548,24 @@ body.nav-open .nav__mobile {
   line-height: 1.4;
 }
 
-/* On larger screens, tables can be full width without scrolling */
+/* On larger screens, tables fit the content width and their cells wrap.
+   The overrides need !important to beat the mobile no-wrap rule above;
+   a table that still cannot fit (a long unbreakable value) scrolls
+   instead of being clipped by .docs-content's overflow-x: hidden */
 @media (min-width: 768px) {
   .docs-table-wrapper {
-    overflow-x: visible;
+    overflow-x: auto;
   }
-  
+
   .docs-table-wrapper table {
     width: 100%;
     white-space: normal;
   }
-  
+
   .docs-table-wrapper th,
   .docs-table-wrapper td {
-    white-space: normal;
+    white-space: normal !important;
+    overflow-wrap: break-word !important;
   }
 }
 

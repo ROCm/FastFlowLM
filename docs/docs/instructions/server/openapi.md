@@ -21,7 +21,7 @@ parent: Local Server (Server Mode)
   - [Example: Multi-Modal Input](#️-example-multi-modal-input)   
   - [Example: Flash Models (Single-Turn, Pinned System Prompt)](#-example-flash-models-single-turn-pinned-system-prompt)   
 
-> 📘 **Related pages:** [Tool Calling](https://fastflowlm.com/docs/instructions/server/tool_calling/) · [Reasoning, Tool Calls & Streaming](https://fastflowlm.com/docs/instructions/server/reasoning_and_tools/) (`reasoning_content`, streamed tool call deltas, the `think` switch) · [Structured Output & tool_choice](https://fastflowlm.com/docs/instructions/server/structured_output/) (`tool_choice`, `parallel_tool_calls`, `response_format` JSON / JSON schema)
+> 📘 **Related pages:** [Tool Calling](https://fastflowlm.com/docs/instructions/server/tool_calling/) · [Reasoning, Tool Calls & Streaming](https://fastflowlm.com/docs/instructions/server/reasoning_and_tools/) (`reasoning_content`, streamed tool call deltas, the `think` switch) · [Structured Output & tool_choice](https://fastflowlm.com/docs/instructions/server/structured_output/) (`tool_choice`, `parallel_tool_calls`, `response_format` JSON / JSON schema) · [Request Parameters & Long Prompts](https://fastflowlm.com/docs/instructions/server/request_parameters/) (sampling fields, `seed`, unknown fields, prefill chunking)
 
 ---
 
@@ -322,6 +322,39 @@ del response, client
 import gc
 gc.collect()
 ```
+
+> ⚠️ Sampling settings stay in effect for later requests that don't send them, until the model is reloaded. `seed` is ignored. What each field does, the penalty window and model defaults: [Request Parameters & Long Prompts](https://fastflowlm.com/docs/instructions/server/request_parameters/).
+
+---
+
+## 🎲 Example: Token Log Probabilities
+
+`/v1/chat/completions` returns per-token log probabilities as OpenAI does. Set `logprobs=True`, and `top_logprobs` (0–100) for the most likely alternatives at each position:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://127.0.0.1:52625/v1", api_key="flm")
+
+response = client.chat.completions.create(
+    model="llama3.2:1b",
+    messages=[{"role": "user", "content": "Say hello."}],
+    logprobs=True,
+    top_logprobs=2,
+)
+
+for t in response.choices[0].logprobs.content:
+    alternatives = ", ".join(f"{a.token!r} {a.logprob:.3f}" for a in t.top_logprobs)
+    print(f"{t.token!r:12} {t.logprob:8.4f}   [{alternatives}]")
+```
+
+Streaming works the same way: each content chunk carries `choices[0].logprobs.content` for the tokens in that chunk.
+
+- The log probabilities are the model's own distribution, before temperature, top-k/top-p, penalties, or the grammar from `tool_choice` / `response_format` are applied. Under a grammar, the chosen token can be one the model itself thought unlikely.
+- Only `content` has log probabilities. Tokens of `reasoning_content` and of tool calls are left out, and chunks that carry them have `logprobs: null`.
+- `bytes` is `null` for special tokens such as end-of-turn, which can appear among `top_logprobs`. A token that holds only part of a UTF-8 character is named by its bytes, for example `"bytes:\xe4\xbd"`.
+- `qwen3.8-mtp` does not support log probabilities. Its speculative decoding commits tokens the server never samples, and requests with `logprobs` get HTTP 400.
+- `top_logprobs` without `logprobs=True`, or outside 0–100, gets HTTP 400.
 
 ---
 

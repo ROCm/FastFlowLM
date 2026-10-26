@@ -91,6 +91,8 @@ docs_nav:
         url: "/docs/instructions/server/reasoning_and_tools/"
       - label: Structured Output
         url: "/docs/instructions/server/structured_output/"
+      - label: Request Parameters & Long Prompts
+        url: "/docs/instructions/server/request_parameters/"
       - label: Output Parsing Internals
         url: "/docs/instructions/server/chat_output_internals/"
       - label: LangChain RAG

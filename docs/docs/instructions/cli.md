@@ -332,7 +332,7 @@ flm serve llama3.2:1b --preemption 1
 
 ### 🧩 Change Prefill Chunk Size at Launch
 
-The `--prefill-chunk-len` flag controls how many tokens are processed per chunk during the prefill phase of inference (default: 4096).
+The `--prefill-chunk-len` flag controls how many tokens are processed per chunk during the prefill phase of inference. The default is the model's own `max_prefill_len`: 4096 for most models, 1024 for the flash models.
 
 For **CLI mode**:
 
@@ -345,6 +345,9 @@ For **Server mode**:
 ```shell
 flm serve llama3.2:1b --prefill-chunk-len 8192
 ```
+
+> - Values below 512 are raised to 512, and the value is rounded up to a power of 2 (`5000` → `8192`).
+> - The chunk length is not a limit on the prompt: a longer prompt is read in more chunks. The prompt has to fit in the context length (`--ctx-len`). See [Long Prompts: Prefill Chunking](https://fastflowlm.com/docs/instructions/server/request_parameters/#-long-prompts-prefill-chunking).
 
 ---
 

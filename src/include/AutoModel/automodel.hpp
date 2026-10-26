@@ -86,6 +86,13 @@ inline std::string stop_reason_to_string(stop_reason_t reason){
     }
 }
 
+/// \brief A sampled token, its raw logprob and the likeliest alternatives
+struct chat_token_logprob {
+	int token_id;
+	float logprob;
+	std::vector<token_logprob_t> top;
+};
+
 struct chat_meta_info_t {
 	int max_prefill_len;
     int prompt_tokens;        // whole prompt, cached prefix included
@@ -106,6 +113,15 @@ struct chat_meta_info_t {
 	/// \brief Decoded tail of the prompt as fed to the model; the output parser
 	///        reads it to tell whether generation starts inside a reasoning block
 	std::string prompt_tail;
+	/// \brief How many alternatives the request wants per token; -1 when it wants no logprobs
+	int logprobs_top_n = -1;
+	/// \brief One entry per sampled token that reaches the output, in order
+	/// \note Filled only when logprobs_top_n >= 0. Special tokens (eos) get none,
+	///       nor do tokens a generate() forces instead of sampling.
+	std::vector<chat_token_logprob> logprobs;
+	/// \brief The last sample added an entry to logprobs
+	/// \note So that _skip_insert_sample() can take it back out with the sample.
+	bool last_sample_logged = false;
 
 	chat_meta_info_t() : max_prefill_len(0), prompt_tokens(0), cached_prompt_tokens(0), generated_tokens(0), total_duration(0), load_duration(0), prefill_duration(0), decoding_duration(0), stop_reason(EOT_DETECTED), restore_allowed(false) {}
 };
@@ -491,6 +507,16 @@ public:
 
 	inline bool is_eos(int token) {
 		return std::find(this->eos_token_ids.begin(), this->eos_token_ids.end(), token) != this->eos_token_ids.end();
+	}
+
+	/// \brief The text a token adds to the output, as generate() writes it
+	/// \note Bytes, not necessarily whole UTF-8 characters: a byte level token
+	///       can carry part of one.
+	std::string token_text(int token);
+
+	/// \brief Whether every output token goes through _sample(), so logprobs can be reported
+	virtual bool supports_logprobs() const {
+		return true;
 	}
 
 	/// \brief Prepare the benchmark

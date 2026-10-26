@@ -15,6 +15,7 @@
 #include <string>
 
 #include "decision/d3_contract.hpp"
+#include "decision/d3_engine_stub.hpp"
 #include "decision/py_json.hpp"
 
 #ifdef FLM_D3_TEST_TOKENIZER
@@ -342,6 +343,187 @@ int main(int argc, char** argv) {
             checks++;
             if (got != "images[0]: the image could not be decoded (test)") fail("decode-order", got);
         }
+    }
+
+    // d3:turbo (prefix_bidir): what this build does not run is refused with a 422 naming the model;
+    // other models keep upstream's messages
+    {
+        flm::d3::PrepareOptions turbo;
+        turbo.unsupported_for = "d3:turbo";
+        const auto detail = [&](const std::string& body_json, bool limited) -> std::string {
+            try {
+                flm::d3::prepare(flm::d3::parse_json(body_json), codes, nullptr, limited ? turbo : flm::d3::PrepareOptions());
+            } catch (const flm::d3::RequestError& e) {
+                return e.detail.is_string() ? e.detail.get<std::string>() : e.detail.dump();
+            }
+            return "";
+        };
+        const std::string tail = " by this build of d3:turbo (it answers choice, noul and score questions about text and images)";
+        const std::string n = "\"questions\": {\"n\": {\"type\": \"noul\"}}";
+        struct Case { std::string body; bool limited; std::string want; };
+        const std::vector<Case> cases = {
+            {"{\"questions\": {\"a\": {\"type\": \"noul\"}, \"b\": {\"type\": \"box\"}}}", true, "question 'b': box questions are not supported" + tail},
+            {"{\"questions\": {\"t\": {\"type\": \"track\"}}}", true, "question 't': track questions are not supported" + tail},
+            {"{" + n + ", \"videos\": [\"data:video/mp4;base64,AAAA\"]}", true, "videos are not supported" + tail},
+            {"{" + n + ", \"assets\": {\"x\": 1}}", true, "assets is not supported" + tail},
+            {"{" + n + ", \"long_context\": true}", true, "long_context is not supported" + tail},
+            {"{" + n + ", \"long_context\": false, \"assets\": null}", true, ""},
+            // d3:lite / nano / mini: unchanged
+            {"{\"questions\": {\"b\": {\"type\": \"box\"}}}", false, ""},   // a per-question invalid_question, not a 422 here
+            {"{" + n + ", \"videos\": [\"data:video/mp4;base64,AAAA\"]}", false,
+             "video inputs are not available: this FastFlowLM build runs d3 on text and images"},
+            {"{" + n + ", \"assets\": {\"x\": 1}}", false,
+             "'assets' not understood; a request may carry state, questions, images, videos, model"},
+        };
+        for (const auto& c : cases) {
+            checks++;
+            const std::string got = detail(c.body, c.limited);
+            if (got != c.want) fail("turbo-limits", "'" + got.substr(0, 160) + "' vs '" + c.want + "'");
+        }
+        // state_end_byte: the end of the state text inside "State:\n<state>\n\nQuestion:\n" (bytes, UTF-8)
+        const auto end_of = [&](const PyValue& state, const std::string& text) { return flm::d3::state_end_byte(text, state); };
+        checks++;
+        if (end_of(PyValue::string("h\xc3\xa9"), "xx State:\nh\xc3\xa9\n\nQuestion:\nq") != 3 + 7 + 3) fail("state_end_byte", "string");
+        checks++;
+        if (end_of(PyValue::null(), "State:\n(empty)\n\nQuestion:\nq") != 7 + 7) fail("state_end_byte", "null");
+        checks++;
+        if (end_of(PyValue::string(""), "State:\n(empty)\n\nQuestion:\nq") != 7 + 7) fail("state_end_byte", "empty string");
+        checks++;
+        if (end_of(PyValue::boolean(false), "State:\nfalse\n\nQuestion:\nq") != 7 + 5) fail("state_end_byte", "false");
+        checks++;
+        try {
+            end_of(PyValue::string("a"), "State:\nb\n\nQuestion:\nq");
+            fail("state_end_byte", "no segment must throw");
+        } catch (const flm::d3::ContractError&) {
+        }
+        // usage: the state block once plus every question block (a stand-in tokenizer: one token per character)
+        const auto chars = [](const std::string& s) { std::vector<int> v; for (unsigned char c : s) v.push_back(c); return v; };
+        const auto one_byte = [](int) -> size_t { return 1; };
+        flm::d3::Prepared pr = flm::d3::prepare(flm::d3::parse_json(
+            "{\"state\": \"hello\", \"questions\": {\"a\": {\"type\": \"noul\"}, \"b\": {\"type\": \"choice\", "
+            "\"criteria\": {\"x\": null, \"y\": \"why\"}}, \"bad\": {\"type\": \"nope\"}}}"), codes);
+        flm::d3::tokenize(pr, chars, 0, one_byte);
+        checks++;
+        const size_t pa = pr.sequences.at("a").size(), pb = pr.sequences.at("b").size();
+        const int S = pr.state_len.at("a");
+        if (S != pr.state_len.at("b") || pr.state_len.count("bad") || pa <= static_cast<size_t>(S)) fail("state_len", "shape");
+        checks++;
+        const std::string sa = flm::d3::render(PyValue::string("hello"), pr.questions.at("a"), codes);
+        if (static_cast<size_t>(S) != sa.find("State:\nhello") + 12) fail("state_len", "S is the end of the state text");
+        const std::map<std::string, std::vector<double>> probs = {{"a", {0.5, 0.5}}, {"b", {0.5, 0.5}}};
+        const auto usage = [&](bool once) { return flm::d3::respond(pr, probs, "d3-turbo", once)["usage"]["input_tokens"].get<size_t>(); };
+        checks++;
+        if (usage(true) != static_cast<size_t>(S) + (pa - S) + (pb - S)) fail("usage", "state once");
+        checks++;
+        if (usage(false) != pa + pb) fail("usage", "whole prompts (D3_STATE_ONCE=0)");
+        // no state_len (lite / nano / mini): whole prompts, as ever
+        flm::d3::Prepared old = flm::d3::prepare(flm::d3::parse_json("{\"state\": \"hello\", \"questions\": {\"a\": {\"type\": \"noul\"}}}"), codes);
+        flm::d3::tokenize(old, chars, 0);
+        checks++;
+        if (!old.state_len.empty() || flm::d3::respond(old, {{"a", {0.5, 0.5}}}, "d3-mini")["usage"]["input_tokens"].get<size_t>() != old.sequences.at("a").size()) {
+            fail("usage", "old models count the whole prompt");
+        }
+        // plain prefix_bidir request -> ONE engine call: the shared state block and one block per question
+        {
+            const auto keys = pr.runnable();
+            const std::vector<float> readout(flm::d3::MAX_OPTIONS * 4, 0.25f);
+            flm::d3::ScriptedEngine engine(4, [&](const flm::d3::EngineStateRequest& r, size_t b) {
+                // a row that depends on the whole [state | block] row: sums of its token ids
+                float sum = 0;
+                for (int id : r.state_ids) sum += id;
+                for (int id : r.blocks[b].ids) sum += id;
+                return std::vector<float>{sum * 1e-4f, 1.f, 2.f, 3.f};
+            });
+            std::vector<flm::d3::EngineImage> images(1);
+            images[0].grid_h = 4;
+            images[0].grid_w = 6;
+            const auto request = flm::d3::plain_state_request(pr, images, 77);
+            const auto rows = engine.encode_state_once(request);
+            checks++;
+            bool ok = keys.size() == 2 && request.blocks.size() == 2 && request.state_ids.size() == static_cast<size_t>(S) &&
+                      request.images.size() == 1 && request.state_image_ids == std::vector<int>{0} && request.image_token_id == 77 &&
+                      request.video_token_id == -1 && engine.calls.size() == 1;
+            for (size_t i = 0; ok && i < keys.size(); i++) {
+                std::vector<int> whole = request.state_ids;
+                whole.insert(whole.end(), request.blocks[i].ids.begin(), request.blocks[i].ids.end());
+                ok = request.blocks[i].tag == keys[i] && whole == pr.sequences.at(keys[i]) && !request.blocks[i].ids.empty() &&
+                     request.blocks[i].readout_from_end == std::vector<int>{0} && request.blocks[i].image_ids.empty();
+            }
+            if (!ok) fail("plain_state_request", "state block, blocks and readout positions");
+            checks++;
+            const auto probs = flm::d3::plain_probabilities(pr, rows, readout.data(), 4, 1.0f);
+            if (probs.size() != 2 || probs.at("a").size() != 2 || probs.at("b").size() != 2) fail("plain_probabilities", "shape");
+            // a different state block in one request is refused, as upstream does
+            flm::d3::Prepared mixed = pr;
+            mixed.state_len["b"] = S - 1;
+            checks++;
+            try {
+                flm::d3::plain_state_request(mixed, {}, -1);
+                fail("plain_state_request", "questions with different state blocks must throw");
+            } catch (const std::runtime_error&) {
+            }
+        }
+    }
+
+    // d3:turbo with composed requests (assets, box) and per-question reasons: check_request / prepare options
+    {
+        flm::d3::PrepareOptions c;
+        c.unsupported_for = "d3:turbo";
+        c.composed = true;
+        c.reasons = true;
+        const auto detail = [&](const std::string& body_json, const flm::d3::PrepareOptions& o) -> std::string {
+            try {
+                flm::d3::check_request(flm::d3::parse_json(body_json), o);
+            } catch (const flm::d3::RequestError& e) {
+                return e.detail.is_string() ? e.detail.get<std::string>() : e.detail.dump();
+            }
+            return "";
+        };
+        const std::string tail = " by this build of d3:turbo (it answers choice, noul, score and box questions about text and images)";
+        const std::string n = "\"questions\": {\"n\": {\"type\": \"noul\"}}";
+        struct Case { std::string body; std::string want; };
+        const std::vector<Case> cases = {
+            {"{\"questions\": {\"b\": {\"type\": \"box\", \"instructions\": \"x\"}}}", ""},
+            {"{\"questions\": {\"b\": {\"type\": \"box\", \"at\": null}}}", ""},
+            {"{\"questions\": {\"b\": {\"type\": \"box\", \"at\": 2.5}}}", "question 'b': a box at a moment of a video is not supported" + tail},
+            {"{\"questions\": {\"t\": {\"type\": \"track\"}}}", "question 't': track questions are not supported" + tail},
+            {"{" + n + ", \"assets\": {\"x\": 1}}", ""},
+            {"{" + n + ", \"long_context\": true}", "long_context is not supported" + tail},
+            {"{" + n + ", \"videos\": [\"x\"], \"zzz\": 1}", "'zzz' not understood; a request may carry state, questions, images, videos, assets, long_context, model"},
+        };
+        for (const auto& cs : cases) {
+            checks++;
+            const std::string got = detail(cs.body, c);
+            if (got != cs.want) fail("composed-checks " + cs.body.substr(0, 80), "'" + got.substr(0, 160) + "' vs '" + cs.want + "'");
+        }
+        // with refuse_video_questions off, track / box-at pass (they are answered per question)
+        checks++;
+        flm::d3::PrepareOptions inl = c;
+        inl.refuse_video_questions = false;
+        if (!detail("{\"questions\": {\"t\": {\"type\": \"track\"}, \"b\": {\"type\": \"box\", \"at\": 1}}}", inl).empty()) fail("composed-checks inline video", "must pass");
+        // reasons: every error answer of a prefix_bidir reply names one; lite / nano / mini replies are unchanged
+        const std::string body = "{\"state\": \"hello\", \"questions\": {\"a\": {\"type\": \"noul\"}, \"long\": {\"type\": \"noul\", \"instructions\": \"" + std::string(300, 'z') + "\"}}}";
+        const auto chars = [](const std::string& t) { std::vector<int> v; for (unsigned char ch : t) v.push_back(ch); return v; };
+        const auto one_byte = [](int) -> size_t { return 1; };
+        for (bool reasons : {true, false}) {
+            flm::d3::PrepareOptions o = c;
+            o.reasons = reasons;
+            flm::d3::Prepared pr = flm::d3::prepare(flm::d3::parse_json(body), codes, nullptr, o);
+            flm::d3::tokenize(pr, chars, 400, one_byte);
+            const auto reply = flm::d3::respond(pr, {{"a", {0.5, 0.5}}}, "d3-turbo");
+            checks++;
+            const ojson& e = reply["answers"]["long"];
+            if (e["error"] != "max_length_exceeded" || e.contains("reason") != reasons || (reasons && e["reason"] != "question_tokens") || reply["answers"]["a"].contains("reason"))
+                fail(std::string("reasons ") + (reasons ? "on" : "off"), e.dump());
+        }
+        // add_reasons: the defaults of upstream's DEFAULT_REASONS, an existing reason kept
+        checks++;
+        ojson answers = {{"x", {{"type", "noul"}, {"error", "invalid_model_output"}, {"message", "m"}}},
+                         {"y", {{"type", "box"}, {"error", "invalid_question"}, {"reason", "video_needed"}, {"message", "m"}}},
+                         {"z", {{"type", "noul"}, {"error", "invalid_question"}, {"message", "m"}}}, {"w", {{"type", "noul"}, {"noul", 0.5}}}};
+        flm::d3::add_reasons(answers);
+        if (answers["x"]["reason"] != "model_output" || answers["y"]["reason"] != "video_needed" || answers["z"]["reason"] != "question_malformed" || answers["w"].contains("reason"))
+            fail("reasons add_reasons", answers.dump());
     }
 
     // json.loads(bytes): encoding detection and UnicodeDecodeError texts (from CPython 3.12)

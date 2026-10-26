@@ -603,25 +603,32 @@ void AutoModel::_begin_turn(chat_meta_info_t& meta_info, const std::vector<int>&
     meta_info.prompt_tail.clear();
     for (size_t i = prompt_tokens.size() > PROMPT_TAIL_TOKENS ? prompt_tokens.size() - PROMPT_TAIL_TOKENS : 0;
          i < prompt_tokens.size(); i++) {
-        try {
-            meta_info.prompt_tail += this->tokenizer->run_time_decoder(prompt_tokens[i]);
-        } catch (const std::runtime_error&) {
-            // added tokens outside the byte map, e.g. DeepSeek's <｜Assistant｜>,
-            // are stored as plain text; the full decoder handles them
-            meta_info.prompt_tail += this->tokenizer->decode({prompt_tokens[i]});
-        }
+        meta_info.prompt_tail += this->token_text(prompt_tokens[i]);
     }
     if (meta_info.constraint) {
         meta_info.constraint->start(chat_format_prefill(this->chat_format, meta_info.prompt_tail));
     }
 }
 
+std::string AutoModel::token_text(int token) {
+    try {
+        return this->tokenizer->run_time_decoder(token);
+    } catch (const std::runtime_error&) {
+        // added tokens outside the byte map, e.g. DeepSeek's <｜Assistant｜>,
+        // are stored as plain text; the full decoder handles them
+        return this->tokenizer->decode({token});
+    }
+}
+
 int AutoModel::_sample(buffer<bf16>& logits, chat_meta_info_t& meta_info) {
     decode_constraint* constraint = meta_info.constraint.get();
     const bool masked = constraint != nullptr && constraint->fill_mask(this->constraint_mask_);
+    sample_logprobs_t raw;
+    raw.top_n = meta_info.logprobs_top_n;
     // The mask goes to the sampler, which applies it to its own copy: the logits
     // live in the engine's device-mapped buffer and are never written here.
-    int token = this->sampler->sample(logits, masked ? &this->constraint_mask_ : nullptr);
+    int token = this->sampler->sample(logits, masked ? &this->constraint_mask_ : nullptr,
+                                      meta_info.logprobs_top_n >= 0 ? &raw : nullptr);
     auto allowed = [this](size_t i) {
         return i / 32 < this->constraint_mask_.size() && ((this->constraint_mask_[i / 32] >> (i % 32)) & 1u);
     };
@@ -654,6 +661,14 @@ int AutoModel::_sample(buffer<bf16>& logits, chat_meta_info_t& meta_info) {
     if (constraint != nullptr) {
         constraint->accept(token);
     }
+    // Special tokens never reach the output, so they have no place in its logprobs.
+    // The chosen token's logprob is read here rather than in the sampler: the
+    // fallback above may have replaced what the sampler picked.
+    meta_info.last_sample_logged = meta_info.logprobs_top_n >= 0 && this->is_normal_token(token);
+    if (meta_info.last_sample_logged) {
+        meta_info.logprobs.push_back(chat_token_logprob{
+            token, static_cast<float>(logits[token]) - raw.log_norm, std::move(raw.top)});
+    }
     meta_info.insert_sample_pending = false;
     return token;
 }
@@ -666,8 +681,15 @@ void AutoModel::_force_token(chat_meta_info_t& meta_info, int token) {
 }
 
 void AutoModel::_skip_insert_sample(chat_meta_info_t& meta_info) {
-    if (meta_info.constraint && meta_info.insert_sample_pending) {
-        meta_info.constraint->rollback(1);
+    if (meta_info.insert_sample_pending) {
+        if (meta_info.constraint) {
+            meta_info.constraint->rollback(1);
+        }
+        // the sample never reaches the output, so neither does its logprob
+        if (meta_info.last_sample_logged) {
+            meta_info.logprobs.pop_back();
+            meta_info.last_sample_logged = false;
+        }
     }
     meta_info.insert_sample_pending = false;
 }

@@ -18,6 +18,7 @@ model gets its own server (--decision takes one tag).
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 import time
@@ -25,7 +26,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from sweep_common import SweepTask, run_task
+from sweep_common import ASSETS_DIR, SweepTask, run_task
 
 REPO = Path(__file__).resolve().parents[2]
 STATE = "The order arrived damaged yesterday. The customer has a receipt and asks for a replacement today."
@@ -103,6 +104,10 @@ class DecisionSweep(SweepTask):
         # every d3 size has its own BF16 answers: d3_goldens.jsonl is d3:lite's, d3_goldens_<size>.jsonl the others'
         size = model.split(":", 1)[1]
         goldens = "d3_goldens.jsonl" if size == "lite" else f"d3_goldens_{size}.jsonl"
+        if not (ASSETS_DIR / goldens).is_file():
+            # e.g. d3_goldens_turbo.jsonl exists once the upstream BF16 reference has answered the requests
+            self.case(writer, model, "goldens", False, f"{goldens} is missing", 0.0, f"no BF16 goldens for {model} ({goldens})")
+            return
         for line in open(self.asset(goldens), encoding="utf-8"):
             rec = json.loads(line)
             status, body, t = self.post(rec["request"])
@@ -165,6 +170,77 @@ class DecisionSweep(SweepTask):
         ok = status == 200 and a.get("error") == "max_length_exceeded" and body["usage"]["input_tokens"] == 0
         self.case(writer, model, "too-long", ok, f"status {status}, {a.get('error')}", t, json.dumps(body)[:200])
 
+    def _prefix_bidir(self, writer, model: str) -> None:
+        """d3:turbo only: a box question is answered when /v1/systemone/models lists `box` (the engine returns the
+        four hidden rows a box reads) and refused inline (`box_unsupported`) when it does not; input_tokens counts
+        the state block once (4 questions cost far less than 4 single-question requests)."""
+        try:
+            with urllib.request.urlopen(f"{self.base_url}/systemone/models", timeout=30) as resp:
+                entry = json.loads(resp.read())["data"][0]
+                listed = entry.get("question_types") or []
+        except (urllib.error.URLError, ValueError, KeyError, IndexError) as err:
+            self.case(writer, model, "models", False, "GET /v1/systemone/models failed", 0.0, str(err))
+            return
+        status, body, t = self.post({"state": STATE, "questions": {"b": {"type": "box", "instructions": "The customer's name"}}})
+        a = body.get("answers", {}).get("b", {})
+        if "box" in listed:
+            box = a.get("box", {})
+            ok = (status == 200 and list(a) == ["type", "box", "confidence"] and sorted(box) == ["bottom", "left", "right", "top"]
+                  and all(0.0 <= v <= 1.0 for v in box.values()) and box["top"] <= box["bottom"] and box["left"] <= box["right"])
+        else:
+            ok = status == 200 and a.get("error") == "invalid_question" and a.get("reason") == "box_unsupported"
+        self.case(writer, model, "box", ok, f"status {status}, box listed: {'box' in listed}", t, json.dumps(body)[:200])
+        long_state = "The customer wrote: " + "the parcel is late, again. " * 40
+        one = {"q1": {"type": "noul", "instructions": "Is the customer upset?"}}
+        four = {f"q{i}": {"type": "noul", "instructions": f"Is the customer upset? ({i})"} for i in range(1, 5)}
+        s1, b1, t1 = self.post({"state": long_state, "questions": one})
+        s4, b4, t4 = self.post({"state": long_state, "questions": four})
+        n1 = b1.get("usage", {}).get("input_tokens", 0)
+        n4 = b4.get("usage", {}).get("input_tokens", 0)
+        ok = s1 == 200 and s4 == 200 and n1 > 0 and n1 < n4 < 4 * n1
+        self.case(writer, model, "state-once-usage", ok, f"1 question {n1} tokens, 4 questions {n4}", t1 + t4,
+                  f"input_tokens {n1} / {n4}")
+        # what the build lists is what it answers: boxes on an image, assets, a track over an encoded video
+        # (needs FFmpeg), long_context refused
+        if "box" in listed:
+            status, body, t = self.post({"state": "A small test picture.", "images": [self.IMAGE],
+                                         "questions": {"b": {"type": "box", "instructions": "The yellow rectangle"}}})
+            a = body.get("answers", {}).get("b", {})
+            box = a.get("box", {})
+            ok = (status == 200 and list(a) == ["type", "box", "confidence"] and sorted(box) == ["bottom", "left", "right", "top"]
+                  and all(0.0 <= v <= 1.0 for v in box.values()) and body["usage"]["input_tokens"] > 100)
+            self.case(writer, model, "box-image", ok, f"status {status}, box {box}", t, json.dumps(body)[:200])
+        if entry.get("assets"):
+            status, body, t = self.post({"state": "Picture: <pic>", "assets": {"<pic>": self.IMAGE},
+                                         "questions": {"bg": {"type": "choice", "instructions": "What is the main colour of the background?",
+                                                              "criteria": {"blue": "Blue", "red": "Red", "green": "Green"}}}})
+            a = body.get("answers", {}).get("bg", {})
+            ok = status == 200 and answer_shape_ok(a) and "error" not in a and body["usage"]["input_tokens"] > 100
+            self.case(writer, model, "assets", ok, f"status {status}, choice {a.get('choice')}", t, json.dumps(body)[:200])
+        if "track" in listed:
+            # a track question needs an encoded video (a frame list is only read by plain questions): the 4 s,
+            # 48 x 32 H.264 clip of the video tests. Without the FFmpeg libraries the server refuses encoded
+            # videos with 422 "video decoding backend not available": the case is then skipped, not failed.
+            clip = REPO / "src/test/d3_video/fixtures/h264.mp4"
+            if not clip.is_file():
+                self.case(writer, model, "track", True, "skipped: the clip fixture is not in this checkout", 0.0)
+            else:
+                video = "data:video/mp4;base64," + base64.b64encode(clip.read_bytes()).decode("ascii")
+                status, body, t = self.post({"state": "A short clip.", "videos": [video],
+                                             "questions": {"t": {"type": "track", "instructions": "The moving object", "rate": 1}}})
+                a = body.get("answers", {}).get("t", {})
+                entries = a.get("track") or []
+                if status == 422 and "decoding backend not available" in json.dumps(body):
+                    self.case(writer, model, "track", True, "skipped: no FFmpeg libraries on this machine", t)
+                else:
+                    ok = (status == 200 and a.get("type") == "track" and len(entries) >= 1
+                          and all(sorted(e) == ["box", "confidence", "time", "visible"] and 0.0 <= e["visible"] <= 1.0 for e in entries))
+                    self.case(writer, model, "track", ok, f"status {status}, {len(entries)} moments", t, json.dumps(body)[:200])
+        status, body, t = self.post({"state": STATE, "long_context": True, "questions": {"q": {"type": "noul"}}})
+        ok = (status == 422) == (entry.get("long_context") is False)
+        self.case(writer, model, "long-context", ok, f"status {status}, listed long_context {entry.get('long_context')}", t,
+                  json.dumps(body)[:200])
+
     # 96 x 64 PNG: a yellow box on a blue background
     IMAGE = ("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGAAAABACAIAAABqVuVZAAAAiElEQVR42u3bMRXAIAxAQcKrjk5V1QkZlYAM"
              "5FQEYmoApi4Z7u8ZuJeMxHm/RfsqAkCAAAECBAgQIK06/gzPp+V81dWHDXJigAABAiRAgAABAgQIECBAAgQIECBAgAABEiBAgAABAgQIkAAB"
@@ -189,6 +265,17 @@ class DecisionSweep(SweepTask):
         probabilities = answer.get("probabilities") or {}
         return max(probabilities, key=probabilities.get) if probabilities else None
 
+    def _same_decision(self, documented: dict, got: dict) -> bool:
+        """choice / noul: exactly the documented decision. score: the documented reply is one model's and its example is
+        a borderline one (levels 0 and 1 near each other for another model), so the neighbouring level may rank first;
+        the documented level must still carry at least 0.3 of the server's probability."""
+        if self._decision(documented) == self._decision(got):
+            return True
+        if documented.get("type") == "score" and got.get("type") == "score":
+            level = self._decision(documented)
+            return got.get("probabilities", {}).get(level, 0.0) >= 0.3
+        return False
+
     def _docs(self, writer, model: str) -> None:
         doc = (REPO / "docs/docs/models/d3.md").read_text(encoding="utf-8")
         m = re.search(r"-d '(\{.*?\})'", doc, re.S)
@@ -202,8 +289,7 @@ class DecisionSweep(SweepTask):
         ok = (status == 200 and list(answers) == list(request["questions"])
               and all(answer_shape_ok(a) and "error" not in a for a in answers.values()))
         # the documented reply must decide what the server decides; its numbers are rounded
-        drift = [k for k, a in documented.get("answers", {}).items()
-                 if self._decision(a) != self._decision(answers.get(k, {}))]
+        drift = [k for k, a in documented.get("answers", {}).items() if not self._same_decision(a, answers.get(k, {}))]
         ok = ok and not drift
         self.case(writer, model, "docs", ok, f"status {status}" + (f", docs decide differently on {drift}" if drift else ""),
                   t, json.dumps(body)[:200])
@@ -225,6 +311,8 @@ class DecisionSweep(SweepTask):
                 self._two_letter(writer, model)
                 self._invalid(writer, model)
                 self._too_long(writer, model)
+                if model == "d3:turbo":
+                    self._prefix_bidir(writer, model)
                 self._image(writer, model)
                 self._docs(writer, model)
         finally:

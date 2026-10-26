@@ -4704,5 +4704,79 @@
             "xetHash": "813e9596d99caac326757177a0c1a543377e8da91b44e8574701174a5750ab32",
             "path": "vision_weight.q4nx"
         }
+    ],
+    "d3:turbo": [
+        {
+            "type": "file",
+            "oid": "c0c686f9c38d70d179fb7b5f5aa7530bc913dda3",
+            "size": 8952,
+            "path": "chat_template.jinja"
+        },
+        {
+            "type": "file",
+            "oid": "73ae9c6222a5137ac33377821f741b9ce9a66d38",
+            "size": 3913,
+            "path": "config.json"
+        },
+        {
+            "type": "file",
+            "oid": "f2856aeaef392ffcafaffd86104c7b8bfd1ea86e",
+            "size": 7576,
+            "path": "decision_config.json"
+        },
+        {
+            "type": "file",
+            "oid": "a045716853a5bd95c44b3cedeaeb3a062c7016cc",
+            "size": 15500905656,
+            "lfs": {
+                "oid": "bb175d0ba981a2581242a8f279003306ec7decd9cc667178f755e2bab2558288",
+                "size": 15500905656,
+                "pointerSize": 136
+            },
+            "xetHash": "1c1e4fc87fc28d3795d67c6c9ff31ac9f0c9eae2ae0eb8be6da13308f72f50dc",
+            "path": "model.q4nx"
+        },
+        {
+            "type": "file",
+            "oid": "57ee5ecc9965428ff2109e597bf3f09aeb3d5d20",
+            "size": 5222480,
+            "lfs": {
+                "oid": "f2579067a488138e2ef00bb3e98989cac7311afbf48700dfad02244e3671f241",
+                "size": 5222480,
+                "pointerSize": 132
+            },
+            "xetHash": "bb54ed0fba6a31685afd04c74cd11d8951328bd273011f664a5dfdd54b2b4d93",
+            "path": "readout.safetensors"
+        },
+        {
+            "type": "file",
+            "oid": "9328ce9c41e80f6dd7bc2c66d8ae1fc93bf87440",
+            "size": 12809320,
+            "lfs": {
+                "oid": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+                "size": 12809320,
+                "pointerSize": 133
+            },
+            "xetHash": "ddca7e708ff0da8902fdcef5209d5eea8bf922715733eb02f93026a37478e426",
+            "path": "tokenizer.json"
+        },
+        {
+            "type": "file",
+            "oid": "5de744b3fca2129d7186979ae47c06be33903243",
+            "size": 17928,
+            "path": "tokenizer_config.json"
+        },
+        {
+            "type": "file",
+            "oid": "c24df56e1c85e3e3da4cb81fc994ebbd0184cc10",
+            "size": 1037176592,
+            "lfs": {
+                "oid": "40b02b19596ebd66995bca905ecf481f994183e391505a89204caf965fe69425",
+                "size": 1037176592,
+                "pointerSize": 135
+            },
+            "xetHash": "56a94fd74fdd847a3069ba83ddea8801feea984490eda49d15e9e3c529266bb6",
+            "path": "vision_weight.q4nx"
+        }
     ]
 }

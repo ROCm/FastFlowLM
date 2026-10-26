@@ -10,11 +10,16 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(FLM_D3_TEST_TOKENIZER "Check token ids with tokenizers-cpp" OFF)
 
 set(FLM_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/../..")
+# d3_contract.cpp reads the video plan (src/common/video); decoding itself is not used here
+set(FLM_D3_VIDEO_SOURCES
+    "${FLM_SOURCE_DIR}/common/video/video_sampling.cpp"
+    "${FLM_SOURCE_DIR}/common/video/video_preprocess.cpp")
 
 add_executable(test_d3_contract
     test_d3_contract.cpp
     "${FLM_SOURCE_DIR}/common/decision/py_json.cpp"
-    "${FLM_SOURCE_DIR}/common/decision/d3_contract.cpp")
+    "${FLM_SOURCE_DIR}/common/decision/d3_contract.cpp"
+    ${FLM_D3_VIDEO_SOURCES})
 target_include_directories(test_d3_contract PRIVATE "${FLM_SOURCE_DIR}/include")
 
 if(FLM_D3_TEST_TOKENIZER)
@@ -22,6 +27,18 @@ if(FLM_D3_TEST_TOKENIZER)
     target_link_libraries(test_d3_contract PRIVATE tokenizers_cpp)
     target_include_directories(test_d3_contract PRIVATE "${FLM_SOURCE_DIR}/../third_party/tokenizers-cpp/include")
     target_compile_definitions(test_d3_contract PRIVATE FLM_D3_TEST_TOKENIZER)
+
+    # prefix_bidir state block length with FastFlowLM's own Tokenizer class (token ids only, no offsets API)
+    # against upstream's offsets rule:  test_d3_state_split <fixtures>/state_split.jsonl <D3-Turbo-NPU2 dir> <fixtures>/images.jsonl
+    add_executable(test_d3_state_split
+        test_d3_state_split.cpp
+        "${FLM_SOURCE_DIR}/common/tokenizer/tokenizer.cpp"
+        "${FLM_SOURCE_DIR}/common/decision/py_json.cpp"
+        "${FLM_SOURCE_DIR}/common/decision/d3_contract.cpp"
+        ${FLM_D3_VIDEO_SOURCES})
+    target_include_directories(test_d3_state_split PRIVATE "${FLM_SOURCE_DIR}/include")
+    target_link_libraries(test_d3_state_split PRIVATE tokenizers_cpp)
+    target_include_directories(test_d3_state_split PRIVATE "${FLM_SOURCE_DIR}/../third_party/tokenizers-cpp/include")
 endif()
 
 enable_testing()

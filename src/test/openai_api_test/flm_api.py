@@ -181,6 +181,8 @@ def raise_for_capability(message: str) -> None:
         raise Skip("the model is not shown tools")
     if "only supports single-turn" in message:
         raise Skip("the model only supports single-turn requests")
+    if "logprobs is not supported" in message:
+        raise Skip("the model cannot report logprobs")
 
 
 # ---------------------------------------------------------------- stream folding

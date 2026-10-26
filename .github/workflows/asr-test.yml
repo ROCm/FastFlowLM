@@ -23,6 +23,13 @@ name: ASR Test
 # lists must stay identical. Shared files such as src/CMakeLists.txt and
 # lm_config.hpp are left out, since every change touches them.
 #
+# Because rest_handler.cpp and server.cpp are shared, the `gate` job below looks
+# at what a pull request or push really changed before any NPU machine is
+# reserved: .github/script/asr_gate.sh runs the test when an ASR-only file
+# changed, or when a changed line in those two server files is about audio or
+# speech, and skips it otherwise (for example a model family adding a tag to
+# the REST handler). The weekly run and manual dispatches always run.
+#
 # The weekly run catches what no commit changes: Whisper weights republished
 # on Hugging Face, and NPU driver or firmware updates on the runners.
 #
@@ -54,6 +61,7 @@ on:
       - 'src/test/whisper_npu/**'
       - '.github/script/asr_test.py'
       - '.github/script/asr_summary.py'
+      - '.github/script/asr_gate.sh'
       - '.github/script/sweep_common.py'
       - '.github/script/assets/asr_eval/**'
       - '.github/workflows/asr-test.yml'
@@ -81,6 +89,7 @@ on:
       - 'src/test/whisper_npu/**'
       - '.github/script/asr_test.py'
       - '.github/script/asr_summary.py'
+      - '.github/script/asr_gate.sh'
       - '.github/script/sweep_common.py'
       - '.github/script/assets/asr_eval/**'
       - '.github/workflows/asr-test.yml'
@@ -123,6 +132,37 @@ env:
   ASR_MAX_DRIFT: ${{ inputs.max_drift || '' }}
 
 jobs:
+  # Cheap hosted-runner check that the change is about ASR (see the header). Every
+  # later job hangs off resolve-build, so skipping that one skips the whole run,
+  # including the summary. Anything the script cannot decide counts as "run".
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+    steps:
+      - name: Checkout (history without file contents)
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: blob:none
+      - name: Decide
+        id: gate
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+        run: |
+          case "$EVENT" in
+            pull_request) range="${PR_BASE}...${PR_HEAD}" ;;
+            push)         range="${PUSH_BEFORE}..${PUSH_AFTER}" ;;
+            *)            range="" ;;   # schedule, workflow_dispatch: always run
+          esac
+          bash .github/script/asr_gate.sh "$range" | tee -a "$GITHUB_OUTPUT"
+
   # Waits on a hosted runner for the build runs under test, the same way the
   # model sweep's resolve-build does, and pins each to a run id so a stale
   # artifact from an earlier push can never be tested. For a pull request it
@@ -130,6 +170,8 @@ jobs:
   # JSON list of builds per platform, which the test jobs expand into their
   # matrix.
   resolve-build:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     outputs:

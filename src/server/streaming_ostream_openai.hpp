@@ -19,6 +19,7 @@
 #include <nlohmann/json.hpp>
 #include "AutoModel/automodel.hpp"
 #include "chat/chat_stream.hpp"
+#include "chat_logprobs.hpp"
 
 using json = nlohmann::ordered_json;
 
@@ -305,10 +306,14 @@ public:
     }
 
     ///@brief Call this once the prompt is inserted, before generating
-    ///@param meta_info the request's meta info, its prompt tail tells where the output starts
+    ///@param meta_info the request's meta info, its prompt tail tells where the output starts;
+    ///       when it asks for logprobs it must outlive the stream
     void start(const chat_meta_info_t& meta_info) {
         const chat_format_spec& spec = auto_chat_engine->get_chat_format();
         stream = std::make_unique<chat_stream>(spec, chat_format_prefill(spec, meta_info.prompt_tail), parse_options);
+        if (meta_info.logprobs_top_n >= 0) {
+            logprobs = std::make_unique<chat_logprobs_aligner>(auto_chat_engine, meta_info.logprobs);
+        }
     }
 
 protected:
@@ -318,6 +323,9 @@ protected:
     int_type overflow(int_type ch) override {
         if (ch != traits_type::eof()) {
             buffer += static_cast<char>(ch);
+            if (logprobs) {
+                logprobs_written += static_cast<char>(ch);
+            }
         }
         return ch;
     }
@@ -325,6 +333,7 @@ protected:
     ///@brief Called when stream is flushed
     ///@return 0
     int sync() override {
+        flush_logprobs();
         flush_complete_utf8_sequences();
         return 0;
     }
@@ -332,6 +341,7 @@ protected:
 public:
     ///@brief Call this when generation is complete
     void finalize(chat_meta_info_t& meta_info) {
+        flush_logprobs();
         // Send the remaining content but not an incomplete UTF-8 sequence at
         // its end: a generation cut off by the length limit or a cancel can
         // stop partway through a multi-byte character, the missing bytes will
@@ -405,6 +415,14 @@ private:
         return 0; // Invalid UTF-8 start byte
     }
 
+    ///@brief Place the tokens written since the last flush, before the parser sees them
+    void flush_logprobs() {
+        if (logprobs) {
+            logprobs->on_flush(logprobs_written);
+            logprobs_written.clear();
+        }
+    }
+
     ///@brief Flush only complete UTF-8 sequences
     void flush_complete_utf8_sequences() {
         if (buffer.empty()) return;
@@ -455,6 +473,8 @@ private:
         }
         for (const chat_msg_delta& d : stream->update(content, generation_done)) {
             json delta = {{"role", "assistant"}};
+            // only content has logprobs; reasoning and tool calls go out with null
+            json choice_logprobs = nullptr;
             if (d.is_tool_call()) {
                 json call = {{"index", d.tool_index}};
                 if (!d.tool_id.empty()) {
@@ -473,20 +493,25 @@ private:
             }
             else {
                 delta["content"] = d.content;
+                if (logprobs) {
+                    choice_logprobs = {{"content", logprobs->take_content(d.content)}, {"refusal", nullptr}};
+                }
             }
 
+            json choice = {
+                {"index", 0},
+                {"delta", delta}
+            };
+            if (logprobs) {
+                choice["logprobs"] = choice_logprobs;
+            }
+            choice["finish_reason"] = nullptr;
             json response = {
                 {"id", stream_id},
                 {"object", "chat.completion.chunk"},
                 {"created", created},
                 {"model", model_name},
-                {"choices", json::array({
-                    {
-                        {"index", 0},
-                        {"delta", delta},
-                        {"finish_reason", nullptr}
-                    }
-                })}
+                {"choices", json::array({choice})}
             };
             if (include_usage) {
                 response["usage"] = nullptr;
@@ -497,22 +522,23 @@ private:
 
     ///@brief Send the chat final response
     void send_final_response(chat_meta_info_t& meta_info) {
+        json final_choice = {
+            {"index", 0},
+            {"delta", {
+                {"content", nullptr}
+            }}
+        };
+        if (logprobs) {
+            final_choice["logprobs"] = nullptr;
+        }
+        final_choice["finish_reason"] = stop_reason_to_string(meta_info.stop_reason);
         json final_response = {
             {"id", stream_id},
             {"object", "chat.completion.chunk"},
             {"created", created},
             {"model", model_name},
             {"system_fingerprint", system_fingerprint},
-            {"choices", json::array({
-                {
-                    {"index", 0},
-                    {"delta", {
-                    {"content", nullptr}
-                }},
-                    //{"logprobs", nullptr},
-                    {"finish_reason", stop_reason_to_string(meta_info.stop_reason)}
-                }
-            })}
+            {"choices", json::array({final_choice})}
         };
         json usage = {
             {"prompt_tokens", meta_info.prompt_tokens},
@@ -572,6 +598,10 @@ private:
     chat_parse_options parse_options;
     ///@brief Parse state of this response, created by start()
     std::unique_ptr<chat_stream> stream;
+    ///@brief Set by start() when the request asks for logprobs
+    std::unique_ptr<chat_logprobs_aligner> logprobs;
+    ///@brief What the model wrote since the last flush, for logprobs
+    std::string logprobs_written;
 };
 
 ///@brief Custom ostream for streaming chat completions

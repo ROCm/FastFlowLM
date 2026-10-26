@@ -79,7 +79,7 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
             ("embed,e", po::value<bool>(&parsed_args.embed)->default_value(0),
             "If load embed model")
             ("decision,d", po::value<std::string>(&parsed_args.decision)->default_value(""),
-             "Serve a decision model next to the chat model, d3:lite, d3:nano or d3:mini (POST /v1/systemone)")
+             "Serve a decision model next to the chat model, d3:lite, d3:nano, d3:mini or d3:turbo (POST /v1/systemone)")
             ("host", po::value<std::string>(&parsed_args.host)->default_value("127.0.0.1"), 
              "Set the server address (for serve command)")
             ("port,p", po::value<int>(&parsed_args.port)->default_value(-1), 

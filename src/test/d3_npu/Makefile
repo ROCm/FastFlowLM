@@ -8,11 +8,16 @@ SOURCES += test.cpp
 SOURCES += ../../common/AutoDecisionModel/auto_decision_model.cpp
 SOURCES += ../../common/decision/d3_contract.cpp
 SOURCES += ../../common/decision/py_json.cpp
+SOURCES += ../../common/video/video_sampling.cpp
+SOURCES += ../../common/video/video_preprocess.cpp
+SOURCES += ../../common/video/video_decode.cpp
+SOURCES += ../../common/video/video_input.cpp
+SOURCES += ../../common/video/ffmpeg_dl.cpp
 SOURCES += ../../common/tokenizer/tokenizer.cpp
 
 ifeq ($(WSL), 0)
 
-LDFLAGS += -ld3_npu
+LDFLAGS += -ld3_npu -ldl
 CXX_FLAGS += -DFLM_HAS_D3_NPU=1
 
 CPP_SOURCES := $(filter %.cpp,$(SOURCES))

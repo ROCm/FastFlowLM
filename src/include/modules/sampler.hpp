@@ -45,6 +45,25 @@ typedef struct {
 
 typedef std::vector<logits_t> logits_list_t;
 
+/// \brief One token and its log probability
+typedef struct {
+    int token_id;
+    float logprob;
+} token_logprob_t;
+
+/// \brief What sample() reports about the distribution it sampled from
+/// \note Raw: the logits as the model produced them, before penalties, the
+///       constraint mask, temperature, top-k, top-p or min-p. That is the
+///       distribution OpenAI's logprobs describe.
+struct sample_logprobs_t {
+    /// \brief in: how many of the most likely tokens to report
+    int top_n = 0;
+    /// \brief out: log of the softmax denominator, so logprob = logit - log_norm
+    float log_norm = 0.0f;
+    /// \brief out: the top_n most likely tokens, most likely first
+    std::vector<token_logprob_t> top;
+};
+
 class Sampler{
 public:
     std::vector<float> logits;
@@ -102,7 +121,8 @@ public:
     ///       Going through the general path would allocate and partial_sort a
     ///       vocab-sized array of triples and run three full-vocab softmaxes for
     ///       a result that never depends on any of it.
-    int sample_greedy(buffer<bf16>& x, const std::vector<uint32_t>* allowed = nullptr);
+    int sample_greedy(buffer<bf16>& x, const std::vector<uint32_t>* allowed = nullptr,
+                      sample_logprobs_t* logprobs = nullptr);
 
     void sampler_topk_apply(int k);
     void sampler_topp_apply(float p);
@@ -116,9 +136,15 @@ public:
     /// \param x the input buffer, only read
     /// \param allowed optional bitmask, bit i of word i/32 set when token i may be
     ///        sampled; applied to the sampler's own copy of the logits
+    /// \param logprobs optional, filled with the raw distribution's normaliser and
+    ///        top tokens; costs one more pass over the vocabulary
     /// \return the sampled token
-    int sample(buffer<bf16>& x, const std::vector<uint32_t>* allowed = nullptr);
+    int sample(buffer<bf16>& x, const std::vector<uint32_t>* allowed = nullptr,
+               sample_logprobs_t* logprobs = nullptr);
 
     /// \brief Push every token the bitmask does not allow to -inf in this->logits
     void sampler_allowed_apply(const std::vector<uint32_t>* allowed);
+
+    /// \brief Fill logprobs from this->logits, which must still hold the raw copy
+    void raw_logprobs_apply(sample_logprobs_t& logprobs);
 };

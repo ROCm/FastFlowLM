@@ -38,3 +38,14 @@ ctest --test-dir build-d3-contract --output-on-failure
 - `decision_config.json`: the package's answer codes.
 
 Regenerating them is a reviewed change: the fixtures are the definition of "identical to upstream".
+
+## prefix_bidir state block (d3:turbo)
+
+`fixtures/state_split.jsonl` (`gen_state_split.py`, upstream `d3_format.encode_split` with the tokenizer's offset mapping)
+holds 457 rendered prompts (the committed subset: all image prompts and every 4th other prompt of the generator's ~1,480) (the golden states, edge states ending in punctuation, whitespace, newlines, unicode,
+non-NFC text and special-token text, random mixes, and image prompts) with their token ids (crc) and the state block
+length S. FastFlowLM's tokenizer API has no offsets, so `state_block_length` derives S from each token's byte length;
+`test_d3_state_split <fixtures>/state_split.jsonl <D3-Turbo-NPU2 dir> <fixtures>/images.jsonl` (built with
+`-DFLM_D3_TEST_TOKENIZER=ON`) requires the same S for every prompt. Three prompts with combining marks (Thai,
+Devanagari) are tokenized differently by transformers' `Qwen2Tokenizer` (its own pre-tokenizer regex) and by
+`tokenizer.json`; for those the expected S comes from `tokenizer.json`'s own offsets.
