@@ -1535,6 +1535,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                 }},
                 {"service_tier", "default"}
             };
+            if (meta_info.prefix_cache.valid) response["usage"]["flm_prefix_cache"] = prefix_cache_usage_json(meta_info.prefix_cache);
             if (meta_info.stop_reason == CANCEL_DETECTED) {
                 header_print("❌ ", "Generation Cancelled!");
                 this->prompt_cache.reset();
@@ -1830,6 +1831,7 @@ void RestHandler::handle_openai_completion(const json& request,
                     {"total_tokens", meta_info.prompt_tokens + meta_info.generated_tokens}
                 }}
             };
+            if (meta_info.prefix_cache.valid) response["usage"]["flm_prefix_cache"] = prefix_cache_usage_json(meta_info.prefix_cache);
             send_response(response);
         }
     }
