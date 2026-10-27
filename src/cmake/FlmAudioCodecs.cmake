@@ -1,7 +1,8 @@
 # Audio codecs for AudioReader (src/common/audio/audio_decoder.cpp).
 #
 #   - libopus 1.6.1, libogg 1.3.6 and libvorbis 1.3.7 (all BSD-3-Clause), built
-#     as static libraries through ExternalProject from pinned release tarballs.
+#     as static libraries through ExternalProject from pinned release tarballs
+#     (libopus: from its pinned release commit, see below).
 #     libvorbis finds libogg through the shared install prefix.
 #   - dr_wav/dr_flac/dr_mp3 (public domain or MIT-0), vendored header-only in
 #     include/dr_libs and compiled into audio_decoder.cpp.
@@ -36,14 +37,14 @@ if(CMAKE_C_COMPILER)
 endif()
 
 # Short working directories keep MSBuild under Windows' 260-char MAX_PATH on
-# CI runners with deep work directories (see FlmImageCodecs.cmake). `urls` is
-# a list of mirrors tried in order; the SHA-256 pins the exact tarball.
-function(_flm_audio_project name urls sha256 byproduct)
+# CI runners with deep work directories (see FlmImageCodecs.cmake). SOURCE
+# takes the ExternalProject download options: a URL list of mirrors tried in
+# order plus the SHA-256 that pins the exact tarball, or a DOWNLOAD_COMMAND.
+function(_flm_audio_project name byproduct)
+    cmake_parse_arguments(PARSE_ARGV 2 _arg "" "" "SOURCE;CMAKE_ARGS")
     set(_work ${CMAKE_BINARY_DIR}/ac/${name})
     ExternalProject_Add(flm_${name}
-        URL ${urls}
-        URL_HASH SHA256=${sha256}
-        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+        ${_arg_SOURCE}
         EXCLUDE_FROM_ALL TRUE
         PREFIX ${_work}
         DOWNLOAD_DIR ${_work}/dl
@@ -52,30 +53,44 @@ function(_flm_audio_project name urls sha256 byproduct)
         STAMP_DIR ${_work}/st
         TMP_DIR ${_work}/t
         INSTALL_DIR ${_flm_audio_prefix}
-        CMAKE_ARGS ${_flm_audio_args} ${ARGN}
+        CMAKE_ARGS ${_flm_audio_args} ${_arg_CMAKE_ARGS}
         BUILD_BYPRODUCTS ${byproduct})
 endfunction()
 
-_flm_audio_project(opus
-    "https://downloads.xiph.org/releases/opus/opus-1.6.1.tar.gz;https://ftp.osuosl.org/pub/xiph/releases/opus/opus-1.6.1.tar.gz"
-    6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1
-    ${_flm_opus_lib}
-    -DOPUS_BUILD_PROGRAMS=OFF
-    -DOPUS_INSTALL_PKG_CONFIG_MODULE=OFF
-    -DOPUS_INSTALL_CMAKE_CONFIG_MODULE=OFF)
-_flm_audio_project(ogg
-    "https://github.com/xiph/ogg/releases/download/v1.3.6/libogg-1.3.6.tar.gz;https://downloads.xiph.org/releases/ogg/libogg-1.3.6.tar.gz;https://ftp.osuosl.org/pub/xiph/releases/ogg/libogg-1.3.6.tar.gz"
-    83e6704730683d004d20e21b8f7f55dcb3383cdf84c0daedf30bde175f774638
-    ${_flm_ogg_lib}
-    -DINSTALL_DOCS=OFF)
+# Opus 1.6.1 has no GitHub release asset, and downloads.xiph.org redirects to
+# ftp.osuosl.org, which a corporate proxy in front of the self-hosted Windows
+# runners blocks intermittently. Fetch the v1.6.1 tag's commit from GitHub
+# instead; FlmFetchGitCommit.cmake checks HEAD against it and writes the
+# package_version file the release tarball carries.
+_flm_audio_project(opus ${_flm_opus_lib}
+    SOURCE
+        DOWNLOAD_COMMAND ${CMAKE_COMMAND}
+            -DREPO=https://github.com/xiph/opus.git
+            -DCOMMIT=22244de5a79bd1d6d623c32e72bf1954b56235be
+            -DSOURCE_DIR=<SOURCE_DIR>
+            -DPACKAGE_VERSION=1.6.1
+            -P ${CMAKE_CURRENT_LIST_DIR}/FlmFetchGitCommit.cmake
+    CMAKE_ARGS
+        -DOPUS_BUILD_PROGRAMS=OFF
+        -DOPUS_INSTALL_PKG_CONFIG_MODULE=OFF
+        -DOPUS_INSTALL_CMAKE_CONFIG_MODULE=OFF)
+_flm_audio_project(ogg ${_flm_ogg_lib}
+    SOURCE
+        URL "https://github.com/xiph/ogg/releases/download/v1.3.6/libogg-1.3.6.tar.gz;https://downloads.xiph.org/releases/ogg/libogg-1.3.6.tar.gz;https://ftp.osuosl.org/pub/xiph/releases/ogg/libogg-1.3.6.tar.gz"
+        URL_HASH SHA256=83e6704730683d004d20e21b8f7f55dcb3383cdf84c0daedf30bde175f774638
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    CMAKE_ARGS
+        -DINSTALL_DOCS=OFF)
 # libvorbis 1.3.7 declares cmake_minimum_required(VERSION 2.8.12), which
 # CMake 4 rejects; let it configure under 3.5 policies (older CMake ignores
 # this variable).
-_flm_audio_project(vorbis
-    "https://github.com/xiph/vorbis/releases/download/v1.3.7/libvorbis-1.3.7.tar.gz;https://downloads.xiph.org/releases/vorbis/libvorbis-1.3.7.tar.gz;https://ftp.osuosl.org/pub/xiph/releases/vorbis/libvorbis-1.3.7.tar.gz"
-    0e982409a9c3fc82ee06e08205b1355e5c6aa4c36bca58146ef399621b0ce5ab
-    "${_flm_vorbis_lib};${_flm_vorbisfile_lib}"
-    -DCMAKE_POLICY_VERSION_MINIMUM=3.5)
+_flm_audio_project(vorbis "${_flm_vorbis_lib};${_flm_vorbisfile_lib}"
+    SOURCE
+        URL "https://github.com/xiph/vorbis/releases/download/v1.3.7/libvorbis-1.3.7.tar.gz;https://downloads.xiph.org/releases/vorbis/libvorbis-1.3.7.tar.gz;https://ftp.osuosl.org/pub/xiph/releases/vorbis/libvorbis-1.3.7.tar.gz"
+        URL_HASH SHA256=0e982409a9c3fc82ee06e08205b1355e5c6aa4c36bca58146ef399621b0ce5ab
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    CMAKE_ARGS
+        -DCMAKE_POLICY_VERSION_MINIMUM=3.5)
 ExternalProject_Add_StepDependencies(flm_vorbis configure flm_ogg)
 
 # The include directory must exist at configure time for the imported targets.
