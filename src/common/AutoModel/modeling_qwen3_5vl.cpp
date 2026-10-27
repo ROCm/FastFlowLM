@@ -71,7 +71,7 @@ void Qwen3_5VL::_attach_prefix_cache() {
 }
 
 void Qwen3_5VL::clear_context() {
-    this->prefix_cache_.clear_live(); // the saved snapshots belong to other conversations too: keep them
+    this->prefix_cache_.clear_live(true); // the saved snapshots belong to other conversations too: keep them
     this->AutoModel::clear_context();
 }
 

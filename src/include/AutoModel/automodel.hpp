@@ -90,6 +90,7 @@ struct chat_meta_info_t {
 	int max_prefill_len;
     int prompt_tokens;        // whole prompt, cached prefix included
     int cached_prompt_tokens; // subset of prompt_tokens served from the KV cache
+    prefix_cache_report_t prefix_cache; // what the slot cache did (valid only for models that have one)
     int generated_tokens;
     uint64_t total_duration; // in nanoseconds
     uint64_t load_duration; // in nanoseconds

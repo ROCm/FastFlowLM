@@ -43,6 +43,28 @@ size_t PrefixSlotCache::budget_bytes() const {
     return mib << 20;
 }
 
+size_t PrefixSlotCache::bytes_used() const {
+    size_t total = 0;
+    for (const auto& slot : slots_table_) total += slot.state->estimate_bytes(static_cast<int>(slot.tokens.size()), slot.kv_from());
+    return total;
+}
+
+prefix_cache_report_t PrefixSlotCache::report() const {
+    prefix_cache_report_t r = report_;
+    r.slots_used = static_cast<int>(slots_table_.size());
+    r.slots_max = static_cast<int>(slot_limit());
+    r.bytes_used = bytes_used();
+    r.bytes_budget = budget_bytes();
+    return r;
+}
+
+void PrefixSlotCache::clear_live(bool announce) {
+    live_tokens_.clear();
+    if (announce && enabled() && !slots_table_.empty()) {
+        header_print("FLM", "Prefix cache: engine context cleared, " << slots_table_.size() << " saved snapshots kept");
+    }
+}
+
 size_t PrefixSlotCache::slot_limit() const {
     if (slots_ == 0) return 0; // --prefix-slots 0: off
     const size_t requested = slots_ > 0 ? static_cast<size_t>(slots_) : kDefaultPrefixSlots;
@@ -89,14 +111,23 @@ PrefixSlotCache::resume_t PrefixSlotCache::resume(const std::vector<int>& full_t
     int best = -1;
     int best_ancestor = -1;  // slot that puts the head under `best` back, when the engine no longer holds it
     size_t match_len = 0;
+    size_t best_lcp = 0;        // longest common prefix with any slot, for the miss reason
+    bool same_prompt = false;   // a slot holds exactly this prompt (or more): nothing left to process
+    bool images_differ = false;
+    bool head_missing = false;
+    report_.prompt_tokens = static_cast<int>(full_tokens.size());
     for (size_t i = 0; i < slots_table_.size(); i++) {
         const slot_t& slot = slots_table_[i];
         const size_t len = slot.tokens.size();
+        best_lcp = std::max(best_lcp, lcp_len(full_tokens, slot.tokens));
         // strictly shorter than the prompt: at least one token must be processed to get logits
-        if (len == 0 || len >= full_tokens.size() || len <= match_len) continue;
+        if (len == 0 || len >= full_tokens.size() || len <= match_len) {
+            if (len >= full_tokens.size() && has_prefix(slot.tokens, full_tokens)) same_prompt = true;
+            continue;
+        }
         if (!has_prefix(full_tokens, slot.tokens)) continue;
         if (slot.image_hashes.size() > image_hashes.size() ||
-            !std::equal(slot.image_hashes.begin(), slot.image_hashes.end(), image_hashes.begin())) continue;
+            !std::equal(slot.image_hashes.begin(), slot.image_hashes.end(), image_hashes.begin())) { images_differ = true; continue; }
         int ancestor = -1;
         const size_t head = static_cast<size_t>(slot.kv_from());
         if (head > 0 && lcp_len(live_tokens_, slot.tokens) < head) {
@@ -109,13 +140,20 @@ PrefixSlotCache::resume_t PrefixSlotCache::resume(const std::vector<int>& full_t
                     break;
                 }
             }
-            if (ancestor < 0) continue;
+            if (ancestor < 0) { head_missing = true; continue; }
         }
         best = static_cast<int>(i);
         best_ancestor = ancestor;
         match_len = len;
     }
     if (best < 0) {
+        if (slots_table_.empty()) result.miss_reason = "no snapshots saved yet";
+        else if (images_differ) result.miss_reason = "the images differ from the matching snapshot";
+        else if (head_missing) result.miss_reason = "the snapshot's head rows are not available";
+        else if (same_prompt) result.miss_reason = "the prompt is not longer than a saved one";
+        else result.miss_reason = "no snapshot is a prefix of the prompt (longest common prefix " + std::to_string(best_lcp) + " tokens)";
+        report_.hit = false;
+        report_.miss_reason = result.miss_reason;
         return result;
     }
     slot_t& slot = slots_table_[best];
@@ -129,12 +167,19 @@ PrefixSlotCache::resume_t PrefixSlotCache::resume(const std::vector<int>& full_t
     if (!restored) {
         header_print("WARNING", "Prefix snapshot of " << match_len << " tokens could not be restored, prefilling from scratch");
         forget_all();
+        result.miss_reason = "the snapshot could not be restored";
+        report_.miss_reason = result.miss_reason;
         return result;
     }
     slot.last_used = ++clock_;
     live_tokens_ = slot.tokens;
     matched_tokens = slot.tokens;
-    header_print("FLM", "Prefix cache: resuming at " << match_len << " of " << full_tokens.size() << " tokens");
+    header_print("FLM", "Prefix cache: resuming at " << match_len << " of " << full_tokens.size() << " tokens, from slot " << slot.id
+                 << " (" << (slot.boundary ? "boundary" : "end") << ", " << slots_table_.size() << " saved)");
+    report_.hit = true;
+    report_.slot = slot.id;
+    report_.slot_boundary = slot.boundary;
+    report_.matched_tokens = static_cast<int>(match_len);
     result.resumed = true;
     result.match_len = match_len;
     return result;
@@ -159,6 +204,8 @@ void PrefixSlotCache::save(const std::vector<int>& tokens, const std::vector<uin
             if (slot.tokens.size() < tokens.size() && tokens.size() - slot.tokens.size() < min_end_gain && has_prefix(tokens, slot.tokens) &&
                 slot.image_hashes.size() <= image_hashes.size() &&
                 std::equal(slot.image_hashes.begin(), slot.image_hashes.end(), image_hashes.begin())) {
+                header_print("FLM", "Prefix cache: not saved, only " << tokens.size() - slot.tokens.size() << " tokens past slot " << slot.id
+                             << " (needs " << min_end_gain << ")");
                 return;
             }
         }
@@ -219,7 +266,8 @@ void PrefixSlotCache::save(const std::vector<int>& tokens, const std::vector<uin
     // The slot that supplies the head of the snapshot being saved is never chosen.
     auto evict_one = [&]() -> bool {
         auto drop_at = [&](size_t i, const char* why) {
-            header_print("FLM", "Prefix cache: dropping " << why << " (" << slots_table_[i].tokens.size() << " tokens)");
+            header_print("FLM", "Prefix cache: dropping slot " << slots_table_[i].id << ", " << why << " (" << slots_table_[i].tokens.size() << " tokens)");
+            report_.dropped++;
             slots_table_.erase(slots_table_.begin() + i);
         };
         const size_t n = slots_table_.size();
@@ -278,5 +326,9 @@ void PrefixSlotCache::save(const std::vector<int>& tokens, const std::vector<uin
     slot.image_hashes.assign(image_hashes.begin(), image_hashes.begin() + runs);
     slot.last_used = ++clock_;
     slot.boundary = boundary;
+    slot.id = next_id_++;
+    header_print("FLM", "Prefix cache: saved slot " << slot.id << " (" << (boundary ? "boundary" : "end") << ", " << tokens.size() << " tokens, from row "
+                 << kv_from << ", " << (new_cost >> 20) << " MiB)");
+    report_.saved.push_back({slot.id, boundary, static_cast<int>(tokens.size()), kv_from, new_cost});
     slots_table_.push_back(std::move(slot));
 }

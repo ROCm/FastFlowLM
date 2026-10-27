@@ -297,6 +297,53 @@ void test_restore_failure_and_off() {
     prefill(off, off_e, seq(1, 600), 0);
     CHECK(off.slot_count() == 0);
 }
+
+void test_report() {
+    std::printf("the report says what a request did: lookup, slots saved and dropped, fill level\n");
+    fake_engine e;
+    PrefixSlotCache cache = make(e, -1, 3);
+    const auto sys = seq(1, 600);
+    const auto t1 = cat(sys, seq(5000, 100));
+
+    // first request: nothing saved yet, then it saves a boundary and an end slot
+    cache.begin_report();
+    std::vector<int> matched;
+    auto r = cache.resume(t1, {}, matched);
+    CHECK(!r.resumed && r.miss_reason == "no snapshots saved yet");
+    prefill(cache, e, t1, 600);
+    auto rep = cache.report();
+    CHECK(rep.valid && !rep.hit && rep.miss_reason == "no snapshots saved yet");
+    CHECK(rep.saved.size() == 2 && rep.saved[0].boundary && !rep.saved[1].boundary);
+    CHECK(rep.saved[0].slot == 1 && rep.saved[1].slot == 2 && rep.saved[1].kv_from == 600);
+    CHECK(rep.slots_used == 2 && rep.slots_max == 3 && rep.bytes_used > 0 && rep.bytes_used <= rep.bytes_budget);
+
+    // the next turn resumes from the end slot
+    cache.begin_report();
+    const auto t2 = cat(t1, seq(6000, 30));
+    r = cache.resume(t2, {}, matched);
+    rep = cache.report();
+    CHECK(r.resumed && rep.hit && rep.slot == 2 && !rep.slot_boundary && rep.matched_tokens == static_cast<int>(t1.size()));
+    CHECK(rep.saved.empty() && rep.dropped == 0);
+
+    // an unrelated prompt: a miss that says how far it matched
+    cache.begin_report();
+    r = cache.resume(seq(9000, 700), {}, matched);
+    CHECK(!r.resumed && r.miss_reason.find("no snapshot is a prefix") == 0);
+    // the exact same prompt: the slot is not strictly shorter
+    cache.begin_report();
+    r = cache.resume(t1, {}, matched);
+    CHECK(r.resumed && cache.report().slot_boundary);  // the boundary slot serves it
+    cache.begin_report();
+    r = cache.resume(sys, {}, matched);
+    CHECK(!r.resumed && r.miss_reason == "the prompt is not longer than a saved one");
+
+    // ids are never reused: a fourth slot evicts one and gets id 3
+    cache.begin_report();
+    prefill(cache, e, seq(20000, 700), 0);
+    prefill(cache, e, seq(30000, 700), 0);
+    rep = cache.report();
+    CHECK(rep.dropped >= 1 && rep.saved.size() == 2 && rep.saved[0].slot == 3 && rep.saved[1].slot == 4);
+}
 } // namespace
 
 int main() {
@@ -309,6 +356,7 @@ int main() {
     test_budget();
     test_images();
     test_restore_failure_and_off();
+    test_report();
     if (failures > 0) {
         std::printf("%d check(s) failed\n", failures);
         return 1;

@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "flm_state_api.h"
@@ -55,6 +56,30 @@ std::vector<uint64_t> prefix_image_hashes(const Payload& payload, size_t patch, 
     return hashes;
 }
 
+/// \brief what the prefix cache did for one request: logged, and reported to the client in `usage.flm_prefix_cache`
+struct prefix_cache_report_t {
+    bool valid = false;           ///< the model has a slot cache and this request went through it
+    bool hit = false;             ///< the request resumed from a slot
+    std::string miss_reason;      ///< why not, when it did not
+    int slot = -1;                ///< id of the slot resumed from (ids are never reused)
+    bool slot_boundary = false;   ///< that slot is a boundary slot (system + tools head) rather than an end slot
+    int matched_tokens = 0;       ///< tokens of the prompt it covered
+    int prompt_tokens = 0;        ///< tokens the cache considered (the prompt without its generation prompt)
+    struct saved_t {
+        int slot = 0;
+        bool boundary = false;
+        int tokens = 0;           ///< prompt length the slot was saved after
+        int kv_from = 0;          ///< first position whose K/V rows it holds
+        size_t bytes = 0;
+    };
+    std::vector<saved_t> saved;   ///< snapshots this request added
+    int dropped = 0;              ///< snapshots this request evicted
+    int slots_used = 0;           ///< after the request
+    int slots_max = 0;
+    size_t bytes_used = 0;
+    size_t bytes_budget = 0;
+};
+
 class PrefixSlotCache {
 public:
     /// \brief most snapshots --prefix-slots may ask for
@@ -81,6 +106,7 @@ public:
     struct resume_t {
         bool resumed = false;      ///< the engine now holds a slot's state
         size_t match_len = 0;      ///< tokens of the prompt it covers
+        std::string miss_reason;   ///< when not resumed: why no slot could serve the prompt
     };
     /// \brief resume from the longest saved prefix of `full_tokens` and write that state back into the engine
     /// \param full_tokens what the prompt leaves in the engine
@@ -101,7 +127,12 @@ public:
 
     /// \brief tokens whose K/V rows the engine's cache holds now (what the last request left in it)
     void set_live(const std::vector<int>& tokens) { live_tokens_ = tokens; }
-    void clear_live() { live_tokens_.clear(); }
+    /// \param announce log that the engine's context was dropped while the slots were kept (a clear or a cancel, not a cold start)
+    void clear_live(bool announce = false);
+
+    /// \brief what the cache did since begin_report(): the lookup, the snapshots added and dropped, and how full it is
+    void begin_report() { report_ = prefix_cache_report_t(); report_.valid = true; }
+    prefix_cache_report_t report() const;
 
     /// \brief forget every slot (and the live tokens)
     void forget_all();
@@ -114,11 +145,13 @@ private:
         std::vector<int> tokens;             // what the slot was saved after
         std::vector<uint64_t> image_hashes;  // content of the images inside `tokens`
         uint64_t last_used = 0;
+        int id = 0;                          // told apart in logs and usage; never reused
         bool boundary = false;               // end of system + tools; evicted last
         /// first position whose K/V rows the slot holds
         int kv_from() const { return state->kv_from(); }
     };
 
+    size_t bytes_used() const;
     size_t budget_bytes() const;
     size_t slot_limit() const;
     size_t count_image_runs(const std::vector<int>& tokens, size_t len) const;
@@ -132,4 +165,6 @@ private:
     int slots_ = -1;
     bool announced_ = false;
     bool warned_too_big_ = false;
+    int next_id_ = 1;
+    prefix_cache_report_t report_;
 };

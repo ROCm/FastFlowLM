@@ -377,10 +377,11 @@ std::string AutoModel::generate_with_prompt(
 
 size_t AutoModel::_prefix_resume(PrefixSlotCache& cache, const std::vector<int>& full_tokens, const std::vector<uint64_t>& image_hashes) {
     std::vector<int> matched;
+    cache.begin_report();
     const PrefixSlotCache::resume_t resumed = cache.resume(full_tokens, image_hashes, matched);
     if (!resumed.resumed) {
         this->_prefix_cold_start(cache);
-        header_print("FLM", "No saved prefix matches, prefilling " << full_tokens.size() << " tokens");
+        header_print("FLM", "No saved prefix matches: " << resumed.miss_reason << "; prefilling " << full_tokens.size() << " tokens");
         return 0;
     }
     this->total_tokens = resumed.match_len;
@@ -443,6 +444,7 @@ bool AutoModel::_prefix_insert(PrefixSlotCache& cache, chat_meta_info_t& meta_in
     cache.set_live(full_tokens);
     // the end of this prompt keeps only what follows the shared head, when a slot holds that head
     cache.save(full_tokens, image_hashes, false, cache.end_kv_from(full_tokens, boundary));
+    meta_info.prefix_cache = cache.report();
     return true;
 }
 
