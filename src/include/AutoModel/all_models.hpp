@@ -25,6 +25,7 @@
 #include "modeling_nanbeige.hpp"
 #include "modeling_gemma4e.hpp"
 #include "modeling_hunyuan.hpp"
+#include "modeling_hy_memory.hpp"
 #include "modeling_gemma4_12b.hpp"
 #include "model_list.hpp"
 #include "nlohmann/json.hpp"
@@ -56,6 +57,7 @@ typedef enum {
     phi4,
     nanbeige,
     hunyuan,
+    hy_memory,
     error_whiper,
     error_embedding
 } SupportedModelFamily;
@@ -90,6 +92,7 @@ inline std::pair<std::string, std::unique_ptr<AutoModel>> get_auto_model(const s
         {"phi4", SupportedModelFamily::phi4},
         {"nanbeige", SupportedModelFamily::nanbeige},
         {"hunyuan", SupportedModelFamily::hunyuan},
+        {"hy-memory", SupportedModelFamily::hy_memory},
         {"whisper-v3", SupportedModelFamily::error_whiper},
         {"embed-gemma", SupportedModelFamily::error_embedding},
         {"d3", SupportedModelFamily::error_embedding}   // decision model: not a chat engine
@@ -181,6 +184,9 @@ inline std::pair<std::string, std::unique_ptr<AutoModel>> get_auto_model(const s
             break;
         case SupportedModelFamily::hunyuan:
             auto_chat_engine = std::make_unique<Hunyuan>(npu_device_inst);
+            break;
+        case SupportedModelFamily::hy_memory:
+            auto_chat_engine = std::make_unique<HyMemory>(npu_device_inst);
             break;
         case SupportedModelFamily::phi4:
             auto_chat_engine = std::make_unique<Phi4>(npu_device_inst);

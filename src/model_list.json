@@ -36,6 +36,40 @@
                 "footprint": 1.5
             }
         },
+        "hy-memory": {
+            "30b-a3b": {
+                "supported_platforms": ["aie2p"],
+                "name": "Hy-Memory-30B-A3B-NPU2",
+                "url": "https://huggingface.co/FastFlowLM/Hy-Memory-30B-A3B-NPU2",
+                "file_url": "https://huggingface.co/api/models/FastFlowLM/Hy-Memory-30B-A3B-NPU2/tree/main",
+                "ms_url": "https://modelscope.cn/models/amd/Hy-Memory-30B-A3B-NPU2",
+                "modified_at": "2026-10-26T00:00:00Z",
+                "size": 17870824616,
+                "flm_min_version": "1.0.5",
+                "default_context_length": 16384,
+                "max_prefill_len": 16384,
+                "files": [
+                    "config.json",
+                    "model.q4nx",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "chat_template.jinja"
+                ],
+                "vlm": false,
+                "asr": false,
+                "details": {
+                    "format": "NPU2",
+                    "family": "hy-memory",
+                    "think": false,
+                    "parameter_size": "30B-A3B",
+                    "quantization_level": "Q4_K"
+                },
+                "label": [
+                    "memory"
+                ],
+                "footprint": 19.7
+            }
+        },
         "nanbeige4.1": {
             "3b": {
                 "supported_platforms": ["aie2p"],

@@ -52,6 +52,7 @@ void register_builtin_backends(BackendRegistry& registry) {
     RegisterFlm<gemma4e_flash>(registry, "gemma4e-flash");
     RegisterFlm<gemma4_12b_npu>(registry, "gemma4-12b");
     RegisterFlm<hunyuan_npu>(registry, "hunyuan");
+    RegisterFlm<hy_mem_npu>(registry, "hy-memory");
     RegisterFlm<gpt_oss_npu>(registry, "gpt-oss");
     RegisterFlm<lfm2_npu>(registry, "lfm2");
     RegisterFlm<lfm2_npu>(registry, "lfm2.5-tk");

@@ -46,6 +46,7 @@
 #include "models/gpt_oss/flm/aie2p/gpt_oss_npu.hpp"
 #include "models/nanbeige/flm/aie2p/nanbeige_npu.hpp"
 #include "models/hunyuan/flm/aie2p/hunyuan_npu.hpp"
+#include "models/hy_mem/flm/aie2p/hy_mem_npu.hpp"
 #include "tokenizer/tokenizer.hpp"
 #include "modules/sampler.hpp"
 #include "utils/utils.hpp"
