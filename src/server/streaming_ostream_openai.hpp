@@ -17,6 +17,7 @@
 #include <sstream>
 #include <iomanip>
 #include <nlohmann/json.hpp>
+#include "prefix_cache_usage.hpp"
 #include "AutoModel/automodel.hpp"
 #include "chat/chat_stream.hpp"
 #include "chat_logprobs.hpp"
@@ -235,6 +236,7 @@ private:
                     {"total_tokens", meta_info.prompt_tokens + meta_info.generated_tokens}
                 }}
             };
+            if (meta_info.prefix_cache.valid) usage_response["usage"]["flm_prefix_cache"] = prefix_cache_usage_json(meta_info.prefix_cache);
             stream_callback("data: " + usage_response.dump() + "\n\n", false);
         }
         // Send the [DONE] message
@@ -554,6 +556,7 @@ private:
             {"prefill_speed_tps", static_cast<double>(meta_info.prompt_tokens - meta_info.cached_prompt_tokens) / static_cast<double>(meta_info.prefill_duration) * 1'000'000'000},
             {"decoding_speed_tps", static_cast<double>(meta_info.generated_tokens) / static_cast<double>(meta_info.decoding_duration) * 1'000'000'000},
         };
+        if (meta_info.prefix_cache.valid) usage["flm_prefix_cache"] = prefix_cache_usage_json(meta_info.prefix_cache);
         if (include_usage) {
             // OpenAI: every chunk carries a null usage, then one extra chunk
             // with no choices carries the usage of the whole request

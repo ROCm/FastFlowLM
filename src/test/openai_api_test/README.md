@@ -36,6 +36,7 @@ Each case prints `PASS`, `FAIL` or `SKIP`. The exit code is non-zero if anything
 | `test_tool_calls.py` | `auto` / `required` / forced function / `none`, `parallel_tool_calls: false`, ids, arguments are JSON matching the tool schema (typed: integer, number, boolean, enum, arrays), `strict: false`, streamed call deltas, a tool round trip |
 | `test_response_format.py` | `json_object`, `json_schema` (flat, enum, Pydantic `$defs`/`$ref`, `const`/`anyOf`/bounds/`pattern`), streamed, with and without thinking, schema vs. `auto` tools, `text` |
 | `test_logprobs.py` | `logprobs` / `top_logprobs` shape in both modes, greedy token heads its `top_logprobs`, entries spell the content and nothing else (no reasoning, no tool call markup), stream and non-stream report the same tokens, malformed values get 400 |
+| `test_sampling.py` | The same `seed` samples the same text (with an unseeded request in between, streamed or not), `repeat_last_n: 0` turns penalties off, `-1` covers the whole reply, malformed values get 400 |
 | `test_errors.py` | Every malformed `tool_choice` / `response_format` gets HTTP 400 with an OpenAI error body, streaming too, and the server keeps serving |
 
 Some cases skip by design:
@@ -44,10 +45,11 @@ Some cases skip by design:
 - **Thinking-on cases** skip on models that never reason.
 - **Multi-turn cases** skip on single-turn (flash) models.
 - **Stream/non-stream parity** compares greedy outputs. Greedy decoding on the NPU isn't always bit-reproducible between identical requests (mostly over long outputs), so the check retries and only fails if the non-streaming output reproduced itself while the stream never matched it. Otherwise it skips.
+- **Seed and penalty-window comparisons** in `test_sampling.py` retry the same way, and skip when two identical greedy requests report different logprobs, since then no output of the model's is repeatable.
 
 ## Notes
 
-- Requests pin `think`, `top_k: 1` and `temperature: 0` explicitly. FLM applies sampling and thinking settings to the loaded model and **keeps them for later requests**, so after a run the server is left greedy with thinking as the last case set it. Send your own values, or restart the server, before using it interactively.
+- Requests pin `think`, `top_k: 1`, `temperature: 0` and `repeat_last_n: 64` explicitly. FLM applies sampling and thinking settings to the loaded model and **keeps them for later requests**, so after a run the server is left greedy with thinking as the last case set it. Send your own values, or restart the server, before using it interactively.
 - The tests check guarantees, not model quality. Under `auto` a model may or may not call a tool, and the tests only check that what it returns is well formed. Under `required`, a forced function, or `response_format`, the grammar makes the shape a guarantee, so any violation is a server bug.
 - Shared helpers live in `flm_api.py`: the HTTP/SSE client, `fold_stream()` (merges tool call deltas by `index`, as clients should), the contract checks, and a small JSON Schema validator. Tools and schemas are in `fixtures.py`.
 

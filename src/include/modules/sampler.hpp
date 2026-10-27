@@ -97,7 +97,15 @@ public:
     /// \param config the configuration
     Sampler() = default;
     Sampler(int in_features, sampler_config& config);
+
+    /// \brief Restart the random generator from seed
     void set_seed(uint64_t seed);
+
+    /// \brief Change the penalty window
+    /// \param n how many of the last sampled tokens the penalties look at, 0 turns them off
+    /// \note Tokens the new window no longer covers are dropped from the history now,
+    ///       so a shrunk window takes effect on the next token.
+    void set_repeat_last_n(size_t n);
 
     /// \brief Reset the penalties
     /// \note The function will reset the penalties
@@ -148,3 +156,9 @@ public:
     /// \brief Fill logprobs from this->logits, which must still hold the raw copy
     void raw_logprobs_apply(sample_logprobs_t& logprobs);
 };
+
+/// \brief Fill logprobs with the normaliser and top tokens of one row of raw logits
+/// \param logits n logits, read only
+/// \note What sample() reports, for logits that never pass through it (an
+///       engine's speculative tokens)
+void raw_logprobs(const float* logits, int n, sample_logprobs_t& logprobs);

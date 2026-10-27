@@ -31,6 +31,7 @@ void Qwen2VL::load_model(std::string model_path, json model_info, int default_co
     for (size_t i = 0; i < PROFILER_TYPE_NUM; i++) {
         this->profiler_list[i].reset();
     }
+    this->_prefix_attach(this->lm_engine, qwen2vl_npu_state_api(this->lm_engine), 151655);
 }
 
 void Qwen2VL::setup_tokenizer(std::string model_path) {
@@ -204,6 +205,21 @@ bool Qwen2VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     // fully-cached leading images so the surviving payload aligns with the
     // surviving image tokens after _shared_insert performs its own erase.
     // ----------------------------------------------------------------------
+    // ---- prefix slots: resume from the longest saved prefix of this prompt ----
+    // The generation prompt ("<|im_start|>assistant\n") is how the next turn renders this reply's header: the whole prompt
+    // is saved (trim 0). After a resume token_history is the slot's tokens, so the skip count below is the match length.
+    const bool slot_mode = this->_prefix_slot_mode(meta_info, tokens.size(), 0);
+    size_t match_len = 0;
+    std::vector<int> full_tokens;          // what this prompt leaves in the engine
+    std::vector<uint64_t> image_hashes;    // content of each of its images
+    if (slot_mode) {
+        full_tokens = tokens;
+        image_hashes = prefix_image_hashes(image_payload, QWEN2_PATCH_SIZE, QWEN2_TEMPORAL_PATCH_SIZE);
+        match_len = this->_prefix_resume(this->prefix_cache_, full_tokens, image_hashes);
+    } else {
+        this->_prefix_legacy_path(); // the in-place path below moves the engine on without telling the cache
+    }
+
     size_t prefix_skip_count = 0;
     {
         const size_t idx = this->token_history.size();
@@ -278,6 +294,10 @@ bool Qwen2VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     }
     last_image_token_index++; // plus the end of image tokens
     // hardware
+    if (slot_mode) {
+        return this->_prefix_insert(this->prefix_cache_, meta_info, tokens, full_tokens, image_hashes, match_len, "<|im_start|>user",
+                                    image_payload.num_images > 0 ? static_cast<void*>(&image_payload) : nullptr, last_image_token_index, is_cancelled);
+    }
     if (image_payload.num_images > 0){
         return this->_shared_insert(meta_info, tokens, is_cancelled, &image_payload, last_image_token_index);
     }else{

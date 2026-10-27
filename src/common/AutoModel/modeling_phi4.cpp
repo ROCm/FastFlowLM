@@ -55,6 +55,7 @@ void Phi4::load_model(std::string model_path, json model_info,
     this->sampler.reset();
     ConfigureSampler(*this);
     for (auto& item : profiler_list) item.reset();
+    _prefix_attach(lm_engine, phi4_npu_state_api(lm_engine));
 }
 
 void Phi4::setup_tokenizer(const nlohmann::json& config) {
@@ -131,6 +132,19 @@ bool Phi4::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input,
         meta_info.stop_reason = CANCEL_DETECTED;
         return false;
     }
+    // The generation prompt ("<|assistant|>") is how the next turn renders this reply's header: save the whole prompt.
+    if (_prefix_slot_mode(meta_info, tokens.size(), 0)) {
+        try {
+            return _prefix_text_insert(meta_info, tokens, 0, "<|user|>", std::move(is_cancelled), input.requested_max_new_tokens);
+        } catch (const ModelRequestError&) {
+            throw;
+        } catch (const std::exception& error) {
+            fail_inference(error.what());
+        } catch (...) {
+            fail_inference();
+        }
+    }
+    _prefix_legacy_path();
     try {
         return _shared_insert(meta_info, tokens, std::move(is_cancelled), nullptr,
                               0, input.requested_max_new_tokens);

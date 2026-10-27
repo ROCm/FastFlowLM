@@ -25,6 +25,7 @@ void Nanbeige::load_model(std::string model_path, json model_info, int default_c
     for (size_t i = 0; i < PROFILER_TYPE_NUM; i++) {
         this->profiler_list[i].reset();
     }
+    this->_prefix_attach(this->lm_engine, nanbeige_npu_state_api(this->lm_engine));
 }
 
 void Nanbeige::setup_tokenizer(std::string model_path) {
@@ -78,6 +79,12 @@ bool Nanbeige::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, st
     // hardware
     int restore_idx = -1;
     nanbeige_npu *nanbeige_engine = dynamic_cast<nanbeige_npu*>(this->lm_engine);
+
+    // The generation prompt ("<|im_start|>assistant\n") is how the next turn renders this reply's header: save the whole prompt.
+    if (this->_prefix_slot_mode(meta_info, tokens.size(), 0)) {
+        return this->_prefix_text_insert(meta_info, tokens, 0, "<|im_start|>user", is_cancelled);
+    }
+    this->_prefix_legacy_path();
 
     if (meta_info.restore_allowed) {
         restore_idx = nanbeige_engine->restore();

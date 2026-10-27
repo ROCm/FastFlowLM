@@ -48,11 +48,7 @@ private:
     
     void preprocess_image(qwen3_5vl_image_t& image,  std::vector<bf16> &pixel_values);
 
-    // ---- prefix slots (see prefix_slot_cache.hpp) ---------------------------------------------
-    PrefixSlotCache prefix_cache_;
-    int prefix_cache_mb_arg_ = -1;   // --prefix-cache-mb, -1 = default
-    int prefix_slots_arg_ = -1;      // --prefix-slots, -1 = default, 0 = off
-    /// \brief hand the loaded engine to the cache (when it is the XRT qwen3_5vl one that has slots)
+    /// \brief hand the loaded engine to the prefix cache (when it is the XRT qwen3_5vl one that has slots)
     void _attach_prefix_cache();
 
 public:
@@ -64,8 +60,6 @@ public:
     std::string generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled = [] { return false; }) override;
     std::string generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os = std::cout) override;
     std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object()) override;
-    void clear_context() override;
-    bool manages_prefix_cache() const override { return this->prefix_cache_.enabled(); }
 
 private:
 
@@ -114,15 +108,6 @@ public:
             try {
                 this->user_system_prompt = std::any_cast<std::string>(value);
                 this->extra_context["user_system_prompt"] = this->user_system_prompt;
-                return true;
-            } catch (const std::bad_any_cast&) {
-                return false;
-            }
-        }
-        else if (parameter_name == "prefix_cache_mb" || parameter_name == "prefix_slots") {
-            try {
-                (parameter_name == "prefix_cache_mb" ? this->prefix_cache_mb_arg_ : this->prefix_slots_arg_) = std::any_cast<int>(value);
-                this->prefix_cache_.configure(this->prefix_cache_mb_arg_, this->prefix_slots_arg_);
                 return true;
             } catch (const std::bad_any_cast&) {
                 return false;

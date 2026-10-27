@@ -303,6 +303,8 @@ Sampler::Sampler(int features, sampler_config& config)
     logits.resize(1); counters.resize(1); token_positions.resize(1, -1);
 }
 void Sampler::reset_penalties() {}
+void Sampler::set_seed(uint64_t) {}
+void Sampler::set_repeat_last_n(size_t n) { repeat_last_n = n; }
 int Sampler::sample(buffer<bf16>& logits, const std::vector<uint32_t>*, sample_logprobs_t*) {
     // FakeEngine hands back logits it allocated, as the core engines do. buffer's
     // copy is shallow and non-owning, so a buffer that no longer owns them by the

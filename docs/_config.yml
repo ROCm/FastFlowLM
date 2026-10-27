@@ -140,7 +140,7 @@ docs_nav:
       - label: MiniCPM
         url: "/docs/models/minicpm/"
       - label: Nemotron Bolt
-        url: "/docs/models/nemotron-bolt/"
+        url: "/docs/models/nemotron3.5-bolt/"
   - label: Benchmarks
     children:
       - label: Overview
@@ -178,4 +178,4 @@ docs_nav:
       - label: MiniCPM-V 4.7
         url: "/docs/benchmarks/minicpm-v-4.7_results/"
       - label: Nemotron Bolt
-        url: "/docs/benchmarks/nemotron-bolt_results/"
+        url: "/docs/benchmarks/nemotron3.5-bolt_results/"

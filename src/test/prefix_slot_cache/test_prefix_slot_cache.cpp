@@ -1,6 +1,6 @@
 /// \file test_prefix_slot_cache.cpp
-/// \brief PrefixSlotCache against a fake engine: which slot a prompt resumes from, what is evicted, and that
-///        engine slot 0 (the model's single checkpoint()/restore()) is never handed out. No NPU needed.
+/// \brief PrefixSlotCache against a fake engine: which snapshot a prompt resumes from, what is evicted, and that the
+///        snapshots live in the cache (the engine only reads one out and writes one back). No NPU needed.
 #include "prefix_slot_cache.hpp"
 
 #include <cstdio>
@@ -19,50 +19,66 @@ int failures = 0;
         }                                                                           \
     } while (0)
 
-/// \brief records what the cache asks of the engine; `length` plays the engine's context length
-struct fake_engine {
-    struct slot { int length = 0; int kv_from = 0; };
-    std::map<int, slot> slots;
+/// \brief a state the fake engine fills; `alive` counts the ones that exist, to see that dropping a slot frees it
+class fake_state final {
+public:
+    static inline int alive = 0;
+    fake_state(size_t fixed, size_t row) : fixed_(fixed), row_(row) { alive++; }
+    ~fake_state() { alive--; }
+    bool filled = false;
+    int context_length = 0;
+    int kv_from = 0;
+    size_t estimate_bytes(int length, int from) const { return fixed_ + static_cast<size_t>(std::max(length - from, 0)) * row_; }
+
+private:
+    size_t fixed_, row_;
+};
+
+/// \brief a model that keeps no state of its own: `length` plays its context length, `calls` records what the cache
+///        asked of it. It has no slots; whatever it was read into is the cache's.
+class fake_engine {
+public:
     std::vector<std::string> calls;
     int length = 0;
-    int max_slots = 33;
     size_t row_bytes = 1024;            // 1 KiB per row
     size_t state_bytes = 1u << 20;      // 1 MiB per snapshot
     bool fail_restore = false;
+
+    fake_state* new_state() { return new fake_state(state_bytes, row_bytes); }
+    int read_state(fake_state& s, int kv_from) {
+        calls.push_back("read");
+        s.filled = true;
+        s.context_length = length;
+        s.kv_from = std::clamp(kv_from, 0, length);
+        return length;
+    }
+    int write_state(const fake_state& state) {
+        calls.push_back("write");
+        if (fail_restore || !state.filled) return -1;
+        length = state.context_length;
+        return length;
+    }
+    int write_state_kv(const fake_state& state) {
+        calls.push_back("write_kv");
+        return state.filled ? state.context_length : -1;
+    }
 };
 
-class fake_ops final : public prefix_engine_ops {
-public:
-    explicit fake_ops(fake_engine* e) : e_(e) {}
-    int checkpoint_slot(int slot, int kv_from) override {
-        if (slot < 0 || slot >= e_->max_slots) return -1;
-        e_->slots[slot] = {e_->length, kv_from};
-        e_->calls.push_back("save " + std::to_string(slot));
-        return e_->length;
-    }
-    int restore_slot(int slot) override {
-        e_->calls.push_back("restore " + std::to_string(slot));
-        auto it = e_->slots.find(slot);
-        if (e_->fail_restore || it == e_->slots.end()) return -1;
-        e_->length = it->second.length;
-        return e_->length;
-    }
-    int restore_slot_kv(int slot) override {
-        e_->calls.push_back("restore_kv " + std::to_string(slot));
-        auto it = e_->slots.find(slot);
-        return it == e_->slots.end() ? -1 : it->second.length;
-    }
-    void drop_checkpoint_slot(int slot) override {
-        e_->calls.push_back("drop " + std::to_string(slot));
-        e_->slots.erase(slot);
-    }
-    size_t row_bytes() override { return e_->row_bytes; }
-    size_t state_bytes() override { return e_->state_bytes; }
-    int max_slots() override { return e_->max_slots; }
-
-private:
-    fake_engine* e_;
-};
+/// \brief the flm_state_api table of the fake engine, as a library would export it
+static const flm_state_api* fake_api() {
+    static const flm_state_api api = {
+        FLM_STATE_API_VERSION, sizeof(flm_state_api),
+        [](void* e) { return reinterpret_cast<flm_state*>(static_cast<fake_engine*>(e)->new_state()); },
+        [](flm_state* s) { delete reinterpret_cast<fake_state*>(s); },
+        [](void* e, flm_state* s, int kv_from) { return static_cast<fake_engine*>(e)->read_state(*reinterpret_cast<fake_state*>(s), kv_from); },
+        [](void* e, const flm_state* s) { return static_cast<fake_engine*>(e)->write_state(*reinterpret_cast<const fake_state*>(s)); },
+        [](void* e, const flm_state* s) { return static_cast<fake_engine*>(e)->write_state_kv(*reinterpret_cast<const fake_state*>(s)); },
+        [](const flm_state* s) { return reinterpret_cast<const fake_state*>(s)->context_length; },
+        [](const flm_state* s) { return reinterpret_cast<const fake_state*>(s)->kv_from; },
+        [](const flm_state* s, int length, int from) { return reinterpret_cast<const fake_state*>(s)->estimate_bytes(length, from); },
+    };
+    return &api;
+}
 
 std::vector<int> seq(int from, int count) {
     std::vector<int> v(count);
@@ -96,28 +112,24 @@ size_t resume(PrefixSlotCache& cache, const std::vector<int>& prompt, const std:
 PrefixSlotCache make(fake_engine& e, int mb = -1, int slots = -1) {
     PrefixSlotCache cache;
     cache.configure(mb, slots);
-    cache.attach(std::make_unique<fake_ops>(&e));
+    cache.attach(&e, fake_api());
     return cache;
 }
 
-void test_slot_zero_reserved() {
-    std::printf("slot 0 is never handed out; at most 32 slots\n");
-    fake_engine e;
-    PrefixSlotCache cache = make(e, 100000, 40);
-    for (int i = 0; i < 40; i++) {
-        prefill(cache, e, seq(1000 * (i + 1), 10), 0);
+void test_slot_limit_and_ownership() {
+    std::printf("at most 32 slots; the states live in the cache and go with it\n");
+    {
+        fake_engine e;
+        PrefixSlotCache cache = make(e, 100000, 40);
+        for (int i = 0; i < 40; i++) {
+            prefill(cache, e, seq(1000 * (i + 1), 10), 0);
+        }
+        CHECK(cache.slot_count() == 32);
+        CHECK(fake_state::alive == 32);               // one state per slot, none kept by the engine
+        cache.forget_all();
+        CHECK(fake_state::alive == 0);
     }
-    CHECK(e.slots.count(0) == 0);
-    CHECK(cache.slot_count() == 32);
-    // an engine built with only 32 slots (older lib) leaves 31
-    fake_engine old;
-    old.max_slots = 32;
-    PrefixSlotCache cache_old = make(old, 100000, 32);
-    for (int i = 0; i < 40; i++) {
-        prefill(cache_old, old, seq(1000 * (i + 1), 10), 0);
-    }
-    CHECK(old.slots.count(0) == 0);
-    CHECK(cache_old.slot_count() == 31);
+    CHECK(fake_state::alive == 0);
 }
 
 void test_longest_strict_prefix() {
@@ -149,7 +161,7 @@ void test_head_restored_after_cold_request() {
     cache.clear_live();
     e.calls.clear();
     CHECK(resume(cache, cat(t1, seq(6000, 30))) == t1.size());
-    CHECK(e.calls.size() == 2 && e.calls[0].rfind("restore_kv ", 0) == 0 && e.calls[1].rfind("restore ", 0) == 0);
+    CHECK(e.calls.size() == 2 && e.calls[0] == "write_kv" && e.calls[1] == "write");
     // with the live cache intact, no head restore is needed
     e.calls.clear();
     CHECK(resume(cache, cat(t1, seq(6100, 30))) == t1.size());
@@ -277,7 +289,7 @@ void test_restore_failure_and_off() {
     e.fail_restore = true;
     CHECK(resume(cache, seq(1, 700)) == 0);
     CHECK(cache.slot_count() == 0);
-    CHECK(e.slots.empty());
+    CHECK(fake_state::alive == 0);
 
     fake_engine off_e;
     PrefixSlotCache off = make(off_e, -1, 0);
@@ -285,10 +297,57 @@ void test_restore_failure_and_off() {
     prefill(off, off_e, seq(1, 600), 0);
     CHECK(off.slot_count() == 0);
 }
+
+void test_report() {
+    std::printf("the report says what a request did: lookup, slots saved and dropped, fill level\n");
+    fake_engine e;
+    PrefixSlotCache cache = make(e, -1, 3);
+    const auto sys = seq(1, 600);
+    const auto t1 = cat(sys, seq(5000, 100));
+
+    // first request: nothing saved yet, then it saves a boundary and an end slot
+    cache.begin_report();
+    std::vector<int> matched;
+    auto r = cache.resume(t1, {}, matched);
+    CHECK(!r.resumed && r.miss_reason == "no snapshots saved yet");
+    prefill(cache, e, t1, 600);
+    auto rep = cache.report();
+    CHECK(rep.valid && !rep.hit && rep.miss_reason == "no snapshots saved yet");
+    CHECK(rep.saved.size() == 2 && rep.saved[0].boundary && !rep.saved[1].boundary);
+    CHECK(rep.saved[0].slot == 1 && rep.saved[1].slot == 2 && rep.saved[1].kv_from == 600);
+    CHECK(rep.slots_used == 2 && rep.slots_max == 3 && rep.bytes_used > 0 && rep.bytes_used <= rep.bytes_budget);
+
+    // the next turn resumes from the end slot
+    cache.begin_report();
+    const auto t2 = cat(t1, seq(6000, 30));
+    r = cache.resume(t2, {}, matched);
+    rep = cache.report();
+    CHECK(r.resumed && rep.hit && rep.slot == 2 && !rep.slot_boundary && rep.matched_tokens == static_cast<int>(t1.size()));
+    CHECK(rep.saved.empty() && rep.dropped == 0);
+
+    // an unrelated prompt: a miss that says how far it matched
+    cache.begin_report();
+    r = cache.resume(seq(9000, 700), {}, matched);
+    CHECK(!r.resumed && r.miss_reason.find("no snapshot is a prefix") == 0);
+    // the exact same prompt: the slot is not strictly shorter
+    cache.begin_report();
+    r = cache.resume(t1, {}, matched);
+    CHECK(r.resumed && cache.report().slot_boundary);  // the boundary slot serves it
+    cache.begin_report();
+    r = cache.resume(sys, {}, matched);
+    CHECK(!r.resumed && r.miss_reason == "the prompt is not longer than a saved one");
+
+    // ids are never reused: a fourth slot evicts one and gets id 3
+    cache.begin_report();
+    prefill(cache, e, seq(20000, 700), 0);
+    prefill(cache, e, seq(30000, 700), 0);
+    rep = cache.report();
+    CHECK(rep.dropped >= 1 && rep.saved.size() == 2 && rep.saved[0].slot == 3 && rep.saved[1].slot == 4);
+}
 } // namespace
 
 int main() {
-    test_slot_zero_reserved();
+    test_slot_limit_and_ownership();
     test_longest_strict_prefix();
     test_head_restored_after_cold_request();
     test_eviction_order();
@@ -297,6 +356,7 @@ int main() {
     test_budget();
     test_images();
     test_restore_failure_and_off();
+    test_report();
     if (failures > 0) {
         std::printf("%d check(s) failed\n", failures);
         return 1;

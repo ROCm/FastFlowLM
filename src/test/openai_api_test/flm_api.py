@@ -11,9 +11,10 @@ anywhere a FastFlowLM server is reachable:
 * ``case`` / ``run_cases`` / ``main``: a minimal runner printing
   PASS / FAIL / SKIP per case and exiting non-zero on any failure.
 
-Every request the tests send pins ``think``, ``top_k`` and ``temperature``
-explicitly: FastFlowLM applies those to the loaded model and keeps them for
-later requests, so a test must never rely on what an earlier one left set.
+Every request the tests send pins ``think``, ``top_k``, ``temperature`` and
+``repeat_last_n`` explicitly: FastFlowLM applies those to the loaded model and
+keeps them for later requests, so a test must never rely on what an earlier one
+left set.
 """
 
 # Every check here reports on the server under test, not on a caller
@@ -101,6 +102,7 @@ class Api:
             "think": think,
             "top_k": 1,
             "temperature": 0.0,
+            "repeat_last_n": 64,
         }
         body.update(fields)
         return body

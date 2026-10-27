@@ -157,6 +157,8 @@ public:
     /// \note Ids only, no strings: the engine has no tokenizer. Pass whatever
     ///       the caller's own is_eos() tests against, or the two disagree
     ///       about where a batch ends.
+    /// \note Affects the commit and the caches only. The speculation counters
+    ///       are deliberately unchanged by this -- see draft_hit_rate().
     void set_stop_tokens(const std::vector<int>& ids);
 
     // ---- speculation statistics -------------------------------------------
@@ -170,22 +172,29 @@ public:
     // machine feels slow today".
 
     /// \brief mean drafts accepted per speculative cycle since load
+    /// \note Add 1.0 for the free token to get tokens per cycle, which is what
+    ///       the speedup over plain decode is proportional to. Two cycles
+    ///       accepting 4 and 5 give 4.5 here and emit 11 tokens.
     double mean_accepted_length() const;
 
     /// \brief fraction of offered drafts the base model agreed with, in [0,1]
     /// \note Denominator is drafts actually offered, which is not
     ///       cycles x MTP_STEPS: k is clamped by max_draft and by the MAX_L
     ///       headroom check, so short cycles would otherwise be charged full.
+    ///       Two cycles of k=7 accepting 4 and 5 give 9/14.
     /// \note The free token committed at the first mismatch is NOT counted as
     ///       a hit -- it is the base model's argmax, not a correct draft.
     ///       Counting it would floor this at 1/k for a head that never once
     ///       guessed right.
-    /// \note Once set_stop_tokens() is in effect, draft slots past a stop
-    ///       token leave BOTH sides of the ratio. Their verdict came from the
-    ///       base model continuing a turn that had already ended, so it says
-    ///       nothing about the head either way -- and scoring them would make
-    ///       the rate a function of how short the turns are. The draft steps
-    ///       they cost are reported separately by speculation_stats().
+    /// \note Blind to stop tokens, by design, even with set_stop_tokens() in
+    ///       effect: a stop truncates the COMMIT, but the drafts past it were
+    ///       still drafted and still verified. Both this and
+    ///       mean_accepted_length() measure the head against the base model,
+    ///       which is a property of the head; discounting the tail would make
+    ///       them a function of how short the turns happen to be.
+    /// \note Follows that on a turn ending mid-batch the accepted count can
+    ///       exceed the tokens emitted. Reconcile a usage block against the
+    ///       token total in speculation_timing(), never against these.
     double draft_hit_rate() const;
 
     /// \brief speculative cycles run since load; 0 means speculation never ran
@@ -193,7 +202,12 @@ public:
     ///       0.0, which is indistinguishable from "ran and missed everything".
     uint64_t speculation_cycles() const;
 
-    /// \brief one-line summary, or "" if no cycle ever ran
+    /// \brief one-line draft-quality summary, or "" if no cycle ever ran
+    /// \note Two ratios only -- accept length and hit rate. Every count they
+    ///       are built from (cycles, draft steps, committed tokens) lives in
+    ///       speculation_timing(); this line answers "is the head any good",
+    ///       not "how fast was it", and nothing on it reconciles against a
+    ///       usage block.
     std::string speculation_stats() const;
 
     /// \brief print that summary; prints nothing when no cycle ran
@@ -230,6 +244,22 @@ public:
     ///       many microseconds from DECODING_TIME to PREFILL_TIME.
     /// \note Read it immediately after speculate(); the next call overwrites it.
     uint64_t last_speculation_prime_us() const override;
+
+    /// \brief the logits each token of the last speculate() was taken from
+    /// \param rows set to the number of tokens that call returned, 0 if none
+    /// \param vocab set to the row width
+    /// \return [rows][vocab] fp32, row i the base model's distribution for
+    ///         returned token i (whose argmax it is); nullptr when the call
+    ///         declined or there is no MTP head
+    /// \note For callers that report per-token log probabilities: speculated
+    ///       tokens never pass through the caller's sampler, so this is the
+    ///       only place their logits exist on the host.
+    /// \note bf16 values widened to fp32, from the batched verify pass. Its
+    ///       kernels differ from forward()'s, so expect bf16-level differences
+    ///       from what one-token decoding would give for the same position.
+    /// \note Non-virtual, like the statistics above: it adds no vtable slot.
+    /// \note Valid until the next speculate(), forward() or prefill().
+    const float* last_speculation_logits(int& rows, int& vocab) const;
 
     /// \brief zero the counters, e.g. between benchmark runs
     /// \note Counters are cumulative since load and survive clear_context(),

@@ -30,6 +30,7 @@ void Qwen3::load_model(std::string model_path, json model_info, int default_cont
     for (size_t i = 0; i < PROFILER_TYPE_NUM; i++) {
         this->profiler_list[i].reset();
     }
+    this->_prefix_attach(this->lm_engine, qwen3_npu_state_api(this->lm_engine));
 }
 
 void Qwen3::setup_tokenizer(std::string model_path) {
@@ -78,6 +79,20 @@ bool Qwen3::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::
 
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
 
+    // Prefix slots. With thinking off the template's empty think block is left out of the prefill (decode() feeds it),
+    // because the next turn does not render it; with thinking on the generation prompt is how the next turn renders the reply.
+    const size_t trim_tokens = this->enable_think ? 0 : 4;
+    if (this->_prefix_slot_mode(meta_info, tokens.size(), trim_tokens)) {
+        try {
+            return this->_prefix_text_insert(meta_info, tokens, trim_tokens, "<|im_start|>user", is_cancelled, input.requested_max_new_tokens);
+        } catch (const ModelRequestError&) {
+            throw;
+        } catch (...) {
+            this->fail_inference();
+        }
+    }
+    this->_prefix_legacy_path();
+
     // hardware: checkpoint and restore are causal_lm virtuals, so this works on
     // whichever backend's engine is loaded
     if (meta_info.restore_allowed) {
@@ -89,7 +104,7 @@ bool Qwen3::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::
     }
 
     size_t n = tokens.size();
-    tokens.resize(n - (this->enable_think ? 0 : 4));
+    tokens.resize(n - trim_tokens);
 
     bool success = false;
     try {
@@ -268,6 +283,7 @@ void Qwen3_IT::load_model(std::string model_path, json model_info, int default_c
     for (size_t i = 0; i < PROFILER_TYPE_NUM; i++) {
         this->profiler_list[i].reset();
     }
+    this->_prefix_attach(this->lm_engine, qwen3_npu_state_api(this->lm_engine));
 }
 
 void Qwen3_IT::setup_tokenizer(std::string model_path) {
@@ -307,6 +323,11 @@ bool Qwen3_IT::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, st
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
     // hardware
 
+    // The generation prompt ("<|im_start|>assistant\n") is how the next turn renders this reply's header: save the whole prompt.
+    if (this->_prefix_slot_mode(meta_info, tokens.size(), 0)) {
+        return this->_prefix_text_insert(meta_info, tokens, 0, "<|im_start|>user", is_cancelled);
+    }
+    this->_prefix_legacy_path();
     return this->_shared_insert(meta_info, tokens, is_cancelled);
 }
 
@@ -339,6 +360,7 @@ void Qwen3_TK::load_model(std::string model_path, json model_info, int default_c
     for (size_t i = 0; i < PROFILER_TYPE_NUM; i++) {
         this->profiler_list[i].reset();
     }
+    this->_prefix_attach(this->lm_engine, qwen3_npu_state_api(this->lm_engine));
 }
 
 void Qwen3_TK::setup_tokenizer(std::string model_path) {
@@ -379,6 +401,12 @@ bool Qwen3_TK::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, st
     // hardware
     int restore_idx = -1;
     qwen3_npu *qwen3_engine = dynamic_cast<qwen3_npu*>(this->lm_engine);
+
+    // Prefix slots. The two tokens left out ("<think>\n") are fed by generate(); the next turn does not render them.
+    if (this->_prefix_slot_mode(meta_info, tokens.size(), 2)) {
+        return this->_prefix_text_insert(meta_info, tokens, 2, "<|im_start|>user", is_cancelled);
+    }
+    this->_prefix_legacy_path();
 
     if (meta_info.restore_allowed) {
         restore_idx = qwen3_engine->restore();
@@ -519,6 +547,7 @@ void DeepSeek_r1_0528_8b::load_model(std::string model_path, json model_info, in
     for (size_t i = 0; i < PROFILER_TYPE_NUM; i++) {
         this->profiler_list[i].reset();
     }
+    this->_prefix_attach(this->lm_engine, qwen3_npu_state_api(this->lm_engine));
 }
 
 void DeepSeek_r1_0528_8b::setup_tokenizer(std::string model_path) {
@@ -558,6 +587,12 @@ bool DeepSeek_r1_0528_8b::insert(chat_meta_info_t& meta_info, lm_uniform_input_t
     // hardware
     int restore_idx = -1;
     qwen3_npu *qwen3_engine = dynamic_cast<qwen3_npu*>(this->lm_engine);
+
+    // A user turn ends with "<｜Assistant｜>" and the next turn continues with the reply, so the whole prompt can be saved (trim 0).
+    if (this->_prefix_slot_mode(meta_info, tokens.size(), 0)) {
+        return this->_prefix_text_insert(meta_info, tokens, 0, "<｜User｜>", is_cancelled);
+    }
+    this->_prefix_legacy_path();
     if (meta_info.restore_allowed) {
         restore_idx = qwen3_engine->restore();
         this->total_tokens = restore_idx;

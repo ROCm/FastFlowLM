@@ -22,7 +22,7 @@ parent: Models
 ▶️ Run with FastFlowLM in PowerShell:
 
 ```shell
-flm run nemotron-bolt:e4b
+flm run nemotron3.5-bolt:e4b
 ```
 
 🖼️ **Note:** In CLI mode, attach an image with:

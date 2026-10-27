@@ -7,7 +7,7 @@ nav_order: 21
 
 ## ⚡ Performance and Efficiency Benchmarks
 
-NVIDIA Nemotron-3.5-Bolt-E4B (`nemotron-bolt:e4b`) is a post-trained Gemma-4-E4B-it and runs on the same engine and
+NVIDIA Nemotron-3.5-Bolt-E4B (`nemotron3.5-bolt:e4b`) is a post-trained Gemma-4-E4B-it and runs on the same engine and
 kernels as `gemma4-it:e4b`, so it performs like it. This page reports the measurements for the Bolt package.
 
 > **Note:**

@@ -15,6 +15,7 @@
 #include "tensor_2d.hpp"
 #include "utils/utils.hpp"
 #include "causal_lm.hpp"
+#include "flm_state_api.h"
 #if USEAVX2
 #include <immintrin.h>  // For AVX intrinsics
 #endif
@@ -106,46 +107,8 @@ public:
     /// \brief get the current context length
     /// \return the current context length
     int get_current_context_length() override;
-
     int checkpoint() override;
     int restore() override;
-
-    // ---- multi-slot checkpoints --------------------------------------------
-    // NOT virtual on purpose: causal_lm's vtable is shared by every engine .so,
-    // so a new virtual there forces all of them to be rebuilt in lockstep (see
-    // the ABI WARNING in causal_lm.hpp). The caller reaches these through the
-    // concrete class, the way it already reaches the vision parameters.
-
-    /// \brief how many checkpoint slots the engine keeps: slot 0 is checkpoint()/restore(),
-    ///        1..32 are left to the caller's prefix cache
-    static constexpr int NUM_CHECKPOINT_SLOTS = 33;
-
-    /// \brief save the recurrent state, the context length and attention K/V rows into `slot`
-    /// \param kv_from first position whose K/V rows are saved with the slot (clamped to the
-    ///        context length); 0 makes the slot self-contained, anything above it leaves the
-    ///        rows before it to the caller, who must have them in place when restoring
-    /// \return the context length saved, or -1 for a bad slot
-    int checkpoint_slot(int slot, int kv_from);
-
-    /// \brief go back to what `slot` saved: state, length, and K/V rows from its kv_from on
-    /// \return the restored context length, or -1 if the slot holds nothing
-    /// \note Rows past the restored length are zeroed.
-    int restore_slot(int slot);
-
-    /// \brief write back only the K/V rows `slot` saved, leaving the state and the length alone
-    /// \return the context length of the slot, or -1 if the slot holds nothing
-    /// \note For putting the shared head of a prompt back under a slot that keeps only its tail.
-    int restore_slot_kv(int slot);
-
-    /// \brief forget a slot
-    void drop_checkpoint_slot(int slot);
-
-    /// \brief host bytes one saved K/V row costs, summed over the attention layers (K and V, bf16)
-    size_t checkpoint_row_bytes();
-
-    /// \brief host bytes the recurrent state of one slot costs, summed over the linear layers
-    /// \note Paid once per used slot, on top of its rows; slots are allocated on first use.
-    size_t checkpoint_state_bytes();
 
     // parameters for vision process in qwen3.5 vl
 
@@ -163,15 +126,16 @@ public:
 
     inline void load_vision_preprocess_parameters(LM_Config& config){
         // Note: this should be called by Impl:: constructor
-        QWEN3_5_PATCH_SIZE  = config.sub("vision_config").value("QWEN3_5_PATCH_SIZE", -1);
-        QWEN3_5_IMAGE_MERGE_SIZE = config.sub("vision_config").value("QWEN3_5_IMAGE_MERGE_SIZE", -1);
-        QWEN3_5_SPATIAL_MERGE_SIZE = config.sub("vision_config").value("QWEN3_5_SPATIAL_MERGE_SIZE", -1);
-        QWEN3_5_SHORTEST_EDGE = config.sub("vision_config").value("QWEN3_5_SHORTEST_EDGE", -1);
-        QWEN3_5_LONGEST_EDGE = config.sub("vision_config").value("QWEN3_5_LONGEST_EDGE", -1);
-        QWEN3_5_VISION_RESCALE_FACTOR = config.sub("vision_config").value("QWEN3_5_VISION_RESCALE_FACTOR", -1.0f);
-        QWEN3_5_VISION_RESCALE_IMAGE_MEAN = config.sub("vision_config").value("QWEN3_5_VISION_RESCALE_IMAGE_MEAN", -1.0f);
-        QWEN3_5_VISION_RESCALE_IMAGE_STD = config.sub("vision_config").value("QWEN3_5_VISION_RESCALE_IMAGE_STD", -1.0f);
-        QWEN3_5_TEMPORAL_PATCH_SIZE = config.sub("vision_config").value("QWEN3_5_TEMPORAL_PATCH_SIZE", -1);
+        const nlohmann::json& vc = config.sub("vision_config");
+        QWEN3_5_PATCH_SIZE  = vc.value("QWEN3_5_PATCH_SIZE", -1);
+        QWEN3_5_IMAGE_MERGE_SIZE = vc.value("QWEN3_5_IMAGE_MERGE_SIZE", -1);
+        QWEN3_5_SPATIAL_MERGE_SIZE = vc.value("QWEN3_5_SPATIAL_MERGE_SIZE", -1);
+        QWEN3_5_SHORTEST_EDGE = vc.value("QWEN3_5_SHORTEST_EDGE", -1);
+        QWEN3_5_LONGEST_EDGE = vc.value("QWEN3_5_LONGEST_EDGE", -1);
+        QWEN3_5_VISION_RESCALE_FACTOR = vc.value("QWEN3_5_VISION_RESCALE_FACTOR", -1.0f);
+        QWEN3_5_VISION_RESCALE_IMAGE_MEAN = vc.value("QWEN3_5_VISION_RESCALE_IMAGE_MEAN", -1.0f);
+        QWEN3_5_VISION_RESCALE_IMAGE_STD = vc.value("QWEN3_5_VISION_RESCALE_IMAGE_STD", -1.0f);
+        QWEN3_5_TEMPORAL_PATCH_SIZE = vc.value("QWEN3_5_TEMPORAL_PATCH_SIZE", -1);
 
         QWEN3_5_MERGE_SIZE = QWEN3_5_IMAGE_MERGE_SIZE;
 
@@ -181,3 +145,5 @@ private:
     Impl* _impl;
 };
 
+/// \brief the saved-state table of this engine (flm_state_api.h); nullptr if `engine` is not a qwen3_5vl_npu
+extern "C" const flm_state_api* qwen3_5vl_state_api(void* engine);

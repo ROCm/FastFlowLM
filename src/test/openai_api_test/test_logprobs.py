@@ -14,8 +14,9 @@ Checks what a client of OpenAI's logprobs relies on:
   chunks are the same tokens the non-streaming response reports;
 * malformed logprobs / top_logprobs get HTTP 400.
 
-Models that cannot report logprobs (the MTP speculative model) answer 400
-"logprobs is not supported", which turns the cases into skips.
+A model that cannot report logprobs answers 400 "logprobs is not supported",
+which turns the cases into skips. qwen3.8-mtp reports them for its speculated
+tokens too, from the verify pass that accepted them.
 
 Usage::
 

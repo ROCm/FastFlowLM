@@ -17,6 +17,7 @@
 #include <thread>
 #include <chrono>
 #include <iomanip>
+#include <limits>
 #include <locale>
 #include <random>
 #include "server.hpp"
@@ -277,6 +278,48 @@ static bool logprobs_request_from_openai(const json& request, int& top_n, std::s
     return true;
 }
 
+///@brief The OpenAI request fields that steer sampling but are not plain numbers to set
+struct openai_sampling_request {
+    /// generated tokens the penalties look at, -1 the whole reply; sticks like the other sampling fields
+    std::optional<int> penalty_window;
+    /// restarts the random generator for this request only
+    std::optional<uint64_t> seed;
+};
+
+///@brief Read an OpenAI request's repeat_last_n (an FLM extension) and seed.
+///@param error set to the message for the client when the request is malformed
+///@return false when the request is malformed
+static bool sampling_request_from_openai(const json& request, openai_sampling_request& sampling, std::string& error) {
+    if (has_value(request, "repeat_last_n")) {
+        const json& n = request.at("repeat_last_n");
+        if (!n.is_number_integer() || (!n.is_number_unsigned() && n.get<int64_t>() < -1)) {
+            error = "repeat_last_n must be an integer: -1 for the whole reply, 0 to turn the penalties off, or a window size";
+            return false;
+        }
+        // a window longer than any reply is the whole reply
+        sampling.penalty_window = n.is_number_unsigned() && n.get<uint64_t>() > std::numeric_limits<int>::max()
+            ? -1 : static_cast<int>(n.get<int64_t>());
+    }
+    if (has_value(request, "seed")) {
+        const json& s = request.at("seed");
+        if (!s.is_number_integer()) {
+            error = "seed must be an integer";
+            return false;
+        }
+        sampling.seed = s.is_number_unsigned() ? s.get<uint64_t>() : static_cast<uint64_t>(s.get<int64_t>());
+    }
+    return true;
+}
+
+static void apply_sampling_request(AutoModel& engine, const openai_sampling_request& sampling) {
+    if (sampling.penalty_window) {
+        engine.set_penalty_window(*sampling.penalty_window);
+    }
+    if (sampling.seed) {
+        engine.set_seed(*sampling.seed);
+    }
+}
+
 ///@brief Convert OpenAI-style assistant tool_calls + following tool messages into the
 /// Gemma4 chat-template format, which expects a single assistant message containing
 /// both `tool_calls` and `tool_responses` (with `{name, response}` entries).
@@ -524,8 +567,7 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag,
             auto [new_ensure_tag, model_info] = supported_models.get_model_info(ensure_tag);
             engine->set_server_mode(true);
             engine->configure_parameter("img_pre_resize", this->img_pre_resize);
-            engine->configure_parameter("prefix_cache_mb", this->prefix_cache_mb);
-            engine->configure_parameter("prefix_slots", this->prefix_slots);
+            engine->set_prefix_limits(this->prefix_cache_mb, this->prefix_slots);
             const auto load_started = std::chrono::steady_clock::now();
             engine->load_model(supported_models.get_model_path(new_ensure_tag), model_info, ctx_length, preemption, requested_backend);
             report_load_time(load_started);
@@ -1341,6 +1383,11 @@ void RestHandler::handle_openai_chat_completion(const json& request,
             send_response({{"error", {{"message", request_error}, {"type", "invalid_request_error"}, {"code", 400}}}});
             return;
         }
+        openai_sampling_request sampling;
+        if (!sampling_request_from_openai(request, sampling, request_error)) {
+            send_response({{"error", {{"message", request_error}, {"type", "invalid_request_error"}, {"code", 400}}}});
+            return;
+        }
 
         auto load_start_time = time_utils::now();
         if (!ensure_model_loaded(model, request_backend)) {
@@ -1356,6 +1403,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
         }
 
         configure_chat_engine_parameters(options, request);
+        apply_sampling_request(*auto_chat_engine, sampling);
 
         current_messages = normalize_messages(current_messages);
         current_messages = normalize_template(current_messages);
@@ -1604,6 +1652,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                 }},
                 {"service_tier", "default"}
             };
+            if (meta_info.prefix_cache.valid) response["usage"]["flm_prefix_cache"] = prefix_cache_usage_json(meta_info.prefix_cache);
             if (meta_info.stop_reason == CANCEL_DETECTED) {
                 header_print("❌ ", "Generation Cancelled!");
                 this->prompt_cache.reset();
@@ -1769,6 +1818,12 @@ void RestHandler::handle_openai_completion(const json& request,
         const std::string request_backend = value_or(request, "backend", std::string());
         bool stream = value_or(request, "stream", false);
         json options = value_or(request, "options", json::object());
+        openai_sampling_request sampling;
+        std::string request_error;
+        if (!sampling_request_from_openai(request, sampling, request_error)) {
+            send_response({{"error", {{"message", request_error}, {"type", "invalid_request_error"}, {"code", 400}}}});
+            return;
+        }
 
         // direct return if model not supported
         if (!supported_models.is_model_supported(model)) {
@@ -1787,6 +1842,7 @@ void RestHandler::handle_openai_completion(const json& request,
         this->prompt_cache.reset();
 
         configure_chat_engine_parameters(options, request);
+        apply_sampling_request(*auto_chat_engine, sampling);
 
         chat_meta_info_t meta_info;
         meta_info.max_prefill_len = this->prefill_chunk_len;
@@ -1902,6 +1958,7 @@ void RestHandler::handle_openai_completion(const json& request,
                     {"total_tokens", meta_info.prompt_tokens + meta_info.generated_tokens}
                 }}
             };
+            if (meta_info.prefix_cache.valid) response["usage"]["flm_prefix_cache"] = prefix_cache_usage_json(meta_info.prefix_cache);
             send_response(response);
         }
     }

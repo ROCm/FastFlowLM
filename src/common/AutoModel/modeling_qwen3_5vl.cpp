@@ -58,21 +58,7 @@ constexpr int kImageSoftTokenId = 248056;
 } // namespace
 
 void Qwen3_5VL::_attach_prefix_cache() {
-    // FLM_DISABLE_PREFIX_SLOTS=1 turns the slots off (single-checkpoint path), to get a reference to compare against
-    static const bool disabled = std::getenv("FLM_DISABLE_PREFIX_SLOTS") != nullptr;
-    this->prefix_cache_.image_token_id = kImageSoftTokenId;
-    this->prefix_cache_.configure(this->prefix_cache_mb_arg_, this->prefix_slots_arg_);
-    auto* engine = dynamic_cast<qwen3_5vl_npu*>(this->lm_engine);
-    if (disabled || engine == nullptr) {
-        this->prefix_cache_.attach(nullptr);
-        return;
-    }
-    this->prefix_cache_.attach(std::make_unique<prefix_engine_adapter<qwen3_5vl_npu>>(engine));
-}
-
-void Qwen3_5VL::clear_context() {
-    this->prefix_cache_.forget_all();
-    this->AutoModel::clear_context();
+    this->_prefix_attach(this->lm_engine, qwen3_5vl_state_api(this->lm_engine), kImageSoftTokenId);
 }
 
 bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {

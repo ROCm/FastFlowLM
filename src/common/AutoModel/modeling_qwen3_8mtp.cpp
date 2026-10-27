@@ -430,7 +430,11 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
     // everything falls through to the ordinary path below.
     // Off under a decoding constraint: speculate() commits the drafts the base
     // model agrees with, so they would never pass the constraint's mask.
-    const bool spec_enabled = !meta_info.constraint;
+    // FLM_DISABLE_SPECULATION=1 turns it off too, for comparing against plain
+    // decoding (output, logprobs) on the same build.
+    const char* no_spec = std::getenv("FLM_DISABLE_SPECULATION");
+    const bool spec_enabled = !meta_info.constraint &&
+        !(no_spec != nullptr && no_spec[0] != '\0' && std::strcmp(no_spec, "0") != 0);
     // Draft depth; also the hit-rate denominator (see report_speculation_stats).
     const int SPEC_MAX_DRAFT = 7;
     if (spec_enabled) {
@@ -519,10 +523,35 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
             }
 
             if (!accepted.empty()) {
+                // These never went through _sample(), so their logprobs come
+                // from the verify pass that accepted them: row i is the
+                // distribution accepted[i] is the argmax of.
+                const float* rows = nullptr;
+                int row_count = 0;
+                int vocab = 0;
+                if (meta_info.logprobs_top_n >= 0) {
+                    auto* mtp = dynamic_cast<qwen3_8mtp_npu*>(this->lm_engine);
+                    rows = mtp ? mtp->last_speculation_logits(row_count, vocab) : nullptr;
+                    if (!rows || row_count < (int)accepted.size()) {
+                        throw std::runtime_error("logprobs: the engine returned " +
+                            std::to_string(row_count) + " logits rows for " +
+                            std::to_string(accepted.size()) + " speculated tokens");
+                    }
+                }
                 // Already committed to the engine's caches -- must not be
                 // re-fed through forward(). eos mid-batch stops here.
                 bool go_on = true;
-                for (int tok : accepted) {
+                for (size_t i = 0; i < accepted.size(); i++) {
+                    const int tok = accepted[i];
+                    if (rows) {
+                        // before consume() writes the token: its entry has to
+                        // exist by the flush that streams it
+                        const float* row = rows + i * (size_t)vocab;
+                        sample_logprobs_t raw;
+                        raw.top_n = meta_info.logprobs_top_n;
+                        raw_logprobs(row, vocab, raw);
+                        this->_record_logprob(meta_info, tok, row[tok], raw);
+                    }
                     if (!(go_on = consume(tok))) break;
                 }
                 if (!go_on) break;

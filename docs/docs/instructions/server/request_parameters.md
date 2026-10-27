@@ -35,10 +35,12 @@ This page says what FLM does with the fields of a `/v1/chat/completions` or `/v1
 | `presence_penalty` | ≥ 0 | See [Penalties](#-presence-frequency-and-repetition-penalties). |
 | `frequency_penalty` | ≥ 0 | See [Penalties](#-presence-frequency-and-repetition-penalties). |
 | `repetition_penalty` | > 0 | FLM extension. See [Penalties](#-presence-frequency-and-repetition-penalties). |
+| `repeat_last_n` | integer ≥ −1 | FLM extension. How many generated tokens the penalties look at. See [The Penalty Window](#-the-penalty-window). |
+| `seed` | any integer | Makes sampling repeatable. See [`seed`](#-seed-and-repeatable-output). |
 
 Each token is chosen in this order: penalties → the `tool_choice` / `response_format` grammar, if any → `top_k` → `top_p` and the model's min-p cut-off → `temperature` → sample.
 
-The OpenAI Python SDK sends `top_k` and `repetition_penalty` through `extra_body`:
+The OpenAI Python SDK sends `top_k`, `repetition_penalty` and `repeat_last_n` through `extra_body`:
 
 ```python
 from openai import OpenAI
@@ -56,9 +58,9 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
-> ⚠️ **Settings stick.** Sampling fields are applied to the loaded model and stay in effect for every later request that doesn't send them, including requests from other clients. They return to the model's defaults only when the model is reloaded. If your application mixes settings, send every sampling field on **every** request. (`think` and `reasoning_effort` [stick the same way](https://fastflowlm.com/docs/instructions/server/reasoning_and_tools/#-turning-thinking-on-and-off).)
+> ⚠️ **Settings stick.** Sampling fields are applied to the loaded model and stay in effect for every later request that doesn't send them, including requests from other clients. They return to the model's defaults only when the model is reloaded. If your application mixes settings, send every sampling field on **every** request. `seed` is the exception: it applies only to the request that sends it. (`think` and `reasoning_effort` [stick the same way](https://fastflowlm.com/docs/instructions/server/reasoning_and_tools/#-turning-thinking-on-and-off).)
 
-> ⚠️ **Out-of-range values are ignored, not rejected.** A negative `temperature` or `presence_penalty`, or a `top_p` above 1, gets HTTP 200: the server logs a warning and keeps the value it had. OpenAI accepts penalties from −2 to 2, but FLM ignores negative ones, so a penalty can't be used to *encourage* repetition.
+> ⚠️ **Out-of-range values are ignored, not rejected.** A negative `temperature` or `presence_penalty`, or a `top_p` above 1, gets HTTP 200: the server logs a warning and keeps the value it had. OpenAI accepts penalties from −2 to 2, but FLM ignores negative ones, so a penalty can't be used to *encourage* repetition. `repeat_last_n` and `seed` are stricter: a value that isn't an integer, or a `repeat_last_n` below −1, is rejected with HTTP 400.
 
 ### Model defaults
 
@@ -67,7 +69,7 @@ A request that sends no sampling fields uses the model's own defaults, which dif
 | Models | `presence_penalty` at load |
 |---|---|
 | `qwen3.5:*`, `qwen3.5-core:*`, `qwen3.6-moe:35b-a3b`, `qwen3.6-moe-core:35b-a3b`, `qwen3.8-mtp:27b`, `minicpm-v-4.7:1b` | 1.5 |
-| `gemma4-it:*`, `gemma4-it-core:*`, `gemma4e-flash:*`, `nemotron-bolt:e4b` | 1.0 |
+| `gemma4-it:*`, `gemma4-it-core:*`, `gemma4e-flash:*`, `nemotron3.5-bolt:e4b` | 1.0 |
 | every other model | 0 |
 
 Sending `presence_penalty=0` turns the default off, and it stays off until the model is reloaded (see *Settings stick* above).
@@ -100,34 +102,65 @@ The [log probabilities](https://fastflowlm.com/docs/instructions/server/openapi/
 
 ## 🪟 The Penalty Window
 
-Penalties only look at the **last 64 tokens the model generated**:
+Penalties only look at the **last 64 tokens the model generated**, unless you set `repeat_last_n`:
 
-- **The prompt doesn't count.** That includes the system prompt, the user's messages and earlier assistant turns you send back in `messages`. A word that appears only in the prompt is not penalised. One exception: when the server continues a conversation it still holds in its KV cache, the end of its previous reply can still be in the window.
-- **The window slides.** Once a token falls more than 64 generated tokens back, `presence_penalty` and `frequency_penalty` stop applying to it. In a long reply the penalties keep the model from repeating itself within a stretch of about 64 tokens, not across the whole reply.
-- **The size is fixed at 64.** No request field or launch option changes it. Ollama-style `repeat_last_n` is not read by the `/v1` endpoints.
+- **The prompt doesn't count.** That includes the system prompt, the user's messages and earlier assistant turns you send back in `messages`. A word that appears only in the prompt is not penalised. One exception: when the server continues a conversation it still holds in its KV cache, the end of its previous reply can still be in the window. A request that sends [`seed`](#-seed-and-repeatable-output) always starts with an empty window.
+- **The window slides.** Once a token falls more than `repeat_last_n` generated tokens back, `presence_penalty` and `frequency_penalty` stop applying to it. With the default of 64, the penalties in a long reply keep the model from repeating itself within a stretch of about 64 tokens, not across the whole reply.
+
+### Changing the window size
+
+`repeat_last_n` is an FLM extension, sent at the top level of the request (`extra_body` in the OpenAI SDK). It works on `/v1/chat/completions` and `/v1/completions`:
+
+| `repeat_last_n` | Penalties look at |
+|---|---|
+| `64` (default) | the last 64 generated tokens |
+| any positive integer `N` | the last `N` generated tokens |
+| `-1` | every token generated so far in the reply |
+| `0` | nothing: all three penalties are off, whatever their values |
+
+```python
+response = client.chat.completions.create(
+    model="qwen3.5:4b",
+    messages=[{"role": "user", "content": "Write a 500-word story without repeating an adjective."}],
+    presence_penalty=1.0,
+    extra_body={"repeat_last_n": -1},   # penalise repeats across the whole reply
+)
+```
+
+Like the other sampling fields, the window size [sticks](#️-sampling-fields) until the model is reloaded, which sets it back to 64. Making the window smaller takes effect at once: tokens it no longer covers stop being penalised from the first token of the request. Ollama-style `options.repeat_last_n` is not read by the `/v1` endpoints: send `repeat_last_n` at the top level.
 
 ---
 
 ## 🎲 `seed` and Repeatable Output
 
-**FLM does not honour `seed`.** The field is accepted and ignored. The sampler's random generator is seeded from the clock once, when the model loads, and keeps going across requests, so sending the same request with the same `seed` twice can give different text. There is no `system_fingerprint` to compare either: non-streaming responses have none, and each stream gets a random one.
-
-To get the same output for the same request, decode greedily:
+Send an integer `seed` and FLM samples from it: the same request with the same `seed` gives the same text, on `/v1/chat/completions` and `/v1/completions`, streamed or not. Any 64-bit integer works, negative ones included.
 
 ```python
 response = client.chat.completions.create(
     model="llama3.2:1b",
-    messages=[{"role": "user", "content": "Name three primary colours."}],
-    temperature=0,          # or extra_body={"top_k": 1}
-    presence_penalty=0,     # send the penalties too: they stick across requests
+    messages=[{"role": "user", "content": "Invent a name for a pet dragon."}],
+    temperature=0.8,
+    top_p=0.9,
+    presence_penalty=0,     # send every sampling field: they stick across requests
     frequency_penalty=0,
+    seed=42,
 )
 ```
 
-Greedy output is deterministic, with two caveats:
+What `seed` does:
 
-- **Penalties still apply.** They change *which* token is the most likely, but in the same way every time, as long as each request sends the same values.
-- **A cached prompt can change the wording.** A prompt resumed from the [prefix cache](https://fastflowlm.com/docs/instructions/server/prefix_cache/#️-limits-to-know-about) is not bit-for-bit identical to the same prompt read from scratch, so the same greedy request can differ between a cold run and a cached one.
+- **It applies to its own request only.** The sampler's random generator restarts from the seed when the request starts. A request without `seed` carries on from wherever the generator was, so it doesn't disturb the next seeded one.
+- **It empties the [penalty window](#-the-penalty-window).** Without this, a conversation the server continues from its KV cache would start with the end of the previous reply in the window, and the same seeded request would sample differently depending on what ran before it.
+- **It doesn't pin the other sampling fields.** They [stick](#️-sampling-fields) across requests, so another client can change them between your two calls. Send `temperature`, `top_p`, `top_k`, the penalties and `repeat_last_n` with every seeded request.
+
+There is no `system_fingerprint` to compare: non-streaming responses have none, and each stream gets a random one.
+
+Greedy decoding (`temperature=0` or `top_k=1`) doesn't use the random generator, so it is repeatable without a seed. Two caveats hold for seeded and greedy output alike:
+
+- **Penalties still apply.** They change *which* token is picked, but in the same way every time, as long as each request sends the same values.
+- **A cached prompt can change the wording.** A prompt resumed from the [prefix cache](https://fastflowlm.com/docs/instructions/server/prefix_cache/#️-limits-to-know-about) or the prompt cache is not bit-for-bit identical to the same prompt read from scratch, so the same request can differ between a cold run and a cached one.
+
+If the same request doesn't repeat, send it twice with `logprobs: true`. If the `logprob` values differ, the model read the prompt differently (usually because one run was cached), not because of the seed.
 
 ---
 
@@ -154,11 +187,11 @@ Turning thinking on and off, streaming examples and the full message format: [Re
 |---|---|
 | A field FLM doesn't know | Ignored. |
 | A field sent as `null` | Treated as not sent. Some clients send `null` for every option they leave unset. |
-| `seed`, `stop`, `n`, `logit_bias`, `user` | Ignored, as above. `stop` sequences are not applied, and there is always exactly one choice. |
+| `stop`, `n`, `logit_bias`, `user` | Ignored, as above. `stop` sequences are not applied, and there is always exactly one choice. |
 | An `options` object (Ollama style) on a `/v1` endpoint | Ignored. Put sampling fields at the top level of the request. |
 | A sampling field outside its range | Ignored with a warning in the server log. The previous value stays in effect ([see above](#️-sampling-fields)). |
 | A sampling field of the wrong JSON type, such as `"temperature": "0.7"` | The request fails with an error. Send numbers as JSON numbers. |
-| A malformed `messages`, `tool_choice`, `parallel_tool_calls`, `response_format`, `logprobs` or `top_logprobs` | Rejected with HTTP 400 and `"type": "invalid_request_error"` before anything is generated, for streaming requests too. |
+| A malformed `messages`, `tool_choice`, `parallel_tool_calls`, `response_format`, `logprobs`, `top_logprobs`, `seed` or `repeat_last_n` | Rejected with HTTP 400 and `"type": "invalid_request_error"` before anything is generated, for streaming requests too. |
 
 FLM's own extensions to the OpenAI request, all top-level fields (`extra_body` in the OpenAI SDK):
 
@@ -166,6 +199,7 @@ FLM's own extensions to the OpenAI request, all top-level fields (`extra_body` i
 |---|---|
 | `think` | [Turning Thinking On and Off](https://fastflowlm.com/docs/instructions/server/reasoning_and_tools/#-turning-thinking-on-and-off) |
 | `top_k`, `repetition_penalty` | [Sampling Fields](#️-sampling-fields) |
+| `repeat_last_n` | [The Penalty Window](#-the-penalty-window) |
 | `backend` | [Choose an Execution Backend](https://fastflowlm.com/docs/instructions/cli/#-choose-an-execution-backend) |
 
 ---
