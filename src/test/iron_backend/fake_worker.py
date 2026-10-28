@@ -31,7 +31,14 @@ def main():
     while True:
         command = receive()
         name = command["command"]
-        if name.startswith("load_") or name == "reset":
+        if name == "load_model":
+            assert command["model"] in {"embedding_gemma2", "llama"}
+            if command["model"] == "llama":
+                assert command["context_length"] == 32
+            else:
+                assert "context_length" not in command
+            send({"ok": True})
+        elif name == "reset":
             send({"ok": True})
         elif name == "logits":
             tokens = struct.unpack(f"={command['count']}i", read_exact(command["count"] * 4))

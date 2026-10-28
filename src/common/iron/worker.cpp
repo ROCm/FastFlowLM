@@ -27,13 +27,13 @@ std::string PythonExecutable() {
 
 std::string WorkerModule() {
     const char* value = std::getenv("FLM_IRON_WORKER_MODULE");
-    return value && *value ? value : "flm_iron.worker";
+    return value && *value ? value : "iron.lm.server";
 }
 
 }  // namespace
 
-Worker::Worker(const std::filesystem::path& model_path,
-               std::uint32_t context_length, std::string model) {
+Worker::Worker(const std::filesystem::path& model_path, std::string model,
+               std::uint32_t context_length) {
 #if defined(_WIN32)
     throw std::runtime_error("The IRON backend requires POSIX process support");
 #else
@@ -57,9 +57,11 @@ Worker::Worker(const std::filesystem::path& model_path,
     close(sockets[1]);
     input_ = output_ = sockets[0];
     try {
-        request({{"command", model == "embedding" ? "load_embedding" : "load_llama"},
-                 {"model_path", model_path.string()},
-                 {"context_length", context_length}});
+        nlohmann::json command = {{"command", "load_model"},
+                                  {"model", std::move(model)},
+                                  {"model_path", model_path.string()}};
+        if (context_length) command["context_length"] = context_length;
+        request(command);
     } catch (...) {
         close(input_);
         waitpid(process_, nullptr, 0);

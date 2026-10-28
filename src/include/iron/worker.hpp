@@ -13,8 +13,8 @@ namespace flm::iron {
 
 class Worker {
 public:
-        Worker(const std::filesystem::path& model_path, std::uint32_t context_length,
-            std::string model = "llama");
+    Worker(const std::filesystem::path& model_path, std::string model,
+           std::uint32_t context_length = 0);
     ~Worker();
 
     Worker(const Worker&) = delete;

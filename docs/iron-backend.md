@@ -5,7 +5,8 @@ SPDX-License-Identifier: MIT
 
 # IRON backend
 
-The `iron` backend runs a complete IRON graph in a persistent Python process.
+The `iron` backend runs a complete IRON graph through IRON's persistent Python
+server.
 FastFlowLM handles tokenization, chat templates, sampling, and HTTP requests.
 The worker retains the IRON model, compiled images, weights, and device state.
 
@@ -17,11 +18,11 @@ the source build:
 ```bash
 source /opt/xilinx/xrt/setup.sh
 export FLM_IRON_PYTHON=/scratch/roesti/IRON/.venv/bin/python
-export PYTHONPATH=/scratch/roesti/FastFlowLM/python:${PYTHONPATH:-}
+export PYTHONPATH=/scratch/roesti/IRON:${PYTHONPATH:-}
 ```
 
-An installed build places `flm_iron` under `share/flm/python`. Add that directory
-to `PYTHONPATH`.
+`FLM_IRON_PYTHON` must name an environment with IRON installed. `PYTHONPATH` is
+needed only when that environment uses an IRON source checkout.
 
 ## Llama 3.2 1B
 
@@ -67,7 +68,8 @@ encoder. The worker returns the normalized 768-element float32 embedding.
 ## Protocol
 
 FastFlowLM and the worker exchange length-prefixed JSON headers and raw binary
-payloads over a Unix socket pair. Llama requests contain the complete token
-history and return bfloat16 logits. Embedding requests contain UTF-8 text and
-return float32 values. Worker errors poison the backend, so FastFlowLM requires
-a model reload after a process or protocol failure.
+payloads over a Unix socket pair. The load request names a model in
+`iron.lm.server.MODELS`. Llama requests contain the complete token history and
+return bfloat16 logits. EmbeddingGemma 2 requests contain UTF-8 text and return
+float32 values. Worker errors poison the backend, so FastFlowLM requires a model
+reload after a process or protocol failure.

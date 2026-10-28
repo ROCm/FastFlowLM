@@ -12,7 +12,7 @@ void IronEmbedding::load_model(std::string model_path, json, bool enable_preempt
     }
     const char* override_path = std::getenv("FLM_IRON_EMBEDDING_PATH");
     if (override_path && *override_path) model_path = override_path;
-    worker_ = std::make_unique<flm::iron::Worker>(model_path, 2048, "embedding");
+    worker_ = std::make_unique<flm::iron::Worker>(model_path, "embedding_gemma2");
     is_model_loaded = true;
     this->model_path = std::move(model_path);
 }

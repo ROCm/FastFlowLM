@@ -17,7 +17,8 @@ namespace {
 class IronLlama final : public causal_lm {
 public:
     IronLlama(const std::string& model_path, std::uint32_t context_length)
-        : worker_(model_path, context_length), max_length_(context_length) {}
+                : worker_(model_path, "llama", context_length),
+                    max_length_(context_length) {}
 
     buffer<bf16> forward(int id) override {
         tokens_.push_back(id);

@@ -53,7 +53,7 @@ option(FLM_PORTABLE_BUILD "Build portable distribution with bundled runtime libr
 # It also fixes the NPU generation the build targets -- see utils/npu_platform.hpp.
 option(FLM_ENABLE_CORE
        "Reach kernels through ryzenai-corelib instead of FastFlowLM's own flow" OFF)
-option(FLM_ENABLE_IRON "Run complete IRON graphs through a Python worker" OFF)
+option(FLM_ENABLE_IRON "Run complete IRON graphs through the IRON Python server" OFF)
 
 if(FLM_ENABLE_IRON)
     add_compile_definitions(FLM_ENABLE_IRON=1)
@@ -1032,10 +1032,6 @@ endif()
 
 install(FILES model_list.json DESTINATION "${FLM_SHARE_DESTINATION}")
 install(FILES model_info.json DESTINATION "${FLM_SHARE_DESTINATION}")
-if(FLM_ENABLE_IRON)
-    install(DIRECTORY "${CMAKE_SOURCE_DIR}/../python/flm_iron"
-            DESTINATION "${FLM_SHARE_DESTINATION}/python")
-endif()
 
 # Ship both licenses with the binaries; LICENSE_BINARY.txt must accompany any
 # redistribution of the NPU kernels and engine libraries. THIRD_PARTY_NOTICES.txt
