@@ -27,7 +27,7 @@ std::string PythonExecutable() {
 
 std::string WorkerModule() {
     const char* value = std::getenv("FLM_IRON_WORKER_MODULE");
-    return value && *value ? value : "iron.server";
+    return value && *value ? value : "iron.lm_server";
 }
 
 }  // namespace
