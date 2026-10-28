@@ -34,6 +34,7 @@
 #include "models/qwen3vl_flash/flm/aie2p/qwen3vl_flash.hpp"
 #include "models/qwen3_5vl/flm/aie2p/qwen3_5vl_npu.hpp"
 #include "models/minicpm_v_4_7/flm/aie2p/minicpm_v_4_7_npu.hpp"
+#include "models/minicpm_ocr/flm/aie2p/minicpm_ocr_npu.hpp"
 #include "models/qwen3_6_moe/flm/aie2p/qwen3_6_moe_npu.hpp"
 #include "models/qwen3_8mtp/flm/aie2p/qwen3_8mtp_npu.hpp"
 #include "models/gemma/flm/aie2p/gemma_npu.hpp"

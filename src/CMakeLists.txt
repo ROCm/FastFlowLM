@@ -503,6 +503,7 @@ list(APPEND FLM_ENGINE_LINK_LIBS qwen3vl_flash)
 list(APPEND FLM_ENGINE_LINK_LIBS
     qwen3_5vl_npu
     minicpm_v_4_7_npu
+    minicpm_ocr_npu
     qwen3_5_omni_npu
     qwen3_6_moe_npu
     qwen3_8mtp_npu
