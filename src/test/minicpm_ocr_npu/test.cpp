@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <sstream>
 #include "utils/utils.hpp"
@@ -82,6 +83,10 @@ int main(int argc, char* argv[]) {
     desc.add_options()("model,m", arg_utils::po::value<std::string>()->default_value("minicpm-ocr:1b"), "Model tag");
     desc.add_options()("Length,l", arg_utils::po::value<int>()->default_value(256), "Max generated tokens per turn");
     desc.add_options()("Preemption,p", arg_utils::po::value<bool>()->default_value(false), "Preemption");
+    // A single timed turn on a prompt from a file, for measuring prefill against length
+    // (models_simple/test_input/{1k,2k,8k}.txt). Skips the four scripted turns entirely.
+    desc.add_options()("prompt-file", arg_utils::po::value<std::string>()->default_value(""),
+                       "Run one turn on this file's contents and exit");
     // Default is the repo's own test image, found relative to the executable the
     // same way model_list.json is. Pass --image "" to skip turn 4 outright.
     desc.add_options()("image,i", arg_utils::po::value<std::string>()->default_value("<default>"),
@@ -108,6 +113,24 @@ int main(int argc, char* argv[]) {
     header_print("info", "Model loaded");
     chat->set_topk(1);
     chat->configure_parameter("enable_think", false);
+
+    // --prompt-file: one turn, nothing else, so the reported prefill is this prompt alone.
+    const std::string prompt_file = vm["prompt-file"].as<std::string>();
+    if (!prompt_file.empty()) {
+        std::ifstream pf(prompt_file);
+        if (!pf) { header_print("ERROR", "cannot open " << prompt_file); return 1; }
+        std::stringstream buf; buf << pf.rdbuf();
+        lm_uniform_input_t one;
+        one.prompt = buf.str();
+        std::cout << "Prompt file: " << prompt_file << " (" << one.prompt.size() << " bytes)" << std::endl;
+        chat_meta_info_t m;
+        chat->start_total_timer();
+        chat->insert(m, one);
+        chat->generate(m, length, std::cout);
+        chat->stop_total_timer();
+        report_turn(*chat, m);
+        return 0;
+    }
 
     // Turn 1: a pure prompt, as `flm run` sends it.
     lm_uniform_input_t input;
