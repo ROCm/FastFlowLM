@@ -56,7 +56,27 @@ std::string MiniCPM_OCR::apply_chat_template(nlohmann::ordered_json& messages, n
     return this->chat_tmpl->apply(inputs);
 }
 
+/// \brief Report why inference failed, then raise the caller-facing error.
+///
+/// Every call site reaches here from a `catch (...)`, which on its own destroys the only
+/// description of what went wrong: the user is told "inference failed" and the engine's actual
+/// message -- an XRT error, a bad shape, a throw from the vision tower -- is gone. That matters
+/// most for the failures you cannot reproduce on demand, where the one occurrence is all the
+/// evidence there will ever be.
+///
+/// `std::current_exception()` is still live inside a catch block, so rethrowing it here recovers
+/// the message without changing any control flow.
 void MiniCPM_OCR::fail_inference() {
+    if (std::current_exception()) {
+        try {
+            throw;
+        } catch (const std::exception& e) {
+            header_print("ERROR", "inference failed: " << e.what());
+        } catch (...) {
+            header_print("ERROR", "inference failed: non-std exception");
+        }
+    }
+
     const bool poisoned = this->backend_ && this->backend_->poisoned();
     this->_shared_after_inference_failure(poisoned);
     throw ModelRequestError(500, true, poisoned
