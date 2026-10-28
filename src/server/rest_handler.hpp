@@ -133,7 +133,7 @@ private:
                                 chat_logprobs_aligner* logprobs = nullptr);
 
 
-    std::unique_ptr<AutoModel> auto_chat_engine;
+    flm::frontend::FrontendPtr auto_chat_engine;
     std::unique_ptr<AutoDecisionModel> decision_engine;
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
     std::unique_ptr<Whisper> whisper_engine;

@@ -57,7 +57,7 @@ class Runner {
         bool embed;
         model_list supported_models;
         ModelDownloader& downloader;
-        std::unique_ptr<AutoModel> auto_chat_engine;
+        flm::frontend::FrontendPtr auto_chat_engine;
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
         std::unique_ptr<Whisper> whisper_engine;
         std::unique_ptr<AutoEmbeddingModel> auto_embedding_engine;
