@@ -556,11 +556,11 @@ void TestTheUnsupportedTagBranchDoesNotReturnBeforeTheCatalogResolvesIt() {
     const auto source = ReadSource(FLM_ALL_MODELS_SOURCE);
     const auto body = FunctionBody(
         source,
-        "inline std::pair<std::string, std::unique_ptr<AutoModel>> "
+        "inline std::pair<std::string, flm::frontend::FrontendPtr> "
         "get_auto_model(");
     const auto gate = body.find("is_model_supported(model_tag) == false");
     const auto resolve = body.find("available_models.get_model_info(model_tag)");
-    const auto dispatch = body.find("modelFamilyMap.at(");
+    const auto dispatch = body.find("FrontendRegistry::instance()");
     TEST_REQUIRE(gate != std::string::npos);
     TEST_REQUIRE(resolve != std::string::npos);
     TEST_REQUIRE(dispatch != std::string::npos);
