@@ -19,12 +19,7 @@ constexpr int kImageSoftTokenId = 248056;
 } // namespace
 
 void Qwen3_6_MOE::_attach_prefix_cache() {
-#if defined(FLM_NPU_AIE_NEXT)
-    // the aie_next engine has no saved-state table yet, so no prefix slots
-    this->_prefix_attach(this->lm_engine, nullptr, kImageSoftTokenId);
-#else
     this->_prefix_attach(this->lm_engine, qwen3_6_moe_state_api(this->lm_engine), kImageSoftTokenId);
-#endif
 }
 
 void Qwen3_6_MOE::load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption, const std::string& backend) {

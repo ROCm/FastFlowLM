@@ -10,6 +10,7 @@
 #include "tensor_2d.hpp"
 #include "utils/utils.hpp"
 #include "causal_lm.hpp"
+#include "flm_state_api.h"
 
 // The device is opened once, by the frontend, and borrowed by every engine.
 namespace xrt { class device; }
@@ -35,6 +36,9 @@ typedef struct {
 }qwen3_6_moe_image_payload_t;
 
 
+
+/// \brief the saved-state table of this engine (flm_state_api.h); nullptr if `engine` is not a qwen3_6_moe_npu
+extern "C" const flm_state_api* qwen3_6_moe_state_api(void* engine);
 
 class qwen3_6_moe_npu : public causal_lm{
 public:
@@ -114,6 +118,7 @@ public:
 
     }
 private:
+    friend const flm_state_api* ::qwen3_6_moe_state_api(void* engine);
     struct Impl;
     Impl* _impl;
 };
