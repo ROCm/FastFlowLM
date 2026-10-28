@@ -69,7 +69,7 @@ encoder. The worker returns the normalized 768-element float32 embedding.
 
 FastFlowLM and the worker exchange length-prefixed JSON headers and raw binary
 payloads over a Unix socket pair. The load request names a model in
-`iron.lm.server.MODELS`. Llama requests contain the complete token history and
+`iron.server.MODELS`. Llama requests contain the complete token history and
 return bfloat16 logits. EmbeddingGemma 2 requests contain UTF-8 text and return
 float32 values. Worker errors poison the backend, so FastFlowLM requires a model
 reload after a process or protocol failure.
