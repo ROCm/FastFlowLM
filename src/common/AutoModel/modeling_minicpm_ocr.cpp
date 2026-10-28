@@ -299,6 +299,10 @@ bool MiniCPM_OCR::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input,
     // FLM_MINICPM_OCR_DUMP=<dir>: the payload and the prompt exactly as the engine
     // gets them, for scoring the preprocessing against the HF processor
     // (pixels.bf16 raw, views.txt "h w" per view, tokens.txt one id per line).
+    // NOTE tokens.txt is the PREFILL set, already shortened by think_trim above, so it
+    // ends at "<|im_start|>assistant\n" and is 2 (or 4) tokens shorter than what the
+    // model actually sees -- decode() feeds the "<think>" tokens back. Do not compare it
+    // against HF's apply_chat_template() output directly and conclude the prompts differ.
     if (const char* dump = std::getenv("FLM_MINICPM_OCR_DUMP"); dump && *dump) {
         const std::string dir(dump);
         std::ofstream(dir + "/pixels.bf16", std::ios::binary)
