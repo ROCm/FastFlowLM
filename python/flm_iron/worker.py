@@ -2,14 +2,11 @@
 # SPDX-License-Identifier: MIT
 
 import json
-import os
 import struct
 import sys
-from dataclasses import replace
-from pathlib import Path
 
-import numpy as np
 import aie.utils as aie_utils
+import numpy as np
 from aie.iron.device import from_name
 from ml_dtypes import bfloat16
 
@@ -38,19 +35,17 @@ def send(header, payload=b""):
 
 
 def load_llama(command):
-    from iron.lm.llama3.model import LLAMA_3_2_1B, Runner
+    from iron.applications.llama import Llama
 
-    root = Path(command["model_path"])
-    weights = root / "model.safetensors"
-    tokenizer = root / "tokenizer.model"
-    config = replace(LLAMA_3_2_1B, max_seq_len=command["context_length"])
-    return Runner(weights, tokenizer, config).npu()
+    return Llama.load(
+        command["model_path"], max_seq_len=command["context_length"]
+    )
 
 
 def load_embedding(command):
-    from iron.lm.embeddinggemma2.encoder import Encoder
+    from iron.applications.embedding_gemma2 import EmbeddingGemma
 
-    return Encoder(command["model_path"], max_tokens=command["context_length"])
+    return EmbeddingGemma.load(command["model_path"])
 
 
 def main():
@@ -72,12 +67,12 @@ def main():
                 words = logits.view(np.uint16).astype("<u2", copy=False)
                 send({"ok": True, "count": words.size}, words.tobytes())
             elif name == "reset":
-                model._seen = np.empty(0, dtype=np.int64)
+                model.forget(0)
                 send({"ok": True})
             elif name == "embed":
                 text = read_exact(command["size"]).decode()
                 value = np.asarray(
-                    model(text, command["task"], command["dimensions"]),
+                    model.embed(text, command["task"], command["dimensions"]),
                     dtype="<f4",
                 )
                 send({"ok": True, "count": value.size}, value.tobytes())

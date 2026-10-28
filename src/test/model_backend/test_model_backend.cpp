@@ -123,11 +123,11 @@ void test_traits_are_kept_per_backend() {
 void test_iron_backend_registration() {
     auto registry = MakeRegistry();
     registry.register_backend("llama3", kIronBackendId, StubFactory("iron"),
-                              BackendTraits{false, false, 32768});
+                              BackendTraits{false, false, 0});
     const auto traits = registry.traits("llama3", kIronBackendId);
     TEST_REQUIRE(!traits.needs_npu_xclbin);
     TEST_REQUIRE(!traits.supports_preemption);
-    TEST_REQUIRE(traits.max_context_length == 32768);
+    TEST_REQUIRE(traits.max_context_length == 0);
 }
 
 void test_backend_defaults() {

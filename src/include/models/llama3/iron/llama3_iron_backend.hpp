@@ -10,7 +10,7 @@ namespace flm::llama3 {
 flm::backend::BackendFactory iron_factory();
 
 inline flm::backend::BackendTraits iron_traits() {
-    return flm::backend::BackendTraits{false, false, 32768};
+    return flm::backend::BackendTraits{false, false, 0};
 }
 
 }  // namespace flm::llama3

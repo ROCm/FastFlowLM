@@ -83,9 +83,8 @@ private:
         return path && *path ? path : fallback;
     }
     static std::uint32_t ValidateContextLength(std::uint32_t length) {
-        if (length == 0 || length > 32768 || length % 2048 != 0) {
-            throw std::out_of_range(
-                "IRON Llama context length must be a multiple of 2048 in 2048..32768");
+        if (length == 0) {
+            throw std::out_of_range("IRON Llama context length must be positive");
         }
         return length;
     }

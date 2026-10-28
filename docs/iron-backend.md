@@ -25,9 +25,9 @@ to `PYTHONPATH`.
 
 ## Llama 3.2 1B
 
-The FastFlowLM package supplies `config.json`, tokenizer files, and chat
-metadata. IRON loads a separate checkpoint directory that contains
-`model.safetensors` and `tokenizer.model`:
+The FastFlowLM package supplies chat metadata and the tokenizer for its HTTP
+API. IRON loads a separate checkpoint directory. The directory contains
+`config.json`, `tokenizer.json`, and one or more `model*.safetensors` files:
 
 ```bash
 export FLM_IRON_MODEL_PATH=/path/to/llama3.2-1b
@@ -38,9 +38,10 @@ curl -H 'Content-Type: application/json' \
 	http://127.0.0.1:52625/v1/chat/completions
 ```
 
-The context length must be a multiple of 2048 and cannot exceed 32768.
-XRT locks the model arena. Increase the process memlock limit before using a
-context whose arena exceeds the current limit. Preemption is unavailable.
+The context length must be positive and cannot exceed the checkpoint's
+`max_position_embeddings`. XRT locks the model arena. Increase the process
+memlock limit before using a context whose arena exceeds the current limit.
+Preemption is unavailable.
 
 The FastFlowLM tokenizer and chat metadata must name the same model variant as
 the IRON checkpoint. In particular, use Llama 3.2 1B Instruct metadata with an
