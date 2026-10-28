@@ -19,10 +19,15 @@ copy_if_different() {
     fi
 }
 
-# the engine and its public header (a stale copy makes experiments lie)
+# the engine (a stale copy makes experiments lie)
 copy_if_different $FLM_DLL_BUILD/hy_mem_npu/lib/libhy_mem_npu.so ../../lib/xrt/libhy_mem_npu.so
-mkdir -p ../../include/models/hy_mem/flm/aie2p
-copy_if_different $FLM_IRON/FLM_DLL/include/models/hy_mem/hy_mem_npu.hpp ../../include/models/hy_mem/flm/aie2p/hy_mem_npu.hpp
+
+# The public header is NOT copied, as in every other model's activate.sh. The app's
+# copy at include/models/hy_mem/flm/aie2p/hy_mem_npu.hpp is maintained by hand and
+# is deliberately narrower than the engine's: it leaves out hybrid_engine_state and
+# the C++ save/restore methods, which are internal to the engine library, and keeps
+# only the opaque flm_state_api table an app drives (as qwen3_npu.hpp does). Copying
+# the engine's header over it would drag utils/hybrid_state.hpp into the app.
 
 # The two layer overlays were both built as layer.xclbin; the engine asks for them
 # by these names. Their RTP addresses are constants in hy_mem_npu_sequence.hpp, so

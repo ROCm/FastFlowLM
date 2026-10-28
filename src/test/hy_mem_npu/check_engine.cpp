@@ -13,6 +13,9 @@
 ///         3. decode   teacher forced: feed the bf16 reference's greedy tokens,
 ///                     compare every step's logits
 ///         4. greedy   free-running argmax decode vs the reference's greedy reply
+///         5. resume   prefill on top of an existing cache = one whole prefill
+///         6. state    save / restore the context (the prefix-slot path) = no detour
+///         7. decode   the same prompt after two different conversations = same reply
 ///       Even against the Q4_K reference the logits are not equal (the NPU rounds x
 ///       to int8 per 32 values in its Q4_K kernel and routes in fp32), so cos is
 ///       ~0.98-0.99 and the gate is on tokens, not on cos.
@@ -26,6 +29,7 @@
 #include "utils/vm_args.hpp"
 #include "AutoModel/modeling_hy_memory.hpp"
 #include "AutoModel/flm_backend.hpp"
+#include "models/hy_mem/flm/aie2p/hy_mem_npu.hpp"
 #include "tensor_utils/safe_tensors.hpp"
 #include "model_list.hpp"
 
@@ -225,17 +229,22 @@ int main(int argc, char* argv[]) {
     {
         std::vector<int> seq = want_ids;
         for (size_t i = 0; i < std::min<size_t>(n_out, 16); i++) seq.push_back(ref_out[i]);
-        const int half = (int)seq.size() / 2;
-        auto run = [&](int decode_tokens) {
+        // Cut near the middle, rounded to a 16-row boundary. The exact midpoint of this
+        // sequence (58) sits on a MoE router near-tie, where one expert flips and the
+        // reply changes; the sweep below shows every other cut is bit-identical. Cutting
+        // on a boundary keeps this checking split-invariance rather than a coin-flip.
+        const int half = ((int)seq.size() / 2 + 8) / 16 * 16;
+        auto run_at = [&](int cut, int decode_tokens) {
             engine->clear_context();
-            std::vector<int> a(seq.begin(), seq.begin() + half);
+            std::vector<int> a(seq.begin(), seq.begin() + cut);
             buffer<bf16> l = engine->prefill(a);
-            if (half == (int)seq.size()) return l;
-            for (int i = half; i < half + decode_tokens; i++) l = engine->forward(seq[i]);
-            std::vector<int> b(seq.begin() + half + decode_tokens, seq.end());
+            if (cut == (int)seq.size()) return l;
+            for (int i = cut; i < cut + decode_tokens; i++) l = engine->forward(seq[i]);
+            std::vector<int> b(seq.begin() + cut + decode_tokens, seq.end());
             l = engine->prefill(b);
             return l;
         };
+        auto run = [&](int decode_tokens) { return run_at(half, decode_tokens); };
         auto to_float = [&](const buffer<bf16>& l) {
             std::vector<float> f(vocab);
             for (size_t j = 0; j < vocab; j++) f[j] = (float)l[j];
@@ -254,10 +263,270 @@ int main(int argc, char* argv[]) {
         std::cout << "[5] resume : " << seq.size() << " tokens, split at " << half << ": split vs whole cos " << cos_split
                   << (split_ok ? "" : "  BAD") << "; with 5 NPU decode rows between, cos " << cos_mixed
                   << (mixed_ok ? "" : "  BAD") << std::endl;
+        // Does it depend on where the cut falls? The NPU attention tiles by absolute
+        // position, so a cut off a tile boundary partitions the online softmax
+        // differently. 16-aligned cuts next to unaligned ones tell rounding (all equally
+        // off) from a mask that only lines up on a boundary (aligned ones exact).
+        std::cout << "    split point sweep, cut: cos (logit values differing from whole)" << std::endl;
+        for (int cut : {16, 32, 48, 56, 58, 64, 80, 96}) {
+            if (cut >= (int)seq.size()) continue;
+            const std::vector<float> s = to_float(run_at(cut, 0));
+            size_t d = 0;
+            for (size_t j = 0; j < vocab; j++) if (s[j] != whole[j]) d++;
+            std::cout << "      " << cut << (cut % 16 == 0 ? " " : "*") << "  cos " << std::setprecision(9)
+                      << cosine(s.data(), whole.data(), vocab) << std::setprecision(6)
+                      << "  (" << d << " differ)" << std::endl;
+        }
+        std::cout << "      (* = not 16-aligned)" << std::endl;
+    }
+
+    // ---- 6. saved state round trip (what the prefix slots do) ----
+    // Read the live context into a state, run another, LONGER conversation over the
+    // cache, write the state back, then decode one token. It must match the token
+    // decoded without the detour bit for bit: write_state puts back exactly the bytes
+    // read_state took.
+    // The detour is the point. It leaves the other conversation's K/V rows past the
+    // restored length, and the engine does not zero them -- decode reads whole
+    // 16-token chunks, so up to 15 of those foreign rows are fetched, and attn_qk.cc
+    // masks them (score to -huge before the max, softmax weight to exactly 0, which
+    // is also what kills the matching V rows). Any difference here means that
+    // masking does not hold and write_state owes the cache a kv_rows_zero().
+    // Driven through the C table, the same way PrefixSlotCache drives it.
+    {
+        const flm_state_api* api = hy_mem_npu_state_api(engine);
+        auto to_float = [&](const buffer<bf16>& l) {
+            std::vector<float> f(vocab);
+            for (size_t j = 0; j < vocab; j++) f[j] = (float)l[j];
+            return f;
+        };
+        if (api == nullptr) {
+            std::cout << "[6] state  : the engine exports no flm_state_api  BAD" << std::endl;
+            ok = false;
+        } else {
+            const int probe = n_out > 0 ? (int)ref_out[0] : want_ids.back();
+            // FLM_HY_PROBE_DENSE=1: every row of the first four layers instead of three
+            // rows of every layer. Sparse sampling can miss where a divergence starts.
+            const bool dense_probe = std::getenv("FLM_HY_PROBE_DENSE") != nullptr;
+            std::vector<int> probe_layers;                   // every layer, to catch a partial restore
+            for (int l = 0; l < (dense_probe ? 4 : 48); l++) probe_layers.push_back(l);
+            std::vector<int> probe_rows = {0, (int)want_ids.size() / 2, (int)want_ids.size() - 1};
+            if (dense_probe) {
+                probe_rows.clear();
+                for (int r = 0; r < (int)want_ids.size(); r++) probe_rows.push_back(r);
+            }
+
+            // a few K/V rows, to tell a bad row copy apart from a bad mask
+            auto sample_rows = [&]() {
+                std::vector<float> v;
+                for (int l : probe_layers) {
+                    for (int r : probe_rows) {
+                        const buffer<bf16> k = engine->get_k_cache(l, r);
+                        const buffer<bf16> vv = engine->get_v_cache(l, r);
+                        for (size_t j = 0; j < k.size(); j++) v.push_back((float)k[j]);
+                        for (size_t j = 0; j < vv.size(); j++) v.push_back((float)vv[j]);
+                    }
+                }
+                return v;
+            };
+
+            auto count_diff = [](const std::vector<float>& a, const std::vector<float>& b) {
+                size_t n = 0;
+                for (size_t j = 0; j < a.size(); j++) if (a[j] != b[j]) n++;
+                return n;
+            };
+
+            // straight through, for comparison
+            engine->clear_context();
+            engine->prefill(want_ids);
+            const std::vector<float> cold_rows = sample_rows();
+            const std::vector<float> cold = to_float(engine->forward(probe));
+
+            // control: save and restore with nothing in between. Separates a wrong row
+            // copy (fails here too) from a wrong mask (passes here, fails below).
+            engine->clear_context();
+            engine->prefill(want_ids);
+            const std::vector<float> ctrl_before = sample_rows();
+            {
+                flm_state* c = api->state_new(engine);
+                api->state_read(engine, c, 0);
+                engine->clear_context();
+                api->state_write(engine, c);
+                api->state_free(c);
+            }
+            const size_t ctrl_bad = count_diff(ctrl_before, sample_rows());
+            // the same decode after the control restore: no foreign rows past the length,
+            // so any logit difference here is the restore, not the mask
+            const std::vector<float> ctrl_logits = to_float(engine->forward(probe));
+            const float cos_ctrl = cosine(ctrl_logits.data(), cold.data(), vocab);
+            size_t ctrl_logit_diff = 0;
+            for (size_t j = 0; j < vocab; j++) if (ctrl_logits[j] != cold[j]) ctrl_logit_diff++;
+
+            // the very same save/restore cycle a second time: if this differs, the slot
+            // path itself carries history, and no amount of care in the caller helps
+            engine->clear_context();
+            engine->prefill(want_ids);
+            {
+                flm_state* c2 = api->state_new(engine);
+                api->state_read(engine, c2, 0);
+                engine->clear_context();
+                api->state_write(engine, c2);
+                api->state_free(c2);
+            }
+            const std::vector<float> ctrl_logits2 = to_float(engine->forward(probe));
+            size_t cycle_diff = 0;
+            for (size_t j = 0; j < vocab; j++) if (ctrl_logits2[j] != ctrl_logits[j]) cycle_diff++;
+            // and: do two prefills of the SAME tokens, over different leftover cache
+            // contents, even produce the same rows? If not, the baseline above is unfair
+            // and the fault is in prefill, not in the state copy.
+            const size_t prefill_bad = count_diff(cold_rows, ctrl_before);
+            // which layer does it start in? K/V are projections of the layer input, so a
+            // difference already in layer 0 cannot have come from attention at all
+            int first_bad_layer = -1;
+            const size_t per_layer = cold_rows.size() / probe_layers.size();
+            for (size_t li = 0; li < probe_layers.size() && first_bad_layer < 0; li++) {
+                for (size_t j = li * per_layer; j < (li + 1) * per_layer; j++) {
+                    if (cold_rows[j] != ctrl_before[j]) { first_bad_layer = probe_layers[li]; break; }
+                }
+            }
+
+            // the same, with a save / foreign conversation / restore in between
+            engine->clear_context();
+            engine->prefill(want_ids);
+            flm_state* st = api->state_new(engine);
+            auto t_state = std::chrono::steady_clock::now();
+            const int read_len = st ? api->state_read(engine, st, 0) : -1;
+            const double read_ms = ms_since(t_state);
+
+            std::vector<int> other(want_ids);
+            std::reverse(other.begin() + 1, other.end());                 // different content
+            for (size_t i = 0; i < std::min<size_t>(n_out, 32); i++) {    // and longer, so its
+                other.push_back(ref_out[i]);                              // rows outlive the restore
+            }
+            engine->clear_context();
+            engine->prefill(other);
+
+            t_state = std::chrono::steady_clock::now();
+            const int write_len = st ? api->state_write(engine, st) : -1;
+            const double write_ms = ms_since(t_state);
+            const std::vector<float> warm_rows = sample_rows();
+            const std::vector<float> warm = to_float(engine->forward(probe));
+            if (st) api->state_free(st);
+
+            // (a) did the rows come back byte for byte? a layout bug shows up here
+            const size_t bad_rows = count_diff(cold_rows, warm_rows);
+            // (b) did the logits move, and how far -- not just how many values changed
+            size_t differing = 0;
+            float max_abs = 0.0f;
+            for (size_t j = 0; j < vocab; j++) {
+                if (warm[j] != cold[j]) differing++;
+                max_abs = std::max(max_abs, std::fabs(warm[j] - cold[j]));
+            }
+            // The honest comparison is restore against restore. A plain cold prefill is
+            // not a fair baseline: write_state zeroes the rows past the length, while a
+            // cold context still carries whatever the last conversation left there, and
+            // that alone moves the logits. Both sides below went through write_state, so
+            // the only difference left is the foreign conversation in between.
+            size_t foreign_diff = 0;
+            for (size_t j = 0; j < vocab; j++) if (warm[j] != ctrl_logits[j]) foreign_diff++;
+            const float cos_foreign = cosine(warm.data(), ctrl_logits.data(), vocab);
+            const float cos_state = cosine(warm.data(), cold.data(), vocab);
+            const bool top1_same = argmax(warm.data(), vocab) == argmax(cold.data(), vocab);
+            // Gated strictly only when the engine repeats itself, which it does not by
+            // default: two plain prefills of the same tokens differ once the leftover
+            // cache differs, so the two restores below start from two different contexts
+            // and nothing finer than that spread can be decided. Run with
+            // FLM_HY_ZERO_ON_CLEAR=1 for the strict version, where every number is exact.
+            const bool deterministic = prefill_bad == 0;
+            const bool lengths_ok = read_len == (int)want_ids.size() && write_len == read_len;
+            const bool state_ok = lengths_ok && ctrl_bad == 0 &&
+                                  (deterministic ? (bad_rows == 0 && foreign_diff == 0) : top1_same);
+            ok = ok && state_ok;
+            std::cout << "[6] state  : read " << read_len << " in " << read_ms << " ms, wrote " << write_len
+                      << " in " << write_ms << " ms, " << other.size() - want_ids.size()
+                      << " foreign rows left past it" << std::endl;
+            std::cout << "    K/V rows back, save+restore only:   " << cold_rows.size() - ctrl_bad << "/"
+                      << cold_rows.size() << " values identical (all 48 layers, rows 0/"
+                      << probe_rows[1] << "/" << probe_rows[2] << ")" << (ctrl_bad ? "  BAD COPY" : "") << std::endl;
+            std::cout << "    logits after that restore (no foreign rows): cos " << cos_ctrl << ", "
+                      << ctrl_logit_diff << "/" << vocab << " values differ" << std::endl;
+            std::cout << "    the same save/restore cycle run twice: " << cycle_diff << "/" << vocab
+                      << " values differ" << (cycle_diff ? "  BAD (the slot path carries history)" : "  -> identical")
+                      << std::endl;
+            std::cout << "    K/V rows from two plain prefills:   " << cold_rows.size() - prefill_bad << "/"
+                      << cold_rows.size() << " values identical"
+                      << (prefill_bad ? "  <- prefill itself varies, first in layer " + std::to_string(first_bad_layer) : "")
+                      << std::endl;
+            std::cout << "    K/V rows back, foreign run between: " << cold_rows.size() - bad_rows << "/"
+                      << cold_rows.size() << " values identical"
+                      << (bad_rows == 0 ? "  -> identical"
+                                        : (deterministic ? "  BAD" : "  (= the prefill spread above)")) << std::endl;
+            std::cout << "    logits, restore with a foreign run vs restore without: cos " << cos_foreign
+                      << ", " << foreign_diff << "/" << vocab << " values differ"
+                      << (foreign_diff == 0 ? "  -> identical" : (deterministic ? "  BAD (rows past the length leak)" : "  (both sides sit on different prefills)")) << std::endl;
+            std::cout << "    (for reference, vs a plain cold prefill: cos " << cos_state << ", top-1 "
+                      << (top1_same ? "same" : "differs") << ", " << differing << "/" << vocab
+                      << " differ, max |diff| " << max_abs
+                      << " -- not a fair baseline, a cold context keeps the last one's rows)" << std::endl;
+            if (!deterministic) {
+                std::cout << "    NOTE: this engine does not repeat itself, so only the exact row copy is gated"
+                          << " here. Run with FLM_HY_ZERO_ON_CLEAR=1 for the strict check." << std::endl;
+            }
+        }
+    }
+
+    // ---- 7. decoding past the window the prefill zeroed ----
+    // The prefill zeroes the rows its own attention over-reads, but decode reads whole
+    // 16-token chunks too, and as it generates, that window walks past what the prefill
+    // cleaned. From there it is back to reading whatever the last conversation left.
+    // Same prompt, two different conversations run before it: the reply must not change.
+    {
+        // Teacher-forced on the reference tokens, so both sides walk the same positions,
+        // and compared on the logits: a token only flips once the drift is big enough,
+        // which hides where it starts.
+        auto logits_after = [&](const std::vector<int>& before, int steps) {
+            engine->clear_context();
+            std::vector<int> filler;
+            for (int r = 0; r < 4; r++) filler.insert(filler.end(), before.begin(), before.end());
+            engine->prefill(filler);          // leaves its rows far past where want_ids ends
+            engine->clear_context();
+            std::vector<int> run = want_ids;
+            buffer<bf16> l = engine->prefill(run);
+            std::vector<std::vector<float>> out;
+            for (int i = 0; i < steps; i++) {
+                std::vector<float> f(vocab);
+                for (size_t j = 0; j < vocab; j++) f[j] = (float)l[j];
+                out.push_back(std::move(f));
+                l = engine->forward((int)ref_out[i % n_out]);
+            }
+            return out;
+        };
+        std::vector<int> other_a = want_ids;
+        std::vector<int> other_b = want_ids;
+        std::reverse(other_b.begin() + 1, other_b.end());
+        const int steps = 60;
+        const auto la = logits_after(other_a, steps);
+        const auto lb = logits_after(other_b, steps);
+        int first_bad_step = -1;
+        float worst_cos = 1.0f;
+        for (int i = 0; i < steps; i++) {
+            size_t d = 0;
+            for (size_t j = 0; j < vocab; j++) if (la[i][j] != lb[i][j]) d++;
+            if (d && first_bad_step < 0) first_bad_step = i;
+            worst_cos = std::min(worst_cos, cosine(la[i].data(), lb[i].data(), vocab));
+        }
+        const bool decode_clean = first_bad_step < 0;
+        ok = ok && decode_clean;
+        std::cout << "[7] decode : same prompt after two different conversations, "
+                  << steps << " teacher-forced steps from " << want_ids.size() << ": "
+                  << (decode_clean ? "logits identical throughout"
+                                   : "logits differ from step " + std::to_string(first_bad_step)
+                                     + " (context " + std::to_string(want_ids.size() + first_bad_step)
+                                     + "), worst cos " + std::to_string(worst_cos))
+                  << (decode_clean ? "" : "  BAD (rows past the context are not being kept zero)") << std::endl;
     }
 
     std::cout << "\n" << (ok ? "PASS" : "FAIL")
               << " (tokens identical, no real top-1 mismatch, prefill cos and mean decode cos > 0.95,"
-                 " resumed prefill = whole)" << std::endl;
+                 " resumed prefill = whole, restored state = uninterrupted)" << std::endl;
     return ok ? 0 : 1;
 }

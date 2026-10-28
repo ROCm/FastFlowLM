@@ -54,6 +54,17 @@ class HyMemoryProbe : public HyMemory {
 public:
     using HyMemory::HyMemory;
     std::vector<int> encode(const std::string& text) { return this->tokenizer->encode(text); }
+    /// \brief turn the prefix slots on (-1 = the default count) or off (0), as --prefix-slots does
+    void set_slots(int slots) { this->set_prefix_limits(-1, slots); }
+    /// \brief back to a freshly loaded model: no live context, no saved snapshots
+    void reset_everything() {
+        this->prefix_cache_.forget_all();
+        this->clear_context();
+    }
+    bool slots_enabled() { return this->prefix_cache_.enabled(); }
+    /// \brief raise it past any prompt to stop boundary snapshots being taken, which is
+    ///        what splits a cold prompt into a head prefill plus the rest
+    void set_min_boundary(size_t n) { this->prefix_cache_.min_boundary = n; }
 };
 
 /// \brief the JSON in a reply, or nothing if none parses
@@ -166,6 +177,8 @@ static std::string now_string(const char* fmt) {
 
 /// \brief --save: where each request's messages and reply go (empty = nowhere)
 static std::string g_save_dir;
+/// \brief appended to the saved file names, so repeated passes do not overwrite each other
+static std::string g_save_dir_suffix;
 
 /// \brief one request through the model: prints the reply as it streams, returns it
 /// \param step file name stem for --save: <step>_messages.json, <step>_reply.txt
@@ -176,9 +189,12 @@ static std::string run_chat(AutoModel& chat, const std::string& step, const std:
                             chat_meta_info_t* out_meta = nullptr) {
     std::cout << "\n" << std::string(100, '=') << "\n" << title << "\n" << std::string(100, '=') << std::endl;
     if (!g_save_dir.empty()) {
-        std::ofstream(g_save_dir + "/" + step + "_messages.json") << messages.dump(2) << std::endl;
+        std::ofstream(g_save_dir + "/" + step + g_save_dir_suffix + "_messages.json") << messages.dump(2) << std::endl;
     }
     chat_meta_info_t meta_info;
+    // as the server does for every request (rest_handler.cpp): let the model reuse what
+    // it already holds. Without it the prefix slots are never consulted.
+    meta_info.restore_allowed = true;
     lm_uniform_input_t input;
     input.messages = messages;
     chat.start_total_timer();
@@ -188,11 +204,14 @@ static std::string run_chat(AutoModel& chat, const std::string& step, const std:
     std::string reply = chat.generate(meta_info, max_new_tokens, std::cout);
     chat.stop_total_timer();
     std::cout << "\n\n" << chat.show_profile() << std::endl;
+    std::cout << "    prompt " << meta_info.prompt_tokens << " tokens, " << meta_info.cached_prompt_tokens
+              << " served from the prefix cache, " << meta_info.prompt_tokens - meta_info.cached_prompt_tokens
+              << " actually prefilled in " << meta_info.prefill_duration / 1e6 << " ms" << std::endl;
     if (meta_info.generated_tokens >= max_new_tokens) {
         header_print("WARNING", "hit the " << max_new_tokens << "-token limit; the reply is probably cut off");
     }
     if (!g_save_dir.empty()) {
-        std::ofstream(g_save_dir + "/" + step + "_reply.txt") << reply;
+        std::ofstream(g_save_dir + "/" + step + g_save_dir_suffix + "_reply.txt") << reply;
     }
     if (out_meta) *out_meta = meta_info;
     return reply;
@@ -369,17 +388,10 @@ static int run_sized(HyMemoryProbe& chat, const std::vector<int>& sizes, int max
 /// \brief steps 1-2 of verify_hy_mem_30A3B.py: the hy_memory engine's EXTRACT then
 ///        RECONCILE calls, with the engine defaults (English, few-shot off)
 /// \return 0 if both replies parsed into the shape the engine accepts
-static int run_chain(AutoModel& chat, const std::string& prompts_path) {
-    std::ifstream pf(prompts_path);
-    if (!pf.is_open()) {
-        header_print("error", "cannot open " << prompts_path << " (run prompts/dump_hy_memory_prompts.py)");
-        return 1;
-    }
-    const nlohmann::ordered_json prompts = nlohmann::ordered_json::parse(pf);
-    const std::string today = now_string("%Y-%m-%d");
-    const std::string now_minute = now_string("%Y-%m-%d %H:%M");
-
-    // ---- STEP 1: EXTRACT ----
+/// \brief the EXTRACT request of the chain: a long system prompt plus one user turn
+/// \note Shared by --chain and --ab-slots so both measure the same ~2.5k-token prompt.
+///       `today` is pinned by the caller, so repeated builds are byte identical.
+static nlohmann::ordered_json build_extract_messages(const nlohmann::ordered_json& prompts, const std::string& today) {
     // The conversation being written into memory; the writer dumps request.messages
     // as a JSON list of {role, content} -- that string is "New Messages".
     nlohmann::ordered_json new_messages = nlohmann::ordered_json::array();
@@ -396,6 +408,172 @@ static int run_chain(AutoModel& chat, const std::string& prompts_path) {
     nlohmann::ordered_json extract_messages = nlohmann::ordered_json::array();
     extract_messages.push_back({{"role", "system"}, {"content", prompts["extract_system"]}});
     extract_messages.push_back({{"role", "user"}, {"content", extract_user_prompt}});
+    return extract_messages;
+}
+
+/// \brief --ab-slots: does turning the prefix slots on change the answer?
+/// \note One process, one byte-identical pair of requests, run as a two-turn chat so
+///       the second turn can resume from the first's snapshot. Each phase runs the
+///       pair `rounds` times from a clean model, so the spread WITHIN a phase is the
+///       engine's own run-to-run spread and the spread BETWEEN phases is what the
+///       slots add. Comparing one slots-on run against one slots-off run proves
+///       nothing on its own: this engine does not repeat itself exactly even with the
+///       slots off (its prefill depends on what the KV cache happened to hold), so the
+///       within-phase spread is the only honest yardstick.
+static int run_ab_slots(HyMemoryProbe& chat, const std::string& prompts_path, int rounds, int max_new_tokens) {
+    std::ifstream pf(prompts_path);
+    if (!pf.is_open()) {
+        header_print("error", "cannot open " << prompts_path << " (run prompts/dump_hy_memory_prompts.py)");
+        return 1;
+    }
+    const nlohmann::ordered_json prompts = nlohmann::ordered_json::parse(pf);
+    const std::string today = now_string("%Y-%m-%d");
+    const nlohmann::ordered_json turn1 = build_extract_messages(prompts, today);
+    const std::string q2 = "List only the tags you used above, one per line, nothing else.";
+
+    struct round_t {
+        std::string reply1, reply2;
+        int cached1 = 0, cached2 = 0;
+    };
+    // one round = turn 1, then turn 2 which repeats turn 1 and adds a question, so the
+    // slots (when on) can serve turn 1's tokens to turn 2
+    auto one_round = [&](const std::string& tag) {
+        chat.reset_everything();
+        round_t r;
+        chat_meta_info_t m1, m2;
+        r.reply1 = run_chat(chat, tag + "_t1", tag + ": turn 1", turn1, max_new_tokens, &m1);
+        nlohmann::ordered_json turn2 = turn1;
+        turn2.push_back({{"role", "assistant"}, {"content", r.reply1}});
+        turn2.push_back({{"role", "user"}, {"content", q2}});
+        r.reply2 = run_chat(chat, tag + "_t2", tag + ": turn 2 (repeats turn 1)", turn2, max_new_tokens, &m2);
+        r.cached1 = m1.cached_prompt_tokens;
+        r.cached2 = m2.cached_prompt_tokens;
+        return r;
+    };
+
+    // slots OFF first, so no snapshot from a previous phase can serve this one
+    std::vector<round_t> off, on, nb;
+    const size_t default_min_boundary = 512;
+    for (int i = 0; i < rounds; i++) {
+        chat.set_slots(0);
+        g_save_dir_suffix = "_off" + std::to_string(i + 1);
+        off.push_back(one_round("ab_off" + std::to_string(i + 1)));
+    }
+    for (int i = 0; i < rounds; i++) {
+        chat.set_slots(-1);
+        chat.set_min_boundary(default_min_boundary);
+        g_save_dir_suffix = "_on" + std::to_string(i + 1);
+        on.push_back(one_round("ab_on" + std::to_string(i + 1)));
+    }
+    // Slots on, but no boundary snapshots. Saving one makes a cold prompt be prefilled
+    // as head-then-rest instead of in one go, which is a difference in its own right;
+    // without it turn 1 is the very same single prefill as with the slots off, so any
+    // turn-2 difference can only come from resuming.
+    for (int i = 0; i < rounds; i++) {
+        chat.set_slots(-1);
+        chat.set_min_boundary(SIZE_MAX);
+        g_save_dir_suffix = "_nb" + std::to_string(i + 1);
+        nb.push_back(one_round("ab_nb" + std::to_string(i + 1)));
+    }
+    chat.set_min_boundary(default_min_boundary);
+
+    // how many of the pairs within a group agree, and across the groups
+    auto agree = [](const std::vector<std::string>& v) {
+        size_t same = 0, pairs = 0;
+        for (size_t i = 0; i < v.size(); i++) {
+            for (size_t j = i + 1; j < v.size(); j++) { pairs++; same += (v[i] == v[j]); }
+        }
+        return std::make_pair(same, pairs);
+    };
+    auto cross = [](const std::vector<std::string>& a, const std::vector<std::string>& b) {
+        size_t same = 0, pairs = 0;
+        for (const auto& x : a) { for (const auto& y : b) { pairs++; same += (x == y); } }
+        return std::make_pair(same, pairs);
+    };
+    auto replies = [](const std::vector<round_t>& v, bool second) {
+        std::vector<std::string> out;
+        for (const auto& r : v) out.push_back(second ? r.reply2 : r.reply1);
+        return out;
+    };
+
+    std::cout << "\n" << std::string(100, '=') << "\nsame answer with and without slots?\n"
+              << std::string(100, '=') << std::endl;
+    int hits = 0;
+    for (const auto& r : on) hits += (r.cached2 > 0);
+    std::cout << "rounds per phase: " << rounds << "; turn 2 resumed from a snapshot in " << hits << "/"
+              << rounds << " slots-on rounds (cached tokens";
+    for (const auto& r : on) std::cout << " " << r.cached2;
+    std::cout << ")" << std::endl;
+    if (hits == 0) {
+        std::cout << "NO SLOT HIT -- the comparison below says nothing about the slots" << std::endl;
+        return 1;
+    }
+    int nb_hits = 0;
+    for (const auto& r : nb) nb_hits += (r.cached2 > 0);
+    std::cout << "with boundary snapshots off, turn 2 still resumed in " << nb_hits << "/" << rounds
+              << " rounds" << std::endl;
+    for (int turn = 1; turn <= 2; turn++) {
+        const bool second = turn == 2;
+        const auto off_a = agree(replies(off, second));
+        const auto on_a = agree(replies(on, second));
+        const auto nb_a = agree(replies(nb, second));
+        const auto x_on = cross(replies(off, second), replies(on, second));
+        const auto x_nb = cross(replies(off, second), replies(nb, second));
+        std::cout << "turn " << turn << ": identical within  off " << off_a.first << "/" << off_a.second
+                  << ",  on " << on_a.first << "/" << on_a.second
+                  << ",  on-no-boundary " << nb_a.first << "/" << nb_a.second
+                  << "   |  vs off:  on " << x_on.first << "/" << x_on.second
+                  << ",  on-no-boundary " << x_nb.first << "/" << x_nb.second << std::endl;
+    }
+    // The verdict: slots are clean if turning them on is no worse than running the
+    // same thing twice without them. If the engine repeats itself (off agrees fully),
+    // then on must agree fully and match off too.
+    const auto off2 = agree(replies(off, true));
+    const auto on2 = agree(replies(on, true));
+    const auto x2 = cross(replies(off, true), replies(nb, true));   // the isolated resume
+    const auto x1_nb = cross(replies(off, false), replies(nb, false));
+    const bool engine_repeats = off2.second > 0 && off2.first == off2.second;
+    bool verdict_ok;
+    if (engine_repeats) {
+        // turn 1 of the no-boundary phase is the same single prefill as with the slots
+        // off, so it must match exactly; turn 2 is then a clean test of resuming alone
+        const bool cold_same = x1_nb.first == x1_nb.second;
+        verdict_ok = on2.first == on2.second && cold_same && x2.first == x2.second;
+        std::cout << "\ncold prompt, slots on (no boundary snapshot) vs off: "
+                  << x1_nb.first << "/" << x1_nb.second << " identical"
+                  << (cold_same ? "  (so the prefill is the same)" : "  <- differs even cold") << std::endl;
+        std::cout << "resumed turn vs the same turn prefilled: " << x2.first << "/" << x2.second
+                  << " identical" << std::endl;
+        std::cout << (verdict_ok
+            ? "\nPASS: the engine repeats itself, and resuming does not change the answer"
+            : "\nFAIL: the engine repeats itself without slots, but the answer changes with them") << std::endl;
+    } else {
+        // no exact baseline to compare against: the most we can say is that the slots
+        // do not make the spread worse
+        verdict_ok = on2.first >= off2.first && x2.first >= off2.first;
+        std::cout << "\nNOTE: this engine does NOT repeat itself with the slots off ("
+                  << off2.first << "/" << off2.second << " identical), so an exact"
+                  << " 'same answer' test is not possible here." << std::endl;
+        std::cout << (verdict_ok
+            ? "INCONCLUSIVE (slots no worse than the engine's own spread)"
+            : "FAIL: the slots add spread beyond the engine's own") << std::endl;
+    }
+    g_save_dir_suffix.clear();
+    return verdict_ok ? 0 : 1;
+}
+
+static int run_chain(AutoModel& chat, const std::string& prompts_path) {
+    std::ifstream pf(prompts_path);
+    if (!pf.is_open()) {
+        header_print("error", "cannot open " << prompts_path << " (run prompts/dump_hy_memory_prompts.py)");
+        return 1;
+    }
+    const nlohmann::ordered_json prompts = nlohmann::ordered_json::parse(pf);
+    const std::string today = now_string("%Y-%m-%d");
+    const std::string now_minute = now_string("%Y-%m-%d %H:%M");
+
+    // ---- STEP 1: EXTRACT ----
+    const nlohmann::ordered_json extract_messages = build_extract_messages(prompts, today);
     // MEMORY_AGENT_MAX_TOKENS = 2000
     const std::string extract_reply = run_chat(chat, "extract", "STEP 1: EXTRACT (hy_memory real prompt)", extract_messages, 2000);
 
@@ -506,6 +684,8 @@ int main(int argc, char* argv[]) {
     desc.add_options()("reasoning", arg_utils::po::value<std::string>()->default_value("no_think"), "reasoning_effort: no_think | low | high");
     desc.add_options()("out,o", arg_utils::po::value<std::string>()->default_value(""), "also write the parsed JSON to this file");
     desc.add_options()("chain", arg_utils::po::bool_switch()->default_value(false), "run hy_memory's EXTRACT -> RECONCILE chain instead of --messages");
+    desc.add_options()("ab-slots", arg_utils::po::bool_switch()->default_value(false),
+        "run the same two-turn chat with the prefix slots off and on (--repeat rounds each) and compare the replies");
     desc.add_options()("prompt-tokens", arg_utils::po::value<std::string>()->default_value(""),
         "run the same extraction task at these prompt lengths instead of --messages, "
         "comma separated (e.g. \"128,512,2048\")");
@@ -541,8 +721,25 @@ int main(int argc, char* argv[]) {
     if (!g_save_dir.empty()) {
         std::filesystem::create_directories(g_save_dir);
     }
+    if (vm["ab-slots"].as<bool>()) {
+        return run_ab_slots(chat, vm["prompts"].as<std::string>(),
+                            std::max(2, vm["repeat"].as<int>()), vm["Length"].as<int>());
+    }
     if (vm["chain"].as<bool>()) {
-        return run_chain(chat, vm["prompts"].as<std::string>());
+        // --repeat N runs the chain N times in one process. The second pass asks the
+        // same two questions again, so it is where the prefix slots saved by the first
+        // can actually be hit; the replies must not change.
+        const int passes = std::max(1, vm["repeat"].as<int>());
+        for (int p = 0; p < passes; p++) {
+            if (passes > 1) {
+                std::cout << "\n" << std::string(100, '#') << "\n# chain pass " << p + 1 << " of " << passes
+                          << "\n" << std::string(100, '#') << std::endl;
+            }
+            g_save_dir_suffix = passes > 1 ? "_pass" + std::to_string(p + 1) : "";
+            const int rc = run_chain(chat, vm["prompts"].as<std::string>());
+            if (rc != 0) return rc;
+        }
+        return 0;
     }
 
     const std::string sizes_arg = vm["prompt-tokens"].as<std::string>();

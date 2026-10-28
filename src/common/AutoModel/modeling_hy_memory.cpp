@@ -30,6 +30,7 @@ void HyMemory::load_model(std::string model_path, json model_info, int default_c
     for (size_t i = 0; i < PROFILER_TYPE_NUM; i++) {
         this->profiler_list[i].reset();
     }
+    this->_prefix_attach(this->lm_engine, hy_mem_npu_state_api(this->lm_engine));
 }
 
 void HyMemory::setup_tokenizer(std::string model_path) {
@@ -102,6 +103,15 @@ bool HyMemory::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, st
     // the template already starts with <bos>; encode() adds no second one
     std::vector<int> tokens = this->tokenizer->encode(templated_text);
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
+
+    // Prefix slots: resume from the longest saved prefix of this prompt. Trim is 0 --
+    // the whole rendered prompt is prefilled here, nothing is left for generate() to
+    // feed. The marker opens the first user turn, so everything before it (system +
+    // tools) is the shared head that gets its own snapshot.
+    if (this->_prefix_slot_mode(meta_info, tokens.size(), 0)) {
+        return this->_prefix_text_insert(meta_info, tokens, 0, "<｜hy_User｜>", is_cancelled);
+    }
+    this->_prefix_legacy_path();
 
     return this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
 }

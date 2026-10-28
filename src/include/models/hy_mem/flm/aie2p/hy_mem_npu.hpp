@@ -15,6 +15,7 @@
 #include "tensor_2d.hpp"
 #include "utils/utils.hpp"
 #include "causal_lm.hpp"
+#include "flm_state_api.h"
 
 
 class hy_mem_npu : public causal_lm{
@@ -72,3 +73,6 @@ private:
     struct Impl;
     Impl* _impl;
 };
+
+/// \brief the saved-state table of this engine (flm_state_api.h); nullptr if `engine` is not a hy_mem_npu
+extern "C" const flm_state_api* hy_mem_npu_state_api(void* engine);
