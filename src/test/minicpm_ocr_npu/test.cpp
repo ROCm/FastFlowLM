@@ -303,12 +303,19 @@ int main(int argc, char* argv[]) {
     // (models_simple/test_input/{1k,2k,8k}.txt). Skips the four scripted turns entirely.
     desc.add_options()("prompt-file", arg_utils::po::value<std::string>()->default_value(""),
                        "Run one turn on this file's contents and exit");
-    // With --prompt-file: a second, cached turn, sent the way `flm serve` sends a follow-up
-    // (whole conversation, restore_allowed), so only the new user turn is prefilled. Its
-    // length decides which GDN backend that prefill takes, independently of turn one's --
-    // which is what makes it the test for handing the recurrent state between the two.
+    // With --prompt-file: a second turn, sent the way `flm serve` sends a follow-up (whole
+    // conversation, restore_allowed). Turn one is sent CLI-style (no restore_allowed), so with
+    // the prefix slots on (the default) it saves no snapshot, and turn two prefills the whole
+    // conversation in two calls -- the head up to its last user turn, then the tail. Their
+    // lengths pick the GDN backend of each, which is what makes it the test for handing the
+    // recurrent state between the two inside one request.
     desc.add_options()("follow-up", arg_utils::po::value<std::string>()->default_value(""),
                        "With --prompt-file: file holding a follow-up user turn");
+    // With --follow-up: send turn one with restore_allowed as well, so it saves a snapshot and
+    // turn two resumes from it, prefilling only the reply and the new user turn -- the short
+    // cached follow-up of a real chat.
+    desc.add_options()("resume", arg_utils::po::bool_switch()->default_value(false),
+                       "With --follow-up: turn two resumes from turn one's saved state");
     // Default is the repo's own test image, found relative to the executable the
     // same way model_list.json is. Pass --image "" to skip turn 4 (and --multi-slot's
     // image conversation) outright.
@@ -389,6 +396,7 @@ int main(int argc, char* argv[]) {
         one.prompt = buf.str();
         std::cout << "Prompt file: " << prompt_file << " (" << one.prompt.size() << " bytes)" << std::endl;
         chat_meta_info_t m;
+        m.restore_allowed = vm["resume"].as<bool>();   // see --resume
         chat->start_total_timer();
         chat->insert(m, one);
         const std::string answer = chat->generate(m, length, std::cout);
