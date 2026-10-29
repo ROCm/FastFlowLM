@@ -484,10 +484,16 @@ class model_list {
         ///       and there is nothing left for a catalog key to disambiguate.
         static std::string backend_for_family(const std::string& model_type) {
             if (model_type == "embeddinggemma-2") return "iron";
-            static const std::string suffix = "-core";
-            if (model_type.size() > suffix.size() &&
-                model_type.compare(model_type.size() - suffix.size(),
-                                   suffix.size(), suffix) == 0) {
+            static const std::string iron_suffix = "-iron";
+            if (model_type.size() > iron_suffix.size() &&
+                model_type.compare(model_type.size() - iron_suffix.size(),
+                                   iron_suffix.size(), iron_suffix) == 0) {
+                return "iron";
+            }
+            static const std::string core_suffix = "-core";
+            if (model_type.size() > core_suffix.size() &&
+                model_type.compare(model_type.size() - core_suffix.size(),
+                                   core_suffix.size(), core_suffix) == 0) {
                 return "core";
             }
             return "flm";

@@ -2490,6 +2490,32 @@
             "path": "vision_weight.q4nx"
         }
     ],
+    "llama3.2-iron:1b": [
+        {
+            "type": "file",
+            "size": 1019,
+            "sha256": "a53d38c545333679d523863f60a45f04166e52d15793864da3464712810f8bd9",
+            "path": "config.json"
+        },
+        {
+            "type": "file",
+            "size": 2471645608,
+            "sha256": "68a2e4be76fa709455a60272fba8e512c02d81c46e6c671cc9449e374fd6809a",
+            "path": "model.safetensors"
+        },
+        {
+            "type": "file",
+            "size": 9085657,
+            "sha256": "79e3e522635f3171300913bb421464a87de6222182a0570b9b2ccba2a964b2b4",
+            "path": "tokenizer.json"
+        },
+        {
+            "type": "file",
+            "size": 4331,
+            "sha256": "01b0d6dd3c391ffc2facc01592ac07f25e8c4212d3450b8103042e8a5fcbafa8",
+            "path": "tokenizer_config.json"
+        }
+    ],
     "llama3.2:1b": [
         {
             "type": "file",

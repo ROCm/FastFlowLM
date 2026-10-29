@@ -1482,6 +1482,46 @@
                 "footprint": 2.7
             }
         },
+        "llama3.2-iron": {
+            "1b": {
+                "supported_platforms": ["aie2p"],
+                "name": "llama3.2-1b",
+                "url": "https://huggingface.co/meta-llama/Llama-3.2-1B",
+                "file_url": "https://huggingface.co/api/models/meta-llama/Llama-3.2-1B/tree/main",
+                "use_hf_token": true,
+                "size": 2480736615,
+                "flm_min_version": "1.0.7",
+                "default_context_length": 131072,
+                "max_prefill_len": 4096,
+                "files": [
+                    "config.json",
+                    "model.safetensors",
+                    "tokenizer.json",
+                    "tokenizer_config.json"
+                ],
+                "file_sources": {
+                    "config.json": {
+                        "url": "https://huggingface.co/FastFlowLM/Llama-3.2-1B-NPU2",
+                        "revision": "7bb88fcd5653534fe065b911123d10294b62a8d1"
+                    },
+                    "tokenizer.json": {
+                        "url": "https://huggingface.co/FastFlowLM/Llama-3.2-1B-NPU2",
+                        "revision": "7bb88fcd5653534fe065b911123d10294b62a8d1"
+                    },
+                    "tokenizer_config.json": {
+                        "url": "https://huggingface.co/FastFlowLM/Llama-3.2-1B-NPU2",
+                        "revision": "7bb88fcd5653534fe065b911123d10294b62a8d1"
+                    }
+                },
+                "details": {
+                    "family": "llama3",
+                    "think": false,
+                    "parameter_size": "1B",
+                    "quantization_level": "BF16"
+                },
+                "footprint": 2.5
+            }
+        },
         "llama3.1": {
             "8b": {
                 "supported_platforms": ["aie2p"],

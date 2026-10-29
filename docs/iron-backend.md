@@ -26,16 +26,16 @@ needed only when that environment uses an IRON source checkout.
 
 ## Llama 3.2 1B
 
-The FastFlowLM package supplies chat metadata and the tokenizer for its HTTP
-API. IRON loads a separate checkpoint directory. The directory contains
-`config.json`, `tokenizer.json`, and one or more `model*.safetensors` files:
+Accept the license for `meta-llama/Llama-3.2-1B`, then provide a Hugging Face
+token through `HF_TOKEN`, `HUGGING_FACE_HUB_TOKEN` or `HF_TOKEN_PATH`. Pull and
+serve the BF16 model registered for IRON:
 
 ```bash
-export FLM_IRON_MODEL_PATH=/path/to/llama3.2-1b
-flm serve llama3.2:1b --backend iron --ctx-len 2048
+flm pull llama3.2-iron:1b
+flm serve llama3.2-iron:1b --ctx-len 2048
 
 curl -H 'Content-Type: application/json' \
-	-d '{"model":"llama3.2:1b","messages":[{"role":"user","content":"Hello"}],"max_tokens":8}' \
+	-d '{"model":"llama3.2-iron:1b","messages":[{"role":"user","content":"Hello"}],"max_tokens":8}' \
 	http://127.0.0.1:52625/v1/chat/completions
 ```
 
