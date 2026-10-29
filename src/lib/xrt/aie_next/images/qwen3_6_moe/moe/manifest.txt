@@ -1,0 +1,422 @@
+design moe
+route 0 0 0 Control32 0 0 0 Controller32 0
+route 0 0 0 Control32 1 0 0 Controller32 0
+route 1 1 0 Control32 0 0 0 Controller32 0
+route 1 1 0 Control32 1 0 0 Controller32 0
+route 2 2 0 Control32 0 0 0 Controller32 0
+route 2 2 0 Control32 1 0 0 Controller32 0
+route 26 0 0 DMAControl 0 0 1 TileControl 0
+route 27 0 0 DMAControl 0 0 2 TileControl 0
+route 29 0 0 DMAControl 0 0 3 TileControl 0
+route 30 0 0 DMAControl 1 0 4 TileControl 0
+route 31 0 0 DMAControl 1 0 5 TileControl 0
+route 1 0 1 Control32 0 0 0 DMATrace 0
+route 1 0 2 Control32 0 0 0 DMATrace 0
+route 1 0 3 Control32 0 0 0 DMATrace 0
+route 1 0 4 Control32 0 0 0 DMATrace 0
+route 1 0 5 Control32 0 0 0 DMATrace 0
+route 26 1 0 DMAControl 0 1 1 TileControl 0
+route 27 1 0 DMAControl 0 1 2 TileControl 0
+route 29 1 0 DMAControl 0 1 3 TileControl 0
+route 30 1 0 DMAControl 1 1 4 TileControl 0
+route 31 1 0 DMAControl 1 1 5 TileControl 0
+route 1 1 1 Control32 0 1 0 DMATrace 0
+route 1 1 2 Control32 0 1 0 DMATrace 0
+route 1 1 3 Control32 0 1 0 DMATrace 0
+route 1 1 4 Control32 0 1 0 DMATrace 0
+route 1 1 5 Control32 0 1 0 DMATrace 0
+route 26 2 0 DMAControl 0 2 1 TileControl 0
+route 27 2 0 DMAControl 0 2 2 TileControl 0
+route 29 2 0 DMAControl 0 2 3 TileControl 0
+route 30 2 0 DMAControl 1 2 4 TileControl 0
+route 31 2 0 DMAControl 1 2 5 TileControl 0
+route 1 2 1 Control32 0 2 0 DMATrace 0
+route 1 2 2 Control32 0 2 0 DMATrace 0
+route 1 2 3 Control32 0 2 0 DMATrace 0
+route 1 2 4 Control32 0 2 0 DMATrace 0
+route 1 2 5 Control32 0 2 0 DMATrace 0
+core 0 2
+core 0 3
+core 0 4
+core 0 5
+core 1 2
+core 1 3
+core 1 4
+core 1 5
+core 2 2
+core 2 3
+core 2 4
+core 2 5
+buffer moe_w0_0_0 0 2 2048 9472
+buffer moe_w1_0_0 0 2 32768 9472
+buffer moe_w2_0_0 0 2 65536 9472
+buffer moe_xg_0_0 0 2 122880 8192
+buffer moe_lg_0_0 0 2 114304 1024
+buffer moe_h_0_0 0 2 119808 3072
+buffer moe_lgo_0_0 0 2 112256 256
+buffer moe_hp_0_0 0 2 112512 768
+buffer moe_yo_0_0 0 2 113280 1024
+buffer moe_rtp_0_0 0 2 112128 64
+buffer moe_pick_0_0 0 2 115328 2048
+buffer moe_scratch_0_0 0 2 117376 2432
+buffer moe_w0_0_1 0 3 2048 9472
+buffer moe_w1_0_1 0 3 32768 9472
+buffer moe_w2_0_1 0 3 65536 9472
+buffer moe_xg_0_1 0 3 122880 8192
+buffer moe_lg_0_1 0 3 114304 1024
+buffer moe_h_0_1 0 3 119808 3072
+buffer moe_lgo_0_1 0 3 112256 256
+buffer moe_hp_0_1 0 3 112512 768
+buffer moe_yo_0_1 0 3 113280 1024
+buffer moe_rtp_0_1 0 3 112128 64
+buffer moe_pick_0_1 0 3 115328 2048
+buffer moe_scratch_0_1 0 3 117376 2432
+buffer moe_w0_0_2 0 4 2048 9472
+buffer moe_w1_0_2 0 4 32768 9472
+buffer moe_w2_0_2 0 4 65536 9472
+buffer moe_xg_0_2 0 4 122880 8192
+buffer moe_lg_0_2 0 4 114304 1024
+buffer moe_h_0_2 0 4 119808 3072
+buffer moe_lgo_0_2 0 4 112256 256
+buffer moe_hp_0_2 0 4 112512 768
+buffer moe_yo_0_2 0 4 113280 1024
+buffer moe_rtp_0_2 0 4 112128 64
+buffer moe_pick_0_2 0 4 115328 2048
+buffer moe_scratch_0_2 0 4 117376 2432
+buffer moe_w0_0_3 0 5 2048 9472
+buffer moe_w1_0_3 0 5 32768 9472
+buffer moe_w2_0_3 0 5 65536 9472
+buffer moe_xg_0_3 0 5 122880 8192
+buffer moe_lg_0_3 0 5 114304 1024
+buffer moe_h_0_3 0 5 119808 3072
+buffer moe_lgo_0_3 0 5 112256 256
+buffer moe_hp_0_3 0 5 112512 768
+buffer moe_yo_0_3 0 5 113280 1024
+buffer moe_rtp_0_3 0 5 112128 64
+buffer moe_pick_0_3 0 5 115328 2048
+buffer moe_scratch_0_3 0 5 117376 2432
+buffer moe_mt_w0_0_0 0 1 0 75776
+buffer moe_mt_w0_1_0 0 1 131072 75776
+buffer moe_mt_w0_2_0 0 1 262144 75776
+buffer moe_mt_w0_3_0 0 1 393216 75776
+buffer moe_mt_w1_0_0 0 1 524288 75776
+buffer moe_mt_w1_1_0 0 1 655360 75776
+buffer moe_mt_w1_2_0 0 1 786432 75776
+buffer moe_mt_w1_3_0 0 1 917504 75776
+buffer moe_mt_xg_0 0 1 1048576 8192
+buffer moe_mt_lg_0 0 1 1441792 1024
+buffer moe_mt_h_0 0 1 1310720 3072
+buffer moe_mt_y 0 1 1179648 4096
+buffer moe_w0_1_0 1 2 2048 9472
+buffer moe_w1_1_0 1 2 32768 9472
+buffer moe_w2_1_0 1 2 65536 9472
+buffer moe_xg_1_0 1 2 122880 8192
+buffer moe_lg_1_0 1 2 114304 1024
+buffer moe_h_1_0 1 2 119808 3072
+buffer moe_lgo_1_0 1 2 112256 256
+buffer moe_hp_1_0 1 2 112512 768
+buffer moe_yo_1_0 1 2 113280 1024
+buffer moe_rtp_1_0 1 2 112128 64
+buffer moe_pick_1_0 1 2 115328 2048
+buffer moe_scratch_1_0 1 2 117376 2432
+buffer moe_w0_1_1 1 3 2048 9472
+buffer moe_w1_1_1 1 3 32768 9472
+buffer moe_w2_1_1 1 3 65536 9472
+buffer moe_xg_1_1 1 3 122880 8192
+buffer moe_lg_1_1 1 3 114304 1024
+buffer moe_h_1_1 1 3 119808 3072
+buffer moe_lgo_1_1 1 3 112256 256
+buffer moe_hp_1_1 1 3 112512 768
+buffer moe_yo_1_1 1 3 113280 1024
+buffer moe_rtp_1_1 1 3 112128 64
+buffer moe_pick_1_1 1 3 115328 2048
+buffer moe_scratch_1_1 1 3 117376 2432
+buffer moe_w0_1_2 1 4 2048 9472
+buffer moe_w1_1_2 1 4 32768 9472
+buffer moe_w2_1_2 1 4 65536 9472
+buffer moe_xg_1_2 1 4 122880 8192
+buffer moe_lg_1_2 1 4 114304 1024
+buffer moe_h_1_2 1 4 119808 3072
+buffer moe_lgo_1_2 1 4 112256 256
+buffer moe_hp_1_2 1 4 112512 768
+buffer moe_yo_1_2 1 4 113280 1024
+buffer moe_rtp_1_2 1 4 112128 64
+buffer moe_pick_1_2 1 4 115328 2048
+buffer moe_scratch_1_2 1 4 117376 2432
+buffer moe_w0_1_3 1 5 2048 9472
+buffer moe_w1_1_3 1 5 32768 9472
+buffer moe_w2_1_3 1 5 65536 9472
+buffer moe_xg_1_3 1 5 122880 8192
+buffer moe_lg_1_3 1 5 114304 1024
+buffer moe_h_1_3 1 5 119808 3072
+buffer moe_lgo_1_3 1 5 112256 256
+buffer moe_hp_1_3 1 5 112512 768
+buffer moe_yo_1_3 1 5 113280 1024
+buffer moe_rtp_1_3 1 5 112128 64
+buffer moe_pick_1_3 1 5 115328 2048
+buffer moe_scratch_1_3 1 5 117376 2432
+buffer moe_mt_w0_0_1 1 1 0 75776
+buffer moe_mt_w0_1_1 1 1 131072 75776
+buffer moe_mt_w0_2_1 1 1 262144 75776
+buffer moe_mt_w0_3_1 1 1 393216 75776
+buffer moe_mt_w1_0_1 1 1 524288 75776
+buffer moe_mt_w1_1_1 1 1 655360 75776
+buffer moe_mt_w1_2_1 1 1 786432 75776
+buffer moe_mt_w1_3_1 1 1 917504 75776
+buffer moe_mt_xg_1 1 1 1048576 8192
+buffer moe_mt_lg_1 1 1 1310720 1024
+buffer moe_mt_h_1 1 1 1179648 3072
+buffer moe_w0_2_0 2 2 2048 9472
+buffer moe_w1_2_0 2 2 32768 9472
+buffer moe_w2_2_0 2 2 65536 9472
+buffer moe_xg_2_0 2 2 122880 8192
+buffer moe_lg_2_0 2 2 114304 1024
+buffer moe_h_2_0 2 2 119808 3072
+buffer moe_lgo_2_0 2 2 112256 256
+buffer moe_hp_2_0 2 2 112512 768
+buffer moe_yo_2_0 2 2 113280 1024
+buffer moe_rtp_2_0 2 2 112128 64
+buffer moe_pick_2_0 2 2 115328 2048
+buffer moe_scratch_2_0 2 2 117376 2432
+buffer moe_w0_2_1 2 3 2048 9472
+buffer moe_w1_2_1 2 3 32768 9472
+buffer moe_w2_2_1 2 3 65536 9472
+buffer moe_xg_2_1 2 3 122880 8192
+buffer moe_lg_2_1 2 3 114304 1024
+buffer moe_h_2_1 2 3 119808 3072
+buffer moe_lgo_2_1 2 3 112256 256
+buffer moe_hp_2_1 2 3 112512 768
+buffer moe_yo_2_1 2 3 113280 1024
+buffer moe_rtp_2_1 2 3 112128 64
+buffer moe_pick_2_1 2 3 115328 2048
+buffer moe_scratch_2_1 2 3 117376 2432
+buffer moe_w0_2_2 2 4 2048 9472
+buffer moe_w1_2_2 2 4 32768 9472
+buffer moe_w2_2_2 2 4 65536 9472
+buffer moe_xg_2_2 2 4 122880 8192
+buffer moe_lg_2_2 2 4 114304 1024
+buffer moe_h_2_2 2 4 119808 3072
+buffer moe_lgo_2_2 2 4 112256 256
+buffer moe_hp_2_2 2 4 112512 768
+buffer moe_yo_2_2 2 4 113280 1024
+buffer moe_rtp_2_2 2 4 112128 64
+buffer moe_pick_2_2 2 4 115328 2048
+buffer moe_scratch_2_2 2 4 117376 2432
+buffer moe_w0_2_3 2 5 2048 9472
+buffer moe_w1_2_3 2 5 32768 9472
+buffer moe_w2_2_3 2 5 65536 9472
+buffer moe_xg_2_3 2 5 122880 8192
+buffer moe_lg_2_3 2 5 114304 1024
+buffer moe_h_2_3 2 5 119808 3072
+buffer moe_lgo_2_3 2 5 112256 256
+buffer moe_hp_2_3 2 5 112512 768
+buffer moe_yo_2_3 2 5 113280 1024
+buffer moe_rtp_2_3 2 5 112128 64
+buffer moe_pick_2_3 2 5 115328 2048
+buffer moe_scratch_2_3 2 5 117376 2432
+buffer moe_mt_w0_0_2 2 1 0 75776
+buffer moe_mt_w0_1_2 2 1 131072 75776
+buffer moe_mt_w0_2_2 2 1 262144 75776
+buffer moe_mt_w0_3_2 2 1 393216 75776
+buffer moe_mt_w1_0_2 2 1 524288 75776
+buffer moe_mt_w1_1_2 2 1 655360 75776
+buffer moe_mt_w1_2_2 2 1 786432 75776
+buffer moe_mt_w1_3_2 2 1 917504 75776
+buffer moe_mt_xg_2 2 1 1048576 8192
+buffer moe_mt_lg_2 2 1 1310720 1024
+buffer moe_mt_h_2 2 1 1179648 3072
+lock moe_w_prod_0_0 0 2 0 3
+lock moe_w_cons_0_0 0 2 1 0
+lock moe_in_0_0 0 2 2 0
+lock moe_out_0_0 0 2 3 0
+lock moe_base_0_0 0 2 4 0
+lock moe_addr_0_0 0 2 5 0
+lock moe_in_free_0_0 0 2 6 4
+lock moe_done_0_0 0 2 7 0
+lock moe_rows_0_0 0 2 8 0
+lock moe_w_prod_0_1 0 3 0 3
+lock moe_w_cons_0_1 0 3 1 0
+lock moe_in_0_1 0 3 2 0
+lock moe_out_0_1 0 3 3 0
+lock moe_base_0_1 0 3 4 0
+lock moe_addr_0_1 0 3 5 0
+lock moe_in_free_0_1 0 3 6 4
+lock moe_done_0_1 0 3 7 0
+lock moe_rows_0_1 0 3 8 0
+lock moe_w_prod_0_2 0 4 0 3
+lock moe_w_cons_0_2 0 4 1 0
+lock moe_in_0_2 0 4 2 0
+lock moe_out_0_2 0 4 3 0
+lock moe_base_0_2 0 4 4 0
+lock moe_addr_0_2 0 4 5 0
+lock moe_in_free_0_2 0 4 6 4
+lock moe_done_0_2 0 4 7 0
+lock moe_rows_0_2 0 4 8 0
+lock moe_w_prod_0_3 0 5 0 3
+lock moe_w_cons_0_3 0 5 1 0
+lock moe_in_0_3 0 5 2 0
+lock moe_out_0_3 0 5 3 0
+lock moe_base_0_3 0 5 4 0
+lock moe_addr_0_3 0 5 5 0
+lock moe_in_free_0_3 0 5 6 4
+lock moe_done_0_3 0 5 7 0
+lock moe_rows_0_3 0 5 8 0
+lock moe_mt_w_free0_0_0 0 1 8 1
+lock moe_mt_w_free0_1_0 0 1 10 1
+lock moe_mt_w_free0_2_0 0 1 12 1
+lock moe_mt_w_free0_3_0 0 1 14 1
+lock moe_mt_w_free1_0_0 0 1 16 1
+lock moe_mt_w_free1_1_0 0 1 18 1
+lock moe_mt_w_free1_2_0 0 1 20 1
+lock moe_mt_w_free1_3_0 0 1 22 1
+lock moe_mt_w_full0_0_0 0 1 9 0
+lock moe_mt_w_full0_1_0 0 1 11 0
+lock moe_mt_w_full0_2_0 0 1 13 0
+lock moe_mt_w_full0_3_0 0 1 15 0
+lock moe_mt_w_full1_0_0 0 1 17 0
+lock moe_mt_w_full1_1_0 0 1 19 0
+lock moe_mt_w_full1_2_0 0 1 21 0
+lock moe_mt_w_full1_3_0 0 1 23 0
+lock moe_mt_x_full_0 0 1 0 0
+lock moe_mt_g_full_0 0 1 1 0
+lock moe_mt_lg_full_0 0 1 2 0
+lock moe_mt_h_full0_0 0 1 3 0
+lock moe_mt_h_full1_0 0 1 4 0
+lock moe_mt_h_full2_0 0 1 5 0
+lock moe_mt_x_free_0 0 1 24 1
+lock moe_mt_g_free_0 0 1 25 1
+lock moe_mt_lg_free_0 0 1 26 4
+lock moe_mt_h_free0_0 0 1 27 4
+lock moe_mt_h_free1_0 0 1 28 4
+lock moe_mt_h_free2_0 0 1 29 4
+lock moe_mt_y_full 0 1 6 0
+lock moe_mt_y_free 0 1 30 4
+lock moe_w_prod_1_0 1 2 0 3
+lock moe_w_cons_1_0 1 2 1 0
+lock moe_in_1_0 1 2 2 0
+lock moe_out_1_0 1 2 3 0
+lock moe_base_1_0 1 2 4 0
+lock moe_addr_1_0 1 2 5 0
+lock moe_in_free_1_0 1 2 6 4
+lock moe_done_1_0 1 2 7 0
+lock moe_rows_1_0 1 2 8 0
+lock moe_w_prod_1_1 1 3 0 3
+lock moe_w_cons_1_1 1 3 1 0
+lock moe_in_1_1 1 3 2 0
+lock moe_out_1_1 1 3 3 0
+lock moe_base_1_1 1 3 4 0
+lock moe_addr_1_1 1 3 5 0
+lock moe_in_free_1_1 1 3 6 4
+lock moe_done_1_1 1 3 7 0
+lock moe_rows_1_1 1 3 8 0
+lock moe_w_prod_1_2 1 4 0 3
+lock moe_w_cons_1_2 1 4 1 0
+lock moe_in_1_2 1 4 2 0
+lock moe_out_1_2 1 4 3 0
+lock moe_base_1_2 1 4 4 0
+lock moe_addr_1_2 1 4 5 0
+lock moe_in_free_1_2 1 4 6 4
+lock moe_done_1_2 1 4 7 0
+lock moe_rows_1_2 1 4 8 0
+lock moe_w_prod_1_3 1 5 0 3
+lock moe_w_cons_1_3 1 5 1 0
+lock moe_in_1_3 1 5 2 0
+lock moe_out_1_3 1 5 3 0
+lock moe_base_1_3 1 5 4 0
+lock moe_addr_1_3 1 5 5 0
+lock moe_in_free_1_3 1 5 6 4
+lock moe_done_1_3 1 5 7 0
+lock moe_rows_1_3 1 5 8 0
+lock moe_mt_w_free0_0_1 1 1 8 1
+lock moe_mt_w_free0_1_1 1 1 10 1
+lock moe_mt_w_free0_2_1 1 1 12 1
+lock moe_mt_w_free0_3_1 1 1 14 1
+lock moe_mt_w_free1_0_1 1 1 16 1
+lock moe_mt_w_free1_1_1 1 1 18 1
+lock moe_mt_w_free1_2_1 1 1 20 1
+lock moe_mt_w_free1_3_1 1 1 22 1
+lock moe_mt_w_full0_0_1 1 1 9 0
+lock moe_mt_w_full0_1_1 1 1 11 0
+lock moe_mt_w_full0_2_1 1 1 13 0
+lock moe_mt_w_full0_3_1 1 1 15 0
+lock moe_mt_w_full1_0_1 1 1 17 0
+lock moe_mt_w_full1_1_1 1 1 19 0
+lock moe_mt_w_full1_2_1 1 1 21 0
+lock moe_mt_w_full1_3_1 1 1 23 0
+lock moe_mt_x_full_1 1 1 0 0
+lock moe_mt_g_full_1 1 1 1 0
+lock moe_mt_lg_full_1 1 1 2 0
+lock moe_mt_h_full0_1 1 1 3 0
+lock moe_mt_h_full1_1 1 1 4 0
+lock moe_mt_h_full2_1 1 1 5 0
+lock moe_mt_x_free_1 1 1 24 1
+lock moe_mt_g_free_1 1 1 25 1
+lock moe_mt_lg_free_1 1 1 26 4
+lock moe_mt_h_free0_1 1 1 27 4
+lock moe_mt_h_free1_1 1 1 28 4
+lock moe_mt_h_free2_1 1 1 29 4
+lock moe_w_prod_2_0 2 2 0 3
+lock moe_w_cons_2_0 2 2 1 0
+lock moe_in_2_0 2 2 2 0
+lock moe_out_2_0 2 2 3 0
+lock moe_base_2_0 2 2 4 0
+lock moe_addr_2_0 2 2 5 0
+lock moe_in_free_2_0 2 2 6 6
+lock moe_done_2_0 2 2 7 0
+lock moe_rows_2_0 2 2 8 0
+lock moe_w_prod_2_1 2 3 0 3
+lock moe_w_cons_2_1 2 3 1 0
+lock moe_in_2_1 2 3 2 0
+lock moe_out_2_1 2 3 3 0
+lock moe_base_2_1 2 3 4 0
+lock moe_addr_2_1 2 3 5 0
+lock moe_in_free_2_1 2 3 6 6
+lock moe_done_2_1 2 3 7 0
+lock moe_rows_2_1 2 3 8 0
+lock moe_w_prod_2_2 2 4 0 3
+lock moe_w_cons_2_2 2 4 1 0
+lock moe_in_2_2 2 4 2 0
+lock moe_out_2_2 2 4 3 0
+lock moe_base_2_2 2 4 4 0
+lock moe_addr_2_2 2 4 5 0
+lock moe_in_free_2_2 2 4 6 6
+lock moe_done_2_2 2 4 7 0
+lock moe_rows_2_2 2 4 8 0
+lock moe_w_prod_2_3 2 5 0 3
+lock moe_w_cons_2_3 2 5 1 0
+lock moe_in_2_3 2 5 2 0
+lock moe_out_2_3 2 5 3 0
+lock moe_base_2_3 2 5 4 0
+lock moe_addr_2_3 2 5 5 0
+lock moe_in_free_2_3 2 5 6 6
+lock moe_done_2_3 2 5 7 0
+lock moe_rows_2_3 2 5 8 0
+lock moe_mt_w_free0_0_2 2 1 8 1
+lock moe_mt_w_free0_1_2 2 1 10 1
+lock moe_mt_w_free0_2_2 2 1 12 1
+lock moe_mt_w_free0_3_2 2 1 14 1
+lock moe_mt_w_free1_0_2 2 1 16 1
+lock moe_mt_w_free1_1_2 2 1 18 1
+lock moe_mt_w_free1_2_2 2 1 20 1
+lock moe_mt_w_free1_3_2 2 1 22 1
+lock moe_mt_w_full0_0_2 2 1 9 0
+lock moe_mt_w_full0_1_2 2 1 11 0
+lock moe_mt_w_full0_2_2 2 1 13 0
+lock moe_mt_w_full0_3_2 2 1 15 0
+lock moe_mt_w_full1_0_2 2 1 17 0
+lock moe_mt_w_full1_1_2 2 1 19 0
+lock moe_mt_w_full1_2_2 2 1 21 0
+lock moe_mt_w_full1_3_2 2 1 23 0
+lock moe_mt_x_full_2 2 1 0 0
+lock moe_mt_g_full_2 2 1 1 0
+lock moe_mt_lg_full_2 2 1 2 0
+lock moe_mt_h_full0_2 2 1 3 0
+lock moe_mt_h_full1_2 2 1 4 0
+lock moe_mt_h_full2_2 2 1 5 0
+lock moe_mt_x_free_2 2 1 24 1
+lock moe_mt_g_free_2 2 1 25 1
+lock moe_mt_lg_free_2 2 1 26 4
+lock moe_mt_h_free0_2 2 1 27 4
+lock moe_mt_h_free1_2 2 1 28 4
+lock moe_mt_h_free2_2 2 1 29 4
+trace 0

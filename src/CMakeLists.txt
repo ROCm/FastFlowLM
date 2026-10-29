@@ -811,6 +811,11 @@ else()
         install(TARGETS gemma4e_npu LIBRARY DESTINATION "${FLM_ENGINE_LIB_DESTINATION}")
     endif()
     install(FILES ${_flm_prebuilt_libs} DESTINATION "${FLM_ENGINE_LIB_DESTINATION}")
+    # aie_next engines that load their array programs at run time keep them in
+    # lib/<runtime>/aie_next/images/<engine>/; they go beside the xclbins.
+    if(FLM_NPU_PLATFORM STREQUAL "aie_next" AND EXISTS "${FLM_NEXT_ENGINE_LIB_DIR}/images")
+        install(DIRECTORY "${FLM_NEXT_ENGINE_LIB_DIR}/images" DESTINATION "${FLM_SHARE_DESTINATION}")
+    endif()
     set_target_properties(flm PROPERTIES INSTALL_RPATH "${FLM_FLM_INSTALL_RPATH}")
 
     # Engine .so file names, used below to keep them out of the flm dependency

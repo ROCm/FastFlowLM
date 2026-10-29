@@ -77,6 +77,13 @@ if [[ "$DO_ENGINE" -eq 1 ]]; then
             install -m 0755 "$so" "$LIB_DEST/"
             log "  + lib/xrt/aie_next/$(basename "$so")"
         done
+        # the engines' array programs, loaded at run time (installed to share/flm/images)
+        if [[ -d "$dll/build/aie_next/lib/images" ]]; then
+            rm -rf "$LIB_DEST/images"
+            cp -r "$dll/build/aie_next/lib/images" "$LIB_DEST/images"
+            find "$LIB_DEST/images" -name .stamp -delete
+            log "  + lib/xrt/aie_next/images/"
+        fi
         # include/models/<m>/aie_next/*.hpp -> include/models/<m>/flm/aie_next/
         for hdr_dir in "$dll"/include/models/*/aie_next; do
             [[ -d "$hdr_dir" ]] || continue
