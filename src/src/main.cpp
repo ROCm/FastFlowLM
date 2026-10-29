@@ -919,6 +919,11 @@ int main(int argc, char* argv[]) {
                                 case ModelDownloader::ModelStatus::Incompatible: std::cout << " ⚠️"; break;
                             }
                         }
+                        if (!parsed_args.sub_process_mode) {
+                            if (const auto base = availble_models.get_base_model(model["name"].get<std::string>())) {
+                                std::cout << " (requires " << *base << ")";
+                            }
+                        }
                         std::cout << std::endl;
                         any_model_listed = true;
                     }

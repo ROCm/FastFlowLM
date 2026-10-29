@@ -60,10 +60,22 @@ public:
 
     void model_not_found(const std::string& model_tag);
 
+    // Tags that name this tag as their base_model and have files on disk
+    std::vector<std::string> installed_dependants(const std::string& model_tag);
+
 private:
     model_list& supported_models;
     download_utils::CurlInitializer curl_init;
     
+    // Readiness of the tag's own folder only (no base_model look-through)
+    ModelStatus own_model_status(const std::string& model_tag, bool sub_process_mode, bool fast_check);
+
+    // pull_model for the tag's own folder only (the base is pulled first by pull_model)
+    bool pull_own_model(const std::string& model_tag, bool use_modelscope, bool force_redownload);
+
+    // check_model for the tag's own folder only
+    bool check_own_model(const std::string& model_tag, bool use_modelscope, bool sub_process_mode);
+
     // Check if a specific file exists
     bool file_exists(const std::string& file_path);
     
@@ -83,4 +95,4 @@ private:
     // Verify per-file integrity against HuggingFace metadata and remove any
     // corrupted files. Returns true if all files passed verification.
     bool verify_and_clean_files(const std::string& model_tag, bool use_modelscope=0, bool sub_process_mode=0);
-}; 
+}; 
