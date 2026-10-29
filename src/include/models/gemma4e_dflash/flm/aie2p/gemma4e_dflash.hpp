@@ -154,6 +154,48 @@ public:
         Gemma4E_Audio_attention_softcap = ac.value("Gemma4E_Audio_attention_softcap", -1.0f);
     }
 
+    // existing causal_lm speculation hooks (greedy convenience path: draft + verify + argmax accept + commit)
+    bool supports_speculation() const override;
+    std::vector<int> speculate(int last_token, int max_draft) override;
+    uint64_t last_speculation_prime_us() const override;
+
+    // ---- DFlash speculative decoding -----------------------------------------------------------------
+    // Everything below is NON-virtual on purpose (the vtable must stay identical to gemma4e_npu's, see causal_lm.hpp).
+    // The wrapper reaches these through dynamic_cast<gemma4e_dflash*>.
+    //
+    // One speculative cycle is split in three calls so the wrapper can run its own sampler on the verify rows
+    // (sample-and-compare, D11):   dflash_draft -> dflash_verify -> (wrapper accepts k drafts) -> dflash_commit(k+1)
+
+    /// \brief load the draft package (draft_dir/config.json + its draft_weight file); false = speculation stays off
+    bool load_draft(const std::string& draft_dir);
+    /// \brief true when the draft is loaded and FLM_DFLASH != 0 and no decline condition holds right now
+    bool draft_ready() const;
+    /// \brief token ids that end a generation (a verify batch is cut one past the first one inside the accepted prefix)
+    void set_stop_tokens(const std::vector<int>& ids);
+
+    /// \brief draft up to 7 tokens after `last_token` (the sampled token that has no KV row yet, at position = current context length)
+    /// \param drafts out: capacity >= 7
+    /// \return number of drafts, 0 = decline (state untouched)
+    int dflash_draft(int last_token, int* drafts);
+    /// \brief run [last_token, drafts[0..n)] through the target at positions ctx..ctx+n; K/V rows are written, taps captured
+    /// \return pointer to (n+1) rows of `vocab_size()` bf16 logits (softcapped); row i = logits after row i's token. Valid until the next call
+    const bf16* dflash_verify(int last_token, const int* drafts, int n_drafts);
+    /// \brief keep the first n_keep verify rows (n_keep = accepted drafts + 1, >= 1): context length += n_keep, rejected rows are
+    ///        invalidated (SWA ring slots restored), the draft context is advanced with the taps of the kept rows
+    void dflash_commit(int n_keep);
+    /// \brief vocabulary size of the logits rows returned by dflash_verify
+    int vocab_size() const;
+    /// \brief fp32-free access to the last verify rows for logprobs (same pointer rules as dflash_verify)
+    const bf16* last_speculation_logits(int& rows, int& vocab) const;
+
+    // statistics (per session; reset_speculation_stats() is called by the wrapper's clear_context)
+    double mean_accepted_length() const;     ///< tokens committed per cycle
+    double draft_hit_rate() const;           ///< accepted drafts / drafted
+    int    speculation_cycles() const;
+    std::string speculation_stats() const;   ///< one line
+    std::string speculation_timing() const;  ///< phase block (draft, verify, lm_head, accept, prime)
+    void   reset_speculation_stats();
+
 private:
     struct Impl;
     Impl* _impl;
