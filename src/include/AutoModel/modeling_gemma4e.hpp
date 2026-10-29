@@ -278,6 +278,15 @@ protected:
     gemma4e_engine_config_t engine_config() const override;
     const flm_state_api* engine_state_api() const override;
 
+    /// \brief the speculative decode loop (sample-and-compare, D11); falls back to the plain loop step by step
+    std::string _speculative_generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled);
+
 public:
     Gemma4e_DFlash(flm_rt::device* npu_device_inst) : Gemma4e(npu_device_inst) {}
+
+    void load_model(std::string model_path, json model_info, int default_context_length = -1, bool enable_preemption = false, const std::string& backend = "") override;
+    std::string generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled = [] { return false; }) override;
+    std::string generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os = std::cout) override;
+    void clear_context() override;
+    std::string show_profile() override;
 };
