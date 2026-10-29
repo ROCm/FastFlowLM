@@ -150,8 +150,7 @@ bool Hunyuan::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
             // rewind to the pinned system turn instead of clearing: _shared_insert
             // then prefix-matches against the history and prefills only the tail.
             // The token history has to move back with the cache or that match fails.
-            hunyuan_npu* engine = dynamic_cast<hunyuan_npu*>(this->lm_engine);
-            this->total_tokens = engine->restore();
+            this->total_tokens = this->lm_engine->restore();
             this->token_history = this->system_his;
             this->checkpoint_his = this->system_his;
             // the turns are independent translations, so nothing carries over
@@ -223,8 +222,7 @@ int Hunyuan::_pin_system_prefix(const std::string& system_text) {
     // prompt is prefix-matched against
     this->system_his = this->token_history;
     this->checkpoint_his = this->token_history;
-    hunyuan_npu* engine = dynamic_cast<hunyuan_npu*>(this->lm_engine);
-    engine->checkpoint();
+    this->lm_engine->checkpoint();
     this->system_tokens = static_cast<int>(shared);
 
     // the system turn costs nothing per turn from here on, so it should not sit

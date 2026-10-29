@@ -126,7 +126,8 @@ class Case:
 class Context:
     def __init__(self, *, flm_bin: str, label: str, tier: str, plan: Plan,
                  out_dir: Path, request_timeout: float, port: int | None = None,
-                 verbose: bool = False):
+                 verbose: bool = False,
+                 model_extensions: list[str] | None = None):
         self.flm_bin = flm_bin
         self.label = label
         self.tier = tier
@@ -136,6 +137,7 @@ class Context:
         self.request_timeout = request_timeout
         self.port = port
         self.verbose = verbose
+        self.model_extensions = list(model_extensions or [])
         self.results: list[Result] = []
         self.servers: list[FlmServer] = []
         self.version = "unknown"
@@ -147,7 +149,11 @@ class Context:
     def server(self, name: str, args: list[str] | None = None, **kwargs) -> FlmServer:
         """A server for one suite, not yet started; use it as a context manager."""
         kwargs.setdefault("port", self.port)
-        server = FlmServer(self.flm_bin, name=name, log_dir=self.out_dir, args=args,
+        server_args = list(args or [])
+        for manifest in self.model_extensions:
+            server_args += ["--model-extension", manifest]
+        server = FlmServer(self.flm_bin, name=name, log_dir=self.out_dir,
+                           args=server_args,
                            request_timeout=self.request_timeout, **kwargs)
         self.servers.append(server)
         return server

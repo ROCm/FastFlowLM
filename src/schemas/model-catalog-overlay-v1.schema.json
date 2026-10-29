@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ROCm/FastFlowLM/schemas/model-catalog-overlay-v1.schema.json",
+  "title": "FastFlowLM model catalog overlay v1",
+  "description": "Adds model tags without replacing entries in FastFlowLM's built-in catalog.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "models"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "models": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "minProperties": 1,
+        "additionalProperties": {
+          "$ref": "#/$defs/modelEntry"
+        }
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "modelEntry": {
+      "type": "object",
+      "required": [
+        "name",
+        "backend",
+        "backend_provider",
+        "default_context_length",
+        "max_prefill_len",
+        "details"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "backend": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "backend_provider": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "frontend_provider": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "default_context_length": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_prefill_len": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "supported_platforms": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "aie2p",
+              "dev04"
+            ]
+          }
+        },
+        "details": {
+          "type": "object",
+          "required": [
+            "family"
+          ],
+          "properties": {
+            "family": {
+              "$ref": "#/$defs/nonEmptyString"
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "vlm": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "vlm"
+                ]
+              },
+              {
+                "properties": {
+                  "asr": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "asr"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "frontend_provider"
+            ]
+          }
+        }
+      ],
+      "additionalProperties": true
+    }
+  }
+}

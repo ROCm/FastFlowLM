@@ -8,6 +8,8 @@
 #pragma once
 #include "AutoModel/automodel.hpp"
 #include "metrices.hpp"
+#include "models/gemma4e/gemma4e_payload.hpp"
+#include "models/gemma4e/flm/aie2p/gemma4e_npu.hpp"
 
 
 #include "typedef.hpp"

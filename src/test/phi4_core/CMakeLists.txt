@@ -140,10 +140,12 @@ target_include_directories(test_model_downloader PRIVATE
 target_compile_definitions(test_model_downloader PRIVATE
     FLM_SOURCE_DIR="${FLM_SOURCE_DIR}"
     CMAKE_INSTALL_PREFIX="${FLM_SOURCE_DIR}/build"
-    CMAKE_XCLBIN_PREFIX="${FLM_SOURCE_DIR}/xclbins"
+    # Compatibility checks inspect model metadata only. A deliberately absent
+    # asset prefix keeps this hardware-free test honest about that boundary.
+    CMAKE_XCLBIN_PREFIX="${CMAKE_CURRENT_BINARY_DIR}/missing-assets"
     __FLM_VERSION__="1.0.3"
     __NPU_VERSION__="0.0.0.0"
-    DEV_BUILD=1 __WINDOWS__ USEAVX2=1 DISABLE_ABI_CHECK=1 _ENABLE_EXTENDED_ALIGNED_STORAGE
+    __WINDOWS__ USEAVX2=1 DISABLE_ABI_CHECK=1 _ENABLE_EXTENDED_ALIGNED_STORAGE
     WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(test_model_downloader PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>:/wd4005 /wd4244>)

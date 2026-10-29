@@ -14,7 +14,10 @@ add_executable(test_model_list_platform
 target_include_directories(test_model_list_platform PRIVATE
     "${FLM_SOURCE_DIR}/include")
 target_compile_definitions(test_model_list_platform PRIVATE
-    FLM_TEST_MODEL_LIST_PATH="${FLM_SOURCE_DIR}/model_list.json")
+    FLM_TEST_MODEL_LIST_PATH="${FLM_SOURCE_DIR}/model_list.json"
+    FLM_TEST_VALID_CATALOG_OVERLAY="${CMAKE_CURRENT_LIST_DIR}/fixtures/valid-model-catalog-overlay-v1.json"
+    FLM_TEST_INVALID_CATALOG_OVERLAY="${CMAKE_CURRENT_LIST_DIR}/fixtures/invalid-model-catalog-overlay-v1.json"
+    FLM_TEST_CATALOG_OVERLAY_SCHEMA="${FLM_SOURCE_DIR}/schemas/model-catalog-overlay-v1.schema.json")
 
 enable_testing()
 add_test(NAME test_model_list_platform COMMAND test_model_list_platform)

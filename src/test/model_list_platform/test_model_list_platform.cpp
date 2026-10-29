@@ -29,10 +29,13 @@ const std::set<std::string> kAllPlatforms = {
 /// \param platform the generation the device reports
 /// \param backends the kernel flows this build is to be taken as linking
 model_list open_catalog(const std::string& platform,
-                        std::vector<std::string> backends) {
+                        std::vector<std::string> backends,
+                        model_list::backend_provider_inventory_t providers = {}) {
     std::string path = kCatalogPath;
     std::string exe_dir = ".";
-    return model_list(path, exe_dir, platform, std::move(backends));
+    return model_list(
+        path, exe_dir, platform, std::move(backends), {}, {},
+        std::move(providers));
 }
 
 /// \brief the catalog as a stock build on shipping silicon reads it
@@ -233,6 +236,259 @@ void test_missing_key_means_every_generation() {
     std::filesystem::remove(path);
 }
 
+void test_extension_catalogs_merge_without_overrides() {
+    const auto base = write_catalog(
+        "flm_extension_base_catalog.json",
+        {{"model_path", "models"},
+         {"models",
+          {{"base",
+            {{"1b",
+              {{"name", "Base"},
+               {"details", {{"family", "base-frontend"}}}}}}}}}});
+    std::string base_path = base.string();
+    std::string exe_dir = ".";
+    model_list models(
+        base_path, exe_dir, "aie2p", {"flm"},
+        {flm::catalog::load_model_catalog_overlay(
+            FLM_TEST_VALID_CATALOG_OVERLAY)},
+        {"base-frontend", "demo-frontend"},
+        {{"base-frontend", {{"flm", {"builtin"}}}},
+         {"demo-frontend", {{"flm", {"demo-provider"}}}}});
+    TEST_REQUIRE(models.is_model_supported("base:1b"));
+    TEST_REQUIRE(models.is_model_supported("extension-demo:1b"));
+    TEST_REQUIRE(
+        models.get_model_info("extension-demo:1b")
+            .second.at("details").at("family") == "demo-frontend");
+    TEST_REQUIRE(
+        models.get_model_info("extension-demo:1b")
+            .second.at("backend_provider") == "demo-provider");
+
+    const auto duplicate = write_catalog(
+        "flm_extension_duplicate_catalog.json",
+        {{"schema_version", 1},
+         {"models",
+          {{"base",
+            {{"1b",
+              {{"name", "Replacement"},
+               {"backend", "flm"},
+               {"backend_provider", "builtin"},
+               {"default_context_length", 4096},
+               {"max_prefill_len", 512},
+               {"details", {{"family", "base-frontend"}}}}}}}}}});
+    RequireContains(
+        RequireThrows([&] {
+            model_list duplicate_models(
+                base_path, exe_dir, "aie2p", {"flm"},
+                {flm::catalog::load_model_catalog_overlay(
+                    duplicate.string())},
+                {"base-frontend"},
+                {{"base-frontend", {{"flm", {"builtin"}}}}});
+        }),
+        "duplicates model tag 'base:1b'");
+
+    const auto redirect = write_catalog(
+        "flm_extension_redirect_alias_catalog.json",
+        {{"schema_version", 1},
+         {"models",
+          {{"base",
+            {{"0b",
+              {{"name", "Alias redirect"},
+               {"backend", "flm"},
+               {"backend_provider", "builtin"},
+               {"default_context_length", 4096},
+               {"max_prefill_len", 512},
+               {"details", {{"family", "base-frontend"}}}}}}}}}});
+    RequireContains(
+        RequireThrows([&] {
+            model_list redirect_models(
+                base_path, exe_dir, "aie2p", {"flm"},
+                {flm::catalog::load_model_catalog_overlay(
+                    redirect.string())},
+                {"base-frontend"},
+                {{"base-frontend", {{"flm", {"builtin"}}}}});
+        }),
+        "changes existing bare model tag 'base' from 'base:1b' to 'base:0b'");
+
+    const auto later_size = write_catalog(
+        "flm_extension_later_size_catalog.json",
+        {{"schema_version", 1},
+         {"models",
+          {{"base",
+            {{"2b",
+              {{"name", "Additional size"},
+               {"backend", "flm"},
+               {"backend_provider", "builtin"},
+               {"default_context_length", 4096},
+               {"max_prefill_len", 512},
+               {"details", {{"family", "base-frontend"}}}}}}}}}});
+    model_list extended_models(
+        base_path, exe_dir, "aie2p", {"flm"},
+        {flm::catalog::load_model_catalog_overlay(
+            later_size.string())},
+        {"base-frontend"},
+        {{"base-frontend", {{"flm", {"builtin"}}}}});
+    TEST_REQUIRE(extended_models.is_model_supported("base:2b"));
+    TEST_REQUIRE(extended_models.rectify_model_tag("base") == "base:1b");
+
+    const auto unknown = write_catalog(
+        "flm_extension_unknown_catalog.json",
+        {{"schema_version", 1},
+         {"models",
+          {{"unknown",
+            {{"1b",
+              {{"name", "Unknown"},
+               {"backend", "flm"},
+               {"backend_provider", "builtin"},
+               {"default_context_length", 4096},
+               {"max_prefill_len", 512},
+               {"details", {{"family", "missing-frontend"}}}}}}}}}});
+    RequireContains(
+        RequireThrows([&] {
+            model_list unknown_models(
+                base_path, exe_dir, "aie2p", {"flm"},
+                {flm::catalog::load_model_catalog_overlay(
+                    unknown.string())},
+                {"base-frontend"});
+        }),
+        "unregistered frontend family 'missing-frontend'");
+
+    const auto unknown_provider = write_catalog(
+        "flm_extension_unknown_provider_catalog.json",
+        {{"schema_version", 1},
+         {"models",
+          {{"provider-test",
+            {{"1b",
+              {{"name", "Unknown provider"},
+               {"backend", "flm"},
+               {"backend_provider", "missing-provider"},
+               {"default_context_length", 4096},
+               {"max_prefill_len", 512},
+               {"details", {{"family", "base-frontend"}}}}}}}}}});
+    RequireContains(
+        RequireThrows([&] {
+            model_list unknown_provider_models(
+                base_path, exe_dir, "aie2p", {"flm"},
+                {flm::catalog::load_model_catalog_overlay(
+                    unknown_provider.string())},
+                {"base-frontend"},
+                {{"base-frontend", {{"flm", {"builtin"}}}}});
+        }),
+        "base-frontend/flm/missing-provider");
+
+    RequireContains(
+        RequireThrows([&] {
+            model_list invalid_schema_models(
+                base_path, exe_dir, "aie2p", {"flm"},
+                {flm::catalog::load_model_catalog_overlay(
+                    FLM_TEST_INVALID_CATALOG_OVERLAY)},
+                {"base-frontend"});
+        }),
+        "must use schema_version 1");
+
+    const auto schema = read_json(FLM_TEST_CATALOG_OVERLAY_SCHEMA);
+    TEST_REQUIRE(
+        schema.at("$id") ==
+        "https://github.com/ROCm/FastFlowLM/schemas/"
+        "model-catalog-overlay-v1.schema.json");
+    TEST_REQUIRE(schema.at("properties")
+                     .at("schema_version")
+                     .at("const") == 1);
+    TEST_REQUIRE(schema.at("type") == "object");
+    TEST_REQUIRE(schema.at("additionalProperties") == false);
+    TEST_REQUIRE(
+        schema.at("required") ==
+        nlohmann::json::array({"schema_version", "models"}));
+    const auto& model_entry = schema.at("$defs").at("modelEntry");
+    TEST_REQUIRE(
+        model_entry.at("required") ==
+        nlohmann::json::array(
+            {"name", "backend", "backend_provider",
+             "default_context_length", "max_prefill_len", "details"}));
+    TEST_REQUIRE(
+        model_entry.at("properties")
+            .at("details")
+            .at("required") ==
+        nlohmann::json::array({"family"}));
+
+    std::filesystem::remove(base);
+    std::filesystem::remove(duplicate);
+    std::filesystem::remove(redirect);
+    std::filesystem::remove(later_size);
+    std::filesystem::remove(unknown);
+    std::filesystem::remove(unknown_provider);
+}
+
+void test_extension_overlay_requires_explicit_backend_provider() {
+    const auto base = write_catalog(
+        "flm_direct_builtin_model_list.json",
+        {{"model_path", "models"},
+         {"models",
+          {{"base-model",
+            {{"1b",
+              {{"name", "Base model"},
+               {"details", {{"family", "base-frontend"}}}}}}}}}});
+    const auto overlay = write_catalog(
+        "flm_direct_builtin_overlay.json",
+        {{"schema_version", 1},
+         {"models",
+          {{"direct-model",
+            {{"1b",
+              {{"name", "Direct built-in model"},
+               {"details", {{"family", "direct-frontend"}}}}}}}}}});
+    std::string catalog_path = base.string();
+    std::string exe_dir = ".";
+    RequireContains(
+        RequireThrows([&] {
+            model_list models(
+                catalog_path, exe_dir, "aie2p", {"flm"},
+                {flm::catalog::load_model_catalog_overlay(
+                    overlay.string())},
+                {"base-frontend", "direct-frontend"},
+                {{"base-frontend", {{"flm", {"builtin"}}}}});
+        }),
+        "backend_provider");
+    std::filesystem::remove(base);
+    std::filesystem::remove(overlay);
+}
+
+void test_multimodal_overlay_requires_frontend_provider() {
+    const auto overlay = write_catalog(
+        "flm_multimodal_overlay_without_frontend.json",
+        {{"schema_version", 1},
+         {"models",
+          {{"multimodal-model",
+            {{"1b",
+              {{"name", "Multimodal model"},
+               {"backend", "flm"},
+               {"backend_provider", "external"},
+               {"default_context_length", 4096},
+               {"max_prefill_len", 512},
+               {"vlm", true},
+               {"details", {{"family", "multimodal"}}}}}}}}}});
+    RequireContains(
+        RequireThrows([&] {
+            (void)flm::catalog::load_model_catalog_overlay(
+                overlay.string());
+        }),
+        "frontend_provider");
+    std::filesystem::remove(overlay);
+}
+
+void test_provider_inventory_preserves_all_implicit_builtin_models() {
+    const model_list::backend_provider_inventory_t incomplete_inventory = {
+        {"phi4", {{"flm", {"builtin"}}}}};
+
+    for (const auto& [platform, backends] :
+         std::vector<std::pair<std::string, std::vector<std::string>>>{
+             {"aie2p", {"flm"}},
+             {"dev04", {"flm", "core"}}}) {
+        const auto baseline = open_catalog(platform, backends);
+        const auto with_inventory =
+            open_catalog(platform, backends, incomplete_inventory);
+        TEST_REQUIRE(with_inventory.all_tags == baseline.all_tags);
+    }
+}
+
 void test_platform_helpers() {
     TEST_REQUIRE(utils::parse_platform("aie2p") == utils::npu_platform::aie2p);
     TEST_REQUIRE(utils::parse_platform("dev04") == utils::npu_platform::dev04);
@@ -248,7 +504,8 @@ void test_platform_helpers() {
     TEST_REQUIRE(utils::platform_from_corelib_arch("AIE2P") == utils::npu_platform::aie2p);
     TEST_REQUIRE(utils::platform_from_corelib_arch("") == utils::npu_platform::aie2p);
 
-    // Built without corelib, as this test is, nothing can name a dev04.
+    // This hardware-free target does not define FLM_ENABLE_CORE, so the
+    // compile-time stand-in is the shipping aie2p generation.
     TEST_REQUIRE(utils::get_device() == utils::default_npu_platform());
     TEST_REQUIRE(utils::get_device() == utils::get_device());
 }
@@ -332,6 +589,14 @@ int main() {
             "an entry is pruned by the silicon it names");
     RunTest(test_missing_key_means_every_generation,
             "missing key means every generation");
+    RunTest(test_extension_catalogs_merge_without_overrides,
+            "extension catalogs merge without overrides");
+    RunTest(test_extension_overlay_requires_explicit_backend_provider,
+            "extension overlay requires explicit backend provider");
+    RunTest(test_multimodal_overlay_requires_frontend_provider,
+            "multimodal overlay requires frontend provider");
+    RunTest(test_provider_inventory_preserves_all_implicit_builtin_models,
+            "provider inventory preserves all implicit built-in models");
     RunTest(test_platform_helpers, "platform helpers");
     RunTest(test_shipped_catalog_is_well_formed,
             "shipped catalog is well formed");

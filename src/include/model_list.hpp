@@ -5,6 +5,8 @@
 /// \version 0.9.24
 /// \note This class is used to manage the model list.
 #pragma once
+#include "AutoModel/backend_contract.hpp"
+#include "AutoModel/model_catalog_overlay.hpp"
 #include "nlohmann/json.hpp"
 #include <algorithm>
 #include <iostream>
@@ -25,6 +27,9 @@
 /// \note This class is used to manage the model list.
 class model_list {
     public:
+        using backend_provider_inventory_t =
+            flm::backend::BackendProviderInventory;
+
         std::unordered_set<std::string> all_tags;
         /// \brief constructor
         model_list(){}
@@ -39,6 +44,10 @@ class model_list {
         ///        not run on this silicon
         /// \param backends the kernel flows this build links, as backend ids;
         ///        an entry whose flow is not among them is pruned too
+        /// \param overlays extension catalog files merged without replacing
+        ///        built-in tags
+        /// \param frontends registered generation frontend families; overlay
+        ///        entries must name one of them
         /// \note Two independent axes. The generation says what the silicon can
         ///       run; the backend list says which kernels were linked in. Which
         ///       flow runs an entry is not a third thing to look up: a tag is
@@ -49,16 +58,24 @@ class model_list {
         ///       entries, with their own artifacts and their own silicon.
         model_list(std::string& list_path, std::string& exe_dir,
                    std::string platform = "aie2p",
-                   std::vector<std::string> backends = {"flm"}){
+                   std::vector<std::string> backends = {
+                       flm::backend::kFlmBackendId},
+                   std::vector<flm::catalog::ModelCatalogOverlay> overlays = {},
+                   std::vector<std::string> frontends = {},
+                   backend_provider_inventory_t backend_providers = {}){
             this->list_path = list_path;
             this->platform_ = std::move(platform);
             this->backends_ = std::move(backends);
+            this->backend_providers_ = std::move(backend_providers);
             std::ifstream config_file(list_path);
             if (!config_file.is_open()) {
                 std::cerr << "Failed to open config file: " << list_path << std::endl;
                 exit(1);
             }
             this->config = nlohmann::json::parse(config_file);
+            for (const auto& overlay : overlays) {
+                this->merge_catalog_overlay(overlay, frontends);
+            }
             // Resolve model_root_path relative to executable directory
             std::string relative_model_path = this->config["model_path"];
             std::filesystem::path root_path = std::filesystem::path(exe_dir) / relative_model_path;
@@ -73,14 +90,7 @@ class model_list {
             // is a real entry; drop the ones that are not before indexing.
             this->validate_base_models();
 
-            // Populate all_tags set
-            for (const auto& [model_type, sizes] : this->config["models"].items()) {
-                // insert default tag without size
-                all_tags.insert(model_type);
-                for (const auto& [size, model_info] : sizes.items()) {
-                    all_tags.insert(model_type + ":" + size);
-                }
-            }
+            this->rebuild_tags();
 
             // An empty catalog is a real state, not a crash: it is what an
             // install looks like when every entry names other silicon or other
@@ -364,6 +374,39 @@ class model_list {
         ///       lets this class be unit tested without an XRT toolchain. The
         ///       key name mirrors flm::backend::kBackendKey.
         std::vector<std::string> backends_;
+        /// \brief providers available for each family/backend contract
+        backend_provider_inventory_t backend_providers_;
+
+        void merge_catalog_overlay(
+            const flm::catalog::ModelCatalogOverlay& overlay,
+            const std::vector<std::string>& frontends) {
+            const auto reserved_tags = flm::catalog::model_catalog_tags(
+                this->config, this->list_path);
+            flm::catalog::validate_model_catalog_overlay(
+                overlay, frontends, this->backend_providers_,
+                reserved_tags);
+            auto merged = this->config;
+            auto& models = merged["models"];
+            for (const auto& [model_type, sizes] :
+                 overlay.document["models"].items()) {
+                for (const auto& [size, entry] : sizes.items()) {
+                    models[model_type][size] = entry;
+                }
+            }
+            this->config = std::move(merged);
+        }
+
+        void rebuild_tags() {
+            this->all_tags.clear();
+            for (const auto& [model_type, sizes] :
+                 this->config["models"].items()) {
+                this->all_tags.insert(model_type);
+                for (const auto& [size, model_info] : sizes.items()) {
+                    (void)model_info;
+                    this->all_tags.insert(model_type + ":" + size);
+                }
+            }
+        }
 
         /// \brief the backend ids, rendered for an error message
         std::string backend_summary() const {
@@ -472,22 +515,13 @@ class model_list {
             return entry;
         }
 
-        /// \brief the kernel flow that runs a tag, read off the tag itself
+        /// \brief legacy backend inference for entries without an explicit key
         /// \param model_type the family part of the tag, e.g. "phi4-mini-it-core"
         /// \return "core" for a family ending in "-core", "flm" otherwise
-        /// \note The name is the mechanism, not a label on top of one. A
-        ///       corelib model is packaged differently from its FastFlowLM
-        ///       namesake -- different weights, different quantization -- so it
-        ///       is a different model to pull and a different tag to ask for,
-        ///       and there is nothing left for a catalog key to disambiguate.
+        /// \note Extension overlays require explicit backend and provider keys.
+        ///       This fallback preserves compatibility with the shipped catalog.
         static std::string backend_for_family(const std::string& model_type) {
-            static const std::string suffix = "-core";
-            if (model_type.size() > suffix.size() &&
-                model_type.compare(model_type.size() - suffix.size(),
-                                   suffix.size(), suffix) == 0) {
-                return "core";
-            }
-            return "flm";
+            return flm::catalog::backend_for_model_type(model_type);
         }
 
         /// \brief whether an entry claims support for this machine's silicon
@@ -525,30 +559,57 @@ class model_list {
             return false;
         }
 
-        /// \brief drop entries this build cannot run and settle their backend
-        /// \note After this runs the config has exactly the shape it had before
-        ///       any of this existed, plus one key: "backend", the flow that
-        ///       will run the entry. It is written here rather than read from
-        ///       the file because the tag is what decides it, and the tag is
-        ///       not part of the entry -- by the time AutoModel sees the entry,
-        ///       the name it came from is gone. The generation, by contrast, is
-        ///       settled once the entry is kept, so its key is erased.
+        bool build_has_provider(
+            const std::string& family, const std::string& backend,
+            const std::string& provider) const {
+            const auto family_entry = this->backend_providers_.find(family);
+            if (family_entry == this->backend_providers_.end()) return false;
+            const auto backend_entry =
+                family_entry->second.find(backend);
+            if (backend_entry == family_entry->second.end()) return false;
+            return std::find(
+                       backend_entry->second.begin(),
+                       backend_entry->second.end(), provider) !=
+                   backend_entry->second.end();
+        }
+
+        /// \brief Drop entries this build cannot run and materialize their
+        ///        exact backend/provider selection.
+        /// \note Shipped entries may use the legacy tag-based backend fallback;
+        ///       extension overlays name both values explicitly. Platform
+        ///       metadata is erased after filtering because execution no longer
+        ///       needs it.
         void apply_support_filter() {
             std::vector<std::string> empty_families;
 
             for (auto& [model_type, model_subset] : this->config["models"].items()) {
                 std::vector<std::string> unsupported_sizes;
-                const std::string backend = backend_for_family(model_type);
 
                 for (auto& [size, model_info] : model_subset.items()) {
                     const std::string tag = model_type + ":" + size;
+                    const std::string backend = model_info.value(
+                        flm::backend::kBackendKey,
+                        backend_for_family(model_type));
+                    const std::string provider = model_info.value(
+                        flm::backend::kBackendProviderKey,
+                        std::string(flm::backend::kBuiltinProviderId));
+                    const bool selects_provider =
+                        model_info.contains(
+                            flm::backend::kBackendProviderKey);
                     if (!entry_supports(model_info, tag) ||
-                        !this->build_has(backend)) {
+                        (selects_provider &&
+                                 !this->backend_providers_.empty()
+                             ? !this->build_has_provider(
+                                   model_info["details"]["family"]
+                                       .get<std::string>(),
+                                   backend, provider)
+                             : !this->build_has(backend))) {
                         unsupported_sizes.push_back(size);
                         continue;
                     }
                     model_info.erase("supported_platforms");
-                    model_info["backend"] = backend;
+                    model_info[flm::backend::kBackendKey] = backend;
+                    model_info[flm::backend::kBackendProviderKey] = provider;
                 }
 
                 for (const auto& size : unsupported_sizes) model_subset.erase(size);

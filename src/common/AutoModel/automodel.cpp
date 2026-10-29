@@ -7,6 +7,7 @@
 
 #include "AutoModel/automodel.hpp"
 #include "chat/chat_continue.hpp"
+#include "npu_utils/npu_utils.hpp"
 #include "utils/npu_platform.hpp"
 
 #include <filesystem>
@@ -242,12 +243,13 @@ bool AutoModel::_shared_is_same_model(const std::string& model_path, const json&
 }
 
 void AutoModel::_shared_initialize_model_state(
-    std::string model_path, json model_info, int context_length) {
+    std::string model_path, json model_info, int context_length,
+    const std::string& asset_root) {
     this->model_path = std::move(model_path);
     this->draft_model_path = model_info.value("draft_model_path", std::string());
     header_print("FLM", "Loading model: " << this->model_path);
     this->lm_config = std::make_unique<LM_Config>();
-    this->lm_config->from_pretrained(this->model_path);
+    this->lm_config->from_pretrained(this->model_path, asset_root);
     if (!this->draft_model_path.empty()) {
         // The draft package's own config rides along in the config the engine reads;
         // the xclbins are looked up under the tag's own folder name (D16).
@@ -273,7 +275,9 @@ void AutoModel::_shared_load_backend(std::string model_path, json model_info,
                                      int default_context_length,
                                      bool enable_preemption,
                                      const std::string& requested_backend,
-                                     const nlohmann::json* tokenizer_config) {
+                                     const nlohmann::json* tokenizer_config,
+                                     bool initialize_host_frontend,
+                                     const std::string& frontend_provider) {
     if (!model_info.contains("details") ||
         !model_info["details"].contains("family")) {
         throw std::runtime_error("Model entry has no details.family");
@@ -285,21 +289,30 @@ void AutoModel::_shared_load_backend(std::string model_path, json model_info,
     // The entry carries the kernel flow its artifacts were built for -- the
     // weights differ between flows, so this belongs to the model rather than
     // to the build. model_list wrote it there from the tag the entry was
-    // found under; --backend and FLM_BACKEND still win over it.
+    // found under. --backend and FLM_BACKEND remain explicit demands, but a
+    // different contract is rejected until the package declares it compatible.
     const std::string catalog_backend = model_info.value(
         flm::backend::kBackendKey, std::string(flm::backend::kFlmBackendId));
-    const std::string id = flm::backend::resolve_backend_id(
-        family, catalog_backend, requested_backend, &source);
+    const std::string catalog_provider = model_info.value(
+        flm::backend::kBackendProviderKey,
+        std::string(flm::backend::kBuiltinProviderId));
+    const auto selection = flm::backend::resolve_backend_selection(
+        family, catalog_backend, catalog_provider, requested_backend, &source);
+    const std::string& id = selection.backend;
+    const std::string& provider = selection.provider;
 
     // Same model on the same backend is a no-op; a different backend is a real
     // reload even when the path has not changed.
     if (this->is_model_loaded && this->_shared_is_same_model(model_path, model_info) &&
-        this->backend_ && this->backend_->id() == id) {
+        this->backend_ && this->backend_->id() == id &&
+        this->backend_provider_ == provider) {
         header_print("FLM", "Model already loaded: " << this->model_path);
         return;
     }
 
-    const auto traits = registry.traits(family, id);
+    const auto traits = registry.traits(family, id, provider);
+    const std::string asset_root =
+        registry.asset_root(family, id, provider);
     if (enable_preemption && !traits.supports_preemption) {
         throw std::invalid_argument(
             "Backend '" + id + "' does not support preemption");
@@ -317,22 +330,38 @@ void AutoModel::_shared_load_backend(std::string model_path, json model_info,
     // Tear the old model down before building the new one: the engines hold
     // device memory, and a half-loaded model must never look loaded.
     this->backend_.reset();
+    this->backend_provider_.clear();
     this->lm_engine = nullptr;
     this->is_model_loaded = false;
 
     try {
-        this->_shared_initialize_model_state(
-            std::move(model_path), model_info, context_length);
+        if (initialize_host_frontend) {
+            this->_shared_initialize_model_state(
+                std::move(model_path), model_info, context_length,
+                asset_root);
+        } else {
+            this->model_path = std::move(model_path);
+            header_print("FLM", "Loading model: " << this->model_path);
+            this->MAX_L = context_length;
+            this->is_model_loaded = true;
+            this->token_history.clear();
+            this->token_history.reserve(this->MAX_L);
+            this->last_token = -1;
+            this->total_tokens = 0;
+            this->tokenizer.reset();
+            this->lm_config.reset();
+        }
         if (traits.needs_npu_xclbin) {
             this->_shared_initialize_legacy_npu(enable_preemption);
         } else {
             this->npu.reset();
-            this->enable_preemption = false;
+            this->enable_preemption = enable_preemption;
         }
 
         flm::backend::BackendContext context;
         context.model_path = this->model_path;
         context.model_info = model_info;
+        context.frontend_provider = frontend_provider;
         context.config = this->lm_config.get();
         context.npu = this->npu.get();
         context.device = this->npu_device_inst;
@@ -340,10 +369,18 @@ void AutoModel::_shared_load_backend(std::string model_path, json model_info,
         context.enable_preemption = this->enable_preemption;
         context.tokenizer_config = tokenizer_config;
 
-        this->backend_ = registry.create(family, id, context);
+        this->backend_ = registry.create(family, id, provider, context);
+        if (initialize_host_frontend && !this->backend_->supports_state()) {
+            throw std::runtime_error(
+                "Backend provider '" + provider + "' for '" + family + "/" +
+                id + "' cannot drive the built-in frontend because it does "
+                "not implement the STATE capability");
+        }
+        this->backend_provider_ = provider;
         this->lm_engine = &this->backend_->engine();
     } catch (...) {
         this->backend_.reset();
+        this->backend_provider_.clear();
         this->lm_engine = nullptr;
         this->tokenizer.reset();
         this->sampler.reset();
@@ -720,7 +757,20 @@ std::string AutoModel::token_text(int token) {
     }
 }
 
+std::vector<int> AutoModel::encode_text(const std::string& text) {
+    return tokenizer->encode(text);
+}
+
+std::string AutoModel::tokenizer_json_path() const {
+    return (std::filesystem::path(model_path) / "tokenizer.json").string();
+}
+
 int AutoModel::_sample(buffer<bf16>& logits, chat_meta_info_t& meta_info) {
+    if (!this->sampler ||
+        logits.size() < static_cast<std::size_t>(this->sampler->in_features)) {
+        throw std::runtime_error(
+            "Backend returned fewer logits than the frontend vocabulary");
+    }
     decode_constraint* constraint = meta_info.constraint.get();
     const bool masked = constraint != nullptr && constraint->fill_mask(this->constraint_mask_);
     sample_logprobs_t raw;
@@ -804,14 +854,14 @@ std::shared_ptr<decode_constraint> AutoModel::make_constraint(const chat_constra
     chat_vocab vocab;
     vocab.size = static_cast<size_t>(this->sampler->in_features);
     vocab.encode = [this](const std::string& text) {
-        std::vector<int> ids = this->tokenizer->encode(text);
+        std::vector<int> ids = this->encode_text(text);
         if (this->has_bos_token && !ids.empty() && ids.front() == this->bos_token_id) {
             ids.erase(ids.begin());
         }
         return ids;
     };
     vocab.stop_tokens = this->eos_token_ids;
-    vocab.tokenizer_json = (std::filesystem::path(this->model_path) / "tokenizer.json").string();
+    vocab.tokenizer_json = this->tokenizer_json_path();
 
     auto engine = [this, &vocab]() -> chat_grammar_engine& {
         if (!this->grammar_engine_ || this->grammar_engine_path_ != vocab.tokenizer_json) {
@@ -857,7 +907,7 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
     // the sample insert() took is the reply's first token, and counts toward the limit
     meta_info.generated_tokens++;
     if (this->is_normal_token(last_sampled_token) && last_sampled_token != -1){
-        std::string token_str = this->tokenizer->run_time_decoder(last_sampled_token);
+        std::string token_str = this->token_text(last_sampled_token);
         result += token_str;
         os << token_str << std::flush;
 
@@ -904,7 +954,7 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
 
         this->profiler_list[TKOEN_DECODE_TIME].start();
         if (this->is_normal_token(sampled_token)){ // filter out special tokens
-            std::string token_str = this->tokenizer->run_time_decoder(sampled_token);
+            std::string token_str = this->token_text(sampled_token);
             os << token_str << std::flush;
             result += token_str;
         }
@@ -1125,9 +1175,10 @@ void AutoModel::set_topk(int topk) {
         header_print("WARNING", "Top-k must be greater than 0");
         return;
     }
-    if (topk > this->lm_config->get("vocab_size")) {
-        header_print("WARNING", "Top-k is greater than vocab size, set to vocab size: " << this->lm_config->get("vocab_size"));
-        topk = this->lm_config->get("vocab_size");
+    const int vocab_size = this->sampler->in_features;
+    if (topk > vocab_size) {
+        header_print("WARNING", "Top-k is greater than vocab size, set to vocab size: " << vocab_size);
+        topk = vocab_size;
     }
     
     this->sampler->top_k = topk;

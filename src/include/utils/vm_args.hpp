@@ -99,6 +99,10 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
              "Set context length")
             ("backend", po::value<std::string>(&parsed_args.backend)->default_value(""),
              "Execution backend to run the model on (default: the model's own). Overrides FLM_BACKEND")
+            ("model-extension",
+             po::value<std::vector<std::string>>(
+                 &parsed_args.model_extensions)->composing(),
+             "Load a model-extension manifest (repeatable)")
             ("prefill-chunk-len,pcl", po::value<int>(&parsed_args.prefill_chunk_len)->default_value(-1),
              "Set prefill chunk length")
             ("prefix-cache-mb", po::value<int>(&parsed_args.prefix_cache_mb)->default_value(-1),

@@ -48,6 +48,22 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 # ———————————————————————————————————————————————
 option(FLM_USE_HRX "Use the HRX amdxdna NPU runtime instead of XRT (0=XRT default, 1=HRX)" OFF)
 option(FLM_PORTABLE_BUILD "Build portable distribution with bundled runtime libraries" OFF)
+
+# Export the stable C model-extension header and runtime selection. Other
+# source-tree headers are internal even though this build-tree include path can
+# physically reach them.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/FastFlowLMModelExtension.cmake")
+flm_add_model_extension_interface(flm_model_extension)
+add_library(FastFlowLM::ModelExtension ALIAS flm_model_extension)
+export(TARGETS flm_model_extension
+    NAMESPACE FastFlowLM::
+    FILE "${CMAKE_CURRENT_BINARY_DIR}/FastFlowLMModelExtensionTargets.cmake")
+if(FLM_USE_HRX)
+    set(FLM_MODEL_EXTENSION_NPU_RUNTIME "hrx")
+else()
+    set(FLM_MODEL_EXTENSION_NPU_RUNTIME "xrt")
+endif()
+
 # Where the kernels come from. FastFlowLM's own flow and ryzenai-corelib share
 # no engine, so a build links one or the other; this option is not an extra.
 # It also fixes the NPU generation the build targets -- see utils/npu_platform.hpp.
@@ -392,6 +408,7 @@ target_include_directories(flm PUBLIC
     ${CMAKE_SOURCE_DIR}/server
     ${CMAKE_SOURCE_DIR}/pull
 )
+target_link_libraries(flm PRIVATE FastFlowLM::ModelExtension)
 
 # XRT backend: add the XRT headers (HRX carries its own via the hrx::hrx target).
 if(NOT FLM_USE_HRX)
@@ -1022,6 +1039,32 @@ endif()
 
 install(FILES model_list.json DESTINATION "${FLM_SHARE_DESTINATION}")
 install(FILES model_info.json DESTINATION "${FLM_SHARE_DESTINATION}")
+install(DIRECTORY schemas/
+    DESTINATION "${FLM_SHARE_DESTINATION}/schemas"
+    COMPONENT ModelExtension)
+set(FLM_MODEL_EXTENSION_CMAKE_DESTINATION
+    "${CMAKE_INSTALL_LIBDIR}/cmake/FastFlowLMModelExtension")
+include(CMakePackageConfigHelpers)
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/FastFlowLMModelExtensionConfig.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/FastFlowLMModelExtensionConfig.cmake"
+    INSTALL_DESTINATION "${FLM_MODEL_EXTENSION_CMAKE_DESTINATION}"
+    PATH_VARS FLM_SHARE_DESTINATION)
+install(TARGETS flm_model_extension
+    EXPORT FastFlowLMModelExtensionTargets
+    COMPONENT ModelExtension)
+install(EXPORT FastFlowLMModelExtensionTargets
+    NAMESPACE FastFlowLM::
+    DESTINATION "${FLM_MODEL_EXTENSION_CMAKE_DESTINATION}"
+    COMPONENT ModelExtension)
+install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/FastFlowLMModelExtensionConfig.cmake"
+    DESTINATION "${FLM_MODEL_EXTENSION_CMAKE_DESTINATION}"
+    COMPONENT ModelExtension)
+install(FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/AutoModel/model_extension.h"
+    DESTINATION "include/AutoModel"
+    COMPONENT ModelExtension)
 
 # Ship both licenses with the binaries; LICENSE_BINARY.txt must accompany any
 # redistribution of the NPU kernels and engine libraries. THIRD_PARTY_NOTICES.txt

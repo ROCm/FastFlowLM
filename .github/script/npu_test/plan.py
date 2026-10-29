@@ -134,13 +134,17 @@ class Model:
         return "translation" in self.labels or self.id.startswith("translategemma")
 
 
-def load_catalog(flm_bin: str) -> dict[str, Model]:
+def load_catalog(flm_bin: str,
+                 model_extensions: list[str] | None = None) -> dict[str, Model]:
     """The catalog as `flm list --json --filter all` reports it on this machine.
 
     That is the only listing that carries the vlm/asr flags and families, and it
     already leaves out models this NPU cannot run.
     """
-    proc = subprocess.run([flm_bin, "list", "--json", "--filter", "all"],
+    command = [flm_bin, "list", "--json", "--filter", "all"]
+    for manifest in model_extensions or []:
+        command += ["--model-extension", manifest]
+    proc = subprocess.run(command,
                           capture_output=True, text=True, timeout=300, check=True)
     start = proc.stdout.find("{")  # tolerate banner lines before the JSON
     if start < 0:

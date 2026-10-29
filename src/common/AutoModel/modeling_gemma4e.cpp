@@ -8,6 +8,8 @@
 
 #include "AutoModel/modeling_gemma4e.hpp"
 #include "metrices.hpp"
+#include "models/gemma4e/flm/aie2p/gemma4e_npu.hpp"
+#include "models/gemma4e_flash/flm/aie2p/gemma4e_flash.hpp"
 
 /************              Gemma4e family            **************/
 Gemma4e::Gemma4e(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "Gemma4e") {}

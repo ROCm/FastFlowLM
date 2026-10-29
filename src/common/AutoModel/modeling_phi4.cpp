@@ -4,6 +4,7 @@
 ///       poisoning, the no-preemption rule, the package-verified stop ids, the
 ///       separate decode loop -- now lives behind flm::backend::ModelBackend.
 #include "AutoModel/modeling_phi4.hpp"
+#include "models/phi4/flm/aie2p/phi4_npu.hpp"
 #include "utils/file_access.hpp"
 
 #include <filesystem>

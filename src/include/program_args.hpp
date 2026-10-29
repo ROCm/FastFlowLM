@@ -8,6 +8,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 struct program_args_t {
     // common commands
@@ -21,6 +22,7 @@ struct program_args_t {
     bool json_output = false;
     int ctx_length = -1; // let model decide
     std::string backend = ""; // let the catalog decide; see AutoModel/model_backend.hpp
+    std::vector<std::string> model_extensions; // explicit manifests, in load order
     int prefill_chunk_len = -1; // let model decide
     int prefix_cache_mb = -1;   // host memory (MiB) for saved prompt snapshots; -1 = the model's default
     int prefix_slots = -1;      // how many prompt snapshots to keep; -1 = the model's default, 0 = off

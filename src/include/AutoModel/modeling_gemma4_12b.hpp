@@ -12,6 +12,7 @@
 #pragma once
 #include "AutoModel/automodel.hpp"
 #include "metrices.hpp"
+#include "models/gemma4_12b/flm/aie2p/gemma4_12b_npu.hpp"
 #include "typedef.hpp"
 #include <filesystem>
 #include <fstream>

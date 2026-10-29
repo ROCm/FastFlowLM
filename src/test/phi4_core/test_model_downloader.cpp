@@ -296,6 +296,11 @@ void TestLegacyReadyCheckDoesNotHashOrDeleteWeights() {
     Write(model_path / "config.json", R"({"model_type":"legacy"})");
     TEST_REQUIRE(downloader.is_model_downloaded("legacy-model:1b", true, true) ==
                  ModelDownloader::ModelStatus::Outdated);
+
+    Write(model_path / "config.json",
+          R"({"model_type":"legacy","flm_version":null})");
+    TEST_REQUIRE(downloader.is_model_downloaded("legacy-model:1b", true, true) ==
+                 ModelDownloader::ModelStatus::Outdated);
 }
 
 void TestPullAndCheckRejectModelscopeBeforePinnedReadyStateChecks() {
