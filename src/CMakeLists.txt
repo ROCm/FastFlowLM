@@ -714,7 +714,7 @@ if(WIN32)
     target_link_libraries(flm PRIVATE
         ntdll wsock32 ws2_32 Bcrypt
         iphlpapi userenv psapi
-        crypt32 secur32 advapi32 normaliz wldap32
+        crypt32 secur32 advapi32 normaliz wldap32 shell32
     )
 else()
     target_link_libraries(flm PRIVATE Threads::Threads)

@@ -29,15 +29,20 @@ def send(header, payload=b""):
 
 def main():
     while True:
-        command = receive()
+        try:
+            command = receive()
+        except EOFError:
+            return
         name = command["command"]
         if name == "load_model":
-            assert command["model"] in {"embedding_gemma2", "llama"}
+            assert command["model"] in {"dies", "embedding_gemma2", "llama"}
             if command["model"] == "llama":
                 assert command["context_length"] == 32
             else:
                 assert "context_length" not in command
             send({"ok": True})
+            if command["model"] == "dies":
+                return
         elif name == "reset":
             send({"ok": True})
         elif name == "logits":

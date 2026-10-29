@@ -3,16 +3,13 @@
 
 #include "iron/worker.hpp"
 
-#if !defined(_WIN32)
-#include <sys/socket.h>
-#include <sys/wait.h>
-#include <unistd.h>
-#endif
+#define BOOST_PROCESS_USE_STD_FS
+#include <boost/process.hpp>
 
-#include <array>
-#include <cerrno>
+#if !defined(_WIN32)
+#include <csignal>
+#endif
 #include <cstdlib>
-#include <cstring>
 #include <stdexcept>
 
 namespace flm::iron {
@@ -22,7 +19,12 @@ constexpr std::uint32_t kMaxHeader = 1 << 20;
 
 std::string PythonExecutable() {
     const char* value = std::getenv("FLM_IRON_PYTHON");
-    return value && *value ? value : "python3";
+    if (value && *value) return value;
+#if defined(_WIN32)
+    return "python";
+#else
+    return "python3";
+#endif
 }
 
 std::string WorkerModule() {
@@ -30,32 +32,48 @@ std::string WorkerModule() {
     return value && *value ? value : "iron.lm_server";
 }
 
+std::filesystem::path ResolveExecutable(const std::string& executable) {
+    const std::filesystem::path path(executable);
+    return path.has_parent_path() ? path : boost::process::search_path(path);
+}
+
+void IgnoreBrokenPipeSignal() {
+#if !defined(_WIN32)
+    static const bool ignored = std::signal(SIGPIPE, SIG_IGN) != SIG_ERR;
+    if (!ignored) throw std::runtime_error("Cannot ignore SIGPIPE");
+#endif
+}
+
 }  // namespace
+
+struct Worker::Impl {
+    boost::process::opstream input;
+    boost::process::ipstream output;
+    boost::process::child process;
+
+    Impl(const std::string& python, const std::string& module)
+        : process(ResolveExecutable(python),
+                  boost::process::args({"-m", module}),
+                  boost::process::std_in < input,
+                  boost::process::std_out > output) {}
+
+    void close_pipes() noexcept {
+        try { input.pipe().close(); } catch (...) {}
+        try { output.pipe().close(); } catch (...) {}
+    }
+
+    void stop() noexcept {
+        close_pipes();
+        std::error_code error;
+        if (process.running(error)) process.terminate(error);
+        process.wait(error);
+    }
+};
 
 Worker::Worker(const std::filesystem::path& model_path, std::string model,
                std::uint32_t context_length) {
-#if defined(_WIN32)
-    throw std::runtime_error("The IRON backend requires POSIX process support");
-#else
-    int sockets[2];
-    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) != 0) {
-        throw std::runtime_error("Cannot create the IRON worker socket");
-    }
-    process_ = fork();
-    if (process_ < 0) throw std::runtime_error("Cannot start the IRON worker");
-    if (process_ == 0) {
-        dup2(sockets[1], STDIN_FILENO);
-        dup2(sockets[1], STDOUT_FILENO);
-        close(sockets[0]);
-        close(sockets[1]);
-        const std::string python = PythonExecutable();
-        const std::string module = WorkerModule();
-        execlp(python.c_str(), python.c_str(), "-m", module.c_str(),
-               static_cast<char*>(nullptr));
-        _exit(127);
-    }
-    close(sockets[1]);
-    input_ = output_ = sockets[0];
+    IgnoreBrokenPipeSignal();
+    impl_ = std::make_unique<Impl>(PythonExecutable(), WorkerModule());
     try {
         nlohmann::json command = {{"command", "load_model"},
                                   {"model", std::move(model)},
@@ -63,46 +81,33 @@ Worker::Worker(const std::filesystem::path& model_path, std::string model,
         if (context_length) command["context_length"] = context_length;
         request(command);
     } catch (...) {
-        close(input_);
-        waitpid(process_, nullptr, 0);
-        input_ = output_ = process_ = -1;
+        impl_->stop();
         throw;
     }
-#endif
 }
 
 Worker::~Worker() {
-#if !defined(_WIN32)
-    if (input_ >= 0) {
-        try { request({{"command", "close"}}); } catch (...) {}
-        close(input_);
+    if (impl_) {
+        try {
+            request({{"command", "close"}});
+        } catch (...) {
+            impl_->stop();
+            return;
+        }
+        impl_->close_pipes();
+        std::error_code error;
+        impl_->process.wait(error);
     }
-    if (process_ > 0) waitpid(process_, nullptr, 0);
-#endif
 }
 
 void Worker::write_all(const void* data, std::size_t size) {
-#if !defined(_WIN32)
-    const auto* cursor = static_cast<const std::uint8_t*>(data);
-    while (size) {
-        const ssize_t written = send(input_, cursor, size, MSG_NOSIGNAL);
-        if (written <= 0) throw std::runtime_error("IRON worker write failed");
-        cursor += written;
-        size -= static_cast<std::size_t>(written);
-    }
-#endif
+    impl_->input.write(static_cast<const char*>(data), size);
+    if (!impl_->input) throw std::runtime_error("IRON worker write failed");
 }
 
 void Worker::read_all(void* data, std::size_t size) {
-#if !defined(_WIN32)
-    auto* cursor = static_cast<std::uint8_t*>(data);
-    while (size) {
-        const ssize_t received = read(output_, cursor, size);
-        if (received <= 0) throw std::runtime_error("IRON worker exited");
-        cursor += received;
-        size -= static_cast<std::size_t>(received);
-    }
-#endif
+    impl_->output.read(static_cast<char*>(data), size);
+    if (!impl_->output) throw std::runtime_error("IRON worker exited");
 }
 
 nlohmann::json Worker::request(const nlohmann::json& command,
@@ -114,6 +119,8 @@ nlohmann::json Worker::request(const nlohmann::json& command,
         write_all(&header_size, sizeof(header_size));
         write_all(header.data(), header.size());
         if (payload_size) write_all(payload, payload_size);
+        impl_->input.flush();
+        if (!impl_->input) throw std::runtime_error("IRON worker write failed");
 
         std::uint32_t response_size = 0;
         read_all(&response_size, sizeof(response_size));

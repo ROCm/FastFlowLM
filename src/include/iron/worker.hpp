@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -33,9 +34,8 @@ private:
     void write_all(const void* data, std::size_t size);
     void read_all(void* data, std::size_t size);
 
-    int input_ = -1;
-    int output_ = -1;
-    int process_ = -1;
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
     bool poisoned_ = false;
 };
 
