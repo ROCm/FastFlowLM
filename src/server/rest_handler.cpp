@@ -629,7 +629,7 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag,
             engine->configure_parameter("img_pre_resize", this->img_pre_resize);
             engine->set_prefix_limits(this->prefix_cache_mb, this->prefix_slots, this->prefix_min_gain);
             const auto load_started = std::chrono::steady_clock::now();
-            engine->load_model(supported_models.get_model_path(new_ensure_tag), model_info, ctx_length, preemption, requested_backend);
+            engine->load_model(supported_models.get_load_path(new_ensure_tag), model_info, ctx_length, preemption, requested_backend);
             report_load_time(load_started);
 
             // Per model, not per process: the flash models take 1024-token
