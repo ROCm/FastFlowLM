@@ -166,22 +166,12 @@ If `flm validate` passes but `flm run` fails with `No such device with index '0'
 
 ### Building from Source
 
-1. Install the build dependencies and select a Rust toolchain:
-   ```sh
-   sudo apt install ninja libedit-dev libxrt-dev uuid-dev libdrm-dev rustup
-   rustup default stable
-   ```
-
-   FastFlowLM builds its tokenizer with Rust. If `cargo` exists but reports
-   that no default toolchain is configured, `rustup default stable` repairs the
-   installation.
-
-2. Clone the repository:
+1. Clone the repository:
    ```sh
    git clone https://github.com/ROCm/FastFlowLM.git
    cd FastFlowLM
    ```
-3. Build:
+2. Build:
    ```sh
    cd src
    cmake --preset linux-default
