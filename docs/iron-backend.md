@@ -24,6 +24,18 @@ export PYTHONPATH=/scratch/roesti/IRON:${PYTHONPATH:-}
 `FLM_IRON_PYTHON` must name an environment with IRON installed. `PYTHONPATH` is
 needed only when that environment uses an IRON source checkout.
 
+For a user install, activate the IRON environment and let the installer record
+its Python executable:
+
+```bash
+source /path/to/iron/.venv/bin/activate
+./src/home_install.sh --iron
+source ~/flm_exe/flm_env.sh
+```
+
+The generated environment script configures FastFlowLM, XRT, and the IRON
+worker. An editable IRON installation also removes the need for `PYTHONPATH`.
+
 ## Llama 3.2 1B
 
 Accept the license for `meta-llama/Llama-3.2-1B`, then provide a Hugging Face

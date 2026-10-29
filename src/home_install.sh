@@ -9,6 +9,7 @@
 #   ./home_install.sh                # build (if needed) + install to ~/flm_exe
 #   ./home_install.sh --no-build     # install an existing build/ tree only
 #   ./home_install.sh --core          # ryzenai-corelib backend, to scratch
+#   ./home_install.sh --iron          # IRON backend, using the active Python
 #   FLM_PREFIX=/path ./home_install.sh
 #
 # --core installs to /scratch/$USER/flm_exe_core rather than ~/flm_exe: a core
@@ -74,16 +75,28 @@ detect_xrt_root() {
 
 DO_BUILD=1
 WANT_CORE=0
+WANT_IRON=0
 for arg in "$@"; do
     case "$arg" in
         --no-build) DO_BUILD=0 ;;
         --core) WANT_CORE=1 ;;
+        --iron) WANT_IRON=1 ;;
         -h|--help)
             grep '^#' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
             exit 0 ;;
         *) echo "Unknown argument: $arg" >&2; exit 1 ;;
     esac
 done
+
+IRON_PYTHON=""
+if [[ "$WANT_IRON" -eq 1 ]]; then
+    IRON_PYTHON="$(command -v python3 || true)"
+    if [[ -z "$IRON_PYTHON" ]] || ! "$IRON_PYTHON" -c 'import iron.lm_server' >/dev/null 2>&1; then
+        echo "[home_install] ERROR: --iron requires a Python environment that can import iron.lm_server." >&2
+        echo "               Activate the IRON environment before running this installer." >&2
+        exit 1
+    fi
+fi
 
 if [[ "$WANT_CORE" -eq 1 && -z "$PRESET_FROM_ENV" ]]; then
     PRESET="linux-core-on"
@@ -139,6 +152,12 @@ needs_configure() {
         local wanted=OFF
         [[ "$WANT_CORE" -eq 1 ]] && wanted=ON
         [[ "$cached" == "$wanted" ]] || return 0
+
+        cached=OFF
+        grep -q '^FLM_ENABLE_IRON:BOOL=ON' "$BUILD_DIR/CMakeCache.txt" && cached=ON
+        wanted=OFF
+        [[ "$WANT_IRON" -eq 1 ]] && wanted=ON
+        [[ "$cached" == "$wanted" ]] || return 0
     fi
     return 1
 }
@@ -150,6 +169,7 @@ if [[ "$DO_BUILD" -eq 1 ]]; then
         if [[ -n "${RYZENAI_CORELIB_ROOT:-}" ]]; then
             configure_args+=(-DRYZENAI_CORELIB_ROOT="$RYZENAI_CORELIB_ROOT")
         fi
+        [[ "$WANT_IRON" -eq 1 ]] && configure_args+=(-DFLM_ENABLE_IRON=ON)
         # --fresh discards whatever a previous failed or differently-configured
         # run left behind. Without it CMake reloads those entries and the
         # reconfigure inherits the state it is meant to replace.
@@ -181,6 +201,14 @@ fi
 
 if [[ ! -d "$BUILD_DIR" ]]; then
     echo "[home_install] ERROR: build dir '$BUILD_DIR' does not exist. Run without --no-build first." >&2
+    exit 1
+fi
+
+if [[ "$WANT_IRON" -eq 1 ]] &&
+   ! grep -q '^FLM_ENABLE_IRON:BOOL=ON' "$BUILD_DIR/CMakeCache.txt"; then
+    echo "[home_install] ERROR: --iron, but $BUILD_DIR was not configured with" >&2
+    echo "               FLM_ENABLE_IRON=ON. Drop --no-build, or point BUILD_DIR at" >&2
+    echo "               an IRON-enabled build tree." >&2
     exit 1
 fi
 
@@ -345,6 +373,10 @@ fi
 
 ENV_SCRIPT="$FLM_PREFIX/flm_env.sh"
 echo "[home_install] writing env script: $ENV_SCRIPT"
+IRON_ENV_BLOCK=""
+if [[ "$WANT_IRON" -eq 1 ]]; then
+    IRON_ENV_BLOCK="export FLM_IRON_PYTHON=\"$IRON_PYTHON\""
+fi
 cat > "$ENV_SCRIPT" <<EOF
 #!/usr/bin/env bash
 # flm_env.sh — initialize the environment for the relocated FastFlowLM install.
@@ -364,7 +396,7 @@ $XRT_ENV_BLOCK
 
 # 3. Put flm on PATH.
 export PATH="\$FLM_PREFIX/bin:\$PATH"
-export FLM_MODEL_PATH="/scratch/alfxu"
+$IRON_ENV_BLOCK
 
 echo "[flm_env] FastFlowLM environment ready (prefix: \$FLM_PREFIX)"
 EOF
