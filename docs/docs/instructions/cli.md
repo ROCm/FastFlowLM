@@ -268,6 +268,8 @@ flm serve phi4-mini-it-core:4b --backend core
 
 A per-request `"backend"` overrides `--backend` for that request, and reloads the model if it differs from the one already loaded — exactly as asking for a different model does.
 
+A model that comes from a `--model-extension` catalog always runs on the backend its entry names. `--backend`, `FLM_BACKEND` and the request field can only repeat that backend, not switch it.
+
 Asking for a backend this build does not ship fails at load with a message listing what is actually available. There is no silent fallback to another engine or to the CPU. Note that a release is built for one NPU generation: on hardware it was not built for, `run`, `serve` and `bench` refuse up front, and `flm validate` still reports what it found.
 
 > A build carries the engines for one generation only, so there is no flag that moves it to the other catalog entry — that is a different build of FLM.

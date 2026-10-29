@@ -10,6 +10,7 @@
 #include "server.hpp"
 #include "model_list.hpp"
 #include "AutoModel/model_backend.hpp"
+#include "AutoModel/model_frontend.hpp"
 #include "model_downloader.hpp"
 #include "update.hpp"
 #include "utils/utils.hpp"
@@ -614,15 +615,38 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+#ifdef FLM_ENABLE_CORE
+    // Declared before the extension guard so extension objects are destroyed
+    // before their underlying runtime is shut down.
+    CoreProcessGuard core_guard;
+#endif
+    auto& frontend_registry = flm::frontend::FrontendRegistry::instance();
+    struct ExtensionUnloadGuard {
+        flm::frontend::FrontendRegistry& registry;
+        ~ExtensionUnloadGuard() { registry.unload_extensions(); }
+    } extension_unload_guard{frontend_registry};
+
+    if (!parsed_args.model_extensions.empty()) {
+        try {
+            const auto reserved_model_tags =
+                flm::catalog::load_model_catalog_tags(config_path);
+            for (const auto& manifest : parsed_args.model_extensions) {
+                frontend_registry.load_extension(
+                    manifest, reserved_model_tags);
+            }
+        } catch (const std::exception& error) {
+            header_print("ERROR", "Failed to load model extension: "
+                                      << error.what());
+            return 1;
+        }
+    }
+
     // Get the models directory from environment variable or default
     std::string models_dir = utils::get_models_directory();
 
     // One NPU runtime for the whole process, brought up before the catalog so
     // the catalog can be filtered to what this NPU generation can actually run.
 #ifdef FLM_ENABLE_CORE
-    // Declared before anything that can return so the destructor covers the
-    // early exits and the catch-all below.
-    CoreProcessGuard core_guard;
     // Before this process takes the device, as in the build without corelib:
     // validate probes /dev/accel/* itself, and amdxdna refuses a second open.
     if (parsed_args.command == "validate") {
@@ -677,9 +701,11 @@ int main(int argc, char* argv[]) {
     // that were linked in, and a tag names its own flow.
     const utils::npu_platform platform = utils::get_device();
 
+    auto& backend_registry = flm::backend::BackendRegistry::instance();
     model_list availble_models(
         config_path, models_dir, std::string(utils::platform_id(platform)),
-        flm::backend::BackendRegistry::instance().backend_ids());
+        backend_registry.backend_ids(), frontend_registry.catalog_overlays(),
+        frontend_registry.available(), backend_registry.provider_inventory());
 
     const bool print_status = !parsed_args.json_output && !parsed_args.sub_process_mode;
     const bool needs_npu =

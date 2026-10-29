@@ -19,6 +19,7 @@
 #include "image/image_reader.hpp"
 #include "image_process_utils/imageproc.hpp"
 #include "image_process_utils/imageprocAVX512.hpp"
+#include "models/minicpm_ocr/flm/aie2p/minicpm_ocr_npu.hpp"
 
 #include <iostream>
 

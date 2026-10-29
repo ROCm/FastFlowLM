@@ -232,14 +232,25 @@ ModelDownloader::ModelStatus ModelDownloader::own_model_status(const std::string
 /// \return true if the model is compatible, false otherwise
 ModelDownloader::ModelStatus ModelDownloader::check_model_compatibility(const std::string& model_tag, bool sub_process_mode) {
     auto [new_model_tag, model_info] = supported_models.get_model_info(model_tag);
-    LM_Config config;
-    config.from_pretrained(this->supported_models.get_model_path(new_model_tag));
     std::string flm_min_version = model_info["flm_min_version"];
     // The pinned Microsoft frontend config is upstream-native and intentionally
     // has no FLM version. Its catalog contract supplies the compatibility floor.
-    std::string flm_version = uses_pinned_upstream_integrity(model_info)
-        ? flm_min_version
-        : config.flm_version;
+    std::string flm_version = flm_min_version;
+    if (!uses_pinned_upstream_integrity(model_info)) {
+        const auto config_path = std::filesystem::path(
+            this->supported_models.get_model_path(new_model_tag)) /
+            "config.json";
+        std::ifstream config_file(config_path);
+        if (!config_file.is_open()) {
+            throw std::runtime_error(
+                "Failed to open model config: " + config_path.string());
+        }
+        const auto config = nlohmann::json::parse(config_file);
+        const auto version = config.find("flm_version");
+        flm_version = version == config.end() || version->is_null()
+            ? std::string("0.0.0")
+            : version->get<std::string>();
+    }
     int l_l, m_l, r_l; //left, middle, right on local version
     int l_r, m_r, r_r; //left, middle, right on requried version
     int l_f, m_f, r_f; //left, middle, right on flm version
