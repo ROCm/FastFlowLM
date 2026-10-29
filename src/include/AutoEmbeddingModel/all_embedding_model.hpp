@@ -11,7 +11,7 @@
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
 #include "modeling_gemma_embedding.hpp"
 #if defined(FLM_ENABLE_IRON)
-#include "modeling_iron_embedding.hpp"
+#include "iron/embedding.hpp"
 #endif
 #endif
 
@@ -38,7 +38,9 @@ inline std::pair<std::string, std::unique_ptr<AutoEmbeddingModel>> get_auto_embe
     if (new_model_tag == "embeddinggemma-2:740m") {
 #if defined(FLM_ENABLE_IRON)
         if (backend.empty() || backend == flm::backend::kIronBackendId)
-            auto_embedding_engine = std::make_unique<IronEmbedding>(npu_device_inst);
+            auto_embedding_engine = std::make_unique<flm::iron::Embedding>(
+                npu_device_inst, "embeddinggemma-2:740m", "embedding_gemma2",
+                768);
         else
 #endif
             throw std::runtime_error(

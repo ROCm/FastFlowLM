@@ -200,23 +200,6 @@ endif()
 # ———————————————————————————————————————————————
 # Add tokenizers-cpp subproject
 # ———————————————————————————————————————————————
-find_program(CARGO_EXECUTABLE cargo REQUIRED)
-execute_process(
-    COMMAND "${CARGO_EXECUTABLE}" --version
-    RESULT_VARIABLE CARGO_VERSION_RESULT
-    OUTPUT_VARIABLE CARGO_VERSION_OUTPUT
-    ERROR_VARIABLE CARGO_VERSION_ERROR
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_STRIP_TRAILING_WHITESPACE)
-if(NOT CARGO_VERSION_RESULT EQUAL 0)
-    message(FATAL_ERROR
-        "Cargo was found at ${CARGO_EXECUTABLE}, but it cannot run:\n"
-        "${CARGO_VERSION_ERROR}\n"
-        "Install a Rust toolchain. If rustup manages Cargo, run: "
-        "rustup default stable")
-endif()
-message(STATUS "Cargo: ${CARGO_VERSION_OUTPUT} (${CARGO_EXECUTABLE})")
-
 # Ensure C++17 is available for tokenizers-cpp
 if(CMAKE_CXX_STANDARD LESS 17)
     set(CMAKE_CXX_STANDARD 17)
@@ -246,6 +229,8 @@ file(GLOB HEADERS "include/*.hpp" "runner/*.hpp" "common/*.hpp" "common/*/*.hpp"
 include(common/models/models_sources.cmake)
 if(FLM_ENABLE_IRON)
     list(APPEND SOURCES ${FLM_MODELS_IRON_SOURCES})
+else()
+    list(FILTER SOURCES EXCLUDE REGEX ".*/common/iron/.*\\.cpp$")
 endif()
 list(FILTER SOURCES EXCLUDE REGEX ".*/common/core/.*\\.cpp$")
 

@@ -4,13 +4,14 @@
 #pragma once
 
 #include "AutoModel/model_backend.hpp"
+#include "iron/causal_lm.hpp"
 
 namespace flm::llama3 {
 
 flm::backend::BackendFactory iron_factory();
 
 inline flm::backend::BackendTraits iron_traits() {
-    return flm::backend::BackendTraits{false, false, 0};
+    return flm::iron::causal_traits();
 }
 
 }  // namespace flm::llama3
