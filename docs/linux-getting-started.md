@@ -121,9 +121,13 @@ In short: if 1.1 firmware breaks probing on stock 6.19, do not keep forcing the 
 
 1. Ensure all required development packages are installed:
    ```sh
-   sudo apt install ninja
-   sudo apt install libedit-dev libxrt-dev uuid-dev libdrm-dev
+   sudo apt install ninja libedit-dev libxrt-dev uuid-dev libdrm-dev rustup
+   rustup default stable
    ```
+
+   FastFlowLM builds its tokenizer with Rust. If `cargo` exists but reports
+   that no default toolchain is configured, `rustup default stable` repairs the
+   installation.
 
 2. Clone the repository and pull all submodules:
    ```sh
