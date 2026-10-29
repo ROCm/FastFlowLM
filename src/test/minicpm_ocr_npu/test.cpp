@@ -87,6 +87,12 @@ int main(int argc, char* argv[]) {
     // (models_simple/test_input/{1k,2k,8k}.txt). Skips the four scripted turns entirely.
     desc.add_options()("prompt-file", arg_utils::po::value<std::string>()->default_value(""),
                        "Run one turn on this file's contents and exit");
+    // With --prompt-file: a second, cached turn, sent the way `flm serve` sends a follow-up
+    // (whole conversation, restore_allowed), so only the new user turn is prefilled. Its
+    // length decides which GDN backend that prefill takes, independently of turn one's --
+    // which is what makes it the test for handing the recurrent state between the two.
+    desc.add_options()("follow-up", arg_utils::po::value<std::string>()->default_value(""),
+                       "With --prompt-file: file holding a follow-up user turn");
     // Default is the repo's own test image, found relative to the executable the
     // same way model_list.json is. Pass --image "" to skip turn 4 outright.
     desc.add_options()("image,i", arg_utils::po::value<std::string>()->default_value("<default>"),
@@ -126,9 +132,29 @@ int main(int argc, char* argv[]) {
         chat_meta_info_t m;
         chat->start_total_timer();
         chat->insert(m, one);
-        chat->generate(m, length, std::cout);
+        const std::string answer = chat->generate(m, length, std::cout);
         chat->stop_total_timer();
         report_turn(*chat, m);
+
+        const std::string follow_file = vm["follow-up"].as<std::string>();
+        if (!follow_file.empty()) {
+            std::ifstream ff(follow_file);
+            if (!ff) { header_print("ERROR", "cannot open " << follow_file); return 1; }
+            std::stringstream fbuf; fbuf << ff.rdbuf();
+            lm_uniform_input_t two;
+            two.messages = nlohmann::ordered_json::array();
+            two.messages.push_back({ {"role", "user"}, {"content", one.prompt} });
+            two.messages.push_back({ {"role", "assistant"}, {"content", answer} });
+            two.messages.push_back({ {"role", "user"}, {"content", fbuf.str()} });
+            std::cout << "Follow-up file: " << follow_file << " (" << fbuf.str().size() << " bytes)" << std::endl;
+            chat_meta_info_t m2;
+            m2.restore_allowed = true;
+            chat->start_total_timer();
+            chat->insert(m2, two);
+            chat->generate(m2, length, std::cout);
+            chat->stop_total_timer();
+            report_turn(*chat, m2);
+        }
         return 0;
     }
 
