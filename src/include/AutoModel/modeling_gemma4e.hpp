@@ -111,6 +111,9 @@ protected:
     /// \note  Overridden by Gemma4e_Flash to read them off the flash engine.
     virtual gemma4e_engine_config_t engine_config() const;
 
+    /// \brief the saved-state table of the engine behind this wrapper (nullptr: the context cache stays off)
+    virtual const flm_state_api* engine_state_api() const;
+
     /// \note Gemma4e and Gemma4e_Flash share this whole wrapper -- weights,
     ///       tokenizer, sampler, chat template -- and differ only in the engine
     ///       behind it. Which one to build is no longer decided here: the two
@@ -264,4 +267,17 @@ public:
     /// \brief Single-turn (every insert() starts over), so the server rejects
     ///        continue_final_message for it; Gemma4e's true is not inherited.
     bool supports_continue_final_message() const override { return false; }
+};
+
+
+/************              Gemma4e_DFlash            **************/
+/// Same checkpoint and wrapper as Gemma4e (nemotron3.5-bolt), backed by the gemma4e_dflash engine: DFlash
+/// speculative decoding with a draft package read from the model's draft_model_path (see model_list base_model).
+class Gemma4e_DFlash : public Gemma4e {
+protected:
+    gemma4e_engine_config_t engine_config() const override;
+    const flm_state_api* engine_state_api() const override;
+
+public:
+    Gemma4e_DFlash(flm_rt::device* npu_device_inst) : Gemma4e(npu_device_inst) {}
 };

@@ -40,6 +40,7 @@
 #include "models/gemma_text/flm/aie2p/gemma_text_npu.hpp"
 #include "models/gemma4e/flm/aie2p/gemma4e_npu.hpp"
 #include "models/gemma4e_flash/flm/aie2p/gemma4e_flash.hpp"
+#include "models/gemma4e_dflash/flm/aie2p/gemma4e_dflash.hpp"
 #include "models/gemma4_12b/flm/aie2p/gemma4_12b_npu.hpp"
 #include "models/lfm2/flm/aie2p/lfm2_npu.hpp"
 #include "models/lfm3/flm/aie2p/lfm3_npu.hpp"

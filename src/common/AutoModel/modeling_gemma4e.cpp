@@ -47,6 +47,18 @@ gemma4e_engine_config_t Gemma4e_Flash::engine_config() const {
     return read_gemma4e_engine_config<gemma4e_flash>(this->lm_engine);
 }
 
+gemma4e_engine_config_t Gemma4e_DFlash::engine_config() const {
+    return read_gemma4e_engine_config<gemma4e_dflash>(this->lm_engine);
+}
+
+const flm_state_api* Gemma4e::engine_state_api() const {
+    return gemma4e_npu_state_api(this->lm_engine);
+}
+
+const flm_state_api* Gemma4e_DFlash::engine_state_api() const {
+    return gemma4e_dflash_state_api(this->lm_engine);
+}
+
 int Gemma4e_Flash::_pin_system_prefix(const std::string& system_text) {
     this->lm_engine->clear_context();
     this->token_history.clear();
@@ -280,7 +292,7 @@ void Gemma4e::load_model(std::string model_path, json model_info, int default_co
     }
     // Gemma4e_Flash shares this function but runs a different engine: the table is nullptr for it, the cache stays off.
     // Text-only prompts only (see insert), so no image placeholder id is given.
-    _prefix_attach(lm_engine, gemma4e_npu_state_api(lm_engine));
+    _prefix_attach(lm_engine, this->engine_state_api());
 }
 
 void Gemma4e::setup_tokenizer(std::string model_path) {

@@ -512,6 +512,7 @@ list(APPEND FLM_ENGINE_LINK_LIBS
 )
 
 list(APPEND FLM_ENGINE_LINK_LIBS gemma4e_flash)
+list(APPEND FLM_ENGINE_LINK_LIBS gemma4e_dflash)
 
 list(APPEND FLM_ENGINE_LINK_LIBS
     gemma4_12b_npu
