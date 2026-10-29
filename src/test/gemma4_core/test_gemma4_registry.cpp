@@ -284,11 +284,20 @@ void TestGemma4eHasARaiBackendRegistered() {
                  ids.end());
 }
 
-void TestResolveBackendIdPicksCoreForGemma4e() {
+void TestResolveBackendSelectionRequiresTheCorePackage() {
     std::string source;
-    TEST_REQUIRE(flm::backend::resolve_backend_id(
-                     kFamily, flm::backend::kCoreBackendId, "", &source) == kCore);
-    TEST_REQUIRE(flm::backend::resolve_backend_id(kFamily, "flm", kCore) == kCore);
+    const auto selection = flm::backend::resolve_backend_selection(
+        kFamily, flm::backend::kCoreBackendId,
+        flm::backend::kBuiltinProviderId, "", &source);
+    TEST_REQUIRE(selection.backend == kCore);
+    TEST_REQUIRE(selection.provider == flm::backend::kBuiltinProviderId);
+    RequireContains(
+        RequireThrows([] {
+            flm::backend::resolve_backend_selection(
+                kFamily, flm::backend::kFlmBackendId,
+                flm::backend::kBuiltinProviderId, kCore);
+        }),
+        "not compatible");
 }
 
 void TestAnUnknownBackendIdForGemma4eNamesTheRealOne() {
@@ -588,7 +597,7 @@ int main() {
     RUN_TEST(TestStripCommentsDoesNotEatCode);
 
     RUN_TEST(TestGemma4eHasARaiBackendRegistered);
-    RUN_TEST(TestResolveBackendIdPicksCoreForGemma4e);
+    RUN_TEST(TestResolveBackendSelectionRequiresTheCorePackage);
     RUN_TEST(TestAnUnknownBackendIdForGemma4eNamesTheRealOne);
 
     RUN_TEST(TestTripwireOneTheDev04FallbackIsGemma4AndItsFamilyCanLoad);

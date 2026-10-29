@@ -25,6 +25,10 @@ inputs:
     description: The container's release codename, e.g. "noble". Goes in the .deb changelog.
     required: false
     default: ""
+  model-extension:
+    description: Build the Gemma4-open integration bundle from the installed SDK.
+    required: false
+    default: "false"
 
 outputs:
   version:
@@ -276,6 +280,69 @@ runs:
         esac
         ccache --show-stats
         echo "build-dir=${build_dir}" >> "$GITHUB_OUTPUT"
+
+    - name: Test model-extension contracts
+      if: endsWith(inputs.variant, '-portable')
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        VARIANT: ${{ inputs.variant }}
+      run: |
+        set -euo pipefail
+        extra=()
+        if [ "${VARIANT}" = "HRX-portable" ]; then
+          extra+=(-DFLM_USE_HRX=ON)
+        fi
+        cmake -S src/test/model_extension_contracts \
+          -B build-model-extension-contracts \
+          -DCMAKE_BUILD_TYPE=Release \
+          "${extra[@]}"
+        cmake --build build-model-extension-contracts -j"$(nproc)"
+        ctest --test-dir build-model-extension-contracts --output-on-failure
+
+    - name: Test installed model-extension package
+      if: endsWith(inputs.variant, '-portable')
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        BUILD_DIR: ${{ steps.portable.outputs.build-dir }}
+      run: |
+        set -euo pipefail
+        prefix="${GITHUB_WORKSPACE}/model-extension-install"
+        cmake --install "${BUILD_DIR}" \
+          --prefix "${prefix}" \
+          --component ModelExtension
+        cmake -S src/test/model_extension_consumer \
+          -B build-model-extension-consumer \
+          -DCMAKE_PREFIX_PATH="${prefix}"
+        cmake --build build-model-extension-consumer -j"$(nproc)"
+
+    - name: Build Gemma4-open model extension
+      if: inputs.model-extension == 'true' && (inputs.variant == 'XRT-portable' || inputs.variant == 'HRX-portable')
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        BUILD_DIR: ${{ steps.portable.outputs.build-dir }}
+        HRX_PREFIX: ${{ steps.hrx.outputs.prefix }}
+        VARIANT: ${{ inputs.variant }}
+      run: |
+        set -euo pipefail
+        prefix="${GITHUB_WORKSPACE}/model-extension-integration-install"
+        cmake --install "${BUILD_DIR}" \
+          --prefix "${prefix}" \
+          --component ModelExtension
+        prefixes="${prefix}"
+        if [ "${VARIANT}" = "HRX-portable" ]; then
+          test -n "${HRX_PREFIX}"
+          prefixes="${prefixes};${HRX_PREFIX}"
+        fi
+        cmake -S src/test/model_extension_gemma4e \
+          -B build-model-extension-gemma4e \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_PREFIX_PATH="${prefixes}" \
+          -DFLM_SOURCE_DIR="${GITHUB_WORKSPACE}/src" \
+          -DFLM_GEMMA4_XCLBIN_DIR="${GITHUB_WORKSPACE}/src/xclbins/Gemma4-E2B-IT-NPU2"
+        cmake --build build-model-extension-gemma4e -j"$(nproc)"
 
     - name: Save compiler cache
       if: github.ref == 'refs/heads/main' && (steps.deb.outcome == 'success' || steps.portable.outcome == 'success')
