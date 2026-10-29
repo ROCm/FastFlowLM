@@ -25,6 +25,19 @@ jobs:
           cmake --build build-d3-contract -j"$(nproc)"
           ctest --test-dir build-d3-contract --output-on-failure
 
+  # continue_final_message (src/common/chat): where the prompt is cut on the template shapes the
+  # models ship, and how the output parser reads the continued text. CPU only, no NPU.
+  chat-continue:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Build and run the chat continue test
+        run: |
+          cmake -S src/test/chat_continue -B build-chat-continue -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-chat-continue -j"$(nproc)"
+          ctest --test-dir build-chat-continue --output-on-failure
+
   package-deb:
     runs-on: ubuntu-latest
     strategy:

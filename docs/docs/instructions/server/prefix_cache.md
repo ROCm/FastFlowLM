@@ -20,17 +20,28 @@ The **prefix cache** lets `flm serve` remember what it already read. When a new 
 
 (Time to first token, measured on an NPU2 Linux machine: the first number is a cold prompt, the second is the same prompt with the shared part cached.)
 
+The other supported models gain the same way. Measured on shorter prompts (about 1 to 2 k tokens), a cold prompt against the same prompt with its shared start cached:
+
+| Model | Prompt | Cold | Cached |
+|---|---|---|---|
+| `gemma4-it:12b` | 2.2 k tokens | 9.3 s | **1.7 s** |
+| `gpt-oss:20b` | 2.1 k tokens | 7.7 s | **1.5 s** |
+| `gemma3:4b` | 2.2 k tokens | 3.3 s | **1.0 s** |
+| `lfm2.5-tk:1.2b` | 2.0 k tokens | 1.4 s | **0.5 s** |
+| `minicpm-v-4.7:1b` | 1.6 k tokens, with a picture | 1.3 s | **0.2 s** |
+| `qwen3.8-mtp:27b` | 1.3 k tokens (shared system prompt only) | 16.5 s | **3.6 s** |
+
 ---
 
 ## ✅ Where it applies
 
 | | Prefix cache |
 |---|---|
-| Models | `qwen3.5:0.8b`, `qwen3.5:2b`, `qwen3.5:4b`, `qwen3.5:9b`, `qwen3.6-moe:35b-a3b` |
+| Models | **Qwen:** `qwen3.5:0.8b` / `2b` / `4b` / `9b`, `qwen3.6-moe:35b-a3b`, `qwen3:0.6b` / `1.7b` / `4b` / `8b`, `qwen3-it:4b`, `qwen3-tk:4b`, `qwen2.5-it:3b`, `qwen3vl-it:4b`, `qwen2.5vl-it:3b`, `qwen3.8-mtp:27b` (the shared system prompt only, see below)<br>**Llama and DeepSeek:** `llama3.2:1b` / `3b`, `llama3.1:8b`, `deepseek-r1:8b`, `deepseek-r1-0528:8b`<br>**Phi and Nanbeige:** `phi4-mini-it:4b`, `nanbeige4.1:3b`<br>**LFM:** `lfm2:1.2b`, `lfm2:2.6b`, `lfm2-trans:2.6b`, `lfm2.5-it:1.2b`, `lfm2.5-tk:1.2b`<br>**gpt-oss:** `gpt-oss:20b`, `gpt-oss-sg:20b`<br>**Gemma:** `gemma3:1b`, `gemma3:4b`, `medgemma:4b`, `medgemma1.5:4b`, `translategemma:4b`, `gemma4-it:e2b` / `e4b` / `12b`, `nemotron3.5-bolt:e4b`<br>**MiniCPM:** `minicpm-v-4.7:1b` |
 | Endpoint | `POST /v1/chat/completions` of `flm serve` (what Hermes, Open WebUI and most agents use), streaming or not |
 | Not covered | `flm run` (CLI mode) and the Ollama endpoints `/api/chat` and `/api/generate`, which keep the older single-checkpoint reuse. A request on an Ollama endpoint also empties the prefix cache, so a client that mixes both APIs loses its cached prompts. |
 
-Other models are unchanged.
+Not covered: the single-turn models (`hy-mt2-flash`, `qwen3vl-flash`, `gemma4e-flash`: they take one request and pin their system prompt, so there is nothing to reuse), the developer-preview `*-core` backends, `lfm3`, and the speech, embedding and robotics models. They are unchanged.
 
 It is on by default. Nothing to configure for a single chat or agent.
 
@@ -46,6 +57,7 @@ flm serve qwen3.5:4b --prefix-cache-mb 8192 --prefix-slots 16
 |---|---|---|
 | `--prefix-cache-mb N` | `4096` | The most host (CPU) memory, in MiB, that saved prompts may use. It is a limit, not a reservation: memory is taken only when a prompt is saved, and given back when it is dropped. |
 | `--prefix-slots N` | `8` (at most `32`) | How many saved prompts to keep. `0` turns the prefix cache off. |
+| `--prefix-min-gain N` | `128` | After a request, its prompt is saved only if it is at least `N` tokens longer than a saved prompt that already covers it; otherwise the next request resumes from the older one and re-reads the difference. `0` saves every prompt. See [Tuning `--prefix-min-gain`](#tuning---prefix-min-gain). |
 | `FLM_DISABLE_PREFIX_SLOTS=1` | off | Environment variable that also turns it off (useful to compare against a cold run). |
 
 When the first prompt is saved, the server logs what a prompt costs and the limits in force:
@@ -53,6 +65,37 @@ When the first prompt is saved, the server logs what a prompt costs and the limi
 ```text
 [FLM]  Prefix cache: up to 8 snapshots in 4096 MiB (a saved row costs 32 KiB, a snapshot's state 49 MiB)
 ```
+
+### Tuning `--prefix-min-gain`
+
+Every saved prompt costs a copy of the model's state out of the NPU and host memory, and when memory or slots run out it pushes an older prompt out. When a conversation grows by only a few tokens per turn, saving every turn would fill the cache with near-copies of each other. `--prefix-min-gain N` skips a save unless the new prompt adds at least `N` tokens over a saved prompt that already covers it. The server logs it when it skips:
+
+```text
+[FLM]  Prefix cache: not saved, only 70 tokens past slot 3 (needs 128, --prefix-min-gain)
+```
+
+The price of a skip is that the next request resumes from the older saved prompt and has to read the difference again, which is always **less than `N` tokens** (about a second at most for `N = 512` on a 2B model reading about 700 tokens/s).
+
+| `N` | Effect | Use it when |
+|---|---|---|
+| `0` | Every prompt is saved: least to re-read per turn, most copying and evictions (83 saves in the test below, as fast as `64`) | A few conversations, plenty of memory and slots |
+| `64` | As fast as `0` with a few fewer saves | Same as `0` |
+| **`128` (default)** | About 20% fewer saves than `64` for about 0.5% more turn time | Most setups |
+| `256` | About 30% fewer saves, about 2% more turn time | Many agents or large prompts, memory or `--prefix-slots` is tight |
+| `512` and above | About 45% fewer saves but 7% or more turn time | Rarely worth it: only when copying the state is slower than re-reading `N` tokens (very large models, very slow memory) |
+
+Measured with 6 interleaved agents (own 2.5k-token system prompt, 10 turns each, tool results of 30 to 1500 tokens, plus title-style side calls) on `qwen3.5:2b`, 16 slots, two runs averaged. Turn time is relative to `N = 64`:
+
+| `N` | Saves | Evictions | Cache hit | Turn time |
+|---|---|---|---|---|
+| 0 (one run) | 83 | 67 | 86.0% | 1.00 |
+| 64 | 78 | 62 | 84.3% | 1.00 |
+| 128 | 64 | 48 | 83.5% | 1.006 |
+| 256 | 56 | 40 | 82.6% | 1.02 |
+| 512 | 44 | 28 | 79.8% | 1.07 |
+| 1024 | 37 | 21 | 75.3% | 1.15 |
+
+With fewer slots than conversations (8 slots for 6 agents here) the cache thrashes and `N` made no difference to the time. A synthetic workload on one model: measure your own agents (`usage.prompt_tokens_details.cached_tokens` and the time to first token, see below) before moving far from the default.
 
 ### How much memory does it need?
 
@@ -63,6 +106,31 @@ A saved prompt costs a fixed amount per model plus an amount per token:
 | `qwen3.5:0.8b` / `2b` | 12 KiB | 18 MiB | about 195 MiB |
 | `qwen3.5:4b` / `9b` | 32 KiB | 49 MiB | about 511 MiB |
 | `qwen3.6-moe:35b-a3b` | 20 KiB | 61 MiB | about 350 MiB |
+
+The other models:
+
+| Model | Per saved token | Fixed per saved prompt | One 4 k-token prompt |
+|---|---|---|---|
+| `llama3.2:1b` | 32 KiB | none | about 128 MiB |
+| `llama3.2:3b` | 112 KiB | none | about 448 MiB |
+| `llama3.1:8b`, `deepseek-r1:8b` | 128 KiB | none | about 512 MiB |
+| `deepseek-r1-0528:8b`, `qwen3:4b` / `8b`, `qwen3-it:4b`, `qwen3-tk:4b`, `qwen3vl-it:4b` | 144 KiB | none | about 576 MiB |
+| `qwen3:0.6b` / `1.7b` | 112 KiB | none | about 448 MiB |
+| `qwen2.5-it:3b`, `qwen2.5vl-it:3b` | 36 KiB | none | about 144 MiB |
+| `phi4-mini-it:4b` | 128 KiB | none | about 512 MiB |
+| `nanbeige4.1:3b` | 64 KiB | none | about 256 MiB |
+| `lfm2:1.2b`, `lfm2.5-it:1.2b`, `lfm2.5-tk:1.2b` | 12 KiB | under 1 MiB | about 48 MiB |
+| `lfm2:2.6b`, `lfm2-trans:2.6b` | 16 KiB | under 1 MiB | about 64 MiB |
+| `gpt-oss:20b`, `gpt-oss-sg:20b` | 24 KiB | 3 MiB | about 99 MiB |
+| `gemma3:1b` | 4 KiB | 11 MiB | about 27 MiB |
+| `gemma3:4b`, `medgemma:4b`, `medgemma1.5:4b`, `translategemma:4b` | 20 KiB | 116 MiB | about 196 MiB |
+| `gemma4-it:e2b` | 6 KiB | 6 MiB | about 30 MiB |
+| `gemma4-it:e4b`, `nemotron3.5-bolt:e4b` | 16 KiB | 20 MiB | about 84 MiB |
+| `gemma4-it:12b` | 16 KiB | 320 MiB | about 384 MiB |
+| `minicpm-v-4.7:1b` | 12 KiB | 18 MiB | about 66 MiB |
+| `qwen3.8-mtp:27b` | 84 KiB | 151 MiB | about 487 MiB |
+
+(Measured from the server log for the models we ran; the 3B and 8B Llama and the 0.6B to 8B Qwen3 sizes follow from the model shape.) `qwen3.8-mtp:27b` keeps fewer and smaller defaults, 4 saved prompts in 1536 MiB, because each saved prompt is large; `--prefix-slots` and `--prefix-cache-mb` still override them.
 
 Conversations that share a system prompt share its saved copy, so one agent with several sub-agents costs much less than the same number of unrelated conversations.
 
@@ -131,6 +199,10 @@ In the multi-agent runs the first sub-agent reads the shared system prompt and i
 - **Qwen3.6 after a tool loop.** Qwen3.6's chat template rewrites the earlier assistant messages (their reasoning blocks) as soon as a newer user message arrives. After a tool-using turn, a new user message can therefore only reuse the system prompt and the first user message, not the whole history. No prompt cache can do better with this template; without the prefix cache nothing is reused.
 - **Answers are not bit-for-bit identical to a cold run.** Resuming from a snapshot gives the same quality, but with greedy decoding some answers differ in wording (for example the order of a list) from what the same prompt gives when read from scratch: about 1 in 5 on Qwen3.5 and about 1 in 3 on Qwen3.6 in our replay tests. The cache that came before it behaves the same way.
 - **Hermes sub-agents.** Sub-agents reuse the parent's system-prompt snapshot only when every task's `context` field is empty. A per-task context is placed in the sub-agent's system prompt, which makes each sub-agent a different prompt that is read from scratch. Larger models (4B and up) leave it empty in practice; `qwen3.5:2b` sometimes fills it in.
+- **Qwen3.8-27B keeps the shared system prompt only.** A saved prompt of this model is large (about 150 MiB plus 84 KiB per token), so it saves the shared start of a conversation (system prompt + tools) and nothing after it, for text prompts. A conversation that keeps going is still continued from the end of its last turn with the older single-checkpoint reuse, as before; the saved system prompt is used when another conversation ran in between, so several agents that share one system prompt do not read it again each time.
+- **Gemma 3 has no shared system-prompt snapshot.** Its chat template puts the system prompt inside the first user turn, so two conversations that differ in their first message have no text in common to save as a shared start. Each conversation still reuses its own earlier turns.
+- **Models with a sliding window or a convolution state** (Gemma 3 and 4, gpt-oss, the LFM2 family) save a state that cannot be rewound, so a saved prompt is resumed only when the new prompt starts with all of it, and a prompt that shares just the first part of a saved one resumes at the saved system-prompt start instead.
+- **Pictures and audio.** The Qwen-VL models, Qwen3.5 and MiniCPM-V reuse prompts that contain pictures. The Gemma 4 models (and the `nemotron3.5-bolt` model built on them) reuse text prompts through the prefix cache; a prompt with a picture or audio keeps the older single-checkpoint reuse. `qwen3.8-mtp:27b` is text only.
 - **Platforms.** Tested on Linux with the XRT backend. The Windows and HRX builds contain the same code but have not been run.
 
 ---

@@ -38,12 +38,11 @@ void Qwen2VL::setup_tokenizer(std::string model_path) {
     auto tokenizer_config = this->_shared_setup_tokenizer(model_path);
 }
 
-std::string Qwen2VL::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools) {
+std::string Qwen2VL::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools, bool continue_final_message) {
     minja::chat_template_inputs inputs;
-    inputs.add_generation_prompt = true;
     inputs.messages = messages;
     inputs.extra_context = this->extra_context;
-    return this->chat_tmpl->apply(inputs);
+    return this->_render_chat_template(inputs, continue_final_message);
 }
 
 bool Qwen2VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
@@ -137,7 +136,7 @@ bool Qwen2VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
 
                 qwenvl_message.push_back(newItem);
             }
-            templated_text = this->apply_chat_template(qwenvl_message);
+            templated_text = this->apply_chat_template(qwenvl_message, nlohmann::ordered_json::object(), meta_info.continue_final_message);
             header_print_g("FLM", "Total images: " + std::to_string(total_images));
         }
         else if (!input.prompt.empty()) { // a pure text, usually from the cli
@@ -163,6 +162,8 @@ bool Qwen2VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
             messages.push_back(content);
             templated_text = this->apply_chat_template(messages);
         }
+    } catch (const ModelRequestError&) {
+        throw; // a final message that cannot be continued is the client's error (400), not a failed prefill
     } catch (const std::exception& e) {
         header_print_r("ERROR", std::string("Exception during chat template application: ") + e.what());
         return false;

@@ -10,6 +10,7 @@ parent: Models
 - **Type:** Image-Text-to-Text
 - **Think:** Toggleable
 - **Tool Calling Support:** Yes
+- **Prefix cache (server mode):** Yes, prompts with pictures included (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
 - **Base Model:** [openbmb/MiniCPM-V-4.7-1B](https://huggingface.co/openbmb/MiniCPM-V-4.7-1B)
 - **Quantization:** Q4_K
 - **Max Context Length:** 256k tokens

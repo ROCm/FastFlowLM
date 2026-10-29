@@ -35,17 +35,16 @@ void LFM3::setup_tokenizer(std::string model_path) {
     this->tokenizer->is_doubled_encoded = true;   // byte-level BPE, like LFM2
 }
 
-std::string LFM3::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools) {
+std::string LFM3::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools, bool continue_final_message) {
     minja::chat_template_inputs inputs;
     minja::chat_template_options opt;
     opt.polyfill_tool_responses = false;
-    inputs.add_generation_prompt = true;
     inputs.messages = messages;
     inputs.extra_context = this->extra_context;
     inputs.extra_context["enable_thinking"] = this->enable_think;
     if (!tools.empty() && this->tools_enabled())
         inputs.tools = tools;
-    return this->chat_tmpl->apply(inputs, opt);
+    return this->_render_chat_template(inputs, continue_final_message, opt);
 }
 
 bool LFM3::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
@@ -56,7 +55,7 @@ bool LFM3::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::f
         return false;
     }
     if (!input.messages.empty()) { // already formatted messages, usually from the REST API
-        templated_text = this->apply_chat_template(input.messages, input.tools);
+        templated_text = this->apply_chat_template(input.messages, input.tools, meta_info.continue_final_message);
     }
     else { // a plain text prompt, usually from the CLI
         nlohmann::ordered_json messages;

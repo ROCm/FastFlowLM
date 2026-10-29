@@ -109,9 +109,10 @@ size_t resume(PrefixSlotCache& cache, const std::vector<int>& prompt, const std:
     return r.resumed ? r.match_len : 0;
 }
 
-PrefixSlotCache make(fake_engine& e, int mb = -1, int slots = -1) {
+/// \note min_gain 64 is what the tests below (tails of 100 tokens) were written for; the default (128) is checked in test_min_end_gain
+PrefixSlotCache make(fake_engine& e, int mb = -1, int slots = -1, int min_gain = 64) {
     PrefixSlotCache cache;
-    cache.configure(mb, slots);
+    cache.configure(mb, slots, min_gain);
     cache.attach(&e, fake_api());
     return cache;
 }
@@ -229,6 +230,44 @@ void test_small_tail_not_saved() {
     const auto chat1 = cat(sys, seq(30000, 20));
     prefill(cache, e, chat1, 600);
     CHECK(resume(cache, cat(chat1, seq(31000, 30))) == sys.size());
+}
+
+void test_min_end_gain() {
+    std::printf("--prefix-min-gain: an end snapshot must add that many tokens over a covering slot (default 128, 0 = save all)\n");
+    const auto base = seq(1, 1000);
+    const auto plus100 = cat(base, seq(5000, 100));
+    const auto plus200 = cat(base, seq(6000, 200));
+    {
+        fake_engine e;
+        PrefixSlotCache cache;                        // flag not given
+        cache.configure(100000, 32, -1);
+        cache.attach(&e, fake_api());
+        CHECK(cache.min_end_gain == 128);
+        prefill(cache, e, base, 0);
+        prefill(cache, e, plus100, 0);
+        CHECK(cache.slot_count() == 1);               // 100 < 128: not saved, the next request resumes from `base`
+        CHECK(resume(cache, cat(plus100, seq(7000, 10))) == base.size());
+        prefill(cache, e, plus200, 0);
+        CHECK(cache.slot_count() == 2);               // 200 >= 128: saved
+    }
+    {
+        fake_engine e;
+        PrefixSlotCache cache = make(e, 100000, 32, 0);  // --prefix-min-gain 0: every end snapshot is saved
+        prefill(cache, e, base, 0);
+        prefill(cache, e, plus100, 0);
+        CHECK(cache.slot_count() == 2);
+        CHECK(resume(cache, cat(plus100, seq(7000, 10))) == plus100.size());
+    }
+    {
+        fake_engine e;
+        PrefixSlotCache cache = make(e, 100000, 32, 300);  // --prefix-min-gain 300
+        CHECK(cache.min_end_gain == 300);
+        prefill(cache, e, base, 0);
+        prefill(cache, e, plus200, 0);
+        CHECK(cache.slot_count() == 1);               // 200 < 300: not saved
+        prefill(cache, e, cat(base, seq(8000, 300)), 0);
+        CHECK(cache.slot_count() == 2);               // 300 >= 300: saved
+    }
 }
 
 void test_budget() {
@@ -353,6 +392,7 @@ int main() {
     test_eviction_order();
     test_boundary_kept_for_dependents();
     test_small_tail_not_saved();
+    test_min_end_gain();
     test_budget();
     test_images();
     test_restore_failure_and_off();

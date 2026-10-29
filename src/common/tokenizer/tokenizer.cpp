@@ -9,6 +9,7 @@
 #include <fstream>
 #include <sstream>
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <unordered_map>
 #include <regex>
@@ -178,7 +179,13 @@ std::string Tokenizer::decode(const std::vector<int>& tokens) {
 /// \param answer_token the answer token
 /// \return the decoded text
 std::string Tokenizer::run_time_decoder(int answer_token) {
-    return this->cpt_to_utf8(this->tokenizer->IdToToken(answer_token));
+    const std::string token = this->tokenizer->IdToToken(answer_token);
+    // SentencePiece byte fallback: "<0x0D>" stands for the byte 0x0D, not for that text
+    if (!this->is_doubled_encoded && token.size() == 6 && token.compare(0, 3, "<0x") == 0 && token[5] == '>' &&
+        std::isxdigit(static_cast<unsigned char>(token[3])) && std::isxdigit(static_cast<unsigned char>(token[4]))) {
+        return std::string(1, static_cast<char>(std::stoi(token.substr(3, 2), nullptr, 16)));
+    }
+    return this->cpt_to_utf8(token);
 }
 
 /// \brief Number of UTF-8 bytes of the text one token stands for

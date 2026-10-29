@@ -2,16 +2,21 @@
 /// \brief which NPU generation this host has (aie2p vs dev04)
 #include "utils/npu_platform.hpp"
 
+#if defined(FLM_ENABLE_CORE)
+#include "core/corelib_runtime.hpp"
+#include "utils/utils.hpp"
+#endif
+
 namespace utils {
 
 npu_platform get_device() {
-    // No device read here: the probe that tells the generations apart is not in
-    // this tree, and nothing else in the build is allowed to stand in for it.
-    // Linking corelib in particular is not evidence -- which kernels were
-    // compiled is a fact about the build, the generation is a fact about the
-    // machine, and letting the first answer the second is how the two axes get
-    // quietly welded back together.
+#if defined(FLM_ENABLE_CORE)
+    static const npu_platform platform = platform_from_corelib_arch(
+        flm::corelib::CorelibRuntime::NpuArch(get_executable_directory()));
+    return platform;
+#else
     return default_npu_platform();
+#endif
 }
 
 std::optional<npu_platform> parse_platform(std::string_view text) {

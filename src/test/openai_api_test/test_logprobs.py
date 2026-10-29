@@ -164,9 +164,28 @@ def stream_matches_nonstream(api: Api) -> None:
 
 
 @case
+def max_tokens_is_exact(api: Api) -> None:
+    """max_tokens N writes N tokens at most, and usage.completion_tokens counts every one."""
+    for n in (1, 2, 5):
+        resp = api.post(logprobs_body(api, user("Count from 1 to 20, separated by spaces."), max_tokens=n))
+        if resp.status != 200:
+            flm_api.raise_for_capability(resp.error_message())
+            raise AssertionError(f"HTTP {resp.status}: {resp.error_message()}")
+        choice = resp.body["choices"][0]
+        entries = choice["logprobs"]["content"]
+        completion = resp.body["usage"]["completion_tokens"]
+        # trailing whitespace waits for text that never comes, so a token can be missing, never extra
+        expect(len(entries) <= n, f"max_tokens {n} gave {len(entries)} tokens: {joined(entries)!r}")
+        expect(completion <= n, f"max_tokens {n} reported {completion} completion tokens")
+        if choice.get("finish_reason") == "length" and not choice["message"].get("reasoning_content"):
+            expect(completion == n, f"max_tokens {n} stopped for length after {completion} completion tokens")
+
+
+@case
 def top_logprobs_default(api: Api) -> None:
     """logprobs without top_logprobs gives every entry an empty top_logprobs."""
-    body = logprobs_body(api, user(PROMPT), max_tokens=16)
+    # an answer budget: a model that reasons first gets room for that too
+    body = logprobs_body(api, user(PROMPT), max_tokens=32)
     del body["top_logprobs"]
     _, entries = nonstream_entries(api, body)
     expect(len(entries) > 0, "no logprobs entries")
@@ -213,9 +232,10 @@ def tool_call_has_no_logprobs(api: Api) -> None:
     expect_covers(streamed, folded.content, "stream tool call")
 
 
-def expect_400(api: Api, fields: dict[str, Any], message_part: str) -> None:
+def expect_400(api: Api, fields: dict[str, Any], message_part: str,
+               messages: list[dict[str, Any]] | None = None) -> None:
     """Non-streaming and streaming both refuse, naming the problem."""
-    body = api.body(user("hi"), max_tokens=8, **fields)
+    body = api.body(messages if messages is not None else user("hi"), max_tokens=8, **fields)
     resp = api.post(body)
     expect(resp.status == 400, f"expected HTTP 400, got {resp.status}: {resp.body}")
     err = resp.body.get("error")

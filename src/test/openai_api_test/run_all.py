@@ -13,6 +13,7 @@ from __future__ import annotations
 import sys
 
 import flm_api
+import test_continue_final_message
 import test_errors
 import test_logprobs
 import test_reasoning
@@ -22,7 +23,7 @@ import test_sampling
 import test_tool_calls
 
 MODULES = [test_response_shape, test_reasoning, test_tool_calls, test_response_format, test_logprobs, test_sampling,
-           test_errors]
+           test_continue_final_message, test_errors]
 
 
 def main() -> None:

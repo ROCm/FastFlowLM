@@ -94,12 +94,12 @@ void Phi4::setup_tokenizer(const nlohmann::json& config) {
 }
 
 std::string Phi4::apply_chat_template(nlohmann::ordered_json& messages,
-                                      nlohmann::ordered_json) {
+                                      nlohmann::ordered_json,
+                                      bool continue_final_message) {
     minja::chat_template_inputs inputs;
-    inputs.add_generation_prompt = true;
     inputs.messages = messages;
     inputs.extra_context = extra_context;
-    return chat_tmpl->apply(inputs);
+    return _render_chat_template(inputs, continue_final_message);
 }
 
 void Phi4::fail_inference(const std::string& detail) {
@@ -119,7 +119,9 @@ bool Phi4::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input,
     profiler_list[TKOEN_ENCODE_TIME].start();
     std::string rendered;
     if (input.messages.empty() && input.prompt.empty()) return false;
-    if (!input.messages.empty()) rendered = apply_chat_template(input.messages);
+    if (!input.messages.empty())
+        rendered = apply_chat_template(input.messages, nlohmann::ordered_json::object(),
+                                       meta_info.continue_final_message);
     else {
         nlohmann::ordered_json messages = nlohmann::ordered_json::array();
         messages.push_back({{"role", "user"}, {"content", input.prompt}});

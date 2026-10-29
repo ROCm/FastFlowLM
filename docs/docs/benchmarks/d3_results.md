@@ -193,6 +193,57 @@ JPEG and WebP data URLs are accepted; web addresses, file paths, corrupt images 
 Attention runs on the NPU from 1,536 tokens, as for d3-lite (measured break-even for d3-mini: about 1,536 tokens; at
 4,096 tokens the NPU attention makes a request 17% faster, 5.3 s against 6.3 s). A prompt of 32,769 tokens is refused.
 
+## ⚡ d3-flash on the NPU
+
+Accuracy and latency of `d3:flash` (vllm-sr/d3-flash, revision 13dc1cc8, package D3-Flash-NPU2, Q4_K with GPTQ), served by FastFlowLM 1.0.12, same machine and settings as above.
+
+> **Note:**
+> - Latency is end to end over HTTP (`flm serve --decision d3:flash`), median of 3 runs on an otherwise idle machine (16,383 tokens: 2 runs; 31,545 and 32,768 tokens: 1 run). Rows of 31,545 tokens and more are real documentation text.
+
+### Accuracy against the upstream BF16 model
+
+| Set | Questions | NPU (FLM) |
+|---|---:|---:|
+| Decision Index public suite, seeded round-robin sample (1,600 requests of at most 8,000 tokens, 37 benchmarks): mean benchmark score | 1,600 | 67.4% (BF16: 67.8%) |
+| Same requests, top-1 agreement with BF16 (choice answers) | 4,452 | 97.0% |
+| Long prompts, 835 to 31,545 tokens, same top answer as BF16 | 8 | 8 of 8 |
+| Long prompts, mean probability difference to BF16 (range over the 8 prompts) | 8 | 0.0004 to 0.017 |
+| Decision Index public vision suite, 30 seeded questions from each of 10 benchmarks: accuracy | 300 | 72.7% (BF16: 75.0%) |
+| Same image questions, top-1 agreement with BF16 | 300 | 90.0% |
+
+The BF16 numbers on the text sample are the upstream BF16 run's own answers (MI325X, the 140,178-request public run) to the same requests;
+the long-prompt and vision references were run on this machine's CPU with the upstream `d3_server.py`. On the Decision Index sample the
+mean benchmark score is 0.36 points below the upstream BF16 model (standard error 0.66; about 41 requests per benchmark, so a single
+benchmark is noisy). It is a sample, not the full suite: only requests whose prompts have at most 8,000 tokens (37 of 40 benchmarks have
+some), and without RouterBench and SGD, whose locally rebuilt requests are not byte-identical to the lab's. The vision subset leaves out
+Winoground (gated); paired accuracy, BF16 minus d3-flash, is +2.3 points (95% CI -0.9 to +5.6): images may cost a little accuracy, while the answers
+agree with BF16 on 90.0% of the questions (d3-mini: 89.8%). The GPTQ calibration prompts (192 synthetic questions) contain no Decision Index data.
+
+### Images (d3-flash)
+
+Latency over HTTP, one question, median of 3: 3.3 s with a 1,024 × 768 image (880 input tokens), 5.2 s with two images, 7.0 s with a
+2000 × 1500 image (downscaled to the 1.6 MP budget; 1,676 tokens). A request with 8 questions about one image takes 18.3 s (one image encoding).
+PNG, JPEG and WebP data URLs are accepted; web addresses, file paths, corrupt images and videos are refused with HTTP 422.
+
+### Latency
+
+| Request | Median (ms) |
+|---|---:|
+| 1 question, 128 tokens | 846 |
+| 1 question, 330 tokens | 983 |
+| 1 question, 1,024 tokens | 2339 |
+| 1 question, 2,047 tokens | 4510 |
+| 1 question, 4,096 tokens | 9010 |
+| 1 question, 8,192 tokens | 19128 |
+| 1 question, 16,383 tokens | 41068 |
+| 1 question, 31,545 tokens | 91693 |
+| 1 question, 32,768 tokens | 96094 |
+| 4 questions, 330 tokens each | 3141 |
+| 16 questions, 330 tokens each | 11729 |
+
+Memory: 6.8 GB resident after the load, 12.6 GB at 31,545 tokens and 14.1 GB at most in a mixed soak (four 31,545-token requests,
+60 short ones and 6 with images). A prompt of 32,769 tokens is refused.
+
 ## ⚡ d3-turbo on the NPU
 
 Accuracy and latency of `d3:turbo` (vllm-sr/d3-turbo v1.1, Qwen3.5-27B backbone, prefix-bidirectional attention, package

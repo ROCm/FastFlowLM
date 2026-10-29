@@ -92,7 +92,7 @@ void test_a_corelib_build_offers_the_corelib_phi4() {
     TEST_REQUIRE(tag == kCoreTag);
     TEST_REQUIRE(corelib.rectify_model_tag("phi4-mini-it-core") == kCoreTag);
     TEST_REQUIRE(info.at("name") == "phi4-mini-it-core");
-    TEST_REQUIRE(info.at("default_context_length") == 4096);
+    TEST_REQUIRE(info.at("default_context_length") == 131072);
     TEST_REQUIRE(info.at("flm_min_version") == "1.0.3");
     TEST_REQUIRE(info.at("files").size() == 4);
     TEST_REQUIRE(info.at("file_sources").size() == 3);
@@ -240,12 +240,15 @@ void test_platform_helpers() {
     TEST_REQUIRE(!utils::parse_platform("stx").has_value());
     TEST_REQUIRE(utils::parse_platform(utils::platform_id(utils::npu_platform::dev04)) ==
                  utils::npu_platform::dev04);
-    TEST_REQUIRE(utils::default_npu_platform() == utils::npu_platform::dev04);
+    TEST_REQUIRE(utils::default_npu_platform() == utils::npu_platform::aie2p);
 
-    // The stand-in consults nothing -- not the environment, not which kernels
-    // were linked -- so it is the default here and in a corelib build alike.
-    // Changing what an install can see means changing default_npu_platform()
-    // and rebuilding, which is the one place to look.
+    // corelib names the NPU; only its AIEM is dev04, and anything else,
+    // no NPU included, is the default.
+    TEST_REQUIRE(utils::platform_from_corelib_arch("AIEM") == utils::npu_platform::dev04);
+    TEST_REQUIRE(utils::platform_from_corelib_arch("AIE2P") == utils::npu_platform::aie2p);
+    TEST_REQUIRE(utils::platform_from_corelib_arch("") == utils::npu_platform::aie2p);
+
+    // Built without corelib, as this test is, nothing can name a dev04.
     TEST_REQUIRE(utils::get_device() == utils::default_npu_platform());
     TEST_REQUIRE(utils::get_device() == utils::get_device());
 }

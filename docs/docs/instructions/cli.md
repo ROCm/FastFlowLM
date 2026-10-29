@@ -363,6 +363,7 @@ flm serve qwen3.5:4b --prefix-cache-mb 8192 --prefix-slots 16
 |---|---|---|
 | `--prefix-cache-mb N` | `4096` | Most host memory (MiB) the saved prompts may use; a limit, not a reservation |
 | `--prefix-slots N` | `8` (at most `32`) | How many saved prompts to keep; `0` turns the prefix cache off |
+| `--prefix-min-gain N` | `128` | A new prompt is saved only if it is at least `N` tokens longer than a saved prompt that already covers it. Larger: fewer saves and evictions, but up to `N` more tokens re-read on a resume. `0`: save every prompt. See [Tuning `--prefix-min-gain`](https://fastflowlm.com/docs/instructions/server/prefix_cache/#tuning---prefix-min-gain) |
 
 `flm run` (CLI mode) does not use it. See [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/) for memory per model, how to check that it works, and its limits.
 

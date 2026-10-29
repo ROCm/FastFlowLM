@@ -50,7 +50,7 @@ void Gemma4_12B::setup_tokenizer(std::string model_path) {
     auto tokenizer_config = this->_shared_setup_tokenizer(model_path);
 }
 
-std::string Gemma4_12B::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools) {
+std::string Gemma4_12B::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools, bool continue_final_message) {
     // The Gemma4 template emits unquoted keys (argument_needle:<|"|>...<|"|>), which minja's
     // capability probe does not recognize, so it would wrongly polyfill tool calls into a
     // generic JSON blob. The template handles tools/tool_calls/tool_responses natively.
@@ -82,13 +82,12 @@ std::string Gemma4_12B::apply_chat_template(nlohmann::ordered_json& messages, nl
     }
 
     minja::chat_template_inputs inputs;
-    inputs.add_generation_prompt = true;
     inputs.messages = normalized;
     inputs.extra_context = this->extra_context;
     inputs.extra_context["enable_thinking"] = this->enable_think;
     if (!tools.empty())
         inputs.tools = tools;
-    return this->chat_tmpl->apply(inputs, opt);
+    return this->_render_chat_template(inputs, continue_final_message, opt);
 }
 
 bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
@@ -275,7 +274,7 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
     
 
     if (!input.messages.empty()) { // already a formated messages, usually from REST API
-        templated_text = this->apply_chat_template(gemma4_12b_message, input.tools);
+        templated_text = this->apply_chat_template(gemma4_12b_message, input.tools, meta_info.continue_final_message);
     }
     else{
 
@@ -379,6 +378,14 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
         if (prefix_skip_count != idx) {
             prefix_skip_count = 0;
         }
+        // A repeated prompt is cached whole: _shared_insert would erase every token and have nothing to
+        // prefill or sample from. Start over instead, with the payload intact.
+        const size_t insert_len = tokens.size() - (this->enable_think ? 0 : 4);
+        if (idx > 0 && prefix_skip_count == idx && insert_len <= idx) {
+            header_print("FLM", "Prompt fully cached, prefilling it again");
+            this->clear_context();
+            prefix_skip_count = 0;
+        }
 
         if (prefix_skip_count > 0 && (image_payload.num_images > 0 || audio_payload.num_audios > 0)) {
             // Count modal soft-tokens that landed inside the cached prefix.
@@ -472,7 +479,8 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
     const bool modal_tokens = std::any_of(tokens.begin(), tokens.end(), [this](int t) {
         return t == image_token_id || t == audio_token_id || t == boi_token_id || t == boa_token_id;
     });
-    const size_t slot_trim = this->enable_think ? 0 : 4;
+    // A continued message keeps all its tokens: they are the client's text, not the generation prompt.
+    const size_t slot_trim = (this->enable_think || meta_info.continue_final_message) ? 0 : 4;
     if (image_payload.num_images == 0 && audio_payload.num_audios == 0 && !modal_tokens &&
         this->_prefix_slot_mode(meta_info, tokens.size(), slot_trim)) {
         checkpoint_his.clear();
@@ -489,7 +497,7 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
     }
 
     size_t n = tokens.size();
-    tokens.resize(n - (this->enable_think ? 0 : 4));
+    tokens.resize(n - slot_trim);
 
     gemma4_12b_multi_modal_payload_t multi_modal_payload;
     multi_modal_payload.image_payload = image_payload;
@@ -522,7 +530,8 @@ std::string Gemma4_12B::generate(chat_meta_info_t& meta_info, int length_limit, 
     std::string token_str;
     int sampled_token;
     int last_sampled_token;
-    if(!enable_think) {
+    // A continued message has no empty thought channel to feed: it starts from insert()'s sample
+    if(!enable_think && !meta_info.continue_final_message) {
         this->token_history.push_back(boc_token_id);
         this->profiler_list[DECODING_TIME].start();
         // fed for the KV cache only, it never reaches the output
@@ -551,16 +560,29 @@ std::string Gemma4_12B::generate(chat_meta_info_t& meta_info, int length_limit, 
         token_str = this->tokenizer->run_time_decoder(eoc_token_id);
         sampled_token = this->_sample(y, meta_info);
 
-        this->total_tokens++;
+        // all four went through the engine, so all four occupy the context
+        this->total_tokens += 4;
         meta_info.generated_tokens++;
         last_sampled_token = sampled_token;
-        token_str = this->tokenizer->run_time_decoder(last_sampled_token);
-        result += token_str;
-        os << token_str << std::flush;
+        // the reply's first token: the loop below forwards it, so the history holds it
+        this->token_history.push_back(last_sampled_token);
+        if (this->is_normal_token(last_sampled_token)) {
+            token_str = this->tokenizer->run_time_decoder(last_sampled_token);
+            result += token_str;
+            os << token_str << std::flush;
+        }
+        if (this->is_eos(last_sampled_token)) {
+            // the reply ended before it started; no engine has run the eos
+            this->token_history.pop_back();
+            meta_info.stop_reason = reason;
+            return result;
+        }
     }
     else {
         last_sampled_token = this->last_token;
         this->token_history.push_back(this->last_token);
+        // the sample insert() took is the reply's first token, and counts toward the limit
+        meta_info.generated_tokens++;
         if (this->is_normal_token(last_sampled_token) && last_sampled_token != -1){
             std::string token_str = this->tokenizer->run_time_decoder(last_sampled_token);
             result += token_str;
@@ -568,6 +590,9 @@ std::string Gemma4_12B::generate(chat_meta_info_t& meta_info, int length_limit, 
 
         }
         if (this->is_eos(last_sampled_token)){
+            // Sampled from the prefill, so no engine has run it.
+            this->token_history.pop_back();
+            meta_info.stop_reason = reason;
             return result;
         }
     }
@@ -575,9 +600,16 @@ std::string Gemma4_12B::generate(chat_meta_info_t& meta_info, int length_limit, 
     if (this->total_tokens >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping generation...");
         reason = MAX_LENGTH_REACHED;
-        return result;
     }
-    while (this->total_tokens < this->MAX_L){
+    else if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)){
+        reason = MAX_LENGTH_REACHED;
+    }
+    else while (true){
+        // Running out of window is a truncation: test it here so it is recorded.
+        if (this->total_tokens >= this->MAX_L){
+            reason = MAX_LENGTH_REACHED;
+            break;
+        }
         if (is_cancelled()) {
             reason = CANCEL_DETECTED;
             break;
@@ -613,6 +645,11 @@ std::string Gemma4_12B::generate(chat_meta_info_t& meta_info, int length_limit, 
     }
     meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
     meta_info.stop_reason = reason;
+    if (reason != EOT_DETECTED) {
+        // Cut short after sampling its last token: no engine has run that one,
+        // so the next prompt has to carry it.
+        this->token_history.pop_back();
+    }
     if (this->total_tokens >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping generation...");
     }

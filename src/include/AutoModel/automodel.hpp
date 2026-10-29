@@ -125,6 +125,11 @@ struct chat_meta_info_t {
 	/// \brief The last sample added an entry to logprobs
 	/// \note So that _skip_insert_sample() can take it back out with the sample.
 	bool last_sample_logged = false;
+	/// \brief The prompt ends inside the final assistant message, and the output continues it
+	/// \note The request's continue_final_message. The template gets no generation
+	///       prompt, and the turn starts right after the message's text: insert()
+	///       trims no prompt tokens and generate() feeds no preamble of its own.
+	bool continue_final_message = false;
 
 	chat_meta_info_t() : max_prefill_len(0), prompt_tokens(0), cached_prompt_tokens(0), generated_tokens(0), total_duration(0), load_duration(0), prefill_duration(0), decoding_duration(0), stop_reason(EOT_DETECTED), restore_allowed(false) {}
 };
@@ -162,12 +167,15 @@ using json = nlohmann::ordered_json;
 
 class ModelRequestError final : public std::runtime_error {
 public:
-	ModelRequestError(int http_code, bool session_cleared, std::string message);
+	/// \param type the OpenAI error type: "model_error", or "invalid_request_error" when the request itself is at fault
+	ModelRequestError(int http_code, bool session_cleared, std::string message, std::string type = "model_error");
 	int http_code() const noexcept;
 	bool session_cleared() const noexcept;
+	const std::string& type() const noexcept;
 private:
 	int http_code_;
 	bool session_cleared_;
+	std::string type_;
 };
 
 class AutoModel {
@@ -320,6 +328,7 @@ protected:
 	PrefixSlotCache prefix_cache_;
 	int prefix_cache_mb_arg_ = -1;   // --prefix-cache-mb, -1 = default
 	int prefix_slots_arg_ = -1;      // --prefix-slots, -1 = default, 0 = off
+	int prefix_min_gain_arg_ = -1;   // --prefix-min-gain, -1 = default (128), 0 = no minimum
 
 	/// \brief hand the loaded engine and the state table its library exports to the cache (call at the end of load_model)
 	/// \param api the library's `<engine>_state_api(engine)`, nullptr if the engine cannot save its context
@@ -353,6 +362,20 @@ protected:
 	void _shared_validate_capacity(std::size_t rendered_tokens, std::optional<int> requested) const;
 	buffer<bf16> _chunked_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled = [] { return false; }, void* payload = nullptr, int first_len_run = 0);
 	std::string _shared_generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled = [] { return false; });
+
+	/// \brief Render the chat template for a request
+	/// \param inputs the template inputs; add_generation_prompt is set here
+	/// \param continue_final_message render no generation prompt and stop right
+	///        after the final message's text (see chat_continue.hpp)
+	/// \param options minja's render options, for templates that need polyfills turned off
+	/// \throws ModelRequestError 400 when the final message cannot be continued
+	///         because the template rewrote it
+	std::string _render_chat_template(minja::chat_template_inputs& inputs, bool continue_final_message,
+	                                  const minja::chat_template_options& options = minja::chat_template_options());
+	/// \brief The continued assistant turn of the last prompt rendered with continue_final_message:
+	///        the template's opening of the turn and the message's text
+	/// \note _begin_turn() hands it to the output parser for such a request, which renders it just before.
+	std::string continued_turn_;
 
 	/// \brief Note where this turn's output starts, once the prompt is final
 	/// \param meta_info the request; gets the prompt tail, and its constraint is started
@@ -564,6 +587,14 @@ public:
 		return true;
 	}
 
+	/// \brief Whether a request can continue its final assistant message (continue_final_message)
+	/// \note Off unless a model says otherwise: its insert() must pass the flag to
+	///       apply_chat_template() and keep every prompt token, and its generate()
+	///       must start from the sample insert() made rather than feed a preamble.
+	virtual bool supports_continue_final_message() const {
+		return false;
+	}
+
 	/// \brief Prepare the benchmark
 	/// \param text the text to benchmark
 	/// \return a pair of the number of tokens and the text that produce 1000 tokens
@@ -605,11 +636,12 @@ public:
 		return this->prefix_cache_.enabled();
 	}
 
-	/// \brief --prefix-cache-mb / --prefix-slots (-1 = the default, 0 slots = off); call before load_model
-	void set_prefix_limits(int cache_mb, int slots) {
+	/// \brief --prefix-cache-mb / --prefix-slots / --prefix-min-gain (-1 = the default, 0 slots = off); call before load_model
+	void set_prefix_limits(int cache_mb, int slots, int min_gain = -1) {
 		this->prefix_cache_mb_arg_ = cache_mb;
 		this->prefix_slots_arg_ = slots;
-		this->prefix_cache_.configure(cache_mb, slots);
+		this->prefix_min_gain_arg_ = min_gain;
+		this->prefix_cache_.configure(cache_mb, slots, min_gain);
 	}
 	/// \brief Whether the chat template is rendered with thinking on
 	/// \note Only models with a thinking switch override this; the rest reason or
@@ -665,7 +697,9 @@ public:
 		return configure_parameter(parameter_name, std::any(value));
 	}
 
-	virtual std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object()) = 0;
+	/// \brief Render the chat
+	/// \param continue_final_message continue the final assistant message instead of opening a new turn
+	virtual std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object(), bool continue_final_message = false) = 0;
 
 };
 

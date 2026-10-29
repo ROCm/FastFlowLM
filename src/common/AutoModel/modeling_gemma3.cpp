@@ -34,12 +34,11 @@ void Gemma3::setup_tokenizer(std::string model_path) {
     auto tokenizer_config = this->_shared_setup_tokenizer(model_path);
 }
 
-std::string Gemma3::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools) {
+std::string Gemma3::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools, bool continue_final_message) {
     minja::chat_template_inputs inputs;
-    inputs.add_generation_prompt = true;
     inputs.messages = messages;
     inputs.extra_context = this->extra_context;
-    return this->chat_tmpl->apply(inputs);
+    return this->_render_chat_template(inputs, continue_final_message);
 }
 
 bool Gemma3::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
@@ -110,7 +109,7 @@ bool Gemma3::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std:
             filtered_messages.push_back(filtered_message);
         }
         header_print("FLM", "Total images: " << total_images);
-        templated_text = this->apply_chat_template(filtered_messages);
+        templated_text = this->apply_chat_template(filtered_messages, nlohmann::ordered_json::object(), meta_info.continue_final_message);
 
         if (total_images > 0) {
             pixel_values.resize(3 * 896 * 896 * sizeof(bf16) * total_images);

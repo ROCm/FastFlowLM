@@ -10,7 +10,8 @@
 namespace flm::qwen3 {
 
 /// \brief the largest context this backend can hold
-inline constexpr std::uint32_t kCoreContextLimit = 4096;
+/// \note Qwen3's native context, the most corelib pages it to.
+inline constexpr std::uint32_t kCoreContextLimit = 32768;
 
 /// \brief what the frontend must know before building this backend
 /// \note Inline so the registry can reject a request before the engine exists.

@@ -17,6 +17,8 @@ parent: Local Server (Server Mode)
   - [Example: Use a File as the Prompt](#-example-use-a-file-as-the-prompt)
   - [Example: Batch Requests (Multiple Prompts)](#-example-batch-requests-multiple-prompts)
   - [Example: Use Temperature, Top-p, and Presence Penalty](#-example-use-temperature-top-p-and-presence-penalty)
+  - [Example: Token Log Probabilities](#-example-token-log-probabilities)
+  - [Example: Score the Next Token After a Partial Answer](#-example-score-the-next-token-after-a-partial-answer)
   - [Example: Multi-Image Input](#-example-multi-image-input)   
   - [Example: Multi-Modal Input](#️-example-multi-modal-input)   
   - [Example: Flash Models (Single-Turn, Pinned System Prompt)](#-example-flash-models-single-turn-pinned-system-prompt)   
@@ -355,6 +357,41 @@ Streaming works the same way: each content chunk carries `choices[0].logprobs.co
 - `bytes` is `null` for special tokens such as end-of-turn, which can appear among `top_logprobs`. A token that holds only part of a UTF-8 character is named by its bytes, for example `"bytes:\xe4\xbd"`.
 - On `qwen3.8-mtp`, tokens produced by speculative decoding take their log probabilities from the batched pass that checks the draft. That pass runs different kernels from one-token decoding, so the values can differ slightly from what the same model reports with speculation off.
 - `top_logprobs` without `logprobs=True`, or outside 0–100, gets HTTP 400.
+
+---
+
+## 🎯 Example: Score the Next Token After a Partial Answer
+
+> Available from FLM v1.0.11.
+
+To see how likely each answer is, end `messages` with the start of the assistant's reply and set `continue_final_message` (an `extra_body` field). The model continues that text instead of starting a new reply, and the first log probability entry is its distribution for the very next token:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://127.0.0.1:52625/v1", api_key="flm")
+
+response = client.chat.completions.create(
+    model="llama3.2:1b",
+    messages=[
+        {"role": "user", "content": "Is Paris the capital of France? Answer yes or no."},
+        {"role": "assistant", "content": "The answer is:"},
+    ],
+    max_tokens=1,
+    temperature=0,
+    logprobs=True,
+    top_logprobs=5,
+    extra_body={"continue_final_message": True},
+)
+
+for alt in response.choices[0].logprobs.content[0].top_logprobs:
+    print(f"{alt.token!r:10} {alt.logprob:8.4f}")
+```
+
+- The prompt goes through the model's own chat template, so the score is for the context the model is used to.
+- `content` is only the continuation, without your text, and keeps its whitespace as the model wrote it (`' Yes'`, not `'Yes'`).
+- Use a model with thinking off (`think: false`, or a non-reasoning model). A model that always reasons first reads your text as its reasoning, so its first token is not the answer.
+- Continuing works on every chat model except single-turn (flash) models and `gpt-oss`. What else is refused, and how the prompt is cut: [Continuing an Assistant Message](https://fastflowlm.com/docs/instructions/server/request_parameters/#-continuing-an-assistant-message-continue_final_message).
 
 ---
 

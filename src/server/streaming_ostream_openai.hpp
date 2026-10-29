@@ -312,7 +312,8 @@ public:
     ///       when it asks for logprobs it must outlive the stream
     void start(const chat_meta_info_t& meta_info) {
         const chat_format_spec& spec = auto_chat_engine->get_chat_format();
-        stream = std::make_unique<chat_stream>(spec, chat_format_prefill(spec, meta_info.prompt_tail), parse_options);
+        stream = std::make_unique<chat_stream>(
+            spec, chat_format_prefill(spec, meta_info.prompt_tail, meta_info.continue_final_message), parse_options);
         if (meta_info.logprobs_top_n >= 0) {
             logprobs = std::make_unique<chat_logprobs_aligner>(auto_chat_engine, meta_info.logprobs);
         }

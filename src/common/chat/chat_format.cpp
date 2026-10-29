@@ -118,7 +118,7 @@ chat_format_spec chat_format_detect(const std::string& template_src,
     return spec;
 }
 
-std::string chat_format_prefill(const chat_format_spec& spec, const std::string& prompt_tail) {
+std::string chat_format_prefill(const chat_format_spec& spec, const std::string& prompt_tail, bool continuing) {
     if (spec.kind == chat_format_kind::HARMONY) {
         // the generation prompt ends with an open "<|start|>assistant" header, and
         // may have started a channel too; the header is parsed with the output
@@ -133,7 +133,7 @@ std::string chat_format_prefill(const chat_format_spec& spec, const std::string&
     size_t open = prompt_tail.rfind(spec.reasoning_start);
     size_t close = prompt_tail.rfind(spec.reasoning_end);
     if (open == std::string::npos || (close != std::string::npos && close > open)) {
-        return spec.reasoning_forced ? spec.reasoning_start : "";
+        return spec.reasoning_forced && !continuing ? spec.reasoning_start : "";
     }
     // only the tag: what follows it in the prompt is whitespace, and some
     // decoders render that as byte tokens like <0x0A>

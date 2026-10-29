@@ -63,6 +63,9 @@ chat_format_spec chat_format_detect(const std::string& template_src,
 /// \brief The part of the prompt the parser has to see before the generated text
 /// \param spec the model's format
 /// \param prompt_tail the decoded end of the prompt as fed to the model
+/// \param continuing the prompt ends inside the final assistant message
+///        (continue_final_message), not at the start of a new turn; a model that
+///        always opens its turn by reasoning has then already opened it, or not
 /// \return text to prepend to the output before parsing, e.g. "<think>" when the
 ///         template already opened the reasoning block
-std::string chat_format_prefill(const chat_format_spec& spec, const std::string& prompt_tail);
+std::string chat_format_prefill(const chat_format_spec& spec, const std::string& prompt_tail, bool continuing = false);

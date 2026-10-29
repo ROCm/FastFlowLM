@@ -77,7 +77,7 @@ public:
 private:
     flm_rt::device* npu_device_inst_ = nullptr;
     std::string tag_;
-    std::string name_;             //!< the upstream model name in replies ("d3-lite", "d3-nano", "d3-mini", "d3-turbo", "d3-ultra"), set on load
+    std::string name_;             //!< the upstream model name in replies ("d3-lite", "d3-nano", "d3-mini", "d3-flash", "d3-turbo", "d3-ultra"), set on load
     std::unique_ptr<npu_xclbin_manager> npu_;
     std::unique_ptr<LM_Config> config_;
     std::unique_ptr<Tokenizer> tokenizer_;

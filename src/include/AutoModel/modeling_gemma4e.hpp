@@ -125,7 +125,8 @@ public:
     bool insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled = [] { return false; }) override;
     std::string generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled = [] { return false; }) override;
     std::string generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os = std::cout) override;
-    std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object()) override;
+    std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object(), bool continue_final_message = false) override;
+    bool supports_continue_final_message() const override { return true; }
     chat_template_type_t get_chat_template_type() {
         return chat_template_type_t::gemma4;
     }
@@ -255,8 +256,12 @@ public:
 
     /// \brief Apply the chat template without tools — gemma4e_flash does not
     ///        support tool calling, so the tools argument is always dropped.
-    std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object()) override {
+    std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object(), bool continue_final_message = false) override {
         nlohmann::ordered_json no_tools = nlohmann::ordered_json::object();
-        return Gemma4e::apply_chat_template(messages, no_tools);
+        return Gemma4e::apply_chat_template(messages, no_tools, continue_final_message);
     }
+
+    /// \brief Single-turn (every insert() starts over), so the server rejects
+    ///        continue_final_message for it; Gemma4e's true is not inherited.
+    bool supports_continue_final_message() const override { return false; }
 };

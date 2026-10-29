@@ -6,6 +6,7 @@
 /// \note This is a source file for the auto_model class
 
 #include "AutoModel/automodel.hpp"
+#include "chat/chat_continue.hpp"
 #include "utils/npu_platform.hpp"
 
 #include <filesystem>
@@ -40,12 +41,13 @@ int resolve_context_length(const nlohmann::ordered_json& model_info,
 
 
 ModelRequestError::ModelRequestError(
-    int http_code, bool session_cleared, std::string message)
+    int http_code, bool session_cleared, std::string message, std::string type)
     : std::runtime_error(std::move(message)),
-      http_code_(http_code), session_cleared_(session_cleared) {}
+      http_code_(http_code), session_cleared_(session_cleared), type_(std::move(type)) {}
 
 int ModelRequestError::http_code() const noexcept { return http_code_; }
 bool ModelRequestError::session_cleared() const noexcept { return session_cleared_; }
+const std::string& ModelRequestError::type() const noexcept { return type_; }
 
 AutoModel::AutoModel(flm_rt::device* npu_device_inst, std::string current_model) {
     this->npu_device_inst = npu_device_inst;
@@ -400,7 +402,7 @@ void AutoModel::_prefix_cold_start(PrefixSlotCache& cache) {
 void AutoModel::_prefix_attach(void* engine, const flm_state_api* api, int image_token_id) {
     static const bool disabled = std::getenv("FLM_DISABLE_PREFIX_SLOTS") != nullptr;
     this->prefix_cache_.image_token_id = image_token_id;
-    this->prefix_cache_.configure(this->prefix_cache_mb_arg_, this->prefix_slots_arg_);
+    this->prefix_cache_.configure(this->prefix_cache_mb_arg_, this->prefix_slots_arg_, this->prefix_min_gain_arg_);
     if (disabled || engine == nullptr || api == nullptr) {
         this->prefix_cache_.attach(nullptr, nullptr);
         return;
@@ -475,7 +477,9 @@ bool AutoModel::_prefix_insert(PrefixSlotCache& cache, chat_meta_info_t& meta_in
     meta_info.prefill_duration += head_prefill_ns;
     cache.set_live(full_tokens);
     // the end of this prompt keeps only what follows the shared head, when a slot holds that head
-    cache.save(full_tokens, image_hashes, false, cache.end_kv_from(full_tokens, boundary));
+    if (!cache.boundary_only) {
+        cache.save(full_tokens, image_hashes, false, cache.end_kv_from(full_tokens, boundary));
+    }
     meta_info.prefix_cache = cache.report();
     return true;
 }
@@ -534,6 +538,13 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
         if (is_server_mode) {
             header_print("FLM", "Conversation context diverged from cache, clearing context...");
         }
+        clear_context();
+        skip_count = 0;
+    }
+    else if (skip_count >= tokens.size() && !tokens.empty()) {
+        // The engine holds the whole prompt already (the same request again), but
+        // sampling needs the logits of its last token, and the cache cannot step
+        // back one: read it in again from the start.
         clear_context();
         skip_count = 0;
     }
@@ -630,17 +641,51 @@ buffer<bf16> AutoModel::_chunked_insert(chat_meta_info_t& meta_info, std::vector
     return y;
 }
 
+std::string AutoModel::_render_chat_template(minja::chat_template_inputs& inputs, bool continue_final_message,
+                                             const minja::chat_template_options& options) {
+    if (!continue_final_message) {
+        inputs.add_generation_prompt = true;
+        return this->chat_tmpl->apply(inputs, options);
+    }
+    if (inputs.messages.empty() || inputs.messages.back().value("role", "") != "assistant") {
+        throw ModelRequestError(400, false, "continue_final_message requires the last message to have role \"assistant\"",
+                                "invalid_request_error");
+    }
+    const auto render = [&](const nlohmann::ordered_json& messages, bool add_generation_prompt) {
+        minja::chat_template_inputs chat = inputs;
+        chat.messages = messages;
+        chat.add_generation_prompt = add_generation_prompt;
+        return this->chat_tmpl->apply(chat, options);
+    };
+    try {
+        chat_continued continued = chat_continue_prompt(render, inputs.messages);
+        // the output parser looks for an open reasoning block in this turn only, not in what the user wrote earlier
+        this->continued_turn_ = std::move(continued.turn);
+        return continued.prompt;
+    } catch (const std::invalid_argument& e) {
+        throw ModelRequestError(400, false, e.what(), "invalid_request_error");
+    }
+}
+
 void AutoModel::_begin_turn(chat_meta_info_t& meta_info, const std::vector<int>& prompt_tokens) {
     // keep the end of the prompt as the model sees it: generation continues from
-    // there, so it tells the output parser whether a reasoning block is already open
+    // there, so it tells the output parser whether a reasoning block is already open.
+    // A continued message may have opened one anywhere in its text, so then it is
+    // the whole continued turn.
     constexpr size_t PROMPT_TAIL_TOKENS = 32;
     meta_info.prompt_tail.clear();
-    for (size_t i = prompt_tokens.size() > PROMPT_TAIL_TOKENS ? prompt_tokens.size() - PROMPT_TAIL_TOKENS : 0;
-         i < prompt_tokens.size(); i++) {
-        meta_info.prompt_tail += this->token_text(prompt_tokens[i]);
+    if (meta_info.continue_final_message) {
+        meta_info.prompt_tail = this->continued_turn_;
+    }
+    else {
+        for (size_t i = prompt_tokens.size() > PROMPT_TAIL_TOKENS ? prompt_tokens.size() - PROMPT_TAIL_TOKENS : 0;
+             i < prompt_tokens.size(); i++) {
+            meta_info.prompt_tail += this->token_text(prompt_tokens[i]);
+        }
     }
     if (meta_info.constraint) {
-        meta_info.constraint->start(chat_format_prefill(this->chat_format, meta_info.prompt_tail));
+        meta_info.constraint->start(chat_format_prefill(this->chat_format, meta_info.prompt_tail,
+                                                        meta_info.continue_final_message));
     }
 }
 
@@ -788,6 +833,8 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
     stop_reason_t reason = EOT_DETECTED;
     int last_sampled_token = this->last_token;
     this->token_history.push_back(this->last_token);
+    // the sample insert() took is the reply's first token, and counts toward the limit
+    meta_info.generated_tokens++;
     if (this->is_normal_token(last_sampled_token) && last_sampled_token != -1){
         std::string token_str = this->tokenizer->run_time_decoder(last_sampled_token);
         result += token_str;
@@ -807,10 +854,11 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
     if (this->total_tokens >= decode_cap){
         header_print("WARNING", "Max length reached, stopping generation...");
         reason = MAX_LENGTH_REACHED;
-        meta_info.stop_reason = reason;
-        return result;
     }
-    while (true){
+    else if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)){
+        reason = MAX_LENGTH_REACHED;
+    }
+    else while (true){
         // Running out of window is a truncation, not the model choosing to
         // stop, and the caller has to be able to tell those apart: this is
         // what becomes `done_reason` over the API. Testing the cap here rather
@@ -864,6 +912,11 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
     }
     meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
     meta_info.stop_reason = reason;
+    if (reason != EOT_DETECTED) {
+        // Cut short after sampling its last token: no engine has run that one,
+        // so the next prompt has to carry it.
+        this->token_history.pop_back();
+    }
     if (this->total_tokens >= decode_cap){
         header_print("WARNING", "Max length reached, stopping generation...");
     }

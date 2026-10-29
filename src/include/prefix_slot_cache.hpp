@@ -89,13 +89,26 @@ public:
     int image_token_id = -1;
     /// \brief a shared head shorter than this is not worth a slot: re-processing it is cheap
     size_t min_boundary = 512;
-    /// \brief an end snapshot must add at least this many tokens over a saved slot that covers its prompt
-    size_t min_end_gain = 64;
+    /// \brief an end snapshot must add at least this many tokens over a saved slot that covers its prompt (--prefix-min-gain)
+    /// \note Larger: fewer snapshots saved and evicted, but a resume may re-read up to this many tokens more. Measured on 6
+    ///       interleaved agents, 16 slots: 64 -> 128 -> 256 -> 512 costs +0.6% / +1.9% / +7% turn time over 64 and saves 18% /
+    ///       28% / 44% fewer snapshots. 0 saves every end snapshot.
+    static constexpr size_t kDefaultMinEndGain = 128;
+    size_t min_end_gain = kDefaultMinEndGain;
+    /// \brief save boundary slots (the shared system + tools head) only, no end-of-prompt snapshots
+    /// \note For a model whose snapshot is too big to keep one per conversation turn (qwen3.8-mtp: ~160 MB of recurrent state
+    ///       and 64 KB per token): it keeps its own checkpoint for a conversation that continues and uses the head slot
+    ///       when another conversation ran in between.
+    bool boundary_only = false;
+    /// \brief limits while --prefix-cache-mb / --prefix-slots stay at their defaults (0 = the global defaults)
+    size_t default_mib = 0;
+    size_t default_slots = 0;
 
-    /// \brief --prefix-cache-mb / --prefix-slots (-1 = default; 0 slots = off)
-    void configure(int cache_mb, int slots) {
+    /// \brief --prefix-cache-mb / --prefix-slots / --prefix-min-gain (-1 = default; 0 slots = off; min_gain 0 = no minimum)
+    void configure(int cache_mb, int slots, int min_gain = -1) {
         cache_mb_ = cache_mb;
         slots_ = slots;
+        min_end_gain = min_gain >= 0 ? static_cast<size_t>(min_gain) : kDefaultMinEndGain;
     }
     /// \brief attach the engine and the state table its library exports (nullptr api detaches); slots of a former engine are forgotten
     /// \note The engine's library exports a flm_state_api (see flm_state_api.h); without one nothing is saved.

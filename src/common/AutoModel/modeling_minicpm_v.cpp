@@ -45,15 +45,14 @@ void MiniCPM_V::setup_tokenizer(std::string model_path) {
     auto tokenizer_config = this->_shared_setup_tokenizer(model_path);
 }
 
-std::string MiniCPM_V::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools) {
+std::string MiniCPM_V::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools, bool continue_final_message) {
     minja::chat_template_inputs inputs;
-    inputs.add_generation_prompt = true;
     inputs.messages = messages;
     inputs.extra_context = this->extra_context;
     inputs.extra_context["enable_thinking"] = this->enable_think;
     if (!tools.empty() && this->enable_tool)
         inputs.tools = tools;
-    return this->chat_tmpl->apply(inputs);
+    return this->_render_chat_template(inputs, continue_final_message);
 }
 
 void MiniCPM_V::fail_inference() {
@@ -125,7 +124,7 @@ bool MiniCPM_V::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
             content.push_back({ {"type", "text"}, {"text", message["content"]} });
             messages.push_back({ {"role", message["role"]}, {"content", content} });
         }
-        templated_text = this->apply_chat_template(messages, input.tools);
+        templated_text = this->apply_chat_template(messages, input.tools, meta_info.continue_final_message);
     }
     else if (!input.prompt.empty()) { // a pure text, usually from the cli
         nlohmann::ordered_json messages;
@@ -178,8 +177,9 @@ bool MiniCPM_V::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
 
     // ---- prefix slots: resume from the longest saved prefix of this prompt ----
     // The generation prompt ends in "<think>\n" (2 tokens) or, with thinking off, "<think>\n\n</think>\n\n" (4): decode() feeds them,
-    // the next turn does not render them, so they are left out of what is saved.
-    const size_t think_trim = this->enable_think ? 2 : 4;
+    // the next turn does not render them, so they are left out of what is saved. A continued message has no generation
+    // prompt: all its tokens are the client's text and stay.
+    const size_t think_trim = meta_info.continue_final_message ? 0 : (this->enable_think ? 2 : 4);
     const bool slot_mode = this->_prefix_slot_mode(meta_info, tokens.size(), think_trim);
     size_t match_len = 0;
     std::vector<int> full_tokens;          // what this prompt leaves in the engine
@@ -339,8 +339,11 @@ std::string MiniCPM_V::decode(chat_meta_info_t& meta_info, int length_limit, std
     // Some backends refuse to decode past a limit of their own, below MAX_L.
     const uint32_t decode_cap = this->decode_cap();
 
-    // The tail of the generation prompt that insert() held back.
-    const std::vector<int> think_prefix = this->enable_think
+    // The tail of the generation prompt that insert() held back. A continued
+    // message held nothing back: it goes on from the sample insert() made.
+    const std::vector<int> think_prefix = meta_info.continue_final_message
+        ? std::vector<int>{}
+        : this->enable_think
         ? std::vector<int>{ think_start_id, 198 }                     // <think>\n
         : std::vector<int>{ think_start_id, 271, think_end_id, 271 }; // <think>\n\n</think>\n\n
     if (this->total_tokens + think_prefix.size() >= decode_cap) {
@@ -351,7 +354,7 @@ std::string MiniCPM_V::decode(chat_meta_info_t& meta_info, int length_limit, std
     // The first prefix forward is left out of DECODING_TIME, as Qwen3_5VL does,
     // so `flm bench` measures decode speed the same way as for qwen3.5:0.8b.
     buffer<bf16> y;
-    if (!this->enable_think) {
+    if (!this->enable_think && !think_prefix.empty()) {
         // fed for the KV cache only, it never reaches the output
         this->_skip_insert_sample(meta_info);
     }
@@ -371,7 +374,7 @@ std::string MiniCPM_V::decode(chat_meta_info_t& meta_info, int length_limit, std
             os << token_str << std::flush;
         }
     }
-    int sampled_token = this->_sample(y, meta_info);
+    int sampled_token = think_prefix.empty() ? this->last_token : this->_sample(y, meta_info);
 
     while (true) {
         this->profiler_list[TKOEN_DECODE_TIME].start();
@@ -391,6 +394,9 @@ std::string MiniCPM_V::decode(chat_meta_info_t& meta_info, int length_limit, std
                 this->total_tokens < decode_cap) {
                 this->lm_engine->forward(sampled_token);
                 this->total_tokens++;
+            } else {
+                // The engine never ran it, so the next prompt has to carry it.
+                this->token_history.pop_back();
             }
             break;
         }
@@ -419,6 +425,11 @@ std::string MiniCPM_V::decode(chat_meta_info_t& meta_info, int length_limit, std
     }
     meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
     meta_info.stop_reason = reason;
+    if (reason != EOT_DETECTED) {
+        // Cut short after sampling its last token: no engine has run that one,
+        // so the next prompt has to carry it.
+        this->token_history.pop_back();
+    }
 
     std::cout << std::endl;
     if (this->log_raw_output) {

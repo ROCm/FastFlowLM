@@ -36,9 +36,8 @@ void GPT_OSS::setup_tokenizer(std::string model_path){
     auto tokenizer_config = this->_shared_setup_tokenizer(model_path);
 }
 
-std::string GPT_OSS::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools) {
+std::string GPT_OSS::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools, bool continue_final_message) {
     minja::chat_template_inputs inputs;
-    inputs.add_generation_prompt = true;
     inputs.messages = messages;
     inputs.extra_context = this->extra_context;
     inputs.extra_context["enable_thinking"] = this->enable_think;
@@ -47,7 +46,7 @@ std::string GPT_OSS::apply_chat_template(nlohmann::ordered_json& messages, nlohm
     inputs.extra_context["role"] = this->role;
     //inputs.tools = tools;
 
-    return this->chat_tmpl->apply(inputs);
+    return this->_render_chat_template(inputs, continue_final_message);
 }
 bool GPT_OSS::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled)
 {
@@ -114,6 +113,8 @@ std::string GPT_OSS::generate(chat_meta_info_t& meta_info, int length_limit, std
 
  
     token_history.push_back(last_token);
+    // the sample insert() took is the reply's first token, and counts toward the limit
+    meta_info.generated_tokens++;
     if (this->is_normal_token(last_sampled_token) && last_sampled_token != -1){
         std::string token_str = this->tokenizer->run_time_decoder(last_sampled_token);
         result += token_str;
@@ -121,6 +122,9 @@ std::string GPT_OSS::generate(chat_meta_info_t& meta_info, int length_limit, std
 
     }
     if (this->is_eos(last_sampled_token)){
+        // Sampled from the prefill, so no engine has run it.
+        token_history.pop_back();
+        meta_info.stop_reason = reason;
         return result;
     }
     this->profiler_list[DECODING_TIME].reset();
@@ -128,9 +132,16 @@ std::string GPT_OSS::generate(chat_meta_info_t& meta_info, int length_limit, std
     if (this->total_tokens >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping generation...");
         reason = MAX_LENGTH_REACHED;
-        return result;
     }
-    while (this->total_tokens < this->MAX_L){
+    else if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)){
+        reason = MAX_LENGTH_REACHED;
+    }
+    else while (true){
+        // Running out of window is a truncation: test it here so it is recorded.
+        if (this->total_tokens >= this->MAX_L){
+            reason = MAX_LENGTH_REACHED;
+            break;
+        }
         if (is_cancelled()) {
             reason = CANCEL_DETECTED;
             break;
@@ -166,6 +177,11 @@ std::string GPT_OSS::generate(chat_meta_info_t& meta_info, int length_limit, std
     }
     meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
     meta_info.stop_reason = reason;
+    if (reason != EOT_DETECTED) {
+        // Cut short after sampling its last token: no engine has run that one,
+        // so the next prompt has to carry it.
+        token_history.pop_back();
+    }
     if (this->total_tokens >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping generation...");
     }

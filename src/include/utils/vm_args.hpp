@@ -45,6 +45,7 @@ inline void print_help(po::options_description& general) {
     std::cout << "\tflm run phi4-mini-it:4b --backend flm_npu" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --prefill-chunk-len 8192" << std::endl;
     std::cout << "\tflm serve qwen3.5:2b --prefix-slots 16 --prefix-cache-mb 4096" << std::endl;
+    std::cout << "\tflm serve qwen3.5:2b --prefix-min-gain 256" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --socket 10" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --q-len 10" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --port 8000" << std::endl;
@@ -79,7 +80,7 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
             ("embed,e", po::value<bool>(&parsed_args.embed)->default_value(0),
             "If load embed model")
             ("decision,d", po::value<std::string>(&parsed_args.decision)->default_value(""),
-             "Serve a decision model next to the chat model, d3:lite, d3:nano, d3:mini, d3:turbo or d3:ultra (POST /v1/systemone)")
+             "Serve a decision model next to the chat model, d3:lite, d3:nano, d3:mini, d3:flash, d3:turbo or d3:ultra (POST /v1/systemone)")
             ("host", po::value<std::string>(&parsed_args.host)->default_value("127.0.0.1"), 
              "Set the server address (for serve command)")
             ("port,p", po::value<int>(&parsed_args.port)->default_value(-1), 
@@ -104,6 +105,9 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
              "Host memory in MiB for saved prompt snapshots (prefix cache), -1: default 4096 (Qwen3.5 and Qwen3.6-MoE)")
             ("prefix-slots", po::value<int>(&parsed_args.prefix_slots)->default_value(-1),
              "How many prompt snapshots to keep (prefix cache), -1: default 8, at most 32, 0: off (Qwen3.5 and Qwen3.6-MoE)")
+            ("prefix-min-gain", po::value<int>(&parsed_args.prefix_min_gain)->default_value(-1),
+             "Prefix cache: a new end-of-prompt snapshot is only saved if it adds at least this many tokens over a saved one that already covers the prompt, "
+             "-1: default 128, 0: save every one. Larger = fewer saves and evictions but up to N more tokens re-read on a resume; smaller = the opposite")
             ("img-pre-resize,r", po::value<int>(&parsed_args.img_pre_resize)->default_value(2),
              "Pre-resize the image, 0: original size, 1: height = 480, 2: height = 720, 3: height = 1080, 4: height = 1440, 5: height = 2160, 6: height = 2880, 7: height = 3240, 8: height = 4320")
             ("socket,s", po::value<size_t>(&parsed_args.max_socket_connections)->default_value(10),

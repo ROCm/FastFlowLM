@@ -4640,7 +4640,7 @@
         },
         {
             "type": "file",
-            "oid": "b35442413dffd0e83a4400bd21cd4bf879dd12ed",
+            "oid": "ba5fd119746a7e5614ff06dc6178eb9cd83fc933",
             "size": 3000,
             "path": "config.json"
         },
@@ -4702,6 +4702,80 @@
                 "pointerSize": 134
             },
             "xetHash": "813e9596d99caac326757177a0c1a543377e8da91b44e8574701174a5750ab32",
+            "path": "vision_weight.q4nx"
+        }
+    ],
+    "d3:flash": [
+        {
+            "type": "file",
+            "oid": "a585dec894e63da457d9440ec6aa7caa16d20860",
+            "size": 7756,
+            "path": "chat_template.jinja"
+        },
+        {
+            "type": "file",
+            "oid": "c5a23587dcdfe228b2b9f08b5d210b4b822e029f",
+            "size": 3165,
+            "path": "config.json"
+        },
+        {
+            "type": "file",
+            "oid": "b6e99b9556f2953c4fd748737e1d40c402189f46",
+            "size": 5502,
+            "path": "decision_config.json"
+        },
+        {
+            "type": "file",
+            "oid": "e0dac368d8107d040d21ddd90caf36b16ae45181",
+            "size": 5098259624,
+            "lfs": {
+                "oid": "36025387084e3e444d989e9653a52e665dc465bdad3dd1a733f262916e11dd01",
+                "size": 5098259624,
+                "pointerSize": 135
+            },
+            "xetHash": "300bcca59d2b2d14212555a1e468d5de5f7cef2e2ef8cdbe8bc6d955aab9227d",
+            "path": "model.q4nx"
+        },
+        {
+            "type": "file",
+            "oid": "3bed22a9483b5720040c04995c2c5b62cbffe8be",
+            "size": 4178000,
+            "lfs": {
+                "oid": "8bbc9a9df4e1b7df85a80a1091977092b938d8d2d2869dfaeb8fd36063cf322f",
+                "size": 4178000,
+                "pointerSize": 132
+            },
+            "xetHash": "45b8c6fa2b0bb1ddc73ce47d4adc6709f18e4fb40afba9413b02d3c82ad3e18d",
+            "path": "readout.safetensors"
+        },
+        {
+            "type": "file",
+            "oid": "a73a846725794819aa6e1c9e97d8dc9671c2006d",
+            "size": 12807982,
+            "lfs": {
+                "oid": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+                "size": 12807982,
+                "pointerSize": 133
+            },
+            "xetHash": "655d3f6803c619aa34c31a027ce74a315eaa200aad3fca5b968dcdf6485bfba2",
+            "path": "tokenizer.json"
+        },
+        {
+            "type": "file",
+            "oid": "eda48d3e75a8e59a8479ee4ec8b37f76e711d9c1",
+            "size": 16710,
+            "path": "tokenizer_config.json"
+        },
+        {
+            "type": "file",
+            "oid": "3e67f932086e4b75db7c00d00a07dc0a152cb488",
+            "size": 1027737360,
+            "lfs": {
+                "oid": "07979ede48dd92aea3f1bb1cc8f6245151cb446c0edef1516f5edb41c6f1d646",
+                "size": 1027737360,
+                "pointerSize": 135
+            },
+            "xetHash": "b7cbafceaa573a2941b9a5f4a7cb8404c010951a4028181869abbdf721b81bcd",
             "path": "vision_weight.q4nx"
         }
     ],
@@ -4868,14 +4942,14 @@
         },
         {
             "type": "file",
-            "oid": "8450567929a758d476ddb65065666aa505724748",
+            "oid": "d918c80f70ffa5acda3a177c8906494249d0dfce",
             "size": 560,
             "path": "MANIFEST.sha256"
         },
         {
             "type": "file",
-            "oid": "72bb10e8868121fef43a51724e00fd0eed89c594",
-            "size": 2534,
+            "oid": "bf1416d2b688cad2c2ab9b81723f59cca44e2b1e",
+            "size": 2575,
             "path": "README.md"
         },
         {
@@ -4886,7 +4960,7 @@
         },
         {
             "type": "file",
-            "oid": "f54b16d7ab11cf31ac394c68e9913116b93d2974",
+            "oid": "beeee6f635e574ca101f2063edf5b7b0b37fc605",
             "size": 1480,
             "path": "config.json"
         },
@@ -4919,6 +4993,180 @@
             "oid": "6c8970285a6027a4f2830dff29de4d0a2624ba24",
             "size": 1606,
             "path": "tokenizer_config.json"
+        }
+    ],
+    "llama3.2-core:1b": [
+        {
+            "type": "file",
+            "path": "Llama-3.2-1B-Instruct-Q8_0.gguf",
+            "size": 1321083008,
+            "sha256": "432f310a77f4650a88d0fd59ecdd7cebed8d684bafea53cbff0473542964f0c3"
+        },
+        {
+            "type": "file",
+            "path": "tokenizer.json",
+            "size": 9085657,
+            "sha256": "79e3e522635f3171300913bb421464a87de6222182a0570b9b2ccba2a964b2b4"
+        },
+        {
+            "type": "file",
+            "path": "tokenizer_config.json",
+            "size": 4331,
+            "sha256": "01b0d6dd3c391ffc2facc01592ac07f25e8c4212d3450b8103042e8a5fcbafa8"
+        },
+        {
+            "type": "file",
+            "path": "config.json",
+            "size": 1019,
+            "sha256": "a53d38c545333679d523863f60a45f04166e52d15793864da3464712810f8bd9"
+        }
+    ],
+    "llama3.2-core:3b": [
+        {
+            "type": "file",
+            "path": "Llama-3.2-3B-Instruct-Q8_0.gguf",
+            "size": 3421899296,
+            "sha256": "b5607b5090a8280063fff2d706bb3408ca6542341b06aab39c3eca0a28575921"
+        },
+        {
+            "type": "file",
+            "path": "tokenizer.json",
+            "size": 9085657,
+            "sha256": "79e3e522635f3171300913bb421464a87de6222182a0570b9b2ccba2a964b2b4"
+        },
+        {
+            "type": "file",
+            "path": "tokenizer_config.json",
+            "size": 4331,
+            "sha256": "01b0d6dd3c391ffc2facc01592ac07f25e8c4212d3450b8103042e8a5fcbafa8"
+        },
+        {
+            "type": "file",
+            "path": "config.json",
+            "size": 1019,
+            "sha256": "f83c8c4bfd00c7e04c6a4b8d9ed471193bed0aa0304c32dff847a36586f8291e"
+        }
+    ],
+    "llama3.1-core:8b": [
+        {
+            "type": "file",
+            "path": "Meta-Llama-3.1-8B-Instruct-Q8_0.gguf",
+            "size": 8540775840,
+            "sha256": "9da71c45c90a821809821244d4971e5e5dfad7eb091f0b8ff0546392393b6283"
+        },
+        {
+            "type": "file",
+            "path": "tokenizer.json",
+            "size": 9085657,
+            "sha256": "79e3e522635f3171300913bb421464a87de6222182a0570b9b2ccba2a964b2b4"
+        },
+        {
+            "type": "file",
+            "path": "tokenizer_config.json",
+            "size": 4331,
+            "sha256": "01b0d6dd3c391ffc2facc01592ac07f25e8c4212d3450b8103042e8a5fcbafa8"
+        },
+        {
+            "type": "file",
+            "path": "config.json",
+            "size": 1020,
+            "sha256": "82ff79502694a38eacd424763c5f3cc8a95843dd233d830b74dee5b3a14dde9b"
+        }
+    ],
+    "qwen3.6-moe-core:35b-a3b@amd": [
+        {
+            "type": "file",
+            "path": "Qwen3.6-35B-A3B-Q4_G32.gguf",
+            "size": 21298897504,
+            "sha256": "f71ec12919fe53e9c273588e297e4b73f8ae3f1ece9b2607a7c11e44b7a6ecac"
+        },
+        {
+            "type": "file",
+            "path": "tokenizer.json",
+            "size": 12807982,
+            "sha256": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42"
+        },
+        {
+            "type": "file",
+            "path": "tokenizer_config.json",
+            "size": 16718,
+            "sha256": "5186f0defcd7f232382c7f0aebcd2252d073bb921ab240e407b7ae8745d2b29b"
+        },
+        {
+            "type": "file",
+            "path": "config.json",
+            "size": 3686,
+            "sha256": "93a4693fa9d8392fbfccd4b3c9873f4bfdcb14fdede978b123d07d19675efe99"
+        },
+        {
+            "type": "file",
+            "path": "chat_template.jinja",
+            "size": 7764,
+            "sha256": "e84f32a23fdda27689f868aa4a1a5621f41133e51a48d7f3efcbea2839574259"
+        }
+    ],
+    "qwen3.8-core:27b": [
+        {
+            "type": "file",
+            "path": "Qwen3.8-27B-Q4_0.gguf",
+            "size": 16056478688,
+            "sha256": "ede16c7b36e578ca87a8c70e011e4b4633a32c831c0ce76d0f474582384e671d"
+        },
+        {
+            "type": "file",
+            "path": "tokenizer.json",
+            "size": 12809320,
+            "sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3"
+        },
+        {
+            "type": "file",
+            "path": "tokenizer_config.json",
+            "size": 17928,
+            "sha256": "b11349aafa7cdc6a320767cf7ceb29ed82f7eda5d65e8e0819e76f0ce947bf27"
+        },
+        {
+            "type": "file",
+            "path": "config.json",
+            "size": 4312,
+            "sha256": "191e0af232104ed8b65258cf3fb2b842e288008baca7633c11b82a1ac7203aab"
+        },
+        {
+            "type": "file",
+            "path": "chat_template.jinja",
+            "size": 8952,
+            "sha256": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041"
+        }
+    ],
+    "qwen3.8-core:27b@amd": [
+        {
+            "type": "file",
+            "path": "Qwen3.8-27B-Q4_G128.gguf",
+            "size": 15964921824,
+            "sha256": "31fae186a73095d2dc1b1e51847cf2f28af973ba0ff5982df00feaa278af27f0"
+        },
+        {
+            "type": "file",
+            "path": "tokenizer.json",
+            "size": 12809320,
+            "sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3"
+        },
+        {
+            "type": "file",
+            "path": "tokenizer_config.json",
+            "size": 17928,
+            "sha256": "b11349aafa7cdc6a320767cf7ceb29ed82f7eda5d65e8e0819e76f0ce947bf27"
+        },
+        {
+            "type": "file",
+            "path": "config.json",
+            "size": 4312,
+            "sha256": "191e0af232104ed8b65258cf3fb2b842e288008baca7633c11b82a1ac7203aab"
+        },
+        {
+            "type": "file",
+            "path": "chat_template.jinja",
+            "size": 8952,
+            "sha256": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041"
         }
     ]
 }

@@ -35,15 +35,14 @@ void LFM2::setup_tokenizer(std::string model_path) {
     this->tokenizer->is_doubled_encoded = true;
 }
 
-std::string LFM2::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools) {
+std::string LFM2::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools, bool continue_final_message) {
     minja::chat_template_inputs inputs;
     minja::chat_template_options opt;
     opt.polyfill_tool_responses = false;
-    inputs.add_generation_prompt = true;
     inputs.messages = messages;
     inputs.extra_context = this->extra_context;
     // inputs.tools = tools;
-    return this->chat_tmpl->apply(inputs, opt);
+    return this->_render_chat_template(inputs, continue_final_message, opt);
 }
 
 bool LFM2::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
@@ -56,7 +55,7 @@ bool LFM2::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::f
     }
     if (!input.messages.empty()) { // already a formated messages, usually from REST API
         //templated_text = this->apply_chat_template(input.messages);
-        templated_text = this->apply_chat_template(input.messages, input.tools);
+        templated_text = this->apply_chat_template(input.messages, input.tools, meta_info.continue_final_message);
     }
     else if (!input.prompt.empty()) { // a pure text, usually from the cli
         nlohmann::ordered_json messages;
@@ -119,15 +118,14 @@ void LFM2_5_TK::setup_tokenizer(std::string model_path) {
     this->tokenizer->is_doubled_encoded = true;
 }
 
-std::string LFM2_5_TK::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools) {
+std::string LFM2_5_TK::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools, bool continue_final_message) {
     minja::chat_template_inputs inputs;
     minja::chat_template_options opt;
     opt.polyfill_tool_responses = false;
-    inputs.add_generation_prompt = true;
     inputs.messages = messages;
     inputs.extra_context = this->extra_context;
     // inputs.tools = tools;
-    return this->chat_tmpl->apply(inputs, opt);
+    return this->_render_chat_template(inputs, continue_final_message, opt);
 }
 
 bool LFM2_5_TK::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
@@ -139,7 +137,7 @@ bool LFM2_5_TK::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
         return false;
     }
     if (!input.messages.empty()) { // already a formated messages, usually from REST API
-        templated_text = this->apply_chat_template(input.messages);
+        templated_text = this->apply_chat_template(input.messages, nlohmann::ordered_json::object(), meta_info.continue_final_message);
         // templated_text = this->apply_chat_template(input.messages, input.tools);
     }
     else if (!input.prompt.empty()) { // a pure text, usually from the cli
@@ -158,8 +156,10 @@ bool LFM2_5_TK::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
     lfm2_npu *lfm2_engine = dynamic_cast<lfm2_npu*>(this->lm_engine);
 
     // Prefix slots. The two tokens left out ("<think>\n") are fed by generate(); the next turn does not render them.
-    if (this->_prefix_slot_mode(meta_info, tokens.size(), 2)) {
-        return this->_prefix_text_insert(meta_info, tokens, 2, "<|im_start|>user", is_cancelled);
+    // A continued message keeps all its tokens: they are the client's text, not the generation prompt.
+    const size_t think_trim = meta_info.continue_final_message ? 0 : 2;
+    if (this->_prefix_slot_mode(meta_info, tokens.size(), think_trim)) {
+        return this->_prefix_text_insert(meta_info, tokens, think_trim, "<|im_start|>user", is_cancelled);
     }
     this->_prefix_legacy_path();
 
@@ -171,7 +171,7 @@ bool LFM2_5_TK::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
 
     // Remove the starting reasoning placeholder appended by the chat template: "<think>\n" -> token ids 151667 708.
     size_t n = tokens.size();
-    tokens.resize(n - 2);
+    tokens.resize(n - think_trim);
 
     bool success = this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
 
@@ -183,6 +183,10 @@ bool LFM2_5_TK::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
 
 
 std::string LFM2_5_TK::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
+    if (meta_info.continue_final_message) {
+        // insert() held back no "<think>\n": the message goes on from the sample insert() made
+        return this->_shared_generate(meta_info, length_limit, os, is_cancelled);
+    }
     std::vector<int> sampled_tokens;
     std::string result;
     if (length_limit > 0){
@@ -221,18 +225,31 @@ std::string LFM2_5_TK::generate(chat_meta_info_t& meta_info, int length_limit, s
     os << token_str << std::flush;
 
     this->total_tokens++;
+    // the first sample after the preamble is the reply's first token, and counts toward the limit
     meta_info.generated_tokens++;
     int last_sampled_token = sampled_token;
+    token_history.push_back(last_sampled_token);
     token_str = this->tokenizer->run_time_decoder(last_sampled_token);
     result += token_str;
-    os << token_str << std::flush;   
+    os << token_str << std::flush;
 
-    if (this->total_tokens >= this->MAX_L){
+    if (this->is_eos(last_sampled_token)){
+        this->lm_engine->forward(last_sampled_token);
+    }
+    else if (this->total_tokens >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping generation...");
         reason = MAX_LENGTH_REACHED;
-        return result;
     }
-    while (this->total_tokens < this->MAX_L){
+    else if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)){
+        reason = MAX_LENGTH_REACHED;
+    }
+    else while (true){
+        // Running out of window is a truncation; testing here rather than in
+        // the loop condition records it.
+        if (this->total_tokens >= this->MAX_L){
+            reason = MAX_LENGTH_REACHED;
+            break;
+        }
         if (is_cancelled()) {
             reason = CANCEL_DETECTED;
             break;
@@ -268,6 +285,11 @@ std::string LFM2_5_TK::generate(chat_meta_info_t& meta_info, int length_limit, s
     }
     meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
     meta_info.stop_reason = reason;
+    if (reason != EOT_DETECTED) {
+        // Cut short after sampling its last token: no engine has run that one,
+        // so the next prompt has to carry it.
+        token_history.pop_back();
+    }
     if (this->total_tokens >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping generation...");
     }
