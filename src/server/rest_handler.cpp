@@ -1198,8 +1198,9 @@ void RestHandler::handle_chat(const json& request,
                 {"eval_duration", meta_info.decoding_duration},
                 {"done_reason", stop_reason_to_string(meta_info.stop_reason)}
             };
+            log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
             send_response(response);
-            
+
             // auto history = this->chat_engine->get_history();
             // std::cout << "history: " << history.first << std::endl;
             this->auto_chat_engine->clear_context();
