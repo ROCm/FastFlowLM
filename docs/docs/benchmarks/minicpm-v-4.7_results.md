@@ -66,6 +66,8 @@ Prefill time-to-first-token (TTFT) for MiniCPM-V-4.7-1B on NPU (FastFlowLM) with
 
 ---
 
+---
+
 ## MiniCPM-V-4.7-35B-A3B (`minicpm-v-4.7-moe:35b-a3b`)
 
 The Mixture-of-Experts model (35B parameters, about 3B active per token). Same text engine and NPU kernels as
@@ -109,7 +111,7 @@ upstream checkpoint run with Hugging Face Transformers on the CPU.
 
 | **Check** | **FastFlowLM (NPU)** | **llama.cpp Q4_K_M (same GGUF)** | **BF16** |
 |-----------|---------------------:|---------------------------------:|---------:|
-| GSM8K, first 100 test problems (thinking off) | 98 / 100 | 97 / 100 | — |
+| GSM8K, first 100 test problems (thinking off) | 98 / 100 | 97 / 100 | 99 / 100 |
 | DocVQA, 50 validation questions (ANLS) | 97.50 | 97.42 | 97.42 |
 
-With 50–100 questions these checks cannot tell a loss of a point or two from none; they show that nothing is broken.
+GSM8K allows up to 1024 new tokens. Paired with the BF16 model on those 100 problems, the NPU build is 1.0 point lower (95% confidence interval −2.4 to +4.4 points; 2 problems only BF16 solves, 1 only the NPU build). With 50–100 questions these checks cannot tell a loss of a point or two from none; they show that nothing is broken.
