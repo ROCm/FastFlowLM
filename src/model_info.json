@@ -4014,6 +4014,12 @@
         },
         {
             "type": "file",
+            "oid": "19f27431df94a86e3d39d293878ab58970bc8876",
+            "size": 50,
+            "path": "configuration.json"
+        },
+        {
+            "type": "file",
             "oid": "c9861cfc8a360dd79c223aaf7c5177ce7ce1171a",
             "size": 270406816,
             "lfs": {
