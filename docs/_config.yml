@@ -143,7 +143,7 @@ docs_nav:
         url: "/docs/models/nemotron3.5-bolt/"
       - label: Nemotron Bolt DFlash
         url: "/docs/models/nemotron3.5-bolt-dflash/"
-      - label: Flash
+      - label: Flash Models
         url: "/docs/models/flash/"
   - label: Benchmarks
     children:

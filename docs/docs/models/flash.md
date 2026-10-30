@@ -1,6 +1,6 @@
 ---
 layout: docs
-title: Flash
+title: Flash Models
 nav_order: 19
 parent: Models
 ---
