@@ -1206,6 +1206,62 @@
             "path": "vision_weight.q4nx"
         }
     ],
+    "minicpm-v-4.7-moe:35b-a3b": [
+        {
+            "type": "file",
+            "oid": "93107b9f70bdb7a39055d438779c52d5f3c8fc72",
+            "size": 7249,
+            "path": "chat_template.jinja"
+        },
+        {
+            "type": "file",
+            "oid": "353d40735d462fc4ac5a8ffe015ed29a4ef2da1e",
+            "size": 3960,
+            "path": "config.json"
+        },
+        {
+            "type": "file",
+            "oid": "5d509bb115e7612693878e2419cd65f74c104c94",
+            "size": 21043802648,
+            "lfs": {
+                "oid": "08e922a9e570f6c4dc7869da02ccfa7b160ad21591cec73be4d73eacb597ee19",
+                "size": 21043802648,
+                "pointerSize": 136
+            },
+            "xetHash": "ce4067fa1d682305ca62bc13e84925b0da6573a74a1f1e4f62176468a62f7481",
+            "path": "model.q4nx"
+        },
+        {
+            "type": "file",
+            "oid": "e70e867967ee4b7f37bcdb82a134b39f8d37d040",
+            "size": 20001935,
+            "lfs": {
+                "oid": "e4608c5d7b3f4f30ba83be16a82cdac856b2e7191d40f0a08cbacc76c2a926ee",
+                "size": 20001935,
+                "pointerSize": 133
+            },
+            "xetHash": "3c0083140373690c75618599358816fcaf6924ad60ed6c920ea49b46a1f8a5ec",
+            "path": "tokenizer.json"
+        },
+        {
+            "type": "file",
+            "oid": "d5206bf214a23d812325397ab6fc43bdc37d5a01",
+            "size": 1540,
+            "path": "tokenizer_config.json"
+        },
+        {
+            "type": "file",
+            "oid": "c71c501ccf21b1bb52c8dd52401115474682ec21",
+            "size": 1144586944,
+            "lfs": {
+                "oid": "a229ba8c2c8018e284d470cf1ad5934c879ba9eaa00212d2f9e59fcbe7f66010",
+                "size": 1144586944,
+                "pointerSize": 135
+            },
+            "xetHash": "90742a884ad80c33b18d4bc125e05d1df30faf2f97313aab360182acf4feb428",
+            "path": "vision_weight.q4nx"
+        }
+    ],
     "lfm2:1.2b": [
         {
             "type": "file",
