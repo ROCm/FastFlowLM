@@ -36,6 +36,26 @@ json ExceptionResponse(const std::exception& error) {
     return {{"error", error.what()}};
 }
 
+/// \brief One line per finished request in the server log, streamed or not, whatever the client asked for
+/// \note The prefix "Request done:" is stable so tools can grep it
+void log_request_summary(const chat_meta_info_t& m, size_t kv_used, size_t kv_max) {
+    const double prefill_s = static_cast<double>(m.prefill_duration) / 1e9;
+    const double decode_s = static_cast<double>(m.decoding_duration) / 1e9;
+    const auto new_prompt = m.prompt_tokens > m.cached_prompt_tokens ? m.prompt_tokens - m.cached_prompt_tokens : 0;
+    std::ostringstream os;
+    os << std::fixed << std::setprecision(3)
+       << "Request done: prompt " << m.prompt_tokens << " tokens";
+    if (m.cached_prompt_tokens > 0) os << " (" << m.cached_prompt_tokens << " cached)";
+    os << " (prefill " << prefill_s << " s" << std::setprecision(2);
+    if (prefill_s > 0) os << ", " << new_prompt / prefill_s << " tok/s";
+    os << "), generated " << m.generated_tokens << " tokens (decode "
+       << std::setprecision(3) << decode_s << " s" << std::setprecision(2);
+    if (decode_s > 0) os << ", " << m.generated_tokens / decode_s << " tok/s";
+    os << "), kv " << kv_used << "/" << kv_max
+       << ", finish " << stop_reason_to_string(m.stop_reason);
+    header_print("FLM", os.str());
+}
+
 /// \brief Whether a request sets a field
 /// \note Some clients send null for every option they leave unset, so null
 ///       counts as not set; json::value() and conversions throw on it instead.
@@ -1011,6 +1031,7 @@ void RestHandler::handle_generate(const json& request,
             // std::cout << "history: " << history.first << std::endl;
             meta_info.total_duration = (uint64_t)time_utils::duration_ns(total_start_time, total_end_time).first;
             ostream.finalize_generate(meta_info, history.second);
+            log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
         } else {
             // Non-streaming response
             std::stringstream ss;
@@ -1055,6 +1076,7 @@ void RestHandler::handle_generate(const json& request,
                 {"done_reason", stop_reason_to_string(meta_info.stop_reason)}
             };
             // std::cout << "history: " << history.first << std::endl;
+            log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
             send_response(response);
         }
     } catch (const std::exception& e) {
@@ -1133,6 +1155,7 @@ void RestHandler::handle_chat(const json& request,
             meta_info.total_duration = (uint64_t)time_utils::duration_ns(total_start_time, total_end_time).first;
             
             ostream.finalize_chat(meta_info);
+            log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
             // auto history = this->chat_engine->get_history();
             // std::cout << "history: " << history.first << std::endl;
             this->auto_chat_engine->clear_context();
@@ -1656,6 +1679,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                 header_print("ERROR", std::string("Finishing the stream failed: ") + e.what());
                 send_stream_error(ExceptionResponse(e));
             }
+            log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
         }
         else {
             nullstream nstream;
@@ -1739,6 +1763,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                 header_print("❌ ", "Generation Cancelled!");
                 this->prompt_cache.reset();
             }
+            log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
             send_response(response);
         }
 
@@ -1987,6 +2012,7 @@ void RestHandler::handle_openai_completion(const json& request,
                 header_print("ERROR", std::string("Finishing the stream failed: ") + e.what());
                 send_stream_error(ExceptionResponse(e));
             }
+            log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
 
             this->auto_chat_engine->clear_context();
         }
@@ -2041,6 +2067,7 @@ void RestHandler::handle_openai_completion(const json& request,
                 }}
             };
             if (meta_info.prefix_cache.valid) response["usage"]["flm_prefix_cache"] = prefix_cache_usage_json(meta_info.prefix_cache);
+            log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
             send_response(response);
         }
     }
