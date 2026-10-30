@@ -110,18 +110,18 @@ Worker::~Worker() {
 
 void Worker::write_all(const void* data, std::size_t size) {
     impl_->input.write(static_cast<const char*>(data), size);
-    if (!impl_->input) throw std::runtime_error("IRON worker write failed");
+    if (!impl_->input) throw std::runtime_error("IRON server write failed");
 }
 
 void Worker::read_all(void* data, std::size_t size) {
     impl_->output.read(static_cast<char*>(data), size);
-    if (!impl_->output) throw std::runtime_error("IRON worker exited");
+    if (!impl_->output) throw std::runtime_error("IRON server exited");
 }
 
 nlohmann::json Worker::request(const nlohmann::json& command,
                                const void* payload,
                                std::size_t payload_size) {
-    if (poisoned_) throw std::runtime_error("IRON worker is unusable; reload the model");
+    if (poisoned_) throw std::runtime_error("IRON server is unusable; reload the model");
     try {
         const std::string header = command.dump();
         const std::uint32_t header_size = static_cast<std::uint32_t>(header.size());
@@ -129,18 +129,18 @@ nlohmann::json Worker::request(const nlohmann::json& command,
         write_all(header.data(), header.size());
         if (payload_size) write_all(payload, payload_size);
         impl_->input.flush();
-        if (!impl_->input) throw std::runtime_error("IRON worker write failed");
+        if (!impl_->input) throw std::runtime_error("IRON server write failed");
 
         std::uint32_t response_size = 0;
         read_all(&response_size, sizeof(response_size));
         if (response_size == 0 || response_size > kMaxHeader) {
-            throw std::runtime_error("IRON worker returned an invalid header");
+            throw std::runtime_error("IRON server returned an invalid header");
         }
         std::string response(response_size, '\0');
         read_all(response.data(), response.size());
         auto result = nlohmann::json::parse(response);
         if (!result.value("ok", false)) {
-            throw std::runtime_error(result.value("error", "IRON worker failed"));
+            throw std::runtime_error(result.value("error", "IRON server failed"));
         }
         return result;
     } catch (...) {

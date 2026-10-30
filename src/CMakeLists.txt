@@ -53,7 +53,7 @@ option(FLM_PORTABLE_BUILD "Build portable distribution with bundled runtime libr
 # It also fixes the NPU generation the build targets -- see utils/npu_platform.hpp.
 option(FLM_ENABLE_CORE
        "Reach kernels through ryzenai-corelib instead of FastFlowLM's own flow" OFF)
-option(FLM_ENABLE_IRON "Run complete IRON graphs through the IRON Python server" OFF)
+option(FLM_ENABLE_IRON "Run complete IRON graphs through the IRON server" OFF)
 
 if(FLM_ENABLE_IRON)
     add_compile_definitions(FLM_ENABLE_IRON=1)

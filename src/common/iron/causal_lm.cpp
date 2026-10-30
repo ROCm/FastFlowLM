@@ -43,7 +43,7 @@ void CausalLM::set_context_length(int length) {
 }
 
 void CausalLM::load_weights(Q4NX&) {
-    throw std::logic_error("IRON loads safetensors in its worker");
+    throw std::logic_error("The IRON server loads safetensors");
 }
 
 void CausalLM::update_max_length(std::uint32_t length) {
@@ -90,7 +90,7 @@ std::string CausalBackend::id() const {
     return flm::backend::kIronBackendId;
 }
 
-std::string CausalBackend::detail() const { return "IRON graph worker"; }
+std::string CausalBackend::detail() const { return "IRON server"; }
 
 bool CausalBackend::supports_preemption() const { return false; }
 

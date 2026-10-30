@@ -9,7 +9,7 @@
 #   ./home_install.sh                # build (if needed) + install to ~/flm_exe
 #   ./home_install.sh --no-build     # install an existing build/ tree only
 #   ./home_install.sh --core          # ryzenai-corelib backend, to scratch
-#   ./home_install.sh --iron          # IRON backend, using the active Python
+#   ./home_install.sh --iron          # IRON backend, using the active IRON environment
 #   FLM_PREFIX=/path ./home_install.sh
 #
 # --core installs to /scratch/$USER/flm_exe_core rather than ~/flm_exe: a core
@@ -92,7 +92,7 @@ IRON_PYTHON=""
 if [[ "$WANT_IRON" -eq 1 ]]; then
     IRON_PYTHON="$(command -v python3 || true)"
     if [[ -z "$IRON_PYTHON" ]] || ! "$IRON_PYTHON" -c 'import iron.lm_server' >/dev/null 2>&1; then
-        echo "[home_install] ERROR: --iron requires a Python environment that can import iron.lm_server." >&2
+        echo "[home_install] ERROR: --iron requires an environment with the IRON server (iron.lm_server) installed." >&2
         echo "               Activate the IRON environment before running this installer." >&2
         exit 1
     fi
