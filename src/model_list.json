@@ -530,14 +530,14 @@
         },
 
         "minicpm-ocr": {
-            "1b": {
+            "1.0": {
                 "supported_platforms": ["aie2p"],
                 "name": "MiniCPM-OCR-1.0-NPU2",
                 "url": "https://huggingface.co/FastFlowLM/MiniCPM-OCR-1.0-NPU2/resolve/main",
                 "file_url": "https://huggingface.co/api/models/FastFlowLM/MiniCPM-OCR-1.0-NPU2/tree/main",
                 "ms_url": "https://modelscope.cn/models/amd/MiniCPM-OCR-1.0-NPU2",
                 "size": 1300000000,
-                "flm_min_version": "1.0.8",
+                "flm_min_version": "1.0.12",
                 "files": [
                     "config.json",
                     "model.q4nx",
