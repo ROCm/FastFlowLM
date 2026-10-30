@@ -3,7 +3,7 @@
 
 #include "iron/worker.hpp"
 
-#include <cassert>
+#include "../phi4_core/test_support.hpp"
 #include <cstdlib>
 #include <stdexcept>
 #include <vector>
@@ -25,13 +25,20 @@ int main() {
 
     flm::iron::Worker llama("/unused", "llama", 32);
     const auto logits = llama.logits(std::vector<int>{4, 10, 26});
-    assert(logits == std::vector<std::uint16_t>({26, 3}));
+    TEST_REQUIRE(logits == std::vector<std::uint16_t>({26, 3}));
     llama.reset();
-    assert(!llama.poisoned());
+    TEST_REQUIRE(!llama.poisoned());
 
     flm::iron::Worker embedding("/unused", "embedding_gemma2");
     const auto result = embedding.embed("hello", "query", 128);
-    assert(result == std::vector<float>({5.0f, 128.0f}));
+    TEST_REQUIRE(result == std::vector<float>({5.0f, 128.0f}));
+
+    for (const char* model : {"bad_count", "bad_header", "error", "truncated"}) {
+        flm::iron::Worker broken("/unused", model);
+        RequireThrows([&] { broken.logits({1}); });
+        TEST_REQUIRE(broken.poisoned());
+        RequireContains(RequireThrows([&] { broken.reset(); }), "reload");
+    }
 
     bool pipe_failed = false;
     try {
@@ -40,7 +47,7 @@ int main() {
     } catch (const std::runtime_error&) {
         pipe_failed = true;
     }
-    assert(pipe_failed);
+    TEST_REQUIRE(pipe_failed);
 
     bool failed = false;
     SetEnvironment("FLM_IRON_WORKER_MODULE", "missing_worker");
@@ -49,6 +56,6 @@ int main() {
     } catch (const std::runtime_error&) {
         failed = true;
     }
-    assert(failed);
+    TEST_REQUIRE(failed);
     return 0;
 }

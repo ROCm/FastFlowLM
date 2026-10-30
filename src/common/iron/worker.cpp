@@ -4,7 +4,15 @@
 #include "iron/worker.hpp"
 
 #define BOOST_PROCESS_USE_STD_FS
+#if __has_include(<boost/process/v1/child.hpp>)
+#define BOOST_PROCESS_VERSION 1
+#include <boost/process/v1/args.hpp>
+#include <boost/process/v1/child.hpp>
+#include <boost/process/v1/io.hpp>
+#include <boost/process/v1/search_path.hpp>
+#else
 #include <boost/process.hpp>
+#endif
 
 #if !defined(_WIN32)
 #include <csignal>
@@ -113,6 +121,7 @@ void Worker::read_all(void* data, std::size_t size) {
 nlohmann::json Worker::request(const nlohmann::json& command,
                                const void* payload,
                                std::size_t payload_size) {
+    if (poisoned_) throw std::runtime_error("IRON worker is unusable; reload the model");
     try {
         const std::string header = command.dump();
         const std::uint32_t header_size = static_cast<std::uint32_t>(header.size());
@@ -143,15 +152,15 @@ nlohmann::json Worker::request(const nlohmann::json& command,
 std::vector<std::uint16_t> Worker::logits(const std::vector<int>& tokens) {
     auto response = request({{"command", "logits"}, {"count", tokens.size()}},
                             tokens.data(), tokens.size() * sizeof(int));
-    const std::size_t count = response.at("count").get<std::size_t>();
-    std::vector<std::uint16_t> values(count);
     try {
+        const std::size_t count = response.at("count").get<std::size_t>();
+        std::vector<std::uint16_t> values(count);
         read_all(values.data(), values.size() * sizeof(values[0]));
+        return values;
     } catch (...) {
         poisoned_ = true;
         throw;
     }
-    return values;
 }
 
 void Worker::reset() { request({{"command", "reset"}}); }
@@ -164,15 +173,15 @@ std::vector<float> Worker::embed(const std::string& text,
                              {"dimensions", dimensions},
                              {"size", text.size()}},
                             text.data(), text.size());
-    const std::size_t count = response.at("count").get<std::size_t>();
-    std::vector<float> values(count);
     try {
+        const std::size_t count = response.at("count").get<std::size_t>();
+        std::vector<float> values(count);
         read_all(values.data(), values.size() * sizeof(values[0]));
+        return values;
     } catch (...) {
         poisoned_ = true;
         throw;
     }
-    return values;
 }
 
 }  // namespace flm::iron

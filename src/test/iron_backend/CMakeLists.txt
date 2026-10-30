@@ -24,5 +24,6 @@ endif()
 enable_testing()
 add_test(NAME test_iron_worker COMMAND test_iron_worker)
 set_tests_properties(test_iron_worker PROPERTIES
+    TIMEOUT 30
     ENVIRONMENT
         "FLM_IRON_PYTHON=${Python3_EXECUTABLE};PYTHONPATH=${CMAKE_CURRENT_LIST_DIR}")

@@ -115,6 +115,17 @@ runs:
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
         fi
 
+    - name: Build and run backend tests
+      if: inputs.variant == 'XRT-deb'
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: |
+        for suite in iron_backend model_backend model_list_platform; do
+          cmake -S "src/test/$suite" -B "build-$suite" -DCMAKE_BUILD_TYPE=Release
+          cmake --build "build-$suite" --parallel 2
+          ctest --test-dir "build-$suite" --output-on-failure
+        done
+
     # Everything cached lives under .ci-cache in the workspace: a container
     # job's actions/cache resolves relative paths there, and an absolute
     # ${{ github.workspace }} would name the host's path, not the container's.

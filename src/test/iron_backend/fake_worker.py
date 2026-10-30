@@ -35,7 +35,7 @@ def main():
             return
         name = command["command"]
         if name == "load_model":
-            assert command["model"] in {"dies", "embedding_gemma2", "llama"}
+            model = command["model"]
             if command["model"] == "llama":
                 assert command["context_length"] == 32
             else:
@@ -47,7 +47,18 @@ def main():
             send({"ok": True})
         elif name == "logits":
             tokens = struct.unpack(f"={command['count']}i", read_exact(command["count"] * 4))
-            send({"ok": True, "count": 2}, struct.pack("=HH", tokens[-1], len(tokens)))
+            if model == "bad_count":
+                send({"ok": True})
+            elif model == "bad_header":
+                sys.stdout.buffer.write(struct.pack("=I", 0))
+                sys.stdout.buffer.flush()
+            elif model == "error":
+                send({"ok": False, "error": "model failed"})
+            elif model == "truncated":
+                send({"ok": True, "count": 2}, b"x")
+                return
+            else:
+                send({"ok": True, "count": 2}, struct.pack("=HH", tokens[-1], len(tokens)))
         elif name == "embed":
             text = read_exact(command["size"]).decode()
             send({"ok": True, "count": 2}, struct.pack("=ff", len(text), command["dimensions"]))
