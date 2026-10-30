@@ -283,6 +283,43 @@
                 "footprint": 9.1
             }
         },
+        "nemotron3.5-bolt-dflash": {
+            "e4b": {
+                "supported_platforms": ["aie2p"],
+                "name": "Nemotron-3.5-Bolt-E4B-DFlash-NPU2",
+                "base_model": "nemotron3.5-bolt:e4b",
+                "url": "https://huggingface.co/FastFlowLM/Nemotron-3.5-Bolt-E4B-DFlash-NPU2",
+                "file_url": "https://huggingface.co/api/models/FastFlowLM/Nemotron-3.5-Bolt-E4B-DFlash-NPU2/tree/main",
+                "ms_url": "https://modelscope.cn/models/amd/Nemotron-3.5-Bolt-E4B-DFlash-NPU2",
+                "size": 270410098,
+                "flm_min_version": "1.0.12",
+                "files": [
+                    "config.json",
+                    "dflash_weight.q4nx",
+                    "LICENSE.OpenMDW-1.1"
+                ],
+                "vlm": true,
+                "asr": true,
+                "default_context_length": 32768,
+                "max_prefill_len": 4096,
+                "details": {
+                    "format": "NPU2",
+                    "family": "gemma4e-dflash",
+                    "think": true,
+                    "parameter_size": "8B+0.36B",
+                    "quantization_level": "Q4_1"
+                },
+                "label": [
+                    "audio",
+                    "vision",
+                    "reasoning",
+                    "tool-calling",
+                    "chat-transcription",
+                    "speculative"
+                ],
+                "footprint": 9.5
+            }
+        },
         "gemma4e-flash": {
             "e2b": {
                 "supported_platforms": ["aie2p"],
@@ -848,7 +885,7 @@
                 "url": "https://huggingface.co/unsloth/Phi-4-mini-instruct-GGUF/resolve/78eb92a46fc37e6b524df991ed9aca9bc6aa7b80",
                 "file_url": "https://huggingface.co/api/models/unsloth/Phi-4-mini-instruct-GGUF/tree/78eb92a46fc37e6b524df991ed9aca9bc6aa7b80",
                 "size": 4100140571,
-                "default_context_length": 4096,
+                "default_context_length": 131072,
                 "max_prefill_len": 4096,
                 "details": {
                     "family": "phi4",
@@ -929,6 +966,38 @@
             }
         },
         "d3": {
+            "edge": {
+                "supported_platforms": ["aie2p"],
+                "name": "D3-Edge-NPU2",
+                "url": "https://huggingface.co/FastFlowLM/D3-Edge-NPU2",
+                "file_url": "https://huggingface.co/api/models/FastFlowLM/D3-Edge-NPU2/tree/main",
+                "ms_url": "https://modelscope.cn/models/amd/D3-Edge-NPU2",
+                "size": 624659058,
+                "flm_min_version": "1.0.12",
+                "files": [
+                    "config.json",
+                    "model.q4nx",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "chat_template.jinja",
+                    "decision_config.json",
+                    "readout.safetensors",
+                    "vision_weight.q4nx"
+                ],
+                "default_context_length": 32768,
+                "max_prefill_len": 32768,
+                "details": {
+                    "format": "NPU2",
+                    "family": "d3",
+                    "think": false,
+                    "parameter_size": "0.6B",
+                    "quantization_level": "Q4_K"
+                },
+                "label":[
+                    "decision"
+                ],
+                "footprint": 1.5
+            },
             "lite": {
                 "supported_platforms": ["aie2p"],
                 "name": "D3-Lite-NPU2",
@@ -1024,6 +1093,39 @@
                     "decision"
                 ],
                 "footprint": 3.5
+            },
+            "flash": {
+                "supported_platforms": ["aie2p"],
+                "name": "D3-Flash-NPU2",
+                "url": "https://huggingface.co/FastFlowLM/D3-Flash-NPU2",
+                "file_url": "https://huggingface.co/api/models/FastFlowLM/D3-Flash-NPU2/tree/main",
+                "ms_url": "https://modelscope.cn/models/amd/D3-Flash-NPU2",
+                "size": 6143033379,
+                "flm_min_version": "1.0.12",
+                "files": [
+                    "config.json",
+                    "model.q4nx",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "chat_template.jinja",
+                    "decision_config.json",
+                    "readout.safetensors",
+                    "vision_weight.q4nx"
+                ],
+                "default_context_length": 32768,
+                "max_prefill_len": 32768,
+                "details": {
+                    "format": "NPU2",
+                    "family": "d3",
+                    "think": false,
+                    "parameter_size": "9B",
+                    "quantization_level": "Q4_K"
+                },
+                "label":[
+                    "decision"
+                ],
+                "scratch": 8000000000,
+                "footprint": 14.5
             },
             "turbo": {
                 "supported_platforms": ["aie2p"],
@@ -1737,7 +1839,7 @@
             "url": "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/0314792d7f1f7e229411f620751375812bb9faf2",
             "file_url": "https://huggingface.co/api/models/unsloth/gemma-4-E2B-it-GGUF/tree/0314792d7f1f7e229411f620751375812bb9faf2",
             "size": 5080530526,
-            "default_context_length": 16384,
+            "default_context_length": 65536,
             "max_prefill_len": 4096,
             "details": {
                 "family": "gemma4e",
@@ -1806,7 +1908,7 @@
             "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/bfc15c382204943c3a8fff0c750b94ae2364d7a3",
             "file_url": "https://huggingface.co/api/models/unsloth/gemma-4-E4B-it-GGUF/tree/bfc15c382204943c3a8fff0c750b94ae2364d7a3",
             "size": 8225131325,
-            "default_context_length": 16384,
+            "default_context_length": 65536,
             "max_prefill_len": 4096,
             "details": {
                 "family": "gemma4e",
@@ -1877,7 +1979,7 @@
             "url": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523",
             "file_url": "https://huggingface.co/api/models/unsloth/Qwen3.5-4B-GGUF/tree/e87f176479d0855a907a41277aca2f8ee7a09523",
             "size": 4495231341,
-            "default_context_length": 4096,
+            "default_context_length": 32768,
             "max_prefill_len": 4096,
             "details": {
                 "family": "qwen3.5",
@@ -1939,7 +2041,7 @@
             "url": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/3885219b6810b007914f3a7950a8d1b469d598a5",
             "file_url": "https://huggingface.co/api/models/unsloth/Qwen3.5-9B-GGUF/tree/3885219b6810b007914f3a7950a8d1b469d598a5",
             "size": 9540331866,
-            "default_context_length": 4096,
+            "default_context_length": 32768,
             "max_prefill_len": 4096,
             "details": {
                 "family": "qwen3.5",
@@ -2003,7 +2105,7 @@
             "url": "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/a483e9e6cbd595906af30beda3187c2663a1118c",
             "file_url": "https://huggingface.co/api/models/unsloth/Qwen3.6-35B-A3B-GGUF/tree/a483e9e6cbd595906af30beda3187c2663a1118c",
             "size": 36915976470,
-            "default_context_length": 4096,
+            "default_context_length": 32768,
             "max_prefill_len": 4096,
             "details": {
                 "family": "qwen3.6-moe",
@@ -2038,8 +2140,96 @@
                     "revision": "995ad96eacd98c81ed38be0c5b274b04031597b0"
                 }
             },
+            "preferred_source": {
+                "url": "https://huggingface.co/amd/Qwen3.6-35B-A3B-Q4_G32-GGUF/resolve/53a2155ba4237f4bffc3914b2f63cbb0bc68585b",
+                "file_url": "https://huggingface.co/api/models/amd/Qwen3.6-35B-A3B-Q4_G32-GGUF/tree/53a2155ba4237f4bffc3914b2f63cbb0bc68585b",
+                "use_hf_token": true,
+                "size": 21311733654,
+                "footprint": 21.3,
+                "details": {
+                    "quantization_level": "Q4_G32"
+                },
+                "files": [
+                    "Qwen3.6-35B-A3B-Q4_G32.gguf",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "config.json",
+                    "chat_template.jinja"
+                ],
+                "model_info_key": "qwen3.6-moe-core:35b-a3b@amd"
+            },
             "footprint": 36.9,
             "model_info_key": "qwen3.6-moe-core:35b-a3b",
+            "label": [
+                "reasoning",
+                "tool-calling"
+            ]
+        }
+    },
+        "qwen3.8-core":     {
+        "27b": {
+            "supported_platforms": [
+                "dev04"
+            ],
+            "name": "Qwen3.8-27B",
+            "url": "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/4ca720788d1e01f1bff70c033e0d0028fd02e502",
+            "file_url": "https://huggingface.co/api/models/unsloth/Qwen3.8-27B-GGUF/tree/4ca720788d1e01f1bff70c033e0d0028fd02e502",
+            "size": 16069319200,
+            "default_context_length": 32768,
+            "max_prefill_len": 4096,
+            "details": {
+                "family": "qwen3.8-mtp",
+                "think": true,
+                "parameter_size": "27B",
+                "quantization_level": "Q4_0, runs on the GPU"
+            },
+            "flm_min_version": "1.0.11",
+            "vlm": false,
+            "files": [
+                "Qwen3.8-27B-Q4_0.gguf",
+                "tokenizer.json",
+                "tokenizer_config.json",
+                "config.json",
+                "chat_template.jinja"
+            ],
+            "file_sources": {
+                "tokenizer.json": {
+                    "url": "https://huggingface.co/Qwen/Qwen3.8-27B",
+                    "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0"
+                },
+                "tokenizer_config.json": {
+                    "url": "https://huggingface.co/Qwen/Qwen3.8-27B",
+                    "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0"
+                },
+                "config.json": {
+                    "url": "https://huggingface.co/Qwen/Qwen3.8-27B",
+                    "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0"
+                },
+                "chat_template.jinja": {
+                    "url": "https://huggingface.co/Qwen/Qwen3.8-27B",
+                    "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0"
+                }
+            },
+            "preferred_source": {
+                "url": "https://huggingface.co/amd/Qwen3.8-27B-Q4_G128-GGUF/resolve/deab6eafc90811fc6738db7c05ec615130074cb3",
+                "file_url": "https://huggingface.co/api/models/amd/Qwen3.8-27B-Q4_G128-GGUF/tree/deab6eafc90811fc6738db7c05ec615130074cb3",
+                "use_hf_token": true,
+                "size": 15977762336,
+                "footprint": 15.96,
+                "details": {
+                    "quantization_level": "Q4_G128"
+                },
+                "files": [
+                    "Qwen3.8-27B-Q4_G128.gguf",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "config.json",
+                    "chat_template.jinja"
+                ],
+                "model_info_key": "qwen3.8-core:27b@amd"
+            },
+            "footprint": 16.06,
+            "model_info_key": "qwen3.8-core:27b",
             "label": [
                 "reasoning",
                 "tool-calling"
@@ -2055,7 +2245,7 @@
             "url": "https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/50968a4468ef4233ed78cd7c3de230dd1d61a56b",
             "file_url": "https://huggingface.co/api/models/unsloth/Qwen3-0.6B-GGUF/tree/50968a4468ef4233ed78cd7c3de230dd1d61a56b",
             "size": 650881322,
-            "default_context_length": 4096,
+            "default_context_length": 32768,
             "max_prefill_len": 4096,
             "details": {
                 "family": "qwen3",
@@ -2097,7 +2287,7 @@
             "url": "https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/resolve/d7f544eead698dbd1f15126ef60b45a1e1933222",
             "file_url": "https://huggingface.co/api/models/unsloth/Qwen3-1.7B-GGUF/tree/d7f544eead698dbd1f15126ef60b45a1e1933222",
             "size": 1845860522,
-            "default_context_length": 4096,
+            "default_context_length": 32768,
             "max_prefill_len": 4096,
             "details": {
                 "family": "qwen3",
@@ -2156,7 +2346,7 @@
             "url": "https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/22c9fc8a8c7700b76a1789366280a6a5a1ad1120",
             "file_url": "https://huggingface.co/api/models/unsloth/Qwen3-4B-GGUF/tree/22c9fc8a8c7700b76a1789366280a6a5a1ad1120",
             "size": 4291839353,
-            "default_context_length": 4096,
+            "default_context_length": 32768,
             "max_prefill_len": 4096,
             "details": {
                 "family": "qwen3",
@@ -2215,7 +2405,7 @@
             "url": "https://huggingface.co/unsloth/Qwen3-8B-GGUF/resolve/a6adef130ffb23ddaf1a62fec9dced968c9bc482",
             "file_url": "https://huggingface.co/api/models/unsloth/Qwen3-8B-GGUF/tree/a6adef130ffb23ddaf1a62fec9dced968c9bc482",
             "size": 8720952748,
-            "default_context_length": 4096,
+            "default_context_length": 32768,
             "max_prefill_len": 4096,
             "details": {
                 "family": "qwen3",
@@ -2266,6 +2456,127 @@
             "footprint": 8.71,
             "model_info_key": "qwen3-core:8b"
         }
-    }
+    },
+        "llama3.2-core": {
+            "1b": {
+                "supported_platforms": ["dev04"],
+                "name": "llama3.2-1b-core",
+                "url": "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/067b946cf014b7c697f3654f621d577a3e3afd1c",
+                "file_url": "https://huggingface.co/api/models/bartowski/Llama-3.2-1B-Instruct-GGUF/tree/067b946cf014b7c697f3654f621d577a3e3afd1c",
+                "size": 1330174015,
+                "default_context_length": 131072,
+                "max_prefill_len": 4096,
+                "details": {
+                    "family": "llama3",
+                    "think": false,
+                    "think_toggleable": false,
+                    "parameter_size": "1B",
+                    "quantization_level": "Q8_0 -> group-64"
+                },
+                "flm_min_version": "1.0.6",
+                "vlm": false,
+                "files": [
+                    "Llama-3.2-1B-Instruct-Q8_0.gguf",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "config.json"
+                ],
+                "file_sources": {
+                    "tokenizer.json": {
+                        "url": "https://huggingface.co/FastFlowLM/Llama-3.2-1B-NPU2",
+                        "revision": "7bb88fcd5653534fe065b911123d10294b62a8d1"
+                    },
+                    "tokenizer_config.json": {
+                        "url": "https://huggingface.co/FastFlowLM/Llama-3.2-1B-NPU2",
+                        "revision": "7bb88fcd5653534fe065b911123d10294b62a8d1"
+                    },
+                    "config.json": {
+                        "url": "https://huggingface.co/FastFlowLM/Llama-3.2-1B-NPU2",
+                        "revision": "7bb88fcd5653534fe065b911123d10294b62a8d1"
+                    }
+                },
+                "footprint": 1.32
+            },
+            "3b": {
+                "supported_platforms": ["dev04"],
+                "name": "llama3.2-3b-core",
+                "url": "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/5ab33fa94d1d04e903623ae72c95d1696f09f9e8",
+                "file_url": "https://huggingface.co/api/models/bartowski/Llama-3.2-3B-Instruct-GGUF/tree/5ab33fa94d1d04e903623ae72c95d1696f09f9e8",
+                "size": 3430990303,
+                "default_context_length": 131072,
+                "max_prefill_len": 4096,
+                "details": {
+                    "family": "llama3",
+                    "think": false,
+                    "think_toggleable": false,
+                    "parameter_size": "3B",
+                    "quantization_level": "Q8_0 -> group-64"
+                },
+                "flm_min_version": "1.0.6",
+                "vlm": false,
+                "files": [
+                    "Llama-3.2-3B-Instruct-Q8_0.gguf",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "config.json"
+                ],
+                "file_sources": {
+                    "tokenizer.json": {
+                        "url": "https://huggingface.co/FastFlowLM/Llama-3.2-3B-NPU2",
+                        "revision": "2003cdb18a1ecdda338ff4ff39d3e403476e49ae"
+                    },
+                    "tokenizer_config.json": {
+                        "url": "https://huggingface.co/FastFlowLM/Llama-3.2-3B-NPU2",
+                        "revision": "2003cdb18a1ecdda338ff4ff39d3e403476e49ae"
+                    },
+                    "config.json": {
+                        "url": "https://huggingface.co/FastFlowLM/Llama-3.2-3B-NPU2",
+                        "revision": "2003cdb18a1ecdda338ff4ff39d3e403476e49ae"
+                    }
+                },
+                "footprint": 3.42
+            }
+        },
+        "llama3.1-core": {
+            "8b": {
+                "supported_platforms": ["dev04"],
+                "name": "llama3.1-8b-core",
+                "url": "https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/bf5b95e96dac0462e2a09145ec66cae9a3f12067",
+                "file_url": "https://huggingface.co/api/models/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/tree/bf5b95e96dac0462e2a09145ec66cae9a3f12067",
+                "size": 8549866848,
+                "default_context_length": 131072,
+                "max_prefill_len": 4096,
+                "details": {
+                    "family": "llama3",
+                    "think": false,
+                    "think_toggleable": false,
+                    "parameter_size": "8B",
+                    "quantization_level": "Q8_0 -> group-64"
+                },
+                "flm_min_version": "1.0.6",
+                "vlm": false,
+                "files": [
+                    "Meta-Llama-3.1-8B-Instruct-Q8_0.gguf",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "config.json"
+                ],
+                "file_sources": {
+                    "tokenizer.json": {
+                        "url": "https://huggingface.co/FastFlowLM/Llama-3.1-8B-NPU2",
+                        "revision": "527006483dca6c9d75474ff92b8a6bdd8f257914"
+                    },
+                    "tokenizer_config.json": {
+                        "url": "https://huggingface.co/FastFlowLM/Llama-3.1-8B-NPU2",
+                        "revision": "527006483dca6c9d75474ff92b8a6bdd8f257914"
+                    },
+                    "config.json": {
+                        "url": "https://huggingface.co/FastFlowLM/Llama-3.1-8B-NPU2",
+                        "revision": "527006483dca6c9d75474ff92b8a6bdd8f257914"
+                    }
+                },
+                "footprint": 8.54
+            }
+        }
     }
 }

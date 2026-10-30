@@ -1,0 +1,205 @@
+name: Windows build
+description: >
+  Builds flm.exe for one Windows variant. Expects the repository to be checked
+  out with history and tags (the version comes from git describe); packaging
+  the result is left to the caller.
+
+inputs:
+  variant:
+    description: >
+      XRT (the default build), HRX (the HRX runtime), or Source (the model
+      engines built from source instead of the prebuilt DLLs in lib\xrt).
+    required: true
+
+outputs:
+  build-dir:
+    description: The CMake build tree, relative to the workspace.
+    value: ${{ steps.build.outputs.build-dir }}
+  hrx-runtime:
+    description: Absolute path to the fetched hrx.dll (HRX only).
+    value: ${{ steps.hrx-runtime.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check variant
+      shell: powershell
+      env:
+        VARIANT: ${{ inputs.variant }}
+      run: |
+        if ($env:VARIANT -notin @('XRT', 'HRX', 'Source')) {
+          Write-Host "::error::Unknown Windows build variant '$env:VARIANT'."
+          exit 1
+        }
+
+    # A full-history checkout also applies to submodules, which pulls the full
+    # msgpack-c history (~95 MB) and keeps getting reset mid-transfer on the
+    # runner network. The pinned commits alone are under 1 MB.
+    - name: Checkout submodules
+      shell: powershell
+      working-directory: ${{ github.workspace }}
+      run: |
+        for ($i = 1; $i -le 3; $i++) {
+          git submodule update --init --recursive --depth 1 --jobs 4
+          if ($LASTEXITCODE -eq 0) { exit 0 }
+          Write-Host "Submodule fetch failed (attempt $i), retrying..."
+          Start-Sleep -Seconds 15
+        }
+        exit 1
+
+    # setup_windows_deps.ps1 lays out the C:\dev dependencies the self-hosted
+    # runner has. HRX needs the same Boost and curl as the XRT build; the XRT
+    # parts of the tree go unused there.
+    - name: Restore build dependencies
+      uses: actions/cache@v4
+      with:
+        path: C:\dev
+        key: windows-deps-${{ hashFiles('.github/script/ci/setup_windows_deps.ps1', '.github/windows-deps/**') }}
+
+    - name: Set up build dependencies
+      shell: powershell
+      working-directory: ${{ github.workspace }}
+      run: .github\script\ci\setup_windows_deps.ps1
+
+    # Ninja instead of the Visual Studio generator: it keeps every core busy
+    # across targets, which MSBuild does not, and lets sccache wrap cl. It
+    # needs the MSVC environment (cl, link, the SDK) that a developer prompt
+    # sets up.
+    - name: Set up MSVC environment
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
+
+    - name: Install sccache
+      uses: mozilla-actions/sccache-action@v0.0.9
+
+    # Everything cached lives under .ci-cache in the workspace.
+    - name: Locate caches
+      id: cache
+      shell: powershell
+      working-directory: ${{ github.workspace }}
+      env:
+        VARIANT: ${{ inputs.variant }}
+      run: |
+        $ErrorActionPreference = "Stop"
+        $buildDir = if ($env:VARIANT -eq 'Source') { 'src/build-models-from-source' } else { 'src/build' }
+        New-Item -ItemType Directory -Force .ci-cache\sccache | Out-Null
+        $utf8 = [System.Text.UTF8Encoding]::new($false)
+        [System.IO.File]::AppendAllText($env:GITHUB_ENV,
+          "SCCACHE_DIR=$env:GITHUB_WORKSPACE\.ci-cache\sccache`nSCCACHE_CACHE_SIZE=2G`n", $utf8)
+        # tokenizers-cpp builds its Rust crate into <build>/tokenizers-cpp,
+        # for an explicit target on MSVC.
+        [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT,
+          "rust-target=$buildDir/tokenizers-cpp/x86_64-pc-windows-msvc/release`n", $utf8)
+
+    # One cache per variant, keyed on the commit, so each save is new and a
+    # restore takes the newest. Only main saves (see "Save compiler cache"),
+    # for the reason given in lin-build.
+    - name: Restore compiler cache
+      uses: actions/cache/restore@v4
+      with:
+        path: .ci-cache/sccache
+        key: sccache-windows-${{ inputs.variant }}-${{ github.sha }}
+        restore-keys: sccache-windows-${{ inputs.variant }}-
+
+    - name: Restore Cargo registry
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+        key: cargo-registry-windows-${{ hashFiles('third_party/tokenizers-cpp/rust/Cargo.lock') }}
+        restore-keys: cargo-registry-windows-
+
+    - name: Restore Rust build output
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.cache.outputs.rust-target }}
+        key: rust-target-windows-${{ inputs.variant }}-${{ hashFiles('third_party/tokenizers-cpp/rust/**') }}
+        restore-keys: rust-target-windows-${{ inputs.variant }}-
+
+    - name: Restore HRX release
+      if: inputs.variant == 'HRX'
+      uses: actions/cache@v4
+      with:
+        path: hrx-integration/.hrx-release/*.zip
+        key: hrx-release-windows-${{ hashFiles('hrx-integration/hrx-release.env') }}
+
+    - name: Fetch pinned HRX release
+      id: hrx
+      if: inputs.variant == 'HRX'
+      shell: powershell
+      working-directory: ${{ github.workspace }}
+      run: .\hrx-integration\fetch-hrx-release.ps1
+
+    - name: Configure CMake
+      shell: powershell
+      working-directory: ${{ github.workspace }}/src
+      env:
+        VARIANT: ${{ inputs.variant }}
+        HRX_PREFIX: ${{ steps.hrx.outputs.prefix }}
+      run: |
+        $ErrorActionPreference = "Stop"
+        $launcher = @('-DCMAKE_C_COMPILER_LAUNCHER=sccache', '-DCMAKE_CXX_COMPILER_LAUNCHER=sccache')
+        switch ($env:VARIANT) {
+          'XRT' {
+            cmake --preset windows-ninja @launcher
+          }
+          'HRX' {
+            if (-not $env:HRX_PREFIX) {
+              throw 'fetch-hrx-release.ps1 did not report the HRX package prefix'
+            }
+            cmake --preset windows-ninja @launcher -DFLM_USE_HRX=ON "-DCMAKE_PREFIX_PATH=$env:HRX_PREFIX"
+          }
+          'Source' {
+            cmake --preset windows-ninja @launcher `
+              -B build-models-from-source `
+              -DFLM_BUILD_GEMMA4E=ON
+          }
+        }
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    # The engines take more memory per compile than the rest of the tree, so
+    # the source build runs fewer jobs at once.
+    - name: Build
+      id: build
+      shell: powershell
+      working-directory: ${{ github.workspace }}/src
+      env:
+        VARIANT: ${{ inputs.variant }}
+      run: |
+        $ErrorActionPreference = "Stop"
+        sccache --zero-stats | Out-Null
+        if ($env:VARIANT -eq 'Source') {
+          cmake --build build-models-from-source --parallel 2
+          $buildDir = 'src/build-models-from-source'
+        } else {
+          cmake --build build --parallel
+          $buildDir = 'src/build'
+        }
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        sccache --show-stats
+        # No BOM: Windows PowerShell 5.1's Out-File -Encoding utf8 writes one,
+        # which corrupts the output name.
+        [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "build-dir=$buildDir`n")
+
+    - name: Save compiler cache
+      if: github.ref == 'refs/heads/main' && steps.build.outcome == 'success'
+      uses: actions/cache/save@v4
+      with:
+        path: .ci-cache/sccache
+        key: sccache-windows-${{ inputs.variant }}-${{ github.sha }}
+
+    - name: Locate HRX runtime
+      id: hrx-runtime
+      if: inputs.variant == 'HRX'
+      shell: powershell
+      working-directory: ${{ github.workspace }}
+      run: |
+        $ErrorActionPreference = "Stop"
+        $hrxDll = Get-ChildItem -Path .\hrx-integration\.hrx-release -Recurse -Filter 'hrx.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $hrxDll) {
+          throw 'hrx.dll not found under hrx-integration\.hrx-release; HRX fetch step may have failed'
+        }
+        [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "path=$($hrxDll.FullName)`n")

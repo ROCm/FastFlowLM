@@ -41,6 +41,7 @@
 #include "models/gemma_text/flm/aie2p/gemma_text_npu.hpp"
 #include "models/gemma4e/flm/aie2p/gemma4e_npu.hpp"
 #include "models/gemma4e_flash/flm/aie2p/gemma4e_flash.hpp"
+#include "models/gemma4e_dflash/flm/aie2p/gemma4e_dflash.hpp"
 #include "models/gemma4_12b/flm/aie2p/gemma4_12b_npu.hpp"
 #include "models/lfm2/flm/aie2p/lfm2_npu.hpp"
 #include "models/lfm3/flm/aie2p/lfm3_npu.hpp"
@@ -181,6 +182,8 @@ private:
 class AutoModel {
 protected:
 	std::string model_path = "";
+	/// the draft package of a tag with a base_model ("" otherwise); model_path is then the base folder
+	std::string draft_model_path = "";
 	/// \brief the execution backend, which owns the engine
 	std::unique_ptr<flm::backend::ModelBackend> backend_ = nullptr;
 	/// \brief a non-owning view of backend_'s engine, or null when none is loaded
@@ -254,6 +257,8 @@ protected:
 
 	void _shared_load_model(std::string model_path, json model_info, int default_context_length = -1, bool enable_preemption = false);
 	void _shared_initialize_model_state(std::string model_path, json model_info, int context_length);
+	/// true if model_path + the entry's draft package are what is already loaded
+	bool _shared_is_same_model(const std::string& model_path, const json& model_info) const;
 	void _shared_initialize_legacy_npu(bool enable_preemption);
 	nlohmann::json _shared_setup_tokenizer(std::string model_path);
 	/// \brief Detect chat_format from the template; the tokenizer and bos id must be set up

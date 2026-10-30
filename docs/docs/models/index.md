@@ -32,3 +32,4 @@ has_children: true
 - [Hy-MT2](hy-mt2/)
 - [MiniCPM](minicpm/)
 - [Nemotron Bolt](nemotron3.5-bolt/)
+- [Nemotron Bolt DFlash](nemotron3.5-bolt-dflash/)

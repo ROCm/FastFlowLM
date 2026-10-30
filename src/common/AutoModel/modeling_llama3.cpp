@@ -39,7 +39,18 @@ std::string Llama3::apply_chat_template(nlohmann::ordered_json& messages, nlohma
     return this->_render_chat_template(inputs, continue_final_message);
 }
 
+void Llama3::fail_inference(const std::string& detail) {
+    const bool poisoned = this->backend_ && this->backend_->poisoned();
+    this->_shared_after_inference_failure(poisoned);
+    std::string message = poisoned
+        ? "Inference failed; unload/reload is required because the model is poisoned"
+        : "Inference failed; the current conversation was cleared";
+    if (!detail.empty()) message += " (" + detail + ")";
+    throw ModelRequestError(500, true, message);
+}
+
 bool Llama3::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
+    this->_shared_guard_poisoned();
     // preprocess
     this->profiler_list[TKOEN_ENCODE_TIME].start();
     std::string templated_text;
@@ -65,23 +76,47 @@ bool Llama3::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std:
     // The template's generation prompt ("<|start_header_id|>assistant<|end_header_id|>\n\n") is how the next turn
     // renders this reply's header, so the whole prompt can be saved: nothing is left out of the prefill (trim 0).
     if (this->_prefix_slot_mode(meta_info, tokens.size(), 0)) {
-        return this->_prefix_text_insert(meta_info, tokens, 0, "<|start_header_id|>user", is_cancelled);
+        try {
+            return this->_prefix_text_insert(meta_info, tokens, 0, "<|start_header_id|>user", is_cancelled, input.requested_max_new_tokens);
+        } catch (const ModelRequestError&) {
+            throw;
+        } catch (const std::exception& error) {
+            this->fail_inference(error.what());
+        } catch (...) {
+            this->fail_inference();
+        }
     }
     this->_prefix_legacy_path();
-    return this->_shared_insert(meta_info, tokens, is_cancelled);
+    try {
+        return this->_shared_insert(meta_info, tokens, is_cancelled, nullptr, 0, input.requested_max_new_tokens);
+    } catch (const ModelRequestError&) {
+        throw;
+    } catch (const std::exception& error) {
+        this->fail_inference(error.what());
+    } catch (...) {
+        this->fail_inference();
+    }
 }
 
 
 std::string Llama3::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
-    //header_print("is_cancelled", is_cancelled);
-    return this->_shared_generate(meta_info, length_limit, os, is_cancelled);
+    this->_shared_guard_poisoned();
+    try {
+        return this->_shared_generate(meta_info, length_limit, os, is_cancelled);
+    } catch (const ModelRequestError&) {
+        throw;
+    } catch (const std::exception& error) {
+        this->fail_inference(error.what());
+    } catch (...) {
+        this->fail_inference();
+    }
 }
 
 std::string Llama3::generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os) {
     if (!this->insert(meta_info, input)) {
         return "";
     }
-    return this->_shared_generate(meta_info, length_limit, os);
+    return this->generate(meta_info, length_limit, os);
 }
 
 /************              DeepSeek_r1_8b family            **************/
