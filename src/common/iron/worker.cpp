@@ -24,6 +24,12 @@ namespace flm::iron {
 namespace {
 
 constexpr std::uint32_t kMaxHeader = 1 << 20;
+constexpr std::uint32_t kProtocolVersion = 1;
+constexpr std::uint32_t kCapabilities =
+    static_cast<std::uint32_t>(Capability::CausalLM) |
+    static_cast<std::uint32_t>(Capability::Embeddings);
+// Missing handshake fields mean the original protocol; never extend this mask.
+constexpr std::uint32_t kLegacyCapabilities = 0b11;
 
 std::string PythonExecutable() {
     const char* value = std::getenv("FLM_IRON_PYTHON");
@@ -84,10 +90,16 @@ Worker::Worker(const std::filesystem::path& model_path, std::string model,
     impl_ = std::make_unique<Impl>(PythonExecutable(), WorkerModule());
     try {
         nlohmann::json command = {{"command", "load_model"},
+                                  {"protocol_version", kProtocolVersion},
+                                  {"capabilities", kCapabilities},
                                   {"model", std::move(model)},
                                   {"model_path", model_path.string()}};
         if (context_length) command["context_length"] = context_length;
-        request(command);
+        const auto response = request(command);
+        if (response.value("protocol_version", 1u) != kProtocolVersion) {
+            throw std::runtime_error("Unsupported IRON server protocol version");
+        }
+        capabilities_ = response.value("capabilities", kLegacyCapabilities) & kCapabilities;
     } catch (...) {
         impl_->stop();
         throw;
@@ -150,6 +162,8 @@ nlohmann::json Worker::request(const nlohmann::json& command,
 }
 
 std::vector<std::uint16_t> Worker::logits(const std::vector<int>& tokens) {
+    if (!supports(Capability::CausalLM))
+        throw std::runtime_error("IRON server does not support causal inference");
     auto response = request({{"command", "logits"}, {"count", tokens.size()}},
                             tokens.data(), tokens.size() * sizeof(int));
     try {
@@ -163,11 +177,17 @@ std::vector<std::uint16_t> Worker::logits(const std::vector<int>& tokens) {
     }
 }
 
-void Worker::reset() { request({{"command", "reset"}}); }
+void Worker::reset() {
+    if (!supports(Capability::CausalLM))
+        throw std::runtime_error("IRON server does not support causal inference");
+    request({{"command", "reset"}});
+}
 
 std::vector<float> Worker::embed(const std::string& text,
                                  const std::string& task,
                                  std::uint32_t dimensions) {
+    if (!supports(Capability::Embeddings))
+        throw std::runtime_error("IRON server does not support embeddings");
     auto response = request({{"command", "embed"},
                              {"task", task},
                              {"dimensions", dimensions},

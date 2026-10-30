@@ -12,6 +12,12 @@
 
 namespace flm::iron {
 
+// Wire protocol bits; keep in sync with IRON's iron/lm_server.py.
+enum class Capability : std::uint32_t {
+    CausalLM = 1 << 0,  // logits and reset
+    Embeddings = 1 << 1,
+};
+
 class Worker {
 public:
     Worker(const std::filesystem::path& model_path, std::string model,
@@ -25,6 +31,9 @@ public:
     std::vector<float> embed(const std::string& text, const std::string& task,
                              std::uint32_t dimensions = 768);
     void reset();
+    bool supports(Capability capability) const noexcept {
+        return (capabilities_ & static_cast<std::uint32_t>(capability)) != 0;
+    }
     bool poisoned() const noexcept { return poisoned_; }
 
 private:
@@ -37,6 +46,7 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
     bool poisoned_ = false;
+    std::uint32_t capabilities_ = 0;
 };
 
 }  // namespace flm::iron

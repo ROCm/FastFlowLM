@@ -55,7 +55,16 @@ int ServeFake() {
             model = command.at("model").get<std::string>();
             if (model == "llama") TEST_REQUIRE(command.at("context_length") == 32);
             else TEST_REQUIRE(!command.contains("context_length"));
-            send({{"ok", true}});
+            nlohmann::json reply = {{"ok", true}};
+            if (model != "legacy") {
+                TEST_REQUIRE(command.at("protocol_version") == 1);
+                TEST_REQUIRE(command.at("capabilities") == 3);
+                reply["protocol_version"] = model == "wrong_version" ? 2 : 1;
+                reply["capabilities"] = model == "embedding_only" ? 2 :
+                                        model == "causal_only" ? 1 :
+                                        model == "future" ? 7 : 3;
+            }
+            send(reply);
             if (model == "dies") return 0;
         } else if (name == "logits") {
             std::vector<std::int32_t> tokens(command.at("count").get<std::size_t>());
@@ -111,6 +120,30 @@ int main(int argc, char** argv) {
     flm::iron::Worker embedding("/unused", "embedding_gemma2");
     const auto result = embedding.embed("hello", "query", 128);
     TEST_REQUIRE(result == std::vector<float>({5.0f, 128.0f}));
+
+    using flm::iron::Capability;
+    for (const char* model : {"legacy", "future"}) {
+        flm::iron::Worker compatible("/unused", model);
+        TEST_REQUIRE(compatible.supports(Capability::CausalLM));
+        TEST_REQUIRE(compatible.supports(Capability::Embeddings));
+        TEST_REQUIRE(!compatible.supports(static_cast<Capability>(4)));
+        TEST_REQUIRE(compatible.logits({26}) == std::vector<std::uint16_t>({26, 1}));
+    }
+    flm::iron::Worker embedding_only("/unused", "embedding_only");
+    TEST_REQUIRE(!embedding_only.supports(Capability::CausalLM));
+    RequireContains(RequireThrows([&] { embedding_only.logits({1}); }), "support");
+    RequireContains(RequireThrows([&] { embedding_only.reset(); }), "support");
+    TEST_REQUIRE(!embedding_only.poisoned());
+    TEST_REQUIRE(embedding_only.embed("hello", "query", 128) == result);
+
+    flm::iron::Worker causal_only("/unused", "causal_only");
+    TEST_REQUIRE(!causal_only.supports(Capability::Embeddings));
+    RequireContains(RequireThrows([&] { causal_only.embed("hello", "query"); }), "support");
+    TEST_REQUIRE(!causal_only.poisoned());
+    causal_only.reset();
+    RequireContains(RequireThrows([] {
+        flm::iron::Worker incompatible("/unused", "wrong_version");
+    }), "protocol version");
 
     for (const char* model : {"bad_count", "bad_header", "error", "truncated"}) {
         flm::iron::Worker broken("/unused", model);
