@@ -33,4 +33,3 @@ has_children: true
 - [MiniCPM](minicpm/)
 - [Nemotron Bolt](nemotron3.5-bolt/)
 - [Nemotron Bolt DFlash](nemotron3.5-bolt-dflash/)
-- [Flash](flash/)
