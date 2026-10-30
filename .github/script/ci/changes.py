@@ -77,6 +77,7 @@ ENGINES = {
     ("qwen3vl_flash",):                      ("qwen3vl-flash",),
     ("qwen3_5vl",):                          ("qwen3.5",),
     ("minicpm_v_4_7", "minicpm_v"):          ("minicpm-v-4.7",),
+    ("minicpm_v_4_7_moe", "minicpm_v_moe"): ("minicpm-v-4.7-moe",),
     ("qwen3_6_moe",):                        ("qwen3.6-moe",),
     ("qwen3_8mtp", "qwen3_8_mtp"):           ("qwen3.8-mtp",),
     ("gemma", "gemma3"):                     ("gemma3",),
