@@ -366,7 +366,7 @@ int main() {
             "a corelib build offers the corelib phi4");
     RunTest(test_embeddinggemma_2_requires_iron,
             "EmbeddingGemma 2 requires iron");
-        RunTest(test_bf16_llama_requires_iron,
+    RunTest(test_bf16_llama_requires_iron,
             "BF16 Llama requires iron");
     RunTest(test_the_tag_name_decides_the_backend,
             "the tag name decides the backend");
