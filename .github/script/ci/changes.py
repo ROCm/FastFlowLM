@@ -81,9 +81,10 @@ ENGINES = {
     ("qwen3_8mtp", "qwen3_8_mtp"):           ("qwen3.8-mtp",),
     ("gemma", "gemma3"):                     ("gemma3",),
     ("gemma_text", "gemma3_text"):           ("gemma3-text",),
-    # Gemma4e_Flash derives from Gemma4e and its engine includes gemma4e_npu.
-    ("gemma4e",):                            ("gemma4e", "gemma4e-flash"),
+    # Gemma4e_Flash and Gemma4e_DFlash derive from Gemma4e and their engines include gemma4e_npu.
+    ("gemma4e",):                            ("gemma4e", "gemma4e-flash", "gemma4e-dflash"),
     ("gemma4e_flash",):                      ("gemma4e-flash",),
+    ("gemma4e_dflash",):                     ("gemma4e-dflash",),
     ("gemma4_12b",):                         ("gemma4-12b",),
     ("hunyuan",):                            ("hunyuan",),
     ("gpt_oss",):                            ("gpt-oss",),

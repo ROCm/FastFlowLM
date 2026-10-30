@@ -72,6 +72,7 @@ Source: "qwen3_8mtp_npu.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "nanbeige_npu.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gemma4e_npu.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gemma4e_flash.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "gemma4e_dflash.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gemma4e_12b_npu.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "hunyuan_npu.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "lm_head.dll"; DestDir: "{app}"; Flags: ignoreversion

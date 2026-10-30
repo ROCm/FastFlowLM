@@ -191,6 +191,9 @@
       <Component Id="Comp_gemma4e_flash.dll" Guid="*">
         <File Id="File_gemma4e_flash.dll" Source="$(SourceDir)\gemma4e_flash.dll" KeyPath="yes" />
       </Component>
+      <Component Id="Comp_gemma4e_dflash.dll" Guid="*">
+        <File Id="File_gemma4e_dflash.dll" Source="$(SourceDir)\gemma4e_dflash.dll" KeyPath="yes" />
+      </Component>
       <Component Id="Comp_gemma4e_12b_npu.dll" Guid="*">
         <File Id="File_gemma4e_12b_npu.dll" Source="$(SourceDir)\gemma4_12b_npu.dll" KeyPath="yes" />
       </Component>
