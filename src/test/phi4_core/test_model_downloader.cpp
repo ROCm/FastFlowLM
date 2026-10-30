@@ -534,6 +534,262 @@ void TestPullFallsBackWhenPreferredSourceIsUnreachable() {
     TEST_REQUIRE(fixture.resolved_files() == kBaseFiles);
 }
 
+
+constexpr const char* kBaseTag = "base-model:1b";
+constexpr const char* kDependantTag = "dep-model:1b";
+
+std::string ConfigWithVersion(const char* model_type, const char* version) {
+    return std::string(R"({"model_type":")") + model_type + R"(","flm_version":")" + version + R"("})";
+}
+
+/// \brief a base entry and a dependant entry (base_model) served from local directories
+struct BaseModelFixture {
+    fs::path root;
+    std::string catalog_string;
+    std::string root_string;
+    model_list models;
+
+    static void WriteSource(const fs::path& dir, const std::string& config, const char* weight_name,
+                            std::string_view weight) {
+        Write(dir / "config.json", config);
+        Write(dir / weight_name, weight);
+    }
+
+    explicit BaseModelFixture(std::string_view name, bool with_hf_sources = true,
+                              nlohmann::json dependant_overrides = nlohmann::json::object())
+        : root(TempDirectory(name)) {
+        const std::string base_config = ConfigWithVersion("qwen3", "1.0.3");
+        const std::string dep_config = ConfigWithVersion("dflash", "1.0.3");
+        for (const char* where : {"hf", "ms"}) {
+            WriteSource(root / where / "base" / "resolve", base_config, "main.bin", "main-weights");
+            WriteSource(root / where / "dep" / "resolve", dep_config, "draft.bin", "draft-weights");
+        }
+        const auto record = [](const fs::path& file) {
+            return nlohmann::json{{"path", file.filename().string()},
+                                  {"size", fs::file_size(file)},
+                                  {"sha256", download_utils::calculate_file_sha256(file.string())}};
+        };
+        nlohmann::json dependant = {
+            {"name", "dep-model"},
+            {"base_model", kBaseTag},
+            {"url", FileUrl(root / "hf" / "dep" / "resolve")},
+            {"ms_url", FileUrl(root / "ms" / "dep" / "resolve")},
+            {"file_url", "https://example.invalid/api"},
+            {"flm_min_version", "1.0.3"},
+            {"details", {{"family", "dep-family"}}},
+            {"files", {"config.json", "draft.bin"}}};
+        dependant.update(dependant_overrides);
+        const nlohmann::json catalog = {
+            {"model_path", "models"},
+            {"models", {
+                {"base-model", {{"1b", {
+                    {"name", "base-model"},
+                    {"url", FileUrl(root / "hf" / "base" / "resolve")},
+                    {"ms_url", FileUrl(root / "ms" / "base" / "resolve")},
+                    {"file_url", "https://example.invalid/api"},
+                    {"flm_min_version", "1.0.3"},
+                    {"details", {{"family", "qwen3"}}},
+                    {"files", {"config.json", "main.bin"}}}}}},
+                {"dep-model", {{"1b", dependant}}}}}};
+        const nlohmann::json info = {
+            {kBaseTag, {record(root / "hf" / "base" / "resolve" / "config.json"),
+                        record(root / "hf" / "base" / "resolve" / "main.bin")}},
+            {kDependantTag, {record(root / "hf" / "dep" / "resolve" / "config.json"),
+                             record(root / "hf" / "dep" / "resolve" / "draft.bin")}}};
+        Write(root / "model_list.json", catalog.dump());
+        Write(root / "model_info.json", info.dump());
+        UseModelInfo(root / "model_info.json");
+        if (!with_hf_sources) fs::remove_all(root / "hf");
+        catalog_string = (root / "model_list.json").string();
+        root_string = root.string();
+        models = model_list(catalog_string, root_string);
+    }
+
+    fs::path base_path() const { return root / "models" / "base-model"; }
+    fs::path dep_path() const { return root / "models" / "dep-model"; }
+
+    void InstallBase(const char* version = "1.0.3") const {
+        Write(base_path() / "config.json", ConfigWithVersion("qwen3", version));
+        Write(base_path() / "main.bin", "main-weights");
+    }
+    void InstallDependant() const {
+        Write(dep_path() / "config.json", ConfigWithVersion("dflash", "1.0.3"));
+        Write(dep_path() / "draft.bin", "draft-weights");
+    }
+};
+
+/// \brief run f with std::cout captured
+template <typename F>
+std::string Captured(F&& f) {
+    std::ostringstream output;
+    auto* previous = std::cout.rdbuf(output.rdbuf());
+    try { f(); } catch (...) { std::cout.rdbuf(previous); throw; }
+    std::cout.rdbuf(previous);
+    return output.str();
+}
+
+void TestBaseModelCatalogRelations() {
+    BaseModelFixture fixture("base-catalog");
+    TEST_REQUIRE(fixture.models.get_base_model(kDependantTag) == std::string(kBaseTag));
+    TEST_REQUIRE(!fixture.models.get_base_model(kBaseTag));
+    // the bare family resolves the same way an ordinary tag does
+    TEST_REQUIRE(fixture.models.get_base_model("dep-model") == std::string(kBaseTag));
+    TEST_REQUIRE(fixture.models.get_dependants(kBaseTag) == std::vector<std::string>{kDependantTag});
+    TEST_REQUIRE(fixture.models.get_dependants(kDependantTag).empty());
+
+    // storage is the tag's own folder; loading is from the base's
+    TEST_REQUIRE(fs::path(fixture.models.get_model_path(kDependantTag)) == fixture.dep_path());
+    TEST_REQUIRE(fs::path(fixture.models.get_load_path(kDependantTag)) == fixture.base_path());
+    TEST_REQUIRE(fs::path(fixture.models.get_load_path(kBaseTag)) == fixture.base_path());
+
+    // what the engine side reads out of the entry
+    const auto info = fixture.models.get_model_info(kDependantTag).second;
+    TEST_REQUIRE(info.at("base_model") == kBaseTag);
+    TEST_REQUIRE(fs::path(info.at("base_model_path").get<std::string>()) == fixture.base_path());
+    TEST_REQUIRE(fs::path(info.at("draft_model_path").get<std::string>()) == fixture.dep_path());
+    TEST_REQUIRE(info.at("xclbin_folder") == "dep-model");
+    // an ordinary tag carries none of it
+    const auto plain = fixture.models.get_model_info(kBaseTag).second;
+    TEST_REQUIRE(!plain.contains("draft_model_path") && !plain.contains("xclbin_folder") &&
+                 !plain.contains("base_model"));
+}
+
+void TestInvalidBaseModelEntriesAreDropped() {
+    // unknown base
+    {
+        BaseModelFixture fixture("base-unknown", true, {{"base_model", "nope:1b"}});
+        TEST_REQUIRE(!fixture.models.is_model_supported(kDependantTag));
+        TEST_REQUIRE(fixture.models.is_model_supported(kBaseTag));
+    }
+    // a base that itself has a base (one level only), and a self reference
+    {
+        BaseModelFixture fixture("base-chain", true, {{"base_model", kDependantTag}});
+        TEST_REQUIRE(!fixture.models.is_model_supported(kDependantTag));
+    }
+}
+
+void TestPullPullsBaseFirstThenOwnFiles() {
+    BaseModelFixture fixture("base-pull");
+    ModelDownloader downloader(fixture.models);
+    bool pulled = false;
+    const auto output = Captured([&] { pulled = downloader.pull_model(kDependantTag); });
+    TEST_REQUIRE(pulled);
+    const auto base_pos = output.find("Pulling required base model " + std::string(kBaseTag));
+    const auto own_pos = output.find("Model: " + std::string(kDependantTag));
+    TEST_REQUIRE(base_pos != std::string::npos && own_pos != std::string::npos && base_pos < own_pos);
+    TEST_REQUIRE(Read(fixture.base_path() / "main.bin") == "main-weights");
+    TEST_REQUIRE(Read(fixture.dep_path() / "draft.bin") == "draft-weights");
+    // no duplicate of the base inside the dependant's folder
+    TEST_REQUIRE(!fs::exists(fixture.dep_path() / "main.bin"));
+    TEST_REQUIRE(downloader.is_model_downloaded(kDependantTag) == ModelDownloader::ModelStatus::Ready);
+    // own files only: the missing-files list never includes the base's
+    TEST_REQUIRE(downloader.get_missing_files(kDependantTag).empty());
+}
+
+void TestPullAbortsWhenBaseCannotBePulled() {
+    BaseModelFixture fixture("base-pull-fails");
+    fs::remove_all(fixture.root / "hf" / "base");
+    ModelDownloader downloader(fixture.models);
+    bool pulled = true;
+    Captured([&] { pulled = downloader.pull_model(kDependantTag); });
+    TEST_REQUIRE(!pulled);
+    TEST_REQUIRE(!fs::exists(fixture.dep_path() / "draft.bin"));
+}
+
+void TestStatusNeedsBothPackages() {
+    BaseModelFixture fixture("base-status");
+    ModelDownloader downloader(fixture.models);
+    using Status = ModelDownloader::ModelStatus;
+    fixture.InstallDependant();
+    // own package alone: not ready, the base is missing
+    TEST_REQUIRE(downloader.is_model_downloaded(kDependantTag, true, true) == Status::Missing);
+    fixture.InstallBase();
+    TEST_REQUIRE(downloader.is_model_downloaded(kDependantTag, true, true) == Status::Ready);
+    // partial base: a weight file is gone
+    fs::remove(fixture.base_path() / "main.bin");
+    TEST_REQUIRE(downloader.is_model_downloaded(kDependantTag, true, true) == Status::Missing);
+    TEST_REQUIRE(downloader.is_model_downloaded(kBaseTag, true, true) == Status::Missing);
+    // outdated base: config.json from an older FLM
+    fixture.InstallBase("1.0.2");
+    TEST_REQUIRE(downloader.is_model_downloaded(kDependantTag, true, true) == Status::Outdated);
+    // the base's status is unchanged by the dependant being absent
+    fs::remove_all(fixture.dep_path());
+    fixture.InstallBase();
+    TEST_REQUIRE(downloader.is_model_downloaded(kBaseTag, true, true) == Status::Ready);
+    TEST_REQUIRE(downloader.is_model_downloaded(kDependantTag, true, true) == Status::Missing);
+}
+
+void TestCheckReportsAnIncompleteBase() {
+    BaseModelFixture fixture("base-check");
+    fixture.InstallDependant();
+    ModelDownloader downloader(fixture.models);
+    bool ok = true;
+    const auto output = Captured([&] { ok = downloader.check_model(kDependantTag, false, true); });
+    TEST_REQUIRE(!ok);
+    TEST_REQUIRE(output.find("Base model incomplete: " + std::string(kBaseTag)) != std::string::npos);
+}
+
+void TestRemovingBaseWarnsAndRemovingDependantKeepsBase() {
+    BaseModelFixture fixture("base-remove");
+    fixture.InstallBase();
+    fixture.InstallDependant();
+    ModelDownloader downloader(fixture.models);
+
+    // removing the dependant keeps the base
+    bool removed = false;
+    Captured([&] { removed = downloader.remove_model(kDependantTag); });
+    TEST_REQUIRE(removed);
+    TEST_REQUIRE(!fs::exists(fixture.dep_path()));
+    TEST_REQUIRE(fs::exists(fixture.base_path() / "main.bin"));
+    TEST_REQUIRE(downloader.installed_dependants(kBaseTag).empty());
+
+    // removing the base with an installed dependant warns and never cascades
+    fixture.InstallDependant();
+    TEST_REQUIRE(downloader.installed_dependants(kBaseTag) == std::vector<std::string>{kDependantTag});
+    const auto output = Captured([&] { removed = downloader.remove_model(kBaseTag); });
+    TEST_REQUIRE(removed);
+    TEST_REQUIRE(output.find("Installed model " + std::string(kDependantTag) + " requires " + kBaseTag) !=
+                 std::string::npos);
+    TEST_REQUIRE(!fs::exists(fixture.base_path()));
+    TEST_REQUIRE(fs::exists(fixture.dep_path() / "draft.bin"));
+    TEST_REQUIRE(downloader.is_model_downloaded(kDependantTag, true, true) ==
+                 ModelDownloader::ModelStatus::Missing);
+}
+
+void TestModelscopeFlagReachesTheBase() {
+    // Only the ModelScope sources exist: both pulls can succeed only if the flag
+    // reaches the base as well as the dependant.
+    BaseModelFixture fixture("base-modelscope", /*with_hf_sources=*/false);
+    ModelDownloader downloader(fixture.models);
+    bool pulled = false;
+    Captured([&] { pulled = downloader.pull_model(kDependantTag, /*use_modelscope=*/true); });
+    TEST_REQUIRE(pulled);
+    TEST_REQUIRE(Read(fixture.base_path() / "main.bin") == "main-weights");
+    TEST_REQUIRE(Read(fixture.dep_path() / "draft.bin") == "draft-weights");
+}
+
+void TestShippedCatalogDeclaresTheDflashDependant() {
+    std::string path = FLM_SOURCE_DIR "/model_list.json";
+    std::string exe_dir = ".";
+    model_list models(path, exe_dir, "aie2p", {"flm"});
+    const char* dflash = "nemotron3.5-bolt-dflash:e4b";
+    TEST_REQUIRE(models.is_model_supported(dflash));
+    TEST_REQUIRE(models.get_base_model(dflash) == std::string("nemotron3.5-bolt:e4b"));
+    const auto info = models.get_model_info(dflash).second;
+    TEST_REQUIRE(info.at("name") == "Nemotron-3.5-Bolt-E4B-DFlash-NPU2");
+    TEST_REQUIRE(info.at("details").at("family") == "gemma4e-dflash");
+    TEST_REQUIRE(info.at("xclbin_folder") == "Nemotron-3.5-Bolt-E4B-DFlash-NPU2");
+    TEST_REQUIRE(info.at("files").get<std::vector<std::string>>() ==
+                 (std::vector<std::string>{"config.json", "dflash_weight.q4nx", "LICENSE.OpenMDW-1.1"}));
+    // the base entry is the shipped plain-decode tag, untouched
+    const auto base = models.get_model_info("nemotron3.5-bolt:e4b").second;
+    TEST_REQUIRE(base.at("name") == "Nemotron-3.5-Bolt-E4B-NPU2");
+    TEST_REQUIRE(!base.contains("base_model") && !base.contains("draft_model_path"));
+    // a platform without the base prunes the dependant with it
+    model_list dev04(path, exe_dir, "dev04", {"flm"});
+    TEST_REQUIRE(!dev04.is_model_supported(dflash));
+}
+
 download_utils::DownloadRequest Request(const fs::path& source, const fs::path& destination,
                                         std::uint64_t size, std::string hash) {
     return {FileUrl(source), destination, size, download_utils::HashAlgorithm::Sha256, std::move(hash)};
@@ -607,6 +863,15 @@ int main() {
     RunTest(TestPreferredSourceResolvesByWhatIsOnDisk, "preferred source resolution");
     RunTest(TestPullUsesReachablePreferredSourceAndKeepsItOncePulled, "preferred source pull");
     RunTest(TestPullFallsBackWhenPreferredSourceIsUnreachable, "preferred source fallback");
+    RunTest(TestBaseModelCatalogRelations, "base_model catalog relations");
+    RunTest(TestInvalidBaseModelEntriesAreDropped, "invalid base_model dropped");
+    RunTest(TestPullPullsBaseFirstThenOwnFiles, "pull order: base first");
+    RunTest(TestPullAbortsWhenBaseCannotBePulled, "pull aborts without base");
+    RunTest(TestStatusNeedsBothPackages, "status needs both packages");
+    RunTest(TestCheckReportsAnIncompleteBase, "check reports incomplete base");
+    RunTest(TestRemovingBaseWarnsAndRemovingDependantKeepsBase, "rm semantics");
+    RunTest(TestModelscopeFlagReachesTheBase, "modelscope flag reaches base");
+    RunTest(TestShippedCatalogDeclaresTheDflashDependant, "shipped dflash entry");
     RunTest(TestResumeAppendsToPartThenAtomicallyPromotes, "resume and promote");
     RunTest(TestWrongSizeOrHashNeverReplacesAValidFinalFile, "invalid transfer isolation");
     RunTest(TestInterruptedTransferKeepsPartForNextResume, "interrupted transfer");

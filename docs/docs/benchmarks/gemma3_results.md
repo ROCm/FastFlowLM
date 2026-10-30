@@ -32,8 +32,8 @@ AMD Ryzen™ AI 7 350 (Kraken Point) with 32 GB DRAM; performance is comparable 
 
 | **Model**        | **HW**       | **1k** | **2k** | **4k** | **8k** | **16k** | **32k** |**64k** | **128k** |
 |------------------|--------------------|--------:|--------:|--------:|--------:|---------:|---------:|---------:|---------:|
-| **Gemma 3 1B**  | NPU (FLM)    | 41.1	| 40.5	|	39.5	|	37.3	|	33.6	|	27.9|	OOC|	OOC|
-| **Gemma 3 4B**  | NPU (FLM)    | 18.2	| 18.0	| 17.8	| 17.3	| 16.3	| 14.8 |	13.2 |	11.2 |
+| **Gemma 3 1B**  | XDNA2    | 41.1	| 40.5	|	39.5	|	37.3	|	33.6	|	27.9|	OOC|	OOC|
+| **Gemma 3 4B**  | XDNA2    | 18.2	| 18.0	| 17.8	| 17.3	| 16.3	| 14.8 |	13.2 |	11.2 |
 
 > OOC: Out Of Context Length  
 > Each LLM has a maximum supported context window. For example, the gemma3:1b model supports up to 32k tokens.
@@ -44,8 +44,8 @@ AMD Ryzen™ AI 7 350 (Kraken Point) with 32 GB DRAM; performance is comparable 
 
 | **Model**        | **HW**       | **1k** | **2k** | **4k** | **8k** | **16k** | **32k** |
 |------------------|--------------------|--------:|--------:|--------:|--------:|---------:|---------:|
-| **Gemma 3 1B**   | NPU (FLM)    | 1004 |	1321|	1546 |	1720 |	1785 |	1755|
-| **Gemma 3 4B**   | NPU (FLM)    | 528 |	654 |	771 |	881 |	936 |	926|
+| **Gemma 3 1B**   | XDNA2    | 1004 |	1321|	1546 |	1720 |	1785 |	1755|
+| **Gemma 3 4B**   | XDNA2    | 528 |	654 |	771 |	881 |	936 |	926|
 
 ---
 
@@ -53,6 +53,6 @@ AMD Ryzen™ AI 7 350 (Kraken Point) with 32 GB DRAM; performance is comparable 
 
 | **Model**        | **HW**       | **Image** |
 |------------------|--------------------|--------:|
-| **Gemma 3 4B**   | NPU (FLM)    | 2.6|
+| **Gemma 3 4B**   | XDNA2    | 2.6|
 
 > This test uses a short prompt: “Describe this image.”

@@ -283,6 +283,43 @@
                 "footprint": 9.1
             }
         },
+        "nemotron3.5-bolt-dflash": {
+            "e4b": {
+                "supported_platforms": ["aie2p"],
+                "name": "Nemotron-3.5-Bolt-E4B-DFlash-NPU2",
+                "base_model": "nemotron3.5-bolt:e4b",
+                "url": "https://huggingface.co/FastFlowLM/Nemotron-3.5-Bolt-E4B-DFlash-NPU2",
+                "file_url": "https://huggingface.co/api/models/FastFlowLM/Nemotron-3.5-Bolt-E4B-DFlash-NPU2/tree/main",
+                "ms_url": "https://modelscope.cn/models/amd/Nemotron-3.5-Bolt-E4B-DFlash-NPU2",
+                "size": 270410098,
+                "flm_min_version": "1.0.12",
+                "files": [
+                    "config.json",
+                    "dflash_weight.q4nx",
+                    "LICENSE.OpenMDW-1.1"
+                ],
+                "vlm": true,
+                "asr": true,
+                "default_context_length": 32768,
+                "max_prefill_len": 4096,
+                "details": {
+                    "format": "NPU2",
+                    "family": "gemma4e-dflash",
+                    "think": true,
+                    "parameter_size": "8B+0.36B",
+                    "quantization_level": "Q4_1"
+                },
+                "label": [
+                    "audio",
+                    "vision",
+                    "reasoning",
+                    "tool-calling",
+                    "chat-transcription",
+                    "speculative"
+                ],
+                "footprint": 9.5
+            }
+        },
         "gemma4e-flash": {
             "e2b": {
                 "supported_platforms": ["aie2p"],
@@ -562,6 +599,42 @@
                     "tool-calling"
                 ],
                 "footprint": 2.4
+            }
+        },
+
+        "minicpm-v-4.7-moe": {
+            "35b-a3b": {
+                "supported_platforms": ["aie2p"],
+                "name": "MiniCPM-V-4.7-35B-A3B-NPU2",
+                "url": "https://huggingface.co/FastFlowLM/MiniCPM-V-4.7-35B-A3B-NPU2/resolve/main",
+                "file_url": "https://huggingface.co/api/models/FastFlowLM/MiniCPM-V-4.7-35B-A3B-NPU2/tree/main",
+                "ms_url": "https://modelscope.cn/models/amd/MiniCPM-V-4.7-35B-A3B-NPU2",
+                "size": 22000000000,
+                "flm_min_version": "1.0.12",
+                "files": [
+                    "config.json",
+                    "model.q4nx",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "vision_weight.q4nx",
+                    "chat_template.jinja"
+                ],
+                "vlm": true,
+                "default_context_length": 32768,
+                "max_prefill_len": 4096,
+                "details": {
+                    "format": "NPU2",
+                    "family": "minicpm-v-4.7-moe",
+                    "think": true,
+                    "parameter_size": "35B",
+                    "quantization_level": "Q4_K"
+                },
+                "label": [
+                    "vision",
+                    "reasoning",
+                    "tool-calling"
+                ],
+                "footprint": 22.2
             }
         },
 
@@ -929,6 +1002,38 @@
             }
         },
         "d3": {
+            "edge": {
+                "supported_platforms": ["aie2p"],
+                "name": "D3-Edge-NPU2",
+                "url": "https://huggingface.co/FastFlowLM/D3-Edge-NPU2",
+                "file_url": "https://huggingface.co/api/models/FastFlowLM/D3-Edge-NPU2/tree/main",
+                "ms_url": "https://modelscope.cn/models/amd/D3-Edge-NPU2",
+                "size": 624659058,
+                "flm_min_version": "1.0.12",
+                "files": [
+                    "config.json",
+                    "model.q4nx",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "chat_template.jinja",
+                    "decision_config.json",
+                    "readout.safetensors",
+                    "vision_weight.q4nx"
+                ],
+                "default_context_length": 32768,
+                "max_prefill_len": 32768,
+                "details": {
+                    "format": "NPU2",
+                    "family": "d3",
+                    "think": false,
+                    "parameter_size": "0.6B",
+                    "quantization_level": "Q4_K"
+                },
+                "label":[
+                    "decision"
+                ],
+                "footprint": 1.5
+            },
             "lite": {
                 "supported_platforms": ["aie2p"],
                 "name": "D3-Lite-NPU2",

@@ -141,6 +141,10 @@ docs_nav:
         url: "/docs/models/minicpm/"
       - label: Nemotron Bolt
         url: "/docs/models/nemotron3.5-bolt/"
+      - label: Nemotron Bolt DFlash
+        url: "/docs/models/nemotron3.5-bolt-dflash/"
+      - label: Flash Models
+        url: "/docs/models/flash/"
   - label: Benchmarks
     children:
       - label: Overview
@@ -181,3 +185,7 @@ docs_nav:
         url: "/docs/benchmarks/minicpm-v-4.7_results/"
       - label: Nemotron Bolt
         url: "/docs/benchmarks/nemotron3.5-bolt_results/"
+      - label: Nemotron Bolt DFlash
+        url: "/docs/benchmarks/nemotron3.5-bolt-dflash_results/"
+      - label: Flash Models
+        url: "/docs/benchmarks/flash_results/"

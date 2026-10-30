@@ -1,0 +1,189 @@
+name: NPU test
+description: >
+  Runs the npu_test suites (.github/script/npu_test) against one flm binary in
+  server mode, adds the summary to the job page and uploads the full report.
+  Needs .github/script, src/test/openai_api_test, src/test/openai_usage and
+  src/test/d3_video/fixtures in the checkout, and Python 3.9+ on the runner
+  (standard library only).
+
+inputs:
+  flm-bin:
+    description: Absolute path of the flm binary to test.
+    required: true
+  label:
+    description: Names this package in the report, e.g. linux-xrt-portable.
+    required: true
+  tier:
+    description: install, pr or full.
+    required: true
+  suites:
+    description: Comma-separated suites, or "all".
+    required: false
+    default: all
+  families:
+    description: Comma-separated model families the change touches.
+    required: false
+    default: ""
+  models:
+    description: Comma-separated model ids that restrict every suite.
+    required: false
+    default: ""
+  asr-full:
+    description: '"true" to run the whole ASR evaluation set on the pr tier.'
+    required: false
+    default: "false"
+  asr-expected-key:
+    description: Row of asr_eval/expected.json to check WER against (linux, linux-hrx, windows, windows-hrx).
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    # A runner takes one job at a time, so an flm left running from an earlier
+    # job's workspace is stale and holds the NPU: a new server then hangs at
+    # start. Only processes under the runner's work directory are touched,
+    # never one a person started. One that survives SIGKILL is stuck in the
+    # NPU driver, and only a reboot frees the runner.
+    - name: Clear stale flm processes (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        work="$(dirname "$(dirname "${GITHUB_WORKSPACE}")")"
+        stale=$(pgrep -u "$(id -u)" -f "^${work}/.*flm(-real)? serve" || true)
+        [ -z "${stale}" ] && exit 0
+        echo "::warning::Killing flm left over from an earlier job: $(ps -o pid=,stat=,args= -p ${stale} | tr '\n' ';')"
+        kill -9 ${stale} 2>/dev/null || true
+        sleep 5
+        left=$(ps -o pid=,stat=,args= -p ${stale} 2>/dev/null || true)
+        if [ -n "${left}" ]; then
+          echo "::error::flm from an earlier job survived SIGKILL and holds the NPU (state D means stuck in the driver); reboot this runner (${RUNNER_NAME}): ${left}"
+          exit 1
+        fi
+
+    - name: Clear stale flm processes (Windows)
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        $work = Split-Path (Split-Path $env:GITHUB_WORKSPACE)
+        $stale = Get-Process -Name flm -ErrorAction SilentlyContinue |
+          Where-Object { $_.Path -and $_.Path.StartsWith($work, [StringComparison]::OrdinalIgnoreCase) }
+        if (-not $stale) { exit 0 }
+        Write-Host "::warning::Killing flm left over from an earlier job: $($stale | ForEach-Object { "$($_.Id) $($_.Path)" })"
+        $stale | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 5
+        $left = $stale | Where-Object { -not $_.HasExited }
+        if ($left) {
+          Write-Host "::error::flm from an earlier job survived Stop-Process and holds the NPU; reboot this runner ($env:RUNNER_NAME): $($left.Id)"
+          exit 1
+        }
+
+    # Models persist on the runner between jobs, so only the first job on a
+    # runner pays for a download.
+    - name: Run tests (Linux)
+      id: linux
+      if: runner.os == 'Linux'
+      shell: bash
+      working-directory: ${{ github.workspace }}/.github/script
+      env:
+        FLM_BIN: ${{ inputs.flm-bin }}
+        LABEL: ${{ inputs.label }}
+        TIER: ${{ inputs.tier }}
+        SUITES: ${{ inputs.suites }}
+        FAMILIES: ${{ inputs.families }}
+        MODELS: ${{ inputs.models }}
+        ASR_FULL: ${{ inputs.asr-full }}
+        ASR_KEY: ${{ inputs.asr-expected-key }}
+      run: |
+        export FLM_MODEL_PATH="${FLM_MODEL_PATH:-/scratch}"
+        args=(--flm-bin "${FLM_BIN}" --label "${LABEL}" --tier "${TIER}" --suites "${SUITES}"
+              --families "${FAMILIES}" --models "${MODELS}" --asr-expected-key "${ASR_KEY}"
+              --output-dir "${GITHUB_WORKSPACE}/npu-test-results/${LABEL}")
+        [ "${ASR_FULL}" = "true" ] && args+=(--asr-full)
+        code=0
+        python3 -m npu_test "${args[@]}" || code=$?
+        echo "code=${code}" >> "$GITHUB_OUTPUT"
+
+    - name: Run tests (Windows)
+      id: windows
+      if: runner.os == 'Windows'
+      shell: powershell
+      working-directory: ${{ github.workspace }}/.github/script
+      env:
+        FLM_BIN: ${{ inputs.flm-bin }}
+        LABEL: ${{ inputs.label }}
+        TIER: ${{ inputs.tier }}
+        SUITES: ${{ inputs.suites }}
+        FAMILIES: ${{ inputs.families }}
+        MODELS: ${{ inputs.models }}
+        ASR_FULL: ${{ inputs.asr-full }}
+        ASR_KEY: ${{ inputs.asr-expected-key }}
+      run: |
+        if (-not $env:FLM_MODEL_PATH) {
+          $env:FLM_MODEL_PATH = Join-Path $env:USERPROFILE ".flm"
+          New-Item -ItemType Directory -Force $env:FLM_MODEL_PATH | Out-Null
+        }
+        # --opt=value throughout: Windows PowerShell 5.1 drops an empty argument
+        # when calling a native program, which would leave --families with no
+        # value. Model output and transcripts are not all representable in the
+        # console code page, so Python (and the test scripts it starts) write UTF-8.
+        $env:PYTHONUTF8 = '1'
+        $outDir = Join-Path $env:GITHUB_WORKSPACE "npu-test-results\$env:LABEL"
+        $cmdArgs = @('-m', 'npu_test', "--flm-bin=$env:FLM_BIN", "--label=$env:LABEL",
+                     "--tier=$env:TIER", "--suites=$env:SUITES", "--families=$env:FAMILIES",
+                     "--models=$env:MODELS", "--asr-expected-key=$env:ASR_KEY",
+                     "--output-dir=$outDir")
+        if ($env:ASR_FULL -eq 'true') { $cmdArgs += '--asr-full' }
+        & python $cmdArgs
+        [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "code=$LASTEXITCODE`n")
+        exit 0
+
+    - name: Add summary (Linux)
+      if: always() && runner.os == 'Linux'
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        LABEL: ${{ inputs.label }}
+      run: |
+        summary="npu-test-results/${LABEL}/summary.md"
+        if [ -f "${summary}" ]; then
+          cat "${summary}" >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "### ❌ ${LABEL}: no report was written" >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+    - name: Add summary (Windows)
+      if: always() && runner.os == 'Windows'
+      shell: powershell
+      working-directory: ${{ github.workspace }}
+      env:
+        LABEL: ${{ inputs.label }}
+      run: |
+        $summary = "npu-test-results\$env:LABEL\summary.md"
+        $text = if (Test-Path $summary) { Get-Content $summary -Raw -Encoding UTF8 } else { "### ❌ ${env:LABEL}: no report was written`n" }
+        [System.IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, $text, [System.Text.UTF8Encoding]::new($false))
+
+    # Server logs included, so a failure can be diagnosed without the runner.
+    - name: Upload report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: npu-test-${{ inputs.label }}
+        path: npu-test-results/${{ inputs.label }}/
+        if-no-files-found: warn
+        retention-days: 30
+
+    # Last, so a failed run still gets its summary and report uploaded.
+    - name: Fail on test failures (Linux)
+      if: runner.os == 'Linux' && steps.linux.outputs.code != '0'
+      shell: bash
+      run: |
+        echo "::error::NPU tests failed; see the summary and the npu-test-${{ inputs.label }} artifact."
+        exit 1
+
+    - name: Fail on test failures (Windows)
+      if: runner.os == 'Windows' && steps.windows.outputs.code != '0'
+      shell: powershell
+      run: |
+        Write-Host "::error::NPU tests failed; see the summary and the npu-test-${{ inputs.label }} artifact."
+        exit 1

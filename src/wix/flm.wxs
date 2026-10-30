@@ -176,6 +176,9 @@
       <Component Id="Comp_minicpm_ocr_npu.dll" Guid="*">
         <File Id="File_minicpm_ocr_npu.dll" Source="$(SourceDir)\minicpm_ocr_npu.dll" KeyPath="yes" />
       </Component>
+      <Component Id="Comp_minicpm_v_4_7_moe_npu.dll" Guid="*">
+        <File Id="File_minicpm_v_4_7_moe_npu.dll" Source="$(SourceDir)\minicpm_v_4_7_moe_npu.dll" KeyPath="yes" />
+      </Component>
       <Component Id="Comp_qwen3_5_omni_npu.dll" Guid="*">
         <File Id="File_qwen3_5_omni_npu.dll" Source="$(SourceDir)\qwen3_5_omni_npu.dll" KeyPath="yes" />
       </Component>
@@ -193,6 +196,9 @@
       </Component>
       <Component Id="Comp_gemma4e_flash.dll" Guid="*">
         <File Id="File_gemma4e_flash.dll" Source="$(SourceDir)\gemma4e_flash.dll" KeyPath="yes" />
+      </Component>
+      <Component Id="Comp_gemma4e_dflash.dll" Guid="*">
+        <File Id="File_gemma4e_dflash.dll" Source="$(SourceDir)\gemma4e_dflash.dll" KeyPath="yes" />
       </Component>
       <Component Id="Comp_gemma4e_12b_npu.dll" Guid="*">
         <File Id="File_gemma4e_12b_npu.dll" Source="$(SourceDir)\gemma4_12b_npu.dll" KeyPath="yes" />

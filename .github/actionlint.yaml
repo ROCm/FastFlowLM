@@ -1,0 +1,6 @@
+# Labels of the self-hosted NPU runners, for actionlint's runs-on check.
+self-hosted-runner:
+  labels:
+    - flm
+    - npu
+    - sweep

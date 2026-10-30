@@ -69,6 +69,9 @@ class model_list {
             // actually run, so an unsupported tag fails at validation instead of
             // failing much later inside the model backend.
             this->apply_support_filter();
+            // A dependant tag (one with a base_model) is only usable if its base
+            // is a real entry; drop the ones that are not before indexing.
+            this->validate_base_models();
 
             // Populate all_tags set
             for (const auto& [model_type, sizes] : this->config["models"].items()) {
@@ -279,6 +282,48 @@ class model_list {
             return full_path.string();
         }
 
+        /// \brief the tag a tag depends on, if it names one
+        /// \param tag the tag of the model
+        /// \return the rectified base tag; nullopt for an ordinary model
+        /// \note One level only (validate_base_models drops anything else). A
+        ///       tag with a base stores only its own files in its own folder
+        ///       (get_model_path); the base's folder holds everything else
+        ///       (get_load_path).
+        std::optional<std::string> get_base_model(const std::string& tag) const {
+            const auto entry = this->find_entry(this->rectify_model_tag(tag));
+            if (!entry || !entry->contains("base_model") || !entry->at("base_model").is_string()) {
+                return std::nullopt;
+            }
+            return this->rectify_model_tag(entry->at("base_model").get<std::string>());
+        }
+
+        /// \brief the tags that name this tag as their base
+        /// \param tag the tag of the base model
+        std::vector<std::string> get_dependants(const std::string& tag) const {
+            const std::string base = this->rectify_model_tag(tag);
+            std::vector<std::string> out;
+            for (const auto& [model_type, model_subset] : this->config["models"].items()) {
+                for (const auto& [size, model_info] : model_subset.items()) {
+                    const std::string dependant = model_type + ":" + size;
+                    const auto own_base = this->get_base_model(dependant);
+                    if (own_base && *own_base == base) out.push_back(dependant);
+                }
+            }
+            return out;
+        }
+
+        /// \brief the folder a model is loaded from
+        /// \param tag the tag of the model
+        /// \return the base model's folder for a tag with a base_model, else
+        ///         the tag's own folder (get_model_path)
+        /// \note Config, tokenizer, chat template and the main weights come from
+        ///       here; load paths (runner, server, benchmark) use this, the
+        ///       downloader keeps using get_model_path.
+        std::string get_load_path(const std::string& tag) {
+            if (const auto base = this->get_base_model(tag)) return this->get_model_path(*base);
+            return this->get_model_path(tag);
+        }
+
         bool is_model_supported(const std::string& tag) {
             return all_tags.find(tag) != all_tags.end();
         }
@@ -362,6 +407,48 @@ class model_list {
         ///       has is on disk: downloads land under their final name only once
         ///       verified, so a present file is a pulled one.
         nlohmann::json resolve_source(const std::string& tag, nlohmann::json entry) const {
+            entry = this->resolve_source_impl(tag, std::move(entry));
+            // A tag with a base_model is loaded from the base's folder; tell the
+            // engine side where its own files are and which xclbin folder is its.
+            if (entry.contains("base_model") && entry.at("base_model").is_string() &&
+                entry.contains("name")) {
+                const std::string base_tag = this->rectify_model_tag(entry.at("base_model").get<std::string>());
+                entry["base_model"] = base_tag;
+                if (const auto base = this->find_entry(base_tag); base && base->contains("name")) {
+                    entry["base_model_path"] =
+                        (std::filesystem::path(this->model_root_path) / base->at("name").get<std::string>()).string();
+                }
+                entry["draft_model_path"] =
+                    (std::filesystem::path(this->model_root_path) / entry.at("name").get<std::string>()).string();
+                entry["xclbin_folder"] = entry.at("name");
+            }
+            return entry;
+        }
+
+        /// \brief drop dependants whose base is not a catalog entry of its own
+        void validate_base_models() {
+            std::vector<std::pair<std::string, std::string>> bad;
+            for (const auto& [model_type, model_subset] : this->config["models"].items()) {
+                for (const auto& [size, model_info] : model_subset.items()) {
+                    if (!model_info.contains("base_model")) continue;
+                    const std::string tag = model_type + ":" + size;
+                    const std::string base = model_info.at("base_model").is_string()
+                        ? this->rectify_model_tag(model_info.at("base_model").get<std::string>()) : std::string();
+                    const auto base_entry = base.empty() ? nullptr : this->find_entry(base);
+                    if (!base_entry || base == tag || base_entry->contains("base_model")) {
+                        bad.emplace_back(model_type, size);
+                        header_print_r("ERROR", "Ignoring " + tag + ": base_model '" + base +
+                                       "' must be another catalog entry without a base_model");
+                    }
+                }
+            }
+            for (const auto& [model_type, size] : bad) {
+                this->config["models"][model_type].erase(size);
+                if (this->config["models"][model_type].empty()) this->config["models"].erase(model_type);
+            }
+        }
+
+        nlohmann::json resolve_source_impl(const std::string& tag, nlohmann::json entry) const {
             const auto preferred = entry.find("preferred_source");
             if (preferred == entry.end()) return entry;
             const nlohmann::json overlay = *preferred;
