@@ -19,6 +19,14 @@ bool dflash_env_enabled() {
 }
 }
 
+gemma4e_engine_config_t Gemma4e_DFlash::engine_config() const {
+    return read_gemma4e_engine_config<gemma4e_dflash>(this->lm_engine);
+}
+
+const flm_state_api* Gemma4e_DFlash::engine_state_api() const {
+    return gemma4e_dflash_state_api(this->lm_engine);
+}
+
 void Gemma4e_DFlash::load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption, const std::string& backend) {
     Gemma4e::load_model(model_path, model_info, default_context_length, enable_preemption, backend);
     auto* engine = dynamic_cast<gemma4e_dflash*>(this->lm_engine);

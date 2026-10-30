@@ -39,6 +39,34 @@ struct gemma4e_engine_config_t {
     unsigned int Gemma4e_Audio_conv2d_Padding;
 };
 
+/// Reads the shared set of engine constants off a concrete engine type.
+/// gemma4e_npu, gemma4e_flash and gemma4e_dflash are unrelated types that happen to expose the
+/// same member names, so this is templated rather than taking a common base.
+template <typename EngineT>
+inline gemma4e_engine_config_t read_gemma4e_engine_config(causal_lm* engine) {
+    EngineT* e = dynamic_cast<EngineT*>(engine);
+    if (e == nullptr) {
+        // Reachable in Release with the core engine, which has no vision or
+        // audio path.
+        throw std::runtime_error(
+            "engine_config() was called on a Gemma4e wrapper whose engine is "
+            "not the expected type -- the vision and audio paths are not "
+            "available on this backend (core runs text only)");
+    }
+    return gemma4e_engine_config_t{
+        e->GEMMA4E_VISION_PATCH_SIZE,
+        e->GEMMA4E_POOLING_KERNEL_SIZE,
+        e->GEMMA4E_VISION_RESCALE_FACTOR,
+        e->GEMMA4E_VISION_IMAGE_MEAN,
+        e->GEMMA4E_VISION_IMAGE_STD,
+        e->Gemma4E_Audio_resample_rate,
+        e->Gemma4E_Audio_conv2d_kernel_size,
+        e->Gemma4E_Audio_conv2d_Stride,
+        e->Gemma4e_Audio_conv2d_Padding,
+    };
+}
+
+
 class Gemma4e : public AutoModel {
 private:
     // some model specific template variables
