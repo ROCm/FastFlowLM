@@ -14,6 +14,7 @@
 ///       seed/stop-rule/teardown structure -- keep the two in sync by hand.
 
 #include "AutoModel/modeling_qwen3_8mtp.hpp"
+#include "models/qwen3_8mtp/flm/aie2p/qwen3_8mtp_npu.hpp"
 
 
 /************              Qwen3_8MTP family            **************/
@@ -470,10 +471,17 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
     // everything falls through to the ordinary path below.
     // Off under a decoding constraint: speculate() commits the drafts the base
     // model agrees with, so they would never pass the constraint's mask.
+    // An extension's generic speculation table has no per-draft logits view,
+    // so logprobs use ordinary decoding unless this is the built-in engine.
     // FLM_DISABLE_SPECULATION=1 turns it off too, for comparing against plain
     // decoding (output, logprobs) on the same build.
     const char* no_spec = std::getenv("FLM_DISABLE_SPECULATION");
-    const bool spec_enabled = this->lm_engine->supports_speculation() && !meta_info.constraint &&
+    const bool has_speculation_logits =
+        meta_info.logprobs_top_n < 0 ||
+        dynamic_cast<qwen3_8mtp_npu*>(this->lm_engine) != nullptr;
+    const bool spec_enabled = this->lm_engine->supports_speculation() &&
+        !meta_info.constraint &&
+        has_speculation_logits &&
         !(no_spec != nullptr && no_spec[0] != '\0' && std::strcmp(no_spec, "0") != 0);
     // Draft depth; also the hit-rate denominator (see report_speculation_stats).
     const int SPEC_MAX_DRAFT = 7;

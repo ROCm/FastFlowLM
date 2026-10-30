@@ -19,11 +19,13 @@
 ///       vtable slots in code this build cannot recompile.
 #pragma once
 
+#include "AutoModel/backend_contract.hpp"
 #include "causal_lm.hpp"
 #include "lm_config.hpp"
 #include "device_runtime.hpp"
 #include "nlohmann/json.hpp"
 
+#include <cstddef>
 #include <functional>
 #include <map>
 #include <memory>
@@ -36,38 +38,14 @@ class npu_xclbin_manager;
 
 namespace flm::backend {
 
-/// \brief FastFlowLM's own NPU kernel flow
-/// \note Every model family registers this one, in every build, which is what
-///       makes it the backend a catalog entry gets when it names none.
-inline constexpr const char* kFlmBackendId = "flm";
-
-/// \brief kernels reached through ryzenai-corelib
-/// \note Only compiled in when FLM_ENABLE_CORE is on, and only for families that
-///       have a corelib engine. It is added to a build, never swapped in: a core
-///       build still runs every flm model with the flm kernels.
-inline constexpr const char* kCoreBackendId = "core";
-
-/// \brief the entry key naming the kernel flow an entry's artifacts need
-/// \note Written onto the entry by model_list, which derives it from the tag,
-///       rather than read from model_list.json: the tag is what decides, and
-///       it is not part of the entry that reaches AutoModel. An entry without
-///       it runs on kFlmBackendId.
-inline constexpr const char* kBackendKey = "backend";
-
-/// \brief the suffix that marks a model family as ryzenai-corelib's
-/// \note The tag is the mechanism: a corelib model is packaged differently
-///       from its FastFlowLM namesake, so it is a different model to pull and
-///       a different tag to ask for. model_list::backend_for_family is where
-///       this is applied; it is spelled out here so the two ids and the rule
-///       that picks between them sit together.
-inline constexpr const char* kCoreFamilySuffix = "-core";
-
 /// \brief everything a backend factory needs to build its engine
 /// \note Assembled by the frontend once the shared model state is initialized,
 ///       so `config` and `context_length` are already resolved.
 struct BackendContext {
     std::string model_path;
     nlohmann::ordered_json model_info;
+    /// \brief Provider that owns any opaque prefill payload.
+    std::string frontend_provider = kBuiltinProviderId;
     const LM_Config* config = nullptr;
     /// \note null for backends that do not drive the NPU through an xclbin
     npu_xclbin_manager* npu = nullptr;
@@ -116,6 +94,9 @@ public:
     /// \brief whether this backend can run with preemption enabled
     virtual bool supports_preemption() const { return true; }
 
+    /// \brief whether the engine implements checkpoint and restore
+    virtual bool supports_state() const { return true; }
+
     /// \brief whether the engine wants one more forward() after an EOS token
     /// \note The flm engines use it to keep their KV cache in step; the core
     ///       engines reject a decode past corelib's own limit, so they opt out.
@@ -156,8 +137,21 @@ public:
 
     /// \brief register a backend for a family
     /// \throws std::runtime_error if that family already has that id
-    void register_backend(std::string family, std::string id,
+    void register_backend(const std::string& family, const std::string& id,
                           BackendFactory factory, BackendTraits traits = {});
+
+    /// \brief Register one provider implementation of a backend contract.
+    /// \throws std::runtime_error if that family/backend/provider exists
+    void register_provider(const std::string& family, const std::string& id,
+                           std::string provider, BackendFactory factory,
+                           BackendTraits traits = {},
+                           std::string asset_root = {});
+
+    /// \brief Remove an extension provider while rolling back registration.
+    /// \note The linked-in "builtin" provider cannot be removed.
+    void unregister_provider(const std::string& family,
+                             const std::string& id,
+                             const std::string& provider) noexcept;
 
     /// \brief register a backend, replacing any backend already under that id
     /// \note Unlike register_backend this never throws on a duplicate. It exists
@@ -169,13 +163,27 @@ public:
     /// \brief the ids registered for a family, sorted
     std::vector<std::string> available(const std::string& family) const;
 
+    /// \brief provider ids registered for one family/backend, sorted
+    std::vector<std::string> available_providers(
+        const std::string& family, const std::string& id) const;
+
     /// \brief what a registered backend needs before it can be built
     /// \throws std::runtime_error naming the available ids if it is not registered
     BackendTraits traits(const std::string& family,
-                         const std::string& id) const;
+                         const std::string& id,
+                         const std::string& provider =
+                             kBuiltinProviderId) const;
+
+    /// \brief Extension-local asset prefix, empty for linked-in providers.
+    std::string asset_root(const std::string& family, const std::string& id,
+                           const std::string& provider) const;
 
     /// \brief whether a family has a backend with this id
     bool has(const std::string& family, const std::string& id) const;
+
+    /// \brief whether one provider implements a family/backend pair
+    bool has_provider(const std::string& family, const std::string& id,
+                      const std::string& provider) const;
 
     /// \brief every backend id this build registers for any family, sorted
     /// \note This is what the build links, which is what model_list prunes the
@@ -184,23 +192,39 @@ public:
     ///       generation is not.
     std::vector<std::string> backend_ids() const;
 
+    using ProviderInventory = BackendProviderInventory;
+
+    /// \brief immutable family/backend/provider snapshot for catalog validation
+    ProviderInventory provider_inventory() const;
+
     /// \brief build a backend
     /// \throws std::runtime_error naming the available ids if it is not registered
     std::unique_ptr<ModelBackend> create(const std::string& family,
                                          const std::string& id,
+                                         const std::string& provider,
                                          const BackendContext& context) const;
+
+    /// \brief Build the linked-in provider for compatibility with old callers.
+    std::unique_ptr<ModelBackend> create(
+        const std::string& family, const std::string& id,
+        const BackendContext& context) const {
+        return create(family, id, kBuiltinProviderId, context);
+    }
 
 private:
     struct Entry {
         BackendFactory factory;
         BackendTraits traits;
+        std::string asset_root;
     };
 
     /// \brief look up one entry, or throw naming what the family does provide
-    Entry lookup(const std::string& family, const std::string& id) const;
+    Entry lookup(const std::string& family, const std::string& id,
+                 const std::string& provider) const;
 
     mutable std::mutex mutex_;
-    std::map<std::string, std::map<std::string, Entry>> factories_;
+    std::map<std::string,
+             std::map<std::string, std::map<std::string, Entry>>> factories_;
 };
 
 /// \brief register every backend that ships with this build
@@ -209,26 +233,28 @@ private:
 ///       both the family names and the engine types.
 void register_builtin_backends(BackendRegistry& registry);
 
-/// \brief decide which backend to run a model on
+/// \brief Exact backend implementation selected for one model package.
+struct BackendSelection {
+    std::string backend;
+    std::string provider;
+};
+
+/// \brief Resolve and validate the backend/provider pair for a model package.
 /// \param family the model family, as in details.family
-/// \param fallback the backend the entry asks for -- its kBackendKey, which
-///        model_list derived from the tag, or kFlmBackendId when it has none
-/// \param requested the --backend value, empty when the flag was not given
+/// \param catalog_backend backend contract declared by the model entry
+/// \param catalog_provider provider declared by the model entry
+/// \param requested_backend the --backend value, empty when the flag was absent
 /// \param source if non-null, receives a human-readable reason for the choice
-/// \return the resolved backend id
-/// \throws std::runtime_error naming the registered ids when nothing matches
-/// \note Precedence: --backend, then FLM_BACKEND, then `fallback`. Every one
-///       of them is a demand, not a preference: an id that this family does
-///       not register is an error whoever asked for it. The entry cannot
-///       reasonably ask for a flow the build lacks, because model_list has
-///       already pruned the entries whose flow is missing -- so a throw here
-///       means a genuine mismatch, not a routine packaging gap.
-/// \note `fallback` arrives as a string so that this header stays free of the
-///       NPU runtime includes, which is what lets test/model_backend build
-///       without an XRT toolchain.
-std::string resolve_backend_id(const std::string& family,
-                               const std::string& fallback,
-                               const std::string& requested = "",
-                               std::string* source = nullptr);
+/// \throws std::runtime_error if the exact pair is unavailable or an override
+///         requests a backend the model package does not declare compatible
+/// \note Precedence remains --backend, FLM_BACKEND, then the catalog. The
+///       current catalog schema declares one exact pair; registration alone
+///       does not make a different backend compatible with the package.
+BackendSelection resolve_backend_selection(
+    const std::string& family,
+    const std::string& catalog_backend,
+    const std::string& catalog_provider = kBuiltinProviderId,
+    const std::string& requested_backend = "",
+    std::string* source = nullptr);
 
 }  // namespace flm::backend

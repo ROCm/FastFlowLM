@@ -28,6 +28,10 @@ inputs:
     description: Comma-separated model ids that restrict every suite.
     required: false
     default: ""
+  model-extension:
+    description: Optional model-extension manifest passed to FLM.
+    required: false
+    default: ""
   asr-full:
     description: '"true" to run the whole ASR evaluation set on the pr tier.'
     required: false
@@ -92,6 +96,7 @@ runs:
         SUITES: ${{ inputs.suites }}
         FAMILIES: ${{ inputs.families }}
         MODELS: ${{ inputs.models }}
+        MODEL_EXTENSION: ${{ inputs.model-extension }}
         ASR_FULL: ${{ inputs.asr-full }}
         ASR_KEY: ${{ inputs.asr-expected-key }}
       run: |
@@ -100,6 +105,7 @@ runs:
               --families "${FAMILIES}" --models "${MODELS}" --asr-expected-key "${ASR_KEY}"
               --output-dir "${GITHUB_WORKSPACE}/npu-test-results/${LABEL}")
         [ "${ASR_FULL}" = "true" ] && args+=(--asr-full)
+        [ -n "${MODEL_EXTENSION}" ] && args+=(--model-extension "${MODEL_EXTENSION}")
         code=0
         python3 -m npu_test "${args[@]}" || code=$?
         echo "code=${code}" >> "$GITHUB_OUTPUT"
@@ -116,6 +122,7 @@ runs:
         SUITES: ${{ inputs.suites }}
         FAMILIES: ${{ inputs.families }}
         MODELS: ${{ inputs.models }}
+        MODEL_EXTENSION: ${{ inputs.model-extension }}
         ASR_FULL: ${{ inputs.asr-full }}
         ASR_KEY: ${{ inputs.asr-expected-key }}
       run: |
@@ -134,6 +141,9 @@ runs:
                      "--models=$env:MODELS", "--asr-expected-key=$env:ASR_KEY",
                      "--output-dir=$outDir")
         if ($env:ASR_FULL -eq 'true') { $cmdArgs += '--asr-full' }
+        if ($env:MODEL_EXTENSION) {
+          $cmdArgs += "--model-extension=$env:MODEL_EXTENSION"
+        }
         & python $cmdArgs
         [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "code=$LASTEXITCODE`n")
         exit 0

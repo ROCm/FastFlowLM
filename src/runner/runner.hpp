@@ -57,7 +57,11 @@ class Runner {
         bool embed;
         model_list supported_models;
         ModelDownloader& downloader;
-        std::unique_ptr<AutoModel> auto_chat_engine;
+        // Declared before engines so the borrowed native handle stays valid
+        // through provider destruction (members are destroyed in reverse).
+        std::optional<flm_rt::device> owned_device;
+        flm_rt::device* npu_device_inst;
+        flm::frontend::FrontendPtr auto_chat_engine;
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
         std::unique_ptr<Whisper> whisper_engine;
         std::unique_ptr<AutoEmbeddingModel> auto_embedding_engine;
@@ -71,12 +75,6 @@ class Runner {
         int img_pre_resize;
         // CLI instance for interactive input
         CLIWide cli;
-        // Non-RAI: Runner owns the device. RAI: main passes corelib's device.
-        flm_rt::device* npu_device_inst;
-        // Non-RAI path: Runner owns the device so constructor errors propagate
-        // to main()'s try-catch.
-        std::optional<flm_rt::device> owned_device;
-
         /// \brief Command functions
         void cmd_set(std::vector<std::string>& input_list);
         void cmd_show(std::vector<std::string>& input_list);

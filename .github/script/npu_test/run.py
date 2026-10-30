@@ -37,6 +37,9 @@ def parse_args(argv=None) -> argparse.Namespace:
                         help="Run the whole ASR evaluation set even on the pr tier.")
     parser.add_argument("--models", default="",
                         help="Comma-separated model ids; restricts every suite to these.")
+    parser.add_argument("--model-extension", action="append", default=[],
+                        help="Model-extension manifest passed to `flm list` and every "
+                             "server (repeatable).")
     parser.add_argument("--asr-expected-key", default="",
                         help="Row of asr_eval/expected.json to check WER against, "
                              "e.g. linux-hrx (default: none, core checks only).")
@@ -72,7 +75,7 @@ def main(argv=None) -> int:
     # report, so a broken package shows up as a failed case, not a traceback.
     catalog_error = ""
     try:
-        catalog = load_catalog(args.flm_bin)
+        catalog = load_catalog(args.flm_bin, args.model_extension)
     except Exception as exc:
         catalog, catalog_error = {}, f"`flm list --json` failed: {type(exc).__name__}: {exc}"
     families = [f.strip() for f in args.families.split(",") if f.strip()]
@@ -80,7 +83,8 @@ def main(argv=None) -> int:
     plan = Plan(catalog, args.tier, families, only_models=only)
     ctx = Context(flm_bin=args.flm_bin, label=args.label, tier=args.tier, plan=plan,
                   out_dir=args.output_dir, request_timeout=args.request_timeout,
-                  port=args.port, verbose=args.verbose)
+                  port=args.port, verbose=args.verbose,
+                  model_extensions=args.model_extension)
     ctx.asr_full = args.asr_full or args.tier == "full"
     ctx.asr_expected_key = args.asr_expected_key
 

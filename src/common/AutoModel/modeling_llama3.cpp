@@ -6,6 +6,7 @@
 /// \note This is a source file for the llama3 class
 
 #include "AutoModel/modeling_llama3.hpp"
+#include "models/llama/flm/aie2p/llama_npu.hpp"
 
 /************              Llama3 family            **************/
 Llama3::Llama3(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "Llama3") {}
@@ -177,22 +178,20 @@ bool DeepSeek_r1_8b::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& inp
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
     // hardware
     int restore_idx = -1;
-    llama_npu *llama_engine = dynamic_cast<llama_npu*>(this->lm_engine);
-
     // The generation prompt ("<｜Assistant｜>\n") is how the next turn renders this reply's header: save the whole prompt (trim 0).
     if (this->_prefix_slot_mode(meta_info, tokens.size(), 0)) {
         return this->_prefix_text_insert(meta_info, tokens, 0, "<｜User｜>", is_cancelled);
     }
     this->_prefix_legacy_path();
     if (meta_info.restore_allowed) {
-        restore_idx = llama_engine->restore();
+        restore_idx = this->lm_engine->restore();
         this->total_tokens = restore_idx;
         this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
     }
     bool success = this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
 
     checkpoint_his = token_history;
-    int checkpoint_idx = llama_engine->checkpoint();
+    int checkpoint_idx = this->lm_engine->checkpoint();
 
     return success;
 }

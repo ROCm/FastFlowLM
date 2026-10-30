@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "name": "fake-model-extension",
+  "version": "1.0.0",
+  "library": "__library__",
+  "catalog": "fake-model-catalog.json"
+}

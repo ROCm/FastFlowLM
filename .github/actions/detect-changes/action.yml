@@ -29,9 +29,11 @@ outputs:
       The suites for the HRX packages: the same, less api and serving, which
       test server logic the backend does not touch. Empty when nothing is left.
     value: ${{ steps.tier.outputs.hrx-suites }}
-  source:
-    description: '"true" when the models-from-source builds need testing (the chat suite runs).'
-    value: ${{ steps.tier.outputs.source }}
+  model-e2e:
+    description: >
+      "true" when source-built models and model-extension E2E need testing
+      (the chat suite runs).
+    value: ${{ steps.tier.outputs.model-e2e }}
   tier:
     description: install, pr or full.
     value: ${{ steps.tier.outputs.tier }}
@@ -78,13 +80,13 @@ runs:
         else
           hrx=$(echo "${suites}" | tr ',' '\n' | { grep -vxE 'api|serving' || true; } | paste -sd, -)
         fi
-        source=false
-        { [ "${suites}" = "all" ] || echo ",${suites}," | grep -q ",chat,"; } && source=true
+        model_e2e=false
+        { [ "${suites}" = "all" ] || echo ",${suites}," | grep -q ",chat,"; } && model_e2e=true
         {
           echo "tier=${tier}"
           echo "short-sha=${SHA:0:7}"
           echo "suites=${suites}"
           echo "hrx-suites=${hrx}"
-          echo "source=${source}"
+          echo "model-e2e=${model_e2e}"
         } >> "$GITHUB_OUTPUT"
-        echo "Tier: ${tier}; suites: ${suites}; HRX suites: ${hrx:-none}; source tests: ${source}"
+        echo "Tier: ${tier}; suites: ${suites}; HRX suites: ${hrx:-none}; model E2E: ${model_e2e}"

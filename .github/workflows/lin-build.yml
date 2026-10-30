@@ -10,6 +10,8 @@ name: Linux Build
 #   XRT-portable     portable                                    (Debian 13)
 #   HRX-portable     HRX-portable                                (Debian 13)
 #   Source-portable  models-from-source-portable                 (Debian 13)
+#   XRT extension    gemma4-open-linux-xrt                       (optional)
+#   HRX extension    gemma4-open-linux-hrx                       (optional)
 #
 # Build and Test (build-and-test.yml) calls this once per package on every pull
 # request, push and tag; dispatch it to build packages without testing them.
@@ -22,6 +24,10 @@ on:
           comma-separated list of them, or "all".
         type: string
         default: all
+      model-extension:
+        description: Build separate Gemma4-open bundles for portable XRT/HRX variants.
+        type: boolean
+        default: false
     outputs:
       deb_distros:
         description: How many distributions each .deb variant is built for.
@@ -33,6 +39,10 @@ on:
         type: choice
         options: [all, XRT-deb, HRX-deb, XRT-portable, HRX-portable, Source-portable]
         default: all
+      model-extension:
+        description: Build separate Gemma4-open bundles for portable XRT/HRX variants
+        type: boolean
+        default: false
 
 # No concurrency group: build-and-test.yml calls this several times in one
 # run, and the calls would cancel each other. The caller owns cancellation.
@@ -135,10 +145,12 @@ jobs:
           distro: ${{ matrix.distro }}
           distro-version: ${{ matrix.version }}
           codename: ${{ matrix.codename }}
+          model-extension: ${{ inputs.model-extension }}
 
       - name: Package portable distribution
         id: portable
         if: endsWith(matrix.variant, '-portable')
+        shell: bash
         env:
           VARIANT: ${{ matrix.variant }}
           VERSION: ${{ steps.build.outputs.version }}
@@ -182,6 +194,8 @@ jobs:
             flm \
             flm-real \
             lib/ \
+            include/ \
+            schemas/ \
             xclbins/ \
             model_list.json \
             model_info.json \
@@ -205,5 +219,14 @@ jobs:
           name: ${{ matrix.artifact }}
           path: ${{ steps.build.outputs.package || steps.portable.outputs.tarball }}
           retention-days: ${{ matrix.retention }}
+          if-no-files-found: error
+
+      - name: Upload model-extension artifact
+        if: inputs.model-extension && (matrix.variant == 'XRT-portable' || matrix.variant == 'HRX-portable')
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.variant == 'XRT-portable' && 'gemma4-open-linux-xrt' || 'gemma4-open-linux-hrx' }}
+          path: build-model-extension-gemma4e/bundle/
+          retention-days: 7
           if-no-files-found: error
 

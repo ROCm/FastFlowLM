@@ -4,10 +4,9 @@
 ///        every backend here is a stub, so this builds and runs on Linux CI
 ///        where the phi4_core suite cannot. register_builtin_backends
 ///        is stubbed out below for the same reason.
-/// \note  A backend id names a kernel provider: "flm", "core", and one day
-///        whatever else grows an engine. It is not a platform id -- the
-///        resolution rules below are about which provider a build links,
-///        not about which silicon it runs on.
+/// \note  A backend id names an execution/artifact contract such as "flm" or
+///        "core". A provider names one implementation of that contract. Neither
+///        is a platform id; these rules do not choose which silicon to run on.
 #include "AutoModel/model_backend.hpp"
 #include "../phi4_core/test_support.hpp"
 
@@ -22,7 +21,7 @@ using flm::backend::BackendTraits;
 using flm::backend::kFlmBackendId;
 using flm::backend::kCoreBackendId;
 using flm::backend::ModelBackend;
-using flm::backend::resolve_backend_id;
+using flm::backend::resolve_backend_selection;
 
 /// \brief the builtin set, emptied
 /// \note The real one lives in builtin_backends.cpp and pulls in every engine
@@ -119,6 +118,44 @@ void test_traits_are_kept_per_backend() {
     TEST_REQUIRE(core.max_context_length == 4096);
 }
 
+void test_providers_are_kept_per_backend_contract() {
+    auto registry = MakeRegistry();
+    registry.register_backend(
+        "gemma4e", kFlmBackendId, StubFactory("builtin"));
+    registry.register_provider(
+        "gemma4e", kFlmBackendId, "gemma4-open",
+        StubFactory("gemma4-open"),
+        BackendTraits{true, false, 32768});
+
+    const auto providers =
+        registry.available_providers("gemma4e", kFlmBackendId);
+    TEST_REQUIRE(providers.size() == 2);
+    TEST_REQUIRE(providers[0] == "builtin");
+    TEST_REQUIRE(providers[1] == "gemma4-open");
+    TEST_REQUIRE(registry.has_provider(
+        "gemma4e", kFlmBackendId, "gemma4-open"));
+
+    BackendContext context;
+    auto backend = registry.create(
+        "gemma4e", kFlmBackendId, "gemma4-open", context);
+    TEST_REQUIRE(backend->id() == "gemma4-open");
+    TEST_REQUIRE(
+        !registry.traits(
+            "gemma4e", kFlmBackendId, "gemma4-open")
+             .supports_preemption);
+
+    const auto inventory = registry.provider_inventory();
+    TEST_REQUIRE(
+        inventory.at("gemma4e").at(kFlmBackendId).size() == 2);
+    RequireContains(
+        RequireThrows([&] {
+            registry.register_provider(
+                "gemma4e", kFlmBackendId, "gemma4-open",
+                StubFactory("duplicate"));
+        }),
+        "already registered");
+}
+
 void test_backend_defaults() {
     StubBackend backend(kFlmBackendId);
     TEST_REQUIRE(backend.detail().empty());
@@ -182,14 +219,52 @@ void test_the_catalog_entry_is_the_default() {
     registry.replace_backend("phi4", kCoreBackendId, StubFactory("core"));
 
     std::string source;
+    auto selection = resolve_backend_selection(
+        "phi4", kFlmBackendId, "builtin", "", &source);
+    TEST_REQUIRE(selection.backend == kFlmBackendId);
+    TEST_REQUIRE(selection.provider == "builtin");
+    TEST_REQUIRE(source == "model catalog");
+    selection = resolve_backend_selection(
+        "phi4", kCoreBackendId, "builtin", "", &source);
+    TEST_REQUIRE(selection.backend == kCoreBackendId);
+    TEST_REQUIRE(selection.provider == "builtin");
+    TEST_REQUIRE(source == "model catalog");
+}
 
-    // Nothing overrides it, so the entry decides. Both flows are registered
-    // for this family at once, which is the point: they are two ways to run
-    // phi4 on one machine, not two machines.
-    TEST_REQUIRE(resolve_backend_id("phi4", "flm", "", &source) == kFlmBackendId);
-    TEST_REQUIRE(source == "model catalog");
-    TEST_REQUIRE(resolve_backend_id("phi4", "core", "", &source) == kCoreBackendId);
-    TEST_REQUIRE(source == "model catalog");
+void test_catalog_selects_exact_backend_provider_pair() {
+    auto& registry = BackendRegistry::instance();
+    registry.replace_backend(
+        "provider-test", kFlmBackendId, StubFactory("builtin"));
+    if (!registry.has_provider(
+            "provider-test", kFlmBackendId, "gemma4-open")) {
+        registry.register_provider(
+            "provider-test", kFlmBackendId, "gemma4-open",
+            StubFactory("gemma4-open"));
+    }
+
+    const auto selected = resolve_backend_selection(
+        "provider-test", kFlmBackendId, "gemma4-open");
+    TEST_REQUIRE(selected.backend == kFlmBackendId);
+    TEST_REQUIRE(selected.provider == "gemma4-open");
+    RequireContains(
+        RequireThrows([] {
+            resolve_backend_selection(
+                "provider-test", kFlmBackendId, "missing");
+        }),
+        "missing");
+
+    registry.register_provider(
+        "provider-switch-test", "iron", "worker",
+        StubFactory("worker"));
+    registry.register_provider(
+        "provider-switch-test", "iron", "native",
+        StubFactory("native"));
+    TEST_REQUIRE(
+        resolve_backend_selection(
+            "provider-switch-test", "iron", "worker").provider == "worker");
+    TEST_REQUIRE(
+        resolve_backend_selection(
+            "provider-switch-test", "iron", "native").provider == "native");
 }
 
 void test_resolution_precedence() {
@@ -199,20 +274,30 @@ void test_resolution_precedence() {
 
     std::string source;
     {
-        // FLM_BACKEND beats what the entry asked for.
+        // FLM_BACKEND is a demand, but registration alone cannot make the
+        // requested backend compatible with this model package.
         ScopedBackendEnv env(kCoreBackendId);
-        TEST_REQUIRE(resolve_backend_id("phi4", "flm", "", &source) == kCoreBackendId);
-        TEST_REQUIRE(source == "FLM_BACKEND");
+        const auto incompatible = RequireThrows([&] {
+            resolve_backend_selection(
+                "phi4", kFlmBackendId, "builtin", "", &source);
+        });
+        RequireContains(incompatible, "FLM_BACKEND");
+        RequireContains(incompatible, "not compatible");
 
         // --backend beats both.
-        TEST_REQUIRE(resolve_backend_id("phi4", "flm", kFlmBackendId, &source) ==
-                     kFlmBackendId);
+        TEST_REQUIRE(
+            resolve_backend_selection(
+                "phi4", kFlmBackendId, "builtin", kFlmBackendId, &source)
+                .backend == kFlmBackendId);
         TEST_REQUIRE(source == "--backend");
     }
 
     // An empty FLM_BACKEND is the same as an unset one.
     ScopedBackendEnv empty("");
-    TEST_REQUIRE(resolve_backend_id("phi4", "core", "", &source) == kCoreBackendId);
+    TEST_REQUIRE(
+        resolve_backend_selection(
+            "phi4", kCoreBackendId, "builtin", "", &source)
+            .backend == kCoreBackendId);
     TEST_REQUIRE(source == "model catalog");
 }
 
@@ -226,21 +311,25 @@ void test_adding_core_leaves_the_flm_families_alone() {
     // corelib engine, flm for that family too, and flm alone everywhere else.
     // Linking core must not disturb any of the families it says nothing about.
     std::string source;
-    TEST_REQUIRE(resolve_backend_id("llama3", kFlmBackendId, "", &source) ==
-                 kFlmBackendId);
+    TEST_REQUIRE(
+        resolve_backend_selection(
+            "llama3", kFlmBackendId, "builtin", "", &source)
+            .backend == kFlmBackendId);
     TEST_REQUIRE(source == "model catalog");
-    TEST_REQUIRE(resolve_backend_id("phi4", kCoreBackendId, "", &source) ==
-                 kCoreBackendId);
+    TEST_REQUIRE(
+        resolve_backend_selection(
+            "phi4", kCoreBackendId, "builtin", "", &source)
+            .backend == kCoreBackendId);
     TEST_REQUIRE(source == "model catalog");
 
-    // core is registered, but not for llama3, and nothing quietly substitutes
-    // another flow: asking for one backend and silently getting a different
-    // one would be worse than an error. The catalog cannot ask for this in
-    // practice -- model_list prunes an entry whose flow is missing -- so a
-    // throw here means a real mismatch rather than a packaging gap.
-    RequireThrows([&] { resolve_backend_id("llama3", kCoreBackendId); });
-    RequireThrows(
-        [&] { resolve_backend_id("llama3", kFlmBackendId, kCoreBackendId); });
+    // A registered backend is not automatically compatible with every model
+    // package for the family.
+    RequireContains(
+        RequireThrows([&] {
+            resolve_backend_selection(
+                "phi4", kFlmBackendId, "builtin", kCoreBackendId);
+        }),
+        "not compatible");
 
     // Every backend the build links, whichever family registered it.
     const auto ids = registry.backend_ids();
@@ -252,29 +341,37 @@ void test_resolution_rejects_with_a_readable_message() {
     auto& registry = BackendRegistry::instance();
     registry.replace_backend("llama3", kFlmBackendId, StubFactory("flm"));
 
-    // A family with no engine for the requested provider: the message has to
-    // name both what was asked for and what the build does have.
-    const std::string not_built = RequireThrows(
-        [&] { resolve_backend_id("llama3", "flm", kCoreBackendId); });
-    RequireContains(not_built, "--backend");
-    RequireContains(not_built, "is not available for model family");
-    RequireContains(not_built, "flm");
+    const std::string incompatible = RequireThrows([&] {
+        resolve_backend_selection(
+            "llama3", kFlmBackendId, "builtin", kCoreBackendId);
+    });
+    RequireContains(incompatible, "--backend");
+    RequireContains(incompatible, "not compatible");
+    RequireContains(incompatible, "flm/builtin");
 
-    // Same for a provider nobody has an engine for yet.
+    // A catalog pair that this build does not provide fails explicitly.
     const std::string unknown_provider =
-        RequireThrows([&] { resolve_backend_id("llama3", "gpu"); });
+        RequireThrows([&] {
+            resolve_backend_selection("llama3", kFlmBackendId, "missing");
+        });
     RequireContains(unknown_provider, "model catalog");
-    RequireContains(unknown_provider, "gpu");
+    RequireContains(unknown_provider, "missing");
 
     // The env var gets named in the message too, so the user can find it.
-    ScopedBackendEnv env("bogus");
-    const std::string from_env =
-        RequireThrows([&] { resolve_backend_id("llama3", "flm"); });
-    RequireContains(from_env, "FLM_BACKEND");
+    {
+        ScopedBackendEnv env("bogus");
+        const std::string from_env = RequireThrows([&] {
+            resolve_backend_selection("llama3", kFlmBackendId, "builtin");
+        });
+        RequireContains(from_env, "FLM_BACKEND");
+    }
 
     // And a family that has nothing at all still says so rather than crashing.
     const std::string no_family =
-        RequireThrows([&] { resolve_backend_id("nosuchfamily", "flm"); });
+        RequireThrows([&] {
+            resolve_backend_selection(
+                "nosuchfamily", kFlmBackendId, "builtin");
+        });
     RequireContains(no_family, "(none)");
 }
 
@@ -283,11 +380,15 @@ void test_resolution_rejects_with_a_readable_message() {
 int main() {
     RunTest(test_register_and_create, "register and create");
     RunTest(test_traits_are_kept_per_backend, "traits are kept per backend");
+    RunTest(test_providers_are_kept_per_backend_contract,
+            "providers are kept per backend contract");
     RunTest(test_backend_defaults, "backend policy defaults");
     RunTest(test_duplicate_registration_is_rejected, "duplicate registration is rejected");
     RunTest(test_replace_backend_is_the_test_seam, "replace_backend is the test seam");
     RunTest(test_unknown_id_names_what_exists, "unknown id names what exists");
     RunTest(test_the_catalog_entry_is_the_default, "the catalog entry is the default");
+    RunTest(test_catalog_selects_exact_backend_provider_pair,
+            "catalog selects exact backend/provider pair");
     RunTest(test_resolution_precedence, "resolution precedence");
     RunTest(test_adding_core_leaves_the_flm_families_alone,
             "adding core leaves the flm families alone");

@@ -133,16 +133,16 @@ private:
                                 chat_logprobs_aligner* logprobs = nullptr);
 
 
-    std::unique_ptr<AutoModel> auto_chat_engine;
+    // Declared before engines so the borrowed native handle stays valid
+    // through provider destruction (members are destroyed in reverse).
+    std::optional<flm_rt::device> owned_device;
+    flm_rt::device* npu_device_inst;
+    flm::frontend::FrontendPtr auto_chat_engine;
     std::unique_ptr<AutoDecisionModel> decision_engine;
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
     std::unique_ptr<Whisper> whisper_engine;
     std::unique_ptr<AutoEmbeddingModel> auto_embedding_engine;
 #endif
-    // Non-RAI: RestHandler owns the device. RAI: main passes corelib's device.
-    flm_rt::device* npu_device_inst;
-    // Non-RAI path: owned device so constructor errors propagate.
-    std::optional<flm_rt::device> owned_device;
     model_list& supported_models;
     ModelDownloader& downloader;
     std::string current_model_tag;

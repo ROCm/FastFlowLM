@@ -17,6 +17,7 @@
 #include "causal_lm.hpp"
 #include "flm_state_api.h"
 #include "utils/hybrid_state.hpp"
+#include "models/gemma4e/gemma4e_payload.hpp"
 #if USEAVX2
 #include <immintrin.h>  // For AVX intrinsics
 #endif
@@ -58,35 +59,6 @@ typedef struct {
 } gemma4e_image_t;
 
 
-
-
-
-struct gemma4e_image_payload_t{
-    // original raw data
-    std::vector<std::pair<int, int>> image_patch__element_per_patch; // [num_of_image][width, height]
-    std::vector<uint32_t> valid_patch_size_per_image; // [num_of_image], the unpadded size per image
-    std::vector<std::vector<bf16>> pixel_values; // [num_of_image][image_size], where image_size = height_resized * width_resized * 3
-    std::vector< std::vector<int>> image_grid_pairs_per_image; // [num_of_image][num_of_position_id][x, y]
-    std::vector<unsigned int> num_soft_tokens_per_image; // [num_of_image]
-    unsigned int num_images;
-};
-
-
-struct gemma4e_audio_payload_t{
-    // per-audio mel spectrogram data
-    std::vector<std::vector<bf16>> mel_spectrograms;               // [num_audios][frames * bins], row-major
-    std::vector<int> mel_spectrogram_frames_per_audio;             // [num_audios]
-    std::vector<int> mel_spectrogram_bins_per_audio;               // [num_audios]
-    unsigned int num_audios = 0;
-    std::vector<unsigned int> num_soft_tokens_per_audio; // [num_audios]
-
-};
-
-
-typedef struct {
-    gemma4e_image_payload_t image_payload;
-    gemma4e_audio_payload_t audio_payload;
-} gemma4e_multi_modal_payload_t;
 
 class gemma4e_npu : public causal_lm{
 public:

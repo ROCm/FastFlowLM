@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "models": {
+    "extension-demo": {
+      "1b": {
+        "name": "Extension demo",
+        "supported_platforms": [
+          "aie2p"
+        ],
+        "backend": "flm",
+        "backend_provider": "demo-provider",
+        "default_context_length": 4096,
+        "max_prefill_len": 512,
+        "details": {
+          "family": "demo-frontend"
+        }
+      }
+    }
+  }
+}

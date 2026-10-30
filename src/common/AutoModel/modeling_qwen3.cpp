@@ -7,6 +7,7 @@
 
 
 #include "AutoModel/modeling_qwen3.hpp"
+#include "models/qwen3/flm/aie2p/qwen3_npu.hpp"
 
 
 /************              Qwen3 family            **************/
@@ -427,8 +428,6 @@ bool Qwen3_TK::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, st
 
     // hardware
     int restore_idx = -1;
-    qwen3_npu *qwen3_engine = dynamic_cast<qwen3_npu*>(this->lm_engine);
-
     // Prefix slots. The two tokens left out ("<think>\n") are fed by generate(); the next turn does not render them.
     // A continued message keeps all its tokens: they are the client's text, not the generation prompt.
     const size_t trim_tokens = meta_info.continue_final_message ? 0 : 2;
@@ -438,7 +437,7 @@ bool Qwen3_TK::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, st
     this->_prefix_legacy_path();
 
     if (meta_info.restore_allowed) {
-        restore_idx = qwen3_engine->restore();
+        restore_idx = this->lm_engine->restore();
         this->total_tokens = restore_idx;
         this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
     }
@@ -449,7 +448,7 @@ bool Qwen3_TK::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, st
     bool success = this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
 
     checkpoint_his = token_history;
-    int checkpoint_idx = qwen3_engine->checkpoint();
+    int checkpoint_idx = this->lm_engine->checkpoint();
 
     return success;
 }
@@ -657,22 +656,20 @@ bool DeepSeek_r1_0528_8b::insert(chat_meta_info_t& meta_info, lm_uniform_input_t
 
     // hardware
     int restore_idx = -1;
-    qwen3_npu *qwen3_engine = dynamic_cast<qwen3_npu*>(this->lm_engine);
-
     // A user turn ends with "<｜Assistant｜>" and the next turn continues with the reply, so the whole prompt can be saved (trim 0).
     if (this->_prefix_slot_mode(meta_info, tokens.size(), 0)) {
         return this->_prefix_text_insert(meta_info, tokens, 0, "<｜User｜>", is_cancelled);
     }
     this->_prefix_legacy_path();
     if (meta_info.restore_allowed) {
-        restore_idx = qwen3_engine->restore();
+        restore_idx = this->lm_engine->restore();
         this->total_tokens = restore_idx;
         this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
     }
     bool success = this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
 
     checkpoint_his = token_history;
-    int checkpoint_idx = qwen3_engine->checkpoint();
+    int checkpoint_idx = this->lm_engine->checkpoint();
 
     return success;
 }

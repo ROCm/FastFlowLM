@@ -4,7 +4,8 @@
 /// \date 2025-10-01
 /// \version 0.9.24
 /// \note This is a source file for the gpt-oss class
-#include "AutoModel/modeling_gpt_oss.hpp"   
+#include "AutoModel/modeling_gpt_oss.hpp"
+#include "models/gpt_oss/flm/aie2p/gpt_oss_npu.hpp"
 
 
 GPT_OSS::GPT_OSS(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "gpt-oss") {}
@@ -74,8 +75,6 @@ bool GPT_OSS::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     
     // hardware
     int restore_idx = -1;
-    gpt_oss_npu *gpt_oss_engine = dynamic_cast<gpt_oss_npu*>(this->lm_engine);
-
     // Prefix slots. The generation prompt ("<|start|>assistant") is how the next turn renders this reply's header: save the whole prompt.
     if (this->_prefix_slot_mode(meta_info, tokens.size(), 0)) {
         return this->_prefix_text_insert(meta_info, tokens, 0, "<|start|>user", is_cancelled);
@@ -83,14 +82,14 @@ bool GPT_OSS::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     this->_prefix_legacy_path();
 
     if (meta_info.restore_allowed) {
-        restore_idx = gpt_oss_engine->restore();
+        restore_idx = this->lm_engine->restore();
         this->total_tokens = restore_idx;
         this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
     }
     bool success = this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
 
     checkpoint_his = token_history;
-    int checkpoint_idx = gpt_oss_engine->checkpoint();
+    int checkpoint_idx = this->lm_engine->checkpoint();
 
     return success;
 }

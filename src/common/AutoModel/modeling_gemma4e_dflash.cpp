@@ -8,6 +8,7 @@
 /// emitted touch the sampler's RNG and penalty history.
 #include "AutoModel/modeling_gemma4e.hpp"
 #include "AutoModel/automodel.hpp"
+#include "models/gemma4e_dflash/flm/aie2p/gemma4e_dflash.hpp"
 #include <cstdlib>
 #include <cstring>
 

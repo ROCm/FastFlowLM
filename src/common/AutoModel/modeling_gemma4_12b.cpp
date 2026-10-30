@@ -8,6 +8,7 @@
 #include "AutoModel/modeling_gemma4_12b.hpp"
 #include "metrices.hpp"
 #include "error_measure.hpp"
+#include "models/gemma4_12b/flm/aie2p/gemma4_12b_npu.hpp"
 #include <cassert>
 
 /************              Gemma4_12B family            **************/
@@ -150,6 +151,11 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
             // Process Audios
             if (message.contains("audios")) {
                 gemma4_12b_npu *gemma4e_engine = dynamic_cast<gemma4_12b_npu*>(this->lm_engine); 
+                if (!gemma4e_engine) {
+                    throw std::runtime_error(
+                        "Gemma 4 audio requires a matching frontend and "
+                        "backend provider");
+                }
                 for (auto& aud : message["audios"]) {
                     std::string audio_str = aud.get<std::string>();
                     audio_data_t audio_data = this->load_audio_base64(audio_str, gemma4e_engine->GEMMA4_12B_audio_sampling_rate, MonoDownmixMode::RMS);
@@ -202,6 +208,11 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
         // nlohmann::ordered_json messages;
         if(input.audios.size() > 0){
             gemma4_12b_npu *gemma4e_engine = dynamic_cast<gemma4_12b_npu*>(this->lm_engine);  
+            if (!gemma4e_engine) {
+                throw std::runtime_error(
+                    "Gemma 4 audio requires a matching frontend and backend "
+                    "provider");
+            }
 
             for (int i = 0; i < input.audios.size(); i++) {
                 std::string audio_str = input.audios[i];
@@ -471,8 +482,6 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
 
     // hardware
     int restore_idx = -1;
-    gemma4_12b_npu *gemma4_12b_engine = dynamic_cast<gemma4_12b_npu*>(this->lm_engine);
-
     // Prefix slots, text-only prompts. A prompt that carries pictures or audio, or a text turn whose history still holds their
     // soft tokens (the payload is gone by then), takes the in-place path below. With thinking off the last 4 tokens of the prompt
     // (the empty thought channel) are fed by generate(); the next turn does not render them.
@@ -491,7 +500,7 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
     // The legacy checkpoint keeps only the rings: it relies on the global rows still being the ones it was taken with. A slot request
     // overwrites them, so it drops the checkpoint's token history, and the in-place path below then has nothing to restore.
     if (meta_info.restore_allowed && !checkpoint_his.empty()) {
-        restore_idx = gemma4_12b_engine->restore();
+        restore_idx = this->lm_engine->restore();
         this->total_tokens = restore_idx;
         this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
     }
@@ -509,7 +518,7 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
         : this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
 
     checkpoint_his = token_history;
-    int checkpoint_idx = gemma4_12b_engine->checkpoint();
+    int checkpoint_idx = this->lm_engine->checkpoint();
     return success;
 }
 
