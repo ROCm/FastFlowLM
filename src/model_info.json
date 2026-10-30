@@ -2500,7 +2500,7 @@
         {
             "type": "file",
             "size": 2471645608,
-            "sha256": "68a2e4be76fa709455a60272fba8e512c02d81c46e6c671cc9449e374fd6809a",
+            "sha256": "1ff795ff6a07e6a68085d206fb84417da2f083f68391c2843cd2b8ac6df8538f",
             "path": "model.safetensors"
         },
         {

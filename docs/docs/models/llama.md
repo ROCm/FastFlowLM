@@ -23,6 +23,20 @@ parent: Models
 flm run llama3.2:1b
 ```
 
+With an IRON-enabled build, `llama3.2-iron:1b` uses the same Instruct model in
+BF16, with the tokenizer and chat template from FastFlowLM's package above.
+Accept Meta's model license and provide a Hugging Face token (`HF_TOKEN` or
+`hf auth login`), then run:
+
+```shell
+flm pull llama3.2-iron:1b
+flm run llama3.2-iron:1b --ctx-len 2048
+```
+
+This downloads into `models/llama3.2-1b-instruct`. If you previously pulled the
+base checkpoint, pull again after updating FastFlowLM; the new directory keeps
+the two checkpoints separate.
+
 ---
 
 ## 🧩 Model Card: [Llama-3.2-3B-Instruct](https://huggingface.co/meta-llama/Llama-3.2-3B-Instruct)

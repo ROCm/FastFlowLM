@@ -143,7 +143,9 @@ void test_bf16_llama_requires_iron() {
     const auto [tag, info] = iron.get_model_info(kIronLlamaTag);
     TEST_REQUIRE(tag == kIronLlamaTag);
     TEST_REQUIRE(info.at("backend") == "iron");
-    TEST_REQUIRE(info.at("name") == "llama3.2-1b");
+    TEST_REQUIRE(info.at("name") == "llama3.2-1b-instruct");
+    TEST_REQUIRE(info.at("url").get<std::string>().starts_with(
+        "https://huggingface.co/meta-llama/Llama-3.2-1B-Instruct/resolve/"));
     TEST_REQUIRE(info.at("details").at("family") == "llama3");
     TEST_REQUIRE(info.at("details").at("quantization_level") == "BF16");
     TEST_REQUIRE(info.at("files").at(1) == "model.safetensors");
