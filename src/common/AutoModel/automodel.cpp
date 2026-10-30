@@ -281,15 +281,13 @@ void AutoModel::_shared_load_backend(std::string model_path, json model_info,
     const std::string family = model_info["details"]["family"].get<std::string>();
 
     auto& registry = flm::backend::BackendRegistry::instance();
-    std::string source;
     // The entry carries the kernel flow its artifacts were built for -- the
     // weights differ between flows, so this belongs to the model rather than
     // to the build. model_list wrote it there from the tag the entry was
-    // found under; --backend and FLM_BACKEND still win over it.
-    const std::string catalog_backend = model_info.value(
-        flm::backend::kBackendKey, std::string(flm::backend::kFlmBackendId));
-    const std::string id = flm::backend::resolve_backend_id(
-        family, catalog_backend, requested_backend, &source);
+    // found under; --backend and FLM_BACKEND take precedence over it but must
+    // agree with it, or the load is refused.
+    const std::string id =
+        flm::backend::choose_backend_id(model_info, requested_backend);
 
     // Same model on the same backend is a no-op; a different backend is a real
     // reload even when the path has not changed.
@@ -352,7 +350,7 @@ void AutoModel::_shared_load_backend(std::string model_path, json model_info,
         throw;
     }
     // Hide the log now.
-    // header_print("FLM", "Backend: " << id << " (from " << source << ")");
+    // header_print("FLM", "Backend: " << id);
 }
 
 void AutoModel::_shared_after_inference_failure(bool poisoned) {
