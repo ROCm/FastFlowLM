@@ -29,10 +29,10 @@ AMD Ryzen™ AI 9 370 (Strix Point) with 32 GB DRAM; performance is comparable t
 
 | **Model**               | **HW**    | **64** | **128** | **256** | **512** | **1024** |
 |-------------------------|-----------|-------:|--------:|--------:|--------:|---------:|
-| **gemma4e-flash:e2b**   | NPU (FLM) | 0.20 | 0.22 | 0.36 | 0.73 | 1.53 |
-| **gemma4e-flash:e4b**   | NPU (FLM) | 0.33 | 0.34 | 0.62 | 1.20 | 2.57 |
-| **qwen3vl-flash:4b**    | NPU (FLM) | 0.24 | 0.24 | 0.45 | 0.85 | 1.83 |
-| **hy-mt2-flash:1.8b**   | NPU (FLM) | 0.13 | 0.14 | 0.23 | 0.43 | 0.84 |
+| **gemma4e-flash:e2b**   | XDNA2 | 0.20 | 0.22 | 0.36 | 0.73 | 1.53 |
+| **gemma4e-flash:e4b**   | XDNA2 | 0.33 | 0.34 | 0.62 | 1.20 | 2.57 |
+| **qwen3vl-flash:4b**    | XDNA2 | 0.24 | 0.24 | 0.45 | 0.85 | 1.83 |
+| **hy-mt2-flash:1.8b**   | XDNA2 | 0.13 | 0.14 | 0.23 | 0.43 | 0.84 |
 
 ---
 
@@ -42,10 +42,10 @@ Prompt tokens divided by TTFT (TTFT includes generating the first token).
 
 | **Model**               | **HW**    | **64** | **128** | **256** | **512** | **1024** |
 |-------------------------|-----------|-------:|--------:|--------:|--------:|---------:|
-| **gemma4e-flash:e2b**   | NPU (FLM) | 322 | 593 | 721 | 705 | 668 |
-| **gemma4e-flash:e4b**   | NPU (FLM) | 193 | 373 | 412 | 427 | 398 |
-| **qwen3vl-flash:4b**    | NPU (FLM) | 271 | 526 | 570 | 601 | 558 |
-| **hy-mt2-flash:1.8b**   | NPU (FLM) | 490 | 923 | 1,093 | 1,197 | 1,214 |
+| **gemma4e-flash:e2b**   | XDNA2 | 322 | 593 | 721 | 705 | 668 |
+| **gemma4e-flash:e4b**   | XDNA2 | 193 | 373 | 412 | 427 | 398 |
+| **qwen3vl-flash:4b**    | XDNA2 | 271 | 526 | 570 | 601 | 558 |
+| **hy-mt2-flash:1.8b**   | XDNA2 | 490 | 923 | 1,093 | 1,197 | 1,214 |
 
 ---
 
@@ -53,9 +53,9 @@ Prompt tokens divided by TTFT (TTFT includes generating the first token).
 
 | **Model**               | **HW**    | **1k** | **Source** |
 |-------------------------|-----------|-------:|------------|
-| **gemma4e-flash:e2b**   | NPU (FLM) | 22.6 | [Gemma 4](../gemma4_results/) (`gemma4-it:e2b`) |
-| **gemma4e-flash:e4b**   | NPU (FLM) | 12.6 | [Gemma 4](../gemma4_results/) (`gemma4-it:e4b`) |
-| **qwen3vl-flash:4b**    | NPU (FLM) | 19.6 | [Qwen3](../qwen3_results/) (Qwen 3 4B) |
-| **hy-mt2-flash:1.8b**   | NPU (FLM) | 52.2 | [Hy-MT2](../hy-mt2_results/) |
+| **gemma4e-flash:e2b**   | XDNA2 | 22.6 | [Gemma 4](../gemma4_results/) (`gemma4-it:e2b`) |
+| **gemma4e-flash:e4b**   | XDNA2 | 12.6 | [Gemma 4](../gemma4_results/) (`gemma4-it:e4b`) |
+| **qwen3vl-flash:4b**    | XDNA2 | 19.6 | [Qwen3](../qwen3_results/) (Qwen 3 4B) |
+| **hy-mt2-flash:1.8b**   | XDNA2 | 52.2 | [Hy-MT2](../hy-mt2_results/) |
 
 > Context is fixed at 1k tokens for every flash model, so 1k is the only applicable decode starting point.

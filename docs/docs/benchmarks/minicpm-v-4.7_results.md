@@ -32,7 +32,7 @@ AMD Ryzen™ AI 5 340 (Kraken Point) with 64 GB DRAM; performance is comparable 
 
 | **Model**        | **HW**       | **1k** | **2k** | **4k** | **8k** | **16k** | **32k** |
 |------------------|--------------------|--------:|--------:|--------:|--------:|---------:|---------:|
-| **MiniCPM-V-4.7-1B**    | NPU (FLM)    | 47.7 | 45.9 | 43.0 | 32.7 | 31.6 | 23.8 | 
+| **MiniCPM-V-4.7-1B**    | XDNA2    | 47.7 | 45.9 | 43.0 | 32.7 | 31.6 | 23.8 | 
 
 ---
 
@@ -40,7 +40,7 @@ AMD Ryzen™ AI 5 340 (Kraken Point) with 64 GB DRAM; performance is comparable 
 
 | **Model**        | **HW**       | **1k** | **2k** | **4k** | **8k** | **16k** | **32k** |
 |------------------|--------------------|--------:|--------:|--------:|--------:|---------:|---------:|
-| **MiniCPM-V-4.7-1B**    | NPU (FLM)    | 1504.7 | 1624.0 | 1648.2 | 1808.8 | 1941.1 | 1666.3 |
+| **MiniCPM-V-4.7-1B**    | XDNA2    | 1504.7 | 1624.0 | 1648.2 | 1808.8 | 1941.1 | 1666.3 |
 
 ---
 
@@ -52,13 +52,13 @@ Prefill time-to-first-token (TTFT) for MiniCPM-V-4.7-1B on NPU (FastFlowLM) with
 
 | Model        | HW  | 720p (1280×720) | 1080p (1920×1080) | 
 |--------------|-----------|----------------:|------------------:|
-| MiniCPM-V-4.7-1B  | NPU (FLM) | 2.1 | 2.5 |
+| MiniCPM-V-4.7-1B  | XDNA2 | 2.1 | 2.5 |
 
 **High Resolution Images:**
 
 | Model        | HW  | 2K (2560×1440) | 4K (3840×2160) |
 |--------------|-----------|---------------:|---------------:|
-| MiniCPM-V-4.7-1B  | NPU (FLM) | 2.5 | 2.5 |
+| MiniCPM-V-4.7-1B  | XDNA2 | 2.5 | 2.5 |
 
 > This test uses a short prompt: “Describe this image.”
 
@@ -85,19 +85,19 @@ AMD Ryzen™ AI MAX+ PRO 395 (Strix Halo) with 128 GB DRAM.
 
 | **Model**        | **HW**       | **1k** | **2k** | **4k** | **8k** | **16k** | **32k** |
 |------------------|--------------------|--------:|--------:|--------:|--------:|---------:|---------:|
-| **MiniCPM-V-4.7-35B-A3B** | NPU (FLM) | 16.2 | 16.1 | 15.2 | 14.6 | 13.1 | 10.9 |
+| **MiniCPM-V-4.7-35B-A3B** | XDNA2 | 16.2 | 16.1 | 15.2 | 14.6 | 13.1 | 10.9 |
 
 ### 🚀 Prefill Speed (TPS, or Tokens per Second, with different prompt lengths)
 
 | **Model**        | **HW**       | **1k** | **2k** | **4k** | **8k** | **16k** | **32k** |
 |------------------|--------------------|--------:|--------:|--------:|--------:|---------:|---------:|
-| **MiniCPM-V-4.7-35B-A3B** | NPU (FLM) | 148 | 219 | 278 | 288 | 284 | 269 |
+| **MiniCPM-V-4.7-35B-A3B** | XDNA2 | 148 | 219 | 278 | 288 | 284 | 269 |
 
 ### 🚀 Prefill TTFT with Image Input (Seconds)
 
 | Model        | HW  | 720p (1280×720) | 1080p (1920×1080) | 2K (2560×1440) | 4K (3840×2160) |
 |--------------|-----------|----------------:|------------------:|---------------:|---------------:|
-| MiniCPM-V-4.7-35B-A3B | NPU (FLM) | 7.8 | 9.1 | 8.8 | 8.4 |
+| MiniCPM-V-4.7-35B-A3B | XDNA2 | 7.8 | 9.1 | 8.8 | 8.4 |
 
 > This test uses a short prompt: “Describe this image.” TTFT stays flat from 1080p up: pictures are split into at most 9 tiles.
 

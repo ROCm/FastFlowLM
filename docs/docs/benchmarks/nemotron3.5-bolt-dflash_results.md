@@ -41,8 +41,8 @@ coding prompt reaches 40.6 tokens/s). The long-context prompts summarize long do
 
 | **Model**              | **HW**    | **1k** | **2k** | **4k** | **8k** | **16k** | **32k** |
 |------------------------|-----------|-------:|-------:|-------:|-------:|--------:|--------:|
-| **Bolt E4B DFlash**    | NPU (FLM) | 17.9   | 18.9   | 18.3   | 21.9   | 11.0    | 7.3     |
-| Bolt E4B               | NPU (FLM) | 13.2   | 12.8   | 12.2   | 11.1   | 9.5     | 7.4     |
+| **Bolt E4B DFlash**    | XDNA2 | 17.9   | 18.9   | 18.3   | 21.9   | 11.0    | 7.3     |
+| Bolt E4B               | XDNA2 | 13.2   | 12.8   | 12.2   | 11.1   | 9.5     | 7.4     |
 
 `flm bench` decodes only a few tokens of one prompt per length, so it is a coarse measure of speculative decoding. At 32k the engine
 turns speculation off because it would not be faster. Prefill speed and time to first token are those of `nemotron3.5-bolt:e4b`.
