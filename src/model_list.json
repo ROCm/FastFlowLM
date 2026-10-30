@@ -291,7 +291,7 @@
                 "url": "https://huggingface.co/FastFlowLM/Nemotron-3.5-Bolt-E4B-DFlash-NPU2",
                 "file_url": "https://huggingface.co/api/models/FastFlowLM/Nemotron-3.5-Bolt-E4B-DFlash-NPU2/tree/main",
                 "ms_url": "https://modelscope.cn/models/amd/Nemotron-3.5-Bolt-E4B-DFlash-NPU2",
-                "size": 400000000,
+                "size": 270410098,
                 "flm_min_version": "1.0.12",
                 "files": [
                     "config.json",

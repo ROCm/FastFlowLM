@@ -85,7 +85,9 @@ std::string Gemma4e_DFlash::_speculative_generate(chat_meta_info_t& meta_info, i
     auto* engine = dynamic_cast<gemma4e_dflash*>(this->lm_engine);
     // Off under a decoding constraint (grammar / tool JSON, D14): a drafted token never passes the constraint's mask
     // through sample-and-compare unless every row is masked, which the plain loop already does cheaply.
-    const bool spec_enabled = engine != nullptr && !meta_info.constraint && dflash_env_enabled() && engine->draft_ready();
+    // draft_ready() is asked per cycle below: the engine's adaptive guard (it turns speculation off while it cannot win and re-probes
+    // later) and the headroom check change from cycle to cycle, so only the static conditions are fixed for the whole turn.
+    const bool spec_enabled = engine != nullptr && !meta_info.constraint && dflash_env_enabled() && engine->supports_speculation();
     const int SPEC_MAX_DRAFT = 7;
     const int vocab = engine != nullptr ? engine->vocab_size() : 0;
     if (spec_enabled) {
