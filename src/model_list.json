@@ -529,6 +529,42 @@
             }
         },
 
+        "minicpm-v-4.7-moe": {
+            "35b-a3b": {
+                "supported_platforms": ["aie2p"],
+                "name": "MiniCPM-V-4.7-35B-A3B-NPU2",
+                "url": "https://huggingface.co/FastFlowLM/MiniCPM-V-4.7-35B-A3B-NPU2/resolve/main",
+                "file_url": "https://huggingface.co/api/models/FastFlowLM/MiniCPM-V-4.7-35B-A3B-NPU2/tree/main",
+                "ms_url": "https://modelscope.cn/models/amd/MiniCPM-V-4.7-35B-A3B-NPU2",
+                "size": 22000000000,
+                "flm_min_version": "1.0.12",
+                "files": [
+                    "config.json",
+                    "model.q4nx",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "vision_weight.q4nx",
+                    "chat_template.jinja"
+                ],
+                "vlm": true,
+                "default_context_length": 32768,
+                "max_prefill_len": 4096,
+                "details": {
+                    "format": "NPU2",
+                    "family": "minicpm-v-4.7-moe",
+                    "think": true,
+                    "parameter_size": "35B",
+                    "quantization_level": "Q4_K"
+                },
+                "label": [
+                    "vision",
+                    "reasoning",
+                    "tool-calling"
+                ],
+                "footprint": 23.4
+            }
+        },
+
         "qwen3.6-moe": {
             "35b-a3b": {
                 "supported_platforms": ["aie2p"],
