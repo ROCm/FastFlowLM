@@ -9,7 +9,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(FLM_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/../..")
 find_path(BOOST_PROCESS_INCLUDE_DIR NAMES boost/process.hpp
     HINTS "$ENV{BOOST_ROOT}" "C:/dev/boost_1_88_0" REQUIRED)
-find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 add_executable(test_iron_worker
     test_worker.cpp
@@ -26,4 +25,4 @@ add_test(NAME test_iron_worker COMMAND test_iron_worker)
 set_tests_properties(test_iron_worker PROPERTIES
     TIMEOUT 30
     ENVIRONMENT
-        "FLM_IRON_PYTHON=${Python3_EXECUTABLE};PYTHONPATH=${CMAKE_CURRENT_LIST_DIR}")
+        "FLM_IRON_PYTHON=$<TARGET_FILE:test_iron_worker>")
