@@ -704,7 +704,9 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
         ? this->_shared_insert(meta_info, tokens, is_cancelled, &multi_modal_payload, last_image_token_index)
         : this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
 
-    if (this->enable_think) {
+    // Single-turn (flash): the only checkpoint is the pinned system prefix, which Gemma4e_Flash owns. Taking this one would
+    // overwrite it with the whole first prompt, and every later request would restore into that stale context.
+    if (this->enable_think && !this->single_turn) {
         checkpoint_his = token_history;
         int checkpoint_idx = this->lm_engine->checkpoint();
     }
