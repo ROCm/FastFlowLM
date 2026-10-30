@@ -3,9 +3,11 @@
 # home_install_aie_next.sh — fast rebuild-and-run loop for the aie_next build.
 #
 # Rebuilds the aie_next engine libraries from their source tree (incremental),
-# stages them into lib/xrt/aie_next with their headers, builds flm with the
-# linux-aie-next preset (its own tree, build_aie_next/) and installs it to a
-# user prefix through home_install.sh. Everything is incremental, so a second
+# stages them into lib/xrt/aie_next with their headers (an engine with a
+# `make install` also puts its array programs in xclbins/images/<model>/),
+# builds flm with the linux-aie-next preset (its own tree, build_aie_next/),
+# installs it to a user prefix through home_install.sh, then copies
+# xclbins/images/* to <prefix>/share/flm/images/. Everything is incremental, so a second
 # run after a one-line engine change takes seconds.
 #
 # Usage:
@@ -67,7 +69,12 @@ if [[ "$DO_ENGINE" -eq 1 ]]; then
         make -s -C "$dll/detail/q4nx" NPU_PLATFORM=aie_next -j"$jobs"
         for unit in "$dll"/detail/aie_next/*/; do
             [[ -f "$unit/Makefile" ]] || continue
-            make -s -C "$unit" NPU_PLATFORM=aie_next -j"$jobs"
+            # `make install`: the .so into lib/xrt/aie_next, the array programs into xclbins/images/<model>
+            if grep -q '^install:' "$unit/Makefile"; then
+                make -s -C "$unit" NPU_PLATFORM=aie_next FLM_REPO="$REPO_DIR" -j"$jobs" install
+            else
+                make -s -C "$unit" NPU_PLATFORM=aie_next -j"$jobs"
+            fi
         done
 
         # The engines only; q4nx is shared and already in lib/xrt.
@@ -77,13 +84,6 @@ if [[ "$DO_ENGINE" -eq 1 ]]; then
             install -m 0755 "$so" "$LIB_DEST/"
             log "  + lib/xrt/aie_next/$(basename "$so")"
         done
-        # the engines' array programs, loaded at run time (installed to share/flm/images)
-        if [[ -d "$dll/build/aie_next/lib/images" ]]; then
-            rm -rf "$LIB_DEST/images"
-            cp -r "$dll/build/aie_next/lib/images" "$LIB_DEST/images"
-            find "$LIB_DEST/images" -name .stamp -delete
-            log "  + lib/xrt/aie_next/images/"
-        fi
         # include/models/<m>/aie_next/*.hpp -> include/models/<m>/flm/aie_next/
         for hdr_dir in "$dll"/include/models/*/aie_next; do
             [[ -d "$hdr_dir" ]] || continue
@@ -106,6 +106,20 @@ install_args=()
 [[ "$DO_BUILD" -eq 1 ]] || install_args+=(--no-build)
 PRESET=linux-aie-next BUILD_DIR="$SRC_DIR/build_aie_next" \
     "$SRC_DIR/home_install.sh" ${install_args[@]+"${install_args[@]}"}
+
+# ---- the engines' array programs ---------------------------------------------
+# xclbins/images/<model>/ -> <prefix>/share/flm/images/<model>/, where the
+# engines look for them (beside the xclbins, as FLM_XCLBIN_PATH finds those).
+if [[ -d "$SRC_DIR/xclbins/images" ]]; then
+    mkdir -p "$FLM_PREFIX/share/flm/images"
+    for dir in "$SRC_DIR"/xclbins/images/*/; do
+        [[ -d "$dir" ]] || continue
+        name="$(basename "$dir")"
+        rm -rf "$FLM_PREFIX/share/flm/images/$name"
+        cp -r "$dir" "$FLM_PREFIX/share/flm/images/$name"
+        log "  + share/flm/images/$name"
+    done
+fi
 
 # ---- run -------------------------------------------------------------------
 if [[ "$DO_RUN" -eq 1 ]]; then

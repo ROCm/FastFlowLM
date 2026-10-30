@@ -811,11 +811,6 @@ else()
         install(TARGETS gemma4e_npu LIBRARY DESTINATION "${FLM_ENGINE_LIB_DESTINATION}")
     endif()
     install(FILES ${_flm_prebuilt_libs} DESTINATION "${FLM_ENGINE_LIB_DESTINATION}")
-    # aie_next engines that load their array programs at run time keep them in
-    # lib/<runtime>/aie_next/images/<engine>/; they go beside the xclbins.
-    if(FLM_NPU_PLATFORM STREQUAL "aie_next" AND EXISTS "${FLM_NEXT_ENGINE_LIB_DIR}/images")
-        install(DIRECTORY "${FLM_NEXT_ENGINE_LIB_DIR}/images" DESTINATION "${FLM_SHARE_DESTINATION}")
-    endif()
     set_target_properties(flm PROPERTIES INSTALL_RPATH "${FLM_FLM_INSTALL_RPATH}")
 
     # Engine .so file names, used below to keep them out of the flm dependency
@@ -1068,4 +1063,6 @@ install(FILES
 
 # xclbins, which are loaded by shared libraries need to be in location
 # relative to the executable, so we install them relative to the binary.
-install(DIRECTORY xclbins DESTINATION "${FLM_SHARE_DESTINATION}")
+# xclbins/images/<model>/ (aie_next engines' array programs, loaded at run time)
+# are not xclbins: home_install_aie_next.sh puts them in share/flm/images.
+install(DIRECTORY xclbins DESTINATION "${FLM_SHARE_DESTINATION}" PATTERN "images" EXCLUDE)
