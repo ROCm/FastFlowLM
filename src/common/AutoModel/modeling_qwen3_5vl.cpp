@@ -54,13 +54,41 @@ std::string Qwen3_5VL::apply_chat_template(nlohmann::ordered_json& messages, nlo
 /************              prefix slots            **************/
 namespace {
 constexpr int kImageSoftTokenId = 248056;
+
+/// \brief whether a request carries an image, in either input form
+/// \note The CLI passes images in input.images; the REST API puts them in the
+///       "images" arrays of its messages. insert() reads no audio, so audios
+///       are not checked here.
+bool carries_images(const lm_uniform_input_t& input) {
+    if (!input.images.empty()) return true;
+    for (const auto& item : input.messages) {
+        if (item.contains("images") && !item["images"].empty()) return true;
+    }
+    return false;
+}
 } // namespace
 
 void Qwen3_5VL::_attach_prefix_cache() {
-    this->_prefix_attach(this->lm_engine, qwen3_5vl_state_api(this->lm_engine), kImageSoftTokenId);
+    // The state table belongs to the NPU engine. Any other engine is attached
+    // with none, which leaves the prefix cache off (see _prefix_attach).
+    const flm_state_api* api = dynamic_cast<qwen3_5vl_npu*>(this->lm_engine) != nullptr
+        ? qwen3_5vl_state_api(this->lm_engine)
+        : nullptr;
+    this->_prefix_attach(this->lm_engine, api, kImageSoftTokenId);
 }
 
 bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
+    // Refuse images before any image work or engine cast. The image path reads
+    // the NPU engine's geometry through reinterpret_cast<qwen3_5vl_npu*>, which
+    // an engine of another backend (oga-hipep, core) does not provide.
+    if (dynamic_cast<qwen3_5vl_npu*>(this->lm_engine) == nullptr && carries_images(input)) {
+        // A ModelRequestError, not invalid_argument: the handlers turn only the
+        // former into an HTTP 400, and the latter would come back as a 200 body.
+        throw ModelRequestError(400, false,
+            "the loaded backend '" + this->backend_id() + "' does not accept image input",
+            "invalid_request_error");
+    }
+
     // preprocess
     constexpr int image_soft_token_id = 248056;
     this->profiler_list[TKOEN_ENCODE_TIME].start();
@@ -429,7 +457,13 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
     os << token_str << std::flush;
 
     if (this->is_eos(last_sampled_token)){
-        this->lm_engine->forward(last_sampled_token);
+        if (this->forward_on_eos &&
+            (!this->backend_ || this->backend_->forwards_past_eos())) {
+            this->lm_engine->forward(last_sampled_token);
+        } else {
+            // The engine never ran it, so the next prompt has to carry it.
+            this->token_history.pop_back();
+        }
     }
     else if (this->total_tokens + kEngineLead >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping generation...");
@@ -470,7 +504,13 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
         this->token_history.push_back(sampled_token);
         if (this->is_eos(sampled_token)){
             meta_info.generated_tokens++;
-            this->lm_engine->forward(last_sampled_token);
+            if (this->forward_on_eos &&
+                (!this->backend_ || this->backend_->forwards_past_eos())) {
+                this->lm_engine->forward(last_sampled_token);
+            } else {
+                // The engine never ran it, so the next prompt has to carry it.
+                this->token_history.pop_back();
+            }
             break;
         }
         meta_info.generated_tokens++;

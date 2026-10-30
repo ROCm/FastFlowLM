@@ -3,7 +3,8 @@
 /// \note One place knows both the family names from model_list.json and the
 ///       engine types behind them. Everything else goes through the registry.
 /// \note Every family registers the flm backend. Only families with a corelib
-///       engine also register a core backend, and only when this build has one.
+///       engine also register a core backend, and only families with an OGA
+///       package an oga-hipep backend, each only when this build has it.
 #include "AutoModel/automodel.hpp"
 #include "AutoModel/flm_backend.hpp"
 #include "AutoModel/model_backend.hpp"
@@ -16,6 +17,9 @@
 #include "models/qwen35/core/dev04/qwen35_core_backend.hpp"
 #include "models/qwen36/core/dev04/qwen36_core_backend.hpp"
 #include "models/qwen38/core/dev04/qwen38_core_backend.hpp"
+#endif
+#if defined(FLM_ENABLE_OGA_HIPEP)
+#include "oga/oga_hipep_backend.hpp"
 #endif
 
 namespace flm::backend {
@@ -87,6 +91,11 @@ void register_builtin_backends(BackendRegistry& registry) {
     registry.register_backend("llama3", flm::backend::kCoreBackendId,
                               flm::llama::core_factory(),
                               flm::llama::core_traits());
+#endif
+#if defined(FLM_ENABLE_OGA_HIPEP)
+    registry.register_backend("qwen3.5", flm::backend::kOgaHipepBackendId,
+                              flm::oga::hipep_factory(),
+                              flm::oga::hipep_traits());
 #endif
 }
 

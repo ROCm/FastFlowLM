@@ -95,6 +95,15 @@ if(FLM_ENABLE_CORE)
     endif()
 endif()
 
+# OGA packages on the GPU, through a hip-ep installed apart from flm. This adds a
+# backend rather than replacing one, and links nothing from hip-ep: its DLLs are
+# found and loaded when such a model is first loaded.
+option(FLM_ENABLE_OGA_HIPEP
+       "Add the oga-hipep backend: OGA models on the GPU through an installed hip-ep" OFF)
+if(FLM_ENABLE_OGA_HIPEP AND NOT WIN32)
+    message(FATAL_ERROR "FLM_ENABLE_OGA_HIPEP is supported on Windows only")
+endif()
+
 if(FLM_USE_HRX)
     set(FLM_RUNTIME_NAME "hrx")
     message(STATUS "FLM NPU runtime backend: HRX (FLM_USE_HRX=ON)")
@@ -222,6 +231,7 @@ include("${CMAKE_SOURCE_DIR}/common/chat/chat_sources.cmake")
 file(GLOB SOURCES "src/*.cpp" "runner/*.cpp" "common/*.cpp" "common/*/*.cpp" "server/*.cpp" "pull/*.cpp" )
 file(GLOB HEADERS "include/*.hpp" "runner/*.hpp" "common/*.hpp" "common/*/*.hpp" "server/*.hpp" "pull/*.hpp")
 list(FILTER SOURCES EXCLUDE REGEX ".*/common/core/.*\\.cpp$")
+list(FILTER SOURCES EXCLUDE REGEX ".*/common/oga/.*\\.cpp$")
 
 # Model sources live two levels deeper than the globs above reach. Only the core
 # half exists as loose sources; it is built separately, below.
@@ -312,6 +322,16 @@ if(FLM_ENABLE_CORE)
                             "copy them beside flm.exe by hand")
         endif()
     endif()
+endif()
+
+if(FLM_ENABLE_OGA_HIPEP)
+    target_sources(flm PRIVATE
+        "${CMAKE_SOURCE_DIR}/common/oga/oga_api.cpp"
+        "${CMAKE_SOURCE_DIR}/common/oga/oga_engine.cpp"
+        "${CMAKE_SOURCE_DIR}/common/oga/oga_hipep_backend.cpp")
+    target_compile_definitions(flm PRIVATE FLM_ENABLE_OGA_HIPEP=1)
+    # version.lib: the hip-ep package is checked by onnxruntime-genai.dll's file version.
+    target_link_libraries(flm PRIVATE version)
 endif()
 
 # ———————————————————————————————————————————————
