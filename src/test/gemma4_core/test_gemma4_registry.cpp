@@ -43,7 +43,7 @@ constexpr const char* kCore = "core";
 ///        a GGUF the fake corelib never opens
 class TempPackage final {
 public:
-    explicit TempPackage(std::string gguf_name = "gemma-4-E2B-it-Q8_0.gguf")
+    explicit TempPackage(std::string gguf_name = "gemma-4-E2B-it-Q4_G32.gguf")
         : gguf_name_(std::move(gguf_name)) {
         path_ = std::filesystem::temp_directory_path() /
                 ("flm-gemma4-registry-" +

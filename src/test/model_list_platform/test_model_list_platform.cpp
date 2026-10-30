@@ -82,7 +82,7 @@ void test_stock_build_offers_phi4_with_its_own_artifacts() {
 }
 
 void test_a_corelib_build_offers_the_corelib_phi4() {
-    // The corelib entry is described by its own artifacts -- a Q8_0 GGUF, not
+    // The corelib entry is described by its own artifacts -- AMD's Q4_G128 GGUF, not
     // the NPU2/Q4NX package -- under its own tag, and it is offered by a build
     // that has corelib's kernels, on the silicon they were built for.
     auto corelib = open_core();

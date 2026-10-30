@@ -2,9 +2,9 @@
 
 #include <ryzenai/corelib.h>
 
-#if RYZENAI_CORELIB_VERSION_MAJOR != 0 || RYZENAI_CORELIB_VERSION_MINOR != 59 || \
+#if RYZENAI_CORELIB_VERSION_MAJOR != 0 || RYZENAI_CORELIB_VERSION_MINOR != 60 || \
     RYZENAI_CORELIB_VERSION_PATCH != 0
-#error "FastFlowLM requires ryzenai-corelib headers exactly 0.59.0"
+#error "FastFlowLM requires ryzenai-corelib headers exactly 0.60.0"
 #endif
 
 // ryzenai_corelib_testing_npu_arch, until corelib's public header names the

@@ -15,7 +15,7 @@ namespace {
 namespace fs = std::filesystem;
 
 // The corelib model is packaged differently from its FastFlowLM namesake --
-// a Q8_0 GGUF against an NPU2/Q4NX build -- so it is a separate tag, and the
+// AMD's Q4_G128 GGUF against an NPU2/Q4NX build -- so it is a separate tag, and the
 // "-core" suffix is what routes it to the corelib kernels.
 constexpr const char* kCoreTag = "phi4-mini-it-core:4b";
 constexpr const char* kFlmTag = "phi4-mini-it:4b";
@@ -23,7 +23,7 @@ constexpr const char* kFlmTag = "phi4-mini-it:4b";
 // alike and nothing has to redirect between them.
 constexpr const char* kCoreModelInfoKey = "phi4-mini-it-core:4b";
 constexpr const char* kCoreDirName = "phi4-mini-it-core";
-constexpr const char* kUnslothRevision = "78eb92a46fc37e6b524df991ed9aca9bc6aa7b80";
+constexpr const char* kAmdRevision = "812448440ca39fa1a18e1f0f874c18dfdc5be075";
 constexpr const char* kMicrosoftRevision = "cfbefacb99257ffa30c83adab238a50856ac3083";
 
 /// \brief the shipped catalog entry as the machine that can run it resolves it
@@ -88,7 +88,7 @@ std::string FileUrl(const fs::path& path) {
 void TestCoreCatalogHasExactlyFourFilesAndExpectedDirectoryName() {
     const auto model = ResolvedModel(kCoreTag, "dev04");
     const std::vector<std::string> expected = {
-        "Phi-4-mini-instruct.Q8_0.gguf", "tokenizer.json",
+        "Phi-4-mini-instruct-Q4_G128.gguf", "tokenizer.json",
         "tokenizer_config.json", "config.json"};
     TEST_REQUIRE(model.at("name") == kCoreDirName);
     // The tag is the key, so there is nothing to redirect.
@@ -96,14 +96,15 @@ void TestCoreCatalogHasExactlyFourFilesAndExpectedDirectoryName() {
     TEST_REQUIRE(std::string(kCoreTag) == kCoreModelInfoKey);
     TEST_REQUIRE(model.at("backend") == "core");
     TEST_REQUIRE(model.at("files").get<std::vector<std::string>>() == expected);
-    TEST_REQUIRE(model.at("size").get<std::uint64_t>() == 4100140571ULL);
+    TEST_REQUIRE(model.at("size").get<std::uint64_t>() == 3253347291ULL);
 }
 
-void TestGgufUrlContainsUnslothRevisionAndFilename() {
+void TestGgufUrlContainsAmdRevisionAndFilename() {
     const auto model = ResolvedModel(kCoreTag, "dev04");
-    const auto source = resolve_file_source(model, "Phi-4-mini-instruct.Q8_0.gguf", false);
-    TEST_REQUIRE(source.url == std::string("https://huggingface.co/unsloth/Phi-4-mini-instruct-GGUF/resolve/") +
-                                  kUnslothRevision + "/Phi-4-mini-instruct.Q8_0.gguf?download=true");
+    const auto source = resolve_file_source(model, "Phi-4-mini-instruct-Q4_G128.gguf", false);
+    TEST_REQUIRE(source.url == std::string("https://huggingface.co/amd/Phi-4-mini-instruct-Q4_G128-GGUF/resolve/") +
+                                  kAmdRevision + "/Phi-4-mini-instruct-Q4_G128.gguf?download=true");
+    TEST_REQUIRE(source.use_hf_token);
 }
 
 void TestThreeFrontendUrlsContainMicrosoftRevisionAndFilename() {
@@ -112,6 +113,7 @@ void TestThreeFrontendUrlsContainMicrosoftRevisionAndFilename() {
         const auto source = resolve_file_source(model, filename, false);
         TEST_REQUIRE(source.url == std::string("https://huggingface.co/microsoft/Phi-4-mini-instruct/resolve/") +
                                       kMicrosoftRevision + "/" + filename + "?download=true");
+        TEST_REQUIRE(!source.use_hf_token);
     }
 }
 
@@ -177,7 +179,7 @@ void TestModelInfoHasExactSizeAndSha256ForEveryRequiredFile() {
     const auto all_info = ReadJson(FLM_SOURCE_DIR "/model_info.json");
     const auto& records = all_info.at(kCoreModelInfoKey);
     const std::vector<std::tuple<std::string, std::uint64_t, std::string>> expected = {
-        {"Phi-4-mini-instruct.Q8_0.gguf", 4084611040ULL, "26188c6050d525376a88b04514c236c5e28a36730f1e936f2a00314212b7ba42"},
+        {"Phi-4-mini-instruct-Q4_G128.gguf", 3237817760ULL, "dcd7eb744eb2b1286f0c0f0c53fb9f44a1b8a6dc4bee9640d18e89665c005a6d"},
         {"tokenizer.json", 15524095ULL, "382cc235b56c725945e149cc25f191da667c836655efd0857b004320e90e91ea"},
         {"tokenizer_config.json", 2932ULL, "9c9b6bc0c94d95f69f826c41069a3e8b387ac3ced89601d201886e99240ac9db"},
         {"config.json", 2504ULL, "ac65d86061d3d0d704ee2511fd0eb8713ef19eb6eedba17c3080a4165d5b933b"}};
@@ -192,7 +194,7 @@ void TestModelInfoHasExactSizeAndSha256ForEveryRequiredFile() {
         TEST_REQUIRE(match->at("sha256") == sha256);
         total += size;
     }
-    TEST_REQUIRE(total == 4100140571ULL);
+    TEST_REQUIRE(total == 3253347291ULL);
 }
 
 struct DownloaderFixture {
@@ -456,32 +458,35 @@ void TestShippedPreferredSourcesArePinnedAmdGgufs() {
         }
     }
     TEST_REQUIRE(tags == std::set<std::string>({
-        "phi4-mini-it-core:4b", "qwen3-core:1.7b", "qwen3-core:4b", "qwen3-core:8b",
-        "qwen3.5-core:4b", "qwen3.5-core:9b", "qwen3.8-core:27b",
-        "gemma4-it-core:e2b", "gemma4-it-core:e4b"}));
+        "qwen3-core:1.7b", "qwen3-core:4b", "qwen3-core:8b", "qwen3.8-core:27b"}));
 }
 
-void TestQwen36PullsOnlyAmdQ4G32() {
+void TestShippedAmdOnlyEntriesNameAmdGgufs() {
+    // corelib refuses a Q8_0 GGUF for these, so there is no public file to fall back to.
     const auto catalog = ReadJson(FLM_SOURCE_DIR "/model_list.json");
     const auto all_info = ReadJson(FLM_SOURCE_DIR "/model_info.json");
-    const auto& entry = catalog.at("models").at("qwen3.6-moe-core").at("35b-a3b");
-    TEST_REQUIRE(!entry.contains("preferred_source"));
-    TEST_REQUIRE(entry.at("url").get<std::string>().rfind(
-        "https://huggingface.co/amd/Qwen3.6-35B-A3B-Q4_G32-GGUF/resolve/", 0) == 0);
-    TEST_REQUIRE(entry.at("use_hf_token") == true);
-    TEST_REQUIRE(entry.at("details").at("quantization_level") == "Q4_G32");
-
-    const auto& files = entry.at("files");
-    TEST_REQUIRE(std::find(files.begin(), files.end(), "Qwen3.6-35B-A3B-Q4_G32.gguf") != files.end());
-    const auto& records = all_info.at(entry.at("model_info_key").get<std::string>());
-    TEST_REQUIRE(records.size() == files.size());
-    std::uint64_t total = 0;
-    for (const auto& record : records) {
-        TEST_REQUIRE(std::find(files.begin(), files.end(), record.at("path")) != files.end());
-        total += record.at("size").get<std::uint64_t>();
+    for (const auto& [family, size] : std::vector<std::pair<std::string, std::string>>{
+             {"phi4-mini-it-core", "4b"}, {"qwen3.5-core", "4b"}, {"qwen3.5-core", "9b"},
+             {"qwen3.6-moe-core", "35b-a3b"}, {"gemma4-it-core", "e2b"}, {"gemma4-it-core", "e4b"}}) {
+        const auto& entry = catalog.at("models").at(family).at(size);
+        TEST_REQUIRE(!entry.contains("preferred_source"));
+        TEST_REQUIRE(entry.at("url").get<std::string>().rfind("https://huggingface.co/amd/", 0) == 0);
+        TEST_REQUIRE(entry.at("use_hf_token") == true);
+        TEST_REQUIRE(entry.at("details").at("quantization_level").get<std::string>().starts_with("Q4_G"));
+        TEST_REQUIRE(!all_info.contains(family + ":" + size + "@amd"));
+        const auto& records = all_info.at(family + ":" + size);
+        std::uint64_t total = 0;
+        for (const auto& file : entry.at("files")) {
+            TEST_REQUIRE(file.get<std::string>().find("Q8_0") == std::string::npos);
+            const auto record = std::find_if(records.begin(), records.end(), [&](const auto& value) {
+                return value.at("path") == file;
+            });
+            TEST_REQUIRE(record != records.end());
+            total += record->at("size").get<std::uint64_t>();
+        }
+        TEST_REQUIRE(records.size() == entry.at("files").size());
+        TEST_REQUIRE(total == entry.at("size").get<std::uint64_t>());
     }
-    TEST_REQUIRE(total == entry.at("size").get<std::uint64_t>());
-    TEST_REQUIRE(!all_info.contains("qwen3.6-moe-core:35b-a3b@amd"));
 }
 
 const std::vector<std::string> kBaseFiles = {"config.json", "base.gguf"};
@@ -902,7 +907,7 @@ void TestSuccessfulForceDownloadAtomicallyReplacesFinalFile() {
 
 int main() {
     RunTest(TestCoreCatalogHasExactlyFourFilesAndExpectedDirectoryName, "core catalog");
-    RunTest(TestGgufUrlContainsUnslothRevisionAndFilename, "GGUF URL");
+    RunTest(TestGgufUrlContainsAmdRevisionAndFilename, "GGUF URL");
     RunTest(TestThreeFrontendUrlsContainMicrosoftRevisionAndFilename, "frontend URLs");
     RunTest(TestExistingSingleSourceEntryKeepsItsCurrentUrl, "legacy URL");
     RunTest(TestUnknownFileSourceKeyAndMissingUrlOrRevisionFail, "source validation");
@@ -917,7 +922,7 @@ int main() {
     RunTest(TestCheckHashesPinnedFilesExactlyOnce, "single check verification");
     RunTest(TestStartupStatusDoesNotRehashButCheckStillDoes, "startup status skips rehash");
     RunTest(TestShippedPreferredSourcesArePinnedAmdGgufs, "shipped preferred sources");
-    RunTest(TestQwen36PullsOnlyAmdQ4G32, "qwen3.6 source");
+    RunTest(TestShippedAmdOnlyEntriesNameAmdGgufs, "shipped AMD-only entries");
     RunTest(TestPreferredSourceResolvesByWhatIsOnDisk, "preferred source resolution");
     RunTest(TestPullUsesReachablePreferredSourceAndKeepsItOncePulled, "preferred source pull");
     RunTest(TestPullFallsBackWhenPreferredSourceIsUnreachable, "preferred source fallback");
