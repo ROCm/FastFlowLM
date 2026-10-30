@@ -1,0 +1,210 @@
+name: Linux Build
+
+# Builds, packages and uploads one or more Linux variants, each inside the
+# fastflowlm build-environment container for its distribution. The artifact
+# names are what build-and-test.yml and release.yml download, so they are fixed
+# per variant:
+#
+#   XRT-deb          flm-<distro><version>-<short sha>-deb       (every distro)
+#   HRX-deb          HRX-flm-<distro><version>-<short sha>-deb   (every distro)
+#   XRT-portable     portable                                    (Debian 13)
+#   HRX-portable     HRX-portable                                (Debian 13)
+#   Source-portable  models-from-source-portable                 (Debian 13)
+#
+# Build and Test (build-and-test.yml) calls this once per package on every pull
+# request, push and tag; dispatch it to build packages without testing them.
+on:
+  workflow_call:
+    inputs:
+      variants:
+        description: >
+          XRT-deb, HRX-deb, XRT-portable, HRX-portable, Source-portable, a
+          comma-separated list of them, or "all".
+        type: string
+        default: all
+    outputs:
+      deb_distros:
+        description: How many distributions each .deb variant is built for.
+        value: ${{ jobs.plan.outputs.deb_distros }}
+  workflow_dispatch:
+    inputs:
+      variants:
+        description: Variant to build
+        type: choice
+        options: [all, XRT-deb, HRX-deb, XRT-portable, HRX-portable, Source-portable]
+        default: all
+
+# No concurrency group: build-and-test.yml calls this several times in one
+# run, and the calls would cancel each other. The caller owns cancellation.
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      include: ${{ steps.plan.outputs.include }}
+      deb_distros: ${{ steps.plan.outputs.deb_distros }}
+    steps:
+      - name: Expand variants
+        id: plan
+        env:
+          VARIANTS: ${{ inputs.variants || 'all' }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # The .debs ship for each of these; the portable tarballs are built
+          # on the oldest glibc among them so they run on all.
+          deb_distros='[
+            {"distro": "ubuntu", "version": "24.04", "codename": "noble"},
+            {"distro": "ubuntu", "version": "25.10", "codename": "questing"},
+            {"distro": "ubuntu", "version": "26.04", "codename": "resolute"},
+            {"distro": "debian", "version": "13",    "codename": "trixie"}
+          ]'
+          portable_distro='{"distro": "debian", "version": "13", "codename": "trixie"}'
+          short_sha="${SHA:0:7}"
+
+          variants="${VARIANTS//,/ }"
+          if [ "$(echo ${variants})" = "all" ]; then
+            variants="XRT-deb HRX-deb XRT-portable HRX-portable Source-portable"
+          fi
+
+          include='[]'
+          for variant in ${variants}; do
+            case "${variant}" in
+              XRT-deb|HRX-deb)
+                prefix=""
+                [ "${variant}" = "HRX-deb" ] && prefix="HRX-"
+                include=$(jq -c --arg v "${variant}" --arg p "${prefix}" --arg s "${short_sha}" \
+                  --argjson d "${deb_distros}" \
+                  '. + [$d[] | . + {variant: $v, retention: "",
+                    artifact: "\($p)flm-\(.distro)\(.version)-\($s)-deb"}]' <<< "${include}")
+                ;;
+              XRT-portable|HRX-portable|Source-portable)
+                case "${variant}" in
+                  XRT-portable)    artifact=portable ;;
+                  HRX-portable)    artifact=HRX-portable ;;
+                  Source-portable) artifact=models-from-source-portable ;;
+                esac
+                include=$(jq -c --arg v "${variant}" --arg a "${artifact}" \
+                  --argjson d "${portable_distro}" \
+                  '. + [$d + {variant: $v, retention: "7", artifact: $a}]' <<< "${include}")
+                ;;
+              *)
+                echo "::error::Unknown Linux build variant '${variant}'."
+                exit 1
+                ;;
+            esac
+          done
+          if [ "${include}" = '[]' ]; then
+            echo "::error::No Linux build variant given."
+            exit 1
+          fi
+
+          jq . <<< "${include}"
+          echo "include=${include}" >> "$GITHUB_OUTPUT"
+          echo "deb_distros=$(jq length <<< "${deb_distros}")" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build (${{ matrix.variant }}, ${{ matrix.distro }}${{ matrix.version }})
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      # Each variant and distro ships on its own; one failing must not cancel
+      # the others.
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.include) }}
+
+    container:
+      image: ghcr.io/rocm/fastflowlm/build-environment:${{ matrix.distro }}${{ matrix.version }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Build
+        id: build
+        uses: ./.github/actions/lin-build
+        with:
+          variant: ${{ matrix.variant }}
+          distro: ${{ matrix.distro }}
+          distro-version: ${{ matrix.version }}
+          codename: ${{ matrix.codename }}
+
+      - name: Package portable distribution
+        id: portable
+        if: endsWith(matrix.variant, '-portable')
+        env:
+          VARIANT: ${{ matrix.variant }}
+          VERSION: ${{ steps.build.outputs.version }}
+          BUILD_DIR: ${{ steps.build.outputs.build-dir }}
+        run: |
+          set -euo pipefail
+          case "${VARIANT}" in
+            XRT-portable)    name_prefix="" ;;
+            HRX-portable)    name_prefix="HRX_" ;;
+            Source-portable) name_prefix="models-from-source_" ;;
+          esac
+          tarball="${name_prefix}fastflowlm_${VERSION}_linux.tar.gz"
+
+          cd "${GITHUB_WORKSPACE}/${BUILD_DIR}"
+          rm -rf install
+          DESTDIR="$PWD/install" cmake --install .
+
+          # Rename binary and wrapper for portable layout
+          package_root=install/opt/fastflowlm
+          mv "${package_root}/flm" "${package_root}/flm-real"
+          mv "${package_root}/flm-wrapper.sh" "${package_root}/flm"
+          chmod +x "${package_root}/flm"
+
+          # Strip debug symbols to reduce binary size (111MB → 33MB)
+          # --strip-debug removes debug info while keeping stack trace capability
+          strip --strip-debug "${package_root}/flm-real"
+
+          if [ "${VARIANT}" = "Source-portable" ]; then
+            staged_engine="${package_root}/lib/libgemma4e_npu.so"
+            test -f "${staged_engine}"
+            if cmp -s "${GITHUB_WORKSPACE}/src/lib/xrt/libgemma4e_npu.so" "${staged_engine}"; then
+              echo "The staged Gemma 4 engine matches the prebuilt library." >&2
+              exit 1
+            fi
+            readelf -n "${staged_engine}" | grep -A1 'Build ID'
+          fi
+
+          # Symlinks are preserved.
+          tar czf "${GITHUB_WORKSPACE}/${tarball}" \
+            -C "${package_root}" \
+            flm \
+            flm-real \
+            lib/ \
+            xclbins/ \
+            model_list.json \
+            model_info.json \
+            LICENSE_RUNTIME.txt \
+            LICENSE_BINARY.txt \
+            THIRD_PARTY_NOTICES.txt
+
+          # Confirm the runtime the build selects is bundled.
+          case "${VARIANT}" in
+            XRT-portable) tar tzf "${GITHUB_WORKSPACE}/${tarball}" | grep libxrt ;;
+            HRX-portable) tar tzf "${GITHUB_WORKSPACE}/${tarball}" | grep libhrx ;;
+          esac
+          "${GITHUB_WORKSPACE}/.github/script/ci/check_no_copyleft_libs.sh" \
+            "${GITHUB_WORKSPACE}/${tarball}"
+
+          echo "tarball=${tarball}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ steps.build.outputs.package || steps.portable.outputs.tarball }}
+          retention-days: ${{ matrix.retention }}
+          if-no-files-found: error
+

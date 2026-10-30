@@ -15,7 +15,7 @@ struct HostViewTag {};
 struct MatMulWeightsTag {};
 struct SsMlpWeightsTag {};
 struct ModelTag {};
-struct ModelWeightsTag {};
+struct ModelSessionTag {};
 struct ModelSnapshotTag {};
 
 template <typename Tag>
@@ -67,7 +67,7 @@ using UniqueHostView = UniqueObject<HostViewTag>;
 using UniqueMatMulWeights = UniqueObject<MatMulWeightsTag>;
 using UniqueSsMlpWeights = UniqueObject<SsMlpWeightsTag>;
 using UniqueModel = UniqueObject<ModelTag>;
-using UniqueModelWeights = UniqueObject<ModelWeightsTag>;
+using UniqueModelSession = UniqueObject<ModelSessionTag>;
 using UniqueModelSnapshot = UniqueObject<ModelSnapshotTag>;
 
 /// \brief a stream on one PDI per phase that resolves the kernels `bundle` ships

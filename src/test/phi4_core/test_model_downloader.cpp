@@ -456,7 +456,8 @@ void TestShippedPreferredSourcesArePinnedAmdGgufs() {
     }
     TEST_REQUIRE(tags == std::set<std::string>({
         "phi4-mini-it-core:4b", "qwen3-core:1.7b", "qwen3-core:4b", "qwen3-core:8b",
-        "qwen3.5-core:4b", "qwen3.5-core:9b", "gemma4-it-core:e2b", "gemma4-it-core:e4b"}));
+        "qwen3.5-core:4b", "qwen3.5-core:9b", "qwen3.6-moe-core:35b-a3b", "qwen3.8-core:27b",
+        "gemma4-it-core:e2b", "gemma4-it-core:e4b"}));
 }
 
 const std::vector<std::string> kBaseFiles = {"config.json", "base.gguf"};

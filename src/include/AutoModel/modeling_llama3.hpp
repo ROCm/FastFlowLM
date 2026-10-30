@@ -12,6 +12,12 @@
 class Llama3 : public AutoModel {
 private:
     void setup_tokenizer(std::string model_path);
+    /// \brief clear the conversation after a failed inference and report it
+    /// \param detail the backend's own message, when the failure carried one
+    /// \throws ModelRequestError 500, asking for a reload when the backend is poisoned
+    /// \note The detail is appended to the thrown message. Without it the
+    ///       corelib label that names the failing op is lost at the catch.
+    [[noreturn]] void fail_inference(const std::string& detail = {});
 
 public:
     Llama3(flm_rt::device* npu_device_inst);

@@ -600,6 +600,17 @@ if(FLM_USE_HRX)
     if(NOT WIN32)
         set_target_properties(flm PROPERTIES
             BUILD_RPATH "$<TARGET_FILE_DIR:hrx::hrx>;${FLM_ENGINE_LIB_DIR}")
+        # The HRX package ships its own libtinfo (and libedit, curl, ...) next to
+        # libhrx, and the linker looks in BUILD_RPATH for the dependencies of
+        # shared libraries. The system libedit linked below for non-portable
+        # builds would then resolve its libtinfo to the HRX copy, which lacks the
+        # NCURSES6_TINFO symbol versions, and the link fails. -rpath-link is
+        # searched first and only at link time, so the system copies win and the
+        # installed RPATH is unchanged.
+        if(NOT FLM_PORTABLE_BUILD AND CMAKE_LIBRARY_ARCHITECTURE)
+            target_link_options(flm PRIVATE
+                "LINKER:-rpath-link,/usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}")
+        endif()
     endif()
 else()
     # XRT: link xrt_coreutil (+ aiebu for the ELF assembler used by npu_utils_xrt).

@@ -60,6 +60,7 @@ if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/test_gemma4_frontend.cpp")
             "${FLM_SOURCE_DIR}/common/AutoModel/automodel.cpp"
             "${FLM_SOURCE_DIR}/common/AutoModel/model_backend.cpp"
             "${FLM_SOURCE_DIR}/common/AutoModel/modeling_gemma4e.cpp"
+            "${FLM_SOURCE_DIR}/common/prefix_slot_cache.cpp"
             ${FLM_CHAT_SOURCES})
         target_include_directories(test_gemma4_frontend PRIVATE
             "${CMAKE_CURRENT_LIST_DIR}"

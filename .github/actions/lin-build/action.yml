@@ -1,0 +1,177 @@
+name: Linux build
+description: >
+  Builds one Linux variant inside the fastflowlm build-environment container.
+  Expects the repository to be checked out with submodules, history and tags
+  (the version comes from git describe). A deb variant comes out as a finished
+  .deb, since dpkg-buildpackage builds and packages in one go; a portable
+  variant comes out as a CMake build tree for the caller to install and pack.
+
+inputs:
+  variant:
+    description: >
+      XRT-deb, HRX-deb, XRT-portable, HRX-portable, or Source-portable (the
+      model engines built from source instead of the prebuilt libraries in
+      lib/xrt).
+    required: true
+  distro:
+    description: The container's distribution, "ubuntu" or "debian". Names the .deb.
+    required: false
+    default: ""
+  distro-version:
+    description: The container's distribution version, e.g. "24.04". Names the .deb.
+    required: false
+    default: ""
+  codename:
+    description: The container's release codename, e.g. "noble". Goes in the .deb changelog.
+    required: false
+    default: ""
+
+outputs:
+  version:
+    description: git describe without the leading "v".
+    value: ${{ steps.version.outputs.version }}
+  package:
+    description: The built .deb, relative to the workspace (deb variants only).
+    value: ${{ steps.deb.outputs.package }}
+  build-dir:
+    description: The CMake build tree, relative to the workspace (portable variants only).
+    value: ${{ steps.portable.outputs.build-dir }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check variant
+      shell: bash
+      env:
+        VARIANT: ${{ inputs.variant }}
+        DISTRO: ${{ inputs.distro }}
+        DISTRO_VERSION: ${{ inputs.distro-version }}
+        CODENAME: ${{ inputs.codename }}
+      run: |
+        case "${VARIANT}" in
+          XRT-deb|HRX-deb)
+            if [ -z "${DISTRO}" ] || [ -z "${DISTRO_VERSION}" ] || [ -z "${CODENAME}" ]; then
+              echo "::error::${VARIANT} needs distro, distro-version and codename."
+              exit 1
+            fi
+            ;;
+          XRT-portable|HRX-portable|Source-portable) ;;
+          *)
+            echo "::error::Unknown Linux build variant '${VARIANT}'."
+            exit 1
+            ;;
+        esac
+
+    - name: Configure git safe directory
+      shell: bash
+      run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+
+    # Stripped for Debian version compatibility, and so the tarball names
+    # match the release tag without its "v".
+    - name: Get version from git describe
+      id: version
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: echo "version=$(git describe --tags --always | sed 's/^v//')" >> "$GITHUB_OUTPUT"
+
+    # The build-environment image is rebuilt nightly from main's Dockerfile, so
+    # a Build-Depends change reaches it only after merge. Install the ones the
+    # image may still lack, plus what the portable and HRX builds need (patchelf
+    # rewrites the HRX engine RUNPATHs, zstd unpacks the HRX release).
+    - name: Install build tools and upgrade Rust toolchain
+      shell: bash
+      run: |
+        apt-get update
+        apt-get install -y --no-install-recommends \
+          ca-certificates curl libedit-dev nasm patchelf uuid-dev zstd
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+          sh -s -- -y --profile minimal --default-toolchain stable
+        echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+    - name: Fetch pinned HRX release
+      id: hrx
+      if: startsWith(inputs.variant, 'HRX-')
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: ./hrx-integration/fetch-hrx-release.sh
+
+    # debian/rules reads FLM_USE_HRX and FLM_CMAKE_ARGS from the environment.
+    - name: Build Debian package
+      id: deb
+      if: endsWith(inputs.variant, '-deb')
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        VARIANT: ${{ inputs.variant }}
+        DISTRO: ${{ inputs.distro }}${{ inputs.distro-version }}
+        CODENAME: ${{ inputs.codename }}
+        DEB_VERSION: ${{ steps.version.outputs.version }}
+        HRX_PREFIX: ${{ steps.hrx.outputs.prefix }}
+        DEBEMAIL: noreply@example.com
+        DEBFULLNAME: fastflowlm
+      run: |
+        set -euo pipefail
+        rustc --version
+
+        sed -e "s|@@DEB_VERSION@@|${DEB_VERSION}|g" \
+            -e "s|@@DEB_CODENAME@@|${CODENAME}|g" \
+            -e "s|@@DEB_DATE@@|$(date -R)|g" \
+            debian/changelog.in > debian/changelog
+        chmod +x debian/rules
+
+        if [ "${VARIANT}" = "HRX-deb" ]; then
+          if [ -z "${HRX_PREFIX}" ]; then
+            echo "::error::fetch-hrx-release.sh did not report the HRX package prefix."
+            exit 1
+          fi
+          export FLM_USE_HRX=ON
+          export FLM_CMAKE_ARGS="-DCMAKE_PREFIX_PATH=${HRX_PREFIX}"
+          package="HRX_fastflowlm_${DEB_VERSION}_${DISTRO}_amd64.deb"
+        else
+          package="fastflowlm_${DEB_VERSION}_${DISTRO}_amd64.deb"
+        fi
+
+        dpkg-buildpackage -b -us -uc
+        mv "../fastflowlm_${DEB_VERSION}_amd64.deb" "./${package}"
+        ls -lah "./${package}"
+        .github/script/ci/check_no_copyleft_libs.sh "./${package}"
+        echo "package=${package}" >> "$GITHUB_OUTPUT"
+
+    # The engines take more memory per compile than the rest of the tree, so
+    # the source build runs fewer jobs at once.
+    - name: Build portable distribution
+      id: portable
+      if: endsWith(inputs.variant, '-portable')
+      shell: bash
+      working-directory: ${{ github.workspace }}/src
+      env:
+        VARIANT: ${{ inputs.variant }}
+        HRX_PREFIX: ${{ steps.hrx.outputs.prefix }}
+      run: |
+        set -euo pipefail
+        case "${VARIANT}" in
+          XRT-portable)
+            cmake --preset linux-portable
+            cmake --build build -j"$(nproc)"
+            build_dir=src/build
+            ;;
+          HRX-portable)
+            if [ -z "${HRX_PREFIX}" ]; then
+              echo "::error::fetch-hrx-release.sh did not report the HRX package prefix."
+              exit 1
+            fi
+            cmake --preset linux-portable \
+              -DFLM_USE_HRX=ON \
+              -DCMAKE_PREFIX_PATH="${HRX_PREFIX}"
+            cmake --build build -j"$(nproc)"
+            build_dir=src/build
+            ;;
+          Source-portable)
+            cmake --preset linux-portable \
+              -B build-models-from-source \
+              -DFLM_BUILD_GEMMA4E=ON
+            cmake --build build-models-from-source --parallel 2
+            build_dir=src/build-models-from-source
+            ;;
+        esac
+        echo "build-dir=${build_dir}" >> "$GITHUB_OUTPUT"

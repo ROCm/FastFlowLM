@@ -1,0 +1,157 @@
+name: Release
+
+# Builds and tests the tagged commit, then publishes it to the tag's GitHub
+# Release. Built here rather than taken from main's CI artifacts because the
+# version comes from git describe at build time: only a build of the tag itself
+# gets the tag's version in its .deb metadata and tarball names.
+#
+# Assets: the XRT and HRX builds for both platforms (Windows zip and MSI, the
+# .debs for every distro, the Linux tarball). The models-from-source builds
+# are not released. Each backend is published only when all of its packages
+# passed their NPU tests.
+on:
+  push:
+    tags:
+      - '*'
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    uses: ./.github/workflows/build-and-test.yml
+    with:
+      tier: pr
+      release: true
+
+  # Each publish job downloads only the artifacts it ships, by name, and runs
+  # only when that backend passed: a failed HRX build or test leaves the release
+  # without the HRX assets instead of holding back the default ones.
+  release:
+    needs: build-and-test
+    if: ${{ !cancelled() && github.ref_type == 'tag' && needs.build-and-test.outputs.xrt-passed == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Windows portable artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: fastflowlm-windows-${{ github.sha }}
+          path: windows-dist
+
+      - name: Download Windows MSI artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: fastflowlm-windows-msi-${{ github.sha }}
+          path: msi-dist
+
+      - name: Download Linux portable artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: portable
+          path: linux-dist
+
+      # Not the HRX- prefixed ones, which release-hrx publishes.
+      - name: Download deb artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: debs
+          pattern: 'flm-*-deb'
+
+      # A pattern download takes whatever is there, so a distro whose build
+      # failed would otherwise just be missing from the release.
+      - name: Check every distro's deb is present
+        env:
+          EXPECTED: ${{ needs.build-and-test.outputs.deb-distros }}
+        run: |
+          set -euo pipefail
+          ls debs/*/*.deb
+          found=$(ls debs/*/*.deb | wc -l)
+          if [ "${found}" -ne "${EXPECTED}" ]; then
+            echo "::error::Expected ${EXPECTED} XRT .debs, found ${found}."
+            exit 1
+          fi
+
+      - name: Stage release assets
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          mkdir assets
+
+          # flm.exe and its DLLs at the top level of the zip.
+          (cd windows-dist && zip -r "../assets/fastflowlm_${version}_windows_amd64.zip" .)
+          cp msi-dist/flm-setup.msi assets/
+          cp linux-dist/fastflowlm_*_linux.tar.gz assets/
+          cp debs/*/*.deb assets/
+          ls -lah assets
+
+      - name: Upload assets to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          files: assets/*
+          overwrite_files: true
+          fail_on_unmatched_files: true
+
+  # The HRX build ships as a preview, so it gets its own publish job. It runs
+  # after the default one, whatever that one's outcome, so the two never race
+  # to create the release.
+  release-hrx:
+    needs: [build-and-test, release]
+    if: ${{ !cancelled() && github.ref_type == 'tag' && needs.build-and-test.outputs.hrx-passed == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Windows HRX portable artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: HRX-fastflowlm-windows-${{ github.sha }}
+          path: windows-dist
+
+      - name: Download Linux HRX portable artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: HRX-portable
+          path: linux-dist
+
+      - name: Download HRX deb artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: debs
+          pattern: 'HRX-flm-*-deb'
+
+      - name: Check every distro's HRX deb is present
+        env:
+          EXPECTED: ${{ needs.build-and-test.outputs.deb-distros }}
+        run: |
+          set -euo pipefail
+          ls debs/*/*.deb
+          found=$(ls debs/*/*.deb | wc -l)
+          if [ "${found}" -ne "${EXPECTED}" ]; then
+            echo "::error::Expected ${EXPECTED} HRX .debs, found ${found}."
+            exit 1
+          fi
+
+      - name: Stage HRX release assets
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          mkdir assets
+
+          # Same layout as the default zip: flm.exe and its DLLs at the top level.
+          (cd windows-dist && zip -r "../assets/HRX_fastflowlm_${version}_windows_amd64.zip" .)
+          cp linux-dist/HRX_fastflowlm_*_linux.tar.gz assets/
+          cp debs/*/*.deb assets/
+          ls -lah assets
+
+      - name: Upload HRX assets to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          files: assets/*
+          overwrite_files: true
+          fail_on_unmatched_files: true

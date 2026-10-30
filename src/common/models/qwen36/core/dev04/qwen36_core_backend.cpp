@@ -13,6 +13,9 @@ flm::backend::BackendFactory core_factory() {
         .model = {"qwen36", "Qwen3.6", kCoreContextLimit, core::Continuation::kAnywhere,
                   core::Rewind::kSnapshot},
         .context_rule = "1.." + std::to_string(kCoreContextLimit),
+        .reliable_context = kReliableContext,
+        .unreliable_reason = "past it the NPU's paged attention can return garbage "
+                             "(corelib's PAGED_DECODE_PAGE_DRIFT)",
     });
 }
 

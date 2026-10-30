@@ -72,8 +72,8 @@ void TestTheCatalogsGgufRunsAsCorelibsPhi4mini() {
     auto backend = flm::phi4::core_factory()(Context(p, flm::phi4::kCoreContextLimit));
     const auto& state = fake_corelib::GetState();
     TEST_REQUIRE(state.model_names.front() == "phi4mini");
-    TEST_REQUIRE(state.model_weights_path == (p.root / kGguf).string());
-    TEST_REQUIRE(state.model_max_sequence_length == 4096);
+    TEST_REQUIRE(state.model_path == (p.root / kGguf).string());
+    TEST_REQUIRE(state.model_max_sequence_length == flm::phi4::kCoreContextLimit);
     TEST_REQUIRE(backend->id() == flm::backend::kCoreBackendId);
     TEST_REQUIRE(backend->max_decode_length() == flm::phi4::kCoreDecodeLimit);
     TEST_REQUIRE(!backend->supports_preemption());
@@ -81,13 +81,13 @@ void TestTheCatalogsGgufRunsAsCorelibsPhi4mini() {
     TEST_REQUIRE(!backend->forced_bos_id().has_value());
 }
 
-void TestAContextPast4096IsRefusedBeforeTheWeightsAreOpened() {
+void TestAContextPastTheLimitIsRefusedBeforeTheWeightsAreOpened() {
     Runtime r;
     Package p;
     RequireContains(RequireThrows<std::out_of_range>(
-                        [&] { (void)flm::phi4::core_factory()(Context(p, 4097)); }),
-                    "1..4096");
-    TEST_REQUIRE(fake_corelib::GetState().call_counts["ryzenai_corelib_model_weights_create_path"] == 0);
+                        [&] { (void)flm::phi4::core_factory()(Context(p, flm::phi4::kCoreContextLimit + 1)); }),
+                    "1..131072");
+    TEST_REQUIRE(fake_corelib::GetState().call_counts["ryzenai_corelib_create_model_from_path"] == 0);
 }
 
 }  // namespace
@@ -95,7 +95,7 @@ void TestAContextPast4096IsRefusedBeforeTheWeightsAreOpened() {
 int main() {
 #define RUN(name) RunTest(&name, #name)
     RUN(TestTheCatalogsGgufRunsAsCorelibsPhi4mini);
-    RUN(TestAContextPast4096IsRefusedBeforeTheWeightsAreOpened);
+    RUN(TestAContextPastTheLimitIsRefusedBeforeTheWeightsAreOpened);
 #undef RUN
     std::cout << "All Phi-4 core backend tests passed\n";
     return 0;

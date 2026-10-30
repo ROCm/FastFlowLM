@@ -1,0 +1,528 @@
+name: Build and Test
+
+# Builds every FastFlowLM package and tests each one on the NPU runners as soon
+# as its own build finishes.
+#
+#   Linux    XRT portable ─ test     HRX portable ─ test     Source portable ─ test
+#            XRT .deb ─ install test (off)   HRX .deb ─ install test (off)
+#   Windows  XRT zip ─ test          HRX zip ─ test          Source zip ─ test
+#            XRT MSI ─ install test (off)
+#
+# Each package is its own build call, so its tests do not wait on the other
+# packages' builds, and XRT and HRX are tested side by side. HRX skips the api
+# and serving suites: they test server logic the backend does not touch, and
+# the XRT run covers it.
+#
+# A pull request runs only the suites its changes can affect (an ASR-only
+# change runs asr, a d3-only change decision); see .github/script/ci/changes.py.
+#
+# Tiers (.github/script/npu_test/plan.py): pull requests and pushes run the pr
+# tier, one model per engine family plus every model of a family the change
+# touches; the nightly run tests every model. A change that only touches docs
+# builds and tests nothing.
+#
+# release.yml calls this with release: true before publishing a tag.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  schedule:
+    - cron: '17 6 * * *'  # nightly, full tier
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: Test tier
+        type: choice
+        options: [pr, full, install]
+        default: pr
+  workflow_call:
+    inputs:
+      tier:
+        description: Test tier (install, pr or full).
+        type: string
+        default: pr
+      release:
+        description: Build and test only what a release ships (no models-from-source).
+        type: boolean
+        default: false
+    outputs:
+      xrt-passed:
+        description: '"true" when every XRT package built and passed its tests.'
+        value: ${{ jobs.summary.outputs.xrt-passed }}
+      hrx-passed:
+        description: '"true" when every HRX package built and passed its tests.'
+        value: ${{ jobs.summary.outputs.hrx-passed }}
+      deb-distros:
+        description: How many distributions each .deb variant was built for.
+        value: ${{ jobs.build-lin-xrt-deb.outputs.deb_distros }}
+
+# A superseded pull request commit only holds the NPU runners up, so a new
+# push cancels its run. Pushes to main, nightly runs and tags each get their
+# own group and always finish.
+concurrency:
+  group: build-and-test-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.detect.outputs.run }}
+      families: ${{ steps.detect.outputs.families }}
+      asr-full: ${{ steps.detect.outputs.asr-full }}
+      tier: ${{ steps.detect.outputs.tier }}
+      short-sha: ${{ steps.detect.outputs.short-sha }}
+      suites: ${{ steps.detect.outputs.suites }}
+      hrx-suites: ${{ steps.detect.outputs.hrx-suites }}
+      source: ${{ steps.detect.outputs.source }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Detect changes
+        id: detect
+        uses: ./.github/actions/detect-changes
+        with:
+          tier: ${{ inputs.tier }}
+
+  # ── Linux builds ─────────────────────────────────────────────────────────
+
+  build-lin-xrt-portable:
+    name: Linux XRT portable
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    uses: ./.github/workflows/lin-build.yml
+    with:
+      variants: XRT-portable
+
+  build-lin-hrx-portable:
+    name: Linux HRX portable
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    uses: ./.github/workflows/lin-build.yml
+    with:
+      variants: HRX-portable
+
+  build-lin-source-portable:
+    name: Linux models-from-source portable
+    needs: changes
+    if: needs.changes.outputs.run == 'true' && !inputs.release
+    uses: ./.github/workflows/lin-build.yml
+    with:
+      variants: Source-portable
+
+  build-lin-xrt-deb:
+    name: Linux XRT .deb
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    uses: ./.github/workflows/lin-build.yml
+    with:
+      variants: XRT-deb
+
+  build-lin-hrx-deb:
+    name: Linux HRX .deb
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    uses: ./.github/workflows/lin-build.yml
+    with:
+      variants: HRX-deb
+
+  # ── Windows builds ───────────────────────────────────────────────────────
+
+  build-win-xrt:
+    name: Windows XRT
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    uses: ./.github/workflows/win-build.yml
+    with:
+      variants: XRT
+      msi: true
+
+  build-win-hrx:
+    name: Windows HRX
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    uses: ./.github/workflows/win-build.yml
+    with:
+      variants: HRX
+      msi: false
+
+  build-win-source:
+    name: Windows models-from-source
+    needs: changes
+    if: needs.changes.outputs.run == 'true' && !inputs.release
+    uses: ./.github/workflows/win-build.yml
+    with:
+      variants: Source
+      msi: false
+
+  # ── Linux tests ──────────────────────────────────────────────────────────
+  # Only the test scripts and their assets are checked out, never the sources:
+  # these jobs run a prebuilt package and compile nothing.
+
+  test-lin-xrt-portable:
+    name: Test Linux XRT portable
+    needs: [changes, build-lin-xrt-portable]
+    runs-on: [self-hosted, linux, x64, npu, sweep]
+    timeout-minutes: 120
+    steps:
+      - &checkout-tests
+        name: Checkout test scripts
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/actions
+            .github/script
+            src/test/openai_api_test
+            src/test/openai_usage
+            src/test/d3_video/fixtures
+          filter: blob:none
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+          name: portable
+          path: package
+      - name: Prepare package
+        id: package
+        uses: ./.github/actions/install-package
+        with:
+          kind: portable
+          path: package
+      - name: Test
+        uses: ./.github/actions/npu-test
+        with:
+          flm-bin: ${{ steps.package.outputs.flm-bin }}
+          label: linux-xrt-portable
+          tier: ${{ needs.changes.outputs.tier }}
+          suites: ${{ needs.changes.outputs.suites }}
+          families: ${{ needs.changes.outputs.families }}
+          asr-full: ${{ needs.changes.outputs.asr-full }}
+          asr-expected-key: linux
+
+  test-lin-hrx-portable:
+    name: Test Linux HRX portable
+    needs: [changes, build-lin-hrx-portable]
+    if: needs.changes.outputs.hrx-suites != ''
+    runs-on: [self-hosted, linux, x64, npu, sweep]
+    timeout-minutes: 120
+    steps:
+      - *checkout-tests
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+          name: HRX-portable
+          path: package
+      - name: Prepare package
+        id: package
+        uses: ./.github/actions/install-package
+        with:
+          kind: portable
+          path: package
+      - name: Test
+        uses: ./.github/actions/npu-test
+        with:
+          flm-bin: ${{ steps.package.outputs.flm-bin }}
+          label: linux-hrx-portable
+          tier: ${{ needs.changes.outputs.tier }}
+          suites: ${{ needs.changes.outputs.hrx-suites }}
+          families: ${{ needs.changes.outputs.families }}
+          asr-full: ${{ needs.changes.outputs.asr-full }}
+          asr-expected-key: linux-hrx
+
+  # Only the engines differ from the XRT portable build, and only the Gemma 4
+  # engines are built from source so far.
+  test-lin-source-portable:
+    name: Test Linux models-from-source portable
+    needs: [changes, build-lin-source-portable]
+    if: needs.changes.outputs.source == 'true'
+    runs-on: [self-hosted, linux, x64, npu, sweep]
+    timeout-minutes: 60
+    steps:
+      - *checkout-tests
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+          name: models-from-source-portable
+          path: package
+      - name: Prepare package
+        id: package
+        uses: ./.github/actions/install-package
+        with:
+          kind: portable
+          path: package
+      - name: Test
+        uses: ./.github/actions/npu-test
+        with:
+          flm-bin: ${{ steps.package.outputs.flm-bin }}
+          label: linux-source-portable
+          tier: ${{ needs.changes.outputs.tier }}
+          suites: chat
+          models: gemma4-it:e2b,gemma4-it:e4b
+
+  # The .deb and MSI install tests are off unless the repository variable
+  # FLM_INSTALL_TESTS is "true": the runners cannot install yet (no
+  # passwordless sudo on Linux, an FLM already installed on Windows), so they
+  # only tested the unpacked payload. When turning them on, also add them to
+  # the summary's verdict, so a release waits for them.
+  #
+  # The NPU runners run Ubuntu 24.04, so that is the .deb that can be
+  # installed; the other distributions' builds are covered by their build.
+  install-lin-xrt-deb:
+    name: Install test Linux XRT .deb
+    needs: [changes, build-lin-xrt-deb]
+    if: vars.FLM_INSTALL_TESTS == 'true'
+    runs-on: [self-hosted, linux, x64, npu, sweep]
+    timeout-minutes: 60
+    steps:
+      - *checkout-tests
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+          name: flm-ubuntu24.04-${{ needs.changes.outputs.short-sha }}-deb
+          path: package
+      - name: Install package
+        id: package
+        uses: ./.github/actions/install-package
+        with:
+          kind: deb
+          path: package
+      - name: Test
+        uses: ./.github/actions/npu-test
+        with:
+          flm-bin: ${{ steps.package.outputs.flm-bin }}
+          label: linux-xrt-deb-${{ steps.package.outputs.mode }}
+          tier: install
+      - name: Remove package
+        if: always()
+        uses: ./.github/actions/remove-package
+        with:
+          kind: deb
+          mode: ${{ steps.package.outputs.mode }}
+
+  install-lin-hrx-deb:
+    name: Install test Linux HRX .deb
+    needs: [changes, build-lin-hrx-deb]
+    if: vars.FLM_INSTALL_TESTS == 'true'
+    runs-on: [self-hosted, linux, x64, npu, sweep]
+    timeout-minutes: 60
+    steps:
+      - *checkout-tests
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+          name: HRX-flm-ubuntu24.04-${{ needs.changes.outputs.short-sha }}-deb
+          path: package
+      - name: Install package
+        id: package
+        uses: ./.github/actions/install-package
+        with:
+          kind: deb
+          path: package
+      - name: Test
+        uses: ./.github/actions/npu-test
+        with:
+          flm-bin: ${{ steps.package.outputs.flm-bin }}
+          label: linux-hrx-deb-${{ steps.package.outputs.mode }}
+          tier: install
+      - name: Remove package
+        if: always()
+        uses: ./.github/actions/remove-package
+        with:
+          kind: deb
+          mode: ${{ steps.package.outputs.mode }}
+
+  # ── Windows tests ────────────────────────────────────────────────────────
+
+  test-win-xrt:
+    name: Test Windows XRT
+    needs: [changes, build-win-xrt]
+    runs-on: [self-hosted, windows, x64, npu, sweep]
+    timeout-minutes: 120
+    steps:
+      - *checkout-tests
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+          name: fastflowlm-windows-${{ github.sha }}
+          path: package
+      - name: Prepare package
+        id: package
+        uses: ./.github/actions/install-package
+        with:
+          kind: portable
+          path: package
+      - name: Test
+        uses: ./.github/actions/npu-test
+        with:
+          flm-bin: ${{ steps.package.outputs.flm-bin }}
+          label: windows-xrt
+          tier: ${{ needs.changes.outputs.tier }}
+          suites: ${{ needs.changes.outputs.suites }}
+          families: ${{ needs.changes.outputs.families }}
+          asr-full: ${{ needs.changes.outputs.asr-full }}
+          asr-expected-key: windows
+
+  test-win-hrx:
+    name: Test Windows HRX
+    needs: [changes, build-win-hrx]
+    if: needs.changes.outputs.hrx-suites != ''
+    runs-on: [self-hosted, windows, x64, npu, sweep]
+    timeout-minutes: 120
+    steps:
+      - *checkout-tests
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+          name: HRX-fastflowlm-windows-${{ github.sha }}
+          path: package
+      - name: Prepare package
+        id: package
+        uses: ./.github/actions/install-package
+        with:
+          kind: portable
+          path: package
+      - name: Test
+        uses: ./.github/actions/npu-test
+        with:
+          flm-bin: ${{ steps.package.outputs.flm-bin }}
+          label: windows-hrx
+          tier: ${{ needs.changes.outputs.tier }}
+          suites: ${{ needs.changes.outputs.hrx-suites }}
+          families: ${{ needs.changes.outputs.families }}
+          asr-full: ${{ needs.changes.outputs.asr-full }}
+          asr-expected-key: windows-hrx
+
+  test-win-source:
+    name: Test Windows models-from-source
+    needs: [changes, build-win-source]
+    if: needs.changes.outputs.source == 'true'
+    runs-on: [self-hosted, windows, x64, npu, sweep]
+    timeout-minutes: 60
+    steps:
+      - *checkout-tests
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+          name: models-from-source-fastflowlm-windows-${{ github.sha }}
+          path: package
+      - name: Prepare package
+        id: package
+        uses: ./.github/actions/install-package
+        with:
+          kind: portable
+          path: package
+      - name: Test
+        uses: ./.github/actions/npu-test
+        with:
+          flm-bin: ${{ steps.package.outputs.flm-bin }}
+          label: windows-source
+          tier: ${{ needs.changes.outputs.tier }}
+          suites: chat
+          models: gemma4-it:e2b,gemma4-it:e4b
+
+  install-win-msi:
+    name: Install test Windows MSI
+    needs: [changes, build-win-xrt]
+    if: vars.FLM_INSTALL_TESTS == 'true'
+    runs-on: [self-hosted, windows, x64, npu, sweep]
+    timeout-minutes: 60
+    steps:
+      - *checkout-tests
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+          name: fastflowlm-windows-msi-${{ github.sha }}
+          path: package
+      - name: Install package
+        id: package
+        uses: ./.github/actions/install-package
+        with:
+          kind: msi
+          path: package
+      - name: Test
+        uses: ./.github/actions/npu-test
+        with:
+          flm-bin: ${{ steps.package.outputs.flm-bin }}
+          label: windows-msi-${{ steps.package.outputs.mode }}
+          tier: install
+      - name: Remove package
+        if: always()
+        uses: ./.github/actions/remove-package
+        with:
+          kind: msi
+          mode: ${{ steps.package.outputs.mode }}
+          path: package
+
+  # ── Summary ──────────────────────────────────────────────────────────────
+
+  summary:
+    needs:
+      - changes
+      - build-lin-xrt-portable
+      - build-lin-hrx-portable
+      - build-lin-xrt-deb
+      - build-lin-hrx-deb
+      - build-win-xrt
+      - build-win-hrx
+      - test-lin-xrt-portable
+      - test-lin-hrx-portable
+      - test-lin-source-portable
+      - install-lin-xrt-deb
+      - install-lin-hrx-deb
+      - test-win-xrt
+      - test-win-hrx
+      - test-win-source
+      - install-win-msi
+    if: always()
+    runs-on: ubuntu-latest
+    outputs:
+      xrt-passed: ${{ steps.verdict.outputs.xrt }}
+      hrx-passed: ${{ steps.verdict.outputs.hrx }}
+    steps:
+      - name: Checkout scripts
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/script/ci
+          filter: blob:none
+
+      - name: Download reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: npu-test-*
+          path: reports
+
+      - name: Summarize
+        run: python3 .github/script/ci/merge_reports.py reports >> "$GITHUB_STEP_SUMMARY"
+
+      # What release.yml publishes on: every package of a backend built and
+      # passed its tests. A test job skipped because the change did not touch
+      # its suites counts as passed; one skipped because its build failed does
+      # not, since the build's own failure is in the list too.
+      - name: Verdict
+        id: verdict
+        env:
+          XRT: >-
+            ${{ needs.build-lin-xrt-portable.result }} ${{ needs.build-lin-xrt-deb.result }}
+            ${{ needs.build-win-xrt.result }}
+            ${{ needs.test-lin-xrt-portable.result }} ${{ needs.test-win-xrt.result }}
+          HRX: >-
+            ${{ needs.build-lin-hrx-portable.result }} ${{ needs.build-lin-hrx-deb.result }}
+            ${{ needs.build-win-hrx.result }}
+            ${{ needs.test-lin-hrx-portable.result }} ${{ needs.test-win-hrx.result }}
+        run: |
+          verdict() {
+            for result in $1; do
+              case "${result}" in success|skipped) ;; *) echo false; return ;; esac
+            done
+            echo true
+          }
+          echo "xrt=$(verdict "${XRT}")" >> "$GITHUB_OUTPUT"
+          echo "hrx=$(verdict "${HRX}")" >> "$GITHUB_OUTPUT"
+          echo "XRT: ${XRT} -> $(verdict "${XRT}")"
+          echo "HRX: ${HRX} -> $(verdict "${HRX}")"

@@ -1,0 +1,130 @@
+name: Windows build
+description: >
+  Builds flm.exe for one Windows variant. Expects the repository to be checked
+  out with history and tags (the version comes from git describe); packaging
+  the result is left to the caller.
+
+inputs:
+  variant:
+    description: >
+      XRT (the default build), HRX (the HRX runtime), or Source (the model
+      engines built from source instead of the prebuilt DLLs in lib\xrt).
+    required: true
+
+outputs:
+  build-dir:
+    description: The CMake build tree, relative to the workspace.
+    value: ${{ steps.build.outputs.build-dir }}
+  hrx-runtime:
+    description: Absolute path to the fetched hrx.dll (HRX only).
+    value: ${{ steps.hrx-runtime.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check variant
+      shell: powershell
+      env:
+        VARIANT: ${{ inputs.variant }}
+      run: |
+        if ($env:VARIANT -notin @('XRT', 'HRX', 'Source')) {
+          Write-Host "::error::Unknown Windows build variant '$env:VARIANT'."
+          exit 1
+        }
+
+    # A full-history checkout also applies to submodules, which pulls the full
+    # msgpack-c history (~95 MB) and keeps getting reset mid-transfer on the
+    # runner network. The pinned commits alone are under 1 MB.
+    - name: Checkout submodules
+      shell: powershell
+      working-directory: ${{ github.workspace }}
+      run: |
+        for ($i = 1; $i -le 3; $i++) {
+          git submodule update --init --recursive --depth 1 --jobs 4
+          if ($LASTEXITCODE -eq 0) { exit 0 }
+          Write-Host "Submodule fetch failed (attempt $i), retrying..."
+          Start-Sleep -Seconds 15
+        }
+        exit 1
+
+    # setup_windows_deps.ps1 lays out the C:\dev dependencies the self-hosted
+    # runner has. HRX needs the same Boost and curl as the XRT build; the XRT
+    # parts of the tree go unused there.
+    - name: Restore build dependencies
+      uses: actions/cache@v4
+      with:
+        path: C:\dev
+        key: windows-deps-${{ hashFiles('.github/script/ci/setup_windows_deps.ps1', '.github/windows-deps/**') }}
+
+    - name: Set up build dependencies
+      shell: powershell
+      working-directory: ${{ github.workspace }}
+      run: .github\script\ci\setup_windows_deps.ps1
+
+    - name: Fetch pinned HRX release
+      id: hrx
+      if: inputs.variant == 'HRX'
+      shell: powershell
+      working-directory: ${{ github.workspace }}
+      run: .\hrx-integration\fetch-hrx-release.ps1
+
+    - name: Configure CMake
+      shell: powershell
+      working-directory: ${{ github.workspace }}/src
+      env:
+        VARIANT: ${{ inputs.variant }}
+        HRX_PREFIX: ${{ steps.hrx.outputs.prefix }}
+      run: |
+        $ErrorActionPreference = "Stop"
+        switch ($env:VARIANT) {
+          'XRT' {
+            cmake --preset windows-vs18
+          }
+          'HRX' {
+            if (-not $env:HRX_PREFIX) {
+              throw 'fetch-hrx-release.ps1 did not report the HRX package prefix'
+            }
+            cmake --preset windows-vs18 -DFLM_USE_HRX=ON "-DCMAKE_PREFIX_PATH=$env:HRX_PREFIX"
+          }
+          'Source' {
+            cmake --preset windows-vs18 `
+              -B build-models-from-source `
+              -DFLM_BUILD_GEMMA4E=ON
+          }
+        }
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    # The engines take more memory per compile than the rest of the tree, so
+    # the source build runs fewer jobs at once.
+    - name: Build
+      id: build
+      shell: powershell
+      working-directory: ${{ github.workspace }}/src
+      env:
+        VARIANT: ${{ inputs.variant }}
+      run: |
+        $ErrorActionPreference = "Stop"
+        if ($env:VARIANT -eq 'Source') {
+          cmake --build build-models-from-source --config Release --parallel 2
+          $buildDir = 'src/build-models-from-source'
+        } else {
+          cmake --build --preset windows-default --config Release --parallel
+          $buildDir = 'src/build'
+        }
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        # No BOM: Windows PowerShell 5.1's Out-File -Encoding utf8 writes one,
+        # which corrupts the output name.
+        [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "build-dir=$buildDir`n")
+
+    - name: Locate HRX runtime
+      id: hrx-runtime
+      if: inputs.variant == 'HRX'
+      shell: powershell
+      working-directory: ${{ github.workspace }}
+      run: |
+        $ErrorActionPreference = "Stop"
+        $hrxDll = Get-ChildItem -Path .\hrx-integration\.hrx-release -Recurse -Filter 'hrx.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $hrxDll) {
+          throw 'hrx.dll not found under hrx-integration\.hrx-release; HRX fetch step may have failed'
+        }
+        [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "path=$($hrxDll.FullName)`n")
