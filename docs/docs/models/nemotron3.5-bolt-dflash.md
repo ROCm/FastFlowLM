@@ -53,6 +53,7 @@ Expected: `1, 2, 3, ..., 40` followed by `done`, at a visibly higher speed than 
 - Greedy output can differ from `nemotron3.5-bolt:e4b` at near-ties: the NPU checks 8 positions in one pass, which rounds differently
   from decoding one token at a time. 97% of checked positions pick exactly the same token as token-by-token decoding (99.5% when the two
   best tokens are not within a hair of each other).
+- Speculation works on both NPU runtimes (XRT and HRX) with the same speed and output.
 - `FLM_DFLASH=0` in the environment turns speculation off: the tag then decodes exactly like `nemotron3.5-bolt:e4b`.
 - Speculation pauses while a tool-call or JSON grammar constrains the output, and whenever it would not be faster (for example at very
   long contexts); it resumes by itself.
