@@ -241,16 +241,17 @@ flm serve llama3.2:1b --ctx-len 8192
 
 ### 🔀 Choose an Execution Backend
 
-**A backend names where the kernels come from.** There are two:
+**A backend names where the kernels come from.** There are three:
 
 | id | kernels | ships on |
 |---|---|---|
 | `flm` | FastFlowLM's own NPU kernels | Strix / Krackan Point |
 | `core` | AMD's ryzenai-corelib | the next NPU generation |
+| `oga-hipep` | onnxruntime-genai with a separately installed hip-ep | the GPU, on a host that also has an NPU (see below) |
 
-You normally never set this. The model tag already names the flow — a family ending in `-core` wants corelib's kernels, everything else FastFlowLM's — and `flm list` only ever offers you tags this build and this machine can actually run. `flm run` separately prints the silicon as `NPU platform: dev04`. A model family has at most one engine per backend, so there is nothing to choose between.
+You normally never set this. The model tag already names the flow — a family ending in `-core` wants corelib's kernels, one ending in `-oga-hipep` wants the GPU through hip-ep, everything else FastFlowLM's — and `flm list` only ever offers you tags this build and this machine can actually run. `flm run` separately prints the silicon as `NPU platform: dev04`. A model family has at most one engine per backend, so there is nothing to choose between.
 
-The flag exists for overriding what the tag says, and for the targets that will join this list later:
+The flag is a check, not a switch: it must agree with the tag, because each backend needs its own model files and so has its own tag. Naming a different backend fails before anything loads, and the message names the rule to follow (a family ending in `-core` runs on `core`, a family ending in `-oga-hipep` runs on `oga-hipep`, every other family on `flm`). It also leaves room for the targets that will join this list later:
 
 ```shell
 flm run   phi4-mini-it:4b     --backend flm
@@ -263,13 +264,28 @@ flm serve phi4-mini-it-core:4b --backend core
 |---|---|---|
 | 1 | `--backend <id>` | the flag above, or a `"backend"` field on a `/v1/chat/completions` or `/v1/completions` request |
 | 2 | `FLM_BACKEND=<id>` | environment variable, for a whole shell session |
-| 3 | the model's catalog entry | `core` for a tag whose family ends in `-core`, `flm` otherwise |
+| 3 | the model's catalog entry | `core` for a tag whose family ends in `-core`, `oga-hipep` for one ending in `-oga-hipep`, `flm` otherwise |
 
-A per-request `"backend"` overrides `--backend` for that request, and reloads the model if it differs from the one already loaded — exactly as asking for a different model does.
+A per-request `"backend"` replaces `--backend` for that request, and reloads the model if it differs from the one already loaded — exactly as asking for a different model does. The same rule applies to it: a backend the model's tag was not built for is refused.
 
 Asking for a backend this build does not ship fails at load with a message listing what is actually available. There is no silent fallback to another engine or to the CPU. Note that a release is built for one NPU generation: on hardware it was not built for, `run`, `serve` and `bench` refuse up front, and `flm validate` still reports what it found.
 
 > A build carries the engines for one generation only, so there is no flag that moves it to the other catalog entry — that is a different build of FLM.
+
+#### oga-hipep: OGA models on the GPU
+
+Models whose family ends in `-oga-hipep` run on the GPU through a hip-ep package that you install separately from FLM.
+
+```shell
+flm pull qwen3.5-oga-hipep:9b
+flm run  qwen3.5-oga-hipep:9b
+```
+
+- **Build it in.** This backend is not part of a default build. Configure FLM with `-DFLM_ENABLE_OGA_HIPEP=ON` (Windows only). Without it, `flm list` does not offer these models.
+- **Install hip-ep 0.5.2 or later.** It is a zip with no installer. Unzip it into `%LOCALAPPDATA%\hip-ep\<version>` or `%ProgramFiles%\hip-ep\<version>`; when both hold a package, the newest version wins. The version may sit anywhere in the folder name, so `hipep_0.5.2_windows`, the name Windows gives the zip, works. Or set `AMDRT_PKG_ROOT` to the package root. When `AMDRT_PKG_ROOT` is set it is the only location used, and a package it points to that is rejected is an error, not a fallback to the default locations.
+- **GPU only.** This backend runs on the GPU.
+- **The host must have an NPU.** FLM still opens the NPU for this backend, so a host without an NPU is not supported yet.
+- **Text reuse is experimental and off by default.** Set `FLM_OGA_TEXT_REUSE=1` to enable it.
 
 ---
 
