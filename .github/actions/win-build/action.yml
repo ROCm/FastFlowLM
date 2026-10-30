@@ -61,6 +61,71 @@ runs:
       working-directory: ${{ github.workspace }}
       run: .github\script\ci\setup_windows_deps.ps1
 
+    # Ninja instead of the Visual Studio generator: it keeps every core busy
+    # across targets, which MSBuild does not, and lets sccache wrap cl. It
+    # needs the MSVC environment (cl, link, the SDK) that a developer prompt
+    # sets up.
+    - name: Set up MSVC environment
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
+
+    - name: Install sccache
+      uses: mozilla-actions/sccache-action@v0.0.9
+
+    # Everything cached lives under .ci-cache in the workspace.
+    - name: Locate caches
+      id: cache
+      shell: powershell
+      working-directory: ${{ github.workspace }}
+      env:
+        VARIANT: ${{ inputs.variant }}
+      run: |
+        $ErrorActionPreference = "Stop"
+        $buildDir = if ($env:VARIANT -eq 'Source') { 'src/build-models-from-source' } else { 'src/build' }
+        New-Item -ItemType Directory -Force .ci-cache\sccache | Out-Null
+        $utf8 = [System.Text.UTF8Encoding]::new($false)
+        [System.IO.File]::AppendAllText($env:GITHUB_ENV,
+          "SCCACHE_DIR=$env:GITHUB_WORKSPACE\.ci-cache\sccache`nSCCACHE_CACHE_SIZE=2G`n", $utf8)
+        # tokenizers-cpp builds its Rust crate into <build>/tokenizers-cpp,
+        # for an explicit target on MSVC.
+        [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT,
+          "rust-target=$buildDir/tokenizers-cpp/x86_64-pc-windows-msvc/release`n", $utf8)
+
+    # One cache per variant, keyed on the commit, so each save is new and a
+    # restore takes the newest. Only main saves (see "Save compiler cache"),
+    # for the reason given in lin-build.
+    - name: Restore compiler cache
+      uses: actions/cache/restore@v4
+      with:
+        path: .ci-cache/sccache
+        key: sccache-windows-${{ inputs.variant }}-${{ github.sha }}
+        restore-keys: sccache-windows-${{ inputs.variant }}-
+
+    - name: Restore Cargo registry
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+        key: cargo-registry-windows-${{ hashFiles('third_party/tokenizers-cpp/rust/Cargo.lock') }}
+        restore-keys: cargo-registry-windows-
+
+    - name: Restore Rust build output
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.cache.outputs.rust-target }}
+        key: rust-target-windows-${{ inputs.variant }}-${{ hashFiles('third_party/tokenizers-cpp/rust/**') }}
+        restore-keys: rust-target-windows-${{ inputs.variant }}-
+
+    - name: Restore HRX release
+      if: inputs.variant == 'HRX'
+      uses: actions/cache@v4
+      with:
+        path: hrx-integration/.hrx-release/*.zip
+        key: hrx-release-windows-${{ hashFiles('hrx-integration/hrx-release.env') }}
+
     - name: Fetch pinned HRX release
       id: hrx
       if: inputs.variant == 'HRX'
@@ -76,18 +141,19 @@ runs:
         HRX_PREFIX: ${{ steps.hrx.outputs.prefix }}
       run: |
         $ErrorActionPreference = "Stop"
+        $launcher = @('-DCMAKE_C_COMPILER_LAUNCHER=sccache', '-DCMAKE_CXX_COMPILER_LAUNCHER=sccache')
         switch ($env:VARIANT) {
           'XRT' {
-            cmake --preset windows-vs18
+            cmake --preset windows-ninja @launcher
           }
           'HRX' {
             if (-not $env:HRX_PREFIX) {
               throw 'fetch-hrx-release.ps1 did not report the HRX package prefix'
             }
-            cmake --preset windows-vs18 -DFLM_USE_HRX=ON "-DCMAKE_PREFIX_PATH=$env:HRX_PREFIX"
+            cmake --preset windows-ninja @launcher -DFLM_USE_HRX=ON "-DCMAKE_PREFIX_PATH=$env:HRX_PREFIX"
           }
           'Source' {
-            cmake --preset windows-vs18 `
+            cmake --preset windows-ninja @launcher `
               -B build-models-from-source `
               -DFLM_BUILD_GEMMA4E=ON
           }
@@ -104,17 +170,26 @@ runs:
         VARIANT: ${{ inputs.variant }}
       run: |
         $ErrorActionPreference = "Stop"
+        sccache --zero-stats | Out-Null
         if ($env:VARIANT -eq 'Source') {
-          cmake --build build-models-from-source --config Release --parallel 2
+          cmake --build build-models-from-source --parallel 2
           $buildDir = 'src/build-models-from-source'
         } else {
-          cmake --build --preset windows-default --config Release --parallel
+          cmake --build build --parallel
           $buildDir = 'src/build'
         }
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        sccache --show-stats
         # No BOM: Windows PowerShell 5.1's Out-File -Encoding utf8 writes one,
         # which corrupts the output name.
         [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "build-dir=$buildDir`n")
+
+    - name: Save compiler cache
+      if: github.ref == 'refs/heads/main' && steps.build.outcome == 'success'
+      uses: actions/cache/save@v4
+      with:
+        path: .ci-cache/sccache
+        key: sccache-windows-${{ inputs.variant }}-${{ github.sha }}
 
     - name: Locate HRX runtime
       id: hrx-runtime

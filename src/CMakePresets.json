@@ -96,6 +96,19 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
       }
+    },
+    {
+      "name": "windows-ninja",
+      "displayName": "Windows Ninja",
+      "description": "Windows with Ninja and the MSVC compiler from the environment (run from a VS developer prompt); what CI builds with, so a compiler cache can wrap cl",
+      "inherits": "common-default",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "cl",
+        "CMAKE_CXX_COMPILER": "cl"
+      }
     }
   ],
   "buildPresets": [

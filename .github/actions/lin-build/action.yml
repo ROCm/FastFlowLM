@@ -66,6 +66,19 @@ runs:
       shell: bash
       run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
+    # Shallow: the pinned commits alone are under 1 MB, where full history
+    # (msgpack-c's alone is ~95 MB) is what a recursive checkout fetches.
+    - name: Checkout submodules
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: |
+        for attempt in 1 2 3; do
+          git submodule update --init --recursive --depth 1 --jobs 4 && exit 0
+          echo "Submodule fetch failed (attempt ${attempt}), retrying..."
+          sleep 15
+        done
+        exit 1
+
     # Stripped for Debian version compatibility, and so the tarball names
     # match the release tag without its "v".
     - name: Get version from git describe
@@ -74,19 +87,101 @@ runs:
       working-directory: ${{ github.workspace }}
       run: echo "version=$(git describe --tags --always | sed 's/^v//')" >> "$GITHUB_OUTPUT"
 
-    # The build-environment image is rebuilt nightly from main's Dockerfile, so
-    # a Build-Depends change reaches it only after merge. Install the ones the
-    # image may still lack, plus what the portable and HRX builds need (patchelf
-    # rewrites the HRX engine RUNPATHs, zstd unpacks the HRX release).
-    - name: Install build tools and upgrade Rust toolchain
+    # The build-environment image carries these (see Dockerfile), but it is
+    # rebuilt nightly from main's Dockerfile, so a new one reaches it only
+    # after merge. Install whatever this image still lacks: patchelf rewrites
+    # the HRX engine RUNPATHs, zstd unpacks the HRX release, ccache caches
+    # compiles, and the distro's rustc is too old for the tokenizers crate.
+    - name: Install missing build tools
       shell: bash
       run: |
-        apt-get update
-        apt-get install -y --no-install-recommends \
-          ca-certificates curl libedit-dev nasm patchelf uuid-dev zstd
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
-          sh -s -- -y --profile minimal --default-toolchain stable
-        echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+        set -euo pipefail
+        need=""
+        for tool in ccache curl nasm patchelf zstd; do
+          command -v "${tool}" >/dev/null || need="${need} ${tool}"
+        done
+        for pkg in ca-certificates libedit-dev uuid-dev; do
+          dpkg -s "${pkg}" >/dev/null 2>&1 || need="${need} ${pkg}"
+        done
+        if [ -n "${need}" ]; then
+          echo "Installing:${need}"
+          apt-get update
+          apt-get install -y --no-install-recommends ${need}
+        fi
+        if ! command -v rustup >/dev/null; then
+          echo "Installing Rust stable with rustup"
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+            sh -s -- -y --profile minimal --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+        fi
+
+    # Everything cached lives under .ci-cache in the workspace: a container
+    # job's actions/cache resolves relative paths there, and an absolute
+    # ${{ github.workspace }} would name the host's path, not the container's.
+    - name: Locate caches
+      id: cache
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        VARIANT: ${{ inputs.variant }}
+      run: |
+        set -euo pipefail
+        case "${VARIANT}" in
+          XRT-deb|HRX-deb)  build_dir=build ;;
+          Source-portable)  build_dir=src/build-models-from-source ;;
+          *)                build_dir=src/build ;;
+        esac
+        mkdir -p .ci-cache/ccache
+        {
+          echo "CCACHE_DIR=${GITHUB_WORKSPACE}/.ci-cache/ccache"
+          # Paths under the workspace hash as relative ones, so a cache made
+          # in one checkout serves another.
+          echo "CCACHE_BASEDIR=${GITHUB_WORKSPACE}"
+          echo "CCACHE_NOHASHDIR=true"
+          echo "CCACHE_COMPILERCHECK=content"
+          echo "CCACHE_MAXSIZE=1G"
+        } >> "$GITHUB_ENV"
+        # tokenizers-cpp builds its Rust crate into <build>/tokenizers-cpp;
+        # cargo keeps per-profile output (and its fingerprints) in release/.
+        echo "rust-target=${build_dir}/tokenizers-cpp/release" >> "$GITHUB_OUTPUT"
+        echo "cargo-home=${CARGO_HOME:-$HOME/.cargo}" >> "$GITHUB_OUTPUT"
+
+    # One cache per variant and distribution, since each compiles with its
+    # own flags and compiler. Keyed on the commit, so each save is new and a
+    # restore takes the newest. Only main saves (see "Save compiler cache"):
+    # the repository's caches share 10 GB, and a pull request's entries are
+    # usable by that pull request alone, so saving from every PR commit would
+    # only evict main's.
+    - name: Restore compiler cache
+      uses: actions/cache/restore@v4
+      with:
+        path: .ci-cache/ccache
+        key: ccache-${{ inputs.variant }}-${{ inputs.distro }}${{ inputs.distro-version }}-${{ github.sha }}
+        restore-keys: ccache-${{ inputs.variant }}-${{ inputs.distro }}${{ inputs.distro-version }}-
+
+    - name: Restore Cargo registry
+      uses: actions/cache@v4
+      with:
+        path: |
+          ${{ steps.cache.outputs.cargo-home }}/registry/index
+          ${{ steps.cache.outputs.cargo-home }}/registry/cache
+          ${{ steps.cache.outputs.cargo-home }}/git/db
+        key: cargo-registry-${{ inputs.distro }}${{ inputs.distro-version }}-${{ hashFiles('third_party/tokenizers-cpp/rust/Cargo.lock') }}
+        restore-keys: cargo-registry-${{ inputs.distro }}${{ inputs.distro-version }}-
+
+    - name: Restore Rust build output
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.cache.outputs.rust-target }}
+        key: rust-target-${{ inputs.variant }}-${{ inputs.distro }}${{ inputs.distro-version }}-${{ hashFiles('third_party/tokenizers-cpp/rust/**') }}
+        restore-keys: rust-target-${{ inputs.variant }}-${{ inputs.distro }}${{ inputs.distro-version }}-
+
+    - name: Restore HRX release
+      if: startsWith(inputs.variant, 'HRX-')
+      uses: actions/cache@v4
+      with:
+        path: hrx-integration/.hrx-release/*.tar.zst
+        key: hrx-release-linux-${{ hashFiles('hrx-integration/hrx-release.env') }}
 
     - name: Fetch pinned HRX release
       id: hrx
@@ -112,6 +207,7 @@ runs:
       run: |
         set -euo pipefail
         rustc --version
+        ccache --zero-stats >/dev/null
 
         sed -e "s|@@DEB_VERSION@@|${DEB_VERSION}|g" \
             -e "s|@@DEB_CODENAME@@|${CODENAME}|g" \
@@ -119,19 +215,21 @@ runs:
             debian/changelog.in > debian/changelog
         chmod +x debian/rules
 
+        export FLM_CMAKE_ARGS="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
         if [ "${VARIANT}" = "HRX-deb" ]; then
           if [ -z "${HRX_PREFIX}" ]; then
             echo "::error::fetch-hrx-release.sh did not report the HRX package prefix."
             exit 1
           fi
           export FLM_USE_HRX=ON
-          export FLM_CMAKE_ARGS="-DCMAKE_PREFIX_PATH=${HRX_PREFIX}"
+          FLM_CMAKE_ARGS="${FLM_CMAKE_ARGS} -DCMAKE_PREFIX_PATH=${HRX_PREFIX}"
           package="HRX_fastflowlm_${DEB_VERSION}_${DISTRO}_amd64.deb"
         else
           package="fastflowlm_${DEB_VERSION}_${DISTRO}_amd64.deb"
         fi
 
         dpkg-buildpackage -b -us -uc
+        ccache --show-stats
         mv "../fastflowlm_${DEB_VERSION}_amd64.deb" "./${package}"
         ls -lah "./${package}"
         .github/script/ci/check_no_copyleft_libs.sh "./${package}"
@@ -149,9 +247,11 @@ runs:
         HRX_PREFIX: ${{ steps.hrx.outputs.prefix }}
       run: |
         set -euo pipefail
+        ccache --zero-stats >/dev/null
+        launcher=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
         case "${VARIANT}" in
           XRT-portable)
-            cmake --preset linux-portable
+            cmake --preset linux-portable "${launcher[@]}"
             cmake --build build -j"$(nproc)"
             build_dir=src/build
             ;;
@@ -160,18 +260,26 @@ runs:
               echo "::error::fetch-hrx-release.sh did not report the HRX package prefix."
               exit 1
             fi
-            cmake --preset linux-portable \
+            cmake --preset linux-portable "${launcher[@]}" \
               -DFLM_USE_HRX=ON \
               -DCMAKE_PREFIX_PATH="${HRX_PREFIX}"
             cmake --build build -j"$(nproc)"
             build_dir=src/build
             ;;
           Source-portable)
-            cmake --preset linux-portable \
+            cmake --preset linux-portable "${launcher[@]}" \
               -B build-models-from-source \
               -DFLM_BUILD_GEMMA4E=ON
             cmake --build build-models-from-source --parallel 2
             build_dir=src/build-models-from-source
             ;;
         esac
+        ccache --show-stats
         echo "build-dir=${build_dir}" >> "$GITHUB_OUTPUT"
+
+    - name: Save compiler cache
+      if: github.ref == 'refs/heads/main' && (steps.deb.outcome == 'success' || steps.portable.outcome == 'success')
+      uses: actions/cache/save@v4
+      with:
+        path: .ci-cache/ccache
+        key: ccache-${{ inputs.variant }}-${{ inputs.distro }}${{ inputs.distro-version }}-${{ github.sha }}

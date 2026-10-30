@@ -84,6 +84,60 @@ An image costs a fixed amount on top of its tokens (decoding, resizing and the v
 640 × 480 and 0.8 s at 1.6 MP. All questions of a request share one image encoding: a 1.6 MP image with 8 questions
 takes 6.4 s, not 8 × 1.5 s. The first request with images loads the vision tower (about 40 ms) and two more NPU
 hardware contexts.
+## ⚡ d3-edge on the NPU
+
+Accuracy and latency of `d3:edge` (vllm-sr/d3-edge, revision c454ee39, 12 layers, package D3-Edge-NPU2, Q4_K with GPTQ), served by FastFlowLM 1.0.12, same machine and settings as above.
+
+> **Note:**
+> - Latency is end to end over HTTP (`flm serve --decision d3:edge`), median of 3 runs on an otherwise idle machine (16,384 tokens: 2 runs; 31,545 and 32,767 tokens: 1 run). Rows of 31,545 tokens and more are real documentation text.
+
+### Accuracy against the upstream BF16 model
+
+| Set | Questions | NPU (FLM) |
+|---|---:|---:|
+| Decision Index public suite, seeded round-robin sample (1,600 requests of at most 8,000 tokens, 37 benchmarks): mean benchmark score | 1,600 | 49.8% (BF16: 47.2%) |
+| Same requests, top-1 agreement with BF16 (choice answers) | 4,452 | 93.8% |
+| Same requests with plain Q4_K weights instead of GPTQ: mean score / top-1 agreement | 1,600 | 47.7% / 91.9% |
+| Long prompts, 835 to 31,545 tokens, same top answer as BF16 | 8 | 6 of 8 |
+| Long prompts, mean probability difference to BF16 (range over the 8 prompts) | 8 | 0.006 to 0.031 |
+| Decision Index public vision suite, 30 seeded questions from each of 10 benchmarks: accuracy | 300 | 53.0% (BF16: 55.7%) |
+| Same image questions, top-1 agreement with BF16 | 300 | 82.3% |
+
+The BF16 numbers on the text sample are the upstream BF16 run's own answers (MI325X, the public run) to the same requests; the long-prompt
+and vision references were run on this machine's CPU with the upstream `d3_server.py`. On the Decision Index sample the mean benchmark score
+is 2.6 points *above* the upstream BF16 model (standard error 1.1; about 42 requests per benchmark, so a single benchmark is noisy):
+quantization noise on near-ties moves some answers either way, and no loss in accuracy is measurable. The answers agree with BF16 less often than
+those of the larger d3 sizes (93.8% against about 97%): a 0.6B model with 12 layers has many near-tied options, and the two long prompts that
+differ (12,000 and 24,000 tokens) are of that kind (the BF16 model's own top two options have 0.30 and 0.28, and 0.25 and 0.23). It is a sample, not the full
+suite: only requests whose prompts have at most 8,000 tokens, and without RouterBench and SGD, whose locally rebuilt requests are not byte-identical
+to the lab's. The vision subset leaves out Winoground (gated); paired accuracy, BF16 minus d3-edge, is +2.7 points (95% CI -0.7 to +6.0), as for d3-mini
+and d3-flash (+2.5 and +2.3). The GPTQ calibration prompts (192 synthetic questions) contain no Decision Index data.
+
+### Images (d3-edge)
+
+Latency over HTTP, one question, median of 3: 0.61 s with a 1,024 × 768 image (880 input tokens), 0.89 s with two images, 1.4 s with a
+2000 × 1500 image (downscaled to the 1.6 MP budget; 1,676 tokens). A request with 8 questions about one image takes 2.0 s (one image encoding).
+PNG, JPEG and WebP data URLs are accepted; web addresses, file paths, corrupt images and videos are refused with HTTP 422.
+
+### Latency
+
+| Request | Median (ms) |
+|---|---:|
+| 1 question, 128 tokens | 60 |
+| 1 question, 330 tokens | 83 |
+| 1 question, 1,024 tokens | 263 |
+| 1 question, 2,047 tokens | 467 |
+| 1 question, 4,096 tokens | 1007 |
+| 1 question, 8,192 tokens | 2402 |
+| 1 question, 16,384 tokens | 5983 |
+| 1 question, 31,545 tokens | 16180 |
+| 1 question, 32,767 tokens | 16896 |
+| 4 questions, 330 tokens each | 291 |
+| 16 questions, 330 tokens each | 1045 |
+
+Memory: 2.0 GB resident after the load, 4.6 GB at 31,545 tokens and 4.8 GB at most in a mixed soak (four 31,545-token requests,
+60 short ones and 6 with images). A prompt of 32,769 tokens is refused.
+
 ## ⚡ d3-nano on the NPU
 
 Accuracy and latency of `d3:nano` (vllm-sr/d3-nano v3.1.3, package D3-Nano-NPU2), same machine and settings as above.

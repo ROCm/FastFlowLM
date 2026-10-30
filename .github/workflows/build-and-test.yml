@@ -19,7 +19,9 @@ name: Build and Test
 # Tiers (.github/script/npu_test/plan.py): pull requests and pushes run the pr
 # tier, one model per engine family plus every model of a family the change
 # touches; the nightly run tests every model. A change that only touches docs
-# builds and tests nothing.
+# builds and tests nothing. The portable test jobs get 120 minutes on the pr
+# tier and 360 on the full one, which runs every model and every d3 size and
+# may first download tens of GB of weights.
 #
 # release.yml calls this with release: true before publishing a tag.
 on:
@@ -170,7 +172,7 @@ jobs:
     name: Test Linux XRT portable
     needs: [changes, build-lin-xrt-portable]
     runs-on: [self-hosted, linux, x64, npu, sweep]
-    timeout-minutes: 120
+    timeout-minutes: ${{ needs.changes.outputs.tier == 'full' && 360 || 120 }}
     steps:
       - &checkout-tests
         name: Checkout test scripts
@@ -210,7 +212,7 @@ jobs:
     needs: [changes, build-lin-hrx-portable]
     if: needs.changes.outputs.hrx-suites != ''
     runs-on: [self-hosted, linux, x64, npu, sweep]
-    timeout-minutes: 120
+    timeout-minutes: ${{ needs.changes.outputs.tier == 'full' && 360 || 120 }}
     steps:
       - *checkout-tests
       - name: Download package
@@ -343,7 +345,7 @@ jobs:
     name: Test Windows XRT
     needs: [changes, build-win-xrt]
     runs-on: [self-hosted, windows, x64, npu, sweep]
-    timeout-minutes: 120
+    timeout-minutes: ${{ needs.changes.outputs.tier == 'full' && 360 || 120 }}
     steps:
       - *checkout-tests
       - name: Download package
@@ -373,7 +375,7 @@ jobs:
     needs: [changes, build-win-hrx]
     if: needs.changes.outputs.hrx-suites != ''
     runs-on: [self-hosted, windows, x64, npu, sweep]
-    timeout-minutes: 120
+    timeout-minutes: ${{ needs.changes.outputs.tier == 'full' && 360 || 120 }}
     steps:
       - *checkout-tests
       - name: Download package

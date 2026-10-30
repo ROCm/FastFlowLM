@@ -770,7 +770,7 @@ int main(int argc, char* argv[]) {
             header_print_g("FLM", "Embedding mode enabled: reserving additional 300MB of memory");
         }
         if (!parsed_args.decision.empty()) {
-            // the decision model's own weights (d3:lite 0.56 GB, d3:nano 1.34 GB, d3:mini 3.43 GB, d3:flash ~5.5 GB in the catalog's size) plus
+            // the decision model's own weights (d3:edge ~0.6 GB, d3:lite 0.56 GB, d3:nano 1.34 GB, d3:mini 3.43 GB, d3:flash ~5.5 GB in the catalog's size) plus
             // its scratch: 1 GB by default (a 4096-row pass; bigger prompts allocate per call) and the fp32 readout. A
             // catalog entry whose 32,768-token pass needs far more (d3:turbo, 27B: ~7.3 GB of pass scratch and ~1.4 GB of
             // transients, audit estimate) says so in "scratch" (bytes).
