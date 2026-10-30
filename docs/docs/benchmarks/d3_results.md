@@ -15,7 +15,7 @@ Accuracy and latency of `d3:lite` (vllm-sr/d3-lite v3.1.3, package D3-Lite-NPU2)
 
 ### Accuracy against the upstream BF16 model
 
-| Set | Questions | Upstream BF16 | NPU (FLM) |
+| Set | Questions | Upstream BF16 | XDNA2 |
 |---|---:|---:|---:|
 | Decision Index public suite, stratified subset (gold accuracy) | 6,824 | 61.2% | 60.5% |
 | Same questions, top-1 agreement with BF16 | 7,226 | -- | 90.5% |
@@ -50,7 +50,7 @@ decision model holds two NPU hardware contexts instead of one.
 Accuracy on the Decision Index public vision suite (the 10 benchmarks that can be rebuilt without gated data; 60
 questions each, images capped at 1.6 MP as the suite's `decide` engine sends them):
 
-| Benchmark | Upstream BF16 | NPU (FLM) | Same answer |
+| Benchmark | Upstream BF16 | XDNA2 | Same answer |
 |---|---:|---:|---:|
 | CV-Bench | 81.7% | 85.0% | 91.7% |
 | BLINK | 51.7% | 58.3% | 78.3% |
@@ -93,7 +93,7 @@ Accuracy and latency of `d3:edge` (vllm-sr/d3-edge, revision c454ee39, 12 layers
 
 ### Accuracy against the upstream BF16 model
 
-| Set | Questions | NPU (FLM) |
+| Set | Questions | XDNA2 |
 |---|---:|---:|
 | Decision Index public suite, seeded round-robin sample (1,600 requests of at most 8,000 tokens, 37 benchmarks): mean benchmark score | 1,600 | 49.8% (BF16: 47.2%) |
 | Same requests, top-1 agreement with BF16 (choice answers) | 4,452 | 93.8% |
@@ -148,7 +148,7 @@ Accuracy and latency of `d3:nano` (vllm-sr/d3-nano v3.1.3, package D3-Nano-NPU2)
 
 ### Accuracy against the upstream BF16 model
 
-| Set | Questions | NPU (FLM) |
+| Set | Questions | XDNA2 |
 |---|---:|---:|
 | Hand-built request set (up to 4,096 tokens), top-1 agreement with BF16 | 725 | 95.7% |
 | Same set, final hidden state cosine to BF16 (median) | 725 | 0.998 |
@@ -202,7 +202,7 @@ Accuracy and latency of `d3:mini` (vllm-sr/d3-mini v3.1.3, package D3-Mini-NPU2)
 
 ### Accuracy against the upstream BF16 model
 
-| Set | Questions | NPU (FLM) |
+| Set | Questions | XDNA2 |
 |---|---:|---:|
 | Hand-built request set (up to 4,096 tokens), top-1 agreement with BF16 | 725 | 97.0% |
 | Same set, final hidden state cosine to BF16 (median) | 725 | 0.9994 |
@@ -256,7 +256,7 @@ Accuracy and latency of `d3:flash` (vllm-sr/d3-flash, revision 13dc1cc8, package
 
 ### Accuracy against the upstream BF16 model
 
-| Set | Questions | NPU (FLM) |
+| Set | Questions | XDNA2 |
 |---|---:|---:|
 | Decision Index public suite, seeded round-robin sample (1,600 requests of at most 8,000 tokens, 37 benchmarks): mean benchmark score | 1,600 | 67.4% (BF16: 67.8%) |
 | Same requests, top-1 agreement with BF16 (choice answers) | 4,452 | 97.0% |
@@ -317,7 +317,7 @@ D3-Turbo-NPU2, Q4_K with GPTQ), same machine and settings as above.
 
 ### Accuracy against the upstream BF16 model
 
-| Set | Questions | NPU (FLM) |
+| Set | Questions | XDNA2 |
 |---|---:|---:|
 | Hand-built request set (up to 4,096 tokens), top-1 agreement with BF16 | 736 | 95.7% |
 | Same set, final hidden state cosine to BF16 (median) | 736 | 0.9990 |
@@ -421,7 +421,7 @@ the same engine library and the same four kernels as `d3:turbo`; its package add
 
 ### Accuracy against the upstream BF16 model
 
-| Set | Questions | NPU (FLM) |
+| Set | Questions | XDNA2 |
 |---|---:|---:|
 | Hand-built request set (up to 4,096 tokens), top-1 agreement with BF16 | 736 | 95.1% |
 | Same set, final hidden state cosine to BF16 (median) | 736 | 0.9985 |
