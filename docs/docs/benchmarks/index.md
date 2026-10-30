@@ -28,5 +28,6 @@ Browse detailed NPU benchmark results for each major model family supported by F
 - [MiniCPM-V 4.7](minicpm-v-4.7_results/)
 - [Nemotron Bolt](nemotron3.5-bolt_results/)
 - [Nemotron Bolt DFlash](nemotron3.5-bolt-dflash_results/)
+- [Flash Models](flash_results/)
 
 Each page includes decoding and prefill speed metrics (tokens per second) and notes about the test setup and hardware. 
