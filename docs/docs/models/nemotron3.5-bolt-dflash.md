@@ -58,3 +58,57 @@ Expected: `1, 2, 3, ..., 40` followed by `done`, at a visibly higher speed than 
 - Speculation pauses while a tool-call or JSON grammar constrains the output, and whenever it would not be faster (for example at very
   long contexts); it resumes by itself.
 - `flm remove nemotron3.5-bolt-dflash:e4b` removes only the draft package; `nemotron3.5-bolt:e4b` stays installed.
+
+---
+
+## 🧩 Model Card: [NVIDIA-Nemotron-3.5-Bolt-E4B — DFlash Flash](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB)
+
+- **Type:** Any-to-Text (image, audio), single-turn, with speculative decoding
+- **What it is:** [`nemotron3.5-bolt-dflash:e4b`](#-model-card-nvidia-nemotron-35-bolt-e4b-with-the-dflash-draft) built for the
+  [Flash](https://fastflowlm.com/docs/models/flash/) serving style: the fast short-prompt prefill of `gemma4e-flash:e4b` together with
+  DFlash speculative decoding. Every request starts from a clean state; the system prompt is pinned and reused
+  ([how flash models work in server mode](https://fastflowlm.com/docs/instructions/server/openapi/#-example-flash-models-single-turn-pinned-system-prompt))
+- **Time to first token:** the same as `gemma4e-flash:e4b`, about 0.3 s for a short prompt, against 1.2 s for `nemotron3.5-bolt-dflash:e4b`
+- **Decode speed:** 33 to 40 tokens/s on code and structured answers, 19 to 21 tokens/s on open prose, against 13 for `gemma4e-flash:e4b`
+- **Think / Conversational mode / Vision / Audio:** as `nemotron3.5-bolt:e4b`. Tool calling is not supported (the `tools` field is dropped).
+  Images default to the smallest visual token budget (70) and only the first 30 seconds of an audio clip are used
+- **Packages:** the same two downloads as `nemotron3.5-bolt-dflash:e4b` (`Nemotron-3.5-Bolt-E4B-NPU2`, about 9 GB, and the 0.27 GB draft
+  `Nemotron-3.5-Bolt-E4B-DFlash-NPU2`). Nothing new to download if you already have that tag
+- **Max / Default Context Length:** 1k tokens (fixed, like every flash model)
+- **License:** [OpenMDW-1.1](https://openmdw.ai/license/1-1/)
+- **FastFlowLM:** 1.0.13 or later
+
+▶️ Run with FastFlowLM in PowerShell:
+
+```shell
+flm run nemotron3.5-bolt-dflash-flash:e4b
+```
+
+Server mode:
+
+```shell
+flm serve nemotron3.5-bolt-dflash-flash:e4b
+```
+
+📊 **Measured** (greedy, 18-token pinned system prompt, NPU, quiet machine):
+
+| Prompt length | `gemma4e-flash:e4b` | `nemotron3.5-bolt-dflash:e4b` | `nemotron3.5-bolt-dflash-flash:e4b` |
+|---|---|---|---|
+| ~50 tokens, time to first token | 0.31 s | 1.24 s | 0.32 s |
+| ~140 tokens | 0.57 s | 1.24 s | 0.60 s |
+| ~540 tokens | 1.48 s | 1.84 s | 1.49 s |
+| ~960 tokens | 2.51 s | 2.15 s | 2.52 s |
+| decode, code answer | 13 tokens/s | 38 to 40 tokens/s | 33 to 40 tokens/s |
+| decode, prose answer | 13 tokens/s | 17 to 22 tokens/s | 19 to 21 tokens/s |
+
+📝 **Note:**
+
+- Flash prefill is tuned for short prompts: it is the faster choice up to a prompt of roughly 700 tokens. For longer prompts use
+  `nemotron3.5-bolt-dflash:e4b`, which also has a longer context.
+- A long, fixed system prompt (instructions, examples) is where this tag gains most: it is prefilled once and the draft model sees it on
+  every request, which keeps the speculative steps long. Changing the system prompt between requests discards the pin.
+- Sampling, `FLM_DFLASH=0` and the other behaviours of speculation are as on the [`nemotron3.5-bolt-dflash:e4b`](#-model-card-nvidia-nemotron-35-bolt-e4b-with-the-dflash-draft) card.
+  Greedy output can differ from `nemotron3.5-bolt:e4b` at near-ties.
+- Needs 9 of the NPU's 16 hardware contexts (vision and audio included), so other models can still be loaded next to it.
+- `flm remove nemotron3.5-bolt-dflash-flash:e4b` removes only the draft package, shared with `nemotron3.5-bolt-dflash:e4b`: remove
+  both tags' use of it first if you want the space back.

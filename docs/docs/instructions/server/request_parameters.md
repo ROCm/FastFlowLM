@@ -70,7 +70,7 @@ A request that sends no sampling fields uses the model's own defaults, which dif
 | Models | `presence_penalty` at load |
 |---|---|
 | `qwen3.5:*`, `qwen3.5-core:*`, `qwen3.6-moe:35b-a3b`, `qwen3.6-moe-core:35b-a3b`, `qwen3.8-mtp:27b`, `minicpm-v-4.7:1b` | 1.5 |
-| `gemma4-it:*`, `gemma4-it-core:*`, `gemma4e-flash:*`, `nemotron3.5-bolt:e4b` | 1.0 |
+| `gemma4-it:*`, `gemma4-it-core:*`, `gemma4e-flash:*`, `nemotron3.5-bolt:e4b`, `nemotron3.5-bolt-dflash:e4b`, `nemotron3.5-bolt-dflash-flash:e4b` | 1.0 |
 | every other model | 0 |
 
 Sending `presence_penalty=0` turns the default off, and it stays off until the model is reloaded (see *Settings stick* above).
@@ -260,7 +260,7 @@ Before generating, FLM reads the prompt into the model's KV cache. This is the *
 
 | Models | `max_prefill_len` |
 |---|---|
-| Flash models (`gemma4e-flash:*`, `qwen3vl-flash:4b`, `hy-mt2-flash:1.8b`) | 1024 |
+| Flash models (`gemma4e-flash:*`, `nemotron3.5-bolt-dflash-flash:e4b`, `qwen3vl-flash:4b`, `hy-mt2-flash:1.8b`) | 1024 |
 | Every other chat model | 4096 |
 
 **`max_prefill_len` is not a limit on the prompt.** A longer prompt just takes more chunks. A 32,000-token prompt on a model with 4096-token chunks is read in eight passes, seven of 4096 tokens and one of 3,328, and the server log shows each one:

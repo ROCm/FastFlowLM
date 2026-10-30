@@ -41,7 +41,7 @@ The other supported models gain the same way. Measured on shorter prompts (about
 | Endpoint | `POST /v1/chat/completions` of `flm serve` (what Hermes, Open WebUI and most agents use), streaming or not |
 | Not covered | `flm run` (CLI mode) and the Ollama endpoints `/api/chat` and `/api/generate`, which keep the older single-checkpoint reuse. A request on an Ollama endpoint also empties the prefix cache, so a client that mixes both APIs loses its cached prompts. |
 
-Not covered: the single-turn models (`hy-mt2-flash`, `qwen3vl-flash`, `gemma4e-flash`: they take one request and pin their system prompt, so there is nothing to reuse), the developer-preview `*-core` backends, `lfm3`, and the speech, embedding and robotics models. They are unchanged.
+Not covered: the single-turn models (`hy-mt2-flash`, `qwen3vl-flash`, `gemma4e-flash`, `nemotron3.5-bolt-dflash-flash`: they take one request and pin their system prompt, so there is nothing to reuse), the developer-preview `*-core` backends, `lfm3`, and the speech, embedding and robotics models. They are unchanged.
 
 It is on by default. Nothing to configure for a single chat or agent.
 
