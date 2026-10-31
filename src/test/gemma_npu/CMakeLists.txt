@@ -11,6 +11,7 @@ add_npu_test(
     USE_TOKENIZER
     USE_SAMPLER
     SOURCES
+        "${CMAKE_SOURCE_DIR}/../../common/AutoModel/model_backend.cpp"
         "${CMAKE_SOURCE_DIR}/../../common/AutoModel/modeling_gemma3.cpp"
         "${CMAKE_SOURCE_DIR}/../../common/AutoModel/modeling_gemma3_image.cpp"
         "${CMAKE_SOURCE_DIR}/../../common/image/image_reader.cpp"

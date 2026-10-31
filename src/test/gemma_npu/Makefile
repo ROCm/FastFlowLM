@@ -18,6 +18,7 @@
 -include ../common.mk
 
 SOURCES += test.cpp
+SOURCES += ../../common/AutoModel/model_backend.cpp
 SOURCES += ../../common/AutoModel/automodel.cpp
 SOURCES += $(CHAT_SOURCES)
 SOURCES += ../../common/AutoModel/modeling_gemma3.cpp

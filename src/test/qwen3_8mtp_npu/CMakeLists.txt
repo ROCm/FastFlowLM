@@ -19,6 +19,7 @@ add_npu_test(
     USE_TOKENIZER
     USE_SAMPLER
     SOURCES
+        "${CMAKE_SOURCE_DIR}/../../common/AutoModel/model_backend.cpp"
         "${CMAKE_SOURCE_DIR}/../../common/AutoModel/modeling_qwen3_8mtp.cpp"
 )
 

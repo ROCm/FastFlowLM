@@ -17,6 +17,7 @@
 -include ../common.mk
 
 
+SOURCES += ../../common/AutoModel/model_backend.cpp
 SOURCES += ../../common/AutoModel/automodel.cpp
 SOURCES += $(CHAT_SOURCES)
 SOURCES += ../../common/AutoModel/modeling_qwen2vl.cpp
