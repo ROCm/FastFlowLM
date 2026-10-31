@@ -1,0 +1,491 @@
+design attn_prefill
+route 0 0 0 Control32 0 0 0 Controller32 0
+route 0 0 0 Control32 1 0 0 Controller32 0
+route 1 1 0 Control32 0 0 0 Controller32 0
+route 1 1 0 Control32 1 0 0 Controller32 0
+route 2 2 0 Control32 0 0 0 Controller32 0
+route 2 2 0 Control32 1 0 0 Controller32 0
+route 26 0 0 DMAControl 0 0 1 TileControl 0
+route 27 0 0 DMAControl 0 0 2 TileControl 0
+route 29 0 0 DMAControl 0 0 3 TileControl 0
+route 30 0 0 DMAControl 1 0 4 TileControl 0
+route 31 0 0 DMAControl 1 0 5 TileControl 0
+route 1 0 1 Control32 0 0 0 DMATrace 0
+route 1 0 2 Control32 0 0 0 DMATrace 0
+route 1 0 3 Control32 0 0 0 DMATrace 0
+route 1 0 4 Control32 0 0 0 DMATrace 0
+route 1 0 5 Control32 0 0 0 DMATrace 0
+route 26 1 0 DMAControl 0 1 1 TileControl 0
+route 27 1 0 DMAControl 0 1 2 TileControl 0
+route 29 1 0 DMAControl 0 1 3 TileControl 0
+route 30 1 0 DMAControl 1 1 4 TileControl 0
+route 31 1 0 DMAControl 1 1 5 TileControl 0
+route 1 1 1 Control32 0 1 0 DMATrace 0
+route 1 1 2 Control32 0 1 0 DMATrace 0
+route 1 1 3 Control32 0 1 0 DMATrace 0
+route 1 1 4 Control32 0 1 0 DMATrace 0
+route 1 1 5 Control32 0 1 0 DMATrace 0
+route 26 2 0 DMAControl 0 2 1 TileControl 0
+route 27 2 0 DMAControl 0 2 2 TileControl 0
+route 29 2 0 DMAControl 0 2 3 TileControl 0
+route 30 2 0 DMAControl 1 2 4 TileControl 0
+route 31 2 0 DMAControl 1 2 5 TileControl 0
+route 1 2 1 Control32 0 2 0 DMATrace 0
+route 1 2 2 Control32 0 2 0 DMATrace 0
+route 1 2 3 Control32 0 2 0 DMATrace 0
+route 1 2 4 Control32 0 2 0 DMATrace 0
+route 1 2 5 Control32 0 2 0 DMATrace 0
+core 0 2
+core 0 3
+core 0 4
+core 0 5
+core 1 2
+core 1 3
+core 1 4
+core 1 5
+core 2 2
+core 2 3
+core 2 4
+core 2 5
+buffer ap_kv0_0_0 0 2 32768 32768
+buffer ap_kv1_0_0 0 2 65536 32768
+buffer ap_ym_0_0 0 2 98304 8320
+buffer ap_y_0_0 0 2 4096 8320
+buffer ap_q0_0_0 0 2 106624 4096
+buffer ap_q1_0_0 0 2 12416 4096
+buffer ap_g_0_0 0 2 110720 4096
+buffer ap_s_0_0 0 2 114816 1024
+buffer ap_eye_0_0 0 2 16512 2048
+buffer ap_param_0_0 0 2 115840 32
+buffer ap_rtp_0_0 0 2 18688 32
+buffer ap_bdw_0_0 0 2 18560 64
+buffer ap_kv0_0_1 0 3 32768 32768
+buffer ap_kv1_0_1 0 3 65536 32768
+buffer ap_ym_0_1 0 3 98304 8320
+buffer ap_y_0_1 0 3 4096 8320
+buffer ap_q0_0_1 0 3 106624 4096
+buffer ap_q1_0_1 0 3 12416 4096
+buffer ap_g_0_1 0 3 110720 4096
+buffer ap_s_0_1 0 3 114816 1024
+buffer ap_eye_0_1 0 3 16512 2048
+buffer ap_param_0_1 0 3 115840 32
+buffer ap_rtp_0_1 0 3 18688 32
+buffer ap_bdw_0_1 0 3 18560 64
+buffer ap_kv0_0_2 0 4 32768 32768
+buffer ap_kv1_0_2 0 4 65536 32768
+buffer ap_ym_0_2 0 4 98304 8320
+buffer ap_y_0_2 0 4 4096 8320
+buffer ap_q0_0_2 0 4 106624 4096
+buffer ap_q1_0_2 0 4 12416 4096
+buffer ap_g_0_2 0 4 110720 4096
+buffer ap_s_0_2 0 4 114816 1024
+buffer ap_eye_0_2 0 4 16512 2048
+buffer ap_param_0_2 0 4 115840 32
+buffer ap_rtp_0_2 0 4 18688 32
+buffer ap_bdw_0_2 0 4 18560 64
+buffer ap_kv0_0_3 0 5 32768 32768
+buffer ap_kv1_0_3 0 5 65536 32768
+buffer ap_ym_0_3 0 5 98304 8320
+buffer ap_y_0_3 0 5 4096 8320
+buffer ap_q0_0_3 0 5 106624 4096
+buffer ap_q1_0_3 0 5 12416 4096
+buffer ap_g_0_3 0 5 110720 4096
+buffer ap_s_0_3 0 5 114816 1024
+buffer ap_eye_0_3 0 5 16512 2048
+buffer ap_param_0_3 0 5 115840 32
+buffer ap_rtp_0_3 0 5 18688 32
+buffer ap_bdw_0_3 0 5 18560 64
+buffer ap_kb0_0 0 1 0 32768
+buffer ap_kb1_0 0 1 131072 32768
+buffer ap_vb0_0 0 1 262144 32768
+buffer ap_vb1_0 0 1 393216 32768
+buffer ap_mparam_0 0 1 2097152 32
+buffer ap_mq0_0 0 1 524288 8192
+buffer ap_mq1_0 0 1 655360 8192
+buffer ap_mg0_0 0 1 786432 8192
+buffer ap_mg1_0 0 1 917504 8192
+buffer ap_mo0_0_0 0 1 1048576 2048
+buffer ap_mo0_1_0 0 1 1179648 2048
+buffer ap_mo1_0_0 0 1 1310720 2048
+buffer ap_mo1_1_0 0 1 1441792 2048
+buffer ap_mo2_0_0 0 1 1572864 2048
+buffer ap_mo2_1_0 0 1 1703936 2048
+buffer ap_mo3_0_0 0 1 1835008 2048
+buffer ap_mo3_1_0 0 1 1966080 2048
+buffer ap_kv0_1_0 1 2 32768 32768
+buffer ap_kv1_1_0 1 2 65536 32768
+buffer ap_ym_1_0 1 2 98304 8320
+buffer ap_y_1_0 1 2 4096 8320
+buffer ap_q0_1_0 1 2 106624 4096
+buffer ap_q1_1_0 1 2 12416 4096
+buffer ap_g_1_0 1 2 110720 4096
+buffer ap_s_1_0 1 2 114816 1024
+buffer ap_eye_1_0 1 2 16512 2048
+buffer ap_param_1_0 1 2 115840 32
+buffer ap_rtp_1_0 1 2 18688 32
+buffer ap_bdw_1_0 1 2 18560 64
+buffer ap_kv0_1_1 1 3 32768 32768
+buffer ap_kv1_1_1 1 3 65536 32768
+buffer ap_ym_1_1 1 3 98304 8320
+buffer ap_y_1_1 1 3 4096 8320
+buffer ap_q0_1_1 1 3 106624 4096
+buffer ap_q1_1_1 1 3 12416 4096
+buffer ap_g_1_1 1 3 110720 4096
+buffer ap_s_1_1 1 3 114816 1024
+buffer ap_eye_1_1 1 3 16512 2048
+buffer ap_param_1_1 1 3 115840 32
+buffer ap_rtp_1_1 1 3 18688 32
+buffer ap_bdw_1_1 1 3 18560 64
+buffer ap_kv0_1_2 1 4 32768 32768
+buffer ap_kv1_1_2 1 4 65536 32768
+buffer ap_ym_1_2 1 4 98304 8320
+buffer ap_y_1_2 1 4 4096 8320
+buffer ap_q0_1_2 1 4 106624 4096
+buffer ap_q1_1_2 1 4 12416 4096
+buffer ap_g_1_2 1 4 110720 4096
+buffer ap_s_1_2 1 4 114816 1024
+buffer ap_eye_1_2 1 4 16512 2048
+buffer ap_param_1_2 1 4 115840 32
+buffer ap_rtp_1_2 1 4 18688 32
+buffer ap_bdw_1_2 1 4 18560 64
+buffer ap_kv0_1_3 1 5 32768 32768
+buffer ap_kv1_1_3 1 5 65536 32768
+buffer ap_ym_1_3 1 5 98304 8320
+buffer ap_y_1_3 1 5 4096 8320
+buffer ap_q0_1_3 1 5 106624 4096
+buffer ap_q1_1_3 1 5 12416 4096
+buffer ap_g_1_3 1 5 110720 4096
+buffer ap_s_1_3 1 5 114816 1024
+buffer ap_eye_1_3 1 5 16512 2048
+buffer ap_param_1_3 1 5 115840 32
+buffer ap_rtp_1_3 1 5 18688 32
+buffer ap_bdw_1_3 1 5 18560 64
+buffer ap_kb0_1 1 1 0 32768
+buffer ap_kb1_1 1 1 131072 32768
+buffer ap_vb0_1 1 1 262144 32768
+buffer ap_vb1_1 1 1 393216 32768
+buffer ap_mparam_1 1 1 2097152 32
+buffer ap_mq0_1 1 1 524288 8192
+buffer ap_mq1_1 1 1 655360 8192
+buffer ap_mg0_1 1 1 786432 8192
+buffer ap_mg1_1 1 1 917504 8192
+buffer ap_mo0_0_1 1 1 1048576 2048
+buffer ap_mo0_1_1 1 1 1179648 2048
+buffer ap_mo1_0_1 1 1 1310720 2048
+buffer ap_mo1_1_1 1 1 1441792 2048
+buffer ap_mo2_0_1 1 1 1572864 2048
+buffer ap_mo2_1_1 1 1 1703936 2048
+buffer ap_mo3_0_1 1 1 1835008 2048
+buffer ap_mo3_1_1 1 1 1966080 2048
+buffer ap_kv0_2_0 2 2 32768 32768
+buffer ap_kv1_2_0 2 2 65536 32768
+buffer ap_ym_2_0 2 2 98304 8320
+buffer ap_y_2_0 2 2 4096 8320
+buffer ap_q0_2_0 2 2 106624 4096
+buffer ap_q1_2_0 2 2 12416 4096
+buffer ap_g_2_0 2 2 110720 4096
+buffer ap_s_2_0 2 2 114816 1024
+buffer ap_eye_2_0 2 2 16512 2048
+buffer ap_param_2_0 2 2 115840 32
+buffer ap_rtp_2_0 2 2 18688 32
+buffer ap_bdw_2_0 2 2 18560 64
+buffer ap_kv0_2_1 2 3 32768 32768
+buffer ap_kv1_2_1 2 3 65536 32768
+buffer ap_ym_2_1 2 3 98304 8320
+buffer ap_y_2_1 2 3 4096 8320
+buffer ap_q0_2_1 2 3 106624 4096
+buffer ap_q1_2_1 2 3 12416 4096
+buffer ap_g_2_1 2 3 110720 4096
+buffer ap_s_2_1 2 3 114816 1024
+buffer ap_eye_2_1 2 3 16512 2048
+buffer ap_param_2_1 2 3 115840 32
+buffer ap_rtp_2_1 2 3 18688 32
+buffer ap_bdw_2_1 2 3 18560 64
+buffer ap_kv0_2_2 2 4 32768 32768
+buffer ap_kv1_2_2 2 4 65536 32768
+buffer ap_ym_2_2 2 4 98304 8320
+buffer ap_y_2_2 2 4 4096 8320
+buffer ap_q0_2_2 2 4 106624 4096
+buffer ap_q1_2_2 2 4 12416 4096
+buffer ap_g_2_2 2 4 110720 4096
+buffer ap_s_2_2 2 4 114816 1024
+buffer ap_eye_2_2 2 4 16512 2048
+buffer ap_param_2_2 2 4 115840 32
+buffer ap_rtp_2_2 2 4 18688 32
+buffer ap_bdw_2_2 2 4 18560 64
+buffer ap_kv0_2_3 2 5 32768 32768
+buffer ap_kv1_2_3 2 5 65536 32768
+buffer ap_ym_2_3 2 5 98304 8320
+buffer ap_y_2_3 2 5 4096 8320
+buffer ap_q0_2_3 2 5 106624 4096
+buffer ap_q1_2_3 2 5 12416 4096
+buffer ap_g_2_3 2 5 110720 4096
+buffer ap_s_2_3 2 5 114816 1024
+buffer ap_eye_2_3 2 5 16512 2048
+buffer ap_param_2_3 2 5 115840 32
+buffer ap_rtp_2_3 2 5 18688 32
+buffer ap_bdw_2_3 2 5 18560 64
+buffer ap_kb0_2 2 1 0 32768
+buffer ap_kb1_2 2 1 131072 32768
+buffer ap_vb0_2 2 1 262144 32768
+buffer ap_vb1_2 2 1 393216 32768
+buffer ap_mparam_2 2 1 2097152 32
+buffer ap_mq0_2 2 1 524288 8192
+buffer ap_mq1_2 2 1 655360 8192
+buffer ap_mg0_2 2 1 786432 8192
+buffer ap_mg1_2 2 1 917504 8192
+buffer ap_mo0_0_2 2 1 1048576 2048
+buffer ap_mo0_1_2 2 1 1179648 2048
+buffer ap_mo1_0_2 2 1 1310720 2048
+buffer ap_mo1_1_2 2 1 1441792 2048
+buffer ap_mo2_0_2 2 1 1572864 2048
+buffer ap_mo2_1_2 2 1 1703936 2048
+buffer ap_mo3_0_2 2 1 1835008 2048
+buffer ap_mo3_1_2 2 1 1966080 2048
+lock ap_q_prod_0_0 0 2 0 2
+lock ap_q_cons_0_0 0 2 1 0
+lock ap_g_prod_0_0 0 2 2 1
+lock ap_g_cons_0_0 0 2 3 0
+lock ap_g_out_0_0 0 2 4 0
+lock ap_kv_prod_0_0 0 2 5 2
+lock ap_kv_cons_0_0 0 2 6 0
+lock ap_p_free_0_0 0 2 7 1
+lock ap_p_full_0_0 0 2 8 0
+lock ap_rtp_lock_0_0 0 2 9 0
+lock ap_bdw_lock_0_0 0 2 10 0
+lock ap_half_0_0 0 2 11 0
+lock ap_q_prod_0_1 0 3 0 2
+lock ap_q_cons_0_1 0 3 1 0
+lock ap_g_prod_0_1 0 3 2 1
+lock ap_g_cons_0_1 0 3 3 0
+lock ap_g_out_0_1 0 3 4 0
+lock ap_kv_prod_0_1 0 3 5 2
+lock ap_kv_cons_0_1 0 3 6 0
+lock ap_p_free_0_1 0 3 7 1
+lock ap_p_full_0_1 0 3 8 0
+lock ap_rtp_lock_0_1 0 3 9 0
+lock ap_bdw_lock_0_1 0 3 10 0
+lock ap_half_0_1 0 3 11 0
+lock ap_q_prod_0_2 0 4 0 2
+lock ap_q_cons_0_2 0 4 1 0
+lock ap_g_prod_0_2 0 4 2 1
+lock ap_g_cons_0_2 0 4 3 0
+lock ap_g_out_0_2 0 4 4 0
+lock ap_kv_prod_0_2 0 4 5 2
+lock ap_kv_cons_0_2 0 4 6 0
+lock ap_p_free_0_2 0 4 7 1
+lock ap_p_full_0_2 0 4 8 0
+lock ap_rtp_lock_0_2 0 4 9 0
+lock ap_bdw_lock_0_2 0 4 10 0
+lock ap_half_0_2 0 4 11 0
+lock ap_q_prod_0_3 0 5 0 2
+lock ap_q_cons_0_3 0 5 1 0
+lock ap_g_prod_0_3 0 5 2 1
+lock ap_g_cons_0_3 0 5 3 0
+lock ap_g_out_0_3 0 5 4 0
+lock ap_kv_prod_0_3 0 5 5 2
+lock ap_kv_cons_0_3 0 5 6 0
+lock ap_p_free_0_3 0 5 7 1
+lock ap_p_full_0_3 0 5 8 0
+lock ap_rtp_lock_0_3 0 5 9 0
+lock ap_bdw_lock_0_3 0 5 10 0
+lock ap_half_0_3 0 5 11 0
+lock ap_k_prod_0 0 1 0 2
+lock ap_k_cons_0 0 1 1 0
+lock ap_v_prod_0 0 1 2 8
+lock ap_v_cons_0 0 1 3 0
+lock ap_mp_free_0 0 1 4 1
+lock ap_mp_full_0 0 1 5 0
+lock ap_mq_free0_0 0 1 6 4
+lock ap_mq_free1_0 0 1 8 4
+lock ap_mq_full0_0 0 1 7 0
+lock ap_mq_full1_0 0 1 9 0
+lock ap_mg_free0_0 0 1 10 4
+lock ap_mg_free1_0 0 1 12 4
+lock ap_mg_full0_0 0 1 11 0
+lock ap_mg_full1_0 0 1 13 0
+lock ap_mo_free0_0_0 0 1 14 1
+lock ap_mo_free0_1_0 0 1 16 1
+lock ap_mo_free1_0_0 0 1 18 1
+lock ap_mo_free1_1_0 0 1 20 1
+lock ap_mo_free2_0_0 0 1 22 1
+lock ap_mo_free2_1_0 0 1 24 1
+lock ap_mo_free3_0_0 0 1 26 1
+lock ap_mo_free3_1_0 0 1 28 1
+lock ap_mo_full0_0_0 0 1 15 0
+lock ap_mo_full0_1_0 0 1 17 0
+lock ap_mo_full1_0_0 0 1 19 0
+lock ap_mo_full1_1_0 0 1 21 0
+lock ap_mo_full2_0_0 0 1 23 0
+lock ap_mo_full2_1_0 0 1 25 0
+lock ap_mo_full3_0_0 0 1 27 0
+lock ap_mo_full3_1_0 0 1 29 0
+lock ap_mhalf0_0 0 1 30 0
+lock ap_mhalf1_0 0 1 31 0
+lock ap_mhalf2_0 0 1 32 0
+lock ap_mhalf3_0 0 1 33 0
+lock ap_q_prod_1_0 1 2 0 2
+lock ap_q_cons_1_0 1 2 1 0
+lock ap_g_prod_1_0 1 2 2 1
+lock ap_g_cons_1_0 1 2 3 0
+lock ap_g_out_1_0 1 2 4 0
+lock ap_kv_prod_1_0 1 2 5 2
+lock ap_kv_cons_1_0 1 2 6 0
+lock ap_p_free_1_0 1 2 7 1
+lock ap_p_full_1_0 1 2 8 0
+lock ap_rtp_lock_1_0 1 2 9 0
+lock ap_bdw_lock_1_0 1 2 10 0
+lock ap_half_1_0 1 2 11 0
+lock ap_q_prod_1_1 1 3 0 2
+lock ap_q_cons_1_1 1 3 1 0
+lock ap_g_prod_1_1 1 3 2 1
+lock ap_g_cons_1_1 1 3 3 0
+lock ap_g_out_1_1 1 3 4 0
+lock ap_kv_prod_1_1 1 3 5 2
+lock ap_kv_cons_1_1 1 3 6 0
+lock ap_p_free_1_1 1 3 7 1
+lock ap_p_full_1_1 1 3 8 0
+lock ap_rtp_lock_1_1 1 3 9 0
+lock ap_bdw_lock_1_1 1 3 10 0
+lock ap_half_1_1 1 3 11 0
+lock ap_q_prod_1_2 1 4 0 2
+lock ap_q_cons_1_2 1 4 1 0
+lock ap_g_prod_1_2 1 4 2 1
+lock ap_g_cons_1_2 1 4 3 0
+lock ap_g_out_1_2 1 4 4 0
+lock ap_kv_prod_1_2 1 4 5 2
+lock ap_kv_cons_1_2 1 4 6 0
+lock ap_p_free_1_2 1 4 7 1
+lock ap_p_full_1_2 1 4 8 0
+lock ap_rtp_lock_1_2 1 4 9 0
+lock ap_bdw_lock_1_2 1 4 10 0
+lock ap_half_1_2 1 4 11 0
+lock ap_q_prod_1_3 1 5 0 2
+lock ap_q_cons_1_3 1 5 1 0
+lock ap_g_prod_1_3 1 5 2 1
+lock ap_g_cons_1_3 1 5 3 0
+lock ap_g_out_1_3 1 5 4 0
+lock ap_kv_prod_1_3 1 5 5 2
+lock ap_kv_cons_1_3 1 5 6 0
+lock ap_p_free_1_3 1 5 7 1
+lock ap_p_full_1_3 1 5 8 0
+lock ap_rtp_lock_1_3 1 5 9 0
+lock ap_bdw_lock_1_3 1 5 10 0
+lock ap_half_1_3 1 5 11 0
+lock ap_k_prod_1 1 1 0 2
+lock ap_k_cons_1 1 1 1 0
+lock ap_v_prod_1 1 1 2 8
+lock ap_v_cons_1 1 1 3 0
+lock ap_mp_free_1 1 1 4 1
+lock ap_mp_full_1 1 1 5 0
+lock ap_mq_free0_1 1 1 6 4
+lock ap_mq_free1_1 1 1 8 4
+lock ap_mq_full0_1 1 1 7 0
+lock ap_mq_full1_1 1 1 9 0
+lock ap_mg_free0_1 1 1 10 4
+lock ap_mg_free1_1 1 1 12 4
+lock ap_mg_full0_1 1 1 11 0
+lock ap_mg_full1_1 1 1 13 0
+lock ap_mo_free0_0_1 1 1 14 1
+lock ap_mo_free0_1_1 1 1 16 1
+lock ap_mo_free1_0_1 1 1 18 1
+lock ap_mo_free1_1_1 1 1 20 1
+lock ap_mo_free2_0_1 1 1 22 1
+lock ap_mo_free2_1_1 1 1 24 1
+lock ap_mo_free3_0_1 1 1 26 1
+lock ap_mo_free3_1_1 1 1 28 1
+lock ap_mo_full0_0_1 1 1 15 0
+lock ap_mo_full0_1_1 1 1 17 0
+lock ap_mo_full1_0_1 1 1 19 0
+lock ap_mo_full1_1_1 1 1 21 0
+lock ap_mo_full2_0_1 1 1 23 0
+lock ap_mo_full2_1_1 1 1 25 0
+lock ap_mo_full3_0_1 1 1 27 0
+lock ap_mo_full3_1_1 1 1 29 0
+lock ap_mhalf0_1 1 1 30 0
+lock ap_mhalf1_1 1 1 31 0
+lock ap_mhalf2_1 1 1 32 0
+lock ap_mhalf3_1 1 1 33 0
+lock ap_q_prod_2_0 2 2 0 2
+lock ap_q_cons_2_0 2 2 1 0
+lock ap_g_prod_2_0 2 2 2 1
+lock ap_g_cons_2_0 2 2 3 0
+lock ap_g_out_2_0 2 2 4 0
+lock ap_kv_prod_2_0 2 2 5 2
+lock ap_kv_cons_2_0 2 2 6 0
+lock ap_p_free_2_0 2 2 7 1
+lock ap_p_full_2_0 2 2 8 0
+lock ap_rtp_lock_2_0 2 2 9 0
+lock ap_bdw_lock_2_0 2 2 10 0
+lock ap_half_2_0 2 2 11 0
+lock ap_q_prod_2_1 2 3 0 2
+lock ap_q_cons_2_1 2 3 1 0
+lock ap_g_prod_2_1 2 3 2 1
+lock ap_g_cons_2_1 2 3 3 0
+lock ap_g_out_2_1 2 3 4 0
+lock ap_kv_prod_2_1 2 3 5 2
+lock ap_kv_cons_2_1 2 3 6 0
+lock ap_p_free_2_1 2 3 7 1
+lock ap_p_full_2_1 2 3 8 0
+lock ap_rtp_lock_2_1 2 3 9 0
+lock ap_bdw_lock_2_1 2 3 10 0
+lock ap_half_2_1 2 3 11 0
+lock ap_q_prod_2_2 2 4 0 2
+lock ap_q_cons_2_2 2 4 1 0
+lock ap_g_prod_2_2 2 4 2 1
+lock ap_g_cons_2_2 2 4 3 0
+lock ap_g_out_2_2 2 4 4 0
+lock ap_kv_prod_2_2 2 4 5 2
+lock ap_kv_cons_2_2 2 4 6 0
+lock ap_p_free_2_2 2 4 7 1
+lock ap_p_full_2_2 2 4 8 0
+lock ap_rtp_lock_2_2 2 4 9 0
+lock ap_bdw_lock_2_2 2 4 10 0
+lock ap_half_2_2 2 4 11 0
+lock ap_q_prod_2_3 2 5 0 2
+lock ap_q_cons_2_3 2 5 1 0
+lock ap_g_prod_2_3 2 5 2 1
+lock ap_g_cons_2_3 2 5 3 0
+lock ap_g_out_2_3 2 5 4 0
+lock ap_kv_prod_2_3 2 5 5 2
+lock ap_kv_cons_2_3 2 5 6 0
+lock ap_p_free_2_3 2 5 7 1
+lock ap_p_full_2_3 2 5 8 0
+lock ap_rtp_lock_2_3 2 5 9 0
+lock ap_bdw_lock_2_3 2 5 10 0
+lock ap_half_2_3 2 5 11 0
+lock ap_k_prod_2 2 1 0 2
+lock ap_k_cons_2 2 1 1 0
+lock ap_v_prod_2 2 1 2 8
+lock ap_v_cons_2 2 1 3 0
+lock ap_mp_free_2 2 1 4 1
+lock ap_mp_full_2 2 1 5 0
+lock ap_mq_free0_2 2 1 6 4
+lock ap_mq_free1_2 2 1 8 4
+lock ap_mq_full0_2 2 1 7 0
+lock ap_mq_full1_2 2 1 9 0
+lock ap_mg_free0_2 2 1 10 4
+lock ap_mg_free1_2 2 1 12 4
+lock ap_mg_full0_2 2 1 11 0
+lock ap_mg_full1_2 2 1 13 0
+lock ap_mo_free0_0_2 2 1 14 1
+lock ap_mo_free0_1_2 2 1 16 1
+lock ap_mo_free1_0_2 2 1 18 1
+lock ap_mo_free1_1_2 2 1 20 1
+lock ap_mo_free2_0_2 2 1 22 1
+lock ap_mo_free2_1_2 2 1 24 1
+lock ap_mo_free3_0_2 2 1 26 1
+lock ap_mo_free3_1_2 2 1 28 1
+lock ap_mo_full0_0_2 2 1 15 0
+lock ap_mo_full0_1_2 2 1 17 0
+lock ap_mo_full1_0_2 2 1 19 0
+lock ap_mo_full1_1_2 2 1 21 0
+lock ap_mo_full2_0_2 2 1 23 0
+lock ap_mo_full2_1_2 2 1 25 0
+lock ap_mo_full3_0_2 2 1 27 0
+lock ap_mo_full3_1_2 2 1 29 0
+lock ap_mhalf0_2 2 1 30 0
+lock ap_mhalf1_2 2 1 31 0
+lock ap_mhalf2_2 2 1 32 0
+lock ap_mhalf3_2 2 1 33 0
+trace 0

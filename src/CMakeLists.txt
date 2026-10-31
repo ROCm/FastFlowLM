@@ -119,13 +119,18 @@ set_property(CACHE FLM_NPU_PLATFORM PROPERTY STRINGS aie2p aie_next)
 set(FLM_NEXT_ENGINE_LIBS "")
 set(FLM_ENGINE_RPATH "${FLM_ENGINE_LIB_DIR}")
 if(FLM_NPU_PLATFORM STREQUAL "aie_next")
-    if(FLM_USE_HRX OR WIN32)
-        message(FATAL_ERROR "FLM_NPU_PLATFORM=aie_next is Linux/XRT only for now")
+    if(FLM_USE_HRX)
+        message(FATAL_ERROR "FLM_NPU_PLATFORM=aie_next is XRT only for now")
     endif()
     set(FLM_NEXT_ENGINE_LIB_DIR "${FLM_ENGINE_LIB_DIR}/aie_next")
-    file(GLOB FLM_NEXT_ENGINE_LIBS "${FLM_NEXT_ENGINE_LIB_DIR}/*.so")
+    # Windows: the import libs; their DLLs beside them have the aie2p engines' names
+    if(WIN32)
+        file(GLOB FLM_NEXT_ENGINE_LIBS "${FLM_NEXT_ENGINE_LIB_DIR}/*.lib")
+    else()
+        file(GLOB FLM_NEXT_ENGINE_LIBS "${FLM_NEXT_ENGINE_LIB_DIR}/*.so")
+    endif()
     if(NOT FLM_NEXT_ENGINE_LIBS)
-        message(FATAL_ERROR "FLM_NPU_PLATFORM=aie_next but ${FLM_NEXT_ENGINE_LIB_DIR} has no engine .so")
+        message(FATAL_ERROR "FLM_NPU_PLATFORM=aie_next but ${FLM_NEXT_ENGINE_LIB_DIR} has no engine library")
     endif()
     add_compile_definitions(FLM_NPU_AIE_NEXT=1)
     message(STATUS "FLM NPU platform: aie_next (engines from ${FLM_NEXT_ENGINE_LIB_DIR})")
@@ -737,7 +742,7 @@ endif()
 # ———————————————————————————————————————————————
 # Copy the build flm.exe into the out directory (for local dev)
 # ———————————————————————————————————————————————
-if(WIN32)
+if(WIN32 AND NOT FLM_NPU_PLATFORM STREQUAL "aie_next")
     add_custom_command(TARGET flm POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy
             $<TARGET_FILE:flm>
@@ -888,6 +893,7 @@ if(WIN32)
     install(RUNTIME_DEPENDENCY_SET fastflowlm_runtime_dependencies
         DESTINATION bin
         DIRECTORIES
+            ${FLM_NEXT_ENGINE_LIB_DIR}  # aie_next engines first, so they win (empty on aie2p)
             "${FLM_ENGINE_LIB_DIR}"
             "${CMAKE_SOURCE_DIR}/lib"
             "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin"

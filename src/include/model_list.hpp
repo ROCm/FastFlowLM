@@ -446,6 +446,10 @@ class model_list {
         ///       not part of the entry -- by the time AutoModel sees the entry,
         ///       the name it came from is gone. The generation, by contrast, is
         ///       settled once the entry is kept, so its key is erased.
+        /// \note "platform_sources" maps a generation to a JSON merge patch over
+        ///       the entry, for a model whose weights differ by generation (its
+        ///       own revision, and its own folder so the two never mix on disk).
+        ///       It is applied here, where the generation is known, and erased.
         void apply_support_filter() {
             std::vector<std::string> empty_families;
 
@@ -462,6 +466,12 @@ class model_list {
                     }
                     model_info.erase("supported_platforms");
                     model_info["backend"] = backend;
+                    if (const auto sources = model_info.find("platform_sources");
+                        sources != model_info.end()) {
+                        const nlohmann::json overlay = sources->value(this->platform_, nlohmann::json());
+                        model_info.erase(sources);
+                        if (!overlay.is_null()) model_info.merge_patch(overlay);
+                    }
                 }
 
                 for (const auto& size : unsupported_sizes) model_subset.erase(size);

@@ -426,7 +426,17 @@
                 "footprint": 3.1
             },
             "4b": {
-                "supported_platforms": ["aie2p"],
+                "supported_platforms": ["aie2p", "dev04"],
+                "platform_sources": {
+                    "dev04": {
+                        "name": "Qwen3.5-4B-NPU2-dev04",
+                        "model_info_key": "qwen3.5:4b-dev04",
+                        "url": "https://huggingface.co/FastFlowLM/Qwen3.5-4B-NPU2/resolve/aie_next",
+                        "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.5-4B-NPU2/tree/aie_next",
+                        "ms_url": null,
+                        "size": 4391342000
+                    }
+                },
                 "name": "Qwen3.5-4B-NPU2",
                 "url": "https://huggingface.co/FastFlowLM/Qwen3.5-4B-NPU2/resolve/flm_q4k_high_precision",
                 "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.5-4B-NPU2/tree/flm_q4k_high_precision",
@@ -532,6 +542,16 @@
         "qwen3.6-moe": {
             "35b-a3b": {
                 "supported_platforms": ["aie2p", "dev04"],
+                "platform_sources": {
+                    "dev04": {
+                        "name": "Qwen3.6-35B-A3B-NPU2-dev04",
+                        "model_info_key": "qwen3.6-moe:35b-a3b-dev04",
+                        "url": "https://huggingface.co/FastFlowLM/Qwen3.6-35B-A3B-NPU2/resolve/aie_next",
+                        "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.6-35B-A3B-NPU2/tree/aie_next",
+                        "ms_url": null,
+                        "size": 21780000000
+                    }
+                },
                 "name": "Qwen3.6-35B-A3B-NPU2",
                 "url": "https://huggingface.co/FastFlowLM/Qwen3.6-35B-A3B-NPU2/resolve/flm_q4k_high_precision",
                 "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.6-35B-A3B-NPU2/tree/flm_q4k_high_precision",

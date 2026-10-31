@@ -1,0 +1,389 @@
+design qk_norm_rope
+route 0 0 0 Control32 0 0 0 Controller32 0
+route 0 0 0 Control32 1 0 0 Controller32 0
+route 1 1 0 Control32 0 0 0 Controller32 0
+route 1 1 0 Control32 1 0 0 Controller32 0
+route 2 2 0 Control32 0 0 0 Controller32 0
+route 2 2 0 Control32 1 0 0 Controller32 0
+route 26 0 0 DMAControl 0 0 1 TileControl 0
+route 27 0 0 DMAControl 0 0 2 TileControl 0
+route 29 0 0 DMAControl 0 0 3 TileControl 0
+route 30 0 0 DMAControl 1 0 4 TileControl 0
+route 31 0 0 DMAControl 1 0 5 TileControl 0
+route 1 0 1 Control32 0 0 0 DMATrace 0
+route 1 0 2 Control32 0 0 0 DMATrace 0
+route 1 0 3 Control32 0 0 0 DMATrace 0
+route 1 0 4 Control32 0 0 0 DMATrace 0
+route 1 0 5 Control32 0 0 0 DMATrace 0
+route 26 1 0 DMAControl 0 1 1 TileControl 0
+route 27 1 0 DMAControl 0 1 2 TileControl 0
+route 29 1 0 DMAControl 0 1 3 TileControl 0
+route 30 1 0 DMAControl 1 1 4 TileControl 0
+route 31 1 0 DMAControl 1 1 5 TileControl 0
+route 1 1 1 Control32 0 1 0 DMATrace 0
+route 1 1 2 Control32 0 1 0 DMATrace 0
+route 1 1 3 Control32 0 1 0 DMATrace 0
+route 1 1 4 Control32 0 1 0 DMATrace 0
+route 1 1 5 Control32 0 1 0 DMATrace 0
+route 26 2 0 DMAControl 0 2 1 TileControl 0
+route 27 2 0 DMAControl 0 2 2 TileControl 0
+route 29 2 0 DMAControl 0 2 3 TileControl 0
+route 30 2 0 DMAControl 1 2 4 TileControl 0
+route 31 2 0 DMAControl 1 2 5 TileControl 0
+route 1 2 1 Control32 0 2 0 DMATrace 0
+route 1 2 2 Control32 0 2 0 DMATrace 0
+route 1 2 3 Control32 0 2 0 DMATrace 0
+route 1 2 4 Control32 0 2 0 DMATrace 0
+route 1 2 5 Control32 0 2 0 DMATrace 0
+core 0 2
+core 0 3
+core 0 4
+core 0 5
+core 1 2
+core 1 3
+core 1 4
+core 1 5
+core 2 2
+core 2 3
+core 2 4
+core 2 5
+buffer qr_qa0_0_0 0 2 2048 8192
+buffer qr_qa1_0_0 0 2 32768 8192
+buffer qr_w_0_0 0 2 65536 512
+buffer qr_ro0_0_0 0 2 98304 128
+buffer qr_ro1_0_0 0 2 10240 128
+buffer qr_qa0_0_1 0 3 2048 8192
+buffer qr_qa1_0_1 0 3 32768 8192
+buffer qr_w_0_1 0 3 65536 512
+buffer qr_ro0_0_1 0 3 98304 128
+buffer qr_ro1_0_1 0 3 10240 128
+buffer qr_qa0_0_2 0 4 2048 8192
+buffer qr_qa1_0_2 0 4 32768 8192
+buffer qr_w_0_2 0 4 65536 512
+buffer qr_ro0_0_2 0 4 98304 128
+buffer qr_ro1_0_2 0 4 10240 128
+buffer qr_param_0_3 0 5 2816 32
+buffer qr_ka0_0_3 0 5 2048 512
+buffer qr_ka1_0_3 0 5 32768 512
+buffer qr_ka2_0_3 0 5 65536 512
+buffer qr_w_0_3 0 5 98304 512
+buffer qr_ro0_0_3 0 5 33280 128
+buffer qr_ro1_0_3 0 5 66048 128
+buffer qr_rtp_0_3 0 5 98816 64
+buffer qr_bdw_0_3 0 5 2560 256
+buffer qr_mq0_0 0 1 0 8192
+buffer qr_mq1_0 0 1 131072 8192
+buffer qr_mq2_0 0 1 262144 8192
+buffer qr_mq3_0 0 1 393216 8192
+buffer qr_mq4_0 0 1 524288 8192
+buffer qr_mq5_0 0 1 655360 8192
+buffer qr_mr0_0 0 1 1703936 128
+buffer qr_mr1_0 0 1 1835008 128
+buffer qr_mr2_0 0 1 1966080 128
+buffer qr_mr3_0 0 1 2097152 128
+buffer qr_mr4_0 0 1 2228224 128
+buffer qr_mr5_0 0 1 2359296 128
+buffer qr_mw_0 0 1 1572864 512
+buffer qr_mo0_0_0 0 1 786432 8192
+buffer qr_mo0_1_0 0 1 917504 8192
+buffer qr_mo1_0_0 0 1 1048576 8192
+buffer qr_mo1_1_0 0 1 1179648 8192
+buffer qr_mo2_0_0 0 1 1310720 8192
+buffer qr_mo2_1_0 0 1 1441792 8192
+buffer qr_qa0_1_0 1 2 2048 8192
+buffer qr_qa1_1_0 1 2 32768 8192
+buffer qr_w_1_0 1 2 65536 512
+buffer qr_ro0_1_0 1 2 98304 128
+buffer qr_ro1_1_0 1 2 10240 128
+buffer qr_qa0_1_1 1 3 2048 8192
+buffer qr_qa1_1_1 1 3 32768 8192
+buffer qr_w_1_1 1 3 65536 512
+buffer qr_ro0_1_1 1 3 98304 128
+buffer qr_ro1_1_1 1 3 10240 128
+buffer qr_qa0_1_2 1 4 2048 8192
+buffer qr_qa1_1_2 1 4 32768 8192
+buffer qr_w_1_2 1 4 65536 512
+buffer qr_ro0_1_2 1 4 98304 128
+buffer qr_ro1_1_2 1 4 10240 128
+buffer qr_param_1_3 1 5 2816 32
+buffer qr_ka0_1_3 1 5 2048 512
+buffer qr_ka1_1_3 1 5 32768 512
+buffer qr_ka2_1_3 1 5 65536 512
+buffer qr_w_1_3 1 5 98304 512
+buffer qr_ro0_1_3 1 5 33280 128
+buffer qr_ro1_1_3 1 5 66048 128
+buffer qr_rtp_1_3 1 5 98816 64
+buffer qr_bdw_1_3 1 5 2560 256
+buffer qr_mq0_1 1 1 0 8192
+buffer qr_mq1_1 1 1 131072 8192
+buffer qr_mq2_1 1 1 262144 8192
+buffer qr_mq3_1 1 1 393216 8192
+buffer qr_mq4_1 1 1 524288 8192
+buffer qr_mq5_1 1 1 655360 8192
+buffer qr_mr0_1 1 1 1703936 128
+buffer qr_mr1_1 1 1 1835008 128
+buffer qr_mr2_1 1 1 1966080 128
+buffer qr_mr3_1 1 1 2097152 128
+buffer qr_mr4_1 1 1 2228224 128
+buffer qr_mr5_1 1 1 2359296 128
+buffer qr_mw_1 1 1 1572864 512
+buffer qr_mo0_0_1 1 1 786432 8192
+buffer qr_mo0_1_1 1 1 917504 8192
+buffer qr_mo1_0_1 1 1 1048576 8192
+buffer qr_mo1_1_1 1 1 1179648 8192
+buffer qr_mo2_0_1 1 1 1310720 8192
+buffer qr_mo2_1_1 1 1 1441792 8192
+buffer qr_qa0_2_0 2 2 2048 8192
+buffer qr_qa1_2_0 2 2 32768 8192
+buffer qr_w_2_0 2 2 65536 512
+buffer qr_ro0_2_0 2 2 98304 128
+buffer qr_ro1_2_0 2 2 10240 128
+buffer qr_qa0_2_1 2 3 2048 8192
+buffer qr_qa1_2_1 2 3 32768 8192
+buffer qr_w_2_1 2 3 65536 512
+buffer qr_ro0_2_1 2 3 98304 128
+buffer qr_ro1_2_1 2 3 10240 128
+buffer qr_qa0_2_2 2 4 2048 8192
+buffer qr_qa1_2_2 2 4 32768 8192
+buffer qr_w_2_2 2 4 65536 512
+buffer qr_ro0_2_2 2 4 98304 128
+buffer qr_ro1_2_2 2 4 10240 128
+buffer qr_param_2_3 2 5 2816 32
+buffer qr_ka0_2_3 2 5 2048 512
+buffer qr_ka1_2_3 2 5 32768 512
+buffer qr_ka2_2_3 2 5 65536 512
+buffer qr_w_2_3 2 5 98304 512
+buffer qr_ro0_2_3 2 5 33280 128
+buffer qr_ro1_2_3 2 5 66048 128
+buffer qr_rtp_2_3 2 5 98816 64
+buffer qr_bdw_2_3 2 5 2560 256
+buffer qr_mq0_2 2 1 0 8192
+buffer qr_mq1_2 2 1 131072 8192
+buffer qr_mq2_2 2 1 262144 8192
+buffer qr_mq3_2 2 1 393216 8192
+buffer qr_mq4_2 2 1 524288 8192
+buffer qr_mq5_2 2 1 655360 8192
+buffer qr_mr0_2 2 1 1703936 128
+buffer qr_mr1_2 2 1 1835008 128
+buffer qr_mr2_2 2 1 1966080 128
+buffer qr_mr3_2 2 1 2097152 128
+buffer qr_mr4_2 2 1 2228224 128
+buffer qr_mr5_2 2 1 2359296 128
+buffer qr_mw_2 2 1 1572864 512
+buffer qr_mo0_0_2 2 1 786432 8192
+buffer qr_mo0_1_2 2 1 917504 8192
+buffer qr_mo1_0_2 2 1 1048576 8192
+buffer qr_mo1_1_2 2 1 1179648 8192
+buffer qr_mo2_0_2 2 1 1310720 8192
+buffer qr_mo2_1_2 2 1 1441792 8192
+lock qr_q_free_0_0 0 2 0 2
+lock qr_q_full_0_0 0 2 1 0
+lock qr_q_done_0_0 0 2 2 0
+lock qr_r_free_0_0 0 2 3 2
+lock qr_r_full_0_0 0 2 4 0
+lock qr_w_free_0_0 0 2 5 1
+lock qr_w_full_0_0 0 2 6 0
+lock qr_q_free_0_1 0 3 0 2
+lock qr_q_full_0_1 0 3 1 0
+lock qr_q_done_0_1 0 3 2 0
+lock qr_r_free_0_1 0 3 3 2
+lock qr_r_full_0_1 0 3 4 0
+lock qr_w_free_0_1 0 3 5 1
+lock qr_w_full_0_1 0 3 6 0
+lock qr_q_free_0_2 0 4 0 2
+lock qr_q_full_0_2 0 4 1 0
+lock qr_q_done_0_2 0 4 2 0
+lock qr_r_free_0_2 0 4 3 2
+lock qr_r_full_0_2 0 4 4 0
+lock qr_w_free_0_2 0 4 5 1
+lock qr_w_full_0_2 0 4 6 0
+lock qr_q_free_0_3 0 5 0 3
+lock qr_q_full_0_3 0 5 1 0
+lock qr_q_done_0_3 0 5 2 0
+lock qr_r_free_0_3 0 5 3 2
+lock qr_r_full_0_3 0 5 4 0
+lock qr_w_free_0_3 0 5 5 1
+lock qr_w_full_0_3 0 5 6 0
+lock qr_p_free_0_3 0 5 7 1
+lock qr_p_full_0_3 0 5 8 0
+lock qr_rtp_lock_0_3 0 5 9 0
+lock qr_bdw_lock_0_3 0 5 10 0
+lock qr_mq_free0_0 0 1 0 1
+lock qr_mq_free1_0 0 1 2 1
+lock qr_mq_free2_0 0 1 4 1
+lock qr_mq_free3_0 0 1 6 1
+lock qr_mq_free4_0 0 1 8 1
+lock qr_mq_free5_0 0 1 10 1
+lock qr_mq_full0_0 0 1 1 0
+lock qr_mq_full1_0 0 1 3 0
+lock qr_mq_full2_0 0 1 5 0
+lock qr_mq_full3_0 0 1 7 0
+lock qr_mq_full4_0 0 1 9 0
+lock qr_mq_full5_0 0 1 11 0
+lock qr_mr_free0_0 0 1 12 1
+lock qr_mr_free1_0 0 1 14 1
+lock qr_mr_free2_0 0 1 16 1
+lock qr_mr_free3_0 0 1 18 1
+lock qr_mr_free4_0 0 1 20 1
+lock qr_mr_free5_0 0 1 22 1
+lock qr_mr_full0_0 0 1 13 0
+lock qr_mr_full1_0 0 1 15 0
+lock qr_mr_full2_0 0 1 17 0
+lock qr_mr_full3_0 0 1 19 0
+lock qr_mr_full4_0 0 1 21 0
+lock qr_mr_full5_0 0 1 23 0
+lock qr_mw_free_0 0 1 24 1
+lock qr_mw_full_0 0 1 25 0
+lock qr_mo_free0_0_0 0 1 26 1
+lock qr_mo_free0_1_0 0 1 28 1
+lock qr_mo_free1_0_0 0 1 30 1
+lock qr_mo_free1_1_0 0 1 32 1
+lock qr_mo_free2_0_0 0 1 34 1
+lock qr_mo_free2_1_0 0 1 36 1
+lock qr_mo_full0_0_0 0 1 27 0
+lock qr_mo_full0_1_0 0 1 29 0
+lock qr_mo_full1_0_0 0 1 31 0
+lock qr_mo_full1_1_0 0 1 33 0
+lock qr_mo_full2_0_0 0 1 35 0
+lock qr_mo_full2_1_0 0 1 37 0
+lock qr_q_free_1_0 1 2 0 2
+lock qr_q_full_1_0 1 2 1 0
+lock qr_q_done_1_0 1 2 2 0
+lock qr_r_free_1_0 1 2 3 2
+lock qr_r_full_1_0 1 2 4 0
+lock qr_w_free_1_0 1 2 5 1
+lock qr_w_full_1_0 1 2 6 0
+lock qr_q_free_1_1 1 3 0 2
+lock qr_q_full_1_1 1 3 1 0
+lock qr_q_done_1_1 1 3 2 0
+lock qr_r_free_1_1 1 3 3 2
+lock qr_r_full_1_1 1 3 4 0
+lock qr_w_free_1_1 1 3 5 1
+lock qr_w_full_1_1 1 3 6 0
+lock qr_q_free_1_2 1 4 0 2
+lock qr_q_full_1_2 1 4 1 0
+lock qr_q_done_1_2 1 4 2 0
+lock qr_r_free_1_2 1 4 3 2
+lock qr_r_full_1_2 1 4 4 0
+lock qr_w_free_1_2 1 4 5 1
+lock qr_w_full_1_2 1 4 6 0
+lock qr_q_free_1_3 1 5 0 3
+lock qr_q_full_1_3 1 5 1 0
+lock qr_q_done_1_3 1 5 2 0
+lock qr_r_free_1_3 1 5 3 2
+lock qr_r_full_1_3 1 5 4 0
+lock qr_w_free_1_3 1 5 5 1
+lock qr_w_full_1_3 1 5 6 0
+lock qr_p_free_1_3 1 5 7 1
+lock qr_p_full_1_3 1 5 8 0
+lock qr_rtp_lock_1_3 1 5 9 0
+lock qr_bdw_lock_1_3 1 5 10 0
+lock qr_mq_free0_1 1 1 0 1
+lock qr_mq_free1_1 1 1 2 1
+lock qr_mq_free2_1 1 1 4 1
+lock qr_mq_free3_1 1 1 6 1
+lock qr_mq_free4_1 1 1 8 1
+lock qr_mq_free5_1 1 1 10 1
+lock qr_mq_full0_1 1 1 1 0
+lock qr_mq_full1_1 1 1 3 0
+lock qr_mq_full2_1 1 1 5 0
+lock qr_mq_full3_1 1 1 7 0
+lock qr_mq_full4_1 1 1 9 0
+lock qr_mq_full5_1 1 1 11 0
+lock qr_mr_free0_1 1 1 12 1
+lock qr_mr_free1_1 1 1 14 1
+lock qr_mr_free2_1 1 1 16 1
+lock qr_mr_free3_1 1 1 18 1
+lock qr_mr_free4_1 1 1 20 1
+lock qr_mr_free5_1 1 1 22 1
+lock qr_mr_full0_1 1 1 13 0
+lock qr_mr_full1_1 1 1 15 0
+lock qr_mr_full2_1 1 1 17 0
+lock qr_mr_full3_1 1 1 19 0
+lock qr_mr_full4_1 1 1 21 0
+lock qr_mr_full5_1 1 1 23 0
+lock qr_mw_free_1 1 1 24 1
+lock qr_mw_full_1 1 1 25 0
+lock qr_mo_free0_0_1 1 1 26 1
+lock qr_mo_free0_1_1 1 1 28 1
+lock qr_mo_free1_0_1 1 1 30 1
+lock qr_mo_free1_1_1 1 1 32 1
+lock qr_mo_free2_0_1 1 1 34 1
+lock qr_mo_free2_1_1 1 1 36 1
+lock qr_mo_full0_0_1 1 1 27 0
+lock qr_mo_full0_1_1 1 1 29 0
+lock qr_mo_full1_0_1 1 1 31 0
+lock qr_mo_full1_1_1 1 1 33 0
+lock qr_mo_full2_0_1 1 1 35 0
+lock qr_mo_full2_1_1 1 1 37 0
+lock qr_q_free_2_0 2 2 0 2
+lock qr_q_full_2_0 2 2 1 0
+lock qr_q_done_2_0 2 2 2 0
+lock qr_r_free_2_0 2 2 3 2
+lock qr_r_full_2_0 2 2 4 0
+lock qr_w_free_2_0 2 2 5 1
+lock qr_w_full_2_0 2 2 6 0
+lock qr_q_free_2_1 2 3 0 2
+lock qr_q_full_2_1 2 3 1 0
+lock qr_q_done_2_1 2 3 2 0
+lock qr_r_free_2_1 2 3 3 2
+lock qr_r_full_2_1 2 3 4 0
+lock qr_w_free_2_1 2 3 5 1
+lock qr_w_full_2_1 2 3 6 0
+lock qr_q_free_2_2 2 4 0 2
+lock qr_q_full_2_2 2 4 1 0
+lock qr_q_done_2_2 2 4 2 0
+lock qr_r_free_2_2 2 4 3 2
+lock qr_r_full_2_2 2 4 4 0
+lock qr_w_free_2_2 2 4 5 1
+lock qr_w_full_2_2 2 4 6 0
+lock qr_q_free_2_3 2 5 0 3
+lock qr_q_full_2_3 2 5 1 0
+lock qr_q_done_2_3 2 5 2 0
+lock qr_r_free_2_3 2 5 3 2
+lock qr_r_full_2_3 2 5 4 0
+lock qr_w_free_2_3 2 5 5 1
+lock qr_w_full_2_3 2 5 6 0
+lock qr_p_free_2_3 2 5 7 1
+lock qr_p_full_2_3 2 5 8 0
+lock qr_rtp_lock_2_3 2 5 9 0
+lock qr_bdw_lock_2_3 2 5 10 0
+lock qr_mq_free0_2 2 1 0 1
+lock qr_mq_free1_2 2 1 2 1
+lock qr_mq_free2_2 2 1 4 1
+lock qr_mq_free3_2 2 1 6 1
+lock qr_mq_free4_2 2 1 8 1
+lock qr_mq_free5_2 2 1 10 1
+lock qr_mq_full0_2 2 1 1 0
+lock qr_mq_full1_2 2 1 3 0
+lock qr_mq_full2_2 2 1 5 0
+lock qr_mq_full3_2 2 1 7 0
+lock qr_mq_full4_2 2 1 9 0
+lock qr_mq_full5_2 2 1 11 0
+lock qr_mr_free0_2 2 1 12 1
+lock qr_mr_free1_2 2 1 14 1
+lock qr_mr_free2_2 2 1 16 1
+lock qr_mr_free3_2 2 1 18 1
+lock qr_mr_free4_2 2 1 20 1
+lock qr_mr_free5_2 2 1 22 1
+lock qr_mr_full0_2 2 1 13 0
+lock qr_mr_full1_2 2 1 15 0
+lock qr_mr_full2_2 2 1 17 0
+lock qr_mr_full3_2 2 1 19 0
+lock qr_mr_full4_2 2 1 21 0
+lock qr_mr_full5_2 2 1 23 0
+lock qr_mw_free_2 2 1 24 1
+lock qr_mw_full_2 2 1 25 0
+lock qr_mo_free0_0_2 2 1 26 1
+lock qr_mo_free0_1_2 2 1 28 1
+lock qr_mo_free1_0_2 2 1 30 1
+lock qr_mo_free1_1_2 2 1 32 1
+lock qr_mo_free2_0_2 2 1 34 1
+lock qr_mo_free2_1_2 2 1 36 1
+lock qr_mo_full0_0_2 2 1 27 0
+lock qr_mo_full0_1_2 2 1 29 0
+lock qr_mo_full1_0_2 2 1 31 0
+lock qr_mo_full1_1_2 2 1 33 0
+lock qr_mo_full2_0_2 2 1 35 0
+lock qr_mo_full2_1_2 2 1 37 0
+trace 0

@@ -32,7 +32,11 @@
 #include "models/qwen2vl/flm/aie2p/qwen2vl_npu.hpp"
 #include "models/qwen3vl/flm/aie2p/qwen3vl_npu.hpp"
 #include "models/qwen3vl_flash/flm/aie2p/qwen3vl_flash.hpp"
+#if defined(FLM_NPU_AIE_NEXT)
+#include "models/qwen3_5vl/flm/aie_next/qwen3_5vl_npu.hpp"
+#else
 #include "models/qwen3_5vl/flm/aie2p/qwen3_5vl_npu.hpp"
+#endif
 #include "models/minicpm_v_4_7/flm/aie2p/minicpm_v_4_7_npu.hpp"
 #if defined(FLM_NPU_AIE_NEXT)
 #include "models/qwen3_6_moe/flm/aie_next/qwen3_6_moe_npu.hpp"
