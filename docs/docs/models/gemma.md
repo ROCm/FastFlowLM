@@ -10,6 +10,7 @@ parent: Models
 - **Type:** Text-to-Text
 - **Think:** No
 - **Tool Calling Support:** No  
+- **Prefix cache (server mode):** Yes; Gemma 3 puts the system prompt in the first user turn, so each conversation reuses its own earlier turns (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
 - **Base Model:** [google/gemma-3-1b-it](https://huggingface.co/google/gemma-3-1b-it)
 - **Quantization:** Q4_1
 - **Max Context Length:** 32k tokens  
@@ -29,6 +30,7 @@ flm run gemma3:1b
 - **Type:** Image-Text-to-Text
 - **Think:** No
 - **Tool Calling Support:** No  
+- **Prefix cache (server mode):** Yes; Gemma 3 puts the system prompt in the first user turn, so each conversation reuses its own earlier turns (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
 - **Base Model:** [google/gemma-3-4b-it](https://huggingface.co/google/gemma-3-4b-it)
 - **Quantization:** Q4_1
 - **Max Context Length:** 128k tokens  
@@ -54,6 +56,7 @@ flm run gemma3:4b
 - **Type:** Any-to-Text
 - **Think:** Toggleable
 - **Tool Calling Support:** Yes  
+- **Prefix cache (server mode):** Yes for text prompts; a prompt with a picture or audio keeps the older single-checkpoint reuse (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
 - **Base Model:** [google/gemma-4-E2B-it](https://huggingface.co/google/gemma-4-E2B-it)
 - **Quantization:** Q4_1
 - **Max Context Length:** 128k tokens  
@@ -91,6 +94,7 @@ flm run gemma4-it:e2b
 - **Type:** Any-to-Text
 - **Think:** Toggleable
 - **Tool Calling Support:** Yes  
+- **Prefix cache (server mode):** Yes for text prompts; a prompt with a picture or audio keeps the older single-checkpoint reuse (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
 - **Base Model:** [google/gemma-4-E4B-it](https://huggingface.co/google/gemma-4-E4B-it)
 - **Quantization:** Q4_1
 - **Max Context Length:** 128k tokens  
@@ -128,6 +132,7 @@ flm run gemma4-it:e4b
 - **Type:** Any-to-Text
 - **Think:** Toggleable
 - **Tool Calling Support:** Yes  
+- **Prefix cache (server mode):** Yes for text prompts; a prompt with a picture or audio keeps the older single-checkpoint reuse (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
 - **Base Model:** [google/gemma-4-12B-it](https://huggingface.co/google/gemma-4-12B-it-qat-q4_0-unquantized)
 - **Quantization:** Q4_0
 - **Max Context Length:** 128k tokens  

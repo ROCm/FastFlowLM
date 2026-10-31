@@ -156,3 +156,9 @@ public:
     /// \brief Fill logprobs from this->logits, which must still hold the raw copy
     void raw_logprobs_apply(sample_logprobs_t& logprobs);
 };
+
+/// \brief Fill logprobs with the normaliser and top tokens of one row of raw logits
+/// \param logits n logits, read only
+/// \note What sample() reports, for logits that never pass through it (an
+///       engine's speculative tokens)
+void raw_logprobs(const float* logits, int n, sample_logprobs_t& logprobs);

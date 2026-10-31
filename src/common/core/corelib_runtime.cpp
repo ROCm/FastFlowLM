@@ -7,6 +7,22 @@ namespace flm::corelib {
 namespace {
 std::mutex process_mutex;
 std::shared_ptr<CorelibRuntime> process_runtime;
+/// \brief the API loaded for this process, kept so a runtime that failed to
+///        come up, or the NPU probe, does not load it again
+std::shared_ptr<CorelibApi> process_api;
+
+/// \note The caller holds process_mutex.
+std::shared_ptr<CorelibApi> ProcessApi(const std::filesystem::path& executable_dir) {
+    if (!process_api) {
+#if defined(FLM_CORELIB_LINK_STATIC)
+        (void)executable_dir;
+        process_api = CorelibApi::LoadStatic();
+#else
+        process_api = CorelibApi::Load(CorelibApi::ResolveLibraryPath(executable_dir));
+#endif
+    }
+    return process_api;
+}
 #if defined(FLM_CORELIB_TESTING)
 std::function<void(bool)> destruction_observer;
 bool shutdown_execution_lock_held = false;
@@ -27,10 +43,10 @@ std::shared_ptr<CorelibRuntime> CorelibRuntime::CreateReady(
     if (!api) throw std::invalid_argument("corelib API is null");
     api->Check(api->functions().selftest_dependencies(),
                "ryzenai_corelib_selftest_dependencies");
-    // NULL means this process has no NPU hardware context to dispatch on.
-    // The bound symbol is ryzenai_corelib_get_hardware_context.
-    if (api->functions().get_device() == nullptr) {
-        throw std::runtime_error("corelib has no device context");
+    // Without one corelib still runs a session, on the GPU or the host, which
+    // is the silent slowness the core backend is meant to rule out.
+    if (!api->functions().npu_usable()) {
+        throw std::runtime_error("corelib has no usable NPU");
     }
     return std::shared_ptr<CorelibRuntime>(new CorelibRuntime(std::move(api)));
 }
@@ -38,16 +54,19 @@ std::shared_ptr<CorelibRuntime> CorelibRuntime::CreateReady(
 std::shared_ptr<CorelibRuntime> CorelibRuntime::GetOrCreate(
     const std::filesystem::path& executable_dir) {
     std::lock_guard lock(process_mutex);
-    if (!process_runtime) {
-#if defined(FLM_CORELIB_LINK_STATIC)
-        (void)executable_dir;
-        auto api = CorelibApi::LoadStatic();
-#else
-        auto api = CorelibApi::Load(CorelibApi::ResolveLibraryPath(executable_dir));
-#endif
-        process_runtime = CreateReady(std::move(api));
-    }
+    if (!process_runtime) process_runtime = CreateReady(ProcessApi(executable_dir));
     return process_runtime;
+}
+
+std::string CorelibRuntime::NpuArch(const std::filesystem::path& executable_dir) noexcept {
+    try {
+        std::lock_guard lock(process_mutex);
+        const auto api = process_runtime ? process_runtime->api_ : ProcessApi(executable_dir);
+        const char* arch = api->functions().npu_arch();
+        return arch ? arch : "";
+    } catch (...) {
+        return "";
+    }
 }
 
 std::shared_ptr<CorelibRuntime> CorelibRuntime::CreateForTest(
@@ -63,6 +82,7 @@ std::shared_ptr<CorelibRuntime> CorelibRuntime::CreateForTest(
 
 void CorelibRuntime::ShutdownProcess() {
     std::lock_guard process_lock(process_mutex);
+    process_api.reset();
     if (!process_runtime) return;
 
     auto runtime = process_runtime;

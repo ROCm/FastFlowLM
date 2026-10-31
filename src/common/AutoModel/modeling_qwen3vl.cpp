@@ -30,26 +30,27 @@ void Qwen3VL::load_model(std::string model_path, json model_info, int default_co
     for (size_t i = 0; i < PROFILER_TYPE_NUM; i++) {
         this->profiler_list[i].reset();
     }
+    this->_prefix_attach(this->lm_engine, qwen3vl_npu_state_api(this->lm_engine), IMAGE_SOFT_TOKEN_ID);
 }
 
 void Qwen3VL::setup_tokenizer(std::string model_path) {
     auto tokenizer_config = this->_shared_setup_tokenizer(model_path);
 }
 
-std::string Qwen3VL::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools) {
+std::string Qwen3VL::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools, bool continue_final_message) {
     minja::chat_template_inputs inputs;
-    inputs.add_generation_prompt = true;
     inputs.messages = messages;
-    
+
     if (!tools.empty())
         inputs.tools = tools;
     inputs.extra_context = this->extra_context;
-    return this->chat_tmpl->apply(inputs);
+    return this->_render_chat_template(inputs, continue_final_message);
 }
 
 bool Qwen3VL::_build_vl_tokens(lm_uniform_input_t& input,
                                qwen3vl_image_payload_t& image_payload,
-                               std::vector<int>& tokens) {
+                               std::vector<int>& tokens,
+                               bool continue_final_message) {
     if (input.messages.empty() && input.prompt.empty()) {
         header_print("WARNING", "No messages or prompt provided");
         return false;
@@ -128,7 +129,7 @@ bool Qwen3VL::_build_vl_tokens(lm_uniform_input_t& input,
 
             qwenvl_message.push_back(newItem);
         }
-        templated_text = this->apply_chat_template(qwenvl_message, input.tools);
+        templated_text = this->apply_chat_template(qwenvl_message, input.tools, continue_final_message);
         header_print("FLM", "Total images: " << total_images);
     }
     else if (!input.prompt.empty()) { // a pure text, usually from the cli
@@ -184,7 +185,7 @@ bool Qwen3VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     constexpr int image_soft_token_id = IMAGE_SOFT_TOKEN_ID;
     qwen3vl_image_payload_t image_payload;
     std::vector<int> tokens;
-    if (!this->_build_vl_tokens(input, image_payload, tokens)) {
+    if (!this->_build_vl_tokens(input, image_payload, tokens, meta_info.continue_final_message)) {
         return false;
     }
 
@@ -201,6 +202,21 @@ bool Qwen3VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     // fully-cached leading images so the surviving payload aligns with the
     // surviving image tokens after _shared_insert performs its own erase.
     // ----------------------------------------------------------------------
+    // ---- prefix slots: resume from the longest saved prefix of this prompt ----
+    // The generation prompt ("<|im_start|>assistant\n") is how the next turn renders this reply's header: the whole prompt
+    // is saved (trim 0). After a resume token_history is the slot's tokens, so the skip count below is the match length.
+    const bool slot_mode = this->_prefix_slot_mode(meta_info, tokens.size(), 0);
+    size_t match_len = 0;
+    std::vector<int> full_tokens;          // what this prompt leaves in the engine
+    std::vector<uint64_t> image_hashes;    // content of each of its images
+    if (slot_mode) {
+        full_tokens = tokens;
+        image_hashes = prefix_image_hashes(image_payload, QWEN3_PATCH_SIZE, QWEN3_TEMPORAL_PATCH_SIZE);
+        match_len = this->_prefix_resume(this->prefix_cache_, full_tokens, image_hashes);
+    } else {
+        this->_prefix_legacy_path(); // the in-place path below moves the engine on without telling the cache
+    }
+
     size_t prefix_skip_count = 0;
     {
         const size_t idx = this->token_history.size();
@@ -277,6 +293,10 @@ bool Qwen3VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     last_image_token_index++; // plus the end of image tokens
 
     // hardware
+    if (slot_mode) {
+        return this->_prefix_insert(this->prefix_cache_, meta_info, tokens, full_tokens, image_hashes, match_len, "<|im_start|>user",
+                                    image_payload.num_images > 0 ? static_cast<void*>(&image_payload) : nullptr, last_image_token_index, is_cancelled);
+    }
     if (image_payload.num_images > 0){
         return this->_shared_insert(meta_info, tokens, is_cancelled, &image_payload, last_image_token_index);
     }else{
@@ -487,9 +507,15 @@ std::string Qwen3VL_Flash::generate(chat_meta_info_t& meta_info, int length_limi
     stop_reason_t reason = EOT_DETECTED;
     int last_sampled_token = this->last_token;
     this->token_history.push_back(last_sampled_token);
+    // the sample insert() took is the reply's first token, and counts toward the limit
+    meta_info.generated_tokens++;
     emit(last_sampled_token);
 
-    if (!this->is_eos(last_sampled_token) && this->total_tokens < this->MAX_L) {
+    if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)
+        && !this->is_eos(last_sampled_token)) {
+        reason = MAX_LENGTH_REACHED;
+    }
+    else if (!this->is_eos(last_sampled_token) && this->total_tokens < this->MAX_L) {
         while (true) {
             if (is_cancelled()) {
                 reason = CANCEL_DETECTED;
@@ -529,6 +555,9 @@ std::string Qwen3VL_Flash::generate(chat_meta_info_t& meta_info, int length_limi
 
     meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
     meta_info.stop_reason = reason;
+    // Whatever the stop, eos included, its last sampled token was never
+    // forward()ed (this loop does not feed an eos back), so the history drops it.
+    this->token_history.pop_back();
     if (this->log_raw_output) {
         std::cout << std::endl;
         header_print("FLM", "Model RAW Output: \n" + result);
@@ -555,6 +584,11 @@ std::string Qwen3VL_Thinking::generate_with_prompt(chat_meta_info_t& meta_info, 
 
 
 std::string Qwen3VL_Thinking::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
+    // the echo stands for the generation prompt's "<think>\n"; a continued message
+    // has no generation prompt, its output picks up right after the client's text
+    if (meta_info.continue_final_message) {
+        return this->_shared_generate(meta_info, length_limit, os, is_cancelled);
+    }
     std::string result;
     os << "<think>\n\n";
     result = this->_shared_generate(meta_info, length_limit, os, is_cancelled);

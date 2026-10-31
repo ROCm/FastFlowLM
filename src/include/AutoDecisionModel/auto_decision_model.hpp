@@ -9,6 +9,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -76,7 +77,7 @@ public:
 private:
     flm_rt::device* npu_device_inst_ = nullptr;
     std::string tag_;
-    std::string name_;             //!< the upstream model name in replies ("d3-lite", "d3-nano", "d3-mini", "d3-turbo"), set on load
+    std::string name_;             //!< the upstream model name in replies ("d3-edge", "d3-lite", "d3-nano", "d3-mini", "d3-flash", "d3-turbo", "d3-ultra"), set on load
     std::unique_ptr<npu_xclbin_manager> npu_;
     std::unique_ptr<LM_Config> config_;
     std::unique_ptr<Tokenizer> tokenizer_;
@@ -87,6 +88,8 @@ private:
     bool state_once_ = true;       //!< prefix_bidir usage counts the state block once (D3_STATE_ONCE=0: whole prompts)
     bool prefix_bidir_ = false;    //!< decision_config.json attention_mode: prefix_bidir (state block + question blocks)
     float temperature_ = 1.0f;
+    std::optional<flm::d3::TemperatureTable> temperature_by_questions_;   //!< decision_config.json temperature_by_questions
+    bool header_v1_ = false;       //!< decision_config.json prompt_layout "header-v1" (text prompts lead with the question list)
     bool composed_ = false;        //!< prefix_bidir: assets and box questions (decision/d3_composed.hpp)
     flm::d3::ComposedConfig composed_config_;   //!< decision_config.json `systemone`, the tag and the limits
     std::unique_ptr<flm::d3::ReadoutEngine> readout_engine_;   //!< the contract's view of the engine (d3_engine_adapter)

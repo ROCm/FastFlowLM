@@ -38,6 +38,10 @@ from typing import Any, Callable
 
 DEFAULT_ENDPOINT = "http://127.0.0.1:52625"
 DEFAULT_TIMEOUT = 300.0
+# room a model that always reasons gets on top of a request's answer budget (--reasoning-budget)
+DEFAULT_REASONING_BUDGET = 1024
+# smaller budgets are about where generation stops, not about getting an answer
+ANSWER_BUDGET = 32
 
 # Raw markup any supported format may write; none of it may reach the client.
 MARKERS = (
@@ -85,16 +89,24 @@ class Stream:
 class Api:
     """Talks to one FastFlowLM server about one model."""
 
-    def __init__(self, endpoint: str, model: str, timeout: float, always_thinks: bool = False) -> None:
+    def __init__(self, endpoint: str, model: str, timeout: float, always_thinks: bool = False,
+                 reasoning_budget: int = DEFAULT_REASONING_BUDGET) -> None:
         self.url = endpoint.rstrip("/") + "/v1/chat/completions"
         self.model = model
         self.timeout = timeout
         # the model reasons whatever think says (qwen3-tk, deepseek-r1, gpt-oss, ...)
         self.always_thinks = always_thinks
+        self.reasoning_budget = reasoning_budget
 
     def body(self, messages: list[dict[str, Any]], *, think: bool = False,
              max_tokens: int = 256, **fields: Any) -> dict[str, Any]:
-        """Build a request body with sampling pinned (see the module note)."""
+        """Build a request body with sampling pinned (see the module note).
+
+        A model that always reasons spends tokens on that before answering, so a
+        budget meant for an answer gets the reasoning budget on top.
+        """
+        if self.always_thinks and max_tokens >= ANSWER_BUDGET:
+            max_tokens += self.reasoning_budget
         body: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -185,6 +197,8 @@ def raise_for_capability(message: str) -> None:
         raise Skip("the model only supports single-turn requests")
     if "logprobs is not supported" in message:
         raise Skip("the model cannot report logprobs")
+    if "continue_final_message is not supported" in message:
+        raise Skip("the model cannot continue a message")
 
 
 # ---------------------------------------------------------------- stream folding
@@ -546,13 +560,17 @@ def parse_args(description: str) -> argparse.Namespace:
     parser.add_argument("--always-thinks", action="store_true",
                         help="the model cannot turn thinking off (e.g. qwen3-tk, deepseek-r1, gpt-oss): "
                              "do not require think=false to drop reasoning_content")
+    parser.add_argument("--reasoning-budget", type=int, default=DEFAULT_REASONING_BUDGET,
+                        help="with --always-thinks, tokens added to every answer budget for the reasoning "
+                             "that comes first (default: %(default)s)")
     parser.add_argument("-k", dest="only", help="run only cases whose name contains this text")
     parser.add_argument("-v", "--verbose", action="store_true", help="print tracebacks of failures")
     return parser.parse_args()
 
 
 def make_api(args: argparse.Namespace) -> Api:
-    return Api(args.endpoint, args.model, args.timeout, always_thinks=args.always_thinks)
+    return Api(args.endpoint, args.model, args.timeout, always_thinks=args.always_thinks,
+               reasoning_budget=args.reasoning_budget)
 
 
 def summarize(tally: Tally) -> int:

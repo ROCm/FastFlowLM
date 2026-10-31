@@ -10,10 +10,12 @@
 
 #if defined(FLM_ENABLE_CORE)
 #include "models/gemma4/core/dev04/gemma4_core_backend.hpp"
+#include "models/llama/core/dev04/llama_core_backend.hpp"
 #include "models/phi4/core/dev04/phi4_core_backend.hpp"
 #include "models/qwen3/core/dev04/qwen3_core_backend.hpp"
 #include "models/qwen35/core/dev04/qwen35_core_backend.hpp"
 #include "models/qwen36/core/dev04/qwen36_core_backend.hpp"
+#include "models/qwen38/core/dev04/qwen38_core_backend.hpp"
 #endif
 
 namespace flm::backend {
@@ -44,17 +46,20 @@ void register_builtin_backends(BackendRegistry& registry) {
     RegisterFlm<qwen3vl_flash>(registry, "qwen3vl-flash");
     RegisterFlm<qwen3_5vl_npu>(registry, "qwen3.5");
     RegisterFlm<minicpm_v_4_7_npu>(registry, "minicpm-v-4.7");
+    RegisterFlm<minicpm_v_4_7_moe_npu>(registry, "minicpm-v-4.7-moe");
     RegisterFlm<qwen3_6_moe_npu>(registry, "qwen3.6-moe");
     RegisterFlm<qwen3_8mtp_npu>(registry, "qwen3.8-mtp");
     RegisterFlm<gemma_npu>(registry, "gemma3");
     RegisterFlm<gemma_text_npu>(registry, "gemma3-text");
     RegisterFlm<gemma4e_npu>(registry, "gemma4e");
     RegisterFlm<gemma4e_flash>(registry, "gemma4e-flash");
+    RegisterFlm<gemma4e_dflash>(registry, "gemma4e-dflash");
     RegisterFlm<gemma4_12b_npu>(registry, "gemma4-12b");
     RegisterFlm<hunyuan_npu>(registry, "hunyuan");
     RegisterFlm<gpt_oss_npu>(registry, "gpt-oss");
     RegisterFlm<lfm2_npu>(registry, "lfm2");
     RegisterFlm<lfm2_npu>(registry, "lfm2.5-tk");
+    RegisterFlm<lfm3_npu>(registry, "lfm3");
     RegisterFlm<nanbeige_npu>(registry, "nanbeige");
     RegisterFlm<phi4_npu>(registry, "phi4");
 
@@ -74,6 +79,12 @@ void register_builtin_backends(BackendRegistry& registry) {
     registry.register_backend("qwen3.6-moe", flm::backend::kCoreBackendId,
                               flm::qwen36::core_factory(),
                               flm::qwen36::core_traits());
+    registry.register_backend("qwen3.8-mtp", flm::backend::kCoreBackendId,
+                              flm::qwen38::core_factory(),
+                              flm::qwen38::core_traits());
+    registry.register_backend("llama3", flm::backend::kCoreBackendId,
+                              flm::llama::core_factory(),
+                              flm::llama::core_traits());
 #endif
 }
 

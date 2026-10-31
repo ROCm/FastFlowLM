@@ -25,7 +25,7 @@
 namespace {
 json ModelErrorResponse(const ModelRequestError& error) {
     return {{"error", {{"message", error.what()},
-                       {"type", "model_error"},
+                       {"type", error.type()},
                        {"code", error.http_code()},
                        {"session_cleared", error.session_cleared()}}}};
 }
@@ -34,6 +34,26 @@ json ExceptionResponse(const std::exception& error) {
     if (const auto* model_error = dynamic_cast<const ModelRequestError*>(&error))
         return ModelErrorResponse(*model_error);
     return {{"error", error.what()}};
+}
+
+/// \brief One line per finished request in the server log, streamed or not, whatever the client asked for
+/// \note The prefix "Request done:" is stable so tools can grep it
+void log_request_summary(const chat_meta_info_t& m, size_t kv_used, size_t kv_max) {
+    const double prefill_s = static_cast<double>(m.prefill_duration) / 1e9;
+    const double decode_s = static_cast<double>(m.decoding_duration) / 1e9;
+    const auto new_prompt = m.prompt_tokens > m.cached_prompt_tokens ? m.prompt_tokens - m.cached_prompt_tokens : 0;
+    std::ostringstream os;
+    os << std::fixed << std::setprecision(3)
+       << "Request done: prompt " << m.prompt_tokens << " tokens";
+    if (m.cached_prompt_tokens > 0) os << " (" << m.cached_prompt_tokens << " cached)";
+    os << " (prefill " << prefill_s << " s" << std::setprecision(2);
+    if (prefill_s > 0) os << ", " << new_prompt / prefill_s << " tok/s";
+    os << "), generated " << m.generated_tokens << " tokens (decode "
+       << std::setprecision(3) << decode_s << " s" << std::setprecision(2);
+    if (decode_s > 0) os << ", " << m.generated_tokens / decode_s << " tok/s";
+    os << "), kv " << kv_used << "/" << kv_max
+       << ", finish " << stop_reason_to_string(m.stop_reason);
+    header_print("FLM", os.str());
 }
 
 /// \brief Whether a request sets a field
@@ -311,6 +331,65 @@ static bool sampling_request_from_openai(const json& request, openai_sampling_re
     return true;
 }
 
+///@brief Read an OpenAI chat request's continue_final_message (vLLM's extension) and check
+///       that the request can continue its final message.
+///@param messages the request's messages, as sent
+///@param constraint the request's tool_choice and response_format
+///@param continue_final set to whether the final assistant message is continued
+///@param error set to the message for the client when the request is malformed
+///@return false when the request is malformed
+///@note add_generation_prompt is read only to refuse it alongside continue_final_message, as
+///      vLLM does: the two ask for opposite things. On its own it is ignored, as before.
+static bool continue_request_from_openai(const json& request, const json& messages,
+                                         const chat_constraint_request& constraint,
+                                         bool& continue_final, std::string& error) {
+    continue_final = false;
+    if (has_value(request, "continue_final_message")) {
+        if (!request.at("continue_final_message").is_boolean()) {
+            error = "continue_final_message must be a boolean";
+            return false;
+        }
+        continue_final = request.at("continue_final_message").get<bool>();
+    }
+    if (!continue_final) {
+        return true;
+    }
+    if (has_value(request, "add_generation_prompt") && request.at("add_generation_prompt") == true) {
+        error = "Cannot set both continue_final_message and add_generation_prompt to true";
+        return false;
+    }
+    const json* last = messages.empty() ? nullptr : &messages.back();
+    if (last == nullptr || !last->is_object() || last->value("role", "") != "assistant") {
+        error = "continue_final_message requires the last message to have role \"assistant\"";
+        return false;
+    }
+    if (has_value(*last, "tool_calls") && !(last->at("tool_calls").is_array() && last->at("tool_calls").empty())) {
+        error = "continue_final_message cannot continue an assistant message that has tool_calls";
+        return false;
+    }
+    // the grammar of a forced call or a JSON answer starts at the beginning of a turn
+    if (constraint.json_object || !constraint.json_schema.is_null() ||
+        constraint.tool_choice == chat_tool_choice::REQUIRED || constraint.tool_choice == chat_tool_choice::FUNCTION) {
+        error = "continue_final_message cannot be combined with response_format or a tool_choice that forces a call";
+        return false;
+    }
+    return true;
+}
+
+///@brief Check the final message once normalize_template has flattened it: text to continue, and nothing else
+///@return the message for the client, empty when the message can be continued
+static std::string continue_final_message_error(const json& messages) {
+    const json& last = messages.back();
+    if (last.contains("images") || last.contains("audios")) {
+        return "continue_final_message requires the final assistant message to be text only";
+    }
+    const std::string text = last.value("content", std::string());
+    if (text.find_first_not_of(" \t\n\r\v\f") == std::string::npos) {
+        return "continue_final_message requires text in the final assistant message";
+    }
+    return "";
+}
+
 static void apply_sampling_request(AutoModel& engine, const openai_sampling_request& sampling) {
     if (sampling.penalty_window) {
         engine.set_penalty_window(*sampling.penalty_window);
@@ -463,6 +542,7 @@ RestHandler::RestHandler(model_list& models, ModelDownloader& downloader, progra
     this->prefill_chunk_len = this->prefill_chunk_len_arg;
     this->prefix_cache_mb = args.prefix_cache_mb;
     this->prefix_slots = args.prefix_slots;
+    this->prefix_min_gain = args.prefix_min_gain;
 
     // Initialize chat bot with default model
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
@@ -567,9 +647,9 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag,
             auto [new_ensure_tag, model_info] = supported_models.get_model_info(ensure_tag);
             engine->set_server_mode(true);
             engine->configure_parameter("img_pre_resize", this->img_pre_resize);
-            engine->set_prefix_limits(this->prefix_cache_mb, this->prefix_slots);
+            engine->set_prefix_limits(this->prefix_cache_mb, this->prefix_slots, this->prefix_min_gain);
             const auto load_started = std::chrono::steady_clock::now();
-            engine->load_model(supported_models.get_model_path(new_ensure_tag), model_info, ctx_length, preemption, requested_backend);
+            engine->load_model(supported_models.get_load_path(new_ensure_tag), model_info, ctx_length, preemption, requested_backend);
             report_load_time(load_started);
 
             // Per model, not per process: the flash models take 1024-token
@@ -685,7 +765,7 @@ void RestHandler::handle_systemone(const std::string& raw_body,
     json reply;
     if (!this->decision_engine) {
         reply["__http_status"] = 404;
-        reply["__http_body"] = {{"detail", "no decision model is loaded; start the server with --decision d3:lite, d3:nano, d3:mini or d3:turbo"}};
+        reply["__http_body"] = {{"detail", "no decision model is loaded; start the server with --decision d3:edge, d3:lite, d3:nano, d3:mini, d3:flash, d3:turbo or d3:ultra"}};
         send_response(reply);
         return;
     }
@@ -790,7 +870,8 @@ json RestHandler::build_nstream_response(const std::string& response_text, chat_
                                          const chat_parse_options& parse_options,
                                          chat_logprobs_aligner* logprobs) {
     const chat_format_spec& spec = auto_chat_engine->get_chat_format();
-    chat_msg parsed = chat_parse(spec, chat_format_prefill(spec, meta_info.prompt_tail) + response_text,
+    chat_msg parsed = chat_parse(spec,
+                                 chat_format_prefill(spec, meta_info.prompt_tail, meta_info.continue_final_message) + response_text,
                                  false, parse_options);
 
     json message;
@@ -950,6 +1031,7 @@ void RestHandler::handle_generate(const json& request,
             // std::cout << "history: " << history.first << std::endl;
             meta_info.total_duration = (uint64_t)time_utils::duration_ns(total_start_time, total_end_time).first;
             ostream.finalize_generate(meta_info, history.second);
+            log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
         } else {
             // Non-streaming response
             std::stringstream ss;
@@ -994,6 +1076,7 @@ void RestHandler::handle_generate(const json& request,
                 {"done_reason", stop_reason_to_string(meta_info.stop_reason)}
             };
             // std::cout << "history: " << history.first << std::endl;
+            log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
             send_response(response);
         }
     } catch (const std::exception& e) {
@@ -1072,6 +1155,7 @@ void RestHandler::handle_chat(const json& request,
             meta_info.total_duration = (uint64_t)time_utils::duration_ns(total_start_time, total_end_time).first;
             
             ostream.finalize_chat(meta_info);
+            log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
             // auto history = this->chat_engine->get_history();
             // std::cout << "history: " << history.first << std::endl;
             this->auto_chat_engine->clear_context();
@@ -1114,8 +1198,9 @@ void RestHandler::handle_chat(const json& request,
                 {"eval_duration", meta_info.decoding_duration},
                 {"done_reason", stop_reason_to_string(meta_info.stop_reason)}
             };
+            log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
             send_response(response);
-            
+
             // auto history = this->chat_engine->get_history();
             // std::cout << "history: " << history.first << std::endl;
             this->auto_chat_engine->clear_context();
@@ -1388,6 +1473,11 @@ void RestHandler::handle_openai_chat_completion(const json& request,
             send_response({{"error", {{"message", request_error}, {"type", "invalid_request_error"}, {"code", 400}}}});
             return;
         }
+        bool continue_final = false;
+        if (!continue_request_from_openai(request, current_messages, constraint_request, continue_final, request_error)) {
+            send_response({{"error", {{"message", request_error}, {"type", "invalid_request_error"}, {"code", 400}}}});
+            return;
+        }
 
         auto load_start_time = time_utils::now();
         if (!ensure_model_loaded(model, request_backend)) {
@@ -1401,12 +1491,24 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                                       {"type", "invalid_request_error"}, {"code", 400}}}});
             return;
         }
+        if (continue_final && (auto_chat_engine->single_turn || !auto_chat_engine->supports_continue_final_message())) {
+            send_response({{"error", {{"message", "continue_final_message is not supported by " + model},
+                                      {"type", "invalid_request_error"}, {"code", 400}}}});
+            return;
+        }
 
         configure_chat_engine_parameters(options, request);
         apply_sampling_request(*auto_chat_engine, sampling);
 
         current_messages = normalize_messages(current_messages);
         current_messages = normalize_template(current_messages);
+        if (continue_final) {
+            request_error = continue_final_message_error(current_messages);
+            if (!request_error.empty()) {
+                send_response({{"error", {{"message", request_error}, {"type", "invalid_request_error"}, {"code", 400}}}});
+                return;
+            }
+        }
 
         // see if we can use prompt cache
         chat_meta_info_t meta_info;
@@ -1424,8 +1526,8 @@ void RestHandler::handle_openai_chat_completion(const json& request,
             }
             if (has_assistant_msg) {
                 header_print("Warning", "Single-turn model received multi-turn request (assistant messages detected). Rejecting.");
-                json error_response = {{"error", "This model only supports single-turn requests. Multi-turn conversation history (assistant messages) is not allowed."}};
-                send_response(error_response);
+                send_response({{"error", {{"message", "This model only supports single-turn requests. Multi-turn conversation history (assistant messages) is not allowed."},
+                                          {"type", "invalid_request_error"}, {"code", 400}}}});
                 return;
             }
         }
@@ -1483,6 +1585,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
         meta_info.load_duration = (uint64_t)time_utils::duration_ns(load_start_time, load_end_time).first;
         meta_info.max_prefill_len = this->prefill_chunk_len;
         meta_info.logprobs_top_n = logprobs_top_n;
+        meta_info.continue_final_message = continue_final;
         try {
             meta_info.constraint = auto_chat_engine->make_constraint(constraint_request);
         } catch (const std::invalid_argument& e) {
@@ -1494,6 +1597,9 @@ void RestHandler::handle_openai_chat_completion(const json& request,
         chat_parse_options parse_options;
         parse_options.tools = &tools;
         parse_options.parse_tool_calls = !tools.empty() && constraint_request.tool_choice != chat_tool_choice::NONE;
+        parse_options.keep_whitespace = continue_final;
+        // a model that reasons first reads the continued message as its reasoning
+        parse_options.reasoning_may_close = continue_final && auto_chat_engine->thinking_enabled();
         if (stream){
             // Create a wrapper callback that passes the pre-formatted SSE string directly
             cancellation_token->reset();
@@ -1574,6 +1680,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                 header_print("ERROR", std::string("Finishing the stream failed: ") + e.what());
                 send_stream_error(ExceptionResponse(e));
             }
+            log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
         }
         else {
             nullstream nstream;
@@ -1657,6 +1764,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                 header_print("❌ ", "Generation Cancelled!");
                 this->prompt_cache.reset();
             }
+            log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
             send_response(response);
         }
 
@@ -1905,6 +2013,7 @@ void RestHandler::handle_openai_completion(const json& request,
                 header_print("ERROR", std::string("Finishing the stream failed: ") + e.what());
                 send_stream_error(ExceptionResponse(e));
             }
+            log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
 
             this->auto_chat_engine->clear_context();
         }
@@ -1959,6 +2068,7 @@ void RestHandler::handle_openai_completion(const json& request,
                 }}
             };
             if (meta_info.prefix_cache.valid) response["usage"]["flm_prefix_cache"] = prefix_cache_usage_json(meta_info.prefix_cache);
+            log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
             send_response(response);
         }
     }

@@ -11,6 +11,7 @@ parent: Models
 - **Think:** Toggleable
 - **Conversational mode:** Toggleable (short, spoken-style answers for voice and device assistants)
 - **Tool Calling Support:** Yes
+- **Prefix cache (server mode):** Yes for text prompts; a prompt with a picture or audio keeps the older single-checkpoint reuse (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
 - **Base Model:** [nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-BF16](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-BF16), post-trained from [google/gemma-4-E4B-it](https://huggingface.co/google/gemma-4-E4B-it) (same architecture as `gemma4-it:e4b`)
 - **Quantization:** Q4_1 (converted from NVIDIA's Q4_K_M release)
 - **Max Context Length:** 64k tokens
@@ -18,6 +19,8 @@ parent: Models
 - **[Set Context Length at Launch](https://fastflowlm.com/docs/instructions/cli/#-set-context-length-at-launch)**
 - **License:** [OpenMDW-1.1](https://openmdw.ai/license/1-1/)
 - **FastFlowLM:** 1.0.11 or later
+- **Faster decoding:** [`nemotron3.5-bolt-dflash:e4b`](../nemotron3.5-bolt-dflash/) is the same model with NVIDIA's DFlash speculative-decoding
+  draft (1.3x to 1.9x the decode speed)
 
 ▶️ Run with FastFlowLM in PowerShell:
 

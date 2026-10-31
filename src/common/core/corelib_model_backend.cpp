@@ -154,6 +154,10 @@ public:
                                             : length >= 1 && length <= spec.model.context_limit;
         if (!fits)
             throw std::out_of_range(name + " core context length must be in " + spec.context_rule);
+        if (spec.reliable_context && length > spec.reliable_context)
+            header_print("WARNING", name << " core context " << length << " is past "
+                                         << spec.reliable_context << ": "
+                                         << spec.unreliable_reason);
         context_length_ = length;
 
         auto tokens = ReadPackageTokens(spec, context);

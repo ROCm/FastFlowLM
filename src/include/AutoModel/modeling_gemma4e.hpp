@@ -39,6 +39,34 @@ struct gemma4e_engine_config_t {
     unsigned int Gemma4e_Audio_conv2d_Padding;
 };
 
+/// Reads the shared set of engine constants off a concrete engine type.
+/// gemma4e_npu, gemma4e_flash and gemma4e_dflash are unrelated types that happen to expose the
+/// same member names, so this is templated rather than taking a common base.
+template <typename EngineT>
+inline gemma4e_engine_config_t read_gemma4e_engine_config(causal_lm* engine) {
+    EngineT* e = dynamic_cast<EngineT*>(engine);
+    if (e == nullptr) {
+        // Reachable in Release with the core engine, which has no vision or
+        // audio path.
+        throw std::runtime_error(
+            "engine_config() was called on a Gemma4e wrapper whose engine is "
+            "not the expected type -- the vision and audio paths are not "
+            "available on this backend (core runs text only)");
+    }
+    return gemma4e_engine_config_t{
+        e->GEMMA4E_VISION_PATCH_SIZE,
+        e->GEMMA4E_POOLING_KERNEL_SIZE,
+        e->GEMMA4E_VISION_RESCALE_FACTOR,
+        e->GEMMA4E_VISION_IMAGE_MEAN,
+        e->GEMMA4E_VISION_IMAGE_STD,
+        e->Gemma4E_Audio_resample_rate,
+        e->Gemma4E_Audio_conv2d_kernel_size,
+        e->Gemma4E_Audio_conv2d_Stride,
+        e->Gemma4e_Audio_conv2d_Padding,
+    };
+}
+
+
 class Gemma4e : public AutoModel {
 private:
     // some model specific template variables
@@ -111,6 +139,9 @@ protected:
     /// \note  Overridden by Gemma4e_Flash to read them off the flash engine.
     virtual gemma4e_engine_config_t engine_config() const;
 
+    /// \brief the saved-state table of the engine behind this wrapper (nullptr: the context cache stays off)
+    virtual const flm_state_api* engine_state_api() const;
+
     /// \note Gemma4e and Gemma4e_Flash share this whole wrapper -- weights,
     ///       tokenizer, sampler, chat template -- and differ only in the engine
     ///       behind it. Which one to build is no longer decided here: the two
@@ -125,7 +156,8 @@ public:
     bool insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled = [] { return false; }) override;
     std::string generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled = [] { return false; }) override;
     std::string generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os = std::cout) override;
-    std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object()) override;
+    std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object(), bool continue_final_message = false) override;
+    bool supports_continue_final_message() const override { return true; }
     chat_template_type_t get_chat_template_type() {
         return chat_template_type_t::gemma4;
     }
@@ -255,8 +287,34 @@ public:
 
     /// \brief Apply the chat template without tools — gemma4e_flash does not
     ///        support tool calling, so the tools argument is always dropped.
-    std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object()) override {
+    std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object(), bool continue_final_message = false) override {
         nlohmann::ordered_json no_tools = nlohmann::ordered_json::object();
-        return Gemma4e::apply_chat_template(messages, no_tools);
+        return Gemma4e::apply_chat_template(messages, no_tools, continue_final_message);
     }
+
+    /// \brief Single-turn (every insert() starts over), so the server rejects
+    ///        continue_final_message for it; Gemma4e's true is not inherited.
+    bool supports_continue_final_message() const override { return false; }
+};
+
+
+/************              Gemma4e_DFlash            **************/
+/// Same checkpoint and wrapper as Gemma4e (nemotron3.5-bolt), backed by the gemma4e_dflash engine: DFlash
+/// speculative decoding with a draft package read from the model's draft_model_path (see model_list base_model).
+class Gemma4e_DFlash : public Gemma4e {
+protected:
+    gemma4e_engine_config_t engine_config() const override;
+    const flm_state_api* engine_state_api() const override;
+
+    /// \brief the speculative decode loop (sample-and-compare, D11); falls back to the plain loop step by step
+    std::string _speculative_generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled);
+
+public:
+    Gemma4e_DFlash(flm_rt::device* npu_device_inst) : Gemma4e(npu_device_inst) {}
+
+    void load_model(std::string model_path, json model_info, int default_context_length = -1, bool enable_preemption = false, const std::string& backend = "") override;
+    std::string generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled = [] { return false; }) override;
+    std::string generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os = std::cout) override;
+    void clear_context() override;
+    std::string show_profile() override;
 };

@@ -19,11 +19,11 @@
 #include "video/video_input.hpp"
 #endif
 
-std::unordered_set<std::string> decisionModelTags = {"d3:lite", "d3:nano", "d3:mini", "d3:turbo"};
+std::unordered_set<std::string> decisionModelTags = {"d3:edge", "d3:lite", "d3:nano", "d3:mini", "d3:flash", "d3:turbo", "d3:ultra"};
 
 /// Decision models whose warmup passes are skipped: one 2,048-row pass of a 27B backbone is minutes of
 /// NPU time, far more than the first-request latency it would hide. D3_WARMUP=1 / 0 overrides per run.
-static const std::unordered_set<std::string> decisionNoWarmupTags = {"d3:turbo"};
+static const std::unordered_set<std::string> decisionNoWarmupTags = {"d3:turbo", "d3:ultra"};
 
 namespace {
 
@@ -207,7 +207,7 @@ void AutoDecisionModel::load_model(const std::string& model_path, const nlohmann
     if (dc.value("format_version", 0) != 1) throw std::runtime_error("decision_config.json: format_version must be 1");
     if (dc.value("format_id", std::string()) != flm::d3::FORMAT_ID) throw std::runtime_error("decision_config.json: unsupported format_id");
     if (dc.value("prompt", std::string("d3")) != "d3") throw std::runtime_error("decision_config.json: prompt must be d3");
-    // noncausal_full_attention: every token sees every token (d3:lite, d3:nano, d3:mini);
+    // noncausal_full_attention: every token sees every token (d3:edge, d3:lite, d3:nano, d3:mini, d3:flash);
     // prefix_bidir: the state block sees only itself, each question block sees the state and itself (d3:turbo)
     const std::string attention_mode = dc.value("attention_mode", std::string("causal"));
     if (attention_mode != "noncausal_full_attention" && attention_mode != "prefix_bidir") {
@@ -222,6 +222,22 @@ void AutoDecisionModel::load_model(const std::string& model_path, const nlohmann
     if (dc.value("readout_dtype", std::string("float32")) != "float32") throw std::runtime_error("decision_config.json: readout_dtype must be float32");
     temperature_ = dc.value("temperature", 1.0f);
     if (!(std::isfinite(temperature_) && temperature_ > 0)) throw std::runtime_error("decision_config.json: temperature must be finite and positive");
+    temperature_by_questions_ = flm::d3::temperature_table(dc.contains("temperature_by_questions") ? dc["temperature_by_questions"] : nlohmann::json(nullptr),
+                                                           "decision_config.json");
+    {   // prompt_layout: absent / null (the plain layout) or "header-v1"; anything else is refused, as upstream does
+        const auto layout = dc.contains("prompt_layout") ? dc["prompt_layout"] : nlohmann::json(nullptr);
+        if (!layout.is_null() && !(layout.is_string() && layout.get<std::string>() == "header-v1")) {
+            throw std::runtime_error("decision_config.json: unknown prompt_layout " + layout.dump());
+        }
+        header_v1_ = !layout.is_null();
+    }
+    // validated_length is the longest prompt the checkpoint was validated on upstream (d3-ultra: 131,072); this build's cap
+    // is MAX_INPUT_TOKENS (what the NPU engine was measured to run) and stays there whatever the package says.
+    if (dc.contains("validated_length") && dc["validated_length"].is_number_integer() &&
+        dc["validated_length"].get<long long>() > MAX_INPUT_TOKENS) {
+        header_print("FLM", "decision_config.json validated_length " << dc["validated_length"].get<long long>()
+                                                                      << " is above this build's cap; max input stays " << MAX_INPUT_TOKENS << " tokens");
+    }
     const auto codes = dc["codes"].get<std::vector<std::string>>();
     const auto token_ids = dc["token_ids"].get<std::vector<int>>();
 
@@ -277,6 +293,7 @@ void AutoDecisionModel::load_model(const std::string& model_path, const nlohmann
         composed_config_.tag = tag_;
         composed_config_.max_length = MAX_INPUT_TOKENS;
         composed_config_.temperature = temperature_;
+        composed_config_.temperature_by_questions = temperature_by_questions_;
         composed_config_.question_types = {"choice", "noul", "score"};
         for (const char* kind : {"box", "track"}) {
             for (const auto& declared : so.value("question_types", nlohmann::json::array())) {
@@ -385,7 +402,7 @@ void AutoDecisionModel::load_model(const std::string& model_path, const nlohmann
     throw std::runtime_error("this FastFlowLM build has no d3 engine (libd3_npu)");
 #endif
 
-    // replies name the upstream model, as d3_server does ("model": "d3-lite", "d3-nano", ...);
+    // replies name the upstream model, as d3_server does ("model": "d3-edge", "d3-lite", "d3-nano", ...);
     // without a marker in config.json the name is the tag with its colon turned into a dash
     std::string tag_name = tag_;
     std::replace(tag_name.begin(), tag_name.end(), ':', '-');
@@ -406,11 +423,14 @@ std::map<std::string, std::vector<double>> AutoDecisionModel::run(const flm::d3:
     // moved, never copied: XRT buffer copies do not own their memory
     std::vector<buffer<bf16>> hidden = engine_->encode_batch(ids, payload);
     std::vector<float> h(hidden_);
+    // temperature_by_questions: the request's number of (valid) choice / noul / score questions; the plain path has no box / track
+    const float request_temperature =
+        flm::d3::temperature_for(temperature_by_questions_, temperature_, static_cast<int>(prepared.questions.size()));
     for (size_t i = 0; i < keys.size(); i++) {
         const bf16* row = hidden[i].data();
         for (int d = 0; d < hidden_; d++) h[d] = static_cast<float>(row[d]);
         const int count = static_cast<int>(prepared.questions.at(keys[i]).keys.size());
-        auto p = flm::d3::readout_probabilities(h.data(), readout_.data(), hidden_, count, temperature_);
+        auto p = flm::d3::readout_probabilities(h.data(), readout_.data(), hidden_, count, request_temperature);
         out[keys[i]] = std::vector<double>(p.begin(), p.end());
     }
     return out;
@@ -448,7 +468,8 @@ std::map<std::string, std::vector<double>> AutoDecisionModel::run_state_once(con
     const flm::d3::EngineStateRequest request =
         flm::d3::plain_state_request(prepared, std::move(images), payload ? payload->image_token_id : -1);
     const std::vector<std::vector<float>> hidden = readout_engine_->encode_state_once(request);
-    return flm::d3::plain_probabilities(prepared, hidden, readout_.data(), hidden_, temperature_);
+    return flm::d3::plain_probabilities(prepared, hidden, readout_.data(), hidden_,
+                                         flm::d3::temperature_for(temperature_by_questions_, temperature_, static_cast<int>(prepared.questions.size())));
 }
 
 DecisionReply AutoDecisionModel::system_one(const std::string& raw_body) {
@@ -483,6 +504,7 @@ DecisionReply AutoDecisionModel::system_one(const std::string& raw_body) {
     };
     try {
         flm::d3::PrepareOptions options;
+        options.header_v1 = header_v1_;
         if (prefix_bidir_) {
             options.unsupported_for = tag_;   // long_context / videos (and track): not in this build
             options.composed = composed_;

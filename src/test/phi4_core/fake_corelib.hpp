@@ -28,11 +28,6 @@ struct RowsPadCall {
     std::uint32_t group_size;
 };
 
-struct MhaPadCall {
-    std::int64_t m;
-    ryzenai_corelib_flat_mha_bf16_desc desc;
-};
-
 struct TensorCreateRecord {
     ryzenai_corelib_data_type data_type;
     std::vector<std::int64_t> shape;
@@ -103,11 +98,10 @@ struct State {
                                          RYZENAI_CORELIB_VERSION_PATCH};
     ryzenai_corelib_status selftest_status{ryzenai_corelib_status_success};
     ryzenai_corelib_status default_status{ryzenai_corelib_status_success};
-    /// \brief whether get_device() hands back a device rather than NULL
-    /// \note Still a bool here even though 0.5.0's entry point returns a
-    ///       pointer: what a test wants to say is "this box has an NPU or it
-    ///       does not", and the fake has no device object worth modelling.
-    bool has_device_context{true};
+    /// \brief what npu_usable() answers
+    bool npu_usable{true};
+    /// \brief what testing_npu_arch() answers
+    std::string npu_arch{"AIEM"};
     /// \brief the PDI lists the engine opened its stream with
     /// \note Required from 0.5.0 and deliberately undefaulted by corelib, so
     ///       it is worth being able to assert on.
@@ -120,6 +114,9 @@ struct State {
     std::unordered_map<std::string, int> resolution_counts;
     std::unordered_map<std::string, int> call_counts;
     std::unordered_map<std::string, ryzenai_corelib_status> statuses;
+    /// \brief how many more calls of a function fail before it answers as
+    ///        `statuses` says
+    std::unordered_map<std::string, int> fail_counts;
     std::vector<std::string> lifetime_events;
     std::atomic<int> live_objects{0};
     std::atomic<int> releases{0};
@@ -128,7 +125,6 @@ struct State {
     std::atomic<int> maximum_active_leases{0};
     std::vector<MatmulPadCall> matmul_pad_calls;
     std::vector<RowsPadCall> rows_pad_calls;
-    std::vector<MhaPadCall> mha_pad_calls;
     std::int64_t pad_multiple{64};
     std::int64_t matmul_k_delta{0};
     std::int64_t matmul_n_delta{0};
@@ -149,13 +145,13 @@ struct State {
     std::string fail_after_submit;
     std::int64_t model_max_sequence_length{-1};
     std::int64_t model_vocab{8};
-    std::size_t model_creates{};
+    std::size_t session_creates{};
     std::size_t state_saves{};
     std::size_t state_restores{};
     std::vector<ModelForwardRecord> model_forwards;
-    /// \brief the name passed to model_weights_create_path, then to every model_create
+    /// \brief the name passed to each create_model_from_path
     std::vector<std::string> model_names;
-    std::string model_weights_path;
+    std::string model_path;
 };
 
 State& GetState();

@@ -1,0 +1,65 @@
+name: Windows MSI
+description: >
+  Builds the MSI installer around an already-built flm.exe, so the MSI and the
+  portable zip ship the same binary. Everything else the installer stages
+  (DLLs, xclbins, model lists) comes from the checkout, so no submodules or
+  history are needed.
+
+inputs:
+  flm-exe:
+    description: Path to the flm.exe to package, relative to the workspace.
+    required: true
+
+outputs:
+  msi:
+    description: The built installer, relative to the workspace.
+    value: src/wix/output/flm-setup.msi
+
+runs:
+  using: composite
+  steps:
+    # get_files.bat (inno and wix) stage flm.exe from build\, where a local
+    # build puts it.
+    - name: Place flm.exe
+      shell: powershell
+      working-directory: ${{ github.workspace }}
+      env:
+        FLM_EXE: ${{ inputs.flm-exe }}
+      run: |
+        $ErrorActionPreference = "Stop"
+        New-Item -ItemType Directory -Force src\build | Out-Null
+        Copy-Item -Path $env:FLM_EXE -Destination src\build\flm.exe -Force
+
+    - name: Stage installer package files
+      shell: powershell
+      working-directory: ${{ github.workspace }}/src/inno
+      run: .\get_files.bat
+
+    # The image only has WiX 3; flm.wxs is WiX 5. Same version as the
+    # self-hosted runner had.
+    - name: Install WiX
+      shell: powershell
+      run: |
+        $ErrorActionPreference = "Stop"
+        dotnet tool install --global wix --version 5.0.2
+        if ($LASTEXITCODE -ne 0) { throw "dotnet tool install wix failed" }
+        $wixToolsPath = Join-Path $env:USERPROFILE ".dotnet\tools"
+        & "$wixToolsPath\wix.exe" extension add --global WixToolset.UI.wixext/5.0.2
+        if ($LASTEXITCODE -ne 0) { throw "wix extension add failed" }
+
+        $wixToolsPath | Out-File `
+          -FilePath $env:GITHUB_PATH `
+          -Encoding utf8 `
+          -Append
+
+    - name: Verify WiX
+      shell: powershell
+      run: |
+        $wix = Get-Command wix -ErrorAction Stop
+        Write-Host "Using WiX: $($wix.Source)"
+        wix --version
+
+    - name: Build MSI installer
+      shell: powershell
+      working-directory: ${{ github.workspace }}/src
+      run: .\wix\build.ps1

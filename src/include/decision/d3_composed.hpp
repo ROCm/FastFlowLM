@@ -57,6 +57,9 @@ struct ComposedConfig {
     int moment_row_limit = video::DEFAULT_MOMENT_ROW_LIMIT;
     video::VideoProcessorConfig video_config;   //!< the checkpoint's video processor settings (d3-turbo's defaults)
     float temperature = 1.0f;
+    /// decision_config temperature_by_questions: a choice / noul / score row reads the table at the request's number of such
+    /// questions (`ComposedRequest::decisions`); box and track rows keep `temperature`.
+    std::optional<TemperatureTable> temperature_by_questions;
 };
 
 /// What the contract needs from its host to prepare a request.
@@ -110,6 +113,7 @@ struct ComposedRow {
 /// A composed request after validation: per-question inline errors, the rows to run, the image table.
 struct ComposedRequest {
     std::vector<std::string> keys;                    //!< every question ID, request order
+    int decisions = 0;                                //!< questions of type choice / noul / score (valid or not): the temperature table's key
     std::map<std::string, ojson> errors;              //!< answers decided before the engine (refusals, invalid, too long)
     std::vector<ComposedRow> rows;                    //!< runnable rows, request order (M3: one per runnable question)
     std::vector<ComposedImage> images;                //!< distinct images (decoded by `ComposedHooks::decode`, same index)

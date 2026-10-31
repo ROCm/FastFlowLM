@@ -10,8 +10,8 @@ sections:
     body: |
       FastFlowLM curates the most requested families and publishes tuned manifests under `flm pull <model>`.
       We validate every build on Ryzen™ AI laptops and provide matching cards—see them [here](/docs/models/).
-      The catalog already covers models spanning Qwen3.8 (27B, MTP speculative decoding), Qwen3.6 (MoE), Qwen3.5 (Vision), Gemma4 (omni), Qwen3, GPT-OSS-20B (MoE), DeepSeek-R1, Whisper
-      (Audio), Hy-MT2 (Translation), MiniCPM-V 4.7 (Vision), MedGemma (Medical), Decision 3.0 (d3-lite, d3-nano, d3-mini, d3-turbo, the System One
+      The catalog already covers models spanning Qwen3.8 (27B, MTP speculative decoding), Qwen3.6 (MoE), Qwen3.5 (Vision), Gemma4 (omni), Nemotron Bolt (DFlash speculative decoding), Qwen3, GPT-OSS-20B (MoE), DeepSeek-R1, Whisper
+      (Audio), Hy-MT2 (Translation), MiniCPM-V 4.7 (Vision, 1B and 35B-A3B MoE), MedGemma (Medical), Decision 3.0 (d3-edge, d3-lite, d3-nano, d3-mini, d3-flash, d3-turbo, d3-ultra, the System One
       decision model of vLLM Semantic Router), and other leading open families.
     ctas:
       - label: "View model docs"
@@ -26,12 +26,12 @@ sections:
         - "Qwen3.8 (Vision and MTP speculative decoding)"
         - "Qwen3.6 (Vision and MoE)"
         - "Gemma 4 (omni)"
-        - "Nemotron Bolt (NVIDIA, tool use)"
+        - "Nemotron Bolt (NVIDIA, tool use; DFlash speculative decoding)"
         - "Qwen3.5 (Vision)"
         - "Qwen 3 (Vision)"
-        - "MiniCPM-V 4.7 (Vision)"
+        - "MiniCPM-V 4.7 (Vision, incl. 35B-A3B MoE)"
         - "GPT-OSS (MoE)"
-        - "LFM2 (Liquid AI)"
+        - "LFM2 / LFM3 (Liquid AI)"
         - "EmbeddingGemma (RAG)"
         - "Whisper (Audio)"
         - "Hy-MT2 (Translation)"

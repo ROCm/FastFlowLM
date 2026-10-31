@@ -29,18 +29,18 @@ void Gemma3_Text_Only::load_model(std::string model_path, json model_info, int d
     for (size_t i = 0; i < PROFILER_TYPE_NUM; i++) {
         this->profiler_list[i].reset();
     }
+    _prefix_attach(lm_engine, gemma_text_npu_state_api(lm_engine));
 }
 
 void Gemma3_Text_Only::setup_tokenizer(std::string model_path) {
     auto tokenizer_config = this->_shared_setup_tokenizer(model_path);
 }
 
-std::string Gemma3_Text_Only::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools) {
+std::string Gemma3_Text_Only::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools, bool continue_final_message) {
     minja::chat_template_inputs inputs;
-    inputs.add_generation_prompt = true;
     inputs.messages = messages;
     inputs.extra_context = this->extra_context;
-    return this->chat_tmpl->apply(inputs);
+    return this->_render_chat_template(inputs, continue_final_message);
 }
 
 bool Gemma3_Text_Only::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
@@ -52,7 +52,7 @@ bool Gemma3_Text_Only::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& i
         return false;
     }
     if (!input.messages.empty()) { // already a formated messages, usually from REST API
-        templated_text = this->apply_chat_template(input.messages);
+        templated_text = this->apply_chat_template(input.messages, nlohmann::ordered_json::object(), meta_info.continue_final_message);
     }
     else if (!input.prompt.empty()) { // a pure text, usually from the cli
         nlohmann::ordered_json messages;
@@ -65,6 +65,14 @@ bool Gemma3_Text_Only::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& i
     
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
     // hardware
+
+    // Prefix slots. The generation prompt ("<start_of_turn>model\n") is how the next turn renders this reply's header: save the whole
+    // prompt. The template folds the system prompt into the first user turn, so the shared head before "<start_of_turn>user" is a
+    // BOS token only: no boundary slot, the end slots carry the reuse.
+    if (this->_prefix_slot_mode(meta_info, tokens.size(), 0)) {
+        return this->_prefix_text_insert(meta_info, tokens, 0, "<start_of_turn>user", is_cancelled);
+    }
+    this->_prefix_legacy_path();
 
     return this->_shared_insert(meta_info, tokens, is_cancelled);
 }

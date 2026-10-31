@@ -48,11 +48,13 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 # ———————————————————————————————————————————————
 option(FLM_USE_HRX "Use the HRX amdxdna NPU runtime instead of XRT (0=XRT default, 1=HRX)" OFF)
 option(FLM_PORTABLE_BUILD "Build portable distribution with bundled runtime libraries" OFF)
-# Where the kernels come from. FastFlowLM's own flow and ryzenai-corelib share
-# no engine, so a build links one or the other; this option is not an extra.
-# It also fixes the NPU generation the build targets -- see utils/npu_platform.hpp.
+# ryzenai-corelib (exactly 0.53.0) beside FastFlowLM's own engines: the two
+# share no engine, and each model tag is served by one of them (a family ending
+# in "-core" is corelib's), so both are offered side by side -- with
+# FLM_NPU_PLATFORM=aie_next, the aie_next flm engines next to corelib's models.
+# corelib also tells which NPU generation this host has: utils/npu_platform.hpp.
 option(FLM_ENABLE_CORE
-       "Reach kernels through ryzenai-corelib instead of FastFlowLM's own flow" OFF)
+       "Also reach kernels through ryzenai-corelib, beside FastFlowLM's own flow" OFF)
 
 if(FLM_ENABLE_CORE)
     # The corelib prefix lives outside this repository, so its headers have to
@@ -544,6 +546,7 @@ list(APPEND FLM_ENGINE_LINK_LIBS qwen3vl_flash)
 list(APPEND FLM_ENGINE_LINK_LIBS
     qwen3_5vl_npu
     minicpm_v_4_7_npu
+    minicpm_v_4_7_moe_npu
     qwen3_5_omni_npu
     qwen3_6_moe_npu
     qwen3_8mtp_npu
@@ -553,6 +556,7 @@ list(APPEND FLM_ENGINE_LINK_LIBS
 )
 
 list(APPEND FLM_ENGINE_LINK_LIBS gemma4e_flash)
+list(APPEND FLM_ENGINE_LINK_LIBS gemma4e_dflash)
 
 list(APPEND FLM_ENGINE_LINK_LIBS
     gemma4_12b_npu
@@ -560,6 +564,7 @@ list(APPEND FLM_ENGINE_LINK_LIBS
     whisper_npu
     gemma_embedding
     lfm2_npu
+    lfm3_npu
     phi4_npu
     nanbeige_npu
     hunyuan_npu
@@ -639,6 +644,17 @@ if(FLM_USE_HRX)
     if(NOT WIN32)
         set_target_properties(flm PROPERTIES
             BUILD_RPATH "$<TARGET_FILE_DIR:hrx::hrx>;${FLM_ENGINE_LIB_DIR}")
+        # The HRX package ships its own libtinfo (and libedit, curl, ...) next to
+        # libhrx, and the linker looks in BUILD_RPATH for the dependencies of
+        # shared libraries. The system libedit linked below for non-portable
+        # builds would then resolve its libtinfo to the HRX copy, which lacks the
+        # NCURSES6_TINFO symbol versions, and the link fails. -rpath-link is
+        # searched first and only at link time, so the system copies win and the
+        # installed RPATH is unchanged.
+        if(NOT FLM_PORTABLE_BUILD AND CMAKE_LIBRARY_ARCHITECTURE)
+            target_link_options(flm PRIVATE
+                "LINKER:-rpath-link,/usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}")
+        endif()
     endif()
 else()
     # XRT: link xrt_coreutil (+ aiebu for the ELF assembler used by npu_utils_xrt).

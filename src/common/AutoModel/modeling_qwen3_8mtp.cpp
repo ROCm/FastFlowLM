@@ -71,6 +71,14 @@ void Qwen3_8MTP::load_model(std::string model_path, json model_info, int default
     for (size_t i = 0; i < PROFILER_TYPE_NUM; i++) {
         this->profiler_list[i].reset();
     }
+
+    // Prefix slots, phase 1: the shared head (system prompt + tools) of a text conversation. A snapshot is ~157 MB of
+    // recurrent state plus 64 KB (K/V) and 20 KB (the head's hidden history) per token, so no end-of-prompt snapshots
+    // and smaller default limits than the other models; a conversation that continues keeps using the single checkpoint.
+    this->prefix_cache_.boundary_only = true;
+    this->prefix_cache_.default_mib   = 1536;
+    this->prefix_cache_.default_slots = 4;
+    this->_prefix_attach(this->lm_engine, qwen3_8mtp_state_api(this->lm_engine), 248056); // 248056 = <|image_pad|>
 }
 
 void Qwen3_8MTP::setup_tokenizer(std::string model_path) {
@@ -81,15 +89,14 @@ void Qwen3_8MTP::setup_tokenizer(std::string model_path) {
     auto tokenizer_config = this->_shared_setup_tokenizer(model_path);
 }
 
-std::string Qwen3_8MTP::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools) {
+std::string Qwen3_8MTP::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools, bool continue_final_message) {
     minja::chat_template_inputs inputs;
-    inputs.add_generation_prompt = true;
     inputs.messages = messages;
     inputs.extra_context = this->extra_context;
     inputs.extra_context["enable_thinking"] = this->enable_think;
     if (!tools.empty() && this->enable_tool)
         inputs.tools = tools;
-    return this->chat_tmpl->apply(inputs);
+    return this->_render_chat_template(inputs, continue_final_message);
 }
 
 bool Qwen3_8MTP::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
@@ -185,7 +192,7 @@ bool Qwen3_8MTP::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
             qwenvl_message.push_back({ {"role", item["role"]}, {"content", newContent} });
         }
         nlohmann::ordered_json ordered_messages = qwenvl_message;
-        templated_text = this->apply_chat_template(ordered_messages, input.tools);
+        templated_text = this->apply_chat_template(ordered_messages, input.tools, meta_info.continue_final_message);
     }
     else if (!input.prompt.empty()) { // a pure text, usually from the cli
         nlohmann::ordered_json messages;
@@ -329,8 +336,25 @@ bool Qwen3_8MTP::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
     // hardware
     int restore_idx = -1;
 
-    if (meta_info.restore_allowed) {
-        restore_idx = qwen3_8mtp_engine->restore();
+    // The single checkpoint (the conversation that ran last) covers this prompt when its token history is a prefix of it: the
+    // conversation continues, restore() rewinds to the end of the last turn and only the new turn is prefilled.
+    // Otherwise (the first turn, or another conversation ran in between) a text prompt resumes from the slot that holds its
+    // shared head (system prompt + tools), if there is one, and prefills the rest. The saved head is a self-contained
+    // copy, so the engine moving on does not invalidate it.
+    const size_t think_trim = this->enable_think ? 2 : 4;
+    const bool checkpoint_covers = !checkpoint_his.empty() && checkpoint_his.size() <= tokens.size() &&
+                                   std::equal(checkpoint_his.begin(), checkpoint_his.end(), tokens.begin());
+    const bool slot_mode = !checkpoint_covers && !has_images &&
+                           std::find(tokens.begin(), tokens.end(), image_soft_token_id) == tokens.end() &&
+                           this->_prefix_slot_mode(meta_info, tokens.size(), think_trim);
+    size_t match_len = 0;
+    std::vector<int> full_tokens;          // what this prompt leaves in the engine
+    if (slot_mode) {
+        full_tokens.assign(tokens.begin(), tokens.end() - think_trim);
+        match_len = this->_prefix_resume(this->prefix_cache_, full_tokens, {});
+    }
+    else if (meta_info.restore_allowed && !checkpoint_his.empty()) {
+        restore_idx = this->lm_engine->restore();
         this->total_tokens = restore_idx;
         this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
     }
@@ -351,16 +375,32 @@ bool Qwen3_8MTP::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
     // Thinking on still needs "<think>\n" on screen -- record it for
     // generate() to echo. Thinking off streams nothing: its tokens only close
     // a block that was never opened.
+    //
+    // A continued message has no generation prompt: its last tokens are the
+    // client's own text, which the output must not repeat.
     this->preamble_to_stream.clear();
-    if (this->enable_think && tokens.size() >= 2)
+    if (this->enable_think && !meta_info.continue_final_message && tokens.size() >= 2)
         this->preamble_to_stream.assign(tokens.end() - 2, tokens.end());
+
+    if (slot_mode) {
+        const bool inserted = this->_prefix_insert(this->prefix_cache_, meta_info, tokens, full_tokens, {}, match_len, "<|im_start|>user",
+                                                   nullptr, 0, is_cancelled, input.requested_max_new_tokens);
+        if (!inserted) {
+            checkpoint_his.clear();   // cancelled half way: the engine holds part of a prompt
+            return false;
+        }
+        // the conversation continues from here: take the single checkpoint as well
+        checkpoint_his = token_history;
+        this->lm_engine->checkpoint();
+        return true;
+    }
 
     bool success = has_images
         ? this->_shared_insert(meta_info, tokens, is_cancelled, &payload, last_image_token_index)
         : this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
 
     checkpoint_his = token_history;
-    int checkpoint_idx = qwen3_8mtp_engine->checkpoint();
+    int checkpoint_idx = this->lm_engine->checkpoint();
     return success;
 }
 
@@ -430,7 +470,11 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
     // everything falls through to the ordinary path below.
     // Off under a decoding constraint: speculate() commits the drafts the base
     // model agrees with, so they would never pass the constraint's mask.
-    const bool spec_enabled = !meta_info.constraint;
+    // FLM_DISABLE_SPECULATION=1 turns it off too, for comparing against plain
+    // decoding (output, logprobs) on the same build.
+    const char* no_spec = std::getenv("FLM_DISABLE_SPECULATION");
+    const bool spec_enabled = this->lm_engine->supports_speculation() && !meta_info.constraint &&
+        !(no_spec != nullptr && no_spec[0] != '\0' && std::strcmp(no_spec, "0") != 0);
     // Draft depth; also the hit-rate denominator (see report_speculation_stats).
     const int SPEC_MAX_DRAFT = 7;
     if (spec_enabled) {
@@ -439,21 +483,21 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
 
     int last_sampled_token = this->last_token;
     this->token_history.push_back(this->last_token);
+    // the sample insert() took is the reply's first token, and counts toward the limit
+    meta_info.generated_tokens++;
     if (this->is_normal_token(last_sampled_token) && last_sampled_token != -1){
         std::string token_str = this->tokenizer->run_time_decoder(last_sampled_token);
         result += token_str;
         os << token_str << std::flush;
     }
     if (this->is_eos(last_sampled_token)){
+        // Sampled from the prefill, so no engine has run it (as in _shared_generate).
+        this->token_history.pop_back();
+        meta_info.stop_reason = reason;
         return result;
     }
     this->profiler_list[DECODING_TIME].reset();
     this->profiler_list[TKOEN_DECODE_TIME].reset();
-    if (this->total_tokens >= this->MAX_L){
-        header_print("WARNING", "Max length reached, stopping generation...");
-        reason = MAX_LENGTH_REACHED;
-        return result;
-    }
 
     // Commit one token: stream it, record it, test the stop rules. Shared by
     // both branches so a batch can't drift from the single-token path and
@@ -481,6 +525,9 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
             // second copy of it -- a wasted 64-layer pass and a duplicate row.
             if (this->forward_on_eos) {
                 this->lm_engine->forward(token);
+            } else {
+                // The engine never ran it, so the next prompt has to carry it.
+                this->token_history.pop_back();
             }
             return false;
         }
@@ -489,19 +536,43 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
             reason = MAX_LENGTH_REACHED;
             return false;
         }
-        return this->total_tokens < this->MAX_L;
+        // No MAX_L test here: a batch's tokens before its last are already in
+        // the caches, so stopping mid-batch would leave rows token_history
+        // does not describe. The loop tests MAX_L between steps instead.
+        return true;
     };
 
-    while (this->total_tokens < this->MAX_L){
+    if (this->total_tokens >= this->MAX_L){
+        header_print("WARNING", "Max length reached, stopping generation...");
+        reason = MAX_LENGTH_REACHED;
+    }
+    else if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)){
+        reason = MAX_LENGTH_REACHED;
+    }
+    else while (true){
+        // Tested here rather than in the loop condition so the stop is
+        // recorded as a truncation, as in _shared_generate.
+        if (this->total_tokens >= this->MAX_L){
+            reason = MAX_LENGTH_REACHED;
+            break;
+        }
         if (is_cancelled()) {
             reason = CANCEL_DETECTED;
             break;
         }
 
-        if (spec_enabled) {
+        // A batch must not run past length_limit: speculate() returns up to
+        // max_draft + 1 tokens, all but the last already committed, so capping
+        // the batch at the tokens left keeps the limit on the last one -- the
+        // one token a stop can drop. With one token left, decode it plainly.
+        const int tokens_left = (length_limit > 0)
+            ? length_limit - meta_info.generated_tokens
+            : SPEC_MAX_DRAFT + 1;
+        if (spec_enabled && tokens_left > 1) {
             this->profiler_list[DECODING_TIME].start();
             std::vector<int> accepted =
-                this->lm_engine->speculate(last_sampled_token, SPEC_MAX_DRAFT);
+                this->lm_engine->speculate(last_sampled_token,
+                                           std::min(SPEC_MAX_DRAFT, tokens_left - 1));
             // Charge the cycle to however many tokens came out of it, so
             // tok/s stays comparable with the non-speculative path.
             this->profiler_list[DECODING_TIME].stop(
@@ -519,10 +590,35 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
             }
 
             if (!accepted.empty()) {
+                // These never went through _sample(), so their logprobs come
+                // from the verify pass that accepted them: row i is the
+                // distribution accepted[i] is the argmax of.
+                const float* rows = nullptr;
+                int row_count = 0;
+                int vocab = 0;
+                if (meta_info.logprobs_top_n >= 0) {
+                    auto* mtp = dynamic_cast<qwen3_8mtp_npu*>(this->lm_engine);
+                    rows = mtp ? mtp->last_speculation_logits(row_count, vocab) : nullptr;
+                    if (!rows || row_count < (int)accepted.size()) {
+                        throw std::runtime_error("logprobs: the engine returned " +
+                            std::to_string(row_count) + " logits rows for " +
+                            std::to_string(accepted.size()) + " speculated tokens");
+                    }
+                }
                 // Already committed to the engine's caches -- must not be
                 // re-fed through forward(). eos mid-batch stops here.
                 bool go_on = true;
-                for (int tok : accepted) {
+                for (size_t i = 0; i < accepted.size(); i++) {
+                    const int tok = accepted[i];
+                    if (rows) {
+                        // before consume() writes the token: its entry has to
+                        // exist by the flush that streams it
+                        const float* row = rows + i * (size_t)vocab;
+                        sample_logprobs_t raw;
+                        raw.top_n = meta_info.logprobs_top_n;
+                        raw_logprobs(row, vocab, raw);
+                        this->_record_logprob(meta_info, tok, row[tok], raw);
+                    }
                     if (!(go_on = consume(tok))) break;
                 }
                 if (!go_on) break;
@@ -544,6 +640,11 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
     }
     meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
     meta_info.stop_reason = reason;
+    if (reason != EOT_DETECTED) {
+        // Cut short after sampling its last token: no engine has run that one,
+        // so the next prompt has to carry it.
+        this->token_history.pop_back();
+    }
     if (this->total_tokens >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping generation...");
     }

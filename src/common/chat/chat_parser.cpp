@@ -27,6 +27,12 @@ std::string trim(const std::string& s) {
     return s.substr(b, e - b);
 }
 
+std::string trim_end(const std::string& s) {
+    size_t e = s.size();
+    while (e > 0 && is_ws(s[e - 1])) e--;
+    return s.substr(0, e);
+}
+
 size_t skip_ws(const std::string& s, size_t pos) {
     while (pos < s.size() && is_ws(s[pos])) pos++;
     return pos;
@@ -76,18 +82,32 @@ size_t find_first(const std::string& s, size_t pos, std::initializer_list<const 
 /// \brief Collects the text parts of one kind and joins them
 /// \note Each part is trimmed and empty parts are dropped. Trimming keeps the
 ///       prefix property: trailing whitespace only shows once text follows it.
+///       The first text of a continued message is the exception: its whitespace
+///       belongs to the answer, so it is kept, the trailing part once the text is final.
 struct text_parts {
-    std::vector<std::string> parts;
+    struct part_t {
+        std::string raw;
+        bool exact; // the first text of a continued message
+    };
+    std::vector<part_t> parts;
 
-    void add(const std::string& raw) {
-        parts.push_back(raw);
+    void add(const std::string& raw, bool exact = false) {
+        parts.push_back({raw, exact});
     }
 
-    std::string join() const {
+    /// \param is_final no more text follows, so trailing whitespace can be released
+    std::string join(bool is_final = false) const {
+        const bool others = std::any_of(parts.begin(), parts.end(),
+                                        [](const part_t& p) { return !p.exact && !trim(p.raw).empty(); });
         std::string out;
-        for (const auto& raw : parts) {
-            std::string part = trim(raw);
-            if (part.empty()) {
+        for (size_t i = 0; i < parts.size(); i++) {
+            const auto& [raw, exact] = parts[i];
+            // text after it settles its trailing whitespace as surely as the end does
+            const bool followed = std::any_of(parts.begin() + i + 1, parts.end(),
+                                              [](const part_t& p) { return !trim(p.raw).empty(); });
+            std::string part = !exact ? trim(raw) : (is_final || followed) ? raw : trim_end(raw);
+            // whitespace alone is the answer only when nothing else is
+            if (part.empty() || (exact && others && trim(part).empty())) {
                 continue;
             }
             if (!out.empty()) {
@@ -468,6 +488,22 @@ chat_msg parse_tagged(const chat_format_spec& spec, const std::string& full_text
     text_parts content;
     bool in_reasoning = false;
     size_t pos = 0;
+    if (options.reasoning_may_close && spec.has_reasoning()) {
+        const size_t close = text.find(spec.reasoning_end);
+        const size_t open = text.find(spec.reasoning_start);
+        if (close != npos && (open == npos || close < open)) {
+            in_reasoning = true; // what came before the close was reasoning all along
+        } else if (open == npos && is_partial) {
+            return msg; // reasoning or answer: only a marker, or the end, can tell
+        }
+    }
+    // the first text of a continued message keeps its whitespace
+    bool lead_pending = options.keep_whitespace;
+    auto lead = [&lead_pending](const std::string& raw) {
+        const bool keep = lead_pending && !raw.empty();
+        lead_pending = lead_pending && raw.empty();
+        return keep;
+    };
 
     while (pos <= text.size()) {
         if (in_reasoning) {
@@ -488,10 +524,13 @@ chat_msg parse_tagged(const chat_format_spec& spec, const std::string& full_text
                 if (is_partial) {
                     rest = cut_partial_marker(rest, {&spec.reasoning_end, &stop_marker});
                 }
-                reasoning.add(rest);
+                reasoning.add(rest, lead(rest));
                 break;
             }
-            reasoning.add(text.substr(pos, end - pos));
+            const std::string part = text.substr(pos, end - pos);
+            // closed with nothing but whitespace in it, the block was layout, not an answer
+            const bool exact = lead(part);
+            reasoning.add(part, exact && !trim(part).empty());
             pos = end + spec.reasoning_end.size();
             in_reasoning = false;
             continue;
@@ -504,10 +543,11 @@ chat_msg parse_tagged(const chat_format_spec& spec, const std::string& full_text
             if (is_partial) {
                 rest = cut_partial_marker(rest, {&reasoning_start, &tool_start, &stop_marker});
             }
-            content.add(rest);
+            content.add(rest, lead(rest));
             break;
         }
-        content.add(text.substr(pos, at - pos));
+        const std::string part = text.substr(pos, at - pos);
+        content.add(part, lead(part));
         if (which == &reasoning_start) {
             pos = at + reasoning_start.size();
             in_reasoning = true;
@@ -530,8 +570,11 @@ chat_msg parse_tagged(const chat_format_spec& spec, const std::string& full_text
         pos = body_end + spec.tool_end.size();
     }
 
-    msg.reasoning = reasoning.join();
-    msg.content = content.join();
+    msg.reasoning = reasoning.join(!is_partial);
+    msg.content = content.join(!is_partial);
+    if (!msg.tool_calls.empty() && trim(msg.content).empty()) {
+        msg.content.clear(); // whitespace before a call is layout, kept only as a whole answer
+    }
     return msg;
 }
 

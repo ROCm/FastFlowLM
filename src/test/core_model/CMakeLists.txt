@@ -50,3 +50,6 @@ add_core_model_test(test_corelib_model_backend
 add_core_model_test(test_phi4_core_backend
     "${FLM_SOURCE_DIR}/common/core/corelib_model_backend.cpp"
     "${FLM_SOURCE_DIR}/common/models/phi4/core/dev04/phi4_core_backend.cpp")
+add_core_model_test(test_llama_core_backend
+    "${FLM_SOURCE_DIR}/common/core/corelib_model_backend.cpp"
+    "${FLM_SOURCE_DIR}/common/models/llama/core/dev04/llama_core_backend.cpp")

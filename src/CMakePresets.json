@@ -5,7 +5,7 @@
       "name": "common-default",
       "hidden": true,
       "cacheVariables": {
-        "FLM_VERSION": "1.0.11",
+        "FLM_VERSION": "1.0.12",
         "NPU_VERSION": "32.0.203.304"
       }
     },
@@ -115,6 +115,19 @@
       "binaryDir": "${sourceDir}/build_aie_next",
       "cacheVariables": {
         "FLM_NPU_PLATFORM": "aie_next"
+      }
+    },
+    {
+      "name": "windows-ninja",
+      "displayName": "Windows Ninja",
+      "description": "Windows with Ninja and the MSVC compiler from the environment (run from a VS developer prompt); what CI builds with, so a compiler cache can wrap cl",
+      "inherits": "common-default",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "cl",
+        "CMAKE_CXX_COMPILER": "cl"
       }
     }
   ],

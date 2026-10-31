@@ -1,0 +1,122 @@
+name: Install package
+description: >
+  Makes a downloaded FastFlowLM package runnable on an NPU runner and reports
+  the flm binary to test. A portable package is unpacked. A .deb or MSI is
+  installed when the runner account may install software (passwordless sudo,
+  or an elevated Windows session) and nothing is installed already; otherwise
+  it is unpacked and run in place, with a warning that the install itself went
+  untested. Pair with remove-package (if: always()) to put the runner back.
+
+inputs:
+  kind:
+    description: portable, deb or msi.
+    required: true
+  path:
+    description: Directory the package artifact was downloaded to, relative to the workspace.
+    required: true
+
+outputs:
+  flm-bin:
+    description: Absolute path of the flm binary to test.
+    value: ${{ steps.linux.outputs.flm-bin || steps.windows.outputs.flm-bin }}
+  mode:
+    description: '"installed" or "unpacked"; remove-package undoes an install only.'
+    value: ${{ steps.linux.outputs.mode || steps.windows.outputs.mode }}
+
+runs:
+  using: composite
+  steps:
+    - name: Prepare package (Linux)
+      id: linux
+      if: runner.os == 'Linux'
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        KIND: ${{ inputs.kind }}
+        PKG_DIR: ${{ inputs.path }}
+      run: |
+        set -euo pipefail
+        unpack="${GITHUB_WORKSPACE}/flm-unpacked"
+        rm -rf "${unpack}" && mkdir -p "${unpack}"
+        case "${KIND}" in
+          portable)
+            tar xzf "$(ls "${PKG_DIR}"/*_linux.tar.gz | head -1)" -C "${unpack}"
+            echo "flm-bin=${unpack}/flm" >> "$GITHUB_OUTPUT"
+            echo "mode=unpacked" >> "$GITHUB_OUTPUT"
+            ;;
+          deb)
+            deb=$(ls "${PKG_DIR}"/*.deb | head -1)
+            # Installing over a FastFlowLM someone put on this runner would
+            # leave it removed afterwards, so only install onto a clean one.
+            if sudo -n true 2>/dev/null && ! dpkg -s fastflowlm >/dev/null 2>&1; then
+              sudo -n apt-get install -y --no-install-recommends "$(realpath "${deb}")"
+              echo "flm-bin=/opt/fastflowlm/bin/flm" >> "$GITHUB_OUTPUT"
+              echo "mode=installed" >> "$GITHUB_OUTPUT"
+            else
+              reason="no passwordless sudo"
+              dpkg -s fastflowlm >/dev/null 2>&1 && reason="fastflowlm is already installed on this runner"
+              echo "::warning::Not installing $(basename "${deb}") (${reason}); testing its unpacked payload instead."
+              # flm finds its model lists and xclbins in ../share/flm next to
+              # the binary before its built-in /opt prefix, so the unpacked
+              # tree runs as it is.
+              dpkg-deb -x "${deb}" "${unpack}"
+              echo "flm-bin=${unpack}/opt/fastflowlm/bin/flm" >> "$GITHUB_OUTPUT"
+              echo "mode=unpacked" >> "$GITHUB_OUTPUT"
+            fi
+            ;;
+          *)
+            echo "::error::Unknown Linux package kind '${KIND}'."
+            exit 1
+            ;;
+        esac
+
+    - name: Prepare package (Windows)
+      id: windows
+      if: runner.os == 'Windows'
+      shell: powershell
+      working-directory: ${{ github.workspace }}
+      env:
+        KIND: ${{ inputs.kind }}
+        PKG_DIR: ${{ inputs.path }}
+      run: |
+        $ErrorActionPreference = "Stop"
+        function Out-Step($line) {
+          # No BOM: Windows PowerShell 5.1's Out-File -Encoding utf8 writes one,
+          # which corrupts the output name.
+          [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "$line`n")
+        }
+        switch ($env:KIND) {
+          'portable' {
+            $flm = Join-Path (Resolve-Path $env:PKG_DIR) 'flm.exe'
+            if (-not (Test-Path $flm)) { throw "flm.exe not found in $env:PKG_DIR" }
+            Out-Step "flm-bin=$flm"
+            Out-Step "mode=unpacked"
+          }
+          'msi' {
+            $msi = (Get-ChildItem $env:PKG_DIR -Filter *.msi | Select-Object -First 1).FullName
+            $installed = Join-Path $env:ProgramFiles 'flm\flm.exe'
+            $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+              [Security.Principal.WindowsBuiltInRole]::Administrator)
+            if ($admin -and -not (Test-Path $installed)) {
+              $log = Join-Path $env:GITHUB_WORKSPACE 'msi-install.log'
+              $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @('/i', "`"$msi`"", '/qn', '/l*v', "`"$log`"")
+              if ($p.ExitCode -ne 0) { throw "msiexec /i failed with exit code $($p.ExitCode); see msi-install.log" }
+              Out-Step "flm-bin=$installed"
+              Out-Step "mode=installed"
+            } else {
+              $reason = if (-not $admin) { 'the runner session is not elevated' } else { 'FastFlowLM is already installed on this runner' }
+              Write-Host "::warning::Not installing $(Split-Path $msi -Leaf) ($reason); testing its unpacked payload instead."
+              # An administrative install only extracts the files; it needs no
+              # elevation and registers nothing.
+              $target = Join-Path $env:GITHUB_WORKSPACE 'flm-unpacked'
+              if (Test-Path $target) { Remove-Item $target -Recurse -Force }
+              $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @('/a', "`"$msi`"", '/qn', "TARGETDIR=`"$target`"")
+              if ($p.ExitCode -ne 0) { throw "msiexec /a failed with exit code $($p.ExitCode)" }
+              $flm = Get-ChildItem $target -Recurse -Filter flm.exe | Select-Object -First 1
+              if (-not $flm) { throw "flm.exe not found in the extracted MSI" }
+              Out-Step "flm-bin=$($flm.FullName)"
+              Out-Step "mode=unpacked"
+            }
+          }
+          default { throw "Unknown Windows package kind '$env:KIND'." }
+        }

@@ -248,6 +248,7 @@ void gemma4e_attn_block_prefill_context::sync_kv_cache(
     memcpy(prefill_v_cache_ptr, new_v_cache_ptr, L_effective * DV * sizeof(bf16));
     memcpy(decoding_k_cache_ptr, new_k_cache_ptr, L_effective * DK * sizeof(bf16));
     memcpy(decoding_v_cache_ptr, new_v_cache_ptr, L_effective * DV * sizeof(bf16));
+    global_scratch_rows = std::max(global_scratch_rows, static_cast<size_t>(L_begin + L_effective));
 
     decoding_cache.sync_to_device();
     prefill_cache.sync_to_device();
@@ -327,6 +328,7 @@ void gemma4e_attn_block_prefill_context::sync_sliding_kv_cache(
     // // part 4: padded, no actual data exists
     // memset(prefill_k_cache_ptr, 0, part_4_length * DK * sizeof(bf16));
     // memset(prefill_v_cache_ptr, 0, part_4_length * DV * sizeof(bf16));
+    sliding_scratch_rows = std::max(sliding_scratch_rows, static_cast<size_t>(L_begin + L_effective));
     decoding_cache.sync_to_device();
     prefill_cache.sync_to_device();
 }

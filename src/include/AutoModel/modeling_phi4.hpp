@@ -50,7 +50,9 @@ public:
                                      int length_limit,
                                      std::ostream& os = std::cout) override;
     std::string apply_chat_template(nlohmann::ordered_json& messages,
-                                    nlohmann::ordered_json tools = nlohmann::ordered_json::object()) override;
+                                    nlohmann::ordered_json tools = nlohmann::ordered_json::object(),
+                                    bool continue_final_message = false) override;
+    bool supports_continue_final_message() const override { return true; }
 
     /// \note Phi-4 does not reuse a checkpointed prefix, so a matched prefix
     ///       still costs one round. Overrides the base default of true.

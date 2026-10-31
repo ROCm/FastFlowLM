@@ -169,6 +169,8 @@ gemma4e_npu::Impl::Impl(LM_Config config, npu_xclbin_manager *npu_instance, gemm
     proj_weights.resize(num_hidden_layers);
     pli_gate_up_weights.resize(num_hidden_layers);
     kv_caches.resize(non_skip_layers); // only allocate kv_cache for non-skip layers
+    attn_mask.resize(non_skip_layers);
+    for (int i = 0; i < non_skip_layers; i++) attn_mask[i] = is_global_layer_idx(i);
     rope_rms_weights.resize(num_hidden_layers);
     layer_scale = buffer<float>(num_hidden_layers);
 
@@ -263,6 +265,7 @@ void gemma4e_npu::Impl::_set_rope_rms_weights(int idx){
 
 void gemma4e_npu::Impl::set_context_length(int L){
     this->current_context_length = L;
+    this->dirty_rows = std::max(this->dirty_rows, static_cast<size_t>(L));
     DEBUG_BLOCK(2,
     header_print_r("info", "Setting context length to " + std::to_string(L) + " for all layers in the sequence");
     )
@@ -459,6 +462,7 @@ buffer<bf16> gemma4e_npu::Impl::_prefill_with_mm(std::vector<int>& ids, void* pa
     // Sizes the batch and readies every block; sequences and buffers that already
     // match this geometry are kept as they are.
     const gemma4e_prefill_shape s = this->prefill_ctx->setup(L_in, this->current_context_length);
+    this->prefill_ctx->zero_scratch();
     gemma4e_common_buffers& bufs = this->prefill_ctx->bufs;
 
     DEBUG_BLOCK(1,
@@ -609,6 +613,65 @@ void gemma4e_npu::Impl::clear_context(){
         memset(this->kv_caches[i].data(), 0, this->kv_caches[i].size() * sizeof(bf16));
         this->kv_caches[i].sync_to_device();
     }
+    this->dirty_rows = 0;
+}
+
+kv_row_layout gemma4e_npu::Impl::kv_layout() const{
+    kv_row_layout l;
+    l.DK = DK; l.DV = DV; l.striped = false;
+    l.v_offset = static_cast<size_t>(MAX_L) * DK; // a global layer holds K rows, then V rows
+    return l;
+}
+
+std::unique_ptr<hybrid_engine_state> gemma4e_npu::Impl::new_state(){
+    size_t ring_bytes = 0, global_layers = 0;
+    for (size_t i = 0; i < kv_caches.size(); i++){
+        if (attn_mask[i]) global_layers++;
+        else ring_bytes += kv_caches[i].size() * sizeof(bf16);
+    }
+    return kv_rows_new_state(global_layers, kv_layout(), ring_bytes);
+}
+
+int gemma4e_npu::Impl::read_state(hybrid_engine_state& state, int kv_from){
+    header_print_r("FLM", "Reading state at context length " + std::to_string(this->current_context_length) + ", K/V rows from " + std::to_string(kv_from));
+    const int length = kv_rows_read(state, this->kv_caches, kv_layout(), this->current_context_length, kv_from, -1, &attn_mask);
+    if (length < 0) return -1;
+    for (size_t i = 0; i < kv_caches.size(); i++){
+        if (attn_mask[i]) continue;
+        this->kv_caches[i].sync_from_device();
+        state.state[i] = buffer<bf16>(this->kv_caches[i].size());
+        memcpy(static_cast<void*>(state.state[i].data()), static_cast<void*>(this->kv_caches[i].data()), this->kv_caches[i].size() * sizeof(bf16));
+    }
+    return length;
+}
+
+int gemma4e_npu::Impl::write_state_kv(const hybrid_engine_state& state){
+    return kv_rows_write(state, this->kv_caches, kv_layout(), this->MAX_L, &attn_mask);
+}
+
+int gemma4e_npu::Impl::write_state(const hybrid_engine_state& state){
+    // check the rings before anything is written
+    bool ok = state.state.size() == this->kv_caches.size();
+    for (size_t i = 0; ok && i < kv_caches.size(); i++){
+        if (!attn_mask[i] && state.state[i].size() != this->kv_caches[i].size()) ok = false;
+    }
+    const int length = ok ? kv_rows_write(state, this->kv_caches, kv_layout(), this->MAX_L, &attn_mask) : -1;
+    if (length < 0){
+        header_print_r("FLM", "No valid state to write");
+        return -1;
+    }
+    header_print_r("FLM", "Writing state at context length " + std::to_string(length));
+    for (size_t i = 0; i < kv_caches.size(); i++){
+        if (attn_mask[i]) continue;
+        this->kv_caches[i].sync_from_device();
+        memcpy(static_cast<void*>(this->kv_caches[i].data()), static_cast<const void*>(state.state[i].data()), this->kv_caches[i].size() * sizeof(bf16));
+        this->kv_caches[i].sync_to_device();
+    }
+    // rows past the length hold what the requests since the state was read left there: put back the zeros of a fresh engine
+    kv_rows_zero(this->kv_caches, kv_layout(), static_cast<size_t>(length), this->dirty_rows, &attn_mask);
+    this->dirty_rows = static_cast<size_t>(length);
+    this->set_context_length(length);
+    return length;
 }
 
 int gemma4e_npu::Impl::get_current_context_length(){
@@ -638,6 +701,7 @@ void gemma4e_npu::Impl::update_max_length(uint32_t MAX_L){
         }
     }
     is_checkpoint_valid = false; // force reload checkpoint to clear kv cache on device
+    this->dirty_rows = 0; // every global buffer was zeroed
     this->set_context_length(0); // clear
 }
 
@@ -848,6 +912,26 @@ int gemma4e_npu::checkpoint(){
 
 int gemma4e_npu::restore(){
     return this->_impl->restore();
+}
+
+std::unique_ptr<hybrid_engine_state> gemma4e_npu::new_state(){
+    return this->_impl->new_state();
+}
+
+int gemma4e_npu::read_state(hybrid_engine_state& state, int kv_from){
+    return this->_impl->read_state(state, kv_from);
+}
+
+int gemma4e_npu::write_state(const hybrid_engine_state& state){
+    return this->_impl->write_state(state);
+}
+
+int gemma4e_npu::write_state_kv(const hybrid_engine_state& state){
+    return this->_impl->write_state_kv(state);
+}
+
+extern "C" const flm_state_api* gemma4e_npu_state_api(void* engine){
+    return hybrid_state_api<gemma4e_npu>(engine);
 }
 
 buffer<bf16> gemma4e_npu::get_k_cache(int layer_idx, int idx){

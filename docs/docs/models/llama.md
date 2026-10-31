@@ -10,6 +10,7 @@ parent: Models
 - **Type:** Text-to-Text
 - **Think:** No
 - **Tool Calling Support:** No  
+- **Prefix cache (server mode):** Yes, saved prompts are reused (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
 - **Base Model:** [meta-llama/Llama-3.2-1B-Instruct](https://huggingface.co/meta-llama/Llama-3.2-1B-Instruct)
 - **Quantization:** Q4_1
 - **Max Context Length:** 128k tokens  
@@ -29,6 +30,7 @@ flm run llama3.2:1b
 - **Type:** Text-to-Text
 - **Think:** No
 - **Tool Calling Support:** No  
+- **Prefix cache (server mode):** Yes, saved prompts are reused (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
 - **Base Model:** [meta-llama/Llama-3.2-3B-Instruct](https://huggingface.co/meta-llama/Llama-3.2-3B-Instruct)
 - **Quantization:** Q4_1
 - **Max Context Length:** 128k tokens  
@@ -48,6 +50,7 @@ flm run llama3.2:3b
 - **Type:** Text-to-Text
 - **Think:** No
 - **Tool Calling Support:** No  
+- **Prefix cache (server mode):** Yes, saved prompts are reused (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
 - **Base Model:** [meta-llama/Llama-3.1-8B-Instruct](https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct)
 - **Quantization:** Q4_1
 - **Max Context Length:** 128k tokens  

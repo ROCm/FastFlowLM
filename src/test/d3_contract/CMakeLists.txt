@@ -22,6 +22,13 @@ add_executable(test_d3_contract
     ${FLM_D3_VIDEO_SOURCES})
 target_include_directories(test_d3_contract PRIVATE "${FLM_SOURCE_DIR}/include")
 
+add_executable(test_d3_ultra
+    test_d3_ultra.cpp
+    "${FLM_SOURCE_DIR}/common/decision/py_json.cpp"
+    "${FLM_SOURCE_DIR}/common/decision/d3_contract.cpp"
+    ${FLM_D3_VIDEO_SOURCES})
+target_include_directories(test_d3_ultra PRIVATE "${FLM_SOURCE_DIR}/include")
+
 if(FLM_D3_TEST_TOKENIZER)
     add_subdirectory("${FLM_SOURCE_DIR}/../third_party/tokenizers-cpp" tokenizers EXCLUDE_FROM_ALL)
     target_link_libraries(test_d3_contract PRIVATE tokenizers_cpp)
@@ -39,8 +46,16 @@ if(FLM_D3_TEST_TOKENIZER)
     target_include_directories(test_d3_state_split PRIVATE "${FLM_SOURCE_DIR}/include")
     target_link_libraries(test_d3_state_split PRIVATE tokenizers_cpp)
     target_include_directories(test_d3_state_split PRIVATE "${FLM_SOURCE_DIR}/../third_party/tokenizers-cpp/include")
+
+    # d3-ultra: header-v1 prompts with FastFlowLM's Tokenizer:  test_d3_ultra <fixtures_ultra> <D3-Ultra or D3-Turbo-NPU2 dir>
+    target_sources(test_d3_ultra PRIVATE "${FLM_SOURCE_DIR}/common/tokenizer/tokenizer.cpp")
+    target_link_libraries(test_d3_ultra PRIVATE tokenizers_cpp)
+    target_include_directories(test_d3_ultra PRIVATE "${FLM_SOURCE_DIR}/../third_party/tokenizers-cpp/include")
+    target_compile_definitions(test_d3_ultra PRIVATE FLM_D3_TEST_TOKENIZER)
 endif()
 
 enable_testing()
 add_test(NAME test_d3_contract
          COMMAND test_d3_contract "${CMAKE_CURRENT_LIST_DIR}/fixtures")
+add_test(NAME test_d3_ultra
+         COMMAND test_d3_ultra "${CMAKE_CURRENT_LIST_DIR}/fixtures_ultra")

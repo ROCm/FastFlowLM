@@ -489,13 +489,17 @@ void Sampler::sampler_allowed_apply(const std::vector<uint32_t>* allowed) {
 }
 
 void Sampler::raw_logprobs_apply(sample_logprobs_t& logprobs) {
+    raw_logprobs(this->logits.data(), in_features, logprobs);
+}
+
+void raw_logprobs(const float* logits, int n, sample_logprobs_t& logprobs) {
     float max_l = -std::numeric_limits<float>::infinity();
-    for (int i = 0; i < in_features; i++) {
-        max_l = std::max(max_l, this->logits[i]);
+    for (int i = 0; i < n; i++) {
+        max_l = std::max(max_l, logits[i]);
     }
     double sum = 0.0;
-    for (int i = 0; i < in_features; i++) {
-        sum += std::exp(this->logits[i] - max_l);
+    for (int i = 0; i < n; i++) {
+        sum += std::exp(logits[i] - max_l);
     }
     logprobs.log_norm = max_l + static_cast<float>(std::log(sum));
 
@@ -504,7 +508,7 @@ void Sampler::raw_logprobs_apply(sample_logprobs_t& logprobs) {
         if (a.logprob != b.logprob) { return a.logprob > b.logprob; }
         return a.token_id < b.token_id;
     };
-    const int k = std::min(logprobs.top_n, in_features);
+    const int k = std::min(logprobs.top_n, n);
     auto& top = logprobs.top;
     top.clear();
     if (k <= 0) {
@@ -513,13 +517,13 @@ void Sampler::raw_logprobs_apply(sample_logprobs_t& logprobs) {
     // Holds logits until the end, logprobs only once the heap is sorted
     top.reserve(k);
     for (int i = 0; i < k; i++) {
-        top.push_back(token_logprob_t{ i, this->logits[i] });
+        top.push_back(token_logprob_t{ i, logits[i] });
     }
     std::make_heap(top.begin(), top.end(), ranks_before);
-    for (int i = k; i < in_features; i++) {
-        if (this->logits[i] > top.front().logprob) {
+    for (int i = k; i < n; i++) {
+        if (logits[i] > top.front().logprob) {
             std::pop_heap(top.begin(), top.end(), ranks_before);
-            top.back() = token_logprob_t{ i, this->logits[i] };
+            top.back() = token_logprob_t{ i, logits[i] };
             std::push_heap(top.begin(), top.end(), ranks_before);
         }
     }

@@ -40,6 +40,10 @@ void* NewObject(std::string kind = "generic") {
     return object;
 }
 
+bool IsKind(const void* object, std::string_view kind) {
+    return object && static_cast<const FakeObject*>(object)->kind == kind;
+}
+
 /// \brief the size the fake claims a packed weight has
 /// \note Only has to be deterministic and descriptor-derived: corelib rejects
 ///       a cached slice whose length is not exactly what the descriptor packs
@@ -55,6 +59,11 @@ unsigned char FillFor(const void* source) {
 }
 
 ryzenai_corelib_status Status(std::string_view name) {
+    if (auto pending = state.fail_counts.find(std::string(name));
+        pending != state.fail_counts.end() && pending->second > 0) {
+        --pending->second;
+        return ryzenai_corelib_status_failure;
+    }
     const auto configured = state.statuses.find(std::string(name));
     return configured == state.statuses.end() ? state.default_status
                                                : configured->second;
@@ -165,14 +174,10 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             return current_detail.c_str();
         } else if constexpr (std::is_same_v<Tag, selftest_dependencies_tag>) {
             return state.selftest_status;
-        } else if constexpr (std::is_same_v<Tag, get_device_tag>) {
-            // 0.5.0 answers "is there an NPU" with the device pointer itself,
-            // NULL when there is none. The fake has no device to hand out, so
-            // any stable non-null address will do -- nothing dereferences it.
-            static const int kFakeDevice = 0;
-            return state.has_device_context
-                       ? static_cast<const void*>(&kFakeDevice)
-                       : nullptr;
+        } else if constexpr (std::is_same_v<Tag, npu_usable_tag>) {
+            return state.npu_usable;
+        } else if constexpr (std::is_same_v<Tag, npu_arch_tag>) {
+            return state.npu_arch.c_str();
         } else if constexpr (std::is_same_v<Tag, object_release_tag>) {
             void* object = std::get<0>(arguments);
             if (object) {
@@ -202,23 +207,26 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             const char* model = std::get<1>(arguments);
             state.kernel_bundles.emplace_back(model ? model : "");
             return Status(Tag::name);
-        } else if constexpr (std::is_same_v<Tag, model_weights_create_path_tag>) {
+        } else if constexpr (std::is_same_v<Tag, create_model_from_path_tag>) {
             const auto status = Status(Tag::name);
             state.model_names.emplace_back(std::get<0>(arguments) ? std::get<0>(arguments) : "");
-            state.model_weights_path = std::get<1>(arguments) ? std::get<1>(arguments) : "";
+            state.model_path = std::get<1>(arguments) ? std::get<1>(arguments) : "";
             auto* out = std::get<2>(arguments);
-            if (out) *out = status == ryzenai_corelib_status_success ? NewObject("model_weights") : nullptr;
-            return status;
-        } else if constexpr (std::is_same_v<Tag, model_create_tag>) {
-            const auto status = Status(Tag::name);
-            state.model_names.emplace_back(std::get<0>(arguments) ? std::get<0>(arguments) : "");
-            const auto* options = std::get<2>(arguments);
-            auto* out = std::get<3>(arguments);
-            state.model_max_sequence_length = options ? options->max_sequence_length : 0;
-            ++state.model_creates;
             if (out) *out = status == ryzenai_corelib_status_success ? NewObject("model") : nullptr;
             return status;
-        } else if constexpr (std::is_same_v<Tag, model_info_get_tag>) {
+        } else if constexpr (std::is_same_v<Tag, model_create_session_tag>) {
+            // A model and a session are both an object_ptr to the compiler,
+            // so the fake tells them apart where corelib would.
+            if (!IsKind(std::get<0>(arguments), "model")) return ryzenai_corelib_status_bad_argument;
+            const auto status = Status(Tag::name);
+            const auto* options = std::get<1>(arguments);
+            auto* out = std::get<2>(arguments);
+            state.model_max_sequence_length = options ? options->max_sequence_length : 0;
+            ++state.session_creates;
+            if (out) *out = status == ryzenai_corelib_status_success ? NewObject("session") : nullptr;
+            return status;
+        } else if constexpr (std::is_same_v<Tag, model_get_info_tag>) {
+            if (!IsKind(std::get<0>(arguments), "session")) return ryzenai_corelib_status_bad_argument;
             auto* out = std::get<1>(arguments);
             if (out) {
                 constexpr std::int64_t kPage = 4096;
@@ -227,6 +235,7 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             }
             return Status(Tag::name);
         } else if constexpr (std::is_same_v<Tag, model_forward_tag>) {
+            if (!IsKind(std::get<0>(arguments), "session")) return ryzenai_corelib_status_bad_argument;
             const auto* options = std::get<6>(arguments);
             auto* out_logits = std::get<8>(arguments);
             // corelib refuses options whose size does not cover the struct
@@ -243,13 +252,18 @@ struct TypedFake<Tag, Result (*)(Args...)> {
                                                   static_cast<std::size_t>(state.model_vocab)),
                             0.5f);
             return Status(Tag::name);
+        } else if constexpr (std::is_same_v<Tag, model_reset_tag>) {
+            if (!IsKind(std::get<0>(arguments), "session")) return ryzenai_corelib_status_bad_argument;
+            return Status(Tag::name);
         } else if constexpr (std::is_same_v<Tag, model_state_save_tag>) {
+            if (!IsKind(std::get<0>(arguments), "session")) return ryzenai_corelib_status_bad_argument;
             const auto status = Status(Tag::name);
             ++state.state_saves;
             auto* out = std::get<1>(arguments);
             if (out) *out = status == ryzenai_corelib_status_success ? NewObject("snapshot") : nullptr;
             return status;
         } else if constexpr (std::is_same_v<Tag, model_state_restore_tag>) {
+            if (!IsKind(std::get<0>(arguments), "session")) return ryzenai_corelib_status_bad_argument;
             ++state.state_restores;
             return Status(Tag::name);
         } else if constexpr (std::is_same_v<Tag, create_device_tensor_tag>) {
@@ -376,12 +390,11 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             }
             return status;
         } else if constexpr (std::is_same_v<Tag, matmul_enum_kernels_tag> ||
-                             std::is_same_v<Tag, ssmlp_enum_kernels_tag> ||
-                             std::is_same_v<Tag, flat_mha_enum_kernels_tag>) {
+                             std::is_same_v<Tag, ssmlp_enum_kernels_tag>) {
             // corelib 0.9 reports shipped kernels instead of padding a shape.
             // A negative M is the test double for "every requested M ships
             // exactly". Argument 1 is the callback,
-            // argument 2 is its context, for all three of these entry points.
+            // argument 2 is its context, for both of these entry points.
             const auto status = Status(Tag::name);
             if (status == ryzenai_corelib_status_success && !state.pad_row_overrides.empty()) {
                 // A test that overrides a padded extent gets an explicit grid
@@ -408,18 +421,11 @@ struct TypedFake<Tag, Result (*)(Args...)> {
                                          static_cast<std::int64_t>(64), false,
                                          static_cast<std::int64_t>(0), static_cast<std::int64_t>(0));
                         }
-                    } else if constexpr (std::is_same_v<Tag, ssmlp_enum_kernels_tag>) {
+                    } else {
                         for (const auto m : shipped("ssmlp"))
                             callback(ctx, 0, "fusion_mladf_ssmlp", m,
                                      static_cast<std::int64_t>(3072), static_cast<std::int64_t>(8192),
                                      static_cast<std::int64_t>(64));
-                    } else {
-                        for (const auto m : shipped("mha"))
-                            callback(ctx, 0, static_cast<std::int64_t>(24),
-                                     static_cast<std::int64_t>(8), m, static_cast<std::int64_t>(0),
-                                     static_cast<std::int64_t>(128), static_cast<std::int64_t>(4096),
-                                     static_cast<std::int64_t>(96), static_cast<std::int64_t>(0),
-                                     false, false);
                     }
                 }
             } else if (status == ryzenai_corelib_status_success) {
@@ -433,20 +439,11 @@ struct TypedFake<Tag, Result (*)(Args...)> {
                                  static_cast<std::int64_t>(0), false,
                                  static_cast<std::int64_t>(0),
                                  static_cast<std::int64_t>(0));
-                    } else if constexpr (std::is_same_v<Tag, ssmlp_enum_kernels_tag>) {
+                    } else {
                         callback(ctx, 0, "", static_cast<std::int64_t>(-1),
                                  static_cast<std::int64_t>(0),
                                  static_cast<std::int64_t>(0),
                                  static_cast<std::int64_t>(0));
-                    } else {
-                        callback(ctx, 0, static_cast<std::int64_t>(-1),
-                                 static_cast<std::int64_t>(0),
-                                 static_cast<std::int64_t>(-1),
-                                 static_cast<std::int64_t>(0),
-                                 static_cast<std::int64_t>(0),
-                                 static_cast<std::int64_t>(0),
-                                 static_cast<std::int64_t>(0),
-                                 static_cast<std::int64_t>(0), false, false);
                     }
                 }
             }
@@ -537,8 +534,7 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             state.work_in_flight = false;
             return Status(Tag::name);
         } else if constexpr (std::is_same_v<Tag, matmul_tag> ||
-                             std::is_same_v<Tag, ssmlp_tag> ||
-                             std::is_same_v<Tag, flat_mha_tag>) {
+                             std::is_same_v<Tag, ssmlp_tag>) {
             if (state.statuses.contains("test_observe_dispatch_concurrency")) {
                 const int active = ++state.active_leases;
                 int maximum = state.maximum_active_leases.load();
@@ -566,20 +562,9 @@ struct TypedFake<Tag, Result (*)(Args...)> {
                     }
                 }
             }
-            if constexpr (std::is_same_v<Tag, flat_mha_tag>) {
-                // Real corelib reads the rotary tables on the host and rejects
-                // anything but a host view for them.
-                for (void* table : {std::get<5>(arguments), std::get<6>(arguments)}) {
-                    if (!table || static_cast<FakeObject*>(table)->kind != "host_view") {
-                        state.detail = "handle is not a class RyzenAI::CoreLib::HostView";
-                        return ryzenai_corelib_status_bad_argument;
-                    }
-                }
-            }
             fake_corelib::DispatchRecord record{};
             record.thread_id = std::this_thread::get_id();
-            record.kind = std::is_same_v<Tag, matmul_tag> ? "matmul" :
-                          std::is_same_v<Tag, ssmlp_tag> ? "ssmlp" : "mha";
+            record.kind = std::is_same_v<Tag, matmul_tag> ? "matmul" : "ssmlp";
             record.stream = std::get<0>(arguments);
             // 0.5.0 removed the row count from every dispatch: M is the leading
             // extent of the operand that was bound. Read it back off the input
@@ -587,13 +572,9 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             if constexpr (std::is_same_v<Tag, matmul_tag>) {
                 record.input = std::get<1>(arguments);
                 record.output = std::get<3>(arguments);
-            } else if constexpr (std::is_same_v<Tag, ssmlp_tag>) {
+            } else {
                 record.input = std::get<1>(arguments);
                 record.output = std::get<5>(arguments);
-            } else {
-                record.input = std::get<2>(arguments);
-                record.position = std::get<4>(arguments);
-                record.output = std::get<9>(arguments);
             }
             if (record.input) {
                 const auto& shape = static_cast<FakeObject*>(record.input)->shape;
@@ -663,7 +644,8 @@ void Reset() {
                      RYZENAI_CORELIB_VERSION_PATCH};
     state.selftest_status = ryzenai_corelib_status_success;
     state.default_status = ryzenai_corelib_status_success;
-    state.has_device_context = true;
+    state.npu_usable = true;
+    state.npu_arch = "AIEM";
     state.stream_prefill_pdis.clear();
     state.stream_token_pdis.clear();
     state.detail.clear();
@@ -673,6 +655,7 @@ void Reset() {
     state.resolution_counts.clear();
     state.call_counts.clear();
     state.statuses.clear();
+    state.fail_counts.clear();
     state.lifetime_events.clear();
     state.live_objects = 0;
     state.releases = 0;
@@ -681,7 +664,6 @@ void Reset() {
     state.maximum_active_leases = 0;
     state.matmul_pad_calls.clear();
     state.rows_pad_calls.clear();
-    state.mha_pad_calls.clear();
     state.pad_multiple = 64;
     state.matmul_k_delta = 0;
     state.matmul_n_delta = 0;
@@ -701,12 +683,12 @@ void Reset() {
     state.fail_after_submit.clear();
     state.model_max_sequence_length = -1;
     state.model_vocab = 8;
-    state.model_creates = 0;
+    state.session_creates = 0;
     state.state_saves = 0;
     state.state_restores = 0;
     state.model_forwards.clear();
     state.model_names.clear();
-    state.model_weights_path.clear();
+    state.model_path.clear();
 }
 
 flm::corelib::CorelibApi::Resolver Resolver() {

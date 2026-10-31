@@ -28,7 +28,7 @@
 
   <Package Name="FLM"
            Manufacturer="FastFlowLM"
-           Version="1.0.11"
+           Version="1.0.12"
            UpgradeCode="5A5B2872-1E63-4934-9F57-088554CF4959"
            Language="1033"
            Scope="perMachine"
@@ -146,6 +146,9 @@
       <Component Id="Comp_lfm2_npu.dll" Guid="*">
         <File Id="File_lfm2_npu.dll" Source="$(SourceDir)\lfm2_npu.dll" KeyPath="yes" />
       </Component>
+      <Component Id="Comp_lfm3_npu.dll" Guid="*">
+        <File Id="File_lfm3_npu.dll" Source="$(SourceDir)\lfm3_npu.dll" KeyPath="yes" />
+      </Component>
       <Component Id="Comp_phi4_npu.dll" Guid="*">
         <File Id="File_phi4_npu.dll" Source="$(SourceDir)\phi4_npu.dll" KeyPath="yes" />
       </Component>
@@ -170,6 +173,9 @@
       <Component Id="Comp_minicpm_v_4_7_npu.dll" Guid="*">
         <File Id="File_minicpm_v_4_7_npu.dll" Source="$(SourceDir)\minicpm_v_4_7_npu.dll" KeyPath="yes" />
       </Component>
+      <Component Id="Comp_minicpm_v_4_7_moe_npu.dll" Guid="*">
+        <File Id="File_minicpm_v_4_7_moe_npu.dll" Source="$(SourceDir)\minicpm_v_4_7_moe_npu.dll" KeyPath="yes" />
+      </Component>
       <Component Id="Comp_qwen3_5_omni_npu.dll" Guid="*">
         <File Id="File_qwen3_5_omni_npu.dll" Source="$(SourceDir)\qwen3_5_omni_npu.dll" KeyPath="yes" />
       </Component>
@@ -187,6 +193,9 @@
       </Component>
       <Component Id="Comp_gemma4e_flash.dll" Guid="*">
         <File Id="File_gemma4e_flash.dll" Source="$(SourceDir)\gemma4e_flash.dll" KeyPath="yes" />
+      </Component>
+      <Component Id="Comp_gemma4e_dflash.dll" Guid="*">
+        <File Id="File_gemma4e_dflash.dll" Source="$(SourceDir)\gemma4e_dflash.dll" KeyPath="yes" />
       </Component>
       <Component Id="Comp_gemma4e_12b_npu.dll" Guid="*">
         <File Id="File_gemma4e_12b_npu.dll" Source="$(SourceDir)\gemma4_12b_npu.dll" KeyPath="yes" />

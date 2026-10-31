@@ -756,6 +756,52 @@ int main(int argc, char** argv) {
             }
             if (err != "images[1]: image data URLs take the types png, jpeg, jpg, webp, got 'gif'") fail("interface", "hoisted index", err);
         }
+        // 3b. temperature_by_questions (d3-ultra): choice / noul / score rows read the table at the request's number of such
+        //     questions; box rows keep the base temperature
+        {
+            const std::string choice = "{\"type\": \"choice\", \"criteria\": {\"x\": \"one\", \"y\": \"two\", \"z\": null}}";
+            const auto body = [&](int decisions) {
+                std::string q = "{\"images\": [\"" + png + "\"], \"state\": \"s\", \"questions\": {\"b\": {\"type\": \"box\", \"instructions\": \"the thing\"}";
+                for (int i = 0; i < decisions; i++) q += ", \"d" + std::to_string(i) + "\": " + (i % 2 ? "{\"type\": \"noul\"}" : choice);
+                return q + "}}";
+            };
+            flm::d3::ComposedConfig table = cfg;
+            table.temperature = 1.0f;
+            table.temperature_by_questions = flm::d3::TemperatureTable{{2}, {3.0f, 0.5f}};
+            const auto answers = [&](int decisions, flm::d3::ComposedConfig c) {
+                flm::d3::ScriptedEngine* e = nullptr;
+                const ojson r = run(body(decisions), c, e);
+                delete e;
+                return r["answers"];
+            };
+            const auto same_decisions = [&](const ojson& a, const ojson& b, int decisions) {
+                for (int i = 0; i < decisions; i++) if (a["d" + std::to_string(i)] != b["d" + std::to_string(i)]) return false;
+                return true;
+            };
+            flm::d3::ComposedConfig base = cfg, cold = cfg, warm = cfg;
+            base.temperature = 1.0f;
+            cold.temperature = 3.0f;
+            warm.temperature = 0.5f;
+            count("temperature");
+            const ojson three = answers(3, table), two = answers(2, table);
+            // 3 decisions: t_rest 0.5 for the decisions, base 1.0 for the box
+            if (!same_decisions(three, answers(3, warm), 3) || three["b"] != answers(3, base)["b"]) fail("temperature", "3 decisions", three.dump().substr(0, 300));
+            count("temperature");
+            if (same_decisions(three, answers(3, base), 3)) fail("temperature", "the table changed nothing", "");
+            // 2 decisions: the first bound (n <= 2) gives 3.0; the box still reads 1.0
+            count("temperature");
+            if (!same_decisions(two, answers(2, cold), 2) || two["b"] != answers(2, base)["b"]) fail("temperature", "2 decisions", two.dump().substr(0, 300));
+            // an invalid question still counts (upstream counts every question of a decision type): 2 valid + 1 invalid = 3
+            count("temperature");
+            {
+                std::string b3 = body(2);
+                b3.insert(b3.size() - 2, ", \"bad\": {\"type\": \"choice\", \"criteria\": {}}");
+                flm::d3::ScriptedEngine* e = nullptr;
+                const ojson r = run(b3, table, e);
+                delete e;
+                if (!same_decisions(r["answers"], answers(2, warm), 2)) fail("temperature", "invalid question counted", r.dump().substr(0, 300));
+            }
+        }
         // 4. over the limit: the question's inline max_length_exceeded with its reason; the others answer
         {
             count("interface");

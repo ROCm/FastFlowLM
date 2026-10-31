@@ -98,11 +98,13 @@ chat_format_spec chat_format_detect(const std::string& template_src,
     if (known("<|tool_call>") && known("<|channel>")) {
         return chat_format_make(chat_format_kind::GEMMA4, false);
     }
-    if (known("<|tool_call_start|>")) {
-        return chat_format_make(chat_format_kind::LFM2_PYTHONIC, with_reasoning);
-    }
+    // a template that renders <function=...><parameter=...> is Qwen-style XML even when its vocabulary also carries
+    // LFM2's <|tool_call_start|> (LFM3 does: the token is inherited, the model calls tools with <tool_call>)
     if (in_template("<function=") && in_template("<parameter=")) {
         return chat_format_make(chat_format_kind::QWEN_XML, with_reasoning);
+    }
+    if (known("<|tool_call_start|>")) {
+        return chat_format_make(chat_format_kind::LFM2_PYTHONIC, with_reasoning);
     }
     // only trust <tool_call> when the template renders it: some vocabularies carry
     // the token without the model ever being trained to call tools with it
@@ -116,7 +118,7 @@ chat_format_spec chat_format_detect(const std::string& template_src,
     return spec;
 }
 
-std::string chat_format_prefill(const chat_format_spec& spec, const std::string& prompt_tail) {
+std::string chat_format_prefill(const chat_format_spec& spec, const std::string& prompt_tail, bool continuing) {
     if (spec.kind == chat_format_kind::HARMONY) {
         // the generation prompt ends with an open "<|start|>assistant" header, and
         // may have started a channel too; the header is parsed with the output
@@ -131,7 +133,7 @@ std::string chat_format_prefill(const chat_format_spec& spec, const std::string&
     size_t open = prompt_tail.rfind(spec.reasoning_start);
     size_t close = prompt_tail.rfind(spec.reasoning_end);
     if (open == std::string::npos || (close != std::string::npos && close > open)) {
-        return spec.reasoning_forced ? spec.reasoning_start : "";
+        return spec.reasoning_forced && !continuing ? spec.reasoning_start : "";
     }
     // only the tag: what follows it in the prompt is whitespace, and some
     // decoders render that as byte tokens like <0x0A>

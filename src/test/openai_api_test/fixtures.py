@@ -10,6 +10,11 @@ def user(text: str) -> list[dict[str, Any]]:
     return [{"role": "user", "content": text}]
 
 
+def continued(text: str, assistant: Any) -> list[dict[str, Any]]:
+    """A question and the start of its answer, for continue_final_message."""
+    return user(text) + [{"role": "assistant", "content": assistant}]
+
+
 def function_choice(name: str) -> dict[str, Any]:
     """tool_choice forcing one function."""
     return {"type": "function", "function": {"name": name}}

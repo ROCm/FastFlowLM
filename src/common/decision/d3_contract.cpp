@@ -125,14 +125,32 @@ Question normalize_question(const PyValue& question) {
                         " (choice, noul or score)");
 }
 
-std::string user_prompt(const PyValue& state, const Question& q, const std::vector<std::string>& codes) {
+std::string header_block(const std::vector<Question>& header) {
+    if (header.empty()) throw ContractError("a header needs at least one question");
+    std::string out = std::string(HEADER_TITLE) + "\n";
+    for (size_t i = 0; i < header.size(); i++) {
+        const Question& q = header[i];
+        out += std::to_string(i + 1) + ". ";
+        out += q.instructions.truthy() ? describe(q.instructions) : std::string(DEFAULT_INSTRUCTIONS);
+        out += "\n";
+        if (q.kind == "choice" || q.kind == "score") {   // a score question is rendered as a choice of its level texts
+            for (const auto& text : q.option_texts) out += "   - " + text + "\n";
+        }
+    }
+    out += "\n";
+    return out;
+}
+
+std::string user_prompt(const PyValue& state, const Question& q, const std::vector<std::string>& codes,
+                        const std::string& header) {
     const size_t room = std::min<size_t>(MAX_OPTIONS, codes.size());
     if (q.option_texts.empty() || q.option_texts.size() > room) {
         throw ContractError("a question needs 1 to " + std::to_string(room) + " options, got " +
                             std::to_string(q.option_texts.size()));
     }
     const bool empty_state = state.is_null() || (state.is_string() && state.text.empty());
-    std::string out = "State:\n";
+    std::string out = header;
+    out += "State:\n";
     out += empty_state ? std::string(EMPTY_STATE) : describe(state);
     out += "\n\nQuestion:\n";
     out += q.instructions.truthy() ? describe(q.instructions) : std::string(DEFAULT_INSTRUCTIONS);
@@ -155,9 +173,51 @@ std::string chat_text(const std::string& system, const std::string& user) {
     return out;
 }
 
-std::string render(const PyValue& state, const Question& q, const std::vector<std::string>& codes) {
-    return chat_text(SYSTEM_PROMPT, user_prompt(state, q, codes));
+std::string render(const PyValue& state, const Question& q, const std::vector<std::string>& codes,
+                   const std::string& header) {
+    return chat_text(SYSTEM_PROMPT, user_prompt(state, q, codes, header));
 }
+
+float TemperatureTable::for_questions(int n) const {
+    for (size_t i = 0; i < max_questions.size(); i++) {
+        if (n <= max_questions[i]) return temperature[i];
+    }
+    return temperature.back();
+}
+
+std::optional<TemperatureTable> temperature_table(const ojson& value, const std::string& source) {
+    if (value.is_null()) return std::nullopt;
+    if (!value.is_object() || value.size() != 2 || !value.contains("max_questions") || !value.contains("temperature")) {
+        throw std::runtime_error(source + ": temperature_by_questions must hold max_questions and temperature only");
+    }
+    const std::string bad = source + ": temperature_by_questions needs strictly increasing positive max_questions and one more "
+                                     "finite, positive temperature than max_questions";
+    const ojson& bounds = value["max_questions"];
+    const ojson& temps = value["temperature"];
+    if (!bounds.is_array() || !temps.is_array() || temps.size() != bounds.size() + 1) throw std::runtime_error(bad);
+    TemperatureTable table;
+    for (const auto& b : bounds) {
+        if (!b.is_number_integer() || b.get<long long>() < 1 || b.get<long long>() > 2147483647LL) throw std::runtime_error(bad);
+        table.max_questions.push_back(static_cast<int>(b.get<long long>()));
+    }
+    for (size_t i = 1; i < table.max_questions.size(); i++) {
+        if (table.max_questions[i - 1] >= table.max_questions[i]) throw std::runtime_error(bad);
+    }
+    for (const auto& t : temps) {
+        // bool is not a number here (nlohmann), as in Python's explicit isinstance(t, bool) refusal
+        if (!t.is_number()) throw std::runtime_error(bad);
+        const double d = t.get<double>();
+        if (!std::isfinite(d) || !(d > 0)) throw std::runtime_error(bad);
+        table.temperature.push_back(static_cast<float>(d));
+    }
+    return table;
+}
+
+float temperature_for(const std::optional<TemperatureTable>& table, float base, int n_questions) {
+    return table ? table->for_questions(n_questions) : base;
+}
+
+bool is_decision_kind(const std::string& kind) { return kind == "choice" || kind == "noul" || kind == "score"; }
 
 std::string render_image(const PyValue& state, const Question& q, const std::vector<std::string>& codes,
                          int n_images) {
@@ -766,6 +826,19 @@ Prepared prepare(const PyValue& body, const std::vector<std::string>& codes,
             p.video_runs.emplace_back(times.size(), g.tokens_per_group());
         }
     }
+    // prompt_layout header-v1 (text path only, as upstream): every question that normalizes, in request order
+    std::string header;
+    if (options.header_v1 && n_images == 0 && n_videos == 0) {
+        std::vector<Question> all;
+        for (const auto& m : questions->members) {
+            try {
+                all.push_back(normalize_question(m.second));
+            } catch (const ContractError&) {
+                continue;
+            }
+        }
+        if (!all.empty()) header = header_block(all);
+    }
     for (const auto& m : questions->members) {
         const std::string& key = m.first;
         p.keys.push_back(key);
@@ -785,7 +858,7 @@ Prepared prepare(const PyValue& body, const std::vector<std::string>& codes,
                 }
                 p.texts[key] = std::move(text);
             } else if (n_images == 0) {
-                p.texts[key] = render(state, q, codes);
+                p.texts[key] = render(state, q, codes, header);
             } else {
                 std::string text = render_image(state, q, codes, n_images);
                 int pads = 0;

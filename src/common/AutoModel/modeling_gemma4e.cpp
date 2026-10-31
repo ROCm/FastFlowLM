@@ -12,39 +12,16 @@
 /************              Gemma4e family            **************/
 Gemma4e::Gemma4e(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "Gemma4e") {}
 
-/// Reads the shared set of engine constants off a concrete engine type.
-/// gemma4e_npu and gemma4e_flash are unrelated types that happen to expose the
-/// same member names, so this is templated rather than taking a common base.
-template <typename EngineT>
-static gemma4e_engine_config_t read_gemma4e_engine_config(causal_lm* engine) {
-    EngineT* e = dynamic_cast<EngineT*>(engine);
-    if (e == nullptr) {
-        // Reachable in Release with the core engine, which has no vision or
-        // audio path.
-        throw std::runtime_error(
-            "engine_config() was called on a Gemma4e wrapper whose engine is "
-            "not the expected type -- the vision and audio paths are not "
-            "available on this backend (core runs text only)");
-    }
-    return gemma4e_engine_config_t{
-        e->GEMMA4E_VISION_PATCH_SIZE,
-        e->GEMMA4E_POOLING_KERNEL_SIZE,
-        e->GEMMA4E_VISION_RESCALE_FACTOR,
-        e->GEMMA4E_VISION_IMAGE_MEAN,
-        e->GEMMA4E_VISION_IMAGE_STD,
-        e->Gemma4E_Audio_resample_rate,
-        e->Gemma4E_Audio_conv2d_kernel_size,
-        e->Gemma4E_Audio_conv2d_Stride,
-        e->Gemma4e_Audio_conv2d_Padding,
-    };
-}
-
 gemma4e_engine_config_t Gemma4e::engine_config() const {
     return read_gemma4e_engine_config<gemma4e_npu>(this->lm_engine);
 }
 
 gemma4e_engine_config_t Gemma4e_Flash::engine_config() const {
     return read_gemma4e_engine_config<gemma4e_flash>(this->lm_engine);
+}
+
+const flm_state_api* Gemma4e::engine_state_api() const {
+    return gemma4e_npu_state_api(this->lm_engine);
 }
 
 int Gemma4e_Flash::_pin_system_prefix(const std::string& system_text) {
@@ -164,6 +141,8 @@ std::string Gemma4e_Flash::generate(chat_meta_info_t& meta_info, int length_limi
     int last_sampled_token = this->last_token;
 
     this->token_history.push_back(last_token);
+    // the sample insert() took is the reply's first token, and counts toward the limit
+    meta_info.generated_tokens++;
 
     if (this->is_normal_token(last_sampled_token) && last_sampled_token != -1) {
         std::string token_str = this->tokenizer->run_time_decoder(last_sampled_token);
@@ -171,6 +150,8 @@ std::string Gemma4e_Flash::generate(chat_meta_info_t& meta_info, int length_limi
         os << token_str << std::flush;
     }
     if (this->is_eos(last_sampled_token)) {
+        // Sampled from the prefill, so no engine has run it.
+        this->token_history.pop_back();
         meta_info.stop_reason = reason;
         return result;
     }
@@ -178,11 +159,17 @@ std::string Gemma4e_Flash::generate(chat_meta_info_t& meta_info, int length_limi
     this->profiler_list[TKOEN_DECODE_TIME].reset();
     if (this->total_tokens >= this->MAX_L) {
         header_print("WARNING", "Max length reached, stopping generation...");
-        meta_info.stop_reason = MAX_LENGTH_REACHED;
-        return result;
+        reason = MAX_LENGTH_REACHED;
     }
-
-    while (this->total_tokens < this->MAX_L) {
+    else if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)) {
+        reason = MAX_LENGTH_REACHED;
+    }
+    else while (true) {
+        // Running out of window is a truncation: test it here so it is recorded.
+        if (this->total_tokens >= this->MAX_L) {
+            reason = MAX_LENGTH_REACHED;
+            break;
+        }
         if (is_cancelled()) {
             reason = CANCEL_DETECTED;
             break;
@@ -212,6 +199,8 @@ std::string Gemma4e_Flash::generate(chat_meta_info_t& meta_info, int length_limi
         if (this->is_eos(sampled_token)) {
             // Single-turn: no forward_on_eos needed — kv cache is discarded
             // by _reset_turn() at the start of every new request.
+            // The engine never ran it, so the history drops it.
+            this->token_history.pop_back();
             break;
         }
         if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)) {
@@ -222,6 +211,10 @@ std::string Gemma4e_Flash::generate(chat_meta_info_t& meta_info, int length_limi
 
     meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
     meta_info.stop_reason = reason;
+    if (reason != EOT_DETECTED) {
+        // Cut short after sampling its last token: no engine has run that one.
+        this->token_history.pop_back();
+    }
     if (this->total_tokens >= this->MAX_L) {
         header_print("WARNING", "Max length reached, stopping generation...");
     }
@@ -262,13 +255,16 @@ void Gemma4e::load_model(std::string model_path, json model_info, int default_co
     for (size_t i = 0; i < PROFILER_TYPE_NUM; i++) {
         this->profiler_list[i].reset();
     }
+    // Gemma4e_Flash shares this function but runs a different engine: the table is nullptr for it, the cache stays off.
+    // Text-only prompts only (see insert), so no image placeholder id is given.
+    _prefix_attach(lm_engine, this->engine_state_api());
 }
 
 void Gemma4e::setup_tokenizer(std::string model_path) {
     auto tokenizer_config = this->_shared_setup_tokenizer(model_path);
 }
 
-std::string Gemma4e::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools) {
+std::string Gemma4e::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools, bool continue_final_message) {
     // Same as Gemma4_12B: the Gemma4 template emits unquoted keys (argument_needle:<|"|>...<|"|>), which
     // minja's capability probe does not recognize, so it would wrongly polyfill tool calls and tool
     // responses into a generic JSON blob. The template handles them natively.
@@ -300,14 +296,13 @@ std::string Gemma4e::apply_chat_template(nlohmann::ordered_json& messages, nlohm
     }
 
     minja::chat_template_inputs inputs;
-    inputs.add_generation_prompt = true;
     inputs.messages = normalized;
     inputs.extra_context = this->extra_context;
     inputs.extra_context["enable_thinking"] = this->enable_think;
     inputs.extra_context["conversational_mode"] = this->conversational_mode;
     if (!tools.empty())
         inputs.tools = tools;
-    return this->chat_tmpl->apply(inputs, opt);
+    return this->_render_chat_template(inputs, continue_final_message, opt);
 }
 
 bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
@@ -499,7 +494,7 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     if (!input.messages.empty()) { // already a formated messages, usually from REST API
         // gemma4_message was already built above, in the same pass that
         // decoded images/audio.
-        templated_text = this->apply_chat_template(gemma4_message, input.tools);
+        templated_text = this->apply_chat_template(gemma4_message, input.tools, meta_info.continue_final_message);
     }
     else if (!input.prompt.empty()) { // a pure text, usually from the cli
         nlohmann::ordered_json messages;
@@ -685,7 +680,21 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     int restore_idx = -1;
     const bool has_multimodal = image_payload.num_images > 0 || audio_payload.num_audios > 0;
 
-    if (meta_info.restore_allowed) {
+    // Prefix slots, text-only prompts. A prompt that carries pictures or audio, or a text turn whose history still holds their
+    // soft tokens (the payload is gone by then), takes the in-place path below. The generation prompt ("<|turn>model\n") is how
+    // the next turn renders this reply's header: the whole prompt is saved (trim 0).
+    const bool modal_tokens = std::any_of(tokens.begin(), tokens.end(), [this](int t) {
+        return t == image_token_id || t == audio_token_id || t == boi_token_id || t == boa_token_id;
+    });
+    if (!has_multimodal && !modal_tokens && this->_prefix_slot_mode(meta_info, tokens.size(), 0)) {
+        checkpoint_his.clear();
+        return this->_prefix_text_insert(meta_info, tokens, 0, "<|turn>user", is_cancelled);
+    }
+    this->_prefix_legacy_path();
+
+    // The legacy checkpoint keeps only the rings: it relies on the global rows still being the ones it was taken with. A slot request
+    // overwrites them, so it drops the checkpoint's token history, and the in-place path below then has nothing to restore.
+    if (meta_info.restore_allowed && !checkpoint_his.empty()) {
         restore_idx = this->lm_engine->restore();
         this->total_tokens = restore_idx;
         this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
@@ -718,6 +727,8 @@ std::string Gemma4e::generate(chat_meta_info_t& meta_info, int length_limit, std
     int last_sampled_token = this->last_token;
 
     this->token_history.push_back(last_token);
+    // the sample insert() took is the reply's first token, and counts toward the limit
+    meta_info.generated_tokens++;
 
     if (this->is_normal_token(last_sampled_token) && last_sampled_token != -1){
         std::string token_str = this->tokenizer->run_time_decoder(last_sampled_token);
@@ -726,6 +737,9 @@ std::string Gemma4e::generate(chat_meta_info_t& meta_info, int length_limit, std
 
     }
     if (this->is_eos(last_sampled_token)){
+        // Sampled from the prefill, so no engine has run it.
+        this->token_history.pop_back();
+        meta_info.stop_reason = reason;
         return result;
     }
     this->profiler_list[DECODING_TIME].reset();
@@ -733,9 +747,16 @@ std::string Gemma4e::generate(chat_meta_info_t& meta_info, int length_limit, std
     if (this->total_tokens >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping generation...");
         reason = MAX_LENGTH_REACHED;
-        return result;
     }
-    while (this->total_tokens < this->MAX_L){
+    else if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)){
+        reason = MAX_LENGTH_REACHED;
+    }
+    else while (true){
+        // Running out of window is a truncation: test it here so it is recorded.
+        if (this->total_tokens >= this->MAX_L){
+            reason = MAX_LENGTH_REACHED;
+            break;
+        }
         if (is_cancelled()) {
             reason = CANCEL_DETECTED;
             break;
@@ -777,13 +798,17 @@ std::string Gemma4e::generate(chat_meta_info_t& meta_info, int length_limit, std
     std::cout << std::endl;
     header_print("FLM", "Model RAW Output: \n" + result);
     
-    if (!this->enable_think) {
-        int checkpoint_idx = this->lm_engine->checkpoint();
-        // copy the token history at the checkpoint except the last one token, which is the start token for generation and should not be included in the checkpoint history
-        checkpoint_his = token_history;
-        checkpoint_his.pop_back();       
+    if (reason != EOT_DETECTED) {
+        // Cut short after sampling its last token: no engine has run that one,
+        // so the next prompt has to carry it.
+        this->token_history.pop_back();
     }
-    
+    if (!this->enable_think) {
+        // the history the checkpoint holds: an eos ending the turn was run, a cut-off token was not
+        int checkpoint_idx = this->lm_engine->checkpoint();
+        checkpoint_his = token_history;
+    }
+
     return result;
 }
 

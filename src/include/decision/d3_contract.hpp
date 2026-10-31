@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <map>
+#include <optional>
 #include <utility>
 #include <stdexcept>
 #include <string>
@@ -59,8 +60,18 @@ Question normalize_question(const PyValue& question);
 /// The 255 candidate codes in preference order (A..Z, AA..ZZ).
 std::vector<std::string> candidate_codes();
 
-/// `d3_format.user_prompt` (state may be null).
-std::string user_prompt(const PyValue& state, const Question& q, const std::vector<std::string>& codes);
+/// prompt_layout `header-v1` (d3_format.HEADER_TITLE).
+constexpr const char* HEADER_TITLE = "Questions in this request:";
+
+/// `d3_format.header_lines` joined as the user prompt carries them: the title, one numbered line per question
+/// (its instructions, or the default), the option texts (no codes) of choice / score questions as `   - text`
+/// lines, then one empty line; the result ends with "\n\n" so that "State:" follows directly. `header` is every
+/// normalizable question of the request, in request order; throws ContractError when it is empty.
+std::string header_block(const std::vector<Question>& header);
+
+/// `d3_format.user_prompt` (state may be null). `header` (header-v1: `header_block`) leads the text; empty: none.
+std::string user_prompt(const PyValue& state, const Question& q, const std::vector<std::string>& codes,
+                        const std::string& header = std::string());
 
 /// The chat text of `[system, user]` (or `[user]` when system is empty) with
 /// `add_generation_prompt=True, enable_thinking=False`, as the package's chat_template.jinja renders
@@ -68,7 +79,26 @@ std::string user_prompt(const PyValue& state, const Question& q, const std::vect
 std::string chat_text(const std::string& system, const std::string& user);
 
 /// The whole prompt of one question (`d3_format.render`).
-std::string render(const PyValue& state, const Question& q, const std::vector<std::string>& codes);
+std::string render(const PyValue& state, const Question& q, const std::vector<std::string>& codes,
+                   const std::string& header = std::string());
+
+// ---- decision_config temperature_by_questions (d3_runtime.temperature_table / temperature_for) ----
+/// `{"max_questions": [n_1..n_k], "temperature": [t_1..t_k, t_rest]}`.
+struct TemperatureTable {
+    std::vector<int> max_questions;
+    std::vector<float> temperature;
+    /// The temperature of a request with `n` choice / noul / score questions: the t_i of the first n <= n_i, else t_rest.
+    float for_questions(int n) const;
+};
+/// `temperature_table`: null gives nullopt; throws std::runtime_error ("<source>: ...") with upstream's checks
+/// (exactly the keys max_questions and temperature, strictly increasing integer counts >= 1, one more finite
+/// positive temperature than counts).
+std::optional<TemperatureTable> temperature_table(const ojson& value, const std::string& source);
+/// `D3.temperature_for`: the table's value, or `base` without a table.
+float temperature_for(const std::optional<TemperatureTable>& table, float base, int n_questions);
+
+/// d3_runtime.DECISION_KINDS: the question types a request's temperature applies to.
+bool is_decision_kind(const std::string& kind);
 
 // ---- images (d3_runtime: load_image strict, visual_tokens, image_messages) ----------------------
 constexpr const char* IMAGE_TOKEN = "<|image_pad|>";
@@ -187,6 +217,10 @@ struct PrepareOptions {
     /// What this build answers, named in a refusal ("... by this build of d3:turbo (it answers <answers>)"); empty: the
     /// default text for the mode (choice, noul, score [and box] questions about text and images).
     std::string answers;
+    /// decision_config `prompt_layout` "header-v1": a text request's prompts start with the header block listing every
+    /// normalizable question (upstream applies it to the text path only; image, video and composed prompts keep the
+    /// plain layout).
+    bool header_v1 = false;
     /// Videos (d3:turbo with the video decoder on): loads `videos[i]` (see video/video_input.hpp: throws
     /// video::VideoError, or video::VideoBackendUnavailable when no decoder is there). Null: `videos` stays
     /// refused with the messages above, so nothing changes for builds without the decoder.
