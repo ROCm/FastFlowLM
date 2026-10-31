@@ -4087,6 +4087,56 @@
             "path": "dflash_weight.q4nx"
         }
     ],
+    "nemotron3.5-bolt-dflash-flash:e4b": [
+        {
+            "type": "file",
+            "oid": "d117c32cf5bcf5c5f22d62d5e5c8249486afd5d9",
+            "size": 1574,
+            "path": ".gitattributes"
+        },
+        {
+            "type": "file",
+            "oid": "ec297ac5456384786644013ec196da33b916be97",
+            "size": 2619,
+            "path": "LICENSE.OpenMDW-1.1"
+        },
+        {
+            "type": "file",
+            "oid": "0c962bbc53cd5ecc1f7cf36cbb50af3efe1f0363",
+            "size": 325,
+            "path": "MANIFEST.sha256"
+        },
+        {
+            "type": "file",
+            "oid": "2ea5e5f6b3b44533daebb1be130dfb4f3c2bff73",
+            "size": 3729,
+            "path": "README.md"
+        },
+        {
+            "type": "file",
+            "oid": "4021fcef0c1e178beccd273b96a154ace237870c",
+            "size": 663,
+            "path": "config.json"
+        },
+        {
+            "type": "file",
+            "oid": "19f27431df94a86e3d39d293878ab58970bc8876",
+            "size": 50,
+            "path": "configuration.json"
+        },
+        {
+            "type": "file",
+            "oid": "c9861cfc8a360dd79c223aaf7c5177ce7ce1171a",
+            "size": 270406816,
+            "lfs": {
+                "oid": "e9548041bef37788cd3d2b38de5a6879d2d790c0b5ca821c4543cae86c04c165",
+                "size": 270406816,
+                "pointerSize": 134
+            },
+            "xetHash": "543a8e40205cb293da499715d7f07c6b6d6020578515a68cdc5cec6c7e386801",
+            "path": "dflash_weight.q4nx"
+        }
+    ],
     "nemotron3.5-bolt:e4b": [
         {
             "type": "file",

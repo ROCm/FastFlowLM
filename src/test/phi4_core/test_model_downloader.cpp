@@ -2,6 +2,7 @@
 #include "model_downloader.hpp"
 #include "test_support.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -785,9 +786,23 @@ void TestShippedCatalogDeclaresTheDflashDependant() {
     const auto base = models.get_model_info("nemotron3.5-bolt:e4b").second;
     TEST_REQUIRE(base.at("name") == "Nemotron-3.5-Bolt-E4B-NPU2");
     TEST_REQUIRE(!base.contains("base_model") && !base.contains("draft_model_path"));
+    // the flash variant shares the base and the draft package with the plain DFlash tag
+    const char* dflash_flash = "nemotron3.5-bolt-dflash-flash:e4b";
+    TEST_REQUIRE(models.is_model_supported(dflash_flash));
+    TEST_REQUIRE(models.get_base_model(dflash_flash) == std::string("nemotron3.5-bolt:e4b"));
+    const auto flash = models.get_model_info(dflash_flash).second;
+    TEST_REQUIRE(flash.at("name") == "Nemotron-3.5-Bolt-E4B-DFlash-NPU2");
+    TEST_REQUIRE(flash.at("details").at("family") == "gemma4e-dflash-flash");
+    TEST_REQUIRE(flash.at("xclbin_folder") == "Nemotron-3.5-Bolt-E4B-DFlash-NPU2");
+    TEST_REQUIRE(flash.at("default_context_length") == 1024);
+    TEST_REQUIRE(flash.at("max_prefill_len") == 1024);
+    const auto labels = flash.at("label").get<std::vector<std::string>>();
+    TEST_REQUIRE(std::find(labels.begin(), labels.end(), "single-turn") != labels.end());
+    TEST_REQUIRE(std::find(labels.begin(), labels.end(), "tool-calling") == labels.end());
     // a platform without the base prunes the dependant with it
     model_list dev04(path, exe_dir, "dev04", {"flm"});
     TEST_REQUIRE(!dev04.is_model_supported(dflash));
+    TEST_REQUIRE(!dev04.is_model_supported(dflash_flash));
 }
 
 download_utils::DownloadRequest Request(const fs::path& source, const fs::path& destination,

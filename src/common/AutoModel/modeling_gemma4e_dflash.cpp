@@ -50,47 +50,13 @@ void Gemma4e_DFlash::load_model(std::string model_path, json model_info, int def
     }
 }
 
-std::string Gemma4e_DFlash::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
-    return this->_speculative_generate(meta_info, length_limit, os, is_cancelled);
-}
-
-std::string Gemma4e_DFlash::generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os) {
-    if (!this->insert(meta_info, input)) {
-        return "";
-    }
-    if (this->thinking_enabled()) {
-        os << "<think>\n" << std::flush;
-    }
-    int checkpoint_idx = this->lm_engine->checkpoint();
-    int restore_idx = this->lm_engine->restore();
-    header_print_r("FLM", "Checkpoint before generation: " << checkpoint_idx << ", restore point: " << restore_idx << ", user context length: " << this->token_history.size());
-    return this->_speculative_generate(meta_info, length_limit, os, [] { return false; });
-}
-
-void Gemma4e_DFlash::clear_context() {
-    Gemma4e::clear_context();
-    if (auto* engine = dynamic_cast<gemma4e_dflash*>(this->lm_engine)) {
-        engine->reset_speculation_stats();
-    }
-}
-
-std::string Gemma4e_DFlash::show_profile() {
-    std::string profile = Gemma4e::show_profile();
-    if (auto* engine = dynamic_cast<gemma4e_dflash*>(this->lm_engine)) {
-        if (engine->speculation_cycles() > 0) {
-            profile += engine->speculation_timing();
-        }
-    }
-    return profile;
-}
-
-std::string Gemma4e_DFlash::_speculative_generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
+template <class Engine>
+std::string Gemma4e::_speculative_loop(Engine* engine, chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled, bool single_turn) {
     std::string result;
     assert(this->last_token != -1);
 
     stop_reason_t reason = EOT_DETECTED;
 
-    auto* engine = dynamic_cast<gemma4e_dflash*>(this->lm_engine);
     // Off under a decoding constraint (grammar / tool JSON, D14): a drafted token never passes the constraint's mask
     // through sample-and-compare unless every row is masked, which the plain loop already does cheaply.
     // draft_ready() is asked per cycle below: the engine's adaptive guard (it turns speculation off while it cannot win and re-probes
@@ -136,7 +102,12 @@ std::string Gemma4e_DFlash::_speculative_generate(chat_meta_info_t& meta_info, i
         if (this->is_eos(token)) {
             meta_info.generated_tokens++;
             // The engine never ran the stop token: supply its KV row (it is the last token of a cycle, see below).
-            this->lm_engine->forward(token);
+            // Single-turn: the KV is discarded by the next request's restore to the pin, so skip it.
+            if (single_turn) {
+                this->token_history.pop_back();    // as Gemma4e_Flash::generate: the engine never ran the stop token
+            } else {
+                this->lm_engine->forward(token);
+            }
             return false;
         }
         meta_info.generated_tokens++;
@@ -231,10 +202,105 @@ std::string Gemma4e_DFlash::_speculative_generate(chat_meta_info_t& meta_info, i
         // Cut short after its last token was sampled: no engine has run that one, so the next prompt has to carry it.
         this->token_history.pop_back();
     }
-    if (!this->thinking_enabled()) {
+    // Single-turn: the only checkpoint is the pinned system prefix, which _pin_system_prefix() owns.
+    if (!single_turn && !this->thinking_enabled()) {
         // the history the checkpoint holds: an eos ending the turn was run, a cut-off token was not
         this->lm_engine->checkpoint();
         checkpoint_his = token_history;
     }
     return result;
+}
+
+std::string Gemma4e_DFlash::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
+    return this->_speculative_loop(dynamic_cast<gemma4e_dflash*>(this->lm_engine), meta_info, length_limit, os, is_cancelled, false);
+}
+
+std::string Gemma4e_DFlash::generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os) {
+    if (!this->insert(meta_info, input)) {
+        return "";
+    }
+    if (this->thinking_enabled()) {
+        os << "<think>\n" << std::flush;
+    }
+    int checkpoint_idx = this->lm_engine->checkpoint();
+    int restore_idx = this->lm_engine->restore();
+    header_print_r("FLM", "Checkpoint before generation: " << checkpoint_idx << ", restore point: " << restore_idx << ", user context length: " << this->token_history.size());
+    return this->_speculative_loop(dynamic_cast<gemma4e_dflash*>(this->lm_engine), meta_info, length_limit, os, [] { return false; }, false);
+}
+
+void Gemma4e_DFlash::clear_context() {
+    Gemma4e::clear_context();
+    if (auto* engine = dynamic_cast<gemma4e_dflash*>(this->lm_engine)) {
+        engine->reset_speculation_stats();
+    }
+}
+
+std::string Gemma4e_DFlash::show_profile() {
+    std::string profile = Gemma4e::show_profile();
+    if (auto* engine = dynamic_cast<gemma4e_dflash*>(this->lm_engine)) {
+        if (engine->speculation_cycles() > 0) {
+            profile += engine->speculation_timing();
+        }
+    }
+    return profile;
+}
+
+/************              Gemma4e_DFlash_Flash            **************/
+gemma4e_engine_config_t Gemma4e_DFlash_Flash::engine_config() const {
+    return read_gemma4e_engine_config<gemma4e_dflash_flash>(this->lm_engine);
+}
+
+const flm_state_api* Gemma4e_DFlash_Flash::engine_state_api() const {
+    return nullptr;
+}
+
+void Gemma4e_DFlash_Flash::load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption, const std::string& backend) {
+    Gemma4e::load_model(model_path, model_info, default_context_length, enable_preemption, backend);
+    auto* engine = dynamic_cast<gemma4e_dflash_flash*>(this->lm_engine);
+    if (engine == nullptr) {
+        header_print("WARNING", "Gemma4e_DFlash_Flash: the engine is not gemma4e_dflash_flash, speculation is off");
+        return;
+    }
+    engine->set_stop_tokens(this->eos_token_ids);
+    if (this->draft_model_path.empty()) {
+        header_print("WARNING", "Gemma4e_DFlash_Flash: no draft package, decoding without speculation");
+        return;
+    }
+    if (!dflash_env_enabled()) {
+        header_print("FLM", "DFlash speculation disabled by FLM_DFLASH=0");
+        return;
+    }
+    if (engine->load_draft(this->draft_model_path)) {
+        header_print("FLM", "DFlash draft loaded from " << this->draft_model_path);
+    } else {
+        header_print("WARNING", "Gemma4e_DFlash_Flash: the draft package could not be loaded, decoding without speculation");
+    }
+}
+
+std::string Gemma4e_DFlash_Flash::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
+    return this->_speculative_loop(dynamic_cast<gemma4e_dflash_flash*>(this->lm_engine), meta_info, length_limit, os, is_cancelled, true);
+}
+
+std::string Gemma4e_DFlash_Flash::generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os) {
+    if (!this->insert(meta_info, input)) {
+        return "";
+    }
+    return this->generate(meta_info, length_limit, os);
+}
+
+void Gemma4e_DFlash_Flash::clear_context() {
+    Gemma4e::clear_context();
+    if (auto* engine = dynamic_cast<gemma4e_dflash_flash*>(this->lm_engine)) {
+        engine->reset_speculation_stats();
+    }
+}
+
+std::string Gemma4e_DFlash_Flash::show_profile() {
+    std::string profile = Gemma4e::show_profile();
+    if (auto* engine = dynamic_cast<gemma4e_dflash_flash*>(this->lm_engine)) {
+        if (engine->speculation_cycles() > 0) {
+            profile += engine->speculation_timing();
+        }
+    }
+    return profile;
 }
