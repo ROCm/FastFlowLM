@@ -109,6 +109,10 @@ flm serve nemotron3.5-bolt-dflash-flash:e4b
   every request, which keeps the speculative steps long. Changing the system prompt between requests discards the pin.
 - Sampling, `FLM_DFLASH=0` and the other behaviours of speculation are as on the [`nemotron3.5-bolt-dflash:e4b`](#-model-card-nvidia-nemotron-35-bolt-e4b-with-the-dflash-draft) card.
   Greedy output can differ from `nemotron3.5-bolt:e4b` at near-ties.
+- Accuracy (50-question samples, XRT and HRX give the same results): GSM8K 92%, the same as `nemotron3.5-bolt-dflash:e4b` and
+  `gemma4e-flash:e4b`. Document reading (DocVQA, ANLS) is 45, against 76 for `nemotron3.5-bolt-dflash:e4b`: flash models look at an image
+  with the smallest visual token budget (70 instead of 280), which is enough for captions and simple scenes but not for small text. For
+  documents and screenshots use `nemotron3.5-bolt-dflash:e4b`.
 - Needs 9 of the NPU's 16 hardware contexts (vision and audio included), so other models can still be loaded next to it.
 - `flm remove nemotron3.5-bolt-dflash-flash:e4b` removes only the draft package, shared with `nemotron3.5-bolt-dflash:e4b`: remove
   both tags' use of it first if you want the space back.
