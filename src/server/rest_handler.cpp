@@ -545,13 +545,19 @@ RestHandler::RestHandler(model_list& models, ModelDownloader& downloader, progra
     this->prefix_min_gain = args.prefix_min_gain;
 
     // Initialize chat bot with default model
+    const bool embeddinggemma_2 =
+        default_model_tag == "embeddinggemma-2" ||
+        default_model_tag.starts_with("embeddinggemma-2:");
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
     if (this->asr) {
         std::string whisper_tag = "whisper-v3:turbo";
         ensure_asr_model_loaded(whisper_tag);
     }
-    if (this->embed) {
-        std::string embed_tag = "embed-gemma:300m";
+    if (this->embed || embeddinggemma_2) {
+        this->embed = true;
+        std::string embed_tag = embeddinggemma_2
+                                    ? default_model_tag
+                                    : "embed-gemma:300m";
         ensure_embed_model_loaded(embed_tag);
     }
 #else
@@ -567,7 +573,7 @@ RestHandler::RestHandler(model_list& models, ModelDownloader& downloader, progra
         ensure_decision_model_loaded(args.decision);
     }
 
-    if (default_model_tag != "model-faker") {
+    if (default_model_tag != "model-faker" && !embeddinggemma_2) {
         if (!supported_models.is_model_supported(default_model_tag)) {
             header_print("Warning", "Default model tag '" << default_model_tag << "' is not supported. Falling back to 'llama3.2:1b'.");
             this->default_model_tag = "llama3.2:1b";
@@ -799,7 +805,8 @@ void RestHandler::ensure_embed_model_loaded(const std::string& model_tag) {
             this->embed = false;
             return;
     }
-    auto [embedding_model_tag, auto_embedding_engine] = get_auto_embedding_model(ensure_tag, this->npu_device_inst);
+    auto [embedding_model_tag, auto_embedding_engine] =
+        get_auto_embedding_model(ensure_tag, this->npu_device_inst, this->backend);
     this->auto_embedding_engine = std::move(auto_embedding_engine);
     auto [new_embedding_model_tag, embedding_model_info] = this->supported_models.get_model_info(embedding_model_tag);
     std::string embedding_model_path = this->supported_models.get_model_path(new_embedding_model_tag);

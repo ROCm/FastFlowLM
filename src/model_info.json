@@ -1918,6 +1918,32 @@
             "path": "tokenizer_config.json"
         }
     ],
+    "embeddinggemma-2:740m": [
+        {
+            "type": "file",
+            "path": "config.json",
+            "size": 4455,
+            "oid": "dc524b2cbef566d66d8533c67dc68a6a8f5d340a"
+        },
+        {
+            "type": "file",
+            "path": "model.safetensors",
+            "size": 1488915288,
+            "sha256": "197a32965d4b1105faf060417baa899e193fb73cd401f42ec9295234d5553d79"
+        },
+        {
+            "type": "file",
+            "path": "tokenizer.json",
+            "size": 32170510,
+            "sha256": "4d777ef5bdc1aa36227abdfb77c3e49e7b9c892d16e1b6bda41c393504828be4"
+        },
+        {
+            "type": "file",
+            "path": "tokenizer_config.json",
+            "size": 1599,
+            "oid": "a9afd12fb3ca2c418fd405320ace85ad46748d03"
+        }
+    ],
     "whisper-v3:turbo": [
         {
             "type": "file",
@@ -2462,6 +2488,32 @@
             },
             "xetHash": "c31c9b2b05bf28fbbd99c3c63ebe9b849442304f28f2956b211b89711271085a",
             "path": "vision_weight.q4nx"
+        }
+    ],
+    "llama3.2-iron:1b": [
+        {
+            "type": "file",
+            "size": 1019,
+            "sha256": "a53d38c545333679d523863f60a45f04166e52d15793864da3464712810f8bd9",
+            "path": "config.json"
+        },
+        {
+            "type": "file",
+            "size": 2471645608,
+            "sha256": "1ff795ff6a07e6a68085d206fb84417da2f083f68391c2843cd2b8ac6df8538f",
+            "path": "model.safetensors"
+        },
+        {
+            "type": "file",
+            "size": 9085657,
+            "sha256": "79e3e522635f3171300913bb421464a87de6222182a0570b9b2ccba2a964b2b4",
+            "path": "tokenizer.json"
+        },
+        {
+            "type": "file",
+            "size": 4331,
+            "sha256": "01b0d6dd3c391ffc2facc01592ac07f25e8c4212d3450b8103042e8a5fcbafa8",
+            "path": "tokenizer_config.json"
         }
     ],
     "llama3.2:1b": [

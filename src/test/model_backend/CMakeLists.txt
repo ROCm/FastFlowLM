@@ -20,7 +20,8 @@ else()
     if(XRT_FOUND)
         set(XRT_INCLUDE_DIR "${XRT_INCLUDE_DIRS}")
     else()
-        set(XRT_INCLUDE_DIR /opt/xilinx/xrt/include CACHE PATH "Where XRT headers live")
+        find_path(XRT_INCLUDE_DIR NAMES xrt/xrt_bo.h
+            HINTS /opt/xilinx/xrt/include REQUIRED)
     endif()
 endif()
 

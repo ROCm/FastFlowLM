@@ -21,6 +21,7 @@ using flm::backend::BackendRegistry;
 using flm::backend::BackendTraits;
 using flm::backend::kFlmBackendId;
 using flm::backend::kCoreBackendId;
+using flm::backend::kIronBackendId;
 using flm::backend::ModelBackend;
 using flm::backend::resolve_backend_id;
 
@@ -117,6 +118,16 @@ void test_traits_are_kept_per_backend() {
     TEST_REQUIRE(!core.needs_npu_xclbin);
     TEST_REQUIRE(!core.supports_preemption);
     TEST_REQUIRE(core.max_context_length == 4096);
+}
+
+void test_iron_backend_registration() {
+    auto registry = MakeRegistry();
+    registry.register_backend("llama3", kIronBackendId, StubFactory("iron"),
+                              BackendTraits{false, false, 0});
+    const auto traits = registry.traits("llama3", kIronBackendId);
+    TEST_REQUIRE(!traits.needs_npu_xclbin);
+    TEST_REQUIRE(!traits.supports_preemption);
+    TEST_REQUIRE(traits.max_context_length == 0);
 }
 
 void test_backend_defaults() {
@@ -283,6 +294,7 @@ void test_resolution_rejects_with_a_readable_message() {
 int main() {
     RunTest(test_register_and_create, "register and create");
     RunTest(test_traits_are_kept_per_backend, "traits are kept per backend");
+    RunTest(test_iron_backend_registration, "iron backend registration");
     RunTest(test_backend_defaults, "backend policy defaults");
     RunTest(test_duplicate_registration_is_rejected, "duplicate registration is rejected");
     RunTest(test_replace_backend_is_the_test_seam, "replace_backend is the test seam");

@@ -225,6 +225,7 @@ class model_list {
                 if (model_type == "whisper-v3") continue;
                 else if (model_type == "embed-gemma") continue;
                 else if (model_type == "d3") continue;   // decision models answer /v1/systemone only
+                else if (model_type == "embeddinggemma-2") continue;
                 for (const auto& [size, model_info] : model_subset.items()) {
                     nlohmann::json model_entry = {
                         {"name", model_type + ":" + size},
@@ -256,6 +257,7 @@ class model_list {
                 if (model_type == "whisper-v3") continue;
                 else if (model_type == "embed-gemma") continue;
                 else if (model_type == "d3") continue;   // decision models answer /v1/systemone only
+                else if (model_type == "embeddinggemma-2") continue;
                 for (const auto& [size, model_info] : model_subset.items()) {
                     // id uses the same "type:size" convention; created uses current epoch seconds
                     nlohmann::json model_entry = {
@@ -474,17 +476,24 @@ class model_list {
 
         /// \brief the kernel flow that runs a tag, read off the tag itself
         /// \param model_type the family part of the tag, e.g. "phi4-mini-it-core"
-        /// \return "core" for a family ending in "-core", "flm" otherwise
+        /// \return the backend id encoded by the family name
         /// \note The name is the mechanism, not a label on top of one. A
         ///       corelib model is packaged differently from its FastFlowLM
         ///       namesake -- different weights, different quantization -- so it
         ///       is a different model to pull and a different tag to ask for,
         ///       and there is nothing left for a catalog key to disambiguate.
         static std::string backend_for_family(const std::string& model_type) {
-            static const std::string suffix = "-core";
-            if (model_type.size() > suffix.size() &&
-                model_type.compare(model_type.size() - suffix.size(),
-                                   suffix.size(), suffix) == 0) {
+            if (model_type == "embeddinggemma-2") return "iron";
+            static const std::string iron_suffix = "-iron";
+            if (model_type.size() > iron_suffix.size() &&
+                model_type.compare(model_type.size() - iron_suffix.size(),
+                                   iron_suffix.size(), iron_suffix) == 0) {
+                return "iron";
+            }
+            static const std::string core_suffix = "-core";
+            if (model_type.size() > core_suffix.size() &&
+                model_type.compare(model_type.size() - core_suffix.size(),
+                                   core_suffix.size(), core_suffix) == 0) {
                 return "core";
             }
             return "flm";

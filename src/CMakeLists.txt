@@ -53,6 +53,11 @@ option(FLM_PORTABLE_BUILD "Build portable distribution with bundled runtime libr
 # It also fixes the NPU generation the build targets -- see utils/npu_platform.hpp.
 option(FLM_ENABLE_CORE
        "Reach kernels through ryzenai-corelib instead of FastFlowLM's own flow" OFF)
+option(FLM_ENABLE_IRON "Run complete IRON graphs through the IRON server" OFF)
+
+if(FLM_ENABLE_IRON)
+    add_compile_definitions(FLM_ENABLE_IRON=1)
+endif()
 
 if(FLM_ENABLE_CORE)
     # The corelib prefix lives outside this repository, so its headers have to
@@ -221,10 +226,16 @@ include("${CMAKE_SOURCE_DIR}/common/chat/chat_sources.cmake")
 # ———————————————————————————————————————————————
 file(GLOB SOURCES "src/*.cpp" "runner/*.cpp" "common/*.cpp" "common/*/*.cpp" "server/*.cpp" "pull/*.cpp" )
 file(GLOB HEADERS "include/*.hpp" "runner/*.hpp" "common/*.hpp" "common/*/*.hpp" "server/*.hpp" "pull/*.hpp")
+include(common/models/models_sources.cmake)
+if(FLM_ENABLE_IRON)
+    list(APPEND SOURCES ${FLM_MODELS_IRON_SOURCES})
+else()
+    list(FILTER SOURCES EXCLUDE REGEX ".*/common/iron/.*\\.cpp$")
+endif()
 list(FILTER SOURCES EXCLUDE REGEX ".*/common/core/.*\\.cpp$")
 
-# Model sources live two levels deeper than the globs above reach. Only the core
-# half exists as loose sources; it is built separately, below.
+# Model sources live two levels deeper than the globs above reach. IRON links
+# into flm. Core builds as a separate library below.
 
 # Exclude files that depend on missing libraries for Linux
 if(NOT WIN32)
@@ -706,7 +717,7 @@ if(WIN32)
     target_link_libraries(flm PRIVATE
         ntdll wsock32 ws2_32 Bcrypt
         iphlpapi userenv psapi
-        crypt32 secur32 advapi32 normaliz wldap32
+        crypt32 secur32 advapi32 normaliz wldap32 shell32
     )
 else()
     target_link_libraries(flm PRIVATE Threads::Threads)

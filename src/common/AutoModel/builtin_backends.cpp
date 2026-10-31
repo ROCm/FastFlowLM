@@ -8,6 +8,10 @@
 #include "AutoModel/flm_backend.hpp"
 #include "AutoModel/model_backend.hpp"
 
+#if defined(FLM_ENABLE_IRON)
+#include "models/llama3/iron/llama3_iron_backend.hpp"
+#endif
+
 #if defined(FLM_ENABLE_CORE)
 #include "models/gemma4/core/dev04/gemma4_core_backend.hpp"
 #include "models/llama/core/dev04/llama_core_backend.hpp"
@@ -63,6 +67,12 @@ void register_builtin_backends(BackendRegistry& registry) {
     RegisterFlm<lfm3_npu>(registry, "lfm3");
     RegisterFlm<nanbeige_npu>(registry, "nanbeige");
     RegisterFlm<phi4_npu>(registry, "phi4");
+
+#if defined(FLM_ENABLE_IRON)
+    registry.register_backend("llama3", flm::backend::kIronBackendId,
+                              flm::llama3::iron_factory(),
+                              flm::llama3::iron_traits());
+#endif
 
 #if defined(FLM_ENABLE_CORE)
     registry.register_backend("gemma4e", flm::backend::kCoreBackendId,

@@ -19,6 +19,8 @@ namespace {
 constexpr const char* kCatalogPath = FLM_TEST_MODEL_LIST_PATH;
 constexpr const char* kPhiTag = "phi4-mini-it:4b";
 constexpr const char* kCoreTag = "phi4-mini-it-core:4b";
+constexpr const char* kEmbeddingGemma2Tag = "embeddinggemma-2:740m";
+constexpr const char* kIronLlamaTag = "llama3.2-iron:1b";
 
 /// \brief every generation the build knows about, for the catalog sweep
 const std::set<std::string> kAllPlatforms = {
@@ -116,6 +118,41 @@ void test_a_corelib_build_offers_the_corelib_phi4() {
     TEST_REQUIRE(corelib_on_aie2p.get_model_info(kPhiTag).second.at("backend") == "flm");
 }
 
+void test_embeddinggemma_2_requires_iron() {
+    auto stock = open_stock();
+    TEST_REQUIRE(!stock.is_model_supported(kEmbeddingGemma2Tag));
+
+    auto iron = open_catalog("aie2p", {"flm", "iron"});
+    TEST_REQUIRE(iron.is_model_supported(kEmbeddingGemma2Tag));
+    TEST_REQUIRE(iron.rectify_model_tag("embeddinggemma-2") == kEmbeddingGemma2Tag);
+
+    const auto [tag, info] = iron.get_model_info(kEmbeddingGemma2Tag);
+    TEST_REQUIRE(tag == kEmbeddingGemma2Tag);
+    TEST_REQUIRE(info.at("backend") == "iron");
+    TEST_REQUIRE(info.at("details").at("family") == "embeddinggemma-2");
+}
+
+void test_bf16_llama_requires_iron() {
+    auto stock = open_stock();
+    TEST_REQUIRE(!stock.is_model_supported(kIronLlamaTag));
+
+    auto iron = open_catalog("aie2p", {"flm", "iron"});
+    TEST_REQUIRE(iron.is_model_supported(kIronLlamaTag));
+    TEST_REQUIRE(iron.rectify_model_tag("llama3.2-iron") == kIronLlamaTag);
+
+    const auto [tag, info] = iron.get_model_info(kIronLlamaTag);
+    TEST_REQUIRE(tag == kIronLlamaTag);
+    TEST_REQUIRE(info.at("backend") == "iron");
+    TEST_REQUIRE(info.at("name") == "llama3.2-1b-instruct");
+    TEST_REQUIRE(info.at("url").get<std::string>().starts_with(
+        "https://huggingface.co/meta-llama/Llama-3.2-1B-Instruct/resolve/"));
+    TEST_REQUIRE(info.at("details").at("family") == "llama3");
+    TEST_REQUIRE(info.at("details").at("quantization_level") == "BF16");
+    TEST_REQUIRE(info.at("files").at(1) == "model.safetensors");
+    TEST_REQUIRE(info.at("use_hf_token") == true);
+    TEST_REQUIRE(!info.at("file_sources").contains("model.safetensors"));
+}
+
 void test_a_catalog_can_filter_down_to_nothing() {
     // The other corner of the same rule, and the one that reads like a bug if
     // it is not stated: a build with only the FastFlowLM kernels, on silicon
@@ -141,15 +178,15 @@ void test_a_catalog_can_filter_down_to_nothing() {
 }
 
 void test_the_tag_name_decides_the_backend() {
-    // The rule, on a catalog small enough to see: a family ending in "-core" is
-    // corelib's, anything else is the FastFlowLM kernels'. Nothing else in the
-    // entry is consulted, which is why the two never contend for a tag.
+    // The rule, on a catalog small enough to see: a family ending in "-core" or
+    // "-iron" names that backend; anything else uses FastFlowLM's kernels.
     const auto path = write_catalog(
         "flm_backend_model_list.json",
         {{"model_path", "models"},
          {"models",
           {{"demo", {{"1b", {{"name", "Demo"}}}}},
-           {"demo-core", {{"1b", {{"name", "Demo-core"}}}}}}}});
+           {"demo-core", {{"1b", {{"name", "Demo-core"}}}}},
+           {"demo-iron", {{"1b", {{"name", "Demo-iron"}}}}}}}});
     std::string list_path = path.string();
     std::string exe_dir = ".";
 
@@ -159,6 +196,7 @@ void test_the_tag_name_decides_the_backend() {
     model_list stock(list_path, exe_dir, "aie2p", {"flm"});
     TEST_REQUIRE(stock.is_model_supported("demo:1b"));
     TEST_REQUIRE(!stock.is_model_supported("demo-core:1b"));
+    TEST_REQUIRE(!stock.is_model_supported("demo-iron:1b"));
     TEST_REQUIRE(stock.get_model_info("demo:1b").second.at("backend") == "flm");
     // Both lookups used to dereference the pruned entry. A pruned family keeps
     // its own name rather than resolving to a size, and an unknown tag comes
@@ -174,6 +212,10 @@ void test_the_tag_name_decides_the_backend() {
     TEST_REQUIRE(corelib.is_model_supported("demo-core:1b"));
     TEST_REQUIRE(corelib.get_model_info("demo-core:1b").second.at("backend") == "core");
     TEST_REQUIRE(corelib.get_model_info("demo:1b").second.at("backend") == "flm");
+
+    model_list iron(list_path, exe_dir, "aie2p", {"flm", "iron"});
+    TEST_REQUIRE(iron.is_model_supported("demo-iron:1b"));
+    TEST_REQUIRE(iron.get_model_info("demo-iron:1b").second.at("backend") == "iron");
 
     std::filesystem::remove(path);
 }
@@ -324,6 +366,10 @@ int main() {
             "stock build offers phi4 with its own artifacts");
     RunTest(test_a_corelib_build_offers_the_corelib_phi4,
             "a corelib build offers the corelib phi4");
+    RunTest(test_embeddinggemma_2_requires_iron,
+            "EmbeddingGemma 2 requires iron");
+    RunTest(test_bf16_llama_requires_iron,
+            "BF16 Llama requires iron");
     RunTest(test_the_tag_name_decides_the_backend,
             "the tag name decides the backend");
     RunTest(test_a_catalog_can_filter_down_to_nothing,
