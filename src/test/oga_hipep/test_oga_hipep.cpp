@@ -11,7 +11,6 @@
 #include <windows.h>
 
 #include <algorithm>
-#include <bit>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -21,7 +20,6 @@
 #include <map>
 #include <memory>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -38,68 +36,32 @@ struct OgaGenerator {
     /// \brief the tokens the model state has seen, which the logits describe
     std::vector<std::int32_t> tokens;
     double max_length = 0;
-    /// \brief the search's sequence length, which RewindTo always moves
-    std::size_t length = 0;
-    std::optional<std::vector<std::int32_t>> snapshot;
-    bool rewound = false;
 };
 struct OgaTensor {
     OgaElementType type = OgaElementType_float32;
     std::vector<std::int64_t> shape;
     std::vector<std::byte> data;
 };
-struct OgaTokenizer {
-    bool skip_special_tokens = true;
-};
-
 namespace {
 
 constexpr std::uint32_t kVocab = 64;
-
-// Pieces the fake tokenizer decodes specially; every other id decodes to "[id]".
-constexpr int kEqualsGet = 20;  ///< "=get", as a model generates it
-constexpr int kEquals = 21;     ///< "="
-constexpr int kGet = 22;        ///< "get", so "=" "get" is the same text as "=get"
-constexpr int kImEnd = 23;      ///< "<|im_end|>", a special token
-constexpr int kBadByte = 24;    ///< a byte that is not a whole UTF-8 character
-constexpr int kBadByte2 = 25;   ///< another one
-constexpr int kA = 26;          ///< "a"
-constexpr int kB = 27;          ///< "b"
-constexpr int kAB = 28;         ///< "ab"
-
-/// \brief how SnapshotState and RewindTo behave on a hybrid model
-enum class Rewind {
-    /// \brief onnxruntime-genai 0.17: both succeed, and the model state keeps every token
-    kRelease,
-    /// \brief onnxruntime-genai main: RewindTo restores the one snapshot, at its length only
-    kMain,
-    /// \brief RewindTo fails, as for model types OGA refuses to rewind
-    kRefused,
-};
+constexpr int kMergedToken = 20;
+constexpr int kSplitTokenOne = 21;
+constexpr int kSplitTokenTwo = 22;
 
 /// \brief what the fake OGA saw and how it answers next
 struct FakeOga {
-    Rewind rewind = Rewind::kRelease;
     int generators_created = 0;
     int generators_live = 0;
     int results_destroyed = 0;
-    int snapshots = 0;
-    int rewinds = 0;
     double last_max_length = 0;
     std::vector<std::vector<std::int32_t>> appends;
     std::optional<std::string> fail_next_append;
-    bool fail_tokenizer = false;
     OgaElementType logits_type = OgaElementType_float32;
     std::int64_t logits_rows = 0;  ///< 0: rank 2 [1, vocab]; n: rank 3 [1, n, vocab]
     std::int64_t logits_width = kVocab;
     /// \brief raw 16-bit values for the last row's first entries, for f16/bf16
     std::vector<std::uint16_t> raw_head;
-    int tokenizers_live = 0;
-    /// \brief text handed out by Decode; DestroyString leaves it here
-    std::vector<std::unique_ptr<std::string>> decoded;
-    /// \brief the 1-based SnapshotState or RewindTo call that fails, counted with snapshots or rewinds; 0 for none
-    int fail_snapshot_call = 0;
-    int fail_rewind_call = 0;
     /// \brief handles destroyed, in the order they happened
     std::vector<std::string> events;
 };
@@ -179,38 +141,11 @@ OgaResult* OGA_API_CALL FakeAppendTokens(OgaGenerator* generator, const std::int
     }
     g_fake.appends.emplace_back(ids, ids + count);
     generator->tokens.insert(generator->tokens.end(), ids, ids + count);
-    generator->length += count;
-    generator->rewound = false;
-    if (generator->length > generator->max_length) return Error("past max_length");
-    return nullptr;
-}
-OgaResult* OGA_API_CALL FakeSnapshotState(OgaGenerator* generator) {
-    if (++g_fake.snapshots == g_fake.fail_snapshot_call) return Error("snapshot failed");
-    if (g_fake.rewind == Rewind::kMain) generator->snapshot = generator->tokens;
-    return nullptr;
-}
-OgaResult* OGA_API_CALL FakeRewindTo(OgaGenerator* generator, size_t length) {
-    if (++g_fake.rewinds == g_fake.fail_rewind_call) return Error("RewindTo failed");
-    if (length > generator->length) return Error("cannot rewind to a greater length");
-    if (length == generator->length) return nullptr;
-    switch (g_fake.rewind) {
-    case Rewind::kRelease: break;
-    case Rewind::kMain:
-        if (!generator->snapshot) return Error("RewindTo is not supported without a snapshot");
-        if (generator->snapshot->size() != length) return Error("cannot restore snapshot");
-        generator->tokens = *generator->snapshot;
-        break;
-    case Rewind::kRefused: return Error("RewindTo is currently not supported");
-    }
-    generator->length = length;
-    generator->rewound = true;
+    if (generator->tokens.size() > static_cast<std::size_t>(generator->max_length))
+        return Error("past max_length");
     return nullptr;
 }
 OgaResult* OGA_API_CALL FakeGetLogits(OgaGenerator* generator, OgaTensor** out) {
-    // OGA main's GetLogits right after a rewind runs the last token again.
-    if (generator->rewound && g_fake.rewind == Rewind::kMain)
-        generator->tokens.push_back(generator->tokens.back());
-    generator->rewound = false;
     auto* tensor = new OgaTensor;
     tensor->type = g_fake.logits_type;
     const std::int64_t rows = g_fake.logits_rows ? g_fake.logits_rows : 1;
@@ -254,48 +189,6 @@ OgaResult* OGA_API_CALL FakeTensorGetData(OgaTensor* tensor, void** out) {
     return nullptr;
 }
 void OGA_API_CALL FakeDestroyTensor(OgaTensor* tensor) { delete tensor; }
-OgaResult* OGA_API_CALL FakeCreateTokenizer(const OgaModel*, OgaTokenizer** out) {
-    if (g_fake.fail_tokenizer) return Error("no tokenizer.json");
-    ++g_fake.tokenizers_live;
-    *out = new OgaTokenizer;
-    return nullptr;
-}
-OgaResult* OGA_API_CALL FakeUpdateTokenizerOptions(OgaTokenizer* tokenizer, const char* const* keys,
-                                                   const char* const* values, size_t count) {
-    for (size_t i = 0; i < count; ++i) {
-        if (std::string(keys[i]) != "skip_special_tokens") return Error("unknown tokenizer option");
-        tokenizer->skip_special_tokens = std::string(values[i]) == "true";
-    }
-    return nullptr;
-}
-OgaResult* OGA_API_CALL FakeTokenizerDecode(const OgaTokenizer* tokenizer, const std::int32_t* ids,
-                                            size_t count, const char** out) {
-    auto text = std::make_unique<std::string>();
-    for (size_t i = 0; i < count; ++i) {
-        switch (ids[i]) {
-        case kEqualsGet: *text += "=get"; break;
-        case kEquals: *text += "="; break;
-        case kGet: *text += "get"; break;
-        case kImEnd:
-            if (!tokenizer->skip_special_tokens) *text += "<|im_end|>";
-            break;
-        case kBadByte:
-        case kBadByte2: *text += "\xEF\xBF\xBD"; break;
-        case kA: *text += "a"; break;
-        case kB: *text += "b"; break;
-        case kAB: *text += "ab"; break;
-        default: *text += "[" + std::to_string(ids[i]) + "]";
-        }
-    }
-    *out = text->c_str();
-    g_fake.decoded.push_back(std::move(text));
-    return nullptr;
-}
-void OGA_API_CALL FakeDestroyTokenizer(OgaTokenizer* tokenizer) {
-    --g_fake.tokenizers_live;
-    RecordEvent("destroy_tokenizer");
-    delete tokenizer;
-}
 std::map<std::string, void*> FakeSymbols() {
     return {
         {"OgaResultGetError", reinterpret_cast<void*>(&FakeResultGetError)},
@@ -315,17 +208,11 @@ std::map<std::string, void*> FakeSymbols() {
         {"OgaDestroyGenerator", reinterpret_cast<void*>(&FakeDestroyGenerator)},
         {"OgaGenerator_AppendTokens", reinterpret_cast<void*>(&FakeAppendTokens)},
         {"OgaGenerator_GetLogits", reinterpret_cast<void*>(&FakeGetLogits)},
-        {"OgaGenerator_SnapshotState", reinterpret_cast<void*>(&FakeSnapshotState)},
-        {"OgaGenerator_RewindTo", reinterpret_cast<void*>(&FakeRewindTo)},
         {"OgaTensorGetType", reinterpret_cast<void*>(&FakeTensorGetType)},
         {"OgaTensorGetShapeRank", reinterpret_cast<void*>(&FakeTensorGetShapeRank)},
         {"OgaTensorGetShape", reinterpret_cast<void*>(&FakeTensorGetShape)},
         {"OgaTensorGetData", reinterpret_cast<void*>(&FakeTensorGetData)},
         {"OgaDestroyTensor", reinterpret_cast<void*>(&FakeDestroyTensor)},
-        {"OgaCreateTokenizer", reinterpret_cast<void*>(&FakeCreateTokenizer)},
-        {"OgaUpdateTokenizerOptions", reinterpret_cast<void*>(&FakeUpdateTokenizerOptions)},
-        {"OgaTokenizerDecode", reinterpret_cast<void*>(&FakeTokenizerDecode)},
-        {"OgaDestroyTokenizer", reinterpret_cast<void*>(&FakeDestroyTokenizer)},
     };
 }
 
@@ -336,37 +223,26 @@ std::shared_ptr<const flm::oga::OgaApi> FakeApi(std::map<std::string, void*> sym
     });
 }
 
-using Options = flm::oga::OgaEngine::Options;
-constexpr Options kTextReuse{true};
-
 /// \brief an engine over `api`, with a model that is a fresh fake
 std::unique_ptr<flm::oga::OgaEngine> ConstructOn(std::shared_ptr<const flm::oga::OgaApi> api,
-                                                 Options options = {}, std::uint32_t max_length = 32,
+                                                 std::uint32_t max_length = 32,
                                                  std::uint32_t context_limit = 64) {
     flm::oga::OgaApi::Owned<OgaModel> model(new OgaModel, {&FakeDestroyModel});
     return std::make_unique<flm::oga::OgaEngine>(std::move(api), std::move(model), "Test", kVocab,
-                                                 context_limit, max_length, options);
+                                                 context_limit, max_length);
 }
 
 /// \brief an engine over the fake as `g_fake` is set up now
-std::unique_ptr<flm::oga::OgaEngine> Construct(Options options = {}, std::uint32_t max_length = 32,
+std::unique_ptr<flm::oga::OgaEngine> Construct(std::uint32_t max_length = 32,
                                                std::uint32_t context_limit = 64) {
-    return ConstructOn(FakeApi(), options, max_length, context_limit);
+    return ConstructOn(FakeApi(), max_length, context_limit);
 }
 
-/// \brief a fresh fake and an engine over it, with the construction probe's calls forgotten
+/// \brief a fresh fake and an engine over it
 std::unique_ptr<flm::oga::OgaEngine> MakeEngine(std::uint32_t max_length = 32,
-                                                std::uint32_t context_limit = 64,
-                                                Options options = {},
-                                                Rewind rewind = Rewind::kRelease) {
+                                                std::uint32_t context_limit = 64) {
     g_fake = FakeOga{};
-    g_fake.rewind = rewind;
-    auto engine = Construct(options, max_length, context_limit);
-    g_fake.generators_created = 0;
-    g_fake.snapshots = 0;
-    g_fake.rewinds = 0;
-    g_fake.appends.clear();
-    return engine;
+    return Construct(max_length, context_limit);
 }
 
 float At(const buffer<bf16>& logits, std::size_t index) { return static_cast<float>(logits[index]); }
@@ -422,7 +298,22 @@ void TestADivergentPassReplaysEverythingInOneAppend() {
     TEST_REQUIRE(g_fake.generators_created == 2);
     TEST_REQUIRE(g_fake.generators_live == 1);
     TEST_REQUIRE(g_fake.appends.back() == (Tokens{1, 2, 3, 9}));
-    TEST_REQUIRE(g_fake.rewinds == 0);
+}
+
+void TestRetokenizedSequenceReplaysUsingTheNewTokenIds() {
+    auto engine = MakeEngine();
+    std::vector<int> first_encoding{1, 2, 3, kMergedToken};
+    engine->prefill(first_encoding);
+    engine->clear_context();
+
+    // These ids can decode to equivalent text, but the token sequence changed.
+    std::vector<int> retokenized{1, 2, 3, kSplitTokenOne, kSplitTokenTwo, 4};
+    RequireState(engine->prefill(retokenized), 6, 4,
+                 1 + 2 + 3 + kSplitTokenOne + kSplitTokenTwo + 4);
+    TEST_REQUIRE(g_fake.generators_created == 2);
+    TEST_REQUIRE(g_fake.generators_live == 1);
+    TEST_REQUIRE(g_fake.appends.back() ==
+                 (Tokens{1, 2, 3, kSplitTokenOne, kSplitTokenTwo, 4}));
 }
 
 void TestTheSameSequenceAgainReadsTheLiveLogits() {
@@ -450,218 +341,6 @@ void TestSetContextLengthOnlyMovesTheLogicalEnd() {
     RequireState(engine->forward(7), 3, 7, 10);
     TEST_REQUIRE(g_fake.generators_created == 2);
     TEST_REQUIRE(g_fake.appends.back() == (Tokens{1, 2, 7}));
-}
-
-/// \brief run `prompt`, generate `answer`, then go back to the end of the prompt
-void Turn(flm::oga::OgaEngine& engine, std::vector<int> prompt, const std::vector<int>& answer) {
-    engine.prefill(prompt);
-    engine.checkpoint();
-    for (const int id : answer) engine.forward(id);
-    engine.restore();
-}
-
-void TestTheSameTextInAnotherSplitContinuesTheGenerator() {
-    auto engine = MakeEngine(32, 64, kTextReuse);
-    Turn(*engine, {1, 2, 3}, {kEqualsGet, kImEnd});
-    // The frontend renders the answer back as "=" "get" "<|im_end|>".
-    std::vector<int> turn{kEquals, kGet, kImEnd, 4, 5};
-    RequireState(engine->prefill(turn), 7, 5, 1 + 2 + 3 + kEqualsGet + kImEnd + 4 + 5);
-    TEST_REQUIRE(g_fake.generators_created == 1);
-    TEST_REQUIRE(g_fake.appends.back() == (Tokens{4, 5}));
-    TEST_REQUIRE(engine->get_current_context_length() == 8);
-
-    // Later turns continue from the frontend's tokens.
-    engine->checkpoint();
-    engine->forward(6);
-    engine->restore();
-    std::vector<int> next{6, 7};
-    RequireState(engine->prefill(next), 9, 7, 1 + 2 + 3 + kEqualsGet + kImEnd + 4 + 5 + 6 + 7);
-    TEST_REQUIRE(g_fake.generators_created == 1);
-    TEST_REQUIRE(g_fake.appends.back() == (Tokens{7}));
-    TEST_REQUIRE(engine->get_current_context_length() == 10);
-}
-
-void TestADifferentTextReplays() {
-    auto engine = MakeEngine(32, 64, kTextReuse);
-    Turn(*engine, {1, 2, 3}, {kEqualsGet, kImEnd});
-    std::vector<int> turn{kEquals, 9, kImEnd};
-    RequireState(engine->prefill(turn), 6, kImEnd, 1 + 2 + 3 + kEquals + 9 + kImEnd);
-    TEST_REQUIRE(g_fake.generators_created == 2);
-    TEST_REQUIRE(g_fake.generators_live == 1);
-    TEST_REQUIRE(g_fake.appends.back() == (Tokens{1, 2, 3, kEquals, 9, kImEnd}));
-}
-
-void TestSpecialTokensAreTextToo() {
-    auto engine = MakeEngine(32, 64, kTextReuse);
-    Turn(*engine, {1, 2, 3}, {kEqualsGet, kImEnd});
-    // Read without special tokens, the answer would be "=get", a prefix of this.
-    std::vector<int> turn{kEquals, kGet, 4};
-    RequireState(engine->prefill(turn), 6, 4, 1 + 2 + 3 + kEquals + kGet + 4);
-    TEST_REQUIRE(g_fake.generators_created == 2);
-}
-
-void TestTextWithAReplacementCharacterNeverMatches() {
-    auto engine = MakeEngine(32, 64, kTextReuse);
-    Turn(*engine, {1, 2, 3}, {kBadByte});
-    std::vector<int> turn{kBadByte2, 4};
-    RequireState(engine->prefill(turn), 5, 4, 1 + 2 + 3 + kBadByte2 + 4);
-    TEST_REQUIRE(g_fake.generators_created == 2);
-    TEST_REQUIRE(g_fake.appends.back() == (Tokens{1, 2, 3, kBadByte2, 4}));
-}
-
-void TestTheGeneratorMustHoldItsOwnTokensToContinue() {
-    // The generator ran "a" "b" where the frontend now has "ab": one token more.
-    for (const std::uint32_t max_length : {7u, 6u}) {
-        auto engine = MakeEngine(max_length, 64, kTextReuse);
-        Turn(*engine, {1, 2, 3}, {kA, kB});
-        std::vector<int> turn{kAB, 4, 5};
-        engine->prefill(turn);
-        if (max_length == 7) {
-            TEST_REQUIRE(g_fake.generators_created == 1);
-            TEST_REQUIRE(g_fake.appends.back() == (Tokens{4, 5}));
-        } else {
-            TEST_REQUIRE(g_fake.generators_created == 2);
-            TEST_REQUIRE(g_fake.appends.back() == (Tokens{1, 2, 3, kAB, 4, 5}));
-        }
-    }
-}
-
-void TestRewindingIntoAnotherSplitReplays() {
-    auto engine = MakeEngine(32, 64, kTextReuse);
-    Turn(*engine, {1, 2, 3}, {kEqualsGet, kImEnd});
-    std::vector<int> turn{kEquals, kGet, kImEnd, 4};
-    engine->prefill(turn);
-    TEST_REQUIRE(g_fake.generators_created == 1);
-    // Back to inside the text the generator ran as one token.
-    engine->set_context_length(4);
-    RequireState(engine->forward(9), 5, 9, 1 + 2 + 3 + kEquals + 9);
-    TEST_REQUIRE(g_fake.generators_created == 2);
-    TEST_REQUIRE(g_fake.appends.back() == (Tokens{1, 2, 3, kEquals, 9}));
-}
-
-void TestTheProbeTrustsARewindThatRestoresTheSnapshot() {
-    g_fake = FakeOga{};
-    g_fake.rewind = Rewind::kMain;
-    auto engine = Construct();
-    TEST_REQUIRE(g_fake.rewinds == 1);
-    TEST_REQUIRE(g_fake.generators_live == 0);
-    const int probe_generators = g_fake.generators_created;
-    Turn(*engine, {1, 2, 3}, {4});
-    std::vector<int> other{9};
-    RequireState(engine->prefill(other), 4, 9, 15);
-    TEST_REQUIRE(g_fake.rewinds == 2);
-    TEST_REQUIRE(g_fake.generators_created == probe_generators + 1);
-}
-
-void TestWithoutAWorkingRewindTheEngineNeverRewindsAndReplays() {
-    for (const Rewind rewind : {Rewind::kRelease, Rewind::kRefused}) {
-        g_fake = FakeOga{};
-        g_fake.rewind = rewind;
-        auto engine = Construct();
-        TEST_REQUIRE(g_fake.rewinds == 1);
-        TEST_REQUIRE(g_fake.generators_live == 0);
-        g_fake.rewinds = 0;
-        Turn(*engine, {1, 2, 3}, {4, 5});
-        std::vector<int> turn{9};
-        RequireState(engine->prefill(turn), 4, 9, 15);
-        TEST_REQUIRE(g_fake.appends.back() == (Tokens{1, 2, 3, 9}));
-        engine->checkpoint();
-        engine->forward(6);
-        engine->restore();
-        std::vector<int> next{7, 8};
-        RequireState(engine->prefill(next), 6, 8, 1 + 2 + 3 + 9 + 7 + 8);
-        TEST_REQUIRE(g_fake.rewinds == 0);
-    }
-}
-
-void TestRestoreRewindsToTheSnapshotAndAppendsOnlyTheRest() {
-    auto engine = MakeEngine(32, 64, {}, Rewind::kMain);
-    Turn(*engine, {1, 2, 3}, {4, 5});
-    std::vector<int> turn{6, 7};
-    RequireState(engine->prefill(turn), 5, 7, 1 + 2 + 3 + 6 + 7);
-    TEST_REQUIRE(g_fake.rewinds == 1);
-    TEST_REQUIRE(g_fake.appends.back() == (Tokens{6, 7}));
-    RequireState(engine->forward(8), 6, 8, 1 + 2 + 3 + 6 + 7 + 8);
-    TEST_REQUIRE(g_fake.appends.back() == (Tokens{8}));
-
-    // Each checkpoint takes a new snapshot.
-    engine->checkpoint();
-    engine->forward(9);
-    engine->restore();
-    std::vector<int> next{10};
-    RequireState(engine->prefill(next), 7, 10, 1 + 2 + 3 + 6 + 7 + 8 + 10);
-    TEST_REQUIRE(g_fake.rewinds == 2);
-    TEST_REQUIRE(g_fake.appends.back() == (Tokens{10}));
-    TEST_REQUIRE(g_fake.generators_created == 1);
-}
-
-void TestASnapshotServesOneRewind() {
-    auto engine = MakeEngine(32, 64, {}, Rewind::kMain);
-    Turn(*engine, {1, 2, 3}, {4});
-    std::vector<int> turn{9};
-    engine->prefill(turn);
-    TEST_REQUIRE(g_fake.rewinds == 1);
-    engine->restore();
-    std::vector<int> again{8};
-    RequireState(engine->prefill(again), 4, 8, 14);
-    TEST_REQUIRE(g_fake.rewinds == 1);
-    TEST_REQUIRE(g_fake.generators_created == 2);
-    TEST_REQUIRE(g_fake.appends.back() == (Tokens{1, 2, 3, 8}));
-}
-
-void TestNothingLeftAfterTheSnapshotReplays() {
-    auto engine = MakeEngine(32, 64, {}, Rewind::kMain);
-    std::vector<int> prompt{1, 2, 3};
-    engine->prefill(prompt);
-    engine->checkpoint();
-    engine->forward(4);
-    engine->clear_context();
-    RequireState(engine->prefill(prompt), 3, 3, 6);
-    TEST_REQUIRE(g_fake.rewinds == 0);
-    TEST_REQUIRE(g_fake.generators_created == 2);
-}
-
-void TestASnapshotPastWhereTheContextDivergesReplays() {
-    auto engine = MakeEngine(32, 64, {}, Rewind::kMain);
-    Turn(*engine, {1, 2, 3}, {4});
-    engine->set_context_length(2);
-    std::vector<int> turn{9, 8};
-    RequireState(engine->prefill(turn), 4, 8, 1 + 2 + 9 + 8);
-    TEST_REQUIRE(g_fake.rewinds == 0);
-    TEST_REQUIRE(g_fake.generators_created == 2);
-}
-
-void TestACheckpointBehindTheGeneratorTakesNoSnapshot() {
-    auto engine = MakeEngine(32, 64, {}, Rewind::kMain);
-    std::vector<int> prompt{1, 2, 3, 4};
-    engine->prefill(prompt);
-    engine->set_context_length(2);
-    engine->checkpoint();
-    RequireState(engine->forward(5), 3, 5, 8);
-    engine->restore();
-    RequireState(engine->forward(6), 3, 6, 9);
-    TEST_REQUIRE(g_fake.rewinds == 0);
-    TEST_REQUIRE(g_fake.generators_created == 3);
-}
-
-void TestTextReuseIsOffByDefault() {
-    auto engine = MakeEngine();
-    TEST_REQUIRE(g_fake.tokenizers_live == 0);
-    Turn(*engine, {1, 2, 3}, {kEqualsGet, kImEnd});
-    std::vector<int> turn{kEquals, kGet, kImEnd, 4, 5};
-    RequireState(engine->prefill(turn), 8, 5, 1 + 2 + 3 + kEquals + kGet + kImEnd + 4 + 5);
-    TEST_REQUIRE(g_fake.generators_created == 2);
-}
-
-void TestTextReuseWithoutATokenizerReplays() {
-    g_fake = FakeOga{};
-    g_fake.fail_tokenizer = true;
-    auto engine = Construct(kTextReuse);
-    Turn(*engine, {1, 2, 3}, {kEqualsGet, kImEnd});
-    const int generators = g_fake.generators_created;
-    std::vector<int> turn{kEquals, kGet, kImEnd, 4};
-    RequireState(engine->prefill(turn), 7, 4, 1 + 2 + 3 + kEquals + kGet + kImEnd + 4);
-    TEST_REQUIRE(g_fake.generators_created == generators + 1);
 }
 
 void TestOverflowThrowsBeforeOgaIsCalled() {
@@ -789,29 +468,6 @@ std::size_t CountOf(const std::vector<std::string>& events, const std::string& e
     return static_cast<std::size_t>(std::count(events.begin(), events.end(), event));
 }
 
-std::size_t Occurrences(const std::string& text, std::string_view needle) {
-    std::size_t count = 0;
-    for (std::size_t at = text.find(needle); at != std::string::npos;
-         at = text.find(needle, at + needle.size()))
-        ++count;
-    return count;
-}
-
-/// \brief the text `body` writes to stdout
-template <typename Body>
-std::string Stdout(Body&& body) {
-    std::ostringstream captured;
-    std::streambuf* previous = std::cout.rdbuf(captured.rdbuf());
-    try {
-        body();
-    } catch (...) {
-        std::cout.rdbuf(previous);
-        throw;
-    }
-    std::cout.rdbuf(previous);
-    return captured.str();
-}
-
 void TestAFreshApiAfterFullReleaseWorksAgain() {
     g_fake = FakeOga{};
     int loads = 0;
@@ -840,65 +496,6 @@ void TestAFreshApiAfterFullReleaseWorksAgain() {
     second.reset();
     again.reset();
     TEST_REQUIRE(CountOf(Events(), "destroy_model") == 2);
-}
-
-// ---- an optional snapshot never fails a request ----------------------------
-
-void TestAFailedCheckpointSnapshotKeepsTheCheckpointAndWarnsOnce() {
-    auto engine = MakeEngine(32, 64, {}, Rewind::kMain);
-    std::vector<int> prompt{1, 2, 3};
-    engine->prefill(prompt);
-    g_fake.fail_snapshot_call = g_fake.snapshots + 1;
-    int position = -1;
-    const std::string log = Stdout([&] { position = engine->checkpoint(); });
-    TEST_REQUIRE(position == 3);
-    TEST_REQUIRE(Occurrences(log, "warning:") == 1);
-    engine->forward(4);
-    TEST_REQUIRE(engine->restore() == 3);
-    std::vector<int> next{9};
-    RequireState(engine->prefill(next), 4, 9, 15);
-    TEST_REQUIRE(g_fake.rewinds == 0);
-    TEST_REQUIRE(g_fake.appends.back() == (Tokens{1, 2, 3, 9}));
-}
-
-void TestAFailedCheckpointDropsTheEarlierSnapshotToo() {
-    auto engine = MakeEngine(32, 64, {}, Rewind::kMain);
-    std::vector<int> prompt{1, 2, 3};
-    engine->prefill(prompt);
-    engine->checkpoint();
-    engine->forward(4);
-    g_fake.fail_snapshot_call = g_fake.snapshots + 1;
-    const std::string log = Stdout([&] { engine->checkpoint(); });
-    TEST_REQUIRE(Occurrences(log, "warning:") == 1);
-    engine->forward(5);
-    TEST_REQUIRE(engine->restore() == 4);
-    std::vector<int> next{6};
-    // A rewind to the first checkpoint would give the same logits; only the rewind count shows it.
-    RequireState(engine->prefill(next), 5, 6, 16);
-    TEST_REQUIRE(g_fake.rewinds == 0);
-    TEST_REQUIRE(g_fake.appends.back() == (Tokens{1, 2, 3, 4, 6}));
-}
-
-void TestAFailedRewindReplaysOnceAndNeverRewindsAgain() {
-    auto engine = MakeEngine(32, 64, {}, Rewind::kMain);
-    Turn(*engine, {1, 2, 3}, {4});
-    g_fake.fail_rewind_call = g_fake.rewinds + 1;
-    std::vector<int> turn{6, 7};
-    const std::string log = Stdout([&] { RequireState(engine->prefill(turn), 5, 7, 19); });
-    TEST_REQUIRE(Occurrences(log, "warning:") == 1);
-    TEST_REQUIRE(g_fake.rewinds == 1);
-    TEST_REQUIRE(g_fake.generators_created == 2);
-    TEST_REQUIRE(g_fake.appends.back() == (Tokens{1, 2, 3, 6, 7}));
-
-    // Rewinding is off now: no checkpoint takes a snapshot, and no later pass rewinds.
-    const int snapshots = g_fake.snapshots;
-    engine->checkpoint();
-    engine->forward(8);
-    engine->restore();
-    std::vector<int> next{9};
-    RequireState(engine->prefill(next), 6, 9, 28);
-    TEST_REQUIRE(g_fake.snapshots == snapshots);
-    TEST_REQUIRE(g_fake.rewinds == 1);
 }
 
 // ---- package discovery ----------------------------------------------------
@@ -1212,30 +809,37 @@ void TestTheBackendSaysHowToGetHipep() {
     RequireContains(text, "Install hip-ep 0.5.2 or later");
 }
 
+void TestConstructionDoesNotRunInference() {
+    g_fake = FakeOga{};
+    auto engine = Construct();
+    TEST_REQUIRE(g_fake.generators_created == 0);
+    TEST_REQUIRE(g_fake.appends.empty());
+}
+
+void TestBackendCapacityTracksContextUpdates() {
+    g_fake = FakeOga{};
+    auto api = flm::oga::OgaApi::GetOrCreateWith([] { return FakeApi(); });
+    PackageDir package;
+    auto backend = flm::oga::hipep_factory()(package.Context(32));
+    TEST_REQUIRE(backend->max_decode_length() == 31);
+    backend->engine().update_max_length(64);
+    TEST_REQUIRE(backend->max_decode_length() == 63);
+    backend->engine().update_max_length(16);
+    TEST_REQUIRE(backend->max_decode_length() == 15);
+}
+
 }  // namespace
 
 int main() {
 #define RUN(name) RunTest(&name, #name)
+    RUN(TestConstructionDoesNotRunInference);
+    RUN(TestBackendCapacityTracksContextUpdates);
     RUN(TestPrefillThenForwardAppendsOnlyTheNewToken);
     RUN(TestRestoreIsBookkeepingAndAContinuationReusesTheGenerator);
     RUN(TestADivergentPassReplaysEverythingInOneAppend);
+    RUN(TestRetokenizedSequenceReplaysUsingTheNewTokenIds);
     RUN(TestTheSameSequenceAgainReadsTheLiveLogits);
     RUN(TestSetContextLengthOnlyMovesTheLogicalEnd);
-    RUN(TestTheSameTextInAnotherSplitContinuesTheGenerator);
-    RUN(TestADifferentTextReplays);
-    RUN(TestSpecialTokensAreTextToo);
-    RUN(TestTextWithAReplacementCharacterNeverMatches);
-    RUN(TestTheGeneratorMustHoldItsOwnTokensToContinue);
-    RUN(TestRewindingIntoAnotherSplitReplays);
-    RUN(TestTheProbeTrustsARewindThatRestoresTheSnapshot);
-    RUN(TestWithoutAWorkingRewindTheEngineNeverRewindsAndReplays);
-    RUN(TestRestoreRewindsToTheSnapshotAndAppendsOnlyTheRest);
-    RUN(TestASnapshotServesOneRewind);
-    RUN(TestNothingLeftAfterTheSnapshotReplays);
-    RUN(TestASnapshotPastWhereTheContextDivergesReplays);
-    RUN(TestACheckpointBehindTheGeneratorTakesNoSnapshot);
-    RUN(TestTextReuseIsOffByDefault);
-    RUN(TestTextReuseWithoutATokenizerReplays);
     RUN(TestOverflowThrowsBeforeOgaIsCalled);
     RUN(TestAnOgaErrorDropsTheGeneratorWithoutPoisoningTheEngine);
     RUN(TestGrowingPastCapacityDropsTheGenerator);
@@ -1246,9 +850,6 @@ int main() {
     RUN(TestCallsTheEngineDoesNotSupportThrow);
     RUN(TestAMissingSymbolNamesIt);
     RUN(TestAFreshApiAfterFullReleaseWorksAgain);
-    RUN(TestAFailedCheckpointSnapshotKeepsTheCheckpointAndWarnsOnce);
-    RUN(TestAFailedCheckpointDropsTheEarlierSnapshotToo);
-    RUN(TestAFailedRewindReplaysOnceAndNeverRewindsAgain);
     RUN(TestDiscoveryReportsWhyEachRootIsRejected);
     RUN(TestDiscoveryAcceptsAVersionedPackageWithoutABinDirectory);
     RUN(TestFindPackageTakesTheFirstThatQualifiesAndListsEveryRejection);

@@ -42,7 +42,7 @@ inline void print_help(po::options_description& general) {
     std::cout << "\tflm pull llama3.2:1b --modelscope 1" << std::endl;
     std::cout << "\tflm check llama3.2:1b" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --ctx-len 8192" << std::endl;
-    std::cout << "\tflm run qwen3.5-oga-hipep:9b" << std::endl;
+    std::cout << "\tflm run phi4-mini-it:4b --backend flm_npu" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --prefill-chunk-len 8192" << std::endl;
     std::cout << "\tflm serve qwen3.5:2b --prefix-slots 16 --prefix-cache-mb 4096" << std::endl;
     std::cout << "\tflm serve qwen3.5:2b --prefix-min-gain 256" << std::endl;
@@ -98,7 +98,7 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
             ("ctx-len,c", po::value<int>(&parsed_args.ctx_length)->default_value(-1),
              "Set context length")
             ("backend", po::value<std::string>(&parsed_args.backend)->default_value(""),
-             "Execution backend: flm, core or oga-hipep. Default: the model tag's own backend, and it must match, since each backend needs its own model files. Overrides FLM_BACKEND")
+             "Execution backend to run the model on (default: the model's own). Overrides FLM_BACKEND")
             ("prefill-chunk-len,pcl", po::value<int>(&parsed_args.prefill_chunk_len)->default_value(-1),
              "Set prefill chunk length")
             ("prefix-cache-mb", po::value<int>(&parsed_args.prefix_cache_mb)->default_value(-1),

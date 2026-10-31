@@ -10,7 +10,6 @@
 ///        not about which silicon it runs on.
 #include "AutoModel/model_backend.hpp"
 #include "../phi4_core/test_support.hpp"
-#include "nlohmann/json.hpp"
 
 #include <cstdlib>
 #include <memory>
@@ -20,11 +19,9 @@
 using flm::backend::BackendContext;
 using flm::backend::BackendRegistry;
 using flm::backend::BackendTraits;
-using flm::backend::choose_backend_id;
 using flm::backend::kFlmBackendId;
 using flm::backend::kCoreBackendId;
 using flm::backend::ModelBackend;
-using flm::backend::require_backend_matches_files;
 using flm::backend::resolve_backend_id;
 
 /// \brief the builtin set, emptied
@@ -281,97 +278,6 @@ void test_resolution_rejects_with_a_readable_message() {
     RequireContains(no_family, "(none)");
 }
 
-void test_backend_match_is_enforced_only_for_a_named_flow() {
-    // An entry that names no backend never tied itself to a flow, so the
-    // requested one stands. The phi4 frontend tests depend on this.
-    require_backend_matches_files(false, kFlmBackendId, kCoreBackendId, "--backend");
-
-    // When the entry names the backend that was chosen, there is nothing to refuse.
-    require_backend_matches_files(true, kCoreBackendId, kCoreBackendId, "--backend");
-    require_backend_matches_files(true, kFlmBackendId, kFlmBackendId, "model catalog");
-}
-
-void test_mismatched_backend_is_refused_for_every_source() {
-    for (const char* source : {"--backend", "FLM_BACKEND", "model catalog"}) {
-        const std::string message = RequireThrows([&] {
-            require_backend_matches_files(true, kFlmBackendId, kCoreBackendId, source);
-        });
-        RequireContains(message, kCoreBackendId);
-        RequireContains(message, kFlmBackendId);
-        RequireContains(message, std::string("(from ") + source + ")");
-    }
-}
-
-/// \brief a catalog entry as AutoModel receives it
-/// \note An empty flow leaves kBackendKey out: the entry was never tied to a flow.
-nlohmann::json MakeEntry(const std::string& family, const std::string& flow) {
-    nlohmann::json entry;
-    entry["details"]["family"] = family;
-    if (!flow.empty()) entry[flm::backend::kBackendKey] = flow;
-    return entry;
-}
-
-void test_choose_backend_id_refuses_a_mismatch_under_the_given_label() {
-    auto& registry = BackendRegistry::instance();
-    registry.replace_backend("phi4", kFlmBackendId, StubFactory("flm"));
-    registry.replace_backend("phi4", kCoreBackendId, StubFactory("core"));
-
-    // A per-request "backend" field must be named as such, not blamed on --backend.
-    const std::string message = RequireThrows([&] {
-        choose_backend_id(MakeEntry("phi4", kCoreBackendId), kFlmBackendId,
-                          "the request's \"backend\" field");
-    });
-    RequireContains(message, "(from the request's \"backend\" field)");
-    RequireContains(message, "cannot run this model");
-    TEST_REQUIRE(message.find("--backend") == std::string::npos);
-}
-
-void test_choose_backend_id_names_the_backend_flag_by_default() {
-    auto& registry = BackendRegistry::instance();
-    registry.replace_backend("phi4", kFlmBackendId, StubFactory("flm"));
-    registry.replace_backend("phi4", kCoreBackendId, StubFactory("core"));
-
-    const std::string message = RequireThrows([&] {
-        choose_backend_id(MakeEntry("phi4", kCoreBackendId), kFlmBackendId);
-    });
-    RequireContains(message, "(from --backend)");
-}
-
-void test_choose_backend_id_returns_the_matching_backend() {
-    auto& registry = BackendRegistry::instance();
-    registry.replace_backend("phi4", kFlmBackendId, StubFactory("flm"));
-    registry.replace_backend("phi4", kCoreBackendId, StubFactory("core"));
-
-    ScopedBackendEnv env(nullptr);
-    TEST_REQUIRE(choose_backend_id(MakeEntry("phi4", kCoreBackendId),
-                                   kCoreBackendId) == kCoreBackendId);
-    TEST_REQUIRE(choose_backend_id(MakeEntry("phi4", kCoreBackendId), "") ==
-                 kCoreBackendId);
-}
-
-void test_choose_backend_id_lets_an_unnamed_flow_take_an_override() {
-    auto& registry = BackendRegistry::instance();
-    registry.replace_backend("phi4", kFlmBackendId, StubFactory("flm"));
-    registry.replace_backend("phi4", kCoreBackendId, StubFactory("core"));
-
-    // An entry that names no flow never tied itself to one, so the override stands.
-    TEST_REQUIRE(choose_backend_id(MakeEntry("phi4", ""), kCoreBackendId) ==
-                 kCoreBackendId);
-}
-
-void test_choose_backend_id_requires_a_family() {
-    nlohmann::json no_details = nlohmann::json::object();
-    const std::string missing_details =
-        RequireThrows([&] { choose_backend_id(no_details, ""); });
-    RequireContains(missing_details, "Model entry has no details.family");
-
-    nlohmann::json no_family;
-    no_family["details"] = nlohmann::json::object();
-    const std::string missing_family =
-        RequireThrows([&] { choose_backend_id(no_family, ""); });
-    RequireContains(missing_family, "Model entry has no details.family");
-}
-
 }  // namespace
 
 int main() {
@@ -387,20 +293,6 @@ int main() {
             "adding core leaves the flm families alone");
     RunTest(test_resolution_rejects_with_a_readable_message,
             "resolution rejects with a readable message");
-    RunTest(test_backend_match_is_enforced_only_for_a_named_flow,
-            "backend match is enforced only for a named flow");
-    RunTest(test_mismatched_backend_is_refused_for_every_source,
-            "mismatched backend is refused for every source");
-    RunTest(test_choose_backend_id_refuses_a_mismatch_under_the_given_label,
-            "choose refuses a mismatch under the given label");
-    RunTest(test_choose_backend_id_names_the_backend_flag_by_default,
-            "choose names the backend flag by default");
-    RunTest(test_choose_backend_id_returns_the_matching_backend,
-            "choose returns the matching backend");
-    RunTest(test_choose_backend_id_lets_an_unnamed_flow_take_an_override,
-            "choose lets an unnamed flow take an override");
-    RunTest(test_choose_backend_id_requires_a_family,
-            "choose requires a family");
     std::cout << "All model backend tests passed\n";
     return 0;
 }

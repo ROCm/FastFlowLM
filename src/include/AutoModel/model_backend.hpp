@@ -2,10 +2,9 @@
 /// \brief Named execution backends for a model family
 /// \note A backend names *where the kernels come from*, not which silicon runs
 ///       them: `flm` is FastFlowLM's own kernel flow, `core` reaches them
-///       through ryzenai-corelib, `oga-hipep` through onnxruntime-genai and a
-///       separately installed hip-ep on the GPU. All are causal_lm subclasses,
-///       but they differ in how they are built and in how they must be driven.
-///       A ModelBackend owns one engine and states those differences, so the
+///       through ryzenai-corelib. Both are causal_lm subclasses, but they
+///       differ in how they are built and in how they must be driven. A
+///       ModelBackend owns one engine and states those differences, so the
 ///       frontends stay backend-agnostic.
 /// \note A backend id is *not* a platform id. Which generation the machine is
 ///       is utils::npu_platform's job, and one binary may carry several kernel
@@ -63,8 +62,7 @@ inline constexpr const char* kBackendKey = "backend";
 ///       that picks between them sit together.
 inline constexpr const char* kCoreFamilySuffix = "-core";
 
-/// \brief an OGA package run on the GPU by a separately installed hip-ep
-/// \note Only compiled in when FLM_ENABLE_OGA_HIPEP is on (Windows).
+/// \brief OGA packages run on the GPU through a separately installed hip-ep
 inline constexpr const char* kOgaHipepBackendId = "oga-hipep";
 
 /// \brief everything a backend factory needs to build its engine
@@ -220,7 +218,6 @@ void register_builtin_backends(BackendRegistry& registry);
 ///        model_list derived from the tag, or kFlmBackendId when it has none
 /// \param requested the --backend value, empty when the flag was not given
 /// \param source if non-null, receives a human-readable reason for the choice
-/// \param requested_label how `requested` is named in `source`, "--backend" by default
 /// \return the resolved backend id
 /// \throws std::runtime_error naming the registered ids when nothing matches
 /// \note Precedence: --backend, then FLM_BACKEND, then `fallback`. Every one
@@ -235,36 +232,6 @@ void register_builtin_backends(BackendRegistry& registry);
 std::string resolve_backend_id(const std::string& family,
                                const std::string& fallback,
                                const std::string& requested = "",
-                               std::string* source = nullptr,
-                               const std::string& requested_label = "--backend");
-
-/// \brief refuse a backend that the model's files were not built for
-/// \param entry_names_backend whether the entry carries kBackendKey; an entry
-///        that names none was never tied to a flow, so the chosen one stands
-/// \param files_backend the flow the entry's files were built for
-/// \param chosen the id resolve_backend_id returned
-/// \param source the reason it returned, as resolve_backend_id reports it
-/// \throws std::runtime_error when the entry names a backend other than chosen
-/// \note The files differ between flows, so an override cannot make them run.
-///       Without this check the engine fails later on a missing file, such as
-///       genai_config.json, and never says which tag to use instead.
-void require_backend_matches_files(bool entry_names_backend,
-                                   const std::string& files_backend,
-                                   const std::string& chosen,
-                                   const std::string& source);
-
-/// \brief decide which backend to run a catalog entry on, and refuse a conflict
-/// \param model_info the catalog entry, as AutoModel receives it
-/// \param requested the override, such as --backend or a request's "backend"
-///        field; empty when there is none
-/// \param requested_label how `requested` is named in error messages
-/// \return the resolved backend id
-/// \throws std::runtime_error when the entry has no details.family, or when
-///         resolve_backend_id or require_backend_matches_files refuses
-/// \note Call this before releasing a loaded engine. A refusal after the
-///       release would leave the model unloaded.
-std::string choose_backend_id(const nlohmann::json& model_info,
-                              const std::string& requested,
-                              const std::string& requested_label = "--backend");
+                               std::string* source = nullptr);
 
 }  // namespace flm::backend

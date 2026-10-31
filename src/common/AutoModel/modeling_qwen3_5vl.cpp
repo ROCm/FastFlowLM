@@ -69,19 +69,17 @@ bool carries_images(const lm_uniform_input_t& input) {
 } // namespace
 
 void Qwen3_5VL::_attach_prefix_cache() {
-    // The state table belongs to the NPU engine. Any other engine is attached
-    // with none, which leaves the prefix cache off (see _prefix_attach).
-    const flm_state_api* api = dynamic_cast<qwen3_5vl_npu*>(this->lm_engine) != nullptr
-        ? qwen3_5vl_state_api(this->lm_engine)
-        : nullptr;
+    // OGA has no native prefix-slot state API; keep the existing path for other backends.
+    const flm_state_api* api = this->backend_id() == flm::backend::kOgaHipepBackendId
+        ? nullptr : qwen3_5vl_state_api(this->lm_engine);
     this->_prefix_attach(this->lm_engine, api, kImageSoftTokenId);
 }
 
 bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
     // Refuse images before any image work or engine cast. The image path reads
     // the NPU engine's geometry through reinterpret_cast<qwen3_5vl_npu*>, which
-    // an engine of another backend (oga-hipep, core) does not provide.
-    if (dynamic_cast<qwen3_5vl_npu*>(this->lm_engine) == nullptr && carries_images(input)) {
+    // the OGA engine does not provide.
+    if (this->backend_id() == flm::backend::kOgaHipepBackendId && carries_images(input)) {
         // A ModelRequestError, not invalid_argument: the handlers turn only the
         // former into an HTTP 400, and the latter would come back as a 200 body.
         throw ModelRequestError(400, false,
@@ -202,6 +200,10 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
         templated_text = this->apply_chat_template(messages);
     }
     std::vector<int> tokens_init = this->tokenizer->encode(templated_text);
+    if (this->backend_id() == flm::backend::kOgaHipepBackendId) {
+        // Include the think preamble before it is trimmed from the prefill.
+        this->_shared_validate_capacity(tokens_init.size(), input.requested_max_new_tokens);
+    }
 
     // update the tokens to include the image tokens
     std::vector<int> tokens;
@@ -447,6 +449,12 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
         token_str = this->tokenizer->run_time_decoder(271);
         sampled_token = this->_sample(y, meta_info);
     }
+    if (this->backend_id() == flm::backend::kOgaHipepBackendId) {
+        // The preamble has run; reuse the shared capacity, EOS and history handling.
+        this->total_tokens = this->lm_engine->get_current_context_length();
+        this->last_token = sampled_token;
+        return result + this->_shared_generate(meta_info, length_limit, os, std::move(is_cancelled));
+    }
     this->total_tokens++;
     // the first sample after the preamble is the reply's first token, and counts toward the limit
     meta_info.generated_tokens++;
@@ -457,13 +465,7 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
     os << token_str << std::flush;
 
     if (this->is_eos(last_sampled_token)){
-        if (this->forward_on_eos &&
-            (!this->backend_ || this->backend_->forwards_past_eos())) {
-            this->lm_engine->forward(last_sampled_token);
-        } else {
-            // The engine never ran it, so the next prompt has to carry it.
-            this->token_history.pop_back();
-        }
+        this->lm_engine->forward(last_sampled_token);
     }
     else if (this->total_tokens + kEngineLead >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping generation...");
@@ -504,13 +506,7 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
         this->token_history.push_back(sampled_token);
         if (this->is_eos(sampled_token)){
             meta_info.generated_tokens++;
-            if (this->forward_on_eos &&
-                (!this->backend_ || this->backend_->forwards_past_eos())) {
-                this->lm_engine->forward(last_sampled_token);
-            } else {
-                // The engine never ran it, so the next prompt has to carry it.
-                this->token_history.pop_back();
-            }
+            this->lm_engine->forward(last_sampled_token);
             break;
         }
         meta_info.generated_tokens++;
@@ -536,6 +532,9 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
 std::string Qwen3_5VL::generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os) {
     if (!this->insert(meta_info, input)) {
         return "";
+    }
+    if (this->backend_id() == flm::backend::kOgaHipepBackendId) {
+        return this->generate(meta_info, length_limit, os);
     }
     header_print("FLM", "Prompt inserted, starting generation...");
     int checkpoint_idx = this->lm_engine->checkpoint();

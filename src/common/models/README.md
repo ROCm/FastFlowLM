@@ -352,9 +352,8 @@ Points that are easy to get wrong:
   the entry as `"backend"`, which is what
   [`AutoModel`](../AutoModel/automodel.cpp) later reads. Do not write `backend`
   by hand — it is derived, and a hand-written one is overwritten.
-  `--backend` and `FLM_BACKEND` take precedence over it but must agree with it
-  (`require_backend_matches_files`, because the files differ per backend), and
-  are checked against the registry. The plural `supported_backends` and `details.execution_backend` are
+  `--backend` and `FLM_BACKEND` still override it, and are checked against the
+  registry. The plural `supported_backends` and `details.execution_backend` are
   retired, as are `supported_backend` and `platform_overrides`.
 - **`supported_platforms` is required on every shipped entry**, and
   `src/test/model_list_platform` fails if one is missing or disagrees with its

@@ -132,13 +132,12 @@ std::unique_ptr<ModelBackend> BackendRegistry::create(
 std::string resolve_backend_id(const std::string& family,
                                const std::string& fallback,
                                const std::string& requested,
-                               std::string* source,
-                               const std::string& requested_label) {
+                               std::string* source) {
     std::string chosen;
     std::string chosen_source;
     if (!requested.empty()) {
         chosen = requested;
-        chosen_source = requested_label;
+        chosen_source = "--backend";
     } else if (std::string env = EnvBackend(); !env.empty()) {
         chosen = std::move(env);
         chosen_source = "FLM_BACKEND";
@@ -157,40 +156,6 @@ std::string resolve_backend_id(const std::string& family,
 
     if (source) *source = chosen_source;
     return chosen;
-}
-
-void require_backend_matches_files(bool entry_names_backend,
-                                   const std::string& files_backend,
-                                   const std::string& chosen,
-                                   const std::string& source) {
-    if (!entry_names_backend || chosen == files_backend) return;
-    throw std::runtime_error(
-        "Backend '" + chosen + "' (from " + source +
-        ") cannot run this model: its files were built for backend '" +
-        files_backend + "'. Each backend has its own model tag, so pick the "
-        "tag for the backend you want instead of overriding it. A family name "
-        "ending in '-core' or '-oga-hipep' names that backend, and any other "
-        "family runs on 'flm'. Run 'flm list' to see the tags.");
-}
-
-std::string choose_backend_id(const nlohmann::json& model_info,
-                              const std::string& requested,
-                              const std::string& requested_label) {
-    if (!model_info.contains("details") ||
-        !model_info.at("details").contains("family")) {
-        throw std::runtime_error("Model entry has no details.family");
-    }
-    const std::string family =
-        model_info.at("details").at("family").get<std::string>();
-
-    const std::string catalog_backend = model_info.value(
-        kBackendKey, std::string(kFlmBackendId));
-    const bool entry_names_backend = model_info.contains(kBackendKey);
-    std::string source;
-    const std::string id = resolve_backend_id(
-        family, catalog_backend, requested, &source, requested_label);
-    require_backend_matches_files(entry_names_backend, catalog_backend, id, source);
-    return id;
 }
 
 }  // namespace flm::backend

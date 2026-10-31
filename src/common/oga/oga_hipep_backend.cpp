@@ -7,14 +7,12 @@
 #include "utils/file_access.hpp"
 
 #include <algorithm>
-#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -166,11 +164,8 @@ public:
         api_ = OgaApi::GetOrCreate();
         auto model = OpenModel(*api_, root);
         header_print("FLM", "OGA device: AMDGPU (" << api_->package().bin.string() << ")");
-        const char* text_reuse = std::getenv("FLM_OGA_TEXT_REUSE");
         engine_ = std::make_unique<OgaEngine>(
-            api_, std::move(model), name, genai.vocab_size, genai.context_length, length,
-            OgaEngine::Options{text_reuse && std::string_view(text_reuse) == "1"});
-        context_length_ = length;
+            api_, std::move(model), name, genai.vocab_size, genai.context_length, length);
     }
 
     causal_lm& engine() override { return *engine_; }
@@ -180,14 +175,13 @@ public:
         return package.bin.string() + " (onnxruntime-genai " + VersionText(package.oga_version) +
                ", from " + package.source + ")";
     }
-    std::uint32_t max_decode_length() const override { return context_length_ - 1; }
+    std::uint32_t max_decode_length() const override { return engine_->max_length() - 1; }
     bool supports_preemption() const override { return false; }
     bool forwards_past_eos() const override { return false; }
     std::optional<std::vector<int>> forced_eos_ids() const override { return eos_ids_; }
     std::optional<int> forced_bos_id() const override { return bos_id_; }
 
 private:
-    std::uint32_t context_length_{};
     std::vector<int> eos_ids_;
     std::optional<int> bos_id_;
     std::shared_ptr<const OgaApi> api_;

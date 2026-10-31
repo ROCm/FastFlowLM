@@ -36,17 +36,11 @@
     X(destroy_generator, OgaDestroyGenerator)                                      \
     X(generator_append_tokens, OgaGenerator_AppendTokens)                          \
     X(generator_get_logits, OgaGenerator_GetLogits)                                \
-    X(generator_snapshot_state, OgaGenerator_SnapshotState)                        \
-    X(generator_rewind_to, OgaGenerator_RewindTo)                                  \
     X(tensor_get_type, OgaTensorGetType)                                           \
     X(tensor_get_shape_rank, OgaTensorGetShapeRank)                                \
     X(tensor_get_shape, OgaTensorGetShape)                                         \
     X(tensor_get_data, OgaTensorGetData)                                           \
-    X(destroy_tensor, OgaDestroyTensor)                                            \
-    X(create_tokenizer, OgaCreateTokenizer)                                        \
-    X(update_tokenizer_options, OgaUpdateTokenizerOptions)                         \
-    X(tokenizer_decode, OgaTokenizerDecode)                                        \
-    X(destroy_tokenizer, OgaDestroyTokenizer)
+    X(destroy_tensor, OgaDestroyTensor)
 
 namespace flm::oga {
 

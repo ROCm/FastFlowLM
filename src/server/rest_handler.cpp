@@ -12,7 +12,6 @@
 #include "streaming_ostream_openai.hpp"
 #include "image/image_reader.hpp"
 #include "whisper/transcript_format.hpp"
-#include "AutoModel/model_backend.hpp"
 #include <sstream>
 #include <iostream>
 #include <thread>
@@ -640,17 +639,6 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag,
     // "llama3.2" or "Ollama/llama3.2:1b" does not reload llama3.2:1b each time.
     const std::string resolved_tag = supported_models.rectify_model_tag(model_tag);
     if (current_model_tag != resolved_tag || current_backend != requested_backend) {
-        // Refused before the release below: a refused request must leave the
-        // loaded model in place.
-        try {
-            const nlohmann::json model_info = supported_models.get_model_info(resolved_tag).second;
-            flm::backend::choose_backend_id(model_info, requested_backend,
-                request_backend.empty() ? "--backend" : "the request's \"backend\" field");
-        }
-        catch (const std::exception& e) {
-            header_print("ERROR", "Failed to load model: " + std::string(e.what()));
-            return false;
-        }
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         // The old model is released before the new one is built, so from here
         // on nothing is loaded until the load below succeeds. Record that now:
