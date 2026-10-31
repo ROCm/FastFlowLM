@@ -603,6 +603,42 @@
             }
         },
 
+        "minicpm-ocr": {
+            "1.0": {
+                "supported_platforms": ["aie2p"],
+                "name": "MiniCPM-OCR-1.0-NPU2",
+                "url": "https://huggingface.co/FastFlowLM/MiniCPM-OCR-1.0-NPU2/resolve/main",
+                "file_url": "https://huggingface.co/api/models/FastFlowLM/MiniCPM-OCR-1.0-NPU2/tree/main",
+                "ms_url": "https://modelscope.cn/models/amd/MiniCPM-OCR-1.0-NPU2",
+                "size": 1300000000,
+                "flm_min_version": "1.0.12",
+                "files": [
+                    "config.json",
+                    "model.q4nx",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "vision_weight.q4nx",
+                    "chat_template.jinja"
+                ],
+                "vlm": true,
+                "default_context_length": 32768,
+                "max_prefill_len": 4096,
+                "details": {
+                    "format": "NPU2",
+                    "family": "minicpm-ocr",
+                    "think": true,
+                    "parameter_size": "1B",
+                    "quantization_level": "Q4_K"
+                },
+                "label": [
+                    "vision",
+                    "reasoning",
+                    "tool-calling"
+                ],
+                "footprint": 2.4
+            }
+        },
+
         "minicpm-v-4.7-moe": {
             "35b-a3b": {
                 "supported_platforms": ["aie2p"],
