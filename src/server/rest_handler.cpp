@@ -996,6 +996,8 @@ void RestHandler::handle_generate(const json& request,
                     ? std::optional<int>(request.at("max_tokens").get<int>())
                     : std::nullopt);
         meta_info.max_prefill_len = this->prefill_chunk_len;
+        meta_info.ignore_eos = value_or(request, "ignore_eos", false);
+        meta_info.min_tokens = value_or(request, "min_tokens", 0);
         meta_info.load_duration = (uint64_t)time_utils::duration_ns(load_start_time, load_end_time).first;
         header_print("FLM", "Start generating...");
         
@@ -1122,6 +1124,8 @@ void RestHandler::handle_chat(const json& request,
                     : std::nullopt);
         meta_info.load_duration = (uint64_t)time_utils::duration_ns(load_start_time, load_end_time).first;
         meta_info.max_prefill_len = this->prefill_chunk_len;
+        meta_info.ignore_eos = value_or(request, "ignore_eos", false);
+        meta_info.min_tokens = value_or(request, "min_tokens", 0);
         header_print("FLM", "Start generating...");
         if (stream) {
             // Streaming response using streaming_ostream
@@ -1584,6 +1588,8 @@ void RestHandler::handle_openai_chat_completion(const json& request,
             normalize_requested_max_new_tokens(openai_chat_budget);
         meta_info.load_duration = (uint64_t)time_utils::duration_ns(load_start_time, load_end_time).first;
         meta_info.max_prefill_len = this->prefill_chunk_len;
+        meta_info.ignore_eos = value_or(request, "ignore_eos", false);
+        meta_info.min_tokens = value_or(request, "min_tokens", 0);
         meta_info.logprobs_top_n = logprobs_top_n;
         meta_info.continue_final_message = continue_final;
         try {
@@ -1954,6 +1960,8 @@ void RestHandler::handle_openai_completion(const json& request,
 
         chat_meta_info_t meta_info;
         meta_info.max_prefill_len = this->prefill_chunk_len;
+        meta_info.ignore_eos = value_or(request, "ignore_eos", false);
+        meta_info.min_tokens = value_or(request, "min_tokens", 0);
         lm_uniform_input_t uniformed_input;
         uniformed_input.requested_max_new_tokens =
             normalize_requested_max_new_tokens(

@@ -38,6 +38,10 @@ This page says what FLM does with the fields of a `/v1/chat/completions` or `/v1
 | `repetition_penalty` | > 0 | FLM extension. See [Penalties](#-presence-frequency-and-repetition-penalties). |
 | `repeat_last_n` | integer ≥ −1 | FLM extension. How many generated tokens the penalties look at. See [The Penalty Window](#-the-penalty-window). |
 | `seed` | any integer | Makes sampling repeatable. See [`seed`](#-seed-and-repeatable-output). |
+| `min_tokens` | integer ≥ 0 | vLLM-style extension. End-of-sequence tokens are not sampled until at least `min_tokens` tokens have been generated; the reply can run one or two tokens over (more with speculative decoding). `max_tokens` still ends the reply. |
+| `ignore_eos` | `true` / `false` | vLLM-style extension. End-of-sequence tokens are never sampled, so the reply runs to `max_tokens` (or the context limit). Meant for fixed-length benchmarking. |
+
+> `min_tokens` and `ignore_eos` mask the end-of-sequence ids before sampling, so they work on every sampling path. `qwen3.8-mtp` decodes one token at a time while either is in force, because its draft head samples inside the engine; expect a much lower speed there.
 
 Each token is chosen in this order: penalties → the `tool_choice` / `response_format` grammar, if any → `top_k` → `top_p` and the model's min-p cut-off → `temperature` → sample.
 
