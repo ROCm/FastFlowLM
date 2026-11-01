@@ -355,7 +355,7 @@ Streaming works the same way: each content chunk carries `choices[0].logprobs.co
 - The log probabilities are the model's own distribution, before temperature, top-k/top-p, penalties, or the grammar from `tool_choice` / `response_format` are applied. Under a grammar, the chosen token can be one the model itself thought unlikely.
 - Only `content` has log probabilities. Tokens of `reasoning_content` and of tool calls are left out, and chunks that carry them have `logprobs: null`.
 - `bytes` is `null` for special tokens such as end-of-turn, which can appear among `top_logprobs`. A token that holds only part of a UTF-8 character is named by its bytes, for example `"bytes:\xe4\xbd"`.
-- On `qwen3.8-mtp`, tokens produced by speculative decoding take their log probabilities from the batched pass that checks the draft. That pass runs different kernels from one-token decoding, so the values can differ slightly from what the same model reports with speculation off.
+- On `qwen3.8-mtp` and `qwen3.8-dflash`, tokens produced by speculative decoding take their log probabilities from the batched pass that checks the draft. That pass runs different kernels from one-token decoding, so the values can differ slightly from what the same model reports with speculation off.
 - `top_logprobs` without `logprobs=True`, or outside 0–100, gets HTTP 400.
 
 ---

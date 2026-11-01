@@ -67,3 +67,25 @@ Prefill time-to-first-token (TTFT) for Qwen3.8-27B on NPU (FastFlowLM) with diff
 
 
 > This test uses a short prompt: “Describe this image.”
+
+---
+
+### 🚀 DFlash 2 draft: decode speed against the MTP head (TPS, greedy, 160 new tokens, short prompts)
+
+`qwen3.8-dflash:27b` is the same model decoded with z-lab's [DFlash 2 draft](https://fastflowlm.com/docs/models/qwen/#-model-card-qwen38-27b-with-the-dflash-2-draft) instead of the built-in MTP head. Both rows of a prompt ran the same engine build and kernels on the same machine, one request at a time, thinking off.
+
+| **Prompt** | **`qwen3.8-mtp:27b`** | **`qwen3.8-dflash:27b`** | **Speedup** |
+|---|--------:|--------:|--------:|
+| Hash map explanation + Python code | 2.95 | 3.09 | 1.05x |
+| TCP vs UDP | 3.39 | 3.48 | 1.03x |
+| Short story (creative) | 1.71 | 1.96 | 1.14x |
+| Train catch-up word problem | 4.12 | 4.91 | 1.19x |
+| French Revolution bullets | 2.42 | 2.89 | 1.19x |
+| SQL query + explanation | 4.10 | 4.42 | 1.08x |
+| C linked-list reversal | 3.57 | 5.25 | 1.47x |
+| Grade-school math word problem | 3.40 | 4.24 | 1.25x |
+| Translation to French and German (60 tokens) | 2.65 | 2.30 | 0.87x |
+| JSON object (three planets) | 3.98 | 4.87 | 1.22x |
+| **Mean** | **3.23** | **3.74** | **1.16x** |
+
+On a short code prompt the draft keeps about 6.6 of every 7 drafted tokens (the model then emits 7.6 tokens per step); on open prose it keeps about 3. One step costs about 1.2 s with either draft: 0.9 s to check the 8 positions and about 0.27 s to draft. Gains come from the draft predicting more of what the model will say, so they follow the text, as with the MTP head.

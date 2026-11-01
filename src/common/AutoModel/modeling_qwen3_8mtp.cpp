@@ -478,7 +478,7 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
     // Draft depth; also the hit-rate denominator (see report_speculation_stats).
     const int SPEC_MAX_DRAFT = 7;
     if (spec_enabled) {
-        header_print("FLM", "Speculative decoding enabled (MTP draft head).");
+        header_print("FLM", "Speculative decoding enabled (" << this->spec_label_ << ").");
     }
 
     int last_sampled_token = this->last_token;

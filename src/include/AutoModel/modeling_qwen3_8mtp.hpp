@@ -126,6 +126,10 @@ private:
     void preprocess_image(qwen3_8mtp_host_image_t& image,
                           std::vector<float>& pixel_values);
 
+protected:
+    /// what the speculation log line calls the draft ("MTP draft head", or the DFlash2 drafter of the subclass below)
+    std::string spec_label_ = "MTP draft head";
+
 public:
     Qwen3_8MTP(flm_rt::device* npu_device_inst);
 
@@ -265,5 +269,18 @@ public:
             }
         }
         return AutoModel::configure_parameter(parameter_name, value);
+    }
+};
+
+
+/************              Qwen3_8DFlash            **************/
+/// \brief Qwen3.8-27B with the z-lab DFlash2 drafter (qwen3.8-dflash:27b)
+/// \note The same checkpoint, wrapper and engine as Qwen3_8MTP. The model's draft_model_path (see model_list
+///       base_model) names the draft package; the engine reads it and the DFlash2 drafter replaces the MTP head, so the
+///       wrapper only differs in how it names the draft. The xclbins are the base model's.
+class Qwen3_8DFlash : public Qwen3_8MTP {
+public:
+    Qwen3_8DFlash(flm_rt::device* npu_device_inst) : Qwen3_8MTP(npu_device_inst) {
+        this->spec_label_ = "DFlash2 draft";
     }
 };
