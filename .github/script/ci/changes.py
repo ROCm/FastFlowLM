@@ -79,8 +79,8 @@ ENGINES = {
     ("minicpm_v_4_7", "minicpm_v"):          ("minicpm-v-4.7",),
     ("minicpm_v_4_7_moe", "minicpm_v_moe"): ("minicpm-v-4.7-moe",),
     ("qwen3_6_moe",):                        ("qwen3.6-moe",),
-    # qwen3.8-dflash is the same engine with a draft package (Qwen3_8DFlash derives from Qwen3_8MTP).
-    ("qwen3_8mtp", "qwen3_8_mtp"):           ("qwen3.8-mtp", "qwen3.8-dflash"),
+    # qwen3.8-dflash2 is the same engine with a draft package (Qwen3_8DFlash2 derives from Qwen3_8MTP).
+    ("qwen3_8mtp", "qwen3_8_mtp"):           ("qwen3.8-mtp", "qwen3.8-dflash2"),
     ("gemma", "gemma3"):                     ("gemma3",),
     ("gemma_text", "gemma3_text"):           ("gemma3-text",),
     # Gemma4e_Flash, Gemma4e_DFlash and Gemma4e_DFlash_Flash derive from Gemma4e and their engines include gemma4e_npu.

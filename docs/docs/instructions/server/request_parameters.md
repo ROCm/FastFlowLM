@@ -41,7 +41,7 @@ This page says what FLM does with the fields of a `/v1/chat/completions` or `/v1
 | `min_tokens` | integer ≥ 0 | vLLM-style extension. End-of-sequence tokens are not sampled until at least `min_tokens` tokens have been generated; the reply can run one or two tokens over (more with speculative decoding). `max_tokens` still ends the reply. |
 | `ignore_eos` | `true` / `false` | vLLM-style extension. End-of-sequence tokens are never sampled, so the reply runs to `max_tokens` (or the context limit). Meant for fixed-length benchmarking. |
 
-> `min_tokens` and `ignore_eos` mask the end-of-sequence ids before sampling, so they work on every sampling path. `qwen3.8-mtp` and `qwen3.8-dflash` decode one token at a time while either is in force, because its draft head samples inside the engine; expect a much lower speed there.
+> `min_tokens` and `ignore_eos` mask the end-of-sequence ids before sampling, so they work on every sampling path. `qwen3.8-mtp` and `qwen3.8-dflash2` decode one token at a time while either is in force, because its draft head samples inside the engine; expect a much lower speed there.
 
 Each token is chosen in this order: penalties → the `tool_choice` / `response_format` grammar, if any → `top_k` → `top_p` and the model's min-p cut-off → `temperature` → sample.
 
@@ -73,7 +73,7 @@ A request that sends no sampling fields uses the model's own defaults, which dif
 
 | Models | `presence_penalty` at load |
 |---|---|
-| `qwen3.5:*`, `qwen3.5-core:*`, `qwen3.6-moe:35b-a3b`, `qwen3.6-moe-core:35b-a3b`, `qwen3.8-mtp:27b`, `qwen3.8-dflash:27b`, `minicpm-v-4.7:1b` | 1.5 |
+| `qwen3.5:*`, `qwen3.5-core:*`, `qwen3.6-moe:35b-a3b`, `qwen3.6-moe-core:35b-a3b`, `qwen3.8-mtp:27b`, `qwen3.8-dflash2:27b`, `minicpm-v-4.7:1b` | 1.5 |
 | `gemma4-it:*`, `gemma4-it-core:*`, `gemma4e-flash:*`, `nemotron3.5-bolt:e4b`, `nemotron3.5-bolt-dflash:e4b`, `nemotron3.5-bolt-dflash-flash:e4b` | 1.0 |
 | every other model | 0 |
 
@@ -101,7 +101,7 @@ Penalties also act on reasoning tokens, and on tokens that a `tool_choice` or `r
 
 The [log probabilities](https://fastflowlm.com/docs/instructions/server/openapi/#-example-token-log-probabilities) a response reports are taken **before** any penalty is applied.
 
-> ⚠️ **`qwen3.8-mtp:27b` and `qwen3.8-dflash:27b`:** tokens accepted from the speculative draft are compared with the model's own most likely token and skip the sampler. Penalties, `temperature`, `top_k` and `top_p` only shape the tokens the model samples itself, and drafted tokens don't enter the penalty window.
+> ⚠️ **`qwen3.8-mtp:27b` and `qwen3.8-dflash2:27b`:** tokens accepted from the speculative draft are compared with the model's own most likely token and skip the sampler. Penalties, `temperature`, `top_k` and `top_p` only shape the tokens the model samples itself, and drafted tokens don't enter the penalty window.
 
 ---
 

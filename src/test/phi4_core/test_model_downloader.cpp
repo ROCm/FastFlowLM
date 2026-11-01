@@ -812,12 +812,12 @@ void TestShippedCatalogDeclaresTheDflashDependant() {
 
     // Qwen3.8 with the DFlash 2 draft: the same engine, the base's kernels (no xclbin copy), the draft package only
     // adds weights
-    const char* q38 = "qwen3.8-dflash:27b";
+    const char* q38 = "qwen3.8-dflash2:27b";
     TEST_REQUIRE(models.is_model_supported(q38));
     TEST_REQUIRE(models.get_base_model(q38) == std::string("qwen3.8-mtp:27b"));
     const auto q38_info = models.get_model_info(q38).second;
     TEST_REQUIRE(q38_info.at("name") == "Qwen3.8-27B-DFlash2-NPU2");
-    TEST_REQUIRE(q38_info.at("details").at("family") == "qwen3.8-dflash");
+    TEST_REQUIRE(q38_info.at("details").at("family") == "qwen3.8-dflash2");
     TEST_REQUIRE(q38_info.at("xclbin_folder") == "Qwen3.8-27B-NPU2");
     TEST_REQUIRE(q38_info.at("files").get<std::vector<std::string>>() ==
                  (std::vector<std::string>{"config.json", "dflash_weight.q4nx", "LICENSE"}));

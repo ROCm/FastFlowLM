@@ -710,7 +710,7 @@
                 "footprint": 18.1
             }
         },
-        "qwen3.8-dflash": {
+        "qwen3.8-dflash2": {
             "27b": {
                 "supported_platforms": ["aie2p"],
                 "name": "Qwen3.8-27B-DFlash2-NPU2",
@@ -732,7 +732,7 @@
                 "max_bench_length": 8192,
                 "details": {
                     "format": "NPU2",
-                    "family": "qwen3.8-dflash",
+                    "family": "qwen3.8-dflash2",
                     "think": true,
                     "parameter_size": "27B+2B",
                     "quantization_level": "Q4_K"

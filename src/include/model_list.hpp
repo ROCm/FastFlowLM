@@ -420,7 +420,7 @@ class model_list {
                 }
                 entry["draft_model_path"] =
                     (std::filesystem::path(this->model_root_path) / entry.at("name").get<std::string>()).string();
-                // The dependant's own folder unless the entry names another: qwen3.8-dflash runs the base model's
+                // The dependant's own folder unless the entry names another: qwen3.8-dflash2 runs the base model's
                 // kernels (the draft package adds weights only), so it points at the base's folder instead of
                 // carrying a copy of every xclbin.
                 if (!entry.contains("xclbin_folder")) entry["xclbin_folder"] = entry.at("name");

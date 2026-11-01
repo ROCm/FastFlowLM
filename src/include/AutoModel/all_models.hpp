@@ -48,7 +48,7 @@ typedef enum {
     qwen3_5_omni,
     qwen3_6_moe,
     qwen3_8mtp,
-    qwen3_8dflash,
+    qwen3_8dflash2,
     gemma3,
     gemma3_text,
     gemma4e,
@@ -86,7 +86,7 @@ inline std::pair<std::string, std::unique_ptr<AutoModel>> get_auto_model(const s
         {"qwen3.5-omni", SupportedModelFamily::qwen3_5_omni},
         {"qwen3.6-moe", SupportedModelFamily::qwen3_6_moe},
         {"qwen3.8-mtp", SupportedModelFamily::qwen3_8mtp},
-        {"qwen3.8-dflash", SupportedModelFamily::qwen3_8dflash},
+        {"qwen3.8-dflash2", SupportedModelFamily::qwen3_8dflash2},
         {"gemma3", SupportedModelFamily::gemma3},
         {"gemma3-text", SupportedModelFamily::gemma3_text},
         {"gemma4e", SupportedModelFamily::gemma4e},
@@ -191,8 +191,8 @@ inline std::pair<std::string, std::unique_ptr<AutoModel>> get_auto_model(const s
         case SupportedModelFamily::qwen3_8mtp:
             auto_chat_engine = std::make_unique<Qwen3_8MTP>(npu_device_inst);
             break;
-        case SupportedModelFamily::qwen3_8dflash:
-            auto_chat_engine = std::make_unique<Qwen3_8DFlash>(npu_device_inst);
+        case SupportedModelFamily::qwen3_8dflash2:
+            auto_chat_engine = std::make_unique<Qwen3_8DFlash2>(npu_device_inst);
             break;
         case SupportedModelFamily::lfm2:
             auto_chat_engine = std::make_unique<LFM2>(npu_device_inst);

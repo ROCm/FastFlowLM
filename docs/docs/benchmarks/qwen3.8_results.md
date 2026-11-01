@@ -72,9 +72,9 @@ Prefill time-to-first-token (TTFT) for Qwen3.8-27B on NPU (FastFlowLM) with diff
 
 ### 🚀 DFlash 2 draft: decode speed against the MTP head (TPS, greedy, 160 new tokens, short prompts)
 
-`qwen3.8-dflash:27b` is the same model decoded with z-lab's [DFlash 2 draft](https://fastflowlm.com/docs/models/qwen/#-model-card-qwen38-27b-with-the-dflash-2-draft) instead of the built-in MTP head. Both rows of a prompt ran the same engine build and kernels on the same machine, one request at a time, thinking off.
+`qwen3.8-dflash2:27b` is the same model decoded with z-lab's [DFlash 2 draft](https://fastflowlm.com/docs/models/qwen/#-model-card-qwen38-27b-with-the-dflash-2-draft) instead of the built-in MTP head. Both rows of a prompt ran the same engine build and kernels on the same machine, one request at a time, thinking off.
 
-| **Prompt** | **`qwen3.8-mtp:27b`** | **`qwen3.8-dflash:27b`** | **Speedup** |
+| **Prompt** | **`qwen3.8-mtp:27b`** | **`qwen3.8-dflash2:27b`** | **Speedup** |
 |---|--------:|--------:|--------:|
 | Hash map explanation + Python code | 2.95 | 3.09 | 1.05x |
 | TCP vs UDP | 3.39 | 3.48 | 1.03x |

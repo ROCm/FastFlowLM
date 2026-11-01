@@ -273,14 +273,14 @@ public:
 };
 
 
-/************              Qwen3_8DFlash            **************/
-/// \brief Qwen3.8-27B with the z-lab DFlash2 drafter (qwen3.8-dflash:27b)
+/************              Qwen3_8DFlash2            **************/
+/// \brief Qwen3.8-27B with the z-lab DFlash2 drafter (qwen3.8-dflash2:27b)
 /// \note The same checkpoint, wrapper and engine as Qwen3_8MTP. The model's draft_model_path (see model_list
 ///       base_model) names the draft package; the engine reads it and the DFlash2 drafter replaces the MTP head, so the
 ///       wrapper only differs in how it names the draft. The xclbins are the base model's.
-class Qwen3_8DFlash : public Qwen3_8MTP {
+class Qwen3_8DFlash2 : public Qwen3_8MTP {
 public:
-    Qwen3_8DFlash(flm_rt::device* npu_device_inst) : Qwen3_8MTP(npu_device_inst) {
+    Qwen3_8DFlash2(flm_rt::device* npu_device_inst) : Qwen3_8MTP(npu_device_inst) {
         this->spec_label_ = "DFlash2 draft";
     }
 };
