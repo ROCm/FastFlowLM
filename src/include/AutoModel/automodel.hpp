@@ -111,6 +111,10 @@ struct chat_meta_info_t {
 	bool restore_allowed;
 	/// \brief Restricts sampling for this request (tool_choice, response_format); may be null
 	std::shared_ptr<decode_constraint> constraint;
+	/// \brief ignore_eos / min_tokens of the request: end-of-sequence tokens are
+	///        never sampled (ignore_eos) or not before min_tokens tokens exist
+	bool ignore_eos = false;
+	int min_tokens = 0;
 	/// \brief insert() sampled a token that generate() has not used yet
 	/// \note Models that make the model emit preamble tokens in generate()
 	///       throw that sample away; _force_token() takes it back out of the constraint.
