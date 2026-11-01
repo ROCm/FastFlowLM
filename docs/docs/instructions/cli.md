@@ -247,7 +247,7 @@ flm serve llama3.2:1b --ctx-len 8192
 |---|---|---|
 | `flm` | FastFlowLM's own NPU kernels | Strix / Krackan Point |
 | `core` | AMD's ryzenai-corelib | the next NPU generation |
-| `oga-hipep` | onnxruntime-genai with a separately installed hip-ep | the GPU, on a host that also has an NPU (see below) |
+| `oga-hipep` | onnxruntime-genai with a hip-ep runtime installed on demand | the GPU, on a host that also has an NPU (see below) |
 
 You normally never set this. The model tag already names the flow — a family ending in `-core` wants corelib's kernels, one ending in `-oga-hipep` wants the GPU through hip-ep, everything else FastFlowLM's — and `flm list` only ever offers you tags this build and this machine can actually run. `flm run` separately prints the silicon as `NPU platform: dev04`. A model family has at most one engine per backend, so there is nothing to choose between.
 
@@ -274,7 +274,7 @@ Asking for a backend this build does not ship fails at load with a message listi
 
 #### oga-hipep: OGA models on the GPU
 
-Models whose family ends in `-oga-hipep` run on the GPU through a hip-ep package that you install separately from FLM.
+Models whose family ends in `-oga-hipep` run on the GPU through a hip-ep package. FLM reuses an existing package when it finds one, and on the standard Windows XRT build it can install the pinned runtime into the current user's profile the first time `run` or `serve` needs it.
 
 ```shell
 flm pull qwen3.5-oga-hipep:9b
@@ -282,7 +282,9 @@ flm run  qwen3.5-oga-hipep:9b
 ```
 
 - **Build it in.** The standard Windows release ZIP and MSI include this backend. Source builds must configure FLM with `-DFLM_ENABLE_OGA_HIPEP=ON` on Windows with the XRT runtime (`FLM_USE_HRX=OFF`). It is unsupported on HRX and Linux builds. Without it, `flm list` does not offer these models.
-- **Install hip-ep 0.5.2 or later.** It is a zip with no installer. Unzip it into `%LOCALAPPDATA%\hip-ep\<version>` or `%ProgramFiles%\hip-ep\<version>`; when both hold a package, the newest version wins. The version may sit anywhere in the folder name, so `hipep_0.5.2_windows`, the name Windows gives the zip, works. Or set `AMDRT_PKG_ROOT` to the package root. When `AMDRT_PKG_ROOT` is set it is the only location used, and a package it points to that is rejected is an error, not a fallback to the default locations.
+- **Runtime discovery and install.** `flm run qwen3.5-oga-hipep:9b` and `flm serve qwen3.5-oga-hipep:9b` first look for a usable package under `%LOCALAPPDATA%\hip-ep\<version>` and `%ProgramFiles%\hip-ep\<version>`, newest version first. When none qualifies and `AMDRT_PKG_ROOT` is unset, FLM downloads the pinned `hip-ep` v0.5.2 Windows zip, verifies its built-in SHA-256, and installs it under `%LOCALAPPDATA%\hip-ep\flm-0.5.2`. `flm pull`, `flm list`, help output, and non-OGA models do not trigger this install path.
+- **Profile paths.** Automatic download supports non-ASCII profile paths when Windows provides a usable short-path alias. If short names are disabled and the path cannot be represented by the shared downloader, FLM reports the limitation; use `AMDRT_PKG_ROOT` with a manually extracted package.
+- **Manual and offline use.** You can still unzip a package yourself into `%LOCALAPPDATA%\hip-ep\<version>` or `%ProgramFiles%\hip-ep\<version>`; the version may sit anywhere in the folder name, so `hipep_0.5.2_windows`, the name Windows gives the zip, works. Or set `AMDRT_PKG_ROOT` to the package root. When `AMDRT_PKG_ROOT` is set it is the only location used, and a package it points to that is rejected is an error, not a fallback to the default locations or to an automatic download.
 - **Text only.** This integration supports Qwen3.5-9B text input; image input is rejected.
 - **The host must have an NPU.** FLM still opens the NPU for this backend, so a host without an NPU is not supported yet.
 - **Conversation state.** Exact token prefixes can continue the existing generator. Diverging histories are replayed; NPU prefix slots are not used.

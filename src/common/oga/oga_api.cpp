@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Advanced Micro Devices, Inc.
 
 #include "oga/oga_api.hpp"
+#include "oga_runtime_install.hpp"
 
 #include <algorithm>
 #include <array>
@@ -31,6 +32,11 @@ constexpr const wchar_t* kPackageRootVariable = L"AMDRT_PKG_ROOT";
 constexpr std::string_view kHipEpFolder = "hip-ep";
 /// \brief the hip-ep release whose OGA this backend is built against
 constexpr const char* kMinimumHipEp = "0.5.2";
+
+std::string Text(const std::filesystem::path& path) {
+    const auto utf8 = path.u8string();
+    return std::string(utf8.begin(), utf8.end());
+}
 
 /// \brief a folder hip-ep may be unzipped under; `label` is how the error names it
 struct DefaultFolder {
@@ -114,7 +120,7 @@ bool TriedBefore(const FoundVersion& a, const FoundVersion& b) {
 HMODULE LoadFromPackage(const std::filesystem::path& file) {
     HMODULE module = LoadLibraryExW(file.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
     if (!module) {
-        throw std::runtime_error("failed to load '" + file.string() + "' (Windows error " +
+        throw std::runtime_error("failed to load '" + Text(file) + "' (Windows error " +
                                  std::to_string(GetLastError()) + ")");
     }
     return module;
@@ -133,8 +139,7 @@ Cache& GetCache() {
 
 /// \brief load the package that FindPackage picks, and resolve its OGA entry points
 std::shared_ptr<const OgaApi> LoadHipEp() {
-    const PackageSearch search = SearchPackages(EnvironmentPath);
-    Package package = FindPackage(search.candidates, search.notes);
+    Package package = EnsureHipEpPackage(EnvironmentPath);
     if (GetEnvironmentVariableW(L"HIPDNN_EP_STRICT", nullptr, 0) == 0)
         _putenv_s("HIPDNN_EP_STRICT", "1");
     AddDllDirectory(package.bin.c_str());
@@ -189,7 +194,7 @@ PackageSearch SearchPackages(const PackageEnvironment& environment) {
         const std::filesystem::path hipep = base / kHipEpFolder;
         std::error_code error;
         if (!std::filesystem::is_directory(hipep, error)) {
-            search.notes.push_back("'" + hipep.string() + "' does not exist");
+            search.notes.push_back("'" + Text(hipep) + "' does not exist");
             continue;
         }
         const std::size_t before = found.size();
@@ -198,13 +203,13 @@ PackageSearch SearchPackages(const PackageEnvironment& environment) {
         for (; !error && entry != end; entry.increment(error)) {
             std::error_code entry_error;
             if (!entry->is_directory(entry_error)) continue;
-            std::string name = entry->path().filename().string();
+            std::string name = Text(entry->path().filename());
             const std::string source = std::string(folder.label) + "\\" +
                                        std::string(kHipEpFolder) + "\\" + name;
             found.push_back({entry->path(), source, name, ParseVersionName(name), index});
         }
         if (found.size() == before)
-            search.notes.push_back("'" + hipep.string() + "' has no version folder");
+            search.notes.push_back("'" + Text(hipep) + "' has no version folder");
     }
     std::sort(found.begin(), found.end(), TriedBefore);
     for (FoundVersion& version : found)
@@ -216,7 +221,7 @@ std::variant<Package, std::string> InspectPackage(const PackageCandidate& candid
     if (candidate.root.empty()) return std::string("not set");
     std::error_code error;
     if (!std::filesystem::is_directory(candidate.root, error))
-        return "'" + candidate.root.string() + "' is not a directory";
+        return "'" + Text(candidate.root) + "' is not a directory";
     const std::filesystem::path bin = std::filesystem::is_directory(candidate.root / "bin", error)
                                           ? candidate.root / "bin"
                                           : candidate.root;
@@ -226,12 +231,12 @@ std::variant<Package, std::string> InspectPackage(const PackageCandidate& candid
         missing += missing.empty() ? "" : ", ";
         missing += file;
     }
-    if (!missing.empty()) return "'" + bin.string() + "' has no " + missing;
+    if (!missing.empty()) return "'" + Text(bin) + "' has no " + missing;
     const std::filesystem::path oga = bin / kPackageFiles.front();
     const std::optional<FileVersion> version = ReadFileVersion(oga);
-    if (!version) return "'" + oga.string() + "' has no file version";
+    if (!version) return "'" + Text(oga) + "' has no file version";
     if (!AtLeast(*version, kMinimumOgaVersion)) {
-        return "'" + oga.string() + "' is OGA " + VersionText(*version) + ", older than " +
+        return "'" + Text(oga) + "' is OGA " + VersionText(*version) + ", older than " +
                VersionText(kMinimumOgaVersion);
     }
     return Package{candidate.source, bin, *version};

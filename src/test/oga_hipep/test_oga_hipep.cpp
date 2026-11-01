@@ -9,10 +9,12 @@
 #include "oga/oga_engine.hpp"
 #include "oga/oga_hipep_backend.hpp"
 #include "test_support.hpp"
+#include "../../common/oga/oga_runtime_install.hpp"
 
 #include <windows.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -22,6 +24,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -591,6 +594,13 @@ void MakePackage(const std::filesystem::path& root) {
                                std::filesystem::copy_options::overwrite_existing);
 }
 
+void MakeManagedRuntimeLayout(const std::filesystem::path& root) {
+    MakePackage(root);
+    std::filesystem::create_directories(root / "lib");
+    std::filesystem::create_directories(root / "wheels");
+    Touch(root / "morphizen_config.json", "{}");
+}
+
 /// \brief an environment in which the variables discovery reads have these values; empty is unset
 flm::oga::PackageEnvironment Environment(std::filesystem::path root, std::filesystem::path local_app_data,
                                          std::filesystem::path program_files) {
@@ -602,6 +612,74 @@ flm::oga::PackageEnvironment Environment(std::filesystem::path root, std::filesy
         return {};
     };
 }
+
+std::filesystem::path RealEnvironmentPath(const wchar_t* name) {
+    const DWORD needed = GetEnvironmentVariableW(name, nullptr, 0);
+    if (needed == 0) return {};
+    std::wstring value(needed, L'\0');
+    value.resize(GetEnvironmentVariableW(name, value.data(), needed));
+    return value;
+}
+
+std::string Text(const std::filesystem::path& path) {
+    const auto utf8 = path.u8string();
+    return std::string(utf8.begin(), utf8.end());
+}
+
+struct RuntimeInstallFixture {
+    TempDir local;
+    TempDir archive_root;
+    std::filesystem::path archive_path = archive_root.path / "hipep-test.zip";
+    flm::oga::HipEpRuntimeRelease release;
+    int downloads = 0;
+
+    RuntimeInstallFixture()
+        : release({"9.9.9", "hipep-test.zip", "https://example.invalid/hipep-test.zip", 0, 128,
+                   ""}) {
+        Touch(archive_path, "tiny test archive");
+        release.archive_size = std::filesystem::file_size(archive_path);
+        release.sha256 = download_utils::calculate_file_sha256(archive_path.string());
+    }
+
+    std::filesystem::path final_dir() const {
+        return local.path / "hip-ep" / ("flm-" + release.version);
+    }
+
+    std::filesystem::path staging_root() const { return local.path / "hip-ep-install" / "staging"; }
+
+    std::filesystem::path quarantine_root() const { return local.path / "hip-ep-install" / "quarantine"; }
+
+    flm::oga::PackageEnvironment environment(std::filesystem::path root = {}) const {
+        return Environment(std::move(root), local.path, {});
+    }
+
+    flm::oga::HipEpInstallHooks Hooks(
+        std::function<void(const std::filesystem::path&, const std::filesystem::path&)> extract = {}) {
+        flm::oga::HipEpInstallHooks hooks;
+        hooks.release = release;
+        hooks.download = [this](const download_utils::DownloadRequest& request, std::function<void(double)>) {
+            ++downloads;
+            std::filesystem::create_directories(request.destination.parent_path());
+            std::filesystem::copy_file(archive_path, request.destination,
+                                       std::filesystem::copy_options::overwrite_existing);
+            return true;
+        };
+        hooks.extract_archive = extract
+                                    ? std::move(extract)
+                                    : [](const std::filesystem::path&, const std::filesystem::path& staging) {
+                                          MakeManagedRuntimeLayout(staging);
+                                      };
+        hooks.space = [](const std::filesystem::path&) {
+            return std::filesystem::space_info{
+                static_cast<std::uintmax_t>(1ULL << 30),
+                static_cast<std::uintmax_t>(1ULL << 30),
+                static_cast<std::uintmax_t>(1ULL << 30)};
+        };
+        hooks.lock_wait = std::chrono::seconds(5);
+        hooks.lock_poll = std::chrono::milliseconds(10);
+        return hooks;
+    }
+};
 
 void TestCandidatesComeFromAmdrtPkgRootOnly() {
     TempDir local;
@@ -754,6 +832,213 @@ void TestAVersionInsideAFolderNameStillWinsByItsNumber() {
     TEST_REQUIRE(named_search.candidates.back().source == "%LOCALAPPDATA%\\hip-ep\\latest");
 }
 
+void TestAutoInstallCreatesAManagedRuntime() {
+    RuntimeInstallFixture fixture;
+    const auto package = flm::oga::EnsureHipEpPackageForTest(fixture.environment(), fixture.Hooks());
+    TEST_REQUIRE(fixture.downloads == 1);
+    TEST_REQUIRE(package.source == "%LOCALAPPDATA%\\hip-ep\\flm-9.9.9");
+    TEST_REQUIRE(package.bin == fixture.final_dir() / "bin");
+    TEST_REQUIRE(std::filesystem::is_regular_file(fixture.final_dir() / ".flm-hipep-install.json"));
+}
+
+void TestAutoInstallReusesTheManagedRuntimeWithoutDownloadingAgain() {
+    RuntimeInstallFixture fixture;
+    TEST_REQUIRE(flm::oga::EnsureHipEpPackageForTest(fixture.environment(), fixture.Hooks()).bin ==
+                 fixture.final_dir() / "bin");
+    auto hooks = fixture.Hooks();
+    hooks.download = [&](const download_utils::DownloadRequest&, std::function<void(double)>) {
+        ++fixture.downloads;
+        return false;
+    };
+    const auto package = flm::oga::EnsureHipEpPackageForTest(fixture.environment(), hooks);
+    TEST_REQUIRE(package.bin == fixture.final_dir() / "bin");
+    TEST_REQUIRE(fixture.downloads == 1);
+}
+
+void TestAnExplicitRootStillDisablesAutoInstall() {
+    RuntimeInstallFixture fixture;
+    auto hooks = fixture.Hooks();
+    hooks.download = [&](const download_utils::DownloadRequest&, std::function<void(double)>) {
+        ++fixture.downloads;
+        return true;
+    };
+    const auto text = RequireThrows<std::runtime_error>([&] {
+        flm::oga::EnsureHipEpPackageForTest(fixture.environment(fixture.local.path / "absent"), hooks);
+    });
+    TEST_REQUIRE(fixture.downloads == 0);
+    RequireContains(text, "AMDRT_PKG_ROOT: '");
+}
+
+void TestAutoInstallDoesNotReplaceAnUnownedConflict() {
+    RuntimeInstallFixture fixture;
+    Touch(fixture.final_dir() / "bin" / "onnxruntime-genai.dll");
+    const auto text = RequireThrows<std::runtime_error>([&] {
+        flm::oga::EnsureHipEpPackageForTest(fixture.environment(), fixture.Hooks());
+    });
+    TEST_REQUIRE(fixture.downloads == 0);
+    RequireContains(text, "refusing to replace");
+}
+
+void TestAutoInstallRepairsABrokenManagedRuntime() {
+    RuntimeInstallFixture fixture;
+    TEST_REQUIRE(flm::oga::EnsureHipEpPackageForTest(fixture.environment(), fixture.Hooks()).bin ==
+                 fixture.final_dir() / "bin");
+    std::filesystem::remove(fixture.final_dir() / "bin" / "onnxruntime.dll");
+    const auto repaired = flm::oga::EnsureHipEpPackageForTest(fixture.environment(), fixture.Hooks());
+    TEST_REQUIRE(repaired.bin == fixture.final_dir() / "bin");
+    TEST_REQUIRE(fixture.downloads == 1);
+    TEST_REQUIRE(std::filesystem::is_directory(fixture.quarantine_root()));
+    bool quarantined = false;
+    for (const auto& entry : std::filesystem::directory_iterator(fixture.quarantine_root())) {
+        if (entry.is_directory()) quarantined = true;
+    }
+    TEST_REQUIRE(quarantined);
+}
+
+void TestAutoInstallFailsWhenTheDownloaderNeedsAnAliasThatDoesNotExist() {
+    RuntimeInstallFixture fixture;
+    auto hooks = fixture.Hooks();
+    hooks.download_path = [](const std::filesystem::path&) -> std::optional<std::filesystem::path> {
+        return std::nullopt;
+    };
+    const auto local = fixture.local.path / std::filesystem::path(u8"用户");
+    std::filesystem::create_directories(local);
+    const auto text = RequireThrows<std::runtime_error>(
+        [&] { flm::oga::EnsureHipEpPackageForTest(Environment({}, local, {}), hooks); });
+    TEST_REQUIRE(fixture.downloads == 0);
+    RequireContains(text, "cannot be represented");
+}
+
+void TestAutoInstallStopsWhenDownloadReturnsFalse() {
+    RuntimeInstallFixture fixture;
+    auto hooks = fixture.Hooks();
+    hooks.download = [&](const download_utils::DownloadRequest&, std::function<void(double)>) {
+        ++fixture.downloads;
+        return false;
+    };
+
+    const auto text = RequireThrows<std::runtime_error>(
+        [&] { flm::oga::EnsureHipEpPackageForTest(fixture.environment(), hooks); });
+    RequireContains(text, "failed to download hip-ep");
+    TEST_REQUIRE(fixture.downloads == 1);
+    TEST_REQUIRE(!std::filesystem::exists(fixture.final_dir()));
+}
+
+void TestAutoInstallRejectsAnArchiveWithTheWrongHash() {
+    RuntimeInstallFixture fixture;
+    auto hooks = fixture.Hooks();
+    hooks.release->sha256 = std::string(64, '0');
+
+    const auto text = RequireThrows<std::runtime_error>(
+        [&] { flm::oga::EnsureHipEpPackageForTest(fixture.environment(), hooks); });
+    RequireContains(text, "did not match the pinned SHA-256 after download");
+    TEST_REQUIRE(fixture.downloads == 1);
+    TEST_REQUIRE(!std::filesystem::exists(fixture.final_dir()));
+}
+
+void TestAutoInstallCleansFailedExtractionAndCanRetry() {
+    RuntimeInstallFixture fixture;
+    auto failing_hooks = fixture.Hooks([](const std::filesystem::path&, const std::filesystem::path& staging) {
+        Touch(staging / "partial.txt", "incomplete extraction");
+        throw std::runtime_error("extractor failed");
+    });
+
+    const auto text = RequireThrows<std::runtime_error>(
+        [&] { flm::oga::EnsureHipEpPackageForTest(fixture.environment(), failing_hooks); });
+    RequireContains(text, "extractor failed");
+    TEST_REQUIRE(!std::filesystem::exists(fixture.final_dir()));
+    TEST_REQUIRE(std::filesystem::is_empty(fixture.staging_root()));
+
+    const auto package = flm::oga::EnsureHipEpPackageForTest(fixture.environment(), fixture.Hooks());
+    TEST_REQUIRE(package.bin == fixture.final_dir() / "bin");
+    TEST_REQUIRE(fixture.downloads == 1);
+    TEST_REQUIRE(std::filesystem::is_empty(fixture.staging_root()));
+}
+
+void TestAutoInstallRejectsAnInvalidExtractedLayoutWithoutPromotingIt() {
+    RuntimeInstallFixture fixture;
+    auto hooks = fixture.Hooks([](const std::filesystem::path&, const std::filesystem::path& staging) {
+        std::filesystem::create_directories(staging / "bin");
+    });
+
+    const auto text = RequireThrows<std::runtime_error>(
+        [&] { flm::oga::EnsureHipEpPackageForTest(fixture.environment(), hooks); });
+    RequireContains(text, "extracted hip-ep archive is missing");
+    TEST_REQUIRE(fixture.downloads == 1);
+    TEST_REQUIRE(!std::filesystem::exists(fixture.final_dir()));
+    TEST_REQUIRE(std::filesystem::is_empty(fixture.staging_root()));
+}
+
+void TestAutoInstallCleansStagingWhenTarRejectsAnInvalidArchive() {
+    RuntimeInstallFixture fixture;
+    auto hooks = fixture.Hooks();
+    hooks.extract_archive = flm::oga::testing::ExtractHipEpArchiveWithTar;
+
+    const auto text = RequireThrows<std::runtime_error>(
+        [&] { flm::oga::EnsureHipEpPackageForTest(fixture.environment(), hooks); });
+    RequireContains(text, "tar.exe failed to extract");
+    TEST_REQUIRE(fixture.downloads == 1);
+    TEST_REQUIRE(!std::filesystem::exists(fixture.final_dir()));
+    TEST_REQUIRE(std::filesystem::is_empty(fixture.staging_root()));
+}
+
+void TestAutoInstallChecksFreeSpaceBeforeDownloading() {
+    RuntimeInstallFixture fixture;
+    auto hooks = fixture.Hooks();
+    hooks.space = [](const std::filesystem::path&) {
+        return std::filesystem::space_info{0, 0, 0};
+    };
+
+    const auto text = RequireThrows<std::runtime_error>(
+        [&] { flm::oga::EnsureHipEpPackageForTest(fixture.environment(), hooks); });
+    RequireContains(text, "not enough free space under %LOCALAPPDATA%");
+    TEST_REQUIRE(fixture.downloads == 0);
+    TEST_REQUIRE(!std::filesystem::exists(fixture.final_dir()));
+}
+
+void TestValidExternalPackagesBypassAutoInstall() {
+    RuntimeInstallFixture fixture;
+    TempDir explicit_root;
+    TempDir programs;
+    MakePackage(explicit_root.path);
+    MakePackage(programs.path / "hip-ep" / "0.5.2");
+    const auto hooks = fixture.Hooks();
+
+    const auto explicit_package = flm::oga::EnsureHipEpPackageForTest(
+        fixture.environment(explicit_root.path), hooks);
+    TEST_REQUIRE(explicit_package.source == "AMDRT_PKG_ROOT");
+    TEST_REQUIRE(explicit_package.bin == explicit_root.path / "bin");
+
+    const auto discovered_package = flm::oga::EnsureHipEpPackageForTest(
+        Environment({}, fixture.local.path, programs.path), hooks);
+    TEST_REQUIRE(discovered_package.source == "%ProgramFiles%\\hip-ep\\0.5.2");
+    TEST_REQUIRE(discovered_package.bin == programs.path / "hip-ep" / "0.5.2" / "bin");
+    TEST_REQUIRE(fixture.downloads == 0);
+    TEST_REQUIRE(!std::filesystem::exists(fixture.final_dir()));
+}
+
+void TestAutoInstallPreservesAMarkerForAnotherRelease() {
+    RuntimeInstallFixture fixture;
+    TEST_REQUIRE(flm::oga::EnsureHipEpPackageForTest(fixture.environment(), fixture.Hooks()).bin ==
+                 fixture.final_dir() / "bin");
+    const auto marker_path = fixture.final_dir() / ".flm-hipep-install.json";
+    const std::string mismatched_marker = R"({"owner":"FastFlowLM","schema":"flm-hipep-install/v1","runtime":"hip-ep","version":")" +
+                                          fixture.release.version +
+                                          R"(","archive_sha256":"wrong"})";
+    Touch(marker_path, mismatched_marker);
+    const auto package_file = fixture.final_dir() / "bin" / "onnxruntime.dll";
+    std::filesystem::remove(package_file);
+
+    const auto text = RequireThrows<std::runtime_error>(
+        [&] { flm::oga::EnsureHipEpPackageForTest(fixture.environment(), fixture.Hooks()); });
+    RequireContains(text, "refusing to replace");
+    std::ifstream marker(marker_path, std::ios::binary);
+    std::string contents;
+    std::getline(marker, contents);
+    TEST_REQUIRE(contents == mismatched_marker);
+    TEST_REQUIRE(fixture.downloads == 1);
+}
+
 // ---- backend checks that run before hip-ep is loaded ------------------------
 
 /// \brief a model directory with just the files the backend reads before loading hip-ep
@@ -832,7 +1117,17 @@ void TestBackendCapacityTracksContextUpdates() {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc == 2 && std::string_view(argv[1]) == "--prepare-runtime") {
+        try {
+            const auto package = flm::oga::EnsureHipEpPackage(RealEnvironmentPath);
+            std::cout << Text(package.bin) << "\n";
+            return 0;
+        } catch (const std::exception& error) {
+            std::cerr << error.what() << "\n";
+            return 1;
+        }
+    }
 #define RUN(name) RunTest(&name, #name)
     RUN(TestConstructionDoesNotRunInference);
     RUN(TestBackendCapacityTracksContextUpdates);
@@ -866,6 +1161,20 @@ int main() {
     RUN(TestWhenNoFolderHoldsAPackageTheErrorListsBothFolders);
     RUN(TestProgramFilesIsUsedWhenLocalAppDataHasNothing);
     RUN(TestAVersionInsideAFolderNameStillWinsByItsNumber);
+    RUN(TestAutoInstallCreatesAManagedRuntime);
+    RUN(TestAutoInstallReusesTheManagedRuntimeWithoutDownloadingAgain);
+    RUN(TestAnExplicitRootStillDisablesAutoInstall);
+    RUN(TestAutoInstallDoesNotReplaceAnUnownedConflict);
+    RUN(TestAutoInstallRepairsABrokenManagedRuntime);
+    RUN(TestAutoInstallFailsWhenTheDownloaderNeedsAnAliasThatDoesNotExist);
+    RUN(TestAutoInstallStopsWhenDownloadReturnsFalse);
+    RUN(TestAutoInstallRejectsAnArchiveWithTheWrongHash);
+    RUN(TestAutoInstallCleansFailedExtractionAndCanRetry);
+    RUN(TestAutoInstallRejectsAnInvalidExtractedLayoutWithoutPromotingIt);
+    RUN(TestAutoInstallCleansStagingWhenTarRejectsAnInvalidArchive);
+    RUN(TestAutoInstallChecksFreeSpaceBeforeDownloading);
+    RUN(TestValidExternalPackagesBypassAutoInstall);
+    RUN(TestAutoInstallPreservesAMarkerForAnotherRelease);
     RUN(TestTheBackendRejectsWhatThePackageCannotRun);
     RUN(TestTheBackendSaysHowToGetHipep);
 #undef RUN

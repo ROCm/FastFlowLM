@@ -20,12 +20,22 @@ find_path(XRT_INCLUDE_DIR NAMES xrt/xrt_bo.h
     HINTS "$ENV{XRT_INCLUDE_DIR}"
           "C:/dev/XRT/src/runtime_src/core/include" REQUIRED)
 set(XRT_LIB_DIR "${XRT_INCLUDE_DIR}/../lib" CACHE PATH "Where xrt_coreutil.lib lives")
+find_path(CURL_INCLUDE_DIR NAMES curl/curl.h
+    HINTS "$ENV{CONDA_PREFIX}/Library/include"
+          "$ENV{USERPROFILE}/anaconda3/Library/include" REQUIRED)
+find_library(CURL_LIBRARY NAMES libcurl curl
+    HINTS "$ENV{CONDA_PREFIX}/Library/lib"
+          "$ENV{USERPROFILE}/anaconda3/Library/lib" REQUIRED)
+find_package(CURL REQUIRED)
 set(FLM_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/../..")
 
 set(OGA_HIPEP_SOURCES
     "${FLM_SOURCE_DIR}/common/oga/oga_api.cpp"
+    "${FLM_SOURCE_DIR}/common/oga/oga_runtime_install.cpp"
     "${FLM_SOURCE_DIR}/common/oga/oga_engine.cpp"
-    "${FLM_SOURCE_DIR}/common/oga/oga_hipep_backend.cpp")
+    "${FLM_SOURCE_DIR}/common/oga/oga_hipep_backend.cpp"
+    "${FLM_SOURCE_DIR}/pull/download_model.cpp"
+    "${FLM_SOURCE_DIR}/common/utils.cpp")
 
 include(CTest)
 
@@ -34,13 +44,20 @@ function(add_oga_hipep_test name)
     target_include_directories(${name} PRIVATE
         "${CMAKE_CURRENT_LIST_DIR}/../phi4_core"
         "${FLM_SOURCE_DIR}/include"
+        "${FLM_SOURCE_DIR}/pull"
         "${BOOST_INCLUDE_DIR}"
+        "${CURL_INCLUDE_DIR}"
         "${XRT_INCLUDE_DIR}")
     target_compile_definitions(${name} PRIVATE
+        CMAKE_INSTALL_PREFIX="${FLM_SOURCE_DIR}/build"
+        CMAKE_XCLBIN_PREFIX="${FLM_SOURCE_DIR}/xclbins"
+        __FLM_VERSION__="test"
+        __NPU_VERSION__="0.0.0.0"
+        DEV_BUILD=1 __WINDOWS__
         USEAVX2=1 DISABLE_ABI_CHECK=1 _ENABLE_EXTENDED_ALIGNED_STORAGE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_compile_options(${name} PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/wd4005 /wd4244>)
     target_link_directories(${name} PRIVATE "${XRT_LIB_DIR}")
-    target_link_libraries(${name} PRIVATE xrt_coreutil version)
+    target_link_libraries(${name} PRIVATE CURL::libcurl xrt_coreutil version)
 endfunction()
 
 add_oga_hipep_test(test_oga_hipep)

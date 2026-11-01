@@ -327,6 +327,7 @@ endif()
 if(FLM_ENABLE_OGA_HIPEP)
     target_sources(flm PRIVATE
         "${CMAKE_SOURCE_DIR}/common/oga/oga_api.cpp"
+        "${CMAKE_SOURCE_DIR}/common/oga/oga_runtime_install.cpp"
         "${CMAKE_SOURCE_DIR}/common/oga/oga_engine.cpp"
         "${CMAKE_SOURCE_DIR}/common/oga/oga_hipep_backend.cpp")
     target_compile_definitions(flm PRIVATE FLM_ENABLE_OGA_HIPEP=1)

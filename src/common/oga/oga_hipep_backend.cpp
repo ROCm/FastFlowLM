@@ -21,6 +21,11 @@
 namespace flm::oga {
 namespace {
 
+std::string Text(const std::filesystem::path& path) {
+    const auto utf8 = path.u8string();
+    return std::string(utf8.begin(), utf8.end());
+}
+
 /// \brief every session on the AMDGPU EP's HIP profile, and no CPU fallback for the decoder
 constexpr const char* kSessionOverlay =
     R"({"model":{)"
@@ -31,11 +36,11 @@ constexpr const char* kSessionOverlay =
 nlohmann::json ReadJson(const std::filesystem::path& path) {
     flm::file_access::ObserveOpen(path);
     std::ifstream input(path, std::ios::binary);
-    if (!input) throw std::runtime_error("Cannot open " + path.string());
+    if (!input) throw std::runtime_error("Cannot open " + Text(path));
     try {
         return nlohmann::json::parse(input);
     } catch (const std::exception& error) {
-        throw std::runtime_error("Cannot parse " + path.string() + ": " + error.what());
+        throw std::runtime_error("Cannot parse " + Text(path) + ": " + error.what());
     }
 }
 
@@ -80,7 +85,7 @@ GenaiConfig ReadGenaiConfig(const std::filesystem::path& root) {
     const auto document = ReadJson(file);
     const auto model = document.find("model");
     if (model == document.end() || !model->is_object())
-        throw std::runtime_error(file.string() + " has no model object");
+        throw std::runtime_error(Text(file) + " has no model object");
     GenaiConfig out;
     out.type = model->value("type", std::string());
     out.vocab_size = model->value("vocab_size", 0u);
@@ -91,7 +96,7 @@ GenaiConfig ReadGenaiConfig(const std::filesystem::path& root) {
         for (const auto& id : eos)
             if (id.is_number_integer()) out.eos_ids.push_back(id.get<int>());
     if (out.type.empty() || !out.vocab_size || !out.context_length)
-        throw std::runtime_error(file.string() +
+        throw std::runtime_error(Text(file) +
                                  " must state model.type, vocab_size and context_length");
     return out;
 }
@@ -116,7 +121,7 @@ OgaApi::Owned<OgaModel> OpenModel(const OgaApi& api, const std::filesystem::path
     const std::string device = raw_device ? raw_device : "";
     if (raw_device) f.destroy_string(raw_device);
     if (device != "AMDGPU")
-        throw std::runtime_error("OGA created " + root.string() + " on '" + device +
+        throw std::runtime_error("OGA created " + Text(root) + " on '" + device +
                                  "', not on AMDGPU");
     return model;
 }
@@ -165,7 +170,7 @@ public:
 
         api_ = OgaApi::GetOrCreate();
         auto model = OpenModel(*api_, root);
-        header_print("FLM", "OGA device: AMDGPU (" << api_->package().bin.string() << ")");
+        header_print("FLM", "OGA device: AMDGPU (" << Text(api_->package().bin) << ")");
         engine_ = std::make_unique<OgaEngine>(
             api_, std::move(model), name, genai.vocab_size, genai.context_length, length);
     }
@@ -174,7 +179,7 @@ public:
     std::string id() const override { return flm::backend::kOgaHipepBackendId; }
     std::string detail() const override {
         const auto& package = api_->package();
-        return package.bin.string() + " (onnxruntime-genai " + VersionText(package.oga_version) +
+        return Text(package.bin) + " (onnxruntime-genai " + VersionText(package.oga_version) +
                ", from " + package.source + ")";
     }
     std::uint32_t max_decode_length() const override { return engine_->max_length() - 1; }
