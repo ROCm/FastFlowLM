@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Advanced Micro Devices, Inc.
+
 #include "oga/oga_api.hpp"
 
 #include <algorithm>

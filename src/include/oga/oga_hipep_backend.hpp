@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Advanced Micro Devices, Inc.
+
 /// \file oga_hipep_backend.hpp
 /// \brief The oga-hipep backend: an OGA package on the GPU, through a separately installed hip-ep
 /// \note Compiled only when FLM_ENABLE_OGA_HIPEP is on, which is Windows only.

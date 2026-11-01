@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Advanced Micro Devices, Inc.
+
 /// \file test_oga_hipep.cpp
 /// \brief Host-only tests of the oga-hipep engine, package discovery and backend checks
 /// \note The OGA C API is a fake defined here: it records every call and

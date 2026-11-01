@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Advanced Micro Devices, Inc.
+
 cmake_minimum_required(VERSION 3.22)
 project(test_qwen_frontend LANGUAGES CXX)
 

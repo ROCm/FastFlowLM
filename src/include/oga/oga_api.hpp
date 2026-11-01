@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Advanced Micro Devices, Inc.
+
 /// \file oga_api.hpp
 /// \brief The onnxruntime-genai (OGA) C API, loaded at run time from a hip-ep package
 /// \note flm links nothing from OGA: the package is installed separately, so

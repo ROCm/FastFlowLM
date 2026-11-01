@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Advanced Micro Devices, Inc.
+
 /// \file oga_hipep_backend.cpp
 #include "oga/oga_hipep_backend.hpp"
 

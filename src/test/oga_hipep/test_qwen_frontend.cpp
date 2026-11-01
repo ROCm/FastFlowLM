@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Advanced Micro Devices, Inc.
+
 /// \file test_qwen_frontend.cpp
 /// \brief fake-backend regression coverage for the Qwen3.5VL OGA frontend
 

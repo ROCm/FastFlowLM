@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Advanced Micro Devices, Inc.
+
 /// \file oga_engine.cpp
 /// \brief Exact-token execution of an OGA text model
 #include "oga/oga_engine.hpp"

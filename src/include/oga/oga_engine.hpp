@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Advanced Micro Devices, Inc.
+
 /// \file oga_engine.hpp
 /// \brief A causal_lm over an OGA model, driven one AppendTokens at a time
 #pragma once

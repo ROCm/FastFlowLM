@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Advanced Micro Devices, Inc.
+
 # The oga-hipep backend is Windows only, and so are its tests. test_oga_hipep
 # runs on any Windows host: the OGA C API is a fake. The XRT and Boost headers
 # are needed because causal_lm.hpp reaches them through the device runtime.
