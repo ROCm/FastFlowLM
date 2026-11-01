@@ -475,6 +475,14 @@ std::string Qwen3_TK::generate(chat_meta_info_t& meta_info, int length_limit, st
     if (!meta_info.continue_final_message) {
         int sampled_token;
 
+        // The two forwards below write rows total_tokens and total_tokens+1, so
+        // the prompt has to leave room for them: past the engine's KV window
+        // they corrupt it for every later request.
+        if (this->total_tokens + 2 > this->MAX_L) {
+            header_print("WARNING", "Max length reached, stopping generation...");
+            meta_info.stop_reason = MAX_LENGTH_REACHED;
+            return result;
+        }
         this->token_history.push_back(think_start_id);
         this->profiler_list[DECODING_TIME].start();
         this->_force_token(meta_info, think_start_id);
