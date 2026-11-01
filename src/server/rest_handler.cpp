@@ -832,7 +832,7 @@ void RestHandler::configure_chat_engine_parameters(const json& options, const js
         auto_chat_engine->set_topk(top_k);
     }
     if (has_value(request, "min_p")) {
-        int min_p = request["min_p"];
+        float min_p = request["min_p"];
         auto_chat_engine->set_minp(min_p);
     }
     if (has_value(request, "presence_penalty")) {
