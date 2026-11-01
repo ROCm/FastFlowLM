@@ -281,7 +281,7 @@ flm pull qwen3.5-oga-hipep:9b
 flm run  qwen3.5-oga-hipep:9b
 ```
 
-- **Build it in.** This backend is not part of a default build. Configure FLM with `-DFLM_ENABLE_OGA_HIPEP=ON` (Windows only). Without it, `flm list` does not offer these models.
+- **Build it in.** The standard Windows release ZIP and MSI include this backend. Source builds must configure FLM with `-DFLM_ENABLE_OGA_HIPEP=ON` on Windows with the XRT runtime (`FLM_USE_HRX=OFF`). It is unsupported on HRX and Linux builds. Without it, `flm list` does not offer these models.
 - **Install hip-ep 0.5.2 or later.** It is a zip with no installer. Unzip it into `%LOCALAPPDATA%\hip-ep\<version>` or `%ProgramFiles%\hip-ep\<version>`; when both hold a package, the newest version wins. The version may sit anywhere in the folder name, so `hipep_0.5.2_windows`, the name Windows gives the zip, works. Or set `AMDRT_PKG_ROOT` to the package root. When `AMDRT_PKG_ROOT` is set it is the only location used, and a package it points to that is rejected is an error, not a fallback to the default locations.
 - **Text only.** This integration supports Qwen3.5-9B text input; image input is rejected.
 - **The host must have an NPU.** FLM still opens the NPU for this backend, so a host without an NPU is not supported yet.

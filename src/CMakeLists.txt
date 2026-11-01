@@ -100,8 +100,8 @@ endif()
 # found and loaded when such a model is first loaded.
 option(FLM_ENABLE_OGA_HIPEP
        "Add the oga-hipep backend: OGA models on the GPU through an installed hip-ep" OFF)
-if(FLM_ENABLE_OGA_HIPEP AND NOT WIN32)
-    message(FATAL_ERROR "FLM_ENABLE_OGA_HIPEP is supported on Windows only")
+if(FLM_ENABLE_OGA_HIPEP AND (NOT WIN32 OR FLM_USE_HRX))
+    message(FATAL_ERROR "FLM_ENABLE_OGA_HIPEP is supported only on Windows XRT builds (FLM_USE_HRX=OFF)")
 endif()
 
 if(FLM_USE_HRX)
