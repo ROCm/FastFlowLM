@@ -40,6 +40,7 @@ Each case prints `PASS`, `FAIL` or `SKIP`. The exit code is non-zero if anything
 | `test_sampling.py` | The same `seed` samples the same text (with an unseeded request in between, streamed or not), `repeat_last_n: 0` turns penalties off, `-1` covers the whole reply, malformed values get 400 |
 | `test_continue_final_message.py` | `continue_final_message` continues a trailing assistant message instead of answering it: content is only the new text, whitespace as written (a model that reasons first may read the prefix as reasoning, and close it), `logprobs` cover exactly the continued tokens (the first entry scores the next token), stream matches non-stream, a cache-resumed continuation matches a cold one, a normal turn can follow, malformed combinations get 400 |
 | `test_errors.py` | Every malformed `tool_choice` / `response_format` gets HTTP 400 with an OpenAI error body, streaming too, and the server keeps serving |
+| `test_connections.py` | Connections give their slot back however they end: clients hanging up mid-stream, before the first chunk or on a non-streaming request, finished requests, idle and malformed connections. Needs the default `--socket 10` |
 
 Some cases skip by design:
 
