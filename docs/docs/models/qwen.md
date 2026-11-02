@@ -14,6 +14,7 @@ parent: Models
 - **Base Model:** [Qwen/Qwen3-0.6B](https://huggingface.co/Qwen/Qwen3-0.6B)
 - **Quantization:** Q4_1
 - **Max Context Length:** 32k tokens  
+- **Host memory:** the token embeddings are read straight from `model.q4nx` through a read-only memory map, one row per token, instead of being copied into a 0.3 GiB table in RAM. This saves about 0.3 GiB of RAM (private memory right after loading: about 0.4 GiB before, 0.1 GiB now) with the same speed and the same output. Only the rows of tokens that were actually seen stay in memory, and the OS can drop them under memory pressure; if it does, a prompt full of new tokens takes a little longer to start (under 10% in our tests, with the file evicted from the page cache). On Windows, the loaded model's `model.q4nx` cannot be replaced or deleted, so stop the server before `flm remove` or `flm pull` of this model.
 - **Default Context Length:** 32k tokens ([change default](https://fastflowlm.com/docs/instructions/cli/#-change-default-context-length-max))  
 - **[Set Context Length at Launch](https://fastflowlm.com/docs/instructions/cli/#-set-context-length-at-launch)**
 
@@ -39,6 +40,7 @@ flm run qwen3:0.6b
 - **Base Model:** [Qwen/Qwen3-1.7B](https://huggingface.co/Qwen/Qwen3-1.7B)
 - **Quantization:** Q4_1
 - **Max Context Length:** 32k tokens  
+- **Host memory:** the token embeddings are read straight from `model.q4nx` through a read-only memory map, one row per token, instead of being copied into a 0.6 GiB table in RAM. This saves about 0.6 GiB of RAM (the size of the table; measured on Qwen3-0.6B and Qwen3-4B, which run the same code) with the same speed and the same output. Only the rows of tokens that were actually seen stay in memory, and the OS can drop them under memory pressure; if it does, a prompt full of new tokens takes a little longer to start (under 10% in our tests, with the file evicted from the page cache). On Windows, the loaded model's `model.q4nx` cannot be replaced or deleted, so stop the server before `flm remove` or `flm pull` of this model.
 - **Default Context Length:** 32k tokens ([change default](https://fastflowlm.com/docs/instructions/cli/#-change-default-context-length-max))  
 - **[Set Context Length at Launch](https://fastflowlm.com/docs/instructions/cli/#-set-context-length-at-launch)**
 
@@ -64,6 +66,7 @@ flm run qwen3:1.7b
 - **Base Model:** [Qwen/Qwen3-4B](https://huggingface.co/Qwen/Qwen3-4B)
 - **Quantization:** Q4_1
 - **Max Context Length:** 32k tokens  
+- **Host memory:** the token embeddings are read straight from `model.q4nx` through a read-only memory map, one row per token, instead of being copied into a 0.7 GiB table in RAM. This saves about 0.7 GiB of RAM (private memory right after loading: about 0.84 GiB before, 0.12 GiB now) with the same speed and the same output. Only the rows of tokens that were actually seen stay in memory, and the OS can drop them under memory pressure; if it does, a prompt full of new tokens takes a little longer to start (under 10% in our tests, with the file evicted from the page cache). On Windows, the loaded model's `model.q4nx` cannot be replaced or deleted, so stop the server before `flm remove` or `flm pull` of this model.
 - **Default Context Length:** 32k tokens ([change default](https://fastflowlm.com/docs/instructions/cli/#-change-default-context-length-max))  
 - **[Set Context Length at Launch](https://fastflowlm.com/docs/instructions/cli/#-set-context-length-at-launch)**
 
@@ -89,6 +92,7 @@ flm run qwen3:4b
 - **Base Model:** [Qwen/Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B)
 - **Quantization:** Q4_1
 - **Max Context Length:** 32k tokens  
+- **Host memory:** the token embeddings are read straight from `model.q4nx` through a read-only memory map, one row per token, instead of being copied into a 1.2 GiB table in RAM. This saves about 1.2 GiB of RAM (the size of the table; measured on Qwen3-0.6B and Qwen3-4B, which run the same code) with the same speed and the same output. Only the rows of tokens that were actually seen stay in memory, and the OS can drop them under memory pressure; if it does, a prompt full of new tokens takes a little longer to start (under 10% in our tests, with the file evicted from the page cache). On Windows, the loaded model's `model.q4nx` cannot be replaced or deleted, so stop the server before `flm remove` or `flm pull` of this model.
 - **Default Context Length:** 16k tokens ([change default](https://fastflowlm.com/docs/instructions/cli/#-change-default-context-length-max))  
 - **[Set Context Length at Launch](https://fastflowlm.com/docs/instructions/cli/#-set-context-length-at-launch)**
 
@@ -156,6 +160,7 @@ flm run  qwen3-core:4b
 - **Base Model:** [Qwen/Qwen3-4B-Thinking-2507](https://huggingface.co/Qwen/Qwen3-4B-Thinking-2507)
 - **Quantization:** Q4_1
 - **Max Context Length:** 256k tokens  
+- **Host memory:** the token embeddings are read straight from `model.q4nx` through a read-only memory map, one row per token, instead of being copied into a 0.7 GiB table in RAM. This saves about 0.7 GiB of RAM (the size of the table; measured on Qwen3-4B, which runs the same code) with the same speed and the same output. Only the rows of tokens that were actually seen stay in memory, and the OS can drop them under memory pressure; if it does, a prompt full of new tokens takes a little longer to start (under 10% in our tests, with the file evicted from the page cache). On Windows, the loaded model's `model.q4nx` cannot be replaced or deleted, so stop the server before `flm remove` or `flm pull` of this model.
 - **Default Context Length:** 32k tokens ([change default](https://fastflowlm.com/docs/instructions/cli/#-change-default-context-length-max))  
 - **[Set Context Length at Launch](https://fastflowlm.com/docs/instructions/cli/#-set-context-length-at-launch)**
 
@@ -176,6 +181,7 @@ flm run qwen3-tk:4b
 - **Base Model:** [Qwen/Qwen3-4B-Instruct-2507](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507)
 - **Quantization:** Q4_1
 - **Max Context Length:** 256k tokens  
+- **Host memory:** the token embeddings are read straight from `model.q4nx` through a read-only memory map, one row per token, instead of being copied into a 0.7 GiB table in RAM. This saves about 0.7 GiB of RAM (the size of the table; measured on Qwen3-4B, which runs the same code) with the same speed and the same output. Only the rows of tokens that were actually seen stay in memory, and the OS can drop them under memory pressure; if it does, a prompt full of new tokens takes a little longer to start (under 10% in our tests, with the file evicted from the page cache). On Windows, the loaded model's `model.q4nx` cannot be replaced or deleted, so stop the server before `flm remove` or `flm pull` of this model.
 - **Default Context Length:** 32k tokens ([change default](https://fastflowlm.com/docs/instructions/cli/#-change-default-context-length-max))  
 - **[Set Context Length at Launch](https://fastflowlm.com/docs/instructions/cli/#-set-context-length-at-launch)**
 

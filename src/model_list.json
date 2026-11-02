@@ -1035,7 +1035,7 @@
                 "label":[
                     "embeddings"
                 ],
-                "footprint": 0.62
+                "footprint": 0.25
             }
         },
         "d3": {
@@ -1324,7 +1324,7 @@
                     "parameter_size": "1B",
                     "quantization_level": "Q4_1"
                 },
-                "footprint": 1.2
+                "footprint": 0.64
             },
             "4b": {
                 "supported_platforms": ["aie2p"],
@@ -1594,7 +1594,7 @@
                 "label":[
                     "reasoning"
                 ],
-                "footprint": 5.6
+                "footprint": 4.44
             }
         },
         "qwen3": {
@@ -1625,7 +1625,7 @@
                 "label":[
                     "reasoning"
                 ],
-                "footprint": 0.66
+                "footprint": 0.37
             },
             "1.7b": {
                 "supported_platforms": ["aie2p"],
@@ -1654,7 +1654,7 @@
                 "label":[
                     "reasoning"
                 ],
-                "footprint": 1.6
+                "footprint": 1.02
             },
             "4b": {
                 "supported_platforms": ["aie2p"],
@@ -1684,7 +1684,7 @@
                     "reasoning",
                     "tool-calling"
                 ],
-                "footprint": 3.1
+                "footprint": 2.38
             },
             "8b": {
                 "supported_platforms": ["aie2p"],
@@ -1714,7 +1714,7 @@
                     "reasoning",
                     "tool-calling"
                 ],
-                "footprint": 5.6
+                "footprint": 4.44
             }
         },
         "qwen3-tk": {
@@ -1746,7 +1746,7 @@
                     "reasoning",
                     "tool-calling"
                 ],
-                "footprint": 3.1
+                "footprint": 2.38
             }
         },
         "qwen3-it": {
@@ -1777,7 +1777,7 @@
                 "label":[
                     "tool-calling"
                 ],
-                "footprint": 3.1
+                "footprint": 2.38
             }
         },
         "gpt-oss": {
