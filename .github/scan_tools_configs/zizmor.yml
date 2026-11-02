@@ -25,9 +25,4 @@
 #
 # Add rule-specific settings and suppressions under `rules:`.
 
-rules:
-  unpinned-uses:
-    config:
-      policies:
-        # Security owns this workflow and moves the v1 tag.
-        ROCm/rocm-security-gh/.github/workflows/security-baseline.yml: ref-pin
+rules: {}

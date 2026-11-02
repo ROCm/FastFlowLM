@@ -24,8 +24,7 @@ jobs:
     permissions:
       contents: read
       security-events: write
-    # Trust Security-managed v1 updates to minimize developer update noise.
-    uses: ROCm/rocm-security-gh/.github/workflows/security-baseline.yml@v1
+    uses: ROCm/rocm-security-gh/.github/workflows/security-baseline.yml@35d3060c4b2ed48f950f85bd414a1302a431fc0b # v1.0.8
     with:
       scan_mode: all
       report_formats: sarif
