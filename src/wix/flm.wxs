@@ -201,6 +201,9 @@
       <Component Id="Comp_qwen3_8mtp_npu.dll" Guid="*">
         <File Id="File_qwen3_8mtp_npu.dll" Source="$(SourceDir)\qwen3_8mtp_npu.dll" KeyPath="yes" />
       </Component>
+      <Component Id="Comp_qwen3_asr_npu.dll" Guid="*">
+        <File Id="File_qwen3_asr_npu.dll" Source="$(SourceDir)\qwen3_asr_npu.dll" KeyPath="yes" />
+      </Component>
       <Component Id="Comp_nanbeige_npu.dll" Guid="*">
         <File Id="File_nanbeige_npu.dll" Source="$(SourceDir)\nanbeige_npu.dll" KeyPath="yes" />
       </Component>

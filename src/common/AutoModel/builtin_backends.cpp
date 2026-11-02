@@ -32,6 +32,7 @@
 #include "models/qwen3_5vl/flm/aie2p/qwen3_5vl_npu.hpp"
 #include "models/qwen3_6_moe/flm/aie2p/qwen3_6_moe_npu.hpp"
 #include "models/qwen3_8mtp/flm/aie2p/qwen3_8mtp_npu.hpp"
+#include "models/qwen3_asr/flm/aie2p/qwen3_asr_npu.hpp"
 #include "models/qwen3vl/flm/aie2p/qwen3vl_npu.hpp"
 #include "models/qwen3vl_flash/flm/aie2p/qwen3vl_flash.hpp"
 
@@ -81,6 +82,7 @@ void register_builtin_backends(BackendRegistry& registry) {
     RegisterFlm<qwen3_6_moe_npu>(registry, "qwen3.6-moe");
     RegisterFlm<qwen3_8mtp_npu>(registry, "qwen3.8-mtp");
     RegisterFlm<qwen3_8mtp_npu>(registry, "qwen3.8-dflash2");   // the same engine; the draft package turns the DFlash2 drafter on
+    RegisterFlm<qwen3_asr_npu>(registry, "r2t2");
     RegisterFlm<gemma_npu>(registry, "gemma3");
     RegisterFlm<gemma_text_npu>(registry, "gemma3-text");
     RegisterFlm<gemma4e_npu>(registry, "gemma4e");
