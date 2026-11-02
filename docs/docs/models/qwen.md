@@ -109,7 +109,7 @@ flm run qwen3:8b
 
 - **Tags:** `qwen3-core:0.6b`, `qwen3-core:1.7b`, `qwen3-core:4b`, `qwen3-core:8b` — their own tags, beside the NPU2 `qwen3:*` entries. `supported_platforms` is `dev04`, and the `-core` suffix is what asks for corelib's kernels.
 - **Backend:** `core` — one engine for all four sizes. The GGUF's own metadata selects the size and is cross-checked against it.
-- **Source format:** GGUF, read directly by corelib. With a Hugging Face token that can read AMD's private repositories (`HF_TOKEN`, or `hf auth login`), `flm pull` fetches AMD's 4-bit file, which packs exactly as it is; without one it falls back to the public GGUF. A public `Q8_0` is requantized to 4-bit groups on every load, which is lossy.
+- **Source format:** GGUF, read directly by corelib. With a Hugging Face token that can read AMD's private repositories (`HF_TOKEN`, or `hf auth login`), `flm pull` fetches AMD's 4-bit file, which packs exactly as it is; without one it falls back to the public GGUF, except for Qwen3.6, which has only AMD's file. A public `Q8_0` is requantized to 4-bit groups on every load, which is lossy.
 - **Context:** each tag's limit is the most corelib runs that model at; the default is lower where corelib or our own runs found answers going wrong past it. Over-capacity requests are rejected with HTTP 400 before any work reaches the device.
 - **Availability:** developer build against corelib 0.53.0 — see [Phi-4 on the core backend](phi.md).
 
@@ -120,7 +120,7 @@ The same corelib path runs every `-core` tag:
 | `qwen3-core:0.6b` | unsloth `Q8_0`, refit to group 64 (lm_head 32) | — | 32768 | 32768 |
 | `qwen3-core:1.7b` / `4b` / `8b` | AMD `Q4_G128` | unsloth `Q8_0` | 32768 | 32768 |
 | `qwen3.5-core:4b` / `9b` | AMD `Q4_G128` | unsloth `Q8_0` | 262144 | 32768 |
-| `qwen3.6-moe-core:35b-a3b` | AMD `Q4_G32` | unsloth `Q8_0` | 262144 | 32768 |
+| `qwen3.6-moe-core:35b-a3b` | AMD `Q4_G32` | — (needs a token that can read AMD's repository) | 262144 | 32768 |
 | `qwen3.8-core:27b` | AMD `Q4_G128`, on the NPU | unsloth `Q4_0`, on the GPU | 262144 | 32768 |
 | `gemma4-it-core:e2b` / `e4b` | AMD `Q4_G32` | unsloth `Q8_0` | 131072 | 65536 |
 | `phi4-mini-it-core:4b` | AMD `Q4_G128` | unsloth `Q8_0` | 131072 | 131072 |

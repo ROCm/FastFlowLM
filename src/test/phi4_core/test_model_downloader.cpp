@@ -457,8 +457,31 @@ void TestShippedPreferredSourcesArePinnedAmdGgufs() {
     }
     TEST_REQUIRE(tags == std::set<std::string>({
         "phi4-mini-it-core:4b", "qwen3-core:1.7b", "qwen3-core:4b", "qwen3-core:8b",
-        "qwen3.5-core:4b", "qwen3.5-core:9b", "qwen3.6-moe-core:35b-a3b", "qwen3.8-core:27b",
+        "qwen3.5-core:4b", "qwen3.5-core:9b", "qwen3.8-core:27b",
         "gemma4-it-core:e2b", "gemma4-it-core:e4b"}));
+}
+
+void TestQwen36PullsOnlyAmdQ4G32() {
+    const auto catalog = ReadJson(FLM_SOURCE_DIR "/model_list.json");
+    const auto all_info = ReadJson(FLM_SOURCE_DIR "/model_info.json");
+    const auto& entry = catalog.at("models").at("qwen3.6-moe-core").at("35b-a3b");
+    TEST_REQUIRE(!entry.contains("preferred_source"));
+    TEST_REQUIRE(entry.at("url").get<std::string>().rfind(
+        "https://huggingface.co/amd/Qwen3.6-35B-A3B-Q4_G32-GGUF/resolve/", 0) == 0);
+    TEST_REQUIRE(entry.at("use_hf_token") == true);
+    TEST_REQUIRE(entry.at("details").at("quantization_level") == "Q4_G32");
+
+    const auto& files = entry.at("files");
+    TEST_REQUIRE(std::find(files.begin(), files.end(), "Qwen3.6-35B-A3B-Q4_G32.gguf") != files.end());
+    const auto& records = all_info.at(entry.at("model_info_key").get<std::string>());
+    TEST_REQUIRE(records.size() == files.size());
+    std::uint64_t total = 0;
+    for (const auto& record : records) {
+        TEST_REQUIRE(std::find(files.begin(), files.end(), record.at("path")) != files.end());
+        total += record.at("size").get<std::uint64_t>();
+    }
+    TEST_REQUIRE(total == entry.at("size").get<std::uint64_t>());
+    TEST_REQUIRE(!all_info.contains("qwen3.6-moe-core:35b-a3b@amd"));
 }
 
 const std::vector<std::string> kBaseFiles = {"config.json", "base.gguf"};
@@ -894,6 +917,7 @@ int main() {
     RunTest(TestCheckHashesPinnedFilesExactlyOnce, "single check verification");
     RunTest(TestStartupStatusDoesNotRehashButCheckStillDoes, "startup status skips rehash");
     RunTest(TestShippedPreferredSourcesArePinnedAmdGgufs, "shipped preferred sources");
+    RunTest(TestQwen36PullsOnlyAmdQ4G32, "qwen3.6 source");
     RunTest(TestPreferredSourceResolvesByWhatIsOnDisk, "preferred source resolution");
     RunTest(TestPullUsesReachablePreferredSourceAndKeepsItOncePulled, "preferred source pull");
     RunTest(TestPullFallsBackWhenPreferredSourceIsUnreachable, "preferred source fallback");

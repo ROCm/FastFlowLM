@@ -2175,21 +2175,22 @@
                 "dev04"
             ],
             "name": "Qwen3.6-35B-A3B",
-            "url": "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/a483e9e6cbd595906af30beda3187c2663a1118c",
-            "file_url": "https://huggingface.co/api/models/unsloth/Qwen3.6-35B-A3B-GGUF/tree/a483e9e6cbd595906af30beda3187c2663a1118c",
-            "size": 36915976470,
+            "url": "https://huggingface.co/amd/Qwen3.6-35B-A3B-Q4_G32-GGUF/resolve/53a2155ba4237f4bffc3914b2f63cbb0bc68585b",
+            "file_url": "https://huggingface.co/api/models/amd/Qwen3.6-35B-A3B-Q4_G32-GGUF/tree/53a2155ba4237f4bffc3914b2f63cbb0bc68585b",
+            "use_hf_token": true,
+            "size": 21311733654,
             "default_context_length": 32768,
             "max_prefill_len": 4096,
             "details": {
                 "family": "qwen3.6-moe",
                 "think": true,
                 "parameter_size": "35B",
-                "quantization_level": "Q8_0 -> group-32"
+                "quantization_level": "Q4_G32"
             },
             "flm_min_version": "1.0.6",
             "vlm": false,
             "files": [
-                "Qwen3.6-35B-A3B-Q8_0.gguf",
+                "Qwen3.6-35B-A3B-Q4_G32.gguf",
                 "tokenizer.json",
                 "tokenizer_config.json",
                 "config.json",
@@ -2213,25 +2214,7 @@
                     "revision": "995ad96eacd98c81ed38be0c5b274b04031597b0"
                 }
             },
-            "preferred_source": {
-                "url": "https://huggingface.co/amd/Qwen3.6-35B-A3B-Q4_G32-GGUF/resolve/53a2155ba4237f4bffc3914b2f63cbb0bc68585b",
-                "file_url": "https://huggingface.co/api/models/amd/Qwen3.6-35B-A3B-Q4_G32-GGUF/tree/53a2155ba4237f4bffc3914b2f63cbb0bc68585b",
-                "use_hf_token": true,
-                "size": 21311733654,
-                "footprint": 21.3,
-                "details": {
-                    "quantization_level": "Q4_G32"
-                },
-                "files": [
-                    "Qwen3.6-35B-A3B-Q4_G32.gguf",
-                    "tokenizer.json",
-                    "tokenizer_config.json",
-                    "config.json",
-                    "chat_template.jinja"
-                ],
-                "model_info_key": "qwen3.6-moe-core:35b-a3b@amd"
-            },
-            "footprint": 36.9,
+            "footprint": 21.3,
             "model_info_key": "qwen3.6-moe-core:35b-a3b",
             "label": [
                 "reasoning",
