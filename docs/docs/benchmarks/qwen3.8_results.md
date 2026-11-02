@@ -89,3 +89,20 @@ Prefill time-to-first-token (TTFT) for Qwen3.8-27B on NPU (FastFlowLM) with diff
 | **Mean** | **3.23** | **3.74** | **1.16x** |
 
 On a short code prompt the draft keeps about 6.6 of every 7 drafted tokens (the model then emits 7.6 tokens per step); on open prose it keeps about 3. One step costs about 1.2 s with either draft: 0.9 s to check the 8 positions and about 0.27 s to draft. Gains come from the draft predicting more of what the model will say, so they follow the text, as with the MTP head.
+
+#### Decode speed after a long prompt (TPS, greedy, 96 new tokens, 8k context)
+
+One run per cell: a run of 96 tokens is only about a dozen speculative steps, so differences of a few tenths of a token per second between the two tags are within the run-to-run scatter. The draft attends to the last 2048 tokens only, so its cost stops growing once the context passes that.
+
+| **Prompt length** | **Answer** | **`qwen3.8-mtp:27b`** | **`qwen3.8-dflash2:27b`** |
+|---|---|--------:|--------:|
+| ~1k | code | 5.02 | 4.41 |
+| ~1k | prose | 1.70 | 1.90 |
+| ~2k | code | 4.95 | 4.52 |
+| ~2k | prose | 1.61 | 1.44 |
+| ~4k | code | 4.79 | 4.91 |
+| ~4k | prose | 2.07 | 2.08 |
+| ~7k | code | 4.09 | 3.98 |
+| ~7k | prose | 1.56 | 1.63 |
+
+With a long context `qwen3.8-dflash2:27b` is about level with `qwen3.8-mtp:27b`: its draft costs about 0.32 s per step at a full window (host attention over 2048 rows), against about 0.27 s on a short prompt, which cancels most of its higher acceptance. Time to first token is the same for both tags.
