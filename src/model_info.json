@@ -1149,6 +1149,56 @@
             "path": "vision_weight.q4nx"
         }
     ],
+    "qwen3.8-dflash2:27b": [
+        {
+            "type": "file",
+            "oid": "d117c32cf5bcf5c5f22d62d5e5c8249486afd5d9",
+            "size": 1574,
+            "path": ".gitattributes"
+        },
+        {
+            "type": "file",
+            "oid": "d645695673349e3947e8e5ae42332d0ac3164cd7",
+            "size": 11358,
+            "path": "LICENSE"
+        },
+        {
+            "type": "file",
+            "oid": "829ae10baabec0cb9373b19cf3f9a50b3dd3c5ab",
+            "size": 398,
+            "path": "MANIFEST.sha256"
+        },
+        {
+            "type": "file",
+            "oid": "843031dc29fb63d376f7feaf654e8eab612248e8",
+            "size": 4406,
+            "path": "README.md"
+        },
+        {
+            "type": "file",
+            "oid": "79279cc5665bced6f3cdaa2095a2ffe819497b2e",
+            "size": 1239,
+            "path": "config.json"
+        },
+        {
+            "type": "file",
+            "oid": "19f27431df94a86e3d39d293878ab58970bc8876",
+            "size": 50,
+            "path": "configuration.json"
+        },
+        {
+            "type": "file",
+            "oid": "03cfc6e3f3689814cd0441ae7b755972a8349ecf",
+            "size": 1388760648,
+            "lfs": {
+                "oid": "5429d169bea97f49d09ee6fd239b46976c2ca1bb33983cc99b8a4ee1daa0e8db",
+                "size": 1388760648,
+                "pointerSize": 135
+            },
+            "xetHash": "8f3193773578cbff7a863c6f05705e82b90255a494062f16742f27ed4ca86c3c",
+            "path": "dflash_weight.q4nx"
+        }
+    ],
     "minicpm-v-4.7:1b":
     [
         {
