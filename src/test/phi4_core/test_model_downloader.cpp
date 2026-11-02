@@ -422,71 +422,51 @@ struct PreferredSourceFixture {
     }
 };
 
-void TestShippedPreferredSourcesArePinnedAmdGgufs() {
+void TestShippedCoreEntriesPullWhatCorelibDefaultsTo() {
+    // corelib's own variants: AMD's Q4 file and no public fallback, but for the
+    // four that AMD ships no Q4 of, which stay on their public Q8_0.
+    const std::set<std::string> public_q8 = {
+        "qwen3-core:0.6b", "llama3.2-core:1b", "llama3.2-core:3b", "llama3.1-core:8b"};
     const auto catalog = ReadJson(FLM_SOURCE_DIR "/model_list.json");
     const auto all_info = ReadJson(FLM_SOURCE_DIR "/model_info.json");
-    std::set<std::string> tags;
+    std::set<std::string> amd;
     for (const auto& [family, sizes] : catalog.at("models").items()) {
+        if (!family.ends_with("-core")) continue;
         for (const auto& [size, entry] : sizes.items()) {
-            if (!entry.contains("preferred_source")) continue;
             const std::string tag = family + ":" + size;
-            tags.insert(tag);
-            const auto& preferred = entry.at("preferred_source");
-            TEST_REQUIRE(preferred.at("url").get<std::string>().rfind("https://huggingface.co/amd/", 0) == 0);
-            TEST_REQUIRE(preferred.at("use_hf_token") == true);
-
-            const auto& files = preferred.at("files");
-            const auto& records = all_info.at(preferred.at("model_info_key").get<std::string>());
-            TEST_REQUIRE(records.size() == files.size());
+            TEST_REQUIRE(!entry.contains("preferred_source"));
+            TEST_REQUIRE(!all_info.contains(tag + "@amd"));
+            const auto& records = all_info.at(tag);
             std::uint64_t total = 0;
-            std::size_t replaced = 0;
-            for (const auto& file : files) {
+            for (const auto& file : entry.at("files")) {
                 const auto record = std::find_if(records.begin(), records.end(), [&](const auto& value) {
                     return value.at("path") == file;
                 });
                 TEST_REQUIRE(record != records.end());
                 TEST_REQUIRE(record->at("sha256").get<std::string>().size() == 64);
                 total += record->at("size").get<std::uint64_t>();
-                const auto& own = entry.at("files");
-                if (std::find(own.begin(), own.end(), file) == own.end()) {
-                    TEST_REQUIRE(file.get<std::string>().ends_with(".gguf"));
-                    ++replaced;
-                }
             }
-            TEST_REQUIRE(replaced == 1);
-            TEST_REQUIRE(total == preferred.at("size").get<std::uint64_t>());
-        }
-    }
-    TEST_REQUIRE(tags == std::set<std::string>({
-        "qwen3-core:1.7b", "qwen3-core:4b", "qwen3-core:8b", "qwen3.8-core:27b"}));
-}
+            TEST_REQUIRE(records.size() == entry.at("files").size());
+            TEST_REQUIRE(total == entry.at("size").get<std::uint64_t>());
 
-void TestShippedAmdOnlyEntriesNameAmdGgufs() {
-    // corelib refuses a Q8_0 GGUF for these, so there is no public file to fall back to.
-    const auto catalog = ReadJson(FLM_SOURCE_DIR "/model_list.json");
-    const auto all_info = ReadJson(FLM_SOURCE_DIR "/model_info.json");
-    for (const auto& [family, size] : std::vector<std::pair<std::string, std::string>>{
-             {"phi4-mini-it-core", "4b"}, {"qwen3.5-core", "4b"}, {"qwen3.5-core", "9b"},
-             {"qwen3.6-moe-core", "35b-a3b"}, {"gemma4-it-core", "e2b"}, {"gemma4-it-core", "e4b"}}) {
-        const auto& entry = catalog.at("models").at(family).at(size);
-        TEST_REQUIRE(!entry.contains("preferred_source"));
-        TEST_REQUIRE(entry.at("url").get<std::string>().rfind("https://huggingface.co/amd/", 0) == 0);
-        TEST_REQUIRE(entry.at("use_hf_token") == true);
-        TEST_REQUIRE(entry.at("details").at("quantization_level").get<std::string>().starts_with("Q4_G"));
-        TEST_REQUIRE(!all_info.contains(family + ":" + size + "@amd"));
-        const auto& records = all_info.at(family + ":" + size);
-        std::uint64_t total = 0;
-        for (const auto& file : entry.at("files")) {
-            TEST_REQUIRE(file.get<std::string>().find("Q8_0") == std::string::npos);
-            const auto record = std::find_if(records.begin(), records.end(), [&](const auto& value) {
-                return value.at("path") == file;
-            });
-            TEST_REQUIRE(record != records.end());
-            total += record->at("size").get<std::uint64_t>();
+            const bool from_amd =
+                entry.at("url").get<std::string>().rfind("https://huggingface.co/amd/", 0) == 0;
+            const auto quantization = entry.at("details").at("quantization_level").get<std::string>();
+            if (public_q8.contains(tag)) {
+                TEST_REQUIRE(!from_amd);
+                TEST_REQUIRE(quantization.starts_with("Q8_0"));
+                continue;
+            }
+            amd.insert(tag);
+            TEST_REQUIRE(from_amd);
+            TEST_REQUIRE(entry.at("use_hf_token") == true);
+            TEST_REQUIRE(quantization.starts_with("Q4_G"));
         }
-        TEST_REQUIRE(records.size() == entry.at("files").size());
-        TEST_REQUIRE(total == entry.at("size").get<std::uint64_t>());
     }
+    TEST_REQUIRE(amd == std::set<std::string>({
+        "phi4-mini-it-core:4b", "qwen3-core:1.7b", "qwen3-core:4b", "qwen3-core:8b",
+        "qwen3.5-core:4b", "qwen3.5-core:9b", "qwen3.6-moe-core:35b-a3b", "qwen3.8-core:27b",
+        "gemma4-it-core:e2b", "gemma4-it-core:e4b"}));
 }
 
 const std::vector<std::string> kBaseFiles = {"config.json", "base.gguf"};
@@ -921,8 +901,7 @@ int main() {
             "modelscope rejection");
     RunTest(TestCheckHashesPinnedFilesExactlyOnce, "single check verification");
     RunTest(TestStartupStatusDoesNotRehashButCheckStillDoes, "startup status skips rehash");
-    RunTest(TestShippedPreferredSourcesArePinnedAmdGgufs, "shipped preferred sources");
-    RunTest(TestShippedAmdOnlyEntriesNameAmdGgufs, "shipped AMD-only entries");
+    RunTest(TestShippedCoreEntriesPullWhatCorelibDefaultsTo, "shipped core sources");
     RunTest(TestPreferredSourceResolvesByWhatIsOnDisk, "preferred source resolution");
     RunTest(TestPullUsesReachablePreferredSourceAndKeepsItOncePulled, "preferred source pull");
     RunTest(TestPullFallsBackWhenPreferredSourceIsUnreachable, "preferred source fallback");

@@ -4012,9 +4012,9 @@
     "qwen3-core:1.7b":     [
         {
             "type": "file",
-            "path": "Qwen3-1.7B-Q8_0.gguf",
-            "size": 1834426944,
-            "sha256": "0becaa825564295d82e9af4d008bca5f8b7f5f73bf1c6a0b58f7c53ef26b47fd"
+            "path": "Qwen3-1.7B-Q4_G128.gguf",
+            "size": 1545271712,
+            "sha256": "bcfd6097e33805d446f6db0e6da687760b6ccf50a82b4d16c02f151d2c34d63a"
         },
         {
             "type": "file",
@@ -4038,9 +4038,9 @@
     "qwen3-core:4b":     [
         {
             "type": "file",
-            "path": "Qwen3-4B-Q8_0.gguf",
-            "size": 4280405792,
-            "sha256": "eed555233267a33c7e8ee31682762cc7751b3f6d224039086e0e846f05fffa5d"
+            "path": "Qwen3-4B-Q4_G128.gguf",
+            "size": 2884128768,
+            "sha256": "0fae264af2915fd7d24eae5520e004927944d30e7afd9eaaa8b54da5423692ab"
         },
         {
             "type": "file",
@@ -4064,9 +4064,9 @@
     "qwen3-core:8b":     [
         {
             "type": "file",
-            "path": "Qwen3-8B-Q8_0.gguf",
-            "size": 8709519168,
-            "sha256": "0cfbf745760f07a76ddeb358dd025a27f2e11d1ca9c9a4169a373d52990fe86e"
+            "path": "Qwen3-8B-Q4_G128.gguf",
+            "size": 5251100160,
+            "sha256": "fcbbb422e4c26967cc0e3e1f015007f5b0e6f67d9d0af3746000e2147e7dcad8"
         },
         {
             "type": "file",
@@ -4467,84 +4467,6 @@
             "path": "config.json",
             "size": 3161,
             "sha256": "ddc63e1c717afa86c865bb5e01313d89d72bb53b97ad4a8a03ba8510c0621670"
-        }
-    ],
-    "qwen3-core:1.7b@amd": [
-        {
-            "type": "file",
-            "path": "Qwen3-1.7B-Q4_G128.gguf",
-            "size": 1545271712,
-            "sha256": "bcfd6097e33805d446f6db0e6da687760b6ccf50a82b4d16c02f151d2c34d63a"
-        },
-        {
-            "type": "file",
-            "path": "tokenizer.json",
-            "size": 11422654,
-            "sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4"
-        },
-        {
-            "type": "file",
-            "path": "tokenizer_config.json",
-            "size": 10055,
-            "sha256": "51015f78470ac7f7b8c128a6b6ee31a0081285a453db4caba9d46104063908a2"
-        },
-        {
-            "type": "file",
-            "path": "config.json",
-            "size": 869,
-            "sha256": "9c57c7059482fc07da4ba6fc344ea65f303a9467b4094ff1942a1243c4228699"
-        }
-    ],
-    "qwen3-core:4b@amd": [
-        {
-            "type": "file",
-            "path": "Qwen3-4B-Q4_G128.gguf",
-            "size": 2884128768,
-            "sha256": "0fae264af2915fd7d24eae5520e004927944d30e7afd9eaaa8b54da5423692ab"
-        },
-        {
-            "type": "file",
-            "path": "tokenizer.json",
-            "size": 11422654,
-            "sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4"
-        },
-        {
-            "type": "file",
-            "path": "tokenizer_config.json",
-            "size": 10055,
-            "sha256": "51015f78470ac7f7b8c128a6b6ee31a0081285a453db4caba9d46104063908a2"
-        },
-        {
-            "type": "file",
-            "path": "config.json",
-            "size": 852,
-            "sha256": "d273f02569c3b1ee10ca61bea97339d3ad790003c81b65bfd57dfd59f49ef420"
-        }
-    ],
-    "qwen3-core:8b@amd": [
-        {
-            "type": "file",
-            "path": "Qwen3-8B-Q4_G128.gguf",
-            "size": 5251100160,
-            "sha256": "fcbbb422e4c26967cc0e3e1f015007f5b0e6f67d9d0af3746000e2147e7dcad8"
-        },
-        {
-            "type": "file",
-            "path": "tokenizer.json",
-            "size": 11422654,
-            "sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4"
-        },
-        {
-            "type": "file",
-            "path": "tokenizer_config.json",
-            "size": 10055,
-            "sha256": "51015f78470ac7f7b8c128a6b6ee31a0081285a453db4caba9d46104063908a2"
-        },
-        {
-            "type": "file",
-            "path": "config.json",
-            "size": 871,
-            "sha256": "3df0849d23c68f1176d00adc25beb915ade1e6127f8192baaa28f96018a63369"
         }
     ],
     "d3:edge": [
@@ -5212,38 +5134,6 @@
         }
     ],
     "qwen3.8-core:27b": [
-        {
-            "type": "file",
-            "path": "Qwen3.8-27B-Q4_0.gguf",
-            "size": 16056478688,
-            "sha256": "ede16c7b36e578ca87a8c70e011e4b4633a32c831c0ce76d0f474582384e671d"
-        },
-        {
-            "type": "file",
-            "path": "tokenizer.json",
-            "size": 12809320,
-            "sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3"
-        },
-        {
-            "type": "file",
-            "path": "tokenizer_config.json",
-            "size": 17928,
-            "sha256": "b11349aafa7cdc6a320767cf7ceb29ed82f7eda5d65e8e0819e76f0ce947bf27"
-        },
-        {
-            "type": "file",
-            "path": "config.json",
-            "size": 4312,
-            "sha256": "191e0af232104ed8b65258cf3fb2b842e288008baca7633c11b82a1ac7203aab"
-        },
-        {
-            "type": "file",
-            "path": "chat_template.jinja",
-            "size": 8952,
-            "sha256": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041"
-        }
-    ],
-    "qwen3.8-core:27b@amd": [
         {
             "type": "file",
             "path": "Qwen3.8-27B-Q4_G128.gguf",
