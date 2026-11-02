@@ -710,6 +710,42 @@
                 "footprint": 18.1
             }
         },
+        "qwen3.8-dflash2": {
+            "27b": {
+                "supported_platforms": ["aie2p"],
+                "name": "Qwen3.8-27B-DFlash2-NPU2",
+                "base_model": "qwen3.8-mtp:27b",
+                "xclbin_folder": "Qwen3.8-27B-NPU2",
+                "url": "https://huggingface.co/FastFlowLM/Qwen3.8-27B-DFlash2-NPU2",
+                "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.8-27B-DFlash2-NPU2/tree/main",
+                "ms_url": "https://modelscope.cn/models/amd/Qwen3.8-27B-DFlash2-NPU2",
+                "size": 1388772000,
+                "flm_min_version": "1.0.12",
+                "files": [
+                    "config.json",
+                    "dflash_weight.q4nx",
+                    "LICENSE"
+                ],
+                "vlm": false,
+                "default_context_length": 4096,
+                "max_prefill_len": 4096,
+                "max_bench_length": 8192,
+                "details": {
+                    "format": "NPU2",
+                    "family": "qwen3.8-dflash2",
+                    "think": true,
+                    "parameter_size": "27B+2B",
+                    "quantization_level": "Q4_K"
+                },
+                "label": [
+                    "vision",
+                    "reasoning",
+                    "tool-calling",
+                    "speculative"
+                ],
+                "footprint": 20.2
+            }
+        },
         "lfm2": {
             "1.2b": {
                 "supported_platforms": ["aie2p"],

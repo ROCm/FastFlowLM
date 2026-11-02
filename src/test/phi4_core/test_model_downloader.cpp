@@ -653,6 +653,12 @@ void TestBaseModelCatalogRelations() {
     const auto plain = fixture.models.get_model_info(kBaseTag).second;
     TEST_REQUIRE(!plain.contains("draft_model_path") && !plain.contains("xclbin_folder") &&
                  !plain.contains("base_model"));
+
+    // a draft package that only adds weights can run the base's kernels: an explicit xclbin_folder is kept
+    BaseModelFixture shared("base-shared-xclbins", true, {{"xclbin_folder", "base-model"}});
+    const auto shared_info = shared.models.get_model_info(kDependantTag).second;
+    TEST_REQUIRE(shared_info.at("xclbin_folder") == "base-model");
+    TEST_REQUIRE(fs::path(shared_info.at("draft_model_path").get<std::string>()) == shared.dep_path());
 }
 
 void TestInvalidBaseModelEntriesAreDropped() {
@@ -803,6 +809,19 @@ void TestShippedCatalogDeclaresTheDflashDependant() {
     model_list dev04(path, exe_dir, "dev04", {"flm"});
     TEST_REQUIRE(!dev04.is_model_supported(dflash));
     TEST_REQUIRE(!dev04.is_model_supported(dflash_flash));
+
+    // Qwen3.8 with the DFlash 2 draft: the same engine, the base's kernels (no xclbin copy), the draft package only
+    // adds weights
+    const char* q38 = "qwen3.8-dflash2:27b";
+    TEST_REQUIRE(models.is_model_supported(q38));
+    TEST_REQUIRE(models.get_base_model(q38) == std::string("qwen3.8-mtp:27b"));
+    const auto q38_info = models.get_model_info(q38).second;
+    TEST_REQUIRE(q38_info.at("name") == "Qwen3.8-27B-DFlash2-NPU2");
+    TEST_REQUIRE(q38_info.at("details").at("family") == "qwen3.8-dflash2");
+    TEST_REQUIRE(q38_info.at("xclbin_folder") == "Qwen3.8-27B-NPU2");
+    TEST_REQUIRE(q38_info.at("files").get<std::vector<std::string>>() ==
+                 (std::vector<std::string>{"config.json", "dflash_weight.q4nx", "LICENSE"}));
+    TEST_REQUIRE(models.get_model_info("qwen3.8-mtp:27b").second.at("name") == "Qwen3.8-27B-NPU2");
 }
 
 download_utils::DownloadRequest Request(const fs::path& source, const fs::path& destination,
