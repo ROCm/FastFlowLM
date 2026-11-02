@@ -22,6 +22,7 @@
 #include "causal_lm.hpp"
 #include "lm_config.hpp"
 #include "device_runtime.hpp"
+#include "flm_state_api.h"
 #include "nlohmann/json.hpp"
 
 #include <functional>
@@ -143,6 +144,13 @@ public:
     ///       packages (Gemma 4) omit. Whether the package has a BOS at all is
     ///       still the file's statement.
     virtual std::optional<int> forced_bos_id() const { return std::nullopt; }
+
+    /// \brief the saved-state table of an engine not built by the library the
+    ///        frontend links, or nullptr when the frontend's own is the right one
+    /// \note The frontend asks its linked `<engine>_state_api` for the table;
+    ///       an engine the backend loaded at run time saves its context through
+    ///       its own library's table instead.
+    virtual const flm_state_api* state_api() const { return nullptr; }
 };
 
 using BackendFactory =

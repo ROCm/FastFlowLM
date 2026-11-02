@@ -1,0 +1,5 @@
+# config/dequant.toml -- the dequant numbers of Qwen3.6-35B-A3B.
+#
+# make copy builds the op dequant with this file. dequant has no model
+# numbers now: N and K come from the host at each call. Add a key here only
+# when dequant/config.toml in the kernel tree has it.

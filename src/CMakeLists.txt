@@ -64,10 +64,13 @@ if(FLM_ENABLE_CORE)
     # honours CMAKE_PREFIX_PATH. Without the hints every configure has to be
     # handed a prefix on the command line, which is the only reason the core
     # build ever needed an environment variable.
+    # Last, the C:/dev prefix the Windows build already takes Boost, vcpkg and
+    # XRT from: corelib 0.53.0 (the version corelib_api.hpp pins) installed there.
     find_path(RYZENAI_CORELIB_INCLUDE_DIR NAMES ryzenai/corelib.h
         HINTS "${CMAKE_SOURCE_DIR}/include"
               "${RYZENAI_CORELIB_ROOT}/include"
-              "$ENV{RYZENAI_CORELIB_ROOT}/include" REQUIRED)
+              "$ENV{RYZENAI_CORELIB_ROOT}/include"
+              "C:/dev/ryzenai-corelib-0.53.0/install/include" REQUIRED)
     # corelib is linked in rather than dlopened.
     # A conda/pip prefix keeps its import libs beside the headers; a CMake
     # install prefix puts them in lib/ or lib64/ depending on the distribution,
@@ -110,11 +113,13 @@ endif()
 set(FLM_ENGINE_LIB_DIR "${CMAKE_SOURCE_DIR}/lib/${FLM_RUNTIME_NAME}")
 
 # ———————————————————————————————————————————————
-# NPU platform. aie2p is every engine in lib/<runtime>. aie_next swaps in the
-# engines that have an aie_next build, from lib/<runtime>/aie_next: same file
-# name, same class, same header shape (include/models/<m>/flm/aie_next/), so
-# the frontend is unchanged. Families without one keep their aie2p engine; the
-# catalog's supported_platforms is what keeps them off aie_next silicon.
+# NPU platform. aie2p is every engine in lib/<runtime>. An engine that also has
+# an aie_next build ships beside it as <engine>_aie_next: same class, same
+# header shape (include/models/<m>/flm/aie_next/), so the frontend is unchanged.
+# An aie2p build loads it at run time on dev04 silicon (flm_backend.hpp); an
+# aie_next build links it in place of the aie2p engine. Families without one
+# keep their aie2p engine; the catalog's supported_platforms is what keeps them
+# off aie_next silicon.
 # ———————————————————————————————————————————————
 set(FLM_NPU_PLATFORM "aie2p" CACHE STRING "NPU platform the flm engines are built for (aie2p or aie_next)")
 set_property(CACHE FLM_NPU_PLATFORM PROPERTY STRINGS aie2p aie_next)
@@ -124,19 +129,17 @@ if(FLM_NPU_PLATFORM STREQUAL "aie_next")
     if(FLM_USE_HRX)
         message(FATAL_ERROR "FLM_NPU_PLATFORM=aie_next is XRT only for now")
     endif()
-    set(FLM_NEXT_ENGINE_LIB_DIR "${FLM_ENGINE_LIB_DIR}/aie_next")
-    # Windows: the import libs; their DLLs beside them have the aie2p engines' names
+    # Windows: the import libs of the DLLs beside them
     if(WIN32)
-        file(GLOB FLM_NEXT_ENGINE_LIBS "${FLM_NEXT_ENGINE_LIB_DIR}/*.lib")
+        file(GLOB FLM_NEXT_ENGINE_LIBS "${FLM_ENGINE_LIB_DIR}/*_aie_next.lib")
     else()
-        file(GLOB FLM_NEXT_ENGINE_LIBS "${FLM_NEXT_ENGINE_LIB_DIR}/*.so")
+        file(GLOB FLM_NEXT_ENGINE_LIBS "${FLM_ENGINE_LIB_DIR}/lib*_aie_next.so")
     endif()
     if(NOT FLM_NEXT_ENGINE_LIBS)
-        message(FATAL_ERROR "FLM_NPU_PLATFORM=aie_next but ${FLM_NEXT_ENGINE_LIB_DIR} has no engine library")
+        message(FATAL_ERROR "FLM_NPU_PLATFORM=aie_next but ${FLM_ENGINE_LIB_DIR} has no *_aie_next engine library")
     endif()
     add_compile_definitions(FLM_NPU_AIE_NEXT=1)
-    message(STATUS "FLM NPU platform: aie_next (engines from ${FLM_NEXT_ENGINE_LIB_DIR})")
-    set(FLM_ENGINE_RPATH "${FLM_NEXT_ENGINE_LIB_DIR};${FLM_ENGINE_LIB_DIR}")
+    message(STATUS "FLM NPU platform: aie_next (engines: ${FLM_NEXT_ENGINE_LIBS})")
 elseif(NOT FLM_NPU_PLATFORM STREQUAL "aie2p")
     message(FATAL_ERROR "FLM_NPU_PLATFORM must be aie2p or aie_next, got '${FLM_NPU_PLATFORM}'")
 endif()
@@ -497,7 +500,6 @@ elseif(FLM_WIN_DEPS_PREFIX)
 endif()
 
 target_link_directories(flm PUBLIC
-    ${FLM_NEXT_ENGINE_LIB_DIR}  # aie_next engines, searched first so they win (empty on aie2p)
     ${FLM_ENGINE_LIB_DIR}       # per-backend prebuilt engine libs (lib/xrt or lib/hrx)
     ${CMAKE_SOURCE_DIR}/lib     # shared third-party runtime libs (curl/... on Windows)
 )
@@ -619,6 +621,14 @@ endif()
 
 # Link your custom libraries (these may still be DLLs if no static versions available)
 target_link_libraries(flm PRIVATE flm_xgrammar)
+
+# aie_next: link each <engine>_aie_next in place of <engine> (empty on aie2p)
+foreach(_next_lib ${FLM_NEXT_ENGINE_LIBS})
+    get_filename_component(_next_name "${_next_lib}" NAME_WE)
+    string(REGEX REPLACE "^lib" "" _next_name "${_next_name}")
+    string(REGEX REPLACE "_aie_next$" "" _engine_name "${_next_name}")
+    list(TRANSFORM FLM_ENGINE_LINK_LIBS REPLACE "^${_engine_name}$" "${_next_name}")
+endforeach()
 
 target_link_libraries(flm PUBLIC
     ${FLM_ENGINE_LINK_LIBS}
@@ -817,12 +827,6 @@ else()
     endif()
 
     file(GLOB so_libs "${FLM_ENGINE_LIB_DIR}/*.so*")
-    # aie_next: its engines replace the aie2p ones of the same name
-    foreach(_next_lib ${FLM_NEXT_ENGINE_LIBS})
-        get_filename_component(_next_name "${_next_lib}" NAME)
-        list(FILTER so_libs EXCLUDE REGEX "/${_next_name}$")
-        list(APPEND so_libs "${_next_lib}")
-    endforeach()
     # Installed from the glob unless a source build supersedes one of them. The
     # name still has to reach _flm_engine_names below, so filter a copy.
     set(_flm_prebuilt_libs ${so_libs})
@@ -909,7 +913,6 @@ if(WIN32)
     install(RUNTIME_DEPENDENCY_SET fastflowlm_runtime_dependencies
         DESTINATION bin
         DIRECTORIES
-            ${FLM_NEXT_ENGINE_LIB_DIR}  # aie_next engines first, so they win (empty on aie2p)
             "${FLM_ENGINE_LIB_DIR}"
             "${CMAKE_SOURCE_DIR}/lib"
             "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin"

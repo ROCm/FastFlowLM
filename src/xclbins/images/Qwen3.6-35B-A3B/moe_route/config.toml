@@ -1,0 +1,10 @@
+# config/moe_route.toml -- the moe_route numbers of Qwen3.6-35B-A3B.
+#
+# make copy builds the op moe_route with this file. The keys are the keys of
+# the op's default config (moe_route/config.toml in the kernel tree).
+
+# Routed experts (num_experts).
+EXPERTS = 256
+
+# Experts that the op selects for each row (num_experts_per_tok).
+TOP_K = 8

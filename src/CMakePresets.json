@@ -97,6 +97,15 @@
       }
     },
     {
+      "name": "windows-core-on",
+      "displayName": "Windows Core (enabled)",
+      "description": "Windows build with the ryzenai-corelib kernel backend turned on, beside FastFlowLM's own engines. Builds into build/ like windows-default. Needs corelib exactly 0.53.0: point it at a corelib install prefix once with -DRYZENAI_CORELIB_ROOT=<prefix> (or the RYZENAI_CORELIB_ROOT environment variable), or drop the headers into include/ and ryzenai_corelib.lib into lib/.",
+      "inherits": "windows-default",
+      "cacheVariables": {
+        "FLM_ENABLE_CORE": "ON"
+      }
+    },
+    {
       "name": "windows-vs18",
       "displayName": "Windows VS18",
       "description": "Configuration for Windows using Visual Studio 18 2026",
@@ -175,6 +184,13 @@
       "configurePreset": "windows-core",
       "configuration": "Release",
       "jobs": 4
+    },
+    {
+      "name": "windows-core-on",
+      "displayName": "Windows Core Build (enabled)",
+      "description": "Build with the ryzenai-corelib kernel backend in Release",
+      "configurePreset": "windows-core-on",
+      "configuration": "Release"
     }
   ]
 }

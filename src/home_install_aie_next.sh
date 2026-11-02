@@ -3,7 +3,7 @@
 # home_install_aie_next.sh — fast rebuild-and-run loop for the aie_next build.
 #
 # Rebuilds the aie_next engine libraries from their source tree (incremental),
-# stages them into lib/xrt/aie_next with their headers (an engine with a
+# stages them into lib/xrt as <engine>_aie_next with their headers (an engine with a
 # `make install` also puts its array programs in xclbins/images/<model>/),
 # builds flm with the linux-aie-next preset (its own tree, build_aie_next/),
 # installs it to a user prefix through home_install.sh, then copies
@@ -30,7 +30,7 @@ set -euo pipefail
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SRC_DIR/.." && pwd)"
 ENGINE_SRC="${FLM_ENGINE_SRC:-$REPO_DIR/../FastFlowLM_IRON}"
-LIB_DEST="$SRC_DIR/lib/xrt/aie_next"
+LIB_DEST="$SRC_DIR/lib/xrt"
 
 DEFAULT_PREFIX="/scratch/$USER/flm_exe_aie_next"
 [[ -d "/scratch/$USER" ]] || DEFAULT_PREFIX="$HOME/flm_exe_aie_next"
@@ -69,7 +69,7 @@ if [[ "$DO_ENGINE" -eq 1 ]]; then
         make -s -C "$dll/detail/q4nx" NPU_PLATFORM=aie_next -j"$jobs"
         for unit in "$dll"/detail/aie_next/*/; do
             [[ -f "$unit/Makefile" ]] || continue
-            # `make install`: the .so into lib/xrt/aie_next, the array programs into xclbins/images/<model>
+            # `make install`: the .so into lib/xrt, the array programs into xclbins/images/<model>
             if grep -q '^install:' "$unit/Makefile"; then
                 make -s -C "$unit" NPU_PLATFORM=aie_next FLM_REPO="$REPO_DIR" -j"$jobs" install
             else
@@ -77,12 +77,11 @@ if [[ "$DO_ENGINE" -eq 1 ]]; then
             fi
         done
 
-        # The engines only; q4nx is shared and already in lib/xrt.
+        # The engines only, beside the aie2p ones; q4nx is shared and already in lib/xrt.
         mkdir -p "$LIB_DEST"
-        for so in "$dll"/build/aie_next/lib/*.so; do
-            [[ "$(basename "$so")" == libq4_npu_eXpress.so ]] && continue
+        for so in "$dll"/build/aie_next/lib/lib*_aie_next.so; do
             install -m 0755 "$so" "$LIB_DEST/"
-            log "  + lib/xrt/aie_next/$(basename "$so")"
+            log "  + lib/xrt/$(basename "$so")"
         done
         # include/models/<m>/aie_next/*.hpp -> include/models/<m>/flm/aie_next/
         for hdr_dir in "$dll"/include/models/*/aie_next; do

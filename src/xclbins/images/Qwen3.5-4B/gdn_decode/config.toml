@@ -1,0 +1,28 @@
+# config/gdn_decode.toml -- the gdn_decode numbers of Qwen3.5-4B.
+#
+# make copy builds the op gdn_decode with this file. The keys are the keys of
+# the op's default config (gdn_decode/config.toml in the kernel tree).
+
+# Hidden size (hidden_size).
+D = 2560
+
+# v heads of the linear attention (linear_num_value_heads).
+V_HEADS = 32
+
+# q, k heads (linear_num_key_heads).
+QK_HEADS = 16
+
+# Size of a q, k head (linear_key_head_dim).
+DK = 128
+
+# Size of a v head (linear_value_head_dim).
+DV = 128
+
+# Taps of the conv (linear_conv_kernel_dim).
+TAPS = 4
+
+# Epsilon of the l2 norm of q and k.
+L2_EPS = 1e-6
+
+# Epsilon of the gated rms norm (rms_norm_eps).
+RN_EPS = 1e-6

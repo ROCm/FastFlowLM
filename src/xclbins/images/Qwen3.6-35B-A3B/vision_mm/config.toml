@@ -1,0 +1,19 @@
+# config/vision_mm.toml -- the vision_mm numbers of Qwen3.6-35B-A3B
+# (vision_config).
+#
+# make copy builds the op vision_mm with this file. The keys are the keys of
+# the op's default config (vision_mm/config.toml in the kernel tree). Each K
+# is a multiple of 256: the host pads x and W with zeros to K.
+
+# K of vision_mm: hidden_size (1152) padded to 1280.
+K_HIDDEN = 1280
+
+# K of vision_mm_k1536: the patch embedding (3 x temporal_patch_size x
+# patch_size x patch_size), and hidden_size padded to 1536.
+K_PATCH = 1536
+
+# K of vision_mm_k4352: intermediate_size (4304) padded (fc2).
+K_FC2 = 4352
+
+# K of vision_mm_k4608: the merger (spatial_merge_size^2 x hidden_size).
+K_MERGER = 4608
