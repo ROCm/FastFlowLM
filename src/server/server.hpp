@@ -265,6 +265,7 @@ private:
 class HttpSession : public std::enable_shared_from_this<HttpSession> {
 public:
     HttpSession(tcp::socket socket, WebServer& server);
+    ~HttpSession();
     void start(bool cors);
     void write_streaming_response(const json& data, bool is_final);
     void close_connection();
@@ -276,6 +277,8 @@ private:
     void write_response();
     void send_chunk_data(const json& data, bool is_final);
     void start_client_disconnect_monitor(std::shared_ptr<CancellationToken> token);
+    /// Give this connection's slot back to the server's connection limit, exactly once.
+    void release_connection();
     
     ///@brief socket
     tcp::socket socket_;
@@ -292,6 +295,8 @@ private:
     ///@brief stream buffer
     std::shared_ptr<streaming_buf> stream_buf_;
     std::shared_ptr<CancellationToken> cancellation_token_;
+    ///@brief whether this session's slot in active_connections_ was already released
+    std::atomic<bool> connection_released_{false};
 };
 
 // Forward declarations
