@@ -1892,7 +1892,13 @@ void RestHandler::handle_openai_audio_transcriptions(const json& request,
         std::string language = request.value("language", "");
         std::string prompt = request.value("prompt", "");
         std::string response_format = request.value("response_format", "json");
-        bool stream = request.value("stream", false);
+        const std::string stream_field = request.contains("stream") && request["stream"].is_string() ? request["stream"].get<std::string>() : "";
+        const bool stream = request.contains("stream") && (request["stream"].is_boolean() ? request["stream"].get<bool>() : (stream_field == "true" || stream_field == "1"));
+        auto form_int = [&request](const char* key, int fallback) {
+            if (!request.contains(key)) return fallback;
+            if (request[key].is_number_integer()) return request[key].get<int>();
+            try { return std::stoi(request[key].get<std::string>()); } catch (...) { throw std::invalid_argument(std::string(key) + " must be an integer"); }
+        };
         json response;
         if (response_format != "json" && response_format != "text" && response_format != "verbose_json" &&
             response_format != "srt" && response_format != "vtt") {
@@ -1920,6 +1926,28 @@ void RestHandler::handle_openai_audio_transcriptions(const json& request,
             const bool log_transcript = log_env != nullptr && log_env[0] != '\0' && std::strcmp(log_env, "0") != 0;
             std::ostream no_log(nullptr);
             std::ostream& transcript_log = log_transcript ? std::cout : no_log;
+            if (self_asr && stream) {
+                // Append-only text as the audio is processed chunk by chunk (OpenAI transcription events): the model's streaming mode on a whole file
+                header_print("FLM", "Transforming audio to text, streaming (" << model << ")...");
+                chat_meta_info_t asr_meta;
+                asr_meta.max_prefill_len = this->prefill_chunk_len;
+                cancellation_token->reset();
+                auto sse = [&send_streaming_response](const json& event, bool final) { send_streaming_response(json("data: " + event.dump() + "\n\n"), final); };
+                const int chunk_ms = form_int("chunk_size_ms", 1000);
+                const int lookahead_ms = form_int("lookahead_ms", 160);
+                const int unfixed = form_int("unfixed_token_num", 1);
+                try {
+                    audio_context = self_asr->transcribe_streaming(asr_meta, audio_raw, language, prompt, chunk_ms, lookahead_ms, unfixed,
+                        [&sse](const std::string& delta) { sse({{"type", "transcript.text.delta"}, {"delta", delta}}, false); },
+                        language_name, duration, [&] { return cancellation_token->cancelled(); });
+                } catch (const std::invalid_argument& e) {
+                    send_response({{"error", {{"message", e.what()}, {"type", "invalid_request_error"}, {"code", 400}}}});
+                    return;
+                }
+                sse({{"type", "transcript.text.done"}, {"text", audio_context}}, false);
+                send_streaming_response(json("data: [DONE]\n\n"), true);
+                return;
+            }
             if (self_asr) {
                 header_print("FLM", "Transforming audio to text (" << model << ")...");
                 chat_meta_info_t asr_meta;

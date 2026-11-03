@@ -32,6 +32,18 @@ public:
 
     /// \brief the model can transcribe an audio file given as raw bytes (wav / mp3 / flac ...): /v1/audio/transcriptions
     bool supports_transcription() const override { return true; }
+    /// \brief Streaming transcription of a whole file, the way the model is meant to run live: the audio is fed in chunks, after
+    ///        each one the text that can no longer change (all but the last `unfixed_token_num` tokens) is committed and reported
+    ///        through `on_commit` (append-only). Same algorithm and defaults as the reference implementation
+    ///        (netease-youdao/Confucius4-R2T2 example.py). Cost per step: encoder + prefill of ALL audio so far + a few decode steps.
+    /// \param chunk_ms audio per step (80 ms ... 2 s allowed by the model); 160 ms is the reference default but needs a fast host
+    /// \param on_commit called with each newly committed piece of text
+    /// \return the final text (the last, complete hypothesis)
+    std::string transcribe_streaming(chat_meta_info_t& meta_info, const std::vector<uint8_t>& audio_bytes, const std::string& language,
+                                     const std::string& context, int chunk_ms, int lookahead_ms, int unfixed_token_num,
+                                     const std::function<void(const std::string&)>& on_commit, std::string& detected_language,
+                                     double& duration_seconds, std::function<bool()> is_cancelled = [] { return false; });
+
     /// \brief Transcribe one audio file. The text is also streamed to `os`.
     /// \param meta_info the request's meta info (max_prefill_len set by the caller; filled with the usual statistics)
     /// \param language forced language, or "" for automatic detection
@@ -66,7 +78,11 @@ private:
     /// \brief Build the prompt tokens (audio pads expanded) and the engine payload from mono 16 kHz samples.
     /// \param text_after_assistant text that continues the assistant turn (forced "language X<asr_text>", streaming prefix)
     bool _build_prompt(const std::vector<float>& samples, const std::string& context, const std::string& language,
-                       std::vector<int>& tokens, void*& payload_out, int& first_len_run);
+                       const std::string& assistant_text, std::vector<int>& tokens, void*& payload_out, int& first_len_run);
+    /// \brief one prefill + a bounded decode: the text the model generates after `assistant_text`, at most max_new_tokens tokens
+    std::string _asr_step(chat_meta_info_t& meta_info, const std::vector<float>& samples, const std::string& context,
+                          const std::string& language, const std::string& assistant_text, int max_new_tokens,
+                          const std::function<bool()>& is_cancelled);
     /// \brief the engine payload of the request being built (kept alive until the prefill)
     std::shared_ptr<void> payload_holder_;
 };

@@ -133,7 +133,7 @@ bool Qwen3_ASR::configure_parameter(std::string parameter_name, const std::any& 
 }
 
 bool Qwen3_ASR::_build_prompt(const std::vector<float>& samples, const std::string& context, const std::string& language,
-                              std::vector<int>& tokens, void*& payload_out, int& first_len_run) {
+                              const std::string& assistant_text, std::vector<int>& tokens, void*& payload_out, int& first_len_run) {
     // log-mel and the number of audio tokens it makes
     auto payload = std::make_shared<qwen3_asr_payload_t>();
     audio_data_t audio;
@@ -157,6 +157,7 @@ bool Qwen3_ASR::_build_prompt(const std::vector<float>& samples, const std::stri
     std::string prompt = "<|im_start|>system\n" + context + "<|im_end|>\n<|im_start|>user\n<|audio_start|><|audio_pad|><|audio_end|>"
                          "<|im_end|>\n<|im_start|>assistant\n";
     if (!language.empty()) prompt += "language " + language + "<asr_text>";
+    prompt += assistant_text;
     std::vector<int> init = this->tokenizer->encode(prompt);
     tokens.clear();
     tokens.reserve(init.size() + payload->n_audio);
@@ -209,7 +210,7 @@ bool Qwen3_ASR::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
     std::vector<int> tokens;
     void* payload = nullptr;
     int first_len_run = 0;
-    if (!this->_build_prompt(samples, context, this->forced_language, tokens, payload, first_len_run)) return false;
+    if (!this->_build_prompt(samples, context, this->forced_language, "", tokens, payload, first_len_run)) return false;
 
     // 3. every request is its own transcription: nothing of the previous one is reused
     this->clear_context();

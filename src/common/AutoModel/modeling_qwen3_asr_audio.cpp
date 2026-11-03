@@ -90,7 +90,7 @@ std::string Qwen3_ASR::transcribe(chat_meta_info_t& meta_info, const std::vector
     std::vector<int> tokens;
     void* payload = nullptr;
     int first_len_run = 0;
-    if (!this->_build_prompt(audio.samples, context, language, tokens, payload, first_len_run))
+    if (!this->_build_prompt(audio.samples, context, language, "", tokens, payload, first_len_run))
         throw std::invalid_argument("the audio is too short to transcribe");
 
     meta_info.restore_allowed = false;
