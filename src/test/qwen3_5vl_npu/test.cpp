@@ -1,134 +1,379 @@
-#include <iostream>
+/// \file test.cpp
+/// \brief speed harness for Qwen3.5 (qwen3_5vl_npu): TTFT, prefill and decode speed per prompt length
+/// \note See README.md in this folder for how it measures and why.
+#include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <sstream>
 #include "utils/utils.hpp"
 #include "utils/vm_args.hpp"
 #include "AutoModel/modeling_qwen3_5vl.hpp"
+#include "AutoModel/flm_backend.hpp"
+#include "models/qwen3_5vl/flm/aie2p/qwen3_5vl_npu.hpp"
+#include "tokenizer/tokenizer.hpp"
 #include "model_list.hpp"
 
 flm_rt::device npu_device_global;
 
-// Model-specific factory function for Qwen family and DeepSeek_r1_0528_8b
-inline std::pair<std::string, std::unique_ptr<AutoModel>> get_qwen3_5vl_model(const std::string& model_tag) {
-    static std::unordered_set<std::string> qwen3_5_Tags = {
-        "qwen3.5", "qwen3.5:4b", "qwen3.5:9b"
-    };
+namespace flm::backend {
+void register_builtin_backends(BackendRegistry& registry) {
+    registry.register_backend("qwen3.5", kFlmBackendId, flm_factory<qwen3_5vl_npu>());
+}
+}  // namespace flm::backend
 
-    std::unique_ptr<AutoModel> auto_chat_engine = nullptr;
-    std::string new_model_tag = model_tag;
-    if (qwen3_5_Tags.count(model_tag))
-        auto_chat_engine = std::make_unique<Qwen3_5VL>(&npu_device_global);
-    else {
-        new_model_tag = "qwen3.5:4b"; // Default to base Qwen3_5VL model
-        auto_chat_engine = std::make_unique<Qwen3_5VL>(&npu_device_global);
+namespace fs = std::filesystem;
+using steady = std::chrono::steady_clock;
+
+static bool g_engine_log = false;
+
+struct bench_args_t {
+    std::string model_tag;
+    std::vector<int> lengths;
+    int focus_len;
+    int gen_tokens;
+    int iterations;
+    int warmup;
+    std::string prompt_file;
+    std::string csv_file;
+    bool show_response;
+    bool think;
+};
+
+struct run_result_t {
+    int target_len;
+    int iteration;
+    int prompt_tokens;
+    int cached_tokens;
+    int generated_tokens;
+    double ttft_s;
+    double prefill_tps;
+    double decode_tps;
+    std::string stop_reason;
+};
+
+struct stats_t {
+    double mean = 0, std = 0, min = 0, max = 0;
+};
+
+static std::vector<int> parse_lengths(const std::string& text) {
+    std::vector<int> lengths;
+    std::stringstream ss(text);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+        if (!item.empty()) {
+            lengths.push_back(std::stoi(item));
+        }
     }
-  
-    return std::make_pair(new_model_tag, std::move(auto_chat_engine));
+    return lengths;
+}
+
+static bool parse_args(int argc, char* argv[], bench_args_t& args) {
+    namespace po = arg_utils::po;
+    std::string lengths_text;
+    po::options_description desc("Allowed options");
+    desc.add_options()
+        ("help,h", "Show help")
+        ("model,m", po::value<std::string>(&args.model_tag)->default_value("qwen3.5:2b"), "Model tag in model_list.json")
+        ("len,l", po::value<std::string>(&lengths_text)->default_value("128,1024,4096,10240"), "Prompt lengths in tokens, comma separated")
+        ("focus", po::value<int>(&args.focus_len)->default_value(10240), "Length reported as the headline FOCUS result")
+        ("gen,g", po::value<int>(&args.gen_tokens)->default_value(128), "Tokens to decode per run")
+        ("iters,i", po::value<int>(&args.iterations)->default_value(3), "Measured runs per length")
+        ("warmup,w", po::value<int>(&args.warmup)->default_value(1), "Unmeasured runs before measuring, per length")
+        ("prompt-file,f", po::value<std::string>(&args.prompt_file)->default_value(""), "Base text; default bench_text.txt next to the binary")
+        ("csv,c", po::value<std::string>(&args.csv_file)->default_value(""), "Write one row per run to this CSV file")
+        ("show,s", po::value<bool>(&args.show_response)->default_value(true), "Print the response of the first run at each length")
+        ("think,t", po::value<bool>(&args.think)->default_value(false), "Enable thinking in the chat template")
+        ("engine-log,e", po::value<bool>(&g_engine_log)->default_value(false), "Let the engine print to stdout during runs");
+    po::variables_map vm;
+    po::store(po::parse_command_line(argc, argv, desc), vm);
+    po::notify(vm);
+    if (vm.count("help")) {
+        std::cout << desc << std::endl;
+        return false;
+    }
+    args.lengths = parse_lengths(lengths_text);
+    if (args.prompt_file.empty()) {
+        args.prompt_file = utils::get_executable_directory() + "/bench_text.txt";
+    }
+    args.prompt_file = fs::absolute(args.prompt_file).string();
+    if (!args.csv_file.empty()) {
+        args.csv_file = fs::absolute(args.csv_file).string();
+    }
+    return true;
+}
+
+static bool check_paths(const std::string& model_path, const std::string& xclbin_dir, const std::string& prompt_file) {
+    bool ok = true;
+    for (const char* name : {"model.q4nx", "config.json", "tokenizer.json"}) {
+        if (!fs::exists(fs::path(model_path) / name)) {
+            header_print("ERROR", "Missing " << name << " in " << model_path
+                         << " -- set FLM_MODEL_PATH to the folder that contains models/<name> (make test FLM_MODEL_PATH=...)");
+            ok = false;
+        }
+    }
+    if (!fs::exists(fs::path(xclbin_dir) / "layer.xclbin")) {
+        header_print("ERROR", "No layer.xclbin in " << xclbin_dir
+                     << " -- run through `make test`: this DEV_BUILD finds xclbins at ../../../xclbins relative to the current folder");
+        ok = false;
+    }
+    if (!fs::exists(prompt_file)) {
+        header_print("ERROR", "Prompt file not found: " << prompt_file);
+        ok = false;
+    }
+    return ok;
+}
+
+static std::string read_text_file(const std::string& path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) {
+        throw std::runtime_error("cannot open prompt file: " + path);
+    }
+    std::stringstream ss;
+    ss << file.rdbuf();
+    return ss.str();
+}
+
+static std::string make_prompt(Tokenizer& tokenizer, const std::vector<int>& base_tokens, int length) {
+    std::vector<int> tokens;
+    tokens.reserve(length);
+    while ((int)tokens.size() < length) {
+        int take = std::min((int)base_tokens.size(), length - (int)tokens.size());
+        tokens.insert(tokens.end(), base_tokens.begin(), base_tokens.begin() + take);
+    }
+    return tokenizer.decode(tokens);
+}
+
+static int pick_context_length(const bench_args_t& args) {
+    int longest = *std::max_element(args.lengths.begin(), args.lengths.end());
+    int needed = longest + args.gen_tokens + 256;
+    int context = 8192;
+    while (context < needed) {
+        context *= 2;
+    }
+    return context;
+}
+
+static double load_average() {
+    std::ifstream file("/proc/loadavg");
+    double load = -1;
+    file >> load;
+    return load;
+}
+
+struct cout_muter_t {
+    std::streambuf* saved = nullptr;
+    explicit cout_muter_t(bool mute) {
+        if (mute) {
+            saved = std::cout.rdbuf(nullptr);
+        }
+    }
+    ~cout_muter_t() {
+        if (saved) {
+            std::cout.rdbuf(saved);
+            std::cout.clear();
+        }
+    }
+};
+
+static run_result_t run_once(AutoModel& chat, const std::string& prompt, int gen_tokens, std::ostream& os) {
+    cout_muter_t muter(!g_engine_log);
+    chat.clear_context();
+    chat_meta_info_t meta_info;
+    lm_uniform_input_t input;
+    input.prompt = prompt;
+
+    auto t0 = steady::now();
+    chat.insert(meta_info, input);
+    auto t1 = steady::now();
+    chat.generate(meta_info, gen_tokens, os);
+
+    run_result_t r{};
+    r.prompt_tokens = meta_info.prompt_tokens;
+    r.cached_tokens = meta_info.cached_prompt_tokens;
+    r.generated_tokens = meta_info.generated_tokens;
+    r.ttft_s = std::chrono::duration<double>(t1 - t0).count();
+    int prefilled = meta_info.prompt_tokens - meta_info.cached_prompt_tokens;
+    r.prefill_tps = prefilled / (meta_info.prefill_duration / 1e9);
+    r.decode_tps = meta_info.generated_tokens / (meta_info.decoding_duration / 1e9);
+    r.stop_reason = stop_reason_to_string(meta_info.stop_reason);
+    return r;
+}
+
+static stats_t compute_stats(const std::vector<double>& values) {
+    stats_t s;
+    if (values.empty()) {
+        return s;
+    }
+    s.min = *std::min_element(values.begin(), values.end());
+    s.max = *std::max_element(values.begin(), values.end());
+    for (double v : values) {
+        s.mean += v;
+    }
+    s.mean /= values.size();
+    for (double v : values) {
+        s.std += (v - s.mean) * (v - s.mean);
+    }
+    s.std = std::sqrt(s.std / values.size());
+    return s;
+}
+
+static void print_run(const run_result_t& r) {
+    std::cout << std::fixed << std::setprecision(2)
+              << "  len " << std::setw(6) << r.target_len
+              << "  iter " << r.iteration
+              << "  prompt " << std::setw(6) << r.prompt_tokens
+              << "  gen " << std::setw(4) << r.generated_tokens << " (" << r.stop_reason << ")"
+              << "  TTFT " << std::setprecision(3) << r.ttft_s << " s"
+              << "  prefill " << std::setprecision(1) << r.prefill_tps << " tok/s"
+              << "  decode " << std::setprecision(2) << r.decode_tps << " tok/s" << std::endl;
+    if (r.cached_tokens > 0) {
+        header_print("WARN", r.cached_tokens << " prompt tokens came from the cache; prefill speed is not a clean measurement");
+    }
+}
+
+static std::string format_stats(const stats_t& s, int precision) {
+    std::stringstream ss;
+    ss << std::fixed << std::setprecision(precision)
+       << s.mean << " +- " << s.std << " [" << s.min << ", " << s.max << "]";
+    return ss.str();
+}
+
+struct length_summary_t {
+    int prompt_tokens = 0;
+    stats_t ttft, prefill, decode;
+};
+
+static length_summary_t summarize_length(const std::vector<run_result_t>& results, int len) {
+    std::vector<double> ttft, prefill, decode;
+    length_summary_t s;
+    for (const auto& r : results) {
+        if (r.target_len != len) {
+            continue;
+        }
+        ttft.push_back(r.ttft_s);
+        prefill.push_back(r.prefill_tps);
+        decode.push_back(r.decode_tps);
+        s.prompt_tokens = r.prompt_tokens;
+    }
+    s.ttft = compute_stats(ttft);
+    s.prefill = compute_stats(prefill);
+    s.decode = compute_stats(decode);
+    return s;
+}
+
+static void print_summary(const bench_args_t& args, const std::vector<run_result_t>& results) {
+    std::cout << std::endl << std::left
+              << std::setw(8) << "len" << std::setw(8) << "prompt"
+              << std::setw(34) << "TTFT s (mean +- std [min, max])"
+              << std::setw(34) << "prefill tok/s"
+              << "decode tok/s" << std::endl;
+    std::cout << std::string(118, '-') << std::endl;
+    for (int len : args.lengths) {
+        length_summary_t s = summarize_length(results, len);
+        std::cout << std::setw(8) << len << std::setw(8) << s.prompt_tokens
+                  << std::setw(34) << format_stats(s.ttft, 3)
+                  << std::setw(34) << format_stats(s.prefill, 1)
+                  << format_stats(s.decode, 2) << std::endl;
+    }
+    std::cout << std::right << std::endl;
+}
+
+static void print_focus(const bench_args_t& args, const std::vector<run_result_t>& results) {
+    bool measured = std::find(args.lengths.begin(), args.lengths.end(), args.focus_len) != args.lengths.end();
+    if (!measured) {
+        header_print("info", "FOCUS length " << args.focus_len << " was not in --len, no FOCUS line");
+        return;
+    }
+    length_summary_t s = summarize_length(results, args.focus_len);
+    std::cout << std::fixed
+              << "FOCUS " << args.focus_len << " (prompt " << s.prompt_tokens << "): "
+              << "TTFT " << std::setprecision(3) << s.ttft.mean << " s | "
+              << "prefill " << std::setprecision(1) << s.prefill.mean << " tok/s | "
+              << "decode " << std::setprecision(2) << s.decode.mean << " tok/s" << std::endl << std::endl;
+}
+
+static void write_csv(const std::string& path, const std::vector<run_result_t>& results) {
+    std::ofstream out(path, std::ios::trunc);
+    out << "target_len,iteration,prompt_tokens,cached_tokens,generated_tokens,stop_reason,ttft_s,prefill_tok_s,decode_tok_s\n";
+    for (const auto& r : results) {
+        out << r.target_len << "," << r.iteration << "," << r.prompt_tokens << "," << r.cached_tokens << ","
+            << r.generated_tokens << "," << r.stop_reason << "," << r.ttft_s << ","
+            << r.prefill_tps << "," << r.decode_tps << "\n";
+    }
+    header_print("info", "Wrote " << results.size() << " rows to " << path);
 }
 
 int main(int argc, char* argv[]) {
-    #ifdef __WINDOWS__
-    SetConsoleOutputCP(CP_UTF8);
-    SetConsoleCP(CP_UTF8);
-    // Set thread priority to low
-    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
-    #endif
-    
-    arg_utils::po::options_description desc("Allowed options");
-    arg_utils::po::variables_map vm;
-    desc.add_options()("model,m", arg_utils::po::value<std::string>()->required(), "Model file");
-    desc.add_options()("Short,s", arg_utils::po::value<bool>()->default_value(true), "Short Prompt");
-    desc.add_options()("Preemption,p", arg_utils::po::value<bool>()->default_value(false), "Preemption");
-    arg_utils::po::store(arg_utils::po::parse_command_line(argc, argv, desc), vm);
+    bench_args_t args;
+    if (!parse_args(argc, argv, args)) {
+        return 0;
+    }
 
-    std::string tag = vm["model"].as<std::string>();
-    bool short_prompt = vm["Short"].as<bool>();
-    bool preemption = vm["Preemption"].as<bool>();
-    std::cout << "Model: " << tag << std::endl;
-    std::string exe_dir = utils::get_executable_directory();
-    std::string model_dir = utils::get_models_directory();
-    std::string model_list_path = exe_dir + "/model_list.json";
-    model_list model_list(model_list_path, model_dir);
+    std::string model_list_path = utils::get_executable_directory() + "/model_list.json";
+    std::string models_dir = utils::get_models_directory();
+    model_list models(model_list_path, models_dir);
+    std::string model_path = models.get_model_path(args.model_tag);
+    nlohmann::json model_info = models.get_model_info(args.model_tag).second;
+    int context_length = pick_context_length(args);
 
+    std::string xclbin_dir = fs::absolute("../../../xclbins/" + fs::path(model_path).filename().string()).lexically_normal().string();
+    header_print("info", "Model:   " << args.model_tag << " -> " << model_path);
+    header_print("info", "Xclbins: " << xclbin_dir);
+    header_print("info", "Prompt:  " << args.prompt_file);
+    if (!check_paths(model_path, xclbin_dir, args.prompt_file)) {
+        return 1;
+    }
+    std::string lengths_text;
+    for (int len : args.lengths) {
+        lengths_text += std::to_string(len) + " ";
+    }
+    header_print("info", "Lengths: " << lengths_text << "| gen " << args.gen_tokens
+                 << " | iters " << args.iterations << " | warmup " << args.warmup
+                 << " | ctx " << context_length << " | think " << args.think);
+    header_print("info", "CPU load average (1 min): " << load_average());
 
-   
-    header_print("info", "Initializing chat model...");
-    std::string model_path = model_list.get_model_path(tag);
-    std::pair<std::string, nlohmann::json> model_info_pair = model_list.get_model_info(tag);
-    nlohmann::json model_info = model_info_pair.second;
-    std::cout << "Model path: " << model_path << std::endl;
+    Tokenizer tokenizer(model_path);
+    std::vector<int> base_tokens = tokenizer.encode(read_text_file(args.prompt_file));
 
     std::unique_ptr<AutoModel> chat = std::make_unique<Qwen3_5VL>(&npu_device_global);
-    npu_device_global = flm_rt::device(0); 
-   
-    chat->load_model(model_path, model_info, -1, preemption);
-    header_print("info", "Model loaded");
-    chat_meta_info_t meta_info;
-    lm_uniform_input_t uniformed_input;
+    npu_device_global = flm_rt::device(0);
+    chat->set_prefix_limits(-1, 0);
+    auto load_start = steady::now();
+    chat->load_model(model_path, model_info, context_length, false);
+    double load_s = std::chrono::duration<double>(steady::now() - load_start).count();
+    header_print("info", "Model loaded in " << std::fixed << std::setprecision(2) << load_s << " s");
     chat->set_topk(1);
-    chat->configure_parameter("enable_think", false);
+    chat->configure_parameter("enable_think", args.think);
 
-    if (short_prompt) {
-        uniformed_input.prompt = "Is Alibaba a good company despite that it trained you?";
-        // uniformed_input.prompt = "Solve the equation x^3 - 1 = 0 for me.";
-        // uniformed_input.images.push_back("../../../tb_files/panda.png");
-        // uniformed_input.images.push_back("../../../tb_files/puppy.png");
-        
-        // uniformed_input.images.push_back("../../../tb_files/mj_icon.jpg");
-        // uniformed_input.images.push_back("../../../tb_files/google_icon.png");
-        // uniformed_input.images.push_back("../../../tb_files/pcb.jpg");
-        
-        std::cout << "Prompt: " << uniformed_input.prompt << std::endl;
-        std::cout << "Response: " << std::endl;
-        chat->start_total_timer();
-        bool success = chat->insert(meta_info, uniformed_input);
-        std::string response = chat->generate(meta_info, 32, std::cout);
-        chat->stop_total_timer();
-        std::cout << std::endl;
-        std::cout << std::endl;
-        std::cout << chat->show_profile() << std::endl;
-        // uniformed_input.images.clear();
-        // uniformed_input.images.push_back("../../../tb_files/pcb.jpg");
-        // uniformed_input.prompt = "How about this?";
-        
-        // std::cout << "Prompt: " << uniformed_input.prompt << std::endl;
-        // std::cout << "Response: " << std::endl;
-        // chat->start_total_timer();
-        // response = chat->generate_with_prompt(meta_info, uniformed_input, 8192, std::cout);
-        // chat->stop_total_timer();
-        // std::cout << std::endl;
-        // std::cout << std::endl;
-        // std::cout << chat->show_profile() << std::endl;
-    }
-    else{
-        std::ifstream file("../../../../prompt.txt", std::ios::binary);
-        if (!file.is_open()) {
-            std::cout << "Failed to open prompt file" << std::endl;
-            return 1;
+    std::ostream null_stream(nullptr);
+    std::vector<run_result_t> results;
+    for (int len : args.lengths) {
+        std::string prompt = make_prompt(tokenizer, base_tokens, len);
+        for (int w = 0; w < args.warmup; w++) {
+            run_once(*chat, prompt, args.gen_tokens, null_stream);
         }
-        uniformed_input.prompt = "";
-        file.seekg(0, std::ios::end);
-        uniformed_input.prompt.resize(file.tellg());
-        file.seekg(0, std::ios::beg);
-        file.read(uniformed_input.prompt.data(), uniformed_input.prompt.size());
-        file.close();
-        std::cout << "Prompt: " << uniformed_input.prompt << std::endl;
-        std::cout << "Response: ";
-        chat->start_total_timer();
-        bool success = chat->insert(meta_info, uniformed_input);
-        std::string response = chat->generate(meta_info, 1024, std::cout);
-        chat->stop_total_timer();
-        std::cout << std::endl;
-        std::cout << std::endl;
-        std::cout << chat->show_profile() << std::endl;
+        for (int it = 0; it < args.iterations; it++) {
+            std::ostringstream response;
+            bool show = args.show_response && it == 0;
+            run_result_t r = run_once(*chat, prompt, args.gen_tokens, show ? (std::ostream&)response : null_stream);
+            r.target_len = len;
+            r.iteration = it;
+            print_run(r);
+            if (show) {
+                std::cout << "    response: " << response.str() << std::endl;
+            }
+            results.push_back(r);
+        }
     }
-   
-    std::pair<std::string, std::vector<int>> history = chat->get_history();
-    std::cout << "History length: " << history.second.size() << std::endl;
-    std::cout << std::endl;
-    for (auto t: history.second){
-        std::cout << t << " ";
-    }
-    std::cout << std::endl;
 
+    print_summary(args, results);
+    print_focus(args, results);
+    if (!args.csv_file.empty()) {
+        write_csv(args.csv_file, results);
+    }
     return 0;
 }

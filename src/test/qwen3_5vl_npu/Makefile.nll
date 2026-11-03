@@ -1,0 +1,8 @@
+# Long-context accuracy probe (nll_test.cpp). Builds on the harness objects; see README.md.
+include Makefile
+NLL_SOURCES := $(filter-out test.cpp,$(CPP_SOURCES)) nll_test.cpp
+NLL_OBJECTS := $(addprefix $(BUILD_DIR)/,$(notdir $(NLL_SOURCES:.cpp=.o)))
+$(BUILD_DIR)/nll_test: $(NLL_OBJECTS)
+	$(CXX) $(CXX_FLAGS) -o $@ $^ $(LDFLAGS) $(DEPENDENCY_LDFLAGS)
+nll: $(BUILD_DIR)/nll_test
+.PHONY: nll

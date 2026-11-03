@@ -18,6 +18,8 @@
 
 SOURCES += test.cpp
 SOURCES += ../../common/AutoModel/automodel.cpp
+SOURCES += ../../common/AutoModel/model_backend.cpp
+SOURCES += ../../common/prefix_slot_cache.cpp
 SOURCES += $(CHAT_SOURCES)
 SOURCES += ../../common/AutoModel/modeling_qwen3_5vl.cpp
 SOURCES += ../../common/AutoModel/modeling_qwen3_5vl_image.cpp
@@ -36,6 +38,7 @@ ifeq ($(WSL), 0)
 
 LDFLAGS += -lqwen3_5vl_npu
 LDFLAGS += -ljpeg
+LDFLAGS += -L../../build/libwebp/lib -lwebpdecoder
 
 CPP_SOURCES := $(filter %.cpp,$(SOURCES))
 OBJECTS := $(addprefix $(BUILD_DIR)/,$(notdir $(CPP_SOURCES:.cpp=.o)))
@@ -56,9 +59,14 @@ $(BUILD_DIR)/test_qwen3_5vl_npu: $(OBJECTS)
 clean:
 	rm -rf $(BUILD_DIR)
 
+FLM_MODEL_PATH ?= /scratch/michyu
+# 2B engine with lm_head inside layer.xclbin (the bundled engine hangs on the 2B layer.xclbin)
+QWEN35_2B_ENGINE ?= /scratch/michyu/FastFlowLM_IRON/FLM_Xclbin/Qwen3_5_2B/engine/build
+
 test: $(BUILD_DIR)/test_qwen3_5vl_npu
 	cp ../../model_list.json $(BUILD_DIR)/model_list.json
-	cd $(BUILD_DIR) && export LD_LIBRARY_PATH=../../../lib/xrt && ./test_qwen3_5vl_npu --model qwen3.5:0.8b -s 1
+	cp bench_text.txt $(BUILD_DIR)/bench_text.txt
+	cd $(BUILD_DIR) && export LD_LIBRARY_PATH=$(QWEN35_2B_ENGINE):../../../lib/xrt FLM_MODEL_PATH=$(FLM_MODEL_PATH) && ./test_qwen3_5vl_npu --model qwen3.5:2b $(ARGS)
 
 -include $(DEPS)
 .PHONY: all clean test
