@@ -986,17 +986,15 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
         return false;
     }
 
-    if (NPUAccessManager::try_acquire_npu_access()) {
-        if (needs_npu) {
-            header_print("🟢 ", "NPU Locked!");
-        }
+    const auto admission = npu_request_coordinator_.admit([this, process_task]() { process_task(true); },
+                                                          [] { return NPUAccessManager::try_acquire_npu_access(); });
+    if (admission == NPURequestCoordinator::Admission::run_now) {
+        header_print("🟢 ", "NPU Locked!");
         process_task(false); //  return false
         return false;
     }
 
-    if (!npu_request_coordinator_.try_enqueue([this, process_task]() {
-            process_task(true);
-        })) {
+    if (admission == NPURequestCoordinator::Admission::queue_full) {
         res.result(http::status::service_unavailable);
         res.body() = dump_error_body(json{
             {"error", "NPU is in use and request queue is full (limit: " +
