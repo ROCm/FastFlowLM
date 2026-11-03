@@ -27,7 +27,7 @@ AMD Ryzen™ AI 9 370 (Strix Point) with 32 GB DRAM; performance is comparable t
 
 | **Model**        | **HW**       | **1 image** | **2 images** | **3 images** |
 |------------------|--------------------|--------:|--------:|--------:|
-| **SmolVLA**  | NPU (FLM)    | 298	| 363	| 430 |
+| **SmolVLA**  | XDNA2    | 298	| 363	| 430 |
 
 ---
 

@@ -52,13 +52,16 @@ protected:
     /// \param image_payload receives the preprocessed pixels for every image that
     ///        survived decoding, in prompt order
     /// \param tokens receives the prompt token ids
+    /// \param continue_final_message render `messages` so that the prompt ends
+    ///        inside their final assistant message (the CLI prompt never does)
     /// \return false if there was nothing to prefill
     /// \note  Images that fail to decode or preprocess are dropped without
     ///        leaving a placeholder behind, so `image_payload` always stays
     ///        aligned with the image soft tokens in `tokens`.
     bool _build_vl_tokens(lm_uniform_input_t& input,
                           qwen3vl_image_payload_t& image_payload,
-                          std::vector<int>& tokens);
+                          std::vector<int>& tokens,
+                          bool continue_final_message = false);
 
     /// \note The Qwen3-VL checkpoint is served by two engines that share this
     ///       whole wrapper -- the tokenizer, chat template, sampler and image
@@ -81,7 +84,8 @@ public:
     bool insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled = [] { return false; }) override;
     std::string generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled = [] { return false; }) override;
     std::string generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os = std::cout) override;
-    std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object()) override;
+    std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object(), bool continue_final_message = false) override;
+    bool supports_continue_final_message() const override { return true; }
     bool check_using_checkpint() {
 		return false;
 	}
@@ -188,10 +192,13 @@ public:
 
     /// \brief Apply the chat template without tools — qwen3vl_flash does not
     ///        support tool calling, so the tools argument is always dropped.
-    std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object()) override {
+    std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object(), bool continue_final_message = false) override {
         nlohmann::ordered_json no_tools = nlohmann::ordered_json::object();
-        return Qwen3VL::apply_chat_template(messages, no_tools);
+        return Qwen3VL::apply_chat_template(messages, no_tools, continue_final_message);
     }
+
+    /// \brief Single-turn: insert() rebuilds the prompt and never continues a message
+    bool supports_continue_final_message() const override { return false; }
 
     /// \brief img_pre_resize is ignored — the flash engine always forces every
     ///        image down to a 256px longer side (see _forced_long_side above).

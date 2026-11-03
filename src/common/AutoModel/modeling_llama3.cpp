@@ -32,15 +32,25 @@ void Llama3::setup_tokenizer(std::string model_path) {
     auto tokenizer_config = this->_shared_setup_tokenizer(model_path);
 }
 
-std::string Llama3::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools) {
+std::string Llama3::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools, bool continue_final_message) {
     minja::chat_template_inputs inputs;
-    inputs.add_generation_prompt = true;
     inputs.messages = messages;
     inputs.extra_context = this->extra_context;
-    return this->chat_tmpl->apply(inputs);
+    return this->_render_chat_template(inputs, continue_final_message);
+}
+
+void Llama3::fail_inference(const std::string& detail) {
+    const bool poisoned = this->backend_ && this->backend_->poisoned();
+    this->_shared_after_inference_failure(poisoned);
+    std::string message = poisoned
+        ? "Inference failed; unload/reload is required because the model is poisoned"
+        : "Inference failed; the current conversation was cleared";
+    if (!detail.empty()) message += " (" + detail + ")";
+    throw ModelRequestError(500, true, message);
 }
 
 bool Llama3::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
+    this->_shared_guard_poisoned();
     // preprocess
     this->profiler_list[TKOEN_ENCODE_TIME].start();
     std::string templated_text;
@@ -49,7 +59,7 @@ bool Llama3::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std:
         return false;
     }
     if (!input.messages.empty()) { // already a formated messages, usually from REST API
-        templated_text = this->apply_chat_template(input.messages);
+        templated_text = this->apply_chat_template(input.messages, nlohmann::ordered_json::object(), meta_info.continue_final_message);
     }
     else if (!input.prompt.empty()) { // a pure text, usually from the cli
         nlohmann::ordered_json messages;
@@ -66,23 +76,47 @@ bool Llama3::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std:
     // The template's generation prompt ("<|start_header_id|>assistant<|end_header_id|>\n\n") is how the next turn
     // renders this reply's header, so the whole prompt can be saved: nothing is left out of the prefill (trim 0).
     if (this->_prefix_slot_mode(meta_info, tokens.size(), 0)) {
-        return this->_prefix_text_insert(meta_info, tokens, 0, "<|start_header_id|>user", is_cancelled);
+        try {
+            return this->_prefix_text_insert(meta_info, tokens, 0, "<|start_header_id|>user", is_cancelled, input.requested_max_new_tokens);
+        } catch (const ModelRequestError&) {
+            throw;
+        } catch (const std::exception& error) {
+            this->fail_inference(error.what());
+        } catch (...) {
+            this->fail_inference();
+        }
     }
     this->_prefix_legacy_path();
-    return this->_shared_insert(meta_info, tokens, is_cancelled);
+    try {
+        return this->_shared_insert(meta_info, tokens, is_cancelled, nullptr, 0, input.requested_max_new_tokens);
+    } catch (const ModelRequestError&) {
+        throw;
+    } catch (const std::exception& error) {
+        this->fail_inference(error.what());
+    } catch (...) {
+        this->fail_inference();
+    }
 }
 
 
 std::string Llama3::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
-    //header_print("is_cancelled", is_cancelled);
-    return this->_shared_generate(meta_info, length_limit, os, is_cancelled);
+    this->_shared_guard_poisoned();
+    try {
+        return this->_shared_generate(meta_info, length_limit, os, is_cancelled);
+    } catch (const ModelRequestError&) {
+        throw;
+    } catch (const std::exception& error) {
+        this->fail_inference(error.what());
+    } catch (...) {
+        this->fail_inference();
+    }
 }
 
 std::string Llama3::generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os) {
     if (!this->insert(meta_info, input)) {
         return "";
     }
-    return this->_shared_generate(meta_info, length_limit, os);
+    return this->generate(meta_info, length_limit, os);
 }
 
 /************              DeepSeek_r1_8b family            **************/
@@ -113,12 +147,11 @@ void DeepSeek_r1_8b::setup_tokenizer(std::string model_path) {
     this->think_marker_id = this->tokenizer->encode("<think>")[0];
 }
 
-std::string DeepSeek_r1_8b::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools) {
+std::string DeepSeek_r1_8b::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools, bool continue_final_message) {
     minja::chat_template_inputs inputs;
-    inputs.add_generation_prompt = true;
     inputs.messages = messages;
     inputs.extra_context = this->extra_context;
-    return this->chat_tmpl->apply(inputs);
+    return this->_render_chat_template(inputs, continue_final_message);
 }
 
 bool DeepSeek_r1_8b::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
@@ -130,7 +163,7 @@ bool DeepSeek_r1_8b::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& inp
         return false;
     }
     if (!input.messages.empty()) { // already a formated messages, usually from REST API
-        templated_text = this->apply_chat_template(input.messages);
+        templated_text = this->apply_chat_template(input.messages, nlohmann::ordered_json::object(), meta_info.continue_final_message);
     }
     else if (!input.prompt.empty()) { // a pure text, usually from the cli
         nlohmann::ordered_json messages;
@@ -167,7 +200,10 @@ bool DeepSeek_r1_8b::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& inp
 std::string DeepSeek_r1_8b::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
     std::vector<int> sampled_tokens;
     std::string result;
-    os << "<think>\n\n";
+    // A continued message already carries its own text: no think preamble of ours.
+    if (!meta_info.continue_final_message) {
+        os << "<think>\n\n";
+    }
     if (length_limit > 0){
         sampled_tokens.reserve(length_limit);
     }
@@ -180,22 +216,32 @@ std::string DeepSeek_r1_8b::generate(chat_meta_info_t& meta_info, int length_lim
     int last_sampled_token = this->last_token;
 
     token_history.push_back(this->last_token);
+    // the sample insert() took is the reply's first token, and counts toward the limit
+    meta_info.generated_tokens++;
     if (this->is_normal_token(last_sampled_token) && last_sampled_token != -1){
         std::string token_str = this->tokenizer->run_time_decoder(last_sampled_token);
         result += token_str;
         os << token_str << std::flush;
     }
     if (this->is_eos(last_sampled_token)){
+        // Sampled from the prefill, so no engine has run it.
+        token_history.pop_back();
+        meta_info.stop_reason = reason;
         return result;
     }
     this->profiler_list[DECODING_TIME].reset();
     this->profiler_list[TKOEN_DECODE_TIME].reset();
     if (this->total_tokens >= this->MAX_L){
-        header_print("WARNING", "Max length reached, stopping generation...");
         reason = MAX_LENGTH_REACHED;
-        return result;
     }
-    while (this->total_tokens < this->MAX_L){
+    else if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)){
+        reason = MAX_LENGTH_REACHED;
+    }
+    else while (true){
+        if (this->total_tokens >= this->MAX_L){
+            reason = MAX_LENGTH_REACHED;
+            break;
+        }
         if (is_cancelled()) {
             reason = CANCEL_DETECTED;
             break;
@@ -231,12 +277,19 @@ std::string DeepSeek_r1_8b::generate(chat_meta_info_t& meta_info, int length_lim
     }
     meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
     meta_info.stop_reason = reason;
+    if (reason != EOT_DETECTED) {
+        // Cut short after sampling its last token: no engine has run that one,
+        // so the next prompt has to carry it.
+        token_history.pop_back();
+    }
     if (this->total_tokens >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping generation...");
     }
     std::cout << std::endl;
     header_print("FLM", "Model RAW Output: \n" + result);
-    result = "<think>\n\n" + result;
+    if (!meta_info.continue_final_message) {
+        result = "<think>\n\n" + result;
+    }
     return result;
 }
 

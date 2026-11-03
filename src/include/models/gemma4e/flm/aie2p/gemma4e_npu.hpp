@@ -15,6 +15,8 @@
 #include "tensor_2d.hpp"
 #include "utils/utils.hpp"
 #include "causal_lm.hpp"
+#include "flm_state_api.h"
+#include "utils/hybrid_state.hpp"
 #if USEAVX2
 #include <immintrin.h>  // For AVX intrinsics
 #endif
@@ -135,6 +137,15 @@ public:
     int checkpoint() override;
     int restore() override;
 
+    // ---- saved states (see flm_state_api.h) --------------------------------
+    // Declared here because the engine is also built from source (src/detail/gemma4e_npu), against this header.
+    // A state holds the sliding-window ring of every sliding layer (valid at exactly the length it was read at) and the K/V rows
+    // of the global layers; the layers that share another layer's cache hold no state.
+    std::unique_ptr<hybrid_engine_state> new_state();
+    int read_state(hybrid_engine_state& state, int kv_from);
+    int write_state(const hybrid_engine_state& state);
+    int write_state_kv(const hybrid_engine_state& state);
+
     // parameters for vision preprocessing in Gemma4e
     unsigned int GEMMA4E_VISION_MAX_POSITION_EMBEDDINGS;
     unsigned int GEMMA4E_VISION_NUM_HIDDEN_LAYERS;
@@ -223,4 +234,7 @@ private:
     struct Impl;
     Impl* _impl;
 };
+
+/// \brief the saved-state table of this engine (flm_state_api.h); nullptr if `engine` is not a gemma4e_npu
+extern "C" const flm_state_api* gemma4e_npu_state_api(void* engine);
 

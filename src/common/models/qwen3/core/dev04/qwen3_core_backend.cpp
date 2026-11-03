@@ -4,15 +4,18 @@
 
 #include "core/corelib_model_backend.hpp"
 
+#include <string>
+
 namespace flm::qwen3 {
 
-/// \note A multi-row pass starts only at position 0, so a later prompt re-runs
-///       the conversation with it, as the per-op engine did.
+/// \note corelib steps a pass that starts off a page boundary one row at a
+///       time up to it, so a later prompt re-runs its own page's earlier tokens
+///       with it and runs as whole pages.
 flm::backend::BackendFactory core_factory() {
     return core::Factory({
-        .model = {"qwen3", "Qwen3", kCoreContextLimit, core::Continuation::kFromStart,
+        .model = {"qwen3", "Qwen3", kCoreContextLimit, core::Continuation::kFromPage,
                   core::Rewind::kSeek},
-        .context_rule = "1..4096",
+        .context_rule = "1.." + std::to_string(kCoreContextLimit),
         // <|im_end|>, <|endoftext|>
         .eos_ids = {151645, 151643},
     });

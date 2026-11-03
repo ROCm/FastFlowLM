@@ -1,4 +1,17 @@
 #!/usr/bin/make -f
+
+# Backend selection, read from the environment so CI can build the HRX package
+# from the same tree: FLM_USE_HRX=ON plus FLM_CMAKE_ARGS="-DCMAKE_PREFIX_PATH=<hrx>".
+FLM_USE_HRX ?= OFF
+FLM_CMAKE_ARGS ?=
+
+# The XRT package needs the system XRT runtime; the HRX one bundles libhrx.
+ifeq ($(FLM_USE_HRX),ON)
+FLM_RUNTIME_DEPENDS :=
+else
+FLM_RUNTIME_DEPENDS := libxrt-npu2
+endif
+
 %:
 	dh $@
 
@@ -9,7 +22,7 @@ override_dh_dwz:
 	# dh_dwz is skipped because it causes issues with the binary structure
 
 override_dh_auto_configure:
-	cmake -S src -B build --preset linux-default
+	cmake -S src -B build --preset linux-default -DFLM_USE_HRX=$(FLM_USE_HRX) $(FLM_CMAKE_ARGS)
 
 override_dh_auto_build:
 	cmake --build build
@@ -22,3 +35,6 @@ override_dh_auto_install:
 
 	# Remove include directories
 	rm -rf debian/fastflowlm/opt/fastflowlm/include
+
+override_dh_gencontrol:
+	dh_gencontrol -- -Vflm:RuntimeDepends="$(FLM_RUNTIME_DEPENDS)"

@@ -32,35 +32,21 @@ constexpr std::string_view platform_id(npu_platform platform) {
                                               : std::string_view("aie2p");
 }
 
-/// \brief the generation assumed when nothing has read the device
-/// \note Until the probe in get_device() is real this is not a default but the
-///       whole answer, so it decides what every install can see. It is
-///       dev04 while the corelib path is what is being brought up: that is
-///       the generation corelib's kernels are built for, and an install that
-///       claimed aie2p could not offer them at all.
-/// \note The cost is exact and intended: every entry in model_list.json except
-///       the corelib one names aie2p, so a build that does not link corelib
-///       offers nothing here. That is not a broken install, it is an install
-///       for silicon none of its models were built for, and model_list says so
-///       in one line. Set this back to aie2p to get those 42 models back.
-constexpr npu_platform default_npu_platform() { 
-#if defined(FLM_ENABLE_CORE)
-    return npu_platform::dev04; 
-#else
-    return npu_platform::aie2p; 
-#endif
+/// \brief the generation assumed when nothing identifies one
+constexpr npu_platform default_npu_platform() { return npu_platform::aie2p; }
+
+/// \brief the generation corelib's name for this machine's NPU stands for
+/// \param arch what corelib reports: "AIEM", "AIE2P", or "" for none it knows
+constexpr npu_platform platform_from_corelib_arch(std::string_view arch) {
+    return arch == "AIEM" ? npu_platform::dev04 : default_npu_platform();
 }
 
 /// \brief ask the machine which NPU generation it has
 /// \return the generation of the NPU in this host
-/// \note A stand-in, and deliberately the dumbest one that can be written: the
-///       real probe reads the device and is not part of this tree, so until it
-///       lands this returns default_npu_platform() and consults nothing at all
-///       -- not the environment, and not which kernels were linked. A build
-///       that links corelib is still a build on whatever silicon it is running
-///       on, and an install that offers a model it cannot run is worse than one
-///       that offers nothing. The call sites need no change when the probe
-///       arrives: they already treat the generation as a run-time answer.
+/// \note A build that links corelib asks corelib, which reads the device
+///       itself: FastFlowLM keeps no table of devices. Every dev04 model is a
+///       corelib one, so a build without corelib, or one whose corelib cannot
+///       be loaded, answers default_npu_platform(). Asked once per process.
 npu_platform get_device();
 
 /// \brief parse a catalog platform id

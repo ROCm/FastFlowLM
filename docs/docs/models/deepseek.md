@@ -10,6 +10,7 @@ parent: Models
 - **Type:** Text-to-Text
 - **Think:** Yes
 - **Tool Calling Support:** No  
+- **Prefix cache (server mode):** Yes, saved prompts are reused (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
 - **Base Model:** [deepseek-ai/DeepSeek-R1-Distill-Llama-8B](https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Llama-8B)
 - **Quantization:** Q4_1
 - **Max Context Length:** 128k tokens  
@@ -29,6 +30,7 @@ flm run deepseek-r1:8b
 - **Type:** Text-to-Text
 - **Think:** Yes
 - **Tool Calling Support:** No  
+- **Prefix cache (server mode):** Yes, saved prompts are reused (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
 - **Base Model:** [deepseek-ai/DeepSeek-R1-0528-Qwen3-8B](https://huggingface.co/deepseek-ai/DeepSeek-R1-0528-Qwen3-8B)
 - **Quantization:** Q4_1
 - **Max Context Length:** 64k tokens  

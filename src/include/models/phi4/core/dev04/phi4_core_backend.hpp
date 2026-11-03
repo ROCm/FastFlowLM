@@ -10,7 +10,9 @@
 namespace flm::phi4 {
 
 /// \brief the largest context this backend can hold
-inline constexpr std::uint32_t kCoreContextLimit = 4096;
+/// \note The most corelib pages Phi-4-mini to; past one page it ropes every
+///       position with LongRoPE's long factors.
+inline constexpr std::uint32_t kCoreContextLimit = 131072;
 
 /// \brief the largest number of tokens corelib will decode
 inline constexpr std::uint32_t kCoreDecodeLimit = kCoreContextLimit - 1;

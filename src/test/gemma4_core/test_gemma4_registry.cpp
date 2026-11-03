@@ -123,7 +123,7 @@ void TestTraitsAreReadableWithoutConstructingAnEngine() {
     const auto traits = flm::gemma4::core_traits();
     TEST_REQUIRE(!traits.needs_npu_xclbin);
     TEST_REQUIRE(!traits.supports_preemption);
-    TEST_REQUIRE(traits.max_context_length == 16384);
+    TEST_REQUIRE(traits.max_context_length == flm::gemma4::kCoreContextLimit);
     // Nothing above touched corelib, a GGUF or the filesystem, which is the
     // property that lets the frontend consult it while it is still ASSEMBLING
     // the BackendContext -- before any engine exists to ask.
@@ -140,19 +140,9 @@ void TestTraitsComeBackOutOfTheRegistryUnchanged() {
 
 void TestTheTraitsCeilingIsTheEnginesOwnLimit() {
     // The frontend rejects an over-long context against the TRAITS. The
-    // engine accepts the same ceiling: 1..4096 unpaged, or whole pages up to
-    // kCoreContextLimit.
-    TEST_REQUIRE(flm::gemma4::kCoreContextLimit == 16384);
+    // engine accepts the same ceiling, the most corelib pages Gemma 4 to.
+    TEST_REQUIRE(flm::gemma4::kCoreContextLimit == 131072);
     TEST_REQUIRE(flm::gemma4::kCoreDecodeLimit + 1 == flm::gemma4::kCoreContextLimit);
-}
-
-void TestContextFitsStopsAtTheValidated16384() {
-    TEST_REQUIRE(flm::gemma4::ContextFits(4096));
-    TEST_REQUIRE(flm::gemma4::ContextFits(8192));
-    TEST_REQUIRE(flm::gemma4::ContextFits(16384));
-    TEST_REQUIRE(!flm::gemma4::ContextFits(10000));
-    TEST_REQUIRE(!flm::gemma4::ContextFits(20480));
-    TEST_REQUIRE(!flm::gemma4::ContextFits(131072));
 }
 
 void TestTheFactoryReadsTheShippedPackagesTokensAndContextRule() {
@@ -168,10 +158,15 @@ void TestTheFactoryReadsTheShippedPackagesTokensAndContextRule() {
         TEST_REQUIRE(backend->max_decode_length() == 8192 - 1);
     }
     TEST_REQUIRE(runtime.nothing_created());
-    Request refused(package, 5000);
+    {
+        Request off_page(package, 5000);
+        auto backend = flm::gemma4::core_factory()(off_page.context);
+        TEST_REQUIRE(backend->max_decode_length() == 5000 - 1);
+    }
+    Request refused(package, flm::gemma4::kCoreContextLimit + 1);
     RequireContains(RequireThrows<std::out_of_range>(
                         [&] { (void)flm::gemma4::core_factory()(refused.context); }),
-                    "multiple of 4096");
+                    "1..131072");
     TEST_REQUIRE(runtime.nothing_created());
 }
 
@@ -340,8 +335,7 @@ void TestTripwireOneTheDev04FallbackIsGemma4AndItsFamilyCanLoad() {
     const auto traits = registry.traits(family, kCore);
     const auto default_context =
         info.at("default_context_length").get<std::uint32_t>();
-    TEST_REQUIRE(default_context <= traits.max_context_length);
-    TEST_REQUIRE(flm::gemma4::ContextFits(default_context));
+    TEST_REQUIRE(default_context >= 1 && default_context <= traits.max_context_length);
 }
 
 void TestTripwireOneAnUnresolvableTagStillLoadsRatherThanThrowing() {
@@ -588,7 +582,6 @@ int main() {
     RUN_TEST(TestTraitsAreReadableWithoutConstructingAnEngine);
     RUN_TEST(TestTraitsComeBackOutOfTheRegistryUnchanged);
     RUN_TEST(TestTheTraitsCeilingIsTheEnginesOwnLimit);
-    RUN_TEST(TestContextFitsStopsAtTheValidated16384);
     RUN_TEST(TestTheFactoryReadsTheShippedPackagesTokensAndContextRule);
 
     RUN_TEST(TestFunctionBodyStopsAtTheFunctionItNames);

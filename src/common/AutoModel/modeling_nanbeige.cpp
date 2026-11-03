@@ -32,24 +32,22 @@ void Nanbeige::setup_tokenizer(std::string model_path) {
     auto tokenizer_config = this->_shared_setup_tokenizer(model_path);
 }
 
-std::string Nanbeige::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools) {
+std::string Nanbeige::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools, bool continue_final_message) {
     minja::chat_template_inputs inputs;
-    inputs.add_generation_prompt = true;
     inputs.messages = messages;
     // inputs.tools = tools;
     inputs.extra_context = this->extra_context;
-    return this->chat_tmpl->apply(inputs);
+    return this->_render_chat_template(inputs, continue_final_message);
 }
 
 std::string Nanbeige::nanbeige_filter(int token) {
 
     std::string token_str = this->tokenizer->run_time_decoder(token);
-    // Nanbeige tokenizer encodes hex-unicode form 0x00-0xFF as <0xXX> from 3 to 258
-    if (token >= 3 && token <= 258){
-        char c;
-        sscanf(token_str.c_str(), "<0x%hhx>", &c);
-        token_str.resize(1);
-        token_str[0] = c;
+    // Nanbeige tokenizer encodes hex-unicode form 0x00-0xFF as <0xXX> from 3 to 258;
+    // run_time_decoder() already turns those into the byte, this keeps any it left alone
+    unsigned char c;
+    if (token >= 3 && token <= 258 && token_str.size() == 6 && sscanf(token_str.c_str(), "<0x%hhx>", &c) == 1){
+        token_str.assign(1, static_cast<char>(c));
     }
     return token_str;
 }
@@ -63,7 +61,7 @@ bool Nanbeige::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, st
         return false;
     }
     if (!input.messages.empty()) { // already a formated messages, usually from REST API
-        templated_text = this->apply_chat_template(input.messages, input.tools);
+        templated_text = this->apply_chat_template(input.messages, input.tools, meta_info.continue_final_message);
     }
     else if (!input.prompt.empty()) { // a pure text, usually from the cli
         nlohmann::ordered_json messages;
@@ -116,6 +114,8 @@ std::string Nanbeige::generate(chat_meta_info_t& meta_info, int length_limit, st
     stop_reason_t reason = EOT_DETECTED;
     int last_sampled_token = this->last_token;
     this->token_history.push_back(this->last_token);
+    // the sample insert() took is the reply's first token, and counts toward the limit
+    meta_info.generated_tokens++;
     if (this->is_normal_token(last_sampled_token) && last_sampled_token != -1){
         std::string token_str = this->nanbeige_filter(last_sampled_token);
         result += token_str;
@@ -123,16 +123,24 @@ std::string Nanbeige::generate(chat_meta_info_t& meta_info, int length_limit, st
 
     }
     if (this->is_eos(last_sampled_token)){
+        // Sampled from the prefill, so no engine has run it.
+        this->token_history.pop_back();
+        meta_info.stop_reason = reason;
         return result;
     }
     this->profiler_list[DECODING_TIME].reset();
     this->profiler_list[TKOEN_DECODE_TIME].reset();
     if (this->total_tokens >= this->MAX_L){
-        header_print("WARNING", "Max length reached, stopping generation...");
         reason = MAX_LENGTH_REACHED;
-        return result;
     }
-    while (this->total_tokens < this->MAX_L){
+    else if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)){
+        reason = MAX_LENGTH_REACHED;
+    }
+    else while (true){
+        if (this->total_tokens >= this->MAX_L){
+            reason = MAX_LENGTH_REACHED;
+            break;
+        }
         if (is_cancelled()) {
             reason = CANCEL_DETECTED;
             break;
@@ -167,6 +175,11 @@ std::string Nanbeige::generate(chat_meta_info_t& meta_info, int length_limit, st
     }
     meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
     meta_info.stop_reason = reason;
+    if (reason != EOT_DETECTED) {
+        // Cut short after sampling its last token: no engine has run that one,
+        // so the next prompt has to carry it.
+        this->token_history.pop_back();
+    }
     if (this->total_tokens >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping generation...");
     }

@@ -126,6 +126,10 @@ private:
     void preprocess_image(qwen3_8mtp_host_image_t& image,
                           std::vector<float>& pixel_values);
 
+protected:
+    /// what the speculation log line calls the draft ("MTP draft head", or the DFlash2 drafter of the subclass below)
+    std::string spec_label_ = "MTP draft head";
+
 public:
     Qwen3_8MTP(flm_rt::device* npu_device_inst);
 
@@ -150,7 +154,8 @@ public:
     bool insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled = [] { return false; }) override;
     std::string generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled = [] { return false; }) override;
     std::string generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os = std::cout) override;
-    std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object()) override;
+    std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object(), bool continue_final_message = false) override;
+    bool supports_continue_final_message() const override { return true; }
 
     /// \brief the base profile plus the MTP draft/verify/replay breakdown
     /// \note Overridden because "Decoding time" is one number for a model with
@@ -264,5 +269,18 @@ public:
             }
         }
         return AutoModel::configure_parameter(parameter_name, value);
+    }
+};
+
+
+/************              Qwen3_8DFlash2            **************/
+/// \brief Qwen3.8-27B with the z-lab DFlash2 drafter (qwen3.8-dflash2:27b)
+/// \note The same checkpoint, wrapper and engine as Qwen3_8MTP. The model's draft_model_path (see model_list
+///       base_model) names the draft package; the engine reads it and the DFlash2 drafter replaces the MTP head, so the
+///       wrapper only differs in how it names the draft. The xclbins are the base model's.
+class Qwen3_8DFlash2 : public Qwen3_8MTP {
+public:
+    Qwen3_8DFlash2(flm_rt::device* npu_device_inst) : Qwen3_8MTP(npu_device_inst) {
+        this->spec_label_ = "DFlash2 draft";
     }
 };

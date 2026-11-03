@@ -172,6 +172,26 @@ struct gemma4e_attn_block_prefill_context {
 
     /// caches the attention kernels read: contiguous, and rebuilt every layer
     buffer<bf16> kv_cache_sliding_prefill;
+    /// @brief rows of the two prefill scratch caches that an earlier call wrote (see zero_scratch)
+    size_t global_scratch_rows = 0;
+    size_t sliding_scratch_rows = 0;
+    /// @brief The scratch caches are rebuilt from the live caches on every call, but what an earlier call left in the rows
+    ///        outside what it writes is not harmless to the kernels: start every prefill from zeros, so a prefill continued
+    ///        live and one that follows a restored state see the same scratch.
+    void zero_scratch() {
+        if (global_scratch_rows > 0) {
+            memset(kv_cache_global_prefill.data(), 0, global_scratch_rows * desc->DK * sizeof(bf16));
+            memset(kv_cache_global_prefill.data() + (size_t)MAX_L * desc->DK, 0, global_scratch_rows * desc->DV * sizeof(bf16));
+            kv_cache_global_prefill.sync_to_device();
+            global_scratch_rows = 0;
+        }
+        if (sliding_scratch_rows > 0) {
+            memset(kv_cache_sliding_prefill.data(), 0, sliding_scratch_rows * desc->SWA_DK * sizeof(bf16));
+            memset(kv_cache_sliding_prefill.data() + (size_t)MAX_L * desc->SWA_DK, 0, sliding_scratch_rows * desc->SWA_DV * sizeof(bf16));
+            kv_cache_sliding_prefill.sync_to_device();
+            sliding_scratch_rows = 0;
+        }
+    }
     buffer<bf16> kv_cache_global_prefill;
 
     npu_app_manager* mha_app_manager;
@@ -209,6 +229,8 @@ struct gemma4e_attn_block_prefill_context {
         this->kv_cache_global_prefill.memset((bf16)0);
         this->kv_cache_sliding_prefill.sync_to_device();
         this->kv_cache_global_prefill.sync_to_device();
+        this->global_scratch_rows = 0; // zeroed just now
+        this->sliding_scratch_rows = 0;
         // the cached sequences address these buffers, so force a regeneration
         this->L_padded_old = -1;
         this->L_begin_chunked_old = -1;
@@ -467,6 +489,8 @@ struct gemma4e_prefill_context {
     }
 
     void set_max_length(uint32_t MAX_L) { this->attn_block->set_max_length(MAX_L); }
+
+    void zero_scratch() { this->attn_block->zero_scratch(); }
 
     /// @brief Computes the row geometry of a prefill call and readies every block.
     /// @param L_in     number of tokens to prefill

@@ -17,6 +17,7 @@
 #include "tensor_2d.hpp"
 #include "utils/utils.hpp"
 #include "causal_lm.hpp"
+#include "flm_state_api.h"
 #if USEAVX2
 #include <immintrin.h>  // For AVX intrinsics
 #endif
@@ -354,3 +355,6 @@ private:
     struct Impl;
     Impl* _impl;
 };
+
+/// \brief the saved-state table of this engine (flm_state_api.h); nullptr if `engine` is not a qwen3_8mtp_npu
+extern "C" const flm_state_api* qwen3_8mtp_state_api(void* engine);

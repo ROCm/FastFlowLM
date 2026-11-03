@@ -503,6 +503,7 @@ list(APPEND FLM_ENGINE_LINK_LIBS qwen3vl_flash)
 list(APPEND FLM_ENGINE_LINK_LIBS
     qwen3_5vl_npu
     minicpm_v_4_7_npu
+    minicpm_v_4_7_moe_npu
     qwen3_5_omni_npu
     qwen3_6_moe_npu
     qwen3_8mtp_npu
@@ -512,6 +513,8 @@ list(APPEND FLM_ENGINE_LINK_LIBS
 )
 
 list(APPEND FLM_ENGINE_LINK_LIBS gemma4e_flash)
+list(APPEND FLM_ENGINE_LINK_LIBS gemma4e_dflash)
+list(APPEND FLM_ENGINE_LINK_LIBS gemma4e_dflash_flash)
 
 list(APPEND FLM_ENGINE_LINK_LIBS
     gemma4_12b_npu
@@ -519,6 +522,7 @@ list(APPEND FLM_ENGINE_LINK_LIBS
     whisper_npu
     gemma_embedding
     lfm2_npu
+    lfm3_npu
     phi4_npu
     nanbeige_npu
     hunyuan_npu
@@ -599,6 +603,17 @@ if(FLM_USE_HRX)
     if(NOT WIN32)
         set_target_properties(flm PROPERTIES
             BUILD_RPATH "$<TARGET_FILE_DIR:hrx::hrx>;${FLM_ENGINE_LIB_DIR}")
+        # The HRX package ships its own libtinfo (and libedit, curl, ...) next to
+        # libhrx, and the linker looks in BUILD_RPATH for the dependencies of
+        # shared libraries. The system libedit linked below for non-portable
+        # builds would then resolve its libtinfo to the HRX copy, which lacks the
+        # NCURSES6_TINFO symbol versions, and the link fails. -rpath-link is
+        # searched first and only at link time, so the system copies win and the
+        # installed RPATH is unchanged.
+        if(NOT FLM_PORTABLE_BUILD AND CMAKE_LIBRARY_ARCHITECTURE)
+            target_link_options(flm PRIVATE
+                "LINKER:-rpath-link,/usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}")
+        endif()
     endif()
 else()
     # XRT: link xrt_coreutil (+ aiebu for the ELF assembler used by npu_utils_xrt).

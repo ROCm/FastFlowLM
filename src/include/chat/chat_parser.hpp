@@ -26,6 +26,19 @@ struct chat_parse_options {
     const nlohmann::ordered_json* tools = nullptr;
     /// \brief extract tool calls; when false the tool markup stays in the content
     bool parse_tool_calls = true;
+    /// \brief keep the whitespace around the output's first text, as it was written
+    /// \note For continue_final_message: the output continues text the client
+    ///       already holds, so its whitespace (" yes" after "The answer is:", or a
+    ///       lone "\n") belongs to the answer rather than to the layout. Trailing
+    ///       whitespace is held back until the text is final, like any other.
+    bool keep_whitespace = false;
+    /// \brief the output may close a reasoning block the prompt never opened
+    /// \note For continue_final_message on a model that reasons first: such a
+    ///       model reads the continued message as its reasoning, so a reasoning
+    ///       end it writes before any reasoning start closes that, and the text
+    ///       before it is reasoning (as vLLM's DeepSeek-R1 parser has it). Until
+    ///       either marker shows, a partial parse yields nothing.
+    bool reasoning_may_close = false;
 };
 
 /// \brief Parse the assistant output

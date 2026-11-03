@@ -1,0 +1,37 @@
+name: Remove package
+description: >
+  Undoes what install-package installed, so the next job on this runner starts
+  clean. Unpacked packages live in the workspace and need nothing. Run it with
+  if: always().
+
+inputs:
+  kind:
+    description: portable, deb or msi.
+    required: true
+  mode:
+    description: The mode install-package reported.
+    required: true
+  path:
+    description: Directory the package artifact was downloaded to (for the MSI).
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Remove .deb
+      if: runner.os == 'Linux' && inputs.kind == 'deb' && inputs.mode == 'installed'
+      shell: bash
+      run: sudo -n apt-get remove -y fastflowlm
+
+    - name: Remove MSI
+      if: runner.os == 'Windows' && inputs.kind == 'msi' && inputs.mode == 'installed'
+      shell: powershell
+      working-directory: ${{ github.workspace }}
+      env:
+        PKG_DIR: ${{ inputs.path }}
+      run: |
+        $ErrorActionPreference = "Stop"
+        $msi = (Get-ChildItem $env:PKG_DIR -Filter *.msi | Select-Object -First 1).FullName
+        $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @('/x', "`"$msi`"", '/qn')
+        if ($p.ExitCode -ne 0) { throw "msiexec /x failed with exit code $($p.ExitCode)" }

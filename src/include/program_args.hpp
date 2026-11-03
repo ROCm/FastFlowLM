@@ -24,6 +24,7 @@ struct program_args_t {
     int prefill_chunk_len = -1; // let model decide
     int prefix_cache_mb = -1;   // host memory (MiB) for saved prompt snapshots; -1 = the model's default
     int prefix_slots = -1;      // how many prompt snapshots to keep; -1 = the model's default, 0 = off
+    int prefix_min_gain = -1;   // tokens a new end snapshot must add over a saved one covering its prompt; -1 = default (128), 0 = no minimum
 
     // handling input file
     std::string input_file_name = "";

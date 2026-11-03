@@ -20,6 +20,11 @@ struct BackendSpec {
     std::function<bool(std::uint32_t)> context_fits;
     /// \brief the contexts allowed, as a refusal states them, e.g. "1..4096"
     std::string context_rule;
+    /// \brief the longest context the model is known to answer correctly at,
+    ///        0 for its whole range; a longer one loads with a warning
+    std::uint32_t reliable_context = 0;
+    /// \brief what goes wrong past reliable_context, for that warning
+    std::string unreliable_reason;
     /// \brief the ids generation stops on; empty reads them from the package:
     ///        tokenizer_config.json's eos_token, then config.json's eos_token_id
     std::vector<int> eos_ids;

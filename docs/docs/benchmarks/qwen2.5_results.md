@@ -32,8 +32,8 @@ AMD Ryzen™ AI 7 350 (Kraken Point) with 32 GB DRAM; performance is comparable 
 
 | **Model**        | **HW**       | **1k** | **2k** | **4k** | **8k** | **16k** | **32k** |
 |------------------|--------------------|--------:|--------:|--------:|--------:|---------:|---------:|
-| **Qwen2.5-3B-Instruct**  | NPU (FLM)    | 23.5	| 22.5	| 19.8	| 16.8	| 12.5	| 8.4|
-| **Qwen2.5-VL-3B-Instruct**  | NPU (FLM)    | 23.5	| 22.5	| 19.8	| 16.8	| 12.5	| 8.4|
+| **Qwen2.5-3B-Instruct**  | XDNA2    | 23.5	| 22.5	| 19.8	| 16.8	| 12.5	| 8.4|
+| **Qwen2.5-VL-3B-Instruct**  | XDNA2    | 23.5	| 22.5	| 19.8	| 16.8	| 12.5	| 8.4|
 
 ---
 
@@ -41,8 +41,8 @@ AMD Ryzen™ AI 7 350 (Kraken Point) with 32 GB DRAM; performance is comparable 
 
 | **Model**        | **HW**       | **1k** | **2k** | **4k** | **8k** | **16k** | **32k** |
 |------------------|--------------------|--------:|--------:|--------:|--------:|---------:|---------:|
-| **Qwen2.5-3B-Instruct**  | NPU (FLM)    | 660	| 809	| 899	| 891	| 741	| 532 | 
-| **Qwen2.5-VL-3B-Instruct**  | NPU (FLM)    | 660	| 809	| 899	| 891	| 741	| 532 | 
+| **Qwen2.5-3B-Instruct**  | XDNA2    | 660	| 809	| 899	| 891	| 741	| 532 | 
+| **Qwen2.5-VL-3B-Instruct**  | XDNA2    | 660	| 809	| 899	| 891	| 741	| 532 | 
 
 ---
 
@@ -54,13 +54,13 @@ Prefill time-to-first-token (TTFT) for Qwen2.5-VL-3B-Instruct on NPU (FastFlowLM
 
 | Model        | HW  | 720p (1280×720) | 1080p (1920×1080) | 
 |--------------|-----------|----------------:|------------------:|
-| Qwen2.5-VL-3B-Instruct  | NPU (FLM) |            4.3 |               7.9 |
+| Qwen2.5-VL-3B-Instruct  | XDNA2 |            4.3 |               7.9 |
 
 
 **High Resolution Images:**
 
 | Model        | HW  | 2K (2560×1440) | 4K (3840×2160) |
 |--------------|-----------|---------------:|---------------:|
-| Qwen2.5-VL-3B-Instruct  | NPU (FLM) |           13.3 |             36.4 |
+| Qwen2.5-VL-3B-Instruct  | XDNA2 |           13.3 |             36.4 |
 
 > This test uses a short prompt: “Describe this image.”

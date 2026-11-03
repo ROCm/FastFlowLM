@@ -10,6 +10,7 @@ parent: Models
 - **Type:** Text-to-Text
 - **Think:** Toggleable
 - **Tool Calling Support:** No  
+- **Prefix cache (server mode):** Yes, saved prompts are reused (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
 - **Base Model:** [Qwen/Qwen3-0.6B](https://huggingface.co/Qwen/Qwen3-0.6B)
 - **Quantization:** Q4_1
 - **Max Context Length:** 32k tokens  
@@ -34,6 +35,7 @@ flm run qwen3:0.6b
 - **Type:** Text-to-Text
 - **Think:** Toggleable
 - **Tool Calling Support:** No  
+- **Prefix cache (server mode):** Yes, saved prompts are reused (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
 - **Base Model:** [Qwen/Qwen3-1.7B](https://huggingface.co/Qwen/Qwen3-1.7B)
 - **Quantization:** Q4_1
 - **Max Context Length:** 32k tokens  
@@ -58,6 +60,7 @@ flm run qwen3:1.7b
 - **Type:** Text-to-Text
 - **Think:** Toggleable
 - **Tool Calling Support:** Yes  
+- **Prefix cache (server mode):** Yes, saved prompts are reused (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
 - **Base Model:** [Qwen/Qwen3-4B](https://huggingface.co/Qwen/Qwen3-4B)
 - **Quantization:** Q4_1
 - **Max Context Length:** 32k tokens  
@@ -82,6 +85,7 @@ flm run qwen3:4b
 - **Type:** Text-to-Text
 - **Think:** Toggleable
 - **Tool Calling Support:** Yes  
+- **Prefix cache (server mode):** Yes, saved prompts are reused (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
 - **Base Model:** [Qwen/Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B)
 - **Quantization:** Q4_1
 - **Max Context Length:** 32k tokens  
@@ -105,25 +109,36 @@ flm run qwen3:8b
 
 - **Tags:** `qwen3-core:0.6b`, `qwen3-core:1.7b`, `qwen3-core:4b`, `qwen3-core:8b` — their own tags, beside the NPU2 `qwen3:*` entries. `supported_platforms` is `dev04`, and the `-core` suffix is what asks for corelib's kernels.
 - **Backend:** `core` — one engine for all four sizes. The GGUF's own metadata selects the size and is cross-checked against it.
-- **Source format:** GGUF `Q8_0`, read directly. Every weight is requantized to **group 64** while it is packed, except the 0.6B lm_head, which packs at **group 32**.
-- **Usable generation window:** 4095 tokens, prompt plus output. Over-capacity requests are rejected with HTTP 400 before any work reaches the device.
-- **Availability:** developer build against corelib 0.33.1 — see [Phi-4 on the core backend](phi.md).
+- **Source format:** GGUF, read directly by corelib. With a Hugging Face token that can read AMD's private repositories (`HF_TOKEN`, or `hf auth login`), `flm pull` fetches AMD's 4-bit file, which packs exactly as it is; without one it falls back to the public GGUF. A public `Q8_0` is requantized to 4-bit groups on every load, which is lossy.
+- **Context:** each tag's limit is the most corelib runs that model at; the default is lower where corelib or our own runs found answers going wrong past it. Over-capacity requests are rejected with HTTP 400 before any work reaches the device.
+- **Availability:** developer build against corelib 0.53.0 — see [Phi-4 on the core backend](phi.md).
 
-The same corelib path also runs `gemma4-it-core:e2b` and `gemma4-it-core:e4b` (text only), `qwen3.5-core:9b` and `qwen3.6-moe-core:35b-a3b` (text only). Qwen3 stays at 4096; the other three go further.
+The same corelib path runs every `-core` tag:
 
-FastFlowLM sends a long prompt to these models in chunks of `max_prefill_len` (4096) tokens that end on multiples of 4096 counted from the start of the conversation, not from the start of the turn. A later turn's prompt therefore starts with at most one chunk inside a 4096-token page, and every chunk after that starts on a page boundary, which is where corelib runs a whole page as one pass.
+| Tag | Default file | Public fallback | Context limit | Default context |
+|---|---|---|---|---|
+| `qwen3-core:0.6b` | unsloth `Q8_0`, refit to group 64 (lm_head 32) | — | 32768 | 32768 |
+| `qwen3-core:1.7b` / `4b` / `8b` | AMD `Q4_G128` | unsloth `Q8_0` | 32768 | 32768 |
+| `qwen3.5-core:4b` / `9b` | AMD `Q4_G128` | unsloth `Q8_0` | 262144 | 32768 |
+| `qwen3.6-moe-core:35b-a3b` | AMD `Q4_G32` | unsloth `Q8_0` | 262144 | 32768 |
+| `qwen3.8-core:27b` | AMD `Q4_G128`, on the NPU | unsloth `Q4_0`, on the GPU | 262144 | 32768 |
+| `gemma4-it-core:e2b` / `e4b` | AMD `Q4_G32` | unsloth `Q8_0` | 131072 | 65536 |
+| `phi4-mini-it-core:4b` | AMD `Q4_G128` | unsloth `Q8_0` | 131072 | 131072 |
+| `llama3.2-core:1b` / `3b`, `llama3.1-core:8b` | `Q8_0`, refit to group 64 | — | 131072 | 131072 |
 
-- **`qwen3.5-core:9b` — up to 32768 tokens.** The default is 4096; raise it with `--ctx-len` (`-c`). Past 4096 the context is rounded up to whole 4096-token pages. Long contexts have three costs:
-    - **Memory, up front.** The KV cache is allocated when the model is created, at the full capacity: 32 KiB per token (8 attention layers × 4 KV heads × 256 × BF16, for K and V), so 32768 tokens is 1 GiB on top of the weights.
-    - **Prompts run at decode speed.** corelib's Qwen3.5 has no batched prefill: every prompt token is one decode step, so a long prompt takes as long as generating that many tokens.
-    - **Accuracy past the first page.** Attention past 4096 tokens runs on a paged decode kernel that drifts a little further from the reference with each page it reads (corelib's `PAGED_DECODE_PAGE_DRIFT`). corelib reports Qwen3.5-4B and 9B still recalling a fact from position 0 at 31,983 tokens.
-- **`qwen3.6-moe-core:35b-a3b` — up to 131072 tokens**, the most corelib has verified on the NPU (the model's own limit is 262144; corelib refuses more). The default is 4096; raise it with `--ctx-len` (`-c`). Long contexts have three costs:
-    - **Memory, up front.** The KV cache is allocated when the model is created, at the full capacity you ask for (rounded up to whole 4096-token pages), whether or not a conversation ever fills it: about 20 KiB per token (10 attention layers × 2 KV heads × 256 × BF16, for K and V), so 131072 tokens is about 2.5 GiB on top of the weights.
-    - **Long prompts run in passes of up to a page.** The first 4096 tokens from position 0 are one pass, and so is each later chunk that starts on a page boundary, padded to the page; past the second page these passes are slightly less accurate (corelib's `PAGED_PREFILL_DEEP_PAGES`, which corelib measured at perplexity 13.17 against 13.18 exact at 12,500 tokens). A chunk starting inside a page runs as passes up to the next page boundary, padded to at least 256 rows where that fits, also on the NPU; only a pass in a page's last 255 positions is padded to 128 rows and runs its attention on the CPU. corelib steps a few short remainders one token at a time instead: a pass of fewer than 5 tokens, a 128-row pass with only a few live tokens, and a pass starting in the last 127 positions of a page.
-    - **Checkpoints take host memory.** A checkpoint (what lets a conversation rewind without replaying) copies the KV cache into host memory, in whole 4096-token pages up to the current position: about 80 MiB per filled page, so up to about 2.5 GiB at a full 131072-token context.
-- **`gemma4-it-core:e2b` / `gemma4-it-core:e4b` — up to 16384 tokens**, the length corelib has validated paged Gemma 4 to, and never past the GGUF's own `gemma4.context_length`. The default is 16384. Up to 4096 any length works; above 4096 the context must be a multiple of 4096. The KV cache for the whole context is allocated up front, when the model loads.
+Every model's attention is paged: corelib keeps the KV cache in 4096-token pages and grows it a page at a time, so a large context costs memory only as a conversation fills it. Raise the context with `--ctx-len` (`-c`), up to the limit.
 
-Qwen3, Qwen3.5, Qwen3.6, Gemma 4 and Phi-4 run as corelib's own models, which pack their weights on every load: there is no packed-weight cache beside the GGUF. A `<gguf name>.core-weights.bin` / `.json` pair left there by an earlier build is no longer read and can be deleted.
+FastFlowLM sends a long prompt in chunks of `max_prefill_len` (4096) tokens that end on multiples of 4096 counted from the start of the conversation, not from the start of the turn, so every chunk after a turn's first starts on a page boundary, where corelib runs a whole page as one pass. Llama, Qwen3, Phi-4-mini and Gemma 4 run a later turn together with the earlier tokens of the page it starts in. Qwen3.5, Qwen3.6 and Qwen3.8 carry recurrent state and continue from where they are; going back to the last checkpoint restores a snapshot, which copies the filled KV pages into host memory, and going back anywhere else replays the conversation.
+
+Known limits, each corelib's (its `docs/known-problems.md` names them):
+
+- **Qwen3.6 past 32768.** Paged attention can return garbage: a passkey asked for after about 48k tokens came back as `!` repeated (on an AIE4 test machine). A context past 32768 still loads, and says so.
+- **Qwen3.8 on long prompts.** A long prompt can come back as `!` repeated, run to run and from corelib's own runner too: on an AIE4 test machine a passkey was answered at 6k and 14k tokens and garbled at 10k and 28k. Prefill passes shorter than a page past position 0 run their attention on the CPU (`PAGED_PREFILL_SHORT_CHUNK`).
+- **Qwen3.5 and Qwen3.8 decode** drift from the reference the more pages it reads (`PAGED_DECODE_PAGE_DRIFT`).
+- **Gemma 4 past position 65535** (`PAGED_ATTENTION_POSITION_WRAP`).
+- **Llama on a very long, repetitive prompt.** A passkey in about 96k tokens of one repeated sentence came back as `!` repeated, from corelib's own runner too; Phi-4-mini answered the same prompt.
+- **A 4096-token prefill pass can fail to complete** (`PAGED_PREFILL_PREEMPTION_TIMEOUT`), more often while another process uses the NPU. corelib fails only that call, so FastFlowLM resets the session and runs the conversation again from the start, once; a second failure needs an unload and reload.
+Every core model runs as corelib's own model, which packs its weights on every load: there is no packed-weight cache beside the GGUF. A `<gguf name>.core-weights.bin` / `.json` pair left there by an earlier build is no longer read and can be deleted.
 
 ```powershell
 flm pull qwen3-core:4b
@@ -137,6 +152,7 @@ flm run  qwen3-core:4b
 - **Type:** Text-to-Text
 - **Think:** Yes
 - **Tool Calling Support:** Yes  
+- **Prefix cache (server mode):** Yes, saved prompts are reused (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
 - **Base Model:** [Qwen/Qwen3-4B-Thinking-2507](https://huggingface.co/Qwen/Qwen3-4B-Thinking-2507)
 - **Quantization:** Q4_1
 - **Max Context Length:** 256k tokens  
@@ -156,6 +172,7 @@ flm run qwen3-tk:4b
 - **Type:** Text-to-Text
 - **Think:** No
 - **Tool Calling Support:** Yes  
+- **Prefix cache (server mode):** Yes, saved prompts are reused (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
 - **Base Model:** [Qwen/Qwen3-4B-Instruct-2507](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507)
 - **Quantization:** Q4_1
 - **Max Context Length:** 256k tokens  
@@ -175,6 +192,7 @@ flm run qwen3-it:4b
 - **Type:** Image-Text-to-Text
 - **Think:** No
 - **Tool Calling Support:** Yes  
+- **Prefix cache (server mode):** Yes, prompts with pictures included (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
 - **Base Model:** [Qwen/Qwen3-VL-4B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct)
 - **Quantization:** Q4_1
 - **Max Context Length:** 256k tokens  
@@ -254,6 +272,7 @@ flm run qwen3vl-flash:4b
 - **Type:** Text-to-Text
 - **Think:** No
 - **Tool Calling Support:** No  
+- **Prefix cache (server mode):** Yes, saved prompts are reused (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
 - **Base Model:** [Qwen/Qwen2.5-3B-Instruct](https://huggingface.co/Qwen/Qwen2.5-3B-Instruct)
 - **Quantization:** Q4_1
 - **Max Context Length:** 32k tokens  
@@ -273,6 +292,7 @@ flm run qwen2.5-it:3b
 - **Type:** Image-Text-to-Text
 - **Think:** No
 - **Tool Calling Support:** No  
+- **Prefix cache (server mode):** Yes, prompts with pictures included (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
 - **Base Model:** [Qwen/Qwen2.5-VL-3B-Instruct](https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct)
 - **Quantization:** Q4_1
 - **Max Context Length:** 256k tokens  
@@ -367,6 +387,7 @@ The `-r` option determines the image's height:
 - Image understanding adapts to image size. Image TTFT can range from under 1 second to ~200 seconds depending on resolution. Use lower-resolution images (720p or below) unless high resolution is required (e.g. OCR on small text).
 - Video understanding is not supported yet.
 - In server mode this model reuses the prompts it has already read (system prompt, tools, earlier turns), so agents such as Hermes wait for new text only. See [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/).
+- Host memory: the token embeddings are read straight from `model.q4nx` through a read-only memory map, one row per token, instead of being unpacked into a 485 MiB table. This saves about 0.5 GiB of RAM (private memory at 4k context: about 0.8 GiB before, 0.3 GiB now) with the same speed and the same output. Only the rows of tokens that were actually seen stay in memory, and the OS can drop them under memory pressure; if it does, a prompt full of new tokens takes about a second longer to start. On Windows, the loaded model's `model.q4nx` cannot be replaced or deleted, so stop the server before `flm remove` or `flm pull` of this model. This applies to the Qwen3.5 0.8B, 2B and 4B only; the 9B and the other model families still keep their embedding tables in RAM.
 
 ---
 
@@ -419,6 +440,7 @@ The `-r` option determines the image's height:
 - Image understanding adapts to image size. Image TTFT can range from under 1 second to ~200 seconds depending on resolution. Use lower-resolution images (720p or below) unless high resolution is required (e.g. OCR on small text).
 - Video understanding is not supported yet.
 - In server mode this model reuses the prompts it has already read (system prompt, tools, earlier turns), so agents such as Hermes wait for new text only. See [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/).
+- Host memory: the token embeddings are read straight from `model.q4nx` through a read-only memory map, one row per token, instead of being unpacked into a 970 MiB table. This saves about 1 GiB of RAM (private memory at 4k context: about 1.2 GiB before, 0.3 GiB now) with the same speed and the same output. Only the rows of tokens that were actually seen stay in memory, and the OS can drop them under memory pressure; if it does, a prompt full of new tokens takes about a second longer to start. On Windows, the loaded model's `model.q4nx` cannot be replaced or deleted, so stop the server before `flm remove` or `flm pull` of this model. This applies to the Qwen3.5 0.8B, 2B and 4B only; the 9B and the other model families still keep their embedding tables in RAM.
 
 ---
 
@@ -471,6 +493,7 @@ The `-r` option determines the image's height:
 - Image understanding adapts to image size. Image TTFT can range from under 1 second to ~200 seconds depending on resolution. Use lower-resolution images (720p or below) unless high resolution is required (e.g. OCR on small text).
 - Video understanding is not supported yet.
 - In server mode this model reuses the prompts it has already read (system prompt, tools, earlier turns), so agents such as Hermes wait for new text only. See [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/).
+- Host memory: the token embeddings are read straight from `model.q4nx` through a read-only memory map, one row per token, instead of being unpacked into a 1.2 GiB table. This saves about 1.2 GiB of RAM (private memory at 4k context: about 1.8 GiB before, 0.6 GiB now) with the same speed and the same output. Only the rows of tokens that were actually seen stay in memory, and the OS can drop them under memory pressure; if it does, a prompt full of new tokens takes about a second longer to start. On Windows, the loaded model's `model.q4nx` cannot be replaced or deleted, so stop the server before `flm remove` or `flm pull` of this model. This applies to the Qwen3.5 0.8B, 2B and 4B only; the 9B and the other model families still keep their embedding tables in RAM.
 
 ---
 
@@ -583,6 +606,7 @@ The `-r` option determines the image's height:
 - **Type:** Image-Text-to-Text
 - **Think:** Yes
 - **Tool Calling Support:** Yes  
+- **Prefix cache (server mode):** Partly: the shared system prompt of text conversations is saved; a conversation that keeps going uses the older single-checkpoint reuse (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
 - **Speculative Decoding:** Yes — built-in MTP draft head (see note below)
 - **Base Model:** [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B)
 - **Quantization:** Q4_K
@@ -648,3 +672,48 @@ What that means in practice:
 - Optimal sampling parameters for generation vary depending on the task. Check the [Qwen3.8-27B model card](https://huggingface.co/Qwen/Qwen3.8-27B#api-usage) for details.
 - Image understanding adapts to image size. Image TTFT can range from under 1 second to ~200 seconds depending on resolution. Use lower-resolution images (720p or below) unless high resolution is required (e.g. OCR on small text).
 - Video understanding is not supported yet.
+
+---
+
+## 🧩 Model Card: [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) with the [DFlash 2 draft](https://huggingface.co/z-lab/Qwen3.8-27B-DFlash2)
+
+- **Type:** Image-Text-to-Text, with speculative decoding
+- **What it is:** the same model as [`qwen3.8-mtp:27b`](#-model-card-qwen38-27b), decoded with z-lab's DFlash 2 draft instead of the built-in MTP head. The draft reads features of five layers of the main model, writes a block of 7 tokens in one pass and picks one coherent path through its top candidates; the NPU checks all 7 in one pass, with the same kernels as `qwen3.8-mtp:27b`
+- **Speed:** 1.16x the decode speed of `qwen3.8-mtp:27b` on average over ten mixed prompts, from 0.9x to 1.5x per prompt (code and structured answers gain most, short or unpredictable answers least; [benchmarks](https://fastflowlm.com/docs/benchmarks/qwen3.8_results/))
+- **Think / Tool Calling / Vision / Prefix cache:** as `qwen3.8-mtp:27b`
+- **Packages:** two downloads. The main weights are the `qwen3.8-mtp:27b` package (`Qwen3.8-27B-NPU2`, about 18 GB); the draft is [`Qwen3.8-27B-DFlash2-NPU2`](https://huggingface.co/FastFlowLM/Qwen3.8-27B-DFlash2-NPU2) (1.4 GB). `flm pull qwen3.8-dflash2:27b` downloads whichever is missing
+- **Draft:** 5 layers, 2B parameters, Q4_K (the feature projection and the candidate tables stay BF16 where they are read row by row)
+- **Max Context Length:** 8k tokens
+- **Default Context Length:** 4k tokens ([change default](https://fastflowlm.com/docs/instructions/cli/#-change-default-context-length-max))
+- **License:** the draft is [Apache-2.0](https://huggingface.co/z-lab/Qwen3.8-27B-DFlash2); the main model's license applies to the main weights
+- **FastFlowLM:** 1.0.12 or later
+
+▶️ Run with FastFlowLM in PowerShell:
+
+```shell
+flm run qwen3.8-dflash2:27b
+```
+
+▶️ Serve with FastFlowLM in PowerShell:
+
+```shell
+flm serve qwen3.8-dflash2:27b
+```
+
+🧪 **Smoke test** (a predictable answer, long enough for many speculative steps):
+
+```shell
+flm run qwen3.8-dflash2:27b
+>>> Write a Python function that checks whether a number is prime.
+```
+
+Expected: a correct function with a docstring, decoding noticeably faster than with `qwen3.8-mtp:27b` (most of the draft is accepted on code).
+
+📝 **Note:**
+
+- Every step drafts 7 tokens and checks them together; the model keeps the longest prefix it agrees with plus one token of its own. As with `qwen3.8-mtp:27b`, drafted tokens are compared with the model's own most likely token and skip the sampler (see the ⚠️ note in [Request Parameters](https://fastflowlm.com/docs/instructions/server/request_parameters/)).
+- Greedy output can differ from `qwen3.8-mtp:27b` at near-ties: the NPU checks 8 positions in one pass, which rounds differently from decoding one token at a time, and the two drafts propose different blocks.
+- The draft sees the last 2048 tokens of the conversation. After a saved prompt is reused (server mode prefix cache) it starts without the reused part and fills up again from the tokens that follow, so the first steps accept less.
+- `FLM_DFLASH=0` in the environment loads the MTP head instead: the tag then behaves like `qwen3.8-mtp:27b`.
+- Image input, the 8k context and the image-resize options work as on `qwen3.8-mtp:27b` (`-r`).
+- `flm remove qwen3.8-dflash2:27b` removes only the draft package; `qwen3.8-mtp:27b` stays installed.

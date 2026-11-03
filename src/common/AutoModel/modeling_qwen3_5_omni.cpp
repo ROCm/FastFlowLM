@@ -154,13 +154,12 @@ void Qwen3_5_Omni::load_model(std::string model_path, json model_info, int defau
 
 }
 
-std::string Qwen3_5_Omni::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools) {
+std::string Qwen3_5_Omni::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools, bool continue_final_message) {
     minja::chat_template_inputs inputs;
-    inputs.add_generation_prompt = true;
     inputs.messages = messages;
     inputs.extra_context = this->extra_context;
     if (!tools.empty()) inputs.tools = tools;
-    return this->chat_tmpl->apply(inputs);
+    return this->_render_chat_template(inputs, continue_final_message);
 }
 
 bool Qwen3_5_Omni::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
@@ -261,7 +260,7 @@ bool Qwen3_5_Omni::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input
             qwen_messages.push_back(new_item);
         }
         header_print("FLM", "Total images: " << total_images);
-        templated_text = this->apply_chat_template(qwen_messages, input.tools);
+        templated_text = this->apply_chat_template(qwen_messages, input.tools, meta_info.continue_final_message);
     }
     else { // CLI Processing
         // ---- image preprocessing ----
@@ -474,21 +473,24 @@ bool Qwen3_5_Omni::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input
     }
 
     size_t n = tokens.size();
-    tokens.resize(n - 4);
+    // a continued message keeps all its tokens: they are the client's text, not the generation prompt
+    tokens.resize(n - (meta_info.continue_final_message ? 0 : 4));
     this->_begin_turn(meta_info, tokens);
 
     // prefix check for tokens and token history to see if we can skip some tokens
     const size_t idx = this->token_history.size();
     size_t skip_count = 0;
     for (size_t i = 0; i < idx; i++) {
-        if (tokens[i] == this->token_history[i]) {
+        // a continued prompt can be a strict prefix of the history (a retry with less text)
+        if (i < tokens.size() && tokens[i] == this->token_history[i]) {
             skip_count++;
         } 
         else {
             break;
         }
     }
-    if (skip_count != idx) {
+    // the whole prompt cached leaves no last token to sample from: read it in again (see _shared_insert)
+    if (skip_count != idx || (skip_count >= tokens.size() && !tokens.empty())) {
         clear_context();
         skip_count = 0;
     }
@@ -585,8 +587,27 @@ std::string Qwen3_5_Omni::generate(chat_meta_info_t& meta_info, int length_limit
     int sampled_token;
     int last_sampled_token;
 
+    if (meta_info.continue_final_message) {
+        // the prompt ends inside the client's message (insert() trimmed nothing):
+        // no empty think block, the output starts from insert()'s sample
+        last_sampled_token = this->last_token;
+        this->token_history.push_back(last_sampled_token);
+        // the sample insert() took is the reply's first token, and counts toward the limit
+        meta_info.generated_tokens++;
+        if (this->is_normal_token(last_sampled_token)) {
+            token_str = this->tokenizer->run_time_decoder(last_sampled_token);
+            result += token_str;
+            os << token_str << std::flush;
+        }
+        if (this->is_eos(last_sampled_token)) {
+            // sampled from the prefill, so the engine never ran it
+            this->token_history.pop_back();
+            meta_info.stop_reason = reason;
+            return result;
+        }
+    }
     // manually decoding <think> \n <\think> \n
-    {
+    else {
         this->token_history.push_back(think_start_id);
         // fed for the KV cache only, it never reaches the output
         this->_skip_insert_sample(meta_info);
@@ -614,20 +635,33 @@ std::string Qwen3_5_Omni::generate(chat_meta_info_t& meta_info, int length_limit
         sampled_token = this->_sample(this->last_thinker_result.logits, meta_info);
 
         this->total_tokens++;
+        // the first sample after the preamble is the reply's first token, and counts toward the limit
         meta_info.generated_tokens++;
         last_sampled_token = sampled_token;
+        this->token_history.push_back(last_sampled_token);
         token_str = this->tokenizer->run_time_decoder(last_sampled_token);
         result += token_str;
         os << token_str << std::flush;
     }
 
-    if (this->total_tokens >= this->MAX_L){
+    if (this->is_eos(last_sampled_token)) {
+        // only the preamble path gets here with an eos: the engine sampled it, so feed it as the loop does
+        this->engine->forward(last_sampled_token);
+    }
+    else if (this->total_tokens >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping generation...");
         reason = MAX_LENGTH_REACHED;
-        return result;
     }
-
-    while (this->total_tokens < this->MAX_L) {
+    else if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)) {
+        reason = MAX_LENGTH_REACHED;
+    }
+    else while (true) {
+        // Running out of window is a truncation; testing here rather than in
+        // the loop condition records it.
+        if (this->total_tokens >= this->MAX_L) {
+            reason = MAX_LENGTH_REACHED;
+            break;
+        }
         if (is_cancelled()) {
             reason = CANCEL_DETECTED;
             break;
@@ -663,6 +697,11 @@ std::string Qwen3_5_Omni::generate(chat_meta_info_t& meta_info, int length_limit
     }
     meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
     meta_info.stop_reason = reason;
+    if (reason != EOT_DETECTED) {
+        // Cut short after sampling its last token: no engine has run that one,
+        // so the next prompt has to carry it.
+        this->token_history.pop_back();
+    }
     if (this->total_tokens >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping generation...");
     }

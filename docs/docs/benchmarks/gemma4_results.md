@@ -32,9 +32,9 @@ AMD Ryzen™ AI 7 350 (Kraken Point) with 32 GB DRAM; performance is comparable 
 
 | **Model**        | **HW**       | **1k** | **2k** | **4k** | **8k** | **16k** | **32k** |
 |------------------|--------------------|--------:|--------:|--------:|--------:|---------:|---------:|
-| **Gemma 4 E2B**  | NPU (FLM)    | 22.6	| 21.7	| 20.0	| 17.5	| 14.1 |	10.1 |
-| **Gemma 4 E4B**  | NPU (FLM)    | 12.6 | 12.3 | 11.6 | 10.6 | 9.0 | 6.8 |
-| **Gemma 4 12B**  | NPU (FLM)    | 6.3 | 6.3 | 6.2 | 6.1 | 5.9 | 5.6 | 
+| **Gemma 4 E2B**  | XDNA2    | 22.6	| 21.7	| 20.0	| 17.5	| 14.1 |	10.1 |
+| **Gemma 4 E4B**  | XDNA2    | 12.6 | 12.3 | 11.6 | 10.6 | 9.0 | 6.8 |
+| **Gemma 4 12B**  | XDNA2    | 6.3 | 6.3 | 6.2 | 6.1 | 5.9 | 5.6 | 
 
 > Each LLM has a maximum supported context window. For example, the gemma4-it:e2b model supports up to 128k tokens.
 
@@ -44,9 +44,9 @@ AMD Ryzen™ AI 7 350 (Kraken Point) with 32 GB DRAM; performance is comparable 
 
 | **Model**        | **HW**       | **1k** | **2k** | **4k** | **8k** | **16k** | **32k** |
 |------------------|--------------------|--------:|--------:|--------:|--------:|---------:|---------:|
-| **Gemma 4 E2B**   | NPU (FLM)    | 721 |	945 |	1086 |	1124 |	1028 |	783|
-| **Gemma 4 E4B**   | NPU (FLM)    | 441 | 572 | 668 | 720 | 695 | 586 |
-| **Gemma 4 12B**   | NPU (FLM)    | 155 | 217 | 272 | 298 | 297 | 261 |
+| **Gemma 4 E2B**   | XDNA2    | 721 |	945 |	1086 |	1124 |	1028 |	783|
+| **Gemma 4 E4B**   | XDNA2    | 441 | 572 | 668 | 720 | 695 | 586 |
+| **Gemma 4 12B**   | XDNA2    | 155 | 217 | 272 | 298 | 297 | 261 |
 
 ---
 
@@ -54,8 +54,8 @@ AMD Ryzen™ AI 7 350 (Kraken Point) with 32 GB DRAM; performance is comparable 
 
 | **Model**        | **HW**       | **Image** |
 |------------------|--------------------|--------:|
-| **Gemma 4 E2B**   | NPU (FLM)    | 1.7|
-| **Gemma 4 E4B**   | NPU (FLM)    | 1.75|
-| **Gemma 4 12B**   | NPU (FLM)    | 3.4|
+| **Gemma 4 E2B**   | XDNA2    | 1.7|
+| **Gemma 4 E4B**   | XDNA2    | 1.75|
+| **Gemma 4 12B**   | XDNA2    | 3.4|
 
 > This test uses a short prompt: “Describe this image.”

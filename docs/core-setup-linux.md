@@ -9,7 +9,7 @@ Written against the working install on this machine. Paths use `$P` for the
 dependency prefix (here `/home/alfxu/ddprefix`); substitute your own.
 
 > **Status:** the core backend has been run on hardware on Windows only. The
-> steps below are updated for corelib 0.33.1, but they have not been run end
+> steps below are updated for corelib 0.53.0, but they have not been run end
 > to end on Linux at this revision. The [Known issues](#known-issues) are from
 > an earlier Linux bring-up.
 
@@ -52,7 +52,7 @@ loaded from, so those libraries must sit beside it; nothing else is needed at
 run time, no kernel store and no environment variable.
 
 **Version must match exactly.** `src/include/core/corelib_api.hpp` has a
-`#error` for anything other than corelib **0.33.1**:
+`#error` for anything other than corelib **0.53.0**:
 
 ```bash
 grep -E 'CORELIB_VERSION_(MAJOR|MINOR|PATCH)' \
@@ -235,10 +235,10 @@ shape is a dead end.
 |---|---|
 | `RYZENAI_CORELIB_TRACE=xrt` | trace XRT calls (`kernels,xrt` for both logs, `all` for every category) |
 | `RYZENAI_CORELIB_SAFE_MODE` | force staging buffers, no host-pointer import |
-| `RYZENAI_CORELIB_NO_RUN_POOL` | disable run-object reuse |
 | `RYZENAI_CORELIB_NO_CRASH_HANDLER` | leave crashes to the debugger |
-| `RYZENAI_CORELIB_REPORT_FALLBACKS=1` | when a stream is released, report host (CPU fallback) time per artifact, and every dispatch that ran on a later PDI than its first choice; no output means nothing fell back |
-| `RYZENAI_CORELIB_MAX_RUNS_IN_FLIGHT` | how many runs of one kernel a stream lets run ahead (64 unset, `0` for no cap) |
+| `RYZENAI_CORELIB_REPORT_FALLBACKS=1` | when a stream is released, report host and GPU time per artifact, and every dispatch that ran on a later PDI than its first choice; no output means nothing fell back |
+| `RYZENAI_CORELIB_DISABLE_GPU=1` | keep streams created while it is set off the APU's GPU, so whatever no NPU kernel takes runs on the host |
+| `RYZENAI_CORELIB_PROFILE` | `1` prints a per-phase device-time report when a stream is released; a path also writes it as JSON |
 | `RYZENAI_CORELIB_KERNELS_ROOT` | a kernel store to load from, for corelib development only; every model library already carries its kernels, so a normal run sets nothing |
 
 ### Other rough edges

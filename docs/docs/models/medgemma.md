@@ -10,6 +10,7 @@ parent: Models
 - **Type:** Image-Text-to-Text
 - **Think:** No
 - **Tool Calling Support:** No  
+- **Prefix cache (server mode):** Yes; Gemma 3 puts the system prompt in the first user turn, so each conversation reuses its own earlier turns (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
 - **Base Model:** [google/medgemma-4b-it](https://huggingface.co/google/medgemma-4b-it)
 - **Quantization:** Q4_1
 - **Max Context Length:** 128k tokens 
@@ -29,6 +30,7 @@ flm run medgemma:4b
 - **Type:** Image-Text-to-Text
 - **Think:** No
 - **Tool Calling Support:** No  
+- **Prefix cache (server mode):** Yes; Gemma 3 puts the system prompt in the first user turn, so each conversation reuses its own earlier turns (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
 - **Base Model:** [google/medgemma1.5-4b-it](https://huggingface.co/google/medgemma-1.5-4b-it)
 - **Quantization:** Q4_1
 - **Max Context Length:** 128k tokens 

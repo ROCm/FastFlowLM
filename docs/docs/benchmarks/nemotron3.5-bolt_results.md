@@ -27,8 +27,8 @@ AMD Ryzen™ AI MAX+ PRO 395 (Strix Halo) with 128 GB DRAM (HP ZBook Ultra G1a).
 
 | **Model**            | **HW**    | **1k** | **2k** | **4k** | **8k** | **16k** | **32k** |
 |----------------------|-----------|-------:|-------:|-------:|-------:|--------:|--------:|
-| **Nemotron Bolt E4B**| NPU (FLM) | 12.8   | 12.5   | 11.9   | 10.9   | 9.2     | 7.2     |
-| Gemma 4 E4B          | NPU (FLM) | 12.8   | 12.5   | 11.9   | 10.9   | 9.3     | 7.2     |
+| **Nemotron Bolt E4B**| XDNA2 | 12.8   | 12.5   | 11.9   | 10.9   | 9.2     | 7.2     |
+| Gemma 4 E4B          | XDNA2 | 12.8   | 12.5   | 11.9   | 10.9   | 9.3     | 7.2     |
 
 > Nemotron Bolt supports up to 64k tokens of context (the default is 32k).
 
@@ -38,14 +38,14 @@ AMD Ryzen™ AI MAX+ PRO 395 (Strix Halo) with 128 GB DRAM (HP ZBook Ultra G1a).
 
 | **Model**            | **HW**    | **1k** | **2k** | **4k** | **8k** | **16k** | **32k** |
 |----------------------|-----------|-------:|-------:|-------:|-------:|--------:|--------:|
-| **Nemotron Bolt E4B**| NPU (FLM) | 438    | 542    | 606    | 643    | 611     | 516     |
-| Gemma 4 E4B          | NPU (FLM) | 439    | 546    | 609    | 644    | 612     | 516     |
+| **Nemotron Bolt E4B**| XDNA2 | 438    | 542    | 606    | 643    | 611     | 516     |
+| Gemma 4 E4B          | XDNA2 | 439    | 546    | 609    | 644    | 612     | 516     |
 
 ### 🚀 Time to First Token (Seconds)
 
 | **Model**            | **HW**    | **1k** | **2k** | **4k** | **8k** | **16k** | **32k** |
 |----------------------|-----------|-------:|-------:|-------:|-------:|--------:|--------:|
-| **Nemotron Bolt E4B**| NPU (FLM) | 2.2    | 3.6    | 6.4    | 12.1   | 25.4    | 60.1    |
+| **Nemotron Bolt E4B**| XDNA2 | 2.2    | 3.6    | 6.4    | 12.1   | 25.4    | 60.1    |
 
 ---
 

@@ -47,12 +47,11 @@ void Hunyuan::setup_tokenizer(std::string model_path) {
 /// \note The template renders `system` only when it is messages[0]; every other
 ///       role but user / assistant is dropped. It never branches on `tools`, so
 ///       the argument is accepted for the interface and ignored.
-std::string Hunyuan::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools) {
+std::string Hunyuan::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools, bool continue_final_message) {
     minja::chat_template_inputs inputs;
-    inputs.add_generation_prompt = true;
     inputs.messages = messages;
     inputs.extra_context = this->extra_context;
-    return this->chat_tmpl->apply(inputs);
+    return this->_render_chat_template(inputs, continue_final_message);
 }
 
 chat_template_type_t Hunyuan::get_chat_template_type() {

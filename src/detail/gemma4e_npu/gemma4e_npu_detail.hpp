@@ -8,6 +8,7 @@
 #include "gemma4e_audio.hpp"
 #include "embedding_q8_0.hpp"
 #include "gemma4e_prefill.hpp"
+#include "utils/kv_rows_state.hpp"
 
 struct gemma4e_npu::Impl{
     /// @brief constexprs
@@ -142,6 +143,16 @@ struct gemma4e_npu::Impl{
     bool is_vlm;
     bool is_audio;
     void _allocate_checkpoint_buffers();
+
+    kv_row_layout kv_layout() const;
+    std::unique_ptr<hybrid_engine_state> new_state();
+    int read_state(hybrid_engine_state& state, int kv_from);
+    int write_state(const hybrid_engine_state& state);
+    int write_state_kv(const hybrid_engine_state& state);
+    /// @brief one flag per kv cache (non-skip layer): global attention (keeps K/V rows) or sliding window (keeps a ring)
+    std::vector<bool> attn_mask;
+    /// @brief highest context length reached since the global rows past the length were last zero (see kv_rows_zero)
+    size_t dirty_rows = 0;
     int checkpoint();
     int restore();
 

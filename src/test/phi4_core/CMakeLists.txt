@@ -99,6 +99,7 @@ set(PHI4_FRONTEND_SOURCES
     "${FLM_SOURCE_DIR}/common/AutoModel/automodel.cpp"
     "${FLM_SOURCE_DIR}/common/AutoModel/model_backend.cpp"
     "${FLM_SOURCE_DIR}/common/AutoModel/modeling_phi4.cpp"
+    "${FLM_SOURCE_DIR}/common/prefix_slot_cache.cpp"
     ${FLM_CHAT_SOURCES})
 
 add_executable(test_phi4_frontend

@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -82,7 +83,7 @@ BackendContext Context(const Package& package, std::uint32_t length,
 }
 
 int WeightLoads() {
-    return fake_corelib::GetState().call_counts["ryzenai_corelib_model_weights_create_path"];
+    return fake_corelib::GetState().call_counts["ryzenai_corelib_create_model_from_path"];
 }
 
 void TestPreemptionIsRefusedBeforeTheWeightsAreOpened() {
@@ -118,12 +119,40 @@ void TestACustomContextRuleIsApplied() {
     TEST_REQUIRE(fake_corelib::GetState().model_max_sequence_length == 8192);
 }
 
+/// \brief what `run` prints to std::cout
+template <class F>
+std::string CaptureStdout(F run) {
+    std::ostringstream captured;
+    auto* previous = std::cout.rdbuf(captured.rdbuf());
+    try {
+        run();
+    } catch (...) {
+        std::cout.rdbuf(previous);
+        throw;
+    }
+    std::cout.rdbuf(previous);
+    return captured.str();
+}
+
+void TestAContextPastTheReliableOneLoadsWithAWarning() {
+    Runtime r;
+    Package p({"m.gguf"});
+    auto spec = Spec();
+    spec.reliable_context = 2048;
+    spec.unreliable_reason = "the answers drift";
+    const auto within = CaptureStdout([&] { (void)flm::core::Factory(spec)(Context(p, 2048)); });
+    TEST_REQUIRE(within.find("WARNING") == std::string::npos);
+    const auto past = CaptureStdout([&] { (void)flm::core::Factory(spec)(Context(p, 4096)); });
+    TEST_REQUIRE(past.find("WARNING") != std::string::npos);
+    TEST_REQUIRE(past.find("4096 is past 2048: the answers drift") != std::string::npos);
+}
+
 void TestTheCatalogsGgufIsTheOneLoaded() {
     Runtime r;
     Package p({"a.gguf", "b.gguf"});
     auto backend = flm::core::Factory(Spec())(
         Context(p, 4096, nlohmann::ordered_json::array({"b.gguf", "config.json"})));
-    TEST_REQUIRE(fake_corelib::GetState().model_weights_path == (p.root / "b.gguf").string());
+    TEST_REQUIRE(fake_corelib::GetState().model_path == (p.root / "b.gguf").string());
 }
 
 void TestACatalogGgufThatIsMissingIsNamed() {
@@ -152,7 +181,7 @@ void TestWithoutACatalogGgufTheDirectorysOnlyOneIsLoaded() {
     Package p({"only.gguf", "config.json"});
     auto backend = flm::core::Factory(Spec())(
         Context(p, 4096, nlohmann::ordered_json::array({"config.json"})));
-    TEST_REQUIRE(fake_corelib::GetState().model_weights_path == (p.root / "only.gguf").string());
+    TEST_REQUIRE(fake_corelib::GetState().model_path == (p.root / "only.gguf").string());
 }
 
 void TestWithoutACatalogGgufTwoInTheDirectoryAreRefused() {
@@ -245,6 +274,7 @@ int main() {
     RUN(TestPreemptionIsRefusedBeforeTheWeightsAreOpened);
     RUN(TestAContextOutsideTheRuleIsRefusedBeforeTheWeightsAreOpened);
     RUN(TestACustomContextRuleIsApplied);
+    RUN(TestAContextPastTheReliableOneLoadsWithAWarning);
     RUN(TestTheCatalogsGgufIsTheOneLoaded);
     RUN(TestACatalogGgufThatIsMissingIsNamed);
     RUN(TestACatalogNamingTwoGgufsIsRefused);

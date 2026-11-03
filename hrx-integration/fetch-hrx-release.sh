@@ -65,13 +65,19 @@ download() {
   curl -fsSL --retry 3 --retry-delay 2 -o "$path" "$url"
 }
 
-download "$base_url/$HRX_RELEASE_ASSET" "$tarball"
-download "$base_url/$HRX_RELEASE_ASSET.sha256" "$sha_file"
+# An archive already here (CI restores it from its cache) is reused when it
+# matches the pinned checksum, which is what a download is checked against too.
+if [[ -f "$tarball" && "$(sha256sum "$tarball" | awk '{print $1}')" == "$HRX_RELEASE_SHA256" ]]; then
+  echo "reuse: $tarball (sha256 matches the pin)"
+else
+  download "$base_url/$HRX_RELEASE_ASSET" "$tarball"
+  download "$base_url/$HRX_RELEASE_ASSET.sha256" "$sha_file"
 
-remote_sha="$(awk '{print $1; exit}' "$sha_file")"
-[[ -n "$remote_sha" ]] || die "empty remote sha256 file: $sha_file"
-[[ "$remote_sha" == "$HRX_RELEASE_SHA256" ]] ||
-  die "remote sha256 mismatch: expected $HRX_RELEASE_SHA256, got $remote_sha"
+  remote_sha="$(awk '{print $1; exit}' "$sha_file")"
+  [[ -n "$remote_sha" ]] || die "empty remote sha256 file: $sha_file"
+  [[ "$remote_sha" == "$HRX_RELEASE_SHA256" ]] ||
+    die "remote sha256 mismatch: expected $HRX_RELEASE_SHA256, got $remote_sha"
+fi
 
 actual_sha="$(sha256sum "$tarball" | awk '{print $1}')"
 [[ "$actual_sha" == "$HRX_RELEASE_SHA256" ]] ||

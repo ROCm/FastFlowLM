@@ -2,10 +2,14 @@
 
 #include <ryzenai/corelib.h>
 
-#if RYZENAI_CORELIB_VERSION_MAJOR != 0 || RYZENAI_CORELIB_VERSION_MINOR != 33 || \
-    RYZENAI_CORELIB_VERSION_PATCH != 1
-#error "FastFlowLM requires ryzenai-corelib headers exactly 0.33.1"
+#if RYZENAI_CORELIB_VERSION_MAJOR != 0 || RYZENAI_CORELIB_VERSION_MINOR != 53 || \
+    RYZENAI_CORELIB_VERSION_PATCH != 0
+#error "FastFlowLM requires ryzenai-corelib headers exactly 0.53.0"
 #endif
+
+// ryzenai_corelib_testing_npu_arch, until corelib's public header names the
+// NPU's architecture. After the pin: a testing hook may change in any release.
+#include <ryzenai/corelib/testing.h>
 
 #include <atomic>
 #include <cstddef>
@@ -22,7 +26,8 @@
     X(status_to_string, ryzenai_corelib_status_to_string)                          \
     X(get_last_error_message, ryzenai_corelib_get_last_error_message)              \
     X(selftest_dependencies, ryzenai_corelib_selftest_dependencies)                \
-    X(get_device, ryzenai_corelib_get_hardware_context)                            \
+    X(npu_usable, ryzenai_corelib_npu_usable)                                      \
+    X(npu_arch, ryzenai_corelib_testing_npu_arch)                                  \
     X(object_release, ryzenai_corelib_object_release)                              \
     X(create_stream, ryzenai_corelib_create_stream)                                \
     X(stream_synchronize, ryzenai_corelib_stream_synchronize)                      \
@@ -40,14 +45,11 @@
     X(ssmlp_weights_create, ryzenai_corelib_ssmlp_bf16_weights_create)             \
     X(weights_copy_data, ryzenai_corelib_weights_copy_data)                        \
     X(ssmlp, ryzenai_corelib_ssmlp_bf16)                                           \
-    X(flat_mha_enum_kernels, ryzenai_corelib_flat_mha_bf16_enum_kernels)           \
-    X(flat_mha, ryzenai_corelib_flat_mha_bf16)                                     \
-    X(paged_mha_enum_kernels, ryzenai_corelib_paged_mha_bf16_enum_kernels)         \
-    X(model_info_get, ryzenai_corelib_model_info_get)                              \
+    X(model_get_info, ryzenai_corelib_model_get_info)                              \
     X(model_forward, ryzenai_corelib_model_forward)                                \
     X(model_reset, ryzenai_corelib_model_reset)                                    \
-    X(model_weights_create_path, ryzenai_corelib_model_weights_create_path)        \
-    X(model_create, ryzenai_corelib_model_create)                                  \
+    X(create_model_from_path, ryzenai_corelib_create_model_from_path)              \
+    X(model_create_session, ryzenai_corelib_model_create_session)                  \
     X(model_state_save, ryzenai_corelib_model_state_save)                          \
     X(model_state_restore, ryzenai_corelib_model_state_restore)                    \
     X(cleanup, ryzenai_corelib_cleanup)

@@ -48,7 +48,7 @@ FLM detects the format once, when the model loads, from its chat template and to
 | Format (log name) | Model families | Reasoning | Tool call syntax the model writes |
 |---|---|---|---|
 | `hermes_json` | Qwen3, Qwen2.5, Nanbeige | `<think>…</think>` | `<tool_call>{"name": …, "arguments": {…}}</tool_call>` |
-| `qwen_xml` | Qwen3.5 and later | `<think>…</think>` | `<tool_call><function=f><parameter=k>v</parameter></function></tool_call>` |
+| `qwen_xml` | Qwen3.5 and later, LFM3 | `<think>…</think>` | `<tool_call><function=f><parameter=k>v</parameter></function></tool_call>` |
 | `lfm2_pythonic` | LFM2, LFM2.5 | `<think>…</think>` (thinking variants) | `<|tool_call_start|>[f(a=1, b="x")]<|tool_call_end|>` |
 | `gemma4` | Gemma4 | `<|channel>thought … <channel|>` | `<|tool_call>call:f{a:<|"|>x<|"|>}<tool_call|>` |
 | `harmony` | gpt-oss | `analysis` channel | `commentary to=functions.f` channel |

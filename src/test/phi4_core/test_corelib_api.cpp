@@ -214,7 +214,7 @@ void TestEveryUniqueObjectReleasesExactlyOnceAfterMoves() {
     TEST_REQUIRE(api->live_object_count() == 0);
 }
 
-void TestRuntimeRunsDependencySelftestAndRequiresDeviceContext() {
+void TestRuntimeRunsDependencySelftestAndRequiresAUsableNpu() {
     fake_corelib::Reset();
     fake_corelib::GetState().selftest_status = ryzenai_corelib_status_failure;
     RequireContains(RequireThrows([] {
@@ -223,16 +223,33 @@ void TestRuntimeRunsDependencySelftestAndRequiresDeviceContext() {
                     "selftest_dependencies");
 
     fake_corelib::Reset();
-    fake_corelib::GetState().has_device_context = false;
+    fake_corelib::GetState().npu_usable = false;
     RequireContains(RequireThrows([] {
                         CorelibRuntime::CreateForTest(ValidApi());
                     }),
-                    "device context");
+                    "no usable NPU");
 
     fake_corelib::Reset();
     const auto runtime = CorelibRuntime::CreateForTest(ValidApi());
     TEST_REQUIRE(runtime->api() != nullptr);
     CorelibRuntime::ShutdownProcess();
+}
+
+void TestNpuArchIsCorelibsAnswerAndEmptyWhenItCannotLoad() {
+    fake_corelib::Reset();
+    {
+        const auto runtime = CorelibRuntime::CreateForTest(ValidApi());
+        fake_corelib::GetState().npu_arch = "AIE2P";
+        TEST_REQUIRE(CorelibRuntime::NpuArch({}) == "AIE2P");
+        fake_corelib::GetState().npu_arch = "AIEM";
+        TEST_REQUIRE(CorelibRuntime::NpuArch({}) == "AIEM");
+    }
+    CorelibRuntime::ShutdownProcess();
+
+    const auto empty = std::filesystem::temp_directory_path() / "flm-no-corelib-here";
+    std::filesystem::create_directories(empty);
+    TEST_REQUIRE(CorelibRuntime::NpuArch(empty).empty());
+    std::filesystem::remove_all(empty);
 }
 
 void TestExecutionLeaseSerializesTwoThreads() {
@@ -314,7 +331,8 @@ int main() {
     RUN_TEST(TestEnvironmentPathWinsOverExecutableRelativePath);
     RUN_TEST(TestFallbackIsExeDirectoryCoreDllNotCurrentDirectory);
     RUN_TEST(TestEveryUniqueObjectReleasesExactlyOnceAfterMoves);
-    RUN_TEST(TestRuntimeRunsDependencySelftestAndRequiresDeviceContext);
+    RUN_TEST(TestRuntimeRunsDependencySelftestAndRequiresAUsableNpu);
+    RUN_TEST(TestNpuArchIsCorelibsAnswerAndEmptyWhenItCannotLoad);
     RUN_TEST(TestExecutionLeaseSerializesTwoThreads);
     RUN_TEST(TestShutdownReleasesExecutionLockBeforeDestroyingRuntimeOwner);
     RUN_TEST(TestCleanupRunsAfterTheLastObjectAndOnlyOnce);

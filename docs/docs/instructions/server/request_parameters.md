@@ -20,6 +20,7 @@ This page says what FLM does with the fields of a `/v1/chat/completions` or `/v1
 - [The Penalty Window](#-the-penalty-window)
 - [`seed` and Repeatable Output](#-seed-and-repeatable-output)
 - [Reasoning in `reasoning_content`](#-reasoning-in-reasoning_content)
+- [Continuing an Assistant Message (`continue_final_message`)](#-continuing-an-assistant-message-continue_final_message)
 - [Fields FLM Doesn't Know](#-fields-flm-doesnt-know)
 - [Long Prompts: Prefill Chunking](#-long-prompts-prefill-chunking)
 
@@ -37,6 +38,10 @@ This page says what FLM does with the fields of a `/v1/chat/completions` or `/v1
 | `repetition_penalty` | > 0 | FLM extension. See [Penalties](#-presence-frequency-and-repetition-penalties). |
 | `repeat_last_n` | integer ≥ −1 | FLM extension. How many generated tokens the penalties look at. See [The Penalty Window](#-the-penalty-window). |
 | `seed` | any integer | Makes sampling repeatable. See [`seed`](#-seed-and-repeatable-output). |
+| `min_tokens` | integer ≥ 0 | vLLM-style extension. End-of-sequence tokens are not sampled until at least `min_tokens` tokens have been generated; the reply can run one or two tokens over (more with speculative decoding). `max_tokens` still ends the reply. |
+| `ignore_eos` | `true` / `false` | vLLM-style extension. End-of-sequence tokens are never sampled, so the reply runs to `max_tokens` (or the context limit). Meant for fixed-length benchmarking. |
+
+> `min_tokens` and `ignore_eos` mask the end-of-sequence ids before sampling, so they work on every sampling path. `qwen3.8-mtp` and `qwen3.8-dflash2` decode one token at a time while either is in force, because its draft head samples inside the engine; expect a much lower speed there.
 
 Each token is chosen in this order: penalties → the `tool_choice` / `response_format` grammar, if any → `top_k` → `top_p` and the model's min-p cut-off → `temperature` → sample.
 
@@ -68,8 +73,8 @@ A request that sends no sampling fields uses the model's own defaults, which dif
 
 | Models | `presence_penalty` at load |
 |---|---|
-| `qwen3.5:*`, `qwen3.5-core:*`, `qwen3.6-moe:35b-a3b`, `qwen3.6-moe-core:35b-a3b`, `qwen3.8-mtp:27b`, `minicpm-v-4.7:1b` | 1.5 |
-| `gemma4-it:*`, `gemma4-it-core:*`, `gemma4e-flash:*`, `nemotron3.5-bolt:e4b` | 1.0 |
+| `qwen3.5:*`, `qwen3.5-core:*`, `qwen3.6-moe:35b-a3b`, `qwen3.6-moe-core:35b-a3b`, `qwen3.8-mtp:27b`, `qwen3.8-dflash2:27b`, `minicpm-v-4.7:1b` | 1.5 |
+| `gemma4-it:*`, `gemma4-it-core:*`, `gemma4e-flash:*`, `nemotron3.5-bolt:e4b`, `nemotron3.5-bolt-dflash:e4b`, `nemotron3.5-bolt-dflash-flash:e4b` | 1.0 |
 | every other model | 0 |
 
 Sending `presence_penalty=0` turns the default off, and it stays off until the model is reloaded (see *Settings stick* above).
@@ -96,7 +101,7 @@ Penalties also act on reasoning tokens, and on tokens that a `tool_choice` or `r
 
 The [log probabilities](https://fastflowlm.com/docs/instructions/server/openapi/#-example-token-log-probabilities) a response reports are taken **before** any penalty is applied.
 
-> ⚠️ **`qwen3.8-mtp:27b`:** tokens accepted from the speculative draft head are compared with the model's own most likely token and skip the sampler. Penalties, `temperature`, `top_k` and `top_p` only shape the tokens the model samples itself, and drafted tokens don't enter the penalty window.
+> ⚠️ **`qwen3.8-mtp:27b` and `qwen3.8-dflash2:27b`:** tokens accepted from the speculative draft are compared with the model's own most likely token and skip the sampler. Penalties, `temperature`, `top_k` and `top_p` only shape the tokens the model samples itself, and drafted tokens don't enter the penalty window.
 
 ---
 
@@ -179,6 +184,54 @@ Turning thinking on and off, streaming examples and the full message format: [Re
 
 ---
 
+## ⏩ Continuing an Assistant Message (`continue_final_message`)
+
+> Available from FLM v1.0.11, on `/v1/chat/completions`.
+
+By default, a request whose last message is from the assistant gets a **new** reply: the chat template closes that message and opens a fresh assistant turn. Set `continue_final_message: true` and the model **continues** the last message instead, from exactly where its text ends. The field is vLLM's, and Hugging Face's `apply_chat_template` has the same flag.
+
+```python
+response = client.chat.completions.create(
+    model="llama3.2:1b",
+    messages=[
+        {"role": "user", "content": "Is Paris the capital of France? Answer yes or no."},
+        {"role": "assistant", "content": "The answer is:"},
+    ],
+    max_tokens=1,
+    logprobs=True,
+    top_logprobs=5,
+    extra_body={"continue_final_message": True},
+)
+first = response.choices[0].logprobs.content[0]
+print(repr(first.token), first.logprob)   # ' Yes' -0.098 on llama3.2:1b
+```
+
+Use it to score what the model would say at an exact point, through the model's own chat template: classification, multiple-choice evaluation, or checking how confident the model is in an answer. With `logprobs`, the first entry is the model's distribution for the token right after your text (see [the example](https://fastflowlm.com/docs/instructions/server/openapi/#-example-score-the-next-token-after-a-partial-answer)).
+
+What you get back:
+
+- **`content` is only the continuation.** Your text isn't repeated, so `prefix + content` is the whole message. Its whitespace is kept as the model wrote it (`' Yes'`, not `'Yes'`), even when the continuation is only whitespace. In a stream, trailing whitespace arrives once the text after it, or the end of the reply, does.
+- **`logprobs` cover only the continued tokens.** Your text is part of the prompt, so it has no entries.
+- **`usage.prompt_tokens` includes your text**, and `completion_tokens` counts the continuation.
+- **The prompt is cut the way Hugging Face cuts it.** FLM renders the chat with no generation prompt, finds the last occurrence of the final message's text, and stops right after it. One exception: a few templates write a finished message differently from how they open a reply (Qwen3.5 leaves out the empty `<think></think>` block, Gemma4 12B with thinking off its empty thought channel, LFM2.5-Thinking its opening `<think>`). Cut that way, the prompt looks like a finished turn and the model ends it, so for those templates FLM puts your text after the reply's opening instead. Templates that trim message content also drop trailing whitespace from your text, so `"The answer is: "` is read as `"The answer is:"`. A template that keeps the space keeps it, unless your text also starts with whitespace (Hugging Face drops the trailing space then too), and the model then sees a separate space token, which changes what it predicts next.
+- **Models that reason first may read your text as reasoning.** `deepseek-r1`, `deepseek-r1-0528`, `qwen3-tk`, `lfm2.5-tk`, `nanbeige4.1`, and any model with `think` on, start every reply by reasoning. They can treat the message you continue as the start of that reasoning: they go on, close it with `</think>`, then answer. FLM then returns the continuation in `reasoning_content` and the answer after it in `content`, as vLLM's reasoning parsers do. A stream from such a model sends nothing until it either writes that tag or ends. To score the next token, use a model with `think` off: a reasoning model's first token is reasoning, not the answer.
+
+Rejected with HTTP 400 (`invalid_request_error`), for streaming requests too:
+
+| Request | Why |
+|---|---|
+| `continue_final_message` that isn't a boolean | |
+| The last message isn't from the assistant | There is nothing to continue. |
+| `add_generation_prompt: true` together with it | They ask for opposite things; vLLM refuses this too. Sending `add_generation_prompt: false` is fine. |
+| The last message has `tool_calls`, images or audio, or no text | Only text can be continued. |
+| `response_format` (JSON), or `tool_choice` `"required"` / a named function | The grammar for these starts at the beginning of a reply. `tool_choice` `"auto"` and `"none"` work. |
+| The chat template rewrites the last message, for example by moving a closed `<think>…</think>` block out of it | Its text no longer appears as you sent it, so there is no place to continue from. An unclosed `<think>` is kept, and the model goes on reasoning. |
+| The model can't continue a message: single-turn (flash) models and `gpt-oss` | The message is `continue_final_message is not supported by <model>`. |
+
+`continue_final_message: false` or `null` keeps the default behaviour. FLM does not read `add_generation_prompt` otherwise.
+
+---
+
 ## 📨 Fields FLM Doesn't Know
 
 **FLM ignores fields it doesn't read. It doesn't reject them.** OpenAI SDKs, LangChain and agent frameworks send fields that FLM has no use for, and they still work against FLM. The downside is that a misspelt field (`temprature`) is dropped without any error or log line, so check your spelling if a setting seems to have no effect.
@@ -191,7 +244,7 @@ Turning thinking on and off, streaming examples and the full message format: [Re
 | An `options` object (Ollama style) on a `/v1` endpoint | Ignored. Put sampling fields at the top level of the request. |
 | A sampling field outside its range | Ignored with a warning in the server log. The previous value stays in effect ([see above](#️-sampling-fields)). |
 | A sampling field of the wrong JSON type, such as `"temperature": "0.7"` | The request fails with an error. Send numbers as JSON numbers. |
-| A malformed `messages`, `tool_choice`, `parallel_tool_calls`, `response_format`, `logprobs`, `top_logprobs`, `seed` or `repeat_last_n` | Rejected with HTTP 400 and `"type": "invalid_request_error"` before anything is generated, for streaming requests too. |
+| A malformed `messages`, `tool_choice`, `parallel_tool_calls`, `response_format`, `logprobs`, `top_logprobs`, `seed`, `repeat_last_n` or `continue_final_message` | Rejected with HTTP 400 and `"type": "invalid_request_error"` before anything is generated, for streaming requests too. |
 
 FLM's own extensions to the OpenAI request, all top-level fields (`extra_body` in the OpenAI SDK):
 
@@ -201,6 +254,7 @@ FLM's own extensions to the OpenAI request, all top-level fields (`extra_body` i
 | `top_k`, `repetition_penalty` | [Sampling Fields](#️-sampling-fields) |
 | `repeat_last_n` | [The Penalty Window](#-the-penalty-window) |
 | `backend` | [Choose an Execution Backend](https://fastflowlm.com/docs/instructions/cli/#-choose-an-execution-backend) |
+| `continue_final_message` (vLLM's name) | [Continuing an Assistant Message](#-continuing-an-assistant-message-continue_final_message) |
 
 ---
 
@@ -210,7 +264,7 @@ Before generating, FLM reads the prompt into the model's KV cache. This is the *
 
 | Models | `max_prefill_len` |
 |---|---|
-| Flash models (`gemma4e-flash:*`, `qwen3vl-flash:4b`, `hy-mt2-flash:1.8b`) | 1024 |
+| Flash models (`gemma4e-flash:*`, `nemotron3.5-bolt-dflash-flash:e4b`, `qwen3vl-flash:4b`, `hy-mt2-flash:1.8b`) | 1024 |
 | Every other chat model | 4096 |
 
 **`max_prefill_len` is not a limit on the prompt.** A longer prompt just takes more chunks. A 32,000-token prompt on a model with 4096-token chunks is read in eight passes, seven of 4096 tokens and one of 3,328, and the server log shows each one:

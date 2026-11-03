@@ -37,15 +37,14 @@ void Qwen3::setup_tokenizer(std::string model_path) {
     auto tokenizer_config = this->_shared_setup_tokenizer(model_path);
 }
 
-std::string Qwen3::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools) {
+std::string Qwen3::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools, bool continue_final_message) {
     minja::chat_template_inputs inputs;
-    inputs.add_generation_prompt = true;
     inputs.messages = messages;
     inputs.extra_context = this->extra_context;
     inputs.extra_context["enable_thinking"] = this->enable_think;
     if (!tools.empty() && this->enable_tool)
         inputs.tools = tools;
-    return this->chat_tmpl->apply(inputs);
+    return this->_render_chat_template(inputs, continue_final_message);
 }
 
 void Qwen3::fail_inference() {
@@ -66,7 +65,7 @@ bool Qwen3::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::
         return false;
     }
     if (!input.messages.empty()) { // already a formated messages, usually from REST API
-        templated_text = this->apply_chat_template(input.messages, input.tools);
+        templated_text = this->apply_chat_template(input.messages, input.tools, meta_info.continue_final_message);
     }
     else if (!input.prompt.empty()) { // a pure text, usually from the cli
         nlohmann::ordered_json messages;
@@ -81,7 +80,8 @@ bool Qwen3::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::
 
     // Prefix slots. With thinking off the template's empty think block is left out of the prefill (decode() feeds it),
     // because the next turn does not render it; with thinking on the generation prompt is how the next turn renders the reply.
-    const size_t trim_tokens = this->enable_think ? 0 : 4;
+    // A continued message keeps all its tokens: they are the client's text, not the generation prompt.
+    const size_t trim_tokens = (this->enable_think || meta_info.continue_final_message) ? 0 : 4;
     if (this->_prefix_slot_mode(meta_info, tokens.size(), trim_tokens)) {
         try {
             return this->_prefix_text_insert(meta_info, tokens, trim_tokens, "<|im_start|>user", is_cancelled, input.requested_max_new_tokens);
@@ -150,7 +150,8 @@ std::string Qwen3::decode(chat_meta_info_t& meta_info, int length_limit, std::os
     int last_sampled_token;
     // Some backends refuse to decode past a limit of their own, below MAX_L.
     const uint32_t decode_cap = this->decode_cap();
-    if(!enable_think) {
+    // A continued message trimmed nothing, so it starts from insert()'s sample.
+    if(!enable_think && !meta_info.continue_final_message) {
         // The empty think block insert() trimmed is decoded here, four steps
         // the context has to have room for.
         if (this->total_tokens + 4 >= decode_cap) {
@@ -188,13 +189,25 @@ std::string Qwen3::decode(chat_meta_info_t& meta_info, int length_limit, std::os
         this->total_tokens += 4;
         meta_info.generated_tokens++;
         last_sampled_token = sampled_token;
-        token_str = this->tokenizer->run_time_decoder(last_sampled_token);
-        result += token_str;
-        os << token_str << std::flush;
+        // the loop forwards it like insert()'s sample, so history carries it too
+        this->token_history.push_back(last_sampled_token);
+        if (this->is_normal_token(last_sampled_token)) {
+            token_str = this->tokenizer->run_time_decoder(last_sampled_token);
+            result += token_str;
+            os << token_str << std::flush;
+        }
+        if (this->is_eos(last_sampled_token)) {
+            // the reply ended before it started; no engine has run the eos
+            this->token_history.pop_back();
+            meta_info.stop_reason = reason;
+            return result;
+        }
     }
     else {
         last_sampled_token = this->last_token;
         this->token_history.push_back(this->last_token);
+        // the sample insert() took is the reply's first token, and counts toward the limit
+        meta_info.generated_tokens++;
         if (this->is_normal_token(last_sampled_token) && last_sampled_token != -1){
             std::string token_str = this->tokenizer->run_time_decoder(last_sampled_token);
             result += token_str;
@@ -202,16 +215,24 @@ std::string Qwen3::decode(chat_meta_info_t& meta_info, int length_limit, std::os
 
         }
         if (this->is_eos(last_sampled_token)){
+            // Sampled from the prefill, so no engine has run it.
+            this->token_history.pop_back();
+            meta_info.stop_reason = reason;
             return result;
         }
     }
 
     if (this->total_tokens >= decode_cap){
-        header_print("WARNING", "Max length reached, stopping generation...");
         reason = MAX_LENGTH_REACHED;
-        return result;
     }
-    while (this->total_tokens < decode_cap){
+    else if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)){
+        reason = MAX_LENGTH_REACHED;
+    }
+    else while (true){
+        if (this->total_tokens >= decode_cap){
+            reason = MAX_LENGTH_REACHED;
+            break;
+        }
         if (is_cancelled()) {
             reason = CANCEL_DETECTED;
             break;
@@ -239,6 +260,9 @@ std::string Qwen3::decode(chat_meta_info_t& meta_info, int length_limit, std::os
             if (this->forward_on_eos &&
                 (!this->backend_ || this->backend_->forwards_past_eos())) {
                 this->lm_engine->forward(last_sampled_token);
+            } else {
+                // The engine never ran it, so the next prompt has to carry it.
+                this->token_history.pop_back();
             }
             break;
         }
@@ -250,6 +274,11 @@ std::string Qwen3::decode(chat_meta_info_t& meta_info, int length_limit, std::os
     }
     meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
     meta_info.stop_reason = reason;
+    if (reason != EOT_DETECTED) {
+        // Cut short after sampling its last token: no engine has run that one,
+        // so the next prompt has to carry it.
+        this->token_history.pop_back();
+    }
     if (this->total_tokens >= decode_cap){
         header_print("WARNING", "Max length reached, stopping generation...");
     }
@@ -290,14 +319,13 @@ void Qwen3_IT::setup_tokenizer(std::string model_path) {
     auto tokenizer_config = this->_shared_setup_tokenizer(model_path);
 }
 
-std::string Qwen3_IT::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools) {
+std::string Qwen3_IT::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools, bool continue_final_message) {
     minja::chat_template_inputs inputs;
-    inputs.add_generation_prompt = true;
     inputs.messages = messages;
     inputs.extra_context = this->extra_context;
     if (!tools.empty())
         inputs.tools = tools;
-    return this->chat_tmpl->apply(inputs);
+    return this->_render_chat_template(inputs, continue_final_message);
 }
 
 bool Qwen3_IT::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
@@ -309,7 +337,7 @@ bool Qwen3_IT::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, st
         return false;
     }
     if (!input.messages.empty()) { // already a formated messages, usually from REST API
-        templated_text = this->apply_chat_template(input.messages, input.tools);
+        templated_text = this->apply_chat_template(input.messages, input.tools, meta_info.continue_final_message);
     }
     else if (!input.prompt.empty()) { // a pure text, usually from the cli
         nlohmann::ordered_json messages;
@@ -368,13 +396,12 @@ void Qwen3_TK::setup_tokenizer(std::string model_path) {
     this->think_marker_id = this->tokenizer->encode("<think>")[0];
 }
 
-std::string Qwen3_TK::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools) {
+std::string Qwen3_TK::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools, bool continue_final_message) {
     minja::chat_template_inputs inputs;
-    inputs.add_generation_prompt = true;
     inputs.messages = messages;
     inputs.extra_context = this->extra_context;
     inputs.tools = tools;
-    return this->chat_tmpl->apply(inputs);
+    return this->_render_chat_template(inputs, continue_final_message);
 }
 
 bool Qwen3_TK::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
@@ -386,7 +413,7 @@ bool Qwen3_TK::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, st
         return false;
     }
     if (!input.messages.empty()) { // already a formated messages, usually from REST API
-        templated_text = this->apply_chat_template(input.messages, input.tools);
+        templated_text = this->apply_chat_template(input.messages, input.tools, meta_info.continue_final_message);
     }
     else if (!input.prompt.empty()) { // a pure text, usually from the cli
         nlohmann::ordered_json messages;
@@ -403,8 +430,10 @@ bool Qwen3_TK::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, st
     qwen3_npu *qwen3_engine = dynamic_cast<qwen3_npu*>(this->lm_engine);
 
     // Prefix slots. The two tokens left out ("<think>\n") are fed by generate(); the next turn does not render them.
-    if (this->_prefix_slot_mode(meta_info, tokens.size(), 2)) {
-        return this->_prefix_text_insert(meta_info, tokens, 2, "<|im_start|>user", is_cancelled);
+    // A continued message keeps all its tokens: they are the client's text, not the generation prompt.
+    const size_t trim_tokens = meta_info.continue_final_message ? 0 : 2;
+    if (this->_prefix_slot_mode(meta_info, tokens.size(), trim_tokens)) {
+        return this->_prefix_text_insert(meta_info, tokens, trim_tokens, "<|im_start|>user", is_cancelled);
     }
     this->_prefix_legacy_path();
 
@@ -415,7 +444,7 @@ bool Qwen3_TK::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, st
     }
 
     size_t n = tokens.size();
-    tokens.resize(n - 2);
+    tokens.resize(n - trim_tokens);
 
     bool success = this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
 
@@ -441,42 +470,80 @@ std::string Qwen3_TK::generate(chat_meta_info_t& meta_info, int length_limit, st
     this->profiler_list[TKOEN_DECODE_TIME].reset();
 
     std::string token_str;
-    int sampled_token;
+    int last_sampled_token;
 
-    this->token_history.push_back(think_start_id);
-    this->profiler_list[DECODING_TIME].start();
-    this->_force_token(meta_info, think_start_id);
-    this->lm_engine->forward(think_start_id);
-    this->profiler_list[DECODING_TIME].stop(1);
-    token_str = this->tokenizer->run_time_decoder(think_start_id);
-    result += token_str;
-    os << token_str << std::flush;
+    if (!meta_info.continue_final_message) {
+        int sampled_token;
 
-    // \n
-    this->token_history.push_back(198);
-    this->profiler_list[DECODING_TIME].start();
-    this->_force_token(meta_info, 198);
-    buffer<bf16> y = this->lm_engine->forward(198);
-    this->profiler_list[DECODING_TIME].stop(1);
-    token_str = this->tokenizer->run_time_decoder(198);
-    result += token_str;
-    sampled_token = this->_sample(y, meta_info);
-    os << token_str << std::flush;
+        this->token_history.push_back(think_start_id);
+        this->profiler_list[DECODING_TIME].start();
+        this->_force_token(meta_info, think_start_id);
+        this->lm_engine->forward(think_start_id);
+        this->profiler_list[DECODING_TIME].stop(1);
+        token_str = this->tokenizer->run_time_decoder(think_start_id);
+        result += token_str;
+        os << token_str << std::flush;
 
-    this->total_tokens++;
-    meta_info.generated_tokens++;
-    int last_sampled_token = sampled_token;
-    token_str = this->tokenizer->run_time_decoder(last_sampled_token);
-    result += token_str;
-    os << token_str << std::flush;
+        // \n
+        this->token_history.push_back(198);
+        this->profiler_list[DECODING_TIME].start();
+        this->_force_token(meta_info, 198);
+        buffer<bf16> y = this->lm_engine->forward(198);
+        this->profiler_list[DECODING_TIME].stop(1);
+        token_str = this->tokenizer->run_time_decoder(198);
+        result += token_str;
+        sampled_token = this->_sample(y, meta_info);
+        os << token_str << std::flush;
+
+        // both went through the engine, so both occupy the context
+        this->total_tokens += 2;
+        meta_info.generated_tokens++;
+        last_sampled_token = sampled_token;
+        // the loop forwards it like insert()'s sample, so history carries it too
+        this->token_history.push_back(last_sampled_token);
+        if (this->is_normal_token(last_sampled_token)) {
+            token_str = this->tokenizer->run_time_decoder(last_sampled_token);
+            result += token_str;
+            os << token_str << std::flush;
+        }
+        if (this->is_eos(last_sampled_token)) {
+            // the reply ended before it started; no engine has run the eos
+            this->token_history.pop_back();
+            meta_info.stop_reason = reason;
+            return result;
+        }
+    }
+    else {
+        // A continued message trimmed nothing, so it starts from insert()'s sample.
+        last_sampled_token = this->last_token;
+        this->token_history.push_back(this->last_token);
+        // the sample insert() took is the reply's first token, and counts toward the limit
+        meta_info.generated_tokens++;
+        if (this->is_normal_token(last_sampled_token) && last_sampled_token != -1){
+            token_str = this->tokenizer->run_time_decoder(last_sampled_token);
+            result += token_str;
+            os << token_str << std::flush;
+        }
+        if (this->is_eos(last_sampled_token)){
+            // Sampled from the prefill, so no engine has run it.
+            this->token_history.pop_back();
+            meta_info.stop_reason = reason;
+            return result;
+        }
+    }
 
 
     if (this->total_tokens >= this->MAX_L){
-        header_print("WARNING", "Max length reached, stopping generation...");
         reason = MAX_LENGTH_REACHED;
-        return result;
     }
-    while (this->total_tokens < this->MAX_L){
+    else if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)){
+        reason = MAX_LENGTH_REACHED;
+    }
+    else while (true){
+        if (this->total_tokens >= this->MAX_L){
+            reason = MAX_LENGTH_REACHED;
+            break;
+        }
         if (is_cancelled()) {
             reason = CANCEL_DETECTED;
             break;
@@ -512,6 +579,11 @@ std::string Qwen3_TK::generate(chat_meta_info_t& meta_info, int length_limit, st
     }
     meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
     meta_info.stop_reason = reason;
+    if (reason != EOT_DETECTED) {
+        // Cut short after sampling its last token: no engine has run that one,
+        // so the next prompt has to carry it.
+        this->token_history.pop_back();
+    }
     if (this->total_tokens >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping generation...");
     }
@@ -554,12 +626,11 @@ void DeepSeek_r1_0528_8b::setup_tokenizer(std::string model_path) {
     auto tokenizer_config = this->_shared_setup_tokenizer(model_path);
 }
 
-std::string DeepSeek_r1_0528_8b::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools) {
+std::string DeepSeek_r1_0528_8b::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools, bool continue_final_message) {
     minja::chat_template_inputs inputs;
-    inputs.add_generation_prompt = true;
     inputs.messages = messages;
     inputs.extra_context = this->extra_context;
-    return this->chat_tmpl->apply(inputs);
+    return this->_render_chat_template(inputs, continue_final_message);
 }
 
 bool DeepSeek_r1_0528_8b::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
@@ -571,7 +642,7 @@ bool DeepSeek_r1_0528_8b::insert(chat_meta_info_t& meta_info, lm_uniform_input_t
         return false;
     }
     if (!input.messages.empty()) { // already a formated messages, usually from REST API
-        templated_text = this->apply_chat_template(input.messages);
+        templated_text = this->apply_chat_template(input.messages, nlohmann::ordered_json::object(), meta_info.continue_final_message);
     }
     else if (!input.prompt.empty()) { // a pure text, usually from the cli
         nlohmann::ordered_json messages;
@@ -621,6 +692,8 @@ std::string DeepSeek_r1_0528_8b::generate(chat_meta_info_t& meta_info, int lengt
     int last_sampled_token = this->last_token;
 
     token_history.push_back(this->last_token);
+    // the sample insert() took is the reply's first token, and counts toward the limit
+    meta_info.generated_tokens++;
     if (this->is_normal_token(last_sampled_token) && last_sampled_token != -1){
         std::string token_str = this->tokenizer->run_time_decoder(last_sampled_token);
         result += token_str;
@@ -628,16 +701,24 @@ std::string DeepSeek_r1_0528_8b::generate(chat_meta_info_t& meta_info, int lengt
 
     }
     if (this->is_eos(last_sampled_token)){
+        // Sampled from the prefill, so no engine has run it.
+        token_history.pop_back();
+        meta_info.stop_reason = reason;
         return result;
     }
     this->profiler_list[DECODING_TIME].reset();
     this->profiler_list[TKOEN_DECODE_TIME].reset();
     if (this->total_tokens >= this->MAX_L){
-        header_print("WARNING", "Max length reached, stopping generation...");
         reason = MAX_LENGTH_REACHED;
-        return result;
     }
-    while (this->total_tokens < this->MAX_L){
+    else if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)){
+        reason = MAX_LENGTH_REACHED;
+    }
+    else while (true){
+        if (this->total_tokens >= this->MAX_L){
+            reason = MAX_LENGTH_REACHED;
+            break;
+        }
         if (is_cancelled()) {
             reason = CANCEL_DETECTED;
             break;
@@ -673,6 +754,11 @@ std::string DeepSeek_r1_0528_8b::generate(chat_meta_info_t& meta_info, int lengt
     }
     meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
     meta_info.stop_reason = reason;
+    if (reason != EOT_DETECTED) {
+        // Cut short after sampling its last token: no engine has run that one,
+        // so the next prompt has to carry it.
+        token_history.pop_back();
+    }
     if (this->total_tokens >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping generation...");
     }

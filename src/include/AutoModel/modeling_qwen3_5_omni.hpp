@@ -35,7 +35,7 @@ public:
     void load_model(std::string model_path, json model_info, int default_context_length = -1, bool enable_preemption = false, const std::string& backend = "") override;
 
     /// \brief Apply the chat template to the messages.
-    std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object()) override;
+    std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object(), bool continue_final_message = false) override;
 
     /// \brief Encode + preprocess the input (text/image/audio) and prefill.
     bool insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled = [] { return false; }) override;
@@ -65,6 +65,7 @@ public:
     bool thinking_enabled() const override {
         return false;
     }
+    bool supports_continue_final_message() const override { return true; }
 
         /// \brief Configure a parameter with type-erased value
 	/// \param parameter_name the name of the parameter

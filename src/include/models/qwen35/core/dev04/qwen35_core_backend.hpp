@@ -9,8 +9,9 @@
 
 namespace flm::qwen35 {
 
-/// \note corelib rounds a context past 4096 up to whole 4096-row pages.
-inline constexpr std::uint32_t kCoreContextLimit = 32768;
+/// \note Qwen3.5's native context, the most corelib pages it to; corelib
+///       rounds a context up to whole 4096-row pages.
+inline constexpr std::uint32_t kCoreContextLimit = 262144;
 
 inline flm::backend::BackendTraits core_traits() {
     flm::backend::BackendTraits traits;

@@ -1,0 +1,90 @@
+name: Detect changes
+description: >
+  Decides what a Build and Test run does: whether anything beyond docs changed,
+  which model families the change touches, whether the ASR code changed, and
+  which test tier applies. Needs a checkout with enough history to diff
+  (fetch-depth: 0).
+
+inputs:
+  tier:
+    description: Tier requested by the caller or dispatch; empty picks one from the event.
+    required: false
+    default: ""
+
+outputs:
+  run:
+    description: '"true" unless only documentation changed.'
+    value: ${{ steps.changes.outputs.run_tests }}
+  families:
+    description: Comma-separated model families the change touches.
+    value: ${{ steps.changes.outputs.families }}
+  asr-full:
+    description: '"true" when the ASR code changed, so the whole ASR set runs.'
+    value: ${{ steps.changes.outputs.asr_full }}
+  suites:
+    description: '"all", or the comma-separated npu_test suites the change can affect.'
+    value: ${{ steps.tier.outputs.suites }}
+  hrx-suites:
+    description: >
+      The suites for the HRX packages: the same, less api and serving, which
+      test server logic the backend does not touch. Empty when nothing is left.
+    value: ${{ steps.tier.outputs.hrx-suites }}
+  source:
+    description: '"true" when the models-from-source builds need testing (the chat suite runs).'
+    value: ${{ steps.tier.outputs.source }}
+  tier:
+    description: install, pr or full.
+    value: ${{ steps.tier.outputs.tier }}
+  short-sha:
+    description: First 7 characters of the commit, as the .deb artifact names use it.
+    value: ${{ steps.tier.outputs.short-sha }}
+
+runs:
+  using: composite
+  steps:
+    # Pull requests diff their own head against their base, pushes the new tip
+    # against the previous one. A pull request's github.sha is the merge with
+    # the current main, which would also count whatever landed on main since
+    # the base. Everything else (nightly, dispatch, a tag) has no base and
+    # tests everything; so does a push that creates a branch, whose "before"
+    # is zeros.
+    - name: Classify changed files
+      id: changes
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.event_name == 'push' && github.ref_type == 'branch' && github.event.before) || '' }}
+        HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      run: python3 .github/script/ci/changes.py --base "${BASE}" --head "${HEAD}" --github-output
+
+    - name: Pick tier
+      id: tier
+      shell: bash
+      env:
+        REQUESTED: ${{ inputs.tier }}
+        EVENT: ${{ github.event_name }}
+        SHA: ${{ github.sha }}
+        SUITES: ${{ steps.changes.outputs.suites }}
+      run: |
+        tier="${REQUESTED}"
+        if [ -z "${tier}" ]; then
+          if [ "${EVENT}" = "schedule" ]; then tier=full; else tier=pr; fi
+        fi
+        # The nightly and any requested tier test everything, whatever changed.
+        suites="${SUITES:-all}"
+        [ "${EVENT}" = "pull_request" ] || [ "${EVENT}" = "push" ] || suites=all
+        if [ "${suites}" = "all" ]; then
+          hrx="chat,prefix_cache,embedding,decision,asr"
+        else
+          hrx=$(echo "${suites}" | tr ',' '\n' | { grep -vxE 'api|serving' || true; } | paste -sd, -)
+        fi
+        source=false
+        { [ "${suites}" = "all" ] || echo ",${suites}," | grep -q ",chat,"; } && source=true
+        {
+          echo "tier=${tier}"
+          echo "short-sha=${SHA:0:7}"
+          echo "suites=${suites}"
+          echo "hrx-suites=${hrx}"
+          echo "source=${source}"
+        } >> "$GITHUB_OUTPUT"
+        echo "Tier: ${tier}; suites: ${suites}; HRX suites: ${hrx:-none}; source tests: ${source}"

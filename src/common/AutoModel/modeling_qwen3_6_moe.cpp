@@ -49,15 +49,14 @@ void Qwen3_6_MOE::setup_tokenizer(std::string model_path) {
     auto tokenizer_config = this->_shared_setup_tokenizer(model_path);
 }
 
-std::string Qwen3_6_MOE::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools) {
+std::string Qwen3_6_MOE::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools, bool continue_final_message) {
     minja::chat_template_inputs inputs;
-    inputs.add_generation_prompt = true;
     inputs.messages = messages;
     inputs.extra_context = this->extra_context;
     inputs.extra_context["enable_thinking"] = this->enable_think;
     if (!tools.empty() && this->enable_tool)
         inputs.tools = tools;
-    return this->chat_tmpl->apply(inputs);
+    return this->_render_chat_template(inputs, continue_final_message);
 }
 
 bool Qwen3_6_MOE::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
@@ -156,7 +155,7 @@ bool Qwen3_6_MOE::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input,
 
             qwenvl_message.push_back(newItem);
         }
-        templated_text = this->apply_chat_template(qwenvl_message, input.tools);
+        templated_text = this->apply_chat_template(qwenvl_message, input.tools, meta_info.continue_final_message);
         header_print("FLM", "Total images: " << total_images);
     }
     else if (!input.prompt.empty()) { // a pure text, usually from the cli
@@ -221,7 +220,8 @@ bool Qwen3_6_MOE::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input,
     // surviving image tokens after _shared_insert performs its own erase.
     // ----------------------------------------------------------------------
     // ---- prefix slots: resume from the longest saved prefix of this prompt ----
-    const size_t trim_tokens = this->enable_think ? 2 : 4;
+    // a continued message keeps all its tokens: they are the client's text, not the generation prompt
+    const size_t trim_tokens = meta_info.continue_final_message ? 0 : (this->enable_think ? 2 : 4);
     qwen3_6_moe_npu* slot_eng = dynamic_cast<qwen3_6_moe_npu*>(this->lm_engine);
     const bool slot_mode = this->prefix_cache_.enabled() && slot_eng != nullptr && meta_info.restore_allowed && tokens.size() > trim_tokens;
     size_t match_len = 0;
@@ -344,6 +344,10 @@ bool Qwen3_6_MOE::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input,
 }
 
 std::string Qwen3_6_MOE::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
+    if (meta_info.continue_final_message) {
+        // insert() trimmed nothing: no think opening to feed, the output starts from insert()'s sample
+        return this->_shared_generate(meta_info, length_limit, os, is_cancelled);
+    }
     std::vector<int> sampled_tokens;
     std::string result;
 
@@ -420,13 +424,27 @@ std::string Qwen3_6_MOE::generate(chat_meta_info_t& meta_info, int length_limit,
         sampled_token = this->_sample(y, meta_info);
     }
     this->total_tokens += forced;
+    // the first sample after the preamble is the reply's first token, and counts toward the limit
     meta_info.generated_tokens++;
     int last_sampled_token = sampled_token;
+    this->token_history.push_back(last_sampled_token);
     token_str = this->tokenizer->run_time_decoder(last_sampled_token);
     result += token_str;
     os << token_str << std::flush;
 
-    while (true){
+    if (this->is_eos(last_sampled_token)){
+        if (this->forward_on_eos &&
+            (!this->backend_ || this->backend_->forwards_past_eos())) {
+            this->lm_engine->forward(last_sampled_token);
+        } else {
+            // The engine never ran it, so the next prompt has to carry it.
+            this->token_history.pop_back();
+        }
+    }
+    else if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)){
+        reason = MAX_LENGTH_REACHED;
+    }
+    else while (true){
         // Running out of window is a truncation, not the model choosing to
         // stop; testing here rather than in the loop condition records it.
         if (this->total_tokens >= decode_cap){
@@ -460,6 +478,9 @@ std::string Qwen3_6_MOE::generate(chat_meta_info_t& meta_info, int length_limit,
             if (this->forward_on_eos &&
                 (!this->backend_ || this->backend_->forwards_past_eos())) {
                 this->lm_engine->forward(last_sampled_token);
+            } else {
+                // The engine never ran it, so the next prompt has to carry it.
+                this->token_history.pop_back();
             }
             break;
         }
@@ -471,6 +492,11 @@ std::string Qwen3_6_MOE::generate(chat_meta_info_t& meta_info, int length_limit,
     }
     meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
     meta_info.stop_reason = reason;
+    if (reason != EOT_DETECTED) {
+        // Cut short after sampling its last token: no engine has run that one,
+        // so the next prompt has to carry it.
+        this->token_history.pop_back();
+    }
     if (this->total_tokens >= decode_cap){
         header_print("WARNING", "Max length reached, stopping generation...");
     }

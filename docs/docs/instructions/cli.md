@@ -75,6 +75,10 @@ flm pull llama3.2:3b --force
 
 > ⚠️ Use `--force` **only if the model file is corrupted** (e.g., incomplete download). Proceed with caution.
 
+> 📦 Some tags are built on another one: `nemotron3.5-bolt-dflash:e4b` adds a small draft package to the `nemotron3.5-bolt:e4b` weights.
+> `flm pull` downloads the base package first (from the same source, `--modelscope` included), `flm list` marks such a tag
+> "(requires ...)", and it is ready only when both packages are.
+
 #### 📁 Default Model Storage Location
 
 | Platform | Default Path |
@@ -162,6 +166,9 @@ Delete a model from local storage:
 ```shell
 flm remove llama3.2:3b
 ```
+
+For a tag built on another one (for example `nemotron3.5-bolt-dflash:e4b`), `flm remove` deletes only its own package; the base model stays.
+Removing a base model that other installed tags need prints a warning naming them.
 
 ### ✅ Check a Downloaded Model
 
@@ -363,6 +370,7 @@ flm serve qwen3.5:4b --prefix-cache-mb 8192 --prefix-slots 16
 |---|---|---|
 | `--prefix-cache-mb N` | `4096` | Most host memory (MiB) the saved prompts may use; a limit, not a reservation |
 | `--prefix-slots N` | `8` (at most `32`) | How many saved prompts to keep; `0` turns the prefix cache off |
+| `--prefix-min-gain N` | `128` | A new prompt is saved only if it is at least `N` tokens longer than a saved prompt that already covers it. Larger: fewer saves and evictions, but up to `N` more tokens re-read on a resume. `0`: save every prompt. See [Tuning `--prefix-min-gain`](https://fastflowlm.com/docs/instructions/server/prefix_cache/#tuning---prefix-min-gain) |
 
 `flm run` (CLI mode) does not use it. See [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/) for memory per model, how to check that it works, and its limits.
 

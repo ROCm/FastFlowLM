@@ -174,6 +174,33 @@ ModelDownloader::ModelDownloader(model_list& models)
 /// \param model_tag the model tag
 /// \return true if the model is downloaded, false otherwise
 ModelDownloader::ModelStatus ModelDownloader::is_model_downloaded(const std::string& model_tag, bool sub_process_mode, bool fast_check) {
+    const auto [new_tag, info] = supported_models.get_model_info(model_tag);
+    const ModelStatus own = own_model_status(new_tag, sub_process_mode, fast_check);
+    const auto base = supported_models.get_base_model(new_tag);
+    if (!base) return own;
+
+    // A tag with a base_model is ready only if its base is too. The worse of
+    // the two wins: Missing, then Incompatible, then Outdated.
+    const ModelStatus base_status = own_model_status(*base, sub_process_mode, fast_check);
+    if (base_status != ModelStatus::Ready && !sub_process_mode && !fast_check) {
+        header_print("WARNING", new_tag + " needs its base model " + *base +
+                     (base_status == ModelStatus::Missing ? ", which is missing or incomplete."
+                      : base_status == ModelStatus::Outdated ? ", which is outdated."
+                      : ", which is incompatible with this FastFlowLM."));
+    }
+    const auto rank = [](ModelStatus st) {
+        switch (st) {
+            case ModelStatus::Missing: return 3;
+            case ModelStatus::Incompatible: return 2;
+            case ModelStatus::Outdated: return 1;
+            default: return 0;
+        }
+    };
+    return rank(base_status) > rank(own) ? base_status : own;
+}
+
+/// \brief Readiness of one tag's own folder (never looks through base_model)
+ModelDownloader::ModelStatus ModelDownloader::own_model_status(const std::string& model_tag, bool sub_process_mode, bool fast_check) {
     const auto [new_model_tag, model_info] = supported_models.get_model_info(model_tag);
     const bool strict_integrity = uses_pinned_upstream_integrity(model_info);
     auto missing_files = get_missing_files(new_model_tag);
@@ -244,6 +271,21 @@ ModelDownloader::ModelStatus ModelDownloader::check_model_compatibility(const st
 /// \param force_redownload true if the model should be downloaded even if it is already downloaded
 /// \return true if the model is downloaded, false otherwise
 bool ModelDownloader::pull_model(const std::string& model_tag, bool use_modelscope, bool force_redownload) {
+    // A tag with a base_model needs the base's files too: pull the base first
+    // (same source, never forced: --force re-downloads the tag's own files),
+    // and stop if it fails.
+    const auto base = supported_models.get_base_model(model_tag);
+    if (base) {
+        header_print("FLM", "Pulling required base model " + *base + " ...");
+        if (!pull_own_model(*base, use_modelscope, false)) {
+            header_print("ERROR", "Could not pull the required base model " + *base + ".");
+            return false;
+        }
+    }
+    return pull_own_model(model_tag, use_modelscope, force_redownload);
+}
+
+bool ModelDownloader::pull_own_model(const std::string& model_tag, bool use_modelscope, bool force_redownload) {
     try {
         // Once the pull is over, the files on disk say again which source it got.
         struct SourceChoiceReset {
@@ -266,7 +308,7 @@ bool ModelDownloader::pull_model(const std::string& model_tag, bool use_modelsco
         header_print("FLM", "Model: " + new_model_tag);
         header_print("FLM", "Name: " + model_name);
 
-        ModelDownloader::ModelStatus status = is_model_downloaded(new_model_tag);
+        ModelDownloader::ModelStatus status = own_model_status(new_model_tag, false, false);
         switch (status) {
             case ModelStatus::Ready:
                 if (!force_redownload) {
@@ -546,7 +588,16 @@ bool ModelDownloader::remove_model(const std::string& model_tag, bool sub_proces
             return false;
         }
         
-        // Get model path
+        // Removing a base leaves its dependants without their main weights.
+        // Warn, never cascade.
+        if (!sub_process_mode) {
+            for (const auto& dependant : installed_dependants(model_tag)) {
+                header_print("WARNING", "Installed model " + dependant + " requires " + model_tag +
+                             " and will not run until it is pulled again.");
+            }
+        }
+
+        // Get model path (a tag with a base_model removes only its own folder)
         std::string model_path = supported_models.get_model_path(model_tag);
         
         // Check if model directory exists
@@ -589,6 +640,27 @@ bool ModelDownloader::remove_model(const std::string& model_tag, bool sub_proces
 /// \param model_tag the model tag
 /// \return true if all files are present and compatible, false otherwise
 bool ModelDownloader::check_model(const std::string& model_tag, bool use_modelscope, bool sub_process_mode) {
+    // The base is checked on its own; then the tag's own files.
+    if (const auto base = supported_models.get_base_model(model_tag)) {
+        if (!check_own_model(*base, use_modelscope, sub_process_mode)) {
+            header_print("FLM", "Base model incomplete: " + *base + " (needed by " + model_tag + ").");
+            return false;
+        }
+    }
+    return check_own_model(model_tag, use_modelscope, sub_process_mode);
+}
+
+/// \brief Tags that need this one as their base_model and have files on disk
+std::vector<std::string> ModelDownloader::installed_dependants(const std::string& model_tag) {
+    std::vector<std::string> out;
+    for (const auto& dependant : supported_models.get_dependants(model_tag)) {
+        std::error_code error;
+        if (std::filesystem::exists(supported_models.get_model_path(dependant), error)) out.push_back(dependant);
+    }
+    return out;
+}
+
+bool ModelDownloader::check_own_model(const std::string& model_tag, bool use_modelscope, bool sub_process_mode) {
     auto [new_model_tag, model_info] = supported_models.get_model_info(model_tag);
     if (use_modelscope && model_info.contains("file_sources")) {
         try {
@@ -604,7 +676,7 @@ bool ModelDownloader::check_model(const std::string& model_tag, bool use_modelsc
 
     // check_model owns the one full integrity pass below. Status discovery must
     // remain presence/version-only so a pinned 4.1 GB model is not hashed twice.
-    ModelStatus status = is_model_downloaded(new_model_tag, sub_process_mode, true);
+    ModelStatus status = own_model_status(new_model_tag, sub_process_mode, true);
     switch (status) {
         case ModelStatus::Missing:
             header_print("FLM", "Model not found: " + new_model_tag);

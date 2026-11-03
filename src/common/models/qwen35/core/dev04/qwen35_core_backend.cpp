@@ -8,12 +8,12 @@
 
 namespace flm::qwen35 {
 
-/// \note The linear-attention state can neither rewind nor skip and corelib
-///       keeps it outside any state slot, so going back means replaying.
+/// \note The linear-attention state can neither rewind nor skip, so going back
+///       is a snapshot restore at the checkpoint and a replay anywhere else.
 flm::backend::BackendFactory core_factory() {
     return core::Factory({
         .model = {"qwen35", "Qwen3.5", kCoreContextLimit, core::Continuation::kAnywhere,
-                  core::Rewind::kReplay},
+                  core::Rewind::kSnapshot},
         .context_rule = "1.." + std::to_string(kCoreContextLimit),
         .eos_ids = {248046, 248044},
     });

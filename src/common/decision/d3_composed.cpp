@@ -637,6 +637,10 @@ ComposedRequest prepare_composed(const PyValue& body, const std::vector<std::str
         }
     }
 
+    for (const auto& m : questions.members) {   // d3_runtime `decisions`
+        const PyValue* kind = m.second.is_object() ? m.second.get("type") : nullptr;
+        if (kind && kind->is_string() && is_decision_kind(kind->text)) req.decisions++;
+    }
     for (const auto& m : questions.members) {
         const std::string& key = m.first;
         const PyValue& question = m.second;
@@ -747,6 +751,11 @@ std::vector<std::vector<double>> row_probabilities(const ComposedRow& row, const
     return values;
 }
 
+static float row_temperature(const ComposedRow& row, const ComposedRequest& request, const ComposedConfig& config) {
+    return is_decision_kind(row.kind) ? temperature_for(config.temperature_by_questions, config.temperature, request.decisions)
+                                      : config.temperature;
+}
+
 ojson row_answer(const ComposedRow& row, const std::vector<std::vector<double>>& values, const ComposedConfig& config) {
     if (row.kind == "box") {
         const std::vector<std::vector<double>> edges(values.end() - 4, values.end());
@@ -836,7 +845,8 @@ ojson run_composed(const ComposedRequest& request, ReadoutEngine& engine, const 
             const auto hidden = engine.encode_state_once(call);
             if (hidden.size() != group.size()) throw std::runtime_error("the engine returned a different number of blocks than asked for");
             for (size_t i = 0; i < group.size(); i++) {
-                values[group[i]] = row_probabilities(request.rows[group[i]], hidden[i], readout, engine.hidden_size(), config.temperature);
+                values[group[i]] = row_probabilities(request.rows[group[i]], hidden[i], readout, engine.hidden_size(),
+                                                    row_temperature(request.rows[group[i]], request, config));
             }
         }
         // the window's frames are done: free its pixels before the next window is built
