@@ -85,18 +85,6 @@
       }
     },
     {
-      "name": "windows-core",
-      "displayName": "Windows Core",
-      "description": "Windows build with statically linked ryzenai-corelib support",
-      "inherits": "windows-default",
-      "binaryDir": "${sourceDir}/build-core",
-      "cacheVariables": {
-        "FLM_ENABLE_CORE": "OFF",
-        "RYZENAI_CORELIB_INCLUDE_DIR": "$env{RYZENAI_CORELIB_INCLUDE_DIR}",
-        "RYZENAI_CORELIB_LIBRARY": "$env{RYZENAI_CORELIB_LIBRARY}"
-      }
-    },
-    {
       "name": "windows-core-on",
       "displayName": "Windows Core (enabled)",
       "description": "Windows build with the ryzenai-corelib kernel backend turned on, beside FastFlowLM's own engines. Builds into build/ like windows-default. Needs corelib exactly 0.53.0: point it at a corelib install prefix once with -DRYZENAI_CORELIB_ROOT=<prefix> (or the RYZENAI_CORELIB_ROOT environment variable), or drop the headers into include/ and ryzenai_corelib.lib into lib/.",
@@ -174,14 +162,6 @@
       "displayName": "Linux Core Build (enabled)",
       "description": "Build the ryzenai-corelib kernel backend in Release",
       "configurePreset": "linux-core-on",
-      "configuration": "Release",
-      "jobs": 4
-    },
-    {
-      "name": "windows-core",
-      "displayName": "Windows Core Build",
-      "description": "Build the optional ryzenai-corelib runtime in Release",
-      "configurePreset": "windows-core",
       "configuration": "Release",
       "jobs": 4
     },

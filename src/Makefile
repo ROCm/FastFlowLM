@@ -25,6 +25,7 @@ ifeq ($(FLM_PLATFORM),windows)
 #   SERVE_ARGS what `make serve` passes after `flm serve`
 #   JOBS       compilers at once, across all projects (cl, cargo); default every core
 #   PRESET     configure preset; default picks windows-vs18 or windows-default
+#   BUILD_DIR  build tree; default the preset's binaryDir (build_aie_next for windows-aie-next)
 #              (windows-core-on: also ryzenai-corelib)
 #   FLM_DEVENV script setting up MSVC + Windows SDK when cl.exe isn't on PATH
 #              (default: C:\dev\flm-devenv.ps1 when it exists)
@@ -33,7 +34,8 @@ SERVE_ARGS ?= qwen2.5vl-it -c 32768
 
 WIN_MAKE = powershell.exe -NoProfile -ExecutionPolicy Bypass -File make-windows.ps1
 WIN_ARGS = -RunArgs "$(RUN_ARGS)" -ServeArgs "$(SERVE_ARGS)" $(if $(JOBS),-Jobs $(JOBS)) \
-	-BuildDir "$(BUILD_DIR)" -OutDir "$(OUT_DIR)" \
+	$(if $(filter command line environment,$(origin BUILD_DIR)),-BuildDir "$(BUILD_DIR)") \
+	-OutDir "$(OUT_DIR)" \
 	$(if $(PRESET),-Preset "$(PRESET)") \
 	$(if $(FLM_DEVENV),-DevEnv "$(FLM_DEVENV)") \
 	$(if $(PREFIX),-Prefix "$(PREFIX)")

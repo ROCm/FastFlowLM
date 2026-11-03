@@ -357,6 +357,15 @@ if(FLM_ENABLE_CORE)
                             "copy them beside flm.exe by hand")
         endif()
     endif()
+elseif(WIN32 AND NOT FLM_USE_HRX)
+    # Without corelib, flm_util (lib/xrt, built in FastFlowLM_IRON) tells which
+    # NPU generation this host has (common/npu_platform.cpp). A corelib build
+    # asks corelib and does not link it.
+    if(NOT EXISTS "${FLM_ENGINE_LIB_DIR}/flm_util.lib")
+        message(FATAL_ERROR "${FLM_ENGINE_LIB_DIR} has no flm_util.lib")
+    endif()
+    target_link_libraries(flm PRIVATE flm_util)
+    target_compile_definitions(flm PRIVATE FLM_NPU_UTIL=1)
 endif()
 
 # ———————————————————————————————————————————————

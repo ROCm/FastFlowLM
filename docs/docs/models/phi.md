@@ -55,10 +55,8 @@ The core path is compiled only when you ask for it. With the option off, the bin
 From `FastFlowLM/src`, in a Visual Studio developer command prompt:
 
 ```powershell
-$env:RYZENAI_CORELIB_INCLUDE_DIR = 'C:/path/to/ryzenai-corelib/install/include'
-$env:RYZENAI_CORELIB_LIBRARY = 'C:/path/to/ryzenai-corelib/install/lib/ryzenai_corelib.lib'
-cmake --preset windows-core -DFLM_ENABLE_CORE=ON   # builds into src/build-core
-cmake --build --preset windows-core
+cmake --preset windows-core-on -DRYZENAI_CORELIB_ROOT=C:/path/to/ryzenai-corelib/install
+cmake --build --preset windows-core-on
 ```
 
 or, on Linux:

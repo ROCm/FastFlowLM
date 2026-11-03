@@ -18,12 +18,14 @@ param(
     [string]$ServeArgs = 'qwen2.5vl-it -c 32768',
     # Compilers at once across the whole build; default every logical core.
     [int]$Jobs = [Environment]::ProcessorCount,
-    # Configure preset; empty picks windows-vs18 or windows-default from the newest Visual Studio.
+    # Configure preset; empty picks windows-vs18 on Visual Studio 18, else windows-default.
     [string]$Preset,
     # Script dot-sourced to set up MSVC + Windows SDK when cl.exe is not already on PATH.
     [string]$DevEnv,
     [string]$Prefix,
-    [string]$BuildDir = 'build',
+    # Build tree; empty means the configure preset's binaryDir (build_aie_next
+    # for windows-aie-next, else build).
+    [string]$BuildDir,
     [string]$OutDir = 'out'
 )
 
@@ -56,16 +58,34 @@ function Get-ConfigurePreset {
         $version = & $vswhere -latest -products * -property installationVersion
         if ($version -like '18.*') { return 'windows-vs18' }
     }
-    return 'windows-core-on'
+    return 'windows-default'
 }
+
+# The binaryDir a configure preset names (following inherits), relative to here.
+function Get-PresetBinaryDir([string]$Name) {
+    $presets = (Get-Content 'CMakePresets.json' -Raw | ConvertFrom-Json).configurePresets
+    $seen = @{}
+    while ($Name -and -not $seen.ContainsKey($Name)) {
+        $seen[$Name] = $true
+        $p = $presets | Where-Object { $_.name -eq $Name } | Select-Object -First 1
+        if (-not $p) { break }
+        if ($p.binaryDir) { return ($p.binaryDir -replace '^\$\{sourceDir\}[/\\]?', '') }
+        $Name = @($p.inherits)[0]
+    }
+    return 'build'
+}
+
+# A preset with its own binaryDir (windows-aie-next: build_aie_next) configures there,
+# so build and stage from that same tree rather than a stale or empty build\.
+if (-not $BuildDir) { $BuildDir = Get-PresetBinaryDir (Get-ConfigurePreset) }
 
 function Invoke-Build([string[]]$ExtraConfigureArgs) {
     Import-DevEnv
     New-Item -ItemType Directory -Force $BuildDir, $OutDir | Out-Null
     $env:CARGO_BUILD_JOBS = "$Jobs"
     $configure = Get-ConfigurePreset
-    Write-Host "Configuring with preset $configure"
-    Invoke-Native cmake --preset $configure @ExtraConfigureArgs
+    Write-Host "Configuring with preset $configure into $BuildDir"
+    Invoke-Native cmake --preset $configure -B $BuildDir @ExtraConfigureArgs
     # '--' quoted: Windows PowerShell drops a bare -- as its own end-of-parameters marker.
     # MSBuild alone would run $Jobs projects of $Jobs cl each; the multi-tool task
     # with EnforceProcessCountAcrossBuilds holds the whole build to $Jobs compilers.
