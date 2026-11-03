@@ -104,6 +104,58 @@ void Qwen3_ASR::_check_audio_fits(size_t samples) const {
     }
 }
 
+namespace {
+/// Offline audio longer than this is transcribed in pieces of about this length (see the file comment of the split below)
+constexpr double OFFLINE_PIECE_SECONDS = 60.0;
+
+/// qwen_asr.inference.utils.split_audio_into_chunks: pieces of at most max_sec (+ the search window), each cut at the quietest 100 ms
+/// window within +-5 s of the target; the pieces cover the audio exactly (no gap, no overlap). Returns the piece boundaries.
+std::vector<std::pair<size_t, size_t>> split_audio_pieces(const std::vector<float>& wav, int sr, double max_sec) {
+    const size_t total = wav.size();
+    const size_t max_len = (size_t)(max_sec * sr), expand = (size_t)(5.0 * sr), win = std::max<size_t>(4, (size_t)(0.1 * sr));
+    std::vector<std::pair<size_t, size_t>> pieces;
+    size_t start = 0;
+    while (total - start > max_len) {
+        const size_t cut = start + max_len;
+        const size_t left = std::max(start, cut - std::min(cut, expand)), right = std::min(total, cut + expand);
+        size_t boundary = cut;
+        if (right - left > win) {
+            // the window of `win` samples with the smallest sum of |x| (first one on ties), then its quietest sample
+            double sum = 0.0;
+            for (size_t i = left; i < left + win; i++) sum += std::fabs(wav[i]);
+            double best = sum;
+            size_t best_pos = left;
+            for (size_t i = left + 1; i + win <= right; i++) {
+                sum += std::fabs(wav[i + win - 1]) - std::fabs(wav[i - 1]);
+                if (sum < best) { best = sum; best_pos = i; }
+            }
+            size_t inner = best_pos;
+            for (size_t i = best_pos; i < best_pos + win; i++)
+                if (std::fabs(wav[i]) < std::fabs(wav[inner])) inner = i;
+            boundary = inner;
+        }
+        boundary = std::min(std::max(boundary, start + 1), total);
+        pieces.emplace_back(start, boundary);
+        start = boundary;
+    }
+    pieces.emplace_back(start, total);
+    return pieces;
+}
+
+/// whether the UTF-8 code point starting at s[i] is a CJK character / CJK punctuation (no space between such texts)
+bool cjk_at(const std::string& s, size_t i) {
+    const unsigned char c = (unsigned char)s[i];
+    return c >= 0xE3 && c <= 0xEF;   // U+3000..U+FFFF: CJK punctuation, kana, ideographs, full-width forms
+}
+
+/// the start of the last UTF-8 code point of s
+size_t last_cp(const std::string& s) {
+    size_t i = s.size() - 1;
+    while (i > 0 && ((unsigned char)s[i] & 0xC0) == 0x80) i--;
+    return i;
+}
+}  // namespace
+
 std::string Qwen3_ASR::transcribe(chat_meta_info_t& meta_info, const std::vector<uint8_t>& audio_bytes, const std::string& language, const std::string& context,
                                   int length_limit, std::ostream& os, std::string& detected_language, double& duration_seconds,
                                   std::function<bool()> is_cancelled) {
@@ -112,31 +164,55 @@ std::string Qwen3_ASR::transcribe(chat_meta_info_t& meta_info, const std::vector
     audio_data_t audio = this->load_audio_bytes(audio_bytes);
     if (audio.channels != 1 || audio.num_frames == 0) throw std::invalid_argument("the audio could not be decoded (wav, flac, mp3 or ogg expected)");
     duration_seconds = audio.duration_seconds;
-    this->_check_audio_fits(audio.samples.size());
 
-    std::vector<int> tokens;
-    void* payload = nullptr;
-    int first_len_run = 0;
-    if (!this->_build_prompt(audio.samples, context, language, "", tokens, payload, first_len_run))
-        throw std::invalid_argument("the audio is too short to transcribe");
+    // long audio: pieces of about a minute, transcribed one by one (as qwen_asr does above its own, longer, limit)
+    const auto pieces = split_audio_pieces(audio.samples, SAMPLE_RATE, OFFLINE_PIECE_SECONDS);
+    std::string text, last_language;
+    for (size_t p = 0; p < pieces.size(); p++) {
+        if (p > 0 && is_cancelled()) break;
+        std::vector<float> piece(audio.samples.begin() + pieces[p].first, audio.samples.begin() + pieces[p].second);
+        const size_t min_len = SAMPLE_RATE / 2;   // qwen_asr pads pieces shorter than 0.5 s with silence
+        if (piece.size() < min_len) piece.resize(min_len, 0.0f);
 
-    meta_info.restore_allowed = false;
-    this->clear_context();
-    if (!this->_shared_insert(meta_info, tokens, is_cancelled, payload, first_len_run)) throw std::invalid_argument("the audio is too long for the context window (about 10 minutes at the default 8192 tokens)");
+        std::vector<int> tokens;
+        void* payload = nullptr;
+        int first_len_run = 0;
+        if (!this->_build_prompt(piece, context, language, "", tokens, payload, first_len_run)) {
+            if (pieces.size() == 1) throw std::invalid_argument("the audio is too short to transcribe");
+            continue;
+        }
+        meta_info.restore_allowed = false;
+        this->clear_context();
+        if (!this->_shared_insert(meta_info, tokens, is_cancelled, payload, first_len_run)) {
+            if (is_cancelled()) break;
+            throw std::invalid_argument("the audio could not be transcribed (prompt too long for the context window)");
+        }
 
-    std::ostringstream answer;
-    {
-        // keep the model's own header for the language, stream only the text
-        struct tee : std::streambuf {
-            std::ostringstream& a;
-            explicit tee(std::ostringstream& s) : a(s) {}
-            int_type overflow(int_type c) override { if (c != traits_type::eof()) a.put(traits_type::to_char_type(c)); return c; }
-        } raw(answer);
-        std::ostream raw_os(&raw);
-        this->_shared_generate(meta_info, length_limit, raw_os, is_cancelled);
+        std::ostringstream answer;
+        {
+            // keep the model's own header for the language, stream only the text
+            struct tee : std::streambuf {
+                std::ostringstream& a;
+                explicit tee(std::ostringstream& s) : a(s) {}
+                int_type overflow(int_type c) override { if (c != traits_type::eof()) a.put(traits_type::to_char_type(c)); return c; }
+            } raw(answer);
+            std::ostream raw_os(&raw);
+            this->_shared_generate(meta_info, length_limit, raw_os, is_cancelled);
+        }
+        std::string piece_language, piece_text;
+        qwen3_asr_split_answer(answer.str(), piece_language, piece_text);
+        // languages: qwen_asr merge_languages (in order, consecutive duplicates and empty ones dropped)
+        if (!piece_language.empty() && piece_language != last_language) {
+            detected_language += (detected_language.empty() ? "" : ",") + piece_language;
+            last_language = piece_language;
+        }
+        if (piece_text.empty()) continue;
+        // qwen_asr joins the pieces without a separator; a space keeps two Latin-script pieces from running together
+        std::string joined = piece_text;
+        if (!text.empty() && !cjk_at(text, last_cp(text)) && !cjk_at(piece_text, 0) && text.back() != ' ' && piece_text.front() != ' ')
+            joined = " " + piece_text;
+        text += joined;
+        os << joined << std::flush;
     }
-    std::string text;
-    qwen3_asr_split_answer(answer.str(), detected_language, text);
-    os << text << std::flush;
     return text;
 }
