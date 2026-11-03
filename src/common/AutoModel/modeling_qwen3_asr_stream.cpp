@@ -278,6 +278,7 @@ std::string Qwen3_ASR::transcribe_streaming(chat_meta_info_t& meta_info, const s
     audio_data_t audio = this->load_audio_bytes(audio_bytes);
     if (audio.channels != 1 || audio.num_frames == 0) throw std::invalid_argument("the audio could not be decoded (wav, flac, mp3 or ogg expected)");
     duration_seconds = audio.duration_seconds;
+    this->_check_audio_fits(audio.samples.size());
     if (chunk_ms < 80 || chunk_ms > 2000) throw std::invalid_argument("chunk_size_ms must be between 80 and 2000");
     unfixed_token_num = std::max(0, unfixed_token_num);
     const std::vector<float>& wav = audio.samples;

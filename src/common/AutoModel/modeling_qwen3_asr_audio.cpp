@@ -78,6 +78,16 @@ void Qwen3_ASR::compute_log_mel(const audio_data_t& audio, std::vector<float>& m
     audioproc::affine_scale(mel.data(), total, log_offset, log_scale);                                          // (x + 4) / 4
 }
 
+void Qwen3_ASR::_check_audio_fits(size_t samples) const {
+    const size_t audio_tokens = (size_t)qwen3_asr_audio_tokens((int)(samples / 160));
+    const size_t reserve = std::max<size_t>(256, audio_tokens / 2);
+    const size_t cap = this->decode_cap();
+    if (cap > 0 && audio_tokens + 64 + reserve > cap) {
+        const double max_s = (double)(cap - 64) / 1.5 / 12.5;
+        throw std::invalid_argument("the audio is too long for the context window (at most about " + std::to_string((int)max_s) + " seconds)");
+    }
+}
+
 std::string Qwen3_ASR::transcribe(chat_meta_info_t& meta_info, const std::vector<uint8_t>& audio_bytes, const std::string& language, const std::string& context,
                                   int length_limit, std::ostream& os, std::string& detected_language, double& duration_seconds,
                                   std::function<bool()> is_cancelled) {
@@ -86,6 +96,7 @@ std::string Qwen3_ASR::transcribe(chat_meta_info_t& meta_info, const std::vector
     audio_data_t audio = this->load_audio_bytes(audio_bytes);
     if (audio.channels != 1 || audio.num_frames == 0) throw std::invalid_argument("the audio could not be decoded (wav, flac, mp3 or ogg expected)");
     duration_seconds = audio.duration_seconds;
+    this->_check_audio_fits(audio.samples.size());
 
     std::vector<int> tokens;
     void* payload = nullptr;

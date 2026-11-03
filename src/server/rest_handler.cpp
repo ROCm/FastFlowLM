@@ -1886,6 +1886,10 @@ void RestHandler::handle_openai_audio_transcriptions(const json& request,
                                         StreamResponseCallback send_streaming_response,
                                         std::shared_ptr<CancellationToken> cancellation_token) {
     try {
+        if (!request.contains("file") || !request["file"].is_string()) {
+            send_response({{"error", {{"message", "the request has no audio file (multipart field \"file\")"}, {"type", "invalid_request_error"}, {"code", 400}}}});
+            return;
+        }
         std::string model = request["model"];
         std::string file_content = request["file"].get<std::string>();
         std::vector<uint8_t> audio_raw(file_content.begin(), file_content.end());

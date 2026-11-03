@@ -83,6 +83,9 @@ private:
     std::string _asr_step(chat_meta_info_t& meta_info, const std::vector<float>& samples, const std::string& context,
                           const std::string& language, const std::string& assistant_text, int max_new_tokens,
                           const std::function<bool()>& is_cancelled);
+    /// \brief refuse (std::invalid_argument) audio whose text could not be finished in the context window: the prompt takes 12.5 tokens per
+    ///        audio second, and room is kept for the answer (half a token per audio token, at least 256)
+    void _check_audio_fits(size_t samples) const;
     /// \brief the engine payload of the request being built (kept alive until the prefill)
     std::shared_ptr<void> payload_holder_;
     /// \brief streaming: the engine keeps the encoder output and K/V rows of the closed 8 s windows between the steps; true until the first step has run

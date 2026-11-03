@@ -1216,7 +1216,13 @@ std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader&
             std::function<void(const json&, bool)> send_streaming_response,
             std::shared_ptr<HttpSession> session,
             std::shared_ptr<CancellationToken> cancellation_token) {
-                std::map<std::string, MultipartPart> parts = parse_multipart(req);
+                std::map<std::string, MultipartPart> parts;
+                try {
+                    parts = parse_multipart(req);
+                } catch (const std::exception& e) {   // not a multipart/form-data body: the client's mistake, not a server error
+                    send_response({{"error", {{"message", std::string("the request must be multipart/form-data with a \"file\" field: ") + e.what()}, {"type", "invalid_request_error"}, {"code", 400}}}});
+                    return;
+                }
                 json request_json;
                 request_json["model"] = parts["model"].content;
                 request_json["file"] = parts["file"].content;
