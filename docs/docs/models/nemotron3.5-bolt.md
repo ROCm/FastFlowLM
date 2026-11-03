@@ -15,6 +15,7 @@ parent: Models
 - **Base Model:** [nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-BF16](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-BF16), post-trained from [google/gemma-4-E4B-it](https://huggingface.co/google/gemma-4-E4B-it) (same architecture as `gemma4-it:e4b`)
 - **Quantization:** Q4_1 (converted from NVIDIA's Q4_K_M release)
 - **Max Context Length:** 64k tokens
+- **Host memory:** the token embeddings and the per-layer embeddings are read straight from `model.q4nx` through a read-only memory map, one row per token, instead of being copied into RAM. This saves about 3.7 GiB of RAM (private memory right after loading: about 3.9 GiB before, 0.3 GiB now) with the same speed and the same output. Only the rows of tokens that were actually seen stay in memory, and the OS can drop them under memory pressure; if it does, a prompt full of new tokens takes a little longer to start (about 0.2 s for 4k tokens on an NVMe drive). On Windows, the loaded model's `model.q4nx` cannot be replaced or deleted, so stop the server before `flm remove` or `flm pull` of this model.
 - **Default Context Length:** 32k tokens ([change default](https://fastflowlm.com/docs/instructions/cli/#-change-default-context-length-max))
 - **[Set Context Length at Launch](https://fastflowlm.com/docs/instructions/cli/#-set-context-length-at-launch)**
 - **License:** [OpenMDW-1.1](https://openmdw.ai/license/1-1/)

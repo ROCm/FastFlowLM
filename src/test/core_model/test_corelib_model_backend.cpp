@@ -260,7 +260,7 @@ void TestPoisonedFollowsTheEngine() {
     Runtime r;
     Package p({"m.gguf"});
     auto backend = flm::core::Factory(Spec())(Context(p, 4096));
-    fake_corelib::GetState().statuses["ryzenai_corelib_model_forward"] =
+    fake_corelib::GetState().statuses["ryzenai_corelib_model_run"] =
         ryzenai_corelib_status_failure;
     std::vector<int> ids{1, 2};
     (void)RequireThrows([&] { (void)backend->engine().prefill(ids); });

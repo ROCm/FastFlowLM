@@ -478,7 +478,7 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
     // Draft depth; also the hit-rate denominator (see report_speculation_stats).
     const int SPEC_MAX_DRAFT = 7;
     if (spec_enabled) {
-        header_print("FLM", "Speculative decoding enabled (MTP draft head).");
+        header_print("FLM", "Speculative decoding enabled (" << this->spec_label_ << ").");
     }
 
     int last_sampled_token = this->last_token;
@@ -568,7 +568,10 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
         const int tokens_left = (length_limit > 0)
             ? length_limit - meta_info.generated_tokens
             : SPEC_MAX_DRAFT + 1;
-        if (spec_enabled && tokens_left > 1) {
+        // speculate() samples inside the engine, past _sample()'s EOS mask: while ignore_eos / min_tokens
+        // still forbids an EOS, decode one token at a time
+        const bool eos_suppressed = meta_info.ignore_eos || meta_info.generated_tokens < meta_info.min_tokens;
+        if (spec_enabled && tokens_left > 1 && !eos_suppressed) {
             this->profiler_list[DECODING_TIME].start();
             std::vector<int> accepted =
                 this->lm_engine->speculate(last_sampled_token,

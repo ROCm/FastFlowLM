@@ -164,7 +164,14 @@ std::string Nanbeige::generate(chat_meta_info_t& meta_info, int length_limit, st
         this->profiler_list[TKOEN_DECODE_TIME].stop(1);
         this->token_history.push_back(sampled_token);
         if (this->is_eos(sampled_token)){
-            this->lm_engine->forward(last_sampled_token);
+            // Its row is past the end of the engine's KV window once the context is
+            // full: forwarding it there corrupts the engine for every later request,
+            // so the next prompt has to carry it instead.
+            if (this->total_tokens < this->MAX_L) {
+                this->lm_engine->forward(last_sampled_token);
+            } else {
+                this->token_history.pop_back();
+            }
             break;
         }
         meta_info.generated_tokens++;
@@ -241,7 +248,14 @@ std::string Nanbeige::generate_with_prompt(chat_meta_info_t& meta_info, lm_unifo
         this->profiler_list[TKOEN_DECODE_TIME].stop(1);
         this->token_history.push_back(sampled_token);
         if (this->is_eos(sampled_token)){
-            this->lm_engine->forward(last_sampled_token);
+            // Its row is past the end of the engine's KV window once the context is
+            // full: forwarding it there corrupts the engine for every later request,
+            // so the next prompt has to carry it instead.
+            if (this->total_tokens < this->MAX_L) {
+                this->lm_engine->forward(last_sampled_token);
+            } else {
+                this->token_history.pop_back();
+            }
             break;
         }
         meta_info.generated_tokens++;

@@ -355,7 +355,7 @@ Streaming works the same way: each content chunk carries `choices[0].logprobs.co
 - The log probabilities are the model's own distribution, before temperature, top-k/top-p, penalties, or the grammar from `tool_choice` / `response_format` are applied. Under a grammar, the chosen token can be one the model itself thought unlikely.
 - Only `content` has log probabilities. Tokens of `reasoning_content` and of tool calls are left out, and chunks that carry them have `logprobs: null`.
 - `bytes` is `null` for special tokens such as end-of-turn, which can appear among `top_logprobs`. A token that holds only part of a UTF-8 character is named by its bytes, for example `"bytes:\xe4\xbd"`.
-- On `qwen3.8-mtp`, tokens produced by speculative decoding take their log probabilities from the batched pass that checks the draft. That pass runs different kernels from one-token decoding, so the values can differ slightly from what the same model reports with speculation off.
+- On `qwen3.8-mtp` and `qwen3.8-dflash2`, tokens produced by speculative decoding take their log probabilities from the batched pass that checks the draft. That pass runs different kernels from one-token decoding, so the values can differ slightly from what the same model reports with speculation off.
 - `top_logprobs` without `logprobs=True`, or outside 0–100, gets HTTP 400.
 
 ---
@@ -507,7 +507,7 @@ gc.collect()
 
 ## ⚡ Example: Flash Models (Single-Turn, Pinned System Prompt)
 
-**Flash** models — `gemma4e-flash:e2b`, `gemma4e-flash:e4b`, `qwen3vl-flash:4b`, and `hy-mt2-flash:1.8b` — trade context length for a much faster time-to-first-token. They are built for high-throughput, short, independent requests: classification, captioning, extraction, routing, translation.
+**Flash** models — `gemma4e-flash:e2b`, `gemma4e-flash:e4b`, `nemotron3.5-bolt-dflash-flash:e4b`, `qwen3vl-flash:4b`, and `hy-mt2-flash:1.8b` — trade context length for a much faster time-to-first-token. They are built for high-throughput, short, independent requests: classification, captioning, extraction, routing, translation.
 
 They are **single-turn**: every request starts from a clean KV state, so earlier turns are not carried over. The system prompt is the one exception — it is prefilled once and cached, so keep it fixed and vary only the user message (and, for vision models, the image).
 
@@ -571,6 +571,6 @@ gc.collect()
 > 📏 Context is **fixed at 1k tokens** for every flash model; context-length overrides are ignored.  
 > 🔧 **Tool calling is not supported** — any `tools` you pass are dropped.  
 > 🌐 `hy-mt2-flash` is text-only and has no default system prompt — pin your own translation instruction as the system prompt, or put it in the user message.  
-> 🖼️ `gemma4e-flash` defaults to the smallest visual token budget (70) and keeps only the **first 30 seconds** of an audio clip. `qwen3vl-flash` always downscales images to a **256 px longer side**.  
+> 🖼️ `gemma4e-flash` and `nemotron3.5-bolt-dflash-flash` default to the smallest visual token budget (70) and keeps only the **first 30 seconds** of an audio clip. `qwen3vl-flash` always downscales images to a **256 px longer side**.  
 
-For the full per-model details, see the [`gemma4e-flash:e2b`](https://fastflowlm.com/docs/models/gemma/#-model-card-gemma-4-e2b-it--flash), [`gemma4e-flash:e4b`](https://fastflowlm.com/docs/models/gemma/#-model-card-gemma-4-e4b-it--flash), [`qwen3vl-flash:4b`](https://fastflowlm.com/docs/models/qwen/#-model-card-qwen3-vl-4b-instruct--flash), and [`hy-mt2-flash:1.8b`](https://fastflowlm.com/docs/models/hy-mt2/) model cards. Performance numbers are on the [Flash benchmarks](https://fastflowlm.com/docs/benchmarks/flash_results/) page.
+For the full per-model details, see the [`gemma4e-flash:e2b`](https://fastflowlm.com/docs/models/gemma/#-model-card-gemma-4-e2b-it--flash), [`gemma4e-flash:e4b`](https://fastflowlm.com/docs/models/gemma/#-model-card-gemma-4-e4b-it--flash), [`nemotron3.5-bolt-dflash-flash:e4b`](https://fastflowlm.com/docs/models/nemotron3.5-bolt-dflash/#-model-card-nvidia-nemotron-35-bolt-e4b--dflash-flash), [`qwen3vl-flash:4b`](https://fastflowlm.com/docs/models/qwen/#-model-card-qwen3-vl-4b-instruct--flash), and [`hy-mt2-flash:1.8b`](https://fastflowlm.com/docs/models/hy-mt2/) model cards. Performance numbers are on the [Flash benchmarks](https://fastflowlm.com/docs/benchmarks/flash_results/) page.

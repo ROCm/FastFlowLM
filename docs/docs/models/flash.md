@@ -13,6 +13,7 @@ parent: Models
 |---------------|----------|----------------|
 | `gemma4e-flash:e2b` | Any-to-Text (image, audio) | [Gemma 4 E2B — Flash](https://fastflowlm.com/docs/models/gemma/#-model-card-gemma-4-e2b-it--flash) |
 | `gemma4e-flash:e4b` | Any-to-Text (image, audio) | [Gemma 4 E4B — Flash](https://fastflowlm.com/docs/models/gemma/#-model-card-gemma-4-e4b-it--flash) |
+| `nemotron3.5-bolt-dflash-flash:e4b` | Any-to-Text (image, audio), speculative decoding | [Nemotron Bolt E4B — DFlash Flash](https://fastflowlm.com/docs/models/nemotron3.5-bolt-dflash/#-model-card-nvidia-nemotron-35-bolt-e4b--dflash-flash) |
 | `qwen3vl-flash:4b` | Image-Text-to-Text | [Qwen3-VL-4B — Flash](https://fastflowlm.com/docs/models/qwen/#-model-card-qwen3-vl-4b-instruct--flash) |
 | `hy-mt2-flash:1.8b` | Text-to-Text (Translation) | [Hy-MT2](https://fastflowlm.com/docs/models/hy-mt2/) |
 

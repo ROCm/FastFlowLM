@@ -38,6 +38,10 @@ This page says what FLM does with the fields of a `/v1/chat/completions` or `/v1
 | `repetition_penalty` | > 0 | FLM extension. See [Penalties](#-presence-frequency-and-repetition-penalties). |
 | `repeat_last_n` | integer ≥ −1 | FLM extension. How many generated tokens the penalties look at. See [The Penalty Window](#-the-penalty-window). |
 | `seed` | any integer | Makes sampling repeatable. See [`seed`](#-seed-and-repeatable-output). |
+| `min_tokens` | integer ≥ 0 | vLLM-style extension. End-of-sequence tokens are not sampled until at least `min_tokens` tokens have been generated; the reply can run one or two tokens over (more with speculative decoding). `max_tokens` still ends the reply. |
+| `ignore_eos` | `true` / `false` | vLLM-style extension. End-of-sequence tokens are never sampled, so the reply runs to `max_tokens` (or the context limit). Meant for fixed-length benchmarking. |
+
+> `min_tokens` and `ignore_eos` mask the end-of-sequence ids before sampling, so they work on every sampling path. `qwen3.8-mtp` and `qwen3.8-dflash2` decode one token at a time while either is in force, because its draft head samples inside the engine; expect a much lower speed there.
 
 Each token is chosen in this order: penalties → the `tool_choice` / `response_format` grammar, if any → `top_k` → `top_p` and the model's min-p cut-off → `temperature` → sample.
 
@@ -69,8 +73,8 @@ A request that sends no sampling fields uses the model's own defaults, which dif
 
 | Models | `presence_penalty` at load |
 |---|---|
-| `qwen3.5:*`, `qwen3.5-core:*`, `qwen3.6-moe:35b-a3b`, `qwen3.6-moe-core:35b-a3b`, `qwen3.8-mtp:27b`, `minicpm-v-4.7:1b` | 1.5 |
-| `gemma4-it:*`, `gemma4-it-core:*`, `gemma4e-flash:*`, `nemotron3.5-bolt:e4b` | 1.0 |
+| `qwen3.5:*`, `qwen3.5-core:*`, `qwen3.6-moe:35b-a3b`, `qwen3.6-moe-core:35b-a3b`, `qwen3.8-mtp:27b`, `qwen3.8-dflash2:27b`, `minicpm-v-4.7:1b` | 1.5 |
+| `gemma4-it:*`, `gemma4-it-core:*`, `gemma4e-flash:*`, `nemotron3.5-bolt:e4b`, `nemotron3.5-bolt-dflash:e4b`, `nemotron3.5-bolt-dflash-flash:e4b` | 1.0 |
 | every other model | 0 |
 
 Sending `presence_penalty=0` turns the default off, and it stays off until the model is reloaded (see *Settings stick* above).
@@ -97,7 +101,7 @@ Penalties also act on reasoning tokens, and on tokens that a `tool_choice` or `r
 
 The [log probabilities](https://fastflowlm.com/docs/instructions/server/openapi/#-example-token-log-probabilities) a response reports are taken **before** any penalty is applied.
 
-> ⚠️ **`qwen3.8-mtp:27b`:** tokens accepted from the speculative draft head are compared with the model's own most likely token and skip the sampler. Penalties, `temperature`, `top_k` and `top_p` only shape the tokens the model samples itself, and drafted tokens don't enter the penalty window.
+> ⚠️ **`qwen3.8-mtp:27b` and `qwen3.8-dflash2:27b`:** tokens accepted from the speculative draft are compared with the model's own most likely token and skip the sampler. Penalties, `temperature`, `top_k` and `top_p` only shape the tokens the model samples itself, and drafted tokens don't enter the penalty window.
 
 ---
 
@@ -260,7 +264,7 @@ Before generating, FLM reads the prompt into the model's KV cache. This is the *
 
 | Models | `max_prefill_len` |
 |---|---|
-| Flash models (`gemma4e-flash:*`, `qwen3vl-flash:4b`, `hy-mt2-flash:1.8b`) | 1024 |
+| Flash models (`gemma4e-flash:*`, `nemotron3.5-bolt-dflash-flash:e4b`, `qwen3vl-flash:4b`, `hy-mt2-flash:1.8b`) | 1024 |
 | Every other chat model | 4096 |
 
 **`max_prefill_len` is not a limit on the prompt.** A longer prompt just takes more chunks. A 32,000-token prompt on a model with 4096-token chunks is read in eight passes, seven of 4096 tokens and one of 3,328, and the server log shows each one:

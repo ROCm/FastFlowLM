@@ -722,7 +722,30 @@ std::string AutoModel::token_text(int token) {
 
 int AutoModel::_sample(buffer<bf16>& logits, chat_meta_info_t& meta_info) {
     decode_constraint* constraint = meta_info.constraint.get();
-    const bool masked = constraint != nullptr && constraint->fill_mask(this->constraint_mask_);
+    bool masked = constraint != nullptr && constraint->fill_mask(this->constraint_mask_);
+    // ignore_eos / min_tokens: take the EOS ids out of the allowed set
+    if (meta_info.ignore_eos || meta_info.generated_tokens < meta_info.min_tokens) {
+        const size_t words = (logits.size() + 31) / 32;
+        if (!masked) {
+            this->constraint_mask_.assign(words, 0xFFFFFFFFu);
+        } else if (this->constraint_mask_.size() < words) {
+            this->constraint_mask_.resize(words, 0u);
+        }
+        std::vector<uint32_t> saved = this->constraint_mask_;
+        for (int id : this->eos_token_ids) {
+            if (id >= 0 && static_cast<size_t>(id) < logits.size()) {
+                this->constraint_mask_[id / 32] &= ~(1u << (id % 32));
+            }
+        }
+        // a grammar that only allows EOS here keeps it: nothing else could be sampled
+        bool any = false;
+        for (uint32_t w : this->constraint_mask_) { if (w) { any = true; break; } }
+        if (any) {
+            masked = true;
+        } else {
+            this->constraint_mask_ = saved;
+        }
+    }
     sample_logprobs_t raw;
     raw.top_n = meta_info.logprobs_top_n;
     // The mask goes to the sampler, which applies it to its own copy: the logits
@@ -916,7 +939,9 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
             // cache in step. Two things can say no: a frontend whose cache is
             // discarded anyway (forward_on_eos), and a backend that caps its
             // own decode and would reject the call.
-            if (this->forward_on_eos &&
+            // The forward writes row total_tokens, which is past the end of the
+            // engine's KV window once the context is full.
+            if (this->forward_on_eos && this->total_tokens < decode_cap &&
                 (!this->backend_ || this->backend_->forwards_past_eos())) {
                 this->lm_engine->forward(last_sampled_token);
             } else {

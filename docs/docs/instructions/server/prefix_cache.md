@@ -37,11 +37,11 @@ The other supported models gain the same way. Measured on shorter prompts (about
 
 | | Prefix cache |
 |---|---|
-| Models | **Qwen:** `qwen3.5:0.8b` / `2b` / `4b` / `9b`, `qwen3.6-moe:35b-a3b`, `qwen3:0.6b` / `1.7b` / `4b` / `8b`, `qwen3-it:4b`, `qwen3-tk:4b`, `qwen2.5-it:3b`, `qwen3vl-it:4b`, `qwen2.5vl-it:3b`, `qwen3.8-mtp:27b` (the shared system prompt only, see below)<br>**Llama and DeepSeek:** `llama3.2:1b` / `3b`, `llama3.1:8b`, `deepseek-r1:8b`, `deepseek-r1-0528:8b`<br>**Phi and Nanbeige:** `phi4-mini-it:4b`, `nanbeige4.1:3b`<br>**LFM:** `lfm2:1.2b`, `lfm2:2.6b`, `lfm2-trans:2.6b`, `lfm2.5-it:1.2b`, `lfm2.5-tk:1.2b`<br>**gpt-oss:** `gpt-oss:20b`, `gpt-oss-sg:20b`<br>**Gemma:** `gemma3:1b`, `gemma3:4b`, `medgemma:4b`, `medgemma1.5:4b`, `translategemma:4b`, `gemma4-it:e2b` / `e4b` / `12b`, `nemotron3.5-bolt:e4b`<br>**MiniCPM:** `minicpm-v-4.7:1b`, `minicpm-v-4.7-moe:35b-a3b` |
+| Models | **Qwen:** `qwen3.5:0.8b` / `2b` / `4b` / `9b`, `qwen3.6-moe:35b-a3b`, `qwen3:0.6b` / `1.7b` / `4b` / `8b`, `qwen3-it:4b`, `qwen3-tk:4b`, `qwen2.5-it:3b`, `qwen3vl-it:4b`, `qwen2.5vl-it:3b`, `qwen3.8-mtp:27b` and `qwen3.8-dflash2:27b` (the shared system prompt only, see below)<br>**Llama and DeepSeek:** `llama3.2:1b` / `3b`, `llama3.1:8b`, `deepseek-r1:8b`, `deepseek-r1-0528:8b`<br>**Phi and Nanbeige:** `phi4-mini-it:4b`, `nanbeige4.1:3b`<br>**LFM:** `lfm2:1.2b`, `lfm2:2.6b`, `lfm2-trans:2.6b`, `lfm2.5-it:1.2b`, `lfm2.5-tk:1.2b`<br>**gpt-oss:** `gpt-oss:20b`, `gpt-oss-sg:20b`<br>**Gemma:** `gemma3:1b`, `gemma3:4b`, `medgemma:4b`, `medgemma1.5:4b`, `translategemma:4b`, `gemma4-it:e2b` / `e4b` / `12b`, `nemotron3.5-bolt:e4b`<br>**MiniCPM:** `minicpm-v-4.7:1b`, `minicpm-v-4.7-moe:35b-a3b` |
 | Endpoint | `POST /v1/chat/completions` of `flm serve` (what Hermes, Open WebUI and most agents use), streaming or not |
 | Not covered | `flm run` (CLI mode) and the Ollama endpoints `/api/chat` and `/api/generate`, which keep the older single-checkpoint reuse. A request on an Ollama endpoint also empties the prefix cache, so a client that mixes both APIs loses its cached prompts. |
 
-Not covered: the single-turn models (`hy-mt2-flash`, `qwen3vl-flash`, `gemma4e-flash`: they take one request and pin their system prompt, so there is nothing to reuse), the developer-preview `*-core` backends, `lfm3`, and the speech, embedding and robotics models. They are unchanged.
+Not covered: the single-turn models (`hy-mt2-flash`, `qwen3vl-flash`, `gemma4e-flash`, `nemotron3.5-bolt-dflash-flash`: they take one request and pin their system prompt, so there is nothing to reuse), the developer-preview `*-core` backends, `lfm3`, and the speech, embedding and robotics models. They are unchanged.
 
 It is on by default. Nothing to configure for a single chat or agent.
 
@@ -128,7 +128,7 @@ The other models:
 | `gemma4-it:e4b`, `nemotron3.5-bolt:e4b` | 16 KiB | 20 MiB | about 84 MiB |
 | `gemma4-it:12b` | 16 KiB | 320 MiB | about 384 MiB |
 | `minicpm-v-4.7:1b` | 12 KiB | 18 MiB | about 66 MiB |
-| `qwen3.8-mtp:27b` | 84 KiB | 151 MiB | about 487 MiB |
+| `qwen3.8-mtp:27b`, `qwen3.8-dflash2:27b` | 84 KiB | 151 MiB | about 487 MiB |
 
 (Measured from the server log for the models we ran; the 3B and 8B Llama and the 0.6B to 8B Qwen3 sizes follow from the model shape.) `qwen3.8-mtp:27b` keeps fewer and smaller defaults, 4 saved prompts in 1536 MiB, because each saved prompt is large; `--prefix-slots` and `--prefix-cache-mb` still override them.
 
@@ -202,7 +202,7 @@ In the multi-agent runs the first sub-agent reads the shared system prompt and i
 - **Qwen3.8-27B keeps the shared system prompt only.** A saved prompt of this model is large (about 150 MiB plus 84 KiB per token), so it saves the shared start of a conversation (system prompt + tools) and nothing after it, for text prompts. A conversation that keeps going is still continued from the end of its last turn with the older single-checkpoint reuse, as before; the saved system prompt is used when another conversation ran in between, so several agents that share one system prompt do not read it again each time.
 - **Gemma 3 has no shared system-prompt snapshot.** Its chat template puts the system prompt inside the first user turn, so two conversations that differ in their first message have no text in common to save as a shared start. Each conversation still reuses its own earlier turns.
 - **Models with a sliding window or a convolution state** (Gemma 3 and 4, gpt-oss, the LFM2 family) save a state that cannot be rewound, so a saved prompt is resumed only when the new prompt starts with all of it, and a prompt that shares just the first part of a saved one resumes at the saved system-prompt start instead.
-- **Pictures and audio.** The Qwen-VL models, Qwen3.5 and MiniCPM-V reuse prompts that contain pictures. The Gemma 4 models (and the `nemotron3.5-bolt` model built on them) reuse text prompts through the prefix cache; a prompt with a picture or audio keeps the older single-checkpoint reuse. `qwen3.8-mtp:27b` is text only.
+- **Pictures and audio.** The Qwen-VL models, Qwen3.5 and MiniCPM-V reuse prompts that contain pictures. The Gemma 4 models (and the `nemotron3.5-bolt` model built on them) reuse text prompts through the prefix cache; a prompt with a picture or audio keeps the older single-checkpoint reuse. `qwen3.8-mtp:27b` and `qwen3.8-dflash2:27b` are text only.
 - **Platforms.** Tested on Linux with the XRT backend. The Windows and HRX builds contain the same code but have not been run.
 
 ---

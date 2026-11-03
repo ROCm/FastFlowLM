@@ -640,6 +640,9 @@ json chat_structural_tag(const chat_format_spec& spec, const chat_constraint_req
             std::vector<std::string> excludes;
             if (spec.has_reasoning()) {
                 excludes = {spec.reasoning_start, spec.reasoning_end};
+                // gemma4 opens reasoning with two tokens; the bare <|channel> token must not
+                // be sampled either, or it stands in for <|tool_call> (FLM#886)
+                if (spec.kind == chat_format_kind::GEMMA4) excludes.push_back("<|channel>");
             }
             suffix = {{"type", "triggered_tags"}, {"triggers", {syntax.trigger}}, {"tags", syntax.tags},
                       {"stop_after_first", !request.parallel_tool_calls}};

@@ -109,22 +109,22 @@ flm run qwen3:8b
 
 - **Tags:** `qwen3-core:0.6b`, `qwen3-core:1.7b`, `qwen3-core:4b`, `qwen3-core:8b` — their own tags, beside the NPU2 `qwen3:*` entries. `supported_platforms` is `dev04`, and the `-core` suffix is what asks for corelib's kernels.
 - **Backend:** `core` — one engine for all four sizes. The GGUF's own metadata selects the size and is cross-checked against it.
-- **Source format:** GGUF, read directly by corelib. With a Hugging Face token that can read AMD's private repositories (`HF_TOKEN`, or `hf auth login`), `flm pull` fetches AMD's 4-bit file, which packs exactly as it is; without one it falls back to the public GGUF. A public `Q8_0` is requantized to 4-bit groups on every load, which is lossy.
+- **Source format:** GGUF, read directly by corelib. With a Hugging Face token that can read AMD's private repositories (`HF_TOKEN`, or `hf auth login`), `flm pull` fetches AMD's 4-bit file, which packs exactly as it is; without one, a tag below on an AMD file cannot be pulled, as corelib's own runner has no public fallback either. Only Qwen3-0.6B and Llama, which AMD ships no 4-bit file of, pull a public `Q8_0`, requantized to 4-bit groups on every load, which is lossy; corelib refuses `Q8_0` for Qwen3.5, Qwen3.6, Gemma 4 and Phi-4-mini.
 - **Context:** each tag's limit is the most corelib runs that model at; the default is lower where corelib or our own runs found answers going wrong past it. Over-capacity requests are rejected with HTTP 400 before any work reaches the device.
-- **Availability:** developer build against corelib 0.53.0 — see [Phi-4 on the core backend](phi.md).
+- **Availability:** developer build against corelib 0.60.0 — see [Phi-4 on the core backend](phi.md).
 
 The same corelib path runs every `-core` tag:
 
-| Tag | Default file | Public fallback | Context limit | Default context |
-|---|---|---|---|---|
-| `qwen3-core:0.6b` | unsloth `Q8_0`, refit to group 64 (lm_head 32) | — | 32768 | 32768 |
-| `qwen3-core:1.7b` / `4b` / `8b` | AMD `Q4_G128` | unsloth `Q8_0` | 32768 | 32768 |
-| `qwen3.5-core:4b` / `9b` | AMD `Q4_G128` | unsloth `Q8_0` | 262144 | 32768 |
-| `qwen3.6-moe-core:35b-a3b` | AMD `Q4_G32` | unsloth `Q8_0` | 262144 | 32768 |
-| `qwen3.8-core:27b` | AMD `Q4_G128`, on the NPU | unsloth `Q4_0`, on the GPU | 262144 | 32768 |
-| `gemma4-it-core:e2b` / `e4b` | AMD `Q4_G32` | unsloth `Q8_0` | 131072 | 65536 |
-| `phi4-mini-it-core:4b` | AMD `Q4_G128` | unsloth `Q8_0` | 131072 | 131072 |
-| `llama3.2-core:1b` / `3b`, `llama3.1-core:8b` | `Q8_0`, refit to group 64 | — | 131072 | 131072 |
+| Tag | File | Context limit | Default context |
+|---|---|---|---|
+| `qwen3-core:0.6b` | unsloth `Q8_0`, refit to group 64 (lm_head 32) | 32768 | 32768 |
+| `qwen3-core:1.7b` / `4b` / `8b` | AMD `Q4_G128` | 32768 | 32768 |
+| `qwen3.5-core:4b` / `9b` | AMD `Q4_G128` | 262144 | 32768 |
+| `qwen3.6-moe-core:35b-a3b` | AMD `Q4_G32` | 262144 | 32768 |
+| `qwen3.8-core:27b` | AMD `Q4_G128`, on the NPU | 262144 | 32768 |
+| `gemma4-it-core:e2b` / `e4b` | AMD `Q4_G32` | 131072 | 65536 |
+| `phi4-mini-it-core:4b` | AMD `Q4_G128` | 131072 | 131072 |
+| `llama3.2-core:1b` / `3b`, `llama3.1-core:8b` | `Q8_0`, refit to group 64 | 131072 | 131072 |
 
 Every model's attention is paged: corelib keeps the KV cache in 4096-token pages and grows it a page at a time, so a large context costs memory only as a conversation fills it. Raise the context with `--ctx-len` (`-c`), up to the limit.
 
@@ -387,6 +387,7 @@ The `-r` option determines the image's height:
 - Image understanding adapts to image size. Image TTFT can range from under 1 second to ~200 seconds depending on resolution. Use lower-resolution images (720p or below) unless high resolution is required (e.g. OCR on small text).
 - Video understanding is not supported yet.
 - In server mode this model reuses the prompts it has already read (system prompt, tools, earlier turns), so agents such as Hermes wait for new text only. See [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/).
+- Host memory: the token embeddings are read straight from `model.q4nx` through a read-only memory map, one row per token, instead of being unpacked into a 485 MiB table. This saves about 0.5 GiB of RAM (private memory at 4k context: about 0.8 GiB before, 0.3 GiB now) with the same speed and the same output. Only the rows of tokens that were actually seen stay in memory, and the OS can drop them under memory pressure; if it does, a prompt full of new tokens takes about a second longer to start. On Windows, the loaded model's `model.q4nx` cannot be replaced or deleted, so stop the server before `flm remove` or `flm pull` of this model. This applies to the Qwen3.5 0.8B, 2B and 4B only; the 9B and the other model families still keep their embedding tables in RAM.
 
 ---
 
@@ -439,6 +440,7 @@ The `-r` option determines the image's height:
 - Image understanding adapts to image size. Image TTFT can range from under 1 second to ~200 seconds depending on resolution. Use lower-resolution images (720p or below) unless high resolution is required (e.g. OCR on small text).
 - Video understanding is not supported yet.
 - In server mode this model reuses the prompts it has already read (system prompt, tools, earlier turns), so agents such as Hermes wait for new text only. See [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/).
+- Host memory: the token embeddings are read straight from `model.q4nx` through a read-only memory map, one row per token, instead of being unpacked into a 970 MiB table. This saves about 1 GiB of RAM (private memory at 4k context: about 1.2 GiB before, 0.3 GiB now) with the same speed and the same output. Only the rows of tokens that were actually seen stay in memory, and the OS can drop them under memory pressure; if it does, a prompt full of new tokens takes about a second longer to start. On Windows, the loaded model's `model.q4nx` cannot be replaced or deleted, so stop the server before `flm remove` or `flm pull` of this model. This applies to the Qwen3.5 0.8B, 2B and 4B only; the 9B and the other model families still keep their embedding tables in RAM.
 
 ---
 
@@ -491,6 +493,7 @@ The `-r` option determines the image's height:
 - Image understanding adapts to image size. Image TTFT can range from under 1 second to ~200 seconds depending on resolution. Use lower-resolution images (720p or below) unless high resolution is required (e.g. OCR on small text).
 - Video understanding is not supported yet.
 - In server mode this model reuses the prompts it has already read (system prompt, tools, earlier turns), so agents such as Hermes wait for new text only. See [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/).
+- Host memory: the token embeddings are read straight from `model.q4nx` through a read-only memory map, one row per token, instead of being unpacked into a 1.2 GiB table. This saves about 1.2 GiB of RAM (private memory at 4k context: about 1.8 GiB before, 0.6 GiB now) with the same speed and the same output. Only the rows of tokens that were actually seen stay in memory, and the OS can drop them under memory pressure; if it does, a prompt full of new tokens takes about a second longer to start. On Windows, the loaded model's `model.q4nx` cannot be replaced or deleted, so stop the server before `flm remove` or `flm pull` of this model. This applies to the Qwen3.5 0.8B, 2B and 4B only; the 9B and the other model families still keep their embedding tables in RAM.
 
 ---
 
@@ -669,3 +672,48 @@ What that means in practice:
 - Optimal sampling parameters for generation vary depending on the task. Check the [Qwen3.8-27B model card](https://huggingface.co/Qwen/Qwen3.8-27B#api-usage) for details.
 - Image understanding adapts to image size. Image TTFT can range from under 1 second to ~200 seconds depending on resolution. Use lower-resolution images (720p or below) unless high resolution is required (e.g. OCR on small text).
 - Video understanding is not supported yet.
+
+---
+
+## 🧩 Model Card: [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) with the [DFlash 2 draft](https://huggingface.co/z-lab/Qwen3.8-27B-DFlash2)
+
+- **Type:** Image-Text-to-Text, with speculative decoding
+- **What it is:** the same model as [`qwen3.8-mtp:27b`](#-model-card-qwen38-27b), decoded with z-lab's DFlash 2 draft instead of the built-in MTP head. The draft reads features of five layers of the main model, writes a block of 7 tokens in one pass and picks one coherent path through its top candidates; the NPU checks all 7 in one pass, with the same kernels as `qwen3.8-mtp:27b`
+- **Speed:** 1.16x the decode speed of `qwen3.8-mtp:27b` on average over ten mixed prompts, from 0.9x to 1.5x per prompt (code and structured answers gain most, short or unpredictable answers least; [benchmarks](https://fastflowlm.com/docs/benchmarks/qwen3.8_results/))
+- **Think / Tool Calling / Vision / Prefix cache:** as `qwen3.8-mtp:27b`
+- **Packages:** two downloads. The main weights are the `qwen3.8-mtp:27b` package (`Qwen3.8-27B-NPU2`, about 18 GB); the draft is [`Qwen3.8-27B-DFlash2-NPU2`](https://huggingface.co/FastFlowLM/Qwen3.8-27B-DFlash2-NPU2) (1.4 GB). `flm pull qwen3.8-dflash2:27b` downloads whichever is missing
+- **Draft:** 5 layers, 2B parameters, Q4_K (the feature projection and the candidate tables stay BF16 where they are read row by row)
+- **Max Context Length:** 8k tokens
+- **Default Context Length:** 4k tokens ([change default](https://fastflowlm.com/docs/instructions/cli/#-change-default-context-length-max))
+- **License:** the draft is [Apache-2.0](https://huggingface.co/z-lab/Qwen3.8-27B-DFlash2); the main model's license applies to the main weights
+- **FastFlowLM:** 1.0.12 or later
+
+▶️ Run with FastFlowLM in PowerShell:
+
+```shell
+flm run qwen3.8-dflash2:27b
+```
+
+▶️ Serve with FastFlowLM in PowerShell:
+
+```shell
+flm serve qwen3.8-dflash2:27b
+```
+
+🧪 **Smoke test** (a predictable answer, long enough for many speculative steps):
+
+```shell
+flm run qwen3.8-dflash2:27b
+>>> Write a Python function that checks whether a number is prime.
+```
+
+Expected: a correct function with a docstring, decoding noticeably faster than with `qwen3.8-mtp:27b` (most of the draft is accepted on code).
+
+📝 **Note:**
+
+- Every step drafts 7 tokens and checks them together; the model keeps the longest prefix it agrees with plus one token of its own. As with `qwen3.8-mtp:27b`, drafted tokens are compared with the model's own most likely token and skip the sampler (see the ⚠️ note in [Request Parameters](https://fastflowlm.com/docs/instructions/server/request_parameters/)).
+- Greedy output can differ from `qwen3.8-mtp:27b` at near-ties: the NPU checks 8 positions in one pass, which rounds differently from decoding one token at a time, and the two drafts propose different blocks.
+- The draft sees the last 2048 tokens of the conversation. After a saved prompt is reused (server mode prefix cache) it starts without the reused part and fills up again from the tokens that follow, so the first steps accept less.
+- `FLM_DFLASH=0` in the environment loads the MTP head instead: the tag then behaves like `qwen3.8-mtp:27b`.
+- Image input, the 8k context and the image-resize options work as on `qwen3.8-mtp:27b` (`-r`).
+- `flm remove qwen3.8-dflash2:27b` removes only the draft package; `qwen3.8-mtp:27b` stays installed.
