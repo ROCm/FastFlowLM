@@ -26,6 +26,48 @@ inline size_t incomplete_utf8_tail(const std::string& text) {
     return 0;
 }
 
+/// The length (1-4) of the well-formed UTF-8 character that starts at p, given the avail bytes there;
+/// 0 when those bytes cannot start one (drop the first byte and look again at the next);
+/// -1 when they are a well-formed start that needs more bytes.
+/// \note Well-formed is Unicode's Table 3-7, which json::dump() enforces. A lead byte alone is not enough:
+///       the model can emit the byte tokens of a character and then stop it with another token
+///       (e.g. 0xE2 followed by "a"), and such bytes reached dump() and failed the request with a 500.
+inline int utf8_char_len(const unsigned char* p, size_t avail) {
+    const unsigned char c = p[0];
+    int len;
+    unsigned char lo = 0x80, hi = 0xBF;  // allowed range of the second byte
+    if (c < 0x80) return 1;
+    else if (c >= 0xC2 && c <= 0xDF) len = 2;
+    else if (c >= 0xE0 && c <= 0xEF) { len = 3; if (c == 0xE0) lo = 0xA0; else if (c == 0xED) hi = 0x9F; }
+    else if (c >= 0xF0 && c <= 0xF4) { len = 4; if (c == 0xF0) lo = 0x90; else if (c == 0xF4) hi = 0x8F; }
+    else return 0;
+    for (int k = 1; k < len; k++) {
+        if ((size_t)k >= avail) return -1;
+        const unsigned char b = p[k];
+        if (k == 1 ? (b < lo || b > hi) : (b & 0xC0) != 0x80) return 0;
+    }
+    return len;
+}
+
+/// text without the bytes that are not part of a well-formed UTF-8 character (see utf8_char_len),
+/// including a character the end of text cuts off
+inline std::string sanitize_utf8(const std::string& text) {
+    std::string out;
+    out.reserve(text.size());
+    const unsigned char* p = reinterpret_cast<const unsigned char*>(text.data());
+    size_t pos = 0;
+    while (pos < text.size()) {
+        const int len = utf8_char_len(p + pos, text.size() - pos);
+        if (len > 0) {
+            out.append(text, pos, len);
+            pos += len;
+        } else {
+            pos++;
+        }
+    }
+    return out;
+}
+
 /// \brief wstream_buf class
 /// \note This class is used to avoid partial UTF-8 characters from the decoder.
 struct wstream_buf : std::streambuf {
@@ -44,33 +86,17 @@ struct wstream_buf : std::streambuf {
         // Process complete UTF-8 sequences
         size_t pos = 0;
         while (pos < utf8_buffer.size()) {
-            unsigned char first = utf8_buffer[pos];
-            size_t seq_len = 1;
-            
-            // Determine sequence length
-            if ((first & 0x80) == 0) {
-                // Single byte sequence
-                seq_len = 1;
-            } else if ((first & 0xE0) == 0xC0) {
-                // Two byte sequence
-                seq_len = 2;
-            } else if ((first & 0xF0) == 0xE0) {
-                // Three byte sequence
-                seq_len = 3;
-            } else if ((first & 0xF8) == 0xF0) {
-                // Four byte sequence
-                seq_len = 4;
-            } else {
-                // Invalid UTF-8 start byte
+            const int len = utf8_char_len(reinterpret_cast<const unsigned char*>(utf8_buffer.data()) + pos, utf8_buffer.size() - pos);
+            if (len == 0) {
+                // Not part of a well-formed character: skip it
                 pos++;
                 continue;
             }
-            
-            // Check if we have a complete sequence
-            if (pos + seq_len > utf8_buffer.size()) {
+            if (len < 0) {
                 // Incomplete sequence, keep it in buffer
                 break;
             }
+            const size_t seq_len = (size_t)len;
             os.write(&utf8_buffer[pos], seq_len);
             pos += seq_len;
         }
@@ -90,8 +116,7 @@ struct wstream_buf : std::streambuf {
         if (ch == traits_type::eof()) return ch;
         char c = traits_type::to_char_type(ch);
         
-        // Add single byte to buffer and process it
-        utf8_buffer.push_back(c);
+        // Process the single byte (xsputn appends it to the buffer)
         xsputn(&c, 1);
         return ch;
     }
