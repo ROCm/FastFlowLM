@@ -8,6 +8,7 @@
 #   make chain    - Run hy_memory's EXTRACT -> RECONCILE chain
 #   make check    - Run check_hy_mem against REFERENCE (default: the Q4_K one)
 #   make test-long- The same task at PROMPT_TOKENS prompt lengths (default 128,512,2048)
+#   make locomo   - LoCoMo-MC10 multiple-choice scoring (LOCOMO_ARGS, LOCOMO_OUT)
 #   make clean    - Remove all built files
 #
 # Run `source activate.sh` first: it copies the engine, its header and the
@@ -31,10 +32,15 @@ REFERENCE ?= /scratch/$(USER)/Projects/FastFlowLM_IRON/models_simple/hy_mem_e2e_
 FLM_MODEL_PATH ?= /scratch/$(USER)
 # test / chain: write each request's messages and reply here (empty = off)
 SAVE ?=
+# make locomo: LoCoMo-MC10 scoring (Projects/hy_locomo_eval); absolute paths, the run cds into BUILD_DIR
+LOCOMO_PROMPTS ?= /scratch/$(USER)/Projects/hy_locomo_eval/out/prompts.json
+LOCOMO_OUT     ?= /scratch/$(USER)/Projects/hy_locomo_eval/out/npu_pilot.jsonl
+LOCOMO_ARGS    ?= --set pilot --resume
 RUN_ENV := FLM_MODEL_PATH=$(FLM_MODEL_PATH)
 
 SOURCES += test.cpp
 SOURCES += check_engine.cpp
+SOURCES += locomo_mc10.cpp
 SOURCES += ../../common/AutoModel/automodel.cpp
 # automodel.cpp's prefix-slot resume/save path
 SOURCES += ../../common/prefix_slot_cache.cpp
@@ -55,11 +61,11 @@ CPP_SOURCES := $(filter %.cpp,$(SOURCES))
 ALL_OBJS := $(addprefix $(BUILD_DIR)/,$(notdir $(CPP_SOURCES:.cpp=.o)))
 # test.cpp and check_engine.cpp each carry a main(), so they link into separate
 # executables over the same shared objects
-SHARED_OBJS := $(filter-out $(BUILD_DIR)/test.o $(BUILD_DIR)/check_engine.o,$(ALL_OBJS))
+SHARED_OBJS := $(filter-out $(BUILD_DIR)/test.o $(BUILD_DIR)/check_engine.o $(BUILD_DIR)/locomo_mc10.o,$(ALL_OBJS))
 DEPS := $(ALL_OBJS:.o=.d)
 VPATH := $(sort $(dir $(CPP_SOURCES)))
 
-all: $(BUILD_DIR)/test_hy_mem $(BUILD_DIR)/check_hy_mem
+all: $(BUILD_DIR)/test_hy_mem $(BUILD_DIR)/check_hy_mem $(BUILD_DIR)/locomo_hy_mem
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
@@ -71,6 +77,9 @@ $(BUILD_DIR)/test_hy_mem: $(BUILD_DIR)/test.o $(SHARED_OBJS)
 	$(CXX) $(CXX_FLAGS) -o $@ $^ $(LDFLAGS) $(DEPENDENCY_LDFLAGS)
 
 $(BUILD_DIR)/check_hy_mem: $(BUILD_DIR)/check_engine.o $(SHARED_OBJS)
+	$(CXX) $(CXX_FLAGS) -o $@ $^ $(LDFLAGS) $(DEPENDENCY_LDFLAGS)
+
+$(BUILD_DIR)/locomo_hy_mem: $(BUILD_DIR)/locomo_mc10.o $(SHARED_OBJS)
 	$(CXX) $(CXX_FLAGS) -o $@ $^ $(LDFLAGS) $(DEPENDENCY_LDFLAGS)
 
 clean:
@@ -92,8 +101,12 @@ check: $(BUILD_DIR)/check_hy_mem
 	cp ../../model_list.json $(BUILD_DIR)/model_list.json
 	cd $(BUILD_DIR) && $(RUN_ENV) ./check_hy_mem --model $(TAG) --reference $(REFERENCE)
 
+locomo: $(BUILD_DIR)/locomo_hy_mem
+	cp ../../model_list.json $(BUILD_DIR)/model_list.json
+	cd $(BUILD_DIR) && $(RUN_ENV) ./locomo_hy_mem --model $(TAG) --prompts $(LOCOMO_PROMPTS) --out $(LOCOMO_OUT) $(LOCOMO_ARGS)
+
 -include $(DEPS)
-.PHONY: all clean test test-long chain check
+.PHONY: all clean test test-long chain check locomo
 
 else
 
