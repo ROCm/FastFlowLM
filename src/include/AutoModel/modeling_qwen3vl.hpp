@@ -172,6 +172,10 @@ private:
     /// \return number of tokens pinned, 0 if the prefix could not be isolated
     int _pin_system_prefix(const std::string& system_text);
 
+    /// \brief forget the pin, so the next request with a system prompt pins it again
+    /// \note  Leaves the engine alone: callers clear it themselves.
+    void _forget_pin();
+
 protected:
     /// \brief The flash engine is tuned for short contexts, so every image is
     ///        forced down to a 256px longer side regardless of img_pre_resize.
@@ -189,6 +193,11 @@ public:
     bool insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled = [] { return false; }) override;
     std::string generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled = [] { return false; }) override;
     std::string generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os = std::cout) override;
+
+    /// \brief Clear the context, the pinned system prefix included
+    /// \note  The engine zeroes its KV cache but keeps the checkpoint, so a pin
+    ///        kept past this would restore zeroed rows on the next request.
+    void clear_context() override;
 
     /// \brief Apply the chat template without tools — qwen3vl_flash does not
     ///        support tool calling, so the tools argument is always dropped.

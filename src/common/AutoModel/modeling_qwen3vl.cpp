@@ -377,6 +377,17 @@ int Qwen3VL_Flash::_pin_system_prefix(const std::string& system_text) {
     return this->system_tokens;
 }
 
+void Qwen3VL_Flash::_forget_pin() {
+    this->pinned_system_text.clear();
+    this->system_his.clear();
+    this->system_tokens = 0;
+}
+
+void Qwen3VL_Flash::clear_context() {
+    this->AutoModel::clear_context();
+    this->_forget_pin();
+}
+
 void Qwen3VL_Flash::_reset_turn() {
     if (this->system_tokens > 0) {
         // Rewind to the pinned system prefix instead of clearing from scratch.
@@ -445,6 +456,17 @@ bool Qwen3VL_Flash::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& inpu
         if (prefix_matches) {
             skip = this->system_tokens;
         }
+    }
+    if (this->system_tokens > 0 && skip == 0) {
+        // The prompt does not start with the pinned tokens (the user text can
+        // merge with the end of the probe prefix, e.g. one starting with a
+        // newline), yet the engine holds them: prefilling on top would leave it
+        // more rows than total_tokens counts, and the system turn twice. Start
+        // from an empty cache; the prefill below overwrites the pinned rows, so
+        // the pin goes too, and the next request with this system text pins it again.
+        this->lm_engine->clear_context();
+        this->checkpoint_his.clear();
+        this->_forget_pin();
     }
 
     // The vision encoder runs once, on the chunk that carries the payload, so
