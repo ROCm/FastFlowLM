@@ -52,11 +52,13 @@ void register_builtin_backends(BackendRegistry& registry) {
     RegisterFlm<minicpm_v_4_7_moe_npu>(registry, "minicpm-v-4.7-moe");
     RegisterFlm<qwen3_6_moe_npu>(registry, "qwen3.6-moe", "qwen3_6_moe_npu_aie_next");
     RegisterFlm<qwen3_8mtp_npu>(registry, "qwen3.8-mtp");
+    RegisterFlm<qwen3_8mtp_npu>(registry, "qwen3.8-dflash2");   // the same engine; the draft package turns the DFlash2 drafter on
     RegisterFlm<gemma_npu>(registry, "gemma3");
     RegisterFlm<gemma_text_npu>(registry, "gemma3-text");
     RegisterFlm<gemma4e_npu>(registry, "gemma4e");
     RegisterFlm<gemma4e_flash>(registry, "gemma4e-flash");
     RegisterFlm<gemma4e_dflash>(registry, "gemma4e-dflash");
+    RegisterFlm<gemma4e_dflash_flash>(registry, "gemma4e-dflash-flash");
     RegisterFlm<gemma4_12b_npu>(registry, "gemma4-12b");
     RegisterFlm<hunyuan_npu>(registry, "hunyuan");
     RegisterFlm<gpt_oss_npu>(registry, "gpt-oss");

@@ -47,6 +47,7 @@ Components
   32. XGrammar
   33. PicoJSON
   34. DLPack
+  35. AMD XDNA driver UAPI header (amdxdna_accel.h)
 
 ==============================================================================
 1. libcurl
@@ -188,9 +189,14 @@ text is reproduced at the end of this file.
 License:  Apache License 2.0
 Homepage: https://github.com/Xilinx/XRT
 Used in:  Linux portable package: libxrt* shared libraries.
+          Windows CI build: .github/windows-deps/xrt_version.h (SPDX
+          Apache-2.0; Copyright (C) 2019-2021 Xilinx, Inc.; Copyright (C)
+          2023 Advanced Micro Devices, Inc.).
 
 Copyright (C) 2016-2022 Xilinx, Inc
 Copyright (C) 2022-2023 Advanced Micro Devices, Inc
+Copyright (C) 2019-2021 Xilinx, Inc. (xrt_version.h)
+Copyright (C) 2023 Advanced Micro Devices, Inc. (xrt_version.h)
 
 Licensed under the Apache License, Version 2.0. The license text is
 reproduced at the end of this file.
@@ -201,7 +207,9 @@ reproduced at the end of this file.
 
 License:  MIT License
 Homepage: https://github.com/Xilinx/aiebu
-Used in:  Statically linked into flm (XRT builds).
+Used in:  Statically linked into flm (XRT builds); public headers
+          src/include/aiebu/aiebu.h, aiebu_assembler.h and aiebu_error.h
+          (SPDX MIT; Copyright (C) 2024-2025 Advanced Micro Devices, Inc.).
 
 MIT License
 
@@ -1071,6 +1079,8 @@ Used in:  HRX packages: libhrx.so.0 (Linux) and hrx.dll (Windows), from the
 
 Copyright The HRX Authors.
 Copyright The IREE Authors.
+Copyright (C) 2026 Advanced Micro Devices, Inc. (hrx-integration/hrx-release.env,
+SPDX Apache-2.0 WITH LLVM-exception)
 
 Licensed under the Apache License, Version 2.0, with the LLVM Exceptions
 below. The Apache License 2.0 text is reproduced at the end of this file.
@@ -1214,6 +1224,26 @@ Copyright 2017 by Contributors
 
 Licensed under the Apache License, Version 2.0. The license text is
 reproduced at the end of this file.
+
+==============================================================================
+35. AMD XDNA driver UAPI header (amdxdna_accel.h)
+==============================================================================
+
+License:  GPL-2.0 WITH Linux-syscall-note (SPDX)
+Homepage: https://github.com/amd/xdna-driver
+Used in:  Compiled into flm (Linux): src/include/npu_utils/amdxdna_accel.h,
+          the user-space interface of the amdxdna kernel driver.
+
+Copyright (C) 2022-2024, Advanced Micro Devices, Inc.
+
+This header is the kernel/user-space API definition of the amdxdna
+driver and is distributed under the GNU General Public License,
+version 2, with the Linux-syscall-note exception: the GPL does not
+cover user programs that use the kernel services through this
+interface by normal system calls. FastFlowLM uses the header only for
+that purpose. The exception text is available at
+https://spdx.org/licenses/Linux-syscall-note.html and the GPL-2.0 text
+at https://www.gnu.org/licenses/old-licenses/gpl-2.0.txt.
 
 ==============================================================================
 Full license texts

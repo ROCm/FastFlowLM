@@ -354,6 +354,18 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
     assert(this->last_token != -1);
     stop_reason_t reason = EOT_DETECTED;
 
+    // The engine runs ahead of total_tokens: the four preamble tokens below are
+    // fed to it but only the sampled one is counted, so the next forward lands
+    // on row total_tokens + 3, and the extra forward after an EOS one further.
+    // Keep that much room under MAX_L, or those forwards write past the end of
+    // the engine's KV window and corrupt it for every later request.
+    constexpr uint32_t kEngineLead = 4;
+    if (this->total_tokens + kEngineLead >= this->MAX_L){
+        header_print("WARNING", "Max length reached, stopping generation...");
+        meta_info.stop_reason = MAX_LENGTH_REACHED;
+        return result;
+    }
+
     this->profiler_list[DECODING_TIME].reset();
     this->profiler_list[TKOEN_DECODE_TIME].reset();
     std::string token_str;
@@ -419,7 +431,7 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
     if (this->is_eos(last_sampled_token)){
         this->lm_engine->forward(last_sampled_token);
     }
-    else if (this->total_tokens >= this->MAX_L){
+    else if (this->total_tokens + kEngineLead >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping generation...");
         reason = MAX_LENGTH_REACHED;
     }
@@ -429,7 +441,8 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
     else while (true){
         // Running out of window is a truncation; testing here rather than in
         // the loop condition records it.
-        if (this->total_tokens >= this->MAX_L){
+        if (this->total_tokens + kEngineLead >= this->MAX_L){
+            header_print("WARNING", "Max length reached, stopping generation...");
             reason = MAX_LENGTH_REACHED;
             break;
         }
@@ -472,9 +485,6 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
         // Cut short after sampling its last token: no engine has run that one,
         // so the next prompt has to carry it.
         this->token_history.pop_back();
-    }
-    if (this->total_tokens >= this->MAX_L){
-        header_print("WARNING", "Max length reached, stopping generation...");
     }
 
     std::cout << std::endl;

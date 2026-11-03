@@ -475,7 +475,9 @@ std::string Qwen3_6_MOE::generate(chat_meta_info_t& meta_info, int length_limit,
         this->token_history.push_back(sampled_token);
         if (this->is_eos(sampled_token)){
             meta_info.generated_tokens++;
-            if (this->forward_on_eos &&
+            // The forward writes row total_tokens, which is past the end of the
+            // engine's KV window once the context is full.
+            if (this->forward_on_eos && this->total_tokens < decode_cap &&
                 (!this->backend_ || this->backend_->forwards_past_eos())) {
                 this->lm_engine->forward(last_sampled_token);
             } else {

@@ -704,7 +704,9 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
         ? this->_shared_insert(meta_info, tokens, is_cancelled, &multi_modal_payload, last_image_token_index)
         : this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
 
-    if (this->enable_think) {
+    // Single-turn (flash): the only checkpoint is the pinned system prefix, which Gemma4e_Flash owns. Taking this one would
+    // overwrite it with the whole first prompt, and every later request would restore into that stale context.
+    if (this->enable_think && !this->single_turn) {
         checkpoint_his = token_history;
         int checkpoint_idx = this->lm_engine->checkpoint();
     }
@@ -781,7 +783,14 @@ std::string Gemma4e::generate(chat_meta_info_t& meta_info, int length_limit, std
         this->token_history.push_back(sampled_token);
         if (this->is_eos(sampled_token)){
             meta_info.generated_tokens++;
-            this->lm_engine->forward(last_sampled_token);
+            // Its row is past the end of the engine's KV window once the context is
+            // full: forwarding it there corrupts the engine for every later request,
+            // so the next prompt has to carry it instead.
+            if (this->total_tokens < this->MAX_L) {
+                this->lm_engine->forward(last_sampled_token);
+            } else {
+                this->token_history.pop_back();
+            }
             break;
         }
         meta_info.generated_tokens++;

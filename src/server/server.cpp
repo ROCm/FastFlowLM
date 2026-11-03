@@ -172,6 +172,18 @@ HttpSession::HttpSession(tcp::socket socket, WebServer& server)
     header_print("🔗 ", "TCP connection established - Remote: " + socket_.remote_endpoint().address().to_string() + ":" + std::to_string(socket_.remote_endpoint().port()));
 }
 
+///@brief destructor: a session never outlives its slot in the connection limit
+HttpSession::~HttpSession() {
+    release_connection();
+}
+
+///@brief release this connection's slot (idempotent; every close path may call it)
+void HttpSession::release_connection() {
+    if (!connection_released_.exchange(true)) {
+        server_.active_connections_.fetch_sub(1);
+    }
+}
+
 ///@brief start
 void HttpSession::start(bool cors) {
     read_request(cors);
@@ -188,7 +200,7 @@ void HttpSession::close_connection() {
         header_print("🔒 ", "TCP connection closing - Remote endpoint unavailable");
     }
     socket_.shutdown(tcp::socket::shutdown_both, ec);
-    server_.active_connections_.fetch_sub(1);
+    release_connection();
 }
 
 ///@brief read request
@@ -229,7 +241,7 @@ void HttpSession::read_request(bool cors) {
             } catch (...) {
                 header_print("🔒 ", "TCP connection closed - Remote endpoint unavailable");
             }
-            self->server_.active_connections_.fetch_sub(1);
+            self->release_connection();
         });
 }
 
@@ -318,7 +330,7 @@ void HttpSession::write_response() {
         [self](beast::error_code ec, std::size_t) {
             self->socket_.shutdown(tcp::socket::shutdown_both, ec);
             // Decrement connection counter for non-keep-alive connections
-            self->server_.active_connections_.fetch_sub(1);
+            self->release_connection();
             try {
                 header_print("🔒 ", "TCP connection closed - Remote: " + self->socket_.remote_endpoint().address().to_string() + ":" + std::to_string(self->socket_.remote_endpoint().port()));
             }
@@ -453,10 +465,10 @@ void HttpSession::send_chunk_data(const json& data, bool is_final) {
         }
 
         //socket_.shutdown(tcp::socket::shutdown_both, ec);
-        //server_.active_connections_.fetch_sub(1);
 
         boost::system::error_code ignore_ec;
         socket_.close(ignore_ec);
+        release_connection();
         return;
     }
 
@@ -467,7 +479,7 @@ void HttpSession::send_chunk_data(const json& data, bool is_final) {
         header_print("🔒 ", "Closing TCP connection (streaming, non-keep-alive)");
         socket_.shutdown(tcp::socket::shutdown_both, ec);
         // Decrement connection counter for non-keep-alive connections
-        server_.active_connections_.fetch_sub(1);
+        release_connection();
     }
 }
 
@@ -694,15 +706,15 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
             auto& response_ref = *res_ptr;
             http::status status = http::status::ok;
 
+            // An OpenAI style error carries its HTTP status as error.code: 400, 404, 500, ...
             if (response_data.contains("error") &&
-                response_data["error"].contains("code"))
+                response_data["error"].contains("code") &&
+                response_data["error"]["code"].is_number_integer())
             {
                 int code = response_data["error"]["code"].get<int>();
 
-                if (code == 400) {
-                    status = http::status::bad_request;
-                } else if (code == 500) {
-                    status = http::status::internal_server_error;
+                if (code >= 400 && code <= 599) {
+                    status = static_cast<http::status>(code);
                 }
             }
 

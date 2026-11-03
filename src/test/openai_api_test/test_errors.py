@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Requests the server must refuse with HTTP 400 instead of serving loosely.
+"""Requests the server must refuse with an HTTP 4xx instead of serving loosely.
 
-Each malformed tool_choice / response_format is rejected before any
-generation starts, with an OpenAI style error body
+Each malformed tool_choice / response_format is rejected with a 400, and a
+model name the catalog does not have with a 404, before any generation
+starts, with an OpenAI style error body
 (``{"error": {"message", "type": "invalid_request_error", "code": 400}}``),
 for streaming requests too. A good request afterwards must still work:
 a rejection must not leave the server in a bad state.
@@ -14,6 +15,9 @@ Usage::
 
 from __future__ import annotations
 
+import json
+import urllib.error
+import urllib.request
 from typing import Any
 
 import flm_api
@@ -85,6 +89,37 @@ def uncompilable_schema(api: Api) -> None:
     """A schema the grammar compiler cannot build: a dangling $ref."""
     schema = {"type": "object", "properties": {"a": {"$ref": "#/$defs/Missing"}}, "required": ["a"]}
     expect_400(api, {"response_format": json_schema_format("bad", schema)}, "cannot build the decoding grammar")
+
+
+@case
+def unknown_model(api: Api) -> None:
+    """A model name the catalog does not have is a 404 on both endpoints, as OpenAI's."""
+    model = "no-such-model:1b"
+
+    def expect_404(status: int, body: dict[str, Any], where: str) -> None:
+        expect(status == 404, f"{where}: expected HTTP 404, got {status}: {body}")
+        err = body.get("error")
+        expect(isinstance(err, dict), f"{where}: error body is not an object: {body}")
+        expect(err.get("type") == "invalid_request_error", f"{where}: error type is {err.get('type')!r}")
+        expect(err.get("param") == "model", f"{where}: error param is {err.get('param')!r}")
+        expect(model in str(err.get("message")), f"{where}: message {err.get('message')!r} lacks {model!r}")
+
+    body = api.body(user("hi"), max_tokens=8, model=model)
+    resp = api.post(body)
+    expect_404(resp.status, resp.body, "chat")
+    s = api.stream(body)
+    expect_404(s.status, s.error or {}, "streaming chat")
+    expect(not s.chunks, "streaming chat: chunks were sent before the rejection")
+
+    url = api.url.replace("/v1/chat/completions", "/v1/completions")
+    req = urllib.request.Request(url, data=json.dumps({"model": model, "prompt": "hi", "max_tokens": 8}).encode(),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=api.timeout) as r:
+            status, reply = r.status, json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        status, reply = e.code, json.loads(e.read())
+    expect_404(status, reply, "completions")
 
 
 @case

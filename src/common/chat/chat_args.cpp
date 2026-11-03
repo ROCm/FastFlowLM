@@ -197,18 +197,96 @@ private:
         }
     }
 
+    enum class quote_verdict { CLOSES, TEXT, UNKNOWN };
+
+    static bool is_key_char(char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' ||
+               c == '.';
+    }
+
+    /// \brief Whether the text at i, after a plain " or `, goes on like a call
+    /// \note Code in a string is full of "x", and "x"} so a plain quote only
+    ///       closes when a closer, the end, or a `,key:` / `,<|"|>` follows.
+    ///       UNKNOWN: the text ran out before the answer.
+    quote_verdict plain_quote_closes(size_t i) const {
+        const quote_verdict out_of_text = done_ ? quote_verdict::CLOSES : quote_verdict::UNKNOWN;
+        auto ws = [&](size_t j) {
+            while (j < s_.size() && is_ws(s_[j])) j++;
+            return j;
+        };
+        i = ws(i);
+        bool closers = false;
+        while (i < s_.size() && is_closer(s_[i])) {
+            closers = true;
+            i = ws(i + 1);
+        }
+        if (i >= s_.size()) {
+            return out_of_text;
+        }
+        if (closers) {
+            // after the call's own closer: another call, or a member of an outer level
+            static const std::string CALL = "call:";
+            if (s_.compare(i, CALL.size(), CALL) == 0) {
+                return quote_verdict::CLOSES;
+            }
+            if (s_.size() - i < CALL.size() && CALL.compare(0, s_.size() - i, s_, i, s_.size() - i) == 0) {
+                return out_of_text;
+            }
+        }
+        if (s_[i] != ',') {
+            return quote_verdict::TEXT;
+        }
+        i = ws(i + 1);
+        if (i >= s_.size()) {
+            return out_of_text;
+        }
+        if (is_closer(s_[i])) {
+            return quote_verdict::CLOSES;
+        }
+        if (s_.compare(i, GEMMA4_QUOTE.size(), GEMMA4_QUOTE) == 0) {
+            return quote_verdict::CLOSES;
+        }
+        size_t key_end = i;
+        while (key_end < s_.size() && is_key_char(s_[key_end])) key_end++;
+        if (key_end == i) {
+            const size_t rem = s_.size() - i;
+            if (rem < GEMMA4_QUOTE.size() && GEMMA4_QUOTE.compare(0, rem, s_, i, rem) == 0) {
+                return out_of_text;
+            }
+            return quote_verdict::TEXT;
+        }
+        key_end = ws(key_end);
+        if (key_end >= s_.size()) {
+            return out_of_text;
+        }
+        return s_[key_end] == ':' ? quote_verdict::CLOSES : quote_verdict::TEXT;
+    }
+
+    /// \brief How many real <|"|> markers the text holds from i on
+    size_t real_markers_from(size_t i) const {
+        size_t n = 0;
+        for (i = s_.find(GEMMA4_QUOTE, i); i != std::string::npos; i = s_.find(GEMMA4_QUOTE, i + GEMMA4_QUOTE.size())) {
+            n++;
+        }
+        return n;
+    }
+
     /// \brief Read a Gemma4 <|"|> string after its opener into dst, JSON escaped
     /// \note Gemma4 strings are raw text, so a <|"|> (or the plain " or ` the
     ///       model sometimes writes instead) only closes the string when the
     ///       value ends right after it; otherwise it is part of the text. Until
     ///       the next non-space character shows which, the candidate is held.
+    ///       The real <|"|> ends the value when a `,` or a closer follows; a
+    ///       plain quote needs more proof (see plain_quote_closes) and waits
+    ///       for the end of the call, so a quote in code never ends the value.
     bool scan_gemma4_string(std::string& dst) {
         while (true) {
             if (starved()) {
                 return false;
             }
             size_t len = 0;
-            if (s_.compare(pos_, GEMMA4_QUOTE.size(), GEMMA4_QUOTE) == 0) {
+            const bool real = s_.compare(pos_, GEMMA4_QUOTE.size(), GEMMA4_QUOTE) == 0;
+            if (real) {
                 len = GEMMA4_QUOTE.size();
             } else if (s_[pos_] == '"' || s_[pos_] == '`') {
                 len = 1;
@@ -217,11 +295,27 @@ private:
             }
             if (len > 0) {
                 size_t next = pos_ + len;
-                while (next < s_.size() && is_ws(s_[next])) next++;
-                if (next >= s_.size() && !done_) {
+                quote_verdict verdict;
+                if (real) {
+                    while (next < s_.size() && is_ws(s_[next])) next++;
+                    if (next >= s_.size()) {
+                        verdict = done_ ? quote_verdict::CLOSES : quote_verdict::UNKNOWN;
+                    } else {
+                        verdict = (s_[next] == ',' || is_closer(s_[next])) ? quote_verdict::CLOSES : quote_verdict::TEXT;
+                    }
+                } else {
+                    verdict = plain_quote_closes(next);
+                    if (verdict == quote_verdict::CLOSES) {
+                        // the string was opened by a real <|"|>: the quote only closes it when the
+                        // markers after it pair up among themselves, an odd one is this string's closer
+                        verdict = !done_ ? quote_verdict::UNKNOWN
+                                         : (real_markers_from(next) % 2 == 0 ? quote_verdict::CLOSES : quote_verdict::TEXT);
+                    }
+                }
+                if (verdict == quote_verdict::UNKNOWN) {
                     return false;
                 }
-                if (next >= s_.size() || s_[next] == ',' || is_closer(s_[next])) {
+                if (verdict == quote_verdict::CLOSES) {
                     pos_ += len;
                     return true;
                 }

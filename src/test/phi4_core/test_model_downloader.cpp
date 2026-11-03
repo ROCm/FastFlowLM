@@ -2,6 +2,7 @@
 #include "model_downloader.hpp"
 #include "test_support.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -14,7 +15,7 @@ namespace {
 namespace fs = std::filesystem;
 
 // The corelib model is packaged differently from its FastFlowLM namesake --
-// a Q8_0 GGUF against an NPU2/Q4NX build -- so it is a separate tag, and the
+// AMD's Q4_G128 GGUF against an NPU2/Q4NX build -- so it is a separate tag, and the
 // "-core" suffix is what routes it to the corelib kernels.
 constexpr const char* kCoreTag = "phi4-mini-it-core:4b";
 constexpr const char* kFlmTag = "phi4-mini-it:4b";
@@ -22,7 +23,7 @@ constexpr const char* kFlmTag = "phi4-mini-it:4b";
 // alike and nothing has to redirect between them.
 constexpr const char* kCoreModelInfoKey = "phi4-mini-it-core:4b";
 constexpr const char* kCoreDirName = "phi4-mini-it-core";
-constexpr const char* kUnslothRevision = "78eb92a46fc37e6b524df991ed9aca9bc6aa7b80";
+constexpr const char* kAmdRevision = "812448440ca39fa1a18e1f0f874c18dfdc5be075";
 constexpr const char* kMicrosoftRevision = "cfbefacb99257ffa30c83adab238a50856ac3083";
 
 /// \brief the shipped catalog entry as the machine that can run it resolves it
@@ -87,7 +88,7 @@ std::string FileUrl(const fs::path& path) {
 void TestCoreCatalogHasExactlyFourFilesAndExpectedDirectoryName() {
     const auto model = ResolvedModel(kCoreTag, "dev04");
     const std::vector<std::string> expected = {
-        "Phi-4-mini-instruct.Q8_0.gguf", "tokenizer.json",
+        "Phi-4-mini-instruct-Q4_G128.gguf", "tokenizer.json",
         "tokenizer_config.json", "config.json"};
     TEST_REQUIRE(model.at("name") == kCoreDirName);
     // The tag is the key, so there is nothing to redirect.
@@ -95,14 +96,15 @@ void TestCoreCatalogHasExactlyFourFilesAndExpectedDirectoryName() {
     TEST_REQUIRE(std::string(kCoreTag) == kCoreModelInfoKey);
     TEST_REQUIRE(model.at("backend") == "core");
     TEST_REQUIRE(model.at("files").get<std::vector<std::string>>() == expected);
-    TEST_REQUIRE(model.at("size").get<std::uint64_t>() == 4100140571ULL);
+    TEST_REQUIRE(model.at("size").get<std::uint64_t>() == 3253347291ULL);
 }
 
-void TestGgufUrlContainsUnslothRevisionAndFilename() {
+void TestGgufUrlContainsAmdRevisionAndFilename() {
     const auto model = ResolvedModel(kCoreTag, "dev04");
-    const auto source = resolve_file_source(model, "Phi-4-mini-instruct.Q8_0.gguf", false);
-    TEST_REQUIRE(source.url == std::string("https://huggingface.co/unsloth/Phi-4-mini-instruct-GGUF/resolve/") +
-                                  kUnslothRevision + "/Phi-4-mini-instruct.Q8_0.gguf?download=true");
+    const auto source = resolve_file_source(model, "Phi-4-mini-instruct-Q4_G128.gguf", false);
+    TEST_REQUIRE(source.url == std::string("https://huggingface.co/amd/Phi-4-mini-instruct-Q4_G128-GGUF/resolve/") +
+                                  kAmdRevision + "/Phi-4-mini-instruct-Q4_G128.gguf?download=true");
+    TEST_REQUIRE(source.use_hf_token);
 }
 
 void TestThreeFrontendUrlsContainMicrosoftRevisionAndFilename() {
@@ -111,6 +113,7 @@ void TestThreeFrontendUrlsContainMicrosoftRevisionAndFilename() {
         const auto source = resolve_file_source(model, filename, false);
         TEST_REQUIRE(source.url == std::string("https://huggingface.co/microsoft/Phi-4-mini-instruct/resolve/") +
                                       kMicrosoftRevision + "/" + filename + "?download=true");
+        TEST_REQUIRE(!source.use_hf_token);
     }
 }
 
@@ -176,7 +179,7 @@ void TestModelInfoHasExactSizeAndSha256ForEveryRequiredFile() {
     const auto all_info = ReadJson(FLM_SOURCE_DIR "/model_info.json");
     const auto& records = all_info.at(kCoreModelInfoKey);
     const std::vector<std::tuple<std::string, std::uint64_t, std::string>> expected = {
-        {"Phi-4-mini-instruct.Q8_0.gguf", 4084611040ULL, "26188c6050d525376a88b04514c236c5e28a36730f1e936f2a00314212b7ba42"},
+        {"Phi-4-mini-instruct-Q4_G128.gguf", 3237817760ULL, "dcd7eb744eb2b1286f0c0f0c53fb9f44a1b8a6dc4bee9640d18e89665c005a6d"},
         {"tokenizer.json", 15524095ULL, "382cc235b56c725945e149cc25f191da667c836655efd0857b004320e90e91ea"},
         {"tokenizer_config.json", 2932ULL, "9c9b6bc0c94d95f69f826c41069a3e8b387ac3ced89601d201886e99240ac9db"},
         {"config.json", 2504ULL, "ac65d86061d3d0d704ee2511fd0eb8713ef19eb6eedba17c3080a4165d5b933b"}};
@@ -191,7 +194,7 @@ void TestModelInfoHasExactSizeAndSha256ForEveryRequiredFile() {
         TEST_REQUIRE(match->at("sha256") == sha256);
         total += size;
     }
-    TEST_REQUIRE(total == 4100140571ULL);
+    TEST_REQUIRE(total == 3253347291ULL);
 }
 
 struct DownloaderFixture {
@@ -419,42 +422,48 @@ struct PreferredSourceFixture {
     }
 };
 
-void TestShippedPreferredSourcesArePinnedAmdGgufs() {
+void TestShippedCoreEntriesPullWhatCorelibDefaultsTo() {
+    // corelib's own variants: AMD's Q4 file and no public fallback, but for the
+    // four that AMD ships no Q4 of, which stay on their public Q8_0.
+    const std::set<std::string> public_q8 = {
+        "qwen3-core:0.6b", "llama3.2-core:1b", "llama3.2-core:3b", "llama3.1-core:8b"};
     const auto catalog = ReadJson(FLM_SOURCE_DIR "/model_list.json");
     const auto all_info = ReadJson(FLM_SOURCE_DIR "/model_info.json");
-    std::set<std::string> tags;
+    std::set<std::string> amd;
     for (const auto& [family, sizes] : catalog.at("models").items()) {
+        if (!family.ends_with("-core")) continue;
         for (const auto& [size, entry] : sizes.items()) {
-            if (!entry.contains("preferred_source")) continue;
             const std::string tag = family + ":" + size;
-            tags.insert(tag);
-            const auto& preferred = entry.at("preferred_source");
-            TEST_REQUIRE(preferred.at("url").get<std::string>().rfind("https://huggingface.co/amd/", 0) == 0);
-            TEST_REQUIRE(preferred.at("use_hf_token") == true);
-
-            const auto& files = preferred.at("files");
-            const auto& records = all_info.at(preferred.at("model_info_key").get<std::string>());
-            TEST_REQUIRE(records.size() == files.size());
+            TEST_REQUIRE(!entry.contains("preferred_source"));
+            TEST_REQUIRE(!all_info.contains(tag + "@amd"));
+            const auto& records = all_info.at(tag);
             std::uint64_t total = 0;
-            std::size_t replaced = 0;
-            for (const auto& file : files) {
+            for (const auto& file : entry.at("files")) {
                 const auto record = std::find_if(records.begin(), records.end(), [&](const auto& value) {
                     return value.at("path") == file;
                 });
                 TEST_REQUIRE(record != records.end());
                 TEST_REQUIRE(record->at("sha256").get<std::string>().size() == 64);
                 total += record->at("size").get<std::uint64_t>();
-                const auto& own = entry.at("files");
-                if (std::find(own.begin(), own.end(), file) == own.end()) {
-                    TEST_REQUIRE(file.get<std::string>().ends_with(".gguf"));
-                    ++replaced;
-                }
             }
-            TEST_REQUIRE(replaced == 1);
-            TEST_REQUIRE(total == preferred.at("size").get<std::uint64_t>());
+            TEST_REQUIRE(records.size() == entry.at("files").size());
+            TEST_REQUIRE(total == entry.at("size").get<std::uint64_t>());
+
+            const bool from_amd =
+                entry.at("url").get<std::string>().rfind("https://huggingface.co/amd/", 0) == 0;
+            const auto quantization = entry.at("details").at("quantization_level").get<std::string>();
+            if (public_q8.contains(tag)) {
+                TEST_REQUIRE(!from_amd);
+                TEST_REQUIRE(quantization.starts_with("Q8_0"));
+                continue;
+            }
+            amd.insert(tag);
+            TEST_REQUIRE(from_amd);
+            TEST_REQUIRE(entry.at("use_hf_token") == true);
+            TEST_REQUIRE(quantization.starts_with("Q4_G"));
         }
     }
-    TEST_REQUIRE(tags == std::set<std::string>({
+    TEST_REQUIRE(amd == std::set<std::string>({
         "phi4-mini-it-core:4b", "qwen3-core:1.7b", "qwen3-core:4b", "qwen3-core:8b",
         "qwen3.5-core:4b", "qwen3.5-core:9b", "qwen3.6-moe-core:35b-a3b", "qwen3.8-core:27b",
         "gemma4-it-core:e2b", "gemma4-it-core:e4b"}));
@@ -652,6 +661,12 @@ void TestBaseModelCatalogRelations() {
     const auto plain = fixture.models.get_model_info(kBaseTag).second;
     TEST_REQUIRE(!plain.contains("draft_model_path") && !plain.contains("xclbin_folder") &&
                  !plain.contains("base_model"));
+
+    // a draft package that only adds weights can run the base's kernels: an explicit xclbin_folder is kept
+    BaseModelFixture shared("base-shared-xclbins", true, {{"xclbin_folder", "base-model"}});
+    const auto shared_info = shared.models.get_model_info(kDependantTag).second;
+    TEST_REQUIRE(shared_info.at("xclbin_folder") == "base-model");
+    TEST_REQUIRE(fs::path(shared_info.at("draft_model_path").get<std::string>()) == shared.dep_path());
 }
 
 void TestInvalidBaseModelEntriesAreDropped() {
@@ -785,9 +800,36 @@ void TestShippedCatalogDeclaresTheDflashDependant() {
     const auto base = models.get_model_info("nemotron3.5-bolt:e4b").second;
     TEST_REQUIRE(base.at("name") == "Nemotron-3.5-Bolt-E4B-NPU2");
     TEST_REQUIRE(!base.contains("base_model") && !base.contains("draft_model_path"));
+    // the flash variant shares the base and the draft package with the plain DFlash tag
+    const char* dflash_flash = "nemotron3.5-bolt-dflash-flash:e4b";
+    TEST_REQUIRE(models.is_model_supported(dflash_flash));
+    TEST_REQUIRE(models.get_base_model(dflash_flash) == std::string("nemotron3.5-bolt:e4b"));
+    const auto flash = models.get_model_info(dflash_flash).second;
+    TEST_REQUIRE(flash.at("name") == "Nemotron-3.5-Bolt-E4B-DFlash-NPU2");
+    TEST_REQUIRE(flash.at("details").at("family") == "gemma4e-dflash-flash");
+    TEST_REQUIRE(flash.at("xclbin_folder") == "Nemotron-3.5-Bolt-E4B-DFlash-NPU2");
+    TEST_REQUIRE(flash.at("default_context_length") == 1024);
+    TEST_REQUIRE(flash.at("max_prefill_len") == 1024);
+    const auto labels = flash.at("label").get<std::vector<std::string>>();
+    TEST_REQUIRE(std::find(labels.begin(), labels.end(), "single-turn") != labels.end());
+    TEST_REQUIRE(std::find(labels.begin(), labels.end(), "tool-calling") == labels.end());
     // a platform without the base prunes the dependant with it
     model_list dev04(path, exe_dir, "dev04", {"flm"});
     TEST_REQUIRE(!dev04.is_model_supported(dflash));
+    TEST_REQUIRE(!dev04.is_model_supported(dflash_flash));
+
+    // Qwen3.8 with the DFlash 2 draft: the same engine, the base's kernels (no xclbin copy), the draft package only
+    // adds weights
+    const char* q38 = "qwen3.8-dflash2:27b";
+    TEST_REQUIRE(models.is_model_supported(q38));
+    TEST_REQUIRE(models.get_base_model(q38) == std::string("qwen3.8-mtp:27b"));
+    const auto q38_info = models.get_model_info(q38).second;
+    TEST_REQUIRE(q38_info.at("name") == "Qwen3.8-27B-DFlash2-NPU2");
+    TEST_REQUIRE(q38_info.at("details").at("family") == "qwen3.8-dflash2");
+    TEST_REQUIRE(q38_info.at("xclbin_folder") == "Qwen3.8-27B-NPU2");
+    TEST_REQUIRE(q38_info.at("files").get<std::vector<std::string>>() ==
+                 (std::vector<std::string>{"config.json", "dflash_weight.q4nx", "LICENSE"}));
+    TEST_REQUIRE(models.get_model_info("qwen3.8-mtp:27b").second.at("name") == "Qwen3.8-27B-NPU2");
 }
 
 download_utils::DownloadRequest Request(const fs::path& source, const fs::path& destination,
@@ -845,7 +887,7 @@ void TestSuccessfulForceDownloadAtomicallyReplacesFinalFile() {
 
 int main() {
     RunTest(TestCoreCatalogHasExactlyFourFilesAndExpectedDirectoryName, "core catalog");
-    RunTest(TestGgufUrlContainsUnslothRevisionAndFilename, "GGUF URL");
+    RunTest(TestGgufUrlContainsAmdRevisionAndFilename, "GGUF URL");
     RunTest(TestThreeFrontendUrlsContainMicrosoftRevisionAndFilename, "frontend URLs");
     RunTest(TestExistingSingleSourceEntryKeepsItsCurrentUrl, "legacy URL");
     RunTest(TestUnknownFileSourceKeyAndMissingUrlOrRevisionFail, "source validation");
@@ -859,7 +901,7 @@ int main() {
             "modelscope rejection");
     RunTest(TestCheckHashesPinnedFilesExactlyOnce, "single check verification");
     RunTest(TestStartupStatusDoesNotRehashButCheckStillDoes, "startup status skips rehash");
-    RunTest(TestShippedPreferredSourcesArePinnedAmdGgufs, "shipped preferred sources");
+    RunTest(TestShippedCoreEntriesPullWhatCorelibDefaultsTo, "shipped core sources");
     RunTest(TestPreferredSourceResolvesByWhatIsOnDisk, "preferred source resolution");
     RunTest(TestPullUsesReachablePreferredSourceAndKeepsItOncePulled, "preferred source pull");
     RunTest(TestPullFallsBackWhenPreferredSourceIsUnreachable, "preferred source fallback");
