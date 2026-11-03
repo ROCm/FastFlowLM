@@ -192,15 +192,8 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             state.lifetime_events.emplace_back("cleanup");
             return;
         } else if constexpr (std::is_same_v<Tag, create_stream_tag>) {
-            // 0.30.0 signature is (prefill_pdis, prefill_count, token_pdis,
-            // token_count, out). Recorded so a test can assert the lists the
-            // engine opened its stream with.
             const auto status = Status(Tag::name);
-            const int* prefill = std::get<0>(arguments);
-            const int* token = std::get<2>(arguments);
-            state.stream_prefill_pdis.assign(prefill, prefill ? prefill + std::get<1>(arguments) : prefill);
-            state.stream_token_pdis.assign(token, token ? token + std::get<3>(arguments) : token);
-            auto* out = std::get<4>(arguments);
+            auto* out = std::get<0>(arguments);
             if (out) *out = status == ryzenai_corelib_status_success ? NewObject("stream") : nullptr;
             return status;
         } else if constexpr (std::is_same_v<Tag, stream_enable_kernel_bundle_tag>) {
@@ -225,30 +218,61 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             ++state.session_creates;
             if (out) *out = status == ryzenai_corelib_status_success ? NewObject("session") : nullptr;
             return status;
-        } else if constexpr (std::is_same_v<Tag, model_get_info_tag>) {
+        } else if constexpr (std::is_same_v<Tag, model_get_metadata_tag>) {
             if (!IsKind(std::get<0>(arguments), "session")) return ryzenai_corelib_status_bad_argument;
             auto* out = std::get<1>(arguments);
+            // corelib refuses a struct ending before image_token_id.
+            if (out && out->size < sizeof(*out)) return ryzenai_corelib_status_bad_argument;
             if (out) {
                 constexpr std::int64_t kPage = 4096;
                 const auto wanted = std::max<std::int64_t>(state.model_max_sequence_length, 1);
-                *out = {state.model_vocab, (wanted + kPage - 1) / kPage * kPage, 16, 4};
+                *out = {sizeof(*out), "fake", 16, state.model_vocab,
+                        4, (wanted + kPage - 1) / kPage * kPage, -1};
             }
             return Status(Tag::name);
-        } else if constexpr (std::is_same_v<Tag, model_forward_tag>) {
+        } else if constexpr (std::is_same_v<Tag, model_run_tag>) {
             if (!IsKind(std::get<0>(arguments), "session")) return ryzenai_corelib_status_bad_argument;
-            const auto* options = std::get<6>(arguments);
-            auto* out_logits = std::get<8>(arguments);
-            // corelib refuses options whose size does not cover the struct
-            // before the model moves, so a short one is never recorded.
-            if (options && options->size < sizeof(*options))
+            const char* method = std::get<1>(arguments);
+            const auto* inputs = std::get<2>(arguments);
+            const auto input_count = std::get<3>(arguments);
+            auto* outputs = std::get<4>(arguments);
+            const auto output_count = std::get<5>(arguments);
+            if (!method || std::string_view(method) != "forward")
                 return ryzenai_corelib_status_bad_argument;
+            const ryzenai_corelib_model_value* ids = nullptr;
+            std::size_t position = fake_corelib::kPositionContinue;
+            for (std::size_t i = 0; i < input_count; ++i) {
+                const auto& value = inputs[i];
+                if (value.size != sizeof(value) || !value.name)
+                    return ryzenai_corelib_status_bad_argument;
+                const std::string_view name(value.name);
+                if (name == "input_ids" && value.data_type == ryzenai_corelib_data_type_int32 &&
+                    value.rank == 1 && value.data) {
+                    ids = &value;
+                } else if (name == "position" &&
+                           value.data_type == ryzenai_corelib_data_type_int64 &&
+                           value.rank == 0 && value.data) {
+                    position = static_cast<std::size_t>(*static_cast<const std::int64_t*>(value.data));
+                } else {
+                    return ryzenai_corelib_status_bad_argument;
+                }
+            }
+            if (!ids) return ryzenai_corelib_status_bad_argument;
+            float* out_logits = nullptr;
+            std::size_t logits_capacity = 0;
+            for (std::size_t i = 0; i < output_count; ++i) {
+                auto& value = outputs[i];
+                if (value.size != sizeof(value) || !value.name ||
+                    std::string_view(value.name) != "logits" || !value.data)
+                    return ryzenai_corelib_status_bad_argument;
+                out_logits = static_cast<float*>(value.data);
+                logits_capacity = value.capacity / sizeof(float);
+            }
             state.model_forwards.push_back(
-                {std::get<3>(arguments),
-                 options ? options->position : RYZENAI_CORELIB_POSITION_CONTINUE,
-                 out_logits != nullptr});
+                {static_cast<std::size_t>(ids->dims[0]), position, out_logits != nullptr});
             if (out_logits)
                 std::fill_n(out_logits,
-                            std::min<std::size_t>(std::get<9>(arguments),
+                            std::min<std::size_t>(logits_capacity,
                                                   static_cast<std::size_t>(state.model_vocab)),
                             0.5f);
             return Status(Tag::name);
@@ -416,16 +440,18 @@ struct TypedFake<Tag, Result (*)(Args...)> {
                     if constexpr (std::is_same_v<Tag, matmul_enum_kernels_tag>) {
                         constexpr std::int64_t outputs[] = {3072, 1024, 200064};
                         for (const auto n : outputs) {
-                            for (const auto m : shipped(n == 1024 ? "matmul-1024" : "matmul-3072"))
-                                callback(ctx, 0, m, static_cast<std::int64_t>(3072), n,
-                                         static_cast<std::int64_t>(64), false,
-                                         static_cast<std::int64_t>(0), static_cast<std::int64_t>(0));
+                            for (const auto m : shipped(n == 1024 ? "matmul-1024" : "matmul-3072")) {
+                                const ryzenai_corelib_matmul_bf16_kernel_info info{
+                                    sizeof(info), 0, m, 3072, n, 64, false, 0, 0};
+                                callback(ctx, &info);
+                            }
                         }
                     } else {
-                        for (const auto m : shipped("ssmlp"))
-                            callback(ctx, 0, "fusion_mladf_ssmlp", m,
-                                     static_cast<std::int64_t>(3072), static_cast<std::int64_t>(8192),
-                                     static_cast<std::int64_t>(64));
+                        for (const auto m : shipped("ssmlp")) {
+                            const ryzenai_corelib_ssmlp_bf16_kernel_info info{
+                                sizeof(info), 0, "fusion_mladf_ssmlp", m, 3072, 8192, 64};
+                            callback(ctx, &info);
+                        }
                     }
                 }
             } else if (status == ryzenai_corelib_status_success) {
@@ -433,17 +459,13 @@ struct TypedFake<Tag, Result (*)(Args...)> {
                 auto* ctx = std::get<2>(arguments);
                 if (callback) {
                     if constexpr (std::is_same_v<Tag, matmul_enum_kernels_tag>) {
-                        callback(ctx, 0, static_cast<std::int64_t>(-1),
-                                 static_cast<std::int64_t>(0),
-                                 static_cast<std::int64_t>(0),
-                                 static_cast<std::int64_t>(0), false,
-                                 static_cast<std::int64_t>(0),
-                                 static_cast<std::int64_t>(0));
+                        const ryzenai_corelib_matmul_bf16_kernel_info info{
+                            sizeof(info), 0, -1, 0, 0, 0, false, 0, 0};
+                        callback(ctx, &info);
                     } else {
-                        callback(ctx, 0, "", static_cast<std::int64_t>(-1),
-                                 static_cast<std::int64_t>(0),
-                                 static_cast<std::int64_t>(0),
-                                 static_cast<std::int64_t>(0));
+                        const ryzenai_corelib_ssmlp_bf16_kernel_info info{
+                            sizeof(info), 0, "", -1, 0, 0, 0};
+                        callback(ctx, &info);
                     }
                 }
             }
@@ -646,8 +668,6 @@ void Reset() {
     state.default_status = ryzenai_corelib_status_success;
     state.npu_usable = true;
     state.npu_arch = "AIEM";
-    state.stream_prefill_pdis.clear();
-    state.stream_token_pdis.clear();
     state.detail.clear();
     state.status_text = "success";
     state.missing_symbol.clear();

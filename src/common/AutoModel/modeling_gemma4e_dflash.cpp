@@ -103,7 +103,9 @@ std::string Gemma4e::_speculative_loop(Engine* engine, chat_meta_info_t& meta_in
             meta_info.generated_tokens++;
             // The engine never ran the stop token: supply its KV row (it is the last token of a cycle, see below).
             // Single-turn: the KV is discarded by the next request's restore to the pin, so skip it.
-            if (single_turn) {
+            // Its row is past the end of the engine's KV window once the context is full:
+            // forwarding it there corrupts the engine, so the next prompt carries it instead.
+            if (single_turn || this->total_tokens >= this->MAX_L) {
                 this->token_history.pop_back();    // as Gemma4e_Flash::generate: the engine never ran the stop token
             } else {
                 this->lm_engine->forward(token);

@@ -3,7 +3,6 @@
 #include "core/corelib_api.hpp"
 
 #include <memory>
-#include <string>
 #include <utility>
 
 namespace flm::corelib {
@@ -69,22 +68,5 @@ using UniqueSsMlpWeights = UniqueObject<SsMlpWeightsTag>;
 using UniqueModel = UniqueObject<ModelTag>;
 using UniqueModelSession = UniqueObject<ModelSessionTag>;
 using UniqueModelSnapshot = UniqueObject<ModelSnapshotTag>;
-
-/// \brief a stream on one PDI per phase that resolves the kernels `bundle` ships
-/// \note A new stream resolves no kernel at all: every enumeration comes back
-///       empty and every dispatch runs on the host until a bundle is enabled,
-///       so this has to precede the shape plan and the weights.
-/// \note corelib takes a priority list per phase and tries the other phase's
-///       list before the host, so a shape one PDI lacks runs on the other.
-inline UniqueStream OpenModelStream(const std::shared_ptr<const CorelibApi>& api,
-                                    int prefill_pdi, int token_pdi, const char* bundle) {
-    void* raw = nullptr;
-    api->Check(api->functions().create_stream(&prefill_pdi, 1, &token_pdi, 1, &raw),
-               "ryzenai_corelib_create_stream");
-    UniqueStream stream(api, raw);
-    api->Check(api->functions().stream_enable_kernel_bundle(stream.get(), bundle),
-               std::string("ryzenai_corelib_stream_enable_kernel_bundle ") + bundle);
-    return stream;
-}
 
 }  // namespace flm::corelib
