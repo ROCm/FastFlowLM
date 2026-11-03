@@ -12,7 +12,8 @@
 
 namespace flm::oga {
 
-/// \brief create the OGA model in `root` with every session on the AMDGPU EP's HIP profile
+/// \brief create the OGA model in `root` with its decoder on the EP registered under
+///        kAmdGpuProviderName alone, and no CPU fallback
 /// \throws std::runtime_error if OGA places the model on any other device
 OgaApi::Owned<OgaModel> OpenModel(const OgaApi& api, const std::filesystem::path& root);
 

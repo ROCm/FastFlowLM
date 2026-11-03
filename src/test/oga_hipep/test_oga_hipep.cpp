@@ -20,6 +20,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
@@ -69,6 +70,13 @@ struct FakeOga {
     std::vector<std::uint16_t> raw_head;
     /// \brief handles destroyed, in the order they happened
     std::vector<std::string> events;
+    /// \brief the decoder's providers, which a config starts with from the package
+    std::vector<std::string> providers{"CPU"};
+    std::vector<std::string> overlays;
+    std::string device = "AMDGPU";
+    /// \brief each OgaRegisterExecutionProviderLibrary call, as name and path
+    std::vector<std::pair<std::string, std::string>> registrations;
+    std::optional<std::string> fail_registration;
 };
 
 FakeOga g_fake;
@@ -94,12 +102,24 @@ void OGA_API_CALL FakeDestroyResult(OgaResult* result) {
     delete result;
 }
 void OGA_API_CALL FakeDestroyString(const char*) {}
+void OGA_API_CALL FakeRegisterExecutionProviderLibrary(const char* name, const char* path) {
+    if (g_fake.fail_registration) throw std::runtime_error(*g_fake.fail_registration);
+    g_fake.registrations.emplace_back(name, path);
+}
 OgaResult* OGA_API_CALL FakeCreateConfig(const char*, OgaConfig** out) {
     *out = new OgaConfig;
     return nullptr;
 }
-OgaResult* OGA_API_CALL FakeConfigOverlay(OgaConfig*, const char*) { return nullptr; }
-OgaResult* OGA_API_CALL FakeConfigSetProviderOption(OgaConfig*, const char*, const char*, const char*) {
+OgaResult* OGA_API_CALL FakeConfigClearProviders(OgaConfig*) {
+    g_fake.providers.clear();
+    return nullptr;
+}
+OgaResult* OGA_API_CALL FakeConfigAppendProvider(OgaConfig*, const char* provider) {
+    g_fake.providers.emplace_back(provider);
+    return nullptr;
+}
+OgaResult* OGA_API_CALL FakeConfigOverlay(OgaConfig*, const char* json) {
+    g_fake.overlays.emplace_back(json);
     return nullptr;
 }
 void OGA_API_CALL FakeDestroyConfig(OgaConfig* config) { delete config; }
@@ -108,7 +128,7 @@ OgaResult* OGA_API_CALL FakeCreateModelFromConfig(const OgaConfig*, OgaModel** o
     return nullptr;
 }
 OgaResult* OGA_API_CALL FakeModelGetDeviceType(const OgaModel*, const char** out) {
-    *out = "AMDGPU";
+    *out = g_fake.device.c_str();
     return nullptr;
 }
 void OGA_API_CALL FakeDestroyModel(OgaModel* model) {
@@ -199,9 +219,11 @@ std::map<std::string, void*> FakeSymbols() {
         {"OgaResultGetError", reinterpret_cast<void*>(&FakeResultGetError)},
         {"OgaDestroyResult", reinterpret_cast<void*>(&FakeDestroyResult)},
         {"OgaDestroyString", reinterpret_cast<void*>(&FakeDestroyString)},
+        {"OgaRegisterExecutionProviderLibrary", reinterpret_cast<void*>(&FakeRegisterExecutionProviderLibrary)},
         {"OgaCreateConfig", reinterpret_cast<void*>(&FakeCreateConfig)},
+        {"OgaConfigClearProviders", reinterpret_cast<void*>(&FakeConfigClearProviders)},
+        {"OgaConfigAppendProvider", reinterpret_cast<void*>(&FakeConfigAppendProvider)},
         {"OgaConfigOverlay", reinterpret_cast<void*>(&FakeConfigOverlay)},
-        {"OgaConfigSetProviderOption", reinterpret_cast<void*>(&FakeConfigSetProviderOption)},
         {"OgaDestroyConfig", reinterpret_cast<void*>(&FakeDestroyConfig)},
         {"OgaCreateModelFromConfig", reinterpret_cast<void*>(&FakeCreateModelFromConfig)},
         {"OgaModelGetDeviceType", reinterpret_cast<void*>(&FakeModelGetDeviceType)},
@@ -221,11 +243,19 @@ std::map<std::string, void*> FakeSymbols() {
     };
 }
 
-std::shared_ptr<const flm::oga::OgaApi> FakeApi(std::map<std::string, void*> symbols = FakeSymbols()) {
-    return flm::oga::OgaApi::ResolveForTest([symbols](std::string_view name) -> void* {
-        const auto it = symbols.find(std::string(name));
-        return it == symbols.end() ? nullptr : it->second;
-    });
+std::shared_ptr<const flm::oga::OgaApi> FakeApi(std::map<std::string, void*> symbols = FakeSymbols(),
+                                                flm::oga::Package package = {}) {
+    return flm::oga::OgaApi::ResolveForTest(
+        [symbols](std::string_view name) -> void* {
+            const auto it = symbols.find(std::string(name));
+            return it == symbols.end() ? nullptr : it->second;
+        },
+        std::move(package));
+}
+
+/// \brief the fake API of a package whose DLLs are in `bin`
+std::shared_ptr<const flm::oga::OgaApi> FakeApiIn(std::filesystem::path bin) {
+    return FakeApi(FakeSymbols(), {"test", std::move(bin), {0, 17, 0, 0}});
 }
 
 /// \brief an engine over `api`, with a model that is a fresh fake
@@ -503,6 +533,53 @@ void TestAFreshApiAfterFullReleaseWorksAgain() {
     TEST_REQUIRE(CountOf(Events(), "destroy_model") == 2);
 }
 
+// ---- the AMDGPU EP: registration and model creation -------------------------
+
+void TestTheEpLibraryIsRegisteredUnderTheNameOgaLooksUp() {
+    g_fake = FakeOga{};
+    flm::oga::RegisterAmdGpuProvider(*FakeApiIn("C:\\hip-ep\\0.5.2"));
+    TEST_REQUIRE(g_fake.registrations.size() == 1);
+    TEST_REQUIRE(g_fake.registrations[0].first == "AMDGPUExecutionProvider");
+    TEST_REQUIRE(g_fake.registrations[0].second == "C:\\hip-ep\\0.5.2\\hipgpu.dll");
+}
+
+void TestARefusedRegistrationNamesTheLibrary() {
+    g_fake = FakeOga{};
+    g_fake.fail_registration = "Error loading \"hipgpu.dll\" which depends on \"amdhip64_7.dll\"";
+    const auto text = RequireThrows<std::runtime_error>(
+        [] { flm::oga::RegisterAmdGpuProvider(*FakeApiIn("C:\\hip-ep\\0.5.2")); });
+    RequireContains(text, "failed to register 'C:\\hip-ep\\0.5.2\\hipgpu.dll' as AMDGPUExecutionProvider");
+    RequireContains(text, "depends on \"amdhip64_7.dll\"");
+}
+
+void TestANonAsciiLibraryPathIsRefusedBeforeOgaSeesIt() {
+    // Under a UTF-8 code page OGA reads both of its conversions of the path alike.
+    if (GetACP() == CP_UTF8) return;
+    g_fake = FakeOga{};
+    const auto text = RequireThrows<std::runtime_error>(
+        [] { flm::oga::RegisterAmdGpuProvider(*FakeApiIn(std::filesystem::path(u8"C:\\用户\\hip-ep"))); });
+    TEST_REQUIRE(g_fake.registrations.empty());
+    RequireContains(text, "needs an ASCII path");
+}
+
+void TestOpenModelPutsTheDecoderOnTheRegisteredEpAlone() {
+    g_fake = FakeOga{};
+    const auto api = FakeApi();
+    TEST_REQUIRE(flm::oga::OpenModel(*api, "C:\\model") != nullptr);
+    TEST_REQUIRE(g_fake.providers == (std::vector<std::string>{"AMDGPUExecutionProvider"}));
+    TEST_REQUIRE(g_fake.overlays.size() == 1);
+    RequireContains(g_fake.overlays[0], R"("decoder":{"session_options":{"session.disable_cpu_ep_fallback":"1"}})");
+}
+
+void TestOpenModelRejectsAModelOnAnotherDevice() {
+    g_fake = FakeOga{};
+    g_fake.device = "CPU";
+    const auto api = FakeApi();
+    RequireContains(RequireThrows<std::runtime_error>([&] { flm::oga::OpenModel(*api, "C:\\model"); }),
+                    "on 'CPU', not on AMDGPU");
+    TEST_REQUIRE(CountOf(Events(), "destroy_model") == 1);
+}
+
 // ---- package discovery ----------------------------------------------------
 
 struct TempDir {
@@ -529,8 +606,12 @@ void Touch(const std::filesystem::path& file, std::string_view text = "") {
     std::ofstream(file, std::ios::binary) << text;
 }
 
-const char* kPackageFiles[] = {"onnxruntime-genai.dll", "onnxruntime.dll", "amdgpu-ep.dll",
-                               "hip-backend.dll", "hipgpu.dll"};
+std::string ReadText(const std::filesystem::path& file) {
+    std::ifstream stream(file, std::ios::binary);
+    return {std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
+}
+
+const char* kPackageFiles[] = {"onnxruntime-genai.dll", "onnxruntime.dll", "hipgpu.dll"};
 
 std::string Reason(const flm::oga::PackageCandidate& candidate) {
     auto inspected = flm::oga::InspectPackage(candidate);
@@ -546,8 +627,7 @@ void TestDiscoveryReportsWhyEachRootIsRejected() {
 
     TempDir partial;
     Touch(partial.path / "bin" / "onnxruntime-genai.dll");
-    RequireContains(Reason({"AMDRT_PKG_ROOT", partial.path}),
-                    "has no onnxruntime.dll, amdgpu-ep.dll, hip-backend.dll, hipgpu.dll");
+    RequireContains(Reason({"AMDRT_PKG_ROOT", partial.path}), "has no onnxruntime.dll, hipgpu.dll");
 
     TempDir unversioned;
     for (const char* file : kPackageFiles) Touch(unversioned.path / "bin" / file);
@@ -587,18 +667,22 @@ void TestFindPackageTakesTheFirstThatQualifiesAndListsEveryRejection() {
     RequireContains(text, "set AMDRT_PKG_ROOT");
 }
 
-/// \brief a complete hip-ep package under `root`, with a version resource standing in for OGA
-void MakePackage(const std::filesystem::path& root) {
-    for (const char* file : kPackageFiles) Touch(root / "bin" / file);
-    std::filesystem::copy_file("C:\\Windows\\System32\\version.dll", root / "bin" / "onnxruntime-genai.dll",
+/// \brief the package DLLs in `bin`, with a version resource standing in for OGA
+void MakePackageFiles(const std::filesystem::path& bin) {
+    for (const char* file : kPackageFiles) Touch(bin / file);
+    std::filesystem::copy_file("C:\\Windows\\System32\\version.dll", bin / "onnxruntime-genai.dll",
                                std::filesystem::copy_options::overwrite_existing);
 }
 
+/// \brief a complete hip-ep package under `root`, with its DLLs in root\\bin
+void MakePackage(const std::filesystem::path& root) { MakePackageFiles(root / "bin"); }
+
+/// \brief what amdgpu.zip extracts to: no bin, the DLLs and hipBLASLt's kernels at the root
 void MakeManagedRuntimeLayout(const std::filesystem::path& root) {
-    MakePackage(root);
-    std::filesystem::create_directories(root / "lib");
-    std::filesystem::create_directories(root / "wheels");
-    Touch(root / "morphizen_config.json", "{}");
+    MakePackageFiles(root);
+    Touch(root / "amdhip64_7.dll");
+    Touch(root / "hipblaslt.dll");
+    std::filesystem::create_directories(root / "hipblaslt" / "library");
 }
 
 /// \brief an environment in which the variables discovery reads have these values; empty is unset
@@ -837,21 +921,21 @@ void TestAutoInstallCreatesAManagedRuntime() {
     const auto package = flm::oga::EnsureHipEpPackageForTest(fixture.environment(), fixture.Hooks());
     TEST_REQUIRE(fixture.downloads == 1);
     TEST_REQUIRE(package.source == "%LOCALAPPDATA%\\hip-ep\\flm-9.9.9");
-    TEST_REQUIRE(package.bin == fixture.final_dir() / "bin");
+    TEST_REQUIRE(package.bin == fixture.final_dir());
     TEST_REQUIRE(std::filesystem::is_regular_file(fixture.final_dir() / ".flm-hipep-install.json"));
 }
 
 void TestAutoInstallReusesTheManagedRuntimeWithoutDownloadingAgain() {
     RuntimeInstallFixture fixture;
     TEST_REQUIRE(flm::oga::EnsureHipEpPackageForTest(fixture.environment(), fixture.Hooks()).bin ==
-                 fixture.final_dir() / "bin");
+                 fixture.final_dir());
     auto hooks = fixture.Hooks();
     hooks.download = [&](const download_utils::DownloadRequest&, std::function<void(double)>) {
         ++fixture.downloads;
         return false;
     };
     const auto package = flm::oga::EnsureHipEpPackageForTest(fixture.environment(), hooks);
-    TEST_REQUIRE(package.bin == fixture.final_dir() / "bin");
+    TEST_REQUIRE(package.bin == fixture.final_dir());
     TEST_REQUIRE(fixture.downloads == 1);
 }
 
@@ -871,7 +955,7 @@ void TestAnExplicitRootStillDisablesAutoInstall() {
 
 void TestAutoInstallDoesNotReplaceAnUnownedConflict() {
     RuntimeInstallFixture fixture;
-    Touch(fixture.final_dir() / "bin" / "onnxruntime-genai.dll");
+    Touch(fixture.final_dir() / "onnxruntime-genai.dll");
     const auto text = RequireThrows<std::runtime_error>([&] {
         flm::oga::EnsureHipEpPackageForTest(fixture.environment(), fixture.Hooks());
     });
@@ -882,10 +966,10 @@ void TestAutoInstallDoesNotReplaceAnUnownedConflict() {
 void TestAutoInstallRepairsABrokenManagedRuntime() {
     RuntimeInstallFixture fixture;
     TEST_REQUIRE(flm::oga::EnsureHipEpPackageForTest(fixture.environment(), fixture.Hooks()).bin ==
-                 fixture.final_dir() / "bin");
-    std::filesystem::remove(fixture.final_dir() / "bin" / "onnxruntime.dll");
+                 fixture.final_dir());
+    std::filesystem::remove(fixture.final_dir() / "onnxruntime.dll");
     const auto repaired = flm::oga::EnsureHipEpPackageForTest(fixture.environment(), fixture.Hooks());
-    TEST_REQUIRE(repaired.bin == fixture.final_dir() / "bin");
+    TEST_REQUIRE(repaired.bin == fixture.final_dir());
     TEST_REQUIRE(fixture.downloads == 1);
     TEST_REQUIRE(std::filesystem::is_directory(fixture.quarantine_root()));
     bool quarantined = false;
@@ -950,7 +1034,7 @@ void TestAutoInstallCleansFailedExtractionAndCanRetry() {
     TEST_REQUIRE(std::filesystem::is_empty(fixture.staging_root()));
 
     const auto package = flm::oga::EnsureHipEpPackageForTest(fixture.environment(), fixture.Hooks());
-    TEST_REQUIRE(package.bin == fixture.final_dir() / "bin");
+    TEST_REQUIRE(package.bin == fixture.final_dir());
     TEST_REQUIRE(fixture.downloads == 1);
     TEST_REQUIRE(std::filesystem::is_empty(fixture.staging_root()));
 }
@@ -1017,25 +1101,43 @@ void TestValidExternalPackagesBypassAutoInstall() {
     TEST_REQUIRE(!std::filesystem::exists(fixture.final_dir()));
 }
 
-void TestAutoInstallPreservesAMarkerForAnotherRelease() {
+void TestAutoInstallRepairsAnInstallFromAnotherArchive() {
     RuntimeInstallFixture fixture;
     TEST_REQUIRE(flm::oga::EnsureHipEpPackageForTest(fixture.environment(), fixture.Hooks()).bin ==
-                 fixture.final_dir() / "bin");
+                 fixture.final_dir());
     const auto marker_path = fixture.final_dir() / ".flm-hipep-install.json";
-    const std::string mismatched_marker = R"({"owner":"FastFlowLM","schema":"flm-hipep-install/v1","runtime":"hip-ep","version":")" +
-                                          fixture.release.version +
-                                          R"(","archive_sha256":"wrong"})";
-    Touch(marker_path, mismatched_marker);
-    const auto package_file = fixture.final_dir() / "bin" / "onnxruntime.dll";
-    std::filesystem::remove(package_file);
+    const std::string other_archive_marker = R"({"owner":"FastFlowLM","schema":"flm-hipep-install/v1","runtime":"hip-ep","version":")" +
+                                             fixture.release.version +
+                                             R"(","archive_sha256":"another-archive"})";
+    Touch(marker_path, other_archive_marker);
+    std::filesystem::remove(fixture.final_dir() / "onnxruntime.dll");
+
+    const auto repaired = flm::oga::EnsureHipEpPackageForTest(fixture.environment(), fixture.Hooks());
+    TEST_REQUIRE(repaired.bin == fixture.final_dir());
+    TEST_REQUIRE(fixture.downloads == 1);
+    RequireContains(ReadText(marker_path), fixture.release.sha256);
+    std::vector<std::string> quarantined_markers;
+    for (const auto& entry : std::filesystem::directory_iterator(fixture.quarantine_root())) {
+        quarantined_markers.push_back(ReadText(entry.path() / ".flm-hipep-install.json"));
+    }
+    TEST_REQUIRE(quarantined_markers == std::vector<std::string>{other_archive_marker});
+}
+
+void TestAutoInstallDoesNotReplaceAnInstallForAnotherVersion() {
+    RuntimeInstallFixture fixture;
+    TEST_REQUIRE(flm::oga::EnsureHipEpPackageForTest(fixture.environment(), fixture.Hooks()).bin ==
+                 fixture.final_dir());
+    const auto marker_path = fixture.final_dir() / ".flm-hipep-install.json";
+    const std::string other_version_marker =
+        R"({"owner":"FastFlowLM","schema":"flm-hipep-install/v1","runtime":"hip-ep","version":"0.0.1","archive_sha256":")" +
+        fixture.release.sha256 + R"("})";
+    Touch(marker_path, other_version_marker);
+    std::filesystem::remove(fixture.final_dir() / "onnxruntime.dll");
 
     const auto text = RequireThrows<std::runtime_error>(
         [&] { flm::oga::EnsureHipEpPackageForTest(fixture.environment(), fixture.Hooks()); });
     RequireContains(text, "refusing to replace");
-    std::ifstream marker(marker_path, std::ios::binary);
-    std::string contents;
-    std::getline(marker, contents);
-    TEST_REQUIRE(contents == mismatched_marker);
+    TEST_REQUIRE(ReadText(marker_path) == other_version_marker);
     TEST_REQUIRE(fixture.downloads == 1);
 }
 
@@ -1147,6 +1249,11 @@ int main(int argc, char** argv) {
     RUN(TestCallsTheEngineDoesNotSupportThrow);
     RUN(TestAMissingSymbolNamesIt);
     RUN(TestAFreshApiAfterFullReleaseWorksAgain);
+    RUN(TestTheEpLibraryIsRegisteredUnderTheNameOgaLooksUp);
+    RUN(TestARefusedRegistrationNamesTheLibrary);
+    RUN(TestANonAsciiLibraryPathIsRefusedBeforeOgaSeesIt);
+    RUN(TestOpenModelPutsTheDecoderOnTheRegisteredEpAlone);
+    RUN(TestOpenModelRejectsAModelOnAnotherDevice);
     RUN(TestDiscoveryReportsWhyEachRootIsRejected);
     RUN(TestDiscoveryAcceptsAVersionedPackageWithoutABinDirectory);
     RUN(TestFindPackageTakesTheFirstThatQualifiesAndListsEveryRejection);
@@ -1174,7 +1281,8 @@ int main(int argc, char** argv) {
     RUN(TestAutoInstallCleansStagingWhenTarRejectsAnInvalidArchive);
     RUN(TestAutoInstallChecksFreeSpaceBeforeDownloading);
     RUN(TestValidExternalPackagesBypassAutoInstall);
-    RUN(TestAutoInstallPreservesAMarkerForAnotherRelease);
+    RUN(TestAutoInstallRepairsAnInstallFromAnotherArchive);
+    RUN(TestAutoInstallDoesNotReplaceAnInstallForAnotherVersion);
     RUN(TestTheBackendRejectsWhatThePackageCannotRun);
     RUN(TestTheBackendSaysHowToGetHipep);
 #undef RUN

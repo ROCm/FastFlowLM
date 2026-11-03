@@ -24,9 +24,11 @@
     X(result_get_error, OgaResultGetError)                                         \
     X(destroy_result, OgaDestroyResult)                                            \
     X(destroy_string, OgaDestroyString)                                            \
+    X(register_execution_provider_library, OgaRegisterExecutionProviderLibrary)    \
     X(create_config, OgaCreateConfig)                                              \
+    X(config_clear_providers, OgaConfigClearProviders)                             \
+    X(config_append_provider, OgaConfigAppendProvider)                             \
     X(config_overlay, OgaConfigOverlay)                                            \
-    X(config_set_provider_option, OgaConfigSetProviderOption)                      \
     X(destroy_config, OgaDestroyConfig)                                            \
     X(create_model_from_config, OgaCreateModelFromConfig)                          \
     X(model_get_device_type, OgaModelGetDeviceType)                                \
@@ -57,6 +59,13 @@ struct FileVersion {
 /// \brief the oldest onnxruntime-genai whose C API matches the vendored header
 /// \note hip-ep 0.5.1 ships OGA 0.14, which runs this model only on the CPU.
 inline constexpr FileVersion kMinimumOgaVersion{0, 17, 0, 0};
+
+/// \brief the name the EP library is registered under
+/// \note OGA's AMDGPU provider attaches the EP devices of this name to a session.
+inline constexpr const char* kAmdGpuProviderName = "AMDGPUExecutionProvider";
+
+/// \brief the EP library of a hip-ep package, registered under kAmdGpuProviderName
+inline constexpr const char* kAmdGpuProviderLibrary = "hipgpu.dll";
 
 /// \brief one place a hip-ep package may be, in the order they are tried
 struct PackageCandidate {
@@ -126,7 +135,9 @@ public:
     using Resolver = std::function<void*(std::string_view)>;
 
     /// \brief the API of the hip-ep package that FindPackage(SearchPackages()) picks
-    /// \note The cache holds no owning reference. The API lives as long as an
+    /// \note The first load in a process registers the package's EP library
+    ///       (RegisterAmdGpuProvider), so every later load must pick the same package.
+    ///       The cache holds no owning reference. The API lives as long as an
     ///       owner holds it; loading again after the last owner went finds the
     ///       DLLs already mapped. The DLLs are never unloaded here, and
     ///       OgaShutdown() is never called: flm swaps models inside one process,
@@ -169,5 +180,11 @@ private:
     OgaFunctions functions_{};
     Package package_;
 };
+
+/// \brief register the package's kAmdGpuProviderLibrary with OGA under kAmdGpuProviderName
+/// \note OGA keeps a registration until the process exits and refuses a second one
+///       under the same name.
+/// \throws std::runtime_error naming the library if OGA cannot register it
+void RegisterAmdGpuProvider(const OgaApi& api);
 
 }  // namespace flm::oga

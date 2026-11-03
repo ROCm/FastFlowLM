@@ -37,11 +37,11 @@ constexpr std::uint64_t kInstallSafetyMargin = 64ULL * 1024ULL * 1024ULL;
 const HipEpRuntimeRelease& BuiltInRelease() {
     static const HipEpRuntimeRelease release{
         "0.5.2",
-        "hipep_0.5.2_windows.zip",
-        "https://github.com/ROCm/hip-ep/releases/download/v0.5.2/hipep_0.5.2_windows.zip",
-        315406317ULL,
-        822268991ULL,
-        "45aa33c87b546b376852a78ea946c8595f7e21bb101a2d61a6b942291f515d27",
+        "amdgpu.zip",
+        "https://github.com/ROCm/hip-ep/releases/download/v0.5.2/amdgpu.zip",
+        130920185ULL,
+        323570048ULL,
+        "de3e4e2241e6466712be530bd66f77fcce44fc005910f23a874ce8adf4de7ef4",
     };
     return release;
 }
@@ -161,15 +161,16 @@ std::string MarkerJson(const HipEpRuntimeRelease& release) {
     return marker.dump(2);
 }
 
-bool HasMatchingMarker(const std::filesystem::path& root, const HipEpRuntimeRelease& release) {
+/// \note The archive is not compared: flm releases may pin different archives of one hip-ep
+///       version, and each must be able to repair what another installed.
+bool IsManagedInstall(const std::filesystem::path& root, const HipEpRuntimeRelease& release) {
     std::ifstream stream(root / kMarkerName, std::ios::binary);
     if (!stream.is_open()) return false;
     nlohmann::json marker;
     try {
         stream >> marker;
         return marker.value("owner", "") == kMarkerOwner && marker.value("schema", "") == kMarkerSchema &&
-               marker.value("runtime", "") == "hip-ep" && marker.value("version", "") == release.version &&
-               marker.value("archive_sha256", "") == release.sha256;
+               marker.value("runtime", "") == "hip-ep" && marker.value("version", "") == release.version;
     } catch (...) {
         return false;
     }
@@ -344,17 +345,17 @@ void EnsureArchiveCached(const ManagedPaths& paths, const Hooks& hooks) {
     }
 }
 
+/// \brief what hipgpu.dll needs beside the DLLs InspectPackage checks, all under the archive root
 void ValidateArchiveLayout(const std::filesystem::path& root) {
-    const std::array<std::filesystem::path, 4> required{
-        root / "bin",
-        root / "lib",
-        root / "wheels",
-        root / "morphizen_config.json",
+    const std::array<std::filesystem::path, 3> required{
+        root / "amdhip64_7.dll",
+        root / "hipblaslt.dll",
+        root / "hipblaslt" / "library",
     };
     for (const auto& path : required) {
         std::error_code error;
-        const bool ok = path.filename() == "morphizen_config.json" ? std::filesystem::is_regular_file(path, error)
-                                                                    : std::filesystem::is_directory(path, error);
+        const bool ok = path.has_extension() ? std::filesystem::is_regular_file(path, error)
+                                             : std::filesystem::is_directory(path, error);
         if (!ok) throw std::runtime_error("extracted hip-ep archive is missing '" + Text(path) + "'");
     }
 }
@@ -376,7 +377,7 @@ void PrepareExistingTarget(const ManagedPaths& paths, const Hooks& hooks) {
     EnsureNotReparseIfExists(paths.package_root, "managed hip-ep root");
     if (!Exists(paths.final_dir)) return;
     EnsureNotReparseIfExists(paths.final_dir, "managed hip-ep package");
-    if (!HasMatchingMarker(paths.final_dir, hooks.release)) {
+    if (!IsManagedInstall(paths.final_dir, hooks.release)) {
         throw std::runtime_error("refusing to replace '" + Text(paths.final_dir) +
                                  "' because it is not owned by FastFlowLM");
     }
@@ -428,8 +429,7 @@ Package InstallManagedPackage(const PackageEnvironment& environment, const Hooks
     }
     cleanup.release();
     hooks.log("Installed hip-ep " + hooks.release.version + " to " + Text(paths.final_dir));
-    staged.bin = paths.final_dir / "bin";
-    return staged;
+    return InspectOrThrow(std::move(staged.source), paths.final_dir);
 }
 
 std::wstring QuoteForCreateProcess(std::wstring_view value) {
@@ -542,7 +542,7 @@ Package EnsureHipEpPackageForTest(const PackageEnvironment& environment, const H
 
 Package EnsureHipEpPackage(const PackageEnvironment& environment) {
     Package package = EnsureHipEpPackageForTest(environment, {});
-    // OGA narrows its own module path when registering the AMDGPU EP.
+    // RegisterAmdGpuProvider passes OGA the library path as narrow text; a short path keeps it ASCII.
     package.bin = ShortPath(package.bin).value_or(package.bin);
     return package;
 }

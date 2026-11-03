@@ -26,12 +26,9 @@ std::string Text(const std::filesystem::path& path) {
     return std::string(utf8.begin(), utf8.end());
 }
 
-/// \brief every session on the AMDGPU EP's HIP profile, and no CPU fallback for the decoder
+/// \brief no CPU fallback for the decoder
 constexpr const char* kSessionOverlay =
-    R"({"model":{)"
-    R"("decoder":{"session_options":{"provider_options":[{"AMDGPU":{"profile":"hip"}}],"session.disable_cpu_ep_fallback":"1"}},)"
-    R"("embedding":{"session_options":{"provider_options":[{"AMDGPU":{"profile":"hip"}}]}},)"
-    R"("vision":{"session_options":{"provider_options":[{"AMDGPU":{"profile":"hip"}}]}}}})";
+    R"({"model":{"decoder":{"session_options":{"session.disable_cpu_ep_fallback":"1"}}}})";
 
 nlohmann::json ReadJson(const std::filesystem::path& path) {
     flm::file_access::ObserveOpen(path);
@@ -110,9 +107,9 @@ OgaApi::Owned<OgaModel> OpenModel(const OgaApi& api, const std::filesystem::path
     api.Check(f.create_config(reinterpret_cast<const char*>(directory.c_str()), &raw_config),
               "OgaCreateConfig");
     OgaApi::Owned<OgaConfig> config(raw_config, {f.destroy_config});
+    api.Check(f.config_clear_providers(config.get()), "OgaConfigClearProviders");
+    api.Check(f.config_append_provider(config.get(), kAmdGpuProviderName), "OgaConfigAppendProvider");
     api.Check(f.config_overlay(config.get(), kSessionOverlay), "OgaConfigOverlay");
-    api.Check(f.config_set_provider_option(config.get(), "AMDGPU", "profile", "hip"),
-              "OgaConfigSetProviderOption");
     OgaModel* raw_model = nullptr;
     api.Check(f.create_model_from_config(config.get(), &raw_model), "OgaCreateModelFromConfig");
     OgaApi::Owned<OgaModel> model(raw_model, {f.destroy_model});

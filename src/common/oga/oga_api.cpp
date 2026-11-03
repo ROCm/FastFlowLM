@@ -25,8 +25,8 @@
 namespace flm::oga {
 namespace {
 /// \brief the DLLs a hip-ep package must have; the first is OGA itself
-constexpr std::array<std::string_view, 5> kPackageFiles{
-    "onnxruntime-genai.dll", "onnxruntime.dll", "amdgpu-ep.dll", "hip-backend.dll", "hipgpu.dll"};
+constexpr std::array<std::string_view, 3> kPackageFiles{
+    "onnxruntime-genai.dll", "onnxruntime.dll", kAmdGpuProviderLibrary};
 
 constexpr const wchar_t* kPackageRootVariable = L"AMDRT_PKG_ROOT";
 constexpr std::string_view kHipEpFolder = "hip-ep";
@@ -137,11 +137,26 @@ Cache& GetCache() {
     return cache;
 }
 
-/// \brief load the package that FindPackage picks, and resolve its OGA entry points
+/// \brief load the package that FindPackage picks, resolve its OGA entry points, and
+///        register its EP library on the first load
+/// \note Runs under GetOrCreate's lock, which also guards `registered`.
 std::shared_ptr<const OgaApi> LoadHipEp() {
+    // The DLLs stay loaded, and OGA keeps the registration, until the process exits.
+    static std::filesystem::path registered;
     Package package = EnsureHipEpPackage(EnvironmentPath);
+    if (!registered.empty() && package.bin != registered) {
+        throw std::runtime_error("flm already loaded hip-ep from '" + Text(registered) +
+                                 "'; restart flm to use '" + Text(package.bin) + "'");
+    }
     if (GetEnvironmentVariableW(L"HIPDNN_EP_STRICT", nullptr, 0) == 0)
         _putenv_s("HIPDNN_EP_STRICT", "1");
+    // hipgpu.dll loads hipblaslt.dll by name, a search that AddDllDirectory alone does
+    // not extend to the package.
+    if (!SetDllDirectoryW(package.bin.c_str())) {
+        throw std::runtime_error("failed to add '" + Text(package.bin) +
+                                 "' to the DLL search path (Windows error " +
+                                 std::to_string(GetLastError()) + ")");
+    }
     AddDllDirectory(package.bin.c_str());
     // A System32 onnxruntime.dll of another version would otherwise satisfy
     // onnxruntime-genai.dll's import.
@@ -151,7 +166,12 @@ std::shared_ptr<const OgaApi> LoadHipEp() {
         const std::string terminated(name);
         return reinterpret_cast<void*>(GetProcAddress(genai, terminated.c_str()));
     };
-    return OgaApi::ResolveForTest(std::move(resolver), std::move(package));
+    auto api = OgaApi::ResolveForTest(std::move(resolver), std::move(package));
+    if (registered.empty()) {
+        RegisterAmdGpuProvider(*api);
+        registered = api->package().bin;
+    }
+    return api;
 }
 }  // namespace
 
@@ -254,9 +274,9 @@ Package FindPackage(const std::vector<PackageCandidate>& candidates,
     throw std::runtime_error(
         "no usable hip-ep package for the oga-hipep backend:" + reasons +
         "\nInstall hip-ep " + kMinimumHipEp + " or later (OGA " + VersionText(kMinimumOgaVersion) +
-        " or later). hip-ep is a zip with no installer. Unzip it into %LOCALAPPDATA%\\hip-ep\\<version>"
-        " or %ProgramFiles%\\hip-ep\\<version>, so that its bin directory holds the DLLs (a root"
-        " without bin also works). Or set AMDRT_PKG_ROOT to the package root: when it is set, no"
+        " or later). hip-ep's amdgpu.zip has no installer. Unzip it into %LOCALAPPDATA%\\hip-ep\\<version>"
+        " or %ProgramFiles%\\hip-ep\\<version>, so that the folder holds its DLLs (a bin directory"
+        " holding them also works). Or set AMDRT_PKG_ROOT to the package root: when it is set, no"
         " other folder is tried.");
 }
 
@@ -299,6 +319,27 @@ void OgaApi::Check(OgaResult* result, std::string_view what) const {
     text += message ? message : "unknown error";
     functions_.destroy_result(result);
     throw OgaError(text);
+}
+
+void RegisterAmdGpuProvider(const OgaApi& api) {
+    const std::string library = Text(api.package().bin / kAmdGpuProviderLibrary);
+    // OGA loads the library through the ANSI code page before it registers it through UTF-8.
+    const bool ascii =
+        std::all_of(library.begin(), library.end(), [](unsigned char c) { return c < 0x80; });
+    if (!ascii && GetACP() != CP_UTF8) {
+        throw std::runtime_error("cannot register '" + library +
+                                 "' with OGA, which needs an ASCII path for it. Set AMDRT_PKG_ROOT"
+                                 " to a hip-ep package under an ASCII path");
+    }
+    // OGA reports a failed registration by throwing rather than by an OgaResult.
+    const std::string failed = "failed to register '" + library + "' as " + kAmdGpuProviderName;
+    try {
+        api.functions().register_execution_provider_library(kAmdGpuProviderName, library.c_str());
+    } catch (const std::exception& error) {
+        throw std::runtime_error(failed + ": " + error.what());
+    } catch (...) {
+        throw std::runtime_error(failed);
+    }
 }
 
 }  // namespace flm::oga
