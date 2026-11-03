@@ -83,6 +83,9 @@ struct WeightFromFileRecord {
     std::uint64_t size{};
 };
 
+/// \brief the position a forward records when it names none
+inline constexpr std::size_t kPositionContinue = SIZE_MAX;
+
 struct ModelForwardRecord {
     std::size_t rows{};
     std::size_t position{};
@@ -102,11 +105,6 @@ struct State {
     bool npu_usable{true};
     /// \brief what testing_npu_arch() answers
     std::string npu_arch{"AIEM"};
-    /// \brief the PDI lists the engine opened its stream with
-    /// \note Required from 0.5.0 and deliberately undefaulted by corelib, so
-    ///       it is worth being able to assert on.
-    std::vector<int> stream_prefill_pdis;
-    std::vector<int> stream_token_pdis;
     std::string detail;
     std::string status_text{"success"};
     std::string missing_symbol;

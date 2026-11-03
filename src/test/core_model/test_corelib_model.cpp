@@ -24,7 +24,7 @@ const ModelSpec kFromStart{"qwen3", "Qwen3", 4096, Continuation::kFromStart, Rew
 const ModelSpec kFromPage{"gemma4", "Gemma 4", 16384, Continuation::kFromPage, Rewind::kSeek};
 
 constexpr std::int64_t kVocab = 300000;
-constexpr std::size_t kContinue = RYZENAI_CORELIB_POSITION_CONTINUE;
+constexpr std::size_t kContinue = fake_corelib::kPositionContinue;
 
 struct Harness {
     std::shared_ptr<CorelibRuntime> runtime;
@@ -208,10 +208,10 @@ void TestAFailedForwardPoisonsTheEngineAndDropsTheCheckpoint() {
     auto ids = Ids(10);
     (void)h.engine->prefill(ids);
     (void)h.engine->checkpoint();
-    S().statuses["ryzenai_corelib_model_forward"] = ryzenai_corelib_status_failure;
+    S().statuses["ryzenai_corelib_model_run"] = ryzenai_corelib_status_failure;
     (void)RequireThrows([&] { (void)h.engine->forward(1); });
     TEST_REQUIRE(h.engine->poisoned());
-    S().statuses.erase("ryzenai_corelib_model_forward");
+    S().statuses.erase("ryzenai_corelib_model_run");
     const auto forwards = S().model_forwards.size();
     RequireContains(RequireThrows([&] { (void)h.engine->forward(2); }), "poisoned");
     RequireContains(RequireThrows([&] { (void)h.engine->prefill(ids); }), "poisoned");
@@ -226,7 +226,7 @@ void TestAForwardThatFailsOnceRunsAgainFromTheStart() {
     auto ids = Ids(5000);
     (void)h.engine->prefill(ids);
     const int resets = Resets();
-    S().fail_counts["ryzenai_corelib_model_forward"] = 1;
+    S().fail_counts["ryzenai_corelib_model_run"] = 1;
     std::vector<int> more{1, 2, 3};
     (void)h.engine->prefill(more);
     TEST_REQUIRE(!h.engine->poisoned());
@@ -241,10 +241,10 @@ void TestARecurrentModelRunsAgainFromTheStartAfterAFailure() {
     Harness h(kSnapshot, 4096);
     auto ids = Ids(10);
     (void)h.engine->prefill(ids);
-    S().fail_counts["ryzenai_corelib_model_forward"] = 1;
+    S().fail_counts["ryzenai_corelib_model_run"] = 1;
     (void)h.engine->forward(1);
     TEST_REQUIRE(!h.engine->poisoned());
-    TEST_REQUIRE(Last().rows == 11 && Last().position == RYZENAI_CORELIB_POSITION_CONTINUE);
+    TEST_REQUIRE(Last().rows == 11 && Last().position == kContinue);
     TEST_REQUIRE(h.engine->get_current_context_length() == 11);
 }
 
@@ -252,7 +252,7 @@ void TestAForwardThatFailsTwicePoisonsTheEngine() {
     Harness h(kFromPage, 4096);
     auto ids = Ids(10);
     (void)h.engine->prefill(ids);
-    S().fail_counts["ryzenai_corelib_model_forward"] = 2;
+    S().fail_counts["ryzenai_corelib_model_run"] = 2;
     (void)RequireThrows([&] { (void)h.engine->forward(1); });
     TEST_REQUIRE(h.engine->poisoned());
 }

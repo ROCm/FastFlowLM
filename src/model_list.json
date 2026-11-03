@@ -955,9 +955,10 @@
             "4b": {
                 "supported_platforms": ["dev04"],
                 "name": "phi4-mini-it-core",
-                "url": "https://huggingface.co/unsloth/Phi-4-mini-instruct-GGUF/resolve/78eb92a46fc37e6b524df991ed9aca9bc6aa7b80",
-                "file_url": "https://huggingface.co/api/models/unsloth/Phi-4-mini-instruct-GGUF/tree/78eb92a46fc37e6b524df991ed9aca9bc6aa7b80",
-                "size": 4100140571,
+                "url": "https://huggingface.co/amd/Phi-4-mini-instruct-Q4_G128-GGUF/resolve/812448440ca39fa1a18e1f0f874c18dfdc5be075",
+                "file_url": "https://huggingface.co/api/models/amd/Phi-4-mini-instruct-Q4_G128-GGUF/tree/812448440ca39fa1a18e1f0f874c18dfdc5be075",
+                "use_hf_token": true,
+                "size": 3253347291,
                 "default_context_length": 131072,
                 "max_prefill_len": 4096,
                 "details": {
@@ -965,12 +966,12 @@
                     "think": false,
                     "think_toggleable": false,
                     "parameter_size": "4B",
-                    "quantization_level": "Q8_0 -> group-64"
+                    "quantization_level": "Q4_G128"
                 },
                 "flm_min_version": "1.0.3",
                 "vlm": false,
                 "files": [
-                    "Phi-4-mini-instruct.Q8_0.gguf",
+                    "Phi-4-mini-instruct-Q4_G128.gguf",
                     "tokenizer.json",
                     "tokenizer_config.json",
                     "config.json"
@@ -989,24 +990,7 @@
                         "revision": "cfbefacb99257ffa30c83adab238a50856ac3083"
                     }
                 },
-                "preferred_source": {
-                    "url": "https://huggingface.co/amd/Phi-4-mini-instruct-Q4_G128-GGUF/resolve/812448440ca39fa1a18e1f0f874c18dfdc5be075",
-                    "file_url": "https://huggingface.co/api/models/amd/Phi-4-mini-instruct-Q4_G128-GGUF/tree/812448440ca39fa1a18e1f0f874c18dfdc5be075",
-                    "use_hf_token": true,
-                    "size": 3253347291,
-                    "footprint": 3.25,
-                    "details": {
-                        "quantization_level": "Q4_G128"
-                    },
-                    "files": [
-                        "Phi-4-mini-instruct-Q4_G128.gguf",
-                        "tokenizer.json",
-                        "tokenizer_config.json",
-                        "config.json"
-                    ],
-                    "model_info_key": "phi4-mini-it-core:4b@amd"
-                },
-                "footprint": 4.1
+                "footprint": 3.25
             }
         },
         "embed-gemma": {
@@ -1909,21 +1893,22 @@
                 "dev04"
             ],
             "name": "gemma4-it-core-e2b",
-            "url": "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/0314792d7f1f7e229411f620751375812bb9faf2",
-            "file_url": "https://huggingface.co/api/models/unsloth/gemma-4-E2B-it-GGUF/tree/0314792d7f1f7e229411f620751375812bb9faf2",
-            "size": 5080530526,
+            "url": "https://huggingface.co/amd/gemma-4-E2B-it-Q4_G32-GGUF/resolve/cccdcfeae91175e7e5e64c41900b5e6a986148e6",
+            "file_url": "https://huggingface.co/api/models/amd/gemma-4-E2B-it-Q4_G32-GGUF/tree/cccdcfeae91175e7e5e64c41900b5e6a986148e6",
+            "use_hf_token": true,
+            "size": 6889739655,
             "default_context_length": 65536,
             "max_prefill_len": 4096,
             "details": {
                 "family": "gemma4e",
                 "think": true,
                 "parameter_size": "5B",
-                "quantization_level": "Q8_0 -> group-32"
+                "quantization_level": "Q4_G32"
             },
             "flm_min_version": "1.0.6",
             "vlm": false,
             "files": [
-                "gemma-4-E2B-it-Q8_0.gguf",
+                "gemma-4-E2B-it-Q4_G32.gguf",
                 "tokenizer.json",
                 "tokenizer_config.json",
                 "config.json",
@@ -1947,25 +1932,7 @@
                     "revision": "3e22461f65e89153144f8adb70e3b8c2cc9845a7"
                 }
             },
-            "preferred_source": {
-                "url": "https://huggingface.co/amd/gemma-4-E2B-it-Q4_G32-GGUF/resolve/cccdcfeae91175e7e5e64c41900b5e6a986148e6",
-                "file_url": "https://huggingface.co/api/models/amd/gemma-4-E2B-it-Q4_G32-GGUF/tree/cccdcfeae91175e7e5e64c41900b5e6a986148e6",
-                "use_hf_token": true,
-                "size": 6889739655,
-                "footprint": 6.92,
-                "details": {
-                    "quantization_level": "Q4_G32"
-                },
-                "files": [
-                    "gemma-4-E2B-it-Q4_G32.gguf",
-                    "tokenizer.json",
-                    "tokenizer_config.json",
-                    "config.json",
-                    "chat_template.jinja"
-                ],
-                "model_info_key": "gemma4-it-core:e2b@amd"
-            },
-            "footprint": 5.1,
+            "footprint": 6.92,
             "model_info_key": "gemma4-it-core:e2b",
             "label": [
                 "reasoning",
@@ -1978,21 +1945,22 @@
                 "dev04"
             ],
             "name": "gemma4-it-core-e4b",
-            "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/bfc15c382204943c3a8fff0c750b94ae2364d7a3",
-            "file_url": "https://huggingface.co/api/models/unsloth/gemma-4-E4B-it-GGUF/tree/bfc15c382204943c3a8fff0c750b94ae2364d7a3",
-            "size": 8225131325,
+            "url": "https://huggingface.co/amd/gemma-4-E4B-it-Q4_G32-GGUF/resolve/1aeafabf9fb3f92c6858e506d56881bf78e55243",
+            "file_url": "https://huggingface.co/api/models/amd/gemma-4-E4B-it-Q4_G32-GGUF/tree/1aeafabf9fb3f92c6858e506d56881bf78e55243",
+            "use_hf_token": true,
+            "size": 9771106246,
             "default_context_length": 65536,
             "max_prefill_len": 4096,
             "details": {
                 "family": "gemma4e",
                 "think": true,
                 "parameter_size": "8B",
-                "quantization_level": "Q8_0 -> group-32"
+                "quantization_level": "Q4_G32"
             },
             "flm_min_version": "1.0.6",
             "vlm": false,
             "files": [
-                "gemma-4-E4B-it-Q8_0.gguf",
+                "gemma-4-E4B-it-Q4_G32.gguf",
                 "tokenizer.json",
                 "tokenizer_config.json",
                 "config.json",
@@ -2016,25 +1984,7 @@
                     "revision": "ee0ef6023621cff504d758262d4e04895a5af4a2"
                 }
             },
-            "preferred_source": {
-                "url": "https://huggingface.co/amd/gemma-4-E4B-it-Q4_G32-GGUF/resolve/1aeafabf9fb3f92c6858e506d56881bf78e55243",
-                "file_url": "https://huggingface.co/api/models/amd/gemma-4-E4B-it-Q4_G32-GGUF/tree/1aeafabf9fb3f92c6858e506d56881bf78e55243",
-                "use_hf_token": true,
-                "size": 9771106246,
-                "footprint": 9.74,
-                "details": {
-                    "quantization_level": "Q4_G32"
-                },
-                "files": [
-                    "gemma-4-E4B-it-Q4_G32.gguf",
-                    "tokenizer.json",
-                    "tokenizer_config.json",
-                    "config.json",
-                    "chat_template.jinja"
-                ],
-                "model_info_key": "gemma4-it-core:e4b@amd"
-            },
-            "footprint": 8.2,
+            "footprint": 9.74,
             "model_info_key": "gemma4-it-core:e4b",
             "label": [
                 "reasoning",
@@ -2049,21 +1999,22 @@
                 "dev04"
             ],
             "name": "Qwen3.5-4B",
-            "url": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523",
-            "file_url": "https://huggingface.co/api/models/unsloth/Qwen3.5-4B-GGUF/tree/e87f176479d0855a907a41277aca2f8ee7a09523",
-            "size": 4495231341,
+            "url": "https://huggingface.co/amd/Qwen3.5-4B-Q4_G128-GGUF/resolve/bcc0151518cc195478cba3df3821a09e057ad187",
+            "file_url": "https://huggingface.co/api/models/amd/Qwen3.5-4B-Q4_G128-GGUF/tree/bcc0151518cc195478cba3df3821a09e057ad187",
+            "use_hf_token": true,
+            "size": 3533740685,
             "default_context_length": 32768,
             "max_prefill_len": 4096,
             "details": {
                 "family": "qwen3.5",
                 "think": true,
                 "parameter_size": "4B",
-                "quantization_level": "Q8_0 -> group-64"
+                "quantization_level": "Q4_G128, lm_head Q4_G32"
             },
             "flm_min_version": "1.0.6",
             "vlm": false,
             "files": [
-                "Qwen3.5-4B-Q8_0.gguf",
+                "Qwen3.5-4B-Q4_G128.gguf",
                 "tokenizer.json",
                 "tokenizer_config.json",
                 "config.json"
@@ -2082,24 +2033,7 @@
                     "revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a"
                 }
             },
-            "preferred_source": {
-                "url": "https://huggingface.co/amd/Qwen3.5-4B-Q4_G128-GGUF/resolve/bcc0151518cc195478cba3df3821a09e057ad187",
-                "file_url": "https://huggingface.co/api/models/amd/Qwen3.5-4B-Q4_G128-GGUF/tree/bcc0151518cc195478cba3df3821a09e057ad187",
-                "use_hf_token": true,
-                "size": 3533740685,
-                "footprint": 4.07,
-                "details": {
-                    "quantization_level": "Q4_G128, lm_head Q4_G32"
-                },
-                "files": [
-                    "Qwen3.5-4B-Q4_G128.gguf",
-                    "tokenizer.json",
-                    "tokenizer_config.json",
-                    "config.json"
-                ],
-                "model_info_key": "qwen3.5-core:4b@amd"
-            },
-            "footprint": 5.18,
+            "footprint": 4.07,
             "model_info_key": "qwen3.5-core:4b",
             "label": [
                 "reasoning",
@@ -2111,21 +2045,22 @@
                 "dev04"
             ],
             "name": "Qwen3.5-9B",
-            "url": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/3885219b6810b007914f3a7950a8d1b469d598a5",
-            "file_url": "https://huggingface.co/api/models/unsloth/Qwen3.5-9B-GGUF/tree/3885219b6810b007914f3a7950a8d1b469d598a5",
-            "size": 9540331866,
+            "url": "https://huggingface.co/amd/Qwen3.5-9B-Q4_G128-GGUF/resolve/4e22acd7dd3b686965d09a8f48bf24a3fea1aeb8",
+            "file_url": "https://huggingface.co/api/models/amd/Qwen3.5-9B-Q4_G128-GGUF/tree/4e22acd7dd3b686965d09a8f48bf24a3fea1aeb8",
+            "use_hf_token": true,
+            "size": 6276655722,
             "default_context_length": 32768,
             "max_prefill_len": 4096,
             "details": {
                 "family": "qwen3.5",
                 "think": true,
                 "parameter_size": "9B",
-                "quantization_level": "Q8_0 -> group-64"
+                "quantization_level": "Q4_G128, lm_head Q4_G32"
             },
             "flm_min_version": "1.0.3",
             "vlm": false,
             "files": [
-                "Qwen3.5-9B-Q8_0.gguf",
+                "Qwen3.5-9B-Q4_G128.gguf",
                 "tokenizer.json",
                 "tokenizer_config.json",
                 "config.json"
@@ -2144,24 +2079,7 @@
                     "revision": "c202236235762e1c871ad0ccb60c8ee5ba337b9a"
                 }
             },
-            "preferred_source": {
-                "url": "https://huggingface.co/amd/Qwen3.5-9B-Q4_G128-GGUF/resolve/4e22acd7dd3b686965d09a8f48bf24a3fea1aeb8",
-                "file_url": "https://huggingface.co/api/models/amd/Qwen3.5-9B-Q4_G128-GGUF/tree/4e22acd7dd3b686965d09a8f48bf24a3fea1aeb8",
-                "use_hf_token": true,
-                "size": 6276655722,
-                "footprint": 7.24,
-                "details": {
-                    "quantization_level": "Q4_G128, lm_head Q4_G32"
-                },
-                "files": [
-                    "Qwen3.5-9B-Q4_G128.gguf",
-                    "tokenizer.json",
-                    "tokenizer_config.json",
-                    "config.json"
-                ],
-                "model_info_key": "qwen3.5-core:9b@amd"
-            },
-            "footprint": 11.0,
+            "footprint": 7.24,
             "model_info_key": "qwen3.5-core:9b",
             "label": [
                 "reasoning",
@@ -2175,21 +2093,22 @@
                 "dev04"
             ],
             "name": "Qwen3.6-35B-A3B",
-            "url": "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/a483e9e6cbd595906af30beda3187c2663a1118c",
-            "file_url": "https://huggingface.co/api/models/unsloth/Qwen3.6-35B-A3B-GGUF/tree/a483e9e6cbd595906af30beda3187c2663a1118c",
-            "size": 36915976470,
+            "url": "https://huggingface.co/amd/Qwen3.6-35B-A3B-Q4_G32-GGUF/resolve/53a2155ba4237f4bffc3914b2f63cbb0bc68585b",
+            "file_url": "https://huggingface.co/api/models/amd/Qwen3.6-35B-A3B-Q4_G32-GGUF/tree/53a2155ba4237f4bffc3914b2f63cbb0bc68585b",
+            "use_hf_token": true,
+            "size": 21311733654,
             "default_context_length": 32768,
             "max_prefill_len": 4096,
             "details": {
                 "family": "qwen3.6-moe",
                 "think": true,
                 "parameter_size": "35B",
-                "quantization_level": "Q8_0 -> group-32"
+                "quantization_level": "Q4_G32"
             },
             "flm_min_version": "1.0.6",
             "vlm": false,
             "files": [
-                "Qwen3.6-35B-A3B-Q8_0.gguf",
+                "Qwen3.6-35B-A3B-Q4_G32.gguf",
                 "tokenizer.json",
                 "tokenizer_config.json",
                 "config.json",
@@ -2213,25 +2132,7 @@
                     "revision": "995ad96eacd98c81ed38be0c5b274b04031597b0"
                 }
             },
-            "preferred_source": {
-                "url": "https://huggingface.co/amd/Qwen3.6-35B-A3B-Q4_G32-GGUF/resolve/53a2155ba4237f4bffc3914b2f63cbb0bc68585b",
-                "file_url": "https://huggingface.co/api/models/amd/Qwen3.6-35B-A3B-Q4_G32-GGUF/tree/53a2155ba4237f4bffc3914b2f63cbb0bc68585b",
-                "use_hf_token": true,
-                "size": 21311733654,
-                "footprint": 21.3,
-                "details": {
-                    "quantization_level": "Q4_G32"
-                },
-                "files": [
-                    "Qwen3.6-35B-A3B-Q4_G32.gguf",
-                    "tokenizer.json",
-                    "tokenizer_config.json",
-                    "config.json",
-                    "chat_template.jinja"
-                ],
-                "model_info_key": "qwen3.6-moe-core:35b-a3b@amd"
-            },
-            "footprint": 36.9,
+            "footprint": 21.3,
             "model_info_key": "qwen3.6-moe-core:35b-a3b",
             "label": [
                 "reasoning",
@@ -2245,21 +2146,22 @@
                 "dev04"
             ],
             "name": "Qwen3.8-27B",
-            "url": "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/4ca720788d1e01f1bff70c033e0d0028fd02e502",
-            "file_url": "https://huggingface.co/api/models/unsloth/Qwen3.8-27B-GGUF/tree/4ca720788d1e01f1bff70c033e0d0028fd02e502",
-            "size": 16069319200,
+            "url": "https://huggingface.co/amd/Qwen3.8-27B-Q4_G128-GGUF/resolve/deab6eafc90811fc6738db7c05ec615130074cb3",
+            "file_url": "https://huggingface.co/api/models/amd/Qwen3.8-27B-Q4_G128-GGUF/tree/deab6eafc90811fc6738db7c05ec615130074cb3",
+            "use_hf_token": true,
+            "size": 15977762336,
             "default_context_length": 32768,
             "max_prefill_len": 4096,
             "details": {
                 "family": "qwen3.8-mtp",
                 "think": true,
                 "parameter_size": "27B",
-                "quantization_level": "Q4_0, runs on the GPU"
+                "quantization_level": "Q4_G128"
             },
             "flm_min_version": "1.0.11",
             "vlm": false,
             "files": [
-                "Qwen3.8-27B-Q4_0.gguf",
+                "Qwen3.8-27B-Q4_G128.gguf",
                 "tokenizer.json",
                 "tokenizer_config.json",
                 "config.json",
@@ -2283,25 +2185,7 @@
                     "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0"
                 }
             },
-            "preferred_source": {
-                "url": "https://huggingface.co/amd/Qwen3.8-27B-Q4_G128-GGUF/resolve/deab6eafc90811fc6738db7c05ec615130074cb3",
-                "file_url": "https://huggingface.co/api/models/amd/Qwen3.8-27B-Q4_G128-GGUF/tree/deab6eafc90811fc6738db7c05ec615130074cb3",
-                "use_hf_token": true,
-                "size": 15977762336,
-                "footprint": 15.96,
-                "details": {
-                    "quantization_level": "Q4_G128"
-                },
-                "files": [
-                    "Qwen3.8-27B-Q4_G128.gguf",
-                    "tokenizer.json",
-                    "tokenizer_config.json",
-                    "config.json",
-                    "chat_template.jinja"
-                ],
-                "model_info_key": "qwen3.8-core:27b@amd"
-            },
-            "footprint": 16.06,
+            "footprint": 15.96,
             "model_info_key": "qwen3.8-core:27b",
             "label": [
                 "reasoning",
@@ -2357,9 +2241,10 @@
                 "dev04"
             ],
             "name": "qwen3-1.7b-core",
-            "url": "https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/resolve/d7f544eead698dbd1f15126ef60b45a1e1933222",
-            "file_url": "https://huggingface.co/api/models/unsloth/Qwen3-1.7B-GGUF/tree/d7f544eead698dbd1f15126ef60b45a1e1933222",
-            "size": 1845860522,
+            "url": "https://huggingface.co/amd/Qwen3-1.7B-Q4_G128-GGUF/resolve/02e64d5de4076fbc3a989c1685a63ca9cb830c85",
+            "file_url": "https://huggingface.co/api/models/amd/Qwen3-1.7B-Q4_G128-GGUF/tree/02e64d5de4076fbc3a989c1685a63ca9cb830c85",
+            "use_hf_token": true,
+            "size": 1556705290,
             "default_context_length": 32768,
             "max_prefill_len": 4096,
             "details": {
@@ -2367,12 +2252,12 @@
                 "think": true,
                 "think_toggleable": true,
                 "parameter_size": "1.7B",
-                "quantization_level": "Q8_0 -> group-64"
+                "quantization_level": "Q4_G128, lm_head Q4_G32"
             },
             "flm_min_version": "1.0.6",
             "vlm": false,
             "files": [
-                "Qwen3-1.7B-Q8_0.gguf",
+                "Qwen3-1.7B-Q4_G128.gguf",
                 "tokenizer.json",
                 "tokenizer_config.json",
                 "config.json"
@@ -2391,24 +2276,7 @@
                     "revision": "1b452c9ab53dcc580fab244d3dc4d808185ceaca"
                 }
             },
-            "preferred_source": {
-                "url": "https://huggingface.co/amd/Qwen3-1.7B-Q4_G128-GGUF/resolve/02e64d5de4076fbc3a989c1685a63ca9cb830c85",
-                "file_url": "https://huggingface.co/api/models/amd/Qwen3-1.7B-Q4_G128-GGUF/tree/02e64d5de4076fbc3a989c1685a63ca9cb830c85",
-                "use_hf_token": true,
-                "size": 1556705290,
-                "footprint": 1.54,
-                "details": {
-                    "quantization_level": "Q4_G128, lm_head Q4_G32"
-                },
-                "files": [
-                    "Qwen3-1.7B-Q4_G128.gguf",
-                    "tokenizer.json",
-                    "tokenizer_config.json",
-                    "config.json"
-                ],
-                "model_info_key": "qwen3-core:1.7b@amd"
-            },
-            "footprint": 1.83,
+            "footprint": 1.54,
             "model_info_key": "qwen3-core:1.7b"
         },
         "4b": {
@@ -2416,9 +2284,10 @@
                 "dev04"
             ],
             "name": "qwen3-4b-core",
-            "url": "https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/22c9fc8a8c7700b76a1789366280a6a5a1ad1120",
-            "file_url": "https://huggingface.co/api/models/unsloth/Qwen3-4B-GGUF/tree/22c9fc8a8c7700b76a1789366280a6a5a1ad1120",
-            "size": 4291839353,
+            "url": "https://huggingface.co/amd/Qwen3-4B-Q4_G128-GGUF/resolve/80a8efd4277fe4d5846d3f04c5cdbd17e913aa11",
+            "file_url": "https://huggingface.co/api/models/amd/Qwen3-4B-Q4_G128-GGUF/tree/80a8efd4277fe4d5846d3f04c5cdbd17e913aa11",
+            "use_hf_token": true,
+            "size": 2895562329,
             "default_context_length": 32768,
             "max_prefill_len": 4096,
             "details": {
@@ -2426,12 +2295,12 @@
                 "think": true,
                 "think_toggleable": true,
                 "parameter_size": "4B",
-                "quantization_level": "Q8_0 -> group-64"
+                "quantization_level": "Q4_G128"
             },
             "flm_min_version": "1.0.6",
             "vlm": false,
             "files": [
-                "Qwen3-4B-Q8_0.gguf",
+                "Qwen3-4B-Q4_G128.gguf",
                 "tokenizer.json",
                 "tokenizer_config.json",
                 "config.json"
@@ -2450,24 +2319,7 @@
                     "revision": "07651f11cac70ff5b7a81731643dee6f6e7baee1"
                 }
             },
-            "preferred_source": {
-                "url": "https://huggingface.co/amd/Qwen3-4B-Q4_G128-GGUF/resolve/80a8efd4277fe4d5846d3f04c5cdbd17e913aa11",
-                "file_url": "https://huggingface.co/api/models/amd/Qwen3-4B-Q4_G128-GGUF/tree/80a8efd4277fe4d5846d3f04c5cdbd17e913aa11",
-                "use_hf_token": true,
-                "size": 2895562329,
-                "footprint": 2.89,
-                "details": {
-                    "quantization_level": "Q4_G128"
-                },
-                "files": [
-                    "Qwen3-4B-Q4_G128.gguf",
-                    "tokenizer.json",
-                    "tokenizer_config.json",
-                    "config.json"
-                ],
-                "model_info_key": "qwen3-core:4b@amd"
-            },
-            "footprint": 4.28,
+            "footprint": 2.89,
             "model_info_key": "qwen3-core:4b"
         },
         "8b": {
@@ -2475,9 +2327,10 @@
                 "dev04"
             ],
             "name": "qwen3-8b-core",
-            "url": "https://huggingface.co/unsloth/Qwen3-8B-GGUF/resolve/a6adef130ffb23ddaf1a62fec9dced968c9bc482",
-            "file_url": "https://huggingface.co/api/models/unsloth/Qwen3-8B-GGUF/tree/a6adef130ffb23ddaf1a62fec9dced968c9bc482",
-            "size": 8720952748,
+            "url": "https://huggingface.co/amd/Qwen3-8B-Q4_G128-GGUF/resolve/f34630e023ed33ce47ff6c0fe33548cd34dbd731",
+            "file_url": "https://huggingface.co/api/models/amd/Qwen3-8B-Q4_G128-GGUF/tree/f34630e023ed33ce47ff6c0fe33548cd34dbd731",
+            "use_hf_token": true,
+            "size": 5262533740,
             "default_context_length": 32768,
             "max_prefill_len": 4096,
             "details": {
@@ -2485,12 +2338,12 @@
                 "think": true,
                 "think_toggleable": true,
                 "parameter_size": "8B",
-                "quantization_level": "Q8_0 -> group-64"
+                "quantization_level": "Q4_G128, lm_head Q4_G32"
             },
             "flm_min_version": "1.0.6",
             "vlm": false,
             "files": [
-                "Qwen3-8B-Q8_0.gguf",
+                "Qwen3-8B-Q4_G128.gguf",
                 "tokenizer.json",
                 "tokenizer_config.json",
                 "config.json"
@@ -2509,24 +2362,7 @@
                     "revision": "941c148c228496682e95c413cb90025f73200af2"
                 }
             },
-            "preferred_source": {
-                "url": "https://huggingface.co/amd/Qwen3-8B-Q4_G128-GGUF/resolve/f34630e023ed33ce47ff6c0fe33548cd34dbd731",
-                "file_url": "https://huggingface.co/api/models/amd/Qwen3-8B-Q4_G128-GGUF/tree/f34630e023ed33ce47ff6c0fe33548cd34dbd731",
-                "use_hf_token": true,
-                "size": 5262533740,
-                "footprint": 5.26,
-                "details": {
-                    "quantization_level": "Q4_G128, lm_head Q4_G32"
-                },
-                "files": [
-                    "Qwen3-8B-Q4_G128.gguf",
-                    "tokenizer.json",
-                    "tokenizer_config.json",
-                    "config.json"
-                ],
-                "model_info_key": "qwen3-core:8b@amd"
-            },
-            "footprint": 8.71,
+            "footprint": 5.26,
             "model_info_key": "qwen3-core:8b"
         }
     },

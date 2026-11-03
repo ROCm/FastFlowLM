@@ -30,19 +30,22 @@ set(CORELIB_SOURCES
 
 # A synthetic mismatched copy proves that the adapter rejects header drift at
 # compile time. The caller-provided header remains untouched.
-file(READ "${RYZENAI_CORELIB_INCLUDE_DIR}/ryzenai/corelib.h" CORELIB_HEADER_TEXT)
+# corelib.h only includes the per-area headers, so the whole tree is copied and
+# the version is changed in the copy of corelib/base.h, which defines it.
+set(WRONG_CORELIB_INCLUDE_DIR
+    "${CMAKE_CURRENT_BINARY_DIR}/wrong-corelib-version/include")
+file(REMOVE_RECURSE "${WRONG_CORELIB_INCLUDE_DIR}")
+file(COPY "${RYZENAI_CORELIB_INCLUDE_DIR}/ryzenai" DESTINATION "${WRONG_CORELIB_INCLUDE_DIR}")
+set(WRONG_CORELIB_VERSION_HEADER "${WRONG_CORELIB_INCLUDE_DIR}/ryzenai/corelib/base.h")
+file(READ "${WRONG_CORELIB_VERSION_HEADER}" CORELIB_HEADER_TEXT)
 string(REGEX REPLACE
     "#define RYZENAI_CORELIB_VERSION_PATCH[ \t]+[0-9]+"
     "#define RYZENAI_CORELIB_VERSION_PATCH 9999"
     WRONG_CORELIB_HEADER_TEXT "${CORELIB_HEADER_TEXT}")
 if(WRONG_CORELIB_HEADER_TEXT STREQUAL CORELIB_HEADER_TEXT)
-  message(FATAL_ERROR "No RYZENAI_CORELIB_VERSION_PATCH in corelib.h to mismatch")
+  message(FATAL_ERROR "No RYZENAI_CORELIB_VERSION_PATCH in corelib/base.h to mismatch")
 endif()
-set(WRONG_CORELIB_INCLUDE_DIR
-    "${CMAKE_CURRENT_BINARY_DIR}/wrong-corelib-version/include")
-file(MAKE_DIRECTORY "${WRONG_CORELIB_INCLUDE_DIR}/ryzenai")
-file(WRITE "${WRONG_CORELIB_INCLUDE_DIR}/ryzenai/corelib.h"
-    "${WRONG_CORELIB_HEADER_TEXT}")
+file(WRITE "${WRONG_CORELIB_VERSION_HEADER}" "${WRONG_CORELIB_HEADER_TEXT}")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/wrong-corelib-version/probe.cpp"
     "#define RYZENAI_CORELIB_STATIC 1\n#include \"core/corelib_api.hpp\"\n")
 # The probe must compile against the real header, or its failure against the
