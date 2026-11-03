@@ -64,10 +64,15 @@ bool qwen3_asr_split_answer(const std::string& answer, std::string& language, st
     if (at == std::string::npos) {
         language.clear();
         text = answer;
+        const size_t bar0 = text.find('|');
+        if (bar0 != std::string::npos) text.resize(bar0);
         return false;
     }
     const std::string header = answer.substr(0, at);        // "language Chinese" / "language None"
     text = answer.substr(at + marker.size());
+    // a streaming-trained model may end its text with a "|" marker (the reference keeps the part before it)
+    const size_t bar = text.find('|');
+    if (bar != std::string::npos) text.resize(bar);
     language.clear();
     const std::string key = "language ";
     const size_t k = header.find(key);

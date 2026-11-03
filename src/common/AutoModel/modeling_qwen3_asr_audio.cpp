@@ -84,18 +84,18 @@ std::string Qwen3_ASR::transcribe(chat_meta_info_t& meta_info, const std::vector
     detected_language.clear();
     duration_seconds = 0.0;
     audio_data_t audio = this->load_audio_bytes(audio_bytes);
-    if (audio.channels != 1 || audio.num_frames == 0) throw std::runtime_error("the audio could not be decoded (mono, 16 kHz after conversion expected)");
+    if (audio.channels != 1 || audio.num_frames == 0) throw std::invalid_argument("the audio could not be decoded (wav, flac, mp3 or ogg expected)");
     duration_seconds = audio.duration_seconds;
 
     std::vector<int> tokens;
     void* payload = nullptr;
     int first_len_run = 0;
     if (!this->_build_prompt(audio.samples, context, language, tokens, payload, first_len_run))
-        throw std::runtime_error("the audio is too short to transcribe");
+        throw std::invalid_argument("the audio is too short to transcribe");
 
     meta_info.restore_allowed = false;
     this->clear_context();
-    if (!this->_shared_insert(meta_info, tokens, is_cancelled, payload, first_len_run)) throw std::runtime_error("the audio does not fit in the context");
+    if (!this->_shared_insert(meta_info, tokens, is_cancelled, payload, first_len_run)) throw std::invalid_argument("the audio is too long for the context window (about 10 minutes at the default 8192 tokens)");
 
     std::ostringstream answer;
     {
