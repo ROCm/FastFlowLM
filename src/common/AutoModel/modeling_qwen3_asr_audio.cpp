@@ -40,42 +40,58 @@ audio_data_t Qwen3_ASR::load_audio_bytes(const std::vector<uint8_t>& bytes) {
     return result;
 }
 
-void Qwen3_ASR::compute_log_mel(const audio_data_t& audio, std::vector<float>& mel, int& frames) {
-    constexpr int n_fft = 400;
-    constexpr float min_frequency = 0.0f;
-    constexpr float max_frequency = 8000.0f;
-    constexpr float clamp_min = 1e-10f;
-    constexpr float dynamic_range = 8.0f;
-    constexpr float log_offset = 4.0f;
-    constexpr float log_scale = 4.0f;
-    const int num_frequency_bins = n_fft / 2 + 1;   // 201
+namespace {
+constexpr int N_FFT = 400;
+constexpr int STFT_PAD = N_FFT / 2;               // center=True pads half a window on each side
+constexpr int FREQ_BINS = N_FFT / 2 + 1;          // 201
+}  // namespace
 
-    frames = 0;
-    mel.clear();
-    const int n_samples = static_cast<int>(audio.num_frames);
-    if (n_samples <= 0) return;
-
-    // torch.hann_window(400) is periodic; mel filters: Slaney scale and norm
-    std::vector<float> window = audioproc::window_function_optimized(n_fft, "hann", /*periodic=*/true);
-    std::vector<float> mel_filters = audioproc::mel_filter_bank_optimized(num_frequency_bins, NUM_MEL_BINS, min_frequency, max_frequency,
-                                                                          SAMPLE_RATE, /*apply_slaney_norm=*/true, /*slaney_mel_scale=*/true);
-
-    const int num_frames_alloc = audioproc::stft_num_frames(n_samples, n_fft, HOP_LENGTH, /*center=*/true);
-    if (num_frames_alloc <= 0) return;
-    std::vector<float> power_spec(static_cast<size_t>(num_frames_alloc) * num_frequency_bins);
-    const int num_frames = audioproc::stft_power_optimized(audio.samples.data(), n_samples, window.data(), n_fft, HOP_LENGTH,
-                                                           /*center=*/true, audioproc::StftPadMode::reflect, power_spec.data());
-    frames = num_frames - 1;   // the feature extractor drops the last STFT frame
-    if (frames <= 0) { frames = 0; return; }
-
-    mel.resize(static_cast<size_t>(frames) * NUM_MEL_BINS);
-    audioproc::mel_spectrogram_optimized(power_spec.data(), mel_filters.data(), mel.data(), frames, num_frequency_bins, NUM_MEL_BINS);
-
-    const int total = frames * NUM_MEL_BINS;
-    audioproc::log_mel_floor_optimized</*UseClamp=*/true, /*Base=*/10>(mel.data(), mel.data(), total, clamp_min);   // log10(max(x, 1e-10))
+void Qwen3_ASR::_finish_log_mel(std::vector<float>& mel) {
+    const int total = (int)mel.size();
+    if (total == 0) return;
     const float max_val = audioproc::reduce_max(mel.data(), total);
-    audioproc::clamp_below_max(mel.data(), total, max_val, dynamic_range);                                      // max(x, max - 8)
-    audioproc::affine_scale(mel.data(), total, log_offset, log_scale);                                          // (x + 4) / 4
+    audioproc::clamp_below_max(mel.data(), total, max_val, 8.0f);
+    audioproc::affine_scale(mel.data(), total, 4.0f, 4.0f);
+}
+
+void Qwen3_ASR::_log10_mel_frames(const float* x, int n, int first, std::vector<float>& out, int& end) {
+    // torch.hann_window(400) is periodic; mel filters: Slaney scale and norm
+    static const std::vector<float> window = audioproc::window_function_optimized(N_FFT, "hann", /*periodic=*/true);
+    static const std::vector<float> mel_filters = audioproc::mel_filter_bank_optimized(FREQ_BINS, NUM_MEL_BINS, 0.0f, 8000.0f, SAMPLE_RATE,
+                                                                                       /*apply_slaney_norm=*/true, /*slaney_mel_scale=*/true);
+    out.clear();
+    end = n > 0 ? audioproc::stft_num_frames(n, N_FFT, HOP_LENGTH, /*center=*/true) - 1 : 0;   // the feature extractor drops the last frame
+    if (end <= 0) { end = 0; return; }
+    first = std::max(first, 0);
+    if (first >= end) return;
+
+    std::vector<float> power;
+    int skip = 0;   // frames of `power` before `first`
+    if (first * HOP_LENGTH < STFT_PAD || n < STFT_PAD + 2) {
+        // frames near the start: the whole clip, reflect-padded at both ends
+        power.resize((size_t)(end + 1) * FREQ_BINS);
+        audioproc::stft_power_optimized(x, n, window.data(), N_FFT, HOP_LENGTH, /*center=*/true, audioproc::StftPadMode::reflect, power.data());
+        skip = first;
+    } else {
+        // from frame `first`: its samples, then the clip's right reflect padding as stft(center=True) adds it (x[n-2], x[n-3], ...)
+        const int s0 = first * HOP_LENGTH - STFT_PAD;
+        std::vector<float> buf((size_t)(n - s0 + STFT_PAD));
+        std::memcpy(buf.data(), x + s0, sizeof(float) * (size_t)(n - s0));
+        for (int i = 0; i < STFT_PAD; i++) buf[(size_t)(n - s0 + i)] = x[n - 2 - i];
+        const int frames = audioproc::stft_num_frames((int)buf.size(), N_FFT, HOP_LENGTH, /*center=*/false);
+        power.resize((size_t)frames * FREQ_BINS);
+        audioproc::stft_power_optimized(buf.data(), (int)buf.size(), window.data(), N_FFT, HOP_LENGTH, /*center=*/false,
+                                        audioproc::StftPadMode::reflect, power.data());
+    }
+    const int count = end - first;
+    out.resize((size_t)count * NUM_MEL_BINS);
+    audioproc::mel_spectrogram_optimized(power.data() + (size_t)skip * FREQ_BINS, mel_filters.data(), out.data(), count, FREQ_BINS, NUM_MEL_BINS);
+    audioproc::log_mel_floor_optimized</*UseClamp=*/true, /*Base=*/10>(out.data(), out.data(), count * NUM_MEL_BINS, 1e-10f);   // log10(max(x, 1e-10))
+}
+
+void Qwen3_ASR::compute_log_mel(const audio_data_t& audio, std::vector<float>& mel, int& frames) {
+    this->_log10_mel_frames(audio.samples.data(), static_cast<int>(audio.num_frames), 0, mel, frames);
+    _finish_log_mel(mel);
 }
 
 void Qwen3_ASR::_check_audio_fits(size_t samples) const {

@@ -242,7 +242,8 @@ std::string Qwen3_ASR::_asr_step(chat_meta_info_t& meta_info, const std::vector<
     std::vector<int> tokens;
     void* payload = nullptr;
     int first_len_run = 0;
-    if (!this->_build_prompt(samples, context, language, assistant_text, tokens, payload, first_len_run)) return "";
+    if (!this->_build_prompt(samples, context, language, assistant_text, tokens, payload, first_len_run,
+                             this->streaming_caches_ ? &this->stream_mel_ : nullptr)) return "";
     if (this->streaming_caches_) {   // the engine reuses what it kept of the previous step of this recording
         auto* p = static_cast<qwen3_asr_payload_t*>(payload);
         p->streaming = true;
@@ -285,6 +286,7 @@ std::string Qwen3_ASR::transcribe_streaming(chat_meta_info_t& meta_info, const s
     static const bool caches_off = std::getenv("QWEN3_ASR_STREAM_CACHE") && std::string(std::getenv("QWEN3_ASR_STREAM_CACHE")) == "0";
     this->streaming_caches_ = !caches_off;
     this->stream_reset_pending_ = true;
+    this->stream_mel_ = stream_mel_cache();
 
     // ---- state (ASRStreamingState) ----
     const size_t step = (size_t)std::llround(chunk_ms / 1000.0 * SAMPLE_RATE);

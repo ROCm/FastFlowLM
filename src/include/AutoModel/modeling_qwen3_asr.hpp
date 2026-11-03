@@ -74,11 +74,22 @@ private:
     audio_data_t load_audio_bytes(const std::vector<uint8_t>& bytes);
     /// \brief log-mel [frames][128] fp32 (Whisper feature extractor: n_fft 400, hop 160, Slaney mels, log10 clamp (max-8), (x+4)/4)
     void compute_log_mel(const audio_data_t& audio, std::vector<float>& mel, int& frames);
+    /// \brief streaming: the log10 mel frames (before the clip-wide clamp) that later audio cannot change. The STFT window of frame t
+    ///        covers samples [160 t - 200, 160 t + 200), so once they exist the frame is final; a step only computes the frames after them.
+    struct stream_mel_cache {
+        std::vector<float> log10_mel;   ///< [frames][128]
+        int frames = 0;
+    };
+    /// \brief log10(max(mel, 1e-10)) of the frames [first, end) of the clip `x` (end: its frame count, the last STFT frame dropped)
+    void _log10_mel_frames(const float* x, int n, int first, std::vector<float>& out, int& end);
+    /// \brief the clip-wide end of the feature extractor on log10 mel frames: max(x, max - 8), then (x + 4) / 4
+    static void _finish_log_mel(std::vector<float>& mel);
 
     /// \brief Build the prompt tokens (audio pads expanded) and the engine payload from mono 16 kHz samples.
     /// \param text_after_assistant text that continues the assistant turn (forced "language X<asr_text>", streaming prefix)
     bool _build_prompt(const std::vector<float>& samples, const std::string& context, const std::string& language,
-                       const std::string& assistant_text, std::vector<int>& tokens, void*& payload_out, int& first_len_run);
+                       const std::string& assistant_text, std::vector<int>& tokens, void*& payload_out, int& first_len_run,
+                       stream_mel_cache* mel_cache = nullptr);
     /// \brief one prefill + a bounded decode: the text the model generates after `assistant_text`, at most max_new_tokens tokens
     std::string _asr_step(chat_meta_info_t& meta_info, const std::vector<float>& samples, const std::string& context,
                           const std::string& language, const std::string& assistant_text, int max_new_tokens,
@@ -91,6 +102,7 @@ private:
     /// \brief streaming: the engine keeps the encoder output and K/V rows of the closed 8 s windows between the steps; true until the first step has run
     bool stream_reset_pending_ = false;
     bool streaming_caches_ = false;
+    stream_mel_cache stream_mel_;
 };
 
 /// \brief Split the model's answer "language X<asr_text>text" into the language and the text.
