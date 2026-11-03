@@ -124,6 +124,7 @@ public:
 private:
     bool ensure_model_loaded(const std::string& model_tag,
                              const std::string& request_backend = "");
+    bool is_known_model(const std::string& model_tag);
     void ensure_asr_model_loaded(const std::string& model_tag);
     void ensure_embed_model_loaded(const std::string& model_tag);
     void ensure_decision_model_loaded(const std::string& model_tag);
