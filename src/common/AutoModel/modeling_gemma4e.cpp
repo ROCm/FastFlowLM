@@ -82,6 +82,17 @@ int Gemma4e_Flash::_pin_system_prefix(const std::string& system_text) {
     return this->system_tokens;
 }
 
+void Gemma4e_Flash::_forget_pin() {
+    this->pinned_system_text.clear();
+    this->system_his.clear();
+    this->system_tokens = 0;
+}
+
+void Gemma4e_Flash::clear_context() {
+    Gemma4e::clear_context();
+    this->_forget_pin();
+}
+
 void Gemma4e_Flash::_reset_turn() {
     if (this->system_tokens > 0) {
         this->total_tokens = static_cast<uint32_t>(this->lm_engine->restore());

@@ -291,7 +291,7 @@ std::string Gemma4e_DFlash_Flash::generate_with_prompt(chat_meta_info_t& meta_in
 }
 
 void Gemma4e_DFlash_Flash::clear_context() {
-    Gemma4e::clear_context();
+    Gemma4e_Flash::clear_context(); // the pinned system prefix goes too
     if (auto* engine = dynamic_cast<gemma4e_dflash_flash*>(this->lm_engine)) {
         engine->reset_speculation_stats();
     }
