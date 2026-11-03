@@ -14,6 +14,7 @@ parent: Models
 - **Base Model:** [google/gemma-3-1b-it](https://huggingface.co/google/gemma-3-1b-it)
 - **Quantization:** Q4_1
 - **Max Context Length:** 32k tokens  
+- **Host memory:** the token embeddings are read straight from `model.q4nx` through a read-only memory map, one row per token, instead of being copied into a 0.6 GiB table in RAM. This saves about 0.6 GiB of RAM (private memory right after loading: about 0.85 GiB before, 0.29 GiB now) with the same speed and the same output. Only the rows of tokens that were actually seen stay in memory, and the OS can drop them under memory pressure; if it does, a prompt full of new tokens takes a little longer to start (under 10% in our tests, with the file evicted from the page cache). On Windows, the loaded model's `model.q4nx` cannot be replaced or deleted, so stop the server before `flm remove` or `flm pull` of this model.
 - **Default Context Length:** 32k tokens ([change default](https://fastflowlm.com/docs/instructions/cli/#-change-default-context-length-max))  
 - **[Set Context Length at Launch](https://fastflowlm.com/docs/instructions/cli/#-set-context-length-at-launch)**
 

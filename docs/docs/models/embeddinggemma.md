@@ -12,6 +12,7 @@ parent: Models
 - **Tool Calling Support:** No
 - **Base Model:** [google/embeddinggemma-300m](https://huggingface.co/google/embeddinggemma-300m)
 - **Quantization:** Q4_1
+- **Host memory:** the token embeddings are read straight from `model.q4nx` through a read-only memory map, one row per token, instead of being copied into a 0.4 GiB table in RAM. This saves about 0.4 GiB of RAM (measured together with its host LLM: 1.37 GiB before, 0.43 GiB now; 0.4 GiB of the 0.9 GiB saved is this model) with the same speed and the same output. Only the rows of tokens that were actually seen stay in memory, and the OS can drop them under memory pressure; if it does, a prompt full of new tokens takes a little longer to start (under 10% in our tests, with the file evicted from the page cache). On Windows, the loaded model's `model.q4nx` cannot be replaced or deleted, so stop the server before `flm remove` or `flm pull` of this model.
 - **Max Chunk Size:** 2048
 - **Default Context Length:** NA
 
