@@ -939,7 +939,9 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
             // cache in step. Two things can say no: a frontend whose cache is
             // discarded anyway (forward_on_eos), and a backend that caps its
             // own decode and would reject the call.
-            if (this->forward_on_eos &&
+            // The forward writes row total_tokens, which is past the end of the
+            // engine's KV window once the context is full.
+            if (this->forward_on_eos && this->total_tokens < decode_cap &&
                 (!this->backend_ || this->backend_->forwards_past_eos())) {
                 this->lm_engine->forward(last_sampled_token);
             } else {
