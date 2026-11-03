@@ -35,3 +35,4 @@ has_children: true
 - [Nemotron Bolt](nemotron3.5-bolt/)
 - [Nemotron Bolt DFlash](nemotron3.5-bolt-dflash/)
 - [Flash Models](flash/)
+- [Confucius4-R2T2](r2t2/)
