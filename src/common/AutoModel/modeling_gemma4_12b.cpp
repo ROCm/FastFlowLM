@@ -532,6 +532,14 @@ std::string Gemma4_12B::generate(chat_meta_info_t& meta_info, int length_limit, 
     int last_sampled_token;
     // A continued message has no empty thought channel to feed: it starts from insert()'s sample
     if(!enable_think && !meta_info.continue_final_message) {
+        // The four forwards below write rows total_tokens..total_tokens+3, so the
+        // prompt has to leave room for them: past the engine's KV window they
+        // corrupt it for every later request.
+        if (this->total_tokens + 4 > this->MAX_L) {
+            header_print("WARNING", "Max length reached, stopping generation...");
+            meta_info.stop_reason = MAX_LENGTH_REACHED;
+            return result;
+        }
         this->token_history.push_back(boc_token_id);
         this->profiler_list[DECODING_TIME].start();
         // fed for the KV cache only, it never reaches the output
