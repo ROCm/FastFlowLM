@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <map>
 
 namespace {
@@ -242,6 +243,12 @@ std::string Qwen3_ASR::_asr_step(chat_meta_info_t& meta_info, const std::vector<
     void* payload = nullptr;
     int first_len_run = 0;
     if (!this->_build_prompt(samples, context, language, assistant_text, tokens, payload, first_len_run)) return "";
+    if (this->streaming_caches_) {   // the engine reuses what it kept of the previous step of this recording
+        auto* p = static_cast<qwen3_asr_payload_t*>(payload);
+        p->streaming = true;
+        p->stream_reset = this->stream_reset_pending_;
+        this->stream_reset_pending_ = false;
+    }
     chat_meta_info_t step_meta;
     step_meta.max_prefill_len = meta_info.max_prefill_len;
     step_meta.restore_allowed = false;
@@ -274,6 +281,9 @@ std::string Qwen3_ASR::transcribe_streaming(chat_meta_info_t& meta_info, const s
     if (chunk_ms < 80 || chunk_ms > 2000) throw std::invalid_argument("chunk_size_ms must be between 80 and 2000");
     unfixed_token_num = std::max(0, unfixed_token_num);
     const std::vector<float>& wav = audio.samples;
+    static const bool caches_off = std::getenv("QWEN3_ASR_STREAM_CACHE") && std::string(std::getenv("QWEN3_ASR_STREAM_CACHE")) == "0";
+    this->streaming_caches_ = !caches_off;
+    this->stream_reset_pending_ = true;
 
     // ---- state (ASRStreamingState) ----
     const size_t step = (size_t)std::llround(chunk_ms / 1000.0 * SAMPLE_RATE);

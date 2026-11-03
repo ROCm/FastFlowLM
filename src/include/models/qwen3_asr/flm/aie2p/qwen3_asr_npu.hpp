@@ -34,6 +34,11 @@ typedef struct {
     std::vector<bf16> audio_embeds;   ///< [n_audio][hidden]
     int mel_frames = 0;
     std::vector<float> mel;           ///< [mel_frames][128]; n_audio must equal qwen3_asr_audio_tokens(mel_frames)
+    /// Streaming: successive requests of one growing recording (mel = all audio so far). The engine then keeps the encoder output of the
+    /// closed 8 s windows and the K/V rows of the prompt head + those windows' audio tokens, and only encodes / prefills what is new.
+    /// The caller must not clear the context between the steps and must send the same prompt head; stream_reset starts a new recording.
+    bool streaming = false;
+    bool stream_reset = false;
 } qwen3_asr_payload_t;
 
 class qwen3_asr_npu : public causal_lm{

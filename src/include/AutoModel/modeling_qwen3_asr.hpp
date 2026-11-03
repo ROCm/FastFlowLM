@@ -85,6 +85,9 @@ private:
                           const std::function<bool()>& is_cancelled);
     /// \brief the engine payload of the request being built (kept alive until the prefill)
     std::shared_ptr<void> payload_holder_;
+    /// \brief streaming: the engine keeps the encoder output and K/V rows of the closed 8 s windows between the steps; true until the first step has run
+    bool stream_reset_pending_ = false;
+    bool streaming_caches_ = false;
 };
 
 /// \brief Split the model's answer "language X<asr_text>text" into the language and the text.
