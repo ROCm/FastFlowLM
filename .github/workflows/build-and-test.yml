@@ -23,6 +23,11 @@ name: Build and Test
 # tier and 360 on the full one, which runs every model and every d3 size and
 # may first download tens of GB of weights.
 #
+# A dispatch can name the models to test (models, e.g. qwen3.5-oga-hipep:9b):
+# every test job then runs only those, so a package without them runs
+# nothing. fresh-hip-ep has the Windows XRT job install hip-ep from scratch for
+# the oga-hipep models, instead of reusing the runner's copy.
+#
 # release.yml calls this with release: true before publishing a tag.
 on:
   push:
@@ -40,6 +45,14 @@ on:
         type: choice
         options: [pr, full, install]
         default: pr
+      models:
+        description: Comma-separated model ids to test instead of the tier's (e.g. qwen3.5-oga-hipep:9b)
+        type: string
+        default: ''
+      fresh-hip-ep:
+        description: Install hip-ep from scratch on Windows XRT, for the oga-hipep models
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       tier:
@@ -204,6 +217,7 @@ jobs:
           tier: ${{ needs.changes.outputs.tier }}
           suites: ${{ needs.changes.outputs.suites }}
           families: ${{ needs.changes.outputs.families }}
+          models: ${{ inputs.models }}
           asr-full: ${{ needs.changes.outputs.asr-full }}
           asr-expected-key: linux
 
@@ -234,6 +248,7 @@ jobs:
           tier: ${{ needs.changes.outputs.tier }}
           suites: ${{ needs.changes.outputs.hrx-suites }}
           families: ${{ needs.changes.outputs.families }}
+          models: ${{ inputs.models }}
           asr-full: ${{ needs.changes.outputs.asr-full }}
           asr-expected-key: linux-hrx
 
@@ -265,7 +280,7 @@ jobs:
           label: linux-source-portable
           tier: ${{ needs.changes.outputs.tier }}
           suites: chat
-          models: gemma4-it:e2b,gemma4-it:e4b
+          models: ${{ inputs.models || 'gemma4-it:e2b,gemma4-it:e4b' }}
 
   # The .deb and MSI install tests are off unless the repository variable
   # FLM_INSTALL_TESTS is "true": the runners cannot install yet (no
@@ -359,6 +374,17 @@ jobs:
         with:
           kind: portable
           path: package
+      # flm installs hip-ep into %LOCALAPPDATA%\hip-ep once and reuses it after,
+      # so only an empty one makes it download and install again. The runner
+      # empties its temp folder after every job. A short name: the deepest
+      # hip-ep file is 128 characters below the package root.
+      - name: Use an empty LOCALAPPDATA
+        if: inputs.fresh-hip-ep
+        shell: powershell
+        run: |
+          $dir = New-Item -ItemType Directory -Force (Join-Path $env:RUNNER_TEMP 'lad')
+          [System.IO.File]::AppendAllText($env:GITHUB_ENV, "LOCALAPPDATA=$($dir.FullName)`n")
+          Write-Host "LOCALAPPDATA=$($dir.FullName)"
       - name: Test
         uses: ./.github/actions/npu-test
         with:
@@ -367,6 +393,7 @@ jobs:
           tier: ${{ needs.changes.outputs.tier }}
           suites: ${{ needs.changes.outputs.suites }}
           families: ${{ needs.changes.outputs.families }}
+          models: ${{ inputs.models }}
           asr-full: ${{ needs.changes.outputs.asr-full }}
           asr-expected-key: windows
 
@@ -397,6 +424,7 @@ jobs:
           tier: ${{ needs.changes.outputs.tier }}
           suites: ${{ needs.changes.outputs.hrx-suites }}
           families: ${{ needs.changes.outputs.families }}
+          models: ${{ inputs.models }}
           asr-full: ${{ needs.changes.outputs.asr-full }}
           asr-expected-key: windows-hrx
 
@@ -426,7 +454,7 @@ jobs:
           label: windows-source
           tier: ${{ needs.changes.outputs.tier }}
           suites: chat
-          models: gemma4-it:e2b,gemma4-it:e4b
+          models: ${{ inputs.models || 'gemma4-it:e2b,gemma4-it:e4b' }}
 
   install-win-msi:
     name: Install test Windows MSI

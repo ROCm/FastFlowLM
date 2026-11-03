@@ -46,6 +46,12 @@ change `decision`, an engine change `chat` and `prefix_cache`), or all of them
 when any changed file is shared code. The HRX packages never run `api` or
 `serving`, which test server logic the backend does not touch.
 
+A manual run of Build and Test can name the models to test, for example
+`gh workflow run build-and-test.yml --ref <branch> -f models=qwen3.5-oga-hipep:9b`:
+every package then runs only those, and one whose catalog lacks them runs
+nothing. Add `-f fresh-hip-ep=true` to have the Windows XRT job install hip-ep
+from scratch for the oga-hipep models, instead of reusing the runner's copy.
+
 ## Suites
 
 | Suite | Checks |
