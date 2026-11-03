@@ -51,6 +51,39 @@ private:
     /// \brief hand the loaded engine to the prefix cache (when it is the XRT qwen3_5vl one that has slots)
     void _attach_prefix_cache();
 
+protected:
+    /// \brief image settings the engine read from vision_config
+    struct vision_params_t {
+        unsigned patch_size;
+        unsigned image_merge_size;
+        unsigned merge_size;
+        unsigned temporal_patch_size;
+        unsigned shortest_edge;
+        unsigned longest_edge;
+        float rescale_factor;
+        float image_mean;
+        float image_std;
+    };
+
+    template <class Engine>
+    static vision_params_t _read_vision_params(const Engine* eng) {
+        return {eng->QWEN3_5_PATCH_SIZE, eng->QWEN3_5_IMAGE_MERGE_SIZE, eng->QWEN3_5_MERGE_SIZE,
+                eng->QWEN3_5_TEMPORAL_PATCH_SIZE, eng->QWEN3_5_SHORTEST_EDGE, eng->QWEN3_5_LONGEST_EDGE,
+                eng->QWEN3_5_VISION_RESCALE_FACTOR, eng->QWEN3_5_VISION_RESCALE_IMAGE_MEAN, eng->QWEN3_5_VISION_RESCALE_IMAGE_STD};
+    }
+
+    /// \brief the three places that know the engine type; Qwen3_5VL_Flash points them at qwen3_5vl_flash
+    virtual vision_params_t _vision_params() const {
+        return _read_vision_params(reinterpret_cast<const qwen3_5vl_npu*>(this->lm_engine));
+    }
+    virtual const flm_state_api* _state_api() {
+        return qwen3_5vl_state_api(this->lm_engine);
+    }
+    /// \brief true when lm_engine is this wrapper's XRT engine (the one with saved-state slots)
+    virtual bool _is_own_engine() const {
+        return dynamic_cast<qwen3_5vl_npu*>(this->lm_engine) != nullptr;
+    }
+
 public:
     Qwen3_5VL(flm_rt::device* npu_device_inst);
 
@@ -151,3 +184,25 @@ public:
 		return false;
 	}
 };
+
+#if defined(FLM_HAS_QWEN3_5VL_FLASH)
+/************              Qwen3_5VL_Flash            **************/
+/// Same checkpoint and same wrapper as Qwen3_5VL (multi-turn, full context),
+/// backed by the qwen3_5vl_flash engine: the Qwen3.5-2B kernels from
+/// FLM_Xclbin/Qwen3_5_2B, loaded from the model's own xclbin folder.
+class Qwen3_5VL_Flash : public Qwen3_5VL {
+protected:
+    vision_params_t _vision_params() const override {
+        return _read_vision_params(static_cast<const qwen3_5vl_flash*>(this->lm_engine));
+    }
+    const flm_state_api* _state_api() override {
+        return qwen3_5vl_flash_state_api(this->lm_engine);
+    }
+    bool _is_own_engine() const override {
+        return dynamic_cast<qwen3_5vl_flash*>(this->lm_engine) != nullptr;
+    }
+
+public:
+    Qwen3_5VL_Flash(flm_rt::device* npu_device_inst) : Qwen3_5VL(npu_device_inst) {}
+};
+#endif

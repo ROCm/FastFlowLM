@@ -9,7 +9,8 @@ each length so you can see the output is still correct after a change.
 ```bash
 cd /scratch/michyu/FastFlowLM/src/test/qwen3_5vl_npu
 make -j 12
-make test                                   # defaults: 128,1024,4096,10240, focus 10240
+make test                                   # qwen3.5-flash:2b; defaults: 128,1024,4096,10240, focus 10240
+make test MODEL=qwen3.5:2b                  # the original 2B engine and kernels
 make test ARGS="--csv /tmp/run.csv"         # extra options go in ARGS
 make test FLM_MODEL_PATH=/other/models_root # another model root
 ```
@@ -19,16 +20,18 @@ make test FLM_MODEL_PATH=/other/models_root # another model root
 - **Model folder:** `make test` sets `FLM_MODEL_PATH` (default `/scratch/michyu`), the folder that
   **contains** `models/`. The model lives in `/scratch/michyu/models/Qwen3.5-2B-NPU2`. Without `FLM_MODEL_PATH`
   the code falls back to `~/.config/flm/models` and fails with "Cannot open .../tokenizer.json". The folder
-  name must match the `name` in `model_list.json` exactly (`Qwen3.5-2B-NPU2`, case-sensitive), because it is
-  also the xclbin subfolder name.
+  name must match the `name` in `model_list.json` exactly (`Qwen3.5-2B-NPU2`, case-sensitive). Both 2B tags read
+  it. The xclbin subfolder is the entry's `xclbin_folder` when it has one (`Qwen3.5-2B-Flash-NPU2` for
+  `qwen3.5-flash:2b`), else the same name.
 - **Xclbins:** the harness is built with `-DDEV_BUILD` (`../common.mk`). In that mode `LM_Config` uses
   `../../../xclbins/<model folder name>/` relative to the **current folder** and ignores `FLM_XCLBIN_PATH`.
-  From the build folder that is the repo's `src/xclbins/Qwen3.5-2B-NPU2/`. Running the binary from
+  From the build folder that is the repo's `src/xclbins/Qwen3.5-2B-Flash-NPU2/` (flash) or `src/xclbins/Qwen3.5-2B-NPU2/`. Running the binary from
   anywhere else finds no xclbins.
 - The tool prints the model and xclbin folders at start and stops with an `ERROR` line if `model.q4nx`,
   `config.json`, `tokenizer.json`, `layer.xclbin` or the prompt file is missing.
-- The engine `.so` comes from `../../lib/xrt` (rpath). To try your own `libqwen3_5vl_npu.so`, put only that
-  file in a folder and add it in front with `LD_LIBRARY_PATH`.
+- The engine `.so` comes from `../../lib/xrt` (rpath): `libqwen3_5vl_flash.so` for `qwen3.5-flash:2b`,
+  `libqwen3_5vl_npu.so` for the others. To try your own build, put only that file in a folder and add it in front
+  with `LD_LIBRARY_PATH`.
 
 ## Options
 
@@ -121,9 +124,8 @@ Default power mode, for comparison (decode was 2-3 % faster there, prefill about
 
 `src/xclbins/Qwen3.5-2B-NPU2/layer.xclbin` is now the build from
 `FastFlowLM_IRON/FLM_Xclbin/Qwen3_5_2B/qwen3_5_decoding` (md5 e86e2b22): lm_head runs inside it, so it only
-works with an engine that writes its mode RTPs. `make test` therefore puts `QWEN35_2B_ENGINE` (default: the engine
-copy `FastFlowLM_IRON/FLM_Xclbin/Qwen3_5_2B/engine/build`) first on `LD_LIBRARY_PATH`. FastFlowLM's bundled engine
-hangs on this xclbin. Old file: `git checkout src/xclbins/Qwen3.5-2B-NPU2/layer.xclbin`.
+works with an engine that writes its mode RTPs. At the time `make test` put a private engine copy first on
+`LD_LIBRARY_PATH`. Replaced on 2026-11-03 by the `qwen3.5-flash:2b` split (last section).
 
 | `make test`, NPU otherwise idle | TTFT | prefill tok/s | decode tok/s |
 |---|---|---|---|
@@ -141,3 +143,17 @@ With the newest prefill as well (2026-11-02): the engine copy now also carries t
 | 1024 | 0.701 s | 1487.2 | 37.12 |
 | 4096 | 1.763 s | 2341.4 | 34.72 |
 | **10240 (FOCUS)** | **4.085 s** | **2519.5** | **31.14** |
+
+## Two 2B models (2026-11-03)
+
+`qwen3.5:2b` is the original again (origin/main engine and xclbins). Everything above went into a separate tag,
+`qwen3.5-flash:2b`: engine `libqwen3_5vl_flash.so` (`FastFlowLM_IRON/FLM_DLL/detail/qwen3_5vl_flash`, notes in its
+`PREFILL_SPEEDUPS.md`), xclbins in `src/xclbins/Qwen3.5-2B-Flash-NPU2`, the same weights folder. `make test` runs
+the flash tag; `make test MODEL=qwen3.5:2b` runs the original. `nll_test` takes `-m` the same way.
+
+| `make test ARGS="--iters 2"`, NPU otherwise idle | `qwen3.5:2b` TTFT / prefill / decode | `qwen3.5-flash:2b` TTFT / prefill / decode |
+|---|---|---|
+| 128 | 0.425 s / 325 / 34.04 | 0.357 s / 387 / 37.73 |
+| 1024 | 1.025 s / 1013 / 33.45 | 0.560 s / 1864 / 37.10 |
+| 4096 | 2.988 s / 1378 / 31.48 | 1.306 s / 3167 / 34.66 |
+| **10240 (FOCUS)** | **7.056 s / 1456 / 28.82** | **2.939 s / 3507 / 31.16** |

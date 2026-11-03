@@ -75,7 +75,9 @@ ENGINES = {
     # Qwen3VL_Flash derives from Qwen3VL and its engine includes qwen3vl_npu.
     ("qwen3vl",):                            ("qwen3vl", "qwen3vl-flash"),
     ("qwen3vl_flash",):                      ("qwen3vl-flash",),
-    ("qwen3_5vl",):                          ("qwen3.5",),
+    # Qwen3_5VL_Flash derives from Qwen3_5VL and its engine header includes qwen3_5vl_npu's.
+    ("qwen3_5vl",):                          ("qwen3.5", "qwen3.5-flash"),
+    ("qwen3_5vl_flash",):                    ("qwen3.5-flash",),
     ("minicpm_v_4_7", "minicpm_v"):          ("minicpm-v-4.7",),
     ("minicpm_v_4_7_moe", "minicpm_v_moe"): ("minicpm-v-4.7-moe",),
     ("qwen3_6_moe",):                        ("qwen3.6-moe",),
@@ -380,6 +382,13 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
     for entry in head_catalog.values():
         if entry.get("name"):
             xclbin_families.setdefault(entry["name"], set()).add(family_of(entry))
+    # A tag with a kernel folder of its own (qwen3.5-flash:2b): that folder serves only it. Folders that are also a
+    # model's name (qwen3.8-dflash2 runs the 27B's) keep the families of that name.
+    names = {entry["name"] for entry in head_catalog.values() if entry.get("name")}
+    for entry in head_catalog.values():
+        folder = entry.get("xclbin_folder")
+        if folder and folder not in names:
+            xclbin_families.setdefault(folder, set()).add(family_of(entry))
 
     for path in code:
         hit = engine_families(path, xclbin_families)

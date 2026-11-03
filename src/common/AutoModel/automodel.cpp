@@ -248,16 +248,17 @@ void AutoModel::_shared_initialize_model_state(
     header_print("FLM", "Loading model: " << this->model_path);
     this->lm_config = std::make_unique<LM_Config>();
     this->lm_config->from_pretrained(this->model_path);
+    // A tag may run another folder's xclbins: qwen3.5-flash:2b shares the 2B's weights but has its own kernels,
+    // and a draft package runs from the folder model_list names for it (D16).
+    this->lm_config->model_name = model_info.value("xclbin_folder", this->lm_config->model_name);
     if (!this->draft_model_path.empty()) {
-        // The draft package's own config rides along in the config the engine reads;
-        // the xclbins are looked up under the tag's own folder name (D16).
+        // The draft package's own config rides along in the config the engine reads.
         this->lm_config->_json_config["draft_model_path"] = this->draft_model_path;
         std::ifstream draft_file(std::filesystem::path(this->draft_model_path) / "config.json");
         if (!draft_file.is_open()) {
             throw std::runtime_error("Cannot open " + this->draft_model_path + "/config.json");
         }
         this->lm_config->_json_config["draft_config"] = nlohmann::json::parse(draft_file);
-        this->lm_config->model_name = model_info.value("xclbin_folder", this->lm_config->model_name);
         header_print("FLM", "Draft package: " << this->draft_model_path);
     }
     this->MAX_L = context_length;

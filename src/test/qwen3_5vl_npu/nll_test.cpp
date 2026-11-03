@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -13,6 +14,9 @@
 #include "AutoModel/modeling_qwen3_5vl.hpp"
 #include "AutoModel/flm_backend.hpp"
 #include "models/qwen3_5vl/flm/aie2p/qwen3_5vl_npu.hpp"
+#if defined(FLM_HAS_QWEN3_5VL_FLASH)
+#include "models/qwen3_5vl_flash/flm/aie2p/qwen3_5vl_flash.hpp"
+#endif
 #include "tokenizer/tokenizer.hpp"
 #include "model_list.hpp"
 
@@ -24,12 +28,16 @@ flm_rt::device npu_device_global;
 namespace flm::backend {
 void register_builtin_backends(BackendRegistry& registry) {
     registry.register_backend("qwen3.5", kFlmBackendId, flm_factory<qwen3_5vl_npu>());
+#if defined(FLM_HAS_QWEN3_5VL_FLASH)
+    registry.register_backend("qwen3.5-flash", kFlmBackendId, flm_factory<qwen3_5vl_flash>());
+#endif
 }
 }  // namespace flm::backend
 
-class nll_model_t : public Qwen3_5VL {
+template <class Base>
+class nll_model_t : public Base {
 public:
-    using Qwen3_5VL::Qwen3_5VL;
+    using Base::Base;
     causal_lm* engine() { return this->lm_engine; }
 };
 
@@ -96,7 +104,20 @@ int main(int argc, char* argv[]) {
         cut_points.push_back((int)std::lround(min_len * std::pow((double)max_len / min_len, f)));
     }
 
-    auto chat = std::make_unique<nll_model_t>(&npu_device_global);
+    std::unique_ptr<AutoModel> chat;
+    std::function<causal_lm*()> engine;
+#if defined(FLM_HAS_QWEN3_5VL_FLASH)
+    if (model_info["details"]["family"] == "qwen3.5-flash") {
+        auto model = std::make_unique<nll_model_t<Qwen3_5VL_Flash>>(&npu_device_global);
+        engine = [m = model.get()] { return m->engine(); };
+        chat = std::move(model);
+    }
+#endif
+    if (!chat) {
+        auto model = std::make_unique<nll_model_t<Qwen3_5VL>>(&npu_device_global);
+        engine = [m = model.get()] { return m->engine(); };
+        chat = std::move(model);
+    }
     npu_device_global = flm_rt::device(0);
     chat->set_prefix_limits(-1, 0);
     chat->load_model(model_path, model_info, 32768, false);
@@ -115,16 +136,16 @@ int main(int argc, char* argv[]) {
             std::vector<float> l(logits.size());
             for (size_t v = 0; v < l.size(); v++) l[v] = (float)logits[v];
             if (dump.is_open()) dump.write((const char*)l.data(), l.size() * sizeof(float));
-            std::cout << step << ": context " << chat->engine()->get_current_context_length() << ", top1 " << argmax(logits) << std::endl;
+            std::cout << step << ": context " << engine()->get_current_context_length() << ", top1 " << argmax(logits) << std::endl;
         };
         auto prefill = [&](const char* step, int from, int to) {
             std::vector<int> ids(tokens.begin() + from, tokens.begin() + to);
-            buffer<bf16> logits = chat->engine()->prefill(ids);
+            buffer<bf16> logits = engine()->prefill(ids);
             save(step, logits);
             return logits;
         };
         auto decode = [&](const char* step, buffer<bf16> logits, int n) {
-            for (int t = 0; t < n; t++) logits = chat->engine()->forward(argmax(logits));
+            for (int t = 0; t < n; t++) logits = engine()->forward(argmax(logits));
             save(step, logits);
             return logits;
         };
@@ -132,9 +153,9 @@ int main(int argc, char* argv[]) {
         buffer<bf16> logits = prefill("prefill 3000", 0, 3000);
         logits = decode("decode 37", logits, 37);
         logits = prefill("prefill +1500", 3000, 4500);
-        chat->engine()->checkpoint();
+        engine()->checkpoint();
         decode("decode 8 (dropped)", logits, 8);
-        chat->engine()->restore();
+        engine()->restore();
         prefill("restore, prefill +700", 4500, 5200);
         chat->clear_context();
         prefill("clear, prefill 2333", 100, 2433);
@@ -147,7 +168,7 @@ int main(int argc, char* argv[]) {
     for (int n : cut_points) {
         chat->clear_context();
         std::vector<int> ids(tokens.begin(), tokens.begin() + n);
-        buffer<bf16> logits = chat->engine()->prefill(ids);
+        buffer<bf16> logits = engine()->prefill(ids);
 
         const size_t vocab = logits.size();
         std::vector<float> l(vocab);

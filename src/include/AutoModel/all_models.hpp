@@ -43,6 +43,7 @@ typedef enum {
     qwen3vl,
     qwen3vl_flash,
     qwen3_5,
+    qwen3_5_flash,
     minicpm_v,
     minicpm_v_moe,
     qwen3_5_omni,
@@ -81,6 +82,7 @@ inline std::pair<std::string, std::unique_ptr<AutoModel>> get_auto_model(const s
         {"qwen3vl", SupportedModelFamily::qwen3vl},
         {"qwen3vl-flash", SupportedModelFamily::qwen3vl_flash},
         {"qwen3.5", SupportedModelFamily::qwen3_5},
+        {"qwen3.5-flash", SupportedModelFamily::qwen3_5_flash},
         {"minicpm-v-4.7", SupportedModelFamily::minicpm_v},
         {"minicpm-v-4.7-moe", SupportedModelFamily::minicpm_v_moe},
         {"qwen3.5-omni", SupportedModelFamily::qwen3_5_omni},
@@ -176,6 +178,13 @@ inline std::pair<std::string, std::unique_ptr<AutoModel>> get_auto_model(const s
         case SupportedModelFamily::qwen3_5:
             auto_chat_engine = std::make_unique<Qwen3_5VL>(npu_device_inst);
             break;
+        case SupportedModelFamily::qwen3_5_flash:
+#if defined(FLM_HAS_QWEN3_5VL_FLASH)
+            auto_chat_engine = std::make_unique<Qwen3_5VL_Flash>(npu_device_inst);
+            break;
+#else
+            throw std::runtime_error(new_model_tag + " needs the qwen3_5vl_flash engine library, which this build does not include");
+#endif
         case SupportedModelFamily::minicpm_v:
             auto_chat_engine = std::make_unique<MiniCPM_V>(npu_device_inst);
             break;

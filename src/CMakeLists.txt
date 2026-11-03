@@ -563,6 +563,19 @@ if(EXISTS "${_d3_npu_lib}")
     message(STATUS "d3_npu state-once API (revision 2): ${_d3_rev2}")
 endif()
 
+# The Qwen3.5-2B flash engine (qwen3.5-flash:2b). Linked where its library is vendored; elsewhere
+# (a Windows build before qwen3_5vl_flash.dll ships) the qwen3.5-flash family is left out.
+if(WIN32)
+    set(_qwen35_flash_lib "${FLM_ENGINE_LIB_DIR}/qwen3_5vl_flash.lib")
+else()
+    set(_qwen35_flash_lib "${FLM_ENGINE_LIB_DIR}/libqwen3_5vl_flash.so")
+endif()
+if(EXISTS "${_qwen35_flash_lib}")
+    list(APPEND FLM_ENGINE_LINK_LIBS qwen3_5vl_flash)
+    target_compile_definitions(flm PRIVATE FLM_HAS_QWEN3_5VL_FLASH=1)
+endif()
+message(STATUS "qwen3_5vl_flash engine: ${_qwen35_flash_lib} (linked if present)")
+
 # Video input for d3:turbo (src/common/video): FFmpeg's shared libraries are loaded at run time (no build-time
 # dependency); ON by default (the engine runs videos). A machine without the FFmpeg libraries keeps the
 # frame-list input and answers encoded videos with a clear 422; -DFLM_VIDEO_FFMPEG=OFF leaves the decoder out.

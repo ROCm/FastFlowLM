@@ -595,6 +595,10 @@ bool ModelDownloader::remove_model(const std::string& model_tag, bool sub_proces
                 header_print("WARNING", "Installed model " + dependant + " requires " + model_tag +
                              " and will not run until it is pulled again.");
             }
+            for (const auto& sharer : supported_models.get_folder_sharers(model_tag)) {
+                header_print("WARNING", "Model " + sharer + " uses the same files as " + model_tag +
+                             " and will not run until it is pulled again.");
+            }
         }
 
         // Get model path (a tag with a base_model removes only its own folder)

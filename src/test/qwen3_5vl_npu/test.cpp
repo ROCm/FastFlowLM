@@ -14,6 +14,9 @@
 #include "AutoModel/modeling_qwen3_5vl.hpp"
 #include "AutoModel/flm_backend.hpp"
 #include "models/qwen3_5vl/flm/aie2p/qwen3_5vl_npu.hpp"
+#if defined(FLM_HAS_QWEN3_5VL_FLASH)
+#include "models/qwen3_5vl_flash/flm/aie2p/qwen3_5vl_flash.hpp"
+#endif
 #include "tokenizer/tokenizer.hpp"
 #include "model_list.hpp"
 
@@ -22,6 +25,9 @@ flm_rt::device npu_device_global;
 namespace flm::backend {
 void register_builtin_backends(BackendRegistry& registry) {
     registry.register_backend("qwen3.5", kFlmBackendId, flm_factory<qwen3_5vl_npu>());
+#if defined(FLM_HAS_QWEN3_5VL_FLASH)
+    registry.register_backend("qwen3.5-flash", kFlmBackendId, flm_factory<qwen3_5vl_flash>());
+#endif
 }
 }  // namespace flm::backend
 
@@ -320,7 +326,8 @@ int main(int argc, char* argv[]) {
     nlohmann::json model_info = models.get_model_info(args.model_tag).second;
     int context_length = pick_context_length(args);
 
-    std::string xclbin_dir = fs::absolute("../../../xclbins/" + fs::path(model_path).filename().string()).lexically_normal().string();
+    const std::string xclbin_folder = model_info.value("xclbin_folder", fs::path(model_path).filename().string());
+    std::string xclbin_dir = fs::absolute("../../../xclbins/" + xclbin_folder).lexically_normal().string();
     header_print("info", "Model:   " << args.model_tag << " -> " << model_path);
     header_print("info", "Xclbins: " << xclbin_dir);
     header_print("info", "Prompt:  " << args.prompt_file);
@@ -339,7 +346,15 @@ int main(int argc, char* argv[]) {
     Tokenizer tokenizer(model_path);
     std::vector<int> base_tokens = tokenizer.encode(read_text_file(args.prompt_file));
 
-    std::unique_ptr<AutoModel> chat = std::make_unique<Qwen3_5VL>(&npu_device_global);
+    std::unique_ptr<AutoModel> chat;
+#if defined(FLM_HAS_QWEN3_5VL_FLASH)
+    if (model_info["details"]["family"] == "qwen3.5-flash") {
+        chat = std::make_unique<Qwen3_5VL_Flash>(&npu_device_global);
+    }
+#endif
+    if (!chat) {
+        chat = std::make_unique<Qwen3_5VL>(&npu_device_global);
+    }
     npu_device_global = flm_rt::device(0);
     chat->set_prefix_limits(-1, 0);
     auto load_start = steady::now();

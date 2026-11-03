@@ -312,6 +312,25 @@ class model_list {
             return out;
         }
 
+        /// \brief the other tags whose files live in the same folder as this tag
+        /// \param tag the tag of the model
+        /// \note e.g. qwen3.5-flash:2b and qwen3.5:2b: two engines, one weights folder
+        std::vector<std::string> get_folder_sharers(const std::string& tag) const {
+            const std::string own_tag = this->rectify_model_tag(tag);
+            const auto own = this->find_entry(own_tag);
+            std::vector<std::string> out;
+            if (!own || !own->contains("name")) return out;
+            for (const auto& [model_type, model_subset] : this->config["models"].items()) {
+                for (const auto& [size, model_info] : model_subset.items()) {
+                    const std::string other = model_type + ":" + size;
+                    if (other != own_tag && model_info.contains("name") && model_info["name"] == own->at("name")) {
+                        out.push_back(other);
+                    }
+                }
+            }
+            return out;
+        }
+
         /// \brief the folder a model is loaded from
         /// \param tag the tag of the model
         /// \return the base model's folder for a tag with a base_model, else

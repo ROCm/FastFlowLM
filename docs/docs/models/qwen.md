@@ -444,6 +444,32 @@ The `-r` option determines the image's height:
 
 ---
 
+## 🧩 Model Card: [Qwen3.5-2B — Flash](https://huggingface.co/Qwen/Qwen3.5-2B)
+
+- **Type:** Image-Text-to-Text
+- **Think:** Toggleable
+- **Tool Calling Support:** Yes  
+- **Base Model:** [Qwen/Qwen3.5-2B](https://huggingface.co/Qwen/Qwen3.5-2B)
+- **Quantization:** Q4_K
+- **Default Context Length:** 32k tokens ([change default](https://fastflowlm.com/docs/instructions/cli/#-change-default-context-length-max))  
+- **[Set Context Length at Launch](https://fastflowlm.com/docs/instructions/cli/#-set-context-length-at-launch)**
+
+▶️ Run with FastFlowLM in PowerShell:  
+
+```shell
+flm run qwen3.5-flash:2b
+```
+
+⚡ **Note — what "Flash" changes:**
+
+- Same checkpoint and the same download as `qwen3.5:2b`, served by a different engine with NPU kernels built only for the 2B: faster prefill matmul and attention, a faster linear-attention (GatedDeltaNet) and conv step, the output layer inside the decode kernel (no NPU reconfiguration per generated token), and the vision encoder on one fused overlay.
+- **Prefill is much faster on long prompts, and decode is a little faster.** Images also start faster.
+- **Nothing else is limited.** Unlike the other Flash models, it keeps multi-turn chat, the full context length, thinking, tool calling and the [prefix cache](https://fastflowlm.com/docs/instructions/server/prefix_cache/), exactly like `qwen3.5:2b`. The image resize option (`-r`) works the same way.
+- The answers are close to, but not bit-identical with, `qwen3.5:2b`: the faster kernels round some numbers differently.
+- Both tags use one model folder. `flm remove` of either tag deletes it, so the other tag needs `flm pull` again (`flm remove` prints a warning).
+
+---
+
 ## 🧩 Model Card: [Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B)
 
 - **Type:** Image-Text-to-Text

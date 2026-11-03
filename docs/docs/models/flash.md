@@ -15,7 +15,10 @@ parent: Models
 | `gemma4e-flash:e4b` | Any-to-Text (image, audio) | [Gemma 4 E4B — Flash](https://fastflowlm.com/docs/models/gemma/#-model-card-gemma-4-e4b-it--flash) |
 | `nemotron3.5-bolt-dflash-flash:e4b` | Any-to-Text (image, audio), speculative decoding | [Nemotron Bolt E4B — DFlash Flash](https://fastflowlm.com/docs/models/nemotron3.5-bolt-dflash/#-model-card-nvidia-nemotron-35-bolt-e4b--dflash-flash) |
 | `qwen3vl-flash:4b` | Image-Text-to-Text | [Qwen3-VL-4B — Flash](https://fastflowlm.com/docs/models/qwen/#-model-card-qwen3-vl-4b-instruct--flash) |
+| `qwen3.5-flash:2b` | Image-Text-to-Text | [Qwen3.5-2B — Flash](https://fastflowlm.com/docs/models/qwen/#-model-card-qwen35-2b--flash) |
 | `hy-mt2-flash:1.8b` | Text-to-Text (Translation) | [Hy-MT2](https://fastflowlm.com/docs/models/hy-mt2/) |
+
+`qwen3.5-flash:2b` is the exception to the rules above: it is the faster engine for `qwen3.5:2b` and keeps multi-turn chat, the full context length and tool calling.
 
 - 📊 [Flash benchmarks](https://fastflowlm.com/docs/benchmarks/flash_results/)
 - 🔌 [Flash models in server mode](https://fastflowlm.com/docs/instructions/server/openapi/#-example-flash-models-single-turn-pinned-system-prompt)

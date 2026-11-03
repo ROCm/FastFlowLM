@@ -36,7 +36,9 @@ HEADERS += ../../include/qwen3_5vl/qwen3_5vl_npu.hpp
 
 ifeq ($(WSL), 0)
 
+CXX_FLAGS += -DFLM_HAS_QWEN3_5VL_FLASH=1
 LDFLAGS += -lqwen3_5vl_npu
+LDFLAGS += -lqwen3_5vl_flash
 LDFLAGS += -ljpeg
 LDFLAGS += -L../../build/libwebp/lib -lwebpdecoder
 
@@ -60,13 +62,13 @@ clean:
 	rm -rf $(BUILD_DIR)
 
 FLM_MODEL_PATH ?= /scratch/michyu
-# 2B engine with lm_head inside layer.xclbin (the bundled engine hangs on the 2B layer.xclbin)
-QWEN35_2B_ENGINE ?= /scratch/michyu/FastFlowLM_IRON/FLM_Xclbin/Qwen3_5_2B/engine/build
+# qwen3.5-flash:2b = the optimized 2B (libqwen3_5vl_flash.so), qwen3.5:2b = the original
+MODEL ?= qwen3.5-flash:2b
 
 test: $(BUILD_DIR)/test_qwen3_5vl_npu
 	cp ../../model_list.json $(BUILD_DIR)/model_list.json
 	cp bench_text.txt $(BUILD_DIR)/bench_text.txt
-	cd $(BUILD_DIR) && export LD_LIBRARY_PATH=$(QWEN35_2B_ENGINE):../../../lib/xrt FLM_MODEL_PATH=$(FLM_MODEL_PATH) && ./test_qwen3_5vl_npu --model qwen3.5:2b $(ARGS)
+	cd $(BUILD_DIR) && export LD_LIBRARY_PATH=../../../lib/xrt FLM_MODEL_PATH=$(FLM_MODEL_PATH) && ./test_qwen3_5vl_npu --model $(MODEL) $(ARGS)
 
 -include $(DEPS)
 .PHONY: all clean test

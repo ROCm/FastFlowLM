@@ -57,7 +57,7 @@ constexpr int kImageSoftTokenId = 248056;
 } // namespace
 
 void Qwen3_5VL::_attach_prefix_cache() {
-    this->_prefix_attach(this->lm_engine, qwen3_5vl_state_api(this->lm_engine), kImageSoftTokenId);
+    this->_prefix_attach(this->lm_engine, this->_state_api(), kImageSoftTokenId);
 }
 
 bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
@@ -215,8 +215,7 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
     // generate() feeds the generation prompt's think tokens itself, so they are left out of the prefill. A continued
     // message keeps all its tokens: they are the client's text, not the generation prompt.
     const size_t trim_tokens = meta_info.continue_final_message ? 0 : (this->enable_think ? 2 : 4);
-    qwen3_5vl_npu* slot_eng = dynamic_cast<qwen3_5vl_npu*>(this->lm_engine);
-    const bool slot_mode = this->prefix_cache_.enabled() && slot_eng != nullptr && meta_info.restore_allowed && tokens.size() > trim_tokens;
+    const bool slot_mode = this->prefix_cache_.enabled() && this->_is_own_engine() && meta_info.restore_allowed && tokens.size() > trim_tokens;
     size_t match_len = 0;
     std::vector<int> full_tokens;          // what this prompt leaves in the engine
     std::vector<uint64_t> image_hashes;    // content of each of its images
@@ -226,7 +225,8 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
     }
     if (slot_mode) {
         full_tokens.assign(tokens.begin(), tokens.end() - trim_tokens);
-        image_hashes = prefix_image_hashes(image_payload, slot_eng->QWEN3_5_PATCH_SIZE, slot_eng->QWEN3_5_TEMPORAL_PATCH_SIZE);
+        const vision_params_t vp = this->_vision_params();
+        image_hashes = prefix_image_hashes(image_payload, vp.patch_size, vp.temporal_patch_size);
         match_len = this->_prefix_resume(this->prefix_cache_, full_tokens, image_hashes);
     }
 
@@ -252,9 +252,9 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
         if (prefix_skip_count > 0 && !image_payload.images.empty()) {
             // Per-image bf16 footprint depends on runtime patch/temporal
             // config carried by the engine.
-            auto* eng = reinterpret_cast<qwen3_5vl_npu*>(this->lm_engine);
-            const unsigned patch_size = eng->QWEN3_5_PATCH_SIZE;
-            const unsigned temporal_patch = eng->QWEN3_5_TEMPORAL_PATCH_SIZE;
+            const vision_params_t vp = this->_vision_params();
+            const unsigned patch_size = vp.patch_size;
+            const unsigned temporal_patch = vp.temporal_patch_size;
 
             int skipped_image_tokens = 0;
             for (size_t i = 0; i < prefix_skip_count; i++) {
