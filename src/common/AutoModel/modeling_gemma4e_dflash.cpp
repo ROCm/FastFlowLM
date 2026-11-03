@@ -194,7 +194,8 @@ std::string Gemma4e::_speculative_loop(Engine* engine, chat_meta_info_t& meta_in
     }
     meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
     meta_info.stop_reason = reason;
-    if (this->total_tokens >= this->MAX_L) {
+    // a turn ending on eos at the cap fills the window too, but nothing was stopped
+    if (reason == MAX_LENGTH_REACHED && this->total_tokens >= this->MAX_L) {
         header_print("WARNING", "Max length reached, stopping generation...");
     }
     std::cout << std::endl;

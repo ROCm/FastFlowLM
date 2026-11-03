@@ -657,7 +657,8 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
         // so the next prompt has to carry it.
         this->token_history.pop_back();
     }
-    if (this->total_tokens >= decode_cap){
+    // an eos run on the last row fills the window too, but nothing was stopped
+    if (reason == MAX_LENGTH_REACHED && this->total_tokens >= decode_cap){
         header_print("WARNING", "Max length reached, stopping generation...");
     }
     if (this->log_raw_output) {
