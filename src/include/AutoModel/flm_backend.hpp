@@ -36,7 +36,7 @@ struct NextEngine {
 };
 
 /// \brief whether this machine runs the aie_next engine library `library`
-/// \param library e.g. "qwen3_5vl_npu_aie_next"; nullptr for a family without one
+/// \param library e.g. "qwen3_6_moe_npu_aie_next"; nullptr for a family without one
 /// \note utils::get_device(), the platform the catalog picked the weights for.
 bool runs_next_engine(const char* library);
 

@@ -123,14 +123,14 @@ void test_dev04_offers_only_ported_flm_families() {
     // that have an aie_next engine.
     auto next = open_catalog("dev04", {"flm"});
     const auto ported = [](const std::string& tag) {
-        return tag.rfind("qwen3.6-moe", 0) == 0 || tag.rfind("qwen3.5", 0) == 0;
+        return tag.rfind("qwen3.6-moe", 0) == 0;
     };
     // the family alias ("qwen3.6-moe") is a tag too
     for (const auto& tag : next.all_tags) {
         TEST_REQUIRE(ported(tag));
     }
     TEST_REQUIRE(next.is_model_supported("qwen3.6-moe:35b-a3b"));
-    TEST_REQUIRE(next.is_model_supported("qwen3.5:4b"));
+    TEST_REQUIRE(!next.is_model_supported("qwen3.5:4b"));
     TEST_REQUIRE(!next.is_model_supported("qwen3.5:2b"));
     TEST_REQUIRE(!next.is_model_supported(kPhiTag));
     TEST_REQUIRE(!next.is_model_supported(kCoreTag));
@@ -141,14 +141,14 @@ void test_dev04_offers_only_ported_flm_families() {
     TEST_REQUIRE(ported(next.get_model_info(kPhiTag).first));
 
     // dev04 weights are their own revision, in their own folder; aie2p keeps its own
-    const auto next_info = next.get_model_info("qwen3.5:4b").second;
-    TEST_REQUIRE(next_info.at("name") == "Qwen3.5-4B-NPU2-dev04");
-    TEST_REQUIRE(next_info.at("model_info_key") == "qwen3.5:4b-dev04");
+    const auto next_info = next.get_model_info("qwen3.6-moe:35b-a3b").second;
+    TEST_REQUIRE(next_info.at("name") == "Qwen3.6-35B-A3B-NPU2-dev04");
+    TEST_REQUIRE(next_info.at("model_info_key") == "qwen3.6-moe:35b-a3b-dev04");
     TEST_REQUIRE(next_info.at("url").get<std::string>().find("/resolve/aie_next") != std::string::npos);
     TEST_REQUIRE(!next_info.contains("ms_url"));
     TEST_REQUIRE(!next_info.contains("platform_sources"));
-    const auto stock_info = open_catalog("aie2p", {"flm"}).get_model_info("qwen3.5:4b").second;
-    TEST_REQUIRE(stock_info.at("name") == "Qwen3.5-4B-NPU2");
+    const auto stock_info = open_catalog("aie2p", {"flm"}).get_model_info("qwen3.6-moe:35b-a3b").second;
+    TEST_REQUIRE(stock_info.at("name") == "Qwen3.6-35B-A3B-NPU2");
     TEST_REQUIRE(stock_info.contains("ms_url"));
     TEST_REQUIRE(!stock_info.contains("platform_sources"));
 

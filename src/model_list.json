@@ -463,17 +463,7 @@
                 "footprint": 3.1
             },
             "4b": {
-                "supported_platforms": ["aie2p", "dev04"],
-                "platform_sources": {
-                    "dev04": {
-                        "name": "Qwen3.5-4B-NPU2-dev04",
-                        "model_info_key": "qwen3.5:4b-dev04",
-                        "url": "https://huggingface.co/FastFlowLM/Qwen3.5-4B-NPU2/resolve/aie_next",
-                        "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.5-4B-NPU2/tree/aie_next",
-                        "ms_url": null,
-                        "size": 4391342000
-                    }
-                },
+                "supported_platforms": ["aie2p"],
                 "name": "Qwen3.5-4B-NPU2",
                 "url": "https://huggingface.co/FastFlowLM/Qwen3.5-4B-NPU2/resolve/flm_q4k_high_precision",
                 "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.5-4B-NPU2/tree/flm_q4k_high_precision",
