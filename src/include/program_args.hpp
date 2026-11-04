@@ -17,6 +17,8 @@ struct program_args_t {
     bool preemption = false;
     bool asr = false;
     bool embed = false;
+    std::string asr_tag = "whisper-v3:turbo";   // ASR model to load when asr is set (-a <tag>)
+    std::string embed_tag = "embed-gemma:300m"; // embedding model to load when embed is set (-e <tag>)
     std::string decision = ""; // --decision <tag>: serve a decision model (POST /v1/systemone)
     bool json_output = false;
     int ctx_length = -1; // let model decide
