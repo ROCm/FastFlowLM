@@ -587,7 +587,7 @@
                 "xclbin_folder": "Qwen3.5-2B-Flash-NPU2",
                 "vlm": true,
                 "default_context_length": 32768,
-                "max_prefill_len": 4096,
+                "max_prefill_len": 32768,
                 "details": {
                     "format": "NPU2",
                     "family": "qwen3.5-flash",

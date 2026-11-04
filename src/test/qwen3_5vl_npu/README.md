@@ -157,3 +157,14 @@ the flash tag; `make test MODEL=qwen3.5:2b` runs the original. `nll_test` takes 
 | 1024 | 1.025 s / 1013 / 33.45 | 0.560 s / 1864 / 37.10 |
 | 4096 | 2.988 s / 1378 / 31.48 | 1.306 s / 3167 / 34.66 |
 | **10240 (FOCUS)** | **7.056 s / 1456 / 28.82** | **2.939 s / 3507 / 31.16** |
+
+Kernels moved to Peano (2026-11-03): decode, conv1d, dequant_mm and GDN on Peano 22 (attention and vision overlay stay
+Chess). `qwen3.5-flash:2b`, `make test ARGS="--iters 2"`: 128 0.342 s / 406 / 37.93, 1024 0.610 s / 1711 / 37.21,
+4096 1.440 s / 2872 / 34.91, **10240 3.242 s / 3178 / 31.44** (TTFT / prefill tok/s / decode tok/s). dequant_mm (+24 %)
+and GDN (+32 %) are slower under Peano; their READMEs have the details.
+
+Then attention and the vision overlay moved to Peano too (bit-identical to Chess; attention needed the `.bss` fix and
+Peano-only softmax vectorizing, the overlay the upstream Peano MM / attention commits). Every 2B flash kernel is now
+built with Peano. `make test ARGS="--iters 2"`: 128 0.332 s / 418 / 37.81, 1024 0.586 s / 1780 / 37.12, 4096 1.444 s /
+2861 / 34.89, **10240 3.245 s / 3176 / 31.47**.
+
