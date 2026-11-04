@@ -7,7 +7,11 @@
 #include "utils/utils.hpp"
 #elif defined(FLM_NPU_UTIL)
 /// flm_util (lib/<runtime>): "aie2p", "dev04", or "" when it knows no NPU here
+#ifdef _WIN32
 extern "C" __declspec(dllimport) const char* flm_util_npu_platform(void);
+#else
+extern "C" const char* flm_util_npu_platform(void);
+#endif
 #endif
 
 namespace utils {

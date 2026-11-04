@@ -357,12 +357,18 @@ if(FLM_ENABLE_CORE)
                             "copy them beside flm.exe by hand")
         endif()
     endif()
-elseif(WIN32 AND NOT FLM_USE_HRX)
+elseif(NOT FLM_USE_HRX)
     # Without corelib, flm_util (lib/xrt, built in FastFlowLM_IRON) tells which
-    # NPU generation this host has (common/npu_platform.cpp). A corelib build
+    # NPU generation this host has (common/npu_platform.cpp), so a default build
+    # runs the aie_next engines on dev04 (flm_backend.hpp). A corelib build
     # asks corelib and does not link it.
-    if(NOT EXISTS "${FLM_ENGINE_LIB_DIR}/flm_util.lib")
-        message(FATAL_ERROR "${FLM_ENGINE_LIB_DIR} has no flm_util.lib")
+    if(WIN32)
+        set(_flm_util_lib "${FLM_ENGINE_LIB_DIR}/flm_util.lib")
+    else()
+        set(_flm_util_lib "${FLM_ENGINE_LIB_DIR}/libflm_util.so")
+    endif()
+    if(NOT EXISTS "${_flm_util_lib}")
+        message(FATAL_ERROR "${FLM_ENGINE_LIB_DIR} has no flm_util (make install in FastFlowLM_IRON/FLM_DLL/detail/flm_util)")
     endif()
     target_link_libraries(flm PRIVATE flm_util)
     target_compile_definitions(flm PRIVATE FLM_NPU_UTIL=1)
@@ -1098,5 +1104,9 @@ install(FILES
 # xclbins, which are loaded by shared libraries need to be in location
 # relative to the executable, so we install them relative to the binary.
 # xclbins/images/<model>/ (aie_next engines' array programs, loaded at run time)
-# are not xclbins: home_install_aie_next.sh puts them in share/flm/images.
+# are not xclbins: the engines look for them in share/flm/images.
 install(DIRECTORY xclbins DESTINATION "${FLM_SHARE_DESTINATION}" PATTERN "images" EXCLUDE)
+if(IS_DIRECTORY "${CMAKE_SOURCE_DIR}/xclbins/images")
+    install(DIRECTORY xclbins/images DESTINATION "${FLM_SHARE_DESTINATION}"
+            PATTERN ".stamp" EXCLUDE)
+endif()

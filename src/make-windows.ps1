@@ -23,8 +23,7 @@ param(
     # Script dot-sourced to set up MSVC + Windows SDK when cl.exe is not already on PATH.
     [string]$DevEnv,
     [string]$Prefix,
-    # Build tree; empty means the configure preset's binaryDir (build_aie_next
-    # for windows-aie-next, else build).
+    # Build tree; empty means the configure preset's binaryDir.
     [string]$BuildDir,
     [string]$OutDir = 'out'
 )
@@ -75,8 +74,8 @@ function Get-PresetBinaryDir([string]$Name) {
     return 'build'
 }
 
-# A preset with its own binaryDir (windows-aie-next: build_aie_next) configures there,
-# so build and stage from that same tree rather than a stale or empty build\.
+# A preset with its own binaryDir configures there, so build and stage from that
+# same tree rather than a stale or empty build\.
 if (-not $BuildDir) { $BuildDir = Get-PresetBinaryDir (Get-ConfigurePreset) }
 
 function Invoke-Build([string[]]$ExtraConfigureArgs) {

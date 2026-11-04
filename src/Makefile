@@ -25,8 +25,8 @@ ifeq ($(FLM_PLATFORM),windows)
 #   SERVE_ARGS what `make serve` passes after `flm serve`
 #   JOBS       compilers at once, across all projects (cl, cargo); default every core
 #   PRESET     configure preset; default picks windows-vs18 or windows-default
-#   BUILD_DIR  build tree; default the preset's binaryDir (build_aie_next for windows-aie-next)
 #              (windows-core-on: also ryzenai-corelib)
+#   BUILD_DIR  build tree; default the preset's binaryDir
 #   FLM_DEVENV script setting up MSVC + Windows SDK when cl.exe isn't on PATH
 #              (default: C:\dev\flm-devenv.ps1 when it exists)
 RUN_ARGS   ?= llama3.2:1b -a 0

@@ -54,7 +54,7 @@ constexpr npu_platform platform_from_corelib_arch(std::string_view arch) {
 /// \brief ask the machine which NPU generation it has
 /// \return the generation of the NPU in this host
 /// \note A build that links corelib asks corelib, which reads the device
-///       itself: FastFlowLM keeps no table of devices. A Windows XRT build
+///       itself: FastFlowLM keeps no table of devices. An XRT build
 ///       without corelib asks flm_util (lib/xrt) instead. A build with
 ///       neither, or whose answer names no generation, answers
 ///       default_npu_platform(): dev04 for an aie_next build, whose flm
