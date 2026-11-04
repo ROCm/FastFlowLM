@@ -6,12 +6,18 @@ name: Build and Test
 #   Linux    XRT portable ─ test     HRX portable ─ test     Source portable ─ test
 #            XRT .deb ─ install test (off)   HRX .deb ─ install test (off)
 #   Windows  XRT zip ─ test          HRX zip ─ test          Source zip ─ test
+#            XRT zip ─ HIPEP test
 #            XRT MSI ─ install test (off)
 #
 # Each package is its own build call, so its tests do not wait on the other
 # packages' builds, and XRT and HRX are tested side by side. HRX skips the api
 # and serving suites: they test server logic the backend does not touch, and
 # the XRT run covers it.
+#
+# The Windows XRT package also holds the oga-hipep backend, which runs its
+# models (qwen3.5-oga-hipep) on the GPU through hip-ep. Test Windows HIPEP
+# tests those models from the same zip, and Test Windows XRT the NPU models;
+# like models-from-source, it runs whenever the chat suite does.
 #
 # A pull request runs only the suites its changes can affect (an ASR-only
 # change runs asr, a d3-only change decision); see .github/script/ci/changes.py.
@@ -25,8 +31,8 @@ name: Build and Test
 #
 # A dispatch can name the models to test (models, e.g. qwen3.5-oga-hipep:9b):
 # every test job then runs only those, so a package without them runs
-# nothing. fresh-hip-ep has the Windows XRT job install hip-ep from scratch for
-# the oga-hipep models, instead of reusing the runner's copy.
+# nothing. fresh-hip-ep has Test Windows HIPEP install hip-ep from scratch,
+# instead of reusing the runner's copy.
 #
 # release.yml calls this with release: true before publishing a tag.
 on:
@@ -50,7 +56,7 @@ on:
         type: string
         default: ''
       fresh-hip-ep:
-        description: Install hip-ep from scratch on Windows XRT, for the oga-hipep models
+        description: Install hip-ep from scratch in Test Windows HIPEP
         type: boolean
         default: false
   workflow_call:
@@ -374,6 +380,42 @@ jobs:
         with:
           kind: portable
           path: package
+      - name: Test
+        uses: ./.github/actions/npu-test
+        with:
+          flm-bin: ${{ steps.package.outputs.flm-bin }}
+          label: windows-xrt
+          tier: ${{ needs.changes.outputs.tier }}
+          suites: ${{ needs.changes.outputs.suites }}
+          families: ${{ needs.changes.outputs.families }}
+          models: ${{ inputs.models }}
+          asr-full: ${{ needs.changes.outputs.asr-full }}
+          asr-expected-key: windows
+
+  # The XRT zip's oga-hipep models, on the GPU: its runner needs an AMD GPU
+  # that hip-ep runs on.
+  test-win-hipep:
+    name: Test Windows HIPEP
+    needs: [changes, build-win-xrt]
+    if: needs.changes.outputs.source == 'true'
+    runs-on: [self-hosted, windows, x64, npu, sweep]
+    timeout-minutes: 60
+    steps:
+      - *checkout-tests
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+          name: fastflowlm-windows-${{ github.sha }}
+          path: package
+      - name: Prepare package
+        id: package
+        uses: ./.github/actions/install-package
+        with:
+          kind: portable
+          path: package
+      - name: Show the GPU
+        shell: powershell
+        run: Get-CimInstance Win32_VideoController | ForEach-Object { "$($_.Name), driver $($_.DriverVersion)" }
       # flm installs hip-ep into %LOCALAPPDATA%\hip-ep once and reuses it after,
       # so only an empty one makes it download and install again. The runner
       # empties its temp folder after every job. A short name: the deepest
@@ -389,13 +431,11 @@ jobs:
         uses: ./.github/actions/npu-test
         with:
           flm-bin: ${{ steps.package.outputs.flm-bin }}
-          label: windows-xrt
+          label: windows-hipep
           tier: ${{ needs.changes.outputs.tier }}
-          suites: ${{ needs.changes.outputs.suites }}
-          families: ${{ needs.changes.outputs.families }}
+          suites: chat
           models: ${{ inputs.models }}
-          asr-full: ${{ needs.changes.outputs.asr-full }}
-          asr-expected-key: windows
+          backend: oga-hipep
 
   test-win-hrx:
     name: Test Windows HRX
@@ -506,6 +546,7 @@ jobs:
       - install-lin-xrt-deb
       - install-lin-hrx-deb
       - test-win-xrt
+      - test-win-hipep
       - test-win-hrx
       - test-win-source
       - install-win-msi
@@ -541,6 +582,7 @@ jobs:
             ${{ needs.build-lin-xrt-portable.result }} ${{ needs.build-lin-xrt-deb.result }}
             ${{ needs.build-win-xrt.result }}
             ${{ needs.test-lin-xrt-portable.result }} ${{ needs.test-win-xrt.result }}
+            ${{ needs.test-win-hipep.result }}
           HRX: >-
             ${{ needs.build-lin-hrx-portable.result }} ${{ needs.build-lin-hrx-deb.result }}
             ${{ needs.build-win-hrx.result }}

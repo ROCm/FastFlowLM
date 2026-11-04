@@ -60,6 +60,10 @@ PR_CHAT = {
 # Families that are not chat models; each has its own suite.
 NON_CHAT_FAMILIES = {"embed-gemma", "d3", "whisper-v3"}
 
+# Backends that run their models on the GPU rather than the NPU. Only a run
+# that asks for one (--backend) tests its models, and then all of them.
+GPU_BACKENDS = {"oga-hipep"}
+
 # Models that reason even when asked not to. Their answer comes after the
 # reasoning, so they need a larger token budget before any content appears.
 ALWAYS_THINKS_FAMILIES = {"qwen3-tk", "lfm2.5-tk", "deepseek-r1", "deepseek-r1-0528",
@@ -121,6 +125,7 @@ class Model:
     think: bool = False
     labels: list = field(default_factory=list)
     size: float = 0.0
+    backend: str = "flm"
 
     @property
     def single_turn(self) -> bool:
@@ -161,25 +166,34 @@ def load_catalog(flm_bin: str) -> dict[str, Model]:
             think=bool(details.get("think")),
             labels=list(entry.get("label") or []),
             size=float(entry.get("size") or 0),
+            backend=entry.get("backend") or "flm",
         )
     return models
 
 
 class Plan:
     def __init__(self, catalog: dict[str, Model], tier: str, families: list[str],
-                 only_models: list[str] | None = None):
+                 only_models: list[str] | None = None, backend: str = ""):
         if tier not in TIERS:
             raise ValueError(f"unknown tier {tier!r}")
+        if backend and backend not in GPU_BACKENDS:
+            raise ValueError(f"unknown GPU backend {backend!r}")
         self.catalog = catalog
         self.tier = tier
         self.families = set(families)
         self.only_models = only_models
+        self.backend = backend  # empty: the NPU backends
+
+    def _serves(self, model_id: str) -> bool:
+        """Whether the backend under test runs this model."""
+        backend = self.catalog[model_id].backend
+        return backend == self.backend if self.backend else backend not in GPU_BACKENDS
 
     def _known(self, ids) -> list[str]:
         """Keeps catalog models, in order, dropping ones this machine lacks."""
         out = []
         for model_id in ids:
-            if model_id in self.catalog and model_id not in out:
+            if model_id in self.catalog and model_id not in out and self._serves(model_id):
                 if not self.only_models or model_id in self.only_models:
                     out.append(model_id)
         return out
@@ -194,8 +208,11 @@ class Plan:
     def chat(self) -> list[str]:
         # --models names exactly what to test, whatever the tier would pick.
         if self.only_models:
-            return [m for m in self.only_models if m in self.catalog
+            return [m for m in self.only_models if m in self.catalog and self._serves(m)
                     and self.catalog[m].family not in NON_CHAT_FAMILIES]
+        if self.backend:
+            return self._known(m.id for m in self.catalog.values()
+                               if m.family not in NON_CHAT_FAMILIES)
         if self.tier == "install":
             return self._known(INSTALL_CHAT)
         chat_models = [m for m in self.catalog.values() if m.family not in NON_CHAT_FAMILIES]

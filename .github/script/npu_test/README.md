@@ -6,7 +6,8 @@ report. Python 3.9+ standard library only, so a runner needs nothing installed.
 
 CI runs it from `.github/workflows/build-and-test.yml` through the
 `.github/actions/npu-test` action, once per package (XRT and HRX portable, the
-Ubuntu 24.04 .deb, the MSI, the models-from-source builds).
+Ubuntu 24.04 .deb, the MSI, the models-from-source builds), and once more for
+the Windows XRT zip's GPU models (Test Windows HIPEP).
 
 ## Running it
 
@@ -22,6 +23,7 @@ python3 -m npu_test --flm-bin flm --label dev --suites chat --models qwen3:0.6b,
 | `--tier install\|pr\|full` | How much to run; see below |
 | `--suites a,b` | Only these suites (default: all) |
 | `--models a,b` | Restrict every suite to these model ids |
+| `--backend oga-hipep` | Test every model of this GPU backend instead of the NPU models |
 | `--families a,b` | Families a change touches; the pr tier tests all their models |
 | `--asr-full` | The whole ASR evaluation set on the pr tier |
 | `--asr-expected-key KEY` | Check WER against this row of `assets/asr_eval/expected.json` |
@@ -40,6 +42,11 @@ failed; warnings and skips do not fail a run.
 
 Which models each suite runs at each tier is in `plan.py`, in one place.
 
+The tiers pick NPU models only. A model whose `backend` in `flm list --json` runs
+on the GPU (`oga-hipep`, in the Windows XRT package) is tested by a run with
+`--backend oga-hipep`, which tests all of them whatever the tier; that is the
+Test Windows HIPEP job.
+
 On a pull request, `.github/script/ci/changes.py` also picks the suites: only
 those the changed files can affect (an ASR-only change runs `asr`, a d3-only
 change `decision`, an engine change `chat` and `prefix_cache`), or all of them
@@ -49,8 +56,8 @@ when any changed file is shared code. The HRX packages never run `api` or
 A manual run of Build and Test can name the models to test, for example
 `gh workflow run build-and-test.yml --ref <branch> -f models=qwen3.5-oga-hipep:9b`:
 every package then runs only those, and one whose catalog lacks them runs
-nothing. Add `-f fresh-hip-ep=true` to have the Windows XRT job install hip-ep
-from scratch for the oga-hipep models, instead of reusing the runner's copy.
+nothing. Add `-f fresh-hip-ep=true` to have Test Windows HIPEP install hip-ep
+from scratch, instead of reusing the runner's copy.
 
 ## Suites
 
