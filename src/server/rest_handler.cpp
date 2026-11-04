@@ -1266,6 +1266,14 @@ void RestHandler::handle_embeddings(const json& request,
             }
         }
 
+        if (inputs.empty()) {
+            send_response({{"error", {{"message", "'input' is required: a string or a non-empty array of strings."},
+                                      {"type", "invalid_request_error"},
+                                      {"param", "input"},
+                                      {"code", 400}}}});
+            return;
+        }
+
         json response;
         if (this->embed) {
             json embedding_data = json::array();
@@ -1295,12 +1303,26 @@ void RestHandler::handle_embeddings(const json& request,
         }
         else {
             header_print("Warning", "No embedding model loaded");
+            send_response({{"error", {{"message", "No embedding model is loaded; start the server with --embed 1."},
+                                      {"type", "invalid_request_error"},
+                                      {"code", 400}}}});
+            return;
         }
         send_response(response);
     }
+    catch (const json::exception& e) {
+        // A missing or mistyped "model" / "input": the request is at fault
+        send_response({{"error", {{"message", std::string("Invalid embeddings request: ") + e.what()},
+                                  {"type", "invalid_request_error"},
+                                  {"code", 400}}}});
+    }
     catch (const std::exception& e) {
-        json error_response = ExceptionResponse(e);
-        send_response(error_response);
+        // A failed NPU dispatch throws from embed(); it must reach the client as a 5xx, not a 200
+        // whose body is an error string (the 200 is what let a broken vector look like an answer).
+        header_print("ERROR", std::string("Embedding failed: ") + e.what());
+        send_response({{"error", {{"message", e.what()},
+                                  {"type", "server_error"},
+                                  {"code", 500}}}});
     }
 }
 
