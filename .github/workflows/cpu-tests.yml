@@ -38,3 +38,34 @@ jobs:
           cmake -S src/test/chat_continue -B build-chat-continue -DCMAKE_BUILD_TYPE=Release
           cmake --build build-chat-continue -j"$(nproc)"
           ctest --test-dir build-chat-continue --output-on-failure
+
+  # The HRX executable-cache key (src/include/hrx_cpp/hrx_cpp.hpp:
+  # make_exe_key / compute_xclbin_digest): distinct xclbin images -> distinct
+  # keys (including two images at a reused heap address), identical image ->
+  # identical key, and control-code sensitivity. The header pulls in the HRX C
+  # API, so the pinned public HRX release is fetched first for its headers; the
+  # test itself exercises only the pure key logic and needs no NPU.
+  hrx-exe-key:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Fetch pinned HRX release
+        run: |
+          set -euo pipefail
+          command -v zstd >/dev/null 2>&1 || sudo apt-get update && sudo apt-get install -y --no-install-recommends zstd
+          ./hrx-integration/fetch-hrx-release.sh
+      - name: Build and run the HRX exe-cache key test
+        run: |
+          set -euo pipefail
+          hdr="$(find hrx-integration/.hrx-release -name hrx_amdxdna.h -print | head -n1)"
+          if [ -z "$hdr" ]; then
+            echo "::error::hrx_amdxdna.h not found under hrx-integration/.hrx-release."
+            exit 1
+          fi
+          inc="$(dirname "$hdr")"
+          echo "Using HRX headers from: $inc"
+          g++ -std=c++17 -O2 -Wall -Wextra \
+            -I src/include -I "$inc" \
+            src/tests/hrx_exe_key_test.cpp -o /tmp/hrx_exe_key_test
+          /tmp/hrx_exe_key_test
