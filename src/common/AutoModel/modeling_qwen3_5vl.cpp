@@ -51,6 +51,21 @@ std::string Qwen3_5VL::apply_chat_template(nlohmann::ordered_json& messages, nlo
 }
 
 
+Qwen3_5VL::vision_params_t Qwen3_5VL::_vision_params() const {
+    auto read = [](const auto& e) {
+        return vision_params_t{e.QWEN3_5_PATCH_SIZE, e.QWEN3_5_IMAGE_MERGE_SIZE, e.QWEN3_5_SHORTEST_EDGE, e.QWEN3_5_LONGEST_EDGE,
+                               e.QWEN3_5_TEMPORAL_PATCH_SIZE, e.QWEN3_5_MERGE_SIZE, e.QWEN3_5_VISION_RESCALE_FACTOR,
+                               e.QWEN3_5_VISION_RESCALE_IMAGE_MEAN, e.QWEN3_5_VISION_RESCALE_IMAGE_STD};
+    };
+    if (const auto* e = dynamic_cast<const qwen3_5vl_npu*>(this->lm_engine)) {
+        return read(*e);
+    }
+    if (const auto* e = dynamic_cast<const qwen3_5vl_flash*>(this->lm_engine)) {
+        return read(*e);
+    }
+    throw std::runtime_error("Qwen3_5VL: the loaded engine is neither qwen3_5vl_npu nor qwen3_5vl_flash");
+}
+
 /************              prefix slots            **************/
 namespace {
 constexpr int kImageSoftTokenId = 248056;
@@ -60,7 +75,7 @@ void Qwen3_5VL::_attach_prefix_cache() {
     this->_prefix_attach(this->lm_engine, qwen3_5vl_state_api(this->lm_engine), kImageSoftTokenId);
 }
 
-bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
+bool Qwen3_5VL::_build_tokens(chat_meta_info_t& meta_info, lm_uniform_input_t& input, qwen3_5vl_image_payload_t& image_payload, std::vector<int>& tokens) {
     // preprocess
     constexpr int image_soft_token_id = 248056;
     this->profiler_list[TKOEN_ENCODE_TIME].start();
@@ -71,7 +86,6 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
     }
 
     constexpr bool DEBUG_IMAGE_PREPROCESS = false;
-    qwen3_5vl_image_payload_t image_payload;
     image_payload.num_images = 0;
     if (input.images.size() > 0) {
 
@@ -176,7 +190,7 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
     std::vector<int> tokens_init = this->tokenizer->encode(templated_text);
 
     // update the tokens to include the image tokens
-    std::vector<int> tokens;
+    tokens.clear();
     int total_image_tokens = 0;
     // Use image_payload.images.size() (not input.images.size()), because on
     // the REST API path images come from `messages` and input.images is empty.
@@ -197,6 +211,16 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
     }
 
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
+    return true;
+}
+
+bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
+    constexpr int image_soft_token_id = 248056;
+    qwen3_5vl_image_payload_t image_payload;
+    std::vector<int> tokens;
+    if (!this->_build_tokens(meta_info, input, image_payload, tokens)) {
+        return false;
+    }
 
     // ----------------------------------------------------------------------
     // Prompt-cache aware image alignment.
@@ -252,9 +276,9 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
         if (prefix_skip_count > 0 && !image_payload.images.empty()) {
             // Per-image bf16 footprint depends on runtime patch/temporal
             // config carried by the engine.
-            auto* eng = reinterpret_cast<qwen3_5vl_npu*>(this->lm_engine);
-            const unsigned patch_size = eng->QWEN3_5_PATCH_SIZE;
-            const unsigned temporal_patch = eng->QWEN3_5_TEMPORAL_PATCH_SIZE;
+            const auto vision = this->_vision_params();
+            const unsigned patch_size = vision.QWEN3_5_PATCH_SIZE;
+            const unsigned temporal_patch = vision.QWEN3_5_TEMPORAL_PATCH_SIZE;
 
             int skipped_image_tokens = 0;
             for (size_t i = 0; i < prefix_skip_count; i++) {
@@ -505,4 +529,186 @@ std::string Qwen3_5VL::generate_with_prompt(chat_meta_info_t& meta_info, lm_unif
         os << "<think>\n" << std::flush;
     }
     return this->_shared_generate(meta_info, length_limit, os);
+}
+
+
+/************              Qwen3_5VL_Flash            **************/
+
+void Qwen3_5VL_Flash::load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption, const std::string& backend) {
+    Qwen3_5VL::load_model(model_path, model_info, default_context_length, enable_preemption, backend);
+    // no tool calling in a flash model, whatever the catalog size says
+    this->enable_tool = false;
+    // single-turn: nothing to reuse between requests, and the state table the base wrapper attached belongs to the
+    // other engine class (the flash engine's table is qwen3_5vl_flash_state_api)
+    this->_prefix_attach(nullptr, nullptr, kImageSoftTokenId);
+    this->_forget_pin();
+}
+
+int Qwen3_5VL_Flash::_pin_system_prefix(const std::string& system_text) {
+    // Full clear: drop any previous pin before building the new one.
+    this->lm_engine->clear_context();
+    this->token_history.clear();
+    this->checkpoint_his.clear();
+    this->total_tokens = 0;
+    this->last_token = -1;
+    this->system_tokens = 0;
+    this->system_his.clear();
+    this->pinned_system_text = system_text;
+
+    // debugging switch, like FLM_DISABLE_PREFIX_SLOTS: no pin, so a request prefills its whole prompt (A/B for the pin)
+    static const bool pin_disabled = std::getenv("FLM_DISABLE_FLASH_PIN") != nullptr;
+    if (system_text.empty() || pin_disabled) {
+        return 0;
+    }
+
+    // Find how many tokens the system turn plus the opening of the user turn share across different user texts (the
+    // variable part). Template two otherwise identical prompts that differ only in the first character of the user
+    // message and take the longest common prefix.
+    auto templated = [&](const std::string& user_text) {
+        nlohmann::ordered_json messages = nlohmann::ordered_json::array();
+        messages.push_back({ {"role", "system"}, {"content", system_text} });
+        messages.push_back({ {"role", "user"}, {"content", user_text} });
+        return this->apply_chat_template(messages);
+    };
+    std::vector<int> probe_a = this->tokenizer->encode(templated("A"));
+    std::vector<int> probe_b = this->tokenizer->encode(templated("\xe4\xbd\xa0")); // U+4F60, CJK probe
+
+    size_t shared = 0;
+    while (shared < probe_a.size() && shared < probe_b.size() && probe_a[shared] == probe_b[shared]) {
+        shared++;
+    }
+    if (shared == 0) {
+        header_print("WARNING", "Qwen3_5VL_Flash: could not isolate a reusable system prefix, every turn will prefill in full");
+        return 0;
+    }
+
+    std::vector<int> tokens(probe_a.begin(), probe_a.begin() + shared);
+    chat_meta_info_t pin_meta;
+    pin_meta.restore_allowed = false;
+    pin_meta.max_prefill_len = this->MAX_L;
+    bool pinned = false;
+    try {
+        // prefill only: nothing is sampled for a prefix
+        pinned = this->_shared_insert(pin_meta, tokens, [] { return false; }, nullptr, 0, std::nullopt, false);
+    } catch (const ModelRequestError&) {
+        // a system prompt that does not fit the window is the request's problem, reported by its own prefill
+        pinned = false;
+    }
+    if (!pinned) {
+        this->lm_engine->clear_context();
+        this->token_history.clear();
+        this->total_tokens = 0;
+        return 0;
+    }
+
+    this->system_his = this->token_history;
+    this->checkpoint_his = this->token_history;
+    this->lm_engine->checkpoint();
+    this->system_tokens = static_cast<int>(shared);
+
+    // Reset profilers so the pin prefill does not count against the first turn.
+    for (size_t i = 0; i < PROFILER_TYPE_NUM; i++) {
+        this->profiler_list[i].reset();
+    }
+
+    header_print("FLM", "Qwen3_5VL_Flash: system prefix pinned (" + std::to_string(this->system_tokens) + " tokens).");
+    return this->system_tokens;
+}
+
+void Qwen3_5VL_Flash::_forget_pin() {
+    this->pinned_system_text.clear();
+    this->system_his.clear();
+    this->system_tokens = 0;
+}
+
+void Qwen3_5VL_Flash::clear_context() {
+    this->AutoModel::clear_context();
+    this->_forget_pin();
+}
+
+void Qwen3_5VL_Flash::_reset_turn() {
+    if (this->system_tokens > 0) {
+        // Rewind to the pinned system prefix instead of clearing from scratch.
+        this->total_tokens = static_cast<uint32_t>(this->lm_engine->restore());
+        this->token_history = this->system_his;
+        this->checkpoint_his = this->system_his;
+    } else {
+        this->lm_engine->clear_context();
+        this->token_history.clear();
+        this->checkpoint_his.clear();
+        this->total_tokens = 0;
+    }
+    this->sampler->reset_penalties();
+    this->last_token = -1;
+    this->profiler_list[PREFILL_TIME].reset();
+    this->profiler_list[DECODING_TIME].reset();
+    this->profiler_list[SAMPLING_TIME].reset();
+    this->profiler_list[TKOEN_ENCODE_TIME].reset();
+    this->profiler_list[TKOEN_DECODE_TIME].reset();
+}
+
+bool Qwen3_5VL_Flash::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
+    // Extract the system text from the incoming messages (first message only).
+    std::string sys_text;
+    if (!input.messages.empty() && input.messages[0].value("role", "") == "system") {
+        const auto& content = input.messages[0]["content"];
+        if (content.is_string()) {
+            sys_text = content.get<std::string>();
+        } else if (content.is_array()) {
+            for (const auto& item : content) {
+                if (item.value("type", "") == "text") {
+                    sys_text += item.value("text", "");
+                }
+            }
+        }
+    }
+
+    // Re-pin only when the system text actually changed (or is set for the first time).
+    if (sys_text != this->pinned_system_text) {
+        this->_pin_system_prefix(sys_text);
+    }
+
+    this->_reset_turn();
+
+    constexpr int image_soft_token_id = 248056;
+    qwen3_5vl_image_payload_t image_payload;
+    std::vector<int> tokens;
+    if (!this->_build_tokens(meta_info, input, image_payload, tokens)) {
+        return false;
+    }
+
+    // generate() feeds the generation prompt's think tokens itself, so they are left out of the prefill
+    const size_t trim_tokens = this->enable_think ? 2 : 4;
+    if (tokens.size() <= trim_tokens) {
+        header_print("WARNING", "Qwen3_5VL_Flash: the rendered prompt is shorter than its generation prompt");
+        return false;
+    }
+    tokens.resize(tokens.size() - trim_tokens);
+
+    // _shared_insert skips whatever the engine already holds (the pinned tokens) and clears the context, through
+    // clear_context() and so the pin as well, when the prompt does not start with them. The image payload and the
+    // image index have to be cut the same way: the pin never holds an image.
+    const bool on_pin = this->system_tokens > 0 && tokens.size() > static_cast<size_t>(this->system_tokens) &&
+        std::equal(this->system_his.begin(), this->system_his.end(), tokens.begin());
+    const int skip = on_pin ? this->system_tokens : 0;
+    int last_image_token_index = -1;
+    for (int i = skip; i < static_cast<int>(tokens.size()); i++) {
+        if (tokens[i] == image_soft_token_id) {
+            last_image_token_index = i - skip;
+        }
+    }
+    last_image_token_index++; // plus the end of image tokens
+
+    const bool has_images = image_payload.num_images > 0;
+    // no checkpoint() afterwards: the one checkpoint is the pinned system prefix
+    return has_images
+        ? this->_shared_insert(meta_info, tokens, is_cancelled, &image_payload, last_image_token_index)
+        : this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
+}
+
+std::string Qwen3_5VL_Flash::generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os) {
+    if (!this->insert(meta_info, input)) {
+        return "";
+    }
+    return this->generate(meta_info, length_limit, os);
 }
