@@ -101,6 +101,16 @@ private:
     std::string _asr_step(chat_meta_info_t& meta_info, const std::vector<float>& samples, const std::string& context,
                           const std::string& language, const std::string& assistant_text, int max_new_tokens,
                           const std::function<bool()>& is_cancelled);
+    /// \brief offline transcription of mono 16 kHz samples in pieces of about a minute (each its own context, the next piece's prompt
+    ///        prefilled on the CPU during the current piece's decode); the text is streamed to `os`. Used by transcribe() and generate().
+    std::string _transcribe_samples(chat_meta_info_t& meta_info, const std::vector<float>& samples, const std::string& context,
+                                    const std::string& language, int length_limit, std::ostream& os, std::string& detected_language,
+                                    const std::function<bool()>& is_cancelled);
+    /// \brief end of a request: the engine drops its context and gives the host memory it used back
+    void _release_engine_memory();
+    /// \brief insert() only collects the audio and its context; generate() transcribes it (in pieces, as transcribe())
+    std::vector<float> pending_samples_;
+    std::string pending_context_;
     /// \brief the engine payload of the request being built (kept alive until the prefill)
     std::shared_ptr<void> payload_holder_;
     /// \brief streaming: the engine keeps the encoder output and K/V rows of the closed 8 s windows between the steps; true until the first step has run

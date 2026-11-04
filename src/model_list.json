@@ -80,8 +80,8 @@
                 "modified_at": "2026-11-02T00:00:00Z",
                 "size": 3920000000,
                 "flm_min_version": "1.0.13",
-                "default_context_length": 8192,
-                "max_prefill_len": 4096,
+                "default_context_length": 2048,
+                "max_prefill_len": 2048,
                 "files": [
                     "config.json",
                     "model.q4nx",

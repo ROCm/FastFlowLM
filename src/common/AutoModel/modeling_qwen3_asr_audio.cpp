@@ -9,7 +9,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <functional>
 #include <sstream>
+#include <streambuf>
 
 audio_data_t Qwen3_ASR::load_audio(const std::string& filename) {
     audio_data_t result;
@@ -174,6 +176,101 @@ std::vector<std::pair<size_t, size_t>> split_audio_pieces(const std::vector<floa
     return pieces;
 }
 
+/// Streams the model's answer to the caller without the "language X<asr_text>" header: everything up to and including
+/// "<asr_text>" is held back; if the marker never comes (the language was forced in the prompt, or the model skipped
+/// it) the held-back text is released after `max_header` characters.
+class answer_filter_buf : public std::streambuf {
+public:
+    answer_filter_buf(std::ostream& sink, bool header_expected) : sink_(sink), passthrough_(!header_expected) {}
+    ~answer_filter_buf() override { release(); }
+
+protected:
+    // Whole chunks, not single bytes: the CLI / SSE writers behind `sink_` treat every write as a token and hold back an
+    // incomplete UTF-8 tail themselves, which they cannot do for one-byte writes of a multi-byte character.
+    std::streamsize xsputn(const char* s, std::streamsize n) override {
+        if (passthrough_) { sink_.write(s, n); return n; }
+        held_.append(s, (size_t)n);
+        static const std::string marker = "<asr_text>";
+        const size_t at = held_.find(marker);
+        if (at != std::string::npos) {
+            passthrough_ = true;
+            const std::string rest = held_.substr(at + marker.size());
+            held_.clear();
+            if (!rest.empty()) sink_.write(rest.data(), (std::streamsize)rest.size());
+        } else if (held_.size() > kMaxHeader) {   // no header after all: stop holding text back
+            release();
+        }
+        return n;
+    }
+    int_type overflow(int_type c) override {
+        if (c == traits_type::eof()) return c;
+        const char ch = traits_type::to_char_type(c);
+        xsputn(&ch, 1);
+        return c;
+    }
+    int sync() override { sink_.flush(); return 0; }
+
+private:
+    static constexpr size_t kMaxHeader = 64;
+    void release() {
+        if (!held_.empty()) { sink_.write(held_.data(), (std::streamsize)held_.size()); held_.clear(); }
+        passthrough_ = true;
+    }
+    std::ostream& sink_;
+    std::string held_;
+    bool passthrough_;
+};
+
+/// One piece's text on its way to the caller's stream: a space first where it meets the text before it (decided on its first byte,
+/// see Qwen3_ASR::_needs_space), and nothing from a "|" on (where qwen3_asr_split_answer ends the text). So the stream gets exactly
+/// the text transcribe() returns.
+class piece_text_buf : public std::streambuf {
+public:
+    piece_text_buf(std::ostream& sink, std::function<bool(const std::string&)> space_before) : sink_(sink), space_before_(std::move(space_before)) {}
+
+protected:
+    std::streamsize xsputn(const char* s, std::streamsize n) override {
+        if (ended_ || n <= 0) return n;
+        std::string chunk(s, (size_t)n);
+        const size_t bar = chunk.find('|');
+        if (bar != std::string::npos) { chunk.resize(bar); ended_ = true; }
+        if (chunk.empty()) return n;
+        if (!started_) {
+            started_ = true;
+            if (space_before_(chunk)) chunk.insert(0, 1, ' ');   // one write with the text (the CLI's wstream_buf doubles single-char writes)
+        }
+        sink_.write(chunk.data(), (std::streamsize)chunk.size());
+        return n;
+    }
+    int_type overflow(int_type c) override {
+        if (c == traits_type::eof()) return c;
+        const char ch = traits_type::to_char_type(c);
+        xsputn(&ch, 1);
+        return c;
+    }
+    int sync() override { sink_.flush(); return 0; }
+
+private:
+    std::ostream& sink_;
+    std::function<bool(const std::string&)> space_before_;
+    bool started_ = false, ended_ = false;
+};
+
+/// the model's answer to two places: whole chunks (see answer_filter_buf) to both
+struct tee_buf : std::streambuf {
+    std::ostream& a;
+    std::ostream& b;
+    tee_buf(std::ostream& x, std::ostream& y) : a(x), b(y) {}
+    std::streamsize xsputn(const char* s, std::streamsize n) override { a.write(s, n); b.write(s, n); return n; }
+    int_type overflow(int_type c) override {
+        if (c == traits_type::eof()) return c;
+        const char ch = traits_type::to_char_type(c);
+        xsputn(&ch, 1);
+        return c;
+    }
+    int sync() override { a.flush(); b.flush(); return 0; }
+};
+
 }  // namespace
 
 std::string Qwen3_ASR::transcribe(chat_meta_info_t& meta_info, const std::vector<uint8_t>& audio_bytes, const std::string& language_arg, const std::string& context,
@@ -185,9 +282,21 @@ std::string Qwen3_ASR::transcribe(chat_meta_info_t& meta_info, const std::vector
     audio_data_t audio = this->load_audio_bytes(audio_bytes);
     if (audio.channels != 1 || audio.num_frames == 0) throw std::invalid_argument("the audio could not be decoded (wav, flac, mp3 or ogg expected)");
     duration_seconds = audio.duration_seconds;
+    return this->_transcribe_samples(meta_info, audio.samples, context, language_name, length_limit, os, detected_language, is_cancelled);
+}
+
+std::string Qwen3_ASR::_transcribe_samples(chat_meta_info_t& meta_info, const std::vector<float>& samples, const std::string& context,
+                                           const std::string& language_name, int length_limit, std::ostream& os, std::string& detected_language,
+                                           const std::function<bool()>& is_cancelled) {
+    // however the request ends, the engine gives back the host memory it used for it
+    struct release_at_exit {
+        Qwen3_ASR* model;
+        ~release_at_exit() { model->_release_engine_memory(); }
+    } release{this};
+    detected_language.clear();
 
     // long audio: pieces of about a minute, transcribed one by one (as qwen_asr does above its own, longer, limit)
-    const auto pieces = split_audio_pieces(audio.samples, SAMPLE_RATE, OFFLINE_PIECE_SECONDS);
+    const auto pieces = split_audio_pieces(samples, SAMPLE_RATE, OFFLINE_PIECE_SECONDS);
     std::string text, last_language;
     // a piece's prompt is built one piece ahead and goes with the previous piece, whose decode on the NPU the engine uses to prefill
     // it on the CPU (the prompt of a piece does not depend on the text of the one before)
@@ -200,7 +309,7 @@ std::string Qwen3_ASR::transcribe(chat_meta_info_t& meta_info, const std::vector
     };
     auto prepare = [&](size_t p) {
         piece_prompt r;
-        std::vector<float> piece(audio.samples.begin() + pieces[p].first, audio.samples.begin() + pieces[p].second);
+        std::vector<float> piece(samples.begin() + pieces[p].first, samples.begin() + pieces[p].second);
         const size_t min_len = SAMPLE_RATE / 2;   // qwen_asr pads pieces shorter than 0.5 s with silence
         if (piece.size() < min_len) piece.resize(min_len, 0.0f);
         r.ok = this->_build_prompt(piece, context, language_name, "", r.tokens, r.payload, r.first_len_run);
@@ -237,14 +346,15 @@ std::string Qwen3_ASR::transcribe(chat_meta_info_t& meta_info, const std::vector
 
         std::ostringstream answer;
         {
-            // keep the model's own header for the language, stream only the text
-            struct tee : std::streambuf {
-                std::ostringstream& a;
-                explicit tee(std::ostringstream& s) : a(s) {}
-                int_type overflow(int_type c) override { if (c != traits_type::eof()) a.put(traits_type::to_char_type(c)); return c; }
-            } raw(answer);
+            // the whole answer is kept (its header names the language); its text goes to `os` as it is decoded
+            piece_text_buf text_buf(os, [&](const std::string& first) { return _needs_space(text, first); });
+            std::ostream text_os(&text_buf);
+            answer_filter_buf filter(text_os, /*header_expected=*/language_name.empty());
+            std::ostream filtered(&filter);
+            tee_buf raw(answer, filtered);
             std::ostream raw_os(&raw);
             this->_shared_generate(meta_info, length_limit, raw_os, is_cancelled);
+            raw_os.flush();
         }
         std::string piece_language, piece_text;
         qwen3_asr_split_answer(answer.str(), piece_language, piece_text);
@@ -255,9 +365,8 @@ std::string Qwen3_ASR::transcribe(chat_meta_info_t& meta_info, const std::vector
         }
         if (piece_text.empty()) continue;
         // qwen_asr joins the pieces without a separator; a space keeps two Latin-script pieces from running together
-        const std::string joined = (_needs_space(text, piece_text) ? " " : "") + piece_text;
-        text += joined;
-        os << joined << std::flush;
+        text += (_needs_space(text, piece_text) ? " " : "") + piece_text;   // what piece_text_buf has streamed
+        os.flush();
     }
     return text;
 }

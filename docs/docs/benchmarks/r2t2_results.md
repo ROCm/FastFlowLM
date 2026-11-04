@@ -54,4 +54,4 @@ End to end through the server (normal request): a 68 s recording takes about 8 s
 
 ### 🧠 Memory
 
-About 5 GB resident after loading, about 7 GB while transcribing a minute-long recording.
+About 2.4 GB resident after loading, about 4.2 GB after the first request (1.8 GB of that is the model file mapped from disk), at most about 5.7 GB while transcribing long recordings (7-minute file, 10-minute stream).

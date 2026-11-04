@@ -282,6 +282,11 @@ std::string Qwen3_ASR::transcribe_streaming(chat_meta_info_t& meta_info, const s
                                             double& duration_seconds, std::function<bool()> is_cancelled) {
     detected_language.clear();
     duration_seconds = 0.0;
+    // however the recording ends, the engine gives back the host memory it used for it
+    struct release_at_exit {
+        Qwen3_ASR* model;
+        ~release_at_exit() { model->_release_engine_memory(); }
+    } release{this};
     const std::string language = _asr_language(language_arg);
     audio_data_t audio = this->load_audio_bytes(audio_bytes);
     if (audio.channels != 1 || audio.num_frames == 0) throw std::invalid_argument("the audio could not be decoded (wav, flac, mp3 or ogg expected)");

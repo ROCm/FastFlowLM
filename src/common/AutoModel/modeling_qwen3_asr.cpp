@@ -7,56 +7,6 @@
 #include <algorithm>
 #include <memory>
 #include <sstream>
-#include <streambuf>
-
-namespace {
-
-/// Streams the model's answer to the caller without the "language X<asr_text>" header: everything up to and including
-/// "<asr_text>" is held back; if the marker never comes (the language was forced in the prompt, or the model skipped
-/// it) the held-back text is released after `max_header` characters.
-class answer_filter_buf : public std::streambuf {
-public:
-    answer_filter_buf(std::ostream& sink, bool header_expected) : sink_(sink), passthrough_(!header_expected) {}
-    ~answer_filter_buf() override { release(); }
-
-protected:
-    // Whole chunks, not single bytes: the CLI / SSE writers behind `sink_` treat every write as a token and hold back an
-    // incomplete UTF-8 tail themselves, which they cannot do for one-byte writes of a multi-byte character.
-    std::streamsize xsputn(const char* s, std::streamsize n) override {
-        if (passthrough_) { sink_.write(s, n); return n; }
-        held_.append(s, (size_t)n);
-        static const std::string marker = "<asr_text>";
-        const size_t at = held_.find(marker);
-        if (at != std::string::npos) {
-            passthrough_ = true;
-            const std::string rest = held_.substr(at + marker.size());
-            held_.clear();
-            if (!rest.empty()) sink_.write(rest.data(), (std::streamsize)rest.size());
-        } else if (held_.size() > kMaxHeader) {   // no header after all: stop holding text back
-            release();
-        }
-        return n;
-    }
-    int_type overflow(int_type c) override {
-        if (c == traits_type::eof()) return c;
-        const char ch = traits_type::to_char_type(c);
-        xsputn(&ch, 1);
-        return c;
-    }
-    int sync() override { sink_.flush(); return 0; }
-
-private:
-    static constexpr size_t kMaxHeader = 64;
-    void release() {
-        if (!held_.empty()) { sink_.write(held_.data(), (std::streamsize)held_.size()); held_.clear(); }
-        passthrough_ = true;
-    }
-    std::ostream& sink_;
-    std::string held_;
-    bool passthrough_;
-};
-
-}  // namespace
 
 bool qwen3_asr_split_answer(const std::string& answer, std::string& language, std::string& text) {
     static const std::string marker = "<asr_text>";
@@ -228,25 +178,35 @@ bool Qwen3_ASR::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
     // text next to the audio is context / hot words for the model, unless a system prompt was configured
     const std::string context = this->user_system_prompt.empty() ? text_context : this->user_system_prompt;
 
-    // 2. prompt + payload
-    std::vector<int> tokens;
-    void* payload = nullptr;
-    int first_len_run = 0;
-    if (!this->_build_prompt(samples, context, this->forced_language, "", tokens, payload, first_len_run)) return false;
-
-    // 3. every request is its own transcription: nothing of the previous one is reused
-    this->clear_context();
-    return this->_shared_insert(meta_info, tokens, is_cancelled, payload, first_len_run);
+    // 2. generate() transcribes it as /v1/audio/transcriptions does: in pieces of about a minute, each its own context
+    this->pending_samples_ = std::move(samples);
+    this->pending_context_ = context;
+    return true;
 }
 
 std::string Qwen3_ASR::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
-    answer_filter_buf filter(os, /*header_expected=*/this->forced_language.empty());
-    std::ostream filtered(&filter);
-    std::string answer = this->_shared_generate(meta_info, length_limit, filtered, is_cancelled);
-    filtered.flush();
-    std::string language, text;
-    qwen3_asr_split_answer(answer, language, text);
-    return text;
+    std::vector<float> samples;
+    samples.swap(this->pending_samples_);   // the audio insert() collected
+    if (samples.empty()) return "";
+    std::string detected_language;
+    try {
+        return this->_transcribe_samples(meta_info, samples, this->pending_context_, _asr_language(this->forced_language), length_limit, os,
+                                         detected_language, is_cancelled);
+    } catch (const std::invalid_argument& e) {
+        header_print("ERROR", e.what());
+        return "";
+    }
+}
+
+void Qwen3_ASR::_release_engine_memory() {
+    this->payload_holder_.reset();
+    this->stream_mel_ = stream_mel_cache();
+    this->stream_wav_ = nullptr;
+    try {
+        if (auto* engine = dynamic_cast<qwen3_asr_npu*>(this->lm_engine)) engine->release_host_memory();
+    } catch (const std::exception& e) {
+        header_print("WARNING", "Qwen3_ASR: could not release the engine memory: " << e.what());
+    }
 }
 
 std::string Qwen3_ASR::generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os) {

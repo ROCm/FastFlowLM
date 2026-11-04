@@ -73,6 +73,10 @@ public:
     /// \brief update the max length
     void clear_context() override;
 
+    /// \brief end of a request: drop the context and the streaming caches; after a long context (~35 s of audio and more) also
+    ///        give the CPU decoder's K/V and the freed heap back to the system (malloc_trim). The next request allocates again.
+    void release_host_memory();
+
     /// \brief get the k cache
     /// \param layer_idx the layer index
     /// \param idx the index
