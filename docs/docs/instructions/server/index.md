@@ -34,14 +34,16 @@ Different model types can run together (for example, one LLM and one embedding m
 ### Load all three model types in one server process (default port)
 
 ```shell
-flm serve lfm2:1.2b -e 1 -a 1
+flm serve lfm2:1.2b -e embed-gemma:300m -a whisper-v3:turbo
 ```
+
+`-a` / `-e` take a model tag; `-a 1` / `-e 1` still select the default ASR (`whisper-v3:turbo`) / embedding (`embed-gemma:300m`) model.
 
 ### Run model types in separate server processes (different ports)
 
 ```shell
-flm serve -e 1 --port 52625
-flm serve -a 1 --port 52627
+flm serve -e embed-gemma:300m --port 52625
+flm serve -a whisper-v3:turbo --port 52627
 flm serve lfm2:1.2b --port 52628
 ```
 

@@ -569,12 +569,10 @@ RestHandler::RestHandler(model_list& models, ModelDownloader& downloader, progra
     // Initialize chat bot with default model
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
     if (this->asr) {
-        std::string whisper_tag = "whisper-v3:turbo";
-        ensure_asr_model_loaded(whisper_tag);
+        ensure_asr_model_loaded(args.asr_tag);
     }
     if (this->embed) {
-        std::string embed_tag = "embed-gemma:300m";
-        ensure_embed_model_loaded(embed_tag);
+        ensure_embed_model_loaded(args.embed_tag);
     }
 #else
     if (this->asr) {

@@ -67,6 +67,7 @@ inline void print_help(po::options_description& general) {
 /// \param parsed_args reference to store parsed arguments
 /// \return true if parsing was successful, false otherwise
 bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
+    std::string asr_arg, embed_arg;
     try {
         // Define the command line options
         po::options_description general("Allowed options");
@@ -75,10 +76,10 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
             ("version,v", "Show version information")
             ("pmode", po::value<std::string>(&parsed_args.power_mode)->default_value("performance"),
              "Set power mode: powersaver, balanced, performance, turbo")
-            ("asr,a", po::value<bool>(&parsed_args.asr)->default_value(0),
-             "If load asr model")
-            ("embed,e", po::value<bool>(&parsed_args.embed)->default_value(0),
-            "If load embed model")
+            ("asr,a", po::value<std::string>(&asr_arg)->default_value("0"),
+             "ASR model to load: a model tag (e.g. whisper-v3:turbo), 1 = the default ASR model, 0 = none")
+            ("embed,e", po::value<std::string>(&embed_arg)->default_value("0"),
+            "Embedding model to load: a model tag (e.g. embed-gemma:300m), 1 = the default embedding model, 0 = none")
             ("decision,d", po::value<std::string>(&parsed_args.decision)->default_value(""),
              "Serve a decision model next to the chat model, d3:edge, d3:lite, d3:nano, d3:mini, d3:flash, d3:turbo or d3:ultra (POST /v1/systemone)")
             ("host", po::value<std::string>(&parsed_args.host)->default_value("127.0.0.1"), 
@@ -145,6 +146,20 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
                   .positional(pos_desc)
                   .run(), vm);
         po::notify(vm);
+
+        // -a / -e take a model tag, or the legacy 0 / 1 (off / the default model)
+        auto resolve_model_arg = [](const std::string& arg, bool& enabled, std::string& tag) {
+            if (arg.empty() || arg == "0" || arg == "false") {
+                enabled = false;
+            } else {
+                enabled = true;
+                if (arg != "1" && arg != "true") {
+                    tag = arg;
+                }
+            }
+        };
+        resolve_model_arg(asr_arg, parsed_args.asr, parsed_args.asr_tag);
+        resolve_model_arg(embed_arg, parsed_args.embed, parsed_args.embed_tag);
 
         // Help has highest priority
         if (vm.count("help")) {

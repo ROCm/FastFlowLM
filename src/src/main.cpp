@@ -726,6 +726,17 @@ int main(int argc, char* argv[]) {
         }
     }
   
+    if (parsed_args.command == "serve" || parsed_args.command == "run") {
+        if (parsed_args.asr && !availble_models.is_model_supported(parsed_args.asr_tag)) {
+            header_print("ERROR", "ASR model not found: " << parsed_args.asr_tag << "; Please check with `flm list` and try again.");
+            return 1;
+        }
+        if (parsed_args.embed && !availble_models.is_model_supported(parsed_args.embed_tag)) {
+            header_print("ERROR", "Embedding model not found: " << parsed_args.embed_tag << "; Please check with `flm list` and try again.");
+            return 1;
+        }
+    }
+
     if (parsed_args.command == "serve" || parsed_args.command == "run" || parsed_args.command == "bench"){
         // Configure AMD XRT for the specified power mode
         if (parsed_args.power_mode == "default" || parsed_args.power_mode == "powersaver" || parsed_args.power_mode == "balanced" || 
