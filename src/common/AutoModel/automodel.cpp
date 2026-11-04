@@ -580,6 +580,7 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
     }
     buffer<bf16> y;
 
+    const std::uint64_t replayed_before = this->backend_ ? this->backend_->replayed_tokens() : 0;
     auto prefill_start_time = this->profiler_list[PREFILL_TIME].start();
     
     y = _chunked_insert(meta_info, tokens, is_cancelled, payload, first_len_run);
@@ -588,8 +589,10 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
     meta_info.prefill_duration = (uint64_t)time_utils::duration_ns(prefill_start_time, prefill_end_time).first;
     // `tokens` was trimmed to the uncached suffix above, so add the prefix served
     // from the KV cache back on: usage.prompt_tokens is the whole prompt, and the
-    // cached part is reported separately rather than subtracted.
-    meta_info.cached_prompt_tokens = static_cast<int>(skip_count);
+    // cached part is reported separately rather than subtracted. What the engine
+    // had to run again of that prefix did not come from its cache.
+    const std::uint64_t replayed = this->backend_ ? this->backend_->replayed_tokens() - replayed_before : 0;
+    meta_info.cached_prompt_tokens = static_cast<int>(skip_count - std::min<std::uint64_t>(skip_count, replayed));
     meta_info.prompt_tokens = static_cast<int>(skip_count + tokens.size());
 
     if (meta_info.stop_reason == CANCEL_DETECTED) {

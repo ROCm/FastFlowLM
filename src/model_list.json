@@ -2102,7 +2102,7 @@
                     "quantization_level": "INT4 RTN group-32, fp16 activations"
                 },
                 "flm_min_version": "1.0.12",
-                "vlm": false,
+                "vlm": true,
                 "files": [
                     "chat_template.jinja",
                     "config.json",
@@ -2119,6 +2119,7 @@
                 ],
                 "file_sources": {},
                 "label": [
+                    "vision",
                     "reasoning",
                     "tool-calling"
                 ]

@@ -1,13 +1,17 @@
 // Copyright (c) 2026 Advanced Micro Devices, Inc.
 
 /// \file oga_engine.cpp
-/// \brief Exact-token execution of an OGA text model
+/// \brief Exact-token execution of an OGA model, with the images of its prompts
 #include "oga/oga_engine.hpp"
 
 #include "utils/debug_utils.hpp"
 
 #include <algorithm>
 #include <bit>
+#include <chrono>
+#include <cmath>
+#include <cstring>
+#include <iterator>
 #include <stdexcept>
 #include <utility>
 
@@ -46,18 +50,33 @@ std::string ShapeText(const std::vector<std::int64_t>& shape) {
 
 OgaEngine::OgaEngine(std::shared_ptr<const OgaApi> api, OgaApi::Owned<OgaModel> model,
                      std::string display_name, std::uint32_t vocab_size,
-                     std::uint32_t context_limit, std::uint32_t max_length)
+                     std::uint32_t context_limit, std::uint32_t max_length,
+                     std::optional<OgaVisionConfig> vision)
     : api_(std::move(api)),
       display_name_(std::move(display_name)),
       vocab_size_(vocab_size),
       context_limit_(context_limit),
       max_length_(max_length),
+      vision_(std::move(vision)),
       model_(std::move(model)) {
     if (!api_ || !model_) throw std::invalid_argument("OGA engine needs an API and a model");
     if (!vocab_size_) throw std::invalid_argument(display_name_ + " vocabulary size is 0");
     if (!max_length_ || max_length_ > context_limit_)
         throw std::invalid_argument(display_name_ + " maximum length must be in 1.." +
                                     std::to_string(context_limit_));
+    if (vision_) {
+        const OgaVisionConfig& v = *vision_;
+        const auto in_vocabulary = [&](int id) {
+            return id >= 0 && static_cast<std::uint32_t>(id) < vocab_size_;
+        };
+        if (!in_vocabulary(v.image_token_id) || !in_vocabulary(v.vision_start_token_id) ||
+            v.image_token_id == v.vision_start_token_id || v.spatial_merge_size <= 0 ||
+            v.patch_values <= 0 || v.max_patches < v.spatial_merge_size * v.spatial_merge_size)
+            throw std::invalid_argument(display_name_ + " vision configuration is invalid");
+    }
+    const OgaFunctions& f = api_->functions();
+    rewinds_ = AtLeast(api_->package().oga_version, kRewindOgaVersion) &&
+               f.generator_snapshot_state && f.generator_rewind_to;
 }
 
 OgaEngine::~OgaEngine() = default;
@@ -65,17 +84,24 @@ OgaEngine::~OgaEngine() = default;
 buffer<bf16> OgaEngine::forward(int id) { return Run({id}); }
 
 buffer<bf16> OgaEngine::prefill(std::vector<int>& ids, void* payload) {
-    if (payload) throw std::invalid_argument(display_name_ + " on OGA does not run a vision payload");
+    if (payload && !vision_)
+        throw std::invalid_argument(display_name_ + " on OGA does not run a vision payload");
     if (ids.empty()) throw std::invalid_argument(display_name_ + " request contains no token IDs");
-    return Run(ids);
+    return Run(ids, static_cast<const OgaVisionInput*>(payload));
 }
 
 void OgaEngine::set_context_length(int length) {
     if (length < 0 || static_cast<std::uint32_t>(length) > max_length_)
         throw std::out_of_range(display_name_ + " context length is out of range");
-    if (static_cast<std::size_t>(length) > logical_.size())
+    const auto kept = static_cast<std::size_t>(length);
+    if (kept > logical_.size())
         throw std::runtime_error(display_name_ + " cannot rewind past the tokens it has run");
-    logical_.resize(static_cast<std::size_t>(length));
+    while (!images_.empty() && images_.back().start + images_.back().length > kept) {
+        if (images_.back().start < kept)
+            throw std::invalid_argument(display_name_ + " cannot keep part of an image");
+        images_.pop_back();
+    }
+    logical_.resize(kept);
 }
 
 void OgaEngine::load_weights(Q4NX&) {
@@ -86,12 +112,13 @@ void OgaEngine::update_max_length(std::uint32_t max_length) {
     if (!max_length || max_length > context_limit_ || max_length < logical_.size())
         throw std::out_of_range(display_name_ + " maximum length is invalid");
     if (live_ && max_length > live_->capacity) live_.reset();
-    if (saved_ && max_length < saved_->size()) saved_.reset();
+    if (saved_ && max_length < saved_->tokens.size()) saved_.reset();
     max_length_ = max_length;
 }
 
 void OgaEngine::clear_context() {
     logical_.clear();
+    images_.clear();
     saved_.reset();
 }
 
@@ -106,62 +133,242 @@ buffer<bf16> OgaEngine::get_v_cache(int, int) {
 int OgaEngine::get_current_context_length() { return static_cast<int>(logical_.size()); }
 
 int OgaEngine::checkpoint() {
-    saved_ = logical_;
+    saved_ = Saved{logical_, images_};
+    if (rewinds_ && live_ && !logical_.empty() && live_->ran == logical_) {
+        try {
+            api_->Check(api_->functions().generator_snapshot_state(live_->generator.get()),
+                        "OgaGenerator_SnapshotState");
+            live_->snapshot = logical_.size();
+        } catch (const OgaError& e) {
+            live_->snapshot.reset();
+            header_print("WARNING", display_name_ << ": " << e.what()
+                                    << "; a prompt that leaves this checkpoint replays its history");
+        }
+    }
     return static_cast<int>(logical_.size());
 }
 
 int OgaEngine::restore() {
     if (!saved_) return -1;
-    logical_ = *saved_;
+    logical_ = saved_->tokens;
+    images_ = saved_->images;
     return static_cast<int>(logical_.size());
 }
 
-buffer<bf16> OgaEngine::Run(const std::vector<int>& fresh) {
+buffer<bf16> OgaEngine::Run(const std::vector<int>& fresh, const OgaVisionInput* vision) {
     CheckIds(fresh);
     if (logical_.size() + fresh.size() > max_length_)
         throw std::out_of_range(display_name_ + " request exceeds configured context capacity");
+    std::vector<ImageSpan> spans = ImageSpans(fresh, logical_.size(), vision);
     const std::size_t before = logical_.size();
+    const std::size_t images_before = images_.size();
     logical_.insert(logical_.end(), fresh.begin(), fresh.end());
+    images_.insert(images_.end(), std::make_move_iterator(spans.begin()),
+                   std::make_move_iterator(spans.end()));
     try {
         const auto [reuse, reused] = Append();
+        if (reused < before) replayed_ += before - reused;
         const std::size_t total = logical_.size();
-        if (reuse == Reuse::kRebuilt)
-            header_print("FLM", "OGA generator: replaying all " << total << " tokens");
+        if (reuse == Reuse::kRebuilt) {
+            const std::string with =
+                images_.empty() ? "" : " with " + std::to_string(images_.size()) + " image(s)";
+            header_print("FLM", "OGA generator: replaying all " << total << " tokens" << with);
+        } else if (reuse == Reuse::kRewound)
+            header_print("FLM", "OGA generator: rewound to " << reused << " tokens"
+                                    << ", appending " << total - reused);
         else if (total - reused > 1)
             header_print("FLM", "OGA generator: reusing " << reused << " tokens"
                                     << ", appending " << total - reused);
         return Logits(live_->generator.get());
     } catch (...) {
         logical_.resize(before);
+        images_.resize(images_before);
         live_.reset();
         throw;
     }
 }
 
+std::vector<OgaEngine::ImageSpan> OgaEngine::ImageSpans(const std::vector<int>& fresh,
+                                                        std::size_t offset,
+                                                        const OgaVisionInput* vision) const {
+    std::vector<ImageSpan> spans;
+    if (!vision_) return spans;
+    const OgaVisionConfig& config = *vision_;
+    const std::size_t images = vision ? vision->images.size() : 0;
+    const std::int64_t merged = config.spatial_merge_size * config.spatial_merge_size;
+    std::int64_t patches = 0;
+    for (const ImageSpan& span : images_)
+        patches += span.image->grid_t * span.image->grid_h * span.image->grid_w;
+    for (std::size_t i = 0; i < fresh.size();) {
+        if (fresh[i] != config.image_token_id) {
+            ++i;
+            continue;
+        }
+        std::size_t end = i;
+        while (end < fresh.size() && fresh[end] == config.image_token_id) ++end;
+        const std::string which = display_name_ + " image " + std::to_string(spans.size() + 1);
+        if (spans.size() == images)
+            throw std::invalid_argument(display_name_ + " prompt has more runs of image tokens than its " +
+                                        std::to_string(images) + " image(s)");
+        const int before = i ? fresh[i - 1] : (offset ? logical_[offset - 1] : -1);
+        if (before != config.vision_start_token_id)
+            throw std::invalid_argument(which + " does not follow a vision start token");
+        const OgaImage& image = vision->images[spans.size()];
+        if (image.grid_t <= 0 || image.grid_h <= 0 || image.grid_w <= 0 ||
+            image.grid_h % config.spatial_merge_size || image.grid_w % config.spatial_merge_size)
+            throw std::invalid_argument(which + " has an invalid grid");
+        const std::int64_t grid = image.grid_t * image.grid_h * image.grid_w;
+        if (image.pixels.size() != static_cast<std::size_t>(grid * config.patch_values))
+            throw std::invalid_argument(which + " has " + std::to_string(image.pixels.size()) +
+                                        " pixel values, not " + std::to_string(grid * config.patch_values));
+        if (end - i != static_cast<std::size_t>(grid / merged))
+            throw std::invalid_argument(which + " has " + std::to_string(grid / merged) +
+                                        " image tokens, but its run in the prompt has " +
+                                        std::to_string(end - i));
+        patches += grid;
+        if (patches > config.max_patches)
+            throw std::invalid_argument(display_name_ + " prompt images have " + std::to_string(patches) +
+                                        " patches, more than the " + std::to_string(config.max_patches) +
+                                        " the vision model runs at once");
+        spans.push_back({offset + i, end - i, std::make_shared<const OgaImage>(image)});
+        i = end;
+    }
+    if (spans.size() != images)
+        throw std::invalid_argument(display_name_ + " prompt has " + std::to_string(spans.size()) +
+                                    " runs of image tokens for " + std::to_string(images) + " image(s)");
+    return spans;
+}
+
+bool OgaEngine::ImageAfter(std::size_t position) const {
+    return !images_.empty() && images_.back().start + images_.back().length > position;
+}
+
 std::pair<OgaEngine::Reuse, std::size_t> OgaEngine::Append() {
+    if (!images_.empty() && !vision_warm_) WarmUpVision();
     const Reuse reuse = Resume();
     Live& run = *live_;
     const std::size_t from = run.ran.size();
     // Equal lengths: the generator already ran the last token, so its logits are current.
     if (from == logical_.size()) return {reuse, from};
-    AppendTokens(run.generator.get(), logical_.data() + from, logical_.size() - from);
+    if (from == 0 && !images_.empty()) {
+        std::vector<const OgaImage*> images;
+        for (const ImageSpan& span : images_) images.push_back(span.image.get());
+        SetInputs(run.generator.get(), logical_, images);
+    } else {
+        AppendTokens(run.generator.get(), logical_.data() + from, logical_.size() - from);
+    }
     const auto rest = logical_.begin() + static_cast<std::ptrdiff_t>(from);
     run.ran.insert(run.ran.end(), rest, logical_.end());
     return {reuse, from};
 }
 
 OgaEngine::Reuse OgaEngine::Resume() {
-    if (live_ && logical_.size() <= std::min(live_->capacity, max_length_) &&
-        live_->ran.size() <= logical_.size() &&
-        std::equal(live_->ran.begin(), live_->ran.end(), logical_.begin()))
+    if (!live_ || logical_.size() > std::min(live_->capacity, max_length_)) return Rebuild();
+    Live& run = *live_;
+    // OGA takes images only in a generator's first call.
+    if (run.ran.size() <= logical_.size() &&
+        std::equal(run.ran.begin(), run.ran.end(), logical_.begin()) && !ImageAfter(run.ran.size()))
         return Reuse::kSameTokens;
+    // A rewind has to leave at least one token to run, or the logits are stale.
+    if (run.snapshot && *run.snapshot <= run.ran.size() && *run.snapshot < logical_.size() &&
+        std::equal(run.ran.begin(), run.ran.begin() + static_cast<std::ptrdiff_t>(*run.snapshot),
+                   logical_.begin()) &&
+        !ImageAfter(*run.snapshot)) {
+        try {
+            api_->Check(api_->functions().generator_rewind_to(run.generator.get(), *run.snapshot),
+                        "OgaGenerator_RewindTo");
+        } catch (const OgaError& e) {
+            header_print("WARNING", display_name_ << ": " << e.what() << "; replaying instead");
+            return Rebuild();
+        }
+        run.ran.resize(*run.snapshot);
+        return Reuse::kRewound;
+    }
     return Rebuild();
 }
 
 OgaEngine::Reuse OgaEngine::Rebuild() {
     live_.reset();
-    live_.emplace(Live{NewGenerator(max_length_), max_length_, {}});
+    live_.emplace(Live{NewGenerator(max_length_), max_length_, {}, std::nullopt});
     return Reuse::kRebuilt;
+}
+
+void OgaEngine::SetInputs(OgaGenerator* generator, const std::vector<int>& ids,
+                          const std::vector<const OgaImage*>& images) const {
+    const OgaFunctions& f = api_->functions();
+    const std::int64_t merged = vision_->spatial_merge_size * vision_->spatial_merge_size;
+    std::int64_t patches = 0;
+    std::vector<std::int64_t> grids;
+    std::vector<std::int64_t> tokens;
+    for (const OgaImage* image : images) {
+        const std::int64_t grid = image->grid_t * image->grid_h * image->grid_w;
+        patches += grid;
+        grids.insert(grids.end(), {image->grid_t, image->grid_h, image->grid_w});
+        tokens.push_back(grid / merged);
+    }
+    OgaNamedTensors* raw_named = nullptr;
+    api_->Check(f.create_named_tensors(&raw_named), "OgaCreateNamedTensors");
+    OgaApi::Owned<OgaNamedTensors> named(raw_named, {f.destroy_named_tensors});
+    // The named tensors hold their own reference, and so does the generator once it has them.
+    const auto set = [&](const char* name, const OgaApi::Owned<OgaTensor>& tensor) {
+        api_->Check(f.named_tensors_set(named.get(), name, tensor.get()),
+                    std::string("OgaNamedTensorsSet(") + name + ")");
+    };
+    const auto count = static_cast<std::int64_t>(images.size());
+    set("input_ids", NewTensor({1, static_cast<std::int64_t>(ids.size())}, OgaElementType_int32,
+                               ids.data(), ids.size() * sizeof(int)));
+    const OgaApi::Owned<OgaTensor> pixels =
+        NewTensor({patches, vision_->patch_values}, OgaElementType_float16, nullptr, 0);
+    void* data = nullptr;
+    api_->Check(f.tensor_get_data(pixels.get(), &data), "OgaTensorGetData(pixel_values)");
+    auto* to = static_cast<std::uint16_t*>(data);
+    for (const OgaImage* image : images) to = std::copy(image->pixels.begin(), image->pixels.end(), to);
+    set("pixel_values", pixels);
+    set("image_grid_thw", NewTensor({count, 3}, OgaElementType_int64, grids.data(),
+                                    grids.size() * sizeof(std::int64_t)));
+    set("num_image_tokens", NewTensor({count}, OgaElementType_int64, tokens.data(),
+                                      tokens.size() * sizeof(std::int64_t)));
+    api_->Check(f.generator_set_inputs(generator, named.get()), "OgaGenerator_SetInputs");
+}
+
+void OgaEngine::WarmUpVision() {
+    const OgaVisionConfig& config = *vision_;
+    auto side = static_cast<std::int64_t>(std::sqrt(static_cast<double>(config.max_patches)));
+    while (side * side > config.max_patches) --side;
+    side -= side % config.spatial_merge_size;
+    OgaImage image;
+    image.grid_h = side;
+    image.grid_w = side;
+    image.pixels.assign(static_cast<std::size_t>(side * side * config.patch_values), 0);
+    std::vector<int> ids(static_cast<std::size_t>(
+                             1 + side * side / (config.spatial_merge_size * config.spatial_merge_size)),
+                         config.image_token_id);
+    ids.front() = config.vision_start_token_id;
+    const auto start = std::chrono::steady_clock::now();
+    const OgaApi::Owned<OgaGenerator> generator = NewGenerator(static_cast<std::uint32_t>(ids.size()));
+    SetInputs(generator.get(), ids, {&image});
+    Logits(generator.get());
+    vision_warm_ = true;
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - start).count();
+    header_print("FLM", "OGA vision: warmed up with a " << side << "x" << side << "-patch image in "
+                                                        << ms << " ms");
+}
+
+OgaApi::Owned<OgaTensor> OgaEngine::NewTensor(const std::vector<std::int64_t>& shape,
+                                              OgaElementType type, const void* data,
+                                              std::size_t bytes) const {
+    const OgaFunctions& f = api_->functions();
+    OgaTensor* raw_tensor = nullptr;
+    api_->Check(f.create_tensor_from_buffer(nullptr, shape.data(), shape.size(), type, &raw_tensor),
+                "OgaCreateTensorFromBuffer");
+    OgaApi::Owned<OgaTensor> tensor(raw_tensor, {f.destroy_tensor});
+    if (data && bytes) {
+        void* to = nullptr;
+        api_->Check(f.tensor_get_data(tensor.get(), &to), "OgaTensorGetData");
+        std::memcpy(to, data, bytes);
+    }
+    return tensor;
 }
 
 OgaApi::Owned<OgaGenerator> OgaEngine::NewGenerator(std::uint32_t max_length) const {

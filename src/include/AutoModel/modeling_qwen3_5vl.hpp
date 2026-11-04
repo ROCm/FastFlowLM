@@ -20,6 +20,22 @@
 #include <fstream>
 #include <iostream>
 
+/// \brief how the vision model wants its images preprocessed
+/// \note From the NPU engine's config, or from the OGA package's
+///       processor_config.json. All zero when the engine runs no images.
+struct qwen3_5vl_vision_geometry_t {
+    unsigned patch_size = 0;
+    unsigned merge_size = 0;
+    unsigned temporal_patch_size = 0;
+    unsigned min_pixels = 0;
+    unsigned max_pixels = 0;
+    float rescale_factor = 0.0f;
+    float image_mean = 0.0f;
+    float image_std = 0.0f;
+
+    bool valid() const { return patch_size && merge_size && temporal_patch_size && max_pixels; }
+};
+
 /************              Qwen3VL_4b            **************/
 class Qwen3_5VL : public AutoModel {
 private:
@@ -46,10 +62,25 @@ private:
     int min_pixels,
     int max_pixels);
     
-    void preprocess_image(qwen3_5vl_image_t& image,  std::vector<bf16> &pixel_values);
+    /// \param max_pixels the most pixels the resized image may have
+    void preprocess_image(qwen3_5vl_image_t& image,  std::vector<bf16> &pixel_values, unsigned max_pixels);
 
     /// \brief hand the loaded engine to the prefix cache (when it is the XRT qwen3_5vl one that has slots)
     void _attach_prefix_cache();
+
+    /// \brief read the loaded engine's image preprocessing into vision_geometry
+    void _load_vision_geometry();
+
+    /// \brief continue the history the engine ran instead of restoring the checkpoint
+    /// \note The rendered prompt carries the last reply as the client sent it
+    ///       back. When that is the reply the engine generated, the prompt is
+    ///       rewritten to the engine's history (its reasoning included) plus what
+    ///       follows the reply, so nothing before it runs again.
+    /// \return whether `tokens` now continues token_history
+    bool _continue_verbatim(std::vector<int>& tokens, std::optional<int> requested_max_new_tokens);
+
+protected:
+    qwen3_5vl_vision_geometry_t vision_geometry;
 
 public:
     Qwen3_5VL(flm_rt::device* npu_device_inst);

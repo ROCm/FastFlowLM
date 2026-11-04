@@ -49,11 +49,6 @@ constexpr std::array<DefaultFolder, 2> kDefaultFolders{{
     {L"ProgramFiles", "%ProgramFiles%"},
 }};
 
-bool AtLeast(FileVersion version, FileVersion minimum) {
-    return std::tie(version.major, version.minor, version.build, version.revision) >=
-           std::tie(minimum.major, minimum.minor, minimum.build, minimum.revision);
-}
-
 std::filesystem::path EnvironmentPath(const wchar_t* name) {
     const DWORD needed = GetEnvironmentVariableW(name, nullptr, 0);
     if (needed == 0) return {};
@@ -175,6 +170,11 @@ std::shared_ptr<const OgaApi> LoadHipEp() {
 }
 }  // namespace
 
+bool AtLeast(FileVersion version, FileVersion minimum) {
+    return std::tie(version.major, version.minor, version.build, version.revision) >=
+           std::tie(minimum.major, minimum.minor, minimum.build, minimum.revision);
+}
+
 std::string VersionText(FileVersion version) {
     return std::to_string(version.major) + "." + std::to_string(version.minor) + "." +
            std::to_string(version.build);
@@ -289,6 +289,10 @@ OgaApi::OgaApi(Resolver resolver, Package package) : package_(std::move(package)
     }
     FLM_OGA_FUNCTIONS(FLM_RESOLVE_OGA_FUNCTION)
 #undef FLM_RESOLVE_OGA_FUNCTION
+#define FLM_RESOLVE_OPTIONAL_OGA_FUNCTION(member, symbol) \
+    functions_.member = reinterpret_cast<decltype(functions_.member)>(resolver(#symbol));
+    FLM_OGA_OPTIONAL_FUNCTIONS(FLM_RESOLVE_OPTIONAL_OGA_FUNCTION)
+#undef FLM_RESOLVE_OPTIONAL_OGA_FUNCTION
 }
 
 std::shared_ptr<const OgaApi> OgaApi::ResolveForTest(Resolver resolver, Package package) {

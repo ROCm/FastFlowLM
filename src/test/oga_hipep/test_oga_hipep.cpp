@@ -42,11 +42,16 @@ struct OgaGenerator {
     /// \brief the tokens the model state has seen, which the logits describe
     std::vector<std::int32_t> tokens;
     double max_length = 0;
+    /// \brief the length of the last OgaGenerator_SnapshotState
+    std::optional<std::size_t> snapshot;
 };
 struct OgaTensor {
     OgaElementType type = OgaElementType_float32;
     std::vector<std::int64_t> shape;
     std::vector<std::byte> data;
+};
+struct OgaNamedTensors {
+    std::map<std::string, OgaTensor> tensors;
 };
 namespace {
 
@@ -54,15 +59,33 @@ constexpr std::uint32_t kVocab = 64;
 constexpr int kMergedToken = 20;
 constexpr int kSplitTokenOne = 21;
 constexpr int kSplitTokenTwo = 22;
+constexpr int kImageToken = 40;
+constexpr int kVisionStart = 41;
+constexpr std::int64_t kPatchValues = 4;
 
 /// \brief what the fake OGA saw and how it answers next
 struct FakeOga {
+    /// \brief what one OgaGenerator_SetInputs call was given
+    struct Inputs {
+        std::vector<std::int32_t> ids;
+        std::vector<std::int64_t> pixel_shape;
+        std::vector<std::uint16_t> pixels;
+        std::vector<std::int64_t> grids;
+        std::vector<std::int64_t> image_tokens;
+    };
+
     int generators_created = 0;
     int generators_live = 0;
     int results_destroyed = 0;
     double last_max_length = 0;
     std::vector<std::vector<std::int32_t>> appends;
     std::optional<std::string> fail_next_append;
+    std::vector<Inputs> set_inputs;
+    int snapshots = 0;
+    std::optional<std::string> fail_next_snapshot;
+    /// \brief the length of each OgaGenerator_RewindTo call
+    std::vector<std::size_t> rewinds;
+    std::optional<std::string> fail_next_rewind;
     OgaElementType logits_type = OgaElementType_float32;
     std::int64_t logits_rows = 0;  ///< 0: rank 2 [1, vocab]; n: rank 3 [1, n, vocab]
     std::int64_t logits_width = kVocab;
@@ -214,6 +237,101 @@ OgaResult* OGA_API_CALL FakeTensorGetData(OgaTensor* tensor, void** out) {
     return nullptr;
 }
 void OGA_API_CALL FakeDestroyTensor(OgaTensor* tensor) { delete tensor; }
+
+std::size_t ElementSize(OgaElementType type) {
+    switch (type) {
+    case OgaElementType_int32:
+    case OgaElementType_float32: return 4;
+    case OgaElementType_int64: return 8;
+    case OgaElementType_float16:
+    case OgaElementType_bfloat16: return 2;
+    default: return 0;
+    }
+}
+OgaResult* OGA_API_CALL FakeCreateTensorFromBuffer(void* data, const std::int64_t* shape, size_t rank,
+                                                   OgaElementType type, OgaTensor** out) {
+    // The engine has OGA own every tensor it hands over.
+    if (data) return Error("the fake allocates every tensor itself");
+    if (!ElementSize(type)) return Error("unexpected element type");
+    auto* tensor = new OgaTensor;
+    tensor->type = type;
+    tensor->shape.assign(shape, shape + rank);
+    std::size_t count = 1;
+    for (std::size_t i = 0; i < rank; ++i) count *= static_cast<std::size_t>(shape[i]);
+    tensor->data.resize(count * ElementSize(type));
+    *out = tensor;
+    return nullptr;
+}
+OgaResult* OGA_API_CALL FakeCreateNamedTensors(OgaNamedTensors** out) {
+    *out = new OgaNamedTensors;
+    return nullptr;
+}
+OgaResult* OGA_API_CALL FakeNamedTensorsSet(OgaNamedTensors* named, const char* name, OgaTensor* tensor) {
+    named->tensors[name] = *tensor;
+    return nullptr;
+}
+void OGA_API_CALL FakeDestroyNamedTensors(OgaNamedTensors* named) { delete named; }
+
+template <typename T>
+std::vector<T> Values(const OgaTensor& tensor) {
+    std::vector<T> values(tensor.data.size() / sizeof(T));
+    std::memcpy(values.data(), tensor.data.data(), values.size() * sizeof(T));
+    return values;
+}
+OgaResult* OGA_API_CALL FakeSetInputs(OgaGenerator* generator, const OgaNamedTensors* named) {
+    // As in OGA, only a generator's first call can carry images.
+    if (!generator->tokens.empty()) return Error("SetInputs on a generator that has run tokens");
+    const auto& t = named->tensors;
+    for (const char* name : {"input_ids", "pixel_values", "image_grid_thw", "num_image_tokens"})
+        if (!t.count(name)) return Error(std::string("no ") + name);
+    const OgaTensor& ids = t.at("input_ids");
+    const OgaTensor& pixels = t.at("pixel_values");
+    const OgaTensor& grids = t.at("image_grid_thw");
+    const OgaTensor& counts = t.at("num_image_tokens");
+    if (ids.type != OgaElementType_int32 || ids.shape.size() != 2 || ids.shape[0] != 1)
+        return Error("input_ids is not int32 [1, n]");
+    if (pixels.type != OgaElementType_float16 || pixels.shape.size() != 2)
+        return Error("pixel_values is not float16 [patches, values]");
+    if (grids.type != OgaElementType_int64 || grids.shape.size() != 2 || grids.shape[1] != 3)
+        return Error("image_grid_thw is not int64 [images, 3]");
+    if (counts.type != OgaElementType_int64 || counts.shape.size() != 1 || counts.shape[0] != grids.shape[0])
+        return Error("num_image_tokens is not int64 [images]");
+    FakeOga::Inputs inputs;
+    inputs.ids = Values<std::int32_t>(ids);
+    inputs.pixel_shape = pixels.shape;
+    inputs.pixels = Values<std::uint16_t>(pixels);
+    inputs.grids = Values<std::int64_t>(grids);
+    inputs.image_tokens = Values<std::int64_t>(counts);
+    generator->tokens = inputs.ids;
+    g_fake.set_inputs.push_back(std::move(inputs));
+    if (generator->tokens.size() > static_cast<std::size_t>(generator->max_length))
+        return Error("past max_length");
+    return nullptr;
+}
+OgaResult* OGA_API_CALL FakeSnapshotState(OgaGenerator* generator) {
+    if (g_fake.fail_next_snapshot) {
+        auto text = *g_fake.fail_next_snapshot;
+        g_fake.fail_next_snapshot.reset();
+        return Error(text);
+    }
+    ++g_fake.snapshots;
+    generator->snapshot = generator->tokens.size();
+    return nullptr;
+}
+OgaResult* OGA_API_CALL FakeRewindTo(OgaGenerator* generator, size_t length) {
+    g_fake.rewinds.push_back(length);
+    if (g_fake.fail_next_rewind) {
+        auto text = *g_fake.fail_next_rewind;
+        g_fake.fail_next_rewind.reset();
+        return Error(text);
+    }
+    // OGA 0.19 can bring a hybrid model's recurrent state back only from its snapshot.
+    if (generator->snapshot != length || length > generator->tokens.size())
+        return Error("no snapshot at length " + std::to_string(length));
+    generator->tokens.resize(length);
+    return nullptr;
+}
+
 std::map<std::string, void*> FakeSymbols() {
     return {
         {"OgaResultGetError", reinterpret_cast<void*>(&FakeResultGetError)},
@@ -240,6 +358,13 @@ std::map<std::string, void*> FakeSymbols() {
         {"OgaTensorGetShape", reinterpret_cast<void*>(&FakeTensorGetShape)},
         {"OgaTensorGetData", reinterpret_cast<void*>(&FakeTensorGetData)},
         {"OgaDestroyTensor", reinterpret_cast<void*>(&FakeDestroyTensor)},
+        {"OgaCreateTensorFromBuffer", reinterpret_cast<void*>(&FakeCreateTensorFromBuffer)},
+        {"OgaCreateNamedTensors", reinterpret_cast<void*>(&FakeCreateNamedTensors)},
+        {"OgaNamedTensorsSet", reinterpret_cast<void*>(&FakeNamedTensorsSet)},
+        {"OgaDestroyNamedTensors", reinterpret_cast<void*>(&FakeDestroyNamedTensors)},
+        {"OgaGenerator_SetInputs", reinterpret_cast<void*>(&FakeSetInputs)},
+        {"OgaGenerator_SnapshotState", reinterpret_cast<void*>(&FakeSnapshotState)},
+        {"OgaGenerator_RewindTo", reinterpret_cast<void*>(&FakeRewindTo)},
     };
 }
 
@@ -261,10 +386,58 @@ std::shared_ptr<const flm::oga::OgaApi> FakeApiIn(std::filesystem::path bin) {
 /// \brief an engine over `api`, with a model that is a fresh fake
 std::unique_ptr<flm::oga::OgaEngine> ConstructOn(std::shared_ptr<const flm::oga::OgaApi> api,
                                                  std::uint32_t max_length = 32,
-                                                 std::uint32_t context_limit = 64) {
+                                                 std::uint32_t context_limit = 64,
+                                                 std::optional<flm::oga::OgaVisionConfig> vision = std::nullopt) {
     flm::oga::OgaApi::Owned<OgaModel> model(new OgaModel, {&FakeDestroyModel});
     return std::make_unique<flm::oga::OgaEngine>(std::move(api), std::move(model), "Test", kVocab,
-                                                 context_limit, max_length);
+                                                 context_limit, max_length, std::move(vision));
+}
+
+/// \brief a fresh fake and an engine over an OGA of `version`
+std::unique_ptr<flm::oga::OgaEngine> MakeEngineOn(flm::oga::FileVersion version,
+                                                  std::map<std::string, void*> symbols = FakeSymbols()) {
+    g_fake = FakeOga{};
+    return ConstructOn(FakeApi(std::move(symbols), {"test", {}, version}));
+}
+
+/// \brief 2x2 patches to an image token, 4 values to a patch, 64 patches to a prompt
+flm::oga::OgaVisionConfig VisionConfig() {
+    flm::oga::OgaVisionConfig config;
+    config.image_token_id = kImageToken;
+    config.vision_start_token_id = kVisionStart;
+    config.spatial_merge_size = 2;
+    config.patch_values = kPatchValues;
+    config.max_patches = 64;
+    return config;
+}
+
+/// \brief a fresh fake and an engine over it that runs images
+std::unique_ptr<flm::oga::OgaEngine> MakeVisionEngine(flm::oga::FileVersion version = {0, 17, 0, 0}) {
+    g_fake = FakeOga{};
+    return ConstructOn(FakeApi(FakeSymbols(), {"test", {}, version}), 64, 128, VisionConfig());
+}
+
+/// \brief an image of `h` x `w` patches, every value `fill`
+flm::oga::OgaImage Image(std::int64_t h, std::int64_t w, std::uint16_t fill = 0x3c00) {
+    flm::oga::OgaImage image;
+    image.grid_h = h;
+    image.grid_w = w;
+    image.pixels.assign(static_cast<std::size_t>(h * w * kPatchValues), fill);
+    return image;
+}
+
+/// \brief `before`, then the vision start and image tokens of `image`, then `after`
+std::vector<int> WithImage(std::vector<int> before, const flm::oga::OgaImage& image,
+                           const std::vector<int>& after) {
+    before.push_back(kVisionStart);
+    before.insert(before.end(), static_cast<std::size_t>(image.grid_h * image.grid_w / 4), kImageToken);
+    before.insert(before.end(), after.begin(), after.end());
+    return before;
+}
+
+std::vector<int> Concat(std::vector<int> first, const std::vector<int>& second) {
+    first.insert(first.end(), second.begin(), second.end());
+    return first;
 }
 
 /// \brief an engine over the fake as `g_fake` is set up now
@@ -288,6 +461,14 @@ void RequireState(const buffer<bf16>& logits, float count, float last, float sum
     TEST_REQUIRE(At(logits, 0) == count);
     TEST_REQUIRE(At(logits, 1) == last);
     TEST_REQUIRE(At(logits, 2) == sum);
+}
+
+/// \brief the logits describe a generator that ran exactly `ids`
+void RequireRan(const buffer<bf16>& logits, const std::vector<int>& ids) {
+    float sum = 0;
+    for (const int id : ids) sum += static_cast<float>(id);
+    RequireState(logits, static_cast<float>(ids.size()), static_cast<float>(ids.back()),
+                 static_cast<float>(bf16(sum)));
 }
 
 using Tokens = std::vector<std::int32_t>;
@@ -491,6 +672,355 @@ void TestAMissingSymbolNamesIt() {
     symbols.erase("OgaGenerator_GetLogits");
     RequireContains(RequireThrows<std::runtime_error>([&] { FakeApi(symbols); }),
                     "missing OGA symbol: OgaGenerator_GetLogits");
+}
+
+// ---- what one request runs, and what a later one runs again -----------------
+
+void TestChunksAndDecodeStepsEachRunOnlyTheirOwnTokens() {
+    auto engine = MakeEngine(64);
+    std::vector<int> first{1, 2, 3, 4};
+    std::vector<int> second{5, 6, 7};
+    std::vector<int> third{8, 9};
+    engine->prefill(first);
+    engine->prefill(second);
+    RequireState(engine->prefill(third), 9, 9, 45);
+    engine->forward(10);
+    RequireState(engine->forward(11), 11, 11, 66);
+    TEST_REQUIRE(g_fake.generators_created == 1);
+    TEST_REQUIRE(g_fake.appends == (std::vector<Tokens>{{1, 2, 3, 4}, {5, 6, 7}, {8, 9}, {10}, {11}}));
+    TEST_REQUIRE(engine->replayed_tokens() == 0);
+}
+
+void TestOga017ReplaysTheHistoryAfterARestore() {
+    g_fake = FakeOga{};
+    auto engine = ConstructOn(FakeApiIn("C:\\hip-ep\\0.5.2"));
+    TEST_REQUIRE(!engine->rewinds());
+    std::vector<int> prompt{1, 2, 3};
+    engine->prefill(prompt);
+    engine->checkpoint();
+    engine->forward(4);
+    engine->restore();
+    std::vector<int> turn{5};
+    RequireState(engine->prefill(turn), 4, 5, 11);
+    TEST_REQUIRE(g_fake.snapshots == 0);
+    TEST_REQUIRE(g_fake.rewinds.empty());
+    TEST_REQUIRE(g_fake.generators_created == 2);
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{1, 2, 3, 5}));
+    TEST_REQUIRE(engine->replayed_tokens() == 3);
+}
+
+void TestOga019RewindsToTheCheckpoint() {
+    auto engine = MakeEngineOn({0, 19, 0, 0});
+    TEST_REQUIRE(engine->rewinds());
+    std::vector<int> prompt{1, 2, 3};
+    engine->prefill(prompt);
+    TEST_REQUIRE(engine->checkpoint() == 3);
+    TEST_REQUIRE(g_fake.snapshots == 1);
+    engine->forward(4);
+    engine->forward(5);
+    engine->restore();
+    std::vector<int> turn{6};
+    RequireState(engine->prefill(turn), 4, 6, 12);
+    TEST_REQUIRE(g_fake.rewinds == (std::vector<std::size_t>{3}));
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{6}));
+    TEST_REQUIRE(g_fake.generators_created == 1);
+    TEST_REQUIRE(engine->replayed_tokens() == 0);
+
+    // the snapshot outlives the rewind, so the same checkpoint can be left again
+    engine->forward(7);
+    engine->restore();
+    std::vector<int> again{8};
+    RequireState(engine->prefill(again), 4, 8, 14);
+    TEST_REQUIRE(g_fake.rewinds == (std::vector<std::size_t>{3, 3}));
+    TEST_REQUIRE(g_fake.generators_created == 1);
+    TEST_REQUIRE(engine->replayed_tokens() == 0);
+}
+
+void TestARewindNeedsTheHistoryToKeepTheCheckpoint() {
+    auto engine = MakeEngineOn({0, 19, 0, 0});
+    std::vector<int> prompt{1, 2, 3};
+    engine->prefill(prompt);
+    engine->checkpoint();
+    engine->forward(4);
+    // a history that leaves the checkpoint's tokens replays
+    engine->clear_context();
+    std::vector<int> other{1, 9, 3, 4};
+    RequireState(engine->prefill(other), 4, 4, 17);
+    TEST_REQUIRE(g_fake.rewinds.empty());
+    TEST_REQUIRE(g_fake.generators_created == 2);
+    TEST_REQUIRE(engine->replayed_tokens() == 0);
+
+    // so does one whose checkpoint could not be snapshotted
+    g_fake.fail_next_snapshot = "out of memory";
+    TEST_REQUIRE(engine->checkpoint() == 4);
+    engine->forward(5);
+    engine->restore();
+    std::vector<int> turn{6};
+    RequireState(engine->prefill(turn), 5, 6, 23);
+    TEST_REQUIRE(g_fake.rewinds.empty());
+    TEST_REQUIRE(g_fake.generators_created == 3);
+    TEST_REQUIRE(engine->replayed_tokens() == 4);
+}
+
+void TestARefusedRewindReplaysInstead() {
+    auto engine = MakeEngineOn({0, 19, 0, 0});
+    std::vector<int> prompt{1, 2, 3};
+    engine->prefill(prompt);
+    engine->checkpoint();
+    engine->forward(4);
+    engine->restore();
+    g_fake.fail_next_rewind = "state lost";
+    std::vector<int> turn{5};
+    RequireState(engine->prefill(turn), 4, 5, 11);
+    TEST_REQUIRE(g_fake.rewinds == (std::vector<std::size_t>{3}));
+    TEST_REQUIRE(g_fake.generators_created == 2);
+    TEST_REQUIRE(g_fake.generators_live == 1);
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{1, 2, 3, 5}));
+    TEST_REQUIRE(engine->replayed_tokens() == 3);
+}
+
+void TestTheRewindEntryPointsAreOptional() {
+    auto symbols = FakeSymbols();
+    symbols.erase("OgaGenerator_SnapshotState");
+    symbols.erase("OgaGenerator_RewindTo");
+    const auto api = FakeApi(symbols, {"test", {}, {0, 19, 0, 0}});
+    TEST_REQUIRE(api->functions().generator_snapshot_state == nullptr);
+    TEST_REQUIRE(api->functions().generator_rewind_to == nullptr);
+    g_fake = FakeOga{};
+    auto engine = ConstructOn(api);
+    TEST_REQUIRE(!engine->rewinds());
+    std::vector<int> prompt{1, 2};
+    engine->prefill(prompt);
+    engine->checkpoint();
+    engine->forward(3);
+    engine->restore();
+    std::vector<int> turn{4};
+    RequireState(engine->prefill(turn), 3, 4, 7);
+    TEST_REQUIRE(g_fake.snapshots == 0);
+    TEST_REQUIRE(g_fake.generators_created == 2);
+}
+
+void TestAnImagePromptRunsInOneSetInputsAfterAWarmUp() {
+    auto engine = MakeVisionEngine();
+    const auto image = Image(4, 4);
+    flm::oga::OgaVisionInput vision{{image}};
+    std::vector<int> prompt = WithImage({1}, image, {2});
+    RequireRan(engine->prefill(prompt, &vision), prompt);
+    TEST_REQUIRE(g_fake.set_inputs.size() == 2);
+    // the warm-up: blank pixels, at the most patches a prompt may have
+    const auto& warm = g_fake.set_inputs[0];
+    TEST_REQUIRE(warm.ids.size() == 17);
+    TEST_REQUIRE(warm.ids.front() == kVisionStart);
+    TEST_REQUIRE(std::count(warm.ids.begin(), warm.ids.end(), kImageToken) == 16);
+    TEST_REQUIRE(warm.pixel_shape == (std::vector<std::int64_t>{64, kPatchValues}));
+    TEST_REQUIRE(std::all_of(warm.pixels.begin(), warm.pixels.end(), [](std::uint16_t v) { return v == 0; }));
+    TEST_REQUIRE(warm.grids == (std::vector<std::int64_t>{1, 8, 8}));
+    TEST_REQUIRE(warm.image_tokens == (std::vector<std::int64_t>{16}));
+    const auto& run = g_fake.set_inputs[1];
+    TEST_REQUIRE(run.ids == prompt);
+    TEST_REQUIRE(run.pixel_shape == (std::vector<std::int64_t>{16, kPatchValues}));
+    TEST_REQUIRE(run.pixels == image.pixels);
+    TEST_REQUIRE(run.grids == (std::vector<std::int64_t>{1, 4, 4}));
+    TEST_REQUIRE(run.image_tokens == (std::vector<std::int64_t>{4}));
+    TEST_REQUIRE(g_fake.appends.empty());
+    TEST_REQUIRE(g_fake.generators_created == 2);
+    TEST_REQUIRE(g_fake.generators_live == 1);
+
+    // what follows the image continues the same generator
+    std::vector<int> more{3, 4};
+    RequireRan(engine->prefill(more), Concat(prompt, more));
+    RequireRan(engine->forward(5), Concat(prompt, {3, 4, 5}));
+    TEST_REQUIRE(g_fake.appends == (std::vector<Tokens>{{3, 4}, {5}}));
+    TEST_REQUIRE(g_fake.generators_created == 2);
+    TEST_REQUIRE(engine->replayed_tokens() == 0);
+}
+
+void TestAnImageRunCanStartAChunk() {
+    auto engine = MakeVisionEngine();
+    const auto image = Image(2, 2);
+    flm::oga::OgaVisionInput vision{{image}};
+    std::vector<int> head{1, kVisionStart};
+    std::vector<int> rest{kImageToken, 2};
+    engine->prefill(head);
+    RequireRan(engine->prefill(rest, &vision), Concat(head, rest));
+    TEST_REQUIRE(g_fake.set_inputs.back().ids == Concat(head, rest));
+    TEST_REQUIRE(engine->replayed_tokens() == 2);
+}
+
+void TestANewImageReplaysTheHistoryWithEveryImage() {
+    auto engine = MakeVisionEngine();
+    const auto first = Image(4, 4, 0x3c00);
+    const auto second = Image(2, 4, 0x4000);
+    flm::oga::OgaVisionInput one{{first}};
+    flm::oga::OgaVisionInput two{{second}};
+    std::vector<int> turn1 = WithImage({1}, first, {2});
+    engine->prefill(turn1, &one);
+    engine->forward(3);
+    std::vector<int> turn2 = WithImage({4}, second, {5});
+    const auto all = Concat(Concat(turn1, {3}), turn2);
+    RequireRan(engine->prefill(turn2, &two), all);
+    // the warm-up, the first turn and the replay: the vision model warms up once
+    TEST_REQUIRE(g_fake.set_inputs.size() == 3);
+    const auto& replay = g_fake.set_inputs.back();
+    TEST_REQUIRE(replay.ids == all);
+    TEST_REQUIRE(replay.grids == (std::vector<std::int64_t>{1, 4, 4, 1, 2, 4}));
+    TEST_REQUIRE(replay.image_tokens == (std::vector<std::int64_t>{4, 2}));
+    TEST_REQUIRE(replay.pixel_shape == (std::vector<std::int64_t>{24, kPatchValues}));
+    auto pixels = first.pixels;
+    pixels.insert(pixels.end(), second.pixels.begin(), second.pixels.end());
+    TEST_REQUIRE(replay.pixels == pixels);
+    TEST_REQUIRE(g_fake.generators_live == 1);
+    TEST_REQUIRE(engine->replayed_tokens() == turn1.size() + 1);
+}
+
+void TestARestoredCheckpointBringsBackItsImages() {
+    auto engine = MakeVisionEngine();
+    const auto image = Image(4, 4);
+    flm::oga::OgaVisionInput vision{{image}};
+    std::vector<int> prompt = WithImage({1}, image, {2});
+    engine->prefill(prompt, &vision);
+    engine->checkpoint();
+    engine->forward(3);
+    engine->forward(4);
+    engine->restore();
+    std::vector<int> turn{5};
+    const auto expected = Concat(prompt, turn);
+    RequireRan(engine->prefill(turn), expected);
+    TEST_REQUIRE(g_fake.set_inputs.size() == 3);
+    TEST_REQUIRE(g_fake.set_inputs.back().ids == expected);
+    TEST_REQUIRE(g_fake.set_inputs.back().pixels == image.pixels);
+    TEST_REQUIRE(engine->replayed_tokens() == prompt.size());
+
+    // a cleared context leaves no image to give a new generator
+    engine->clear_context();
+    std::vector<int> text{1, 2};
+    RequireRan(engine->prefill(text), text);
+    TEST_REQUIRE(g_fake.set_inputs.size() == 3);
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{1, 2}));
+}
+
+void TestOga019DoesNotRewindPastANewImage() {
+    auto engine = MakeVisionEngine({0, 19, 0, 0});
+    std::vector<int> text{1, 2};
+    engine->prefill(text);
+    engine->checkpoint();
+    TEST_REQUIRE(g_fake.snapshots == 1);
+    engine->forward(3);
+    engine->restore();
+    const auto image = Image(2, 2);
+    flm::oga::OgaVisionInput vision{{image}};
+    std::vector<int> turn = WithImage({4}, image, {5});
+    RequireRan(engine->prefill(turn, &vision), Concat(text, turn));
+    TEST_REQUIRE(g_fake.rewinds.empty());
+    TEST_REQUIRE(g_fake.set_inputs.back().ids == Concat(text, turn));
+    TEST_REQUIRE(engine->replayed_tokens() == 2);
+}
+
+void TestImageRunsAndImagesMustAgree() {
+    auto engine = MakeVisionEngine();
+    const auto image = Image(4, 4);
+    flm::oga::OgaVisionInput one{{image}};
+    const std::vector<int> prompt = WithImage({1}, image, {2});
+    const auto fails = [&](std::vector<int> ids, flm::oga::OgaVisionInput* vision) {
+        return RequireThrows<std::invalid_argument>([&] { engine->prefill(ids, vision); });
+    };
+    RequireContains(fails(prompt, nullptr), "more runs of image tokens than its 0 image(s)");
+    RequireContains(fails({1, 2}, &one), "has 0 runs of image tokens for 1 image(s)");
+    RequireContains(fails({1, kImageToken, kImageToken, kImageToken, kImageToken, 2}, &one),
+                    "image 1 does not follow a vision start token");
+    RequireContains(fails(WithImage({1}, Image(2, 4), {2}), &one),
+                    "image 1 has 4 image tokens, but its run in the prompt has 2");
+    flm::oga::OgaVisionInput odd{{Image(3, 4)}};
+    RequireContains(fails(prompt, &odd), "image 1 has an invalid grid");
+    flm::oga::OgaVisionInput thin{{image}};
+    thin.images[0].pixels.pop_back();
+    RequireContains(fails(prompt, &thin), "image 1 has 63 pixel values, not 64");
+    TEST_REQUIRE(g_fake.generators_created == 0);
+    TEST_REQUIRE(engine->get_current_context_length() == 0);
+}
+
+void TestTheImagesOfAPromptShareThePatchBudget() {
+    auto engine = MakeVisionEngine();
+    const auto big = Image(6, 6);
+    flm::oga::OgaVisionInput one{{big}};
+    std::vector<int> turn1 = WithImage({1}, big, {2});
+    engine->prefill(turn1, &one);
+    // the earlier image counts too: a rebuilt generator runs both at once
+    std::vector<int> turn2 = WithImage({3}, big, {4});
+    RequireContains(RequireThrows<std::invalid_argument>([&] { engine->prefill(turn2, &one); }),
+                    "prompt images have 72 patches, more than the 64");
+    TEST_REQUIRE(engine->get_current_context_length() == static_cast<int>(turn1.size()));
+    TEST_REQUIRE(g_fake.set_inputs.size() == 2);
+
+    engine->clear_context();
+    flm::oga::OgaVisionInput two{{Image(4, 4), Image(6, 6)}};
+    std::vector<int> both = WithImage(WithImage({1}, two.images[0], {2}), two.images[1], {3});
+    RequireRan(engine->prefill(both, &two), both);
+    TEST_REQUIRE(g_fake.set_inputs.back().image_tokens == (std::vector<std::int64_t>{4, 9}));
+}
+
+void TestSetContextLengthKeepsWholeImagesOnly() {
+    auto engine = MakeVisionEngine();
+    const auto image = Image(4, 4);
+    flm::oga::OgaVisionInput vision{{image}};
+    std::vector<int> prompt = WithImage({1}, image, {2});
+    engine->prefill(prompt, &vision);
+    RequireContains(RequireThrows<std::invalid_argument>([&] { engine->set_context_length(4); }),
+                    "cannot keep part of an image");
+    TEST_REQUIRE(engine->get_current_context_length() == static_cast<int>(prompt.size()));
+    engine->set_context_length(6);
+    engine->set_context_length(2);
+    std::vector<int> text{3};
+    RequireRan(engine->prefill(text), {1, kVisionStart, 3});
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{1, kVisionStart, 3}));
+}
+
+void TestAPackageWithoutVisionTakesNoImages() {
+    auto engine = MakeEngine();
+    const auto image = Image(2, 2);
+    flm::oga::OgaVisionInput vision{{image}};
+    std::vector<int> prompt = WithImage({1}, image, {2});
+    RequireContains(RequireThrows<std::invalid_argument>([&] { engine->prefill(prompt, &vision); }),
+                    "does not run a vision payload");
+    // without a vision model the image token is text like any other
+    RequireRan(engine->prefill(prompt), prompt);
+    TEST_REQUIRE(g_fake.set_inputs.empty());
+}
+
+void TestAnInvalidVisionConfigurationIsRefused() {
+    g_fake = FakeOga{};
+    auto config = VisionConfig();
+    config.image_token_id = static_cast<int>(kVocab);
+    RequireContains(RequireThrows<std::invalid_argument>([&] { ConstructOn(FakeApi(), 32, 64, config); }),
+                    "vision configuration is invalid");
+    config = VisionConfig();
+    config.vision_start_token_id = config.image_token_id;
+    RequireThrows<std::invalid_argument>([&] { ConstructOn(FakeApi(), 32, 64, config); });
+    config = VisionConfig();
+    config.max_patches = 3;
+    RequireThrows<std::invalid_argument>([&] { ConstructOn(FakeApi(), 32, 64, config); });
+}
+
+void TestFloatToHalfRoundsToNearestEven() {
+    using flm::oga::FloatToHalf;
+    TEST_REQUIRE(FloatToHalf(1.0f) == 0x3c00);
+    TEST_REQUIRE(FloatToHalf(-2.0f) == 0xc000);
+    TEST_REQUIRE(FloatToHalf(-0.5f) == 0xb800);
+    TEST_REQUIRE(FloatToHalf(0.0f) == 0x0000);
+    TEST_REQUIRE(FloatToHalf(-0.0f) == 0x8000);
+    TEST_REQUIRE(FloatToHalf(65504.0f) == 0x7bff);
+    // halfway between the largest float16 and the next power of two
+    TEST_REQUIRE(FloatToHalf(65520.0f) == 0x7c00);
+    TEST_REQUIRE(FloatToHalf(std::numeric_limits<float>::infinity()) == 0x7c00);
+    const auto nan = FloatToHalf(std::numeric_limits<float>::quiet_NaN());
+    TEST_REQUIRE((nan & 0x7c00) == 0x7c00 && (nan & 0x03ff) != 0);
+    // ties go to the even mantissa
+    TEST_REQUIRE(FloatToHalf(1.0f + 0x1p-11f) == 0x3c00);
+    TEST_REQUIRE(FloatToHalf(1.0f + 3 * 0x1p-11f) == 0x3c02);
+    TEST_REQUIRE(FloatToHalf(0x1p-14f) == 0x0400);
+    TEST_REQUIRE(FloatToHalf(0x1p-24f) == 0x0001);
+    TEST_REQUIRE(FloatToHalf(0x1p-25f) == 0x0000);
+    TEST_REQUIRE(FloatToHalf(3 * 0x1p-25f) == 0x0002);
 }
 
 // ---- OGA lifetime: a new API after the last owner went ----------------------
@@ -1147,14 +1677,19 @@ void TestAutoInstallDoesNotReplaceAnInstallForAnotherVersion() {
 struct PackageDir {
     TempDir dir;
     LM_Config config;
-    explicit PackageDir(std::uint32_t vocab = kVocab, const char* eos_text = "<|im_end|>") {
+    /// \param model_extra more members of genai_config.json's model, each after a comma
+    explicit PackageDir(std::uint32_t vocab = kVocab, const char* eos_text = "<|im_end|>",
+                        const std::string& model_extra = "") {
         Touch(dir.path / "genai_config.json",
               R"({"model":{"type":"test_type","vocab_size":)" + std::to_string(kVocab) +
-                  R"(,"context_length":128,"eos_token_id":[7]}})");
+                  R"(,"context_length":128,"eos_token_id":[7])" + model_extra + "}}");
         Touch(dir.path / "tokenizer_config.json",
               std::string(R"({"bos_token":null,"eos_token":")") + eos_text + R"("})");
         Touch(dir.path / "tokenizer.json", R"({"added_tokens":[{"id":5,"content":"<|im_end|>"}]})");
-        config._json_config = {{"vocab_size", vocab}};
+        // a patch row of in_channels * temporal_patch_size * patch_size^2 = kPatchValues
+        config._json_config = {
+            {"vocab_size", vocab},
+            {"vision_config", {{"patch_size", 1}, {"temporal_patch_size", 2}, {"in_channels", 2}}}};
     }
     flm::backend::BackendContext Context(std::uint32_t length = 64, bool preemption = false) const {
         flm::backend::BackendContext context;
@@ -1182,6 +1717,42 @@ void TestTheBackendRejectsWhatThePackageCannotRun() {
     PackageDir unknown_eos(kVocab, "<|unknown|>");
     RequireContains(RequireThrows<std::runtime_error>([&] { factory(unknown_eos.Context()); }),
                     "tokenizer.json has no id for eos_token <|unknown|>");
+
+    PackageDir unnamed_tokens(kVocab, "<|im_end|>", R"(,"vision":{"spatial_merge_size":2})");
+    RequireContains(RequireThrows<std::runtime_error>([&] { factory(unnamed_tokens.Context()); }),
+                    "has a vision model but does not state image_token_id");
+}
+
+constexpr const char* kVisionModel =
+    R"(,"image_token_id":40,"vision_start_token_id":41,"vision":{"spatial_merge_size":2})";
+
+void TestTheBackendRunsThePackagesImages() {
+    g_fake = FakeOga{};
+    auto api = flm::oga::OgaApi::GetOrCreateWith([] { return FakeApi(); });
+    PackageDir package(kVocab, "<|im_end|>", kVisionModel);
+    auto backend = flm::oga::hipep_factory()(package.Context(64));
+    // OGA 0.17 cannot rewind, so a restored checkpoint replays
+    TEST_REQUIRE(!backend->keeps_state_on_restore());
+    const auto image = Image(2, 2);
+    flm::oga::OgaVisionInput vision{{image}};
+    std::vector<int> prompt = WithImage({1}, image, {2});
+    backend->engine().prefill(prompt, &vision);
+    TEST_REQUIRE(g_fake.set_inputs.size() == 2);
+    // the package's warm-up is the full budget: 90x90 patches
+    TEST_REQUIRE(g_fake.set_inputs[0].grids == (std::vector<std::int64_t>{1, 90, 90}));
+    TEST_REQUIRE(g_fake.set_inputs[0].pixel_shape == (std::vector<std::int64_t>{8100, 4}));
+    TEST_REQUIRE(g_fake.set_inputs[1].ids == prompt);
+    TEST_REQUIRE(g_fake.set_inputs[1].pixel_shape == (std::vector<std::int64_t>{4, 4}));
+    TEST_REQUIRE(backend->replayed_tokens() == 0);
+}
+
+void TestABackendOnOga019KeepsItsStateOnRestore() {
+    g_fake = FakeOga{};
+    auto api = flm::oga::OgaApi::GetOrCreateWith(
+        [] { return FakeApi(FakeSymbols(), {"test", {}, {0, 19, 0, 0}}); });
+    PackageDir package;
+    auto backend = flm::oga::hipep_factory()(package.Context(64));
+    TEST_REQUIRE(backend->keeps_state_on_restore());
 }
 
 void TestTheBackendSaysHowToGetHipep() {
@@ -1248,6 +1819,23 @@ int main(int argc, char** argv) {
     RUN(TestLogitsOfAnotherWidthOrTypeAreRejected);
     RUN(TestCallsTheEngineDoesNotSupportThrow);
     RUN(TestAMissingSymbolNamesIt);
+    RUN(TestChunksAndDecodeStepsEachRunOnlyTheirOwnTokens);
+    RUN(TestOga017ReplaysTheHistoryAfterARestore);
+    RUN(TestOga019RewindsToTheCheckpoint);
+    RUN(TestARewindNeedsTheHistoryToKeepTheCheckpoint);
+    RUN(TestARefusedRewindReplaysInstead);
+    RUN(TestTheRewindEntryPointsAreOptional);
+    RUN(TestAnImagePromptRunsInOneSetInputsAfterAWarmUp);
+    RUN(TestAnImageRunCanStartAChunk);
+    RUN(TestANewImageReplaysTheHistoryWithEveryImage);
+    RUN(TestARestoredCheckpointBringsBackItsImages);
+    RUN(TestOga019DoesNotRewindPastANewImage);
+    RUN(TestImageRunsAndImagesMustAgree);
+    RUN(TestTheImagesOfAPromptShareThePatchBudget);
+    RUN(TestSetContextLengthKeepsWholeImagesOnly);
+    RUN(TestAPackageWithoutVisionTakesNoImages);
+    RUN(TestAnInvalidVisionConfigurationIsRefused);
+    RUN(TestFloatToHalfRoundsToNearestEven);
     RUN(TestAFreshApiAfterFullReleaseWorksAgain);
     RUN(TestTheEpLibraryIsRegisteredUnderTheNameOgaLooksUp);
     RUN(TestARefusedRegistrationNamesTheLibrary);
@@ -1284,6 +1872,8 @@ int main(int argc, char** argv) {
     RUN(TestAutoInstallRepairsAnInstallFromAnotherArchive);
     RUN(TestAutoInstallDoesNotReplaceAnInstallForAnotherVersion);
     RUN(TestTheBackendRejectsWhatThePackageCannotRun);
+    RUN(TestTheBackendRunsThePackagesImages);
+    RUN(TestABackendOnOga019KeepsItsStateOnRestore);
     RUN(TestTheBackendSaysHowToGetHipep);
 #undef RUN
     std::cout << "All oga-hipep tests passed\n";

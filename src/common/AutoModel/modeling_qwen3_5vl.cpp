@@ -8,6 +8,11 @@
 
 #include "AutoModel/modeling_qwen3_5vl.hpp"
 #include "metrices.hpp"
+#include "oga/oga_vision.hpp"
+
+#include <algorithm>
+#include <cctype>
+#include <iterator>
 
 
 /************              Qwen3_5VL family            **************/
@@ -15,6 +20,7 @@ Qwen3_5VL::Qwen3_5VL(flm_rt::device* npu_device_inst) : AutoModel(npu_device_ins
 
 void Qwen3_5VL::load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption, const std::string& backend) {
     this->_shared_load_backend(model_path, model_info, default_context_length, enable_preemption, backend);
+    this->_load_vision_geometry();
     this->setup_tokenizer(model_path);
     this->sampler.reset();
 
@@ -54,17 +60,28 @@ std::string Qwen3_5VL::apply_chat_template(nlohmann::ordered_json& messages, nlo
 /************              prefix slots            **************/
 namespace {
 constexpr int kImageSoftTokenId = 248056;
+constexpr int kImEndId = 248046;
 
-/// \brief whether a request carries an image, in either input form
+/// \brief the images a request carries, in either input form
 /// \note The CLI passes images in input.images; the REST API puts them in the
 ///       "images" arrays of its messages. insert() reads no audio, so audios
-///       are not checked here.
-bool carries_images(const lm_uniform_input_t& input) {
-    if (!input.images.empty()) return true;
+///       are not counted here.
+std::size_t count_images(const lm_uniform_input_t& input) {
+    std::size_t count = input.images.size();
     for (const auto& item : input.messages) {
-        if (item.contains("images") && !item["images"].empty()) return true;
+        if (item.contains("images") && item["images"].is_array()) count += item["images"].size();
     }
-    return false;
+    return count;
+}
+
+std::string trim_left(const std::string& text) {
+    const auto first = std::find_if(text.begin(), text.end(), [](unsigned char c) { return !std::isspace(c); });
+    return std::string(first, text.end());
+}
+
+std::string trim_right(const std::string& text) {
+    const auto last = std::find_if(text.rbegin(), text.rend(), [](unsigned char c) { return !std::isspace(c); });
+    return std::string(text.begin(), last.base());
 }
 } // namespace
 
@@ -75,16 +92,119 @@ void Qwen3_5VL::_attach_prefix_cache() {
     this->_prefix_attach(this->lm_engine, api, kImageSoftTokenId);
 }
 
+void Qwen3_5VL::_load_vision_geometry() {
+    this->vision_geometry = {};
+    if (const auto* npu = dynamic_cast<const qwen3_5vl_npu*>(this->lm_engine)) {
+        this->vision_geometry = {npu->QWEN3_5_PATCH_SIZE, npu->QWEN3_5_MERGE_SIZE, npu->QWEN3_5_TEMPORAL_PATCH_SIZE,
+                                 npu->QWEN3_5_SHORTEST_EDGE, npu->QWEN3_5_LONGEST_EDGE,
+                                 npu->QWEN3_5_VISION_RESCALE_FACTOR, npu->QWEN3_5_VISION_RESCALE_IMAGE_MEAN,
+                                 npu->QWEN3_5_VISION_RESCALE_IMAGE_STD};
+        return;
+    }
+    if (this->backend_id() != flm::backend::kOgaHipepBackendId || !this->lm_config) return;
+    // An OGA package states its preprocessing as the transforms of OGA's own image processor.
+    const nlohmann::json& processor = this->lm_config->sub("processor_config");
+    if (processor.empty()) return;
+    qwen3_5vl_vision_geometry_t geometry;
+    try {
+        for (const auto& transform : processor.at("processor").at("transforms")) {
+            const auto& operation = transform.at("operation");
+            const std::string type = operation.value("type", std::string());
+            const nlohmann::json attrs = operation.value("attrs", nlohmann::json::object());
+            if (type == "Resize") {
+                geometry.min_pixels = attrs.value("min_pixels", 0u);
+                geometry.max_pixels = attrs.value("max_pixels", 0u);
+            } else if (type == "Rescale") {
+                geometry.rescale_factor = attrs.value("rescale_factor", 0.0f);
+            } else if (type == "Normalize") {
+                const auto mean = attrs.value("mean", std::vector<float>{});
+                const auto deviation = attrs.value("std", std::vector<float>{});
+                // the normalization takes one mean and one deviation for all three channels
+                const auto uniform = [](const std::vector<float>& values) {
+                    return !values.empty() &&
+                           std::all_of(values.begin(), values.end(), [&](float v) { return v == values.front(); });
+                };
+                if (!uniform(mean) || !uniform(deviation))
+                    throw std::runtime_error("Normalize has a different mean or std per channel");
+                geometry.image_mean = mean.front();
+                geometry.image_std = deviation.front();
+            } else if (type == "PatchImage") {
+                geometry.patch_size = attrs.value("patch_size", 0u);
+                geometry.temporal_patch_size = attrs.value("temporal_patch_size", 0u);
+                geometry.merge_size = attrs.value("merge_size", 0u);
+            }
+        }
+    } catch (const std::exception& e) {
+        header_print("WARNING", "processor_config.json: " << e.what() << "; image input is off");
+        return;
+    }
+    if (!geometry.valid() || geometry.rescale_factor == 0.0f || geometry.image_std == 0.0f) {
+        header_print("WARNING", "processor_config.json does not state the image preprocessing; image input is off");
+        return;
+    }
+    this->vision_geometry = geometry;
+}
+
+bool Qwen3_5VL::_continue_verbatim(std::vector<int>& tokens, std::optional<int> requested_max_new_tokens) {
+    const std::vector<int>& ran = this->token_history;
+    const std::vector<int>& held = this->checkpoint_his;
+    const size_t cp = held.size();
+    if (cp == 0 || ran.size() <= cp || tokens.size() <= cp ||
+        static_cast<size_t>(this->lm_engine->get_current_context_length()) != ran.size() ||
+        !std::equal(held.begin(), held.end(), ran.begin()) || !std::equal(held.begin(), held.end(), tokens.begin())) {
+        return false;
+    }
+    // the prompt's copy of the last reply ends at the first <|im_end|> after the checkpoint
+    const auto reply_end = std::find(tokens.begin() + cp, tokens.end(), kImEndId);
+    if (reply_end == tokens.end()) return false;
+    // A reply's content follows its reasoning block; a reply cut inside that block has none.
+    const auto content = [&](std::vector<int>::const_iterator begin, std::vector<int>::const_iterator end) {
+        const auto close = std::find(std::make_reverse_iterator(end), std::make_reverse_iterator(begin), this->think_end_id);
+        if (close.base() != begin) return this->tokenizer->decode(std::vector<int>(close.base(), end));
+        if (begin != end && *begin == this->think_start_id) return std::string();
+        return this->tokenizer->decode(std::vector<int>(begin, end));
+    };
+    const std::string generated = trim_left(content(ran.begin() + cp, ran.end()));
+    const std::string sent = trim_right(trim_left(content(tokens.begin() + cp, reply_end)));
+    std::vector<int> continued(ran);
+    if (trim_right(generated) != sent) {
+        // A reply cut at the length limit lacks its last sampled token, which the client did get.
+        if (generated.empty() || sent.size() <= generated.size() || sent.compare(0, generated.size(), generated) != 0) {
+            return false;
+        }
+        const std::vector<int> rest = this->tokenizer->encode(sent.substr(generated.size()));
+        continued.insert(continued.end(), rest.begin(), rest.end());
+    }
+    continued.insert(continued.end(), reply_end, tokens.end());
+    // The history keeps the reasoning the rendered prompt leaves out, so it can be the longer one.
+    try {
+        this->_shared_validate_capacity(continued.size(), requested_max_new_tokens);
+    } catch (const ModelRequestError&) {
+        return false;
+    }
+    header_print("FLM", "Continuing the " << ran.size() << " tokens the engine ran, last reply included");
+    tokens = std::move(continued);
+    return true;
+}
+
 bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
-    // Refuse images before any image work or engine cast. The image path reads
-    // the NPU engine's geometry through reinterpret_cast<qwen3_5vl_npu*>, which
-    // the OGA engine does not provide.
-    if (this->backend_id() == flm::backend::kOgaHipepBackendId && carries_images(input)) {
+    // Refuse images before any image work: an engine without image
+    // preprocessing runs no vision model.
+    const size_t requested_images = count_images(input);
+    if (requested_images > 0 && !this->vision_geometry.valid()) {
         // A ModelRequestError, not invalid_argument: the handlers turn only the
         // former into an HTTP 400, and the latter would come back as a 200 body.
         throw ModelRequestError(400, false,
             "the loaded backend '" + this->backend_id() + "' does not accept image input",
             "invalid_request_error");
+    }
+    const bool oga = this->backend_id() == flm::backend::kOgaHipepBackendId;
+    unsigned max_pixels = this->vision_geometry.max_pixels;
+    if (oga && requested_images > 0) {
+        // OGA runs all the images of a prompt in one vision pass, so they share its patch budget.
+        const uint64_t patch_pixels = static_cast<uint64_t>(this->vision_geometry.patch_size) * this->vision_geometry.patch_size;
+        const uint64_t share = static_cast<uint64_t>(flm::oga::kMaxImagePatches) / requested_images * patch_pixels;
+        max_pixels = static_cast<unsigned>(std::min<uint64_t>(max_pixels, share));
     }
 
     // preprocess
@@ -112,7 +232,7 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
                 continue;
             }
 
-            preprocess_image(image, image_payload._data__processed);
+            preprocess_image(image, image_payload._data__processed, max_pixels);
             if (image.grid_h <= 0 || image.grid_w <= 0) {
                 header_print("ERROR", "Skipping image that failed to preprocess: " << img_str);
                 continue;
@@ -146,7 +266,7 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
                     continue;
                 }
 
-                preprocess_image(image, image_payload._data__processed);
+                preprocess_image(image, image_payload._data__processed, max_pixels);
                 if (image.grid_h <= 0 || image.grid_w <= 0) {
                     header_print("ERROR", "Skipping image that failed to preprocess");
                     continue;
@@ -200,10 +320,6 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
         templated_text = this->apply_chat_template(messages);
     }
     std::vector<int> tokens_init = this->tokenizer->encode(templated_text);
-    if (this->backend_id() == flm::backend::kOgaHipepBackendId) {
-        // Include the think preamble before it is trimmed from the prefill.
-        this->_shared_validate_capacity(tokens_init.size(), input.requested_max_new_tokens);
-    }
 
     // update the tokens to include the image tokens
     std::vector<int> tokens;
@@ -214,9 +330,14 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
         total_image_tokens += image_payload.images[i].grid_h * image_payload.images[i].grid_w;
     }
     tokens.reserve(tokens_init.size() + total_image_tokens);
-    int image_counter = 0;
+    size_t image_counter = 0;
     for (int i = 0; i < tokens_init.size(); i++) {
         if (tokens_init[i] == image_soft_token_id) {
+            // the prompt's own text can spell the placeholder too
+            if (image_counter == image_payload.images.size()) {
+                throw ModelRequestError(400, false, "the prompt has more image placeholders than images",
+                                        "invalid_request_error");
+            }
             for (int j = 0; j < image_payload.images[image_counter].grid_h * image_payload.images[image_counter].grid_w / 4; j++) {
                 tokens.push_back(image_soft_token_id);
             }
@@ -224,6 +345,10 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
         } else {
             tokens.push_back(tokens_init[i]);
         }
+    }
+    if (oga) {
+        // Include the think preamble before it is trimmed from the prefill.
+        this->_shared_validate_capacity(tokens.size(), input.requested_max_new_tokens);
     }
 
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
@@ -260,11 +385,19 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
         match_len = this->_prefix_resume(this->prefix_cache_, full_tokens, image_hashes);
     }
 
+    // An engine that would replay the whole history after a restore continues
+    // the history it ran instead, when the prompt is that history going on.
+    const bool continued = !slot_mode && meta_info.restore_allowed && this->backend_ &&
+                           !this->backend_->keeps_state_on_restore() &&
+                           this->_continue_verbatim(tokens, input.requested_max_new_tokens);
+
     size_t prefix_skip_count = 0;
     {
-        const size_t idx = this->checkpoint_his.size();
+        // what _shared_insert will find in the engine: the history it ran, or the checkpoint restored below
+        const std::vector<int>& held = continued ? this->token_history : this->checkpoint_his;
+        const size_t idx = held.size();
         for (size_t i = 0; i < idx; i++) {
-            if (i < tokens.size() && tokens[i] == this->checkpoint_his[i]) {
+            if (i < tokens.size() && tokens[i] == held[i]) {
                 prefix_skip_count++;
             } else {
                 break;
@@ -282,9 +415,8 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
         if (prefix_skip_count > 0 && !image_payload.images.empty()) {
             // Per-image bf16 footprint depends on runtime patch/temporal
             // config carried by the engine.
-            auto* eng = reinterpret_cast<qwen3_5vl_npu*>(this->lm_engine);
-            const unsigned patch_size = eng->QWEN3_5_PATCH_SIZE;
-            const unsigned temporal_patch = eng->QWEN3_5_TEMPORAL_PATCH_SIZE;
+            const unsigned patch_size = this->vision_geometry.patch_size;
+            const unsigned temporal_patch = this->vision_geometry.temporal_patch_size;
 
             int skipped_image_tokens = 0;
             for (size_t i = 0; i < prefix_skip_count; i++) {
@@ -343,7 +475,7 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
     int restore_idx = -1;
     const bool has_images = image_payload.num_images > 0;
 
-    if (!slot_mode && meta_info.restore_allowed) {
+    if (!slot_mode && meta_info.restore_allowed && !continued) {
         restore_idx = this->lm_engine->restore();
         this->total_tokens = restore_idx;
         this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
@@ -357,9 +489,30 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
                                     has_images ? static_cast<void*>(&image_payload) : nullptr, last_image_token_index, is_cancelled);
     }
 
-    bool success = has_images
-        ? this->_shared_insert(meta_info, tokens, is_cancelled, &image_payload, last_image_token_index)
-        : this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
+    // OGA takes the pixels as float16, one block per image
+    flm::oga::OgaVisionInput oga_vision;
+    if (oga && has_images) {
+        const qwen3_5vl_vision_geometry_t& geometry = this->vision_geometry;
+        const size_t values = 3u * geometry.temporal_patch_size * geometry.patch_size * geometry.patch_size;
+        size_t offset = 0;
+        for (const auto& img : image_payload.images) {
+            flm::oga::OgaImage image;
+            image.grid_h = img.grid_h;
+            image.grid_w = img.grid_w;
+            const size_t count = static_cast<size_t>(img.grid_h) * img.grid_w * values;
+            if (offset + count > image_payload._data__processed.size()) {
+                throw std::runtime_error("image payload holds fewer pixels than its images");
+            }
+            const bf16* from = image_payload._data__processed.data() + offset;
+            image.pixels.resize(count);
+            std::transform(from, from + count, image.pixels.begin(),
+                           [](const bf16& value) { return flm::oga::FloatToHalf(static_cast<float>(value)); });
+            offset += count;
+            oga_vision.images.push_back(std::move(image));
+        }
+    }
+    void* payload = !has_images ? nullptr : oga ? static_cast<void*>(&oga_vision) : static_cast<void*>(&image_payload);
+    bool success = this->_shared_insert(meta_info, tokens, is_cancelled, payload, has_images ? last_image_token_index : 0);
 
     checkpoint_his = token_history;
     int checkpoint_idx = this->lm_engine->checkpoint();
