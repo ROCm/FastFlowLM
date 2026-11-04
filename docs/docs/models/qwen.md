@@ -476,6 +476,8 @@ flm run qwen3.5-flash:2b -r 1
 - **Single-turn.** Every request starts from a clean state — earlier turns are not carried over. A system prompt is the one exception: it is pinned on first use and reused on later requests, so it is not re-prefilled on every call.
 - **Context length is fixed at 1k tokens.** Context-length overrides are ignored for this model. A prompt can be about 1,015 tokens long; the last few tokens of the window are kept for the start of the reply.
 - **Tool calling is not supported.** Any tools passed with the request are dropped.
+- **Large pictures may not fit.** A picture that needs more than the 1k window is refused with `Max length reached!`. At the default `-r 2`, a full document page can be too big (4 of 100 DocVQA pages were); use `-r 1` for those. On the pages that fit, the answers match `qwen3.5:2b`.
+- **Pictures need the NPU to themselves.** The vision encoder keeps part of its state in the running NPU context, so a picture request can time out if another program uses the NPU at the same moment.
 - **Example usage:** [Flash models in server mode](https://fastflowlm.com/docs/instructions/server/openapi/#-example-flash-models-single-turn-pinned-system-prompt)
 
 ---
