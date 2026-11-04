@@ -169,12 +169,8 @@ def _cases(ctx, server, primary: str, secondary: str | None) -> None:
         after = _ask(client, primary, ANSWERS[0][0])
         case.data["after_load_duration"] = after.usage.get("load_duration")
         expect(after.content.strip(), f"{primary} gave no answer after the unknown-model request")
-        if status == 200:
-            # The handler's error has no "code", so send_response keeps 200.
-            # OpenAI answers 404; until the server sets a code this is a
-            # warning, so the gap stays visible without failing every run.
-            warn(f"unknown model answered HTTP 200 with {str(body)[:120]}; expected a 4xx")
-        expect(400 <= status < 500, f"unknown model answered HTTP {status}")
+        # 404, as OpenAI answers a model that does not exist.
+        expect(status == 404, f"unknown model answered HTTP {status}")
 
     with ctx.case(NAME, "model-switch", primary, server) as case:
         if not secondary:

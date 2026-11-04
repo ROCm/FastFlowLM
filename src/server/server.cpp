@@ -706,15 +706,15 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
             auto& response_ref = *res_ptr;
             http::status status = http::status::ok;
 
+            // An OpenAI style error carries its HTTP status as error.code: 400, 404, 500, ...
             if (response_data.contains("error") &&
-                response_data["error"].contains("code"))
+                response_data["error"].contains("code") &&
+                response_data["error"]["code"].is_number_integer())
             {
                 int code = response_data["error"]["code"].get<int>();
 
-                if (code == 400) {
-                    status = http::status::bad_request;
-                } else if (code == 500) {
-                    status = http::status::internal_server_error;
+                if (code >= 400 && code <= 599) {
+                    status = static_cast<http::status>(code);
                 }
             }
 

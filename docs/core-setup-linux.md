@@ -9,7 +9,7 @@ Written against the working install on this machine. Paths use `$P` for the
 dependency prefix (here `/home/alfxu/ddprefix`); substitute your own.
 
 > **Status:** the core backend has been run on hardware on Windows only. The
-> steps below are updated for corelib 0.53.0, but they have not been run end
+> steps below are updated for corelib 0.60.0, but they have not been run end
 > to end on Linux at this revision. The [Known issues](#known-issues) are from
 > an earlier Linux bring-up.
 
@@ -52,14 +52,14 @@ loaded from, so those libraries must sit beside it; nothing else is needed at
 run time, no kernel store and no environment variable.
 
 **Version must match exactly.** `src/include/core/corelib_api.hpp` has a
-`#error` for anything other than corelib **0.53.0**:
+`#error` for anything other than corelib **0.60.0**:
 
 ```bash
 grep -E 'CORELIB_VERSION_(MAJOR|MINOR|PATCH)' \
-  $P/install-corelib/include/ryzenai/corelib.h
+  $P/install-corelib/include/ryzenai/corelib/base.h
 ```
 
-Must print `0`, `33`, `1`. (`BUILD-NOTES.md` still says 0.4.0 in its opening
+Must print `0`, `60`, `0`. (`BUILD-NOTES.md` still says 0.4.0 in its opening
 line — that text is stale.)
 
 ### Verify corelib before going further

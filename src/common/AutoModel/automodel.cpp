@@ -248,6 +248,11 @@ void AutoModel::_shared_initialize_model_state(
     header_print("FLM", "Loading model: " << this->model_path);
     this->lm_config = std::make_unique<LM_Config>();
     this->lm_config->from_pretrained(this->model_path);
+    // A tag that shares another tag's weights but runs its own kernels (qwen3.5-flash:2b) names the folder its xclbins
+    // are in; the engine looks them up under lm_config->model_name, which is the weights folder's name otherwise.
+    if (const std::string xclbin_folder = model_info.value("xclbin_folder", std::string()); !xclbin_folder.empty()) {
+        this->lm_config->model_name = xclbin_folder;
+    }
     if (!this->draft_model_path.empty()) {
         // The draft package's own config rides along in the config the engine reads;
         // the xclbins are looked up under the tag's own folder name (D16).
@@ -939,9 +944,15 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
             // cache in step. Two things can say no: a frontend whose cache is
             // discarded anyway (forward_on_eos), and a backend that caps its
             // own decode and would reject the call.
-            if (this->forward_on_eos &&
+            // The forward writes row total_tokens, which is past the end of the
+            // engine's KV window once the context is full.
+            if (this->forward_on_eos && this->total_tokens < decode_cap &&
                 (!this->backend_ || this->backend_->forwards_past_eos())) {
                 this->lm_engine->forward(last_sampled_token);
+                // Counted like any other row: a model whose insert() prefix-matches
+                // the next prompt without a restore keeps total_tokens across turns,
+                // and every MAX_L check would otherwise fall one row short per turn.
+                this->total_tokens++;
             } else {
                 // The engine never ran it, so the next prompt has to carry it.
                 this->token_history.pop_back();
@@ -961,7 +972,8 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
         // so the next prompt has to carry it.
         this->token_history.pop_back();
     }
-    if (this->total_tokens >= decode_cap){
+    // an eos run on the last row fills the window too, but nothing was stopped
+    if (reason == MAX_LENGTH_REACHED && this->total_tokens >= decode_cap){
         header_print("WARNING", "Max length reached, stopping generation...");
     }
     if (this->log_raw_output) {

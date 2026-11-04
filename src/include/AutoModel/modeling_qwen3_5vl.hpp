@@ -22,10 +22,36 @@
 
 /************              Qwen3VL_4b            **************/
 class Qwen3_5VL : public AutoModel {
-private:
-
+protected:
+    // the flash model (Qwen3_5VL_Flash) reads these
     bool enable_think = false;
     bool enable_tool = false;
+
+    /// \brief render a request into the prompt tokens and the image payload (what insert() prefills)
+    /// \param meta_info the request's meta info
+    /// \param input the request (messages or prompt, images)
+    /// \param image_payload receives the decoded, preprocessed images
+    /// \param tokens receives the prompt tokens, image soft tokens expanded, the generation prompt included
+    /// \return false if the request has nothing to render
+    bool _build_tokens(chat_meta_info_t& meta_info, lm_uniform_input_t& input, qwen3_5vl_image_payload_t& image_payload, std::vector<int>& tokens);
+
+    /// \brief the engine's vision preprocessing parameters, read from whichever engine is loaded
+    /// \note  Two engine classes run this wrapper (qwen3_5vl_npu and qwen3_5vl_flash) and they share no base
+    ///         with these fields, so each is asked by its own type instead of casting one to the other.
+    struct vision_params_t {
+        unsigned int QWEN3_5_PATCH_SIZE;
+        unsigned int QWEN3_5_IMAGE_MERGE_SIZE;
+        unsigned int QWEN3_5_SHORTEST_EDGE;
+        unsigned int QWEN3_5_LONGEST_EDGE;
+        unsigned int QWEN3_5_TEMPORAL_PATCH_SIZE;
+        unsigned int QWEN3_5_MERGE_SIZE;
+        float QWEN3_5_VISION_RESCALE_FACTOR;
+        float QWEN3_5_VISION_RESCALE_IMAGE_MEAN;
+        float QWEN3_5_VISION_RESCALE_IMAGE_STD;
+    };
+    vision_params_t _vision_params() const;
+
+private:
     int think_start_id = 248068;
     int think_end_id = 248069;
     
@@ -150,4 +176,61 @@ public:
         }
 		return false;
 	}
+};
+
+
+/************              Qwen3_5VL_Flash            **************/
+/// Same checkpoint and the same wrapper as Qwen3_5VL, backed by the qwen3_5vl_flash engine: the 2B-only prefill
+/// kernels (bfp16 matmul and attention, faster GateDeltaNet and conv), lm_head inside the decode layer, one vision
+/// overlay. Tuned for short contexts; Qwen3_5VL stays the general-purpose path.
+///
+/// Logically single-turn, like every flash model: every insert() starts from a clean state. The one exception is the
+/// system prompt: on the first request that carries one, insert() prefills its shared prefix and checkpoints it (the
+/// engine's checkpoint holds the whole hybrid state, recurrent and conv state as well as the KV rows), then rewinds to
+/// that checkpoint on later requests with the same system text.
+class Qwen3_5VL_Flash : public Qwen3_5VL {
+private:
+    /// \brief system text the current checkpoint was built from, empty when none
+    std::string pinned_system_text;
+
+    /// \brief token history at the time of the checkpoint
+    std::vector<int> system_his;
+
+    /// \brief number of tokens covered by the checkpoint, 0 when nothing is pinned
+    int system_tokens = 0;
+
+    /// \brief prefill the system prefix of `system_text` and checkpoint it
+    /// \return number of tokens pinned, 0 if the prefix could not be isolated
+    int _pin_system_prefix(const std::string& system_text);
+
+    /// \brief forget the pin, so the next request with a system prompt pins it again
+    /// \note  Leaves the engine alone: callers clear it themselves.
+    void _forget_pin();
+
+    /// \brief Drop everything the previous turn left behind, back to the pin.
+    /// \note  Deliberately not AutoModel::clear_context(): that also resets the TTFT and TOTAL profilers, which the
+    ///        caller starts around the whole turn.
+    void _reset_turn();
+
+public:
+    Qwen3_5VL_Flash(flm_rt::device* npu_device_inst) : Qwen3_5VL(npu_device_inst) { single_turn = true; }
+
+    void load_model(std::string model_path, json model_inf, int default_context_length = -1, bool enable_preemption = false, const std::string& backend = "") override;
+    bool insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled = [] { return false; }) override;
+    std::string generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os = std::cout) override;
+
+    /// \brief Clear the context, the pinned system prefix included
+    /// \note  The engine zeroes its state but keeps the checkpoint, so a pin kept past this would restore zeroed rows
+    ///        on the next request. This also covers _shared_insert clearing a prompt that diverges from the pinned
+    ///        tokens: it prefills from row 0, over the pinned rows.
+    void clear_context() override;
+
+    /// \brief Apply the chat template without tools: the flash model does not support tool calling
+    std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object(), bool continue_final_message = false) override {
+        nlohmann::ordered_json no_tools = nlohmann::ordered_json::object();
+        return Qwen3_5VL::apply_chat_template(messages, no_tools, continue_final_message);
+    }
+
+    /// \brief Single-turn: insert() rebuilds the prompt and never continues a message
+    bool supports_continue_final_message() const override { return false; }
 };

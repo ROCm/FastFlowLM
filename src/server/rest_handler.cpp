@@ -36,6 +36,28 @@ json ExceptionResponse(const std::exception& error) {
     return {{"error", error.what()}};
 }
 
+/// \brief The reply to a model name the catalog does not have: a 404, as OpenAI's
+json UnknownModelResponse(const std::string& model) {
+    return {{"error", {{"message", "The model '" + model + "' does not exist. Please check with `flm list`."},
+                       {"type", "invalid_request_error"},
+                       {"param", "model"},
+                       {"code", 404}}}};
+}
+
+/// \brief The reply when a known model, or the loaded one, cannot be used
+/// \note "model-faker" is what a request without "model" names while nothing is loaded: the request is at fault
+json ModelLoadFailedResponse(const std::string& model) {
+    if (model == "model-faker") {
+        return {{"error", {{"message", "No model is loaded; name one in 'model'."},
+                           {"type", "invalid_request_error"},
+                           {"param", "model"},
+                           {"code", 400}}}};
+    }
+    return {{"error", {{"message", "Failed to load " + model + " model!"},
+                       {"type", "server_error"},
+                       {"code", 500}}}};
+}
+
 /// \brief One line per finished request in the server log, streamed or not, whatever the client asked for
 /// \note The prefix "Request done:" is stable so tools can grep it
 void log_request_summary(const chat_meta_info_t& m, size_t kv_used, size_t kv_max) {
@@ -547,12 +569,10 @@ RestHandler::RestHandler(model_list& models, ModelDownloader& downloader, progra
     // Initialize chat bot with default model
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
     if (this->asr) {
-        std::string whisper_tag = "whisper-v3:turbo";
-        ensure_asr_model_loaded(whisper_tag);
+        ensure_asr_model_loaded(args.asr_tag);
     }
     if (this->embed) {
-        std::string embed_tag = "embed-gemma:300m";
-        ensure_embed_model_loaded(embed_tag);
+        ensure_embed_model_loaded(args.embed_tag);
     }
 #else
     if (this->asr) {
@@ -668,6 +688,15 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag,
         }
     }
     return auto_chat_engine != nullptr;
+}
+
+///@brief Whether ensure_model_loaded's gate would admit the model tag
+///@note The same tolerant form as that gate, so a handler can answer a name the
+///      catalog does not have with a 404 instead of a failed load.
+///@param model_tag the model tag
+bool RestHandler::is_known_model(const std::string& model_tag) {
+    return model_tag == "model-faker" ||
+           supported_models.is_model_supported(supported_models.rectify_model_tag(model_tag));
 }
 
 ///@brief Ensure the asr model is loaded
@@ -1181,7 +1210,7 @@ void RestHandler::handle_chat(const json& request,
                 return;
             }
             // A character the generation stopped partway through can never be finished
-            response_text.resize(response_text.size() - incomplete_utf8_tail(response_text));
+            response_text = sanitize_utf8(response_text);
             //std::string response_text = chat_engine->generate_with_prompt(meta_info, prompts, length_limit, std::cout, payload);
             auto total_end_time = time_utils::now();
             meta_info.total_duration = (uint64_t)time_utils::duration_ns(total_start_time, total_end_time).first;
@@ -1235,6 +1264,14 @@ void RestHandler::handle_embeddings(const json& request,
             }
         }
 
+        if (inputs.empty()) {
+            send_response({{"error", {{"message", "'input' is required: a string or a non-empty array of strings."},
+                                      {"type", "invalid_request_error"},
+                                      {"param", "input"},
+                                      {"code", 400}}}});
+            return;
+        }
+
         json response;
         if (this->embed) {
             json embedding_data = json::array();
@@ -1264,12 +1301,26 @@ void RestHandler::handle_embeddings(const json& request,
         }
         else {
             header_print("Warning", "No embedding model loaded");
+            send_response({{"error", {{"message", "No embedding model is loaded; start the server with --embed 1."},
+                                      {"type", "invalid_request_error"},
+                                      {"code", 400}}}});
+            return;
         }
         send_response(response);
     }
+    catch (const json::exception& e) {
+        // A missing or mistyped "model" / "input": the request is at fault
+        send_response({{"error", {{"message", std::string("Invalid embeddings request: ") + e.what()},
+                                  {"type", "invalid_request_error"},
+                                  {"code", 400}}}});
+    }
     catch (const std::exception& e) {
-        json error_response = ExceptionResponse(e);
-        send_response(error_response);
+        // A failed NPU dispatch throws from embed(); it must reach the client as a 5xx, not a 200
+        // whose body is an error string (the 200 is what let a broken vector look like an answer).
+        header_print("ERROR", std::string("Embedding failed: ") + e.what());
+        send_response({{"error", {{"message", e.what()},
+                                  {"type", "server_error"},
+                                  {"code", 500}}}});
     }
 }
 
@@ -1483,10 +1534,13 @@ void RestHandler::handle_openai_chat_completion(const json& request,
             return;
         }
 
+        if (!is_known_model(model)) {
+            send_response(UnknownModelResponse(model));
+            return;
+        }
         auto load_start_time = time_utils::now();
         if (!ensure_model_loaded(model, request_backend)) {
-            json error_response = {{"error", "Failed to load " + model + " model!"}};
-            send_response(error_response);
+            send_response(ModelLoadFailedResponse(model));
             return;
         }
         auto load_end_time = time_utils::now();
@@ -1741,7 +1795,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                 return;
             }
             // A character the generation stopped partway through can never be finished
-            response_text.resize(response_text.size() - incomplete_utf8_tail(response_text));
+            response_text = sanitize_utf8(response_text);
             // check response_text
             json choices = build_nstream_response(response_text, meta_info, parse_options,
                                                   lstream ? &lstream->aligner() : nullptr);
@@ -1940,15 +1994,15 @@ void RestHandler::handle_openai_completion(const json& request,
         }
 
         // direct return if model not supported
-        if (!supported_models.is_model_supported(model)) {
-            throw std::runtime_error("Model " + model + " is not supported.");
+        if (!is_known_model(model)) {
+            send_response(UnknownModelResponse(model));
+            return;
         }
 
         int length_limit = value_or(request, "max_tokens", 4096);
 
         if (!ensure_model_loaded(model, request_backend)) {
-            json error_response = {{"error", "Failed to load " + model + " model!"}};
-            send_response(error_response);
+            send_response(ModelLoadFailedResponse(model));
             return;
         }
         // This shares the engine with /v1/chat/completions and replaces the

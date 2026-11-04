@@ -423,7 +423,7 @@ std::string Qwen3_8MTP::generate(chat_meta_info_t& meta_info, int length_limit, 
         result += token_str;
         os << token_str << std::flush;
     }
-    if (this->total_tokens >= this->MAX_L){
+    if (this->total_tokens >= this->decode_cap()){
         header_print("WARNING", "Max length reached, stopping generation...");
         meta_info.stop_reason = MAX_LENGTH_REACHED;
         return result;
@@ -498,6 +498,8 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
     }
     this->profiler_list[DECODING_TIME].reset();
     this->profiler_list[TKOEN_DECODE_TIME].reset();
+    // Some backends refuse to decode past a limit of their own, below MAX_L.
+    const uint32_t decode_cap = this->decode_cap();
 
     // Commit one token: stream it, record it, test the stop rules. Shared by
     // both branches so a batch can't drift from the single-token path and
@@ -523,7 +525,11 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
             // row. Without that truncation an eos could land mid-batch, where
             // it is already committed, and this forward() would append a
             // second copy of it -- a wasted 64-layer pass and a duplicate row.
-            if (this->forward_on_eos) {
+            // The forward writes row total_tokens, which is past the end of the
+            // context once it is full; a backend that caps its own decode would
+            // reject it too.
+            if (this->forward_on_eos && this->total_tokens < decode_cap &&
+                (!this->backend_ || this->backend_->forwards_past_eos())) {
                 this->lm_engine->forward(token);
             } else {
                 // The engine never ran it, so the next prompt has to carry it.
@@ -538,11 +544,12 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
         }
         // No MAX_L test here: a batch's tokens before its last are already in
         // the caches, so stopping mid-batch would leave rows token_history
-        // does not describe. The loop tests MAX_L between steps instead.
+        // does not describe. The loop tests the cap between steps instead, and
+        // sizes each batch to the room left.
         return true;
     };
 
-    if (this->total_tokens >= this->MAX_L){
+    if (this->total_tokens >= decode_cap){
         header_print("WARNING", "Max length reached, stopping generation...");
         reason = MAX_LENGTH_REACHED;
     }
@@ -552,7 +559,7 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
     else while (true){
         // Tested here rather than in the loop condition so the stop is
         // recorded as a truncation, as in _shared_generate.
-        if (this->total_tokens >= this->MAX_L){
+        if (this->total_tokens >= decode_cap){
             reason = MAX_LENGTH_REACHED;
             break;
         }
@@ -565,9 +572,11 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
         // max_draft + 1 tokens, all but the last already committed, so capping
         // the batch at the tokens left keeps the limit on the last one -- the
         // one token a stop can drop. With one token left, decode it plainly.
-        const int tokens_left = (length_limit > 0)
-            ? length_limit - meta_info.generated_tokens
-            : SPEC_MAX_DRAFT + 1;
+        // The same goes for the context: a batch of n leaves total_tokens at
+        // total_tokens + n, which must not pass the cap.
+        const int tokens_left = std::min<int>(
+            (length_limit > 0) ? length_limit - meta_info.generated_tokens : SPEC_MAX_DRAFT + 1,
+            static_cast<int>(decode_cap - this->total_tokens));
         // speculate() samples inside the engine, past _sample()'s EOS mask: while ignore_eos / min_tokens
         // still forbids an EOS, decode one token at a time
         const bool eos_suppressed = meta_info.ignore_eos || meta_info.generated_tokens < meta_info.min_tokens;
@@ -648,7 +657,8 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
         // so the next prompt has to carry it.
         this->token_history.pop_back();
     }
-    if (this->total_tokens >= this->MAX_L){
+    // an eos run on the last row fills the window too, but nothing was stopped
+    if (reason == MAX_LENGTH_REACHED && this->total_tokens >= decode_cap){
         header_print("WARNING", "Max length reached, stopping generation...");
     }
     if (this->log_raw_output) {

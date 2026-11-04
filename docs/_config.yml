@@ -189,3 +189,5 @@ docs_nav:
         url: "/docs/benchmarks/nemotron3.5-bolt-dflash_results/"
       - label: Flash Models
         url: "/docs/benchmarks/flash_results/"
+      - label: Whisper
+        url: "/docs/benchmarks/whisper_results/"
