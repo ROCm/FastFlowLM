@@ -35,7 +35,7 @@ inline void print_help(po::options_description& general) {
     std::cout << general << std::endl;
     std::cout << "Examples:" << std::endl;
     std::cout << "\tflm run llama3.2:1b" << std::endl;
-    std::cout << "\tflm run llama3.2:1b --asr 1" << std::endl;
+    std::cout << "\tflm run llama3.2:1b --asr whisper-v3:turbo" << std::endl;
     std::cout << "\tflm run llama3.2:1b --modelscope 1" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --pmode balanced" << std::endl;
     std::cout << "\tflm pull llama3.2:1b --force" << std::endl;
@@ -50,8 +50,10 @@ inline void print_help(po::options_description& general) {
     std::cout << "\tflm serve llama3.2:1b --q-len 10" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --port 8000" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --cors 0" << std::endl;
-    std::cout << "\tflm serve llama3.2:1b --asr 1" << std::endl;
-    std::cout << "\tflm serve llama3.2:1b --embed 1" << std::endl;
+    std::cout << "\tflm serve llama3.2:1b --asr whisper-v3:turbo" << std::endl;
+    std::cout << "\tflm serve llama3.2:1b --embed embed-gemma:300m" << std::endl;
+    std::cout << "\tflm serve -a whisper-v3:turbo" << std::endl;
+    std::cout << "\tflm serve -e embed-gemma:300m" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --modelscope 1" << std::endl;
     std::cout << "\tflm serve qwen3vl-it:4b --img-pre-resize 1" << std::endl;
     std::cout << "\tflm list" << std::endl;

@@ -81,7 +81,7 @@ lower is better:
 
 | | **Before** | **Now** |
 |---|---:|---:|
-| Whisper-only server (`flm serve --asr 1`), after transcribing | 1.0-1.1 GB | 2.3-2.4 GB |
+| Whisper-only server (`flm serve --asr whisper-v3:turbo`), after transcribing | 1.0-1.1 GB | 2.3-2.4 GB |
 | ... with `WHISPER_CACHE_DEQUANT=0` | | 1.0 GB |
 
 The extra memory holds the encoder's dequantised weights. With `WHISPER_CACHE_DEQUANT=0` they are dequantised for

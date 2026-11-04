@@ -115,7 +115,7 @@ Runner::Runner(model_list& supported_models, ModelDownloader& downloader, progra
         // check if multi-modal model with ASR support is loaded, if not, load the default whisper model for ASR
         if (!asr_supported) 
         {
-            header_print("FLM", "The loaded model does not support ASR. Loading default Whisper model for ASR...");
+            header_print("FLM", "The loaded model does not support ASR. Loading ASR model " + this->asr_tag + "...");
             std::string whisper_tag = this->asr_tag;
             switch (this->downloader.is_model_downloaded(whisper_tag)) {
                 case ModelDownloader::ModelStatus::Ready:
