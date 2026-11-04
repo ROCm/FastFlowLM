@@ -1280,7 +1280,7 @@
                     "realtime-transcription",
                     "transcription"
                 ],
-                "footprint": 0.62
+                "footprint": 1.9
             }
         },
         "gemma3": {

@@ -14,6 +14,35 @@ parent: Models
 - **Max Context Length:** NA
 - **Default Context Length:** NA
 
+### ⚡ Performance and memory
+
+Whisper processes audio in 30 s windows: the encoder runs once per window, then the decoder writes the text
+token by token. Measured on Ryzen AI MAX+ 395 (Strix Halo):
+
+| | before | now |
+|---|---|---|
+| encoder, per 30 s window | ~1.9 s | **~0.6 s** (Windows: ~0.7 s) |
+| 5-minute English recording, wall time | ~44 s | **~25 s** |
+| short clip (6 s), wall time | ~2.5 s | **~1.2 s** |
+
+Accuracy is unchanged (FLEURS, 7 languages, 84 files: pooled error 7.50 % before, 7.53 % now; the per-language
+differences are single words).
+
+The encoder keeps its dequantised weights in memory: a Whisper-only server uses about **2.3 GB** instead of
+~1.0 GB. To trade that memory for speed (~0.8 s per 30 s window instead of ~0.6 s), set
+`WHISPER_CACHE_DEQUANT=0` before starting FLM:
+
+```shell
+# Linux
+WHISPER_CACHE_DEQUANT=0 flm serve --asr 1
+```
+```powershell
+# Windows (PowerShell)
+$env:WHISPER_CACHE_DEQUANT = "0"; flm serve --asr 1
+```
+
+`WHISPER_PROFILE=1` prints one line per encoder window with the time spent in each stage (stderr).
+
 ▶️ Run with FastFlowLM in PowerShell:  
 
 > The ASR model must be used with an LLM (loaded concurrently) in CLI Mode.
