@@ -163,19 +163,45 @@ std::string Qwen3_ASR::transcribe(chat_meta_info_t& meta_info, const std::vector
     // long audio: pieces of about a minute, transcribed one by one (as qwen_asr does above its own, longer, limit)
     const auto pieces = split_audio_pieces(audio.samples, SAMPLE_RATE, OFFLINE_PIECE_SECONDS);
     std::string text, last_language;
-    for (size_t p = 0; p < pieces.size(); p++) {
-        if (p > 0 && is_cancelled()) break;
+    // a piece's prompt is built one piece ahead and goes with the previous piece, whose decode on the NPU the engine uses to prefill
+    // it on the CPU (the prompt of a piece does not depend on the text of the one before)
+    struct piece_prompt {
+        bool ok = false;
+        std::vector<int> tokens;
+        void* payload = nullptr;
+        std::shared_ptr<void> holder;   // keeps the payload alive (payload_holder_ only holds the last one built)
+        int first_len_run = 0;
+    };
+    auto prepare = [&](size_t p) {
+        piece_prompt r;
         std::vector<float> piece(audio.samples.begin() + pieces[p].first, audio.samples.begin() + pieces[p].second);
         const size_t min_len = SAMPLE_RATE / 2;   // qwen_asr pads pieces shorter than 0.5 s with silence
         if (piece.size() < min_len) piece.resize(min_len, 0.0f);
-
-        std::vector<int> tokens;
-        void* payload = nullptr;
-        int first_len_run = 0;
-        if (!this->_build_prompt(piece, context, language, "", tokens, payload, first_len_run)) {
+        r.ok = this->_build_prompt(piece, context, language, "", r.tokens, r.payload, r.first_len_run);
+        r.holder = this->payload_holder_;
+        return r;
+    };
+    piece_prompt next = prepare(0);
+    for (size_t p = 0; p < pieces.size(); p++) {
+        if (p > 0 && is_cancelled()) break;
+        piece_prompt cur = std::move(next);
+        if (p + 1 < pieces.size()) {
+            next = prepare(p + 1);
+            if (cur.ok && next.ok) {
+                auto* pl = static_cast<qwen3_asr_payload_t*>(cur.payload);
+                const auto* np = static_cast<const qwen3_asr_payload_t*>(next.payload);
+                pl->next_ids = next.tokens;
+                pl->next_mel = np->mel;
+                pl->next_mel_frames = np->mel_frames;
+            }
+        }
+        if (!cur.ok) {
             if (pieces.size() == 1) throw std::invalid_argument("the audio is too short to transcribe");
             continue;
         }
+        std::vector<int>& tokens = cur.tokens;
+        void* payload = cur.payload;
+        const int first_len_run = cur.first_len_run;
         meta_info.restore_allowed = false;
         this->clear_context();
         if (!this->_shared_insert(meta_info, tokens, is_cancelled, payload, first_len_run)) {

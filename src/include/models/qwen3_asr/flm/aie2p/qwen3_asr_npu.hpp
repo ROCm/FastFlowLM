@@ -43,6 +43,9 @@ typedef struct {
     /// in the background while this step decodes on the NPU, and the next prefill uses that result when its mel is the same.
     int next_mel_frames = 0;
     std::vector<float> next_mel;
+    /// Offline pieces of one recording: the next piece's whole prompt (with next_mel), prefilled on the CPU in the background while
+    /// this piece decodes on the NPU; the next prefill uses it when its prompt and mel are the same.
+    std::vector<int> next_ids;
 } qwen3_asr_payload_t;
 
 class qwen3_asr_npu : public causal_lm{
