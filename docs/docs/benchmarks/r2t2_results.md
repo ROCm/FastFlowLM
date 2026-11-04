@@ -48,7 +48,7 @@ Prompt processing (audio encoder + prefill) per recording length, and decoding s
 | 8 – 12 s         | 1.09 s | 112 ms | 28.6 |
 | 12 – 20 s        | 1.64 s | 106 ms | 28.4 |
 
-End to end through the server: a 7 s recording takes about 1.1 s, a 68 s recording 14 s, a 3 minute recording 37 s (about 0.2 × real time).
+End to end through the server (normal request): a 68 s recording takes about 10 s, a 205 s recording 31 s, a 410 s recording 62 s (about 0.15 × real time; recordings longer than a minute are transcribed in pieces of about a minute). Streaming (stream=true): 0.5 × real time at 480 ms chunks, 0.8 × at 240 ms, 1.1 × at the paper's 160 ms; long recordings stay at the same rate.
 
 ---
 
