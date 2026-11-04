@@ -949,6 +949,10 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
             if (this->forward_on_eos && this->total_tokens < decode_cap &&
                 (!this->backend_ || this->backend_->forwards_past_eos())) {
                 this->lm_engine->forward(last_sampled_token);
+                // Counted like any other row: a model whose insert() prefix-matches
+                // the next prompt without a restore keeps total_tokens across turns,
+                // and every MAX_L check would otherwise fall one row short per turn.
+                this->total_tokens++;
             } else {
                 // The engine never ran it, so the next prompt has to carry it.
                 this->token_history.pop_back();
@@ -968,7 +972,8 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
         // so the next prompt has to carry it.
         this->token_history.pop_back();
     }
-    if (this->total_tokens >= decode_cap){
+    // an eos run on the last row fills the window too, but nothing was stopped
+    if (reason == MAX_LENGTH_REACHED && this->total_tokens >= decode_cap){
         header_print("WARNING", "Max length reached, stopping generation...");
     }
     if (this->log_raw_output) {
