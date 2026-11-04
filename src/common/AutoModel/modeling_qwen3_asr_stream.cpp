@@ -276,12 +276,13 @@ std::string Qwen3_ASR::_asr_step(chat_meta_info_t& meta_info, const std::vector<
 // ---------------------------------------------------------------------------------------------------------------------
 // the streaming loop
 // ---------------------------------------------------------------------------------------------------------------------
-std::string Qwen3_ASR::transcribe_streaming(chat_meta_info_t& meta_info, const std::vector<uint8_t>& audio_bytes, const std::string& language,
+std::string Qwen3_ASR::transcribe_streaming(chat_meta_info_t& meta_info, const std::vector<uint8_t>& audio_bytes, const std::string& language_arg,
                                             const std::string& context, int chunk_ms, int lookahead_ms, int unfixed_token_num,
                                             const std::function<void(const std::string&)>& on_commit, std::string& detected_language,
                                             double& duration_seconds, std::function<bool()> is_cancelled) {
     detected_language.clear();
     duration_seconds = 0.0;
+    const std::string language = _asr_language(language_arg);
     audio_data_t audio = this->load_audio_bytes(audio_bytes);
     if (audio.channels != 1 || audio.num_frames == 0) throw std::invalid_argument("the audio could not be decoded (wav, flac, mp3 or ogg expected)");
     duration_seconds = audio.duration_seconds;
@@ -326,7 +327,9 @@ std::string Qwen3_ASR::transcribe_streaming(chat_meta_info_t& meta_info, const s
     // most a quarter of the median 100 ms window of the context), or at 45 s, a final step finishes the text (as at the end of the
     // recording), and the next chunk starts a fresh context. Not in the reference streaming loop, which keeps one context throughout.
     constexpr double CONTEXT_MIN_SECONDS = 30.0, CONTEXT_MAX_SECONDS = 45.0;
-    const int first_max_new_tokens_ = std::max(1, (int)((step + lookahead) / 1280));
+    // every step re-generates the unfixed tokens it rolled back: k - 1 more tokens than the reference budget (which is for k = 1)
+    const int unfixed_extra = std::max(0, unfixed_token_num - 1);
+    const int first_max_new_tokens_ = std::max(1, (int)((step + lookahead) / 1280)) + unfixed_extra;
     std::string last_text_tmp;
     auto maybe_cut = [&]() -> bool {
         const double secs = (double)audio_accum.size() / SAMPLE_RATE;
@@ -383,7 +386,7 @@ std::string Qwen3_ASR::transcribe_streaming(chat_meta_info_t& meta_info, const s
             }
             prefix = before_bar(prefix);
 
-            std::string gen_text = this->_asr_step(meta_info, audio_accum, context, language, prefix, max_new_tokens, is_cancelled);
+            std::string gen_text = this->_asr_step(meta_info, audio_accum, context, language, prefix, max_new_tokens + unfixed_extra, is_cancelled);
             gen_text = remove_replacement(normalize_punct_by_context(gen_text));
             raw_decoded = prefix + gen_text;
 
@@ -404,6 +407,7 @@ std::string Qwen3_ASR::transcribe_streaming(chat_meta_info_t& meta_info, const s
             if (has_tag && raw_decoded.substr(raw_decoded.find(tag) + tag.size()).empty()) k = 0;
             fixed_text = decode_with_rollback(*this->tokenizer, cur_ids, k, /*avoid_replacement_loop=*/true);
             if (fixed_text.find(tag) != std::string::npos) fixed_text = fixed_text.substr(fixed_text.find(tag) + tag.size());
+            else if (has_tag) fixed_text.clear();   // the rollback reached into the "language X" header: no text is fixed yet
             fixed_text = before_bar(fixed_text);
 
             has_tag = raw_decoded.find(tag) != std::string::npos;
@@ -429,7 +433,7 @@ std::string Qwen3_ASR::transcribe_streaming(chat_meta_info_t& meta_info, const s
         buffer_pcm.clear();
         const std::vector<int> cur_ids = this->tokenizer->encode(raw_decoded);
         std::string prefix = before_bar(decode_with_rollback(*this->tokenizer, cur_ids, unfixed_token_num, /*avoid_replacement_loop=*/false));
-        std::string gen_text = this->_asr_step(meta_info, audio_accum, context, language, prefix, max_new_tokens, is_cancelled);
+        std::string gen_text = this->_asr_step(meta_info, audio_accum, context, language, prefix, max_new_tokens + unfixed_extra, is_cancelled);
         gen_text = remove_replacement(normalize_punct_by_context(gen_text));
         raw_decoded = before_bar(prefix + gen_text);
         auto [lang, txt] = parse_asr_output(raw_decoded, language);

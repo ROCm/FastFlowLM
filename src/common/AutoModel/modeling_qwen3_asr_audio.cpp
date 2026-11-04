@@ -59,6 +59,31 @@ size_t last_cp(const std::string& s) {
 }
 }  // namespace
 
+std::string Qwen3_ASR::_asr_language(const std::string& language) {
+    // qwen_asr.inference.utils.SUPPORTED_LANGUAGES, with the ISO 639-1 code of each
+    static const std::pair<const char*, const char*> names[] = {
+        {"Chinese", "zh"}, {"English", "en"}, {"Cantonese", "yue"}, {"Arabic", "ar"}, {"German", "de"}, {"French", "fr"}, {"Spanish", "es"},
+        {"Portuguese", "pt"}, {"Indonesian", "id"}, {"Italian", "it"}, {"Korean", "ko"}, {"Russian", "ru"}, {"Thai", "th"}, {"Vietnamese", "vi"},
+        {"Japanese", "ja"}, {"Turkish", "tr"}, {"Hindi", "hi"}, {"Malay", "ms"}, {"Dutch", "nl"}, {"Swedish", "sv"}, {"Danish", "da"},
+        {"Finnish", "fi"}, {"Polish", "pl"}, {"Czech", "cs"}, {"Filipino", "tl"}, {"Persian", "fa"}, {"Greek", "el"}, {"Romanian", "ro"},
+        {"Hungarian", "hu"}, {"Macedonian", "mk"}};
+    std::string s = language;
+    s.erase(0, s.find_first_not_of(" \t"));
+    s.erase(s.find_last_not_of(" \t") + 1);
+    if (s.empty()) return "";
+    std::string lower = s;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+    std::string list;
+    for (const auto& [name, code] : names) {
+        std::string n = name;
+        std::transform(n.begin(), n.end(), n.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+        if (lower == n || lower == code || (lower == "fil" && std::string(code) == "tl") || (lower == "zh-cn" && std::string(code) == "zh"))
+            return name;
+        list += (list.empty() ? "" : ", ") + std::string(name);
+    }
+    throw std::invalid_argument("unsupported language '" + language + "' (supported: " + list + ", or their ISO 639-1 codes; empty = detect)");
+}
+
 bool Qwen3_ASR::_needs_space(const std::string& before, const std::string& after) {
     return !before.empty() && !after.empty() && !cjk_at(before, last_cp(before)) && !cjk_at(after, 0) && before.back() != ' ' && after.front() != ' ';
 }
@@ -151,11 +176,12 @@ std::vector<std::pair<size_t, size_t>> split_audio_pieces(const std::vector<floa
 
 }  // namespace
 
-std::string Qwen3_ASR::transcribe(chat_meta_info_t& meta_info, const std::vector<uint8_t>& audio_bytes, const std::string& language, const std::string& context,
+std::string Qwen3_ASR::transcribe(chat_meta_info_t& meta_info, const std::vector<uint8_t>& audio_bytes, const std::string& language_arg, const std::string& context,
                                   int length_limit, std::ostream& os, std::string& detected_language, double& duration_seconds,
                                   std::function<bool()> is_cancelled) {
     detected_language.clear();
     duration_seconds = 0.0;
+    const std::string language_name = _asr_language(language_arg);
     audio_data_t audio = this->load_audio_bytes(audio_bytes);
     if (audio.channels != 1 || audio.num_frames == 0) throw std::invalid_argument("the audio could not be decoded (wav, flac, mp3 or ogg expected)");
     duration_seconds = audio.duration_seconds;
@@ -177,7 +203,7 @@ std::string Qwen3_ASR::transcribe(chat_meta_info_t& meta_info, const std::vector
         std::vector<float> piece(audio.samples.begin() + pieces[p].first, audio.samples.begin() + pieces[p].second);
         const size_t min_len = SAMPLE_RATE / 2;   // qwen_asr pads pieces shorter than 0.5 s with silence
         if (piece.size() < min_len) piece.resize(min_len, 0.0f);
-        r.ok = this->_build_prompt(piece, context, language, "", r.tokens, r.payload, r.first_len_run);
+        r.ok = this->_build_prompt(piece, context, language_name, "", r.tokens, r.payload, r.first_len_run);
         r.holder = this->payload_holder_;
         return r;
     };

@@ -88,6 +88,9 @@ private:
     void _stream_log_mel(const float* x, int n, stream_mel_cache& cache, std::vector<float>& mel, int& frames);
     /// \brief whether two transcript pieces need a space between them (Latin script on both sides; none next to CJK)
     static bool _needs_space(const std::string& before, const std::string& after);
+    /// \brief the language the caller asked for, as the model names it: "" (detect), one of the 30 names qwen_asr supports in any
+    ///        case ("chinese" -> "Chinese"), or an ISO 639-1 code ("zh" -> "Chinese"); throws std::invalid_argument otherwise
+    static std::string _asr_language(const std::string& language);
 
     /// \brief Build the prompt tokens (audio pads expanded) and the engine payload from mono 16 kHz samples.
     /// \param text_after_assistant text that continues the assistant turn (forced "language X<asr_text>", streaming prefix)

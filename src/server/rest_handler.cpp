@@ -1958,7 +1958,7 @@ void RestHandler::handle_openai_audio_transcriptions(const json& request,
                 asr_meta.max_prefill_len = this->prefill_chunk_len;
                 transcript_log << "Audio content: " << std::flush;
                 audio_context = self_asr->transcribe(asr_meta, audio_raw, language, prompt, request.value("max_tokens", 8192), transcript_log,
-                                                     language_name, duration);
+                                                     language_name, duration, [&] { return cancellation_token->cancelled(); });
                 transcript_log << std::endl;
             } else {
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
