@@ -40,7 +40,7 @@ void HyMemory::setup_tokenizer(std::string model_path) {
 /// \note The template reads `reasoning_effort` ("high" | "low" | "no_think", default
 ///       "no_think") and, when there are no tools, appends
 ///       <｜reasoning_mode｜>reasoning_effort:<value> to the system prompt.
-std::string HyMemory::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools) {
+std::string HyMemory::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools, bool continue_final_message) {
     minja::chat_template_inputs inputs;
     inputs.add_generation_prompt = true;
     inputs.messages = messages;
