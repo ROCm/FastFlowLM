@@ -441,9 +441,44 @@ The `-r` option determines the image's height:
 - Video understanding is not supported yet.
 - In server mode this model reuses the prompts it has already read (system prompt, tools, earlier turns), so agents such as Hermes wait for new text only. See [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/).
 - Host memory: the token embeddings are read straight from `model.q4nx` through a read-only memory map, one row per token, instead of being unpacked into a 970 MiB table. This saves about 1 GiB of RAM (private memory at 4k context: about 1.2 GiB before, 0.3 GiB now) with the same speed and the same output. Only the rows of tokens that were actually seen stay in memory, and the OS can drop them under memory pressure; if it does, a prompt full of new tokens takes about a second longer to start. On Windows, the loaded model's `model.q4nx` cannot be replaced or deleted, so stop the server before `flm remove` or `flm pull` of this model. This applies to the Qwen3.5 0.8B, 2B and 4B only; the 9B and the other model families still keep their embedding tables in RAM.
+- For short, independent requests there is a faster single-turn variant with the same weights: [`qwen3.5-flash:2b`](#-model-card-qwen35-2b--flash).
 
 ---
 
+## 🧩 Model Card: [Qwen3.5-2B — Flash](https://huggingface.co/Qwen/Qwen3.5-2B)
+
+- **Type:** Image-Text-to-Text
+- **Think:** Off by default (toggleable, but a 1k window leaves little room for reasoning)
+- **Tool Calling Support:** No
+- **Base Model:** [Qwen/Qwen3.5-2B](https://huggingface.co/Qwen/Qwen3.5-2B)
+- **Quantization:** Q4_K
+- **Max Context Length:** 1k tokens
+- **Default Context Length:** 1k tokens (fixed, see note below)
+
+▶️ Run with FastFlowLM in PowerShell:
+
+```shell
+flm run qwen3.5-flash:2b
+```
+
+▶️ Image Resize Options
+
+Images are resized the same way as for `qwen3.5:2b`: the `--img-pre-resize` flag, or simply `-r`, sets the image height (0: original size, 1: 480 px, 2: 720 px (default), 3: 1080 px, ...). The picture's tokens count against the 1k window: a 640×480 image is about 320 tokens and a 1280×720 image about 900, so use `-r 1` for large photos.
+
+```shell
+flm run qwen3.5-flash:2b -r 1
+```
+
+⚡ **Note — what "Flash" changes:**
+
+- Same weights as `qwen3.5:2b` (the `Qwen3.5-2B-NPU2` package, nothing extra to download), served by a different engine: prefill kernels built for the 2B's shapes, the output head inside the decode layer, and a single NPU overlay for the vision encoder.
+- **Faster prefill, and decode too.** Time to first token is about 0.34 s for a 128-token prompt and 0.49 s for a 1,015-token prompt, against 0.43 s and 0.81 s for `qwen3.5:2b`; generation runs at about 33 tokens/s at a 1k context, against 29 tokens/s. See the [Flash benchmarks](https://fastflowlm.com/docs/benchmarks/flash_results/).
+- **Single-turn.** Every request starts from a clean state — earlier turns are not carried over. A system prompt is the one exception: it is pinned on first use and reused on later requests, so it is not re-prefilled on every call.
+- **Context length is fixed at 1k tokens.** Context-length overrides are ignored for this model. A prompt can be about 1,015 tokens long; the last few tokens of the window are kept for the start of the reply.
+- **Tool calling is not supported.** Any tools passed with the request are dropped.
+- **Example usage:** [Flash models in server mode](https://fastflowlm.com/docs/instructions/server/openapi/#-example-flash-models-single-turn-pinned-system-prompt)
+
+---
 ## 🧩 Model Card: [Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B)
 
 - **Type:** Image-Text-to-Text
