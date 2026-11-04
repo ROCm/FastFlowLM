@@ -424,6 +424,9 @@ void AutoModel::_prefix_attach(void* engine, const flm_state_api* api, int image
     static const bool disabled = std::getenv("FLM_DISABLE_PREFIX_SLOTS") != nullptr;
     this->prefix_cache_.image_token_id = image_token_id;
     this->prefix_cache_.configure(this->prefix_cache_mb_arg_, this->prefix_slots_arg_, this->prefix_min_gain_arg_);
+    if (this->backend_ && engine == this->lm_engine && this->backend_->state_api()) {
+        api = this->backend_->state_api(); // the engine came from a library the frontend does not link
+    }
     if (disabled || engine == nullptr || api == nullptr) {
         this->prefix_cache_.attach(nullptr, nullptr);
         return;

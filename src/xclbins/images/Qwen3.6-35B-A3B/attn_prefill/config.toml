@@ -1,0 +1,13 @@
+# config/attn_prefill.toml -- the attn_prefill numbers of Qwen3.6-35B-A3B.
+#
+# make copy builds the op attn_prefill with this file. The keys are the keys
+# of the op's default config (attn_prefill/config.toml in the kernel tree).
+
+# Dimension of a head (head_dim).
+HEAD_DIM = 256
+
+# Query heads (num_attention_heads).
+Q_HEADS = 16
+
+# Key / value heads (num_key_value_heads).
+KV_HEADS = 2

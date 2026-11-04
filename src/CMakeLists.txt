@@ -48,11 +48,13 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 # ———————————————————————————————————————————————
 option(FLM_USE_HRX "Use the HRX amdxdna NPU runtime instead of XRT (0=XRT default, 1=HRX)" OFF)
 option(FLM_PORTABLE_BUILD "Build portable distribution with bundled runtime libraries" OFF)
-# Where the kernels come from. FastFlowLM's own flow and ryzenai-corelib share
-# no engine, so a build links one or the other; this option is not an extra.
-# It also fixes the NPU generation the build targets -- see utils/npu_platform.hpp.
+# ryzenai-corelib (exactly 0.53.0) beside FastFlowLM's own engines: the two
+# share no engine, and each model tag is served by one of them (a family ending
+# in "-core" is corelib's), so both are offered side by side -- with
+# FLM_NPU_PLATFORM=aie_next, the aie_next flm engines next to corelib's models.
+# corelib also tells which NPU generation this host has: utils/npu_platform.hpp.
 option(FLM_ENABLE_CORE
-       "Reach kernels through ryzenai-corelib instead of FastFlowLM's own flow" OFF)
+       "Also reach kernels through ryzenai-corelib, beside FastFlowLM's own flow" OFF)
 
 if(FLM_ENABLE_CORE)
     # The corelib prefix lives outside this repository, so its headers have to
@@ -62,10 +64,13 @@ if(FLM_ENABLE_CORE)
     # honours CMAKE_PREFIX_PATH. Without the hints every configure has to be
     # handed a prefix on the command line, which is the only reason the core
     # build ever needed an environment variable.
+    # Last, the C:/dev prefix the Windows build already takes Boost, vcpkg and
+    # XRT from: corelib 0.53.0 (the version corelib_api.hpp pins) installed there.
     find_path(RYZENAI_CORELIB_INCLUDE_DIR NAMES ryzenai/corelib.h
         HINTS "${CMAKE_SOURCE_DIR}/include"
               "${RYZENAI_CORELIB_ROOT}/include"
-              "$ENV{RYZENAI_CORELIB_ROOT}/include" REQUIRED)
+              "$ENV{RYZENAI_CORELIB_ROOT}/include"
+              "C:/dev/ryzenai-corelib-0.53.0/install/include" REQUIRED)
     # corelib is linked in rather than dlopened.
     # A conda/pip prefix keeps its import libs beside the headers; a CMake
     # install prefix puts them in lib/ or lib64/ depending on the distribution,
@@ -106,6 +111,38 @@ endif()
 # Prebuilt engine libraries live in a per-backend subdirectory so the XRT-built
 # and HRX-built .so/.dll/.lib never collide (see src/lib/xrt and src/lib/hrx).
 set(FLM_ENGINE_LIB_DIR "${CMAKE_SOURCE_DIR}/lib/${FLM_RUNTIME_NAME}")
+
+# ———————————————————————————————————————————————
+# NPU platform. aie2p is every engine in lib/<runtime>. An engine that also has
+# an aie_next build ships beside it as <engine>_aie_next: same class, same
+# header shape (include/models/<m>/flm/aie_next/), so the frontend is unchanged.
+# An aie2p build loads it at run time on dev04 silicon (flm_backend.hpp); an
+# aie_next build links it in place of the aie2p engine. Families without one
+# keep their aie2p engine; the catalog's supported_platforms is what keeps them
+# off aie_next silicon.
+# ———————————————————————————————————————————————
+set(FLM_NPU_PLATFORM "aie2p" CACHE STRING "NPU platform the flm engines are built for (aie2p or aie_next)")
+set_property(CACHE FLM_NPU_PLATFORM PROPERTY STRINGS aie2p aie_next)
+set(FLM_NEXT_ENGINE_LIBS "")
+set(FLM_ENGINE_RPATH "${FLM_ENGINE_LIB_DIR}")
+if(FLM_NPU_PLATFORM STREQUAL "aie_next")
+    if(FLM_USE_HRX)
+        message(FATAL_ERROR "FLM_NPU_PLATFORM=aie_next is XRT only for now")
+    endif()
+    # Windows: the import libs of the DLLs beside them
+    if(WIN32)
+        file(GLOB FLM_NEXT_ENGINE_LIBS "${FLM_ENGINE_LIB_DIR}/*_aie_next.lib")
+    else()
+        file(GLOB FLM_NEXT_ENGINE_LIBS "${FLM_ENGINE_LIB_DIR}/lib*_aie_next.so")
+    endif()
+    if(NOT FLM_NEXT_ENGINE_LIBS)
+        message(FATAL_ERROR "FLM_NPU_PLATFORM=aie_next but ${FLM_ENGINE_LIB_DIR} has no *_aie_next engine library")
+    endif()
+    add_compile_definitions(FLM_NPU_AIE_NEXT=1)
+    message(STATUS "FLM NPU platform: aie_next (engines: ${FLM_NEXT_ENGINE_LIBS})")
+elseif(NOT FLM_NPU_PLATFORM STREQUAL "aie2p")
+    message(FATAL_ERROR "FLM_NPU_PLATFORM must be aie2p or aie_next, got '${FLM_NPU_PLATFORM}'")
+endif()
 
 # The flash engine libs (qwen3vl_flash, gemma4e_flash) are always shipped in
 # src/lib/${FLM_RUNTIME_NAME} for every backend, so their model families are
@@ -266,6 +303,14 @@ endif()
 
 add_executable(flm ${SOURCES} ${HEADERS})
 
+# An aie_next flm links other engines, so it must not land on the stock one in
+# build/: the stock tree would then take it for up to date.
+if(FLM_NPU_PLATFORM STREQUAL "aie_next")
+    set_target_properties(flm PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+        RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}")
+endif()
+
 if(FLM_ENABLE_CORE)
     include("${CMAKE_SOURCE_DIR}/common/core/core_sources.cmake")
     add_library(flm_core STATIC ${FLM_CORE_SOURCES})
@@ -312,6 +357,21 @@ if(FLM_ENABLE_CORE)
                             "copy them beside flm.exe by hand")
         endif()
     endif()
+elseif(NOT FLM_USE_HRX)
+    # Without corelib, flm_util (lib/xrt, built in FastFlowLM_IRON) tells which
+    # NPU generation this host has (common/npu_platform.cpp), so a default build
+    # runs the aie_next engines on dev04 (flm_backend.hpp). A corelib build
+    # asks corelib and does not link it.
+    if(WIN32)
+        set(_flm_util_lib "${FLM_ENGINE_LIB_DIR}/flm_util.lib")
+    else()
+        set(_flm_util_lib "${FLM_ENGINE_LIB_DIR}/libflm_util.so")
+    endif()
+    if(NOT EXISTS "${_flm_util_lib}")
+        message(FATAL_ERROR "${FLM_ENGINE_LIB_DIR} has no flm_util (make install in FastFlowLM_IRON/FLM_DLL/detail/flm_util)")
+    endif()
+    target_link_libraries(flm PRIVATE flm_util)
+    target_compile_definitions(flm PRIVATE FLM_NPU_UTIL=1)
 endif()
 
 # ———————————————————————————————————————————————
@@ -578,6 +638,14 @@ endif()
 # Link your custom libraries (these may still be DLLs if no static versions available)
 target_link_libraries(flm PRIVATE flm_xgrammar)
 
+# aie_next: link each <engine>_aie_next in place of <engine> (empty on aie2p)
+foreach(_next_lib ${FLM_NEXT_ENGINE_LIBS})
+    get_filename_component(_next_name "${_next_lib}" NAME_WE)
+    string(REGEX REPLACE "^lib" "" _next_name "${_next_name}")
+    string(REGEX REPLACE "_aie_next$" "" _engine_name "${_next_name}")
+    list(TRANSFORM FLM_ENGINE_LINK_LIBS REPLACE "^${_engine_name}$" "${_next_name}")
+endforeach()
+
 target_link_libraries(flm PUBLIC
     ${FLM_ENGINE_LINK_LIBS}
     # flm's own code calls nothing in the four shared-runtime libs below -- the
@@ -630,7 +698,7 @@ else()
     endif()
     if(NOT WIN32)
         set_target_properties(flm PROPERTIES
-            BUILD_RPATH "${FLM_ENGINE_LIB_DIR}")
+            BUILD_RPATH "${FLM_ENGINE_RPATH}")
     endif()
 endif()
 
@@ -716,7 +784,7 @@ endif()
 # ———————————————————————————————————————————————
 # Copy the build flm.exe into the out directory (for local dev)
 # ———————————————————————————————————————————————
-if(WIN32)
+if(WIN32 AND NOT FLM_NPU_PLATFORM STREQUAL "aie_next")
     add_custom_command(TARGET flm POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy
             $<TARGET_FILE:flm>
@@ -1036,4 +1104,10 @@ install(FILES
 
 # xclbins, which are loaded by shared libraries need to be in location
 # relative to the executable, so we install them relative to the binary.
-install(DIRECTORY xclbins DESTINATION "${FLM_SHARE_DESTINATION}")
+# xclbins/images/<model>/ (aie_next engines' array programs, loaded at run time)
+# are not xclbins: the engines look for them in share/flm/images.
+install(DIRECTORY xclbins DESTINATION "${FLM_SHARE_DESTINATION}" PATTERN "images" EXCLUDE)
+if(IS_DIRECTORY "${CMAKE_SOURCE_DIR}/xclbins/images")
+    install(DIRECTORY xclbins/images DESTINATION "${FLM_SHARE_DESTINATION}"
+            PATTERN ".stamp" EXCLUDE)
+endif()

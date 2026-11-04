@@ -33,20 +33,33 @@ constexpr std::string_view platform_id(npu_platform platform) {
 }
 
 /// \brief the generation assumed when nothing identifies one
-constexpr npu_platform default_npu_platform() { return npu_platform::aie2p; }
+/// \note An aie_next build's flm engines run on dev04 silicon only, so that
+///       build assumes dev04; every other build assumes aie2p.
+constexpr npu_platform default_npu_platform() {
+#if defined(FLM_NPU_AIE_NEXT)
+    return npu_platform::dev04;
+#else
+    return npu_platform::aie2p;
+#endif
+}
 
 /// \brief the generation corelib's name for this machine's NPU stands for
 /// \param arch what corelib reports: "AIEM", "AIE2P", or "" for none it knows
 constexpr npu_platform platform_from_corelib_arch(std::string_view arch) {
-    return arch == "AIEM" ? npu_platform::dev04 : default_npu_platform();
+    if (arch == "AIEM") return npu_platform::dev04;
+    if (arch == "AIE2P") return npu_platform::aie2p;
+    return default_npu_platform();
 }
 
 /// \brief ask the machine which NPU generation it has
 /// \return the generation of the NPU in this host
 /// \note A build that links corelib asks corelib, which reads the device
-///       itself: FastFlowLM keeps no table of devices. Every dev04 model is a
-///       corelib one, so a build without corelib, or one whose corelib cannot
-///       be loaded, answers default_npu_platform(). Asked once per process.
+///       itself: FastFlowLM keeps no table of devices. An XRT build
+///       without corelib asks flm_util (lib/xrt) instead. A build with
+///       neither, or whose answer names no generation, answers
+///       default_npu_platform(): dev04 for an aie_next build, whose flm
+///       engines and corelib's models are offered side by side, else aie2p.
+///       Asked once per process.
 npu_platform get_device();
 
 /// \brief parse a catalog platform id

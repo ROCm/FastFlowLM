@@ -25,10 +25,13 @@ namespace {
 /// \tparam Engine the concrete engine type
 /// \param registry the registry to populate
 /// \param family the family name, as in details.family
+/// \param next_library its aie_next engine library, run on dev04 (flm_backend.hpp)
 template <class Engine>
-void RegisterFlm(BackendRegistry& registry, const char* family) {
+void RegisterFlm(BackendRegistry& registry, const char* family,
+                 const char* next_library = nullptr) {
     registry.register_backend(family, kFlmBackendId,
-                              flm_factory<Engine>());
+                              flm_factory<Engine>(next_library),
+                              flm_traits<Engine>(next_library));
 }
 
 }  // namespace
@@ -47,7 +50,7 @@ void register_builtin_backends(BackendRegistry& registry) {
     RegisterFlm<qwen3_5vl_npu>(registry, "qwen3.5");
     RegisterFlm<minicpm_v_4_7_npu>(registry, "minicpm-v-4.7");
     RegisterFlm<minicpm_v_4_7_moe_npu>(registry, "minicpm-v-4.7-moe");
-    RegisterFlm<qwen3_6_moe_npu>(registry, "qwen3.6-moe");
+    RegisterFlm<qwen3_6_moe_npu>(registry, "qwen3.6-moe", "qwen3_6_moe_npu_aie_next");
     RegisterFlm<qwen3_8mtp_npu>(registry, "qwen3.8-mtp");
     RegisterFlm<qwen3_8mtp_npu>(registry, "qwen3.8-dflash2");   // the same engine; the draft package turns the DFlash2 drafter on
     RegisterFlm<gemma_npu>(registry, "gemma3");

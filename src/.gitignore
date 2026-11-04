@@ -9,3 +9,4 @@ include/model_list.hpp~
 inno/.flm.iss.un~
 
 *.csv
+out_*/

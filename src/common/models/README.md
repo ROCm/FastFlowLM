@@ -359,8 +359,11 @@ Points that are easy to get wrong:
   `src/test/model_list_platform` fails if one is missing or disagrees with its
   family name. Omitting it is legal — it means *every* generation, which is what
   a catalog written before the key meant — but a shipped entry should say what
-  it was built for. Every FastFlowLM entry is `["aie2p"]`; every `-core` entry is
-  `["dev04"]`.
+  it was built for. Every FastFlowLM entry names `"aie2p"`, and also `"dev04"`
+  once its family has an aie_next engine (built with
+  `-DFLM_NPU_PLATFORM=aie_next`, from `lib/<runtime>/aie_next/`); every `-core`
+  entry is `["dev04"]`. So a family can have two implementations on dev04, e.g.
+  `qwen3.6-moe` (FastFlowLM kernels) and `qwen3.6-moe-core` (corelib).
 - Separate families mean **separate tags**, so no `model_info_key` redirect is
   needed: `model_info.json` keys the corelib records under `<family>-core:<size>`
   directly, which is also the tag a user types.

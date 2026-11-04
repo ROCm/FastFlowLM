@@ -1,0 +1,14 @@
+# config/mvm.toml -- the mvm numbers of Qwen3.6-35B-A3B.
+#
+# make copy builds the op mvm with this file. The keys are the keys of the
+# op's default config (mvm/config.toml in the kernel tree).
+
+# Hidden size (hidden_size): K of norm mode.
+D = 2048
+
+# The largest K of a decode projection (num_attention_heads x head_dim, the
+# input of o_proj and out_proj).
+K_MAX = 4096
+
+# Epsilon of the RMS norm in norm mode (rms_norm_eps).
+EPS = 1e-6

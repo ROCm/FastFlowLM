@@ -5164,5 +5164,67 @@
             "size": 8952,
             "sha256": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041"
         }
+    ],
+    "qwen3.6-moe:35b-a3b-dev04": [
+        {
+            "type": "file",
+            "oid": "f6a7527cede01bc2f044b1799ac812c33fca468b",
+            "size": 1673,
+            "path": ".gitattributes"
+        },
+        {
+            "type": "file",
+            "oid": "a8755d827c0a7b614c246c4060dfd58ab352a8ff",
+            "size": 7764,
+            "path": "chat_template.jinja"
+        },
+        {
+            "type": "file",
+            "oid": "663d99f07e89c5b6f89e7224b6afc20f42d6744e",
+            "size": 4017,
+            "path": "config.json"
+        },
+        {
+            "type": "file",
+            "oid": "4f7edbe40c3e8564346d7b2d036fc41fd5c61251",
+            "size": 20769682432,
+            "lfs": {
+                "oid": "d355af4d9e7ba7b109633472ae61227fcc23950b2f70d6277fb4be4342165769",
+                "size": 20769682432,
+                "pointerSize": 136
+            },
+            "xetHash": "fc0be39402936b8dba5be520e16058f2f4090487d53064b7db8959e945af5a4a",
+            "path": "model.q4nx"
+        },
+        {
+            "type": "file",
+            "oid": "a73a846725794819aa6e1c9e97d8dc9671c2006d",
+            "size": 12807982,
+            "lfs": {
+                "oid": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+                "size": 12807982,
+                "pointerSize": 133
+            },
+            "xetHash": "655d3f6803c619aa34c31a027ce74a315eaa200aad3fca5b968dcdf6485bfba2",
+            "path": "tokenizer.json"
+        },
+        {
+            "type": "file",
+            "oid": "3952ffef1dfabf76646d5f8a1a899e760db72cb4",
+            "size": 8761,
+            "path": "tokenizer_config.json"
+        },
+        {
+            "type": "file",
+            "oid": "9d3425e1318159c5eacd35dc2963e0991f1fabd2",
+            "size": 1008858888,
+            "lfs": {
+                "oid": "11845c3c112ccb481382763e7e1838cca103b100a73bbd98b7a61cc12861323e",
+                "size": 1008858888,
+                "pointerSize": 135
+            },
+            "xetHash": "860599816a63700e42eb8e141c2c5f83cd1af1426de148725b0dca76a2c1bf11",
+            "path": "vision_weight.q4nx"
+        }
     ]
 }

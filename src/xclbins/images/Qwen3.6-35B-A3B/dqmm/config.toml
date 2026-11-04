@@ -1,0 +1,15 @@
+# config/dqmm.toml -- the dqmm numbers of Qwen3.6-35B-A3B.
+#
+# make copy builds the op dqmm with this file. The keys are the keys of the
+# op's default config (dqmm/config.toml in the kernel tree).
+
+# Hidden size (hidden_size): K of dqmm, dqmm_ab, dqmm_glu and dqmm_glu_m1.
+D = 2048
+
+# Input of out_proj and o_proj (linear_num_value_heads x linear_value_head_dim
+# = num_attention_heads x head_dim): K of dqmm_k4096.
+V_DIM = 4096
+
+# Expert intermediate size (moe_intermediate_size): K of dqmm_k512 and
+# dqmm_k512_m1.
+MOE_I = 512

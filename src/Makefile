@@ -1,52 +1,47 @@
 BUILD_DIR := build
 OUT_DIR   := out
-PWSH      := powershell.exe
 
-.PHONY: all clean run run-hrx serve install hrx
+.PHONY: all clean run run-hrx serve stage install hrx
 
+# Which flm to build and run: the native Windows one or the Linux one.
+#   * make on Windows (cmd, PowerShell, Git Bash, conda) -> windows
+#   * make inside WSL on a Windows-drive checkout (/mnt/c/...) -> windows, driven
+#     through WSL interop (powershell.exe), since the NPU is only reachable from
+#     the Windows side
+#   * anything else (Linux, or WSL on its own filesystem) -> linux
+# Override with `make FLM_PLATFORM=linux` (or windows).
 ifeq ($(OS),Windows_NT)
+FLM_PLATFORM ?= windows
+else ifneq ($(shell grep -qis microsoft /proc/sys/kernel/osrelease && echo wsl),)
+FLM_PLATFORM ?= $(if $(filter /mnt/%,$(CURDIR)),windows,linux)
+else
+FLM_PLATFORM ?= linux
+endif
 
-all:
-	@$(PWSH) "if (!(Test-Path '$(BUILD_DIR)')) { New-Item -ItemType Directory -Path '$(BUILD_DIR)' }"
-	@$(PWSH) "if (!(Test-Path '$(OUT_DIR)'))   { New-Item -ItemType Directory -Path '$(OUT_DIR)' }"
-	@$(PWSH) "cmake --preset windows-vs18"
-	@$(PWSH) "cmake --build build --preset windows-default"
+ifeq ($(FLM_PLATFORM),windows)
 
-hrx:
-	@$(PWSH) "if (!(Test-Path '$(BUILD_DIR)')) { New-Item -ItemType Directory -Path '$(BUILD_DIR)' }"
-	@$(PWSH) "if (!(Test-Path '$(OUT_DIR)'))   { New-Item -ItemType Directory -Path '$(OUT_DIR)' }"
-	@$(PWSH) "$$lines = & '..\\hrx-integration\\fetch-hrx-release.ps1' 6>&1 | ForEach-Object { $$_.ToString() }; $$lines | ForEach-Object { Write-Host $$_ }; $$prefix = ($$lines | Where-Object { $$_ -like 'HRX_CMAKE_PREFIX=*' } | Select-Object -First 1) -replace 'HRX_CMAKE_PREFIX=', ''; if (!$$prefix) { throw 'failed to determine HRX_CMAKE_PREFIX from fetch-hrx-release.ps1 output' }; $$prefixArg = '-DCMAKE_PREFIX_PATH=' + $$prefix; cmake --preset windows-vs18 -DFLM_USE_HRX=ON $$prefixArg; cmake --build build --preset windows-default"
+# Everything Windows-side lives in make-windows.ps1. Knobs:
+#   RUN_ARGS   what `make run` passes after `flm run`   (make run RUN_ARGS="qwen3:8b")
+#   SERVE_ARGS what `make serve` passes after `flm serve`
+#   JOBS       compilers at once, across all projects (cl, cargo); default every core
+#   PRESET     configure preset; default picks windows-vs18 or windows-default
+#              (windows-core-on: also ryzenai-corelib)
+#   BUILD_DIR  build tree; default the preset's binaryDir
+#   FLM_DEVENV script setting up MSVC + Windows SDK when cl.exe isn't on PATH
+#              (default: C:\dev\flm-devenv.ps1 when it exists)
+RUN_ARGS   ?= llama3.2:1b -a 0
+SERVE_ARGS ?= qwen2.5vl-it -c 32768
 
-run:
-	@$(PWSH) "Copy-Item 'lib\\xrt\\*.dll' '$(OUT_DIR)' -Force"
-	@$(PWSH) "Copy-Item 'lib\\*.dll' '$(OUT_DIR)' -Force"
-	@$(PWSH) "Copy-Item 'model_list.json' '$(OUT_DIR)' -Force"
-	@$(PWSH) "Copy-Item 'model_info.json' '$(OUT_DIR)' -Force"
-	@$(PWSH) "Copy-Item 'xclbins' '$(OUT_DIR)' -Recurse -Force"
-	@$(PWSH) "cd '$(OUT_DIR)'; .\\flm.exe run llama3.2:1b -a 0"
+WIN_MAKE = powershell.exe -NoProfile -ExecutionPolicy Bypass -File make-windows.ps1
+WIN_ARGS = -RunArgs "$(RUN_ARGS)" -ServeArgs "$(SERVE_ARGS)" $(if $(JOBS),-Jobs $(JOBS)) \
+	$(if $(filter command line environment,$(origin BUILD_DIR)),-BuildDir "$(BUILD_DIR)") \
+	-OutDir "$(OUT_DIR)" \
+	$(if $(PRESET),-Preset "$(PRESET)") \
+	$(if $(FLM_DEVENV),-DevEnv "$(FLM_DEVENV)") \
+	$(if $(PREFIX),-Prefix "$(PREFIX)")
 
-run-hrx:
-	@$(PWSH) "Copy-Item 'lib\\hrx\\*.dll' '$(OUT_DIR)' -Force"
-	@$(PWSH) "Copy-Item 'lib\\*.dll' '$(OUT_DIR)' -Force"
-	@$(PWSH) "$$hrxDll = Get-ChildItem -Path '..\\hrx-integration\\.hrx-release' -Recurse -Filter 'hrx.dll' -ErrorAction SilentlyContinue | Select-Object -First 1; if ($$hrxDll) { Copy-Item $$hrxDll.FullName '$(OUT_DIR)' -Force } else { Write-Warning 'hrx.dll not found under hrx-integration\\.hrx-release; run make hrx first' }"
-	@$(PWSH) "Copy-Item 'model_list.json' '$(OUT_DIR)' -Force"
-	@$(PWSH) "Copy-Item 'model_info.json' '$(OUT_DIR)' -Force"
-	@$(PWSH) "Copy-Item 'xclbins' '$(OUT_DIR)' -Recurse -Force"
-	@$(PWSH) "cd '$(OUT_DIR)'; .\\flm.exe run llama3.2:1b -a 0"
-
-serve:
-	@$(PWSH) "Copy-Item 'lib\\*.dll' '$(OUT_DIR)' -Force"
-	@$(PWSH) "Copy-Item 'model_list.json' '$(OUT_DIR)' -Force"
-	@$(PWSH) "Copy-Item 'xclbins' '$(OUT_DIR)' -Recurse -Force"
-	@$(PWSH) "cd '$(OUT_DIR)'; .\\flm.exe serve qwen2.5vl-it -c 32768"
-
-clean:
-	@$(PWSH) "Remove-Item -Recurse -Force '$(BUILD_DIR)'"
-	@$(PWSH) "Remove-Item -Recurse -Force '$(OUT_DIR)'"
-
-install:
-	@echo "Installing using CMake..."
-	@cd $(BUILD_DIR) && cmake --install . --prefix $(PREFIX)
+all hrx run run-hrx serve stage clean install:
+	@$(WIN_MAKE) $@ $(WIN_ARGS)
 
 else
 

@@ -1,0 +1,11 @@
+# config/vision_attn.toml -- the vision_attn numbers of Qwen3.6-35B-A3B
+# (vision_config).
+#
+# make copy builds the op vision_attn with this file. The keys are the keys
+# of the op's default config (vision_attn/config.toml in the kernel tree).
+
+# Attention heads (num_heads).
+HEADS = 16
+
+# Dimension of a head (hidden_size / num_heads).
+HEAD_DIM = 72

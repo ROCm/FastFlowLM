@@ -1,0 +1,22 @@
+# config/gdn_prefill.toml -- the gdn_prefill numbers of Qwen3.6-35B-A3B.
+#
+# make copy builds the op gdn_prefill with this file. The keys are the keys
+# of the op's default config (gdn_prefill/config.toml in the kernel tree).
+
+# Hidden size (hidden_size). It sets the size of an ab_w record.
+D = 2048
+
+# v heads of the linear attention (linear_num_value_heads).
+V_HEADS = 32
+
+# q, k heads (linear_num_key_heads).
+QK_HEADS = 16
+
+# Size of a q, k head (linear_key_head_dim).
+DK = 128
+
+# Size of a v head (linear_value_head_dim).
+DV = 128
+
+# Epsilon of the l2 norm of q and k.
+L2_EPS = 1e-6
