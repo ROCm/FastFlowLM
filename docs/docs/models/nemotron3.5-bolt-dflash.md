@@ -78,7 +78,7 @@ Expected: `1, 2, 3, ..., 40` followed by `done`, at a visibly higher speed than 
   `Nemotron-3.5-Bolt-E4B-DFlash-NPU2`). Nothing new to download if you already have that tag
 - **Max / Default Context Length:** 1k tokens (fixed, like every flash model)
 - **License:** [OpenMDW-1.1](https://openmdw.ai/license/1-1/)
-- **FastFlowLM:** 1.0.13 or later
+- **FastFlowLM:** 1.0.12 or later
 
 ▶️ Run with FastFlowLM in PowerShell:
 
