@@ -210,11 +210,11 @@ flm run qwen3vl-it:4b
 You can control image resizing when running or serving the model using the `--img-pre-resize` flag or simply `-r`:
 
 ```shell
-flm run qwen3vl-it:3b -r 1
+flm run qwen3vl-it:4b -r 1
 ```
 
 ```shell
-flm serve qwen3vl-it:3b -r 1
+flm serve qwen3vl-it:4b -r 1
 ```
 
 The `-r` option determines the image's height:

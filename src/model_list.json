@@ -56,7 +56,7 @@
                 ],
                 "details": {
                     "family": "nanbeige",
-                    "think": false,
+                    "think": true,
                     "parameter_size": "3B",
                     "quantization_level": "Q4_1"
                 },
@@ -158,6 +158,7 @@
                     "format": "NPU2",
                     "family": "gemma4e",
                     "think": true,
+                    "think_toggleable": true,
                     "parameter_size": "5B",
                     "quantization_level": "Q4_1"
                 },
@@ -195,6 +196,7 @@
                     "format": "NPU2",
                     "family": "gemma4e",
                     "think": true,
+                    "think_toggleable": true,
                     "parameter_size": "8B",
                     "quantization_level": "Q4_1"
                 },
@@ -231,6 +233,7 @@
                     "format": "NPU2",
                     "family": "gemma4-12b",
                     "think": true,
+                    "think_toggleable": true,
                     "parameter_size": "12B",
                     "quantization_level": "Q4_0"
                 },
@@ -270,6 +273,7 @@
                     "format": "NPU2",
                     "family": "gemma4e",
                     "think": true,
+                    "think_toggleable": true,
                     "parameter_size": "8B",
                     "quantization_level": "Q4_1"
                 },
@@ -381,6 +385,7 @@
                     "format": "NPU2",
                     "family": "gemma4e-flash",
                     "think": true,
+                    "think_toggleable": true,
                     "parameter_size": "5B",
                     "quantization_level": "Q4_1"
                 },
@@ -418,6 +423,7 @@
                     "format": "NPU2",
                     "family": "gemma4e-flash",
                     "think": true,
+                    "think_toggleable": true,
                     "parameter_size": "8B",
                     "quantization_level": "Q4_1"
                 },
@@ -455,6 +461,7 @@
                     "format": "NPU2",
                     "family": "qwen3.5",
                     "think": true,
+                    "think_toggleable": true,
                     "parameter_size": "0.8B",
                     "quantization_level": "Q4_K"
                 },
@@ -487,6 +494,7 @@
                     "format": "NPU2",
                     "family": "qwen3.5",
                     "think": true,
+                    "think_toggleable": true,
                     "parameter_size": "2B",
                     "quantization_level": "Q4_K"
                 },
@@ -520,6 +528,7 @@
                     "format": "NPU2",
                     "family": "qwen3.5",
                     "think": true,
+                    "think_toggleable": true,
                     "parameter_size": "4B",
                     "quantization_level": "Q4_K"
                 },
@@ -553,6 +562,7 @@
                     "format": "NPU2",
                     "family": "qwen3.5",
                     "think": true,
+                    "think_toggleable": true,
                     "parameter_size": "9B",
                     "quantization_level": "Q4_K"
                 },
@@ -589,12 +599,14 @@
                 "details": {
                     "format": "NPU2",
                     "family": "qwen3.5-flash",
-                    "think": false,
+                    "think": true,
+                    "think_toggleable": true,
                     "parameter_size": "2B",
                     "quantization_level": "Q4_K"
                 },
                 "label": [
                     "vision",
+                    "reasoning",
                     "single-turn"
                 ],
                 "footprint": 2.2
@@ -624,6 +636,7 @@
                     "format": "NPU2",
                     "family": "minicpm-v-4.7",
                     "think": true,
+                    "think_toggleable": true,
                     "parameter_size": "1B",
                     "quantization_level": "Q4_K"
                 },
@@ -660,6 +673,7 @@
                     "format": "NPU2",
                     "family": "minicpm-v-4.7-moe",
                     "think": true,
+                    "think_toggleable": true,
                     "parameter_size": "35B",
                     "quantization_level": "Q4_K"
                 },
@@ -696,6 +710,7 @@
                     "format": "NPU2",
                     "family": "qwen3.6-moe",
                     "think": true,
+                    "think_toggleable": true,
                     "parameter_size": "35B",
                     "quantization_level": "Q4_K"
                 },
@@ -724,7 +739,7 @@
                     "chat_template.jinja",
                     "vision_weight.q4nx"
                 ],
-                "vlm": false,
+                "vlm": true,
                 "default_context_length": 4096,
                 "max_prefill_len": 4096,
                 "max_bench_length": 8192,
@@ -738,7 +753,8 @@
                 "label": [
                     "vision",
                     "reasoning",
-                    "tool-calling"
+                    "tool-calling",
+                    "speculative"
                 ],
                 "footprint": 18.1
             }
@@ -758,7 +774,7 @@
                     "config.json",
                     "dflash_weight.q4nx"
                 ],
-                "vlm": false,
+                "vlm": true,
                 "default_context_length": 4096,
                 "max_prefill_len": 4096,
                 "max_bench_length": 8192,
@@ -918,6 +934,10 @@
                     "tokenizer.json",
                     "tokenizer_config.json",
                     "chat_template.jinja"
+                ],
+                "label": [
+                    "reasoning",
+                    "tool-calling"
                 ],
                 "footprint": 1.8
             }
@@ -1878,7 +1898,7 @@
                 "max_prefill_len": 4096,
                 "details": {
                     "family": "qwen2",
-                    "think": true,
+                    "think": false,
                     "think_toggleable": false,
                     "parameter_size": "3B",
                     "quantization_level": "Q4_0"
@@ -1908,7 +1928,7 @@
                 "max_prefill_len": 4096,
                 "details": {
                     "family": "qwen2vl",
-                    "think": true,
+                    "think": false,
                     "think_toggleable": false,
                     "parameter_size": "3B",
                     "quantization_level": "Q4_1"

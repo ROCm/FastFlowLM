@@ -806,7 +806,7 @@ void TestShippedCatalogDeclaresTheQwen35FlashTag() {
     }
     // the Flash contract
     TEST_REQUIRE(flash.at("details").at("family") == "qwen3.5-flash");
-    TEST_REQUIRE(flash.at("details").at("think") == false);
+    TEST_REQUIRE(flash.at("details").at("think") == true);
     TEST_REQUIRE(flash.at("default_context_length") == 1024);
     TEST_REQUIRE(flash.at("max_prefill_len") == 1024);
     const auto labels = flash.at("label").get<std::vector<std::string>>();
