@@ -43,6 +43,8 @@ $env:WHISPER_CACHE_DEQUANT = "0"; flm serve --asr 1
 
 `WHISPER_PROFILE=1` prints one line per encoder window with the time spent in each stage (stderr).
 
+Full speed, accuracy and memory tables: [Whisper benchmarks](/docs/benchmarks/whisper_results/).
+
 ▶️ Run with FastFlowLM in PowerShell:  
 
 > The ASR model must be used with an LLM (loaded concurrently) in CLI Mode.
