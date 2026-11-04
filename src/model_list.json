@@ -78,7 +78,7 @@
                 "file_url": "https://huggingface.co/api/models/FastFlowLM/Confucius4-R2T2-NPU2/tree/main",
                 "ms_url": "https://modelscope.cn/models/amd/Confucius4-R2T2-NPU2",
                 "modified_at": "2026-11-02T00:00:00Z",
-                "size": 3100000000,
+                "size": 3920000000,
                 "flm_min_version": "1.0.13",
                 "default_context_length": 8192,
                 "max_prefill_len": 4096,
@@ -86,6 +86,7 @@
                     "config.json",
                     "model.q4nx",
                     "audio_weight.q4nx",
+                    "npu_q41.q4nx",
                     "tokenizer.json",
                     "tokenizer_config.json",
                     "chat_template.jinja",
@@ -98,7 +99,7 @@
                     "family": "r2t2",
                     "think": false,
                     "parameter_size": "2B",
-                    "quantization_level": "Q8_0"
+                    "quantization_level": "Q8_0 / Q4_1"
                 },
                 "label": [
                     "audio",

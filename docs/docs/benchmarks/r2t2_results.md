@@ -28,10 +28,10 @@ The same 180 recordings were transcribed by the original BF16 model (PyTorch, CP
 
 | **Language** | **Metric** | **BF16 original** | **FLM (NPU)** | **Difference** |
 |--------------|------------|------------------:|--------------:|---------------:|
-| English      | WER (%)    | 2.89 | 2.98 | +0.09 (−0.08 … +0.26) |
-| Mandarin     | CER (%)    | 8.96 | 8.96 | +0.00 |
+| English      | WER (%)    | 2.89 | 2.81 | −0.09 (−0.31 … +0.09) |
+| Mandarin     | CER (%)    | 8.96 | 6.37 | −2.60 (−9.84 … +1.37) |
 
-The decoder is stored as **Q8_0**: it is lossless for this model, while 4-bit quantization (Q4_0, Q4_1, Q4_K) is not (empty transcripts, or Mandarin answered in English). Mandarin CER is dominated by number and punctuation style, not by recognition errors, which is why the absolute value is higher than the English one.
+The NPU decode reads mixed precision: Q4_1 for q/k/o/gate/up and the output head, Q8_0 for v_proj and down_proj (the prompt is processed on the CPU with Q8_0 throughout). 4-bit quantization of every matrix (Q4_0, Q4_1, Q4_K) breaks this model (empty transcripts, or Mandarin answered in English); keeping v_proj and down_proj at 8 bit does not change its accuracy, and decodes ~24 % faster than Q8_0 everywhere. Mandarin CER is dominated by number and punctuation style (digits vs Chinese numerals), not by recognition errors, which is why the absolute values are higher than the English ones and why their difference is not significant.
 
 For recordings cut at 0.5 s … 60 s (around the encoder's 1 s chunk and 8 s window edges), the FLM transcripts are identical to the BF16 original's in all 18 cases.
 
@@ -43,12 +43,12 @@ Prompt processing (audio encoder + prefill) per recording length, and decoding s
 
 | **Audio length** | **Encode + prefill** | **per second of audio** | **Decoding (tokens/s)** |
 |------------------|---------------------:|------------------------:|------------------------:|
-| 0 – 4 s          | 0.46 s | 144 ms | 28.7 |
-| 4 – 8 s          | 0.76 s | 127 ms | 28.7 |
-| 8 – 12 s         | 1.09 s | 112 ms | 28.6 |
-| 12 – 20 s        | 1.64 s | 106 ms | 28.4 |
+| 0 – 4 s          | 0.13 s | 43 ms | 38.5 |
+| 4 – 8 s          | 0.21 s | 35 ms | 38.4 |
+| 8 – 12 s         | 0.31 s | 30 ms | 38.0 |
+| 12 – 20 s        | 0.45 s | 28 ms | 37.8 |
 
-End to end through the server (normal request): a 68 s recording takes about 10 s, a 205 s recording 28 s, a 410 s recording 53 s (about 0.13 × real time; recordings longer than a minute are transcribed in pieces of about a minute). Streaming (stream=true): 0.5 × real time at 480 ms chunks, 0.8 × at 240 ms, 0.9 × at 200 ms, 1.1 × at the paper's 160 ms; long recordings stay at the same rate.
+End to end through the server (normal request): a 68 s recording takes about 8 s, a 205 s recording 22 s, a 410 s recording 42 s (about 0.1 × real time; recordings longer than a minute are transcribed in pieces of about a minute). Streaming (stream=true): 0.45 × real time at 480 ms chunks, 0.75 × at 240 ms, about 0.9 × at 200 ms, 1.05 × at the paper's 160 ms; long recordings stay at the same rate.
 
 ---
 
