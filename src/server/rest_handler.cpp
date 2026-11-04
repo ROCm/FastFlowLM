@@ -1212,7 +1212,7 @@ void RestHandler::handle_chat(const json& request,
                 return;
             }
             // A character the generation stopped partway through can never be finished
-            response_text.resize(response_text.size() - incomplete_utf8_tail(response_text));
+            response_text = sanitize_utf8(response_text);
             //std::string response_text = chat_engine->generate_with_prompt(meta_info, prompts, length_limit, std::cout, payload);
             auto total_end_time = time_utils::now();
             meta_info.total_duration = (uint64_t)time_utils::duration_ns(total_start_time, total_end_time).first;
@@ -1775,7 +1775,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                 return;
             }
             // A character the generation stopped partway through can never be finished
-            response_text.resize(response_text.size() - incomplete_utf8_tail(response_text));
+            response_text = sanitize_utf8(response_text);
             // check response_text
             json choices = build_nstream_response(response_text, meta_info, parse_options,
                                                   lstream ? &lstream->aligner() : nullptr);
