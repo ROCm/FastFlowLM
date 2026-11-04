@@ -248,6 +248,11 @@ void AutoModel::_shared_initialize_model_state(
     header_print("FLM", "Loading model: " << this->model_path);
     this->lm_config = std::make_unique<LM_Config>();
     this->lm_config->from_pretrained(this->model_path);
+    // A tag that shares another tag's weights but runs its own kernels (qwen3.5-flash:2b) names the folder its xclbins
+    // are in; the engine looks them up under lm_config->model_name, which is the weights folder's name otherwise.
+    if (const std::string xclbin_folder = model_info.value("xclbin_folder", std::string()); !xclbin_folder.empty()) {
+        this->lm_config->model_name = xclbin_folder;
+    }
     if (!this->draft_model_path.empty()) {
         // The draft package's own config rides along in the config the engine reads;
         // the xclbins are looked up under the tag's own folder name (D16).
