@@ -36,6 +36,7 @@ endif
 
 SOURCES += test.cpp
 SOURCES += bench_prefill.cpp
+SOURCES += test_long.cpp
 SOURCES += ../../common/AutoModel/automodel.cpp
 SOURCES += ../../common/prefix_slot_cache.cpp
 SOURCES += ../../common/AutoModel/model_backend.cpp
@@ -55,14 +56,14 @@ LDFLAGS += -lhunyuan_npu
 
 CPP_SOURCES := $(filter %.cpp,$(SOURCES))
 ALL_OBJS := $(addprefix $(BUILD_DIR)/,$(notdir $(CPP_SOURCES:.cpp=.o)))
-# test.cpp and bench_prefill.cpp each carry a main(), so they link into separate
-# executables over the same shared objects
-SHARED_OBJS := $(filter-out $(BUILD_DIR)/test.o $(BUILD_DIR)/bench_prefill.o,$(ALL_OBJS))
+# test.cpp, bench_prefill.cpp and test_long.cpp each carry a main(), so they link
+# into separate executables over the same shared objects
+SHARED_OBJS := $(filter-out $(BUILD_DIR)/test.o $(BUILD_DIR)/bench_prefill.o $(BUILD_DIR)/test_long.o,$(ALL_OBJS))
 OBJECTS := $(ALL_OBJS)
 DEPS := $(OBJECTS:.o=.d)
 VPATH := $(sort $(dir $(CPP_SOURCES)))
 
-all: $(BUILD_DIR)/test_hunyuan $(BUILD_DIR)/bench_prefill
+all: $(BUILD_DIR)/test_hunyuan $(BUILD_DIR)/bench_prefill $(BUILD_DIR)/test_long
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
@@ -74,6 +75,9 @@ $(BUILD_DIR)/test_hunyuan: $(BUILD_DIR)/test.o $(SHARED_OBJS)
 	$(CXX) $(CXX_FLAGS) -o $@ $^ $(LDFLAGS) $(DEPENDENCY_LDFLAGS)
 
 $(BUILD_DIR)/bench_prefill: $(BUILD_DIR)/bench_prefill.o $(SHARED_OBJS)
+	$(CXX) $(CXX_FLAGS) -o $@ $^ $(LDFLAGS) $(DEPENDENCY_LDFLAGS)
+
+$(BUILD_DIR)/test_long: $(BUILD_DIR)/test_long.o $(SHARED_OBJS)
 	$(CXX) $(CXX_FLAGS) -o $@ $^ $(LDFLAGS) $(DEPENDENCY_LDFLAGS)
 
 clean:
