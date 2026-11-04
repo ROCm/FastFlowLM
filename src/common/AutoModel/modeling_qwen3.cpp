@@ -257,7 +257,9 @@ std::string Qwen3::decode(chat_meta_info_t& meta_info, int length_limit, std::os
         this->token_history.push_back(sampled_token);
         if (this->is_eos(sampled_token)){
             meta_info.generated_tokens++;
-            if (this->forward_on_eos &&
+            // The forward writes row total_tokens, which is past the end of the
+            // engine's KV window once the context is full.
+            if (this->forward_on_eos && this->total_tokens < decode_cap &&
                 (!this->backend_ || this->backend_->forwards_past_eos())) {
                 this->lm_engine->forward(last_sampled_token);
             } else {
@@ -475,6 +477,14 @@ std::string Qwen3_TK::generate(chat_meta_info_t& meta_info, int length_limit, st
     if (!meta_info.continue_final_message) {
         int sampled_token;
 
+        // The two forwards below write rows total_tokens and total_tokens+1, so
+        // the prompt has to leave room for them: past the engine's KV window
+        // they corrupt it for every later request.
+        if (this->total_tokens + 2 > this->MAX_L) {
+            header_print("WARNING", "Max length reached, stopping generation...");
+            meta_info.stop_reason = MAX_LENGTH_REACHED;
+            return result;
+        }
         this->token_history.push_back(think_start_id);
         this->profiler_list[DECODING_TIME].start();
         this->_force_token(meta_info, think_start_id);
@@ -568,7 +578,14 @@ std::string Qwen3_TK::generate(chat_meta_info_t& meta_info, int length_limit, st
         this->token_history.push_back(sampled_token);
         if (this->is_eos(sampled_token)){
             meta_info.generated_tokens++;
-            this->lm_engine->forward(last_sampled_token);
+            // Its row is past the end of the engine's KV window once the context is
+            // full: forwarding it there corrupts the engine for every later request,
+            // so the next prompt has to carry it instead.
+            if (this->total_tokens < this->MAX_L) {
+                this->lm_engine->forward(last_sampled_token);
+            } else {
+                this->token_history.pop_back();
+            }
             break;
         }
         meta_info.generated_tokens++;
@@ -743,7 +760,14 @@ std::string DeepSeek_r1_0528_8b::generate(chat_meta_info_t& meta_info, int lengt
         token_history.push_back(sampled_token);
         if (this->is_eos(sampled_token)){
             meta_info.generated_tokens++;
-            this->lm_engine->forward(last_sampled_token);
+            // Its row is past the end of the engine's KV window once the context is
+            // full: forwarding it there corrupts the engine for every later request,
+            // so the next prompt has to carry it instead.
+            if (this->total_tokens < this->MAX_L) {
+                this->lm_engine->forward(last_sampled_token);
+            } else {
+                this->token_history.pop_back();
+            }
             break;
         }
         meta_info.generated_tokens++;

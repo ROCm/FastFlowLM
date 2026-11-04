@@ -2,9 +2,9 @@
 
 #include <ryzenai/corelib.h>
 
-#if RYZENAI_CORELIB_VERSION_MAJOR != 0 || RYZENAI_CORELIB_VERSION_MINOR != 53 || \
+#if RYZENAI_CORELIB_VERSION_MAJOR != 0 || RYZENAI_CORELIB_VERSION_MINOR != 60 || \
     RYZENAI_CORELIB_VERSION_PATCH != 0
-#error "FastFlowLM requires ryzenai-corelib headers exactly 0.53.0"
+#error "FastFlowLM requires ryzenai-corelib headers exactly 0.60.0"
 #endif
 
 // ryzenai_corelib_testing_npu_arch, until corelib's public header names the
@@ -45,8 +45,8 @@
     X(ssmlp_weights_create, ryzenai_corelib_ssmlp_bf16_weights_create)             \
     X(weights_copy_data, ryzenai_corelib_weights_copy_data)                        \
     X(ssmlp, ryzenai_corelib_ssmlp_bf16)                                           \
-    X(model_get_info, ryzenai_corelib_model_get_info)                              \
-    X(model_forward, ryzenai_corelib_model_forward)                                \
+    X(model_get_metadata, ryzenai_corelib_model_get_metadata)                      \
+    X(model_run, ryzenai_corelib_model_run)                                        \
     X(model_reset, ryzenai_corelib_model_reset)                                    \
     X(create_model_from_path, ryzenai_corelib_create_model_from_path)              \
     X(model_create_session, ryzenai_corelib_model_create_session)                  \

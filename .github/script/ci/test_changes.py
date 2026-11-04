@@ -81,6 +81,11 @@ class Cli(unittest.TestCase):
         cases = {
             "src/include/AutoModel/modeling_lfm2.hpp": {"lfm2", "lfm2.5-tk"},
             "src/common/AutoModel/modeling_qwen3vl_image.cpp": {"qwen3vl", "qwen3vl-flash"},
+            "src/common/AutoModel/modeling_qwen3_5vl_image.cpp": {"qwen3.5", "qwen3.5-flash"},
+            "src/lib/xrt/libqwen3_5vl_flash.so": {"qwen3.5-flash"},
+            "src/lib/hrx/qwen3_5vl_flash.dll": {"qwen3.5-flash"},
+            "src/include/models/qwen3_5vl_flash/flm/aie2p/qwen3_5vl_flash.hpp": {"qwen3.5-flash"},
+            "src/test/qwen3_5vl_flash/test.cpp": {"qwen3.5-flash"},
             "src/include/models/gemma_text/flm/aie2p/gemma_text_gemm.hpp": {"gemma3-text"},
             "src/include/models/qwen3/core/x.hpp": {"qwen3"},
             "src/common/models/qwen35/core/dev04/a.cpp": {"qwen3.5"},

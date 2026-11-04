@@ -8,7 +8,7 @@
 
 namespace flm::phi4 {
 
-/// \note corelib reads the catalog's GGUF, Q8_0 or Q4_G128, and checks its
+/// \note corelib reads the catalog's GGUF, Q4_G128 only, and checks its
 ///       shapes and metadata itself. It steps a pass that starts off a page
 ///       boundary one row at a time up to it, so a later prompt re-runs its own
 ///       page's earlier tokens with it and runs as whole pages.
