@@ -111,10 +111,12 @@ jobs:
     with:
       variants: HRX-portable
 
+  # The models-from-source builds are only tested when the chat suite runs, so
+  # they are only built then.
   build-lin-source-portable:
     name: Linux models-from-source portable
     needs: changes
-    if: needs.changes.outputs.run == 'true' && !inputs.release
+    if: needs.changes.outputs.run == 'true' && needs.changes.outputs.source == 'true' && !inputs.release
     uses: ./.github/workflows/lin-build.yml
     with:
       variants: Source-portable
@@ -158,7 +160,7 @@ jobs:
   build-win-source:
     name: Windows models-from-source
     needs: changes
-    if: needs.changes.outputs.run == 'true' && !inputs.release
+    if: needs.changes.outputs.run == 'true' && needs.changes.outputs.source == 'true' && !inputs.release
     uses: ./.github/workflows/win-build.yml
     with:
       variants: Source
