@@ -31,11 +31,14 @@ FLM can keep one NPU model loaded per type at a time:
 
 Different model types can run together (for example, one LLM and one embedding model).
 
-### Load all three model types in one server process (default port)
+### Load several model types in one server process (default port)
 
 ```shell
-flm serve lfm2:1.2b -e embed-gemma:300m -a whisper-v3:turbo
+flm serve lfm2:1.2b -e embed-gemma:300m
+flm serve lfm2:1.2b -a whisper-v3:turbo
 ```
+
+Each loaded model holds NPU hardware contexts, and the driver allows only 16 per NPU device. An LLM together with **both** Whisper and the embedding model can exceed that limit, in which case the LLM fails to load (`DRM_IOCTL_AMDXDNA_CREATE_HWCTX IOCTL failed`). If that happens, load at most one of `-a` / `-e` next to the LLM, or use separate server processes as shown below.
 
 `-a` / `-e` take a model tag; `-a 1` / `-e 1` still select the default ASR (`whisper-v3:turbo`) / embedding (`embed-gemma:300m`) model.
 
