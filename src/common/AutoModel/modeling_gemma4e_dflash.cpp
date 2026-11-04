@@ -8,6 +8,7 @@
 /// emitted touch the sampler's RNG and penalty history.
 #include "AutoModel/modeling_gemma4e.hpp"
 #include "AutoModel/automodel.hpp"
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 
@@ -136,8 +137,10 @@ std::string Gemma4e::_speculative_loop(Engine* engine, chat_meta_info_t& meta_in
         }
 
         // A cycle emits up to n_drafts + 1 tokens, all but the last already in the caches: cap it at the tokens left so
-        // the limit lands on the last one. With one token left, decode it plainly.
-        const int tokens_left = (length_limit > 0) ? length_limit - meta_info.generated_tokens : SPEC_MAX_DRAFT + 1;
+        // the limit lands on the last one. With one token left, decode it plainly. The same goes for the context: the engine
+        // checks its own window, which can be larger than MAX_L (rounded up to a power of two), so cap the cycle at MAX_L here.
+        const int tokens_left = std::min<int>((length_limit > 0) ? length_limit - meta_info.generated_tokens : SPEC_MAX_DRAFT + 1,
+                                              static_cast<int>(this->MAX_L - this->total_tokens));
         if (spec_enabled && tokens_left > 1 && engine->draft_ready()) {
             int drafts[SPEC_MAX_DRAFT];
             this->profiler_list[DECODING_TIME].start();
@@ -191,7 +194,8 @@ std::string Gemma4e::_speculative_loop(Engine* engine, chat_meta_info_t& meta_in
     }
     meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
     meta_info.stop_reason = reason;
-    if (this->total_tokens >= this->MAX_L) {
+    // a turn ending on eos at the cap fills the window too, but nothing was stopped
+    if (reason == MAX_LENGTH_REACHED && this->total_tokens >= this->MAX_L) {
         header_print("WARNING", "Max length reached, stopping generation...");
     }
     std::cout << std::endl;
