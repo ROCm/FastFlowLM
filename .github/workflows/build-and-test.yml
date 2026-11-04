@@ -16,8 +16,9 @@ name: Build and Test
 #
 # The Windows XRT package also holds the oga-hipep backend, which runs its
 # models (qwen3.5-oga-hipep) on the GPU through hip-ep. Test Windows HIPEP
-# tests those models from the same zip, and Test Windows XRT the NPU models;
-# like models-from-source, it runs whenever the chat suite does.
+# runs the chat and api suites on those models from the same zip, and Test
+# Windows XRT tests the NPU models; like models-from-source, it runs whenever
+# the chat suite does.
 #
 # A pull request runs only the suites its changes can affect (an ASR-only
 # change runs asr, a d3-only change decision); see .github/script/ci/changes.py.
@@ -393,13 +394,14 @@ jobs:
           asr-expected-key: windows
 
   # The XRT zip's oga-hipep models, on the GPU: its runner needs an AMD GPU
-  # that hip-ep runs on.
+  # that hip-ep runs on. Besides chat, they run the OpenAI contract tests (api),
+  # tool calls included.
   test-win-hipep:
     name: Test Windows HIPEP
     needs: [changes, build-win-xrt]
     if: needs.changes.outputs.source == 'true'
     runs-on: [self-hosted, windows, x64, npu, sweep]
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       - *checkout-tests
       - name: Download package
@@ -433,7 +435,7 @@ jobs:
           flm-bin: ${{ steps.package.outputs.flm-bin }}
           label: windows-hipep
           tier: ${{ needs.changes.outputs.tier }}
-          suites: chat
+          suites: chat,api
           models: ${{ inputs.models }}
           backend: oga-hipep
 

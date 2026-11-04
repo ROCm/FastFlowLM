@@ -64,6 +64,11 @@ NON_CHAT_FAMILIES = {"embed-gemma", "d3", "whisper-v3"}
 # that asks for one (--backend) tests its models, and then all of them.
 GPU_BACKENDS = {"oga-hipep"}
 
+# Suites with a fixed NPU model list that a GPU backend run gives its own chat
+# models instead: the OpenAI contract (tools, streaming, errors, usage) holds
+# for every backend the server drives.
+BACKEND_SUITES = {"api"}
+
 # Models that reason even when asked not to. Their answer comes after the
 # reasoning, so they need a larger token budget before any content appears.
 ALWAYS_THINKS_FAMILIES = {"qwen3-tk", "lfm2.5-tk", "deepseek-r1", "deepseek-r1-0528",
@@ -232,6 +237,8 @@ class Plan:
 
     def suite(self, name: str) -> list[str]:
         """Models for a suite with a fixed list in SUITE_MODELS."""
+        if self.backend and name in BACKEND_SUITES:
+            return self.chat()
         table = SUITE_MODELS[name]
         listed = table[self.tier]
         if listed is None:  # full tier: derive from the catalog
