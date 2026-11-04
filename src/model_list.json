@@ -576,7 +576,7 @@
                 "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.5-2B-NPU2/tree/flm_q4k_high_precision",
                 "ms_url": "https://modelscope.cn/models/amd/Qwen3.5-2B-NPU2/resolve/flm_q4k_high_precision",
                 "size": 2000000000,
-                "flm_min_version": "1.0.12",
+                "flm_min_version": "1.0.3",
                 "files": [
                     "config.json",
                     "model.q4nx",
