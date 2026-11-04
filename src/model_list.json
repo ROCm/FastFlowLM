@@ -33,7 +33,7 @@
                     "translation",
                     "single-turn"
                 ],
-                "footprint": 1.5
+                "footprint": 1.4
             }
         },
         "nanbeige4.1": {
@@ -63,7 +63,7 @@
                 "label":[
                     "reasoning"
                 ],
-                "footprint": 3.1
+                "footprint": 2.9
             }
         },
         "qwen3vl-it": {
@@ -169,7 +169,7 @@
                     "tool-calling",
                     "chat-transcription"
                 ],
-                "footprint": 3.1
+                "footprint": 5.6
             },
             "e4b": {
                 "supported_platforms": ["aie2p"],
@@ -207,7 +207,7 @@
                     "tool-calling",
                     "chat-transcription"
                 ],
-                "footprint": 5.4
+                "footprint": 8.5
             },
             "12b": {
                 "supported_platforms": ["aie2p"],
@@ -244,7 +244,7 @@
                     "tool-calling",
                     "chat-transcription"
                 ],
-                "footprint": 7.5
+                "footprint": 8.7
             }
         },
         "nemotron3.5-bolt": {
@@ -284,7 +284,7 @@
                     "tool-calling",
                     "chat-transcription"
                 ],
-                "footprint": 5.4
+                "footprint": 8.5
             }
         },
         "nemotron3.5-bolt-dflash": {
@@ -320,7 +320,7 @@
                     "chat-transcription",
                     "speculative"
                 ],
-                "footprint": 5.8
+                "footprint": 8.7
             }
         },
         "nemotron3.5-bolt-dflash-flash": {
@@ -356,7 +356,7 @@
                     "single-turn",
                     "speculative"
                 ],
-                "footprint": 5.8
+                "footprint": 8.7
             }
         },
         "gemma4e-flash": {
@@ -396,7 +396,7 @@
                     "chat-transcription",
                     "single-turn"
                 ],
-                "footprint": 3.1
+                "footprint": 5.6
             },
             "e4b": {
                 "supported_platforms": ["aie2p"],
@@ -434,7 +434,7 @@
                     "chat-transcription",
                     "single-turn"
                 ],
-                "footprint": 5.4
+                "footprint": 8.5
             }
         },
         "qwen3.5": {
@@ -469,7 +469,7 @@
                     "vision",
                     "reasoning"
                 ],
-                "footprint": 0.9
+                "footprint": 0.72
             },
             "2b": {
                 "supported_platforms": ["aie2p"],
@@ -503,7 +503,7 @@
                     "reasoning",
                     "tool-calling"
                 ],
-                "footprint": 2.2
+                "footprint": 1.9
             },
             "4b": {
                 "supported_platforms": ["aie2p"],
@@ -537,7 +537,7 @@
                     "reasoning",
                     "tool-calling"
                 ],
-                "footprint": 3.9
+                "footprint": 3.2
             },
             "9b":{
                 "supported_platforms": ["aie2p"],
@@ -571,7 +571,7 @@
                     "reasoning",
                     "tool-calling"
                 ],
-                "footprint": 8.7
+                "footprint": 7.6
             }
         },
 
@@ -609,7 +609,7 @@
                     "reasoning",
                     "single-turn"
                 ],
-                "footprint": 2.2
+                "footprint": 1.9
             }
         },
         "minicpm-v-4.7": {
@@ -645,7 +645,7 @@
                     "reasoning",
                     "tool-calling"
                 ],
-                "footprint": 2.2
+                "footprint": 2.1
             }
         },
 
@@ -682,7 +682,7 @@
                     "reasoning",
                     "tool-calling"
                 ],
-                "footprint": 22.2
+                "footprint": 20.7
             }
         },
 
@@ -719,7 +719,7 @@
                     "reasoning",
                     "tool-calling"
                 ],
-                "footprint": 22.1
+                "footprint": 20.6
             }
         },
         "qwen3.8-mtp": {
@@ -756,7 +756,7 @@
                     "tool-calling",
                     "speculative"
                 ],
-                "footprint": 18.1
+                "footprint": 16.8
             }
         },
         "qwen3.8-dflash2": {
@@ -791,7 +791,7 @@
                     "tool-calling",
                     "speculative"
                 ],
-                "footprint": 20.2
+                "footprint": 18.1
             }
         },
         "lfm2": {
@@ -820,7 +820,7 @@
                     "tokenizer.json",
                     "tokenizer_config.json"
                 ],
-                "footprint": 0.96
+                "footprint": 0.94
             },
             "2.6b": {
                 "supported_platforms": ["aie2p"],
@@ -905,7 +905,7 @@
                     "tokenizer.json",
                     "tokenizer_config.json"
                 ],
-                "footprint": 0.96
+                "footprint": 0.94
             }
         },
         "lfm3": {
@@ -939,7 +939,7 @@
                     "reasoning",
                     "tool-calling"
                 ],
-                "footprint": 1.8
+                "footprint": 1.5
             }
         },
         "lfm2.5-tk": {
@@ -972,7 +972,7 @@
                 "label":[
                     "reasoning"
                 ],
-                "footprint": 0.96
+                "footprint": 0.94
             }
         },
         "phi4-mini-it": {
@@ -1071,7 +1071,7 @@
                 "label":[
                     "embeddings"
                 ],
-                "footprint": 0.62
+                "footprint": 0.61
             }
         },
         "d3": {
@@ -1105,7 +1105,7 @@
                 "label":[
                     "decision"
                 ],
-                "footprint": 1.5
+                "footprint": 0.58
             },
             "lite": {
                 "supported_platforms": ["aie2p"],
@@ -1137,7 +1137,7 @@
                 "label":[
                     "decision"
                 ],
-                "footprint": 0.8
+                "footprint": 0.72
             },
             "nano": {
                 "supported_platforms": ["aie2p"],
@@ -1169,7 +1169,7 @@
                 "label":[
                     "decision"
                 ],
-                "footprint": 2.0
+                "footprint": 1.9
             },
             "mini": {
                 "supported_platforms": ["aie2p"],
@@ -1201,7 +1201,7 @@
                 "label":[
                     "decision"
                 ],
-                "footprint": 3.5
+                "footprint": 3.2
             },
             "flash": {
                 "supported_platforms": ["aie2p"],
@@ -1234,7 +1234,7 @@
                     "decision"
                 ],
                 "scratch": 8000000000,
-                "footprint": 14.5
+                "footprint": 5.7
             },
             "turbo": {
                 "supported_platforms": ["aie2p"],
@@ -1267,7 +1267,7 @@
                     "decision"
                 ],
                 "scratch": 8600000000,
-                "footprint": 28.0
+                "footprint": 15.4
             },
             "ultra": {
                 "supported_platforms": ["aie2p"],
@@ -1300,7 +1300,7 @@
                     "decision"
                 ],
                 "scratch": 8600000000,
-                "footprint": 28.0
+                "footprint": 15.4
             }
         },
         "whisper-v3": {
@@ -1332,7 +1332,7 @@
                     "realtime-transcription",
                     "transcription"
                 ],
-                "footprint": 1.9
+                "footprint": 0.61
             }
         },
         "gemma3": {
@@ -1391,7 +1391,7 @@
                 "label":[
                     "vision"
                 ],
-                "footprint": 4.5
+                "footprint": 4.4
             }
         },
         "translategemma": {
@@ -1424,7 +1424,7 @@
                 "label":[
                     "vision"
                 ],
-                "footprint": 4.5
+                "footprint": 4.4
             }
         },
         "medgemma": {
@@ -1457,7 +1457,7 @@
                 "label":[
                     "vision"
                 ],
-                "footprint": 4.5
+                "footprint": 4.4
             }
         },
         "medgemma1.5": {
@@ -1490,7 +1490,7 @@
                 "label":[
                     "vision"
                 ],
-                "footprint": 4.5
+                "footprint": 4.4
             }
         },
         "llama3.2": {
@@ -1517,7 +1517,7 @@
                     "parameter_size": "1B",
                     "quantization_level": "Q4_1"
                 },
-                "footprint": 1.3
+                "footprint": 1.2
             },
             "3b": {
                 "supported_platforms": ["aie2p"],
@@ -1542,7 +1542,7 @@
                     "parameter_size": "3B",
                     "quantization_level": "Q4_1"
                 },
-                "footprint": 2.7
+                "footprint": 2.6
             }
         },
         "llama3.1": {
@@ -1661,7 +1661,7 @@
                 "label":[
                     "reasoning"
                 ],
-                "footprint": 0.66
+                "footprint": 0.65
             },
             "1.7b": {
                 "supported_platforms": ["aie2p"],
@@ -1844,7 +1844,7 @@
                 "label":[
                     "reasoning"
                 ],
-                "footprint": 14.0
+                "footprint": 13.5
             }
         },
         "gpt-oss-sg": {
@@ -1875,7 +1875,7 @@
                 "label":[
                     "reasoning"
                 ],
-                "footprint": 14.0
+                "footprint": 13.5
             }
         },
         "qwen2.5-it": {
@@ -1903,7 +1903,7 @@
                     "parameter_size": "3B",
                     "quantization_level": "Q4_0"
                 },
-                "footprint": 2.5
+                "footprint": 2.4
             }
         },
         "qwen2.5vl-it": {
@@ -1936,7 +1936,7 @@
                 "label":[
                     "vision"
                 ],
-                "footprint": 3.8
+                "footprint": 3.7
             }
         },
         "gemma4-it-core":     {

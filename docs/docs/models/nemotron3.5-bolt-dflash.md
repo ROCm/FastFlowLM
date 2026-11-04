@@ -13,8 +13,8 @@ parent: Models
 - **Speed:** 1.3x to 1.9x the decode speed of `nemotron3.5-bolt:e4b`, from short prompts to 16k tokens of context
   ([benchmarks](https://fastflowlm.com/docs/benchmarks/nemotron3.5-bolt-dflash_results/))
 - **Think / Conversational mode / Tool Calling / Vision / Audio:** as `nemotron3.5-bolt:e4b`
-- **Packages:** two downloads. The main weights are the `nemotron3.5-bolt:e4b` package (`Nemotron-3.5-Bolt-E4B-NPU2`, about 9 GB); the
-  draft is [`Nemotron-3.5-Bolt-E4B-DFlash-NPU2`](https://huggingface.co/FastFlowLM/Nemotron-3.5-Bolt-E4B-DFlash-NPU2) (0.27 GB).
+- **Packages:** two downloads. The main weights are the `nemotron3.5-bolt:e4b` package (`Nemotron-3.5-Bolt-E4B-NPU2`, about 8.5 GiB); the
+  draft is [`Nemotron-3.5-Bolt-E4B-DFlash-NPU2`](https://huggingface.co/FastFlowLM/Nemotron-3.5-Bolt-E4B-DFlash-NPU2) (0.25 GiB).
   `flm pull nemotron3.5-bolt-dflash:e4b` downloads whichever is missing
 - **Draft:** 5 layers, 0.36B parameters, reads features of 5 layers of the main model; Q4_1 with its feature projection in BF16
 - **Max Context Length:** 64k tokens
@@ -74,7 +74,7 @@ Expected: `1, 2, 3, ..., 40` followed by `done`, at a visibly higher speed than 
 - **Decode speed:** 33 to 40 tokens/s on code and structured answers, 19 to 21 tokens/s on open prose, against 13 for `gemma4e-flash:e4b`
 - **Think / Conversational mode / Vision / Audio:** as `nemotron3.5-bolt:e4b`. Tool calling is not supported (the `tools` field is dropped).
   Images default to the smallest visual token budget (70) and only the first 30 seconds of an audio clip are used
-- **Packages:** the same two downloads as `nemotron3.5-bolt-dflash:e4b` (`Nemotron-3.5-Bolt-E4B-NPU2`, about 9 GB, and the 0.27 GB draft
+- **Packages:** the same two downloads as `nemotron3.5-bolt-dflash:e4b` (`Nemotron-3.5-Bolt-E4B-NPU2`, about 8.5 GiB, and the 0.25 GiB draft
   `Nemotron-3.5-Bolt-E4B-DFlash-NPU2`). Nothing new to download if you already have that tag
 - **Max / Default Context Length:** 1k tokens (fixed, like every flash model)
 - **License:** [OpenMDW-1.1](https://openmdw.ai/license/1-1/)
