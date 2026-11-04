@@ -132,6 +132,23 @@ bool Qwen3_ASR::configure_parameter(std::string parameter_name, const std::any& 
     return false;
 }
 
+void Qwen3_ASR::_stream_log_mel(const float* x, int n, stream_mel_cache& cache, std::vector<float>& mel, int& frames) {
+    std::vector<float> fresh;
+    this->_log10_mel_frames(x, n, cache.frames, fresh, frames);
+    mel.clear();
+    if (frames <= 0) return;
+    const int cached = std::min(cache.frames, frames);
+    mel.reserve((size_t)frames * NUM_MEL_BINS);
+    mel.assign(cache.log10_mel.begin(), cache.log10_mel.begin() + (size_t)cached * NUM_MEL_BINS);
+    mel.insert(mel.end(), fresh.begin(), fresh.end());
+    const int final_frames = n >= 200 ? std::min((n - 200) / HOP_LENGTH + 1, frames) : 0;   // window [160 t - 200, 160 t + 200) inside
+    if (final_frames > cache.frames) {
+        cache.log10_mel.insert(cache.log10_mel.end(), mel.begin() + (size_t)cache.frames * NUM_MEL_BINS, mel.begin() + (size_t)final_frames * NUM_MEL_BINS);
+        cache.frames = final_frames;
+    }
+    _finish_log_mel(mel);   // the clip-wide clamp, as compute_log_mel
+}
+
 bool Qwen3_ASR::_build_prompt(const std::vector<float>& samples, const std::string& context, const std::string& language,
                               const std::string& assistant_text, std::vector<int>& tokens, void*& payload_out, int& first_len_run,
                               stream_mel_cache* mel_cache) {
@@ -145,22 +162,7 @@ bool Qwen3_ASR::_build_prompt(const std::vector<float>& samples, const std::stri
     std::vector<float> mel;
     int frames = 0;
     if (mel_cache) {   // streaming: only the frames that are not final yet
-        std::vector<float> fresh;
-        const int n = static_cast<int>(samples.size());
-        this->_log10_mel_frames(samples.data(), n, mel_cache->frames, fresh, frames);
-        if (frames > 0) {
-            const int cached = std::min(mel_cache->frames, frames);
-            mel.reserve((size_t)frames * NUM_MEL_BINS);
-            mel.assign(mel_cache->log10_mel.begin(), mel_cache->log10_mel.begin() + (size_t)cached * NUM_MEL_BINS);
-            mel.insert(mel.end(), fresh.begin(), fresh.end());
-            const int final_frames = n >= 200 ? std::min((n - 200) / HOP_LENGTH + 1, frames) : 0;   // window [160 t - 200, 160 t + 200) inside
-            if (final_frames > mel_cache->frames) {
-                mel_cache->log10_mel.insert(mel_cache->log10_mel.end(), mel.begin() + (size_t)mel_cache->frames * NUM_MEL_BINS,
-                                            mel.begin() + (size_t)final_frames * NUM_MEL_BINS);
-                mel_cache->frames = final_frames;
-            }
-            _finish_log_mel(mel);   // the clip-wide clamp, as compute_log_mel
-        }
+        this->_stream_log_mel(samples.data(), static_cast<int>(samples.size()), *mel_cache, mel, frames);
     } else {
         this->compute_log_mel(audio, mel, frames);
     }

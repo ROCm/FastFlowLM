@@ -39,6 +39,10 @@ typedef struct {
     /// The caller must not clear the context between the steps and must send the same prompt head; stream_reset starts a new recording.
     bool streaming = false;
     bool stream_reset = false;
+    /// Streaming: the mel of the next step ([next_mel_frames][128], all audio so far), when the caller knows it. The engine encodes it
+    /// in the background while this step decodes on the NPU, and the next prefill uses that result when its mel is the same.
+    int next_mel_frames = 0;
+    std::vector<float> next_mel;
 } qwen3_asr_payload_t;
 
 class qwen3_asr_npu : public causal_lm{

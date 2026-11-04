@@ -44,7 +44,24 @@ namespace {
 constexpr int N_FFT = 400;
 constexpr int STFT_PAD = N_FFT / 2;               // center=True pads half a window on each side
 constexpr int FREQ_BINS = N_FFT / 2 + 1;          // 201
+
+/// whether the UTF-8 code point starting at s[i] is a CJK character / CJK punctuation (no space between such texts)
+bool cjk_at(const std::string& s, size_t i) {
+    const unsigned char c = (unsigned char)s[i];
+    return c >= 0xE3 && c <= 0xEF;   // U+3000..U+FFFF: CJK punctuation, kana, ideographs, full-width forms
+}
+
+/// the start of the last UTF-8 code point of s
+size_t last_cp(const std::string& s) {
+    size_t i = s.size() - 1;
+    while (i > 0 && ((unsigned char)s[i] & 0xC0) == 0x80) i--;
+    return i;
+}
 }  // namespace
+
+bool Qwen3_ASR::_needs_space(const std::string& before, const std::string& after) {
+    return !before.empty() && !after.empty() && !cjk_at(before, last_cp(before)) && !cjk_at(after, 0) && before.back() != ' ' && after.front() != ' ';
+}
 
 void Qwen3_ASR::_finish_log_mel(std::vector<float>& mel) {
     const int total = (int)mel.size();
@@ -94,16 +111,6 @@ void Qwen3_ASR::compute_log_mel(const audio_data_t& audio, std::vector<float>& m
     _finish_log_mel(mel);
 }
 
-void Qwen3_ASR::_check_audio_fits(size_t samples) const {
-    const size_t audio_tokens = (size_t)qwen3_asr_audio_tokens((int)(samples / 160));
-    const size_t reserve = std::max<size_t>(256, audio_tokens / 2);
-    const size_t cap = this->decode_cap();
-    if (cap > 0 && audio_tokens + 64 + reserve > cap) {
-        const double max_s = (double)(cap - 64) / 1.5 / 12.5;
-        throw std::invalid_argument("the audio is too long for the context window (at most about " + std::to_string((int)max_s) + " seconds)");
-    }
-}
-
 namespace {
 /// Offline audio longer than this is transcribed in pieces of about this length (see the file comment of the split below)
 constexpr double OFFLINE_PIECE_SECONDS = 60.0;
@@ -142,18 +149,6 @@ std::vector<std::pair<size_t, size_t>> split_audio_pieces(const std::vector<floa
     return pieces;
 }
 
-/// whether the UTF-8 code point starting at s[i] is a CJK character / CJK punctuation (no space between such texts)
-bool cjk_at(const std::string& s, size_t i) {
-    const unsigned char c = (unsigned char)s[i];
-    return c >= 0xE3 && c <= 0xEF;   // U+3000..U+FFFF: CJK punctuation, kana, ideographs, full-width forms
-}
-
-/// the start of the last UTF-8 code point of s
-size_t last_cp(const std::string& s) {
-    size_t i = s.size() - 1;
-    while (i > 0 && ((unsigned char)s[i] & 0xC0) == 0x80) i--;
-    return i;
-}
 }  // namespace
 
 std::string Qwen3_ASR::transcribe(chat_meta_info_t& meta_info, const std::vector<uint8_t>& audio_bytes, const std::string& language, const std::string& context,
@@ -208,9 +203,7 @@ std::string Qwen3_ASR::transcribe(chat_meta_info_t& meta_info, const std::vector
         }
         if (piece_text.empty()) continue;
         // qwen_asr joins the pieces without a separator; a space keeps two Latin-script pieces from running together
-        std::string joined = piece_text;
-        if (!text.empty() && !cjk_at(text, last_cp(text)) && !cjk_at(piece_text, 0) && text.back() != ' ' && piece_text.front() != ' ')
-            joined = " " + piece_text;
+        const std::string joined = (_needs_space(text, piece_text) ? " " : "") + piece_text;
         text += joined;
         os << joined << std::flush;
     }

@@ -219,8 +219,8 @@ std::string drop_spaces_between_cjk(const std::string& s) {
 /// the text up to a rollback of `k` tokens of `ids`, without a broken last character: back off one more token while the decode ends in U+FFFD
 std::string decode_with_rollback(Tokenizer& tok, const std::vector<int>& ids, int k, bool avoid_replacement_loop) {
     if (!avoid_replacement_loop) {
-        const int end_idx = std::max(1, (int)ids.size() - k);
-        return tok.decode(std::vector<int>(ids.begin(), ids.begin() + end_idx));
+        const int end_idx = std::min((int)ids.size(), std::max(1, (int)ids.size() - k));   // python ids[:max(1, len - k)]: no text, no prefix
+        return end_idx > 0 ? tok.decode(std::vector<int>(ids.begin(), ids.begin() + end_idx)) : std::string();
     }
     while (true) {
         const int end_idx = std::max(0, (int)ids.size() - k);
@@ -249,6 +249,12 @@ std::string Qwen3_ASR::_asr_step(chat_meta_info_t& meta_info, const std::vector<
         p->streaming = true;
         p->stream_reset = this->stream_reset_pending_;
         this->stream_reset_pending_ = false;
+        // the next step's audio is this one plus a chunk (or the rest of the recording): its mel lets the engine encode it during the decode
+        const size_t now = this->stream_seg_start_ + samples.size();
+        if (this->stream_wav_ && now < this->stream_wav_->size()) {
+            const size_t next = std::min(now + this->stream_step_, this->stream_wav_->size()) - this->stream_seg_start_;
+            this->_stream_log_mel(this->stream_wav_->data() + this->stream_seg_start_, (int)next, this->stream_mel_, p->next_mel, p->next_mel_frames);
+        }
     }
     chat_meta_info_t step_meta;
     step_meta.max_prefill_len = meta_info.max_prefill_len;
@@ -279,7 +285,6 @@ std::string Qwen3_ASR::transcribe_streaming(chat_meta_info_t& meta_info, const s
     audio_data_t audio = this->load_audio_bytes(audio_bytes);
     if (audio.channels != 1 || audio.num_frames == 0) throw std::invalid_argument("the audio could not be decoded (wav, flac, mp3 or ogg expected)");
     duration_seconds = audio.duration_seconds;
-    this->_check_audio_fits(audio.samples.size());
     if (chunk_ms < 80 || chunk_ms > 2000) throw std::invalid_argument("chunk_size_ms must be between 80 and 2000");
     unfixed_token_num = std::max(0, unfixed_token_num);
     const std::vector<float>& wav = audio.samples;
@@ -287,21 +292,78 @@ std::string Qwen3_ASR::transcribe_streaming(chat_meta_info_t& meta_info, const s
     this->streaming_caches_ = !caches_off;
     this->stream_reset_pending_ = true;
     this->stream_mel_ = stream_mel_cache();
+    this->stream_wav_ = this->streaming_caches_ ? &wav : nullptr;
+    this->stream_seg_start_ = 0;
 
     // ---- state (ASRStreamingState) ----
     const size_t step = (size_t)std::llround(chunk_ms / 1000.0 * SAMPLE_RATE);
     const size_t lookahead = (size_t)std::llround(lookahead_ms / 1000.0 * SAMPLE_RATE);
+    this->stream_step_ = step;
     size_t chunk_samples = step;
     int chunk_id = 0;
     std::vector<float> buffer_pcm, audio_accum;
     std::string raw_decoded, state_text;
     std::string committed;   // what on_commit has been given so far
+    std::string base;        // the final text of the finished contexts (see the 30-45 s cut below)
+    std::string languages_done, last_language;   // qwen_asr merge_languages over the contexts
+    auto languages = [&](const std::string& lang) {
+        std::string out = languages_done;
+        if (!lang.empty() && lang != last_language) out += (out.empty() ? "" : ",") + lang;
+        return out;
+    };
+    auto full_text = [&](const std::string& seg) { return base + (_needs_space(base, seg) ? " " : "") + seg; };
 
     auto report = [&](const std::string& fixed) {   // append-only: only a growth of what was reported is passed on
-        if (fixed.size() > committed.size() && fixed.compare(0, committed.size(), committed) == 0) {
-            on_commit(fixed.substr(committed.size()));
-            committed = fixed;
+        const std::string full = full_text(fixed);
+        if (full.size() > committed.size() && full.compare(0, committed.size(), committed) == 0) {
+            on_commit(full.substr(committed.size()));
+            committed = full;
         }
+    };
+
+    // One context covers 30-45 s of audio: every step re-reads all of its audio and text, so a longer one gets slower and slower (and the
+    // NPU decode can end a transcript early at long contexts). After 30 s, at the first chunk end whose last 100 ms is quiet (mean |x| at
+    // most a quarter of the median 100 ms window of the context), or at 45 s, a final step finishes the text (as at the end of the
+    // recording), and the next chunk starts a fresh context. Not in the reference streaming loop, which keeps one context throughout.
+    constexpr double CONTEXT_MIN_SECONDS = 30.0, CONTEXT_MAX_SECONDS = 45.0;
+    const int first_max_new_tokens_ = std::max(1, (int)((step + lookahead) / 1280));
+    std::string last_text_tmp;
+    auto maybe_cut = [&]() -> bool {
+        const double secs = (double)audio_accum.size() / SAMPLE_RATE;
+        if (secs < CONTEXT_MIN_SECONDS || is_cancelled()) return false;
+        if (secs < CONTEXT_MAX_SECONDS) {
+            const size_t win = SAMPLE_RATE / 10;
+            std::vector<float> means;
+            means.reserve(audio_accum.size() / win);
+            for (size_t i = 0; i + win <= audio_accum.size(); i += win) {
+                double s = 0.0;
+                for (size_t j = i; j < i + win; j++) s += std::fabs(audio_accum[j]);
+                means.push_back((float)(s / win));
+            }
+            const float last = means.back();
+            std::nth_element(means.begin(), means.begin() + means.size() / 2, means.end());
+            if (last > 0.25f * means[means.size() / 2]) return false;
+        }
+        // the final step of this context: the text so far minus its unfixed tokens, continued on all its audio
+        const std::vector<int> cur_ids = this->tokenizer->encode(raw_decoded);
+        const std::string prefix = before_bar(decode_with_rollback(*this->tokenizer, cur_ids, unfixed_token_num, /*avoid_replacement_loop=*/false));
+        std::string gen_text = this->_asr_step(meta_info, audio_accum, context, language, prefix, first_max_new_tokens_, is_cancelled);
+        gen_text = remove_replacement(normalize_punct_by_context(gen_text));
+        auto [lang, txt] = parse_asr_output(before_bar(prefix + gen_text), language);
+        report(before_bar(txt));
+        detected_language = languages(lang);
+        languages_done = detected_language;
+        if (!lang.empty()) last_language = lang;
+        base = committed;   // what the client has (a final text that does not extend it is not sent)
+        // a fresh context for the next chunk
+        this->stream_seg_start_ += audio_accum.size();
+        audio_accum.clear();
+        raw_decoded.clear();
+        state_text.clear();
+        last_text_tmp.clear();
+        this->stream_reset_pending_ = true;
+        this->stream_mel_ = stream_mel_cache();
+        return true;
     };
 
     // streaming_transcribe: feed `seg`, run one decode step per full chunk, return the committed text of the last step
@@ -348,12 +410,14 @@ std::string Qwen3_ASR::transcribe_streaming(chat_meta_info_t& meta_info, const s
             if (!has_tag && language.empty()) {      // the model has not started the answer yet
                 state_text.clear();
                 fixed_text.clear();
+                maybe_cut();
                 continue;
             }
-            detected_language = lang2;
+            detected_language = languages(lang2);
             state_text = before_bar(txt);
             ++chunk_id;
             report(fixed_text);
+            if (maybe_cut()) fixed_text.clear();
         }
         return fixed_text;
     };
@@ -369,7 +433,7 @@ std::string Qwen3_ASR::transcribe_streaming(chat_meta_info_t& meta_info, const s
         gen_text = remove_replacement(normalize_punct_by_context(gen_text));
         raw_decoded = before_bar(prefix + gen_text);
         auto [lang, txt] = parse_asr_output(raw_decoded, language);
-        detected_language = lang;
+        detected_language = languages(lang);
         state_text = before_bar(txt);
         ++chunk_id;
     };
@@ -380,7 +444,6 @@ std::string Qwen3_ASR::transcribe_streaming(chat_meta_info_t& meta_info, const s
     int max_new_tokens = std::max(1, (int)((step + lookahead) / 1280));      // 1280 samples = 80 ms = one audio token
     const int first_max_new_tokens = max_new_tokens;
     const int max_new_tokens_floor = std::min(32, std::max(4, 2 * (int)(step / 1280)));
-    std::string last_text_tmp;
     while (pos < wav.size()) {
         size_t n;
         if (is_first) {                                   // the first call carries the look-ahead
@@ -406,10 +469,11 @@ std::string Qwen3_ASR::transcribe_streaming(chat_meta_info_t& meta_info, const s
         if ((double)n / SAMPLE_RATE < chunk_ms / 1000.0) break;   // the last, short segment
     }
     finish(first_max_new_tokens);
-    state_text = before_bar(state_text);
-    if (state_text.size() > committed.size() && state_text.compare(0, committed.size(), committed) == 0)
-        on_commit(state_text.substr(committed.size()));
-    else if (committed.empty() && !state_text.empty())
-        on_commit(state_text);
-    return state_text;
+    this->stream_wav_ = nullptr;
+    const std::string full = full_text(before_bar(state_text));
+    if (full.size() > committed.size() && full.compare(0, committed.size(), committed) == 0)
+        on_commit(full.substr(committed.size()));
+    else if (committed.empty() && !full.empty())
+        on_commit(full);
+    return full;
 }

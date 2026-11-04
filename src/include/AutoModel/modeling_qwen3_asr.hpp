@@ -84,6 +84,10 @@ private:
     void _log10_mel_frames(const float* x, int n, int first, std::vector<float>& out, int& end);
     /// \brief the clip-wide end of the feature extractor on log10 mel frames: max(x, max - 8), then (x + 4) / 4
     static void _finish_log_mel(std::vector<float>& mel);
+    /// \brief streaming log-mel of the clip x[0, n): the final frames come from (and are added to) `cache`, only the rest is computed
+    void _stream_log_mel(const float* x, int n, stream_mel_cache& cache, std::vector<float>& mel, int& frames);
+    /// \brief whether two transcript pieces need a space between them (Latin script on both sides; none next to CJK)
+    static bool _needs_space(const std::string& before, const std::string& after);
 
     /// \brief Build the prompt tokens (audio pads expanded) and the engine payload from mono 16 kHz samples.
     /// \param text_after_assistant text that continues the assistant turn (forced "language X<asr_text>", streaming prefix)
@@ -94,15 +98,16 @@ private:
     std::string _asr_step(chat_meta_info_t& meta_info, const std::vector<float>& samples, const std::string& context,
                           const std::string& language, const std::string& assistant_text, int max_new_tokens,
                           const std::function<bool()>& is_cancelled);
-    /// \brief refuse (std::invalid_argument) audio whose text could not be finished in the context window: the prompt takes 12.5 tokens per
-    ///        audio second, and room is kept for the answer (half a token per audio token, at least 256)
-    void _check_audio_fits(size_t samples) const;
     /// \brief the engine payload of the request being built (kept alive until the prefill)
     std::shared_ptr<void> payload_holder_;
     /// \brief streaming: the engine keeps the encoder output and K/V rows of the closed 8 s windows between the steps; true until the first step has run
     bool stream_reset_pending_ = false;
     bool streaming_caches_ = false;
     stream_mel_cache stream_mel_;
+    /// \brief streaming: the whole recording and where the current context's audio starts in it (the next step's audio is known)
+    const std::vector<float>* stream_wav_ = nullptr;
+    size_t stream_seg_start_ = 0;
+    size_t stream_step_ = 0;
 };
 
 /// \brief Split the model's answer "language X<asr_text>text" into the language and the text.
