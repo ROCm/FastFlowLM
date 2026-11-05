@@ -52,3 +52,31 @@ difference is the NPU attention alone. One known offset: the reference decodes t
 batched prefill path at L = 1, the NPU build through the decode overlay, whose matmuls round
 differently. So decode cosines sit near 0.995 even at 512 tokens; what matters is whether they
 fall as the prompt grows.
+
+The accuracy gate of the Hy-MT2 plan (G4) uses the all-CPU reference instead
+(`make HOST_ATTN=1 HOST_MM=1 BUILD_DIR=../../build/hunyuan_npu_host`): on Krackan the
+`HOST_ATTN=1`-only build hangs from ~4K. Dumps for 512 ... 24K are in
+`/scratch/michyu/hy_mt2_stage/long/host_acc`.
+
+## prof_summary.py
+
+Added 2026-11-05 (WP0). Sums the `[prefill-prof]` lines of a `test_long` run made with the
+engine's profile build:
+
+```
+cd FLM_DLL/detail/hunyuan_npu && make PREFILL_PROFILE=1 BUILD_DIR=../../build/hunyuan_npu_prof
+LD_LIBRARY_PATH=.../build/hunyuan_npu_prof/lib test_long --text long.txt --lengths 12,12,12,12,512,512,512,512 --decode 0 > prof.log
+python3 prof_summary.py prof.log [--skip 1] [--steps] [--md]
+```
+
+- Each result row of `test_long` closes one prompt; the profile lines before it belong to it.
+  Every step is summed over the 32 layers (and over all 512-token pieces of a long prompt).
+- Repeat each length (as above) and keep `--skip 1`: the first call at a new padded size also
+  builds its run sequences and buffers. The table shows the median of the rest.
+- Rows group the steps: NPU GEMM runs, NPU attention, each kind of CPU work, syncs, lm_head.
+  `not covered by ticks` = the measured prefill time minus all ticks. `--steps` prints every
+  single step too.
+- An NPU run's time includes the overlay switch in front of it (`attn:mha` from GEMM to
+  attention, `attn:o_run` back) and, in layer 0, the reload after the decode xclbin.
+- The profile prints ~30 lines per layer, which costs ~5% at short prompts: use it for the
+  split, `bench_prefill` / `test_long` without it for the totals.
