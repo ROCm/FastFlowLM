@@ -80,3 +80,6 @@ python3 prof_summary.py prof.log [--skip 1] [--steps] [--md]
   attention, `attn:o_run` back) and, in layer 0, the reload after the decode xclbin.
 - The profile prints ~30 lines per layer, which costs ~5% at short prompts: use it for the
   split, `bench_prefill` / `test_long` without it for the totals.
+- Since WP1 the syncs are ranged (group "syncs (ranged)") and K's rope runs inside
+  `attn:fill_kv_cache`. Logs from before WP1 still have `attn:k_rope_norm` and
+  `attn:kv_sync_to`; they show up under "other ticks".
