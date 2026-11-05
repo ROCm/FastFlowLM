@@ -308,6 +308,23 @@ void test_images() {
     CHECK(resume(cache, next, {222}) == 0);
     CHECK(resume(cache, next, {111}) == prompt.size());
 
+    // the same tokens with another picture of the same size replace the slot: the engine holds that one now
+    cache.set_live(prompt);
+    cache.save(prompt, {222}, false, 0);
+    CHECK(cache.slot_count() == 1);
+    CHECK(resume(cache, next, {111}) == 0);
+    CHECK(resume(cache, next, {222}) == prompt.size());
+
+    // a slot saved without the hash of a picture it holds is never resumed: the picture could be any
+    fake_engine e2;
+    PrefixSlotCache unhashed = make(e2);
+    unhashed.image_token_id = 99;
+    e2.length = static_cast<int>(prompt.size());
+    unhashed.set_live(prompt);
+    unhashed.save(prompt, {}, true, 0);
+    CHECK(unhashed.slot_count() == 1);
+    CHECK(resume(unhashed, next, {111}) == 0);
+
     struct image { int grid_h, grid_w; };
     struct payload { std::vector<image> images; std::vector<uint16_t> _data__processed; };
     payload p1{{{2, 2}, {2, 2}}, std::vector<uint16_t>(2 * 2 * 4 * 3 * 2, 7)};

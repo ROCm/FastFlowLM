@@ -487,7 +487,7 @@ bool AutoModel::_prefix_insert(PrefixSlotCache& cache, chat_meta_info_t& meta_in
             head_prefill_ns = head_meta.prefill_duration;
             const std::vector<int> head_tokens(full_tokens.begin(), full_tokens.begin() + boundary);
             cache.set_live(head_tokens);
-            cache.save(head_tokens, {}, true, 0);
+            cache.save(head_tokens, image_hashes, true, 0); // keeps the hashes of the pictures inside the head
         } else {
             meta_info.stop_reason = head_meta.stop_reason;
             meta_info.error_message = head_meta.error_message;

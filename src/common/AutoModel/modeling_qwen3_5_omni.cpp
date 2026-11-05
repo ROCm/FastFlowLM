@@ -239,26 +239,27 @@ bool Qwen3_5_Omni::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input
                     new_content.push_back({{"type", "audio"}, {"audio", aud}});
                 }
             }
-            if(audio_data_list.size()> 0){
-                pad_audio(audio_data_list);
-                this->extract_spectrogram(audio_data_list, audio_payload);
-                for (unsigned int i = 0; i < audio_payload.num_audios; i++) {
-                    audio_payload.audio_tokens.push_back(
-                        get_audio_tokens(
-                            _get_feat_extract_output_length(
-                                audio_payload.mel_spectrogram_frames_per_audio[i]
-                            )
-                        )
-                    );
-                }
-            }
-
             new_content.push_back({{"type", "text"}, {"text", message.value("content", "")}});
             nlohmann::ordered_json new_item = {
                 {"role", message.value("role", "user")},
                 {"content", new_content}
             };
             qwen_messages.push_back(new_item);
+        }
+        // once for every clip of the conversation, after the loop: run per message, it re-padded and re-extracted the
+        // clips of earlier messages and appended them again, so the payload no longer matched the placeholders
+        if(audio_data_list.size()> 0){
+            pad_audio(audio_data_list);
+            this->extract_spectrogram(audio_data_list, audio_payload);
+            for (unsigned int i = 0; i < audio_payload.num_audios; i++) {
+                audio_payload.audio_tokens.push_back(
+                    get_audio_tokens(
+                        _get_feat_extract_output_length(
+                            audio_payload.mel_spectrogram_frames_per_audio[i]
+                        )
+                    )
+                );
+            }
         }
         header_print("FLM", "Total images: " << total_images);
         templated_text = this->apply_chat_template(qwen_messages, input.tools, meta_info.continue_final_message);
@@ -458,9 +459,9 @@ bool Qwen3_5_Omni::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input
     }
     const bool has_modal = (image_payload.num_images > 0) || (audio_payload.num_audios > 0);
 
-    // _plan_reuse cleared already when the history ends inside an item; the other clears
+    // _plan_reuse cleared already when the history ends inside an item or an item changed; the other clears
     // (divergence, the whole prompt cached: no last token to sample from) are ours, as in _shared_insert
-    if (plan.clear && plan.reason != prompt_reuse_t::kInsideMedia) {
+    if (plan.clear && plan.reason != prompt_reuse_t::kInsideMedia && plan.reason != prompt_reuse_t::kMediaChanged) {
         clear_context();
     }
     const size_t skip_count = plan.skip;
