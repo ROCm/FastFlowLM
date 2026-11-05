@@ -308,7 +308,7 @@ D3-Turbo-NPU2, Q4_K with GPTQ), same machine and settings as above.
 >   xclbins of the pull request build) on an otherwise idle machine: median and range of 5 requests after one warm-up
 >   request. A request is one state block plus one block per question: the state is computed once and every question
 >   runs against it (state-once).
-> - Memory: 16.6 GB of weights; the server process peaks at 17.4 GB for prompts up to 4,096 tokens, 22.4 GB at 24,000 and
+> - Memory: 15.4 GiB of weights; the server process peaks at 17.4 GB for prompts up to 4,096 tokens, 22.4 GB at 24,000 and
 >   26.3 GB at 32,768 tokens (a fresh server of the pull request build, one request). In a soak run of 1,000 mixed requests (text, image
 >   and long-prompt requests, several questions per request, repeated requests and malformed bodies), first one after the
 >   other and then the same schedule from 4 concurrent clients next to a streaming chat model, there were 0 status and 0
@@ -367,7 +367,7 @@ further question about the same state costs 0.4 to 1 s.
 Earlier development measurements (plain Q4_K package, an NPU shared with other jobs, so upper bounds), time to the answer of one
 question: 64 tokens 5.6 s, 330 tokens 5.5 s, 1,024 tokens 11.9 s, 2,048 tokens 23.4 s, 4,096 tokens 42 s, 8,192 tokens 84 s,
 16,384 tokens 186 s, 32,768 tokens 430 s (the first timing of the 64 layers alone at 32,768 tokens: 313 s). A pass over the weights
-costs about 4 to 5 s whatever the prompt (the 16.5 GB of weights stream through the NPU), plus 7 to 12 ms per token row. Before
+costs about 4 to 5 s whatever the prompt (the 15.4 GiB of weights stream through the NPU), plus 7 to 12 ms per token row. Before
 the state was computed once, 16 questions about a 330-token state took 62 s; against one pass per question the state-once engine is 2.5 times faster at a 300-token state with 16 questions, 9.4 times at
 1,024 tokens and 8.7 times at 4,096 tokens (64 questions: 4.1, 10.4 and 32 times). A first request loads the weights (about
 17 s) and, with images, the vision tower.
@@ -412,7 +412,7 @@ the same engine library and the same four kernels as `d3:turbo`; its package add
 >   xclbins of the pull request build) on an otherwise idle machine: median and range of 5 requests after one warm-up request
 >   (one request for 32,768 tokens). The tokens are `usage.input_tokens`, the header block included: the header lists the
 >   questions of a request once in the shared state, so the same request is longer than with `d3:turbo`.
-> - Memory: 16.6 GB of weights; the server process is at 15.9 GiB after the load (17.2 GiB peak while loading), 18.0 GiB after
+> - Memory: 15.4 GiB of weights; the server process is at 15.9 GiB after the load (17.2 GiB peak while loading), 18.0 GiB after
 >   a request of 4,201 tokens and 27.0 GiB after one request of 32,750 tokens. A soak run of 100 mixed requests (text, image and
 >   long-prompt requests, several questions per request, empty and malformed bodies), first one after the other and then the same
 >   schedule from 4 concurrent clients next to a streaming chat model, had 0 status and 0 answer mismatches between the two runs

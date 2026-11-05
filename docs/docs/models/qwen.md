@@ -210,11 +210,11 @@ flm run qwen3vl-it:4b
 You can control image resizing when running or serving the model using the `--img-pre-resize` flag or simply `-r`:
 
 ```shell
-flm run qwen3vl-it:3b -r 1
+flm run qwen3vl-it:4b -r 1
 ```
 
 ```shell
-flm serve qwen3vl-it:3b -r 1
+flm serve qwen3vl-it:4b -r 1
 ```
 
 The `-r` option determines the image's height:
@@ -718,7 +718,7 @@ What that means in practice:
 - **What it is:** the same model as [`qwen3.8-mtp:27b`](#-model-card-qwen38-27b), decoded with z-lab's DFlash 2 draft instead of the built-in MTP head. The draft reads features of five layers of the main model, writes a block of 7 tokens in one pass and picks one coherent path through its top candidates; the NPU checks all 7 in one pass, with the same kernels as `qwen3.8-mtp:27b`
 - **Speed:** 1.16x the decode speed of `qwen3.8-mtp:27b` on average over ten mixed prompts, from 0.9x to 1.5x per prompt (code and structured answers gain most, short or unpredictable answers least; [benchmarks](https://fastflowlm.com/docs/benchmarks/qwen3.8_results/))
 - **Think / Tool Calling / Vision / Prefix cache:** as `qwen3.8-mtp:27b`
-- **Packages:** two downloads. The main weights are the `qwen3.8-mtp:27b` package (`Qwen3.8-27B-NPU2`, about 18 GB); the draft is [`Qwen3.8-27B-DFlash2-NPU2`](https://huggingface.co/FastFlowLM/Qwen3.8-27B-DFlash2-NPU2) (1.4 GB). `flm pull qwen3.8-dflash2:27b` downloads whichever is missing
+- **Packages:** two downloads. The main weights are the `qwen3.8-mtp:27b` package (`Qwen3.8-27B-NPU2`, about 16.8 GiB); the draft is [`Qwen3.8-27B-DFlash2-NPU2`](https://huggingface.co/FastFlowLM/Qwen3.8-27B-DFlash2-NPU2) (1.3 GiB). `flm pull qwen3.8-dflash2:27b` downloads whichever is missing
 - **Draft:** 5 layers, 2B parameters, Q4_K (the feature projection and the candidate tables stay BF16 where they are read row by row)
 - **Max Context Length:** 8k tokens
 - **Default Context Length:** 4k tokens ([change default](https://fastflowlm.com/docs/instructions/cli/#-change-default-context-length-max))

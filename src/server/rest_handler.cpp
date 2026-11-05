@@ -569,12 +569,10 @@ RestHandler::RestHandler(model_list& models, ModelDownloader& downloader, progra
     // Initialize chat bot with default model
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
     if (this->asr) {
-        std::string whisper_tag = "whisper-v3:turbo";
-        ensure_asr_model_loaded(whisper_tag);
+        ensure_asr_model_loaded(args.asr_tag);
     }
     if (this->embed) {
-        std::string embed_tag = "embed-gemma:300m";
-        ensure_embed_model_loaded(embed_tag);
+        ensure_embed_model_loaded(args.embed_tag);
     }
 #else
     if (this->asr) {
@@ -902,7 +900,8 @@ json RestHandler::build_nstream_response(const std::string& response_text, chat_
                                          chat_logprobs_aligner* logprobs) {
     const chat_format_spec& spec = auto_chat_engine->get_chat_format();
     chat_msg parsed = chat_parse(spec,
-                                 chat_format_prefill(spec, meta_info.prompt_tail, meta_info.continue_final_message) + response_text,
+                                 chat_format_prefill(spec, meta_info.prompt_tail, meta_info.continue_final_message,
+                                                     parse_options.parse_tool_calls) + response_text,
                                  false, parse_options);
 
     json message;
@@ -1266,6 +1265,14 @@ void RestHandler::handle_embeddings(const json& request,
             }
         }
 
+        if (inputs.empty()) {
+            send_response({{"error", {{"message", "'input' is required: a string or a non-empty array of strings."},
+                                      {"type", "invalid_request_error"},
+                                      {"param", "input"},
+                                      {"code", 400}}}});
+            return;
+        }
+
         json response;
         if (this->embed) {
             json embedding_data = json::array();
@@ -1295,12 +1302,26 @@ void RestHandler::handle_embeddings(const json& request,
         }
         else {
             header_print("Warning", "No embedding model loaded");
+            send_response({{"error", {{"message", "No embedding model is loaded; start the server with --embed 1."},
+                                      {"type", "invalid_request_error"},
+                                      {"code", 400}}}});
+            return;
         }
         send_response(response);
     }
+    catch (const json::exception& e) {
+        // A missing or mistyped "model" / "input": the request is at fault
+        send_response({{"error", {{"message", std::string("Invalid embeddings request: ") + e.what()},
+                                  {"type", "invalid_request_error"},
+                                  {"code", 400}}}});
+    }
     catch (const std::exception& e) {
-        json error_response = ExceptionResponse(e);
-        send_response(error_response);
+        // A failed NPU dispatch throws from embed(); it must reach the client as a 5xx, not a 200
+        // whose body is an error string (the 200 is what let a broken vector look like an answer).
+        header_print("ERROR", std::string("Embedding failed: ") + e.what());
+        send_response({{"error", {{"message", e.what()},
+                                  {"type", "server_error"},
+                                  {"code", 500}}}});
     }
 }
 

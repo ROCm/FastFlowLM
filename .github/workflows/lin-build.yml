@@ -49,6 +49,7 @@ jobs:
         env:
           VARIANTS: ${{ inputs.variants || 'all' }}
           SHA: ${{ github.sha }}
+          EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
           # The .debs ship for each of these; the portable tarballs are built
@@ -59,6 +60,14 @@ jobs:
             {"distro": "ubuntu", "version": "26.04", "codename": "resolute"},
             {"distro": "debian", "version": "13",    "codename": "trixie"}
           ]'
+          # A pull request builds only the Ubuntu 24.04 .deb (the first above, and
+          # the one the NPU runners run): the same source compiled for the other
+          # distributions only tells something about their toolchains, which a
+          # pull request does not change. Pushes to main, the nightly run and
+          # releases build them all.
+          if [ "${EVENT}" = "pull_request" ]; then
+            deb_distros=$(jq -c '.[:1]' <<< "${deb_distros}")
+          fi
           portable_distro='{"distro": "debian", "version": "13", "codename": "trixie"}'
           short_sha="${SHA:0:7}"
 

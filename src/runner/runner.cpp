@@ -40,7 +40,7 @@ std::map<std::string, runner_cmd_t> cmd_map = {
 /// \param tag - the tag of the model to load
 Runner::Runner(model_list& supported_models, ModelDownloader& downloader, program_args_t& args,
                flm_rt::device* npu_device)
-    : supported_models(supported_models), downloader(downloader), tag(args.model_tag), modelscope(args.modelscope), asr(args.asr), embed(args.embed), img_pre_resize(args.img_pre_resize), preemption(args.preemption), backend(args.backend) {
+    : supported_models(supported_models), downloader(downloader), tag(args.model_tag), modelscope(args.modelscope), asr(args.asr), asr_tag(args.asr_tag), embed(args.embed), img_pre_resize(args.img_pre_resize), preemption(args.preemption), backend(args.backend) {
 
     // RAI receives the device from corelib; non-RAI creates its own here.
     if (npu_device != nullptr) {
@@ -105,7 +105,7 @@ Runner::Runner(model_list& supported_models, ModelDownloader& downloader, progra
 
 
     if (this->embed) {
-        header_print("Warning", "Embed model not supported in CLI; Use 'flm serve -e 1'");
+        header_print("Warning", "Embed model not supported in CLI; Use 'flm serve -e <model tag>'");
     }
 
     header_print("FLM", "Loading model: " << this->tag);
@@ -115,8 +115,8 @@ Runner::Runner(model_list& supported_models, ModelDownloader& downloader, progra
         // check if multi-modal model with ASR support is loaded, if not, load the default whisper model for ASR
         if (!asr_supported) 
         {
-            header_print("FLM", "The loaded model does not support ASR. Loading default Whisper model for ASR...");
-            std::string whisper_tag = "whisper-v3:turbo";
+            header_print("FLM", "The loaded model does not support ASR. Loading ASR model " + this->asr_tag + "...");
+            std::string whisper_tag = this->asr_tag;
             switch (this->downloader.is_model_downloaded(whisper_tag)) {
                 case ModelDownloader::ModelStatus::Ready:
                     break;
