@@ -24,6 +24,7 @@
 #include "typedef.hpp"
 #include "causal_lm.hpp"
 #include "prefix_slot_cache.hpp"
+#include "prompt_reuse.hpp"
 #include "lm_config.hpp"
 #include "AutoModel/model_backend.hpp"
 #include "models/llama/flm/aie2p/llama_npu.hpp"
@@ -308,6 +309,17 @@ protected:
 	/// \param payload the payload, it shall not be used as this function is only used for chunkwised insertion, no image allowed
 	/// \return true if the tokens were inserted successfully, false otherwise
 	bool _shared_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled = [] { return false; }, void* payload = nullptr, int first_len_run = 0, std::optional<int> requested_max_new_tokens = std::nullopt, bool sample_next = true);
+
+	/// \brief decide how much of a prompt with media the engine keeps, before the model trims its payload
+	/// \param tokens the prompt exactly as it will go to _shared_insert / _prefix_insert (after any restore or slot
+	///        resume, with the generation-prompt tokens the model feeds itself already cut)
+	/// \param media its images and audio clips (see prompt_reuse.hpp)
+	/// \return the plan: drop skipped_media[kind] leading items of each payload list and pass media_end as first_len_run
+	/// \note Clears the context when the plan says so, so the _shared_insert that follows skips exactly plan.skip;
+	///       _shared_insert checks that it does when it gets a payload.
+	prompt_reuse_t _plan_reuse(const std::vector<int>& tokens, const std::vector<prompt_media_t>& media);
+	/// \brief the skip _plan_reuse() promised the next _shared_insert with a payload
+	std::optional<size_t> planned_skip_;
 
 	// ---- prefix slot cache (see prefix_slot_cache.hpp) ---------------------------------------
 	// Steps every model family with engine snapshots shares; the model supplies the tokens, the image

@@ -149,6 +149,9 @@ bool MiniCPM_V::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
     // Expand each picture's single <|image_pad|> to the processor's placeholder.
     std::vector<int> tokens_init = this->tokenizer->encode(templated_text);
     std::vector<int> tokens;
+    // Each picture's whole placeholder, <image_id> through its last </slice> / </image>: the
+    // prompt cache must not split it, and the first prefill chunk must hold it whole.
+    std::vector<prompt_media_t> media;
     {
         size_t extra = 0;
         for (const auto& l : layouts) extra += (size_t)l.tokens + 16 + 3 * (size_t)l.views;
@@ -164,7 +167,12 @@ bool MiniCPM_V::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
                 return false;
             }
             const std::vector<int> ph = this->image_placeholder(layouts[picture], (int)picture);
+            prompt_media_t m;
+            m.kind = prompt_media_t::kImage;
+            m.begin = tokens.size();
             tokens.insert(tokens.end(), ph.begin(), ph.end());
+            m.end = tokens.size();
+            media.push_back(m);
             picture++;
         }
         if (picture != layouts.size()) {
@@ -211,69 +219,33 @@ bool MiniCPM_V::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
     // feeds them back.
     tokens.resize(tokens.size() - think_trim);
 
-    // ----------------------------------------------------------------------
-    // Prompt-cache aware image alignment. _shared_insert erases the prefix of
-    // `tokens` that matches token_history -- only when it matches ALL of
-    // token_history, else it clears the context and skips nothing. The payload
-    // must lose exactly the pictures that erased prefix fully covers (all of
-    // their views) so it lines up with the image rows that are prefilled.
-    //
-    // This is _shared_insert's rule on _shared_insert's inputs: token_history
-    // AFTER the restore above and `tokens` AFTER the think trim. Computing it
-    // against checkpoint_his instead (Qwen3_5VL's way) disagrees in the CLI,
-    // where token_history also holds the previous answer: a repeated question
-    // then "hits" here, its image is dropped, _shared_insert clears and
-    // re-prefills the whole prompt, and the engine is handed image rows with
-    // no pixels.
-    // ----------------------------------------------------------------------
-    size_t prefix_skip_count = 0;
+    // Prompt-cache aware image alignment: _shared_insert skips the part of `tokens`
+    // the engine already holds, so the payload must lose exactly the pictures (all
+    // of their views) inside that skip. _plan_reuse decides it with _shared_insert's
+    // rule on _shared_insert's inputs: token_history after the restore / slot resume
+    // above and `tokens` after the think trim. The pictures sit before the trimmed
+    // generation prompt, so their spans still hold.
+    const prompt_reuse_t plan = this->_plan_reuse(tokens, media);
     {
-        const size_t idx = this->token_history.size();
-        while (prefix_skip_count < idx && prefix_skip_count < tokens.size() &&
-               tokens[prefix_skip_count] == this->token_history[prefix_skip_count]) {
-            prefix_skip_count++;
+        const size_t drop_pictures = plan.skipped_media[prompt_media_t::kImage];
+        size_t drop_views = 0, drop_values = 0;
+        for (size_t i = 0; i < drop_pictures; i++) {
+            drop_views += (size_t)layouts[i].views;
+            drop_values += layouts[i].values;
         }
-        if (prefix_skip_count != idx) prefix_skip_count = 0;
-
-        if (prefix_skip_count > 0 && !layouts.empty()) {
-            int skipped_rows = 0;
-            for (size_t i = 0; i < prefix_skip_count; i++) skipped_rows += (tokens[i] == image_pad);
-            size_t drop_pictures = 0, drop_views = 0, drop_values = 0;
-            int consumed = 0;
-            for (const auto& l : layouts) {
-                if (consumed + l.tokens > skipped_rows) break;
-                consumed += l.tokens;
-                drop_pictures++;
-                drop_views += (size_t)l.views;
-                drop_values += l.values;
-            }
-            if (drop_pictures > 0) {
-                image_payload.images.erase(image_payload.images.begin(), image_payload.images.begin() + drop_views);
-                image_payload._data__processed.erase(image_payload._data__processed.begin(),
-                                                     image_payload._data__processed.begin() + drop_values);
-                image_payload.num_images = (unsigned)image_payload.images.size();
-                header_print("FLM", "Prompt-cache hit: dropped " << drop_pictures << " cached image(s) from payload");
-            }
+        if (drop_pictures > 0) {
+            image_payload.images.erase(image_payload.images.begin(), image_payload.images.begin() + drop_views);
+            image_payload._data__processed.erase(image_payload._data__processed.begin(),
+                                                 image_payload._data__processed.begin() + drop_values);
+            image_payload.num_images = (unsigned)image_payload.images.size();
         }
     }
 
     // The payload rides on the first prefill chunk only, so that chunk must hold
     // every image GROUP whole -- through the </slice> / </image> that close it,
     // which the canvas m-rope positions too -- not just up to the last pad row.
-    int first_len_run = 0;
-    {
-        int last = -1;
-        for (int i = (int)prefix_skip_count; i < (int)tokens.size(); i++) {
-            if (tokens[i] == image_pad) last = i;
-        }
-        if (last >= 0) {
-            auto structural = [](int t) {
-                return t == 248078 || t == 248079 || t == 248088 || t == 248089;
-            };
-            while (last + 1 < (int)tokens.size() && structural(tokens[last + 1])) last++;
-            first_len_run = last + 1 - (int)prefix_skip_count;
-        }
-    }
+    // The media spans end there, so media_end is that length past the skip.
+    const int first_len_run = (int)plan.media_end;
     const bool has_images = !image_payload.images.empty();
 
     // FLM_MINICPM_V_DUMP=<dir>: the payload and the prompt exactly as the engine

@@ -172,25 +172,11 @@ bool Gemma3::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std:
     
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
 
-    // ----------------------------------------------------------------------
-    // Prompt-cache aware image alignment.
-    //
-    // AutoModel::_shared_insert prefix-matches `tokens` against `token_history`
-    // over the FULL length of `token_history`. If every token matches, it
-    // erases that prefix before prefilling; otherwise it calls clear_context()
-    // and skips nothing. We must NOT erase `tokens` here -- _shared_insert
-    // needs the untrimmed sequence to run that very check. What we DO need to
-    // fix up locally is `pixel_values` (which carries pixels for the WHOLE
-    // prompt, including images from earlier turns that are already cached):
-    // drop the fully-cached leading images so the surviving payload aligns
-    // with the surviving image tokens after _shared_insert performs its own
-    // erase.
-    // ----------------------------------------------------------------------
     // ---- prefix slots: resume from the longest saved prefix of this prompt ----
     // The generation prompt ("<start_of_turn>model\n") is how the next turn renders this reply's header: the whole prompt is saved
     // (trim 0). The template folds the system prompt into the first user turn, so the shared head before "<start_of_turn>user" is a
     // BOS token only: no boundary slot, the end slots carry the reuse. After a resume token_history is the slot's tokens, so the
-    // skip count below is the match length.
+    // plan's skip below is the match length.
     const bool slot_mode = this->_prefix_slot_mode(meta_info, tokens.size(), 0);
     size_t match_len = 0;
     std::vector<int> full_tokens;          // what this prompt leaves in the engine
@@ -206,77 +192,45 @@ bool Gemma3::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std:
         this->_prefix_legacy_path(); // the in-place path below moves the engine on without telling the cache
     }
 
-    size_t prefix_skip_count = 0;
-    {
-        const size_t idx = this->token_history.size();
-        for (size_t i = 0; i < idx; i++) {
-            if (i < tokens.size() && tokens[i] == this->token_history[i]) {
-                prefix_skip_count++;
-            } else {
-                break;
-            }
-        }
-        // Must match the entirety of token_history, otherwise _shared_insert
-        // will clear the context and not skip anything.
-        if (prefix_skip_count != idx) {
-            prefix_skip_count = 0;
-        }
-    }
-
-    // Total images currently held in pixel_values (each image occupies a
-    // fixed 3*896*896 bf16 elements block).
+    // ---- prompt cache: drop the images the engine already holds ----
+    // pixel_values carries every image of the prompt, earlier turns' included. Each image is a fixed 896x896 block and
+    // expands to the same number of placeholders (the chat template does the expansion), so the per-image count is the
+    // placeholder total over the blocks; the last image takes any remainder so the items cover every placeholder.
     const size_t per_img_bytes = static_cast<size_t>(3) * 896 * 896 * sizeof(bf16);
-    const size_t total_images_in_payload =
-        per_img_bytes > 0 ? pixel_values.size() / per_img_bytes : 0;
-
-    if (prefix_skip_count > 0 && total_images_in_payload > 0) {
-        int skipped_image_tokens = 0;
-        for (size_t i = 0; i < prefix_skip_count; i++) {
-            if (tokens[i] == IMAGE_TOKEN_ID) skipped_image_tokens++;
-        }
-        int total_image_tokens = 0;
-        for (int t : tokens) {
-            if (t == IMAGE_TOKEN_ID) total_image_tokens++;
-        }
-        if (skipped_image_tokens > 0 && total_image_tokens > 0) {
-            const int per_img_tokens =
-                total_image_tokens / static_cast<int>(total_images_in_payload);
-            if (per_img_tokens > 0) {
-                const size_t skipped_imgs =
-                    static_cast<size_t>(skipped_image_tokens / per_img_tokens);
-                const size_t drop_bytes =
-                    std::min(skipped_imgs * per_img_bytes, pixel_values.size());
-                if (drop_bytes > 0) {
-                    const size_t remaining = pixel_values.size() - drop_bytes;
-                    if (remaining == 0) {
-                        pixel_values = bytes();
-                    } else {
-                        bytes trimmed(remaining);
-                        memcpy(trimmed.data(),
-                               pixel_values.data() + drop_bytes,
-                               remaining);
-                        pixel_values = std::move(trimmed);
-                    }
-                    header_print("FLM",
-                        "Prompt-cache hit: dropped " << skipped_imgs
-                        << " cached image(s) from payload");
-                }
-            }
+    const size_t total_images_in_payload = pixel_values.size() / per_img_bytes;
+    std::vector<prompt_media_t> media;
+    if (total_images_in_payload > 0) {
+        const size_t total_image_tokens = static_cast<size_t>(std::count(tokens.begin(), tokens.end(), IMAGE_TOKEN_ID));
+        std::vector<size_t> counts(total_images_in_payload, total_image_tokens / total_images_in_payload);
+        counts.back() += total_image_tokens % total_images_in_payload;
+        prompt_media_from_counts(tokens, IMAGE_TOKEN_ID, counts, prompt_media_t::kImage, media);
+    }
+    // after the slot resume: it sees the token_history _shared_insert will see
+    const prompt_reuse_t plan = this->_plan_reuse(tokens, media);
+    const size_t drop_bytes = std::min(plan.skipped_media[prompt_media_t::kImage] * per_img_bytes, pixel_values.size());
+    if (drop_bytes > 0) {
+        const size_t remaining = pixel_values.size() - drop_bytes;
+        if (remaining == 0) {
+            pixel_values = bytes();
+        } else {
+            bytes trimmed(remaining);
+            memcpy(trimmed.data(), pixel_values.data() + drop_bytes, remaining);
+            pixel_values = std::move(trimmed);
         }
     }
 
     // hardware
     void* payload = pixel_values.size() > 0 ? static_cast<void*>(&pixel_values) : nullptr;
 
-    // find the last image token index, expressed relative to the tokens that
-    // will SURVIVE _shared_insert's prefix erase (i.e. shifted by -prefix_skip_count).
+    // the image rows have to sit in the first prefill chunk: one past the last placeholder that is prefilled,
+    // relative to the tokens that survive _shared_insert's skip
     int last_image_token_index = -1;
-    for (int i = static_cast<int>(prefix_skip_count); i < (int)tokens.size(); i++) {
+    for (int i = static_cast<int>(plan.skip); i < (int)tokens.size(); i++) {
         if (tokens[i] == IMAGE_TOKEN_ID) {
-            last_image_token_index = i - static_cast<int>(prefix_skip_count);
+            last_image_token_index = i - static_cast<int>(plan.skip);
         }
     }
-    last_image_token_index++; // plus the end of image tokens
+    last_image_token_index++;
 
     if (slot_mode) {
         return this->_prefix_insert(this->prefix_cache_, meta_info, tokens, full_tokens, image_hashes, match_len, "<start_of_turn>user",

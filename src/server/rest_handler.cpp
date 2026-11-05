@@ -900,7 +900,8 @@ json RestHandler::build_nstream_response(const std::string& response_text, chat_
                                          chat_logprobs_aligner* logprobs) {
     const chat_format_spec& spec = auto_chat_engine->get_chat_format();
     chat_msg parsed = chat_parse(spec,
-                                 chat_format_prefill(spec, meta_info.prompt_tail, meta_info.continue_final_message) + response_text,
+                                 chat_format_prefill(spec, meta_info.prompt_tail, meta_info.continue_final_message,
+                                                     parse_options.parse_tool_calls) + response_text,
                                  false, parse_options);
 
     json message;
