@@ -579,7 +579,7 @@ std::string Gemma4_12B::generate(chat_meta_info_t& meta_info, int length_limit, 
             result += token_str;
             os << token_str << std::flush;
         }
-        if (this->is_eos(last_sampled_token)) {
+        if (this->is_eos(last_sampled_token) && !meta_info.ignore_eos) {
             // the reply ended before it started; no engine has run the eos
             this->token_history.pop_back();
             meta_info.stop_reason = reason;
@@ -597,7 +597,7 @@ std::string Gemma4_12B::generate(chat_meta_info_t& meta_info, int length_limit, 
             os << token_str << std::flush;
 
         }
-        if (this->is_eos(last_sampled_token)){
+        if (this->is_eos(last_sampled_token) && !meta_info.ignore_eos){
             // Sampled from the prefill, so no engine has run it.
             this->token_history.pop_back();
             meta_info.stop_reason = reason;
@@ -640,7 +640,7 @@ std::string Gemma4_12B::generate(chat_meta_info_t& meta_info, int length_limit, 
         }
         this->profiler_list[TKOEN_DECODE_TIME].stop(1);
         this->token_history.push_back(sampled_token);
-        if (this->is_eos(sampled_token)){
+        if (this->is_eos(sampled_token) && !meta_info.ignore_eos){
             meta_info.generated_tokens++;
             // Its row is past the end of the engine's KV window once the context is
             // full: forwarding it there corrupts the engine for every later request,

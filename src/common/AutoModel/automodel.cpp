@@ -742,11 +742,24 @@ int AutoModel::_sample(buffer<bf16>& logits, chat_meta_info_t& meta_info) {
                 this->constraint_mask_[id / 32] &= ~(1u << (id % 32));
             }
         }
-        // a grammar that only allows EOS here keeps it: nothing else could be sampled
+        // A grammar that only allows EOS has nothing left once EOS is masked.
+        // min_tokens still keeps that EOS. ignore_eos must not: Tufo asks for a
+        // fixed completion length even when tools are bound, so drop the
+        // grammar and sample any non-EOS token until max_tokens.
         bool any = false;
         for (uint32_t w : this->constraint_mask_) { if (w) { any = true; break; } }
         if (any) {
             masked = true;
+        } else if (meta_info.ignore_eos) {
+            this->constraint_mask_.assign(words, 0xFFFFFFFFu);
+            for (int id : this->eos_token_ids) {
+                if (id >= 0 && static_cast<size_t>(id) < logits.size()) {
+                    this->constraint_mask_[id / 32] &= ~(1u << (id % 32));
+                }
+            }
+            masked = true;
+            meta_info.constraint.reset();
+            constraint = nullptr;
         } else {
             this->constraint_mask_ = saved;
         }
@@ -890,7 +903,7 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
         os << token_str << std::flush;
 
     }
-    if (this->is_eos(last_sampled_token)){
+    if (this->is_eos(last_sampled_token) && !meta_info.ignore_eos){
         // Sampled from the prefill, so no engine has run it.
         this->token_history.pop_back();
         meta_info.stop_reason = reason;
@@ -938,7 +951,7 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
         }
         this->profiler_list[TKOEN_DECODE_TIME].stop(1);
         this->token_history.push_back(sampled_token);
-        if (this->is_eos(sampled_token)){
+        if (this->is_eos(sampled_token) && !meta_info.ignore_eos){
             meta_info.generated_tokens++;
             // The FastFlowLM engines want one more forward() to keep their KV
             // cache in step. Two things can say no: a frontend whose cache is
