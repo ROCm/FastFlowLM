@@ -192,12 +192,18 @@ bool Qwen3_6_MOE::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input,
         total_image_tokens += image_payload.images[i].grid_h * image_payload.images[i].grid_w;
     }
     tokens.reserve(tokens_init.size() + total_image_tokens);
+    // placeholders of each image, recorded as expanded: the prompt-cache plan below locates the images by them
+    std::vector<size_t> image_token_counts;
     int image_counter = 0;
     for (int i = 0; i < tokens_init.size(); i++) {
         if (tokens_init[i] == image_soft_token_id) {
-            for (int j = 0; j < image_payload.images[image_counter].grid_h * image_payload.images[image_counter].grid_w / 4; j++) {
+            // one token per merge x merge patches; the same config value smart_resize rounds the grid to
+            const int merge = static_cast<int>(reinterpret_cast<qwen3_6_moe_npu*>(this->lm_engine)->QWEN3_6_MOE_IMAGE_MERGE_SIZE);
+            const int n_image_tokens = image_payload.images[image_counter].grid_h * image_payload.images[image_counter].grid_w / (merge * merge);
+            for (int j = 0; j < n_image_tokens; j++) {
                 tokens.push_back(image_soft_token_id);
             }
+            image_token_counts.push_back(static_cast<size_t>(n_image_tokens));
             image_counter++;
         } else {
             tokens.push_back(tokens_init[i]);
@@ -206,19 +212,6 @@ bool Qwen3_6_MOE::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input,
 
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
 
-    // ----------------------------------------------------------------------
-    // Prompt-cache aware image alignment.
-    //
-    // AutoModel::_shared_insert prefix-matches `tokens` against `checkpoint_his`
-    // over the FULL length of `checkpoint_his`. If every token matches, it
-    // erases that prefix before prefilling; otherwise it calls clear_context()
-    // and skips nothing. We must NOT erase `tokens` here -- _shared_insert
-    // needs the untrimmed sequence to run that very check. What we DO need to
-    // fix up locally is the image payload (pixels for the WHOLE prompt,
-    // including already-cached images from earlier turns): drop the
-    // fully-cached leading images so the surviving payload aligns with the
-    // surviving image tokens after _shared_insert performs its own erase.
-    // ----------------------------------------------------------------------
     // ---- prefix slots: resume from the longest saved prefix of this prompt ----
     // a continued message keeps all its tokens: they are the client's text, not the generation prompt
     const size_t trim_tokens = meta_info.continue_final_message ? 0 : (this->enable_think ? 2 : 4);
@@ -237,89 +230,8 @@ bool Qwen3_6_MOE::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input,
         match_len = this->_prefix_resume(this->prefix_cache_, full_tokens, image_hashes);
     }
 
-    size_t prefix_skip_count = 0;
-    {
-        const size_t idx = this->checkpoint_his.size();
-        for (size_t i = 0; i < idx; i++) {
-            if (i < tokens.size() && tokens[i] == this->checkpoint_his[i]) {
-                prefix_skip_count++;
-            } else {
-                break;
-            }
-        }
-        // Must match the entirety of checkpoint_his, otherwise _shared_insert
-        // will clear the context and not skip anything.
-        if (prefix_skip_count != idx) {
-            prefix_skip_count = 0;
-        }
-        if (slot_mode) {
-            prefix_skip_count = match_len;
-        }
-
-        if (prefix_skip_count > 0 && !image_payload.images.empty()) {
-            // Per-image bf16 footprint depends on runtime patch/temporal
-            // config carried by the engine.
-            auto* eng = reinterpret_cast<qwen3_6_moe_npu*>(this->lm_engine);
-            const unsigned patch_size = eng->QWEN3_6_MOE_PATCH_SIZE;
-            const unsigned temporal_patch = eng->QWEN3_6_MOE_TEMPORAL_PATCH_SIZE;
-
-            int skipped_image_tokens = 0;
-            for (size_t i = 0; i < prefix_skip_count; i++) {
-                if (tokens[i] == image_soft_token_id) skipped_image_tokens++;
-            }
-
-            size_t images_to_drop = 0;
-            size_t bf16_to_drop = 0;
-            int consumed_image_tokens = 0;
-            for (const auto& img : image_payload.images) {
-                const int img_tokens = (img.grid_h * img.grid_w) / 4;
-                const size_t img_bf16 =
-                    static_cast<size_t>(img.grid_h) * patch_size *
-                    static_cast<size_t>(img.grid_w) * patch_size *
-                    3u * temporal_patch;
-                if (consumed_image_tokens + img_tokens <= skipped_image_tokens) {
-                    consumed_image_tokens += img_tokens;
-                    bf16_to_drop += img_bf16;
-                    images_to_drop++;
-                } else {
-                    break;
-                }
-            }
-
-            if (images_to_drop > 0) {
-                image_payload.images.erase(
-                    image_payload.images.begin(),
-                    image_payload.images.begin() + images_to_drop);
-                image_payload.num_images -= static_cast<int>(images_to_drop);
-                if (bf16_to_drop >= image_payload._data__processed.size()) {
-                    image_payload._data__processed.clear();
-                } else {
-                    image_payload._data__processed.erase(
-                        image_payload._data__processed.begin(),
-                        image_payload._data__processed.begin() + bf16_to_drop);
-                }
-                header_print("FLM",
-                    "Prompt-cache hit: dropped " << images_to_drop
-                    << " cached image(s) from payload");
-            }
-        }
-    }
-
-    // find the last image token index, expressed relative to the tokens that
-    // will SURVIVE _shared_insert's prefix erase (i.e. shifted by -prefix_skip_count).
-    int last_image_token_index = -1;
-    for (int i = static_cast<int>(prefix_skip_count); i < (int)tokens.size(); i++) {
-        if (tokens[i] == image_soft_token_id) {
-            last_image_token_index = i - static_cast<int>(prefix_skip_count);
-        }
-    }
-    last_image_token_index++; // plus the end of image tokens
-
-
     // hardware
     int restore_idx = -1;
-    const bool has_images = image_payload.num_images > 0;
-
     if (!slot_mode && meta_info.restore_allowed) {
         restore_idx = this->lm_engine->restore();
         this->total_tokens = restore_idx;
@@ -328,6 +240,48 @@ bool Qwen3_6_MOE::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input,
 
     size_t n = tokens.size();
     tokens.resize(n - trim_tokens);
+
+    // ---- prompt cache: drop the images the engine already holds ----
+    // The payload carries the pixels of every image of the prompt, but _shared_insert only prefills the
+    // tokens after the part the engine keeps. Ask the shared rule, against the history and the exact
+    // tokens _shared_insert will see, how much that is, and drop the images inside it.
+    std::vector<prompt_media_t> media;
+    prompt_media_from_counts(tokens, image_soft_token_id, image_token_counts, prompt_media_t::kImage, media);
+    const prompt_reuse_t plan = this->_plan_reuse(tokens, media);
+
+    const size_t images_to_drop = std::min(plan.skipped_media[prompt_media_t::kImage], image_payload.images.size());
+    if (images_to_drop > 0) {
+        // Per-image bf16 footprint depends on runtime patch/temporal
+        // config carried by the engine.
+        auto* eng = reinterpret_cast<qwen3_6_moe_npu*>(this->lm_engine);
+        const unsigned patch_size = eng->QWEN3_6_MOE_PATCH_SIZE;
+        const unsigned temporal_patch = eng->QWEN3_6_MOE_TEMPORAL_PATCH_SIZE;
+
+        size_t bf16_to_drop = 0;
+        for (size_t i = 0; i < images_to_drop; i++) {
+            const auto& img = image_payload.images[i];
+            bf16_to_drop +=
+                static_cast<size_t>(img.grid_h) * patch_size *
+                static_cast<size_t>(img.grid_w) * patch_size *
+                3u * temporal_patch;
+        }
+
+        image_payload.images.erase(
+            image_payload.images.begin(),
+            image_payload.images.begin() + images_to_drop);
+        image_payload.num_images -= static_cast<int>(images_to_drop);
+        if (bf16_to_drop >= image_payload._data__processed.size()) {
+            image_payload._data__processed.clear();
+        } else {
+            image_payload._data__processed.erase(
+                image_payload._data__processed.begin(),
+                image_payload._data__processed.begin() + bf16_to_drop);
+        }
+    }
+
+    // one past the last image token, relative to the tokens that survive _shared_insert's skip
+    const int last_image_token_index = static_cast<int>(plan.media_end);
+    const bool has_images = image_payload.num_images > 0;
 
     if (slot_mode) {
         return this->_prefix_insert(this->prefix_cache_, meta_info, tokens, full_tokens, image_hashes, match_len, "<|im_start|>user",

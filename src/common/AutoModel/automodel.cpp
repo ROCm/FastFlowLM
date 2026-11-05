@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <numeric>
 #include <stdexcept>
 
 namespace {
@@ -526,7 +527,26 @@ void AutoModel::_shared_validate_capacity(std::size_t rendered_tokens,
     }
 }
 
+prompt_reuse_t AutoModel::_plan_reuse(const std::vector<int>& tokens, const std::vector<prompt_media_t>& media) {
+    prompt_reuse_t plan = plan_prompt_reuse(this->token_history, tokens, media);
+    if (plan.reason == prompt_reuse_t::kInsideMedia) {
+        // _shared_insert alone would keep the history: it does not see where the items are
+        header_print("FLM", "Prompt cache ends inside an image or audio clip, clearing context...");
+        clear_context();
+    }
+    // the other clears are _shared_insert's own, made when it gets there
+    this->planned_skip_ = plan.skip;
+    const size_t dropped = std::accumulate(plan.skipped_media.begin(), plan.skipped_media.end(), size_t{0});
+    if (dropped > 0) {
+        header_print("FLM", "Prompt-cache hit: dropped " << plan.skipped_media[prompt_media_t::kImage] << " cached image(s) and "
+                            << plan.skipped_media[prompt_media_t::kAudio] << " cached audio clip(s) from payload");
+    }
+    return plan;
+}
+
 bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled, void* payload, int first_len_run, std::optional<int> requested_max_new_tokens, bool sample_next) {
+    // taken first, so a request that throws below cannot leave it for the next one
+    const std::optional<size_t> planned_skip = std::exchange(this->planned_skip_, std::nullopt);
     this->_shared_validate_capacity(tokens.size(), requested_max_new_tokens);
 
     // a prefill-only pass (sample_next false) is the head of a longer prompt: the
@@ -549,30 +569,23 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
     // }
     // std::cout << std::endl;
 
-    // prefix check for tokens and token history to see if we can skip some tokens
-    const size_t idx = this->token_history.size();
-    size_t skip_count = 0;
-    for (size_t i = 0; i < idx; i++) {
-        if (i < tokens.size() && tokens[i] == this->token_history[i]) {
-            skip_count++;
-        }
-        else {
-            break;
-        }
-    }
-    if (skip_count != idx) {
-        if (is_server_mode) {
+    // skip the part of the prompt the engine already holds; the rule is plan_prompt_reuse's, which the
+    // models with media asked already (_plan_reuse) to trim their payload the same way
+    const prompt_reuse_t plan = plan_prompt_reuse(this->token_history, tokens);
+    if (plan.clear) {
+        if (is_server_mode && plan.reason == prompt_reuse_t::kDiverged) {
             header_print("FLM", "Conversation context diverged from cache, clearing context...");
         }
+        // kWholePrompt: the engine holds the whole prompt already (the same request again), but
+        // sampling needs the logits of its last token, and the cache cannot step back one
         clear_context();
-        skip_count = 0;
     }
-    else if (skip_count >= tokens.size() && !tokens.empty()) {
-        // The engine holds the whole prompt already (the same request again), but
-        // sampling needs the logits of its last token, and the cache cannot step
-        // back one: read it in again from the start.
+    const size_t skip_count = plan.skip;
+    if (payload != nullptr && planned_skip && *planned_skip != skip_count) {
+        // the payload was trimmed for another skip: its items would land on the wrong rows
         clear_context();
-        skip_count = 0;
+        throw std::logic_error("prompt cache: the payload was trimmed for a skip of " + std::to_string(*planned_skip) +
+                               " tokens, but the engine keeps " + std::to_string(skip_count));
     }
     tokens.erase(tokens.begin(), tokens.begin() + skip_count);
 

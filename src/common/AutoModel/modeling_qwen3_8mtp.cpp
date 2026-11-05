@@ -223,6 +223,7 @@ bool Qwen3_8MTP::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
     // The template emits ONE <|image_pad|> per image; the model wants one per
     // MERGED patch, which is grid_h * grid_w / merge^2. Expand in place.
     std::vector<int> tokens;
+    std::vector<size_t> image_token_counts;   // per staged image, for the prompt-cache plan
     if (host_images.empty()) {
         tokens = std::move(tokens_init);
     }
@@ -241,6 +242,7 @@ bool Qwen3_8MTP::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
                 const qwen3_8mtp_host_image_t& im = host_images[image_counter];
                 const int n = im.grid_h * im.grid_w / merged;
                 tokens.insert(tokens.end(), static_cast<size_t>(n), image_soft_token_id);
+                image_token_counts.push_back(static_cast<size_t>(n));
                 image_counter++;
             } else {
                 tokens.push_back(tokens_init[i]);
@@ -258,67 +260,60 @@ bool Qwen3_8MTP::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
 
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
 
-    // Prompt-cache aware image alignment. _shared_insert prefix-matches
-    // `tokens` against checkpoint_his and erases that prefix itself, so
-    // `tokens` must stay untrimmed here. What needs fixing up locally is the
-    // image payload: it still holds pixels for cached leading images, so drop
-    // those descriptors to keep the survivors aligned with the tokens that
-    // survive the erase.
-    size_t prefix_skip_count = 0;
+    // hardware
+    int restore_idx = -1;
+
+    // The single checkpoint (the conversation that ran last) covers this prompt when its token history is a prefix of it: the
+    // conversation continues, restore() rewinds to the end of the last turn and only the new turn is prefilled.
+    // Otherwise (the first turn, or another conversation ran in between) a text prompt resumes from the slot that holds its
+    // shared head (system prompt + tools), if there is one, and prefills the rest. The saved head is a self-contained
+    // copy, so the engine moving on does not invalidate it.
+    // Images never take the slot path: a staged image always expanded into image_soft_token_id rows.
+    const size_t think_trim = this->enable_think ? 2 : 4;
+    const bool checkpoint_covers = !checkpoint_his.empty() && checkpoint_his.size() <= tokens.size() &&
+                                   std::equal(checkpoint_his.begin(), checkpoint_his.end(), tokens.begin());
+    const bool slot_mode = !checkpoint_covers && host_images.empty() &&
+                           std::find(tokens.begin(), tokens.end(), image_soft_token_id) == tokens.end() &&
+                           this->_prefix_slot_mode(meta_info, tokens.size(), think_trim);
+    size_t match_len = 0;
+    std::vector<int> full_tokens;          // what this prompt leaves in the engine
+    if (slot_mode) {
+        full_tokens.assign(tokens.begin(), tokens.end() - think_trim);
+        match_len = this->_prefix_resume(this->prefix_cache_, full_tokens, {});
+    }
+    else if (meta_info.restore_allowed && !checkpoint_his.empty()) {
+        restore_idx = this->lm_engine->restore();
+        this->total_tokens = restore_idx;
+        this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
+    }
+
+    // _shared_insert erases the prefix the engine already holds from `tokens` itself (the whole prompt, preamble
+    // included, is prefilled), so `tokens` stays untrimmed here. The image payload still holds pixels for the cached
+    // leading images: ask for the same skip _shared_insert will take, against the token_history it will see (after
+    // the restore above), and drop those images so the survivors line up with the surviving rows.
+    prompt_reuse_t plan;
     if (!host_images.empty()) {
-        const size_t idx = this->checkpoint_his.size();
-        for (size_t i = 0; i < idx; i++) {
-            if (i < tokens.size() && tokens[i] == this->checkpoint_his[i]) prefix_skip_count++;
-            else break;
-        }
-        // Must match all of checkpoint_his, or _shared_insert clears the
-        // context and skips nothing.
-        if (prefix_skip_count != idx) prefix_skip_count = 0;
-        // Covering the whole prompt (the same prompt again, or another image
-        // of the same size) makes _shared_insert clear the context and read it
-        // all in again, images included.
-        if (prefix_skip_count >= tokens.size()) prefix_skip_count = 0;
+        std::vector<prompt_media_t> media;
+        prompt_media_from_counts(tokens, image_soft_token_id, image_token_counts, prompt_media_t::kImage, media);
+        plan = this->_plan_reuse(tokens, media);
 
-        if (prefix_skip_count > 0) {
-            const int merged = static_cast<int>(this->vision_merge_size *
-                                                this->vision_merge_size);
-            size_t skipped_image_tokens = 0;
-            for (size_t i = 0; i < prefix_skip_count; i++)
-                if (tokens[i] == image_soft_token_id) skipped_image_tokens++;
-
-            size_t images_to_drop = 0;
-            size_t consumed_image_tokens = 0;
-            for (const auto& im : host_images) {
-                const size_t img_tokens =
-                    static_cast<size_t>(im.grid_h) * im.grid_w / merged;
-                if (consumed_image_tokens + img_tokens > skipped_image_tokens) break;
-                consumed_image_tokens += img_tokens;
-                images_to_drop++;
-            }
-
-            if (images_to_drop > 0) {
-                // pixel_offsets are absolute indices into `pixels`, so
-                // dropping the descriptors is enough -- no need to erase the
-                // (multi-hundred-MB) buffer itself.
-                host_images.erase(host_images.begin(),
-                                  host_images.begin() + images_to_drop);
-                pixel_offsets.erase(pixel_offsets.begin(),
-                                    pixel_offsets.begin() + images_to_drop);
-                header_print("FLM", "Prompt-cache hit: dropped " << images_to_drop
-                                    << " cached image(s) from payload");
-            }
+        const size_t images_to_drop = plan.skipped_media[prompt_media_t::kImage];
+        if (images_to_drop > 0) {
+            // pixel_offsets are absolute indices into `pixels`, so
+            // dropping the descriptors is enough -- no need to erase the
+            // (multi-hundred-MB) buffer itself.
+            host_images.erase(host_images.begin(),
+                              host_images.begin() + images_to_drop);
+            pixel_offsets.erase(pixel_offsets.begin(),
+                                pixel_offsets.begin() + images_to_drop);
         }
     }
 
-    // Last image token's index, relative to the tokens that survive
-    // _shared_insert's prefix erase. Grows chunk 0 (the only chunk that gets
-    // the image payload) to cover every image row.
-    int last_image_token_index = -1;
-    for (int i = static_cast<int>(prefix_skip_count); i < (int)tokens.size(); i++) {
-        if (tokens[i] == image_soft_token_id)
-            last_image_token_index = i - static_cast<int>(prefix_skip_count);
-    }
-    last_image_token_index++;   // plus the end-of-image token
+    // One past the last image token, relative to the tokens that survive
+    // _shared_insert's prefix erase (the end-of-image token's index). Grows
+    // chunk 0 (the only chunk that gets the image payload) to cover every
+    // image row.
+    const int last_image_token_index = static_cast<int>(plan.media_end);
 
     // Engine-facing views. Built here, after every append to `pixels` is done,
     // because the vector reallocates as it grows.
@@ -336,32 +331,6 @@ bool Qwen3_8MTP::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
     qwen3_8mtp_payload_t payload;
     payload.images = &image_payload;
     const bool has_images = image_payload.num_images > 0;
-
-    // hardware
-    int restore_idx = -1;
-
-    // The single checkpoint (the conversation that ran last) covers this prompt when its token history is a prefix of it: the
-    // conversation continues, restore() rewinds to the end of the last turn and only the new turn is prefilled.
-    // Otherwise (the first turn, or another conversation ran in between) a text prompt resumes from the slot that holds its
-    // shared head (system prompt + tools), if there is one, and prefills the rest. The saved head is a self-contained
-    // copy, so the engine moving on does not invalidate it.
-    const size_t think_trim = this->enable_think ? 2 : 4;
-    const bool checkpoint_covers = !checkpoint_his.empty() && checkpoint_his.size() <= tokens.size() &&
-                                   std::equal(checkpoint_his.begin(), checkpoint_his.end(), tokens.begin());
-    const bool slot_mode = !checkpoint_covers && !has_images &&
-                           std::find(tokens.begin(), tokens.end(), image_soft_token_id) == tokens.end() &&
-                           this->_prefix_slot_mode(meta_info, tokens.size(), think_trim);
-    size_t match_len = 0;
-    std::vector<int> full_tokens;          // what this prompt leaves in the engine
-    if (slot_mode) {
-        full_tokens.assign(tokens.begin(), tokens.end() - think_trim);
-        match_len = this->_prefix_resume(this->prefix_cache_, full_tokens, {});
-    }
-    else if (meta_info.restore_allowed && !checkpoint_his.empty()) {
-        restore_idx = this->lm_engine->restore();
-        this->total_tokens = restore_idx;
-        this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
-    }
 
     // The chat template's generation prompt ends with the think preamble:
     //   thinking on : "<think>\n"                -> 2 tokens

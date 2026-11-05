@@ -92,3 +92,16 @@ jobs:
           cmake -S src/test/chat_tools -B build-chat-tools -DCMAKE_BUILD_TYPE=Release
           cmake --build build-chat-tools -j"$(nproc)"
           ctest --test-dir build-chat-tools --output-on-failure
+
+  # plan_prompt_reuse (src/include/prompt_reuse.hpp): how much of a prompt the engine keeps and which images /
+  # audio clips a model drops from its payload, the one rule every vision model and _shared_insert share. CPU only.
+  prompt-reuse:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Build and run the prompt reuse test
+        run: |
+          cmake -S src/test/prompt_reuse -B build-prompt-reuse -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-prompt-reuse -j"$(nproc)"
+          ctest --test-dir build-prompt-reuse --output-on-failure
