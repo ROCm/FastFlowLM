@@ -274,6 +274,10 @@ bool Qwen3_8MTP::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
         // Must match all of checkpoint_his, or _shared_insert clears the
         // context and skips nothing.
         if (prefix_skip_count != idx) prefix_skip_count = 0;
+        // Covering the whole prompt (the same prompt again, or another image
+        // of the same size) makes _shared_insert clear the context and read it
+        // all in again, images included.
+        if (prefix_skip_count >= tokens.size()) prefix_skip_count = 0;
 
         if (prefix_skip_count > 0) {
             const int merged = static_cast<int>(this->vision_merge_size *
