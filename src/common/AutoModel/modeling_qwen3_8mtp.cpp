@@ -253,6 +253,8 @@ bool Qwen3_8MTP::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
             // nowhere to land. Refuse rather than prefill a scrambled caption.
             header_print("ERROR", "templated " << image_counter << " image placeholder(s) "
                                   "for " << host_images.size() << " image(s); refusing to prefill");
+            meta_info.error_message = "Prompt has " + std::to_string(image_counter) + " image placeholder(s) for " + std::to_string(host_images.size()) + " image(s)";
+            meta_info.error_code = 500;
             return false;
         }
         header_print("FLM", "Total images: " << image_counter);

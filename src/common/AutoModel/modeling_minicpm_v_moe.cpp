@@ -161,6 +161,7 @@ bool MiniCPM_V_MOE::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& inpu
             }
             if (picture >= layouts.size()) {
                 header_print("ERROR", "the prompt has more <|image_pad|> than images");
+                meta_info.error_message = "The prompt has more <|image_pad|> than images";
                 return false;
             }
             const std::vector<int> ph = this->image_placeholder(layouts[picture], (int)picture);
@@ -169,6 +170,7 @@ bool MiniCPM_V_MOE::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& inpu
         }
         if (picture != layouts.size()) {
             header_print("ERROR", "the prompt has " << picture << " <|image_pad|> for " << layouts.size() << " images");
+            meta_info.error_message = "The prompt has " + std::to_string(picture) + " <|image_pad|> for " + std::to_string(layouts.size()) + " images";
             return false;
         }
     }
