@@ -783,6 +783,40 @@ void TestModelscopeFlagReachesTheBase() {
     TEST_REQUIRE(Read(fixture.dep_path() / "draft.bin") == "draft-weights");
 }
 
+void TestShippedCatalogDeclaresTheQwen35FlashTag() {
+    std::string path = FLM_SOURCE_DIR "/model_list.json";
+    std::string exe_dir = ".";
+    model_list models(path, exe_dir, "aie2p", {"flm"});
+    const char* flash_tag = "qwen3.5-flash:2b";
+    const char* plain_tag = "qwen3.5:2b";
+    TEST_REQUIRE(models.is_model_supported(flash_tag));
+    const auto flash = models.get_model_info(flash_tag).second;
+    const auto plain = models.get_model_info(plain_tag).second;
+    // the same weights package as qwen3.5:2b: no new download, the same files, and the package's own version floor
+    // (a higher floor makes the shared package "outdated" on every start)
+    for (const char* key : {"name", "url", "file_url", "ms_url", "size", "flm_min_version", "files", "vlm"}) {
+        TEST_REQUIRE(flash.at(key) == plain.at(key));
+    }
+    // its own kernels: the folder is named in the entry, and it ships in the tree
+    TEST_REQUIRE(flash.at("xclbin_folder") == "Qwen3.5-2B-Flash-NPU2");
+    TEST_REQUIRE(!plain.contains("xclbin_folder"));
+    TEST_REQUIRE(!flash.contains("base_model"));
+    for (const char* file : {"attn", "conv", "GateDeltaNet_prefill", "layer", "mm", "vision_attn", "vision_mm", "vision_overlay"}) {
+        TEST_REQUIRE(fs::exists(fs::path(FLM_SOURCE_DIR) / "xclbins" / "Qwen3.5-2B-Flash-NPU2" / (std::string(file) + ".xclbin")));
+    }
+    // the Flash contract
+    TEST_REQUIRE(flash.at("details").at("family") == "qwen3.5-flash");
+    TEST_REQUIRE(flash.at("details").at("think") == true);
+    TEST_REQUIRE(flash.at("default_context_length") == 1024);
+    TEST_REQUIRE(flash.at("max_prefill_len") == 1024);
+    const auto labels = flash.at("label").get<std::vector<std::string>>();
+    TEST_REQUIRE(std::find(labels.begin(), labels.end(), "single-turn") != labels.end());
+    TEST_REQUIRE(std::find(labels.begin(), labels.end(), "tool-calling") == labels.end());
+    // the tag lists the same files as qwen3.5:2b, so it has the same Hugging Face tree
+    const auto tree = ReadJson(FLM_SOURCE_DIR "/model_info.json");
+    TEST_REQUIRE(tree.at(flash_tag) == tree.at(plain_tag));
+}
+
 void TestShippedCatalogDeclaresTheDflashDependant() {
     std::string path = FLM_SOURCE_DIR "/model_list.json";
     std::string exe_dir = ".";
@@ -914,6 +948,7 @@ int main() {
     RunTest(TestRemovingBaseWarnsAndRemovingDependantKeepsBase, "rm semantics");
     RunTest(TestModelscopeFlagReachesTheBase, "modelscope flag reaches base");
     RunTest(TestShippedCatalogDeclaresTheDflashDependant, "shipped dflash entry");
+    RunTest(TestShippedCatalogDeclaresTheQwen35FlashTag, "shipped qwen3.5-flash entry");
     RunTest(TestResumeAppendsToPartThenAtomicallyPromotes, "resume and promote");
     RunTest(TestWrongSizeOrHashNeverReplacesAValidFinalFile, "invalid transfer isolation");
     RunTest(TestInterruptedTransferKeepsPartForNextResume, "interrupted transfer");

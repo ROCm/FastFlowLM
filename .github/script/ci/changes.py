@@ -75,7 +75,9 @@ ENGINES = {
     # Qwen3VL_Flash derives from Qwen3VL and its engine includes qwen3vl_npu.
     ("qwen3vl",):                            ("qwen3vl", "qwen3vl-flash"),
     ("qwen3vl_flash",):                      ("qwen3vl-flash",),
-    ("qwen3_5vl",):                          ("qwen3.5",),
+    # Qwen3_5VL_Flash derives from Qwen3_5VL (modeling_qwen3_5vl*.cpp) and runs its own engine, qwen3_5vl_flash.
+    ("qwen3_5vl",):                          ("qwen3.5", "qwen3.5-flash"),
+    ("qwen3_5vl_flash",):                    ("qwen3.5-flash",),
     ("minicpm_v_4_7", "minicpm_v"):          ("minicpm-v-4.7",),
     ("minicpm_v_4_7_moe", "minicpm_v_moe"): ("minicpm-v-4.7-moe",),
     ("qwen3_6_moe",):                        ("qwen3.6-moe",),

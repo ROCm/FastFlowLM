@@ -396,16 +396,16 @@ flm serve qwen3.5:4b --prefix-cache-mb 8192 --prefix-slots 16
 
 ### 🎙️ ASR (Automatic Speech Recognition)
 
-**Requirement:** The ASR model (e.g., `whisper-large-v3-turbo`) must run **with an LLM loaded concurrently**. Enabling `--asr 1` starts Whisper in the background **while** your chosen LLM loads.
+**Requirement:** The ASR model (e.g., `whisper-large-v3-turbo`) must run **with an LLM loaded concurrently**. Enabling `--asr <model tag>` (or `--asr 1` for the default) starts Whisper in the background **while** your chosen LLM loads.
 
 #### CLI mode
 ```shell
-flm run gemma3:4b --asr 1  # Load Whisper (whisper-large-v3-turbo) in the background and load the LLM (gemma3:4b) concurrently.
+flm run gemma3:4b --asr whisper-v3:turbo  # Load Whisper (whisper-large-v3-turbo) in the background and load the LLM (gemma3:4b) concurrently.
 ```
 
 #### Server mode
 ```shell
-flm serve gemma3:4b --asr 1  # Background-load Whisper and initialize the LLM (gemma3:4b) concurrently.
+flm serve gemma3:4b --asr whisper-v3:turbo  # Background-load Whisper and initialize the LLM (gemma3:4b) concurrently.
 ```
 
 > **Note:** ASR alone isn’t supported—an LLM must be present for end-to-end voice→text→LLM workflows.
