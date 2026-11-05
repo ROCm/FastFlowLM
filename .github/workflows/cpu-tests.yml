@@ -38,3 +38,26 @@ jobs:
           cmake -S src/test/chat_continue -B build-chat-continue -DCMAKE_BUILD_TYPE=Release
           cmake --build build-chat-continue -j"$(nproc)"
           ctest --test-dir build-chat-continue --output-on-failure
+
+  # Tool calling (src/common/chat): the output parser on what models write, and the decoding grammar
+  # against the calls the chat templates render. CPU only, no NPU.
+  chat-tools:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      # the grammar engine, and the headers it builds against; nothing else is needed
+      - name: Checkout xgrammar
+        run: |
+          for attempt in 1 2 3; do
+            git submodule update --init --depth 1 third_party/xgrammar &&
+              git -C third_party/xgrammar submodule update --init --depth 1 3rdparty/dlpack && exit 0
+            echo "Submodule fetch failed (attempt ${attempt}), retrying..."
+            sleep 10
+          done
+          exit 1
+      - name: Build and run the chat tools test
+        run: |
+          cmake -S src/test/chat_tools -B build-chat-tools -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-chat-tools -j"$(nproc)"
+          ctest --test-dir build-chat-tools --output-on-failure
