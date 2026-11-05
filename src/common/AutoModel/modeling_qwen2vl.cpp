@@ -166,6 +166,7 @@ bool Qwen2VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
         throw; // a final message that cannot be continued is the client's error (400), not a failed prefill
     } catch (const std::exception& e) {
         header_print_r("ERROR", std::string("Exception during chat template application: ") + e.what());
+        meta_info.error_message = std::string("Applying the chat template failed: ") + e.what();
         return false;
     }
     std::vector<int> tokens_init = this->tokenizer->encode(templated_text);

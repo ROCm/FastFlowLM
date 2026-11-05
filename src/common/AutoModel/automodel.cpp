@@ -487,6 +487,8 @@ bool AutoModel::_prefix_insert(PrefixSlotCache& cache, chat_meta_info_t& meta_in
             cache.save(head_tokens, {}, true, 0);
         } else {
             meta_info.stop_reason = head_meta.stop_reason;
+            meta_info.error_message = head_meta.error_message;
+            meta_info.error_code = head_meta.error_code;
         }
     }
     if (success) {
@@ -578,6 +580,10 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
 
     if (this->total_tokens + tokens.size() >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping prefilling...");
+        meta_info.error_message = "Prompt does not fit in the context window: " + std::to_string(tokens.size()) +
+                                  " new prompt tokens on top of the " + std::to_string(this->total_tokens) +
+                                  " already held exceed the context length of " + std::to_string(this->MAX_L) + " tokens";
+        meta_info.error_code = 400;
         return false;
     }
     for (int token : tokens){
@@ -597,7 +603,7 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
     meta_info.cached_prompt_tokens = static_cast<int>(skip_count);
     meta_info.prompt_tokens = static_cast<int>(skip_count + tokens.size());
 
-    if (meta_info.stop_reason == CANCEL_DETECTED) {
+    if (meta_info.stop_reason == CANCEL_DETECTED || meta_info.stop_reason == ERROR_DETECTED) {
         return false;
     }
 
@@ -624,6 +630,23 @@ buffer<bf16> AutoModel::_chunked_insert(chat_meta_info_t& meta_info, std::vector
         max_prefill_len = 1 << static_cast<int>(std::ceil(std::log2(max_prefill_len)));
     }
     buffer<bf16> y;
+    // test hook, off unless set: FLM_TEST_PREFILL_FAULT=throw|false makes a prefill whose prompt contains the text
+    // FLM_TEST_PREFILL_FAULT throw / be refused (ERROR_DETECTED), as a failing engine would (src/test/openai_api_test)
+    static const std::string prefill_fault = [] {
+        const char* v = std::getenv("FLM_TEST_PREFILL_FAULT");
+        return std::string(v != nullptr ? v : "");
+    }();
+    if (!prefill_fault.empty() && this->tokenizer->decode(tokens).find("FLM_TEST_PREFILL_FAULT") != std::string::npos) {
+        if (prefill_fault == "throw") {
+            throw std::runtime_error("FLM_TEST_PREFILL_FAULT: injected prefill failure");
+        }
+        if (prefill_fault == "false") {
+            meta_info.stop_reason = ERROR_DETECTED;
+            meta_info.error_message = "FLM_TEST_PREFILL_FAULT: injected prefill refusal";
+            meta_info.error_code = 500;
+            return y;
+        }
+    }
     if (max_prefill_len < 512) {
         if (is_cancelled()) {
             meta_info.stop_reason = CANCEL_DETECTED;

@@ -442,6 +442,7 @@ bool Qwen3VL_Flash::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& inpu
 
     if (tokens.size() >= this->MAX_L) {
         header_print("WARNING", "Prompt does not fit in the context window, stopping prefilling...");
+        meta_info.error_message = "Prompt does not fit in the context window: " + std::to_string(tokens.size()) + " tokens, the context length is " + std::to_string(this->MAX_L);
         return false;
     }
 
@@ -496,7 +497,7 @@ bool Qwen3VL_Flash::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& inpu
     // prompt but was not prefilled on this turn.
     meta_info.cached_prompt_tokens = skip;
 
-    if (meta_info.stop_reason == CANCEL_DETECTED) {
+    if (meta_info.stop_reason == CANCEL_DETECTED || meta_info.stop_reason == ERROR_DETECTED) {
         return false;
     }
 

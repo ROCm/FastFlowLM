@@ -137,6 +137,11 @@ struct chat_meta_info_t {
 	///       prompt, and the turn starts right after the message's text: insert()
 	///       trims no prompt tokens and generate() feeds no preamble of its own.
 	bool continue_final_message = false;
+	/// \brief Why insert() returned false, for the reply to the client; empty when it did not say
+	/// \note A cancelled prefill leaves it empty: stop_reason (CANCEL_DETECTED) tells that case.
+	std::string error_message;
+	/// \brief HTTP status that goes with error_message: 400 when the request is at fault, 500 otherwise
+	int error_code = 400;
 
 	chat_meta_info_t() : max_prefill_len(0), prompt_tokens(0), cached_prompt_tokens(0), generated_tokens(0), total_duration(0), load_duration(0), prefill_duration(0), decoding_duration(0), stop_reason(EOT_DETECTED), restore_allowed(false) {}
 };

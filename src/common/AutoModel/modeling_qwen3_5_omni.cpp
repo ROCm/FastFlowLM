@@ -232,6 +232,7 @@ bool Qwen3_5_Omni::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input
                     audio_data_t audio_data = this->load_audio_base64(aud_str, this->audio_sampling_rate, MonoDownmixMode::MEAN);
                     if (audio_data.channels > 1) {
                         header_print("ERROR", "only mono audio is supported");
+                        meta_info.error_message = "Only mono audio is supported";
                         return false;
                     }
                     audio_data_list.push_back(audio_data);
@@ -282,6 +283,7 @@ bool Qwen3_5_Omni::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input
             audio_data_t audio_data = this->load_audio(aud_str, this->audio_sampling_rate, MonoDownmixMode::MEAN);
             if (audio_data.channels > 1) {
                 header_print("ERROR", "only mono audio is supported");
+                meta_info.error_message = "Only mono audio is supported";
                 return false;
             }
           
@@ -498,6 +500,7 @@ bool Qwen3_5_Omni::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input
 
     if (this->total_tokens + tokens.size() >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping prefilling...");
+        meta_info.error_message = "Prompt does not fit in the context window: " + std::to_string(tokens.size()) + " new prompt tokens on top of the " + std::to_string(this->total_tokens) + " already held exceed the context length of " + std::to_string(this->MAX_L) + " tokens";
         return false;
     }
     for (int token : tokens){

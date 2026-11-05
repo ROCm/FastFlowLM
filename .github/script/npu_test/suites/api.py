@@ -58,7 +58,9 @@ def run(ctx) -> None:
         ctx.not_attempted(NAME, models, "API test scripts missing")
         return
 
-    with ctx.server(NAME) as server:
+    # The hook fails only prompts that contain FLM_TEST_PREFILL_FAULT, which only
+    # test_errors.py's prefill_fault case sends; it skips without the hook.
+    with ctx.server(NAME, env={"FLM_TEST_PREFILL_FAULT": "throw"}) as server:
         for i, model in enumerate(models):
             try:
                 test_model(ctx, server, model, run_all, usage)

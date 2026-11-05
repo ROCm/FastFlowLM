@@ -681,6 +681,7 @@ bool Qwen3_5VL_Flash::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& in
     const size_t trim_tokens = this->enable_think ? 2 : 4;
     if (tokens.size() <= trim_tokens) {
         header_print("WARNING", "Qwen3_5VL_Flash: the rendered prompt is shorter than its generation prompt");
+        meta_info.error_message = "The rendered prompt is shorter than its generation prompt";
         return false;
     }
     tokens.resize(tokens.size() - trim_tokens);
