@@ -389,21 +389,24 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
     size_t match_len = 0;
     std::vector<int> full_tokens;          // what this prompt leaves in the engine
     std::vector<uint64_t> image_hashes;    // content of each of its images
+    if (!image_payload.images.empty()) {
+        // over the whole payload, before any drop: the slot cache and the prompt-cache plan both use them
+        image_hashes = prefix_image_hashes(image_payload, this->vision_geometry.patch_size,
+                                           this->vision_geometry.temporal_patch_size);
+    }
     if (this->prefix_cache_.enabled() && !slot_mode) {
         // the single-checkpoint path below moves the engine on without telling the cache
         this->prefix_cache_.forget_all();
     }
     if (slot_mode) {
         full_tokens.assign(tokens.begin(), tokens.end() - trim_tokens);
-        image_hashes = prefix_image_hashes(image_payload, slot_eng->QWEN3_5_PATCH_SIZE, slot_eng->QWEN3_5_TEMPORAL_PATCH_SIZE);
         match_len = this->_prefix_resume(this->prefix_cache_, full_tokens, image_hashes);
     }
 
     // The tokens of an image tell only its size, so a prompt can match the checkpoint's tokens with other images.
     std::vector<uint64_t> oga_image_hashes;
     if (oga) {
-        oga_image_hashes = prefix_image_hashes(image_payload, this->vision_geometry.patch_size,
-                                               this->vision_geometry.temporal_patch_size);
+        oga_image_hashes = image_hashes;
         const std::vector<uint64_t>& held = this->checkpoint_image_hashes_;
         if (!this->checkpoint_his.empty() &&
             (held.size() > oga_image_hashes.size() || !std::equal(held.begin(), held.end(), oga_image_hashes.begin()))) {
@@ -425,7 +428,7 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
         restore_idx = this->lm_engine->restore();
         if (restore_idx >= 0) {
             this->total_tokens = restore_idx;
-            this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
+            this->_restore_history(); // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
         }
     }
 
@@ -445,6 +448,10 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
             image_tokens.push_back(image_soft_tokens(img, merge_size));
         }
         prompt_media_from_counts(tokens, image_soft_token_id, image_tokens, prompt_media_t::kImage, media);
+        // so a different picture of the same size is not taken for the cached one (0 means "not hashed")
+        for (size_t i = 0; i < media.size(); i++) {
+            media[i].hash = image_hashes[i] != 0 ? image_hashes[i] : 1;
+        }
     }
     const prompt_reuse_t plan = this->_plan_reuse(tokens, media);
 
@@ -511,7 +518,7 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
     const size_t prompt_tokens = tokens.size();
     bool success = this->_shared_insert(meta_info, tokens, is_cancelled, payload, has_images ? last_image_token_index : 0);
 
-    checkpoint_his = token_history;
+    this->_checkpoint_history();
     if (oga && checkpoint_his.size() >= prompt_tokens) {
         // a shorter history is the previous checkpoint, which a prompt _shared_insert refused leaves as it was
         this->checkpoint_image_hashes_ = std::move(oga_image_hashes);
@@ -718,6 +725,7 @@ int Qwen3_5VL_Flash::_pin_system_prefix(const std::string& system_text) {
     this->lm_engine->clear_context();
     this->token_history.clear();
     this->checkpoint_his.clear();
+    this->_forget_history_media();
     this->total_tokens = 0;
     this->last_token = -1;
     this->system_tokens = 0;
@@ -766,12 +774,13 @@ int Qwen3_5VL_Flash::_pin_system_prefix(const std::string& system_text) {
     if (!pinned) {
         this->lm_engine->clear_context();
         this->token_history.clear();
+        this->_forget_history_media();
         this->total_tokens = 0;
         return 0;
     }
 
     this->system_his = this->token_history;
-    this->checkpoint_his = this->token_history;
+    this->_checkpoint_history();
     this->lm_engine->checkpoint();
     this->system_tokens = static_cast<int>(shared);
 
@@ -801,10 +810,14 @@ void Qwen3_5VL_Flash::_reset_turn() {
         this->total_tokens = static_cast<uint32_t>(this->lm_engine->restore());
         this->token_history = this->system_his;
         this->checkpoint_his = this->system_his;
+        // the pin is a text-only system prefix (_pin_system_prefix), so it holds no image
+        this->history_media_ = std::vector<prompt_media_t>{};
+        this->checkpoint_media_ = std::vector<prompt_media_t>{};
     } else {
         this->lm_engine->clear_context();
         this->token_history.clear();
         this->checkpoint_his.clear();
+        this->_forget_history_media();
         this->total_tokens = 0;
     }
     this->sampler->reset_penalties();

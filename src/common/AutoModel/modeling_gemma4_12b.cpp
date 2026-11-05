@@ -369,6 +369,7 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
     if (image_payload.num_images == 0 && audio_payload.num_audios == 0 && !modal_tokens &&
         this->_prefix_slot_mode(meta_info, tokens.size(), slot_trim)) {
         checkpoint_his.clear();
+        this->checkpoint_media_ = std::vector<prompt_media_t>{}; // an empty checkpoint holds no media
         return this->_prefix_text_insert(meta_info, tokens, slot_trim, "<|turn>user", is_cancelled);
     }
     this->_prefix_legacy_path();
@@ -378,7 +379,7 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
     if (meta_info.restore_allowed && !checkpoint_his.empty()) {
         restore_idx = gemma4_12b_engine->restore();
         this->total_tokens = restore_idx;
-        this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
+        this->_restore_history(); // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
     }
 
     size_t n = tokens.size();
@@ -389,6 +390,30 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
     std::vector<prompt_media_t> media;
     prompt_media_from_counts(tokens, image_token_id, image_token_counts, prompt_media_t::kImage, media);
     prompt_media_from_counts(tokens, audio_token_id, audio_token_counts, prompt_media_t::kAudio, media);
+    // Content hashes of the full payload (before the drop), so a different picture or clip with the same token count is
+    // not taken for the one the engine holds. media lists the images first, then the audio chunks, each in payload order.
+    {
+        auto nonzero = [](uint64_t h) { return h ? h : 1ull; };
+        size_t m = 0;
+        for (size_t i = 0; i < image_payload.num_images && m < media.size(); i++, m++) {
+            const auto& px = image_payload.pixel_values[i];
+            const auto& grid = image_payload.image_grid_pairs_per_image[i];
+            const auto dims = image_payload.image_patch__element_per_patch[i];
+            uint64_t h = 0xcbf29ce484222325ull ^ (static_cast<uint64_t>(static_cast<uint32_t>(dims.first)) << 32 |
+                                                 static_cast<uint32_t>(dims.second));
+            h ^= static_cast<uint64_t>(image_payload.valid_patch_size_per_image[i]) * 0x9e3779b97f4a7c15ull;
+            h = prefix_hash_bytes(grid.data(), grid.size() * sizeof(grid[0]), h);
+            h = prefix_hash_bytes(px.data(), px.size() * sizeof(px[0]), h);
+            media[m].hash = nonzero(h);
+        }
+        for (size_t i = 0; i < audio_payload.num_audios && m < media.size(); i++, m++) {
+            const auto& mel = audio_payload.mel_spectrograms[i];
+            const uint64_t h = 0xcbf29ce484222325ull ^
+                (static_cast<uint64_t>(static_cast<uint32_t>(audio_payload.mel_spectrogram_frames_per_audio[i])) << 32 |
+                 static_cast<uint32_t>(audio_payload.mel_spectrogram_bins_per_audio[i]));
+            media[m].hash = nonzero(prefix_hash_bytes(mel.data(), mel.size() * sizeof(mel[0]), h));
+        }
+    }
     const prompt_reuse_t plan = this->_plan_reuse(tokens, media);
     {
         auto drop_front = [](auto& vec, size_t count) {
@@ -430,7 +455,7 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
         ? this->_shared_insert(meta_info, tokens, is_cancelled, &multi_modal_payload, last_image_token_index)
         : this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
 
-    checkpoint_his = token_history;
+    this->_checkpoint_history();
     int checkpoint_idx = gemma4_12b_engine->checkpoint();
     return success;
 }

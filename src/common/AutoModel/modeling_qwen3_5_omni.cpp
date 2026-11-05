@@ -368,7 +368,7 @@ bool Qwen3_5_Omni::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input
     if (meta_info.restore_allowed) {
         int restore_idx = this->engine->restore();
         this->total_tokens = restore_idx;
-        this->token_history = this->checkpoint_his;
+        this->_restore_history();
     }
 
     size_t n = tokens.size();
@@ -384,10 +384,41 @@ bool Qwen3_5_Omni::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input
     prompt_media_from_counts(tokens, image_token_id, image_token_counts, prompt_media_t::kImage, media);
     prompt_media_from_brackets(tokens, audio_start_token_id, audio_end_token_id, prompt_media_t::kAudio, media);
 
+    // the tokens of an item only depend on its size: hash what the engine reads (before the drop below),
+    // so a cached item is only kept when its pixels / mel frames are the same
+    {
+        size_t image_idx = 0, audio_idx = 0, pixel_offset = 0;
+        const auto& pixels = image_payload._processed_pixel_values;
+        for (prompt_media_t& m : media) {
+            if (m.kind == prompt_media_t::kImage && image_idx < image_payload.image_grid_h_w.size()) {
+                const auto& grid = image_payload.image_grid_h_w[image_idx++];
+                const int grid_h = grid.size() > 0 ? grid[0] : 0;
+                const int grid_w = grid.size() > 1 ? grid[1] : 0;
+                const size_t count = static_cast<size_t>(std::max(grid_h, 0)) * static_cast<size_t>(std::max(grid_w, 0))
+                    * this->patch_size * this->patch_size * this->temporal_patch_size * 3;
+                uint64_t h = 0xcbf29ce484222325ull ^ (static_cast<uint64_t>(static_cast<uint32_t>(grid_h)) << 32 | static_cast<uint32_t>(grid_w));
+                if (pixel_offset + count <= pixels.size()) {
+                    h = prefix_hash_bytes(pixels.data() + pixel_offset, count * sizeof(pixels[0]), h);
+                }
+                pixel_offset += count;
+                m.hash = h != 0 ? h : 1;   // 0 means "not hashed"
+            } else if (m.kind == prompt_media_t::kAudio && audio_idx < audio_payload.mel_spectrograms.size()) {
+                const auto& mel = audio_payload.mel_spectrograms[audio_idx];
+                const int frames = audio_payload.mel_spectrogram_frames_per_audio[audio_idx];
+                const int bins = audio_payload.mel_spectrogram_bins_per_audio[audio_idx];
+                audio_idx++;
+                uint64_t h = 0x84222325cbf29ce4ull ^ (static_cast<uint64_t>(static_cast<uint32_t>(frames)) << 32 | static_cast<uint32_t>(bins));
+                h = prefix_hash_bytes(mel.data(), mel.size() * sizeof(mel[0]), h);
+                m.hash = h != 0 ? h : 1;
+            }
+        }
+    }
+
     // the skip and the payload trim come from the same plan, decided against the history the engine
     // holds now (after the restore); this insert does its own prefill, so the plan is not handed on
     const prompt_reuse_t plan = this->_plan_reuse(tokens, media);
     this->planned_skip_.reset();
+    this->planned_media_.reset();   // committed into history_media_ below, once the prompt is in token_history
 
     auto drop_front = [](auto& vec, size_t count) {
         if (count == 0) return;
@@ -443,6 +474,8 @@ bool Qwen3_5_Omni::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input
     for (int token : tokens){
         this->token_history.push_back(token);
     }
+    // as _shared_insert does with its plan: these are now the items token_history holds
+    this->history_media_ = std::move(media);
 
     auto prefill_start = this->profiler_list[PREFILL_TIME].start();
 
@@ -496,7 +529,7 @@ bool Qwen3_5_Omni::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input
     meta_info.insert_sample_pending = true;
     this->profiler_list[SAMPLING_TIME].stop(1);
 
-    this->checkpoint_his = this->token_history;
+    this->_checkpoint_history();
     this->engine->checkpoint();
     return true;
 }
@@ -687,6 +720,7 @@ void Qwen3_5_Omni::clear_context() {
     this->last_token = -1;
     this->token_history.clear();
     this->checkpoint_his.clear();
+    this->_forget_history_media();   // the items went with the history they sat in
     this->engine->clear_context();
     this->total_tokens = 0;
     this->sampler->reset_penalties();

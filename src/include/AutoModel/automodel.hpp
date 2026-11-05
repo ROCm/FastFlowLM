@@ -318,13 +318,37 @@ protected:
 	/// \brief decide how much of a prompt with media the engine keeps, before the model trims its payload
 	/// \param tokens the prompt exactly as it will go to _shared_insert / _prefix_insert (after any restore or slot
 	///        resume, with the generation-prompt tokens the model feeds itself already cut)
-	/// \param media its images and audio clips (see prompt_reuse.hpp)
+	/// \param media its images and audio clips (see prompt_reuse.hpp), with their content hashes
 	/// \return the plan: drop skipped_media[kind] leading items of each payload list and pass media_end as first_len_run
 	/// \note Clears the context when the plan says so, so the _shared_insert that follows skips exactly plan.skip;
 	///       _shared_insert checks that it does when it gets a payload.
 	prompt_reuse_t _plan_reuse(const std::vector<int>& tokens, const std::vector<prompt_media_t>& media);
 	/// \brief the skip _plan_reuse() promised the next _shared_insert with a payload
 	std::optional<size_t> planned_skip_;
+	/// \brief the items (with hashes) of the prompt _plan_reuse() planned; token_history's once _shared_insert read it in
+	std::optional<std::vector<prompt_media_t>> planned_media_;
+	/// \brief the images and audio clips token_history holds, with their content hashes (see plan_prompt_reuse)
+	/// \note nullopt after a prefix-slot resume: the slot cache compared the image hashes itself.
+	std::optional<std::vector<prompt_media_t>> history_media_ = std::vector<prompt_media_t>{};
+	/// \brief the same for checkpoint_his
+	std::optional<std::vector<prompt_media_t>> checkpoint_media_ = std::vector<prompt_media_t>{};
+	/// \brief take the single checkpoint's token history (checkpoint_his) from token_history, with its media
+	void _checkpoint_history() {
+		this->checkpoint_his = this->token_history;
+		this->checkpoint_media_ = this->history_media_;
+	}
+	/// \brief token_history (and its media) back to the single checkpoint's, after lm_engine->restore()
+	void _restore_history() {
+		this->token_history = this->checkpoint_his;
+		this->history_media_ = this->checkpoint_media_;
+	}
+	/// \brief forget the media of token_history and checkpoint_his, and any plan (with the histories themselves)
+	void _forget_history_media() {
+		this->history_media_ = std::vector<prompt_media_t>{};
+		this->checkpoint_media_ = std::vector<prompt_media_t>{};
+		this->planned_skip_.reset();
+		this->planned_media_.reset();
+	}
 
 	// ---- prefix slot cache (see prefix_slot_cache.hpp) ---------------------------------------
 	// Steps every model family with engine snapshots shares; the model supplies the tokens, the image

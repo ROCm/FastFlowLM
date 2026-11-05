@@ -65,7 +65,7 @@ from scratch, instead of reusing the runner's copy.
 
 | Suite | Checks |
 |---|---|
-| `chat` | Per engine family: a known answer, a streamed two-turn conversation, a non-streamed reply and its usage; for vision models, the colour of a generated test image |
+| `chat` | Per engine family: a known answer, a streamed two-turn conversation, a non-streamed reply and its usage; for vision models, the colour of a generated test image, and a resent two-turn conversation whose turn-1 image is swapped for a same-size one (the answer must name the new colour; with the original image it must still name the old one) |
 | `serving` | Queue full (503), concurrent requests, client disconnect releasing the NPU, cancel, model switching, unknown model, `/v1/models` |
 | `prefix_cache` | Multi-slot KV cache (`--prefix-slots 2`): a hit when a conversation returns, LRU eviction, cached and cold replies agree |
 | `api` | `src/test/openai_api_test` (tools, logprobs, response_format, reasoning, sampling, continue_final_message, errors) and `src/test/openai_usage` |

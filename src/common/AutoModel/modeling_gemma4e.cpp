@@ -28,6 +28,7 @@ int Gemma4e_Flash::_pin_system_prefix(const std::string& system_text) {
     this->lm_engine->clear_context();
     this->token_history.clear();
     this->checkpoint_his.clear();
+    this->_forget_history_media();
     this->total_tokens = 0;
     this->last_token = -1;
     this->system_tokens = 0;
@@ -66,11 +67,14 @@ int Gemma4e_Flash::_pin_system_prefix(const std::string& system_text) {
         this->lm_engine->clear_context();
         this->token_history.clear();
         this->checkpoint_his.clear();
+        this->_forget_history_media();
         return 0;
     }
 
     this->system_his = this->token_history;
-    this->checkpoint_his = this->token_history;
+    // the probes are text only, read in without a payload: the pin holds no image or audio
+    this->history_media_ = std::vector<prompt_media_t>{};
+    this->_checkpoint_history();
     this->lm_engine->checkpoint();
     this->system_tokens = static_cast<int>(shared);
 
@@ -98,10 +102,14 @@ void Gemma4e_Flash::_reset_turn() {
         this->total_tokens = static_cast<uint32_t>(this->lm_engine->restore());
         this->token_history = this->system_his;
         this->checkpoint_his = this->system_his;
+        // the pin is a text-only system prefix (_pin_system_prefix), so it holds no image or audio
+        this->history_media_ = std::vector<prompt_media_t>{};
+        this->checkpoint_media_ = std::vector<prompt_media_t>{};
     } else {
         this->lm_engine->clear_context();
         this->token_history.clear();
         this->checkpoint_his.clear();
+        this->_forget_history_media();
         this->total_tokens = 0;
     }
     this->sampler->reset_penalties();
@@ -595,7 +603,7 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     if (meta_info.restore_allowed && !checkpoint_his.empty()) {
         restore_idx = this->lm_engine->restore();
         this->total_tokens = restore_idx;
-        this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
+        this->_restore_history(); // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
     }
 
     // The payload carries every image and audio of the prompt, earlier turns included. _shared_insert skips what the engine
@@ -604,6 +612,36 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     std::vector<prompt_media_t> media;
     prompt_media_from_counts(tokens, image_token_id, image_token_counts, prompt_media_t::kImage, media);
     prompt_media_from_counts(tokens, audio_token_id, audio_token_counts, prompt_media_t::kAudio, media);
+    // Content hash of each item over exactly what the engine reads for it, taken before the drop: the soft-token count
+    // only follows the aspect ratio (images) or the sample count (audio), so a same-sized other picture or clip would
+    // otherwise match the history and be reused.
+    size_t next_image = 0;
+    size_t next_audio = 0;
+    for (prompt_media_t& m : media) {
+        uint64_t h = 0;
+        if (m.kind == prompt_media_t::kImage && next_image < image_payload.num_images) {
+            const size_t i = next_image++;
+            const auto& dims = image_payload.image_patch__element_per_patch[i];
+            const uint64_t shape[4] = { static_cast<uint64_t>(static_cast<uint32_t>(dims.first)), static_cast<uint64_t>(static_cast<uint32_t>(dims.second)),
+                                        image_payload.valid_patch_size_per_image[i], image_payload.num_soft_tokens_per_image[i] };
+            const auto& pixels = image_payload.pixel_values[i];
+            const auto& grid = image_payload.image_grid_pairs_per_image[i];
+            h = prefix_hash_bytes(shape, sizeof(shape), 0xcbf29ce484222325ull);
+            h = prefix_hash_bytes(pixels.data(), pixels.size() * sizeof(pixels[0]), h);
+            h = prefix_hash_bytes(grid.data(), grid.size() * sizeof(grid[0]), h);
+        } else if (m.kind == prompt_media_t::kAudio && next_audio < audio_payload.num_audios) {
+            const size_t i = next_audio++;
+            const uint64_t shape[3] = { static_cast<uint64_t>(static_cast<uint32_t>(audio_payload.mel_spectrogram_frames_per_audio[i])),
+                                        static_cast<uint64_t>(static_cast<uint32_t>(audio_payload.mel_spectrogram_bins_per_audio[i])),
+                                        audio_payload.num_soft_tokens_per_audio[i] };
+            const auto& mel = audio_payload.mel_spectrograms[i];
+            h = prefix_hash_bytes(shape, sizeof(shape), 0x84222325cbf29ce4ull);
+            h = prefix_hash_bytes(mel.data(), mel.size() * sizeof(mel[0]), h);
+        } else {
+            continue;
+        }
+        m.hash = h != 0 ? h : 1; // 0 means "not hashed"
+    }
     const prompt_reuse_t plan = this->_plan_reuse(tokens, media);
 
     auto drop_front = [](auto& vec, size_t n) {
@@ -647,7 +685,7 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     // Single-turn (flash): the only checkpoint is the pinned system prefix, which Gemma4e_Flash owns. Taking this one would
     // overwrite it with the whole first prompt, and every later request would restore into that stale context.
     if (this->enable_think && !this->single_turn) {
-        checkpoint_his = token_history;
+        this->_checkpoint_history();
         int checkpoint_idx = this->lm_engine->checkpoint();
     }
     
@@ -755,7 +793,7 @@ std::string Gemma4e::generate(chat_meta_info_t& meta_info, int length_limit, std
     if (!this->enable_think) {
         // the history the checkpoint holds: an eos ending the turn was run, a cut-off token was not
         int checkpoint_idx = this->lm_engine->checkpoint();
-        checkpoint_his = token_history;
+        this->_checkpoint_history();
     }
 
     return result;
