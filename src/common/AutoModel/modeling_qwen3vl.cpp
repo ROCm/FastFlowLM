@@ -47,6 +47,12 @@ std::string Qwen3VL::apply_chat_template(nlohmann::ordered_json& messages, nlohm
     return this->_render_chat_template(inputs, continue_final_message);
 }
 
+// the <|image_pad|> rows one image is expanded into: one per merge_size x merge_size block of patches.
+// The expansion and the prompt-cache media list both use it, so they cannot disagree.
+static size_t qwen3vl_image_token_count(const qwen3vl_image_t& image) {
+    return static_cast<size_t>(image.grid_h) * static_cast<size_t>(image.grid_w) / (QWEN3_MERGE_SIZE * QWEN3_MERGE_SIZE);
+}
+
 bool Qwen3VL::_build_vl_tokens(lm_uniform_input_t& input,
                                qwen3vl_image_payload_t& image_payload,
                                std::vector<int>& tokens,
@@ -168,7 +174,7 @@ bool Qwen3VL::_build_vl_tokens(lm_uniform_input_t& input,
     int image_counter = 0;
     for (int i = 0; i < tokens_init.size(); i++) {
         if (tokens_init[i] == IMAGE_SOFT_TOKEN_ID) {
-            for (int j = 0; j < image_payload.images[image_counter].grid_h * image_payload.images[image_counter].grid_w / 4; j++) {
+            for (size_t j = 0; j < qwen3vl_image_token_count(image_payload.images[image_counter]); j++) {
                 tokens.push_back(IMAGE_SOFT_TOKEN_ID);
             }
             image_counter++;
@@ -189,19 +195,6 @@ bool Qwen3VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
         return false;
     }
 
-    // ----------------------------------------------------------------------
-    // Prompt-cache aware image alignment.
-    //
-    // AutoModel::_shared_insert prefix-matches `tokens` against `token_history`
-    // over the FULL length of `token_history`. If every token matches, it
-    // erases that prefix before prefilling; otherwise it calls clear_context()
-    // and skips nothing. We must NOT erase `tokens` here -- _shared_insert
-    // needs the untrimmed sequence to run that very check. What we DO need to
-    // fix up locally is the image payload (pixels for the WHOLE prompt,
-    // including already-cached images from earlier turns): drop the
-    // fully-cached leading images so the surviving payload aligns with the
-    // surviving image tokens after _shared_insert performs its own erase.
-    // ----------------------------------------------------------------------
     // ---- prefix slots: resume from the longest saved prefix of this prompt ----
     // The generation prompt ("<|im_start|>assistant\n") is how the next turn renders this reply's header: the whole prompt
     // is saved (trim 0). After a resume token_history is the slot's tokens, so the skip count below is the match length.
@@ -217,80 +210,44 @@ bool Qwen3VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
         this->_prefix_legacy_path(); // the in-place path below moves the engine on without telling the cache
     }
 
-    size_t prefix_skip_count = 0;
+    // ---- prompt cache: drop the images the engine already holds ----
+    // The payload carries the pixels of every image of the prompt, but _shared_insert skips the part of the
+    // prompt the engine holds; plan_prompt_reuse tells both sides the same skip, so the images left in the
+    // payload are exactly the ones on the rows that get prefilled.
+    std::vector<prompt_media_t> media;
     {
-        const size_t idx = this->token_history.size();
-        for (size_t i = 0; i < idx; i++) {
-            if (i < tokens.size() && tokens[i] == this->token_history[i]) {
-                prefix_skip_count++;
-            } else {
-                break;
-            }
+        std::vector<size_t> image_token_counts;
+        image_token_counts.reserve(image_payload.images.size());
+        for (const auto& img : image_payload.images) {
+            image_token_counts.push_back(qwen3vl_image_token_count(img));
         }
-        // Must match the entirety of token_history, otherwise _shared_insert
-        // will clear the context and not skip anything.
-        if (prefix_skip_count != idx) {
-            prefix_skip_count = 0;
+        prompt_media_from_counts(tokens, image_soft_token_id, image_token_counts, prompt_media_t::kImage, media);
+    }
+    const prompt_reuse_t plan = this->_plan_reuse(tokens, media);
+    const size_t images_to_drop = plan.skipped_media[prompt_media_t::kImage];
+    if (images_to_drop > 0) {
+        size_t bf16_to_drop = 0;
+        for (size_t i = 0; i < images_to_drop; i++) {
+            const auto& img = image_payload.images[i];
+            bf16_to_drop += static_cast<size_t>(img.grid_h) * QWEN3_PATCH_SIZE *
+                            static_cast<size_t>(img.grid_w) * QWEN3_PATCH_SIZE *
+                            3u * QWEN3_TEMPORAL_PATCH_SIZE;
         }
-
-        if (prefix_skip_count > 0 && !image_payload.images.empty()) {
-            // Count image-soft tokens in the cached prefix.
-            int skipped_image_tokens = 0;
-            for (size_t i = 0; i < prefix_skip_count; i++) {
-                if (tokens[i] == image_soft_token_id) skipped_image_tokens++;
-            }
-
-            // Walk through images and drop those whose entire token block
-            // sits within the cached prefix. (The chat-template prefix
-            // boundary always falls between messages, so an image's token
-            // block is never partially cached.)
-            size_t images_to_drop = 0;
-            size_t bf16_to_drop = 0;
-            int consumed_image_tokens = 0;
-            for (const auto& img : image_payload.images) {
-                const int img_tokens =
-                    (img.grid_h * img.grid_w) / 4;
-                const size_t img_bf16 =
-                    static_cast<size_t>(img.grid_h) * QWEN3_PATCH_SIZE *
-                    static_cast<size_t>(img.grid_w) * QWEN3_PATCH_SIZE *
-                    3u * QWEN3_TEMPORAL_PATCH_SIZE;
-                if (consumed_image_tokens + img_tokens <= skipped_image_tokens) {
-                    consumed_image_tokens += img_tokens;
-                    bf16_to_drop += img_bf16;
-                    images_to_drop++;
-                } else {
-                    break;
-                }
-            }
-
-            if (images_to_drop > 0) {
-                image_payload.images.erase(
-                    image_payload.images.begin(),
-                    image_payload.images.begin() + images_to_drop);
-                image_payload.num_images -= static_cast<int>(images_to_drop);
-                if (bf16_to_drop >= image_payload._data__processed.size()) {
-                    image_payload._data__processed.clear();
-                } else {
-                    image_payload._data__processed.erase(
-                        image_payload._data__processed.begin(),
-                        image_payload._data__processed.begin() + bf16_to_drop);
-                }
-                header_print("FLM",
-                    "Prompt-cache hit: dropped " << images_to_drop
-                    << " cached image(s) from payload");
-            }
+        image_payload.images.erase(
+            image_payload.images.begin(),
+            image_payload.images.begin() + images_to_drop);
+        image_payload.num_images -= static_cast<int>(images_to_drop);
+        if (bf16_to_drop >= image_payload._data__processed.size()) {
+            image_payload._data__processed.clear();
+        } else {
+            image_payload._data__processed.erase(
+                image_payload._data__processed.begin(),
+                image_payload._data__processed.begin() + bf16_to_drop);
         }
     }
 
-    // find the last image token index, expressed relative to the tokens that
-    // will SURVIVE _shared_insert's prefix erase (i.e. shifted by -prefix_skip_count).
-    int last_image_token_index = -1;
-    for (int i = static_cast<int>(prefix_skip_count); i < (int)tokens.size(); i++) {
-        if (tokens[i] == image_soft_token_id) {
-            last_image_token_index = i - static_cast<int>(prefix_skip_count);
-        }
-    }
-    last_image_token_index++; // plus the end of image tokens
+    // one past the last image row that gets prefilled, relative to the skip (0 when none is)
+    const int last_image_token_index = static_cast<int>(plan.media_end);
 
     // hardware
     if (slot_mode) {
