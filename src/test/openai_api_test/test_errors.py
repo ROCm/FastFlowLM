@@ -180,7 +180,7 @@ def context_words(api: Api) -> int:
     held = (usage.get("prompt_tokens") or 0) + (usage.get("completion_tokens") or 0)
     pct = usage.get("kv_token_occupancy_rate_percentage")
     if held and isinstance(pct, (int, float)) and pct > 0:
-        return max(8192, int(2 * held * 100 / pct))
+        return max(8192, int(1.25 * held * 100 / pct))  # a quarter over: enough, and the server logs every body
     return 1 << 18
 
 
@@ -207,6 +207,9 @@ def prefill_fault(api: Api) -> None:
     body = api.body(user(FAULT_PROMPT), max_tokens=8)
     resp = api.post(body)
     if resp.status == 200:
+        # a 200 that carries an error is the bug this case is about, not a server without the hook
+        expect(not (isinstance(resp.body, dict) and "error" in resp.body),
+               f"chat: HTTP 200 with an error body: {str(resp.body)[:300]}")
         raise flm_api.Skip("the server was not started with FLM_TEST_PREFILL_FAULT")
     for where, r in (("chat", resp),
                      ("completions", api.post({"model": api.model, "prompt": FAULT_PROMPT, "max_tokens": 8},
