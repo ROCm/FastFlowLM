@@ -710,8 +710,10 @@ void AutoModel::_begin_turn(chat_meta_info_t& meta_info, const std::vector<int>&
         }
     }
     if (meta_info.constraint) {
+        // a grammar that lets a continued message stop inside a call is a tool grammar,
+        // so it starts inside that call; a token ban ignores the prefill
         meta_info.constraint->start(chat_format_prefill(this->chat_format, meta_info.prompt_tail,
-                                                        meta_info.continue_final_message));
+                                                        meta_info.continue_final_message, true));
     }
 }
 
