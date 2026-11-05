@@ -916,6 +916,52 @@ void TestOga019DoesNotRewindPastANewImage() {
     TEST_REQUIRE(engine->replayed_tokens() == 2);
 }
 
+void TestAnotherImageOfTheSameSizeRebuildsTheGenerator() {
+    auto engine = MakeVisionEngine();
+    const auto first = Image(4, 4, 0x3c00);
+    const auto second = Image(4, 4, 0x4000);
+    flm::oga::OgaVisionInput one{{first}};
+    flm::oga::OgaVisionInput two{{second}};
+    std::vector<int> prompt = WithImage({1}, first, {2});
+    engine->prefill(prompt, &one);
+    engine->forward(3);
+    // the same tokens, but not the image the generator ran
+    engine->clear_context();
+    std::vector<int> again = Concat(prompt, {3, 4});
+    RequireRan(engine->prefill(again, &two), again);
+    TEST_REQUIRE(g_fake.set_inputs.size() == 3);
+    TEST_REQUIRE(g_fake.set_inputs.back().pixels == second.pixels);
+    TEST_REQUIRE(g_fake.generators_live == 1);
+    TEST_REQUIRE(engine->replayed_tokens() == 0);
+
+    // equal pixels in another payload continue it
+    engine->clear_context();
+    flm::oga::OgaVisionInput copy{{second}};
+    std::vector<int> more = Concat(again, {5});
+    RequireRan(engine->prefill(more, &copy), more);
+    TEST_REQUIRE(g_fake.set_inputs.size() == 3);
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{5}));
+}
+
+void TestOga019DoesNotRewindToAnotherImageOfTheSameSize() {
+    auto engine = MakeVisionEngine({0, 19, 0, 0});
+    const auto first = Image(4, 4, 0x3c00);
+    const auto second = Image(4, 4, 0x4000);
+    flm::oga::OgaVisionInput one{{first}};
+    flm::oga::OgaVisionInput two{{second}};
+    std::vector<int> prompt = WithImage({1}, first, {2});
+    engine->prefill(prompt, &one);
+    engine->checkpoint();
+    TEST_REQUIRE(g_fake.snapshots == 1);
+    engine->forward(3);
+    engine->clear_context();
+    std::vector<int> turn = Concat(prompt, {4});
+    RequireRan(engine->prefill(turn, &two), turn);
+    TEST_REQUIRE(g_fake.rewinds.empty());
+    TEST_REQUIRE(g_fake.set_inputs.back().ids == turn);
+    TEST_REQUIRE(g_fake.set_inputs.back().pixels == second.pixels);
+}
+
 void TestImageRunsAndImagesMustAgree() {
     auto engine = MakeVisionEngine();
     const auto image = Image(4, 4);
@@ -1733,6 +1779,7 @@ void TestTheBackendRunsThePackagesImages() {
     auto backend = flm::oga::hipep_factory()(package.Context(64));
     // OGA 0.17 cannot rewind, so a restored checkpoint replays
     TEST_REQUIRE(!backend->keeps_state_on_restore());
+    TEST_REQUIRE(backend->matches_token_prefixes());
     const auto image = Image(2, 2);
     flm::oga::OgaVisionInput vision{{image}};
     std::vector<int> prompt = WithImage({1}, image, {2});
@@ -1830,6 +1877,8 @@ int main(int argc, char** argv) {
     RUN(TestANewImageReplaysTheHistoryWithEveryImage);
     RUN(TestARestoredCheckpointBringsBackItsImages);
     RUN(TestOga019DoesNotRewindPastANewImage);
+    RUN(TestAnotherImageOfTheSameSizeRebuildsTheGenerator);
+    RUN(TestOga019DoesNotRewindToAnotherImageOfTheSameSize);
     RUN(TestImageRunsAndImagesMustAgree);
     RUN(TestTheImagesOfAPromptShareThePatchBudget);
     RUN(TestSetContextLengthKeepsWholeImagesOnly);

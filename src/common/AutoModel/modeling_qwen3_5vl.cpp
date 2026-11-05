@@ -385,6 +385,19 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
         match_len = this->_prefix_resume(this->prefix_cache_, full_tokens, image_hashes);
     }
 
+    // The tokens of an image tell only its size, so a prompt can match the checkpoint's tokens with other images.
+    std::vector<uint64_t> oga_image_hashes;
+    if (oga) {
+        oga_image_hashes = prefix_image_hashes(image_payload, this->vision_geometry.patch_size,
+                                               this->vision_geometry.temporal_patch_size);
+        const std::vector<uint64_t>& held = this->checkpoint_image_hashes_;
+        if (!this->checkpoint_his.empty() &&
+            (held.size() > oga_image_hashes.size() || !std::equal(held.begin(), held.end(), oga_image_hashes.begin()))) {
+            header_print("FLM", "The prompt's images differ from the cached ones, clearing context...");
+            this->clear_context();
+        }
+    }
+
     // An engine that would replay the whole history after a restore continues
     // the history it ran instead, when the prompt is that history going on.
     const bool continued = !slot_mode && meta_info.restore_allowed && this->backend_ &&
@@ -404,8 +417,9 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
             }
         }
         // Must match the entirety of checkpoint_his, otherwise _shared_insert
-        // will clear the context and not skip anything.
-        if (prefix_skip_count != idx) {
+        // will clear the context and not skip anything. Nor does it skip a
+        // prompt it holds whole: it reads that again from the start.
+        if (prefix_skip_count != idx || prefix_skip_count + trim_tokens >= tokens.size()) {
             prefix_skip_count = 0;
         }
         if (slot_mode) {
@@ -476,9 +490,12 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
     const bool has_images = image_payload.num_images > 0;
 
     if (!slot_mode && meta_info.restore_allowed && !continued) {
+        // an engine without a checkpoint keeps what it holds
         restore_idx = this->lm_engine->restore();
-        this->total_tokens = restore_idx;
-        this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
+        if (restore_idx >= 0) {
+            this->total_tokens = restore_idx;
+            this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
+        }
     }
 
     size_t n = tokens.size();
@@ -512,9 +529,14 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
         }
     }
     void* payload = !has_images ? nullptr : oga ? static_cast<void*>(&oga_vision) : static_cast<void*>(&image_payload);
+    const size_t prompt_tokens = tokens.size();
     bool success = this->_shared_insert(meta_info, tokens, is_cancelled, payload, has_images ? last_image_token_index : 0);
 
     checkpoint_his = token_history;
+    if (oga && checkpoint_his.size() >= prompt_tokens) {
+        // a shorter history is the previous checkpoint, which a prompt _shared_insert refused leaves as it was
+        this->checkpoint_image_hashes_ = std::move(oga_image_hashes);
+    }
     int checkpoint_idx = this->lm_engine->checkpoint();
     return success;
 }

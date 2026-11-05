@@ -211,6 +211,7 @@ public:
     bool forwards_past_eos() const override { return false; }
     bool keeps_state_on_restore() const override { return engine_->rewinds(); }
     std::uint64_t replayed_tokens() const override { return engine_->replayed_tokens(); }
+    bool matches_token_prefixes() const override { return true; }
     std::optional<std::vector<int>> forced_eos_ids() const override { return eos_ids_; }
     std::optional<int> forced_bos_id() const override { return bos_id_; }
 

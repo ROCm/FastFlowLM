@@ -79,6 +79,9 @@ private:
     /// \return whether `tokens` now continues token_history
     bool _continue_verbatim(std::vector<int>& tokens, std::optional<int> requested_max_new_tokens);
 
+    /// \brief the content of each image in checkpoint_his, kept on OGA
+    std::vector<uint64_t> checkpoint_image_hashes_;
+
 protected:
     qwen3_5vl_vision_geometry_t vision_geometry;
 

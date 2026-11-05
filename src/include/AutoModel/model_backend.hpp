@@ -147,6 +147,14 @@ public:
     ///       that the engine ran again rather than served from its cache.
     virtual std::uint64_t replayed_tokens() const { return 0; }
 
+    /// \brief whether the engine finds by itself how much of a prompt it has
+    ///        already run
+    /// \note Such an engine compares every prefill with the tokens and images it
+    ///       holds and runs again only what differs, so the frontend can match
+    ///       each rendered prompt against its checkpoint instead of relying on a
+    ///       message-level cache.
+    virtual bool matches_token_prefixes() const { return false; }
+
     /// \brief EOS ids proven by the backend's own package, when it has them
     /// \note Returning a value overrides whatever tokenizer_config.json says.
     virtual std::optional<std::vector<int>> forced_eos_ids() const {

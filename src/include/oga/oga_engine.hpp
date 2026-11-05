@@ -82,6 +82,8 @@ private:
         std::vector<int> ran;
         /// \brief the length its recurrent state was snapshotted at, which it can rewind to
         std::optional<std::size_t> snapshot;
+        /// \brief the hash of each image it has been given, in order
+        std::vector<std::uint64_t> images;
     };
 
     /// \brief one image's run of image tokens in `logical`
@@ -89,6 +91,8 @@ private:
         std::size_t start = 0;
         std::size_t length = 0;
         std::shared_ptr<const OgaImage> image;
+        /// \brief a hash of the image's grid and pixels, which the run's tokens do not tell
+        std::uint64_t hash = 0;
     };
 
     /// \brief `logical` and its images, as checkpoint() left them

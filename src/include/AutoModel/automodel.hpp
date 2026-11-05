@@ -640,10 +640,12 @@ public:
 	///        the previous prompts it can reuse
 	/// \note True makes the server stop clearing the context on a message-level
 	///       cache miss and always pass restore_allowed: the model matches the
-	///       rendered prompt against its saved prefixes and falls back to a full
+	///       rendered prompt against its saved prefixes, or its checkpoint on an
+	///       engine that matches token prefixes, and falls back to a full
 	///       prefill by itself.
 	virtual bool manages_prefix_cache() const {
-		return this->prefix_cache_.enabled();
+		return this->prefix_cache_.enabled() ||
+		       (this->backend_ && this->backend_->matches_token_prefixes());
 	}
 
 	/// \brief --prefix-cache-mb / --prefix-slots / --prefix-min-gain (-1 = the default, 0 slots = off); call before load_model

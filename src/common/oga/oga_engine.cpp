@@ -46,6 +46,27 @@ std::string ShapeText(const std::vector<std::int64_t>& shape) {
     return text + "]";
 }
 
+std::uint64_t ImageHash(const OgaImage& image) {
+    std::uint64_t h = 0xcbf29ce484222325ull;
+    const auto mix = [&h](std::uint64_t word) {
+        h = (h ^ word) * 0x100000001b3ull;
+        h ^= h >> 29;
+    };
+    mix(static_cast<std::uint64_t>(image.grid_t));
+    mix(static_cast<std::uint64_t>(image.grid_h));
+    mix(static_cast<std::uint64_t>(image.grid_w));
+    mix(image.pixels.size());
+    const std::uint16_t* values = image.pixels.data();
+    std::size_t i = 0;
+    for (; i + 4 <= image.pixels.size(); i += 4) {
+        std::uint64_t word;
+        std::memcpy(&word, values + i, sizeof word);
+        mix(word);
+    }
+    for (; i < image.pixels.size(); ++i) mix(values[i]);
+    return h;
+}
+
 }  // namespace
 
 OgaEngine::OgaEngine(std::shared_ptr<const OgaApi> api, OgaApi::Owned<OgaModel> model,
@@ -230,7 +251,7 @@ std::vector<OgaEngine::ImageSpan> OgaEngine::ImageSpans(const std::vector<int>& 
             throw std::invalid_argument(display_name_ + " prompt images have " + std::to_string(patches) +
                                         " patches, more than the " + std::to_string(config.max_patches) +
                                         " the vision model runs at once");
-        spans.push_back({offset + i, end - i, std::make_shared<const OgaImage>(image)});
+        spans.push_back({offset + i, end - i, std::make_shared<const OgaImage>(image), ImageHash(image)});
         i = end;
     }
     if (spans.size() != images)
@@ -252,7 +273,10 @@ std::pair<OgaEngine::Reuse, std::size_t> OgaEngine::Append() {
     if (from == logical_.size()) return {reuse, from};
     if (from == 0 && !images_.empty()) {
         std::vector<const OgaImage*> images;
-        for (const ImageSpan& span : images_) images.push_back(span.image.get());
+        for (const ImageSpan& span : images_) {
+            images.push_back(span.image.get());
+            run.images.push_back(span.hash);
+        }
         SetInputs(run.generator.get(), logical_, images);
     } else {
         AppendTokens(run.generator.get(), logical_.data() + from, logical_.size() - from);
@@ -265,15 +289,20 @@ std::pair<OgaEngine::Reuse, std::size_t> OgaEngine::Append() {
 OgaEngine::Reuse OgaEngine::Resume() {
     if (!live_ || logical_.size() > std::min(live_->capacity, max_length_)) return Rebuild();
     Live& run = *live_;
+    // The tokens of an image tell only its size.
+    const bool same_images =
+        std::equal(run.images.begin(), run.images.end(), images_.begin(), images_.end(),
+                   [](std::uint64_t hash, const ImageSpan& span) { return hash == span.hash; });
     // OGA takes images only in a generator's first call.
     if (run.ran.size() <= logical_.size() &&
-        std::equal(run.ran.begin(), run.ran.end(), logical_.begin()) && !ImageAfter(run.ran.size()))
+        std::equal(run.ran.begin(), run.ran.end(), logical_.begin()) && !ImageAfter(run.ran.size()) &&
+        same_images)
         return Reuse::kSameTokens;
     // A rewind has to leave at least one token to run, or the logits are stale.
     if (run.snapshot && *run.snapshot <= run.ran.size() && *run.snapshot < logical_.size() &&
         std::equal(run.ran.begin(), run.ran.begin() + static_cast<std::ptrdiff_t>(*run.snapshot),
                    logical_.begin()) &&
-        !ImageAfter(*run.snapshot)) {
+        !ImageAfter(*run.snapshot) && same_images) {
         try {
             api_->Check(api_->functions().generator_rewind_to(run.generator.get(), *run.snapshot),
                         "OgaGenerator_RewindTo");

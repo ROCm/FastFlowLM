@@ -140,6 +140,7 @@ public:
     bool forwards_past_eos() const override { return false; }
     bool keeps_state_on_restore() const override { return engine_->rewinds; }
     std::uint64_t replayed_tokens() const override { return engine_->replayed; }
+    bool matches_token_prefixes() const override { return true; }
     FakeEngine& fake_engine() const { return *engine_; }
 
 private:
@@ -468,6 +469,56 @@ void AnEngineThatRewindsRestoresTheCheckpoint() {
     Require(meta.cached_prompt_tokens == 4, "the checkpoint must count as cached");
 }
 
+// ---- what the server leaves to the model ---------------------------------------
+
+void TheOgaBackendLeavesThePrefixMatchToTheModel() {
+    Harness model;
+    Require(model.manages_prefix_cache(),
+            "on OGA the server must let every prompt restore instead of clearing on a message-level miss");
+}
+
+void AFirstPromptTheServerLetsRestoreStillRuns() {
+    Reset({10, 11, 12, 13, kThinkStart, 271, kThinkEnd, 271}, {7});
+    Harness model;
+    auto meta = Meta();
+    meta.restore_allowed = true;
+    auto input = TextInput();
+    Require(model.insert(meta, input), "a prompt without a checkpoint to restore must still run");
+    Require(model.engine().prefills.back() == (std::vector<int>{10, 11, 12, 13}), "the whole prompt must run");
+    Require(meta.cached_prompt_tokens == 0 && meta.prompt_tokens == 4, "nothing of a first prompt is cached");
+    RequireHistoryMatchesEngine(model);
+}
+
+/// \brief a request that continues its final assistant message, as the server sends it on OGA
+chat_meta_info_t ContinueMessage(Harness& model, const std::vector<int>& encoded, int limit,
+                                 lm_uniform_input_t input = TextInput()) {
+    g_encoded_tokens = encoded;
+    auto meta = Meta();
+    meta.continue_final_message = true;
+    meta.restore_allowed = true;
+    Require(model.insert(meta, input), "continued message insert failed");
+    std::ostringstream output;
+    model.generate(meta, limit, output);
+    RequireHistoryMatchesEngine(model);
+    return meta;
+}
+
+void ASecondContinuationReusesTheFirst() {
+    Reset({}, {7, 9, 7, 7});
+    Harness model;
+    const std::vector<int> first{10, 11, 12, 13};
+    Require(ContinueMessage(model, first, 2).cached_prompt_tokens == 0, "nothing of a first prompt is cached");
+    // the client sends back the message with the text it got
+    std::vector<int> second = first;
+    second.insert(second.end(), {7, 9});
+    const auto meta = ContinueMessage(model, second, 2);
+    const FakeEngine& engine = model.engine();
+    Require(engine.restores == 1, "a continued message must restore the checkpoint of the one before");
+    Require(engine.prefills.back() == (std::vector<int>{7, 9}), "only the text the first continuation added may run");
+    Require(engine.replayed == 0, "the first continuation must not run again");
+    Require(meta.cached_prompt_tokens == 4, "the first continuation's prompt must count as cached");
+}
+
 // ---- images ------------------------------------------------------------------
 
 qwen3_5vl_vision_geometry_t Geometry() {
@@ -556,6 +607,66 @@ void MorePlaceholdersThanImagesIsARequestError() {
         return;
     }
     throw std::runtime_error("more placeholders than images must be refused");
+}
+
+/// \brief what {10, vision start, image, vision end, 12} becomes with a 4x4 image, then `more`
+std::vector<int> OneImagePrompt(const std::vector<int>& more) {
+    std::vector<int> tokens{10, kVisionStart};
+    tokens.insert(tokens.end(), 4, kImagePad);
+    tokens.insert(tokens.end(), {kVisionEnd, 12});
+    tokens.insert(tokens.end(), more.begin(), more.end());
+    return tokens;
+}
+
+void AnotherImageOfTheSameSizeRunsTheWholePromptAgain() {
+    const std::vector<int> head{10, kVisionStart, kImagePad, kVisionEnd, 12};
+    Reset(head, {7, 9, 7});
+    Harness model(4096, 8192);
+    model.set_vision_geometry(Geometry());
+    ContinueMessage(model, head, 1, ImageInput(1));
+    const auto first_pixels = model.engine().vision.images.at(0).pixels;
+
+    // the same picture again
+    g_max_pixels.clear();
+    std::vector<int> longer = head;
+    longer.insert(longer.end(), {7, 9});
+    const auto same = ContinueMessage(model, longer, 1, ImageInput(1));
+    Require(model.engine().prefills.back() == (std::vector<int>{7, 9}), "a checkpoint with the same image must be reused");
+    Require(same.cached_prompt_tokens == 8, "the checkpoint with the same image must count as cached");
+
+    // another picture of the same size, which gives the same tokens
+    longer.push_back(5);
+    const auto other = ContinueMessage(model, longer, 1, ImageInput(1));
+    const FakeEngine& engine = model.engine();
+    Require(engine.prefills.back() == OneImagePrompt({7, 9, 5}), "a checkpoint with another image must not be reused");
+    Require(engine.vision.images.size() == 1 && engine.vision.images[0].pixels != first_pixels,
+            "the new image must reach the engine");
+    Require(other.cached_prompt_tokens == 0, "nothing of a prompt with another image is cached");
+}
+
+void TheSameImagePromptAgainCarriesItsImage() {
+    Reset({10, kVisionStart, kImagePad, kVisionEnd, 12, kThinkStart, 271, kThinkEnd, 271},
+          {7, 7, kEos, 7, 7, kEos});
+    Harness model(4096, 8192);
+    model.set_vision_geometry(Geometry());
+    const auto send = [&model] {
+        g_max_pixels.clear();
+        auto meta = Meta();
+        meta.restore_allowed = true;
+        auto input = ImageInput(1);
+        Require(model.insert(meta, input), "image prompt insert failed");
+        std::ostringstream output;
+        model.generate(meta, 0, output);
+        RequireHistoryMatchesEngine(model);
+        return meta;
+    };
+    send();
+    model.engine().vision = {};
+    const auto again = send();
+    const FakeEngine& engine = model.engine();
+    Require(engine.prefills.back() == OneImagePrompt({}), "a prompt the engine holds whole must run again from the start");
+    Require(engine.vision.images.size() == 1, "a prompt run again from the start must carry its image");
+    Require(again.cached_prompt_tokens == 0, "a prompt run again from the start is not cached");
 }
 
 }  // namespace
@@ -654,9 +765,14 @@ int main() {
     run("a reply cut inside its reasoning continues", AReplyCutInsideItsReasoningContinuesToo);
     run("an edited reply restores and reports the replay", AnEditedReplyRestoresTheCheckpointAndReportsTheReplay);
     run("an engine that rewinds restores the checkpoint", AnEngineThatRewindsRestoresTheCheckpoint);
+    run("OGA leaves the prefix match to the model", TheOgaBackendLeavesThePrefixMatchToTheModel);
+    run("a first prompt the server lets restore still runs", AFirstPromptTheServerLetsRestoreStillRuns);
+    run("a second continuation reuses the first", ASecondContinuationReusesTheFirst);
     run("OGA images reach the engine as float16", OgaImagesReachTheEngineAsFloat16);
     run("images refused without preprocessing", ImagesAreRefusedWithoutImagePreprocessing);
     run("more placeholders than images", MorePlaceholdersThanImagesIsARequestError);
+    run("another image of the same size runs the prompt again", AnotherImageOfTheSameSizeRunsTheWholePromptAgain);
+    run("the same image prompt again carries its image", TheSameImagePromptAgainCarriesItsImage);
     if (failures == 0) std::cout << "Qwen frontend regression tests passed\n";
     return failures == 0 ? 0 : 1;
 }
