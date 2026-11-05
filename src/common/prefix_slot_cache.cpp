@@ -200,15 +200,24 @@ void PrefixSlotCache::save(const std::vector<int>& tokens, const std::vector<uin
             slot.boundary = slot.boundary || boundary;
             return;
         }
-        // the same tokens with other pictures (another image of the same size): the engine now holds this one, and
-        // the slots that take their head rows from the old one would get these pictures' rows under their own
+        // the same tokens with other pictures (another image of the same size): the engine now holds this one. A
+        // self-contained slot also supplies the head rows of the end slots saved after it, which would get this
+        // picture's rows under their own: they go too.
         boundary = boundary || slot.boundary;
+        const bool parent = slot.kv_from() == 0;
+        header_print("FLM", "Prefix cache: dropping slot " << slot.id << ", the same tokens with other pictures (" << tokens.size() << " tokens)");
+        report_.dropped++;
         slots_table_.erase(slots_table_.begin() + static_cast<std::ptrdiff_t>(i));
-        slots_table_.erase(std::remove_if(slots_table_.begin(), slots_table_.end(), [&tokens](const slot_t& other) {
-            const size_t head = static_cast<size_t>(other.kv_from());
-            return head > 0 && head <= tokens.size() && other.tokens.size() >= head &&
-                   std::equal(other.tokens.begin(), other.tokens.begin() + static_cast<std::ptrdiff_t>(head), tokens.begin());
-        }), slots_table_.end());
+        for (size_t j = 0; parent && j < slots_table_.size();) {
+            const slot_t& other = slots_table_[j];
+            if (static_cast<size_t>(other.kv_from()) == tokens.size() && has_prefix(other.tokens, tokens)) {
+                header_print("FLM", "Prefix cache: dropping slot " << other.id << ", its head rows were in the replaced slot (" << other.tokens.size() << " tokens)");
+                report_.dropped++;
+                slots_table_.erase(slots_table_.begin() + static_cast<std::ptrdiff_t>(j));
+            } else {
+                j++;
+            }
+        }
         break;
     }
     if (!boundary) {
