@@ -81,6 +81,7 @@ int main(int argc, char* argv[]) {
     desc.add_options()("decode,d", arg_utils::po::value<int>()->default_value(32), "Decode steps after each prompt");
     desc.add_options()("context,L", arg_utils::po::value<int>()->default_value(0), "Engine context, 0 = longest prompt + decode");
     desc.add_options()("dump", arg_utils::po::value<std::string>()->default_value(""), "Folder for logits dumps, empty = none");
+    desc.add_options()("grow-to", arg_utils::po::value<int>()->default_value(0), "Grow the engine context to this length (update_max_length) halfway through each decode, 0 = never");
     desc.add_options()("help,h", "Show this help");
     arg_utils::po::store(arg_utils::po::parse_command_line(argc, argv, desc), vm);
     if (vm.count("help")) {
@@ -93,6 +94,7 @@ int main(int argc, char* argv[]) {
     std::vector<int> lengths = parse_lengths(vm["lengths"].as<std::string>());
     int decode_steps = vm["decode"].as<int>();
     std::string dump_dir = vm["dump"].as<std::string>();
+    int grow_to = vm["grow-to"].as<int>();
 
     int longest = 0;
     for (int n : lengths) {
@@ -148,6 +150,10 @@ int main(int argc, char* argv[]) {
         // teacher forcing: every build sees the same tokens, so the logits compare step by step
         double decode_ms = 0.0;
         for (int i = 0; i < decode_steps; i++) {
+            if (grow_to > 0 && i == decode_steps / 2) {
+                // the path a client's larger context request takes (AutoModel::set_max_length)
+                engine->update_max_length((uint32_t)grow_to);
+            }
             std::chrono::steady_clock::time_point t1 = std::chrono::steady_clock::now();
             buffer<bf16> step = engine->forward(text_tokens[n + i]);
             decode_ms += ms_since(t1);
