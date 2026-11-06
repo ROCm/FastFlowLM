@@ -477,7 +477,7 @@ class model_list {
 
         /// \brief the kernel flow that runs a tag, read off the tag itself
         /// \param model_type the family part of the tag, e.g. "phi4-mini-it-core"
-        /// \return "core" for a family ending in "-core", "flm" otherwise
+        /// \return "core" for "-core", "oga-hipep" for "-oga-hipep", "flm" otherwise
         /// \note The name is the mechanism, not a label on top of one. A
         ///       corelib model is packaged differently from its FastFlowLM
         ///       namesake -- different weights, different quantization -- so it
@@ -489,6 +489,12 @@ class model_list {
                 model_type.compare(model_type.size() - suffix.size(),
                                    suffix.size(), suffix) == 0) {
                 return "core";
+            }
+            static const std::string oga_suffix = "-oga-hipep";
+            if (model_type.size() > oga_suffix.size() &&
+                model_type.compare(model_type.size() - oga_suffix.size(),
+                                   oga_suffix.size(), oga_suffix) == 0) {
+                return "oga-hipep";
             }
             return "flm";
         }

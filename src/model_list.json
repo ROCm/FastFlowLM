@@ -2139,6 +2139,43 @@
             ]
         }
     },
+        "qwen3.5-oga-hipep": {
+            "9b": {
+                "name": "Qwen3.5-9B_gpuep_1.0_gpu_128",
+                "url": "https://huggingface.co/amd/Qwen3.5-9B_gpuep_1.0_gpu_128/resolve/f3a9b4aeb60a42542cc4fec561e1f1095e427483",
+                "file_url": "https://huggingface.co/api/models/amd/Qwen3.5-9B_gpuep_1.0_gpu_128/tree/f3a9b4aeb60a42542cc4fec561e1f1095e427483",
+                "size": 7491571939,
+                "default_context_length": 32768,
+                "max_prefill_len": 4096,
+                "details": {
+                    "family": "qwen3.5",
+                    "think": true,
+                    "parameter_size": "9B",
+                    "quantization_level": "INT4 RTN group-32, fp16 activations"
+                },
+                "flm_min_version": "1.0.12",
+                "vlm": false,
+                "files": [
+                    "chat_template.jinja",
+                    "config.json",
+                    "embedding.onnx",
+                    "embedding.onnx.data",
+                    "genai_config.json",
+                    "processor_config.json",
+                    "text.onnx",
+                    "text.onnx.data",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "vision.onnx",
+                    "vision.onnx.data"
+                ],
+                "file_sources": {},
+                "label": [
+                    "reasoning",
+                    "tool-calling"
+                ]
+            }
+        },
         "qwen3.6-moe-core":     {
         "35b-a3b": {
             "supported_platforms": [

@@ -62,6 +62,9 @@ inline constexpr const char* kBackendKey = "backend";
 ///       that picks between them sit together.
 inline constexpr const char* kCoreFamilySuffix = "-core";
 
+/// \brief OGA packages run on the GPU through a separately installed hip-ep
+inline constexpr const char* kOgaHipepBackendId = "oga-hipep";
+
 /// \brief everything a backend factory needs to build its engine
 /// \note Assembled by the frontend once the shared model state is initialized,
 ///       so `config` and `context_length` are already resolved.

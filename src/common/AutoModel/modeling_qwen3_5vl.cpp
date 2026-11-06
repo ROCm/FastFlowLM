@@ -70,6 +70,18 @@ Qwen3_5VL::vision_params_t Qwen3_5VL::_vision_params() const {
 namespace {
 constexpr int kImageSoftTokenId = 248056;
 
+/// \brief whether a request carries an image, in either input form
+/// \note The CLI passes images in input.images; the REST API puts them in the
+///       "images" arrays of its messages. insert() reads no audio, so audios
+///       are not checked here.
+bool carries_images(const lm_uniform_input_t& input) {
+    if (!input.images.empty()) return true;
+    for (const auto& item : input.messages) {
+        if (item.contains("images") && !item["images"].empty()) return true;
+    }
+    return false;
+}
+
 /// \brief the soft tokens one image expands into: one per merge x merge block of patches
 /// \note _build_tokens expands with it and insert() describes the images with it, so the two cannot disagree
 size_t image_soft_tokens(const qwen3_5vl_image_t& image, unsigned int merge_size) {
@@ -78,10 +90,23 @@ size_t image_soft_tokens(const qwen3_5vl_image_t& image, unsigned int merge_size
 } // namespace
 
 void Qwen3_5VL::_attach_prefix_cache() {
-    this->_prefix_attach(this->lm_engine, qwen3_5vl_state_api(this->lm_engine), kImageSoftTokenId);
+    // OGA has no native prefix-slot state API; keep the existing path for other backends.
+    const flm_state_api* api = this->backend_id() == flm::backend::kOgaHipepBackendId
+        ? nullptr : qwen3_5vl_state_api(this->lm_engine);
+    this->_prefix_attach(this->lm_engine, api, kImageSoftTokenId);
 }
 
 bool Qwen3_5VL::_build_tokens(chat_meta_info_t& meta_info, lm_uniform_input_t& input, qwen3_5vl_image_payload_t& image_payload, std::vector<int>& tokens) {
+    // Refuse images before any image work. The OGA engine takes no vision
+    // payload: OgaEngine::prefill() throws on one.
+    if (this->backend_id() == flm::backend::kOgaHipepBackendId && carries_images(input)) {
+        // A ModelRequestError, not invalid_argument: the handlers turn only the
+        // former into an HTTP 400, and the latter would come back as a 200 body.
+        throw ModelRequestError(400, false,
+            "the loaded backend '" + this->backend_id() + "' does not accept image input",
+            "invalid_request_error");
+    }
+
     // preprocess
     constexpr int image_soft_token_id = 248056;
     this->profiler_list[TKOEN_ENCODE_TIME].start();
@@ -194,6 +219,10 @@ bool Qwen3_5VL::_build_tokens(chat_meta_info_t& meta_info, lm_uniform_input_t& i
         templated_text = this->apply_chat_template(messages);
     }
     std::vector<int> tokens_init = this->tokenizer->encode(templated_text);
+    if (this->backend_id() == flm::backend::kOgaHipepBackendId) {
+        // Include the think preamble before it is trimmed from the prefill.
+        this->_shared_validate_capacity(tokens_init.size(), input.requested_max_new_tokens);
+    }
 
     // update the tokens to include the image tokens
     tokens.clear();
@@ -407,6 +436,12 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
         token_str = this->tokenizer->run_time_decoder(271);
         sampled_token = this->_sample(y, meta_info);
     }
+    if (this->backend_id() == flm::backend::kOgaHipepBackendId) {
+        // The preamble has run; reuse the shared capacity, EOS and history handling.
+        this->total_tokens = this->lm_engine->get_current_context_length();
+        this->last_token = sampled_token;
+        return result + this->_shared_generate(meta_info, length_limit, os, std::move(is_cancelled));
+    }
     this->total_tokens++;
     // the first sample after the preamble is the reply's first token, and counts toward the limit
     meta_info.generated_tokens++;
@@ -484,6 +519,9 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
 std::string Qwen3_5VL::generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os) {
     if (!this->insert(meta_info, input)) {
         return "";
+    }
+    if (this->backend_id() == flm::backend::kOgaHipepBackendId) {
+        return this->generate(meta_info, length_limit, os);
     }
     header_print("FLM", "Prompt inserted, starting generation...");
     int checkpoint_idx = this->lm_engine->checkpoint();
