@@ -75,6 +75,8 @@ struct GenaiConfig {
     std::uint32_t vocab_size = 0;
     std::uint32_t context_length = 0;
     std::vector<int> eos_ids;
+    /// \brief image token ids and merge size, when the package has a vision model
+    std::optional<OgaVisionConfig> vision;
 };
 
 GenaiConfig ReadGenaiConfig(const std::filesystem::path& root) {
@@ -95,7 +97,27 @@ GenaiConfig ReadGenaiConfig(const std::filesystem::path& root) {
     if (out.type.empty() || !out.vocab_size || !out.context_length)
         throw std::runtime_error(Text(file) +
                                  " must state model.type, vocab_size and context_length");
+    if (const auto vision = model->find("vision"); vision != model->end() && vision->is_object()) {
+        OgaVisionConfig config;
+        config.image_token_id = model->value("image_token_id", -1);
+        config.vision_start_token_id = model->value("vision_start_token_id", -1);
+        config.spatial_merge_size = vision->value("spatial_merge_size", std::int64_t{0});
+        if (config.image_token_id < 0 || config.vision_start_token_id < 0 ||
+            config.spatial_merge_size <= 0)
+            throw std::runtime_error(Text(file) + " has a vision model but does not state "
+                                     "image_token_id, vision_start_token_id and "
+                                     "vision.spatial_merge_size");
+        out.vision = config;
+    }
     return out;
+}
+
+/// \brief values in one patch row, from config.json's vision_config
+/// \return 0 when it does not state a patch size
+std::int64_t PatchValues(const nlohmann::json& vision_config) {
+    const auto patch = cfg_get<std::int64_t>(vision_config, "patch_size", 0);
+    return cfg_get<std::int64_t>(vision_config, "in_channels", 3) *
+           cfg_get<std::int64_t>(vision_config, "temporal_patch_size", 1) * patch * patch;
 }
 
 }  // namespace
@@ -129,7 +151,7 @@ class OgaHipepBackend final : public flm::backend::ModelBackend {
 public:
     explicit OgaHipepBackend(const flm::backend::BackendContext& context) {
         const std::filesystem::path root(context.model_path);
-        const GenaiConfig genai = ReadGenaiConfig(root);
+        GenaiConfig genai = ReadGenaiConfig(root);
         const std::string name = "OGA " + genai.type;
         if (context.enable_preemption)
             throw std::invalid_argument(name + " does not support preemption");
@@ -143,6 +165,11 @@ public:
             throw std::runtime_error(name + " config.json vocab_size " + std::to_string(vocab) +
                                      " differs from genai_config.json vocab_size " +
                                      std::to_string(genai.vocab_size));
+        if (genai.vision) {
+            genai.vision->patch_values = PatchValues(context.config->sub("vision_config"));
+            if (genai.vision->patch_values <= 0)
+                throw std::runtime_error(name + " config.json vision_config states no patch_size");
+        }
 
         const auto tokenizer_config = context.tokenizer_config
                                           ? *context.tokenizer_config
@@ -168,8 +195,8 @@ public:
         api_ = OgaApi::GetOrCreate();
         auto model = OpenModel(*api_, root);
         header_print("FLM", "OGA device: AMDGPU (" << Text(api_->package().bin) << ")");
-        engine_ = std::make_unique<OgaEngine>(
-            api_, std::move(model), name, genai.vocab_size, genai.context_length, length);
+        engine_ = std::make_unique<OgaEngine>(api_, std::move(model), name, genai.vocab_size,
+                                              genai.context_length, length, genai.vision);
     }
 
     causal_lm& engine() override { return *engine_; }
@@ -182,6 +209,9 @@ public:
     std::uint32_t max_decode_length() const override { return engine_->max_length() - 1; }
     bool supports_preemption() const override { return false; }
     bool forwards_past_eos() const override { return false; }
+    bool keeps_state_on_restore() const override { return engine_->rewinds(); }
+    std::uint64_t replayed_tokens() const override { return engine_->replayed_tokens(); }
+    bool matches_token_prefixes() const override { return true; }
     std::optional<std::vector<int>> forced_eos_ids() const override { return eos_ids_; }
     std::optional<int> forced_bos_id() const override { return bos_id_; }
 

@@ -44,7 +44,18 @@
     X(tensor_get_shape_rank, OgaTensorGetShapeRank)                                \
     X(tensor_get_shape, OgaTensorGetShape)                                         \
     X(tensor_get_data, OgaTensorGetData)                                           \
-    X(destroy_tensor, OgaDestroyTensor)
+    X(destroy_tensor, OgaDestroyTensor)                                            \
+    X(create_tensor_from_buffer, OgaCreateTensorFromBuffer)                        \
+    X(create_named_tensors, OgaCreateNamedTensors)                                 \
+    X(named_tensors_set, OgaNamedTensorsSet)                                       \
+    X(destroy_named_tensors, OgaDestroyNamedTensors)                               \
+    X(generator_set_inputs, OgaGenerator_SetInputs)
+
+/// \brief entry points an OGA may lack; OgaFunctions holds null for each one it does not export
+/// \note OGA 0.17 exports no OgaGenerator_SnapshotState.
+#define FLM_OGA_OPTIONAL_FUNCTIONS(X)                                              \
+    X(generator_snapshot_state, OgaGenerator_SnapshotState)                        \
+    X(generator_rewind_to, OgaGenerator_RewindTo)
 
 namespace flm::oga {
 
@@ -59,6 +70,14 @@ struct FileVersion {
 /// \brief the oldest onnxruntime-genai whose C API matches the vendored header
 /// \note hip-ep 0.5.1 ships OGA 0.14, which runs this model only on the CPU.
 inline constexpr FileVersion kMinimumOgaVersion{0, 17, 0, 0};
+
+/// \brief the oldest onnxruntime-genai that can rewind a hybrid model's recurrent state
+/// \note OGA 0.19 snapshots that state (OgaGenerator_SnapshotState) and restores
+///       it in OgaGenerator_RewindTo to the snapshot's length, and to no other.
+inline constexpr FileVersion kRewindOgaVersion{0, 19, 0, 0};
+
+/// \brief whether `version` is `minimum` or later
+bool AtLeast(FileVersion version, FileVersion minimum);
 
 /// \brief the name the EP library is registered under
 /// \note OGA's AMDGPU provider attaches the EP devices of this name to a session.
@@ -120,6 +139,7 @@ Package FindPackage(const std::vector<PackageCandidate>& candidates,
 struct OgaFunctions {
 #define FLM_DECLARE_OGA_FUNCTION(member, symbol) decltype(&::symbol) member{};
     FLM_OGA_FUNCTIONS(FLM_DECLARE_OGA_FUNCTION)
+    FLM_OGA_OPTIONAL_FUNCTIONS(FLM_DECLARE_OGA_FUNCTION)
 #undef FLM_DECLARE_OGA_FUNCTION
 };
 
