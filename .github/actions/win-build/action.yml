@@ -10,6 +10,10 @@ inputs:
       XRT (the default build), HRX (the HRX runtime), or Source (the model
       engines built from source instead of the prebuilt DLLs in lib\xrt).
     required: true
+  model-extension:
+    description: Build the Gemma4-open integration bundle from the installed SDK.
+    required: false
+    default: "false"
 
 outputs:
   build-dir:
@@ -183,6 +187,82 @@ runs:
         # No BOM: Windows PowerShell 5.1's Out-File -Encoding utf8 writes one,
         # which corrupts the output name.
         [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "build-dir=$buildDir`n")
+
+    - name: Test model-extension contracts
+      shell: powershell
+      working-directory: ${{ github.workspace }}/src
+      env:
+        VARIANT: ${{ inputs.variant }}
+      run: |
+        $ErrorActionPreference = "Stop"
+        $extra = @()
+        if ($env:VARIANT -eq 'HRX') {
+          $extra += '-DFLM_USE_HRX=ON'
+        }
+        cmake -S test/model_extension_contracts `
+          -B build-model-extension-contracts `
+          -G "Visual Studio 18 2026" @extra
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        cmake --build build-model-extension-contracts `
+          --config Release --parallel
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        ctest --test-dir build-model-extension-contracts `
+          -C Release --output-on-failure
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    - name: Test installed model-extension package
+      shell: powershell
+      working-directory: ${{ github.workspace }}/src
+      env:
+        BUILD_DIR: ${{ steps.build.outputs.build-dir }}
+      run: |
+        $ErrorActionPreference = "Stop"
+        $prefix = Join-Path $env:RUNNER_TEMP "model-extension-install"
+        cmake --install (Join-Path $env:GITHUB_WORKSPACE $env:BUILD_DIR) `
+          --prefix $prefix --component ModelExtension --config Release
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        cmake -S test/model_extension_consumer `
+          -B build-model-extension-consumer `
+          -G "Visual Studio 18 2026" `
+          "-DCMAKE_PREFIX_PATH=$prefix"
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        cmake --build build-model-extension-consumer `
+          --config Release --parallel
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    - name: Build Gemma4-open model extension
+      if: inputs.model-extension == 'true' && (inputs.variant == 'XRT' || inputs.variant == 'HRX')
+      shell: powershell
+      working-directory: ${{ github.workspace }}/src
+      env:
+        BUILD_DIR: ${{ steps.build.outputs.build-dir }}
+        HRX_PREFIX: ${{ steps.hrx.outputs.prefix }}
+        VARIANT: ${{ inputs.variant }}
+      run: |
+        $ErrorActionPreference = "Stop"
+        $prefix = Join-Path $env:RUNNER_TEMP "model-extension-integration-install"
+        cmake --install (Join-Path $env:GITHUB_WORKSPACE $env:BUILD_DIR) `
+          --prefix $prefix --component ModelExtension --config Release
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        $prefixes = $prefix
+        if ($env:VARIANT -eq 'HRX') {
+          if (-not $env:HRX_PREFIX) { throw 'The HRX package prefix is empty.' }
+          $prefixes += ";$env:HRX_PREFIX"
+        }
+        cmake -S test/model_extension_gemma4e `
+          -B build-model-extension-gemma4e `
+          -G "Visual Studio 18 2026" `
+          "-DCMAKE_PREFIX_PATH=$prefixes" `
+          "-DFLM_SOURCE_DIR=$PWD" `
+          "-DFLM_GEMMA4_XCLBIN_DIR=$PWD\xclbins\Gemma4-E2B-IT-NPU2" `
+          -DXRT_INCLUDE_DIR=C:\dev\XRT\src\runtime_src\core\include `
+          -DXRT_LIBRARY_DIR=C:\dev\xrtNPUfromDLL `
+          -DBOOST_INCLUDE_DIR=C:\dev\boost_1_88_0 `
+          -DVCPKG_INCLUDE_DIR=C:\dev\vcpkg\installed\x64-windows\include
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        cmake --build build-model-extension-gemma4e `
+          --config Release --parallel
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
     - name: Save compiler cache
       if: github.ref == 'refs/heads/main' && steps.build.outcome == 'success'

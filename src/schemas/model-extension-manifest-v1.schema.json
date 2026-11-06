@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ROCm/FastFlowLM/schemas/model-extension-manifest-v1.schema.json",
+  "title": "FastFlowLM model extension manifest v1",
+  "description": "Describes one stable-ABI native model extension bundle.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "name",
+    "version",
+    "library"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "library": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/bundlePath"
+        },
+        {
+          "type": "object",
+          "minProperties": 1,
+          "properties": {
+            "linux-x86_64": {
+              "$ref": "#/$defs/bundlePath"
+            },
+            "windows-x86_64": {
+              "$ref": "#/$defs/bundlePath"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "asset_root": {
+      "$ref": "#/$defs/bundlePath"
+    },
+    "catalog": {
+      "$ref": "#/$defs/bundlePath"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "bundlePath": {
+      "type": "string",
+      "minLength": 1,
+      "description": "A path relative to the extension bundle root."
+    }
+  }
+}

@@ -7,6 +7,8 @@ name: Windows Build
 #   XRT     fastflowlm-windows-<sha>                 (+ fastflowlm-windows-msi-<sha>)
 #   HRX     HRX-fastflowlm-windows-<sha>
 #   Source  models-from-source-fastflowlm-windows-<sha>
+#   XRT extension  gemma4-open-windows-xrt            (optional)
+#   HRX extension  gemma4-open-windows-hrx            (optional)
 #
 # Build and Test (build-and-test.yml) calls this once per package on every pull
 # request, push and tag; dispatch it to build packages without testing them.
@@ -21,6 +23,10 @@ on:
         description: Also build the MSI installer when the XRT variant is built.
         type: boolean
         default: true
+      model-extension:
+        description: Build separate Gemma4-open bundles for XRT/HRX variants.
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       variants:
@@ -32,6 +38,10 @@ on:
         description: Also build the MSI installer when the XRT variant is built
         type: boolean
         default: true
+      model-extension:
+        description: Build separate Gemma4-open bundles for XRT/HRX variants
+        type: boolean
+        default: false
 
 # No concurrency group: build-and-test.yml calls this several times in one
 # run, and the calls would cancel each other. The caller owns cancellation.
@@ -109,6 +119,7 @@ jobs:
         uses: ./.github/actions/win-build
         with:
           variant: ${{ matrix.variant }}
+          model-extension: ${{ inputs.model-extension }}
 
       - name: Prepare package files
         shell: powershell
@@ -127,6 +138,9 @@ jobs:
           }
 
           New-Item -ItemType Directory -Force $dist | Out-Null
+          cmake --install $build --prefix $dist `
+            --component ModelExtension --config Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           # Main executable
           Copy-Item -Path $build\flm.exe -Destination $dist\ -Force
@@ -169,6 +183,15 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: src/dist/
+          if-no-files-found: error
+
+      - name: Upload model-extension artifact
+        if: inputs.model-extension && (matrix.variant == 'XRT' || matrix.variant == 'HRX')
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.variant == 'XRT' && 'gemma4-open-windows-xrt' || 'gemma4-open-windows-hrx' }}
+          path: src/build-model-extension-gemma4e/bundle/
+          retention-days: 7
           if-no-files-found: error
 
   # Packages the flm.exe from the XRT build instead of building it again, so

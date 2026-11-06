@@ -8,6 +8,8 @@
 
 #include "AutoModel/modeling_qwen3_5vl.hpp"
 #include "metrices.hpp"
+#include "models/qwen3_5vl/flm/aie2p/qwen3_5vl_npu.hpp"
+#include "models/qwen3_5vl_flash/flm/aie2p/qwen3_5vl_flash.hpp"
 #include "oga/oga_vision.hpp"
 
 #include <algorithm>

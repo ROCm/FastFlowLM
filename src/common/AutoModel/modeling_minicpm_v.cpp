@@ -7,6 +7,7 @@
 
 
 #include "AutoModel/modeling_minicpm_v.hpp"
+#include "models/minicpm_v_4_7/flm/aie2p/minicpm_v_4_7_npu.hpp"
 
 #include <cstdlib>
 #include <fstream>

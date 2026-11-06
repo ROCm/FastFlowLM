@@ -8,6 +8,7 @@
 #pragma once
 #include "AutoModel/automodel.hpp"
 #include "metrices.hpp"
+#include "models/qwen3vl/flm/aie2p/qwen3vl_npu.hpp"
 
 
 #include "typedef.hpp"
