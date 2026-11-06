@@ -201,10 +201,13 @@ bool Qwen3VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     const bool slot_mode = this->_prefix_slot_mode(meta_info, tokens.size(), 0);
     size_t match_len = 0;
     std::vector<int> full_tokens;          // what this prompt leaves in the engine
-    std::vector<uint64_t> image_hashes;    // content of each of its images
+    // content of each of its images (pixels + grid), over the full payload: the slot cache and the prompt cache both use it
+    std::vector<uint64_t> image_hashes;
+    if (!image_payload.images.empty()) {
+        image_hashes = prefix_image_hashes(image_payload, QWEN3_PATCH_SIZE, QWEN3_TEMPORAL_PATCH_SIZE);
+    }
     if (slot_mode) {
         full_tokens = tokens;
-        image_hashes = prefix_image_hashes(image_payload, QWEN3_PATCH_SIZE, QWEN3_TEMPORAL_PATCH_SIZE);
         match_len = this->_prefix_resume(this->prefix_cache_, full_tokens, image_hashes);
     } else {
         this->_prefix_legacy_path(); // the in-place path below moves the engine on without telling the cache
@@ -222,6 +225,10 @@ bool Qwen3VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
             image_token_counts.push_back(qwen3vl_image_token_count(img));
         }
         prompt_media_from_counts(tokens, image_soft_token_id, image_token_counts, prompt_media_t::kImage, media);
+        // so a same-size but different image in the cached part of the prompt is not taken for the old one
+        for (size_t i = 0; i < media.size() && i < image_hashes.size(); i++) {
+            media[i].hash = image_hashes[i] != 0 ? image_hashes[i] : 1; // 0 means "not hashed"
+        }
     }
     const prompt_reuse_t plan = this->_plan_reuse(tokens, media);
     const size_t images_to_drop = plan.skipped_media[prompt_media_t::kImage];
@@ -321,7 +328,7 @@ int Qwen3VL_Flash::_pin_system_prefix(const std::string& system_text) {
     }
 
     this->system_his = this->token_history;
-    this->checkpoint_his = this->token_history;
+    this->_checkpoint_history();
     this->lm_engine->checkpoint();
     this->system_tokens = static_cast<int>(shared);
 
@@ -351,6 +358,9 @@ void Qwen3VL_Flash::_reset_turn() {
         this->total_tokens = static_cast<uint32_t>(this->lm_engine->restore());
         this->token_history = this->system_his;
         this->checkpoint_his = this->system_his;
+        // the pinned prefix is text only (a system string, read in without a payload)
+        this->history_media_ = std::vector<prompt_media_t>{};
+        this->checkpoint_media_ = std::vector<prompt_media_t>{};
     } else {
         this->lm_engine->clear_context();
         this->token_history.clear();
@@ -424,6 +434,7 @@ bool Qwen3VL_Flash::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& inpu
         // the pin goes too, and the next request with this system text pins it again.
         this->lm_engine->clear_context();
         this->checkpoint_his.clear();
+        this->checkpoint_media_ = std::vector<prompt_media_t>{};
         this->_forget_pin();
     }
 

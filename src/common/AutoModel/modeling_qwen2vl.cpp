@@ -218,6 +218,16 @@ bool Qwen2VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     // exactly the tokens these images sit in.
     std::vector<prompt_media_t> media;
     prompt_media_from_counts(tokens, image_soft_token_id, image_token_counts, prompt_media_t::kImage, media);
+    // Same-size pictures render the same tokens: the plan compares these content hashes (taken before the drop) so
+    // another picture is never matched to the rows of the old one. The slot path's hashes are the same values.
+    if (!media.empty()) {
+        if (image_hashes.empty()) {
+            image_hashes = prefix_image_hashes(image_payload, QWEN2_PATCH_SIZE, QWEN2_TEMPORAL_PATCH_SIZE);
+        }
+        for (size_t i = 0; i < media.size() && i < image_hashes.size(); i++) {
+            media[i].hash = image_hashes[i] != 0 ? image_hashes[i] : 1; // 0 means "not hashed"
+        }
+    }
     const prompt_reuse_t plan = this->_plan_reuse(tokens, media);
     const size_t images_to_drop = std::min(plan.skipped_media[prompt_media_t::kImage], image_payload.images.size());
     if (images_to_drop > 0) {

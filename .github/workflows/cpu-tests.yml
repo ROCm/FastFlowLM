@@ -105,3 +105,16 @@ jobs:
           cmake -S src/test/prompt_reuse -B build-prompt-reuse -DCMAKE_BUILD_TYPE=Release
           cmake --build build-prompt-reuse -j"$(nproc)"
           ctest --test-dir build-prompt-reuse --output-on-failure
+
+  # PrefixSlotCache (src/common/prefix_slot_cache.cpp) against a fake engine: which snapshot a prompt resumes from,
+  # eviction, and that a snapshot is only reused for the same images (content hashes). CPU only.
+  prefix-slot-cache:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Build and run the prefix slot cache test
+        run: |
+          cmake -S src/test/prefix_slot_cache -B build-prefix-slot-cache -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-prefix-slot-cache -j"$(nproc)"
+          ctest --test-dir build-prefix-slot-cache --output-on-failure
