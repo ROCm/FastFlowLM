@@ -370,6 +370,61 @@ if(FLM_WIN_DEPS_PREFIX)
     message(STATUS "Windows deps from prefix: ${FLM_WIN_DEPS_PREFIX}")
 endif()
 
+# ———————————————————————————————————————————————
+# curl on Windows.
+#
+# Every Windows package ships src/lib/libcurl.dll, curl FLM_CURL_VERSION. The
+# default route (CI, WinSetup.ps1) compiles against the matching headers in
+# third_party/curl and links an import library generated from that DLL's
+# export list (third_party/curl/libcurl.def), so it always links the DLL it
+# ships. The vcpkg-toolchain and FLM_WIN_DEPS_PREFIX routes bring their own
+# curl and only get a warning when its version differs.
+# Updating the DLL: see third_party/curl/README.md.
+# ———————————————————————————————————————————————
+set(FLM_CURL_VERSION "8.15.0")
+if(WIN32)
+    set(FLM_CURL_DIR "${CMAKE_SOURCE_DIR}/../third_party/curl")
+
+    # The x.y.z part of LIBCURL_VERSION in a curlver.h ("" if not found).
+    function(flm_curl_header_version out_var curlver_h)
+        set(_ver "")
+        if(EXISTS "${curlver_h}")
+            file(STRINGS "${curlver_h}" _line REGEX "^#define LIBCURL_VERSION \"")
+            if(_line MATCHES "\"([0-9]+\\.[0-9]+\\.[0-9]+)")
+                set(_ver "${CMAKE_MATCH_1}")
+            endif()
+        endif()
+        set(${out_var} "${_ver}" PARENT_SCOPE)
+    endfunction()
+
+    flm_curl_header_version(_flm_curl_ver "${FLM_CURL_DIR}/include/curl/curlver.h")
+    if(NOT _flm_curl_ver STREQUAL FLM_CURL_VERSION)
+        message(FATAL_ERROR "third_party/curl/include is curl '${_flm_curl_ver}', but "
+                            "FLM_CURL_VERSION (the shipped src/lib/libcurl.dll) is "
+                            "${FLM_CURL_VERSION}; update them together")
+    endif()
+endif()
+
+if(WIN32 AND NOT VCPKG_TOOLCHAIN AND NOT FLM_WIN_DEPS_PREFIX)
+    # lib.exe (CMAKE_AR under MSVC) writes the import library; rerun it, and
+    # reconfigure, whenever the .def changes.
+    set(_flm_curl_def "${FLM_CURL_DIR}/libcurl.def")
+    set(FLM_CURL_IMPLIB "${CMAKE_BINARY_DIR}/third_party/curl/libcurl.lib")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_flm_curl_def}")
+    if(NOT EXISTS "${FLM_CURL_IMPLIB}" OR "${_flm_curl_def}" IS_NEWER_THAN "${FLM_CURL_IMPLIB}")
+        file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/third_party/curl")
+        execute_process(
+            COMMAND "${CMAKE_AR}" /nologo /machine:x64 "/def:${_flm_curl_def}" "/out:${FLM_CURL_IMPLIB}"
+            RESULT_VARIABLE _flm_curl_rc
+            OUTPUT_VARIABLE _flm_curl_out
+            ERROR_VARIABLE _flm_curl_out)
+        if(NOT _flm_curl_rc EQUAL 0)
+            message(FATAL_ERROR "Generating libcurl.lib with '${CMAKE_AR}' failed:\n${_flm_curl_out}")
+        endif()
+    endif()
+    message(STATUS "curl ${FLM_CURL_VERSION}: third_party/curl headers, import library ${FLM_CURL_IMPLIB}")
+endif()
+
 if(WIN32)
     if(VCPKG_TOOLCHAIN)
         # A vcpkg toolchain is active (e.g. the rocm-npu-staging dev.py build or
@@ -379,14 +434,27 @@ if(WIN32)
         # installed Boost version.
         find_package(Boost CONFIG REQUIRED COMPONENTS program_options)
         find_package(CURL CONFIG REQUIRED)
+        if(NOT CURL_VERSION VERSION_EQUAL FLM_CURL_VERSION)
+            message(WARNING "vcpkg provides curl ${CURL_VERSION}, but flm ships "
+                            "libcurl.dll ${FLM_CURL_VERSION}; calls into newer curl "
+                            "APIs would fail to load against the shipped DLL")
+        endif()
+    elseif(FLM_WIN_DEPS_PREFIX)
+        flm_curl_header_version(_flm_prefix_curl_ver
+            "${FLM_WIN_DEPS_PREFIX}/include/curl/curlver.h")
+        if(NOT _flm_prefix_curl_ver STREQUAL FLM_CURL_VERSION)
+            message(WARNING "FLM_WIN_DEPS_PREFIX provides curl '${_flm_prefix_curl_ver}', "
+                            "but flm ships libcurl.dll ${FLM_CURL_VERSION}; calls into "
+                            "newer curl APIs would fail to load against the shipped DLL")
+        endif()
     endif()
     # A third, opt-in route (FLM_WIN_DEPS_PREFIX, declared above) takes Boost
     # and curl from one local prefix, wired next to each CI-runner block.
     # Otherwise (the bare self-hosted CI runner) there is no vcpkg toolchain and
-    # no Boost in vcpkg: Boost is a standalone b2 build under C:/dev/boost_1_88_0
-    # and curl is linked by raw name from the vcpkg lib dir. That
-    # path is wired via the include/link dirs and raw library names guarded by
-    # NOT VCPKG_TOOLCHAIN below.
+    # Boost is a standalone b2 build under C:/dev/boost_1_88_0 and curl comes
+    # from third_party/curl (see the curl block above). That path is wired via
+    # the include/link dirs and library names guarded by NOT VCPKG_TOOLCHAIN
+    # below.
 else()
     find_package(Boost CONFIG REQUIRED COMPONENTS program_options)
     # The Linux build environment installs these via apt, which provides the
@@ -424,10 +492,10 @@ if(NOT FLM_USE_HRX)
 endif()
 
 if(WIN32 AND NOT VCPKG_TOOLCHAIN AND NOT FLM_WIN_DEPS_PREFIX)
-    # Bare CI runner: standalone Boost + vcpkg headers by absolute path.
+    # Bare CI runner: standalone Boost by absolute path, vendored curl headers.
     target_include_directories(flm PUBLIC
         C:/dev/boost_1_88_0
-        C:/dev/vcpkg/installed/x64-windows/include/
+        "${FLM_CURL_DIR}/include"
     )
 elseif(FLM_WIN_DEPS_PREFIX)
     target_include_directories(flm PUBLIC "${FLM_WIN_DEPS_PREFIX}/include")
@@ -458,9 +526,9 @@ if(WIN32)
 endif()
 
 if(WIN32 AND NOT VCPKG_TOOLCHAIN AND NOT FLM_WIN_DEPS_PREFIX)
-    # Bare CI runner: statically link the standalone Boost + curl.
+    # Bare CI runner: statically link the standalone Boost. curl is the shipped
+    # DLL, so its functions stay declared dllimport (no CURL_STATICLIB).
     target_compile_definitions(flm PUBLIC
-        CURL_STATICLIB
         BOOST_ALL_NO_LIB
         BOOST_ALL_STATIC_LINK
     )
@@ -490,10 +558,9 @@ if(NOT FLM_USE_HRX)
 endif()
 
 if(WIN32 AND NOT VCPKG_TOOLCHAIN AND NOT FLM_WIN_DEPS_PREFIX)
-    # Bare CI runner: standalone Boost stage libs + vcpkg import libs.
+    # Bare CI runner: standalone Boost stage libs (curl is linked by full path).
     target_link_directories(flm PUBLIC
         C:/dev/boost_1_88_0/stage/lib
-        C:/dev/vcpkg/installed/x64-windows/lib
     )
 elseif(FLM_WIN_DEPS_PREFIX)
     target_link_directories(flm PUBLIC "${FLM_WIN_DEPS_PREFIX}/lib")
@@ -680,10 +747,10 @@ elseif(WIN32 AND FLM_WIN_DEPS_PREFIX)
         ${FLM_WIN_DEPS_PREFIX_LIBS}
     )
 elseif(WIN32)
-    # Bare CI runner: link the native deps by raw name from the standalone Boost
-    # + vcpkg lib dirs wired above (no CMake package configs there).
+    # Bare CI runner: Boost by raw name from the stage lib dir wired above (no
+    # CMake package configs there), curl via the generated import library.
     target_link_libraries(flm PUBLIC
-        libcurl
+        "${FLM_CURL_IMPLIB}"
         libboost_program_options-vc143-mt-x64-1_88
     )
 else()
