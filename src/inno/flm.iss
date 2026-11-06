@@ -78,6 +78,7 @@ Source: "gemma4e_dflash.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gemma4e_dflash_flash.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gemma4e_12b_npu.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "hunyuan_npu.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "hy_mem_npu.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "lm_head.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "dequant.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "whisper_npu.dll"; DestDir: "{app}"; Flags: ignoreversion

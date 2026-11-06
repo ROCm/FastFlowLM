@@ -45,7 +45,7 @@
                 "ms_url": "https://modelscope.cn/models/amd/Hy-Memory-30B-A3B-NPU2",
                 "modified_at": "2026-10-26T00:00:00Z",
                 "size": 17870824616,
-                "flm_min_version": "1.0.5",
+                "flm_min_version": "1.0.13",
                 "default_context_length": 16384,
                 "max_prefill_len": 16384,
                 "files": [

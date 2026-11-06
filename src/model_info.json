@@ -4674,5 +4674,43 @@
             "size": 8952,
             "sha256": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041"
         }
+    ],
+    "hy-memory:30b-a3b": [
+        {
+            "type": "file",
+            "oid": "3c754dfaa296122d7b8d9557164743f1dbd4fa5c",
+            "size": 11258,
+            "path": "chat_template.jinja"
+        },
+        {
+            "type": "file",
+            "oid": "5c766445898240fc2dc80dc2245df9dcef2846a2",
+            "size": 1980,
+            "path": "config.json"
+        },
+        {
+            "type": "file",
+            "oid": "f9f341fb48c424f587b99b793c527ea2dbce5237",
+            "size": 17870824616,
+            "lfs": {
+                "oid": "62f6880181efe868f118bb1de927e4811dd43160276158e02abeb35fdcdafda9",
+                "size": 17870824616,
+                "pointerSize": 136
+            },
+            "xetHash": "9c753dba3318f80f558d6a5fd56156dba881073daea3eb15403131c1ada79b24",
+            "path": "model.q4nx"
+        },
+        {
+            "type": "file",
+            "oid": "eabe51e7b9be3ff26b2ff354ad04c946e4f0fa69",
+            "size": 9527108,
+            "path": "tokenizer.json"
+        },
+        {
+            "type": "file",
+            "oid": "da4f196e9f662ef7a833895f96b4f5e44fe8aaea",
+            "size": 368,
+            "path": "tokenizer_config.json"
+        }
     ]
 }
