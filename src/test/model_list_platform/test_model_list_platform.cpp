@@ -178,6 +178,33 @@ void test_the_tag_name_decides_the_backend() {
     std::filesystem::remove(path);
 }
 
+void test_the_oga_hipep_suffix_names_its_backend() {
+    const auto path = write_catalog(
+        "flm_oga_hipep_model_list.json",
+        {{"model_path", "models"},
+         {"models",
+          {{"demo", {{"1b", {{"name", "Demo"}}}}},
+           {"demo-core", {{"1b", {{"name", "Demo-core"}}}}},
+           {"demo-oga-hipep", {{"1b", {{"name", "Demo-oga-hipep"}}}}}}}});
+    std::string list_path = path.string();
+    std::string exe_dir = ".";
+
+    model_list stock(list_path, exe_dir, "aie2p", {"flm"});
+    TEST_REQUIRE(!stock.is_model_supported("demo-oga-hipep:1b"));
+
+    model_list gpu(list_path, exe_dir, "aie2p", {"flm", "oga-hipep"});
+    TEST_REQUIRE(gpu.is_model_supported("demo-oga-hipep:1b"));
+    TEST_REQUIRE(!gpu.is_model_supported("demo-core:1b"));
+    TEST_REQUIRE(gpu.get_model_info("demo-oga-hipep:1b").second.at("backend") == "oga-hipep");
+    TEST_REQUIRE(gpu.get_model_info("demo:1b").second.at("backend") == "flm");
+
+    model_list both(list_path, exe_dir, "dev04", {"core", "flm", "oga-hipep"});
+    TEST_REQUIRE(both.get_model_info("demo-core:1b").second.at("backend") == "core");
+    TEST_REQUIRE(both.get_model_info("demo-oga-hipep:1b").second.at("backend") == "oga-hipep");
+
+    std::filesystem::remove(path);
+}
+
 void test_an_entry_is_pruned_by_the_silicon_it_names() {
     // The other axis, on its own: same build, same kernels, different machine.
     const auto path = write_catalog(
@@ -260,6 +287,7 @@ void test_shipped_catalog_is_well_formed() {
     for (const auto& [family, sizes] : catalog.at("models").items()) {
         const bool core_family = family.size() > 5 &&
                                  family.compare(family.size() - 5, 5, "-core") == 0;
+        const bool gpu_family = family.ends_with("-oga-hipep");
         for (const auto& [size, entry] : sizes.items()) {
             const std::string tag = family + ":" + size;
 
@@ -276,6 +304,15 @@ void test_shipped_catalog_is_well_formed() {
             if (entry.contains("details") &&
                 entry.at("details").contains("execution_backend")) {
                 throw std::runtime_error(tag + ": execution_backend is retired");
+            }
+
+            // An oga-hipep package runs on the GPU, so no NPU generation
+            // decides whether it runs here.
+            if (gpu_family) {
+                if (entry.contains("supported_platforms")) {
+                    throw std::runtime_error(tag + ": an oga-hipep package names no NPU generation");
+                }
+                continue;
             }
 
             if (!entry.contains("supported_platforms")) {
@@ -326,6 +363,8 @@ int main() {
             "a corelib build offers the corelib phi4");
     RunTest(test_the_tag_name_decides_the_backend,
             "the tag name decides the backend");
+    RunTest(test_the_oga_hipep_suffix_names_its_backend,
+            "the oga-hipep suffix names its backend");
     RunTest(test_a_catalog_can_filter_down_to_nothing,
             "a catalog can filter down to nothing");
     RunTest(test_an_entry_is_pruned_by_the_silicon_it_names,

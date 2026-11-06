@@ -126,6 +126,9 @@ SUBSYSTEMS = (
     # src/detail builds the gemma4e engine from source; gemma4e_flash
     # includes it.
     ("gemma4e engine source", r"src/detail/", ("gemma4e", "gemma4e-flash")),
+    # The oga-hipep backend, in the Windows XRT package only, runs
+    # qwen3.5-oga-hipep on the GPU.
+    ("oga-hipep backend", r"src/(common|include)/oga/|src/test/oga_hipep/", ("qwen3.5",)),
 )
 
 # Files that only serve speech recognition: any change runs the whole ASR

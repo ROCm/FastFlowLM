@@ -2,18 +2,6 @@
     "nanbeige4.1:3b": [
         {
             "type": "file",
-            "oid": "897803c21efdef4728f145ed97801e7413bc5bdb",
-            "size": 1613,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "3ebe1349965fc12a6e3f18691a623fd6c7ed0998",
-            "size": 11957,
-            "path": "README.md"
-        },
-        {
-            "type": "file",
             "oid": "cc000ef3016b519922779eb4873dbee136c5ef59",
             "size": 922,
             "path": "config.json"
@@ -50,18 +38,6 @@
         }
     ],
     "qwen3vl-it:4b": [
-        {
-            "type": "file",
-            "oid": "90adb20d209ab3dbe65edbd05edeb8e6c7f9999c",
-            "size": 2025,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "6e9c8e998933a2509b66ed231d6fe7a1a68f5b16",
-            "size": 7173,
-            "path": "README.md"
-        },
         {
             "type": "file",
             "oid": "3e026a53c0aa16b632886628a5455bd2a4433b56",
@@ -186,18 +162,6 @@
     "qwen3vl-flash:4b": [
         {
             "type": "file",
-            "oid": "90adb20d209ab3dbe65edbd05edeb8e6c7f9999c",
-            "size": 2025,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "6e9c8e998933a2509b66ed231d6fe7a1a68f5b16",
-            "size": 7173,
-            "path": "README.md"
-        },
-        {
-            "type": "file",
             "oid": "3e026a53c0aa16b632886628a5455bd2a4433b56",
             "size": 698331,
             "lfs": {
@@ -320,18 +284,6 @@
     "gemma4-it:e2b": [
         {
             "type": "file",
-            "oid": "da9be47b91174e0a1580d01be5d18bc6f7d916f2",
-            "size": 1671,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "45209d4fb7c00301e1e5a22e5c62db044a33a9b8",
-            "size": 26676,
-            "path": "README.md"
-        },
-        {
-            "type": "file",
             "oid": "3eab7fc10cc24fac2ef4ffd5edd07539f4498406",
             "size": 951607832,
             "lfs": {
@@ -404,18 +356,6 @@
         }
     ],
     "gemma4-it:e4b": [
-        {
-            "type": "file",
-            "oid": "da9be47b91174e0a1580d01be5d18bc6f7d916f2",
-            "size": 1671,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "644ed83706f49d94a417ffe7544b3bc211acf28b",
-            "size": 26713,
-            "path": "README.md"
-        },
         {
             "type": "file",
             "oid": "16ebb04b8679f9440cc119967088bae0f16cf265",
@@ -492,18 +432,6 @@
     "gemma4e-flash:e2b": [
         {
             "type": "file",
-            "oid": "da9be47b91174e0a1580d01be5d18bc6f7d916f2",
-            "size": 1671,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "45209d4fb7c00301e1e5a22e5c62db044a33a9b8",
-            "size": 26676,
-            "path": "README.md"
-        },
-        {
-            "type": "file",
             "oid": "3eab7fc10cc24fac2ef4ffd5edd07539f4498406",
             "size": 951607832,
             "lfs": {
@@ -576,18 +504,6 @@
         }
     ],
     "gemma4e-flash:e4b": [
-        {
-            "type": "file",
-            "oid": "da9be47b91174e0a1580d01be5d18bc6f7d916f2",
-            "size": 1671,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "644ed83706f49d94a417ffe7544b3bc211acf28b",
-            "size": 26713,
-            "path": "README.md"
-        },
         {
             "type": "file",
             "oid": "16ebb04b8679f9440cc119967088bae0f16cf265",
@@ -664,18 +580,6 @@
     "gemma4-it:12b": [
         {
             "type": "file",
-            "oid": "83c8ea9c8551a76b29521487fdf58e72c5f924dc",
-            "size": 1678,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "61e18105d7cb61ce375aa16ed66442b85116bb8a",
-            "size": 27955,
-            "path": "README.md"
-        },
-        {
-            "type": "file",
             "oid": "c699d6fa0e521a3cba62442214d90ff91da99446",
             "size": 18568,
             "path": "chat_template.jinja"
@@ -730,18 +634,6 @@
         }
     ],
     "qwen3.5:0.8b": [
-        {
-            "type": "file",
-            "oid": "da9be47b91174e0a1580d01be5d18bc6f7d916f2",
-            "size": 1671,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "5824f1761b2b3a55a2141a9a1172a7f92c7c2ad9",
-            "size": 61705,
-            "path": "README.md"
-        },
         {
             "type": "file",
             "oid": "45ef1dd503212998639ffa79508ca2bb88a66406",
@@ -806,18 +698,6 @@
     "qwen3.5:2b": [
         {
             "type": "file",
-            "oid": "da9be47b91174e0a1580d01be5d18bc6f7d916f2",
-            "size": 1671,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "2efa49d346c547ea81cd3d1310f414df25934f45",
-            "size": 62814,
-            "path": "README.md"
-        },
-        {
-            "type": "file",
             "oid": "45ef1dd503212998639ffa79508ca2bb88a66406",
             "size": 7545,
             "path": "chat_template.jinja"
@@ -878,18 +758,6 @@
         }
     ],
     "qwen3.5-flash:2b": [
-        {
-            "type": "file",
-            "oid": "da9be47b91174e0a1580d01be5d18bc6f7d916f2",
-            "size": 1671,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "2efa49d346c547ea81cd3d1310f414df25934f45",
-            "size": 62814,
-            "path": "README.md"
-        },
         {
             "type": "file",
             "oid": "45ef1dd503212998639ffa79508ca2bb88a66406",
@@ -954,18 +822,6 @@
     "qwen3.5:4b": [
         {
             "type": "file",
-            "oid": "c92246146c3db56bca85452d5b0e640388b23d73",
-            "size": 152,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "b0faf44f4bf33ed113e855dd7755cacd2fabdf92",
-            "size": 77656,
-            "path": "README.md"
-        },
-        {
-            "type": "file",
             "oid": "45ef1dd503212998639ffa79508ca2bb88a66406",
             "size": 7545,
             "path": "chat_template.jinja"
@@ -1026,18 +882,6 @@
         }
     ],
     "qwen3.5:9b": [
-        {
-            "type": "file",
-            "oid": "c92246146c3db56bca85452d5b0e640388b23d73",
-            "size": 152,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "bd05f965b4557fe600645e56530de0099ac13eb8",
-            "size": 77638,
-            "path": "README.md"
-        },
         {
             "type": "file",
             "oid": "45ef1dd503212998639ffa79508ca2bb88a66406",
@@ -1102,12 +946,6 @@
     "qwen3.6-moe:35b-a3b": [
         {
             "type": "file",
-            "oid": "f6a7527cede01bc2f044b1799ac812c33fca468b",
-            "size": 1673,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
             "oid": "a8755d827c0a7b614c246c4060dfd58ab352a8ff",
             "size": 7764,
             "path": "chat_template.jinja"
@@ -1162,12 +1000,6 @@
         }
     ],
     "qwen3.8-mtp:27b": [
-        {
-            "type": "file",
-            "oid": "4024240d1736b025e64675f817c9df18654c8ec0",
-            "size": 1672,
-            "path": ".gitattributes"
-        },
         {
             "type": "file",
             "oid": "c0c686f9c38d70d179fb7b5f5aa7530bc913dda3",
@@ -1226,39 +1058,9 @@
     "qwen3.8-dflash2:27b": [
         {
             "type": "file",
-            "oid": "d117c32cf5bcf5c5f22d62d5e5c8249486afd5d9",
-            "size": 1574,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "d645695673349e3947e8e5ae42332d0ac3164cd7",
-            "size": 11358,
-            "path": "LICENSE"
-        },
-        {
-            "type": "file",
-            "oid": "829ae10baabec0cb9373b19cf3f9a50b3dd3c5ab",
-            "size": 398,
-            "path": "MANIFEST.sha256"
-        },
-        {
-            "type": "file",
-            "oid": "843031dc29fb63d376f7feaf654e8eab612248e8",
-            "size": 4406,
-            "path": "README.md"
-        },
-        {
-            "type": "file",
-            "oid": "79279cc5665bced6f3cdaa2095a2ffe819497b2e",
-            "size": 1239,
+            "oid": "87f112f8d749b01619c1812d42972ba8d4a51dda",
+            "size": 1266,
             "path": "config.json"
-        },
-        {
-            "type": "file",
-            "oid": "19f27431df94a86e3d39d293878ab58970bc8876",
-            "size": 50,
-            "path": "configuration.json"
         },
         {
             "type": "file",
@@ -1273,8 +1075,7 @@
             "path": "dflash_weight.q4nx"
         }
     ],
-    "minicpm-v-4.7:1b":
-    [
+    "minicpm-v-4.7:1b": [
         {
             "type": "file",
             "oid": "0948ab105fab2a52f84bdc85c3a784221f8452d4",
@@ -1389,12 +1190,6 @@
     "lfm2:1.2b": [
         {
             "type": "file",
-            "oid": "e8825b49610d68531dd9cace712410596f7daf35",
-            "size": 1611,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
             "oid": "0f94bb1fba21122a7f0170d6e70131c38ecc4861",
             "size": 695259,
             "lfs": {
@@ -1485,12 +1280,6 @@
         }
     ],
     "lfm2:2.6b": [
-        {
-            "type": "file",
-            "oid": "2c8e9fb9dad2bfbe25dcecb9a2c07185a98d4c48",
-            "size": 1859,
-            "path": ".gitattributes"
-        },
         {
             "type": "file",
             "oid": "0f94bb1fba21122a7f0170d6e70131c38ecc4861",
@@ -1585,18 +1374,6 @@
     "lfm2-trans:2.6b": [
         {
             "type": "file",
-            "oid": "cff52be91b8b35c8a9d15aa4ad5a7cb7f9734632",
-            "size": 1808,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "5d229205fa5d2a2756932a9aa22e849996a6ba3f",
-            "size": 11263,
-            "path": "README.md"
-        },
-        {
-            "type": "file",
             "oid": "0f94bb1fba21122a7f0170d6e70131c38ecc4861",
             "size": 695259,
             "lfs": {
@@ -1624,12 +1401,6 @@
             },
             "xetHash": "e0a0d0937b6a5c5996ea029534af7f082ebcdb020a829325594b58e993b54dbd",
             "path": "conv.xclbin"
-        },
-        {
-            "type": "file",
-            "oid": "cfdf16ff4267242707440058e0201714b6d20a17",
-            "size": 10236,
-            "path": "demo.txt"
         },
         {
             "type": "file",
@@ -1693,18 +1464,6 @@
         }
     ],
     "lfm2.5-it:1.2b": [
-        {
-            "type": "file",
-            "oid": "cff52be91b8b35c8a9d15aa4ad5a7cb7f9734632",
-            "size": 1808,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "ce008fb022c6d303fcfbc9a25364a81d14649528",
-            "size": 13505,
-            "path": "README.md"
-        },
         {
             "type": "file",
             "oid": "0f94bb1fba21122a7f0170d6e70131c38ecc4861",
@@ -1799,18 +1558,6 @@
     "lfm2.5-tk:1.2b": [
         {
             "type": "file",
-            "oid": "2ace5b8c3964855369daf18f16907dfdba648708",
-            "size": 1566,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "1a31f2d17429841bec8454f66dc2f811f69d8d9a",
-            "size": 17312,
-            "path": "README.md"
-        },
-        {
-            "type": "file",
             "oid": "e6f159efaeda3857a21a38f9dbeaa514c49af627",
             "size": 1792,
             "path": "chat_template.jinja"
@@ -1847,18 +1594,6 @@
         }
     ],
     "phi4-mini-it:4b": [
-        {
-            "type": "file",
-            "oid": "ef8dceb7e7473a324f8991b322c8ae14b3303d2c",
-            "size": 1811,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "0bcd41c7c7bdded52ee8c7f28d9ba636d56ea448",
-            "size": 29246,
-            "path": "README.md"
-        },
         {
             "type": "file",
             "oid": "df6fe4b6d9c07a25623ba799530dcc4403b7e88a",
@@ -1947,18 +1682,6 @@
     "embed-gemma:300m": [
         {
             "type": "file",
-            "oid": "0c8f32c5b18cef1834c153d55a2153e5f3fa8b9b",
-            "size": 1823,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "d65ad387a44981277ad9a3df87eedd92e975cca1",
-            "size": 16343,
-            "path": "README.md"
-        },
-        {
-            "type": "file",
             "oid": "e552e7c9880e14d55111cf9e8e517cffb889eb13",
             "size": 274427,
             "lfs": {
@@ -2043,18 +1766,6 @@
         }
     ],
     "whisper-v3:turbo": [
-        {
-            "type": "file",
-            "oid": "5796826707abeb89fd8deccd569361f2bda4db56",
-            "size": 1947,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "d94de8fe54912e736e264580dfe9855466b4f62f",
-            "size": 21202,
-            "path": "README.md"
-        },
         {
             "type": "file",
             "oid": "03694f1f745a3c891f35bcfa1f3789fece658706",
@@ -2147,18 +1858,6 @@
         }
     ],
     "gemma3:1b": [
-        {
-            "type": "file",
-            "oid": "d9168db29a2f255f097ebd2b3347bdd66ad73e26",
-            "size": 1862,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "6cefb48309be7614e106ad8927a5968f7aa50677",
-            "size": 21893,
-            "path": "README.md"
-        },
         {
             "type": "file",
             "oid": "fb29ead777da0d1429a95033c3cc2136a0e60046",
@@ -2257,18 +1956,6 @@
         }
     ],
     "gemma3:4b": [
-        {
-            "type": "file",
-            "oid": "616731466cfd77541dd6592f98746b19919a33a4",
-            "size": 1658,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "39942510ee05b9882e170104fa5c4fcc65c74b3e",
-            "size": 21893,
-            "path": "README.md"
-        },
         {
             "type": "file",
             "oid": "bdedbd78a039afe6dfc3784a8949b541d489aab1",
@@ -2405,18 +2092,6 @@
     "translategemma:4b": [
         {
             "type": "file",
-            "oid": "4024240d1736b025e64675f817c9df18654c8ec0",
-            "size": 1672,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "44f3690778da1770bf19d64bace73480c5825bcc",
-            "size": 17508,
-            "path": "README.md"
-        },
-        {
-            "type": "file",
             "oid": "ae47bc8d7b0c81f69a91382953f1d4de82d31884",
             "size": 1717,
             "path": "config.json"
@@ -2465,18 +2140,6 @@
         }
     ],
     "medgemma:4b": [
-        {
-            "type": "file",
-            "oid": "90adb20d209ab3dbe65edbd05edeb8e6c7f9999c",
-            "size": 2025,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "c0b426c33a272b3bfe48f6750a3853798a29a43f",
-            "size": 35064,
-            "path": "README.md"
-        },
         {
             "type": "file",
             "oid": "800a0f9a44558920d7d6296ed7ac8af1673efacb",
@@ -2529,18 +2192,6 @@
     "medgemma1.5:4b": [
         {
             "type": "file",
-            "oid": "4024240d1736b025e64675f817c9df18654c8ec0",
-            "size": 1672,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "08ddf2681ac499605d85d6d56db27f1d1bf7413e",
-            "size": 41494,
-            "path": "README.md"
-        },
-        {
-            "type": "file",
             "oid": "800a0f9a44558920d7d6296ed7ac8af1673efacb",
             "size": 1717,
             "path": "config.json"
@@ -2589,18 +2240,6 @@
         }
     ],
     "llama3.2:1b": [
-        {
-            "type": "file",
-            "oid": "325bffdaa640c873a2ee20c05f83bf959c9fcc07",
-            "size": 139,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "88aa8db88be25891b654abba2974e9b19d49a2d2",
-            "size": 2196,
-            "path": "README.md"
-        },
         {
             "type": "file",
             "oid": "0f94bb1fba21122a7f0170d6e70131c38ecc4861",
@@ -2689,18 +2328,6 @@
     "llama3.2:3b": [
         {
             "type": "file",
-            "oid": "77392f5e64a6bffb73d56f8a605958584b6e10b2",
-            "size": 139,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "67c9ca16c360d45ada83eda5d393a9a5af39939e",
-            "size": 2196,
-            "path": "README.md"
-        },
-        {
-            "type": "file",
             "oid": "df6fe4b6d9c07a25623ba799530dcc4403b7e88a",
             "size": 527083,
             "lfs": {
@@ -2785,18 +2412,6 @@
         }
     ],
     "llama3.1:8b": [
-        {
-            "type": "file",
-            "oid": "325bffdaa640c873a2ee20c05f83bf959c9fcc07",
-            "size": 139,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "62cb7b05c385d8856ccd3f788130765e6eeea9d6",
-            "size": 2213,
-            "path": "README.md"
-        },
         {
             "type": "file",
             "oid": "3e026a53c0aa16b632886628a5455bd2a4433b56",
@@ -2885,18 +2500,6 @@
     "deepseek-r1:8b": [
         {
             "type": "file",
-            "oid": "325bffdaa640c873a2ee20c05f83bf959c9fcc07",
-            "size": 139,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "f5a64f93c0a3b2a5cdf5f20a0820a5cfa2c949c1",
-            "size": 18831,
-            "path": "README.md"
-        },
-        {
-            "type": "file",
             "oid": "d6719555f1b445d7185e6523cb680f3002bb9525",
             "size": 986,
             "path": "config.json"
@@ -2933,18 +2536,6 @@
         }
     ],
     "deepseek-r1-0528:8b": [
-        {
-            "type": "file",
-            "oid": "a605fd807771d0b529849b7d9560c704e2c87d2a",
-            "size": 1860,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "1a72cfce3352358300f7bf271ebd4e7b536c8a22",
-            "size": 14673,
-            "path": "README.md"
-        },
         {
             "type": "file",
             "oid": "3e026a53c0aa16b632886628a5455bd2a4433b56",
@@ -3039,18 +2630,6 @@
     "qwen3:0.6b": [
         {
             "type": "file",
-            "oid": "3ae5690b8855e0efa129d17221335f5919dcb220",
-            "size": 343,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "15be693db03f9c00cbec000f95cb153510cd6d00",
-            "size": 13197,
-            "path": "README.md"
-        },
-        {
-            "type": "file",
             "oid": "2762a902c859f77ba92bdb68e7a0f6f4a29f55d5",
             "size": 355915,
             "lfs": {
@@ -3135,18 +2714,6 @@
         }
     ],
     "qwen3:1.7b": [
-        {
-            "type": "file",
-            "oid": "3ae5690b8855e0efa129d17221335f5919dcb220",
-            "size": 343,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "0ee529f155c223161f5da6d0dc859fe58591e4bd",
-            "size": 13168,
-            "path": "README.md"
-        },
         {
             "type": "file",
             "oid": "2762a902c859f77ba92bdb68e7a0f6f4a29f55d5",
@@ -3235,18 +2802,6 @@
     "qwen3:4b": [
         {
             "type": "file",
-            "oid": "3ae5690b8855e0efa129d17221335f5919dcb220",
-            "size": 343,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "2de5ee7eee214bb55ea33ec7505c5838a7adf7f6",
-            "size": 16857,
-            "path": "README.md"
-        },
-        {
-            "type": "file",
             "oid": "3e026a53c0aa16b632886628a5455bd2a4433b56",
             "size": 698331,
             "lfs": {
@@ -3331,18 +2886,6 @@
         }
     ],
     "qwen3:8b": [
-        {
-            "type": "file",
-            "oid": "048eaa7dc4d13404160c14c86c3e1bac24d8d3dd",
-            "size": 343,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "d9824dae8617dfd724f854313ebde0b80ab973d4",
-            "size": 16197,
-            "path": "README.md"
-        },
         {
             "type": "file",
             "oid": "3e026a53c0aa16b632886628a5455bd2a4433b56",
@@ -3431,18 +2974,6 @@
     "qwen3-tk:4b": [
         {
             "type": "file",
-            "oid": "d9168db29a2f255f097ebd2b3347bdd66ad73e26",
-            "size": 1862,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "962b92df82aa870f4b6cad1768250634b44a1317",
-            "size": 10063,
-            "path": "README.md"
-        },
-        {
-            "type": "file",
             "oid": "3e026a53c0aa16b632886628a5455bd2a4433b56",
             "size": 698331,
             "lfs": {
@@ -3529,18 +3060,6 @@
     "qwen3-it:4b": [
         {
             "type": "file",
-            "oid": "d9168db29a2f255f097ebd2b3347bdd66ad73e26",
-            "size": 1862,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "b85879f8e465b5b02bd7ea13dd7ffaf22816bf59",
-            "size": 8168,
-            "path": "README.md"
-        },
-        {
-            "type": "file",
             "oid": "3e026a53c0aa16b632886628a5455bd2a4433b56",
             "size": 698331,
             "lfs": {
@@ -3625,18 +3144,6 @@
         }
     ],
     "gpt-oss:20b": [
-        {
-            "type": "file",
-            "oid": "be324efdbf2a899dbdd429b2ab4e490dc9d0d74a",
-            "size": 1658,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "f49670770486d5484656093310ca013cb257ed5f",
-            "size": 7115,
-            "path": "README.md"
-        },
         {
             "type": "file",
             "oid": "39e853e1bf90ae64a344e7bef4ef09a035e6c9f3",
@@ -3749,18 +3256,6 @@
     "gpt-oss-sg:20b": [
         {
             "type": "file",
-            "oid": "d555f9092e48d285ff736789d6cfeafc6a8369cd",
-            "size": 1662,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "78a1c7165346b7cfa36c7e5b2765dd11f96ecebe",
-            "size": 4030,
-            "path": "README.md"
-        },
-        {
-            "type": "file",
             "oid": "39e853e1bf90ae64a344e7bef4ef09a035e6c9f3",
             "size": 592363,
             "lfs": {
@@ -3871,18 +3366,6 @@
     "qwen2.5-it:3b": [
         {
             "type": "file",
-            "oid": "2ace5b8c3964855369daf18f16907dfdba648708",
-            "size": 1566,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "0b87f6362ee8ad33b2223afb47134264380f13fe",
-            "size": 4930,
-            "path": "README.md"
-        },
-        {
-            "type": "file",
             "oid": "07c2500e17ecc9747a7481a2486f223eb334e4d8",
             "size": 746,
             "path": "config.json"
@@ -3913,18 +3396,6 @@
         }
     ],
     "qwen2.5vl-it:3b": [
-        {
-            "type": "file",
-            "oid": "90c2dcec997fd71bd4fe83c2905c16781a62a54d",
-            "size": 1622,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "835c411a7e3ed671f9438cffebf54ff5541b8dce",
-            "size": 18328,
-            "path": "README.md"
-        },
         {
             "type": "file",
             "oid": "732bd68bc5427d1fb6c06a59b3bf2456b2155d24",
@@ -3975,24 +3446,6 @@
         }
     ],
     "hy-mt2-flash:1.8b": [
-        {
-            "type": "file",
-            "oid": "2ace5b8c3964855369daf18f16907dfdba648708",
-            "size": 1566,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "a2b47d85f160e051cfd4399c324fbfa2e355ae39",
-            "size": 14763,
-            "path": "README.md"
-        },
-        {
-            "type": "file",
-            "oid": "96f7d1c6c2bfa21b10c75e73e9215aa0c19ac55e",
-            "size": 13767,
-            "path": "README_CN.md"
-        },
         {
             "type": "file",
             "oid": "11f06996e3fdef5fc75a350af36dc9862e34cbde",
@@ -4055,9 +3508,8 @@
             "size": 2504,
             "sha256": "ac65d86061d3d0d704ee2511fd0eb8713ef19eb6eedba17c3080a4165d5b933b"
         }
-    ]
-,
-    "qwen3-core:0.6b":     [
+    ],
+    "qwen3-core:0.6b": [
         {
             "type": "file",
             "path": "Qwen3-0.6B-Q8_0.gguf",
@@ -4083,7 +3535,7 @@
             "sha256": "8a5ec72f5c96766168a4024f88d70841ae341900a0c84fd4fd23f8eeae16c6a7"
         }
     ],
-    "qwen3-core:1.7b":     [
+    "qwen3-core:1.7b": [
         {
             "type": "file",
             "path": "Qwen3-1.7B-Q4_G128.gguf",
@@ -4109,7 +3561,7 @@
             "sha256": "9c57c7059482fc07da4ba6fc344ea65f303a9467b4094ff1942a1243c4228699"
         }
     ],
-    "qwen3-core:4b":     [
+    "qwen3-core:4b": [
         {
             "type": "file",
             "path": "Qwen3-4B-Q4_G128.gguf",
@@ -4135,7 +3587,7 @@
             "sha256": "d273f02569c3b1ee10ca61bea97339d3ad790003c81b65bfd57dfd59f49ef420"
         }
     ],
-    "qwen3-core:8b":     [
+    "qwen3-core:8b": [
         {
             "type": "file",
             "path": "Qwen3-8B-Q4_G128.gguf",
@@ -4164,39 +3616,9 @@
     "nemotron3.5-bolt-dflash:e4b": [
         {
             "type": "file",
-            "oid": "d117c32cf5bcf5c5f22d62d5e5c8249486afd5d9",
-            "size": 1574,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "ec297ac5456384786644013ec196da33b916be97",
-            "size": 2619,
-            "path": "LICENSE.OpenMDW-1.1"
-        },
-        {
-            "type": "file",
-            "oid": "0c962bbc53cd5ecc1f7cf36cbb50af3efe1f0363",
-            "size": 325,
-            "path": "MANIFEST.sha256"
-        },
-        {
-            "type": "file",
-            "oid": "2ea5e5f6b3b44533daebb1be130dfb4f3c2bff73",
-            "size": 3729,
-            "path": "README.md"
-        },
-        {
-            "type": "file",
             "oid": "4021fcef0c1e178beccd273b96a154ace237870c",
             "size": 663,
             "path": "config.json"
-        },
-        {
-            "type": "file",
-            "oid": "19f27431df94a86e3d39d293878ab58970bc8876",
-            "size": 50,
-            "path": "configuration.json"
         },
         {
             "type": "file",
@@ -4214,39 +3636,9 @@
     "nemotron3.5-bolt-dflash-flash:e4b": [
         {
             "type": "file",
-            "oid": "d117c32cf5bcf5c5f22d62d5e5c8249486afd5d9",
-            "size": 1574,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "ec297ac5456384786644013ec196da33b916be97",
-            "size": 2619,
-            "path": "LICENSE.OpenMDW-1.1"
-        },
-        {
-            "type": "file",
-            "oid": "0c962bbc53cd5ecc1f7cf36cbb50af3efe1f0363",
-            "size": 325,
-            "path": "MANIFEST.sha256"
-        },
-        {
-            "type": "file",
-            "oid": "2ea5e5f6b3b44533daebb1be130dfb4f3c2bff73",
-            "size": 3729,
-            "path": "README.md"
-        },
-        {
-            "type": "file",
             "oid": "4021fcef0c1e178beccd273b96a154ace237870c",
             "size": 663,
             "path": "config.json"
-        },
-        {
-            "type": "file",
-            "oid": "19f27431df94a86e3d39d293878ab58970bc8876",
-            "size": 50,
-            "path": "configuration.json"
         },
         {
             "type": "file",
@@ -4264,30 +3656,6 @@
     "nemotron3.5-bolt:e4b": [
         {
             "type": "file",
-            "oid": "b0e8de60c7fda6fa44dcdf4182cf29703effe2ab",
-            "size": 1786,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "ec297ac5456384786644013ec196da33b916be97",
-            "size": 2619,
-            "path": "LICENSE.OpenMDW-1.1"
-        },
-        {
-            "type": "file",
-            "oid": "6a28e4de43daa54313e70a345751b62a3f81b7d0",
-            "size": 1310,
-            "path": "MANIFEST.sha256"
-        },
-        {
-            "type": "file",
-            "oid": "fec08b3b77b15869442e143f3597b5def6e9b31c",
-            "size": 61642,
-            "path": "README.md"
-        },
-        {
-            "type": "file",
             "oid": "16ebb04b8679f9440cc119967088bae0f16cf265",
             "size": 956326424,
             "lfs": {
@@ -4297,24 +3665,6 @@
             },
             "xetHash": "366e484bb9b24eedb0c577b8ea6c99c917bb15975d2bdb07f0a493bed470bfeb",
             "path": "audio_weight.q4nx"
-        },
-        {
-            "type": "file",
-            "oid": "9363fe5c01f6cd4ce23709896010462a16c07e81",
-            "size": 3254,
-            "path": "bias.md"
-        },
-        {
-            "type": "file",
-            "oid": "1b59e55e347ff6603b24bec5e80a58670a70d845",
-            "size": 444073,
-            "lfs": {
-                "oid": "244b8a0f465c13fbfa81c8046b0bd4471d2202c275ea950c4845374788852145",
-                "size": 444073,
-                "pointerSize": 131
-            },
-            "xetHash": "d288025e4d3c90df6f6302b84fab56e74346c1b8cc3522ef5a5ca10c6aee0481",
-            "path": "bolt-smart-and-fast.png"
         },
         {
             "type": "file",
@@ -4330,18 +3680,6 @@
         },
         {
             "type": "file",
-            "oid": "78ea0cbdc4a199b6bd4b63a2ca634a90d0860795",
-            "size": 53,
-            "path": "configuration.json"
-        },
-        {
-            "type": "file",
-            "oid": "d414423a76ee510683f75fb48b7fda7b3aef2a00",
-            "size": 3315,
-            "path": "explainability.md"
-        },
-        {
-            "type": "file",
             "oid": "ef59f829ee2b61091699348aea9dd091675960cc",
             "size": 7142621252,
             "lfs": {
@@ -4351,18 +3689,6 @@
             },
             "xetHash": "5914fea57790188028a64ddedf52b7cc426929d2468eda3449aaa9f3910bc91c",
             "path": "model.q4nx"
-        },
-        {
-            "type": "file",
-            "oid": "34ae94eed1aa623d152261ba4b9952d6cbec42f1",
-            "size": 1671,
-            "path": "privacy.md"
-        },
-        {
-            "type": "file",
-            "oid": "6e72aa753fc6e89f1e205a1fb2bffec8f61c7a8d",
-            "size": 2292,
-            "path": "safety.md"
         },
         {
             "type": "file",
@@ -4395,7 +3721,7 @@
             "path": "vision_weight.q4nx"
         }
     ],
-    "gemma4-it-core:e2b":     [
+    "gemma4-it-core:e2b": [
         {
             "type": "file",
             "path": "gemma-4-E2B-it-Q4_G32.gguf",
@@ -4427,7 +3753,7 @@
             "sha256": "0a2c8073c878ab1da004bee933a998606537bbb62016310352c7285c3f01c5b5"
         }
     ],
-    "gemma4-it-core:e4b":     [
+    "gemma4-it-core:e4b": [
         {
             "type": "file",
             "path": "gemma-4-E4B-it-Q4_G32.gguf",
@@ -4459,7 +3785,7 @@
             "sha256": "0a2c8073c878ab1da004bee933a998606537bbb62016310352c7285c3f01c5b5"
         }
     ],
-    "qwen3.5-core:9b":     [
+    "qwen3.5-core:9b": [
         {
             "type": "file",
             "path": "Qwen3.5-9B-Q4_G128.gguf",
@@ -4541,6 +3867,140 @@
             "path": "config.json",
             "size": 3161,
             "sha256": "ddc63e1c717afa86c865bb5e01313d89d72bb53b97ad4a8a03ba8510c0621670"
+        }
+    ],
+    "qwen3.5-oga-hipep:9b": [
+        {
+            "type": "file",
+            "oid": "7243f8a673a3142f24c003bff8681cf62745f0a5",
+            "size": 1730,
+            "path": ".gitattributes"
+        },
+        {
+            "type": "file",
+            "oid": "efadf490d2c71b403d73a91e0e4c874dd127d917",
+            "size": 2646,
+            "path": "README.md"
+        },
+        {
+            "type": "file",
+            "oid": "a585dec894e63da457d9440ec6aa7caa16d20860",
+            "size": 7756,
+            "path": "chat_template.jinja"
+        },
+        {
+            "type": "file",
+            "oid": "3e6a5d15f82c732c92b88e17acb44b27b4616777",
+            "size": 2809,
+            "path": "config.json"
+        },
+        {
+            "type": "file",
+            "oid": "66a861d3fc41fb6353aa51c64614424aa795e26c",
+            "size": 3018,
+            "lfs": {
+                "oid": "645c888c0943066cb87a039436ca4620ee719072494467daa4261297160ee417",
+                "size": 3018,
+                "pointerSize": 129
+            },
+            "xetHash": "57756fb8c0ba321da305120cd41b2a87cc2afd26b26cda245c325813fca2d4e0",
+            "path": "embedding.onnx"
+        },
+        {
+            "type": "file",
+            "oid": "e4299528a904d2f2f6ee6dc3e8e1a4e697238b4f",
+            "size": 2034237440,
+            "lfs": {
+                "oid": "a781bf4004f3b265d676800124628ddcda261ee90bc7c6d560f201f3eb31cbe2",
+                "size": 2034237440,
+                "pointerSize": 135
+            },
+            "xetHash": "fcdbf5e72ba4006c873a0cf1eee7c5fd5fe091dfd1e0156cc356b6ad1d65106e",
+            "path": "embedding.onnx.data"
+        },
+        {
+            "type": "file",
+            "oid": "7122246d009ccc48bc3c82c3c663dd1c200b2572",
+            "size": 3390,
+            "path": "genai_config.json"
+        },
+        {
+            "type": "file",
+            "oid": "5504263f1de4c38d2f3f2ab5c68aeaddcd66525d",
+            "size": 379,
+            "path": "model_config.json"
+        },
+        {
+            "type": "file",
+            "oid": "739c767335eb239bd5a3f1c1160581cd8b2e74d7",
+            "size": 1531,
+            "path": "processor_config.json"
+        },
+        {
+            "type": "file",
+            "oid": "c1c46e61f28afb1635dbc2798283e2209002f445",
+            "size": 661516,
+            "lfs": {
+                "oid": "723a8630cfbbced734c56c92ccacf3fd3e1332ea9a0cebe7765179c59fb810f0",
+                "size": 661516,
+                "pointerSize": 131
+            },
+            "xetHash": "60b2141c1149a440cb85cbfc6317a17b7700fc57f87008864281f1ef0b752b65",
+            "path": "text.onnx"
+        },
+        {
+            "type": "file",
+            "oid": "22ff512db755ef4a15c733c243434bd632bc55a8",
+            "size": 4533018624,
+            "lfs": {
+                "oid": "a7f8bc812ed3d41fd9b17eb356794c0fc170f612aed29b29f0d71d36c244e35a",
+                "size": 4533018624,
+                "pointerSize": 135
+            },
+            "xetHash": "54cdfc58063a45ac1ea227a6c09d0147ac77fca79d53e886d9e44f0b224f7656",
+            "path": "text.onnx.data"
+        },
+        {
+            "type": "file",
+            "oid": "711cf69902abd2d03ab2f07aba0a23c417efe6e1",
+            "size": 11071263,
+            "lfs": {
+                "oid": "6f57b7081304082fec953d5087f68107c261685f3d73f816233acffb088f8268",
+                "size": 11071263,
+                "pointerSize": 133
+            },
+            "xetHash": "4deacc0fb9e2faddf6f5309fead9791d5d87ffca69e9568fad47ab88c905f46f",
+            "path": "tokenizer.json"
+        },
+        {
+            "type": "file",
+            "oid": "2671539e685161539e6610343ec086189271b358",
+            "size": 1124,
+            "path": "tokenizer_config.json"
+        },
+        {
+            "type": "file",
+            "oid": "4a7b148eee6ba240e2ca7207c560fda2bb72f938",
+            "size": 289068,
+            "lfs": {
+                "oid": "8afa3c7189b17c49984a2903a05ba6a715d9e61e82d74878d0959db7f2b2699a",
+                "size": 289068,
+                "pointerSize": 131
+            },
+            "xetHash": "4111b5a734b846c9fca9c662c81bba58626ca0a4ab066acc188ebb839635ece2",
+            "path": "vision.onnx"
+        },
+        {
+            "type": "file",
+            "oid": "1c0c63cea572915d53fd42d208e521f92c2920cb",
+            "size": 912274400,
+            "lfs": {
+                "oid": "71c153bc528d15e0eaf45bb6adaf6d4e282054fbb556ff5e67160c17a91f867c",
+                "size": 912274400,
+                "pointerSize": 134
+            },
+            "xetHash": "1230308cb249e821ea7d9ff8562689767aae06277eb7f2e52b68682a68a5554e",
+            "path": "vision.onnx.data"
         }
     ],
     "d3:edge": [
@@ -5062,30 +4522,6 @@
         }
     ],
     "lfm3:1.7b": [
-        {
-            "type": "file",
-            "oid": "29e88dbaf959bce14eda515acf18ff7ad61261c7",
-            "size": 1617,
-            "path": ".gitattributes"
-        },
-        {
-            "type": "file",
-            "oid": "25e731c697c4fe4c52ee654cedf7106a827748d2",
-            "size": 10574,
-            "path": "LICENSE"
-        },
-        {
-            "type": "file",
-            "oid": "d918c80f70ffa5acda3a177c8906494249d0dfce",
-            "size": 560,
-            "path": "MANIFEST.sha256"
-        },
-        {
-            "type": "file",
-            "oid": "bf1416d2b688cad2c2ab9b81723f59cca44e2b1e",
-            "size": 2575,
-            "path": "README.md"
-        },
         {
             "type": "file",
             "oid": "d0747b8b5fc99eaecfe02a04eefcff75eb181334",

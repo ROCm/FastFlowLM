@@ -327,7 +327,7 @@ axes prune:
 | the entry is dropped when | said by |
 |---|---|
 | the host is not silicon the entry names | `"supported_platforms"` on the entry |
-| the build did not link the kernel flow the entry needs | the **family name**: a family ending in `-core` is corelib's, everything else is FastFlowLM's |
+| the build did not link the kernel flow the entry needs | the **family name**: a family ending in `-core` is corelib's, one ending in `-oga-hipep` is an OGA package for the GPU (`FLM_ENABLE_OGA_HIPEP`), everything else is FastFlowLM's |
 
 So the corelib flavour of a model is **its own top-level family**, named
 `<family>-core`, sitting beside the stock one rather than patching it:
@@ -360,7 +360,8 @@ Points that are easy to get wrong:
   family name. Omitting it is legal — it means *every* generation, which is what
   a catalog written before the key meant — but a shipped entry should say what
   it was built for. Every FastFlowLM entry is `["aie2p"]`; every `-core` entry is
-  `["dev04"]`.
+  `["dev04"]`. An `-oga-hipep` entry runs on the GPU, so it names no
+  generation and omits the key.
 - Separate families mean **separate tags**, so no `model_info_key` redirect is
   needed: `model_info.json` keys the corelib records under `<family>-core:<size>`
   directly, which is also the tag a user types.
