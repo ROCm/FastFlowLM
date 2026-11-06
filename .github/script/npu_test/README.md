@@ -45,7 +45,9 @@ Which models each suite runs at each tier is in `plan.py`, in one place.
 The tiers pick NPU models only. A model whose `backend` in `flm list --json` runs
 on the GPU (`oga-hipep`, in the Windows XRT package) is tested by a run with
 `--backend oga-hipep`, which tests all of them whatever the tier; that is the
-Test Windows HIPEP job.
+Test Windows HIPEP job, which runs the `chat` and `api` suites. Such a run gives
+`api` the backend's models in place of its NPU list, so the OpenAI contract
+tests, tool calls included, run on the GPU too.
 
 On a pull request, `.github/script/ci/changes.py` also picks the suites: only
 those the changed files can affect (an ASR-only change runs `asr`, a d3-only
