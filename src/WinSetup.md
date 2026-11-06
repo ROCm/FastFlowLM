@@ -20,9 +20,21 @@ cd C:\dev\FastFlowLM
 powershell -ExecutionPolicy Bypass -File src\WinSetup.ps1 -InstallPrereqs
 ```
 
-`-InstallPrereqs` installs any missing tools with winget. Some installers ask
-for elevation, Visual Studio Build Tools among them. If you leave the switch
-off, the script lists what is missing and stops.
+`-InstallPrereqs` installs any missing tools with winget. If you leave the
+switch off, the script lists what is missing and stops.
+
+Visual Studio Build Tools installs machine-wide, and so does adding the C++
+workload to an existing Visual Studio. Both show a UAC prompt that an
+administrator has to approve. Rust and Ninja install per user. The script
+uses the CMake and Ninja that come with Visual Studio's C++ workload (its
+recommended "C++ CMake tools" component, which the script's install
+includes), and it unpacks Boost with the `tar.exe` that ships with Windows.
+CMake and 7-Zip then need no separate install. Only if Visual Studio has no
+CMake does the script install one with winget, which is also machine-wide.
+
+If a UAC prompt is declined or times out, the script stops and lists what is
+still missing; rerun it to try again. Without administrator rights, have
+Visual Studio Build Tools with the C++ workload installed first.
 
 When the script finishes, `src\out` contains a runnable build:
 
@@ -35,9 +47,10 @@ cd src\out
 You can rerun the script at any time. Steps whose output already exists are
 skipped, so a rerun just rebuilds.
 
-To keep a log, use `Start-Transcript build.log` before running the script. Do
-not pipe its output (`*>&1 | Tee-Object`). In Windows PowerShell 5.1 a
-redirected stderr line from git can abort the dependency step.
+To keep a log, pipe the script's output: `*>&1 | Tee-Object build.log`. Windows
+PowerShell 5.1 then shows tool messages written to stderr (rustup info, CMake
+warnings) as red `NativeCommandError` records. They are harmless: the script
+judges each tool by its exit code.
 
 | Option | Effect |
 |---|---|
@@ -50,6 +63,10 @@ redirected stderr line from git can abort the dependency step.
 | `-SkipBuild` | Set up tools and dependencies only. |
 | `-NoStage` | Do not copy runtime files into `src\out`. |
 
+All variants stage into the same `src\out`, so it holds the variant built
+last. Staging removes the DLLs there first, so none are left over from
+another variant.
+
 ## What gets set up
 
 ### 1. Tools
@@ -57,12 +74,15 @@ redirected stderr line from git can abort the dependency step.
 | Tool | Why | winget ID |
 |---|---|---|
 | Git | clone and submodules | `Git.Git` |
-| Visual Studio 2026 or 2022 with **Desktop development with C++** (the Build Tools edition is enough) | MSVC, Windows SDK, `lib.exe`, `dumpbin`, and the bundled Ninja | `Microsoft.VisualStudio.BuildTools` (2026) |
-| CMake 3.22 or newer (4.2 or newer with VS 2026) | build system | `Kitware.CMake` |
+| Visual Studio 2026 or 2022 with **Desktop development with C++** (the Build Tools edition is enough) | MSVC, Windows SDK, `lib.exe`, `dumpbin`, and the bundled CMake and Ninja | `Microsoft.VisualStudio.BuildTools` (2026) |
+| CMake 3.24 or newer (4.2 or newer with VS 2026). The copy bundled with VS works. | build system | `Kitware.CMake` |
 | Rust through rustup, toolchain `stable-x86_64-pc-windows-msvc` | tokenizers-cpp builds a Rust crate | `Rustlang.Rustup` |
-| 7-Zip | unpacks the Boost archive (only needed until `C:\dev\boost_1_88_0` is built) | `7zip.7zip` |
-| Ninja | generator for the `windows-ninja` preset. The copy bundled with VS works. | `Ninja-build.Ninja` |
-| NASM (optional) | SIMD code in libjpeg-turbo | `NASM.NASM` |
+| Ninja. The copy bundled with VS works. | generator for the `windows-ninja` preset | `Ninja-build.Ninja` |
+| 7-Zip (optional) | unpacks the Boost archive; without it, the `tar.exe` that ships with Windows is used | `7zip.7zip` |
+
+CI has no NASM, so its libjpeg-turbo builds without SIMD code. If `nasm` is on
+`PATH`, libjpeg-turbo finds it and builds with SIMD, so your build differs
+from CI's in that respect.
 
 If Visual Studio is already installed without the C++ workload, add
 **Desktop development with C++** to it in the Visual Studio Installer. With
@@ -83,11 +103,13 @@ characters).
 ### 2. Submodules
 
 ```powershell
-git submodule update --init --recursive
+git submodule update --init --recursive --depth 1
 ```
 
 This pulls `third_party/tokenizers-cpp` (with msgpack and sentencepiece) and
-`third_party/xgrammar`.
+`third_party/xgrammar`. `--depth 1` fetches only the pinned commits, as CI
+does. The full msgpack-c history is about 95 MB, and GitHub often resets that
+transfer partway through.
 
 ### 3. Native dependencies under `C:\dev`
 
@@ -104,8 +126,10 @@ curl is not on this list. `third_party/curl` holds the headers that match the
 shipped `src\lib\libcurl.dll`, and CMake makes `libcurl.lib` from
 `third_party/curl/libcurl.def` when it configures, so you do not need vcpkg.
 
-To set up the rest, run the script CI uses. It needs `7z` on `PATH` and the
-Visual Studio C++ tools:
+To set up the rest, run the script CI uses. It needs `cmake` on `PATH` and the
+Visual Studio C++ tools, so run it from the x64 developer shell in step 4. It
+unpacks Boost with `7z` when that is on `PATH`, and with Windows' `tar.exe`
+otherwise:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .github\script\ci\setup_windows_deps.ps1
@@ -130,7 +154,7 @@ and an x86 build fails to link against the x64 libraries. Use the
 PowerShell:
 
 ```powershell
-$vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+$vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
 Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
 Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
 ```
@@ -146,6 +170,20 @@ Then build:
 cd src
 cmake --preset windows-ninja -DFLM_ENABLE_OGA_HIPEP=ON
 cmake --build build --parallel
+```
+
+The other variants use their own build directories, with the same options
+as CI:
+
+```powershell
+# HRX: fetch the pinned release first
+powershell -ExecutionPolicy Bypass -File ..\hrx-integration\fetch-hrx-release.ps1   # prints HRX_CMAKE_PREFIX=<prefix>
+cmake --preset windows-ninja -B build-hrx -DFLM_USE_HRX=ON -DFLM_ENABLE_OGA_HIPEP=OFF "-DCMAKE_PREFIX_PATH=<prefix>"
+cmake --build build-hrx --parallel
+
+# Source: the Gemma 4 engine built from source, without hip-ep
+cmake --preset windows-ninja -B build-models-from-source -DFLM_BUILD_GEMMA4E=ON -DFLM_ENABLE_OGA_HIPEP=OFF
+cmake --build build-models-from-source --parallel 2
 ```
 
 If you prefer the Visual Studio generator, no developer shell is needed:
@@ -183,8 +221,9 @@ New-Item -ItemType Directory -Force out\xclbins | Out-Null
 Copy-Item xclbins\* out\xclbins -Recurse -Force   # not "xclbins out": that nests on a rerun
 ```
 
-For HRX, copy `lib\*.dll`, then `lib\hrx\*.dll`, then the `hrx.dll` from
-`hrx-integration\.hrx-release`.
+For HRX, copy `lib\*.dll`, then `lib\hrx\*.dll`, then the `hrx.dll` that
+`fetch-hrx-release.ps1` unpacked somewhere under `hrx-integration\.hrx-release`
+(`Get-ChildItem ..\hrx-integration\.hrx-release -Recurse -Filter hrx.dll`).
 
 For the Source variant, also copy `build-models-from-source\engines\*.dll`
 over the prebuilt engine DLLs.

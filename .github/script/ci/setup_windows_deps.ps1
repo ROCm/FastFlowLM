@@ -18,8 +18,9 @@
     libcurl.dll are committed under third_party/curl.
 
     Each part is skipped when its output already exists, so a restored cache
-    only fills in what is missing. Needs git, 7z, cmake, and Visual Studio
-    with the C++ tools.
+    only fills in what is missing. Needs git, cmake, and Visual Studio with
+    the C++ tools. Boost is unpacked with 7z when it is on PATH, otherwise
+    with the tar.exe that ships with Windows.
 
 .PARAMETER Root
     Directory to lay the dependencies out under. CMake expects C:\dev.
@@ -42,10 +43,16 @@ $BoostSha256 = "6956c4283fa07db440b0cefea08a7db9a1b909b250e4f2403cd0ec52a1a1b03e
 $XrtRepo = "https://github.com/Xilinx/XRT.git"
 $XrtCommit = "77c7088d804602a53c3eb489b9cb37b709bcd751"
 
+# Native commands run with ErrorActionPreference=Continue: when the output
+# is redirected, Windows PowerShell 5.1 turns every stderr line (git
+# progress, for one) into an error record, and under Stop the first one
+# would abort the script. Success is judged by the exit code instead.
 function Invoke-Native {
-    param([string]$What, [scriptblock]$Command)
-    & $Command
-    if ($LASTEXITCODE -ne 0) {
+    param([string]$What, [scriptblock]$Command, [switch]$NoThrow)
+    $old = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try { & $Command } finally { $ErrorActionPreference = $old }
+    if ($LASTEXITCODE -ne 0 -and -not $NoThrow) {
         throw "$What failed with exit code $LASTEXITCODE"
     }
 }
@@ -75,7 +82,20 @@ if (-not (Test-Path $BoostLib)) {
         }
         $extract = Join-Path $Scratch "boost"
         if (Test-Path $extract) { Remove-Item $extract -Recurse -Force }
-        Invoke-Native "7z" { 7z x $archive "-o$extract" -y -bso0 -bsp0 }
+        if (Get-Command 7z -ErrorAction SilentlyContinue) {
+            Invoke-Native "7z" { 7z x $archive "-o$extract" -y -bso0 -bsp0 }
+        } else {
+            # No 7-Zip (it needs an administrator to install): the bsdtar
+            # that ships with Windows reads .7z too. It skips one Boost.Wave
+            # test file with a non-ASCII name and then exits 1, so judge the
+            # result by the headers instead of the exit code.
+            Write-Host "7z not found; unpacking with tar.exe"
+            New-Item -ItemType Directory -Force $extract | Out-Null
+            Invoke-Native "tar" { & "$env:SystemRoot\System32\tar.exe" -xf $archive -C $extract } -NoThrow
+            if (-not (Test-Path (Join-Path $extract "boost-1.88.0\boost\program_options.hpp"))) {
+                throw "tar.exe could not unpack $archive; install 7-Zip and rerun"
+            }
+        }
         if (Test-Path $BoostDir) { Remove-Item $BoostDir -Recurse -Force }
         Move-Item (Join-Path $extract "boost-1.88.0") $BoostDir
     }
@@ -105,7 +125,7 @@ if (-not (Test-Path (Join-Path $XrtInclude "xrt\detail\version.h"))) {
     New-Item -ItemType Directory -Force $XrtDir | Out-Null
     Invoke-Native "git init" { git -C $XrtDir init --quiet }
     Invoke-Native "git sparse-checkout" { git -C $XrtDir sparse-checkout set src/runtime_src/core/include }
-    Invoke-Native "git fetch XRT" { git -C $XrtDir fetch --depth 1 --filter=blob:none $XrtRepo $XrtCommit }
+    Invoke-Native "git fetch XRT" { git -C $XrtDir fetch --quiet --depth 1 --filter=blob:none $XrtRepo $XrtCommit }
     Invoke-Native "git checkout XRT" { git -C $XrtDir -c advice.detachedHead=false checkout --quiet FETCH_HEAD }
     $head = git -C $XrtDir rev-parse HEAD
     if ($head -ne $XrtCommit) {

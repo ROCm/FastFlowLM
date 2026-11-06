@@ -5,8 +5,10 @@
 .DESCRIPTION
     Runs the same steps as the Windows CI build (.github/actions/win-build):
 
-      1. Checks the tools (Git, CMake, Visual Studio C++ tools, Rust, 7-Zip,
-         Ninja). With -InstallPrereqs, installs any that are missing via winget.
+      1. Checks the tools (Git, Visual Studio C++ tools, CMake, Ninja, Rust).
+         With -InstallPrereqs, installs any that are missing via winget. The
+         CMake and Ninja bundled with Visual Studio are used when there is no
+         other copy on PATH.
       2. Checks out the git submodules (tokenizers-cpp, xgrammar).
       3. Runs .github\script\ci\setup_windows_deps.ps1, which lays out
          C:\dev: Boost 1.88.0 (program_options built), the pinned XRT
@@ -27,12 +29,14 @@
         powershell -ExecutionPolicy Bypass -File src\WinSetup.ps1 -InstallPrereqs
 
 .PARAMETER Variant
-    XRT (default), HRX (the HRX runtime), or Source (the default build plus
-    the Gemma 4 engine built from source instead of the prebuilt DLL).
+    XRT (default), HRX (the HRX runtime), or Source (like the CI "models
+    from source" package: XRT without the hip-ep backend, with the Gemma 4
+    engine built from source instead of the prebuilt DLL).
 
 .PARAMETER InstallPrereqs
-    Install missing tools with winget. Visual Studio Build Tools and some
-    other installers prompt for elevation.
+    Install missing tools with winget. Visual Studio Build Tools (and CMake,
+    if Visual Studio does not bundle it) install machine-wide and show a UAC
+    prompt; Rust and Ninja install per user.
 
 .PARAMETER BuildDir
     CMake build directory under src. Defaults to build (XRT), build-hrx (HRX)
@@ -74,7 +78,6 @@ $ProgressPreference = 'SilentlyContinue'
 $DevRoot = 'C:\dev'               # hardcoded in src/CMakeLists.txt
 $SrcDir = $PSScriptRoot
 $RepoRoot = (Resolve-Path (Join-Path $SrcDir '..')).Path
-$NasmDir = Join-Path $env:ProgramFiles 'NASM'
 
 function Write-Step([string]$Message) {
     Write-Host ''
@@ -104,15 +107,32 @@ function Test-Native([scriptblock]$Command) {
     return ($LASTEXITCODE -eq 0)
 }
 
-# Picks up PATH changes made by installers that ran in this session.
+# Picks up PATH changes made by installers that ran in this session. The
+# registry entries are appended to the session PATH rather than replacing
+# it, so whatever only the session had (a developer shell's cl, a portable
+# git, a hand-added tool) stays reachable.
 function Update-SessionPath {
-    $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
-    $user = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $env:Path = "$machine;$user"
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $parts = @()
+    $all = @($env:Path, [Environment]::GetEnvironmentVariable('Path', 'Machine'),
+        [Environment]::GetEnvironmentVariable('Path', 'User')) -join ';'
+    foreach ($p in ($all -split ';')) {
+        if ($p -and $seen.Add($p.TrimEnd('\'))) { $parts += $p }
+    }
+    $env:Path = $parts -join ';'
 }
 
-function Add-ToPath([string]$Dir) {
-    if ($Dir -and (Test-Path $Dir) -and (($env:Path -split ';') -notcontains $Dir)) {
+# Prepends $Dir to PATH unless it is already there. With -Front it is moved
+# to the front even when it is further down, so its programs win over
+# same-named ones in earlier directories.
+function Add-ToPath([string]$Dir, [switch]$Front) {
+    if (-not $Dir -or -not (Test-Path $Dir)) { return }
+    $key = $Dir.TrimEnd('\')
+    $parts = @($env:Path -split ';' | Where-Object { $_ })
+    $present = @($parts | Where-Object { $_.TrimEnd('\') -eq $key }).Count -gt 0
+    if ($Front) {
+        $env:Path = (@($Dir) + @($parts | Where-Object { $_.TrimEnd('\') -ne $key })) -join ';'
+    } elseif (-not $present) {
         $env:Path = "$Dir;$env:Path"
     }
 }
@@ -157,6 +177,9 @@ function Find-Cargo {
     return $null
 }
 
+# 7-Zip is optional: setup_windows_deps.ps1 unpacks the Boost archive with
+# it when it is on PATH and with the tar.exe that ships with Windows
+# otherwise.
 function Find-7z {
     $cmd = Get-Command 7z -ErrorAction SilentlyContinue
     if ($cmd) { return (Split-Path $cmd.Source) }
@@ -166,15 +189,33 @@ function Find-7z {
     return $null
 }
 
-function Test-Nasm {
-    if (Get-Command nasm -ErrorAction SilentlyContinue) { return $true }
-    return (Test-Path (Join-Path $NasmDir 'nasm.exe'))
+# $null for a cmake that does not run (a stale pip launcher, a broken
+# install), so Find-CMake moves on to the next candidate.
+function Get-CMakeVersion([string]$Exe) {
+    $old = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { $line = (& $Exe --version 2>$null | Select-Object -First 1) }
+    catch { $line = $null }
+    finally { $ErrorActionPreference = $old }
+    if ($line -match '(\d+\.\d+(\.\d+)?)') { return [version]$Matches[1] }
+    return $null
 }
 
-function Get-CMakeVersion {
-    if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) { return $null }
-    $line = (& cmake --version | Select-Object -First 1)
-    if ($line -match '(\d+\.\d+(\.\d+)?)') { return [version]$Matches[1] }
+# The cmake on PATH if it is new enough, else the one bundled with Visual
+# Studio's C++ workload (the "C++ CMake tools" component, which
+# --includeRecommended adds). Returns @{ Dir; Version } or $null.
+function Find-CMake([object]$Vs, [version]$Min) {
+    $candidates = @()
+    $cmd = Get-Command cmake -ErrorAction SilentlyContinue
+    if ($cmd) { $candidates += $cmd.Source }
+    if ($Vs) {
+        $candidates += (Join-Path $Vs.installationPath 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe')
+    }
+    foreach ($exe in $candidates) {
+        if (-not (Test-Path $exe)) { continue }
+        $v = Get-CMakeVersion $exe
+        if ($v -and $v -ge $Min) { return @{ Dir = (Split-Path $exe); Version = $v } }
+    }
     return $null
 }
 
@@ -227,12 +268,18 @@ function Install-WithWinget([string]$Id, [string[]]$Extra = @()) {
     Invoke-Native "winget install $Id" { & winget @wingetArgs } -NoThrow
     # winget exits non-zero when the package is already installed with no
     # upgrade available; the tool check after this call is what decides.
+    # Keep the code for the error message: an MSI that returns 1602
+    # (winget 0x8A15010C) means its UAC prompt was declined or timed out.
+    if ($LASTEXITCODE -ne 0) {
+        $script:WingetFailures += ('{0}: winget exit code 0x{1:X8}' -f $Id, $LASTEXITCODE)
+    }
     Update-SessionPath
 }
+$WingetFailures = @()
 
 # --- 1. Tools --------------------------------------------------------------
-# All installs happen in this section. Install-WithWinget resets PATH from
-# the registry, so PATH is only extended after it.
+# All installs happen in this section. Install-WithWinget merges the
+# registry PATH into the session, so tool directories are added after it.
 Write-Step 'Checking tools'
 
 if (-not [Environment]::Is64BitProcess) {
@@ -286,20 +333,23 @@ if (-not $vs) {
     }
 }
 
-# Boost is the one dependency setup_windows_deps.ps1 builds: it unpacks the
-# archive with 7-Zip and configures with CMake's default generator, the
-# newest Visual Studio, which for VS 2026 needs CMake 4.2.
+# The codec ExternalProjects use DOWNLOAD_EXTRACT_TIMESTAMP (CMake 3.24).
+# Boost is the one dependency setup_windows_deps.ps1 builds, with CMake's
+# default generator, the newest Visual Studio; for VS 2026 that needs 4.2.
+# Visual Studio's C++ workload bundles a CMake new enough for both (4.x in
+# VS 2026), so the separate CMake install, a machine-wide MSI with a UAC
+# prompt, is only a fallback.
 $needBoost = -not (Test-Path (Join-Path $DevRoot 'boost_1_88_0\stage\lib\libboost_program_options-vc143-mt-x64-1_88.lib'))
-$minCMake = [version]'3.22'
+$minCMake = [version]'3.24'
 if ($needBoost -and $vs -and ([version]$vs.installationVersion).Major -ge 18) { $minCMake = [version]'4.2' }
-$cmakeVersion = Get-CMakeVersion
-if (-not $cmakeVersion -or $cmakeVersion -lt $minCMake) {
+$cmake = Find-CMake $vs $minCMake
+if (-not $cmake) {
     if ($InstallPrereqs) {
         Install-WithWinget 'Kitware.CMake'
-        $cmakeVersion = Get-CMakeVersion
+        $cmake = Find-CMake $vs $minCMake
     }
-    if (-not $cmakeVersion -or $cmakeVersion -lt $minCMake) {
-        $missing += "CMake $minCMake or newer on PATH (winget install Kitware.CMake)"
+    if (-not $cmake) {
+        $missing += "CMake $minCMake or newer (winget install Kitware.CMake)"
     }
 }
 
@@ -319,25 +369,24 @@ if (-not $cargoDir) {
 }
 
 $sevenZipDir = Find-7z
-if (-not $sevenZipDir -and $needBoost) {
-    if ($InstallPrereqs) {
-        Install-WithWinget '7zip.7zip'
-        $sevenZipDir = Find-7z
-    }
-    if (-not $sevenZipDir) { $missing += '7-Zip (winget install 7zip.7zip)' }
-}
-
-# Optional: without NASM, libjpeg-turbo builds without its SIMD code.
-if (-not (Test-Nasm) -and $InstallPrereqs) { Install-WithWinget 'NASM.NASM' }
 
 if ($missing.Count -gt 0) {
     $list = ($missing | ForEach-Object { "  - $_" }) -join "`n"
-    throw "Missing tools:`n$list`nInstall them, or rerun with -InstallPrereqs."
+    if (-not $InstallPrereqs) {
+        throw "Missing tools:`n$list`nInstall them, or rerun with -InstallPrereqs."
+    }
+    $why = ''
+    if ($WingetFailures.Count -gt 0) {
+        $why = "`nwinget reported:`n" + (($WingetFailures | ForEach-Object { "  - $_" }) -join "`n") +
+            "`nAn MSI exit code of 1602 (winget 0x8A15010C) means the UAC prompt was declined or timed out."
+    }
+    throw "Still missing after the winget installs:`n$list$why`nInstall them by hand, or rerun and accept the UAC prompts."
 }
 
 Add-ToPath $cargoDir
+# First on PATH: an older cmake earlier on PATH must not win over the chosen one.
+Add-ToPath $cmake.Dir -Front
 Add-ToPath $sevenZipDir
-Add-ToPath $NasmDir
 
 # tokenizers-cpp runs cargo for the MSVC target; a rustup without a default
 # toolchain has a cargo.exe that cannot build anything.
@@ -351,22 +400,30 @@ if (Test-Path $rustup) {
 }
 
 Write-Host "git:    $(git --version)"
-Write-Host "cmake:  $cmakeVersion"
+Write-Host "cmake:  $($cmake.Version) ($($cmake.Dir))"
 Write-Host "VS:     $($vs.displayName) $($vs.installationVersion)"
 Write-Host "        $($vs.installationPath)"
 Write-Host "cargo:  $(& (Join-Path $cargoDir 'cargo.exe') --version)"
-if ($sevenZipDir) { Write-Host "7-Zip:  $sevenZipDir" }
-if (Test-Nasm) {
-    Write-Host 'NASM:   found'
+if ($sevenZipDir) {
+    Write-Host "7-Zip:  $sevenZipDir"
 } else {
-    Write-Host 'NASM:   not found (optional; libjpeg-turbo then builds without SIMD)'
+    Write-Host '7-Zip:  not found; Boost is unpacked with the tar.exe that ships with Windows'
+}
+# CI has no NASM, so its libjpeg-turbo builds without SIMD. A NASM on PATH
+# gets used, which makes this build differ from CI's.
+if (Get-Command nasm -ErrorAction SilentlyContinue) {
+    Write-Host 'NASM:   on PATH; libjpeg-turbo builds with SIMD (CI builds without)'
 }
 
 # --- 2. Submodules ---------------------------------------------------------
+# Only the pinned commits (--depth 1, as in CI): the full msgpack-c history
+# is ~95 MB, and GitHub often resets that transfer partway through.
 Write-Step 'Checking out submodules'
 $ok = $false
 for ($i = 1; $i -le 3 -and -not $ok; $i++) {
-    Invoke-Native 'git submodule update' { git -C $RepoRoot submodule update --init --recursive --jobs 4 } -NoThrow
+    Invoke-Native 'git submodule update' {
+        git -C $RepoRoot submodule update --init --recursive --depth 1 --jobs 4
+    } -NoThrow
     if ($LASTEXITCODE -eq 0) {
         $ok = $true
     } else {
@@ -393,11 +450,11 @@ Write-Step "Entering the $($vs.displayName) developer shell"
 # Everything links against x64 libraries, so the shell must target x64. The
 # Start Menu developer shells default to x86; refuse those rather than stack
 # a second environment on top.
-if ($env:VSCMD_ARG_TGT_ARCH) {
-    if ($env:VSCMD_ARG_TGT_ARCH -ne 'x64') {
-        throw ("This developer shell targets $env:VSCMD_ARG_TGT_ARCH. Run the script from a " +
-            'regular PowerShell window (it sets up an x64 environment itself) or an x64 one.')
-    }
+if ($env:VSCMD_ARG_TGT_ARCH -and $env:VSCMD_ARG_TGT_ARCH -ne 'x64') {
+    throw ("This developer shell targets $env:VSCMD_ARG_TGT_ARCH. Run the script from a " +
+        'regular PowerShell window (it sets up an x64 environment itself) or an x64 one.')
+}
+if ($env:VSCMD_ARG_TGT_ARCH -and (Get-Command cl -ErrorAction SilentlyContinue)) {
     Write-Host 'Already in an x64 developer shell'
 } else {
     Import-Module (Join-Path $vs.installationPath 'Common7\Tools\Microsoft.VisualStudio.DevShell.dll')
@@ -405,10 +462,10 @@ if ($env:VSCMD_ARG_TGT_ARCH) {
         -DevCmdArguments '-arch=x64 -host_arch=x64' | Out-Null
 }
 Repair-WindowsSdkEnv
-# The developer shell rewrites PATH; keep cargo and NASM reachable, and fall
-# back to the Ninja that Visual Studio bundles.
+# The developer shell rewrites PATH; keep cargo and the chosen cmake
+# reachable, and fall back to the Ninja that Visual Studio bundles.
 Add-ToPath $cargoDir
-Add-ToPath $NasmDir
+Add-ToPath $cmake.Dir -Front
 if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
     Add-ToPath (Get-VsNinjaDir $vs)
 }
@@ -487,6 +544,9 @@ try {
 if (-not $NoStage) {
     Write-Step "Staging runtime files in $outPath"
     New-Item -ItemType Directory -Force $outPath | Out-Null
+    # Every variant stages into the same src\out. Start from no DLLs so none
+    # are left from another variant (e.g. hrx.dll after an HRX build).
+    Remove-Item (Join-Path $outPath '*.dll') -Force -ErrorAction SilentlyContinue
     Copy-Item (Join-Path $buildPath 'flm.exe') $outPath -Force
     $lib = Join-Path $SrcDir 'lib'
     if ($Variant -eq 'HRX') {
