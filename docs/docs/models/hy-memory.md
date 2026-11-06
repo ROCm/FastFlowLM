@@ -14,7 +14,7 @@ parent: Models
 - **Quantization:** Q4_K (experts and projections), Q8_0 (lm_head)
 - **Max Context Length:** 16k tokens
 - **Default Context Length:** 16k tokens
-- **Host memory:** about 19 GB of mapped weights plus a few GB of working memory; 32 GB or more of system RAM is recommended.
+- **Host memory:** about 19 GB for the weights (pinned in NPU-visible memory, not reclaimable) plus 1–2 GB of working memory, and up to about 4 GB more for the prefix cache; 32 GB or more of system RAM is recommended.
 
 ▶️ Run with FastFlowLM in PowerShell:
 

@@ -7,6 +7,35 @@
 #include "AutoModel/modeling_hy_memory.hpp"
 #include "models/hy_mem/flm/aie2p/hy_mem_npu.hpp"
 
+#include <chrono>
+#include <cstdlib>
+#if defined(__GLIBC__)
+#include <malloc.h>
+#endif
+
+namespace {
+
+/// Hand the heap's free memory back to the OS once a request is done.
+///
+/// A prefill allocates and frees many MB-sized host buffers (expert gather/scatter blocks,
+/// router and GLU scratch). glibc keeps each thread's freed chunks in that thread's arena
+/// and only gives back the top of an arena, so a server that runs requests on several
+/// threads ends up holding about 5 GB of free memory in ~10 arenas after a few long
+/// prompts (measured: 25.1 GB RSS, of which only 0.75 GB in use; malloc_trim(0) -> 20.4 GB).
+/// Trimming after the request keeps RSS at what is live. FLM_HEAP_TRIM_LOG=1 prints the time it takes.
+void release_idle_heap() {
+#if defined(__GLIBC__)
+    const auto t0 = std::chrono::steady_clock::now();
+    malloc_trim(0);
+    if (std::getenv("FLM_HEAP_TRIM_LOG")) {
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        header_print("FLM", "heap trim took " << ms << " ms");
+    }
+#endif
+}
+
+}  // namespace
+
 /************              Hy-Memory family            **************/
 HyMemory::HyMemory(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "HyMemory") {}
 
@@ -117,7 +146,9 @@ bool HyMemory::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, st
 }
 
 std::string HyMemory::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
-    return this->_shared_generate(meta_info, length_limit, os, is_cancelled);
+    std::string reply = this->_shared_generate(meta_info, length_limit, os, is_cancelled);
+    release_idle_heap();
+    return reply;
 }
 
 std::string HyMemory::generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os) {
