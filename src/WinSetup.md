@@ -96,24 +96,18 @@ fixed:
 
 | Path | Contents |
 |---|---|
-| `C:\dev\vcpkg\installed\x64-windows` | curl headers and `libcurl.lib`, from a vcpkg clone with `vcpkg install curl:x64-windows` |
 | `C:\dev\boost_1_88_0` | Boost 1.88.0 headers, plus `stage\lib\libboost_program_options-vc143-mt-x64-1_88.lib` |
 | `C:\dev\XRT\src\runtime_src\core\include` | XRT headers at the pinned commit, plus `xrt\detail\version.h` |
 | `C:\dev\xrtNPUfromDLL\xrt_coreutil.lib` | import library for the NPU driver's `xrt_coreutil.dll` |
 
-Set up vcpkg and curl:
+curl is not on this list. `third_party/curl` holds the headers that match the
+shipped `src\lib\libcurl.dll`, and CMake makes `libcurl.lib` from
+`third_party/curl/libcurl.def` when it configures, so you do not need vcpkg.
+
+To set up the rest, run the script CI uses. It needs `7z` on `PATH` and the
+Visual Studio C++ tools:
 
 ```powershell
-git clone https://github.com/microsoft/vcpkg.git C:\dev\vcpkg
-C:\dev\vcpkg\bootstrap-vcpkg.bat -disableMetrics
-C:\dev\vcpkg\vcpkg.exe install curl:x64-windows
-```
-
-Then run the script CI uses to set up the rest. It needs `7z` on `PATH` and
-the Visual Studio C++ tools:
-
-```powershell
-$env:VCPKG_INSTALLATION_ROOT = 'C:\dev\vcpkg'
 powershell -ExecutionPolicy Bypass -File .github\script\ci\setup_windows_deps.ps1
 ```
 
@@ -210,6 +204,9 @@ installed. `flm.exe validate` checks the driver.
     `-DCMAKE_TOOLCHAIN_FILE=<vcpkg>\scripts\buildsystems\vcpkg.cmake`.
   - The XRT headers and `xrt_coreutil.lib` still come from `XRT_INCLUDE_DIR`
     and `XRT_LIB_DIR`, which default to the `C:\dev` paths above.
+  - Packages still ship `src\lib\libcurl.dll`. CMake warns when vcpkg's curl
+    is a different version, because a newer curl function would fail to load
+    against the shipped DLL.
   - vcpkg's `x64-windows` Boost is a DLL. Copy
     `build\boost_program_options-*.dll` into `src\out` along with the files
     in step 5.
@@ -218,6 +215,8 @@ installed. `flm.exe validate` checks the driver.
     practice that is a conda env's `Library` dir, set up with
     `conda install -c conda-forge boost libcurl`.
   - The env's `bin` must be on `PATH` when `flm.exe` runs.
+  - Packages still ship `src\lib\libcurl.dll`. CMake warns when the prefix's
+    curl is a different version.
   - The XRT headers and `xrt_coreutil.lib` still come from the `C:\dev` paths
     (`XRT_INCLUDE_DIR`, `XRT_LIB_DIR`).
   - This route cannot be combined with the vcpkg toolchain.

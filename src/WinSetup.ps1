@@ -8,13 +8,13 @@
       1. Checks the tools (Git, CMake, Visual Studio C++ tools, Rust, 7-Zip,
          Ninja). With -InstallPrereqs, installs any that are missing via winget.
       2. Checks out the git submodules (tokenizers-cpp, xgrammar).
-      3. Installs curl:x64-windows with a vcpkg clone at C:\dev\vcpkg.
-      4. Runs .github\script\ci\setup_windows_deps.ps1, which lays out the
-         rest of C:\dev: Boost 1.88.0 (program_options built), the pinned XRT
+      3. Runs .github\script\ci\setup_windows_deps.ps1, which lays out
+         C:\dev: Boost 1.88.0 (program_options built), the pinned XRT
          headers, and xrt_coreutil.lib generated from the committed .def.
-      5. Enters a Visual Studio developer shell, configures with the
+         curl comes from third_party/curl and needs no setup.
+      4. Enters a Visual Studio developer shell, configures with the
          windows-ninja preset and builds.
-      6. Stages flm.exe plus its DLLs, model_list.json, model_info.json and
+      5. Stages flm.exe plus its DLLs, model_list.json, model_info.json and
          xclbins in src\out so it can be run from there.
 
     Every step is skipped when its output already exists, so the script is
@@ -376,32 +376,11 @@ for ($i = 1; $i -le 3 -and -not $ok; $i++) {
 }
 if (-not $ok) { throw 'git submodule update failed' }
 
-# --- 3. curl via vcpkg -----------------------------------------------------
+# --- 3. Boost, XRT headers, xrt_coreutil.lib -------------------------------
+# The CI script skips each part whose output exists. curl needs no setup:
+# third_party/curl is committed and CMake makes its import library.
 Write-Step "Setting up $DevRoot"
 New-Item -ItemType Directory -Force $DevRoot | Out-Null
-
-$vcpkgRoot = Join-Path $DevRoot 'vcpkg'
-$libcurl = Join-Path $vcpkgRoot 'installed\x64-windows\lib\libcurl.lib'
-if (-not (Test-Path $libcurl)) {
-    $vcpkgExe = Join-Path $vcpkgRoot 'vcpkg.exe'
-    if (-not (Test-Path (Join-Path $vcpkgRoot 'bootstrap-vcpkg.bat'))) {
-        if ((Test-Path $vcpkgRoot) -and (Get-ChildItem $vcpkgRoot -Force | Select-Object -First 1)) {
-            throw "$vcpkgRoot exists but is not a vcpkg clone; move it away and rerun"
-        }
-        Write-Host "Cloning vcpkg into $vcpkgRoot"
-        Invoke-Native 'git clone vcpkg' { git clone https://github.com/microsoft/vcpkg.git $vcpkgRoot }
-    }
-    if (-not (Test-Path $vcpkgExe)) {
-        Invoke-Native 'bootstrap-vcpkg' { & (Join-Path $vcpkgRoot 'bootstrap-vcpkg.bat') -disableMetrics }
-    }
-    Write-Host 'Installing curl:x64-windows (the first time takes a few minutes)'
-    Invoke-Native 'vcpkg install curl' { & $vcpkgExe install curl:x64-windows }
-}
-
-# --- 4. Boost, XRT headers, xrt_coreutil.lib -------------------------------
-# The CI script skips each part whose output exists; its curl part (which
-# copies from VCPKG_INSTALLATION_ROOT) is already satisfied by step 3.
-if (-not $env:VCPKG_INSTALLATION_ROOT) { $env:VCPKG_INSTALLATION_ROOT = $vcpkgRoot }
 & (Join-Path $RepoRoot '.github\script\ci\setup_windows_deps.ps1') -Root $DevRoot
 
 if ($SkipBuild) {
@@ -409,7 +388,7 @@ if ($SkipBuild) {
     return
 }
 
-# --- 5. Configure and build ------------------------------------------------
+# --- 4. Configure and build ------------------------------------------------
 Write-Step "Entering the $($vs.displayName) developer shell"
 # Everything links against x64 libraries, so the shell must target x64. The
 # Start Menu developer shells default to x86; refuse those rather than stack
@@ -502,7 +481,7 @@ try {
     Pop-Location
 }
 
-# --- 6. Stage the runtime files --------------------------------------------
+# --- 5. Stage the runtime files --------------------------------------------
 # Same files and copy order as the package step in
 # .github/workflows/win-build.yml: later copies win where names overlap.
 if (-not $NoStage) {

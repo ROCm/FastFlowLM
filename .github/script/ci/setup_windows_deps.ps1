@@ -11,13 +11,15 @@
 
       boost_1_88_0\                     Boost 1.88.0 headers
       boost_1_88_0\stage\lib\           libboost_program_options-vc143-mt-x64-1_88.lib
-      vcpkg\installed\x64-windows\      curl headers and libcurl.lib (vcpkg curl:x64-windows)
       XRT\src\runtime_src\core\include\ XRT headers at the commit the runner has
       xrtNPUfromDLL\xrt_coreutil.lib    import library for the NPU driver's xrt_coreutil.dll
 
+    curl needs nothing here: its headers and the .def for the shipped
+    libcurl.dll are committed under third_party/curl.
+
     Each part is skipped when its output already exists, so a restored cache
-    only fills in what is missing. Needs git, 7z, cmake, Visual Studio with
-    the C++ tools, and vcpkg at $env:VCPKG_INSTALLATION_ROOT.
+    only fills in what is missing. Needs git, 7z, cmake, and Visual Studio
+    with the C++ tools.
 
 .PARAMETER Root
     Directory to lay the dependencies out under. CMake expects C:\dev.
@@ -89,23 +91,6 @@ if (-not (Test-Path $BoostLib)) {
     $stage = Join-Path $BoostDir "stage\lib"
     New-Item -ItemType Directory -Force $stage | Out-Null
     Copy-Item (Join-Path $build "Release\libboost_program_options-vc143-mt-x64-1_88.lib") $stage -Force
-}
-
-# --- curl (vcpkg) ----------------------------------------------------------
-# flm links libcurl.lib, the import library for the libcurl.dll that ships
-# from src\lib, and compiles against curl's headers.
-$VcpkgDir = Join-Path $Root "vcpkg\installed\x64-windows"
-if (-not (Test-Path (Join-Path $VcpkgDir "lib\libcurl.lib"))) {
-    if (-not $env:VCPKG_INSTALLATION_ROOT) {
-        throw "VCPKG_INSTALLATION_ROOT is not set"
-    }
-    $vcpkg = Join-Path $env:VCPKG_INSTALLATION_ROOT "vcpkg.exe"
-    Write-Host "Installing curl:x64-windows with vcpkg"
-    Invoke-Native "vcpkg install curl" { & $vcpkg install curl:x64-windows }
-    $installed = Join-Path $env:VCPKG_INSTALLATION_ROOT "installed\x64-windows"
-    New-Item -ItemType Directory -Force (Join-Path $VcpkgDir "lib") | Out-Null
-    Copy-Item (Join-Path $installed "include") $VcpkgDir -Recurse -Force
-    Copy-Item (Join-Path $installed "lib\*.lib") (Join-Path $VcpkgDir "lib") -Force
 }
 
 # --- XRT headers -----------------------------------------------------------

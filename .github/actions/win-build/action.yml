@@ -48,7 +48,7 @@ runs:
         exit 1
 
     # setup_windows_deps.ps1 lays out the C:\dev dependencies the self-hosted
-    # runner has. HRX needs the same Boost and curl as the XRT build; the XRT
+    # runner has. HRX needs the same Boost as the XRT build; the XRT
     # parts of the tree go unused there.
     - name: Restore build dependencies
       uses: actions/cache@v4
