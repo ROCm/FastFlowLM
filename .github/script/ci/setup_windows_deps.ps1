@@ -50,10 +50,13 @@ function Invoke-Native {
 
 New-Item -ItemType Directory -Force $Root | Out-Null
 $Root = (Resolve-Path $Root).Path
-$Scratch = Join-Path $env:RUNNER_TEMP "flm-windows-deps"
-if (-not $env:RUNNER_TEMP) {
-    $Scratch = Join-Path ([IO.Path]::GetTempPath()) "flm-windows-deps"
+# RUNNER_TEMP is only set on a runner; Join-Path throws on a null path, so
+# pick the base first (src/WinSetup.ps1 runs this on developer machines).
+$TempBase = $env:RUNNER_TEMP
+if (-not $TempBase) {
+    $TempBase = [IO.Path]::GetTempPath()
 }
+$Scratch = Join-Path $TempBase "flm-windows-deps"
 New-Item -ItemType Directory -Force $Scratch | Out-Null
 
 # --- Boost 1.88.0 ----------------------------------------------------------

@@ -1,5 +1,6 @@
 out
 build
+build-*
 .vscode
 .vs/
 include/.model_list.hpp.un~
