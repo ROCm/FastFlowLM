@@ -33,6 +33,17 @@ test_long --text long.txt --lengths 512,1024,2048,4096,8192,16384,32768 --decode
 - Columns: prefill ms and tok/s for the whole prompt; decode ms for all steps and tok/s;
   `top1` = the token id the prefill logits pick.
 - `--dump dir` writes `L<N>_prefill.bin` and `L<N>_decode<i>.bin` (raw bf16 logits).
+- `--hash` (WP12) adds a last column: an FNV-1a hash of the prefill logits bytes. The engine is
+  deterministic, so the same length must give the same hash in every prompt and every run; a
+  different hash means that prompt's logits changed (used to check output after a run failure).
+
+## test_hunyuan --order (WP12)
+
+`--order forward` (default, the corpus order), `reverse`, or `shuffle:<seed>`. Every turn rewinds
+to the pinned system prompt, so a turn's text should not depend on the order. It did (14/130 lines
+in reverse order) until the engine zeroed the cache rows left past the pin (`HY_ZERO_STALE_KV=1`,
+engine README "Stale KV rows after restore"). The turns are printed in the order they ran; pair
+them by source text to compare two orders (`hymt2_plan/logs/WP12/g2cmp.py`).
 
 ## compare_logits.py
 
