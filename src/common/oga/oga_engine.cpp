@@ -72,13 +72,14 @@ std::uint64_t ImageHash(const OgaImage& image) {
 OgaEngine::OgaEngine(std::shared_ptr<const OgaApi> api, OgaApi::Owned<OgaModel> model,
                      std::string display_name, std::uint32_t vocab_size,
                      std::uint32_t context_limit, std::uint32_t max_length,
-                     std::optional<OgaVisionConfig> vision)
+                     std::optional<OgaVisionConfig> vision, bool empty_image_batch)
     : api_(std::move(api)),
       display_name_(std::move(display_name)),
       vocab_size_(vocab_size),
       context_limit_(context_limit),
       max_length_(max_length),
       vision_(std::move(vision)),
+      empty_image_batch_(empty_image_batch),
       model_(std::move(model)) {
     if (!api_ || !model_) throw std::invalid_argument("OGA engine needs an API and a model");
     if (!vocab_size_) throw std::invalid_argument(display_name_ + " vocabulary size is 0");
@@ -271,7 +272,7 @@ std::pair<OgaEngine::Reuse, std::size_t> OgaEngine::Append() {
     const std::size_t from = run.ran.size();
     // Equal lengths: the generator already ran the last token, so its logits are current.
     if (from == logical_.size()) return {reuse, from};
-    if (from == 0 && !images_.empty()) {
+    if (from == 0 && (!images_.empty() || empty_image_batch_)) {
         std::vector<const OgaImage*> images;
         for (const ImageSpan& span : images_) {
             images.push_back(span.image.get());
@@ -325,6 +326,23 @@ OgaEngine::Reuse OgaEngine::Rebuild() {
 void OgaEngine::SetInputs(OgaGenerator* generator, const std::vector<int>& ids,
                           const std::vector<const OgaImage*>& images) const {
     const OgaFunctions& f = api_->functions();
+    OgaNamedTensors* raw_named = nullptr;
+    api_->Check(f.create_named_tensors(&raw_named), "OgaCreateNamedTensors");
+    OgaApi::Owned<OgaNamedTensors> named(raw_named, {f.destroy_named_tensors});
+    // The named tensors hold their own reference, and so does the generator once it has them.
+    const auto set = [&](const char* name, const OgaApi::Owned<OgaTensor>& tensor) {
+        api_->Check(f.named_tensors_set(named.get(), name, tensor.get()),
+                    std::string("OgaNamedTensorsSet(") + name + ")");
+    };
+    set("input_ids", NewTensor({1, static_cast<std::int64_t>(ids.size())}, OgaElementType_int32,
+                               ids.data(), ids.size() * sizeof(int)));
+    if (images.empty()) {
+        // OGA counts the images by pixel_values' leading dimension; without image tokens the
+        // vision model does not run
+        set("pixel_values", NewTensor({1, 0, 0}, OgaElementType_float16, nullptr, 0));
+        api_->Check(f.generator_set_inputs(generator, named.get()), "OgaGenerator_SetInputs");
+        return;
+    }
     const std::int64_t merged = vision_->spatial_merge_size * vision_->spatial_merge_size;
     std::int64_t patches = 0;
     std::vector<std::int64_t> grids;
@@ -335,17 +353,7 @@ void OgaEngine::SetInputs(OgaGenerator* generator, const std::vector<int>& ids,
         grids.insert(grids.end(), {image->grid_t, image->grid_h, image->grid_w});
         tokens.push_back(grid / merged);
     }
-    OgaNamedTensors* raw_named = nullptr;
-    api_->Check(f.create_named_tensors(&raw_named), "OgaCreateNamedTensors");
-    OgaApi::Owned<OgaNamedTensors> named(raw_named, {f.destroy_named_tensors});
-    // The named tensors hold their own reference, and so does the generator once it has them.
-    const auto set = [&](const char* name, const OgaApi::Owned<OgaTensor>& tensor) {
-        api_->Check(f.named_tensors_set(named.get(), name, tensor.get()),
-                    std::string("OgaNamedTensorsSet(") + name + ")");
-    };
     const auto count = static_cast<std::int64_t>(images.size());
-    set("input_ids", NewTensor({1, static_cast<std::int64_t>(ids.size())}, OgaElementType_int32,
-                               ids.data(), ids.size() * sizeof(int)));
     const OgaApi::Owned<OgaTensor> pixels =
         NewTensor({patches, vision_->patch_values}, OgaElementType_float16, nullptr, 0);
     void* data = nullptr;

@@ -97,6 +97,18 @@ void register_builtin_backends(BackendRegistry& registry) {
     registry.register_backend("qwen3.5", flm::backend::kOgaHipepBackendId,
                               flm::oga::hipep_factory(),
                               flm::oga::hipep_traits());
+    registry.register_backend("qwen2", flm::backend::kOgaHipepBackendId,
+                              flm::oga::hipep_factory(),
+                              flm::oga::hipep_traits());
+    registry.register_backend("gemma3", flm::backend::kOgaHipepBackendId,
+                              flm::oga::hipep_factory(),
+                              flm::oga::hipep_traits());
+    registry.register_backend("gemma4e", flm::backend::kOgaHipepBackendId,
+                              flm::oga::hipep_factory(),
+                              flm::oga::hipep_traits());
+    registry.register_backend("gpt-oss", flm::backend::kOgaHipepBackendId,
+                              flm::oga::hipep_factory(),
+                              flm::oga::hipep_traits());
 #endif
 }
 

@@ -46,10 +46,13 @@ public:
     /// \param context_limit the most positions the package supports
     /// \param max_length positions this engine may run: 1..context_limit
     /// \param vision how prompts carry images, when the package has a vision model
+    /// \param empty_image_batch give a generator without images a batch of one image without
+    ///        pixels: OGA shapes the empty image features of a text prompt by the image batch,
+    ///        and with none it drops the batch dimension that a 3-D image_features input needs
     OgaEngine(std::shared_ptr<const OgaApi> api, OgaApi::Owned<OgaModel> model,
               std::string display_name, std::uint32_t vocab_size,
               std::uint32_t context_limit, std::uint32_t max_length,
-              std::optional<OgaVisionConfig> vision = std::nullopt);
+              std::optional<OgaVisionConfig> vision = std::nullopt, bool empty_image_batch = false);
     ~OgaEngine() override;
 
     std::uint32_t max_length() const { return max_length_; }
@@ -122,6 +125,7 @@ private:
     OgaApi::Owned<OgaGenerator> NewGenerator(std::uint32_t max_length) const;
     void AppendTokens(OgaGenerator* generator, const int* ids, std::size_t count) const;
     /// \brief give an empty generator `ids` and `images` in one call
+    /// \note No images: the batch of one image without pixels (empty_image_batch)
     void SetInputs(OgaGenerator* generator, const std::vector<int>& ids,
                    const std::vector<const OgaImage*>& images) const;
     /// \brief run the vision model once at max_patches, before the first real image
@@ -142,6 +146,7 @@ private:
     std::uint32_t context_limit_;
     std::uint32_t max_length_;
     std::optional<OgaVisionConfig> vision_;
+    bool empty_image_batch_ = false;
     bool rewinds_ = false;
     bool vision_warm_ = false;
     std::uint64_t replayed_ = 0;

@@ -49,6 +49,19 @@ bool Gemma3::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std:
         header_print("WARNING", "No messages or prompt provided");
         return false;
     }
+    // On OGA the model runs text only. A ModelRequestError, not a payload the
+    // engine rejects: the handlers turn only the former into an HTTP 400.
+    if (this->backend_id() == flm::backend::kOgaHipepBackendId) {
+        bool images = !input.images.empty();
+        for (const auto& message : input.messages) {
+            images = images || (message.contains("images") && !message["images"].empty());
+        }
+        if (images) {
+            throw ModelRequestError(400, false,
+                "the loaded backend '" + this->backend_id() + "' does not accept image input",
+                "invalid_request_error");
+        }
+    }
     if (!input.messages.empty()) { // already a formated messages, usually from REST API
         // Templating happens below, together with image decoding, so that a
         // failed image never gets an image-token placeholder in the prompt.

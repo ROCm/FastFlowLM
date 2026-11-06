@@ -15,8 +15,8 @@ name: Build and Test
 # the XRT run covers it.
 #
 # The Windows XRT package also holds the oga-hipep backend, which runs its
-# models (qwen3.5-oga-hipep) on the GPU through hip-ep. Test Windows HIPEP
-# runs the chat and api suites on those models from the same zip, and Test
+# models on the GPU through hip-ep. Test Windows HIPEP runs the chat and api
+# suites on qwen3.5-oga-hipep:9b from the same zip, and Test
 # Windows XRT tests the NPU models; like models-from-source, it runs whenever
 # the chat suite does.
 #
@@ -397,7 +397,9 @@ jobs:
 
   # The XRT zip's oga-hipep models, on the GPU: its runner needs an AMD GPU
   # that hip-ep runs on. Besides chat, they run the OpenAI contract tests (api),
-  # tool calls included.
+  # tool calls included. Every tier tests qwen3.5-oga-hipep:9b alone: the other
+  # oga-hipep packages are 4 to 72 GB each, and a dispatch that names them
+  # (models) tests them instead.
   test-win-hipep:
     name: Test Windows HIPEP
     needs: [changes, build-win-xrt]
@@ -438,7 +440,7 @@ jobs:
           label: windows-hipep
           tier: ${{ needs.changes.outputs.tier }}
           suites: chat,api
-          models: ${{ inputs.models }}
+          models: ${{ inputs.models || 'qwen3.5-oga-hipep:9b' }}
           backend: oga-hipep
 
   test-win-hrx:
