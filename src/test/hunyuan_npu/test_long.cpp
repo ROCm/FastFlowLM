@@ -64,6 +64,16 @@ static int argmax(buffer<bf16>& logits) {
     return best;
 }
 
+/// \brief FNV-1a of the logits bytes: equal hashes = byte-identical logits
+static unsigned long long logits_hash(buffer<bf16>& logits) {
+    const unsigned char* p = reinterpret_cast<const unsigned char*>(logits.data());
+    unsigned long long h = 1469598103934665603ULL;
+    for (size_t i = 0; i < logits.size() * sizeof(bf16); i++) {
+        h = (h ^ p[i]) * 1099511628211ULL;
+    }
+    return h;
+}
+
 static void dump(const std::string& dir, const std::string& name, buffer<bf16>& logits) {
     if (dir.empty()) {
         return;
@@ -82,6 +92,7 @@ int main(int argc, char* argv[]) {
     desc.add_options()("context,L", arg_utils::po::value<int>()->default_value(0), "Engine context, 0 = longest prompt + decode");
     desc.add_options()("dump", arg_utils::po::value<std::string>()->default_value(""), "Folder for logits dumps, empty = none");
     desc.add_options()("grow-to", arg_utils::po::value<int>()->default_value(0), "Grow the engine context to this length (update_max_length) halfway through each decode, 0 = never");
+    desc.add_options()("hash", arg_utils::po::bool_switch()->default_value(false), "Print a hash of each prompt's prefill logits (last column)");
     desc.add_options()("help,h", "Show this help");
     arg_utils::po::store(arg_utils::po::parse_command_line(argc, argv, desc), vm);
     if (vm.count("help")) {
@@ -95,6 +106,7 @@ int main(int argc, char* argv[]) {
     int decode_steps = vm["decode"].as<int>();
     std::string dump_dir = vm["dump"].as<std::string>();
     int grow_to = vm["grow-to"].as<int>();
+    bool print_hash = vm["hash"].as<bool>();
 
     int longest = 0;
     for (int n : lengths) {
@@ -145,6 +157,7 @@ int main(int argc, char* argv[]) {
         buffer<bf16> logits = engine->prefill(prompt);
         double prefill_ms = ms_since(t0);
         int top1 = argmax(logits);
+        unsigned long long hash = print_hash ? logits_hash(logits) : 0;
         dump(dump_dir, "L" + std::to_string(n) + "_prefill.bin", logits);
 
         // teacher forcing: every build sees the same tokens, so the logits compare step by step
@@ -163,7 +176,11 @@ int main(int argc, char* argv[]) {
         double decode_rate = decode_steps > 0 ? decode_steps * 1000.0 / decode_ms : 0.0;
         std::cout << std::fixed << std::setprecision(1)
                   << std::setw(8) << n << std::setw(13) << prefill_ms << std::setw(14) << n * 1000.0 / prefill_ms
-                  << std::setw(13) << decode_ms << std::setw(13) << decode_rate << std::setw(10) << top1 << std::endl;
+                  << std::setw(13) << decode_ms << std::setw(13) << decode_rate << std::setw(10) << top1;
+        if (print_hash) {
+            std::cout << "  " << std::hex << hash << std::dec;
+        }
+        std::cout << std::endl;
     }
     std::cout << std::endl;
     return 0;
