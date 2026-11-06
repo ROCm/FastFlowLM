@@ -44,16 +44,20 @@ Which models each suite runs at each tier is in `plan.py`, in one place.
 
 The tiers pick NPU models only. A model whose `backend` in `flm list --json` runs
 on the GPU (`oga-hipep`, in the Windows XRT package) is tested by a run with
-`--backend oga-hipep`, which tests all of them whatever the tier; that is the
-Test Windows HIPEP job, which runs the `chat` and `api` suites. Such a run gives
-`api` the backend's models in place of its NPU list, so the OpenAI contract
-tests, tool calls included, run on the GPU too.
+`--backend oga-hipep`, which tests all of them whatever the tier. The Test
+Windows HIPEP job runs the `chat` and `api` suites that way on
+`qwen3.5-oga-hipep:9b` alone, since the other packages are 4 to 72 GB each,
+unless a manual run names the models (below). Such a run gives `api` the
+backend's models in place of its NPU list, so the OpenAI contract tests, tool
+calls included, run on the GPU too.
 
 On a pull request, `.github/script/ci/changes.py` also picks the suites: only
 those the changed files can affect (an ASR-only change runs `asr`, a d3-only
 change `decision`, an engine change `chat` and `prefix_cache`), or all of them
-when any changed file is shared code. The HRX packages never run `api` or
-`serving`, which test server logic the backend does not touch.
+when any changed file is shared code. A change to the oga-hipep backend or to
+its catalog entries touches no NPU family: it runs `chat`, which is what has
+Test Windows HIPEP run. The HRX packages never run `api` or `serving`, which
+test server logic the backend does not touch.
 
 A manual run of Build and Test can name the models to test, for example
 `gh workflow run build-and-test.yml --ref <branch> -f models=qwen3.5-oga-hipep:9b`:

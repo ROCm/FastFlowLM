@@ -9,6 +9,16 @@
 #include "AutoModel/modeling_gemma4e.hpp"
 #include "metrices.hpp"
 
+#include <cctype>
+
+namespace {
+std::string trim(const std::string& text) {
+    const auto first = std::find_if(text.begin(), text.end(), [](unsigned char c) { return !std::isspace(c); });
+    const auto last = std::find_if(text.rbegin(), text.rend(), [](unsigned char c) { return !std::isspace(c); }).base();
+    return first < last ? std::string(first, last) : std::string();
+}
+} // namespace
+
 /************              Gemma4e family            **************/
 Gemma4e::Gemma4e(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "Gemma4e") {}
 
@@ -316,6 +326,64 @@ std::string Gemma4e::apply_chat_template(nlohmann::ordered_json& messages, nlohm
     return this->_render_chat_template(inputs, continue_final_message, opt);
 }
 
+bool Gemma4e::_continue_verbatim(std::vector<int>& tokens, std::optional<int> requested_max_new_tokens) {
+    const std::vector<int>& ran = this->token_history;
+    if (ran.empty() || static_cast<size_t>(this->lm_engine->get_current_context_length()) != ran.size()) {
+        return false;
+    }
+    const std::vector<int> header = this->tokenizer->encode("<|turn>model\n");
+    const std::vector<int> turn_end = this->tokenizer->encode("<turn|>");
+    if (header.empty() || turn_end.size() != 1) {
+        return false;
+    }
+    // the reply the engine generated follows the last model header it ran
+    const auto at = std::find_end(ran.begin(), ran.end(), header.begin(), header.end());
+    if (at == ran.end()) {
+        return false;
+    }
+    const size_t start = static_cast<size_t>(at - ran.begin()) + header.size();
+    if (tokens.size() <= start || !std::equal(ran.begin(), ran.begin() + start, tokens.begin())) {
+        return false;
+    }
+    // the prompt's copy of that reply ends at the first <turn|> after its header
+    const auto reply_end = std::find(tokens.begin() + start, tokens.end(), turn_end[0]);
+    if (reply_end == tokens.end()) {
+        return false;
+    }
+    // an eos that ended the reply was run; a reply cut at the length limit lacks its last token
+    const bool ended = ran.back() == turn_end[0];
+    // A reply's content follows its thought channel; a reply cut inside that channel has none.
+    const auto content = [&](std::vector<int>::const_iterator begin, std::vector<int>::const_iterator end) {
+        if (begin != end && *begin == think_start_id) {
+            const auto close = std::find(begin, end, think_end_id);
+            if (close == end) return std::string();
+            begin = close + 1;
+        }
+        return trim(this->tokenizer->decode(std::vector<int>(begin, end)));
+    };
+    const std::string generated = content(ran.begin() + start, ended ? ran.end() - 1 : ran.end());
+    const std::string sent = content(tokens.begin() + start, reply_end);
+    std::vector<int> continued(ran);
+    if (generated != sent) {
+        // the client did get the token the engine did not run
+        if (ended || generated.empty() || sent.size() <= generated.size() || sent.compare(0, generated.size(), generated) != 0) {
+            return false;
+        }
+        const std::vector<int> rest = this->tokenizer->encode(sent.substr(generated.size()));
+        continued.insert(continued.end(), rest.begin(), rest.end());
+    }
+    continued.insert(continued.end(), ended ? reply_end + 1 : reply_end, tokens.end());
+    // the history keeps the thought channel the rendered prompt leaves out, so it can be the longer one
+    try {
+        this->_shared_validate_capacity(continued.size(), requested_max_new_tokens);
+    } catch (const ModelRequestError&) {
+        return false;
+    }
+    header_print("FLM", "Continuing the " << ran.size() << " tokens the engine ran, last reply included");
+    tokens = std::move(continued);
+    return true;
+}
+
 bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
     this->profiler_list[TKOEN_ENCODE_TIME].start();
     std::string templated_text;
@@ -323,6 +391,22 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     if (input.messages.empty() && input.prompt.empty()) {
         header_print("WARNING", "No messages or prompt provided");
         return false;
+    }
+    // On OGA these models run text only. A ModelRequestError, not the engine_config()
+    // error: the handlers turn only the former into an HTTP 400.
+    if (this->backend_id() == flm::backend::kOgaHipepBackendId) {
+        bool images = !input.images.empty();
+        bool audios = !input.audios.empty();
+        for (const auto& message : input.messages) {
+            images = images || (message.contains("images") && !message["images"].empty());
+            audios = audios || (message.contains("audios") && !message["audios"].empty());
+        }
+        if (images || audios) {
+            throw ModelRequestError(400, false,
+                "the loaded backend '" + this->backend_id() + "' does not accept " +
+                    (images ? "image" : "audio") + " input",
+                "invalid_request_error");
+        }
     }
 
     constexpr bool DEBUG_IMAGE_PREPROCESS = false;
@@ -589,10 +673,15 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     }
     this->_prefix_legacy_path();
 
+    // OGA cannot reuse a prompt that leaves the history it ran, so it runs on from that history instead
+    const bool continued = meta_info.restore_allowed && !modal_tokens &&
+                           this->backend_id() == flm::backend::kOgaHipepBackendId &&
+                           this->_continue_verbatim(tokens, input.requested_max_new_tokens);
+
     int restore_idx = -1;
     // The legacy checkpoint keeps only the rings: it relies on the global rows still being the ones it was taken with. A slot request
     // overwrites them, so it drops the checkpoint's token history, and the in-place path below then has nothing to restore.
-    if (meta_info.restore_allowed && !checkpoint_his.empty()) {
+    if (meta_info.restore_allowed && !checkpoint_his.empty() && !continued) {
         restore_idx = this->lm_engine->restore();
         this->total_tokens = restore_idx;
         this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic

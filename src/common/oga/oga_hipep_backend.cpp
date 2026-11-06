@@ -75,9 +75,20 @@ struct GenaiConfig {
     std::uint32_t vocab_size = 0;
     std::uint32_t context_length = 0;
     std::vector<int> eos_ids;
-    /// \brief image token ids and merge size, when the package has a vision model
+    /// \brief image token ids and merge size, when the package has a vision model the engine runs
     std::optional<OgaVisionConfig> vision;
+    /// \brief whether a text prompt needs a batch of one image without pixels (OgaEngine)
+    /// \note gemma3 packages take 3-D image_features, [images, tokens, hidden]
+    bool empty_image_batch = false;
 };
+
+/// \brief whether the engine runs the vision model of a package of this model type
+/// \note The engine feeds OGA the inputs of its Qwen3.5 vision pipeline (pixel_values per
+///       patch, image_grid_thw, num_image_tokens). A package of another type that ships a
+///       vision model, such as gemma3 or gemma4, runs text only.
+bool RunsVisionOf(const std::string& type) {
+    return type == "qwen3_5" || type == "qwen3_5_moe";
+}
 
 GenaiConfig ReadGenaiConfig(const std::filesystem::path& root) {
     const auto file = root / "genai_config.json";
@@ -97,7 +108,9 @@ GenaiConfig ReadGenaiConfig(const std::filesystem::path& root) {
     if (out.type.empty() || !out.vocab_size || !out.context_length)
         throw std::runtime_error(Text(file) +
                                  " must state model.type, vocab_size and context_length");
-    if (const auto vision = model->find("vision"); vision != model->end() && vision->is_object()) {
+    const auto vision = model->find("vision");
+    out.empty_image_batch = out.type == "gemma3" && vision != model->end() && vision->is_object();
+    if (vision != model->end() && vision->is_object() && RunsVisionOf(out.type)) {
         OgaVisionConfig config;
         config.image_token_id = model->value("image_token_id", -1);
         config.vision_start_token_id = model->value("vision_start_token_id", -1);
@@ -196,7 +209,8 @@ public:
         auto model = OpenModel(*api_, root);
         header_print("FLM", "OGA device: AMDGPU (" << Text(api_->package().bin) << ")");
         engine_ = std::make_unique<OgaEngine>(api_, std::move(model), name, genai.vocab_size,
-                                              genai.context_length, length, genai.vision);
+                                              genai.context_length, length, genai.vision,
+                                              genai.empty_image_batch);
     }
 
     causal_lm& engine() override { return *engine_; }

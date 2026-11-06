@@ -2175,6 +2175,411 @@
                     "reasoning",
                     "tool-calling"
                 ]
+            },
+            "35b-a3b": {
+                "name": "Qwen3.5-35B-A3B_gpuep_1.0_gpu_128",
+                "url": "https://huggingface.co/amd/Qwen3.5-35B-A3B_gpuep_1.0_gpu_128/resolve/3fd220727224e8894e0a896346720d041d049fe9",
+                "file_url": "https://huggingface.co/api/models/amd/Qwen3.5-35B-A3B_gpuep_1.0_gpu_128/tree/3fd220727224e8894e0a896346720d041d049fe9",
+                "size": 22090435356,
+                "default_context_length": 32768,
+                "max_prefill_len": 4096,
+                "details": {
+                    "family": "qwen3.5",
+                    "think": true,
+                    "parameter_size": "35B-A3B",
+                    "quantization_level": "INT4 RTN group-32, fp16 activations"
+                },
+                "flm_min_version": "1.0.13",
+                "vlm": true,
+                "files": [
+                    "chat_template.jinja",
+                    "config.json",
+                    "embedding.onnx",
+                    "embedding.onnx.data",
+                    "genai_config.json",
+                    "processor_config.json",
+                    "text.onnx",
+                    "text.onnx.data",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "vision.onnx",
+                    "vision.onnx.data"
+                ],
+                "file_sources": {},
+                "label": [
+                    "vision",
+                    "reasoning",
+                    "tool-calling"
+                ]
+            },
+            "122b-a10b": {
+                "name": "Qwen3.5-122B-A10B_gpuep_1.0_gpu_128",
+                "url": "https://huggingface.co/amd/Qwen3.5-122B-A10B_gpuep_1.0_gpu_128/resolve/586488aec4bfb4d20d6a5bf1c4ccd4a7400c736a",
+                "file_url": "https://huggingface.co/api/models/amd/Qwen3.5-122B-A10B_gpuep_1.0_gpu_128/tree/586488aec4bfb4d20d6a5bf1c4ccd4a7400c736a",
+                "size": 71789309753,
+                "default_context_length": 32768,
+                "max_prefill_len": 4096,
+                "details": {
+                    "family": "qwen3.5",
+                    "think": true,
+                    "parameter_size": "122B-A10B",
+                    "quantization_level": "INT4 RTN group-32, fp16 activations"
+                },
+                "flm_min_version": "1.0.13",
+                "vlm": true,
+                "files": [
+                    "chat_template.jinja",
+                    "config.json",
+                    "embedding.onnx",
+                    "embedding.onnx.data",
+                    "genai_config.json",
+                    "processor_config.json",
+                    "text.onnx",
+                    "text.onnx.data",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "vision.onnx",
+                    "vision.onnx.data"
+                ],
+                "file_sources": {},
+                "label": [
+                    "vision",
+                    "reasoning",
+                    "tool-calling"
+                ]
+            }
+        },
+        "qwen3.6-oga-hipep": {
+            "27b": {
+                "name": "Qwen3.6-27B_gpuep_1.0_gpu_128",
+                "url": "https://huggingface.co/amd/Qwen3.6-27B_gpuep_1.0_gpu_128/resolve/8375cbdb48eedc8d4d32c5dac2d1154fb0b31bd0",
+                "file_url": "https://huggingface.co/api/models/amd/Qwen3.6-27B_gpuep_1.0_gpu_128/tree/8375cbdb48eedc8d4d32c5dac2d1154fb0b31bd0",
+                "size": 17965202975,
+                "default_context_length": 32768,
+                "max_prefill_len": 4096,
+                "details": {
+                    "family": "qwen3.5",
+                    "think": true,
+                    "parameter_size": "27B",
+                    "quantization_level": "INT4 RTN group-32, fp16 activations"
+                },
+                "flm_min_version": "1.0.13",
+                "vlm": true,
+                "files": [
+                    "chat_template.jinja",
+                    "config.json",
+                    "embedding.onnx",
+                    "embedding.onnx.data",
+                    "genai_config.json",
+                    "processor_config.json",
+                    "text.onnx",
+                    "text.onnx.data",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "vision.onnx",
+                    "vision.onnx.data"
+                ],
+                "file_sources": {},
+                "label": [
+                    "vision",
+                    "reasoning",
+                    "tool-calling"
+                ]
+            },
+            "35b-a3b": {
+                "name": "Qwen3.6-35B-A3B_gpuep_1.0_gpu_128",
+                "url": "https://huggingface.co/amd/Qwen3.6-35B-A3B_gpuep_1.0_gpu_128/resolve/061f05d3b6bd2350b274e11c3bc7975251732269",
+                "file_url": "https://huggingface.co/api/models/amd/Qwen3.6-35B-A3B_gpuep_1.0_gpu_128/tree/061f05d3b6bd2350b274e11c3bc7975251732269",
+                "size": 22090435475,
+                "default_context_length": 32768,
+                "max_prefill_len": 4096,
+                "details": {
+                    "family": "qwen3.5",
+                    "think": true,
+                    "parameter_size": "35B-A3B",
+                    "quantization_level": "INT4 RTN group-32, fp16 activations"
+                },
+                "flm_min_version": "1.0.13",
+                "vlm": true,
+                "files": [
+                    "chat_template.jinja",
+                    "config.json",
+                    "embedding.onnx",
+                    "embedding.onnx.data",
+                    "genai_config.json",
+                    "processor_config.json",
+                    "text.onnx",
+                    "text.onnx.data",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "vision.onnx",
+                    "vision.onnx.data"
+                ],
+                "file_sources": {},
+                "label": [
+                    "vision",
+                    "reasoning",
+                    "tool-calling"
+                ]
+            }
+        },
+        "qwen3.8-oga-hipep": {
+            "27b": {
+                "name": "Qwen3.8-27B_gpuep_1.0_gpu_128",
+                "url": "https://huggingface.co/amd/Qwen3.8-27B_gpuep_1.0_gpu_128/resolve/e133613183b5774ce91108a7954ec5f222388a9a",
+                "file_url": "https://huggingface.co/api/models/amd/Qwen3.8-27B_gpuep_1.0_gpu_128/tree/e133613183b5774ce91108a7954ec5f222388a9a",
+                "size": 16874950402,
+                "default_context_length": 32768,
+                "max_prefill_len": 4096,
+                "details": {
+                    "family": "qwen3.5",
+                    "think": true,
+                    "parameter_size": "27B",
+                    "quantization_level": "INT4 K-quant group-128, fp16 activations"
+                },
+                "flm_min_version": "1.0.13",
+                "vlm": true,
+                "files": [
+                    "chat_template.jinja",
+                    "config.json",
+                    "embedding.onnx",
+                    "embedding.onnx.data",
+                    "genai_config.json",
+                    "processor_config.json",
+                    "text.onnx",
+                    "text.onnx.data",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "vision.onnx",
+                    "vision.onnx.data"
+                ],
+                "file_sources": {},
+                "label": [
+                    "vision",
+                    "reasoning",
+                    "tool-calling"
+                ]
+            }
+        },
+        "qwen2.5-it-oga-hipep": {
+            "14b": {
+                "name": "Qwen2.5-14B-Instruct_gpuep_1.0_gpu_128",
+                "url": "https://huggingface.co/amd/Qwen2.5-14B-Instruct_gpuep_1.0_gpu_128/resolve/efc1134c0ea60c296e823237b8c43fbdd4ab3c04",
+                "file_url": "https://huggingface.co/api/models/amd/Qwen2.5-14B-Instruct_gpuep_1.0_gpu_128/tree/efc1134c0ea60c296e823237b8c43fbdd4ab3c04",
+                "size": 8849120893,
+                "default_context_length": 32768,
+                "max_prefill_len": 4096,
+                "details": {
+                    "family": "qwen2",
+                    "think": false,
+                    "think_toggleable": false,
+                    "parameter_size": "14B",
+                    "quantization_level": "INT4 RTN group-128, fp16 activations"
+                },
+                "flm_min_version": "1.0.13",
+                "vlm": false,
+                "files": [
+                    "chat_template.jinja",
+                    "config.json",
+                    "genai_config.json",
+                    "text.onnx",
+                    "text.onnx.data",
+                    "tokenizer.json",
+                    "tokenizer_config.json"
+                ],
+                "file_sources": {}
+            }
+        },
+        "qwen2.5-coder-it-oga-hipep": {
+            "14b": {
+                "name": "Qwen2.5-Coder-14B-Instruct_gpuep_1.0_gpu_128",
+                "url": "https://huggingface.co/amd/Qwen2.5-Coder-14B-Instruct_gpuep_1.0_gpu_128/resolve/895046fa2d396914012b7e561990510334a252b7",
+                "file_url": "https://huggingface.co/api/models/amd/Qwen2.5-Coder-14B-Instruct_gpuep_1.0_gpu_128/tree/895046fa2d396914012b7e561990510334a252b7",
+                "size": 8849120893,
+                "default_context_length": 32768,
+                "max_prefill_len": 4096,
+                "details": {
+                    "family": "qwen2",
+                    "think": false,
+                    "think_toggleable": false,
+                    "parameter_size": "14B",
+                    "quantization_level": "INT4 RTN group-128, fp16 activations"
+                },
+                "flm_min_version": "1.0.13",
+                "vlm": false,
+                "files": [
+                    "chat_template.jinja",
+                    "config.json",
+                    "genai_config.json",
+                    "text.onnx",
+                    "text.onnx.data",
+                    "tokenizer.json",
+                    "tokenizer_config.json"
+                ],
+                "file_sources": {}
+            }
+        },
+        "gemma3-oga-hipep": {
+            "4b": {
+                "name": "Gemma3-4B-it_gpuep_1.0_gpu_128",
+                "url": "https://huggingface.co/amd/Gemma3-4B-it_gpuep_1.0_gpu_128/resolve/2c900e07cf2b9e2f20dcebfda02202885e26843f",
+                "file_url": "https://huggingface.co/api/models/amd/Gemma3-4B-it_gpuep_1.0_gpu_128/tree/2c900e07cf2b9e2f20dcebfda02202885e26843f",
+                "size": 4354661282,
+                "default_context_length": 32768,
+                "max_prefill_len": 4096,
+                "details": {
+                    "family": "gemma3",
+                    "think": false,
+                    "think_toggleable": false,
+                    "parameter_size": "4B",
+                    "quantization_level": "INT4 RTN group-128, fp16 activations"
+                },
+                "flm_min_version": "1.0.13",
+                "vlm": false,
+                "files": [
+                    "chat_template.jinja",
+                    "config.json",
+                    "embedding.onnx",
+                    "embedding.onnx.data",
+                    "genai_config.json",
+                    "processor_config.json",
+                    "text.onnx",
+                    "text.onnx.data",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "vision.onnx",
+                    "vision.onnx.data"
+                ],
+                "file_sources": {
+                    "config.json": {
+                        "url": "https://huggingface.co/FastFlowLM/Gemma3-4B-NPU2",
+                        "revision": "a5ad9dbc7bdf9cdf83b4ddfd951372953da0969a"
+                    }
+                }
+            }
+        },
+        "gemma4-it-oga-hipep": {
+            "12b": {
+                "name": "Gemma-4-12B-it_gpuep_1.0_gpu_128",
+                "url": "https://huggingface.co/amd/Gemma-4-12B-it_gpuep_1.0_gpu_128/resolve/adc217f3ae0f54bd55aa049845f132c6706ba9d9",
+                "file_url": "https://huggingface.co/api/models/amd/Gemma-4-12B-it_gpuep_1.0_gpu_128/tree/adc217f3ae0f54bd55aa049845f132c6706ba9d9",
+                "size": 9446605606,
+                "default_context_length": 32768,
+                "max_prefill_len": 4096,
+                "details": {
+                    "family": "gemma4e",
+                    "think": true,
+                    "think_toggleable": true,
+                    "parameter_size": "12B",
+                    "quantization_level": "INT4 K-quant group-32, fp16 activations"
+                },
+                "flm_min_version": "1.0.13",
+                "vlm": false,
+                "files": [
+                    "audio_encoder/model.onnx",
+                    "audio_encoder/model.onnx.data",
+                    "audio_feature_extraction.json",
+                    "chat_template.jinja",
+                    "config.json",
+                    "decoder/model.onnx",
+                    "decoder/model.onnx.data",
+                    "embedding/model.onnx",
+                    "embedding/model.onnx.data",
+                    "genai_config.json",
+                    "image_processor.json",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "vision_encoder/model.onnx",
+                    "vision_encoder/model.onnx.data"
+                ],
+                "file_sources": {
+                    "config.json": {
+                        "url": "https://huggingface.co/google/gemma-4-12B-it",
+                        "revision": "43c9d014b231474fa7212dbb48a762566c2b255d"
+                    }
+                },
+                "label": [
+                    "reasoning",
+                    "tool-calling"
+                ]
+            },
+            "26b-a4b": {
+                "name": "Gemma-4-26B-A4B-it_gpuep_1.0_gpu_128",
+                "url": "https://huggingface.co/amd/Gemma-4-26B-A4B-it_gpuep_1.0_gpu_128/resolve/66d30d3b4ae7fd9301c7f603356feb855a63f628",
+                "file_url": "https://huggingface.co/api/models/amd/Gemma-4-26B-A4B-it_gpuep_1.0_gpu_128/tree/66d30d3b4ae7fd9301c7f603356feb855a63f628",
+                "size": 16554791874,
+                "default_context_length": 32768,
+                "max_prefill_len": 4096,
+                "details": {
+                    "family": "gemma4e",
+                    "think": true,
+                    "think_toggleable": true,
+                    "parameter_size": "26B-A4B",
+                    "quantization_level": "INT4 block-32, QMoE experts, fp16 activations"
+                },
+                "flm_min_version": "1.0.13",
+                "vlm": false,
+                "files": [
+                    "chat_template.jinja",
+                    "config.json",
+                    "decoder/model.onnx",
+                    "decoder/model.onnx.data",
+                    "embedding/model.onnx",
+                    "embedding/model.onnx.data",
+                    "genai_config.json",
+                    "image_processor.json",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "vision_encoder/model.onnx",
+                    "vision_encoder/model.onnx.data"
+                ],
+                "file_sources": {
+                    "config.json": {
+                        "url": "https://huggingface.co/google/gemma-4-26B-A4B-it",
+                        "revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52"
+                    }
+                },
+                "label": [
+                    "reasoning",
+                    "tool-calling"
+                ]
+            }
+        },
+        "gpt-oss-oga-hipep": {
+            "120b": {
+                "name": "GPT-OSS-120B_gpuep_1.0_gpu_128",
+                "url": "https://huggingface.co/amd/GPT-OSS-120B_gpuep_1.0_gpu_128/resolve/6872e7be72e258754a7ee723dc52d84aec5db960",
+                "file_url": "https://huggingface.co/api/models/amd/GPT-OSS-120B_gpuep_1.0_gpu_128/tree/6872e7be72e258754a7ee723dc52d84aec5db960",
+                "size": 69317428853,
+                "default_context_length": 32768,
+                "max_prefill_len": 4096,
+                "details": {
+                    "family": "gpt-oss",
+                    "think": true,
+                    "think_toggleable": false,
+                    "parameter_size": "120B",
+                    "quantization_level": "UINT4 AWQ group-32, fp16 activations"
+                },
+                "flm_min_version": "1.0.13",
+                "vlm": false,
+                "files": [
+                    "chat_template.jinja",
+                    "config.json",
+                    "genai_config.json",
+                    "model.onnx",
+                    "model.onnx.data",
+                    "tokenizer.json",
+                    "tokenizer_config.json"
+                ],
+                "file_sources": {
+                    "config.json": {
+                        "url": "https://huggingface.co/openai/gpt-oss-120b",
+                        "revision": "b5c939de8f754692c1647ca79fbf85e8c1e70f8a"
+                    }
+                },
+                "label": [
+                    "reasoning"
+                ]
             }
         },
         "qwen3.6-moe-core":     {

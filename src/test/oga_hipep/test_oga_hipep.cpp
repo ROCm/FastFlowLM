@@ -282,26 +282,34 @@ OgaResult* OGA_API_CALL FakeSetInputs(OgaGenerator* generator, const OgaNamedTen
     // As in OGA, only a generator's first call can carry images.
     if (!generator->tokens.empty()) return Error("SetInputs on a generator that has run tokens");
     const auto& t = named->tensors;
-    for (const char* name : {"input_ids", "pixel_values", "image_grid_thw", "num_image_tokens"})
+    for (const char* name : {"input_ids", "pixel_values"})
         if (!t.count(name)) return Error(std::string("no ") + name);
     const OgaTensor& ids = t.at("input_ids");
     const OgaTensor& pixels = t.at("pixel_values");
-    const OgaTensor& grids = t.at("image_grid_thw");
-    const OgaTensor& counts = t.at("num_image_tokens");
     if (ids.type != OgaElementType_int32 || ids.shape.size() != 2 || ids.shape[0] != 1)
         return Error("input_ids is not int32 [1, n]");
-    if (pixels.type != OgaElementType_float16 || pixels.shape.size() != 2)
-        return Error("pixel_values is not float16 [patches, values]");
-    if (grids.type != OgaElementType_int64 || grids.shape.size() != 2 || grids.shape[1] != 3)
-        return Error("image_grid_thw is not int64 [images, 3]");
-    if (counts.type != OgaElementType_int64 || counts.shape.size() != 1 || counts.shape[0] != grids.shape[0])
-        return Error("num_image_tokens is not int64 [images]");
     FakeOga::Inputs inputs;
+    if (!t.count("image_grid_thw") && !t.count("num_image_tokens")) {
+        // a text prompt's batch of one image without pixels
+        if (pixels.type != OgaElementType_float16 || pixels.shape != std::vector<std::int64_t>{1, 0, 0})
+            return Error("pixel_values is not float16 [1, 0, 0]");
+    } else {
+        for (const char* name : {"image_grid_thw", "num_image_tokens"})
+            if (!t.count(name)) return Error(std::string("no ") + name);
+        const OgaTensor& grids = t.at("image_grid_thw");
+        const OgaTensor& counts = t.at("num_image_tokens");
+        if (pixels.type != OgaElementType_float16 || pixels.shape.size() != 2)
+            return Error("pixel_values is not float16 [patches, values]");
+        if (grids.type != OgaElementType_int64 || grids.shape.size() != 2 || grids.shape[1] != 3)
+            return Error("image_grid_thw is not int64 [images, 3]");
+        if (counts.type != OgaElementType_int64 || counts.shape.size() != 1 || counts.shape[0] != grids.shape[0])
+            return Error("num_image_tokens is not int64 [images]");
+        inputs.grids = Values<std::int64_t>(grids);
+        inputs.image_tokens = Values<std::int64_t>(counts);
+    }
     inputs.ids = Values<std::int32_t>(ids);
     inputs.pixel_shape = pixels.shape;
     inputs.pixels = Values<std::uint16_t>(pixels);
-    inputs.grids = Values<std::int64_t>(grids);
-    inputs.image_tokens = Values<std::int64_t>(counts);
     generator->tokens = inputs.ids;
     g_fake.set_inputs.push_back(std::move(inputs));
     if (generator->tokens.size() > static_cast<std::size_t>(generator->max_length))
@@ -1724,10 +1732,11 @@ struct PackageDir {
     TempDir dir;
     LM_Config config;
     /// \param model_extra more members of genai_config.json's model, each after a comma
+    /// \param type genai_config.json's model type
     explicit PackageDir(std::uint32_t vocab = kVocab, const char* eos_text = "<|im_end|>",
-                        const std::string& model_extra = "") {
+                        const std::string& model_extra = "", const std::string& type = "qwen3_5") {
         Touch(dir.path / "genai_config.json",
-              R"({"model":{"type":"test_type","vocab_size":)" + std::to_string(kVocab) +
+              R"({"model":{"type":")" + type + R"(","vocab_size":)" + std::to_string(kVocab) +
                   R"(,"context_length":128,"eos_token_id":[7])" + model_extra + "}}");
         Touch(dir.path / "tokenizer_config.json",
               std::string(R"({"bos_token":null,"eos_token":")") + eos_text + R"("})");
@@ -1791,6 +1800,48 @@ void TestTheBackendRunsThePackagesImages() {
     TEST_REQUIRE(g_fake.set_inputs[1].ids == prompt);
     TEST_REQUIRE(g_fake.set_inputs[1].pixel_shape == (std::vector<std::int64_t>{4, 4}));
     TEST_REQUIRE(backend->replayed_tokens() == 0);
+}
+
+void TestTheBackendRunsTheTextOfAnotherTypesVisionPackage() {
+    g_fake = FakeOga{};
+    auto api = flm::oga::OgaApi::GetOrCreateWith([] { return FakeApi(); });
+    // a Gemma 4 package names its image token, and neither a vision start nor a merge size
+    PackageDir package(kVocab, "<|im_end|>",
+                       R"(,"image_token_id":40,"vision":{"filename":"vision_encoder/model.onnx"})", "gemma4");
+    auto backend = flm::oga::hipep_factory()(package.Context(64));
+    const auto image = Image(2, 2);
+    flm::oga::OgaVisionInput vision{{image}};
+    std::vector<int> prompt = WithImage({1}, image, {2});
+    RequireContains(RequireThrows<std::invalid_argument>([&] { backend->engine().prefill(prompt, &vision); }),
+                    "does not run a vision payload");
+    std::vector<int> text{1, 2};
+    backend->engine().prefill(text);
+    TEST_REQUIRE(g_fake.set_inputs.empty());
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{1, 2}));
+}
+
+void TestAGemma3PackageGivesItsTextAnEmptyImageBatch() {
+    g_fake = FakeOga{};
+    auto api = flm::oga::OgaApi::GetOrCreateWith([] { return FakeApi(); });
+    PackageDir package(kVocab, "<|im_end|>",
+                       R"(,"image_token_id":40,"vision":{"filename":"vision.onnx"})", "gemma3");
+    auto backend = flm::oga::hipep_factory()(package.Context(64));
+    std::vector<int> text{1, 2};
+    backend->engine().prefill(text);
+    TEST_REQUIRE(g_fake.set_inputs.size() == 1);
+    TEST_REQUIRE(g_fake.set_inputs[0].ids == text);
+    TEST_REQUIRE(g_fake.set_inputs[0].pixel_shape == (std::vector<std::int64_t>{1, 0, 0}));
+    TEST_REQUIRE(g_fake.set_inputs[0].pixels.empty());
+    // the generator runs on with tokens alone
+    backend->engine().forward(3);
+    TEST_REQUIRE(g_fake.set_inputs.size() == 1);
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{3}));
+    // a prompt that leaves the history gets a new generator, and the batch again
+    backend->engine().clear_context();
+    std::vector<int> other{1, 5};
+    backend->engine().prefill(other);
+    TEST_REQUIRE(g_fake.set_inputs.size() == 2);
+    TEST_REQUIRE(g_fake.set_inputs[1].ids == other);
 }
 
 void TestABackendOnOga019KeepsItsStateOnRestore() {
@@ -1922,6 +1973,8 @@ int main(int argc, char** argv) {
     RUN(TestAutoInstallDoesNotReplaceAnInstallForAnotherVersion);
     RUN(TestTheBackendRejectsWhatThePackageCannotRun);
     RUN(TestTheBackendRunsThePackagesImages);
+    RUN(TestTheBackendRunsTheTextOfAnotherTypesVisionPackage);
+    RUN(TestAGemma3PackageGivesItsTextAnEmptyImageBatch);
     RUN(TestABackendOnOga019KeepsItsStateOnRestore);
     RUN(TestTheBackendSaysHowToGetHipep);
 #undef RUN
