@@ -94,3 +94,7 @@ python3 prof_summary.py prof.log [--skip 1] [--steps] [--md]
 - Since WP1 the syncs are ranged (group "syncs (ranged)") and K's rope runs inside
   `attn:fill_kv_cache`. Logs from before WP1 still have `attn:k_rope_norm` and
   `attn:kv_sync_to`; they show up under "other ticks".
+- Since WP2 the matmul inputs go to the NPU as bfp16 tiles: the two norms and `mlp:glu_mul`
+  include packing + flushing them (no `layer:x_sync_to` / `mlp:hid_sync_to` in a normal NPU
+  build any more), and `attn:o_x_tiles` (own group) reads the attention output back and packs
+  it for the o run.

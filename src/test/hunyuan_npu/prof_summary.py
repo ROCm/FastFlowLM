@@ -24,7 +24,9 @@ GROUPS = OrderedDict([
     ("NPU gemm (q, kv, o, up+gate, down)", ["attn:q_run", "attn:kv_start", "attn:kv_wait", "attn:o_run",
                                             "mlp:upgate_run", "mlp:down_run"]),
     ("NPU attention (mha)", ["attn:mha"]),
+    # since WP2 the two norms and the glu also pack x as bfp16 tiles and flush them
     ("CPU rms norms", ["layer:input_rms_norm", "layer:post_attn_rms_norm"]),
+    ("CPU o input tiles (sync + pack)", ["attn:o_x_tiles"]),
     ("CPU rope + qk norm", ["attn:q_rope_norm"]),   # K's rope runs inside fill_kv_cache (WP1)
     ("CPU glu multiply", ["mlp:glu_mul"]),
     ("CPU residual add + x memset", ["layer:residual_add", "layer:x_memset"]),
