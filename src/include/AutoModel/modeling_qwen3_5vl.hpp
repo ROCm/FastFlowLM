@@ -20,6 +20,22 @@
 #include <fstream>
 #include <iostream>
 
+/// \brief how the vision model wants its images preprocessed
+/// \note From the NPU or the Flash engine's config, or from the OGA package's
+///       processor_config.json. All zero when the engine runs no images.
+struct qwen3_5vl_vision_geometry_t {
+    unsigned patch_size = 0;
+    unsigned merge_size = 0;
+    unsigned temporal_patch_size = 0;
+    unsigned min_pixels = 0;
+    unsigned max_pixels = 0;
+    float rescale_factor = 0.0f;
+    float image_mean = 0.0f;
+    float image_std = 0.0f;
+
+    bool valid() const { return patch_size && merge_size && temporal_patch_size && max_pixels; }
+};
+
 /************              Qwen3VL_4b            **************/
 class Qwen3_5VL : public AutoModel {
 protected:
@@ -34,22 +50,6 @@ protected:
     /// \param tokens receives the prompt tokens, image soft tokens expanded, the generation prompt included
     /// \return false if the request has nothing to render
     bool _build_tokens(chat_meta_info_t& meta_info, lm_uniform_input_t& input, qwen3_5vl_image_payload_t& image_payload, std::vector<int>& tokens);
-
-    /// \brief the engine's vision preprocessing parameters, read from whichever engine is loaded
-    /// \note  Two engine classes run this wrapper (qwen3_5vl_npu and qwen3_5vl_flash) and they share no base
-    ///         with these fields, so each is asked by its own type instead of casting one to the other.
-    struct vision_params_t {
-        unsigned int QWEN3_5_PATCH_SIZE;
-        unsigned int QWEN3_5_IMAGE_MERGE_SIZE;
-        unsigned int QWEN3_5_SHORTEST_EDGE;
-        unsigned int QWEN3_5_LONGEST_EDGE;
-        unsigned int QWEN3_5_TEMPORAL_PATCH_SIZE;
-        unsigned int QWEN3_5_MERGE_SIZE;
-        float QWEN3_5_VISION_RESCALE_FACTOR;
-        float QWEN3_5_VISION_RESCALE_IMAGE_MEAN;
-        float QWEN3_5_VISION_RESCALE_IMAGE_STD;
-    };
-    vision_params_t _vision_params() const;
 
 private:
     int think_start_id = 248068;
@@ -72,10 +72,28 @@ private:
     int min_pixels,
     int max_pixels);
     
-    void preprocess_image(qwen3_5vl_image_t& image,  std::vector<bf16> &pixel_values);
+    /// \param max_pixels the most pixels the resized image may have
+    void preprocess_image(qwen3_5vl_image_t& image,  std::vector<bf16> &pixel_values, unsigned max_pixels);
 
     /// \brief hand the loaded engine to the prefix cache (when it is the XRT qwen3_5vl one that has slots)
     void _attach_prefix_cache();
+
+    /// \brief read the loaded engine's image preprocessing into vision_geometry
+    void _load_vision_geometry();
+
+    /// \brief continue the history the engine ran instead of restoring the checkpoint
+    /// \note The rendered prompt carries the last reply as the client sent it
+    ///       back. When that is the reply the engine generated, the prompt is
+    ///       rewritten to the engine's history (its reasoning included) plus what
+    ///       follows the reply, so nothing before it runs again.
+    /// \return whether `tokens` now continues token_history
+    bool _continue_verbatim(std::vector<int>& tokens, std::optional<int> requested_max_new_tokens);
+
+    /// \brief the content of each image in checkpoint_his, kept on OGA
+    std::vector<uint64_t> checkpoint_image_hashes_;
+
+protected:
+    qwen3_5vl_vision_geometry_t vision_geometry;
 
 public:
     Qwen3_5VL(flm_rt::device* npu_device_inst);

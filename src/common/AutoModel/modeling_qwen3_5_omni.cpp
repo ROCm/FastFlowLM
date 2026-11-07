@@ -232,32 +232,34 @@ bool Qwen3_5_Omni::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input
                     audio_data_t audio_data = this->load_audio_base64(aud_str, this->audio_sampling_rate, MonoDownmixMode::MEAN);
                     if (audio_data.channels > 1) {
                         header_print("ERROR", "only mono audio is supported");
+                        meta_info.error_message = "Only mono audio is supported";
                         return false;
                     }
                     audio_data_list.push_back(audio_data);
                     new_content.push_back({{"type", "audio"}, {"audio", aud}});
                 }
             }
-            if(audio_data_list.size()> 0){
-                pad_audio(audio_data_list);
-                this->extract_spectrogram(audio_data_list, audio_payload);
-                for (unsigned int i = 0; i < audio_payload.num_audios; i++) {
-                    audio_payload.audio_tokens.push_back(
-                        get_audio_tokens(
-                            _get_feat_extract_output_length(
-                                audio_payload.mel_spectrogram_frames_per_audio[i]
-                            )
-                        )
-                    );
-                }
-            }
-
             new_content.push_back({{"type", "text"}, {"text", message.value("content", "")}});
             nlohmann::ordered_json new_item = {
                 {"role", message.value("role", "user")},
                 {"content", new_content}
             };
             qwen_messages.push_back(new_item);
+        }
+        // once for every clip of the conversation, after the loop: run per message, it re-padded and re-extracted the
+        // clips of earlier messages and appended them again, so the payload no longer matched the placeholders
+        if(audio_data_list.size()> 0){
+            pad_audio(audio_data_list);
+            this->extract_spectrogram(audio_data_list, audio_payload);
+            for (unsigned int i = 0; i < audio_payload.num_audios; i++) {
+                audio_payload.audio_tokens.push_back(
+                    get_audio_tokens(
+                        _get_feat_extract_output_length(
+                            audio_payload.mel_spectrogram_frames_per_audio[i]
+                        )
+                    )
+                );
+            }
         }
         header_print("FLM", "Total images: " << total_images);
         templated_text = this->apply_chat_template(qwen_messages, input.tools, meta_info.continue_final_message);
@@ -282,6 +284,7 @@ bool Qwen3_5_Omni::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input
             audio_data_t audio_data = this->load_audio(aud_str, this->audio_sampling_rate, MonoDownmixMode::MEAN);
             if (audio_data.channels > 1) {
                 header_print("ERROR", "only mono audio is supported");
+                meta_info.error_message = "Only mono audio is supported";
                 return false;
             }
           
@@ -362,114 +365,11 @@ bool Qwen3_5_Omni::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input
     //     << " (images: " << image_payload.num_images << ", soft image tokens: " << total_image_tokens
     //     << "; audios: " << audio_payload.num_audios << ", soft audio tokens: " << total_audio_tokens << ")");
 
-    // ---- prompt-cache prefix matching ----
-    // Compute how many leading tokens are already in the cached KV state
-    // (checkpoint_his). _shared_insert requires checkpoint_his to be fully
-    // matched; otherwise it clears context and skips nothing. We replicate
-    // that logic here so we can also trim the multi-modal payload accordingly.
-    size_t prefix_skip_count = 0;
-    {
-        const size_t idx = this->checkpoint_his.size();
-        for (size_t i = 0; i < idx; i++) {
-            if (i < tokens.size() && tokens[i] == this->checkpoint_his[i]) {
-                prefix_skip_count++;
-            } else {
-                break;
-            }
-        }
-        if (prefix_skip_count != idx) {
-            // header_print("KV-Cache", "Checkpoint not mathchedm here!");
-            prefix_skip_count = 0;
-            // this->engine->clear_context();
-            // this->checkpoint_his.clear();
-            // this->total_tokens = 0;
-            // this->token_history.clear();
-        }
-    }
-
-    // Drop leading images/audios whose soft tokens fall entirely within the
-    // cached prefix so the payload stays aligned with the surviving tokens.
-    if (prefix_skip_count > 0 && (image_payload.num_images > 0 || audio_payload.num_audios > 0)) {
-        int skipped_image_tokens = 0;
-        int skipped_audio_tokens = 0;  // counts audio_token_id soft tokens only (not boa/eoa)
-        for (size_t i = 0; i < prefix_skip_count; i++) {
-            if (tokens[i] == image_token_id) skipped_image_tokens++;
-            else if (tokens[i] == audio_token_id) skipped_audio_tokens++;
-            // audio_start/end token ids are not counted; the boa/eoa are handled implicitly
-        }
-
-        auto drop_front = [](auto& vec, size_t n) {
-            if (n == 0) return;
-            if (n >= vec.size()) { vec.clear(); return; }
-            vec.erase(vec.begin(), vec.begin() + n);
-        };
-
-        size_t images_to_drop = 0;
-        {
-            int consumed = 0;
-            for (unsigned i = 0; i < image_payload.num_images; i++) {
-                const int n = static_cast<int>(image_payload.num_soft_tokens_per_image[i]);
-                if (consumed + n <= skipped_image_tokens) { consumed += n; images_to_drop++; }
-                else break;
-            }
-        }
-        if (images_to_drop > 0) {
-            // Compute how many bf16 elements to erase from the flat pixel buffer.
-            // Each image contributed grid_h * grid_w * patch_size^2 * temporal_patch_size * 3 values.
-            size_t pixel_elems_to_drop = 0;
-            for (size_t i = 0; i < images_to_drop; i++) {
-                const int grid_h = image_payload.image_grid_h_w[i][0];
-                const int grid_w = image_payload.image_grid_h_w[i][1];
-                pixel_elems_to_drop += static_cast<size_t>(grid_h) * grid_w
-                    * this->patch_size * this->patch_size
-                    * this->temporal_patch_size * 3;
-            }
-            drop_front(image_payload._processed_pixel_values, pixel_elems_to_drop);
-            drop_front(image_payload.image_grid_h_w,              images_to_drop);
-            drop_front(image_payload.num_soft_tokens_per_image,   images_to_drop);
-            image_payload.num_images -= static_cast<unsigned>(images_to_drop);
-            header_print("FLM", "Prompt-cache hit: dropped " << images_to_drop << " cached image(s) from payload");
-        }
-
-        // Count complete audio blocks (audio_start..audio_end pairs) that fall
-        // entirely within the cached prefix. Each such pair maps 1:1 to an audio
-        // in the payload. We scan for start/end bracket tokens rather than
-        // audio_token_id because the expanded stream replaces the placeholder with
-        // encoded timestamp+pad tokens — bare audio_token_id never appears there.
-        size_t audios_to_drop = 0;
-        {
-            bool in_audio_block = false;
-            for (size_t i = 0; i < prefix_skip_count; i++) {
-                if (tokens[i] == audio_start_token_id) {
-                    in_audio_block = true;
-                } else if (tokens[i] == audio_end_token_id && in_audio_block) {
-                    in_audio_block = false;
-                    audios_to_drop++;
-                }
-            }
-            // A block still open at the prefix boundary is only partially cached;
-            // do not drop it.
-        }
-        if (audios_to_drop > 0) {
-            // Each audio has its own mel_spectrograms[i] buffer (not a flat concat),
-            // so dropping is a simple front-erase on each per-audio vector.
-            drop_front(audio_payload.mel_spectrograms,                 audios_to_drop);
-            drop_front(audio_payload.mel_spectrogram_frames_per_audio, audios_to_drop);
-            drop_front(audio_payload.mel_spectrogram_bins_per_audio,   audios_to_drop);
-            drop_front(audio_payload.audio_tokens,                     audios_to_drop);
-            audio_payload.num_audios -= static_cast<unsigned>(audios_to_drop);
-            header_print("FLM", "Prompt-cache hit: dropped " << audios_to_drop << " cached audio(s) from payload");
-        }
-
-    }
-    const bool has_modal = (image_payload.num_images > 0) || (audio_payload.num_audios > 0);
-
-
     // Restore KV cache from checkpoint if caller allows it
     if (meta_info.restore_allowed) {
         int restore_idx = this->engine->restore();
         this->total_tokens = restore_idx;
-        this->token_history = this->checkpoint_his;
+        this->_restore_history();
     }
 
     size_t n = tokens.size();
@@ -477,48 +377,115 @@ bool Qwen3_5_Omni::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input
     tokens.resize(n - (meta_info.continue_final_message ? 0 : 4));
     this->_begin_turn(meta_info, tokens);
 
-    // prefix check for tokens and token history to see if we can skip some tokens
-    const size_t idx = this->token_history.size();
-    size_t skip_count = 0;
-    for (size_t i = 0; i < idx; i++) {
-        // a continued prompt can be a strict prefix of the history (a retry with less text)
-        if (i < tokens.size() && tokens[i] == this->token_history[i]) {
-            skip_count++;
-        } 
-        else {
-            break;
+    // where each image and audio clip sits in the prompt that is prefilled: images are runs of
+    // image_token_id as expanded above, each audio clip is bracketed by audio_start/audio_end
+    std::vector<prompt_media_t> media;
+    const std::vector<size_t> image_token_counts(image_payload.num_soft_tokens_per_image.begin(),
+                                                 image_payload.num_soft_tokens_per_image.end());
+    prompt_media_from_counts(tokens, image_token_id, image_token_counts, prompt_media_t::kImage, media);
+    prompt_media_from_brackets(tokens, audio_start_token_id, audio_end_token_id, prompt_media_t::kAudio, media);
+
+    // the tokens of an item only depend on its size: hash what the engine reads (before the drop below),
+    // so a cached item is only kept when its pixels / mel frames are the same
+    {
+        size_t image_idx = 0, audio_idx = 0, pixel_offset = 0;
+        const auto& pixels = image_payload._processed_pixel_values;
+        for (prompt_media_t& m : media) {
+            if (m.kind == prompt_media_t::kImage && image_idx < image_payload.image_grid_h_w.size()) {
+                const auto& grid = image_payload.image_grid_h_w[image_idx++];
+                const int grid_h = grid.size() > 0 ? grid[0] : 0;
+                const int grid_w = grid.size() > 1 ? grid[1] : 0;
+                const size_t count = static_cast<size_t>(std::max(grid_h, 0)) * static_cast<size_t>(std::max(grid_w, 0))
+                    * this->patch_size * this->patch_size * this->temporal_patch_size * 3;
+                uint64_t h = 0xcbf29ce484222325ull ^ (static_cast<uint64_t>(static_cast<uint32_t>(grid_h)) << 32 | static_cast<uint32_t>(grid_w));
+                if (pixel_offset + count <= pixels.size()) {
+                    h = prefix_hash_bytes(pixels.data() + pixel_offset, count * sizeof(pixels[0]), h);
+                }
+                pixel_offset += count;
+                m.hash = h != 0 ? h : 1;   // 0 means "not hashed"
+            } else if (m.kind == prompt_media_t::kAudio && audio_idx < audio_payload.mel_spectrograms.size()) {
+                const auto& mel = audio_payload.mel_spectrograms[audio_idx];
+                const int frames = audio_payload.mel_spectrogram_frames_per_audio[audio_idx];
+                const int bins = audio_payload.mel_spectrogram_bins_per_audio[audio_idx];
+                audio_idx++;
+                uint64_t h = 0x84222325cbf29ce4ull ^ (static_cast<uint64_t>(static_cast<uint32_t>(frames)) << 32 | static_cast<uint32_t>(bins));
+                h = prefix_hash_bytes(mel.data(), mel.size() * sizeof(mel[0]), h);
+                m.hash = h != 0 ? h : 1;
+            }
         }
     }
-    // the whole prompt cached leaves no last token to sample from: read it in again (see _shared_insert)
-    if (skip_count != idx || (skip_count >= tokens.size() && !tokens.empty())) {
-        clear_context();
-        skip_count = 0;
+
+    // the skip and the payload trim come from the same plan, decided against the history the engine
+    // holds now (after the restore); this insert does its own prefill, so the plan is not handed on
+    const prompt_reuse_t plan = this->_plan_reuse(tokens, media);
+    this->planned_skip_.reset();
+    this->planned_media_.reset();   // committed into history_media_ below, once the prompt is in token_history
+
+    auto drop_front = [](auto& vec, size_t count) {
+        if (count == 0) return;
+        if (count >= vec.size()) { vec.clear(); return; }
+        vec.erase(vec.begin(), vec.begin() + count);
+    };
+
+    // drop the leading images/audios whose tokens fall within the reused prefix
+    // so the payload stays aligned with the surviving tokens
+    const size_t images_to_drop = std::min<size_t>(plan.skipped_media[prompt_media_t::kImage], image_payload.num_images);
+    if (images_to_drop > 0) {
+        // Compute how many bf16 elements to erase from the flat pixel buffer.
+        // Each image contributed grid_h * grid_w * patch_size^2 * temporal_patch_size * 3 values.
+        size_t pixel_elems_to_drop = 0;
+        for (size_t i = 0; i < images_to_drop; i++) {
+            const int grid_h = image_payload.image_grid_h_w[i][0];
+            const int grid_w = image_payload.image_grid_h_w[i][1];
+            pixel_elems_to_drop += static_cast<size_t>(grid_h) * grid_w
+                * this->patch_size * this->patch_size
+                * this->temporal_patch_size * 3;
+        }
+        drop_front(image_payload._processed_pixel_values, pixel_elems_to_drop);
+        drop_front(image_payload.image_grid_h_w,              images_to_drop);
+        drop_front(image_payload.num_soft_tokens_per_image,   images_to_drop);
+        image_payload.num_images -= static_cast<unsigned>(images_to_drop);
     }
+
+    const size_t audios_to_drop = std::min<size_t>(plan.skipped_media[prompt_media_t::kAudio], audio_payload.num_audios);
+    if (audios_to_drop > 0) {
+        // Each audio has its own mel_spectrograms[i] buffer (not a flat concat),
+        // so dropping is a simple front-erase on each per-audio vector.
+        drop_front(audio_payload.mel_spectrograms,                 audios_to_drop);
+        drop_front(audio_payload.mel_spectrogram_frames_per_audio, audios_to_drop);
+        drop_front(audio_payload.mel_spectrogram_bins_per_audio,   audios_to_drop);
+        drop_front(audio_payload.audio_tokens,                     audios_to_drop);
+        audio_payload.num_audios -= static_cast<unsigned>(audios_to_drop);
+    }
+    const bool has_modal = (image_payload.num_images > 0) || (audio_payload.num_audios > 0);
+
+    // _plan_reuse cleared already when the history ends inside an item or an item changed; the other clears
+    // (divergence, the whole prompt cached: no last token to sample from) are ours, as in _shared_insert
+    if (plan.clear && plan.reason != prompt_reuse_t::kInsideMedia && plan.reason != prompt_reuse_t::kMediaChanged) {
+        clear_context();
+    }
+    const size_t skip_count = plan.skip;
     tokens.erase(tokens.begin(), tokens.begin() + skip_count);
 
     if (this->total_tokens + tokens.size() >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping prefilling...");
+        meta_info.error_message = "Prompt does not fit in the context window: " + std::to_string(tokens.size()) + " new prompt tokens on top of the " + std::to_string(this->total_tokens) + " already held exceed the context length of " + std::to_string(this->MAX_L) + " tokens";
         return false;
     }
     for (int token : tokens){
         this->token_history.push_back(token);
     }
+    // as _shared_insert does with its plan: these are now the items token_history holds
+    this->history_media_ = std::move(media);
 
     auto prefill_start = this->profiler_list[PREFILL_TIME].start();
 
     int max_prefill_len = meta_info.max_prefill_len;
 
-    // Index (exclusive) of the last multimodal soft token in the surviving
+    // Index (exclusive) of the last multimodal token in the surviving
     // token sequence. The chunker uses this to guarantee the first prefill
     // chunk is large enough to carry the entire multimodal payload.
-    int first_len_run = 0;
-    for (int i = static_cast<int>(tokens.size()) - 1; i >= 0; i--) {
-        if (tokens[i] == image_token_id || tokens[i] == audio_token_id ||
-            tokens[i] == audio_start_token_id || tokens[i] == audio_end_token_id) {
-            first_len_run = i + 1;
-            break;
-        }
-    }
+    int first_len_run = static_cast<int>(plan.media_end);
 
     max_prefill_len = 1 << static_cast<int>(std::ceil(std::log2(max_prefill_len)));
     if (max_prefill_len < 512) {
@@ -552,8 +519,7 @@ bool Qwen3_5_Omni::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input
     meta_info.prefill_duration = (uint64_t)time_utils::duration_ns(prefill_start, prefill_end).first;
     // As in AutoModel::_shared_insert, `tokens` holds only the uncached suffix, so
     // the cached prefix is added back to report the whole prompt. The relevant count
-    // is `skip_count`, which is what was erased from `tokens` above -- not the earlier
-    // `prefix_skip_count`, which only trims the multi-modal payload.
+    // is `skip_count`, which is what was erased from `tokens` above.
     meta_info.cached_prompt_tokens = static_cast<int>(skip_count);
     meta_info.prompt_tokens = static_cast<int>(skip_count + tokens.size());
 
@@ -564,7 +530,7 @@ bool Qwen3_5_Omni::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input
     meta_info.insert_sample_pending = true;
     this->profiler_list[SAMPLING_TIME].stop(1);
 
-    this->checkpoint_his = this->token_history;
+    this->_checkpoint_history();
     this->engine->checkpoint();
     return true;
 }
@@ -755,6 +721,7 @@ void Qwen3_5_Omni::clear_context() {
     this->last_token = -1;
     this->token_history.clear();
     this->checkpoint_his.clear();
+    this->_forget_history_media();   // the items went with the history they sat in
     this->engine->clear_context();
     this->total_tokens = 0;
     this->sampler->reset_penalties();

@@ -323,6 +323,9 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
     // and audios as the chat template emitted them.
     int image_counter = 0;
     int audio_counter = 0;
+    // soft tokens pushed per image / audio chunk, to tell the prompt-cache plan where each item sits
+    std::vector<size_t> image_token_counts;
+    std::vector<size_t> audio_token_counts;
     for(int i = 0; i < tokens_init.size(); i++){
         if (tokens_init[i] == image_token_id && image_counter < (int)image_payload.num_images) {
             tokens.push_back(boi_token_id); // the first image soft token id, which is reserved for the model to identify the image position, the rest of the soft tokens for this image will be continuous following this id
@@ -330,6 +333,7 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
                 tokens.push_back(image_token_id);
             }
             tokens.push_back(eoi_token_id); // a separator token between images, not necessary but can help the model to better distinguish different images
+            image_token_counts.push_back(image_payload.num_soft_tokens_per_image[image_counter]);
             image_counter++;
         }
         else if (tokens_init[i] == audio_token_id && audio_counter < (int)audio_payload.num_audios) {
@@ -338,6 +342,7 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
                 tokens.push_back(audio_token_id);
             }
             tokens.push_back(eoa_token_id); // a separator token between audios, not necessary but can help the model to better distinguish different audios
+            audio_token_counts.push_back(audio_payload.num_soft_tokens_per_audio[audio_counter]);
             audio_counter++;
         }
         else {
@@ -348,126 +353,6 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
     assert(audio_counter == (int)audio_payload.num_audios);
 
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
-
-    // ----------------------------------------------------------------------
-    // Prompt-cache aware multi-modal alignment.
-    //
-    // AutoModel::_shared_insert prefix-matches `tokens` against `checkpoint_his`
-    // over the FULL length of `checkpoint_his`. If every token matches, it
-    // erases that prefix before prefilling; otherwise it calls clear_context()
-    // and skips nothing. We must NOT erase `tokens` here -- _shared_insert
-    // needs the untrimmed sequence to run that very check. What we DO need
-    // to fix up locally is the multi-modal payload (which carries
-    // pixels/waveforms for the WHOLE prompt, including images/audios from
-    // earlier turns that are already cached): drop the fully-cached leading
-    // images/audios so the surviving payload aligns with the surviving soft
-    // tokens after _shared_insert performs its own erase.
-    // ----------------------------------------------------------------------
-    size_t prefix_skip_count = 0;
-    {
-        const size_t idx = this->checkpoint_his.size();
-        for (size_t i = 0; i < idx; i++) {
-            if (i < tokens.size() && tokens[i] == this->checkpoint_his[i]) {
-                prefix_skip_count++;
-            } else {
-                break;
-            }
-        }
-        // Must match the entirety of checkpoint_his, otherwise _shared_insert
-        // will clear the context and not skip anything.
-        if (prefix_skip_count != idx) {
-            prefix_skip_count = 0;
-        }
-        // A repeated prompt is cached whole: _shared_insert would erase every token and have nothing to
-        // prefill or sample from. Start over instead, with the payload intact.
-        const size_t insert_len = tokens.size() - (this->enable_think ? 0 : 4);
-        if (idx > 0 && prefix_skip_count == idx && insert_len <= idx) {
-            header_print("FLM", "Prompt fully cached, prefilling it again");
-            this->clear_context();
-            prefix_skip_count = 0;
-        }
-
-        if (prefix_skip_count > 0 && (image_payload.num_images > 0 || audio_payload.num_audios > 0)) {
-            // Count modal soft-tokens that landed inside the cached prefix.
-            int skipped_image_tokens = 0;
-            int skipped_audio_tokens = 0;
-            for (size_t i = 0; i < prefix_skip_count; i++) {
-                if (tokens[i] == image_token_id) skipped_image_tokens++;
-                else if (tokens[i] == audio_token_id) skipped_audio_tokens++;
-            }
-
-            // Walk images in order; each image's soft-token block is either
-            // entirely inside the cached prefix or not at all (chat-template
-            // boundaries never split a single image's block).
-            size_t images_to_drop = 0;
-            {
-                int consumed = 0;
-                for (unsigned i = 0; i < image_payload.num_images; i++) {
-                    const int n = static_cast<int>(image_payload.num_soft_tokens_per_image[i]);
-                    if (consumed + n <= skipped_image_tokens) {
-                        consumed += n;
-                        images_to_drop++;
-                    } else {
-                        break;
-                    }
-                }
-            }
-
-            // Same for audios.
-            size_t audios_to_drop = 0;
-            {
-                int consumed = 0;
-                for (unsigned i = 0; i < audio_payload.num_audios; i++) {
-                    const int n = static_cast<int>(audio_payload.num_soft_tokens_per_audio[i]);
-                    if (consumed + n <= skipped_audio_tokens) {
-                        consumed += n;
-                        audios_to_drop++;
-                    } else {
-                        break;
-                    }
-                }
-            }
-
-            auto drop_front = [](auto& vec, size_t n) {
-                if (n == 0) return;
-                if (n >= vec.size()) { vec.clear(); return; }
-                vec.erase(vec.begin(), vec.begin() + n);
-            };
-
-            if (images_to_drop > 0) {
-                drop_front(image_payload.image_patch__element_per_patch, images_to_drop);
-                drop_front(image_payload.valid_patch_size_per_image,     images_to_drop);
-                drop_front(image_payload.pixel_values,                   images_to_drop);
-                drop_front(image_payload.image_grid_pairs_per_image,     images_to_drop);
-                drop_front(image_payload.num_soft_tokens_per_image,      images_to_drop);
-                image_payload.num_images -= static_cast<unsigned>(images_to_drop);
-                header_print("FLM",
-                    "Prompt-cache hit: dropped " << images_to_drop
-                    << " cached image(s) from payload");
-            }
-
-            if (audios_to_drop > 0) {
-                drop_front(audio_payload.mel_spectrograms,                 audios_to_drop);
-                drop_front(audio_payload.mel_spectrogram_frames_per_audio, audios_to_drop);
-                drop_front(audio_payload.mel_spectrogram_bins_per_audio,   audios_to_drop);
-                drop_front(audio_payload.num_soft_tokens_per_audio,        audios_to_drop);
-                audio_payload.num_audios -= static_cast<unsigned>(audios_to_drop);
-                header_print("FLM",
-                    "Prompt-cache hit: dropped " << audios_to_drop
-                    << " cached audio(s) from payload");
-            }
-        }
-    }
-
-    // find the last image token index, expressed relative to the tokens that
-    // will SURVIVE _shared_insert's prefix erase (i.e. shifted by -prefix_skip_count).
-    int last_image_token_index = -1;
-    for (int i = static_cast<int>(prefix_skip_count); i < (int)tokens.size(); i++) {
-        if ((tokens[i] == image_token_id || tokens[i] == boi_token_id)) {
-            last_image_token_index = i - static_cast<int>(prefix_skip_count);
-        }
-    }
-    last_image_token_index++; // plus the end of image tokens
 
     // hardware
     int restore_idx = -1;
@@ -484,6 +369,7 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
     if (image_payload.num_images == 0 && audio_payload.num_audios == 0 && !modal_tokens &&
         this->_prefix_slot_mode(meta_info, tokens.size(), slot_trim)) {
         checkpoint_his.clear();
+        this->checkpoint_media_ = std::vector<prompt_media_t>{}; // an empty checkpoint holds no media
         return this->_prefix_text_insert(meta_info, tokens, slot_trim, "<|turn>user", is_cancelled);
     }
     this->_prefix_legacy_path();
@@ -493,11 +379,72 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
     if (meta_info.restore_allowed && !checkpoint_his.empty()) {
         restore_idx = gemma4_12b_engine->restore();
         this->total_tokens = restore_idx;
-        this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
+        this->_restore_history(); // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
     }
 
     size_t n = tokens.size();
     tokens.resize(n - slot_trim);
+
+    // The payload carries every image / audio chunk of the prompt, including those of earlier turns the engine already
+    // holds: drop the ones _shared_insert will skip, decided by the same rule it uses, on the same tokens and history.
+    std::vector<prompt_media_t> media;
+    prompt_media_from_counts(tokens, image_token_id, image_token_counts, prompt_media_t::kImage, media);
+    prompt_media_from_counts(tokens, audio_token_id, audio_token_counts, prompt_media_t::kAudio, media);
+    // Content hashes of the full payload (before the drop), so a different picture or clip with the same token count is
+    // not taken for the one the engine holds. media lists the images first, then the audio chunks, each in payload order.
+    {
+        auto nonzero = [](uint64_t h) { return h ? h : 1ull; };
+        size_t m = 0;
+        for (size_t i = 0; i < image_payload.num_images && m < media.size(); i++, m++) {
+            const auto& px = image_payload.pixel_values[i];
+            const auto& grid = image_payload.image_grid_pairs_per_image[i];
+            const auto dims = image_payload.image_patch__element_per_patch[i];
+            uint64_t h = 0xcbf29ce484222325ull ^ (static_cast<uint64_t>(static_cast<uint32_t>(dims.first)) << 32 |
+                                                 static_cast<uint32_t>(dims.second));
+            h ^= static_cast<uint64_t>(image_payload.valid_patch_size_per_image[i]) * 0x9e3779b97f4a7c15ull;
+            h = prefix_hash_bytes(grid.data(), grid.size() * sizeof(grid[0]), h);
+            h = prefix_hash_bytes(px.data(), px.size() * sizeof(px[0]), h);
+            media[m].hash = nonzero(h);
+        }
+        for (size_t i = 0; i < audio_payload.num_audios && m < media.size(); i++, m++) {
+            const auto& mel = audio_payload.mel_spectrograms[i];
+            const uint64_t h = 0xcbf29ce484222325ull ^
+                (static_cast<uint64_t>(static_cast<uint32_t>(audio_payload.mel_spectrogram_frames_per_audio[i])) << 32 |
+                 static_cast<uint32_t>(audio_payload.mel_spectrogram_bins_per_audio[i]));
+            media[m].hash = nonzero(prefix_hash_bytes(mel.data(), mel.size() * sizeof(mel[0]), h));
+        }
+    }
+    const prompt_reuse_t plan = this->_plan_reuse(tokens, media);
+    {
+        auto drop_front = [](auto& vec, size_t count) {
+            if (count == 0) return;
+            if (count >= vec.size()) { vec.clear(); return; }
+            vec.erase(vec.begin(), vec.begin() + count);
+        };
+
+        const size_t images_to_drop = plan.skipped_media[prompt_media_t::kImage];
+        if (images_to_drop > 0) {
+            drop_front(image_payload.image_patch__element_per_patch, images_to_drop);
+            drop_front(image_payload.valid_patch_size_per_image,     images_to_drop);
+            drop_front(image_payload.pixel_values,                   images_to_drop);
+            drop_front(image_payload.image_grid_pairs_per_image,     images_to_drop);
+            drop_front(image_payload.num_soft_tokens_per_image,      images_to_drop);
+            image_payload.num_images -= static_cast<unsigned>(images_to_drop);
+        }
+
+        const size_t audios_to_drop = plan.skipped_media[prompt_media_t::kAudio];
+        if (audios_to_drop > 0) {
+            drop_front(audio_payload.mel_spectrograms,                 audios_to_drop);
+            drop_front(audio_payload.mel_spectrogram_frames_per_audio, audios_to_drop);
+            drop_front(audio_payload.mel_spectrogram_bins_per_audio,   audios_to_drop);
+            drop_front(audio_payload.num_soft_tokens_per_audio,        audios_to_drop);
+            audio_payload.num_audios -= static_cast<unsigned>(audios_to_drop);
+        }
+    }
+
+    // One past the last prefilled image row, relative to the skip: the first chunk is widened to hold the images,
+    // which travel with it alone. Audio never widened it here, so it is left out.
+    const int last_image_token_index = static_cast<int>(plan.media_end_by_kind[prompt_media_t::kImage]);
 
     gemma4_12b_multi_modal_payload_t multi_modal_payload;
     multi_modal_payload.image_payload = image_payload;
@@ -508,7 +455,7 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
         ? this->_shared_insert(meta_info, tokens, is_cancelled, &multi_modal_payload, last_image_token_index)
         : this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
 
-    checkpoint_his = token_history;
+    this->_checkpoint_history();
     int checkpoint_idx = gemma4_12b_engine->checkpoint();
     return success;
 }

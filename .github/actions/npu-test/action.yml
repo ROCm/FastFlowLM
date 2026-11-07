@@ -28,6 +28,10 @@ inputs:
     description: Comma-separated model ids that restrict every suite.
     required: false
     default: ""
+  backend:
+    description: A GPU backend (oga-hipep) whose models to test instead of the NPU models.
+    required: false
+    default: ""
   asr-full:
     description: '"true" to run the whole ASR evaluation set on the pr tier.'
     required: false
@@ -92,12 +96,14 @@ runs:
         SUITES: ${{ inputs.suites }}
         FAMILIES: ${{ inputs.families }}
         MODELS: ${{ inputs.models }}
+        BACKEND: ${{ inputs.backend }}
         ASR_FULL: ${{ inputs.asr-full }}
         ASR_KEY: ${{ inputs.asr-expected-key }}
       run: |
         export FLM_MODEL_PATH="${FLM_MODEL_PATH:-/scratch}"
         args=(--flm-bin "${FLM_BIN}" --label "${LABEL}" --tier "${TIER}" --suites "${SUITES}"
-              --families "${FAMILIES}" --models "${MODELS}" --asr-expected-key "${ASR_KEY}"
+              --families "${FAMILIES}" --models "${MODELS}" --backend "${BACKEND}"
+              --asr-expected-key "${ASR_KEY}"
               --output-dir "${GITHUB_WORKSPACE}/npu-test-results/${LABEL}")
         [ "${ASR_FULL}" = "true" ] && args+=(--asr-full)
         code=0
@@ -116,6 +122,7 @@ runs:
         SUITES: ${{ inputs.suites }}
         FAMILIES: ${{ inputs.families }}
         MODELS: ${{ inputs.models }}
+        BACKEND: ${{ inputs.backend }}
         ASR_FULL: ${{ inputs.asr-full }}
         ASR_KEY: ${{ inputs.asr-expected-key }}
       run: |
@@ -131,7 +138,7 @@ runs:
         $outDir = Join-Path $env:GITHUB_WORKSPACE "npu-test-results\$env:LABEL"
         $cmdArgs = @('-m', 'npu_test', "--flm-bin=$env:FLM_BIN", "--label=$env:LABEL",
                      "--tier=$env:TIER", "--suites=$env:SUITES", "--families=$env:FAMILIES",
-                     "--models=$env:MODELS", "--asr-expected-key=$env:ASR_KEY",
+                     "--models=$env:MODELS", "--backend=$env:BACKEND", "--asr-expected-key=$env:ASR_KEY",
                      "--output-dir=$outDir")
         if ($env:ASR_FULL -eq 'true') { $cmdArgs += '--asr-full' }
         & python $cmdArgs

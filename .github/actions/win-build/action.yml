@@ -144,7 +144,7 @@ runs:
         $launcher = @('-DCMAKE_C_COMPILER_LAUNCHER=sccache', '-DCMAKE_CXX_COMPILER_LAUNCHER=sccache')
         switch ($env:VARIANT) {
           'XRT' {
-            cmake --preset windows-ninja @launcher
+            cmake --preset windows-ninja @launcher -DFLM_ENABLE_OGA_HIPEP=ON
           }
           'HRX' {
             if (-not $env:HRX_PREFIX) {

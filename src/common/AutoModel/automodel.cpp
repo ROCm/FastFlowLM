@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <numeric>
 #include <stdexcept>
 
 namespace {
@@ -365,6 +366,7 @@ void AutoModel::_shared_after_inference_failure(bool poisoned) {
     this->last_token = -1;
     this->token_history.clear();
     this->checkpoint_his.clear();
+    this->_forget_history_media();
     // A poisoned engine cannot be driven at all, not even to clear itself.
     if (!poisoned && this->lm_engine) {
         try { this->lm_engine->clear_context(); } catch (...) {}
@@ -414,6 +416,7 @@ size_t AutoModel::_prefix_resume(PrefixSlotCache& cache, const std::vector<int>&
     }
     this->total_tokens = resumed.match_len;
     this->token_history = std::move(matched);
+    this->history_media_.reset(); // the slot was only taken if its images are the prompt's
     // a cold prompt starts with an empty penalty history (clear_context); resuming must too,
     // or the tokens of earlier requests change what this one generates
     this->sampler->reset_penalties();
@@ -484,9 +487,11 @@ bool AutoModel::_prefix_insert(PrefixSlotCache& cache, chat_meta_info_t& meta_in
             head_prefill_ns = head_meta.prefill_duration;
             const std::vector<int> head_tokens(full_tokens.begin(), full_tokens.begin() + boundary);
             cache.set_live(head_tokens);
-            cache.save(head_tokens, {}, true, 0);
+            cache.save(head_tokens, image_hashes, true, 0); // keeps the hashes of the pictures inside the head
         } else {
             meta_info.stop_reason = head_meta.stop_reason;
+            meta_info.error_message = head_meta.error_message;
+            meta_info.error_code = head_meta.error_code;
         }
     }
     if (success) {
@@ -526,7 +531,33 @@ void AutoModel::_shared_validate_capacity(std::size_t rendered_tokens,
     }
 }
 
+prompt_reuse_t AutoModel::_plan_reuse(const std::vector<int>& tokens, const std::vector<prompt_media_t>& media) {
+    prompt_reuse_t plan = plan_prompt_reuse(this->token_history, tokens, media,
+                                            this->history_media_ ? &*this->history_media_ : nullptr);
+    if (plan.reason == prompt_reuse_t::kInsideMedia || plan.reason == prompt_reuse_t::kMediaChanged) {
+        // _shared_insert alone would keep the history: it does not see where the items are, nor what they hold
+        header_print("FLM", (plan.reason == prompt_reuse_t::kInsideMedia
+                                 ? "Prompt cache ends inside an image or audio clip, clearing context..."
+                                 : "An image or audio clip in the cached part of the prompt changed, clearing context..."));
+        clear_context();
+    }
+    // the other clears are _shared_insert's own, made when it gets there
+    this->planned_skip_ = plan.skip;
+    this->planned_media_ = media;
+    const size_t dropped = std::accumulate(plan.skipped_media.begin(), plan.skipped_media.end(), size_t{0});
+    if (dropped > 0) {
+        header_print("FLM", "Prompt-cache hit: dropped " << plan.skipped_media[prompt_media_t::kImage] << " cached image(s) and "
+                            << plan.skipped_media[prompt_media_t::kAudio] << " cached audio clip(s) from payload");
+    }
+    return plan;
+}
+
 bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled, void* payload, int first_len_run, std::optional<int> requested_max_new_tokens, bool sample_next) {
+    // taken first, so a request that throws below cannot leave it for the next one; a prefill-only head pass
+    // (_prefix_insert) leaves the plan to the pass that reads the rest of the prompt
+    const std::optional<size_t> planned_skip = sample_next ? std::exchange(this->planned_skip_, std::nullopt) : std::nullopt;
+    std::optional<std::vector<prompt_media_t>> planned_media;
+    if (sample_next) planned_media = std::exchange(this->planned_media_, std::nullopt);
     this->_shared_validate_capacity(tokens.size(), requested_max_new_tokens);
 
     // a prefill-only pass (sample_next false) is the head of a longer prompt: the
@@ -549,42 +580,45 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
     // }
     // std::cout << std::endl;
 
-    // prefix check for tokens and token history to see if we can skip some tokens
-    const size_t idx = this->token_history.size();
-    size_t skip_count = 0;
-    for (size_t i = 0; i < idx; i++) {
-        if (i < tokens.size() && tokens[i] == this->token_history[i]) {
-            skip_count++;
-        }
-        else {
-            break;
-        }
-    }
-    if (skip_count != idx) {
-        if (is_server_mode) {
+    // skip the part of the prompt the engine already holds; the rule is plan_prompt_reuse's, which the
+    // models with media asked already (_plan_reuse) to trim their payload the same way
+    const prompt_reuse_t plan = plan_prompt_reuse(this->token_history, tokens);
+    if (plan.clear) {
+        if (is_server_mode && plan.reason == prompt_reuse_t::kDiverged) {
             header_print("FLM", "Conversation context diverged from cache, clearing context...");
         }
+        // kWholePrompt: the engine holds the whole prompt already (the same request again), but
+        // sampling needs the logits of its last token, and the cache cannot step back one
         clear_context();
-        skip_count = 0;
     }
-    else if (skip_count >= tokens.size() && !tokens.empty()) {
-        // The engine holds the whole prompt already (the same request again), but
-        // sampling needs the logits of its last token, and the cache cannot step
-        // back one: read it in again from the start.
+    const size_t skip_count = plan.skip;
+    if (payload != nullptr && planned_skip && *planned_skip != skip_count) {
+        // the payload was trimmed for another skip: its items would land on the wrong rows
         clear_context();
-        skip_count = 0;
+        throw std::logic_error("prompt cache: the payload was trimmed for a skip of " + std::to_string(*planned_skip) +
+                               " tokens, but the engine keeps " + std::to_string(skip_count));
     }
     tokens.erase(tokens.begin(), tokens.begin() + skip_count);
 
     if (this->total_tokens + tokens.size() >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping prefilling...");
+        meta_info.error_message = "Prompt does not fit in the context window: " + std::to_string(tokens.size()) +
+                                  " new prompt tokens on top of the " + std::to_string(this->total_tokens) +
+                                  " already held exceed the context length of " + std::to_string(this->MAX_L) + " tokens";
+        meta_info.error_code = 400;
         return false;
     }
     for (int token : tokens){
         this->token_history.push_back(token);
     }
+    if (planned_media) {
+        this->history_media_ = std::move(*planned_media);
+    } else if (skip_count == 0) {
+        this->history_media_ = std::vector<prompt_media_t>{};   // a prompt read in without a plan has no known media
+    }
     buffer<bf16> y;
 
+    const std::uint64_t replayed_before = this->backend_ ? this->backend_->replayed_tokens() : 0;
     auto prefill_start_time = this->profiler_list[PREFILL_TIME].start();
     
     y = _chunked_insert(meta_info, tokens, is_cancelled, payload, first_len_run);
@@ -593,11 +627,13 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
     meta_info.prefill_duration = (uint64_t)time_utils::duration_ns(prefill_start_time, prefill_end_time).first;
     // `tokens` was trimmed to the uncached suffix above, so add the prefix served
     // from the KV cache back on: usage.prompt_tokens is the whole prompt, and the
-    // cached part is reported separately rather than subtracted.
-    meta_info.cached_prompt_tokens = static_cast<int>(skip_count);
+    // cached part is reported separately rather than subtracted. What the engine
+    // had to run again of that prefix did not come from its cache.
+    const std::uint64_t replayed = this->backend_ ? this->backend_->replayed_tokens() - replayed_before : 0;
+    meta_info.cached_prompt_tokens = static_cast<int>(skip_count - std::min<std::uint64_t>(skip_count, replayed));
     meta_info.prompt_tokens = static_cast<int>(skip_count + tokens.size());
 
-    if (meta_info.stop_reason == CANCEL_DETECTED) {
+    if (meta_info.stop_reason == CANCEL_DETECTED || meta_info.stop_reason == ERROR_DETECTED) {
         return false;
     }
 
@@ -624,6 +660,23 @@ buffer<bf16> AutoModel::_chunked_insert(chat_meta_info_t& meta_info, std::vector
         max_prefill_len = 1 << static_cast<int>(std::ceil(std::log2(max_prefill_len)));
     }
     buffer<bf16> y;
+    // test hook, off unless set: FLM_TEST_PREFILL_FAULT=throw|false makes a prefill whose prompt contains the text
+    // FLM_TEST_PREFILL_FAULT throw / be refused (ERROR_DETECTED), as a failing engine would (src/test/openai_api_test)
+    static const std::string prefill_fault = [] {
+        const char* v = std::getenv("FLM_TEST_PREFILL_FAULT");
+        return std::string(v != nullptr ? v : "");
+    }();
+    if (!prefill_fault.empty() && this->tokenizer->decode(tokens).find("FLM_TEST_PREFILL_FAULT") != std::string::npos) {
+        if (prefill_fault == "throw") {
+            throw std::runtime_error("FLM_TEST_PREFILL_FAULT: injected prefill failure");
+        }
+        if (prefill_fault == "false") {
+            meta_info.stop_reason = ERROR_DETECTED;
+            meta_info.error_message = "FLM_TEST_PREFILL_FAULT: injected prefill refusal";
+            meta_info.error_code = 500;
+            return y;
+        }
+    }
     if (max_prefill_len < 512) {
         if (is_cancelled()) {
             meta_info.stop_reason = CANCEL_DETECTED;
@@ -710,8 +763,10 @@ void AutoModel::_begin_turn(chat_meta_info_t& meta_info, const std::vector<int>&
         }
     }
     if (meta_info.constraint) {
+        // a grammar that lets a continued message stop inside a call is a tool grammar,
+        // so it starts inside that call; a token ban ignores the prefill
         meta_info.constraint->start(chat_format_prefill(this->chat_format, meta_info.prompt_tail,
-                                                        meta_info.continue_final_message));
+                                                        meta_info.continue_final_message, true));
     }
 }
 
@@ -999,6 +1054,7 @@ void AutoModel::_clear_live_context() {
     this->last_token = -1;
     this->token_history.clear();
     this->checkpoint_his.clear();
+    this->_forget_history_media();
     // A poisoned engine would throw; drop the conversation and leave it alone
     // so the caller can still reload.
     if (this->backend_ && this->backend_->poisoned()) {

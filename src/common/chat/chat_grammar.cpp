@@ -7,10 +7,13 @@
 #include <fstream>
 #include <functional>
 #include <iterator>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_map>
+#include <variant>
 #include <vector>
 
 #include <xgrammar/xgrammar.h>
@@ -84,6 +87,73 @@ json qwen_xml_schema(json schema) {
 
 json grammar_content(const std::string& ebnf) {
     return {{"type", "grammar"}, {"grammar", ebnf}};
+}
+
+/// \brief Text a raw string value may not hold: where the call goes on after it
+/// \note As EBNF string literals. The separator between two parts of a call is at
+///       most one whitespace character (see qwen_xml_arguments), so these are all of
+///       its spellings; the parser ends a value, a function and a block the same way.
+std::string qwen_xml_value_ends() {
+    std::string out;
+    for (const char* ws : {"", "\\n", " ", "\\t", "\\r"}) {
+        for (const auto& [close, next] : {std::pair{"</parameter>", "<parameter="}, std::pair{"</parameter>", "</function>"},
+                                          std::pair{"</function>", "</tool_call>"}, std::pair{"</function>", "<function="}}) {
+            out += std::string(out.empty() ? "" : ", ") + "\"" + close + ws + next + "\"";
+        }
+    }
+    return "excludes=(" + out + ")";
+}
+
+/// \brief The arguments of a Qwen XML call: xgrammar's qwen_xml grammar for the schema,
+///        but a raw string value may hold "</parameter>"
+/// \note xgrammar ends a raw string at the first "</parameter>", so a value that holds
+///       one (XML, or code that writes tool calls) is cut there, and the model, made to
+///       close the call, writes the rest of it as the answer. The value only has to end
+///       where the call goes on after it, as the parser reads it: at a "</parameter>"
+///       followed by the next parameter or by "</function>". The grammar is rebuilt
+///       from xgrammar's own text with just that rule changed; should that ever fail,
+///       the stock grammar stands. The templates put one newline between the parts of a
+///       call, so one whitespace character is all the grammar allows there, which keeps
+///       the list of what a value may not hold short and exact.
+json qwen_xml_arguments(const json& schema) {
+    // the same tools come with every request of a conversation, and the rebuild costs
+    // far more than the rest of the structural tag
+    static std::mutex mutex;
+    static std::unordered_map<std::string, json> built;
+    const std::string key = schema.dump();
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        auto it = built.find(key);
+        if (it != built.end()) {
+            return it->second;
+        }
+    }
+    json content = {{"type", "json_schema"}, {"json_schema", qwen_xml_schema(schema)}, {"max_whitespace_cnt", 1},
+                    {"style", "qwen_xml"}};
+    static const std::string RULE = "\nxml_string ::= ";
+    static const std::string EXCLUDES = "excludes=(\"</parameter>\")";
+    try {
+        auto grammar = xgrammar::Grammar::FromStructuralTag(json{{"type", "structural_tag"}, {"format", content}}.dump());
+        if (std::holds_alternative<xgrammar::Grammar>(grammar)) {
+            std::string ebnf = std::get<xgrammar::Grammar>(grammar).ToString();
+            size_t rule = ebnf.find(RULE);
+            size_t excludes = rule == std::string::npos ? rule : ebnf.find(EXCLUDES, rule);
+            size_t rule_end = rule == std::string::npos ? rule : ebnf.find(" ::= ", rule + RULE.size());
+            // no raw string in this schema, nothing to change
+            if (excludes != std::string::npos && excludes < rule_end) {
+                ebnf.replace(excludes, EXCLUDES.size(), qwen_xml_value_ends());
+                xgrammar::Grammar::FromEBNF(ebnf); // throws when the text does not read back
+                content = grammar_content(ebnf);
+            }
+        }
+    } catch (const std::exception&) {
+    }
+    std::lock_guard<std::mutex> lock(mutex);
+    if (built.size() >= 256) {
+        built.clear();
+    }
+    built.emplace(key, content);
+    return content;
 }
 
 // ---------------------------------------------------------------- tools of a request
@@ -335,11 +405,14 @@ tool_syntax tool_tags(const chat_format_spec& spec, const std::vector<tool_def>&
                                           schema_content(tool.parameters), "}\n</tool_call>"));
                 break;
             case chat_format_kind::QWEN_XML:
-                // xgrammar's qwen_3_5 style
+                // xgrammar's qwen_3_5 style, except for the end: the templates write the newline
+                // after each "</parameter>", not before "</function>", so a call without
+                // arguments is "<function=f>\n</function>"; the parameter list takes trailing
+                // whitespace, which covers the newline after the last one
                 syntax.trigger = "<tool_call>\n<function=";
                 syntax.tags.push_back(tag("<tool_call>\n<function=" + tool.name + ">\n",
-                                          schema_content(qwen_xml_schema(tool.parameters), "qwen_xml"),
-                                          "\n</function>\n</tool_call>"));
+                                          qwen_xml_arguments(tool.parameters),
+                                          "</function>\n</tool_call>"));
                 break;
             case chat_format_kind::GEMMA4:
                 syntax.trigger = "<|tool_call>";

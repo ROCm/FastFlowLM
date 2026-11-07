@@ -100,6 +100,15 @@ private:
     std::vector<audio_data_t> clip_audio_length(audio_data_t& audio, double max_duration_second);
     void extract_spectrogram(std::vector<audio_data_t>& audio_inputs, gemma4e_audio_payload_t& audio_payload);
 
+    /// \brief Keep what the engine ran when the prompt goes on from its last reply
+    /// \note The template renders a past reply without the thought channel the
+    ///       engine ran with it (an empty one when thinking is off), so the prompt
+    ///       leaves the engine's history right after that reply's header. When the
+    ///       prompt's copy of the reply is the one the engine generated, the prompt
+    ///       is rewritten to the engine's history plus what follows the reply.
+    /// \return whether `tokens` now continues token_history
+    bool _continue_verbatim(std::vector<int>& tokens, std::optional<int> requested_max_new_tokens);
+
 protected:
     /// Protected so Gemma4e_Flash can lower the default; see its constructor.
     int image_softtoken_budget = 280; // set a default value
