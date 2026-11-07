@@ -472,6 +472,8 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
                     newContent.push_back({{"type", "image"}, {"image", img}});
                 }
             }
+            // Gemma 4 does best with images before the text and audio after it (model card)
+            newContent.push_back({{"type", "text"}, {"text", message.value("content", "")}});
             // Process Audios
             if (message.contains("audios")) {
                 const gemma4e_engine_config_t gemma4e_engine = this->engine_config();
@@ -497,7 +499,6 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
                     newContent.push_back({{"type", "audio"}, {"audio", aud}});
                 }
             }
-            newContent.push_back({{"type", "text"}, {"text", message.value("content", "")}});
 
             nlohmann::ordered_json newItem = {
                 {"role", message.value("role", "user")},
@@ -608,11 +609,10 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
         for (int i = 0; i < input.images.size(); i++) {
             content["content"].push_back({{"type", "image"}, {"image", input.images[i]}});
         }
+        content["content"].push_back({{"type", "text"}, {"text", input.prompt}});
         for (int i = 0; i < total_audio_clips; i++) {
             content["content"].push_back({{"type", "audio"}, {"audio", input.audios[0]}}); // placeholder
         }
-        
-        content["content"].push_back({{"type", "text"}, {"text", input.prompt}});
         messages.push_back(content);
         templated_text = this->apply_chat_template(messages);
     }
@@ -756,9 +756,10 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
         audio_payload.num_audios -= static_cast<unsigned>(audios_to_drop);
     }
 
-    // one past the last prefilled image row, relative to the skip: the first chunk is widened to hold the images,
-    // which travel with it alone. Audio never widened it here, so it is left out.
-    const int last_image_token_index = static_cast<int>(plan.media_end_by_kind[prompt_media_t::kImage]);
+    // one past the last prefilled image or audio row, relative to the skip: the first chunk is widened to hold
+    // them, as their payload travels with it alone. Audio comes after the text, so a long text can push it past
+    // a first chunk sized for the images only.
+    const int first_len_run = static_cast<int>(plan.media_end);
 
     // hardware
     gemma4e_multi_modal_payload_t multi_modal_payload;
@@ -768,7 +769,7 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     const bool has_multimodal = image_payload.num_images > 0 || audio_payload.num_audios > 0;
 
     bool success = has_multimodal
-        ? this->_shared_insert(meta_info, tokens, is_cancelled, &multi_modal_payload, last_image_token_index)
+        ? this->_shared_insert(meta_info, tokens, is_cancelled, &multi_modal_payload, first_len_run)
         : this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
 
     // Single-turn (flash): the only checkpoint is the pinned system prefix, which Gemma4e_Flash owns. Taking this one would

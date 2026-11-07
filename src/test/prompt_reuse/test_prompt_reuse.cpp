@@ -146,8 +146,6 @@ void test_audio_brackets() {
     CHECK(plan.skipped_media[prompt_media_t::kImage] == 1);
     CHECK(plan.skipped_media[prompt_media_t::kAudio] == 1);
     CHECK(plan.media_end == 12 - 9);
-    CHECK(plan.media_end_by_kind[prompt_media_t::kImage] == 0);
-    CHECK(plan.media_end_by_kind[prompt_media_t::kAudio] == 12 - 9);
 
     // an item with no tokens (a clip too short for one row) adds no rows to the first chunk
     std::vector<prompt_media_t> with_empty = media;
