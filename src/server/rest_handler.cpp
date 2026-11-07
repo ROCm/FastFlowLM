@@ -112,9 +112,10 @@ T value_or(const json& request, const char* key, T fallback) {
 }
 }
 
-///@brief Normalize messages by merging consecutive user messages (like Ollama does)
+///@brief Normalize messages: drop the reasoning from assistant messages
 ///@param messages the original messages
-///@return normalized messages with consecutive user messages merged
+///@return the messages, in the same order: consecutive messages of one role stay separate,
+///        and the chat template decides how to render them
 static json normalize_messages(json messages) {
     if (messages.empty()) return messages;
 
@@ -124,61 +125,7 @@ static json normalize_messages(json messages) {
         auto current_msg = messages[i];
         std::string role = current_msg.value("role", "");
 
-        if (role == "user") {
-            json merged_content_array = json::array();
-
-            // Merge all consecutive user messages into array format
-            while (i < messages.size() && messages[i].value("role", "") == "user") {
-                if (messages[i].contains("content")) {
-                    if (messages[i]["content"].is_array()) {
-                        for (auto& item : messages[i]["content"]) {
-                            merged_content_array.push_back(item);
-                        }
-                    }
-                    else if (messages[i]["content"].is_string()) {
-                        std::string text = messages[i]["content"].get<std::string>();
-                        if (!text.empty()) {
-                            nlohmann::ordered_json text_item;
-                            text_item["type"] = "text";
-                            text_item["text"] = text;
-                            merged_content_array.push_back(text_item);
-                        }
-                    }
-                }
-                if (i + 1 < messages.size() && messages[i + 1].value("role", "") == "user") i++;
-                else break;
-            }
-
-            current_msg["content"] = merged_content_array;
-        }
-        else if (role == "system") {
-            json merged_content_array = json::array();
-
-            // Merge all consecutive system messages into array format
-            while (i < messages.size() && messages[i].value("role", "") == "system") {
-                if (messages[i].contains("content")) {
-                    if (messages[i]["content"].is_array()) {
-                        for (auto& item : messages[i]["content"]) {
-                            merged_content_array.push_back(item);
-                        }
-                    }
-                    else if (messages[i]["content"].is_string()) {
-                        std::string text = messages[i]["content"].get<std::string>();
-                        if (!text.empty()) {
-                            json text_item;
-                            text_item["type"] = "text";
-                            text_item["text"] = text;
-                            merged_content_array.push_back(text_item);
-                        }
-                    }
-                }
-                if (i + 1 < messages.size() && messages[i + 1].value("role", "") == "system") i++;
-                else break;
-            }
-
-            current_msg["content"] = merged_content_array;
-        }
-        else if (role == "assistant") {
+        if (role == "assistant") {
             // Strip prior assistant "thinking" / reasoning fields so they are not
             // fed back into the model on subsequent turns.
             if (current_msg.contains("thinking")) {
