@@ -209,6 +209,9 @@
       <Component Id="Comp_hunyuan_npu.dll" Guid="*">
         <File Id="File_hunyuan_npu.dll" Source="$(SourceDir)\hunyuan_npu.dll" KeyPath="yes" />
       </Component>
+      <Component Id="Comp_hy_mem_npu.dll" Guid="*">
+        <File Id="File_hy_mem_npu.dll" Source="$(SourceDir)\hy_mem_npu.dll" KeyPath="yes" />
+      </Component>
       <Component Id="Comp_lm_head.dll" Guid="*">
         <File Id="File_lm_head.dll" Source="$(SourceDir)\lm_head.dll" KeyPath="yes" />
       </Component>
