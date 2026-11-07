@@ -9,6 +9,7 @@ set(FLM_CHAT_SOURCES
     "${CMAKE_CURRENT_LIST_DIR}/chat_constraint.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/chat_continue.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/chat_format.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/chat_gemma4_tools.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/chat_grammar.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/chat_msg.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/chat_parser.cpp"

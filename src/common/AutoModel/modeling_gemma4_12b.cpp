@@ -6,6 +6,7 @@
 /// \note This is a source file for the Gemma4_12B class (text-only interface).
 
 #include "AutoModel/modeling_gemma4_12b.hpp"
+#include "chat/chat_gemma4_tools.hpp"
 #include "metrices.hpp"
 #include "error_measure.hpp"
 #include <cassert>
@@ -86,7 +87,7 @@ std::string Gemma4_12B::apply_chat_template(nlohmann::ordered_json& messages, nl
     inputs.extra_context = this->extra_context;
     inputs.extra_context["enable_thinking"] = this->enable_think;
     if (!tools.empty())
-        inputs.tools = tools;
+        inputs.tools = gemma4_template_tools(tools);
     return this->_render_chat_template(inputs, continue_final_message, opt);
 }
 
