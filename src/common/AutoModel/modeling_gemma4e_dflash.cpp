@@ -212,7 +212,7 @@ std::string Gemma4e::_speculative_loop(Engine* engine, chat_meta_info_t& meta_in
     if (!single_turn && !this->thinking_enabled()) {
         // the history the checkpoint holds: an eos ending the turn was run, a cut-off token was not
         this->lm_engine->checkpoint();
-        checkpoint_his = token_history;
+        this->_checkpoint_history();
     }
     return result;
 }

@@ -771,6 +771,26 @@ void TestRemovingBaseWarnsAndRemovingDependantKeepsBase() {
                  ModelDownloader::ModelStatus::Missing);
 }
 
+void TestRemovingAModelRemovesTheFoldersOfItsFiles() {
+    BaseModelFixture fixture("nested-remove", true,
+                             {{"files", {"config.json", "draft.bin", "decoder/model.onnx"}}});
+    fixture.InstallDependant();
+    Write(fixture.dep_path() / "decoder" / "model.onnx", "graph");
+    Write(fixture.dep_path() / "decoder" / "model.onnx.data.part", "partial");
+    ModelDownloader downloader(fixture.models);
+    bool removed = false;
+    Captured([&] { removed = downloader.remove_model(kDependantTag); });
+    TEST_REQUIRE(removed);
+    TEST_REQUIRE(!fs::exists(fixture.dep_path()));
+
+    // a folder that holds none of the model's files is not the model's to delete
+    fixture.InstallDependant();
+    Write(fixture.dep_path() / "notes" / "mine.txt", "keep");
+    Captured([&] { removed = downloader.remove_model(kDependantTag); });
+    TEST_REQUIRE(!removed);
+    TEST_REQUIRE(Read(fixture.dep_path() / "notes" / "mine.txt") == "keep");
+}
+
 void TestModelscopeFlagReachesTheBase() {
     // Only the ModelScope sources exist: both pulls can succeed only if the flag
     // reaches the base as well as the dependant.
@@ -946,6 +966,7 @@ int main() {
     RunTest(TestStatusNeedsBothPackages, "status needs both packages");
     RunTest(TestCheckReportsAnIncompleteBase, "check reports incomplete base");
     RunTest(TestRemovingBaseWarnsAndRemovingDependantKeepsBase, "rm semantics");
+    RunTest(TestRemovingAModelRemovesTheFoldersOfItsFiles, "rm removes the folders of its files");
     RunTest(TestModelscopeFlagReachesTheBase, "modelscope flag reaches base");
     RunTest(TestShippedCatalogDeclaresTheDflashDependant, "shipped dflash entry");
     RunTest(TestShippedCatalogDeclaresTheQwen35FlashTag, "shipped qwen3.5-flash entry");

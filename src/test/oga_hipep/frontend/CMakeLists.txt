@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Advanced Micro Devices, Inc.
 
 cmake_minimum_required(VERSION 3.22)
-project(test_qwen_frontend LANGUAGES CXX)
+project(oga_hipep_frontend_tests LANGUAGES CXX)
 
 if(NOT WIN32)
     message(FATAL_ERROR "oga-hipep frontend tests require Windows")
@@ -22,30 +22,35 @@ find_path(XRT_INCLUDE_DIR NAMES xrt/xrt_bo.h
 set(XRT_LIB_DIR "${XRT_INCLUDE_DIR}/../lib" CACHE PATH "Directory containing xrt_coreutil")
 
 include("${FLM_SOURCE_DIR}/common/chat/chat_sources.cmake")
-
-add_executable(test_qwen_frontend
-    "${FLM_SOURCE_DIR}/test/oga_hipep/test_qwen_frontend.cpp"
-    "${FLM_SOURCE_DIR}/common/prefix_slot_cache.cpp"
-    "${FLM_SOURCE_DIR}/common/AutoModel/automodel.cpp"
-    "${FLM_SOURCE_DIR}/common/AutoModel/model_backend.cpp"
-    "${FLM_SOURCE_DIR}/common/AutoModel/modeling_qwen3_5vl.cpp"
-    ${FLM_CHAT_SOURCES})
-
-target_include_directories(test_qwen_frontend PRIVATE
-    "${FLM_SOURCE_DIR}/include"
-    "${FLM_SOURCE_DIR}/pull"
-    "${FLM_SOURCE_DIR}/runner"
-    "${FLM_SOURCE_DIR}/server"
-    "${FLM_SOURCE_DIR}/../third_party/tokenizers-cpp/include"
-    "${BOOST_INCLUDE_DIR}"
-    "${XRT_INCLUDE_DIR}")
-target_compile_definitions(test_qwen_frontend PRIVATE
-    DEV_BUILD=1 __WINDOWS__ USEAVX2=1 DISABLE_ABI_CHECK=1 _ENABLE_EXTENDED_ALIGNED_STORAGE
-    WIN32_LEAN_AND_MEAN NOMINMAX)
-target_compile_options(test_qwen_frontend PRIVATE
-    $<$<CXX_COMPILER_ID:MSVC>:/wd4005 /wd4244>)
-target_link_directories(test_qwen_frontend PRIVATE "${XRT_LIB_DIR}")
-target_link_libraries(test_qwen_frontend PRIVATE xrt_coreutil flm_xgrammar)
-
 include(CTest)
-add_test(NAME test_qwen_frontend COMMAND test_qwen_frontend)
+
+function(add_frontend_test name frontend_source)
+    add_executable(${name}
+        "${FLM_SOURCE_DIR}/test/oga_hipep/${name}.cpp"
+        "${FLM_SOURCE_DIR}/common/prefix_slot_cache.cpp"
+        "${FLM_SOURCE_DIR}/common/AutoModel/automodel.cpp"
+        "${FLM_SOURCE_DIR}/common/AutoModel/model_backend.cpp"
+        "${FLM_SOURCE_DIR}/common/AutoModel/${frontend_source}"
+        ${FLM_CHAT_SOURCES})
+
+    target_include_directories(${name} PRIVATE
+        "${FLM_SOURCE_DIR}/include"
+        "${FLM_SOURCE_DIR}/pull"
+        "${FLM_SOURCE_DIR}/runner"
+        "${FLM_SOURCE_DIR}/server"
+        "${FLM_SOURCE_DIR}/../third_party/tokenizers-cpp/include"
+        "${BOOST_INCLUDE_DIR}"
+        "${XRT_INCLUDE_DIR}")
+    target_compile_definitions(${name} PRIVATE
+        DEV_BUILD=1 __WINDOWS__ USEAVX2=1 DISABLE_ABI_CHECK=1 _ENABLE_EXTENDED_ALIGNED_STORAGE
+        WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(${name} PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>:/wd4005 /wd4244>)
+    target_link_directories(${name} PRIVATE "${XRT_LIB_DIR}")
+    target_link_libraries(${name} PRIVATE xrt_coreutil flm_xgrammar)
+
+    add_test(NAME ${name} COMMAND ${name})
+endfunction()
+
+add_frontend_test(test_qwen_frontend modeling_qwen3_5vl.cpp)
+add_frontend_test(test_gpt_oss_frontend modeling_gpt_oss.cpp)

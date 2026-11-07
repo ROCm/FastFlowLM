@@ -185,11 +185,13 @@ bool MiniCPM_V_MOE::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& inpu
     const bool slot_mode = this->_prefix_slot_mode(meta_info, tokens.size(), think_trim);
     size_t match_len = 0;
     std::vector<int> full_tokens;          // what this prompt leaves in the engine
-    std::vector<uint64_t> image_hashes;    // content of each view of its pictures
+    std::vector<uint64_t> image_hashes;    // content of each view of its pictures, over the whole payload (before any drop)
+    if (slot_mode || !layouts.empty()) {
+        minicpm_v_4_7_moe_npu* hash_eng = dynamic_cast<minicpm_v_4_7_moe_npu*>(this->lm_engine);
+        image_hashes = prefix_image_hashes(image_payload, hash_eng->MINICPM_V_PATCH_SIZE, hash_eng->MINICPM_V_TEMPORAL_PATCH_SIZE);
+    }
     if (slot_mode) {
-        minicpm_v_4_7_moe_npu* slot_eng = dynamic_cast<minicpm_v_4_7_moe_npu*>(this->lm_engine);
         full_tokens.assign(tokens.begin(), tokens.end() - think_trim);
-        image_hashes = prefix_image_hashes(image_payload, slot_eng->MINICPM_V_PATCH_SIZE, slot_eng->MINICPM_V_TEMPORAL_PATCH_SIZE);
         match_len = this->_prefix_resume(this->prefix_cache_, full_tokens, image_hashes);
         // The single checkpoint keeps only the recurrent state and relies on the attention rows staying as they were: a slot request
         // overwrites them, so drop its token history; the path below then has nothing to restore.
@@ -203,7 +205,7 @@ bool MiniCPM_V_MOE::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& inpu
         const int restore_idx = this->lm_engine->restore();
         if (restore_idx >= 0) {
             this->total_tokens = restore_idx;
-            this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
+            this->_restore_history(); // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
         }
     }
 
@@ -224,6 +226,18 @@ bool MiniCPM_V_MOE::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& inpu
         std::vector<size_t> counts;
         for (const auto& l : layouts) counts.push_back((size_t)l.tokens);
         prompt_media_from_counts(tokens, image_pad, counts, prompt_media_t::kImage, media);
+        // A picture is all of its views (pixels and grids), so its hash folds in
+        // their hashes: another picture of the same size is not reused.
+        size_t view = 0;
+        for (size_t i = 0; i < layouts.size() && i < media.size(); i++) {
+            const size_t views = (size_t)layouts[i].views;
+            uint64_t h = 0xcbf29ce484222325ull ^ (uint64_t)views;
+            if (view + views <= image_hashes.size()) {
+                h = prefix_hash_bytes(image_hashes.data() + view, views * sizeof(uint64_t), h);
+            }
+            media[i].hash = h != 0 ? h : 1;   // 0 means "not hashed"
+            view += views;
+        }
     }
     const prompt_reuse_t plan = this->_plan_reuse(tokens, media);
     {
@@ -291,7 +305,7 @@ bool MiniCPM_V_MOE::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& inpu
         this->fail_inference();
     }
 
-    checkpoint_his = token_history;
+    this->_checkpoint_history();
     this->lm_engine->checkpoint();
     return success;
 }

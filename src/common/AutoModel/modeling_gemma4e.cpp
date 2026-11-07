@@ -9,6 +9,16 @@
 #include "AutoModel/modeling_gemma4e.hpp"
 #include "metrices.hpp"
 
+#include <cctype>
+
+namespace {
+std::string trim(const std::string& text) {
+    const auto first = std::find_if(text.begin(), text.end(), [](unsigned char c) { return !std::isspace(c); });
+    const auto last = std::find_if(text.rbegin(), text.rend(), [](unsigned char c) { return !std::isspace(c); }).base();
+    return first < last ? std::string(first, last) : std::string();
+}
+} // namespace
+
 /************              Gemma4e family            **************/
 Gemma4e::Gemma4e(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "Gemma4e") {}
 
@@ -28,6 +38,7 @@ int Gemma4e_Flash::_pin_system_prefix(const std::string& system_text) {
     this->lm_engine->clear_context();
     this->token_history.clear();
     this->checkpoint_his.clear();
+    this->_forget_history_media();
     this->total_tokens = 0;
     this->last_token = -1;
     this->system_tokens = 0;
@@ -66,11 +77,14 @@ int Gemma4e_Flash::_pin_system_prefix(const std::string& system_text) {
         this->lm_engine->clear_context();
         this->token_history.clear();
         this->checkpoint_his.clear();
+        this->_forget_history_media();
         return 0;
     }
 
     this->system_his = this->token_history;
-    this->checkpoint_his = this->token_history;
+    // the probes are text only, read in without a payload: the pin holds no image or audio
+    this->history_media_ = std::vector<prompt_media_t>{};
+    this->_checkpoint_history();
     this->lm_engine->checkpoint();
     this->system_tokens = static_cast<int>(shared);
 
@@ -98,10 +112,14 @@ void Gemma4e_Flash::_reset_turn() {
         this->total_tokens = static_cast<uint32_t>(this->lm_engine->restore());
         this->token_history = this->system_his;
         this->checkpoint_his = this->system_his;
+        // the pin is a text-only system prefix (_pin_system_prefix), so it holds no image or audio
+        this->history_media_ = std::vector<prompt_media_t>{};
+        this->checkpoint_media_ = std::vector<prompt_media_t>{};
     } else {
         this->lm_engine->clear_context();
         this->token_history.clear();
         this->checkpoint_his.clear();
+        this->_forget_history_media();
         this->total_tokens = 0;
     }
     this->sampler->reset_penalties();
@@ -316,6 +334,64 @@ std::string Gemma4e::apply_chat_template(nlohmann::ordered_json& messages, nlohm
     return this->_render_chat_template(inputs, continue_final_message, opt);
 }
 
+bool Gemma4e::_continue_verbatim(std::vector<int>& tokens, std::optional<int> requested_max_new_tokens) {
+    const std::vector<int>& ran = this->token_history;
+    if (ran.empty() || static_cast<size_t>(this->lm_engine->get_current_context_length()) != ran.size()) {
+        return false;
+    }
+    const std::vector<int> header = this->tokenizer->encode("<|turn>model\n");
+    const std::vector<int> turn_end = this->tokenizer->encode("<turn|>");
+    if (header.empty() || turn_end.size() != 1) {
+        return false;
+    }
+    // the reply the engine generated follows the last model header it ran
+    const auto at = std::find_end(ran.begin(), ran.end(), header.begin(), header.end());
+    if (at == ran.end()) {
+        return false;
+    }
+    const size_t start = static_cast<size_t>(at - ran.begin()) + header.size();
+    if (tokens.size() <= start || !std::equal(ran.begin(), ran.begin() + start, tokens.begin())) {
+        return false;
+    }
+    // the prompt's copy of that reply ends at the first <turn|> after its header
+    const auto reply_end = std::find(tokens.begin() + start, tokens.end(), turn_end[0]);
+    if (reply_end == tokens.end()) {
+        return false;
+    }
+    // an eos that ended the reply was run; a reply cut at the length limit lacks its last token
+    const bool ended = ran.back() == turn_end[0];
+    // A reply's content follows its thought channel; a reply cut inside that channel has none.
+    const auto content = [&](std::vector<int>::const_iterator begin, std::vector<int>::const_iterator end) {
+        if (begin != end && *begin == think_start_id) {
+            const auto close = std::find(begin, end, think_end_id);
+            if (close == end) return std::string();
+            begin = close + 1;
+        }
+        return trim(this->tokenizer->decode(std::vector<int>(begin, end)));
+    };
+    const std::string generated = content(ran.begin() + start, ended ? ran.end() - 1 : ran.end());
+    const std::string sent = content(tokens.begin() + start, reply_end);
+    std::vector<int> continued(ran);
+    if (generated != sent) {
+        // the client did get the token the engine did not run
+        if (ended || generated.empty() || sent.size() <= generated.size() || sent.compare(0, generated.size(), generated) != 0) {
+            return false;
+        }
+        const std::vector<int> rest = this->tokenizer->encode(sent.substr(generated.size()));
+        continued.insert(continued.end(), rest.begin(), rest.end());
+    }
+    continued.insert(continued.end(), ended ? reply_end + 1 : reply_end, tokens.end());
+    // the history keeps the thought channel the rendered prompt leaves out, so it can be the longer one
+    try {
+        this->_shared_validate_capacity(continued.size(), requested_max_new_tokens);
+    } catch (const ModelRequestError&) {
+        return false;
+    }
+    header_print("FLM", "Continuing the " << ran.size() << " tokens the engine ran, last reply included");
+    tokens = std::move(continued);
+    return true;
+}
+
 bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
     this->profiler_list[TKOEN_ENCODE_TIME].start();
     std::string templated_text;
@@ -323,6 +399,22 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     if (input.messages.empty() && input.prompt.empty()) {
         header_print("WARNING", "No messages or prompt provided");
         return false;
+    }
+    // On OGA these models run text only. A ModelRequestError, not the engine_config()
+    // error: the handlers turn only the former into an HTTP 400.
+    if (this->backend_id() == flm::backend::kOgaHipepBackendId) {
+        bool images = !input.images.empty();
+        bool audios = !input.audios.empty();
+        for (const auto& message : input.messages) {
+            images = images || (message.contains("images") && !message["images"].empty());
+            audios = audios || (message.contains("audios") && !message["audios"].empty());
+        }
+        if (images || audios) {
+            throw ModelRequestError(400, false,
+                "the loaded backend '" + this->backend_id() + "' does not accept " +
+                    (images ? "image" : "audio") + " input",
+                "invalid_request_error");
+        }
     }
 
     constexpr bool DEBUG_IMAGE_PREPROCESS = false;
@@ -589,13 +681,18 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     }
     this->_prefix_legacy_path();
 
+    // OGA cannot reuse a prompt that leaves the history it ran, so it runs on from that history instead
+    const bool continued = meta_info.restore_allowed && !modal_tokens &&
+                           this->backend_id() == flm::backend::kOgaHipepBackendId &&
+                           this->_continue_verbatim(tokens, input.requested_max_new_tokens);
+
     int restore_idx = -1;
     // The legacy checkpoint keeps only the rings: it relies on the global rows still being the ones it was taken with. A slot request
     // overwrites them, so it drops the checkpoint's token history, and the in-place path below then has nothing to restore.
-    if (meta_info.restore_allowed && !checkpoint_his.empty()) {
+    if (meta_info.restore_allowed && !checkpoint_his.empty() && !continued) {
         restore_idx = this->lm_engine->restore();
         this->total_tokens = restore_idx;
-        this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
+        this->_restore_history(); // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
     }
 
     // The payload carries every image and audio of the prompt, earlier turns included. _shared_insert skips what the engine
@@ -604,6 +701,36 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     std::vector<prompt_media_t> media;
     prompt_media_from_counts(tokens, image_token_id, image_token_counts, prompt_media_t::kImage, media);
     prompt_media_from_counts(tokens, audio_token_id, audio_token_counts, prompt_media_t::kAudio, media);
+    // Content hash of each item over exactly what the engine reads for it, taken before the drop: the soft-token count
+    // only follows the aspect ratio (images) or the sample count (audio), so a same-sized other picture or clip would
+    // otherwise match the history and be reused.
+    size_t next_image = 0;
+    size_t next_audio = 0;
+    for (prompt_media_t& m : media) {
+        uint64_t h = 0;
+        if (m.kind == prompt_media_t::kImage && next_image < image_payload.num_images) {
+            const size_t i = next_image++;
+            const auto& dims = image_payload.image_patch__element_per_patch[i];
+            const uint64_t shape[4] = { static_cast<uint64_t>(static_cast<uint32_t>(dims.first)), static_cast<uint64_t>(static_cast<uint32_t>(dims.second)),
+                                        image_payload.valid_patch_size_per_image[i], image_payload.num_soft_tokens_per_image[i] };
+            const auto& pixels = image_payload.pixel_values[i];
+            const auto& grid = image_payload.image_grid_pairs_per_image[i];
+            h = prefix_hash_bytes(shape, sizeof(shape), 0xcbf29ce484222325ull);
+            h = prefix_hash_bytes(pixels.data(), pixels.size() * sizeof(pixels[0]), h);
+            h = prefix_hash_bytes(grid.data(), grid.size() * sizeof(grid[0]), h);
+        } else if (m.kind == prompt_media_t::kAudio && next_audio < audio_payload.num_audios) {
+            const size_t i = next_audio++;
+            const uint64_t shape[3] = { static_cast<uint64_t>(static_cast<uint32_t>(audio_payload.mel_spectrogram_frames_per_audio[i])),
+                                        static_cast<uint64_t>(static_cast<uint32_t>(audio_payload.mel_spectrogram_bins_per_audio[i])),
+                                        audio_payload.num_soft_tokens_per_audio[i] };
+            const auto& mel = audio_payload.mel_spectrograms[i];
+            h = prefix_hash_bytes(shape, sizeof(shape), 0x84222325cbf29ce4ull);
+            h = prefix_hash_bytes(mel.data(), mel.size() * sizeof(mel[0]), h);
+        } else {
+            continue;
+        }
+        m.hash = h != 0 ? h : 1; // 0 means "not hashed"
+    }
     const prompt_reuse_t plan = this->_plan_reuse(tokens, media);
 
     auto drop_front = [](auto& vec, size_t n) {
@@ -647,7 +774,7 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     // Single-turn (flash): the only checkpoint is the pinned system prefix, which Gemma4e_Flash owns. Taking this one would
     // overwrite it with the whole first prompt, and every later request would restore into that stale context.
     if (this->enable_think && !this->single_turn) {
-        checkpoint_his = token_history;
+        this->_checkpoint_history();
         int checkpoint_idx = this->lm_engine->checkpoint();
     }
     
@@ -755,7 +882,7 @@ std::string Gemma4e::generate(chat_meta_info_t& meta_info, int length_limit, std
     if (!this->enable_think) {
         // the history the checkpoint holds: an eos ending the turn was run, a cut-off token was not
         int checkpoint_idx = this->lm_engine->checkpoint();
-        checkpoint_his = token_history;
+        this->_checkpoint_history();
     }
 
     return result;

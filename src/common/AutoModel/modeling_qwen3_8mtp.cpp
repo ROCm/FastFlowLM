@@ -286,7 +286,7 @@ bool Qwen3_8MTP::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
     else if (meta_info.restore_allowed && !checkpoint_his.empty()) {
         restore_idx = this->lm_engine->restore();
         this->total_tokens = restore_idx;
-        this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
+        this->_restore_history(); // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
     }
 
     // _shared_insert erases the prefix the engine already holds from `tokens` itself (the whole prompt, preamble
@@ -297,6 +297,18 @@ bool Qwen3_8MTP::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
     if (!host_images.empty()) {
         std::vector<prompt_media_t> media;
         prompt_media_from_counts(tokens, image_soft_token_id, image_token_counts, prompt_media_t::kImage, media);
+        // Hash each image's fp32 pixels and grid (exactly what the engine gets), before the drop, so a same-size
+        // different picture at a cached position is not reused. Images are staged back to back in `pixels`.
+        for (size_t i = 0; i < media.size() && i < host_images.size(); i++) {
+            const qwen3_8mtp_host_image_t& im = host_images[i];
+            const size_t begin = pixel_offsets[i];
+            const size_t end = i + 1 < pixel_offsets.size() ? pixel_offsets[i + 1] : pixels.size();
+            const uint64_t seed = 0xcbf29ce484222325ull ^ (static_cast<uint64_t>(im.grid_t) << 48 |
+                                                           static_cast<uint64_t>(im.grid_h) << 24 |
+                                                           static_cast<uint64_t>(im.grid_w));
+            const uint64_t h = prefix_hash_bytes(pixels.data() + begin, (end - begin) * sizeof(float), seed);
+            media[i].hash = h != 0 ? h : 1;   // 0 means "not hashed"
+        }
         plan = this->_plan_reuse(tokens, media);
 
         const size_t images_to_drop = plan.skipped_media[prompt_media_t::kImage];
@@ -365,7 +377,7 @@ bool Qwen3_8MTP::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
             return false;
         }
         // the conversation continues from here: take the single checkpoint as well
-        checkpoint_his = token_history;
+        this->_checkpoint_history();
         this->lm_engine->checkpoint();
         return true;
     }
@@ -374,7 +386,7 @@ bool Qwen3_8MTP::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
         ? this->_shared_insert(meta_info, tokens, is_cancelled, &payload, last_image_token_index)
         : this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
 
-    checkpoint_his = token_history;
+    this->_checkpoint_history();
     int checkpoint_idx = this->lm_engine->checkpoint();
     return success;
 }

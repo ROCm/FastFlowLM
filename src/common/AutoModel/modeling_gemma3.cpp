@@ -49,6 +49,19 @@ bool Gemma3::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std:
         header_print("WARNING", "No messages or prompt provided");
         return false;
     }
+    // On OGA the model runs text only. A ModelRequestError, not a payload the
+    // engine rejects: the handlers turn only the former into an HTTP 400.
+    if (this->backend_id() == flm::backend::kOgaHipepBackendId) {
+        bool images = !input.images.empty();
+        for (const auto& message : input.messages) {
+            images = images || (message.contains("images") && !message["images"].empty());
+        }
+        if (images) {
+            throw ModelRequestError(400, false,
+                "the loaded backend '" + this->backend_id() + "' does not accept image input",
+                "invalid_request_error");
+        }
+    }
     if (!input.messages.empty()) { // already a formated messages, usually from REST API
         // Templating happens below, together with image decoding, so that a
         // failed image never gets an image-token placeholder in the prompt.
@@ -181,12 +194,13 @@ bool Gemma3::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std:
     size_t match_len = 0;
     std::vector<int> full_tokens;          // what this prompt leaves in the engine
     std::vector<uint64_t> image_hashes;    // content of each of its images (a fixed 3*896*896 bf16 block each)
+    // computed over the untrimmed pixels, for the slot cache and for the prompt-reuse check below
+    const size_t block_bytes = static_cast<size_t>(3) * 896 * 896 * sizeof(bf16);
+    for (size_t off = 0; off + block_bytes <= pixel_values.size(); off += block_bytes) {
+        image_hashes.push_back(prefix_hash_bytes(pixel_values.data() + off, block_bytes, 0xcbf29ce484222325ull));
+    }
     if (slot_mode) {
         full_tokens = tokens;
-        const size_t block_bytes = static_cast<size_t>(3) * 896 * 896 * sizeof(bf16);
-        for (size_t off = 0; off + block_bytes <= pixel_values.size(); off += block_bytes) {
-            image_hashes.push_back(prefix_hash_bytes(pixel_values.data() + off, block_bytes, 0xcbf29ce484222325ull));
-        }
         match_len = this->_prefix_resume(this->prefix_cache_, full_tokens, image_hashes);
     } else {
         this->_prefix_legacy_path(); // the in-place path below moves the engine on without telling the cache
@@ -204,6 +218,10 @@ bool Gemma3::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std:
         std::vector<size_t> counts(total_images_in_payload, total_image_tokens / total_images_in_payload);
         counts.back() += total_image_tokens % total_images_in_payload;
         prompt_media_from_counts(tokens, IMAGE_TOKEN_ID, counts, prompt_media_t::kImage, media);
+        // so a different picture under the same placeholders is not taken for the one the engine holds (0 = not hashed)
+        for (size_t i = 0; i < media.size() && i < image_hashes.size(); i++) {
+            media[i].hash = image_hashes[i] != 0 ? image_hashes[i] : 1;
+        }
     }
     // after the slot resume: it sees the token_history _shared_insert will see
     const prompt_reuse_t plan = this->_plan_reuse(tokens, media);
