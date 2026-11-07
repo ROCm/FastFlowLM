@@ -35,7 +35,7 @@ TRIES = 3
 
 
 def no_penalties(**fields: Any) -> dict[str, Any]:
-    """Penalty fields set to off, overridable; they stick, so every case sends them."""
+    """Penalty fields set to off, overridable; every case sends them, so none depends on the model's defaults."""
     out: dict[str, Any] = {"presence_penalty": 0.0, "frequency_penalty": 0.0, "repetition_penalty": 1.0}
     out.update(fields)
     return out

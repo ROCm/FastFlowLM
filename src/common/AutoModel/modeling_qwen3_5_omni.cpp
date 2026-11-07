@@ -711,11 +711,6 @@ buffer<bf16> Qwen3_5_Omni::say(std::string wav_out_path) {
     }
 }
 
-void Qwen3_5_Omni::set_sampler(sampler_config& sampler_config) {
-    if (this->sampler != nullptr) this->sampler.reset();
-    this->sampler = std::make_unique<Sampler>((int)this->lm_config->get("vocab_size"), sampler_config);
-}
-
 void Qwen3_5_Omni::clear_context() {
     this->total_tokens = 0;
     this->last_token = -1;

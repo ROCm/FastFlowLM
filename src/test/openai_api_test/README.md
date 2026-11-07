@@ -54,7 +54,7 @@ Some cases skip by design:
 
 ## Notes
 
-- Requests pin `think`, `top_k: 1`, `temperature: 0` and `repeat_last_n: 64` explicitly. FLM applies sampling and thinking settings to the loaded model and **keeps them for later requests**, so after a run the server is left greedy with thinking as the last case set it. Send your own values, or restart the server, before using it interactively.
+- Requests pin `think`, `top_k: 1`, `temperature: 0` and `repeat_last_n: 64` explicitly, so a case does not depend on the model's defaults.
 - The tests check guarantees, not model quality. Under `auto` a model may or may not call a tool, and the tests only check that what it returns is well formed. Under `required`, a forced function, or `response_format`, the grammar makes the shape a guarantee, so any violation is a server bug.
 - Shared helpers live in `flm_api.py`: the HTTP/SSE client, `fold_stream()` (merges tool call deltas by `index`, as clients should), the contract checks, and a small JSON Schema validator. Tools and schemas are in `fixtures.py`.
 

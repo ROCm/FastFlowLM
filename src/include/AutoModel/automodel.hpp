@@ -203,6 +203,10 @@ protected:
 	causal_lm* lm_engine = nullptr;
 	std::unique_ptr<Tokenizer> tokenizer = nullptr;
 	std::unique_ptr<Sampler> sampler = nullptr;
+	/// \brief the config set_sampler() last made the sampler from, which load_model() sets
+	sampler_config loaded_sampler_config;
+	/// \brief whether thinking was on when save_request_settings() ran
+	bool loaded_thinking = false;
 	bool is_model_loaded = false;
 	std::string current_model = "";
 	std::vector<int> token_history;
@@ -504,6 +508,16 @@ public:
 	/// \brief Set the sampler
 	/// \param sampler_config the sampler config
 	virtual void set_sampler(sampler_config& sampler_config);
+
+	/// \brief Remember the settings a request may change, as the model loaded them
+	/// \note Call after load_model()
+	void save_request_settings();
+
+	/// \brief Put back the settings save_request_settings() remembered: sampling and thinking
+	/// \note The server calls it before applying a request's settings, so a setting one
+	///       request leaves out falls back to the model's default rather than to what
+	///       the previous request asked for.
+	void restore_request_settings();
 
 	/// \brief Set the max length
 	/// \param MAX_L the max length

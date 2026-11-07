@@ -12,9 +12,7 @@ anywhere a FastFlowLM server is reachable:
   PASS / FAIL / SKIP per case and exiting non-zero on any failure.
 
 Every request the tests send pins ``think``, ``top_k``, ``temperature`` and
-``repeat_last_n`` explicitly: FastFlowLM applies those to the loaded model and
-keeps them for later requests, so a test must never rely on what an earlier one
-left set.
+``repeat_last_n`` explicitly, so a test does not depend on the model's defaults.
 """
 
 # Every check here reports on the server under test, not on a caller

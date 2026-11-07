@@ -63,7 +63,7 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
-> ⚠️ **Settings stick.** Sampling fields are applied to the loaded model and stay in effect for every later request that doesn't send them, including requests from other clients. They return to the model's defaults only when the model is reloaded. If your application mixes settings, send every sampling field on **every** request. `seed` is the exception: it applies only to the request that sends it. (`think` and `reasoning_effort` [stick the same way](https://fastflowlm.com/docs/instructions/server/reasoning_and_tools/#-turning-thinking-on-and-off).)
+> ℹ️ **Every request starts from the model's defaults.** A sampling field applies only to the request that sends it. A request that leaves a field out gets the model's default, not what an earlier request set. `think` and `reasoning_effort` [work the same way](https://fastflowlm.com/docs/instructions/server/reasoning_and_tools/#-turning-thinking-on-and-off), except the `reasoning_effort` levels of GPT-OSS and Hy-Memory, which stay in effect until the model is reloaded.
 
 > ⚠️ **Out-of-range values are ignored, not rejected.** A negative `temperature` or `presence_penalty`, or a `top_p` above 1, gets HTTP 200: the server logs a warning and keeps the value it had. OpenAI accepts penalties from −2 to 2, but FLM ignores negative ones, so a penalty can't be used to *encourage* repetition. `repeat_last_n` and `seed` are stricter: a value that isn't an integer, or a `repeat_last_n` below −1, is rejected with HTTP 400.
 
@@ -77,7 +77,7 @@ A request that sends no sampling fields uses the model's own defaults, which dif
 | `gemma4-it:*`, `gemma4-it-core:*`, `gemma4e-flash:*`, `nemotron3.5-bolt:e4b`, `nemotron3.5-bolt-dflash:e4b`, `nemotron3.5-bolt-dflash-flash:e4b` | 1.0 |
 | every other model | 0 |
 
-Sending `presence_penalty=0` turns the default off, and it stays off until the model is reloaded (see *Settings stick* above).
+Sending `presence_penalty=0` turns the default off for that request.
 
 ---
 
@@ -132,7 +132,7 @@ response = client.chat.completions.create(
 )
 ```
 
-Like the other sampling fields, the window size [sticks](#️-sampling-fields) until the model is reloaded, which sets it back to 64. Making the window smaller takes effect at once: tokens it no longer covers stop being penalised from the first token of the request. Ollama-style `options.repeat_last_n` is not read by the `/v1` endpoints: send `repeat_last_n` at the top level.
+Like the other sampling fields, the window size applies to its own request; a request without it uses 64. Ollama-style `options.repeat_last_n` is not read by the `/v1` endpoints: send `repeat_last_n` at the top level.
 
 ---
 
@@ -146,7 +146,7 @@ response = client.chat.completions.create(
     messages=[{"role": "user", "content": "Invent a name for a pet dragon."}],
     temperature=0.8,
     top_p=0.9,
-    presence_penalty=0,     # send every sampling field: they stick across requests
+    presence_penalty=0,
     frequency_penalty=0,
     seed=42,
 )
@@ -154,9 +154,9 @@ response = client.chat.completions.create(
 
 What `seed` does:
 
-- **It applies to its own request only.** The sampler's random generator restarts from the seed when the request starts. A request without `seed` carries on from wherever the generator was, so it doesn't disturb the next seeded one.
-- **It empties the [penalty window](#-the-penalty-window).** Without this, a conversation the server continues from its KV cache would start with the end of the previous reply in the window, and the same seeded request would sample differently depending on what ran before it.
-- **It doesn't pin the other sampling fields.** They [stick](#️-sampling-fields) across requests, so another client can change them between your two calls. Send `temperature`, `top_p`, `top_k`, the penalties and `repeat_last_n` with every seeded request.
+- **It applies to its own request only.** The sampler's random generator restarts from the seed when the request starts. A request without `seed` gets a generator seeded from the clock.
+- **The [penalty window](#-the-penalty-window) starts empty**, as it does for every request, so the same seeded request samples the same way whatever ran before it.
+- **The other sampling fields come from the request or the model's defaults**, never from an earlier request, so two calls with the same fields and `seed` give the same text.
 
 There is no `system_fingerprint` to compare: non-streaming responses have none, and each stream gets a random one.
 
@@ -242,7 +242,7 @@ Rejected with HTTP 400 (`invalid_request_error`), for streaming requests too:
 | A field sent as `null` | Treated as not sent. Some clients send `null` for every option they leave unset. |
 | `stop`, `n`, `logit_bias`, `user` | Ignored, as above. `stop` sequences are not applied, and there is always exactly one choice. |
 | An `options` object (Ollama style) on a `/v1` endpoint | Ignored. Put sampling fields at the top level of the request. |
-| A sampling field outside its range | Ignored with a warning in the server log. The previous value stays in effect ([see above](#️-sampling-fields)). |
+| A sampling field outside its range | Ignored with a warning in the server log. The model's default is used ([see above](#️-sampling-fields)). |
 | A sampling field of the wrong JSON type, such as `"temperature": "0.7"` | The request fails with an error. Send numbers as JSON numbers. |
 | A malformed `messages`, `tool_choice`, `parallel_tool_calls`, `response_format`, `logprobs`, `top_logprobs`, `seed`, `repeat_last_n` or `continue_final_message` | Rejected with HTTP 400 and `"type": "invalid_request_error"` before anything is generated, for streaming requests too. |
 
