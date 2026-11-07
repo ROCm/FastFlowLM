@@ -10,6 +10,7 @@
 #include "utils/npu_platform.hpp"
 
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <stdexcept>
 
@@ -222,7 +223,7 @@ void AutoModel::_detect_chat_format(const std::string& template_src) {
 
 
 void AutoModel::_shared_load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption) {
-    if (this->is_model_loaded && this->model_path == model_path) {
+    if (this->is_model_loaded && this->_shared_is_same_model(model_path, model_info)) {
         header_print("FLM", "Model already loaded: " << this->model_path);
         return;
     }
@@ -233,12 +234,32 @@ void AutoModel::_shared_load_model(std::string model_path, json model_info, int 
     this->_shared_initialize_legacy_npu(enable_preemption);
 }
 
+bool AutoModel::_shared_is_same_model(const std::string& model_path, const json& model_info) const {
+    // A tag with a base_model loads from the base's folder, so the folder alone
+    // does not tell it from the base tag: the draft package does.
+    return this->model_path == model_path &&
+           this->draft_model_path == model_info.value("draft_model_path", std::string());
+}
+
 void AutoModel::_shared_initialize_model_state(
-    std::string model_path, json, int context_length) {
+    std::string model_path, json model_info, int context_length) {
     this->model_path = std::move(model_path);
+    this->draft_model_path = model_info.value("draft_model_path", std::string());
     header_print("FLM", "Loading model: " << this->model_path);
     this->lm_config = std::make_unique<LM_Config>();
     this->lm_config->from_pretrained(this->model_path);
+    if (!this->draft_model_path.empty()) {
+        // The draft package's own config rides along in the config the engine reads;
+        // the xclbins are looked up under the tag's own folder name (D16).
+        this->lm_config->_json_config["draft_model_path"] = this->draft_model_path;
+        std::ifstream draft_file(std::filesystem::path(this->draft_model_path) / "config.json");
+        if (!draft_file.is_open()) {
+            throw std::runtime_error("Cannot open " + this->draft_model_path + "/config.json");
+        }
+        this->lm_config->_json_config["draft_config"] = nlohmann::json::parse(draft_file);
+        this->lm_config->model_name = model_info.value("xclbin_folder", this->lm_config->model_name);
+        header_print("FLM", "Draft package: " << this->draft_model_path);
+    }
     this->MAX_L = context_length;
     this->is_model_loaded = true;
     this->token_history.clear();
@@ -272,7 +293,7 @@ void AutoModel::_shared_load_backend(std::string model_path, json model_info,
 
     // Same model on the same backend is a no-op; a different backend is a real
     // reload even when the path has not changed.
-    if (this->is_model_loaded && this->model_path == model_path &&
+    if (this->is_model_loaded && this->_shared_is_same_model(model_path, model_info) &&
         this->backend_ && this->backend_->id() == id) {
         header_print("FLM", "Model already loaded: " << this->model_path);
         return;

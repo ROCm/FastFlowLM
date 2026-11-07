@@ -1,0 +1,40 @@
+name: CPU Tests
+
+# Unit tests that build and run on a plain hosted runner, no NPU.
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - '*'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  # The d3 System One contract (src/common/decision) against fixtures written by the upstream
+  # package: prompt bytes, request/question errors and answer objects. CPU only, no NPU.
+  d3-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Build and run the d3 contract test
+        run: |
+          cmake -S src/test/d3_contract -B build-d3-contract -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-d3-contract -j"$(nproc)"
+          ctest --test-dir build-d3-contract --output-on-failure
+
+  # continue_final_message (src/common/chat): where the prompt is cut on the template shapes the
+  # models ship, and how the output parser reads the continued text. CPU only, no NPU.
+  chat-continue:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Build and run the chat continue test
+        run: |
+          cmake -S src/test/chat_continue -B build-chat-continue -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-chat-continue -j"$(nproc)"
+          ctest --test-dir build-chat-continue --output-on-failure

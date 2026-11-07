@@ -81,7 +81,7 @@ Runner::Runner(model_list& supported_models, ModelDownloader& downloader, progra
     this->auto_chat_engine->configure_parameter("img_pre_resize", this->img_pre_resize);
     try {
         const auto load_started = std::chrono::steady_clock::now();
-        this->auto_chat_engine->load_model(this->supported_models.get_model_path(new_tag), model_info, this->ctx_length, this->preemption, this->backend);
+        this->auto_chat_engine->load_model(this->supported_models.get_load_path(new_tag), model_info, this->ctx_length, this->preemption, this->backend);
         report_load_time(load_started);
     }
     catch (const std::exception& e) {
@@ -462,7 +462,7 @@ void Runner::cmd_load(std::vector<std::string>& input_list) {
         this->auto_chat_engine->configure_parameter("img_pre_resize", this->img_pre_resize);
         try {
             const auto load_started = std::chrono::steady_clock::now();
-            this->auto_chat_engine->load_model(this->supported_models.get_model_path(new_tag), model_info, this->ctx_length, this->preemption, this->backend);
+            this->auto_chat_engine->load_model(this->supported_models.get_load_path(new_tag), model_info, this->ctx_length, this->preemption, this->backend);
             report_load_time(load_started);
         }
         catch (const std::exception& e) {

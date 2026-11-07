@@ -7,3 +7,6 @@ _site
 .jekyll-metadata
 *.csv
 .claude/
+
+# CI compiler and download caches (actions/cache restores them here)
+.ci-cache/

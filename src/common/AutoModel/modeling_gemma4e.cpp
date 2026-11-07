@@ -12,39 +12,16 @@
 /************              Gemma4e family            **************/
 Gemma4e::Gemma4e(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "Gemma4e") {}
 
-/// Reads the shared set of engine constants off a concrete engine type.
-/// gemma4e_npu and gemma4e_flash are unrelated types that happen to expose the
-/// same member names, so this is templated rather than taking a common base.
-template <typename EngineT>
-static gemma4e_engine_config_t read_gemma4e_engine_config(causal_lm* engine) {
-    EngineT* e = dynamic_cast<EngineT*>(engine);
-    if (e == nullptr) {
-        // Reachable in Release with the core engine, which has no vision or
-        // audio path.
-        throw std::runtime_error(
-            "engine_config() was called on a Gemma4e wrapper whose engine is "
-            "not the expected type -- the vision and audio paths are not "
-            "available on this backend (core runs text only)");
-    }
-    return gemma4e_engine_config_t{
-        e->GEMMA4E_VISION_PATCH_SIZE,
-        e->GEMMA4E_POOLING_KERNEL_SIZE,
-        e->GEMMA4E_VISION_RESCALE_FACTOR,
-        e->GEMMA4E_VISION_IMAGE_MEAN,
-        e->GEMMA4E_VISION_IMAGE_STD,
-        e->Gemma4E_Audio_resample_rate,
-        e->Gemma4E_Audio_conv2d_kernel_size,
-        e->Gemma4E_Audio_conv2d_Stride,
-        e->Gemma4e_Audio_conv2d_Padding,
-    };
-}
-
 gemma4e_engine_config_t Gemma4e::engine_config() const {
     return read_gemma4e_engine_config<gemma4e_npu>(this->lm_engine);
 }
 
 gemma4e_engine_config_t Gemma4e_Flash::engine_config() const {
     return read_gemma4e_engine_config<gemma4e_flash>(this->lm_engine);
+}
+
+const flm_state_api* Gemma4e::engine_state_api() const {
+    return gemma4e_npu_state_api(this->lm_engine);
 }
 
 int Gemma4e_Flash::_pin_system_prefix(const std::string& system_text) {
@@ -280,7 +257,7 @@ void Gemma4e::load_model(std::string model_path, json model_info, int default_co
     }
     // Gemma4e_Flash shares this function but runs a different engine: the table is nullptr for it, the cache stays off.
     // Text-only prompts only (see insert), so no image placeholder id is given.
-    _prefix_attach(lm_engine, gemma4e_npu_state_api(lm_engine));
+    _prefix_attach(lm_engine, this->engine_state_api());
 }
 
 void Gemma4e::setup_tokenizer(std::string model_path) {

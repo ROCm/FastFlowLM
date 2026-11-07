@@ -21,6 +21,7 @@
 #include "modeling_qwen3_5vl.hpp"
 #include "modeling_minicpm_v.hpp"
 #include "modeling_minicpm_ocr.hpp"
+#include "modeling_minicpm_v_moe.hpp"
 #include "modeling_qwen3_5_omni.hpp"
 #include "modeling_qwen3_6_moe.hpp"
 #include "modeling_qwen3_8mtp.hpp"
@@ -45,6 +46,7 @@ typedef enum {
     qwen3_5,
     minicpm_v,
     minicpm_ocr,
+    minicpm_v_moe,
     qwen3_5_omni,
     qwen3_6_moe,
     qwen3_8mtp,
@@ -52,6 +54,7 @@ typedef enum {
     gemma3_text,
     gemma4e,
     gemma4e_flash,
+    gemma4e_dflash,
     gemma4_12b,
     gpt_oss,
     lfm2,
@@ -80,6 +83,7 @@ inline std::pair<std::string, std::unique_ptr<AutoModel>> get_auto_model(const s
         {"qwen3.5", SupportedModelFamily::qwen3_5},
         {"minicpm-v-4.7", SupportedModelFamily::minicpm_v},
         {"minicpm-ocr", SupportedModelFamily::minicpm_ocr},
+        {"minicpm-v-4.7-moe", SupportedModelFamily::minicpm_v_moe},
         {"qwen3.5-omni", SupportedModelFamily::qwen3_5_omni},
         {"qwen3.6-moe", SupportedModelFamily::qwen3_6_moe},
         {"qwen3.8-mtp", SupportedModelFamily::qwen3_8mtp},
@@ -87,6 +91,7 @@ inline std::pair<std::string, std::unique_ptr<AutoModel>> get_auto_model(const s
         {"gemma3-text", SupportedModelFamily::gemma3_text},
         {"gemma4e", SupportedModelFamily::gemma4e},
         {"gemma4e-flash", SupportedModelFamily::gemma4e_flash},
+        {"gemma4e-dflash", SupportedModelFamily::gemma4e_dflash},
         {"gemma4-12b", SupportedModelFamily::gemma4_12b},
         {"gpt-oss", SupportedModelFamily::gpt_oss},
         {"lfm2", SupportedModelFamily::lfm2},
@@ -149,6 +154,9 @@ inline std::pair<std::string, std::unique_ptr<AutoModel>> get_auto_model(const s
         case SupportedModelFamily::gemma4e_flash:
             auto_chat_engine = std::make_unique<Gemma4e_Flash>(npu_device_inst);
             break;
+        case SupportedModelFamily::gemma4e_dflash:
+            auto_chat_engine = std::make_unique<Gemma4e_DFlash>(npu_device_inst);
+            break;
         case SupportedModelFamily::gemma4_12b:
             auto_chat_engine = std::make_unique<Gemma4_12B>(npu_device_inst);
             break;
@@ -169,6 +177,9 @@ inline std::pair<std::string, std::unique_ptr<AutoModel>> get_auto_model(const s
             break;
         case SupportedModelFamily::minicpm_ocr:
             auto_chat_engine = std::make_unique<MiniCPM_OCR>(npu_device_inst);
+            break;
+        case SupportedModelFamily::minicpm_v_moe:
+            auto_chat_engine = std::make_unique<MiniCPM_V_MOE>(npu_device_inst);
             break;
         case SupportedModelFamily::qwen3_5_omni:
             auto_chat_engine = std::make_unique<Qwen3_5_Omni>(npu_device_inst);

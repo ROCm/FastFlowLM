@@ -86,13 +86,20 @@ function Download-File([string]$url, [string]$path) {
     }
 }
 
-Download-File "$baseUrl/$asset" $zip
-Download-File "$baseUrl/$asset.sha256" $shaFile
+# An archive already here (CI restores it from its cache) is reused when it
+# matches the pinned checksum, which is what a download is checked against too.
+if ((Test-Path -LiteralPath $zip) -and
+    (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLower() -eq $sha256) {
+    Write-Host "reuse: $zip (sha256 matches the pin)"
+} else {
+    Download-File "$baseUrl/$asset" $zip
+    Download-File "$baseUrl/$asset.sha256" $shaFile
 
-$remoteSha = ((Get-Content -LiteralPath $shaFile | Select-Object -First 1) -split '\s+')[0].ToLower()
-if ([string]::IsNullOrWhiteSpace($remoteSha)) { throw "empty remote sha256 file: $shaFile" }
-if ($remoteSha -ne $sha256) {
-    throw "remote sha256 mismatch: expected $sha256, got $remoteSha"
+    $remoteSha = ((Get-Content -LiteralPath $shaFile | Select-Object -First 1) -split '\s+')[0].ToLower()
+    if ([string]::IsNullOrWhiteSpace($remoteSha)) { throw "empty remote sha256 file: $shaFile" }
+    if ($remoteSha -ne $sha256) {
+        throw "remote sha256 mismatch: expected $sha256, got $remoteSha"
+    }
 }
 
 $actualSha = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLower()

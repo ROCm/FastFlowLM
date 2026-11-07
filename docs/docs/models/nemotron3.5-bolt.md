@@ -19,6 +19,8 @@ parent: Models
 - **[Set Context Length at Launch](https://fastflowlm.com/docs/instructions/cli/#-set-context-length-at-launch)**
 - **License:** [OpenMDW-1.1](https://openmdw.ai/license/1-1/)
 - **FastFlowLM:** 1.0.11 or later
+- **Faster decoding:** [`nemotron3.5-bolt-dflash:e4b`](../nemotron3.5-bolt-dflash/) is the same model with NVIDIA's DFlash speculative-decoding
+  draft (1.3x to 1.9x the decode speed)
 
 ▶️ Run with FastFlowLM in PowerShell:
 

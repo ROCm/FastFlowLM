@@ -19,7 +19,7 @@
 #include "video/video_input.hpp"
 #endif
 
-std::unordered_set<std::string> decisionModelTags = {"d3:lite", "d3:nano", "d3:mini", "d3:flash", "d3:turbo", "d3:ultra"};
+std::unordered_set<std::string> decisionModelTags = {"d3:edge", "d3:lite", "d3:nano", "d3:mini", "d3:flash", "d3:turbo", "d3:ultra"};
 
 /// Decision models whose warmup passes are skipped: one 2,048-row pass of a 27B backbone is minutes of
 /// NPU time, far more than the first-request latency it would hide. D3_WARMUP=1 / 0 overrides per run.
@@ -207,7 +207,7 @@ void AutoDecisionModel::load_model(const std::string& model_path, const nlohmann
     if (dc.value("format_version", 0) != 1) throw std::runtime_error("decision_config.json: format_version must be 1");
     if (dc.value("format_id", std::string()) != flm::d3::FORMAT_ID) throw std::runtime_error("decision_config.json: unsupported format_id");
     if (dc.value("prompt", std::string("d3")) != "d3") throw std::runtime_error("decision_config.json: prompt must be d3");
-    // noncausal_full_attention: every token sees every token (d3:lite, d3:nano, d3:mini, d3:flash);
+    // noncausal_full_attention: every token sees every token (d3:edge, d3:lite, d3:nano, d3:mini, d3:flash);
     // prefix_bidir: the state block sees only itself, each question block sees the state and itself (d3:turbo)
     const std::string attention_mode = dc.value("attention_mode", std::string("causal"));
     if (attention_mode != "noncausal_full_attention" && attention_mode != "prefix_bidir") {
@@ -402,7 +402,7 @@ void AutoDecisionModel::load_model(const std::string& model_path, const nlohmann
     throw std::runtime_error("this FastFlowLM build has no d3 engine (libd3_npu)");
 #endif
 
-    // replies name the upstream model, as d3_server does ("model": "d3-lite", "d3-nano", ...);
+    // replies name the upstream model, as d3_server does ("model": "d3-edge", "d3-lite", "d3-nano", ...);
     // without a marker in config.json the name is the tag with its colon turned into a dash
     std::string tag_name = tag_;
     std::replace(tag_name.begin(), tag_name.end(), ':', '-');

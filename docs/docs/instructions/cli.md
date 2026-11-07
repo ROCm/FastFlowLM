@@ -75,6 +75,10 @@ flm pull llama3.2:3b --force
 
 > ⚠️ Use `--force` **only if the model file is corrupted** (e.g., incomplete download). Proceed with caution.
 
+> 📦 Some tags are built on another one: `nemotron3.5-bolt-dflash:e4b` adds a small draft package to the `nemotron3.5-bolt:e4b` weights.
+> `flm pull` downloads the base package first (from the same source, `--modelscope` included), `flm list` marks such a tag
+> "(requires ...)", and it is ready only when both packages are.
+
 #### 📁 Default Model Storage Location
 
 | Platform | Default Path |
@@ -162,6 +166,9 @@ Delete a model from local storage:
 ```shell
 flm remove llama3.2:3b
 ```
+
+For a tag built on another one (for example `nemotron3.5-bolt-dflash:e4b`), `flm remove` deletes only its own package; the base model stays.
+Removing a base model that other installed tags need prints a warning naming them.
 
 ### ✅ Check a Downloaded Model
 
