@@ -25,6 +25,7 @@ Browse detailed NPU benchmark results for each major model family supported by F
 - [Nanbeige4.1](nanbeige4.1_results/)
 - [SmolVLA](smolvla_results/)
 - [Hy-MT2](hy-mt2_results/)
+- [Hy-Memory](hy-memory_results/)
 - [MiniCPM-V 4.7](minicpm-v-4.7_results/)
 - [Nemotron Bolt](nemotron3.5-bolt_results/)
 - [Nemotron Bolt DFlash](nemotron3.5-bolt-dflash_results/)
