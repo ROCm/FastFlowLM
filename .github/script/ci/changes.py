@@ -8,8 +8,8 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
   run_tests  false only when every changed file is documentation or otherwise
              never built or packaged, so no NPU runner is reserved for it
   families   comma-separated model families (details.family in
-             src/model_list.json) whose engine or catalog entry changed; the
-             pr tier tests every model in them instead of one per engine
+             src/model_list.json) whose engine or NPU catalog entry changed;
+             the pr tier tests every model in them instead of one per engine
   asr_full   true when speech-recognition code changed, so the pr tier runs
              the whole ASR evaluation set
   suites     "all", or the comma-separated npu_test suites the change can
@@ -75,17 +75,21 @@ ENGINES = {
     # Qwen3VL_Flash derives from Qwen3VL and its engine includes qwen3vl_npu.
     ("qwen3vl",):                            ("qwen3vl", "qwen3vl-flash"),
     ("qwen3vl_flash",):                      ("qwen3vl-flash",),
-    ("qwen3_5vl",):                          ("qwen3.5",),
+    # Qwen3_5VL_Flash derives from Qwen3_5VL (modeling_qwen3_5vl*.cpp) and runs its own engine, qwen3_5vl_flash.
+    ("qwen3_5vl",):                          ("qwen3.5", "qwen3.5-flash"),
+    ("qwen3_5vl_flash",):                    ("qwen3.5-flash",),
     ("minicpm_v_4_7", "minicpm_v"):          ("minicpm-v-4.7",),
     ("minicpm_v_4_7_moe", "minicpm_v_moe"): ("minicpm-v-4.7-moe",),
     ("qwen3_6_moe",):                        ("qwen3.6-moe",),
-    ("qwen3_8mtp", "qwen3_8_mtp"):           ("qwen3.8-mtp",),
+    # qwen3.8-dflash2 is the same engine with a draft package (Qwen3_8DFlash2 derives from Qwen3_8MTP).
+    ("qwen3_8mtp", "qwen3_8_mtp"):           ("qwen3.8-mtp", "qwen3.8-dflash2"),
     ("gemma", "gemma3"):                     ("gemma3",),
     ("gemma_text", "gemma3_text"):           ("gemma3-text",),
-    # Gemma4e_Flash and Gemma4e_DFlash derive from Gemma4e and their engines include gemma4e_npu.
-    ("gemma4e",):                            ("gemma4e", "gemma4e-flash", "gemma4e-dflash"),
+    # Gemma4e_Flash, Gemma4e_DFlash and Gemma4e_DFlash_Flash derive from Gemma4e and their engines include gemma4e_npu.
+    ("gemma4e",):                            ("gemma4e", "gemma4e-flash", "gemma4e-dflash", "gemma4e-dflash-flash"),
     ("gemma4e_flash",):                      ("gemma4e-flash",),
     ("gemma4e_dflash",):                     ("gemma4e-dflash",),
+    ("gemma4e_dflash_flash",):               ("gemma4e-dflash-flash",),
     ("gemma4_12b",):                         ("gemma4-12b",),
     ("hunyuan",):                            ("hunyuan",),
     ("gpt_oss",):                            ("gpt-oss",),
@@ -123,6 +127,20 @@ SUBSYSTEMS = (
     # includes it.
     ("gemma4e engine source", r"src/detail/", ("gemma4e", "gemma4e-flash")),
 )
+
+# The oga-hipep backend, in the Windows XRT package only, runs on the GPU the
+# catalog entries whose name ends in GPU_SUFFIX (model_list::backend_for_family).
+# No NPU model runs its code or those entries, so they name no family. They run
+# the chat suite: Test Windows HIPEP runs whenever it does, and tests the
+# backend on qwen3.5-oga-hipep:9b.
+GPU_ONLY = re.compile(r"^(src/(common|include)/oga/|src/test/oga_hipep/)")
+GPU_SUFFIX = "-oga-hipep"
+GPU_SUITES = {"chat"}
+
+# Tests of shared code kept in an engine's test directory, which name no family:
+# test_model_downloader tests src/pull, beside the phi4 corelib tests it came
+# with. A change to phi4's own entries shows in the catalog.
+SHARED_TESTS = re.compile(r"^src/test/phi4_core/test_model_downloader\.cpp$")
 
 # Files that only serve speech recognition: any change runs the whole ASR
 # set. Ported from the paths: filter of the old asr-test.yml and asr_gate.sh,
@@ -279,19 +297,30 @@ def family_of(entry: dict) -> str:
     return details.get("family", "") if isinstance(details, dict) else ""
 
 
-def catalog_diff(base: dict[str, dict], head: dict[str, dict]) -> set:
-    """Families with an entry added, removed or edited between two catalogs."""
-    fams = set()
-    for mid in set(base) | set(head):
-        if base.get(mid) != head.get(mid):
+def runs_on_gpu(model_id: str) -> bool:
+    """Whether the oga-hipep backend, not an NPU one, runs this catalog entry."""
+    return model_id.split(":", 1)[0].endswith(GPU_SUFFIX)
+
+
+def catalog_diff(base: dict[str, dict], head: dict[str, dict]) -> tuple[set, list]:
+    """Families with an NPU entry added, removed or edited between two catalogs,
+    and the GPU entries that were."""
+    fams, gpu = set(), []
+    for mid in sorted(set(base) | set(head)):
+        if base.get(mid) == head.get(mid):
+            continue
+        if runs_on_gpu(mid):
+            gpu.append(mid)
+        else:
             fams.update(family_of(e) for e in (base.get(mid), head.get(mid)) if e)
-    return fams - {""}
+    return fams - {""}, gpu
 
 
 def model_info_diff(base_text: Optional[str], head_text: Optional[str],
-                    catalogs: Iterable[dict[str, dict]]) -> Optional[set]:
-    """Families whose model_info.json entry changed. Keys are model ids or a
-    catalog entry's model_info_key."""
+                    catalogs: Iterable[dict[str, dict]]) -> Optional[tuple[set, list]]:
+    """Families with an NPU entry whose model_info.json entry changed, and the
+    GPU entries whose one did. Keys are model ids or a catalog entry's
+    model_info_key."""
     try:
         base = json.loads(base_text) if base_text else {}
         head = json.loads(head_text) if head_text else {}
@@ -300,12 +329,33 @@ def model_info_diff(base_text: Optional[str], head_text: Optional[str],
     if not isinstance(base, dict) or not isinstance(head, dict):
         return None
     keys = {k for k in set(base) | set(head) if base.get(k) != head.get(k)}
-    fams = set()
+    fams, gpu = set(), set()
     for catalog in catalogs:
         for mid, entry in catalog.items():
             if mid in keys or entry.get("model_info_key") in keys:
-                fams.add(family_of(entry))
-    return fams - {""}
+                if runs_on_gpu(mid):
+                    gpu.add(mid)
+                else:
+                    fams.add(family_of(entry))
+    return fams - {""}, sorted(gpu)
+
+
+def add_catalog_change(d: Decision, path: str, fams: set, gpu: list,
+                       catalog: dict[str, dict], neither: str) -> None:
+    """A catalog file's changed entries: their NPU families in full, and the
+    chat suite for GPU entries. A change to neither is not scoped."""
+    d.families |= fams
+    if fams:
+        d.add_suites(family_suites(fams, catalog))
+    if gpu:
+        d.add_suites(GPU_SUITES)
+    if not fams and not gpu:
+        d.all_suites(path)
+    what = ", ".join(sorted(fams)) or ("no NPU family" if gpu else neither)
+    if gpu:
+        what += (f"; {len(gpu)} oga-hipep entr{'y' if len(gpu) == 1 else 'ies'}, e.g. {gpu[0]},"
+                 " which only Test Windows HIPEP runs")
+    d.reasons.append(f"{path}: entries changed in {what}")
 
 
 def engine_families(path: str, xclbin_families: dict[str, set]) -> Optional[tuple[str, tuple]]:
@@ -379,8 +429,13 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
         if entry.get("name"):
             xclbin_families.setdefault(entry["name"], set()).add(family_of(entry))
 
+    gpu_code = []
     for path in code:
-        hit = engine_families(path, xclbin_families)
+        if GPU_ONLY.match(path):
+            gpu_code.append(path)
+            d.add_suites(GPU_SUITES)
+            continue
+        hit = None if SHARED_TESTS.match(path) else engine_families(path, xclbin_families)
         if hit is None:
             hit = next(((why, fams) for why, pattern, fams in SUBSYSTEMS
                         if re.match(pattern, path)), None)
@@ -406,6 +461,9 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
             d.all_suites(path)
         elif scope is not None:
             d.add_suites(scope)
+    if gpu_code:
+        more = f" and {len(gpu_code) - 1} more" if len(gpu_code) > 1 else ""
+        d.reasons.append(f"{gpu_code[0]}{more}: oga-hipep backend, which only Test Windows HIPEP runs")
 
     if MODEL_LIST in code:
         base = load_catalog(git.show("base", MODEL_LIST)) if git else {}
@@ -413,29 +471,18 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
             d.reasons.append(f"{MODEL_LIST} changed but cannot be compared; no family added for it")
             d.all_suites(MODEL_LIST)
         else:
-            fams = catalog_diff(base, head_catalog)
-            d.families |= fams
-            if fams:
-                d.add_suites(family_suites(fams, head_catalog))
-            else:
-                d.all_suites(MODEL_LIST)
-            d.reasons.append(f"{MODEL_LIST}: entries changed in "
-                             + (", ".join(sorted(fams)) or "no family (top-level fields only)"))
+            add_catalog_change(d, MODEL_LIST, *catalog_diff(base, head_catalog), head_catalog,
+                               "no family (top-level fields only)")
     if MODEL_INFO in code:
-        fams = None
+        diff = None
         if git:
-            fams = model_info_diff(git.show("base", MODEL_INFO), git.show("head", MODEL_INFO),
+            diff = model_info_diff(git.show("base", MODEL_INFO), git.show("head", MODEL_INFO),
                                    [load_catalog(git.show("base", MODEL_LIST)), head_catalog])
-        if fams is None:
+        if diff is None:
             d.reasons.append(f"{MODEL_INFO} changed but cannot be compared; no family added for it")
             d.all_suites(MODEL_INFO)
         else:
-            d.families |= fams
-            if fams:
-                d.add_suites(family_suites(fams, head_catalog))
-            else:
-                d.all_suites(MODEL_INFO)
-            d.reasons.append(f"{MODEL_INFO}: entries changed in " + (", ".join(sorted(fams)) or "no family"))
+            add_catalog_change(d, MODEL_INFO, *diff, head_catalog, "no family")
 
     # A family the head catalog lacks (removed, or never listed) has no model
     # the plan could run.

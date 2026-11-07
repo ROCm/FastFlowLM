@@ -580,8 +580,9 @@ std::pair<nlohmann::json, float> ModelDownloader::build_download_list(
 bool ModelDownloader::remove_model(const std::string& model_tag, bool sub_process_mode) {
     try {
         // Check if model exists in supported models by trying to get its info
+        nlohmann::json model_info;
         try {
-            supported_models.get_model_info(model_tag);
+            model_info = supported_models.get_model_info(model_tag).second;
         } catch (const std::exception& e) {
             header_print("ERROR", "Model not found: " + model_tag);
             model_not_found(model_tag);
@@ -618,6 +619,23 @@ bool ModelDownloader::remove_model(const std::string& model_tag, bool sub_proces
                 std::filesystem::remove(entry.path());
                 removed_files++;
             }
+        }
+        // and the folders the model's own files are in (decoder/model.onnx); any other folder stays,
+        // so the directory is not removed
+        std::unordered_set<std::string> folders;
+        for (const auto& file : model_info.value("files", nlohmann::json::array())) {
+            const std::filesystem::path relative(file.get<std::string>());
+            if (relative.is_relative() && relative.has_parent_path() && *relative.begin() != "..") {
+                folders.insert(relative.begin()->string());
+            }
+        }
+        for (const auto& folder : folders) {
+            const std::filesystem::path path = std::filesystem::path(model_path) / folder;
+            if (!std::filesystem::is_directory(path)) continue;
+            for (const auto& entry : std::filesystem::recursive_directory_iterator(path)) {
+                if (entry.is_regular_file()) removed_files++;
+            }
+            std::filesystem::remove_all(path);
         }
         
         // Remove the model directory itself

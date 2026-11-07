@@ -100,6 +100,15 @@ private:
     std::vector<audio_data_t> clip_audio_length(audio_data_t& audio, double max_duration_second);
     void extract_spectrogram(std::vector<audio_data_t>& audio_inputs, gemma4e_audio_payload_t& audio_payload);
 
+    /// \brief Keep what the engine ran when the prompt goes on from its last reply
+    /// \note The template renders a past reply without the thought channel the
+    ///       engine ran with it (an empty one when thinking is off), so the prompt
+    ///       leaves the engine's history right after that reply's header. When the
+    ///       prompt's copy of the reply is the one the engine generated, the prompt
+    ///       is rewritten to the engine's history plus what follows the reply.
+    /// \return whether `tokens` now continues token_history
+    bool _continue_verbatim(std::vector<int>& tokens, std::optional<int> requested_max_new_tokens);
+
 protected:
     /// Protected so Gemma4e_Flash can lower the default; see its constructor.
     int image_softtoken_budget = 280; // set a default value
@@ -141,6 +150,15 @@ protected:
 
     /// \brief the saved-state table of the engine behind this wrapper (nullptr: the context cache stays off)
     virtual const flm_state_api* engine_state_api() const;
+
+    /// \brief the DFlash speculative decode loop (sample-and-compare, D11), shared by Gemma4e_DFlash and Gemma4e_DFlash_Flash.
+    /// \tparam Engine gemma4e_dflash or gemma4e_dflash_flash (same speculation API, unrelated types)
+    /// \param  single_turn the flash contract: no checkpoint at the end (the pinned system prefix owns the only one) and no
+    ///         KV row for the stop token (the next request restarts from the pin); the plain DFlash tag keeps both.
+    /// \note   defined in modeling_gemma4e_dflash.cpp, the only place it is instantiated
+    template <class Engine>
+    std::string _speculative_loop(Engine* engine, chat_meta_info_t& meta_info, int length_limit, std::ostream& os,
+                                  std::function<bool()> is_cancelled, bool single_turn);
 
     /// \note Gemma4e and Gemma4e_Flash share this whole wrapper -- weights,
     ///       tokenizer, sampler, chat template -- and differ only in the engine
@@ -267,6 +285,10 @@ private:
     /// \brief Drop everything the previous turn left behind, back to the pin.
     void _reset_turn();
 
+    /// \brief forget the pin, so the next request with a system prompt pins it again
+    /// \note  Leaves the engine alone: callers clear it themselves.
+    void _forget_pin();
+
 protected:
     gemma4e_engine_config_t engine_config() const override;
 
@@ -284,6 +306,13 @@ public:
     bool insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled = [] { return false; }) override;
     std::string generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled = [] { return false; }) override;
     std::string generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os = std::cout) override;
+
+    /// \brief Clear the context, the pinned system prefix included
+    /// \note  The engine zeroes its KV cache but keeps the checkpoint, so a pin
+    ///        kept past this would restore zeroed rows on the next request. This
+    ///        also covers _shared_insert clearing a prompt that diverges from
+    ///        the pinned tokens: it prefills from row 0, over the pinned rows.
+    void clear_context() override;
 
     /// \brief Apply the chat template without tools — gemma4e_flash does not
     ///        support tool calling, so the tools argument is always dropped.
@@ -306,11 +335,29 @@ protected:
     gemma4e_engine_config_t engine_config() const override;
     const flm_state_api* engine_state_api() const override;
 
-    /// \brief the speculative decode loop (sample-and-compare, D11); falls back to the plain loop step by step
-    std::string _speculative_generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled);
-
 public:
     Gemma4e_DFlash(flm_rt::device* npu_device_inst) : Gemma4e(npu_device_inst) {}
+
+    void load_model(std::string model_path, json model_info, int default_context_length = -1, bool enable_preemption = false, const std::string& backend = "") override;
+    std::string generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled = [] { return false; }) override;
+    std::string generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os = std::cout) override;
+    void clear_context() override;
+    std::string show_profile() override;
+};
+
+
+/************              Gemma4e_DFlash_Flash            **************/
+/// Single-turn flash serving (Gemma4e_Flash: pinned system prefix, no tools, no continue_final_message) with DFlash
+/// speculative decoding, backed by the gemma4e_dflash_flash engine: the gemma4e_flash prefill plus the DFlash draft/verify.
+/// Weights are the nemotron3.5-bolt:e4b package, the draft comes from draft_model_path (see model_list base_model).
+class Gemma4e_DFlash_Flash : public Gemma4e_Flash {
+protected:
+    gemma4e_engine_config_t engine_config() const override;
+    /// \brief nullptr: the pinned system prefix (checkpoint/restore) owns the KV, the multi-slot prefix cache stays off
+    const flm_state_api* engine_state_api() const override;
+
+public:
+    Gemma4e_DFlash_Flash(flm_rt::device* npu_device_inst) : Gemma4e_Flash(npu_device_inst) {}
 
     void load_model(std::string model_path, json model_info, int default_context_length = -1, bool enable_preemption = false, const std::string& backend = "") override;
     std::string generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled = [] { return false; }) override;

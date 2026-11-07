@@ -24,6 +24,7 @@
 #include "typedef.hpp"
 #include "causal_lm.hpp"
 #include "prefix_slot_cache.hpp"
+#include "prompt_reuse.hpp"
 #include "lm_config.hpp"
 #include "AutoModel/model_backend.hpp"
 #include "models/llama/flm/aie2p/llama_npu.hpp"
@@ -33,6 +34,7 @@
 #include "models/qwen3vl/flm/aie2p/qwen3vl_npu.hpp"
 #include "models/qwen3vl_flash/flm/aie2p/qwen3vl_flash.hpp"
 #include "models/qwen3_5vl/flm/aie2p/qwen3_5vl_npu.hpp"
+#include "models/qwen3_5vl_flash/flm/aie2p/qwen3_5vl_flash.hpp"
 #include "models/minicpm_v_4_7/flm/aie2p/minicpm_v_4_7_npu.hpp"
 #include "models/minicpm_ocr/flm/aie2p/minicpm_ocr_npu.hpp"
 #include "models/minicpm_v_4_7_moe/flm/aie2p/minicpm_v_4_7_moe_npu.hpp"
@@ -43,6 +45,7 @@
 #include "models/gemma4e/flm/aie2p/gemma4e_npu.hpp"
 #include "models/gemma4e_flash/flm/aie2p/gemma4e_flash.hpp"
 #include "models/gemma4e_dflash/flm/aie2p/gemma4e_dflash.hpp"
+#include "models/gemma4e_dflash_flash/flm/aie2p/gemma4e_dflash_flash.hpp"
 #include "models/gemma4_12b/flm/aie2p/gemma4_12b_npu.hpp"
 #include "models/lfm2/flm/aie2p/lfm2_npu.hpp"
 #include "models/lfm3/flm/aie2p/lfm3_npu.hpp"
@@ -50,6 +53,7 @@
 #include "models/gpt_oss/flm/aie2p/gpt_oss_npu.hpp"
 #include "models/nanbeige/flm/aie2p/nanbeige_npu.hpp"
 #include "models/hunyuan/flm/aie2p/hunyuan_npu.hpp"
+#include "models/hy_mem/flm/aie2p/hy_mem_npu.hpp"
 #include "tokenizer/tokenizer.hpp"
 #include "modules/sampler.hpp"
 #include "utils/utils.hpp"
@@ -111,6 +115,10 @@ struct chat_meta_info_t {
 	bool restore_allowed;
 	/// \brief Restricts sampling for this request (tool_choice, response_format); may be null
 	std::shared_ptr<decode_constraint> constraint;
+	/// \brief ignore_eos / min_tokens of the request: end-of-sequence tokens are
+	///        never sampled (ignore_eos) or not before min_tokens tokens exist
+	bool ignore_eos = false;
+	int min_tokens = 0;
 	/// \brief insert() sampled a token that generate() has not used yet
 	/// \note Models that make the model emit preamble tokens in generate()
 	///       throw that sample away; _force_token() takes it back out of the constraint.
@@ -132,6 +140,11 @@ struct chat_meta_info_t {
 	///       prompt, and the turn starts right after the message's text: insert()
 	///       trims no prompt tokens and generate() feeds no preamble of its own.
 	bool continue_final_message = false;
+	/// \brief Why insert() returned false, for the reply to the client; empty when it did not say
+	/// \note A cancelled prefill leaves it empty: stop_reason (CANCEL_DETECTED) tells that case.
+	std::string error_message;
+	/// \brief HTTP status that goes with error_message: 400 when the request is at fault, 500 otherwise
+	int error_code = 400;
 
 	chat_meta_info_t() : max_prefill_len(0), prompt_tokens(0), cached_prompt_tokens(0), generated_tokens(0), total_duration(0), load_duration(0), prefill_duration(0), decoding_duration(0), stop_reason(EOT_DETECTED), restore_allowed(false) {}
 };
@@ -303,6 +316,41 @@ protected:
 	/// \param payload the payload, it shall not be used as this function is only used for chunkwised insertion, no image allowed
 	/// \return true if the tokens were inserted successfully, false otherwise
 	bool _shared_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled = [] { return false; }, void* payload = nullptr, int first_len_run = 0, std::optional<int> requested_max_new_tokens = std::nullopt, bool sample_next = true);
+
+	/// \brief decide how much of a prompt with media the engine keeps, before the model trims its payload
+	/// \param tokens the prompt exactly as it will go to _shared_insert / _prefix_insert (after any restore or slot
+	///        resume, with the generation-prompt tokens the model feeds itself already cut)
+	/// \param media its images and audio clips (see prompt_reuse.hpp), with their content hashes
+	/// \return the plan: drop skipped_media[kind] leading items of each payload list and pass media_end as first_len_run
+	/// \note Clears the context when the plan says so, so the _shared_insert that follows skips exactly plan.skip;
+	///       _shared_insert checks that it does when it gets a payload.
+	prompt_reuse_t _plan_reuse(const std::vector<int>& tokens, const std::vector<prompt_media_t>& media);
+	/// \brief the skip _plan_reuse() promised the next _shared_insert with a payload
+	std::optional<size_t> planned_skip_;
+	/// \brief the items (with hashes) of the prompt _plan_reuse() planned; token_history's once _shared_insert read it in
+	std::optional<std::vector<prompt_media_t>> planned_media_;
+	/// \brief the images and audio clips token_history holds, with their content hashes (see plan_prompt_reuse)
+	/// \note nullopt after a prefix-slot resume: the slot cache compared the image hashes itself.
+	std::optional<std::vector<prompt_media_t>> history_media_ = std::vector<prompt_media_t>{};
+	/// \brief the same for checkpoint_his
+	std::optional<std::vector<prompt_media_t>> checkpoint_media_ = std::vector<prompt_media_t>{};
+	/// \brief take the single checkpoint's token history (checkpoint_his) from token_history, with its media
+	void _checkpoint_history() {
+		this->checkpoint_his = this->token_history;
+		this->checkpoint_media_ = this->history_media_;
+	}
+	/// \brief token_history (and its media) back to the single checkpoint's, after lm_engine->restore()
+	void _restore_history() {
+		this->token_history = this->checkpoint_his;
+		this->history_media_ = this->checkpoint_media_;
+	}
+	/// \brief forget the media of token_history and checkpoint_his, and any plan (with the histories themselves)
+	void _forget_history_media() {
+		this->history_media_ = std::vector<prompt_media_t>{};
+		this->checkpoint_media_ = std::vector<prompt_media_t>{};
+		this->planned_skip_.reset();
+		this->planned_media_.reset();
+	}
 
 	// ---- prefix slot cache (see prefix_slot_cache.hpp) ---------------------------------------
 	// Steps every model family with engine snapshots shares; the model supplies the tokens, the image
@@ -636,10 +684,12 @@ public:
 	///        the previous prompts it can reuse
 	/// \note True makes the server stop clearing the context on a message-level
 	///       cache miss and always pass restore_allowed: the model matches the
-	///       rendered prompt against its saved prefixes and falls back to a full
+	///       rendered prompt against its saved prefixes, or its checkpoint on an
+	///       engine that matches token prefixes, and falls back to a full
 	///       prefill by itself.
 	virtual bool manages_prefix_cache() const {
-		return this->prefix_cache_.enabled();
+		return this->prefix_cache_.enabled() ||
+		       (this->backend_ && this->backend_->matches_token_prefixes());
 	}
 
 	/// \brief --prefix-cache-mb / --prefix-slots / --prefix-min-gain (-1 = the default, 0 slots = off); call before load_model

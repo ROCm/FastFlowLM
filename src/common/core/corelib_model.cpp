@@ -213,17 +213,37 @@ private:
         return 0;
     }
 
+    /// \note Without a position corelib continues at the session's own, which
+    ///       is all a model that cannot seek accepts.
     void Dispatch(const std::vector<std::int32_t>& rows, std::size_t from, bool want_logits) {
-        ryzenai_corelib_model_forward_options options{};
-        options.size = sizeof(options);
-        options.position =
-            spec.rewind == Rewind::kSeek ? from : RYZENAI_CORELIB_POSITION_CONTINUE;
-        float* out_logits = want_logits ? logits.data() : nullptr;
-        const std::size_t logits_capacity = want_logits ? logits.size() : 0;
-        api->Check(api->functions().model_forward(session.get(), rows.data(), nullptr, rows.size(),
-                                                  nullptr, 0, &options, nullptr, out_logits,
-                                                  logits_capacity),
-                   "ryzenai_corelib_model_forward");
+        ryzenai_corelib_model_value inputs[2]{};
+        std::size_t input_count = 0;
+        auto& ids = inputs[input_count++];
+        ids.size = sizeof(ids);
+        ids.name = "input_ids";
+        ids.data_type = ryzenai_corelib_data_type_int32;
+        ids.rank = 1;
+        ids.dims[0] = static_cast<std::int64_t>(rows.size());
+        ids.data = const_cast<std::int32_t*>(rows.data());
+        std::int64_t position = static_cast<std::int64_t>(from);
+        if (spec.rewind == Rewind::kSeek) {
+            auto& at = inputs[input_count++];
+            at.size = sizeof(at);
+            at.name = "position";
+            at.data_type = ryzenai_corelib_data_type_int64;
+            at.rank = 0;
+            at.data = &position;
+        }
+        ryzenai_corelib_model_value output{};
+        output.size = sizeof(output);
+        output.name = "logits";
+        output.data_type = ryzenai_corelib_data_type_fp32;
+        output.data = logits.data();
+        output.capacity = logits.size() * sizeof(float);
+        api->Check(api->functions().model_run(session.get(), "forward", inputs, input_count,
+                                              want_logits ? &output : nullptr,
+                                              want_logits ? 1 : 0, 0),
+                   "ryzenai_corelib_model_run forward");
     }
 
     /// \brief make `target` the sequence the model holds, as cheaply as its state allows
@@ -267,11 +287,12 @@ private:
         api->Check(api->functions().model_create_session(model.get(), &options, &raw),
                    "ryzenai_corelib_model_create_session");
         UniqueModelSession created(api, raw);
-        ryzenai_corelib_model_info info{};
-        api->Check(api->functions().model_get_info(created.get(), &info),
-                   "ryzenai_corelib_model_get_info");
+        ryzenai_corelib_model_metadata info{};
+        info.size = sizeof(info);
+        api->Check(api->functions().model_get_metadata(created.get(), &info),
+                   "ryzenai_corelib_model_get_metadata");
         if (info.vocab_size <= 0 || info.context_length < static_cast<std::int64_t>(n))
-            throw std::runtime_error(spec.display_name + " model_info is vocab " +
+            throw std::runtime_error(spec.display_name + " model_metadata is vocab " +
                                      std::to_string(info.vocab_size) + " context " +
                                      std::to_string(info.context_length) +
                                      "; this engine needs vocab > 0 and context >= " +

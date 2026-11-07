@@ -8,6 +8,7 @@
 /// emitted touch the sampler's RNG and penalty history.
 #include "AutoModel/modeling_gemma4e.hpp"
 #include "AutoModel/automodel.hpp"
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 
@@ -50,47 +51,13 @@ void Gemma4e_DFlash::load_model(std::string model_path, json model_info, int def
     }
 }
 
-std::string Gemma4e_DFlash::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
-    return this->_speculative_generate(meta_info, length_limit, os, is_cancelled);
-}
-
-std::string Gemma4e_DFlash::generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os) {
-    if (!this->insert(meta_info, input)) {
-        return "";
-    }
-    if (this->thinking_enabled()) {
-        os << "<think>\n" << std::flush;
-    }
-    int checkpoint_idx = this->lm_engine->checkpoint();
-    int restore_idx = this->lm_engine->restore();
-    header_print_r("FLM", "Checkpoint before generation: " << checkpoint_idx << ", restore point: " << restore_idx << ", user context length: " << this->token_history.size());
-    return this->_speculative_generate(meta_info, length_limit, os, [] { return false; });
-}
-
-void Gemma4e_DFlash::clear_context() {
-    Gemma4e::clear_context();
-    if (auto* engine = dynamic_cast<gemma4e_dflash*>(this->lm_engine)) {
-        engine->reset_speculation_stats();
-    }
-}
-
-std::string Gemma4e_DFlash::show_profile() {
-    std::string profile = Gemma4e::show_profile();
-    if (auto* engine = dynamic_cast<gemma4e_dflash*>(this->lm_engine)) {
-        if (engine->speculation_cycles() > 0) {
-            profile += engine->speculation_timing();
-        }
-    }
-    return profile;
-}
-
-std::string Gemma4e_DFlash::_speculative_generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
+template <class Engine>
+std::string Gemma4e::_speculative_loop(Engine* engine, chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled, bool single_turn) {
     std::string result;
     assert(this->last_token != -1);
 
     stop_reason_t reason = EOT_DETECTED;
 
-    auto* engine = dynamic_cast<gemma4e_dflash*>(this->lm_engine);
     // Off under a decoding constraint (grammar / tool JSON, D14): a drafted token never passes the constraint's mask
     // through sample-and-compare unless every row is masked, which the plain loop already does cheaply.
     // draft_ready() is asked per cycle below: the engine's adaptive guard (it turns speculation off while it cannot win and re-probes
@@ -136,7 +103,14 @@ std::string Gemma4e_DFlash::_speculative_generate(chat_meta_info_t& meta_info, i
         if (this->is_eos(token)) {
             meta_info.generated_tokens++;
             // The engine never ran the stop token: supply its KV row (it is the last token of a cycle, see below).
-            this->lm_engine->forward(token);
+            // Single-turn: the KV is discarded by the next request's restore to the pin, so skip it.
+            // Its row is past the end of the engine's KV window once the context is full:
+            // forwarding it there corrupts the engine, so the next prompt carries it instead.
+            if (single_turn || this->total_tokens >= this->MAX_L) {
+                this->token_history.pop_back();    // as Gemma4e_Flash::generate: the engine never ran the stop token
+            } else {
+                this->lm_engine->forward(token);
+            }
             return false;
         }
         meta_info.generated_tokens++;
@@ -163,8 +137,10 @@ std::string Gemma4e_DFlash::_speculative_generate(chat_meta_info_t& meta_info, i
         }
 
         // A cycle emits up to n_drafts + 1 tokens, all but the last already in the caches: cap it at the tokens left so
-        // the limit lands on the last one. With one token left, decode it plainly.
-        const int tokens_left = (length_limit > 0) ? length_limit - meta_info.generated_tokens : SPEC_MAX_DRAFT + 1;
+        // the limit lands on the last one. With one token left, decode it plainly. The same goes for the context: the engine
+        // checks its own window, which can be larger than MAX_L (rounded up to a power of two), so cap the cycle at MAX_L here.
+        const int tokens_left = std::min<int>((length_limit > 0) ? length_limit - meta_info.generated_tokens : SPEC_MAX_DRAFT + 1,
+                                              static_cast<int>(this->MAX_L - this->total_tokens));
         if (spec_enabled && tokens_left > 1 && engine->draft_ready()) {
             int drafts[SPEC_MAX_DRAFT];
             this->profiler_list[DECODING_TIME].start();
@@ -218,7 +194,8 @@ std::string Gemma4e_DFlash::_speculative_generate(chat_meta_info_t& meta_info, i
     }
     meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
     meta_info.stop_reason = reason;
-    if (this->total_tokens >= this->MAX_L) {
+    // a turn ending on eos at the cap fills the window too, but nothing was stopped
+    if (reason == MAX_LENGTH_REACHED && this->total_tokens >= this->MAX_L) {
         header_print("WARNING", "Max length reached, stopping generation...");
     }
     std::cout << std::endl;
@@ -231,10 +208,105 @@ std::string Gemma4e_DFlash::_speculative_generate(chat_meta_info_t& meta_info, i
         // Cut short after its last token was sampled: no engine has run that one, so the next prompt has to carry it.
         this->token_history.pop_back();
     }
-    if (!this->thinking_enabled()) {
+    // Single-turn: the only checkpoint is the pinned system prefix, which _pin_system_prefix() owns.
+    if (!single_turn && !this->thinking_enabled()) {
         // the history the checkpoint holds: an eos ending the turn was run, a cut-off token was not
         this->lm_engine->checkpoint();
-        checkpoint_his = token_history;
+        this->_checkpoint_history();
     }
     return result;
+}
+
+std::string Gemma4e_DFlash::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
+    return this->_speculative_loop(dynamic_cast<gemma4e_dflash*>(this->lm_engine), meta_info, length_limit, os, is_cancelled, false);
+}
+
+std::string Gemma4e_DFlash::generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os) {
+    if (!this->insert(meta_info, input)) {
+        return "";
+    }
+    if (this->thinking_enabled()) {
+        os << "<think>\n" << std::flush;
+    }
+    int checkpoint_idx = this->lm_engine->checkpoint();
+    int restore_idx = this->lm_engine->restore();
+    header_print_r("FLM", "Checkpoint before generation: " << checkpoint_idx << ", restore point: " << restore_idx << ", user context length: " << this->token_history.size());
+    return this->_speculative_loop(dynamic_cast<gemma4e_dflash*>(this->lm_engine), meta_info, length_limit, os, [] { return false; }, false);
+}
+
+void Gemma4e_DFlash::clear_context() {
+    Gemma4e::clear_context();
+    if (auto* engine = dynamic_cast<gemma4e_dflash*>(this->lm_engine)) {
+        engine->reset_speculation_stats();
+    }
+}
+
+std::string Gemma4e_DFlash::show_profile() {
+    std::string profile = Gemma4e::show_profile();
+    if (auto* engine = dynamic_cast<gemma4e_dflash*>(this->lm_engine)) {
+        if (engine->speculation_cycles() > 0) {
+            profile += engine->speculation_timing();
+        }
+    }
+    return profile;
+}
+
+/************              Gemma4e_DFlash_Flash            **************/
+gemma4e_engine_config_t Gemma4e_DFlash_Flash::engine_config() const {
+    return read_gemma4e_engine_config<gemma4e_dflash_flash>(this->lm_engine);
+}
+
+const flm_state_api* Gemma4e_DFlash_Flash::engine_state_api() const {
+    return nullptr;
+}
+
+void Gemma4e_DFlash_Flash::load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption, const std::string& backend) {
+    Gemma4e::load_model(model_path, model_info, default_context_length, enable_preemption, backend);
+    auto* engine = dynamic_cast<gemma4e_dflash_flash*>(this->lm_engine);
+    if (engine == nullptr) {
+        header_print("WARNING", "Gemma4e_DFlash_Flash: the engine is not gemma4e_dflash_flash, speculation is off");
+        return;
+    }
+    engine->set_stop_tokens(this->eos_token_ids);
+    if (this->draft_model_path.empty()) {
+        header_print("WARNING", "Gemma4e_DFlash_Flash: no draft package, decoding without speculation");
+        return;
+    }
+    if (!dflash_env_enabled()) {
+        header_print("FLM", "DFlash speculation disabled by FLM_DFLASH=0");
+        return;
+    }
+    if (engine->load_draft(this->draft_model_path)) {
+        header_print("FLM", "DFlash draft loaded from " << this->draft_model_path);
+    } else {
+        header_print("WARNING", "Gemma4e_DFlash_Flash: the draft package could not be loaded, decoding without speculation");
+    }
+}
+
+std::string Gemma4e_DFlash_Flash::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
+    return this->_speculative_loop(dynamic_cast<gemma4e_dflash_flash*>(this->lm_engine), meta_info, length_limit, os, is_cancelled, true);
+}
+
+std::string Gemma4e_DFlash_Flash::generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os) {
+    if (!this->insert(meta_info, input)) {
+        return "";
+    }
+    return this->generate(meta_info, length_limit, os);
+}
+
+void Gemma4e_DFlash_Flash::clear_context() {
+    Gemma4e_Flash::clear_context(); // the pinned system prefix goes too
+    if (auto* engine = dynamic_cast<gemma4e_dflash_flash*>(this->lm_engine)) {
+        engine->reset_speculation_stats();
+    }
+}
+
+std::string Gemma4e_DFlash_Flash::show_profile() {
+    std::string profile = Gemma4e::show_profile();
+    if (auto* engine = dynamic_cast<gemma4e_dflash_flash*>(this->lm_engine)) {
+        if (engine->speculation_cycles() > 0) {
+            profile += engine->speculation_timing();
+        }
+    }
+    return profile;
 }

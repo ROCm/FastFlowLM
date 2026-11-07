@@ -4,7 +4,7 @@
 
 AppName=flm
 
-AppVersion=1.0.12
+AppVersion=1.0.13
 
 AppPublisher=FastFlowLM
 
@@ -65,6 +65,7 @@ Source: "qwen3_npu.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "qwen3vl_npu.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "qwen3vl_flash.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "qwen3_5vl_npu.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "qwen3_5vl_flash.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "minicpm_v_4_7_npu.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "minicpm_ocr_npu.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "minicpm_v_4_7_moe_npu.dll"; DestDir: "{app}"; Flags: ignoreversion
@@ -75,8 +76,10 @@ Source: "nanbeige_npu.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gemma4e_npu.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gemma4e_flash.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gemma4e_dflash.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "gemma4e_dflash_flash.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gemma4e_12b_npu.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "hunyuan_npu.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "hy_mem_npu.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "lm_head.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "dequant.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "whisper_npu.dll"; DestDir: "{app}"; Flags: ignoreversion

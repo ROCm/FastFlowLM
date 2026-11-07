@@ -62,6 +62,9 @@ inline constexpr const char* kBackendKey = "backend";
 ///       that picks between them sit together.
 inline constexpr const char* kCoreFamilySuffix = "-core";
 
+/// \brief OGA packages run on the GPU through a separately installed hip-ep
+inline constexpr const char* kOgaHipepBackendId = "oga-hipep";
+
 /// \brief everything a backend factory needs to build its engine
 /// \note Assembled by the frontend once the shared model state is initialized,
 ///       so `config` and `context_length` are already resolved.
@@ -131,6 +134,26 @@ public:
 
     /// \brief whether the engine has failed in a way that needs a full reload
     virtual bool poisoned() const noexcept { return false; }
+
+    /// \brief whether a restore() leaves the engine able to continue from its
+    ///        checkpoint without running the tokens before it again
+    /// \note When it does not, a prompt that diverges after the checkpoint
+    ///       replays the whole history, so a frontend should prefer continuing
+    ///       the history the engine ran over restoring.
+    virtual bool keeps_state_on_restore() const { return true; }
+
+    /// \brief tokens the engine has run more than once, counted since it was built
+    /// \note The difference across a prefill is the part of the reused prefix
+    ///       that the engine ran again rather than served from its cache.
+    virtual std::uint64_t replayed_tokens() const { return 0; }
+
+    /// \brief whether the engine finds by itself how much of a prompt it has
+    ///        already run
+    /// \note Such an engine compares every prefill with the tokens and images it
+    ///       holds and runs again only what differs, so the frontend can match
+    ///       each rendered prompt against its checkpoint instead of relying on a
+    ///       message-level cache.
+    virtual bool matches_token_prefixes() const { return false; }
 
     /// \brief EOS ids proven by the backend's own package, when it has them
     /// \note Returning a value overrides whatever tokenizer_config.json says.

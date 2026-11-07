@@ -25,8 +25,16 @@ parent: Models
 Start with embedding model enabled:
 
 ```shell
-flm serve gemma3:4b --embed 1 # Load the embedding model (embed-gemma:300m) in the background, with concurrent LLM loading (gemma3:4b).
+flm serve gemma3:4b --embed embed-gemma:300m # Load the embedding model in the background, with concurrent LLM loading (gemma3:4b).
 ```
+
+As a standalone embedding server (no LLM):
+
+```shell
+flm serve -e embed-gemma:300m
+```
+
+`--embed` / `-e` take an embedding model tag (see `flm list`); `1` selects the default (embed-gemma:300m) and `0` turns it off. An unknown tag, or the tag of a different kind of model, stops flm with an error.
 
 Send file(s) to `POST /v1/embeddings` via any OpenAI Client or Open WebUI.
 

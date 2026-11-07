@@ -16,7 +16,7 @@ import sys
 import time
 
 from .harness import FAIL, Context, Result, configure_stdout
-from .plan import TIERS, Plan, load_catalog
+from .plan import GPU_BACKENDS, TIERS, Plan, load_catalog
 from .suites import SUITES, ORDER
 
 
@@ -37,6 +37,9 @@ def parse_args(argv=None) -> argparse.Namespace:
                         help="Run the whole ASR evaluation set even on the pr tier.")
     parser.add_argument("--models", default="",
                         help="Comma-separated model ids; restricts every suite to these.")
+    parser.add_argument("--backend", choices=["", *sorted(GPU_BACKENDS)], default="",
+                        help="Test every model of this GPU backend instead of the NPU models "
+                             "(default: the NPU models).")
     parser.add_argument("--asr-expected-key", default="",
                         help="Row of asr_eval/expected.json to check WER against, "
                              "e.g. linux-hrx (default: none, core checks only).")
@@ -77,7 +80,7 @@ def main(argv=None) -> int:
         catalog, catalog_error = {}, f"`flm list --json` failed: {type(exc).__name__}: {exc}"
     families = [f.strip() for f in args.families.split(",") if f.strip()]
     only = [m.strip() for m in args.models.split(",") if m.strip()] or None
-    plan = Plan(catalog, args.tier, families, only_models=only)
+    plan = Plan(catalog, args.tier, families, only_models=only, backend=args.backend)
     ctx = Context(flm_bin=args.flm_bin, label=args.label, tier=args.tier, plan=plan,
                   out_dir=args.output_dir, request_timeout=args.request_timeout,
                   port=args.port, verbose=args.verbose)
@@ -86,7 +89,8 @@ def main(argv=None) -> int:
 
     print(f"{args.label}: {args.tier} tier, {len(catalog)} catalog models, "
           f"suites: {', '.join(names)}" + (f", touched families: {', '.join(families)}"
-                                           if families else ""))
+                                           if families else "")
+          + (f", backend: {args.backend}" if args.backend else ""))
     try:
         if catalog_error:
             print(catalog_error)

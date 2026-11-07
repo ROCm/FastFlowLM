@@ -6,6 +6,21 @@
 /// \note This is a source file for the gpt-oss class
 #include "AutoModel/modeling_gpt_oss.hpp"   
 
+#include <algorithm>
+#include <cctype>
+#include <iterator>
+
+namespace {
+std::string trim_left(const std::string& text) {
+    const auto first = std::find_if(text.begin(), text.end(), [](unsigned char c) { return !std::isspace(c); });
+    return std::string(first, text.end());
+}
+
+std::string trim_right(const std::string& text) {
+    const auto last = std::find_if(text.rbegin(), text.rend(), [](unsigned char c) { return !std::isspace(c); });
+    return std::string(text.begin(), last.base());
+}
+} // namespace
 
 GPT_OSS::GPT_OSS(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "gpt-oss") {}
 
@@ -48,6 +63,66 @@ std::string GPT_OSS::apply_chat_template(nlohmann::ordered_json& messages, nlohm
 
     return this->_render_chat_template(inputs, continue_final_message);
 }
+
+bool GPT_OSS::_continue_verbatim(std::vector<int>& tokens, std::optional<int> requested_max_new_tokens) {
+    const std::vector<int>& ran = this->token_history;
+    const std::vector<int>& held = this->checkpoint_his;
+    const size_t cp = held.size();
+    // an engine that ran the reply's <|return|> holds it where the prompt has <|end|>
+    if (cp == 0 || ran.size() <= cp || tokens.size() <= cp || this->is_eos(ran.back()) ||
+        static_cast<size_t>(this->lm_engine->get_current_context_length()) != ran.size() ||
+        !std::equal(held.begin(), held.end(), ran.begin()) || !std::equal(held.begin(), held.end(), tokens.begin())) {
+        return false;
+    }
+    const std::vector<int> channel = this->tokenizer->encode("<|channel|>");
+    const std::vector<int> message = this->tokenizer->encode("<|message|>");
+    const std::vector<int> end = this->tokenizer->encode("<|end|>");
+    if (channel.size() != 1 || message.size() != 1 || end.size() != 1) {
+        return false;
+    }
+    // the prompt's copy of the last reply ends at the first <|end|> after the checkpoint
+    const auto reply_end = std::find(tokens.begin() + cp, tokens.end(), end[0]);
+    if (reply_end == tokens.end()) {
+        return false;
+    }
+    // The text of the last message in [begin, stop), when that message is on the final channel.
+    const auto final_text = [&](std::vector<int>::const_iterator begin, std::vector<int>::const_iterator stop) -> std::optional<std::string> {
+        const auto open = std::find(std::make_reverse_iterator(stop), std::make_reverse_iterator(begin), channel[0]);
+        if (open == std::make_reverse_iterator(begin)) return std::nullopt;
+        const auto body = std::find(open.base(), stop, message[0]);
+        if (body == stop) return std::nullopt;
+        const std::string header = this->tokenizer->decode(std::vector<int>(open.base(), body));
+        if (header.substr(0, header.find_first_of(" \t\r\n<")) != "final") return std::nullopt;
+        return this->tokenizer->decode(std::vector<int>(body + 1, stop));
+    };
+    const std::optional<std::string> generated_text = final_text(ran.begin() + cp, ran.end());
+    const std::optional<std::string> sent_text = final_text(tokens.begin() + cp, reply_end);
+    if (!generated_text || !sent_text) {
+        return false;
+    }
+    const std::string generated = trim_left(*generated_text);
+    const std::string sent = trim_right(trim_left(*sent_text));
+    std::vector<int> continued(ran);
+    if (trim_right(generated) != sent) {
+        // A reply cut at the length limit lacks its last sampled token, which the client did get.
+        if (generated.empty() || sent.size() <= generated.size() || sent.compare(0, generated.size(), generated) != 0) {
+            return false;
+        }
+        const std::vector<int> rest = this->tokenizer->encode(sent.substr(generated.size()));
+        continued.insert(continued.end(), rest.begin(), rest.end());
+    }
+    continued.insert(continued.end(), reply_end, tokens.end());
+    // the history keeps the analysis the rendered prompt leaves out, so it can be the longer one
+    try {
+        this->_shared_validate_capacity(continued.size(), requested_max_new_tokens);
+    } catch (const ModelRequestError&) {
+        return false;
+    }
+    header_print("FLM", "Continuing the " << ran.size() << " tokens the engine ran, last reply included");
+    tokens = std::move(continued);
+    return true;
+}
+
 bool GPT_OSS::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled)
 {
     // preprocess
@@ -74,7 +149,6 @@ bool GPT_OSS::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     
     // hardware
     int restore_idx = -1;
-    gpt_oss_npu *gpt_oss_engine = dynamic_cast<gpt_oss_npu*>(this->lm_engine);
 
     // Prefix slots. The generation prompt ("<|start|>assistant") is how the next turn renders this reply's header: save the whole prompt.
     if (this->_prefix_slot_mode(meta_info, tokens.size(), 0)) {
@@ -82,15 +156,20 @@ bool GPT_OSS::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     }
     this->_prefix_legacy_path();
 
-    if (meta_info.restore_allowed) {
-        restore_idx = gpt_oss_engine->restore();
+    // An engine that would replay the whole history after a restore continues
+    // the history it ran instead, when the prompt is that history going on.
+    const bool continued = meta_info.restore_allowed && this->backend_ &&
+                           !this->backend_->keeps_state_on_restore() &&
+                           this->_continue_verbatim(tokens, input.requested_max_new_tokens);
+    if (meta_info.restore_allowed && !checkpoint_his.empty() && !continued) {
+        restore_idx = this->lm_engine->restore();
         this->total_tokens = restore_idx;
         this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
     }
     bool success = this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
 
     checkpoint_his = token_history;
-    int checkpoint_idx = gpt_oss_engine->checkpoint();
+    int checkpoint_idx = this->lm_engine->checkpoint();
 
     return success;
 }
@@ -166,7 +245,15 @@ std::string GPT_OSS::generate(chat_meta_info_t& meta_info, int length_limit, std
         token_history.push_back(sampled_token);
         if (this->is_eos(sampled_token)){
             meta_info.generated_tokens++;
-            this->lm_engine->forward(last_sampled_token);
+            // Its row is past the end of the engine's KV window once the context is
+            // full: forwarding it there corrupts the engine for every later request,
+            // so the next prompt has to carry it instead, as it does for a backend
+            // that opts out of the forward.
+            if (this->total_tokens < this->MAX_L && (!this->backend_ || this->backend_->forwards_past_eos())) {
+                this->lm_engine->forward(last_sampled_token);
+            } else {
+                this->token_history.pop_back();
+            }
             break;
         }
         meta_info.generated_tokens++;

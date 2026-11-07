@@ -726,6 +726,34 @@ int main(int argc, char* argv[]) {
         }
     }
   
+    if (parsed_args.command == "serve" || parsed_args.command == "run") {
+        // -a / -e must name a model of the right kind (the catalog's family says which)
+        auto family_of = [&](const std::string& tag) {
+            auto [resolved_tag, info] = availble_models.get_model_info(tag);
+            return info.value("details", nlohmann::json::object()).value("family", std::string());
+        };
+        if (parsed_args.asr) {
+            if (!availble_models.is_model_supported(parsed_args.asr_tag)) {
+                header_print("ERROR", "ASR model not found: " << parsed_args.asr_tag << "; Please check with `flm list` and try again.");
+                return 1;
+            }
+            if (family_of(parsed_args.asr_tag) != "whisper-v3") {
+                header_print("ERROR", parsed_args.asr_tag << " is not an ASR model; use e.g. -a whisper-v3:turbo");
+                return 1;
+            }
+        }
+        if (parsed_args.embed) {
+            if (!availble_models.is_model_supported(parsed_args.embed_tag)) {
+                header_print("ERROR", "Embedding model not found: " << parsed_args.embed_tag << "; Please check with `flm list` and try again.");
+                return 1;
+            }
+            if (family_of(parsed_args.embed_tag) != "embed-gemma") {
+                header_print("ERROR", parsed_args.embed_tag << " is not an embedding model; use e.g. -e embed-gemma:300m");
+                return 1;
+            }
+        }
+    }
+
     if (parsed_args.command == "serve" || parsed_args.command == "run" || parsed_args.command == "bench"){
         // Configure AMD XRT for the specified power mode
         if (parsed_args.power_mode == "default" || parsed_args.power_mode == "powersaver" || parsed_args.power_mode == "balanced" || 

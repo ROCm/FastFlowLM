@@ -43,8 +43,8 @@ This is a contributor document. For *using* a backend once it exists — `--back
 |---|---|
 | **Platform** | Windows and Linux. Both configure and build; only Windows has been run on hardware, and the `src/test/phi4_core` suite is still Windows-only. |
 | **Hardware** | An dev04 NPU. There is no simulator; a wrong shape shows up as garbage output, not an error. |
-| **corelib headers** | The corelib ABI is still pre-1.0, so FastFlowLM requires an **exact `0.53.0`** match on major, minor and patch. [`corelib_api.hpp`](../../include/core/corelib_api.hpp) `#error`s on any other version — deliberately, because the C ABI has changed shape between patch releases. The version is queried before any other entry point, so a mismatched runtime reports a version error rather than a missing symbol. corelib's default build gives one `ryzenai_corelib_model_<name>` library per model, carrying its kernels, which must sit beside corelib. A per-op engine enables its model's kernel bundle on the stream it opens; a model corelib runs whole enables its own. |
-| **Weights** | A GGUF corelib's model reads: a Q8_0 one, which it requantizes on every load, or a Q4_G128 or Q4_G32 one, whose codes it packs as they are. The catalog names which; see `preferred_source` in §6. |
+| **corelib headers** | The corelib ABI is still pre-1.0, so FastFlowLM requires an **exact `0.60.0`** match on major, minor and patch. [`corelib_api.hpp`](../../include/core/corelib_api.hpp) `#error`s on any other version — deliberately, because the C ABI has changed shape between patch releases. The version is queried before any other entry point, so a mismatched runtime reports a version error rather than a missing symbol. corelib's default build gives one `ryzenai_corelib_model_<name>` library per model, carrying its kernels, which must sit beside corelib. A per-op engine enables its model's kernel bundle on the stream it opens; a model corelib runs whole enables its own. |
+| **Weights** | A GGUF corelib's model reads: a Q4_G128 or Q4_G32 one, whose codes it packs as they are, or, for Qwen3 and Llama only, a Q8_0 one, which it requantizes on every load. The catalog pulls what corelib's own runner does: AMD's Q4 file, with no public fallback, for every model but Qwen3-0.6B and Llama, which AMD ships no Q4 of and which stay on a public Q8_0. See §6. |
 
 Configure with:
 
@@ -327,7 +327,7 @@ axes prune:
 | the entry is dropped when | said by |
 |---|---|
 | the host is not silicon the entry names | `"supported_platforms"` on the entry |
-| the build did not link the kernel flow the entry needs | the **family name**: a family ending in `-core` is corelib's, everything else is FastFlowLM's |
+| the build did not link the kernel flow the entry needs | the **family name**: a family ending in `-core` is corelib's, one ending in `-oga-hipep` is an OGA package for the GPU (`FLM_ENABLE_OGA_HIPEP`), everything else is FastFlowLM's |
 
 So the corelib flavour of a model is **its own top-level family**, named
 `<family>-core`, sitting beside the stock one rather than patching it:
@@ -360,22 +360,26 @@ Points that are easy to get wrong:
   family name. Omitting it is legal — it means *every* generation, which is what
   a catalog written before the key meant — but a shipped entry should say what
   it was built for. Every FastFlowLM entry is `["aie2p"]`; every `-core` entry is
-  `["dev04"]`.
+  `["dev04"]`. An `-oga-hipep` entry runs on the GPU, so it names no
+  generation and omits the key.
 - Separate families mean **separate tags**, so no `model_info_key` redirect is
   needed: `model_info.json` keys the corelib records under `<family>-core:<size>`
   directly, which is also the tag a user types.
 - `file_sources` pins a per-file origin + revision when the weights and the
   tokenizer come from different repos (very common with GGUF mirrors).
+- `"use_hf_token": true` sends the user's Hugging Face token (`HF_TOKEN`, or
+  the file `hf auth login` writes) with the files that the entry's `url`
+  serves, and with nothing else. Every `-core` entry on an AMD Q4 GGUF under
+  `huggingface.co/amd/`, a private repository, sets it.
 - `preferred_source` is a JSON merge patch over the entry naming a source
-  `flm pull` tries first — today the AMD Q4 GGUFs under `huggingface.co/amd/`,
-  over the public Q8_0 mirror the entry itself names. It carries its own `url`,
-  `files`, `size` and `model_info_key` (records keyed `<tag>@amd`), and
-  `"use_hf_token": true` sends the user's Hugging Face token (`HF_TOKEN`, or
-  the file `hf auth login` writes) with the files that `url` serves, and with
-  nothing else. A pull uses it when its files are already on disk or the
-  first of them answers a HEAD request, and falls back to the entry otherwise;
-  outside a pull, the entry resolves to the preferred source exactly when every
-  file only it has is on disk.
+  `flm pull` tries first, over the one the entry itself names. It carries its
+  own `url`, `files`, `size` and `model_info_key` (records keyed
+  `<tag>@amd`), and its own `use_hf_token`. A pull uses it when its files are
+  already on disk or the first of them answers a HEAD request, and falls back
+  to the entry otherwise; outside a pull, the entry resolves to the preferred
+  source exactly when every file only it has is on disk. No shipped entry uses
+  it: corelib has no public fallback for a model AMD ships a Q4 file of, so
+  neither does the catalog.
 - The two keys are checked independently, and **the platform is checked first
   and for everyone**. On a `dev04` NPU a corelib build offers the `-core` tags
   and nothing else; on an `aie2p` one, or none, every build offers the

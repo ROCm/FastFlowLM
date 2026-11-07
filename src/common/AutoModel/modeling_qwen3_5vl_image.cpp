@@ -183,7 +183,7 @@ void Qwen3_5VL::smart_resize(
 ///@note: Converts uint8 image to BF16 format, data is already in (3, H, W) CHW layout
 ///@param: image: the image to preprocess (already in CHW format)
 ///@return: the preprocessed image in BF16 format
-void Qwen3_5VL::preprocess_image(qwen3_5vl_image_t& image, std::vector<bf16> &pixel_values) {
+void Qwen3_5VL::preprocess_image(qwen3_5vl_image_t& image, std::vector<bf16> &pixel_values, unsigned max_pixels) {
     const int width = image.width;
     const int height = image.height;
     const int channels = 3; // RGB
@@ -191,22 +191,22 @@ void Qwen3_5VL::preprocess_image(qwen3_5vl_image_t& image, std::vector<bf16> &pi
     int resized_width;    
     // do the automatically resizing in here 
 
-    qwen3_5vl_npu* lm_engine_qwen3_5_ptr = reinterpret_cast<qwen3_5vl_npu*>(this->lm_engine);
+    const qwen3_5vl_vision_geometry_t& geometry = this->vision_geometry;
     smart_resize(
         height, width,
         resized_height, resized_width,
         
-        lm_engine_qwen3_5_ptr->QWEN3_5_PATCH_SIZE * lm_engine_qwen3_5_ptr->QWEN3_5_IMAGE_MERGE_SIZE,
-        lm_engine_qwen3_5_ptr->QWEN3_5_SHORTEST_EDGE,
-        lm_engine_qwen3_5_ptr->QWEN3_5_LONGEST_EDGE
+        geometry.patch_size * geometry.merge_size,
+        std::min(geometry.min_pixels, max_pixels),
+        max_pixels
     );
     // std::cout << "resized_height "<< resized_height << " resized_width " << resized_width <<std::endl;
 
     // Cache size calculations for efficiency
     const uint32_t single_frame_size = resized_height * resized_width * channels;
-    const uint32_t total_patch_size = single_frame_size * lm_engine_qwen3_5_ptr->QWEN3_5_TEMPORAL_PATCH_SIZE;
-    const uint32_t grid_h = resized_height / lm_engine_qwen3_5_ptr->QWEN3_5_PATCH_SIZE;
-    const uint32_t grid_w = resized_width / lm_engine_qwen3_5_ptr->QWEN3_5_PATCH_SIZE;
+    const uint32_t total_patch_size = single_frame_size * geometry.temporal_patch_size;
+    const uint32_t grid_h = resized_height / geometry.patch_size;
+    const uint32_t grid_w = resized_width / geometry.patch_size;
 
     // Pre-allocate final buffer to avoid reallocation
     const uint32_t prev_pixel_values_size = pixel_values.size();
@@ -227,13 +227,13 @@ void Qwen3_5VL::preprocess_image(qwen3_5vl_image_t& image, std::vector<bf16> &pi
     imgproc::avx512::rescale_and_normalize_avx512(
         resize_image.data(), patch_vector_scratch.data(),
         resized_width, resized_height, channels,
-        true, lm_engine_qwen3_5_ptr->QWEN3_5_VISION_RESCALE_FACTOR,
-        true, lm_engine_qwen3_5_ptr->QWEN3_5_VISION_RESCALE_IMAGE_MEAN, lm_engine_qwen3_5_ptr->QWEN3_5_VISION_RESCALE_IMAGE_STD
+        true, geometry.rescale_factor,
+        true, geometry.image_mean, geometry.image_std
     );
     
     // Replicate first frame for temporal patches (optimized for QWEN3_5_TEMPORAL_PATCH_SIZE = 2)
     // This is more efficient than a loop for the common case
-    if  (lm_engine_qwen3_5_ptr->QWEN3_5_TEMPORAL_PATCH_SIZE == 2) {
+    if  (geometry.temporal_patch_size == 2) {
         memcpy(
             patch_vector_scratch.data() + single_frame_size,
             patch_vector_scratch.data(),
@@ -241,7 +241,7 @@ void Qwen3_5VL::preprocess_image(qwen3_5vl_image_t& image, std::vector<bf16> &pi
         );
     } else {
         // Generic loop for other TEMPORAL_PATCH_SIZE values
-        for(unsigned l = 1; l < lm_engine_qwen3_5_ptr->QWEN3_5_TEMPORAL_PATCH_SIZE; l++){
+        for(unsigned l = 1; l < geometry.temporal_patch_size; l++){
             memcpy(
                 patch_vector_scratch.data() + l * single_frame_size,
                 patch_vector_scratch.data(),
@@ -255,11 +255,11 @@ void Qwen3_5VL::preprocess_image(qwen3_5vl_image_t& image, std::vector<bf16> &pi
         patch_vector_scratch.data(),
         pixel_values.data() + prev_pixel_values_size,
         1, 1, // something special for image
-        lm_engine_qwen3_5_ptr->QWEN3_5_TEMPORAL_PATCH_SIZE,
+        geometry.temporal_patch_size,
         channels,
         grid_h, grid_w,
-        lm_engine_qwen3_5_ptr->QWEN3_5_MERGE_SIZE,
-        lm_engine_qwen3_5_ptr->QWEN3_5_PATCH_SIZE
+        geometry.merge_size,
+        geometry.patch_size
     );
 
 

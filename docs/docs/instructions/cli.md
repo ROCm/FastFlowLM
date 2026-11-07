@@ -241,14 +241,15 @@ flm serve llama3.2:1b --ctx-len 8192
 
 ### 🔀 Choose an Execution Backend
 
-**A backend names where the kernels come from.** There are two:
+**A backend names where the kernels come from.** There are three:
 
 | id | kernels | ships on |
 |---|---|---|
 | `flm` | FastFlowLM's own NPU kernels | Strix / Krackan Point |
 | `core` | AMD's ryzenai-corelib | the next NPU generation |
+| `oga-hipep` | onnxruntime-genai with a hip-ep runtime installed on demand | the GPU, on a host that also has an NPU (see below) |
 
-You normally never set this. The model tag already names the flow — a family ending in `-core` wants corelib's kernels, everything else FastFlowLM's — and `flm list` only ever offers you tags this build and this machine can actually run. `flm run` separately prints the silicon as `NPU platform: dev04`. A model family has at most one engine per backend, so there is nothing to choose between.
+You normally never set this. The model tag already names the flow — a family ending in `-core` wants corelib's kernels, one ending in `-oga-hipep` wants the GPU through hip-ep, everything else FastFlowLM's — and `flm list` only ever offers you tags this build and this machine can actually run. `flm run` separately prints the silicon as `NPU platform: dev04`. A model family has at most one engine per backend, so there is nothing to choose between.
 
 The flag exists for overriding what the tag says, and for the targets that will join this list later:
 
@@ -263,13 +264,31 @@ flm serve phi4-mini-it-core:4b --backend core
 |---|---|---|
 | 1 | `--backend <id>` | the flag above, or a `"backend"` field on a `/v1/chat/completions` or `/v1/completions` request |
 | 2 | `FLM_BACKEND=<id>` | environment variable, for a whole shell session |
-| 3 | the model's catalog entry | `core` for a tag whose family ends in `-core`, `flm` otherwise |
+| 3 | the model's catalog entry | `core` for a tag whose family ends in `-core`, `oga-hipep` for one ending in `-oga-hipep`, `flm` otherwise |
 
 A per-request `"backend"` overrides `--backend` for that request, and reloads the model if it differs from the one already loaded — exactly as asking for a different model does.
 
 Asking for a backend this build does not ship fails at load with a message listing what is actually available. There is no silent fallback to another engine or to the CPU. Note that a release is built for one NPU generation: on hardware it was not built for, `run`, `serve` and `bench` refuse up front, and `flm validate` still reports what it found.
 
 > A build carries the engines for one generation only, so there is no flag that moves it to the other catalog entry — that is a different build of FLM.
+
+#### oga-hipep: OGA models on the GPU
+
+Models whose family ends in `-oga-hipep` run on the GPU through a hip-ep package. FLM reuses an existing package when it finds one, and on the standard Windows XRT build it can install the pinned runtime into the current user's profile the first time `run` or `serve` needs it.
+
+```shell
+flm pull qwen3.5-oga-hipep:9b
+flm run  qwen3.5-oga-hipep:9b
+```
+
+- **Build it in.** The standard Windows release ZIP and MSI include this backend. Source builds must configure FLM with `-DFLM_ENABLE_OGA_HIPEP=ON` on Windows with the XRT runtime (`FLM_USE_HRX=OFF`). It is unsupported on HRX and Linux builds. Without it, `flm list` does not offer these models.
+- **Runtime discovery and install.** `flm run qwen3.5-oga-hipep:9b` and `flm serve qwen3.5-oga-hipep:9b` first look for a usable package under `%LOCALAPPDATA%\hip-ep\<version>` and `%ProgramFiles%\hip-ep\<version>`, newest version first. When none qualifies and `AMDRT_PKG_ROOT` is unset, FLM downloads `amdgpu.zip` (about 125 MiB) from the `hip-ep` v0.5.2 release, verifies its built-in SHA-256, and installs it under `%LOCALAPPDATA%\hip-ep\flm-0.5.2`. Whichever package is used, FLM registers its `hipgpu.dll` with onnxruntime-genai as the `AMDGPUExecutionProvider`, once per process. `flm pull`, `flm list`, help output, and non-OGA models do not trigger this install path.
+- **Profile paths.** Non-ASCII profile paths work when Windows provides a usable short-path alias, which both the shared downloader and the provider registration need. If short names are disabled, FLM reports the limitation; use `AMDRT_PKG_ROOT` with a package extracted under an ASCII path.
+- **Manual and offline use.** You can still unzip a package yourself into `%LOCALAPPDATA%\hip-ep\<version>` or `%ProgramFiles%\hip-ep\<version>`. The folder must hold `onnxruntime-genai.dll`, `onnxruntime.dll` and `hipgpu.dll`, at its root as `amdgpu.zip` unpacks or in a `bin` directory. The version may sit anywhere in the folder name, such as `hip-ep-0.5.2`; a folder without one, such as `amdgpu`, the name Windows gives the zip, is tried after the versioned ones. Or set `AMDRT_PKG_ROOT` to the package root. When `AMDRT_PKG_ROOT` is set it is the only location used, and a package it points to that is rejected is an error, not a fallback to the default locations or to an automatic download.
+- **Models.** `qwen3.5-oga-hipep` (`9b`, `35b-a3b`, `122b-a10b`), `qwen3.6-oga-hipep` (`27b`, `35b-a3b`) and `qwen3.8-oga-hipep:27b` take images as well as text. `qwen2.5-it-oga-hipep:14b`, `qwen2.5-coder-it-oga-hipep:14b`, `gemma3-oga-hipep:4b`, `gemma4-it-oga-hipep` (`12b`, `26b-a4b`) and `gpt-oss-oga-hipep:120b` take text only: the Gemma packages ship a vision model, and `gemma4-it-oga-hipep:12b` an audio model too, but FLM does not run them, so a request with an image or audio gets HTTP 400. The packages are 4 to 72 GB each.
+- **Images.** The images of one prompt share a budget of 8100 patches (one 1440x1440 image, 2025 image tokens), so a prompt with several images resizes each one smaller. The first image after the model loads takes a few seconds longer: FLM first runs the vision model once at that full size, which hip-ep 0.5.2 needs to give correct image features for every size after it.
+- **The host must have an NPU.** FLM still opens the NPU for this backend, so a host without an NPU is not supported yet.
+- **Conversation state.** Exact token prefixes continue the existing generator, so a request does not run its tokens twice. A follow-up turn continues the conversation the generator ran when the client sends the last reply back unchanged; the reply's reasoning then stays in the context. Any other history, and every new or changed image, replays the whole conversation (OGA takes images only when it starts a generator); `usage.prompt_tokens_details.cached_tokens` counts only the tokens that were not run again. With onnxruntime-genai 0.19 or later in the hip-ep package, FLM instead rewinds to the end of the last prompt, as on the NPU. NPU prefix slots are not used.
 
 ---
 
@@ -378,16 +397,16 @@ flm serve qwen3.5:4b --prefix-cache-mb 8192 --prefix-slots 16
 
 ### 🎙️ ASR (Automatic Speech Recognition)
 
-**Requirement:** The ASR model (e.g., `whisper-large-v3-turbo`) must run **with an LLM loaded concurrently**. Enabling `--asr 1` starts Whisper in the background **while** your chosen LLM loads.
+**Requirement:** The ASR model (e.g., `whisper-large-v3-turbo`) must run **with an LLM loaded concurrently**. Enabling `--asr <model tag>` (or `--asr 1` for the default) starts Whisper in the background **while** your chosen LLM loads.
 
 #### CLI mode
 ```shell
-flm run gemma3:4b --asr 1  # Load Whisper (whisper-large-v3-turbo) in the background and load the LLM (gemma3:4b) concurrently.
+flm run gemma3:4b --asr whisper-v3:turbo  # Load Whisper (whisper-large-v3-turbo) in the background and load the LLM (gemma3:4b) concurrently.
 ```
 
 #### Server mode
 ```shell
-flm serve gemma3:4b --asr 1  # Background-load Whisper and initialize the LLM (gemma3:4b) concurrently.
+flm serve gemma3:4b --asr whisper-v3:turbo  # Background-load Whisper and initialize the LLM (gemma3:4b) concurrently.
 ```
 
 > **Note:** ASR alone isn’t supported—an LLM must be present for end-to-end voice→text→LLM workflows.

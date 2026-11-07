@@ -1,0 +1,6 @@
+ort_genai_c.h is src/ort_genai_c.h of microsoft/onnxruntime-genai, unmodified.
+
+Tag:    v0.17.0
+Commit: 1d67be30e5b1ed0c264f6f41c598f85157e8288b
+SHA256: 9c69cc16a779aec3191b8d1f19a629e59667f34597e74fcbf0cdc24f39e0aef3
+Source: https://github.com/microsoft/onnxruntime-genai/blob/v0.17.0/src/ort_genai_c.h

@@ -28,7 +28,7 @@
 
   <Package Name="FLM"
            Manufacturer="FastFlowLM"
-           Version="1.0.12"
+           Version="1.0.13"
            UpgradeCode="5A5B2872-1E63-4934-9F57-088554CF4959"
            Language="1033"
            Scope="perMachine"
@@ -170,6 +170,9 @@
       <Component Id="Comp_qwen3_5vl_npu.dll" Guid="*">
         <File Id="File_qwen3_5vl_npu.dll" Source="$(SourceDir)\qwen3_5vl_npu.dll" KeyPath="yes" />
       </Component>
+      <Component Id="Comp_qwen3_5vl_flash.dll" Guid="*">
+        <File Id="File_qwen3_5vl_flash.dll" Source="$(SourceDir)\qwen3_5vl_flash.dll" KeyPath="yes" />
+      </Component>
       <Component Id="Comp_minicpm_v_4_7_npu.dll" Guid="*">
         <File Id="File_minicpm_v_4_7_npu.dll" Source="$(SourceDir)\minicpm_v_4_7_npu.dll" KeyPath="yes" />
       </Component>
@@ -200,11 +203,17 @@
       <Component Id="Comp_gemma4e_dflash.dll" Guid="*">
         <File Id="File_gemma4e_dflash.dll" Source="$(SourceDir)\gemma4e_dflash.dll" KeyPath="yes" />
       </Component>
+      <Component Id="Comp_gemma4e_dflash_flash.dll" Guid="*">
+        <File Id="File_gemma4e_dflash_flash.dll" Source="$(SourceDir)\gemma4e_dflash_flash.dll" KeyPath="yes" />
+      </Component>
       <Component Id="Comp_gemma4e_12b_npu.dll" Guid="*">
         <File Id="File_gemma4e_12b_npu.dll" Source="$(SourceDir)\gemma4_12b_npu.dll" KeyPath="yes" />
       </Component>
       <Component Id="Comp_hunyuan_npu.dll" Guid="*">
         <File Id="File_hunyuan_npu.dll" Source="$(SourceDir)\hunyuan_npu.dll" KeyPath="yes" />
+      </Component>
+      <Component Id="Comp_hy_mem_npu.dll" Guid="*">
+        <File Id="File_hy_mem_npu.dll" Source="$(SourceDir)\hy_mem_npu.dll" KeyPath="yes" />
       </Component>
       <Component Id="Comp_lm_head.dll" Guid="*">
         <File Id="File_lm_head.dll" Source="$(SourceDir)\lm_head.dll" KeyPath="yes" />

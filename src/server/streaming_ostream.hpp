@@ -15,6 +15,7 @@
 #include <vector>
 #include <nlohmann/json.hpp>
 #include "AutoModel/automodel.hpp"
+#include "wstream_buf.hpp"
 #include "harmony_filter.hpp"
 
 using json = nlohmann::ordered_json;
@@ -76,22 +77,6 @@ private:
         buffer.clear();
     }
 
-    ///@brief Get UTF-8 sequence length from first byte
-    ///@param first_byte the first byte
-    ///@return sequence length, or 0 if invalid
-    size_t get_utf8_sequence_length(unsigned char first_byte) {
-        if ((first_byte & 0x80) == 0) {
-            return 1; // Single byte sequence
-        } else if ((first_byte & 0xE0) == 0xC0) {
-            return 2; // Two byte sequence
-        } else if ((first_byte & 0xF0) == 0xE0) {
-            return 3; // Three byte sequence
-        } else if ((first_byte & 0xF8) == 0xF0) {
-            return 4; // Four byte sequence
-        }
-        return 0; // Invalid UTF-8 start byte
-    }
-    
     ///@brief Flush only complete UTF-8 sequences
     ///@param is_final the is final
     void flush_complete_utf8_sequences(bool is_final) {
@@ -102,20 +87,18 @@ private:
         
         // Process complete UTF-8 sequences
         while (pos < buffer.size()) {
-            unsigned char first = static_cast<unsigned char>(buffer[pos]);
-            size_t seq_len = get_utf8_sequence_length(first);
-            
-            if (seq_len == 0) {
-                // Invalid UTF-8 start byte, skip it
+            const int len = utf8_char_len(reinterpret_cast<const unsigned char*>(buffer.data()) + pos, buffer.size() - pos);
+            if (len == 0) {
+                // Not part of a well-formed character (e.g. a character's first byte followed by
+                // another token): skip it, json::dump() would throw on it
                 pos++;
                 continue;
             }
-            
-            // Check if we have a complete sequence
-            if (pos + seq_len > buffer.size()) {
+            if (len < 0) {
                 // Incomplete sequence, stop here
                 break;
             }
+            const size_t seq_len = (size_t)len;
             
             // Add complete sequence to output
             complete_content.append(buffer, pos, seq_len);
