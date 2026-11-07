@@ -236,6 +236,34 @@ def round_trip(api: Api) -> None:
     expect("23" in (msg["content"] or ""), f"the answer does not use the tool result: {msg['content']!r}")
 
 
+
+@case
+def reasoning_kept_within_turn(api: Api) -> None:
+    """Reasoning sent back with a tool call stays in the prompt until the next user message."""
+    call = {"id": "call_1", "type": "function",
+            "function": {"name": "get_weather", "arguments": json.dumps({"city": "Paris"})}}
+    reasoning = "The user wants the weather in Paris, so I call get_weather for Paris."
+
+    def prompt_tokens(follow_up: bool, **fields) -> int:
+        messages = user(WEATHER_PROMPT) + [
+            {"role": "assistant", "content": None, "tool_calls": [call], **fields},
+            {"role": "tool", "tool_call_id": "call_1", "content": json.dumps({"temperature_c": 23})},
+        ]
+        if follow_up:
+            messages += [{"role": "assistant", "content": "It is 23 degrees."}] + user("And tomorrow?")
+        resp = api.post(api.body(messages, tools=WEATHER_TOOLS, max_tokens=1))
+        expect(resp.status == 200, f"HTTP {resp.status}: {resp.error_message()}")
+        return resp.body["usage"]["prompt_tokens"]
+
+    without = prompt_tokens(False)
+    kept = prompt_tokens(False, reasoning_content=reasoning)
+    if kept == without:
+        raise Skip("the chat template does not render reasoning on a tool call")
+    for fields in ({"reasoning": reasoning}, {"thinking": reasoning}, {"reasoning_content": None, "thinking": reasoning}):
+        expect(prompt_tokens(False, **fields) == kept, f"reasoning sent as {list(fields)} was not kept")
+    expect(prompt_tokens(True, reasoning_content=reasoning) == prompt_tokens(True),
+           "reasoning from an earlier turn was fed back to the model")
+
 CASES = flm_api.collect(globals())
 
 if __name__ == "__main__":
