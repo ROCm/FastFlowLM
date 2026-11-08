@@ -264,7 +264,7 @@ Before generating, FLM reads the prompt into the model's KV cache. This is the *
 
 | Models | `max_prefill_len` |
 |---|---|
-| Flash models (`gemma4e-flash:*`, `nemotron3.5-bolt-dflash-flash:e4b`, `qwen3.5-flash:2b`, `qwen3vl-flash:4b`, `hy-mt2-flash:1.8b`) | 1024 |
+| Flash models (`gemma4e-flash:*`, `nemotron3.5-bolt-dflash-flash:e4b`, `qwen3vl-flash:4b`, `hy-mt2-flash:1.8b`) | 1024 |
 | Every other chat model | 4096 |
 
 **`max_prefill_len` is not a limit on the prompt.** A longer prompt just takes more chunks. A 32,000-token prompt on a model with 4096-token chunks is read in eight passes, seven of 4096 tokens and one of 3,328, and the server log shows each one:

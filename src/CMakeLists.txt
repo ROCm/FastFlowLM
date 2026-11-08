@@ -116,7 +116,7 @@ endif()
 # and HRX-built .so/.dll/.lib never collide (see src/lib/xrt and src/lib/hrx).
 set(FLM_ENGINE_LIB_DIR "${CMAKE_SOURCE_DIR}/lib/${FLM_RUNTIME_NAME}")
 
-# The flash engine libs (qwen3vl_flash, qwen3_5vl_flash, gemma4e_flash) are always shipped in
+# The flash engine libs (qwen3vl_flash, gemma4e_flash) are always shipped in
 # src/lib/${FLM_RUNTIME_NAME} for every backend, so their model families are
 # always compiled in -- no probe/gate/macro needed.
 # Gemma4e can be built from source here; the other engines stay prebuilt.
@@ -520,7 +520,6 @@ set(FLM_ENGINE_LINK_LIBS
 )
 
 list(APPEND FLM_ENGINE_LINK_LIBS qwen3vl_flash)
-list(APPEND FLM_ENGINE_LINK_LIBS qwen3_5vl_flash)
 
 list(APPEND FLM_ENGINE_LINK_LIBS
     qwen3_5vl_npu
