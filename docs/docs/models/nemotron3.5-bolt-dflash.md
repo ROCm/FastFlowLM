@@ -19,6 +19,7 @@ parent: Models
 - **Draft:** 5 layers, 0.36B parameters, reads features of 5 layers of the main model; Q4_1 with its feature projection in BF16
 - **Max Context Length:** 64k tokens
 - **Host memory:** the token embeddings and the per-layer embeddings are read straight from `model.q4nx` through a read-only memory map, one row per token, instead of being copied into RAM. This saves about 3.7 GiB of RAM (private memory right after loading: about 4.2 GiB before, 0.5 GiB now) with the same speed and the same output. Only the rows of tokens that were actually seen stay in memory, and the OS can drop them under memory pressure; if it does, a prompt full of new tokens takes a little longer to start (about 0.2 s for 4k tokens on an NVMe drive). On Windows, the loaded model's `model.q4nx` cannot be replaced or deleted, so stop the server before `flm remove` or `flm pull` of this model.
+- **Prefill speed:** the projections of the 24 layers that own a KV cache run on a block-float NPU kernel (`dequant_mm_bfp.xclbin`). The draft reads the hidden state after layer 35 of every prompt row, so layers 24 to 35 still run over the whole prompt, but the last six layers run as a single decode step on the last token. On a local Strix Halo box time to first token is about 1.2 s to 0.85 s for a short prompt, 1.9 s to 1.4 s at 1k tokens and 5.0 s to 4.1 s at 4k tokens; on the CI runner prefill is about 14 % faster at 4k tokens and 34 % at 16k. Image start-up is about 20 % faster and audio 15 to 40 %. Output quality is unchanged (GSM8K 88 to 89 of 100, same speculation speed).
 - **Default Context Length:** 32k tokens ([change default](https://fastflowlm.com/docs/instructions/cli/#-change-default-context-length-max))
 - **License:** [OpenMDW-1.1](https://openmdw.ai/license/1-1/)
 - **FastFlowLM:** 1.0.12 or later
@@ -72,6 +73,7 @@ Expected: `1, 2, 3, ..., 40` followed by `done`, at a visibly higher speed than 
   ([how flash models work in server mode](https://fastflowlm.com/docs/instructions/server/openapi/#-example-flash-models-single-turn-pinned-system-prompt))
 - **Time to first token:** the same as `gemma4e-flash:e4b`, about 0.3 s for a short prompt, against 1.2 s for `nemotron3.5-bolt-dflash:e4b`
 - **Decode speed:** 33 to 40 tokens/s on code and structured answers, 19 to 21 tokens/s on open prose, against 13 for `gemma4e-flash:e4b`
+- **Image and audio start-up:** about 9 % faster for a picture and 5 to 23 % for audio than before (host-side work of the vision and audio encoders and the decode loop was trimmed); the flash prefill itself is unchanged, since it is the faster choice for short prompts (see the note below).
 - **Think / Conversational mode / Vision / Audio:** as `nemotron3.5-bolt:e4b`. Tool calling is not supported (the `tools` field is dropped).
   Images default to the smallest visual token budget (70) and only the first 30 seconds of an audio clip are used
 - **Packages:** the same two downloads as `nemotron3.5-bolt-dflash:e4b` (`Nemotron-3.5-Bolt-E4B-NPU2`, about 8.5 GiB, and the 0.25 GiB draft
@@ -105,7 +107,7 @@ flm serve nemotron3.5-bolt-dflash-flash:e4b
 
 📝 **Note:**
 
-- Flash prefill is tuned for short prompts: it is the faster choice up to a prompt of roughly 700 tokens. For longer prompts use
+- Flash prefill is tuned for short prompts: it is the faster choice up to a prompt of roughly 400 tokens (about 0.33 s for a short prompt against 0.85 s for `nemotron3.5-bolt-dflash:e4b`; `nemotron3.5-bolt:e4b` without a draft ties it at about 200 tokens). For longer prompts use
   `nemotron3.5-bolt-dflash:e4b`, which also has a longer context.
 - A long, fixed system prompt (instructions, examples) is where this tag gains most: it is prefilled once and the draft model sees it on
   every request, which keeps the speculative steps long. Changing the system prompt between requests discards the pin.
