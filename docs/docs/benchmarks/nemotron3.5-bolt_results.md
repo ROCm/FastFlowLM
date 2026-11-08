@@ -14,6 +14,7 @@ kernels as `gemma4-it:e4b`, so it performs like it. This page reports the measur
 > - Results are based on FastFlowLM 1.0.10 plus the Nemotron Bolt changes (a local build), under FLM's default NPU
 >   power mode (Performance). Newer versions may deliver improved performance.
 > - The Gemma 4 E4B row is measured in the same session on the same build.
+> - The prefill tables below were measured before the block-float prefill kernel (`dequant_mm_bfp.xclbin`) and the shared-layer shortcut reached this model; with them prefill is about 42 % faster at 1k tokens, 38 % at 4k and 29 % at 16k on the CI runner (decode unchanged). The tables have not been re-measured.
 
 ---
 
