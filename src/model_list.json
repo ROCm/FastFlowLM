@@ -653,7 +653,7 @@
                 "url": "https://huggingface.co/FastFlowLM/MiniCPM-OCR-1.0-NPU2/resolve/main",
                 "file_url": "https://huggingface.co/api/models/FastFlowLM/MiniCPM-OCR-1.0-NPU2/tree/main",
                 "ms_url": "https://modelscope.cn/models/amd/MiniCPM-OCR-1.0-NPU2",
-                "size": 1300000000,
+                "size": 2014286880,
                 "flm_min_version": "1.0.13",
                 "files": [
                     "config.json",
@@ -670,6 +670,7 @@
                     "format": "NPU2",
                     "family": "minicpm-ocr",
                     "think": true,
+                    "think_toggleable": true,
                     "parameter_size": "1B",
                     "quantization_level": "Q4_K"
                 },

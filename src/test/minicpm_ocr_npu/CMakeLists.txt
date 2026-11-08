@@ -13,6 +13,11 @@ add_npu_test(
     SOURCES
         "${CMAKE_SOURCE_DIR}/../../common/AutoModel/model_backend.cpp"
         "${CMAKE_SOURCE_DIR}/../../common/AutoModel/modeling_minicpm_ocr.cpp"
+        "${CMAKE_SOURCE_DIR}/../../common/AutoModel/modeling_minicpm_ocr_image.cpp"
+        "${CMAKE_SOURCE_DIR}/../../common/image/image_reader.cpp"
+        "${CMAKE_SOURCE_DIR}/../../common/image_process_utils/imageproc.cpp"
+        "${CMAKE_SOURCE_DIR}/../../common/image_process_utils/imageprocAVX512.cpp"
+        "${CMAKE_SOURCE_DIR}/../../common/prefix_slot_cache.cpp"
 )
 
 target_link_libraries(test_minicpm_ocr_npu PUBLIC

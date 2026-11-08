@@ -237,7 +237,10 @@ bool MiniCPM_OCR::load_image(const std::string& source, bool base64, image_data_
 
 MiniCPM_OCR::image_layout MiniCPM_OCR::preprocess_image(const image_data_t& chw,
                                                     minicpm_ocr_image_payload_t& payload) {
-    auto* eng = reinterpret_cast<minicpm_ocr_npu*>(this->lm_engine);
+    auto* eng = dynamic_cast<minicpm_ocr_npu*>(this->lm_engine);
+    if (eng == nullptr) {
+        throw ModelRequestError(500, false, "MiniCPM-OCR engine is not loaded");
+    }
     const int patch = (int)eng->MINICPM_OCR_PATCH_SIZE;                      // 14
     const int max_slices = (int)eng->MINICPM_OCR_MAX_SLICE_NUMS;             // 9
     const int divisor = (int)eng->MINICPM_OCR_DOWNSAMPLE_FACTOR;             // 4 (16 on 4.7)

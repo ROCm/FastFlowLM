@@ -1,18 +1,29 @@
 /// \file minicpm_ocr_npu.hpp
-/// \brief minicpm_ocr_npu class -- MiniCPM-V-4.7-1B engine (text tower + SigLIP vision tower)
+/// \brief minicpm_ocr_npu class -- MiniCPM-OCR-1.0 engine (text tower + SigLIP vision tower)
 /// \author FastFlowLM Team
-/// \date 2026-10-02
-/// \version 0.9.28
+/// \date 2026-10-28
+/// \version 0.9.43
 ///
-/// \note CONTRACT FILE. This is the engine ABI: S3 implements it, S6 (the AutoModel
-///       wrapper) and S7 (vision) compile against it. Do not edit without the brain's
-///       agreement -- see /scratch/michyu/minicpm-1b/CONTRACTS.md.
+/// \note CONTRACT FILE. This is the engine ABI: the implementation in
+///       detail/minicpm_ocr_npu/ provides it, and the AutoModel wrapper and the
+///       vision glue compile against it.
 ///
-/// MiniCPM-V-4.7-1B's text tower is config-identical to Qwen3.5-0.8B (hidden 1024,
-/// 8/2 heads, head_dim 256, FFN 3584, 24 layers, 16x128 GatedDeltaNet heads, conv 4,
-/// full_attention_interval 4, rope_theta 1e7, mrope_section [11,11,10]), so the text
-/// path reuses the Qwen3.5-0.8B xclbins unchanged. The vision tower is SigLIP and
-/// shares nothing with Qwen3.5-VL's ViT.
+/// Forked from include/models/minicpm_v_4_7/minicpm_v_4_7_npu.hpp. MiniCPM-OCR-1.0's
+/// text tower is MiniCPM-V-4.7's, which is itself config-identical to Qwen3.5-0.8B
+/// (hidden 1024, 8/2 heads, head_dim 256, FFN 3584, 24 layers, 16x128 GatedDeltaNet
+/// heads, conv 4, full_attention_interval 4, rope_theta 1e7), so the text path reuses
+/// the Qwen3.5-0.8B xclbins unchanged -- vocab 248100 pads to the same 248832 that
+/// 248094 does. The vision tower is SigLIP and shares nothing with Qwen3.5-VL's ViT.
+///
+/// Two differences from the engine this was forked from, both of them subtractions:
+///
+///   * **No mRoPE.** Positions are plain sequential, images included. Upstream,
+///     MiniCPMOcr is MiniCPMV4_6 with `pass`, and the canvas m-rope belongs to 4.7.
+///   * **downsample_mode "4x"** switches the windowed vit_merger off entirely, so
+///     blocks 7..26 run on 4x the patches and one image costs 256..2560 LLM rows.
+///
+/// A third, tie_word_embeddings, is handled in the converter rather than here: by the
+/// time model.q4nx is loaded there is a real lm_head.weight tensor.
 #pragma once
 #include "lm_config.hpp"
 #include "npu_utils/npu_utils.hpp"

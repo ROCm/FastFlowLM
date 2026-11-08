@@ -1,10 +1,10 @@
 # =============================================================================
-# MiniCPM-V NPU test Makefile
+# MiniCPM-OCR NPU test Makefile
 # =============================================================================
 #
 # Usage:
 #   make        - Build the test
-#   make test   - Build and run minicpm-ocr:1b (prompt, prompt-cache follow-up,
+#   make test   - Build and run minicpm-ocr:1.0 (prompt, prompt-cache follow-up,
 #                 fresh prompt with thinking)
 #   make clean  - Remove all built files
 #
@@ -73,7 +73,7 @@ clean:
 
 test: $(BUILD_DIR)/test_minicpm_ocr_npu
 	cp ../../model_list.json $(BUILD_DIR)/model_list.json
-	cd $(BUILD_DIR) && ./test_minicpm_ocr_npu --model minicpm-ocr:1b --Length $(LENGTH)
+	cd $(BUILD_DIR) && ./test_minicpm_ocr_npu --model minicpm-ocr:1.0 --Length $(LENGTH)
 
 -include $(DEPS)
 .PHONY: all clean test
@@ -99,7 +99,7 @@ clean:
 
 test: directories $(BUILD_DIR)/test_minicpm_ocr_npu.exe
 	cp ../../model_list.json $(BUILD_DIR)/model_list.json
-	cd $(BUILD_DIR) && ${PWSH} -Command "\$$env:PATH = '..\..\..\lib;' + \$$env:PATH; .\test_minicpm_ocr_npu.exe -m minicpm-ocr:1b -l $(LENGTH)"
+	cd $(BUILD_DIR) && ${PWSH} -Command "\$$env:PATH = '..\..\..\lib;' + \$$env:PATH; .\test_minicpm_ocr_npu.exe -m minicpm-ocr:1.0 -l $(LENGTH)"
 
 .PHONY: all clean test directories
 
