@@ -507,7 +507,7 @@ gc.collect()
 
 ## ⚡ Example: Flash Models (Single-Turn, Pinned System Prompt)
 
-**Flash** models — `gemma4e-flash:e2b`, `gemma4e-flash:e4b`, `nemotron3.5-bolt-dflash-flash:e4b`, `qwen3.5-flash:2b`, `qwen3vl-flash:4b`, and `hy-mt2-flash:1.8b` — trade context length for a much faster time-to-first-token. They are built for high-throughput, short, independent requests: classification, captioning, extraction, routing, translation.
+**Flash** models — `gemma4e-flash:e2b`, `gemma4e-flash:e4b`, `nemotron3.5-bolt-dflash-flash:e4b`, `qwen3vl-flash:4b`, and `hy-mt2-flash:1.8b` — trade context length for a much faster time-to-first-token. They are built for high-throughput, short, independent requests: classification, captioning, extraction, routing, translation.
 
 They are **single-turn**: every request starts from a clean KV state, so earlier turns are not carried over. The system prompt is the one exception — it is prefilled once and cached, so keep it fixed and vary only the user message (and, for vision models, the image).
 

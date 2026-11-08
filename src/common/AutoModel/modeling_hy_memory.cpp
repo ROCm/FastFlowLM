@@ -15,6 +15,21 @@
 
 namespace {
 
+#if defined(FLM_USE_HRX)
+constexpr bool kHrxRuntime = true;
+#else
+constexpr bool kHrxRuntime = false;
+#endif
+
+/// Longest prefill chunk handed to the engine on the HRX runtime.
+///
+/// On HRX a chunk of about 2k rows or more makes an NPU dispatch of the prefill overlay time out
+/// ("amdxdna dispatch timed out: ert state 8", DEADLINE_EXCEEDED), the engine goes on with a failed
+/// result and the request hangs or returns garbage (measured: 1.4k-token prompt fine, 2.3k-token
+/// prompt hangs; with the chunk capped at 1024 the same prompt runs clean). XRT is not affected and
+/// is faster with big chunks (the MoE expert matmuls pad to 256 rows), so only HRX is capped.
+constexpr int kHrxMaxPrefillChunk = 1024;
+
 /// Hand the heap's free memory back to the OS once a request is done.
 ///
 /// A prefill allocates and frees many MB-sized host buffers (expert gather/scatter blocks,
@@ -132,6 +147,10 @@ bool HyMemory::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, st
     // the template already starts with <bos>; encode() adds no second one
     std::vector<int> tokens = this->tokenizer->encode(templated_text);
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
+
+    if (kHrxRuntime && (meta_info.max_prefill_len <= 0 || meta_info.max_prefill_len > kHrxMaxPrefillChunk)) {
+        meta_info.max_prefill_len = kHrxMaxPrefillChunk;
+    }
 
     // Prefix slots: resume from the longest saved prefix of this prompt. Trim is 0 --
     // the whole rendered prompt is prefilled here, nothing is left for generate() to
