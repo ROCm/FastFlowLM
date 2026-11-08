@@ -757,68 +757,6 @@
             "path": "vision_weight.q4nx"
         }
     ],
-    "qwen3.5-flash:2b": [
-        {
-            "type": "file",
-            "oid": "45ef1dd503212998639ffa79508ca2bb88a66406",
-            "size": 7545,
-            "path": "chat_template.jinja"
-        },
-        {
-            "type": "file",
-            "oid": "b82ca5fcc6744bebcf52bcdfe62488ba91069d5a",
-            "size": 2968,
-            "path": "config.json"
-        },
-        {
-            "type": "file",
-            "oid": "a259467c60059574939a49eaa17457693d1ef915",
-            "size": 1339269144,
-            "lfs": {
-                "oid": "cb07e36b8997f1ee680317b46fb6b3ded1544ddbc54d44404d4d3a4a84ca1ee2",
-                "size": 1339269144,
-                "pointerSize": 135
-            },
-            "xetHash": "8eaa9dea048c0e8c9feda27a89ad16776cd019eac91b769c8e9428cfaa36d90f",
-            "path": "model.q4nx"
-        },
-        {
-            "type": "file",
-            "oid": "a73a846725794819aa6e1c9e97d8dc9671c2006d",
-            "size": 12807982,
-            "lfs": {
-                "oid": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
-                "size": 12807982,
-                "pointerSize": 133
-            },
-            "xetHash": "655d3f6803c619aa34c31a027ce74a315eaa200aad3fca5b968dcdf6485bfba2",
-            "path": "tokenizer.json"
-        },
-        {
-            "type": "file",
-            "oid": "c31cf3ceb18b28742b019f09c58beacefdb26847",
-            "size": 16791,
-            "lfs": {
-                "oid": "613f1afe2956c1288f548c052476a936fd6d908da9e0f98a07f48e55e662e232",
-                "size": 16791,
-                "pointerSize": 130
-            },
-            "xetHash": "62dd786c99791874b100d9cfc696015d362b2a73766f1dcc4b89186e6259f3a2",
-            "path": "tokenizer_config.json"
-        },
-        {
-            "type": "file",
-            "oid": "f503e74fd5808ff0b28ee36798fbb6f4f459c4b4",
-            "size": 662866216,
-            "lfs": {
-                "oid": "508c9381e69173b838650cc0b97a81196eb438be692999436be7d518ffd4ebf2",
-                "size": 662866216,
-                "pointerSize": 134
-            },
-            "xetHash": "c479d2be31af0c569b4e49c1320dd243e5487bcc30f6be6429a641d0dddc5dae",
-            "path": "vision_weight.q4nx"
-        }
-    ],
     "qwen3.5:4b": [
         {
             "type": "file",

@@ -44,7 +44,6 @@ typedef enum {
     qwen3vl,
     qwen3vl_flash,
     qwen3_5,
-    qwen3_5_flash,
     minicpm_v,
     minicpm_v_moe,
     qwen3_5_omni,
@@ -84,7 +83,6 @@ inline std::pair<std::string, std::unique_ptr<AutoModel>> get_auto_model(const s
         {"qwen3vl", SupportedModelFamily::qwen3vl},
         {"qwen3vl-flash", SupportedModelFamily::qwen3vl_flash},
         {"qwen3.5", SupportedModelFamily::qwen3_5},
-        {"qwen3.5-flash", SupportedModelFamily::qwen3_5_flash},
         {"minicpm-v-4.7", SupportedModelFamily::minicpm_v},
         {"minicpm-v-4.7-moe", SupportedModelFamily::minicpm_v_moe},
         {"qwen3.5-omni", SupportedModelFamily::qwen3_5_omni},
@@ -180,9 +178,6 @@ inline std::pair<std::string, std::unique_ptr<AutoModel>> get_auto_model(const s
             break;
         case SupportedModelFamily::qwen3_5:
             auto_chat_engine = std::make_unique<Qwen3_5VL>(npu_device_inst);
-            break;
-        case SupportedModelFamily::qwen3_5_flash:
-            auto_chat_engine = std::make_unique<Qwen3_5VL_Flash>(npu_device_inst);
             break;
         case SupportedModelFamily::minicpm_v:
             auto_chat_engine = std::make_unique<MiniCPM_V>(npu_device_inst);
