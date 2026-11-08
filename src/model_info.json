@@ -1022,8 +1022,8 @@
         },
         {
             "type": "file",
-            "oid": "71dcc793b79ca4b539b00c4e7437e4848abeff72",
-            "size": 2880,
+            "oid": "10f312110852385ce3c3ebb2291cedd9ea3714b0",
+            "size": 2881,
             "path": "config.json"
         },
         {
@@ -1058,14 +1058,14 @@
         },
         {
             "type": "file",
-            "oid": "a565f8ad42f6cabf681c45154c93bc5773992623",
-            "size": 1135147712,
+            "oid": "0069bbe2dd0f096871b8cd7bee7615dd321958a3",
+            "size": 1135147936,
             "lfs": {
-                "oid": "3e1f4168ea50db218659de01787d7aca355fa5769e01c1af6bc454e6169f37bf",
-                "size": 1135147712,
+                "oid": "c683bc86c91c174a98620d7fdae3bd022ace442318d06bf1c91564646c4be026",
+                "size": 1135147936,
                 "pointerSize": 135
             },
-            "xetHash": "ffae0462aa68358b7f116dc700c8d92cc71dcc4ba3e0b6cd021f04e1d40d0c1b",
+            "xetHash": "ab6cc496c224c576b4b60ff9fc484a90d7424373fe820a52ff5a0e9a778a53dd",
             "path": "vision_weight.q4nx"
         }
     ],
