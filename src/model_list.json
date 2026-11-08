@@ -500,7 +500,30 @@
                 "footprint": 2.2
             },
             "4b": {
-                "supported_platforms": ["aie2p"],
+                "supported_platforms": ["aie2p", "dev04"],
+                "platform_sources": {
+                    "dev04": {
+                        "name": "Qwen3.5-4B-NPU2-dev04",
+                        "model_info_key": "qwen3.5:4b-dev04",
+                        "url": "https://huggingface.co/FastFlowLM/Qwen3.5-4B-NPU2/resolve/aie_next",
+                        "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.5-4B-NPU2/tree/aie_next",
+                        "ms_url": null,
+                        "size": 2452292641,
+                        "files": [
+                            "config.json",
+                            "model.q4nx",
+                            "tokenizer.json",
+                            "tokenizer_config.json",
+                            "chat_template.jinja"
+                        ],
+                        "vlm": false,
+                        "label": [
+                            "reasoning",
+                            "tool-calling"
+                        ],
+                        "footprint": 2.5
+                    }
+                },
                 "name": "Qwen3.5-4B-NPU2",
                 "url": "https://huggingface.co/FastFlowLM/Qwen3.5-4B-NPU2/resolve/flm_q4k_high_precision",
                 "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.5-4B-NPU2/tree/flm_q4k_high_precision",
@@ -533,7 +556,30 @@
                 "footprint": 3.9
             },
             "9b":{
-                "supported_platforms": ["aie2p"],
+                "supported_platforms": ["aie2p", "dev04"],
+                "platform_sources": {
+                    "dev04": {
+                        "name": "Qwen3.5-9B-NPU2-dev04",
+                        "model_info_key": "qwen3.5:9b-dev04",
+                        "url": "https://huggingface.co/FastFlowLM/Qwen3.5-9B-NPU2/resolve/aie_next",
+                        "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.5-9B-NPU2/tree/aie_next",
+                        "ms_url": null,
+                        "size": 5200756771,
+                        "files": [
+                            "config.json",
+                            "model.q4nx",
+                            "tokenizer.json",
+                            "tokenizer_config.json",
+                            "chat_template.jinja"
+                        ],
+                        "vlm": false,
+                        "label": [
+                            "reasoning",
+                            "tool-calling"
+                        ],
+                        "footprint": 5.2
+                    }
+                },
                 "name": "Qwen3.5-9B-NPU2",
                 "url": "https://huggingface.co/FastFlowLM/Qwen3.5-9B-NPU2/resolve/flm_q4k_high_precision",
                 "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.5-9B-NPU2/tree/flm_q4k_high_precision",

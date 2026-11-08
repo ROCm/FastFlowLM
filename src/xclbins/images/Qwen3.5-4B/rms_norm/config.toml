@@ -1,0 +1,1 @@
+# config/Qwen3.5-4B/rms_norm.toml -- empty: rms_norm is a std op, every size is a run-time argument.

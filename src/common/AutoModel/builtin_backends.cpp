@@ -47,7 +47,7 @@ void register_builtin_backends(BackendRegistry& registry) {
     RegisterFlm<qwen3_npu>(registry, "qwen3-tk");
     RegisterFlm<qwen3vl_npu>(registry, "qwen3vl");
     RegisterFlm<qwen3vl_flash>(registry, "qwen3vl-flash");
-    RegisterFlm<qwen3_5vl_npu>(registry, "qwen3.5");
+    RegisterFlm<qwen3_5vl_npu>(registry, "qwen3.5", "qwen3_5vl_npu_aie_next");
     RegisterFlm<minicpm_v_4_7_npu>(registry, "minicpm-v-4.7");
     RegisterFlm<minicpm_v_4_7_moe_npu>(registry, "minicpm-v-4.7-moe");
     RegisterFlm<qwen3_6_moe_npu>(registry, "qwen3.6-moe", "qwen3_6_moe_npu_aie_next");

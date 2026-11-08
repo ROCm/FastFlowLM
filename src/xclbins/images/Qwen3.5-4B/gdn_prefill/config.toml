@@ -1,0 +1,15 @@
+# config/Qwen3.5-4B/gdn_prefill.toml -- the gdn_prefill numbers of Qwen3.5-4B (prefill gated delta rule).
+
+# Hidden size (hidden_size): sizes the ab_w record (A, dt_bias words).
+D = 2560
+
+# linear_num_value_heads, linear_num_key_heads.
+V_HEADS = 32
+QK_HEADS = 16
+
+# linear_key_head_dim, linear_value_head_dim.
+DK = 128
+DV = 128
+
+# Epsilon of the q / k l2norm.
+L2_EPS = 1e-6

@@ -1,0 +1,1 @@
+# config/gemm.toml -- empty: gemm is a std op, every size is a run-time argument.
