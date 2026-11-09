@@ -16,9 +16,10 @@ name: Build and Test
 #
 # The Windows XRT package also holds the oga-hipep backend, which runs its
 # models on the GPU through hip-ep. Test Windows HIPEP runs the chat and api
-# suites on qwen3.5-oga-hipep:9b from the same zip, and Test
-# Windows XRT tests the NPU models; like models-from-source, it runs whenever
-# the chat suite does.
+# suites on qwen3.5-oga-hipep:9b from the same zip, and Test Windows XRT tests
+# the NPU models. HIPEP runs when every suite does, or when a change reaches
+# that model (the backend, its catalog entries, the qwen3.5 frontend, the chat
+# and api tests); a change only to the backend or its entries runs no NPU test.
 #
 # A pull request runs only the suites its changes can affect (an ASR-only
 # change runs asr, a d3-only change decision); see .github/script/ci/changes.py.
@@ -100,6 +101,7 @@ jobs:
       suites: ${{ steps.detect.outputs.suites }}
       hrx-suites: ${{ steps.detect.outputs.hrx-suites }}
       source: ${{ steps.detect.outputs.source }}
+      hipep: ${{ steps.detect.outputs.hipep }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -193,6 +195,7 @@ jobs:
   test-lin-xrt-portable:
     name: Test Linux XRT portable
     needs: [changes, build-lin-xrt-portable]
+    if: needs.changes.outputs.suites != 'none'
     runs-on: [self-hosted, linux, x64, npu, sweep]
     timeout-minutes: ${{ needs.changes.outputs.tier == 'full' && 360 || 120 }}
     steps:
@@ -368,6 +371,7 @@ jobs:
   test-win-xrt:
     name: Test Windows XRT
     needs: [changes, build-win-xrt]
+    if: needs.changes.outputs.suites != 'none'
     runs-on: [self-hosted, windows, x64, npu, sweep]
     timeout-minutes: ${{ needs.changes.outputs.tier == 'full' && 360 || 120 }}
     steps:
@@ -399,11 +403,12 @@ jobs:
   # that hip-ep runs on. Besides chat, they run the OpenAI contract tests (api),
   # tool calls included. Every tier tests qwen3.5-oga-hipep:9b alone: the other
   # oga-hipep packages are 4 to 72 GB each, and a dispatch that names them
-  # (models) tests them instead.
+  # (models) tests them instead. npu_test pulls the models first, so a runner
+  # without them downloads them (7.5 GB for the 9b) outside the requests' timeouts.
   test-win-hipep:
     name: Test Windows HIPEP
     needs: [changes, build-win-xrt]
-    if: needs.changes.outputs.source == 'true'
+    if: needs.changes.outputs.hipep == 'true'
     runs-on: [self-hosted, windows, x64, npu, sweep]
     timeout-minutes: 120
     steps:
