@@ -1725,6 +1725,162 @@ void TestAutoInstallDoesNotReplaceAnInstallForAnotherVersion() {
     TEST_REQUIRE(fixture.downloads == 1);
 }
 
+// ---- flm uninstall hipep ----------------------------------------------------
+
+std::string MarkerFor(const std::string& version) {
+    return R"({"owner":"FastFlowLM","schema":"flm-hipep-install/v1","runtime":"hip-ep","version":")" + version +
+           R"(","archive_sha256":"any"})";
+}
+
+/// \brief uninstall from the fixture's %LOCALAPPDATA%, require the result, and return what it logged
+std::string Uninstall(const RuntimeInstallFixture& fixture, bool clean,
+                      const flm::oga::PackageEnvironment& environment = {}) {
+    flm::oga::HipEpInstallHooks hooks;
+    hooks.release = fixture.release;
+    std::string log;
+    hooks.log = [&log](std::string_view line) { log.append(line).append("\n"); };
+    TEST_REQUIRE(flm::oga::UninstallHipEpPackage(environment ? environment : fixture.environment(), hooks) ==
+                 clean);
+    return log;
+}
+
+void TestUninstallRemovesEveryManagedRuntimeAndTheInstallersFiles() {
+    RuntimeInstallFixture fixture;
+    TEST_REQUIRE(flm::oga::EnsureHipEpPackageForTest(fixture.environment(), fixture.Hooks()).bin ==
+                 fixture.final_dir());
+    const auto older = fixture.local.path / "hip-ep" / "flm-8.8.8";
+    MakeManagedRuntimeLayout(older);
+    Touch(older / ".flm-hipep-install.json", MarkerFor("8.8.8"));
+    Touch(fixture.staging_root() / "runtime-1-2" / "partial.txt");
+    Touch(fixture.quarantine_root() / "broken-runtime-1-2" / "onnxruntime.dll");
+
+    const std::string log = Uninstall(fixture, true);
+    RequireContains(log, "Removed hip-ep 9.9.9");
+    RequireContains(log, "Removed hip-ep 8.8.8");
+    RequireContains(log, "Removed the installer's files");
+    RequireContains(log, "`flm remove <model_tag>` removes one");
+    TEST_REQUIRE(!std::filesystem::exists(fixture.local.path / "hip-ep"));
+    TEST_REQUIRE(!std::filesystem::exists(fixture.local.path / "hip-ep-install"));
+
+    TEST_REQUIRE(flm::oga::EnsureHipEpPackageForTest(fixture.environment(), fixture.Hooks()).bin ==
+                 fixture.final_dir());
+    TEST_REQUIRE(fixture.downloads == 2);
+}
+
+void TestUninstallLeavesEveryPackageFlmDidNotInstall() {
+    RuntimeInstallFixture fixture;
+    TempDir explicit_root;
+    TempDir programs;
+    TEST_REQUIRE(flm::oga::EnsureHipEpPackageForTest(fixture.environment(), fixture.Hooks()).bin ==
+                 fixture.final_dir());
+    const auto unzipped = fixture.local.path / "hip-ep" / "0.5.2";
+    const auto unmarked = fixture.local.path / "hip-ep" / "flm-1.0.0";
+    const auto misnamed = fixture.local.path / "hip-ep" / "flm-2.0.0";
+    const auto program_files = programs.path / "hip-ep" / "0.5.2";
+    for (const auto& root : {unzipped, unmarked, misnamed, program_files, explicit_root.path}) MakePackage(root);
+    Touch(misnamed / ".flm-hipep-install.json", MarkerFor("3.0.0"));
+
+    const std::string log =
+        Uninstall(fixture, true, Environment(explicit_root.path, fixture.local.path, programs.path));
+    RequireContains(log, "Removed hip-ep 9.9.9");
+    TEST_REQUIRE(!std::filesystem::exists(fixture.final_dir()));
+    for (const auto& root : {unzipped, unmarked, misnamed, program_files, explicit_root.path}) {
+        TEST_REQUIRE(std::filesystem::is_regular_file(root / "bin" / "onnxruntime.dll"));
+    }
+    RequireContains(log, "Left the package AMDRT_PKG_ROOT names in place: " + Text(explicit_root.path));
+    for (const auto& root : {unzipped, unmarked, misnamed, program_files}) {
+        RequireContains(log, "Left " + Text(root) + " in place: flm did not install it");
+    }
+}
+
+void TestUninstallRemovesNothingWhileAProcessHasTheRuntimeLoaded() {
+    RuntimeInstallFixture fixture;
+    TEST_REQUIRE(flm::oga::EnsureHipEpPackageForTest(fixture.environment(), fixture.Hooks()).bin ==
+                 fixture.final_dir());
+    std::vector<std::filesystem::path> files;
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(fixture.local.path)) {
+        files.push_back(entry.path());
+    }
+    // onnxruntime-genai.dll is a copy of version.dll, so this process can load it
+    std::unique_ptr<std::remove_pointer_t<HMODULE>, decltype(&FreeLibrary)> loaded(
+        LoadLibraryW((fixture.final_dir() / "onnxruntime-genai.dll").c_str()), &FreeLibrary);
+    TEST_REQUIRE(loaded != nullptr);
+
+    const std::string log = Uninstall(fixture, false);
+    RequireContains(log, "hip-ep 9.9.9 is in use, so nothing was removed");
+    RequireContains(log, Text(fixture.final_dir() / "onnxruntime-genai.dll"));
+    for (const auto& file : files) TEST_REQUIRE(std::filesystem::exists(file));
+
+    loaded.reset();
+    RequireContains(Uninstall(fixture, true), "Removed hip-ep 9.9.9");
+    TEST_REQUIRE(!std::filesystem::exists(fixture.final_dir()));
+}
+
+void TestUninstallRemovesNothingWhileAnInstallRuns() {
+    RuntimeInstallFixture fixture;
+    TEST_REQUIRE(flm::oga::EnsureHipEpPackageForTest(fixture.environment(), fixture.Hooks()).bin ==
+                 fixture.final_dir());
+    // the lock another flm holds while it installs a version this one does not know
+    const auto lock_path = fixture.local.path / "hip-ep-install" / "locks" / "7.7.7.lock";
+    std::filesystem::create_directories(lock_path.parent_path());
+    std::unique_ptr<void, decltype(&CloseHandle)> lock(
+        CreateFileW(lock_path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS,
+                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE, nullptr),
+        &CloseHandle);
+    TEST_REQUIRE(lock.get() != INVALID_HANDLE_VALUE);
+
+    RequireContains(Uninstall(fixture, false),
+                    "Another flm process is installing hip-ep 7.7.7, so nothing was removed");
+    TEST_REQUIRE(std::filesystem::is_regular_file(fixture.final_dir() / ".flm-hipep-install.json"));
+    TEST_REQUIRE(std::filesystem::is_directory(fixture.local.path / "hip-ep-install" / "cache"));
+
+    lock.reset();
+    RequireContains(Uninstall(fixture, true), "Removed hip-ep 9.9.9");
+    TEST_REQUIRE(!std::filesystem::exists(fixture.local.path / "hip-ep-install"));
+}
+
+void TestUninstallWithNothingInstalledChangesNothing() {
+    RuntimeInstallFixture fixture;
+    RequireContains(Uninstall(fixture, true), "No hip-ep that flm installed is under");
+    TEST_REQUIRE(std::filesystem::is_empty(fixture.local.path));
+    RequireContains(RequireThrows<std::runtime_error>([&] { Uninstall(fixture, true, Environment({}, {}, {})); }),
+                    "%LOCALAPPDATA% is not set");
+}
+
+void TestUninstallRemovesWhatAFailedInstallLeft() {
+    RuntimeInstallFixture fixture;
+    auto hooks = fixture.Hooks([](const std::filesystem::path&, const std::filesystem::path&) {
+        throw std::runtime_error("extractor failed");
+    });
+    RequireThrows<std::runtime_error>([&] { flm::oga::EnsureHipEpPackageForTest(fixture.environment(), hooks); });
+    TEST_REQUIRE(std::filesystem::is_regular_file(fixture.local.path / "hip-ep-install" / "cache" /
+                                                  fixture.release.archive_name));
+
+    RequireContains(Uninstall(fixture, true), "Removed the installer's files");
+    TEST_REQUIRE(std::filesystem::is_empty(fixture.local.path));
+}
+
+void TestUninstallRemovesFilesPastMaxPath() {
+    RuntimeInstallFixture fixture;
+    TEST_REQUIRE(flm::oga::EnsureHipEpPackageForTest(fixture.environment(), fixture.Hooks()).bin ==
+                 fixture.final_dir());
+    // hipBLASLt's kernel files have long names, and a long %LOCALAPPDATA% takes them past MAX_PATH
+    const std::wstring folder(100, L'k');
+    std::vector<std::filesystem::path> deep;
+    for (const auto& root : {fixture.final_dir() / "hipblaslt" / "library", fixture.staging_root() / "runtime-1-2"}) {
+        deep.push_back(std::filesystem::path(LR"(\\?\)" + root.native()) / folder / folder / "TensileLibrary.dat");
+        TEST_REQUIRE(deep.back().native().size() > MAX_PATH + 4);
+        Touch(deep.back(), "kernel");
+        TEST_REQUIRE(std::filesystem::is_regular_file(deep.back()));
+    }
+
+    const std::string log = Uninstall(fixture, true);
+    RequireContains(log, "Removed hip-ep 9.9.9");
+    RequireContains(log, "Removed the installer's files");
+    for (const auto& file : deep) TEST_REQUIRE(!std::filesystem::exists(file));
+    TEST_REQUIRE(std::filesystem::is_empty(fixture.local.path));
+}
+
 // ---- backend checks that run before hip-ep is loaded ------------------------
 
 /// \brief a model directory with just the files the backend reads before loading hip-ep
@@ -1971,6 +2127,13 @@ int main(int argc, char** argv) {
     RUN(TestValidExternalPackagesBypassAutoInstall);
     RUN(TestAutoInstallRepairsAnInstallFromAnotherArchive);
     RUN(TestAutoInstallDoesNotReplaceAnInstallForAnotherVersion);
+    RUN(TestUninstallRemovesEveryManagedRuntimeAndTheInstallersFiles);
+    RUN(TestUninstallLeavesEveryPackageFlmDidNotInstall);
+    RUN(TestUninstallRemovesNothingWhileAProcessHasTheRuntimeLoaded);
+    RUN(TestUninstallRemovesNothingWhileAnInstallRuns);
+    RUN(TestUninstallWithNothingInstalledChangesNothing);
+    RUN(TestUninstallRemovesWhatAFailedInstallLeft);
+    RUN(TestUninstallRemovesFilesPastMaxPath);
     RUN(TestTheBackendRejectsWhatThePackageCannotRun);
     RUN(TestTheBackendRunsThePackagesImages);
     RUN(TestTheBackendRunsTheTextOfAnotherTypesVisionPackage);

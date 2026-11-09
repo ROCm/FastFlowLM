@@ -10,8 +10,11 @@
 #include <fstream>
 #include <iterator>
 #include <nlohmann/json.hpp>
+#include <set>
 #include <sstream>
 #include <system_error>
+#include <utility>
+#include <vector>
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -161,19 +164,29 @@ std::string MarkerJson(const HipEpRuntimeRelease& release) {
     return marker.dump(2);
 }
 
-/// \note The archive is not compared: flm releases may pin different archives of one hip-ep
-///       version, and each must be able to repair what another installed.
-bool IsManagedInstall(const std::filesystem::path& root, const HipEpRuntimeRelease& release) {
+/// \brief the hip-ep version flm installed in `root`: the one its marker states, when `root` is
+///        named for it
+std::optional<std::string> ManagedVersion(const std::filesystem::path& root) {
     std::ifstream stream(root / kMarkerName, std::ios::binary);
-    if (!stream.is_open()) return false;
+    if (!stream.is_open()) return std::nullopt;
     nlohmann::json marker;
     try {
         stream >> marker;
-        return marker.value("owner", "") == kMarkerOwner && marker.value("schema", "") == kMarkerSchema &&
-               marker.value("runtime", "") == "hip-ep" && marker.value("version", "") == release.version;
+        std::string version = marker.value("version", "");
+        if (marker.value("owner", "") == kMarkerOwner && marker.value("schema", "") == kMarkerSchema &&
+            marker.value("runtime", "") == "hip-ep" && !version.empty() &&
+            Text(root.filename()) == std::string(kManagedPrefix) + version) {
+            return version;
+        }
     } catch (...) {
-        return false;
     }
+    return std::nullopt;
+}
+
+/// \note The archive is not compared: flm releases may pin different archives of one hip-ep
+///       version, and each must be able to repair what another installed.
+bool IsManagedInstall(const std::filesystem::path& root, const HipEpRuntimeRelease& release) {
+    return ManagedVersion(root) == release.version;
 }
 
 void WriteMarker(const std::filesystem::path& root, const HipEpRuntimeRelease& release) {
@@ -255,19 +268,24 @@ private:
     HANDLE handle_ = nullptr;
 };
 
+/// \brief the installer lock at `path`, or no handle while another process holds it
+UniqueHandle TryLock(const std::filesystem::path& path) {
+    HANDLE handle = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS,
+                                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+    if (handle != INVALID_HANDLE_VALUE) return UniqueHandle(handle);
+    const DWORD error = GetLastError();
+    if (error != ERROR_SHARING_VIOLATION && error != ERROR_ACCESS_DENIED) {
+        throw std::runtime_error("failed to open installer lock '" + Text(path) + "': " + WindowsMessage(error));
+    }
+    return {};
+}
+
 UniqueHandle AcquireLock(const ManagedPaths& paths, const Hooks& hooks) {
     EnsureDirectories(paths.lock_root, "installer lock");
     const ULONGLONG deadline = GetTickCount64() + static_cast<ULONGLONG>(hooks.lock_wait.count());
     bool reported_wait = false;
     for (;;) {
-        HANDLE handle = CreateFileW(paths.lock_path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS,
-                                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
-        if (handle != INVALID_HANDLE_VALUE) return UniqueHandle(handle);
-        const DWORD error = GetLastError();
-        if (error != ERROR_SHARING_VIOLATION && error != ERROR_ACCESS_DENIED) {
-            throw std::runtime_error("failed to open installer lock '" + Text(paths.lock_path) + "': " +
-                                     WindowsMessage(error));
-        }
+        if (UniqueHandle lock = TryLock(paths.lock_path); lock.valid()) return lock;
         if (!reported_wait) {
             hooks.log("Waiting for another FLM process to finish installing hip-ep");
             reported_wait = true;
@@ -461,6 +479,69 @@ std::filesystem::path SystemTar() {
     return std::filesystem::path(system) / "tar.exe";
 }
 
+/// \brief why Windows refuses to delete `file` now, as it does a DLL a process has loaded;
+///        none when it would delete it
+/// \note It marks the file for deletion and clears the mark on the same handle, so the file stays.
+std::optional<std::string> DeleteBlocker(const std::filesystem::path& file) {
+    UniqueHandle handle(CreateFileW(file.c_str(), DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                    nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+    if (!handle.valid()) return WindowsMessage(GetLastError());
+    FILE_DISPOSITION_INFO disposition{TRUE};
+    if (!SetFileInformationByHandle(handle.get(), FileDispositionInfo, &disposition, sizeof(disposition))) {
+        return WindowsMessage(GetLastError());
+    }
+    disposition = FILE_DISPOSITION_INFO{FALSE};
+    SetFileInformationByHandle(handle.get(), FileDispositionInfo, &disposition, sizeof(disposition));
+    return std::nullopt;
+}
+
+bool IsDll(const std::filesystem::path& file) {
+    return CompareStringOrdinal(file.extension().c_str(), -1, L".dll", -1, TRUE) == CSTR_EQUAL;
+}
+
+/// \brief `path` in the \\?\ form, which lifts MAX_PATH: flm is not long-path aware, and a runtime
+///        moved into the quarantine has longer paths than it had
+std::filesystem::path ExtendedLength(const std::filesystem::path& path) {
+    std::error_code error;
+    const std::filesystem::path absolute = std::filesystem::absolute(path, error);
+    if (error) return path;
+    const std::wstring text = absolute.lexically_normal().native();
+    if (text.rfind(LR"(\\?\)", 0) == 0) return text;
+    if (text.rfind(LR"(\\)", 0) == 0) return LR"(\\?\UNC\)" + text.substr(2);
+    return LR"(\\?\)" + text;
+}
+
+std::uint64_t TreeSize(const std::filesystem::path& root) {
+    std::uint64_t bytes = 0;
+    std::error_code error;
+    for (std::filesystem::recursive_directory_iterator it(ExtendedLength(root), error), end; !error && it != end;
+         it.increment(error)) {
+        std::error_code ignored;
+        if (!it->is_regular_file(ignored)) continue;
+        const std::uintmax_t size = it->file_size(ignored);
+        if (!ignored) bytes += size;
+    }
+    return bytes;
+}
+
+/// \brief name the packages an uninstall leaves, which discovery still finds
+void ReportKept(const PackageEnvironment& environment, const std::vector<std::filesystem::path>& unowned,
+                const Hooks& hooks) {
+    if (const std::filesystem::path root = environment(L"AMDRT_PKG_ROOT"); !root.empty()) {
+        hooks.log("Left the package AMDRT_PKG_ROOT names in place: " + Text(root));
+    }
+    std::vector<std::filesystem::path> kept = unowned;
+    if (const std::filesystem::path programs = environment(L"ProgramFiles"); !programs.empty()) {
+        std::error_code error;
+        for (std::filesystem::directory_iterator it(programs / kManagedFolder, error), end; !error && it != end;
+             it.increment(error)) {
+            std::error_code ignored;
+            if (it->is_directory(ignored)) kept.push_back(it->path());
+        }
+    }
+    for (const auto& folder : kept) hooks.log("Left " + Text(folder) + " in place: flm did not install it");
+}
+
 }  // namespace
 
 void testing::ExtractHipEpArchiveWithTar(const std::filesystem::path& archive,
@@ -545,6 +626,111 @@ Package EnsureHipEpPackage(const PackageEnvironment& environment) {
     // RegisterAmdGpuProvider passes OGA the library path as narrow text; a short path keeps it ASCII.
     package.bin = ShortPath(package.bin).value_or(package.bin);
     return package;
+}
+
+bool UninstallHipEpPackage(const PackageEnvironment& environment, const HipEpInstallHooks& raw_hooks) {
+    const Hooks hooks = ResolveHooks(raw_hooks);
+    if (environment(kLocalAppDataVariable).empty()) {
+        throw std::runtime_error("%LOCALAPPDATA% is not set, so flm cannot find the hip-ep it installed");
+    }
+    const ManagedPaths paths = BuildPaths(environment, hooks.release);
+    EnsureNotReparseIfExists(paths.package_root, "managed hip-ep root");
+    EnsureNotReparseIfExists(paths.installer_root, "installer root");
+    EnsureNotReparseIfExists(paths.cache_root, "installer cache root");
+    EnsureNotReparseIfExists(paths.lock_root, "installer lock root");
+    EnsureNotReparseIfExists(paths.staging_root, "installer staging root");
+    EnsureNotReparseIfExists(paths.quarantine_root, "installer quarantine root");
+
+    std::vector<std::pair<std::string, std::filesystem::path>> runtimes;
+    std::vector<std::filesystem::path> unowned;
+    std::error_code error;
+    for (std::filesystem::directory_iterator it(paths.package_root, error), end; !error && it != end;
+         it.increment(error)) {
+        if (!it->is_directory(error)) continue;
+        std::optional<std::string> version;
+        if (!IsReparsePoint(it->path())) version = ManagedVersion(it->path());
+        if (version) {
+            runtimes.emplace_back(std::move(*version), it->path());
+        } else {
+            unowned.push_back(it->path());
+        }
+    }
+    const bool had_installer_files = Exists(paths.installer_root);
+    if (runtimes.empty() && !had_installer_files) {
+        hooks.log("No hip-ep that flm installed is under " + Text(paths.package_root));
+        ReportKept(environment, unowned, hooks);
+        return true;
+    }
+
+    // An install holds the lock of its version until it is done, and leaves no lock file behind.
+    std::set<std::string> versions{hooks.release.version};
+    for (const auto& runtime : runtimes) versions.insert(runtime.first);
+    for (std::filesystem::directory_iterator it(paths.lock_root, error), end; !error && it != end;
+         it.increment(error)) {
+        if (it->path().extension() == ".lock") versions.insert(Text(it->path().stem()));
+    }
+    EnsureDirectories(paths.lock_root, "installer lock");
+    std::vector<UniqueHandle> locks;
+    for (const std::string& version : versions) {
+        locks.push_back(TryLock(paths.lock_root / (version + ".lock")));
+        if (!locks.back().valid()) {
+            hooks.log("Another flm process is installing hip-ep " + version +
+                      ", so nothing was removed. Run `flm uninstall hipep` again when it is done");
+            return false;
+        }
+    }
+
+    // A process keeps the package's DLLs loaded until it exits; deleting the rest of its files
+    // would break that process later, so a runtime in use stays whole.
+    for (const auto& [version, root] : runtimes) {
+        for (const auto& entry : std::filesystem::directory_iterator(root)) {
+            if (!entry.is_regular_file() || !IsDll(entry.path())) continue;
+            if (const auto blocker = DeleteBlocker(entry.path())) {
+                hooks.log("hip-ep " + version + " is in use, so nothing was removed: Windows cannot delete " +
+                          Text(entry.path()) + " (" + *blocker +
+                          "), as when a running flm has loaded it for an oga-hipep model. Stop that process "
+                          "and run `flm uninstall hipep` again");
+                return false;
+            }
+        }
+    }
+
+    bool clean = true;
+    const std::uint64_t installer_bytes = TreeSize(paths.installer_root);
+    for (const auto& [version, root] : runtimes) {
+        const std::uint64_t bytes = TreeSize(root);
+        // One rename takes the whole runtime out of discovery, before any file of it is deleted.
+        EnsureDirectories(paths.quarantine_root, "installer quarantine");
+        std::filesystem::rename(root, UniqueChild(paths.quarantine_root, "uninstall-" + version), error);
+        if (error) {
+            hooks.log("Failed to remove hip-ep " + version + ": cannot move " + Text(root) + ": " + error.message());
+            clean = false;
+            continue;
+        }
+        hooks.log("Removed hip-ep " + version + " (" + BytesText(bytes) + ") from " + Text(root));
+    }
+    bool installer_clean = true;
+    for (const auto& folder : {paths.cache_root, paths.staging_root, paths.quarantine_root}) {
+        std::filesystem::remove_all(ExtendedLength(folder), error);
+        if (error) {
+            hooks.log("Failed to delete all of " + Text(folder) + " (" + error.message() +
+                      "). Run `flm uninstall hipep` again");
+            installer_clean = false;
+        }
+    }
+    if (had_installer_files && installer_clean) {
+        hooks.log("Removed the installer's files (" + BytesText(installer_bytes) + ") from " +
+                  Text(paths.installer_root));
+    }
+    locks.clear();
+    for (const auto& folder : {paths.lock_root, paths.installer_root, paths.package_root}) {
+        std::filesystem::remove(folder, error);
+    }
+    ReportKept(environment, unowned, hooks);
+    if (!clean || !installer_clean) return false;
+    hooks.log("Models stay installed; `flm remove <model_tag>` removes one. Loading an oga-hipep model installs "
+              "hip-ep again when flm finds no other package");
+    return true;
 }
 
 }  // namespace flm::oga

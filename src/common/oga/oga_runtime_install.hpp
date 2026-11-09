@@ -44,6 +44,14 @@ Package EnsureHipEpPackage(const PackageEnvironment& environment);
 Package EnsureHipEpPackageForTest(const PackageEnvironment& environment,
                                   const HipEpInstallHooks& hooks);
 
+/// \brief remove what EnsureHipEpPackage installed: each %LOCALAPPDATA%\hip-ep\flm-<version>
+///        its marker claims, and the installer's files
+/// \note Every other package stays. So does everything, when a runtime is in use or being
+///       installed. Of the hooks, only `release` (whose lock it also takes) and `log` are read.
+/// \return whether nothing flm installed is left
+/// \throws std::runtime_error when %LOCALAPPDATA% is unset or one of the roots is a reparse point
+bool UninstallHipEpPackage(const PackageEnvironment& environment, const HipEpInstallHooks& hooks = {});
+
 namespace testing {
 
 /// \brief the CreateProcessW tar extractor the installer uses in production

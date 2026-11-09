@@ -49,14 +49,6 @@ constexpr std::array<DefaultFolder, 2> kDefaultFolders{{
     {L"ProgramFiles", "%ProgramFiles%"},
 }};
 
-std::filesystem::path EnvironmentPath(const wchar_t* name) {
-    const DWORD needed = GetEnvironmentVariableW(name, nullptr, 0);
-    if (needed == 0) return {};
-    std::wstring value(needed, L'\0');
-    value.resize(GetEnvironmentVariableW(name, value.data(), needed));
-    return value;
-}
-
 /// \brief the numeric parts of the first dotted number in a folder name, such as "0.5.2" in
 /// "hipep_0.5.2_windows"; empty when the name has no dotted number
 std::optional<std::vector<std::uint32_t>> ParseVersionName(std::string_view name) {
@@ -192,6 +184,14 @@ std::optional<FileVersion> ReadFileVersion(const std::filesystem::path& file) {
     }
     return FileVersion{HIWORD(info->dwFileVersionMS), LOWORD(info->dwFileVersionMS),
                        HIWORD(info->dwFileVersionLS), LOWORD(info->dwFileVersionLS)};
+}
+
+std::filesystem::path EnvironmentPath(const wchar_t* name) {
+    const DWORD needed = GetEnvironmentVariableW(name, nullptr, 0);
+    if (needed == 0) return {};
+    std::wstring value(needed, L'\0');
+    value.resize(GetEnvironmentVariableW(name, value.data(), needed));
+    return value;
 }
 
 PackageSearch SearchPackages(const PackageEnvironment& environment) {
