@@ -791,6 +791,37 @@ void TestRemovingAModelRemovesTheFoldersOfItsFiles() {
     TEST_REQUIRE(Read(fixture.dep_path() / "notes" / "mine.txt") == "keep");
 }
 
+void TestOnlyFoldersInsideTheModelDirectoryAreRemoved() {
+    TEST_REQUIRE(model_file_folder("decoder/model.onnx") == std::string("decoder"));
+    TEST_REQUIRE(model_file_folder("./vision//x.bin") == std::string("vision"));
+    TEST_REQUIRE(model_file_folder("vision/../decoder/model.onnx") == std::string("decoder"));
+    // at the top of the model directory, or outside it
+    for (const char* file : {"config.json", "./config.json", "vision/../config.json", "", ".",
+                             "/vision/x.bin", "//server/share/x.bin", "../vision/x.bin",
+                             "vision/../../x.bin"}) {
+        TEST_REQUIRE(!model_file_folder(file));
+    }
+#ifdef _WIN32
+    for (const char* file : {"\\vision\\x.bin", "C:vision/x.bin", "C:/vision/x.bin", "D:x.bin"}) {
+        TEST_REQUIRE(!model_file_folder(file));
+    }
+#endif
+
+    // ./decoder/model.onnx takes decoder/ with it, not the whole model directory
+    BaseModelFixture fixture("dotted-remove", true,
+                             {{"files", {"config.json", "draft.bin", "./decoder/model.onnx"}}});
+    fixture.InstallDependant();
+    Write(fixture.dep_path() / "decoder" / "model.onnx", "graph");
+    Write(fixture.dep_path() / "notes" / "mine.txt", "keep");
+    ModelDownloader downloader(fixture.models);
+    bool removed = true;
+    Captured([&] { removed = downloader.remove_model(kDependantTag); });
+    TEST_REQUIRE(!removed);
+    TEST_REQUIRE(!fs::exists(fixture.dep_path() / "decoder"));
+    TEST_REQUIRE(!fs::exists(fixture.dep_path() / "draft.bin"));
+    TEST_REQUIRE(Read(fixture.dep_path() / "notes" / "mine.txt") == "keep");
+}
+
 void TestModelscopeFlagReachesTheBase() {
     // Only the ModelScope sources exist: both pulls can succeed only if the flag
     // reaches the base as well as the dependant.
@@ -933,6 +964,7 @@ int main() {
     RunTest(TestCheckReportsAnIncompleteBase, "check reports incomplete base");
     RunTest(TestRemovingBaseWarnsAndRemovingDependantKeepsBase, "rm semantics");
     RunTest(TestRemovingAModelRemovesTheFoldersOfItsFiles, "rm removes the folders of its files");
+    RunTest(TestOnlyFoldersInsideTheModelDirectoryAreRemoved, "rm stays inside the model directory");
     RunTest(TestModelscopeFlagReachesTheBase, "modelscope flag reaches base");
     RunTest(TestShippedCatalogDeclaresTheDflashDependant, "shipped dflash entry");
     RunTest(TestResumeAppendsToPartThenAtomicallyPromotes, "resume and promote");

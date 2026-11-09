@@ -139,6 +139,15 @@ ModelFileSource resolve_file_source(const nlohmann::json& model_info,
     return {base_url + "/resolve/main/" + std::string(filename) + "?download=true", {}, use_hf_token};
 }
 
+std::optional<std::string> model_file_folder(std::string_view file) {
+    // "./vision/x.bin" is in vision/; a root ("/", "C:") or a leading ".." is outside
+    const std::filesystem::path relative = std::filesystem::path(file).lexically_normal();
+    if (relative.has_root_path() || !relative.has_parent_path() || *relative.begin() == "..") {
+        return std::nullopt;
+    }
+    return relative.begin()->string();
+}
+
 namespace {
 
 ResolvedModelFile resolve_model_file(const nlohmann::json& model_info,
@@ -624,9 +633,8 @@ bool ModelDownloader::remove_model(const std::string& model_tag, bool sub_proces
         // so the directory is not removed
         std::unordered_set<std::string> folders;
         for (const auto& file : model_info.value("files", nlohmann::json::array())) {
-            const std::filesystem::path relative(file.get<std::string>());
-            if (relative.is_relative() && relative.has_parent_path() && *relative.begin() != "..") {
-                folders.insert(relative.begin()->string());
+            if (auto folder = model_file_folder(file.get<std::string>())) {
+                folders.insert(std::move(*folder));
             }
         }
         for (const auto& folder : folders) {
