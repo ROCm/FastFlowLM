@@ -145,14 +145,12 @@ std::shared_ptr<const OgaApi> LoadHipEp() {
     }
     if (GetEnvironmentVariableW(L"HIPDNN_EP_STRICT", nullptr, 0) == 0)
         _putenv_s("HIPDNN_EP_STRICT", "1");
-    // hipgpu.dll loads hipblaslt.dll by name, a search that AddDllDirectory alone does
-    // not extend to the package.
-    if (!SetDllDirectoryW(package.bin.c_str())) {
-        throw std::runtime_error("failed to add '" + Text(package.bin) +
-                                 "' to the DLL search path (Windows error " +
-                                 std::to_string(GetLastError()) + ")");
-    }
-    AddDllDirectory(package.bin.c_str());
+    // hipgpu.dll loads hipblaslt.dll by name when it creates a model, and delay-loads
+    // amdhip64_7.dll by name, which the GPU driver also puts in System32. Loading
+    // hipblaslt.dll from the package loads its amdhip64_7.dll from there too, so both
+    // names resolve to modules already loaded, and the process DLL search path is
+    // left as it was.
+    LoadFromPackage(package.bin / "hipblaslt.dll");
     // A System32 onnxruntime.dll of another version would otherwise satisfy
     // onnxruntime-genai.dll's import.
     LoadFromPackage(package.bin / "onnxruntime.dll");
