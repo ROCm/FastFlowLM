@@ -37,6 +37,7 @@ PR_CHAT = {
     "gemma4e-dflash": None,   # needs the 9 GB nemotron3.5-bolt:e4b package; runs when the change touches it
     "qwen3.5": "qwen3.5:0.8b",
     "minicpm-v-4.7": "minicpm-v-4.7:1b",
+    "minicpm-ocr": "minicpm-ocr:1.0",
     "qwen3.6-moe": None,      # 35 GB
     "qwen3.8-mtp": None,      # 27 GB, ~2 tok/s
     "qwen3.8-dflash2": None,   # needs the 27 GB qwen3.8-mtp:27b package; runs when the change touches it

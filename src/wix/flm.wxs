@@ -173,6 +173,9 @@
       <Component Id="Comp_minicpm_v_4_7_npu.dll" Guid="*">
         <File Id="File_minicpm_v_4_7_npu.dll" Source="$(SourceDir)\minicpm_v_4_7_npu.dll" KeyPath="yes" />
       </Component>
+      <Component Id="Comp_minicpm_ocr_npu.dll" Guid="*">
+        <File Id="File_minicpm_ocr_npu.dll" Source="$(SourceDir)\minicpm_ocr_npu.dll" KeyPath="yes" />
+      </Component>
       <Component Id="Comp_minicpm_v_4_7_moe_npu.dll" Guid="*">
         <File Id="File_minicpm_v_4_7_moe_npu.dll" Source="$(SourceDir)\minicpm_v_4_7_moe_npu.dll" KeyPath="yes" />
       </Component>
