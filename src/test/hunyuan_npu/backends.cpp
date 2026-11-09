@@ -4,6 +4,7 @@
 ///       library; test_hunyuan and bench_prefill both link this instead.
 #include "AutoModel/modeling_hunyuan.hpp"
 #include "AutoModel/flm_backend.hpp"
+#include "models/hunyuan/flm/aie2p/hunyuan_npu.hpp"
 
 namespace flm::backend {
 void register_builtin_backends(BackendRegistry& registry) {
