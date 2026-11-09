@@ -5,6 +5,7 @@
 
 #include "oga/oga_api.hpp"
 #include "oga/oga_engine.hpp"
+#include "oga_runtime_install.hpp"
 #include "utils/debug_utils.hpp"
 #include "utils/file_access.hpp"
 
@@ -244,5 +245,7 @@ flm::backend::BackendFactory hipep_factory() {
         return std::make_unique<OgaHipepBackend>(context);
     };
 }
+
+bool UninstallHipEp() { return UninstallHipEpPackage(EnvironmentPath); }
 
 }  // namespace flm::oga

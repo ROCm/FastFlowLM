@@ -19,6 +19,8 @@ attempted.
 from __future__ import annotations
 
 import json
+import re
+import subprocess
 import sys
 import time
 import traceback
@@ -174,6 +176,24 @@ class Context:
     def not_attempted(self, suite: str, models: list[str], reason: str) -> None:
         for model in models:
             self.record(Result(suite, "not-attempted", FAIL, model, reason))
+
+    def pull(self, models: list[str], timeout: float) -> None:
+        """Runs `flm pull` for each model before any suite, one setup case each.
+
+        A model that does not pull is left out of the plan: its suites would
+        only wait out their request timeouts on the same download.
+        """
+        for model in models:
+            log = self.out_dir / f"pull-{re.sub(r'[^A-Za-z0-9._-]+', '_', model)}.log"
+            print(f"  [setup] {model}: flm pull (log: {log.name})", flush=True)
+            with self.case("setup", "pull", model) as case:
+                case.data["log"] = log.name
+                with open(log, "wb") as out:
+                    proc = subprocess.run([self.flm_bin, "pull", model], stdout=out,
+                                          stderr=subprocess.STDOUT, timeout=timeout)
+                expect(proc.returncode == 0, f"flm pull exited with code {proc.returncode}")
+            if not case.ok:
+                self.plan.unavailable.add(model)
 
     def run_suite(self, module) -> None:
         """Runs one suite module, turning a fatal error into a recorded failure."""

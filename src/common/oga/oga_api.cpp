@@ -49,14 +49,6 @@ constexpr std::array<DefaultFolder, 2> kDefaultFolders{{
     {L"ProgramFiles", "%ProgramFiles%"},
 }};
 
-std::filesystem::path EnvironmentPath(const wchar_t* name) {
-    const DWORD needed = GetEnvironmentVariableW(name, nullptr, 0);
-    if (needed == 0) return {};
-    std::wstring value(needed, L'\0');
-    value.resize(GetEnvironmentVariableW(name, value.data(), needed));
-    return value;
-}
-
 /// \brief the numeric parts of the first dotted number in a folder name, such as "0.5.2" in
 /// "hipep_0.5.2_windows"; empty when the name has no dotted number
 std::optional<std::vector<std::uint32_t>> ParseVersionName(std::string_view name) {
@@ -145,14 +137,12 @@ std::shared_ptr<const OgaApi> LoadHipEp() {
     }
     if (GetEnvironmentVariableW(L"HIPDNN_EP_STRICT", nullptr, 0) == 0)
         _putenv_s("HIPDNN_EP_STRICT", "1");
-    // hipgpu.dll loads hipblaslt.dll by name, a search that AddDllDirectory alone does
-    // not extend to the package.
-    if (!SetDllDirectoryW(package.bin.c_str())) {
-        throw std::runtime_error("failed to add '" + Text(package.bin) +
-                                 "' to the DLL search path (Windows error " +
-                                 std::to_string(GetLastError()) + ")");
-    }
-    AddDllDirectory(package.bin.c_str());
+    // hipgpu.dll loads hipblaslt.dll by name when it creates a model, and delay-loads
+    // amdhip64_7.dll by name, which the GPU driver also puts in System32. Loading
+    // hipblaslt.dll from the package loads its amdhip64_7.dll from there too, so both
+    // names resolve to modules already loaded, and the process DLL search path is
+    // left as it was.
+    LoadFromPackage(package.bin / "hipblaslt.dll");
     // A System32 onnxruntime.dll of another version would otherwise satisfy
     // onnxruntime-genai.dll's import.
     LoadFromPackage(package.bin / "onnxruntime.dll");
@@ -194,6 +184,14 @@ std::optional<FileVersion> ReadFileVersion(const std::filesystem::path& file) {
     }
     return FileVersion{HIWORD(info->dwFileVersionMS), LOWORD(info->dwFileVersionMS),
                        HIWORD(info->dwFileVersionLS), LOWORD(info->dwFileVersionLS)};
+}
+
+std::filesystem::path EnvironmentPath(const wchar_t* name) {
+    const DWORD needed = GetEnvironmentVariableW(name, nullptr, 0);
+    if (needed == 0) return {};
+    std::wstring value(needed, L'\0');
+    value.resize(GetEnvironmentVariableW(name, value.data(), needed));
+    return value;
 }
 
 PackageSearch SearchPackages(const PackageEnvironment& environment) {

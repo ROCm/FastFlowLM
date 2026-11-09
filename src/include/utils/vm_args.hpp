@@ -25,6 +25,9 @@ inline void print_help(po::options_description& general) {
     std::cout << "  serve <model_tag>   - Start the  server" << std::endl;
     std::cout << "  pull <model_tag>    - Download model files if not present" << std::endl;
     std::cout << "  remove <model_tag>  - Remove a model" << std::endl;
+#if defined(FLM_ENABLE_OGA_HIPEP)
+    std::cout << "  uninstall hipep     - Remove the hip-ep runtime flm installed for oga-hipep models" << std::endl;
+#endif
     std::cout << "  check <model_tag>   - Check a model" << std::endl;
     std::cout << "  list                - List all available models" << std::endl;
     std::cout << "  version             - Show version information" << std::endl;
@@ -264,6 +267,11 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
                 std::cerr << "Error: Model tag is required for command '" << parsed_args.command << "'" << std::endl;
                 return false;
             }
+        }
+        if (parsed_args.command == "uninstall" && parsed_args.model_tag != "hipep" &&
+            parsed_args.model_tag != "hip-ep") {
+            std::cerr << "Error: flm uninstall removes only the hip-ep runtime: run 'flm uninstall hipep'" << std::endl;
+            return false;
         }
 
         return true;

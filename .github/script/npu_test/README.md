@@ -29,8 +29,10 @@ python3 -m npu_test --flm-bin flm --label dev --suites chat --models qwen3:0.6b,
 | `--asr-expected-key KEY` | Check WER against this row of `assets/asr_eval/expected.json` |
 | `--output-dir DIR` | Where `results.json`, `summary.md` and the server logs go |
 
-Models download on first use into `$FLM_MODEL_PATH`. Exit code 1 means a case
-failed; warnings and skips do not fail a run.
+Models download on first use into `$FLM_MODEL_PATH`. A `--backend` run pulls its
+models first (`flm pull`, one `setup`/`pull` case each), so a download counts
+against no request's timeout; a model that does not pull is not tested. Exit
+code 1 means a case failed; warnings and skips do not fail a run.
 
 ## Tiers
 
@@ -54,10 +56,12 @@ calls included, run on the GPU too.
 On a pull request, `.github/script/ci/changes.py` also picks the suites: only
 those the changed files can affect (an ASR-only change runs `asr`, a d3-only
 change `decision`, an engine change `chat` and `prefix_cache`), or all of them
-when any changed file is shared code. A change to the oga-hipep backend or to
-its catalog entries touches no NPU family: it runs `chat`, which is what has
-Test Windows HIPEP run. The HRX packages never run `api` or `serving`, which
-test server logic the backend does not touch.
+when any changed file is shared code. The HRX packages never run `api` or
+`serving`, which test server logic the backend does not touch. Test Windows
+HIPEP runs when every suite does, or when the change reaches
+`qwen3.5-oga-hipep:9b`: the oga-hipep backend or its catalog entries, the
+qwen3.5 frontend, the `chat` and `api` tests. A change only to the backend or
+its entries touches no NPU family and runs no NPU test job.
 
 A manual run of Build and Test can name the models to test, for example
 `gh workflow run build-and-test.yml --ref <branch> -f models=qwen3.5-oga-hipep:9b`:

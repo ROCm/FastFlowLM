@@ -227,6 +227,13 @@ std::vector<int> Reply(const std::vector<int>& final) {
     return reply;
 }
 
+/// \brief a reply that goes straight to `final` as the final message
+std::vector<int> FinalOnly(const std::vector<int>& final) {
+    std::vector<int> reply{kChannel, kFinal, kMessage};
+    reply.insert(reply.end(), final.begin(), final.end());
+    return reply;
+}
+
 /// \brief turn 1: kPrompt, then `reply` (the insert's own sample first) and <|return|>, cut at `limit`
 void FirstTurn(Harness& model, std::vector<int> reply, int limit) {
     reply.push_back(kReturn);
@@ -280,19 +287,32 @@ void AFirstPromptTheServerLetsRestoreStillRuns() {
 
 void TheSameReplyContinuesTheHistoryTheEngineRan() {
     Harness model;
-    FirstTurn(model, Reply({100, 101}), 0);
+    FirstTurn(model, FinalOnly({100, 101}), 0);
     const auto meta = SecondTurn(model, {100, 101});
     const FakeEngine& engine = model.engine();
     Require(engine.restores == 0, "a continued history must not restore the checkpoint");
     Require(engine.prefills.back() == kNewTurn, "only what follows the last reply may run");
     Require(engine.replayed == 0, "the continued history must not run again");
-    Require(meta.cached_prompt_tokens == 16, "the whole history the engine kept, analysis included, must count as cached");
-    Require(meta.prompt_tokens == 24, "the prompt is the history plus the new turn");
+    Require(meta.cached_prompt_tokens == 9, "the whole history the engine kept must count as cached");
+    Require(meta.prompt_tokens == 17, "the prompt is the history plus the new turn");
+}
+
+void AReplyWithAnalysisRunsAsRendered() {
+    Harness model;
+    FirstTurn(model, Reply({100, 101}), 0);
+    const auto meta = SecondTurn(model, {100, 101});
+    const FakeEngine& engine = model.engine();
+    Require(engine.restores == 1, "a reply with analysis must restore the checkpoint");
+    std::vector<int> expected{kChannel, kFinal, kMessage, 100, 101};
+    expected.insert(expected.end(), kNewTurn.begin(), kNewTurn.end());
+    Require(engine.prefills.back() == expected, "the reply as rendered, without its analysis, must follow the checkpoint");
+    Require(engine.replayed == 4, "an engine that cannot rewind runs the checkpoint again");
+    Require(meta.cached_prompt_tokens == 0, "tokens the engine ran again must not count as cached");
 }
 
 void AReplyCutAtTheLimitRunsItsLastSampledTokenNext() {
     Harness model;
-    FirstTurn(model, Reply({100, 101}), 12);
+    FirstTurn(model, FinalOnly({100, 101}), 5);
     // the engine never ran " world", the last token the client received
     Require(model.history().back() == 100, "a reply cut at its limit keeps only the tokens the engine ran");
     const auto meta = SecondTurn(model, {100, 101});
@@ -300,7 +320,7 @@ void AReplyCutAtTheLimitRunsItsLastSampledTokenNext() {
     expected.insert(expected.end(), kNewTurn.begin(), kNewTurn.end());
     Require(model.engine().prefills.back() == expected, "the missing tail of the reply must run before the new turn");
     Require(model.engine().replayed == 0, "the continued history must not run again");
-    Require(meta.cached_prompt_tokens == 15, "the history the engine ran must count as cached");
+    Require(meta.cached_prompt_tokens == 8, "the history the engine ran must count as cached");
 }
 
 void AReplyCutInsideItsAnalysisRestoresTheCheckpoint() {
@@ -313,7 +333,7 @@ void AReplyCutInsideItsAnalysisRestoresTheCheckpoint() {
 
 void AnEditedReplyRestoresTheCheckpointAndReportsTheReplay() {
     Harness model;
-    FirstTurn(model, Reply({100, 101}), 0);
+    FirstTurn(model, FinalOnly({100, 101}), 0);
     const auto meta = SecondTurn(model, {100, 103});
     const FakeEngine& engine = model.engine();
     Require(engine.restores == 1, "a history the engine did not run must restore the checkpoint");
@@ -398,6 +418,7 @@ int main() {
     run("a reply ends without running its <|return|>", AReplyEndsWithoutRunningItsReturn);
     run("a first prompt the server lets restore still runs", AFirstPromptTheServerLetsRestoreStillRuns);
     run("the same reply continues the engine's history", TheSameReplyContinuesTheHistoryTheEngineRan);
+    run("a reply with analysis runs as rendered", AReplyWithAnalysisRunsAsRendered);
     run("a reply cut at its limit runs its last token next", AReplyCutAtTheLimitRunsItsLastSampledTokenNext);
     run("a reply cut inside its analysis restores", AReplyCutInsideItsAnalysisRestoresTheCheckpoint);
     run("an edited reply restores and reports the replay", AnEditedReplyRestoresTheCheckpointAndReportsTheReplay);

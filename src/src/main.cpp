@@ -44,6 +44,9 @@
 #endif
 #include "core/corelib_runtime.hpp"
 #endif
+#if defined(FLM_ENABLE_OGA_HIPEP)
+#include "oga/oga_hipep_backend.hpp"
+#endif
 
 #ifndef _WIN32
 #include <fcntl.h>
@@ -601,6 +604,20 @@ int main(int argc, char* argv[]) {
             std::cout << "Server Port: " << utils::get_server_port(parsed_args.port) << std::endl;
         }
         return 0;
+    }
+
+    if (parsed_args.command == "uninstall") {
+#if defined(FLM_ENABLE_OGA_HIPEP)
+        try {
+            return flm::oga::UninstallHipEp() ? 0 : 1;
+        } catch (const std::exception& e) {
+            header_print("ERROR", e.what());
+            return 1;
+        }
+#else
+        header_print("ERROR", "This flm build has no oga-hipep backend, so it installs no hip-ep runtime");
+        return 1;
+#endif
     }
 
     // Get the command, model tag, and force flag
