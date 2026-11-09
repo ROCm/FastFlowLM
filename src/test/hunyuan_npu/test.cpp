@@ -16,6 +16,8 @@
 #include <iomanip>
 #include <iostream>
 #include <fstream>
+#include <numeric>
+#include <random>
 #include <sstream>
 #include <vector>
 #define NOMINMAX
@@ -246,6 +248,25 @@ static std::string turn_tag(size_t i, size_t n) {
     return tag.str();
 }
 
+/// \brief the order the measured pass visits the corpus in: "forward" (the corpus
+///        order), "reverse", or "shuffle:<seed>". Every turn rewinds to the pinned
+///        prefix, so the text of a turn must not depend on this.
+static std::vector<size_t> turn_order(const std::string& order, size_t n) {
+    std::vector<size_t> idx(n);
+    std::iota(idx.begin(), idx.end(), 0);
+    if (order == "reverse") {
+        std::reverse(idx.begin(), idx.end());
+    }
+    else if (order.rfind("shuffle:", 0) == 0) {
+        std::mt19937 rng(static_cast<unsigned>(std::stoul(order.substr(8))));
+        std::shuffle(idx.begin(), idx.end(), rng);
+    }
+    else if (order != "forward") {
+        throw std::runtime_error("--order must be forward, reverse or shuffle:<seed>");
+    }
+    return idx;
+}
+
 /// \brief the timing line of a turn: prefill / decode / e2e, tokens, decode speed
 static std::string turn_timings(const turn_result_t& r) {
     std::ostringstream o;
@@ -292,6 +313,7 @@ int main(int argc, char* argv[]) {
     desc.add_options()("count,n", arg_utils::po::value<int>()->default_value(0), "Turns to run, 0 = the whole corpus");
     desc.add_options()("pin", arg_utils::po::value<bool>()->default_value(true), "Pin the constant instruction in the KV cache at init");
     desc.add_options()("csv,c", arg_utils::po::value<std::string>()->default_value("bench.csv"), "Per-turn CSV to write, empty to skip");
+    desc.add_options()("order", arg_utils::po::value<std::string>()->default_value("forward"), "Measured pass order: forward, reverse or shuffle:<seed>");
     arg_utils::po::store(arg_utils::po::parse_command_line(argc, argv, desc), vm);
 
     std::string tag = vm["model"].as<std::string>();
@@ -301,6 +323,7 @@ int main(int argc, char* argv[]) {
     int count = vm["count"].as<int>();
     bool pin_prefix = vm["pin"].as<bool>();
     std::string csv_path = vm["csv"].as<std::string>();
+    std::string order = vm["order"].as<std::string>();
     std::cout << "Model: " << tag << std::endl;
 
     size_t total_turns = kBenchSamples.size();
@@ -374,10 +397,11 @@ int main(int argc, char* argv[]) {
         std::cout << std::endl;
     }
 
+    std::vector<size_t> visit = turn_order(order, total_turns);
     std::vector<turn_result_t> results;
     results.reserve(total_turns);
     for (size_t i = 0; i < total_turns; i++) {
-        turn_result_t r = run_turn(chat, kBenchSamples[i], length_limit, pin_prefix);
+        turn_result_t r = run_turn(chat, kBenchSamples[visit[i]], length_limit, pin_prefix);
         record_breakdown(chat, r, prev_slots);
         results.push_back(r);
 
