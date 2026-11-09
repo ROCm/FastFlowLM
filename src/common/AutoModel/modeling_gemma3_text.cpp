@@ -6,6 +6,7 @@
 /// \note This is a source file for the gemma3 class
 
 #include "AutoModel/modeling_gemma3_text.hpp"
+#include "models/gemma_text/flm/aie2p/gemma_text_npu.hpp"
 
 
 /************              Gemma3_Text_Only family            **************/

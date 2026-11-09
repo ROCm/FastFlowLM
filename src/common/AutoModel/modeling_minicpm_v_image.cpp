@@ -16,6 +16,7 @@
 ///       HF processor emits, transposed per patch.
 
 #include "AutoModel/modeling_minicpm_v.hpp"
+#include "models/minicpm_v_4_7/flm/aie2p/minicpm_v_4_7_npu.hpp"
 
 #include <algorithm>
 #include <cmath>

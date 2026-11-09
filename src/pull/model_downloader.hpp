@@ -7,7 +7,6 @@
 #pragma once
 
 #include "model_list.hpp"
-#include "lm_config.hpp"
 #include "download_model.hpp"
 #include "nlohmann/json.hpp"
 #include <filesystem>

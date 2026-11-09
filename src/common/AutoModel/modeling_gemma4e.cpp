@@ -8,6 +8,8 @@
 
 #include "AutoModel/modeling_gemma4e.hpp"
 #include "metrices.hpp"
+#include "models/gemma4e/flm/aie2p/gemma4e_npu.hpp"
+#include "models/gemma4e_flash/flm/aie2p/gemma4e_flash.hpp"
 
 #include <cctype>
 

@@ -21,6 +21,13 @@ REM Copy third-party license notices from repo root
 echo Copying THIRD_PARTY_NOTICES.txt...
 copy "..\..\THIRD_PARTY_NOTICES.txt" "package\THIRD_PARTY_NOTICES.txt"
 
+REM Stage the model-extension SDK from the local build unless CI staged it
+if not exist "package\sdk" (
+    echo Installing the model-extension SDK...
+    cmake --install "..\build" --prefix "package\sdk" --component ModelExtension --config Release
+    if errorlevel 1 exit /b 1
+)
+
 REM Copy static installer assets
 echo Copying static assets...
 copy "..\inno\logo.ico" "package\logo.ico"

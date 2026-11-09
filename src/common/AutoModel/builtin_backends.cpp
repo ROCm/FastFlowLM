@@ -2,12 +2,38 @@
 /// \brief The backends this build ships, keyed by model family
 /// \note One place knows both the family names from model_list.json and the
 ///       engine types behind them. Everything else goes through the registry.
-/// \note Every family registers the flm backend. Only families with a corelib
-///       engine also register a core backend, and only families with an OGA
-///       package an oga-hipep backend, each only when this build has it.
-#include "AutoModel/automodel.hpp"
+/// \note Every family using the shared backend path registers the flm backend.
+///       Only families with a corelib engine also register a core backend, and
+///       only families with an OGA package an oga-hipep backend, each only when
+///       this build has it.
 #include "AutoModel/flm_backend.hpp"
 #include "AutoModel/model_backend.hpp"
+#include "models/gemma/flm/aie2p/gemma_npu.hpp"
+#include "models/gemma4_12b/flm/aie2p/gemma4_12b_npu.hpp"
+#include "models/gemma4e/flm/aie2p/gemma4e_npu.hpp"
+#include "models/gemma4e_dflash/flm/aie2p/gemma4e_dflash.hpp"
+#include "models/gemma4e_dflash_flash/flm/aie2p/gemma4e_dflash_flash.hpp"
+#include "models/gemma4e_flash/flm/aie2p/gemma4e_flash.hpp"
+#include "models/gemma_text/flm/aie2p/gemma_text_npu.hpp"
+#include "models/gpt_oss/flm/aie2p/gpt_oss_npu.hpp"
+#include "models/hunyuan/flm/aie2p/hunyuan_npu.hpp"
+#include "models/hy_mem/flm/aie2p/hy_mem_npu.hpp"
+#include "models/lfm2/flm/aie2p/lfm2_npu.hpp"
+#include "models/lfm3/flm/aie2p/lfm3_npu.hpp"
+#include "models/llama/flm/aie2p/llama_npu.hpp"
+#include "models/minicpm_ocr/flm/aie2p/minicpm_ocr_npu.hpp"
+#include "models/minicpm_v_4_7/flm/aie2p/minicpm_v_4_7_npu.hpp"
+#include "models/minicpm_v_4_7_moe/flm/aie2p/minicpm_v_4_7_moe_npu.hpp"
+#include "models/nanbeige/flm/aie2p/nanbeige_npu.hpp"
+#include "models/phi4/flm/aie2p/phi4_npu.hpp"
+#include "models/qwen2/flm/aie2p/qwen2_npu.hpp"
+#include "models/qwen2vl/flm/aie2p/qwen2vl_npu.hpp"
+#include "models/qwen3/flm/aie2p/qwen3_npu.hpp"
+#include "models/qwen3_5vl/flm/aie2p/qwen3_5vl_npu.hpp"
+#include "models/qwen3_6_moe/flm/aie2p/qwen3_6_moe_npu.hpp"
+#include "models/qwen3_8mtp/flm/aie2p/qwen3_8mtp_npu.hpp"
+#include "models/qwen3vl/flm/aie2p/qwen3vl_npu.hpp"
+#include "models/qwen3vl_flash/flm/aie2p/qwen3vl_flash.hpp"
 
 #if defined(FLM_ENABLE_CORE)
 #include "models/gemma4/core/dev04/gemma4_core_backend.hpp"
@@ -50,6 +76,7 @@ void register_builtin_backends(BackendRegistry& registry) {
     RegisterFlm<qwen3vl_flash>(registry, "qwen3vl-flash");
     RegisterFlm<qwen3_5vl_npu>(registry, "qwen3.5");
     RegisterFlm<minicpm_v_4_7_npu>(registry, "minicpm-v-4.7");
+    RegisterFlm<minicpm_ocr_npu>(registry, "minicpm-ocr");
     RegisterFlm<minicpm_v_4_7_moe_npu>(registry, "minicpm-v-4.7-moe");
     RegisterFlm<qwen3_6_moe_npu>(registry, "qwen3.6-moe");
     RegisterFlm<qwen3_8mtp_npu>(registry, "qwen3.8-mtp");

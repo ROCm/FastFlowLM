@@ -32,7 +32,7 @@ outputs:
       test server logic the backend does not touch. Empty when nothing is left.
     value: ${{ steps.tier.outputs.hrx-suites }}
   source:
-    description: '"true" when the chat suite runs, the only suite the models-from-source tests run.'
+    description: '"true" when the chat suite runs, the only suite the models-from-source and model-extension tests run.'
     value: ${{ steps.tier.outputs.source }}
   hipep:
     description: '"true" when every suite runs or the change reaches the model Test Windows HIPEP tests.'
