@@ -225,10 +225,11 @@ bool MiniCPM_V::load_image(const std::string& source, bool base64, image_data_t&
 }
 
 MiniCPM_V::image_layout MiniCPM_V::preprocess_image(const image_data_t& chw,
-                                                    minicpm_v_image_payload_t& payload) {
+                                                    minicpm_v_image_payload_t& payload, int max_slice_nums) {
     auto* eng = reinterpret_cast<minicpm_v_4_7_npu*>(this->lm_engine);
     const int patch = (int)eng->MINICPM_V_PATCH_SIZE;                      // 14
-    const int max_slices = (int)eng->MINICPM_V_MAX_SLICE_NUMS;             // 9
+    const int engine_slices = (int)eng->MINICPM_V_MAX_SLICE_NUMS;          // 9
+    const int max_slices = max_slice_nums > 0 ? std::min(max_slice_nums, engine_slices) : engine_slices;
     const int divisor = (int)eng->MINICPM_V_DOWNSAMPLE_FACTOR;             // 16 (or 4)
     constexpr int scale = 448;   // scale_resolution: the processor's default; not in any config
     const float rescale = eng->MINICPM_V_VISION_RESCALE_FACTOR;

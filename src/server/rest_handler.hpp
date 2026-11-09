@@ -155,6 +155,8 @@ private:
     int prefill_chunk_len;
     /// \brief the --prefill-chunk-len value, -1 when each model's own is used
     int prefill_chunk_len_arg;
+    /// \brief what one request may carry in raw RGB8 frames (--max-raw-frames, --max-raw-mb)
+    raw_rgb8_limits_t raw_rgb8_limits;
     int generate_context_id;
     int chat_context_id;
     int ctx_length;

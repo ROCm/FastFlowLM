@@ -442,6 +442,8 @@ import gc
 gc.collect()
 ```
 
+> 🎞️ **Video frames:** `minicpm-v-4.7:1b` also accepts decoded RGB8 frames directly (`image_raw`), with no JPEG/PNG encoding. See [Raw RGB Images](https://fastflowlm.com/docs/instructions/server/raw_rgb_images/).
+
 ---
 
 ## 🎙️ Example: Multi-Modal Input

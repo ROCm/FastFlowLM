@@ -295,6 +295,7 @@ flm serve llama3.2:1b --ctx-len 65536
 
 - **Only the new part is read.** When the start of the prompt is already in the KV cache (the prompt cache, or the [prefix cache](https://fastflowlm.com/docs/instructions/server/prefix_cache/) on Qwen3.5 / Qwen3.6), only the rest is chunked and read. `usage.prompt_tokens_details.cached_tokens` says how much was reused.
 - **Cancelling stops between chunks.** If the client disconnects during a long prefill, FLM stops before the next chunk instead of reading the whole prompt.
+- **MiniCPM-V has a limit on that chunk.** All the pictures of a request must fit its first chunk, and the engine cannot prefill more than about 17,300 tokens there. A request whose pictures need more gets a `400` that names the token count ([raw frames](https://fastflowlm.com/docs/instructions/server/raw_rgb_images/) are the usual case: about 73 tokens each).
 - **Images can make the first chunk larger.** On some vision models the image encoder runs with the first chunk, so that chunk is widened to hold every image token. That chunk size, rounded up to a power of two, is then used for the rest of that prompt.
 - **On the `core` backend chunks are page-aligned.** They end on multiples of `max_prefill_len` counted from the start of the conversation, not from the start of the new part ([details](https://fastflowlm.com/docs/models/qwen/#-qwen3-06b--17b--4b--8b-on-the-core-backend-developer-preview)).
 

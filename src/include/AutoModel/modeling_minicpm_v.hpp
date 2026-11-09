@@ -48,7 +48,8 @@ private:
     /// \brief Decode to uint8 CHW; false on failure.
     bool load_image(const std::string& source, bool base64, image_data_t& chw);
     /// \brief Slice, resize, normalise and patchify one picture into `payload`.
-    image_layout preprocess_image(const image_data_t& chw, minicpm_v_image_payload_t& payload);
+    /// `max_slice_nums` > 0 caps the engine's slice count for this picture.
+    image_layout preprocess_image(const image_data_t& chw, minicpm_v_image_payload_t& payload, int max_slice_nums = 0);
     /// \brief The token sequence `<|image_pad|>` expands to for picture `index`.
     std::vector<int> image_placeholder(const image_layout& l, int index);
 

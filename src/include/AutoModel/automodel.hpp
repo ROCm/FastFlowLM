@@ -22,6 +22,7 @@
 #include <optional>
 #include <stdexcept>
 #include "typedef.hpp"
+#include "image/raw_rgb8.hpp"
 #include "causal_lm.hpp"
 #include "prefix_slot_cache.hpp"
 #include "prompt_reuse.hpp"
@@ -138,6 +139,9 @@ struct lm_uniform_input_t {
 	nlohmann::ordered_json messages;
 	std::vector<std::string> images;
 	std::vector<input_payload_type_t> image_payload_types;
+	// Raw RGB8 frames of this request; a message's `images` entry {"rgb8": {"batch": b, "frame": f}} names one of them.
+	// Only MiniCPM-V reads them; the server refuses raw frames for every other model.
+	std::vector<std::shared_ptr<const raw_rgb8_batch_t>> raw_rgb8;
 	std::vector<std::string> audios;
 	std::vector<input_payload_type_t> audio_payload_types;
 	nlohmann::ordered_json tools;

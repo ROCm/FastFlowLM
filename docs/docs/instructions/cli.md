@@ -397,6 +397,18 @@ flm serve qwen3.5:4b --prefix-cache-mb 8192 --prefix-slots 16
 
 ---
 
+### 🎞️ Raw RGB Images (Server Mode)
+
+`minicpm-v-4.7:1b` accepts decoded 8-bit RGB frames in `/v1/chat/completions` (`image_raw`), without JPEG or PNG encoding. These options cap what one request may carry:
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--max-raw-frames N` | `128` | Most raw frames in one request |
+| `--max-raw-mb N` | `128` | Most MiB of raw pixels in one request |
+| `--allow-raw-path DIR` | off | Let `image_raw` read frame files (`"path"`) from `DIR`; nothing outside it is read |
+
+See [Raw RGB Images](https://fastflowlm.com/docs/instructions/server/raw_rgb_images/).
+
 ### 🎙️ ASR (Automatic Speech Recognition)
 
 **Requirement:** The ASR model (e.g., `whisper-large-v3-turbo`) must run **with an LLM loaded concurrently**. Enabling `--asr <model tag>` (or `--asr 1` for the default) starts Whisper in the background **while** your chosen LLM loads.
