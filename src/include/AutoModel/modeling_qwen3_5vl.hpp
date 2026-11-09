@@ -83,13 +83,23 @@ private:
     /// \brief continue the history the engine ran instead of restoring the checkpoint
     /// \note The rendered prompt carries the last reply as the client sent it
     ///       back. When that is the reply the engine generated, the prompt is
-    ///       rewritten to the engine's history (its reasoning included) plus what
-    ///       follows the reply, so nothing before it runs again.
+    ///       rewritten to the engine's history plus what follows the reply, so
+    ///       nothing before it runs again. A later turn renders the earlier
+    ///       replies as this prompt does, so it is matched against this prompt
+    ///       (checkpoint_prompt_) and continues too. The template leaves the
+    ///       reasoning of earlier replies out, so a reply with reasoning, or cut
+    ///       inside it, is not continued: that turn runs as rendered.
+    /// \param rendered gets the prompt as rendered when `tokens` is rewritten
     /// \return whether `tokens` now continues token_history
-    bool _continue_verbatim(std::vector<int>& tokens, std::optional<int> requested_max_new_tokens);
+    bool _continue_verbatim(std::vector<int>& tokens, std::optional<int> requested_max_new_tokens,
+                            std::vector<int>& rendered);
 
     /// \brief the content of each image in checkpoint_his, kept on OGA
     std::vector<uint64_t> checkpoint_image_hashes_;
+    /// \brief checkpoint_his as the template rendered it, when _continue_verbatim
+    ///        rewrote it; empty when a later turn is matched against checkpoint_his
+    ///        itself
+    std::vector<int> checkpoint_prompt_;
 
 protected:
     qwen3_5vl_vision_geometry_t vision_geometry;
