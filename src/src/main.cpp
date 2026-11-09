@@ -883,6 +883,22 @@ int main(int argc, char* argv[]) {
             return 1;
         }
         if (parsed_args.command == "bench") {
+            // Like run and serve: fetch the model (from HF, or ModelScope with --modelscope) if it is not on disk yet.
+            const std::string bench_tag = availble_models.get_model_info(parsed_args.model_tag).first;
+            switch (downloader.is_model_downloaded(bench_tag, false, /*fast_check=*/true)) {
+                case ModelDownloader::ModelStatus::Ready:
+                    break;
+                case ModelDownloader::ModelStatus::Outdated:
+                case ModelDownloader::ModelStatus::Missing:
+                    if (!downloader.pull_model(bench_tag, parsed_args.modelscope)) {
+                        header_print("ERROR", "Failed to pull model: " + bench_tag);
+                        return 1;
+                    }
+                    break;
+                case ModelDownloader::ModelStatus::Incompatible:
+                    header_print("ERROR", "Model is incompatible with this version of FastFlowLM: " + bench_tag);
+                    return 1;
+            }
             benchmarking::BenchmarkResults_t results = benchmarking::run_benchmarks(parsed_args.model_tag, parsed_args.input_file_name, availble_models, parsed_args.iterations, npu_device, parsed_args.backend, parsed_args.ctx_length);
         }
         else if (parsed_args.command == "run") {

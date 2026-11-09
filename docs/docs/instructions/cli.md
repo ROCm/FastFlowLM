@@ -646,6 +646,12 @@ Each benchmark tests context lengths from `1k` to `32k`, running `2` iterations 
 flm bench llama3.2:1b
 ```
 
+If the model is not downloaded yet, `flm bench` pulls it first, like `flm run` and `flm serve` (add `--modelscope` to download from ModelScope):
+
+```shell
+flm bench llama3.2:1b --modelscope
+```
+
 Change the iteration times by `bench-iterations`:
 
 ```shell
