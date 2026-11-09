@@ -21,7 +21,7 @@
 #ifdef FLM_DEVICE_BUFFER
 // Pulls in the selected NPU runtime backend (XRT or HRX) behind the neutral
 // `flm_rt` alias. All device buffer types below are referenced as flm_rt::bo.
-#include "device_runtime.hpp"
+#include <device_runtime.hpp>
 #endif
 
 #include "utils/debug_utils.hpp"

@@ -9,6 +9,11 @@ inputs:
   flm-exe:
     description: Path to the flm.exe to package, relative to the workspace.
     required: true
+  sdk:
+    description: >
+      The portable package root whose model-extension SDK (include\, lib\cmake\,
+      share\) the installer ships, relative to the workspace.
+    required: true
 
 outputs:
   msi:
@@ -29,6 +34,25 @@ runs:
         $ErrorActionPreference = "Stop"
         New-Item -ItemType Directory -Force src\build | Out-Null
         Copy-Item -Path $env:FLM_EXE -Destination src\build\flm.exe -Force
+
+    # The model-extension SDK comes from the same package as flm.exe, so the
+    # MSI and the zip ship the same header, CMake package and schemas.
+    - name: Place model-extension SDK
+      shell: powershell
+      working-directory: ${{ github.workspace }}
+      env:
+        SDK: ${{ inputs.sdk }}
+      run: |
+        $ErrorActionPreference = "Stop"
+        $staged = "src\wix\package\sdk"
+        if (Test-Path $staged) { Remove-Item $staged -Recurse -Force }
+        foreach ($part in "include", "lib\cmake", "share") {
+          $source = Join-Path $env:SDK $part
+          if (-not (Test-Path $source)) { throw "The package has no $part folder." }
+          $target = Join-Path $staged $part
+          New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
+          Copy-Item -Path $source -Destination $target -Recurse -Force
+        }
 
     - name: Stage installer package files
       shell: powershell

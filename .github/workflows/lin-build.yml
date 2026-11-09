@@ -148,6 +148,7 @@ jobs:
       - name: Package portable distribution
         id: portable
         if: endsWith(matrix.variant, '-portable')
+        shell: bash
         env:
           VARIANT: ${{ matrix.variant }}
           VERSION: ${{ steps.build.outputs.version }}
@@ -191,6 +192,8 @@ jobs:
             flm \
             flm-real \
             lib/ \
+            include/ \
+            share/ \
             xclbins/ \
             model_list.json \
             model_info.json \

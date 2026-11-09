@@ -39,6 +39,8 @@ constexpr int kFinal = 120;
 constexpr int kAnalysis = 121;
 constexpr int kAssistant = 122;
 constexpr int kUser = 123;
+/// \brief vocabulary width of the sampler; the fake engine returns this many logits
+constexpr int kVocab = 64;
 std::vector<int> g_encoded_tokens;
 /// \brief encodings of particular text; any other text encodes to g_encoded_tokens
 std::map<std::string, std::vector<int>> g_encodings;
@@ -58,7 +60,7 @@ public:
         ++position;
         forwarded.push_back(token);
         Run({token});
-        return buffer<bf16>(1);
+        return buffer<bf16>(kVocab);
     }
     buffer<bf16> prefill(std::vector<int>& tokens, void*) override {
         if (position + static_cast<int>(tokens.size()) > static_cast<int>(max_length)) {
@@ -67,7 +69,7 @@ public:
         position += static_cast<int>(tokens.size());
         prefills.push_back(tokens);
         Run(tokens);
-        return buffer<bf16>(1);
+        return buffer<bf16>(kVocab);
     }
     void set_context_length(int value) override { position = value; }
     void load_weights(Q4NX&) override {}
@@ -154,7 +156,7 @@ public:
         lm_engine = &backend_->engine();
         tokenizer = std::make_unique<Tokenizer>("");
         sampler_config config;
-        sampler = std::make_unique<Sampler>(64, config);
+        sampler = std::make_unique<Sampler>(kVocab, config);
         MAX_L = frontend_max_length;
         eos_token_ids = {kReturn, kEndOfText, kCall};
         bos_token_id = -1;

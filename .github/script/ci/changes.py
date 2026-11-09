@@ -75,11 +75,10 @@ ENGINES = {
     # Qwen3VL_Flash derives from Qwen3VL and its engine includes qwen3vl_npu.
     ("qwen3vl",):                            ("qwen3vl", "qwen3vl-flash"),
     ("qwen3vl_flash",):                      ("qwen3vl-flash",),
-    # Qwen3_5VL_Flash derives from Qwen3_5VL (modeling_qwen3_5vl*.cpp) and runs its own engine, qwen3_5vl_flash.
-    ("qwen3_5vl",):                          ("qwen3.5", "qwen3.5-flash"),
-    ("qwen3_5vl_flash",):                    ("qwen3.5-flash",),
+    ("qwen3_5vl",):                          ("qwen3.5",),
     ("minicpm_v_4_7", "minicpm_v"):          ("minicpm-v-4.7",),
     ("minicpm_v_4_7_moe", "minicpm_v_moe"): ("minicpm-v-4.7-moe",),
+    ("minicpm_ocr",):                        ("minicpm-ocr",),
     ("qwen3_6_moe",):                        ("qwen3.6-moe",),
     # qwen3.8-dflash2 is the same engine with a draft package (Qwen3_8DFlash2 derives from Qwen3_8MTP).
     ("qwen3_8mtp", "qwen3_8_mtp"):           ("qwen3.8-mtp", "qwen3.8-dflash2"),
@@ -178,6 +177,10 @@ TEST_SCOPES = (
     (r"\.github/script/npu_test/assets/vision/|\.github/script/npu_test/tools/make_vision_assets\.py$",
      {"chat"}),
     (r"src/test/(openai_api_test|openai_usage)/", {"api"}),
+    # The model-extension contracts run in cpu-tests.yml on every change; the
+    # Gemma4-open bundle and its NPU tests run with chat.
+    (r"src/test/(model_frontend|model_backend|model_list_platform|model_extension_\w+)/"
+     r"|src/schemas/|src/cmake/FastFlowLMModelExtension[^/]*\.cmake(\.in)?$", {"chat"}),
 )
 
 

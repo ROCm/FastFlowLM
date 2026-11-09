@@ -81,11 +81,6 @@ class Cli(unittest.TestCase):
         cases = {
             "src/include/AutoModel/modeling_lfm2.hpp": {"lfm2", "lfm2.5-tk"},
             "src/common/AutoModel/modeling_qwen3vl_image.cpp": {"qwen3vl", "qwen3vl-flash"},
-            "src/common/AutoModel/modeling_qwen3_5vl_image.cpp": {"qwen3.5", "qwen3.5-flash"},
-            "src/lib/xrt/libqwen3_5vl_flash.so": {"qwen3.5-flash"},
-            "src/lib/hrx/qwen3_5vl_flash.dll": {"qwen3.5-flash"},
-            "src/include/models/qwen3_5vl_flash/flm/aie2p/qwen3_5vl_flash.hpp": {"qwen3.5-flash"},
-            "src/test/qwen3_5vl_flash/test.cpp": {"qwen3.5-flash"},
             "src/include/models/gemma_text/flm/aie2p/gemma_text_gemm.hpp": {"gemma3-text"},
             "src/include/models/qwen3/core/x.hpp": {"qwen3"},
             "src/common/models/qwen35/core/dev04/a.cpp": {"qwen3.5"},
@@ -146,6 +141,12 @@ class Cli(unittest.TestCase):
             # chat is what has Test Windows HIPEP run.
             ("src/common/oga/oga_hipep_backend.cpp",): "chat",
             ("src/test/oga_hipep/test_oga_hipep.cpp", "src/lib/xrt/libqwen3_npu.so"): "chat,prefix_cache",
+            # Model-extension contracts, fixture and schemas: chat runs the extension jobs.
+            ("src/test/model_frontend/fake_model_extension.c",): "chat",
+            ("src/test/model_extension_gemma4e/model-list.json",): "chat",
+            ("src/test/model_list_platform/test_model_list_platform.cpp",): "chat",
+            ("src/schemas/model-catalog-overlay-v1.schema.json",): "chat",
+            ("src/cmake/FastFlowLMModelExtension.cmake",): "chat",
             # An engine with an audio encoder is also tested by asr.
             ("src/lib/xrt/libgemma4e_npu.so",): "chat,prefix_cache,asr",
             ("src/test/openai_api_test/test_errors.py", "src/lib/xrt/libd3_npu.so"): "api,decision",

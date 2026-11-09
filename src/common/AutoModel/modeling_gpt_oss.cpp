@@ -4,7 +4,8 @@
 /// \date 2025-10-01
 /// \version 0.9.24
 /// \note This is a source file for the gpt-oss class
-#include "AutoModel/modeling_gpt_oss.hpp"   
+#include "AutoModel/modeling_gpt_oss.hpp"
+#include "models/gpt_oss/flm/aie2p/gpt_oss_npu.hpp"
 
 #include <algorithm>
 #include <cctype>

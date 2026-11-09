@@ -4,8 +4,10 @@ name: Build and Test
 # as its own build finishes.
 #
 #   Linux    XRT portable ─ test     HRX portable ─ test     Source portable ─ test
+#                └ extension ─ test      └ extension ─ test
 #            XRT .deb ─ install test (off)   HRX .deb ─ install test (off)
 #   Windows  XRT zip ─ test          HRX zip ─ test          Source zip ─ test
+#                └ extension ─ test      └ extension ─ test
 #            XRT zip ─ HIPEP test
 #            XRT MSI ─ install test (off)
 #
@@ -186,6 +188,52 @@ jobs:
       variants: Source
       msi: false
 
+  # ── Model extensions ─────────────────────────────────────────────────────
+  # The Gemma4-open bundles build against the SDK in their package once it
+  # exists, outside the package build, so a failure here holds back no package
+  # or NPU test, only the verdict. The model-extension contracts need no package
+  # and run in cpu-tests.yml.
+
+  build-lin-extension-xrt:
+    name: Linux XRT model extension
+    needs: [changes, build-lin-xrt-portable]
+    if: needs.changes.outputs.source == 'true'
+    uses: ./.github/workflows/model-extension-build.yml
+    with:
+      os: linux
+      runtime: XRT
+      package: portable
+
+  build-lin-extension-hrx:
+    name: Linux HRX model extension
+    needs: [changes, build-lin-hrx-portable]
+    if: needs.changes.outputs.source == 'true'
+    uses: ./.github/workflows/model-extension-build.yml
+    with:
+      os: linux
+      runtime: HRX
+      package: HRX-portable
+
+  build-win-extension-xrt:
+    name: Windows XRT model extension
+    needs: [changes, build-win-xrt]
+    if: needs.changes.outputs.source == 'true'
+    uses: ./.github/workflows/model-extension-build.yml
+    with:
+      os: windows
+      runtime: XRT
+      package: fastflowlm-windows-${{ github.sha }}
+
+  build-win-extension-hrx:
+    name: Windows HRX model extension
+    needs: [changes, build-win-hrx]
+    if: needs.changes.outputs.source == 'true'
+    uses: ./.github/workflows/model-extension-build.yml
+    with:
+      os: windows
+      runtime: HRX
+      package: HRX-fastflowlm-windows-${{ github.sha }}
+
   # ── Linux tests ──────────────────────────────────────────────────────────
   # Only the test scripts and their assets are checked out, never the sources:
   # these jobs run a prebuilt package and compile nothing.
@@ -290,6 +338,74 @@ jobs:
           tier: ${{ needs.changes.outputs.tier }}
           suites: chat
           models: ${{ inputs.models || 'gemma4-it:e2b,gemma4-it:e4b' }}
+
+  test-lin-extension-xrt:
+    name: Test Linux XRT model extension
+    needs: [changes, build-lin-xrt-portable, build-lin-extension-xrt]
+    if: needs.changes.outputs.source == 'true'
+    runs-on: [self-hosted, linux, x64, npu, sweep]
+    timeout-minutes: 60
+    steps:
+      - *checkout-tests
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+          name: portable
+          path: package
+      - name: Download model extension
+        uses: actions/download-artifact@v4
+        with:
+          name: gemma4-open-linux-xrt
+          path: model-extension
+      - name: Prepare package
+        id: package
+        uses: ./.github/actions/install-package
+        with:
+          kind: portable
+          path: package
+      - name: Test
+        uses: ./.github/actions/npu-test
+        with:
+          flm-bin: ${{ steps.package.outputs.flm-bin }}
+          label: linux-xrt-model-extension
+          tier: ${{ needs.changes.outputs.tier }}
+          suites: chat
+          models: gemma4-open-it:e2b
+          model-extension: ${{ github.workspace }}/model-extension/extension.json
+
+  test-lin-extension-hrx:
+    name: Test Linux HRX model extension
+    needs: [changes, build-lin-hrx-portable, build-lin-extension-hrx]
+    if: needs.changes.outputs.source == 'true'
+    runs-on: [self-hosted, linux, x64, npu, sweep]
+    timeout-minutes: 60
+    steps:
+      - *checkout-tests
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+          name: HRX-portable
+          path: package
+      - name: Download model extension
+        uses: actions/download-artifact@v4
+        with:
+          name: gemma4-open-linux-hrx
+          path: model-extension
+      - name: Prepare package
+        id: package
+        uses: ./.github/actions/install-package
+        with:
+          kind: portable
+          path: package
+      - name: Test
+        uses: ./.github/actions/npu-test
+        with:
+          flm-bin: ${{ steps.package.outputs.flm-bin }}
+          label: linux-hrx-model-extension
+          tier: ${{ needs.changes.outputs.tier }}
+          suites: chat
+          models: gemma4-open-it:e2b
+          model-extension: ${{ github.workspace }}/model-extension/extension.json
 
   # The .deb and MSI install tests are off unless the repository variable
   # FLM_INSTALL_TESTS is "true": the runners cannot install yet (no
@@ -502,6 +618,74 @@ jobs:
           suites: chat
           models: ${{ inputs.models || 'gemma4-it:e2b,gemma4-it:e4b' }}
 
+  test-win-extension-xrt:
+    name: Test Windows XRT model extension
+    needs: [changes, build-win-xrt, build-win-extension-xrt]
+    if: needs.changes.outputs.source == 'true'
+    runs-on: [self-hosted, windows, x64, npu, sweep]
+    timeout-minutes: 60
+    steps:
+      - *checkout-tests
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+          name: fastflowlm-windows-${{ github.sha }}
+          path: package
+      - name: Download model extension
+        uses: actions/download-artifact@v4
+        with:
+          name: gemma4-open-windows-xrt
+          path: model-extension
+      - name: Prepare package
+        id: package
+        uses: ./.github/actions/install-package
+        with:
+          kind: portable
+          path: package
+      - name: Test
+        uses: ./.github/actions/npu-test
+        with:
+          flm-bin: ${{ steps.package.outputs.flm-bin }}
+          label: windows-xrt-model-extension
+          tier: ${{ needs.changes.outputs.tier }}
+          suites: chat
+          models: gemma4-open-it:e2b
+          model-extension: ${{ github.workspace }}/model-extension/extension.json
+
+  test-win-extension-hrx:
+    name: Test Windows HRX model extension
+    needs: [changes, build-win-hrx, build-win-extension-hrx]
+    if: needs.changes.outputs.source == 'true'
+    runs-on: [self-hosted, windows, x64, npu, sweep]
+    timeout-minutes: 60
+    steps:
+      - *checkout-tests
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+          name: HRX-fastflowlm-windows-${{ github.sha }}
+          path: package
+      - name: Download model extension
+        uses: actions/download-artifact@v4
+        with:
+          name: gemma4-open-windows-hrx
+          path: model-extension
+      - name: Prepare package
+        id: package
+        uses: ./.github/actions/install-package
+        with:
+          kind: portable
+          path: package
+      - name: Test
+        uses: ./.github/actions/npu-test
+        with:
+          flm-bin: ${{ steps.package.outputs.flm-bin }}
+          label: windows-hrx-model-extension
+          tier: ${{ needs.changes.outputs.tier }}
+          suites: chat
+          models: gemma4-open-it:e2b
+          model-extension: ${{ github.workspace }}/model-extension/extension.json
+
   install-win-msi:
     name: Install test Windows MSI
     needs: [changes, build-win-xrt]
@@ -546,15 +730,23 @@ jobs:
       - build-lin-hrx-deb
       - build-win-xrt
       - build-win-hrx
+      - build-lin-extension-xrt
+      - build-lin-extension-hrx
+      - build-win-extension-xrt
+      - build-win-extension-hrx
       - test-lin-xrt-portable
       - test-lin-hrx-portable
       - test-lin-source-portable
+      - test-lin-extension-xrt
+      - test-lin-extension-hrx
       - install-lin-xrt-deb
       - install-lin-hrx-deb
       - test-win-xrt
       - test-win-hipep
       - test-win-hrx
       - test-win-source
+      - test-win-extension-xrt
+      - test-win-extension-hrx
       - install-win-msi
     if: always()
     runs-on: ubuntu-latest
@@ -589,10 +781,14 @@ jobs:
             ${{ needs.build-win-xrt.result }}
             ${{ needs.test-lin-xrt-portable.result }} ${{ needs.test-win-xrt.result }}
             ${{ needs.test-win-hipep.result }}
+            ${{ needs.build-lin-extension-xrt.result }} ${{ needs.build-win-extension-xrt.result }}
+            ${{ needs.test-lin-extension-xrt.result }} ${{ needs.test-win-extension-xrt.result }}
           HRX: >-
             ${{ needs.build-lin-hrx-portable.result }} ${{ needs.build-lin-hrx-deb.result }}
             ${{ needs.build-win-hrx.result }}
             ${{ needs.test-lin-hrx-portable.result }} ${{ needs.test-win-hrx.result }}
+            ${{ needs.build-lin-extension-hrx.result }} ${{ needs.build-win-extension-hrx.result }}
+            ${{ needs.test-lin-extension-hrx.result }} ${{ needs.test-win-extension-hrx.result }}
         run: |
           verdict() {
             for result in $1; do

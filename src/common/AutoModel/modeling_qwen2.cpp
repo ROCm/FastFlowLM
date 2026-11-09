@@ -7,6 +7,7 @@
 
 
 #include "AutoModel/modeling_qwen2.hpp"
+#include "models/qwen2/flm/aie2p/qwen2_npu.hpp"
 
 /************              Qwen2 family            **************/
 Qwen2::Qwen2(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst) {}

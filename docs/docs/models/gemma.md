@@ -100,6 +100,7 @@ flm run gemma4-it:e2b
 - **Quantization:** Q4_1
 - **Max Context Length:** 128k tokens  
 - **Host memory:** the token embeddings and the per-layer embeddings are read straight from `model.q4nx` through a read-only memory map, one row per token, instead of being copied into RAM. This saves about 3.7 GiB of RAM (private memory right after loading: about 3.9 GiB before, 0.3 GiB now) with the same speed and the same output. Only the rows of tokens that were actually seen stay in memory, and the OS can drop them under memory pressure; if it does, a prompt full of new tokens takes a little longer to start (about 0.2 s for 4k tokens on an NVMe drive). On Windows, the loaded model's `model.q4nx` cannot be replaced or deleted, so stop the server before `flm remove` or `flm pull` of this model.
+- **Prefill speed:** the 18 layers that only reuse other layers' KV caches run as a single decode step on the last token, and the projections of the other 24 layers run on a block-float NPU kernel (`dequant_mm_bfp.xclbin`). On the CI runner (`flm bench`) prefill is about 26 % faster at 1k tokens, 82 % at 4k and 117 % at 16k than before, decode about 9 % faster; image and audio input are faster too. Nothing changes in the model files or the quantization.
 - **Default Context Length:** 64k tokens ([change default](https://fastflowlm.com/docs/instructions/cli/#-change-default-context-length-max))  
 - **[Set Context Length at Launch](https://fastflowlm.com/docs/instructions/cli/#-set-context-length-at-launch)**
 

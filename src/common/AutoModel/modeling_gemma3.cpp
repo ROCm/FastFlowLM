@@ -6,6 +6,7 @@
 /// \note This is a source file for the gemma3 class
 
 #include "AutoModel/modeling_gemma3.hpp"
+#include "models/gemma/flm/aie2p/gemma_npu.hpp"
 
 /************              Gemma3 family            **************/
 Gemma3::Gemma3(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "Gemma3") {}
