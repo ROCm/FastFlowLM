@@ -336,7 +336,8 @@ std::string Gemma4e::apply_chat_template(nlohmann::ordered_json& messages, nlohm
     return this->_render_chat_template(inputs, continue_final_message, opt);
 }
 
-bool Gemma4e::_continue_verbatim(std::vector<int>& tokens, std::optional<int> requested_max_new_tokens) {
+bool Gemma4e::_continue_verbatim(std::vector<int>& tokens, std::optional<int> requested_max_new_tokens,
+                                 std::vector<int>& rendered) {
     const std::vector<int>& ran = this->token_history;
     if (ran.empty() || static_cast<size_t>(this->lm_engine->get_current_context_length()) != ran.size()) {
         return false;
@@ -351,13 +352,41 @@ bool Gemma4e::_continue_verbatim(std::vector<int>& tokens, std::optional<int> re
     if (at == ran.end()) {
         return false;
     }
+    // After a continued turn the history holds the earlier replies as the engine ran them (with
+    // their empty thought channels), where the prompt renders them as continued_prompt_.rendered does.
+    const std::vector<int>& held = this->continued_prompt_.ran;
+    const std::vector<int>& held_as_rendered = this->continued_prompt_.rendered;
+    std::vector<int> spliced;
+    if (!held.empty() && !held_as_rendered.empty() && held.size() <= ran.size() && tokens.size() > held_as_rendered.size() &&
+        std::equal(held.begin(), held.end(), ran.begin()) &&
+        std::equal(held_as_rendered.begin(), held_as_rendered.end(), tokens.begin())) {
+        spliced = held;
+        spliced.insert(spliced.end(), tokens.begin() + held_as_rendered.size(), tokens.end());
+    }
+    const std::vector<int>& prompt = spliced.empty() ? tokens : spliced;
     const size_t start = static_cast<size_t>(at - ran.begin()) + header.size();
-    if (tokens.size() <= start || !std::equal(ran.begin(), ran.begin() + start, tokens.begin())) {
+    if (prompt.size() <= start || !std::equal(ran.begin(), ran.begin() + start, prompt.begin())) {
         return false;
     }
+    // A reply opens with its thought channel, which the template leaves out of earlier turns: a reply
+    // with a thought, or cut inside the channel, runs as rendered instead.
+    const auto reply = ran.begin() + start;
+    if (reply != ran.end() && *reply == think_start_id) {
+        const auto close = std::find(reply, ran.end(), think_end_id);
+        if (close == ran.end()) {
+            return false;
+        }
+        // an empty channel has the channel's name too
+        constexpr std::string_view kChannelName = "thought";
+        std::string thought = trim(this->tokenizer->decode(std::vector<int>(reply + 1, close)));
+        if (thought.rfind(kChannelName, 0) == 0) thought = trim(thought.substr(kChannelName.size()));
+        if (!thought.empty()) {
+            return false;
+        }
+    }
     // the prompt's copy of that reply ends at the first <turn|> after its header
-    const auto reply_end = std::find(tokens.begin() + start, tokens.end(), turn_end[0]);
-    if (reply_end == tokens.end()) {
+    const auto reply_end = std::find(prompt.begin() + start, prompt.end(), turn_end[0]);
+    if (reply_end == prompt.end()) {
         return false;
     }
     // an eos that ended the reply was run; a reply cut at the length limit lacks its last token
@@ -372,7 +401,7 @@ bool Gemma4e::_continue_verbatim(std::vector<int>& tokens, std::optional<int> re
         return trim(this->tokenizer->decode(std::vector<int>(begin, end)));
     };
     const std::string generated = content(ran.begin() + start, ended ? ran.end() - 1 : ran.end());
-    const std::string sent = content(tokens.begin() + start, reply_end);
+    const std::string sent = content(prompt.begin() + start, reply_end);
     std::vector<int> continued(ran);
     if (generated != sent) {
         // the client did get the token the engine did not run
@@ -382,14 +411,15 @@ bool Gemma4e::_continue_verbatim(std::vector<int>& tokens, std::optional<int> re
         const std::vector<int> rest = this->tokenizer->encode(sent.substr(generated.size()));
         continued.insert(continued.end(), rest.begin(), rest.end());
     }
-    continued.insert(continued.end(), ended ? reply_end + 1 : reply_end, tokens.end());
-    // the history keeps the thought channel the rendered prompt leaves out, so it can be the longer one
+    continued.insert(continued.end(), ended ? reply_end + 1 : reply_end, prompt.end());
+    // the history keeps the empty thought channels the rendered prompt leaves out, so it can be the longer one
     try {
         this->_shared_validate_capacity(continued.size(), requested_max_new_tokens);
     } catch (const ModelRequestError&) {
         return false;
     }
     header_print("FLM", "Continuing the " << ran.size() << " tokens the engine ran, last reply included");
+    rendered = std::move(tokens);
     tokens = std::move(continued);
     return true;
 }
@@ -684,9 +714,10 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     this->_prefix_legacy_path();
 
     // OGA cannot reuse a prompt that leaves the history it ran, so it runs on from that history instead
+    std::vector<int> rendered;
     const bool continued = meta_info.restore_allowed && !modal_tokens &&
                            this->backend_id() == flm::backend::kOgaHipepBackendId &&
-                           this->_continue_verbatim(tokens, input.requested_max_new_tokens);
+                           this->_continue_verbatim(tokens, input.requested_max_new_tokens, rendered);
 
     int restore_idx = -1;
     // The legacy checkpoint keeps only the rings: it relies on the global rows still being the ones it was taken with. A slot request
@@ -769,6 +800,7 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
 
     const bool has_multimodal = image_payload.num_images > 0 || audio_payload.num_audios > 0;
 
+    const size_t prompt_tokens = tokens.size();
     bool success = has_multimodal
         ? this->_shared_insert(meta_info, tokens, is_cancelled, &multi_modal_payload, last_image_token_index)
         : this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
@@ -778,6 +810,21 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     if (this->enable_think && !this->single_turn) {
         this->_checkpoint_history();
         int checkpoint_idx = this->lm_engine->checkpoint();
+    }
+    // a shorter history is not this prompt, which _shared_insert refused or a cancel cut short
+    if (continued && this->token_history.size() >= prompt_tokens) {
+        // Kept up to the header of the reply to come, which the next turn renders right after it, without the
+        // empty thought channel that ends the prompt when thinking is off.
+        const std::vector<int> header = this->tokenizer->encode("<|turn>model\n");
+        const auto through_header = [&](const std::vector<int>& prompt) {
+            const auto at = std::find_end(prompt.begin(), prompt.end(), header.begin(), header.end());
+            return at == prompt.end() ? std::vector<int>() : std::vector<int>(prompt.begin(), at + header.size());
+        };
+        this->continued_prompt_.rendered = through_header(rendered);
+        this->continued_prompt_.ran = through_header(this->token_history);
+    } else {
+        this->continued_prompt_.rendered.clear();
+        this->continued_prompt_.ran.clear();
     }
     
     return success;

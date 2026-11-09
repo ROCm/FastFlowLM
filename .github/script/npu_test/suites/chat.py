@@ -140,8 +140,9 @@ def _model_cases(ctx, server, model) -> None:
             # Reusing the first turn's KV cache is an optimisation not every
             # engine implements, so its absence is worth seeing, not failing.
             # oga-hipep continues the turn it ran when the reply comes back
-            # unchanged, as it does here.
-            expect(model.backend != "oga-hipep",
+            # unchanged and has no reasoning, as it does here unless the model
+            # always reasons.
+            expect(model.backend != "oga-hipep" or thinks,
                    f"turn 2 reported cached_tokens={second.cached_tokens}")
             warn(f"turn 2 reported cached_tokens={second.cached_tokens}")
 

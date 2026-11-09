@@ -156,18 +156,34 @@ void Qwen3_5VL::_load_vision_geometry() {
     this->vision_geometry = geometry;
 }
 
-bool Qwen3_5VL::_continue_verbatim(std::vector<int>& tokens, std::optional<int> requested_max_new_tokens) {
+bool Qwen3_5VL::_continue_verbatim(std::vector<int>& tokens, std::optional<int> requested_max_new_tokens,
+                                   std::vector<int>& rendered) {
     const std::vector<int>& ran = this->token_history;
     const std::vector<int>& held = this->checkpoint_his;
     const size_t cp = held.size();
-    if (cp == 0 || ran.size() <= cp || tokens.size() <= cp ||
+    const std::vector<int>& held_as_rendered = this->checkpoint_prompt_.empty() ? held : this->checkpoint_prompt_;
+    if (cp == 0 || ran.size() <= cp || tokens.size() <= held_as_rendered.size() ||
         static_cast<size_t>(this->lm_engine->get_current_context_length()) != ran.size() ||
-        !std::equal(held.begin(), held.end(), ran.begin()) || !std::equal(held.begin(), held.end(), tokens.begin())) {
+        !std::equal(held.begin(), held.end(), ran.begin()) ||
+        !std::equal(held_as_rendered.begin(), held_as_rendered.end(), tokens.begin())) {
         return false;
     }
+    // A reply opens with its reasoning block, which the template leaves out of earlier turns: a reply
+    // with reasoning, or cut inside that block, runs as rendered instead.
+    const auto reply = ran.begin() + cp;
+    if (*reply == this->think_start_id) {
+        const auto think_close = std::find(reply, ran.end(), this->think_end_id);
+        if (think_close == ran.end() ||
+            !trim_right(trim_left(this->tokenizer->decode(std::vector<int>(reply + 1, think_close)))).empty()) {
+            return false;
+        }
+    }
+    // the history the engine holds at the checkpoint, then the rest of the prompt
+    std::vector<int> prompt(held);
+    prompt.insert(prompt.end(), tokens.begin() + held_as_rendered.size(), tokens.end());
     // the prompt's copy of the last reply ends at the first <|im_end|> after the checkpoint
-    const auto reply_end = std::find(tokens.begin() + cp, tokens.end(), kImEndId);
-    if (reply_end == tokens.end()) return false;
+    const auto reply_end = std::find(prompt.begin() + cp, prompt.end(), kImEndId);
+    if (reply_end == prompt.end()) return false;
     // A reply's content follows its reasoning block; a reply cut inside that block has none.
     const auto content = [&](std::vector<int>::const_iterator begin, std::vector<int>::const_iterator end) {
         const auto close = std::find(std::make_reverse_iterator(end), std::make_reverse_iterator(begin), this->think_end_id);
@@ -176,7 +192,7 @@ bool Qwen3_5VL::_continue_verbatim(std::vector<int>& tokens, std::optional<int> 
         return this->tokenizer->decode(std::vector<int>(begin, end));
     };
     const std::string generated = trim_left(content(ran.begin() + cp, ran.end()));
-    const std::string sent = trim_right(trim_left(content(tokens.begin() + cp, reply_end)));
+    const std::string sent = trim_right(trim_left(content(prompt.begin() + cp, reply_end)));
     std::vector<int> continued(ran);
     if (trim_right(generated) != sent) {
         // A reply cut at the length limit lacks its last sampled token, which the client did get.
@@ -186,14 +202,15 @@ bool Qwen3_5VL::_continue_verbatim(std::vector<int>& tokens, std::optional<int> 
         const std::vector<int> rest = this->tokenizer->encode(sent.substr(generated.size()));
         continued.insert(continued.end(), rest.begin(), rest.end());
     }
-    continued.insert(continued.end(), reply_end, tokens.end());
-    // The history keeps the reasoning the rendered prompt leaves out, so it can be the longer one.
+    continued.insert(continued.end(), reply_end, prompt.end());
+    // The history keeps the empty reasoning blocks the rendered prompt leaves out, so it can be the longer one.
     try {
         this->_shared_validate_capacity(continued.size(), requested_max_new_tokens);
     } catch (const ModelRequestError&) {
         return false;
     }
     header_print("FLM", "Continuing the " << ran.size() << " tokens the engine ran, last reply included");
+    rendered = std::move(tokens);
     tokens = std::move(continued);
     return true;
 }
@@ -414,9 +431,10 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
 
     // An engine that would replay the whole history after a restore continues
     // the history it ran instead, when the prompt is that history going on.
+    std::vector<int> rendered;
     const bool continued = !slot_mode && meta_info.restore_allowed && this->backend_ &&
                            !this->backend_->keeps_state_on_restore() &&
-                           this->_continue_verbatim(tokens, input.requested_max_new_tokens);
+                           this->_continue_verbatim(tokens, input.requested_max_new_tokens, rendered);
 
     // hardware
     int restore_idx = -1;
@@ -519,6 +537,12 @@ bool Qwen3_5VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
     if (oga && checkpoint_his.size() >= prompt_tokens) {
         // a shorter history is the previous checkpoint, which a prompt _shared_insert refused leaves as it was
         this->checkpoint_image_hashes_ = std::move(oga_image_hashes);
+    }
+    if (continued && checkpoint_his.size() >= prompt_tokens) {
+        rendered.resize(rendered.size() - trim_tokens);
+        this->checkpoint_prompt_ = std::move(rendered);
+    } else {
+        this->checkpoint_prompt_.clear();
     }
     int checkpoint_idx = this->lm_engine->checkpoint();
     return success;

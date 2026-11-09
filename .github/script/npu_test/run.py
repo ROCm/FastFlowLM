@@ -19,6 +19,10 @@ from .harness import FAIL, Context, Result, configure_stdout
 from .plan import GPU_BACKENDS, TIERS, Plan, load_catalog
 from .suites import SUITES, ORDER
 
+# Per model. A GPU backend's models are large (qwen3.5-oga-hipep:9b is 7.5 GB)
+# and new to most runners, some of which download at a few MB/s.
+PULL_TIMEOUT = 90 * 60
+
 
 def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -100,6 +104,10 @@ def main(argv=None) -> int:
             print(catalog_error)
             ctx.record(Result("setup", "catalog", FAIL, detail=catalog_error))
         else:
+            if args.backend:
+                # Pulled first, the download counts against no request's timeout.
+                print(f"\n== setup: pull the {args.backend} models", flush=True)
+                ctx.pull(plan.chat(), PULL_TIMEOUT)
             for name in names:
                 ctx.run_suite(SUITES[name])
     finally:

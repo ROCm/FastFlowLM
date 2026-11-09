@@ -193,9 +193,13 @@ class Plan:
         self.families = set(families)
         self.only_models = only_models
         self.backend = backend  # empty: the NPU backends
+        # Models the run could not pull (Context.pull), which no suite tests.
+        self.unavailable: set[str] = set()
 
     def _serves(self, model_id: str) -> bool:
-        """Whether the backend under test runs this model."""
+        """Whether the backend under test runs this model, and it is not unavailable."""
+        if model_id in self.unavailable:
+            return False
         backend = self.catalog[model_id].backend
         return backend == self.backend if self.backend else backend not in GPU_BACKENDS
 
