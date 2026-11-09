@@ -35,6 +35,8 @@ constexpr int kVisionEnd = 248054;
 constexpr int kImagePad = 248056;
 constexpr int kThinkStart = 248068;
 constexpr int kThinkEnd = 248069;
+/// \brief vocabulary width of the sampler; the fake engine returns this many logits
+constexpr int kVocab = 64;
 std::vector<int> g_encoded_tokens;
 /// \brief encodings of particular text; any other text encodes to g_encoded_tokens
 std::map<std::string, std::vector<int>> g_encodings;
@@ -59,7 +61,7 @@ public:
         ++position;
         forwarded.push_back(token);
         Run({token});
-        return buffer<bf16>(1);
+        return buffer<bf16>(kVocab);
     }
     buffer<bf16> prefill(std::vector<int>& tokens, void* payload) override {
         if (position + static_cast<int>(tokens.size()) > static_cast<int>(max_length)) {
@@ -69,7 +71,7 @@ public:
         prefills.push_back(tokens);
         if (payload) vision = *static_cast<const flm::oga::OgaVisionInput*>(payload);
         Run(tokens);
-        return buffer<bf16>(1);
+        return buffer<bf16>(kVocab);
     }
     void set_context_length(int value) override { position = value; }
     void load_weights(Q4NX&) override {}
@@ -158,7 +160,7 @@ public:
         lm_engine = &backend_->engine();
         tokenizer = std::make_unique<Tokenizer>("");
         sampler_config config;
-        sampler = std::make_unique<Sampler>(64, config);
+        sampler = std::make_unique<Sampler>(kVocab, config);
         MAX_L = frontend_max_length;
         eos_token_ids = {kEos, kImEnd};
         bos_token_id = -1;
@@ -406,6 +408,67 @@ chat_meta_info_t SecondTurn(Harness& model, const std::vector<int>& reply, bool 
 
 const std::vector<int> kNewTurn{kImEnd, 198, 20, 21, kImEnd, 198, 30};
 
+/// \brief a later turn: `rendered` is the conversation as the template renders it, before the generation prompt
+chat_meta_info_t NextTurn(Harness& model, const std::vector<int>& rendered, bool think) {
+    std::vector<int> encoded(rendered);
+    encoded.push_back(kThinkStart);
+    if (think) {
+        encoded.push_back(198);
+    } else {
+        encoded.insert(encoded.end(), {271, kThinkEnd, 271});
+    }
+    g_encoded_tokens = encoded;
+    auto meta = Meta();
+    meta.restore_allowed = true;
+    auto input = TextInput();
+    Require(model.insert(meta, input), "next turn insert failed");
+    RequireHistoryMatchesEngine(model);
+    return meta;
+}
+
+void LaterTurnsContinueTheHistoryTheEngineRan(bool think) {
+    // each reply as generate() samples it, reasoning first when thinking; the template renders its content alone
+    const std::vector<std::vector<int>> contents{{100, 101, 102}, {103, 102}, {100, 103}};
+    std::vector<int> samples;
+    for (const auto& content : contents) {
+        if (!samples.empty()) samples.push_back(7);  // the insert's own sample
+        if (think) samples.insert(samples.end(), {110, kThinkEnd, 271});
+        samples.insert(samples.end(), content.begin(), content.end());
+        samples.push_back(kImEnd);
+    }
+    Harness model(128, 256);
+    FirstTurn(model, samples, 0, think);
+    std::vector<int> rendered{10, 11, 12, 13};
+    for (std::size_t turn = 0; turn < contents.size(); ++turn) {
+        const std::size_t ran = model.history().size();
+        const int user = 40 + 10 * static_cast<int>(turn);
+        const std::vector<int> new_turn{kImEnd, 198, user, user + 1, kImEnd, 198, 30};
+        rendered.insert(rendered.end(), contents[turn].begin(), contents[turn].end());
+        rendered.insert(rendered.end(), new_turn.begin(), new_turn.end());
+        const FakeEngine& engine = model.engine();
+        const int restores = engine.restores;
+        const std::uint64_t replayed = engine.replayed;
+        auto meta = NextTurn(model, rendered, think);
+        const std::string at = "turn " + std::to_string(turn + 2) + ": ";
+        if (think) {
+            // continuing would keep the reply's reasoning, which the template leaves out
+            Require(engine.restores == restores + 1, at + "a reply with reasoning must restore the checkpoint");
+            Require(model.history() == rendered, at + "the prompt must run as rendered");
+        } else {
+            Require(engine.restores == restores, at + "a continued history must not restore the checkpoint");
+            Require(engine.prefills.back() == new_turn, at + "only what follows the last reply may run");
+            Require(engine.replayed == replayed, at + "the earlier turns must not run again");
+            Require(meta.cached_prompt_tokens == static_cast<int>(ran),
+                    at + "the whole history the engine kept must count as cached");
+        }
+        if (turn + 1 < contents.size()) {
+            std::ostringstream output;
+            model.generate(meta, 0, output);
+            RequireHistoryMatchesEngine(model);
+        }
+    }
+}
+
 void TheSameReplyContinuesTheHistoryTheEngineRan() {
     Harness model;
     FirstTurn(model, {100, 101, 102, kImEnd}, 0, false);
@@ -432,14 +495,15 @@ void AReplyCutAtTheLimitRunsItsLastSampledTokenNext() {
     Require(meta.cached_prompt_tokens == 9, "the history the engine ran must count as cached");
 }
 
-void AReplyCutInsideItsReasoningContinuesToo() {
+void AReplyCutInsideItsReasoningRestoresTheCheckpoint() {
     Harness model;
     FirstTurn(model, {110, 110}, 2, true);
+    // the client got reasoning and no content, so the template renders the reply empty
     const auto meta = SecondTurn(model, {}, true);
-    std::vector<int> expected(kNewTurn.begin(), kNewTurn.end());
-    Require(model.engine().prefills.back() == expected, "an empty reply after open reasoning must continue");
-    Require(model.engine().restores == 0, "a continued history must not restore the checkpoint");
-    Require(meta.cached_prompt_tokens == 7, "the history with its reasoning must count as cached");
+    const FakeEngine& engine = model.engine();
+    Require(engine.restores == 1, "a reply cut inside its reasoning must restore the checkpoint");
+    Require(engine.prefills.back() == kNewTurn, "the prompt as rendered must follow the checkpoint");
+    Require(meta.cached_prompt_tokens == 0, "tokens the engine ran again must not count as cached");
 }
 
 void AnEditedReplyRestoresTheCheckpointAndReportsTheReplay() {
@@ -787,8 +851,10 @@ int main() {
     run("generate_with_prompt parity", GenerateWithPromptMatchesInsertThenGenerate);
     run("chunked prefill and decode run each token once", ChunkedPrefillAndDecodeRunEachTokenOnce);
     run("the same reply continues the engine's history", TheSameReplyContinuesTheHistoryTheEngineRan);
+    run("every later turn continues, thinking off", [] { LaterTurnsContinueTheHistoryTheEngineRan(false); });
+    run("every later turn runs as rendered, thinking on", [] { LaterTurnsContinueTheHistoryTheEngineRan(true); });
     run("a reply cut at its limit runs its last token next", AReplyCutAtTheLimitRunsItsLastSampledTokenNext);
-    run("a reply cut inside its reasoning continues", AReplyCutInsideItsReasoningContinuesToo);
+    run("a reply cut inside its reasoning restores", AReplyCutInsideItsReasoningRestoresTheCheckpoint);
     run("an edited reply restores and reports the replay", AnEditedReplyRestoresTheCheckpointAndReportsTheReplay);
     run("an engine that rewinds restores the checkpoint", AnEngineThatRewindsRestoresTheCheckpoint);
     run("OGA leaves the prefix match to the model", TheOgaBackendLeavesThePrefixMatchToTheModel);

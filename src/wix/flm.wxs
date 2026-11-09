@@ -25,6 +25,7 @@
 
   <?define SourceDir = ".\package"?>
   <?define XclbinsDir = "..\xclbins"?>
+  <?define SdkDir = ".\package\sdk"?>
 
   <Package Name="FLM"
            Manufacturer="FastFlowLM"
@@ -65,6 +66,11 @@
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="flm">
         <Directory Id="XCLBINSFOLDER" Name="xclbins" />
+        <Directory Id="SDKINCLUDEFOLDER" Name="include" />
+        <Directory Id="SDKLIBFOLDER" Name="lib">
+          <Directory Id="SDKCMAKEFOLDER" Name="cmake" />
+        </Directory>
+        <Directory Id="SDKSHAREFOLDER" Name="share" />
       </Directory>
     </StandardDirectory>
 
@@ -107,6 +113,13 @@
       <ComponentGroupRef Id="MainComponents" />
       <ComponentGroupRef Id="XclbinsComponents" />
       <ComponentGroupRef Id="ApplicationShortcuts" />
+    </Feature>
+
+    <!-- The same model-extension SDK the portable zip ships: header, CMake package, schemas -->
+    <Feature Id="ModelExtensionSdkFeature" Title="Model extension SDK" Level="1">
+      <ComponentGroupRef Id="SdkIncludeComponents" />
+      <ComponentGroupRef Id="SdkCMakeComponents" />
+      <ComponentGroupRef Id="SdkShareComponents" />
     </Feature>
 
     <Feature Id="DesktopShortcutsFeature" Title="Desktop shortcuts" Level="1000">
@@ -170,11 +183,11 @@
       <Component Id="Comp_qwen3_5vl_npu.dll" Guid="*">
         <File Id="File_qwen3_5vl_npu.dll" Source="$(SourceDir)\qwen3_5vl_npu.dll" KeyPath="yes" />
       </Component>
-      <Component Id="Comp_qwen3_5vl_flash.dll" Guid="*">
-        <File Id="File_qwen3_5vl_flash.dll" Source="$(SourceDir)\qwen3_5vl_flash.dll" KeyPath="yes" />
-      </Component>
       <Component Id="Comp_minicpm_v_4_7_npu.dll" Guid="*">
         <File Id="File_minicpm_v_4_7_npu.dll" Source="$(SourceDir)\minicpm_v_4_7_npu.dll" KeyPath="yes" />
+      </Component>
+      <Component Id="Comp_minicpm_ocr_npu.dll" Guid="*">
+        <File Id="File_minicpm_ocr_npu.dll" Source="$(SourceDir)\minicpm_ocr_npu.dll" KeyPath="yes" />
       </Component>
       <Component Id="Comp_minicpm_v_4_7_moe_npu.dll" Guid="*">
         <File Id="File_minicpm_v_4_7_moe_npu.dll" Source="$(SourceDir)\minicpm_v_4_7_moe_npu.dll" KeyPath="yes" />
@@ -208,6 +221,9 @@
       </Component>
       <Component Id="Comp_hunyuan_npu.dll" Guid="*">
         <File Id="File_hunyuan_npu.dll" Source="$(SourceDir)\hunyuan_npu.dll" KeyPath="yes" />
+      </Component>
+      <Component Id="Comp_hy_mem_npu.dll" Guid="*">
+        <File Id="File_hy_mem_npu.dll" Source="$(SourceDir)\hy_mem_npu.dll" KeyPath="yes" />
       </Component>
       <Component Id="Comp_lm_head.dll" Guid="*">
         <File Id="File_lm_head.dll" Source="$(SourceDir)\lm_head.dll" KeyPath="yes" />
@@ -270,6 +286,16 @@
     <!-- xclbins\* recursively, mirrors flm.iss's recursesubdirs Source entry -->
     <ComponentGroup Id="XclbinsComponents" Directory="XCLBINSFOLDER">
       <Files Include="$(XclbinsDir)\**" />
+    </ComponentGroup>
+
+    <ComponentGroup Id="SdkIncludeComponents" Directory="SDKINCLUDEFOLDER">
+      <Files Include="$(SdkDir)\include\**" />
+    </ComponentGroup>
+    <ComponentGroup Id="SdkCMakeComponents" Directory="SDKCMAKEFOLDER">
+      <Files Include="$(SdkDir)\lib\cmake\**" />
+    </ComponentGroup>
+    <ComponentGroup Id="SdkShareComponents" Directory="SDKSHAREFOLDER">
+      <Files Include="$(SdkDir)\share\**" />
     </ComponentGroup>
 
     <!-- Start Menu shortcut: always installed -->

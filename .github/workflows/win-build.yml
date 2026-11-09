@@ -127,6 +127,9 @@ jobs:
           }
 
           New-Item -ItemType Directory -Force $dist | Out-Null
+          cmake --install $build --prefix $dist `
+            --component ModelExtension --config Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           # Main executable
           Copy-Item -Path $build\flm.exe -Destination $dist\ -Force
@@ -194,6 +197,7 @@ jobs:
         uses: ./.github/actions/win-msi
         with:
           flm-exe: portable-dist/flm.exe
+          sdk: portable-dist
 
       - name: Upload MSI artifact
         uses: actions/upload-artifact@v4

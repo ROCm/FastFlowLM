@@ -14,7 +14,13 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              the whole ASR evaluation set
   suites     "all", or the comma-separated npu_test suites the change can
              affect when every changed file is scoped to some (an ASR-only
-             change runs asr, a d3-only change runs decision)
+             change runs asr, a d3-only change runs decision); "none" when
+             every changed file is oga-hipep code or a GPU catalog entry,
+             which no NPU job runs
+  hipep      true when the change can reach qwen3.5-oga-hipep:9b, which Test
+             Windows HIPEP runs on the GPU: when every suite runs, or a changed
+             file is oga-hipep code, a GPU catalog entry, the qwen3.5 frontend,
+             or a test of the chat and api suites that job runs
   summary    one line for the job log
 
 When in doubt it tests more: an all-zero or missing base (a new branch), or a
@@ -75,11 +81,10 @@ ENGINES = {
     # Qwen3VL_Flash derives from Qwen3VL and its engine includes qwen3vl_npu.
     ("qwen3vl",):                            ("qwen3vl", "qwen3vl-flash"),
     ("qwen3vl_flash",):                      ("qwen3vl-flash",),
-    # Qwen3_5VL_Flash derives from Qwen3_5VL (modeling_qwen3_5vl*.cpp) and runs its own engine, qwen3_5vl_flash.
-    ("qwen3_5vl",):                          ("qwen3.5", "qwen3.5-flash"),
-    ("qwen3_5vl_flash",):                    ("qwen3.5-flash",),
+    ("qwen3_5vl",):                          ("qwen3.5",),
     ("minicpm_v_4_7", "minicpm_v"):          ("minicpm-v-4.7",),
     ("minicpm_v_4_7_moe", "minicpm_v_moe"): ("minicpm-v-4.7-moe",),
+    ("minicpm_ocr",):                        ("minicpm-ocr",),
     ("qwen3_6_moe",):                        ("qwen3.6-moe",),
     # qwen3.8-dflash2 is the same engine with a draft package (Qwen3_8DFlash2 derives from Qwen3_8MTP).
     ("qwen3_8mtp", "qwen3_8_mtp"):           ("qwen3.8-mtp", "qwen3.8-dflash2"),
@@ -126,16 +131,23 @@ SUBSYSTEMS = (
     # src/detail builds the gemma4e engine from source; gemma4e_flash
     # includes it.
     ("gemma4e engine source", r"src/detail/", ("gemma4e", "gemma4e-flash")),
+    # An oga-hipep header that the qwen3.5 frontend includes in every package.
+    ("header the qwen3.5 frontend includes", r"src/include/oga/oga_vision\.hpp$", ("qwen3.5",)),
 )
 
 # The oga-hipep backend, in the Windows XRT package only, runs on the GPU the
 # catalog entries whose name ends in GPU_SUFFIX (model_list::backend_for_family).
-# No NPU model runs its code or those entries, so they name no family. They run
-# the chat suite: Test Windows HIPEP runs whenever it does, and tests the
-# backend on qwen3.5-oga-hipep:9b.
+# No NPU model runs its code (bar the header above) or those entries, so they
+# name no family and run no NPU job: Test Windows HIPEP tests them, on
+# qwen3.5-oga-hipep:9b.
 GPU_ONLY = re.compile(r"^(src/(common|include)/oga/|src/test/oga_hipep/)")
 GPU_SUFFIX = "-oga-hipep"
-GPU_SUITES = {"chat"}
+# The family of qwen3.5-oga-hipep:9b: a change to its frontend reaches that
+# model too, one to its NPU engine does not.
+GPU_FAMILIES = {"qwen3.5"}
+GPU_FRONTEND = re.compile(r"^src/(include|common)/AutoModel/")
+# The suites Test Windows HIPEP runs.
+GPU_SUITES = {"chat", "api"}
 
 # Tests of shared code kept in an engine's test directory, which name no family:
 # test_model_downloader tests src/pull, beside the phi4 corelib tests it came
@@ -178,6 +190,10 @@ TEST_SCOPES = (
     (r"\.github/script/npu_test/assets/vision/|\.github/script/npu_test/tools/make_vision_assets\.py$",
      {"chat"}),
     (r"src/test/(openai_api_test|openai_usage)/", {"api"}),
+    # The model-extension contracts run in cpu-tests.yml on every change; the
+    # Gemma4-open bundle and its NPU tests run with chat.
+    (r"src/test/(model_frontend|model_backend|model_list_platform|model_extension_\w+)/"
+     r"|src/schemas/|src/cmake/FastFlowLMModelExtension[^/]*\.cmake(\.in)?$", {"chat"}),
 )
 
 
@@ -247,6 +263,8 @@ class Decision:
     asr_full: bool = False
     # None: every suite. Otherwise the suites every changed file is scoped to.
     suites: Optional[set] = field(default_factory=set)
+    # A changed file reaches qwen3.5-oga-hipep:9b (every suite running does too).
+    hipep: bool = False
     reasons: list = field(default_factory=list)
 
     def all_suites(self, path: str) -> None:
@@ -258,18 +276,31 @@ class Decision:
         if self.suites is not None:
             self.suites |= names
 
+    def reach_hipep(self, reason: str) -> None:
+        self.hipep = True
+        self.reasons.append(reason)
+
+    def runs_hipep(self) -> bool:
+        return self.run_tests and (self.hipep or self.suites_value() == "all")
+
     def summary(self) -> str:
         if not self.run_tests:
             return "documentation only: NPU tests skipped"
+        hipep = "HIPEP: " + ("runs" if self.runs_hipep() else "skipped")
+        if self.suites_value() == "none":
+            return f"oga-hipep only: NPU tests skipped; {hipep}"
         parts = ["NPU tests run"]
         parts.append("families in full: " + (", ".join(sorted(self.families)) or "none"))
         parts.append("ASR: whole set" if self.asr_full else "ASR: pr subset")
         parts.append("suites: " + self.suites_value().replace(",", ", "))
+        parts.append(hipep)
         return "; ".join(parts)
 
     def suites_value(self) -> str:
-        if self.suites is None or not self.suites:
+        if self.suites is None:
             return "all"
+        if not self.suites:
+            return "none" if self.hipep else "all"
         return ",".join(s for s in SUITES if s in self.suites)
 
     def outputs(self) -> dict[str, str]:
@@ -277,6 +308,7 @@ class Decision:
                 "families": ",".join(sorted(self.families)),
                 "asr_full": str(self.asr_full).lower(),
                 "suites": self.suites_value(),
+                "hipep": str(self.runs_hipep()).lower(),
                 "summary": self.summary()}
 
 
@@ -342,17 +374,16 @@ def model_info_diff(base_text: Optional[str], head_text: Optional[str],
 
 def add_catalog_change(d: Decision, path: str, fams: set, gpu: list,
                        catalog: dict[str, dict], neither: str) -> None:
-    """A catalog file's changed entries: their NPU families in full, and the
-    chat suite for GPU entries. A change to neither is not scoped."""
+    """A catalog file's changed entries: their NPU families in full, and Test
+    Windows HIPEP for GPU entries. A change to neither is not scoped."""
     d.families |= fams
     if fams:
         d.add_suites(family_suites(fams, catalog))
-    if gpu:
-        d.add_suites(GPU_SUITES)
     if not fams and not gpu:
         d.all_suites(path)
     what = ", ".join(sorted(fams)) or ("no NPU family" if gpu else neither)
     if gpu:
+        d.hipep = True
         what += (f"; {len(gpu)} oga-hipep entr{'y' if len(gpu) == 1 else 'ies'}, e.g. {gpu[0]},"
                  " which only Test Windows HIPEP runs")
     d.reasons.append(f"{path}: entries changed in {what}")
@@ -431,19 +462,22 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
 
     gpu_code = []
     for path in code:
-        if GPU_ONLY.match(path):
-            gpu_code.append(path)
-            d.add_suites(GPU_SUITES)
-            continue
         hit = None if SHARED_TESTS.match(path) else engine_families(path, xclbin_families)
         if hit is None:
             hit = next(((why, fams) for why, pattern, fams in SUBSYSTEMS
                         if re.match(pattern, path)), None)
+        if GPU_ONLY.match(path):
+            gpu_code.append(path)
+            if hit is None:
+                continue
         if hit and hit[1]:
             new = set(hit[1]) - d.families
             if new:
                 d.families |= new
                 d.reasons.append(f"{path}: {hit[0]} -> {', '.join(sorted(new))}")
+            if GPU_FAMILIES & set(hit[1]) and GPU_FRONTEND.match(path):
+                d.reach_hipep(f"{path}: {hit[0]} also runs qwen3.5-oga-hipep:9b,"
+                              " which Test Windows HIPEP tests")
 
         # Which suites this file can affect.
         scope = None
@@ -453,6 +487,9 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
                 scope = names if names is not None else (
                     {m.group(1)} if m.group(1) in SUITES else None)
                 break
+        if scope and scope & GPU_SUITES:
+            d.reach_hipep(f"{path}: tests the {', '.join(sorted(scope & GPU_SUITES))} suite,"
+                          " which Test Windows HIPEP runs")
         if scope is None and ASR_ONLY.match(path):
             scope = {"asr"}
         if scope is None and hit and hit[1]:
@@ -463,7 +500,7 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
             d.add_suites(scope)
     if gpu_code:
         more = f" and {len(gpu_code) - 1} more" if len(gpu_code) > 1 else ""
-        d.reasons.append(f"{gpu_code[0]}{more}: oga-hipep backend, which only Test Windows HIPEP runs")
+        d.reach_hipep(f"{gpu_code[0]}{more}: oga-hipep backend, which Test Windows HIPEP tests")
 
     if MODEL_LIST in code:
         base = load_catalog(git.show("base", MODEL_LIST)) if git else {}

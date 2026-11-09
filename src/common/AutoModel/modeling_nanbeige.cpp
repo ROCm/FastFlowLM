@@ -6,6 +6,7 @@
 /// \note This is a source file for the nanbeige class
 
 #include "AutoModel/modeling_nanbeige.hpp"
+#include "models/nanbeige/flm/aie2p/nanbeige_npu.hpp"
 
 /************              Nanbeige family            **************/
 Nanbeige::Nanbeige(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "Nanbeige") {}
@@ -76,8 +77,6 @@ bool Nanbeige::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, st
 
     // hardware
     int restore_idx = -1;
-    nanbeige_npu *nanbeige_engine = dynamic_cast<nanbeige_npu*>(this->lm_engine);
-
     // The generation prompt ("<|im_start|>assistant\n") is how the next turn renders this reply's header: save the whole prompt.
     if (this->_prefix_slot_mode(meta_info, tokens.size(), 0)) {
         return this->_prefix_text_insert(meta_info, tokens, 0, "<|im_start|>user", is_cancelled);
@@ -85,7 +84,7 @@ bool Nanbeige::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, st
     this->_prefix_legacy_path();
 
     if (meta_info.restore_allowed) {
-        restore_idx = nanbeige_engine->restore();
+        restore_idx = this->lm_engine->restore();
         this->total_tokens = restore_idx;
         this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
     }
@@ -93,7 +92,7 @@ bool Nanbeige::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, st
     bool success = this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
 
     checkpoint_his = token_history;
-    int checkpoint_idx = nanbeige_engine->checkpoint();
+    int checkpoint_idx = this->lm_engine->checkpoint();
 
     return success;
 }

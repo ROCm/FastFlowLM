@@ -16,7 +16,7 @@ from ..harness import ServerGone, expect, skip, warn
 from ..server import ServerError
 
 NAME = "chat"
-DESCRIPTION = "per-model answer, streaming, two turns, non-streamed usage, vision"
+DESCRIPTION = "per-model answer, streaming, two turns, non-streamed usage, vision, stale image cache"
 
 # Greedy, so the content checks see the model's single most likely answer.
 # FLM keeps sampling and think settings on the loaded model between requests,
@@ -37,6 +37,9 @@ TRANSLATE_TURNS = ("Thank you very much.", "Good night.")
 
 COLOR_PROMPT = "What color is the square? Answer with one word."
 COLOR_IMAGES = {"red": "vision/red_square.png", "blue": "vision/blue_square.png"}
+# Turn 1 of vision-stale: a question whose answer cannot name the colour, so
+# the echoed history does not give the later colour question away.
+LOOK_PROMPT = "Look at this image. Reply with only the word OK."
 PHOTO = "test_image1.jpg"
 PHOTO_PROMPT = "Describe this image in one sentence."
 
@@ -137,8 +140,9 @@ def _model_cases(ctx, server, model) -> None:
             # Reusing the first turn's KV cache is an optimisation not every
             # engine implements, so its absence is worth seeing, not failing.
             # oga-hipep continues the turn it ran when the reply comes back
-            # unchanged, as it does here.
-            expect(model.backend != "oga-hipep",
+            # unchanged and has no reasoning, as it does here unless the model
+            # always reasons.
+            expect(model.backend != "oga-hipep" or thinks,
                    f"turn 2 reported cached_tokens={second.cached_tokens}")
             warn(f"turn 2 reported cached_tokens={second.cached_tokens}")
 
@@ -173,6 +177,67 @@ def _model_cases(ctx, server, model) -> None:
             expect(reply.content.strip(), f"{color} square: empty content")
             expect(color in reply.content.lower(),
                    f"{color} square: answer was {reply.content[:120]!r}")
+
+    if crashed():
+        return
+    with ctx.case(NAME, "vision-stale", model.id, server) as case:
+        # The red and blue squares are the same size, so they expand to the
+        # same tokens: a cache that matches on tokens alone takes a resend
+        # with turn 1's image swapped as a hit and answers from the old
+        # image. The resend must extend the cached prompt (a strict token
+        # prefix); an identical-length resend is the full-match path, which
+        # re-prefills anyway and so would pass without the fix.
+        if model.translation:
+            skip("translation model: does not answer questions about images")
+        if model.single_turn:
+            skip("single-turn model: the server rejects assistant messages")
+        red = _image_message(ctx.asset(COLOR_IMAGES["red"]), LOOK_PROMPT)
+        blue = _image_message(ctx.asset(COLOR_IMAGES["blue"]), LOOK_PROMPT)
+        first = chat([red], ANSWER_TOKENS)
+        case.data["turn1"] = _timing(first)
+        check_reply(first, "turn 1")
+        answer = first.content
+        if not answer.strip():
+            skip("turn 1 had only reasoning; no reply to echo as the assistant turn")
+        if any(color in answer.lower() for color in COLOR_IMAGES):
+            skip(f"turn 1 named a colour ({answer[:120]!r}), so the history gives the answer away")
+        # Echo turn 1's reply verbatim so the cached history is a token prefix.
+        tail = [{"role": "assistant", "content": answer},
+                {"role": "user", "content": COLOR_PROMPT}]
+        notes = []
+
+        # Turn 1's image replaced by a different same-size one. A fixed
+        # engine sees the image hashes differ and drops the cache from that
+        # image on, so few or no cached tokens is the correct outcome here.
+        resent = chat([blue] + tail, ANSWER_TOKENS)
+        case.data["resent"] = {**_timing(resent), "content": resent.content[:120],
+                               "cached_tokens": resent.cached_tokens}
+        expect(resent.content.strip(), "resent with blue: empty content")
+        expect("blue" in resent.content.lower(),
+               f"turn-1 image replaced by blue, answer was {resent.content[:120]!r}: "
+               f"stale red image state reused")
+        if (resent.cached_tokens or 0) >= first.usage.get("prompt_tokens", 1 << 30):
+            notes.append(f"resent with blue reported cached_tokens={resent.cached_tokens}, "
+                         f"covering all of turn 1's prompt including the replaced image")
+
+        # Control: the same conversation with the original image must still
+        # see red, and should reuse the cache. Turn 1 is sent again first so
+        # the cache holds red and the control extends it.
+        again = chat([red], ANSWER_TOKENS)
+        check_reply(again, "turn 1 again")
+        control = chat([red] + tail, ANSWER_TOKENS)
+        case.data["control"] = {**_timing(control), "content": control.content[:120],
+                                "cached_tokens": control.cached_tokens}
+        expect(control.content.strip(), "control with red: empty content")
+        expect("red" in control.content.lower(),
+               f"control with the original red image, answer was {control.content[:120]!r}")
+        if not control.cached_tokens:
+            # As in stream-two-turns: reuse is an optimisation, so a miss is
+            # worth seeing, not failing.
+            notes.append(f"control reported cached_tokens={control.cached_tokens}: "
+                         f"the cache was not reused for an unchanged image")
+        if notes:
+            warn("; ".join(notes))
 
     if crashed():
         return

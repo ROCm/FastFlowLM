@@ -27,37 +27,10 @@
 #include "prompt_reuse.hpp"
 #include "lm_config.hpp"
 #include "AutoModel/model_backend.hpp"
-#include "models/llama/flm/aie2p/llama_npu.hpp"
-#include "models/qwen2/flm/aie2p/qwen2_npu.hpp"
-#include "models/qwen3/flm/aie2p/qwen3_npu.hpp"
-#include "models/qwen2vl/flm/aie2p/qwen2vl_npu.hpp"
-#include "models/qwen3vl/flm/aie2p/qwen3vl_npu.hpp"
-#include "models/qwen3vl_flash/flm/aie2p/qwen3vl_flash.hpp"
-#include "models/qwen3_5vl/flm/aie2p/qwen3_5vl_npu.hpp"
-#include "models/qwen3_5vl_flash/flm/aie2p/qwen3_5vl_flash.hpp"
-#include "models/minicpm_v_4_7/flm/aie2p/minicpm_v_4_7_npu.hpp"
-#include "models/minicpm_v_4_7_moe/flm/aie2p/minicpm_v_4_7_moe_npu.hpp"
-#include "models/qwen3_6_moe/flm/aie2p/qwen3_6_moe_npu.hpp"
-#include "models/qwen3_8mtp/flm/aie2p/qwen3_8mtp_npu.hpp"
-#include "models/gemma/flm/aie2p/gemma_npu.hpp"
-#include "models/gemma_text/flm/aie2p/gemma_text_npu.hpp"
-#include "models/gemma4e/flm/aie2p/gemma4e_npu.hpp"
-#include "models/gemma4e_flash/flm/aie2p/gemma4e_flash.hpp"
-#include "models/gemma4e_dflash/flm/aie2p/gemma4e_dflash.hpp"
-#include "models/gemma4e_dflash_flash/flm/aie2p/gemma4e_dflash_flash.hpp"
-#include "models/gemma4_12b/flm/aie2p/gemma4_12b_npu.hpp"
-#include "models/lfm2/flm/aie2p/lfm2_npu.hpp"
-#include "models/lfm3/flm/aie2p/lfm3_npu.hpp"
-#include "models/phi4/flm/aie2p/phi4_npu.hpp"
-#include "models/gpt_oss/flm/aie2p/gpt_oss_npu.hpp"
-#include "models/nanbeige/flm/aie2p/nanbeige_npu.hpp"
-#include "models/hunyuan/flm/aie2p/hunyuan_npu.hpp"
 #include "tokenizer/tokenizer.hpp"
 #include "modules/sampler.hpp"
 #include "utils/utils.hpp"
 #include "utils/profiler.hpp"
-#include "tensor_utils/q4_npu_eXpress.hpp"
-#include "npu_utils/npu_utils.hpp"
 #include "minja/chat-template.hpp"
 #include "chat/chat_format.hpp"
 #include "chat/chat_constraint.hpp"
@@ -198,6 +171,8 @@ protected:
 	std::string draft_model_path = "";
 	/// \brief the execution backend, which owns the engine
 	std::unique_ptr<flm::backend::ModelBackend> backend_ = nullptr;
+	/// \brief implementation selected for backend_
+	std::string backend_provider_;
 	/// \brief a non-owning view of backend_'s engine, or null when none is loaded
 	causal_lm* lm_engine = nullptr;
 	std::unique_ptr<Tokenizer> tokenizer = nullptr;
@@ -206,7 +181,7 @@ protected:
 	std::string current_model = "";
 	std::vector<int> token_history;
 	flm_rt::device* npu_device_inst = nullptr;
-	std::unique_ptr<npu_xclbin_manager> npu = nullptr;
+	std::unique_ptr<npu_xclbin_manager> npu;
 	bool enable_preemption = false;
     std::vector<int> checkpoint_his;
 	/// \brief dump the undecorated model output to stdout once a turn ends
@@ -268,7 +243,9 @@ protected:
 
 
 	void _shared_load_model(std::string model_path, json model_info, int default_context_length = -1, bool enable_preemption = false);
-	void _shared_initialize_model_state(std::string model_path, json model_info, int context_length);
+	void _shared_initialize_model_state(
+		std::string model_path, json model_info, int context_length,
+		const std::string& asset_root = "");
 	/// true if model_path + the entry's draft package are what is already loaded
 	bool _shared_is_same_model(const std::string& model_path, const json& model_info) const;
 	void _shared_initialize_legacy_npu(bool enable_preemption);
@@ -288,7 +265,7 @@ protected:
 	///       for the frontend is the tokenizer, the chat template and the sampler.
 	/// \throws std::runtime_error if the backend is unknown, unavailable for the
 	///         model, or cannot honour the requested preemption/context length
-	void _shared_load_backend(std::string model_path, json model_info, int default_context_length = -1, bool enable_preemption = false, const std::string& requested_backend = "", const nlohmann::json* tokenizer_config = nullptr);
+	void _shared_load_backend(std::string model_path, json model_info, int default_context_length = -1, bool enable_preemption = false, const std::string& requested_backend = "", const nlohmann::json* tokenizer_config = nullptr, bool initialize_host_frontend = true, const std::string& frontend_provider = flm::backend::kBuiltinProviderId);
 
 	/// \brief Drop the conversation after a failed inference
 	/// \param poisoned whether the engine can no longer be driven at all
@@ -318,13 +295,37 @@ protected:
 	/// \brief decide how much of a prompt with media the engine keeps, before the model trims its payload
 	/// \param tokens the prompt exactly as it will go to _shared_insert / _prefix_insert (after any restore or slot
 	///        resume, with the generation-prompt tokens the model feeds itself already cut)
-	/// \param media its images and audio clips (see prompt_reuse.hpp)
+	/// \param media its images and audio clips (see prompt_reuse.hpp), with their content hashes
 	/// \return the plan: drop skipped_media[kind] leading items of each payload list and pass media_end as first_len_run
 	/// \note Clears the context when the plan says so, so the _shared_insert that follows skips exactly plan.skip;
 	///       _shared_insert checks that it does when it gets a payload.
 	prompt_reuse_t _plan_reuse(const std::vector<int>& tokens, const std::vector<prompt_media_t>& media);
 	/// \brief the skip _plan_reuse() promised the next _shared_insert with a payload
 	std::optional<size_t> planned_skip_;
+	/// \brief the items (with hashes) of the prompt _plan_reuse() planned; token_history's once _shared_insert read it in
+	std::optional<std::vector<prompt_media_t>> planned_media_;
+	/// \brief the images and audio clips token_history holds, with their content hashes (see plan_prompt_reuse)
+	/// \note nullopt after a prefix-slot resume: the slot cache compared the image hashes itself.
+	std::optional<std::vector<prompt_media_t>> history_media_ = std::vector<prompt_media_t>{};
+	/// \brief the same for checkpoint_his
+	std::optional<std::vector<prompt_media_t>> checkpoint_media_ = std::vector<prompt_media_t>{};
+	/// \brief take the single checkpoint's token history (checkpoint_his) from token_history, with its media
+	void _checkpoint_history() {
+		this->checkpoint_his = this->token_history;
+		this->checkpoint_media_ = this->history_media_;
+	}
+	/// \brief token_history (and its media) back to the single checkpoint's, after lm_engine->restore()
+	void _restore_history() {
+		this->token_history = this->checkpoint_his;
+		this->history_media_ = this->checkpoint_media_;
+	}
+	/// \brief forget the media of token_history and checkpoint_his, and any plan (with the histories themselves)
+	void _forget_history_media() {
+		this->history_media_ = std::vector<prompt_media_t>{};
+		this->checkpoint_media_ = std::vector<prompt_media_t>{};
+		this->planned_skip_.reset();
+		this->planned_media_.reset();
+	}
 
 	// ---- prefix slot cache (see prefix_slot_cache.hpp) ---------------------------------------
 	// Steps every model family with engine snapshots shares; the model supplies the tokens, the image
@@ -608,7 +609,15 @@ public:
 	/// \brief The text a token adds to the output, as generate() writes it
 	/// \note Bytes, not necessarily whole UTF-8 characters: a byte level token
 	///       can carry part of one.
-	std::string token_text(int token);
+	virtual std::string token_text(int token);
+
+	/// \brief Encode text with this frontend's tokenizer.
+	/// \note Extension frontends override this instead of exposing a C++
+	///       Tokenizer object across the stable ABI.
+	virtual std::vector<int> encode_text(const std::string& text);
+
+	/// \brief Path used by the host grammar engine for this tokenizer.
+	virtual std::string tokenizer_json_path() const;
 
 	/// \brief Whether every output token goes through _sample(), so logprobs can be reported
 	virtual bool supports_logprobs() const {
@@ -627,12 +636,13 @@ public:
 	/// \param text the text to benchmark
 	/// \return a pair of the number of tokens and the text that produce 1000 tokens
 	std::pair<int, std::string> prepare_benchmark(std::string& text){
-		std::vector<int> tokens = this->tokenizer->encode(text);
+		std::vector<int> tokens = this->encode_text(text);
 		int num_tokens = tokens.size();
 		std::string benchmark_text = text;
 		if (num_tokens > 1000 - 32) {
 			tokens.resize(1000 - 32); // considering that the chat template always add some tokens to it
-			benchmark_text = this->tokenizer->decode(tokens);
+			benchmark_text.clear();
+			for (int token : tokens) benchmark_text += this->token_text(token);
 		}
 		return { num_tokens, benchmark_text };
 	}

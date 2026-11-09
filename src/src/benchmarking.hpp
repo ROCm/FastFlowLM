@@ -276,13 +276,14 @@ BenchmarkResults_t run_benchmarks(std::string model_tag, std::string bench_confi
         input_file.close();
     }
 
-    std::unique_ptr<AutoModel> auto_chat_engine;
+    flm::frontend::FrontendPtr auto_chat_engine;
     if (!availble_models.is_model_supported(model_tag)) {
         header_print_r("ERROR", "Model not found: " << model_tag << "; Please check with `flm list` and try again.");
         return results;
     }
     auto [new_tag, model_info] = availble_models.get_model_info(model_tag);
-    std::pair<std::string, std::unique_ptr<AutoModel>> auto_model = get_auto_model(new_tag, availble_models, npu_device);
+    auto auto_model =
+        get_auto_model(new_tag, availble_models, npu_device);
     auto_chat_engine = std::move(auto_model.second);
 
     bool single_turn = model_info.contains("label") &&

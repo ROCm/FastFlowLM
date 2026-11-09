@@ -20,11 +20,11 @@ private:
     void setup_tokenizer(std::string model_path);
 
     /// \brief Keep what the engine ran when the prompt goes on from its last reply
-    /// \note The template renders a past reply as its final message alone, so the
-    ///       prompt leaves the engine's history where the reply's analysis began.
-    ///       When the prompt's copy of the reply is the final message the engine
+    /// \note The template renders a past reply as its final message alone. When
+    ///       the prompt's copy of the reply is the final message the engine
     ///       generated, the prompt is rewritten to the engine's history plus what
-    ///       follows the reply.
+    ///       follows the reply, unless the reply has analysis, which would stay in
+    ///       the context the template leaves it out of: that turn runs as rendered.
     /// \return whether `tokens` now continues token_history
     bool _continue_verbatim(std::vector<int>& tokens, std::optional<int> requested_max_new_tokens);
 

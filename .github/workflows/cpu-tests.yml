@@ -105,3 +105,79 @@ jobs:
           cmake -S src/test/prompt_reuse -B build-prompt-reuse -DCMAKE_BUILD_TYPE=Release
           cmake --build build-prompt-reuse -j"$(nproc)"
           ctest --test-dir build-prompt-reuse --output-on-failure
+
+  # PrefixSlotCache (src/common/prefix_slot_cache.cpp) against a fake engine: which snapshot a prompt resumes from,
+  # eviction, and that a snapshot is only reused for the same images (content hashes). CPU only.
+  prefix-slot-cache:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Build and run the prefix slot cache test
+        run: |
+          cmake -S src/test/prefix_slot_cache -B build-prefix-slot-cache -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-prefix-slot-cache -j"$(nproc)"
+          ctest --test-dir build-prefix-slot-cache --output-on-failure
+
+  # Model extensions (src/common/AutoModel/model_extension_*, model_frontend.cpp, model_backend.cpp): the
+  # stable C ABI, manifest and catalog-overlay checks and registry rules, against fake extensions and stub
+  # runtimes, for each NPU runtime. CPU only, no NPU.
+  model-extension-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      # the grammar engine and tokenizer headers automodel.cpp builds against; nothing is built from tokenizers-cpp
+      - name: Checkout submodules
+        run: |
+          for attempt in 1 2 3; do
+            git submodule update --init --depth 1 third_party/xgrammar third_party/tokenizers-cpp &&
+              git -C third_party/xgrammar submodule update --init --depth 1 3rdparty/dlpack && exit 0
+            echo "Submodule fetch failed (attempt ${attempt}), retrying..."
+            sleep 10
+          done
+          exit 1
+      - name: Build and run the model-extension contracts
+        run: |
+          set -euo pipefail
+          for hrx in OFF ON; do
+            cmake -S src/test/model_extension_contracts -B "build-contracts-hrx-${hrx}" \
+              -DCMAKE_BUILD_TYPE=Release -DFLM_USE_HRX="${hrx}"
+            cmake --build "build-contracts-hrx-${hrx}" -j"$(nproc)"
+            ctest --test-dir "build-contracts-hrx-${hrx}" --output-on-failure
+          done
+
+  # The same contracts on Windows, where extensions load as DLLs.
+  model-extension-contracts-windows:
+    runs-on: windows-2025
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Checkout submodules
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            git submodule update --init --depth 1 third_party/xgrammar third_party/tokenizers-cpp &&
+              git -C third_party/xgrammar submodule update --init --depth 1 3rdparty/dlpack && exit 0
+            echo "Submodule fetch failed (attempt ${attempt}), retrying..."
+            sleep 10
+          done
+          exit 1
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      # Ninja under the MSVC environment instead of the Visual Studio generator, which builds one target at a time.
+      - name: Build and run the model-extension contracts
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          foreach ($hrx in "OFF", "ON") {
+            cmake -S src/test/model_extension_contracts -B "build-contracts-hrx-$hrx" -G Ninja `
+              -DCMAKE_BUILD_TYPE=Release "-DFLM_USE_HRX=$hrx"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            cmake --build "build-contracts-hrx-$hrx" --parallel
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            ctest --test-dir "build-contracts-hrx-$hrx" --output-on-failure
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }

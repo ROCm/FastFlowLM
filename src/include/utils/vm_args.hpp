@@ -25,6 +25,9 @@ inline void print_help(po::options_description& general) {
     std::cout << "  serve <model_tag>   - Start the  server" << std::endl;
     std::cout << "  pull <model_tag>    - Download model files if not present" << std::endl;
     std::cout << "  remove <model_tag>  - Remove a model" << std::endl;
+#if defined(FLM_ENABLE_OGA_HIPEP)
+    std::cout << "  uninstall hipep     - Remove the hip-ep runtime flm installed for oga-hipep models" << std::endl;
+#endif
     std::cout << "  check <model_tag>   - Check a model" << std::endl;
     std::cout << "  list                - List all available models" << std::endl;
     std::cout << "  version             - Show version information" << std::endl;
@@ -56,6 +59,7 @@ inline void print_help(po::options_description& general) {
     std::cout << "\tflm serve -e embed-gemma:300m" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --modelscope 1" << std::endl;
     std::cout << "\tflm serve qwen3vl-it:4b --img-pre-resize 1" << std::endl;
+    std::cout << "\tflm bench llama3.2:1b --modelscope 1" << std::endl;
     std::cout << "\tflm list" << std::endl;
     std::cout << "\tflm list --quiet" << std::endl;
     std::cout << "\tflm list --filter installed" << std::endl;
@@ -102,6 +106,10 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
              "Set context length")
             ("backend", po::value<std::string>(&parsed_args.backend)->default_value(""),
              "Execution backend to run the model on (default: the model's own). Overrides FLM_BACKEND")
+            ("model-extension",
+             po::value<std::vector<std::string>>(
+                 &parsed_args.model_extensions)->composing(),
+             "Load a model-extension manifest (repeatable)")
             ("prefill-chunk-len,pcl", po::value<int>(&parsed_args.prefill_chunk_len)->default_value(-1),
              "Set prefill chunk length")
             ("prefix-cache-mb", po::value<int>(&parsed_args.prefix_cache_mb)->default_value(-1),
@@ -259,6 +267,11 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
                 std::cerr << "Error: Model tag is required for command '" << parsed_args.command << "'" << std::endl;
                 return false;
             }
+        }
+        if (parsed_args.command == "uninstall" && parsed_args.model_tag != "hipep" &&
+            parsed_args.model_tag != "hip-ep") {
+            std::cerr << "Error: flm uninstall removes only the hip-ep runtime: run 'flm uninstall hipep'" << std::endl;
+            return false;
         }
 
         return true;

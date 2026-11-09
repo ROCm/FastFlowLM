@@ -112,6 +112,9 @@ std::optional<FileVersion> ReadFileVersion(const std::filesystem::path& file);
 /// \brief the value of an environment variable as a path, empty when it is unset
 using PackageEnvironment = std::function<std::filesystem::path(const wchar_t* name)>;
 
+/// \brief the PackageEnvironment of this process
+std::filesystem::path EnvironmentPath(const wchar_t* name);
+
 /// \brief where discovery looked, in the order it tried
 struct PackageSearch {
     std::vector<PackageCandidate> candidates;

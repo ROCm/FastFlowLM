@@ -4,7 +4,8 @@
 /// \date 2025-10-01
 /// \version 0.9.24
 /// \note This is a source file for the gpt-oss class
-#include "AutoModel/modeling_gpt_oss.hpp"   
+#include "AutoModel/modeling_gpt_oss.hpp"
+#include "models/gpt_oss/flm/aie2p/gpt_oss_npu.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -85,14 +86,28 @@ bool GPT_OSS::_continue_verbatim(std::vector<int>& tokens, std::optional<int> re
     if (reply_end == tokens.end()) {
         return false;
     }
+    const auto channel_name = [&](std::vector<int>::const_iterator open, std::vector<int>::const_iterator body) {
+        const std::string header = this->tokenizer->decode(std::vector<int>(open, body));
+        return header.substr(0, header.find_first_of(" \t\r\n<"));
+    };
+    // The template leaves the analysis of earlier replies out, so a reply with analysis runs as rendered.
+    for (auto open = std::find(ran.begin() + cp, ran.end(), channel[0]); open != ran.end();
+         open = std::find(open + 1, ran.end(), channel[0])) {
+        const auto body = std::find(open + 1, ran.end(), message[0]);
+        if (body == ran.end()) break;
+        const auto stop = std::find(body + 1, ran.end(), end[0]);
+        if (channel_name(open + 1, body) == "analysis" &&
+            !trim_right(trim_left(this->tokenizer->decode(std::vector<int>(body + 1, stop)))).empty()) {
+            return false;
+        }
+    }
     // The text of the last message in [begin, stop), when that message is on the final channel.
     const auto final_text = [&](std::vector<int>::const_iterator begin, std::vector<int>::const_iterator stop) -> std::optional<std::string> {
         const auto open = std::find(std::make_reverse_iterator(stop), std::make_reverse_iterator(begin), channel[0]);
         if (open == std::make_reverse_iterator(begin)) return std::nullopt;
         const auto body = std::find(open.base(), stop, message[0]);
         if (body == stop) return std::nullopt;
-        const std::string header = this->tokenizer->decode(std::vector<int>(open.base(), body));
-        if (header.substr(0, header.find_first_of(" \t\r\n<")) != "final") return std::nullopt;
+        if (channel_name(open.base(), body) != "final") return std::nullopt;
         return this->tokenizer->decode(std::vector<int>(body + 1, stop));
     };
     const std::optional<std::string> generated_text = final_text(ran.begin() + cp, ran.end());
@@ -112,7 +127,7 @@ bool GPT_OSS::_continue_verbatim(std::vector<int>& tokens, std::optional<int> re
         continued.insert(continued.end(), rest.begin(), rest.end());
     }
     continued.insert(continued.end(), reply_end, tokens.end());
-    // the history keeps the analysis the rendered prompt leaves out, so it can be the longer one
+    // the history keeps an empty analysis the rendered prompt leaves out, so it can be the longer one
     try {
         this->_shared_validate_capacity(continued.size(), requested_max_new_tokens);
     } catch (const ModelRequestError&) {

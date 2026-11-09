@@ -7,6 +7,7 @@
 
 
 #include "AutoModel/modeling_minicpm_v.hpp"
+#include "models/minicpm_v_4_7/flm/aie2p/minicpm_v_4_7_npu.hpp"
 
 #include <cstdlib>
 #include <fstream>
@@ -152,7 +153,15 @@ bool MiniCPM_V::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
     // Each picture's whole placeholder, <image_id> through its last </slice> / </image>: the
     // prompt cache must not split it, and the first prefill chunk must hold it whole.
     std::vector<prompt_media_t> media;
+    // Content of each VIEW of the pictures, over the full payload: the slot cache keys on these, and each
+    // picture's media hash folds its views so a swapped image of the same geometry is not reused.
+    std::vector<uint64_t> image_hashes;
+    if (!layouts.empty()) {
+        auto* eng = reinterpret_cast<minicpm_v_4_7_npu*>(this->lm_engine);
+        image_hashes = prefix_image_hashes(image_payload, eng->MINICPM_V_PATCH_SIZE, eng->MINICPM_V_TEMPORAL_PATCH_SIZE);
+    }
     {
+        size_t first_view = 0;
         size_t extra = 0;
         for (const auto& l : layouts) extra += (size_t)l.tokens + 16 + 3 * (size_t)l.views;
         tokens.reserve(tokens_init.size() + extra);
@@ -173,6 +182,12 @@ bool MiniCPM_V::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
             m.begin = tokens.size();
             tokens.insert(tokens.end(), ph.begin(), ph.end());
             m.end = tokens.size();
+            // seed: the slice grid; bytes: its views' hashes (each already covers that view's grid and pixels)
+            const image_layout& l = layouts[picture];
+            const uint64_t seed = 0xcbf29ce484222325ull ^ ((uint64_t)l.views << 40 | (uint64_t)l.rows << 20 | (uint64_t)l.cols);
+            m.hash = prefix_hash_bytes(image_hashes.data() + first_view, (size_t)l.views * sizeof(uint64_t), seed);
+            if (m.hash == 0) m.hash = 1; // 0 means "not hashed"
+            first_view += (size_t)l.views;
             media.push_back(m);
             picture++;
         }
@@ -193,11 +208,8 @@ bool MiniCPM_V::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
     const bool slot_mode = this->_prefix_slot_mode(meta_info, tokens.size(), think_trim);
     size_t match_len = 0;
     std::vector<int> full_tokens;          // what this prompt leaves in the engine
-    std::vector<uint64_t> image_hashes;    // content of each view of its pictures
     if (slot_mode) {
-        minicpm_v_4_7_npu* slot_eng = dynamic_cast<minicpm_v_4_7_npu*>(this->lm_engine);
         full_tokens.assign(tokens.begin(), tokens.end() - think_trim);
-        image_hashes = prefix_image_hashes(image_payload, slot_eng->MINICPM_V_PATCH_SIZE, slot_eng->MINICPM_V_TEMPORAL_PATCH_SIZE);
         match_len = this->_prefix_resume(this->prefix_cache_, full_tokens, image_hashes);
         // The single checkpoint keeps only the recurrent state and relies on the attention rows staying as they were: a slot request
         // overwrites them, so drop its token history; the path below then has nothing to restore.
@@ -211,7 +223,7 @@ bool MiniCPM_V::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
         const int restore_idx = this->lm_engine->restore();
         if (restore_idx >= 0) {
             this->total_tokens = restore_idx;
-            this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
+            this->_restore_history(); // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
         }
     }
 
@@ -287,7 +299,7 @@ bool MiniCPM_V::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
         this->fail_inference();
     }
 
-    checkpoint_his = token_history;
+    this->_checkpoint_history();
     this->lm_engine->checkpoint();
     return success;
 }

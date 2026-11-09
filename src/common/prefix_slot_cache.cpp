@@ -126,7 +126,8 @@ PrefixSlotCache::resume_t PrefixSlotCache::resume(const std::vector<int>& full_t
             continue;
         }
         if (!has_prefix(full_tokens, slot.tokens)) continue;
-        if (slot.image_hashes.size() > image_hashes.size() ||
+        // every picture the slot holds must be one of the prompt's: a picture saved without a hash could be any
+        if (slot.image_hashes.size() < count_image_runs(slot.tokens, len) || slot.image_hashes.size() > image_hashes.size() ||
             !std::equal(slot.image_hashes.begin(), slot.image_hashes.end(), image_hashes.begin())) { images_differ = true; continue; }
         int ancestor = -1;
         const size_t head = static_cast<size_t>(slot.kv_from());
@@ -189,12 +190,35 @@ void PrefixSlotCache::save(const std::vector<int>& tokens, const std::vector<uin
     if (!engine_ || tokens.empty() || slot_limit() == 0) {
         return;
     }
-    for (auto& slot : slots_table_) {
-        if (slot.tokens == tokens) { // same prompt, same state: nothing to save
+    const size_t runs = std::min(count_image_runs(tokens, tokens.size()), image_hashes.size());
+    for (size_t i = 0; i < slots_table_.size(); i++) {
+        slot_t& slot = slots_table_[i];
+        if (slot.tokens != tokens) continue;
+        if (std::equal(slot.image_hashes.begin(), slot.image_hashes.end(), image_hashes.begin(), image_hashes.begin() + runs)) {
+            // same prompt, same pictures, same state: nothing to save
             slot.last_used = ++clock_;
             slot.boundary = slot.boundary || boundary;
             return;
         }
+        // the same tokens with other pictures (another image of the same size): the engine now holds this one. A
+        // self-contained slot also supplies the head rows of the end slots saved after it, which would get this
+        // picture's rows under their own: they go too.
+        boundary = boundary || slot.boundary;
+        const bool parent = slot.kv_from() == 0;
+        header_print("FLM", "Prefix cache: dropping slot " << slot.id << ", the same tokens with other pictures (" << tokens.size() << " tokens)");
+        report_.dropped++;
+        slots_table_.erase(slots_table_.begin() + static_cast<std::ptrdiff_t>(i));
+        for (size_t j = 0; parent && j < slots_table_.size();) {
+            const slot_t& other = slots_table_[j];
+            if (static_cast<size_t>(other.kv_from()) == tokens.size() && has_prefix(other.tokens, tokens)) {
+                header_print("FLM", "Prefix cache: dropping slot " << other.id << ", its head rows were in the replaced slot (" << other.tokens.size() << " tokens)");
+                report_.dropped++;
+                slots_table_.erase(slots_table_.begin() + static_cast<std::ptrdiff_t>(j));
+            } else {
+                j++;
+            }
+        }
+        break;
     }
     if (!boundary) {
         // An end snapshot only a few tokens past a slot that already covers this prompt (a short side call on a
@@ -322,7 +346,6 @@ void PrefixSlotCache::save(const std::vector<int>& tokens, const std::vector<uin
     slot_t slot;
     slot.state = std::move(state);
     slot.tokens = tokens;
-    const size_t runs = std::min(count_image_runs(tokens, tokens.size()), image_hashes.size());
     slot.image_hashes.assign(image_hashes.begin(), image_hashes.begin() + runs);
     slot.last_used = ++clock_;
     slot.boundary = boundary;

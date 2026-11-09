@@ -139,6 +139,15 @@ ModelFileSource resolve_file_source(const nlohmann::json& model_info,
     return {base_url + "/resolve/main/" + std::string(filename) + "?download=true", {}, use_hf_token};
 }
 
+std::optional<std::string> model_file_folder(std::string_view file) {
+    // "./vision/x.bin" is in vision/; a root ("/", "C:") or a leading ".." is outside
+    const std::filesystem::path relative = std::filesystem::path(file).lexically_normal();
+    if (relative.has_root_path() || !relative.has_parent_path() || *relative.begin() == "..") {
+        return std::nullopt;
+    }
+    return relative.begin()->string();
+}
+
 namespace {
 
 ResolvedModelFile resolve_model_file(const nlohmann::json& model_info,
@@ -232,14 +241,25 @@ ModelDownloader::ModelStatus ModelDownloader::own_model_status(const std::string
 /// \return true if the model is compatible, false otherwise
 ModelDownloader::ModelStatus ModelDownloader::check_model_compatibility(const std::string& model_tag, bool sub_process_mode) {
     auto [new_model_tag, model_info] = supported_models.get_model_info(model_tag);
-    LM_Config config;
-    config.from_pretrained(this->supported_models.get_model_path(new_model_tag));
     std::string flm_min_version = model_info["flm_min_version"];
     // The pinned Microsoft frontend config is upstream-native and intentionally
     // has no FLM version. Its catalog contract supplies the compatibility floor.
-    std::string flm_version = uses_pinned_upstream_integrity(model_info)
-        ? flm_min_version
-        : config.flm_version;
+    std::string flm_version = flm_min_version;
+    if (!uses_pinned_upstream_integrity(model_info)) {
+        const auto config_path = std::filesystem::path(
+            this->supported_models.get_model_path(new_model_tag)) /
+            "config.json";
+        std::ifstream config_file(config_path);
+        if (!config_file.is_open()) {
+            throw std::runtime_error(
+                "Failed to open model config: " + config_path.string());
+        }
+        const auto config = nlohmann::json::parse(config_file);
+        const auto version = config.find("flm_version");
+        flm_version = version == config.end() || version->is_null()
+            ? std::string("0.0.0")
+            : version->get<std::string>();
+    }
     int l_l, m_l, r_l; //left, middle, right on local version
     int l_r, m_r, r_r; //left, middle, right on requried version
     int l_f, m_f, r_f; //left, middle, right on flm version
@@ -624,9 +644,8 @@ bool ModelDownloader::remove_model(const std::string& model_tag, bool sub_proces
         // so the directory is not removed
         std::unordered_set<std::string> folders;
         for (const auto& file : model_info.value("files", nlohmann::json::array())) {
-            const std::filesystem::path relative(file.get<std::string>());
-            if (relative.is_relative() && relative.has_parent_path() && *relative.begin() != "..") {
-                folders.insert(relative.begin()->string());
+            if (auto folder = model_file_folder(file.get<std::string>())) {
+                folders.insert(std::move(*folder));
             }
         }
         for (const auto& folder : folders) {

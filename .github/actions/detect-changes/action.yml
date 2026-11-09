@@ -22,7 +22,9 @@ outputs:
     description: '"true" when the ASR code changed, so the whole ASR set runs.'
     value: ${{ steps.changes.outputs.asr_full }}
   suites:
-    description: '"all", or the comma-separated npu_test suites the change can affect.'
+    description: >
+      "all", "none" when only oga-hipep code or GPU catalog entries changed, or
+      the comma-separated npu_test suites the change can affect.
     value: ${{ steps.tier.outputs.suites }}
   hrx-suites:
     description: >
@@ -30,8 +32,11 @@ outputs:
       test server logic the backend does not touch. Empty when nothing is left.
     value: ${{ steps.tier.outputs.hrx-suites }}
   source:
-    description: '"true" when the chat suite runs, the only suite the models-from-source and HIPEP tests run.'
+    description: '"true" when the chat suite runs, the only suite the models-from-source and model-extension tests run.'
     value: ${{ steps.tier.outputs.source }}
+  hipep:
+    description: '"true" when every suite runs or the change reaches the model Test Windows HIPEP tests.'
+    value: ${{ steps.tier.outputs.hipep }}
   tier:
     description: install, pr or full.
     value: ${{ steps.tier.outputs.tier }}
@@ -65,6 +70,7 @@ runs:
         EVENT: ${{ github.event_name }}
         SHA: ${{ github.sha }}
         SUITES: ${{ steps.changes.outputs.suites }}
+        HIPEP: ${{ steps.changes.outputs.hipep }}
       run: |
         tier="${REQUESTED}"
         if [ -z "${tier}" ]; then
@@ -76,15 +82,18 @@ runs:
         if [ "${suites}" = "all" ]; then
           hrx="chat,prefix_cache,embedding,decision,asr"
         else
-          hrx=$(echo "${suites}" | tr ',' '\n' | { grep -vxE 'api|serving' || true; } | paste -sd, -)
+          hrx=$(echo "${suites}" | tr ',' '\n' | { grep -vxE 'api|serving|none' || true; } | paste -sd, -)
         fi
         source=false
         { [ "${suites}" = "all" ] || echo ",${suites}," | grep -q ",chat,"; } && source=true
+        hipep=false
+        { [ "${suites}" = "all" ] || [ "${HIPEP}" = "true" ]; } && hipep=true
         {
           echo "tier=${tier}"
           echo "short-sha=${SHA:0:7}"
           echo "suites=${suites}"
           echo "hrx-suites=${hrx}"
           echo "source=${source}"
+          echo "hipep=${hipep}"
         } >> "$GITHUB_OUTPUT"
-        echo "Tier: ${tier}; suites: ${suites}; HRX suites: ${hrx:-none}; source tests: ${source}"
+        echo "Tier: ${tier}; suites: ${suites}; HRX suites: ${hrx:-none}; source tests: ${source}; HIPEP: ${hipep}"

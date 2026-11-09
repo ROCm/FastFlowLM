@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 /// \brief one image or audio clip of a prompt: the tokens it was expanded into
@@ -20,6 +21,7 @@ struct prompt_media_t {
     int kind = kImage;     ///< which payload list it sits in; each list is dropped from the front
     size_t begin = 0;      ///< its first token in the prompt
     size_t end = 0;        ///< one past its last token
+    uint64_t hash = 0;     ///< content hash (see prefix_image_hashes), 0 when the model does not hash this kind
 };
 
 /// \brief what plan_prompt_reuse() decided
@@ -30,6 +32,7 @@ struct prompt_reuse_t {
         kDiverged,      ///< the history is not a prefix of the prompt
         kWholePrompt,   ///< the history covers the whole prompt: sampling needs the last token's logits, read it all in again
         kInsideMedia,   ///< the history ends inside an item's tokens: that item's rows cannot be split, read it all in again
+        kMediaChanged,  ///< an item inside the history has other content than the one the engine read (same size, other picture)
     };
     reason_t reason = kNoHistory;
     size_t skip = 0;                                   ///< leading tokens of the prompt the engine keeps
@@ -43,8 +46,14 @@ struct prompt_reuse_t {
 /// \param history what the engine holds (AutoModel::token_history, after any restore or slot resume)
 /// \param tokens the prompt exactly as it will be prefilled (generation-prompt tokens a model feeds itself already cut)
 /// \param media every image and audio clip of `tokens`, in prompt order per kind
+/// \param history_media the items of `history` as they were read in, with their hashes; nullptr when they were checked
+///        already (a prefix slot compares image hashes itself when it resumes)
+/// \note The tokens of an image only depend on its size, so the tokens alone cannot tell a picture from another one of the
+///       same size: an item inside the history is only kept when its hash is the one the engine read. An item with hash 0
+///       is not checked.
 inline prompt_reuse_t plan_prompt_reuse(const std::vector<int>& history, const std::vector<int>& tokens,
-                                        const std::vector<prompt_media_t>& media = {}) {
+                                        const std::vector<prompt_media_t>& media = {},
+                                        const std::vector<prompt_media_t>* history_media = nullptr) {
     prompt_reuse_t plan;
     if (history.empty()) {
         plan.reason = prompt_reuse_t::kNoHistory;
@@ -64,6 +73,18 @@ inline prompt_reuse_t plan_prompt_reuse(const std::vector<int>& history, const s
             for (const prompt_media_t& m : media) {
                 if (m.begin < plan.skip && m.end > plan.skip) {
                     plan.reason = prompt_reuse_t::kInsideMedia;
+                    plan.clear = true;
+                    plan.skip = 0;
+                    break;
+                }
+            }
+            for (const prompt_media_t& m : media) {
+                if (history_media == nullptr || plan.skip == 0 || m.end > plan.skip || m.hash == 0) continue;
+                const bool same = std::any_of(history_media->begin(), history_media->end(), [&m](const prompt_media_t& h) {
+                    return h.kind == m.kind && h.begin == m.begin && h.end == m.end && h.hash == m.hash;
+                });
+                if (!same) {
+                    plan.reason = prompt_reuse_t::kMediaChanged;
                     plan.clear = true;
                     plan.skip = 0;
                     break;

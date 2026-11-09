@@ -8,6 +8,8 @@
 /// emitted touch the sampler's RNG and penalty history.
 #include "AutoModel/modeling_gemma4e.hpp"
 #include "AutoModel/automodel.hpp"
+#include "models/gemma4e_dflash/flm/aie2p/gemma4e_dflash.hpp"
+#include "models/gemma4e_dflash_flash/flm/aie2p/gemma4e_dflash_flash.hpp"
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
@@ -212,7 +214,7 @@ std::string Gemma4e::_speculative_loop(Engine* engine, chat_meta_info_t& meta_in
     if (!single_turn && !this->thinking_enabled()) {
         // the history the checkpoint holds: an eos ending the turn was run, a cut-off token was not
         this->lm_engine->checkpoint();
-        checkpoint_his = token_history;
+        this->_checkpoint_history();
     }
     return result;
 }

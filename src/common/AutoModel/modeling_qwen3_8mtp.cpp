@@ -14,6 +14,7 @@
 ///       seed/stop-rule/teardown structure -- keep the two in sync by hand.
 
 #include "AutoModel/modeling_qwen3_8mtp.hpp"
+#include "models/qwen3_8mtp/flm/aie2p/qwen3_8mtp_npu.hpp"
 
 
 /************              Qwen3_8MTP family            **************/
@@ -286,7 +287,7 @@ bool Qwen3_8MTP::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
     else if (meta_info.restore_allowed && !checkpoint_his.empty()) {
         restore_idx = this->lm_engine->restore();
         this->total_tokens = restore_idx;
-        this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
+        this->_restore_history(); // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
     }
 
     // _shared_insert erases the prefix the engine already holds from `tokens` itself (the whole prompt, preamble
@@ -297,6 +298,18 @@ bool Qwen3_8MTP::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
     if (!host_images.empty()) {
         std::vector<prompt_media_t> media;
         prompt_media_from_counts(tokens, image_soft_token_id, image_token_counts, prompt_media_t::kImage, media);
+        // Hash each image's fp32 pixels and grid (exactly what the engine gets), before the drop, so a same-size
+        // different picture at a cached position is not reused. Images are staged back to back in `pixels`.
+        for (size_t i = 0; i < media.size() && i < host_images.size(); i++) {
+            const qwen3_8mtp_host_image_t& im = host_images[i];
+            const size_t begin = pixel_offsets[i];
+            const size_t end = i + 1 < pixel_offsets.size() ? pixel_offsets[i + 1] : pixels.size();
+            const uint64_t seed = 0xcbf29ce484222325ull ^ (static_cast<uint64_t>(im.grid_t) << 48 |
+                                                           static_cast<uint64_t>(im.grid_h) << 24 |
+                                                           static_cast<uint64_t>(im.grid_w));
+            const uint64_t h = prefix_hash_bytes(pixels.data() + begin, (end - begin) * sizeof(float), seed);
+            media[i].hash = h != 0 ? h : 1;   // 0 means "not hashed"
+        }
         plan = this->_plan_reuse(tokens, media);
 
         const size_t images_to_drop = plan.skipped_media[prompt_media_t::kImage];
@@ -365,7 +378,7 @@ bool Qwen3_8MTP::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
             return false;
         }
         // the conversation continues from here: take the single checkpoint as well
-        checkpoint_his = token_history;
+        this->_checkpoint_history();
         this->lm_engine->checkpoint();
         return true;
     }
@@ -374,7 +387,7 @@ bool Qwen3_8MTP::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
         ? this->_shared_insert(meta_info, tokens, is_cancelled, &payload, last_image_token_index)
         : this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
 
-    checkpoint_his = token_history;
+    this->_checkpoint_history();
     int checkpoint_idx = this->lm_engine->checkpoint();
     return success;
 }
@@ -445,10 +458,17 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
     // everything falls through to the ordinary path below.
     // Off under a decoding constraint: speculate() commits the drafts the base
     // model agrees with, so they would never pass the constraint's mask.
+    // An extension's generic speculation table has no per-draft logits view,
+    // so logprobs use ordinary decoding unless this is the built-in engine.
     // FLM_DISABLE_SPECULATION=1 turns it off too, for comparing against plain
     // decoding (output, logprobs) on the same build.
     const char* no_spec = std::getenv("FLM_DISABLE_SPECULATION");
-    const bool spec_enabled = this->lm_engine->supports_speculation() && !meta_info.constraint &&
+    const bool has_speculation_logits =
+        meta_info.logprobs_top_n < 0 ||
+        dynamic_cast<qwen3_8mtp_npu*>(this->lm_engine) != nullptr;
+    const bool spec_enabled = this->lm_engine->supports_speculation() &&
+        !meta_info.constraint &&
+        has_speculation_logits &&
         !(no_spec != nullptr && no_spec[0] != '\0' && std::strcmp(no_spec, "0") != 0);
     // Draft depth; also the hit-rate denominator (see report_speculation_stats).
     const int SPEC_MAX_DRAFT = 7;

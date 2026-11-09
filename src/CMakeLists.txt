@@ -48,6 +48,22 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 # ———————————————————————————————————————————————
 option(FLM_USE_HRX "Use the HRX amdxdna NPU runtime instead of XRT (0=XRT default, 1=HRX)" OFF)
 option(FLM_PORTABLE_BUILD "Build portable distribution with bundled runtime libraries" OFF)
+
+# Export the stable C model-extension header and runtime selection. Other
+# source-tree headers are internal even though this build-tree include path can
+# physically reach them.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/FastFlowLMModelExtension.cmake")
+flm_add_model_extension_interface(flm_model_extension)
+add_library(FastFlowLM::ModelExtension ALIAS flm_model_extension)
+export(TARGETS flm_model_extension
+    NAMESPACE FastFlowLM::
+    FILE "${CMAKE_CURRENT_BINARY_DIR}/FastFlowLMModelExtensionTargets.cmake")
+if(FLM_USE_HRX)
+    set(FLM_MODEL_EXTENSION_NPU_RUNTIME "hrx")
+else()
+    set(FLM_MODEL_EXTENSION_NPU_RUNTIME "xrt")
+endif()
+
 # Where the kernels come from. FastFlowLM's own flow and ryzenai-corelib share
 # no engine, so a build links one or the other; this option is not an extra.
 # It also fixes the NPU generation the build targets -- see utils/npu_platform.hpp.
@@ -116,7 +132,7 @@ endif()
 # and HRX-built .so/.dll/.lib never collide (see src/lib/xrt and src/lib/hrx).
 set(FLM_ENGINE_LIB_DIR "${CMAKE_SOURCE_DIR}/lib/${FLM_RUNTIME_NAME}")
 
-# The flash engine libs (qwen3vl_flash, qwen3_5vl_flash, gemma4e_flash) are always shipped in
+# The flash engine libs (qwen3vl_flash, gemma4e_flash) are always shipped in
 # src/lib/${FLM_RUNTIME_NAME} for every backend, so their model families are
 # always compiled in -- no probe/gate/macro needed.
 # Gemma4e can be built from source here; the other engines stay prebuilt.
@@ -481,6 +497,7 @@ target_include_directories(flm PUBLIC
     ${CMAKE_SOURCE_DIR}/server
     ${CMAKE_SOURCE_DIR}/pull
 )
+target_link_libraries(flm PRIVATE FastFlowLM::ModelExtension)
 
 # XRT backend: add the XRT headers (HRX carries its own via the hrx::hrx target).
 if(NOT FLM_USE_HRX)
@@ -587,11 +604,11 @@ set(FLM_ENGINE_LINK_LIBS
 )
 
 list(APPEND FLM_ENGINE_LINK_LIBS qwen3vl_flash)
-list(APPEND FLM_ENGINE_LINK_LIBS qwen3_5vl_flash)
 
 list(APPEND FLM_ENGINE_LINK_LIBS
     qwen3_5vl_npu
     minicpm_v_4_7_npu
+    minicpm_ocr_npu
     minicpm_v_4_7_moe_npu
     qwen3_5_omni_npu
     qwen3_6_moe_npu
@@ -615,6 +632,7 @@ list(APPEND FLM_ENGINE_LINK_LIBS
     phi4_npu
     nanbeige_npu
     hunyuan_npu
+    hy_mem_npu
 )
 
 # The d3 decision engine (--decision d3:lite). Linked where its library is vendored; elsewhere
@@ -1113,6 +1131,35 @@ endif()
 
 install(FILES model_list.json DESTINATION "${FLM_SHARE_DESTINATION}")
 install(FILES model_info.json DESTINATION "${FLM_SHARE_DESTINATION}")
+# The SDK keeps one layout in every package (deb, portable tarball, Windows
+# zip and MSI), unlike the runtime files, which follow FLM_SHARE_DESTINATION.
+set(FLM_MODEL_EXTENSION_SCHEMA_DESTINATION "share/flm/schemas")
+install(DIRECTORY schemas/
+    DESTINATION "${FLM_MODEL_EXTENSION_SCHEMA_DESTINATION}"
+    COMPONENT ModelExtension)
+set(FLM_MODEL_EXTENSION_CMAKE_DESTINATION
+    "${CMAKE_INSTALL_LIBDIR}/cmake/FastFlowLMModelExtension")
+include(CMakePackageConfigHelpers)
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/FastFlowLMModelExtensionConfig.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/FastFlowLMModelExtensionConfig.cmake"
+    INSTALL_DESTINATION "${FLM_MODEL_EXTENSION_CMAKE_DESTINATION}"
+    PATH_VARS FLM_MODEL_EXTENSION_SCHEMA_DESTINATION)
+install(TARGETS flm_model_extension
+    EXPORT FastFlowLMModelExtensionTargets
+    COMPONENT ModelExtension)
+install(EXPORT FastFlowLMModelExtensionTargets
+    NAMESPACE FastFlowLM::
+    DESTINATION "${FLM_MODEL_EXTENSION_CMAKE_DESTINATION}"
+    COMPONENT ModelExtension)
+install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/FastFlowLMModelExtensionConfig.cmake"
+    DESTINATION "${FLM_MODEL_EXTENSION_CMAKE_DESTINATION}"
+    COMPONENT ModelExtension)
+install(FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/AutoModel/model_extension.h"
+    DESTINATION "include/AutoModel"
+    COMPONENT ModelExtension)
 
 # Ship both licenses with the binaries; LICENSE_BINARY.txt must accompany any
 # redistribution of the NPU kernels and engine libraries. THIRD_PARTY_NOTICES.txt

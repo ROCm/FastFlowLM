@@ -36,8 +36,8 @@ PR_CHAT = {
     "gemma4e-dflash-flash": None,   # same 9 GB nemotron3.5-bolt:e4b package; runs when the change touches it
     "gemma4e-dflash": None,   # needs the 9 GB nemotron3.5-bolt:e4b package; runs when the change touches it
     "qwen3.5": "qwen3.5:0.8b",
-    "qwen3.5-flash": "qwen3.5-flash:2b",
     "minicpm-v-4.7": "minicpm-v-4.7:1b",
+    "minicpm-ocr": "minicpm-ocr:1.0",
     "qwen3.6-moe": None,      # 35 GB
     "qwen3.8-mtp": None,      # 27 GB, ~2 tok/s
     "qwen3.8-dflash2": None,   # needs the 27 GB qwen3.8-mtp:27b package; runs when the change touches it
@@ -147,13 +147,17 @@ class Model:
         return "translation" in self.labels or self.id.startswith("translategemma")
 
 
-def load_catalog(flm_bin: str) -> dict[str, Model]:
+def load_catalog(flm_bin: str,
+                 model_extensions: list[str] | None = None) -> dict[str, Model]:
     """The catalog as `flm list --json --filter all` reports it on this machine.
 
     That is the only listing that carries the vlm/asr flags and families, and it
     already leaves out models this NPU cannot run.
     """
-    proc = subprocess.run([flm_bin, "list", "--json", "--filter", "all"],
+    command = [flm_bin, "list", "--json", "--filter", "all"]
+    for manifest in model_extensions or []:
+        command += ["--model-extension", manifest]
+    proc = subprocess.run(command,
                           capture_output=True, text=True, timeout=300, check=True)
     start = proc.stdout.find("{")  # tolerate banner lines before the JSON
     if start < 0:
@@ -189,9 +193,13 @@ class Plan:
         self.families = set(families)
         self.only_models = only_models
         self.backend = backend  # empty: the NPU backends
+        # Models the run could not pull (Context.pull), which no suite tests.
+        self.unavailable: set[str] = set()
 
     def _serves(self, model_id: str) -> bool:
-        """Whether the backend under test runs this model."""
+        """Whether the backend under test runs this model, and it is not unavailable."""
+        if model_id in self.unavailable:
+            return False
         backend = self.catalog[model_id].backend
         return backend == self.backend if self.backend else backend not in GPU_BACKENDS
 

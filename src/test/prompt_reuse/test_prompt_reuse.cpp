@@ -160,6 +160,47 @@ void test_audio_brackets() {
     const std::vector<int> inside(prompt.begin(), prompt.begin() + 3);
     CHECK(plan_prompt_reuse(inside, prompt, media).reason == prompt_reuse_t::kInsideMedia);
 }
+void test_hashes() {
+    std::printf("an earlier image replaced by another of the same size is not reused\n");
+    // turn 1 asked about red; the client resends the conversation with turn 1's image replaced by blue
+    const std::vector<int> turn1 = with_image({1, 2}, 4, {3});
+    std::vector<int> turn2 = turn1;
+    turn2.insert(turn2.end(), {7, 8});
+    auto red = images(turn1, {4});
+    red[0].hash = 0x7ed;
+    auto blue = images(turn2, {4});
+    blue[0].hash = 0xb1e;
+
+    auto plan = plan_prompt_reuse(turn1, turn2, blue, &red);
+    CHECK(plan.reason == prompt_reuse_t::kMediaChanged && plan.clear && plan.skip == 0);
+    CHECK(plan.skipped_media[prompt_media_t::kImage] == 0);   // blue is read in
+    CHECK(plan.media_end == 6);
+
+    // the same picture again is reused
+    auto red2 = images(turn2, {4});
+    red2[0].hash = 0x7ed;
+    plan = plan_prompt_reuse(turn1, turn2, red2, &red);
+    CHECK(plan.reason == prompt_reuse_t::kPrefix && plan.skip == turn1.size());
+    CHECK(plan.skipped_media[prompt_media_t::kImage] == 1);
+
+    // a history whose items were checked elsewhere (a prefix slot), and items the model does not hash, are not compared
+    CHECK(plan_prompt_reuse(turn1, turn2, blue, nullptr).reason == prompt_reuse_t::kPrefix);
+    auto unhashed = images(turn2, {4});
+    CHECK(plan_prompt_reuse(turn1, turn2, unhashed, &red).reason == prompt_reuse_t::kPrefix);
+
+    // a history that does not know the item (read in without a plan) is not trusted with it
+    const std::vector<prompt_media_t> nothing;
+    CHECK(plan_prompt_reuse(turn1, turn2, red2, &nothing).reason == prompt_reuse_t::kMediaChanged);
+
+    // an image after the history is new either way: nothing to compare
+    std::vector<int> turn2b = turn1;
+    turn2b.insert(turn2b.end(), {7, IMG, IMG, 8});
+    auto media_b = images(turn2b, {4, 2});
+    media_b[0].hash = 0x7ed;
+    media_b[1].hash = 0xb1e;
+    plan = plan_prompt_reuse(turn1, turn2b, media_b, &red);
+    CHECK(plan.reason == prompt_reuse_t::kPrefix && plan.skipped_media[prompt_media_t::kImage] == 1);
+}
 }  // namespace
 
 int main() {
@@ -170,6 +211,7 @@ int main() {
     test_inside_image();
     test_counts();
     test_audio_brackets();
+    test_hashes();
     if (failures) {
         std::printf("%d check(s) failed\n", failures);
         return 1;

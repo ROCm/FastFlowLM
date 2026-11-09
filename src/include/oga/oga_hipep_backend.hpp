@@ -30,4 +30,10 @@ inline flm::backend::BackendTraits hipep_traits() {
 ///       context and the package's token ids are checked before hip-ep is loaded.
 flm::backend::BackendFactory hipep_factory();
 
+/// \brief `flm uninstall hipep`: remove the hip-ep runtime flm installed for this user, and the
+///        installer's files; every other hip-ep package, and every model, stays
+/// \return whether nothing flm installed is left
+/// \throws std::runtime_error when it cannot tell what flm installed
+bool UninstallHipEp();
+
 }  // namespace flm::oga
