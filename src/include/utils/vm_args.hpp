@@ -56,6 +56,7 @@ inline void print_help(po::options_description& general) {
     std::cout << "\tflm serve -e embed-gemma:300m" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --modelscope 1" << std::endl;
     std::cout << "\tflm serve qwen3vl-it:4b --img-pre-resize 1" << std::endl;
+    std::cout << "\tflm bench llama3.2:1b --modelscope 1" << std::endl;
     std::cout << "\tflm list" << std::endl;
     std::cout << "\tflm list --quiet" << std::endl;
     std::cout << "\tflm list --filter installed" << std::endl;
