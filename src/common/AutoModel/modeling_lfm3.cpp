@@ -3,6 +3,7 @@
 /// \note LiquidAI LFM3: ChatML, `<think>` opened by the template when thinking is on, Qwen-style XML tool calls.
 
 #include "AutoModel/modeling_lfm3.hpp"
+#include "models/lfm3/flm/aie2p/lfm3_npu.hpp"
 #include "utils/utils.hpp"
 #include "metrices.hpp"
 

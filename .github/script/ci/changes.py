@@ -177,6 +177,10 @@ TEST_SCOPES = (
     (r"\.github/script/npu_test/assets/vision/|\.github/script/npu_test/tools/make_vision_assets\.py$",
      {"chat"}),
     (r"src/test/(openai_api_test|openai_usage)/", {"api"}),
+    # The model-extension contracts run in cpu-tests.yml on every change; the
+    # Gemma4-open bundle and its NPU tests run with chat.
+    (r"src/test/(model_frontend|model_backend|model_list_platform|model_extension_\w+)/"
+     r"|src/schemas/|src/cmake/FastFlowLMModelExtension[^/]*\.cmake(\.in)?$", {"chat"}),
 )
 
 

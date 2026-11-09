@@ -6,6 +6,7 @@
 /// \note This is a source file for the Qwen3_6_MOE image processing functionality
 
 #include "AutoModel/modeling_qwen3_6_moe.hpp"
+#include "models/qwen3_6_moe/flm/aie2p/qwen3_6_moe_npu.hpp"
 
 qwen3_6_moe_image_t Qwen3_6_MOE::load_image(const std::string& filename) {
     qwen3_6_moe_image_t empty_result{};

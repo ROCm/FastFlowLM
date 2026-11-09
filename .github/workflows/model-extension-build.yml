@@ -1,0 +1,280 @@
+name: Model Extension Build
+
+# Builds the Gemma4-open model extension, the bundle the model-extension test
+# jobs load, against the SDK inside an already-built package: the header, CMake
+# package and schemas a third party gets, not the build tree. A minimal
+# consumer of that SDK is built first. This runs after, not inside, the package
+# build, so a failure here holds back neither the package nor its NPU tests;
+# build-and-test.yml still counts it in the verdict.
+#
+#   os       runtime  package                         bundle artifact
+#   linux    XRT      portable                        gemma4-open-linux-xrt
+#   linux    HRX      HRX-portable                    gemma4-open-linux-hrx
+#   windows  XRT      fastflowlm-windows-<sha>        gemma4-open-windows-xrt
+#   windows  HRX      HRX-fastflowlm-windows-<sha>    gemma4-open-windows-hrx
+on:
+  workflow_call:
+    inputs:
+      os:
+        description: linux or windows.
+        type: string
+        required: true
+      runtime:
+        description: XRT or HRX; must match the package's runtime.
+        type: string
+        required: true
+      package:
+        description: The package artifact whose SDK the bundle builds against.
+        type: string
+        required: true
+
+jobs:
+  linux:
+    name: build (${{ inputs.runtime }})
+    if: inputs.os == 'linux'
+    runs-on: ubuntu-latest
+    # The portable packages are built in this image, so the bundle sees the
+    # same compiler, glibc and XRT.
+    container:
+      image: ghcr.io/rocm/fastflowlm/build-environment:debian13
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      RUNTIME: ${{ inputs.runtime }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure git safe directory
+        run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+
+      # The bundle owns its tokenizer; nothing else from third_party is built.
+      - name: Checkout tokenizers-cpp
+        run: |
+          for attempt in 1 2 3; do
+            git submodule update --init --recursive --depth 1 third_party/tokenizers-cpp && exit 0
+            echo "Submodule fetch failed (attempt ${attempt}), retrying..."
+            sleep 15
+          done
+          exit 1
+
+      # See lin-build: the image may lag main's Dockerfile.
+      - name: Install missing build tools
+        id: tools
+        run: |
+          set -euo pipefail
+          need=""
+          for tool in curl zstd; do
+            command -v "${tool}" >/dev/null || need="${need} ${tool}"
+          done
+          dpkg -s ca-certificates >/dev/null 2>&1 || need="${need} ca-certificates"
+          if [ -n "${need}" ]; then
+            apt-get update
+            apt-get install -y --no-install-recommends ${need}
+          fi
+          if ! command -v rustup >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+              sh -s -- -y --profile minimal --default-toolchain stable
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+          echo "cargo-home=${CARGO_HOME:-$HOME/.cargo}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ steps.tools.outputs.cargo-home }}/registry/index
+            ${{ steps.tools.outputs.cargo-home }}/registry/cache
+            ${{ steps.tools.outputs.cargo-home }}/git/db
+          key: cargo-registry-debian13-${{ hashFiles('third_party/tokenizers-cpp/rust/Cargo.lock') }}
+          restore-keys: cargo-registry-debian13-
+
+      # The pinned codec tarballs, so a bundle build does not depend on the
+      # xiph mirrors being up. ExternalProject checks each one's SHA-256.
+      - &codec-cache
+        name: Restore codec tarballs
+        uses: actions/cache@v4
+        with:
+          path: |
+            build-model-extension-gemma4e/ac/*/dl
+            build-model-extension-gemma4e/ljt/dl
+            build-model-extension-gemma4e/wbp/dl
+          key: codec-tarballs-${{ inputs.os }}-${{ hashFiles('src/cmake/FlmAudioCodecs.cmake', 'src/cmake/FlmImageCodecs.cmake') }}
+
+      - name: Restore HRX release
+        if: inputs.runtime == 'HRX'
+        uses: actions/cache@v4
+        with:
+          path: hrx-integration/.hrx-release/*.tar.zst
+          key: hrx-release-linux-${{ hashFiles('hrx-integration/hrx-release.env') }}
+
+      - name: Fetch pinned HRX release
+        id: hrx
+        if: inputs.runtime == 'HRX'
+        run: ./hrx-integration/fetch-hrx-release.sh
+
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.package }}
+          path: package
+
+      - name: Unpack package
+        run: |
+          set -euo pipefail
+          mkdir -p sdk
+          tar xzf package/*.tar.gz -C sdk
+
+      - name: Test installed model-extension package
+        run: |
+          set -euo pipefail
+          cmake -S src/test/model_extension_consumer \
+            -B build-model-extension-consumer \
+            -DCMAKE_PREFIX_PATH="${GITHUB_WORKSPACE}/sdk"
+          cmake --build build-model-extension-consumer -j"$(nproc)"
+
+      - name: Build Gemma4-open model extension
+        env:
+          HRX_PREFIX: ${{ steps.hrx.outputs.prefix }}
+        run: |
+          set -euo pipefail
+          prefixes="${GITHUB_WORKSPACE}/sdk"
+          if [ "${RUNTIME}" = "HRX" ]; then
+            test -n "${HRX_PREFIX}"
+            prefixes="${prefixes};${HRX_PREFIX}"
+          fi
+          cmake -S src/test/model_extension_gemma4e \
+            -B build-model-extension-gemma4e \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="${prefixes}" \
+            -DFLM_SOURCE_DIR="${GITHUB_WORKSPACE}/src" \
+            -DFLM_GEMMA4_XCLBIN_DIR="${GITHUB_WORKSPACE}/src/xclbins/Gemma4-E2B-IT-NPU2"
+          cmake --build build-model-extension-gemma4e -j"$(nproc)"
+
+      - name: Upload model extension
+        uses: actions/upload-artifact@v4
+        with:
+          name: gemma4-open-linux-${{ inputs.runtime == 'XRT' && 'xrt' || 'hrx' }}
+          path: build-model-extension-gemma4e/bundle/
+          retention-days: 7
+          if-no-files-found: error
+
+  windows:
+    name: build (${{ inputs.runtime }})
+    if: inputs.os == 'windows'
+    runs-on: windows-2025-vs2026
+    env:
+      RUNTIME: ${{ inputs.runtime }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Checkout tokenizers-cpp
+        shell: powershell
+        run: |
+          for ($i = 1; $i -le 3; $i++) {
+            git submodule update --init --recursive --depth 1 third_party/tokenizers-cpp
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Write-Host "Submodule fetch failed (attempt $i), retrying..."
+            Start-Sleep -Seconds 15
+          }
+          exit 1
+
+      # The XRT headers and import library, Boost and the codec headers the
+      # bundle compiles against, as win-build lays them out.
+      - name: Restore build dependencies
+        uses: actions/cache@v4
+        with:
+          path: C:\dev
+          key: windows-deps-${{ hashFiles('.github/script/ci/setup_windows_deps.ps1', '.github/windows-deps/**') }}
+
+      - name: Set up build dependencies
+        shell: powershell
+        run: .github\script\ci\setup_windows_deps.ps1
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Restore Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-windows-${{ hashFiles('third_party/tokenizers-cpp/rust/Cargo.lock') }}
+          restore-keys: cargo-registry-windows-
+
+      - *codec-cache
+
+      - name: Restore HRX release
+        if: inputs.runtime == 'HRX'
+        uses: actions/cache@v4
+        with:
+          path: hrx-integration/.hrx-release/*.zip
+          key: hrx-release-windows-${{ hashFiles('hrx-integration/hrx-release.env') }}
+
+      - name: Fetch pinned HRX release
+        id: hrx
+        if: inputs.runtime == 'HRX'
+        shell: powershell
+        run: .\hrx-integration\fetch-hrx-release.ps1
+
+      # The zip artifact is the package root itself.
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.package }}
+          path: sdk
+
+      - name: Test installed model-extension package
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          cmake -S src/test/model_extension_consumer `
+            -B build-model-extension-consumer -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            "-DCMAKE_PREFIX_PATH=$env:GITHUB_WORKSPACE\sdk"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build-model-extension-consumer --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build Gemma4-open model extension
+        shell: powershell
+        env:
+          HRX_PREFIX: ${{ steps.hrx.outputs.prefix }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $prefixes = "$env:GITHUB_WORKSPACE\sdk"
+          if ($env:RUNTIME -eq 'HRX') {
+            if (-not $env:HRX_PREFIX) { throw 'The HRX package prefix is empty.' }
+            $prefixes += ";$env:HRX_PREFIX"
+          }
+          $src = "$env:GITHUB_WORKSPACE\src"
+          cmake -S src/test/model_extension_gemma4e `
+            -B build-model-extension-gemma4e -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            "-DCMAKE_PREFIX_PATH=$prefixes" `
+            "-DFLM_SOURCE_DIR=$src" `
+            "-DFLM_GEMMA4_XCLBIN_DIR=$src\xclbins\Gemma4-E2B-IT-NPU2" `
+            -DXRT_INCLUDE_DIR=C:\dev\XRT\src\runtime_src\core\include `
+            -DXRT_LIBRARY_DIR=C:\dev\xrtNPUfromDLL `
+            -DBOOST_INCLUDE_DIR=C:\dev\boost_1_88_0 `
+            -DVCPKG_INCLUDE_DIR=C:\dev\vcpkg\installed\x64-windows\include
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build-model-extension-gemma4e --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload model extension
+        uses: actions/upload-artifact@v4
+        with:
+          name: gemma4-open-windows-${{ inputs.runtime == 'XRT' && 'xrt' || 'hrx' }}
+          path: build-model-extension-gemma4e/bundle/
+          retention-days: 7
+          if-no-files-found: error

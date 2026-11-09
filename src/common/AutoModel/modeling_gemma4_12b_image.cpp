@@ -6,6 +6,7 @@
 /// \note This is a source file for the Gemma4e image processing functionality
 #include "AutoModel/modeling_gemma4_12b.hpp"
 #include "error_measure.hpp"
+#include "models/gemma4_12b/flm/aie2p/gemma4_12b_npu.hpp"
 #include <utility>
 #include <algorithm>
 #include <numeric>
