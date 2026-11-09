@@ -265,8 +265,7 @@ jobs:
             "-DFLM_GEMMA4_XCLBIN_DIR=$src\xclbins\Gemma4-E2B-IT-NPU2" `
             -DXRT_INCLUDE_DIR=C:\dev\XRT\src\runtime_src\core\include `
             -DXRT_LIBRARY_DIR=C:\dev\xrtNPUfromDLL `
-            -DBOOST_INCLUDE_DIR=C:\dev\boost_1_88_0 `
-            -DVCPKG_INCLUDE_DIR=C:\dev\vcpkg\installed\x64-windows\include
+            -DBOOST_INCLUDE_DIR=C:\dev\boost_1_88_0
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build build-model-extension-gemma4e --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
