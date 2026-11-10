@@ -5236,8 +5236,8 @@
         },
         {
             "type": "file",
-            "oid": "f957143934d0a234e8652ea253bd4b5a1a83ea65",
-            "size": 2076,
+            "oid": "a8b37b51970b2dc277c11e512cb1e9045ea72286",
+            "size": 3364,
             "path": "config.json"
         },
         {
@@ -5264,8 +5264,8 @@
         },
         {
             "type": "file",
-            "oid": "a85c0ab57dacc1f0788d48abb6c5abc856d10d40",
-            "size": 15200,
+            "oid": "152d7d92184876e34755f94b680afb690a026585",
+            "size": 16791,
             "path": "tokenizer_config.json"
         }
     ],
@@ -5278,8 +5278,8 @@
         },
         {
             "type": "file",
-            "oid": "dde06a5ff08a3fe68b69c0ecc2255cf1e7cbb3ca",
-            "size": 2074,
+            "oid": "a9c69893a7b32540f592d1eded3b0ffd2ca510fa",
+            "size": 3189,
             "path": "config.json"
         },
         {
@@ -5306,8 +5306,8 @@
         },
         {
             "type": "file",
-            "oid": "a85c0ab57dacc1f0788d48abb6c5abc856d10d40",
-            "size": 15200,
+            "oid": "07fe173cff0ef940cb9847f1e3aeef7fb155d76b",
+            "size": 16791,
             "path": "tokenizer_config.json"
         }
     ]
