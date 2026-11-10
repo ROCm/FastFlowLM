@@ -48,7 +48,7 @@ The tiers pick NPU models only. A model whose `backend` in `flm list --json` run
 on the GPU (`oga-hipep`, in the Windows XRT package) is tested by a run with
 `--backend oga-hipep`, which tests all of them whatever the tier. The Test
 Windows HIPEP job runs the `chat` and `api` suites that way on
-`qwen3.5-oga-hipep:9b` alone, since the other packages are 4 to 72 GB each,
+`qwen3.5-oga-hipep:9b` alone, since the other packages are 4 to 124 GB each,
 unless a manual run names the models (below). Such a run gives `api` the
 backend's models in place of its NPU list, so the OpenAI contract tests, tool
 calls included, run on the GPU too.
