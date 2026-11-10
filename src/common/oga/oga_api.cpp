@@ -28,7 +28,7 @@ namespace {
 constexpr std::array<std::string_view, 3> kPackageFiles{
     "onnxruntime-genai.dll", "onnxruntime.dll", kAmdGpuProviderLibrary};
 
-constexpr const wchar_t* kPackageRootVariable = L"AMDRT_PKG_ROOT";
+constexpr const wchar_t* kPackageRootVariable = L"HIPEP_PKG_ROOT";
 constexpr std::string_view kHipEpFolder = "hip-ep";
 /// \brief the hip-ep release whose OGA this backend is built against
 constexpr const char* kMinimumHipEp = "0.5.3";
@@ -197,7 +197,7 @@ std::filesystem::path EnvironmentPath(const wchar_t* name) {
 PackageSearch SearchPackages(const PackageEnvironment& environment) {
     PackageSearch search;
     if (std::filesystem::path root = environment(kPackageRootVariable); !root.empty()) {
-        search.candidates.push_back({"AMDRT_PKG_ROOT", std::move(root)});
+        search.candidates.push_back({"HIPEP_PKG_ROOT", std::move(root)});
         return search;
     }
 
@@ -275,7 +275,7 @@ Package FindPackage(const std::vector<PackageCandidate>& candidates,
         " or later). hip-ep's amdgpu-<version>.zip has no installer and holds its DLLs in an"
         " amdgpu-<version> folder: unzip it into %LOCALAPPDATA%\\hip-ep or %ProgramFiles%\\hip-ep, where"
         " each folder that holds the DLLs (or a bin directory holding them) is a package. Or set"
-        " AMDRT_PKG_ROOT to the package root: when it is set, no other folder is tried.");
+        " HIPEP_PKG_ROOT to the package root: when it is set, no other folder is tried.");
 }
 
 OgaApi::OgaApi(Resolver resolver, Package package) : package_(std::move(package)) {
@@ -330,7 +330,7 @@ void RegisterAmdGpuProvider(const OgaApi& api) {
         std::all_of(library.begin(), library.end(), [](unsigned char c) { return c < 0x80; });
     if (!ascii && GetACP() != CP_UTF8) {
         throw std::runtime_error("cannot register '" + library +
-                                 "' with OGA, which needs an ASCII path for it. Set AMDRT_PKG_ROOT"
+                                 "' with OGA, which needs an ASCII path for it. Set HIPEP_PKG_ROOT"
                                  " to a hip-ep package under an ASCII path");
     }
     // OGA reports a failed registration by throwing rather than by an OgaResult.

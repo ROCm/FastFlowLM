@@ -89,7 +89,7 @@ inline constexpr const char* kAmdGpuProviderLibrary = "hipgpu.dll";
 
 /// \brief one place a hip-ep package may be, in the order they are tried
 struct PackageCandidate {
-    /// \brief what named the root, e.g. "AMDRT_PKG_ROOT"
+    /// \brief what named the root, e.g. "HIPEP_PKG_ROOT"
     std::string source;
     /// \brief the package root, empty when the source names none
     std::filesystem::path root;
@@ -124,7 +124,7 @@ struct PackageSearch {
 };
 
 /// \brief where this build looks for a hip-ep package, in order
-/// \note AMDRT_PKG_ROOT, when set, is the only candidate. Otherwise the
+/// \note HIPEP_PKG_ROOT, when set, is the only candidate. Otherwise the
 ///       candidates are the version folders under %LOCALAPPDATA%\hip-ep and
 ///       %ProgramFiles%\hip-ep, newest version first. A folder name that is not a
 ///       version comes after all of them; equal versions keep the %LOCALAPPDATA% one first.
