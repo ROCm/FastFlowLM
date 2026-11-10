@@ -89,15 +89,38 @@ bool MiniCPM_V::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
     minicpm_v_image_payload_t image_payload;
     image_payload.num_images = 0;
     std::vector<image_layout> layouts;
+    auto add_chw = [&](image_data_t& chw, int max_slice_nums = 0) {
+        layouts.push_back(this->preprocess_image(chw, image_payload, max_slice_nums));
+        image_reader_.recycle(chw);
+        return true;
+    };
     auto add_image = [&](const std::string& source, bool base64) {
         image_data_t chw;
         if (!this->load_image(source, base64, chw)) {
             header_print("ERROR", "Skipping image that failed to load");
             return false;
         }
-        layouts.push_back(this->preprocess_image(chw, image_payload));
-        image_reader_.recycle(chw);
-        return true;
+        return add_chw(chw);
+    };
+    // A raw frame joins the same path as a decoded picture: from here on it is the pixels a decoder would have left.
+    auto add_raw = [&](const nlohmann::ordered_json& ref) {
+        const auto& r = ref.at("rgb8");
+        const size_t batch = r.at("batch").get<size_t>();
+        const int frame = r.at("frame").get<int>();
+        if (batch >= input.raw_rgb8.size() || frame < 0 || frame >= input.raw_rgb8[batch]->frames) {
+            header_print("ERROR", "Skipping raw frame that does not exist");
+            return false;
+        }
+        const auto& b = *input.raw_rgb8[batch];
+        image_data_t decoded, chw;
+        if (!image_reader_.from_rgb8(b.frame(frame), b.height, b.width, decoded)
+            || !image_reader_.reorder_hwc_to_chw(decoded, chw)) {
+            image_reader_.recycle(decoded);
+            header_print("ERROR", "Skipping raw frame that failed to load");
+            return false;
+        }
+        image_reader_.recycle(decoded);
+        return add_chw(chw, b.max_slice_nums);
     };
 
     if (!input.messages.empty()) { // already a formated messages, usually from REST API
@@ -118,7 +141,7 @@ bool MiniCPM_V::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
             // placeholder in the template below.
             nlohmann::ordered_json content = nlohmann::ordered_json::array();
             for (const auto& img : message["images"]) {
-                if (add_image(img.get<std::string>(), true)) {
+                if (img.is_object() ? add_raw(img) : add_image(img.get<std::string>(), true)) {
                     content.push_back({ {"type", "image"} });
                 }
             }
@@ -261,6 +284,18 @@ bool MiniCPM_V::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
     // The media spans end there, so media_end is that length past the skip.
     const int first_len_run = (int)plan.media_end;
     const bool has_images = !image_payload.images.empty();
+
+    // The engine prefills this whole span in one go, and the buffer it allocates for it is about 123.5 KB per token,
+    // which no longer fits a 32-bit size at 2^31 / 123540 = 17382 tokens (measured: 17221 runs, 17.5k fails in
+    // xrt::ext::bo, poisoning the request). Refuse it up front, before anything reaches the NPU.
+    constexpr int kMaxImagePrefillTokens = 17300;
+    if (has_images && first_len_run > kMaxImagePrefillTokens) {
+        this->_shared_after_inference_failure(false);
+        throw ModelRequestError(400, true,
+            "The pictures take " + std::to_string(first_len_run) + " prompt tokens; at most " +
+            std::to_string(kMaxImagePrefillTokens) + " can be prefilled with them. Send fewer or smaller images/frames.",
+            "invalid_request_error");
+    }
 
     // FLM_MINICPM_V_DUMP=<dir>: the payload and the prompt exactly as the engine
     // gets them, for scoring the preprocessing against the HF processor

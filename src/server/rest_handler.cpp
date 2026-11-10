@@ -11,6 +11,8 @@
 #include "streaming_ostream.hpp"
 #include "streaming_ostream_openai.hpp"
 #include "image/image_reader.hpp"
+#include "image/raw_rgb8.hpp"
+#include "AutoModel/modeling_minicpm_v.hpp"
 #include "whisper/transcript_format.hpp"
 #include <sstream>
 #include <iostream>
@@ -216,8 +218,13 @@ static json normalize_messages(json messages) {
     return normalized;
 }
 
-static json normalize_template(json messages) {
+///@brief `raw`: where to keep the batches of any `image_raw` parts (null: the model takes none, so such a part is an
+/// error); a bad one sets `error` and the result must not be used
+static json normalize_template(json messages, std::vector<std::shared_ptr<const raw_rgb8_batch_t>>* raw = nullptr,
+                               std::string* error = nullptr, const raw_rgb8_limits_t& raw_limits = raw_rgb8_limits_t()) {
     json template_message = json::array();
+    size_t raw_frames = 0;
+    size_t raw_bytes = 0;
 
     for (auto& message : messages) {
         json new_message = message;
@@ -257,6 +264,29 @@ static json normalize_template(json messages) {
                         continue;
                     }
                     merged_images.push_back(image_url);
+                }
+                else if (contentItem.contains("type") && contentItem["type"] == "image_raw") {
+                    std::string why;
+                    auto batch = std::make_shared<raw_rgb8_batch_t>();
+                    if (!raw) {
+                        why = "image_raw: raw RGB8 images are not supported by this model";
+                    }
+                    else if (!contentItem.contains("image_raw")) {
+                        why = "image_raw: the part has no 'image_raw' object";
+                    }
+                    else if (parse_image_raw(contentItem["image_raw"], raw_limits, raw_frames, raw_bytes, *batch, why)) {
+                        why.clear();
+                    }
+                    if (!why.empty()) {
+                        if (error) *error = why;
+                        return template_message;
+                    }
+                    raw_frames += (size_t)batch->frames;
+                    raw_bytes += batch->data.size();
+                    for (int f = 0; f < batch->frames; ++f) {
+                        merged_images.push_back({ {"rgb8", {{"batch", raw->size()}, {"frame", f}}} });
+                    }
+                    raw->push_back(std::move(batch));
                 }
                 else if (contentItem.contains("type") && contentItem["type"] == "input_audio") {
                     std::string audio_base64 = contentItem["input_audio"]["data"].get<std::string>();
@@ -584,6 +614,16 @@ RestHandler::RestHandler(model_list& models, ModelDownloader& downloader, progra
     this->prefix_cache_mb = args.prefix_cache_mb;
     this->prefix_slots = args.prefix_slots;
     this->prefix_min_gain = args.prefix_min_gain;
+    this->raw_rgb8_limits.allow_path_dir = args.raw_path_dir;
+    if (!args.raw_path_dir.empty()) {
+        std::error_code raw_dir_ec;
+        if (!std::filesystem::is_directory(args.raw_path_dir, raw_dir_ec)) {
+            header_print("WARNING", "--allow-raw-path " << args.raw_path_dir << " is not a directory; raw frame files stay off");
+            this->raw_rgb8_limits.allow_path_dir.clear();
+        }
+    }
+    this->raw_rgb8_limits.max_frames = (size_t)std::max(args.max_raw_frames, 1);
+    this->raw_rgb8_limits.max_bytes = (size_t)std::max(args.max_raw_mb, 1) * 1024 * 1024;
 
     // Initialize chat bot with default model
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
@@ -1579,7 +1619,17 @@ void RestHandler::handle_openai_chat_completion(const json& request,
         apply_sampling_request(*auto_chat_engine, sampling);
 
         current_messages = normalize_messages(current_messages);
-        current_messages = normalize_template(current_messages);
+        std::vector<std::shared_ptr<const raw_rgb8_batch_t>> raw_rgb8;
+        {
+            // raw RGB8 frames only go to MiniCPM-V; any other model gets a clear 400 rather than a dropped image
+            const bool takes_raw = dynamic_cast<MiniCPM_V*>(auto_chat_engine.get()) != nullptr;
+            std::string raw_error;
+            current_messages = normalize_template(current_messages, takes_raw ? &raw_rgb8 : nullptr, &raw_error, this->raw_rgb8_limits);
+            if (!raw_error.empty()) {
+                send_response({{"error", {{"message", raw_error}, {"type", "invalid_request_error"}, {"code", 400}}}});
+                return;
+            }
+        }
         if (continue_final) {
             request_error = continue_final_message_error(current_messages);
             if (!request_error.empty()) {
@@ -1652,6 +1702,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
 
         lm_uniform_input_t uniformed_input;
         uniformed_input.messages = current_messages;
+        uniformed_input.raw_rgb8 = std::move(raw_rgb8);
         uniformed_input.tools = tools;
         const std::optional<int> openai_chat_budget = has_value(request, "max_tokens")
             ? std::optional<int>(request.at("max_tokens").get<int>())

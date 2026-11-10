@@ -116,6 +116,12 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
              "Host memory in MiB for saved prompt snapshots (prefix cache), -1: default 4096 (Qwen3.5 and Qwen3.6-MoE)")
             ("prefix-slots", po::value<int>(&parsed_args.prefix_slots)->default_value(-1),
              "How many prompt snapshots to keep (prefix cache), -1: default 8, at most 32, 0: off (Qwen3.5 and Qwen3.6-MoE)")
+            ("max-raw-frames", po::value<int>(&parsed_args.max_raw_frames)->default_value(128),
+             "Most raw RGB8 frames (image_raw, MiniCPM-V only) one request may carry (for serve command)")
+            ("allow-raw-path", po::value<std::string>(&parsed_args.raw_path_dir)->default_value(""),
+             "Directory raw RGB8 frame files may be read from (image_raw 'path'); empty: file input is off (for serve command)")
+            ("max-raw-mb", po::value<int>(&parsed_args.max_raw_mb)->default_value(128),
+             "Most MiB of raw RGB8 pixels one request may carry (for serve command)")
             ("prefix-min-gain", po::value<int>(&parsed_args.prefix_min_gain)->default_value(-1),
              "Prefix cache: a new end-of-prompt snapshot is only saved if it adds at least this many tokens over a saved one that already covers the prompt, "
              "-1: default 128, 0: save every one. Larger = fewer saves and evictions but up to N more tokens re-read on a resume; smaller = the opposite")

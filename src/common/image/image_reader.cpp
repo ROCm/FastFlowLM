@@ -686,6 +686,26 @@ bool ImageReader::load_image_base64(const std::string& base64_string, image_data
     return decode_bytes(reinterpret_cast<const uint8_t*>(decoded.data()), decoded.size(), out_image);
 }
 
+bool ImageReader::from_rgb8(const uint8_t* rgb, int height, int width, image_data_t& out_image) {
+    if (!rgb || height <= 0 || width <= 0) {
+        return false;
+    }
+    const size_t pixel_count = static_cast<size_t>(width) * height;
+    if (pixel_count > kMaxImagePixels) {
+        return false;
+    }
+    bytes buffer = memory_pool_.acquire(pixel_count * 3);
+    if (buffer.size() == 0) {
+        return false;
+    }
+    std::memcpy(buffer.data(), rgb, pixel_count * 3);
+    recycle(out_image);
+    out_image.width = width;
+    out_image.height = height;
+    out_image.pixels = std::move(buffer);
+    return true;
+}
+
 bool ImageReader::resize_image(const image_data_t& input, int target_width, int target_height, image_data_t& output) {
     if (input.pixels.size() == 0 || input.width <= 0 || input.height <= 0 || target_width <= 0 || target_height <= 0) {
         return false;
