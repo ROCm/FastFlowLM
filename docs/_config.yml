@@ -71,6 +71,8 @@ docs_nav:
     url: "/docs/install_win/"
   - label: Install-Linux
     url: "/docs/install_lin/"
+  - label: Build-Windows
+    url: "/docs/build_win/"
   - label: Instructions
     children:
       - label: Overview
