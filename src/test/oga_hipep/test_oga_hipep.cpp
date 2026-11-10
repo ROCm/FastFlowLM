@@ -787,6 +787,31 @@ void TestARefusedRewindReplaysInstead() {
     TEST_REQUIRE(engine->replayed_tokens() == 3);
 }
 
+void TestARefusedRewindEndsTheRewinds() {
+    auto engine = MakeEngineOn({0, 19, 0, 0});
+    std::vector<int> prompt{1, 2, 3};
+    engine->prefill(prompt);
+    engine->checkpoint();
+    engine->forward(4);
+    engine->restore();
+    g_fake.fail_next_rewind = "Requested length of rewind is greater than the current length.";
+    std::vector<int> turn{5};
+    engine->prefill(turn);
+    TEST_REQUIRE(!engine->rewinds());
+
+    // later checkpoints take no snapshot, so their turns replay without asking OGA to rewind
+    TEST_REQUIRE(engine->checkpoint() == 4);
+    engine->forward(6);
+    engine->restore();
+    std::vector<int> again{7};
+    RequireState(engine->prefill(again), 5, 7, 18);
+    TEST_REQUIRE(g_fake.snapshots == 1);
+    TEST_REQUIRE(g_fake.rewinds == (std::vector<std::size_t>{3}));
+    TEST_REQUIRE(g_fake.generators_created == 3);
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{1, 2, 3, 5, 7}));
+    TEST_REQUIRE(engine->replayed_tokens() == 7);
+}
+
 void TestTheRewindEntryPointsAreOptional() {
     auto symbols = FakeSymbols();
     symbols.erase("OgaGenerator_SnapshotState");
@@ -2186,6 +2211,7 @@ int main(int argc, char** argv) {
     RUN(TestOga019RewindsToTheCheckpoint);
     RUN(TestARewindNeedsTheHistoryToKeepTheCheckpoint);
     RUN(TestARefusedRewindReplaysInstead);
+    RUN(TestARefusedRewindEndsTheRewinds);
     RUN(TestTheRewindEntryPointsAreOptional);
     RUN(TestAnImagePromptRunsInOneSetInputsAfterAWarmUp);
     RUN(TestAnImageRunCanStartAChunk);

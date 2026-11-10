@@ -57,6 +57,7 @@ public:
 
     std::uint32_t max_length() const { return max_length_; }
     /// \brief whether a prefill after restore() continues at the checkpoint
+    /// \note It stops at the first rewind OGA refuses.
     bool rewinds() const noexcept { return rewinds_; }
     /// \brief tokens a rebuilt or rewound generator ran again, since construction
     std::uint64_t replayed_tokens() const noexcept { return replayed_; }

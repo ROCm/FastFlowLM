@@ -308,7 +308,10 @@ OgaEngine::Reuse OgaEngine::Resume() {
             api_->Check(api_->functions().generator_rewind_to(run.generator.get(), *run.snapshot),
                         "OgaGenerator_RewindTo");
         } catch (const OgaError& e) {
-            header_print("WARNING", display_name_ << ": " << e.what() << "; replaying instead");
+            // OGA refuses every rewind of a model it cannot rewind, such as gemma4 in OGA 0.19
+            rewinds_ = false;
+            header_print("WARNING", display_name_ << ": " << e.what()
+                                    << "; replaying instead, and after every later checkpoint");
             return Rebuild();
         }
         run.ran.resize(*run.snapshot);
