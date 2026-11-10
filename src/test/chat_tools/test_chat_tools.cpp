@@ -529,15 +529,15 @@ void test_no_tools_after_tool_turns() {
 
 void test_gemma4_nullable_types() {
     std::printf("gemma4 template gets nullable types in its own form\n");
-    json schema = {{"type", "object"},
-                   {"properties",
-                    {{"note", {{"type", {"string", "null"}}}},
-                     {"tags", {{"type", "array"}, {"items", {{"type", {"null", "integer"}}}}}},
-                     {"either", {{"type", {"string", "number"}}}},
-                     {"either_or_null", {{"type", {"string", "number", "null"}}}},
-                     {"shape", {{"type", "object"}, {"enum", {{{"type", {"string", "null"}}}}}}},
-                     {"labels", {{"type", "object"}, {"additionalProperties", {{"type", {"string", "null"}}}}}}}}};
-    json tools = json::array({{{"type", "function"}, {"function", {{"name", "f"}, {"parameters", schema}}}}});
+    const json tools = json::array({tool(
+        "f", object_schema({
+                 {"note", {{"type", {"string", "null"}}}},
+                 {"tags", {{"type", "array"}, {"items", {{"type", {"null", "integer"}}}}}},
+                 {"either", {{"type", {"string", "number"}}}},
+                 {"either_or_null", {{"type", {"string", "number", "null"}}}},
+                 {"shape", {{"type", "object"}, {"enum", {{{"type", {"string", "null"}}}}}}},
+                 {"labels", {{"type", "object"}, {"additionalProperties", {{"type", {"string", "null"}}}}}},
+             }))});
     const json out = gemma4_template_tools(tools)[0]["function"]["parameters"]["properties"];
     CHECK(out["note"] == (json{{"type", "string"}, {"nullable", true}}));
     CHECK(out["tags"]["items"] == (json{{"type", "integer"}, {"nullable", true}}));

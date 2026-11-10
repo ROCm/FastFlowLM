@@ -10,20 +10,12 @@ void write_nullable_types(nlohmann::ordered_json& schema) {
     if (!schema.is_object()) {
         return;
     }
-    if (schema.contains("type") && schema["type"].is_array()) {
-        nlohmann::ordered_json types = nlohmann::ordered_json::array();
-        bool nullable = false;
-        for (const auto& type : schema["type"]) {
-            if (type == "null") {
-                nullable = true;
-            } else {
-                types.push_back(type);
-            }
-        }
-        if (nullable && types.size() == 1) {
-            schema["type"] = types[0];
-            schema["nullable"] = true;
-        }
+    // [T, "null"] -> T, nullable: true
+    auto type = schema.find("type");
+    if (type != schema.end() && type->is_array() && type->size() == 2 &&
+        ((*type)[0] == "null") != ((*type)[1] == "null")) {
+        *type = (*type)[0] == "null" ? (*type)[1] : (*type)[0];
+        schema["nullable"] = true;
     }
     if (schema.contains("properties") && schema["properties"].is_object()) {
         for (auto& property : schema["properties"]) {
