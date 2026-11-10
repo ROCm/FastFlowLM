@@ -56,7 +56,8 @@ Components
 
 License:  curl License
 Homepage: https://curl.se
-Used in:  Windows: libcurl.dll (8.15.0).
+Used in:  Windows: libcurl.dll (8.15.0), and its headers in third_party/curl
+          for the Windows build.
 
 COPYRIGHT AND PERMISSION NOTICE
 

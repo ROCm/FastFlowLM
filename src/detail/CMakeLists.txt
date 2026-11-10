@@ -28,7 +28,7 @@ target_include_directories(gemma4e_npu BEFORE PRIVATE
 if(WIN32 AND NOT VCPKG_TOOLCHAIN)
     target_include_directories(gemma4e_npu PRIVATE
         C:/dev/boost_1_88_0
-        C:/dev/vcpkg/installed/x64-windows/include/
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/curl/include"
     )
 endif()
 # Whichever XRT the parent discovered: pkg-config, a portable build's from-source

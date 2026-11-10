@@ -1,95 +1,261 @@
-# Windows Setup and Build Instructions
+# Building FastFlowLM on Windows
 
-## Preparing WSL Side
+This page covers building `flm.exe` from source on Windows 11 x64. The build
+follows the Windows CI build (`.github/actions/win-build`). You do not need
+WSL, mlir-aie, or `gendef`.
 
-### mlir-aie tools: WSL Ubuntu 24.04
-All steps in WSL Ubuntu terminal.
-1. Open powershell as Administrator:
-    - Install WSL2 and Ubuntu 22.04
-        ```
-        wsl --install
-        wsl --install -d Ubuntu-22.0
-        ```
+## Quick start: `WinSetup.ps1`
 
+`src\WinSetup.ps1` performs every step below. Run it from a regular 64-bit
+PowerShell window, not "Developer PowerShell for VS": the script sets up its
+own x64 build environment. It can be started from any directory.
 
-2. Prepare WSL2 with Ubuntu 24.04:
-    - Install packages (after apt-get update):
-        ```
-        sudo apt install \
-        build-essential clang clang-14 lld lld-14 cmake \
-        python3-venv python3-pip \
-        libxrender1 libxtst6 libxi6 \
-        mingw-w64-tools \
-        gcc-13 g++-13
-        ```
-    - generate locales
-        ```
-        apt-get install locales
-        locale-gen en_US.UTF-8
-        ```
-3. Clone [https://github.com/Xilinx/mlir-aie.git](https://github.com/Xilinx/mlir-aie.git) best under /home/username for speed (yourPathToBuildMLIR-AIE), with submodules:
-    ```
-    git clone --recurse-submodules https://github.com/Xilinx/mlir-aie.git
-    ````
-4. Install mlir-aie tools under WSL2:
-    -  Use quick setup script to install from whls:
-        ```
-        cd mlir-air
-        source utils/quick_setup.sh
-        ```
-5. Build XRT dll definition file to be used to create .lib needed for host code compilation with Visual Studio C/C++ compiler. After installing the updated Ryzen™ AI driver (see next subsection), use the gendef tool (from the mingw-w64-tools package) to create a .def file with the required link symbols. This step is needed to create an XRT dll def file that we can link against when we compile. 
-    ```
-    mkdir /mnt/c/dev
-    mkdir /mnt/c/dev/xrtNPUfromDLL
-    cd /mnt/c/dev/xrtNPUfromDLL
-    cp /mnt/c/Windows/System32/xrt_coreutil.dll .
-    gendef xrt_coreutil.dll
-    ```
-6. Clone [XRT](https://github.com/Xilinx/XRT) under C:\dev\XRT. 
-    ```
-    cd /mnt/c/dev
-    git clone https://github.com/Xilinx/XRT.git
-    ```
+Git is needed to clone the repository. On a fresh machine, install it first
+with `winget install Git.Git` and open a new window. The script installs
+everything else.
 
+```powershell
+git clone https://github.com/ROCm/FastFlowLM.git C:\dev\FastFlowLM
+cd C:\dev\FastFlowLM
+powershell -ExecutionPolicy Bypass -File src\WinSetup.ps1 -InstallPrereqs
+```
 
-## Prepare Host Side: Natively on Win11
+`-InstallPrereqs` installs any missing tools with winget. If you leave the
+switch off, the script lists what is missing and stops.
 
-All steps in Win11 (powershell where needed).
+Visual Studio Build Tools installs machine-wide, and so does adding the C++
+workload to an existing Visual Studio. Both show a UAC prompt that an
+administrator has to approve. Rust and Ninja install per user. The script
+uses the CMake and Ninja that come with Visual Studio's C++ workload (its
+recommended "C++ CMake tools" component, which the script's install
+includes), and it unpacks Boost with the `tar.exe` that ships with Windows.
+CMake and 7-Zip then need no separate install. Only if Visual Studio has no
+CMake does the script install one with winget, which is also machine-wide.
 
-1. Upgrade the NPU driver to the latest version. Navigate to [here](https://ryzenai.docs.amd.com/en/latest/inst.html#install-npu-drivers) under `NPU Driver` to download and install the driver. 
+If a UAC prompt is declined or times out, the script stops and lists what is
+still missing; rerun it to try again. Without administrator rights, have
+Visual Studio Build Tools with the C++ workload installed first.
 
-   Note that we currently have two steps for setting up the driver for host compilation and linking. The driver installation provides the `xrt_coreutil.dll` under `C:\Windows\System32\` or `C:\Windows\System32\AMD` which is needed to generate the `xrt_coreutil.lib` that Visual Studio uses to compile against. 
+When the script finishes, `src\out` contains a runnable build:
 
-2. Install [Microsoft Visual Studio 17 2022 Community Edition](https://visualstudio.microsoft.com/vs/community/) with package for C++ development.
+```powershell
+cd src\out
+.\flm.exe validate
+.\flm.exe run llama3.2:1b
+```
 
-3. Install CMake on windows ([https://cmake.org/download/](https://cmake.org/download/)) which should include adding CMake to your PATH environment variable (e.g. `C:\Program Files\CMake\bin`)
+You can rerun the script at any time. Steps whose output already exists are
+skipped, so a rerun just rebuilds.
 
-4. Create visual studio XRT lib file for host code linking. This is done by creating a .lib file from the .dll shipped with the driver (along with generated .def file above).
-    - In wsl, generate a .def file (see above)
-    - Start a x86 Native Tools Command Prompt (installed as part of VS17), go to the folder `C:\dev\xrtNPUfromDLL` and run command:
-      ```
-      lib /def:xrt_coreutil.def /machine:x64 /out:xrt_coreutil.lib
-      ```
+To keep a log, pipe the script's output: `*>&1 | Tee-Object build.log`. Windows
+PowerShell 5.1 then shows tool messages written to stderr (rustup info, CMake
+warnings) as red `NativeCommandError` records. They are harmless: the script
+judges each tool by its exit code.
 
-5. Install Boost under `C:\Program Files\boost\boost_1_88_0`.
-    - Create  the boost directory.
-        ```
-        mkdir 'C:\Program Files\boost'
-        cd 'C:\Program Files\boost'
-        ```
-    -  Download the [Boost 1.88.0](https://www.boost.org/releases/1.88.0/) ZIP archive here. Then extract its contents to `C:\Program Files\boost\boost_1_88_0`.
+| Option | Effect |
+|---|---|
+| `-Variant XRT` | The default build, same as the release package. Includes the hip-ep (GPU) backend; pass `-NoOgaHipep` to leave it out. Builds into `src\build`. |
+| `-Variant HRX` | Builds against the pinned HRX runtime release (`hrx-integration\hrx-release.env`). Builds into `src\build-hrx`. |
+| `-Variant Source` | Like the CI "models from source" package: the Gemma 4 engine (`gemma4e_npu.dll`) is built from source instead of using the prebuilt DLL, and hip-ep is not included. Builds into `src\build-models-from-source`. |
+| `-BuildDir <dir>` | Use a different build directory under `src`. |
+| `-Clean` | Delete the build directory and `src\out` first. |
+| `-Jobs <n>` | Parallel build jobs. The default is all cores, or 2 for `Source`. |
+| `-SkipBuild` | Set up tools and dependencies only. |
+| `-NoStage` | Do not copy runtime files into `src\out`. |
 
+All variants stage into the same `src\out`, so it holds the variant built
+last. Staging removes the DLLs there first, so none are left over from
+another variant.
 
-6. Clone vcpkg under `C:\dev`.
-    ```
-    cd 'C:\dev'
-    git clone https://github.com/microsoft/vcpkg.git
-    ``` 
+## What gets set up
 
-## Quick Start
+### 1. Tools
 
-1. Open a powershell
+| Tool | Why | winget ID |
+|---|---|---|
+| Git | clone and submodules | `Git.Git` |
+| Visual Studio 2026 or 2022 with **Desktop development with C++** (the Build Tools edition is enough) | MSVC, Windows SDK, `lib.exe`, `dumpbin`, and the bundled CMake and Ninja | `Microsoft.VisualStudio.BuildTools` (2026) |
+| CMake 3.24 or newer (4.2 or newer with VS 2026). The copy bundled with VS works. | build system | `Kitware.CMake` |
+| Rust through rustup, toolchain `stable-x86_64-pc-windows-msvc` | tokenizers-cpp builds a Rust crate | `Rustlang.Rustup` |
+| Ninja. The copy bundled with VS works. | generator for the `windows-ninja` preset | `Ninja-build.Ninja` |
+| 7-Zip (optional) | unpacks the Boost archive; without it, the `tar.exe` that ships with Windows is used | `7zip.7zip` |
 
-2. Go to the FastFlowLM dir
+CI has no NASM, so its libjpeg-turbo builds without SIMD code. If `nasm` is on
+`PATH`, libjpeg-turbo finds it and builds with SIMD, so your build differs
+from CI's in that respect.
 
-3. Type `make run` 
+If Visual Studio is already installed without the C++ workload, add
+**Desktop development with C++** to it in the Visual Studio Installer. With
+`-InstallPrereqs`, the script does this for you. To install the Build Tools by
+hand with the C++ workload:
+
+```powershell
+winget install Microsoft.VisualStudio.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+```
+
+cargo does not have to be on `PATH`. tokenizers-cpp also looks in
+`%CARGO_HOME%\bin` and `%USERPROFILE%\.cargo\bin`.
+
+Keep the clone path short, for example `C:\dev\FastFlowLM`. The Rust and codec
+build trees nest deeply, and a long root path can exceed MAX_PATH (260
+characters).
+
+### 2. Submodules
+
+```powershell
+git submodule update --init --recursive --depth 1
+```
+
+This pulls `third_party/tokenizers-cpp` (with msgpack and sentencepiece) and
+`third_party/xgrammar`. `--depth 1` fetches only the pinned commits, as CI
+does. The full msgpack-c history is about 95 MB, and GitHub often resets that
+transfer partway through.
+
+### 3. Native dependencies under `C:\dev`
+
+`src/CMakeLists.txt` looks for these by absolute path, so the location is
+fixed:
+
+| Path | Contents |
+|---|---|
+| `C:\dev\boost_1_88_0` | Boost 1.88.0 headers, plus `stage\lib\libboost_program_options-vc143-mt-x64-1_88.lib` |
+| `C:\dev\XRT\src\runtime_src\core\include` | XRT headers at the pinned commit, plus `xrt\detail\version.h` |
+| `C:\dev\xrtNPUfromDLL\xrt_coreutil.lib` | import library for the NPU driver's `xrt_coreutil.dll` |
+
+curl is not on this list. `third_party/curl` holds the headers that match the
+shipped `src\lib\libcurl.dll`, and CMake makes `libcurl.lib` from
+`third_party/curl/libcurl.def` when it configures, so you do not need vcpkg.
+
+To set up the rest, run the script CI uses. It needs `cmake` on `PATH` and the
+Visual Studio C++ tools, so run it from the x64 developer shell in step 4. It
+unpacks Boost with `7z` when that is on `PATH`, and with Windows' `tar.exe`
+otherwise:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .github\script\ci\setup_windows_deps.ps1
+```
+
+That script does four things:
+
+- Downloads the Boost archive and checks its SHA-256.
+- Builds Boost.ProgramOptions with `.github/windows-deps/boost_program_options`.
+- Sparse-checks-out the XRT headers at the pinned commit, and adds the
+  generated `version.h` from `.github/windows-deps`.
+- Runs `lib.exe` on `.github/windows-deps/xrt_coreutil.def` to make
+  `xrt_coreutil.lib`. The `.def` file is committed, so you need neither the
+  NPU driver nor `gendef` to build.
+
+### 4. Configure and build
+
+Ninja and `cl` need an **x64** MSVC environment. The Start Menu "Developer
+PowerShell for VS" and "Developer Command Prompt" shortcuts target **x86**,
+and an x86 build fails to link against the x64 libraries. Use the
+"x64 Native Tools Command Prompt for VS", or enter an x64 shell from a regular
+PowerShell:
+
+```powershell
+$vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
+```
+
+If configure then fails with `LNK1104: cannot open file 'kernel32.lib'`, the
+developer shell could not find the Windows SDK. This happens when policy
+blocks `reg.exe`. `WinSetup.ps1` detects this and adds the SDK paths itself;
+the Visual Studio generator below is not affected.
+
+Then build:
+
+```powershell
+cd src
+cmake --preset windows-ninja -DFLM_ENABLE_OGA_HIPEP=ON
+cmake --build build --parallel
+```
+
+The other variants use their own build directories, with the same options
+as CI:
+
+```powershell
+# HRX: fetch the pinned release first
+powershell -ExecutionPolicy Bypass -File ..\hrx-integration\fetch-hrx-release.ps1   # prints HRX_CMAKE_PREFIX=<prefix>
+cmake --preset windows-ninja -B build-hrx -DFLM_USE_HRX=ON -DFLM_ENABLE_OGA_HIPEP=OFF "-DCMAKE_PREFIX_PATH=<prefix>"
+cmake --build build-hrx --parallel
+
+# Source: the Gemma 4 engine built from source, without hip-ep
+cmake --preset windows-ninja -B build-models-from-source -DFLM_BUILD_GEMMA4E=ON -DFLM_ENABLE_OGA_HIPEP=OFF
+cmake --build build-models-from-source --parallel 2
+```
+
+If you prefer the Visual Studio generator, no developer shell is needed:
+
+```powershell
+cmake --preset windows-vs18 -DFLM_ENABLE_OGA_HIPEP=ON   # VS 2026; windows-default for VS 2022
+cmake --build build --config Release --parallel
+```
+
+A build directory belongs to the generator it was configured with. To switch
+generators, delete the directory or use another one (`-B <dir>`).
+
+`FLM_USE_HRX`, `FLM_ENABLE_OGA_HIPEP` and `FLM_BUILD_GEMMA4E` are cached
+options. To turn one off in an existing build directory, pass it as `=OFF`;
+leaving it out keeps the previous value.
+
+The first build needs internet access. It downloads the image and audio codec
+sources (libjpeg-turbo, libwebp, opus, libogg, libvorbis) and the Rust crates.
+
+The version string comes from `FLM_VERSION` in `src/CMakePresets.json`, not
+from git tags.
+
+### 5. Stage and run
+
+The build writes `src\build\flm.exe` and copies it to `src\out\flm.exe`. Before
+it can run, it needs the engine DLLs and data files next to it. The script
+copies the same files as the release package:
+
+```powershell
+cd src
+Copy-Item lib\xrt\*.dll out -Force
+Copy-Item lib\*.dll out -Force
+Copy-Item model_list.json, model_info.json out -Force
+New-Item -ItemType Directory -Force out\xclbins | Out-Null
+Copy-Item xclbins\* out\xclbins -Recurse -Force   # not "xclbins out": that nests on a rerun
+```
+
+For HRX, copy `lib\*.dll`, then `lib\hrx\*.dll`, then the `hrx.dll` that
+`fetch-hrx-release.ps1` unpacked somewhere under `hrx-integration\.hrx-release`
+(`Get-ChildItem ..\hrx-integration\.hrx-release -Recurse -Filter hrx.dll`).
+
+For the Source variant, also copy `build-models-from-source\engines\*.dll`
+over the prebuilt engine DLLs.
+
+To run it, you need an AMD Ryzen AI NPU with the
+[NPU driver](https://ryzenai.docs.amd.com/en/latest/inst.html#install-npu-drivers)
+installed. `flm.exe validate` checks the driver.
+
+## Other dependency routes
+
+`src/CMakeLists.txt` has two alternatives to the `C:\dev` layout:
+
+- **vcpkg toolchain**
+  - Install Boost and curl:
+    `vcpkg install boost-program-options curl:x64-windows`
+  - Configure with
+    `-DCMAKE_TOOLCHAIN_FILE=<vcpkg>\scripts\buildsystems\vcpkg.cmake`.
+  - The XRT headers and `xrt_coreutil.lib` still come from `XRT_INCLUDE_DIR`
+    and `XRT_LIB_DIR`, which default to the `C:\dev` paths above.
+  - Packages still ship `src\lib\libcurl.dll`. CMake warns when vcpkg's curl
+    is a different version, because a newer curl function would fail to load
+    against the shipped DLL.
+  - vcpkg's `x64-windows` Boost is a DLL. Copy
+    `build\boost_program_options-*.dll` into `src\out` along with the files
+    in step 5.
+- **`-DFLM_WIN_DEPS_PREFIX=<prefix>`**
+  - Takes Boost and curl from `<prefix>\include` and `<prefix>\lib`. In
+    practice that is a conda env's `Library` dir, set up with
+    `conda install -c conda-forge boost libcurl`.
+  - The env's `bin` must be on `PATH` when `flm.exe` runs.
+  - Packages still ship `src\lib\libcurl.dll`. CMake warns when the prefix's
+    curl is a different version.
+  - The XRT headers and `xrt_coreutil.lib` still come from the `C:\dev` paths
+    (`XRT_INCLUDE_DIR`, `XRT_LIB_DIR`).
+  - This route cannot be combined with the vcpkg toolchain.
