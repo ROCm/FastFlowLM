@@ -13,6 +13,76 @@
 #include <iostream>
 #include <iomanip>
 #include <locale>
+#include <array>
+
+namespace {
+/// Serialize an error body. Error text can carry raw request bytes (a parse error quotes the
+/// bytes it choked on), so invalid UTF-8 is replaced instead of throwing: a throwing dump here
+/// escapes into ioc.run() and permanently kills that I/O thread.
+std::string dump_error_body(const json& body) {
+    return body.dump(-1, ' ', false, json::error_handler_t::replace);
+}
+
+/// Reject a connection over the connection limit with a real HTTP 503 instead of a bare close.
+/// The request is not read; after the reply the write side is shut down and the read side is
+/// drained (bounded by a timer) so the kernel does not answer unread request bytes with a RST.
+struct ConnectionRejecter : std::enable_shared_from_this<ConnectionRejecter> {
+    // The io_context runs on several threads: a strand keeps the timeout's close() from
+    // racing the write/read handlers on the same socket.
+    net::strand<net::any_io_executor> strand;
+    tcp::socket socket;
+    net::steady_timer timer;
+    std::string reply;
+    std::array<char, 4096> sink{};
+
+    explicit ConnectionRejecter(tcp::socket s)
+        : strand(net::make_strand(s.get_executor())), socket(std::move(s)), timer(strand) {}
+
+    void start(size_t limit) {
+        const std::string body = dump_error_body(json{{"error", {
+            {"message", "Server is at its connection limit (" + std::to_string(limit) +
+                        "). Please try again later."},
+            {"type", "server_busy"},
+            {"code", 503}}}});
+        reply = "HTTP/1.1 503 Service Unavailable\r\n"
+                "Content-Type: application/json\r\n"
+                "Retry-After: 1\r\n"
+                "Connection: close\r\n"
+                "Access-Control-Allow-Origin: *\r\n"
+                "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
+        auto self = shared_from_this();
+        timer.expires_after(std::chrono::seconds(5));
+        timer.async_wait(net::bind_executor(strand, [self](beast::error_code ec) {
+            if (!ec) { beast::error_code ignore; self->socket.close(ignore); }
+        }));
+        // Start the write on the strand too, so it is ordered against the timer handler.
+        net::dispatch(strand, [self] {
+            net::async_write(self->socket, net::buffer(self->reply),
+                net::bind_executor(self->strand, [self](beast::error_code ec, std::size_t) {
+                    if (ec) { self->finish(); return; }
+                    beast::error_code ignore;
+                    self->socket.shutdown(tcp::socket::shutdown_send, ignore);
+                    self->drain();
+                }));
+        });
+    }
+
+    void drain() {
+        auto self = shared_from_this();
+        socket.async_read_some(net::buffer(sink),
+            net::bind_executor(strand, [self](beast::error_code ec, std::size_t) {
+                if (ec) { self->finish(); return; }
+                self->drain();
+            }));
+    }
+
+    void finish() {
+        beast::error_code ignore;
+        timer.cancel();
+        socket.close(ignore);
+    }
+};
+} // namespace
 
 
 // Global NPU access control
@@ -283,8 +353,40 @@ void HttpSession::handle_request(bool cors) {
     res_.version(req_.version());
     res_.keep_alive(req_.keep_alive());
 
-    // Handle the request through the server
-    bool deferred = server_.handle_request(req_, res_, socket_, shared_from_this());
+    // Handle the request through the server. Nothing may escape into ioc.run(): answer 500
+    // (or, mid-stream, drop the connection) instead of leaving the client without a reply.
+    bool deferred = false;
+    try {
+        deferred = server_.handle_request(req_, res_, socket_, shared_from_this());
+    } catch (const std::exception& e) {
+        header_print("LOG", "Unhandled exception in request: " + std::string(e.what()));
+        deferred = false;
+        if (!is_streaming_) {
+            res_ = {};
+            res_.version(req_.version());
+            res_.keep_alive(false);
+            res_.result(http::status::internal_server_error);
+            res_.set(http::field::content_type, "application/json");
+            res_.body() = dump_error_body(json{ {"error", std::string("Internal server error: ") + e.what()} });
+            res_.prepare_payload();
+        } else {
+            close_connection();
+        }
+    } catch (...) {
+        header_print("LOG", "Unknown unhandled exception in request");
+        deferred = false;
+        if (!is_streaming_) {
+            res_ = {};
+            res_.version(req_.version());
+            res_.keep_alive(false);
+            res_.result(http::status::internal_server_error);
+            res_.set(http::field::content_type, "application/json");
+            res_.body() = dump_error_body(json{ {"error", "Internal server error"} });
+            res_.prepare_payload();
+        } else {
+            close_connection();
+        }
+    }
 
     // Clear the buffer after processing to prevent data accumulation
     buffer_.consume(buffer_.size());
@@ -500,10 +602,18 @@ void WebServer::start() {
     // Run the I/O service on multiple threads for better concurrency
     for (size_t i = 0; i < io_thread_count_; ++i) {
         io_threads_.emplace_back([this]() {
-            try {
-                ioc.run();
-            } catch (const std::exception& e) {
-                header_print("LOG", "Error in WebServer I/O thread: " + std::string(e.what()));
+            // An exception escaping a handler unwinds run(); asio allows calling run() again, so
+            // keep this thread serving instead of losing one I/O thread per escaped exception.
+            for (;;) {
+                try {
+                    ioc.run();
+                    break;  // run() returned normally: the server is stopping
+                } catch (const std::exception& e) {
+                    header_print("LOG", "Error in WebServer I/O thread (continuing): " + std::string(e.what()));
+                } catch (...) {
+                    header_print("LOG", "Unknown error in WebServer I/O thread (continuing)");
+                }
+                if (!running) break;
             }
         });
     }
@@ -570,9 +680,8 @@ void WebServer::do_accept() {
             if (!ec) {
                 // Check connection limit
                 if (active_connections_.load() >= max_connections_) {
-                    header_print("LOG", "Connection limit reached (" + std::to_string(max_connections_) + "), rejecting new connection");
-                    // Close the socket and continue accepting
-                    socket.close();
+                    header_print("LOG", "Connection limit reached (" + std::to_string(max_connections_) + "), rejecting new connection with 503");
+                    std::make_shared<ConnectionRejecter>(std::move(socket))->start(max_connections_);
                 } else {
                     // Increment connection counter
                     active_connections_.fetch_add(1);
@@ -625,9 +734,11 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
             std::string content_type = std::string(req[http::field::content_type]);
 
             if (content_type.find("application/json") != std::string::npos) {
+                // Decide on the Content-Type, not on whether this log-only parse succeeds:
+                // a malformed body must still reach the parse below and get its 400.
+                is_json = true;
                 json request_json_log = json::parse(req.body());
                 brief_print_message_request(request_json_log);
-                is_json = true;
             }
             else if (content_type.find("multipart/form-data") != std::string::npos) {
                 // print some request info 
@@ -644,7 +755,7 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
     if (it == routes.end()) {
         // No route: respond 404 synchronously.
         res.result(http::status::not_found);
-        res.body() = json{ {"error", "Not Found"} }.dump();
+        res.body() = dump_error_body(json{ {"error", "Not Found"} });
         res.set(http::field::content_type, is_json ? "application/json" : "multipart/form-data");
         res.prepare_payload();
         return false; 
@@ -677,8 +788,12 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
             }
         }
         catch (const std::exception& e) {
+            header_print("LOG", "Invalid JSON request body: " + std::string(e.what()));
             res_ref.result(http::status::bad_request);
-            res_ref.body() = json{ {"error", "Invalid JSON"} }.dump();
+            res_ref.body() = dump_error_body(json{ {"error", {
+                {"message", std::string("Invalid JSON: ") + e.what()},
+                {"type", "invalid_request_error"},
+                {"code", 400}}} });
             res_ref.set(http::field::content_type, "application/json");
             res_ref.prepare_payload();
 
@@ -691,8 +806,9 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
         session->set_cancellation_token(cancellation_token);
 
         std::string request_id;
-        if (request_json.contains("request_id")) {
-            request_id = request_json["request_id"];
+        if (request_json.is_object() && request_json.contains("request_id") &&
+            request_json["request_id"].is_string()) {
+            request_id = request_json["request_id"].get<std::string>();
         }
         else {
             static std::atomic<int> counter{ 0 };
@@ -764,12 +880,33 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
         try {
             it->second(req_ref, send_response, send_streaming_response, session, cancellation_token);
         }
+        catch (const json::parse_error& e) {
+            // A route that parses the body itself (any Content-Type) got a malformed one: 400.
+            // A parse error on anything else (model output, a file) stays a 500.
+            cancellation_token->complete();
+            unregister_active_request(request_id);
+
+            const bool bad_body = !json::accept(req_ref.body());
+            res_ref.result(bad_body ? http::status::bad_request : http::status::internal_server_error);
+            res_ref.body() = bad_body
+                ? dump_error_body(json{ {"error", {
+                    {"message", std::string("Invalid JSON: ") + e.what()},
+                    {"type", "invalid_request_error"},
+                    {"code", 400}}} })
+                : dump_error_body(json{ {"error", std::string("Handler exception: ") + e.what()} });
+            res_ref.set(http::field::content_type, "application/json");
+            res_ref.prepare_payload();
+
+            if (is_deferred && session) {
+                session->write_response_from_callback();
+            }
+        }
         catch (const std::exception& e) {
             cancellation_token->complete();
             unregister_active_request(request_id);
 
             res_ref.result(http::status::internal_server_error);
-            res_ref.body() = json{ {"error", std::string("Handler exception: ") + e.what()} }.dump();
+            res_ref.body() = dump_error_body(json{ {"error", std::string("Handler exception: ") + e.what()} });
             res_ref.set(http::field::content_type, "application/json");
             res_ref.prepare_payload();
 
@@ -782,7 +919,7 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
             unregister_active_request(request_id);
 
             res_ref.result(http::status::internal_server_error);
-            res_ref.body() = json{ {"error", "Unknown handler exception"} }.dump();
+            res_ref.body() = dump_error_body(json{ {"error", "Unknown handler exception"} });
             res_ref.set(http::field::content_type, "application/json");
             res_ref.prepare_payload();
 
@@ -812,11 +949,11 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
             process_task(true);
         })) {
         res.result(http::status::service_unavailable);
-        res.body() = json{
+        res.body() = dump_error_body(json{
             {"error", "NPU is in use and request queue is full (limit: " +
                 std::to_string(npu_request_coordinator_.capacity()) +
                 "). Please try again later."}
-        }.dump();
+        });
         res.set(http::field::content_type, "application/json");
         res.prepare_payload();
         header_print("🚫 ", "NPU busy and queue full, request denied: " + key);
