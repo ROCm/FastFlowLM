@@ -1221,7 +1221,7 @@ void TestDiscoveryReportsWhyEachRootIsRejected() {
 void TestDiscoveryAcceptsAVersionedPackageWithoutABinDirectory() {
     TempDir root;
     for (const char* file : kPackageFiles) Touch(root.path / file);
-    // Any DLL with a version resource of 0.17 or later stands in for OGA here.
+    // Any DLL with a version resource of 0.19 or later stands in for OGA here.
     std::filesystem::copy_file("C:\\Windows\\System32\\version.dll",
                                root.path / "onnxruntime-genai.dll",
                                std::filesystem::copy_options::overwrite_existing);
@@ -1261,12 +1261,24 @@ void MakePackageFiles(const std::filesystem::path& bin) {
 /// \brief a complete hip-ep package under `root`, with its DLLs in root\\bin
 void MakePackage(const std::filesystem::path& root) { MakePackageFiles(root / "bin"); }
 
-/// \brief what amdgpu.zip extracts to: no bin, the DLLs and hipBLASLt's kernels at the root
+/// \brief a package as hip-ep's amdgpu zips hold it: no bin, the DLLs and hipBLASLt's kernels at the root
 void MakeManagedRuntimeLayout(const std::filesystem::path& root) {
     MakePackageFiles(root);
     Touch(root / "amdhip64_7.dll");
     Touch(root / "hipblaslt.dll");
     std::filesystem::create_directories(root / "hipblaslt" / "library");
+}
+
+/// \brief a package as hip-ep 0.5.3's hipep_0.5.3_windows.zip holds it: the DLLs and hipBLASLt's kernels in bin
+void MakeBinRuntimeLayout(const std::filesystem::path& root) { MakeManagedRuntimeLayout(root / "bin"); }
+
+void ExtractBinRuntime(const std::filesystem::path&, const std::filesystem::path& staging) {
+    MakeBinRuntimeLayout(staging);
+}
+
+/// \brief what hip-ep 0.5.3's amdgpu-0.5.3.zip extracts to: the package in a folder of its own
+void ExtractFolderedRuntime(const std::filesystem::path&, const std::filesystem::path& staging) {
+    MakeManagedRuntimeLayout(staging / "amdgpu-9.9.9");
 }
 
 /// \brief an environment in which the variables discovery reads have these values; empty is unset
@@ -1456,8 +1468,8 @@ void TestWhenNoFolderHoldsAPackageTheErrorListsBothFolders() {
         [&] { flm::oga::FindPackage(search.candidates, search.notes); });
     RequireContains(text, "'" + (local.path / "hip-ep").string() + "' does not exist");
     RequireContains(text, "'" + (programs.path / "hip-ep").string() + "' does not exist");
-    RequireContains(text, "Install hip-ep 0.5.2 or later");
-    RequireContains(text, "Unzip it into %LOCALAPPDATA%\\hip-ep\\<version>");
+    RequireContains(text, "Install hip-ep 0.5.3 or later (OGA 0.19.0 or later)");
+    RequireContains(text, "unzip it into %LOCALAPPDATA%\\hip-ep or %ProgramFiles%\\hip-ep");
 
     const auto unset = flm::oga::SearchPackages(Environment({}, {}, {}));
     const auto unset_text = RequireThrows<std::runtime_error>(
@@ -1507,6 +1519,83 @@ void TestAutoInstallCreatesAManagedRuntime() {
     TEST_REQUIRE(package.source == "%LOCALAPPDATA%\\hip-ep\\flm-9.9.9");
     TEST_REQUIRE(package.bin == fixture.final_dir());
     TEST_REQUIRE(std::filesystem::is_regular_file(fixture.final_dir() / ".flm-hipep-install.json"));
+}
+
+void TestAutoInstallTakesAnArchiveThatKeepsItsDllsInBin() {
+    RuntimeInstallFixture fixture;
+    const auto package =
+        flm::oga::EnsureHipEpPackageForTest(fixture.environment(), fixture.Hooks(ExtractBinRuntime));
+    TEST_REQUIRE(fixture.downloads == 1);
+    TEST_REQUIRE(package.source == "%LOCALAPPDATA%\\hip-ep\\flm-9.9.9");
+    TEST_REQUIRE(package.bin == fixture.final_dir() / "bin");
+    TEST_REQUIRE(std::filesystem::is_regular_file(fixture.final_dir() / ".flm-hipep-install.json"));
+    TEST_REQUIRE(flm::oga::EnsureHipEpPackageForTest(fixture.environment(), fixture.Hooks(ExtractBinRuntime)).bin ==
+                 fixture.final_dir() / "bin");
+    TEST_REQUIRE(fixture.downloads == 1);
+}
+
+void TestAutoInstallTakesAnArchiveThatKeepsItsPackageInAFolder() {
+    RuntimeInstallFixture fixture;
+    const auto package =
+        flm::oga::EnsureHipEpPackageForTest(fixture.environment(), fixture.Hooks(ExtractFolderedRuntime));
+    TEST_REQUIRE(fixture.downloads == 1);
+    TEST_REQUIRE(package.source == "%LOCALAPPDATA%\\hip-ep\\flm-9.9.9");
+    TEST_REQUIRE(package.bin == fixture.final_dir());
+    TEST_REQUIRE(std::filesystem::is_regular_file(fixture.final_dir() / ".flm-hipep-install.json"));
+    TEST_REQUIRE(std::filesystem::is_directory(fixture.final_dir() / "hipblaslt" / "library"));
+    TEST_REQUIRE(std::filesystem::is_empty(fixture.staging_root()));
+    TEST_REQUIRE(flm::oga::EnsureHipEpPackageForTest(fixture.environment(), fixture.Hooks(ExtractFolderedRuntime))
+                     .bin == fixture.final_dir());
+    TEST_REQUIRE(fixture.downloads == 1);
+
+    RuntimeInstallFixture in_bin;
+    TEST_REQUIRE(flm::oga::EnsureHipEpPackageForTest(
+                     in_bin.environment(),
+                     in_bin.Hooks([](const std::filesystem::path&, const std::filesystem::path& staging) {
+                         MakeBinRuntimeLayout(staging / "hip-ep-9.9.9");
+                     }))
+                     .bin == in_bin.final_dir() / "bin");
+    TEST_REQUIRE(std::filesystem::is_regular_file(in_bin.final_dir() / ".flm-hipep-install.json"));
+    TEST_REQUIRE(std::filesystem::is_empty(in_bin.staging_root()));
+}
+
+void TestAnArchiveFolderMustHoldTheWholePackage() {
+    RuntimeInstallFixture fixture;
+    auto hooks = fixture.Hooks([](const std::filesystem::path& archive, const std::filesystem::path& staging) {
+        ExtractFolderedRuntime(archive, staging);
+        std::filesystem::remove(staging / "amdgpu-9.9.9" / "hipblaslt.dll");
+    });
+    const auto text = RequireThrows<std::runtime_error>(
+        [&] { flm::oga::EnsureHipEpPackageForTest(fixture.environment(), hooks); });
+    RequireContains(text, "extracted hip-ep archive is missing");
+    RequireContains(text, Text(std::filesystem::path("amdgpu-9.9.9") / "hipblaslt.dll") + "'");
+    TEST_REQUIRE(!std::filesystem::exists(fixture.final_dir()));
+    TEST_REQUIRE(std::filesystem::is_empty(fixture.staging_root()));
+
+    // a folder beside the package's folder leaves no single folder to take as the package
+    auto two_folders = fixture.Hooks([](const std::filesystem::path& archive, const std::filesystem::path& staging) {
+        ExtractFolderedRuntime(archive, staging);
+        std::filesystem::create_directories(staging / "docs");
+    });
+    RequireContains(RequireThrows<std::runtime_error>(
+                        [&] { flm::oga::EnsureHipEpPackageForTest(fixture.environment(), two_folders); }),
+                    "extracted hip-ep archive is missing");
+    TEST_REQUIRE(!std::filesystem::exists(fixture.final_dir()));
+    TEST_REQUIRE(std::filesystem::is_empty(fixture.staging_root()));
+}
+
+void TestAnArchiveWithABinDirectoryNeedsHipblasltBesideItsDlls() {
+    RuntimeInstallFixture fixture;
+    auto hooks = fixture.Hooks([](const std::filesystem::path&, const std::filesystem::path& staging) {
+        MakeBinRuntimeLayout(staging);
+        std::filesystem::rename(staging / "bin" / "hipblaslt", staging / "hipblaslt");
+    });
+    const auto text = RequireThrows<std::runtime_error>(
+        [&] { flm::oga::EnsureHipEpPackageForTest(fixture.environment(), hooks); });
+    RequireContains(text, "extracted hip-ep archive is missing");
+    RequireContains(text, Text(std::filesystem::path("bin") / "hipblaslt" / "library") + "'");
+    TEST_REQUIRE(!std::filesystem::exists(fixture.final_dir()));
+    TEST_REQUIRE(std::filesystem::is_empty(fixture.staging_root()));
 }
 
 void TestAutoInstallReusesTheManagedRuntimeWithoutDownloadingAgain() {
@@ -1816,6 +1905,25 @@ void TestUninstallRemovesNothingWhileAProcessHasTheRuntimeLoaded() {
     TEST_REQUIRE(!std::filesystem::exists(fixture.final_dir()));
 }
 
+void TestUninstallSeesARuntimeInUseThroughItsBinDirectory() {
+    RuntimeInstallFixture fixture;
+    TEST_REQUIRE(flm::oga::EnsureHipEpPackageForTest(fixture.environment(), fixture.Hooks(ExtractBinRuntime)).bin ==
+                 fixture.final_dir() / "bin");
+    const auto genai = fixture.final_dir() / "bin" / "onnxruntime-genai.dll";
+    std::unique_ptr<std::remove_pointer_t<HMODULE>, decltype(&FreeLibrary)> loaded(LoadLibraryW(genai.c_str()),
+                                                                                  &FreeLibrary);
+    TEST_REQUIRE(loaded != nullptr);
+
+    const std::string log = Uninstall(fixture, false);
+    RequireContains(log, "hip-ep 9.9.9 is in use, so nothing was removed");
+    RequireContains(log, Text(genai));
+    TEST_REQUIRE(std::filesystem::is_regular_file(genai));
+
+    loaded.reset();
+    RequireContains(Uninstall(fixture, true), "Removed hip-ep 9.9.9");
+    TEST_REQUIRE(!std::filesystem::exists(fixture.final_dir()));
+}
+
 void TestUninstallRemovesNothingWhileAnInstallRuns() {
     RuntimeInstallFixture fixture;
     TEST_REQUIRE(flm::oga::EnsureHipEpPackageForTest(fixture.environment(), fixture.Hooks()).bin ==
@@ -2020,7 +2128,7 @@ void TestTheBackendSaysHowToGetHipep() {
         [&] { flm::oga::hipep_factory()(package.Context()); });
     _putenv_s("AMDRT_PKG_ROOT", "");
     RequireContains(text, "AMDRT_PKG_ROOT: '" + absent + "' is not a directory");
-    RequireContains(text, "Install hip-ep 0.5.2 or later");
+    RequireContains(text, "Install hip-ep 0.5.3 or later");
 }
 
 void TestConstructionDoesNotRunInference() {
@@ -2113,6 +2221,10 @@ int main(int argc, char** argv) {
     RUN(TestProgramFilesIsUsedWhenLocalAppDataHasNothing);
     RUN(TestAVersionInsideAFolderNameStillWinsByItsNumber);
     RUN(TestAutoInstallCreatesAManagedRuntime);
+    RUN(TestAutoInstallTakesAnArchiveThatKeepsItsDllsInBin);
+    RUN(TestAutoInstallTakesAnArchiveThatKeepsItsPackageInAFolder);
+    RUN(TestAnArchiveFolderMustHoldTheWholePackage);
+    RUN(TestAnArchiveWithABinDirectoryNeedsHipblasltBesideItsDlls);
     RUN(TestAutoInstallReusesTheManagedRuntimeWithoutDownloadingAgain);
     RUN(TestAnExplicitRootStillDisablesAutoInstall);
     RUN(TestAutoInstallDoesNotReplaceAnUnownedConflict);
@@ -2130,6 +2242,7 @@ int main(int argc, char** argv) {
     RUN(TestUninstallRemovesEveryManagedRuntimeAndTheInstallersFiles);
     RUN(TestUninstallLeavesEveryPackageFlmDidNotInstall);
     RUN(TestUninstallRemovesNothingWhileAProcessHasTheRuntimeLoaded);
+    RUN(TestUninstallSeesARuntimeInUseThroughItsBinDirectory);
     RUN(TestUninstallRemovesNothingWhileAnInstallRuns);
     RUN(TestUninstallWithNothingInstalledChangesNothing);
     RUN(TestUninstallRemovesWhatAFailedInstallLeft);

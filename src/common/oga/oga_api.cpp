@@ -31,7 +31,7 @@ constexpr std::array<std::string_view, 3> kPackageFiles{
 constexpr const wchar_t* kPackageRootVariable = L"AMDRT_PKG_ROOT";
 constexpr std::string_view kHipEpFolder = "hip-ep";
 /// \brief the hip-ep release whose OGA this backend is built against
-constexpr const char* kMinimumHipEp = "0.5.2";
+constexpr const char* kMinimumHipEp = "0.5.3";
 
 std::string Text(const std::filesystem::path& path) {
     const auto utf8 = path.u8string();
@@ -272,10 +272,10 @@ Package FindPackage(const std::vector<PackageCandidate>& candidates,
     throw std::runtime_error(
         "no usable hip-ep package for the oga-hipep backend:" + reasons +
         "\nInstall hip-ep " + kMinimumHipEp + " or later (OGA " + VersionText(kMinimumOgaVersion) +
-        " or later). hip-ep's amdgpu.zip has no installer. Unzip it into %LOCALAPPDATA%\\hip-ep\\<version>"
-        " or %ProgramFiles%\\hip-ep\\<version>, so that the folder holds its DLLs (a bin directory"
-        " holding them also works). Or set AMDRT_PKG_ROOT to the package root: when it is set, no"
-        " other folder is tried.");
+        " or later). hip-ep's amdgpu-<version>.zip has no installer and holds its DLLs in an"
+        " amdgpu-<version> folder: unzip it into %LOCALAPPDATA%\\hip-ep or %ProgramFiles%\\hip-ep, where"
+        " each folder that holds the DLLs (or a bin directory holding them) is a package. Or set"
+        " AMDRT_PKG_ROOT to the package root: when it is set, no other folder is tried.");
 }
 
 OgaApi::OgaApi(Resolver resolver, Package package) : package_(std::move(package)) {

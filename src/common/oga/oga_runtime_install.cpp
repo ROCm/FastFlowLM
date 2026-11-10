@@ -39,12 +39,12 @@ constexpr std::uint64_t kInstallSafetyMargin = 64ULL * 1024ULL * 1024ULL;
 
 const HipEpRuntimeRelease& BuiltInRelease() {
     static const HipEpRuntimeRelease release{
-        "0.5.2",
-        "amdgpu.zip",
-        "https://github.com/ROCm/hip-ep/releases/download/v0.5.2/amdgpu.zip",
-        130920185ULL,
-        323570048ULL,
-        "de3e4e2241e6466712be530bd66f77fcce44fc005910f23a874ce8adf4de7ef4",
+        "0.5.3",
+        "amdgpu-0.5.3.zip",
+        "https://github.com/ROCm/hip-ep/releases/download/v0.5.3/amdgpu-0.5.3.zip",
+        143284770ULL,
+        345463058ULL,
+        "96c7c765e944b07c3f7f95283a0a868b5515196ab36f5eedfdb0174bf3681d31",
     };
     return release;
 }
@@ -363,12 +363,32 @@ void EnsureArchiveCached(const ManagedPaths& paths, const Hooks& hooks) {
     }
 }
 
-/// \brief what hipgpu.dll needs beside the DLLs InspectPackage checks, all under the archive root
+/// \brief the folder of a package's DLLs, as InspectPackage picks it: its bin directory, or its
+///        root when it has none
+std::filesystem::path DllFolder(const std::filesystem::path& root) {
+    std::error_code error;
+    return std::filesystem::is_directory(root / "bin", error) ? root / "bin" : root;
+}
+
+/// \brief the root of the package an archive extracted into `staging`: the one folder there, as
+///        amdgpu-0.5.3.zip keeps its package in amdgpu-0.5.3, unless that is the package's bin
+///        directory; `staging` itself otherwise
+std::filesystem::path ExtractedRoot(const std::filesystem::path& staging) {
+    std::vector<std::filesystem::path> entries;
+    std::error_code error;
+    for (std::filesystem::directory_iterator it(staging, error), end; !error && it != end; it.increment(error))
+        entries.push_back(it->path());
+    if (entries.size() != 1 || DllFolder(staging) != staging || IsReparsePoint(entries.front())) return staging;
+    return std::filesystem::is_directory(entries.front(), error) ? entries.front() : staging;
+}
+
+/// \brief what hipgpu.dll needs beside the DLLs InspectPackage checks, all beside them
 void ValidateArchiveLayout(const std::filesystem::path& root) {
+    const std::filesystem::path bin = DllFolder(root);
     const std::array<std::filesystem::path, 3> required{
-        root / "amdhip64_7.dll",
-        root / "hipblaslt.dll",
-        root / "hipblaslt" / "library",
+        bin / "amdhip64_7.dll",
+        bin / "hipblaslt.dll",
+        bin / "hipblaslt" / "library",
     };
     for (const auto& path : required) {
         std::error_code error;
@@ -436,16 +456,17 @@ Package InstallManagedPackage(const PackageEnvironment& environment, const Hooks
     ScopedCleanup cleanup(staging);
     hooks.log("Extracting hip-ep " + hooks.release.version + " under " + Text(staging));
     hooks.extract_archive(paths.archive_path, staging);
-    ValidateArchiveLayout(staging);
-    WriteMarker(staging, hooks.release);
+    const std::filesystem::path root = ExtractedRoot(staging);
+    ValidateArchiveLayout(root);
+    WriteMarker(root, hooks.release);
     Package staged = InspectOrThrow("%LOCALAPPDATA%\\hip-ep\\" + std::string(kManagedPrefix) + hooks.release.version,
-                                    staging);
+                                    root);
     std::error_code error;
-    std::filesystem::rename(staging, paths.final_dir, error);
+    std::filesystem::rename(root, paths.final_dir, error);
     if (error) {
         throw std::runtime_error("failed to move hip-ep into '" + Text(paths.final_dir) + "': " + error.message());
     }
-    cleanup.release();
+    if (root == staging) cleanup.release();
     hooks.log("Installed hip-ep " + hooks.release.version + " to " + Text(paths.final_dir));
     return InspectOrThrow(std::move(staged.source), paths.final_dir);
 }
@@ -683,7 +704,7 @@ bool UninstallHipEpPackage(const PackageEnvironment& environment, const HipEpIns
     // A process keeps the package's DLLs loaded until it exits; deleting the rest of its files
     // would break that process later, so a runtime in use stays whole.
     for (const auto& [version, root] : runtimes) {
-        for (const auto& entry : std::filesystem::directory_iterator(root)) {
+        for (const auto& entry : std::filesystem::directory_iterator(DllFolder(root))) {
             if (!entry.is_regular_file() || !IsDll(entry.path())) continue;
             if (const auto blocker = DeleteBlocker(entry.path())) {
                 hooks.log("hip-ep " + version + " is in use, so nothing was removed: Windows cannot delete " +

@@ -67,9 +67,10 @@ struct FileVersion {
     std::uint32_t revision = 0;
 };
 
-/// \brief the oldest onnxruntime-genai whose C API matches the vendored header
-/// \note hip-ep 0.5.1 ships OGA 0.14, which runs this model only on the CPU.
-inline constexpr FileVersion kMinimumOgaVersion{0, 17, 0, 0};
+/// \brief the oldest onnxruntime-genai the backend takes; the vendored header matches its C API
+/// \note Discovery passes over an older package, so flm installs hip-ep 0.5.3 (OGA 0.19) in place
+///       of hip-ep 0.5.2 (OGA 0.17), which cannot rewind a hybrid model's recurrent state.
+inline constexpr FileVersion kMinimumOgaVersion{0, 19, 0, 0};
 
 /// \brief the oldest onnxruntime-genai that can rewind a hybrid model's recurrent state
 /// \note OGA 0.19 snapshots that state (OgaGenerator_SnapshotState) and restores
