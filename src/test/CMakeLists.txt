@@ -92,7 +92,7 @@ function(add_npu_test TARGET_NAME OUTPUT_SUBDIR)
         ${CMAKE_SOURCE_DIR}/../../include
         ${XRT_INCLUDE_DIR}
         C:/dev/boost_1_88_0
-        C:/dev/vcpkg/installed/x64-windows/include/
+        ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../../third_party/curl/include
     )
 
     # Basic link settings for test
@@ -101,7 +101,6 @@ function(add_npu_test TARGET_NAME OUTPUT_SUBDIR)
         ${XRT_LIB_DIR}
         ${CMAKE_SOURCE_DIR}/../../build/tokenizer/lib
         C:/dev/boost_1_88_0/stage/lib
-        C:/dev/vcpkg/installed/x64-windows/lib
         # tokenziers_cpp
         ${CMAKE_SOURCE_DIR}/../../build/tokenizers-cpp
         ${CMAKE_SOURCE_DIR}/../../build/tokenizers-cpp/release

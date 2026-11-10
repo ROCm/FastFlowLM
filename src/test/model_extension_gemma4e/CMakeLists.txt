@@ -46,10 +46,11 @@ if(WIN32)
   set(XRT_INCLUDE_DIR "" CACHE PATH "Directory containing XRT headers")
   set(XRT_LIBRARY_DIR "" CACHE PATH "Directory containing xrt_coreutil.lib")
   set(BOOST_INCLUDE_DIR "" CACHE PATH "Directory containing Boost headers")
-  set(VCPKG_INCLUDE_DIR "" CACHE PATH
-    "Directory containing the Windows media-codec dependency headers")
+  # curl's headers are committed beside FLM's sources; they match the
+  # libcurl.dll that FLM ships (see third_party/curl/README.md).
+  set(FLM_CURL_INCLUDE_DIR "${FLM_SOURCE_DIR}/../third_party/curl/include")
   foreach(_required_dir
-      XRT_INCLUDE_DIR XRT_LIBRARY_DIR BOOST_INCLUDE_DIR VCPKG_INCLUDE_DIR)
+      XRT_INCLUDE_DIR XRT_LIBRARY_DIR BOOST_INCLUDE_DIR FLM_CURL_INCLUDE_DIR)
     if(NOT IS_DIRECTORY "${${_required_dir}}")
       message(FATAL_ERROR "${_required_dir} must name an existing directory")
     endif()
@@ -135,7 +136,7 @@ if(WIN32)
   target_include_directories(gemma4_open_model_extension PRIVATE
     "${XRT_INCLUDE_DIR}"
     "${BOOST_INCLUDE_DIR}"
-    "${VCPKG_INCLUDE_DIR}")
+    "${FLM_CURL_INCLUDE_DIR}")
 endif()
 target_compile_definitions(gemma4_open_model_extension PRIVATE
   VERBOSE=0
