@@ -117,6 +117,26 @@ jobs:
         with:
           tier: ${{ inputs.tier }}
 
+  # ── NPU approval gate ────────────────────────────────────────────────────
+  # The NPU runners are few, so pull requests from anyone outside the core
+  # team wait for one of the npu-approval environment's reviewers before any
+  # job lands on them. Builds on hosted runners still start right away.
+  # Pushes to main, nightly, manual and release runs are never gated.
+  npu-gate:
+    needs: changes
+    if: >-
+      github.event_name == 'pull_request'
+      && !contains(fromJSON('["zaneni6", "michyu-amd", "tawei-amd", "alfxu-amd", "shdu-amd"]'), github.event.pull_request.user.login)
+      && (needs.changes.outputs.suites != 'none'
+          || needs.changes.outputs.hrx-suites != ''
+          || needs.changes.outputs.source == 'true'
+          || needs.changes.outputs.hipep == 'true'
+          || vars.FLM_INSTALL_TESTS == 'true')
+    runs-on: ubuntu-latest
+    environment: npu-approval
+    steps:
+      - run: echo "NPU tests approved for ${{ github.event.pull_request.user.login }}'s pull request."
+
   # ── Linux builds ─────────────────────────────────────────────────────────
 
   build-lin-xrt-portable:
@@ -242,8 +262,15 @@ jobs:
 
   test-lin-xrt-portable:
     name: Test Linux XRT portable
-    needs: [changes, build-lin-xrt-portable]
-    if: needs.changes.outputs.suites != 'none'
+    needs: [changes, build-lin-xrt-portable, npu-gate]
+    # npu-gate is skipped for trusted authors, so spell out what the
+    # implicit success() check used to require.
+    if: >-
+      ${{ !cancelled()
+      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && needs.changes.result == 'success'
+      && needs.build-lin-xrt-portable.result == 'success'
+      && (needs.changes.outputs.suites != 'none') }}
     runs-on: [self-hosted, linux, x64, npu, sweep]
     timeout-minutes: ${{ needs.changes.outputs.tier == 'full' && 360 || 120 }}
     steps:
@@ -283,8 +310,15 @@ jobs:
 
   test-lin-hrx-portable:
     name: Test Linux HRX portable
-    needs: [changes, build-lin-hrx-portable]
-    if: needs.changes.outputs.hrx-suites != ''
+    needs: [changes, build-lin-hrx-portable, npu-gate]
+    # npu-gate is skipped for trusted authors, so spell out what the
+    # implicit success() check used to require.
+    if: >-
+      ${{ !cancelled()
+      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && needs.changes.result == 'success'
+      && needs.build-lin-hrx-portable.result == 'success'
+      && (needs.changes.outputs.hrx-suites != '') }}
     runs-on: [self-hosted, linux, x64, npu, sweep]
     timeout-minutes: ${{ needs.changes.outputs.tier == 'full' && 360 || 120 }}
     steps:
@@ -316,8 +350,15 @@ jobs:
   # engines are built from source so far.
   test-lin-source-portable:
     name: Test Linux models-from-source portable
-    needs: [changes, build-lin-source-portable]
-    if: needs.changes.outputs.source == 'true'
+    needs: [changes, build-lin-source-portable, npu-gate]
+    # npu-gate is skipped for trusted authors, so spell out what the
+    # implicit success() check used to require.
+    if: >-
+      ${{ !cancelled()
+      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && needs.changes.result == 'success'
+      && needs.build-lin-source-portable.result == 'success'
+      && (needs.changes.outputs.source == 'true') }}
     runs-on: [self-hosted, linux, x64, npu, sweep]
     timeout-minutes: 60
     steps:
@@ -344,8 +385,16 @@ jobs:
 
   test-lin-extension-xrt:
     name: Test Linux XRT model extension
-    needs: [changes, build-lin-xrt-portable, build-lin-extension-xrt]
-    if: needs.changes.outputs.source == 'true'
+    needs: [changes, build-lin-xrt-portable, build-lin-extension-xrt, npu-gate]
+    # npu-gate is skipped for trusted authors, so spell out what the
+    # implicit success() check used to require.
+    if: >-
+      ${{ !cancelled()
+      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && needs.changes.result == 'success'
+      && needs.build-lin-xrt-portable.result == 'success'
+      && needs.build-lin-extension-xrt.result == 'success'
+      && (needs.changes.outputs.source == 'true') }}
     runs-on: [self-hosted, linux, x64, npu, sweep]
     timeout-minutes: 60
     steps:
@@ -378,8 +427,16 @@ jobs:
 
   test-lin-extension-hrx:
     name: Test Linux HRX model extension
-    needs: [changes, build-lin-hrx-portable, build-lin-extension-hrx]
-    if: needs.changes.outputs.source == 'true'
+    needs: [changes, build-lin-hrx-portable, build-lin-extension-hrx, npu-gate]
+    # npu-gate is skipped for trusted authors, so spell out what the
+    # implicit success() check used to require.
+    if: >-
+      ${{ !cancelled()
+      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && needs.changes.result == 'success'
+      && needs.build-lin-hrx-portable.result == 'success'
+      && needs.build-lin-extension-hrx.result == 'success'
+      && (needs.changes.outputs.source == 'true') }}
     runs-on: [self-hosted, linux, x64, npu, sweep]
     timeout-minutes: 60
     steps:
@@ -420,8 +477,15 @@ jobs:
   # installed; the other distributions' builds are covered by their build.
   install-lin-xrt-deb:
     name: Install test Linux XRT .deb
-    needs: [changes, build-lin-xrt-deb]
-    if: vars.FLM_INSTALL_TESTS == 'true'
+    needs: [changes, build-lin-xrt-deb, npu-gate]
+    # npu-gate is skipped for trusted authors, so spell out what the
+    # implicit success() check used to require.
+    if: >-
+      ${{ !cancelled()
+      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && needs.changes.result == 'success'
+      && needs.build-lin-xrt-deb.result == 'success'
+      && (vars.FLM_INSTALL_TESTS == 'true') }}
     runs-on: [self-hosted, linux, x64, npu, sweep]
     timeout-minutes: 60
     steps:
@@ -452,8 +516,15 @@ jobs:
 
   install-lin-hrx-deb:
     name: Install test Linux HRX .deb
-    needs: [changes, build-lin-hrx-deb]
-    if: vars.FLM_INSTALL_TESTS == 'true'
+    needs: [changes, build-lin-hrx-deb, npu-gate]
+    # npu-gate is skipped for trusted authors, so spell out what the
+    # implicit success() check used to require.
+    if: >-
+      ${{ !cancelled()
+      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && needs.changes.result == 'success'
+      && needs.build-lin-hrx-deb.result == 'success'
+      && (vars.FLM_INSTALL_TESTS == 'true') }}
     runs-on: [self-hosted, linux, x64, npu, sweep]
     timeout-minutes: 60
     steps:
@@ -486,8 +557,15 @@ jobs:
 
   test-win-xrt:
     name: Test Windows XRT
-    needs: [changes, build-win-xrt]
-    if: needs.changes.outputs.suites != 'none'
+    needs: [changes, build-win-xrt, npu-gate]
+    # npu-gate is skipped for trusted authors, so spell out what the
+    # implicit success() check used to require.
+    if: >-
+      ${{ !cancelled()
+      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && needs.changes.result == 'success'
+      && needs.build-win-xrt.result == 'success'
+      && (needs.changes.outputs.suites != 'none') }}
     runs-on: [self-hosted, windows, x64, npu, sweep]
     timeout-minutes: ${{ needs.changes.outputs.tier == 'full' && 360 || 120 }}
     steps:
@@ -523,8 +601,15 @@ jobs:
   # without them downloads them (7.5 GB for the 9b) outside the requests' timeouts.
   test-win-hipep:
     name: Test Windows HIPEP
-    needs: [changes, build-win-xrt]
-    if: needs.changes.outputs.hipep == 'true'
+    needs: [changes, build-win-xrt, npu-gate]
+    # npu-gate is skipped for trusted authors, so spell out what the
+    # implicit success() check used to require.
+    if: >-
+      ${{ !cancelled()
+      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && needs.changes.result == 'success'
+      && needs.build-win-xrt.result == 'success'
+      && (needs.changes.outputs.hipep == 'true') }}
     runs-on: [self-hosted, windows, x64, npu, sweep]
     timeout-minutes: 120
     steps:
@@ -566,8 +651,15 @@ jobs:
 
   test-win-hrx:
     name: Test Windows HRX
-    needs: [changes, build-win-hrx]
-    if: needs.changes.outputs.hrx-suites != ''
+    needs: [changes, build-win-hrx, npu-gate]
+    # npu-gate is skipped for trusted authors, so spell out what the
+    # implicit success() check used to require.
+    if: >-
+      ${{ !cancelled()
+      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && needs.changes.result == 'success'
+      && needs.build-win-hrx.result == 'success'
+      && (needs.changes.outputs.hrx-suites != '') }}
     runs-on: [self-hosted, windows, x64, npu, sweep]
     timeout-minutes: ${{ needs.changes.outputs.tier == 'full' && 360 || 120 }}
     steps:
@@ -597,8 +689,15 @@ jobs:
 
   test-win-source:
     name: Test Windows models-from-source
-    needs: [changes, build-win-source]
-    if: needs.changes.outputs.source == 'true'
+    needs: [changes, build-win-source, npu-gate]
+    # npu-gate is skipped for trusted authors, so spell out what the
+    # implicit success() check used to require.
+    if: >-
+      ${{ !cancelled()
+      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && needs.changes.result == 'success'
+      && needs.build-win-source.result == 'success'
+      && (needs.changes.outputs.source == 'true') }}
     runs-on: [self-hosted, windows, x64, npu, sweep]
     timeout-minutes: 60
     steps:
@@ -625,8 +724,16 @@ jobs:
 
   test-win-extension-xrt:
     name: Test Windows XRT model extension
-    needs: [changes, build-win-xrt, build-win-extension-xrt]
-    if: needs.changes.outputs.source == 'true'
+    needs: [changes, build-win-xrt, build-win-extension-xrt, npu-gate]
+    # npu-gate is skipped for trusted authors, so spell out what the
+    # implicit success() check used to require.
+    if: >-
+      ${{ !cancelled()
+      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && needs.changes.result == 'success'
+      && needs.build-win-xrt.result == 'success'
+      && needs.build-win-extension-xrt.result == 'success'
+      && (needs.changes.outputs.source == 'true') }}
     runs-on: [self-hosted, windows, x64, npu, sweep]
     timeout-minutes: 60
     steps:
@@ -659,8 +766,16 @@ jobs:
 
   test-win-extension-hrx:
     name: Test Windows HRX model extension
-    needs: [changes, build-win-hrx, build-win-extension-hrx]
-    if: needs.changes.outputs.source == 'true'
+    needs: [changes, build-win-hrx, build-win-extension-hrx, npu-gate]
+    # npu-gate is skipped for trusted authors, so spell out what the
+    # implicit success() check used to require.
+    if: >-
+      ${{ !cancelled()
+      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && needs.changes.result == 'success'
+      && needs.build-win-hrx.result == 'success'
+      && needs.build-win-extension-hrx.result == 'success'
+      && (needs.changes.outputs.source == 'true') }}
     runs-on: [self-hosted, windows, x64, npu, sweep]
     timeout-minutes: 60
     steps:
@@ -693,8 +808,15 @@ jobs:
 
   install-win-msi:
     name: Install test Windows MSI
-    needs: [changes, build-win-xrt]
-    if: vars.FLM_INSTALL_TESTS == 'true'
+    needs: [changes, build-win-xrt, npu-gate]
+    # npu-gate is skipped for trusted authors, so spell out what the
+    # implicit success() check used to require.
+    if: >-
+      ${{ !cancelled()
+      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && needs.changes.result == 'success'
+      && needs.build-win-xrt.result == 'success'
+      && (vars.FLM_INSTALL_TESTS == 'true') }}
     runs-on: [self-hosted, windows, x64, npu, sweep]
     timeout-minutes: 60
     steps:
