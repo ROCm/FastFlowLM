@@ -39,7 +39,6 @@ struct prompt_reuse_t {
     bool clear = false;                                ///< the engine's context has to be dropped first (skip is then 0)
     std::array<size_t, prompt_media_t::kKinds> skipped_media{};  ///< per kind: leading items wholly inside the skip
     size_t media_end = 0;                              ///< one past the last token of the items that are prefilled, relative to the skip (0: none)
-    std::array<size_t, prompt_media_t::kKinds> media_end_by_kind{};  ///< the same, per kind
 };
 
 /// \brief decide how much of `tokens` the engine keeps, given that it holds `history`
@@ -96,7 +95,6 @@ inline prompt_reuse_t plan_prompt_reuse(const std::vector<int>& history, const s
         if (m.end <= plan.skip) {
             plan.skipped_media[m.kind]++;
         } else if (m.end > m.begin) {   // an item with no tokens has no rows to fit in the first chunk
-            plan.media_end_by_kind[m.kind] = std::max(plan.media_end_by_kind[m.kind], m.end - plan.skip);
             plan.media_end = std::max(plan.media_end, m.end - plan.skip);
         }
     }
