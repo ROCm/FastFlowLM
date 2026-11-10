@@ -1,0 +1,6 @@
+# config/moe_combine.toml -- the moe_combine numbers of Qwen3.6-35B-A3B.
+
+# Hidden size: bf16 in a row.
+D = 2048
+# Experts of a token.
+TOPK = 8

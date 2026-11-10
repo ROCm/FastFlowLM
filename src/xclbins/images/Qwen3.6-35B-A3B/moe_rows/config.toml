@@ -1,0 +1,4 @@
+# config/moe_rows.toml -- the moe_rows numbers of Qwen3.6-35B-A3B.
+
+# Hidden size: bf16 in a row.
+D = 2048

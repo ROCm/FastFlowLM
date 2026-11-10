@@ -1,0 +1,4 @@
+# rms_norm/config.toml -- the config of rms_norm: no key.
+#
+# D and eps are run-time (RTP words), so one package serves every model.
+# The design's CONFIG schema is empty; the file must stay empty of keys.

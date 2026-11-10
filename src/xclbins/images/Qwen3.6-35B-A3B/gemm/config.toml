@@ -1,0 +1,5 @@
+# gemm/config.toml -- gemm has no model numbers.
+#
+# M, K and N are run-time (the host's sequence and the cores' RTP words), so
+# every engine uses the same package. This file has no keys; an engine's
+# config/gemm.toml is empty too (gemm/iron/gemm_design.py, CONFIG = {}).

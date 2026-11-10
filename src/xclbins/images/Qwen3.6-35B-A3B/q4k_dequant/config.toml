@@ -1,0 +1,5 @@
+# q4k_dequant/config.toml -- the model numbers of q4k_dequant: none.
+#
+# q4k_dequant is a shared op (std_ops): Dout and Din are run-time values of each
+# call, so one build serves every model. The file stays empty; an engine's
+# config/q4k_dequant.toml is empty too.
