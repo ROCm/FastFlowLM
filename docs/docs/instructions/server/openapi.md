@@ -325,7 +325,7 @@ import gc
 gc.collect()
 ```
 
-> ⚠️ Sampling settings stay in effect for later requests that don't send them, until the model is reloaded; `seed` applies to its own request only. What each field does, `seed`, the penalty window and model defaults: [Request Parameters & Long Prompts](https://fastflowlm.com/docs/instructions/server/request_parameters/).
+> ℹ️ Sampling settings apply only to the request that sends them; a request that leaves one out gets the model's default. What each field does, `seed`, the penalty window and model defaults: [Request Parameters & Long Prompts](https://fastflowlm.com/docs/instructions/server/request_parameters/).
 
 ---
 

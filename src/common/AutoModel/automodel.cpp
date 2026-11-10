@@ -1139,6 +1139,22 @@ void AutoModel::set_sampler(sampler_config& sampler_config) {
         this->sampler.reset();
     }
     this->sampler = std::make_unique<Sampler>(this->lm_config->get("vocab_size"), sampler_config);
+    this->loaded_sampler_config = sampler_config;
+}
+
+/// \brief Remember the settings a request may change, as the model loaded them
+/// \note Call after load_model()
+void AutoModel::save_request_settings() {
+    this->loaded_thinking = this->thinking_enabled();
+}
+
+/// \brief Put back the settings save_request_settings() remembered: sampling and thinking
+/// \note Recreates the sampler, so its penalty window starts empty and, without a seed, its
+///       random generator is seeded from the clock
+void AutoModel::restore_request_settings() {
+    sampler_config config = this->loaded_sampler_config;
+    this->set_sampler(config);
+    this->configure_parameter("enable_think", this->loaded_thinking);
 }
 
 /// \brief Set the max length

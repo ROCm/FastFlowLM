@@ -371,7 +371,7 @@ static bool logprobs_request_from_openai(const json& request, int& top_n, std::s
 
 ///@brief The OpenAI request fields that steer sampling but are not plain numbers to set
 struct openai_sampling_request {
-    /// generated tokens the penalties look at, -1 the whole reply; sticks like the other sampling fields
+    /// generated tokens the penalties look at, -1 the whole reply; applies to its own request, like the other sampling fields
     std::optional<int> penalty_window;
     /// restarts the random generator for this request only
     std::optional<uint64_t> seed;
@@ -729,6 +729,7 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag,
             engine->set_prefix_limits(this->prefix_cache_mb, this->prefix_slots, this->prefix_min_gain);
             const auto load_started = std::chrono::steady_clock::now();
             engine->load_model(supported_models.get_load_path(new_ensure_tag), model_info, ctx_length, preemption, requested_backend);
+            engine->save_request_settings();
             report_load_time(load_started);
 
             // Per model, not per process: the flash models take 1024-token
@@ -907,6 +908,7 @@ void RestHandler::ensure_embed_model_loaded(const std::string& model_tag) {
 ///@param options the options JSON object
 ///@param request the request JSON object
 void RestHandler::configure_chat_engine_parameters(const json& options, const json& request) {
+    auto_chat_engine->restore_request_settings();
     if (has_value(request, "temperature")) {
         float temperature = request["temperature"];
         auto_chat_engine->set_temperature(temperature);
@@ -1076,6 +1078,8 @@ void RestHandler::handle_generate(const json& request,
             return;
         }
         auto load_end_time = time_utils::now();
+        // It takes no settings, but must not run with what an earlier chat request set
+        auto_chat_engine->restore_request_settings();
       
         chat_meta_info_t meta_info;
         lm_uniform_input_t uniformed_input;
