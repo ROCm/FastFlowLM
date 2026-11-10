@@ -2395,6 +2395,51 @@
                 ]
             }
         },
+        "qwen3.8-flash-next-oga-hipep": {
+            "125b-a6b": {
+                "name": "Qwen3.8-Flash-Next_gpuep_1.0_gpu_128",
+                "url": "https://huggingface.co/amd/Qwen3.8-Flash-Next_gpuep_1.0_gpu_128/resolve/52f7f5d1c5184c47146cdb2cc92814c8e46c2ebe",
+                "file_url": "https://huggingface.co/api/models/amd/Qwen3.8-Flash-Next_gpuep_1.0_gpu_128/tree/52f7f5d1c5184c47146cdb2cc92814c8e46c2ebe",
+                "size": 124000514569,
+                "default_context_length": 32768,
+                "max_prefill_len": 4096,
+                "details": {
+                    "family": "qwen3.5",
+                    "think": true,
+                    "parameter_size": "125B-A6B",
+                    "quantization_level": "INT4 RTN group-32, QMoE experts, FP8 n-gram embedding, fp16 activations"
+                },
+                "flm_min_version": "1.0.13",
+                "vlm": true,
+                "files": [
+                    "chat_template.jinja",
+                    "config.json",
+                    "embedding.onnx",
+                    "embedding.onnx.data",
+                    "engram.onnx",
+                    "engram.onnx.data",
+                    "genai_config.json",
+                    "processor_config.json",
+                    "text.onnx",
+                    "text.onnx.data",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "vision.onnx",
+                    "vision.onnx.data"
+                ],
+                "file_sources": {
+                    "config.json": {
+                        "url": "https://huggingface.co/Qwen/Qwen3.8-Flash-Next",
+                        "revision": "812d96e10a0dd82b69d749e68693698cf6c36daa"
+                    }
+                },
+                "label": [
+                    "vision",
+                    "reasoning",
+                    "tool-calling"
+                ]
+            }
+        },
         "qwen2.5-it-oga-hipep": {
             "14b": {
                 "name": "Qwen2.5-14B-Instruct_gpuep_1.0_gpu_128",
