@@ -7,6 +7,7 @@
 
 
 #include "AutoModel/modeling_gemma4e.hpp"
+#include "chat/chat_gemma4_tools.hpp"
 #include "metrices.hpp"
 #include "models/gemma4e/flm/aie2p/gemma4e_npu.hpp"
 #include "models/gemma4e_flash/flm/aie2p/gemma4e_flash.hpp"
@@ -332,7 +333,7 @@ std::string Gemma4e::apply_chat_template(nlohmann::ordered_json& messages, nlohm
     inputs.extra_context["enable_thinking"] = this->enable_think;
     inputs.extra_context["conversational_mode"] = this->conversational_mode;
     if (!tools.empty())
-        inputs.tools = tools;
+        inputs.tools = gemma4_template_tools(tools);
     return this->_render_chat_template(inputs, continue_final_message, opt);
 }
 

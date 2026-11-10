@@ -3,6 +3,7 @@
 ///        against the calls the chat templates render, and the constraint a request gets. No NPU needed.
 #include "chat/chat_constraint.hpp"
 #include "chat/chat_format.hpp"
+#include "chat/chat_gemma4_tools.hpp"
 #include "chat/chat_grammar.hpp"
 #include "chat/chat_parser.hpp"
 #include "minja/minja.hpp"
@@ -526,6 +527,31 @@ void test_no_tools_after_tool_turns() {
     CHECK(chat_make_constraint(QWEN_XML, plain_request, vocab, never) == nullptr);
 }
 
+void test_gemma4_nullable_types() {
+    std::printf("gemma4 template gets nullable types in its own form\n");
+    const json tools = json::array({tool(
+        "f", object_schema({
+                 {"note", {{"type", {"string", "null"}}}},
+                 {"tags", {{"type", "array"}, {"items", {{"type", {"null", "integer"}}}}}},
+                 {"either", {{"type", {"string", "number"}}}},
+                 {"either_or_null", {{"type", {"string", "number", "null"}}}},
+                 {"shape", {{"type", "object"}, {"enum", {{{"type", {"string", "null"}}}}}}},
+                 {"labels", {{"type", "object"}, {"additionalProperties", {{"type", {"string", "null"}}}}}},
+             }))});
+    const json out = gemma4_template_tools(tools)[0]["function"]["parameters"]["properties"];
+    CHECK(out["note"] == (json{{"type", "string"}, {"nullable", true}}));
+    CHECK(out["tags"]["items"] == (json{{"type", "integer"}, {"nullable", true}}));
+    CHECK(out["either"] == (json{{"type", {"string", "number"}}}));
+    CHECK(out["either_or_null"] == (json{{"type", {"string", "number", "null"}}}));
+    // a literal value is not a schema, even when it looks like one
+    CHECK(out["shape"]["enum"][0] == (json{{"type", {"string", "null"}}}));
+    CHECK(out["labels"]["additionalProperties"] == (json{{"type", "string"}, {"nullable", true}}));
+    // what the template does with a parameter's type, which minja cannot do to a list
+    auto tmpl = minja::Parser::parse("{{ value['type'] | upper }}{% if value['nullable'] %} nullable{% endif %}",
+                                     {true, true, false});
+    CHECK_EQ(tmpl->render(minja::Context::make(minja::Value(json{{"value", out["note"]}}))), "STRING nullable");
+}
+
 } // namespace
 
 int main() {
@@ -538,6 +564,7 @@ int main() {
     test_streams_extend();
     test_continued_call();
     test_no_tools_after_tool_turns();
+    test_gemma4_nullable_types();
     if (failures) {
         std::printf("%d check(s) failed\n", failures);
         return 1;
