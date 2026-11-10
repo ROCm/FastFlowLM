@@ -16,7 +16,8 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              affect when every changed file is scoped to some (an ASR-only
              change runs asr, a d3-only change runs decision); "none" when
              every changed file is oga-hipep code or a GPU catalog entry,
-             which no NPU job runs
+             which no NPU job runs; a change to a model_list.json field outside
+             its model entries, such as model_path, gives "all"
   hipep      true when the change can reach qwen3.5-oga-hipep:9b, which Test
              Windows HIPEP runs on the GPU: when every suite runs, or a changed
              file is oga-hipep code, a GPU catalog entry, the qwen3.5 frontend,
@@ -348,6 +349,13 @@ def catalog_diff(base: dict[str, dict], head: dict[str, dict]) -> tuple[set, lis
     return fams - {""}, gpu
 
 
+def catalog_fields_diff(base_text: str, head_text: str) -> list[str]:
+    """The top-level fields of two model_list.json texts, other than models,
+    that differ. Every model reads them: model_path is the folder of all."""
+    base, head = json.loads(base_text), json.loads(head_text)
+    return sorted(k for k in base.keys() | head.keys() if k != "models" and base.get(k) != head.get(k))
+
+
 def model_info_diff(base_text: Optional[str], head_text: Optional[str],
                     catalogs: Iterable[dict[str, dict]]) -> Optional[tuple[set, list]]:
     """Families with an NPU entry whose model_info.json entry changed, and the
@@ -503,11 +511,16 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
         d.reach_hipep(f"{gpu_code[0]}{more}: oga-hipep backend, which Test Windows HIPEP tests")
 
     if MODEL_LIST in code:
-        base = load_catalog(git.show("base", MODEL_LIST)) if git else {}
+        base_text = git.show("base", MODEL_LIST) if git else None
+        base = load_catalog(base_text)
         if git is None or not base or not head_catalog:
             d.reasons.append(f"{MODEL_LIST} changed but cannot be compared; no family added for it")
             d.all_suites(MODEL_LIST)
         else:
+            fields = catalog_fields_diff(base_text, head_catalog_text)
+            if fields:
+                d.reasons.append(f"{MODEL_LIST}: {', '.join(fields)} changed, outside its model entries")
+                d.all_suites(MODEL_LIST)
             add_catalog_change(d, MODEL_LIST, *catalog_diff(base, head_catalog), head_catalog,
                                "no family (top-level fields only)")
     if MODEL_INFO in code:

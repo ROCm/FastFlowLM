@@ -221,6 +221,28 @@ class Decide(unittest.TestCase):
         d = changes.decide([changes.MODEL_LIST], git, both)
         self.assertEqual((d.families, d.suites_value(), d.runs_hipep()), ({"lfm2"}, "chat,prefix_cache", True))
 
+    def test_catalog_fields_outside_models_run_every_suite(self):
+        base = catalog(qwen3__0_6b=("Qwen3-0.6B-NPU2", "qwen3"), lfm2__1b=("LFM2", "lfm2"))
+
+        def outcome(head):
+            text = json.dumps(head)
+            git = FakeGit(base={changes.MODEL_LIST: base}, head={changes.MODEL_LIST: text})
+            d = changes.decide([changes.MODEL_LIST], git, text)
+            return d.families, d.suites_value(), d.runs_hipep()
+
+        head = json.loads(base)
+        head["model_path"] = "models2"
+        self.assertEqual(outcome(head), (set(), "all", True))
+        # model_path is the folder of every model: an entry changed beside it narrows nothing.
+        head["models"]["gemma3-oga-hipep"] = {"4b": {"name": "Gemma3-4B_gpuep", "details": {"family": "gemma3"}}}
+        self.assertEqual(outcome(head), (set(), "all", True))
+        head["models"]["lfm2"]["1b"]["default_context_length"] = 4096
+        self.assertEqual(outcome(head), ({"lfm2"}, "all", True))
+        # A field only one side has counts too.
+        head["model_path"] = "models"
+        head["schema"] = 2
+        self.assertEqual(outcome(head), ({"lfm2"}, "all", True))
+
     def test_model_info_of_oga_hipep_entries_names_no_family(self):
         cat = catalog(**{"gemma3-oga-hipep__4b": ("x", "gemma3"), "lfm2__1b": ("y", "lfm2")})
         git = FakeGit(base={changes.MODEL_LIST: cat, changes.MODEL_INFO: '{"lfm2:1b": 1}'},
