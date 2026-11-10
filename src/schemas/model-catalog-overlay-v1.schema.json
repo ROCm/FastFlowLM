@@ -30,14 +30,14 @@
       "minLength": 1
     },
     "folderName": {
-      "description": "A single folder name inside the model root: no '/', '\\', ':', '.' or '..'.",
+      "description": "A single folder name inside the model root: no '/', '\\' or ':', no trailing '.' or space, and no Windows device name (CON, NUL, COM1, COM\u00b9, ...).",
       "type": "string",
-      "pattern": "^(?!\\.{1,2}$)[^/\\\\:]+$"
+      "pattern": "^(?!(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|(?:[Cc][Oo][Mm]|[Ll][Pp][Tt])[1-9\u00b9\u00b2\u00b3]) *(?:\\.|/|$))[^/\\\\:]*[^/\\\\:. ]$"
     },
     "relativePath": {
-      "description": "A '/'-separated path inside the model folder: no '\\', ':', empty, '.' or '..' components.",
+      "description": "A '/'-separated path inside the model folder: no '\\' or ':', and no empty component, component ending in '.' or space, or Windows device name (CON, NUL, COM1, COM\u00b9, ...).",
       "type": "string",
-      "pattern": "^(?!(.*/)?\\.{1,2}(/.*)?$)([^/\\\\:]+/)*[^/\\\\:]+$"
+      "pattern": "^(?:(?!(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|(?:[Cc][Oo][Mm]|[Ll][Pp][Tt])[1-9\u00b9\u00b2\u00b3]) *(?:\\.|/|$))[^/\\\\:]*[^/\\\\:. ]/)*(?!(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|(?:[Cc][Oo][Mm]|[Ll][Pp][Tt])[1-9\u00b9\u00b2\u00b3]) *(?:\\.|/|$))[^/\\\\:]*[^/\\\\:. ]$"
     },
     "modelEntry": {
       "type": "object",

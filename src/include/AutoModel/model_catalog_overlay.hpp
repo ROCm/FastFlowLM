@@ -35,18 +35,41 @@ inline std::filesystem::path path_from_utf8(const std::string& encoded) {
 /// \param single_component true when `value` must be one folder or file name
 /// \note Backslashes and colons are rejected on every platform, so a catalog
 ///       cannot name a rooted, drive-relative or UNC path on Windows and the
-///       same catalog is accepted everywhere.
+///       same catalog is accepted everywhere. So are the names Windows
+///       rewrites: it drops a trailing dot or space ("Model." opens "Model",
+///       another entry's folder) and maps CON, NUL, COM1 and the like,
+///       including COM and LPT with a superscript 1 to 3, with any
+///       extension, to devices.
 inline bool is_contained_path(const std::string& value,
                               bool single_component) {
     if (value.empty() || value.find_first_of("\\:") != std::string::npos) {
         return false;
     }
+    const auto is_device = [](const std::string& component) {
+        std::string stem = component.substr(0, component.find('.'));
+        stem.erase(stem.find_last_not_of(' ') + 1);
+        for (auto& c : stem) {
+            c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        }
+        if (stem == "CON" || stem == "PRN" || stem == "AUX" || stem == "NUL") {
+            return true;
+        }
+        if (stem.compare(0, 3, "COM") != 0 && stem.compare(0, 3, "LPT") != 0) {
+            return false;
+        }
+        // COM1-COM9 and LPT1-LPT9, and the same with a superscript 1, 2 or 3
+        // (U+00B9, U+00B2, U+00B3) in UTF-8.
+        const std::string port = stem.substr(3);
+        return (port.size() == 1 && port[0] >= '1' && port[0] <= '9') ||
+               port == "\xC2\xB9" || port == "\xC2\xB2" || port == "\xC2\xB3";
+    };
     std::size_t begin = 0;
     while (true) {
         const std::size_t end = value.find('/', begin);
         const std::string component = value.substr(
             begin, end == std::string::npos ? std::string::npos : end - begin);
-        if (component.empty() || component == "." || component == "..") {
+        if (component.empty() || component.back() == '.' ||
+            component.back() == ' ' || is_device(component)) {
             return false;
         }
         if (end == std::string::npos) return true;
@@ -115,7 +138,152 @@ inline std::unordered_set<std::string> model_catalog_folders(
     }
     return folders;
 }
+
+/// \brief the entry flm pull and flm run use once `entry`'s preferred_source
+///        applies
+/// \note model_list applies preferred_source as a JSON merge patch when a pull
+///       chose it or its files are on disk, so the merged entry must pass the
+///       checks the entry itself does.
+inline nlohmann::json with_preferred_source(nlohmann::json entry) {
+    nlohmann::json preferred = std::move(entry["preferred_source"]);
+    entry.erase("preferred_source");
+    entry.merge_patch(preferred);
+    return entry;
+}
+
+/// \brief refuse a catalog entry flm pull, flm remove or flm run cannot use
+/// \param entry a size entry, or the one its preferred_source makes
+/// \param tag names the entry in error messages
+inline void validate_catalog_entry(const nlohmann::json& entry,
+                                   const std::string& tag) {
+    if (!entry.is_object() || !entry.contains("name") ||
+        !entry["name"].is_string() ||
+        entry["name"].get_ref<const std::string&>().empty() ||
+        !entry.contains(backend::kBackendKey) ||
+        !entry.contains(backend::kBackendProviderKey) ||
+        !entry.contains("default_context_length") ||
+        !entry["default_context_length"].is_number_integer() ||
+        entry["default_context_length"].get<int>() <= 0 ||
+        !entry.contains("max_prefill_len") ||
+        !entry["max_prefill_len"].is_number_integer() ||
+        entry["max_prefill_len"].get<int>() <= 0 ||
+        !entry.contains("details") ||
+        !entry["details"].is_object() ||
+        !entry["details"].contains("family") ||
+        !entry["details"]["family"].is_string() ||
+        entry["details"]["family"]
+            .get_ref<const std::string&>().empty()) {
+        throw std::runtime_error(
+            "Model extension catalog entry '" + tag +
+            "' must have non-empty name, backend, "
+            "backend_provider, positive default_context_length and "
+            "max_prefill_len, and details.family");
+    }
+    for (const char* field :
+         {backend::kBackendKey,
+          backend::kBackendProviderKey}) {
+        if (entry.contains(field) &&
+            (!entry[field].is_string() ||
+             entry[field]
+                 .get_ref<const std::string&>().empty())) {
+            throw std::runtime_error(
+                "Model extension catalog entry '" + tag +
+                "' field '" + field +
+                "' must be a non-empty string");
+        }
+    }
+    // flm pull reads these unconditionally for every catalog entry.
+    for (const char* field : {"url", "flm_min_version"}) {
+        if (!entry.contains(field) || !entry[field].is_string() ||
+            entry[field].get_ref<const std::string&>().empty()) {
+            throw std::runtime_error(
+                "Model extension catalog entry '" + tag +
+                "' field '" + field +
+                "' must be a non-empty string");
+        }
+    }
+    if (!entry.contains("files") || !entry["files"].is_array() ||
+        entry["files"].empty() ||
+        std::any_of(entry["files"].begin(), entry["files"].end(),
+                    [](const nlohmann::json& file) {
+                        return !file.is_string() ||
+                               file.get_ref<const std::string&>()
+                                   .empty();
+                    })) {
+        throw std::runtime_error(
+            "Model extension catalog entry '" + tag +
+            "' files must be a non-empty array of non-empty strings");
+    }
+    // flm pull writes, and flm remove deletes, under
+    // <model root>/<name>/<file>; none of them may leave that folder.
+    detail::require_contained_name(entry, "name", tag);
+    detail::require_contained_name(entry, "xclbin_folder", tag);
+    detail::require_contained_files(entry["files"], tag);
+    if (entry.contains("file_sources")) {
+        if (!entry["file_sources"].is_object()) {
+            throw std::runtime_error(
+                "Model extension catalog entry '" + tag +
+                "' file_sources must be an object");
+        }
+        for (const auto& [file, source] :
+             entry["file_sources"].items()) {
+            (void)source;
+            if (!detail::is_contained_path(file, false)) {
+                throw std::runtime_error(
+                    "Model extension catalog entry '" + tag +
+                    "' file_sources must name relative paths "
+                    "inside the model folder");
+            }
+        }
+    }
+    if (entry.contains("supported_platforms")) {
+        const auto& platforms = entry["supported_platforms"];
+        if (!platforms.is_array() || platforms.empty()) {
+            throw std::runtime_error(
+                "Model extension catalog entry '" + tag +
+                "' supported_platforms must be a non-empty array");
+        }
+        std::unordered_set<std::string> seen;
+        for (const auto& platform : platforms) {
+            if (!platform.is_string()) {
+                throw std::runtime_error(
+                    "Model extension catalog entry '" + tag +
+                    "' supported_platforms must contain strings");
+            }
+            const auto value = platform.get<std::string>();
+            if ((value != "aie2p" && value != "dev04") ||
+                !seen.insert(value).second) {
+                throw std::runtime_error(
+                    "Model extension catalog entry '" + tag +
+                    "' has an unknown or duplicate platform '" +
+                    value + "'");
+            }
+        }
+    }
+    if ((entry.value("vlm", false) ||
+         entry.value("asr", false)) &&
+        (!entry.contains("frontend_provider") ||
+         !entry["frontend_provider"].is_string() ||
+         entry["frontend_provider"]
+             .get_ref<const std::string&>().empty())) {
+        throw std::runtime_error(
+            "Multimodal model extension catalog entry '" + tag +
+            "' must name a frontend_provider");
+    }
+}
 }  // namespace detail
+
+/// \brief an entry and, when it has a preferred_source, the entry that makes
+/// \note Checks that read an entry's selections apply to both: either can be
+///       the one flm pull and flm run use.
+inline std::vector<nlohmann::json> catalog_entry_sources(
+    const nlohmann::json& entry) {
+    std::vector<nlohmann::json> sources{entry};
+    if (entry.contains("preferred_source")) {
+        sources.push_back(detail::with_preferred_source(entry));
+    }
+    return sources;
+}
 
 inline std::string backend_for_model_type(const std::string& model_type) {
     const auto has_suffix = [&](const std::string& suffix) {
@@ -178,136 +346,19 @@ inline ModelCatalogOverlay load_model_catalog_overlay(
         }
         for (const auto& [size, entry] : sizes.items()) {
             const std::string tag = model_type + ":" + size;
-            if (!entry.is_object() || !entry.contains("name") ||
-                !entry["name"].is_string() ||
-                entry["name"].get_ref<const std::string&>().empty() ||
-                !entry.contains(backend::kBackendKey) ||
-                !entry.contains(backend::kBackendProviderKey) ||
-                !entry.contains("default_context_length") ||
-                !entry["default_context_length"].is_number_integer() ||
-                entry["default_context_length"].get<int>() <= 0 ||
-                !entry.contains("max_prefill_len") ||
-                !entry["max_prefill_len"].is_number_integer() ||
-                entry["max_prefill_len"].get<int>() <= 0 ||
-                !entry.contains("details") ||
-                !entry["details"].is_object() ||
-                !entry["details"].contains("family") ||
-                !entry["details"]["family"].is_string() ||
-                entry["details"]["family"]
-                    .get_ref<const std::string&>().empty()) {
-                throw std::runtime_error(
-                    "Model extension catalog entry '" + tag +
-                    "' must have non-empty name, backend, "
-                    "backend_provider, positive default_context_length and "
-                    "max_prefill_len, and details.family");
-            }
-            for (const char* field :
-                 {backend::kBackendKey,
-                  backend::kBackendProviderKey}) {
-                if (entry.contains(field) &&
-                    (!entry[field].is_string() ||
-                     entry[field]
-                         .get_ref<const std::string&>().empty())) {
-                    throw std::runtime_error(
-                        "Model extension catalog entry '" + tag +
-                        "' field '" + field +
-                        "' must be a non-empty string");
-                }
-            }
-            // flm pull reads these unconditionally for every catalog entry.
-            for (const char* field : {"url", "flm_min_version"}) {
-                if (!entry.contains(field) || !entry[field].is_string() ||
-                    entry[field].get_ref<const std::string&>().empty()) {
-                    throw std::runtime_error(
-                        "Model extension catalog entry '" + tag +
-                        "' field '" + field +
-                        "' must be a non-empty string");
-                }
-            }
-            if (!entry.contains("files") || !entry["files"].is_array() ||
-                entry["files"].empty() ||
-                std::any_of(entry["files"].begin(), entry["files"].end(),
-                            [](const nlohmann::json& file) {
-                                return !file.is_string() ||
-                                       file.get_ref<const std::string&>()
-                                           .empty();
-                            })) {
-                throw std::runtime_error(
-                    "Model extension catalog entry '" + tag +
-                    "' files must be a non-empty array of non-empty strings");
-            }
-            // flm pull writes, and flm remove deletes, under
-            // <model root>/<name>/<file>; none of them may leave that folder.
-            detail::require_contained_name(entry, "name", tag);
-            detail::require_contained_name(entry, "xclbin_folder", tag);
-            detail::require_contained_files(entry["files"], tag);
-            if (entry.contains("file_sources")) {
-                if (!entry["file_sources"].is_object()) {
-                    throw std::runtime_error(
-                        "Model extension catalog entry '" + tag +
-                        "' file_sources must be an object");
-                }
-                for (const auto& [file, source] :
-                     entry["file_sources"].items()) {
-                    (void)source;
-                    if (!detail::is_contained_path(file, false)) {
-                        throw std::runtime_error(
-                            "Model extension catalog entry '" + tag +
-                            "' file_sources must name relative paths "
-                            "inside the model folder");
-                    }
-                }
-            }
+            detail::validate_catalog_entry(entry, tag);
             if (entry.contains("preferred_source")) {
                 const auto& preferred = entry["preferred_source"];
-                if (!preferred.is_object()) {
+                if (!preferred.is_object() ||
+                    preferred.contains("preferred_source")) {
                     throw std::runtime_error(
                         "Model extension catalog entry '" + tag +
-                        "' preferred_source must be an object");
+                        "' preferred_source must be an object without a "
+                        "preferred_source of its own");
                 }
-                detail::require_contained_name(preferred, "name", tag);
-                if (preferred.contains("files")) {
-                    if (!preferred["files"].is_array()) {
-                        throw std::runtime_error(
-                            "Model extension catalog entry '" + tag +
-                            "' preferred_source files must be an array");
-                    }
-                    detail::require_contained_files(preferred["files"], tag);
-                }
-            }
-            if (entry.contains("supported_platforms")) {
-                const auto& platforms = entry["supported_platforms"];
-                if (!platforms.is_array() || platforms.empty()) {
-                    throw std::runtime_error(
-                        "Model extension catalog entry '" + tag +
-                        "' supported_platforms must be a non-empty array");
-                }
-                std::unordered_set<std::string> seen;
-                for (const auto& platform : platforms) {
-                    if (!platform.is_string()) {
-                        throw std::runtime_error(
-                            "Model extension catalog entry '" + tag +
-                            "' supported_platforms must contain strings");
-                    }
-                    const auto value = platform.get<std::string>();
-                    if ((value != "aie2p" && value != "dev04") ||
-                        !seen.insert(value).second) {
-                        throw std::runtime_error(
-                            "Model extension catalog entry '" + tag +
-                            "' has an unknown or duplicate platform '" +
-                            value + "'");
-                    }
-                }
-            }
-            if ((entry.value("vlm", false) ||
-                 entry.value("asr", false)) &&
-                (!entry.contains("frontend_provider") ||
-                 !entry["frontend_provider"].is_string() ||
-                 entry["frontend_provider"]
-                     .get_ref<const std::string&>().empty())) {
-                throw std::runtime_error(
-                    "Multimodal model extension catalog entry '" + tag +
-                    "' must name a frontend_provider");
+                detail::validate_catalog_entry(
+                    detail::with_preferred_source(entry),
+                    tag + " preferred_source");
             }
         }
     }
@@ -352,36 +403,38 @@ inline void validate_model_catalog_overlay(
                     "Model extension catalog duplicates model tag '" +
                     tag + "'");
             }
-            const std::string family =
-                entry["details"]["family"].get<std::string>();
-            if (std::find(frontends.begin(), frontends.end(), family) ==
-                frontends.end()) {
-                throw std::runtime_error(
-                    "Model extension catalog entry '" + tag +
-                    "' names unregistered frontend family '" +
-                    family + "'");
-            }
-            const std::string selected_backend =
-                entry.at(backend::kBackendKey).get<std::string>();
-            const std::string provider =
-                entry.at(backend::kBackendProviderKey).get<std::string>();
-            const auto family_entry = providers.find(family);
-            if (family_entry == providers.end()) {
-                throw std::runtime_error(
-                    "Model extension catalog entry '" + tag +
-                    "' names unavailable backend provider '" + family +
-                    "/" + selected_backend + "/" + provider + "'");
-            }
-            const auto backend_entry =
-                family_entry->second.find(selected_backend);
-            if (backend_entry == family_entry->second.end() ||
-                std::find(backend_entry->second.begin(),
-                          backend_entry->second.end(), provider) ==
-                    backend_entry->second.end()) {
-                throw std::runtime_error(
-                    "Model extension catalog entry '" + tag +
-                    "' names unavailable backend provider '" + family +
-                    "/" + selected_backend + "/" + provider + "'");
+            for (const auto& source : catalog_entry_sources(entry)) {
+                const std::string family =
+                    source["details"]["family"].get<std::string>();
+                if (std::find(frontends.begin(), frontends.end(), family) ==
+                    frontends.end()) {
+                    throw std::runtime_error(
+                        "Model extension catalog entry '" + tag +
+                        "' names unregistered frontend family '" +
+                        family + "'");
+                }
+                const std::string selected_backend =
+                    source.at(backend::kBackendKey).get<std::string>();
+                const std::string provider =
+                    source.at(backend::kBackendProviderKey).get<std::string>();
+                const auto family_entry = providers.find(family);
+                if (family_entry == providers.end()) {
+                    throw std::runtime_error(
+                        "Model extension catalog entry '" + tag +
+                        "' names unavailable backend provider '" + family +
+                        "/" + selected_backend + "/" + provider + "'");
+                }
+                const auto backend_entry =
+                    family_entry->second.find(selected_backend);
+                if (backend_entry == family_entry->second.end() ||
+                    std::find(backend_entry->second.begin(),
+                              backend_entry->second.end(), provider) ==
+                        backend_entry->second.end()) {
+                    throw std::runtime_error(
+                        "Model extension catalog entry '" + tag +
+                        "' names unavailable backend provider '" + family +
+                        "/" + selected_backend + "/" + provider + "'");
+                }
             }
         }
     }

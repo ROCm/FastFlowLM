@@ -621,15 +621,29 @@ void test_overlay_paths_stay_inside_the_model_folder() {
     nested["xclbin_folder"] = "Path-Model-Kernels";
     load(nested);
 
+    // COM with a superscript 4 is not reserved; Windows reserves only the
+    // superscripts 1 to 3.
     for (const std::string name :
-         {"..", ".", "a/b", "a\\b", "C:", "C:model", "/root", "\\\\server"}) {
+         {"CONSOLE", "COM10", "LPT0", "Model.v2", "COM\xE2\x81\xB4"}) {
+        nlohmann::json entry = complete;
+        entry["name"] = name;
+        load(entry);
+    }
+
+    // Windows opens "Model." and "Model " as "Model", and CON, NUL.txt,
+    // com1 or COM with a superscript 1 as devices.
+    for (const std::string name :
+         {"..", ".", "a/b", "a\\b", "C:", "C:model", "/root", "\\\\server",
+          "Model.", "Model ", "CON", "nul.txt", "Com1", "LPT9.bin", "AUX .x",
+          "COM\xC2\xB9", "com\xC2\xB2", "LPT\xC2\xB3.bin"}) {
         nlohmann::json entry = complete;
         entry["name"] = name;
         RequireContains(RequireThrows([&] { load(entry); }), "'name'");
     }
     for (const std::string file :
          {"../x", "/x", "a/../b", "./a", "a//b", "a/", "a\\b", "C:\\x",
-          "C:x"}) {
+          "C:x", "config.json.", "a /x", "a/CON", "prn.json",
+          "a/COM\xC2\xB3", "lpt\xC2\xB9.json", "LPT\xC2\xB2/x"}) {
         nlohmann::json entry = complete;
         entry["files"] = {"config.json", file};
         RequireContains(RequireThrows([&] { load(entry); }), "files");
@@ -650,6 +664,32 @@ void test_overlay_paths_stay_inside_the_model_folder() {
         RequireContains(RequireThrows([&] { load(entry); }), "'name'");
         entry["preferred_source"] = {{"files", {"../x"}}};
         RequireContains(RequireThrows([&] { load(entry); }), "files");
+    }
+
+    // flm pull and flm run use the entry preferred_source merge-patches in,
+    // so every field it sets is checked as the entry's own would be.
+    for (const auto& [preferred, field] :
+         std::vector<std::pair<nlohmann::json, std::string>>{
+             {{{"xclbin_folder", ".."}}, "xclbin_folder"},
+             {{{"file_sources", {{"../tokenizer.json", {{"url", "x"}}}}}},
+              "file_sources"},
+             {{{"files", nullptr}}, "files"},
+             {{{"url", ""}}, "url"},
+             {{{"backend_provider", ""}}, "backend_provider"},
+             {{{"vlm", true}}, "frontend_provider"},
+             {{{"preferred_source", nlohmann::json::object()}},
+              "preferred_source"}}) {
+        nlohmann::json entry = complete;
+        entry["preferred_source"] = preferred;
+        RequireContains(RequireThrows([&] { load(entry); }), field);
+    }
+    {
+        nlohmann::json entry = complete;
+        entry["preferred_source"] = {
+            {"url", "https://example.com/amd"},
+            {"files", {"config.json", "amd/model.onnx"}},
+            {"details", {{"quantization_level", "Q4"}}}};
+        load(entry);
     }
 }
 
@@ -705,6 +745,67 @@ void test_overlay_cannot_reuse_another_catalogs_folder() {
              {"2b", entry("Demo-Model-NPU2")}}}}}});
     TEST_REQUIRE(open(shared));
     std::filesystem::remove(shared);
+
+    auto preferred = entry("Demo-Model-NPU2");
+    preferred["preferred_source"] = {{"name", "base-model-npu2"}};
+    const auto preferred_reuse = write_catalog(
+        "flm_folder_preferred_reuse_overlay.json",
+        {{"schema_version", 1}, {"models", {{"demo", {{"1b", preferred}}}}}});
+    RequireContains(RequireThrows([&] { (void)open(preferred_reuse); }),
+                    "uses model folder");
+    std::filesystem::remove(preferred_reuse);
+    std::filesystem::remove(base);
+}
+
+void test_overlay_preferred_source_selects_available_providers() {
+    // A preferred_source may not switch to a backend provider or frontend
+    // family the loaded extensions do not offer.
+    const auto base = write_catalog(
+        "flm_preferred_provider_base_catalog.json",
+        {{"model_path", "models"},
+         {"models",
+          {{"base",
+            {{"1b",
+              {{"name", "Base-Model-NPU2"},
+               {"details", {{"family", "base-frontend"}}}}}}}}}});
+    std::string base_path = base.string();
+    std::string exe_dir = ".";
+    const model_list::backend_provider_inventory_t providers = {
+        {"base-frontend", {{"flm", {"builtin"}}}},
+        {"demo-frontend", {{"flm", {"demo-provider"}}}}};
+    for (const auto& [preferred, message] :
+         std::vector<std::pair<nlohmann::json, std::string>>{
+             {nlohmann::json::object(), ""},
+             {{{"backend_provider", "other-provider"}},
+              "unavailable backend provider"},
+             {{{"backend", "core"}}, "unavailable backend provider"},
+             {{{"details", {{"family", "missing-frontend"}}}},
+              "unregistered frontend family"}}) {
+        auto demo = WithDownloadMetadata(
+            {{"name", "Demo-Model-NPU2"},
+             {"backend", "flm"},
+             {"backend_provider", "demo-provider"},
+             {"default_context_length", 4096},
+             {"max_prefill_len", 512},
+             {"details", {{"family", "demo-frontend"}}},
+             {"preferred_source", preferred}});
+        const auto overlay = write_catalog(
+            "flm_preferred_provider_overlay.json",
+            {{"schema_version", 1}, {"models", {{"demo", {{"1b", demo}}}}}});
+        const auto open = [&] {
+            model_list models(
+                base_path, exe_dir, "aie2p", {"flm", "core"},
+                {flm::catalog::load_model_catalog_overlay(overlay.string())},
+                {"base-frontend", "demo-frontend"}, providers);
+            return models.is_model_supported("demo:1b");
+        };
+        if (message.empty()) {
+            TEST_REQUIRE(open());
+        } else {
+            RequireContains(RequireThrows(open), message);
+        }
+        std::filesystem::remove(overlay);
+    }
     std::filesystem::remove(base);
 }
 
@@ -849,6 +950,8 @@ int main() {
             "overlay paths stay inside the model folder");
     RunTest(test_overlay_cannot_reuse_another_catalogs_folder,
             "overlay cannot reuse another catalog's folder");
+    RunTest(test_overlay_preferred_source_selects_available_providers,
+            "overlay preferred_source selects available providers");
     RunTest(test_provider_inventory_preserves_all_implicit_builtin_models,
             "provider inventory preserves all implicit built-in models");
     RunTest(test_platform_helpers, "platform helpers");
