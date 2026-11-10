@@ -12,6 +12,10 @@
 #include "streaming_ostream_openai.hpp"
 #include "image/image_reader.hpp"
 #include "image/raw_rgb8.hpp"
+#include "base64.hpp"
+#include <algorithm>
+#include <cctype>
+#include <cstring>
 #include "AutoModel/modeling_minicpm_v.hpp"
 #include "whisper/transcript_format.hpp"
 #include <sstream>
@@ -218,15 +222,92 @@ static json normalize_messages(json messages) {
     return normalized;
 }
 
+static bool starts_with_ci(const std::string& s, const char* prefix) {
+    const size_t n = std::strlen(prefix);
+    if (s.size() < n) return false;
+    for (size_t i = 0; i < n; ++i) {
+        if (std::tolower(static_cast<unsigned char>(s[i])) != prefix[i]) return false;
+    }
+    return true;
+}
+
+///@brief Check one OpenAI `image_url` content part and return its base64 payload, ready for the models' decoders.
+/// Accepts a base64 `data:image/...;base64,` URL (any image media type, any case; the bytes decide the format) or bare
+/// base64. On failure returns false with `why` set: the request is malformed or the image can't be used, and silently
+/// dropping it would let the model answer about an image it never saw.
+static bool image_url_payload(const json& part, ImageReader& reader, std::string& payload, std::string& why) {
+    if (!part.contains("image_url") || !part["image_url"].is_object()) {
+        why = "'image_url' must be an object like {\"url\": \"data:image/png;base64,...\"}";
+        return false;
+    }
+    const json& image_url = part["image_url"];
+    if (!image_url.contains("url") || !image_url["url"].is_string()) {
+        why = "'image_url.url' is missing or not a string";
+        return false;
+    }
+    const std::string url = image_url["url"].get<std::string>();
+    if (url.empty()) {
+        why = "'image_url.url' is empty";
+        return false;
+    }
+    if (starts_with_ci(url, "http://") || starts_with_ci(url, "https://")) {
+        why = "remote image URLs are not supported; send the image inline as a base64 data URL "
+              "(data:image/png;base64,...)";
+        return false;
+    }
+    std::string encoded;
+    if (starts_with_ci(url, "data:")) {
+        const size_t comma = url.find(',');
+        if (comma == std::string::npos) {
+            why = "malformed data URL: no ',' before the image data";
+            return false;
+        }
+        std::string header = url.substr(5, comma - 5);
+        std::transform(header.begin(), header.end(), header.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        const std::string media_type = header.substr(0, header.find(';'));
+        if (media_type.rfind("image/", 0) != 0) {
+            why = "data URL media type '" + media_type + "' is not an image";
+            return false;
+        }
+        if (header.size() < 7 || header.compare(header.size() - 7, 7, ";base64") != 0) {
+            why = "data URL must be base64-encoded (data:image/...;base64,...)";
+            return false;
+        }
+        payload = url.substr(comma + 1);
+    }
+    else {
+        payload = url;  // bare base64
+    }
+    if (payload.empty()) {
+        why = "the image data is empty";
+        return false;
+    }
+    try {
+        encoded = base64::from_base64(payload);
+    }
+    catch (const std::exception&) {
+        why = "the image data is not valid base64";
+        return false;
+    }
+    return reader.validate_image_bytes(encoded, why);
+}
+
 ///@brief `raw`: where to keep the batches of any `image_raw` parts (null: the model takes none, so such a part is an
-/// error); a bad one sets `error` and the result must not be used
+/// error). A bad image or image part (and an image outside a user message) sets `error`, and the result must not be used
 static json normalize_template(json messages, std::vector<std::shared_ptr<const raw_rgb8_batch_t>>* raw = nullptr,
                                std::string* error = nullptr, const raw_rgb8_limits_t& raw_limits = raw_rgb8_limits_t()) {
     json template_message = json::array();
     size_t raw_frames = 0;
     size_t raw_bytes = 0;
+    ImageReader image_reader;
+    auto fail = [&](size_t m, size_t c, const std::string& why) {
+        if (error) *error = "messages[" + std::to_string(m) + "].content[" + std::to_string(c) + "]: " + why;
+        return template_message;
+    };
 
-    for (auto& message : messages) {
+    for (size_t message_index = 0; message_index < messages.size(); ++message_index) {
+        auto& message = messages[message_index];
         json new_message = message;
         std::string merged_text;
         nlohmann::ordered_json::array_t merged_images;
@@ -238,32 +319,26 @@ static json normalize_template(json messages, std::vector<std::shared_ptr<const 
         }
         else if (message["content"].is_array()) {
             // Structured format: extract text and image URLs
-            for (auto& contentItem : message["content"]) {
+            for (size_t content_index = 0; content_index < message["content"].size(); ++content_index) {
+                auto& contentItem = message["content"][content_index];
+                const bool is_image = contentItem.is_object() && contentItem.contains("type") &&
+                                      (contentItem["type"] == "image_url" || contentItem["type"] == "image_raw");
+                if (is_image && message.value("role", "") != "user") {
+                    // OpenAI takes image parts in user messages only; the chat templates drop or reject the rest.
+                    return fail(message_index, content_index, "images are only supported in user messages, not in a message with role '" +
+                                (message.contains("role") && message["role"].is_string()
+                                     ? message["role"].get<std::string>() : std::string("?")) + "' message");
+                }
                 if (contentItem.contains("type") && contentItem["type"] == "text") {
                     merged_text += contentItem["text"].get<std::string>();
                 }
                 else if (contentItem.contains("type") && contentItem["type"] == "image_url") {
-                    std::string image_url = contentItem["image_url"]["url"].get<std::string>();
-                    const std::vector<std::string> prefixes = {
-                        "data:image/png;base64,",
-                        "data:image/jpeg;base64,",
-                        "data:image/jpg;base64,"
-                    };
-                    for (const auto& prefix : prefixes) {
-                        if (image_url.substr(0, prefix.length()) == prefix) {
-                            image_url = image_url.substr(prefix.length());
-                            break;
-                        }
+                    std::string payload, why;
+                    if (!image_url_payload(contentItem, image_reader, payload, why)) {
+                        header_print("Warning", "Rejecting image: " + why);
+                        return fail(message_index, content_index, why);
                     }
-                    if (image_url.substr(0, 5) == "data:") {
-                        header_print("Warning", "Unsupported image format, skipping this image.");
-                        continue;
-                    }
-                    if (image_url.empty()) {
-                        header_print("Warning", "Empty image, skipping this image.");
-                        continue;
-                    }
-                    merged_images.push_back(image_url);
+                    merged_images.push_back(payload);
                 }
                 else if (contentItem.contains("type") && contentItem["type"] == "image_raw") {
                     std::string why;
@@ -278,8 +353,7 @@ static json normalize_template(json messages, std::vector<std::shared_ptr<const 
                         why.clear();
                     }
                     if (!why.empty()) {
-                        if (error) *error = why;
-                        return template_message;
+                        return fail(message_index, content_index, why);
                     }
                     raw_frames += (size_t)batch->frames;
                     raw_bytes += batch->data.size();
