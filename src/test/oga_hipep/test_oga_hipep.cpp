@@ -1229,18 +1229,18 @@ std::string Reason(const flm::oga::PackageCandidate& candidate) {
 }
 
 void TestDiscoveryReportsWhyEachRootIsRejected() {
-    TEST_REQUIRE(Reason({"AMDRT_PKG_ROOT", {}}) == "not set");
+    TEST_REQUIRE(Reason({"HIPEP_PKG_ROOT", {}}) == "not set");
 
     TempDir missing;
-    RequireContains(Reason({"AMDRT_PKG_ROOT", missing.path / "absent"}), "is not a directory");
+    RequireContains(Reason({"HIPEP_PKG_ROOT", missing.path / "absent"}), "is not a directory");
 
     TempDir partial;
     Touch(partial.path / "bin" / "onnxruntime-genai.dll");
-    RequireContains(Reason({"AMDRT_PKG_ROOT", partial.path}), "has no onnxruntime.dll, hipgpu.dll");
+    RequireContains(Reason({"HIPEP_PKG_ROOT", partial.path}), "has no onnxruntime.dll, hipgpu.dll");
 
     TempDir unversioned;
     for (const char* file : kPackageFiles) Touch(unversioned.path / "bin" / file);
-    RequireContains(Reason({"AMDRT_PKG_ROOT", unversioned.path}), "has no file version");
+    RequireContains(Reason({"HIPEP_PKG_ROOT", unversioned.path}), "has no file version");
 }
 
 void TestDiscoveryAcceptsAVersionedPackageWithoutABinDirectory() {
@@ -1270,10 +1270,10 @@ void TestFindPackageTakesTheFirstThatQualifiesAndListsEveryRejection() {
 
     TempDir empty;
     const auto text = RequireThrows<std::runtime_error>(
-        [&] { flm::oga::FindPackage({{"AMDRT_PKG_ROOT", {}}, {"other", empty.path}}); });
-    RequireContains(text, "AMDRT_PKG_ROOT: not set");
+        [&] { flm::oga::FindPackage({{"HIPEP_PKG_ROOT", {}}, {"other", empty.path}}); });
+    RequireContains(text, "HIPEP_PKG_ROOT: not set");
     RequireContains(text, "other: '" + (empty.path).string() + "' has no onnxruntime-genai.dll");
-    RequireContains(text, "set AMDRT_PKG_ROOT");
+    RequireContains(text, "set HIPEP_PKG_ROOT");
 }
 
 /// \brief the package DLLs in `bin`, with a version resource standing in for OGA
@@ -1311,7 +1311,7 @@ flm::oga::PackageEnvironment Environment(std::filesystem::path root, std::filesy
                                          std::filesystem::path program_files) {
     return [root, local_app_data, program_files](const wchar_t* name) -> std::filesystem::path {
         const std::wstring_view variable(name);
-        if (variable == L"AMDRT_PKG_ROOT") return root;
+        if (variable == L"HIPEP_PKG_ROOT") return root;
         if (variable == L"LOCALAPPDATA") return local_app_data;
         if (variable == L"ProgramFiles") return program_files;
         return {};
@@ -1391,7 +1391,7 @@ void TestCandidatesComeFromAmdrtPkgRootOnly() {
     MakePackage(local.path / "hip-ep" / "0.5.2");
     const auto set = flm::oga::SearchPackages(Environment("D:\\somewhere\\hip-ep", local.path, {}));
     TEST_REQUIRE(set.candidates.size() == 1);
-    TEST_REQUIRE(set.candidates[0].source == "AMDRT_PKG_ROOT");
+    TEST_REQUIRE(set.candidates[0].source == "HIPEP_PKG_ROOT");
     TEST_REQUIRE(set.candidates[0].root == std::filesystem::path("D:\\somewhere\\hip-ep"));
     TEST_REQUIRE(set.notes.empty());
 
@@ -1478,7 +1478,7 @@ void TestAnExplicitRootThatIsRejectedDoesNotFallThrough() {
     TEST_REQUIRE(search.candidates.size() == 1);
     const auto text = RequireThrows<std::runtime_error>(
         [&] { flm::oga::FindPackage(search.candidates, search.notes); });
-    RequireContains(text, "AMDRT_PKG_ROOT: '" + explicit_root.path.string() + "' has no onnxruntime-genai.dll");
+    RequireContains(text, "HIPEP_PKG_ROOT: '" + explicit_root.path.string() + "' has no onnxruntime-genai.dll");
     // The default folders are not named anywhere in the error, so none was tried.
     TEST_REQUIRE(text.find(local.path.string()) == std::string::npos);
     TEST_REQUIRE(text.find(programs.path.string()) == std::string::npos);
@@ -1648,7 +1648,7 @@ void TestAnExplicitRootStillDisablesAutoInstall() {
         flm::oga::EnsureHipEpPackageForTest(fixture.environment(fixture.local.path / "absent"), hooks);
     });
     TEST_REQUIRE(fixture.downloads == 0);
-    RequireContains(text, "AMDRT_PKG_ROOT: '");
+    RequireContains(text, "HIPEP_PKG_ROOT: '");
 }
 
 void TestAutoInstallDoesNotReplaceAnUnownedConflict() {
@@ -1788,7 +1788,7 @@ void TestValidExternalPackagesBypassAutoInstall() {
 
     const auto explicit_package = flm::oga::EnsureHipEpPackageForTest(
         fixture.environment(explicit_root.path), hooks);
-    TEST_REQUIRE(explicit_package.source == "AMDRT_PKG_ROOT");
+    TEST_REQUIRE(explicit_package.source == "HIPEP_PKG_ROOT");
     TEST_REQUIRE(explicit_package.bin == explicit_root.path / "bin");
 
     const auto discovered_package = flm::oga::EnsureHipEpPackageForTest(
@@ -1901,7 +1901,7 @@ void TestUninstallLeavesEveryPackageFlmDidNotInstall() {
     for (const auto& root : {unzipped, unmarked, misnamed, program_files, explicit_root.path}) {
         TEST_REQUIRE(std::filesystem::is_regular_file(root / "bin" / "onnxruntime.dll"));
     }
-    RequireContains(log, "Left the package AMDRT_PKG_ROOT names in place: " + Text(explicit_root.path));
+    RequireContains(log, "Left the package HIPEP_PKG_ROOT names in place: " + Text(explicit_root.path));
     for (const auto& root : {unzipped, unmarked, misnamed, program_files}) {
         RequireContains(log, "Left " + Text(root) + " in place: flm did not install it");
     }
@@ -2143,16 +2143,16 @@ void TestABackendOnOga019KeepsItsStateOnRestore() {
 }
 
 void TestTheBackendSaysHowToGetHipep() {
-    // AMDRT_PKG_ROOT names a folder that does not exist, so the outcome does not depend on
+    // HIPEP_PKG_ROOT names a folder that does not exist, so the outcome does not depend on
     // what hip-ep this machine has installed, and the real environment is what is read.
     TempDir missing;
     const std::string absent = (missing.path / "absent").string();
-    _putenv_s("AMDRT_PKG_ROOT", absent.c_str());
+    _putenv_s("HIPEP_PKG_ROOT", absent.c_str());
     PackageDir package;
     const auto text = RequireThrows<std::runtime_error>(
         [&] { flm::oga::hipep_factory()(package.Context()); });
-    _putenv_s("AMDRT_PKG_ROOT", "");
-    RequireContains(text, "AMDRT_PKG_ROOT: '" + absent + "' is not a directory");
+    _putenv_s("HIPEP_PKG_ROOT", "");
+    RequireContains(text, "HIPEP_PKG_ROOT: '" + absent + "' is not a directory");
     RequireContains(text, "Install hip-ep 0.5.3 or later");
 }
 

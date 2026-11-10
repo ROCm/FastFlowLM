@@ -311,7 +311,7 @@ std::filesystem::path NarrowPathOrThrow(const std::filesystem::path& path, const
     if (!chosen) {
         throw std::runtime_error("the cache path '" + Text(path) +
                                  "' cannot be represented for the shared downloader, and no short-path alias is "
-                                 "available. Set AMDRT_PKG_ROOT to a manually extracted hip-ep package");
+                                 "available. Set HIPEP_PKG_ROOT to a manually extracted hip-ep package");
     }
     return *chosen;
 }
@@ -548,8 +548,8 @@ std::uint64_t TreeSize(const std::filesystem::path& root) {
 /// \brief name the packages an uninstall leaves, which discovery still finds
 void ReportKept(const PackageEnvironment& environment, const std::vector<std::filesystem::path>& unowned,
                 const Hooks& hooks) {
-    if (const std::filesystem::path root = environment(L"AMDRT_PKG_ROOT"); !root.empty()) {
-        hooks.log("Left the package AMDRT_PKG_ROOT names in place: " + Text(root));
+    if (const std::filesystem::path root = environment(L"HIPEP_PKG_ROOT"); !root.empty()) {
+        hooks.log("Left the package HIPEP_PKG_ROOT names in place: " + Text(root));
     }
     std::vector<std::filesystem::path> kept = unowned;
     if (const std::filesystem::path programs = environment(L"ProgramFiles"); !programs.empty()) {
@@ -624,7 +624,7 @@ void testing::ExtractHipEpArchiveWithTar(const std::filesystem::path& archive,
 Package EnsureHipEpPackageForTest(const PackageEnvironment& environment, const HipEpInstallHooks& raw_hooks) {
     const Hooks hooks = ResolveHooks(raw_hooks);
     const PackageSearch search = SearchPackages(environment);
-    if (!search.candidates.empty() && search.candidates.front().source == "AMDRT_PKG_ROOT") {
+    if (!search.candidates.empty() && search.candidates.front().source == "HIPEP_PKG_ROOT") {
         return FindPackage(search.candidates, search.notes);
     }
     if (auto package = FirstUsablePackage(search)) return *package;
