@@ -46,6 +46,12 @@ private:
     /// \brief whether insert() may pin the system turn it sees, and rewind to it
     bool pin_enabled = true;
 
+    /// \brief reply cap set by insert() when the caller sent no max_tokens, 0 = none
+    int auto_length_limit = 0;
+
+    /// \brief true once the reply repeats a short block of tokens (see common/AutoModel/modeling_hunyuan.md)
+    bool _stop_generation(const chat_meta_info_t& meta_info) const override;
+
 public:
     Hunyuan(flm_rt::device* npu_device_inst);
 

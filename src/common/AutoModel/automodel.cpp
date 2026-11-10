@@ -34,8 +34,9 @@ int resolve_context_length(const nlohmann::ordered_json& model_info,
         std::find(model_info["label"].begin(), model_info["label"].end(),
                   "single-turn") != model_info["label"].end();
     if (single_turn) {
-        header_print("FLM", "Single-turn model, 1k max context length allowed only!");
-        return model_info["default_context_length"].get<int>();
+        const int fixed_length = model_info["default_context_length"].get<int>();
+        header_print("FLM", "Single-turn model, context length fixed at " + std::to_string(fixed_length) + " tokens");
+        return fixed_length;
     }
     return default_context_length;
 }
@@ -1067,6 +1068,10 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
         }
         meta_info.generated_tokens++;
         if ((length_limit > 0) && (meta_info.generated_tokens >= length_limit)){
+            reason = MAX_LENGTH_REACHED;
+            break;
+        }
+        if (this->_stop_generation(meta_info)){
             reason = MAX_LENGTH_REACHED;
             break;
         }
