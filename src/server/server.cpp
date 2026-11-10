@@ -150,7 +150,9 @@ void brief_print_message_request(nlohmann::json request) {
                             contentItem["text"] = utf8_truncate_middle(text, 10, 10);
                         }
                     }
-                    else if (contentItem.contains("type") && contentItem["type"] == "image_url") {
+                    else if (contentItem.contains("type") && contentItem["type"] == "image_url" &&
+                             contentItem["image_url"].is_object() && contentItem["image_url"].contains("url") &&
+                             contentItem["image_url"]["url"].is_string()) {
                         std::string image_url = contentItem["image_url"]["url"].get<std::string>();
                         if (image_url.size() > 20) {
                             contentItem["image_url"]["url"] = utf8_truncate_middle(image_url, 10, 10);
