@@ -90,7 +90,9 @@ if (-not (Test-Path $BoostLib)) {
 
 # --- curl (vcpkg) ----------------------------------------------------------
 # flm links libcurl.lib, the import library for the libcurl.dll that ships
-# from src\lib, and compiles against curl's headers.
+# from src\lib, and compiles against curl's headers. The Gemma4-open fixture
+# (src\test\model_extension_gemma4e) also requires this include dir as
+# VCPKG_INCLUDE_DIR, so dropping vcpkg here means changing that build too.
 $VcpkgDir = Join-Path $Root "vcpkg\installed\x64-windows"
 if (-not (Test-Path (Join-Path $VcpkgDir "lib\libcurl.lib"))) {
     if (-not $env:VCPKG_INSTALLATION_ROOT) {

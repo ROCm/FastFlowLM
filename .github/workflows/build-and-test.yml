@@ -70,7 +70,7 @@ on:
         type: string
         default: pr
       release:
-        description: Build and test only what a release ships (no models-from-source).
+        description: Build and test only what a release ships (no models-from-source, no model-extension fixture).
         type: boolean
         default: false
     outputs:
@@ -193,13 +193,15 @@ jobs:
   # ── Model extensions ─────────────────────────────────────────────────────
   # The Gemma4-open bundles build against the SDK in their package once it
   # exists, outside the package build, so a failure here holds back no package
-  # or NPU test, only the verdict. The model-extension contracts need no package
-  # and run in cpu-tests.yml.
+  # or NPU test, only the verdict. A release run skips them, like the
+  # models-from-source builds: a fixture-only break (rustup, a submodule fetch)
+  # should not hold a release that pull requests already tested. The
+  # model-extension contracts need no package and run in cpu-tests.yml.
 
   build-lin-extension-xrt:
     name: Linux XRT model extension
     needs: [changes, build-lin-xrt-portable]
-    if: needs.changes.outputs.source == 'true'
+    if: needs.changes.outputs.source == 'true' && !inputs.release
     uses: ./.github/workflows/model-extension-build.yml
     with:
       os: linux
@@ -209,7 +211,7 @@ jobs:
   build-lin-extension-hrx:
     name: Linux HRX model extension
     needs: [changes, build-lin-hrx-portable]
-    if: needs.changes.outputs.source == 'true'
+    if: needs.changes.outputs.source == 'true' && !inputs.release
     uses: ./.github/workflows/model-extension-build.yml
     with:
       os: linux
@@ -219,7 +221,7 @@ jobs:
   build-win-extension-xrt:
     name: Windows XRT model extension
     needs: [changes, build-win-xrt]
-    if: needs.changes.outputs.source == 'true'
+    if: needs.changes.outputs.source == 'true' && !inputs.release
     uses: ./.github/workflows/model-extension-build.yml
     with:
       os: windows
@@ -229,7 +231,7 @@ jobs:
   build-win-extension-hrx:
     name: Windows HRX model extension
     needs: [changes, build-win-hrx]
-    if: needs.changes.outputs.source == 'true'
+    if: needs.changes.outputs.source == 'true' && !inputs.release
     uses: ./.github/workflows/model-extension-build.yml
     with:
       os: windows

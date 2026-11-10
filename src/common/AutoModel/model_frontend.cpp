@@ -751,52 +751,55 @@ void FrontendRegistry::load_extension(
         }
         for (const auto& [model_type, sizes] :
              extension->catalog->document.at("models").items()) {
-            for (const auto& [size, entry] : sizes.items()) {
+            for (const auto& [size, catalog_entry] : sizes.items()) {
                 const std::string tag = model_type + ":" + size;
-                const std::string family =
-                    entry.at("details").at("family").get<std::string>();
-                auto selected = providers_.find(family);
-                std::string expected =
-                    selected == providers_.end() ? std::string() : selected->second;
-                bool requires_explicit = false;
-                for (const auto& pending :
-                     registration.pending_frontends) {
-                    if (pending.family == family) {
-                        expected = pending.provider;
-                        requires_explicit = true;
-                        break;
+                for (const auto& entry :
+                     catalog::catalog_entry_sources(catalog_entry)) {
+                    const std::string family =
+                        entry.at("details").at("family").get<std::string>();
+                    auto selected = providers_.find(family);
+                    std::string expected =
+                        selected == providers_.end() ? std::string() : selected->second;
+                    bool requires_explicit = false;
+                    for (const auto& pending :
+                         registration.pending_frontends) {
+                        if (pending.family == family) {
+                            expected = pending.provider;
+                            requires_explicit = true;
+                            break;
+                        }
                     }
-                }
-                if (!expected.empty()) {
-                    const auto provider = entry.find("frontend_provider");
-                    if ((provider == entry.end() && requires_explicit) ||
-                        (provider != entry.end() &&
-                         (!provider->is_string() ||
-                          provider->get<std::string>() != expected))) {
+                    if (!expected.empty()) {
+                        const auto provider = entry.find("frontend_provider");
+                        if ((provider == entry.end() && requires_explicit) ||
+                            (provider != entry.end() &&
+                             (!provider->is_string() ||
+                              provider->get<std::string>() != expected))) {
+                            throw std::runtime_error(
+                                "Model extension catalog entry '" + tag +
+                                "' must select frontend provider '" + expected +
+                                "' for family '" + family + "'");
+                        }
+                    }
+                    const bool has_private_payload =
+                        entry.value("vlm", false) ||
+                        entry.value("asr", false);
+                    const std::string backend_provider =
+                        entry.at(backend::kBackendProviderKey)
+                            .get<std::string>();
+                    const auto frontend_provider =
+                        entry.find("frontend_provider");
+                    if (has_private_payload &&
+                        backend_provider != backend::kBuiltinProviderId &&
+                        (frontend_provider == entry.end() ||
+                         !frontend_provider->is_string() ||
+                         frontend_provider->get<std::string>() !=
+                             backend_provider)) {
                         throw std::runtime_error(
-                            "Model extension catalog entry '" + tag +
-                            "' must select frontend provider '" + expected +
-                            "' for family '" + family + "'");
+                            "Multimodal model extension catalog entry '" + tag +
+                            "' must select matching frontend and backend provider '" +
+                            backend_provider + "'");
                     }
-                }
-                const bool has_private_payload =
-                    entry.value("vlm", false) ||
-                    entry.value("asr", false);
-                const std::string backend_provider =
-                    entry.at(backend::kBackendProviderKey)
-                        .get<std::string>();
-                const auto frontend_provider =
-                    entry.find("frontend_provider");
-                if (has_private_payload &&
-                    backend_provider != backend::kBuiltinProviderId &&
-                    (frontend_provider == entry.end() ||
-                     !frontend_provider->is_string() ||
-                     frontend_provider->get<std::string>() !=
-                         backend_provider)) {
-                    throw std::runtime_error(
-                        "Multimodal model extension catalog entry '" + tag +
-                        "' must select matching frontend and backend provider '" +
-                        backend_provider + "'");
                 }
             }
         }
