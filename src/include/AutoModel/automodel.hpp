@@ -400,6 +400,9 @@ protected:
 	buffer<bf16> _chunked_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled = [] { return false; }, void* payload = nullptr, int first_len_run = 0);
 	std::string _shared_generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled = [] { return false; });
 
+	/// \brief asked by _shared_generate after every decoded token; true ends the reply as a length stop
+	virtual bool _stop_generation(const chat_meta_info_t& meta_info) const { (void)meta_info; return false; }
+
 	/// \brief Render the chat template for a request
 	/// \param inputs the template inputs; add_generation_prompt is set here
 	/// \param continue_final_message render no generation prompt and stop right
