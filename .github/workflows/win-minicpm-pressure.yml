@@ -41,8 +41,10 @@ env:
   HRX_ENGINE_BLOB: f30a9032124aaa421ac58e39fe335bc1cd80eec6
   # Engine overlay: a CI-built Windows XRT minicpm_v_4_7_npu.dll dropped over the package's copy.
   # Empty OVERLAY_BLOB = the package's own engine.
-  OVERLAY_BLOB: ''
-  OVERLAY_SOURCE: ''
+  # Now: IRON dev/minicpm-v-prefill-prof (747c3ed3 + MINICPM_V_PREFILL_PROFILE, build-libs run 43091707172), for
+  # phase S's per-stage split. Not for release.
+  OVERLAY_BLOB: 98856a73b72a37849ce9b24cdc4f83475eff7373
+  OVERLAY_SOURCE: IRON dev/minicpm-v-prefill-prof (prefill profile build)
   # Baseline for the perf phase: the last release's Windows XRT portable zip. It
   # refuses today's model files (config.json says flm_version 1.0.13), so
   # pressure.py gives it hard links of the same files with that field lowered.
