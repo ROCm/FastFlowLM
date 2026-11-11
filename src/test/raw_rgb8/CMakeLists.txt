@@ -10,6 +10,9 @@ set(FLM_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/../..")
 
 add_executable(test_raw_rgb8 test_raw_rgb8.cpp)
 target_include_directories(test_raw_rgb8 PRIVATE "${FLM_SOURCE_DIR}/include")
+if(WIN32)
+    target_compile_definitions(test_raw_rgb8 PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
 
 enable_testing()
 add_test(NAME test_raw_rgb8 COMMAND test_raw_rgb8)
