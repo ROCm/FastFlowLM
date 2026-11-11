@@ -15,6 +15,8 @@
 
 #include "AutoModel/modeling_qwen3_8mtp.hpp"
 #include "models/qwen3_8mtp/flm/aie2p/qwen3_8mtp_npu.hpp"
+#include <algorithm>
+#include <limits>
 
 
 /************              Qwen3_8MTP family            **************/
@@ -456,8 +458,8 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
     // runs and silently produces greedy output instead. A checkpoint with no
     // MTP head is unaffected: speculate() just returns {} every step and
     // everything falls through to the ordinary path below.
-    // Off under a decoding constraint: speculate() commits the drafts the base
-    // model agrees with, so they would never pass the constraint's mask.
+    // Under a decoding constraint speculate() would commit drafts the constraint's mask never saw, so a constrained
+    // request speculates only through set_speculation_chooser() below (built-in engine, greedy sampler).
     // An extension's generic speculation table has no per-draft logits view,
     // so logprobs use ordinary decoding unless this is the built-in engine.
     // FLM_DISABLE_SPECULATION=1 turns it off too, for comparing against plain
@@ -466,10 +468,62 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
     const bool has_speculation_logits =
         meta_info.logprobs_top_n < 0 ||
         dynamic_cast<qwen3_8mtp_npu*>(this->lm_engine) != nullptr;
+    // A constrained request still speculates when the built-in engine can hand each verify row to the constraint
+    // (set_speculation_chooser) and the sampler is greedy, which is all speculation can reproduce.
+    auto* mtp_engine = dynamic_cast<qwen3_8mtp_npu*>(this->lm_engine);
+    const bool greedy = this->sampler && (this->sampler->top_k == 1 || this->sampler->temperature <= 0.0f);
+    const bool constrained_spec = meta_info.constraint && mtp_engine != nullptr && greedy;
     const bool spec_enabled = this->lm_engine->supports_speculation() &&
-        !meta_info.constraint &&
+        (!meta_info.constraint || constrained_spec) &&
         has_speculation_logits &&
         !(no_spec != nullptr && no_spec[0] != '\0' && std::strcmp(no_spec, "0") != 0);
+    // Cleared on every way out, so the next request does not inherit this one's constraint.
+    struct chooser_guard {
+        qwen3_8mtp_npu* engine = nullptr;
+        ~chooser_guard() { if (engine) engine->set_speculation_chooser({}); }
+    } guard;
+    if (spec_enabled && constrained_spec) {
+        decode_constraint* constraint = meta_info.constraint.get();
+        // Argmax of one verify row inside the constraint's mask, then the constraint advances past it: the engine asks
+        // for rows in order and stops at the first mismatch, so this sees exactly the tokens that get committed.
+        // Past an accepted stop token the matcher is terminated (fill_mask() would throw); the engine truncates a batch
+        // one past its stop token, so those rows are discarded and only need some token.
+        auto stopped = std::make_shared<bool>(false);
+        mtp_engine->set_speculation_chooser([this, constraint, stopped](int, const float* row, int vocab) {
+            if (*stopped) {
+                int best = 0;
+                for (int i = 1; i < vocab; i++) if (row[i] > row[best]) best = i;
+                return best;
+            }
+            const bool masked = constraint->fill_mask(this->constraint_mask_);
+            int best = -1;
+            float best_logit = -std::numeric_limits<float>::infinity();
+            if (!masked) {
+                for (int i = 0; i < vocab; i++) {
+                    if (row[i] > best_logit) { best_logit = row[i]; best = i; }
+                }
+            } else {
+                const int words = std::min<int>((int)this->constraint_mask_.size(), (vocab + 31) / 32);
+                for (int w = 0; w < words; w++) {
+                    uint32_t bits = this->constraint_mask_[w];
+                    while (bits) {
+                        const int i = w * 32 + __builtin_ctz(bits);
+                        bits &= bits - 1;
+                        if (i < vocab && row[i] > best_logit) { best_logit = row[i]; best = i; }
+                    }
+                }
+            }
+            if (best < 0) {
+                // nothing allowed (or NaN logits): the plain argmax, as _sample() keeps its sample in that case
+                best = 0;
+                for (int i = 1; i < vocab; i++) if (row[i] > row[best]) best = i;
+            }
+            constraint->accept(best);
+            if (this->is_eos(best)) *stopped = true;
+            return best;
+        });
+        guard.engine = mtp_engine;
+    }
     // Draft depth; also the hit-rate denominator (see report_speculation_stats).
     const int SPEC_MAX_DRAFT = 7;
     if (spec_enabled) {
