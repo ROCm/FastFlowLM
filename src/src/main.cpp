@@ -565,14 +565,31 @@ static flm_rt::device* open_npu_device(std::string* why) {
     }
 }
 
-///@brief main function
+#if defined(_WIN32) && defined(FLM_ENABLE_OGA_HIPEP)
+///@brief end a process that loaded hip-ep at Ctrl+C, Ctrl+Break or closing its console
+///@note The default handler, which runs when this one returns FALSE, ends the process
+///      through ExitProcess, which never finishes once hip-ep is loaded.
+static BOOL WINAPI end_hipep_process_on_console_event(DWORD event) {
+    if (event == CTRL_C_EVENT || event == CTRL_BREAK_EVENT || event == CTRL_CLOSE_EVENT) {
+        flm::oga::EndProcessIfHipEpLoaded(STATUS_CONTROL_C_EXIT);
+    }
+    return FALSE;
+}
+#endif
+
+///@brief run the command line; main ends the process with its result
 ///@param argc the number of arguments
 ///@param argv the arguments
 ///@return the exit code
-int main(int argc, char* argv[]) {
+static int run_flm(int argc, char* argv[]) {
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
+#if defined(FLM_ENABLE_OGA_HIPEP)
+    SetConsoleCtrlHandler(end_hipep_process_on_console_event, TRUE);
+    // The exit(EXIT_FAILURE) of an error path would hang the same way.
+    std::atexit([] { flm::oga::EndProcessIfHipEpLoaded(EXIT_FAILURE); });
+#endif
 #elif !defined(FLM_USE_HRX)
     // XRT backend: preload bundled XRT libraries from the executable directory.
     preload_bundled_libraries();
@@ -1031,4 +1048,17 @@ int main(int argc, char* argv[]) {
         std::cerr << "Error: " << e.what() << std::endl;
         return 1;
     }
+}
+
+///@brief main function
+///@param argc the number of arguments
+///@param argv the arguments
+///@return the exit code
+int main(int argc, char* argv[]) {
+    const int code = run_flm(argc, argv);
+#if defined(FLM_ENABLE_OGA_HIPEP)
+    // run_flm released what it held; ExitProcess would hang in hip-ep's DLL teardown.
+    flm::oga::EndProcessIfHipEpLoaded(static_cast<unsigned int>(code));
+#endif
+    return code;
 }
