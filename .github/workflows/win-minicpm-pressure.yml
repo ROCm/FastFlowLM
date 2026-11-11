@@ -43,8 +43,8 @@ env:
   # Empty OVERLAY_BLOB = the package's own engine.
   # Now: IRON dev/minicpm-v-prefill-prof (747c3ed3 + MINICPM_V_PREFILL_PROFILE, build-libs run 43091707172), for
   # phase S's per-stage split. Not for release.
-  OVERLAY_BLOB: 98856a73b72a37849ce9b24cdc4f83475eff7373
-  OVERLAY_SOURCE: IRON dev/minicpm-v-prefill-prof (prefill profile build)
+  OVERLAY_BLOB: e0be320ddc6ff4714637bf1d4e251f06d2ab0121
+  OVERLAY_SOURCE: IRON dev/minicpm-v-prefill-prof a5feff58 (profile build, GDN + conv on the host)
   # Baseline for the perf phase: the last release's Windows XRT portable zip. It
   # refuses today's model files (config.json says flm_version 1.0.13), so
   # pressure.py gives it hard links of the same files with that field lowered.
