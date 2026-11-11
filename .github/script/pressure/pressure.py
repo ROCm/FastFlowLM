@@ -181,6 +181,7 @@ class Run:
         s = self.FlmServer(bin_ or self.args.flm_bin, name=name, log_dir=self.out, args=CTX + list(extra),
                            ready_timeout=600, request_timeout=1800, max_restarts=0, env=env)
         s.start()
+        s.under_test = bin_ is None or bin_ == self.args.flm_bin
         self.servers.append(s)
         path = proc.image_path(s.proc.pid)
         want = bin_ or self.args.flm_bin
@@ -193,24 +194,27 @@ class Run:
 
     def stop(self, s):
         s.stop()
-        self.shrink_log(s)
+        big = self.shrink_log(s)
+        if getattr(s, "under_test", True):
+            # the v1.0.12 baseline still echoes frames; only the package under test must keep them out
+            self.check(f"{s.name}: server log keeps image_raw data out (no line over 100 kB)", not big,
+                       f"{len(big)} lines, largest {max(big, default=0)} bytes")
         if s.unkillable:
             self.check(f"{s.name}: server stopped", False, "process survived kill (stuck in NPU driver?)")
             raise SystemExit("unkillable server")
         return s.proc.returncode
 
     def shrink_log(self, s, keep=300):
-        """flm logs each request body, and does not shorten image_raw data (only image_url, input_audio
-        and images), so a 120-frame request writes ~43 MB. Cut such lines so the artifact stays small,
-        and count them: the server writing the frames to its log is itself a finding."""
+        """flm up to v1.0.13 logged each request body without shortening image_raw data, so a 120-frame
+        request wrote ~43 MB. Cut such lines so the artifact stays small, and count them; returns their sizes."""
         try:
             with open(s.log_path, "rb") as f:
                 lines = f.read().split(b"\n")
         except OSError:
-            return
+            return []
         big = [len(x) for x in lines if len(x) > 100_000]
         if not big:
-            return
+            return big
         out = [x if len(x) <= 100_000 else x[:keep] + b" ...[%d bytes cut by pressure.py]" % (len(x) - keep)
                for x in lines]
         with open(s.log_path, "wb") as f:
@@ -219,6 +223,7 @@ class Run:
         logged["lines"] += len(big)
         logged["bytes"] += sum(big)
         logged["max"] = max(logged["max"], *big)
+        return big
 
     def log_text(self, s):
         try:
@@ -624,8 +629,12 @@ def phase_E(r):
             must("alternate data stream", good + ":x", 400)
             must("device name CON", os.path.join(allow, "CON"), 400)
             must("device name NUL", os.path.join(allow, "NUL"), 400)
+            # Network and device forms are refused before anything is opened, even to the allowed file.
+            must("UNC to allowed file", unc(gdrive, gtail), 400)
+            must("//host/share form to allowed file", unc(gdrive, gtail).replace("\\", "/"), 400)
+            must("\\\\?\\UNC\\ form to allowed file", "\\\\?\\UNC\\localhost\\" + gdrive[0] + "$" + gtail, 400)
+            must("\\\\.\\ device form to allowed file", "\\\\.\\" + os.path.abspath(good), 400)
             # Inside the dir but spelled differently: either answer is safe; record which.
-            must("UNC to allowed file", unc(gdrive, gtail), 200, soft=True)
             must("\\\\?\\ prefix to allowed file", "\\\\?\\" + os.path.abspath(good), 200, soft=True)
             must("forward slashes, allowed file", good.replace("\\", "/"), 200, soft=True)
             must("upper-case path, allowed file", good.upper(), 200, soft=True)
@@ -713,8 +722,11 @@ def phase_R(r):
     """Old fixed 512-row matmul (FLM_MINICPM_MM_RTM=0) against the runtime-m matmul (=1) in the same job.
     texts go to rtm.json, to compare with the other platform's run of this phase."""
     arms = {}
-    for label, val in (("mm0", "0"), ("rtm1", "1")):
-        arms[label] = _rtm_arm(r, label, {"FLM_MINICPM_MM_RTM": val})
+    # dflt = the engine's own defaults (runtime-m mm and GLU fusion on every platform since IRON #194);
+    # glu0 = the same with GLU fusion off, as Windows ran before
+    for label, env in (("mm0", {"FLM_MINICPM_MM_RTM": "0"}), ("rtm1", {"FLM_MINICPM_MM_RTM": "1"}),
+                       ("dflt", {}), ("glu0", {"FLM_MINICPM_GLU_FUSED": "0"})):
+        arms[label] = _rtm_arm(r, label, env)
         r.data(label, arms[label])
         if arms[label]["failed"]:
             break

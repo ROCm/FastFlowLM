@@ -32,12 +32,17 @@ permissions:
   actions: read
 
 env:
-  # Package under test: Windows XRT portable zip of main c6bfd288 (Build and Test push run).
-  PKG_RUN_ID: '42942859383'
-  PKG_NAME: fastflowlm-windows-c6bfd2887f202abd8a3fb3fe933ffdfccd3bab2c
-  # git blob ids of src/lib/{xrt,hrx}/minicpm_v_4_7_npu.dll at c6bfd288
+  # Package under test: Windows XRT portable zip of FLM PR #1018 (head 876fcd0e, merge ref b2bb14dc,
+  # Build and Test run). Earlier runs: main c6bfd288, run 42942859383.
+  PKG_RUN_ID: '43058509779'
+  PKG_NAME: fastflowlm-windows-b2bb14dc5a8b3cd1aaf1daed3c92668348f6cbca
+  # git blob ids of src/lib/{xrt,hrx}/minicpm_v_4_7_npu.dll on main (c6bfd288 .. c9e054a0)
   XRT_ENGINE_BLOB: 23883f520de62b1602567bad7e1b77e37a4f6a54
   HRX_ENGINE_BLOB: a5d8e6e4f97eaf66324ecfe21006699c16181ac0
+  # Engine overlay: IRON #194's CI-built Windows XRT minicpm_v_4_7_npu.dll (run 43054485272, windows-libs),
+  # runtime-m mm and GLU fusion on by default on Windows. Empty OVERLAY_BLOB = the package's own engine.
+  OVERLAY_BLOB: 4259d30f954a5d3172cf24eca276603fad47e489
+  OVERLAY_SOURCE: IRON PR 194 (35cf5229, merged 747c3ed3)
   # Baseline for the perf phase: the last release's Windows XRT portable zip. It
   # refuses today's model files (config.json says flm_version 1.0.13), so
   # pressure.py gives it hard links of the same files with that field lowered.
@@ -115,6 +120,16 @@ jobs:
           if ($blob -eq $env:HRX_ENGINE_BLOB) { throw 'minicpm engine is the HRX build' }
           if ($blob -ne $env:XRT_ENGINE_BLOB) { throw "minicpm engine blob $blob is not the XRT build $env:XRT_ENGINE_BLOB" }
           Write-Host "minicpm_v_4_7_npu.dll = src/lib/xrt build ($blob)"
+          if ($env:OVERLAY_BLOB) {
+            # the engine under test: IRON's CI-built Windows XRT DLL, dropped over the package's copy
+            $ov = Join-Path $env:GITHUB_WORKSPACE '.github\script\pressure\overlay\minicpm_v_4_7_npu.dll'
+            $ob = (git hash-object $ov).Trim()
+            if ($ob -ne $env:OVERLAY_BLOB) { throw "overlay blob $ob is not $env:OVERLAY_BLOB" }
+            Copy-Item $ov (Join-Path $pkg 'minicpm_v_4_7_npu.dll') -Force
+            $blob = (git hash-object (Join-Path $pkg 'minicpm_v_4_7_npu.dll')).Trim()
+            if ($blob -ne $env:OVERLAY_BLOB) { throw "engine blob after overlay is $blob" }
+            Write-Host "minicpm_v_4_7_npu.dll overlaid: $env:OVERLAY_SOURCE ($blob)"
+          }
           New-Item -ItemType Directory -Force pressure-out | Out-Null
           Get-ChildItem $pkg -File -Include *.exe, *.dll -Recurse | Get-FileHash -Algorithm SHA256 |
             ForEach-Object { "$($_.Hash)  $(Split-Path $_.Path -Leaf)" } | Set-Content pressure-out\package-sha256.txt
