@@ -51,7 +51,7 @@ env:
   BASELINE_URL: https://github.com/ROCm/FastFlowLM/releases/download/v1.0.12/fastflowlm_1.0.12_windows_amd64.zip
   # empty = any idle runner with the labels below; the Windows vs Linux prefill study (phase S) pins the
   # HX 370 machine the first pressure run used
-  WANT_RUNNER: xconucstr244-flm-sweep
+  WANT_RUNNER: ''
 
 jobs:
   pressure:
