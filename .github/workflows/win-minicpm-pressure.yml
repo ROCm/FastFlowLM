@@ -47,7 +47,8 @@ env:
   # refuses today's model files (config.json says flm_version 1.0.13), so
   # pressure.py gives it hard links of the same files with that field lowered.
   BASELINE_URL: https://github.com/ROCm/FastFlowLM/releases/download/v1.0.12/fastflowlm_1.0.12_windows_amd64.zip
-  WANT_RUNNER: xconucstr244-flm-sweep
+  # empty = any idle runner with the labels below (earlier runs pinned xconucstr244-flm-sweep)
+  WANT_RUNNER: ''
 
 jobs:
   pressure:
@@ -59,7 +60,7 @@ jobs:
         shell: powershell
         run: |
           Write-Host "runner $env:RUNNER_NAME on $env:COMPUTERNAME"
-          if ($env:RUNNER_NAME -ne $env:WANT_RUNNER) {
+          if ($env:WANT_RUNNER -and $env:RUNNER_NAME -ne $env:WANT_RUNNER) {
             Write-Host "::error::Landed on $env:RUNNER_NAME, want $env:WANT_RUNNER; not testing here."
             exit 1
           }
@@ -199,8 +200,9 @@ jobs:
         if: always()
         shell: powershell
         run: |
+          New-Item -ItemType Directory -Force pressure-out | Out-Null
           $work = Split-Path (Split-Path $env:GITHUB_WORKSPACE)
-          $left = Get-Process -Name flm -ErrorAction SilentlyContinue |
+          $left =Get-Process -Name flm -ErrorAction SilentlyContinue |
             Where-Object { $_.Path -and $_.Path.StartsWith($work, [StringComparison]::OrdinalIgnoreCase) }
           if ($left) {
             Write-Host "::warning::flm still running after the test: $($left.Id); stopping it"
