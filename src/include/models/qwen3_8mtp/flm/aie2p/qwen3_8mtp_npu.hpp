@@ -162,6 +162,17 @@ public:
     ///       are deliberately unchanged by this -- see draft_hit_rate().
     void set_stop_tokens(const std::vector<int>& ids);
 
+    /// \brief pick each verify row's token under the caller's constraint (FLM#1016)
+    /// \param chooser (row, that row's logits, vocab) -> the token to take at that row; empty clears it
+    /// \note Without one a row's token is the plain argmax of its logits. With one, the engine asks for rows 0, 1, ...
+    ///       in order and stops at the first row whose token differs from the draft it checks (that token is the cycle's
+    ///       free one), so the chooser sees exactly the tokens that get committed, in order, and may advance a grammar
+    ///       state as it goes. Rows past the first mismatch are not asked for.
+    /// \note Set it per request and clear it after: drafts the base model agrees with are committed as they are, so a
+    ///       constrained request needs this to keep every committed token inside its mask.
+    /// \note Non-virtual: it adds no vtable slot.
+    void set_speculation_chooser(std::function<int(int, const float*, int)> chooser);
+
     // ---- speculation statistics -------------------------------------------
     // All non-virtual: they add no vtable slot, so unlike the two speculation
     // hooks on causal_lm these cost no lockstep rebuild of the other engines.
