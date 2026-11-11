@@ -54,7 +54,9 @@ struct program_args_t {
     size_t max_socket_connections = 10;
     size_t max_npu_queue = 10;
     int port = -1; // default port
-    bool cors = false;
+    bool cors = true;  // same default as the --cors option
+    // --cors-origins: origins allowed besides the local ones (comma-separated; "*" = any)
+    std::string cors_origins;
     bool sub_process_mode = false;
     
     program_args_t() {}

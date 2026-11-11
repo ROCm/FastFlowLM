@@ -7,6 +7,7 @@
  *  \version 0.9.24
  */
 #include "rest_handler.hpp"
+#include "http_guard.hpp"
 #include "wstream_buf.hpp"
 #include "streaming_ostream.hpp"
 #include "streaming_ostream_openai.hpp"
@@ -1099,7 +1100,13 @@ void RestHandler::handle_show(const json& request,
     std::function<void(const json&)> send_response,
     StreamResponseCallback send_streaming_response) {
     try {
-        std::string model = request["model"];
+        // A missing key read through const operator[] is undefined behavior (a crash with
+        // ordered_json): check the required fields first and answer 400.
+        if (auto bad = flm::http_guard::validate_show(request)) {
+            send_response(*bad);
+            return;
+        }
+        std::string model = request.at("model").get<std::string>();
         json info = {
             {"modelfile", ""},
             {"parameters", ""},
@@ -1137,7 +1144,11 @@ void RestHandler::handle_generate(const json& request,
                                  StreamResponseCallback send_streaming_response,
                                  std::shared_ptr<CancellationToken> cancellation_token) {
     try {
-        std::string prompt = request["prompt"];
+        if (auto bad = flm::http_guard::validate_generate(request)) {
+            send_response(*bad);
+            return;
+        }
+        std::string prompt = request.at("prompt").get<std::string>();
         bool stream = request.value("stream", true);
         std::string model = request.value("model", current_model_tag);
         const std::string request_backend = request.value("backend", std::string());
@@ -1263,7 +1274,11 @@ void RestHandler::handle_chat(const json& request,
                              StreamResponseCallback send_streaming_response,
                              std::shared_ptr<CancellationToken> cancellation_token) {
     try {
-        nlohmann::ordered_json messages = request["messages"];
+        if (auto bad = flm::http_guard::validate_chat(request)) {
+            send_response(*bad);
+            return;
+        }
+        nlohmann::ordered_json messages = request.at("messages");
         bool stream = request.value("stream", false);
         std::string model = request.value("model", current_model_tag);
         const std::string request_backend = request.value("backend", std::string());
@@ -1390,24 +1405,21 @@ void RestHandler::handle_embeddings(const json& request,
                                    std::function<void(const json&)> send_response,
                                    StreamResponseCallback send_streaming_response) {
     try {
-        std::string model = request["model"];
-        std::vector<std::string> inputs;
-
-        if (request["input"].is_string()) {
-            inputs.push_back(request["input"].get<std::string>());
+        // "model" must be a string and "input" a string or a non-empty array of strings.
+        if (auto bad = flm::http_guard::validate_embeddings(request)) {
+            send_response(*bad);
+            return;
         }
-        else if (request["input"].is_array()) {
-            for (const auto& item : request["input"]) {
+        std::string model = request.at("model").get<std::string>();
+        std::vector<std::string> inputs;
+        const json& input = request.at("input");
+        if (input.is_string()) {
+            inputs.push_back(input.get<std::string>());
+        }
+        else {
+            for (const auto& item : input) {
                 inputs.push_back(item.get<std::string>());
             }
-        }
-
-        if (inputs.empty()) {
-            send_response({{"error", {{"message", "'input' is required: a string or a non-empty array of strings."},
-                                      {"type", "invalid_request_error"},
-                                      {"param", "input"},
-                                      {"code", 400}}}});
-            return;
         }
 
         json response;
