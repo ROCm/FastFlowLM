@@ -8,6 +8,7 @@
  */
 #include "server.hpp"
 #include "rest_handler.hpp"
+#include "utils/json_log.hpp"
 #include <sstream>
 #include <thread>
 #include <iostream>
@@ -126,7 +127,7 @@ std::string utf8_truncate_middle(const std::string& input, size_t head_count, si
 }
 
 ///@brief brief print request
-///@param request the request
+///@param request the request, already parsed with json_log::parse (long strings cut)
 void brief_print_message_request(nlohmann::json request) {
     // if request has "messages" or "message" field, the context in meassages shall be printed briefly
     
@@ -191,7 +192,7 @@ void brief_print_message_request(nlohmann::json request) {
     }
 
     header_print("LOG", "Body: ");
-    std::string brief_body = request.dump(4);
+    std::string brief_body = json_log::dump(request);
     std::cout << brief_body << std::endl;
 }
 
@@ -739,8 +740,8 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
                 // Decide on the Content-Type, not on whether this log-only parse succeeds:
                 // a malformed body must still reach the parse below and get its 400.
                 is_json = true;
-                json request_json_log = json::parse(req.body());
-                brief_print_message_request(request_json_log);
+                // cut long strings (image / audio data) as they are read: never logged, nor copied, whole
+                brief_print_message_request(json_log::parse(req.body()));
             }
             else if (content_type.find("multipart/form-data") != std::string::npos) {
                 // print some request info 

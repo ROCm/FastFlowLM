@@ -119,6 +119,41 @@ jobs:
           cmake --build build-prefix-slot-cache -j"$(nproc)"
           ctest --test-dir build-prefix-slot-cache --output-on-failure
 
+  # image_raw (src/include/image/raw_rgb8.hpp): request parsing, the --allow-raw-path file read (confined to the
+  # directory, also against a link swapped in mid-request), and the request log that keeps frame data out
+  # (src/include/utils/json_log.hpp). CPU only.
+  raw-rgb8:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Build and run the raw RGB8 test
+        run: |
+          cmake -S src/test/raw_rgb8 -B build-raw-rgb8 -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-raw-rgb8 -j"$(nproc)"
+          ctest --test-dir build-raw-rgb8 --output-on-failure
+
+  # The same on Windows, where UNC and device paths must be refused before anything is opened.
+  raw-rgb8-windows:
+    runs-on: windows-2025
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Build and run the raw RGB8 test
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          cmake -S src/test/raw_rgb8 -B build-raw-rgb8 -G Ninja -DCMAKE_BUILD_TYPE=Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build-raw-rgb8 --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --test-dir build-raw-rgb8 --output-on-failure
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
   # Model extensions (src/common/AutoModel/model_extension_*, model_frontend.cpp, model_backend.cpp): the
   # stable C ABI, manifest and catalog-overlay checks and registry rules, against fake extensions and stub
   # runtimes, for each NPU runtime. CPU only, no NPU.

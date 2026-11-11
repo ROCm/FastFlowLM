@@ -2,6 +2,8 @@
 /// \brief decoded 8-bit RGB frames sent straight to a vision model, bypassing PNG/JPEG decoding
 #pragma once
 
+#include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -12,6 +14,18 @@
 #include <string_view>
 #include <nlohmann/json.hpp>
 #include "base64.hpp"
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#if __has_include(<linux/openat2.h>)
+#include <linux/openat2.h>
+#endif
+#endif
 
 /// One request part: `frames` pictures of `height` x `width`, packed THWC, 3 bytes (R, G, B) per pixel.
 /// The model reads frame i from data + i * frame_bytes(); every frame is then an independent picture.
@@ -38,9 +52,123 @@ struct raw_rgb8_limits_t {
 	std::string allow_path_dir;
 };
 
+namespace raw_rgb8_detail {
+
+/// false for a path the server must not even open: on Windows a UNC or device path ("\\server\share\..",
+/// "\\?\UNC\..", "\\.\.."), which would make the server connect to a host the client names (SMB, with the
+/// service account's credentials) before any check could refuse it. Drive and relative paths are local.
+inline bool is_local_path(const std::string& path) {
+#ifdef _WIN32
+	std::string p = path;
+	for (char& c : p) if (c == '/') c = '\\';
+	if (p.rfind("\\\\?\\", 0) == 0) {
+		// "\\?\C:\x" names a drive; "\\?\UNC\server\.." and "\\?\Volume{..}" do not
+		return p.size() >= 7 && std::isalpha((unsigned char)p[4]) && p[5] == ':' && p[6] == '\\';
+	}
+	return p.rfind("\\\\", 0) != 0 && p.rfind("\\??\\", 0) != 0;
+#else
+	(void)path;
+	return true;
+#endif
+}
+
+/// true if `file` is `root` or below it (both already resolved)
+inline bool is_inside(const std::filesystem::path& file, const std::filesystem::path& root) {
+	const std::filesystem::path rel = file.lexically_relative(root);
+	return !rel.empty() && *rel.begin() != "..";
+}
+
+#ifdef _WIN32
+/// Reads exactly `expected` bytes of the regular disk file `file` into `out`, checking the opened handle itself:
+/// a path component swapped for a junction between the name check and the open cannot make us read elsewhere.
+inline bool read_checked(const std::filesystem::path& root, const std::filesystem::path& file, unsigned long long expected,
+                         std::string& out, unsigned long long& size, bool& wrong_size) {
+	HANDLE h = CreateFileW(file.wstring().c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+	                       nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+	if (h == INVALID_HANDLE_VALUE) return false;
+	std::unique_ptr<void, decltype(&CloseHandle)> guard(h, &CloseHandle);
+	BY_HANDLE_FILE_INFORMATION info;
+	if (GetFileType(h) != FILE_TYPE_DISK || !GetFileInformationByHandle(h, &info) ||
+	    (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+		return false;
+	}
+	std::wstring final_path(MAX_PATH, L'\0');
+	for (;;) {
+		const DWORD n = GetFinalPathNameByHandleW(h, final_path.data(), (DWORD)final_path.size(),
+		                                          FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+		if (n == 0) return false;
+		if (n < final_path.size()) { final_path.resize(n); break; }
+		final_path.resize(n + 1);
+	}
+	if (final_path.rfind(L"\\\\?\\", 0) == 0) final_path = final_path.substr(4);
+	if (final_path.rfind(L"UNC\\", 0) == 0 || !is_inside(std::filesystem::path(final_path), root)) return false;
+	LARGE_INTEGER li;
+	if (!GetFileSizeEx(h, &li)) return false;
+	size = (unsigned long long)li.QuadPart;
+	if (size != expected) { wrong_size = true; return false; }
+	out.resize((size_t)expected);
+	for (unsigned long long done = 0; done < expected;) {
+		const DWORD want = (DWORD)(std::min<unsigned long long>)(expected - done, 1u << 30);
+		DWORD got = 0;
+		if (!ReadFile(h, out.data() + done, want, &got, nullptr) || got == 0) return false;  // truncated meanwhile
+		done += got;
+	}
+	return true;
+}
+#else
+/// As above, on Linux: the file is opened beneath the allowed directory (openat2 RESOLVE_BENEATH, so no symlink or
+/// ".." swapped in meanwhile can lead out of it; O_NOFOLLOW and a check of the opened file's own path where openat2
+/// is missing), and what was opened is checked and read through the same descriptor.
+inline bool read_checked(const std::filesystem::path& root, const std::filesystem::path& file, unsigned long long expected,
+                         std::string& out, unsigned long long& size, bool& wrong_size) {
+	const int dir = open(root.c_str(), O_PATH | O_DIRECTORY | O_CLOEXEC);
+	if (dir < 0) return false;
+	const std::string rel = file.lexically_relative(root).string();
+	const int flags = O_RDONLY | O_CLOEXEC | O_NOCTTY | O_NONBLOCK;
+	int fd = -1;
+	bool beneath = false;
+#if defined(SYS_openat2) && defined(RESOLVE_BENEATH)
+	open_how how{};
+	how.flags = (unsigned long long)flags;
+	how.resolve = RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS;
+	fd = (int)syscall(SYS_openat2, dir, rel.c_str(), &how, sizeof(how));
+	beneath = fd >= 0;
+	const bool no_openat2 = fd < 0 && (errno == ENOSYS || errno == EPERM);  // old kernel, or a seccomp filter
+#else
+	const bool no_openat2 = true;
+#endif
+	if (fd < 0 && no_openat2) fd = openat(dir, rel.c_str(), flags | O_NOFOLLOW);
+	close(dir);
+	if (fd < 0) return false;
+	std::unique_ptr<int, void (*)(int*)> guard(&fd, [](int* f) { close(*f); });
+	struct stat st;
+	if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) return false;
+	if (!beneath) {
+		std::error_code ec;
+		const auto opened = std::filesystem::read_symlink("/proc/self/fd/" + std::to_string(fd), ec);
+		if (ec || !is_inside(opened, root)) return false;
+	}
+	size = (unsigned long long)st.st_size;
+	if (size != expected) { wrong_size = true; return false; }
+	out.resize((size_t)expected);
+	for (unsigned long long done = 0; done < expected;) {
+		const ssize_t got = read(fd, out.data() + done, (size_t)(std::min<unsigned long long>)(expected - done, 1u << 30));
+		if (got < 0 && errno == EINTR) continue;
+		if (got <= 0) return false;  // truncated meanwhile
+		done += (unsigned long long)got;
+	}
+	return true;
+}
+#endif
+
+}  // namespace raw_rgb8_detail
+
 /// Read `path` into `out` if, once symlinks and ".." are resolved, it is a regular file inside `allowed_dir` and is
 /// exactly `expected` bytes. The same message answers a missing file and one outside the directory, so a client cannot
-/// probe the rest of the disk. The file is read, not mapped: a file truncated while a request runs must not crash us.
+/// probe the rest of the disk. The name is checked first, then the opened file itself, which is what is read: the
+/// file is read, not mapped (a file truncated while a request runs must not crash us), and nothing swapped in
+/// between the two checks can make us read a file outside the directory. UNC and device paths are refused before
+/// anything is opened.
 inline bool read_raw_file(const std::string& allowed_dir, const std::string& path, unsigned long long expected,
                           std::string& out, std::string& error) {
 	namespace fs = std::filesystem;
@@ -49,24 +177,24 @@ inline bool read_raw_file(const std::string& allowed_dir, const std::string& pat
 		return false;
 	}
 	const std::string unreadable = "image_raw: 'path' is not a readable file inside the allowed directory";
+	if (!raw_rgb8_detail::is_local_path(path)) {
+		error = "image_raw: 'path' must be a local file path (not a network or device path) inside the allowed directory";
+		return false;
+	}
 	std::error_code ec;
 	const fs::path root = fs::canonical(fs::path(allowed_dir), ec);
 	if (ec) { error = unreadable; return false; }
 	const fs::path file = fs::canonical(fs::path(path), ec);
-	if (ec) { error = unreadable; return false; }
-	const fs::path rel = file.lexically_relative(root);
-	if (rel.empty() || *rel.begin() == "..") { error = unreadable; return false; }
-	if (!fs::is_regular_file(file, ec) || ec) { error = unreadable; return false; }
-	const auto size = fs::file_size(file, ec);
-	if (ec) { error = unreadable; return false; }
-	if ((unsigned long long)size != expected) {
-		error = "image_raw: the file holds " + std::to_string((unsigned long long)size) + " bytes but 'shape' needs " +
-		        std::to_string(expected);
+	if (ec || !raw_rgb8_detail::is_inside(file, root)) { error = unreadable; return false; }
+	unsigned long long size = 0;
+	bool wrong_size = false;
+	if (!raw_rgb8_detail::read_checked(root, file, expected, out, size, wrong_size)) {
+		out.clear();
+		error = wrong_size ? "image_raw: the file holds " + std::to_string(size) + " bytes but 'shape' needs " +
+		                         std::to_string(expected)
+		                   : unreadable;
 		return false;
 	}
-	std::ifstream in(file, std::ios::binary);
-	out.resize((size_t)expected);
-	if (!in || !in.read(out.data(), (std::streamsize)expected)) { error = unreadable; return false; }
 	return true;
 }
 
