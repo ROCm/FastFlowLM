@@ -669,14 +669,13 @@
                 "details": {
                     "format": "NPU2",
                     "family": "minicpm-ocr",
-                    "think": true,
-                    "think_toggleable": true,
+                    "think": false,
+                    "think_toggleable": false,
                     "parameter_size": "1B",
                     "quantization_level": "Q4_K"
                 },
                 "label": [
                     "vision",
-                    "reasoning",
                     "tool-calling"
                 ],
                 "footprint": 2.4
