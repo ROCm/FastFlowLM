@@ -80,3 +80,10 @@ regexes = [
   '''[A-Z][A-Z0-9_]*SHA512\s*[=:]''',
   '''[A-Z][A-Z0-9_]*MD5\s*[=:]''',
 ]
+
+[[allowlists]]
+description = "Public git revisions (40-hex commit SHAs) pinned by *_revision keys, e.g. a HuggingFace tokenizer revision"
+regexTarget = "match"
+regexes = [
+  '''(?i)_revision\s*[=:]\s*['"]?[0-9a-f]{40}['"]?$''',
+]
