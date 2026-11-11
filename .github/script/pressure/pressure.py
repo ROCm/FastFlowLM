@@ -351,7 +351,8 @@ def _profile(r, bin_, label, kinds, env=None):
                 mark = os.path.getsize(s.log_path)
                 for _ in range(3):
                     post(s.port, raw_body=body)
-                log = open(s.log_path, encoding="utf-8", errors="replace").read()[mark:]
+                time.sleep(1)
+                log = _log_since(s.log_path, mark)
                 tower = [int(x) for x in re.findall(r"vision: .*? rows in (\d+) ms", log)]
                 llm = [int(x) for x in re.findall(r"language prefill: \d+ tokens in (\d+) ms", log)]
                 out[f"{n}-{k}"] = {"tower_ms": tower, "llm_prefill_ms": llm}
@@ -699,7 +700,8 @@ def _rtm_arm(r, label, env):
         for name, body in cases:
             mark = os.path.getsize(s.log_path)
             reps = [post(s.port, raw_body=body) for _ in range(3)]
-            log = open(s.log_path, encoding="utf-8", errors="replace").read()[mark:]
+            time.sleep(1)
+            log = _log_since(s.log_path, mark)
             rows = [x.row() for x in reps]
             texts = [x.text for x in reps]
             out["cases"][name] = {
@@ -790,6 +792,14 @@ def _power_info(out):
     return info
 
 
+def _log_since(path, mark):
+    """the server log after byte offset `mark` (os.path.getsize); the log holds UTF-8 replies, so slicing the
+    decoded text at `mark` would land too late"""
+    with open(path, "rb") as fh:
+        fh.seek(mark)
+        return fh.read().decode("utf-8", errors="replace")
+
+
 def _prof_split(log):
     """Per-request sums of the -DMINICPM_V_PREFILL_PROFILE ticks, in ms, keyed by stage name (layer index dropped)."""
     unit = {"ns": 1e-6, "us": 1e-3, "ms": 1.0, "s": 1e3}
@@ -835,9 +845,15 @@ def phase_S(r):
             for _ in range(3):
                 mark = os.path.getsize(s.log_path)
                 rep = post(s.port, raw_body=raw_body)
-                log = open(s.log_path, encoding="utf-8", errors="replace").read()[mark:]
-                m = re.search(r"language prefill: (\d+) tokens in (\d+) ms \(layers (\d+), lm_head w sync (\d+), "
-                              r"lm_head (\d+)\)", log)
+                # mark is a byte offset (the log holds UTF-8 replies), and the server may flush the
+                # prefill line after the reply
+                for _ in range(20):
+                    log = _log_since(s.log_path, mark)
+                    m = re.search(r"language prefill: (\d+) tokens in (\d+) ms \(layers (\d+), lm_head w sync (\d+), "
+                                  r"lm_head (\d+)\)", log)
+                    if m or rep.code != 200:
+                        break
+                    time.sleep(0.25)
                 t = re.search(r"vision: .* rows in (\d+) ms", log)
                 runs.append({"code": rep.code, "ttft": rep.row()["ttft"],
                              "tokens": int(m.group(1)) if m else None, "prefill_ms": int(m.group(2)) if m else None,
