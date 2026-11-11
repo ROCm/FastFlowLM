@@ -63,7 +63,7 @@ runs:
     # self-hosted runner had.
     - name: Install WiX
       shell: powershell
-      run: |
+      run: | # zizmor: ignore[github-env] appends the constant ~\.dotnet\tools to GITHUB_PATH
         $ErrorActionPreference = "Stop"
         dotnet tool install --global wix --version 5.0.2
         if ($LASTEXITCODE -ne 0) { throw "dotnet tool install wix failed" }
