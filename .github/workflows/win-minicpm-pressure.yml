@@ -206,10 +206,10 @@ jobs:
           name: pressure-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             pressure-out
-            !pressure-out/clips
-            !pressure-out/rawdir
-            !pressure-out/outside
-            !pressure-out/base-models
+            !pressure-out/clips/**
+            !pressure-out/rawdir/**
+            !pressure-out/outside/**
+            !pressure-out/base-models/**
           retention-days: 30
 
       - name: Remove baseline and test data

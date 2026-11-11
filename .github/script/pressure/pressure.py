@@ -193,10 +193,32 @@ class Run:
 
     def stop(self, s):
         s.stop()
+        self.shrink_log(s)
         if s.unkillable:
             self.check(f"{s.name}: server stopped", False, "process survived kill (stuck in NPU driver?)")
             raise SystemExit("unkillable server")
         return s.proc.returncode
+
+    def shrink_log(self, s, keep=300):
+        """flm logs each request body, and does not shorten image_raw data (only image_url, input_audio
+        and images), so a 120-frame request writes ~43 MB. Cut such lines so the artifact stays small,
+        and count them: the server writing the frames to its log is itself a finding."""
+        try:
+            with open(s.log_path, "rb") as f:
+                lines = f.read().split(b"\n")
+        except OSError:
+            return
+        big = [len(x) for x in lines if len(x) > 100_000]
+        if not big:
+            return
+        out = [x if len(x) <= 100_000 else x[:keep] + b" ...[%d bytes cut by pressure.py]" % (len(x) - keep)
+               for x in lines]
+        with open(s.log_path, "wb") as f:
+            f.write(b"\n".join(out))
+        logged = self.results.setdefault("raw_data_logged", {"lines": 0, "bytes": 0, "max": 0})
+        logged["lines"] += len(big)
+        logged["bytes"] += sum(big)
+        logged["max"] = max(logged["max"], *big)
 
     def log_text(self, s):
         try:
@@ -644,7 +666,12 @@ PHASES = {"A": phase_A, "P": phase_P, "B": phase_B, "C": phase_C, "D": phase_D, 
 def summary(r):
     lines = [f"## minicpm-v-4.7:1b batch image pressure test", "",
              f"- flm: `{r.args.flm_bin}`", f"- baseline: `{r.args.baseline_bin}`",
-             f"- clip sha256: `{r.clips.digest()}`", ""]
+             f"- clip sha256: `{r.clips.digest()}`"]
+    rl = r.results.get("raw_data_logged")
+    if rl:
+        lines.append(f"- server log echoed image_raw data in full: {rl['lines']} lines, {rl['bytes'] / 1e6:.0f} MB "
+                     f"(largest {rl['max'] / 1e6:.1f} MB); cut from the uploaded logs")
+    lines.append("")
     for ph, d in r.results["phases"].items():
         fails = [c for c in d["checks"] if not c["ok"] and not c["soft"]]
         warns = [c for c in d["checks"] if not c["ok"] and c["soft"]]

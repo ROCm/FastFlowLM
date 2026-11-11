@@ -1,3 +1,3 @@
 # Phases the next push runs (first non-comment line). A always runs first.
 # A correctness, P perf, B soak, C shape sweep, D concurrency + abuse, E file input, F final health
-A,P
+B
