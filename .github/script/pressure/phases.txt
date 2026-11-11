@@ -1,4 +1,5 @@
 # Phases the next push runs (first non-comment line). A always runs first.
 # A correctness, P perf, B soak, C shape sweep, D concurrency + abuse, E file input, F final health,
-# R old vs runtime-m prefill matmul (FLM_MINICPM_MM_RTM=0/1)
-A,P,B,C,D,E,R,F
+# R old vs runtime-m prefill matmul (FLM_MINICPM_MM_RTM=0/1),
+# S prefill study: power mode, hidden-state dumps (tfdiff.py) and per-layer / per-stage prefill profile
+S,R

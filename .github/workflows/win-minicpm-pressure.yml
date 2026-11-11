@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       phases:
-        description: Phases to run (A,P,B,C,D,E,F); empty = phases.txt
+        description: Phases to run (A,P,B,C,D,E,R,S,F); empty = phases.txt
         default: ''
       quick:
         description: Fewer repetitions
@@ -32,23 +32,24 @@ permissions:
   actions: read
 
 env:
-  # Package under test: Windows XRT portable zip of FLM PR #1018 (head 876fcd0e, merge ref b2bb14dc,
-  # Build and Test run). Earlier runs: main c6bfd288, run 42942859383.
-  PKG_RUN_ID: '43058509779'
-  PKG_NAME: fastflowlm-windows-b2bb14dc5a8b3cd1aaf1daed3c92668348f6cbca
-  # git blob ids of src/lib/{xrt,hrx}/minicpm_v_4_7_npu.dll on main (c6bfd288 .. c9e054a0)
-  XRT_ENGINE_BLOB: 23883f520de62b1602567bad7e1b77e37a4f6a54
-  HRX_ENGINE_BLOB: a5d8e6e4f97eaf66324ecfe21006699c16181ac0
-  # Engine overlay: IRON #194's CI-built Windows XRT minicpm_v_4_7_npu.dll (run 43054485272, windows-libs),
-  # runtime-m mm and GLU fusion on by default on Windows. Empty OVERLAY_BLOB = the package's own engine.
-  OVERLAY_BLOB: 4259d30f954a5d3172cf24eca276603fad47e489
-  OVERLAY_SOURCE: IRON PR 194 (35cf5229, merged 747c3ed3)
+  # Package under test: Windows XRT portable zip of main 5879b881 (Build and Test run).
+  # Earlier runs: PR #1018 merge ref b2bb14dc (run 43058509779), main c6bfd288 (run 42942859383).
+  PKG_RUN_ID: '43082327443'
+  PKG_NAME: fastflowlm-windows-5879b881d47bd7d8eff4e79b53f3815c400c4ef2
+  # git blob ids of src/lib/{xrt,hrx}/minicpm_v_4_7_npu.dll on main 5879b881 (IRON #194, vendored by FLM #1019)
+  XRT_ENGINE_BLOB: 4259d30f954a5d3172cf24eca276603fad47e489
+  HRX_ENGINE_BLOB: f30a9032124aaa421ac58e39fe335bc1cd80eec6
+  # Engine overlay: a CI-built Windows XRT minicpm_v_4_7_npu.dll dropped over the package's copy.
+  # Empty OVERLAY_BLOB = the package's own engine.
+  OVERLAY_BLOB: ''
+  OVERLAY_SOURCE: ''
   # Baseline for the perf phase: the last release's Windows XRT portable zip. It
   # refuses today's model files (config.json says flm_version 1.0.13), so
   # pressure.py gives it hard links of the same files with that field lowered.
   BASELINE_URL: https://github.com/ROCm/FastFlowLM/releases/download/v1.0.12/fastflowlm_1.0.12_windows_amd64.zip
-  # empty = any idle runner with the labels below (earlier runs pinned xconucstr244-flm-sweep)
-  WANT_RUNNER: ''
+  # empty = any idle runner with the labels below; the Windows vs Linux prefill study (phase S) pins the
+  # HX 370 machine the first pressure run used
+  WANT_RUNNER: xconucstr244-flm-sweep
 
 jobs:
   pressure:

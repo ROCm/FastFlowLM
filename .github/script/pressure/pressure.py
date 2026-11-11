@@ -15,6 +15,7 @@ import argparse
 import base64
 import json
 import os
+import platform
 import re
 import shutil
 import socket
@@ -564,8 +565,13 @@ def phase_D(r):
             rep = post(s.port, [part, txt("hi")], max_tokens=4)
             r.check(f"malformed: {name} -> 400", rep.code == 400, f"{rep.code} {rep.error[:80]}")
         trunc = json.dumps(body_of(small)).encode()[:100000]
+        mark = os.path.getsize(s.log_path)
         rep = post(s.port, raw_body=trunc)
         r.check("truncated JSON body -> 4xx", 400 <= rep.code < 500, str(rep.code))
+        # the parse error quotes the body it last read; flm before the json_log::what cap logged and returned ~100 kB
+        longest = max((len(x) for x in open(s.log_path, "rb").read()[mark:].split(b"\n")), default=0)
+        r.check("truncated JSON body: error reply and log lines stay short", len(rep.error) < 2000 and longest < 2000,
+                f"reply error {len(rep.error)} bytes, longest log line {longest} bytes", soft=True)
 
         cycles = 3 if r.args.quick else 20
         bad_codes = []
@@ -749,8 +755,112 @@ def phase_R(r):
               open(os.path.join(r.out, "rtm.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 
 
+def _power_info(out):
+    """Read-only: NPU power mode (xrt-smi examine -r platform), CPU power plan / governor, CPU name."""
+    cands = [shutil.which("xrt-smi"), r"C:\Windows\System32\AMD\xrt-smi.exe", "/opt/xilinx/xrt/bin/xrt-smi"]
+    smi = next((c for c in cands if c and os.path.exists(c)), None)
+    info = {"xrt_smi": smi, "cpu": platform.processor()}
+    text = []
+    if smi:
+        try:
+            text.append(subprocess.run([smi, "examine", "-r", "platform"], capture_output=True, text=True,
+                                       timeout=60).stdout)
+        except (OSError, subprocess.SubprocessError) as e:
+            text.append(f"xrt-smi failed: {e}")
+    if os.name == "nt":
+        text.append(subprocess.run(["powercfg", "/getactivescheme"], capture_output=True, text=True).stdout)
+    else:
+        for p in ("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor",
+                  "/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference",
+                  "/sys/firmware/acpi/platform_profile"):
+            try:
+                text.append(f"{p}: {open(p).read().strip()}")
+            except OSError:
+                pass
+        try:
+            info["cpu"] = next(l.split(":", 1)[1].strip() for l in open("/proc/cpuinfo") if l.startswith("model name"))
+        except (OSError, StopIteration):
+            pass
+    joined = "\n".join(text)
+    open(os.path.join(out, "power.txt"), "w", encoding="utf-8").write(joined)
+    m = re.search(r"(?im)^\s*power mode\s*:\s*(.+)$", joined)
+    info["npu_power_mode"] = m.group(1).strip() if m else None
+    m = re.search(r"\(([^)]+)\)\s*$", joined.strip()) if os.name == "nt" else None
+    info["power_plan"] = m.group(1) if m else None
+    return info
+
+
+def _prof_split(log):
+    """Per-request sums of the -DMINICPM_V_PREFILL_PROFILE ticks, in ms, keyed by stage name (layer index dropped)."""
+    unit = {"ns": 1e-6, "us": 1e-3, "ms": 1.0, "s": 1e3}
+    acc = {}
+    for name, v, u in re.findall(r"\[prefill-prof\]\s+(.+?)(?: \(sum\))?: ([\d.eE+-]+) (ns|us|ms|s)\b", log):
+        name = re.sub(r"\d+$", "", name)   # wC0..wC3 -> wC
+        acc[name] = acc.get(name, 0.0) + float(v) * unit[u]
+    return {k: round(v, 2) for k, v in sorted(acc.items(), key=lambda kv: -kv[1])}
+
+
+def phase_S(r):
+    """Step C: where Windows spends its prefill time, and where its text first departs from Linux.
+    Pass 1 dumps pixels / tower rows / final hidden rows (FLM_TF_*_FILE) once per case, for a cross-platform diff.
+    Pass 2 (no dumps) times each case 3x with the per-layer split, plus the per-stage split if the engine was built
+    with -DMINICPM_V_PREFILL_PROFILE."""
+    r.data("power", _power_info(r.out))
+    print(f"  S power: {r.results['phases']['S']['data']['power']}", flush=True)
+    q = txt(PROMPT)
+    texts = [(f"text{f}", body_of([txt(_text_prompt(f))], max_tokens=256)) for f in (0, 10, 40, 150)]
+    imgs = [(f"img{n}", body_of(_content(r, n, "raw", q))) for n in (1, 8, 32, 120)]
+    tf = os.path.join(r.out, "tf")
+    os.makedirs(tf, exist_ok=True)
+    order = []
+    env = {"FLM_TF_HIDDEN_FILE": os.path.join(tf, "hidden.bin"), "FLM_TF_IMGEMB_FILE": os.path.join(tf, "imgemb.bin"),
+           "FLM_TF_PIXELS_FILE": os.path.join(tf, "pixels.bin")}
+    s = r.server("S-dump", env=env)
+    try:
+        for name, body in texts + imgs[:3]:          # img120 rows are 36 MB of hidden state: leave it out
+            rep = post(s.port, raw_body=json.dumps(body).encode())
+            order.append({"case": name, "code": rep.code, "prompt_tokens": rep.usage.get("prompt_tokens"),
+                          "text": rep.text})
+            r.check(f"dump {name} 200", rep.code == 200, f"{rep.code} {rep.error[:80]}")
+    finally:
+        r.stop(s)
+    json.dump({"platform": sys.platform, "clip_sha256": r.clips.digest(), "order": order},
+              open(os.path.join(tf, "order.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    s = r.server("S-prof", env={"FLM_MINICPM_V_VISION_PROFILE": "1", "FLM_MINICPM_V_PREFILL_PROFILE": "1"})
+    prof = {}
+    try:
+        for name, body in imgs[::-1] + texts[::-1]:
+            raw_body = json.dumps(dict(body, max_tokens=8)).encode()
+            runs = []
+            for _ in range(3):
+                mark = os.path.getsize(s.log_path)
+                rep = post(s.port, raw_body=raw_body)
+                log = open(s.log_path, encoding="utf-8", errors="replace").read()[mark:]
+                m = re.search(r"language prefill: (\d+) tokens in (\d+) ms \(layers (\d+), lm_head w sync (\d+), "
+                              r"lm_head (\d+)\)", log)
+                t = re.search(r"vision: .* rows in (\d+) ms", log)
+                runs.append({"code": rep.code, "ttft": rep.row()["ttft"],
+                             "tokens": int(m.group(1)) if m else None, "prefill_ms": int(m.group(2)) if m else None,
+                             "layers_ms": int(m.group(3)) if m else None, "lm_head_ms": int(m.group(5)) if m else None,
+                             "tower_ms": int(t.group(1)) if t else None,
+                             "layer_ms": [float(x) for x in re.findall(r"\[minicpm_v prefill\] L=\d+ layer\s+\d+ \S+\s+([\d.]+) ms", log)],
+                             "stages_ms": _prof_split(log)})
+                if rep.code != 200:
+                    break
+            prof[name] = runs
+            last = runs[-1]
+            top = list(last["stages_ms"].items())[:6]
+            print(f"  S {name}: tokens {last['tokens']} prefill {[x['prefill_ms'] for x in runs]} ms "
+                  f"layers {last['layers_ms']} lm_head {last['lm_head_ms']} tower {last['tower_ms']} top {top}", flush=True)
+            r.check(f"prof {name} 200 x3", all(x["code"] == 200 for x in runs))
+    finally:
+        r.stop(s)
+    json.dump({"platform": sys.platform, "power": r.results["phases"]["S"]["data"]["power"], "cases": prof},
+              open(os.path.join(r.out, "prof.json"), "w", encoding="utf-8"), indent=1)
+
+
 PHASES = {"A": phase_A, "P": phase_P, "B": phase_B, "C": phase_C, "D": phase_D, "E": phase_E, "F": phase_F,
-          "R": phase_R}
+          "R": phase_R, "S": phase_S}
 
 
 def summary(r):
