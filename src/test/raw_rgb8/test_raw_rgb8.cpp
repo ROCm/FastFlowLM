@@ -224,6 +224,17 @@ int main() {
 		bool threw = false;
 		try { json_log::parse("{\"a\": "); } catch (const std::exception&) { threw = true; }
 		CHECK(threw);
+		// a truncated body's parse error quotes everything after the last opening quote; json_log::what keeps the start
+		threw = false;
+		try { json::parse(text.substr(0, 100000)); }
+		catch (const std::exception& e) {
+			threw = true;
+			const std::string w = json_log::what(e);
+			CHECK(std::string(e.what()).size() > 90000);
+			CHECK(w.size() < 400);
+			CHECK(w.rfind("[json.exception.parse_error.101] parse error at line 1, column 100001", 0) == 0);
+		}
+		CHECK(threw);
 	}
 
 	if (failures) { std::printf("%d FAILED\n", failures); return 1; }

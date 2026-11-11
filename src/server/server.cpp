@@ -749,7 +749,7 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
         }
     }
     catch (const std::exception& e) {
-        header_print("LOG", "Error parsing request body: " + std::string(e.what()));
+        header_print("LOG", "Error parsing request body: " + json_log::what(e));
     }
 
     // Route lookup
@@ -791,10 +791,10 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
             }
         }
         catch (const std::exception& e) {
-            header_print("LOG", "Invalid JSON request body: " + std::string(e.what()));
+            header_print("LOG", "Invalid JSON request body: " + json_log::what(e));
             res_ref.result(http::status::bad_request);
             res_ref.body() = dump_error_body(json{ {"error", {
-                {"message", std::string("Invalid JSON: ") + e.what()},
+                {"message", "Invalid JSON: " + json_log::what(e)},
                 {"type", "invalid_request_error"},
                 {"code", 400}}} });
             res_ref.set(http::field::content_type, "application/json");
@@ -893,7 +893,7 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
             res_ref.result(bad_body ? http::status::bad_request : http::status::internal_server_error);
             res_ref.body() = bad_body
                 ? dump_error_body(json{ {"error", {
-                    {"message", std::string("Invalid JSON: ") + e.what()},
+                    {"message", "Invalid JSON: " + json_log::what(e)},
                     {"type", "invalid_request_error"},
                     {"code", 400}}} })
                 : dump_error_body(json{ {"error", std::string("Handler exception: ") + e.what()} });
