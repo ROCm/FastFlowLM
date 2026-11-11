@@ -47,7 +47,7 @@ Which models each suite runs at each tier is in `plan.py`, in one place.
 The tiers pick NPU models only. A model whose `backend` in `flm list --json` runs
 on the GPU (`oga-hipep`, in the Windows XRT package) is tested by a run with
 `--backend oga-hipep`, which tests all of them whatever the tier. The Test
-Windows HIPEP job runs the `chat` and `api` suites that way on
+Windows HIPEP job runs the `chat`, `api` and `shutdown` suites that way on
 `qwen3.5-oga-hipep:9b` alone, since the other packages are 4 to 124 GB each,
 unless a manual run names the models (below). Such a run gives `api` the
 backend's models in place of its NPU list, so the OpenAI contract tests, tool
@@ -60,8 +60,9 @@ when any changed file is shared code. The HRX packages never run `api` or
 `serving`, which test server logic the backend does not touch. Test Windows
 HIPEP runs when every suite does, or when the change reaches
 `qwen3.5-oga-hipep:9b`: the oga-hipep backend or its catalog entries, the
-qwen3.5 frontend, the `chat` and `api` tests. A change only to the backend or
-its entries touches no NPU family and runs no NPU test job.
+qwen3.5 frontend, the `chat`, `api` and `shutdown` tests. A change only to the
+backend, its entries or the `shutdown` tests touches no NPU family and runs no
+NPU test job.
 
 A manual run of Build and Test can name the models to test, for example
 `gh workflow run build-and-test.yml --ref <branch> -f models=qwen3.5-oga-hipep:9b`:
@@ -80,6 +81,7 @@ from scratch, instead of reusing the runner's copy.
 | `embedding` | Single and batch vectors, similarity ordering, determinism |
 | `decision` | d3 goldens against the upstream model, answer types, errors, the turbo/ultra prefix features |
 | `asr` | Whisper WER/CER on the FLEURS set (`assets/asr_eval`), response formats, segments, language, prompt; chat-model transcription (Gemma 4, Nemotron 3.5) |
+| `shutdown` | GPU backend runs on Windows only: Ctrl+C ends `flm serve` with its model loaded, and `/bye` and Ctrl+C end `flm run` at its prompt, each within 30 s, with flm in a console of its own as a person runs it (a process that had loaded hip-ep used to hang on its way out, unkillable) |
 
 ## Layout
 
@@ -89,6 +91,7 @@ plan.py      catalog and per-tier model selection
 harness.py   context, cases (pass/fail/warn/skip), report
 server.py    one flm serve process
 client.py    HTTP: JSON, SSE streams, multipart
+console.py   a program in a hidden console of its own: Ctrl+C, typed lines, the screen (Windows)
 suites/      one module per suite: NAME, DESCRIPTION, run(ctx)
 assets/      images, audio, the ASR evaluation set, d3 goldens
 tools/       scripts that regenerate assets
