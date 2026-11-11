@@ -16,6 +16,8 @@
 #include "AutoModel/modeling_qwen3_8mtp.hpp"
 #include "models/qwen3_8mtp/flm/aie2p/qwen3_8mtp_npu.hpp"
 #include <algorithm>
+#include <bit>
+#include <memory>
 #include <limits>
 
 
@@ -507,7 +509,7 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
                 for (int w = 0; w < words; w++) {
                     uint32_t bits = this->constraint_mask_[w];
                     while (bits) {
-                        const int i = w * 32 + __builtin_ctz(bits);
+                        const int i = w * 32 + std::countr_zero(bits);
                         bits &= bits - 1;
                         if (i < vocab && row[i] > best_logit) { best_logit = row[i]; best = i; }
                     }
