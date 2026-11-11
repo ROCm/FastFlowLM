@@ -660,7 +660,85 @@ def phase_F(r):
         r.check("no flm.exe running", "flm.exe" not in ps.lower(), ps[:200])
 
 
-PHASES = {"A": phase_A, "P": phase_P, "B": phase_B, "C": phase_C, "D": phase_D, "E": phase_E, "F": phase_F}
+COLOURS = ("red", "green", "blue", "yellow", "white", "black", "orange")
+
+
+def _text_prompt(facts):
+    """A text-only prompt of about 20 tokens per fact, deterministic, with one question about the facts."""
+    if not facts:
+        return "Name three primary colours."
+    lines = [f"Item {i}: weighs {i * 37 % 97} grams, is {COLOURS[i % 7]}, and sits on shelf {i % 11}." for i in range(facts)]
+    return "\n".join(lines) + "\nWhich three items are the heaviest? Answer in one short sentence."
+
+
+def _rtm_arm(r, label, env):
+    """One server with FLM_MINICPM_MM_RTM set as `env` says. Image prompts go longest first (full 512-row matmul
+    dispatches), text prompts after them (shorter, so more dispatches with fewer rows). Stops at the first error."""
+    env = dict(env, FLM_MINICPM_V_VISION_PROFILE="1", FLM_MINICPM_V_PREFILL_PROFILE="1")
+    s = r.server(f"R-{label}", env=env)
+    out, q = {"cases": {}, "failed": False}, txt(PROMPT)
+    cases = [(f"img{n}", json.dumps(body_of(_content(r, n, "raw", q))).encode()) for n in (120, 64, 32, 8, 1)]
+    cases += [(f"text{f}", json.dumps(body_of([txt(_text_prompt(f))], max_tokens=256)).encode())
+              for f in (150, 40, 10, 0)]
+    try:
+        for name, body in cases:
+            mark = os.path.getsize(s.log_path)
+            reps = [post(s.port, raw_body=body) for _ in range(3)]
+            log = open(s.log_path, encoding="utf-8", errors="replace").read()[mark:]
+            rows = [x.row() for x in reps]
+            texts = [x.text for x in reps]
+            out["cases"][name] = {
+                "prompt_tokens": rows[0]["prompt_tokens"], "ttft": [x["ttft"] for x in rows],
+                "tok_s": [x["tok_s"] for x in rows], "text": texts[0], "texts_same": len(set(texts)) == 1,
+                "llm_prefill_ms": [int(x) for x in re.findall(r"language prefill: \d+ tokens in (\d+) ms", log)],
+                "layer_split_ms": [(float(a), float(b)) for a, b in
+                                   re.findall(r"\[minicpm_v prefill\] L=\d+\s+\d+ attn ([\d.]+) ms\s+\d+ linear ([\d.]+) ms", log)]}
+            c = out["cases"][name]
+            print(f"  R {label} {name}: tokens {c['prompt_tokens']} ttft {c['ttft']} prefill {c['llm_prefill_ms']} ms "
+                  f"same={c['texts_same']} text {c['text']!r:.60}", flush=True)
+            ok = r.check(f"{label} {name} 200 x3", all(x.code == 200 for x in reps),
+                         " ".join(f"{x.code} {x.error[:80]}" for x in reps if x.code != 200))
+            r.check(f"{label} {name} deterministic", c["texts_same"], "", soft=True)
+            if not ok:
+                out["failed"] = True
+                break
+    finally:
+        r.stop(s)
+    log = r.log_text(s)
+    out["errors_in_log"] = len(re.findall(r"(?i)\b(error|exception|timeout|hang)\b", log))
+    return out
+
+
+def phase_R(r):
+    """Old fixed 512-row matmul (FLM_MINICPM_MM_RTM=0) against the runtime-m matmul (=1) in the same job.
+    texts go to rtm.json, to compare with the other platform's run of this phase."""
+    arms = {}
+    for label, val in (("mm0", "0"), ("rtm1", "1")):
+        arms[label] = _rtm_arm(r, label, {"FLM_MINICPM_MM_RTM": val})
+        r.data(label, arms[label])
+        if arms[label]["failed"]:
+            break
+    if all(k in arms and not arms[k]["failed"] for k in ("mm0", "rtm1")):
+        a, b = arms["mm0"]["cases"], arms["rtm1"]["cases"]
+        for name in a:
+            pa, pb = a[name]["llm_prefill_ms"], b[name]["llm_prefill_ms"]
+            ma = S.median(pa) if pa else None
+            mb = S.median(pb) if pb else None
+            print(f"  R {name}: prefill mm0 {ma} ms rtm1 {mb} ms, ttft mm0 {S.median(a[name]['ttft'])} "
+                  f"rtm1 {S.median(b[name]['ttft'])} s, same text {a[name]['text'] == b[name]['text']}", flush=True)
+        big = "img120"
+        if a[big]["llm_prefill_ms"] and b[big]["llm_prefill_ms"]:
+            ma, mb = S.median(a[big]["llm_prefill_ms"]), S.median(b[big]["llm_prefill_ms"])
+            r.check("perf: N=120 language prefill faster with runtime-m mm", mb < ma, f"rtm1 {mb} ms vs mm0 {ma} ms",
+                    soft=True)
+    json.dump({"platform": sys.platform, "clip_sha256": r.clips.digest(),
+               "arms": {k: {n: {"text": c["text"], "prompt_tokens": c["prompt_tokens"]} for n, c in v["cases"].items()}
+                        for k, v in arms.items()}},
+              open(os.path.join(r.out, "rtm.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+
+
+PHASES = {"A": phase_A, "P": phase_P, "B": phase_B, "C": phase_C, "D": phase_D, "E": phase_E, "F": phase_F,
+          "R": phase_R}
 
 
 def summary(r):
@@ -683,12 +761,14 @@ def summary(r):
             lines.append(f"- error: `{d['error'][:300]}`")
         if ph == "P" and "data" in d and "main" in d["data"]:
             dd = d["data"]
-            lines += ["", "| N | tokens | main raw TTFT | main PNG TTFT | baseline PNG TTFT | main raw wall | decode tok/s main / base |",
+            # raw frames are one view each by default (max_slice_nums 1), PNG frames are sliced: token counts differ
+            lines += ["", "| N | tokens raw / PNG / base PNG | main raw TTFT | main PNG TTFT | baseline PNG TTFT | main raw wall | decode tok/s main / base |",
                       "|---|---|---|---|---|---|---|"]
             for n, row in dd["main"].items():
                 base = dd.get("baseline", {}).get(n, {}).get("png")
                 f = lambda x, k: f"{x[k]['med']:.2f}" if x and x.get(k) else "-"
-                lines.append(f"| {n} | {row['raw']['prompt_tokens']} | {f(row['raw'], 'ttft')} | {f(row['png'], 'ttft')} | "
+                toks = f"{row['raw']['prompt_tokens']} / {row['png']['prompt_tokens']} / {(base or {}).get('prompt_tokens', '-')}"
+                lines.append(f"| {n} | {toks} | {f(row['raw'], 'ttft')} | {f(row['png'], 'ttft')} | "
                              f"{f(base, 'ttft')} | {f(row['raw'], 'wall')} | {f(row['png'], 'tok_s')} / {f(base, 'tok_s')} |")
             for key in ("profile_main", "profile_baseline"):
                 if key in dd:
