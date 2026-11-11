@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstddef>
+#include <exception>
 #include <string>
 #include <nlohmann/json.hpp>
 
@@ -35,6 +36,13 @@ inline nlohmann::json parse(const std::string& body) {
 		}
 		return true;
 	});
+}
+
+/// an exception message for the log or an error reply: a JSON parse error quotes the text it last read, which for
+/// a truncated body is everything after the last opening quote (up to the whole body); keep the start, which names
+/// the error and its position
+inline std::string what(const std::exception& e) {
+	return cut(e.what(), 200);
 }
 
 /// `body` as indented JSON; never throws on a string that is not valid UTF-8
