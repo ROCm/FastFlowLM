@@ -67,8 +67,9 @@ GPU_BACKENDS = {"oga-hipep"}
 
 # Suites with a fixed NPU model list that a GPU backend run gives its own chat
 # models instead: the OpenAI contract (tools, streaming, errors, usage) holds
-# for every backend the server drives.
-BACKEND_SUITES = {"api"}
+# for every backend the server drives, and flm must still end once it has
+# loaded the backend's runtime (shutdown).
+BACKEND_SUITES = {"api", "shutdown"}
 
 # Models that reason even when asked not to. Their answer comes after the
 # reasoning, so they need a larger token budget before any content appears.
@@ -94,6 +95,8 @@ SUITE_MODELS = {
         "pr": ["qwen3:0.6b", "llama3.2:1b"],
         "full": ["qwen3:0.6b", "llama3.2:1b"],
     },
+    # A GPU backend run only: a process that had loaded hip-ep could not end.
+    "shutdown": {"install": [], "pr": [], "full": []},
     # Chat models fed audio through /v1/chat/completions. Whisper itself is
     # always tested; these are the chat models with an audio encoder.
     "asr_chat": {

@@ -169,8 +169,8 @@ public:
     ///       OgaShutdown() crashes inside onnxruntime.dll (access violation under
     ///       OgaCreateGenerator), although ort_genai_c.h says GenAI may be used
     ///       again. Measured with `flm serve`: oga-hipep, then an NPU model, then
-    ///       oga-hipep again crashes with the call and passes without it; ending
-    ///       `flm run` with /bye exits with code 0 either way.
+    ///       oga-hipep again crashes with the call and passes without it. A process
+    ///       that loaded hip-ep ends through EndProcessIfHipEpLoaded.
     static std::shared_ptr<const OgaApi> GetOrCreate();
 
     /// \brief GetOrCreate with `load` in place of the hip-ep loader
@@ -210,5 +210,10 @@ private:
 ///       under the same name.
 /// \throws std::runtime_error naming the library if OGA cannot register it
 void RegisterAmdGpuProvider(const OgaApi& api);
+
+/// \brief whether this process has started loading a hip-ep package's DLLs
+/// \note Such a process must not end through ExitProcess: the HIP runtime's DLL teardown
+///       then waits in the GPU driver for good. See EndProcessIfHipEpLoaded.
+bool HipEpLoaded() noexcept;
 
 }  // namespace flm::oga
