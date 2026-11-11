@@ -1,0 +1,221 @@
+name: Windows minicpm-v batch image pressure test
+
+# Pressure test of minicpm-v-4.7:1b with batch image input (image_raw RGB8 and
+# PNG, up to 128 frames) on one Windows NPU runner, against the Windows XRT
+# portable package that main's Build and Test produced. Nothing is built here.
+#
+# Lives on the pressure/win-minicpm-batch branch only. Each push runs the phases
+# listed in .github/script/pressure/phases.txt; a dispatch can override them.
+# The tests never inject NPU hangs or kill the server mid-operation; a stuck
+# NPU has taken Windows runners offline before.
+
+on:
+  push:
+    branches:
+      - pressure/win-minicpm-batch
+  workflow_dispatch:
+    inputs:
+      phases:
+        description: Phases to run (A,P,B,C,D,E,F); empty = phases.txt
+        default: ''
+      quick:
+        description: Fewer repetitions
+        type: boolean
+        default: false
+
+concurrency:
+  group: win-minicpm-pressure
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  # Package under test: Windows XRT portable zip of main c6bfd288 (Build and Test push run).
+  PKG_RUN_ID: '42942859383'
+  PKG_NAME: fastflowlm-windows-c6bfd2887f202abd8a3fb3fe933ffdfccd3bab2c
+  # git blob ids of src/lib/{xrt,hrx}/minicpm_v_4_7_npu.dll at c6bfd288
+  XRT_ENGINE_BLOB: 23883f520de62b1602567bad7e1b77e37a4f6a54
+  HRX_ENGINE_BLOB: a5d8e6e4f97eaf66324ecfe21006699c16181ac0
+  # Baseline for the perf phase: the last release's Windows XRT portable zip. It
+  # refuses today's model files (config.json says flm_version 1.0.13), so
+  # pressure.py gives it hard links of the same files with that field lowered.
+  BASELINE_URL: https://github.com/ROCm/FastFlowLM/releases/download/v1.0.12/fastflowlm_1.0.12_windows_amd64.zip
+  WANT_RUNNER: xconucstr244-flm-sweep
+
+jobs:
+  pressure:
+    name: Pressure test (Windows XRT portable)
+    runs-on: [self-hosted, windows, x64, npu, sweep, strix]
+    timeout-minutes: 150
+    steps:
+      - name: Runner guard
+        shell: powershell
+        run: |
+          Write-Host "runner $env:RUNNER_NAME on $env:COMPUTERNAME"
+          if ($env:RUNNER_NAME -ne $env:WANT_RUNNER) {
+            Write-Host "::error::Landed on $env:RUNNER_NAME, want $env:WANT_RUNNER; not testing here."
+            exit 1
+          }
+
+      - name: Checkout test scripts and images
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/actions
+            .github/script
+            src/tb_files
+            docs/assets
+          filter: blob:none
+
+      - name: Stop flm left over from earlier jobs
+        shell: powershell
+        run: |
+          $work = Split-Path (Split-Path $env:GITHUB_WORKSPACE)
+          $stale = Get-Process -Name flm -ErrorAction SilentlyContinue |
+            Where-Object { $_.Path -and $_.Path.StartsWith($work, [StringComparison]::OrdinalIgnoreCase) }
+          if (-not $stale) { exit 0 }
+          Write-Host "::warning::Stopping flm left over from an earlier job: $($stale | ForEach-Object { "$($_.Id) $($_.Path)" })"
+          $stale | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 5
+          if ($stale | Where-Object { -not $_.HasExited }) {
+            Write-Host "::error::flm from an earlier job survived Stop-Process; not testing on this runner."
+            exit 1
+          }
+
+      - name: Download the Windows XRT portable package
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.PKG_NAME }}
+          run-id: ${{ env.PKG_RUN_ID }}
+          github-token: ${{ github.token }}
+          path: package
+
+      - name: Prepare package
+        id: package
+        uses: ./.github/actions/install-package
+        with:
+          kind: portable
+          path: package
+
+      - name: Check this is the XRT portable package
+        shell: powershell
+        env:
+          FLM_BIN: ${{ steps.package.outputs.flm-bin }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pkg = Split-Path $env:FLM_BIN
+          Write-Host "flm-bin: $env:FLM_BIN (mode ${{ steps.package.outputs.mode }})"
+          foreach ($f in 'flm.exe', 'minicpm_v_4_7_npu.dll', 'model_list.json', 'xclbins') {
+            if (-not (Test-Path (Join-Path $pkg $f))) { throw "package has no $f" }
+          }
+          if (Test-Path (Join-Path $pkg 'hrx.dll')) { throw 'hrx.dll present: this is the HRX package' }
+          $blob = (git hash-object (Join-Path $pkg 'minicpm_v_4_7_npu.dll')).Trim()
+          if ($blob -eq $env:HRX_ENGINE_BLOB) { throw 'minicpm engine is the HRX build' }
+          if ($blob -ne $env:XRT_ENGINE_BLOB) { throw "minicpm engine blob $blob is not the XRT build $env:XRT_ENGINE_BLOB" }
+          Write-Host "minicpm_v_4_7_npu.dll = src/lib/xrt build ($blob)"
+          New-Item -ItemType Directory -Force pressure-out | Out-Null
+          Get-ChildItem $pkg -File -Include *.exe, *.dll -Recurse | Get-FileHash -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash)  $(Split-Path $_.Path -Leaf)" } | Set-Content pressure-out\package-sha256.txt
+          & $env:FLM_BIN version | Tee-Object pressure-out\flm-version.txt
+          Write-Host "flm on PATH (not used):"
+          where.exe flm 2>$null; exit 0
+
+      - name: Download the v1.0.12 baseline (Windows XRT portable)
+        id: baseline
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = Join-Path $env:GITHUB_WORKSPACE 'baseline'
+          if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest $env:BASELINE_URL -OutFile "$dir\pkg.zip"
+          Expand-Archive "$dir\pkg.zip" -DestinationPath "$dir\pkg"
+          $flm = Get-ChildItem "$dir\pkg" -Recurse -Filter flm.exe | Select-Object -First 1
+          if (-not $flm) { throw 'flm.exe not found in the baseline zip' }
+          if (Test-Path (Join-Path $flm.DirectoryName 'hrx.dll')) { throw 'baseline zip is the HRX package' }
+          & $flm.FullName version
+          [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "flm-bin=$($flm.FullName)`n")
+
+      - name: Runner health before
+        shell: powershell
+        run: |
+          $cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1).Name
+          $os = Get-CimInstance Win32_OperatingSystem
+          $ramGB = [math]::Round($os.TotalVisibleMemorySize / 1MB, 1)
+          $freeGB = [math]::Round($os.FreePhysicalMemory / 1MB, 1)
+          "cpu: $cpu`nram: $ramGB GB total, $freeGB GB free`nos: $($os.Caption) $($os.Version)" | Tee-Object pressure-out\health-before.txt
+          powercfg /getactivescheme | Tee-Object -Append pressure-out\health-before.txt
+          Get-PnpDevice -FriendlyName '*NPU*' -ErrorAction SilentlyContinue |
+            Format-Table -AutoSize Status, FriendlyName, InstanceId | Out-String | Tee-Object -Append pressure-out\health-before.txt
+          $smi = @('xrt-smi', "$env:SystemRoot\System32\AMD\xrt-smi.exe") | Where-Object { Get-Command $_ -ErrorAction SilentlyContinue } | Select-Object -First 1
+          if ($smi) { & $smi examine 2>&1 | Tee-Object -Append pressure-out\health-before.txt }
+          Get-Process | Where-Object { $_.ProcessName -match 'flm|ollama|lemonade' } |
+            Format-Table -AutoSize Id, ProcessName, Path | Out-String | Tee-Object -Append pressure-out\health-before.txt
+          if ($ramGB -lt 24) { Write-Host "::error::$ramGB GB RAM is too little for 120-frame requests"; exit 1 }
+
+      - name: Pressure test
+        shell: powershell
+        working-directory: ${{ github.workspace }}/.github/script/pressure
+        env:
+          FLM_BIN: ${{ steps.package.outputs.flm-bin }}
+          BASELINE_BIN: ${{ steps.baseline.outputs.flm-bin }}
+          PHASES_IN: ${{ inputs.phases }}
+          QUICK: ${{ inputs.quick }}
+        run: |
+          if (-not $env:FLM_MODEL_PATH) {
+            $env:FLM_MODEL_PATH = Join-Path $env:USERPROFILE ".flm"
+            New-Item -ItemType Directory -Force $env:FLM_MODEL_PATH | Out-Null
+          }
+          $env:PYTHONUTF8 = '1'
+          $phases = if ($env:PHASES_IN) { $env:PHASES_IN } else { (Get-Content phases.txt | Where-Object { $_ -notmatch '^\s*#' } | Select-Object -First 1).Trim() }
+          Write-Host "phases: $phases"
+          $out = Join-Path $env:GITHUB_WORKSPACE 'pressure-out'
+          $cmdArgs = @('pressure.py', "--flm-bin=$env:FLM_BIN", "--baseline-bin=$env:BASELINE_BIN",
+                       "--repo=$env:GITHUB_WORKSPACE", "--out=$out", "--phases=$phases", '--golden=golden-linux.json')
+          if ($env:QUICK -eq 'true') { $cmdArgs += '--quick' }
+          python --version
+          & python $cmdArgs
+          exit $LASTEXITCODE
+
+      - name: Runner health after
+        if: always()
+        shell: powershell
+        run: |
+          $work = Split-Path (Split-Path $env:GITHUB_WORKSPACE)
+          $left = Get-Process -Name flm -ErrorAction SilentlyContinue |
+            Where-Object { $_.Path -and $_.Path.StartsWith($work, [StringComparison]::OrdinalIgnoreCase) }
+          if ($left) {
+            Write-Host "::warning::flm still running after the test: $($left.Id); stopping it"
+            $left | Stop-Process -Force -ErrorAction SilentlyContinue
+          }
+          $os = Get-CimInstance Win32_OperatingSystem
+          "free ram: $([math]::Round($os.FreePhysicalMemory / 1MB, 1)) GB" | Tee-Object pressure-out\health-after.txt
+          Get-PnpDevice -FriendlyName '*NPU*' -ErrorAction SilentlyContinue |
+            Format-Table -AutoSize Status, FriendlyName | Out-String | Tee-Object -Append pressure-out\health-after.txt
+          $smi = @('xrt-smi', "$env:SystemRoot\System32\AMD\xrt-smi.exe") | Where-Object { Get-Command $_ -ErrorAction SilentlyContinue } | Select-Object -First 1
+          if ($smi) { & $smi examine 2>&1 | Tee-Object -Append pressure-out\health-after.txt }
+          exit 0
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pressure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            pressure-out
+            !pressure-out/clips
+            !pressure-out/rawdir
+            !pressure-out/outside
+            !pressure-out/base-models
+          retention-days: 30
+
+      - name: Remove baseline and test data
+        if: always()
+        shell: powershell
+        run: |
+          foreach ($d in 'baseline', 'pressure-out\clips', 'pressure-out\rawdir', 'pressure-out\outside', 'pressure-out\base-models') {
+            if (Test-Path $d) { Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue }
+          }
