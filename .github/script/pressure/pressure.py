@@ -836,10 +836,21 @@ def phase_S(r):
         r.stop(s)
     json.dump({"platform": sys.platform, "clip_sha256": r.clips.digest(), "order": order},
               open(os.path.join(tf, "order.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-    s = r.server("S-prof", env={"FLM_MINICPM_V_VISION_PROFILE": "1", "FLM_MINICPM_V_PREFILL_PROFILE": "1"})
+    prof = _prof_arm(r, "S-prof", {}, imgs[::-1] + texts[::-1])
+    # host-side A/B on the short cases, where Windows' fixed cost dominates: OpenMP threads spinning instead of
+    # sleeping between regions, and a smaller host team
+    arms = {label: _prof_arm(r, f"S-{label}", env, imgs[1:2] + texts[::-1])
+            for label, env in (("omp-active", {"OMP_WAIT_POLICY": "ACTIVE"}), ("threads4", {"FLM_PREFILL_THREADS": "4"}))}
+    json.dump({"platform": sys.platform, "power": r.results["phases"]["S"]["data"]["power"], "cases": prof, "arms": arms},
+              open(os.path.join(r.out, "prof.json"), "w", encoding="utf-8"), indent=1)
+
+
+def _prof_arm(r, label, env, cases):
+    """each case 3x on one server with the prefill / vision profile lines on; returns {case: [run, ...]}"""
+    s = r.server(label, env=dict(env, FLM_MINICPM_V_VISION_PROFILE="1", FLM_MINICPM_V_PREFILL_PROFILE="1"))
     prof = {}
     try:
-        for name, body in imgs[::-1] + texts[::-1]:
+        for name, body in cases:
             raw_body = json.dumps(dict(body, max_tokens=8)).encode()
             runs = []
             for _ in range(3):
@@ -866,13 +877,12 @@ def phase_S(r):
             prof[name] = runs
             last = runs[-1]
             top = list(last["stages_ms"].items())[:6]
-            print(f"  S {name}: tokens {last['tokens']} prefill {[x['prefill_ms'] for x in runs]} ms "
+            print(f"  {label} {name}: tokens {last['tokens']} prefill {[x['prefill_ms'] for x in runs]} ms "
                   f"layers {last['layers_ms']} lm_head {last['lm_head_ms']} tower {last['tower_ms']} top {top}", flush=True)
-            r.check(f"prof {name} 200 x3", all(x["code"] == 200 for x in runs))
+            r.check(f"{label} {name} 200 x3", all(x["code"] == 200 for x in runs))
     finally:
         r.stop(s)
-    json.dump({"platform": sys.platform, "power": r.results["phases"]["S"]["data"]["power"], "cases": prof},
-              open(os.path.join(r.out, "prof.json"), "w", encoding="utf-8"), indent=1)
+    return prof
 
 
 PHASES = {"A": phase_A, "P": phase_P, "B": phase_B, "C": phase_C, "D": phase_D, "E": phase_E, "F": phase_F,
