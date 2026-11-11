@@ -11,8 +11,8 @@
                 "modified_at": "2026-09-01T00:00:00Z",
                 "size": 1800000000,
                 "flm_min_version": "1.0.5",
-                "default_context_length": 8192,
-                "max_prefill_len": 8192,
+                "default_context_length": 32768,
+                "max_prefill_len": 4096,
                 "files": [
                     "config.json",
                     "model.q4nx",
@@ -46,8 +46,8 @@
                 "modified_at": "2026-10-26T00:00:00Z",
                 "size": 17870824616,
                 "flm_min_version": "1.0.13",
-                "default_context_length": 16384,
-                "max_prefill_len": 16384,
+                "default_context_length": 32768,
+                "max_prefill_len": 4096,
                 "files": [
                     "config.json",
                     "model.q4nx",
