@@ -12,6 +12,9 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   # The d3 System One contract (src/common/decision) against fixtures written by the upstream
   # package: prompt bytes, request/question errors and answer objects. CPU only, no NPU.
@@ -19,7 +22,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Build and run the d3 contract test
         run: |
           cmake -S src/test/d3_contract -B build-d3-contract -DCMAKE_BUILD_TYPE=Release
@@ -32,7 +37,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Build and run the chat continue test
         run: |
           cmake -S src/test/chat_continue -B build-chat-continue -DCMAKE_BUILD_TYPE=Release
@@ -49,7 +56,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Fetch pinned HRX release
         run: |
           set -euo pipefail
@@ -76,7 +85,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       # the grammar engine, and the headers it builds against; nothing else is needed
       - name: Checkout xgrammar
         run: |
@@ -99,7 +110,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Build and run the prompt reuse test
         run: |
           cmake -S src/test/prompt_reuse -B build-prompt-reuse -DCMAKE_BUILD_TYPE=Release
@@ -112,7 +125,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Build and run the prefix slot cache test
         run: |
           cmake -S src/test/prefix_slot_cache -B build-prefix-slot-cache -DCMAKE_BUILD_TYPE=Release
@@ -126,7 +141,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Build and run the raw RGB8 test
         run: |
           cmake -S src/test/raw_rgb8 -B build-raw-rgb8 -DCMAKE_BUILD_TYPE=Release
@@ -138,9 +155,11 @@ jobs:
     runs-on: windows-2025
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Set up MSVC environment
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
         with:
           arch: x64
       - name: Build and run the raw RGB8 test
@@ -161,7 +180,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       # the grammar engine and tokenizer headers automodel.cpp builds against; nothing is built from tokenizers-cpp
       - name: Checkout submodules
         run: |
@@ -187,7 +208,9 @@ jobs:
     runs-on: windows-2025
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Checkout submodules
         shell: bash
         run: |
@@ -199,7 +222,7 @@ jobs:
           done
           exit 1
       - name: Set up MSVC environment
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
         with:
           arch: x64
       # Ninja under the MSVC environment instead of the Visual Studio generator, which builds one target at a time.
