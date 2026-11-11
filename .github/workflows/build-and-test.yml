@@ -107,7 +107,7 @@ jobs:
       hipep: ${{ steps.detect.outputs.hipep }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           filter: blob:none
@@ -279,7 +279,7 @@ jobs:
     steps:
       - &checkout-tests
         name: Checkout test scripts
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           sparse-checkout: |
             .github/actions
@@ -289,7 +289,7 @@ jobs:
             src/test/d3_video/fixtures
           filter: blob:none
       - name: Download package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: portable
           path: package
@@ -327,7 +327,7 @@ jobs:
     steps:
       - *checkout-tests
       - name: Download package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: HRX-portable
           path: package
@@ -367,7 +367,7 @@ jobs:
     steps:
       - *checkout-tests
       - name: Download package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: models-from-source-portable
           path: package
@@ -403,12 +403,12 @@ jobs:
     steps:
       - *checkout-tests
       - name: Download package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: portable
           path: package
       - name: Download model extension
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: gemma4-open-linux-xrt
           path: model-extension
@@ -445,12 +445,12 @@ jobs:
     steps:
       - *checkout-tests
       - name: Download package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: HRX-portable
           path: package
       - name: Download model extension
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: gemma4-open-linux-hrx
           path: model-extension
@@ -494,7 +494,7 @@ jobs:
     steps:
       - *checkout-tests
       - name: Download package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: flm-ubuntu24.04-${{ needs.changes.outputs.short-sha }}-deb
           path: package
@@ -533,7 +533,7 @@ jobs:
     steps:
       - *checkout-tests
       - name: Download package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: HRX-flm-ubuntu24.04-${{ needs.changes.outputs.short-sha }}-deb
           path: package
@@ -574,7 +574,7 @@ jobs:
     steps:
       - *checkout-tests
       - name: Download package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: fastflowlm-windows-${{ github.sha }}
           path: package
@@ -619,7 +619,7 @@ jobs:
     steps:
       - *checkout-tests
       - name: Download package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: fastflowlm-windows-${{ github.sha }}
           path: package
@@ -669,7 +669,7 @@ jobs:
     steps:
       - *checkout-tests
       - name: Download package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: HRX-fastflowlm-windows-${{ github.sha }}
           path: package
@@ -707,7 +707,7 @@ jobs:
     steps:
       - *checkout-tests
       - name: Download package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: models-from-source-fastflowlm-windows-${{ github.sha }}
           path: package
@@ -743,12 +743,12 @@ jobs:
     steps:
       - *checkout-tests
       - name: Download package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: fastflowlm-windows-${{ github.sha }}
           path: package
       - name: Download model extension
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: gemma4-open-windows-xrt
           path: model-extension
@@ -785,12 +785,12 @@ jobs:
     steps:
       - *checkout-tests
       - name: Download package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: HRX-fastflowlm-windows-${{ github.sha }}
           path: package
       - name: Download model extension
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: gemma4-open-windows-hrx
           path: model-extension
@@ -826,7 +826,7 @@ jobs:
     steps:
       - *checkout-tests
       - name: Download package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: fastflowlm-windows-msi-${{ github.sha }}
           path: package
@@ -886,13 +886,13 @@ jobs:
       hrx-passed: ${{ steps.verdict.outputs.hrx }}
     steps:
       - name: Checkout scripts
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           sparse-checkout: .github/script/ci
           filter: blob:none
 
       - name: Download reports
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: npu-test-*
           path: reports
