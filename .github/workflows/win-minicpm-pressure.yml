@@ -32,19 +32,19 @@ permissions:
   actions: read
 
 env:
-  # Package under test: Windows XRT portable zip of main 5879b881 (Build and Test run).
-  # Earlier runs: PR #1018 merge ref b2bb14dc (run 43058509779), main c6bfd288 (run 42942859383).
-  PKG_RUN_ID: '43082327443'
-  PKG_NAME: fastflowlm-windows-5879b881d47bd7d8eff4e79b53f3815c400c4ef2
-  # git blob ids of src/lib/{xrt,hrx}/minicpm_v_4_7_npu.dll on main 5879b881 (IRON #194, vendored by FLM #1019)
-  XRT_ENGINE_BLOB: 4259d30f954a5d3172cf24eca276603fad47e489
-  HRX_ENGINE_BLOB: f30a9032124aaa421ac58e39fe335bc1cd80eec6
+  # Package under test: Windows XRT portable zip of FLM draft PR #1022 (vendors IRON #198: delta rule + conv on
+  # the host on Windows), Build and Test run.
+  # Earlier runs: main 5879b881 (run 43082327443), PR #1018 merge ref b2bb14dc (run 43058509779), main c6bfd288 (run 42942859383).
+  PKG_RUN_ID: '43115847052'
+  PKG_NAME: fastflowlm-windows-226ae47f14cffe21ef2e65b3cd5863a044d29c25
+  # git blob ids of src/lib/{xrt,hrx}/minicpm_v_4_7_npu.dll in FLM #1022 (IRON #198 CI build)
+  XRT_ENGINE_BLOB: ce6362fbfb01465b8dc946dad4414566792efe5f
+  HRX_ENGINE_BLOB: 42880d5ca980861193b4e1acc7dd2542693e275e
   # Engine overlay: a CI-built Windows XRT minicpm_v_4_7_npu.dll dropped over the package's copy.
-  # Empty OVERLAY_BLOB = the package's own engine.
-  # Now: IRON dev/minicpm-v-prefill-prof (747c3ed3 + MINICPM_V_PREFILL_PROFILE, build-libs run 43091707172), for
-  # phase S's per-stage split. Not for release.
-  OVERLAY_BLOB: e0be320ddc6ff4714637bf1d4e251f06d2ab0121
-  OVERLAY_SOURCE: IRON dev/minicpm-v-prefill-prof a5feff58 (profile build, GDN + conv on the host)
+  # Empty OVERLAY_BLOB = the package's own engine (now).
+  # Earlier: IRON dev/minicpm-v-prefill-prof profile builds for phase S's per-stage split. Not for release.
+  OVERLAY_BLOB: ''
+  OVERLAY_SOURCE: ''
   # Baseline for the perf phase: the last release's Windows XRT portable zip. It
   # refuses today's model files (config.json says flm_version 1.0.13), so
   # pressure.py gives it hard links of the same files with that field lowered.
