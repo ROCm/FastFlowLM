@@ -34,26 +34,26 @@ jobs:
 
     steps:
       - name: Download Windows portable artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: fastflowlm-windows-${{ github.sha }}
           path: windows-dist
 
       - name: Download Windows MSI artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: fastflowlm-windows-msi-${{ github.sha }}
           path: msi-dist
 
       - name: Download Linux portable artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: portable
           path: linux-dist
 
       # Not the HRX- prefixed ones, which release-hrx publishes.
       - name: Download deb artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: debs
           pattern: 'flm-*-deb'
@@ -106,19 +106,19 @@ jobs:
 
     steps:
       - name: Download Windows HRX portable artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: HRX-fastflowlm-windows-${{ github.sha }}
           path: windows-dist
 
       - name: Download Linux HRX portable artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: HRX-portable
           path: linux-dist
 
       - name: Download HRX deb artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: debs
           pattern: 'HRX-flm-*-deb'

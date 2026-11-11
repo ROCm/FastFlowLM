@@ -47,7 +47,7 @@ jobs:
       RUNTIME: ${{ inputs.runtime }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Configure git safe directory
         run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
@@ -84,7 +84,7 @@ jobs:
           echo "cargo-home=${CARGO_HOME:-$HOME/.cargo}" >> "$GITHUB_OUTPUT"
 
       - name: Restore Cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ${{ steps.tools.outputs.cargo-home }}/registry/index
@@ -97,7 +97,7 @@ jobs:
       # xiph mirrors being up. ExternalProject checks each one's SHA-256.
       - &codec-cache
         name: Restore codec tarballs
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             build-model-extension-gemma4e/ac/*/dl
@@ -107,7 +107,7 @@ jobs:
 
       - name: Restore HRX release
         if: inputs.runtime == 'HRX'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: hrx-integration/.hrx-release/*.tar.zst
           key: hrx-release-linux-${{ hashFiles('hrx-integration/hrx-release.env') }}
@@ -118,7 +118,7 @@ jobs:
         run: ./hrx-integration/fetch-hrx-release.sh
 
       - name: Download package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.package }}
           path: package
@@ -156,7 +156,7 @@ jobs:
           cmake --build build-model-extension-gemma4e -j"$(nproc)"
 
       - name: Upload model extension
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gemma4-open-linux-${{ inputs.runtime == 'XRT' && 'xrt' || 'hrx' }}
           path: build-model-extension-gemma4e/bundle/
@@ -171,7 +171,7 @@ jobs:
       RUNTIME: ${{ inputs.runtime }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Checkout tokenizers-cpp
         shell: powershell
@@ -187,7 +187,7 @@ jobs:
       # The XRT headers and import library, Boost and the codec headers the
       # bundle compiles against, as win-build lays them out.
       - name: Restore build dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: C:\dev
           key: windows-deps-${{ hashFiles('.github/script/ci/setup_windows_deps.ps1', '.github/windows-deps/**') }}
@@ -202,7 +202,7 @@ jobs:
           arch: x64
 
       - name: Restore Cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/index
@@ -215,7 +215,7 @@ jobs:
 
       - name: Restore HRX release
         if: inputs.runtime == 'HRX'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: hrx-integration/.hrx-release/*.zip
           key: hrx-release-windows-${{ hashFiles('hrx-integration/hrx-release.env') }}
@@ -228,7 +228,7 @@ jobs:
 
       # The zip artifact is the package root itself.
       - name: Download package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.package }}
           path: sdk
@@ -271,7 +271,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload model extension
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gemma4-open-windows-${{ inputs.runtime == 'XRT' && 'xrt' || 'hrx' }}
           path: build-model-extension-gemma4e/bundle/
