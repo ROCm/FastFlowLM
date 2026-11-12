@@ -59,7 +59,7 @@ If the frames are already in a file, or your program can write them to one, send
                                     "shape": [120, 224, 398, 3], "path": "/data/frames/clip42.rgb"}}
 ```
 
-The file holds exactly the bytes `data` would decode to. Give exactly one of `data` and `path`. This is **off by default**, because it lets a request make the server read a file: start the server with `--allow-raw-path <directory>` and only regular files inside that directory (after symlinks and `..` are resolved) are read. Anything else, including a missing file, gets the same 400. The file size must match `shape` exactly. FLM reads the file into memory during the request, so it may be rewritten once the response is out. Frames are the same, so the answer is identical to the `data` form; for 120 frames of 398 × 224 it saves about 0.8 s of the 20 s.
+The file holds exactly the bytes `data` would decode to. Give exactly one of `data` and `path`. This is **off by default**, because it lets a request make the server read a file: start the server with `--allow-raw-path <directory>` and only regular files inside that directory (after symlinks and `..` are resolved) are read. Anything else, including a missing file, gets the same 400. The path must be local: network and device paths (`\\server\share\...`, `//server/share/...`, `\\?\UNC\...`, `\\.\...`) are refused before anything is opened; a relative path is read from the server's working directory. The file size must match `shape` exactly. FLM reads the file into memory during the request, so it may be rewritten once the response is out. Frames are the same, so the answer is identical to the `data` form; for 120 frames of 398 × 224 it saves about 0.8 s of the 20 s.
 
 ## Limits
 

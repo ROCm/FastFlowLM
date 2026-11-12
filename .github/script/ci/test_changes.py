@@ -144,6 +144,11 @@ class Cli(unittest.TestCase):
             ("src/lib/xrt/libqwen3_npu.so",): "chat,prefix_cache",
             # The oga-hipep backend alone runs no NPU suite, only Test Windows HIPEP.
             ("src/common/oga/oga_hipep_backend.cpp",): "none",
+            # Nor does shutdown, which tests no NPU model.
+            (".github/script/npu_test/suites/shutdown.py",): "none",
+            (".github/script/npu_test/console.py",): "none",
+            (".github/script/npu_test/suites/shutdown.py", ".github/script/npu_test/suites/serving.py"):
+                "serving",
             ("src/test/oga_hipep/test_oga_hipep.cpp", "src/lib/xrt/libqwen3_npu.so"): "chat,prefix_cache",
             ("src/include/oga/oga_vision.hpp",): "chat,prefix_cache",
             # Model-extension contracts, fixture and schemas: chat runs the extension jobs.
@@ -179,6 +184,8 @@ class Cli(unittest.TestCase):
             ("src/common/AutoModel/modeling_qwen3_5vl_image.cpp",): "true",
             # The tests of the suites it runs, and anything that runs every suite.
             (".github/script/npu_test/suites/chat.py",): "true",
+            (".github/script/npu_test/suites/shutdown.py",): "true",
+            (".github/script/npu_test/console.py",): "true",
             (".github/script/npu_test/assets/vision/cat.png",): "true",
             ("src/test/openai_api_test/test_errors.py",): "true",
             ("src/server/server.cpp",): "true",

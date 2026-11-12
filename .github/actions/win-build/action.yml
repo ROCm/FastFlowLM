@@ -51,7 +51,7 @@ runs:
     # runner has. HRX needs the same Boost as the XRT build; the XRT
     # parts of the tree go unused there.
     - name: Restore build dependencies
-      uses: actions/cache@v4
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: C:\dev
         key: windows-deps-${{ hashFiles('.github/script/ci/setup_windows_deps.ps1', '.github/windows-deps/**') }}
@@ -66,12 +66,12 @@ runs:
     # needs the MSVC environment (cl, link, the SDK) that a developer prompt
     # sets up.
     - name: Set up MSVC environment
-      uses: ilammy/msvc-dev-cmd@v1
+      uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
       with:
         arch: x64
 
     - name: Install sccache
-      uses: mozilla-actions/sccache-action@v0.0.9
+      uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
 
     # Everything cached lives under .ci-cache in the workspace.
     - name: Locate caches
@@ -96,14 +96,14 @@ runs:
     # restore takes the newest. Only main saves (see "Save compiler cache"),
     # for the reason given in lin-build.
     - name: Restore compiler cache
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: .ci-cache/sccache
         key: sccache-windows-${{ inputs.variant }}-${{ github.sha }}
         restore-keys: sccache-windows-${{ inputs.variant }}-
 
     - name: Restore Cargo registry
-      uses: actions/cache@v4
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
           ~/.cargo/registry/index
@@ -113,7 +113,7 @@ runs:
         restore-keys: cargo-registry-windows-
 
     - name: Restore Rust build output
-      uses: actions/cache@v4
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ steps.cache.outputs.rust-target }}
         key: rust-target-windows-${{ inputs.variant }}-${{ hashFiles('third_party/tokenizers-cpp/rust/**') }}
@@ -121,7 +121,7 @@ runs:
 
     - name: Restore HRX release
       if: inputs.variant == 'HRX'
-      uses: actions/cache@v4
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: hrx-integration/.hrx-release/*.zip
         key: hrx-release-windows-${{ hashFiles('hrx-integration/hrx-release.env') }}
@@ -186,7 +186,7 @@ runs:
 
     - name: Save compiler cache
       if: github.ref == 'refs/heads/main' && steps.build.outcome == 'success'
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: .ci-cache/sccache
         key: sccache-windows-${{ inputs.variant }}-${{ github.sha }}

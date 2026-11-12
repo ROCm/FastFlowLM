@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
@@ -124,6 +125,9 @@ Cache& GetCache() {
     return cache;
 }
 
+/// \brief set before LoadHipEp loads the first DLL of a package
+std::atomic<bool> hipep_loaded{false};
+
 /// \brief load the package that FindPackage picks, resolve its OGA entry points, and
 ///        register its EP library on the first load
 /// \note Runs under GetOrCreate's lock, which also guards `registered`.
@@ -137,6 +141,7 @@ std::shared_ptr<const OgaApi> LoadHipEp() {
     }
     if (GetEnvironmentVariableW(L"HIPDNN_EP_STRICT", nullptr, 0) == 0)
         _putenv_s("HIPDNN_EP_STRICT", "1");
+    hipep_loaded = true;
     // hipgpu.dll loads hipblaslt.dll by name when it creates a model, and delay-loads
     // amdhip64_7.dll by name, which the GPU driver also puts in System32. Loading
     // hipblaslt.dll from the package loads its amdhip64_7.dll from there too, so both
@@ -297,6 +302,8 @@ std::shared_ptr<const OgaApi> OgaApi::ResolveForTest(Resolver resolver, Package 
     if (!resolver) throw std::invalid_argument("OGA resolver is empty");
     return std::shared_ptr<const OgaApi>(new OgaApi(std::move(resolver), std::move(package)));
 }
+
+bool HipEpLoaded() noexcept { return hipep_loaded.load(); }
 
 std::shared_ptr<const OgaApi> OgaApi::GetOrCreate() { return GetOrCreateWith(LoadHipEp); }
 

@@ -41,7 +41,7 @@ This page says what FLM does with the fields of a `/v1/chat/completions` or `/v1
 | `min_tokens` | integer ≥ 0 | vLLM-style extension. End-of-sequence tokens are not sampled until at least `min_tokens` tokens have been generated; the reply can run one or two tokens over (more with speculative decoding). `max_tokens` still ends the reply. |
 | `ignore_eos` | `true` / `false` | vLLM-style extension. End-of-sequence tokens are never sampled, so the reply runs to `max_tokens` (or the context limit). Meant for fixed-length benchmarking. |
 
-> `min_tokens` and `ignore_eos` mask the end-of-sequence ids before sampling, so they work on every sampling path. `qwen3.8-mtp` and `qwen3.8-dflash2` decode one token at a time while either is in force, because its draft head samples inside the engine; expect a much lower speed there.
+> `min_tokens` and `ignore_eos` mask the end-of-sequence ids before sampling, so they work on every sampling path. `qwen3.8-mtp` and `qwen3.8-dflash2` decode one token at a time while either is in force, because its draft head samples inside the engine; expect a much lower speed there. With `ignore_eos`, `tool_choice` and `response_format` constrain the reply only until the grammar would end it; after that the rest of the reply is unconstrained, so tool calls and JSON output are not guaranteed to be valid.
 
 Each token is chosen in this order: penalties → the `tool_choice` / `response_format` grammar, if any → `top_k` → `top_p` and the model's min-p cut-off → `temperature` → sample.
 

@@ -36,4 +36,11 @@ flm::backend::BackendFactory hipep_factory();
 /// \throws std::runtime_error when it cannot tell what flm installed
 bool UninstallHipEp();
 
+/// \brief end the process with `code` if it loaded hip-ep, skipping every DLL's teardown;
+///        return otherwise
+/// \note Returning from main and the default Ctrl+C handler both end in ExitProcess, which
+///       hangs in the HIP runtime's teardown: the process keeps its GPU memory and cannot
+///       even be killed. TerminateProcess skips that teardown, and Windows frees the memory.
+void EndProcessIfHipEpLoaded(unsigned int code);
+
 }  // namespace flm::oga

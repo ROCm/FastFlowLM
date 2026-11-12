@@ -1,9 +1,15 @@
 // parse_image_raw: what is accepted, and that each way of getting it wrong is refused with a message, not a crash.
+// Also json_log, which keeps such requests (megabytes of frame data) out of the server log.
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include "image/raw_rgb8.hpp"
+#include "utils/json_log.hpp"
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
 
 using json = nlohmann::json;
 
@@ -135,7 +141,101 @@ int main() {
 	{ json j = pathpart(base / "ok" / "f.rgb"); j.erase("path"); refused("neither", j, "exactly one", 0, 0, fl); }
 	{ json j = pathpart(base / "ok" / "f.rgb"); j["path"] = 5; refused("path not string", j, "'path' must be a string", 0, 0, fl); }
 	{ raw_rgb8_limits_t bad = fl; bad.allow_path_dir = (base / "no_such_dir").string(); refused("bad allowed dir", pathpart(base / "ok" / "f.rgb"), "inside the allowed", 0, 0, bad); }
+	// links that stay inside are fine; a linked directory that leads out is not
+	fs::create_symlink(base / "ok" / "f.rgb", base / "ok" / "inlink.rgb", ec);
+	if (!ec) { raw_rgb8_batch_t c; CHECK(parse(pathpart(base / "ok" / "inlink.rgb"), c, err, 0, 0, fl)); CHECK(c.data == bytes); }
+	fs::create_directory_symlink(base / "out", base / "ok" / "outdir", ec);
+	if (!ec) refused("linked dir out", pathpart(base / "ok" / "outdir" / "secret.rgb"), "inside the allowed", 0, 0, fl);
+	// the race: the name checked out, then a directory on it was swapped for a link that leads out before the open
+	{
+		fs::create_directories(base / "ok" / "swap");
+		write(base / "ok" / "swap" / "secret.rgb", bytes);
+		const fs::path root = fs::canonical(base / "ok");
+		const fs::path checked = fs::canonical(base / "ok" / "swap" / "secret.rgb");
+		fs::remove_all(base / "ok" / "swap");
+		fs::create_directory_symlink(base / "out", base / "ok" / "swap", ec);
+		if (!ec) {
+			std::string got;
+			unsigned long long size = 0;
+			bool wrong_size = false;
+			CHECK(!raw_rgb8_detail::read_checked(root, checked, bytes.size(), got, size, wrong_size));
+			CHECK(!wrong_size);
+		}
+	}
+	// a relative path is read from the server's working directory, as before
+	{
+		const fs::path cwd = fs::current_path();
+		fs::current_path(base);
+		raw_rgb8_batch_t c;
+		CHECK(parse(pathpart(fs::path("ok") / "sub" / "g.rgb"), c, err, 0, 0, fl));
+		refused("relative out", pathpart(fs::path("out") / "secret.rgb"), "inside the allowed", 0, 0, fl);
+		fs::current_path(cwd);
+	}
+#ifndef _WIN32
+	// a FIFO is refused at once: opening it must not wait for a writer
+	if (mkfifo((base / "ok" / "fifo.rgb").c_str(), 0600) == 0) {
+		refused("fifo", pathpart(base / "ok" / "fifo.rgb"), "inside the allowed", 0, 0, fl);
+	}
+#else
+	// network and device paths are refused before anything is opened: no connection to a host the client names
+	for (const char* p : {R"(\\no-such-host.invalid\share\f.rgb)", "//no-such-host.invalid/share/f.rgb",
+	                      R"(\\?\UNC\no-such-host.invalid\share\f.rgb)", R"(\\.\PhysicalDrive0)",
+	                      R"(\\?\Volume{00000000-0000-0000-0000-000000000000}\f.rgb)", R"(\??\C:\f.rgb)"}) {
+		const auto t0 = std::chrono::steady_clock::now();
+		refused(p, pathpart(p), "local file path", 0, 0, fl);
+		CHECK(std::chrono::steady_clock::now() - t0 < std::chrono::seconds(1));
+	}
+	// the long form of a drive path is local
+	{
+		raw_rgb8_batch_t c;
+		CHECK(parse(pathpart(R"(\\?\)" + fs::canonical(base / "ok" / "f.rgb").string()), c, err, 0, 0, fl));
+		CHECK(c.data == bytes);
+	}
+#endif
 	fs::remove_all(base);
+
+	// json_log: a 120-frame request is logged in a few hundred bytes, as valid UTF-8, with the short fields intact
+	{
+		const std::string frames((size_t)120 * 64 * 64 * 3, 'Z');
+		json body = {{"model", "minicpm-v-4.7:1b"},
+		             {"messages", {{{"role", "user"},
+		                            {"content", {{{"type", "text"}, {"text", "describe"}},
+		                                         {{"type", "image_raw"}, {"image_raw", part(120, 64, 64, frames)}}}}}}}};
+		const std::string text = body.dump();
+		const std::string logged = json_log::dump(json_log::parse(text));
+		CHECK(text.size() > 1000000);
+		CHECK(logged.size() < 2000);
+		CHECK(logged.find("describe") != std::string::npos);
+		CHECK(logged.find("minicpm-v-4.7:1b") != std::string::npos);
+		CHECK(logged.find("bytes)...") != std::string::npos);
+		CHECK(json::parse(logged)["messages"][0]["content"][1]["image_raw"]["shape"] == json({120, 64, 64, 3}));
+		// cut on character boundaries: 300 two-byte and 300 four-byte characters stay valid UTF-8
+		for (const char* ch : {"\xc3\xa9", "\xf0\x9f\x98\x80"}) {
+			std::string s;
+			for (int i = 0; i < 300; ++i) s += ch;
+			for (size_t head : {0, 1, 31, 32, 33}) {
+				const std::string c = json_log::cut(s, head, 15);
+				CHECK(c.size() < 200);
+				CHECK(json::parse(json(c).dump()) == c);   // dump throws on broken UTF-8
+			}
+		}
+		CHECK(json_log::cut("short") == "short");
+		CHECK(!json_log::dump(json(std::string("\xff\xfe"))).empty());   // never throws on broken UTF-8
+		bool threw = false;
+		try { json_log::parse("{\"a\": "); } catch (const std::exception&) { threw = true; }
+		CHECK(threw);
+		// a truncated body's parse error quotes everything after the last opening quote; json_log::what keeps the start
+		threw = false;
+		try { json::parse(text.substr(0, 100000)); }
+		catch (const std::exception& e) {
+			threw = true;
+			const std::string w = json_log::what(e);
+			CHECK(std::string(e.what()).size() > 90000);
+			CHECK(w.size() < 400);
+			CHECK(w.rfind("[json.exception.parse_error.101] parse error at line 1, column 100001", 0) == 0);
+		}
+		CHECK(threw);
+	}
 
 	if (failures) { std::printf("%d FAILED\n", failures); return 1; }
 	std::printf("all raw_rgb8 tests passed\n");

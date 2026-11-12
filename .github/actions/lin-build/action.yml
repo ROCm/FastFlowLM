@@ -94,7 +94,7 @@ runs:
     # compiles, and the distro's rustc is too old for the tokenizers crate.
     - name: Install missing build tools
       shell: bash
-      run: |
+      run: | # zizmor: ignore[github-env] appends the constant $HOME/.cargo/bin to GITHUB_PATH
         set -euo pipefail
         need=""
         for tool in ccache curl nasm patchelf zstd; do
@@ -153,14 +153,14 @@ runs:
     # usable by that pull request alone, so saving from every PR commit would
     # only evict main's.
     - name: Restore compiler cache
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: .ci-cache/ccache
         key: ccache-${{ inputs.variant }}-${{ inputs.distro }}${{ inputs.distro-version }}-${{ github.sha }}
         restore-keys: ccache-${{ inputs.variant }}-${{ inputs.distro }}${{ inputs.distro-version }}-
 
     - name: Restore Cargo registry
-      uses: actions/cache@v4
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
           ${{ steps.cache.outputs.cargo-home }}/registry/index
@@ -170,7 +170,7 @@ runs:
         restore-keys: cargo-registry-${{ inputs.distro }}${{ inputs.distro-version }}-
 
     - name: Restore Rust build output
-      uses: actions/cache@v4
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ steps.cache.outputs.rust-target }}
         key: rust-target-${{ inputs.variant }}-${{ inputs.distro }}${{ inputs.distro-version }}-${{ hashFiles('third_party/tokenizers-cpp/rust/**') }}
@@ -178,7 +178,7 @@ runs:
 
     - name: Restore HRX release
       if: startsWith(inputs.variant, 'HRX-')
-      uses: actions/cache@v4
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: hrx-integration/.hrx-release/*.tar.zst
         key: hrx-release-linux-${{ hashFiles('hrx-integration/hrx-release.env') }}
@@ -279,7 +279,7 @@ runs:
 
     - name: Save compiler cache
       if: github.ref == 'refs/heads/main' && (steps.deb.outcome == 'success' || steps.portable.outcome == 'success')
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: .ci-cache/ccache
         key: ccache-${{ inputs.variant }}-${{ inputs.distro }}${{ inputs.distro-version }}-${{ github.sha }}

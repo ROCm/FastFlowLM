@@ -12,6 +12,9 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   # The d3 System One contract (src/common/decision) against fixtures written by the upstream
   # package: prompt bytes, request/question errors and answer objects. CPU only, no NPU.
@@ -19,7 +22,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Build and run the d3 contract test
         run: |
           cmake -S src/test/d3_contract -B build-d3-contract -DCMAKE_BUILD_TYPE=Release
@@ -32,7 +37,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Build and run the chat continue test
         run: |
           cmake -S src/test/chat_continue -B build-chat-continue -DCMAKE_BUILD_TYPE=Release
@@ -49,7 +56,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Fetch pinned HRX release
         run: |
           set -euo pipefail
@@ -76,7 +85,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # the grammar engine, and the headers it builds against; nothing else is needed
       - name: Checkout xgrammar
         run: |
@@ -99,7 +110,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Build and run the prompt reuse test
         run: |
           cmake -S src/test/prompt_reuse -B build-prompt-reuse -DCMAKE_BUILD_TYPE=Release
@@ -125,12 +138,53 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Build and run the prefix slot cache test
         run: |
           cmake -S src/test/prefix_slot_cache -B build-prefix-slot-cache -DCMAKE_BUILD_TYPE=Release
           cmake --build build-prefix-slot-cache -j"$(nproc)"
           ctest --test-dir build-prefix-slot-cache --output-on-failure
+
+  # image_raw (src/include/image/raw_rgb8.hpp): request parsing, the --allow-raw-path file read (confined to the
+  # directory, also against a link swapped in mid-request), and the request log that keeps frame data out
+  # (src/include/utils/json_log.hpp). CPU only.
+  raw-rgb8:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and run the raw RGB8 test
+        run: |
+          cmake -S src/test/raw_rgb8 -B build-raw-rgb8 -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-raw-rgb8 -j"$(nproc)"
+          ctest --test-dir build-raw-rgb8 --output-on-failure
+
+  # The same on Windows, where UNC and device paths must be refused before anything is opened.
+  raw-rgb8-windows:
+    runs-on: windows-2025
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
+      - name: Build and run the raw RGB8 test
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          cmake -S src/test/raw_rgb8 -B build-raw-rgb8 -G Ninja -DCMAKE_BUILD_TYPE=Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build-raw-rgb8 --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --test-dir build-raw-rgb8 --output-on-failure
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   # Model extensions (src/common/AutoModel/model_extension_*, model_frontend.cpp, model_backend.cpp): the
   # stable C ABI, manifest and catalog-overlay checks and registry rules, against fake extensions and stub
@@ -139,7 +193,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # the grammar engine and tokenizer headers automodel.cpp builds against; nothing is built from tokenizers-cpp
       - name: Checkout submodules
         run: |
@@ -165,7 +221,9 @@ jobs:
     runs-on: windows-2025
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Checkout submodules
         shell: bash
         run: |
@@ -177,7 +235,7 @@ jobs:
           done
           exit 1
       - name: Set up MSVC environment
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
         with:
           arch: x64
       # Ninja under the MSVC environment instead of the Visual Studio generator, which builds one target at a time.

@@ -10,14 +10,21 @@
 #include "utils/file_access.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
+
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 
 namespace flm::oga {
 namespace {
@@ -247,5 +254,13 @@ flm::backend::BackendFactory hipep_factory() {
 }
 
 bool UninstallHipEp() { return UninstallHipEpPackage(EnvironmentPath); }
+
+void EndProcessIfHipEpLoaded(unsigned int code) {
+    if (!HipEpLoaded()) return;
+    std::cout.flush();
+    std::cerr.flush();
+    std::fflush(nullptr);
+    TerminateProcess(GetCurrentProcess(), code);
+}
 
 }  // namespace flm::oga

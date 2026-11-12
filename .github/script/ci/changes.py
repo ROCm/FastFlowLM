@@ -15,13 +15,14 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
   suites     "all", or the comma-separated npu_test suites the change can
              affect when every changed file is scoped to some (an ASR-only
              change runs asr, a d3-only change runs decision); "none" when
-             every changed file is oga-hipep code or a GPU catalog entry,
-             which no NPU job runs; a change to a model_list.json field outside
-             its model entries, such as model_path, gives "all"
+             every changed file is oga-hipep code, a GPU catalog entry or a
+             test of the shutdown suite, which no NPU job runs; a change to a
+             model_list.json field outside its model entries, such as
+             model_path, gives "all"
   hipep      true when the change can reach qwen3.5-oga-hipep:9b, which Test
              Windows HIPEP runs on the GPU: when every suite runs, or a changed
              file is oga-hipep code, a GPU catalog entry, the qwen3.5 frontend,
-             or a test of the chat and api suites that job runs
+             or a test of the chat, api and shutdown suites that job runs
   summary    one line for the job log
 
 When in doubt it tests more: an all-zero or missing base (a new branch), or a
@@ -98,6 +99,7 @@ ENGINES = {
     ("gemma4e_dflash_flash",):               ("gemma4e-dflash-flash",),
     ("gemma4_12b",):                         ("gemma4-12b",),
     ("hunyuan",):                            ("hunyuan",),
+    ("hy_mem", "hy_memory"):                 ("hy-memory",),
     ("gpt_oss",):                            ("gpt-oss",),
     ("lfm2",):                               ("lfm2", "lfm2.5-tk"),
     ("lfm3",):                               ("lfm3",),
@@ -148,7 +150,9 @@ GPU_SUFFIX = "-oga-hipep"
 GPU_FAMILIES = {"qwen3.5"}
 GPU_FRONTEND = re.compile(r"^src/(include|common)/AutoModel/")
 # The suites Test Windows HIPEP runs.
-GPU_SUITES = {"chat", "api"}
+GPU_SUITES = {"chat", "api", "shutdown"}
+# Those that test no NPU model, so a change to their tests runs no NPU job.
+GPU_ONLY_SUITES = {"shutdown"}
 
 # Tests of shared code kept in an engine's test directory, which name no family:
 # test_model_downloader tests src/pull, beside the phi4 corelib tests it came
@@ -181,12 +185,13 @@ ASR_WORDS = re.compile(r"audio|transcri|whisper|multipart|speech|\basr\b|\bwav\b
 
 
 # The npu_test suites, in run order; "all" when a change is not scoped.
-SUITES = ("chat", "serving", "prefix_cache", "api", "embedding", "decision", "asr")
+SUITES = ("chat", "serving", "prefix_cache", "api", "embedding", "decision", "asr", "shutdown")
 
 # Test-side files that matter to one suite only. Anything else in npu_test
 # (the client, server, harness, plan) runs every suite.
 TEST_SCOPES = (
     (r"\.github/script/npu_test/suites/(\w+)\.py$", None),  # the suite itself
+    (r"\.github/script/npu_test/console\.py$", {"shutdown"}),
     (r"\.github/script/npu_test/assets/d3_goldens[^/]*\.jsonl$", {"decision"}),
     (r"\.github/script/npu_test/assets/vision/|\.github/script/npu_test/tools/make_vision_assets\.py$",
      {"chat"}),
@@ -498,6 +503,8 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
         if scope and scope & GPU_SUITES:
             d.reach_hipep(f"{path}: tests the {', '.join(sorted(scope & GPU_SUITES))} suite,"
                           " which Test Windows HIPEP runs")
+        if scope:
+            scope = scope - GPU_ONLY_SUITES
         if scope is None and ASR_ONLY.match(path):
             scope = {"asr"}
         if scope is None and hit and hit[1]:

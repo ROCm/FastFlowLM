@@ -87,7 +87,8 @@ runs:
         }
 
     # Models persist on the runner between jobs, so only the first job on a
-    # runner pays for a download.
+    # runner pays for a download. The harness pulls missing models before the
+    # suites, within a time budget on the pr tier (--pull-budget).
     - name: Run tests (Linux)
       id: linux
       if: runner.os == 'Linux'
@@ -183,7 +184,7 @@ runs:
     # Server logs included, so a failure can be diagnosed without the runner.
     - name: Upload report
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: npu-test-${{ inputs.label }}
         path: npu-test-results/${{ inputs.label }}/
@@ -194,13 +195,17 @@ runs:
     - name: Fail on test failures (Linux)
       if: runner.os == 'Linux' && steps.linux.outputs.code != '0'
       shell: bash
+      env:
+        LABEL: ${{ inputs.label }}
       run: |
-        echo "::error::NPU tests failed; see the summary and the npu-test-${{ inputs.label }} artifact."
+        echo "::error::NPU tests failed; see the summary and the npu-test-${LABEL} artifact."
         exit 1
 
     - name: Fail on test failures (Windows)
       if: runner.os == 'Windows' && steps.windows.outputs.code != '0'
       shell: powershell
+      env:
+        LABEL: ${{ inputs.label }}
       run: |
-        Write-Host "::error::NPU tests failed; see the summary and the npu-test-${{ inputs.label }} artifact."
+        Write-Host "::error::NPU tests failed; see the summary and the npu-test-$env:LABEL artifact."
         exit 1
