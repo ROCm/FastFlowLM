@@ -306,25 +306,12 @@ std::string Gemma4e::apply_chat_template(nlohmann::ordered_json& messages, nlohm
     opt.polyfill_tool_responses = false;
     opt.polyfill_object_arguments = false;
 
-    // The template raises if tool_calls[].function.arguments is a string, but OpenAI-style clients send it
-    // serialized. Deserialize it here (what polyfill_object_arguments would do).
-    nlohmann::ordered_json normalized = messages;
-    for (auto& message : normalized) {
-        if (!message.is_object() || !message.contains("tool_calls")) continue;
-        for (auto& tool_call : message["tool_calls"]) {
-            if (!tool_call.is_object() || !tool_call.contains("function")) continue;
-            auto& function = tool_call["function"];
-            if (!function.is_object() || !function.contains("arguments")) continue;
-            auto& arguments = function["arguments"];
-            if (!arguments.is_string()) continue;
-            auto raw = arguments.get<std::string>();
-            if (raw.empty()) {
-                arguments = nlohmann::ordered_json::object();
-                continue;
-            }
-            auto parsed = nlohmann::ordered_json::parse(raw, nullptr, /* allow_exceptions= */ false);
-            if (parsed.is_object()) arguments = parsed;
-        }
+    // OpenAI-style clients send tool call arguments serialized; the template renders only an object
+    nlohmann::ordered_json normalized;
+    try {
+        normalized = gemma4_template_messages(messages);
+    } catch (const std::invalid_argument& e) {
+        throw ModelRequestError(400, false, e.what(), "invalid_request_error");
     }
 
     minja::chat_template_inputs inputs;
