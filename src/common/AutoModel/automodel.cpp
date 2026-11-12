@@ -636,6 +636,13 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
         throw std::logic_error("prompt cache: the payload was trimmed for a skip of " + std::to_string(*planned_skip) +
                                " tokens, but the engine keeps " + std::to_string(skip_count));
     }
+    // A fully cached prompt leaves nothing to prefill, and _chunked_insert then
+    // computes zero chunks and returns a default-constructed (empty) logits
+    // buffer straight into sampler->sample(). Re-prefill instead.
+    if (skip_count == tokens.size()) {
+        clear_context();
+        skip_count = 0;
+    }
     tokens.erase(tokens.begin(), tokens.begin() + skip_count);
 
     if (this->total_tokens + tokens.size() >= this->MAX_L){
