@@ -125,7 +125,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Build and run the HTTP guard test
         run: |
           cmake -S src/test/http_guard -B build-http-guard -DCMAKE_BUILD_TYPE=Release
