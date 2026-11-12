@@ -86,6 +86,10 @@ public:
     std::mt19937_64 rng_{};
     bool use_optimized_sampling = true;
 
+    // scratch for sampler_sort_all_apply(), sized on first use
+    std::vector<uint64_t> sort_keys_;
+    std::vector<uint64_t> sort_tmp_;
+
     /// \brief Constructor
     /// \param in_features the input features
     /// \param config the configuration
@@ -133,6 +137,13 @@ public:
                       sample_logprobs_t* logprobs = nullptr);
 
     void sampler_topk_apply(int k);
+
+    /// \brief top-k off: the list sampler_topk_apply(in_features) gives, in the same order, by a radix sort
+    /// \param min_p when in (0, 1], only the head of that list sampler_minp_apply(min_p) would keep. Callers pass
+    ///        0 while top-p is on: its normaliser sums the whole list, in order.
+    /// \return false, leaving top_k_logits alone, when a NaN logit leaves the order to the heap's internals
+    /// \note A heap sort of a 150k-260k vocabulary on every token is most of the cost of sampling with top-k off.
+    bool sampler_sort_all_apply(float min_p);
     void sampler_topp_apply(float p);
     void sampler_minp_apply(float p);
     void sampler_temp_apply(float temp);
