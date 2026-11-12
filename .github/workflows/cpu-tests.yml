@@ -118,6 +118,31 @@ jobs:
           cmake --build build-chat-tools -j"$(nproc)"
           ctest --test-dir build-chat-tools --output-on-failure
 
+  # ignore_eos (AutoModel::_sample, src/common/AutoModel/automodel.cpp): with a grammar that allows only EOS, the
+  # request's ignore_eos samples a non-EOS token and drops the constraint. Stubbed runtime, CPU only, no NPU.
+  ignore-eos:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # the grammar engine automodel.cpp links, and the headers it builds against; nothing else is needed
+      - name: Checkout xgrammar
+        run: |
+          for attempt in 1 2 3; do
+            git submodule update --init --depth 1 third_party/xgrammar &&
+              git -C third_party/xgrammar submodule update --init --depth 1 3rdparty/dlpack && exit 0
+            echo "Submodule fetch failed (attempt ${attempt}), retrying..."
+            sleep 10
+          done
+          exit 1
+      - name: Build and run the ignore_eos test
+        run: |
+          cmake -S src/test/ignore_eos -B build-ignore-eos -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-ignore-eos -j"$(nproc)"
+          ctest --test-dir build-ignore-eos --output-on-failure
+
   # plan_prompt_reuse (src/include/prompt_reuse.hpp): how much of a prompt the engine keeps and which images /
   # audio clips a model drops from its payload, the one rule every vision model and _shared_insert share. CPU only.
   prompt-reuse:
