@@ -1,0 +1,70 @@
+# Development only (branch issue1001-test, not for PR): FLM#1001 long-context suite on one Windows
+# NPU sweep runner. Runs the Windows XRT portable built from this branch (run FLM_RUN: fix + CI engine
+# libs) through issue1001/ci_suite.py (plan "win", then "dflash"). Ordinary prefill/decode load only,
+# no hang tests. Pinned to xconucgpt1-22 (the only Windows sweep runner with a unique label); krck01
+# drops its jobs. Weights go in the runner's usual %USERPROFILE%\.flm. Triggered by a push whose head
+# commit message contains "run-win" (and "dflash" for qwen3.8-dflash2).
+name: issue1001-win
+
+on:
+  push:
+    branches: [issue1001-test]
+
+concurrency: issue1001-win
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  suite:
+    if: contains(github.event.head_commit.message, 'run-win')
+    runs-on: [self-hosted, windows, x64, npu, sweep, gpt]
+    timeout-minutes: 300
+    defaults: { run: { shell: powershell } }
+    env:
+      WANT: xconucgpt1-22-flm-sweep
+      FLM_RUN: '43309643541'
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Guard
+        run: |
+          if ($env:RUNNER_NAME -ne $env:WANT) { Write-Host "wrong runner $env:RUNNER_NAME"; exit 1 }
+          $m = Join-Path $env:USERPROFILE ".flm"
+          New-Item -ItemType Directory -Force $m | Out-Null
+          [System.IO.File]::AppendAllText($env:GITHUB_ENV, "FLM_MODEL_PATH=$m`n")
+          Get-CimInstance Win32_OperatingSystem | Format-List TotalVisibleMemorySize, FreePhysicalMemory
+          Get-PSDrive C | Format-List Used, Free
+          Get-ChildItem $m -ErrorAction SilentlyContinue | Select-Object -First 40 Name
+      - name: Download the FLM portable build
+        uses: actions/download-artifact@v4
+        with:
+          name: fastflowlm-windows-25e570e3fca33c813c5397fd52225fad4fab8586
+          path: pkg
+          run-id: ${{ env.FLM_RUN }}
+          github-token: ${{ github.token }}
+      - name: Unpack
+        run: |
+          Get-ChildItem pkg
+          $zip = Get-ChildItem pkg -Filter *.zip | Select-Object -First 1
+          if ($zip) { Expand-Archive $zip.FullName flm } else { Copy-Item -Recurse pkg flm }
+          $exe = Get-ChildItem flm -Recurse -Filter flm.exe | Select-Object -First 1
+          Write-Host "flm.exe at $($exe.FullName)"
+          [System.IO.File]::AppendAllText($env:GITHUB_ENV, "FLM_EXE=$($exe.FullName)`n")
+          Get-ChildItem flm -Recurse -Filter qwen3_8mtp_npu.dll | Get-FileHash | Format-List Hash, Path
+      - name: qwen3.8-mtp suite
+        if: ${{ !contains(github.event.head_commit.message, 'dflash-only') }}
+        run: |
+          & $env:FLM_EXE pull qwen3.8-mtp:27b
+          python issue1001\ci_suite.py $env:FLM_EXE out win qwen3.8-mtp:27b
+      - name: qwen3.8-dflash2 suite
+        if: contains(github.event.head_commit.message, 'dflash')
+        run: |
+          & $env:FLM_EXE pull qwen3.8-dflash2:27b
+          python issue1001\ci_suite.py $env:FLM_EXE out dflash qwen3.8-dflash2:27b
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: issue1001-win-out
+          path: out
