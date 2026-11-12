@@ -13,7 +13,7 @@ updates:
       - "/"
       - "/.github/actions/*"
     schedule:
-      interval: "daily"
+      interval: "weekly"
       # Wait a week before adopting newly released action versions.
     cooldown:
       default-days: 7
