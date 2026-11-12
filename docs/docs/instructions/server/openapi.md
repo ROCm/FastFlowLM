@@ -56,7 +56,7 @@ The following endpoints are actively supported and maintained:
 - `v1/models`
 - `v1/chat/completions`
 - `v1/audio/transcriptions`
-- `v1/embeddings`
+- [`v1/embeddings`](../../models/embeddinggemma.md)
 
 ---
 

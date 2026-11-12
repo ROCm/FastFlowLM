@@ -610,6 +610,11 @@ class model_list {
 
                 for (auto& [size, model_info] : model_subset.items()) {
                     const std::string tag = model_type + ":" + size;
+                    if (flm::catalog::model_kind(model_info) == flm::catalog::kEmbeddingModelKind) {
+                        if (!entry_supports(model_info, tag)) unsupported_sizes.push_back(size);
+                        else model_info.erase("supported_platforms");
+                        continue;
+                    }
                     const std::string backend = model_info.value(
                         flm::backend::kBackendKey,
                         backend_for_family(model_type));

@@ -122,7 +122,7 @@ MISSING = [
     ("/api/chat", {"model": "x", "messages": "hi"}, "messages"),
     ("/api/embeddings", {}, "model"),
     ("/api/embeddings", {"model": "x"}, "input"),
-    ("/api/embeddings", {"model": "x", "input": [1, 2]}, "input"),
+    ("/api/embeddings", {"model": "x", "input": []}, "input"),
     ("/v1/embeddings", {"input": "hi"}, "model"),
 ]
 

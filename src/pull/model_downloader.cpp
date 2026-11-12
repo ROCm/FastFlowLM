@@ -46,6 +46,7 @@ bool is_hex_revision(const std::string& revision) {
 ///       "model_info_key"; everything else is keyed by its tag.
 nlohmann::json load_model_file_records(const nlohmann::json& model_info,
                                        const std::string& model_tag) {
+    if (model_info.contains("file_records")) return model_info.at("file_records");
     const std::string key = model_info.value("model_info_key", model_tag);
     std::ifstream stream(utils::find_model_info());
     if (!stream.is_open()) {
