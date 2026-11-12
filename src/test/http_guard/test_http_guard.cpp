@@ -129,6 +129,8 @@ void test_origins() {
     CHECK(!origin_allowed(p, "http://127.0.0.1.evil.example"));
     CHECK(!origin_allowed(p, "null"));
     CHECK(!origin_allowed(p, "http://192.168.1.10:3000"));
+    CHECK(!origin_allowed(p, "http://0.0.0.0:3000"));  // Host accepts it; an Origin does not
+    CHECK(!origin_allowed(p, "http://[::]:3000"));
     CHECK(origin_allowed(p, "chrome-extension://abcdefghijklmnop"));
     CHECK(origin_allowed(p, "moz-extension://1234-5678"));
     // malformed origins a browser never sends: userinfo, a path, a non-numeric port, CR/LF
@@ -169,6 +171,12 @@ void test_hosts() {
     CHECK(host_allowed(p, "mybox:52625"));
     CHECK(host_allowed(p, "mybox.local"));
     CHECK(host_allowed(p, "printer.internal"));
+    CHECK(host_allowed(p, "0.0.0.0"));
+    CHECK(host_allowed(p, "0.0.0.0:52625"));
+    CHECK(host_allowed(p, "[::]:52625"));
+    CHECK(host_allowed(p, "[::]"));
+    CHECK(host_allowed(p, "::"));
+    CHECK(!host_allowed(p, "0.0.0.1"));
     CHECK(!host_allowed(p, "evil.example"));
     CHECK(!host_allowed(p, "evil.example:52625"));
     CHECK(!host_allowed(p, "172.32.0.1"));

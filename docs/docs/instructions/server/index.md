@@ -158,7 +158,7 @@ flm serve --cors 0
 ```
 
 > ⚠️ **Default:** CORS headers are **enabled** (`--cors 1`) for the allowed origins.  
-> 🔒 **Host check:** when the server listens on a loopback address (the default, `127.0.0.1`), it also refuses a request whose `Host` header names another machine, which blocks DNS rebinding. Local names, private-network addresses, `*.local`, `*.internal` (such as `host.docker.internal`) and this machine's name are accepted. Behind a tunnel or reverse proxy that keeps its own host name, add its origin, e.g. `--cors-origins "https://abc.example.app"`. `"*"` turns this check off too.  
+> 🔒 **Host check:** when the server listens on a loopback address (the default, `127.0.0.1`), it also refuses a request whose `Host` header names another machine, which blocks DNS rebinding. Local names, the unspecified address (`0.0.0.0`, `[::]`), private-network addresses, `*.local`, `*.internal` (such as `host.docker.internal`) and this machine's name are accepted. Behind a tunnel or reverse proxy that keeps its own host name, add its origin, e.g. `--cors-origins "https://abc.example.app"`. `"*"` turns this check off too.  
 > 📄 **Local files:** a page opened from a file in a browser sends `Origin: null`, which is refused; allow it with `--cors-origins "null"`.  
 > 🔒 **Security tip:** keep the allowed origins short, and restrict access at your proxy if your server is exposed beyond localhost (127.0.0.1).
 
