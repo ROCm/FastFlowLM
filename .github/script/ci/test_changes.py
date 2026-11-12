@@ -228,6 +228,44 @@ class Decide(unittest.TestCase):
         d = changes.decide([changes.MODEL_LIST], git, both)
         self.assertEqual((d.families, d.suites_value(), d.runs_hipep()), ({"lfm2"}, "chat,prefix_cache", True))
 
+    def test_backend_key_overrides_the_oga_hipep_suffix(self):
+        base = catalog(**{"gemma3-oga-hipep__4b": ("Gemma3-4B_gpuep", "gemma3"), "lfm2__1b": ("LFM2", "lfm2")})
+
+        def outcome(base, head):
+            git = FakeGit(base={changes.MODEL_LIST: base}, head={changes.MODEL_LIST: head})
+            d = changes.decide([changes.MODEL_LIST], git, head)
+            return d.families, d.suites_value()
+
+        # An -oga-hipep entry moved to an NPU backend runs on the NPU, and
+        # Test Windows HIPEP still runs, since it ran there before.
+        head = json.loads(base)
+        head["models"]["gemma3-oga-hipep"]["4b"]["backend"] = "flm"
+        moved = json.dumps(head)
+        self.assertEqual(outcome(base, moved)[0], {"gemma3"})
+        self.assertNotEqual(outcome(base, moved)[1], "none")
+        git = FakeGit(base={changes.MODEL_LIST: base}, head={changes.MODEL_LIST: moved})
+        self.assertTrue(changes.decide([changes.MODEL_LIST], git, moved).runs_hipep())
+        # And an edit to it, once there, names its family too.
+        head["models"]["gemma3-oga-hipep"]["4b"]["default_context_length"] = 4096
+        self.assertEqual(outcome(moved, json.dumps(head))[0], {"gemma3"})
+        # An entry that names the oga-hipep backend runs on the GPU whatever its name.
+        head = json.loads(base)
+        head["models"]["lfm2"]["1b"]["backend"] = "oga-hipep"
+        self.assertEqual(outcome(json.dumps(head), json.dumps(head).replace("LFM2", "LFM2b")),
+                         (set(), "none"))
+
+    def test_model_info_of_an_entry_moved_off_oga_hipep_names_its_family(self):
+        base = catalog(**{"gemma3-oga-hipep__4b": ("x", "gemma3"), "lfm2__1b": ("y", "lfm2")})
+        head = json.loads(base)
+        head["models"]["gemma3-oga-hipep"]["4b"]["backend"] = "flm"
+        head = json.dumps(head)
+        git = FakeGit(base={changes.MODEL_LIST: base, changes.MODEL_INFO: '{}'},
+                      head={changes.MODEL_LIST: head, changes.MODEL_INFO: '{"gemma3-oga-hipep:4b": 2}'})
+        d = changes.decide([changes.MODEL_INFO], git, head)
+        self.assertEqual(d.families, {"gemma3"})
+        self.assertNotEqual(d.suites_value(), "none")
+        self.assertTrue(d.runs_hipep())
+
     def test_catalog_fields_outside_models_run_every_suite(self):
         base = catalog(qwen3__0_6b=("Qwen3-0.6B-NPU2", "qwen3"), lfm2__1b=("LFM2", "lfm2"))
 
