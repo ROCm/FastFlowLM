@@ -134,6 +134,21 @@ jobs:
           cmake --build build-prefix-slot-cache -j"$(nproc)"
           ctest --test-dir build-prefix-slot-cache --output-on-failure
 
+  # Sampler (src/common/modules/sampler.cpp): ties, top-k, tiny temperatures, seeds, penalties and the top-p/min-p
+  # distributions, on the scalar build and on the -DUSEAVX2=1 build the NPU test targets use. CPU only.
+  sampler:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and run the sampler tests
+        run: |
+          cmake -S src/test/sampler -B build-sampler -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-sampler -j"$(nproc)"
+          ctest --test-dir build-sampler --output-on-failure
+
   # image_raw (src/include/image/raw_rgb8.hpp): request parsing, the --allow-raw-path file read (confined to the
   # directory, also against a link swapped in mid-request), and the request log that keeps frame data out
   # (src/include/utils/json_log.hpp). CPU only.

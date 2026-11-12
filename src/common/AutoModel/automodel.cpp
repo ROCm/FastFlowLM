@@ -1383,14 +1383,6 @@ void AutoModel::set_frequency_penalty(float frequency_penalty) {
     this->sampler->freq_penalty = frequency_penalty;
 }
 
-/// \brief Set the frequency penalty window
-/// \param frequency_penalty_window the frequency penalty window
-/// \note The function will set the frequency penalty window
-/// \note The function will check if the frequency penalty window is valid
-void AutoModel::set_frequency_penalty_window(int frequency_penalty_window) {
-    this->sampler->freq_penalty_window = frequency_penalty_window;
-}
-
 /// \brief Set the penalty window
 /// \param penalty_window the frequency penalty window
 /// \note The function will set the penalty window

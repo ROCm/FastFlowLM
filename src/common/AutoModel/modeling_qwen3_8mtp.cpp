@@ -454,10 +454,10 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
 
     stop_reason_t reason = EOT_DETECTED;
 
-    // Always on. Acceptance is an exact compare against the base model's
-    // argmax, so this is only truly correct under greedy sampling -- if the
-    // sampler is later changed (via /set or REST params) speculation still
-    // runs and silently produces greedy output instead. A checkpoint with no
+    // On for greedy requests only. Acceptance is an exact compare against the base model's
+    // argmax, so speculation can only reproduce greedy sampling: with a temperature above 0 (and
+    // top_k above 1) it would ignore the requested distribution and the penalties, so such a request
+    // decodes token by token through _sample() instead. A checkpoint with no
     // MTP head is unaffected: speculate() just returns {} every step and
     // everything falls through to the ordinary path below.
     // Under a decoding constraint speculate() would commit drafts the constraint's mask never saw, so a constrained
@@ -473,9 +473,11 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
     // A constrained request still speculates when the built-in engine can hand each verify row to the constraint
     // (set_speculation_chooser) and the sampler is greedy, which is all speculation can reproduce.
     auto* mtp_engine = dynamic_cast<qwen3_8mtp_npu*>(this->lm_engine);
-    const bool greedy = this->sampler && (this->sampler->top_k == 1 || this->sampler->temperature <= 0.0f);
+    // the sampler's own rule: a temperature below 1e-6 is greedy (sampler_temp_apply)
+    const bool greedy = this->sampler && (this->sampler->top_k == 1 || this->sampler->temperature < 1e-6f);
     const bool constrained_spec = meta_info.constraint && mtp_engine != nullptr && greedy;
     const bool spec_enabled = this->lm_engine->supports_speculation() &&
+        greedy &&
         (!meta_info.constraint || constrained_spec) &&
         has_speculation_logits &&
         !(no_spec != nullptr && no_spec[0] != '\0' && std::strcmp(no_spec, "0") != 0);

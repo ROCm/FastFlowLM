@@ -18,7 +18,6 @@
 /// \param top_p the top p
 /// \param rep_penalty the rep penalty
 /// \param freq_penalty the freq penalty
-/// \param rep_penalty_window the rep penalty window
 typedef struct sampler_config_{
     int top_k = 40;
     float top_p = 0.9f;
@@ -27,8 +26,6 @@ typedef struct sampler_config_{
     float rep_penalty = 1.0f;
     float freq_penalty = 0.0f;
     float pre_penalty = 0.0f;
-    int rep_penalty_window = 64;
-    int freq_penalty_window = 64;  // Window size for frequency penalty
     int repeat_last_n = 64;
     bool use_optimized_sampling = true;
     bool has_rng_seed = false;
@@ -82,14 +79,11 @@ public:
     
     // Ring buffer for frequency tracking
     std::deque<int> token_history;
-    size_t freq_penalty_window;
-    size_t rep_penalty_window;
     size_t repeat_last_n;
     
     std::unordered_map<int, int> token_counts_sparse;
 
     std::mt19937_64 rng_{};
-    std::uniform_real_distribution<float> uniform_dist_{0.0f, 1.0f};
     bool use_optimized_sampling = true;
 
     /// \brief Constructor
@@ -100,6 +94,12 @@ public:
 
     /// \brief Restart the random generator from seed
     void set_seed(uint64_t seed);
+
+    /// \brief The next uniform draw in [0, 1)
+    /// \note (mt19937_64() >> 40) * 2^-24. The standard fixes the engine but not
+    ///       std::uniform_real_distribution, so this is what makes a seed give the same
+    ///       sequence on every compiler and standard library.
+    float next_uniform();
 
     /// \brief Change the penalty window
     /// \param n how many of the last sampled tokens the penalties look at, 0 turns them off

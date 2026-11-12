@@ -575,10 +575,6 @@ public:
 	/// \param frequency_penalty the frequency penalty
 	void set_frequency_penalty(float frequency_penalty);
 
-	/// \brief Set the frequency penalty window
-	/// \param frequency_penalty_window the frequency penalty window
-	void set_frequency_penalty_window(int frequency_penalty_window);
-
 	/// \brief Set the penalty window
 	/// \param penalty_window how many generated tokens the penalties look at:
 	///        -1 the whole reply, 0 penalties off

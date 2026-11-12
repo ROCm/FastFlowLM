@@ -250,8 +250,6 @@ Sampler::Sampler(int features, sampler_config& config)
       freq_penalty(config.freq_penalty), pre_penalty(config.pre_penalty),
       top_k(config.top_k), top_p(config.top_p), min_p(config.min_p),
       temperature(config.temperature), total_tokens(0),
-      freq_penalty_window(config.freq_penalty_window),
-      rep_penalty_window(config.rep_penalty_window),
       repeat_last_n(config.repeat_last_n),
       use_optimized_sampling(config.use_optimized_sampling) {
     logits.resize(1); counters.resize(1); token_positions.resize(1, -1);
