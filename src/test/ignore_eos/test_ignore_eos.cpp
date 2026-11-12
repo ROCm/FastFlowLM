@@ -1,14 +1,16 @@
 /// \file test_ignore_eos.cpp
 /// \brief Grammar that allows only EOS, with ignore_eos set, must sample a
-///        non-EOS token and drop the constraint. No NPU.
+///        non-EOS token and drop the constraint, from an engine buffer
+///        (_sample) and from a speculative verify row (_sample_row). No NPU.
 #include "AutoModel/automodel.hpp"
 #include "chat/decode_constraint.hpp"
 
 #include <cstdio>
 #include <memory>
+#include <vector>
 
 // The real tokenizer links the Rust tokenizers library, and the real builtin
-// registry pulls in every NPU engine. This test only calls _sample, so both
+// registry pulls in every NPU engine. This test only samples, so both
 // stay empty, the same way src/test/model_backend stubs the registry.
 Tokenizer::Tokenizer(const std::string&) : is_doubled_encoded(false) {}
 Tokenizer::~Tokenizer() = default;
@@ -63,6 +65,18 @@ public:
     }
 
     int sample(buffer<bf16>& logits, chat_meta_info_t& meta, int vocab, int eos) {
+        setup(vocab, eos);
+        return this->_sample(logits, meta);
+    }
+
+    /// \brief A speculative verify row, `ahead` tokens into its cycle.
+    int sample_row(const float* row, chat_meta_info_t& meta, int vocab, int eos, int ahead) {
+        setup(vocab, eos);
+        return this->_sample_row(row, vocab, meta, ahead);
+    }
+
+private:
+    void setup(int vocab, int eos) {
         sampler_config config;
         config.top_k = 1;
         config.top_p = 1.0f;
@@ -74,7 +88,6 @@ public:
         config.repeat_last_n = 0;
         this->eos_token_ids = {eos};
         this->sampler = std::make_unique<Sampler>(vocab, config);
-        return this->_sample(logits, meta);
     }
 };
 
@@ -112,6 +125,46 @@ int main() {
     }
     if (meta.constraint != nullptr) {
         std::printf("FAIL: constraint was kept after an EOS-only grammar\n");
+        failures++;
+    }
+
+    // The same from an fp32 verify row (speculative sampling).
+    std::vector<float> row(static_cast<size_t>(kVocab));
+    for (int i = 0; i < kVocab; ++i) {
+        row[static_cast<size_t>(i)] = static_cast<float>(logits[static_cast<size_t>(i)]);
+    }
+    chat_meta_info_t row_meta;
+    row_meta.ignore_eos = true;
+    row_meta.min_tokens = 0;
+    row_meta.generated_tokens = 0;
+    row_meta.logprobs_top_n = -1;
+    row_meta.constraint = std::make_shared<eos_only_constraint>(kVocab, kEos);
+    const int row_token = model.sample_row(row.data(), row_meta, kVocab, kEos, 0);
+    if (row_token != kPreferred) {
+        std::printf("FAIL: verify row sampled %d, expected non-EOS token %d\n", row_token, kPreferred);
+        failures++;
+    }
+    if (row_meta.constraint != nullptr) {
+        std::printf("FAIL: verify row kept the constraint after an EOS-only grammar\n");
+        failures++;
+    }
+
+    // min_tokens on a verify row counts the rows before it in the cycle, which
+    // generated_tokens does not include yet: 3 counted + 1 ahead < 5 masks EOS,
+    // 3 + 2 does not.
+    chat_meta_info_t min_meta;
+    min_meta.ignore_eos = false;
+    min_meta.min_tokens = 5;
+    min_meta.generated_tokens = 3;
+    min_meta.logprobs_top_n = -1;
+    const int under_min = model.sample_row(row.data(), min_meta, kVocab, kEos, 1);
+    if (under_min != kPreferred) {
+        std::printf("FAIL: min_tokens: row 1 sampled %d, expected %d\n", under_min, kPreferred);
+        failures++;
+    }
+    const int at_min = model.sample_row(row.data(), min_meta, kVocab, kEos, 2);
+    if (at_min != kEos) {
+        std::printf("FAIL: min_tokens: row 2 sampled %d, expected EOS %d\n", at_min, kEos);
         failures++;
     }
 

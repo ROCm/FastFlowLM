@@ -161,6 +161,17 @@ public:
     int sample(buffer<bf16>& x, const std::vector<uint32_t>* allowed = nullptr,
                sample_logprobs_t* logprobs = nullptr);
 
+    /// \brief Sample the token from fp32 logits, the same way as the bf16 overload
+    /// \param x in_features logits, only read
+    /// \note For logits that are not an engine's output buffer, such as the rows
+    ///       of a speculative verify pass.
+    int sample(const float* x, const std::vector<uint32_t>* allowed = nullptr,
+               sample_logprobs_t* logprobs = nullptr);
+
+    /// \brief sample()'s greedy and general paths, once this->logits holds the raw logits
+    int greedy_from_logits(const std::vector<uint32_t>* allowed, sample_logprobs_t* logprobs);
+    int sample_from_logits(const std::vector<uint32_t>* allowed, sample_logprobs_t* logprobs);
+
     /// \brief Push every token the bitmask does not allow to -inf in this->logits
     void sampler_allowed_apply(const std::vector<uint32_t>* allowed);
 

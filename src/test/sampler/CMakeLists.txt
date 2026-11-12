@@ -26,7 +26,8 @@ set(SAMPLER_TEST_CASES
     TestTopPAndMinPDistributions
     TestTopKOffMatchesTheHeapPath
     TestSignedZerosTieByIdWithTopKOff
-    TestNaNLogitFallsBackToTheHeapPath)
+    TestNaNLogitFallsBackToTheHeapPath
+    TestFloatRowSamplesLikeBf16)
 
 function(add_sampler_test name)
     add_executable(${name} test_sampler.cpp "${FLM_SOURCE_DIR}/common/modules/sampler.cpp")

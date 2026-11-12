@@ -430,6 +430,39 @@ void TestNaNLogitFallsBackToTheHeapPath() {
     }
 }
 
+// sample(const float*) is what a speculative verify row is sampled with: on the same logits, seed and config it must
+// give the same tokens as sample(buffer<bf16>&), penalty history and mask included, on both the greedy and the
+// general path.
+void TestFloatRowSamplesLikeBf16() {
+    Entries set;
+    for (int i = 0; i < 12; i++) set.push_back({i * 3, 2.0f - 0.25f * i});
+    auto x = logits_of(40, set);
+    std::vector<float> row(40);
+    for (int i = 0; i < 40; i++) row[i] = float(x[i]);
+    std::vector<uint32_t> allowed(2, 0xFFFFFFFFu);
+    allowed[0] &= ~(1u << 3);  // token 3 is masked out
+    for (int top_k : {1, 8}) {
+        sampler_config c = config_of(top_k, 0.9f, 7);
+        c.top_p = 0.95f;
+        c.min_p = 0.02f;
+        c.repeat_last_n = 16;
+        c.rep_penalty = 1.1f;
+        c.freq_penalty = 0.1f;
+        c.pre_penalty = 0.3f;
+        Sampler a(40, c);
+        Sampler b(40, c);
+        for (int i = 0; i < 300; i++) {
+            const std::vector<uint32_t>* mask = (i % 3 == 0) ? &allowed : nullptr;
+            const int want = a.sample(x, mask);
+            const int got = b.sample(row.data(), mask);
+            CHECK(got == want, "top_k=%d draw %d: fp32 row gave %d, bf16 buffer %d", top_k, i, got, want);
+            CHECK(mask == nullptr || got != 3, "top_k=%d draw %d: sampled the masked token", top_k, i);
+            if (got != want) break;
+        }
+        CHECK(a.token_history == b.token_history, "top_k=%d: penalty histories differ", top_k);
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -448,6 +481,7 @@ int main(int argc, char** argv) {
         {"TestTopKOffMatchesTheHeapPath", TestTopKOffMatchesTheHeapPath},
         {"TestSignedZerosTieByIdWithTopKOff", TestSignedZerosTieByIdWithTopKOff},
         {"TestNaNLogitFallsBackToTheHeapPath", TestNaNLogitFallsBackToTheHeapPath},
+        {"TestFloatRowSamplesLikeBf16", TestFloatRowSamplesLikeBf16},
     };
     int failed_tests = 0;
 #if USEAVX2

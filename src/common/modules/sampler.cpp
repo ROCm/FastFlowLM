@@ -484,19 +484,7 @@ int Sampler::sample_greedy(buffer<bf16>& x, const std::vector<uint32_t>* allowed
             this->logits[i] = x[i];
         }
         #endif
-        if (logprobs != nullptr) {
-            raw_logprobs_apply(*logprobs);
-        }
-        if (penalties_active) {
-            sampler_penalty_apply_sparse();
-        }
-        sampler_allowed_apply(allowed);
-        for (int i = 0; i < in_features; i++) {
-            if (this->logits[i] > best) {
-                best = this->logits[i];
-                best_id = i;
-            }
-        }
+        return greedy_from_logits(allowed, logprobs);
     }
     else {
         // Nothing rewrites the logits, so scan them where they lie: no
@@ -549,6 +537,26 @@ int Sampler::sample_greedy(buffer<bf16>& x, const std::vector<uint32_t>* allowed
     }
 
     // callers that inspect the surviving candidates still get a consistent view
+    this->top_k_logits.assign(1, logits_t{ best, best_id, 1.0f });
+    ring_buffer_update_sparse(best_id);
+    return best_id;
+}
+
+int Sampler::greedy_from_logits(const std::vector<uint32_t>* allowed, sample_logprobs_t* logprobs) {
+    if (logprobs != nullptr) {
+        raw_logprobs_apply(*logprobs);
+    }
+    // a no-op without penalties
+    sampler_penalty_apply_sparse();
+    sampler_allowed_apply(allowed);
+    float best = -std::numeric_limits<float>::infinity();
+    int best_id = 0;
+    for (int i = 0; i < in_features; i++) {
+        if (this->logits[i] > best) {
+            best = this->logits[i];
+            best_id = i;
+        }
+    }
     this->top_k_logits.assign(1, logits_t{ best, best_id, 1.0f });
     ring_buffer_update_sparse(best_id);
     return best_id;
@@ -645,6 +653,18 @@ int Sampler::sample(buffer<bf16>& x, const std::vector<uint32_t>* allowed, sampl
     }
     #endif
 
+    return sample_from_logits(allowed, logprobs);
+}
+
+int Sampler::sample(const float* x, const std::vector<uint32_t>* allowed, sample_logprobs_t* logprobs) {
+    std::copy(x, x + in_features, this->logits.begin());
+    if (this->top_k == 1) {
+        return greedy_from_logits(allowed, logprobs);
+    }
+    return sample_from_logits(allowed, logprobs);
+}
+
+int Sampler::sample_from_logits(const std::vector<uint32_t>* allowed, sample_logprobs_t* logprobs) {
     if (logprobs != nullptr) {
         raw_logprobs_apply(*logprobs);
     }

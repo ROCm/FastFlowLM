@@ -429,6 +429,20 @@ protected:
 	/// \return the sampled token, already reported to the constraint
 	int _sample(buffer<bf16>& logits, chat_meta_info_t& meta_info);
 
+	/// \brief Sample one row of fp32 logits the way _sample() samples an engine's output
+	/// \param row vocab logits, only read
+	/// \param ahead tokens taken before this one that meta_info.generated_tokens does not count yet (min_tokens)
+	/// \return the sampled token, already reported to the constraint
+	/// \note For the rows of a speculative verify pass. Records no logprob: the caller reports the committed tokens'
+	///       from the same rows.
+	int _sample_row(const float* row, int vocab, chat_meta_info_t& meta_info, int ahead);
+
+	/// \brief What _sample() and _sample_row() share: the EOS and constraint masks, the draw, the constraint update
+	/// \param at (i) -> logit i; draw (mask or null, raw logprobs or null) -> the sampler's token
+	template <typename At, typename Draw>
+	int _sample_masked(std::size_t n, At at, Draw draw, chat_meta_info_t& meta_info, bool no_eos,
+	                   sample_logprobs_t* raw);
+
 	/// \brief Add a token's entry to meta_info.logprobs
 	/// \param token_logit the token's raw logit
 	/// \param raw its distribution's normaliser and top tokens; the top tokens are moved out

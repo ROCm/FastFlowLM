@@ -101,7 +101,7 @@ Penalties also act on reasoning tokens, and on tokens that a `tool_choice` or `r
 
 The [log probabilities](https://fastflowlm.com/docs/instructions/server/openapi/#-example-token-log-probabilities) a response reports are taken **before** any penalty is applied.
 
-> ⚠️ **`qwen3.8-mtp:27b` and `qwen3.8-dflash2:27b`:** tokens accepted from the speculative draft are compared with the model's own most likely token and skip the sampler. Penalties, `temperature`, `top_k` and `top_p` only shape the tokens the model samples itself, and drafted tokens don't enter the penalty window.
+> ⚠️ **`qwen3.8-mtp:27b` and `qwen3.8-dflash2:27b`:** in a greedy request (`temperature` 0 or `top_k` 1), tokens accepted from the speculative draft are compared with the model's own most likely token and skip the sampler: penalties only shape the tokens the model picks itself, and drafted tokens don't enter the penalty window. A request that samples goes through the sampler at every position, drafted or not, so its penalties, `temperature`, `top_k`, `top_p` and `min_p` apply to every token.
 
 ---
 
