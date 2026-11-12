@@ -135,6 +135,8 @@ struct PackageOptions {
     std::optional<int> bos_token_id;
     /// \brief write an `eos_token_id` array, which the real package does NOT
     std::optional<int> eos_token_id;
+    /// rief write `vocab_size` to config.json so the sampler has a vocabulary; unset keeps it 0
+    std::optional<int> vocab_size;
 };
 
 /// \brief a temporary on-disk package with just enough files for Gemma4e::
@@ -158,7 +160,9 @@ public:
         path_ = std::filesystem::temp_directory_path() /
             ("flm-taskA3-" + std::to_string(++serial));
         std::filesystem::create_directories(path_);
-        Write(path_ / "config.json", nlohmann::json::object());
+        nlohmann::json config = nlohmann::json::object();
+        if (options.vocab_size) { config["vocab_size"] = *options.vocab_size; }
+        Write(path_ / "config.json", config);
         nlohmann::json tokenizer_config;
         tokenizer_config["bos_token"] = kRealBosToken;
         tokenizer_config["eos_token"] = kRealEosToken;
@@ -317,6 +321,10 @@ public:
     bool has_bos() const { return this->has_bos_token; }
     int bos_id() const { return this->bos_token_id; }
     const std::vector<int>& eos_ids() const { return this->eos_token_ids; }
+    bool conversational() const { return this->conversational_mode; }
+    int image_budget() const { return this->image_softtoken_budget; }
+    int sampler_top_k() const { return this->sampler->top_k; }
+    int sampler_vocab() const { return this->sampler->in_features; }
 
     mutable int engine_config_calls = 0;
 };
@@ -436,6 +444,43 @@ void TestTextGenerationNeverAsksForEngineConfig() {
     TEST_REQUIRE(model->engine_config_calls == 0);
 }
 
+void TestRequestSettingsInModelFieldsFallBackToTheLoadedValues() {
+    // WP-04: conversational_mode and image_max_tokens live in Gemma4e's own fields, so the base
+    // class's sampler/think reset does not reach them; the model's save/restore hooks do.
+    TempPackage package;
+    FactoryScope scope;
+    auto model = MakeGemma4eWithStubEngineForTest(package);
+    model->save_request_settings();
+    const bool loaded_conversational = model->conversational();
+    const int loaded_budget = model->image_budget();
+
+    TEST_REQUIRE(model->configure_parameter("conversational_mode", !loaded_conversational));
+    TEST_REQUIRE(model->configure_parameter("image_max_tokens", 1120));
+    TEST_REQUIRE(model->conversational() != loaded_conversational);
+    TEST_REQUIRE(model->image_budget() == 1120);
+
+    model->restore_request_settings();
+    TEST_REQUIRE(model->conversational() == loaded_conversational);
+    TEST_REQUIRE(model->image_budget() == loaded_budget);
+}
+
+void TestTopKOfZeroOrMinusOneTurnsTopKOff() {
+    TempPackage package(PackageOptions{/*bos_token_id=*/std::nullopt, /*eos_token_id=*/std::nullopt, /*vocab_size=*/32});
+    FactoryScope scope;
+    auto model = MakeGemma4eWithStubEngineForTest(package);
+    const int vocab = model->sampler_vocab();
+    TEST_REQUIRE(vocab > 1);  // else "off" and "greedy" would be the same number
+    model->set_topk(1);
+    TEST_REQUIRE(model->sampler_top_k() == 1);
+    model->set_topk(0);
+    TEST_REQUIRE(model->sampler_top_k() == vocab);
+    model->set_topk(1);
+    model->set_topk(-1);
+    TEST_REQUIRE(model->sampler_top_k() == vocab);
+    model->set_topk(vocab + 100);
+    TEST_REQUIRE(model->sampler_top_k() == vocab);
+}
+
 }  // namespace
 
 int main() {
@@ -449,5 +494,8 @@ int main() {
              "TestEngineConfigOnAMismatchedEngineThrowsRatherThanReadingNull");
     RunTest(TestTextGenerationNeverAsksForEngineConfig,
              "TestTextGenerationNeverAsksForEngineConfig");
+    RunTest(TestRequestSettingsInModelFieldsFallBackToTheLoadedValues,
+             "TestRequestSettingsInModelFieldsFallBackToTheLoadedValues");
+    RunTest(TestTopKOfZeroOrMinusOneTurnsTopKOff, "TestTopKOfZeroOrMinusOneTurnsTopKOff");
     std::cout << "test_gemma4_frontend: PASS\n";
 }

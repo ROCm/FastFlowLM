@@ -46,6 +46,18 @@ jobs:
           cmake --build build-chat-continue -j"$(nproc)"
           ctest --test-dir build-chat-continue --output-on-failure
 
+  # top_k <= 0 turns top-k off (effective_top_k, src/include/modules/top_k.hpp). Header only, no NPU.
+  top-k:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Build and run the top-k test
+        run: |
+          cmake -S src/test/top_k -B build-top-k -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-top-k -j"$(nproc)"
+          ctest --test-dir build-top-k --output-on-failure
+
   # The HRX executable-cache key (src/include/hrx_cpp/hrx_cpp.hpp:
   # make_exe_key / compute_xclbin_digest): distinct xclbin images -> distinct
   # keys (including two images at a reused heap address), identical image ->

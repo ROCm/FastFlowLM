@@ -40,6 +40,14 @@ public:
         return chat_template_type_t::harmony;
     }
 
+    /// \brief request settings the model loaded with (see AutoModel::save_request_settings)
+    std::string loaded_reasoning_effort = "low";
+    void save_model_request_settings() override {
+        loaded_reasoning_effort = this->reasoning_effort;
+    }
+    void restore_model_request_settings() override {
+        this->configure_parameter("reasoning_effort", loaded_reasoning_effort);
+    }
     /// \brief Override configure_parameter to handle GPT-oss-specific parameters
     bool configure_parameter(std::string parameter_name, const std::any& value) override {
         if (parameter_name == "reasoning_effort") {

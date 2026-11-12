@@ -114,6 +114,14 @@ public:
     }
 
 
+    /// \brief request settings the model loaded with (see AutoModel::save_request_settings)
+    int loaded_image_softtoken_budget = 280;
+    void save_model_request_settings() override {
+        loaded_image_softtoken_budget = this->image_softtoken_budget;
+    }
+    void restore_model_request_settings() override {
+        this->image_softtoken_budget = loaded_image_softtoken_budget;
+    }
     /// \brief Configure a parameter with type-erased value
     /// \param parameter_name the name of the parameter
     /// \param value the value to set (can be any type)
