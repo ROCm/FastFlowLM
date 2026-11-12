@@ -12,6 +12,7 @@
 #include <algorithm>  // for std::sort
 #include <chrono>
 #include <cmath>      // for std::exp
+#include <cstring>    // for std::memcpy
 #include <limits>
 
 /// \brief Constructor
@@ -263,6 +264,83 @@ void Sampler::sampler_topk_apply(int k) {
         }
     }
     std::sort_heap(top.begin(), top.end(), ranks_before);
+}
+
+bool Sampler::sampler_sort_all_apply(float min_p) {
+    // One pass for the max and for NaN, tested on the bits: NaN has no place in ranks_before()'s order, and fast-math
+    // builds may assume it away.
+    float max_l = -std::numeric_limits<float>::infinity();
+    for (int i = 0; i < in_features; i++) {
+        uint32_t b;
+        std::memcpy(&b, &this->logits[i], sizeof b);
+        if ((b & 0x7FFFFFFFu) > 0x7F800000u) {
+            return false;
+        }
+        if (this->logits[i] > max_l) {
+            max_l = this->logits[i];
+        }
+    }
+    // where sampler_minp_apply() and softmax_with_topp_minp() cut: max_l is the sorted list's first logit
+    float floor = -std::numeric_limits<float>::infinity();
+    if (min_p > 0.0f && min_p <= 1.0f) {
+        floor = max_l + std::log(min_p);
+    }
+
+    // Key: the logit's bits mapped to an unsigned order and inverted, so the highest sorts first, above the token
+    // id. The LSD passes are stable and the keys go in by id, so equal logits stay lowest id first, as in
+    // ranks_before(). That compares floats, which cannot tell -0 from +0 (nor, with denormals flushed, a denormal
+    // from 0), so those all take the key of +0.
+    auto& keys = this->sort_keys_;
+    keys.resize(in_features);
+    size_t n = 0;
+    for (int i = 0; i < in_features; i++) {
+        const float v = this->logits[i];
+        if (!(v >= floor)) {
+            continue;
+        }
+        uint32_t b;
+        std::memcpy(&b, &v, sizeof b);
+        if (v == 0.0f) {
+            b = 0;
+        }
+        const uint32_t descending = (b & 0x80000000u) ? b : ~(b | 0x80000000u);
+        keys[n++] = (static_cast<uint64_t>(descending) << 32) | static_cast<uint32_t>(i);
+    }
+
+    // a histogram per key byte, then one scatter per byte that is not the same in every key
+    size_t hist[4][256] = {};
+    for (size_t j = 0; j < n; j++) {
+        for (int pass = 0; pass < 4; pass++) {
+            hist[pass][(keys[j] >> (32 + 8 * pass)) & 0xFF]++;
+        }
+    }
+    auto& tmp = this->sort_tmp_;
+    tmp.resize(in_features);
+    for (int pass = 0; pass < 4 && n > 0; pass++) {
+        const int shift = 32 + 8 * pass;
+        if (hist[pass][(keys[0] >> shift) & 0xFF] == n) {
+            continue;
+        }
+        size_t offset[256];
+        size_t sum = 0;
+        for (int d = 0; d < 256; d++) {
+            offset[d] = sum;
+            sum += hist[pass][d];
+        }
+        for (size_t j = 0; j < n; j++) {
+            tmp[offset[(keys[j] >> shift) & 0xFF]++] = keys[j];
+        }
+        keys.swap(tmp);
+    }
+
+    auto& top = this->top_k_logits;
+    top.clear();
+    top.reserve(n);
+    for (size_t j = 0; j < n; j++) {
+        const int id = static_cast<int>(static_cast<uint32_t>(keys[j]));
+        top.push_back(logits_t{ this->logits[id], id, 0.0f });
+    }
+    return true;
 }
 
 void Sampler::sampler_topp_apply(float p) {
@@ -572,16 +650,29 @@ int Sampler::sample(buffer<bf16>& x, const std::vector<uint32_t>* allowed, sampl
     }
     sampler_penalty_apply_sparse();
     sampler_allowed_apply(allowed);
-    sampler_topk_apply(this->top_k);
+
+    // The probabilities a softmax writes are read only by a top-p cut and by sample_from_probs(), and the softmax
+    // after temperature rewrites all of them. So the legacy softmaxes no top-p cut reads are skipped, as is
+    // softmax_with_topp_minp() with both cuts off, and with top-p off the sorted list is only needed down to the
+    // min-p cut. None of it changes a token, a candidate or a probability.
+    const bool top_p_on = this->top_p < 1.0f;
+    const bool min_p_on = this->min_p > 0.0f && this->min_p <= 1.0f;
+    const bool top_k_off = this->top_k <= 0 || this->top_k >= in_features;
+    if (!top_k_off || !sampler_sort_all_apply(top_p_on ? 0.0f : this->min_p)) {
+        sampler_topk_apply(this->top_k);
+    }
     if (this->use_optimized_sampling) {
-        softmax_with_topp_minp(this->top_p, this->min_p);
+        if (top_p_on || min_p_on) {
+            softmax_with_topp_minp(this->top_p, this->min_p);
+        }
         sampler_temp_apply(this->temperature);
         softmax_inplace();
     } else {
         // Legacy behavior is kept as the default for output compatibility.
-        softmax_inplace();
-        sampler_topp_apply(this->top_p);
-        softmax_inplace();
+        if (top_p_on) {
+            softmax_inplace();
+            sampler_topp_apply(this->top_p);
+        }
         sampler_minp_apply(this->min_p);
         sampler_temp_apply(this->temperature);
         softmax_inplace();

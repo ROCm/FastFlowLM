@@ -3,7 +3,10 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <functional>
+#include <limits>
+#include <random>
 #include <set>
 #include <string>
 #include <utility>
@@ -249,6 +252,184 @@ void TestTopPAndMinPDistributions() {
     }
 }
 
+// sample() as it was before top-k off got its own sort: the heap of sampler_topk_apply() over the whole vocabulary,
+// then every softmax of the two pipelines. Built from the sampler's own steps, so only sample() itself is compared.
+int reference_sample(Sampler& s, buffer<bf16>& x, const std::vector<uint32_t>* allowed) {
+    for (int i = 0; i < s.in_features; i++) s.logits[i] = x[i];
+    s.sampler_penalty_apply_sparse();
+    s.sampler_allowed_apply(allowed);
+    s.sampler_topk_apply(s.top_k);
+    if (s.use_optimized_sampling) {
+        s.softmax_with_topp_minp(s.top_p, s.min_p);
+        s.sampler_temp_apply(s.temperature);
+        s.softmax_inplace();
+    } else {
+        s.softmax_inplace();
+        s.sampler_topp_apply(s.top_p);
+        s.softmax_inplace();
+        s.sampler_minp_apply(s.min_p);
+        s.sampler_temp_apply(s.temperature);
+        s.softmax_inplace();
+    }
+    int t = s.sample_from_probs();
+    s.ring_buffer_update_sparse(t);
+    return t;
+}
+
+uint32_t bits_of(float f) {
+    uint32_t b;
+    std::memcpy(&b, &f, sizeof b);
+    return b;
+}
+
+// Same candidate list bit for bit (logits and probabilities) and the same history
+bool same_state(const Sampler& a, const Sampler& b) {
+    if (a.top_k_logits.size() != b.top_k_logits.size()) return false;
+    for (size_t i = 0; i < a.top_k_logits.size(); i++) {
+        const auto& p = a.top_k_logits[i];
+        const auto& q = b.top_k_logits[i];
+        if (p.token_id != q.token_id || bits_of(p.logits) != bits_of(q.logits) || bits_of(p.prob) != bits_of(q.prob)) {
+            return false;
+        }
+    }
+    return a.token_history == b.token_history;
+}
+
+void set_bits(buffer<bf16>& b, int id, uint16_t bits) { std::memcpy(&b[id], &bits, sizeof bits); }
+
+// Logits with many exact ties: bf16 keeps 8 bits of mantissa, and two patterns draw from a handful of values, -0 and
+// +0 among them.
+buffer<bf16> tied_logits(int vocab, int pattern, std::mt19937& rng) {
+    buffer<bf16> b(static_cast<size_t>(vocab));
+    std::normal_distribution<float> normal(0.0f, 3.0f);
+    const float few[6] = {2.0f, 1.0f, 0.0f, -0.0f, -1.0f, -6.0f};
+    for (int i = 0; i < vocab; i++) {
+        switch (pattern) {
+            case 0: b[i] = bf16(normal(rng)); break;
+            case 1: b[i] = bf16(few[rng() % 6]); break;
+            case 2: b[i] = bf16(0.0f); break;
+            default: b[i] = bf16(normal(rng) * 0.25f - 4.0f); break;  // flat: top-p keeps most of the vocabulary
+        }
+    }
+    if (pattern == 2) {
+        for (int i = 0; i < vocab; i += 3) set_bits(b, i, 0x8000);  // -0, tied with the +0 around it
+    }
+    return b;
+}
+
+struct SamplingCase {
+    float top_p, min_p, temperature;
+    bool optimized, penalties;
+};
+
+// A top-k-off spelling against the old heap path: same seed, same tokens, same candidate list, step by step.
+int compare_with_reference(int vocab, int steps, int pattern, const SamplingCase& sc, int top_k, bool masked,
+                           uint64_t seed) {
+    std::mt19937 rng(static_cast<uint32_t>(seed));
+    sampler_config c = config_of(top_k, sc.temperature, seed);
+    c.top_p = sc.top_p;
+    c.min_p = sc.min_p;
+    c.use_optimized_sampling = sc.optimized;
+    if (sc.penalties) {
+        c.repeat_last_n = 16;
+        c.rep_penalty = 1.3f;
+        c.freq_penalty = 0.1f;
+        c.pre_penalty = 0.2f;
+    }
+    Sampler fast(vocab, c);
+    sampler_config ref_c = c;
+    ref_c.top_k = vocab;  // what top-k off stands for
+    Sampler ref(vocab, ref_c);
+    for (int step = 0; step < steps; step++) {
+        auto x = tied_logits(vocab, pattern, rng);
+        std::vector<uint32_t> allowed((vocab + 31) / 32, 0xFFFFFFFFu);
+        if (masked) {
+            for (auto& w : allowed) w = static_cast<uint32_t>(rng());
+        }
+        const auto* mask = masked ? &allowed : nullptr;
+        const int got = fast.sample(x, mask);
+        const int want = reference_sample(ref, x, mask);
+        if (got != want || !same_state(fast, ref)) {
+            CHECK(false, "vocab %d pattern %d top_k %d top_p %g min_p %g T %g %s%s%s step %d: token %d, reference %d",
+                  vocab, pattern, top_k, sc.top_p, sc.min_p, sc.temperature, sc.optimized ? "optimized" : "legacy",
+                  sc.penalties ? " penalties" : "", masked ? " masked" : "", step, got, want);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// top_k <= 0 or >= the vocabulary sorts the whole vocabulary without the heap, and skips the softmaxes nothing
+// reads: none of it may change a token, a candidate or a probability.
+void TestTopKOffMatchesTheHeapPath() {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    std::vector<SamplingCase> cases;
+    for (bool optimized : {true, false}) {
+        for (float top_p : {1.0f, 0.95f, 0.5f, 0.0f, nan}) {
+            for (float min_p : {0.0f, 0.05f, 0.5f, 1.0f, 2.0f, nan}) {
+                for (float T : {0.0f, 0.7f, 1.3f}) {
+                    cases.push_back({top_p, min_p, T, optimized, (cases.size() % 3) == 0});
+                }
+            }
+        }
+    }
+    int failures = 0;
+    uint64_t seed = 1;
+    for (const auto& sc : cases) {
+        for (int pattern = 0; pattern < 4; pattern++) {
+            for (int vocab : {1000, 37}) {
+                for (int top_k : {0, -1, vocab, vocab + 5}) {
+                    failures += compare_with_reference(vocab, 4, pattern, sc, top_k, (seed % 4) == 1, seed);
+                    seed++;
+                    if (failures > 5) return;
+                }
+            }
+        }
+    }
+    // a real vocabulary size, fewer combinations: this is where the heap sort cost
+    const SamplingCase large[] = {{1.0f, 0.0f, 0.7f, true, false},  {0.9f, 0.0f, 0.7f, true, true},
+                                  {1.0f, 0.05f, 0.7f, true, false}, {0.95f, 0.05f, 1.0f, true, false},
+                                  {1.0f, 0.0f, 1.0f, false, true},  {0.9f, 0.1f, 0.8f, false, false}};
+    for (const auto& sc : large) {
+        for (int pattern = 0; pattern < 4; pattern++) {
+            failures += compare_with_reference(151936, 2, pattern, sc, 0, pattern == 3, seed++);
+        }
+    }
+}
+
+// -0 and +0 compare equal, so the lower id goes first whichever of them it holds
+void TestSignedZerosTieByIdWithTopKOff() {
+    for (bool minus_first : {true, false}) {
+        auto x = logits_of(1024, {});
+        set_bits(x, 3, minus_first ? 0x8000 : 0x0000);
+        set_bits(x, 5, minus_first ? 0x0000 : 0x8000);
+        auto c = config_of(0, 0.0f);
+        Sampler s(1024, c);
+        const int got = s.sample(x);
+        CHECK(got == 3, "%s at 3: top_k=0, temperature 0 returned %d, want 3", minus_first ? "-0" : "+0", got);
+        CHECK(s.top_k_logits.size() >= 2 && s.top_k_logits[1].token_id == 5, "%s at 3: the runner-up is not 5",
+              minus_first ? "-0" : "+0");
+    }
+}
+
+// A NaN logit has no place in the order: top-k off falls back to the heap path, and so still agrees with it.
+void TestNaNLogitFallsBackToTheHeapPath() {
+    std::mt19937 rng(5);
+    auto x = tied_logits(1000, 0, rng);
+    set_bits(x, 17, 0x7FC0);
+    auto c = config_of(0, 0.8f, 42);
+    c.top_p = 0.9f;
+    Sampler fast(1000, c);
+    sampler_config ref_c = c;
+    ref_c.top_k = 1000;
+    Sampler ref(1000, ref_c);
+    for (int i = 0; i < 8; i++) {
+        const int got = fast.sample(x);
+        const int want = reference_sample(ref, x, nullptr);
+        CHECK(got == want && same_state(fast, ref), "step %d: token %d, reference %d", i, got, want);
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -264,6 +445,9 @@ int main(int argc, char** argv) {
         {"TestUniformDrawsArePortable", TestUniformDrawsArePortable},
         {"TestPenaltyFormulas", TestPenaltyFormulas},
         {"TestTopPAndMinPDistributions", TestTopPAndMinPDistributions},
+        {"TestTopKOffMatchesTheHeapPath", TestTopKOffMatchesTheHeapPath},
+        {"TestSignedZerosTieByIdWithTopKOff", TestSignedZerosTieByIdWithTopKOff},
+        {"TestNaNLogitFallsBackToTheHeapPath", TestNaNLogitFallsBackToTheHeapPath},
     };
     int failed_tests = 0;
 #if USEAVX2

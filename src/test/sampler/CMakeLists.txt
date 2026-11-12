@@ -23,7 +23,10 @@ set(SAMPLER_TEST_CASES
     TestSeededSequenceIsPortable
     TestUniformDrawsArePortable
     TestPenaltyFormulas
-    TestTopPAndMinPDistributions)
+    TestTopPAndMinPDistributions
+    TestTopKOffMatchesTheHeapPath
+    TestSignedZerosTieByIdWithTopKOff
+    TestNaNLogitFallsBackToTheHeapPath)
 
 function(add_sampler_test name)
     add_executable(${name} test_sampler.cpp "${FLM_SOURCE_DIR}/common/modules/sampler.cpp")
