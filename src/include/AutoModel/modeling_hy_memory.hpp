@@ -32,6 +32,14 @@ public:
     std::string generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os = std::cout) override;
     std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object(), bool continue_final_message = false) override;
 
+    /// \brief request settings the model loaded with (see AutoModel::save_request_settings)
+    std::string loaded_reasoning_effort = "no_think";
+    void save_model_request_settings() override {
+        loaded_reasoning_effort = this->reasoning_effort;
+    }
+    void restore_model_request_settings() override {
+        this->configure_parameter("reasoning_effort", loaded_reasoning_effort);
+    }
     /// \brief "reasoning_effort" (std::string: no_think / low / high), plus the base-class ones
     bool configure_parameter(std::string parameter_name, const std::any& value) override;
     using AutoModel::configure_parameter;   // keep the typed template overload visible

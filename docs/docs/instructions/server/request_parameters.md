@@ -32,7 +32,7 @@ This page says what FLM does with the fields of a `/v1/chat/completions` or `/v1
 |---|---|---|
 | `temperature` | ≥ 0 | Sharpens (below 1) or flattens (above 1) the distribution. `0` always picks the most likely token. |
 | `top_p` | 0 – 1 | Keeps the smallest set of most likely tokens whose probabilities add up to `top_p`. |
-| `top_k` | ≥ 1 | FLM extension. Samples among the `top_k` most likely tokens. `1` is greedy decoding. |
+| `top_k` | any integer | FLM extension. Samples among the `top_k` most likely tokens. `1` is greedy decoding. `0` or `-1` turns top-k off (every token stays a candidate), as in vLLM; a value above the vocabulary size means the same. |
 | `presence_penalty` | ≥ 0 | See [Penalties](#-presence-frequency-and-repetition-penalties). |
 | `frequency_penalty` | ≥ 0 | See [Penalties](#-presence-frequency-and-repetition-penalties). |
 | `repetition_penalty` | > 0 | FLM extension. See [Penalties](#-presence-frequency-and-repetition-penalties). |
@@ -63,7 +63,7 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
-> ℹ️ **Every request starts from the model's defaults.** A sampling field applies only to the request that sends it. A request that leaves a field out gets the model's default, not what an earlier request set. `think` and `reasoning_effort` [work the same way](https://fastflowlm.com/docs/instructions/server/reasoning_and_tools/#-turning-thinking-on-and-off), except the `reasoning_effort` levels of GPT-OSS and Hy-Memory, which stay in effect until the model is reloaded.
+> ℹ️ **Every request starts from the model's defaults.** A sampling field applies only to the request that sends it. A request that leaves a field out gets the model's default, not what an earlier request set. `think`, `reasoning_effort` (GPT-OSS's and Hy-Memory's levels too), `conversational_mode` and `image-max-tokens` [work the same way](https://fastflowlm.com/docs/instructions/server/reasoning_and_tools/#-turning-thinking-on-and-off).
 
 > ⚠️ **Out-of-range values are ignored, not rejected.** A negative `temperature` or `presence_penalty`, or a `top_p` above 1, gets HTTP 200: the server logs a warning and keeps the value it had. OpenAI accepts penalties from −2 to 2, but FLM ignores negative ones, so a penalty can't be used to *encourage* repetition. `repeat_last_n` and `seed` are stricter: a value that isn't an integer, or a `repeat_last_n` below −1, is rejected with HTTP 400.
 

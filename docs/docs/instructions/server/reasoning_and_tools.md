@@ -242,7 +242,7 @@ client.chat.completions.create(model="qwen3:4b", messages=msgs, extra_body={"thi
 client.chat.completions.create(model="gpt-oss:20b", messages=msgs, reasoning_effort="low")
 ```
 
-> ℹ️ **The setting applies to its own request.** A request that doesn't mention `think` or `reasoning_effort` gets the model's default, not what an earlier request set. The `reasoning_effort` levels of GPT-OSS and Hy-Memory are the exception: they stay in effect until the model is reloaded.
+> ℹ️ **The setting applies to its own request.** A request that doesn't mention `think` or `reasoning_effort` gets the model's default, not what an earlier request set. This holds for the `reasoning_effort` levels of GPT-OSS and Hy-Memory too.
 
 What changes when thinking is off:
 

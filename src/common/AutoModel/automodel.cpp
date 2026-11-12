@@ -6,6 +6,7 @@
 /// \note This is a source file for the auto_model class
 
 #include "AutoModel/automodel.hpp"
+#include "modules/top_k.hpp"
 #include "chat/chat_continue.hpp"
 #include "npu_utils/npu_utils.hpp"
 #include "utils/npu_platform.hpp"
@@ -1164,6 +1165,7 @@ void AutoModel::set_sampler(sampler_config& sampler_config) {
 /// \note Call after load_model()
 void AutoModel::save_request_settings() {
     this->loaded_thinking = this->thinking_enabled();
+    this->save_model_request_settings();
 }
 
 /// \brief Put back the settings save_request_settings() remembered: sampling and thinking
@@ -1173,6 +1175,7 @@ void AutoModel::restore_request_settings() {
     sampler_config config = this->loaded_sampler_config;
     this->set_sampler(config);
     this->configure_parameter("enable_think", this->loaded_thinking);
+    this->restore_model_request_settings();
 }
 
 /// \brief Set the max length
@@ -1297,17 +1300,9 @@ void AutoModel::verbose() {
 /// \note The function will set the top-k
 /// \note The function will check if the top-k is valid
 void AutoModel::set_topk(int topk) {
-    if (topk < 1) {
-        header_print("WARNING", "Top-k must be greater than 0");
-        return;
-    }
     const int vocab_size = this->sampler->in_features;
-    if (topk > vocab_size) {
-        header_print("WARNING", "Top-k is greater than vocab size, set to vocab size: " << vocab_size);
-        topk = vocab_size;
-    }
-    
-    this->sampler->top_k = topk;
+    // top_k <= 0 turns top-k off: every token stays a candidate
+    this->sampler->top_k = effective_top_k(topk, vocab_size);
 }
 
 /// \brief Set the top-p

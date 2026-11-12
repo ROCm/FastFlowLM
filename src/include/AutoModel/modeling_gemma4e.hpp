@@ -86,8 +86,6 @@ private:
 
     bool enable_think = false;
     bool enable_tool = false;
-    // Nemotron-3.5-Bolt chat-template switch (spoken-style system instruction); stock Gemma4 templates ignore it
-    bool conversational_mode = false;
     void setup_tokenizer(std::string model_path);
     
     // Image processing functionality
@@ -125,6 +123,8 @@ private:
     } continued_prompt_;
 
 protected:
+    // Nemotron-3.5-Bolt chat-template switch (spoken-style system instruction); stock Gemma4 templates ignore it. Protected so a test can read it.
+    bool conversational_mode = false;
     /// Protected so Gemma4e_Flash can lower the default; see its constructor.
     int image_softtoken_budget = 280; // set a default value
 
@@ -202,6 +202,17 @@ public:
     }
 
 
+    /// \brief request settings the model loaded with (see AutoModel::save_request_settings)
+    bool loaded_conversational_mode = false;
+    int loaded_image_softtoken_budget = 280;
+    void save_model_request_settings() override {
+        loaded_conversational_mode = this->conversational_mode;
+        loaded_image_softtoken_budget = this->image_softtoken_budget;
+    }
+    void restore_model_request_settings() override {
+        this->conversational_mode = loaded_conversational_mode;
+        this->image_softtoken_budget = loaded_image_softtoken_budget;
+    }
     /// \brief Configure a parameter with type-erased value
 	/// \param parameter_name the name of the parameter
 	/// \param value the value to set (can be any type)

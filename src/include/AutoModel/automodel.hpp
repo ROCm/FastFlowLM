@@ -502,6 +502,15 @@ public:
 	///       the previous request asked for.
 	void restore_request_settings();
 
+	/// \brief Remember the request settings that live in a model class's own fields
+	///        (reasoning_effort levels, conversational_mode, image_max_tokens)
+	/// \note Called by save_request_settings(); a model with such fields overrides both hooks
+	virtual void save_model_request_settings() {}
+
+	/// \brief Put back what save_model_request_settings() remembered
+	/// \note Called by restore_request_settings()
+	virtual void restore_model_request_settings() {}
+
 	/// \brief Set the max length
 	/// \param MAX_L the max length
 	virtual void set_max_length(unsigned int MAX_L);
