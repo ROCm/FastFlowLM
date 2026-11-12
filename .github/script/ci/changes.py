@@ -139,12 +139,17 @@ SUBSYSTEMS = (
 )
 
 # The oga-hipep backend, in the Windows XRT package only, runs on the GPU the
-# catalog entries whose name ends in GPU_SUFFIX (model_list::backend_for_family).
+# catalog entries whose effective backend is oga-hipep: their "backend" key,
+# or without one, a name ending in GPU_SUFFIX (model_list::backend_for_family).
 # No NPU model runs its code (bar the header above) or those entries, so they
 # name no family and run no NPU job: Test Windows HIPEP tests them, on
 # qwen3.5-oga-hipep:9b.
 GPU_ONLY = re.compile(r"^(src/(common|include)/oga/|src/test/oga_hipep/)")
 GPU_SUFFIX = "-oga-hipep"
+# An entry's "backend" key (flm::backend::kBackendKey), when present, overrides
+# the suffix rule; GPU_BACKEND is the oga-hipep backend's id.
+GPU_BACKEND_KEY = "backend"
+GPU_BACKEND = "oga-hipep"
 # The family of qwen3.5-oga-hipep:9b: a change to its frontend reaches that
 # model too, one to its NPU engine does not.
 GPU_FAMILIES = {"qwen3.5"}
@@ -335,23 +340,38 @@ def family_of(entry: dict) -> str:
     return details.get("family", "") if isinstance(details, dict) else ""
 
 
-def runs_on_gpu(model_id: str) -> bool:
-    """Whether the oga-hipep backend, not an NPU one, runs this catalog entry."""
+def runs_on_gpu(model_id: str, entry: Optional[dict] = None) -> bool:
+    """Whether the oga-hipep backend, not an NPU one, runs this catalog entry.
+    As in model_list::apply_support_filter, an entry's "backend" key overrides
+    the backend its name implies."""
+    backend = (entry or {}).get(GPU_BACKEND_KEY)
+    if backend is not None:
+        return backend == GPU_BACKEND
     return model_id.split(":", 1)[0].endswith(GPU_SUFFIX)
 
 
 def catalog_diff(base: dict[str, dict], head: dict[str, dict]) -> tuple[set, list]:
     """Families with an NPU entry added, removed or edited between two catalogs,
-    and the GPU entries that were."""
+    and the GPU entries that were. An entry is a GPU one only if it is on
+    every side that has it."""
     fams, gpu = set(), []
     for mid in sorted(set(base) | set(head)):
         if base.get(mid) == head.get(mid):
             continue
-        if runs_on_gpu(mid):
-            gpu.append(mid)
-        else:
-            fams.update(family_of(e) for e in (base.get(mid), head.get(mid)) if e)
+        sides = [e for e in (base.get(mid), head.get(mid)) if e is not None]
+        split_entry(mid, sides, fams, gpu)
     return fams - {""}, gpu
+
+
+def split_entry(mid: str, sides: list, fams: set, gpu: list) -> None:
+    """Files one changed entry: under GPU entries if it is on the GPU on any
+    side (Test Windows HIPEP runs it), and under its NPU family unless it is
+    on the GPU on every side."""
+    on_gpu = [runs_on_gpu(mid, e) for e in sides]
+    if any(on_gpu):
+        gpu.append(mid)
+    if not all(on_gpu):
+        fams.update(family_of(e) for e in sides if e)
 
 
 def catalog_fields_diff(base_text: str, head_text: str) -> list[str]:
@@ -374,15 +394,15 @@ def model_info_diff(base_text: Optional[str], head_text: Optional[str],
     if not isinstance(base, dict) or not isinstance(head, dict):
         return None
     keys = {k for k in set(base) | set(head) if base.get(k) != head.get(k)}
-    fams, gpu = set(), set()
+    hits: dict[str, list] = {}
     for catalog in catalogs:
         for mid, entry in catalog.items():
             if mid in keys or entry.get("model_info_key") in keys:
-                if runs_on_gpu(mid):
-                    gpu.add(mid)
-                else:
-                    fams.add(family_of(entry))
-    return fams - {""}, sorted(gpu)
+                hits.setdefault(mid, []).append(entry)
+    fams, gpu = set(), []
+    for mid, entries in sorted(hits.items()):
+        split_entry(mid, entries, fams, gpu)
+    return fams - {""}, gpu
 
 
 def add_catalog_change(d: Decision, path: str, fams: set, gpu: list,
