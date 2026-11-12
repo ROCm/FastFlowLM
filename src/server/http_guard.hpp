@@ -221,6 +221,9 @@ inline bool host_allowed(const OriginPolicy& policy, std::string_view host_heade
     const std::string host = host_part(host_header);
     if (host.empty()) return true;  // HTTP/1.0 without Host
     if (is_loopback_name(host) || is_private_ip(host)) return true;
+    // The unspecified address: a client with base_url http://0.0.0.0:port reaches a loopback bind
+    // on Linux. Ollama accepts it too. Host only; it is not a local Origin.
+    if (host == "0.0.0.0" || host == "::") return true;
     if (ends_with(host, ".local") || ends_with(host, ".internal")) return true;
     for (const auto& extra : policy.extra_origins) {  // a reverse proxy named in --cors-origins keeps its Host
         if (const auto h = origin_http_host(extra); h && *h == host) return true;
