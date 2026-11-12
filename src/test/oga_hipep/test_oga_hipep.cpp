@@ -1651,6 +1651,37 @@ void TestAnExplicitRootStillDisablesAutoInstall() {
     RequireContains(text, "HIPEP_PKG_ROOT: '");
 }
 
+void TestTheOldPackageRootVariableIsNotReadButWarnedAbout() {
+    RuntimeInstallFixture fixture;
+    TempDir old_root;
+    TempDir programs;
+    MakePackage(old_root.path);
+    MakePackage(programs.path / "hip-ep" / "0.5.2");
+    auto hooks = fixture.Hooks();
+    std::vector<std::string> warnings;
+    hooks.warn = [&warnings](std::string_view text) { warnings.emplace_back(text); };
+    const auto with_old_root = [&](std::filesystem::path root) -> flm::oga::PackageEnvironment {
+        return [&old_root, base = Environment(std::move(root), fixture.local.path, programs.path)](
+                   const wchar_t* name) -> std::filesystem::path {
+            if (std::wstring_view(name) == L"AMDRT_PKG_ROOT") return old_root.path;
+            return base(name);
+        };
+    };
+
+    const auto discovered = flm::oga::EnsureHipEpPackageForTest(with_old_root({}), hooks);
+    TEST_REQUIRE(discovered.source == "%ProgramFiles%\\hip-ep\\0.5.2");
+    TEST_REQUIRE(warnings.size() == 1);
+    RequireContains(warnings[0], "AMDRT_PKG_ROOT ('" + Text(old_root.path) + "') is no longer read");
+    RequireContains(warnings[0], "set HIPEP_PKG_ROOT");
+
+    warnings.clear();
+    TEST_REQUIRE(flm::oga::EnsureHipEpPackageForTest(with_old_root(old_root.path), hooks).source ==
+                 "HIPEP_PKG_ROOT");
+    TEST_REQUIRE(flm::oga::EnsureHipEpPackageForTest(fixture.environment(), hooks).source ==
+                 "%LOCALAPPDATA%\\hip-ep\\flm-9.9.9");
+    TEST_REQUIRE(warnings.empty());
+}
+
 void TestAutoInstallDoesNotReplaceAnUnownedConflict() {
     RuntimeInstallFixture fixture;
     Touch(fixture.final_dir() / "onnxruntime-genai.dll");
@@ -2253,6 +2284,7 @@ int main(int argc, char** argv) {
     RUN(TestAnArchiveWithABinDirectoryNeedsHipblasltBesideItsDlls);
     RUN(TestAutoInstallReusesTheManagedRuntimeWithoutDownloadingAgain);
     RUN(TestAnExplicitRootStillDisablesAutoInstall);
+    RUN(TestTheOldPackageRootVariableIsNotReadButWarnedAbout);
     RUN(TestAutoInstallDoesNotReplaceAnUnownedConflict);
     RUN(TestAutoInstallRepairsABrokenManagedRuntime);
     RUN(TestAutoInstallFailsWhenTheDownloaderNeedsAnAliasThatDoesNotExist);
