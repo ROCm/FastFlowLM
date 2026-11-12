@@ -91,11 +91,14 @@ class LM_Config{
             const std::string& asset_root_override = ""){
             // #define DEV_BUILD
             #ifdef DEV_BUILD
-            #ifdef __WINDOWS__
-                this->exec_path = "..\\..\\..\\";
-            #else
-                this->exec_path = "../../../";
-            #endif
+                // three folders above the run folder, as a full path: XRT 2.27 refuses paths with ".."
+                const std::filesystem::path dev_root =
+                    (std::filesystem::current_path() / ".." / ".." / "..").lexically_normal();
+                this->exec_path = dev_root.string();
+                const char sep = (char)std::filesystem::path::preferred_separator;
+                if (this->exec_path.empty() || this->exec_path.back() != sep) {
+                    this->exec_path += sep;
+                }
             #else
             if (!asset_root_override.empty()) {
                 this->exec_path = asset_root_override;
