@@ -850,9 +850,9 @@ int AutoModel::_sample(buffer<bf16>& logits, chat_meta_info_t& meta_info) {
             }
         }
         // A grammar that only allows EOS has nothing left once EOS is masked.
-        // min_tokens still keeps that EOS. ignore_eos must not: Tufo asks for a
-        // fixed completion length even when tools are bound, so drop the
-        // grammar and sample any non-EOS token until max_tokens.
+        // min_tokens still keeps that EOS. ignore_eos must not: a fixed-length
+        // replay asks for a fixed completion length even when tools are bound,
+        // so drop the grammar and sample any non-EOS token until max_tokens.
         bool any = false;
         for (uint32_t w : this->constraint_mask_) { if (w) { any = true; break; } }
         if (any) {
