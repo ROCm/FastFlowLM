@@ -32,7 +32,7 @@ import unicodedata
 from collections import Counter
 from pathlib import Path
 
-from ..client import HttpError
+from ..client import HttpError, is_timeout
 from ..harness import ServerGone, expect, skip, warn
 
 NAME = "asr"
@@ -266,6 +266,8 @@ class WhisperRun:
                     body, seconds = transcribe(self.client, self.model, self.path(item),
                                                response_format="verbose_json")
                 except Exception as exc:  # one bad file must not hide the rest
+                    if is_timeout(exc):
+                        raise  # the server is still busy with it; the case restarts it
                     errors.append(f"{item['file']}: {type(exc).__name__}: {exc}"[:200])
                     if not self.server.alive():
                         break  # the case fails and the server is restarted
@@ -570,6 +572,8 @@ def run_chat(ctx, models: list[str], clips: list[dict]) -> None:
                             text = reply.content
                             seconds += reply.seconds
                         except Exception as exc:
+                            if is_timeout(exc):
+                                raise  # the server is still busy with it; the case restarts it
                             errors.append(f"{item['file']}: {type(exc).__name__}: {exc}"[:200])
                             if not server.alive():
                                 break  # the case fails and the server is restarted
