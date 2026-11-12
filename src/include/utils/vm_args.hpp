@@ -53,6 +53,7 @@ inline void print_help(po::options_description& general) {
     std::cout << "\tflm serve llama3.2:1b --q-len 10" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --port 8000" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --cors 0" << std::endl;
+    std::cout << "\tflm serve llama3.2:1b --cors-origins \"http://nas:3000\"" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --asr whisper-v3:turbo" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --embed embed-gemma:300m" << std::endl;
     std::cout << "\tflm serve -a whisper-v3:turbo" << std::endl;
@@ -132,7 +133,14 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
             ("q-len,q", po::value<size_t>(&parsed_args.max_npu_queue)->default_value(10),
             "Set number of max npu queue length (for serve command)")
             ("cors", po::value<bool>(&parsed_args.cors)->default_value(1),
-             "Enable or disable Cross-Origin Resource Sharing (CORS) (for serve command)")
+             "Enable or disable Cross-Origin Resource Sharing (CORS) headers (for serve command). "
+             "0: no Access-Control-* header on any response")
+            ("cors-origins", po::value<std::string>(&parsed_args.cors_origins)->default_value(""),
+             "Web page origins allowed to call the server besides this machine's own "
+             "(http(s)://localhost, 127.0.0.1, [::1] on any port), comma-separated, e.g. "
+             "\"http://nas:3000,https://webui.example.com\"; \"*\" allows every origin (for serve command). "
+             "Requests from other origins get 403. The host names listed here are also accepted as "
+             "Host on a loopback bind (reverse proxies); \"*\" turns that check off too")
             ("preemption", po::value<bool>(&parsed_args.preemption)->default_value(false),
              "Enable preemption")
             ("prompt,i", po::value<std::string>(&parsed_args.input_file_name)->default_value(""),
@@ -239,6 +247,11 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
             if (!vm["cors"].defaulted())
             {
                 std::cerr << "Error: The cors option is only supported with the serve command! " << std::endl;
+                return false;
+            }
+            if (!vm["cors-origins"].defaulted())
+            {
+                std::cerr << "Error: The cors-origins option is only supported with the serve command! " << std::endl;
                 return false;
             }
         }

@@ -133,6 +133,21 @@ jobs:
           cmake --build build-prompt-reuse -j"$(nproc)"
           ctest --test-dir build-prompt-reuse --output-on-failure
 
+  # HTTP request checks (src/server/http_guard.hpp): route normalization, which routes take the NPU queue
+  # (read from server.cpp), Origin/Host policy, CORS headers and required fields. CPU only, no Boost.
+  http-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and run the HTTP guard test
+        run: |
+          cmake -S src/test/http_guard -B build-http-guard -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-http-guard -j"$(nproc)"
+          ctest --test-dir build-http-guard --output-on-failure
+
   # PrefixSlotCache (src/common/prefix_slot_cache.cpp) against a fake engine: which snapshot a prompt resumes from,
   # eviction, and that a snapshot is only reused for the same images (content hashes). CPU only.
   prefix-slot-cache:

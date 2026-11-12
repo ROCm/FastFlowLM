@@ -39,17 +39,19 @@ struct ConnectionRejecter : std::enable_shared_from_this<ConnectionRejecter> {
     explicit ConnectionRejecter(tcp::socket s)
         : strand(net::make_strand(s.get_executor())), socket(std::move(s)), timer(strand) {}
 
-    void start(size_t limit) {
+    /// cors_wildcard: write "Access-Control-Allow-Origin: *". The request is never read, so its
+    /// Origin is unknown; only a server configured to allow every origin can grant it here.
+    void start(size_t limit, bool cors_wildcard) {
         const std::string body = dump_error_body(json{{"error", {
             {"message", "Server is at its connection limit (" + std::to_string(limit) +
                         "). Please try again later."},
             {"type", "server_busy"},
             {"code", 503}}}});
-        reply = "HTTP/1.1 503 Service Unavailable\r\n"
+        reply = std::string("HTTP/1.1 503 Service Unavailable\r\n"
                 "Content-Type: application/json\r\n"
                 "Retry-After: 1\r\n"
-                "Connection: close\r\n"
-                "Access-Control-Allow-Origin: *\r\n"
+                "Connection: close\r\n") +
+                (cors_wildcard ? "Access-Control-Allow-Origin: *\r\n" : "") +
                 "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
         auto self = shared_from_this();
         timer.expires_after(std::chrono::seconds(5));
@@ -83,6 +85,12 @@ struct ConnectionRejecter : std::enable_shared_from_this<ConnectionRejecter> {
         socket.close(ignore);
     }
 };
+
+/// Write the Access-Control-* headers http_guard chose (none with --cors 0).
+template <class Response>
+void set_cors_headers(Response& res, const flm::http_guard::HeaderList& headers) {
+    for (const auto& [name, value] : headers) res.set(name, value);
+}
 } // namespace
 
 
@@ -296,6 +304,8 @@ void HttpSession::read_request(bool cors) {
 
             // Handle body too large explicitly with 413
             if (ec == http::error::body_limit) {
+                // The header was read: keep it so the reply's CORS headers see the Origin.
+                self->req_ = parser->release();
                 self->res_ = {};
                 self->res_.version(11);
                 self->res_.result(http::status::payload_too_large);
@@ -321,6 +331,35 @@ void HttpSession::read_request(bool cors) {
 ///@brief handle request
 
 void HttpSession::handle_request(bool cors) {
+    // --- Origin and Host checks, before anything else (preflight included) ---
+    // A web page may send "simple" requests here without a preflight, and they have effects
+    // (/api/pull, /api/cancel, model switches) even when the page cannot read the reply. A page
+    // from a foreign origin, or one reached through a foreign Host name (DNS rebinding), is
+    // refused before routing.
+    {
+        const auto& policy = server_.origin_policy();
+        const std::string origin(req_[http::field::origin]);
+        const std::string host(req_[http::field::host]);
+        const bool origin_ok = flm::http_guard::origin_allowed(policy, origin);
+        if (!origin_ok || !flm::http_guard::host_allowed(policy, host)) {
+            const std::string message = !origin_ok
+                ? "Origin '" + origin + "' is not allowed. Start flm serve with --cors-origins \"" + origin +
+                      "\" to allow it (\"*\" allows every origin)."
+                : "Host '" + host + "' is not allowed for a server bound to a loopback address. If a proxy "
+                  "forwards this name, add its origin to --cors-origins (e.g. \"https://" + host + "\").";
+            header_print("🚫 ", message);
+            res_ = {};
+            res_.version(req_.version());
+            res_.keep_alive(false);
+            res_.result(http::status::forbidden);
+            res_.set(http::field::content_type, "application/json");
+            res_.body() = dump_error_body(flm::http_guard::error_body(message, 403));
+            res_.prepare_payload();
+            write_response();
+            return;
+        }
+    }
+
     // --- BEGIN: Preflight (OPTIONS) request handling ---
     if (req_.method() == http::verb::options && cors) {
         header_print("✈️ ", "Handling Preflight (OPTIONS) request");
@@ -328,12 +367,11 @@ void HttpSession::handle_request(bool cors) {
         // reponse empty body for OPTIONS
         auto options_res = std::make_shared<http::response<http::empty_body>>();
         options_res->version(req_.version());
-        options_res->result(http::status::ok); 
+        options_res->result(http::status::ok);
         options_res->keep_alive(req_.keep_alive());
 
-        options_res->set("Access-Control-Allow-Origin", "*");
-        options_res->set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-        options_res->set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
+        set_cors_headers(*options_res, flm::http_guard::cors_headers(server_.origin_policy(),
+            req_[http::field::origin], req_[http::field::access_control_request_headers], true));
 
         options_res->prepare_payload();
         auto self = shared_from_this();
@@ -426,9 +464,8 @@ void HttpSession::write_response() {
 
     std::cout << "================================================" << std::endl;
 
-    res_.set("Access-Control-Allow-Origin", "*");
-    res_.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res_.set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
+    // Every non-streaming exit (normal, 4xx/5xx, 404, 413, 503 queue full) passes here.
+    set_cors_headers(res_, flm::http_guard::cors_headers(server_.origin_policy(), req_[http::field::origin]));
 
 
     http::async_write(socket_, res_,
@@ -512,9 +549,9 @@ void HttpSession::write_streaming_response(const json& data, bool is_final) {
         headers += "Cache-Control: no-cache\r\n";
         headers += "Connection: keep-alive\r\n";
         headers += "Transfer-Encoding: chunked\r\n";
-        headers += "Access-Control-Allow-Origin: *\r\n";
-        headers += "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n";
-        headers += "Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With\r\n";
+        for (const auto& [name, value] : flm::http_guard::cors_headers(server_.origin_policy(), req_[http::field::origin])) {
+            headers += name + ": " + value + "\r\n";
+        }
         headers += "\r\n";
         
         // Send headers synchronously
@@ -590,7 +627,14 @@ void HttpSession::send_chunk_data(const json& data, bool is_final) {
 
 ///@brief WebServer implementation
 ///@param port the port
-WebServer::WebServer(std::string host, int port, bool cors) : acceptor(ioc, {net::ip::make_address(host), static_cast<unsigned short>(port)}), running(false), port(port), cors(cors) {}
+WebServer::WebServer(std::string host, int port, bool cors) : acceptor(ioc, {net::ip::make_address(host), static_cast<unsigned short>(port)}), running(false), port(port), cors(cors) {
+    origin_policy_.cors = cors;
+    // On a loopback bind a request must also name a local Host (DNS rebinding); a server bound
+    // to 0.0.0.0 or a LAN address is reached by names this process cannot know.
+    origin_policy_.check_host = flm::http_guard::is_loopback_bind(host);
+    boost::system::error_code ec;
+    origin_policy_.hostname = net::ip::host_name(ec);
+}
 
 ///@brief destructor
 WebServer::~WebServer() {
@@ -684,7 +728,7 @@ void WebServer::do_accept() {
                 // Check connection limit
                 if (active_connections_.load() >= max_connections_) {
                     header_print("LOG", "Connection limit reached (" + std::to_string(max_connections_) + "), rejecting new connection with 503");
-                    std::make_shared<ConnectionRejecter>(std::move(socket))->start(max_connections_);
+                    std::make_shared<ConnectionRejecter>(std::move(socket))->start(max_connections_, origin_policy_.cors && origin_policy_.allow_any);
                 } else {
                     // Increment connection counter
                     active_connections_.fetch_add(1);
@@ -753,26 +797,28 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
     }
 
     // Route lookup
-    std::string key = std::string(req.method_string()) + " " + std::string(req.target());
+    // Routes match on the path alone: "/v1/models?x=1" and "/v1/models/" are "/v1/models".
+    const std::string path = flm::http_guard::route_path(std::string_view(req.target().data(), req.target().size()));
+    std::string key = std::string(req.method_string()) + " " + path;
     auto it = routes.find(key);
     if (it == routes.end()) {
         // No route: respond 404 synchronously.
         res.result(http::status::not_found);
         res.body() = dump_error_body(json{ {"error", "Not Found"} });
-        res.set(http::field::content_type, is_json ? "application/json" : "multipart/form-data");
+        res.set(http::field::content_type, "application/json");
         res.prepare_payload();
         return false; 
     }
 
     // Decide if this handler needs exclusive NPU access.
-    bool needs_npu = requires_npu_access(std::string(req.method_string()), std::string(req.target()));
+    bool needs_npu = requires_npu_access(std::string(req.method_string()), path);
 
     // Store stable pointers for deferred execution to avoid reference lifetime issues.
     auto* req_ptr = &req;
     auto* res_ptr = &res;
 
     // Define a task lambda with is_deferred flag
-    auto process_task = [this, it, req_ptr, res_ptr, session, needs_npu, key, is_json](bool is_deferred) {
+    auto process_task = [this, it, req_ptr, res_ptr, session, needs_npu, key, path, is_json](bool is_deferred) {
         auto& req_ref = *req_ptr;
         auto& res_ref = *res_ptr;
         NPURequestCompletionGuard completion([this, needs_npu] {
@@ -783,7 +829,7 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
         json request_json;
         try {
             if (!req_ref.body().empty()) {
-                if(is_json && !reads_raw_body(std::string(req_ref.method_string()), std::string(req_ref.target())))
+                if(is_json && !reads_raw_body(std::string(req_ref.method_string()), path))
                     request_json = json::parse(req_ref.body());
                 //else 
                     //do some parse to the MultiPart request?
@@ -978,6 +1024,7 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
 std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader& downloader, program_args_t& args,
                                             flm_rt::device* npu_device) {
     auto server = std::make_unique<WebServer>(args.host, args.port, args.cors);
+    server->set_cors_origins(args.cors_origins);
     auto rest_handler = std::make_shared<RestHandler>(models, downloader, args, npu_device);
     
     // Register Ollama-compatible routes
@@ -1213,8 +1260,12 @@ std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader&
                 return;
             }
             
-            std::string request_id = request_json["request_id"];
-            
+            if (auto bad = flm::http_guard::validate_cancel_request_id(request_json)) {
+                send_response(*bad);
+                return;
+            }
+            const std::string request_id = request_json.at("request_id").get<std::string>();
+
             // Try to cancel the request
             bool cancelled = server_ptr->cancel_request(request_id);
             

@@ -29,6 +29,7 @@
 #include "streaming_ostream.hpp"
 #include "model_downloader.hpp"
 #include "multipart.hpp"
+#include "http_guard.hpp"
 #include <queue>
 #include <functional>
 
@@ -47,14 +48,9 @@ extern std::mutex g_npu_access_mutex;
 extern std::atomic<bool> g_npu_in_use;
 extern std::atomic<int> g_npu_active_requests;
 
-// Helper function to check if an endpoint requires serialized accelerator access.
-inline bool requires_npu_access(const std::string& method, const std::string& path) {
-    if (method != "POST") return false;
-    return path == "/api/generate" || path == "/api/chat" ||
-           path == "/v1/chat/completions" || path == "/v1/completions" ||
-           path == "/v1/audio/transcriptions" || path == "/v1/embeddings" ||
-           path == "/v1/systemone" || path == "/v1/decisions";
-}
+// Which routes take the NPU queue, route normalization, Origin/Host/CORS policy and required
+// fields live in http_guard.hpp so the host tests can build them without Boost or XRT.
+using flm::http_guard::requires_npu_access;
 
 /// Routes whose handler reads the raw body itself (System One parses it with Python json
 /// semantics and answers 422, not 400, for a body that is not JSON).
@@ -206,6 +202,9 @@ public:
     void set_npu_queue_length(size_t q_len) { npu_request_coordinator_.set_capacity(q_len); }
     // Maximum accepted HTTP request body size (in bytes)
     void set_max_body_size_bytes(std::size_t bytes) { max_body_size_bytes_ = bytes; }
+    /// --cors-origins: comma-separated origins allowed besides the local ones; "*" allows all.
+    void set_cors_origins(const std::string& list) { flm::http_guard::set_extra_origins(origin_policy_, list); }
+    const flm::http_guard::OriginPolicy& origin_policy() const { return origin_policy_; }
     std::size_t get_max_body_size_bytes() const { return max_body_size_bytes_; }
 
     void register_handler(const std::string& method, const std::string& path, RequestHandler handler);
@@ -242,6 +241,8 @@ private:
     ///@brief port
     int port;
     bool cors;
+    /// Origin/Host checks and CORS headers for every response (see http_guard.hpp).
+    flm::http_guard::OriginPolicy origin_policy_;
 
     // Concurrency configuration
     size_t max_connections_ = 10;

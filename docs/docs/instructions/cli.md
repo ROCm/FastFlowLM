@@ -322,21 +322,33 @@ flm serve llama3.2:1b --host 127.0.0.1
 
 ### 🌐 Cross-Origin Resource Sharing (CORS)
 
-CORS lets browser apps hosted on a different origin call your FLM server safely.
+Browser pages can call the FLM server only from allowed origins. Without any option these are:
 
-- Enable CORS
+- pages served from this machine: `http(s)://localhost`, `127.0.0.1` or `[::1]`, on any port
+- desktop-app and extension pages: `app://`, `tauri://`, `vscode-webview://`, `vscode-file://`, `file://`, `chrome-extension://`, `moz-extension://`, `safari-web-extension://`
+
+A request from any other origin gets `403`. Clients that send no `Origin` header (curl, the OpenAI SDKs, a web UI's backend such as Open WebUI's) are not affected.
+
+- Allow more origins, e.g. a web UI on another machine
 
 ```shell
-flm serve --cors 1
+flm serve --cors-origins "http://nas:3000,https://webui.example.com"
 ```
-- Disable CORS
+- Allow every origin
+
+```shell
+flm serve --cors-origins "*"
+```
+- Disable CORS headers: no `Access-Control-*` header is sent, so pages on another origin cannot read the replies. The origin check above still applies.
 
 ```shell
 flm serve --cors 0
 ```
 
-> ⚠️ **Default:** CORS is **enabled**.  
-> 🔒 **Security tip:** Disable CORS (or restrict at your proxy) if your server is exposed beyond localhost (127.0.0.1).
+> ⚠️ **Default:** CORS headers are **enabled** (`--cors 1`) for the allowed origins.  
+> 🔒 **Host check:** when the server listens on a loopback address (the default, `127.0.0.1`), it also refuses a request whose `Host` header names another machine, which blocks DNS rebinding. Local names, private-network addresses, `*.local`, `*.internal` (such as `host.docker.internal`) and this machine's name are accepted. Behind a tunnel or reverse proxy that keeps its own host name, add its origin, e.g. `--cors-origins "https://abc.example.app"`. `"*"` turns this check off too.  
+> 📄 **Local files:** a page opened from a file in a browser sends `Origin: null`, which is refused; allow it with `--cors-origins "null"`.  
+> 🔒 **Security tip:** keep the allowed origins short, and restrict access at your proxy if your server is exposed beyond localhost (127.0.0.1).
 
 ---
 
