@@ -27,6 +27,7 @@ TIERS = ("install", "pr", "full")
 # untested.
 PR_CHAT = {
     "hunyuan": "hy-mt2-flash:1.8b",
+    "hy-memory": None,        # 30B; runs when the change touches it
     "nanbeige": "nanbeige4.1:3b",
     "qwen3vl": "qwen3vl-it:4b",
     "qwen3vl-flash": "qwen3vl-flash:4b",
@@ -135,6 +136,12 @@ class Model:
     labels: list = field(default_factory=list)
     size: float = 0.0
     backend: str = "flm"
+    # Whether this machine has the model's files, as `flm list --json` says
+    # (False also for an outdated or incompatible copy); None when it does not say.
+    installed: bool | None = None
+    # The model whose package this one loads on top of (a DFlash draft's
+    # target); `flm pull` downloads it first.
+    base: str = ""
 
     @property
     def single_turn(self) -> bool:
@@ -180,6 +187,8 @@ def load_catalog(flm_bin: str,
             labels=list(entry.get("label") or []),
             size=float(entry.get("size") or 0),
             backend=entry.get("backend") or "flm",
+            installed=entry["installed"] if isinstance(entry.get("installed"), bool) else None,
+            base=entry.get("base_model") or "",
         )
     return models
 
@@ -270,6 +279,38 @@ class Plan:
                 "whisper": self._touched(lambda m: m.family == "whisper-v3"),
             }.get(name, [])
         return self._known(list(listed) + extra)
+
+    def planned(self, suites) -> list[str]:
+        """Every model the named suites will load, in order, without repeats."""
+        ids: list[str] = []
+        for name in suites:
+            if name == "chat":
+                ids += self.chat()
+            elif name == "asr":
+                ids += self.suite("whisper") + self.suite("asr_chat")
+            elif name in SUITE_MODELS:
+                ids += self.suite(name)
+        return list(dict.fromkeys(ids))
+
+    def missing(self, suites, everything: bool = False) -> list[str]:
+        """The planned models this machine lacks (every planned one if
+        everything), cheapest download first.
+
+        Cheapest first, so a download budget that runs out leaves the fewest
+        models untested. A model's download includes its base when that is
+        missing too: a 270 MB DFlash draft can bring a 9 GB target with it.
+        """
+        planned = self.planned(suites)
+        lacking = [m for m in planned
+                   if everything or self.catalog[m].installed is not True]
+
+        def cost(model_id: str) -> float:
+            model = self.catalog[model_id]
+            base = self.catalog.get(model.base)
+            extra = base.size if base is not None and base.installed is not True else 0.0
+            return model.size + extra
+
+        return sorted(lacking, key=lambda m: (cost(m), planned.index(m)))
 
     def model(self, model_id: str) -> Model:
         return self.catalog.get(model_id) or Model(id=model_id)

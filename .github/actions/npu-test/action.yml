@@ -87,7 +87,8 @@ runs:
         }
 
     # Models persist on the runner between jobs, so only the first job on a
-    # runner pays for a download.
+    # runner pays for a download. The harness pulls missing models before the
+    # suites, within a time budget on the pr tier (--pull-budget).
     - name: Run tests (Linux)
       id: linux
       if: runner.os == 'Linux'

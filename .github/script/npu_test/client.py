@@ -8,11 +8,23 @@ need: JSON requests, Server-Sent Events streams, and multipart uploads.
 from __future__ import annotations
 
 import json
+import socket
 import time
 import urllib.error
 import urllib.request
 import uuid
 from dataclasses import dataclass, field
+
+
+def is_timeout(exc: BaseException) -> bool:
+    """Whether exc is a request that ran out of time, however urllib reports it.
+
+    socket.timeout is TimeoutError only from Python 3.10, and a timeout while
+    connecting arrives wrapped in a URLError.
+    """
+    if isinstance(exc, urllib.error.URLError) and not isinstance(exc, urllib.error.HTTPError):
+        exc = exc.reason if isinstance(exc.reason, BaseException) else exc
+    return isinstance(exc, (TimeoutError, socket.timeout))
 
 
 class HttpError(Exception):

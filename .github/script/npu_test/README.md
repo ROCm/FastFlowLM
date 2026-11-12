@@ -27,12 +27,27 @@ python3 -m npu_test --flm-bin flm --label dev --suites chat --models qwen3:0.6b,
 | `--families a,b` | Families a change touches; the pr tier tests all their models |
 | `--asr-full` | The whole ASR evaluation set on the pr tier |
 | `--asr-expected-key KEY` | Check WER against this row of `assets/asr_eval/expected.json` |
+| `--pull-budget MINUTES` | Time for downloading missing models, all together (default 30 on `install`/`pr`, else no limit; 0 for no limit) |
 | `--output-dir DIR` | Where `results.json`, `summary.md` and the server logs go |
 
-Models download on first use into `$FLM_MODEL_PATH`. A `--backend` run pulls its
-models first (`flm pull`, one `setup`/`pull` case each), so a download counts
-against no request's timeout; a model that does not pull is not tested. Exit
-code 1 means a case failed; warnings and skips do not fail a run.
+Models live in `$FLM_MODEL_PATH`. Before any suite, the run pulls the models
+it will use that `flm list --json` reports as not installed (`flm pull`, one
+`setup`/`pull` case each, smallest download first; a `--backend` run pulls all
+of its models, which also checks their files against the pinned hashes), so a
+download counts against no
+request's timeout: `flm serve` would otherwise download inside the request
+that names the model, and every request behind it would wait out its own
+timeout. A model that does not pull is not tested. On the `install` and `pr`
+tiers the downloads share a 30-minute budget (`--pull-budget MINUTES`, 0 for no
+limit), so a model new to the catalog cannot spend a job's time limit on one
+runner; a model the budget leaves undownloaded is a warning and goes untested
+on that runner. The `full` tier and `--backend` runs wait for every download.
+
+A request that times out restarts that suite's server, since flm keeps working
+on a request its client gave up on, and the model's remaining cases are
+dropped. Timeouts count against the server's restart budget (3), so a run of
+them ends the suite rather than the job. Exit code 1 means a case failed;
+warnings and skips do not fail a run.
 
 ## Tiers
 
