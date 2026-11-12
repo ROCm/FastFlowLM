@@ -173,6 +173,13 @@ public:
     /// \note Non-virtual: it adds no vtable slot.
     void set_speculation_chooser(std::function<int(int, const float*, int)> chooser);
 
+    /// \brief the longest context this engine can hold, in tokens (FLM#1001)
+    /// \return 16377: the KV cache tops out at 16384 rows and a verify pass appends 8
+    /// \note A larger MAX_L (constructor or update_max_length) is lowered to this with a warning, so the runtime has to
+    ///       read it back and cap its own context length, or it would decode past the last row the engine can write.
+    /// \note Non-virtual: it adds no vtable slot.
+    uint32_t max_context_length() const;
+
     // ---- speculation statistics -------------------------------------------
     // All non-virtual: they add no vtable slot, so unlike the two speculation
     // hooks on causal_lm these cost no lockstep rebuild of the other engines.
