@@ -7,6 +7,9 @@ a console can attach to one, so each action runs in a short-lived copy of this
 file:
 
     python console.py <pid> ctrl-c | screen | line <text>
+
+Every run imports this file through the shutdown suite, Linux runs too, so
+Windows-only modules are imported inside the functions that use them.
 """
 
 from __future__ import annotations

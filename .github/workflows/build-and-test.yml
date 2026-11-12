@@ -118,6 +118,14 @@ jobs:
         with:
           tier: ${{ inputs.tier }}
 
+      # Every npu_test run imports every suite, but a change to the shutdown
+      # suite or console.py runs Test Windows HIPEP alone. A Windows-only
+      # import there would break the Linux NPU jobs unseen until a change that
+      # runs them, so load the whole package on Linux here on every run.
+      - name: Check npu_test imports on Linux
+        working-directory: .github/script
+        run: python3 -m npu_test --help > /dev/null
+
   # ── NPU approval gate ────────────────────────────────────────────────────
   # The NPU runners are few, so pull requests from anyone outside the core
   # team wait for one of the npu-approval environment's reviewers before any
