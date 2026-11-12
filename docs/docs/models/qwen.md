@@ -662,7 +662,8 @@ Qwen3.8 ships with a **multi-token prediction (MTP) head** — a small draft mod
 
 What that means in practice:
 
-- **Faster decoding, same output.** Verification is an exact compare against what the base model would have emitted, so every token you receive is a token the base model would have produced on its own. Speculation changes throughput, not quality.
+- **Faster decoding, same output (greedy requests).** Verification is an exact compare against what the base model would have emitted, so every token you receive is a token the base model would have produced on its own. Speculation changes throughput, not quality.
+- **Only greedy requests speculate.** Speculation runs when `temperature` is 0 or `top_k` is 1. A request that samples (the model's defaults are `temperature` 0.7 and `top_k` 20) decodes one token at a time, so it follows the requested sampling parameters and penalties, at ordinary decode speed. Send `temperature: 0` for the speculative speed.
 - **Gains are prompt-dependent.** Predictable, low-entropy stretches — code, structured output, long reasoning chains — see the highest draft acceptance. Highly creative or surprising text accepts fewer drafts and converges toward ordinary decode speed.
 - **Nothing to configure.** Speculation is driven by the engine; there is no flag to set and no API change.
 

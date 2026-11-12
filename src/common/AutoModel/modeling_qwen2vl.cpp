@@ -24,9 +24,7 @@ void Qwen2VL::load_model(std::string model_path, json model_info, int default_co
     config.temperature = 0.6;
     config.top_p = 0.8;
     config.top_k = 10;
-    config.rep_penalty_window = 1024;
     config.freq_penalty = 1.05;
-    config.freq_penalty_window = 1024;
     this->set_sampler(config);
     for (size_t i = 0; i < PROFILER_TYPE_NUM; i++) {
         this->profiler_list[i].reset();

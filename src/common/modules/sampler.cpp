@@ -22,7 +22,8 @@ Sampler::Sampler(int in_features, sampler_config& config) {
     this->logits.resize(in_features);
     this->counters.resize(in_features, 0);
     this->token_positions.resize(in_features, -1);
-    this->top_k_logits.resize(config.top_k);
+    // the candidate list is rebuilt on every sample(); top_k may be <= 0 or above the vocabulary
+    this->top_k_logits.reserve(config.top_k > 0 ? std::min(config.top_k, in_features) : 0);
 
     this->temperature           = config.temperature;
     this->top_k                 = config.top_k;
@@ -33,8 +34,6 @@ Sampler::Sampler(int in_features, sampler_config& config) {
     this->rep_penalty           = config.rep_penalty;
     this->freq_penalty          = config.freq_penalty;
     this->pre_penalty           = config.pre_penalty;
-    this->rep_penalty_window    = config.rep_penalty_window;
-    this->freq_penalty_window   = config.freq_penalty_window;
     this->repeat_last_n        = config.repeat_last_n;
     this->use_optimized_sampling = config.use_optimized_sampling;
 
@@ -48,12 +47,15 @@ Sampler::Sampler(int in_features, sampler_config& config) {
                         .count();
         rng_.seed(static_cast<uint64_t>(seed));
     }
-    uniform_dist_ = std::uniform_real_distribution<float>(0.0f, 1.0f);
 }
 
 void Sampler::set_seed(uint64_t seed) {
     rng_.seed(seed);
-    uniform_dist_.reset();
+}
+
+float Sampler::next_uniform() {
+    // 24 random bits scaled by 2^-24: exact in float, never 1.0, and the same everywhere
+    return static_cast<float>(this->rng_() >> 40) * (1.0f / 16777216.0f);
 }
 
 void Sampler::set_repeat_last_n(size_t n) {
@@ -228,9 +230,10 @@ void Sampler::sampler_penalty_apply_sparse() {
 }
 
 void Sampler::sampler_topk_apply(int k) {
-    k = std::min(k, in_features);
-    if (k <= 0) {
-        return;
+    // k <= 0 turns top-k off, as in vLLM and llama.cpp; so does a k above the vocabulary. Returning early here would
+    // leave the previous token's candidates in top_k_logits.
+    if (k <= 0 || k > in_features) {
+        k = in_features;
     }
 
     // bf16 logits tie exactly often enough to matter over a 100k+ vocab, so a
@@ -297,7 +300,8 @@ void Sampler::sampler_minp_apply(float p) {
 }
 
 void Sampler::sampler_temp_apply(float temp) {
-    if (temp == 0) { // Greedy sampling
+    // Below 1e-6 the softmax is the argmax already, and dividing by it overflows to inf and then NaN.
+    if (temp < 1e-6f) { // Greedy sampling
         for (int i = 1; i < this->top_k_logits.size(); i++) {
             this->top_k_logits[i].logits = -std::numeric_limits<float>::infinity();
         }
@@ -310,7 +314,10 @@ void Sampler::sampler_temp_apply(float temp) {
 }
 
 int Sampler::sample_from_probs() {
-    float u = this->uniform_dist_(this->rng_);
+    if (this->top_k_logits.empty()) {
+        return 0;  // no candidate (an empty vocabulary): nothing to choose from
+    }
+    float u = this->next_uniform();
     
     float cdf = 0.0f;
     for (int i = 0; i < this->top_k_logits.size(); i++) {
@@ -438,8 +445,9 @@ int Sampler::sample_greedy(buffer<bf16>& x, const std::vector<uint32_t>* allowed
         _mm256_store_ps(lane_max, vmax);
         _mm256_store_si256((__m256i*)lane_idx, vidx);
         for (int j = 0; j < simd_width; j++) {
-            // strictly greater keeps the lowest index on a tie, in both loops
-            if (lane_max[j] > best) {
+            // Lane j holds ids j, j+8, ...: a tie between lanes goes to the lower id. The tail loop below only
+            // sees higher ids, so its strict > keeps the lowest id.
+            if (lane_max[j] > best || (lane_max[j] == best && lane_idx[j] < best_id)) {
                 best = lane_max[j];
                 best_id = lane_idx[j];
             }
