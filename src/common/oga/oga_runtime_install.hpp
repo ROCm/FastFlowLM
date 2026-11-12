@@ -32,6 +32,7 @@ struct HipEpInstallHooks {
     std::function<std::optional<std::filesystem::path>(const std::filesystem::path&)> download_path;
     std::function<std::filesystem::space_info(const std::filesystem::path&)> space;
     std::function<void(std::string_view)> log;
+    std::function<void(std::string_view)> warn;
     // Allow the shared downloader's 60-minute timeout plus extraction to complete.
     std::chrono::milliseconds lock_wait = std::chrono::minutes(75);
     std::chrono::milliseconds lock_poll = std::chrono::milliseconds(250);

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <fstream>
 #include <iterator>
@@ -205,6 +206,7 @@ struct Hooks {
     std::function<std::optional<std::filesystem::path>(const std::filesystem::path&)> download_path;
     std::function<std::filesystem::space_info(const std::filesystem::path&)> space;
     std::function<void(std::string_view)> log;
+    std::function<void(std::string_view)> warn;
     std::chrono::milliseconds lock_wait;
     std::chrono::milliseconds lock_poll;
 };
@@ -225,6 +227,7 @@ Hooks ResolveHooks(const HipEpInstallHooks& hooks) {
                                        return info;
                                    };
     resolved.log = hooks.log ? hooks.log : [](std::string_view text) { header_print("FLM", text); };
+    resolved.warn = hooks.warn ? hooks.warn : [](std::string_view text) { header_print("WARNING", text); };
     resolved.lock_wait = hooks.lock_wait;
     resolved.lock_poll = hooks.lock_poll;
     return resolved;
@@ -624,6 +627,12 @@ void testing::ExtractHipEpArchiveWithTar(const std::filesystem::path& archive,
 Package EnsureHipEpPackageForTest(const PackageEnvironment& environment, const HipEpInstallHooks& raw_hooks) {
     const Hooks hooks = ResolveHooks(raw_hooks);
     const PackageSearch search = SearchPackages(environment);
+    // HIPEP_PKG_ROOT replaced AMDRT_PKG_ROOT, which is no longer read.
+    if (const std::filesystem::path old_root = environment(L"AMDRT_PKG_ROOT");
+        !old_root.empty() && environment(L"HIPEP_PKG_ROOT").empty()) {
+        hooks.warn("AMDRT_PKG_ROOT ('" + Text(old_root) + "') is no longer read; set HIPEP_PKG_ROOT "
+                   "to use that hip-ep package. Looking in the default locations instead.");
+    }
     if (!search.candidates.empty() && search.candidates.front().source == "HIPEP_PKG_ROOT") {
         return FindPackage(search.candidates, search.notes);
     }
@@ -643,7 +652,13 @@ Package EnsureHipEpPackageForTest(const PackageEnvironment& environment, const H
 }
 
 Package EnsureHipEpPackage(const PackageEnvironment& environment) {
-    Package package = EnsureHipEpPackageForTest(environment, {});
+    // Each model load searches again; warn once per process.
+    static std::atomic<bool> warned{false};
+    HipEpInstallHooks hooks;
+    hooks.warn = [](std::string_view text) {
+        if (!warned.exchange(true)) header_print("WARNING", text);
+    };
+    Package package = EnsureHipEpPackageForTest(environment, hooks);
     // RegisterAmdGpuProvider passes OGA the library path as narrow text; a short path keeps it ASCII.
     package.bin = ShortPath(package.bin).value_or(package.bin);
     return package;
