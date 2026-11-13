@@ -113,7 +113,8 @@ void test_embedding_extension() {
     RequireThrows([&] { model->embed({{"input", text}, {"task", "query"}, {"dimensions", 4}}); });
     for (std::string invalid : {"zero-output", "short-result"})
         RequireThrows([&] { model->embed({{"input", invalid}, {"task", "query"}, {"dimensions", 2}}); });
-    RequireThrows([&] { model->embed({{"input", text}}, [] { return true; }); });
+    RequireThrows<EmbeddingCancelled>([&] { model->embed({{"input", text}}, [] { return true; }); });
+    RequireThrows<EmbeddingCancelled>([&] { model->embed({{"input", "cancel"}}); });
     TEST_REQUIRE(model->embed({{"input", text}}).prompt_tokens == 5);
     std::string empty;
     RequireThrows([&] { model->embed({{"input", empty}, {"task", "query"}}); });

@@ -260,6 +260,19 @@ void TestCatalogFileRecordsDoNotNeedGlobalMetadata() {
     auto catalog = ReadJson(fixture.catalog_path);
     catalog["models"]["test-model"]["1b"]["file_records"] =
         ReadJson(fixture.info_path).at("test-model:1b");
+    auto& records = catalog["models"]["test-model"]["1b"]["file_records"];
+    records[1]["lfs"] = {{"oid", records[1]["sha256"]}};
+    records[1].erase("sha256");
+    records[2]["oid"] = download_utils::calculate_git_blob_oid((fixture.model_path() / "b.bin").string());
+    records[2].erase("sha256");
+    for (auto& record : records) {
+        auto& hash = record.contains("sha256") ? record["sha256"] :
+                     record.contains("lfs") ? record["lfs"]["oid"] : record["oid"];
+        auto value = hash.get<std::string>();
+        std::transform(value.begin(), value.end(), value.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+        hash = value;
+    }
     Write(fixture.catalog_path, catalog.dump());
     fs::remove(fixture.info_path);
     fixture.models = model_list(fixture.catalog_string, fixture.root_string);

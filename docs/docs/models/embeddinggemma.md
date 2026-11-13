@@ -33,18 +33,16 @@ As a standalone embedding server (no LLM):
 flm serve embed-gemma:300m
 ```
 
-`--embed` / `-e` preload an embedding model at startup: pass an embedding model tag (see `flm list`), or `1` for the default (embed-gemma:300m); `0`, the default, preloads none. An unknown tag, or the tag of a different kind of model, stops flm with an error.
+`--embed` / `-e` take an embedding model tag (see `flm list`); `1` selects the default (embed-gemma:300m) and `0` skips preloading. An unknown tag, or the tag of a different kind of model, stops flm with an error.
 
 Send text to `POST /v1/embeddings` via an OpenAI client or Open WebUI. Set
-`model` to `embed-gemma:300m`. Whatever `-e` says, the server downloads (if
-needed) and loads the embedding model a request names, then keeps it loaded; a
-request naming a different embedding model replaces it. A `model` that is
-unknown or not an embedding model returns HTTP 400.
+`model` to `embed-gemma:300m`; the server downloads and loads it when needed.
 
 ### Request options
 
 `input` is a string or a non-empty array of strings, with one vector returned
 per string. Each vector has 768 dimensions; omit `dimensions` or set it to `768`.
+Optional `task`, `title`, and `dimensions` values of `null` are treated as omitted.
 
 `task` is optional and case-sensitive. Omission or an empty string selects `query`:
 

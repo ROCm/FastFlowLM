@@ -9,6 +9,7 @@
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -380,6 +381,7 @@ inline ModelCatalogOverlay load_model_catalog_overlay(
             "' must contain a models object");
     }
 
+    std::vector<std::pair<std::string, std::string>> unsupported;
     for (const auto& [model_type, sizes] :
          overlay["models"].items()) {
         if (!sizes.is_object() || sizes.empty()) {
@@ -389,6 +391,13 @@ inline ModelCatalogOverlay load_model_catalog_overlay(
         }
         for (const auto& [size, entry] : sizes.items()) {
             const std::string tag = model_type + ":" + size;
+            const auto kind = model_kind(entry);
+            if (kind != kGenerationModelKind && kind != kEmbeddingModelKind) {
+                std::cerr << "Ignoring model extension entry '" << tag
+                          << "': unsupported model_kind '" << kind << "'\n";
+                unsupported.emplace_back(model_type, size);
+                continue;
+            }
             detail::validate_catalog_entry(entry, tag);
             if (entry.contains("preferred_source")) {
                 const auto& preferred = entry["preferred_source"];
@@ -399,11 +408,17 @@ inline ModelCatalogOverlay load_model_catalog_overlay(
                         "' preferred_source must be an object without a "
                         "preferred_source of its own");
                 }
-                detail::validate_catalog_entry(
-                    detail::with_preferred_source(entry),
-                    tag + " preferred_source");
+                const auto resolved = detail::with_preferred_source(entry);
+                detail::validate_catalog_entry(resolved, tag + " preferred_source");
+                if (model_kind(resolved) != kind || resolved["details"]["family"] != entry["details"]["family"])
+                    throw std::runtime_error("preferred_source must preserve model_kind and details.family: " + tag);
             }
         }
+    }
+    for (const auto& [family, size] : unsupported) {
+        auto& sizes = overlay["models"][family];
+        sizes.erase(size);
+        if (sizes.empty()) overlay["models"].erase(family);
     }
     return ModelCatalogOverlay{overlay_path, std::move(overlay)};
 }

@@ -1,6 +1,9 @@
 /// \file test_gemma_embedding_request.cpp
 /// \brief Exercise the built-in request formatting with stand-in tokenization and inference.
+#include "AutoEmbeddingModel/all_embedding_model.hpp"
+#ifdef FASTFLOWLM_LINUX_LIMITED_MODELS
 #include "AutoEmbeddingModel/modeling_gemma_embedding.hpp"
+#endif
 #include "../phi4_core/test_support.hpp"
 
 namespace {
@@ -30,6 +33,13 @@ void AutoEmbeddingModel::_shared_load_model(std::string, json, bool) {
 }
 
 void test_gemma_embedding_request() {
+    const json info = {{"model_kind", "embedding"}, {"details", {{"family", "embed-gemma"}}}};
+#ifdef FASTFLOWLM_LINUX_LIMITED_MODELS
+    RequireContains(RequireThrows([&] { get_auto_embedding_model(info, nullptr); }), "built-in");
+#else
+    auto builtin = get_auto_embedding_model(info, nullptr);
+    TEST_REQUIRE(dynamic_cast<Gemma_Embedding*>(builtin.get()));
+#endif
     TestGemma model;
     const std::pair<const char*, const char*> tasks[] = {
         {"query", "task: search result | query: "},

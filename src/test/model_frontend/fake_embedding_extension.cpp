@@ -32,6 +32,7 @@ static int Embed(void *object, flm_span_v1 request, const flm_cancellation_v1 *c
                                                  (const char *)request.data + request.size);
         const auto& input = options.at("input");
         const auto text = (input.is_object() ? input.at("text") : input).get<std::string>();
+        if (text == "cancel") return FLM_MODEL_EXTENSION_STATUS_CANCELLED;
         const auto task = options.value("task", std::string());
         auto dimensions = options.value("dimensions", nlohmann::json(3));
         if (!dimensions.is_number_integer() || dimensions.get<int64_t>() < 1 || dimensions.get<int64_t>() > 3)

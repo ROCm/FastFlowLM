@@ -17,7 +17,7 @@ void Gemma_Embedding::load_model(std::string model_path, json model_info, bool e
 }
 
 EmbeddingResult Gemma_Embedding::embed(const json& request, std::function<bool()> cancelled) {
-    if (cancelled()) throw std::runtime_error("Embedding cancelled");
+    if (cancelled()) throw EmbeddingCancelled();
     const auto text = request.at("input").get<std::string>();
     const auto task = request.value("task", std::string());
     uint32_t dimensions = 0;

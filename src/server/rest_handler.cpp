@@ -763,6 +763,11 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag,
         return auto_chat_engine != nullptr;
     }
 
+    const std::string resolved_tag = supported_models.rectify_model_tag(model_tag);
+    if (is_embedding_model(supported_models.get_model_info(resolved_tag).second)) {
+        header_print_r("ERROR", "Model '" << resolved_tag << "' is an embedding model, not a chat model.");
+        return false;
+    }
     const auto& requested_backend = request_backend.empty() ? backend : request_backend;
     try {
         auto plan = resolve_model_load(supported_models.rectify_model_tag(model_tag), supported_models, requested_backend);
@@ -827,8 +832,10 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag,
 ///      catalog does not have with a 404 instead of a failed load.
 ///@param model_tag the model tag
 bool RestHandler::is_known_model(const std::string& model_tag) {
-    return model_tag == "model-faker" ||
-           supported_models.is_model_supported(supported_models.rectify_model_tag(model_tag));
+    if (model_tag == "model-faker") return true;
+    const auto tag = supported_models.rectify_model_tag(model_tag);
+    return supported_models.is_model_supported(tag) &&
+           !is_embedding_model(supported_models.get_model_info(tag).second);
 }
 
 ///@brief Ensure the asr model is loaded

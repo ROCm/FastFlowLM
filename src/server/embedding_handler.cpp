@@ -52,6 +52,7 @@ void RestHandler::handle_embeddings(const json& request,
             send_response(*bad);
             return;
         }
+        if (cancelled()) throw EmbeddingCancelled();
         std::lock_guard lock(embedding_mutex);
         std::string model = request.at("model");
         const auto& input = request.at("input");
@@ -60,8 +61,11 @@ void RestHandler::handle_embeddings(const json& request,
         json embedding_data = json::array();
         uint64_t prompt_tokens = 0;
         json item_request = request;
+        for (const char* field : {"task", "title", "dimensions"})
+            if (item_request.contains(field) && item_request[field].is_null())
+                item_request.erase(field);
         for (size_t i = 0; i < inputs.size(); ++i) {
-            if (cancelled()) return;
+            if (cancelled()) throw EmbeddingCancelled();
             item_request["input"] = inputs[i];
             auto result = auto_embedding_engine->embed(item_request, cancelled);
             prompt_tokens += result.prompt_tokens;
@@ -71,7 +75,7 @@ void RestHandler::handle_embeddings(const json& request,
                 {"index", i}
             });
         }
-        if (cancelled()) return;
+        if (cancelled()) throw EmbeddingCancelled();
 
         json response = {
             {"object", "list"},
@@ -85,7 +89,11 @@ void RestHandler::handle_embeddings(const json& request,
         send_response(response);
     }
     catch (const std::exception& e) {
-        if (cancelled()) return;
+        if (cancelled() || dynamic_cast<const EmbeddingCancelled*>(&e)) {
+            send_response({{"error", {{"message", "Embedding request cancelled"},
+                                      {"type", "request_cancelled"}, {"code", 499}}}});
+            return;
+        }
         const int code = dynamic_cast<const std::invalid_argument*>(&e) ||
                          dynamic_cast<const nlohmann::json::exception*>(&e) ? 400 : 500;
         send_response({{"error", {{"message", e.what()},

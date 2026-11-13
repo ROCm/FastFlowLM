@@ -146,7 +146,12 @@
           "default": "generation"
         },
         "file_records": {
+          "description": "Pinned per-file download metadata. Required for pulling new extension models unless model_info_key names records in the host model_info.json.",
           "$ref": "#/$defs/fileRecords"
+        },
+        "model_info_key": {
+          "description": "Use an existing record set in the host model_info.json when file_records is omitted.",
+          "$ref": "#/$defs/nonEmptyString"
         }
       },
       "allOf": [

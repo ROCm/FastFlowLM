@@ -80,6 +80,19 @@ void test_embedding_catalog() {
     model_list other(base, directory, "dev04", {"flm"}, {overlay}, {"embedding-family"});
     TEST_REQUIRE(!other.is_model_supported("embedding-test:1"));
     RequireThrows([&] { model_list missing(base, directory, "aie2p", {"flm"}, {overlay}, {}); });
+    auto future = entry;
+    future["model_kind"] = "future-kind";
+    write_catalog("embedding-overlay.json", {{"schema_version", 1}, {"models", {
+        {"embedding-test", {{"1", entry}, {"future", future}}},
+        {"future-only", {{"1", future}}}}}});
+    const auto filtered = flm::catalog::load_model_catalog_overlay(path.string());
+    TEST_REQUIRE(filtered.document.at("models").size() == 1);
+    TEST_REQUIRE(filtered.document.at("models").at("embedding-test").size() == 1);
+    auto switched = entry;
+    switched["preferred_source"] = {{"details", {{"family", "another-embedding"}}}};
+    write_catalog("embedding-overlay.json", {{"schema_version", 1},
+        {"models", {{"embedding-test", {{"1", switched}}}}}});
+    RequireContains(RequireThrows([&] { flm::catalog::load_model_catalog_overlay(path.string()); }), "must preserve");
     const nlohmann::json record = {{"path", "config.json"}, {"size", 0}, {"sha256", std::string(64, 'a')}};
     const auto check_records = [&](const nlohmann::json& records, bool valid) {
         for (bool preferred : {false, true}) {
@@ -117,7 +130,7 @@ void test_embedding_catalog() {
     check_records(nlohmann::json::array({42}), false);
     // Embeddings and their preferred sources obey the shared catalog rules.
     for (const auto& patch : std::vector<nlohmann::json>{
-             {{"model_kind", "unknown"}}, {{"frontend_provider", nullptr}},
+             {{"frontend_provider", nullptr}},
              {{"file_records", nlohmann::json::array()}}, {{"files", {"../weights"}}},
              {{"name", "COM\xC2\xB9"}}, {{"files", {"a/LPT\xC2\xB2.bin"}}},
              {{"supported_platforms", nlohmann::json::array()}}, {{"url", nullptr}}}) {
@@ -884,7 +897,7 @@ void test_overlay_preferred_source_selects_available_providers() {
               "unavailable backend provider"},
              {{{"backend", "core"}}, "unavailable backend provider"},
              {{{"details", {{"family", "missing-frontend"}}}},
-              "unregistered frontend family"}}) {
+              "preferred_source must preserve"}}) {
         auto demo = WithDownloadMetadata(
             {{"name", "Demo-Model-NPU2"},
              {"backend", "flm"},

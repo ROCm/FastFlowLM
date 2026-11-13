@@ -90,7 +90,13 @@ void test_embedding_handler() {
     npu_available = true;
     TEST_REQUIRE(no_device.contains("error"));
     TEST_REQUIRE(no_device["error"]["message"] == flm::backend::kNoNpuDevice);
+    for (const json& bad : {json(nullptr), json(42), json::array({"ok", false})})
+        TEST_REQUIRE(request("missing:1", bad).at("error").at("code") == 400);
+    TEST_REQUIRE(pulls == 0);
     check("first:1", 0.5f);
+    TEST_REQUIRE(request("first", "hello", {{"task", nullptr}, {"title", nullptr}, {"dimensions", nullptr}})
+                     .at("data").at(0).at("embedding") == json({5, 3, 0.5f}));
+    TEST_REQUIRE(request("first", "cancel").at("error").at("code") == 499);
     TEST_REQUIRE(request("first", "hello", {{"task", "provider-task"}}).at("data").at(0).at("embedding").at(1) == 4);
     TEST_REQUIRE(request("first", "hello", {{"task", "unknown"}}).at("error").at("code") == 400);
     TEST_REQUIRE(request("first", "hello", {{"task", 42}}).at("error").at("code") == 400);
@@ -124,7 +130,8 @@ void test_embedding_handler() {
     for (const auto& dimensions : {json(0), json(-1), json(4), json(1.5), json("2")})
         TEST_REQUIRE(request("second", "hi", {{"dimensions", dimensions}}).at("error").at("code") == 400);
     server.handle_embeddings({{"model", "second"}, {"input", "hi"}},
-        [](const json&) { TEST_REQUIRE(false); }, {}, [] { return true; });
+        [](const json& response) { TEST_REQUIRE(response.at("error").at("code") == 499); },
+        {}, [] { return true; });
     TEST_REQUIRE(batch.at("data").at(0).at("embedding").at(0) == 2);
     TEST_REQUIRE(request("second", 42).contains("error"));
     TEST_REQUIRE(request("second", json::array()).at("error").at("code") == 400);

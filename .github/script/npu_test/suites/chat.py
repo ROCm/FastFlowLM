@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 from pathlib import Path
 
+from ..client import HttpError
 from ..harness import ServerGone, expect, skip, warn
 from ..server import ServerError
 
@@ -121,6 +122,17 @@ def _model_cases(ctx, server, model) -> None:
 
     if crashed():
         return
+    with ctx.case(NAME, "reject-embedding-model", model.id, server):
+        before = client.get_json("/api/ps")["models"][0]["name"]
+        try:
+            client.chat("embed-gemma:300m", [{"role": "user", "content": "hello"}], stream=False)
+        except HttpError as error:
+            expect(400 <= error.status < 500, f"expected a client error, got {error.status}")
+        else:
+            raise AssertionError("chat accepted an embedding model")
+        after = client.get_json("/api/ps")["models"][0]["name"]
+        expect(after == before, f"rejected embedding tag unloaded {before!r}")
+
     with ctx.case(NAME, "stream-two-turns", model.id, server) as case:
         turns = ([_translate_prompt(model.id, t) for t in TRANSLATE_TURNS] if translator
                  else list(TURNS))

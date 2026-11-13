@@ -9,6 +9,8 @@ namespace {
 using namespace flm::extension::detail;
 
 void Check(int status, const ErrorCapture &error, bool request = false) {
+    if (request && status == FLM_MODEL_EXTENSION_STATUS_CANCELLED)
+        throw EmbeddingCancelled();
     if (request && (status == FLM_MODEL_EXTENSION_STATUS_INVALID_ARGUMENT ||
                     status == FLM_MODEL_EXTENSION_STATUS_UNSUPPORTED))
         throw std::invalid_argument("Embedding provider: " + error.message);
