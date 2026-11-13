@@ -332,8 +332,10 @@ jobs:
           done
           exit 1
       # Boost, the XRT headers and the xrt_coreutil import library, as for the Windows package build.
+      # Restore only: this workflow also runs on tags, so it never writes the cache (zizmor cache-poisoning);
+      # the Windows package build saves it under the same key, and a miss is built by the next step.
       - name: Restore build dependencies
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: C:\dev
           key: windows-deps-${{ hashFiles('.github/script/ci/setup_windows_deps.ps1', '.github/windows-deps/**') }}
