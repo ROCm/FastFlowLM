@@ -165,7 +165,7 @@ public:
     /// \note Calls the base implementation rather than reproducing its rows,
     ///       so the shared statistics cannot drift out of step with it.
     /// \note Appends nothing when speculation never ran, which keeps the
-    ///       non-greedy and no-MTP-head paths byte-identical to before.
+    ///       non-speculative and no-MTP-head paths byte-identical to before.
     std::string show_profile() override;
 
     /// \brief session reset: context, profilers, and the MTP speculation counters
