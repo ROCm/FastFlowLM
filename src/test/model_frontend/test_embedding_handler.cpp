@@ -10,7 +10,7 @@
 // catalog, factory and C plugin execute every request below.
 RestHandler::RestHandler(model_list& models, ModelDownloader& downloads,
                          program_args_t& args, flm_rt::device* device)
-    : npu_device_inst(device), supported_models(models), downloader(downloads),
+    : npu_device_inst(device), embeddings_enabled(args.embed), supported_models(models), downloader(downloads),
       modelscope(args.modelscope), preemption(args.preemption) {}
 RestHandler::~RestHandler() = default;
 AutoDecisionModel::~AutoDecisionModel() = default;
@@ -72,6 +72,11 @@ void test_embedding_handler() {
     TEST_REQUIRE(found_embedding);
     ModelDownloader downloads(models);
     program_args_t args{};
+    RestHandler disabled(models, downloads, args, nullptr);
+    disabled.handle_embeddings({{"model", "missing:1"}, {"input", "hello"}},
+        [](const json& response) { TEST_REQUIRE(response.at("error").at("code") == 403); }, {});
+    TEST_REQUIRE(pulls == 0);
+    args.embed = true;
     RestHandler server(models, downloads, args, nullptr);
     const auto request = [&](const std::string& tag, json input = "hello", json options = json::object()) {
         json response;

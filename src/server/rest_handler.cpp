@@ -702,6 +702,7 @@ RestHandler::RestHandler(model_list& models, ModelDownloader& downloader, progra
     default_model_tag = supported_models.rectify_model_tag(default_model_tag);
     const bool embedding_only = supported_models.is_model_supported(default_model_tag) &&
         is_embedding_model(supported_models.get_model_info(default_model_tag).second);
+    embeddings_enabled = args.embed || embedding_only;
     if (embedding_only) ensure_embed_model_loaded(default_model_tag);
     // Initialize chat bot with default model
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS

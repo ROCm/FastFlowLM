@@ -52,6 +52,11 @@ void RestHandler::handle_embeddings(const json& request,
             send_response(*bad);
             return;
         }
+        if (!embeddings_enabled) {
+            send_response({{"error", {{"message", "Embeddings are disabled; start with -e <tag> or an embedding primary model"},
+                                      {"type", "permission_error"}, {"code", 403}}}});
+            return;
+        }
         if (cancelled()) throw EmbeddingCancelled();
         std::lock_guard lock(embedding_mutex);
         std::string model = request.at("model");

@@ -33,10 +33,11 @@ As a standalone embedding server (no LLM):
 flm serve embed-gemma:300m
 ```
 
-`--embed` / `-e` take an embedding model tag (see `flm list`); `1` selects the default (embed-gemma:300m) and `0` skips preloading. An unknown tag, or the tag of a different kind of model, stops flm with an error.
+`--embed` / `-e` take an embedding model tag (see `flm list`); `1` selects the default (embed-gemma:300m) and `0` disables embeddings alongside a chat model. An unknown tag, or the tag of a different kind of model, stops flm with an error.
 
 Send text to `POST /v1/embeddings` via an OpenAI client or Open WebUI. Set
-`model` to `embed-gemma:300m`; the server downloads and loads it when needed.
+`model` to `embed-gemma:300m`. Embeddings require `--embed` or an embedding
+primary model; requests can select any catalog embedding tag once enabled.
 
 ### Request options
 

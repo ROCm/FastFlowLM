@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 
+from ..client import HttpError
 from ..harness import FAIL, Result, ServerGone, expect
 
 NAME = "embedding"
@@ -68,6 +69,14 @@ def run(ctx) -> None:
     models = ctx.plan.suite(NAME)
     if not models:
         return
+    with ctx.server("embedding-disabled", ["-e", "0"]) as server:
+        with ctx.case(NAME, "disabled", models[0], server):
+            try:
+                embed(server, models[0], SINGLE_INPUT)
+            except HttpError as error:
+                expect(error.status == 403, f"expected 403, got {error.status}")
+            else:
+                raise AssertionError("embeddings accepted without opt-in")
     with ctx.server(NAME, ["-e", "1"]) as server:
         for done, model in enumerate(models):
             try:
