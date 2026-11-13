@@ -308,3 +308,42 @@ jobs:
             ctest --test-dir "build-contracts-hrx-$hrx" --output-on-failure
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
+
+  # The oga-hipep backend (src/common/oga, src/include/oga) against a fake OGA C API: generator reuse and
+  # rewind, images, package discovery, runtime install and uninstall; and the Qwen3.5 / GPT-OSS frontends that
+  # drive it. Windows only; no GPU, NPU or model (Test Windows HIPEP in build-and-test.yml runs the real one).
+  oga-hipep-windows:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # the frontend tests build automodel.cpp: xgrammar and the tokenizers-cpp headers
+      - name: Checkout submodules
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            git submodule update --init --depth 1 third_party/xgrammar third_party/tokenizers-cpp &&
+              git -C third_party/xgrammar submodule update --init --depth 1 3rdparty/dlpack && exit 0
+            echo "Submodule fetch failed (attempt ${attempt}), retrying..."
+            sleep 10
+          done
+          exit 1
+      # Boost, the XRT headers and the xrt_coreutil import library, as for the Windows package build.
+      - name: Restore build dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: C:\dev
+          key: windows-deps-${{ hashFiles('.github/script/ci/setup_windows_deps.ps1', '.github/windows-deps/**') }}
+      - name: Set up build dependencies
+        shell: powershell
+        run: .github\script\ci\setup_windows_deps.ps1
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
+      - name: Build and run the oga-hipep tests
+        shell: powershell
+        run: .github\script\ci\oga_hipep_tests.ps1 -DepsRoot C:\dev
