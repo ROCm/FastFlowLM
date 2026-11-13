@@ -119,13 +119,20 @@ T value_or(const json& request, const char* key, T fallback) {
 }
 }
 
-///@brief Normalize messages by merging consecutive user messages (like Ollama does)
+///@brief Normalize messages by merging consecutive user messages (like Ollama does), and keep
+/// assistant reasoning only within the current turn, under reasoning_content
 ///@param messages the original messages
 ///@return normalized messages with consecutive user messages merged
 static json normalize_messages(json messages) {
     if (messages.empty()) return messages;
 
     json normalized = nlohmann::ordered_json::array();
+
+    // the current turn: the messages after the last user message, or all of them without one
+    size_t turn_start = 0;
+    for (size_t i = 0; i < messages.size(); i++) {
+        if (messages[i].value("role", "") == "user") turn_start = i + 1;
+    }
 
     for (size_t i = 0; i < messages.size(); i++) {
         auto current_msg = messages[i];
@@ -186,16 +193,19 @@ static json normalize_messages(json messages) {
             current_msg["content"] = merged_content_array;
         }
         else if (role == "assistant") {
-            // Strip prior assistant "thinking" / reasoning fields so they are not
-            // fed back into the model on subsequent turns.
-            if (current_msg.contains("thinking")) {
-                current_msg.erase("thinking");
+            // Reasoning from earlier turns is not fed back to the model, but within the current
+            // turn it is: the model reasons, calls a tool and goes on from the result, and must
+            // still see what it reasoned before the call. The templates read reasoning_content,
+            // so the other names clients use for it are moved there.
+            json reasoning;
+            for (const char* name : {"reasoning_content", "reasoning", "thinking"}) {
+                if (reasoning.is_null() && current_msg.value(name, json()).is_string()) {
+                    reasoning = current_msg[name];
+                }
+                current_msg.erase(name);
             }
-            if (current_msg.contains("reasoning")) {
-                current_msg.erase("reasoning");
-            }
-            if (current_msg.contains("reasoning_content")) {
-                current_msg.erase("reasoning_content");
+            if (i >= turn_start && !reasoning.is_null()) {
+                current_msg["reasoning_content"] = reasoning;
             }
             // Also strip <think>...</think> blocks from string content if present.
             // if (current_msg.contains("content") && current_msg["content"].is_string()) {
