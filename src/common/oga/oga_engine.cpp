@@ -69,10 +69,18 @@ std::uint64_t ImageHash(const OgaImage& image) {
 
 }  // namespace
 
+std::size_t SlotsWithin(const OgaSlotLimits& limits, std::uint32_t max_length) {
+    const std::size_t wanted = std::max<std::size_t>(limits.count, 1);
+    if (!limits.bytes_per_position || !max_length) return wanted;
+    const std::uint64_t extra = limits.budget_bytes / (limits.bytes_per_position * max_length);
+    return static_cast<std::size_t>(std::min<std::uint64_t>(wanted, 1 + extra));
+}
+
 OgaEngine::OgaEngine(std::shared_ptr<const OgaApi> api, OgaApi::Owned<OgaModel> model,
                      std::string display_name, std::uint32_t vocab_size,
                      std::uint32_t context_limit, std::uint32_t max_length,
-                     std::optional<OgaVisionConfig> vision, bool empty_image_batch)
+                     std::optional<OgaVisionConfig> vision, bool empty_image_batch,
+                     OgaSlotLimits slots)
     : api_(std::move(api)),
       display_name_(std::move(display_name)),
       vocab_size_(vocab_size),
@@ -80,6 +88,7 @@ OgaEngine::OgaEngine(std::shared_ptr<const OgaApi> api, OgaApi::Owned<OgaModel> 
       max_length_(max_length),
       vision_(std::move(vision)),
       empty_image_batch_(empty_image_batch),
+      limits_(slots),
       model_(std::move(model)) {
     if (!api_ || !model_) throw std::invalid_argument("OGA engine needs an API and a model");
     if (!vocab_size_) throw std::invalid_argument(display_name_ + " vocabulary size is 0");
@@ -124,6 +133,7 @@ void OgaEngine::set_context_length(int length) {
         images_.pop_back();
     }
     logical_.resize(kept);
+    expected_.clear();
 }
 
 void OgaEngine::load_weights(Q4NX&) {
@@ -133,15 +143,26 @@ void OgaEngine::load_weights(Q4NX&) {
 void OgaEngine::update_max_length(std::uint32_t max_length) {
     if (!max_length || max_length > context_limit_ || max_length < logical_.size())
         throw std::out_of_range(display_name_ + " maximum length is invalid");
-    if (live_ && max_length > live_->capacity) live_.reset();
     if (saved_ && max_length < saved_->tokens.size()) saved_.reset();
     max_length_ = max_length;
+    // A larger one fits, but next to others it would overrun the budget they were counted for.
+    const bool several = slot_limit() > 1;
+    for (std::size_t i = slots_.size(); i-- > 0;)
+        if (max_length > slots_[i].capacity || (several && max_length < slots_[i].capacity)) Drop(i);
+    expected_.clear();
+    Trim();
 }
 
 void OgaEngine::clear_context() {
     logical_.clear();
     images_.clear();
+    expected_.clear();
     saved_.reset();
+}
+
+void OgaEngine::expect_prefill(const std::vector<int>& ids) {
+    expected_ = logical_;
+    expected_.insert(expected_.end(), ids.begin(), ids.end());
 }
 
 buffer<bf16> OgaEngine::get_k_cache(int, int) {
@@ -156,13 +177,20 @@ int OgaEngine::get_current_context_length() { return static_cast<int>(logical_.s
 
 int OgaEngine::checkpoint() {
     saved_ = Saved{logical_, images_};
-    if (rewinds_ && live_ && !logical_.empty() && live_->ran == logical_) {
+    expected_.clear();
+    // A slot rewound to this very checkpoint and given nothing since keeps the snapshot and logits it has.
+    if (rewinds_ && active_ && !logical_.empty() && Active().ran == logical_ && !Active().rewound) {
+        Live& run = Active();
         try {
-            api_->Check(api_->functions().generator_snapshot_state(live_->generator.get()),
+            const buffer<bf16> logits = Logits(run.generator.get());
+            std::vector<bf16> kept(logits.data(), logits.data() + logits.size());
+            api_->Check(api_->functions().generator_snapshot_state(run.generator.get()),
                         "OgaGenerator_SnapshotState");
-            live_->snapshot = logical_.size();
-        } catch (const OgaError& e) {
-            live_->snapshot.reset();
+            run.snapshot = logical_.size();
+            run.snapshot_logits = std::move(kept);
+        } catch (const std::exception& e) {
+            run.snapshot.reset();
+            run.snapshot_logits.clear();
             header_print("WARNING", display_name_ << ": " << e.what()
                                     << "; a prompt that leaves this checkpoint replays its history");
         }
@@ -174,6 +202,7 @@ int OgaEngine::restore() {
     if (!saved_) return -1;
     logical_ = saved_->tokens;
     images_ = saved_->images;
+    expected_.clear();
     return static_cast<int>(logical_.size());
 }
 
@@ -188,24 +217,42 @@ buffer<bf16> OgaEngine::Run(const std::vector<int>& fresh, const OgaVisionInput*
     images_.insert(images_.end(), std::make_move_iterator(spans.begin()),
                    std::make_move_iterator(spans.end()));
     try {
-        const auto [reuse, reused] = Append();
-        if (reused < before) replayed_ += before - reused;
+        const char* why = nullptr;
+        const auto [reuse, reused] = Append(&why);
+        if (reused < before)
+            replayed_ += before - reused;
+        else
+            reused_ += reused - before;
         const std::size_t total = logical_.size();
+        Live& run = Active();
         if (reuse == Reuse::kRebuilt) {
             const std::string with =
                 images_.empty() ? "" : " with " + std::to_string(images_.size()) + " image(s)";
-            header_print("FLM", "OGA generator: replaying all " << total << " tokens" << with);
-        } else if (reuse == Reuse::kRewound)
-            header_print("FLM", "OGA generator: rewound to " << reused << " tokens"
-                                    << ", appending " << total - reused);
-        else if (total - reused > 1)
+            header_print("FLM", "OGA generator: replaying all " << total << " tokens" << with
+                                    << SlotText(why));
+        } else if (reuse == Reuse::kRewound) {
+            const std::size_t at = *run.snapshot;
+            header_print("FLM", "OGA generator: rewound to " << at << " tokens"
+                                    << ", appending " << (total > at ? total - at : 0) << SlotText());
+        } else if (total - reused > 1)
             header_print("FLM", "OGA generator: reusing " << reused << " tokens"
-                                    << ", appending " << total - reused);
-        return Logits(live_->generator.get());
+                                    << ", appending " << total - reused << SlotText());
+        // Ahead of a chunked prompt: no caller reads the logits of a chunk before the last.
+        if (run.ran.size() > total) {
+            buffer<bf16> zeros(vocab_size_);
+            std::fill(zeros.data(), zeros.data() + vocab_size_, bf16(0.0f));
+            return zeros;
+        }
+        if (run.rewound) {
+            buffer<bf16> out(vocab_size_);
+            std::copy(run.snapshot_logits.begin(), run.snapshot_logits.end(), out.data());
+            return out;
+        }
+        return Logits(run.generator.get());
     } catch (...) {
         logical_.resize(before);
         images_.resize(images_before);
-        live_.reset();
+        if (active_) Drop(*active_);
         throw;
     }
 }
@@ -265,13 +312,15 @@ bool OgaEngine::ImageAfter(std::size_t position) const {
     return !images_.empty() && images_.back().start + images_.back().length > position;
 }
 
-std::pair<OgaEngine::Reuse, std::size_t> OgaEngine::Append() {
+std::pair<OgaEngine::Reuse, std::size_t> OgaEngine::Append(const char** why) {
+    active_.reset();  // so that a failure before Resume drops no other conversation's slot
     if (!images_.empty() && !vision_warm_) WarmUpVision();
-    const Reuse reuse = Resume();
-    Live& run = *live_;
+    const Reuse reuse = Resume(why);
+    Live& run = Active();
     const std::size_t from = run.ran.size();
-    // Equal lengths: the generator already ran the last token, so its logits are current.
-    if (from == logical_.size()) return {reuse, from};
+    // Equal lengths: the slot already ran the last token, so its logits are current, or saved
+    // with the snapshot it was rewound to. Longer: it is ahead of a chunked prompt.
+    if (from >= logical_.size()) return {reuse, logical_.size()};
     if (from == 0 && (!images_.empty() || empty_image_batch_)) {
         std::vector<const OgaImage*> images;
         for (const ImageSpan& span : images_) {
@@ -282,48 +331,124 @@ std::pair<OgaEngine::Reuse, std::size_t> OgaEngine::Append() {
     } else {
         AppendTokens(run.generator.get(), logical_.data() + from, logical_.size() - from);
     }
+    run.rewound = false;
     const auto rest = logical_.begin() + static_cast<std::ptrdiff_t>(from);
     run.ran.insert(run.ran.end(), rest, logical_.end());
     return {reuse, from};
 }
 
-OgaEngine::Reuse OgaEngine::Resume() {
-    if (!live_ || logical_.size() > std::min(live_->capacity, max_length_)) return Rebuild();
-    Live& run = *live_;
-    // The tokens of an image tell only its size.
-    const bool same_images =
-        std::equal(run.images.begin(), run.images.end(), images_.begin(), images_.end(),
-                   [](std::uint64_t hash, const ImageSpan& span) { return hash == span.hash; });
-    // OGA takes images only in a generator's first call.
-    if (run.ran.size() <= logical_.size() &&
-        std::equal(run.ran.begin(), run.ran.end(), logical_.begin()) && !ImageAfter(run.ran.size()) &&
-        same_images)
-        return Reuse::kSameTokens;
-    // A rewind has to leave at least one token to run, or the logits are stale.
-    if (run.snapshot && *run.snapshot <= run.ran.size() && *run.snapshot < logical_.size() &&
-        std::equal(run.ran.begin(), run.ran.begin() + static_cast<std::ptrdiff_t>(*run.snapshot),
-                   logical_.begin()) &&
-        !ImageAfter(*run.snapshot) && same_images) {
-        try {
-            api_->Check(api_->functions().generator_rewind_to(run.generator.get(), *run.snapshot),
-                        "OgaGenerator_RewindTo");
-        } catch (const OgaError& e) {
-            // OGA refuses every rewind of a model it cannot rewind, such as gemma4 in OGA 0.19
-            rewinds_ = false;
-            header_print("WARNING", display_name_ << ": " << e.what()
-                                    << "; replaying instead, and after every later checkpoint");
-            return Rebuild();
-        }
-        run.ran.resize(*run.snapshot);
-        return Reuse::kRewound;
-    }
-    return Rebuild();
+const std::vector<int>& OgaEngine::Target() {
+    if (expected_.size() > logical_.size() &&
+        std::equal(logical_.begin(), logical_.end(), expected_.begin()))
+        return expected_;
+    expected_.clear();
+    return logical_;
 }
 
-OgaEngine::Reuse OgaEngine::Rebuild() {
-    live_.reset();
-    live_.emplace(Live{NewGenerator(max_length_), max_length_, {}, std::nullopt});
+OgaEngine::Reach OgaEngine::ReachOf(const Live& slot, const std::vector<int>& target) const {
+    if (target.size() > std::min(slot.capacity, max_length_)) return {};
+    // The tokens of an image tell only its size.
+    const bool same_images =
+        std::equal(slot.images.begin(), slot.images.end(), images_.begin(), images_.end(),
+                   [](std::uint64_t hash, const ImageSpan& span) { return hash == span.hash; });
+    if (!same_images) return {};
+    // OGA takes images only in a generator's first call.
+    const auto reaches = [&](std::size_t length) {
+        return length <= target.size() &&
+               std::equal(slot.ran.begin(), slot.ran.begin() + static_cast<std::ptrdiff_t>(length),
+                          target.begin()) &&
+               !ImageAfter(length);
+    };
+    Reach reach;
+    if (reaches(slot.ran.size())) reach = {slot.ran.size(), false};
+    // The snapshot's logits are saved with it, so it may end where the target ends.
+    if (rewinds_ && slot.snapshot && *slot.snapshot <= slot.ran.size() &&
+        *slot.snapshot > reach.length && reaches(*slot.snapshot))
+        reach = {*slot.snapshot, true};
+    return reach;
+}
+
+OgaEngine::Reuse OgaEngine::Resume(const char** why) {
+    const std::vector<int>& target = Target();
+    std::optional<std::size_t> best;
+    Reach reach;
+    for (std::size_t i = 0; i < slots_.size(); ++i) {
+        const Reach r = ReachOf(slots_[i], target);
+        if (r.length == 0) continue;
+        if (!best || r.length > reach.length ||
+            (r.length == reach.length && slots_[i].used > slots_[*best].used)) {
+            best = i;
+            reach = r;
+        }
+    }
+    if (!best) return Rebuild(std::nullopt, why);
+    active_ = best;
+    Live& run = Active();
+    run.used = ++clock_;
+    if (!reach.rewind) return Reuse::kSameTokens;
+    try {
+        api_->Check(api_->functions().generator_rewind_to(run.generator.get(), reach.length),
+                    "OgaGenerator_RewindTo");
+    } catch (const OgaError& e) {
+        // OGA refuses every rewind of a model it cannot rewind, such as gemma4 in OGA 0.19
+        rewinds_ = false;
+        header_print("WARNING", display_name_ << ": " << e.what()
+                                << "; replaying instead, and after every later checkpoint");
+        if (why) *why = "its rewind was refused";
+        return Rebuild(best, why);
+    }
+    run.ran.resize(reach.length);
+    run.rewound = true;
+    return Reuse::kRewound;
+}
+
+OgaEngine::Reuse OgaEngine::Rebuild(std::optional<std::size_t> slot, const char** why) {
+    if (!slot) {
+        if (slots_.size() < slot_limit()) {
+            slots_.emplace_back();
+            slot = slots_.size() - 1;
+            if (why) *why = "new";
+        } else {
+            slot = LeastRecentlyUsed();
+            if (why) *why = "replacing the least recently used";
+        }
+    }
+    active_ = slot;
+    Live& run = Active();
+    // The old generator goes before the new one takes its memory.
+    run = Live{};
+    run.used = ++clock_;
+    run.generator = NewGenerator(max_length_);
+    run.capacity = max_length_;
     return Reuse::kRebuilt;
+}
+
+std::size_t OgaEngine::LeastRecentlyUsed() const {
+    std::size_t oldest = 0;
+    for (std::size_t i = 1; i < slots_.size(); ++i)
+        if (slots_[i].used < slots_[oldest].used) oldest = i;
+    return oldest;
+}
+
+void OgaEngine::Drop(std::size_t slot) {
+    slots_.erase(slots_.begin() + static_cast<std::ptrdiff_t>(slot));
+    if (!active_) return;
+    if (*active_ == slot)
+        active_.reset();
+    else if (*active_ > slot)
+        --*active_;
+}
+
+void OgaEngine::Trim() {
+    while (slots_.size() > slot_limit()) Drop(LeastRecentlyUsed());
+}
+
+std::string OgaEngine::SlotText(const char* why) const {
+    const std::size_t limit = slot_limit();
+    if (limit <= 1 || !active_) return "";
+    std::string text = " (slot " + std::to_string(*active_ + 1) + " of " + std::to_string(limit);
+    if (why) text += std::string(", ") + why;
+    return text + ")";
 }
 
 void OgaEngine::SetInputs(OgaGenerator* generator, const std::vector<int>& ids,

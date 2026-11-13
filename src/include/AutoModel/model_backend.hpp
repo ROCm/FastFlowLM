@@ -57,6 +57,11 @@ struct BackendContext {
     ///       directory layout stays the frontend's knowledge and the file is
     ///       opened once per load. null for families that have no such file.
     const nlohmann::json* tokenizer_config = nullptr;
+    /// \brief --prefix-slots and --prefix-cache-mb, -1 when not given
+    /// \note The NPU frontends read them for their own prefix cache; a backend
+    ///       that keeps conversations itself (oga-hipep) reads them here.
+    int prefix_slots = -1;
+    int prefix_cache_mb = -1;
 };
 
 /// \brief what a backend needs from the frontend *before* it can be built
@@ -124,6 +129,18 @@ public:
     /// \note The difference across a prefill is the part of the reused prefix
     ///       that the engine ran again rather than served from its cache.
     virtual std::uint64_t replayed_tokens() const { return 0; }
+
+    /// \brief prefill tokens the engine had run already and did not run again,
+    ///        counted since it was built
+    /// \note Only an engine that keeps several conversations finds these: tokens
+    ///       past what the frontend skipped, held by another conversation's state.
+    ///       The difference across a prefill adds to its cached tokens.
+    virtual std::uint64_t reused_tokens() const { return 0; }
+
+    /// \brief the tokens the prefill calls that follow will give together
+    /// \note Called before a prompt is sent in chunks, so an engine that matches
+    ///       token prefixes can match the whole prompt rather than its first chunk.
+    virtual void expect_prefill(const std::vector<int>& /*tokens*/) {}
 
     /// \brief whether the engine finds by itself how much of a prompt it has
     ///        already run
