@@ -484,19 +484,7 @@ int Sampler::sample_greedy(buffer<bf16>& x, const std::vector<uint32_t>* allowed
             this->logits[i] = x[i];
         }
         #endif
-        if (logprobs != nullptr) {
-            raw_logprobs_apply(*logprobs);
-        }
-        if (penalties_active) {
-            sampler_penalty_apply_sparse();
-        }
-        sampler_allowed_apply(allowed);
-        for (int i = 0; i < in_features; i++) {
-            if (this->logits[i] > best) {
-                best = this->logits[i];
-                best_id = i;
-            }
-        }
+        return sample_greedy_loaded(allowed, logprobs);
     }
     else {
         // Nothing rewrites the logits, so scan them where they lie: no
@@ -549,6 +537,25 @@ int Sampler::sample_greedy(buffer<bf16>& x, const std::vector<uint32_t>* allowed
     }
 
     // callers that inspect the surviving candidates still get a consistent view
+    this->top_k_logits.assign(1, logits_t{ best, best_id, 1.0f });
+    ring_buffer_update_sparse(best_id);
+    return best_id;
+}
+
+int Sampler::sample_greedy_loaded(const std::vector<uint32_t>* allowed, sample_logprobs_t* logprobs) {
+    if (logprobs != nullptr) {
+        raw_logprobs_apply(*logprobs);
+    }
+    sampler_penalty_apply_sparse();
+    sampler_allowed_apply(allowed);
+    float best = -std::numeric_limits<float>::infinity();
+    int best_id = 0;
+    for (int i = 0; i < in_features; i++) {
+        if (this->logits[i] > best) {
+            best = this->logits[i];
+            best_id = i;
+        }
+    }
     this->top_k_logits.assign(1, logits_t{ best, best_id, 1.0f });
     ring_buffer_update_sparse(best_id);
     return best_id;
@@ -644,7 +651,15 @@ int Sampler::sample(buffer<bf16>& x, const std::vector<uint32_t>* allowed, sampl
         this->logits[i] = x[i];
     }
     #endif
+    return sample_loaded(allowed, logprobs);
+}
 
+int Sampler::sample(const float* x, const std::vector<uint32_t>* allowed, sample_logprobs_t* logprobs) {
+    std::memcpy(this->logits.data(), x, sizeof(float) * static_cast<size_t>(in_features));
+    return this->top_k == 1 ? sample_greedy_loaded(allowed, logprobs) : sample_loaded(allowed, logprobs);
+}
+
+int Sampler::sample_loaded(const std::vector<uint32_t>* allowed, sample_logprobs_t* logprobs) {
     if (logprobs != nullptr) {
         raw_logprobs_apply(*logprobs);
     }

@@ -161,6 +161,14 @@ public:
     int sample(buffer<bf16>& x, const std::vector<uint32_t>* allowed = nullptr,
                sample_logprobs_t* logprobs = nullptr);
 
+    /// \brief sample() for an fp32 row of in_features logits, e.g. a verify row of a speculative batch
+    int sample(const float* x, const std::vector<uint32_t>* allowed = nullptr,
+               sample_logprobs_t* logprobs = nullptr);
+
+    /// \brief sample() and sample_greedy() past the copy into this->logits
+    int sample_loaded(const std::vector<uint32_t>* allowed, sample_logprobs_t* logprobs);
+    int sample_greedy_loaded(const std::vector<uint32_t>* allowed, sample_logprobs_t* logprobs);
+
     /// \brief Push every token the bitmask does not allow to -inf in this->logits
     void sampler_allowed_apply(const std::vector<uint32_t>* allowed);
 

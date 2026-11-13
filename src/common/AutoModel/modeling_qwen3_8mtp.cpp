@@ -16,7 +16,6 @@
 #include "AutoModel/modeling_qwen3_8mtp.hpp"
 #include "models/qwen3_8mtp/flm/aie2p/qwen3_8mtp_npu.hpp"
 #include <algorithm>
-#include <bit>
 #include <memory>
 #include <limits>
 
@@ -428,7 +427,7 @@ std::string Qwen3_8MTP::generate(chat_meta_info_t& meta_info, int length_limit, 
     // Prints only if a cycle actually ran -- silent for a checkpoint with no
     // MTP head. Worth printing at all because a broken draft path is
     // otherwise invisible: verify overrides every rejected draft with the
-    // base model's own argmax, so bad drafting costs only speed, not
+    // base model's own choice, so bad drafting costs only speed, not
     // correctness. The newline guards against running on from the last
     // streamed token when log_raw_output is off.
     //
@@ -454,77 +453,64 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
 
     stop_reason_t reason = EOT_DETECTED;
 
-    // On for greedy requests only. Acceptance is an exact compare against the base model's
-    // argmax, so speculation can only reproduce greedy sampling: with a temperature above 0 (and
-    // top_k above 1) it would ignore the requested distribution and the penalties, so such a request
-    // decodes token by token through _sample() instead. A checkpoint with no
-    // MTP head is unaffected: speculate() just returns {} every step and
-    // everything falls through to the ordinary path below.
-    // Under a decoding constraint speculate() would commit drafts the constraint's mask never saw, so a constrained
-    // request speculates only through set_speculation_chooser() below (built-in engine, greedy sampler).
-    // An extension's generic speculation table has no per-draft logits view,
-    // so logprobs use ordinary decoding unless this is the built-in engine.
+    // The built-in engine asks set_speculation_chooser() below for the token of every verify row, in order, and keeps
+    // the drafts up to the first row whose token differs, which it commits as the cycle's free token. The chooser
+    // samples each row with this request's sampler (penalties, constraint mask, top-k/top-p/min-p, temperature, the
+    // seeded draw). The draft is the head's argmax, a one-hot q, so that is speculative sampling (Leviathan et al.
+    // 2023, Chen et al. 2023): d is kept with probability p(d) = min(1, p(d)/q(d)), and otherwise the token is drawn
+    // from p without d, renormalised. Every committed token is distributed as plain decoding would draw it, and a
+    // greedy request gets the argmax as before.
+    // An engine without the chooser (an extension's generic speculation table) compares with its own argmax, so it
+    // speculates only for greedy, unconstrained requests, and only without logprobs, which it has no per-draft view of.
     // FLM_DISABLE_SPECULATION=1 turns it off too, for comparing against plain
     // decoding (output, logprobs) on the same build.
     const char* no_spec = std::getenv("FLM_DISABLE_SPECULATION");
-    const bool has_speculation_logits =
-        meta_info.logprobs_top_n < 0 ||
-        dynamic_cast<qwen3_8mtp_npu*>(this->lm_engine) != nullptr;
-    // A constrained request still speculates when the built-in engine can hand each verify row to the constraint
-    // (set_speculation_chooser) and the sampler is greedy, which is all speculation can reproduce.
     auto* mtp_engine = dynamic_cast<qwen3_8mtp_npu*>(this->lm_engine);
     // the sampler's own rule: a temperature below 1e-6 is greedy (sampler_temp_apply)
     const bool greedy = this->sampler && (this->sampler->top_k == 1 || this->sampler->temperature < 1e-6f);
-    const bool constrained_spec = meta_info.constraint && mtp_engine != nullptr && greedy;
-    const bool spec_enabled = this->lm_engine->supports_speculation() &&
-        greedy &&
-        (!meta_info.constraint || constrained_spec) &&
-        has_speculation_logits &&
+    bool spec_enabled = this->lm_engine->supports_speculation() &&
+        (mtp_engine != nullptr || (greedy && !meta_info.constraint && meta_info.logprobs_top_n < 0)) &&
         !(no_spec != nullptr && no_spec[0] != '\0' && std::strcmp(no_spec, "0") != 0);
-    // Cleared on every way out, so the next request does not inherit this one's constraint.
+    // rows the sampler chose in the current speculate() call; must equal the tokens it commits
+    int sampled_rows = 0;
+    // Cleared on every way out, so the next request does not inherit this one's sampler or constraint.
     struct chooser_guard {
         qwen3_8mtp_npu* engine = nullptr;
         ~chooser_guard() { if (engine) engine->set_speculation_chooser({}); }
     } guard;
-    if (spec_enabled && constrained_spec) {
+    if (spec_enabled && mtp_engine != nullptr) {
+        if (!this->sampler) throw std::runtime_error("speculation needs a sampler");
         decode_constraint* constraint = meta_info.constraint.get();
-        // Argmax of one verify row inside the constraint's mask, then the constraint advances past it: the engine asks
-        // for rows in order and stops at the first mismatch, so this sees exactly the tokens that get committed.
-        // Past an accepted stop token the matcher is terminated (fill_mask() would throw); the engine truncates a batch
-        // one past its stop token, so those rows are discarded and only need some token.
+        // Past an accepted stop token the engine truncates the batch, so those rows are discarded and only need some
+        // token; they must not reach the sampler's penalty window, the RNG or the matcher (fill_mask() would throw).
         auto stopped = std::make_shared<bool>(false);
-        mtp_engine->set_speculation_chooser([this, constraint, stopped](int, const float* row, int vocab) {
-            if (*stopped) {
+        mtp_engine->set_speculation_chooser([this, constraint, stopped, &sampled_rows](int, const float* row, int vocab) {
+            auto argmax = [row, vocab]() {
                 int best = 0;
                 for (int i = 1; i < vocab; i++) if (row[i] > row[best]) best = i;
                 return best;
+            };
+            if (*stopped) return argmax();
+            if (vocab < this->sampler->in_features) {
+                throw std::runtime_error("Backend returned fewer logits than the frontend vocabulary");
             }
-            const bool masked = constraint->fill_mask(this->constraint_mask_);
-            int best = -1;
-            float best_logit = -std::numeric_limits<float>::infinity();
-            if (!masked) {
+            const bool masked = constraint != nullptr && constraint->fill_mask(this->constraint_mask_);
+            int token = this->sampler->sample(row, masked ? &this->constraint_mask_ : nullptr);
+            sampled_rows++;
+            auto allowed = [this](int i) {
+                return i >= 0 && (size_t)i / 32 < this->constraint_mask_.size() &&
+                       ((this->constraint_mask_[i / 32] >> (i % 32)) & 1u);
+            };
+            if (masked && !allowed(token)) {
+                // only with broken (NaN) logits, as in _sample(): the best allowed token, else keep the sample
+                float best_logit = -std::numeric_limits<float>::infinity();
                 for (int i = 0; i < vocab; i++) {
-                    if (row[i] > best_logit) { best_logit = row[i]; best = i; }
-                }
-            } else {
-                const int words = std::min<int>((int)this->constraint_mask_.size(), (vocab + 31) / 32);
-                for (int w = 0; w < words; w++) {
-                    uint32_t bits = this->constraint_mask_[w];
-                    while (bits) {
-                        const int i = w * 32 + std::countr_zero(bits);
-                        bits &= bits - 1;
-                        if (i < vocab && row[i] > best_logit) { best_logit = row[i]; best = i; }
-                    }
+                    if (allowed(i) && row[i] > best_logit) { best_logit = row[i]; token = i; }
                 }
             }
-            if (best < 0) {
-                // nothing allowed (or NaN logits): the plain argmax, as _sample() keeps its sample in that case
-                best = 0;
-                for (int i = 1; i < vocab; i++) if (row[i] > row[best]) best = i;
-            }
-            constraint->accept(best);
-            if (this->is_eos(best)) *stopped = true;
-            return best;
+            if (constraint != nullptr) constraint->accept(token);
+            if (this->is_eos(token)) *stopped = true;
+            return token;
         });
         guard.engine = mtp_engine;
     }
@@ -635,9 +621,17 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
         const bool eos_suppressed = meta_info.ignore_eos || meta_info.generated_tokens < meta_info.min_tokens;
         if (spec_enabled && tokens_left > 1 && !eos_suppressed) {
             this->profiler_list[DECODING_TIME].start();
+            sampled_rows = 0;
             std::vector<int> accepted =
                 this->lm_engine->speculate(last_sampled_token,
                                            std::min(SPEC_MAX_DRAFT, tokens_left - 1));
+            if (guard.engine && sampled_rows != (int)accepted.size()) {
+                // the engine committed tokens the sampler did not choose (or dropped ones it did): the batch did
+                // not follow the request's sampling, so decode the rest of the reply one token at a time
+                header_print("WARNING", "speculation committed " << accepted.size() << " token(s) for "
+                             << sampled_rows << " sampled row(s); speculation is off for the rest of this reply");
+                spec_enabled = false;
+            }
             // Charge the cycle to however many tokens came out of it, so
             // tok/s stays comparable with the non-speculative path.
             this->profiler_list[DECODING_TIME].stop(
@@ -657,7 +651,7 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
             if (!accepted.empty()) {
                 // These never went through _sample(), so their logprobs come
                 // from the verify pass that accepted them: row i is the
-                // distribution accepted[i] is the argmax of.
+                // distribution accepted[i] was chosen from.
                 const float* rows = nullptr;
                 int row_count = 0;
                 int vocab = 0;

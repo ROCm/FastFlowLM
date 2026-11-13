@@ -1,6 +1,7 @@
 // Sampler (src/common/modules/sampler.cpp) on the real code, no NPU. Built twice: scalar, and with USEAVX2=1.
 #include "modules/sampler.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -430,6 +431,243 @@ void TestNaNLogitFallsBackToTheHeapPath() {
     }
 }
 
+// sample() on an fp32 row (a verify row of a speculative batch) is sample() on the bf16 buffer it came from: same
+// tokens, same candidates, same penalty history, same draws.
+void TestFloatRowMatchesTheBf16Buffer() {
+    std::mt19937 rng(11);
+    uint64_t seed = 1;
+    for (int top_k : {1, 20, 0}) {
+        for (float T : {0.0f, 0.7f}) {
+            for (bool penalties : {false, true}) {
+                for (bool masked : {false, true}) {
+                    sampler_config c = config_of(top_k, T, seed++);
+                    c.top_p = 0.9f;
+                    c.min_p = 0.05f;
+                    if (penalties) {
+                        c.repeat_last_n = 16;
+                        c.rep_penalty = 1.1f;
+                        c.pre_penalty = 1.5f;
+                    }
+                    Sampler a(1000, c), b(1000, c);
+                    for (int step = 0; step < 8; step++) {
+                        auto x = tied_logits(1000, step % 4, rng);
+                        std::vector<float> row(1000);
+                        for (int i = 0; i < 1000; i++) row[i] = x[i];
+                        std::vector<uint32_t> allowed((1000 + 31) / 32, 0xFFFFFFFFu);
+                        if (masked) {
+                            for (auto& w : allowed) w = static_cast<uint32_t>(rng()) | 1u;
+                        }
+                        const auto* mask = masked ? &allowed : nullptr;
+                        const int want = a.sample(x, mask);
+                        const int got = b.sample(row.data(), mask);
+                        if (got != want || !same_state(a, b)) {
+                            CHECK(false, "top_k %d T %g%s%s step %d: row gave %d, buffer %d", top_k, T,
+                                  penalties ? " penalties" : "", masked ? " masked" : "", step, got, want);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// The engine's side of one speculative cycle (qwen3_8mtp_npu::speculate with set_speculation_chooser): the token of
+// verify row i comes from the chooser, here the sampler; drafts are kept while they equal it, and the first row that
+// differs, or the row past the last draft, is the cycle's free token.
+using Target = std::function<std::vector<float>(const std::vector<int>&)>;
+
+std::vector<int> speculate_with(Sampler& s, const Target& target, std::vector<int>& ctx, const std::vector<int>& drafts,
+                                int* accepted_drafts = nullptr) {
+    std::vector<int> committed;
+    for (size_t i = 0; i <= drafts.size(); i++) {
+        const std::vector<float> row = target(ctx);
+        const int token = s.sample(row.data());
+        committed.push_back(token);
+        ctx.push_back(token);
+        if (i == drafts.size() || token != drafts[i]) break;
+        if (accepted_drafts) (*accepted_drafts)++;
+    }
+    return committed;
+}
+
+// One verify row against an argmax draft d (q one-hot): d is kept with probability min(1, p(d)/q(d)) = p(d), and a
+// rejection draws from max(0, p - q) renormalised, which is p without d.
+void TestSpeculativeAcceptProbabilityAndResidual() {
+    const std::vector<double> p = {0.4, 0.3, 0.15, 0.1, 0.05};
+    std::vector<float> row(16, -30.0f);
+    for (int i = 0; i < 5; i++) row[i] = float(std::log(p[i]));
+    const Target target = [&](const std::vector<int>&) { return row; };
+    const int N = 60000;
+    for (int d : {0, 1, 4}) {
+        auto c = config_of(5, 1.0f, 2024 + d);
+        Sampler s(16, c);
+        int kept = 0;
+        std::vector<int> rejected(5, 0);
+        for (int n = 0; n < N; n++) {
+            std::vector<int> ctx;
+            const auto out = speculate_with(s, target, ctx, {d});
+            if (out.size() == 2) {
+                kept++;
+            } else {
+                CHECK(out.size() == 1 && out[0] != d && out[0] < 5, "draft %d: a rejection committed %d", d, out[0]);
+                rejected[out[0]]++;
+            }
+        }
+        const double q_d = 1.0;
+        const double want_keep = std::min(1.0, p[d] / q_d);
+        CHECK(std::fabs(kept / double(N) - want_keep) < 0.01, "draft %d kept %.4f of the time, want %.4f", d,
+              kept / double(N), want_keep);
+        std::vector<double> residual(5);
+        double z = 0;
+        for (int i = 0; i < 5; i++) z += residual[i] = std::max(0.0, p[i] - (i == d ? q_d : 0.0));
+        for (auto& r : residual) r /= z;
+        const double tvd = tv_distance(rejected, residual, N - kept);
+        CHECK(tvd < 0.02, "draft %d: rejected tokens are %.4f from the residual in total variation", d, tvd);
+    }
+}
+
+// top_k 1, or a temperature of 0, with no penalties: the batch is the longest prefix of drafts that are each row's
+// argmax, then the argmax of the next row, which is what the engine commits without a chooser.
+void TestGreedySpeculationKeepsTheArgmaxPrefix() {
+    std::mt19937 rng(3);
+    for (auto [top_k, T] : {std::pair{1, 0.7f}, std::pair{20, 0.0f}}) {
+        auto c = config_of(top_k, T);
+        Sampler s(1000, c);
+        for (int cycle = 0; cycle < 200; cycle++) {
+            std::vector<std::vector<float>> rows(5, std::vector<float>(1000));
+            std::vector<int> argmax(5);
+            for (int r = 0; r < 5; r++) {
+                std::normal_distribution<float> normal(0.0f, 3.0f);
+                for (auto& v : rows[r]) v = normal(rng);
+                argmax[r] = int(std::max_element(rows[r].begin(), rows[r].end()) - rows[r].begin());
+            }
+            std::vector<int> drafts = {argmax[0], argmax[1], argmax[2], argmax[3]};
+            const int wrong = cycle % 5;  // 4: every draft right
+            if (wrong < 4) drafts[wrong] = (argmax[wrong] + 1) % 1000;
+            std::vector<int> want(argmax.begin(), argmax.begin() + (wrong < 4 ? wrong + 1 : 5));
+            std::vector<int> ctx;
+            const Target target = [&](const std::vector<int>& x) { return rows[x.size()]; };
+            const auto got = speculate_with(s, target, ctx, drafts);
+            if (got != want) {
+                CHECK(false, "top_k %d T %g cycle %d: %zu tokens, want %zu", top_k, T, cycle, got.size(), want.size());
+                return;
+            }
+        }
+    }
+}
+
+// A toy model whose next-token logits depend on the previous token, sampled with temperature, top-k and a presence
+// penalty, against a draft that is the argmax of a different table (so it is sometimes wrong). The first three tokens
+// speculative decoding commits are distributed exactly as when every token is sampled directly.
+void TestSpeculativeSamplingMatchesDirectSampling() {
+    const int V = 4;
+    const float table[V + 1][V] = {
+        {1.30f, 0.70f, 0.20f, -0.40f},   // after the start token
+        {0.10f, 1.10f, 0.60f, -0.20f},
+        {0.90f, -0.30f, 0.40f, 1.20f},
+        {0.50f, 0.80f, -0.60f, 0.15f},
+        {1.00f, 0.25f, 0.85f, -0.10f},
+    };
+    const int draft_of[V + 1] = {0, 2, 3, 1, 0};
+    const float T = 0.7f, pre = 0.6f;
+    const int top_k = 3;
+    auto config = [&](uint64_t seed) {
+        sampler_config c = config_of(top_k, T, seed);
+        c.repeat_last_n = 64;
+        c.pre_penalty = pre;
+        return c;
+    };
+    // ctx holds the start token (V) then the reply
+    const Target target = [&](const std::vector<int>& ctx) {
+        const int prev = ctx.back();
+        return std::vector<float>(table[prev], table[prev] + V);
+    };
+
+    // exact: the penalised logits, top-k, temperature and softmax, over every 3-token reply
+    auto step_probs = [&](const std::vector<int>& ctx) {
+        std::vector<double> l(V);
+        for (int t = 0; t < V; t++) {
+            l[t] = table[ctx.back()][t];
+            if (std::find(ctx.begin() + 1, ctx.end(), t) != ctx.end()) l[t] -= pre;
+        }
+        std::vector<int> order(V);
+        for (int t = 0; t < V; t++) order[t] = t;
+        std::sort(order.begin(), order.end(), [&](int a, int b) { return l[a] > l[b]; });
+        std::vector<double> pr(V, 0.0);
+        double z = 0;
+        for (int r = 0; r < top_k; r++) z += pr[order[r]] = std::exp(l[order[r]] / T);
+        for (auto& x : pr) x /= z;
+        return pr;
+    };
+    std::vector<double> exact(V * V * V);
+    for (int a = 0; a < V; a++) {
+        for (int b = 0; b < V; b++) {
+            for (int c = 0; c < V; c++) {
+                exact[(a * V + b) * V + c] =
+                    step_probs({V})[a] * step_probs({V, a})[b] * step_probs({V, a, b})[c];
+            }
+        }
+    }
+
+    const int N = 60000;
+    std::vector<int> spec(V * V * V, 0), direct(V * V * V, 0);
+    int accepted = 0, cycles = 0;
+    sampler_config cs = config(5), cd = config(6);
+    Sampler ss(V, cs), sd(V, cd);
+    for (int n = 0; n < N; n++) {
+        ss.reset_penalties();
+        std::vector<int> ctx = {V};
+        while (ctx.size() < 4) {
+            // the head drafts greedily from its own table, two ahead
+            std::vector<int> drafts = {draft_of[ctx.back()]};
+            drafts.push_back(draft_of[drafts[0]]);
+            speculate_with(ss, target, ctx, drafts, &accepted);
+            cycles++;
+        }
+        spec[(ctx[1] * V + ctx[2]) * V + ctx[3]]++;
+
+        sd.reset_penalties();
+        std::vector<int> d = {V};
+        while (d.size() < 4) {
+            const auto row = target(d);
+            d.push_back(sd.sample(row.data()));
+        }
+        direct[(d[1] * V + d[2]) * V + d[3]]++;
+    }
+    const double tv_spec = tv_distance(spec, exact, N);
+    const double tv_direct = tv_distance(direct, exact, N);
+    CHECK(tv_spec < 0.02, "speculative replies are %.4f from the exact distribution in total variation", tv_spec);
+    CHECK(tv_direct < 0.02, "direct replies are %.4f from the exact distribution in total variation", tv_direct);
+    // neither every draft kept nor every draft rejected, or the comparison says nothing about the residual
+    CHECK(accepted > N / 4 && accepted < 2 * cycles - N / 4, "%d drafts kept over %d cycles", accepted, cycles);
+}
+
+// A seed gives the same speculative reply twice: the sampler's seeded draw is the only randomness.
+void TestSeededSpeculationIsReproducible() {
+    std::mt19937 rng(9);
+    std::vector<std::vector<float>> rows(64, std::vector<float>(256));
+    std::normal_distribution<float> normal(0.0f, 1.5f);
+    for (auto& r : rows) for (auto& v : r) v = normal(rng);
+    const Target target = [&](const std::vector<int>& ctx) { return rows[ctx.size() % rows.size()]; };
+    std::vector<int> replies[2];
+    for (auto& reply : replies) {
+        sampler_config c = config_of(20, 0.7f, 4242);
+        c.repeat_last_n = 64;
+        c.pre_penalty = 1.5f;
+        Sampler s(256, c);
+        while (reply.size() < 40) {
+            std::vector<int> drafts;
+            for (int i = 0; i < 3; i++) {
+                const auto& r = rows[(reply.size() + i) % rows.size()];
+                drafts.push_back(int(std::max_element(r.begin(), r.end()) - r.begin()));
+            }
+            speculate_with(s, target, reply, drafts);
+        }
+    }
+    CHECK(replies[0] == replies[1], "the same seed gave two different speculative replies");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -448,6 +686,11 @@ int main(int argc, char** argv) {
         {"TestTopKOffMatchesTheHeapPath", TestTopKOffMatchesTheHeapPath},
         {"TestSignedZerosTieByIdWithTopKOff", TestSignedZerosTieByIdWithTopKOff},
         {"TestNaNLogitFallsBackToTheHeapPath", TestNaNLogitFallsBackToTheHeapPath},
+        {"TestFloatRowMatchesTheBf16Buffer", TestFloatRowMatchesTheBf16Buffer},
+        {"TestSpeculativeAcceptProbabilityAndResidual", TestSpeculativeAcceptProbabilityAndResidual},
+        {"TestGreedySpeculationKeepsTheArgmaxPrefix", TestGreedySpeculationKeepsTheArgmaxPrefix},
+        {"TestSpeculativeSamplingMatchesDirectSampling", TestSpeculativeSamplingMatchesDirectSampling},
+        {"TestSeededSpeculationIsReproducible", TestSeededSpeculationIsReproducible},
     };
     int failed_tests = 0;
 #if USEAVX2
