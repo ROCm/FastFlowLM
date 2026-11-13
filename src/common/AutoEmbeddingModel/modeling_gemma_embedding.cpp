@@ -6,7 +6,6 @@
 /// \note This is a source file for the Gemma_Embedding class
 
 #include "AutoEmbeddingModel/modeling_gemma_embedding.hpp"
-#include "models/gemma_embedding/flm/aie2p/gemma_embedding.hpp"
 
 Gemma_Embedding::Gemma_Embedding(flm_rt::device* npu_device_inst) : AutoEmbeddingModel(npu_device_inst, "embed-gemma:300m") {
 }
@@ -17,8 +16,22 @@ void Gemma_Embedding::load_model(std::string model_path, json model_info, bool e
     this->_shared_load_model(model_path, model_info, enable_preemption);
 }
 
-std::vector<float> Gemma_Embedding::embed(std::string& text, embedding_task_type_t task_type) {
-    std::string task_prefix = this->_get_task_prefix(task_type);
+EmbeddingResult Gemma_Embedding::embed(const json& request, std::function<bool()> cancelled) {
+    if (cancelled()) throw std::runtime_error("Embedding cancelled");
+    const auto text = request.at("input").get<std::string>();
+    const auto task = request.value("task", std::string());
+    uint32_t dimensions = 0;
+    if (request.contains("dimensions")) {
+        const auto& value = request.at("dimensions");
+        if (!value.is_number_integer() || value.get<int64_t>() <= 0 || value.get<uint64_t>() > UINT32_MAX)
+            throw std::invalid_argument("dimensions must be a positive uint32");
+        dimensions = value.get<uint32_t>();
+    }
+    std::string task_prefix = this->_get_task_prefix(task);
+    if (request.contains("title")) {
+        if (task != "document") throw std::invalid_argument("title requires the document task");
+        task_prefix = "title: " + request.at("title").get<std::string>() + " | text: ";
+    }
     std::string full_text = "<bos>" + task_prefix + text + "<eos>";
     std::vector<int> tokens = this->tokenizer->encode(full_text);
     if (tokens.size() > 2048) {
@@ -28,9 +41,11 @@ std::vector<float> Gemma_Embedding::embed(std::string& text, embedding_task_type
     }
     
     buffer<bf16> y = this->embedding_model_impl->embed(tokens);
+    if (dimensions && dimensions != y.size())
+        throw std::invalid_argument("This embedding implementation only supports " + std::to_string(y.size()) + " dimensions");
     std::vector<float> result(y.size());
     for (int i = 0; i < y.size(); i++) {
         result[i] = static_cast<float>(y[i]);
     }
-    return result;
+    return {std::move(result), tokens.size()};
 }

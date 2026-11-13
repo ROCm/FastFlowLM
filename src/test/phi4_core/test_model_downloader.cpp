@@ -254,6 +254,21 @@ void TestModelIsReadyOnlyWhenAllFourFinalFilesValidate() {
     TEST_REQUIRE(downloader.is_model_downloaded("test-model:1b") == ModelDownloader::ModelStatus::Missing);
 }
 
+void TestCatalogFileRecordsDoNotNeedGlobalMetadata() {
+    DownloaderFixture fixture;
+    fixture.WriteValidFiles();
+    auto catalog = ReadJson(fixture.catalog_path);
+    catalog["models"]["test-model"]["1b"]["file_records"] =
+        ReadJson(fixture.info_path).at("test-model:1b");
+    Write(fixture.catalog_path, catalog.dump());
+    fs::remove(fixture.info_path);
+    fixture.models = model_list(fixture.catalog_string, fixture.root_string);
+    ModelDownloader downloader(fixture.models);
+    TEST_REQUIRE(downloader.is_model_downloaded("test-model:1b") == ModelDownloader::ModelStatus::Ready);
+    Write(fixture.model_path() / "b.bin", "BETA");
+    TEST_REQUIRE(downloader.is_model_downloaded("test-model:1b") == ModelDownloader::ModelStatus::Missing);
+}
+
 void TestPartFileNeverMakesModelReady() {
     DownloaderFixture fixture;
     fixture.WriteValidFiles();
@@ -942,6 +957,7 @@ void TestSuccessfulForceDownloadAtomicallyReplacesFinalFile() {
 }  // namespace
 
 int main() {
+    RunTest(TestCatalogFileRecordsDoNotNeedGlobalMetadata, "extension file records");
     RunTest(TestCoreCatalogHasExactlyFourFilesAndExpectedDirectoryName, "core catalog");
     RunTest(TestGgufUrlContainsAmdRevisionAndFilename, "GGUF URL");
     RunTest(TestThreeFrontendUrlsContainMicrosoftRevisionAndFilename, "frontend URLs");

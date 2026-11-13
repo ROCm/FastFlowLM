@@ -1087,7 +1087,8 @@ std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader&
             if (!req.body().empty()) {
                 request_json = json::parse(req.body());
             }
-            rest_handler->handle_embeddings(request_json, send_response, send_streaming_response);
+            rest_handler->handle_embeddings(request_json, send_response, send_streaming_response,
+                    [&] { return cancellation_token && cancellation_token->cancelled(); });
         });
     
     server->register_handler("GET", "/api/tags",
@@ -1170,7 +1171,8 @@ std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader&
                 if (!req.body().empty()) {
                     request_json = json::parse(req.body());
                 }
-                rest_handler->handle_embeddings(request_json, send_response, send_streaming_response);
+                rest_handler->handle_embeddings(request_json, send_response, send_streaming_response,
+                    [&] { return cancellation_token && cancellation_token->cancelled(); });
         });
 
     // System One decisions (d3:lite via --decision); /v1/decisions is the alias vLLM Semantic

@@ -6,16 +6,7 @@
 /// \note This is a source file for the AutoEmbeddingModel class
 
 #include "AutoEmbeddingModel/modeling_gemma_embedding.hpp"
-
-std::unordered_set<std::string> embeddingModelTags = {
-        "embed-gemma", "embed-gemma:300m"
-};
-
-AutoEmbeddingModel::AutoEmbeddingModel(flm_rt::device* npu_device_inst, std::string current_model) {
-    this->npu_device_inst = npu_device_inst;
-    this->current_model = current_model;
-}
-
+#include "models/gemma_embedding/flm/aie2p/gemma_embedding.hpp"
 
 std::string AutoEmbeddingModel::get_current_model() {
     return this->current_model;

@@ -6,6 +6,7 @@
 /// \note This is a source file for the main entry point
 #pragma once
 #include "AutoDecisionModel/auto_decision_model.hpp"
+#include "AutoEmbeddingModel/all_embedding_model.hpp"
 #include "runner.hpp"
 #include "server.hpp"
 #include "model_list.hpp"
@@ -780,6 +781,7 @@ static int run_flm(int argc, char* argv[]) {
     }
 
     if (parsed_args.command == "run" || parsed_args.command == "serve" || parsed_args.command == "pull" || parsed_args.command == "remove" || parsed_args.command == "check" || parsed_args.command == "bench") {
+        parsed_args.model_tag = availble_models.rectify_model_tag(parsed_args.model_tag);
       if (parsed_args.model_tag != "model-faker" && (!availble_models.is_model_supported(parsed_args.model_tag))) {
             header_print("ERROR", "Model not found: " << parsed_args.model_tag << "; Please check with `flm list` and try again.");
             return 1;
@@ -787,7 +789,7 @@ static int run_flm(int argc, char* argv[]) {
     }
   
     if (parsed_args.command == "serve" || parsed_args.command == "run") {
-        // -a / -e must name a model of the right kind (the catalog's family says which)
+        // -a / -e must name a model of the right kind.
         auto family_of = [&](const std::string& tag) {
             auto [resolved_tag, info] = availble_models.get_model_info(tag);
             return info.value("details", nlohmann::json::object()).value("family", std::string());
@@ -803,11 +805,12 @@ static int run_flm(int argc, char* argv[]) {
             }
         }
         if (parsed_args.embed) {
+            parsed_args.embed_tag = availble_models.rectify_model_tag(parsed_args.embed_tag);
             if (!availble_models.is_model_supported(parsed_args.embed_tag)) {
                 header_print("ERROR", "Embedding model not found: " << parsed_args.embed_tag << "; Please check with `flm list` and try again.");
                 return 1;
             }
-            if (family_of(parsed_args.embed_tag) != "embed-gemma") {
+            if (!is_embedding_model(availble_models.get_model_info(parsed_args.embed_tag).second)) {
                 header_print("ERROR", parsed_args.embed_tag << " is not an embedding model; use e.g. -e embed-gemma:300m");
                 return 1;
             }
@@ -854,8 +857,8 @@ static int run_flm(int argc, char* argv[]) {
             header_print_g("FLM", "ASR mode enabled: reserving additional 1GB of memory");
         }
         if (parsed_args.embed) {
-            embedding_size = 300000000;
-            header_print_g("FLM", "Embedding mode enabled: reserving additional 300MB of memory");
+            embedding_size = availble_models.get_model_info(parsed_args.embed_tag).second.value("size", uint64_t{300000000});
+            header_print_g("FLM", "Embedding mode enabled: reserving additional " << embedding_size / 1000000 << "MB of memory");
         }
         if (!parsed_args.decision.empty()) {
             // the decision model's own weights (d3:edge ~0.6 GB, d3:lite 0.56 GB, d3:nano 1.34 GB, d3:mini 3.43 GB, d3:flash ~5.5 GB in the catalog's size) plus
@@ -914,6 +917,13 @@ static int run_flm(int argc, char* argv[]) {
             decisionModelTags.count(parsed_args.model_tag)) {
             header_print("FLM", parsed_args.model_tag << " is a decision model: serve it with `flm serve --decision "
                                 << parsed_args.model_tag << "` (optionally next to a chat model) and POST /v1/systemone");
+            return 1;
+        }
+        if ((parsed_args.command == "run" || parsed_args.command == "bench") &&
+            parsed_args.model_tag != "model-faker" &&
+            is_embedding_model(availble_models.get_model_info(parsed_args.model_tag).second)) {
+            header_print("ERROR", parsed_args.model_tag << " is an embedding model: use `flm serve "
+                                  << parsed_args.model_tag << "` and POST /v1/embeddings");
             return 1;
         }
         if (parsed_args.command == "bench") {

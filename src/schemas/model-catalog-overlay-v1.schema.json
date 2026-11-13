@@ -43,10 +43,6 @@
       "type": "object",
       "required": [
         "name",
-        "backend",
-        "backend_provider",
-        "default_context_length",
-        "max_prefill_len",
         "details",
         "url",
         "flm_min_version",
@@ -89,6 +85,16 @@
               "items": {
                 "$ref": "#/$defs/relativePath"
               }
+            },
+            "file_records": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/fileRecords"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           }
         },
@@ -131,6 +137,16 @@
             }
           },
           "additionalProperties": true
+        },
+        "model_kind": {
+          "enum": [
+            "generation",
+            "embedding"
+          ],
+          "default": "generation"
+        },
+        "file_records": {
+          "$ref": "#/$defs/fileRecords"
         }
       },
       "allOf": [
@@ -164,9 +180,95 @@
               "frontend_provider"
             ]
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "model_kind": {
+                "const": "embedding"
+              }
+            },
+            "required": [
+              "model_kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "frontend_provider"
+            ]
+          },
+          "else": {
+            "required": [
+              "backend",
+              "backend_provider",
+              "default_context_length",
+              "max_prefill_len"
+            ]
+          }
         }
       ],
       "additionalProperties": true
+    },
+    "fileRecord": {
+      "type": "object",
+      "required": [
+        "path",
+        "size"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$"
+        },
+        "oid": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{40}$"
+        },
+        "lfs": {
+          "type": "object",
+          "required": [
+            "oid"
+          ],
+          "properties": {
+            "oid": {
+              "type": "string",
+              "pattern": "^[0-9a-fA-F]{64}$"
+            }
+          }
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "sha256"
+          ]
+        },
+        {
+          "required": [
+            "lfs"
+          ]
+        },
+        {
+          "required": [
+            "oid"
+          ]
+        }
+      ]
+    },
+    "fileRecords": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/fileRecord"
+      },
+      "description": "Optional model_info.json-style records. Runtime validation also requires unique paths and a record for every entry in files."
     }
   }
 }

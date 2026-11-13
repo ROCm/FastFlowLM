@@ -17,6 +17,14 @@
 
 namespace flm::catalog {
 
+inline constexpr const char* kGenerationModelKind = "generation";
+inline constexpr const char* kEmbeddingModelKind = "embedding";
+
+/// \brief Read a model's kind; catalogs without it describe generation models.
+inline std::string model_kind(const nlohmann::json& info) {
+    return info.value("model_kind", kGenerationModelKind);
+}
+
 struct ModelCatalogOverlay {
     std::string path;
     nlohmann::json document;
@@ -159,6 +167,7 @@ inline void validate_catalog_entry(const nlohmann::json& entry,
     if (!entry.is_object() || !entry.contains("name") ||
         !entry["name"].is_string() ||
         entry["name"].get_ref<const std::string&>().empty() ||
+        (model_kind(entry) != kEmbeddingModelKind && (
         !entry.contains(backend::kBackendKey) ||
         !entry.contains(backend::kBackendProviderKey) ||
         !entry.contains("default_context_length") ||
@@ -166,7 +175,7 @@ inline void validate_catalog_entry(const nlohmann::json& entry,
         entry["default_context_length"].get<int>() <= 0 ||
         !entry.contains("max_prefill_len") ||
         !entry["max_prefill_len"].is_number_integer() ||
-        entry["max_prefill_len"].get<int>() <= 0 ||
+        entry["max_prefill_len"].get<int>() <= 0)) ||
         !entry.contains("details") ||
         !entry["details"].is_object() ||
         !entry["details"].contains("family") ||
@@ -179,6 +188,12 @@ inline void validate_catalog_entry(const nlohmann::json& entry,
             "backend_provider, positive default_context_length and "
             "max_prefill_len, and details.family");
     }
+    const auto kind = model_kind(entry);
+    if (kind != kGenerationModelKind && kind != kEmbeddingModelKind)
+        throw std::runtime_error("Unknown model_kind for '" + tag + "'");
+    if (entry.contains("file_records") &&
+        (!entry["file_records"].is_array() || entry["file_records"].empty()))
+        throw std::runtime_error("file_records must be a non-empty array: " + tag);
     for (const char* field :
          {backend::kBackendKey,
           backend::kBackendProviderKey}) {
@@ -219,6 +234,34 @@ inline void validate_catalog_entry(const nlohmann::json& entry,
     detail::require_contained_name(entry, "name", tag);
     detail::require_contained_name(entry, "xclbin_folder", tag);
     detail::require_contained_files(entry["files"], tag);
+    if (entry.contains("file_records")) {
+        const auto valid_hash = [](const nlohmann::json& value, size_t size) {
+            if (!value.is_string()) return false;
+            const auto& hash = value.get_ref<const std::string&>();
+            return hash.size() == size && std::all_of(hash.begin(), hash.end(),
+                [](unsigned char c) { return std::isxdigit(c) != 0; });
+        };
+        std::unordered_set<std::string> paths;
+        for (const auto& record : entry["file_records"]) {
+            if (!record.is_object() || !record.contains("path") ||
+                !record["path"].is_string() || !record.contains("size") ||
+                !record["size"].is_number_integer() || record["size"] < 0 ||
+                (!record.contains("sha256") && !record.contains("lfs") && !record.contains("oid")) ||
+                (record.contains("sha256") && !valid_hash(record["sha256"], 64)) ||
+                (record.contains("oid") && !valid_hash(record["oid"], 40)) ||
+                (record.contains("lfs") && (!record["lfs"].is_object() ||
+                    !valid_hash(record["lfs"].value("oid", nlohmann::json()), 64)))) {
+                throw std::runtime_error("Invalid file_records path, size or hash: " + tag);
+            }
+            const auto& path = record["path"].get_ref<const std::string&>();
+            if (!detail::is_contained_path(path, false) || !paths.insert(path).second)
+                throw std::runtime_error("Invalid or duplicate file_records path: " + tag + ": " + path);
+        }
+        for (const auto& file : entry["files"]) {
+            if (!paths.count(file.get<std::string>()))
+                throw std::runtime_error("Missing file_records entry: " + tag + ": " + file.get<std::string>());
+        }
+    }
     if (entry.contains("file_sources")) {
         if (!entry["file_sources"].is_object()) {
             throw std::runtime_error(
@@ -260,14 +303,14 @@ inline void validate_catalog_entry(const nlohmann::json& entry,
             }
         }
     }
-    if ((entry.value("vlm", false) ||
+    if ((kind == kEmbeddingModelKind || entry.value("vlm", false) ||
          entry.value("asr", false)) &&
         (!entry.contains("frontend_provider") ||
          !entry["frontend_provider"].is_string() ||
          entry["frontend_provider"]
              .get_ref<const std::string&>().empty())) {
         throw std::runtime_error(
-            "Multimodal model extension catalog entry '" + tag +
+            "Model extension catalog entry '" + tag +
             "' must name a frontend_provider");
     }
 }
@@ -413,6 +456,7 @@ inline void validate_model_catalog_overlay(
                         "' names unregistered frontend family '" +
                         family + "'");
                 }
+                if (model_kind(source) == kEmbeddingModelKind) continue;
                 const std::string selected_backend =
                     source.at(backend::kBackendKey).get<std::string>();
                 const std::string provider =
