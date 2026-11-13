@@ -41,9 +41,11 @@ primary model; requests can select any catalog embedding tag once enabled.
 
 ### Request options
 
-`input` is a string or a non-empty array of strings, with one vector returned
-per string. Each vector has 768 dimensions; omit `dimensions` or set it to `768`.
-Optional `task`, `title`, and `dimensions` values of `null` are treated as omitted.
+`input` is a string, an object with a `text` string and optional `title`, or a
+non-empty array of either, with one vector returned per input. Object inputs
+and `task` are FastFlowLM extensions to the OpenAI embedding request format;
+pre-tokenized input is not supported. Each vector has 768 dimensions; omit
+`dimensions` or set it to `768`. Null `task` and `dimensions` are treated as omitted.
 
 `task` is optional and case-sensitive. Omission or an empty string selects `query`:
 
@@ -57,14 +59,17 @@ Optional `task`, `title`, and `dimensions` values of `null` are treated as omitt
 | `sentence_similarity` | <code>task: sentence similarity &#124; query: </code> |
 | `summarization` | <code>task: summarization &#124; query: </code> |
 
-The optional `title` string is available with `task: "document"`:
+With `task: "document"`, an object input can supply a `title` string; an omitted
+or null title uses `none`:
 
 ```json
-{"model":"embed-gemma:300m","input":"Paris is in France.","task":"document","title":"France","dimensions":768}
+{"model":"embed-gemma:300m","input":{"text":"Paris is in France.","title":"France"},"task":"document","dimensions":768}
 ```
 
-These options describe the built-in `embed-gemma:300m` model. For extension
-models, consult the provider's documentation.
+These input fields and task names describe the built-in `embed-gemma:300m`
+model. Every embedding provider accepts a string with `task` omitted; its
+object fields, explicit tasks, default task and supported dimensions are
+model-specific. Consult the provider's documentation for those details.
 
 > see more API details here → [/v1/embeddings/](https://developers.openai.com/api/reference/python/resources/embeddings/methods/create)
 

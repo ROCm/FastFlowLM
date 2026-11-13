@@ -97,9 +97,11 @@ void test_embedding_handler() {
     TEST_REQUIRE(no_device["error"]["message"] == flm::backend::kNoNpuDevice);
     for (const json& bad : {json(nullptr), json(42), json::array({"ok", false})})
         TEST_REQUIRE(request("missing:1", bad).at("error").at("code") == 400);
+    TEST_REQUIRE(request("missing:1", "hello", {{"task", 42}}).at("error").at("code") == 400);
+    TEST_REQUIRE(request("missing:1", "hello", {{"dimensions", 0}}).at("error").at("code") == 400);
     TEST_REQUIRE(pulls == 0);
     check("first:1", 0.5f);
-    TEST_REQUIRE(request("first", "hello", {{"task", nullptr}, {"title", nullptr}, {"dimensions", nullptr}})
+    TEST_REQUIRE(request("first", "hello", {{"task", nullptr}, {"dimensions", nullptr}})
                      .at("data").at(0).at("embedding") == json({5, 3, 0.5f}));
     TEST_REQUIRE(request("first", "cancel").at("error").at("code") == 499);
     TEST_REQUIRE(request("first", "hello", {{"task", "provider-task"}}).at("data").at(0).at("embedding").at(1) == 4);
@@ -130,7 +132,8 @@ void test_embedding_handler() {
     const auto batch = request("second", json::array({"hi", "hello"}));
     TEST_REQUIRE(batch.at("data").size() == 2);
     TEST_REQUIRE(batch.at("usage").at("prompt_tokens") == 7);
-    TEST_REQUIRE(request("second", {{"text", "hi"}}, {{"title", "abc"}})
+    TEST_REQUIRE(request("second", {{"text", "hi"}, {"title", "abc"}},
+                         {{"encoding_format", "float"}, {"user", "client"}})
                      .at("data").at(0).at("embedding").at(0) == 5);
     for (const auto& dimensions : {json(0), json(-1), json(4), json(1.5), json("2")})
         TEST_REQUIRE(request("second", "hi", {{"dimensions", dimensions}}).at("error").at("code") == 400);

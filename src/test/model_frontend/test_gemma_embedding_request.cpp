@@ -59,13 +59,13 @@ void test_gemma_embedding_request() {
         model.embed(request);
         TEST_REQUIRE(encoded_text == "<bos>task: search result | query: hello<eos>");
     }
-    model.embed({{"input", "hello"}, {"task", "document"}, {"title", "Example"}});
+    model.embed({{"input", {{"text", "hello"}, {"title", "Example"}}}, {"task", "document"}});
     TEST_REQUIRE(encoded_text == "<bos>title: Example | text: hello<eos>");
     for (const char* task : {"BitextMining", "Retrieval", "Clustering", "Classification",
                             "MultilabelClassification", "CodeRetrieval", "SentenceSimilarity",
                             "Summarization", "STS", "unknown"}) {
         RequireThrows<std::invalid_argument>([&] { model.embed({{"input", "hello"}, {"task", task}}); });
     }
-    RequireThrows<std::invalid_argument>([&] { model.embed({{"input", "hello"}, {"title", "Example"}}); });
+    RequireThrows<std::invalid_argument>([&] { model.embed({{"input", {{"text", "hello"}, {"title", "Example"}}}}); });
     RequireThrows<std::invalid_argument>([&] { model.embed({{"input", "hello"}, {"dimensions", 128}}); });
 }

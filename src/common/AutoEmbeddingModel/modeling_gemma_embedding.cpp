@@ -18,7 +18,8 @@ void Gemma_Embedding::load_model(std::string model_path, json model_info, bool e
 
 EmbeddingResult Gemma_Embedding::embed(const json& request, std::function<bool()> cancelled) {
     if (cancelled()) throw EmbeddingCancelled();
-    const auto text = request.at("input").get<std::string>();
+    const auto& input = request.at("input");
+    const auto text = (input.is_object() ? input.at("text") : input).get<std::string>();
     const auto task = request.value("task", std::string());
     uint32_t dimensions = 0;
     if (request.contains("dimensions")) {
@@ -28,9 +29,9 @@ EmbeddingResult Gemma_Embedding::embed(const json& request, std::function<bool()
         dimensions = value.get<uint32_t>();
     }
     std::string task_prefix = this->_get_task_prefix(task);
-    if (request.contains("title")) {
+    if (input.is_object() && input.contains("title") && !input.at("title").is_null()) {
         if (task != "document") throw std::invalid_argument("title requires the document task");
-        task_prefix = "title: " + request.at("title").get<std::string>() + " | text: ";
+        task_prefix = "title: " + input.at("title").get<std::string>() + " | text: ";
     }
     std::string full_text = "<bos>" + task_prefix + text + "<eos>";
     std::vector<int> tokens = this->tokenizer->encode(full_text);
