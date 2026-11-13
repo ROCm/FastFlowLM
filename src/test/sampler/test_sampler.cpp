@@ -643,6 +643,49 @@ void TestSpeculativeSamplingMatchesDirectSampling() {
     CHECK(accepted > N / 4 && accepted < 2 * cycles - N / 4, "%d drafts kept over %d cycles", accepted, cycles);
 }
 
+// A greedy request checks its drafts against Sampler::argmax, as main did: the first largest raw logit inside the
+// mask, with no penalties and no penalty window. Going through sample() instead lets Unsloth Studio's presence
+// penalty of 1.5 at temperature 0 turn down drafts the base model agrees with.
+void TestGreedyDraftCheckIsTheRawArgmax() {
+    std::mt19937 rng(21);
+    for (int pattern = 0; pattern < 4; pattern++) {
+        for (bool masked : {false, true}) {
+            auto x = tied_logits(1000, pattern, rng);
+            std::vector<float> row(1000);
+            for (int i = 0; i < 1000; i++) row[i] = x[i];
+            std::vector<uint32_t> allowed((1000 + 31) / 32, 0xFFFFFFFFu);
+            if (masked) {
+                for (auto& w : allowed) w = static_cast<uint32_t>(rng()) & static_cast<uint32_t>(rng());
+            }
+            int want = -1;
+            for (int i = 0; i < 1000; i++) {
+                const bool ok = (allowed[i / 32] >> (i % 32)) & 1u;
+                if (ok && (want < 0 || row[i] > row[want])) want = i;
+            }
+            const int got = Sampler::argmax(row.data(), 1000, masked ? &allowed : nullptr);
+            CHECK(got == want, "pattern %d%s: %d, want %d", pattern, masked ? " masked" : "", got, want);
+        }
+    }
+    std::vector<float> row(64, -5.0f);
+    const std::vector<uint32_t> none(2, 0u);
+    CHECK(Sampler::argmax(row.data(), 64, &none) == -1, "nothing allowed must give -1");
+
+    // the draft 7 is the base model's argmax, but 7 is already in the reply
+    row[7] = 2.0f;
+    row[3] = 1.0f;
+    sampler_config c = config_of(20, 0.0f);
+    c.repeat_last_n = 64;
+    c.pre_penalty = 1.5f;
+    Sampler s(64, c), untouched(64, c);
+    std::vector<float> seen(64, -5.0f);
+    seen[7] = 1.0f;
+    s.sample(seen.data());
+    untouched.sample(seen.data());
+    CHECK(Sampler::argmax(row.data(), 64) == 7, "the raw argmax keeps the draft");
+    CHECK(same_state(s, untouched), "argmax must leave the penalty window alone");
+    CHECK(s.sample(row.data()) == 3, "the penalised sample turns the draft down, which is what greedy must not do");
+}
+
 // A seed gives the same speculative reply twice: the sampler's seeded draw is the only randomness.
 void TestSeededSpeculationIsReproducible() {
     std::mt19937 rng(9);
@@ -691,6 +734,7 @@ int main(int argc, char** argv) {
         {"TestGreedySpeculationKeepsTheArgmaxPrefix", TestGreedySpeculationKeepsTheArgmaxPrefix},
         {"TestSpeculativeSamplingMatchesDirectSampling", TestSpeculativeSamplingMatchesDirectSampling},
         {"TestSeededSpeculationIsReproducible", TestSeededSpeculationIsReproducible},
+        {"TestGreedyDraftCheckIsTheRawArgmax", TestGreedyDraftCheckIsTheRawArgmax},
     };
     int failed_tests = 0;
 #if USEAVX2

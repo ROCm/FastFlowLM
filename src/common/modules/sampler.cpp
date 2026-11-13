@@ -10,6 +10,7 @@
 
 #include <deque>
 #include <algorithm>  // for std::sort
+#include <bit>
 #include <chrono>
 #include <cmath>      // for std::exp
 #include <cstring>    // for std::memcpy
@@ -540,6 +541,27 @@ int Sampler::sample_greedy(buffer<bf16>& x, const std::vector<uint32_t>* allowed
     this->top_k_logits.assign(1, logits_t{ best, best_id, 1.0f });
     ring_buffer_update_sparse(best_id);
     return best_id;
+}
+
+int Sampler::argmax(const float* x, int n, const std::vector<uint32_t>* allowed) {
+    int best = -1;
+    float best_logit = -std::numeric_limits<float>::infinity();
+    if (allowed == nullptr) {
+        for (int i = 0; i < n; i++) {
+            if (x[i] > best_logit) { best_logit = x[i]; best = i; }
+        }
+        return best;
+    }
+    const int words = std::min<int>((int)allowed->size(), (n + 31) / 32);
+    for (int w = 0; w < words; w++) {
+        uint32_t bits = (*allowed)[w];
+        while (bits) {
+            const int i = w * 32 + std::countr_zero(bits);
+            bits &= bits - 1;
+            if (i < n && x[i] > best_logit) { best_logit = x[i]; best = i; }
+        }
+    }
+    return best;
 }
 
 int Sampler::sample_greedy_loaded(const std::vector<uint32_t>* allowed, sample_logprobs_t* logprobs) {

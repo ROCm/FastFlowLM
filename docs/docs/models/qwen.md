@@ -662,7 +662,7 @@ Qwen3.8 ships with a **multi-token prediction (MTP) head** — a small draft mod
 
 What that means in practice:
 
-- **Faster decoding, same output distribution.** This is standard speculative sampling: a draft is kept with the probability the full model gives it, and a rejected one is replaced by a token drawn from the rest of the distribution. Every token you receive is distributed as plain decoding would draw it (up to the bf16 rounding of the batched verify pass), with `temperature`, `top_k`, `top_p`, the penalties, `seed` and `tool_choice` / `response_format` applied, and a `temperature: 0` request gets the greedy reply.
+- **Faster decoding, same output distribution.** This is standard speculative sampling: a draft is kept with the probability the full model gives it, and a rejected one is replaced by a token drawn from the rest of the distribution. Every token you receive is distributed as plain decoding would draw it (up to the bf16 rounding of the batched verify pass), with `temperature`, `top_k`, `top_p`, the penalties, `seed` and `tool_choice` / `response_format` applied. A `temperature: 0` (or `top_k: 1`) request is checked against the base model's top token instead, and accepted drafts skip the presence, frequency and repetition penalties (this model's default `presence_penalty` is 1.5); send `presence_penalty: 0` for output identical to plain greedy decoding.
 - **Sampling lowers the acceptance rate.** A greedy request keeps a draft whenever it is the top token; a sampled one keeps it as often as the model would have picked it. Higher temperatures accept fewer drafts and run closer to ordinary decode speed.
 - **Gains are prompt-dependent.** Predictable, low-entropy stretches — code, structured output, long reasoning chains — see the highest draft acceptance. Highly creative or surprising text accepts fewer drafts and converges toward ordinary decode speed.
 - **No flag to set.** Speculation turns on by itself.
@@ -711,7 +711,7 @@ Expected: a correct function with a docstring, decoding noticeably faster than w
 
 📝 **Note:**
 
-- Every step drafts 7 tokens and checks them together; the model keeps the longest prefix it agrees with plus one token of its own. As with `qwen3.8-mtp:27b`, drafted tokens are compared with the token the model samples at that position, so the reply follows the request's sampling parameters.
+- Every step drafts 7 tokens and checks them together; the model keeps the longest prefix it agrees with plus one token of its own. As with `qwen3.8-mtp:27b`, drafted tokens are compared with the token the model samples at that position, so the reply follows the request's sampling parameters; a greedy request compares them with the model's top token.
 - Greedy output can differ from `qwen3.8-mtp:27b` at near-ties: the NPU checks 8 positions in one pass, which rounds differently from decoding one token at a time, and the two drafts propose different blocks.
 - The draft sees the last 2048 tokens of the conversation. After a saved prompt is reused (server mode prefix cache) it starts without the reused part and fills up again from the tokens that follow, so the first steps accept less.
 - `FLM_DFLASH=0` in the environment loads the MTP head instead: the tag then behaves like `qwen3.8-mtp:27b`.

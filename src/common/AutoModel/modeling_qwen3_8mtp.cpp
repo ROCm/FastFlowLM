@@ -458,8 +458,9 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
     // samples each row with this request's sampler (penalties, constraint mask, top-k/top-p/min-p, temperature, the
     // seeded draw). The draft is the head's argmax, a one-hot q, so that is speculative sampling (Leviathan et al.
     // 2023, Chen et al. 2023): d is kept with probability p(d) = min(1, p(d)/q(d)), and otherwise the token is drawn
-    // from p without d, renormalised. Every committed token is distributed as plain decoding would draw it, and a
-    // greedy request gets the argmax as before.
+    // from p without d, renormalised. Every committed token is distributed as plain decoding would draw it.
+    // A greedy request keeps main's rule: drafts are checked against the raw argmax (inside the constraint's mask), with
+    // no penalties and no penalty window, so its tokens and acceptance are unchanged; it needs a chooser only for a mask.
     // An engine without the chooser (an extension's generic speculation table) compares with its own argmax, so it
     // speculates only for greedy, unconstrained requests, and only without logprobs, which it has no per-draft view of.
     // FLM_DISABLE_SPECULATION=1 turns it off too, for comparing against plain
@@ -478,19 +479,30 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
         qwen3_8mtp_npu* engine = nullptr;
         ~chooser_guard() { if (engine) engine->set_speculation_chooser({}); }
     } guard;
-    if (spec_enabled && mtp_engine != nullptr) {
+    if (spec_enabled && mtp_engine != nullptr && (!greedy || meta_info.constraint)) {
         if (!this->sampler) throw std::runtime_error("speculation needs a sampler");
         decode_constraint* constraint = meta_info.constraint.get();
         // Past an accepted stop token the engine truncates the batch, so those rows are discarded and only need some
         // token; they must not reach the sampler's penalty window, the RNG or the matcher (fill_mask() would throw).
         auto stopped = std::make_shared<bool>(false);
-        mtp_engine->set_speculation_chooser([this, constraint, stopped, &sampled_rows](int, const float* row, int vocab) {
+        mtp_engine->set_speculation_chooser([this, constraint, stopped, greedy, &sampled_rows](int, const float* row,
+                                                                                               int vocab) {
             auto argmax = [row, vocab]() {
                 int best = 0;
                 for (int i = 1; i < vocab; i++) if (row[i] > row[best]) best = i;
                 return best;
             };
             if (*stopped) return argmax();
+            if (greedy) {
+                const bool masked = constraint->fill_mask(this->constraint_mask_);
+                int token = Sampler::argmax(row, vocab, masked ? &this->constraint_mask_ : nullptr);
+                // nothing allowed (or NaN logits): the plain argmax, as _sample() keeps its sample in that case
+                if (token < 0) token = argmax();
+                sampled_rows++;
+                constraint->accept(token);
+                if (this->is_eos(token)) *stopped = true;
+                return token;
+            }
             if (vocab < this->sampler->in_features) {
                 throw std::runtime_error("Backend returned fewer logits than the frontend vocabulary");
             }
