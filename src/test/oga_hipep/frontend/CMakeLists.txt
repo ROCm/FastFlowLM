@@ -47,7 +47,10 @@ function(add_frontend_test name frontend_source)
     target_compile_options(${name} PRIVATE
         $<$<CXX_COMPILER_ID:MSVC>:/wd4005 /wd4244>)
     target_link_directories(${name} PRIVATE "${XRT_LIB_DIR}")
-    target_link_libraries(${name} PRIVATE xrt_coreutil flm_xgrammar)
+    target_link_libraries(${name} PRIVATE xrt_coreutil flm_xgrammar delayimp)
+    # xrt_coreutil.dll comes with the NPU driver, which a CI runner lacks; the
+    # tests never call into it, so load it only on first use.
+    target_link_options(${name} PRIVATE "/DELAYLOAD:xrt_coreutil.dll")
 
     add_test(NAME ${name} COMMAND ${name})
 endfunction()
