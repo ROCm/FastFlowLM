@@ -609,7 +609,7 @@ The `-r` option determines the image's height:
 - **Speculative Decoding:** Yes — built-in MTP draft head (see note below)
 - **Base Model:** [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B)
 - **Quantization:** Q4_K
-- **Max Context Length:** 8k tokens  
+- **Max Context Length:** 16k tokens (exactly 16,377; a larger `--ctx-len` is lowered to that with a warning). A 16k context uses about 0.5 GB more memory than 8k  
 - **Default Context Length:** 4k tokens ([change default](https://fastflowlm.com/docs/instructions/cli/#-change-default-context-length-max))  
 - **[Set Context Length at Launch](https://fastflowlm.com/docs/instructions/cli/#-set-context-length-at-launch)**
 
@@ -683,7 +683,7 @@ What that means in practice:
 - **Think / Tool Calling / Vision / Prefix cache:** as `qwen3.8-mtp:27b`
 - **Packages:** two downloads. The main weights are the `qwen3.8-mtp:27b` package (`Qwen3.8-27B-NPU2`, about 16.8 GiB); the draft is [`Qwen3.8-27B-DFlash2-NPU2`](https://huggingface.co/FastFlowLM/Qwen3.8-27B-DFlash2-NPU2) (1.3 GiB). `flm pull qwen3.8-dflash2:27b` downloads whichever is missing
 - **Draft:** 5 layers, 2B parameters, Q4_K (the feature projection and the candidate tables stay BF16 where they are read row by row)
-- **Max Context Length:** 8k tokens
+- **Max Context Length:** 16k tokens (exactly 16,377, as `qwen3.8-mtp:27b`)
 - **Default Context Length:** 4k tokens ([change default](https://fastflowlm.com/docs/instructions/cli/#-change-default-context-length-max))
 - **License:** the draft is [Apache-2.0](https://huggingface.co/z-lab/Qwen3.8-27B-DFlash2); the main model's license applies to the main weights
 - **FastFlowLM:** 1.0.12 or later
@@ -715,5 +715,5 @@ Expected: a correct function with a docstring, decoding noticeably faster than w
 - Greedy output can differ from `qwen3.8-mtp:27b` at near-ties: the NPU checks 8 positions in one pass, which rounds differently from decoding one token at a time, and the two drafts propose different blocks.
 - The draft sees the last 2048 tokens of the conversation. After a saved prompt is reused (server mode prefix cache) it starts without the reused part and fills up again from the tokens that follow, so the first steps accept less.
 - `FLM_DFLASH=0` in the environment loads the MTP head instead: the tag then behaves like `qwen3.8-mtp:27b`.
-- Image input, the 8k context and the image-resize options work as on `qwen3.8-mtp:27b` (`-r`).
+- Image input, the 16k context and the image-resize options work as on `qwen3.8-mtp:27b` (`-r`).
 - `flm remove qwen3.8-dflash2:27b` removes only the draft package; `qwen3.8-mtp:27b` stays installed.

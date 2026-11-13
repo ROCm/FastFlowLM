@@ -236,6 +236,7 @@ flm serve llama3.2:1b --ctx-len 8192
 
 > - Internally, FLM enforces a minimum context length of 512. If you specify a smaller value, it will automatically be adjusted up to 512.  
 > - If you enter a context length that is not a power of 2, FLM automatically rounds it up to the nearest power of 2. For example: input `8000` → adjusted to `8192`.
+> - `qwen3.8-mtp:27b` and `qwen3.8-dflash2:27b` take any context length up to 16,377 tokens. A larger value is lowered to 16,377, with a warning.
 
 ---
 

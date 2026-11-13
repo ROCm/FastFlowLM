@@ -24,6 +24,18 @@
 /************              Qwen3_8MTP family            **************/
 Qwen3_8MTP::Qwen3_8MTP(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "Qwen3_8MTP") {}
 
+// --ctx-len above the engine's limit (FLM#1001): the engine has already sized
+// its cache to the limit and printed the warning, so only lower MAX_L to match.
+void Qwen3_8MTP::_clamp_to_engine_limit() {
+    if (auto* mtp = dynamic_cast<qwen3_8mtp_npu*>(this->lm_engine))
+        this->MAX_L = std::min<uint32_t>(this->MAX_L, mtp->max_context_length());
+}
+
+void Qwen3_8MTP::set_max_length(unsigned int MAX_L) {
+    AutoModel::set_max_length(MAX_L);
+    this->_clamp_to_engine_limit();
+}
+
 void Qwen3_8MTP::load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption, const std::string& backend) {
     this->_shared_load_backend(model_path, model_info, default_context_length, enable_preemption, backend);
     this->setup_tokenizer(model_path);
@@ -37,6 +49,7 @@ void Qwen3_8MTP::load_model(std::string model_path, json model_info, int default
     // it. Giving the engine the list moves the cut upstream of the caches.
     if (auto* mtp = dynamic_cast<qwen3_8mtp_npu*>(this->lm_engine))
         mtp->set_stop_tokens(this->eos_token_ids);
+    this->_clamp_to_engine_limit();
 
     this->sampler.reset();
 
