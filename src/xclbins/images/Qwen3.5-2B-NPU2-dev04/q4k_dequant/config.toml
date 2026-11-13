@@ -1,0 +1,1 @@
+# config/q4k_dequant.toml -- empty: q4k_dequant is a std op (FLM_Xclbin_AIE4/std_ops), every size is a run-time argument.

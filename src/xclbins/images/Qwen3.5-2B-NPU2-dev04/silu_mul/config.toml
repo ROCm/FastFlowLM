@@ -1,0 +1,1 @@
+# config/silu_mul.toml -- empty: silu_mul is a std op (FLM_Xclbin_AIE4/std_ops), every size is a run-time argument.

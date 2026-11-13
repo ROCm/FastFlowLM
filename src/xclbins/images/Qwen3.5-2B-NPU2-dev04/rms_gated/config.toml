@@ -1,0 +1,6 @@
+# config/rms_gated.toml -- the rms_gated numbers of Qwen3.5-2B (the kernel stage's config, tested there).
+# make copy builds the op rms_gated with this file.
+
+HEAD = 128
+HEADS = 16
+EPS = 1e-6

@@ -1,8 +1,0 @@
-# config/rms_gated.toml -- the rms_gated numbers of Qwen3.5-9B (prefill gated RMSNorm of the linear layers).
-
-# linear_value_head_dim, linear_num_value_heads.
-HEAD = 128
-HEADS = 32
-
-# rms_norm_eps.
-EPS = 1e-6

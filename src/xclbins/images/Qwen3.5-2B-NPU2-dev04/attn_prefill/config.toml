@@ -1,0 +1,6 @@
+# config/attn_prefill.toml -- the attn_prefill numbers of Qwen3.5-2B (the kernel stage's config, tested there).
+# make copy builds the op attn_prefill with this file.
+
+HEAD_DIM = 256
+Q_HEADS = 8
+KV_HEADS = 2
