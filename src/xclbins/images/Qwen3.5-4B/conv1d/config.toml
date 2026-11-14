@@ -1,7 +1,0 @@
-# config/Qwen3.5-4B/conv1d.toml -- the conv1d numbers of Qwen3.5-4B (prefill causal conv of the linear layers).
-
-# Channels of the conv: 2 x linear_num_key_heads x linear_key_head_dim + linear_num_value_heads x linear_value_head_dim.
-D = 8192
-
-# Taps (linear_conv_kernel_dim).
-TAPS = 4
