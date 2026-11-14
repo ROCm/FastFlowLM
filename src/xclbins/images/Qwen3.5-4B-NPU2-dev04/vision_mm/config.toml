@@ -1,0 +1,7 @@
+# config/vision_mm.toml -- the vision_mm numbers of Qwen3.5-2B (the kernel stage's config, tested there).
+# make copy builds the op vision_mm with this file.
+
+K_HIDDEN = 1280
+K_PATCH = 1536
+K_FC2 = 4096
+K_MERGER = 1024

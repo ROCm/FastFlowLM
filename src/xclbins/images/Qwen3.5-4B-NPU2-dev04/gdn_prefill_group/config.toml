@@ -1,0 +1,9 @@
+# config/4b/gdn_prefill_group.toml -- the gdn_prefill_group numbers of Qwen3.5-4B (the kernel stage's config, tested there).
+# make copy builds the op gdn_prefill_group with this file.
+
+D = 2560
+V_HEADS = 32
+QK_HEADS = 16
+DK = 128
+DV = 128
+L2_EPS = 1e-6

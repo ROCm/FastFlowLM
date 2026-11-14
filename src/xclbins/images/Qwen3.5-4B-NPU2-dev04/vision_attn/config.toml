@@ -1,0 +1,5 @@
+# config/vision_attn.toml -- the vision_attn numbers of Qwen3.5-2B (the kernel stage's config, tested there).
+# make copy builds the op vision_attn with this file.
+
+HEADS = 16
+HEAD_DIM = 64

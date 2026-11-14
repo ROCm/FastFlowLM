@@ -1,0 +1,1 @@
+# config/gemm.toml -- empty: gemm is a std op (FLM_Xclbin_AIE4/std_ops), every size is a run-time argument.

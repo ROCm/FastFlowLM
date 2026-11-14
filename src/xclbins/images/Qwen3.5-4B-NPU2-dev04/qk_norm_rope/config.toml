@@ -1,0 +1,8 @@
+# config/4b/qk_norm_rope.toml -- the qk_norm_rope numbers of Qwen3.5-4B (the kernel stage's config, tested there).
+# make copy builds the op qk_norm_rope with this file.
+
+HEAD_DIM = 256
+Q_HEADS = 16
+KV_HEADS = 4
+ROPE_DIM = 64
+EPS = 1e-6

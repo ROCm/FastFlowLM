@@ -5288,5 +5288,37 @@
             "xetHash": "96704226047d013b82c7a56621096d9a5fc8df32acf656c7a684093f54760b85",
             "path": "vision_weight.q4nx"
         }
+    ],
+    "qwen3.5:4b-dev04": [
+        {
+            "type": "file",
+            "size": 7756,
+            "path": "chat_template.jinja"
+        },
+        {
+            "type": "file",
+            "size": 2809,
+            "path": "config.json"
+        },
+        {
+            "type": "file",
+            "size": 2960931840,
+            "path": "model.q4nx"
+        },
+        {
+            "type": "file",
+            "size": 12807982,
+            "path": "tokenizer.json"
+        },
+        {
+            "type": "file",
+            "size": 15200,
+            "path": "tokenizer_config.json"
+        },
+        {
+            "type": "file",
+            "size": 668077056,
+            "path": "vision_weight.q4nx"
+        }
     ]
 }

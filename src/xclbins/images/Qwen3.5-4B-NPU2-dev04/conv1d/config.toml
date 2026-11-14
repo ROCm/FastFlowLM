@@ -1,0 +1,5 @@
+# config/4b/conv1d.toml -- the conv1d numbers of Qwen3.5-4B (the kernel stage's config, tested there).
+# make copy builds the op conv1d with this file.
+
+D = 8192
+TAPS = 4

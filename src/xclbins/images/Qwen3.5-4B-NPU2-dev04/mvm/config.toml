@@ -1,0 +1,6 @@
+# config/4b/mvm.toml -- the mvm numbers of Qwen3.5-4B (the kernel stage's config, tested there).
+# make copy builds the op mvm with this file.
+
+D = 2560
+K_MAX = 9216
+EPS = 1e-6
