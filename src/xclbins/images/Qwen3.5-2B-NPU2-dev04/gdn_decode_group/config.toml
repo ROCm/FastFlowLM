@@ -1,0 +1,11 @@
+# config/gdn_decode_group.toml -- the gdn_decode_group numbers of Qwen3.5-2B (the kernel stage's config, tested there).
+# make copy builds the op gdn_decode_group with this file.
+
+D = 2048
+V_HEADS = 16
+QK_HEADS = 16
+DK = 128
+DV = 128
+TAPS = 4
+L2_EPS = 1e-6
+RN_EPS = 1e-6
