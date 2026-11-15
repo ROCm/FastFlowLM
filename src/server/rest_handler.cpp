@@ -841,6 +841,8 @@ bool RestHandler::is_known_model(const std::string& model_tag) {
 void RestHandler::ensure_asr_model_loaded(const std::string& model_tag) {
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
     std::string ensure_tag = model_tag;
+    const bool sidecar_r2t2 = this->supported_models.get_model_info(ensure_tag).second
+        .value("details", json::object()).value("family", std::string()) == "r2t2";
     switch (downloader.is_model_downloaded(ensure_tag, false, /*fast_check=*/true)) {
         case ModelDownloader::ModelStatus::Ready:
             break;
@@ -852,6 +854,23 @@ void RestHandler::ensure_asr_model_loaded(const std::string& model_tag) {
             header_print("ERROR", "Whisper is incompatible with this version of FastFlowLM, skipping... ");
             this->asr = false;
             return;
+    }
+    if (sidecar_r2t2) {
+        // r2t2 transcribes by itself: load it as a second engine beside the chat model
+        try {
+            auto [tag, engine] = get_auto_model(ensure_tag, this->supported_models, this->npu_device_inst);
+            auto [new_tag, info] = this->supported_models.get_model_info(tag);
+            engine->set_server_mode(true);
+            engine->load_model(this->supported_models.get_load_path(new_tag), info, -1, this->preemption, "");
+            engine->save_request_settings();
+            this->asr_sidecar_engine = std::move(engine);
+            this->asr_sidecar_tag = tag;
+        }
+        catch (const std::exception& e) {
+            header_print("ERROR", "Failed to load ASR model: " + std::string(e.what()));
+            exit(EXIT_FAILURE);
+        }
+        return;
     }
     this->whisper_engine = std::make_unique<Whisper>(this->npu_device_inst);
     auto [new_ensure_tag, whisper_model_info] = this->supported_models.get_model_info(ensure_tag);
@@ -1915,7 +1934,10 @@ void RestHandler::handle_openai_audio_transcriptions(const json& request,
         // A model that transcribes by itself (r2t2) answers when it is the one asked for; any other model name is served by
         // the Whisper sidecar (--asr 1), as before.
         Qwen3_ASR* self_asr = nullptr;
-        if (!model.empty() && supported_models.is_model_supported(supported_models.rectify_model_tag(model))) {
+        // --asr r2t2:...: the sidecar answers every transcription, so the chat model stays loaded
+        if (this->asr_sidecar_engine) {
+            self_asr = dynamic_cast<Qwen3_ASR*>(this->asr_sidecar_engine.get());
+        } else if (!model.empty() && supported_models.is_model_supported(supported_models.rectify_model_tag(model))) {
             auto [asr_tag, asr_info] = this->supported_models.get_model_info(model);
             if (asr_info.contains("details") && asr_info["details"].value("family", "") == "r2t2") {
                 if (!ensure_model_loaded(model)) throw std::runtime_error("failed to load " + model);

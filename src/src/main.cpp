@@ -799,8 +799,9 @@ static int run_flm(int argc, char* argv[]) {
                 header_print("ERROR", "ASR model not found: " << parsed_args.asr_tag << "; Please check with `flm list` and try again.");
                 return 1;
             }
-            if (family_of(parsed_args.asr_tag) != "whisper-v3") {
-                header_print("ERROR", parsed_args.asr_tag << " is not an ASR model; use e.g. -a whisper-v3:turbo");
+            const std::string asr_family = family_of(parsed_args.asr_tag);
+            if (asr_family != "whisper-v3" && !(asr_family == "r2t2" && parsed_args.command == "serve")) {
+                header_print("ERROR", parsed_args.asr_tag << " is not an ASR model" << (asr_family == "r2t2" ? " for `flm run`; use `flm serve`" : "") << "; use e.g. -a whisper-v3:turbo");
                 return 1;
             }
         }
