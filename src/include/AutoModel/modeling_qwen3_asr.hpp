@@ -6,6 +6,7 @@
 ///       <|im_end|>\n<|im_start|>assistant\n[language X<asr_text>]; the model answers "language X<asr_text>text".
 #pragma once
 #include "AutoModel/automodel.hpp"
+#include "models/qwen3_asr/flm/aie2p/qwen3_asr_npu.hpp"
 #include "audio/audio_reader.hpp"
 #include "base64.hpp"
 

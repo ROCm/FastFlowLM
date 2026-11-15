@@ -18,6 +18,7 @@
 #include <cctype>
 #include <cstring>
 #include "AutoModel/modeling_minicpm_v.hpp"
+#include "AutoModel/modeling_qwen3_asr.hpp"
 #include "whisper/transcript_format.hpp"
 #include <sstream>
 #include <iostream>
