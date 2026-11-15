@@ -101,10 +101,8 @@ struct State {
                                          RYZENAI_CORELIB_VERSION_PATCH};
     ryzenai_corelib_status selftest_status{ryzenai_corelib_status_success};
     ryzenai_corelib_status default_status{ryzenai_corelib_status_success};
-    /// \brief what npu_usable() answers
-    bool npu_usable{true};
-    /// \brief what testing_npu_arch() answers
-    std::string npu_arch{"AIEM"};
+    /// \brief what get_npu() answers; npu_name() names it as corelib does
+    ryzenai_corelib_npu npu{ryzenai_corelib_npu_aiem};
     std::string detail;
     std::string status_text{"success"};
     std::string missing_symbol;

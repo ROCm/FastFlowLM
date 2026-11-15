@@ -44,9 +44,14 @@ std::shared_ptr<CorelibRuntime> CorelibRuntime::CreateReady(
     api->Check(api->functions().selftest_dependencies(),
                "ryzenai_corelib_selftest_dependencies");
     // Without one corelib still runs a session, on the GPU or the host, which
-    // is the silent slowness the core backend is meant to rule out.
-    if (!api->functions().npu_usable()) {
-        throw std::runtime_error("corelib has no usable NPU");
+    // is the silent slowness the core backend is meant to rule out. An AIE2P
+    // NPU runs corelib's kernels only behind an xclbin, which FastFlowLM never
+    // hands it, so only AIEM counts.
+    const ryzenai_corelib_npu npu = api->functions().get_npu();
+    if (npu != ryzenai_corelib_npu_aiem) {
+        const char* name = api->functions().npu_name(npu);
+        throw std::runtime_error(std::string("corelib has no usable NPU (") +
+                                 (name ? name : "unknown") + ")");
     }
     return std::shared_ptr<CorelibRuntime>(new CorelibRuntime(std::move(api)));
 }
@@ -62,8 +67,10 @@ std::string CorelibRuntime::NpuArch(const std::filesystem::path& executable_dir)
     try {
         std::lock_guard lock(process_mutex);
         const auto api = process_runtime ? process_runtime->api_ : ProcessApi(executable_dir);
-        const char* arch = api->functions().npu_arch();
-        return arch ? arch : "";
+        const ryzenai_corelib_npu npu = api->functions().get_npu();
+        if (npu == ryzenai_corelib_npu_none) return "";
+        const char* name = api->functions().npu_name(npu);
+        return name ? name : "";
     } catch (...) {
         return "";
     }

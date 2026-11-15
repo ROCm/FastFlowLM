@@ -25,7 +25,7 @@ away.
 
 `get_device()` asks the machine, once per process. A build that links corelib
 asks corelib what NPU it has (`CorelibRuntime::NpuArch`, corelib's
-`ryzenai_corelib_testing_npu_arch` until its public header names one): `AIEM`
+`ryzenai_corelib_get_npu` named by `ryzenai_corelib_npu_name`): `AIEM`
 is `dev04`, and `AIE2P`, no NPU, or a corelib that cannot be loaded is
 `default_npu_platform()`, `aie2p`. corelib reads the device itself, so
 FastFlowLM holds no table of devices and names none. A build without corelib
@@ -43,7 +43,7 @@ This is a contributor document. For *using* a backend once it exists — `--back
 |---|---|
 | **Platform** | Windows and Linux. Both configure and build; only Windows has been run on hardware, and the `src/test/phi4_core` suite is still Windows-only. |
 | **Hardware** | An dev04 NPU. There is no simulator; a wrong shape shows up as garbage output, not an error. |
-| **corelib headers** | The corelib ABI is still pre-1.0, so FastFlowLM requires an **exact `0.60.0`** match on major, minor and patch. [`corelib_api.hpp`](../../include/core/corelib_api.hpp) `#error`s on any other version — deliberately, because the C ABI has changed shape between patch releases. The version is queried before any other entry point, so a mismatched runtime reports a version error rather than a missing symbol. corelib's default build gives one `ryzenai_corelib_model_<name>` library per model, carrying its kernels, which must sit beside corelib. A per-op engine enables its model's kernel bundle on the stream it opens; a model corelib runs whole enables its own. |
+| **corelib headers** | The corelib ABI is still pre-1.0, so FastFlowLM requires an **exact `0.70.0`** match on major, minor and patch. [`corelib_api.hpp`](../../include/core/corelib_api.hpp) `#error`s on any other version — deliberately, because the C ABI has changed shape between patch releases. The version is queried before any other entry point, so a mismatched runtime reports a version error rather than a missing symbol. corelib's default build gives one `ryzenai_corelib_model_<name>` library per model, carrying its kernels, which must sit beside corelib. A per-op engine enables its model's kernel bundle on the stream it opens; a model corelib runs whole enables its own. |
 | **Weights** | A GGUF corelib's model reads: a Q4_G128 or Q4_G32 one, whose codes it packs as they are, or, for Qwen3 and Llama only, a Q8_0 one, which it requantizes on every load. The catalog pulls what corelib's own runner does: AMD's Q4 file, with no public fallback, for every model but Qwen3-0.6B and Llama, which AMD ships no Q4 of and which stay on a public Q8_0. See §6. |
 
 Configure with:
