@@ -28,7 +28,7 @@ int qwen3_asr_audio_tokens(int frames);
 /// \brief payload of qwen3_asr_npu::prefill: what goes into the <|audio_pad|> positions of `ids`, in order. The text rows
 ///        come from the embedding table. Give EITHER the encoder output (audio_embeds, n_audio rows of `hidden` bf16)
 ///        OR the mel spectrogram (mel, row-major [mel_frames][128] fp32; the engine runs its audio encoder).
-typedef struct {
+struct qwen3_asr_payload_t {
     int audio_pad_id = 151676;
     int n_audio = 0;
     std::vector<bf16> audio_embeds;   ///< [n_audio][hidden]
@@ -46,7 +46,7 @@ typedef struct {
     /// Offline pieces of one recording: the next piece's whole prompt (with next_mel), prefilled on the CPU in the background while
     /// this piece decodes on the NPU; the next prefill uses it when its prompt and mel are the same.
     std::vector<int> next_ids;
-} qwen3_asr_payload_t;
+};
 
 class qwen3_asr_npu : public causal_lm{
 public:
