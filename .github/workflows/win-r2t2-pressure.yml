@@ -1,0 +1,179 @@
+name: Windows r2t2 pressure test
+
+# Pressure test of r2t2:1.7b (Confucius4-R2T2 speech recognition: offline and
+# streaming transcription) on one Windows NPU runner, against the Windows XRT
+# portable package that the FLM PR's Build and Test produced. Nothing is built
+# here; the model is pulled from Hugging Face by the test.
+#
+# Lives on the pressure/win-r2t2 branch only. The tests never inject NPU hangs
+# and never kill the server mid-operation (clients hang up, that is all): a
+# stuck NPU has taken Windows runners offline before.
+
+on:
+  push:
+    branches:
+      - pressure/win-r2t2
+  workflow_dispatch:
+    inputs:
+      quick:
+        description: Fewer repetitions, no 5/10 minute inputs
+        type: boolean
+        default: false
+
+concurrency:
+  group: win-r2t2-pressure
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  # Package under test: Windows XRT portable zip of FLM draft PR #1048 (feat/r2t2), Build and Test run.
+  PKG_RUN_ID: '43677153016'
+  PKG_NAME: fastflowlm-windows-21dc6b9375ca7783f933d6be0cb693856607a91a
+  # git blob ids of src/lib/{xrt,hrx}/qwen3_asr_npu.dll in FLM #1048 (IRON #208 CI build, run 43665900394)
+  XRT_ENGINE_BLOB: 1e1705358952271b44c3034b3db17eaeea114618
+  HRX_ENGINE_BLOB: 364425f6b4ba41a49c12cbb374487c45b395fe4e
+  # empty = any idle runner with the labels below
+  WANT_RUNNER: ''
+
+jobs:
+  pressure:
+    name: Pressure test (Windows XRT portable)
+    runs-on: [self-hosted, windows, x64, npu, sweep, strix]
+    timeout-minutes: 120
+    steps:
+      - name: Runner guard
+        shell: powershell
+        run: |
+          Write-Host "runner $env:RUNNER_NAME on $env:COMPUTERNAME"
+          if ($env:WANT_RUNNER -and $env:RUNNER_NAME -ne $env:WANT_RUNNER) {
+            Write-Host "::error::Landed on $env:RUNNER_NAME, want $env:WANT_RUNNER; not testing here."
+            exit 1
+          }
+
+      - name: Checkout test scripts
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/actions
+            .github/script
+          filter: blob:none
+
+      - name: Stop flm left over from earlier jobs
+        shell: powershell
+        run: |
+          $work = Split-Path (Split-Path $env:GITHUB_WORKSPACE)
+          $stale = Get-Process -Name flm -ErrorAction SilentlyContinue |
+            Where-Object { $_.Path -and $_.Path.StartsWith($work, [StringComparison]::OrdinalIgnoreCase) }
+          if (-not $stale) { exit 0 }
+          Write-Host "::warning::Stopping flm left over from an earlier job: $($stale | ForEach-Object { "$($_.Id) $($_.Path)" })"
+          $stale | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 5
+          if ($stale | Where-Object { -not $_.HasExited }) {
+            Write-Host "::error::flm from an earlier job survived Stop-Process; not testing on this runner."
+            exit 1
+          }
+
+      - name: Download the Windows XRT portable package
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.PKG_NAME }}
+          run-id: ${{ env.PKG_RUN_ID }}
+          github-token: ${{ github.token }}
+          path: package
+
+      - name: Prepare package
+        id: package
+        uses: ./.github/actions/install-package
+        with:
+          kind: portable
+          path: package
+
+      - name: Check this is the XRT portable package
+        shell: powershell
+        env:
+          FLM_BIN: ${{ steps.package.outputs.flm-bin }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pkg = Split-Path $env:FLM_BIN
+          Write-Host "flm-bin: $env:FLM_BIN (mode ${{ steps.package.outputs.mode }})"
+          foreach ($f in 'flm.exe', 'qwen3_asr_npu.dll', 'model_list.json', 'xclbins') {
+            if (-not (Test-Path (Join-Path $pkg $f))) { throw "package has no $f" }
+          }
+          if (-not (Test-Path (Join-Path $pkg 'xclbins\Confucius4-R2T2-NPU2\layer.xclbin'))) { throw 'package has no r2t2 xclbin' }
+          if (Test-Path (Join-Path $pkg 'hrx.dll')) { throw 'hrx.dll present: this is the HRX package' }
+          $blob = (git hash-object (Join-Path $pkg 'qwen3_asr_npu.dll')).Trim()
+          if ($blob -eq $env:HRX_ENGINE_BLOB) { throw 'r2t2 engine is the HRX build' }
+          if ($blob -ne $env:XRT_ENGINE_BLOB) { throw "r2t2 engine blob $blob is not the XRT build $env:XRT_ENGINE_BLOB" }
+          Write-Host "qwen3_asr_npu.dll = src/lib/xrt build ($blob)"
+          New-Item -ItemType Directory -Force pressure-out | Out-Null
+          Get-ChildItem $pkg -File -Include *.exe, *.dll -Recurse | Get-FileHash -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash)  $(Split-Path $_.Path -Leaf)" } | Set-Content pressure-out\package-sha256.txt
+          & $env:FLM_BIN version | Tee-Object pressure-out\flm-version.txt
+          exit 0
+
+      - name: Runner health before
+        shell: powershell
+        run: |
+          $cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1).Name
+          $os = Get-CimInstance Win32_OperatingSystem
+          $ramGB = [math]::Round($os.TotalVisibleMemorySize / 1MB, 1)
+          $freeGB = [math]::Round($os.FreePhysicalMemory / 1MB, 1)
+          "cpu: $cpu`nram: $ramGB GB total, $freeGB GB free`nos: $($os.Caption) $($os.Version)" | Tee-Object pressure-out\health-before.txt
+          powercfg /getactivescheme | Tee-Object -Append pressure-out\health-before.txt
+          Get-PnpDevice -FriendlyName '*NPU*' -ErrorAction SilentlyContinue |
+            Format-Table -AutoSize Status, FriendlyName, InstanceId | Out-String | Tee-Object -Append pressure-out\health-before.txt
+          $smi = @('xrt-smi', "$env:SystemRoot\System32\AMD\xrt-smi.exe") | Where-Object { Get-Command $_ -ErrorAction SilentlyContinue } | Select-Object -First 1
+          if ($smi) { & $smi examine 2>&1 | Tee-Object -Append pressure-out\health-before.txt }
+          Get-Process | Where-Object { $_.ProcessName -match 'flm|ollama|lemonade' } |
+            Format-Table -AutoSize Id, ProcessName, Path | Out-String | Tee-Object -Append pressure-out\health-before.txt
+          if ($ramGB -lt 16) { Write-Host "::error::$ramGB GB RAM is too little for r2t2 (about 7 GB under load)"; exit 1 }
+
+      - name: Pressure test
+        shell: powershell
+        working-directory: ${{ github.workspace }}/.github/script/pressure-r2t2
+        env:
+          FLM_BIN: ${{ steps.package.outputs.flm-bin }}
+          QUICK: ${{ inputs.quick }}
+        run: |
+          if (-not $env:FLM_MODEL_PATH) {
+            $env:FLM_MODEL_PATH = Join-Path $env:USERPROFILE ".flm"
+            New-Item -ItemType Directory -Force $env:FLM_MODEL_PATH | Out-Null
+          }
+          $env:PYTHONUTF8 = '1'
+          $out = Join-Path $env:GITHUB_WORKSPACE 'pressure-out'
+          $cmdArgs = @('pressure.py', "--flm-bin=$env:FLM_BIN", "--out=$out", '--golden=golden-linux.json')
+          if ($env:QUICK -eq 'true') { $cmdArgs += '--quick' }
+          python --version
+          & python $cmdArgs
+          exit $LASTEXITCODE
+
+      - name: Runner health after
+        if: always()
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force pressure-out | Out-Null
+          $work = Split-Path (Split-Path $env:GITHUB_WORKSPACE)
+          $left = Get-Process -Name flm -ErrorAction SilentlyContinue |
+            Where-Object { $_.Path -and $_.Path.StartsWith($work, [StringComparison]::OrdinalIgnoreCase) }
+          if ($left) {
+            Write-Host "::warning::flm still running after the test: $($left.Id); stopping it"
+            $left | Stop-Process -Force -ErrorAction SilentlyContinue
+          }
+          $os = Get-CimInstance Win32_OperatingSystem
+          "free ram: $([math]::Round($os.FreePhysicalMemory / 1MB, 1)) GB" | Tee-Object pressure-out\health-after.txt
+          Get-PnpDevice -FriendlyName '*NPU*' -ErrorAction SilentlyContinue |
+            Format-Table -AutoSize Status, FriendlyName | Out-String | Tee-Object -Append pressure-out\health-after.txt
+          $smi = @('xrt-smi', "$env:SystemRoot\System32\AMD\xrt-smi.exe") | Where-Object { Get-Command $_ -ErrorAction SilentlyContinue } | Select-Object -First 1
+          if ($smi) { & $smi examine 2>&1 | Tee-Object -Append pressure-out\health-after.txt }
+          exit 0
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pressure-r2t2-${{ github.run_id }}-${{ github.run_attempt }}
+          path: pressure-out
+          retention-days: 30
