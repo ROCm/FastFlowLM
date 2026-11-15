@@ -169,6 +169,50 @@ def function_typed_arguments(api: Api) -> None:
 
 
 @case
+def function_unanchored_pattern(api: Api) -> None:
+    """An unanchored string pattern only has to match somewhere in the string, as JSON Schema reads it."""
+    tool = json.loads(json.dumps(GET_WEATHER))
+    tool["function"]["parameters"]["properties"]["city"] = {
+        "type": "string", "minLength": 1, "maxLength": 64, "pattern": "\\S"}
+    choice = api.ok(api.body(user(WEATHER_PROMPT), tools=[tool], tool_choice=function_choice("get_weather")))
+    city = json.loads(expect_calls(choice, [tool])[0]["function"]["arguments"])["city"]
+    expect(len(city) > 1, f"the pattern \\S held the city to one character: {city!r}")
+
+
+NOTE = ("The quarterly review moved to Thursday at three in the afternoon, "
+        "in the large conference room on the fourth floor.")
+
+
+@case
+def function_pattern_keeps_length_bounds(api: Api) -> None:
+    """A one-character pattern such as \\S still leaves maxLength in force."""
+    tool = {"type": "function", "function": {
+        "name": "save_note", "description": "Save a note",
+        "parameters": {"type": "object", "required": ["text"], "properties": {
+            "text": {"type": "string", "minLength": 1, "maxLength": 20, "pattern": "\\S"}}}}}
+    body = api.body(user(f"Save this note word for word: {NOTE}"), tools=[tool],
+                    tool_choice=function_choice("save_note"))
+    text = json.loads(expect_calls(api.ok(body), [tool])[0]["function"]["arguments"])["text"]
+    expect(1 < len(text) <= 20, f"text {text!r} is outside 2..20 characters")
+
+
+@case
+def function_nested_long_bounded_pattern(api: Api) -> None:
+    """A \\S pattern with a long maxLength inside a nested object still gets a grammar."""
+    caption = {"type": "string", "minLength": 1, "maxLength": 512, "pattern": "\\S"}
+    tool = {"type": "function", "function": {
+        "name": "draw_chart", "description": "Draw a chart",
+        "parameters": {"type": "object", "required": ["spec"], "additionalProperties": False,
+                       "properties": {"spec": {"type": "object", "required": ["caption"],
+                                               "additionalProperties": False,
+                                               "properties": {"caption": caption}}}}}}
+    choice = api.ok(api.body(user("Draw a chart of monthly sales with a short caption."), tools=[tool],
+                             tool_choice=function_choice("draw_chart")))
+    spec = json.loads(expect_calls(choice, [tool])[0]["function"]["arguments"])["spec"]
+    expect(0 < len(spec["caption"]) <= 512, f"caption length {len(spec['caption'])} is outside 1..512")
+
+
+@case
 def function_with_thinking(api: Api) -> None:
     """A forced call still works when the model thinks first."""
     body = api.body(user(WEATHER_PROMPT), think=True, max_tokens=1536, tools=WEATHER_TOOLS,

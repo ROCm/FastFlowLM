@@ -7,6 +7,7 @@
 #include <fstream>
 #include <functional>
 #include <iterator>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -158,6 +159,93 @@ json qwen_xml_arguments(const json& schema) {
 
 // ---------------------------------------------------------------- tools of a request
 
+/// \brief Whether a regex is one character class: ".", "\S", "\d", "[a-z]", ...
+bool is_one_character(const std::string& pattern) {
+    if (pattern == ".") {
+        return true;
+    }
+    if (pattern.size() == 2 && pattern[0] == '\\') {
+        return pattern[1] != 'b' && pattern[1] != 'B';  // word boundaries match no character
+    }
+    if (pattern.size() < 3 || pattern.front() != '[' || pattern.back() != ']') {
+        return false;
+    }
+    for (size_t i = 1; i + 1 < pattern.size(); ++i) {
+        if (pattern[i] == '\\') {
+            ++i;
+        } else if (pattern[i] == ']') {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// \brief A JSON Schema string pattern as xgrammar's whole-string regex has to spell it
+/// \note JSON Schema finds a pattern anywhere in the string, while xgrammar matches
+///       the whole string against it, so "\S" (not blank) would allow exactly one
+///       character. A side the pattern leaves unanchored gets ".*".
+std::string whole_string_pattern(const std::string& pattern) {
+    const bool starts = !pattern.empty() && pattern.front() == '^';
+    size_t escapes = 0;
+    while (escapes + 1 < pattern.size() && pattern[pattern.size() - 2 - escapes] == '\\') ++escapes;
+    const bool ends = pattern.size() > (starts ? 1u : 0u) && pattern.back() == '$' && escapes % 2 == 0;
+    if (starts && ends) {
+        return pattern;
+    }
+    const size_t begin = starts ? 1 : 0;
+    const std::string core = pattern.substr(begin, pattern.size() - begin - (ends ? 1 : 0));
+    if (core.empty()) {
+        return ".*";
+    }
+    return (starts ? "^(" : ".*(") + core + (ends ? ")$" : ").*");
+}
+
+bool is_string_schema(const json& schema) {
+    const json type = schema.value("type", json());
+    if (type.is_array()) {
+        return std::find(type.begin(), type.end(), json("string")) != type.end();
+    }
+    return type == "string";
+}
+
+/// \brief Longest regex repetition xgrammar builds in place; a longer one becomes a rule
+///        of its own, which it cannot build inside a nested object (the check on
+///        per_rule_fsm_hashes fails and the request gets no grammar at all).
+constexpr int64_t XGRAMMAR_REGEX_REPEAT_LIMIT = 128;
+
+/// \brief The pattern xgrammar is given for a string schema, which may take over its length bounds
+/// \note xgrammar drops minLength/maxLength once a pattern is there. A lone character
+///       class that only has to occur somewhere leads instead of being padded, so the
+///       bounds become the repetition after it and leave the schema. Bounds too long for
+///       that repetition keep the schema's minLength/maxLength and drop the pattern
+///       (std::nullopt): a string past its maxLength is the likelier mistake.
+std::optional<std::string> string_pattern(json& schema) {
+    const std::string pattern = schema["pattern"].get<std::string>();
+    const json min_length = schema.value("minLength", json(0));
+    json max_length = schema.value("maxLength", json());
+    const bool bounded = schema.contains("minLength") || schema.contains("maxLength");
+    if (!bounded || !is_one_character(pattern) || !min_length.is_number_integer() ||
+        !(max_length.is_null() || max_length.is_number_integer())) {
+        return whole_string_pattern(pattern);
+    }
+    if (max_length.is_number_integer() && max_length.get<int64_t>() > std::numeric_limits<int32_t>::max()) {
+        max_length = json();
+    }
+    const int64_t low = std::max<int64_t>(min_length.get<int64_t>(), 1) - 1;
+    if (max_length.is_number_integer() && max_length.get<int64_t>() - 1 < low) {
+        return whole_string_pattern(pattern);  // unsatisfiable, which xgrammar reports
+    }
+    const bool long_repeat = max_length.is_null() ? low > XGRAMMAR_REGEX_REPEAT_LIMIT
+                                                  : max_length.get<int64_t>() - 1 > XGRAMMAR_REGEX_REPEAT_LIMIT;
+    if (long_repeat) {
+        return std::nullopt;
+    }
+    const std::string high = max_length.is_null() ? std::string() : std::to_string(max_length.get<int64_t>() - 1);
+    schema.erase("minLength");
+    schema.erase("maxLength");
+    return pattern + ".{" + std::to_string(low) + "," + high + "}";
+}
+
 /// \brief Spell out what a schema leaves implicit where xgrammar needs it
 /// \note An array without "items" means any items; the qwen_xml style rejects
 ///       every value of such an array unless that is written as "items": {}.
@@ -171,6 +259,14 @@ json normalize_schema(json schema) {
     }
     if (schema.value("type", json()) == "array" && !schema.contains("items") && !schema.contains("prefixItems")) {
         schema["items"] = json::object();
+    }
+    if (is_string_schema(schema) && schema.contains("pattern") && schema["pattern"].is_string()) {
+        const std::optional<std::string> pattern = string_pattern(schema);
+        if (pattern) {
+            schema["pattern"] = *pattern;
+        } else {
+            schema.erase("pattern");
+        }
     }
     for (auto& [key, value] : schema.items()) {
         if (value.is_object() || value.is_array()) {
@@ -445,7 +541,7 @@ json reasoning_prefix(const chat_format_spec& spec, bool allow) {
 
 json response_schema(const chat_constraint_request& request) {
     if (!request.json_schema.is_null()) {
-        return request.json_schema;
+        return normalize_schema(request.json_schema);
     }
     return json{{"type", "object"}};
 }
