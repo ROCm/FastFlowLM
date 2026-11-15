@@ -10,7 +10,7 @@ nav_order: 23
 This section reports the accuracy and the speed of Confucius4-R2T2 on the NPU with FastFlowLM (FLM).
 
 > **Note:**
-> - Results are based on a FastFlowLM build of the `r2t2` family (v1.0.13), under FLM's default NPU power mode (Performance).
+> - Results are based on a FastFlowLM build of the `r2t2` family (v1.0.14), under FLM's default NPU power mode (Performance).
 > - The audio encoder and the prompt processing run on the CPU, the 28 decoder layers run on the NPU; the CPU numbers below depend on the host CPU.
 > - Newer versions may deliver improved performance.
 
