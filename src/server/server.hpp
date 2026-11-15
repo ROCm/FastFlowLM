@@ -75,6 +75,17 @@ public:
         tasks_.push(std::move(task));
         return true;
     }
+    enum class Admission { run_now, queued, queue_full };
+    /// \brief take the NPU (`try_acquire`) or else queue `task`, as one step with respect to complete_current: done separately, the
+    ///        running request could find the queue empty and release the NPU between a failed acquire and the enqueue, and the
+    ///        queued task would never run
+    Admission admit(Task task, const std::function<bool()>& try_acquire) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (try_acquire()) return Admission::run_now;
+        if (tasks_.size() >= capacity_) return Admission::queue_full;
+        tasks_.push(std::move(task));
+        return Admission::queued;
+    }
     Task take_next() {
         std::lock_guard<std::mutex> lock(mutex_);
         if (tasks_.empty()) return {};
@@ -85,10 +96,15 @@ public:
     void complete_current(const Scheduler& schedule,
                           const std::function<void()>& release,
                           std::chrono::milliseconds cooldown) {
-        auto task = take_next();
-        if (!task) {
-            release();
-            return;
+        Task task;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);   // dequeue or release as one step (see admit)
+            if (tasks_.empty()) {
+                release();
+                return;
+            }
+            task = std::move(tasks_.front());
+            tasks_.pop();
         }
         if (cooldown.count() > 0) std::this_thread::sleep_for(cooldown);
         schedule(std::move(task));

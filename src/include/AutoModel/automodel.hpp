@@ -702,6 +702,11 @@ public:
 		       (this->backend_ && this->backend_->matches_token_prefixes());
 	}
 
+	/// \brief the model transcribes whole audio files itself (/v1/audio/transcriptions), without the Whisper sidecar
+	virtual bool supports_transcription() const {
+		return false;
+	}
+
 	/// \brief --prefix-cache-mb / --prefix-slots / --prefix-min-gain (-1 = the default, 0 slots = off); call before load_model
 	void set_prefix_limits(int cache_mb, int slots, int min_gain = -1) {
 		this->prefix_cache_mb_arg_ = cache_mb;

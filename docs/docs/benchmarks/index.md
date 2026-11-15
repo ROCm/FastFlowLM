@@ -31,5 +31,6 @@ Browse detailed NPU benchmark results for each major model family supported by F
 - [Nemotron Bolt DFlash](nemotron3.5-bolt-dflash_results/)
 - [Flash Models](flash_results/)
 - [Whisper](whisper_results/)
+- [Confucius4-R2T2](r2t2_results/)
 
 Each page includes decoding and prefill speed metrics (tokens per second; real-time factor for Whisper) and notes about the test setup and hardware. 

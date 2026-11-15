@@ -70,6 +70,44 @@
                 "footprint": 22.0
             }
         },
+        "r2t2": {
+            "1.7b": {
+                "supported_platforms": ["aie2p"],
+                "name": "Confucius4-R2T2-NPU2",
+                "url": "https://huggingface.co/FastFlowLM/Confucius4-R2T2-NPU2",
+                "file_url": "https://huggingface.co/api/models/FastFlowLM/Confucius4-R2T2-NPU2/tree/main",
+                "ms_url": "https://modelscope.cn/models/amd/Confucius4-R2T2-NPU2",
+                "modified_at": "2026-11-02T00:00:00Z",
+                "size": 3920000000,
+                "flm_min_version": "1.0.14",
+                "default_context_length": 2048,
+                "max_prefill_len": 2048,
+                "files": [
+                    "config.json",
+                    "model.q4nx",
+                    "audio_weight.q4nx",
+                    "npu_q41.q4nx",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "chat_template.jinja",
+                    "MODEL_LICENSE"
+                ],
+                "vlm": false,
+                "asr": true,
+                "details": {
+                    "format": "NPU2",
+                    "family": "r2t2",
+                    "think": false,
+                    "parameter_size": "2B",
+                    "quantization_level": "Q8_0 / Q4_1"
+                },
+                "label": [
+                    "audio",
+                    "transcription"
+                ],
+                "footprint": 4.2
+            }
+        },
         "nanbeige4.1": {
             "3b": {
                 "supported_platforms": ["aie2p"],

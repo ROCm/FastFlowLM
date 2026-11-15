@@ -34,6 +34,7 @@ sections:
         - "LFM2 / LFM3 (Liquid AI)"
         - "EmbeddingGemma (RAG)"
         - "Whisper (Audio)"
+        - "Confucius4-R2T2 (Speech recognition)"
         - "Hy-MT2 (Translation)"
         - "SmolVLA (Robotics)"
         - "Decision 3.0 (System One)"

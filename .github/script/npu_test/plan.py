@@ -59,8 +59,8 @@ PR_CHAT = {
     "qwen2vl": "qwen2.5vl-it:3b",
 }
 
-# Families that are not chat models; each has its own suite.
-NON_CHAT_FAMILIES = {"embed-gemma", "d3", "whisper-v3"}
+# Families that are not chat models; each has its own suite (r2t2: asr_chat).
+NON_CHAT_FAMILIES = {"embed-gemma", "d3", "whisper-v3", "r2t2"}
 
 # Backends that run their models on the GPU rather than the NPU. Only a run
 # that asks for one (--backend) tests its models, and then all of them.

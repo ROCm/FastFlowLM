@@ -149,6 +149,8 @@ docs_nav:
         url: "/docs/models/nemotron3.5-bolt-dflash/"
       - label: Flash Models
         url: "/docs/models/flash/"
+      - label: Confucius4-R2T2
+        url: "/docs/models/r2t2/"
   - label: Benchmarks
     children:
       - label: Overview
@@ -195,5 +197,11 @@ docs_nav:
         url: "/docs/benchmarks/nemotron3.5-bolt-dflash_results/"
       - label: Flash Models
         url: "/docs/benchmarks/flash_results/"
+<<<<<<< HEAD
       - label: Whisper
         url: "/docs/benchmarks/whisper_results/"
+||||||| parent of d6a1b36e (docs(r2t2): model card, benchmark page, nav/index entries, transcription endpoint note; catalog footprint)
+=======
+      - label: Confucius4-R2T2
+        url: "/docs/benchmarks/r2t2_results/"
+>>>>>>> d6a1b36e (docs(r2t2): model card, benchmark page, nav/index entries, transcription endpoint note; catalog footprint)

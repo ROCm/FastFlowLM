@@ -1,0 +1,217 @@
+/// \file modeling_qwen3_asr.cpp
+/// \brief Qwen3_ASR class: Confucius4-R2T2 speech recognition (see modeling_qwen3_asr.hpp)
+
+#include "AutoModel/modeling_qwen3_asr.hpp"
+#include "metrices.hpp"
+
+#include <algorithm>
+#include <memory>
+#include <sstream>
+
+bool qwen3_asr_split_answer(const std::string& answer, std::string& language, std::string& text) {
+    static const std::string marker = "<asr_text>";
+    const size_t at = answer.find(marker);
+    if (at == std::string::npos) {
+        language.clear();
+        text = answer;
+        const size_t bar0 = text.find('|');
+        if (bar0 != std::string::npos) text.resize(bar0);
+        return false;
+    }
+    const std::string header = answer.substr(0, at);        // "language Chinese" / "language None"
+    text = answer.substr(at + marker.size());
+    // a streaming-trained model may end its text with a "|" marker (the reference keeps the part before it)
+    const size_t bar = text.find('|');
+    if (bar != std::string::npos) text.resize(bar);
+    language.clear();
+    const std::string key = "language ";
+    const size_t k = header.find(key);
+    if (k != std::string::npos) language = header.substr(k + key.size());
+    if (language == "None") language.clear();               // the model's word for "no language": not a language
+    return true;
+}
+
+/************              Qwen3_ASR family            **************/
+Qwen3_ASR::Qwen3_ASR(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "Qwen3_ASR") {}
+
+void Qwen3_ASR::load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption, const std::string& backend) {
+    this->_shared_load_backend(model_path, model_info, default_context_length, enable_preemption, backend);
+    this->setup_tokenizer(model_path);
+    this->sampler.reset();
+
+    // greedy: the model is trained and benchmarked with temperature ~0
+    sampler_config config;
+    config.top_k = 1;
+    config.top_p = 1.0f;
+    config.min_p = 0.0f;
+    config.temperature = 1.0f;
+    config.rep_penalty = 1.0f;
+    config.freq_penalty = 0.0f;
+    this->set_sampler(config);
+    for (size_t i = 0; i < PROFILER_TYPE_NUM; i++) {
+        this->profiler_list[i].reset();
+    }
+}
+
+void Qwen3_ASR::setup_tokenizer(std::string model_path) {
+    auto tokenizer_config = this->_shared_setup_tokenizer(model_path);
+}
+
+std::string Qwen3_ASR::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools, bool continue_final_message) {
+    minja::chat_template_inputs inputs;
+    inputs.messages = messages;
+    if (!tools.empty()) inputs.tools = tools;
+    inputs.extra_context = this->extra_context;
+    return this->_render_chat_template(inputs, continue_final_message);
+}
+
+bool Qwen3_ASR::configure_parameter(std::string parameter_name, const std::any& value) {
+    try {
+        if (parameter_name == "system_prompt") {
+            this->user_system_prompt = std::any_cast<std::string>(value);
+            this->extra_context["user_system_prompt"] = this->user_system_prompt;
+            return true;
+        }
+        if (parameter_name == "language") {
+            this->forced_language = std::any_cast<std::string>(value);
+            return true;
+        }
+    } catch (const std::bad_any_cast&) {
+        return false;
+    }
+    return false;
+}
+
+void Qwen3_ASR::_stream_log_mel(const float* x, int n, stream_mel_cache& cache, std::vector<float>& mel, int& frames) {
+    std::vector<float> fresh;
+    this->_log10_mel_frames(x, n, cache.frames, fresh, frames);
+    mel.clear();
+    if (frames <= 0) return;
+    const int cached = std::min(cache.frames, frames);
+    mel.reserve((size_t)frames * NUM_MEL_BINS);
+    mel.assign(cache.log10_mel.begin(), cache.log10_mel.begin() + (size_t)cached * NUM_MEL_BINS);
+    mel.insert(mel.end(), fresh.begin(), fresh.end());
+    const int final_frames = n >= 200 ? std::min((n - 200) / HOP_LENGTH + 1, frames) : 0;   // window [160 t - 200, 160 t + 200) inside
+    if (final_frames > cache.frames) {
+        cache.log10_mel.insert(cache.log10_mel.end(), mel.begin() + (size_t)cache.frames * NUM_MEL_BINS, mel.begin() + (size_t)final_frames * NUM_MEL_BINS);
+        cache.frames = final_frames;
+    }
+    _finish_log_mel(mel);   // the clip-wide clamp, as compute_log_mel
+}
+
+bool Qwen3_ASR::_build_prompt(const std::vector<float>& samples, const std::string& context, const std::string& language,
+                              const std::string& assistant_text, std::vector<int>& tokens, void*& payload_out, int& first_len_run,
+                              stream_mel_cache* mel_cache) {
+    // log-mel and the number of audio tokens it makes
+    auto payload = std::make_shared<qwen3_asr_payload_t>();
+    audio_data_t audio;
+    audio.samples = samples;
+    audio.num_samples = audio.num_frames = samples.size();
+    audio.channels = 1;
+    audio.sample_rate = SAMPLE_RATE;
+    std::vector<float> mel;
+    int frames = 0;
+    if (mel_cache) {   // streaming: only the frames that are not final yet
+        this->_stream_log_mel(samples.data(), static_cast<int>(samples.size()), *mel_cache, mel, frames);
+    } else {
+        this->compute_log_mel(audio, mel, frames);
+    }
+    if (frames <= 0) {
+        header_print("ERROR", "The audio is too short to transcribe");
+        return false;
+    }
+    payload->mel_frames = frames;
+    payload->mel = std::move(mel);
+    payload->n_audio = qwen3_asr_audio_tokens(frames);
+    payload->audio_pad_id = AUDIO_PAD_ID;
+
+    this->profiler_list[TKOEN_ENCODE_TIME].start();
+    std::string prompt = "<|im_start|>system\n" + context + "<|im_end|>\n<|im_start|>user\n<|audio_start|><|audio_pad|><|audio_end|>"
+                         "<|im_end|>\n<|im_start|>assistant\n";
+    if (!language.empty()) prompt += "language " + language + "<asr_text>";
+    prompt += assistant_text;
+    std::vector<int> init = this->tokenizer->encode(prompt);
+    tokens.clear();
+    tokens.reserve(init.size() + payload->n_audio);
+    first_len_run = 0;
+    for (int id : init) {
+        if (id == AUDIO_PAD_ID) {
+            for (int j = 0; j < payload->n_audio; j++) tokens.push_back(AUDIO_PAD_ID);
+            first_len_run = (int)tokens.size() + 1;   // the audio tokens and <|audio_end|> must be in the first prefill chunk
+        } else {
+            tokens.push_back(id);
+        }
+    }
+    this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
+    this->payload_holder_ = payload;
+    payload_out = payload.get();
+    return true;
+}
+
+bool Qwen3_ASR::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
+    // 1. the audio: CLI paths in input.audios, REST base64 strings in messages[*]["audios"]; several are joined in time
+    std::vector<float> samples;
+    auto append = [&](audio_data_t&& a) {
+        if (a.channels > 1 || a.num_frames == 0) {
+            header_print("ERROR", "Skipping audio that is not mono or is empty");
+            return;
+        }
+        samples.insert(samples.end(), a.samples.begin(), a.samples.end());
+    };
+    for (const std::string& path : input.audios) append(this->load_audio(path));
+    std::string text_context;
+    if (!input.messages.empty()) {
+        for (const auto& message : input.messages) {
+            if (message.contains("audios")) {
+                for (const auto& aud : message["audios"]) append(this->load_audio_base64(aud.get<std::string>()));
+            }
+            if (message.value("role", "") == "user" && message.contains("content") && message["content"].is_string())
+                text_context = message["content"].get<std::string>();
+        }
+    } else {
+        text_context = input.prompt;
+    }
+    if (samples.empty()) {
+        header_print("WARNING", "No audio to transcribe: give an audio file (/input \"file.wav\") or an audio message");
+        return false;
+    }
+    // text next to the audio is context / hot words for the model, unless a system prompt was configured
+    const std::string context = this->user_system_prompt.empty() ? text_context : this->user_system_prompt;
+
+    // 2. generate() transcribes it as /v1/audio/transcriptions does: in pieces of about a minute, each its own context
+    this->pending_samples_ = std::move(samples);
+    this->pending_context_ = context;
+    return true;
+}
+
+std::string Qwen3_ASR::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
+    std::vector<float> samples;
+    samples.swap(this->pending_samples_);   // the audio insert() collected
+    if (samples.empty()) return "";
+    std::string detected_language;
+    try {
+        return this->_transcribe_samples(meta_info, samples, this->pending_context_, _asr_language(this->forced_language), length_limit, os,
+                                         detected_language, is_cancelled);
+    } catch (const std::invalid_argument& e) {
+        header_print("ERROR", e.what());
+        return "";
+    }
+}
+
+void Qwen3_ASR::_release_engine_memory() {
+    this->payload_holder_.reset();
+    this->stream_mel_ = stream_mel_cache();
+    this->stream_wav_ = nullptr;
+    try {
+        if (auto* engine = dynamic_cast<qwen3_asr_npu*>(this->lm_engine)) engine->release_host_memory();
+    } catch (const std::exception& e) {
+        header_print("WARNING", "Qwen3_ASR: could not release the engine memory: " << e.what());
+    }
+}
+
+std::string Qwen3_ASR::generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os) {
+    if (!this->insert(meta_info, input)) {
+        return "";
+    }
+    return this->generate(meta_info, length_limit, os);
+}
