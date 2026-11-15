@@ -898,10 +898,10 @@ void test_platform_helpers() {
                  utils::npu_platform::dev04);
     TEST_REQUIRE(utils::default_npu_platform() == utils::npu_platform::aie2p);
 
-    // corelib names the NPU; only its AIEM is dev04, and anything else,
+    // corelib names the NPU; only its npu_aiem is dev04, and anything else,
     // no NPU included, is the default.
-    TEST_REQUIRE(utils::platform_from_corelib_arch("AIEM") == utils::npu_platform::dev04);
-    TEST_REQUIRE(utils::platform_from_corelib_arch("AIE2P") == utils::npu_platform::aie2p);
+    TEST_REQUIRE(utils::platform_from_corelib_arch("npu_aiem") == utils::npu_platform::dev04);
+    TEST_REQUIRE(utils::platform_from_corelib_arch("npu_aie2p") == utils::npu_platform::aie2p);
     TEST_REQUIRE(utils::platform_from_corelib_arch("") == utils::npu_platform::aie2p);
 
     // This hardware-free target does not define FLM_ENABLE_CORE, so the

@@ -174,13 +174,19 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             return current_detail.c_str();
         } else if constexpr (std::is_same_v<Tag, selftest_dependencies_tag>) {
             return state.selftest_status;
-        } else if constexpr (std::is_same_v<Tag, get_npu_tag>) {
-            return state.npu;
-        } else if constexpr (std::is_same_v<Tag, npu_name_tag>) {
+        } else if constexpr (std::is_same_v<Tag, has_feature_tag>) {
+            const auto feature = std::get<0>(arguments);
+            if (feature == ryzenai_corelib_feature_npu) return state.npu != fake_corelib::kNoNpu;
+            return (feature == ryzenai_corelib_feature_npu_aiem ||
+                    feature == ryzenai_corelib_feature_npu_aie2p) &&
+                   feature == state.npu;
+        } else if constexpr (std::is_same_v<Tag, feature_name_tag>) {
             switch (std::get<0>(arguments)) {
-            case ryzenai_corelib_npu_none: return "none";
-            case ryzenai_corelib_npu_aiem: return "AIEM";
-            case ryzenai_corelib_npu_aie2p: return "AIE2P";
+            case ryzenai_corelib_feature_npu: return "npu";
+            case ryzenai_corelib_feature_npu_aiem: return "npu_aiem";
+            case ryzenai_corelib_feature_npu_aie2p: return "npu_aie2p";
+            case ryzenai_corelib_feature_gpu: return "gpu";
+            case ryzenai_corelib_feature_npu_direct: return "npu_direct";
             default: return static_cast<const char*>(nullptr);
             }
         } else if constexpr (std::is_same_v<Tag, object_release_tag>) {
@@ -673,7 +679,7 @@ void Reset() {
                      RYZENAI_CORELIB_VERSION_PATCH};
     state.selftest_status = ryzenai_corelib_status_success;
     state.default_status = ryzenai_corelib_status_success;
-    state.npu = ryzenai_corelib_npu_aiem;
+    state.npu = ryzenai_corelib_feature_npu_aiem;
     state.detail.clear();
     state.status_text = "success";
     state.missing_symbol.clear();

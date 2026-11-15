@@ -86,6 +86,9 @@ struct WeightFromFileRecord {
 /// \brief the position a forward records when it names none
 inline constexpr std::size_t kPositionContinue = SIZE_MAX;
 
+/// \brief State::npu for a machine without an NPU corelib knows
+inline constexpr auto kNoNpu = static_cast<ryzenai_corelib_feature>(0);
+
 struct ModelForwardRecord {
     std::size_t rows{};
     std::size_t position{};
@@ -101,8 +104,9 @@ struct State {
                                          RYZENAI_CORELIB_VERSION_PATCH};
     ryzenai_corelib_status selftest_status{ryzenai_corelib_status_success};
     ryzenai_corelib_status default_status{ryzenai_corelib_status_success};
-    /// \brief what get_npu() answers; npu_name() names it as corelib does
-    ryzenai_corelib_npu npu{ryzenai_corelib_npu_aiem};
+    /// \brief the NPU has_feature() reports, npu_aiem, npu_aie2p or kNoNpu;
+    ///        feature_name() names features as corelib does
+    ryzenai_corelib_feature npu{ryzenai_corelib_feature_npu_aiem};
     std::string detail;
     std::string status_text{"success"};
     std::string missing_symbol;

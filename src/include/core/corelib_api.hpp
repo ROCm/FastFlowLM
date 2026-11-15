@@ -2,9 +2,9 @@
 
 #include <ryzenai/corelib.h>
 
-#if RYZENAI_CORELIB_VERSION_MAJOR != 0 || RYZENAI_CORELIB_VERSION_MINOR != 70 || \
+#if RYZENAI_CORELIB_VERSION_MAJOR != 0 || RYZENAI_CORELIB_VERSION_MINOR != 87 || \
     RYZENAI_CORELIB_VERSION_PATCH != 0
-#error "FastFlowLM requires ryzenai-corelib headers exactly 0.70.0"
+#error "FastFlowLM requires ryzenai-corelib headers exactly 0.87.0"
 #endif
 
 #include <atomic>
@@ -22,8 +22,8 @@
     X(status_to_string, ryzenai_corelib_status_to_string)                          \
     X(get_last_error_message, ryzenai_corelib_get_last_error_message)              \
     X(selftest_dependencies, ryzenai_corelib_selftest_dependencies)                \
-    X(get_npu, ryzenai_corelib_get_npu)                                            \
-    X(npu_name, ryzenai_corelib_npu_name)                                          \
+    X(has_feature, ryzenai_corelib_has_feature)                                    \
+    X(feature_name, ryzenai_corelib_feature_name)                                  \
     X(object_release, ryzenai_corelib_object_release)                              \
     X(create_stream, ryzenai_corelib_create_stream)                                \
     X(stream_synchronize, ryzenai_corelib_stream_synchronize)                      \

@@ -222,13 +222,16 @@ void TestRuntimeRunsDependencySelftestAndRequiresAUsableNpu() {
                     }),
                     "selftest_dependencies");
 
-    for (const auto npu : {ryzenai_corelib_npu_none, ryzenai_corelib_npu_aie2p}) {
+    for (const auto& [npu, name] :
+         {std::pair{fake_corelib::kNoNpu, "(none)"},
+          std::pair{ryzenai_corelib_feature_npu_aie2p, "(npu_aie2p)"}}) {
         fake_corelib::Reset();
         fake_corelib::GetState().npu = npu;
-        RequireContains(RequireThrows([] {
-                            CorelibRuntime::CreateForTest(ValidApi());
-                        }),
-                        "no usable NPU");
+        const std::string error = RequireThrows([] {
+            CorelibRuntime::CreateForTest(ValidApi());
+        });
+        RequireContains(error, "no usable NPU");
+        RequireContains(error, name);
     }
 
     fake_corelib::Reset();
@@ -241,12 +244,12 @@ void TestNpuArchIsCorelibsAnswerAndEmptyWhenItCannotLoad() {
     fake_corelib::Reset();
     {
         const auto runtime = CorelibRuntime::CreateForTest(ValidApi());
-        fake_corelib::GetState().npu = ryzenai_corelib_npu_aie2p;
-        TEST_REQUIRE(CorelibRuntime::NpuArch({}) == "AIE2P");
-        fake_corelib::GetState().npu = ryzenai_corelib_npu_none;
+        fake_corelib::GetState().npu = ryzenai_corelib_feature_npu_aie2p;
+        TEST_REQUIRE(CorelibRuntime::NpuArch({}) == "npu_aie2p");
+        fake_corelib::GetState().npu = fake_corelib::kNoNpu;
         TEST_REQUIRE(CorelibRuntime::NpuArch({}).empty());
-        fake_corelib::GetState().npu = ryzenai_corelib_npu_aiem;
-        TEST_REQUIRE(CorelibRuntime::NpuArch({}) == "AIEM");
+        fake_corelib::GetState().npu = ryzenai_corelib_feature_npu_aiem;
+        TEST_REQUIRE(CorelibRuntime::NpuArch({}) == "npu_aiem");
     }
     CorelibRuntime::ShutdownProcess();
 
