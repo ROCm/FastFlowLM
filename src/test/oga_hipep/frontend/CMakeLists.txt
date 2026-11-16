@@ -30,6 +30,7 @@ function(add_frontend_test name frontend_source)
         "${FLM_SOURCE_DIR}/common/prefix_slot_cache.cpp"
         "${FLM_SOURCE_DIR}/common/AutoModel/automodel.cpp"
         "${FLM_SOURCE_DIR}/common/AutoModel/model_backend.cpp"
+        "${FLM_SOURCE_DIR}/common/modules/sampler.cpp"
         "${FLM_SOURCE_DIR}/common/AutoModel/${frontend_source}"
         ${FLM_CHAT_SOURCES})
 
