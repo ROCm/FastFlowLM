@@ -26,6 +26,8 @@
 class Gemma4_12B : public AutoModel {
 private:
     bool enable_think = false;
+    /// thinking is off and the turn is not a continued message: generate() feeds the reply's empty thought channel
+    bool feed_empty_thought_ = false;
 
     void setup_tokenizer(std::string model_path);
 

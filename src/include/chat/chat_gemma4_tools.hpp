@@ -10,3 +10,9 @@
 ///       a single nullable parameter would fail the whole request. A type that still lists
 ///       more than one type after dropping "null" is left as it is.
 nlohmann::ordered_json gemma4_template_tools(nlohmann::ordered_json tools);
+
+/// \brief The messages with every tool call's arguments as the JSON object the template renders
+/// \note OpenAI-style clients send arguments serialized; an empty string is no arguments ({}).
+///       The template refuses any arguments that are not an object or null, so those throw
+///       std::invalid_argument, naming the call, instead of failing in the template.
+nlohmann::ordered_json gemma4_template_messages(nlohmann::ordered_json messages);

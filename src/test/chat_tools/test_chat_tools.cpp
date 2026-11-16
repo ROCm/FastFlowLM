@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -552,6 +553,36 @@ void test_gemma4_nullable_types() {
     CHECK_EQ(tmpl->render(minja::Context::make(minja::Value(json{{"value", out["note"]}}))), "STRING nullable");
 }
 
+
+// Tool call arguments for the Gemma4 templates, which render only an object (or null)
+void test_gemma4_template_messages() {
+    std::printf("gemma4 template gets tool call arguments as an object, or a reason it cannot\n");
+    auto call = [](json arguments) {
+        return json::array({{{"role", "user"}, {"content", "hi"}},
+                            {{"role", "assistant"}, {"content", ""},
+                             {"tool_calls", json::array({{{"type", "function"},
+                                                          {"function", {{"name", "f"}, {"arguments", arguments}}}}})}}});
+    };
+    auto arguments = [](const json& messages) { return messages[1]["tool_calls"][0]["function"]["arguments"]; };
+    CHECK(arguments(gemma4_template_messages(call("{\"a\":null,\"b\":{\"c\":1}}"))) ==
+          (json{{"a", nullptr}, {"b", {{"c", 1}}}}));
+    CHECK(arguments(gemma4_template_messages(call(""))) == json::object());
+    CHECK(arguments(gemma4_template_messages(call(json{{"a", 1}}))) == (json{{"a", 1}}));
+    CHECK(arguments(gemma4_template_messages(call(nullptr))).is_null());
+    // messages without calls are left as they are
+    const json plain = json::array({{{"role", "user"}, {"content", "hi"}}});
+    CHECK(gemma4_template_messages(plain) == plain);
+    for (const json bad : {json("oops"), json("[1]"), json("5"), json("{\"a\":1} trailing"), json::array({1}), json(5)}) {
+        bool threw = false;
+        try {
+            gemma4_template_messages(call(bad));
+        } catch (const std::invalid_argument& e) {
+            threw = std::string(e.what()).find("\"f\"") != std::string::npos;
+        }
+        CHECK(threw);
+    }
+}
+
 } // namespace
 
 int main() {
@@ -565,6 +596,7 @@ int main() {
     test_continued_call();
     test_no_tools_after_tool_turns();
     test_gemma4_nullable_types();
+    test_gemma4_template_messages();
     if (failures) {
         std::printf("%d check(s) failed\n", failures);
         return 1;

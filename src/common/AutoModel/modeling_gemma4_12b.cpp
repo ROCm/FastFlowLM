@@ -11,6 +11,8 @@
 #include "error_measure.hpp"
 #include "models/gemma4_12b/flm/aie2p/gemma4_12b_npu.hpp"
 #include <cassert>
+#include <algorithm>
+#include <iterator>
 
 /************              Gemma4_12B family            **************/
 Gemma4_12B::Gemma4_12B(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "Gemma4_12B") {}
@@ -62,25 +64,12 @@ std::string Gemma4_12B::apply_chat_template(nlohmann::ordered_json& messages, nl
     opt.polyfill_tool_responses = false;
     opt.polyfill_object_arguments = false;
 
-    // The template raises if tool_calls[].function.arguments is a string, but OpenAI-style
-    // clients send it serialized. Deserialize it here (what polyfill_object_arguments would do).
-    nlohmann::ordered_json normalized = messages;
-    for (auto& message : normalized) {
-        if (!message.is_object() || !message.contains("tool_calls")) continue;
-        for (auto& tool_call : message["tool_calls"]) {
-            if (!tool_call.is_object() || !tool_call.contains("function")) continue;
-            auto& function = tool_call["function"];
-            if (!function.is_object() || !function.contains("arguments")) continue;
-            auto& arguments = function["arguments"];
-            if (!arguments.is_string()) continue;
-            auto raw = arguments.get<std::string>();
-            if (raw.empty()) {
-                arguments = nlohmann::ordered_json::object();
-                continue;
-            }
-            auto parsed = nlohmann::ordered_json::parse(raw, nullptr, /* allow_exceptions= */ false);
-            if (parsed.is_object()) arguments = parsed;
-        }
+    // OpenAI-style clients send tool call arguments serialized; the template renders only an object
+    nlohmann::ordered_json normalized;
+    try {
+        normalized = gemma4_template_messages(messages);
+    } catch (const std::invalid_argument& e) {
+        throw ModelRequestError(400, false, e.what(), "invalid_request_error");
     }
 
     minja::chat_template_inputs inputs;
@@ -369,13 +358,21 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
     int restore_idx = -1;
 
     // Prefix slots, text-only prompts. A prompt that carries pictures or audio, or a text turn whose history still holds their
-    // soft tokens (the payload is gone by then), takes the in-place path below. With thinking off the last 4 tokens of the prompt
-    // (the empty thought channel) are fed by generate(); the next turn does not render them.
+    // soft tokens (the payload is gone by then), takes the in-place path below. With thinking off the model opens every reply
+    // with an empty thought channel, which generate() feeds (the reasoning-off grammar would not let it write one). The
+    // template ends a new turn with that channel, and those 4 tokens are cut here and fed there; the next turn does not render
+    // them. After a tool call or a tool response the template writes no channel, so nothing is cut, but it is still fed: the
+    // model opens one there too. A continued message keeps all its tokens: they are the client's text, not the generation
+    // prompt.
     const bool modal_tokens = std::any_of(tokens.begin(), tokens.end(), [this](int t) {
         return t == image_token_id || t == audio_token_id || t == boi_token_id || t == boa_token_id;
     });
-    // A continued message keeps all its tokens: they are the client's text, not the generation prompt.
-    const size_t slot_trim = (this->enable_think || meta_info.continue_final_message) ? 0 : 4;
+    static constexpr int empty_thought[] = {boc_token_id, thought_token_id, new_line_token_id, eoc_token_id};
+    this->feed_empty_thought_ = !this->enable_think && !meta_info.continue_final_message;
+    const bool ends_with_empty_thought =
+        tokens.size() >= std::size(empty_thought) &&
+        std::equal(std::begin(empty_thought), std::end(empty_thought), tokens.end() - std::size(empty_thought));
+    const size_t slot_trim = this->feed_empty_thought_ && ends_with_empty_thought ? std::size(empty_thought) : 0;
     if (image_payload.num_images == 0 && audio_payload.num_audios == 0 && !modal_tokens &&
         this->_prefix_slot_mode(meta_info, tokens.size(), slot_trim)) {
         checkpoint_his.clear();
@@ -488,8 +485,8 @@ std::string Gemma4_12B::generate(chat_meta_info_t& meta_info, int length_limit, 
     std::string token_str;
     int sampled_token;
     int last_sampled_token;
-    // A continued message has no empty thought channel to feed: it starts from insert()'s sample
-    if(!enable_think && !meta_info.continue_final_message) {
+    // with thinking off the reply opens with an empty thought channel, fed here; otherwise generation starts from insert()'s sample
+    if (this->feed_empty_thought_) {
         // The four forwards below write rows total_tokens..total_tokens+3, so the
         // prompt has to leave room for them: past the engine's KV window they
         // corrupt it for every later request.

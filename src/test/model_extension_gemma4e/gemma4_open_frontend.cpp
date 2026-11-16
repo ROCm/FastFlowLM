@@ -442,6 +442,11 @@ private:
                     !call["function"].contains("arguments")) continue;
                 auto& arguments = call["function"]["arguments"];
                 if (!arguments.is_string()) continue;
+                // an empty string is a call without arguments, as in Gemma4e
+                if (arguments.get<std::string>().empty()) {
+                    arguments = json::object();
+                    continue;
+                }
                 const auto parsed = json::parse(
                     arguments.get<std::string>(), nullptr, false);
                 if (parsed.is_object()) arguments = parsed;
