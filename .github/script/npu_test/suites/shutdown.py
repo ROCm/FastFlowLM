@@ -142,19 +142,22 @@ def wait_ready(proc, client: Client, timeout: float) -> None:
 def wait_prompt(proc, timeout: float) -> None:
     deadline = time.monotonic() + timeout
     text = ""
+    error = None
     while time.monotonic() < deadline:
         try:
             text = console.screen(proc.pid)
-        except RuntimeError:
-            if proc.poll() is None:
-                raise
+            error = None
+        except RuntimeError as e:
+            # A console just created may not take an attach yet; try again.
+            error = e
         if proc.poll() is not None:
             raise AssertionError(f"flm run exited with code 0x{exit_code(proc):08X} "
                                  f"before its prompt; screen: {last_lines(text)}")
         if PROMPT in text:
             return
         time.sleep(2)
-    raise AssertionError(f"no {PROMPT} prompt within {timeout:.0f}s; screen: {last_lines(text)}")
+    raise AssertionError(f"no {PROMPT} prompt within {timeout:.0f}s; screen: {last_lines(text)}"
+                         + (f"; last screen read: {error}" if error else ""))
 
 
 def exit_code(proc) -> int:
