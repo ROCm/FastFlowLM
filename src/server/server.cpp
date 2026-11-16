@@ -136,8 +136,8 @@ std::string utf8_truncate_middle(const std::string& input, size_t head_count, si
 }
 
 ///@brief brief print request
-///@param request the request, already parsed with json_log::parse (long strings cut; without
-///       FLM_LOG_CONTENT every text string is already replaced by its length)
+///@param request the request, already parsed with json_log::parse (long strings cut)
+///@note prints user text: called only when FLM_LOG_CONTENT asks for it (json_log::summary otherwise)
 void brief_print_message_request(nlohmann::json request) {
     // if request has "messages" or "message" field, the context in meassages shall be printed briefly
     
@@ -201,8 +201,7 @@ void brief_print_message_request(nlohmann::json request) {
         request["tools"] = "...";
     }
 
-    // parenthesized: header_print streams its argument, and << binds tighter than ?:
-    header_print("LOG", (flm::log_privacy::content_enabled() ? "Body: " : "Body (text hidden; FLM_LOG_CONTENT=1 shows it): "));
+    header_print("LOG", "Body: ");
     std::string brief_body = json_log::dump(request);
     std::cout << brief_body << std::endl;
 }
@@ -774,7 +773,9 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
     std::cout << "================================================" << std::endl;
     header_print("⬇️ ", "Incoming Request: " << req.method_string());
     header_print("LOG", "Time stamp: " << get_current_time_string()); // hh:mm:ss mm:dd:yyyy
-    header_print("LOG", "Target: " << req.target());
+    // user text stays out of the log unless FLM_LOG_CONTENT asks for it: no query, and a summary of the body
+    const bool log_content = flm::log_privacy::content_enabled();
+    header_print("LOG", "Target: " << json_log::target(std::string_view(req.target().data(), req.target().size()), log_content));
     header_print("LOG", "Version: " << req.version());
     header_print("LOG", "Keep-Alive: " << req.keep_alive());
     json request_json_log;
@@ -787,9 +788,13 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
                 // Decide on the Content-Type, not on whether this log-only parse succeeds:
                 // a malformed body must still reach the parse below and get its 400.
                 is_json = true;
-                // cut long strings (image / audio data) as they are read: never logged, nor copied, whole;
-                // user text stays out of the log unless FLM_LOG_CONTENT asks for it
-                brief_print_message_request(json_log::parse(req.body(), flm::log_privacy::content_enabled()));
+                if (log_content) {
+                    // cut long strings (image / audio data) as they are read: never logged, nor copied, whole
+                    brief_print_message_request(json_log::parse(req.body()));
+                } else {
+                    header_print("LOG", "Body (" << req.body().size() << " bytes; FLM_LOG_CONTENT=1 shows the text): "
+                                            << json_log::summary(req.body()));
+                }
             }
             else if (content_type.find("multipart/form-data") != std::string::npos) {
                 // print some request info 
@@ -797,7 +802,7 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
         }
     }
     catch (const std::exception& e) {
-        header_print("LOG", "Error parsing request body: " + json_log::what(e, flm::log_privacy::content_enabled()));
+        header_print("LOG", "Error parsing request body: " + json_log::what(e, log_content));
     }
 
     // Route lookup

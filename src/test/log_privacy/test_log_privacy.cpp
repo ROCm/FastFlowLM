@@ -51,43 +51,81 @@ const char* kBody = R"({
 })";
 
 void TestRequestLogHasNoContent() {
-    const std::string logged = json_log::dump(json_log::parse(kBody, false));
+    using json = nlohmann::json;
+    const std::string logged = json_log::summary(kBody);
     CHECK(!has(logged, "MARK"));
-    // settings, numbers and flags stay readable
-    CHECK(has(logged, "\"qwen3:0.6b\""));
-    CHECK(has(logged, "\"system\""));      // a role value, and the key of the generate field
-    CHECK(has(logged, "\"assistant\""));
-    CHECK(has(logged, "\"image_url\""));
-    CHECK(has(logged, "\"json_schema\""));
-    CHECK(has(logged, "\"auto\""));
-    CHECK(has(logged, "\"float\""));
-    CHECK(has(logged, "\"low\""));
-    CHECK(has(logged, "0.25"));
-    CHECK(has(logged, "true"));
-    // text becomes its length in characters
-    const auto parsed = json_log::parse(kBody, false);
-    CHECK(parsed["prompt"] == "<10 chars>");
-    CHECK(parsed["messages"][0]["content"] == "<19 chars>");
-    CHECK(parsed["input"][1] == "<10 chars>");
+    CHECK(!has(logged, "\n"));  // one line
+    const json line = json::parse(logged);
+    // the top-level parameters: the model tag, numbers and flags as they are
+    CHECK(line["model"] == "qwen3:0.6b");
+    CHECK(line["stream"] == true);
+    CHECK(line["temperature"] == 0.25);
+    CHECK(line["max_tokens"] == 7);
+    // text is its length in characters, an array its item count, an object its key count
+    CHECK(line["prompt"] == "<10 chars>");
+    CHECK(line["tool_choice"] == "<4 chars>");
+    CHECK(line["messages"] == "<3 items>");
+    CHECK(line["input"] == "<2 items>");
+    CHECK(line["response_format"] == "<2 keys>");
     CHECK(json_log::hidden("\xc3\xa9\xf0\x9f\x98\x80x") == "<3 chars>");  // code points, not bytes
-    // a top-level string and an empty body string are hidden too
-    CHECK(json_log::parse("\"MARKtop\"", false) == "<7 chars>");
-    CHECK(json_log::parse(R"({"prompt": ""})", false)["prompt"] == "<0 chars>");
-    // with content kept, the body reads as before (long strings still cut)
-    const std::string full = json_log::dump(json_log::parse(kBody, true));
+    CHECK(json::parse(json_log::summary(R"({"prompt": ""})"))["prompt"] == "<0 chars>");
+    // nothing below the top level is shown: not a role, a type, nor a key
+    CHECK(!has(logged, "assistant"));
+    CHECK(!has(logged, "image_url"));
+    CHECK(!has(logged, "json_schema"));
+    CHECK(!has(logged, "content"));
+
+    // text under a key that names a setting elsewhere (tool-call arguments, metadata) stays out
+    const std::string nested = json_log::summary(R"({"model": "qwen3:0.6b", "metadata": {"role": "MARKrole"},
+        "messages": [{"role": "assistant", "tool_calls": [{"function": {"name": "MARKname", "arguments":
+        {"detail": "MARKdetail", "type": "MARKtype", "model": "MARKmodel", "object": "MARKobject"}}}]}]})");
+    CHECK(!has(nested, "MARK"));
+    CHECK(!has(nested, "detail"));
+    CHECK(json::parse(nested)["messages"] == "<1 items>");
+    // a schema's property names stay out
+    CHECK(!has(json_log::summary(R"({"response_format": {"type": "json_schema", "json_schema": {"schema":
+        {"properties": {"MARKproperty": {"type": "string"}}}}}})"), "MARK"));
+    // text put where a setting goes: a model that does not read as a tag is its length; other strings always are
+    const json misplaced = json::parse(json_log::summary(
+        R"({"model": "MARK text as the model", "tool_choice": "MARKchoice", "keep_alive": "MARKalive"})"));
+    CHECK(misplaced["model"] == "<22 chars>");
+    CHECK(misplaced["tool_choice"] == "<10 chars>");
+    CHECK(misplaced["keep_alive"] == "<9 chars>");
+    CHECK(json::parse(json_log::summary("{\"model\": \"" + std::string(65, 'm') + "\"}"))["model"] == "<65 chars>");
+    CHECK(json::parse(json_log::summary("{\"model\": \"mod\xc3\xa9le\"}"))["model"] == "<6 chars>");
+    // a parameter whose name does not read as a name is counted, not shown
+    const std::string named = json_log::summary("{\"model\": \"m\", \"MARK as a key\": 1, \"MARK\xc3\xa9\": 2, \"seed\": 3}");
+    CHECK(!has(named, "MARK"));
+    CHECK(json::parse(named)["<other parameters>"] == 2);
+    CHECK(json::parse(named)["seed"] == 3);
+    CHECK(json_log::is_name("qwen3:0.6b", 64));
+    CHECK(!json_log::is_name("", 64));
+    CHECK(!json_log::is_name("two words", 64));
+    CHECK(!json_log::is_name("tab\there", 64));
+    // a body that is not an object
+    CHECK(json_log::summary("\"MARKtop\"") == "\"<7 chars>\"");
+    CHECK(json_log::summary(R"(["MARKa", "MARKb"])") == "\"<2 items>\"");
+    CHECK(json_log::summary("7") == "7");
+    // megabytes of image data are neither printed nor kept
+    const std::string big = "{\"prompt\": \"" + std::string(100000, 'x') + "\", \"images\": [\"" + std::string(100000, 'y') + "\"]}";
+    CHECK(json_log::summary(big) == R"({"images":"<1 items>","prompt":"<100000 chars>"})");
+
+    // the request target: the path, without the query
+    CHECK(json_log::target("/v1/models", false) == "/v1/models");
+    CHECK(json_log::target("/v1/chat/completions?note=MARKquery&x=1", false) == "/v1/chat/completions?<query hidden>");
+    CHECK(json_log::target("/v1/chat/completions?note=MARKquery", true) == "/v1/chat/completions?note=MARKquery");
+
+    // with content on, the body reads as before (long strings still cut)
+    const std::string full = json_log::dump(json_log::parse(kBody));
     CHECK(has(full, "MARKprompt"));
     CHECK(has(full, "MARKsystem be brief"));
-    CHECK(json_log::parse(kBody) == json_log::parse(kBody, true));
-    const std::string big = "{\"prompt\": \"" + std::string(100000, 'x') + "\"}";
-    CHECK(json_log::parse(big, false)["prompt"] == "<100000 chars>");
-    CHECK(json_log::dump(json_log::parse(big, true)).size() < 400);
     // still throws on a malformed body, as nlohmann::json::parse does
     bool threw = false;
-    try { json_log::parse("{\"prompt\": ", false); } catch (const std::exception&) { threw = true; }
+    try { json_log::summary("{\"prompt\": "); } catch (const std::exception&) { threw = true; }
     CHECK(threw);
     // a parse error quotes the text it last read: the log leaves that out unless content is on
     threw = false;
-    try { json_log::parse("{\"messages\": [{\"role\": \"user\", \"content\": \"MARKsecret\n more\"}]}", false); }
+    try { json_log::summary("{\"messages\": [{\"role\": \"user\", \"content\": \"MARKsecret\n more\"}]}"); }
     catch (const std::exception& e) {
         threw = true;
         CHECK(has(e.what(), "MARKsecret"));

@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <exception>
 #include <string>
-#include <vector>
+#include <string_view>
 #include <nlohmann/json.hpp>
 
 namespace json_log {
@@ -39,16 +39,6 @@ inline nlohmann::json parse(const std::string& body) {
 	});
 }
 
-/// whether a string under `key` is a setting (a model tag, a role, an enum), not text a user wrote; only these
-/// strings stay readable in a body logged without its content
-inline bool is_setting_key(const std::string& key) {
-	static const char* const kSettings[] = {"model", "role", "type", "object", "encoding_format", "tool_choice",
-	                                        "reasoning_effort", "service_tier", "detail", "keep_alive", "truncation"};
-	for (const char* setting : kSettings)
-		if (key == setting) return true;
-	return false;
-}
-
 /// what a hidden string is logged as: its length in characters (UTF-8 code points)
 inline std::string hidden(const std::string& s) {
 	size_t chars = 0;
@@ -57,43 +47,58 @@ inline std::string hidden(const std::string& s) {
 	return "<" + std::to_string(chars) + " chars>";
 }
 
-/// Parses a request body for the log. With `keep_content`, as parse(body). Without it, every string is replaced by
-/// its length as it is read, except the strings of setting keys (is_setting_key; an array's strings count as its
-/// key's): the log keeps the request's shape, numbers, flags, model and roles, and no text a user sent. Object keys
-/// stay as they are. Throws as nlohmann::json::parse does.
-inline nlohmann::json parse(const std::string& body, bool keep_content) {
-	if (keep_content) return parse(body);
+/// whether `s` reads as a name (a model tag, a parameter name), not as text: 1 to `max` printable ASCII
+/// characters with no space
+inline bool is_name(const std::string& s, size_t max) {
+	if (s.empty() || s.size() > max) return false;
+	for (unsigned char c : s)
+		if (c <= ' ' || c >= 0x7f) return false;
+	return true;
+}
+
+/// The one line a request body is logged as when its content must stay out of the log: its top-level parameters
+/// only. Numbers, flags and null are shown as they are, and the model tag when it reads as a name (is_name).
+/// Every other string is its length ("<42 chars>"), an array its item count, an object its key count. Nothing
+/// below the top level is shown or kept, so no key or value inside messages, tools, a schema or metadata reaches
+/// the log; a parameter whose name does not read as a name is counted, not shown. Throws as
+/// nlohmann::json::parse does.
+inline std::string summary(const std::string& body) {
 	using event_t = nlohmann::json::parse_event_t;
-	struct Open {
-		bool array;
-		std::string key;  // the key this object or array is the value of ("" at the top)
-	};
-	std::vector<Open> open;
-	std::string key;  // the last key read in the innermost object
-	auto key_of_value = [&]() -> const std::string& {
-		static const std::string top;
-		if (open.empty()) return top;
-		return open.back().array ? open.back().key : key;
-	};
-	return nlohmann::json::parse(body, [&](int, event_t event, nlohmann::json& parsed) {
-		switch (event) {
-		case event_t::key:
-			key = parsed.get<std::string>();
-			break;
-		case event_t::object_start:
-		case event_t::array_start:
-			open.push_back({event == event_t::array_start, key_of_value()});
-			break;
-		case event_t::object_end:
-		case event_t::array_end:
-			if (!open.empty()) open.pop_back();
-			break;
-		case event_t::value:
-			if (parsed.is_string() && !is_setting_key(key_of_value())) parsed = hidden(parsed.get_ref<const std::string&>());
-			break;
+	using json = nlohmann::json;
+	bool is_model = false;  // the top-level key read last is "model"
+	const json parsed = json::parse(body, [&](int depth, event_t event, json& value) {
+		if (event == event_t::key && depth == 1) is_model = value == "model";
+		if (event != event_t::value) return true;
+		if (depth > 1) {
+			value = nullptr;  // only counted: dropped as it is read
+		} else if (value.is_string()) {
+			const auto& text = value.get_ref<const std::string&>();
+			if (!(depth == 1 && is_model && is_name(text, 64))) value = hidden(text);
 		}
 		return true;
 	});
+	const auto brief = [](const json& value) -> json {
+		if (value.is_array()) return "<" + std::to_string(value.size()) + " items>";
+		if (value.is_object()) return "<" + std::to_string(value.size()) + " keys>";
+		return value;
+	};
+	if (!parsed.is_object()) return brief(parsed).dump();
+	json line = json::object();
+	size_t unnamed = 0;
+	for (const auto& [key, value] : parsed.items()) {
+		if (is_name(key, 40)) line[key] = brief(value);
+		else ++unnamed;
+	}
+	if (unnamed) line["<other parameters>"] = unnamed;
+	return line.dump();
+}
+
+/// a request target for the log: without `keep_content` its query ("?" and what follows) is left out, as a
+/// client can put text there
+inline std::string target(std::string_view request_target, bool keep_content) {
+	const size_t query = keep_content ? std::string_view::npos : request_target.find('?');
+	if (query == std::string_view::npos) return std::string(request_target);
+	return std::string(request_target.substr(0, query)) + "?<query hidden>";
 }
 
 /// an exception message for the log or an error reply: a JSON parse error quotes the text it last read, which for

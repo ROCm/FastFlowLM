@@ -2,7 +2,8 @@
 """Server log privacy: user text and model replies stay out of the log unless FLM_LOG_CONTENT=1.
 
 Each case sends a request carrying a marker string where a client puts text (message content,
-system prompt, prompt, input, response_format), then reads the server's log and looks for it.
+system prompt, prompt, input, response_format, metadata, the URL query), then reads the server's
+log and looks for it.
 
 The test reads the log the server writes, so it needs to know where that is and how the
 server was started. Both are declared, so a server in the other mode fails instead of passing:
@@ -68,11 +69,11 @@ def post(api: Api, path: str, body: dict[str, Any]) -> int:
         return e.code
 
 
-def check(api: Api, path: str, make_body, *, generates: bool) -> None:
+def check(api: Api, path: str, make_body, *, generates: bool, query: bool = False) -> None:
     log, content_on = declared()
     marker = "zqx" + uuid.uuid4().hex[:12]
     start = log_size(log)
-    status = post(api, path, make_body(marker))
+    status = post(api, path + ("?note=" + marker if query else ""), make_body(marker))
     if status >= 400 and path.endswith("embeddings"):
         raise Skip(f"{path} answered {status} (no embedding model loaded?)")
     expect(status == 200, f"{path} answered {status}")
@@ -103,6 +104,15 @@ def test_chat_parts_and_schema_are_not_logged(api: Api) -> None:
         "response_format": {"type": "json_schema", "json_schema": {"name": m, "schema": {"type": "object", "description": m}}},
         "messages": [{"role": "user", "content": [{"type": "text", "text": m}]}]},
         generates=True)
+
+
+@case
+def test_setting_named_keys_and_query_are_not_logged(api: Api) -> None:
+    # "role" and "detail" name settings elsewhere in a request; here they carry text
+    check(api, "/v1/chat/completions", lambda m: {
+        "model": api.model, "max_tokens": 4, "metadata": {"role": m, "detail": m + " more"},
+        "messages": [{"role": "user", "content": "hi"}]},
+        generates=True, query=True)
 
 
 @case
