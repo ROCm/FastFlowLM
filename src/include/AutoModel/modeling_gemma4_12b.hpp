@@ -26,6 +26,10 @@
 class Gemma4_12B : public AutoModel {
 private:
     bool enable_think = false;
+    /// \brief generate() opens the empty thought channel after this insert.
+    ///        Set only when thinking is off and the turn is not a continuation.
+    ///        insert() trims those tokens from the prompt only when it already ends with them.
+    bool feed_empty_thought_ = false;
 
     void setup_tokenizer(std::string model_path);
 
