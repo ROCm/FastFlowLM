@@ -14,6 +14,7 @@
 #include "image/image_reader.hpp"
 #include "image/raw_rgb8.hpp"
 #include "base64.hpp"
+#include "utils/log_privacy.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cstring>
@@ -1948,9 +1949,8 @@ void RestHandler::handle_openai_audio_transcriptions(const json& request,
         std::string language_name;
         double duration = 0.0;
         if (this->asr || self_asr) {
-            // Transcripts are user speech: log them only when FLM_LOG_RAW_OUTPUT asks.
-            const char* log_env = std::getenv("FLM_LOG_RAW_OUTPUT");
-            const bool log_transcript = log_env != nullptr && log_env[0] != '\0' && std::strcmp(log_env, "0") != 0;
+            // Transcripts are user speech: log them only when FLM_LOG_CONTENT or FLM_LOG_RAW_OUTPUT asks.
+            const bool log_transcript = flm::log_privacy::raw_output_enabled();
             std::ostream no_log(nullptr);
             std::ostream& transcript_log = log_transcript ? std::cout : no_log;
             if (self_asr && stream) {

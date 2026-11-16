@@ -292,7 +292,7 @@ std::string DeepSeek_r1_8b::generate(chat_meta_info_t& meta_info, int length_lim
         header_print("WARNING", "Max length reached, stopping generation...");
     }
     std::cout << std::endl;
-    header_print("FLM", "Model RAW Output: \n" + result);
+    this->print_raw_output(result);
     if (!meta_info.continue_final_message) {
         result = "<think>\n\n" + result;
     }

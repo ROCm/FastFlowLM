@@ -22,6 +22,7 @@
 #include <optional>
 #include <stdexcept>
 #include "typedef.hpp"
+#include "utils/log_privacy.hpp"
 #include "image/raw_rgb8.hpp"
 #include "causal_lm.hpp"
 #include "prefix_slot_cache.hpp"
@@ -192,20 +193,19 @@ protected:
 	std::unique_ptr<npu_xclbin_manager> npu;
 	bool enable_preemption = false;
     std::vector<int> checkpoint_his;
-	/// \brief dump the undecorated model output to stdout once a turn ends
-	/// \note on by default; models whose turns are short and driven in bulk (the
-	///       hunyuan translator) turn it off so the log is not doubled. Those
-	///       models should seed this from env_forces_raw_output() so diagnostics
-	///       can opt back in without changing the interactive default.
-	bool log_raw_output = true;
-	/// \brief whether FLM_LOG_RAW_OUTPUT forces the "Model RAW Output:" dump on
-	/// \note the qualification harness and numerical-match anchor per-turn parsing
-	///       on that marker, so they set FLM_LOG_RAW_OUTPUT=1 to re-enable it for
-	///       models that quiet it by default; unset/empty/"0" leave the default.
+	/// \brief dump the undecorated model output to stdout once a turn ends (print_raw_output)
+	/// \note off by default: the reply is user content and stays out of the log
+	///       (utils/log_privacy.hpp). FLM_LOG_CONTENT=1 or FLM_LOG_RAW_OUTPUT=1 turn
+	///       it on for every model; the qualification harness and numerical-match
+	///       anchor per-turn parsing on the "Model RAW Output:" marker and set
+	///       FLM_LOG_RAW_OUTPUT=1.
+	bool log_raw_output = flm::log_privacy::raw_output_enabled();
+	/// \brief whether FLM_LOG_CONTENT or FLM_LOG_RAW_OUTPUT asks for the "Model RAW Output:" dump
 	static bool env_forces_raw_output() {
-		const char* value = std::getenv("FLM_LOG_RAW_OUTPUT");
-		return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
+		return flm::log_privacy::raw_output_enabled();
 	}
+	/// \brief print "Model RAW Output:" and `result` when log_raw_output is on; the only place that prints it
+	void print_raw_output(const std::string& result) const;
 	/// \brief run one more forward on the eos token once a turn ends
 	/// \note this keeps the kv cache aligned with token_history so a following
 	///       turn can append to it. Models that rewind or clear between turns
