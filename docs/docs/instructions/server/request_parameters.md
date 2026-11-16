@@ -41,7 +41,7 @@ This page says what FLM does with the fields of a `/v1/chat/completions` or `/v1
 | `min_tokens` | integer ≥ 0 | vLLM-style extension. End-of-sequence tokens are not sampled until at least `min_tokens` tokens have been generated; the reply can run one or two tokens over (more with speculative decoding). `max_tokens` still ends the reply. |
 | `ignore_eos` | `true` / `false` | vLLM-style extension. End-of-sequence tokens are never sampled, so the reply runs to `max_tokens` (or the context limit). Meant for fixed-length benchmarking. |
 
-> `min_tokens` and `ignore_eos` mask the end-of-sequence ids before sampling, so they work on every sampling path. `qwen3.8-mtp` and `qwen3.8-dflash2` decode one token at a time while either is in force, because its draft head samples inside the engine; expect a much lower speed there. With `ignore_eos`, `tool_choice` and `response_format` constrain the reply only until the grammar would end it; after that the rest of the reply is unconstrained, so tool calls and JSON output are not guaranteed to be valid.
+> `min_tokens` and `ignore_eos` mask the end-of-sequence ids before sampling, so they work on every sampling path. `qwen3.8-mtp` and `qwen3.8-dflash2` keep speculating for a sampled request, with the mask applied at every position. A greedy request (`temperature` 0 or `top_k` 1) on them decodes one token at a time while either is in force, because its drafts are checked against the model's top token inside the engine; expect a much lower speed there. With `ignore_eos`, `tool_choice` and `response_format` constrain the reply only until the grammar would end it; after that the rest of the reply is unconstrained, so tool calls and JSON output are not guaranteed to be valid.
 
 Each token is chosen in this order: penalties → the `tool_choice` / `response_format` grammar, if any → `top_k` → `top_p` and the model's min-p cut-off → `temperature` → sample.
 
@@ -101,7 +101,7 @@ Penalties also act on reasoning tokens, and on tokens that a `tool_choice` or `r
 
 The [log probabilities](https://fastflowlm.com/docs/instructions/server/openapi/#-example-token-log-probabilities) a response reports are taken **before** any penalty is applied.
 
-> **`qwen3.8-mtp:27b` and `qwen3.8-dflash2:27b`:** a sampled request (`temperature` above 0 and `top_k` not 1) samples every position, drafted or not, with the penalties, `temperature`, `top_k` and `top_p`, and every token enters the penalty window. A greedy request compares drafted tokens with the model's own most likely token: they skip the penalties and don't enter the penalty window.
+> **`qwen3.8-mtp:27b` and `qwen3.8-dflash2:27b`:** a sampled request (`temperature` above 0 and `top_k` not 1) samples every position, drafted or not, with the penalties, `temperature`, `top_k` and `top_p`, and every token enters the penalty window. A greedy request compares drafted tokens with the model's own most likely token: tokens from a speculative batch (drafted, or the model's own correction) skip the penalties and don't enter the penalty window.
 
 ---
 

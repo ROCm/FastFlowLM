@@ -662,10 +662,10 @@ Qwen3.8 ships with a **multi-token prediction (MTP) head** — a small draft mod
 
 What that means in practice:
 
-- **Faster decoding, same output distribution.** This is standard speculative sampling: a draft is kept with the probability the full model gives it, and a rejected one is replaced by a token drawn from the rest of the distribution. Every token you receive is distributed as plain decoding would draw it (up to the bf16 rounding of the batched verify pass), with `temperature`, `top_k`, `top_p`, the penalties, `seed` and `tool_choice` / `response_format` applied. A `temperature: 0` (or `top_k: 1`) request is checked against the base model's top token instead, and accepted drafts skip the presence, frequency and repetition penalties (this model's default `presence_penalty` is 1.5); send `presence_penalty: 0` for output identical to plain greedy decoding.
+- **Faster decoding, same output distribution.** This is standard speculative sampling: a draft is kept with the probability the full model gives it, and a rejected one is replaced by a token drawn from the rest of the distribution. Every token you receive is distributed as plain decoding would draw it (up to the bf16 rounding of the batched verify pass), with `temperature`, `top_k`, `top_p`, the penalties, `seed` and `tool_choice` / `response_format` applied. A `temperature: 0` (or `top_k: 1`) request is checked against the base model's top token instead, and tokens from a speculative batch skip the presence, frequency and repetition penalties (this model's default `presence_penalty` is 1.5); send `presence_penalty: 0` for output identical to plain greedy decoding.
 - **Sampling lowers the acceptance rate.** A greedy request keeps a draft whenever it is the top token; a sampled one keeps it as often as the model would have picked it. Higher temperatures accept fewer drafts and run closer to ordinary decode speed.
 - **Gains are prompt-dependent.** Predictable, low-entropy stretches — code, structured output, long reasoning chains — see the highest draft acceptance. Highly creative or surprising text accepts fewer drafts and converges toward ordinary decode speed.
-- **No flag to set.** Speculation turns on by itself.
+- **No flag to set.** Speculation turns on by itself. A greedy request decodes one token at a time while `ignore_eos` or `min_tokens` keeps the end-of-sequence token out; a sampled request keeps speculating.
 
 📝 **Note:**
 

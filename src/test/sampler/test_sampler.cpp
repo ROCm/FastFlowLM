@@ -477,12 +477,16 @@ void TestFloatRowMatchesTheBf16Buffer() {
 // differs, or the row past the last draft, is the cycle's free token.
 using Target = std::function<std::vector<float>(const std::vector<int>&)>;
 
+// mask_at(n) is the mask of the row that picks reply token n (nullptr: none), as the chooser masks EOS while
+// generated_tokens + row_idx < min_tokens.
+using MaskAt = std::function<const std::vector<uint32_t>*(size_t)>;
+
 std::vector<int> speculate_with(Sampler& s, const Target& target, std::vector<int>& ctx, const std::vector<int>& drafts,
-                                int* accepted_drafts = nullptr) {
+                                int* accepted_drafts = nullptr, const MaskAt& mask_at = nullptr) {
     std::vector<int> committed;
     for (size_t i = 0; i <= drafts.size(); i++) {
         const std::vector<float> row = target(ctx);
-        const int token = s.sample(row.data());
+        const int token = s.sample(row.data(), mask_at ? mask_at(ctx.size()) : nullptr);
         committed.push_back(token);
         ctx.push_back(token);
         if (i == drafts.size() || token != drafts[i]) break;
@@ -711,6 +715,64 @@ void TestSeededSpeculationIsReproducible() {
     CHECK(replies[0] == replies[1], "the same seed gave two different speculative replies");
 }
 
+// ignore_eos / min_tokens under speculation: every verify row is sampled with the EOS ids cleared from the mask while
+// the reply is shorter than min_tokens, counting the rows already committed earlier in the same cycle. EOS is the most
+// likely token, so a row that missed the mask would show up within a few draws; the drafts are the masked rows' likely
+// token, so cycles run several rows long and cross the min_tokens boundary inside a cycle.
+void TestSpeculationNeverSamplesAMaskedEos() {
+    const int V = 64, EOS = 5, MIN = 6, LIKELY = 10;
+    std::vector<float> row(V, -5.0f);
+    row[EOS] = 3.0f;
+    row[LIKELY] = 2.0f;
+    for (int i = 1; i < 6; i++) row[LIKELY + i] = -1.0f - 0.2f * i;
+    const Target target = [&](const std::vector<int>&) { return row; };
+    std::vector<uint32_t> no_eos((V + 31) / 32, 0xFFFFFFFFu);
+    no_eos[EOS / 32] &= ~(1u << (EOS % 32));
+
+    // ignore_eos: masked on every row
+    {
+        sampler_config c = config_of(20, 1.0f, 77);
+        c.repeat_last_n = 64;
+        c.pre_penalty = 0.5f;
+        Sampler s(V, c);
+        int eos = 0, rows = 0;
+        for (int n = 0; n < 4000; n++) {
+            std::vector<int> ctx;
+            const auto out = speculate_with(s, target, ctx, std::vector<int>(7, LIKELY), nullptr,
+                                            [&](size_t) { return &no_eos; });
+            rows += int(out.size());
+            eos += int(std::count(out.begin(), out.end(), EOS));
+        }
+        CHECK(eos == 0, "ignore_eos: EOS sampled %d times in %d rows", eos, rows);
+    }
+
+    // min_tokens: reply token n is masked iff n < MIN; cycles start at different lengths, so the boundary falls on
+    // every row of a cycle
+    {
+        sampler_config c = config_of(20, 1.0f, 78);
+        Sampler s(V, c);
+        std::vector<int> eos_at(MIN + 8, 0), reached(MIN + 8, 0);
+        const int N = 4000;
+        for (int n = 0; n < N; n++) {
+            std::vector<int> ctx(n % MIN, LIKELY);  // reply tokens committed before this cycle
+            const size_t start = ctx.size();
+            std::vector<int> drafts;
+            for (size_t i = 0; i < 7; i++) drafts.push_back(start + i < size_t(MIN) ? LIKELY : EOS);
+            const auto out = speculate_with(s, target, ctx, drafts, nullptr,
+                                            [&](size_t at) { return at < size_t(MIN) ? &no_eos : nullptr; });
+            for (size_t i = 0; i < out.size(); i++) {
+                reached[start + i]++;
+                if (out[i] == EOS) eos_at[start + i]++;
+            }
+        }
+        for (int at = 0; at < MIN; at++) CHECK(eos_at[at] == 0, "min_tokens %d: EOS at reply token %d", MIN, at);
+        // unmasked, EOS is about 0.7 likely, so the first row it is allowed on takes it most of the time
+        CHECK(reached[MIN] > N / 4, "only %d of %d cycles reached reply token %d", reached[MIN], N, MIN);
+        CHECK(eos_at[MIN] > reached[MIN] / 2, "EOS taken %d of %d times at reply token %d, the first one it is "
+              "allowed on", eos_at[MIN], reached[MIN], MIN);
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -735,6 +797,7 @@ int main(int argc, char** argv) {
         {"TestSpeculativeSamplingMatchesDirectSampling", TestSpeculativeSamplingMatchesDirectSampling},
         {"TestSeededSpeculationIsReproducible", TestSeededSpeculationIsReproducible},
         {"TestGreedyDraftCheckIsTheRawArgmax", TestGreedyDraftCheckIsTheRawArgmax},
+        {"TestSpeculationNeverSamplesAMaskedEos", TestSpeculationNeverSamplesAMaskedEos},
     };
     int failed_tests = 0;
 #if USEAVX2
