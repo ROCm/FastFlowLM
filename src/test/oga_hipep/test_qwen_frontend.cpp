@@ -795,11 +795,19 @@ int Sampler::sample(buffer<bf16>&, const std::vector<uint32_t>*, sample_logprobs
     if (g_sample_index < g_samples.size()) return g_samples[g_sample_index++];
     return 7;
 }
+// Speculative verify rows (AutoModel::_sample_row) sample the same scripted way.
 int Sampler::sample(const float*, const std::vector<uint32_t>*, sample_logprobs_t*) {
     if (g_sample_index < g_samples.size()) return g_samples[g_sample_index++];
     return 7;
 }
-int Sampler::argmax(const float*, int, const std::vector<uint32_t>*) { return 7; }
+int Sampler::argmax(const float* x, int n, const std::vector<uint32_t>* allowed) {
+    int best = -1;
+    for (int i = 0; i < n; i++) {
+        if (allowed && !((*allowed)[i / 32] >> (i % 32) & 1u)) continue;
+        if (best < 0 || x[i] > x[best]) best = i;
+    }
+    return best;
+}
 
 SafeTensors::~SafeTensors() = default;
 
