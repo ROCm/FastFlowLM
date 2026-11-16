@@ -828,25 +828,24 @@ std::string AutoModel::tokenizer_json_path() const {
     return (std::filesystem::path(model_path) / "tokenizer.json").string();
 }
 
-int AutoModel::_sample(buffer<bf16>& logits, chat_meta_info_t& meta_info) {
-    if (!this->sampler ||
-        logits.size() < static_cast<std::size_t>(this->sampler->in_features)) {
-        throw std::runtime_error(
-            "Backend returned fewer logits than the frontend vocabulary");
-    }
+template <typename At, typename Draw>
+int AutoModel::_sample_masked(std::size_t n, At at, Draw draw, chat_meta_info_t& meta_info, bool no_eos,
+                              sample_logprobs_t* raw) {
     decode_constraint* constraint = meta_info.constraint.get();
     bool masked = constraint != nullptr && constraint->fill_mask(this->constraint_mask_);
     // ignore_eos / min_tokens: take the EOS ids out of the allowed set
-    if (meta_info.ignore_eos || meta_info.generated_tokens < meta_info.min_tokens) {
-        const size_t words = (logits.size() + 31) / 32;
+    if (no_eos) {
+        const size_t words = (n + 31) / 32;
         if (!masked) {
             this->constraint_mask_.assign(words, 0xFFFFFFFFu);
         } else if (this->constraint_mask_.size() < words) {
             this->constraint_mask_.resize(words, 0u);
         }
-        std::vector<uint32_t> saved = this->constraint_mask_;
+        // only a grammar's mask needs restoring below: without one the mask goes unused
+        std::vector<uint32_t> saved;
+        if (masked) saved = this->constraint_mask_;
         for (int id : this->eos_token_ids) {
-            if (id >= 0 && static_cast<size_t>(id) < logits.size()) {
+            if (id >= 0 && static_cast<size_t>(id) < n) {
                 this->constraint_mask_[id / 32] &= ~(1u << (id % 32));
             }
         }
@@ -861,23 +860,20 @@ int AutoModel::_sample(buffer<bf16>& logits, chat_meta_info_t& meta_info) {
         } else if (meta_info.ignore_eos) {
             this->constraint_mask_.assign(words, 0xFFFFFFFFu);
             for (int id : this->eos_token_ids) {
-                if (id >= 0 && static_cast<size_t>(id) < logits.size()) {
+                if (id >= 0 && static_cast<size_t>(id) < n) {
                     this->constraint_mask_[id / 32] &= ~(1u << (id % 32));
                 }
             }
             masked = true;
             meta_info.constraint.reset();
             constraint = nullptr;
-        } else {
+        } else if (masked) {
             this->constraint_mask_ = saved;
         }
     }
-    sample_logprobs_t raw;
-    raw.top_n = meta_info.logprobs_top_n;
     // The mask goes to the sampler, which applies it to its own copy: the logits
     // live in the engine's device-mapped buffer and are never written here.
-    int token = this->sampler->sample(logits, masked ? &this->constraint_mask_ : nullptr,
-                                      meta_info.logprobs_top_n >= 0 ? &raw : nullptr);
+    int token = draw(masked ? &this->constraint_mask_ : nullptr, raw);
     auto allowed = [this](size_t i) {
         return i / 32 < this->constraint_mask_.size() && ((this->constraint_mask_[i / 32] >> (i % 32)) & 1u);
     };
@@ -887,11 +883,11 @@ int AutoModel::_sample(buffer<bf16>& logits, chat_meta_info_t& meta_info) {
         int first = -1;
         int best = -1;
         float best_logit = -std::numeric_limits<float>::infinity();
-        for (size_t i = 0; i < logits.size(); i++) {
+        for (size_t i = 0; i < n; i++) {
             if (!allowed(i)) {
                 continue;
             }
-            const float v = static_cast<float>(logits[i]);
+            const float v = at(i);
             if (first < 0) first = static_cast<int>(i);
             if (v > best_logit) {  // NaN never compares greater
                 best = static_cast<int>(i);
@@ -910,12 +906,50 @@ int AutoModel::_sample(buffer<bf16>& logits, chat_meta_info_t& meta_info) {
     if (constraint != nullptr) {
         constraint->accept(token);
     }
+    return token;
+}
+
+int AutoModel::_sample(buffer<bf16>& logits, chat_meta_info_t& meta_info) {
+    if (!this->sampler ||
+        logits.size() < static_cast<std::size_t>(this->sampler->in_features)) {
+        throw std::runtime_error(
+            "Backend returned fewer logits than the frontend vocabulary");
+    }
+    sample_logprobs_t raw;
+    raw.top_n = meta_info.logprobs_top_n;
+    const int token = this->_sample_masked(
+        logits.size(),
+        [&logits](size_t i) { return static_cast<float>(logits[i]); },
+        [this, &logits](const std::vector<uint32_t>* mask, sample_logprobs_t* lp) {
+            return this->sampler->sample(logits, mask, lp);
+        },
+        meta_info, meta_info.ignore_eos || meta_info.generated_tokens < meta_info.min_tokens,
+        meta_info.logprobs_top_n >= 0 ? &raw : nullptr);
     // The chosen token's logprob is read here rather than in the sampler: the
-    // fallback above may have replaced what the sampler picked.
+    // fallback in _sample_masked() may have replaced what the sampler picked.
     meta_info.last_sample_logged = meta_info.logprobs_top_n >= 0 &&
         this->_record_logprob(meta_info, token, static_cast<float>(logits[token]), raw);
     meta_info.insert_sample_pending = false;
     return token;
+}
+
+int AutoModel::_sample_row(const float* row, int vocab, chat_meta_info_t& meta_info, int ahead, bool greedy) {
+    if (!this->sampler || (!greedy && vocab < this->sampler->in_features)) {
+        throw std::runtime_error(
+            "Backend returned fewer logits than the frontend vocabulary");
+    }
+    return this->_sample_masked(
+        static_cast<std::size_t>(vocab),
+        [row](size_t i) { return row[i]; },
+        [this, row, vocab, greedy](const std::vector<uint32_t>* mask, sample_logprobs_t*) {
+            if (!greedy) return this->sampler->sample(row, mask, nullptr);
+            int token = Sampler::argmax(row, vocab, mask);
+            // nothing allowed, or NaN logits: the plain argmax (0 if every logit is NaN), which the fallback
+            // replaces with an allowed token if there is one
+            if (token < 0 && mask != nullptr) token = Sampler::argmax(row, vocab);
+            return token < 0 ? 0 : token;
+        },
+        meta_info, meta_info.ignore_eos || meta_info.generated_tokens + ahead < meta_info.min_tokens, nullptr);
 }
 
 bool AutoModel::_record_logprob(chat_meta_info_t& meta_info, int token, float token_logit,

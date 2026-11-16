@@ -161,6 +161,18 @@ public:
     int sample(buffer<bf16>& x, const std::vector<uint32_t>* allowed = nullptr,
                sample_logprobs_t* logprobs = nullptr);
 
+    /// \brief sample() for an fp32 row of in_features logits, e.g. a verify row of a speculative batch
+    int sample(const float* x, const std::vector<uint32_t>* allowed = nullptr,
+               sample_logprobs_t* logprobs = nullptr);
+
+    /// \brief the first largest of x[0..n) whose bit is set in allowed (every id without one), -1 if none is allowed
+    /// \note Reads x only: no penalties, no penalty window, so it is the plain argmax a greedy draft is checked against.
+    static int argmax(const float* x, int n, const std::vector<uint32_t>* allowed = nullptr);
+
+    /// \brief sample() and sample_greedy() past the copy into this->logits
+    int sample_loaded(const std::vector<uint32_t>* allowed, sample_logprobs_t* logprobs);
+    int sample_greedy_loaded(const std::vector<uint32_t>* allowed, sample_logprobs_t* logprobs);
+
     /// \brief Push every token the bitmask does not allow to -inf in this->logits
     void sampler_allowed_apply(const std::vector<uint32_t>* allowed);
 

@@ -144,7 +144,8 @@ public:
     ///       like a token out of forward() -- so a caller that appends it on a
     ///       stop (forward_on_eos) stays correct, and one that re-feeds any of
     ///       the others double-appends them.
-    /// \note Greedy only -- see the precondition on causal_lm::speculate.
+    /// \note Greedy only -- see the precondition on causal_lm::speculate -- unless set_speculation_chooser() picks
+    ///       each row's token.
     std::vector<int> speculate(int last_token, int max_draft) override;
 
     /// \brief the token ids that end a generation, so a batch can stop on one
