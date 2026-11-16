@@ -92,6 +92,12 @@ void PrefixSlotCache::attach(void* engine, const flm_state_api* api) {
 void PrefixSlotCache::forget_all() {
     slots_table_.clear(); // the states are ours: their memory goes with them
     live_tokens_.clear();
+    last_prompt_.clear();
+}
+
+bool PrefixSlotCache::forked(const std::vector<int>& tokens, size_t length) const {
+    return length <= tokens.size() && last_prompt_.size() > length && lcp_len(last_prompt_, tokens) >= length &&
+           !has_prefix(tokens, last_prompt_);
 }
 
 int PrefixSlotCache::end_kv_from(const std::vector<int>& tokens, size_t boundary) const {

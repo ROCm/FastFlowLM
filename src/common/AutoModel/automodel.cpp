@@ -504,34 +504,53 @@ bool AutoModel::_prefix_insert(PrefixSlotCache& cache, chat_meta_info_t& meta_in
                                std::optional<int> requested_max_new_tokens) {
     bool success = true;
     uint64_t head_prefill_ns = 0;
-    // Save the end of system + tools while prefilling, so a prompt that shares only that part
-    // (another conversation, a side request) can resume there.
+    // Save up to two shared heads while prefilling, each where a user turn starts:
+    //   - the end of system + tools (the first user turn), so a prompt that shares only that part
+    //     (another conversation, a side request) can resume there;
+    //   - the history before the last user turn, so prompts that share everything but their last
+    //     message (few-shot examples, a document followed by different questions) can resume there.
     size_t boundary = 0;
+    size_t history = 0;
+    bool save_history = false;
     {
         const std::vector<int> marker = this->tokenizer->encode(boundary_marker);
+        size_t first = 0;
         for (size_t i = 1; i + marker.size() <= full_tokens.size() && !marker.empty(); i++) {
             if (std::equal(marker.begin(), marker.end(), full_tokens.begin() + i)) {
-                boundary = i;
-                break;
+                if (first == 0) first = i;
+                history = i;
             }
         }
-        if (boundary < cache.min_boundary) boundary = 0;
+        boundary = first >= cache.min_boundary ? first : 0;
+        if (history == first || history < cache.min_boundary) history = 0;
+        // Saving the history costs a prefill pass of its own, so it is saved only when the prompt before this one
+        // shared it and went on with another last message, as prompts with the same few-shot examples do. A chat turn
+        // only continues the turn before, and would pay for the pass every turn. It also has to add enough over the
+        // boundary slot and over what this prompt resumed from to be worth a slot.
+        save_history = history > 0 && history >= boundary + cache.min_end_gain && history >= match_len + cache.min_end_gain &&
+                       cache.forked(full_tokens, history);
     }
-    if (payload == nullptr && boundary > match_len && boundary < full_tokens.size()) {
-        std::vector<int> head(full_tokens.begin(), full_tokens.begin() + boundary);
+    auto save_head = [&](size_t length, bool is_boundary) {
+        std::vector<int> head(full_tokens.begin(), full_tokens.begin() + length);
         chat_meta_info_t head_meta;
         head_meta.max_prefill_len = meta_info.max_prefill_len;
-        success = this->_shared_insert(head_meta, head, is_cancelled, nullptr, 0, std::nullopt, false);
-        if (success) {
-            head_prefill_ns = head_meta.prefill_duration;
-            const std::vector<int> head_tokens(full_tokens.begin(), full_tokens.begin() + boundary);
-            cache.set_live(head_tokens);
-            cache.save(head_tokens, image_hashes, true, 0); // keeps the hashes of the pictures inside the head
-        } else {
+        if (!this->_shared_insert(head_meta, head, is_cancelled, nullptr, 0, std::nullopt, false)) {
             meta_info.stop_reason = head_meta.stop_reason;
             meta_info.error_message = head_meta.error_message;
             meta_info.error_code = head_meta.error_code;
+            return false;
         }
+        head_prefill_ns += head_meta.prefill_duration;
+        const std::vector<int> head_tokens(full_tokens.begin(), full_tokens.begin() + length);
+        cache.set_live(head_tokens);
+        cache.save(head_tokens, image_hashes, is_boundary, 0); // keeps the hashes of the pictures inside the head
+        return true;
+    };
+    if (payload == nullptr && boundary > match_len && boundary < full_tokens.size()) {
+        success = save_head(boundary, true);
+    }
+    if (success && payload == nullptr && save_history && history < full_tokens.size()) {
+        success = save_head(history, true);
     }
     if (success) {
         success = payload != nullptr
@@ -546,9 +565,12 @@ bool AutoModel::_prefix_insert(PrefixSlotCache& cache, chat_meta_info_t& meta_in
     meta_info.cached_prompt_tokens = static_cast<int>(match_len);
     meta_info.prefill_duration += head_prefill_ns;
     cache.set_live(full_tokens);
-    // the end of this prompt keeps only what follows the shared head, when a slot holds that head
+    cache.set_last_prompt(full_tokens);
+    // the end of this prompt keeps only what follows the longest shared head a slot holds
     if (!cache.boundary_only) {
-        cache.save(full_tokens, image_hashes, false, cache.end_kv_from(full_tokens, boundary));
+        int kv_from = cache.end_kv_from(full_tokens, history);
+        if (kv_from == 0) kv_from = cache.end_kv_from(full_tokens, boundary);
+        cache.save(full_tokens, image_hashes, false, kv_from);
     }
     meta_info.prefix_cache = cache.report();
     return true;

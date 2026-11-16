@@ -605,7 +605,7 @@ The `-r` option determines the image's height:
 - **Type:** Image-Text-to-Text
 - **Think:** Yes
 - **Tool Calling Support:** Yes  
-- **Prefix cache (server mode):** Partly: the shared system prompt of text conversations is saved; a conversation that keeps going uses the older single-checkpoint reuse (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
+- **Prefix cache (server mode):** Partly: the shared start of text conversations (the system prompt, and the history before the last user turn) is saved; a conversation that keeps going uses the older single-checkpoint reuse (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
 - **Speculative Decoding:** Yes — built-in MTP draft head (see note below)
 - **Base Model:** [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B)
 - **Quantization:** Q4_K

@@ -90,17 +90,30 @@ std::vector<int> cat(std::vector<int> a, const std::vector<int>& b) {
     return a;
 }
 
-/// \brief what AutoModel::_prefix_insert does after a prefill: boundary snapshot at `head`, end snapshot at the end
-void prefill(PrefixSlotCache& cache, fake_engine& e, const std::vector<int>& prompt, size_t head) {
+/// \brief what AutoModel::_prefix_insert does after a prefill: boundary snapshot at `head`, boundary snapshot at `history`
+///        (the start of the last user turn) when the prompt before forked there, end snapshot at the end
+/// \param match what the prompt resumed from
+void prefill(PrefixSlotCache& cache, fake_engine& e, const std::vector<int>& prompt, size_t head, size_t history = 0,
+             size_t match = 0) {
     if (head > 0) {
         std::vector<int> h(prompt.begin(), prompt.begin() + head);
         e.length = static_cast<int>(head);
         cache.set_live(h);
         cache.save(h, {}, true, 0);
     }
+    if (history > 0 && history >= head + cache.min_end_gain && history >= match + cache.min_end_gain &&
+        cache.forked(prompt, history)) {
+        std::vector<int> h(prompt.begin(), prompt.begin() + history);
+        e.length = static_cast<int>(history);
+        cache.set_live(h);
+        cache.save(h, {}, true, 0);
+    }
     e.length = static_cast<int>(prompt.size());
     cache.set_live(prompt);
-    cache.save(prompt, {}, false, cache.end_kv_from(prompt, head));
+    cache.set_last_prompt(prompt);
+    int kv_from = cache.end_kv_from(prompt, history);
+    if (kv_from == 0) kv_from = cache.end_kv_from(prompt, head);
+    cache.save(prompt, {}, false, kv_from);
 }
 
 size_t resume(PrefixSlotCache& cache, const std::vector<int>& prompt, const std::vector<uint64_t>& images = {}) {
@@ -210,6 +223,49 @@ void test_boundary_kept_for_dependents() {
     cache.clear_live();
     CHECK(resume(cache, cat(t2, seq(7000, 5))) == t2.size());
     CHECK(resume(cache, cat(sys, seq(8000, 5))) == sys.size());
+}
+
+void test_shared_history() {
+    std::printf("prompts sharing everything before their last user turn resume there from the second one on, and that slot outlives the end slots\n");
+    fake_engine e;
+    PrefixSlotCache cache = make(e, 100000, 4);
+    // a system prompt too short for a boundary slot, followed by few-shot examples
+    const auto history = seq(1, 1500);
+    prefill(cache, e, cat(history, seq(5000, 100)), 0, history.size());    // no prompt before it: only E1
+    CHECK(cache.slot_count() == 1);
+    const auto q2 = cat(history, seq(6000, 100));
+    CHECK(resume(cache, q2) == 0);
+    prefill(cache, e, q2, 0, history.size());                              // forked from the first: H, E2 (kv_from 1500)
+    CHECK(cache.slot_count() == 3);
+    for (int i = 0; i < 6; i++) {
+        const auto q = cat(history, seq(7000 + 1000 * i, 100));
+        CHECK(resume(cache, q) == history.size());
+        prefill(cache, e, q, 0, history.size(), history.size());          // resumed at H: only an end slot is added
+    }
+    // the end slots were evicted, least recently used first, and H, which they need, stayed
+    CHECK(cache.slot_count() == 4);
+    cache.clear_live();
+    CHECK(resume(cache, cat(history, seq(20000, 100))) == history.size());
+}
+
+void test_chat_saves_no_history() {
+    std::printf("a chat turn, which only continues the turn before, saves no slot before its last user turn\n");
+    fake_engine e;
+    PrefixSlotCache cache = make(e, 100000, 8);
+    const auto sys = seq(1, 600);
+    const auto turn1 = cat(sys, seq(5000, 200));
+    prefill(cache, e, turn1, 600);                                  // one user turn: B, E1
+    const auto history2 = cat(turn1, seq(6000, 300));               // turn 1 with its reply, and the start of turn 2
+    const auto turn2 = cat(history2, seq(7000, 200));
+    CHECK(resume(cache, turn2) == turn1.size());
+    prefill(cache, e, turn2, 600, history2.size(), turn1.size());  // continues turn 1: E2 only
+    CHECK(cache.slot_count() == 3);
+    CHECK(resume(cache, cat(history2, seq(8000, 30))) == turn1.size());
+    // a prompt which shares the history of turn 2 but asks something else is a fork: it saves the history slot
+    const auto other = cat(history2, seq(9000, 200));
+    CHECK(resume(cache, other) == turn1.size());
+    prefill(cache, e, other, 600, history2.size(), turn1.size());
+    CHECK(resume(cache, cat(history2, seq(10000, 30))) == history2.size());
 }
 
 void test_small_tail_not_saved() {
@@ -429,6 +485,8 @@ int main() {
     test_head_restored_after_cold_request();
     test_eviction_order();
     test_boundary_kept_for_dependents();
+    test_shared_history();
+    test_chat_saves_no_history();
     test_small_tail_not_saved();
     test_min_end_gain();
     test_budget();
