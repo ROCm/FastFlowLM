@@ -74,7 +74,7 @@ def run(ctx) -> None:
             try:
                 embed(server, models[0], SINGLE_INPUT)
             except HttpError as error:
-                expect(error.status == 403, f"expected 403, got {error.status}")
+                expect(error.status == 400, f"expected 400, got {error.status}")
             else:
                 raise AssertionError("embeddings accepted without opt-in")
     with ctx.server(NAME, ["-e", "1"]) as server:

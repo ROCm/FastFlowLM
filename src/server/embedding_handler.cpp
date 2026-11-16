@@ -54,7 +54,7 @@ void RestHandler::handle_embeddings(const json& request,
         }
         if (!embeddings_enabled) {
             send_response({{"error", {{"message", "Embeddings are disabled; start with -e <tag> or an embedding primary model"},
-                                      {"type", "permission_error"}, {"code", 403}}}});
+                                      {"type", "invalid_request_error"}, {"code", 400}}}});
             return;
         }
         if (cancelled()) throw EmbeddingCancelled();

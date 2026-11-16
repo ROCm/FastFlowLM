@@ -74,7 +74,8 @@ void test_embedding_handler() {
     program_args_t args{};
     RestHandler disabled(models, downloads, args, nullptr);
     disabled.handle_embeddings({{"model", "missing:1"}, {"input", "hello"}},
-        [](const json& response) { TEST_REQUIRE(response.at("error").at("code") == 403); }, {});
+        [](const json& response) { TEST_REQUIRE(response.at("error").at("code") == 400);
+            TEST_REQUIRE(response.at("error").at("type") == "invalid_request_error"); }, {});
     TEST_REQUIRE(pulls == 0);
     args.embed = true;
     RestHandler server(models, downloads, args, nullptr);
