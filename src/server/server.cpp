@@ -986,17 +986,15 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
         return false;
     }
 
-    if (NPUAccessManager::try_acquire_npu_access()) {
-        if (needs_npu) {
-            header_print("🟢 ", "NPU Locked!");
-        }
+    const auto admission = npu_request_coordinator_.admit([this, process_task]() { process_task(true); },
+                                                          [] { return NPUAccessManager::try_acquire_npu_access(); });
+    if (admission == NPURequestCoordinator::Admission::run_now) {
+        header_print("🟢 ", "NPU Locked!");
         process_task(false); //  return false
         return false;
     }
 
-    if (!npu_request_coordinator_.try_enqueue([this, process_task]() {
-            process_task(true);
-        })) {
+    if (admission == NPURequestCoordinator::Admission::queue_full) {
         res.result(http::status::service_unavailable);
         res.body() = dump_error_body(json{
             {"error", "NPU is in use and request queue is full (limit: " +
@@ -1087,7 +1085,8 @@ std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader&
             if (!req.body().empty()) {
                 request_json = json::parse(req.body());
             }
-            rest_handler->handle_embeddings(request_json, send_response, send_streaming_response);
+            rest_handler->handle_embeddings(request_json, send_response, send_streaming_response,
+                    [&] { return cancellation_token && cancellation_token->cancelled(); });
         });
     
     server->register_handler("GET", "/api/tags",
@@ -1170,7 +1169,8 @@ std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader&
                 if (!req.body().empty()) {
                     request_json = json::parse(req.body());
                 }
-                rest_handler->handle_embeddings(request_json, send_response, send_streaming_response);
+                rest_handler->handle_embeddings(request_json, send_response, send_streaming_response,
+                    [&] { return cancellation_token && cancellation_token->cancelled(); });
         });
 
     // System One decisions (d3:lite via --decision); /v1/decisions is the alias vLLM Semantic
@@ -1214,11 +1214,17 @@ std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader&
             std::function<void(const json&, bool)> send_streaming_response,
             std::shared_ptr<HttpSession> session,
             std::shared_ptr<CancellationToken> cancellation_token) {
-                std::map<std::string, MultipartPart> parts = parse_multipart(req);
+                std::map<std::string, MultipartPart> parts;
+                try {
+                    parts = parse_multipart(req);
+                } catch (const std::exception& e) {   // not a multipart/form-data body: the client's mistake, not a server error
+                    send_response({{"error", {{"message", std::string("the request must be multipart/form-data with a \"file\" field: ") + e.what()}, {"type", "invalid_request_error"}, {"code", 400}}}});
+                    return;
+                }
                 json request_json;
                 request_json["model"] = parts["model"].content;
                 request_json["file"] = parts["file"].content;
-                for (const char* field : {"language", "prompt", "response_format"}) {
+                for (const char* field : {"language", "prompt", "response_format", "stream", "chunk_size_ms", "lookahead_ms", "unfixed_token_num"}) {
                     auto it = parts.find(field);
                     if (it != parts.end()) {
                         request_json[field] = it->second.content;

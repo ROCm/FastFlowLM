@@ -12,6 +12,7 @@ This section reports the performance of **Flash** models on NPU with FastFlowLM 
 > **Note:**
 > - Results are based on FastFlowLM v1.0.12 (main build), under FLM's default NPU power mode (Performance).
 > - Newer versions may deliver improved performance.
+> - The `hy-mt2-flash:1.8b` rows were re-measured on FastFlowLM v1.0.13 (main build); its 64-token case is 62 prompt tokens and its 1,024 case is 1,022.
 > - Flash models are **single-turn** with a **fixed 1k-token context**, so they are benchmarked with short prompts (64 to 1,024 tokens) rather than the long-context sweeps used for general chat models.
 > - Flash only changes how **prefill** runs. **Decode speed matches the non-flash model**, so decoding numbers are taken from the corresponding benchmark page.
 > - Prompt lengths are the server-reported prompt tokens, chat template included (the 1,024 case is 1,023 tokens). Text-only prompts, no system prompt, median of 7 runs.
@@ -33,7 +34,7 @@ AMD Ryzen™ AI 9 370 (Strix Point) with 32 GB DRAM; performance is comparable t
 | **gemma4e-flash:e4b**   | XDNA2 | 0.33 | 0.34 | 0.62 | 1.20 | 2.57 |
 | **nemotron3.5-bolt-dflash-flash:e4b** | XDNA2 | 0.32 | 0.33 | 0.60 | 1.18 | 2.53 |
 | **qwen3vl-flash:4b**    | XDNA2 | 0.24 | 0.24 | 0.45 | 0.85 | 1.83 |
-| **hy-mt2-flash:1.8b**   | XDNA2 | 0.13 | 0.14 | 0.23 | 0.43 | 0.84 |
+| **hy-mt2-flash:1.8b**   | XDNA2 | 0.08 | 0.11 | 0.16 | 0.30 | 0.60 |
 
 ---
 
@@ -47,7 +48,7 @@ Prompt tokens divided by TTFT (TTFT includes generating the first token).
 | **gemma4e-flash:e4b**   | XDNA2 | 193 | 373 | 412 | 427 | 398 |
 | **nemotron3.5-bolt-dflash-flash:e4b** | XDNA2 | 201 | 392 | 427 | 434 | 405 |
 | **qwen3vl-flash:4b**    | XDNA2 | 271 | 526 | 570 | 601 | 558 |
-| **hy-mt2-flash:1.8b**   | XDNA2 | 490 | 923 | 1,093 | 1,197 | 1,214 |
+| **hy-mt2-flash:1.8b**   | XDNA2 | 804 | 1,181 | 1,559 | 1,723 | 1,701 |
 
 ---
 
@@ -59,7 +60,7 @@ Prompt tokens divided by TTFT (TTFT includes generating the first token).
 | **gemma4e-flash:e4b**   | XDNA2 | 12.6 | [Gemma 4](../gemma4_results/) (`gemma4-it:e4b`) |
 | **nemotron3.5-bolt-dflash-flash:e4b** | XDNA2 | 18.2 | [Nemotron Bolt DFlash](../nemotron3.5-bolt-dflash_results/) (`nemotron3.5-bolt-dflash:e4b`) |
 | **qwen3vl-flash:4b**    | XDNA2 | 19.6 | [Qwen3](../qwen3_results/) (Qwen 3 4B) |
-| **hy-mt2-flash:1.8b**   | XDNA2 | 52.2 | [Hy-MT2](../hy-mt2_results/) |
+| **hy-mt2-flash:1.8b**   | XDNA2 | 43.2 | [Hy-MT2](../hy-mt2_results/) (`hy-mt2-flash:1.8b`) |
 
 > Context is fixed at 1k tokens for every flash model, so 1k is the only applicable decode starting point.
 >

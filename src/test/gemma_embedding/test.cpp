@@ -113,7 +113,7 @@ int main(int argc, char* argv[]) {
     std::string text = "Alice's Adventures in Wonderland ALICE'S ADVENTURES IN WONDERLAND Lewis Carroll THE MILLENNIUM FULCRUM EDITION 3.0 CHAPTER I Down the Rabbit-HoleAlice was beginning to get very tired of sitting by her sister on the bank, and of having nothing to do:  once or twice she had peeped into the book her sister was reading, but it had no pictures or conversations in it, and what is the use of a book,'thought Alice without pictures or conversation?' So she was considering in her own mind (as well as she could, for the hot day made her feel very sleepy and stupid), whether the pleasure of making a daisy-chain would be worth the trouble of getting up and picking the daisies, when suddenly a White Rabbit with pink eyes ran close by her. There was nothing so VERY remarkable in that; nor did Alice think it so VERY much out of the way to hear the Rabbit say to itself, `Oh dear!  Oh dear!  I shall be late!'";
 
     time_utils::time_point start_time = time_utils::now();
-    auto y = embedding->embed(text, task_query);
+    auto y = embedding->embed({{"input", text}, {"task", "query"}, {"dimensions", std::size(reference)}}).values;
     buffer<bf16> y_bf16(y.size());
     for (int i = 0; i < y.size(); i++){
         y_bf16[i] = (bf16)y[i];

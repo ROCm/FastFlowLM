@@ -29,7 +29,7 @@
 
   <Package Name="FLM"
            Manufacturer="FastFlowLM"
-           Version="1.0.13"
+           Version="1.0.14"
            UpgradeCode="5A5B2872-1E63-4934-9F57-088554CF4959"
            Language="1033"
            Scope="perMachine"
@@ -200,6 +200,9 @@
       </Component>
       <Component Id="Comp_qwen3_8mtp_npu.dll" Guid="*">
         <File Id="File_qwen3_8mtp_npu.dll" Source="$(SourceDir)\qwen3_8mtp_npu.dll" KeyPath="yes" />
+      </Component>
+      <Component Id="Comp_qwen3_asr_npu.dll" Guid="*">
+        <File Id="File_qwen3_asr_npu.dll" Source="$(SourceDir)\qwen3_asr_npu.dll" KeyPath="yes" />
       </Component>
       <Component Id="Comp_nanbeige_npu.dll" Guid="*">
         <File Id="File_nanbeige_npu.dll" Source="$(SourceDir)\nanbeige_npu.dll" KeyPath="yes" />

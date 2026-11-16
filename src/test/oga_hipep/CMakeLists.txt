@@ -57,7 +57,10 @@ function(add_oga_hipep_test name)
         USEAVX2=1 DISABLE_ABI_CHECK=1 _ENABLE_EXTENDED_ALIGNED_STORAGE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_compile_options(${name} PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/wd4005 /wd4244>)
     target_link_directories(${name} PRIVATE "${XRT_LIB_DIR}")
-    target_link_libraries(${name} PRIVATE CURL::libcurl xrt_coreutil version)
+    target_link_libraries(${name} PRIVATE CURL::libcurl xrt_coreutil version delayimp)
+    # xrt_coreutil.dll comes with the NPU driver, which a CI runner lacks; the
+    # tests never call into it, so load it only on first use.
+    target_link_options(${name} PRIVATE "/DELAYLOAD:xrt_coreutil.dll")
 endfunction()
 
 add_oga_hipep_test(test_oga_hipep)

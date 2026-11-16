@@ -16,10 +16,16 @@ struct ExtensionFrontendRegistration {
     std::string provider;
     flm_frontend_create_v1 create = nullptr;
     void* factory_context = nullptr;
+    flm_embedding_create_v1 create_embedding = nullptr;
 };
 
 /// \brief Build a registry factory for one provider-owned frontend.
 FrontendFactory make_extension_frontend_factory(
+    ExtensionFrontendRegistration registration,
+    std::string extension_root, std::string asset_root,
+    std::shared_ptr<void> provider_lifetime);
+
+EmbeddingFactory make_extension_embedding_factory(
     ExtensionFrontendRegistration registration,
     std::string extension_root, std::string asset_root,
     std::shared_ptr<void> provider_lifetime);

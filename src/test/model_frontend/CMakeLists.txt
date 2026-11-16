@@ -100,7 +100,12 @@ file(GENERATE
 
 add_executable(test_model_frontend
     test_model_frontend.cpp
+    test_embedding_handler.cpp
+    test_gemma_embedding_request.cpp
+    "${FLM_SOURCE_DIR}/common/AutoEmbeddingModel/modeling_gemma_embedding.cpp"
+    "${FLM_SOURCE_DIR}/server/embedding_handler.cpp"
     "${FLM_SOURCE_DIR}/common/AutoModel/model_frontend.cpp"
+    "${FLM_SOURCE_DIR}/common/AutoEmbeddingModel/model_extension_embedding.cpp"
     "${FLM_SOURCE_DIR}/common/AutoModel/model_extension_backend.cpp"
     "${FLM_SOURCE_DIR}/common/AutoModel/model_backend.cpp")
 
@@ -114,6 +119,7 @@ add_executable(test_model_extension_frontend
     "${FLM_SOURCE_DIR}/common/AutoModel/automodel.cpp"
     "${FLM_SOURCE_DIR}/common/AutoModel/model_extension_frontend.cpp"
     "${FLM_SOURCE_DIR}/common/AutoModel/model_frontend.cpp"
+    "${FLM_SOURCE_DIR}/common/AutoEmbeddingModel/model_extension_embedding.cpp"
     "${FLM_SOURCE_DIR}/common/AutoModel/model_extension_backend.cpp"
     "${FLM_SOURCE_DIR}/common/AutoModel/model_backend.cpp"
     "${FLM_SOURCE_DIR}/common/modules/sampler.cpp"
@@ -171,3 +177,23 @@ enable_testing()
 add_test(NAME test_model_frontend COMMAND test_model_frontend)
 add_test(NAME test_model_extension_frontend
     COMMAND test_model_extension_frontend)
+
+add_library(fake_embedding_extension SHARED fake_embedding_extension.cpp)
+target_include_directories(fake_embedding_extension PRIVATE "${FLM_SOURCE_DIR}/include")
+target_link_libraries(fake_embedding_extension PRIVATE flm_model_extension_contract)
+target_compile_definitions(fake_embedding_extension PRIVATE FLM_TEST_NPU_RUNTIME=${FLM_TEST_NPU_RUNTIME})
+file(GENERATE OUTPUT "$<TARGET_FILE_DIR:fake_embedding_extension>/embedding-extension.json"
+    CONTENT "{\"schema_version\":1,\"name\":\"test-embedding\",\"version\":\"1\",\"library\":\"$<TARGET_FILE_NAME:fake_embedding_extension>\",\"catalog\":\"embedding-catalog.json\"}")
+file(GENERATE OUTPUT "$<TARGET_FILE_DIR:fake_embedding_extension>/embedding-catalog.json"
+    CONTENT "{\"schema_version\":1,\"models\":{\"test-embedding\":{\"1\":{\"name\":\"embedding\",\"url\":\"https://example.com/model\",\"files\":[\"config.json\"],\"flm_min_version\":\"1.0.0\",\"model_kind\":\"embedding\",\"frontend_provider\":\"test-embedding\",\"details\":{\"family\":\"test-embedding\"}}}}}")
+target_compile_definitions(test_model_frontend PRIVATE
+    FLM_TEST_EMBEDDING_MANIFEST="$<TARGET_FILE_DIR:fake_embedding_extension>/embedding-extension.json")
+add_dependencies(test_model_frontend fake_embedding_extension)
+
+# Exercise the real embedding HTTP handler with a borrowed fake device and no
+# built-in embedding model. This also keeps the limited-model declarations built.
+target_include_directories(test_model_frontend PRIVATE
+    "${FLM_SOURCE_DIR}/server" "${FLM_SOURCE_DIR}/pull")
+target_compile_definitions(test_model_frontend PRIVATE FASTFLOWLM_LINUX_LIMITED_MODELS)
+find_package(Threads REQUIRED)
+target_link_libraries(test_model_frontend PRIVATE Threads::Threads)

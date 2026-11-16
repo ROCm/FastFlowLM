@@ -6362,5 +6362,97 @@
             "size": 368,
             "path": "tokenizer_config.json"
         }
+    ],
+    "r2t2:1.7b": [
+        {
+            "type": "file",
+            "oid": "61df2d576d06d26bf1840187b19a69860a5f9a51",
+            "size": 1720,
+            "path": ".gitattributes"
+        },
+        {
+            "type": "file",
+            "oid": "71f6409cf391100fa059fed49c68045fe8c02305",
+            "size": 729,
+            "path": "MANIFEST.sha256"
+        },
+        {
+            "type": "file",
+            "oid": "7fbd11c16918aef283c559abc67efc5e1d3e5196",
+            "size": 11071,
+            "path": "MODEL_LICENSE"
+        },
+        {
+            "type": "file",
+            "oid": "b86bc5ae216c4aa86bfcf871f38520db752b9fc1",
+            "size": 3521,
+            "path": "README.md"
+        },
+        {
+            "type": "file",
+            "oid": "ef50610f9d110f6515a4c04a6d00c5de71af3576",
+            "size": 635000472,
+            "lfs": {
+                "oid": "03cc7ea3e03ff34d4535015e5062fbda842aae785bfe0d841bb6ed55a5a91e6f",
+                "size": 635000472,
+                "pointerSize": 134
+            },
+            "xetHash": "6e7c1f83b58b87421b67ecb742315473de5fba8268e9a8ddcb547fbb7e37824f",
+            "path": "audio_weight.q4nx"
+        },
+        {
+            "type": "file",
+            "oid": "5a49c7491040017bb9018327dc1fcc2d8a993798",
+            "size": 1099,
+            "path": "chat_template.jinja"
+        },
+        {
+            "type": "file",
+            "oid": "43352306b573b9cb810004da4fa209dd7db93fc4",
+            "size": 6148,
+            "path": "config.json"
+        },
+        {
+            "type": "file",
+            "oid": "135ce6660285e90f4ee180f43e1d335c89471748",
+            "size": 2450592176,
+            "lfs": {
+                "oid": "f21697c987e1df471e3772ee8170ebceaadf0396217ce4abd69f285d5b8fb8fb",
+                "size": 2450592176,
+                "pointerSize": 135
+            },
+            "xetHash": "bd5d7a60f9aca0fcd5a8f46a251993a86402496453c20cc4aec7da8dc2647fde",
+            "path": "model.q4nx"
+        },
+        {
+            "type": "file",
+            "oid": "84ba2f1f4b16077a8bf1a7286534c562328e9e92",
+            "size": 818396640,
+            "lfs": {
+                "oid": "0cda6c080b8e3f6508c817d96ee62be4a3b305912ac909bcfa9c53ead05f5953",
+                "size": 818396640,
+                "pointerSize": 134
+            },
+            "xetHash": "c13ad226197d335f0f85aa19a8466a4da2be4a2ca0d9159c3297bd9c8045f050",
+            "path": "npu_q41.q4nx"
+        },
+        {
+            "type": "file",
+            "oid": "13efe5e8d4a0f1225fdf3faef86a437a42c33bce",
+            "size": 11429499,
+            "lfs": {
+                "oid": "0499602714160467f2d68b910651d6216020689f1e016be87a2d0019ee3baeab",
+                "size": 11429499,
+                "pointerSize": 133
+            },
+            "xetHash": "19b7109665b15805068c57b005ab01638ae2321dc9ac6ed3fc4356134a4d1c1c",
+            "path": "tokenizer.json"
+        },
+        {
+            "type": "file",
+            "oid": "ff80d10a4411677aec3e9f9021b835138c1a2161",
+            "size": 12535,
+            "path": "tokenizer_config.json"
+        }
     ]
 }

@@ -43,6 +43,7 @@ Tokenizer::Tokenizer(const std::string&) {
     throw std::logic_error("host tokenizer constructed");
 }
 Tokenizer::~Tokenizer() = default;
+SafeTensors::~SafeTensors() = default;
 std::vector<int> Tokenizer::encode(const std::string&) {
     throw std::logic_error("host tokenizer used");
 }

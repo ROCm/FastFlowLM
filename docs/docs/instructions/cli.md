@@ -438,7 +438,9 @@ flm run gemma3:4b --asr whisper-v3:turbo  # Load Whisper (whisper-large-v3-turbo
 flm serve gemma3:4b --asr whisper-v3:turbo  # Background-load Whisper and initialize the LLM (gemma3:4b) concurrently.
 ```
 
-> **Note:** ASR alone isn’t supported—an LLM must be present for end-to-end voice→text→LLM workflows.
+`--asr` also takes `r2t2:1.7b` (Confucius4-R2T2, Qwen3-ASR based) in server mode: `flm serve gemma3:4b --asr r2t2:1.7b`, or `flm serve --asr r2t2:1.7b` for speech-to-text only. See the [R2T2 page](https://fastflowlm.com/docs/models/r2t2/).
+
+> **Note:** In CLI mode (`flm run`) an LLM must be present for end-to-end voice→text→LLM workflows.
 
 See the ASR guide [here](https://fastflowlm.com/docs/models/whisper/)
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import time
 
 # How a process that the default Ctrl+C handler ended exits.
 STATUS_CONTROL_C_EXIT = 0xC000013A
@@ -109,7 +110,15 @@ def _main(argv: list[str]) -> int:
 
     pid, action = int(argv[0]), argv[1]
     kernel32.FreeConsole()
-    if not kernel32.AttachConsole(pid):
+    # Popen returns before a new console is ready, and until it is an attach
+    # fails with ERROR_INVALID_HANDLE (6); give it up to two seconds.
+    for _ in range(10):
+        if kernel32.AttachConsole(pid):
+            break
+        if ctypes.get_last_error() != 6:
+            return fail(f"AttachConsole({pid})")
+        time.sleep(0.2)
+    else:
         return fail(f"AttachConsole({pid})")
 
     if action == "ctrl-c":

@@ -66,6 +66,73 @@ nlohmann::json WithDownloadMetadata(nlohmann::json entry) {
     return entry;
 }
 
+void test_embedding_catalog() {
+    auto entry = WithDownloadMetadata({{"name", "Embedding"}, {"model_kind", "embedding"},
+        {"frontend_provider", "embedding-provider"}, {"supported_platforms", {"aie2p"}},
+        {"details", {{"family", "embedding-family"}}}});
+    auto path = write_catalog("embedding-overlay.json", {{"schema_version", 1},
+        {"models", {{"embedding-test", {{"1", entry}}}}}});
+    auto overlay = flm::catalog::load_model_catalog_overlay(path.string());
+    std::string base = kCatalogPath, directory = ".";
+    model_list models(base, directory, "aie2p", {"flm"}, {overlay}, {"embedding-family"});
+    TEST_REQUIRE(models.is_model_supported("embedding-test:1"));
+    TEST_REQUIRE(models.get_model_info("embedding-test:1").second.at("model_kind") == "embedding");
+    model_list other(base, directory, "dev04", {"flm"}, {overlay}, {"embedding-family"});
+    TEST_REQUIRE(!other.is_model_supported("embedding-test:1"));
+    RequireThrows([&] { model_list missing(base, directory, "aie2p", {"flm"}, {overlay}, {}); });
+    const nlohmann::json record = {{"path", "config.json"}, {"size", 0}, {"sha256", std::string(64, 'a')}};
+    const auto check_records = [&](const nlohmann::json& records, bool valid) {
+        for (bool preferred : {false, true}) {
+            auto candidate = entry;
+            auto& target = preferred ? candidate["preferred_source"] : candidate;
+            target["file_records"] = records;
+            if (valid) flm::catalog::detail::validate_catalog_entry(
+                preferred ? flm::catalog::detail::with_preferred_source(candidate) : candidate, "test:1");
+            else RequireContains(RequireThrows([&] {
+                flm::catalog::detail::validate_catalog_entry(
+                    preferred ? flm::catalog::detail::with_preferred_source(candidate) : candidate, "test:1");
+            }), "file_records");
+        }
+    };
+    check_records(nlohmann::json::array({record}), true);
+    for (const auto& hash : std::vector<nlohmann::json>{
+             {{"oid", std::string(40, 'b')}}, {{"lfs", {{"oid", std::string(64, 'c')}}}}}) {
+        auto alternate = record;
+        alternate.erase("sha256");
+        alternate.update(hash);
+        check_records(nlohmann::json::array({alternate}), true);
+    }
+    for (const auto& patch : std::vector<nlohmann::json>{
+             {{"path", nullptr}}, {{"path", 1}}, {{"path", "../config.json"}},
+             {{"path", "other.json"}}, {{"size", nullptr}}, {{"size", -1}},
+             {{"size", "1"}}, {{"sha256", nullptr}}, {{"sha256", ""}},
+             {{"sha256", std::string(64, 'z')}}, {{"oid", 1}}, {{"lfs", nlohmann::json::array()}},
+             {{"sha256", nullptr}, {"lfs", nlohmann::json::object()}},
+             {{"sha256", nullptr}, {"lfs", {{"oid", 42}}}}}) {
+        auto invalid = record;
+        invalid.merge_patch(patch);
+        check_records(nlohmann::json::array({invalid}), false);
+    }
+    check_records(nlohmann::json::array({record, record}), false);
+    check_records(nlohmann::json::array({42}), false);
+    // Embeddings and their preferred sources obey the shared catalog rules.
+    for (const auto& patch : std::vector<nlohmann::json>{
+             {{"model_kind", "unknown"}}, {{"frontend_provider", nullptr}},
+             {{"file_records", nlohmann::json::array()}}, {{"files", {"../weights"}}},
+             {{"name", "COM\xC2\xB9"}}, {{"files", {"a/LPT\xC2\xB2.bin"}}},
+             {{"supported_platforms", nlohmann::json::array()}}, {{"url", nullptr}}}) {
+        for (bool preferred : {false, true}) {
+            auto candidate = entry;
+            if (preferred) candidate["preferred_source"] = patch;
+            else candidate.merge_patch(patch);
+            write_catalog("embedding-overlay.json", {{"schema_version", 1},
+                {"models", {{"embedding-test", {{"1", candidate}}}}}});
+            RequireThrows([&] { flm::catalog::load_model_catalog_overlay(path.string()); });
+        }
+    }
+    std::filesystem::remove(path);
+}
+
 void test_stock_build_offers_phi4_with_its_own_artifacts() {
     // The regression this design exists to prevent. A stock install has one
     // phi4 -- the FastFlowLM one -- and nothing about a corelib model may
@@ -437,9 +504,7 @@ void test_extension_catalogs_merge_without_overrides() {
     TEST_REQUIRE(
         model_entry.at("required") ==
         nlohmann::json::array(
-            {"name", "backend", "backend_provider",
-             "default_context_length", "max_prefill_len", "details",
-             "url", "flm_min_version", "files"}));
+            {"name", "details", "url", "flm_min_version", "files"}));
     TEST_REQUIRE(
         model_entry.at("properties")
             .at("details")
@@ -922,6 +987,7 @@ void test_shipped_catalog_is_well_formed() {
 }  // namespace
 
 int main() {
+    RunTest(test_embedding_catalog, "embedding catalog and platform filtering");
     RunTest(test_stock_build_offers_phi4_with_its_own_artifacts,
             "stock build offers phi4 with its own artifacts");
     RunTest(test_a_corelib_build_offers_the_corelib_phi4,

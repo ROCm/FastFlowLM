@@ -143,6 +143,21 @@ jobs:
           cmake --build build-ignore-eos -j"$(nproc)"
           ctest --test-dir build-ignore-eos --output-on-failure
 
+  # empty thought channel (src/include/AutoModel/gemma4_12b_thought.hpp): Gemma4 12B drops the last four
+  # tokens only when the prompt ends with the empty thought channel. Header only, CPU only, no NPU.
+  gemma4-empty-thought:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and run the empty thought channel test
+        run: |
+          cmake -S src/test/gemma4_12b_thought -B build-gemma4-12b-thought -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-gemma4-12b-thought -j"$(nproc)"
+          ctest --test-dir build-gemma4-12b-thought --output-on-failure
+
   # plan_prompt_reuse (src/include/prompt_reuse.hpp): how much of a prompt the engine keeps and which images /
   # audio clips a model drops from its payload, the one rule every vision model and _shared_insert share. CPU only.
   prompt-reuse:
@@ -308,3 +323,44 @@ jobs:
             ctest --test-dir "build-contracts-hrx-$hrx" --output-on-failure
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
+
+  # The oga-hipep backend (src/common/oga, src/include/oga) against a fake OGA C API: generator reuse and
+  # rewind, images, package discovery, runtime install and uninstall; and the Qwen3.5 / GPT-OSS frontends that
+  # drive it. Windows only; no GPU, NPU or model (Test Windows HIPEP in build-and-test.yml runs the real one).
+  oga-hipep-windows:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # the frontend tests build automodel.cpp: xgrammar and the tokenizers-cpp headers
+      - name: Checkout submodules
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            git submodule update --init --depth 1 third_party/xgrammar third_party/tokenizers-cpp &&
+              git -C third_party/xgrammar submodule update --init --depth 1 3rdparty/dlpack && exit 0
+            echo "Submodule fetch failed (attempt ${attempt}), retrying..."
+            sleep 10
+          done
+          exit 1
+      # Boost, the XRT headers and the xrt_coreutil import library, as for the Windows package build.
+      # Restore only: this workflow also runs on tags, so it never writes the cache (zizmor cache-poisoning);
+      # the Windows package build saves it under the same key, and a miss is built by the next step.
+      - name: Restore build dependencies
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: C:\dev
+          key: windows-deps-${{ hashFiles('.github/script/ci/setup_windows_deps.ps1', '.github/windows-deps/**') }}
+      - name: Set up build dependencies
+        shell: powershell
+        run: .github\script\ci\setup_windows_deps.ps1
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
+      - name: Build and run the oga-hipep tests
+        shell: powershell
+        run: .github\script\ci\oga_hipep_tests.ps1 -DepsRoot C:\dev

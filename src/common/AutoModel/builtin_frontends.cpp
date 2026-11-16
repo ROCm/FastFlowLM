@@ -24,6 +24,7 @@
 #include "AutoModel/modeling_qwen3_5vl.hpp"
 #include "AutoModel/modeling_qwen3_6_moe.hpp"
 #include "AutoModel/modeling_qwen3_8mtp.hpp"
+#include "AutoModel/modeling_qwen3_asr.hpp"
 #include "AutoModel/modeling_qwen3vl.hpp"
 
 #include "device_runtime.hpp"
@@ -74,6 +75,7 @@ void register_builtin_frontends(FrontendRegistry& registry) {
     Register<Qwen3_6_MOE>(registry, "qwen3.6-moe");
     Register<Qwen3_8MTP>(registry, "qwen3.8-mtp");
     Register<Qwen3_8DFlash2>(registry, "qwen3.8-dflash2");
+    Register<Qwen3_ASR>(registry, "r2t2");
     Register<Gemma3>(registry, "gemma3");
     Register<Gemma3_Text_Only>(registry, "gemma3-text");
     Register<Gemma4e>(registry, "gemma4e");

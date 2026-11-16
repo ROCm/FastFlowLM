@@ -5,6 +5,7 @@
 #include "AutoModel/model_frontend.hpp"
 #include "AutoModel/model_extension_backend.hpp"
 #include "AutoModel/model_extension_frontend.hpp"
+#include "AutoEmbeddingModel/auto_embedding_model.hpp"
 #include "model_extension_detail.hpp"
 
 #if defined(_WIN32)
@@ -246,9 +247,10 @@ int RegisterBackendProvider(
     }
 }
 
-int RegisterFrontendProvider(
+int RegisterModelProvider(
     void* opaque, const char* family, const char* provider,
-    flm_frontend_create_v1 create, void* factory_context) noexcept {
+    flm_frontend_create_v1 create, void* factory_context,
+    flm_embedding_create_v1 embedding = nullptr) noexcept {
     auto& context = *static_cast<RegistrationContext*>(opaque);
     try {
         if (!family || !*family || !provider || !*provider) {
@@ -264,7 +266,7 @@ int RegisterFrontendProvider(
                 "' is reserved";
             return 1;
         }
-        if (!create) {
+        if (!create && !embedding) {
             context.error = "extension frontend factory is null";
             return 1;
         }
@@ -278,7 +280,7 @@ int RegisterFrontendProvider(
         }
         context.pending_frontends.push_back(
             ExtensionFrontendRegistration{
-                family, provider, create, factory_context});
+                family, provider, create, factory_context, embedding});
         return 0;
     } catch (const std::exception& error) {
         context.error = error.what();
@@ -287,6 +289,16 @@ int RegisterFrontendProvider(
         context.error = "extension frontend registration failed";
         return 1;
     }
+}
+
+int RegisterFrontendProvider(void* context, const char* family, const char* provider,
+    flm_frontend_create_v1 create, void* factory_context) noexcept {
+    return RegisterModelProvider(context, family, provider, create, factory_context);
+}
+
+int RegisterEmbeddingProvider(void* context, const char* family, const char* provider,
+    flm_embedding_create_v1 create, void* factory_context) noexcept {
+    return RegisterModelProvider(context, family, provider, nullptr, factory_context, create);
 }
 
 }  // namespace
@@ -349,6 +361,7 @@ FrontendRegistry::~FrontendRegistry() {
     unload_extensions();
     std::lock_guard lock(mutex_);
     factories_.clear();
+    embeddings_.clear();
     providers_.clear();
 }
 
@@ -368,7 +381,7 @@ void FrontendRegistry::register_frontend(std::string family,
     if (provider.empty()) throw std::runtime_error("frontend provider is empty");
 
     std::lock_guard lock(mutex_);
-    if (factories_.count(family)) {
+    if (providers_.count(family)) {
         throw std::runtime_error(
             "frontend family '" + family + "' is already registered");
     }
@@ -395,6 +408,7 @@ void FrontendRegistry::unload_extensions() noexcept {
         (*extension)->backend_keys.clear();
         for (const auto& family : (*extension)->frontend_families) {
             factories_.erase(family);
+            embeddings_.erase(family);
             providers_.erase(family);
         }
     }
@@ -403,14 +417,24 @@ void FrontendRegistry::unload_extensions() noexcept {
 
 bool FrontendRegistry::has(const std::string& family) const {
     std::lock_guard lock(mutex_);
-    return factories_.count(family) != 0;
+    return providers_.count(family) != 0;
+}
+
+std::unique_ptr<AutoEmbeddingModel> FrontendRegistry::create_embedding(
+    const std::string& family, void* device) const {
+    EmbeddingFactory factory;
+    {
+        std::lock_guard lock(mutex_);
+        factory = embeddings_.at(family);
+    }
+    return factory(device);
 }
 
 std::vector<std::string> FrontendRegistry::available() const {
     std::lock_guard lock(mutex_);
     std::vector<std::string> families;
-    families.reserve(factories_.size());
-    for (const auto& [family, factory] : factories_) {
+    families.reserve(providers_.size());
+    for (const auto& [family, factory] : providers_) {
         (void)factory;
         families.push_back(family);
     }
@@ -644,6 +668,7 @@ void FrontendRegistry::load_extension(
         SetExtensionContext,
         RegisterBackendProvider,
         RegisterFrontendProvider,
+        RegisterEmbeddingProvider,
     };
     RegistrationErrorCapture error;
     auto error_sink = error.sink();
@@ -734,8 +759,8 @@ void FrontendRegistry::load_extension(
     }
     if (extension->catalog) {
         std::vector<std::string> frontends;
-        frontends.reserve(factories_.size());
-        for (const auto& [family, factory] : factories_) {
+        frontends.reserve(providers_.size());
+        for (const auto& [family, factory] : providers_) {
             (void)factory;
             frontends.push_back(family);
         }
@@ -757,6 +782,13 @@ void FrontendRegistry::load_extension(
                      catalog::catalog_entry_sources(catalog_entry)) {
                     const std::string family =
                         entry.at("details").at("family").get<std::string>();
+                    bool embedding = embeddings_.count(family) != 0;
+                    for (const auto& pending : registration.pending_frontends) {
+                        if (pending.family == family) embedding = pending.create_embedding != nullptr;
+                    }
+                    if (embedding != (flm::catalog::model_kind(entry) == flm::catalog::kEmbeddingModelKind)) {
+                        throw std::runtime_error("Catalog model_kind does not match frontend '" + family + "'");
+                    }
                     auto selected = providers_.find(family);
                     std::string expected =
                         selected == providers_.end() ? std::string() : selected->second;
@@ -781,6 +813,7 @@ void FrontendRegistry::load_extension(
                                 "' for family '" + family + "'");
                         }
                     }
+                    if (embedding) continue;
                     const bool has_private_payload =
                         entry.value("vlm", false) ||
                         entry.value("asr", false);
@@ -838,7 +871,7 @@ void FrontendRegistry::load_extension(
         for (auto& pending : registration.pending_frontends) {
             const std::string family = pending.family;
             const std::string frontend_provider = pending.provider;
-            if (factories_.count(family)) {
+            if (providers_.count(family)) {
                 throw std::runtime_error(
                     "frontend family '" + family +
                     "' is already registered");
@@ -846,17 +879,22 @@ void FrontendRegistry::load_extension(
             // Record the key first so every exception from factory construction
             // or map insertion is covered by the rollback below.
             extension->frontend_families.push_back(family);
-            factories_.emplace(
-                family, make_extension_frontend_factory(
-                    std::move(pending), extension->root,
-                    extension->asset_root,
+            if (pending.create_embedding) {
+                embeddings_.emplace(family, make_extension_embedding_factory(
+                    std::move(pending), extension->root, extension->asset_root,
                     std::static_pointer_cast<void>(extension)));
+            } else {
+                factories_.emplace(family, make_extension_frontend_factory(
+                    std::move(pending), extension->root, extension->asset_root,
+                    std::static_pointer_cast<void>(extension)));
+            }
             providers_.emplace(family, frontend_provider);
         }
         extensions_.push_back(std::move(extension));
     } catch (...) {
         for (const auto& family : extension->frontend_families) {
             factories_.erase(family);
+            embeddings_.erase(family);
             providers_.erase(family);
         }
         extension->frontend_families.clear();

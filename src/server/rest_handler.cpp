@@ -18,6 +18,7 @@
 #include <cctype>
 #include <cstring>
 #include "AutoModel/modeling_minicpm_v.hpp"
+#include "AutoModel/modeling_qwen3_asr.hpp"
 #include "whisper/transcript_format.hpp"
 #include <sstream>
 #include <iostream>
@@ -664,7 +665,7 @@ static json convert_tool_responses_gemma4(json messages) {
 ///@return the rest handler
 RestHandler::RestHandler(model_list& models, ModelDownloader& downloader, program_args_t& args,
                          flm_rt::device* npu_device)
-    : supported_models(models), downloader(downloader), default_model_tag(args.model_tag), current_model_tag(""), modelscope(args.modelscope), asr(args.asr), embed(args.embed), img_pre_resize(args.img_pre_resize), preemption(args.preemption), backend(args.backend) {
+    : supported_models(models), downloader(downloader), default_model_tag(args.model_tag), current_model_tag(""), modelscope(args.modelscope), asr(args.asr), img_pre_resize(args.img_pre_resize), preemption(args.preemption), backend(args.backend) {
 
     // RAI receives the device from corelib; non-RAI creates its own here.
     if (npu_device != nullptr) {
@@ -700,28 +701,29 @@ RestHandler::RestHandler(model_list& models, ModelDownloader& downloader, progra
     this->raw_rgb8_limits.max_frames = (size_t)std::max(args.max_raw_frames, 1);
     this->raw_rgb8_limits.max_bytes = (size_t)std::max(args.max_raw_mb, 1) * 1024 * 1024;
 
+    default_model_tag = supported_models.rectify_model_tag(default_model_tag);
+    const bool embedding_only = supported_models.is_model_supported(default_model_tag) &&
+        is_embedding_model(supported_models.get_model_info(default_model_tag).second);
+    if (embedding_only) ensure_embed_model_loaded(default_model_tag);
     // Initialize chat bot with default model
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
     if (this->asr) {
         ensure_asr_model_loaded(args.asr_tag);
     }
-    if (this->embed) {
-        ensure_embed_model_loaded(args.embed_tag);
-    }
 #else
     if (this->asr) {
         header_print("Error", "ASR models are not supported in this build");
     }
-    if (this->embed) {
-        header_print("Error", "Embedding models are not supported in this build");
-    }
 #endif
+    if (args.embed && !embedding_only) {
+        ensure_embed_model_loaded(args.embed_tag);
+    }
 
     if (!args.decision.empty()) {
         ensure_decision_model_loaded(args.decision);
     }
 
-    if (default_model_tag != "model-faker") {
+    if (default_model_tag != "model-faker" && !embedding_only) {
         if (!supported_models.is_model_supported(default_model_tag)) {
             header_print("Warning", "Default model tag '" << default_model_tag << "' is not supported. Falling back to 'llama3.2:1b'.");
             this->default_model_tag = "llama3.2:1b";
@@ -839,6 +841,8 @@ bool RestHandler::is_known_model(const std::string& model_tag) {
 void RestHandler::ensure_asr_model_loaded(const std::string& model_tag) {
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
     std::string ensure_tag = model_tag;
+    const bool sidecar_r2t2 = this->supported_models.get_model_info(ensure_tag).second
+        .value("details", json::object()).value("family", std::string()) == "r2t2";
     switch (downloader.is_model_downloaded(ensure_tag, false, /*fast_check=*/true)) {
         case ModelDownloader::ModelStatus::Ready:
             break;
@@ -850,6 +854,23 @@ void RestHandler::ensure_asr_model_loaded(const std::string& model_tag) {
             header_print("ERROR", "Whisper is incompatible with this version of FastFlowLM, skipping... ");
             this->asr = false;
             return;
+    }
+    if (sidecar_r2t2) {
+        // r2t2 transcribes by itself: load it as a second engine beside the chat model
+        try {
+            auto [tag, engine] = get_auto_model(ensure_tag, this->supported_models, this->npu_device_inst);
+            auto [new_tag, info] = this->supported_models.get_model_info(tag);
+            engine->set_server_mode(true);
+            engine->load_model(this->supported_models.get_load_path(new_tag), info, -1, this->preemption, "");
+            engine->save_request_settings();
+            this->asr_sidecar_engine = std::move(engine);
+            this->asr_sidecar_tag = tag;
+        }
+        catch (const std::exception& e) {
+            header_print("ERROR", "Failed to load ASR model: " + std::string(e.what()));
+            exit(EXIT_FAILURE);
+        }
+        return;
     }
     this->whisper_engine = std::make_unique<Whisper>(this->npu_device_inst);
     auto [new_ensure_tag, whisper_model_info] = this->supported_models.get_model_info(ensure_tag);
@@ -944,39 +965,6 @@ void RestHandler::handle_systemone(const std::string& raw_body,
         reply["__http_body"] = {{"detail", std::string("the server failed on this request (") + e.what() + ")"}};
     }
     send_response(reply);
-}
-
-///@brief Ensure the embed model is loaded
-///@param model_tag the model tag
-void RestHandler::ensure_embed_model_loaded(const std::string& model_tag) {
-#ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
-    std::string ensure_tag = model_tag;
-    switch (this->downloader.is_model_downloaded(ensure_tag, false, /*fast_check=*/true)) {
-        case ModelDownloader::ModelStatus::Ready:
-            break;
-        case ModelDownloader::ModelStatus::Outdated:
-        case ModelDownloader::ModelStatus::Missing:
-            this->downloader.pull_model(ensure_tag, this->modelscope);
-            break;
-        case ModelDownloader::ModelStatus::Incompatible:
-            header_print("ERROR", "EmbeddingGemma is incompatible with this version of FastFlowLM, skipping... ");
-            this->embed = false;
-            return;
-    }
-    auto [embedding_model_tag, auto_embedding_engine] = get_auto_embedding_model(ensure_tag, this->npu_device_inst);
-    this->auto_embedding_engine = std::move(auto_embedding_engine);
-    auto [new_embedding_model_tag, embedding_model_info] = this->supported_models.get_model_info(embedding_model_tag);
-    std::string embedding_model_path = this->supported_models.get_model_path(new_embedding_model_tag);
-    try {
-        this->auto_embedding_engine->load_model(embedding_model_path, embedding_model_info, this->preemption);
-    }
-    catch (const std::exception& e) {
-        header_print("ERROR", "Failed to load embedding model: " + std::string(e.what()));
-        exit(EXIT_FAILURE);
-    }
-#else
-    throw std::runtime_error("Embedding models are not supported in this build");
-#endif
 }
 
 ///@brief Configure chat engine parameters from options and request
@@ -1394,83 +1382,6 @@ void RestHandler::handle_chat(const json& request,
     } catch (const std::exception& e) {
         json error_response = ExceptionResponse(e);
         send_response(error_response);
-    }
-}
-
-///@brief Handle the embeddings request
-///@param request the request
-///@param send_response the send response
-///@param send_streaming_response the send streaming response
-void RestHandler::handle_embeddings(const json& request,
-                                   std::function<void(const json&)> send_response,
-                                   StreamResponseCallback send_streaming_response) {
-    try {
-        // "model" must be a string and "input" a string or a non-empty array of strings.
-        if (auto bad = flm::http_guard::validate_embeddings(request)) {
-            send_response(*bad);
-            return;
-        }
-        std::string model = request.at("model").get<std::string>();
-        std::vector<std::string> inputs;
-        const json& input = request.at("input");
-        if (input.is_string()) {
-            inputs.push_back(input.get<std::string>());
-        }
-        else {
-            for (const auto& item : input) {
-                inputs.push_back(item.get<std::string>());
-            }
-        }
-
-        json response;
-        if (this->embed) {
-            json embedding_data = json::array();
-#ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
-            for (size_t i = 0; i < inputs.size(); ++i) {
-                std::cout << "Embedding input[" << i << "]: " << "\n" << inputs[i] << std::endl;
-                std::vector<float> embedding_result = this->auto_embedding_engine->embed(inputs[i], embedding_task_type_t::task_query);
-                embedding_data.push_back({
-                    {"object", "embedding"},
-                    {"embedding", embedding_result},
-                    {"index", i}
-                });
-            }
-#else
-            throw std::runtime_error("Embedding models are not supported in this build");
-#endif
-
-            response = {
-                {"object", "list"},
-                {"data", embedding_data},
-                {"model", model},
-                {"usage", {
-                    {"prompt_tokens", 0},
-                    {"total_tokens", 0}
-                }}
-            };
-        }
-        else {
-            header_print("Warning", "No embedding model loaded");
-            send_response({{"error", {{"message", "No embedding model is loaded; start the server with --embed 1."},
-                                      {"type", "invalid_request_error"},
-                                      {"code", 400}}}});
-            return;
-        }
-        send_response(response);
-    }
-    catch (const json::exception& e) {
-        // A missing or mistyped "model" / "input": the request is at fault
-        send_response({{"error", {{"message", std::string("Invalid embeddings request: ") + e.what()},
-                                  {"type", "invalid_request_error"},
-                                  {"code", 400}}}});
-    }
-    catch (const std::exception& e) {
-        // A failed NPU dispatch throws from embed(); it must reach the client as a 5xx, not a 200
-        // whose body is an error string (the 200 is what let a broken vector look like an answer).
-        header_print("ERROR", std::string("Embedding failed: ") + e.what());
-        send_response({{"error", {{"message", e.what()},
-                                  {"type", "server_error"},
-                                  {"code", 500}}}});
     }
 }
 
@@ -1995,13 +1906,23 @@ void RestHandler::handle_openai_audio_transcriptions(const json& request,
                                         StreamResponseCallback send_streaming_response,
                                         std::shared_ptr<CancellationToken> cancellation_token) {
     try {
+        if (!request.contains("file") || !request["file"].is_string()) {
+            send_response({{"error", {{"message", "the request has no audio file (multipart field \"file\")"}, {"type", "invalid_request_error"}, {"code", 400}}}});
+            return;
+        }
         std::string model = request["model"];
         std::string file_content = request["file"].get<std::string>();
         std::vector<uint8_t> audio_raw(file_content.begin(), file_content.end());
         std::string language = request.value("language", "");
         std::string prompt = request.value("prompt", "");
         std::string response_format = request.value("response_format", "json");
-        bool stream = request.value("stream", false);
+        const std::string stream_field = request.contains("stream") && request["stream"].is_string() ? request["stream"].get<std::string>() : "";
+        const bool stream = request.contains("stream") && (request["stream"].is_boolean() ? request["stream"].get<bool>() : (stream_field == "true" || stream_field == "1"));
+        auto form_int = [&request](const char* key, int fallback) {
+            if (!request.contains(key)) return fallback;
+            if (request[key].is_number_integer()) return request[key].get<int>();
+            try { return std::stoi(request[key].get<std::string>()); } catch (...) { throw std::invalid_argument(std::string(key) + " must be an integer"); }
+        };
         json response;
         if (response_format != "json" && response_format != "text" && response_format != "verbose_json" &&
             response_format != "srt" && response_format != "vtt") {
@@ -2010,27 +1931,72 @@ void RestHandler::handle_openai_audio_transcriptions(const json& request,
         }
         // Segments need the timestamps; json and text are the same transcript without them.
         const bool timed = response_format == "verbose_json" || response_format == "srt" || response_format == "vtt";
-        if (this->asr) {
-#ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
-            this->whisper_engine->load_audio(audio_raw);
-            header_print("FLM", "Transforming audio to text...");
+        // A model that transcribes by itself (r2t2) answers when it is the one asked for; any other model name is served by
+        // the Whisper sidecar (--asr 1), as before.
+        Qwen3_ASR* self_asr = nullptr;
+        // --asr r2t2:...: the sidecar answers every transcription, so the chat model stays loaded
+        if (this->asr_sidecar_engine) {
+            self_asr = dynamic_cast<Qwen3_ASR*>(this->asr_sidecar_engine.get());
+        } else if (!model.empty() && supported_models.is_model_supported(supported_models.rectify_model_tag(model))) {
+            auto [asr_tag, asr_info] = this->supported_models.get_model_info(model);
+            if (asr_info.contains("details") && asr_info["details"].value("family", "") == "r2t2") {
+                if (!ensure_model_loaded(model)) throw std::runtime_error("failed to load " + model);
+                self_asr = dynamic_cast<Qwen3_ASR*>(this->auto_chat_engine.get());
+            }
+        }
+        std::string audio_context;
+        std::string language_name;
+        double duration = 0.0;
+        if (this->asr || self_asr) {
             // Transcripts are user speech: log them only when FLM_LOG_RAW_OUTPUT asks.
             const char* log_env = std::getenv("FLM_LOG_RAW_OUTPUT");
             const bool log_transcript = log_env != nullptr && log_env[0] != '\0' && std::strcmp(log_env, "0") != 0;
             std::ostream no_log(nullptr);
             std::ostream& transcript_log = log_transcript ? std::cout : no_log;
+            if (self_asr && stream) {
+                // Append-only text as the audio is processed chunk by chunk (OpenAI transcription events): the model's streaming mode on a whole file
+                header_print("FLM", "Transforming audio to text, streaming (" << model << ")...");
+                chat_meta_info_t asr_meta;
+                asr_meta.max_prefill_len = this->prefill_chunk_len;
+                cancellation_token->reset();
+                auto sse = [&send_streaming_response](const json& event, bool final) { send_streaming_response(json("data: " + event.dump() + "\n\n"), final); };
+                const int chunk_ms = form_int("chunk_size_ms", 1000);
+                const int lookahead_ms = form_int("lookahead_ms", 160);
+                const int unfixed = form_int("unfixed_token_num", 1);
+                try {
+                    audio_context = self_asr->transcribe_streaming(asr_meta, audio_raw, language, prompt, chunk_ms, lookahead_ms, unfixed,
+                        [&sse](const std::string& delta) { sse({{"type", "transcript.text.delta"}, {"delta", delta}}, false); },
+                        language_name, duration, [&] { return cancellation_token->cancelled(); });
+                } catch (const std::invalid_argument& e) {
+                    send_response({{"error", {{"message", e.what()}, {"type", "invalid_request_error"}, {"code", 400}}}});
+                    return;
+                }
+                sse({{"type", "transcript.text.done"}, {"text", audio_context}}, false);
+                send_streaming_response(json("data: [DONE]\n\n"), true);
+                return;
+            }
+            if (self_asr) {
+                header_print("FLM", "Transforming audio to text (" << model << ")...");
+                chat_meta_info_t asr_meta;
+                asr_meta.max_prefill_len = this->prefill_chunk_len;
+                transcript_log << "Audio content: " << std::flush;
+                audio_context = self_asr->transcribe(asr_meta, audio_raw, language, prompt, request.value("max_tokens", 8192), transcript_log,
+                                                     language_name, duration, [&] { return cancellation_token->cancelled(); });
+                transcript_log << std::endl;
+            } else {
+#ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
+            this->whisper_engine->load_audio(audio_raw);
+            header_print("FLM", "Transforming audio to text...");
             transcript_log << "Audio content: " << std::flush;
             std::pair<std::string, std::string> audio_result = this->whisper_engine->generate(Whisper::whisper_task_type_t::e_transcribe, true, timed, transcript_log, language, prompt);
-            std::string audio_context = audio_result.first;
-            std::string language_name = audio_result.second;
-            double duration = this->whisper_engine->audio_duration();
+            audio_context = audio_result.first;
+            language_name = audio_result.second;
+            duration = this->whisper_engine->audio_duration();
             transcript_log << std::endl;
 #else
             throw std::runtime_error("ASR models are not supported in this build");
-            std::string audio_context;
-            std::string language_name;
-            double duration = 0.0;
 #endif
+            }
 
             if (response_format == "json") {
                 response = {

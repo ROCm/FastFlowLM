@@ -12,7 +12,7 @@
 #include <vector>
 #include <memory>
 #include <functional>
-#include <curl/curl.h>
+#include <cstdio>
 #include "nlohmann/json.hpp"
 
 namespace download_utils {

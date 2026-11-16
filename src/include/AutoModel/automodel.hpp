@@ -429,6 +429,21 @@ protected:
 	/// \return the sampled token, already reported to the constraint
 	int _sample(buffer<bf16>& logits, chat_meta_info_t& meta_info);
 
+	/// \brief _sample() for one verify row of a speculative batch
+	/// \param row the row's vocab fp32 logits
+	/// \param ahead tokens of the batch committed before this row, not yet in meta_info.generated_tokens
+	/// \param greedy take the row's plain argmax inside the masks (no penalties, no penalty window) instead of a draw
+	/// \return the token, already reported to the constraint; no logprob is recorded
+	/// \note Same constraint mask, ignore_eos / min_tokens EOS mask and fallback as _sample().
+	int _sample_row(const float* row, int vocab, chat_meta_info_t& meta_info, int ahead, bool greedy);
+
+	/// \brief The masks, draw, fallback and constraint step _sample() and _sample_row() share
+	/// \param at the logit of id i, read only by the fallback
+	/// \param draw (mask or nullptr, raw) -> the sampler's token
+	template <typename At, typename Draw>
+	int _sample_masked(std::size_t n, At at, Draw draw, chat_meta_info_t& meta_info, bool no_eos,
+	                   sample_logprobs_t* raw);
+
 	/// \brief Add a token's entry to meta_info.logprobs
 	/// \param token_logit the token's raw logit
 	/// \param raw its distribution's normaliser and top tokens; the top tokens are moved out
@@ -700,6 +715,11 @@ public:
 	virtual bool manages_prefix_cache() const {
 		return this->prefix_cache_.enabled() ||
 		       (this->backend_ && this->backend_->matches_token_prefixes());
+	}
+
+	/// \brief the model transcribes whole audio files itself (/v1/audio/transcriptions), without the Whisper sidecar
+	virtual bool supports_transcription() const {
+		return false;
 	}
 
 	/// \brief --prefix-cache-mb / --prefix-slots / --prefix-min-gain (-1 = the default, 0 slots = off); call before load_model

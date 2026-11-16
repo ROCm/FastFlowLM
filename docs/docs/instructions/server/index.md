@@ -38,9 +38,9 @@ flm serve lfm2:1.2b -e embed-gemma:300m
 flm serve lfm2:1.2b -a whisper-v3:turbo
 ```
 
-Each loaded model holds NPU hardware contexts, and the driver allows only 16 per NPU device. An LLM together with **both** Whisper and the embedding model can exceed that limit, in which case the LLM fails to load (`DRM_IOCTL_AMDXDNA_CREATE_HWCTX IOCTL failed`). If that happens, load at most one of `-a` / `-e` next to the LLM, or use separate server processes as shown below.
+Each loaded model holds NPU hardware contexts, and the driver allows only 16 per NPU device. An LLM together with **both** Whisper and the embedding model can exceed that limit, in which case the model that loads last fails (`DRM_IOCTL_AMDXDNA_CREATE_HWCTX IOCTL failed`). If that happens, load at most one of Whisper / the embedding model next to the LLM, or use separate server processes as shown below. Leaving out `-e` does not keep the embedding model off the NPU: a `/v1/embeddings` request loads the embedding model it names whether or not `-e` was given.
 
-`-a` / `-e` take a model tag; `-a 1` / `-e 1` still select the default ASR (`whisper-v3:turbo`) / embedding (`embed-gemma:300m`) model.
+`-a` / `-e` take a model tag; `-a 1` / `-e 1` still select the default ASR (`whisper-v3:turbo`) / embedding (`embed-gemma:300m`) model. `-e` only preloads the embedding model at startup.
 
 ### Run model types in separate server processes (different ports)
 
