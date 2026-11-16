@@ -466,7 +466,7 @@ std::string Qwen3_6_MOE::generate(chat_meta_info_t& meta_info, int length_limit,
     }
 
     std::cout << std::endl;
-    header_print("FLM", "Model RAW Output: \n" + result);
+    this->print_raw_output(result);
 
     return result;
 }

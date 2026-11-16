@@ -201,7 +201,7 @@ std::string Gemma4e::_speculative_loop(Engine* engine, chat_meta_info_t& meta_in
         header_print("WARNING", "Max length reached, stopping generation...");
     }
     std::cout << std::endl;
-    header_print("FLM", "Model RAW Output: \n" + result);
+    this->print_raw_output(result);
     if (spec_enabled && engine->speculation_cycles() > 0) {
         header_print("FLM", engine->speculation_stats());
     }
