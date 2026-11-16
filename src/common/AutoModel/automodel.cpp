@@ -376,6 +376,8 @@ void AutoModel::_shared_load_backend(std::string model_path, json model_info,
         context.context_length = static_cast<std::uint32_t>(context_length);
         context.enable_preemption = this->enable_preemption;
         context.tokenizer_config = tokenizer_config;
+        context.prefix_slots = this->prefix_slots_arg_;
+        context.prefix_cache_mb = this->prefix_cache_mb_arg_;
 
         this->backend_ = registry.create(family, id, provider, context);
         if (initialize_host_frontend && !this->backend_->supports_state()) {
@@ -658,8 +660,9 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
     buffer<bf16> y;
 
     const std::uint64_t replayed_before = this->backend_ ? this->backend_->replayed_tokens() : 0;
+    const std::uint64_t reused_before = this->backend_ ? this->backend_->reused_tokens() : 0;
     auto prefill_start_time = this->profiler_list[PREFILL_TIME].start();
-    
+
     y = _chunked_insert(meta_info, tokens, is_cancelled, payload, first_len_run);
 
     auto prefill_end_time = this->profiler_list[PREFILL_TIME].stop(tokens.size());
@@ -667,9 +670,12 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
     // `tokens` was trimmed to the uncached suffix above, so add the prefix served
     // from the KV cache back on: usage.prompt_tokens is the whole prompt, and the
     // cached part is reported separately rather than subtracted. What the engine
-    // had to run again of that prefix did not come from its cache.
+    // had to run again of that prefix did not come from its cache; what it found
+    // already run of the rest (another conversation's state) did.
     const std::uint64_t replayed = this->backend_ ? this->backend_->replayed_tokens() - replayed_before : 0;
-    meta_info.cached_prompt_tokens = static_cast<int>(skip_count - std::min<std::uint64_t>(skip_count, replayed));
+    const std::uint64_t reused = this->backend_ ? this->backend_->reused_tokens() - reused_before : 0;
+    meta_info.cached_prompt_tokens = static_cast<int>(skip_count - std::min<std::uint64_t>(skip_count, replayed) +
+                                                      std::min<std::uint64_t>(reused, tokens.size()));
     meta_info.prompt_tokens = static_cast<int>(skip_count + tokens.size());
 
     if (meta_info.stop_reason == CANCEL_DETECTED || meta_info.stop_reason == ERROR_DETECTED) {
@@ -739,6 +745,9 @@ buffer<bf16> AutoModel::_chunked_insert(chat_meta_info_t& meta_info, std::vector
             ? this->lm_engine->get_current_context_length() % max_prefill_len
             : 0;
         int chunks = (lead + static_cast<int>(tokens.size()) + max_prefill_len - 1) / max_prefill_len;
+        if (chunks > 1 && this->backend_) {
+            this->backend_->expect_prefill(tokens);
+        }
         for (int i = 0; i < chunks; i++) {
             int start = std::max(0, i * max_prefill_len - lead);
             int end = std::min(static_cast<int>(tokens.size()), (i + 1) * max_prefill_len - lead);

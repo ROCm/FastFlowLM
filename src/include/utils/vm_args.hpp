@@ -114,9 +114,11 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
             ("prefill-chunk-len,pcl", po::value<int>(&parsed_args.prefill_chunk_len)->default_value(-1),
              "Set prefill chunk length")
             ("prefix-cache-mb", po::value<int>(&parsed_args.prefix_cache_mb)->default_value(-1),
-             "Host memory in MiB for saved prompt snapshots (prefix cache), -1: default 4096 (Qwen3.5 and Qwen3.6-MoE)")
+             "Host memory in MiB for saved prompt snapshots (prefix cache), -1: default 4096 (Qwen3.5 and Qwen3.6-MoE). "
+             "-oga-hipep models: memory for the conversations kept beyond the first, -1: default 4096")
             ("prefix-slots", po::value<int>(&parsed_args.prefix_slots)->default_value(-1),
-             "How many prompt snapshots to keep (prefix cache), -1: default 8, at most 32, 0: off (Qwen3.5 and Qwen3.6-MoE)")
+             "How many prompt snapshots to keep (prefix cache), -1: default 8, at most 32, 0: off (Qwen3.5 and Qwen3.6-MoE). "
+             "-oga-hipep models: how many conversations to keep on the GPU, -1: default 4, at most 32, 0: one")
             ("max-raw-frames", po::value<int>(&parsed_args.max_raw_frames)->default_value(128),
              "Most raw RGB8 frames (image_raw, MiniCPM-V only) one request may carry (for serve command)")
             ("allow-raw-path", po::value<std::string>(&parsed_args.raw_path_dir)->default_value(""),
