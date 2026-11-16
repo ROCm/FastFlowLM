@@ -6,6 +6,7 @@
 /// \note This is a source file for the Gemma4_12B class (text-only interface).
 
 #include "AutoModel/modeling_gemma4_12b.hpp"
+#include "AutoModel/gemma4_12b_thought.hpp"
 #include "chat/chat_gemma4_tools.hpp"
 #include "metrices.hpp"
 #include "error_measure.hpp"
@@ -93,6 +94,7 @@ std::string Gemma4_12B::apply_chat_template(nlohmann::ordered_json& messages, nl
 }
 
 bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
+    this->feed_empty_thought_ = false;
     this->profiler_list[TKOEN_ENCODE_TIME].start();
     std::string templated_text;
 
@@ -369,13 +371,18 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
     int restore_idx = -1;
 
     // Prefix slots, text-only prompts. A prompt that carries pictures or audio, or a text turn whose history still holds their
-    // soft tokens (the payload is gone by then), takes the in-place path below. With thinking off the last 4 tokens of the prompt
-    // (the empty thought channel) are fed by generate(); the next turn does not render them.
+    // soft tokens (the payload is gone by then), takes the in-place path below. With thinking off, generate() feeds the
+    // empty thought channel. insert() removes it only when the prompt already ends with it. A tool-result turn does not,
+    // and dropping its last four tokens would cut the tool response. generate() still opens the channel after that turn.
     const bool modal_tokens = std::any_of(tokens.begin(), tokens.end(), [this](int t) {
         return t == image_token_id || t == audio_token_id || t == boi_token_id || t == boa_token_id;
     });
-    // A continued message keeps all its tokens: they are the client's text, not the generation prompt.
-    const size_t slot_trim = (this->enable_think || meta_info.continue_final_message) ? 0 : 4;
+    static_assert(boc_token_id == flm::kGemma4ChannelBegin);
+    static_assert(eoc_token_id == flm::kGemma4ChannelEnd);
+    static_assert(thought_token_id == flm::kGemma4ThoughtToken);
+    static_assert(new_line_token_id == flm::kGemma4NewlineToken);
+    this->feed_empty_thought_ = flm::gemma4_feed_empty_thought(this->enable_think, meta_info.continue_final_message);
+    const size_t slot_trim = flm::gemma4_empty_thought_trim(this->enable_think, meta_info.continue_final_message, tokens);
     if (image_payload.num_images == 0 && audio_payload.num_audios == 0 && !modal_tokens &&
         this->_prefix_slot_mode(meta_info, tokens.size(), slot_trim)) {
         checkpoint_his.clear();
@@ -488,8 +495,11 @@ std::string Gemma4_12B::generate(chat_meta_info_t& meta_info, int length_limit, 
     std::string token_str;
     int sampled_token;
     int last_sampled_token;
-    // A continued message has no empty thought channel to feed: it starts from insert()'s sample
-    if(!enable_think && !meta_info.continue_final_message) {
+    // A continued message has no empty thought channel to feed: it starts from insert()'s sample.
+    // feed_empty_thought_ is what insert() decided, including a tool-result turn whose prompt
+    // did not itself end with the channel.
+    if (this->feed_empty_thought_) {
+        this->feed_empty_thought_ = false;
         // The four forwards below write rows total_tokens..total_tokens+3, so the
         // prompt has to leave room for them: past the engine's KV window they
         // corrupt it for every later request.

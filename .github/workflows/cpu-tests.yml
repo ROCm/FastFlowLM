@@ -143,6 +143,21 @@ jobs:
           cmake --build build-ignore-eos -j"$(nproc)"
           ctest --test-dir build-ignore-eos --output-on-failure
 
+  # empty thought channel (src/include/AutoModel/gemma4_12b_thought.hpp): Gemma4 12B drops the last four
+  # tokens only when the prompt ends with the empty thought channel. Header only, CPU only, no NPU.
+  gemma4-empty-thought:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and run the empty thought channel test
+        run: |
+          cmake -S src/test/gemma4_12b_thought -B build-gemma4-12b-thought -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-gemma4-12b-thought -j"$(nproc)"
+          ctest --test-dir build-gemma4-12b-thought --output-on-failure
+
   # plan_prompt_reuse (src/include/prompt_reuse.hpp): how much of a prompt the engine keeps and which images /
   # audio clips a model drops from its payload, the one rule every vision model and _shared_insert share. CPU only.
   prompt-reuse:
