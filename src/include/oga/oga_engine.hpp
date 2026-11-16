@@ -63,8 +63,18 @@ public:
     std::uint64_t replayed_tokens() const noexcept { return replayed_; }
 
     buffer<bf16> forward(int id) override;
+    /// \brief Run the package processor on `prompt` and the encoded image bytes,
+    ///        and hold the inputs until the next prefill().
+    /// \note Gemma 4 has no vision-start token, so the patch-grid path does not
+    ///       apply. `prompt` has one image placeholder per image. The next
+    ///       prefill() must be given exactly the token ids this returns, as one
+    ///       sequence: the processor already ran all of them.
+    /// \return the expanded input ids, including each image's soft tokens
+    std::vector<int> StagePromptImages(const std::string& prompt,
+                                       const std::vector<std::string>& encoded_images);
     /// \param payload an OgaVisionInput with the images of the runs of image
-    ///        tokens in `ids`, or null when it has none
+    ///        tokens in `ids`, or null when it has none. A staged image prompt
+    ///        ignores this and consumes the processor inputs instead.
     buffer<bf16> prefill(std::vector<int>& ids, void* payload = nullptr) override;
     void set_context_length(int length) override;
     void load_weights(Q4NX&) override;
@@ -97,6 +107,14 @@ private:
         std::shared_ptr<const OgaImage> image;
         /// \brief a hash of the image's grid and pixels, which the run's tokens do not tell
         std::uint64_t hash = 0;
+    };
+
+    /// \brief processor inputs waiting for the next prefill of `ids`
+    /// \note clear_context() does not drop this. A new image prompt diverges
+    ///       from the text history, and that clear happens before prefill.
+    struct StagedPrompt {
+        OgaApi::Owned<OgaNamedTensors> inputs;
+        std::vector<int> ids;
     };
 
     /// \brief `logical` and its images, as checkpoint() left them
@@ -157,6 +175,9 @@ private:
     std::optional<Saved> saved_;
     // The generator is destroyed before the model it reads.
     OgaApi::Owned<OgaModel> model_;
+    /// \brief set by StagePromptImages; prefill() takes it. Not cleared with the conversation.
+    /// \note Declared after the model so processor inputs are released first.
+    std::unique_ptr<StagedPrompt> staged_prompt_;
     std::optional<Live> live_;
 };
 

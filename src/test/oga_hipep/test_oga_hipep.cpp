@@ -45,6 +45,10 @@ struct OgaGenerator {
     /// \brief the length of the last OgaGenerator_SnapshotState
     std::optional<std::size_t> snapshot;
 };
+struct OgaImages {
+    std::size_t count = 0;
+};
+struct OgaMultiModalProcessor {};
 struct OgaTensor {
     OgaElementType type = OgaElementType_float32;
     std::vector<std::int64_t> shape;
@@ -99,6 +103,17 @@ struct FakeOga {
     std::string device = "AMDGPU";
     /// \brief each OgaRegisterExecutionProviderLibrary call, as name and path
     std::vector<std::pair<std::string, std::string>> registrations;
+    /// \brief each OgaConfigSetProviderOption call
+    struct ProviderOption {
+        std::string provider;
+        std::string key;
+        std::string value;
+    };
+    std::vector<ProviderOption> provider_options;
+    /// \brief prompts handed to OgaProcessorProcessImages
+    std::vector<std::string> processed_prompts;
+    /// \brief image counts handed to OgaLoadImagesFromBuffers
+    std::vector<std::size_t> loaded_images;
     std::optional<std::string> fail_registration;
 };
 
@@ -139,6 +154,11 @@ OgaResult* OGA_API_CALL FakeConfigClearProviders(OgaConfig*) {
 }
 OgaResult* OGA_API_CALL FakeConfigAppendProvider(OgaConfig*, const char* provider) {
     g_fake.providers.emplace_back(provider);
+    return nullptr;
+}
+OgaResult* OGA_API_CALL FakeConfigSetProviderOption(OgaConfig*, const char* provider, const char* key,
+                                                    const char* value) {
+    g_fake.provider_options.push_back({provider, key, value});
     return nullptr;
 }
 OgaResult* OGA_API_CALL FakeConfigOverlay(OgaConfig*, const char* json) {
@@ -340,6 +360,42 @@ OgaResult* OGA_API_CALL FakeRewindTo(OgaGenerator* generator, size_t length) {
     return nullptr;
 }
 
+OgaResult* OGA_API_CALL FakeLoadImages(const void**, const size_t*, size_t count, OgaImages** out) {
+    g_fake.loaded_images.push_back(count);
+    *out = new OgaImages{count};
+    return nullptr;
+}
+void OGA_API_CALL FakeDestroyImages(OgaImages* images) { delete images; }
+OgaResult* OGA_API_CALL FakeCreateProcessor(const OgaModel*, OgaMultiModalProcessor** out) {
+    *out = new OgaMultiModalProcessor;
+    return nullptr;
+}
+void OGA_API_CALL FakeDestroyProcessor(OgaMultiModalProcessor* processor) { delete processor; }
+OgaResult* OGA_API_CALL FakeProcessImages(const OgaMultiModalProcessor*, const char* prompt, const OgaImages*,
+                                          OgaNamedTensors** out) {
+    g_fake.processed_prompts.emplace_back(prompt);
+    auto* named = new OgaNamedTensors;
+    OgaTensor ids;
+    ids.type = OgaElementType_int32;
+    ids.shape = {1, 3};
+    const std::int32_t tokens[] = {7, 8, 9};
+    ids.data.resize(sizeof(tokens));
+    std::memcpy(ids.data.data(), tokens, sizeof(tokens));
+    named->tensors.emplace("input_ids", std::move(ids));
+    OgaTensor pixels;
+    pixels.type = OgaElementType_float16;
+    pixels.shape = {1, 0, 0};
+    named->tensors.emplace("pixel_values", std::move(pixels));
+    *out = named;
+    return nullptr;
+}
+OgaResult* OGA_API_CALL FakeNamedTensorsGet(OgaNamedTensors* named, const char* name, OgaTensor** out) {
+    const auto it = named->tensors.find(name);
+    if (it == named->tensors.end()) return Error(std::string("no ") + name);
+    *out = &it->second;
+    return nullptr;
+}
+
 std::map<std::string, void*> FakeSymbols() {
     return {
         {"OgaResultGetError", reinterpret_cast<void*>(&FakeResultGetError)},
@@ -349,6 +405,7 @@ std::map<std::string, void*> FakeSymbols() {
         {"OgaCreateConfig", reinterpret_cast<void*>(&FakeCreateConfig)},
         {"OgaConfigClearProviders", reinterpret_cast<void*>(&FakeConfigClearProviders)},
         {"OgaConfigAppendProvider", reinterpret_cast<void*>(&FakeConfigAppendProvider)},
+        {"OgaConfigSetProviderOption", reinterpret_cast<void*>(&FakeConfigSetProviderOption)},
         {"OgaConfigOverlay", reinterpret_cast<void*>(&FakeConfigOverlay)},
         {"OgaDestroyConfig", reinterpret_cast<void*>(&FakeDestroyConfig)},
         {"OgaCreateModelFromConfig", reinterpret_cast<void*>(&FakeCreateModelFromConfig)},
@@ -373,6 +430,12 @@ std::map<std::string, void*> FakeSymbols() {
         {"OgaGenerator_SetInputs", reinterpret_cast<void*>(&FakeSetInputs)},
         {"OgaGenerator_SnapshotState", reinterpret_cast<void*>(&FakeSnapshotState)},
         {"OgaGenerator_RewindTo", reinterpret_cast<void*>(&FakeRewindTo)},
+        {"OgaLoadImagesFromBuffers", reinterpret_cast<void*>(&FakeLoadImages)},
+        {"OgaDestroyImages", reinterpret_cast<void*>(&FakeDestroyImages)},
+        {"OgaCreateMultiModalProcessor", reinterpret_cast<void*>(&FakeCreateProcessor)},
+        {"OgaDestroyMultiModalProcessor", reinterpret_cast<void*>(&FakeDestroyProcessor)},
+        {"OgaProcessorProcessImages", reinterpret_cast<void*>(&FakeProcessImages)},
+        {"OgaNamedTensorsGet", reinterpret_cast<void*>(&FakeNamedTensorsGet)},
     };
 }
 
@@ -1178,6 +1241,34 @@ void TestOpenModelPutsTheDecoderOnTheRegisteredEpAlone() {
     TEST_REQUIRE(g_fake.providers == (std::vector<std::string>{"AMDGPUExecutionProvider"}));
     TEST_REQUIRE(g_fake.overlays.size() == 1);
     RequireContains(g_fake.overlays[0], R"("decoder":{"session_options":{"session.disable_cpu_ep_fallback":"1"}})");
+}
+
+void TestAStagedImagePromptIsTheNextPrefill() {
+    auto engine = MakeEngine();
+    const std::vector<std::string> images{"PNG_FAKE", "JPEGFAKE"};
+    const auto ids = engine->StagePromptImages("see <image> and <image>", images);
+    TEST_REQUIRE(ids == (std::vector<int>{7, 8, 9}));
+    TEST_REQUIRE(g_fake.loaded_images == (std::vector<std::size_t>{2}));
+    TEST_REQUIRE(g_fake.processed_prompts.size() == 1);
+    TEST_REQUIRE(g_fake.processed_prompts[0] == "see <image> and <image>");
+    // Clearing the text history must keep the staged processor inputs.
+    engine->clear_context();
+    std::vector<int> prompt = ids;
+    engine->prefill(prompt);
+    TEST_REQUIRE(g_fake.set_inputs.size() == 1);
+    TEST_REQUIRE(g_fake.set_inputs[0].ids == (std::vector<std::int32_t>{7, 8, 9}));
+    TEST_REQUIRE(g_fake.appends.empty());
+    TEST_REQUIRE(g_fake.generators_created == 1);
+}
+
+void TestStagingImagesNamesAMissingProcessorEntry() {
+    auto symbols = FakeSymbols();
+    symbols.erase("OgaProcessorProcessImages");
+    auto engine = MakeEngineOn({0, 17, 0, 0}, std::move(symbols));
+    RequireContains(RequireThrows<std::runtime_error>([&] {
+                        engine->StagePromptImages("see <image>", {"PNG_FAKE"});
+                    }),
+                    "missing OgaProcessorProcessImages");
 }
 
 void TestOpenModelRejectsAModelOnAnotherDevice() {
@@ -2122,6 +2213,54 @@ void TestTheBackendRunsThePackagesImages() {
     TEST_REQUIRE(backend->replayed_tokens() == 0);
 }
 
+void TestGemma4UnifiedSharesThePresentBufferAndSkipsGraphCapture() {
+    g_fake = FakeOga{};
+    const auto api = FakeApi();
+    PackageDir package(kVocab, "<|im_end|>",
+                       R"(,"image_token_id":40,"vision":{"filename":"vision_encoder/model.onnx"})",
+                       "gemma4_unified");
+    TEST_REQUIRE(flm::oga::OpenModel(*api, package.dir.path) != nullptr);
+    TEST_REQUIRE(g_fake.overlays.size() == 2);
+    RequireContains(g_fake.overlays[1], R"("past_present_share_buffer":true)");
+    RequireContains(g_fake.overlays[1], R"("enable_graph_capture":"0")");
+    RequireContains(g_fake.overlays[1], R"("hip_graph_enable":"0")");
+    TEST_REQUIRE(g_fake.provider_options.size() == 6);
+    for (const char* key : {"profile", "enable_graph_capture", "hip_graph_enable"}) {
+        const auto matches = std::count_if(g_fake.provider_options.begin(), g_fake.provider_options.end(),
+                                            [&](const FakeOga::ProviderOption& option) {
+                                                return option.key == key;
+                                            });
+        TEST_REQUIRE(matches == 2);
+    }
+}
+
+void TestAnotherModelTypeDoesNotShareThePresentBuffer() {
+    g_fake = FakeOga{};
+    const auto api = FakeApi();
+    PackageDir package;
+    TEST_REQUIRE(flm::oga::OpenModel(*api, package.dir.path) != nullptr);
+    TEST_REQUIRE(g_fake.overlays.size() == 1);
+    TEST_REQUIRE(g_fake.provider_options.empty());
+}
+
+void TestTheGemma4UnifiedPackageStillRunsTextWithoutAVisionStartToken() {
+    g_fake = FakeOga{};
+    auto api = flm::oga::OgaApi::GetOrCreateWith([] { return FakeApi(); });
+    PackageDir package(kVocab, "<|im_end|>",
+                       R"(,"image_token_id":40,"vision":{"filename":"vision_encoder/model.onnx"})",
+                       "gemma4_unified");
+    auto backend = flm::oga::hipep_factory()(package.Context(64));
+    RequireContains(g_fake.overlays[1], R"("past_present_share_buffer":true)");
+    std::vector<int> text{1, 2};
+    backend->engine().prefill(text);
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{1, 2}));
+    const auto image = Image(2, 2);
+    flm::oga::OgaVisionInput vision{{image}};
+    std::vector<int> prompt = WithImage({1}, image, {2});
+    RequireContains(RequireThrows<std::invalid_argument>([&] { backend->engine().prefill(prompt, &vision); }),
+                    "does not run a vision payload");
+}
+
 void TestTheBackendRunsTheTextOfAnotherTypesVisionPackage() {
     g_fake = FakeOga{};
     auto api = flm::oga::OgaApi::GetOrCreateWith([] { return FakeApi(); });
@@ -2262,6 +2401,11 @@ int main(int argc, char** argv) {
     RUN(TestARefusedRegistrationNamesTheLibrary);
     RUN(TestANonAsciiLibraryPathIsRefusedBeforeOgaSeesIt);
     RUN(TestOpenModelPutsTheDecoderOnTheRegisteredEpAlone);
+    RUN(TestGemma4UnifiedSharesThePresentBufferAndSkipsGraphCapture);
+    RUN(TestAnotherModelTypeDoesNotShareThePresentBuffer);
+    RUN(TestAStagedImagePromptIsTheNextPrefill);
+    RUN(TestStagingImagesNamesAMissingProcessorEntry);
+    RUN(TestTheGemma4UnifiedPackageStillRunsTextWithoutAVisionStartToken);
     RUN(TestOpenModelRejectsAModelOnAnotherDevice);
     RUN(TestDiscoveryReportsWhyEachRootIsRejected);
     RUN(TestDiscoveryAcceptsAVersionedPackageWithoutABinDirectory);
