@@ -731,7 +731,7 @@ std::string Qwen3_8MTP::_speculative_generate(chat_meta_info_t& meta_info, int l
     }
     if (this->log_raw_output) {
         std::cout << std::endl;
-        header_print("FLM", "Model RAW Output: \n" + result);
+        this->print_raw_output(result);
     }
     return result;
 }

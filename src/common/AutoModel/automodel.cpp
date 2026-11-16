@@ -1146,9 +1146,14 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
     }
     if (this->log_raw_output) {
         std::cout << std::endl;
-        header_print("FLM", "Model RAW Output: \n" + result);
+        this->print_raw_output(result);
     }
     return result;
+}
+
+void AutoModel::print_raw_output(const std::string& result) const {
+    if (!this->log_raw_output) return;
+    header_print("FLM", "Model RAW Output: \n" + result);
 }
 
 /// \brief Clear the context

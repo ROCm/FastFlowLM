@@ -302,7 +302,7 @@ std::string LFM2_5_TK::generate(chat_meta_info_t& meta_info, int length_limit, s
         token_history.pop_back();
     }
     std::cout << std::endl;
-    header_print("FLM", "Model RAW Output: \n" + result);
+    this->print_raw_output(result);
     return result;
 }
 

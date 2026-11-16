@@ -75,6 +75,11 @@ flm pull llama3.2:3b --force
 
 > ⚠️ Use `--force` **only if the model file is corrupted** (e.g., incomplete download). Proceed with caution.
 
+> 🔒 Downloads verify the server's TLS certificate. On Windows the system certificate store is used, so behind a corporate proxy that
+> inspects HTTPS, install the proxy's root certificate in Windows and downloads work as usual. If that is not possible,
+> `FLM_INSECURE_DOWNLOAD=1` turns verification off (insecure: anyone on the network path can see and alter the traffic;
+> model files are still checked against their SHA-256 hashes). A Hugging Face token is never sent without verification.
+
 > 📦 Some tags are built on another one: `nemotron3.5-bolt-dflash:e4b` adds a small draft package to the `nemotron3.5-bolt:e4b` weights.
 > `flm pull` downloads the base package first (from the same source, `--modelscope` included), `flm list` marks such a tag
 > "(requires ...)", and it is ready only when both packages are.
