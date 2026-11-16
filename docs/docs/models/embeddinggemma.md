@@ -33,10 +33,13 @@ As a standalone embedding server (no LLM):
 flm serve embed-gemma:300m
 ```
 
-`--embed` / `-e` take an embedding model tag (see `flm list`); `1` selects the default (embed-gemma:300m) and `0` turns it off. An unknown tag, or the tag of a different kind of model, stops flm with an error.
+`--embed` / `-e` preload an embedding model at startup: pass an embedding model tag (see `flm list`), or `1` for the default (embed-gemma:300m); `0`, the default, preloads none. An unknown tag, or the tag of a different kind of model, stops flm with an error.
 
 Send text to `POST /v1/embeddings` via an OpenAI client or Open WebUI. Set
-`model` to `embed-gemma:300m`; the server downloads and loads it when needed.
+`model` to `embed-gemma:300m`. Whatever `-e` says, the server downloads (if
+needed) and loads the embedding model a request names, then keeps it loaded; a
+request naming a different embedding model replaces it. A `model` that is
+unknown or not an embedding model returns HTTP 400.
 
 ### Request options
 
@@ -47,13 +50,13 @@ per string. Each vector has 768 dimensions; omit `dimensions` or set it to `768`
 
 | Task | Prompt prefix |
 |---|---|
-| Default, `query` | `task: search result \| query: ` |
-| `document` | `title: <title> \| text: ` (`none` when omitted) |
-| `clustering` | `task: clustering \| query: ` |
-| `classification` | `task: classification \| query: ` |
-| `code_retrieval` | `task: code retrieval \| query: ` |
-| `sentence_similarity` | `task: sentence similarity \| query: ` |
-| `summarization` | `task: summarization \| query: ` |
+| Default, `query` | <code>task: search result &#124; query: </code> |
+| `document` | <code>title: &lt;title&gt; &#124; text: </code> (`none` when omitted) |
+| `clustering` | <code>task: clustering &#124; query: </code> |
+| `classification` | <code>task: classification &#124; query: </code> |
+| `code_retrieval` | <code>task: code retrieval &#124; query: </code> |
+| `sentence_similarity` | <code>task: sentence similarity &#124; query: </code> |
+| `summarization` | <code>task: summarization &#124; query: </code> |
 
 The optional `title` string is available with `task: "document"`:
 
