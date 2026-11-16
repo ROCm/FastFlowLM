@@ -72,6 +72,10 @@ public:
     /// \return the expanded input ids, including each image's soft tokens
     std::vector<int> StagePromptImages(const std::string& prompt,
                                        const std::vector<std::string>& encoded_images);
+    /// \brief Forget a staged image prompt that no prefill() took.
+    /// \note A request that stops before its prefill (cancelled, refused) calls
+    ///       this, or the next request's prefill() would be checked against it.
+    void DropStagedPrompt() noexcept;
     /// \param payload an OgaVisionInput with the images of the runs of image
     ///        tokens in `ids`, or null when it has none. A staged image prompt
     ///        ignores this and consumes the processor inputs instead.
@@ -175,7 +179,7 @@ private:
     std::optional<Saved> saved_;
     // The generator is destroyed before the model it reads.
     OgaApi::Owned<OgaModel> model_;
-    /// \brief set by StagePromptImages; prefill() takes it. Not cleared with the conversation.
+    /// \brief set by StagePromptImages; prefill() or DropStagedPrompt() takes it. Not cleared with the conversation.
     /// \note Declared after the model so processor inputs are released first.
     std::unique_ptr<StagedPrompt> staged_prompt_;
     std::optional<Live> live_;

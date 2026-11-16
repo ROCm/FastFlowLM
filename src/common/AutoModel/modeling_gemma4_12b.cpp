@@ -394,7 +394,10 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
             throw std::runtime_error("oga-hipep engine is not an OgaEngine");
         std::vector<int> image_tokens = engine->StagePromptImages(templated_text, oga_image_bytes);
         this->profiler_list[TKOEN_ENCODE_TIME].stop(image_tokens.size());
-        // The processor already ran the whole prompt, so this prefill must not be chunked.
+        // The processor already ran the whole prompt, so this prefill must not be chunked,
+        // nor start after a cached prefix: the staged inputs are prefilled from token 0.
+        if (!this->token_history.empty())
+            this->clear_context();
         const int saved_prefill = meta_info.max_prefill_len;
         meta_info.max_prefill_len = 0;
         bool success = false;
@@ -402,9 +405,13 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
             success = this->_shared_insert(meta_info, image_tokens, is_cancelled, nullptr);
         } catch (...) {
             meta_info.max_prefill_len = saved_prefill;
+            engine->DropStagedPrompt();
             throw;
         }
         meta_info.max_prefill_len = saved_prefill;
+        // A request that stopped before its prefill (cancelled, or refused for its
+        // length) must not leave its stage to the next request.
+        engine->DropStagedPrompt();
         this->_checkpoint_history();
         this->lm_engine->checkpoint();
         return success;

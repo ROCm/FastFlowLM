@@ -2614,6 +2614,7 @@
                         "revision": "43c9d014b231474fa7212dbb48a762566c2b255d"
                     }
                 },
+                "model_info_key": "gemma4-it-oga-hipep:12b",
                 "label": [
                     "text",
                     "image",

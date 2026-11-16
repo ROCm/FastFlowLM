@@ -145,9 +145,10 @@ buffer<bf16> OgaEngine::forward(int id) { return Run({id}); }
 
 buffer<bf16> OgaEngine::prefill(std::vector<int>& ids, void* payload) {
     if (staged_prompt_) {
+        // Taken first, so a refused prefill does not leave the stage to the next one.
+        std::unique_ptr<StagedPrompt> staged = std::move(staged_prompt_);
         if (payload)
             throw std::invalid_argument(display_name_ + " staged image prompt takes no vision payload");
-        std::unique_ptr<StagedPrompt> staged = std::move(staged_prompt_);
         if (ids != staged->ids)
             throw std::runtime_error(display_name_ +
                                      " image prompt must be prefilled as the processor's whole sequence");
@@ -534,8 +535,11 @@ buffer<bf16> OgaEngine::Logits(OgaGenerator* generator) const {
     return out;
 }
 
+void OgaEngine::DropStagedPrompt() noexcept { staged_prompt_.reset(); }
+
 std::vector<int> OgaEngine::StagePromptImages(const std::string& prompt,
                                               const std::vector<std::string>& encoded_images) {
+    staged_prompt_.reset();
     if (encoded_images.empty())
         throw std::invalid_argument(display_name_ + " image prompt has no images");
     if (prompt.empty())

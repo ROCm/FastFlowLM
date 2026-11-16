@@ -1261,6 +1261,27 @@ void TestAStagedImagePromptIsTheNextPrefill() {
     TEST_REQUIRE(g_fake.generators_created == 1);
 }
 
+void TestADroppedOrRefusedStageDoesNotReachTheNextPrefill() {
+    auto engine = MakeEngine();
+    // A request that stopped before its prefill drops its stage: the next text prompt runs as text.
+    engine->StagePromptImages("see <image>", {"PNG_FAKE"});
+    engine->DropStagedPrompt();
+    std::vector<int> text{1, 2};
+    engine->prefill(text);
+    TEST_REQUIRE(g_fake.set_inputs.empty());
+    TEST_REQUIRE(g_fake.appends == (std::vector<Tokens>{{1, 2}}));
+
+    // A prefill that does not match the stage is refused, and takes the stage with it.
+    engine->clear_context();
+    engine->StagePromptImages("see <image>", {"PNG_FAKE"});
+    std::vector<int> suffix{8, 9};
+    RequireContains(RequireThrows<std::runtime_error>([&] { engine->prefill(suffix); }),
+                    "whole sequence");
+    std::vector<int> again{1, 2};
+    engine->prefill(again);
+    TEST_REQUIRE(g_fake.set_inputs.empty());
+}
+
 void TestStagingImagesNamesAMissingProcessorEntry() {
     auto symbols = FakeSymbols();
     symbols.erase("OgaProcessorProcessImages");
@@ -2404,6 +2425,7 @@ int main(int argc, char** argv) {
     RUN(TestGemma4UnifiedSharesThePresentBufferAndSkipsGraphCapture);
     RUN(TestAnotherModelTypeDoesNotShareThePresentBuffer);
     RUN(TestAStagedImagePromptIsTheNextPrefill);
+    RUN(TestADroppedOrRefusedStageDoesNotReachTheNextPrefill);
     RUN(TestStagingImagesNamesAMissingProcessorEntry);
     RUN(TestTheGemma4UnifiedPackageStillRunsTextWithoutAVisionStartToken);
     RUN(TestOpenModelRejectsAModelOnAnotherDevice);
