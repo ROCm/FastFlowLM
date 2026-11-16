@@ -795,6 +795,11 @@ int Sampler::sample(buffer<bf16>&, const std::vector<uint32_t>*, sample_logprobs
     if (g_sample_index < g_samples.size()) return g_samples[g_sample_index++];
     return 7;
 }
+int Sampler::sample(const float*, const std::vector<uint32_t>*, sample_logprobs_t*) {
+    if (g_sample_index < g_samples.size()) return g_samples[g_sample_index++];
+    return 7;
+}
+int Sampler::argmax(const float*, int, const std::vector<uint32_t>*) { return 7; }
 
 SafeTensors::~SafeTensors() = default;
 
