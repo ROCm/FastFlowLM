@@ -78,8 +78,16 @@ static int Register(const flm_model_extension_registrar_v1 *registrar,
     (void)error;
     if (registrar->struct_size < FLM_MODEL_EXTENSION_REGISTRAR_V1_EMBEDDING_SIZE)
         return FLM_MODEL_EXTENSION_STATUS_UNSUPPORTED;
+#ifdef FLM_TEST_COMPETING_EMBEDDINGS
+    int status = registrar->register_embedding_provider(
+        registrar->host_context, "embed-gemma", "test-embedding", Create, NULL);
+    if (status != 0) return status;
+    return registrar->register_embedding_provider(
+        registrar->host_context, "embed-gemma", "alternative-embedding", Create, NULL);
+#else
     return registrar->register_embedding_provider(
         registrar->host_context, "test-embedding", "test-embedding", Create, NULL);
+#endif
 }
 static const flm_model_extension_v1 extension = {sizeof(flm_model_extension_v1),
                                                  FLM_MODEL_EXTENSION_ABI_V1,

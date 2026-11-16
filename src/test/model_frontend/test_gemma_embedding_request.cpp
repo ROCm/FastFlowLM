@@ -35,7 +35,7 @@ void AutoEmbeddingModel::_shared_load_model(std::string, json, bool) {
 void test_gemma_embedding_request() {
     const json info = {{"model_kind", "embedding"}, {"details", {{"family", "embed-gemma"}}}};
 #ifdef FASTFLOWLM_LINUX_LIMITED_MODELS
-    RequireContains(RequireThrows([&] { get_auto_embedding_model(info, nullptr); }), "built-in");
+    RequireContains(RequireThrows([&] { get_auto_embedding_model(info, nullptr); }), "no frontend");
 #else
     auto builtin = get_auto_embedding_model(info, nullptr);
     TEST_REQUIRE(dynamic_cast<Gemma_Embedding*>(builtin.get()));

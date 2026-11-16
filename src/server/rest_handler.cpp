@@ -800,7 +800,7 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag,
         }
         auto_chat_engine.reset();
         prompt_cache.reset();
-        auto engine = flm::frontend::FrontendRegistry::instance().create(plan.family, device);
+        auto engine = flm::frontend::FrontendRegistry::instance().create(plan.family, device, plan.info.value("frontend_provider", ""));
         engine->set_server_mode(true);
         engine->configure_parameter("img_pre_resize", img_pre_resize);
         engine->set_prefix_limits(prefix_cache_mb, prefix_slots, prefix_min_gain);

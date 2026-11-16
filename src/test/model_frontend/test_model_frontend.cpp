@@ -1,6 +1,8 @@
 /// \file test_model_frontend.cpp
 /// \brief Hardware-free frontend registry and C loader tests
 #include "AutoModel/model_backend.hpp"
+#include "AutoModel/all_models.hpp"
+#include "AutoEmbeddingModel/all_embedding_model.hpp"
 #include "AutoEmbeddingModel/auto_embedding_model.hpp"
 #include "AutoModel/model_extension_frontend.hpp"
 #include "AutoModel/model_frontend.hpp"
@@ -160,6 +162,122 @@ void test_embedding_extension() {
     const auto incomplete = WriteManifest(directory, "incomplete-extension.json", manifest);
     registry.load_extension(incomplete.string(), {});
     RequireContains(RequireThrows([&] { registry.create_embedding("test-embedding", nullptr); }), "incomplete");
+}
+
+class MarkerEmbedding : public AutoEmbeddingModel {
+public:
+    explicit MarkerEmbedding(float value) : AutoEmbeddingModel(nullptr), value_(value) {}
+    EmbeddingResult embed(const json&, std::function<bool()>) override { return {{value_}, 0}; }
+private:
+    float value_;
+};
+
+void test_frontend_provider_selection() {
+    FrontendRegistry registry;
+    registry.register_frontend("shared", [](void*) { return MarkerFrontend(1); }, "first");
+    TEST_REQUIRE(Marker(registry.create("shared", nullptr)) == 1);
+    registry.register_frontend("shared", [](void*) { return MarkerFrontend(2); }, "second");
+    RequireContains(RequireThrows([&] { registry.create("shared", nullptr); }), "Ambiguous");
+    TEST_REQUIRE(Marker(registry.create("shared", nullptr, "first")) == 1);
+    TEST_REQUIRE(Marker(registry.create("shared", nullptr, "second")) == 2);
+    RequireThrows([&] { registry.create("shared", nullptr, "missing"); });
+    registry.register_frontend("shared", [](void*) { return MarkerFrontend(3); });
+    TEST_REQUIRE(Marker(registry.create("shared", nullptr)) == 3);
+    TEST_REQUIRE(registry.available() == std::vector<std::string>{"shared"});
+    RequireThrows([&] { registry.register_frontend("shared", [](void*) { return MarkerFrontend(4); }, "first"); });
+    RequireThrows([&] { registry.register_embedding("shared", [](void*) { return std::make_unique<MarkerEmbedding>(4); }, "first"); });
+
+    registry.register_embedding("embedding", [](void*) { return std::make_unique<MarkerEmbedding>(1); }, "first");
+    const auto marker = [&](const std::string& provider = "") {
+        return registry.create_embedding("embedding", nullptr, provider)->embed({}).values.at(0);
+    };
+    TEST_REQUIRE(marker() == 1);
+    registry.register_embedding("embedding", [](void*) { return std::make_unique<MarkerEmbedding>(2); }, "second");
+    RequireContains(RequireThrows([&] { marker(); }), "Ambiguous");
+    TEST_REQUIRE(marker("first") == 1);
+    TEST_REQUIRE(marker("second") == 2);
+    RequireThrows([&] { marker("missing"); });
+    registry.register_embedding("embedding", [](void*) { return std::make_unique<MarkerEmbedding>(3); });
+    TEST_REQUIRE(marker() == 3);
+    RequireThrows([&] { registry.create("embedding", nullptr); });
+    RequireThrows([&] { registry.create_embedding("shared", nullptr); });
+}
+
+void test_competing_extension_frontends() {
+    // Exercise the C loader, catalog validation, and production generation factory.
+    auto& registry = FrontendRegistry::instance();
+    const std::string family = "complete-plugin-test";
+    registry.register_frontend(family, [](void*) { return MarkerFrontend(1); });
+    registry.load_extension(FLM_TEST_COMPLETE_EXTENSION_PATH, {});
+    TEST_REQUIRE(Marker(registry.create(family, nullptr)) == 1);
+    TEST_REQUIRE(Marker(registry.create(family, nullptr, "plugin-provider")) == 84);
+    const auto directory = std::filesystem::path(FLM_TEST_COMPLETE_EXTENSION_PATH).parent_path();
+    auto catalog = registry.catalog_overlays().at(0).document;
+    catalog["model_path"] = "models";
+    std::string path = WriteManifest(directory, "provider-models.json", catalog).string();
+    std::string root = directory.string();
+    model_list models(path, root);
+    TEST_REQUIRE(Marker(get_auto_model("complete-plugin-model:1b", models, nullptr).second) == 84);
+    registry.unload_extensions();
+    TEST_REQUIRE(Marker(registry.create(family, nullptr)) == 1);
+    RequireThrows([&] { registry.create(family, nullptr, "plugin-provider"); });
+
+    // A provider omitted from the catalog uses the same fallback as creation.
+    auto manifest = ReadJson(FLM_TEST_COMPLETE_EXTENSION_PATH);
+    manifest["catalog"] = "implicit-provider-catalog.json";
+    const auto implicit = WriteManifest(directory, "implicit-provider-extension.json", manifest);
+    catalog.erase("model_path");
+    catalog["models"]["complete-plugin-model"]["1b"].erase("frontend_provider");
+    WriteManifest(directory, "implicit-provider-catalog.json", catalog);
+    {
+        FrontendRegistry sole;
+        sole.load_extension(implicit.string(), {});
+        TEST_REQUIRE(Marker(sole.create(family, nullptr)) == 84);
+    }
+    registry.load_extension(implicit.string(), {});
+    TEST_REQUIRE(Marker(registry.create(family, nullptr)) == 1);
+    registry.unload_extensions();
+    {
+        FrontendRegistry ambiguous;
+        ambiguous.register_frontend(family, [](void*) { return MarkerFrontend(2); }, "other");
+        RequireContains(RequireThrows([&] { ambiguous.load_extension(implicit.string(), {}); }), "Ambiguous");
+        TEST_REQUIRE(Marker(ambiguous.create(family, nullptr)) == 2);
+        TEST_REQUIRE(ambiguous.catalog_overlays().empty());
+        TEST_REQUIRE(!BackendRegistry::instance().has_provider(family, "flm", "plugin-provider"));
+    }
+}
+
+void test_competing_embedding_providers() {
+    auto& registry = FrontendRegistry::instance();
+    registry.register_embedding("test-embedding", [](void*) { return std::make_unique<MarkerEmbedding>(7); });
+    registry.load_extension(FLM_TEST_EMBEDDING_MANIFEST, {});
+    nlohmann::json info = {{"model_kind", "embedding"}, {"details", {{"family", "test-embedding"}}}};
+    TEST_REQUIRE(get_auto_embedding_model(info, nullptr)->embed({}).values == std::vector<float>{7});
+    info["frontend_provider"] = "test-embedding";
+    auto extension = get_auto_embedding_model(info, nullptr);
+    extension->load_model("/weights", {}, false);
+    TEST_REQUIRE(extension->embed({{"input", "hello"}}).values == std::vector<float>({5, 3, 0.5f}));
+    info["frontend_provider"] = "missing";
+    RequireThrows([&] { get_auto_embedding_model(info, nullptr); });
+    registry.unload_extensions();
+    info.erase("frontend_provider");
+    TEST_REQUIRE(get_auto_embedding_model(info, nullptr)->embed({}).values == std::vector<float>{7});
+    // The legacy family check classifies old catalogs, but factory selection is generic.
+    registry.register_embedding("embed-gemma", [](void*) { return std::make_unique<MarkerEmbedding>(8); });
+    registry.load_extension(FLM_TEST_COMPETING_EMBEDDING_MANIFEST, {});
+    info = {{"details", {{"family", "embed-gemma"}}}};
+    TEST_REQUIRE(is_embedding_model(info));
+    TEST_REQUIRE(get_auto_embedding_model(info, nullptr)->embed({}).values == std::vector<float>{8});
+    info["model_kind"] = "embedding";
+    for (const char* provider : {"test-embedding", "alternative-embedding"}) {
+        info["frontend_provider"] = provider;
+        auto model = get_auto_embedding_model(info, nullptr);
+        model->load_model("/weights", {}, false);
+        TEST_REQUIRE(model->embed({{"input", "hello"}}).values == std::vector<float>({5, 3, 0.5f}));
+    }
+    registry.unload_extensions();
+    info.erase("frontend_provider");
+    TEST_REQUIRE(get_auto_embedding_model(info, nullptr)->embed({}).values == std::vector<float>{8});
 }
 
 void test_register_and_create() {
@@ -401,6 +519,32 @@ void test_extensions_cannot_claim_protected_builtin_families() {
         RequireContains(message, "only drives built-in engines");
         TEST_REQUIRE(!BackendRegistry::instance().has_provider(
             "minicpm-v-4.7", "flm", "plugin-provider"));
+    }
+    // A complete alternative is safe; pairing its backend with the built-in
+    // frontend that downcasts its engine is still rejected.
+    {
+        const auto directory = std::filesystem::path(FLM_TEST_COMPLETE_EXTENSION_PATH).parent_path();
+        auto manifest = ReadJson(FLM_TEST_COMPLETE_DOWNCAST_MANIFEST);
+        auto catalog = ReadJson(directory / "fake-complete-model-catalog.json");
+        auto& entry = catalog["models"]["complete-plugin-model"]["1b"];
+        entry["details"]["family"] = "minicpm-v-4.7";
+        entry["vlm"] = true;
+        manifest["catalog"] = "downcast-catalog.json";
+        const auto path = WriteManifest(directory, "downcast-extension.json", manifest);
+        FrontendRegistry registry;
+        registry.register_frontend("minicpm-v-4.7", [](void*) { return MarkerFrontend(1); });
+        for (bool explicit_provider : {false, true}) {
+            if (explicit_provider) entry["frontend_provider"] = "plugin-provider";
+            else entry.erase("frontend_provider");
+            WriteManifest(directory, "downcast-catalog.json", catalog);
+            if (explicit_provider) {
+                registry.load_extension(path.string(), {});
+                TEST_REQUIRE(Marker(registry.create("minicpm-v-4.7", nullptr, "plugin-provider")) == 84);
+            } else {
+                RequireContains(RequireThrows([&] { registry.load_extension(path.string(), {}); }), "only drives built-in engines");
+                TEST_REQUIRE(Marker(registry.create("minicpm-v-4.7", nullptr)) == 1);
+            }
+        }
     }
     TEST_REQUIRE(is_reserved_builtin_family("embed-gemma"));
     TEST_REQUIRE(is_reserved_builtin_family("d3"));
@@ -798,6 +942,9 @@ int main() {
             "invalid manifests are rejected before registration");
     RunTest(test_manifest_schema_fixtures_match_runtime_contract,
             "manifest schema fixtures match runtime contract");
+    RunTest(test_frontend_provider_selection, "frontend provider selection");
+    RunTest(test_competing_extension_frontends, "competing extension frontends");
+    RunTest(test_competing_embedding_providers, "competing embedding providers");
     std::cout << "All model frontend tests passed\n";
     return 0;
 }

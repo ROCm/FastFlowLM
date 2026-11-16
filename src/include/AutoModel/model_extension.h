@@ -469,7 +469,7 @@ typedef struct flm_embedding_result_v1 {
 
 /// \brief Complete embedding model: the provider owns preprocessing and inference.
 /// \note Catalog entries use model_kind="embedding", details.family and
-///       frontend_provider. They need no causal backend or generation limits.
+///       optional frontend_provider. They need no causal backend or generation limits.
 ///       Omitted model_kind defaults to "generation".
 /// \note All callbacks are required and must contain exceptions. Calls on one
 ///       instance are serialized. Spans are borrowed during the callback only.
@@ -517,6 +517,10 @@ typedef int (*flm_embedding_create_v1)(
 ///       reference to the host. It may be called at most once; the host invokes
 ///       its destructor after every provider factory and object is released.
 ///       Providers must use `struct_size` before accessing appended fields.
+/// \note Frontends are registered by (family, provider); provider "builtin" is
+///       reserved. Catalog frontend_provider selects explicitly; when omitted,
+///       the host chooses builtin if available, otherwise the sole provider.
+///       An ambiguous family requires an explicit frontend_provider.
 typedef struct flm_model_extension_registrar_v1 {
     size_t struct_size;
     void* host_context;

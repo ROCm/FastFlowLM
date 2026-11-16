@@ -8,11 +8,9 @@
 #include "AutoModel/model_frontend.hpp"
 #include "auto_embedding_model.hpp"
 
-#ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
-#include "modeling_gemma_embedding.hpp"
-#endif
-
 inline bool is_embedding_model(const nlohmann::json& info) {
+    // Legacy built-in catalogs omit model_kind. New embedding entries must
+    // declare model_kind="embedding" rather than rely on the family name.
     return flm::catalog::model_kind(info) == flm::catalog::kEmbeddingModelKind ||
            info.at("details").at("family") == "embed-gemma";
 }
@@ -21,12 +19,6 @@ inline std::unique_ptr<AutoEmbeddingModel> get_auto_embedding_model(
     const nlohmann::json& info, flm_rt::device* device) {
     if (!is_embedding_model(info))
         throw std::invalid_argument("Model is not an embedding model");
-    if (info.at("details").at("family") != "embed-gemma")
-        return flm::frontend::FrontendRegistry::instance().create_embedding(
-            info.at("details").at("family"), device);
-#ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
-    return std::make_unique<Gemma_Embedding>(device);
-#else
-    throw std::runtime_error("The built-in embedding model is not supported in this build");
-#endif
+    return flm::frontend::FrontendRegistry::instance().create_embedding(
+        info.at("details").at("family"), device, info.value("frontend_provider", ""));
 }

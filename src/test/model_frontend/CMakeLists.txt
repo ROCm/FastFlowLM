@@ -197,3 +197,23 @@ target_include_directories(test_model_frontend PRIVATE
 target_compile_definitions(test_model_frontend PRIVATE FASTFLOWLM_LINUX_LIMITED_MODELS)
 find_package(Threads REQUIRED)
 target_link_libraries(test_model_frontend PRIVATE Threads::Threads)
+
+# Multiple embedding registrations for a built-in family, through the C ABI.
+add_library(fake_competing_embedding_extension SHARED fake_embedding_extension.cpp)
+target_link_libraries(fake_competing_embedding_extension PRIVATE flm_model_extension_contract)
+target_include_directories(fake_competing_embedding_extension PRIVATE "${FLM_SOURCE_DIR}/include")
+target_compile_definitions(fake_competing_embedding_extension PRIVATE
+    FLM_TEST_NPU_RUNTIME=${FLM_TEST_NPU_RUNTIME} FLM_TEST_COMPETING_EMBEDDINGS)
+file(GENERATE OUTPUT "$<TARGET_FILE_DIR:fake_competing_embedding_extension>/competing-embedding-extension.json"
+    CONTENT "{\"schema_version\":1,\"name\":\"test-embedding\",\"version\":\"1\",\"library\":\"$<TARGET_FILE_NAME:fake_competing_embedding_extension>\"}")
+target_compile_definitions(test_model_frontend PRIVATE
+    FLM_TEST_COMPETING_EMBEDDING_MANIFEST="$<TARGET_FILE_DIR:fake_competing_embedding_extension>/competing-embedding-extension.json")
+add_dependencies(test_model_frontend fake_competing_embedding_extension)
+
+add_fake_model_extension(fake_complete_downcast_extension "${FLM_TEST_NPU_RUNTIME}"
+    "${FLM_TEST_EXTENSION_MODE_COMPLETE}" "minicpm-v-4.7")
+file(GENERATE OUTPUT "$<TARGET_FILE_DIR:fake_complete_downcast_extension>/complete-downcast-extension.json"
+    CONTENT "{\"schema_version\":1,\"name\":\"fake-model-extension\",\"version\":\"1.0.0\",\"library\":\"$<TARGET_FILE_NAME:fake_complete_downcast_extension>\"}")
+target_compile_definitions(test_model_frontend PRIVATE
+    FLM_TEST_COMPLETE_DOWNCAST_MANIFEST="$<TARGET_FILE_DIR:fake_complete_downcast_extension>/complete-downcast-extension.json")
+add_dependencies(test_model_frontend fake_complete_downcast_extension)

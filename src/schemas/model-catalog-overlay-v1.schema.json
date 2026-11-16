@@ -157,37 +157,6 @@
       "allOf": [
         {
           "if": {
-            "anyOf": [
-              {
-                "properties": {
-                  "vlm": {
-                    "const": true
-                  }
-                },
-                "required": [
-                  "vlm"
-                ]
-              },
-              {
-                "properties": {
-                  "asr": {
-                    "const": true
-                  }
-                },
-                "required": [
-                  "asr"
-                ]
-              }
-            ]
-          },
-          "then": {
-            "required": [
-              "frontend_provider"
-            ]
-          }
-        },
-        {
-          "if": {
             "properties": {
               "model_kind": {
                 "const": "embedding"
@@ -195,11 +164,6 @@
             },
             "required": [
               "model_kind"
-            ]
-          },
-          "then": {
-            "required": [
-              "frontend_provider"
             ]
           },
           "else": {

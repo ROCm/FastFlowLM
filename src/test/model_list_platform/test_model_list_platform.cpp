@@ -130,7 +130,7 @@ void test_embedding_catalog() {
     check_records(nlohmann::json::array({42}), false);
     // Embeddings and their preferred sources obey the shared catalog rules.
     for (const auto& patch : std::vector<nlohmann::json>{
-             {{"frontend_provider", nullptr}},
+             {{"frontend_provider", ""}},
              {{"file_records", nlohmann::json::array()}}, {{"files", {"../weights"}}},
              {{"name", "COM\xC2\xB9"}}, {{"files", {"a/LPT\xC2\xB2.bin"}}},
              {{"supported_platforms", nlohmann::json::array()}}, {{"url", nullptr}}}) {
@@ -686,7 +686,7 @@ void test_overlay_requires_download_metadata() {
     }
 }
 
-void test_multimodal_overlay_requires_frontend_provider() {
+void test_multimodal_overlay_allows_implicit_frontend_provider() {
     const auto overlay = write_catalog(
         "flm_multimodal_overlay_without_frontend.json",
         {{"schema_version", 1},
@@ -700,12 +700,8 @@ void test_multimodal_overlay_requires_frontend_provider() {
                {"max_prefill_len", 512},
                {"vlm", true},
                {"details", {{"family", "multimodal"}}}})}}}}}});
-    RequireContains(
-        RequireThrows([&] {
-            (void)flm::catalog::load_model_catalog_overlay(
-                overlay.string());
-        }),
-        "frontend_provider");
+    const auto catalog = flm::catalog::load_model_catalog_overlay(overlay.string());
+    TEST_REQUIRE(!catalog.document["models"]["multimodal-model"]["1b"].contains("frontend_provider"));
     std::filesystem::remove(overlay);
 }
 
@@ -793,7 +789,7 @@ void test_overlay_paths_stay_inside_the_model_folder() {
              {{{"files", nullptr}}, "files"},
              {{{"url", ""}}, "url"},
              {{{"backend_provider", ""}}, "backend_provider"},
-             {{{"vlm", true}}, "frontend_provider"},
+             {{{"frontend_provider", ""}}, "frontend_provider"},
              {{{"preferred_source", nlohmann::json::object()}},
               "preferred_source"}}) {
         nlohmann::json entry = complete;
@@ -1063,8 +1059,8 @@ int main() {
             "overlay keeps built-in bare tag after platform filter");
     RunTest(test_overlay_requires_download_metadata,
             "overlay requires download metadata");
-    RunTest(test_multimodal_overlay_requires_frontend_provider,
-            "multimodal overlay requires frontend provider");
+    RunTest(test_multimodal_overlay_allows_implicit_frontend_provider,
+            "multimodal overlay allows implicit frontend provider");
     RunTest(test_overlay_paths_stay_inside_the_model_folder,
             "overlay paths stay inside the model folder");
     RunTest(test_overlay_cannot_reuse_another_catalogs_folder,

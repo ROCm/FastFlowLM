@@ -61,5 +61,5 @@ inline std::pair<std::string, flm::frontend::FrontendPtr> get_auto_model(
     const std::string& power_mode = "performance") {
     auto plan = resolve_model_load(model_tag, available_models, requested_backend);
     auto* device = plan.prepare_device(npu_device_inst, power_mode);
-    return {plan.tag, flm::frontend::FrontendRegistry::instance().create(plan.family, device)};
+    return {plan.tag, flm::frontend::FrontendRegistry::instance().create(plan.family, device, plan.info.value("frontend_provider", ""))};
 }

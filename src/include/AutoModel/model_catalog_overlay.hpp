@@ -304,16 +304,9 @@ inline void validate_catalog_entry(const nlohmann::json& entry,
             }
         }
     }
-    if ((kind == kEmbeddingModelKind || entry.value("vlm", false) ||
-         entry.value("asr", false)) &&
-        (!entry.contains("frontend_provider") ||
-         !entry["frontend_provider"].is_string() ||
-         entry["frontend_provider"]
-             .get_ref<const std::string&>().empty())) {
-        throw std::runtime_error(
-            "Model extension catalog entry '" + tag +
-            "' must name a frontend_provider");
-    }
+    if (entry.contains("frontend_provider") &&
+        (!entry["frontend_provider"].is_string() || entry["frontend_provider"].get_ref<const std::string&>().empty()))
+        throw std::runtime_error("Invalid frontend_provider: " + tag);
 }
 }  // namespace detail
 
