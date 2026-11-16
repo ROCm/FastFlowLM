@@ -102,7 +102,9 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
         header_print("WARNING", "No messages or prompt provided");
         return false;
     }
-
+    // generate() opens the channel from this flag. It depends only on the request, so record it
+    // before a later return. The trim below still runs only when the prompt ends with the channel.
+    this->feed_empty_thought_ = flm::gemma4_feed_empty_thought(this->enable_think, meta_info.continue_final_message);
 
     gemma4_12b_image_payload_t image_payload;
     gemma4_12b_audio_payload_t audio_payload;
@@ -381,7 +383,6 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
     static_assert(eoc_token_id == flm::kGemma4ChannelEnd);
     static_assert(thought_token_id == flm::kGemma4ThoughtToken);
     static_assert(new_line_token_id == flm::kGemma4NewlineToken);
-    this->feed_empty_thought_ = flm::gemma4_feed_empty_thought(this->enable_think, meta_info.continue_final_message);
     const size_t slot_trim = flm::gemma4_empty_thought_trim(this->enable_think, meta_info.continue_final_message, tokens);
     if (image_payload.num_images == 0 && audio_payload.num_audios == 0 && !modal_tokens &&
         this->_prefix_slot_mode(meta_info, tokens.size(), slot_trim)) {
