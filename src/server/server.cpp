@@ -9,6 +9,7 @@
 #include "server.hpp"
 #include "rest_handler.hpp"
 #include "utils/json_log.hpp"
+#include "utils/log_privacy.hpp"
 #include <sstream>
 #include <thread>
 #include <iostream>
@@ -135,7 +136,8 @@ std::string utf8_truncate_middle(const std::string& input, size_t head_count, si
 }
 
 ///@brief brief print request
-///@param request the request, already parsed with json_log::parse (long strings cut)
+///@param request the request, already parsed with json_log::parse (long strings cut; without
+///       FLM_LOG_CONTENT every text string is already replaced by its length)
 void brief_print_message_request(nlohmann::json request) {
     // if request has "messages" or "message" field, the context in meassages shall be printed briefly
     
@@ -199,7 +201,8 @@ void brief_print_message_request(nlohmann::json request) {
         request["tools"] = "...";
     }
 
-    header_print("LOG", "Body: ");
+    // parenthesized: header_print streams its argument, and << binds tighter than ?:
+    header_print("LOG", (flm::log_privacy::content_enabled() ? "Body: " : "Body (text hidden; FLM_LOG_CONTENT=1 shows it): "));
     std::string brief_body = json_log::dump(request);
     std::cout << brief_body << std::endl;
 }
@@ -784,8 +787,9 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
                 // Decide on the Content-Type, not on whether this log-only parse succeeds:
                 // a malformed body must still reach the parse below and get its 400.
                 is_json = true;
-                // cut long strings (image / audio data) as they are read: never logged, nor copied, whole
-                brief_print_message_request(json_log::parse(req.body()));
+                // cut long strings (image / audio data) as they are read: never logged, nor copied, whole;
+                // user text stays out of the log unless FLM_LOG_CONTENT asks for it
+                brief_print_message_request(json_log::parse(req.body(), flm::log_privacy::content_enabled()));
             }
             else if (content_type.find("multipart/form-data") != std::string::npos) {
                 // print some request info 
@@ -793,7 +797,7 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
         }
     }
     catch (const std::exception& e) {
-        header_print("LOG", "Error parsing request body: " + json_log::what(e));
+        header_print("LOG", "Error parsing request body: " + json_log::what(e, flm::log_privacy::content_enabled()));
     }
 
     // Route lookup
@@ -837,7 +841,7 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
             }
         }
         catch (const std::exception& e) {
-            header_print("LOG", "Invalid JSON request body: " + json_log::what(e));
+            header_print("LOG", "Invalid JSON request body: " + json_log::what(e, flm::log_privacy::content_enabled()));
             res_ref.result(http::status::bad_request);
             res_ref.body() = dump_error_body(json{ {"error", {
                 {"message", "Invalid JSON: " + json_log::what(e)},

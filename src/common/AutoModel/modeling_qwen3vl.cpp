@@ -551,7 +551,7 @@ std::string Qwen3VL_Flash::generate(chat_meta_info_t& meta_info, int length_limi
     this->token_history.pop_back();
     if (this->log_raw_output) {
         std::cout << std::endl;
-        header_print("FLM", "Model RAW Output: \n" + result);
+        this->print_raw_output(result);
     }
     return result;
 }

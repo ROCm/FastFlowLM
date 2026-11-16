@@ -172,3 +172,20 @@ flm serve --quiet
 ```
 
 This keeps the parent application's logs cleaner and easier to read.
+
+## What the Server Log Shows
+
+By default the log keeps no text a user sent or a model wrote. Each request is logged with its route, its time and its JSON body with every text replaced by its length (`"content": "<42 chars>"`); the model tag, roles, numbers and flags stay readable. The reply text is not dumped either.
+
+For troubleshooting, turn content back on before starting FLM (the switches are read when the server starts):
+
+| Environment variable | Logs |
+|---|---|
+| `FLM_LOG_CONTENT=1` | request bodies with their text (message text cut to its first and last 10 characters, other long strings such as images to their ends), the `Model RAW Output:` dump of each reply, ASR transcripts |
+| `FLM_LOG_RAW_OUTPUT=1` | only the `Model RAW Output:` dump and ASR transcripts, for every model (scripts that parse each turn on that marker set this) |
+
+```powershell
+$env:FLM_LOG_CONTENT = "1"; flm serve llama3.2:1b
+```
+
+> 🔒 Leave these off on a shared machine or a server others use: the log then holds their prompts and answers. The same switches apply to `flm run`.
