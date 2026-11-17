@@ -9,6 +9,11 @@ Tiers:
 The chat suite covers language models family by family, so there is no
 separate sweep of every model on a pull request: one model per engine family
 exercises the engine, and the families a change touches run in full.
+
+A GPU backend run (--backend) tests that backend's models instead: one per
+family on the install and pr tiers (PR_GPU; some families only when the
+change touches them), plus those whose catalog entries the change touched
+(--changed-models), and every one on the full tier.
 """
 
 from __future__ import annotations
@@ -63,8 +68,31 @@ PR_CHAT = {
 NON_CHAT_FAMILIES = {"embed-gemma", "d3", "whisper-v3", "r2t2"}
 
 # Backends that run their models on the GPU rather than the NPU. Only a run
-# that asks for one (--backend) tests its models, and then all of them.
+# that asks for one (--backend) tests its models.
 GPU_BACKENDS = {"oga-hipep"}
+
+# One model per family for a GPU backend run on the install and pr tiers. A
+# family's models share its frontend and the backend, and the catalog gives
+# them the same features (vision, reasoning, tool calling), so the rest add
+# only other weights, which the full tier tests. A family missing from this
+# table (one added to the catalog later) gets its smallest model, so it is
+# never silently untested.
+PR_GPU = {
+    "qwen3.5": "qwen3.8-oga-hipep:27b",   # the newest Qwen; Qwen3.5 and 3.6 too
+    # Not 12b, whose tool-call round trip fails on OGA 0.19 (the Gemma 4 tool
+    # grammar), which would fail every pull request.
+    "gemma4e": "gemma4-it-oga-hipep:26b-a4b",
+    "qwen2": "qwen2.5-it-oga-hipep:14b",
+    "gemma3": "gemma3-oga-hipep:4b",
+    "gemma4-12b": "gemma4-12b-oga-hipep:12b",
+    "gpt-oss": "gpt-oss-oga-hipep:120b",
+}
+
+# Families whose PR_GPU model the install and pr tiers test only when the
+# change touches the family (--families), so that every pull request tests
+# just the newest Qwen and Gemma: Qwen2.5 and Gemma 3, the generations before;
+# gemma4-12b, a second Gemma 4 family; and gpt-oss, whose one model is 69 GB.
+PR_GPU_WHEN_TOUCHED = {"qwen2", "gemma3", "gemma4-12b", "gpt-oss"}
 
 # Suites with a fixed NPU model list that a GPU backend run gives its own chat
 # models instead: the OpenAI contract (tools, streaming, errors, usage) holds
@@ -195,7 +223,8 @@ def load_catalog(flm_bin: str,
 
 class Plan:
     def __init__(self, catalog: dict[str, Model], tier: str, families: list[str],
-                 only_models: list[str] | None = None, backend: str = ""):
+                 only_models: list[str] | None = None, backend: str = "",
+                 changed_models: list[str] | None = None):
         if tier not in TIERS:
             raise ValueError(f"unknown tier {tier!r}")
         if backend and backend not in GPU_BACKENDS:
@@ -205,7 +234,9 @@ class Plan:
         self.families = set(families)
         self.only_models = only_models
         self.backend = backend  # empty: the NPU backends
-        # Models the run could not pull (Context.pull), which no suite tests.
+        self.changed_models = list(changed_models or [])
+        # Models no suite tests: ones the run could not pull (Context.pull), or
+        # larger than the runner holds (--max-model-gb).
         self.unavailable: set[str] = set()
 
     def _serves(self, model_id: str) -> bool:
@@ -237,8 +268,18 @@ class Plan:
             return [m for m in self.only_models if m in self.catalog and self._serves(m)
                     and self.catalog[m].family not in NON_CHAT_FAMILIES]
         if self.backend:
-            return self._known(m.id for m in self.catalog.values()
-                               if m.family not in NON_CHAT_FAMILIES)
+            models = [m for m in self.catalog.values()
+                      if m.backend == self.backend and m.family not in NON_CHAT_FAMILIES]
+            if self.tier == "full":
+                return self._known(m.id for m in models)
+            picked = []
+            for family in sorted({m.family for m in models}):
+                if family in PR_GPU_WHEN_TOUCHED and family not in self.families:
+                    continue
+                smallest = min((m for m in models if m.family == family),
+                               key=lambda m: (m.size, m.id))
+                picked.append(PR_GPU.get(family, smallest.id))
+            return self._known(picked + self.changed_models)
         if self.tier == "install":
             return self._known(INSTALL_CHAT)
         chat_models = [m for m in self.catalog.values() if m.family not in NON_CHAT_FAMILIES]

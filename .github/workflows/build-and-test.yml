@@ -18,10 +18,13 @@ name: Build and Test
 #
 # The Windows XRT package also holds the oga-hipep backend, which runs its
 # models on the GPU through hip-ep. Test Windows HIPEP runs the chat, api and
-# shutdown suites on qwen3.5-oga-hipep:9b from the same zip, and Test Windows
-# XRT tests the NPU models. HIPEP runs when every suite does, or when a change
-# reaches that model (the backend, its catalog entries, the qwen3.5 frontend,
-# the chat, api and shutdown tests); a change only to the backend or its
+# shutdown suites on the oga-hipep models from the same zip, on each kind of
+# machine in .github/hipep-machines.json: an STX Halo of its own, beside the
+# NPU tests, and whichever shared NPU runner labelled oga-hipep (STX, Krackan
+# or STX Halo) is free. Test Windows XRT tests the NPU models.
+# HIPEP runs when every suite does, or when a change reaches an oga-hipep
+# model (the backend, its catalog entries, the frontend of a family that has
+# one, the chat, api and shutdown tests); a change only to the backend or its
 # entries runs no NPU test.
 #
 # A pull request runs only the suites its changes can affect (an ASR-only
@@ -30,9 +33,10 @@ name: Build and Test
 # Tiers (.github/script/npu_test/plan.py): pull requests and pushes run the pr
 # tier, one model per engine family plus every model of a family the change
 # touches; the nightly run tests every model. A change that only touches docs
-# builds and tests nothing. The portable test jobs get 120 minutes on the pr
-# tier and 360 on the full one, which runs every model and every d3 size and
-# may first download tens of GB of weights.
+# builds and tests nothing. The portable test jobs and Test Windows HIPEP get
+# 120 minutes on the pr tier and 360 on the full one, which runs every model
+# and every d3 size and may first download tens of GB of weights; HIPEP also
+# gets 360 where it tests the models whose catalog entries the change edited.
 #
 # A dispatch can name the models to test (models, e.g. qwen3.5-oga-hipep:9b):
 # every test job then runs only those, so a package without them runs
@@ -85,9 +89,9 @@ on:
         description: How many distributions each .deb variant was built for.
         value: ${{ jobs.build-lin-xrt-deb.outputs.deb_distros }}
 
-# A superseded pull request commit only holds the NPU runners up, so a new
-# push cancels its run. Pushes to main, nightly runs and tags each get their
-# own group and always finish.
+# A superseded pull request commit only holds the NPU and HIPEP runners up, so
+# a new push cancels its run. Pushes to main, nightly runs and tags each get
+# their own group and always finish.
 concurrency:
   group: build-and-test-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
@@ -105,6 +109,7 @@ jobs:
       hrx-suites: ${{ steps.detect.outputs.hrx-suites }}
       source: ${{ steps.detect.outputs.source }}
       hipep: ${{ steps.detect.outputs.hipep }}
+      hipep-machines: ${{ steps.hipep.outputs.machines }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -117,6 +122,20 @@ jobs:
         uses: ./.github/actions/detect-changes
         with:
           tier: ${{ inputs.tier }}
+
+      # One Test Windows HIPEP job per kind of GPU machine, each with the tier
+      # it runs and the changed models it tests. The repository variable
+      # FLM_HIPEP_MACHINES names other kinds, or "none", without a commit,
+      # e.g. while a kind's only runner is down.
+      - name: Pick HIPEP machines
+        id: hipep
+        env:
+          ONLY: ${{ vars.FLM_HIPEP_MACHINES }}
+          TIER: ${{ steps.detect.outputs.tier }}
+          CHANGED: ${{ steps.detect.outputs.hipep-models }}
+        run: |
+          python3 .github/script/ci/hipep_machines.py --tier "${TIER}" --changed-models "${CHANGED}" \
+            --only "${ONLY}" --github-output
 
       # Every npu_test run imports every suite, but a change to the shutdown
       # suite or console.py runs Test Windows HIPEP alone. A Windows-only
@@ -139,7 +158,7 @@ jobs:
       && (needs.changes.outputs.suites != 'none'
           || needs.changes.outputs.hrx-suites != ''
           || needs.changes.outputs.source == 'true'
-          || needs.changes.outputs.hipep == 'true'
+          || (needs.changes.outputs.hipep == 'true' && needs.changes.outputs.hipep-machines != '[]')
           || vars.FLM_INSTALL_TESTS == 'true')
     runs-on: ubuntu-latest
     environment: npu-approval
@@ -606,15 +625,31 @@ jobs:
           asr-full: ${{ needs.changes.outputs.asr-full }}
           asr-expected-key: windows
 
-  # The XRT zip's oga-hipep models, on the GPU: its runner needs an AMD GPU
-  # that hip-ep runs on. Besides chat, they run the OpenAI contract tests (api),
-  # tool calls included, and shutdown: Ctrl+C and /bye must still end flm once
-  # it has loaded hip-ep. Every tier tests qwen3.5-oga-hipep:9b alone: the other
-  # oga-hipep packages are 4 to 72 GB each, and a dispatch that names them
-  # (models) tests them instead. npu_test pulls the models first, so a runner
-  # without them downloads them (7.5 GB for the 9b) outside the requests' timeouts.
+  # The XRT zip's oga-hipep models, on the GPU, one job per kind of machine in
+  # .github/hipep-machines.json: the STX Halo, whose labels (oga-hipep,
+  # stx-halo) no NPU job asks for, so it runs beside the NPU test jobs, and
+  # the shared NPU runners also labelled oga-hipep, those whose memory holds
+  # the pr tier's models (STX, Krackan and STX Halo, whichever is free), one
+  # of which it holds for the job as an NPU test job does. Besides chat, the
+  # models run the OpenAI contract tests (api), tool calls included, and
+  # shutdown: Ctrl+C and /bye must still end flm once it has loaded hip-ep.
+  # The pr tier tests one model per family (PR_GPU in npu_test/plan.py: the
+  # newest Qwen and Gemma; Qwen2.5, Gemma 3, gemma4-12b and gpt-oss only when
+  # the change touches their family); the full tier tests every one, where
+  # the kind's max-tier allows (the shared runners test the pr tier's models
+  # nightly).
+  # The models whose catalog entries the change added or edited run too, on
+  # the kinds whose changed-models allows it (the STX Halo, not the shared
+  # runners), with the full tier's time: their new revisions download within
+  # the job, and a change may add or re-pin many at once. Each kind skips
+  # the models larger than its memory holds (max-model-gb), and a dispatch
+  # that names models (models) tests only those. npu_test pulls the models
+  # first, outside the requests' timeouts, and they stay on the runner: only
+  # its first run, or a new revision of a model, downloads (about 33 GB for
+  # the pr tier's, 410 GB for all), and a model verified before whose pins and
+  # files are unchanged is not verified again.
   test-win-hipep:
-    name: Test Windows HIPEP
+    name: Test Windows HIPEP (${{ matrix.id }})
     needs: [changes, build-win-xrt, npu-gate]
     # npu-gate is skipped for trusted authors, so spell out what the
     # implicit success() check used to require.
@@ -623,9 +658,16 @@ jobs:
       && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
       && needs.changes.result == 'success'
       && needs.build-win-xrt.result == 'success'
-      && (needs.changes.outputs.hipep == 'true') }}
-    runs-on: [self-hosted, windows, x64, npu, sweep]
-    timeout-minutes: 120
+      && (needs.changes.outputs.hipep == 'true')
+      && (needs.changes.outputs.hipep-machines != '[]') }}
+    strategy:
+      # Each kind of machine reports on its own; one failing must not cancel
+      # the others.
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.changes.outputs.hipep-machines) }}
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: ${{ (matrix.tier == 'full' || matrix.changed-models != '') && 360 || 120 }}
     steps:
       - *checkout-tests
       - name: Download package
@@ -639,9 +681,17 @@ jobs:
         with:
           kind: portable
           path: package
+      # An APU's dedicated GPU memory (96 GB on the STX Halo) is outside the
+      # memory Windows reports, and Win32_VideoController's AdapterRAM stops
+      # at 4 GB; the display driver's registry entry has its size.
       - name: Show the GPU
         shell: powershell
-        run: Get-CimInstance Win32_VideoController | ForEach-Object { "$($_.Name), driver $($_.DriverVersion)" }
+        run: |
+          Get-CimInstance Win32_VideoController | ForEach-Object { "$($_.Name), driver $($_.DriverVersion)" }
+          "Memory: {0:N0} GB, not counting memory dedicated to a GPU" -f ((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
+          Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0*' -ErrorAction SilentlyContinue |
+            Where-Object { $_.'HardwareInformation.qwMemorySize' } |
+            ForEach-Object { "{0}: {1:N0} GB dedicated" -f $_.DriverDesc, ($_.'HardwareInformation.qwMemorySize' / 1GB) }
       # flm installs hip-ep into %LOCALAPPDATA%\hip-ep once and reuses it after,
       # so only an empty one makes it download and install again. The runner
       # empties its temp folder after every job. A short name: the deepest
@@ -657,11 +707,14 @@ jobs:
         uses: ./.github/actions/npu-test
         with:
           flm-bin: ${{ steps.package.outputs.flm-bin }}
-          label: windows-hipep
-          tier: ${{ needs.changes.outputs.tier }}
+          label: windows-hipep-${{ matrix.id }}
+          tier: ${{ matrix.tier }}
           suites: chat,api,shutdown
-          models: ${{ inputs.models || 'qwen3.5-oga-hipep:9b' }}
+          families: ${{ needs.changes.outputs.families }}
+          models: ${{ inputs.models }}
           backend: oga-hipep
+          changed-models: ${{ matrix.changed-models }}
+          max-model-gb: ${{ matrix.max-model-gb }}
 
   test-win-hrx:
     name: Test Windows HRX

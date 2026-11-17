@@ -35,8 +35,11 @@ outputs:
     description: '"true" when the chat suite runs, the only suite the models-from-source and model-extension tests run.'
     value: ${{ steps.tier.outputs.source }}
   hipep:
-    description: '"true" when every suite runs or the change reaches the model Test Windows HIPEP tests.'
+    description: '"true" when every suite runs or the change reaches an oga-hipep model, which Test Windows HIPEP tests one per family.'
     value: ${{ steps.tier.outputs.hipep }}
+  hipep-models:
+    description: Comma-separated oga-hipep models whose catalog entries the change added or edited, which Test Windows HIPEP tests too.
+    value: ${{ steps.changes.outputs.hipep_models }}
   tier:
     description: install, pr or full.
     value: ${{ steps.tier.outputs.tier }}

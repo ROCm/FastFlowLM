@@ -15,7 +15,8 @@ import subprocess
 import sys
 import time
 
-from .harness import FAIL, Context, Result, configure_stdout
+from .harness import FAIL, PASS, SKIP, Context, Result, configure_stdout
+from .model_cache import ModelCache
 from .plan import GPU_BACKENDS, TIERS, Plan, load_catalog
 from .suites import SUITES, ORDER
 
@@ -44,14 +45,22 @@ def parse_args(argv=None) -> argparse.Namespace:
                         help=f"Comma-separated subset of: {', '.join(ORDER)} (default: all).")
     parser.add_argument("--families", default="",
                         help="Comma-separated model families the change touches; "
-                             "the pr tier tests every model in them.")
+                             "the pr tier tests every model in them, or with --backend "
+                             "one of each that it tests only when touched.")
     parser.add_argument("--asr-full", action="store_true",
                         help="Run the whole ASR evaluation set even on the pr tier.")
     parser.add_argument("--models", default="",
                         help="Comma-separated model ids; restricts every suite to these.")
     parser.add_argument("--backend", choices=["", *sorted(GPU_BACKENDS)], default="",
-                        help="Test every model of this GPU backend instead of the NPU models "
-                             "(default: the NPU models).")
+                        help="Test this GPU backend's models instead of the NPU models: one "
+                             "per family, or every one on the full tier (default: the NPU "
+                             "models).")
+    parser.add_argument("--changed-models", default="",
+                        help="With --backend: comma-separated models whose catalog entries "
+                             "the change touched, which the install and pr tiers test too.")
+    parser.add_argument("--max-model-gb", type=float, default=0.0, metavar="GB",
+                        help="Skip the models larger than this (catalog size), which this "
+                             "runner's memory cannot hold (default: 0, no limit).")
     parser.add_argument("--model-extension", action="append", default=[],
                         help="Model-extension manifest passed to `flm list` and every "
                              "server (repeatable).")
@@ -108,7 +117,9 @@ def main(argv=None) -> int:
         catalog, catalog_error = {}, f"`flm list --json` failed: {type(exc).__name__}: {exc}"
     families = [f.strip() for f in args.families.split(",") if f.strip()]
     only = [m.strip() for m in args.models.split(",") if m.strip()] or None
-    plan = Plan(catalog, args.tier, families, only_models=only, backend=args.backend)
+    changed = [m.strip() for m in args.changed_models.split(",") if m.strip()]
+    plan = Plan(catalog, args.tier, families, only_models=only, backend=args.backend,
+                changed_models=changed)
     ctx = Context(flm_bin=args.flm_bin, label=args.label, tier=args.tier, plan=plan,
                   out_dir=args.output_dir, request_timeout=args.request_timeout,
                   port=args.port, verbose=args.verbose,
@@ -119,19 +130,46 @@ def main(argv=None) -> int:
     print(f"{args.label}: {args.tier} tier, {len(catalog)} catalog models, "
           f"suites: {', '.join(names)}" + (f", touched families: {', '.join(families)}"
                                            if families else "")
-          + (f", backend: {args.backend}" if args.backend else ""))
+          + (f", backend: {args.backend}" if args.backend else "")
+          + (f", changed models: {', '.join(changed)}" if args.backend and changed else ""))
     try:
         if catalog_error:
             print(catalog_error)
             ctx.record(Result("setup", "catalog", FAIL, detail=catalog_error))
         else:
+            # A model larger than the runner's memory would only fail to load.
+            if args.max_model_gb > 0:
+                for model_id in plan.planned(names):
+                    size_gb = plan.model(model_id).size / 1e9
+                    if size_gb > args.max_model_gb:
+                        ctx.record(Result("setup", "size", SKIP, model_id,
+                                          f"{size_gb:.1f} GB, larger than this runner holds "
+                                          f"(--max-model-gb {args.max_model_gb:g})"))
+                        plan.unavailable.add(model_id)
             # Pulled first, a download counts against no request's timeout: flm
             # serve downloads a missing model inside the request that names it,
             # and every request behind that one waits too.
             # A GPU backend's models are pulled even when present: the pull
             # checks their files against the pinned hashes and replaces any
-            # that do not match, which `flm list` does not.
+            # that do not match, which `flm list` does not. That takes minutes
+            # per model, so one a pull on this runner verified before, whose
+            # pins and files have not changed since, is not pulled again.
             missing = plan.missing(names, everything=bool(args.backend))
+            cache = ModelCache.open(args.flm_bin) if args.backend else None
+            verified = {}
+            if cache is not None:
+                for model_id in missing:
+                    when = cache.verified(model_id) if plan.model(model_id).installed else None
+                    if when:
+                        verified[model_id] = when
+            if verified:
+                print(f"\n== setup: verified on this runner before and unchanged since, so not "
+                      f"pulled: {', '.join(verified)}", flush=True)
+                for model_id, when in verified.items():
+                    ctx.record(Result("setup", "pull", PASS, model_id,
+                                      f"not pulled: verified {when}, and neither its pins nor "
+                                      f"its files changed since", data={"cached": True}))
+                missing = [m for m in missing if m not in verified]
             if missing:
                 budget = pull_budget(args)
                 limit = f"{budget / 60:g}-min budget" if budget else "no time limit"
@@ -141,6 +179,12 @@ def main(argv=None) -> int:
                 started_pull = time.monotonic()
                 ctx.pull(missing, PULL_TIMEOUT, budget)
                 print(f"== setup done in {time.monotonic() - started_pull:.0f}s", flush=True)
+                if cache is not None:
+                    for model_id in missing:
+                        why = "" if model_id in plan.unavailable else cache.stamp(model_id)
+                        if why:
+                            print(f"  [setup] {model_id}: not remembered as verified ({why})",
+                                  flush=True)
             for name in names:
                 ctx.run_suite(SUITES[name])
     finally:
