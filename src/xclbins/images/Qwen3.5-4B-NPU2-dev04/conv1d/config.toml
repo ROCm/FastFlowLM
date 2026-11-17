@@ -3,3 +3,4 @@
 
 D = 8192
 TAPS = 4
+ACTIVATION = "silu"

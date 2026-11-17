@@ -17,3 +17,9 @@ ROPE_DIM = 64
 
 # Epsilon of the q / k norm (rms_norm_eps).
 EPS = 1e-6
+
+# q / k RMS norm before the rope (Qwen3.6: true).
+HAS_QK_NORM = true
+
+# Output gate: the qkv row is q | gate | k | v and out = sigmoid(gate) * attention (Qwen3.6: true).
+HAS_GATE = true

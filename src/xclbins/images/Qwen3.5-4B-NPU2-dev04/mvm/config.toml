@@ -2,5 +2,5 @@
 # make copy builds the op mvm with this file.
 
 D = 2560
-K_MAX = 9216
+X_K = 9216
 EPS = 1e-6

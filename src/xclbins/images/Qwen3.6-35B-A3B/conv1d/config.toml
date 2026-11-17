@@ -10,3 +10,6 @@ D = 8192
 
 # Taps of the conv (linear_conv_kernel_dim).
 TAPS = 4
+
+# Function after the conv: Qwen3.6 uses SiLU ("silu"; "none" = no function).
+ACTIVATION = "silu"

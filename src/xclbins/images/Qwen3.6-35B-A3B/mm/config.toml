@@ -1,15 +1,27 @@
-# config/mm.toml -- the mm numbers of Qwen3.6-35B-A3B.
+# config/mm.toml -- the mm numbers for Qwen3.6-35B-A3B (the vision tower).
 #
-# make copy builds the op mm with this file. The keys are the keys of the
-# op's default config (mm/config.toml in the kernel tree).
+# make copy builds the op mm with this file. The keys are the keys of the op's
+# default config (mm/config.toml in the kernel tree): the granules of a call. The
+# model sizes are not here: L, K and N are arguments of each call (the engine's
+# vision tower calls mm::metadata with the vision sizes). The engine runs the
+# vision tower on mm (the LLM projections run on dqmm, with the Q4_K weights).
+#
+# The sizes the model needs: K 1152 (hidden), 1536 (patch embedding), 4304
+# (fc2: padded to 4352), 4608 (merger: the largest K); N 1152 .. 4352.
 
-# Hidden size (hidden_size): K of mm, mm_cols, mm_glu and mm_glu_cols.
-D = 2048
+# Granule of L (rows of x). The cores compute tiles of 64 rows. A multiple of 64.
+M_PAD = 64
 
-# Input of out_proj and o_proj (linear_num_value_heads x linear_value_head_dim
-# = num_attention_heads x head_dim): K of mm_k4096.
-V_DIM = 4096
+# Granule of K. The host pads K with zeros: 1152 and 1536 and 4608 are not padded,
+# 4304 becomes 4352. A multiple of 32.
+K_PAD = 128
 
-# Expert intermediate size (moe_intermediate_size): K of mm_k512 and
-# mm_k512_cols.
-MOE_I = 512
+# Granule of N (the rows of W). One panel of 64. A multiple of 64.
+N_PAD = 64
+
+# K of the x store: the largest K of a resident image. 4608 holds the merger (4 x 1152). A multiple of K_PAD. An image
+# that cannot hold it stops the build. A larger K runs on the streamed-K image mm_k (plan() picks it).
+X_K = 4608
+
+# Rows of x in the largest block of any image (a multiple of 64): 512 (the split m of the image mm: 4 cores x 2 passes x 64 rows).
+X_ROWS = 512

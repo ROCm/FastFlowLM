@@ -21,6 +21,11 @@ DV = 128
 # Taps of the conv (linear_conv_kernel_dim).
 TAPS = 4
 
+# bf16 from the qkv row to z in the qkv Bind. The decode arena keeps the parts "qkv"
+# (ATT_QKV = 9216 bf16) and "z" in this order, 4 KiB aligned: z lies 10240 bf16 after qkv.
+# qwen3_6_moe_decoding checks it.
+Z_OFFSET = 10240
+
 # Epsilon of the l2 norm of q and k.
 L2_EPS = 1e-6
 

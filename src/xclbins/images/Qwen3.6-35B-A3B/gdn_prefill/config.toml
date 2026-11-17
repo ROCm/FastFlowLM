@@ -20,3 +20,6 @@ DV = 128
 
 # Epsilon of the l2 norm of q and k.
 L2_EPS = 1e-6
+
+# Tokens of a chunk (the matrix products on the MMAC; only 32 is supported).
+CHUNK = 32

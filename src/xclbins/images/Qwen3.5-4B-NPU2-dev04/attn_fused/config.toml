@@ -6,3 +6,5 @@ Q_HEADS = 16
 KV_HEADS = 4
 ROPE_DIM = 64
 EPS = 1e-6
+HAS_QK_NORM = true
+HAS_GATE = true

@@ -1,7 +1,7 @@
 # config/attn_prefill.toml -- the attn_prefill numbers of Qwen3.6-35B-A3B.
 #
 # make copy builds the op attn_prefill with this file. The keys are the keys
-# of the op's default config (attn_prefill/config.toml in the kernel tree).
+# of the op's config (attn_prefill/config.toml in the kernel tree): no key for the context length.
 
 # Dimension of a head (head_dim).
 HEAD_DIM = 256
@@ -11,3 +11,6 @@ Q_HEADS = 16
 
 # Key / value heads (num_key_value_heads).
 KV_HEADS = 2
+
+# The attention output is gated: out = sigmoid(gate) x attention (Qwen3.6 has the gate in the qkv rows).
+HAS_GATE = true

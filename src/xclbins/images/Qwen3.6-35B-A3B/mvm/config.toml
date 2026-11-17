@@ -6,9 +6,9 @@
 # Hidden size (hidden_size): K of norm mode.
 D = 2048
 
-# The largest K of a decode projection (num_attention_heads x head_dim, the
-# input of o_proj and out_proj).
-K_MAX = 4096
+# K of the x store: the largest K of a decode projection (num_attention_heads x
+# head_dim, the input of o_proj and out_proj).
+X_K = 4096
 
 # Epsilon of the RMS norm in norm mode (rms_norm_eps).
 EPS = 1e-6

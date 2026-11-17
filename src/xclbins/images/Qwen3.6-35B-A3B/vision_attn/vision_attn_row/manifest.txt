@@ -1,0 +1,332 @@
+design vision_attn_row
+route 0 0 0 Control32 0 0 0 Controller32 0
+route 0 0 0 Control32 1 0 0 Controller32 0
+route 1 1 0 Control32 0 1 0 Controller32 0
+route 1 1 0 Control32 1 1 0 Controller32 0
+route 2 2 0 Control32 0 2 0 Controller32 0
+route 2 2 0 Control32 1 2 0 Controller32 0
+route 26 0 0 DMAControl 0 0 1 TileControl 0
+route 27 0 0 DMAControl 0 0 2 TileControl 0
+route 29 0 0 DMAControl 0 0 3 TileControl 0
+route 30 0 0 DMAControl 1 0 4 TileControl 0
+route 31 0 0 DMAControl 1 0 5 TileControl 0
+route 1 0 1 Control32 0 0 0 DMATrace 0
+route 1 0 2 Control32 0 0 0 DMATrace 0
+route 1 0 3 Control32 0 0 0 DMATrace 0
+route 1 0 4 Control32 0 0 0 DMATrace 0
+route 1 0 5 Control32 0 0 0 DMATrace 0
+route 26 1 0 DMAControl 0 1 1 TileControl 0
+route 27 1 0 DMAControl 0 1 2 TileControl 0
+route 29 1 0 DMAControl 0 1 3 TileControl 0
+route 30 1 0 DMAControl 1 1 4 TileControl 0
+route 31 1 0 DMAControl 1 1 5 TileControl 0
+route 1 1 1 Control32 0 1 0 DMATrace 0
+route 1 1 2 Control32 0 1 0 DMATrace 0
+route 1 1 3 Control32 0 1 0 DMATrace 0
+route 1 1 4 Control32 0 1 0 DMATrace 0
+route 1 1 5 Control32 0 1 0 DMATrace 0
+route 26 2 0 DMAControl 0 2 1 TileControl 0
+route 27 2 0 DMAControl 0 2 2 TileControl 0
+route 29 2 0 DMAControl 0 2 3 TileControl 0
+route 30 2 0 DMAControl 1 2 4 TileControl 0
+route 31 2 0 DMAControl 1 2 5 TileControl 0
+route 1 2 1 Control32 0 2 0 DMATrace 0
+route 1 2 2 Control32 0 2 0 DMATrace 0
+route 1 2 3 Control32 0 2 0 DMATrace 0
+route 1 2 4 Control32 0 2 0 DMATrace 0
+route 1 2 5 Control32 0 2 0 DMATrace 0
+core 0 2
+core 0 3
+core 0 4
+core 0 5
+core 1 2
+core 1 3
+core 1 4
+core 1 5
+core 2 2
+core 2 3
+core 2 4
+core 2 5
+buffer vr_q0_0_0 0 2 4096 12288
+buffer vr_q1_0_0 0 2 32768 12288
+buffer vr_y_0_0 0 2 98304 32768
+buffer vr_p_0_0 0 2 65536 32768
+buffer vr_o_0_0 0 2 16384 12288
+buffer vr_pp_0_0 0 2 28672 4
+buffer core_data_0_2 0 2 45056 1068
+buffer vr_q0_0_1 0 3 4096 12288
+buffer vr_q1_0_1 0 3 32768 12288
+buffer vr_y_0_1 0 3 98304 32768
+buffer vr_p_0_1 0 3 65536 32768
+buffer vr_o_0_1 0 3 16384 12288
+buffer vr_pp_0_1 0 3 28672 4
+buffer core_data_0_3 0 3 45056 1068
+buffer vr_q0_0_2 0 4 4096 12288
+buffer vr_q1_0_2 0 4 32768 12288
+buffer vr_y_0_2 0 4 98304 32768
+buffer vr_p_0_2 0 4 65536 32768
+buffer vr_o_0_2 0 4 16384 12288
+buffer vr_pp_0_2 0 4 28672 4
+buffer core_data_0_4 0 4 45056 1068
+buffer vr_q0_0_3 0 5 4096 12288
+buffer vr_q1_0_3 0 5 32768 12288
+buffer vr_y_0_3 0 5 98304 32768
+buffer vr_p_0_3 0 5 65536 32768
+buffer vr_o_0_3 0 5 16384 12288
+buffer vr_pp_0_3 0 5 28672 4
+buffer core_data_0_5 0 5 45056 1068
+buffer vr_kv0_0 0 1 0 28672
+buffer vr_kv1_0 0 1 131072 28672
+buffer vr_kv2_0 0 1 262144 28672
+buffer vr_kv3_0 0 1 393216 28672
+buffer vr_kv4_0 0 1 524288 28672
+buffer vr_kv5_0 0 1 655360 28672
+buffer vr_kv6_0 0 1 786432 28672
+buffer vr_kv7_0 0 1 917504 28672
+buffer vr_kv8_0 0 1 1048576 28672
+buffer vr_kv9_0 0 1 1179648 28672
+buffer vr_kv10_0 0 1 1310720 28672
+buffer vr_kv11_0 0 1 1441792 28672
+buffer vr_kv12_0 0 1 1572864 28672
+buffer vr_kv13_0 0 1 1703936 28672
+buffer vr_kv14_0 0 1 1835008 28672
+buffer vr_kv15_0 0 1 1966080 28672
+buffer vr_mq0_0_0 0 1 2097152 12288
+buffer vr_mq0_1_0 0 1 2228224 12288
+buffer vr_mq1_0_0 0 1 2359296 12288
+buffer vr_mq1_1_0 0 1 2490368 12288
+buffer vr_mq2_0_0 0 1 2621440 12288
+buffer vr_mq2_1_0 0 1 2752512 12288
+buffer vr_mq3_0_0 0 1 2883584 12288
+buffer vr_mq3_1_0 0 1 3014656 12288
+buffer vr_mo0_0_0 0 1 28672 9216
+buffer vr_mo0_1_0 0 1 159744 9216
+buffer vr_mo1_0_0 0 1 290816 9216
+buffer vr_mo1_1_0 0 1 421888 9216
+buffer vr_mo2_0_0 0 1 552960 9216
+buffer vr_mo2_1_0 0 1 684032 9216
+buffer vr_mo3_0_0 0 1 815104 9216
+buffer vr_mo3_1_0 0 1 946176 9216
+buffer vr_q0_1_0 1 2 4096 12288
+buffer vr_q1_1_0 1 2 32768 12288
+buffer vr_y_1_0 1 2 98304 32768
+buffer vr_p_1_0 1 2 65536 32768
+buffer vr_o_1_0 1 2 16384 12288
+buffer vr_pp_1_0 1 2 28672 4
+buffer core_data_1_2 1 2 45056 1068
+buffer vr_q0_1_1 1 3 4096 12288
+buffer vr_q1_1_1 1 3 32768 12288
+buffer vr_y_1_1 1 3 98304 32768
+buffer vr_p_1_1 1 3 65536 32768
+buffer vr_o_1_1 1 3 16384 12288
+buffer vr_pp_1_1 1 3 28672 4
+buffer core_data_1_3 1 3 45056 1068
+buffer vr_q0_1_2 1 4 4096 12288
+buffer vr_q1_1_2 1 4 32768 12288
+buffer vr_y_1_2 1 4 98304 32768
+buffer vr_p_1_2 1 4 65536 32768
+buffer vr_o_1_2 1 4 16384 12288
+buffer vr_pp_1_2 1 4 28672 4
+buffer core_data_1_4 1 4 45056 1068
+buffer vr_q0_1_3 1 5 4096 12288
+buffer vr_q1_1_3 1 5 32768 12288
+buffer vr_y_1_3 1 5 98304 32768
+buffer vr_p_1_3 1 5 65536 32768
+buffer vr_o_1_3 1 5 16384 12288
+buffer vr_pp_1_3 1 5 28672 4
+buffer core_data_1_5 1 5 45056 1068
+buffer vr_kv0_1 1 1 0 28672
+buffer vr_kv1_1 1 1 131072 28672
+buffer vr_kv2_1 1 1 262144 28672
+buffer vr_kv3_1 1 1 393216 28672
+buffer vr_kv4_1 1 1 524288 28672
+buffer vr_kv5_1 1 1 655360 28672
+buffer vr_kv6_1 1 1 786432 28672
+buffer vr_kv7_1 1 1 917504 28672
+buffer vr_kv8_1 1 1 1048576 28672
+buffer vr_kv9_1 1 1 1179648 28672
+buffer vr_kv10_1 1 1 1310720 28672
+buffer vr_kv11_1 1 1 1441792 28672
+buffer vr_kv12_1 1 1 1572864 28672
+buffer vr_kv13_1 1 1 1703936 28672
+buffer vr_kv14_1 1 1 1835008 28672
+buffer vr_kv15_1 1 1 1966080 28672
+buffer vr_mq0_0_1 1 1 2097152 12288
+buffer vr_mq0_1_1 1 1 2228224 12288
+buffer vr_mq1_0_1 1 1 2359296 12288
+buffer vr_mq1_1_1 1 1 2490368 12288
+buffer vr_mq2_0_1 1 1 2621440 12288
+buffer vr_mq2_1_1 1 1 2752512 12288
+buffer vr_mq3_0_1 1 1 2883584 12288
+buffer vr_mq3_1_1 1 1 3014656 12288
+buffer vr_mo0_0_1 1 1 28672 9216
+buffer vr_mo0_1_1 1 1 159744 9216
+buffer vr_mo1_0_1 1 1 290816 9216
+buffer vr_mo1_1_1 1 1 421888 9216
+buffer vr_mo2_0_1 1 1 552960 9216
+buffer vr_mo2_1_1 1 1 684032 9216
+buffer vr_mo3_0_1 1 1 815104 9216
+buffer vr_mo3_1_1 1 1 946176 9216
+buffer vr_q0_2_0 2 2 4096 12288
+buffer vr_q1_2_0 2 2 32768 12288
+buffer vr_y_2_0 2 2 98304 32768
+buffer vr_p_2_0 2 2 65536 32768
+buffer vr_o_2_0 2 2 16384 12288
+buffer vr_pp_2_0 2 2 28672 4
+buffer core_data_2_2 2 2 45056 1068
+buffer vr_q0_2_1 2 3 4096 12288
+buffer vr_q1_2_1 2 3 32768 12288
+buffer vr_y_2_1 2 3 98304 32768
+buffer vr_p_2_1 2 3 65536 32768
+buffer vr_o_2_1 2 3 16384 12288
+buffer vr_pp_2_1 2 3 28672 4
+buffer core_data_2_3 2 3 45056 1068
+buffer vr_q0_2_2 2 4 4096 12288
+buffer vr_q1_2_2 2 4 32768 12288
+buffer vr_y_2_2 2 4 98304 32768
+buffer vr_p_2_2 2 4 65536 32768
+buffer vr_o_2_2 2 4 16384 12288
+buffer vr_pp_2_2 2 4 28672 4
+buffer core_data_2_4 2 4 45056 1068
+buffer vr_q0_2_3 2 5 4096 12288
+buffer vr_q1_2_3 2 5 32768 12288
+buffer vr_y_2_3 2 5 98304 32768
+buffer vr_p_2_3 2 5 65536 32768
+buffer vr_o_2_3 2 5 16384 12288
+buffer vr_pp_2_3 2 5 28672 4
+buffer core_data_2_5 2 5 45056 1068
+buffer vr_kv0_2 2 1 0 28672
+buffer vr_kv1_2 2 1 131072 28672
+buffer vr_kv2_2 2 1 262144 28672
+buffer vr_kv3_2 2 1 393216 28672
+buffer vr_kv4_2 2 1 524288 28672
+buffer vr_kv5_2 2 1 655360 28672
+buffer vr_kv6_2 2 1 786432 28672
+buffer vr_kv7_2 2 1 917504 28672
+buffer vr_kv8_2 2 1 1048576 28672
+buffer vr_kv9_2 2 1 1179648 28672
+buffer vr_kv10_2 2 1 1310720 28672
+buffer vr_kv11_2 2 1 1441792 28672
+buffer vr_kv12_2 2 1 1572864 28672
+buffer vr_kv13_2 2 1 1703936 28672
+buffer vr_kv14_2 2 1 1835008 28672
+buffer vr_kv15_2 2 1 1966080 28672
+buffer vr_mq0_0_2 2 1 2097152 12288
+buffer vr_mq0_1_2 2 1 2228224 12288
+buffer vr_mq1_0_2 2 1 2359296 12288
+buffer vr_mq1_1_2 2 1 2490368 12288
+buffer vr_mq2_0_2 2 1 2621440 12288
+buffer vr_mq2_1_2 2 1 2752512 12288
+buffer vr_mq3_0_2 2 1 2883584 12288
+buffer vr_mq3_1_2 2 1 3014656 12288
+buffer vr_mo0_0_2 2 1 28672 9216
+buffer vr_mo0_1_2 2 1 159744 9216
+buffer vr_mo1_0_2 2 1 290816 9216
+buffer vr_mo1_1_2 2 1 421888 9216
+buffer vr_mo2_0_2 2 1 552960 9216
+buffer vr_mo2_1_2 2 1 684032 9216
+buffer vr_mo3_0_2 2 1 815104 9216
+buffer vr_mo3_1_2 2 1 946176 9216
+lock lock_0_2 0 2 0 2
+lock lock_0_2_0 0 2 1 0
+lock lock_0_2_1 0 2 2 1
+lock lock_0_2_2 0 2 3 0
+lock lock_0_3 0 3 0 2
+lock lock_0_3_3 0 3 1 0
+lock lock_0_3_4 0 3 2 1
+lock lock_0_3_5 0 3 3 0
+lock lock_0_4 0 4 0 2
+lock lock_0_4_6 0 4 1 0
+lock lock_0_4_7 0 4 2 1
+lock lock_0_4_8 0 4 3 0
+lock lock_0_5 0 5 0 2
+lock lock_0_5_9 0 5 1 0
+lock lock_0_5_10 0 5 2 1
+lock lock_0_5_11 0 5 3 0
+lock lock_0_1 0 1 0 16
+lock lock_0_1_12 0 1 1 0
+lock lock_0_1_13 0 1 2 2
+lock lock_0_1_14 0 1 3 2
+lock lock_0_1_15 0 1 4 2
+lock lock_0_1_16 0 1 5 2
+lock lock_0_1_17 0 1 6 0
+lock lock_0_1_18 0 1 7 0
+lock lock_0_1_19 0 1 8 0
+lock lock_0_1_20 0 1 9 0
+lock lock_0_1_21 0 1 10 2
+lock lock_0_1_22 0 1 11 2
+lock lock_0_1_23 0 1 12 2
+lock lock_0_1_24 0 1 13 2
+lock lock_0_1_25 0 1 14 0
+lock lock_0_1_26 0 1 15 0
+lock lock_0_1_27 0 1 16 0
+lock lock_0_1_28 0 1 17 0
+lock lock_1_2 1 2 0 2
+lock lock_1_2_29 1 2 1 0
+lock lock_1_2_30 1 2 2 1
+lock lock_1_2_31 1 2 3 0
+lock lock_1_3 1 3 0 2
+lock lock_1_3_32 1 3 1 0
+lock lock_1_3_33 1 3 2 1
+lock lock_1_3_34 1 3 3 0
+lock lock_1_4 1 4 0 2
+lock lock_1_4_35 1 4 1 0
+lock lock_1_4_36 1 4 2 1
+lock lock_1_4_37 1 4 3 0
+lock lock_1_5 1 5 0 2
+lock lock_1_5_38 1 5 1 0
+lock lock_1_5_39 1 5 2 1
+lock lock_1_5_40 1 5 3 0
+lock lock_1_1 1 1 0 16
+lock lock_1_1_41 1 1 1 0
+lock lock_1_1_42 1 1 2 2
+lock lock_1_1_43 1 1 3 2
+lock lock_1_1_44 1 1 4 2
+lock lock_1_1_45 1 1 5 2
+lock lock_1_1_46 1 1 6 0
+lock lock_1_1_47 1 1 7 0
+lock lock_1_1_48 1 1 8 0
+lock lock_1_1_49 1 1 9 0
+lock lock_1_1_50 1 1 10 2
+lock lock_1_1_51 1 1 11 2
+lock lock_1_1_52 1 1 12 2
+lock lock_1_1_53 1 1 13 2
+lock lock_1_1_54 1 1 14 0
+lock lock_1_1_55 1 1 15 0
+lock lock_1_1_56 1 1 16 0
+lock lock_1_1_57 1 1 17 0
+lock lock_2_2 2 2 0 2
+lock lock_2_2_58 2 2 1 0
+lock lock_2_2_59 2 2 2 1
+lock lock_2_2_60 2 2 3 0
+lock lock_2_3 2 3 0 2
+lock lock_2_3_61 2 3 1 0
+lock lock_2_3_62 2 3 2 1
+lock lock_2_3_63 2 3 3 0
+lock lock_2_4 2 4 0 2
+lock lock_2_4_64 2 4 1 0
+lock lock_2_4_65 2 4 2 1
+lock lock_2_4_66 2 4 3 0
+lock lock_2_5 2 5 0 2
+lock lock_2_5_67 2 5 1 0
+lock lock_2_5_68 2 5 2 1
+lock lock_2_5_69 2 5 3 0
+lock lock_2_1 2 1 0 16
+lock lock_2_1_70 2 1 1 0
+lock lock_2_1_71 2 1 2 2
+lock lock_2_1_72 2 1 3 2
+lock lock_2_1_73 2 1 4 2
+lock lock_2_1_74 2 1 5 2
+lock lock_2_1_75 2 1 6 0
+lock lock_2_1_76 2 1 7 0
+lock lock_2_1_77 2 1 8 0
+lock lock_2_1_78 2 1 9 0
+lock lock_2_1_79 2 1 10 2
+lock lock_2_1_80 2 1 11 2
+lock lock_2_1_81 2 1 12 2
+lock lock_2_1_82 2 1 13 2
+lock lock_2_1_83 2 1 14 0
+lock lock_2_1_84 2 1 15 0
+lock lock_2_1_85 2 1 16 0
+lock lock_2_1_86 2 1 17 0
+trace 0
