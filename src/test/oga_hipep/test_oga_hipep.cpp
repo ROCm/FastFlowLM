@@ -896,6 +896,198 @@ void TestTheRewindEntryPointsAreOptional() {
     TEST_REQUIRE(g_fake.generators_created == 2);
 }
 
+// ---- several conversations: one generator slot each ---------------------------
+
+/// \brief a fresh fake and an engine over OGA 0.19 that keeps up to `slots` generators
+std::unique_ptr<flm::oga::OgaEngine> MakeSlotsEngine(std::size_t slots, std::uint32_t max_length = 32) {
+    g_fake = FakeOga{};
+    flm::oga::OgaApi::Owned<OgaModel> model(new OgaModel, {&FakeDestroyModel});
+    flm::oga::OgaSlotLimits limits;
+    limits.count = slots;
+    return std::make_unique<flm::oga::OgaEngine>(FakeApi(FakeSymbols(), {"test", {}, {0, 19, 0, 0}}),
+                                                 std::move(model), "Test", kVocab, 64, max_length,
+                                                 std::nullopt, false, limits);
+}
+
+/// \brief what the frontend does for a prompt that does not continue its history:
+///        clear the context, then prefill the whole prompt and checkpoint it
+buffer<bf16> NewPrompt(flm::oga::OgaEngine& engine, std::vector<int> prompt) {
+    engine.clear_context();
+    auto logits = engine.prefill(prompt);
+    engine.checkpoint();
+    return logits;
+}
+
+void TestTwoConversationsTakingTurnsEachKeepTheirSlot() {
+    auto engine = MakeSlotsEngine(2);
+    TEST_REQUIRE(engine->slot_limit() == 2);
+    NewPrompt(*engine, {1, 2, 3});
+    engine->forward(4);
+    NewPrompt(*engine, {7, 8, 9});
+    engine->forward(10);
+    TEST_REQUIRE(g_fake.generators_created == 2);
+    TEST_REQUIRE(g_fake.generators_live == 2);
+    const auto reused = engine->reused_tokens();
+
+    // A2 continues A's generator, which still holds A1 and its reply
+    RequireState(NewPrompt(*engine, {1, 2, 3, 4, 5}), 5, 5, 15);
+    TEST_REQUIRE(g_fake.generators_created == 2);
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{5}));
+    TEST_REQUIRE(engine->reused_tokens() - reused == 4);
+    TEST_REQUIRE(engine->replayed_tokens() == 0);
+
+    // B2 rewinds B's generator to B1's checkpoint
+    RequireState(NewPrompt(*engine, {7, 8, 9, 11}), 4, 11, 35);
+    TEST_REQUIRE(g_fake.rewinds == (std::vector<std::size_t>{3}));
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{11}));
+    TEST_REQUIRE(g_fake.generators_created == 2);
+    TEST_REQUIRE(engine->reused_tokens() - reused == 7);
+}
+
+void TestTheLeastRecentlyUsedSlotIsRebuilt() {
+    auto engine = MakeSlotsEngine(2);
+    NewPrompt(*engine, {1, 2});   // A
+    NewPrompt(*engine, {5, 6});   // B
+    NewPrompt(*engine, {1, 2, 3});  // A again: B is now the least recently used
+    NewPrompt(*engine, {9});      // C takes B's slot
+    TEST_REQUIRE(g_fake.generators_created == 3);
+    TEST_REQUIRE(g_fake.generators_live == 2);
+    RequireState(NewPrompt(*engine, {1, 2, 3, 4}), 4, 4, 10);
+    TEST_REQUIRE(g_fake.generators_created == 3);
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{4}));
+    // B is gone, so it replays; it takes C's slot, the least recently used
+    RequireState(NewPrompt(*engine, {5, 6, 7}), 3, 7, 18);
+    TEST_REQUIRE(g_fake.generators_created == 4);
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{5, 6, 7}));
+    RequireState(NewPrompt(*engine, {1, 2, 3, 4, 8}), 5, 8, 18);
+    TEST_REQUIRE(g_fake.generators_created == 4);
+}
+
+void TestOneSlotKeepsOneGenerator() {
+    auto engine = MakeSlotsEngine(1);
+    NewPrompt(*engine, {1, 2, 3});
+    NewPrompt(*engine, {7, 8});
+    TEST_REQUIRE(g_fake.generators_live == 1);
+    RequireState(NewPrompt(*engine, {1, 2, 3, 4}), 4, 4, 10);
+    TEST_REQUIRE(g_fake.generators_created == 3);
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{1, 2, 3, 4}));
+}
+
+void TestTheSamePromptAgainRunsNothing() {
+    auto engine = MakeSlotsEngine(1);
+    NewPrompt(*engine, {1, 2, 3});
+    engine->forward(4);
+    const auto appends = g_fake.appends.size();
+    const auto reused = engine->reused_tokens();
+    // the logits saved with the checkpoint, not the live generator's [1, 2, 3, 4]
+    RequireState(NewPrompt(*engine, {1, 2, 3}), 3, 3, 6);
+    TEST_REQUIRE(g_fake.appends.size() == appends);
+    TEST_REQUIRE(g_fake.rewinds == (std::vector<std::size_t>{3}));
+    TEST_REQUIRE(g_fake.generators_created == 1);
+    TEST_REQUIRE(engine->reused_tokens() - reused == 3);
+    TEST_REQUIRE(engine->replayed_tokens() == 0);
+    // and decoding goes on from the checkpoint
+    RequireState(engine->forward(5), 4, 5, 11);
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{5}));
+
+    // twice in a row, with nothing decoded in between, still runs nothing
+    NewPrompt(*engine, {1, 2, 3});
+    const auto again = g_fake.appends.size();
+    RequireState(NewPrompt(*engine, {1, 2, 3}), 3, 3, 6);
+    TEST_REQUIRE(g_fake.appends.size() == again);
+}
+
+void TestAChunkedPromptReachesALongerSlot() {
+    auto engine = MakeSlotsEngine(2);
+    NewPrompt(*engine, {1, 2, 3, 4, 5, 6});
+    engine->forward(7);
+    NewPrompt(*engine, {20, 21});
+    const auto reused = engine->reused_tokens();
+    const auto appends = g_fake.appends.size();
+
+    // the frontend sends A2 in two chunks, the first shorter than A's checkpoint
+    engine->clear_context();
+    const std::vector<int> a2{1, 2, 3, 4, 5, 6, 8, 9};
+    engine->expect_prefill(a2);
+    std::vector<int> head(a2.begin(), a2.begin() + 4);
+    std::vector<int> tail(a2.begin() + 4, a2.end());
+    engine->prefill(head);  // its logits are not used
+    TEST_REQUIRE(g_fake.appends.size() == appends);
+    TEST_REQUIRE(g_fake.generators_created == 2);
+    RequireRan(engine->prefill(tail), a2);
+    TEST_REQUIRE(g_fake.rewinds == (std::vector<std::size_t>{6}));
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{8, 9}));
+    TEST_REQUIRE(g_fake.generators_created == 2);
+    TEST_REQUIRE(engine->reused_tokens() - reused == 6);
+    TEST_REQUIRE(engine->get_current_context_length() == 8);
+
+    // a prompt that leaves what it said it would send is matched on its own tokens
+    engine->clear_context();
+    engine->expect_prefill({20, 21, 22, 23});
+    std::vector<int> other{1, 2, 3, 4, 5, 6, 8, 9, 10};
+    RequireRan(engine->prefill(other), other);
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{10}));
+}
+
+void TestAnOgaErrorDropsOnlyItsSlot() {
+    auto engine = MakeSlotsEngine(2);
+    NewPrompt(*engine, {1, 2, 3});
+    NewPrompt(*engine, {7, 8});
+    g_fake.fail_next_append = "device lost";
+    RequireThrows<flm::oga::OgaError>([&] { engine->forward(9); });
+    TEST_REQUIRE(g_fake.generators_live == 1);
+    RequireState(NewPrompt(*engine, {1, 2, 3, 4}), 4, 4, 10);
+    TEST_REQUIRE(g_fake.generators_created == 2);
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{4}));
+}
+
+void TestTheSlotCountFitsTheBudget() {
+    flm::oga::OgaSlotLimits limits;
+    limits.count = 4;
+    limits.budget_bytes = 4096ull << 20;
+    limits.bytes_per_position = 32 << 10;
+    // the 9B package: 1 GiB a slot at 32k, 4 GiB at 128k; the first slot is outside the budget
+    TEST_REQUIRE(flm::oga::SlotsWithin(limits, 32768) == 4);
+    TEST_REQUIRE(flm::oga::SlotsWithin(limits, 65536) == 3);
+    TEST_REQUIRE(flm::oga::SlotsWithin(limits, 131072) == 2);
+    TEST_REQUIRE(flm::oga::SlotsWithin(limits, 262144) == 1);
+    limits.budget_bytes = 0;
+    TEST_REQUIRE(flm::oga::SlotsWithin(limits, 8) == 1);
+    limits.bytes_per_position = 0;  // a size the package does not tell
+    TEST_REQUIRE(flm::oga::SlotsWithin(limits, 32768) == 4);
+    limits.count = 0;
+    TEST_REQUIRE(flm::oga::SlotsWithin(limits, 32768) == 1);
+
+    // a larger maximum length lowers the limit, and drops the slots too small for it
+    g_fake = FakeOga{};
+    flm::oga::OgaApi::Owned<OgaModel> model(new OgaModel, {&FakeDestroyModel});
+    flm::oga::OgaSlotLimits engine_limits;
+    engine_limits.count = 3;
+    engine_limits.budget_bytes = 64;
+    engine_limits.bytes_per_position = 1;
+    flm::oga::OgaEngine engine(FakeApi(FakeSymbols(), {"test", {}, {0, 19, 0, 0}}), std::move(model),
+                               "Test", kVocab, 64, 32, std::nullopt, false, engine_limits);
+    TEST_REQUIRE(engine.slot_limit() == 3);
+    NewPrompt(engine, {1});
+    NewPrompt(engine, {2});
+    NewPrompt(engine, {3});
+    TEST_REQUIRE(g_fake.generators_live == 3);
+    engine.clear_context();
+    engine.update_max_length(64);
+    TEST_REQUIRE(engine.slot_limit() == 2);
+    TEST_REQUIRE(g_fake.generators_live == 0);
+    // a smaller one drops the larger slots too: next to others they would overrun the budget
+    NewPrompt(engine, {1});
+    NewPrompt(engine, {2});
+    TEST_REQUIRE(g_fake.generators_live == 2);
+    engine.clear_context();
+    engine.update_max_length(32);
+    TEST_REQUIRE(engine.slot_limit() == 3);
+    TEST_REQUIRE(g_fake.generators_live == 0);
+    NewPrompt(engine, {1});
+    TEST_REQUIRE(g_fake.last_max_length == 32);
+}
+
 void TestAnImagePromptRunsInOneSetInputsAfterAWarmUp() {
     auto engine = MakeVisionEngine();
     const auto image = Image(4, 4);
@@ -1280,6 +1472,77 @@ void TestADroppedOrRefusedStageDoesNotReachTheNextPrefill() {
     std::vector<int> again{1, 2};
     engine->prefill(again);
     TEST_REQUIRE(g_fake.set_inputs.empty());
+}
+
+/// \brief what the gemma4-12b frontend does for an image prompt: stage it, clear the
+///        history, prefill the processor's whole sequence and checkpoint it
+buffer<bf16> RunStagedPrompt(flm::oga::OgaEngine& engine) {
+    std::vector<int> ids = engine.StagePromptImages("see <image>", {"PNG_FAKE"});
+    engine.clear_context();
+    auto logits = engine.prefill(ids);
+    engine.DropStagedPrompt();
+    engine.checkpoint();
+    return logits;
+}
+
+void TestAStagedImagePromptTakesTheLeastRecentlyUsedSlot() {
+    auto engine = MakeSlotsEngine(2);
+    NewPrompt(*engine, {1, 2, 3});  // A
+    engine->forward(4);
+    NewPrompt(*engine, {4, 5});     // B: A is now the least recently used
+    // the image prompt [7, 8, 9] gets a new generator in A's slot, and B keeps its own
+    RequireState(RunStagedPrompt(*engine), 3, 9, 24);
+    TEST_REQUIRE(g_fake.generators_created == 3);
+    TEST_REQUIRE(g_fake.generators_live == 2);
+    TEST_REQUIRE(g_fake.set_inputs.size() == 1);
+    TEST_REQUIRE(g_fake.set_inputs.back().ids == (std::vector<std::int32_t>{7, 8, 9}));
+    TEST_REQUIRE(engine->get_current_context_length() == 3);
+    // decoding continues the image slot
+    RequireState(engine->forward(10), 4, 10, 34);
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{10}));
+
+    // B continues its generator
+    RequireState(NewPrompt(*engine, {4, 5, 6}), 3, 6, 15);
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{6}));
+    TEST_REQUIRE(g_fake.generators_created == 3);
+    // so does the image conversation's next turn, without the processor
+    RequireState(NewPrompt(*engine, {7, 8, 9, 10, 11}), 5, 11, 45);
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{11}));
+    TEST_REQUIRE(g_fake.generators_created == 3);
+    TEST_REQUIRE(g_fake.set_inputs.size() == 1);
+    // A was replaced, so it replays, in B's slot, now the least recently used
+    RequireState(NewPrompt(*engine, {1, 2, 3, 4}), 4, 4, 10);
+    TEST_REQUIRE(g_fake.generators_created == 4);
+    TEST_REQUIRE(g_fake.generators_live == 2);
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{1, 2, 3, 4}));
+}
+
+void TestAStagedImagePromptAlwaysBuildsANewGenerator() {
+    auto engine = MakeSlotsEngine(2);
+    RunStagedPrompt(*engine);
+    // The same ids again may carry other images: the processor's inputs run in a new generator.
+    RunStagedPrompt(*engine);
+    TEST_REQUIRE(g_fake.generators_created == 2);
+    TEST_REQUIRE(g_fake.set_inputs.size() == 2);
+    TEST_REQUIRE(g_fake.appends.empty());
+}
+
+void TestAFailedStagedPrefillDropsOnlyItsSlot() {
+    auto engine = MakeSlotsEngine(2);
+    NewPrompt(*engine, {1, 2, 3});
+    NewPrompt(*engine, {4, 5});
+    std::vector<int> ids = engine->StagePromptImages("see <image>", {"PNG_FAKE"});
+    engine->clear_context();
+    g_fake.logits_width = kVocab + 1;
+    RequireThrows<std::runtime_error>([&] { engine->prefill(ids); });
+    g_fake.logits_width = kVocab;
+    TEST_REQUIRE(g_fake.generators_live == 1);
+    // the failed prefill left no image tokens behind, and no stage
+    TEST_REQUIRE(engine->get_current_context_length() == 0);
+    RequireState(NewPrompt(*engine, {4, 5, 6}), 3, 6, 15);
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{6}));
+    TEST_REQUIRE(g_fake.generators_created == 3);
+    TEST_REQUIRE(g_fake.set_inputs.size() == 1);
 }
 
 void TestStagingImagesNamesAMissingProcessorEntry() {
@@ -2404,6 +2667,13 @@ int main(int argc, char** argv) {
     RUN(TestARefusedRewindReplaysInstead);
     RUN(TestARefusedRewindEndsTheRewinds);
     RUN(TestTheRewindEntryPointsAreOptional);
+    RUN(TestTwoConversationsTakingTurnsEachKeepTheirSlot);
+    RUN(TestTheLeastRecentlyUsedSlotIsRebuilt);
+    RUN(TestOneSlotKeepsOneGenerator);
+    RUN(TestTheSamePromptAgainRunsNothing);
+    RUN(TestAChunkedPromptReachesALongerSlot);
+    RUN(TestAnOgaErrorDropsOnlyItsSlot);
+    RUN(TestTheSlotCountFitsTheBudget);
     RUN(TestAnImagePromptRunsInOneSetInputsAfterAWarmUp);
     RUN(TestAnImageRunCanStartAChunk);
     RUN(TestANewImageReplaysTheHistoryWithEveryImage);
@@ -2426,6 +2696,9 @@ int main(int argc, char** argv) {
     RUN(TestAnotherModelTypeDoesNotShareThePresentBuffer);
     RUN(TestAStagedImagePromptIsTheNextPrefill);
     RUN(TestADroppedOrRefusedStageDoesNotReachTheNextPrefill);
+    RUN(TestAStagedImagePromptTakesTheLeastRecentlyUsedSlot);
+    RUN(TestAStagedImagePromptAlwaysBuildsANewGenerator);
+    RUN(TestAFailedStagedPrefillDropsOnlyItsSlot);
     RUN(TestStagingImagesNamesAMissingProcessorEntry);
     RUN(TestTheGemma4UnifiedPackageStillRunsTextWithoutAVisionStartToken);
     RUN(TestOpenModelRejectsAModelOnAnotherDevice);
