@@ -120,7 +120,7 @@ def schema_unanchored_pattern(api: Api) -> None:
     body = api.body(user("Which city is the capital of France? Answer as JSON."),
                     response_format=json_schema_format("city", schema), max_tokens=64)
     _, value = nonstream_json(api, body, schema)
-    expect(len(value["city"]) > 1, f"the pattern \\S held the city to one character: {value['city']!r}")
+    expect("paris" in value["city"].lower(), f"the pattern \\S did not leave room for the city: {value['city']!r}")
 
 
 @case

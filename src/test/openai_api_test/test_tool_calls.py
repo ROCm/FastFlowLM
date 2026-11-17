@@ -176,7 +176,7 @@ def function_unanchored_pattern(api: Api) -> None:
         "type": "string", "minLength": 1, "maxLength": 64, "pattern": "\\S"}
     choice = api.ok(api.body(user(WEATHER_PROMPT), tools=[tool], tool_choice=function_choice("get_weather")))
     city = json.loads(expect_calls(choice, [tool])[0]["function"]["arguments"])["city"]
-    expect(len(city) > 1, f"the pattern \\S held the city to one character: {city!r}")
+    expect("paris" in city.lower(), f"the pattern \\S did not leave room for the city: {city!r}")
 
 
 NOTE = ("The quarterly review moved to Thursday at three in the afternoon, "
@@ -193,7 +193,7 @@ def function_pattern_keeps_length_bounds(api: Api) -> None:
     body = api.body(user(f"Save this note word for word: {NOTE}"), tools=[tool],
                     tool_choice=function_choice("save_note"))
     text = json.loads(expect_calls(api.ok(body), [tool])[0]["function"]["arguments"])["text"]
-    expect(1 < len(text) <= 20, f"text {text!r} is outside 2..20 characters")
+    expect(0 < len(text) <= 20 and not text.isspace(), f"text {text!r} is not 1..20 characters with a non-blank one")
 
 
 @case

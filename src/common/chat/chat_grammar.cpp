@@ -4,6 +4,7 @@
 #include "chat/chat_grammar.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <fstream>
 #include <functional>
 #include <iterator>
@@ -180,24 +181,92 @@ bool is_one_character(const std::string& pattern) {
     return true;
 }
 
+/// \brief Any character a JSON string holds unescaped, as a regex class
+/// \note Not ".": xgrammar keeps '"', '\\' and control characters out of a pattern's
+///       matches only when the pattern is printable ASCII. Any other pattern is
+///       compiled without that, where "." can close the string and add keys.
+const std::string JSON_STRING_CHAR = "[^\"\\\\\\x00-\\x1f]";
+
+/// \brief Where a regex splits into alternatives and holds anchors, outside groups and classes
+struct regex_shape {
+    std::vector<std::string> alternatives; // split at each top-level "|"
+    bool inner_anchor = false;             // a "^" or "$" anywhere but at either end
+};
+
+regex_shape scan_regex(const std::string& pattern) {
+    regex_shape shape;
+    std::string current;
+    int depth = 0;
+    bool in_class = false;
+    for (size_t i = 0; i < pattern.size(); ++i) {
+        const char c = pattern[i];
+        if (c == '\\' && i + 1 < pattern.size()) {
+            current += pattern.substr(i++, 2);
+            continue;
+        }
+        if (in_class) {
+            in_class = c != ']';
+        } else if (c == '[') {
+            in_class = true;
+            if (i + 1 < pattern.size() && pattern[i + 1] == '^') current += pattern[i++];
+            if (i + 1 < pattern.size() && pattern[i + 1] == ']') current += pattern[i++];
+        } else if (c == '(') {
+            ++depth;
+        } else if (c == ')') {
+            --depth;
+        } else if (c == '|' && depth == 0) {
+            shape.alternatives.push_back(std::move(current));
+            current.clear();
+            continue;
+        } else if (c == '^' || c == '$') {
+            const bool at_edge = depth == 0 && (c == '^' ? current.empty()
+                                                         : i + 1 == pattern.size() || pattern[i + 1] == '|');
+            shape.inner_anchor = shape.inner_anchor || !at_edge;
+        }
+        current += c;
+    }
+    shape.alternatives.push_back(std::move(current));
+    return shape;
+}
+
+/// \brief One alternative of a pattern, padded where it leaves a side unanchored
+std::string padded_alternative(const std::string& alternative) {
+    const std::string pad = JSON_STRING_CHAR + "*";
+    const bool starts = !alternative.empty() && alternative.front() == '^';
+    size_t escapes = 0;
+    while (escapes + 1 < alternative.size() && alternative[alternative.size() - 2 - escapes] == '\\') ++escapes;
+    const bool ends = alternative.size() > (starts ? 1u : 0u) && alternative.back() == '$' && escapes % 2 == 0;
+    const size_t begin = starts ? 1 : 0;
+    const std::string core = alternative.substr(begin, alternative.size() - begin - (ends ? 1 : 0));
+    if (core.empty()) {
+        return starts && ends ? std::string() : pad;
+    }
+    return (starts ? "(" : pad + "(") + core + (ends ? ")" : ")" + pad);
+}
+
 /// \brief A JSON Schema string pattern as xgrammar's whole-string regex has to spell it
 /// \note JSON Schema finds a pattern anywhere in the string, while xgrammar matches
 ///       the whole string against it, so "\S" (not blank) would allow exactly one
-///       character. A side the pattern leaves unanchored gets ".*".
+///       character. A side an alternative leaves unanchored gets padded. Left as sent:
+///       a pattern anchored at both ends, one that opens with an inline flag such as
+///       "(?i)", which xgrammar only takes there, and one with an anchor inside a group,
+///       which xgrammar ignores rather than reads.
 std::string whole_string_pattern(const std::string& pattern) {
-    const bool starts = !pattern.empty() && pattern.front() == '^';
-    size_t escapes = 0;
-    while (escapes + 1 < pattern.size() && pattern[pattern.size() - 2 - escapes] == '\\') ++escapes;
-    const bool ends = pattern.size() > (starts ? 1u : 0u) && pattern.back() == '$' && escapes % 2 == 0;
-    if (starts && ends) {
+    const bool inline_flag = pattern.size() > 2 && pattern.compare(0, 2, "(?") == 0 &&
+                             std::isalpha(static_cast<unsigned char>(pattern[2]));
+    const regex_shape shape = scan_regex(pattern);
+    if (inline_flag || shape.inner_anchor) {
         return pattern;
     }
-    const size_t begin = starts ? 1 : 0;
-    const std::string core = pattern.substr(begin, pattern.size() - begin - (ends ? 1 : 0));
-    if (core.empty()) {
-        return ".*";
+    if (shape.alternatives.size() == 1) {
+        const std::string padded = padded_alternative(pattern);
+        return padded.find(JSON_STRING_CHAR) == std::string::npos ? pattern : padded;
     }
-    return (starts ? "^(" : ".*(") + core + (ends ? ")$" : ").*");
+    std::string out;
+    for (const auto& alternative : shape.alternatives) {
+        out += (out.empty() ? "(" : "|") + padded_alternative(alternative);
+    }
+    return out + ")";
 }
 
 bool is_string_schema(const json& schema) {
@@ -216,8 +285,10 @@ constexpr int64_t XGRAMMAR_REGEX_REPEAT_LIMIT = 128;
 /// \brief The pattern xgrammar is given for a string schema, which may take over its length bounds
 /// \note xgrammar drops minLength/maxLength once a pattern is there. A lone character
 ///       class that only has to occur somewhere leads instead of being padded, so the
-///       bounds become the repetition after it and leave the schema. Bounds too long for
-///       that repetition keep the schema's minLength/maxLength and drop the pattern
+///       bounds become the repetition after it and leave the schema. That is narrower
+///       than JSON Schema, which lets the class occur anywhere ("\d" with bounds will not
+///       write "Room 5"), but what it writes is always valid. Bounds too long for that
+///       repetition keep the schema's minLength/maxLength and drop the pattern
 ///       (std::nullopt): a string past its maxLength is the likelier mistake.
 std::optional<std::string> string_pattern(json& schema) {
     const std::string pattern = schema["pattern"].get<std::string>();
@@ -233,7 +304,8 @@ std::optional<std::string> string_pattern(json& schema) {
     }
     const int64_t low = std::max<int64_t>(min_length.get<int64_t>(), 1) - 1;
     if (max_length.is_number_integer() && max_length.get<int64_t>() - 1 < low) {
-        return whole_string_pattern(pattern);  // unsatisfiable, which xgrammar reports
+        // unsatisfiable; xgrammar ignores the bounds beside a pattern, so this holds to the pattern alone
+        return whole_string_pattern(pattern);
     }
     const bool long_repeat = max_length.is_null() ? low > XGRAMMAR_REGEX_REPEAT_LIMIT
                                                   : max_length.get<int64_t>() - 1 > XGRAMMAR_REGEX_REPEAT_LIMIT;
@@ -243,12 +315,14 @@ std::optional<std::string> string_pattern(json& schema) {
     const std::string high = max_length.is_null() ? std::string() : std::to_string(max_length.get<int64_t>() - 1);
     schema.erase("minLength");
     schema.erase("maxLength");
-    return pattern + ".{" + std::to_string(low) + "," + high + "}";
+    return pattern + JSON_STRING_CHAR + "{" + std::to_string(low) + "," + high + "}";
 }
 
 /// \brief Spell out what a schema leaves implicit where xgrammar needs it
 /// \note An array without "items" means any items; the qwen_xml style rejects
 ///       every value of such an array unless that is written as "items": {}.
+///       Literal values (const, enum, default, examples) are not schemas, and a
+///       pattern under "not" would change meaning if rewritten, so neither is entered.
 json normalize_schema(json schema) {
     if (schema.is_array()) {
         for (auto& item : schema) item = normalize_schema(std::move(item));
@@ -268,8 +342,17 @@ json normalize_schema(json schema) {
             schema.erase("pattern");
         }
     }
+    static const std::set<std::string> NOT_ENTERED = {"const", "enum", "default", "examples", "not"};
+    // keyed by name, so a property called "default" is still a schema
+    static const std::set<std::string> SCHEMA_MAPS = {"properties", "patternProperties", "$defs", "definitions",
+                                                      "dependentSchemas"};
     for (auto& [key, value] : schema.items()) {
-        if (value.is_object() || value.is_array()) {
+        if (NOT_ENTERED.count(key)) {
+            continue;
+        }
+        if (SCHEMA_MAPS.count(key) && value.is_object()) {
+            for (auto& [name, sub] : value.items()) sub = normalize_schema(std::move(sub));
+        } else if (value.is_object() || value.is_array()) {
             value = normalize_schema(std::move(value));
         }
     }

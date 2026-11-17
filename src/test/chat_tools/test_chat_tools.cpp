@@ -601,6 +601,81 @@ void test_lfm2_string_length() {
     CHECK(!grammar.takes(note_request(), note("\"abcde\\\"f\"")));
 }
 
+chat_constraint_request string_schema_request(const json& property) {
+    chat_constraint_request request;
+    request.allow_reasoning = false;
+    request.json_schema = {{"type", "object"}, {"properties", {{"v", property}}}, {"required", {"v"}},
+                           {"additionalProperties", false}};
+    return request;
+}
+
+void test_string_pattern() {
+    std::printf("a string pattern matches anywhere, as JSON Schema reads it\n");
+    grammar_fixture grammar(HERMES);
+    auto takes = [&grammar](const json& property, const std::string& value) {
+        return grammar.takes(string_schema_request(property), "{\"v\": \"" + value + "\"}");
+    };
+    auto pattern = [](const std::string& p) { return json{{"type", "string"}, {"pattern", p}}; };
+    CHECK(takes(pattern("\\S"), "Paris"));
+    CHECK(takes(pattern("\\S"), "a"));
+    CHECK(!takes(pattern("\\S"), " "));
+    CHECK(takes(pattern("\\d{5}"), "zip 90210"));
+    // anchored at both ends: as sent
+    CHECK(takes(pattern("^\\d{4}$"), "2024"));
+    CHECK(!takes(pattern("^\\d{4}$"), "x2024"));
+    CHECK(takes(pattern("^ab"), "abc"));
+    CHECK(!takes(pattern("^ab"), "cab"));
+    CHECK(takes(pattern("^$"), ""));
+    CHECK(!takes(pattern("^$"), "a"));
+    // each alternative keeps its own anchor
+    CHECK(takes(pattern("^a|b"), "ax"));
+    CHECK(takes(pattern("^a|b"), "xbx"));
+    CHECK(!takes(pattern("^a|b"), "xa"));
+    // an anchor inside a group, which xgrammar would ignore: left as sent
+    CHECK(takes(pattern("(?:^abc)"), "abc"));
+    CHECK(!takes(pattern("(?:^abc)"), "xabc"));
+    // padding never ends the string: a non-ASCII pattern is compiled without xgrammar's
+    // JSON string guard, where ".*" took "x\", \"k\": \"y" and added a key
+    CHECK(takes(pattern("(\xC3\xA9|x)"), "ax"));
+    CHECK(!takes(pattern("(\xC3\xA9|x)"), "x\", \"k\": \"y"));
+    // a lone class folds its length bounds
+    const json bounded = {{"type", "string"}, {"minLength", 2}, {"maxLength", 5}, {"pattern", "\\S"}};
+    CHECK(takes(bounded, "abcde"));
+    CHECK(!takes(bounded, "abcdef"));
+    CHECK(!takes(bounded, "a"));
+    // past xgrammar's repetition limit the bounds stay and the pattern goes, nested too
+    const json caption = {{"type", "string"}, {"minLength", 1}, {"maxLength", 512}, {"pattern", "\\S"}};
+    chat_constraint_request nested = string_schema_request(
+        {{"type", "object"}, {"properties", {{"caption", caption}}}, {"required", {"caption"}}, {"additionalProperties", false}});
+    CHECK(grammar.takes(nested, "{\"v\": {\"caption\": \"Monthly sales\"}}"));
+}
+
+void test_string_pattern_inline_flag() {
+    std::printf("a pattern opening with an inline flag is left as sent\n");
+    grammar_fixture grammar(HERMES);
+    // padded, it would read ".*((?i)abc).*", which xgrammar cannot build
+    CHECK(grammar.takes(string_schema_request({{"type", "string"}, {"pattern", "(?i)abc"}}), "{\"v\": \"abc\"}"));
+}
+
+void test_schema_literals_untouched() {
+    std::printf("literal values and \"not\" are not rewritten as schemas\n");
+    grammar_fixture grammar(HERMES);
+    // a property named like a keyword is still a schema
+    chat_constraint_request request;
+    request.allow_reasoning = false;
+    request.json_schema = {{"type", "object"},
+                           {"properties", {{"default", {{"type", "string"}, {"pattern", "\\S"}}}}},
+                           {"required", {"default"}},
+                           {"additionalProperties", false}};
+    CHECK(grammar.takes(request, "{\"default\": \"Paris\"}"));
+    // an enum value shaped like a string schema is a value: it is matched as sent
+    request.json_schema = {{"type", "object"},
+                           {"properties", {{"v", {{"enum", {{{"type", "string"}, {"pattern", "\\S"}}}}}}}},
+                           {"required", {"v"}},
+                           {"additionalProperties", false}};
+    CHECK(grammar.takes(request, "{\"v\": {\"type\":\"string\",\"pattern\":\"\\\\S\"}}"));
+}
+
 } // namespace
 
 int main() {
@@ -616,6 +691,9 @@ int main() {
     test_gemma4_nullable_types();
     test_gemma4_string_length();
     test_lfm2_string_length();
+    test_string_pattern();
+    test_string_pattern_inline_flag();
+    test_schema_literals_untouched();
     if (failures) {
         std::printf("%d check(s) failed\n", failures);
         return 1;
