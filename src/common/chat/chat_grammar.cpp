@@ -279,6 +279,9 @@ json normalize_schema(json schema) {
 struct tool_def {
     std::string name;
     json parameters; // a JSON schema, or true for any arguments
+    /// the schema as the request sent it, for the argument grammars written here:
+    /// normalize_schema folds length bounds into a pattern only xgrammar reads
+    json declared;
 };
 
 std::vector<tool_def> request_tools(const chat_constraint_request& request) {
@@ -301,8 +304,9 @@ std::vector<tool_def> request_tools(const chat_constraint_request& request) {
         }
         // as xgrammar does: no schema, or a non-strict tool, still gets well formed arguments
         const bool strict = fn.value("strict", true);
-        tool.parameters = strict && fn.contains("parameters") && fn["parameters"].is_object()
-            ? normalize_schema(fn["parameters"]) : json(true);
+        tool.declared = strict && fn.contains("parameters") && fn["parameters"].is_object()
+            ? fn["parameters"] : json(true);
+        tool.parameters = tool.declared.is_object() ? normalize_schema(tool.declared) : tool.declared;
         tools.push_back(std::move(tool));
     }
     return tools;
@@ -343,18 +347,53 @@ std::string value_rule(const json& property, const char* generic) {
     return generic;
 }
 
+/// \brief How a dialect writes the values of declared properties
+struct value_syntax {
+    /// spells a string enum value the way the dialect writes strings
+    std::function<std::string(const std::string&)> quote_string;
+    /// EBNF between two array items
+    std::string array_sep;
+    /// EBNF for a string of low..high characters (high -1: no upper bound)
+    std::function<std::string(int64_t, int64_t)> bounded_string;
+};
+
+/// \brief A string property's minLength/maxLength as {low, high}, high -1 for none
+/// \return std::nullopt when the property is not a plain string with usable bounds:
+///         none, unsatisfiable ones (left for the model, as before), or ones past
+///         XGRAMMAR_REGEX_REPEAT_LIMIT, which would cost a rule per character
+std::optional<std::pair<int64_t, int64_t>> string_length_bounds(const json& property) {
+    if (property.value("type", json()) != "string" || property.contains("enum")) {
+        return std::nullopt;
+    }
+    const json min_length = property.value("minLength", json(0));
+    const json max_length = property.value("maxLength", json(-1));
+    if (!min_length.is_number_integer() || !max_length.is_number_integer()) {
+        return std::nullopt;
+    }
+    const int64_t low = std::max<int64_t>(min_length.get<int64_t>(), 0);
+    const int64_t high = max_length.get<int64_t>() < 0 ? -1 : max_length.get<int64_t>();
+    if ((low == 0 && high < 0) || (high >= 0 && high < low) ||
+        (high < 0 ? low : high) > XGRAMMAR_REGEX_REPEAT_LIMIT) {
+        return std::nullopt;
+    }
+    return std::make_pair(low, high);
+}
+
 /// \brief EBNF for one property's value, from its schema type
-/// \param quote_string spells a string enum value the way the dialect writes strings
-/// \param array_sep EBNF between two array items
-/// \note An array follows its "items" schema, so enums and types inside lists are
-///       kept too; objects nested in a value are only held to the dialect's syntax.
-std::string property_value(const json& property, const std::function<std::string(const std::string&)>& quote_string,
-                           const std::string& array_sep) {
+/// \note An array follows its "items" schema, so enums, types and string lengths
+///       inside lists are kept too; objects nested in a value are only held to the
+///       dialect's syntax.
+std::string property_value(const json& property, const value_syntax& syntax) {
     std::string value = value_rule(property, "value");
     if (value == "array" && property.contains("items") && property["items"].is_object() &&
         !property["items"].empty()) {
-        const std::string item = property_value(property["items"], quote_string, array_sep);
-        return "(\"[\" (" + item + " (" + array_sep + " " + item + ")*)? \"]\")";
+        const std::string item = property_value(property["items"], syntax);
+        return "(\"[\" (" + item + " (" + syntax.array_sep + " " + item + ")*)? \"]\")";
+    }
+    if (value == "string") {
+        if (const auto bounds = string_length_bounds(property)) {
+            return syntax.bounded_string(bounds->first, bounds->second);
+        }
     }
     if (!value.empty()) {
         return value;
@@ -362,7 +401,7 @@ std::string property_value(const json& property, const std::function<std::string
     value = "(";
     bool first = true;
     for (const auto& option : property["enum"]) {
-        value += (first ? "" : " | ") + quote_string(option.get<std::string>());
+        value += (first ? "" : " | ") + syntax.quote_string(option.get<std::string>());
         first = false;
     }
     return value + ")";
@@ -372,7 +411,7 @@ std::string property_value(const json& property, const std::function<std::string
 /// \param prefix keeps the rule names of different tools apart in one grammar
 /// \param kv_sep EBNF between a key and its value
 /// \param item_sep EBNF between two arguments
-/// \param array_sep EBNF between two items of an array value
+/// \param syntax how the dialect writes declared values
 /// \param sorted keys come in alphabetical order (Gemma4's template uses dictsort),
 ///        otherwise in declaration order
 /// \return rules whose list rule is <prefix>args; a schema without declared
@@ -381,8 +420,7 @@ std::string property_value(const json& property, const std::function<std::string
 ///       and each optional one free to be left out. Rule first<i> is the list
 ///       starting at property i, rest<i> the remainder after something was written.
 std::string argument_list_rules(const json& schema, const std::string& prefix, const std::string& kv_sep,
-                                const std::string& item_sep, const std::string& array_sep,
-                                const std::function<std::string(const std::string&)>& quote_string, bool sorted) {
+                                const std::string& item_sep, const value_syntax& syntax, bool sorted) {
     std::ostringstream g;
     const bool declared = schema.is_object() && schema.contains("properties") && schema["properties"].is_object() &&
                           !schema["properties"].empty() && schema.value("additionalProperties", false) == false;
@@ -406,7 +444,7 @@ std::string argument_list_rules(const json& schema, const std::string& prefix, c
     auto rule = [&prefix](const char* kind, size_t i) { return prefix + kind + std::to_string(i); };
     for (size_t i = 0; i < n; i++) {
         g << rule("p", i) << " ::= " << ebnf_literal(names[i]) << " " << kv_sep << " "
-          << property_value(schema["properties"][names[i]], quote_string, array_sep) << "\n";
+          << property_value(schema["properties"][names[i]], syntax) << "\n";
     }
     for (size_t i = 0; i <= n; i++) {
         if (i == n) {
@@ -433,12 +471,73 @@ const char* BOUNDED_NUMBER_RULES =
     "integer ::= \"-\"? (\"0\" | [1-9] [0-9]{0,15})\n"
     "number ::= integer (\".\" [0-9]{1,15})? ([eE] [+-]? [0-9]{1,3})?\n";
 
+/// \brief Rules for Gemma4 string text of a bounded length, named gstr_<low>_<high>
+/// \note Gemma4 writes strings raw between <|"|> marks, so the text may hold no "<|".
+///       A step takes one character other than "<", or "<" with the character after
+///       it (neither "<" nor "|"), and counts what it took: the length comes out exact,
+///       which a {low,high} repetition over the two-character step would not give.
+class gemma4_bounded_strings {
+public:
+    /// \brief EBNF for a string of low..high characters (high -1: no upper bound)
+    std::string value(int64_t low, int64_t high) {
+        wanted_.insert({low, high});
+        return "(\"<|\\\"|>\" " + name(low, high) + " \"<|\\\"|>\")";
+    }
+
+    /// \brief The rules every value() so far refers to
+    std::string rules() const {
+        std::ostringstream g;
+        std::set<std::pair<int64_t, int64_t>> done;
+        std::vector<std::pair<int64_t, int64_t>> todo(wanted_.begin(), wanted_.end());
+        while (!todo.empty()) {
+            const auto [low, high] = todo.back();
+            todo.pop_back();
+            if (!done.insert({low, high}).second) {
+                continue;
+            }
+            if (low == 0 && high < 0) {
+                g << name(low, high) << " ::= ([^<] | \"<\" [^|])*\n";
+                continue;
+            }
+            std::string steps;
+            for (int64_t width = 1; width <= 2; width++) {
+                if (high >= 0 && high < width) {
+                    continue;
+                }
+                const std::pair<int64_t, int64_t> next = {std::max<int64_t>(low - width, 0),
+                                                          high < 0 ? -1 : high - width};
+                steps += std::string(steps.empty() ? "" : " | ") + (width == 1 ? "[^<]" : "\"<\" [^<|]") + " " +
+                         name(next.first, next.second);
+                todo.push_back(next);
+            }
+            if (steps.empty()) {
+                g << name(low, high) << " ::= \"\"\n";
+            } else if (low == 0) {
+                g << name(low, high) << " ::= (" << steps << ")?\n";
+            } else {
+                g << name(low, high) << " ::= " << steps << "\n";
+            }
+        }
+        return g.str();
+    }
+
+private:
+    static std::string name(int64_t low, int64_t high) {
+        return "gstr_" + std::to_string(low) + "_" + (high < 0 ? std::string("x") : std::to_string(high));
+    }
+
+    std::set<std::pair<int64_t, int64_t>> wanted_;
+};
+
 /// \brief Gemma4 call arguments: {key:<|"|>text<|"|>,n:5,flag:true,list:[...]}
 std::string gemma4_arguments_grammar(const json& schema) {
-    auto quote = [](const std::string& s) { return ebnf_literal("<|\"|>" + s + "<|\"|>"); };
+    gemma4_bounded_strings strings;
+    const value_syntax syntax{[](const std::string& s) { return ebnf_literal("<|\"|>" + s + "<|\"|>"); }, "\",\"",
+                              [&strings](int64_t low, int64_t high) { return strings.value(low, high); }};
     std::ostringstream g;
     g << "root ::= \"{\" args \"}\"\n"
-      << argument_list_rules(schema, "", "\":\"", "\",\"", "\",\"", quote, true)
+      << argument_list_rules(schema, "", "\":\"", "\",\"", syntax, true)
+      << strings.rules()
       << "pair ::= ident \":\" value\n"
       << "ident ::= [a-zA-Z_] [a-zA-Z0-9_]*\n"
       << "value ::= string | number | boolean | \"null\" | object | array\n"
@@ -452,7 +551,14 @@ std::string gemma4_arguments_grammar(const json& schema) {
 
 /// \brief The calls inside one LFM2 block: f(key="text", n=5), g(flag=True)
 std::string python_calls_grammar(const std::vector<tool_def>& tools, bool parallel) {
-    auto quote = [](const std::string& s) { return ebnf_literal("\"" + s + "\""); };
+    // an escape such as \n is one character of the value
+    auto bounded = [](int64_t low, int64_t high) {
+        const std::string count = "{" + std::to_string(low) + "," + (high < 0 ? "" : std::to_string(high)) + "}";
+        return "(\"\\\"\" ([^\"\\\\] | \"\\\\\" [^\\n])" + count + " \"\\\"\" | \"'\" ([^'\\\\] | \"\\\\\" [^\\n])" + count +
+               " \"'\")";
+    };
+    const value_syntax syntax{[](const std::string& s) { return ebnf_literal("\"" + s + "\""); }, "\",\" \" \"?",
+                              bounded};
     std::ostringstream g;
     g << "root ::= call" << (parallel ? " (\",\" \" \"? call)*" : "") << "\n";
     g << "call ::= ";
@@ -463,7 +569,7 @@ std::string python_calls_grammar(const std::vector<tool_def>& tools, bool parall
     for (size_t i = 0; i < tools.size(); i++) {
         const std::string prefix = "t" + std::to_string(i) + "_";
         g << "call_" << i << " ::= " << ebnf_literal(tools[i].name + "(") << " " << prefix << "args \")\"\n"
-          << argument_list_rules(tools[i].parameters, prefix, "\"=\"", "\",\" \" \"?", "\",\" \" \"?", quote, false);
+          << argument_list_rules(tools[i].declared, prefix, "\"=\"", "\",\" \" \"?", syntax, false);
     }
     g << "pair ::= ident \"=\" value\n"
       << "ident ::= [a-zA-Z_] [a-zA-Z0-9_]*\n"
@@ -513,7 +619,7 @@ tool_syntax tool_tags(const chat_format_spec& spec, const std::vector<tool_def>&
             case chat_format_kind::GEMMA4:
                 syntax.trigger = "<|tool_call>";
                 syntax.tags.push_back(tag("<|tool_call>call:" + tool.name,
-                                          grammar_content(gemma4_arguments_grammar(tool.parameters)), "<tool_call|>"));
+                                          grammar_content(gemma4_arguments_grammar(tool.declared)), "<tool_call|>"));
                 break;
             case chat_format_kind::LFM2_PYTHONIC:
             case chat_format_kind::CONTENT_ONLY:
