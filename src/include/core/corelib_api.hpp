@@ -2,9 +2,9 @@
 
 #include <ryzenai/corelib.h>
 
-#if RYZENAI_CORELIB_VERSION_MAJOR != 0 || RYZENAI_CORELIB_VERSION_MINOR != 87 || \
+#if RYZENAI_CORELIB_VERSION_MAJOR != 0 || RYZENAI_CORELIB_VERSION_MINOR != 103 || \
     RYZENAI_CORELIB_VERSION_PATCH != 0
-#error "FastFlowLM requires ryzenai-corelib headers exactly 0.87.0"
+#error "FastFlowLM requires ryzenai-corelib headers exactly 0.103.0"
 #endif
 
 #include <atomic>
