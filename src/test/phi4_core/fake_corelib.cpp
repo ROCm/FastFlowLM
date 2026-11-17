@@ -228,6 +228,7 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             const auto* options = std::get<1>(arguments);
             auto* out = std::get<2>(arguments);
             state.model_max_sequence_length = options ? options->max_sequence_length : 0;
+            state.session_kv_cache_bits.push_back(options ? options->kv_cache_bits : 0);
             ++state.session_creates;
             if (out) *out = status == ryzenai_corelib_status_success ? NewObject("session") : nullptr;
             return status;
@@ -719,6 +720,7 @@ void Reset() {
     state.model_max_sequence_length = -1;
     state.model_vocab = 8;
     state.session_creates = 0;
+    state.session_kv_cache_bits.clear();
     state.state_saves = 0;
     state.state_restores = 0;
     state.model_forwards.clear();

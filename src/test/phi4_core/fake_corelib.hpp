@@ -148,6 +148,8 @@ struct State {
     std::int64_t model_max_sequence_length{-1};
     std::int64_t model_vocab{8};
     std::size_t session_creates{};
+    /// \brief the kv_cache_bits each model_create_session was handed
+    std::vector<std::int32_t> session_kv_cache_bits;
     std::size_t state_saves{};
     std::size_t state_restores{};
     std::vector<ModelForwardRecord> model_forwards;
