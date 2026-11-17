@@ -98,16 +98,17 @@ void test_embedding_handler() {
     TEST_REQUIRE(no_device["error"]["message"] == flm::backend::kNoNpuDevice);
     for (const json& bad : {json(nullptr), json(42), json::array({"ok", false})})
         TEST_REQUIRE(request("missing:1", bad).at("error").at("code") == 400);
-    TEST_REQUIRE(request("missing:1", "hello", {{"task", 42}}).at("error").at("code") == 400);
     TEST_REQUIRE(request("missing:1", "hello", {{"dimensions", 0}}).at("error").at("code") == 400);
     TEST_REQUIRE(pulls == 0);
     check("first:1", 0.5f);
-    TEST_REQUIRE(request("first", "hello", {{"task", nullptr}, {"dimensions", nullptr}})
+    TEST_REQUIRE(request("first", {{"text", "hello"}, {"task", nullptr}}, {{"dimensions", nullptr}})
                      .at("data").at(0).at("embedding") == json({5, 3, 0.5f}));
     TEST_REQUIRE(request("first", "cancel").at("error").at("code") == 499);
-    TEST_REQUIRE(request("first", "hello", {{"task", "provider-task"}}).at("data").at(0).at("embedding").at(1) == 4);
-    TEST_REQUIRE(request("first", "hello", {{"task", "unknown"}}).at("error").at("code") == 400);
-    TEST_REQUIRE(request("first", "hello", {{"task", 42}}).at("error").at("code") == 400);
+    TEST_REQUIRE(request("first", {{"text", "hello"}, {"task", "provider-task"}}).at("data").at(0).at("embedding").at(1) == 4);
+    TEST_REQUIRE(request("first", {{"text", "hello"}, {"task", "unknown"}}).at("error").at("code") == 400);
+    TEST_REQUIRE(request("first", {{"text", "hello"}, {"task", 42}}).at("error").at("code") == 400);
+    // Unknown top-level options are stripped; tasks belong to each input item.
+    TEST_REQUIRE(request("first", "hello", {{"task", 42}}).at("data").at(0).at("embedding").at(1) == 3);
     check("first", 0.5f);
     check("Ollama/first", 0.5f);
     for (const char* tag : {"missing:1", "incompatible:1", "absent:1", "Ollama/absent", "generation:1"}) {
@@ -133,6 +134,10 @@ void test_embedding_handler() {
     const auto batch = request("second", json::array({"hi", "hello"}));
     TEST_REQUIRE(batch.at("data").size() == 2);
     TEST_REQUIRE(batch.at("usage").at("prompt_tokens") == 7);
+    const auto tasks = request("second", json::array({
+        {{"text", "hello"}, {"task", "query"}}, {{"text", "hello"}, {"task", "document"}}}));
+    TEST_REQUIRE(tasks.at("data").at(0).at("embedding").at(1) == 1);
+    TEST_REQUIRE(tasks.at("data").at(1).at("embedding").at(1) == 2);
     TEST_REQUIRE(request("second", {{"text", "hi"}, {"title", "abc"}},
                          {{"encoding_format", "float"}, {"user", "client"}})
                      .at("data").at(0).at("embedding").at(0) == 5);

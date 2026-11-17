@@ -41,13 +41,14 @@ primary model; requests can select any catalog embedding tag once enabled.
 
 ### Request options
 
-`input` is a string, an object with a `text` string and optional `title`, or a
-non-empty array of either, with one vector returned per input. Object inputs
-and `task` are FastFlowLM extensions to the OpenAI embedding request format;
-pre-tokenized input is not supported. Each vector has 768 dimensions; omit
-`dimensions` or set it to `768`. Null `task` and `dimensions` are treated as omitted.
+`input` is a string, an object with a `text` string and optional `task` and `title`,
+or a non-empty array of either, with one vector returned per input. Object inputs
+are a FastFlowLM extension to the OpenAI embedding request format; pre-tokenized
+input is not supported. Each vector has 768 dimensions; omit the top-level
+`dimensions`, set it to null, or set it to `768`.
 
-`task` is optional and case-sensitive. Omission or an empty string selects `query`:
+`input.task` is optional and case-sensitive. A string input, or an omitted, null
+or empty task, selects `query`:
 
 | Task | Prompt prefix |
 |---|---|
@@ -59,15 +60,15 @@ pre-tokenized input is not supported. Each vector has 768 dimensions; omit
 | `sentence_similarity` | <code>task: sentence similarity &#124; query: </code> |
 | `summarization` | <code>task: summarization &#124; query: </code> |
 
-With `task: "document"`, an object input can supply a `title` string; an omitted
+With `input.task: "document"`, an object input can supply a `title` string; an omitted
 or null title uses `none`:
 
 ```json
-{"model":"embed-gemma:300m","input":{"text":"Paris is in France.","title":"France"},"task":"document","dimensions":768}
+{"model":"embed-gemma:300m","input":{"text":"Paris is in France.","title":"France","task":"document"},"dimensions":768}
 ```
 
 These input fields and task names describe the built-in `embed-gemma:300m`
-model. Every embedding provider accepts a string with `task` omitted; its
+model. Every embedding provider accepts a string input; its
 object fields, explicit tasks, default task and supported dimensions are
 model-specific. Consult the provider's documentation for those details.
 

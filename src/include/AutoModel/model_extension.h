@@ -474,14 +474,13 @@ typedef struct flm_embedding_result_v1 {
 /// \note All callbacks are required and must contain exceptions. Calls on one
 ///       instance are serialized. Spans are borrowed during the callback only.
 ///       request_json is a UTF-8 JSON object constructed by the host:
-///       {"input": <string or object>, "task": <optional string>,
-///        "dimensions": <optional positive uint32>}.
-///       Every provider must accept a string input with task omitted and select a
-///       useful default text-embedding task. Explicit task names and the fields
-///       inside an object input are provider-defined; unknown tasks are errors.
+///       {"input": <string or object>, "dimensions": <optional positive uint32>}.
+///       Every provider must accept a string input and select useful default
+///       text-embedding behavior. The fields inside an object input, including
+///       any task selection, are entirely provider-defined.
 ///       dimensions selects the output vector size; omission uses the model default.
 ///       Unsupported dimensions and invalid inputs return INVALID_ARGUMENT or UNSUPPORTED.
-///       The host omits null task/dimensions and splits batches into individual calls.
+///       The host omits null dimensions and splits batches into individual calls.
 ///       Fields inside input are preserved, including nulls. Routing and response
 ///       options (model, encoding_format, user) are not passed to the provider.
 ///       Cancellation is optional and borrowed only during embed.

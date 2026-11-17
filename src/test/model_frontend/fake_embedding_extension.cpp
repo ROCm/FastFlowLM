@@ -36,14 +36,15 @@ static int Embed(void *object, flm_span_v1 request, const flm_cancellation_v1 *c
         const auto& input = options.at("input");
         const auto text = (input.is_object() ? input.at("text") : input).get<std::string>();
         if (text == "cancel") return FLM_MODEL_EXTENSION_STATUS_CANCELLED;
-        const auto task = options.value("task", std::string());
+        const auto task = input.is_object() && input.contains("task") && !input.at("task").is_null()
+            ? input.at("task").get<std::string>() : std::string();
         auto dimensions = options.value("dimensions", nlohmann::json(3));
         if (!dimensions.is_number_integer() || dimensions.get<int64_t>() < 1 || dimensions.get<int64_t>() > 3)
             return FLM_MODEL_EXTENSION_STATUS_UNSUPPORTED;
         float *values = (float *)object;
         values[0] = (float)text.size();
         for (const auto& item : options.items())
-            if (item.key() != "input" && item.key() != "task" && item.key() != "dimensions")
+            if (item.key() != "input" && item.key() != "dimensions")
                 return FLM_MODEL_EXTENSION_STATUS_INVALID_ARGUMENT;
         if (input.is_object() && input.contains("title")) values[0] += input.at("title").get<std::string>().size();
         if (task.empty()) values[1] = 3.0f;

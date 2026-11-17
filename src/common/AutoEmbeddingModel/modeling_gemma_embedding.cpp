@@ -20,7 +20,8 @@ EmbeddingResult Gemma_Embedding::embed(const json& request, std::function<bool()
     if (cancelled()) throw EmbeddingCancelled();
     const auto& input = request.at("input");
     const auto text = (input.is_object() ? input.at("text") : input).get<std::string>();
-    const auto task = request.value("task", std::string());
+    const auto task = input.is_object() && input.contains("task") && !input.at("task").is_null()
+        ? input.at("task").get<std::string>() : std::string();
     uint32_t dimensions = 0;
     if (request.contains("dimensions")) {
         const auto& value = request.at("dimensions");

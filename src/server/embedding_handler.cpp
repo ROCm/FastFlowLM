@@ -66,9 +66,8 @@ void RestHandler::handle_embeddings(const json& request,
         json embedding_data = json::array();
         uint64_t prompt_tokens = 0;
         json item_request = json::object();
-        for (const char* field : {"task", "dimensions"})
-            if (request.contains(field) && !request[field].is_null())
-                item_request[field] = request[field];
+        if (request.contains("dimensions") && !request["dimensions"].is_null())
+            item_request["dimensions"] = request["dimensions"];
         for (size_t i = 0; i < inputs.size(); ++i) {
             if (cancelled()) throw EmbeddingCancelled();
             item_request["input"] = inputs[i];
