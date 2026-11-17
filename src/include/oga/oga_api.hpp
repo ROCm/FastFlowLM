@@ -28,6 +28,7 @@
     X(create_config, OgaCreateConfig)                                              \
     X(config_clear_providers, OgaConfigClearProviders)                             \
     X(config_append_provider, OgaConfigAppendProvider)                             \
+    X(config_set_provider_option, OgaConfigSetProviderOption)                      \
     X(config_overlay, OgaConfigOverlay)                                            \
     X(destroy_config, OgaDestroyConfig)                                            \
     X(create_model_from_config, OgaCreateModelFromConfig)                          \
@@ -52,10 +53,18 @@
     X(generator_set_inputs, OgaGenerator_SetInputs)
 
 /// \brief entry points an OGA may lack; OgaFunctions holds null for each one it does not export
-/// \note OGA 0.17 exports no OgaGenerator_SnapshotState.
+/// \note OGA 0.17 exports no OgaGenerator_SnapshotState. The image-processor
+///       entries are optional so a text-only API still resolves; a prompt that
+///       stages images checks them and names the one that is missing.
 #define FLM_OGA_OPTIONAL_FUNCTIONS(X)                                              \
     X(generator_snapshot_state, OgaGenerator_SnapshotState)                        \
-    X(generator_rewind_to, OgaGenerator_RewindTo)
+    X(generator_rewind_to, OgaGenerator_RewindTo)                                  \
+    X(load_images_from_buffers, OgaLoadImagesFromBuffers)                          \
+    X(destroy_images, OgaDestroyImages)                                            \
+    X(create_multimodal_processor, OgaCreateMultiModalProcessor)                   \
+    X(destroy_multimodal_processor, OgaDestroyMultiModalProcessor)                 \
+    X(processor_process_images, OgaProcessorProcessImages)                         \
+    X(named_tensors_get, OgaNamedTensorsGet)
 
 namespace flm::oga {
 

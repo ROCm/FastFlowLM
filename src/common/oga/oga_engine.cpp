@@ -12,12 +12,50 @@
 #include <cmath>
 #include <cstring>
 #include <iterator>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
 namespace flm::oga {
 namespace {
 static_assert(sizeof(int) == sizeof(std::int32_t), "token ids are passed to OGA as int32_t");
+
+void Require(const void* function, const char* symbol) {
+    if (!function)
+        throw std::runtime_error(std::string("the hip-ep onnxruntime-genai is missing ") + symbol);
+}
+
+std::vector<int> ReadInputIds(const OgaApi& api, OgaTensor* tensor) {
+    const OgaFunctions& f = api.functions();
+    OgaElementType type = OgaElementType_undefined;
+    api.Check(f.tensor_get_type(tensor, &type), "OgaTensorGetType(input_ids)");
+    std::size_t rank = 0;
+    api.Check(f.tensor_get_shape_rank(tensor, &rank), "OgaTensorGetShapeRank(input_ids)");
+    std::vector<std::int64_t> shape(rank);
+    if (rank) api.Check(f.tensor_get_shape(tensor, shape.data(), rank), "OgaTensorGetShape(input_ids)");
+    if (rank == 2 && shape[0] == 1) shape.erase(shape.begin());
+    if (shape.size() != 1 || shape[0] <= 0)
+        throw std::runtime_error("processor input_ids are not a single token row");
+    const auto count = static_cast<std::size_t>(shape[0]);
+    void* data = nullptr;
+    api.Check(f.tensor_get_data(tensor, &data), "OgaTensorGetData(input_ids)");
+    if (!data) throw std::runtime_error("processor input_ids have no data");
+    std::vector<int> ids(count);
+    if (type == OgaElementType_int32) {
+        const auto* from = static_cast<const std::int32_t*>(data);
+        std::copy(from, from + count, ids.begin());
+    } else if (type == OgaElementType_int64) {
+        const auto* from = static_cast<const std::int64_t*>(data);
+        for (std::size_t i = 0; i < count; ++i) {
+            if (from[i] < 0 || from[i] > static_cast<std::int64_t>(std::numeric_limits<int>::max()))
+                throw std::runtime_error("processor input id does not fit in int");
+            ids[i] = static_cast<int>(from[i]);
+        }
+    } else {
+        throw std::runtime_error("processor input_ids are not int32 or int64");
+    }
+    return ids;
+}
 
 float HalfToFloat(std::uint16_t half) {
     const std::uint32_t sign = static_cast<std::uint32_t>(half & 0x8000u) << 16;
@@ -115,6 +153,16 @@ OgaEngine::~OgaEngine() = default;
 buffer<bf16> OgaEngine::forward(int id) { return Run({id}); }
 
 buffer<bf16> OgaEngine::prefill(std::vector<int>& ids, void* payload) {
+    if (staged_prompt_) {
+        // Taken first, so a refused prefill does not leave the stage to the next one.
+        std::unique_ptr<StagedPrompt> staged = std::move(staged_prompt_);
+        if (payload)
+            throw std::invalid_argument(display_name_ + " staged image prompt takes no vision payload");
+        if (ids != staged->ids)
+            throw std::runtime_error(display_name_ +
+                                     " image prompt must be prefilled as the processor's whole sequence");
+        return PrefillStaged(*staged);
+    }
     if (payload && !vision_)
         throw std::invalid_argument(display_name_ + " on OGA does not run a vision payload");
     if (ids.empty()) throw std::invalid_argument(display_name_ + " request contains no token IDs");
@@ -158,6 +206,8 @@ void OgaEngine::clear_context() {
     images_.clear();
     expected_.clear();
     saved_.reset();
+    // staged_prompt_ stays. The caller clears a divergent history and then
+    // prefills the image sequence that was just staged.
 }
 
 void OgaEngine::expect_prefill(const std::vector<int>& ids) {
@@ -599,6 +649,86 @@ buffer<bf16> OgaEngine::Logits(OgaGenerator* generator) const {
                                  ", not float32, float16 or bfloat16");
     }
     return out;
+}
+
+buffer<bf16> OgaEngine::PrefillStaged(const StagedPrompt& staged) {
+    // The processor inputs hold the whole sequence and its images, which OGA takes only in a
+    // generator's first call: a new generator, in a free slot or the least recently used one.
+    active_.reset();  // so that a failure before Rebuild drops no other conversation's slot
+    try {
+        const char* why = nullptr;
+        Rebuild(std::nullopt, &why);
+        Live& run = Active();
+        api_->Check(api_->functions().generator_set_inputs(run.generator.get(), staged.inputs.get()),
+                    "OgaGenerator_SetInputs");
+        buffer<bf16> logits = Logits(run.generator.get());
+        // Only now: a failed prefill leaves `logical` without image tokens that a later
+        // rebuild would replay without their images.
+        run.ran = staged.ids;
+        logical_ = staged.ids;
+        images_.clear();
+        expected_.clear();
+        saved_.reset();
+        header_print("FLM", "OGA generator: image prompt of " << logical_.size() << " tokens"
+                                << SlotText(why));
+        return logits;
+    } catch (...) {
+        if (active_) Drop(*active_);
+        throw;
+    }
+}
+
+void OgaEngine::DropStagedPrompt() noexcept { staged_prompt_.reset(); }
+
+std::vector<int> OgaEngine::StagePromptImages(const std::string& prompt,
+                                              const std::vector<std::string>& encoded_images) {
+    staged_prompt_.reset();
+    if (encoded_images.empty())
+        throw std::invalid_argument(display_name_ + " image prompt has no images");
+    if (prompt.empty())
+        throw std::invalid_argument(display_name_ + " image prompt is empty");
+    const OgaFunctions& f = api_->functions();
+    Require(reinterpret_cast<const void*>(f.load_images_from_buffers), "OgaLoadImagesFromBuffers");
+    Require(reinterpret_cast<const void*>(f.destroy_images), "OgaDestroyImages");
+    Require(reinterpret_cast<const void*>(f.create_multimodal_processor), "OgaCreateMultiModalProcessor");
+    Require(reinterpret_cast<const void*>(f.destroy_multimodal_processor), "OgaDestroyMultiModalProcessor");
+    Require(reinterpret_cast<const void*>(f.processor_process_images), "OgaProcessorProcessImages");
+    Require(reinterpret_cast<const void*>(f.named_tensors_get), "OgaNamedTensorsGet");
+
+    std::vector<const void*> buffers;
+    std::vector<std::size_t> sizes;
+    buffers.reserve(encoded_images.size());
+    sizes.reserve(encoded_images.size());
+    for (const std::string& image : encoded_images) {
+        if (image.size() < 8)
+            throw std::invalid_argument(display_name_ + " image is not an encoded file");
+        buffers.push_back(image.data());
+        sizes.push_back(image.size());
+    }
+    OgaImages* raw_images = nullptr;
+    api_->Check(f.load_images_from_buffers(buffers.data(), sizes.data(), buffers.size(), &raw_images),
+                "OgaLoadImagesFromBuffers");
+    OgaApi::Owned<OgaImages> images(raw_images, {f.destroy_images});
+    OgaMultiModalProcessor* raw_processor = nullptr;
+    api_->Check(f.create_multimodal_processor(model_.get(), &raw_processor),
+                "OgaCreateMultiModalProcessor");
+    OgaApi::Owned<OgaMultiModalProcessor> processor(raw_processor, {f.destroy_multimodal_processor});
+    OgaNamedTensors* raw_inputs = nullptr;
+    api_->Check(f.processor_process_images(processor.get(), prompt.c_str(), images.get(), &raw_inputs),
+                "OgaProcessorProcessImages");
+    OgaApi::Owned<OgaNamedTensors> inputs(raw_inputs, {f.destroy_named_tensors});
+    OgaTensor* raw_ids = nullptr;
+    api_->Check(f.named_tensors_get(inputs.get(), "input_ids", &raw_ids),
+                "OgaNamedTensorsGet(input_ids)");
+    std::vector<int> ids = ReadInputIds(*api_, raw_ids);
+    CheckIds(ids);
+    if (ids.size() > max_length_)
+        throw std::out_of_range(display_name_ + " image prompt has " + std::to_string(ids.size()) +
+                                " tokens, past the context length of " + std::to_string(max_length_));
+    staged_prompt_ = std::make_unique<StagedPrompt>(StagedPrompt{std::move(inputs), ids});
+    header_print("FLM", "OGA image processor: " << encoded_images.size() << " image(s), "
+                                                << ids.size() << " tokens");
+    return ids;
 }
 
 void OgaEngine::CheckIds(const std::vector<int>& ids) const {

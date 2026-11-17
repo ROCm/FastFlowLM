@@ -39,6 +39,12 @@ std::string Text(const std::filesystem::path& path) {
 constexpr const char* kSessionOverlay =
     R"({"model":{"decoder":{"session_options":{"session.disable_cpu_ep_fallback":"1"}}}})";
 
+/// \brief gemma4_unified keeps the preallocated present buffer and does not capture a graph.
+/// \note With past_present_share_buffer the present OrtValue is allocated to max_length.
+///       A captured graph is baked for one sequence length, so capture stays off.
+constexpr const char* kGemmaSearchOverlay =
+    R"({"model":{"decoder":{"session_options":{"provider_options":[{"AMDGPU":{"profile":"hip","enable_graph_capture":"0","hip_graph_enable":"0"}}]}}},"search":{"past_present_share_buffer":true}})";
+
 nlohmann::json ReadJson(const std::filesystem::path& path) {
     flm::file_access::ObserveOpen(path);
     std::ifstream input(path, std::ios::binary);
@@ -98,7 +104,8 @@ struct GenaiConfig {
 /// \brief whether the engine runs the vision model of a package of this model type
 /// \note The engine feeds OGA the inputs of its Qwen3.5 vision pipeline (pixel_values per
 ///       patch, image_grid_thw, num_image_tokens). A package of another type that ships a
-///       vision model, such as gemma3 or gemma4, runs text only.
+///       vision model, such as gemma3 or gemma4, runs text on that pipeline. gemma4_unified
+///       images go through the package processor (OgaEngine::StagePromptImages) instead.
 bool RunsVisionOf(const std::string& type) {
     return type == "qwen3_5" || type == "qwen3_5_moe";
 }
@@ -149,6 +156,20 @@ std::int64_t PatchValues(const nlohmann::json& vision_config) {
     const auto patch = cfg_get<std::int64_t>(vision_config, "patch_size", 0);
     return cfg_get<std::int64_t>(vision_config, "in_channels", 3) *
            cfg_get<std::int64_t>(vision_config, "temporal_patch_size", 1) * patch * patch;
+}
+
+/// \brief whether genai_config.json names a gemma4_unified package
+/// \note A missing or unreadable file is not that package. OpenModel is also called
+///       on paths that have no package yet.
+bool IsGemma4Unified(const std::filesystem::path& root) {
+    try {
+        const auto genai = ReadJson(root / "genai_config.json");
+        const auto model = genai.find("model");
+        return model != genai.end() && model->is_object() &&
+               model->value("type", std::string()) == "gemma4_unified";
+    } catch (const std::exception&) {
+        return false;
+    }
 }
 
 /// \brief generators kept by default (--prefix-slots -1), and the most it takes
@@ -202,6 +223,19 @@ OgaApi::Owned<OgaModel> OpenModel(const OgaApi& api, const std::filesystem::path
     api.Check(f.config_clear_providers(config.get()), "OgaConfigClearProviders");
     api.Check(f.config_append_provider(config.get(), kAmdGpuProviderName), "OgaConfigAppendProvider");
     api.Check(f.config_overlay(config.get(), kSessionOverlay), "OgaConfigOverlay");
+    if (IsGemma4Unified(root)) {
+        // ClearProviders drops the package's AMDGPU options. This export's KV
+        // grows by concatenation, which graph capture rejects, so capture stays off.
+        for (const char* provider : {"AMDGPU", kAmdGpuProviderName}) {
+            api.Check(f.config_set_provider_option(config.get(), provider, "profile", "hip"),
+                      "OgaConfigSetProviderOption");
+            api.Check(f.config_set_provider_option(config.get(), provider, "enable_graph_capture", "0"),
+                      "OgaConfigSetProviderOption");
+            api.Check(f.config_set_provider_option(config.get(), provider, "hip_graph_enable", "0"),
+                      "OgaConfigSetProviderOption");
+        }
+        api.Check(f.config_overlay(config.get(), kGemmaSearchOverlay), "OgaConfigOverlay");
+    }
     OgaModel* raw_model = nullptr;
     api.Check(f.create_model_from_config(config.get(), &raw_model), "OgaCreateModelFromConfig");
     OgaApi::Owned<OgaModel> model(raw_model, {f.destroy_model});

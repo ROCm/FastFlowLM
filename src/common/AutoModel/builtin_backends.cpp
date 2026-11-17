@@ -135,6 +135,11 @@ void register_builtin_backends(BackendRegistry& registry) {
     registry.register_backend("gemma4e", flm::backend::kOgaHipepBackendId,
                               flm::oga::hipep_factory(),
                               flm::oga::hipep_traits());
+    // The Gemma 4 12B GPU package uses the gemma4-12b frontend. The tag
+    // gemma4-12b-oga-hipep selects this backend; details.family stays gemma4-12b.
+    registry.register_backend("gemma4-12b", flm::backend::kOgaHipepBackendId,
+                              flm::oga::hipep_factory(),
+                              flm::oga::hipep_traits());
     registry.register_backend("gpt-oss", flm::backend::kOgaHipepBackendId,
                               flm::oga::hipep_factory(),
                               flm::oga::hipep_traits());

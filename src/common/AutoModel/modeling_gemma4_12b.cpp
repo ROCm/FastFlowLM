@@ -11,7 +11,36 @@
 #include "metrices.hpp"
 #include "error_measure.hpp"
 #include "models/gemma4_12b/flm/aie2p/gemma4_12b_npu.hpp"
+#if defined(FLM_ENABLE_OGA_HIPEP)
+#include "base64.hpp"
+#include "oga/oga_engine.hpp"
+#include <fstream>
+#include <iterator>
+#endif
 #include <cassert>
+
+#if defined(FLM_ENABLE_OGA_HIPEP)
+namespace {
+std::string ImageBytesFromBase64(std::string payload) {
+    const auto marker = payload.find("base64,");
+    if (marker != std::string::npos) payload.erase(0, marker + 7);
+    std::string bytes = base64::from_base64(payload);
+    if (bytes.size() < 8)
+        throw ModelRequestError(400, false, "image payload is not a valid encoded image", "invalid_request_error");
+    return bytes;
+}
+
+std::string ImageBytesFromFile(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in)
+        throw ModelRequestError(400, false, "cannot read image " + path, "invalid_request_error");
+    std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (bytes.size() < 8)
+        throw ModelRequestError(400, false, "image file is empty: " + path, "invalid_request_error");
+    return bytes;
+}
+}  // namespace
+#endif
 
 /************              Gemma4_12B family            **************/
 Gemma4_12B::Gemma4_12B(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "Gemma4_12B") {}
@@ -45,8 +74,11 @@ void Gemma4_12B::load_model(std::string model_path, json model_info, int default
     for (size_t i = 0; i < PROFILER_TYPE_NUM; i++) {
         this->profiler_list[i].reset();
     }
-    // Text-only prompts only (see insert), so no image placeholder id is given.
-    _prefix_attach(lm_engine, gemma4_12b_npu_state_api(lm_engine));
+    // The OGA engine has no NPU prefix-slot table. NPU prompts keep theirs.
+    const flm_state_api* state = this->backend_id() == flm::backend::kOgaHipepBackendId
+                                     ? nullptr
+                                     : gemma4_12b_npu_state_api(lm_engine);
+    _prefix_attach(lm_engine, state);
 }
 
 void Gemma4_12B::setup_tokenizer(std::string model_path) {
@@ -106,6 +138,16 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
     // before a later return. The trim below still runs only when the prompt ends with the channel.
     this->feed_empty_thought_ = flm::gemma4_feed_empty_thought(this->enable_think, meta_info.continue_final_message);
 
+#if defined(FLM_ENABLE_OGA_HIPEP)
+    const bool oga = this->backend_id() == flm::backend::kOgaHipepBackendId;
+    std::vector<std::string> oga_image_bytes;
+    if (oga && !input.audios.empty()) {
+        throw ModelRequestError(400, false,
+            "gemma4-12b on oga-hipep does not accept audio input",
+            "invalid_request_error");
+    }
+#endif
+
     gemma4_12b_image_payload_t image_payload;
     gemma4_12b_audio_payload_t audio_payload;
     audio_payload.num_audios = 0;
@@ -129,7 +171,14 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
             if (message.contains("images")) {
                 for (auto& img : message["images"]) {
                     std::string img_str = img.get<std::string>();
-
+#if defined(FLM_ENABLE_OGA_HIPEP)
+                    if (oga) {
+                        oga_image_bytes.push_back(ImageBytesFromBase64(std::move(img_str)));
+                        newContent.push_back({{"type", "image"}, {"image", img}});
+                        total_images++;
+                        continue;
+                    }
+#endif
                     gemma4_12b_image_t image = this->load_image_base64(img_str);
                     if (image.width <= 0 || image.height <= 0) {
                         header_print("ERROR", "Skipping invalid base64 image; prefilling language only for this item");
@@ -157,6 +206,13 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
             newContent.push_back({{"type", "text"}, {"text", message.value("content", "")}});
             // Process Audios
             if (message.contains("audios")) {
+#if defined(FLM_ENABLE_OGA_HIPEP)
+                if (oga && !message["audios"].empty()) {
+                    throw ModelRequestError(400, false,
+                        "gemma4-12b on oga-hipep does not accept audio input",
+                        "invalid_request_error");
+                }
+#endif
                 gemma4_12b_npu *gemma4e_engine = dynamic_cast<gemma4_12b_npu*>(this->lm_engine); 
                 if (!gemma4e_engine) {
                     throw std::runtime_error(
@@ -267,6 +323,12 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
         }
 
         if(input.images.size() > 0){
+#if defined(FLM_ENABLE_OGA_HIPEP)
+            if (oga) {
+                for (const auto& img_str : input.images)
+                    oga_image_bytes.push_back(ImageBytesFromFile(img_str));
+            } else
+#endif
             for (const auto& img_str : input.images) {
                 gemma4_12b_image_t image = this->load_image(img_str);
 
@@ -316,6 +378,45 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
         messages.push_back(content);
         templated_text = this->apply_chat_template(messages);
     }
+
+#if defined(FLM_ENABLE_OGA_HIPEP)
+    if (oga && !oga_image_bytes.empty()) {
+        // generate() feeds this empty thought channel itself when thinking is off.
+        // The processor must not run it, or the four tokens would be in the KV cache twice.
+        const std::string thought = "<|channel>thought\n<channel|>";
+        if (!this->enable_think && !meta_info.continue_final_message &&
+            templated_text.size() >= thought.size() &&
+            templated_text.compare(templated_text.size() - thought.size(), thought.size(), thought) == 0) {
+            templated_text.resize(templated_text.size() - thought.size());
+        }
+        auto* engine = dynamic_cast<flm::oga::OgaEngine*>(this->lm_engine);
+        if (!engine)
+            throw std::runtime_error("oga-hipep engine is not an OgaEngine");
+        std::vector<int> image_tokens = engine->StagePromptImages(templated_text, oga_image_bytes);
+        this->profiler_list[TKOEN_ENCODE_TIME].stop(image_tokens.size());
+        // The processor already ran the whole prompt, so this prefill must not be chunked,
+        // nor start after a cached prefix: the staged inputs are prefilled from token 0.
+        if (!this->token_history.empty())
+            this->clear_context();
+        const int saved_prefill = meta_info.max_prefill_len;
+        meta_info.max_prefill_len = 0;
+        bool success = false;
+        try {
+            success = this->_shared_insert(meta_info, image_tokens, is_cancelled, nullptr);
+        } catch (...) {
+            meta_info.max_prefill_len = saved_prefill;
+            engine->DropStagedPrompt();
+            throw;
+        }
+        meta_info.max_prefill_len = saved_prefill;
+        // A request that stopped before its prefill (cancelled, or refused for its
+        // length) must not leave its stage to the next request.
+        engine->DropStagedPrompt();
+        this->_checkpoint_history();
+        this->lm_engine->checkpoint();
+        return success;
+    }
+#endif
 
     // update the tokens to include the image tokens
     std::vector<int> tokens;
