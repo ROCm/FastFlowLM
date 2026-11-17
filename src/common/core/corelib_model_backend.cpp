@@ -176,7 +176,9 @@ public:
     causal_lm& engine() override { return *engine_; }
     std::string id() const override { return flm::backend::kCoreBackendId; }
     std::string detail() const override {
-        return runtime_ ? runtime_->loaded_library_path().string() : std::string();
+        if (!runtime_) return {};
+        return runtime_->loaded_library_path().string() +
+               (runtime_->npu_direct() ? " (NPU direct)" : " (no NPU direct)");
     }
     std::uint32_t max_decode_length() const override { return context_length_ - 1; }
     bool supports_preemption() const override { return false; }

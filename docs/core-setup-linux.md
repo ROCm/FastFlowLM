@@ -51,6 +51,11 @@ kernels. corelib loads a model library only from the directory it was itself
 loaded from, so those libraries must sit beside it; nothing else is needed at
 run time, no kernel store and no environment variable.
 
+This build has no NPU direct: corelib compiles NPU direct's core images with
+CHESS in WSL, so only a Windows `build.py --npu-direct` carries them. The
+Windows core build links such a corelib by default; here `flm` warns once that
+NPU direct is off and every core model runs on DD's kernels.
+
 **Version must match exactly.** `src/include/core/corelib_api.hpp` has a
 `#error` for anything other than corelib **0.103.0**:
 

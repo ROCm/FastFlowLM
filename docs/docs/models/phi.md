@@ -73,6 +73,14 @@ Both presets read `RYZENAI_CORELIB_INCLUDE_DIR` and `RYZENAI_CORELIB_LIBRARY` fr
 
 The `src/test/phi4_core` suite is still Windows-only and is not configured on Linux; a Linux build is a compile-and-link path, not a tested one.
 
+A core build links a corelib built with **NPU direct**, corelib's `build.py --npu-direct`, which needs Windows with WSL and the AMD network (CHESS checks out a licence at every compile):
+
+```powershell
+python build.py --config Release --npu-direct --install-dir C:/path/to/ryzenai-corelib/install
+```
+
+On AIEM, NPU direct runs a model's attention from the core image its model library carries, ahead of DD's kernels. The longer the context, the more it gains: Qwen3.6 at a 22.6k-token prompt prefills 46 % faster and decodes 18 % faster with it, at 11k 26 % and 9 %, and a short prompt runs as fast either way. FastFlowLM asks nothing of it: corelib turns it on for every stream. A corelib built without it, or a run under `RYZENAI_CORELIB_NPU_DIRECT=0`, still serves every core model on DD's kernels; `flm` warns once when the runtime comes up, and `Backend detail:` says `(no NPU direct)`.
+
 ### Pointing FastFlowLM at the runtime
 
 A core build (`-DFLM_ENABLE_CORE=ON`) **links corelib in**. corelib keeps its NPU device to itself and opens a hardware context per stream on it; FastFlowLM opens its own device for every other family, and a core model shares no buffer with those. The core backend is offered only where corelib reports an AIEM NPU (`ryzenai_corelib_has_feature(ryzenai_corelib_feature_npu_aiem)`): elsewhere, AIE2P included, corelib would run a session on the GPU or the host. Point the build at the library with `RYZENAI_CORELIB_INCLUDE_DIR` and `RYZENAI_CORELIB_LIBRARY`. `FLM_CORE_CORELIB_PATH` selects a shared library (`.dll` on Windows, `.so` elsewhere) only in the older dynamically loading configuration; in a statically linked core build it is ignored, and `flm` says so if it is set.

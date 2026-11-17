@@ -8,10 +8,13 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <iostream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -237,7 +240,55 @@ void TestRuntimeRunsDependencySelftestAndRequiresAUsableNpu() {
     fake_corelib::Reset();
     const auto runtime = CorelibRuntime::CreateForTest(ValidApi());
     TEST_REQUIRE(runtime->api() != nullptr);
+    TEST_REQUIRE(runtime->npu_direct());
     CorelibRuntime::ShutdownProcess();
+}
+
+/// \brief brings a runtime up and shuts it down, returning whether it ran NPU
+///        direct and what it wrote to stderr
+std::pair<bool, std::string> RuntimeNpuDirect() {
+    std::ostringstream captured;
+    auto* previous = std::cerr.rdbuf(captured.rdbuf());
+    std::shared_ptr<CorelibRuntime> runtime;
+    try {
+        runtime = CorelibRuntime::CreateForTest(ValidApi());
+    } catch (...) {
+        std::cerr.rdbuf(previous);
+        throw;
+    }
+    std::cerr.rdbuf(previous);
+    const bool npu_direct = runtime->npu_direct();
+    runtime.reset();
+    CorelibRuntime::ShutdownProcess();
+    return {npu_direct, captured.str()};
+}
+
+void TestRuntimeWithoutNpuDirectStillComesUpAndSaysWhy() {
+    fake_corelib::Reset();
+    auto [on, quiet] = RuntimeNpuDirect();
+    TEST_REQUIRE(on);
+    TEST_REQUIRE(quiet.empty());
+
+    fake_corelib::Reset();
+    fake_corelib::GetState().npu_direct = false;
+    auto [unbuilt, unbuilt_warning] = RuntimeNpuDirect();
+    TEST_REQUIRE(!unbuilt);
+    RequireContains(unbuilt_warning, "without NPU direct");
+    RequireContains(unbuilt_warning, "--npu-direct");
+
+    fake_corelib::Reset();
+    _putenv_s("RYZENAI_CORELIB_NPU_DIRECT", "0");
+    auto [disabled, disabled_warning] = RuntimeNpuDirect();
+    _putenv_s("RYZENAI_CORELIB_NPU_DIRECT", "");
+    TEST_REQUIRE(!disabled);
+    RequireContains(disabled_warning, "RYZENAI_CORELIB_NPU_DIRECT=0");
+
+    fake_corelib::Reset();
+    _putenv_s("RYZENAI_CORELIB_NPU_DIRECT", "1");
+    auto [enabled, enabled_warning] = RuntimeNpuDirect();
+    _putenv_s("RYZENAI_CORELIB_NPU_DIRECT", "");
+    TEST_REQUIRE(enabled);
+    TEST_REQUIRE(enabled_warning.empty());
 }
 
 void TestNpuArchIsCorelibsAnswerAndEmptyWhenItCannotLoad() {
@@ -339,6 +390,7 @@ int main() {
     RUN_TEST(TestFallbackIsExeDirectoryCoreDllNotCurrentDirectory);
     RUN_TEST(TestEveryUniqueObjectReleasesExactlyOnceAfterMoves);
     RUN_TEST(TestRuntimeRunsDependencySelftestAndRequiresAUsableNpu);
+    RUN_TEST(TestRuntimeWithoutNpuDirectStillComesUpAndSaysWhy);
     RUN_TEST(TestNpuArchIsCorelibsAnswerAndEmptyWhenItCannotLoad);
     RUN_TEST(TestExecutionLeaseSerializesTwoThreads);
     RUN_TEST(TestShutdownReleasesExecutionLockBeforeDestroyingRuntimeOwner);

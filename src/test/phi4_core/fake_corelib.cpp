@@ -177,6 +177,8 @@ struct TypedFake<Tag, Result (*)(Args...)> {
         } else if constexpr (std::is_same_v<Tag, has_feature_tag>) {
             const auto feature = std::get<0>(arguments);
             if (feature == ryzenai_corelib_feature_npu) return state.npu != fake_corelib::kNoNpu;
+            if (feature == ryzenai_corelib_feature_npu_direct)
+                return state.npu_direct && state.npu != fake_corelib::kNoNpu;
             return (feature == ryzenai_corelib_feature_npu_aiem ||
                     feature == ryzenai_corelib_feature_npu_aie2p) &&
                    feature == state.npu;
@@ -680,6 +682,7 @@ void Reset() {
     state.selftest_status = ryzenai_corelib_status_success;
     state.default_status = ryzenai_corelib_status_success;
     state.npu = ryzenai_corelib_feature_npu_aiem;
+    state.npu_direct = true;
     state.detail.clear();
     state.status_text = "success";
     state.missing_symbol.clear();

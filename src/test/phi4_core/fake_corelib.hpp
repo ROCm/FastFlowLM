@@ -107,6 +107,8 @@ struct State {
     /// \brief the NPU has_feature() reports, npu_aiem, npu_aie2p or kNoNpu;
     ///        feature_name() names features as corelib does
     ryzenai_corelib_feature npu{ryzenai_corelib_feature_npu_aiem};
+    /// \brief whether has_feature() reports npu_direct, given an NPU
+    bool npu_direct{true};
     std::string detail;
     std::string status_text{"success"};
     std::string missing_symbol;
