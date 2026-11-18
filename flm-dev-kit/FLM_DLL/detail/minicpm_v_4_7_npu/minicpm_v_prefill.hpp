@@ -1073,7 +1073,7 @@ struct minicpm_v_attn_block_prefill_context{
                 // real members and the first attention layer's slot (marked stale again below, so the first request rebuilds it from the cleared cache)
                 reserve(LT, 0, LT);
                 std::memcpy(q.data(), tq.data(), (size_t)LT * DQ * sizeof(bf16));
-                minicpm_v_cpu::scratch_push(q);   // q is written by the array (q projection): a host write must be flushed (notes/tricks 2026-11-05)
+                minicpm_v_cpu::scratch_push(q);   // q is written by the array (q projection): a host write must be flushed first
                 convert_q(LT, LT);
                 update_kv_bfp16(0, cache, 0, LT, LT);
                 seq_gen->gen_mha_engine_seq_bfp16(mha.seq(), 0, LT, kv_bfp16_rows);

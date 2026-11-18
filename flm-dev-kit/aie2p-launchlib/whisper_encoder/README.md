@@ -186,7 +186,7 @@ What shipping would take:
 | Item | What | Why |
 |---|---|---|
 | Switch files with the xclbins | CI builds `to_attn` and `to_mm` (stream and packets; `tools/build_packages.sh` + `make_switch.exe`) in the same job as `encoder_MM` and `encoder_attention_888`, and ships them next to them in `xclbins/Whisper-V3-Turbo-NPU2/` | they write those exact programs, BDs and locks: a file made from another build of either kernel runs the wrong configuration (no error, wrong output) |
-| A check that they match | the engine compares a hash of the two xclbins (recorded in the switch files at build time) and falls back to two hw_contexts on a mismatch | the binding is otherwise implicit, as between `.q4nx` and xclbins (AGENTS.md §1) |
+| A check that they match | the engine compares a hash of the two xclbins (recorded in the switch files at build time) and falls back to two hw_contexts on a mismatch | the binding is otherwise implicit, as between `.q4nx` and xclbins (nothing checks that a `.q4nx` matches the xclbins it is paired with; a mismatch gives wrong output, not an error) |
 | The engine change | the packet buffer of each switch as a kernel argument (`make_switch.exe` writes it too); `FLM_WHISPER_SWITCH_DIR` becomes "switch files present": on when they are there, an env variable to turn it off; the trial's debug switches (`_DUMP`, `_TRACE`) removed | today it is a trial flag with command-processor writes only |
 | HRX | run step 3 on the HRX runtime (FastFlowLM's `HRX-portable`) | only XRT was tested; HRX runs the same instruction streams, but its ELF and command path differ |
 | Windows | run step 3 on Windows (XRT and the MSI) | Windows uses the same files; the NPU firmware and driver differ |

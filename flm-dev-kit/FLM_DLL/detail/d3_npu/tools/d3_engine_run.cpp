@@ -2,7 +2,7 @@
 // Portions of this file consist of AI-generated content.
 
 // Drive libd3_npu.so over prompts given as token ids: the engine-level harness for accuracy and
-// latency measurements and for .github/workflows/d3-check.yml.
+// latency measurements.
 //
 //   d3_engine_run <pkg_dir> <xclbin_root> <prompts.txt> <out.bin> [--pack N] [--causal] [--group]
 //                 [--reps R] [--max-length N] [--state-file F] [--state-once] [--image GHxGW] [--pix-dir D] [--rig-dump D]

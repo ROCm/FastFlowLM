@@ -13,8 +13,8 @@ HOME_DIR := $(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
 # One design: VISION_MM_C, 64 x 384 x 96 per core, 512 x 384 per array pass
 # (columns split M, rows split N); see kernel/typedef.hpp and iron/mm_config.py.
 # It is written out under the name the engine opens it by, which is also the
-# name assemble-xclbins matches against the kernel map: keep this table,
-# .github/scripts/kernel_assignment.json and minicpm_v_4_7_npu.cpp in sync.
+# name the kernel map (FLM_Xclbin/kernel_assignment.md) lists: keep this table,
+# kernel_assignment.md and minicpm_v_4_7_npu.cpp in sync.
 MODEL_TYPE ?= VISION_MM_C
 DESIGNS := VISION_MM_C
 DEPLOY_NAME_VISION_MM_C := vision_mm_c.xclbin

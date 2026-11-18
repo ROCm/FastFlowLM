@@ -326,7 +326,7 @@ run of the same Q4_K-dequantized weights through layers 0 to 3. Layer 4's MLP ca
 activations (|h| about 1.4e5 at one dim, its down-projection output about 1.4e4, scaled by about -8.6 by the post-MLP
 convolution), so a few percent of error in that one output shows up as 5 to 60% in the final hidden state. Sending the NPU the
 input as a bf16 hi + lo pair did not change it (the error is not the input rounding; probably the array's shared-exponent bfp16
-matmul), and the drafted tokens are not affected beyond what the acceptance numbers show (see the note in `notes/tricks`).
+matmul), and the drafted tokens are not affected beyond what the acceptance numbers show.
 
 | switch | what it does |
 |---|---|

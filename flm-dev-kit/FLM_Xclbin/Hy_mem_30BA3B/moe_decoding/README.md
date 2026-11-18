@@ -144,8 +144,8 @@ sequence early, `HY_DEBUG_TAP=x` reads the x tap.
 
 Peano is the default (`ENABLE_CHESSCC ?= 0`); `make ENABLE_CHESSCC=1` still builds
 with chess. Run `make clean_all` (or use another `BUILD_DIR=`) when switching, since
-both write the same build folder. Use the Peano that CI uses, llvm-aie
-`22.0.0.2026090201` (`.github/actions/wheel-aie-env/action.yml`).
+both write the same build folder. Use Peano
+`llvm-aie 22.0.0.2026090201+a36c62b9`.
 
 Result (2026-11-04, Strix Halo test machine): the Peano layer is **bit-identical** to chess
 (outputs and new K/V rows, 0 values differ, also with 32K of KV filled), and the

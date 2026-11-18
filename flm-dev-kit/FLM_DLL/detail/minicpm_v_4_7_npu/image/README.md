@@ -46,7 +46,7 @@ host does the O(L*D) glue and one attention: the vit_merger's, which is 4x4 over
   are real gathers (`regroup_2x2`), not Qwen3.8's free reinterpretation.
 * **Position table:** a SigLIP NaViT *bucketize* into a 70x70 table, not a
   bilinear resample. Ties follow torch's float32 `arange`, reproduced exactly
-  (notes/tricks/2026-10-05-minicpm-v-position-table-is-bucketize.md).
+  (the position table is a bucketize).
 * **Patch K = 588** (3x14x14), not a multiple of 384: the device op zero-pads K
   to 768 in both operands and pre-rounds the padded rows.
 * **The vit_merger after block 6:** LN -> qkv -> 2x2 windowed attention (host) ->
@@ -62,8 +62,8 @@ Scored op by op on the reference's own inputs, every device matmul without an
 activation lands at ~2.7x the bf16 host op's error; the two with the fused device
 gelu landed at 11x (block fc1) and 19x (vit_merger fc1). So fc1 binds `RTP_NONE`
 and the gelu runs in the widen every dispatch already does (`widen_gelu_tanh_par`),
-at no measurable cost. `FLM_MINICPM_V_VISION_DEVICE_GELU=1` is the A/B.
-(notes/tricks/2026-10-05-vision-mm-fused-gelu-is-the-dominant-device-error.md)
+at no measurable cost. `FLM_MINICPM_V_VISION_DEVICE_GELU=1` is the A/B
+(the fused device GELU was the dominant device error).
 
 ## Verification
 
@@ -139,7 +139,7 @@ Context switches (mm <-> attn, two per block) are ~2.4 ms each and cost ~130 ms 
 Single-context reconfiguration (default on; `FLM_MINICPM_V_VISION_SINGLE_CTX=0` switches it off) replaces them: the attention dispatches of a call run in `vision_mm_a`'s
 hw_context between two in-stream reconfigurations of the array
 (`npu/vision_attn_reconfig.hpp`; the mechanism, its lock quiesce and its safeguards are
-`../minicpm_v_reconfig.hpp`'s and `notes/tricks/2026-11-06-...`). A call with several
+`../minicpm_v_reconfig.hpp`'s). A call with several
 dispatches (a 720p image attends its source view and its slices separately) enters the
 attention configuration once and leaves it once. One reconfiguration round trip costs 1.5 ms
 against 4.9 ms for two context switches (measured on the shipped overlays); an image saves

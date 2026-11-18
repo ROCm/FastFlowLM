@@ -66,8 +66,7 @@ boundaries, so they work with the NPU stages on too. The exceptions are `linear_
 ## What "matches" means
 
 The engine runs Q4_K weights; S2's dumps come from bf16 weights. Quantization alone caps the
-`residual_out` cosine at 0.958 by layer 23 and the logits at 0.947. See
-`notes/tricks/2026-10-02-minicpm-v-q4k-quantization-floor.md`. So the gate scores against the
+`residual_out` cosine at 0.958 by layer 23 and the logits at 0.947 (the Q4_K quantization floor). So the gate scores against the
 q4 oracle (same weights, fp32 activations) and prints the bf16 column next to it:
 
 | | vs q4 oracle | vs bf16 dumps | q4 floor |
@@ -87,7 +86,7 @@ should keep it concise but informative. …"* The first token, 77264, matches HF
 
 * **Round, don't truncate.** `typedef.hpp`'s `f32o_bf16_512` truncates. Every host store here
   goes through `cpu_func::f32_bf16_rne_512` instead. With truncation the same run scored
-  0.9977 / 0.995. See `notes/tricks/2026-10-02-f32o-bf16-512-truncates.md`.
+  0.9977 / 0.995 (`f32o_bf16_512` truncates instead of rounding).
 * **The conv overlay does the L2 norm.** `conv.cc` applies silu and then `l2_norm` over the q
   and k heads, so `conv_qkv` holds normalized q/k. The GDN overlay scales q by `1/sqrt(128)`
   itself. The host stages split the same way. `linear_conv.npy` is dumped between silu and the
@@ -95,10 +94,10 @@ should keep it concise but informative. …"* The first token, 77264, matches HF
 * **`alpha_beta` holds `exp(g)` and `sigmoid(b)`**, not `g` and `b`. The recurrent state is
   fp32 `[16][K=128][V=128]` at bf16 element offset `get_s_offset()` of the cache slot, behind
   the `[3][6144]` conv state.
-* **Offsets are bytes.** See `notes/tricks/2026-10-02-minicpm-v-desc-offsets-are-bytes.md`.
+* **Offsets are bytes**, not elements, in the weight descriptors.
 * **Threads.** `prefill_threads()` defaults to one per physical core (16 here) and can be
-  overridden with `FLM_PREFILL_THREADS`. See
-  `notes/tricks/2026-10-02-host-kernels-32-threads-oversubscribe.md`. All-host, `DEBUG_LEVEL=0`:
+  overridden with `FLM_PREFILL_THREADS` (32 threads, one per SMT thread, oversubscribe the
+  host kernels). All-host, `DEBUG_LEVEL=0`:
   a 1k prompt prefills in about 1.0 s and decode is about 47 ms/token.
 
 ## Not covered by the NPU-vs-host cross reference

@@ -530,7 +530,7 @@ void lfm3_npu::Impl::update_max_length(uint32_t new_max) {
             std::memcpy(nkv.data() + desc.v_band_off(b, new_max), kv_cache[i].data() + desc.v_band_off(b, MAX_L), band * sizeof(bf16));
         }
         if (kv_on_device()) nkv.sync_to_device();
-        kv_cache[i] = std::move(nkv);   // move, never copy-assign a buffer (see BUFFER_ISSUE.md)
+        kv_cache[i] = std::move(nkv);   // move, never copy-assign: XRT buffer copies don't own the allocation
     }
     MAX_L = new_max;
     if (pctx) pctx->set_max_length(new_max);

@@ -183,9 +183,9 @@ void d3_npu::Impl::_encode_pack(const std::vector<std::vector<int>>& ids, size_t
     }
     PREFILL_PROF_TICK("encode:layers");
 
-    // Moved, never copied: under XRT buffer.hpp's copy constructor does not share ownership,
-    // so a copy of `h` dangles once `h` goes out of scope (BUFFER_ISSUE.md, fixed only in the
-    // HRX branch).
+    // Moved, never copied: in the default XRT build, FLM_DLL/include/buffer.hpp's copy
+    // constructor does not share ownership, so a copy of `h` dangles once `h` goes out of
+    // scope (the FLM_USE_HRX branch and FLM_Xclbin/host_common/buffer.hpp do share it).
     for (const auto& s : b.segs) {
         buffer<bf16> h(D);
         cpu_func::_rms_norm(h.data(), residual.data() + (size_t)(s.begin + s.len - 1) * D, final_norm.data(), D, 1, 0, 0);

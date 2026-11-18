@@ -105,7 +105,7 @@ save.
 
 ## Compiler (2026-11-03): Peano
 
-Default is Peano (`ENABLE_CHESSCC ?= 0`, user decision; `ENABLE_CHESSCC=1` builds Chess) (Peano = the pinned CI toolchain `llvm-aie 22.0.0.2026090201+a36c62b9` (`.github/actions/wheel-aie-env`); the June 21.0 that `~/setup.sh` brings is older.). Peano output is bit-identical (same hashes, engine logits identical)
+Default is Peano (`ENABLE_CHESSCC ?= 0`, user decision; `ENABLE_CHESSCC=1` builds Chess) (Peano = `llvm-aie 22.0.0.2026090201+a36c62b9`; the June 21.0 that `~/setup.sh` brings is older.). Peano output is bit-identical (same hashes, engine logits identical)
 but the mm is **24 % slower**: 1814-1821 ms vs 1457-1476 ms per prefill at L 10752. Peano pipelines the k loop at an
 initiation interval of 8 cycles for the 4 `mac_8x8_8x8T` (Chess ~1.65 cycles per mac). Giving Peano the loop hints
 (`AIE_PREPARE_FOR_PIPELINING AIE_LOOP_RANGE`) changed nothing; closing the gap needs the loop rewritten for Peano.

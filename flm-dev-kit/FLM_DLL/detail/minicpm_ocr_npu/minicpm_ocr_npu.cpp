@@ -304,7 +304,7 @@ void minicpm_ocr_npu::Impl::load_weights(Q4NX& q4nx){
 void minicpm_ocr_npu::Impl::_check_descriptors(Q4NX& q4nx){
     auto& attn = static_cast<minicpm_ocr_attn_layer&>(*desc.weight_desc[desc.attn_idx]);
     auto& lin  = static_cast<minicpm_ocr_linear_layer&>(*desc.weight_desc[desc.lin_idx]);
-    // all() leaves out the host-only bf16 twins; attn_gate aliases q_proj (CONTRACTS.md S1)
+    // all() leaves out the host-only bf16 twins; attn_gate aliases q_proj
     std::vector<weight_desc_t*> attn_all = attn.all();
     std::vector<weight_desc_t*> lin_all  = lin.all();
     lin_all.push_back(&lin.ssm_alpha_cpu);

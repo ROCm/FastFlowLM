@@ -22,7 +22,7 @@
 ///    every query of a segment sees every key of the same segment; the gated delta-net layers
 ///    stay causal. Upstream: d3_runtime.PromptEncoder.
 ///  * **No bitstream switches.** Only mm.xclbin is registered; conv1d, the delta rule and
-///    attention run on the host (notes/tricks/2026-10-05-minicpm-v-conv1d-prefill-belongs-on-the-host.md: on this array a token-serial stage
+///    attention run on the host (on this array a token-serial stage
 ///    does not amortize its bitstream switch). `make PREFILL_MM=cpu` runs everything on the host.
 ///  * **No lm_head, no decode.** The caller gets the final-norm hidden state of each segment's
 ///    last row; the 255-way readout lives in the application.
@@ -82,7 +82,7 @@ inline void d3_round_gemm_input(bf16* p, int ld, int rows, int cols) {
 /// @brief whether one of the gated-input projections runs on the host in an NPU build:
 ///        D3_HOST_GEMMS=gdn_o,attn_o,down (any subset). Those three read an elementwise product
 ///        (gated norm, sigmoid gate x attention, up x silu(gate)), which the array's bfp16 MAC
-///        handles worst (notes/tricks/2026-10-02-prefill-mm-overlay-loses-accuracy-on-gated-inputs.md).
+///        handles worst.
 inline bool d3_host_gemm(const char* which) {
 #if D3_MM_ON_NPU
     static const std::string list = [] {

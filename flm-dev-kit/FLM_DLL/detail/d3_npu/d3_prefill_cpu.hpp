@@ -39,7 +39,7 @@
 //
 // d3 registers one bitstream: the prefill GEMM (mm.xclbin). conv1d, the gated delta rule and
 // attention always run on the host here -- token-serial stages pay a bitstream switch they do
-// not amortize (notes/tricks/2026-10-05-minicpm-v-conv1d-prefill-belongs-on-the-host.md), and
+// not amortize, and
 // the bidirectional attention d3 needs has no array kernel yet.
 //
 //   make PREFILL_MM=cpu    -> -DFLM_PREFILL_MM_ON_CPU   -> D3_MM_ON_NPU = 0: no xclbin at all

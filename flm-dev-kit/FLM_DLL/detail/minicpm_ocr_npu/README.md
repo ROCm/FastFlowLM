@@ -911,7 +911,7 @@ Three things the shape says:
   Expected: only the 6 full-attention layers scan a growing KV cache, the 18 GatedDeltaNet layers
   carry fixed-size state. RSS grows ~60 KB per token of context.
 
-Against the sibling's committed CI baseline (`.github/scripts/baseline/xrt/perf/minicpm-v-4.7_1b/`,
+Against the sibling's CI perf baseline (MiniCPM-V-4.7 1B, XRT,
 2026-10-08) **decode agrees closely** -- 46.4 vs 47.7 at 1k, 31.2 vs 31.7 at 16k -- which is the
 useful comparison, since the two share a text tower. Prefill reads 40-65% higher here, but that is
 **not** a like-for-like number: different box (CI uses a pinned perf-bench machine), different

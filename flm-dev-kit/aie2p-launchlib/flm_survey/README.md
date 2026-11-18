@@ -89,7 +89,7 @@ models (more compute per switch). For comparison, Whisper's warm switches save ~
 ## Plan (not started; needs approval)
 
 1. **Feasibility on one model, Qwen3-0.6B (4 xclbins, prefill only, the largest share).** Build its four kernels
-   (`attn`, `mm`, `layer`, `dequant`; `.github/scripts/kernel_assignment.json` names their `FLM_Xclbin` builds) with
+   (`attn`, `mm`, `layer`, `dequant`; `FLM_Xclbin/kernel_assignment.md` names their builds) with
    `--aie-generate-txn` and package them (`../launchlib/tools/make_package.py`; generalize
    `../whisper_encoder/tools/build_packages.sh`). Gate: every init write classified, `test_build` passes for every
    pair, and the measured warm switch per pair (`switch_cost`-style, control packets) is at most ~0.5 ms. Stop here

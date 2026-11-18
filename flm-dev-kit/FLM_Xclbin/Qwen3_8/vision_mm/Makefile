@@ -15,13 +15,12 @@ HOME_DIR := $(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
 MODEL_TYPE ?= VISION_MM_A
 DESIGNS := VISION_MM_A VISION_MM_B
 
-# Both designs ship in ONE CI artifact, so their deliverables cannot both be
-# called mm.xclbin: the collect step in .github/actions/build-xclbins flattens
-# every build/*/xclbins/*.xclbin into a single directory, and the second copy
-# would silently overwrite the first. Each design is therefore written out under
-# the name the engine opens it by, which is also the name assemble-xclbins
-# matches against the kernel map. Keep these three in sync:
-# kernel_assignment.json, this table, and qwen3_8mtp_npu.cpp.
+# Both designs ship in ONE xclbin folder, so their deliverables cannot both be
+# called mm.xclbin: collecting every build/*/xclbins/*.xclbin into a single
+# directory would let the second copy silently overwrite the first. Each design
+# is therefore written out under the name the engine opens it by, which is also
+# the name the kernel map lists. Keep these three in sync:
+# FLM_Xclbin/kernel_assignment.md, this table, and qwen3_8mtp_npu.cpp.
 DEPLOY_NAME_VISION_MM_A := vision_mm_a.xclbin
 DEPLOY_NAME_VISION_MM_B := vision_mm_b.xclbin
 DEPLOY_NAME := $(DEPLOY_NAME_$(MODEL_TYPE))

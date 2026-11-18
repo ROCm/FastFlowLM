@@ -15,7 +15,7 @@ Public interface: `include/decision_model.hpp` (`decision_model`), `include/mode
 
 **Status: text.** Every projection runs on the array (`mm.xclbin` = `xclbins-dequant_mm_512x512x512`,
 Qwen3.5-0.8B's); conv1d and the gated delta rule run on the host. Token-serial stages do not amortize a bitstream
-switch at d3's prompt lengths (`notes/tricks/2026-10-05-minicpm-v-conv1d-prefill-belongs-on-the-host.md`).
+switch at d3's prompt lengths.
 **Attention** runs on the host for prompts under 1,536 tokens and on the array from 1,536 (`attn.xclbin` =
 `xclbins-Qwen3_5_bidirectional_attention_prefill`, Qwen3.5's prefill attention made bidirectional), registered on
 the first such prompt; if it cannot be registered, attention stays on the host.
@@ -211,7 +211,7 @@ plain-PyTorch reference: `models_simple/verify_d3_lite.py`.
 ## Numerical contract
 
 - **Packing is bit-exact**: a prompt's row is the same whether it ran alone or packed with others, in any order
-  (checked by `.github/scripts/d3-check`). Order independence and determinism are bit-exact.
+  (checked when this was written). Order independence and determinism are bit-exact.
 - **Host build** (`PREFILL_MM=cpu`) reproduces a PyTorch model fed the same dequantized weights to cosine ≥ 0.9999
   at every checkpoint.
 - **NPU build**: the array's bf16 MAC is bfp16-emulated and truncating, which is the engine's error floor (cosine
@@ -274,6 +274,6 @@ vision tower on random segments and compares a segment's rows alone and in a cal
 
 ## Gotchas found bringing it up
 
-- `notes/tricks/2026-10-18-host-write-to-a-bo-must-be-flushed-before-the-array-writes-it.md`
-- `notes/tricks/2026-10-18-xrt-buffer-copies-do-not-own-their-memory.md`
-- `notes/tricks/2026-10-18-fused-silu-in-dequant-mm-is-wrong-for-negative-gates.md`
+- A host write to a BO must be flushed (synced) before the array writes that BO.
+- XRT `buffer` copies do not own their memory: move an owning buffer, never copy it.
+- The fused SiLU in `dequant_mm` is wrong for negative gate values.

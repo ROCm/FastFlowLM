@@ -58,10 +58,10 @@ cd audio/test && make run                                                       
 
 ## Gotchas
 
-- The host must not write a buffer the NPU writes (see `notes/tricks/2026-11-02-host-written-logits-buffer-...`): the prefill logits
+- The host must not write a buffer the NPU writes: the prefill logits
   come from a host buffer, not from `logits`.
 - Only `proj_addr` (the proj tiles' IS_ATTN RTP) differs from the Q4_1 builds of the generic decode layer: 49664 here, 33280 there
   (`build/<MODEL>/xclbins/rtp_addresses.txt`).
-- Build the decode xclbin with the CI-pinned Peano (`.github/actions/wheel-aie-env`); the older Peano in the venv crashes on `attn_kv.cc`.
+- Build the decode xclbin with Peano `llvm-aie 22.0.0.2026090201+a36c62b9`; the older Peano in the venv crashes on `attn_kv.cc`.
 - The stock HF `Qwen3ASRAudioEncoder` attends over the whole clip on CPU (no window mask); the reference used here applies the
   `cu_seqlens` window mask like the vLLM backend the model card numbers come from.

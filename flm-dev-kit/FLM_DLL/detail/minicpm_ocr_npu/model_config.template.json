@@ -58,7 +58,7 @@
         "partial_rotary_factor": 0.25
     },
 
-    "_comment_rtp": "Carried verbatim from Qwen3.5-0.8B-NPU2/config.json because we load that model's xclbins. Nothing at the current HEAD of either repo reads these keys, but RTP addresses are part of the kernel contract (AGENTS.md S7), so they must not be invented.",
+    "_comment_rtp": "Carried verbatim from Qwen3.5-0.8B-NPU2/config.json because we load that model's xclbins. Nothing at the current HEAD of either repo reads these keys, but RTP addresses are part of the kernel contract (the host writes RTPs at the fixed addresses each kernel build records in rtp_addresses.txt), so they must not be invented.",
     "addr_qk": 53248,
     "addr_kv": 53536,
 

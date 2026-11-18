@@ -6,7 +6,7 @@
     config.json            FLM_DLL/detail/minicpm_v_4_7_moe_npu/model_config.template.json,
                            top-level "_comment*" keys stripped, values untouched
     tokenizer.json         copied from the HF folder (the GGUF-extracted tokenizer.json is lossy,
-    tokenizer_config.json  see notes/tricks/2026-10-02-gguf-extracted-tokenizer-json-is-lossy.md)
+    tokenizer_config.json  it drops information the HF file has)
     chat_template.jinja    (thinking is off unless enable_thinking is true, as the model card recommends)
     LICENSE / NOTICE       not shipped by the HF repo: the licence is Apache-2.0 (see its card)
 

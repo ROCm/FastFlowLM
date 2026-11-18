@@ -11,8 +11,8 @@ Exit code 0 iff there is no diff and the recovery check passes. Needs the same e
 
   contention_test.py --flm /path/to/flm --foreign 'python3 my_npu_loop.py' [--prompts short|1k|4k] [--n 25] [--max-tokens 24]
 
---foreign is any process that keeps dispatching on the NPU (e.g. an XRT loop alternating two xclbins, or any other NPU workload). Docs: the note
-notes/tricks/2026-11-06-decode-residual-stays-on-the-array-between-runs.md
+--foreign is any process that keeps dispatching on the NPU (e.g. an XRT loop alternating two xclbins, or any other NPU workload). Background: the decode residual stays on the array between
+runs, so another process's dispatches in between can disturb it.
 """
 import argparse, json, os, signal, subprocess, sys, time, urllib.error, urllib.request
 

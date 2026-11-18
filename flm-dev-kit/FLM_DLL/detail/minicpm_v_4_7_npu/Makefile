@@ -63,7 +63,7 @@ CXX_FLAGS += -MMD -MP -DDEBUG_LEVEL=$(DEBUG_LEVEL) -DVERBOSE=$(VERBOSE)
 # All five set to cpu registers no xclbin at all: the whole model runs on the host.
 #
 # GDN and CONV default to the HOST, and that is a measured choice, not an unfinished
-# port -- see notes/tricks/2026-10-05-minicpm-v-conv1d-prefill-belongs-on-the-host.md.
+# port.
 # Both stages are token-serial on the array, so they pay a bitstream switch and a
 # full activation round trip for arithmetic the host does with AVX-512 in less time.
 # Language prefill, 849-token prompt, idle box:

@@ -20,7 +20,7 @@ make bitstream MODEL_TYPE=GEMMA4_E4B          # the shipped design -> build/GEMM
 make host                                     # run.exe, the host tests below
 ```
 
-The xclbin is deployed as `verify.xclbin` (`.github/scripts/kernel_assignment.json`, artifact
+The xclbin is deployed as `verify.xclbin` (`FLM_Xclbin/kernel_assignment.md`, artifact
 `xclbins-Gemma4_verify_decoding_GEMMA4_E4B`). The build compares its RTP addresses with `rtp_expected/fused8x_GEMMA4_E4B.txt`
 and fails if they moved. The engine compiles these addresses in (`gemma4e_dflash_rtp.hpp`) because CI ships only the
 `.xclbin`, so update both files together.

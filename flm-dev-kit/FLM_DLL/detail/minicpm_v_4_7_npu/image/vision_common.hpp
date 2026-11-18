@@ -11,7 +11,9 @@
 /// different namespace on purpose: every engine `.so` carries its own runtime
 /// and `flm` loads all of them at once, so two engines that share a header by
 /// `#include` across `detail/` dirs would also share inline-function symbols the
-/// moment one of them changes (AGENTS.md S7, `-Bsymbolic-functions`).
+/// moment one of them changes (see the `-Wl,-Bsymbolic-functions` comment in
+/// this engine's Makefile: without it, ELF interposition can bind even this
+/// .so's internal calls to another engine's copy of the same function).
 #ifndef __MINICPM_V_VISION_COMMON_HPP__
 #define __MINICPM_V_VISION_COMMON_HPP__
 #pragma once

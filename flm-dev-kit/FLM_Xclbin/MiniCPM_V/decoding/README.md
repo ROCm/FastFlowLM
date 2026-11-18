@@ -11,8 +11,8 @@
 > design family. `MODEL_TYPE=QWEN3_5_08B_SL` builds `layer_lm_sl.xclbin` (the decode with the lm_head as a phase of the layer design;
 > every run takes x from and returns it to DDR, so a firmware design reload between runs cannot change the result). This is the only
 > variant CI builds and ships. `MODEL_TYPE=QWEN3_5_08B` still builds the stateful variant (`layer_lm.xclbin`, x stays on the array
-> inside a layer group) for local experiments; it is neither built by CI nor assigned to a model folder. See the CI matrix
-> (`.github/actions/xclbin-build-matrix`) for the built variants and `FLM_Xclbin/kernel_assignment.md` for where the artifacts go.
+> inside a layer group) for local experiments; it is neither built by CI nor assigned to a model folder. See
+> `FLM_Xclbin/kernel_assignment.md` for the built variants and where the artifacts go.
 
 Only for generateing decoding layers on AMD Ryzen AI Strix+ chips.
 
@@ -54,7 +54,7 @@ Inside Kernel:
 
 ## Compiler (2026-11-03): Peano 22
 
-Already Peano. Rebuilt with the CI pin (Peano = the pinned CI toolchain `llvm-aie 22.0.0.2026090201+a36c62b9` (`.github/actions/wheel-aie-env`); the June 21.0 that `~/setup.sh` brings is older.): prefill logits bit-identical to the June build; decode not bit-identical
+Already Peano. Rebuilt with the CI pin (Peano = `llvm-aie 22.0.0.2026090201+a36c62b9`; the June 21.0 that `~/setup.sh` brings is older.): prefill logits bit-identical to the June build; decode not bit-identical
 but as close to the CPU reference (`--check`: worst cos 0.998865 both, 0.998100 vs 0.997611 at `--kv-scale 8`), and
 10K decode 31.4-31.5 vs 31.2 tok/s. The shipped layer.xclbin is this build.
 
@@ -78,5 +78,4 @@ two-xclbin path); the old `layer.xclbin` stays untouched because an engine that 
 the runs of a layer group and the gate core counts the layers of a period itself, so a firmware design reload between two runs (any other process's
 command) silently changes the attention run. In the `_SL` build every run takes x from DDR and returns it, and the gate core reads the kind of layer from an
 RTP (`RTP_gate_mode`, 36864; the build checks the address). The host (FLM_DLL `minicpm_v_4_7_npu`) must send x with, and receive x from, every run and write
-the gate RTP; this folder's own `host/` (run.exe) does not, so `_SL` builds are for the engine only. Details and the fault-injection method:
-`notes/tricks/2026-11-07-gate-core-counts-the-layer-period-so-a-design-reload-mid-group-breaks-the-attention-run.md`.
+the gate RTP; this folder's own `host/` (run.exe) does not, so `_SL` builds are for the engine only. The cause: the gate core counts the layer period, so a design reload in the middle of a layer group breaks the attention run.

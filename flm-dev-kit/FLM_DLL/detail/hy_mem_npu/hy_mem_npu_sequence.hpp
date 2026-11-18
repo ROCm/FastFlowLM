@@ -82,8 +82,10 @@ private:
     //
     // RE-CHECK THESE AFTER REBUILDING dense_decoding OR moe_decoding. If a rebuild
     // moves an RTP, the host writes to a stale address and the result is wrong
-    // output or a hang, not an error (see AGENTS.md section 7: a Gemma4 decode hang
-    // was exactly this). Diff the new rtp_addresses.txt against the values below.
+    // output or a hang, not an error: the host writes RTPs at fixed addresses, and
+    // the kernel's bitstream rule records where the build put them in
+    // xclbins/rtp_addresses.txt (a Gemma4 decode hang was exactly this mismatch).
+    // Diff the new rtp_addresses.txt against the values below.
     static constexpr uint32_t l_attn_qk_address = 5120;              // RTP_L_attn_qk_core_*, both overlays
     static constexpr uint32_t l_attn_kv_address = 34816;             // RTP_L_attn_kv_core_*, both overlays
     static constexpr uint32_t dense_proj_is_attn_address = 33280;    // RTP_PROJ_IS_ATTN_BUFFER_*, dense

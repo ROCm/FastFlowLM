@@ -169,7 +169,7 @@ $(TARGET): $(OBJS) $(DEQUANT_OBJS)
 
 
 # The engine-level harness (tools/d3_engine_run.cpp): token-id prompts in, final-norm hidden rows
-# out, timing per call. Used by the rig and by .github/workflows/d3-check.yml.
+# out, timing per call. Used by the rig.
 harness: all
 	$(CXX) $(CXX_FLAGS) -o $(BIN_DIR)/d3_engine_run tools/d3_engine_run.cpp \
 		-L$(LIB_DIR) -L$(FINAL_LIB_DIR) -ld3_npu -lq4_npu_eXpress $(LDFLAGS) \

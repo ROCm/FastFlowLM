@@ -62,8 +62,8 @@ CXX_FLAGS += -MMD -MP -DDEBUG_LEVEL=$(DEBUG_LEVEL) -DVERBOSE=$(VERBOSE)
 #   DECODE=cpu        decode and the lm_head             (layer.xclbin, lm_head.xclbin)
 # All five set to cpu registers no xclbin at all: the whole model runs on the host.
 #
-# CONV defaults to the HOST, and that is a measured choice, not an unfinished port --
-# see notes/tricks/2026-10-05-minicpm-v-conv1d-prefill-belongs-on-the-host.md.
+# CONV defaults to the HOST, and that is a measured choice, not an unfinished port:
+# a token-serial stage on the array pays a bitstream switch it does not amortize.
 #
 # GDN defaults to `npu`, but that now means "built in, chosen per prefill call at run time":
 # prefill calls of >= 5120 tokens run the gated delta rule on the array, shorter ones decline

@@ -46,7 +46,7 @@ host does the O(L*D) glue and one attention: the vit_merger's, which is 4x4 over
   are real gathers (`regroup_2x2`), not Qwen3.8's free reinterpretation.
 * **Position table:** a SigLIP NaViT *bucketize* into a 70x70 table, not a
   bilinear resample. Ties follow torch's float32 `arange`, reproduced exactly
-  (notes/tricks/2026-10-05-minicpm-v-position-table-is-bucketize.md).
+  (the position table is a bucketize).
 * **Patch K = 588** (3x14x14), not a multiple of 384: the device op zero-pads K
   to 768 in both operands and pre-rounds the padded rows.
 * **The vit_merger after block 6:** LN -> qkv -> 2x2 windowed attention (host) ->
@@ -62,8 +62,8 @@ Scored op by op on the reference's own inputs, every device matmul without an
 activation lands at ~2.7x the bf16 host op's error; the two with the fused device
 gelu landed at 11x (block fc1) and 19x (vit_merger fc1). So fc1 binds `RTP_NONE`
 and the gelu runs in the widen every dispatch already does (`widen_gelu_tanh_par`),
-at no measurable cost. `FLM_MINICPM_V_VISION_DEVICE_GELU=1` is the A/B.
-(notes/tricks/2026-10-05-vision-mm-fused-gelu-is-the-dominant-device-error.md)
+at no measurable cost. `FLM_MINICPM_V_VISION_DEVICE_GELU=1` is the A/B
+(the fused device GELU was the dominant device error).
 
 ## Verification
 

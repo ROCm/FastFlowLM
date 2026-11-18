@@ -71,7 +71,7 @@ A second, independent cost worth measuring before assuming the maths is everythi
 and `GateDeltaNet_prefill.xclbin` are two separate xclbins, so each of the 18 layers may pay
 bitstream switches the host path never does. Fusing conv into the GDN design, or hoisting the
 switch out of the layer loop, is a smaller change than the chunked rewrite and may be worth doing
-first. See `notes/tricks/` on the NPU2 runtime op switch (~0 us) versus a context switch (~820 us).
+first. On NPU2 a runtime op switch costs ~0 us and a context switch ~820 us.
 
 ## Suggested order
 
@@ -85,9 +85,7 @@ first. See `notes/tricks/` on the NPU2 runtime op switch (~0 us) versus a contex
 Build: `source ~/setup.sh` (**not** `FLM_Xclbin/setup.sh` — wrong paths on this box), then
 `make link` to fail fast before `make bitstream` (5–30 min).
 
-If a variant is added, it must also go in the `MULTI_MODEL` table in
-`.github/actions/xclbin-build-matrix/action.yml`, and in both `kernel_assignment.json` and
-`FLM_Xclbin/kernel_assignment.md`. CI never builds a variant missing from that table.
+If a variant is added, it must also go in `FLM_Xclbin/kernel_assignment.md`.
 
 ## Peano (2026-11-04)
 
@@ -95,7 +93,7 @@ Both kernels now build with Peano by default (`ENABLE_CHESSCC ?= 0`); `ENABLE_CH
 builds chess, and that build is unchanged (same output, same speed). Peano output is
 **bit-identical** to chess for both kernels, at every length tested.
 
-Environment (the CI Peano, `.github/actions/wheel-aie-env/action.yml`):
+Environment (Peano `llvm-aie 22.0.0.2026090201+a36c62b9`):
 
 ```shell
 export AIETOOLS_ROOT=/scratch/ryzen_ai-1.3.0/vitis_aie_essentials AIETOOLS_DIR=$AIETOOLS_ROOT
