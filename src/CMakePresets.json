@@ -77,7 +77,7 @@
     {
       "name": "windows-core-on",
       "displayName": "Windows Core (enabled)",
-      "description": "Windows build with the ryzenai-corelib kernel backend turned on, beside FastFlowLM's own engines. Builds into build/ like windows-default. Needs corelib exactly 0.53.0: point it at a corelib install prefix once with -DRYZENAI_CORELIB_ROOT=<prefix> (or the RYZENAI_CORELIB_ROOT environment variable), or drop the headers into include/ and ryzenai_corelib.lib into lib/.",
+      "description": "Windows build with the ryzenai-corelib kernel backend turned on, beside FastFlowLM's own engines. Builds into build/ like windows-default. Needs corelib exactly 0.103.0: point it at a corelib install prefix once with -DRYZENAI_CORELIB_ROOT=<prefix> (or the RYZENAI_CORELIB_ROOT environment variable), or drop the headers into include/ and ryzenai_corelib.lib into lib/.",
       "inherits": "windows-default",
       "cacheVariables": {
         "FLM_ENABLE_CORE": "ON"

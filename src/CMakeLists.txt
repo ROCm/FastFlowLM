@@ -64,7 +64,7 @@ else()
     set(FLM_MODEL_EXTENSION_NPU_RUNTIME "xrt")
 endif()
 
-# ryzenai-corelib (exactly 0.53.0) beside FastFlowLM's own engines: the two
+# ryzenai-corelib (exactly 0.103.0) beside FastFlowLM's own engines: the two
 # share no engine, and each model tag is served by one of them (a family ending
 # in "-core" is corelib's), so both are offered side by side -- with
 # FLM_NPU_PLATFORM=aie_next, the aie_next flm engines next to corelib's models.
@@ -81,12 +81,12 @@ if(FLM_ENABLE_CORE)
     # handed a prefix on the command line, which is the only reason the core
     # build ever needed an environment variable.
     # Last, the C:/dev prefix the Windows build already takes Boost, vcpkg and
-    # XRT from: corelib 0.53.0 (the version corelib_api.hpp pins) installed there.
+    # XRT from: corelib 0.103.0 (the version corelib_api.hpp pins) installed there.
     find_path(RYZENAI_CORELIB_INCLUDE_DIR NAMES ryzenai/corelib.h
         HINTS "${CMAKE_SOURCE_DIR}/include"
               "${RYZENAI_CORELIB_ROOT}/include"
               "$ENV{RYZENAI_CORELIB_ROOT}/include"
-              "C:/dev/ryzenai-corelib-0.53.0/install/include" REQUIRED)
+              "C:/dev/ryzenai-corelib-0.103.0/install/include" REQUIRED)
     # corelib is linked in rather than dlopened.
     # A conda/pip prefix keeps its import libs beside the headers; a CMake
     # install prefix puts them in lib/ or lib64/ depending on the distribution,
