@@ -70,7 +70,7 @@ done
 ceilings="glibc ${MAX_GLIBC}, GLIBCXX ${MAX_GLIBCXX}, CXXABI ${MAX_CXXABI}, GCC ${MAX_GCC}, GOMP ${MAX_GOMP}, OMP ${MAX_OMP}"
 if (( rc )); then
   echo "check_abi: FAILED (${#libs[@]} libraries checked; ceiling ${ceilings}). Libraries above the" \
-       "ceiling must be built in the manylinux_2_28 container (FLM_DLL/build_manylinux.sh), not on a" \
+       "ceiling must be built in the manylinux_2_28 container (flm-dev-kit/FLM_DLL/build_manylinux.sh), not on a" \
        "newer host." >&2
 else
   echo "check_abi: ${#libs[@]} libraries within ${ceilings}"

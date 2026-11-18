@@ -27,14 +27,14 @@ include_guard(GLOBAL)
 #    `powershell.exe -Command "cmake ../../detail/<engine>"` (see the WSL branch
 #    of each detail/*/Makefile), which cannot pass -DCMAKE_PREFIX_PATH, so we
 #    auto-locate the package here. This mirrors the Linux auto-locate already in
-#    FLM_DLL/hrx.mk.
+#    flm-dev-kit/FLM_DLL/hrx.mk.
 find_package(hrx CONFIG QUIET)
 if(NOT hrx_FOUND)
     file(GLOB _flm_hrx_cfgs
-        "${CMAKE_CURRENT_LIST_DIR}/../../hrx-integration/.hrx-release/*/lib/cmake/hrx/hrx-config.cmake"
-        "${CMAKE_CURRENT_LIST_DIR}/../../hrx-integration/.hrx-release/*/lib/cmake/hrx/hrxConfig.cmake"
-        "${CMAKE_CURRENT_LIST_DIR}/../../hrx-integration/.hrx-release/lib/cmake/hrx/hrx-config.cmake"
-        "${CMAKE_CURRENT_LIST_DIR}/../../hrx-integration/.hrx-release/lib/cmake/hrx/hrxConfig.cmake")
+        "${CMAKE_CURRENT_LIST_DIR}/../../../hrx-integration/.hrx-release/*/lib/cmake/hrx/hrx-config.cmake"
+        "${CMAKE_CURRENT_LIST_DIR}/../../../hrx-integration/.hrx-release/*/lib/cmake/hrx/hrxConfig.cmake"
+        "${CMAKE_CURRENT_LIST_DIR}/../../../hrx-integration/.hrx-release/lib/cmake/hrx/hrx-config.cmake"
+        "${CMAKE_CURRENT_LIST_DIR}/../../../hrx-integration/.hrx-release/lib/cmake/hrx/hrxConfig.cmake")
     if(_flm_hrx_cfgs)
         list(GET _flm_hrx_cfgs 0 _flm_hrx_cfg)
         get_filename_component(_flm_hrx_cfgdir "${_flm_hrx_cfg}" DIRECTORY)

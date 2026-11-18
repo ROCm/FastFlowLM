@@ -1,6 +1,12 @@
 #!/usr/bin/bash
 # Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
 
+cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" || exit 1
+if ! ls detail/*/Makefile >/dev/null 2>&1; then
+	echo "build.sh: no detail/*/Makefile under $PWD" >&2
+	exit 1
+fi
+
 rm -rf build
 
 failed_dirs=()

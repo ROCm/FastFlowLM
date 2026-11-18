@@ -3,6 +3,7 @@
 
 # hunyuan-dense (Hy-MT2-1.8B). No mha/dequant: the engine uses the fused
 # dequant_mm and its own attention, so those modules are not linked.
+cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" || exit 1
 failed_dirs=()
 target_dirs=(q4nx gemm lm_head hunyuan_npu)
 

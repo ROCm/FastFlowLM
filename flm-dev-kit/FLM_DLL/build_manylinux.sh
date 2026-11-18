@@ -5,7 +5,7 @@
 # Build all FLM engine .so inside the TheRock manylinux_2_28 container against the
 # pinned public HRX package. Produces glibc<=2.28 Boost-free engine libraries.
 #
-# usage: bash FLM_DLL/build_manylinux.sh     (on a host with Docker; CI runs exactly this)
+# usage: bash flm-dev-kit/FLM_DLL/build_manylinux.sh     (on a host with Docker; CI runs exactly this)
 #
 # On the host it fetches the pinned HRX package if missing, then re-runs itself in the pinned
 # container as the calling user, with the repo mounted at /work, so build/ is not left owned by root.
@@ -21,7 +21,9 @@ set -uo pipefail
 MANYLINUX_IMAGE="${MANYLINUX_IMAGE:-ghcr.io/rocm/therock_build_manylinux_x86_64@sha256:702a5133851e6d1daf1207d2c9fbb01c2667914a5b6dc5a01faeb3ce66ea6421}"
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-root="$(dirname "$here")"
+# flm-dev-kit/FLM_DLL -> FastFlowLM repo root, which owns hrx-integration/
+root="$(cd "$here/../.." && pwd)"
+[[ -f $root/hrx-integration/hrx-release.env ]] || { echo "FATAL: $root/hrx-integration/hrx-release.env not found" >&2; exit 2; }
 
 # Derive the extracted-package dir from the pinned release (hrx-release.env) so
 # this tracks the pin instead of hardcoding a version.
@@ -46,7 +48,7 @@ if [[ ${FLM_MANYLINUX_INNER:-0} != 1 ]]; then
     -v "$root:/work" \
     -w /work \
     "$MANYLINUX_IMAGE" \
-    bash /work/FLM_DLL/build_manylinux.sh
+    bash /work/flm-dev-kit/FLM_DLL/build_manylinux.sh
 fi
 
 # gcc-toolset-13 ships as g++/gcc; the engine Makefiles hardcode g++-13/gcc-13. Alias them in a

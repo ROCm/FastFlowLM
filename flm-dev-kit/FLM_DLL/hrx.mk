@@ -6,7 +6,7 @@
 # On the HRX path the engines call the public hrx_amdxdna_executable_create()
 # API (hrx_amdxdna.h) and use only HRX public headers. This consumes HRX from
 # its *public package* (public headers + a single libhrx.so + a CMake package).
-# It mirrors FLM_DLL/cmake/flm_hrx.cmake, which does the equivalent via
+# It mirrors flm-dev-kit/FLM_DLL/cmake/flm_hrx.cmake, which does the equivalent via
 # find_package(hrx CONFIG REQUIRED) for the .dll build.
 #
 # The package is fetched+extracted by hrx-integration/fetch-hrx-release.sh (pin:
@@ -16,7 +16,7 @@
 #   * let this file auto-locate the extracted package under .hrx-release.
 
 HRX_MK_DIR := $(dir $(lastword $(MAKEFILE_LIST)))
-REPO_ROOT  := $(abspath $(HRX_MK_DIR)/..)
+REPO_ROOT  := $(abspath $(HRX_MK_DIR)/../..)
 
 # Directory fetch-hrx-release.sh extracts the pinned public package into.
 HRX_RELEASE_DIR ?= $(REPO_ROOT)/hrx-integration/.hrx-release

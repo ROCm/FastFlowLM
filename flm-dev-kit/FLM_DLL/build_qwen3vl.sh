@@ -1,6 +1,7 @@
 #!/usr/bin/bash
 # Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
 
+cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" || exit 1
 failed_dirs=()
 target_dirs=(q4nx mha gemm dequant dequant_new lm_head qwen3vl_npu qwen3vl_flash)
 

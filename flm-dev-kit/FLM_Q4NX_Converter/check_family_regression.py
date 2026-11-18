@@ -9,6 +9,7 @@ every tensor (names, dtype, shape, bytes).  Used when adding a family (e.g. QWEN
 
     python check_family_regression.py --base-ref HEAD~1 --gguf Qwen3.5-4B-Q4_1.gguf -f qwen3.5-4B [--python python]
 Exit status 0 only if the outputs are identical.
+--base-ref must be a commit that already has flm-dev-kit/FLM_Q4NX_Converter (the archive path is taken from this file's place in the repo).
 """
 import argparse, os, subprocess, sys, tempfile
 import torch
@@ -33,11 +34,12 @@ def main():
     ap.add_argument("--python", default=sys.executable)
     a = ap.parse_args()
     repo = subprocess.check_output(["git", "rev-parse", "--show-toplevel"], cwd=HERE, text=True).strip()
+    rel = os.path.relpath(HERE, repo)
     with tempfile.TemporaryDirectory() as tmp:
-        arch = subprocess.Popen(["git", "archive", a.base_ref, "FLM_Q4NX_Converter"], cwd=repo, stdout=subprocess.PIPE)
+        arch = subprocess.Popen(["git", "archive", a.base_ref, rel], cwd=repo, stdout=subprocess.PIPE)
         subprocess.run(["tar", "-x", "-C", tmp], stdin=arch.stdout, check=True)
         arch.wait()
-        base = convert(os.path.join(tmp, "FLM_Q4NX_Converter"), a.gguf, a.family, os.path.join(tmp, "out-base"), a.python, a.type)
+        base = convert(os.path.join(tmp, rel), a.gguf, a.family, os.path.join(tmp, "out-base"), a.python, a.type)
         new = convert(HERE, a.gguf, a.family, os.path.join(tmp, "out-new"), a.python, a.type)
         bad = []
         with safe_open(base, "pt") as fb, safe_open(new, "pt") as fn:

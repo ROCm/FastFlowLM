@@ -4,6 +4,7 @@
 # Phase 1 is CPU only: no mha / gemm / dequant / lm_head xclbin modules are
 # linked, so only q4nx (SafeTensors + Q4NX, which causal_lm's header needs)
 # and the engine itself get built.
+cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" || exit 1
 failed_dirs=()
 target_dirs=(q4nx qwen3_8mtp_npu)
 

@@ -4,6 +4,7 @@
 
 # Hy-Memory-30B-A3B. Every stage runs on its own xclbin, so no host compute
 # modules (mha / gemm / dequant / lm_head) are linked; q4nx is the weight reader.
+cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" || exit 1
 failed_dirs=()
 target_dirs=(q4nx hy_mem_npu)
 
