@@ -2551,7 +2551,10 @@
                     "quantization_level": "INT4 RTN group-128, fp16 activations"
                 },
                 "flm_min_version": "1.0.13",
-                "vlm": false,
+                "vlm": true,
+                "label": [
+                    "vision"
+                ],
                 "files": [
                     "chat_template.jinja",
                     "config.json",

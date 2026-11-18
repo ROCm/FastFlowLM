@@ -25,6 +25,10 @@ private:
     bytes load_image(const std::string& filename);
     bytes load_image_base64(const std::string& base64_string);
     buffer<bf16> preprocess_image(bytes& image);
+#if defined(FLM_ENABLE_OGA_HIPEP)
+    /// \brief an image prompt on oga-hipep, through the package's multimodal processor
+    bool insert_oga_images(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled);
+#endif
 
 public:
     Gemma3(flm_rt::device* npu_device_inst);

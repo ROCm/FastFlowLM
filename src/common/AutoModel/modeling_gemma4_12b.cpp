@@ -28,6 +28,11 @@ std::string trim(const std::string& text) {
 }
 } // namespace
 
+#if defined(FLM_ENABLE_OGA_HIPEP)
+using flm::oga::ImageBytesFromBase64;
+using flm::oga::ImageBytesFromFile;
+#endif
+
 /************              Gemma4_12B family            **************/
 Gemma4_12B::Gemma4_12B(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "Gemma4_12B") {}
 

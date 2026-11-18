@@ -82,6 +82,12 @@ std::string ShapeText(const std::vector<std::int64_t>& shape) {
     return text + "]";
 }
 
+std::uint64_t BytesHash(const std::string& bytes) {
+    std::uint64_t h = 0xcbf29ce484222325ull;
+    for (const unsigned char c : bytes) h = (h ^ c) * 0x100000001b3ull;
+    return h ^ bytes.size();
+}
+
 std::uint64_t ImageHash(const OgaImage& image) {
     std::uint64_t h = 0xcbf29ce484222325ull;
     const auto mix = [&h](std::uint64_t word) {
@@ -618,24 +624,52 @@ buffer<bf16> OgaEngine::Logits(OgaGenerator* generator) const {
 
 buffer<bf16> OgaEngine::PrefillStaged(const StagedPrompt& staged) {
     // The processor inputs hold the whole sequence and its images, which OGA takes only in a
-    // generator's first call: a new generator, in a free slot or the least recently used one.
+    // generator's first call. A slot given the same images that ran a prefix of the sequence
+    // takes the rest as text; otherwise a new generator, in a free slot or the least recently used one.
     active_.reset();  // so that a failure before Rebuild drops no other conversation's slot
     try {
         const char* why = nullptr;
-        Rebuild(std::nullopt, &why);
+        std::optional<std::size_t> found;
+        for (std::size_t i = 0; i < slots_.size(); ++i) {
+            const Live& slot = slots_[i];
+            if (!slot.staged_images.empty() && slot.staged_images == staged.images &&
+                slot.ran.size() < staged.ids.size() &&
+                staged.ids.size() <= std::min(slot.capacity, max_length_) &&
+                std::equal(slot.ran.begin(), slot.ran.end(), staged.ids.begin()) &&
+                (!found || slot.ran.size() > slots_[*found].ran.size()))
+                found = i;
+        }
+        std::size_t reused = 0;
+        if (found) {
+            active_ = found;
+            Live& run = Active();
+            run.used = ++clock_;
+            reused = run.ran.size();
+            AppendTokens(run.generator.get(), staged.ids.data() + reused, staged.ids.size() - reused);
+            run.rewound = false;
+        } else {
+            Rebuild(std::nullopt, &why);
+            api_->Check(api_->functions().generator_set_inputs(Active().generator.get(), staged.inputs.get()),
+                        "OgaGenerator_SetInputs");
+        }
         Live& run = Active();
-        api_->Check(api_->functions().generator_set_inputs(run.generator.get(), staged.inputs.get()),
-                    "OgaGenerator_SetInputs");
         buffer<bf16> logits = Logits(run.generator.get());
         // Only now: a failed prefill leaves `logical` without image tokens that a later
         // rebuild would replay without their images.
         run.ran = staged.ids;
+        run.staged_images = staged.images;
         logical_ = staged.ids;
         images_.clear();
         expected_.clear();
         saved_.reset();
-        header_print("FLM", "OGA generator: image prompt of " << logical_.size() << " tokens"
-                                << SlotText(why));
+        reused_ += reused;
+        if (found)
+            header_print("FLM", "OGA generator: image prompt of " << logical_.size() << " tokens, reusing "
+                                    << reused << " with its images, appending "
+                                    << logical_.size() - reused << SlotText());
+        else
+            header_print("FLM", "OGA generator: image prompt of " << logical_.size() << " tokens"
+                                    << SlotText(why));
         return logits;
     } catch (...) {
         if (active_) Drop(*active_);
@@ -690,7 +724,9 @@ std::vector<int> OgaEngine::StagePromptImages(const std::string& prompt,
     if (ids.size() > max_length_)
         throw std::out_of_range(display_name_ + " image prompt has " + std::to_string(ids.size()) +
                                 " tokens, past the context length of " + std::to_string(max_length_));
-    staged_prompt_ = std::make_unique<StagedPrompt>(StagedPrompt{std::move(inputs), ids});
+    std::vector<std::uint64_t> hashes;
+    for (const std::string& image : encoded_images) hashes.push_back(BytesHash(image));
+    staged_prompt_ = std::make_unique<StagedPrompt>(StagedPrompt{std::move(inputs), ids, std::move(hashes)});
     header_print("FLM", "OGA image processor: " << encoded_images.size() << " image(s), "
                                                 << ids.size() << " tokens");
     return ids;

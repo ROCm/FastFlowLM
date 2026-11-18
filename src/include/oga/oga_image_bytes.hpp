@@ -1,11 +1,9 @@
-// Copyright (c) 2026 Advanced Micro Devices, Inc.
-
 /// \file oga_image_bytes.hpp
-/// \brief The encoded image files a frontend hands the OGA package processor
+/// \brief the encoded image files an OGA package processor decodes itself
 #pragma once
 
-#include "AutoModel/automodel.hpp"
 #include "base64.hpp"
+#include "AutoModel/automodel.hpp"
 
 #include <fstream>
 #include <iterator>
@@ -13,7 +11,7 @@
 
 namespace flm::oga {
 
-/// \brief the file a request's image carries, with or without its data URL prefix
+/// \brief the file bytes of a base64 image, with or without a data-URL prefix
 inline std::string ImageBytesFromBase64(std::string payload) {
     const auto marker = payload.find("base64,");
     if (marker != std::string::npos) payload.erase(0, marker + 7);
@@ -23,7 +21,7 @@ inline std::string ImageBytesFromBase64(std::string payload) {
     return bytes;
 }
 
-/// \brief the file a CLI image names
+/// \brief the bytes of an image file given on the command line
 inline std::string ImageBytesFromFile(const std::string& path) {
     std::ifstream in(path, std::ios::binary);
     if (!in)
