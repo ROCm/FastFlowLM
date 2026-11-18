@@ -32,7 +32,8 @@ void RestHandler::ensure_embed_model_loaded(const std::string& model_tag) {
     // construction/load leaves no engine or tag, so the next request retries.
     auto_embedding_engine.reset();
     current_embedding_tag.clear();
-    auto engine = get_auto_embedding_model(info, npu_device_inst);
+    auto* device = utils::require_npu_device(npu_device_inst, power_mode);
+    auto engine = get_auto_embedding_model(info, device);
     engine->load_model(supported_models.get_model_path(tag), info, preemption);
     auto_embedding_engine = std::move(engine);
     current_embedding_tag = tag;

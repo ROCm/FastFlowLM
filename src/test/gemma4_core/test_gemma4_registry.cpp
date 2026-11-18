@@ -488,7 +488,7 @@ void TestTheServerGatesAnUnknownModelNameBeforeItResolvesIt() {
     // Structural, for the reason given above: ensure_model_loaded cannot be
     // linked into this binary. What it pins is that the gate exists inside
     // that function, that it is the TOLERANT form tested above, and that it
-    // runs BEFORE get_auto_model -- a gate placed after the resolution would
+    // runs BEFORE resolve_model_load -- a gate placed after the resolution would
     // be decoration.
     const auto source = ReadSource(FLM_REST_HANDLER_SOURCE);
     // BOUNDED TO THE FUNCTION BODY ON PURPOSE. Searching from the signature
@@ -499,7 +499,7 @@ void TestTheServerGatesAnUnknownModelNameBeforeItResolvesIt() {
         source, "bool RestHandler::ensure_model_loaded(");
     const auto gate = body.find("is_model_supported(");
     const auto rectify = body.find("rectify_model_tag(");
-    const auto resolve = body.find("get_auto_model(");
+    const auto resolve = body.find("resolve_model_load(");
     TEST_REQUIRE(gate != std::string::npos);
     TEST_REQUIRE(rectify != std::string::npos);
     TEST_REQUIRE(resolve != std::string::npos);
@@ -526,13 +526,13 @@ void TestTheServerGateRefusesTheUnsupportedNameAndNotTheSupportedOne() {
         source, "bool RestHandler::ensure_model_loaded(");
     const auto negated = body.find("!supported_models.is_model_supported(");
     const auto refusal = body.find("return false;");
-    const auto resolve = body.find("get_auto_model(");
+    const auto resolve = body.find("resolve_model_load(");
     TEST_REQUIRE(negated != std::string::npos);
     TEST_REQUIRE(refusal != std::string::npos);
     TEST_REQUIRE(resolve != std::string::npos);
     // The FIRST `return false;` in this body is the gate's own -- the others
     // are the download-incompatible and load-failure paths, both of which
-    // come after get_auto_model.
+    // come after resolve_model_load.
     TEST_REQUIRE(negated < refusal);
     TEST_REQUIRE(refusal < resolve);
 }
@@ -562,8 +562,7 @@ void TestTheUnsupportedTagBranchDoesNotReturnBeforeTheCatalogResolvesIt() {
     const auto source = ReadSource(FLM_ALL_MODELS_SOURCE);
     const auto body = FunctionBody(
         source,
-        "inline std::pair<std::string, flm::frontend::FrontendPtr> "
-        "get_auto_model(");
+        "inline ModelLoadPlan resolve_model_load(");
     const auto gate = body.find("is_model_supported(model_tag) == false");
     const auto resolve = body.find("available_models.get_model_info(model_tag)");
     const auto dispatch = body.find("FrontendRegistry::instance()");

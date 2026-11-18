@@ -58,10 +58,8 @@ class Runner {
         bool embed;
         model_list supported_models;
         ModelDownloader& downloader;
-        // Declared before engines so the borrowed native handle stays valid
-        // through provider destruction (members are destroyed in reverse).
-        std::optional<flm_rt::device> owned_device;
         flm_rt::device* npu_device_inst;
+        std::string power_mode;
         flm::frontend::FrontendPtr auto_chat_engine;
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
         std::unique_ptr<Whisper> whisper_engine;

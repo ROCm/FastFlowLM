@@ -279,8 +279,47 @@ void test_the_oga_hipep_suffix_names_its_backend() {
     model_list both(list_path, exe_dir, "dev04", {"core", "flm", "oga-hipep"});
     TEST_REQUIRE(both.get_model_info("demo-core:1b").second.at("backend") == "core");
     TEST_REQUIRE(both.get_model_info("demo-oga-hipep:1b").second.at("backend") == "oga-hipep");
+    const auto listing = both.get_all_models_openai();
+    const std::map<std::string, std::pair<std::string, std::string>> expected = {
+        {"demo:1b", {"flm", "npu"}}, {"demo-core:1b", {"core", "npu"}},
+        {"demo-oga-hipep:1b", {"oga-hipep", "gpu"}},
+    };
+    TEST_REQUIRE(listing.at("data").size() == expected.size());
+    for (const auto& entry : listing.at("data")) {
+        const auto& [backend, device] = expected.at(entry.at("id").get<std::string>());
+        TEST_REQUIRE(entry.at("owned_by") == "FastFlowLM");
+        TEST_REQUIRE(entry.value("backend", "") == backend);
+        TEST_REQUIRE(entry.value("device", "") == device);
+    }
 
     std::filesystem::remove(path);
+}
+
+void test_startup_only_opens_a_required_npu() {
+    using flm::backend::BackendTraits;
+    using flm::backend::prepare_backend_device;
+    const BackendTraits flm;
+    const BackendTraits core{.needs_npu_xclbin = false};
+    const BackendTraits oga{.needs_npu_xclbin = false, .needs_npu_device = false};
+    int device = 0;
+    for (auto* available : {static_cast<int*>(nullptr), &device}) {
+        int opens = 0;
+        const auto open = [&] {
+            ++opens;
+            return available;
+        };
+        TEST_REQUIRE(prepare_backend_device(oga, open) == nullptr);
+        TEST_REQUIRE(opens == 0);
+        for (const auto* traits : {&flm, &core}) {
+            if (available) {
+                TEST_REQUIRE(prepare_backend_device(*traits, open) == &device);
+            } else {
+                RequireContains(RequireThrows([&] { prepare_backend_device(*traits, open); }),
+                                "No NPU device available");
+            }
+        }
+        TEST_REQUIRE(opens == 2);
+    }
 }
 
 void test_an_entry_is_pruned_by_the_silicon_it_names() {
@@ -996,6 +1035,7 @@ int main() {
             "the tag name decides the backend");
     RunTest(test_the_oga_hipep_suffix_names_its_backend,
             "the oga-hipep suffix names its backend");
+    RunTest(test_startup_only_opens_a_required_npu, "startup only opens a required NPU");
     RunTest(test_a_catalog_can_filter_down_to_nothing,
             "a catalog can filter down to nothing");
     RunTest(test_an_entry_is_pruned_by_the_silicon_it_names,

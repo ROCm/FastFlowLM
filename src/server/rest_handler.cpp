@@ -74,14 +74,14 @@ json UnknownModelResponse(const std::string& model) {
 
 /// \brief The reply when a known model, or the loaded one, cannot be used
 /// \note "model-faker" is what a request without "model" names while nothing is loaded: the request is at fault
-json ModelLoadFailedResponse(const std::string& model) {
+json ModelLoadFailedResponse(const std::string& model, const std::string& refusal) {
     if (model == "model-faker") {
         return {{"error", {{"message", "No model is loaded; name one in 'model'."},
                            {"type", "invalid_request_error"},
                            {"param", "model"},
                            {"code", 400}}}};
     }
-    return {{"error", {{"message", "Failed to load " + model + " model!"},
+    return {{"error", {{"message", refusal.empty() ? "Failed to load " + model + " model!" : refusal},
                        {"type", "server_error"},
                        {"code", 500}}}};
 }
@@ -666,15 +666,9 @@ static json convert_tool_responses_gemma4(json messages) {
 ///@return the rest handler
 RestHandler::RestHandler(model_list& models, ModelDownloader& downloader, program_args_t& args,
                          flm_rt::device* npu_device)
-    : supported_models(models), downloader(downloader), default_model_tag(args.model_tag), current_model_tag(""), modelscope(args.modelscope), asr(args.asr), img_pre_resize(args.img_pre_resize), preemption(args.preemption), backend(args.backend) {
-
-    // RAI receives the device from corelib; non-RAI creates its own here.
-    if (npu_device != nullptr) {
-        npu_device_inst = npu_device;
-    } else {
-        owned_device = flm_rt::device(0);
-        npu_device_inst = &(*owned_device);
-    }
+    : npu_device_inst(npu_device), power_mode(args.power_mode), supported_models(models),
+      downloader(downloader), default_model_tag(args.model_tag), modelscope(args.modelscope),
+      asr(args.asr), img_pre_resize(args.img_pre_resize), preemption(args.preemption), backend(args.backend) {
 
     if (args.ctx_length != -1) {
         this->ctx_length = args.ctx_length >= 512 ? args.ctx_length : 512;
@@ -746,7 +740,7 @@ RestHandler::~RestHandler() = default;
 ///@brief Ensure the model is loaded
 ///@param model_tag the model tag
 bool RestHandler::ensure_model_loaded(const std::string& model_tag,
-                                      const std::string& request_backend) {
+                                      const std::string& request_backend, std::string* refusal) {
     // Refuse a name the catalog does not have before anything resolves it;
     // an unknown name used to load a substitute model (and on dev04 could
     // end the process). Checked after rectify_model_tag, as get_model_info
@@ -766,66 +760,61 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag,
         return auto_chat_engine != nullptr;
     }
 
-    // A per-request "backend" overrides --backend; either one differing from
-    // what is loaded forces a reload, exactly as a different model tag does.
-    const std::string requested_backend =
-        request_backend.empty() ? this->backend : request_backend;
-    // Compared in its resolved form, which is what current_model_tag holds, so
-    // "llama3.2" or "Ollama/llama3.2:1b" does not reload llama3.2:1b each time.
-    const std::string resolved_tag = supported_models.rectify_model_tag(model_tag);
-    if (current_model_tag != resolved_tag || current_backend != requested_backend) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        // The old model is released before the new one is built, so from here
-        // on nothing is loaded until the load below succeeds. Record that now:
-        // a failure must not leave the old tag naming an engine that is gone,
-        // or the next request for it would skip the reload and use that engine.
-        // The device is owned by main() and shared with every engine, so it is
-        // deliberately left alone; releasing the engine is what frees the
-        // hardware context.
-        this->auto_chat_engine.reset();
-        this->current_model_tag = "model-faker";
-        this->current_backend.clear();
-        // The cached conversation lived in the engine just released.
-        this->prompt_cache.reset();
-        try {
-            auto [ensure_tag, engine] = get_auto_model(model_tag, this->supported_models, this->npu_device_inst);
-            switch (downloader.is_model_downloaded(ensure_tag, false, /*fast_check=*/true)) {
-                case ModelDownloader::ModelStatus::Ready:
-                    break;
-                case ModelDownloader::ModelStatus::Outdated:
-                case ModelDownloader::ModelStatus::Missing:
-                    if (!downloader.pull_model(ensure_tag, this->modelscope)) {
-                        throw std::runtime_error("failed to download " + ensure_tag);
-                    }
-                    break;
-                case ModelDownloader::ModelStatus::Incompatible:
-                    throw std::runtime_error(ensure_tag + " is incompatible with this version of FastFlowLM");
-            }
-            auto [new_ensure_tag, model_info] = supported_models.get_model_info(ensure_tag);
-            engine->set_server_mode(true);
-            engine->configure_parameter("img_pre_resize", this->img_pre_resize);
-            engine->set_prefix_limits(this->prefix_cache_mb, this->prefix_slots, this->prefix_min_gain);
-            const auto load_started = std::chrono::steady_clock::now();
-            engine->load_model(supported_models.get_load_path(new_ensure_tag), model_info, ctx_length, preemption, requested_backend);
-            engine->save_request_settings();
-            report_load_time(load_started);
+    const auto& requested_backend = request_backend.empty() ? backend : request_backend;
+    try {
+        auto plan = resolve_model_load(supported_models.rectify_model_tag(model_tag), supported_models, requested_backend);
+        if (auto_chat_engine && current_model_tag == plan.tag && loaded_selection.backend == plan.selection.backend &&
+            loaded_selection.provider == plan.selection.provider) return true;
 
-            // Per model, not per process: the flash models take 1024-token
-            // chunks and the rest 4096, so keeping the first model's value
-            // feeds every later model chunks sized for another one.
-            this->prefill_chunk_len = this->prefill_chunk_len_arg != -1
-                ? this->prefill_chunk_len_arg
-                : model_info["max_prefill_len"].get<int>();
-            this->auto_chat_engine = std::move(engine);
-            this->current_model_tag = ensure_tag;
-            this->current_backend = requested_backend;
+        auto* device = plan.prepare_device(npu_device_inst, power_mode);
+        switch (downloader.is_model_downloaded(plan.tag, false, /*fast_check=*/true)) {
+            case ModelDownloader::ModelStatus::Ready:
+                break;
+            case ModelDownloader::ModelStatus::Outdated:
+            case ModelDownloader::ModelStatus::Missing:
+                if (!downloader.pull_model(plan.tag, modelscope)) throw std::runtime_error("failed to download " + plan.tag);
+                // The pull can select a different catalog source. Preflight its actual entry.
+                plan = resolve_model_load(plan.tag, supported_models, requested_backend);
+                device = plan.prepare_device(npu_device_inst, power_mode);
+                break;
+            case ModelDownloader::ModelStatus::Incompatible:
+                throw std::runtime_error(plan.tag + " is incompatible with this version of FastFlowLM");
         }
-        catch (const std::exception& e) {
-            header_print("ERROR", "Failed to load model: " + std::string(e.what()));
-            return false;
+        const auto path = supported_models.get_load_path(plan.tag);
+        const int chunk = prefill_chunk_len_arg != -1 ? prefill_chunk_len_arg : plan.info.at("max_prefill_len").get<int>();
+
+        // From here on the two engines must not overlap in accelerator memory.
+        {
+            std::lock_guard lock(model_info_mutex);
+            current_model_tag = "model-faker";
+            loaded_backend.clear();
         }
+        auto_chat_engine.reset();
+        prompt_cache.reset();
+        auto engine = flm::frontend::FrontendRegistry::instance().create(plan.family, device);
+        engine->set_server_mode(true);
+        engine->configure_parameter("img_pre_resize", img_pre_resize);
+        engine->set_prefix_limits(prefix_cache_mb, prefix_slots, prefix_min_gain);
+        const auto load_started = std::chrono::steady_clock::now();
+        engine->load_model(path, plan.info, ctx_length, preemption, plan.selection.backend);
+        engine->save_request_settings();
+        report_load_time(load_started);
+        prefill_chunk_len = chunk;
+        {
+            std::lock_guard lock(model_info_mutex);
+            loaded_backend = engine->backend_id();
+            current_model_tag = std::move(plan.tag);
+        }
+        auto_chat_engine = std::move(engine);
+        loaded_selection = std::move(plan.selection);
+        return true;
+    } catch (const flm::backend::NpuUnavailable& e) {
+        if (refusal) *refusal = flm::backend::kNoNpuDevice;
+        header_print("ERROR", "Failed to load model: " + std::string(e.what()));
+    } catch (const std::exception& e) {
+        header_print("ERROR", "Failed to load model: " + std::string(e.what()));
     }
-    return auto_chat_engine != nullptr;
+    return false;
 }
 
 ///@brief Whether ensure_model_loaded's gate would admit the model tag
@@ -859,7 +848,7 @@ void RestHandler::ensure_asr_model_loaded(const std::string& model_tag) {
     if (sidecar_r2t2) {
         // r2t2 transcribes by itself: load it as a second engine beside the chat model
         try {
-            auto [tag, engine] = get_auto_model(ensure_tag, this->supported_models, this->npu_device_inst);
+            auto [tag, engine] = get_auto_model(ensure_tag, supported_models, npu_device_inst, "", power_mode);
             auto [new_tag, info] = this->supported_models.get_model_info(tag);
             engine->set_server_mode(true);
             engine->load_model(this->supported_models.get_load_path(new_tag), info, -1, this->preemption, "");
@@ -873,7 +862,8 @@ void RestHandler::ensure_asr_model_loaded(const std::string& model_tag) {
         }
         return;
     }
-    this->whisper_engine = std::make_unique<Whisper>(this->npu_device_inst);
+    auto* device = utils::require_npu_device(npu_device_inst, power_mode);
+    this->whisper_engine = std::make_unique<Whisper>(device);
     auto [new_ensure_tag, whisper_model_info] = this->supported_models.get_model_info(ensure_tag);
     std::string whisper_model_path = this->supported_models.get_model_path(new_ensure_tag);
     try {
@@ -912,7 +902,8 @@ void RestHandler::ensure_decision_model_loaded(const std::string& model_tag) {
     auto [resolved_tag, model_info] = this->supported_models.get_model_info(ensure_tag);
     std::string model_path = this->supported_models.get_model_path(resolved_tag);
     try {
-        this->decision_engine = std::make_unique<AutoDecisionModel>(this->npu_device_inst, resolved_tag);
+        auto* device = utils::require_npu_device(npu_device_inst, power_mode);
+        this->decision_engine = std::make_unique<AutoDecisionModel>(device, resolved_tag);
         this->decision_engine->load_model(model_path, model_info, this->preemption);
         this->decision_engine->warmup();
     }
@@ -1146,8 +1137,9 @@ void RestHandler::handle_generate(const json& request,
         int length_limit = request.value("max_tokens", 4096);
         auto load_start_time = time_utils::now();
         // TODO: Use Another Check Function avoid loading again
-        if (!ensure_model_loaded(model, request_backend)) {
-            json error_response = {{"error", "Failed to load " + model + " model!"}};
+        std::string refusal;
+        if (!ensure_model_loaded(model, request_backend, &refusal)) {
+            json error_response = {{"error", refusal.empty() ? "Failed to load " + model + " model!" : refusal}};
             send_response(error_response);
             return;
         }
@@ -1275,8 +1267,9 @@ void RestHandler::handle_chat(const json& request,
         int length_limit = options.value("num_predict", 4096);
 
         auto load_start_time = time_utils::now();
-        if (!ensure_model_loaded(model, request_backend)) {
-            json error_response = {{"error", "Failed to load " + model + " model!"}};
+        std::string refusal;
+        if (!ensure_model_loaded(model, request_backend, &refusal)) {
+            json error_response = {{"error", refusal.empty() ? "Failed to load " + model + " model!" : refusal}};
             send_response(error_response);
             return;
         }
@@ -1423,8 +1416,7 @@ void RestHandler::handle_models_openai(const json& request,
     std::function<void(const json&)> send_response,
     StreamResponseCallback send_streaming_response) {
     try {
-        json models = supported_models.get_all_models_openai();
-        send_response(models);
+        send_response(supported_models.get_all_models_openai());
     }
     catch (const std::exception& e) {
         json error_response = { {"error", e.what()} };
@@ -1471,14 +1463,28 @@ void RestHandler::handle_ps(const json& request,
         
         std::string expires_at = expires_ss.str();
         
-        auto [new_current_model_tag, model_info] = supported_models.get_model_info(current_model_tag);
+        std::string tag;
+        std::string backend_id;
+        {
+            std::lock_guard lock(model_info_mutex);
+            tag = current_model_tag;
+            backend_id = loaded_backend;
+        }
+        auto info = supported_models.get_model_info(tag).second;
+        auto& details = info["details"];
+        if (!backend_id.empty()) {
+            details["backend"] = backend_id;
+            if (const auto device = flm::backend::device_for_backend(backend_id); !device.empty()) {
+                details["device"] = device;
+            }
+        }
         json response = {
             {"models", json::array({
                 {
-                    {"name", current_model_tag},
-                    {"model", current_model_tag},
-                    {"size", model_info["size"]},
-                    {"details", model_info["details"]},
+                    {"name", tag},
+                    {"model", tag},
+                    {"size", info["size"]},
+                    {"details", details},
                     {"expires_at", expires_at},
                 }
             })}
@@ -1601,8 +1607,9 @@ void RestHandler::handle_openai_chat_completion(const json& request,
             return;
         }
         auto load_start_time = time_utils::now();
-        if (!ensure_model_loaded(model, request_backend)) {
-            send_response(ModelLoadFailedResponse(model));
+        std::string refusal;
+        if (!ensure_model_loaded(model, request_backend, &refusal)) {
+            send_response(ModelLoadFailedResponse(model, refusal));
             return;
         }
         auto load_end_time = time_utils::now();
@@ -2113,8 +2120,9 @@ void RestHandler::handle_openai_completion(const json& request,
 
         int length_limit = value_or(request, "max_tokens", 4096);
 
-        if (!ensure_model_loaded(model, request_backend)) {
-            send_response(ModelLoadFailedResponse(model));
+        std::string refusal;
+        if (!ensure_model_loaded(model, request_backend, &refusal)) {
+            send_response(ModelLoadFailedResponse(model, refusal));
             return;
         }
         // This shares the engine with /v1/chat/completions and replaces the
