@@ -5,6 +5,7 @@
 #include "AutoModel/model_catalog_overlay.hpp"
 #include "AutoModel/model_extension.h"
 
+#include <compare>
 #include <functional>
 #include <map>
 #include <memory>
@@ -94,7 +95,11 @@ private:
     struct LoadedExtension;
 
     mutable std::mutex mutex_;
-    using Key = std::pair<std::string, std::string>;
+    struct Key {
+        std::string family;
+        std::string provider;
+        auto operator<=>(const Key&) const = default;
+    };
     struct Factories {
         FrontendFactory generation;
         EmbeddingFactory embedding;

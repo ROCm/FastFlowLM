@@ -30,8 +30,8 @@ namespace flm::frontend {
 namespace {
 
 // Used for both catalog validation (including pending registrations) and creation.
-template <class T>
-auto SelectFrontend(const std::map<std::pair<std::string, std::string>, T>& entries,
+template <class Key, class T>
+auto SelectFrontend(const std::map<Key, T>& entries,
                     const std::string& family, const std::string& provider) {
     if (!provider.empty()) {
         const auto selected = entries.find({family, provider});
@@ -42,10 +42,10 @@ auto SelectFrontend(const std::map<std::pair<std::string, std::string>, T>& entr
     const auto builtin = entries.find({family, backend::kBuiltinProviderId});
     if (builtin != entries.end()) return builtin;
     const auto first = entries.lower_bound({family, ""});
-    if (first == entries.end() || first->first.first != family)
+    if (first == entries.end() || first->first.family != family)
         throw std::runtime_error("Model family '" + family + "' has no frontend");
     const auto next = std::next(first);
-    if (next != entries.end() && next->first.first == family)
+    if (next != entries.end() && next->first.family == family)
         throw std::runtime_error("Ambiguous frontend family '" + family + "'; specify frontend_provider");
     return first;
 }
@@ -395,13 +395,13 @@ void FrontendRegistry::register_embedding(std::string family,
 }
 
 void FrontendRegistry::register_provider(Key key, Factories factories) {
-    if (key.first.empty()) throw std::runtime_error("frontend family is empty");
-    if (key.second.empty()) throw std::runtime_error("frontend provider is empty");
+    if (key.family.empty()) throw std::runtime_error("frontend family is empty");
+    if (key.provider.empty()) throw std::runtime_error("frontend provider is empty");
     if (!factories.generation && !factories.embedding)
         throw std::runtime_error("frontend factory is null");
     std::lock_guard lock(mutex_);
     if (!factories_.emplace(key, std::move(factories)).second)
-        throw std::runtime_error("frontend '" + key.first + "/" + key.second + "' is already registered");
+        throw std::runtime_error("frontend '" + key.family + "/" + key.provider + "' is already registered");
 }
 
 void FrontendRegistry::unload_extensions() noexcept {
@@ -423,7 +423,7 @@ void FrontendRegistry::unload_extensions() noexcept {
 bool FrontendRegistry::has(const std::string& family) const {
     std::lock_guard lock(mutex_);
     const auto first = factories_.lower_bound({family, ""});
-    return first != factories_.end() && first->first.first == family;
+    return first != factories_.end() && first->first.family == family;
 }
 
 std::unique_ptr<AutoEmbeddingModel> FrontendRegistry::create_embedding(
@@ -444,7 +444,7 @@ std::vector<std::string> FrontendRegistry::available() const {
     std::vector<std::string> families;
     families.reserve(factories_.size());
     for (const auto& [key, factory] : factories_) {
-        if (families.empty() || families.back() != key.first) families.push_back(key.first);
+        if (families.empty() || families.back() != key.family) families.push_back(key.family);
     }
     return families;
 }
@@ -737,7 +737,7 @@ void FrontendRegistry::load_extension(
         for (const auto& key : loaded->backend_keys) {
             used.insert(key.provider);
         }
-        for (const auto& key : loaded->frontend_keys) used.insert(key.second);
+        for (const auto& key : loaded->frontend_keys) used.insert(key.provider);
         const auto check = [&](const std::string& provider) {
             if (used.count(provider)) {
                 throw std::runtime_error(
@@ -754,10 +754,12 @@ void FrontendRegistry::load_extension(
             check(pending.provider);
         }
     }
-    std::map<Key, bool> inventory;
-    for (const auto& [key, factory] : factories_) inventory.emplace(key, bool(factory.embedding));
+    std::map<Key, std::string_view> inventory;
+    for (const auto& [key, factory] : factories_)
+        inventory.emplace(key, factory.embedding ? catalog::kEmbeddingModelKind : catalog::kGenerationModelKind);
     for (const auto& pending : registration.pending_frontends) {
-        if (!inventory.emplace(Key{pending.family, pending.provider}, pending.create_embedding != nullptr).second)
+        const auto kind = pending.create_embedding ? catalog::kEmbeddingModelKind : catalog::kGenerationModelKind;
+        if (!inventory.emplace(Key{pending.family, pending.provider}, kind).second)
             throw std::runtime_error("frontend '" + pending.family + "/" + pending.provider + "' is already registered");
     }
     const auto validate_frontends = [&](const catalog::ModelCatalogOverlay& overlay) {
@@ -769,24 +771,26 @@ void FrontendRegistry::load_extension(
                      catalog::catalog_entry_sources(catalog_entry)) {
                     const std::string family =
                         entry.at("details").at("family").get<std::string>();
-                    const auto selected = SelectFrontend(inventory, family, entry.value("frontend_provider", ""));
-                    const bool embedding = selected->second;
-                    if (embedding != (flm::catalog::model_kind(entry) == flm::catalog::kEmbeddingModelKind))
-                        throw std::runtime_error("Catalog model_kind does not match frontend '" + family + "'");
-                    if (embedding) continue;
+                    const auto& [frontend, kind] = *SelectFrontend(inventory, family, entry.value("frontend_provider", ""));
+                    const auto requested_kind = catalog::model_kind(entry);
+                    if (kind != requested_kind)
+                        throw std::runtime_error("Catalog entry '" + tag + "' has model_kind '" + requested_kind +
+                            "', but frontend family '" + frontend.family + "' provider '" + frontend.provider +
+                            "' supports '" + std::string(kind) + "'");
+                    if (kind == catalog::kEmbeddingModelKind) continue;
                     const bool has_private_payload =
                         entry.value("vlm", false) ||
                         entry.value("asr", false);
                     const std::string backend_provider =
                         entry.at(backend::kBackendProviderKey)
                             .get<std::string>();
-                    if (selected->first.second == backend::kBuiltinProviderId &&
+                    if (frontend.provider == backend::kBuiltinProviderId &&
                         backend_provider != backend::kBuiltinProviderId &&
                         builtin_frontend_requires_builtin_engine(family))
                         throw std::runtime_error("Frontend '" + family + "' only drives built-in engines");
                     if (has_private_payload &&
                         backend_provider != backend::kBuiltinProviderId &&
-                        selected->first.second != backend_provider) {
+                        frontend.provider != backend_provider) {
                         throw std::runtime_error(
                             "Multimodal model extension catalog entry '" + tag +
                             "' must select matching frontend and backend provider '" +
@@ -802,7 +806,7 @@ void FrontendRegistry::load_extension(
     if (extension->catalog) {
         validate_frontends(*extension->catalog);
         std::vector<std::string> frontends;
-        for (const auto& [key, embedding] : inventory) frontends.push_back(key.first);
+        for (const auto& [key, kind] : inventory) frontends.push_back(key.family);
         auto providers =
             backend::BackendRegistry::instance().provider_inventory();
         for (const auto& pending : registration.pending_backends) {

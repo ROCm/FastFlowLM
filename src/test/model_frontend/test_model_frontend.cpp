@@ -152,7 +152,14 @@ void test_embedding_extension() {
             if (preferred) candidate["preferred_source"] = patch;
             else candidate.merge_patch(patch);
             WriteManifest(directory, "wrong-kind-catalog.json", catalog);
-            RequireContains(RequireThrows([&] { registry.load_extension(wrong.string(), {}); }), message);
+            const auto error = RequireThrows([&] { registry.load_extension(wrong.string(), {}); });
+            RequireContains(error, message);
+            if (message == "model_kind" && !preferred) {
+                RequireContains(error, "test-embedding:1");
+                RequireContains(error, "provider 'test-embedding'");
+                RequireContains(error, "generation");
+                RequireContains(error, "embedding");
+            }
             TEST_REQUIRE(!registry.has("test-embedding"));
             TEST_REQUIRE(registry.catalog_overlays().empty());
         }
