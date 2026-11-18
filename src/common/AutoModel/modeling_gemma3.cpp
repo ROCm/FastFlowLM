@@ -7,6 +7,10 @@
 
 #include "AutoModel/modeling_gemma3.hpp"
 #include "models/gemma/flm/aie2p/gemma_npu.hpp"
+#if defined(FLM_ENABLE_OGA_HIPEP)
+#include "oga/oga_engine.hpp"
+#include "oga/oga_image_bytes.hpp"
+#endif
 
 /************              Gemma3 family            **************/
 Gemma3::Gemma3(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "Gemma3") {}
@@ -42,6 +46,68 @@ std::string Gemma3::apply_chat_template(nlohmann::ordered_json& messages, nlohma
     return this->_render_chat_template(inputs, continue_final_message);
 }
 
+#if defined(FLM_ENABLE_OGA_HIPEP)
+/// \note The package processor decodes and resizes the images and expands each
+///       <start_of_image> of the package template into the image's tokens.
+bool Gemma3::insert_oga_images(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
+    std::vector<std::string> image_bytes;
+    nlohmann::ordered_json messages = nlohmann::ordered_json::array();
+    const auto with_images = [&](const nlohmann::ordered_json& message, std::vector<std::string> bytes) {
+        nlohmann::ordered_json content = nlohmann::ordered_json::array();
+        for (auto& image : bytes) {
+            image_bytes.push_back(std::move(image));
+            content.push_back({{"type", "image"}});
+        }
+        content.push_back({{"type", "text"}, {"text", message.value("content", "")}});
+        return nlohmann::ordered_json{{"role", message.value("role", "user")}, {"content", content}};
+    };
+    if (!input.messages.empty()) {
+        for (const auto& message : input.messages) {
+            if (!message.contains("images") || message["images"].empty()) {
+                messages.push_back(message);
+                continue;
+            }
+            std::vector<std::string> bytes;
+            for (const auto& image : message["images"])
+                bytes.push_back(flm::oga::ImageBytesFromBase64(image.get<std::string>()));
+            messages.push_back(with_images(message, std::move(bytes)));
+        }
+    } else {
+        std::vector<std::string> bytes;
+        for (const auto& path : input.images) bytes.push_back(flm::oga::ImageBytesFromFile(path));
+        messages.push_back(with_images({{"role", "user"}, {"content", input.prompt}}, std::move(bytes)));
+    }
+    header_print("FLM", "Total images: " << image_bytes.size());
+    const std::string templated_text =
+        this->apply_chat_template(messages, nlohmann::ordered_json::object(), meta_info.continue_final_message);
+
+    auto* engine = dynamic_cast<flm::oga::OgaEngine*>(this->lm_engine);
+    if (!engine)
+        throw std::runtime_error("oga-hipep engine is not an OgaEngine");
+    std::vector<int> tokens = engine->StagePromptImages(templated_text, image_bytes);
+    this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
+    // The processor ran the whole prompt: prefill it from token 0, in one piece.
+    if (!this->token_history.empty())
+        this->clear_context();
+    const int saved_prefill = meta_info.max_prefill_len;
+    meta_info.max_prefill_len = 0;
+    bool success = false;
+    try {
+        success = this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
+    } catch (...) {
+        meta_info.max_prefill_len = saved_prefill;
+        engine->DropStagedPrompt();
+        throw;
+    }
+    meta_info.max_prefill_len = saved_prefill;
+    // A request that stopped before its prefill must not leave its stage to the next one.
+    engine->DropStagedPrompt();
+    this->_checkpoint_history();
+    this->lm_engine->checkpoint();
+    return success;
+}
+#endif
+
 bool Gemma3::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
     static constexpr int IMAGE_TOKEN_ID = 262144; // replace with actual image token ID
     this->profiler_list[TKOEN_ENCODE_TIME].start();
@@ -50,19 +116,15 @@ bool Gemma3::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std:
         header_print("WARNING", "No messages or prompt provided");
         return false;
     }
-    // On OGA the model runs text only. A ModelRequestError, not a payload the
-    // engine rejects: the handlers turn only the former into an HTTP 400.
+#if defined(FLM_ENABLE_OGA_HIPEP)
     if (this->backend_id() == flm::backend::kOgaHipepBackendId) {
         bool images = !input.images.empty();
         for (const auto& message : input.messages) {
             images = images || (message.contains("images") && !message["images"].empty());
         }
-        if (images) {
-            throw ModelRequestError(400, false,
-                "the loaded backend '" + this->backend_id() + "' does not accept image input",
-                "invalid_request_error");
-        }
+        if (images) return this->insert_oga_images(meta_info, input, is_cancelled);
     }
+#endif
     if (!input.messages.empty()) { // already a formated messages, usually from REST API
         // Templating happens below, together with image decoding, so that a
         // failed image never gets an image-token placeholder in the prompt.

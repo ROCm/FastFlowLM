@@ -137,6 +137,8 @@ private:
         bool rewound = false;
         /// \brief the hash of each image it has been given, in order
         std::vector<std::uint64_t> images;
+        /// \brief the hash of each encoded image a staged prompt gave it, in order
+        std::vector<std::uint64_t> staged_images;
         /// \brief when it was last chosen, on the engine's clock
         std::uint64_t used = 0;
     };
@@ -156,6 +158,8 @@ private:
     struct StagedPrompt {
         OgaApi::Owned<OgaNamedTensors> inputs;
         std::vector<int> ids;
+        /// \brief the hash of each encoded image, in order
+        std::vector<std::uint64_t> images;
     };
 
     /// \brief `logical` and its images, as checkpoint() left them

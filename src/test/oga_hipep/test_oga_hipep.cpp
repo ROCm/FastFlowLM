@@ -114,6 +114,8 @@ struct FakeOga {
     std::vector<std::string> processed_prompts;
     /// \brief image counts handed to OgaLoadImagesFromBuffers
     std::vector<std::size_t> loaded_images;
+    /// \brief the input_ids OgaProcessorProcessImages returns
+    std::vector<std::int32_t> processor_ids{7, 8, 9};
     std::optional<std::string> fail_registration;
 };
 
@@ -377,10 +379,10 @@ OgaResult* OGA_API_CALL FakeProcessImages(const OgaMultiModalProcessor*, const c
     auto* named = new OgaNamedTensors;
     OgaTensor ids;
     ids.type = OgaElementType_int32;
-    ids.shape = {1, 3};
-    const std::int32_t tokens[] = {7, 8, 9};
-    ids.data.resize(sizeof(tokens));
-    std::memcpy(ids.data.data(), tokens, sizeof(tokens));
+    const std::vector<std::int32_t>& tokens = g_fake.processor_ids;
+    ids.shape = {1, static_cast<std::int64_t>(tokens.size())};
+    ids.data.resize(tokens.size() * sizeof(std::int32_t));
+    std::memcpy(ids.data.data(), tokens.data(), ids.data.size());
     named->tensors.emplace("input_ids", std::move(ids));
     OgaTensor pixels;
     pixels.type = OgaElementType_float16;
@@ -1520,11 +1522,44 @@ void TestAStagedImagePromptTakesTheLeastRecentlyUsedSlot() {
 void TestAStagedImagePromptAlwaysBuildsANewGenerator() {
     auto engine = MakeSlotsEngine(2);
     RunStagedPrompt(*engine);
-    // The same ids again may carry other images: the processor's inputs run in a new generator.
+    // The same ids again: the slot has already run all of them, and sampling needs the logits
+    // of the last prompt token, so the processor's inputs run in a new generator.
     RunStagedPrompt(*engine);
     TEST_REQUIRE(g_fake.generators_created == 2);
     TEST_REQUIRE(g_fake.set_inputs.size() == 2);
     TEST_REQUIRE(g_fake.appends.empty());
+}
+
+void TestAStagedPromptThatExtendsASlotWithTheSameImagesAppendsTheRest() {
+    auto engine = MakeSlotsEngine(2);
+    RunStagedPrompt(*engine);
+    engine->forward(10);
+    // The next turn of the same conversation: the same image, and the tokens the slot ran first.
+    g_fake.processor_ids = {7, 8, 9, 10, 11, 12};
+    const std::uint64_t reused_before = engine->reused_tokens();
+    std::vector<int> ids = engine->StagePromptImages("see <image> again", {"PNG_FAKE"});
+    engine->clear_context();
+    RequireState(engine->prefill(ids), 6, 12, 57);
+    TEST_REQUIRE(g_fake.set_inputs.size() == 1);
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{11, 12}));
+    TEST_REQUIRE(g_fake.generators_created == 1);
+    TEST_REQUIRE(engine->reused_tokens() - reused_before == 4);
+    TEST_REQUIRE(engine->get_current_context_length() == 6);
+
+    // Another image under the same tokens: the processor's inputs run in a new generator.
+    g_fake.processor_ids = {7, 8, 9, 10, 11, 12, 13};
+    ids = engine->StagePromptImages("see <image> again", {"JPEGFAKE"});
+    engine->clear_context();
+    engine->prefill(ids);
+    TEST_REQUIRE(g_fake.set_inputs.size() == 2);
+    TEST_REQUIRE(g_fake.generators_created == 2);
+
+    // Tokens that leave the slot's path: a new generator too.
+    g_fake.processor_ids = {7, 8, 9, 30, 11, 12, 13, 14};
+    ids = engine->StagePromptImages("see <image> again", {"JPEGFAKE"});
+    engine->clear_context();
+    engine->prefill(ids);
+    TEST_REQUIRE(g_fake.set_inputs.size() == 3);
 }
 
 void TestAFailedStagedPrefillDropsOnlyItsSlot() {
@@ -2698,6 +2733,7 @@ int main(int argc, char** argv) {
     RUN(TestADroppedOrRefusedStageDoesNotReachTheNextPrefill);
     RUN(TestAStagedImagePromptTakesTheLeastRecentlyUsedSlot);
     RUN(TestAStagedImagePromptAlwaysBuildsANewGenerator);
+    RUN(TestAStagedPromptThatExtendsASlotWithTheSameImagesAppendsTheRest);
     RUN(TestAFailedStagedPrefillDropsOnlyItsSlot);
     RUN(TestStagingImagesNamesAMissingProcessorEntry);
     RUN(TestTheGemma4UnifiedPackageStillRunsTextWithoutAVisionStartToken);
