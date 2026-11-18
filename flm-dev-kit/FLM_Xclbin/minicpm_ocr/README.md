@@ -82,7 +82,7 @@ first. On NPU2 a runtime op switch costs ~0 us and a context switch ~820 us.
    rather than the hypothesis above.
 3. Then the chunked rewrite.
 
-Build: `source ~/setup.sh` (**not** `FLM_Xclbin/setup.sh` — wrong paths on this box), then
+Build: `source FLM_Xclbin/setup.sh` (set `MLIR_AIE_DIR` and `PEANO_INSTALL_DIR` first), then
 `make link` to fail fast before `make bitstream` (5–30 min).
 
 If a variant is added, it must also go in `FLM_Xclbin/kernel_assignment.md`.
@@ -96,11 +96,10 @@ builds chess, and that build is unchanged (same output, same speed). Peano outpu
 Environment (Peano `llvm-aie 22.0.0.2026090201+a36c62b9`):
 
 ```shell
-export AIETOOLS_ROOT=/scratch/ryzen_ai-1.3.0/vitis_aie_essentials AIETOOLS_DIR=$AIETOOLS_ROOT
-export PATH=$PATH:$AIETOOLS_ROOT/bin LM_LICENSE_FILE=/opt/Xilinx.lic
-source /path/to/mlir-aie/ironenv/bin/activate
-source /path/to/mlir-aie/utils/env_setup.sh /path/to/mlir-aie/install
-export PEANO_INSTALL_DIR=/path/to/flm-toolchains/llvm-aie-22.0.0.2026090201/llvm-aie
+export MLIR_AIE_DIR=/path/to/mlir-aie
+export PEANO_INSTALL_DIR=/path/to/llvm-aie-22.0.0.2026090201/llvm-aie   # the pinned Peano
+# Chess only (ENABLE_CHESSCC=1): export AIETOOLS_ROOT=<Vitis AIE Essentials> LM_LICENSE_FILE=<license>
+source ../../setup.sh   # FLM_Xclbin/setup.sh
 make bitstream          # ~10 s here
 ```
 

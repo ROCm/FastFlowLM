@@ -82,7 +82,7 @@ mistake.
 ## Build and run
 
 ```bash
-source ~/setup.sh          # the HOME one, not the in-repo copy
+source ../../setup.sh      # FLM_Xclbin/setup.sh
 make bitstream             # NOT `make all`
 ./run.exe                  # the standalone driver
 ```

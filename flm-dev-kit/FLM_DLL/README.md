@@ -4,7 +4,11 @@
 
 # FastFlowLM (dev)
 
-Developer repository for FastFlowLM. Private repository for FastFlowLM group.
+The engine libraries of FastFlowLM, one per model family (`detail/`). On Linux, build them with
+`bash build.sh` (every unit) or `bash build_<model>.sh` (one engine and what it needs).
+
+> **Windows: not tested in this release.** The Windows steps below are the old notes, kept for
+> reference until they are checked on a Windows machine.
 
 This repository contains:
     - NPU xclbin code
@@ -66,31 +70,10 @@ C:\dev\xrtNPUfromDLL> lib /def:xrt_coreutil.def /machine:x64 /out:xrt_coreutil.l
 # Build instruction
 ### 1. install
 ```bash
-source ./Libraries/build.sh
+bash build.sh        # from flm-dev-kit/FLM_DLL; on Windows through WSL: wsl bash build.sh
 ```
 
 ### Note:
-```bash
-if have following error
-C:\dev\XRT\src\runtime_src\core\include\xrt\detail\abi.h(12,11): error C1083: Cannot open include file: 'xrt/detail/version.h': No such file or directory [C:\U
-sers\shouyu\Documents\flm\FastFlowLM_Dev\libraries\build\lfm2_npu\lfm2_npu.vcxproj]
-  (compiling source file '../../detail/lfm2_npu/lfm2_npu.cpp')
-
-C:\dev\XRT\src\runtime_src\core\include\xrt\detail\abi.h(12,11): error C1083: Cannot open include file: 'xrt/detail/version.h': No such file or directory [C:\U
-sers\shouyu\Documents\flm\FastFlowLM_Dev\libraries\build\lfm2_npu\lfm2_npu.vcxproj]
-  (compiling source file '../../detail/lfm2_npu/lfm2_npu_sequence.cpp')
-
-
-```
-simply disable this line in abi.h
-```cpp
-// # include "xrt/detail/version.h"
-
-```
-### 2. Test a file
-```bash
-# For example, Gemma image file
-# after cd to FastFlowLM_Dev/libraries/test/gemma_npu
-
-make
-```
+If the build stops with `Cannot open include file: 'xrt/detail/version.h'`, the XRT checkout lacks
+that generated header. FastFlowLM's `.github/script/ci/setup_windows_deps.ps1` shows how CI
+provides it (it copies `.github/windows-deps/xrt_version.h` into place).

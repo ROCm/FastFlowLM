@@ -54,7 +54,7 @@ Inside Kernel:
 
 ## Compiler (2026-11-03): Peano 22
 
-Already Peano. Rebuilt with the CI pin (Peano = `llvm-aie 22.0.0.2026090201+a36c62b9`; the June 21.0 that `~/setup.sh` brings is older.): prefill logits bit-identical to the June build; decode not bit-identical
+Already Peano. Rebuilt with the CI pin (Peano = `llvm-aie 22.0.0.2026090201+a36c62b9`; the June 21.0 used before is older.): prefill logits bit-identical to the June build; decode not bit-identical
 but as close to the CPU reference (`--check`: worst cos 0.998865 both, 0.998100 vs 0.997611 at `--kv-scale 8`), and
 10K decode 31.4-31.5 vs 31.2 tok/s. The shipped layer.xclbin is this build.
 

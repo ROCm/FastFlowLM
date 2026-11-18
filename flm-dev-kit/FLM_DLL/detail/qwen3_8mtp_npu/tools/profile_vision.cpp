@@ -9,7 +9,6 @@
 /// measures 2368 ms against the shipping build's 1823, a 30% error that is
 /// larger than anything being A/B'd (memory: host-vs-device-ab-needs-shipping-
 /// flags). Add `-DQWEN3_8MTP_VISION_PROFILE` for the per-stage table.
-///   source ~/setup.sh
 ///   g++-13 -O3 -march=native -ffast-math -fopenmp -std=c++20
 ///       -mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma
 ///       -I. -I../../include -I../q4nx -I/opt/xilinx/xrt/include

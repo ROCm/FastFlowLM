@@ -343,7 +343,7 @@ this tree needs neither GAV's helper/emitter split nor its `qkv_stage.py` and
 ## 6 · Build
 
 ```bash
-source ~/setup.sh          # NOT the in-repo setup.sh  (memory: flm-iron-build-env-paths)
+source FLM_Xclbin/setup.sh # set MLIR_AIE_DIR, PEANO_INSTALL_DIR first
 cd FLM_Xclbin/Qwen3_8/MTP_decoding
 make bitstream MODEL_TYPE=QWEN3_8_27B   # NOT `make all`
 make host

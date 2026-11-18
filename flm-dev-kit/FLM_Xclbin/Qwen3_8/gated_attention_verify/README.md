@@ -378,7 +378,7 @@ layer; build it with `-DCPU_REF_STANDALONE`.
 ## Build
 
 ```
-source ~/setup.sh          # not the in-repo FLM_Xclbin/setup.sh
+source ../../setup.sh      # FLM_Xclbin/setup.sh
 make kernel                # compile kernels/*.cc
 make bitstream             # not `make all`
 make host

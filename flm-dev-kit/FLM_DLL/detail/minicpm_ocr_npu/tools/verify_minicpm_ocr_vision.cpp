@@ -8,7 +8,6 @@
 ///
 /// Build (one line; from FLM_DLL/detail/minicpm_ocr_npu):
 ///
-///   source ~/setup.sh
 ///   g++-13 -O3 -march=native -fopenmp -std=c++20 -ffast-math
 ///       -I. -I../../include -I../q4nx -I/opt/xilinx/xrt/include
 ///       tools/verify_minicpm_ocr_vision.cpp image/vision_tower.cpp image/vision_ops.cpp

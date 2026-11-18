@@ -22,8 +22,15 @@ if [ -f "$XILINX_XRT_SETUP" ]; then
 fi
 
 source "$MLIR_AIE_DIR/ironenv/bin/activate"
+# env_setup.sh runs /opt/xilinx/xrt/bin/xrt-smi, which fails when XRT lives in /usr; keep that from
+# ending a caller that runs with set -e.
+case $- in *e*) flm_setup_errexit=1; set +e ;; *) flm_setup_errexit=0 ;; esac
 if [ -n "${PEANO_INSTALL_DIR:-}" ]; then
     source "$MLIR_AIE_DIR/utils/env_setup.sh" "$MLIR_AIE_DIR/install" "$PEANO_INSTALL_DIR"
 else
     source "$MLIR_AIE_DIR/utils/env_setup.sh" "$MLIR_AIE_DIR/install"
 fi
+if [ "$flm_setup_errexit" = 1 ]; then
+    set -e
+fi
+unset flm_setup_errexit

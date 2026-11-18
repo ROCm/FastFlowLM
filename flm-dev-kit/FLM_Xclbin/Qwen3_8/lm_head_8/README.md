@@ -154,7 +154,7 @@ converted column does not depend on the token. One conversion now feeds 8 MACs.
 ## Test
 
 ```bash
-source ~/setup.sh        # NOT the in-repo setup.sh
+source ../../setup.sh    # FLM_Xclbin/setup.sh
 make bitstream           # NOT make all, which only builds the host
 make host
 ./run.exe -m QWEN3_8_27B

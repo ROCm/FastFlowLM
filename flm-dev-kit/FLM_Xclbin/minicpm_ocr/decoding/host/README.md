@@ -10,7 +10,7 @@ Runs the **24 decode layers of Qwen3.5-2B** on the NPU the way the FLM_DLL engin
 
 ```bash
 cd flm-dev-kit/FLM_Xclbin/minicpm_ocr/decoding
-source ~/setup.sh                 # only needed for make bitstream
+source ../../setup.sh             # FLM_Xclbin/setup.sh; only needed for make bitstream
 make bitstream                    # build/QWEN3_5_2B/xclbins/layer.xclbin (MODEL_TYPE defaults to QWEN3_5_2B)
 make test                         # 10K context, 20 timed steps after 3 warmup steps
 make test ARGS="--per-layer"      # also time one attention layer and one GDN layer

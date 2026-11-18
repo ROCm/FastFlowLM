@@ -441,7 +441,6 @@ scored against. The engine does not reach them.
 ## Build and run
 
 ```bash
-source ~/setup.sh
 cd FLM_DLL/detail/qwen3_8mtp_npu && make -j8     # -> ../../build/lib/libqwen3_8mtp_npu.so
 ```
 

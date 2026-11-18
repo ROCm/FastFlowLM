@@ -75,8 +75,7 @@ give NaN, while the same source built with Chess is correct.
 ## Build and test
 
 ```bash
-source ~/setup.sh          # only this one: adding /path/to/setup.sh breaks the Chess link step
-export AIETOOLS_DIR=/scratch/ryzen_ai-1.3.0/vitis_aie_essentials   # common.mk points at a missing 1.4.0
+source ../../setup.sh      # FLM_Xclbin/setup.sh
 make bitstream             # -> build/final/xclbins/attn.xclbin
 make host
 LD_LIBRARY_PATH=/opt/xilinx/xrt/lib ./run.exe -L 10752

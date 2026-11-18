@@ -69,8 +69,7 @@ kernels and once in `iron/models/<model>.py` for the array. Both must agree. See
 ## 2. Build
 
 ```bash
-source ~/setup.sh                      # ironenv + mlir-aie + vitis_aie_essentials
-export AIETOOLS_DIR=/scratch/ryzen_ai-1.3.0/vitis_aie_essentials   # see note
+source ../../setup.sh                  # FLM_Xclbin/setup.sh; set MLIR_AIE_DIR, PEANO_INSTALL_DIR first
 make MODEL_TYPE=QWEN3_0_6B -j8         # kernels + mlir + xclbin
 ```
 
@@ -88,9 +87,8 @@ Useful targets: `make kernel`, `make link` (MLIR only), `make bitstream`,
 
 ### Build notes / gotchas
 
-- `makefiles/common.mk` hard-codes `AIETOOLS_DIR ?= /tools/ryzen_ai-1.4.0/...`,
-  which does **not** exist on this machine. Override it (env or command line) to
-  the path in `~/setup.sh`.
+- Peano is the default. A Chess build (`ENABLE_CHESSCC=1`) needs Vitis AIE Essentials:
+  set `AIETOOLS_ROOT` (and `LM_LICENSE_FILE`), or put `xchesscc` on PATH.
 - Hy-Memory dense layer: `ENABLE_CHESSCC=0` (Peano) is the default here since
   2026-11-04; `ENABLE_CHESSCC=1` still builds with chess. With the CI Peano
   (llvm-aie `22.0.0.2026090201`) the output is **bit-identical** to chess (also with

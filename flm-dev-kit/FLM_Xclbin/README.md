@@ -5,180 +5,115 @@
 
 # FastFlowLM xclbin projects
 
-## Environment setup
+Every folder here with a `Makefile` builds NPU kernels (`.xclbin`): IRON Python writes the design as
+MLIR, Peano compiles the per-tile C++, and `aiecc.py` turns both into an xclbin. Peano is the default
+compiler of every folder; Chess is an option (see the end of this file).
 
-FastFlowLM requires mlir-aie. Before doing anything, make sure you have at least **XRT version 2.19.0** installed. If you do not have the driver installed, see Step 4.
+## What you need
 
-* **Optional**: Use [pyenv](https://github.com/pyenv/pyenv) to install a customize manager 3.12 python version
+- x86-64 Linux, tested on Ubuntu 24.04, with Python 3.12.
+- About 15 GB of free disk space; the mlir-aie build alone is about 8 GB.
+- To run what you build: an AMD Ryzen AI NPU (Strix, Strix Halo or Krackan) with the `amdxdna` driver
+  and XRT 2.19 or newer. Building does not need the NPU.
 
+```bash
+sudo apt install build-essential g++-13 lld ninja-build git curl zstd \
+    python3.12 python3.12-venv python3.12-dev \
+    libboost-program-options-dev libboost-filesystem-dev
+```
 
-* **Step 0**: Make sure you have python >= 3.12
+**Use exactly these versions.** A newer mlir-aie or Peano can build without any error and still produce
+kernels that compute wrong numbers.
 
-  ```bash
-  python3 --version
-  ```
+| Tool | Version | Source |
+|---|---|---|
+| mlir-aie | commit `4143812c93bf205250a9b762fb09147410e87558` | https://github.com/ngdxzy/mlir-aie (branch `flm_build`) |
+| Peano (`llvm-aie`) | `22.0.0.2026090201+a36c62b9` | https://github.com/Xilinx/llvm-aie/releases/expanded_assets/nightly |
 
-  If not, install it with:
+## One-time setup
 
-  ```bash
-  sudo apt install python3.12 python3.12-venv
-  ```
+Pick a folder for the tools; this file uses `$HOME/flm-toolchain`.
 
-* **Step 1**: Clone the mlir-aie repo to a place where you want to store the tool. The home directory is used in this tutorial:
+**1. Build mlir-aie** (about 10 minutes on 32 cores):
 
-  ```bash
-  cd ~
-  git clone https://github.com/ngdxzy/mlir-aie.git
-  ```
+```bash
+export TOOLS=$HOME/flm-toolchain
+mkdir -p $TOOLS && cd $TOOLS
+git clone https://github.com/ngdxzy/mlir-aie.git
+cd mlir-aie
+git checkout 4143812c93bf205250a9b762fb09147410e87558
+git submodule update --init --recursive
 
-* **Step 2**: FLM builds on this checkpoint, so create a new branch at the given commit hash. Also fetch submodules:
+python3.12 -m venv ironenv
+source ironenv/bin/activate
+python3 -m pip install --upgrade pip
+python3 -m pip install -r python/requirements.txt
+HOST_MLIR_PYTHON_PACKAGE_PREFIX=aie python3 -m pip install -r python/requirements_extras.txt
+python3 -m pip install "mlir_aie==0.0.1.2025101504+ae29ec5" \
+    -f https://github.com/Xilinx/mlir-aie/releases/expanded_assets/latest-wheels-2
+bash ./utils/build-mlir-aie-from-wheels.sh
+deactivate
+ls $TOOLS/mlir-aie/install/bin/aiecc.py     # must exist: the build script can report success after a failure
+```
 
-  ```bash
-  cd mlir-aie
-  git fetch origin flm_build
-  git checkout flm_build
-  git submodule update --init --recursive
-  ```
+**2. Install Peano** in its own folder, not in the venv (about 1 minute):
 
-* **Step 3**: Install some system-level dependencies:
+```bash
+$TOOLS/mlir-aie/ironenv/bin/python3 -m pip install --no-deps --target $TOOLS/peano \
+    "llvm-aie==22.0.0.2026090201+a36c62b9" \
+    -f https://github.com/Xilinx/llvm-aie/releases/expanded_assets/nightly
+```
 
-  ```bash
-  sudo apt install \
-  build-essential clang clang-14 lld lld-14 cmake ninja-build python3-venv python3-pip
-  ```
+**3. The NPU driver** (only to run kernels): follow AMD's [xdna-driver](https://github.com/amd/xdna-driver)
+instructions or use your distribution's packages. `build_drivers.sh` in this folder is the script
+mlir-aie used to ship for the same job.
 
-* **Step 4**: Install AIE tools
+## In every new shell
 
-  * Install Vitis™ AIE Essentials from [Ryzen AI Software 1.3 Early Access](https://account.amd.com/en/member/ryzenai-sw-ea.html#tabs-a5e122f973-item-4757898120-tab). We assume you use the installation directory `/tools/ryzen_ai-1.3.0/vitis_aie_essentials`.
+```bash
+export MLIR_AIE_DIR=$HOME/flm-toolchain/mlir-aie
+export PEANO_INSTALL_DIR=$HOME/flm-toolchain/peano/llvm-aie
+source flm-dev-kit/FLM_Xclbin/setup.sh
+$PEANO_INSTALL_DIR/bin/clang++ --version | head -1    # clang version 22.0.0 (... a36c62b9 ...)
+```
 
-    > This is an early access lounge; you must register and be granted access.
+`setup.sh` activates the mlir-aie venv and runs mlir-aie's `utils/env_setup.sh` with **both** folders.
+Set `PEANO_INSTALL_DIR` before sourcing it: without a Peano folder, `env_setup.sh` falls back to the
+Peano in the venv, an older version (21) that builds wrong kernels, and if the venv has none it
+pip-installs the newest nightly. `env_setup.sh` may print
+`/opt/xilinx/xrt/bin/xrt-smi: No such file or directory` when XRT lives in `/usr`; that is harmless.
 
-  * Download the VAIML installer for Linux-based compilation: `ryzen_ai-1.3.0ea1.tgz`
+## Build a kernel
 
-  * Extract the required tools:
+```bash
+cd flm-dev-kit/FLM_Xclbin/Dequant_Q4_0_w128x512
+make bitstream          # -> build/xclbins/dequant.xclbin
+```
 
-    ```bash
-    tar -xzvf ryzen_ai-1.3.0ea1.tgz
-    cd ryzen_ai-1.3.0
-    mkdir vitis_aie_essentials
-    mv vitis_aie_essentials*.whl vitis_aie_essentials
-    cd vitis_aie_essentials
-    unzip vitis_aie_essentials*.whl
-    ```
+Folders that build one kernel per model take the model on the command line, for example
+`make bitstream MODEL_TYPE=LLAMA_3_2_1B` in `generic_decoding_layer` (the `Makefile`'s `MODEL_TYPE ?=` is
+only the default; `kernel_assignment.md` names the type each model needs). The xclbin lands in a `xclbins/` folder under `build/`
+(`find build -path '*xclbins*' -name '*.xclbin'`), often with an `rtp_addresses.txt` next to it.
 
-  * Set up an AI Engine license.
+Useful targets: `make kernel` (only the per-tile C++, a fast way to find compile errors), `make link`
+(only the IRON Python), `make clean_all` or `make clean` (what the build made). Not every folder defines
+`link` and `clean_all`; check its `Makefile`, or delete its `build/` folder.
 
-  * Get the local license (`2025 AI Engine Tools License`) for AI Engine tools from
-    [https://www.xilinx.com/getlicense](https://www.xilinx.com/getlicense).
+**Which folders a model needs:** `kernel_assignment.md` lists every model's xclbins and the build that
+makes each one. A build name like `xclbins-Hy_MT2_1.8B_decoding` is the folder path with `/` written as
+`_` (here `Hy_MT2_1.8B/decoding`); a trailing model type, as in
+`xclbins-generic_decoding_layer_LLAMA_3_2_1B`, is the `MODEL_TYPE` to pass.
 
-  * Download and copy your license file (`Xilinx.lic`) to your preferred location, e.g. `/opt/Xilinx.lic`.
+## Optional: Chess
 
-  * Set up your environment using the following script for Vitis™ AI Engine tools:
+`make ... ENABLE_CHESSCC=1` builds a folder with Chess (`xchesscc`) instead of Peano. It needs Vitis AIE
+Essentials and an AI Engine license: set `AIETOOLS_ROOT=<Vitis AIE Essentials folder>` and
+`LM_LICENSE_FILE=<license file>` before sourcing `setup.sh`, or put `xchesscc` on `PATH`. Clean the
+folder (`make clean_all`, or delete `build/`) when switching between the two compilers.
 
-    ```bash
-    #!/bin/bash
-    #################################################################################
-    # Setup Vitis AIE Essentials
-    #################################################################################
-    export AIETOOLS_ROOT=/tools/ryzen_ai-1.3.0/vitis_aie_essentials
-    export PATH=$PATH:${AIETOOLS_ROOT}/bin
-    export LM_LICENSE_FILE=/opt/Xilinx.lic
-    ```
-
-  * To install the driver, you have two choices:
-
-    1. Run the script that comes with mlir-aie directly:
-
-       ```bash
-       bash ./utils/build_drivers.sh
-       sudo reboot
-       ```
-
-    2. New drivers are not good for debugging for some reason, so the same script is copied from the mlir-aie repo (commit: `f66b515`) into the current repo. Simply replace the script and run the same commands.
-
-       > If you use this method, you might encounter the NPU name inconsistency problem. Old XRT uses **NPU Kracken** as the device name, but it was later changed to **Krackan**. If you see errors such as `NO NPU FOUND` or `DEVICE NOT SUPPORTED`, you can manually fix the name check in the script or source.
-
-* **Step 5**: Create an Iron Python virtual environment:
-
-  ```bash
-  python3.12 -m venv ironenv 
-  source ironenv/bin/activate
-  python3 -m pip install --upgrade pip
-  ```
-
-* **Step 6**: Install Python dependencies and mlir-aie. A specific version of mlir-aie is required.
-
-  ```bash
-  python3 -m pip install -r python/requirements.txt
-  HOST_MLIR_PYTHON_PACKAGE_PREFIX=aie python3 -m pip install -r python/requirements_extras.txt
-  python3 -m pip install mlir_aie==0.0.1.2025101504+ae29ec5 -f https://github.com/Xilinx/mlir-aie/releases/expanded_assets/latest-wheels-2/
-
-
-  # for some utilities
-  pip install sympy
-  # This installs the pre-commit hooks defined in .pre-commit-config.yaml
-  pre-commit install
-  ```
-
-* **Step 7**: Build llvm-aie; this should take a few minutes:
-
-  ```bash
-  bash ./utils/build-mlir-aie-from-wheels.sh
-  ```
-
-  After this, all required tools are installed. If you run `pip list | grep aie`, you should see (the date may be different but commit number shall match):
-
-  ```bash
-  $ pip list | grep aie
-  aie-python-extras 0.0.8.2026061909+ba2e6fe
-  llvm-aie          21.0.0.2026061101+50bd3557
-  mlir-aie          0.0.1.2025101504+ae29ec5
-  ```
-
-* **Step 8**: Set up environment variables:
-
-  ```bash
-  source utils/env_setup.sh install
-  ```
-
-  The current session is now ready to compile xclbins. For future sessions, you can create a `setup.sh` script as follows:
-
-  ```bash
-  #!/bin/bash
-
-  export AIETOOLS_ROOT=/tools/ryzen_ai-1.3.0/vitis_aie_essentials
-  export PATH=$PATH:${AIETOOLS_ROOT}/bin
-  export LM_LICENSE_FILE=/opt/Xilinx.lic
-
-  MLIR_AIE_BUILD_DIR=~/mlir-aie
-
-  source /opt/xilinx/xrt/setup.sh
-
-  source ${MLIR_AIE_BUILD_DIR}/ironenv/bin/activate
-  source ${MLIR_AIE_BUILD_DIR}/utils/env_setup.sh
-  source ${MLIR_AIE_BUILD_DIR}/utils/env_setup.sh ${MLIR_AIE_BUILD_DIR}/install
-  ```
-
-  This file is also provided in this repo. Make the necessary changes if your paths are different. Run ```source setup.sh``` to activate the building environment.
-
-## Test the build
-
-* **Step 1**: Clone the **FLM_Xclbin** repo: 
-
-  ```bash
-  git clone https://github.com/FastFlowLM/FLM_Xclbin.git
-  ```
-
-* **Step 2**: Test the build:
-
-  ```bash
-  cd <FLM_XCLBIN>
-  cd Dequant_Q4_0_w128x512
-  make bitstream
-  ```
-
-  You should be able to find the final xclbin at:
-
-  ```text
-  build/xclbins/dequant.xclbin
-  ```
+How the makefiles find Vitis (`makefiles/common.mk`): `AIETOOLS_DIR` defaults to `$AIETOOLS_ROOT`, else
+to the folder above the `bin/` that holds `xchesscc`. A Peano build never reads it. The Chess flags
+(`CHESSCCWRAP*_FLAGS`) start with `$(AIETOOLS_CHECK)`, which expands to nothing when `AIETOOLS_DIR` is
+set and stops make with a clear message when it is not. Because make expands those flags only inside
+the Chess recipes, the check fires only for `ENABLE_CHESSCC=1`. That works even in folders whose
+`Makefile` sets `ENABLE_CHESSCC` after including `common.mk`, where a plain `ifeq` on it would not.

@@ -29,7 +29,6 @@
 /// depends on how the library was compiled. Compiling this at different flags
 /// than `libqwen3_8mtp_npu.so` tests a conversion nobody runs.
 ///
-///     source ~/setup.sh
 ///     g++-13 -std=c++20 -O3 -fopenmp \
 ///       -mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma -march=native \
 ///       -ffast-math -I. -I../../include -I../q4nx \

@@ -69,8 +69,7 @@ kernels and once in `iron/models/<model>.py` for the array. Both must agree. See
 ## 2. Build
 
 ```bash
-source ~/setup.sh                      # ironenv + mlir-aie + vitis_aie_essentials
-export AIETOOLS_DIR=/scratch/ryzen_ai-1.3.0/vitis_aie_essentials   # see note
+source ../setup.sh                     # FLM_Xclbin/setup.sh; set MLIR_AIE_DIR, PEANO_INSTALL_DIR first
 make MODEL_TYPE=QWEN3_0_6B -j8         # kernels + mlir + xclbin
 ```
 
@@ -88,11 +87,10 @@ Useful targets: `make kernel`, `make link` (MLIR only), `make bitstream`,
 
 ### Build notes / gotchas
 
-- `makefiles/common.mk` hard-codes `AIETOOLS_DIR ?= /tools/ryzen_ai-1.4.0/...`,
-  which does **not** exist on this machine. Override it (env or command line) to
-  the path in `~/setup.sh`.
-- `ENABLE_CHESSCC=1` (default) uses `xchesscc` for both kernels and `aiecc.py`.
-  Setting `ENABLE_CHESSCC=0` switches to Peano/llvm-aie, which needs two
+- Peano is the default. A Chess build (`ENABLE_CHESSCC=1`) needs Vitis AIE Essentials:
+  set `AIETOOLS_ROOT` (and `LM_LICENSE_FILE`), or put `xchesscc` on PATH.
+- `ENABLE_CHESSCC=1` uses `xchesscc` for both kernels and `aiecc.py`.
+  `ENABLE_CHESSCC=0` (the default) uses Peano/llvm-aie, which needs two
   workarounds already encoded in the tree:
   - `kernel.mk` forces `-O1` on `attn_qk.o` / `attn_kv.o` (at `-O2` Peano
     miscompiles the context-length `do/while`, deadlocking from ctx ≥ 128).

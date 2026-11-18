@@ -115,7 +115,7 @@ One xclbin run per layer, 25 runs per token in one runlist (`set_layer_rtp` + 24
 
 ## 8. Step A: rebuild of this copy (2026-10-30, power mode Performance)
 
-- Env: `source ~/setup.sh` (Vitis AIE 1.3.0, mlir-aie ironenv; llvm-aie **21.0.0**, CI pins 22.0.0).
+- Env: Vitis AIE 1.3.0 (for the Chess build), mlir-aie ironenv, llvm-aie **21.0.0** (CI pins 22.0.0).
   `make bitstream MODEL_TYPE=QWEN3_5_2B`: Peano build **9 s**, Chess build (`ENABLE_CHESSCC=1`) 2 min 20 s.
   RTP check passes (qk 53248, kv 53536). The 32 "error" lines in the log are the `chess_error` macro text inside
   warnings, not errors.

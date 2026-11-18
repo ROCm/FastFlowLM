@@ -344,7 +344,7 @@ Three things step 2 leaves for it, none of them hard but all easy to miss:
 ## How to verify
 
 ```bash
-source ~/setup.sh                 # not the in-repo FLM_Xclbin/setup.sh
+source ../../setup.sh             # FLM_Xclbin/setup.sh
 make kernel && make bitstream && make host    # not `make all`
 ./run.exe -m QWEN3_8_27B
 ```

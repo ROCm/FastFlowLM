@@ -68,10 +68,10 @@ A run of an op = [switch if needed] + RTP blocks + op lock = 1 on the op's cores
 ## Build and test
 
 ```
-export AIETOOLS_ROOT=/scratch/ryzen_ai-1.3.0/vitis_aie_essentials LM_LICENSE_FILE=/opt/Xilinx.lic
-source /path/to/mlir-aie/ironenv/bin/activate
-source /path/to/mlir-aie/utils/env_setup.sh /path/to/mlir-aie/install
-export PEANO_INSTALL_DIR=/path/to/flm-toolchains/llvm-aie-22.0.0.2026090201/llvm-aie   # the CI Peano
+export MLIR_AIE_DIR=/path/to/mlir-aie
+export PEANO_INSTALL_DIR=/path/to/llvm-aie-22.0.0.2026090201/llvm-aie   # the pinned Peano
+# Chess only (ENABLE_CHESSCC=1): export AIETOOLS_ROOT=<Vitis AIE Essentials> LM_LICENSE_FILE=<license>
+source ../../setup.sh   # FLM_Xclbin/setup.sh
 make            # ~1 min: kernels, base xclbin, both txn dumps, op table, run.exe
 ./run.exe -i 20
 ```
