@@ -145,6 +145,8 @@ No model rewrites, no tuning — it just works.
 
 For developers who want to build FastFlowLM from source, we provide CMake presets for a convenient and consistent build experience.
 
+To build the NPU engines, kernels and weight converter themselves, see [flm-dev-kit/README.md](flm-dev-kit/README.md).
+
 ### Prerequisites
 
 - Git

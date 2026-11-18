@@ -25,6 +25,8 @@ still change behavior. Delete `src/build` when in doubt.
 Open a PR against `main`. Use Conventional Commits — `feat:`, `fix:`, `docs:`, `chore:`,
 `ci:`, `refactor:` — with an optional scope like `chore(hrx):`. No sign-off needed.
 
+Working in `flm-dev-kit/`? Read [flm-dev-kit/AGENTS.md](flm-dev-kit/AGENTS.md) first.
+
 Rebase before pushing, and match the surrounding code (files use `/// \file`, `/// \brief`
 Doxygen headers). Don't edit vendored code: `src/include/nlohmann/`, `src/include/minja/`,
 `third_party/`.
