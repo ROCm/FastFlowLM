@@ -43,6 +43,11 @@ int main(int argc, char **argv) {
     desc.add_options()("L_wanted,l", po::value<int>()->default_value(80), "L_wanted");
     desc.add_options()("L_begin,b", po::value<int>()->default_value(0), "L_begin");
     desc.add_options()("Iteration,i", po::value<int>()->default_value(1000), "Iteration");
+    const char* env_ref = std::getenv("FLM_REFERENCE_DIR");
+    desc.add_options()("reference", po::value<std::string>()->default_value(
+        env_ref ? std::string(env_ref) + "/hy_mt2_1.8b_reference.safetensors" : ""),
+        "With -r false: the safetensors dump to read q/k/v and the expected output from "
+        "(default: $FLM_REFERENCE_DIR/hy_mt2_1.8b_reference.safetensors; not shipped)");
     arg_utils::parse_options(argc, argv, desc, vm);
 
     // User logic
@@ -50,6 +55,11 @@ int main(int argc, char **argv) {
     const bool VERIFY = vm["Verify"].as<bool>();
     const bool RANDOM = vm["Random"].as<bool>();
     const unsigned int SEED = vm["Seed"].as<unsigned int>();
+    const std::string reference_path = vm["reference"].as<std::string>();
+    if (!RANDOM && reference_path.empty()) {
+        header_print("error", "No reference: -r false needs --reference or FLM_REFERENCE_DIR (references are not shipped with the dev kit)");
+        return 1;
+    }
 
     const int d = 128;
     const int HEADS = 16;
@@ -98,7 +108,6 @@ int main(int argc, char **argv) {
         buffer<bf16> k_cache;
         buffer<bf16> v_cache;
         buffer<bf16> aux_out_whole;
-        std::string reference_path = "/path/to/models/Hy-MT2-1.8B-NPU2/hy_mt2_1.8b_reference.safetensors";
         std::unique_ptr<SafeTensors> references = std::make_unique<SafeTensors>(reference_path);
         references->load_weights(q_cache, "layer_0.q_norm");
         references->load_weights(k_cache, "layer_0.k_norm");

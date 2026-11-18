@@ -40,22 +40,22 @@ namespace model_list {
         }
     }
 
-    /// \brief per-layer activations from models_simple/verify_hy_mem_30A3B_layers.py
-    inline std::string get_reference_path(model_t model) {
+    /// \brief per-layer activations (bf16 reference, generated outside the dev kit), in ref_dir
+    inline std::string get_reference_path(model_t model, const std::string& ref_dir) {
         switch (model) {
             case HY_MEMORY_30B_A3B:
-                return "../../../models_simple/hy_mem_30a3b_reference.safetensors";
+                return ref_dir + "/hy_mem_30a3b_reference.safetensors";
             default:
                 return "UNKNOWN_MODEL";
         }
     }
 
     /// \brief the same layers recomputed with the Q4_K weights from model.q4nx, attention
-    ///        and MoE (models_simple/ref_hy_mem_layer_q4k.py), one file per layer
-    inline std::string get_q4k_reference_path(model_t model, int layer_idx) {
+    ///        and MoE (generated outside the dev kit), one file per layer, in ref_dir
+    inline std::string get_q4k_reference_path(model_t model, int layer_idx, const std::string& ref_dir) {
         switch (model) {
             case HY_MEMORY_30B_A3B:
-                return "../../../models_simple/hy_mem_layer_q4k_layer_" + std::to_string(layer_idx) + ".safetensors";
+                return ref_dir + "/hy_mem_layer_q4k_layer_" + std::to_string(layer_idx) + ".safetensors";
             default:
                 return "UNKNOWN_MODEL";
         }

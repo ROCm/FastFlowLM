@@ -15,6 +15,7 @@
 #include "lm_config.hpp"
 
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -99,10 +100,19 @@ int main(int argc, char** argv) {
     desc.add_options()("bench", arg_utils::po::value<int>()->default_value(0), "After the check, time the NPU only: this many rounds of 480 back-to-back calls");
     desc.add_options()("bench_ctx", arg_utils::po::value<int>()->default_value(8), "Context length for --bench (must be below --ctx)");
     desc.add_options()("per_step", arg_utils::po::bool_switch()->default_value(false), "Also print every token's cos / rel L2");
-    desc.add_options()("kv_fill", arg_utils::po::value<int>()->default_value(0), "Long-context check: fill KV rows 0..N-1 with the Q4_K reference's K/V rows (repeated) and decode at positions N..; no reference checks, use --dump and models_simple/check_hy_long_kv.py");
+    desc.add_options()("kv_fill", arg_utils::po::value<int>()->default_value(0), "Long-context check: fill KV rows 0..N-1 with the Q4_K reference's K/V rows (repeated) and decode at positions N..; no reference checks, use --dump and recompute the layer offline");
     desc.add_options()("dump", arg_utils::po::value<std::string>()->default_value(""), "Write the layer outputs and the new K/V rows to <prefix>.out.bin / .k.bin / .v.bin (raw bf16)");
 
+    const char* env_ref = std::getenv("FLM_REFERENCE_DIR");
+    desc.add_options()("ref_dir", arg_utils::po::value<std::string>()->default_value(env_ref ? env_ref : ""), "Directory with hy_mem_30a3b_reference.safetensors and hy_mem_layer_q4k_layer_<N>.safetensors (default: $FLM_REFERENCE_DIR; not shipped)");
+
     arg_utils::parse_options(argc, argv, desc, vm);
+
+    const std::string ref_dir = vm["ref_dir"].as<std::string>();
+    if (ref_dir.empty()) {
+        header_print("error", "No reference directory: pass --ref_dir or set FLM_REFERENCE_DIR (references are not shipped with the dev kit)");
+        return 1;
+    }
 
     std::string model_type = vm["model"].as<std::string>();
     int max_len = vm["len"].as<int>();
@@ -125,7 +135,7 @@ int main(int argc, char** argv) {
     std::unique_ptr<Q4NX> q4nx_model = std::make_unique<Q4NX>(model_list::get_q4nx_path(model));
 
     // ---- references ----
-    std::string reference_path = model_list::get_reference_path(model);
+    std::string reference_path = model_list::get_reference_path(model, ref_dir);
     std::unique_ptr<SafeTensors> references = std::make_unique<SafeTensors>(reference_path);
 
     // sanity check: embedding lookup from model.q4nx vs the reference embeddings
@@ -164,14 +174,14 @@ int main(int argc, char** argv) {
     buffer<bf16> input_ref;
     references->load_weights(input_ref, layer_prefix + "input");
 
-    std::string q4k_reference_path = model_list::get_q4k_reference_path(model, layer_idx);
+    std::string q4k_reference_path = model_list::get_q4k_reference_path(model, layer_idx, ref_dir);
     std::unique_ptr<SafeTensors> q4k_references;
     if (std::filesystem::exists(q4k_reference_path)) {
         q4k_references = std::make_unique<SafeTensors>(q4k_reference_path);
     }
     else {
         header_print("warning", "No Q4_K reference at " << q4k_reference_path
-            << " (run models_simple/ref_hy_mem_layer_q4k.py --layer " << layer_idx << "); comparing with the bf16 one only");
+            << " (generate it with the Q4_K layer reference script); comparing with the bf16 one only");
     }
     // layer output = residual + MLP; K / V: the new KV-cache row (K after
     // q/k norm and RoPE), read back from the cache, so a wrong KV layout shows on its own
@@ -203,7 +213,7 @@ int main(int argc, char** argv) {
     // Long-context check (--kv_fill N): the first N cache rows hold the Q4_K
     // reference's K/V rows, repeated, and the tokens decode at positions N.. .
     // The reference rows assume positions 0.., so there is nothing to check here;
-    // models_simple/check_hy_long_kv.py recomputes the layer from --dump.
+    // An offline reference recomputes the layer from --dump.
     const int kv_fill = vm["kv_fill"].as<int>();
     if (kv_fill > 0) {
         if (!q4k_references) {
@@ -222,7 +232,7 @@ int main(int argc, char** argv) {
         checks.clear();
         header_print("info", "KV rows 0.." << kv_fill - 1 << " filled with the Q4_K reference's K/V rows (repeated)");
     }
-    // --dump: the outputs and the new K/V rows, for check_hy_long_kv.py
+    // --dump: the outputs and the new K/V rows, for an offline long-context check
     const std::string dump_prefix = vm["dump"].as<std::string>();
     std::ofstream dump_out, dump_k, dump_v;
     if (!dump_prefix.empty()) {

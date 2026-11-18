@@ -23,6 +23,7 @@
 #include "tensor_utils/q4_npu_eXpress.hpp"
 #include "q4k_layout.hpp"
 #include "seq_gen.hpp"
+#include "hf_checkpoint.hpp"
 
 namespace po = boost::program_options;
 
@@ -35,7 +36,7 @@ namespace po = boost::program_options;
 //   1. against a scalar CPU decode of the same bytes (q4k_layout.hpp) -- this is
 //      exact up to bf16 rounding, so anything below cos ~0.9999 is a kernel or
 //      DMA bug;
-//   2. against the bf16 reference checkpoint -- this can only reach Q4_K's own
+//   2. against the bf16 HF checkpoint (--reference, optional) -- this can only reach Q4_K's own
 //      quantization error (cos ~0.997), and it is what validates the *reorders*
 //      the converter applies to qkv_proj / self_attn.gate_proj / ssm_out_proj.
 //
@@ -243,9 +244,9 @@ int main(int argc, const char *argv[]) {
     desc.add_options()("model,m", po::value<std::string>()
                            ->default_value("/path/to/models/Qwen3.8-27B-NPU2"),
                        "q4nx model directory");
-    desc.add_options()("reference,r", po::value<std::string>()
-                           ->default_value("../../../models_simple/weights.safetensors"),
-                       "bf16 reference safetensors");
+    desc.add_options()("reference,r", po::value<std::string>()->default_value(""),
+                       "bf16 HF checkpoint folder (Qwen/Qwen3.8-27B) or one .safetensors file; "
+                       "without it check 2 is skipped");
     arg_utils::parse_options(argc, const_cast<char **>(argv), desc, vm);
 
     const int layer_filter = vm["layer"].as<int>();
@@ -261,7 +262,12 @@ int main(int argc, const char *argv[]) {
     npu_app dequant_q = dequant_app_mgr->create_app();
 
     std::unique_ptr<Q4NX> q4nx_model = std::make_unique<Q4NX>(model_path);
-    std::unique_ptr<SafeTensors> weight_reference = std::make_unique<SafeTensors>(reference_path);
+    std::unique_ptr<hf_checkpoint> weight_reference;
+    if (reference_path.empty()) {
+        header_print("info", "check 2 skipped: pass --reference <HF checkpoint folder> to also check the converter's reorders");
+    } else {
+        weight_reference = std::make_unique<hf_checkpoint>(reference_path);
+    }
 
     // Size the device buffers once, for the largest tensor in the table
     // (17408x5120 -> 178 MB out, 51 MB in), and reuse them: a per-tensor
@@ -311,9 +317,11 @@ int main(int argc, const char *argv[]) {
             assert(qmeta.shape[2] == Q4K_BLOCK_BYTES && "not a q4k tensor");
             assert((int)qmeta.shape[0] * QXNX_ROW_BLOCK_SIZE == tc.Dout);
             assert((int)qmeta.shape[1] * QXNX_COL_BLOCK_SIZE == tc.Din);
-            const tensor_metadata rmeta = weight_reference->get_tensor_metadata(ref_name);
-            assert(rmeta.shape.size() == 2);
-            assert((int)rmeta.shape[0] == tc.Dout && (int)rmeta.shape[1] == tc.Din);
+            if (weight_reference) {
+                const tensor_metadata rmeta = weight_reference->get_tensor_metadata(ref_name);
+                assert(rmeta.shape.size() == 2);
+                assert((int)rmeta.shape[0] == tc.Dout && (int)rmeta.shape[1] == tc.Din);
+            }
 
             const size_t elems = (size_t)tc.Dout * tc.Din;
             const size_t qbytes = (size_t)qmeta.shape[0] * qmeta.shape[1] * Q4K_BLOCK_BYTES;
@@ -350,18 +358,21 @@ int main(int argc, const char *argv[]) {
             }
 
             // --- 2. against the bf16 reference, brought into q4nx order ---
-            ref.resize(elems);
-            weight_reference->load_weights(ref, ref_name);
-            apply_reorder(ref, tc);
-            error_metrics m_ref = get_error_metrics(npu_view, ref);
-            print_metrics_line("NPU vs bf16 ref  ", m_ref);
-            header_print("info", "  least-squares scale ref/NPU: "
-                                 << least_squares_scale(npu_view.data(), ref.data(), elems));
-            report_per_block(npu_view.data(), ref.data(), tc.Dout, tc.Din, 0.99f);
+            bool layout_ok = true;
+            if (weight_reference) {
+                ref.resize(elems);
+                weight_reference->load_weights(ref, ref_name);
+                apply_reorder(ref, tc);
+                error_metrics m_ref = get_error_metrics(npu_view, ref);
+                print_metrics_line("NPU vs bf16 ref  ", m_ref);
+                header_print("info", "  least-squares scale ref/NPU: "
+                                     << least_squares_scale(npu_view.data(), ref.data(), elems));
+                report_per_block(npu_view.data(), ref.data(), tc.Dout, tc.Din, 0.99f);
 
-            // 0.15 is twice Q4_K's own ~0.075 and far under the ~1.07 a wrong head
-            // permutation leaves behind.
-            const bool layout_ok = m_ref.RelativeL2 < 0.15f;
+                // 0.15 is twice Q4_K's own ~0.075 and far under the ~1.07 a wrong head
+                // permutation leaves behind.
+                layout_ok = m_ref.RelativeL2 < 0.15f;
+            }
             checked++;
             if (!kernel_ok || !layout_ok) {
                 failed++;
