@@ -8,3 +8,4 @@ build/
 build/
 packaging/*
 *.so
+*.exe
