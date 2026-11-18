@@ -12,34 +12,14 @@
 #include "error_measure.hpp"
 #include "models/gemma4_12b/flm/aie2p/gemma4_12b_npu.hpp"
 #if defined(FLM_ENABLE_OGA_HIPEP)
-#include "base64.hpp"
 #include "oga/oga_engine.hpp"
-#include <fstream>
-#include <iterator>
+#include "oga/oga_image_bytes.hpp"
 #endif
 #include <cassert>
 
 #if defined(FLM_ENABLE_OGA_HIPEP)
-namespace {
-std::string ImageBytesFromBase64(std::string payload) {
-    const auto marker = payload.find("base64,");
-    if (marker != std::string::npos) payload.erase(0, marker + 7);
-    std::string bytes = base64::from_base64(payload);
-    if (bytes.size() < 8)
-        throw ModelRequestError(400, false, "image payload is not a valid encoded image", "invalid_request_error");
-    return bytes;
-}
-
-std::string ImageBytesFromFile(const std::string& path) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in)
-        throw ModelRequestError(400, false, "cannot read image " + path, "invalid_request_error");
-    std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    if (bytes.size() < 8)
-        throw ModelRequestError(400, false, "image file is empty: " + path, "invalid_request_error");
-    return bytes;
-}
-}  // namespace
+using flm::oga::ImageBytesFromBase64;
+using flm::oga::ImageBytesFromFile;
 #endif
 
 /************              Gemma4_12B family            **************/

@@ -166,6 +166,11 @@ target_link_libraries(gemma4_open_model_extension PRIVATE
   flm_image_codecs
   flm_audio_codecs
   OpenMP::OpenMP_CXX)
+if(WIN32)
+  # tokenizers_c.lib (Rust std) calls WaitOnAddress / WakeByAddress*, which live
+  # in synchronization.lib; tokenizers-cpp's own system-library list omits it.
+  target_link_libraries(gemma4_open_model_extension PRIVATE synchronization)
+endif()
 set_target_properties(gemma4_open_model_extension PROPERTIES
   CXX_VISIBILITY_PRESET hidden
   VISIBILITY_INLINES_HIDDEN YES
