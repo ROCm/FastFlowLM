@@ -126,7 +126,7 @@ public:
 private:
     bool ensure_model_loaded(const std::string& model_tag,
                              const std::string& request_backend = "", std::string* refusal = nullptr);
-    bool is_known_model(const std::string& model_tag);
+    std::optional<json> generation_model_error(const std::string& model_tag);
     void ensure_asr_model_loaded(const std::string& model_tag);
     void ensure_embed_model_loaded(const std::string& model_tag);
     void ensure_decision_model_loaded(const std::string& model_tag);

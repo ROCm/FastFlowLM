@@ -77,6 +77,37 @@ def run(ctx) -> None:
         raise
 
 
+def _reject_non_generation_models(ctx, server, model_id) -> None:
+    client = server.client
+    for path, content in (
+        ("/v1/chat/completions", {"messages": [{"role": "user", "content": "hello"}]}),
+        ("/v1/completions", {"prompt": "hello"}),
+        ("/api/chat", {"messages": [{"role": "user", "content": "hello"}]}),
+        ("/api/generate", {"prompt": "hello"}),
+    ):
+        for tag, status, message in (
+            ("embed-gemma:300m", 400, "embedding model"),
+            ("Ollama/embed-gemma:300m", 400, "embedding model"),
+            ("no-such-model:missing", 404, "does not exist"),
+        ):
+            with ctx.case(NAME, f"reject-model:{path}:{tag}", model_id, server):
+                before = client.get_json("/api/ps")["models"][0]["name"]
+                for stream in (False, True):
+                    try:
+                        client.post_json(path, dict(content, model=tag, stream=stream))
+                    except HttpError as error:
+                        expect(error.status == status, f"expected HTTP {status}, got {error.status}")
+                        body = error.json()["error"]
+                        if path.startswith("/v1/"):
+                            expect(body["param"] == "model", f"wrong error parameter: {body}")
+                            body = body["message"]
+                        expect(message in body, f"wrong model error: {body!r}")
+                    else:
+                        raise AssertionError(f"{path} accepted {tag}")
+                    after = client.get_json("/api/ps")["models"][0]["name"]
+                    expect(after == before, f"rejected tag unloaded {before!r}")
+
+
 def _model_cases(ctx, server, model) -> None:
     client = server.client
     # A model that crashed the server once is likely to again; its remaining
@@ -122,16 +153,7 @@ def _model_cases(ctx, server, model) -> None:
 
     if crashed():
         return
-    with ctx.case(NAME, "reject-embedding-model", model.id, server):
-        before = client.get_json("/api/ps")["models"][0]["name"]
-        try:
-            client.chat("embed-gemma:300m", [{"role": "user", "content": "hello"}], stream=False)
-        except HttpError as error:
-            expect(400 <= error.status < 500, f"expected a client error, got {error.status}")
-        else:
-            raise AssertionError("chat accepted an embedding model")
-        after = client.get_json("/api/ps")["models"][0]["name"]
-        expect(after == before, f"rejected embedding tag unloaded {before!r}")
+    _reject_non_generation_models(ctx, server, model.id)
 
     with ctx.case(NAME, "stream-two-turns", model.id, server) as case:
         turns = ([_translate_prompt(model.id, t) for t in TRANSLATE_TURNS] if translator
