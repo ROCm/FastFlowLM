@@ -13,7 +13,7 @@
 ///       tools/verify_n4_prefill_attn.cpp prefill/npu/prefill_attn_sequence.cpp
 ///       verify/npu/attn_sequence.cpp ../q4nx/q4_npu_eXpress.cpp
 ///       ../q4nx/safe_tensors.cpp
-///       -L../../external_libs -L../../build/lib -L/opt/xilinx/xrt/lib
+///       -L../../../../src/lib/xrt -L../../build/lib -L/opt/xilinx/xrt/lib
 ///       -lxrt_coreutil -laiebu -luuid -lpthread -o /tmp/verify_n4_prefill_attn
 ///
 /// ---------------------------------------------------------------------------

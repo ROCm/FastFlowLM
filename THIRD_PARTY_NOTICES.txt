@@ -266,9 +266,9 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-The prebuilt aiebu libraries in flm-dev-kit/ contain code from ELFIO, Boost,
-JSON for Modern C++, aie-rt and the compiler's C++ runtime; each has its own
-entry in this file.
+The prebuilt aiebu libraries in src/lib/xrt/ (also linked by flm-dev-kit/)
+contain code from ELFIO, Boost, JSON for Modern C++, aie-rt and the compiler's
+C++ runtime; each has its own entry in this file.
 
 ==============================================================================
 8. tokenizers-cpp

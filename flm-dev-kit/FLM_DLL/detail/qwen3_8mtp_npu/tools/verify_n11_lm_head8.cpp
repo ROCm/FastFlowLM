@@ -12,7 +12,7 @@
 ///       -I. -I../../include -I../q4nx -I/opt/xilinx/xrt/include
 ///       tools/verify_n11_lm_head8.cpp common/npu/lm_head8_sequence.cpp
 ///       ../q4nx/q4_npu_eXpress.cpp ../q4nx/safe_tensors.cpp
-///       -L../../external_libs -L../../build/lib -L/opt/xilinx/xrt/lib
+///       -L../../../../src/lib/xrt -L../../build/lib -L/opt/xilinx/xrt/lib
 ///       -lxrt_coreutil -laiebu -luuid -lpthread -o /tmp/verify_n11_lm_head8
 ///
 /// **The flags matter.** This driver times the host against the device, and at

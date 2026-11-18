@@ -97,7 +97,7 @@ LDFLAGS += -L/opt/xilinx/xrt/lib
 endif
 
 LDFLAGS += -fopenmp
-LDFLAGS += -L../../external_libs
+LDFLAGS += -L../../../../src/lib/xrt
 LDFLAGS += -L../../build/lib
 ifeq ($(FLM_USE_HRX),1)
 LDFLAGS += $(HRX_LIBS)

@@ -27,7 +27,7 @@ CXX_FLAGS += -MMD -MP -DDEBUG_LEVEL=$(DEBUG_LEVEL) -DVERBOSE=$(VERBOSE)
 
 LDFLAGS += -fopenmp
 LDFLAGS += -L/opt/xilinx/xrt/lib -Wl,-rpath,/opt/xilinx/xrt/lib
-LDFLAGS += -lxrt_coreutil $(FLM_DLL_DIR)/external_libs/libaiebu.a
+LDFLAGS += -lxrt_coreutil $(FLM_DLL_DIR)/../../src/lib/xrt/libaiebu.a
 LDFLAGS += -lboost_program_options -lboost_filesystem
 
 HOST_SOURCES := $(shell find host -name '*.cpp')

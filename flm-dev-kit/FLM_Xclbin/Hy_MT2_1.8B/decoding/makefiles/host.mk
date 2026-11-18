@@ -16,7 +16,7 @@ CXX_FLAGS += -MMD -MP -DDEBUG_LEVEL=0 -DVERBOSE=0
 
 LDFLAGS := -L/opt/xilinx/xrt/lib -L$(FLM_DLL_DIR)/build/lib
 LDFLAGS += -Wl,-rpath,$(realpath $(FLM_DLL_DIR)/build/lib) -Wl,-rpath,/opt/xilinx/xrt/lib
-LDFLAGS += -lq4_npu_eXpress -lxrt_coreutil $(FLM_DLL_DIR)/external_libs/libaiebu.a
+LDFLAGS += -lq4_npu_eXpress -lxrt_coreutil $(FLM_DLL_DIR)/../../src/lib/xrt/libaiebu.a
 LDFLAGS += -lboost_program_options -lboost_filesystem -fopenmp
 
 HOST_OBJECTS := build/host/bench_decode.o build/host/hunyuan_npu_sequence.o

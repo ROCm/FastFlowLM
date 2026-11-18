@@ -12,7 +12,7 @@
 ///       tools/verify_n8_prefill_proj.cpp speculate/npu/proj_sequence.cpp
 ///       prefill/npu/prefill_attn_sequence.cpp verify/npu/attn_sequence.cpp
 ///       ../q4nx/q4_npu_eXpress.cpp ../q4nx/safe_tensors.cpp
-///       -L../../external_libs -L../../build/lib -L/opt/xilinx/xrt/lib
+///       -L../../../../src/lib/xrt -L../../build/lib -L/opt/xilinx/xrt/lib
 ///       -lxrt_coreutil -laiebu -luuid -lpthread -o /tmp/verify_n8_prefill_proj
 ///   (one line; the continuations are dropped here because a backslash at the
 ///    end of a // comment splices the next line into it)

@@ -12,7 +12,7 @@
 ///       tools/verify_n10_delta_net.cpp common/cpu_ref_delta_net_layer.cpp
 ///       prefill/npu/delta_net_sequence.cpp speculate/npu/proj_sequence.cpp
 ///       ../q4nx/q4_npu_eXpress.cpp ../q4nx/safe_tensors.cpp
-///       -L../../external_libs -L../../build/lib -L/opt/xilinx/xrt/lib
+///       -L../../../../src/lib/xrt -L../../build/lib -L/opt/xilinx/xrt/lib
 ///       -lxrt_coreutil -laiebu -luuid -lpthread -o /tmp/verify_n10_delta_net
 ///   (one line; the continuations are dropped here because a backslash at the
 ///    end of a // comment splices the next line into it)

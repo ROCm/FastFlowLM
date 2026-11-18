@@ -13,7 +13,7 @@
 ///       tools/verify_n15_vision_attn.cpp image/npu/vision_attn_sequence.cpp
 ///       image/vision_ops.cpp image/vision_rope.cpp
 ///       ../q4nx/q4_npu_eXpress.cpp ../q4nx/safe_tensors.cpp
-///       -L../../external_libs -L../../build/lib -L/opt/xilinx/xrt/lib
+///       -L../../../../src/lib/xrt -L../../build/lib -L/opt/xilinx/xrt/lib
 ///       -lxrt_coreutil -laiebu -luuid -lpthread
 ///       -o /tmp/verify_n15_vision_attn
 ///

@@ -471,7 +471,7 @@ g++-13 -O2 -march=native -fopenmp -std=c++20 -ffast-math \
     -I. -I../../include -I../q4nx -I/opt/xilinx/xrt/include \
     tools/verify_n2_attn.cpp verify/npu/attn_sequence.cpp \
     ../q4nx/q4_npu_eXpress.cpp ../q4nx/safe_tensors.cpp \
-    -L../../external_libs -L../../build/lib -L/opt/xilinx/xrt/lib \
+    -L../../../../src/lib/xrt -L../../build/lib -L/opt/xilinx/xrt/lib \
     -lxrt_coreutil -laiebu -luuid -lpthread -o /tmp/verify_n2_attn
 ```
 
@@ -485,7 +485,7 @@ g++-13 -O2 -march=native -fopenmp -std=c++20 -ffast-math \
     tools/verify_n4_prefill_attn.cpp \
     prefill/npu/prefill_attn_sequence.cpp verify/npu/attn_sequence.cpp \
     ../q4nx/q4_npu_eXpress.cpp ../q4nx/safe_tensors.cpp \
-    -L../../external_libs -L../../build/lib -L/opt/xilinx/xrt/lib \
+    -L../../../../src/lib/xrt -L../../build/lib -L/opt/xilinx/xrt/lib \
     -lxrt_coreutil -laiebu -luuid -lpthread -o /tmp/verify_n4_prefill_attn
 
 /tmp/verify_n4_prefill_attn      # defaults to the two in-tree build/ xclbins
@@ -517,7 +517,7 @@ g++-13 -O2 -march=native -fopenmp -std=c++20 \
     speculate/mtp_head.cpp speculate/npu/proj_sequence.cpp \
     common/npu/lm_head_sequence.cpp \
     ../q4nx/q4_npu_eXpress.cpp ../q4nx/safe_tensors.cpp \
-    -L../../external_libs -L../../build/lib -L/opt/xilinx/xrt/lib \
+    -L../../../../src/lib/xrt -L../../build/lib -L/opt/xilinx/xrt/lib \
     -lxrt_coreutil -laiebu -luuid -lpthread -o /tmp/verify_n5_mtp_prefill
 
 /tmp/verify_n5_mtp_prefill       # defaults to the four in-tree build/ xclbins
@@ -561,7 +561,7 @@ g++-13 -O2 -march=native -fopenmp -std=c++20 \
     prefill/npu/prefill_attn_sequence.cpp speculate/npu/mtp_sequence.cpp \
     speculate/mtp_head.cpp common/npu/lm_head_sequence.cpp \
     ../q4nx/q4_npu_eXpress.cpp ../q4nx/safe_tensors.cpp \
-    -L../../external_libs -L../../build/lib -L/opt/xilinx/xrt/lib \
+    -L../../../../src/lib/xrt -L../../build/lib -L/opt/xilinx/xrt/lib \
     -lxrt_coreutil -laiebu -luuid -lpthread -o /tmp/verify_n6_mtp_proj
 
 /tmp/verify_n6_mtp_proj          # defaults to the four in-tree build/ xclbins

@@ -24,7 +24,7 @@
 ///       -mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma \
 ///       -I. -I../../include -I../q4nx -I/opt/xilinx/xrt/include \
 ///       tools/bench_lm_head_rows.cpp \
-///       -L../../external_libs -L/opt/xilinx/xrt/lib \
+///       -L../../../../src/lib/xrt -L/opt/xilinx/xrt/lib \
 ///       -lxrt_coreutil -luuid -lpthread -o /tmp/bench_lm_head_rows
 ///   /tmp/bench_lm_head_rows
 #include "common/lm_head.hpp"

@@ -64,6 +64,7 @@ endif
 LDFLAGS += -fopenmp
 LDFLAGS += -L/opt/xilinx/xrt/lib
 LDFLAGS += -L$(HOST_COMMON_DIR)
+LDFLAGS += -L$(HOST_COMMON_DIR)/../../../src/lib/xrt
 LDFLAGS += -lxrt_coreutil -laiebu
 LDFLAGS += -lboost_program_options
 
@@ -124,7 +125,7 @@ $(PY_TARGET): build/$(PY_TARGET)
 build/$(PY_TARGET): $(PY_OBJECTS)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXX_FLAGS) -shared $^ -o $@ $(PY_LDFLAGS) \
-		-fopenmp -L/opt/xilinx/xrt/lib -L$(HOST_COMMON_DIR) -lxrt_coreutil -laiebu
+		-fopenmp -L/opt/xilinx/xrt/lib -L$(HOST_COMMON_DIR) -L$(HOST_COMMON_DIR)/../../../src/lib/xrt -lxrt_coreutil -laiebu
 
 # Run the executable
 run: $(HOST_C_TARGET)

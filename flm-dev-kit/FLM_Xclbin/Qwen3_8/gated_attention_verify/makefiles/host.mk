@@ -43,6 +43,7 @@ CXX_FLAGS += -DL_TOKENS=$(L_TOKENS)
 LDFLAGS += -fopenmp
 LDFLAGS += -L/opt/xilinx/xrt/lib
 LDFLAGS += -L$(HOST_COMMON_DIR)
+LDFLAGS += -L$(HOST_COMMON_DIR)/../../../src/lib/xrt
 LDFLAGS += -lxrt_coreutil -laiebu
 LDFLAGS += -lboost_program_options -lboost_filesystem
 

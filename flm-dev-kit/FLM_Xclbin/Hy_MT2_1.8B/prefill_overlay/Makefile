@@ -100,7 +100,7 @@ CXX := g++-13
 CXX_FLAGS := -std=c++20 -O2 -fPIC -Wall -Wno-sign-compare -Wno-unused-variable -fopenmp
 CXX_FLAGS += -mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma -march=native
 CXX_FLAGS += -Ihost -I$(FLM_DLL_DIR)/include -I$(FLM_DLL_DIR)/detail/hunyuan_npu -I/opt/xilinx/xrt/include -MMD -MP
-LDFLAGS := -L/opt/xilinx/xrt/lib -Wl,-rpath,/opt/xilinx/xrt/lib -lxrt_coreutil $(FLM_DLL_DIR)/external_libs/libaiebu.a
+LDFLAGS := -L/opt/xilinx/xrt/lib -Wl,-rpath,/opt/xilinx/xrt/lib -lxrt_coreutil $(FLM_DLL_DIR)/../../src/lib/xrt/libaiebu.a
 LDFLAGS += -lboost_program_options -lboost_filesystem -fopenmp
 
 run.exe: build/host/host.o

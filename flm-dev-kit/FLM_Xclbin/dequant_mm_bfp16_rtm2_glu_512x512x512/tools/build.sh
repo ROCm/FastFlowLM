@@ -12,5 +12,5 @@ for t in gemm_shapes_bench rtm_test rtm_bench ab_bench ts_test glu_test; do
   EXTRA=""; [ "$t" = ts_test ] && EXTRA="-DDIAG_BUS_EN"
   g++-13 -std=c++20 -fPIC -O2 -DUSE_AVX2=1 -mavx2 -march=native -mfma -ffast-math -fopenmp $EXTRA \
     -Ihost -I"$HC" -I"$NLOH" -I/usr/include/xrt -I/usr/include tools/$t.cpp -o tools/$t \
-    -L"$HC" -L/usr/lib/x86_64-linux-gnu -lxrt_coreutil -laiebu -lboost_program_options -lboost_filesystem -fopenmp || exit 1
+    -L"$HC" -L"$HC/../../../src/lib/xrt" -L/usr/lib/x86_64-linux-gnu -lxrt_coreutil -laiebu -lboost_program_options -lboost_filesystem -fopenmp || exit 1
 done

@@ -14,7 +14,7 @@
 ///       tools/verify_minicpm_v_vision.cpp image/vision_tower.cpp image/vision_ops.cpp
 ///       image/vision_glue.cpp image/mrope.cpp image/npu/vision_mm_sequence.cpp
 ///       image/npu/vision_attn_sequence.cpp
-///       -L../../external_libs -L/opt/xilinx/xrt/lib -lxrt_coreutil -laiebu -luuid -lpthread
+///       -L../../../../src/lib/xrt -L/opt/xilinx/xrt/lib -lxrt_coreutil -laiebu -luuid -lpthread
 ///       -o /tmp/verify_minicpm_v_vision
 ///
 /// -O3 -ffast-math, not -O2: the host arm is built here, and an A/B against the

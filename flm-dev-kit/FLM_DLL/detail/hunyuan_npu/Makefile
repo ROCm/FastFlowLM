@@ -104,7 +104,7 @@ LDFLAGS += -L/opt/xilinx/xrt/lib
 endif
 
 LDFLAGS += -fopenmp
-LDFLAGS += -L../../external_libs
+LDFLAGS += -L../../../../src/lib/xrt
 LDFLAGS += -L../../build/lib
 ifeq ($(FLM_USE_HRX),1)
 LDFLAGS += $(HRX_LIBS)
@@ -113,7 +113,7 @@ else
 # XRT installed in /opt/xilinx/xrt/lib (searched first) supplies its own
 # libaiebu.a, whose assembler prints a "Header version ..." banner to stdout
 # on every _setup_kernel().
-LDFLAGS += -lxrt_coreutil ../../external_libs/libaiebu.a
+LDFLAGS += -lxrt_coreutil ../../../../src/lib/xrt/libaiebu.a
 endif
 ifeq ($(FLM_USE_HRX),1)
 # HRX path links no Boost (no engine source uses Boost); Linux engine .so stay Boost-free.

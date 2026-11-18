@@ -17,7 +17,7 @@
 ///       image/vision_glue.cpp image/vision_rope.cpp image/mrope.cpp
 ///       image/npu/vision_attn_sequence.cpp image/npu/vision_mm_sequence.cpp
 ///       ../q4nx/q4_npu_eXpress.cpp ../q4nx/safe_tensors.cpp
-///       -L../../external_libs -L/opt/xilinx/xrt/lib
+///       -L../../../../src/lib/xrt -L/opt/xilinx/xrt/lib
 ///       -lxrt_coreutil -laiebu -luuid -lpthread -o /tmp/profile_vision
 /// Run:
 ///   /tmp/profile_vision [model_dir] [rounds] [L]

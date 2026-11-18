@@ -14,7 +14,7 @@
 ///       image/npu/vision_attn_sequence.cpp image/image_cpu.cpp
 ///       image/vision_ops.cpp image/vision_glue.cpp image/vision_rope.cpp
 ///       image/mrope.cpp
-///       -L../../external_libs -L../../build/lib -L/opt/xilinx/xrt/lib
+///       -L../../../../src/lib/xrt -L../../build/lib -L/opt/xilinx/xrt/lib
 ///       -lxrt_coreutil -laiebu -luuid -lpthread
 ///       -o /tmp/verify_n16_vision_mm
 ///
