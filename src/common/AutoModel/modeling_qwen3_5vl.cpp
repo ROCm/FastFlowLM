@@ -231,13 +231,26 @@ bool Qwen3_5VL::_build_tokens(chat_meta_info_t& meta_info, lm_uniform_input_t& i
             "invalid_request_error");
     }
     const bool oga = this->backend_id() == flm::backend::kOgaHipepBackendId;
-    unsigned max_pixels = this->vision_geometry.max_pixels;
-    if (oga && requested_images > 0) {
-        // OGA runs all the images of a prompt in one vision pass, so they share its patch budget.
-        const uint64_t patch_pixels = static_cast<uint64_t>(this->vision_geometry.patch_size) * this->vision_geometry.patch_size;
-        const uint64_t share = static_cast<uint64_t>(flm::oga::kMaxImagePatches) / requested_images * patch_pixels;
-        max_pixels = static_cast<unsigned>(std::min<uint64_t>(max_pixels, share));
-    }
+    // Each image is sized on its own, by --img-pre-resize and the model's max_pixels, so an
+    // image keeps its tokens when another one joins the conversation.
+    const unsigned max_pixels = this->vision_geometry.max_pixels;
+    // Without a shared budget, a prompt of many large images would be preprocessed whole before
+    // the context check refuses it, and preprocess_image counts their pixel values in 32 bits.
+    // On OGA, refuse once the images alone pass the context.
+    std::size_t image_tokens = 0;
+    std::size_t counted_images = 0;
+    const auto count_image_tokens = [&](const qwen3_5vl_image_t& image) {
+        if (!oga) return;
+        const std::size_t merge = this->vision_geometry.merge_size;
+        image_tokens += static_cast<std::size_t>(image.grid_h) * image.grid_w / (merge * merge);
+        ++counted_images;
+        const std::size_t cap = this->decode_cap();
+        if (image_tokens >= cap)
+            throw ModelRequestError(400, false,
+                "Request exceeds the " + std::to_string(cap) + "-token limit of backend '" + this->backend_id() +
+                "': the first " + std::to_string(counted_images) + " image(s) alone have " +
+                std::to_string(image_tokens) + " image tokens");
+    };
 
     // preprocess
     constexpr int image_soft_token_id = 248056;
@@ -268,6 +281,7 @@ bool Qwen3_5VL::_build_tokens(chat_meta_info_t& meta_info, lm_uniform_input_t& i
                 header_print("ERROR", "Skipping image that failed to preprocess: " << img_str);
                 continue;
             }
+            count_image_tokens(image);
             // Push the image AFTER preprocessing so grid_h and grid_w are set
             image_payload.images.push_back(image);
             image_payload.num_images++;
@@ -302,6 +316,7 @@ bool Qwen3_5VL::_build_tokens(chat_meta_info_t& meta_info, lm_uniform_input_t& i
                     header_print("ERROR", "Skipping image that failed to preprocess");
                     continue;
                 }
+                count_image_tokens(image);
 
                 image_payload.images.push_back(image);
                 image_payload.num_images++;
