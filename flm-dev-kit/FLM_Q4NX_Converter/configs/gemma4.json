@@ -1,0 +1,691 @@
+{
+    "q4nx_config": {
+        "row_block_size": 32,
+        "col_block_size": 256,
+        "parallel_size": 16,
+        "keep_block_in_2D": false
+    },
+    "vision_config":{
+        "vision_MM_K": 256,
+        "vision_MM_N": 64
+    },    
+    "audio_config":{
+        "audio_MM_K": 256,
+        "audio_MM_N": 64
+    },       
+    "default_tensor_type": "Q4_1",
+    "name_map": {
+        "embedding": {
+            "gguf_name": "token_embd.weight",
+            "q4nx_name": "model.embed_tokens.weight"
+        },
+        "per_layer_token_embedding": {
+            "gguf_name": "per_layer_token_embd.weight",
+            "q4nx_name": "model.per_layer_token_embd.weight"
+        },
+        "per_layer_model_projection_weight": {
+            "gguf_name": "per_layer_model_proj.weight",
+            "q4nx_name": "model.per_layer_model_proj.weight",
+            "default_tensor_type": "BF16"               
+        },
+        "per_layer_model_projection_norm": {
+            "gguf_name": "per_layer_proj_norm.weight",
+            "q4nx_name": "model.per_layer_proj_norm.weight",
+            "default_tensor_type": "BF16"               
+        },
+        "q_proj": {
+            "gguf_name": "blk.{bid}.attn_q.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.q_proj.weight"
+        },
+        "q_proj_norm":{
+            "gguf_name": "blk.{bid}.attn_q_norm.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.q_norm.weight",
+            "default_tensor_type": "BF16"            
+        },
+        "k_proj": {
+            "gguf_name": "blk.{bid}.attn_k.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.k_proj.weight"
+        },
+        "k_proj_norm":{
+            "gguf_name": "blk.{bid}.attn_k_norm.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.k_norm.weight",
+            "default_tensor_type": "BF16"
+        },
+        "v_proj": {
+            "gguf_name": "blk.{bid}.attn_v.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.v_proj.weight"
+        },
+        "o_proj": {
+            "gguf_name": "blk.{bid}.attn_output.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.o_proj.weight"
+        },
+        "layer_output_scale" :{
+            "gguf_name": "blk.{bid}.layer_output_scale.weight",
+            "q4nx_name": "model.layers.{bid}.layer_output_scale.weight",
+            "default_tensor_type": "BF16"                        
+        },
+        "per_layer_projection":{
+            "gguf_name": "blk.{bid}.proj.weight",
+            "q4nx_name": "model.layers.{bid}.per_layer_projection.weight",
+            "default_tensor_type": "BF16"             
+        },
+        "inp_gate": {
+            "gguf_name": "blk.{bid}.inp_gate.weight",
+            "q4nx_name": "model.layers.{bid}.inp_gate.weight",
+            "default_tensor_type": "BF16"            
+        },
+        "post_norm": {
+            "gguf_name": "blk.{bid}.post_norm.weight",
+            "q4nx_name": "model.layers.{bid}.post_layernorm.weight",
+            "default_tensor_type": "BF16"                        
+        },        
+        "up_proj": {
+            "gguf_name": "blk.{bid}.ffn_up.weight",
+            "q4nx_name": "model.layers.{bid}.mlp.up_proj.weight"                        
+        },
+        "gate_proj": {
+            "gguf_name": "blk.{bid}.ffn_gate.weight",
+            "q4nx_name": "model.layers.{bid}.mlp.gate_proj.weight"
+        },
+        "down_proj": {
+            "gguf_name": "blk.{bid}.ffn_down.weight",
+            "q4nx_name": "model.layers.{bid}.mlp.down_proj.weight"
+        },
+        "attn_norm": {
+            "gguf_name": "blk.{bid}.attn_norm.weight",
+            "q4nx_name": "model.layers.{bid}.input_layernorm.weight",
+            "default_tensor_type": "BF16"            
+        },
+        "post_attn_norm" :{
+            "gguf_name": "blk.{bid}.post_attention_norm.weight",
+            "q4nx_name": "model.layers.{bid}.post_attention_layernorm.weight",
+            "default_tensor_type": "BF16"
+        },
+        "ffn_norm": {
+            "gguf_name": "blk.{bid}.ffn_norm.weight",
+            "q4nx_name": "model.layers.{bid}.pre_feedforward_layernorm.weight",
+            "default_tensor_type": "BF16"            
+        },
+        "post_ffn_norm":{
+            "gguf_name": "blk.{bid}.post_ffw_norm.weight",
+            "q4nx_name": "model.layers.{bid}.post_feedforward_layernorm.weight",
+            "default_tensor_type": "BF16"                        
+        },
+        "model_final_norm": {
+            "gguf_name": "output_norm.weight",
+            "q4nx_name": "model.norm.weight",
+            "default_tensor_type": "BF16"             
+        },
+        "rope_freqs": {
+            "gguf_name": "rope_freqs.weight",
+            "q4nx_name": "rope_freqs.weight"
+        },
+        "lm_head": {
+            "gguf_name": "output.weight",
+            "q4nx_name": "lm_head.weight"
+        },
+
+
+        "vision_input_proj_weight" :{
+            "gguf_name": "mm.input_projection.weight",
+            "q4nx_name": "model.vision.embedding_projection.weight",
+            "default_tensor_type": "BF16"
+        },
+        "vision_position_embd_weight": {
+            "gguf_name": "v.position_embd.weight",
+            "q4nx_name": "model.vision.patch_embedder.position_embedding_table",
+            "default_tensor_type": "BF16"
+        },
+        "vision_patch_embd_weight": {
+            "gguf_name": "v.patch_embd.weight",
+            "q4nx_name": "model.vision.patch_embd.weight",
+            "default_tensor_type": "BF16"
+        },
+        "vision_attn_k_proj_weight": {
+            "gguf_name": "v.blk.{bid}.attn_k.weight",
+            "q4nx_name": "model.vision.{bid}.vision_attn.k_proj.weight"
+        },
+        "vision_attn_k_proj_norm_weight":{
+            "gguf_name": "v.blk.{bid}.attn_k_norm.weight",
+            "q4nx_name": "model.vision.{bid}.vision_attn.k_norm.weight",
+            "default_tensor_type": "BF16"            
+        },
+        "vision_attn_k_input_min":{
+            "gguf_name": "v.blk.{bid}.attn_k.input_min",
+            "q4nx_name": "model.vision.{bid}.vision_attn.k_input_min",
+            "default_tensor_type": "BF16"            
+        },
+        "vision_attn_k_input_max":{
+            "gguf_name": "v.blk.{bid}.attn_k.input_max",
+            "q4nx_name": "model.vision.{bid}.vision_attn.k_input_max",
+            "default_tensor_type": "BF16"            
+        },
+        "vision_attn_k_output_max":{
+            "gguf_name": "v.blk.{bid}.attn_k.output_max",
+            "q4nx_name": "model.vision.{bid}.vision_attn.k_output_max",
+            "default_tensor_type": "BF16"            
+        },
+        "vision_attn_k_output_min":{
+            "gguf_name": "v.blk.{bid}.attn_k.output_min",
+            "q4nx_name": "model.vision.{bid}.vision_attn.k_output_min",
+            "default_tensor_type": "BF16"
+        },
+        "vision_attn_out_weight":{
+            "gguf_name": "v.blk.{bid}.attn_out.weight",
+            "q4nx_name": "model.vision.{bid}.vision_attn.out_proj.weight"
+        },
+        "vision_attn_post_norm_weight":{
+            "gguf_name": "v.blk.{bid}.attn_post_norm.weight",
+            "q4nx_name": "model.vision.{bid}.post_attn_norm.weight",
+            "default_tensor_type": "BF16"            
+        },
+        "vision_attn_out_input_max":{
+            "gguf_name": "v.blk.{bid}.attn_out.input_max",
+            "q4nx_name": "model.vision.{bid}.attn_out_input_max",
+            "default_tensor_type": "BF16"            
+        },
+        "vision_attn_out_input_min":{
+            "gguf_name": "v.blk.{bid}.attn_out.input_min",
+            "q4nx_name": "model.vision.{bid}.attn_out_input_min",
+            "default_tensor_type": "BF16"            
+        },
+        "vision_attn_out_output_max":{
+            "gguf_name": "v.blk.{bid}.attn_out.output_max",
+            "q4nx_name": "model.vision.{bid}.attn_out_output_max",
+            "default_tensor_type": "BF16"            
+        },
+        "vision_attn_out_output_min":{
+            "gguf_name": "v.blk.{bid}.attn_out.output_min",
+            "q4nx_name": "model.vision.{bid}.attn_out_output_min",
+            "default_tensor_type": "BF16"            
+        },
+        "vision_attn_q_proj_weight": {
+            "gguf_name": "v.blk.{bid}.attn_q.weight",
+            "q4nx_name": "model.vision.{bid}.vision_attn.q_proj.weight"
+        },
+        "vision_attn_q_proj_norm_weight":{
+            "gguf_name": "v.blk.{bid}.attn_q_norm.weight",
+            "q4nx_name": "model.vision.{bid}.vision_attn.q_norm.weight",
+            "default_tensor_type": "BF16"            
+        },
+        "vision_attn_q_input_min":{
+            "gguf_name": "v.blk.{bid}.attn_q.input_min",
+            "q4nx_name": "model.vision.{bid}.vision_attn.q_input_min",
+            "default_tensor_type": "BF16"            
+        },
+        "vision_attn_q_output_min":{
+            "gguf_name": "v.blk.{bid}.attn_q.output_min",
+            "q4nx_name": "model.vision.{bid}.vision_attn.q_output_min",
+            "default_tensor_type": "BF16"            
+        },
+        "vision_attn_q_input_max":{
+            "gguf_name": "v.blk.{bid}.attn_q.input_max",
+            "q4nx_name": "model.vision.{bid}.vision_attn.q_input_max",
+            "default_tensor_type": "BF16"            
+        },
+        "vision_attn_q_output_max":{
+            "gguf_name": "v.blk.{bid}.attn_q.output_max",
+            "q4nx_name": "model.vision.{bid}.vision_attn.q_output_max",
+            "default_tensor_type": "BF16"   
+        },
+        "vision_attn_v_proj_weight": {
+            "gguf_name": "v.blk.{bid}.attn_v.weight",
+            "q4nx_name": "model.vision.{bid}.vision_attn.v_proj.weight"
+        },
+        "vision_attn_v_input_min":{
+            "gguf_name": "v.blk.{bid}.attn_v.input_min",
+            "q4nx_name": "model.vision.{bid}.vision_attn.v_input_min",
+            "default_tensor_type": "BF16"            
+        },
+        "vision_attn_v_output_min":{
+            "gguf_name": "v.blk.{bid}.attn_v.output_min",
+            "q4nx_name": "model.vision.{bid}.vision_attn.v_output_min",
+            "default_tensor_type": "BF16"            
+        },
+        "vision_attn_v_input_max":{
+            "gguf_name": "v.blk.{bid}.attn_v.input_max",
+            "q4nx_name": "model.vision.{bid}.vision_attn.v_input_max",
+            "default_tensor_type": "BF16"            
+        },
+        "vision_attn_v_output_max":{
+            "gguf_name": "v.blk.{bid}.attn_v.output_max",
+            "q4nx_name": "model.vision.{bid}.vision_attn.v_output_max",
+            "default_tensor_type": "BF16"
+        },
+        "vision_ffn_down_proj_weight": {
+            "gguf_name": "v.blk.{bid}.ffn_down.weight",
+            "q4nx_name": "model.vision.{bid}.ffn.down_proj.weight"
+        },
+        "vision_ffn_down_input_min":{
+            "gguf_name": "v.blk.{bid}.ffn_down.input_min",
+            "q4nx_name": "model.vision.{bid}.ffn.down_input_min",
+            "default_tensor_type": "BF16"            
+        },
+        "vision_ffn_down_output_min":{
+            "gguf_name": "v.blk.{bid}.ffn_down.output_min",
+            "q4nx_name": "model.vision.{bid}.ffn.down_output_min",
+            "default_tensor_type": "BF16"            
+        },
+        "vision_ffn_down_input_max":{
+            "gguf_name": "v.blk.{bid}.ffn_down.input_max",
+            "q4nx_name": "model.vision.{bid}.ffn.down_input_max",
+            "default_tensor_type": "BF16"            
+        },
+        "vision_ffn_down_output_max":{
+            "gguf_name": "v.blk.{bid}.ffn_down.output_max",
+            "q4nx_name": "model.vision.{bid}.ffn.down_output_max",
+            "default_tensor_type": "BF16"
+        },
+        "vision_ffn_gate_proj_weight": {
+            "gguf_name": "v.blk.{bid}.ffn_gate.weight",
+            "q4nx_name": "model.vision.{bid}.ffn.gate_proj.weight"
+        },
+        "vision_ffn_gate_input_min":{
+            "gguf_name": "v.blk.{bid}.ffn_gate.input_min",
+            "q4nx_name": "model.vision.{bid}.ffn.gate_input_min",
+            "default_tensor_type": "BF16"            
+        },
+        "vision_ffn_gate_output_min":{
+            "gguf_name": "v.blk.{bid}.ffn_gate.output_min",
+            "q4nx_name": "model.vision.{bid}.ffn.gate_output_min",
+            "default_tensor_type": "BF16"            
+        },
+        "vision_ffn_gate_input_max":{
+            "gguf_name": "v.blk.{bid}.ffn_gate.input_max",
+            "q4nx_name": "model.vision.{bid}.ffn.gate_input_max",
+            "default_tensor_type": "BF16"            
+        },
+        "vision_ffn_gate_output_max":{
+            "gguf_name": "v.blk.{bid}.ffn_gate.output_max",
+            "q4nx_name": "model.vision.{bid}.ffn.gate_output_max",
+            "default_tensor_type": "BF16"
+        },
+        "vision_ffn_post_norm_weight":{
+            "gguf_name": "v.blk.{bid}.ffn_post_norm.weight",
+            "q4nx_name": "model.vision.{bid}.ffn_post_norm.weight",
+            "default_tensor_type": "BF16"            
+        },
+        "vision_ffn_up_proj_weight": {
+            "gguf_name": "v.blk.{bid}.ffn_up.weight",
+            "q4nx_name": "model.vision.{bid}.ffn.up_proj.weight"
+        },
+        "vision_ffn_up_input_min":{
+            "gguf_name": "v.blk.{bid}.ffn_up.input_min",
+            "q4nx_name": "model.vision.{bid}.ffn.up_input_min",
+            "default_tensor_type": "BF16"            
+        },
+        "vision_ffn_up_output_min":{
+            "gguf_name": "v.blk.{bid}.ffn_up.output_min",
+            "q4nx_name": "model.vision.{bid}.ffn.up_output_min",
+            "default_tensor_type": "BF16"            
+        },
+        "vision_ffn_up_input_max":{
+            "gguf_name": "v.blk.{bid}.ffn_up.input_max",
+            "q4nx_name": "model.vision.{bid}.ffn.up_input_max",
+            "default_tensor_type": "BF16"            
+        },
+        "vision_ffn_up_output_max":{
+            "gguf_name": "v.blk.{bid}.ffn_up.output_max",   
+            "q4nx_name": "model.vision.{bid}.ffn.up_output_max",
+            "default_tensor_type": "BF16"
+        },
+        "vision_layer_norm_1_weight":{
+            "gguf_name": "v.blk.{bid}.ln1.weight",
+            "q4nx_name": "model.vision.{bid}.norm1.weight",
+            "default_tensor_type": "BF16"            
+        },
+        "vision_layer_norm_2_weight":{
+            "gguf_name": "v.blk.{bid}.ln2.weight",
+            "q4nx_name": "model.vision.{bid}.norm2.weight",
+            "default_tensor_type": "BF16"            
+        },
+
+
+        "audio_input_proj_weight" :{
+            "gguf_name": "mm.a.input_projection.weight",
+            "q4nx_name": "model.audio.embedding_projection.weight",
+            "default_tensor_type": "BF16"
+        },
+        "audio_pre_encode_weight":{
+            "gguf_name": "a.pre_encode.out.weight",
+            "q4nx_name": "model.audio.pre_encoder.weight",
+            "default_tensor_type": "BF16"
+        },
+        "audio_pre_encode_bias":{
+            "gguf_name": "a.pre_encode.out.bias",
+            "q4nx_name": "model.audio.pre_encoder.bias",
+            "default_tensor_type": "BF16"
+        },
+        "audio_encode_input_projection_weight":{
+            "gguf_name": "a.input_projection.weight",
+            "q4nx_name": "model.audio.encode_input_projection.weight",
+            "default_tensor_type": "BF16"
+        },
+        "audio_subSample_conv_layer0_weight":{
+            "gguf_name": "a.conv1d.0.weight",
+            "q4nx_name": "model.audio.subsample.conv_layer0.weight",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_subSample_conv_layer0_norm":{
+            "gguf_name": "a.conv1d.0.norm.weight",
+            "q4nx_name": "model.audio.subsample.conv_layer0.norm.weight",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_subSample_conv_layer1_weight":{
+            "gguf_name": "a.conv1d.1.weight",
+            "q4nx_name": "model.audio.subsample.conv_layer1.weight",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_subSample_conv_layer1_norm":{
+            "gguf_name": "a.conv1d.1.norm.weight",
+            "q4nx_name": "model.audio.subsample.conv_layer1.norm.weight",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_attn_k_proj_weight": {
+            "gguf_name": "a.blk.{bid}.attn_k.weight",
+            "q4nx_name": "model.audio.{bid}.attn_k_proj.weight"
+        },
+        "audio_attn_k_proj_rel_weight":{
+            "gguf_name": "a.blk.{bid}.attn_k_rel.weight",
+            "q4nx_name": "model.audio.{bid}.attn_k_proj.rel_weight",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_attn_k_input_min":{
+            "gguf_name": "a.blk.{bid}.attn_k.input_min",
+            "q4nx_name": "model.audio.{bid}.attn_k_proj.input_min",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_attn_k_input_max":{
+            "gguf_name": "a.blk.{bid}.attn_k.input_max",
+            "q4nx_name": "model.audio.{bid}.attn_k_proj.input_max",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_attn_k_output_min":{
+            "gguf_name": "a.blk.{bid}.attn_k.output_min",
+            "q4nx_name": "model.audio.{bid}.attn_k_proj.output_min",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_attn_k_output_max":{
+            "gguf_name": "a.blk.{bid}.attn_k.output_max",
+            "q4nx_name": "model.audio.{bid}.attn_k_proj.output_max",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_attn_out_weight":{
+            "gguf_name": "a.blk.{bid}.attn_out.weight",
+            "q4nx_name": "model.audio.{bid}.attn_out_proj.weight"
+        },
+        "audio_Attn_out_input_min":{
+            "gguf_name": "a.blk.{bid}.attn_out.input_min",
+            "q4nx_name": "model.audio.{bid}.attn_out_proj.input_min",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_Attn_out_input_max":{
+            "gguf_name": "a.blk.{bid}.attn_out.input_max",
+            "q4nx_name": "model.audio.{bid}.attn_out_proj.input_max",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_Attn_out_output_min":{
+            "gguf_name": "a.blk.{bid}.attn_out.output_min",
+            "q4nx_name": "model.audio.{bid}.attn_out_proj.output_min",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_Attn_out_output_max":{
+            "gguf_name": "a.blk.{bid}.attn_out.output_max",
+            "q4nx_name": "model.audio.{bid}.attn_out_proj.output_max",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_attn_post_norm_weight":{
+            "gguf_name": "a.blk.{bid}.attn_post_norm.weight",
+            "q4nx_name": "model.audio.{bid}.attn_post_norm.weight",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_attn_pre_norm_weight":{
+            "gguf_name": "a.blk.{bid}.attn_pre_norm.weight",
+            "q4nx_name": "model.audio.{bid}.attn_pre_norm.weight",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_attn_q_proj_weight": {
+            "gguf_name": "a.blk.{bid}.attn_q.weight",
+            "q4nx_name": "model.audio.{bid}.attn_q_proj.weight"
+        },
+        "audio_attn_q_input_min":{
+            "gguf_name": "a.blk.{bid}.attn_q.input_min",
+            "q4nx_name": "model.audio.{bid}.attn_q_proj.input_min",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_attn_q_output_min":{
+            "gguf_name": "a.blk.{bid}.attn_q.output_min",
+            "q4nx_name": "model.audio.{bid}.attn_q_proj.output_min",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_attn_q_input_max":{
+            "gguf_name": "a.blk.{bid}.attn_q.input_max",
+            "q4nx_name": "model.audio.{bid}.attn_q_proj.input_max",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_attn_q_output_max":{
+            "gguf_name": "a.blk.{bid}.attn_q.output_max",
+            "q4nx_name": "model.audio.{bid}.attn_q_proj.output_max",
+            "default_tensor_type": "BF16"   
+        },
+        "audio_attn_v_proj_weight": {
+            "gguf_name": "a.blk.{bid}.attn_v.weight",
+            "q4nx_name": "model.audio.{bid}.attn_v_proj.weight"
+        },
+        "audio_attn_v_input_min":{
+            "gguf_name": "a.blk.{bid}.attn_v.input_min",
+            "q4nx_name": "model.audio.{bid}.attn_v_proj.input_min",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_attn_v_output_min":{ 
+            "gguf_name": "a.blk.{bid}.attn_v.output_min",
+            "q4nx_name": "model.audio.{bid}.attn_v_proj.output_min",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_attn_v_input_max":{
+            "gguf_name": "a.blk.{bid}.attn_v.input_max",
+            "q4nx_name": "model.audio.{bid}.attn_v_proj.input_max",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_attn_v_output_max":{
+            "gguf_name": "a.blk.{bid}.attn_v.output_max",
+            "q4nx_name": "model.audio.{bid}.attn_v_proj.output_max",
+            "default_tensor_type": "BF16"
+        },
+        "audio_conv_dw_weight":{
+            "gguf_name": "a.blk.{bid}.conv_dw.weight",
+            "q4nx_name": "model.audio.{bid}.conv_dw.weight",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_conv_pw_1_weight": {
+            "gguf_name": "a.blk.{bid}.conv_pw1.weight",
+            "q4nx_name": "model.audio.{bid}.conv_pw_1.weight",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_conv_pw_1_input_min": {
+            "gguf_name": "a.blk.{bid}.conv_pw1.input_min",
+            "q4nx_name": "model.audio.{bid}.conv_pw_1.input_min",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_conv_pw_1_input_max": {
+            "gguf_name": "a.blk.{bid}.conv_pw1.input_max",
+            "q4nx_name": "model.audio.{bid}.conv_pw_1.input_max",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_conv_pw_1_output_min": {
+            "gguf_name": "a.blk.{bid}.conv_pw1.output_min",
+            "q4nx_name": "model.audio.{bid}.conv_pw_1.output_min",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_conv_pw_1_output_max": {
+            "gguf_name": "a.blk.{bid}.conv_pw1.output_max",
+            "q4nx_name": "model.audio.{bid}.conv_pw_1.output_max",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_conv_pw_2_weight": {
+            "gguf_name": "a.blk.{bid}.conv_pw2.weight",
+            "q4nx_name": "model.audio.{bid}.conv_pw_2.weight",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_conv_pw_2_input_min": {
+            "gguf_name": "a.blk.{bid}.conv_pw2.input_min",
+            "q4nx_name": "model.audio.{bid}.conv_pw_2.input_min",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_conv_pw_2_input_max": {
+            "gguf_name": "a.blk.{bid}.conv_pw2.input_max",
+            "q4nx_name": "model.audio.{bid}.conv_pw_2.input_max",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_conv_pw_2_output_min": {
+            "gguf_name": "a.blk.{bid}.conv_pw2.output_min", 
+            "q4nx_name": "model.audio.{bid}.conv_pw_2.output_min",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_conv_pw_2_output_max": {
+            "gguf_name": "a.blk.{bid}.conv_pw2.output_max",
+            "q4nx_name": "model.audio.{bid}.conv_pw_2.output_max",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_ffn_down_proj_weight":{
+            "gguf_name": "a.blk.{bid}.ffn_down.weight",
+            "q4nx_name": "model.audio.{bid}.ffn.down_proj.weight",
+            "default_tensor_type": "BF16"
+        },
+        "audio_ffn_down_input_min":{
+            "gguf_name": "a.blk.{bid}.ffn_down.input_min",
+            "q4nx_name": "model.audio.{bid}.ffn.down_proj.input_min",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_ffn_down_input_max":{
+            "gguf_name": "a.blk.{bid}.ffn_down.input_max",
+            "q4nx_name": "model.audio.{bid}.ffn.down_proj.input_max",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_ffn_down_output_min":{
+            "gguf_name": "a.blk.{bid}.ffn_down.output_min",
+            "q4nx_name": "model.audio.{bid}.ffn.down_proj.output_min",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_ffn_down_output_max":{
+            "gguf_name": "a.blk.{bid}.ffn_down.output_max",
+            "q4nx_name": "model.audio.{bid}.ffn.down_proj.output_max",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_ffn_down_proj_weight_1":{
+            "gguf_name": "a.blk.{bid}.ffn_down_1.weight",
+            "q4nx_name": "model.audio.{bid}.ffn.down_proj_1.weight",
+            "default_tensor_type": "BF16"
+        },
+        "audio_ffn_down_1_input_min":{
+            "gguf_name": "a.blk.{bid}.ffn_down_1.input_min",
+            "q4nx_name": "model.audio.{bid}.ffn.down_proj_1.input_min",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_ffn_down_1_input_max":{
+            "gguf_name": "a.blk.{bid}.ffn_down_1.input_max",
+            "q4nx_name": "model.audio.{bid}.ffn.down_proj_1.input_max",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_ffn_down_1_output_min":{
+            "gguf_name": "a.blk.{bid}.ffn_down_1.output_min",
+            "q4nx_name": "model.audio.{bid}.ffn.down_proj_1.output_min",
+            "default_tensor_type": "BF16"            
+        }, 
+        "audio_ffn_down_1_output_max":{
+            "gguf_name": "a.blk.{bid}.ffn_down_1.output_max",
+            "q4nx_name": "model.audio.{bid}.ffn.down_proj_1.output_max",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_ffn_norm_weight":{
+            "gguf_name": "a.blk.{bid}.ffn_norm.weight",
+            "q4nx_name": "model.audio.{bid}.ffn_norm.weight",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_ffn_norm_weight_1":{
+            "gguf_name": "a.blk.{bid}.ffn_norm_1.weight",
+            "q4nx_name": "model.audio.{bid}.ffn_norm_1.weight",
+            "default_tensor_type": "BF16"
+        },
+        "audio_ffn_post_norm_weight":{
+            "gguf_name": "a.blk.{bid}.ffn_post_norm.weight",
+            "q4nx_name": "model.audio.{bid}.ffn_post_norm.weight",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_ffn_post_norm_weight_1":{
+            "gguf_name": "a.blk.{bid}.ffn_post_norm_1.weight",
+            "q4nx_name": "model.audio.{bid}.ffn_post_norm_1.weight",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_ffn_up_proj_weight":{
+            "gguf_name": "a.blk.{bid}.ffn_up.weight",
+            "q4nx_name": "model.audio.{bid}.ffn.up_proj.weight",
+            "default_tensor_type": "BF16"
+        },
+        "audio_ffn_up_input_min":{
+            "gguf_name": "a.blk.{bid}.ffn_up.input_min",
+            "q4nx_name": "model.audio.{bid}.ffn.up_proj.input_min",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_ffn_up_input_max":{
+            "gguf_name": "a.blk.{bid}.ffn_up.input_max",
+            "q4nx_name": "model.audio.{bid}.ffn.up_proj.input_max",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_ffn_up_output_min":{
+            "gguf_name": "a.blk.{bid}.ffn_up.output_min",
+            "q4nx_name": "model.audio.{bid}.ffn.up_proj.output_min",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_ffn_up_output_max":{
+            "gguf_name": "a.blk.{bid}.ffn_up.output_max",
+            "q4nx_name": "model.audio.{bid}.ffn.up_proj.output_max",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_ffn_up_proj_weight_1":{
+            "gguf_name": "a.blk.{bid}.ffn_up_1.weight",
+            "q4nx_name": "model.audio.{bid}.ffn.up_proj_1.weight",
+            "default_tensor_type": "BF16"
+        },
+        "audio_ffn_up_1_input_min":{
+            "gguf_name": "a.blk.{bid}.ffn_up_1.input_min",
+            "q4nx_name": "model.audio.{bid}.ffn.up_proj_1.input_min",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_ffn_up_1_input_max":{
+            "gguf_name": "a.blk.{bid}.ffn_up_1.input_max",
+            "q4nx_name": "model.audio.{bid}.ffn.up_proj_1.input_max",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_ffn_up_1_output_min":{
+            "gguf_name": "a.blk.{bid}.ffn_up_1.output_min",
+            "q4nx_name": "model.audio.{bid}.ffn.up_proj_1.output_min",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_ffn_up_1_output_max":{   
+            "gguf_name": "a.blk.{bid}.ffn_up_1.output_max",
+            "q4nx_name": "model.audio.{bid}.ffn.up_proj_1.output_max",
+            "default_tensor_type": "BF16"            
+        },
+        "audio_ln2_norm_weight":{
+            "gguf_name": "a.blk.{bid}.ln2.weight",
+            "q4nx_name": "model.audio.{bid}.ln2.weight",
+            "default_tensor_type": "BF16"
+        },
+        "audio_norm_conv_weight":{
+            "gguf_name": "a.blk.{bid}.norm_conv.weight",
+            "q4nx_name": "model.audio.{bid}.norm_conv.weight",
+            "default_tensor_type": "BF16"
+        },
+        "audio_conv_norm_weight":{
+            "gguf_name": "a.blk.{bid}.conv_norm.weight",
+            "q4nx_name": "model.audio.{bid}.conv_norm.weight",
+            "default_tensor_type": "BF16"            
+        },        
+        "audio_pre_dim_scale_weight":{
+            "gguf_name": "a.blk.{bid}.per_dim_scale.weight",
+            "q4nx_name": "model.audio.{bid}.pre_dim_scale.weight",
+            "default_tensor_type": "BF16"
+        }
+    }
+}

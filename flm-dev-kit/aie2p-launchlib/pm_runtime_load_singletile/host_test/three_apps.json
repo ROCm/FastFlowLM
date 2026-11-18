@@ -1,0 +1,20 @@
+{
+  "package_dir": "precompiled/c4",
+  "transport": "ctrlpkt",
+  "configs": [
+    { "kind": "reset" },
+
+    { "kind": "cold",  "app": "vadd" },
+    { "kind": "rerun", "app": "vadd" },
+    { "kind": "cold",  "app": "vmul" },
+    { "kind": "rerun", "app": "vmul" },
+    { "kind": "cold",  "app": "vminus" },
+    { "kind": "rerun", "app": "vminus" },
+
+    { "kind": "warm", "prev": "vadd",   "app": "vmul" },
+    { "kind": "warm", "prev": "vmul",   "app": "vminus" },
+    { "kind": "warm", "prev": "vminus", "app": "vadd" },
+
+    { "kind": "warm", "prev": "vmul",   "app": "vadd" }
+  ]
+}

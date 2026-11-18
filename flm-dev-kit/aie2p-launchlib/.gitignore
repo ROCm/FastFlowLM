@@ -1,0 +1,4 @@
+build/
+__pycache__/
+precompiled/
+env.local.sh

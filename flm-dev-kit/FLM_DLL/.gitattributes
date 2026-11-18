@@ -1,0 +1,2 @@
+build.sh text eol=lf
+build_all.sh text eol=lf

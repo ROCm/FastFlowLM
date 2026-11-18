@@ -1,0 +1,69 @@
+# Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+
+# =============================================================================
+# Llama NPU Library Makefile
+# =============================================================================
+#
+# Created: 2024
+#
+# This Makefile is used to build the Llama NPU library components.
+#
+# Usage:
+#   make        - Build all targets
+#   make clean  - Remove all built files
+#   make help   - Show this help message
+#
+# =============================================================================
+
+# Linux build environment
+# Use g++-13 directly without CMake
+
+HOST_C_TARGET := run.exe
+HOST_COMMON_DIR := ../../host_common
+
+VERBOSE ?= 0
+
+CXX := g++-13
+CXX_FLAGS := -std=c++20 -fPIC -Wall
+CXX_FLAGS += -DUSE_AVX2=1
+CXX_FLAGS += -mavx2 -march=native -mfma -ffast-math
+# The CPU golden references (host/cpu_ref_*) are OpenMP-parallel over weight row
+# blocks; without this they still build, just single-threaded.
+CXX_FLAGS += -fopenmp
+CXX_FLAGS += -Ihost
+CXX_FLAGS += -I/opt/xilinx/xrt/include
+CXX_FLAGS += -I$(HOST_COMMON_DIR)
+CXX_FLAGS += -MMD -MP
+CXX_FLAGS += -DVERBOSE=$(VERBOSE)
+# Query rows per pass; see the comment in the top-level Makefile. Default
+# repeated here so `make host` works when host.mk is included standalone.
+L_TOKENS ?= 8
+CXX_FLAGS += -DL_TOKENS=$(L_TOKENS)
+
+LDFLAGS += -fopenmp
+LDFLAGS += -L/opt/xilinx/xrt/lib
+LDFLAGS += -L$(HOST_COMMON_DIR)
+LDFLAGS += -lxrt_coreutil -laiebu
+LDFLAGS += -lboost_program_options -lboost_filesystem
+
+# Find all source files in host/ directory (including subdirectories)
+HOST_SOURCES := $(shell find host -name '*.cpp')
+HOST_OBJECTS := $(HOST_SOURCES:%.cpp=build/%.o)
+HOST_DEPENDS := $(HOST_OBJECTS:.o=.d)
+
+# Default target
+$(HOST_C_TARGET): build/$(HOST_C_TARGET)
+	cp build/$(HOST_C_TARGET) ./
+
+# Link the executable
+build/$(HOST_C_TARGET): $(HOST_OBJECTS)
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXX_FLAGS) $^ -o $@ $(LDFLAGS)
+
+# Compile source files and generate dependencies
+build/%.o: %.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXX_FLAGS) -c $< -o $@
+
+# Include dependency files
+-include $(HOST_DEPENDS)

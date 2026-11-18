@@ -1,0 +1,880 @@
+<!--
+  Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+-->
+
+<title>Q4_K on the NPU</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+:root{
+  --paper:#EFF1F0; --surface:#FBFCFB; --sunk:#E5E9E7;
+  --ink:#14181B; --body:#2C3437; --muted:#606B68; --faint:#8B9793;
+  --rule:#D2D8D5; --rule-soft:#E1E6E3;
+  --scale:#B4551F; --scale-bg:#F4E5DA; --scale-line:#D98A50;
+  --min:#12706B; --min-bg:#DDECEA; --min-line:#4FA8A1;
+  --hazard:#8A3D6B; --hazard-bg:#F0E2EB;
+  --exact:#4A5A52;
+  --f-display:"Archivo","Helvetica Neue",Arial,sans-serif;
+  --f-body:"Source Serif 4",Georgia,"Times New Roman",serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --paper:#0E1214; --surface:#161B1E; --sunk:#1B2226;
+  --ink:#E7EDEA; --body:#C6D0CC; --muted:#8E9A96; --faint:#6C7874;
+  --rule:#283134; --rule-soft:#1F272A;
+  --scale:#E8964F; --scale-bg:#2E2117; --scale-line:#A2673A;
+  --min:#5CC9BE; --min-bg:#12262A; --min-line:#3E8C87;
+  --hazard:#D98CBD; --hazard-bg:#2A1A26;
+  --exact:#9DB0A7;
+}}
+:root[data-theme="dark"]{
+  --paper:#0E1214; --surface:#161B1E; --sunk:#1B2226;
+  --ink:#E7EDEA; --body:#C6D0CC; --muted:#8E9A96; --faint:#6C7874;
+  --rule:#283134; --rule-soft:#1F272A;
+  --scale:#E8964F; --scale-bg:#2E2117; --scale-line:#A2673A;
+  --min:#5CC9BE; --min-bg:#12262A; --min-line:#3E8C87;
+  --hazard:#D98CBD; --hazard-bg:#2A1A26;
+  --exact:#9DB0A7;
+}
+*{box-sizing:border-box}
+body{background:var(--paper);color:var(--body);font-family:var(--f-body);
+  font-size:17px;line-height:1.72;-webkit-font-smoothing:antialiased}
+::selection{background:var(--scale-bg);color:var(--ink)}
+a{color:var(--scale)}
+:focus-visible{outline:2px solid var(--scale);outline-offset:3px;border-radius:2px}
+
+/* ---- layout track ---- */
+.doc{display:grid;
+  grid-template-columns:
+    [full-start] minmax(1.1rem,1fr)
+    [wide-start] minmax(0,9rem)
+    [main-start] minmax(0,74ch)
+    [main-end] minmax(0,9rem)
+    [wide-end] minmax(1.1rem,1fr) [full-end];
+  row-gap:0}
+.doc > *{grid-column:main}
+.doc > .wide{grid-column:wide}
+.doc > .full{grid-column:full}
+
+/* ---- masthead ---- */
+header.mast{grid-column:full;background:var(--surface);
+  border-bottom:1px solid var(--rule);padding:3.4rem 1.1rem 2.6rem}
+.mast-in{max-width:92rem;margin:0 auto;display:grid;gap:1.4rem}
+.eyebrow{font-family:var(--f-mono);font-size:.7rem;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint)}
+h1{font-family:var(--f-display);font-weight:700;font-size:clamp(2.1rem,5.4vw,3.4rem);
+  line-height:1.02;letter-spacing:-.028em;color:var(--ink);margin:0;text-wrap:balance;max-width:16ch}
+.standfirst{font-size:1.14rem;color:var(--muted);max-width:60ch;margin:0}
+.standfirst b{color:var(--body);font-weight:600}
+
+/* the two-format ledger in the masthead */
+.ledger{display:grid;gap:0;grid-template-columns:1fr;margin-top:1rem;
+  border-top:1px solid var(--rule);font-family:var(--f-mono);font-size:.8rem}
+@media(min-width:720px){.ledger{grid-template-columns:1fr auto 1fr;align-items:stretch}}
+.ledger-cell{padding:1.1rem 0;display:grid;gap:.4rem;align-content:start}
+.ledger-cell + .ledger-cell{border-top:1px solid var(--rule-soft)}
+@media(min-width:720px){
+  .ledger-cell{padding:1.1rem 1.6rem}
+  .ledger-cell:first-child{padding-left:0}
+  .ledger-cell + .ledger-cell{border-top:0}
+  .ledger-arrow{display:grid;place-items:center;color:var(--scale);
+    border-left:1px solid var(--rule-soft);border-right:1px solid var(--rule-soft)}
+}
+.ledger-arrow{font-size:1.3rem;padding:.6rem 0;color:var(--scale)}
+.ledger-k{color:var(--faint);letter-spacing:.1em;text-transform:uppercase;font-size:.66rem}
+.ledger-v{color:var(--ink);font-weight:600;font-size:1.02rem}
+.ledger-n{color:var(--muted);line-height:1.5}
+
+/* ---- sections ---- */
+section{padding:3.2rem 0 0}
+.doc > section{grid-column:wide}
+.rule-head{display:flex;align-items:baseline;gap:.9rem;margin:0 0 1.5rem;
+  border-bottom:1px solid var(--rule);padding-bottom:.7rem}
+.rule-head .n{font-family:var(--f-mono);font-size:.72rem;color:var(--faint);
+  letter-spacing:.14em;padding-top:.2em}
+h2{font-family:var(--f-display);font-weight:600;font-size:1.62rem;letter-spacing:-.018em;
+  color:var(--ink);margin:0;text-wrap:balance;flex:1}
+h3{font-family:var(--f-display);font-weight:600;font-size:1.06rem;letter-spacing:-.005em;
+  color:var(--ink);margin:2.2rem 0 .6rem;text-wrap:balance}
+p{margin:0 0 1.2rem}
+.doc > p:last-child{margin-bottom:0}
+code{font-family:var(--f-mono);font-size:.86em;background:var(--sunk);
+  padding:.1em .34em;border-radius:2px;color:var(--ink)}
+strong{font-weight:600;color:var(--ink)}
+.term{font-family:var(--f-mono);font-size:.88em;color:var(--ink);font-weight:500}
+
+/* path coloring */
+.p-scale{color:var(--scale);font-weight:600}
+.p-min{color:var(--min);font-weight:600}
+
+/* ---- equation slab ---- */
+.eq{background:var(--surface);border:1px solid var(--rule);border-radius:3px;
+  padding:1.15rem 1.3rem;margin:1.4rem 0;font-family:var(--f-mono);font-size:.94rem;
+  color:var(--ink);overflow-x:auto;line-height:1.9}
+.eq .cmt{color:var(--faint);font-size:.84em}
+.eq-label{font-family:var(--f-mono);font-size:.66rem;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--faint);display:block;margin-bottom:.55rem}
+
+/* ---- code ---- */
+pre{background:var(--surface);border:1px solid var(--rule);border-radius:3px;
+  padding:1rem 1.15rem;margin:1.3rem 0;overflow-x:auto;font-family:var(--f-mono);
+  font-size:.795rem;line-height:1.72;color:var(--body)}
+pre b{color:var(--ink);font-weight:600}
+pre i{color:var(--faint);font-style:normal}
+
+/* ---- byte map ---- */
+.bytemap{margin:1.6rem 0 .3rem}
+.bytemap-bar{display:flex;height:44px;border-radius:3px;overflow:hidden;
+  border:1px solid var(--rule)}
+.bm-seg{display:grid;place-items:center;font-family:var(--f-mono);font-size:.7rem;
+  font-weight:600;color:var(--ink);border-right:1px solid var(--paper)}
+.bm-seg:last-child{border-right:0}
+.bm-d{flex:2 0 0;background:var(--scale-bg)}
+.bm-dmin{flex:2 0 0;background:var(--min-bg)}
+.bm-sc{flex:12 0 0;background:var(--hazard-bg)}
+.bm-qs{flex:128 0 0;background:var(--sunk)}
+.bm-seg span{opacity:0}
+.bm-qs span{opacity:1;color:var(--muted)}
+.bytemap-legend{display:grid;gap:0;margin-top:.9rem;border-top:1px solid var(--rule-soft)}
+.bl-row{display:grid;grid-template-columns:14px 4.4rem 5.6rem 1fr;gap:.75rem;
+  align-items:baseline;padding:.6rem 0;border-bottom:1px solid var(--rule-soft);
+  font-family:var(--f-mono);font-size:.76rem}
+.bl-chip{width:10px;height:10px;border-radius:2px;border:1px solid var(--rule);
+  transform:translateY(1px)}
+.bl-b{color:var(--muted);font-variant-numeric:tabular-nums}
+.bl-n{color:var(--ink);font-weight:600}
+.bl-d{font-family:var(--f-body);font-size:.9rem;color:var(--muted);line-height:1.5}
+
+/* ---- data table ---- */
+.tbl-wrap{overflow-x:auto;margin:1.5rem 0}
+table{border-collapse:collapse;width:100%;font-family:var(--f-mono);font-size:.78rem;
+  min-width:34rem}
+th{text-align:left;font-weight:600;color:var(--faint);font-size:.66rem;
+  letter-spacing:.12em;text-transform:uppercase;padding:0 1.1rem .55rem 0;
+  border-bottom:1px solid var(--rule);white-space:nowrap}
+td{padding:.62rem 1.1rem .62rem 0;border-bottom:1px solid var(--rule-soft);
+  color:var(--body);vertical-align:baseline}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;padding-right:1.8rem}
+td.num:last-child,th.num:last-child{padding-right:0}
+
+/* fixed geometry so the numeric columns can't be squeezed by a long last column */
+table.ops{table-layout:fixed}
+table.ops th:nth-child(1),table.ops td:nth-child(1){width:11rem}
+table.ops th:nth-child(2),table.ops td:nth-child(2){width:4.5rem}
+table.ops th:nth-child(3),table.ops td:nth-child(3){width:7rem}
+table.ops th:nth-child(4),table.ops td:nth-child(4){width:8rem}
+table.ops th{white-space:normal;line-height:1.35;vertical-align:bottom}
+tr:last-child td{border-bottom:0}
+tbody tr.total td{border-top:1px solid var(--rule);border-bottom:0;
+  color:var(--ink);font-weight:600;padding-top:.72rem}
+td .lead{color:var(--ink);font-weight:500}
+td .note{font-family:var(--f-body);font-size:.9rem;color:var(--muted)}
+.mark-good{color:var(--min);font-weight:600}
+.mark-bad{color:var(--hazard);font-weight:600}
+
+/* ---- callout ---- */
+.note-box{border-left:2px solid var(--scale);padding:.15rem 0 .15rem 1.15rem;
+  margin:1.5rem 0;color:var(--muted);font-size:.97rem}
+.note-box.min{border-left-color:var(--min)}
+.note-box.hazard{border-left-color:var(--hazard)}
+.note-box .lab{font-family:var(--f-mono);font-size:.64rem;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--scale);display:block;margin-bottom:.3rem}
+.note-box.min .lab{color:var(--min)}
+.note-box.hazard .lab{color:var(--hazard)}
+
+/* ---- figure ---- */
+figure{margin:1.9rem 0 1.2rem}
+figure svg{display:block;width:100%;height:auto}
+figcaption{font-family:var(--f-mono);font-size:.7rem;color:var(--faint);
+  line-height:1.65;margin-top:.85rem;padding-top:.6rem;border-top:1px solid var(--rule-soft)}
+figure > .tbl-wrap{margin:0}
+.fig-scroll{overflow-x:auto}
+.fig-scroll > svg{min-width:38rem}
+
+/* ---- struct listing ---- */
+.struct{background:var(--surface);border:1px solid var(--rule);border-radius:3px;
+  overflow:hidden;margin:1.5rem 0}
+.struct-h{font-family:var(--f-mono);font-size:.7rem;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--faint);padding:.7rem 1.15rem;
+  border-bottom:1px solid var(--rule-soft);background:var(--sunk)}
+.struct pre{border:0;margin:0;background:transparent}
+
+/* ---- footer ---- */
+footer{grid-column:full;margin-top:4rem;border-top:1px solid var(--rule);
+  background:var(--surface);padding:2rem 1.1rem 3rem}
+.foot-in{max-width:92rem;margin:0 auto;font-family:var(--f-mono);font-size:.72rem;
+  color:var(--faint);display:grid;gap:.45rem}
+.foot-in b{color:var(--muted);font-weight:500}
+.doc{padding-bottom:0}
+
+/* ---- comparison table ---- */
+.cmp{width:100%;border-collapse:collapse;font-family:var(--f-mono);font-size:.8rem;
+  min-width:48rem;table-layout:fixed}
+.cmp th{text-align:right;padding:.7rem 1.5rem .85rem;border-bottom:1px solid var(--rule);
+  font-size:.68rem;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);vertical-align:bottom}
+.cmp th:first-child{text-align:left;padding-left:0;width:26%}
+.cmp th:not(:first-child){width:24.66%}
+.cmp th.col-w16{color:var(--muted)}
+.cmp th.col-lk{color:var(--min)}
+.cmp th.col-fk{color:var(--scale)}
+.cmp th small{display:block;font-size:.63rem;letter-spacing:.06em;text-transform:none;
+  color:var(--faint);font-weight:400;margin-top:.4rem;line-height:1.3}
+.cmp td{padding:.72rem 1.5rem;border-bottom:1px solid var(--rule-soft);text-align:right;
+  font-variant-numeric:tabular-nums;color:var(--body)}
+.cmp td:first-child{text-align:left;padding-left:0;padding-right:2rem;color:var(--muted);
+  font-family:var(--f-body);font-size:.94rem;line-height:1.35}
+.cmp td.col-fk{background:var(--scale-bg)}
+.cmp tr.band td{border-bottom:1px solid var(--rule);color:var(--ink);font-weight:600}
+.cmp tr.grp td{padding-top:1.9rem;padding-bottom:.5rem;font-size:.65rem;letter-spacing:.13em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+  font-family:var(--f-mono)}
+.cmp tr.grp td.col-fk{background:transparent}
+.cmp tr:last-child td{border-bottom:0}
+.win{color:var(--min);font-weight:600}
+.lose{color:var(--hazard);font-weight:600}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div class="doc">
+
+<header class="mast">
+  <div class="mast-in">
+    <div class="eyebrow">FastFlowLM · quantized projection datapath</div>
+    <h1>Q4_K on the NPU</h1>
+    <p class="standfirst">How llama.cpp's Q4_K super-block is re-fitted into <b>bf16 + uint8</b> by the FLM converter, and how the AIE decoding kernel spends that layout across <b>two accumulators</b> that never meet until the K loop is over.</p>
+
+    <div class="ledger">
+      <div class="ledger-cell">
+        <div class="ledger-k">Source format</div>
+        <div class="ledger-v">GGML Q4_K</div>
+        <div class="ledger-n">144 B / 256 weights · 4.500 bpw<br>fp16 S, fp16 M, uint6 s<sub>j</sub>, uint6 m<sub>j</sub><br>w = S·s<sub>j</sub>·q − M·m<sub>j</sub></div>
+      </div>
+      <div class="ledger-arrow" aria-hidden="true">&rarr;</div>
+      <div class="ledger-cell">
+        <div class="ledger-k">FLM q4_k block</div>
+        <div class="ledger-v">q4k_block_t</div>
+        <div class="ledger-n">4736 B / 32×256 weights · 4.625 bpw<br>bf16 S′, bf16 M′, uint8 s′<sub>j</sub>, uint8 m′<sub>j</sub><br>w = S′·s′<sub>j</sub>·q + M′·m′<sub>j</sub></div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="rule-head"><span class="n">01</span><h2>The problem the re-fit solves</h2></div>
+
+  <p>Q4_K's metadata is built for a CPU: an fp16 super-block scale multiplied by a 6-bit per-group integer. The AIE vector unit has no fp16 multiplier worth using — its native high-throughput operand is <strong>bf16</strong>, with an 8-bit significand. Rounding Q4_K's fp16 <span class="term">S</span> straight to bf16 throws away three mantissa bits of a value that every one of 256 weights depends on.</p>
+
+  <p>The converter's answer is not to round <span class="term">S</span> and keep <span class="term">s<sub>j</sub></span>. It is to observe that the kernel only ever uses the <em>product</em> <span class="term">t<sub>j</sub> = S·s<sub>j</sub></span>, then re-derive a fresh pair <span class="term">(bf16 S′, uint8 s′<sub>j</sub>)</span> against that product. The two extra bits gained by going uint6 → uint8 are spent absorbing S′'s rounding error rather than as a plain ×4 — which would be a no-op, since <span class="term">S/4</span> has exactly <span class="term">S</span>'s significand.</p>
+
+  <div class="note-box">
+    <span class="lab">The whole pipeline in one line</span>
+    Read the GGUF block → factor out <span class="term">t<sub>j</sub></span>, <span class="term">u<sub>j</sub></span> exactly in fp32 → apply model reorders → re-fit each side onto (bf16, uint8) per 256 columns → transpose into the kernel's column-major chunk.
+  </div>
+</section>
+
+<section>
+  <div class="rule-head"><span class="n">02</span><h2>Reading the Q4_K block</h2></div>
+
+  <p><code>GGUFTensor.unpack_q4_k</code> walks a 144-byte block covering 256 weights of one row, split into 8 groups of 32.</p>
+
+  <div class="wide bytemap">
+    <div class="bytemap-bar" role="img" aria-label="144-byte Q4_K block: 2 bytes d, 2 bytes dmin, 12 bytes packed scales, 128 bytes nibble-packed quants">
+      <div class="bm-seg bm-d"><span>d</span></div>
+      <div class="bm-seg bm-dmin"><span>dmin</span></div>
+      <div class="bm-seg bm-sc"><span>scales</span></div>
+      <div class="bm-seg bm-qs"><span>qs &mdash; 128 B &mdash; 256 nibble-packed uint4 quants</span></div>
+    </div>
+    <div class="bytemap-legend">
+      <div class="bl-row"><span class="bl-chip" style="background:var(--scale-bg)"></span><span class="bl-b">2 B</span><span class="bl-n">d</span><span class="bl-d">fp16 super-block scale <span class="term">S</span></span></div>
+      <div class="bl-row"><span class="bl-chip" style="background:var(--min-bg)"></span><span class="bl-b">2 B</span><span class="bl-n">dmin</span><span class="bl-d">fp16 super-block min <span class="term">M</span> — an unsigned magnitude that is <em>subtracted</em>, unlike Q4_1's signed +m</span></div>
+      <div class="bl-row"><span class="bl-chip" style="background:var(--hazard-bg)"></span><span class="bl-b">12 B</span><span class="bl-n">scales</span><span class="bl-d">8 uint6 <span class="term">s<sub>j</sub></span> and 8 uint6 <span class="term">m<sub>j</sub></span>, bit-packed across the 12 bytes</span></div>
+      <div class="bl-row"><span class="bl-chip" style="background:var(--sunk)"></span><span class="bl-b">128 B</span><span class="bl-n">qs</span><span class="bl-d">256 uint4 quants; four runs of 32 bytes, low nibbles are one group of 32, high nibbles the next</span></div>
+    </div>
+  </div>
+
+  <h3>Unpacking the 6-bit fields</h3>
+  <p>The 12 scale bytes are not eight tidy 6-bit fields. Groups 0–3 take a plain 6-bit field from the first four bytes; groups 4–7 take a low nibble from the last four bytes plus two high bits borrowed from the first four. This is llama.cpp's <code>get_scale_min_k4</code>, vectorized:</p>
+
+  <pre><i># lo = scales[0:4]   hi = scales[4:8]   top = scales[8:12]</i>
+s6 = concat[ <b>lo &amp; 0x3F</b>,                                <i># j = 0..3</i>
+             <b>(top &amp; 0x0F) | ((lo &gt;&gt; 6) &lt;&lt; 4)</b> ]          <i># j = 4..7</i>
+m6 = concat[ <b>hi &amp; 0x3F</b>,                                <i># j = 0..3</i>
+             <b>(top &gt;&gt; 4)   | ((hi &gt;&gt; 6) &lt;&lt; 4)</b> ]          <i># j = 4..7</i></pre>
+
+  <h3>Factoring, not re-quantizing</h3>
+  <p>What comes back out of the unpacker is not the Q4_K structure. It is the collapsed product, one pair per group of 32:</p>
+
+  <div class="eq">
+    <span class="eq-label">unpack_q4_k returns</span>
+    <span class="p-scale">t<sub>j</sub> = S · s<sub>j</sub></span> &nbsp;&nbsp;and&nbsp;&nbsp; <span class="p-min">u<sub>j</sub> = M · m<sub>j</sub></span> &nbsp;&nbsp;<span class="cmt">— both float32, both exact</span><br>
+    so that &nbsp; w<sup>j</sup><sub>i</sub> = t<sub>j</sub>·q<sup>j</sup><sub>i</sub> − u<sub>j</sub>
+  </div>
+
+  <p>Exact is the operative word: an 11-bit fp16 significand times a 6-bit integer needs 17 bits, and fp32 carries 24. Nothing is lost, nothing is re-quantized, and <strong>no super-block structure survives this step</strong>.</p>
+
+  <div class="note-box min">
+    <span class="lab">Why that matters</span>
+    The result has the same shape and the same 32-column granularity as <code>unpack_q4_1</code>'s <span class="term">(d, m, qw)</span>, so it can pass through every model-specific row/column reorder untouched. Some of those reorders move chunks finer than 256 columns — <code>ssm_out_proj</code> moves 128-column chunks — which would leave a super-block's metadata unrepresentable if it had been fixed here. The re-fit is deliberately deferred until <em>after</em> the reorders, inside <code>_pack_q4k</code>, so it always fits the 8 groups that genuinely end up sharing a super-block.
+  </div>
+
+  <p>There is a second reason the direct path exists. The obvious alternative — dequantize Q4_K to bf16, then re-encode as Q4_1 — costs 0.240 bits of ENOB <em>and</em> 0.375 bpw against reading it natively, and damages the distribution tail far more than the mean. Q4_K therefore gets a dedicated branch rather than the generic dequantize/requantize fallback that q5 and q6 still take.</p>
+</section>
+
+<section>
+  <div class="rule-head"><span class="n">03</span><h2>The re-fit: (uint6, fp16) → (uint8, bf16)</h2></div>
+
+  <p><code>_refit_one_side</code> runs once per side per super-block. Given the 8 exact <span class="term">t<sub>j</sub></span>, it produces one bf16-representable <span class="term">P′</span> and 8 integers <span class="term">p′<sub>j</sub> ∈ [0, 255]</span> with <span class="term">P′·p′<sub>j</sub> ≈ t<sub>j</sub></span>. Four decisions carry the whole method:</p>
+
+  <h3>1 — The sign rides on P′</h3>
+  <p><span class="term">p′<sub>j</sub></span> is unsigned, so the sign is pulled out of the largest-magnitude entry and folded into <span class="term">P′</span>. Q4_K's <span class="term">d</span> and <span class="term">dmin</span> are non-negative, so every <span class="term">t<sub>j</sub></span> in a group already shares one sign.</p>
+
+  <h3>2 — P′ is rounded <em>away from zero</em></h3>
+  <p><code>_to_bf16_up</code> rounds the magnitude of <span class="term">max|t<sub>j</sub>| / 255</span> up to a bf16 value. Rounding up is what makes overflow structurally impossible: with a slightly-too-large <span class="term">P′</span>, the quotient <span class="term">t<sub>j</sub>/P′</span> can never exceed the 255 cap.</p>
+
+  <h3>3 — p′<sub>j</sub> is re-derived against the rounded P′</h3>
+  <p>This is where the two extra bits get spent. <span class="term">P′</span> is fixed first; only then is each <span class="term">p′<sub>j</sub> = clip(round(t<sub>j</sub>/P′), 0, 255)</span> computed. Since the quotient runs up to 255, it can absorb up to <span class="term">255·2<sup>−8</sup> ≈ 1</span> integer step of P′'s rounding error — and the uint8 grid, four times finer than the uint6 grid it came from, can represent exactly that.</p>
+
+  <h3>4 — A small search over P′ candidates</h3>
+  <p>The smallest admissible <span class="term">P′</span> is not always the best one. A slightly larger <span class="term">P′</span> often aligns with several <span class="term">t<sub>j</sub></span> at once. The code scores <code>search + 1</code> consecutive bf16 values starting at the base and keeps whichever minimizes <span class="term">Σ<sub>j</sub> (P′p′<sub>j</sub> − t<sub>j</sub>)²</span>. <strong>search = 3</strong> is the knee of the measured sweep; it is also what removes the re-fit's sensitivity to how spread the <span class="term">t<sub>j</sub></span> are.</p>
+
+  <pre>base = <b>to_bf16_up</b>(max|t| / 255)              <i># rounded away from zero</i>
+for c in 0..search:
+    P_c = <b>bf16_next_up</b>(base, c)               <i># c-th bf16 value above base</i>
+    p_c = clip(rint(t / P_c), 0, 255)
+    err = sum((P_c * p_c - t)**2)              <i># scored in float64</i>
+    keep the (P_c, p_c) with the smallest err</pre>
+
+  <p>Both sides go through the same routine — <span class="p-scale">S′, s′<sub>j</sub></span> from <span class="term">t<sub>j</sub></span> and <span class="p-min">M′, m′<sub>j</sub></span> from <span class="term">u<sub>j</sub></span> — and then one small semantic fix is applied at pack time: GGUF <em>subtracts</em> the min, while the kernel <em>adds</em> both accumulators, so <strong>M′ is stored negated</strong>.</p>
+</section>
+
+<section>
+  <div class="rule-head"><span class="n">04</span><h2>The packed block</h2></div>
+
+  <p>One <code>q4k_block_t</code> covers a 32 × 256 chunk — <code>QXNX_ROW_BLOCK_SIZE</code> rows by <code>QXNX_COL_BLOCK_SIZE</code> columns — laid out column-major over the chunk. Because <code>aie_array_layout.h</code> pins <code>PARALLEL_ROWS = QXNX_ROW_BLOCK_SIZE</code> for <code>__Q4_K__</code>, a column <em>is</em> the whole row block: Q4_K is the one format the layer never strides, and the cores take a single pass.</p>
+
+  <div class="struct wide">
+    <div class="struct-h">kernels/model_spec.h</div>
+    <pre>typedef struct {
+    uint8 <b>scales</b>[ROW_BLOCK * COL_BLOCK / GGML_GROUP_SIZE];  <i>// s'_j</i>
+    uint8 <b>mins</b>  [ROW_BLOCK * COL_BLOCK / GGML_GROUP_SIZE];  <i>// m'_j</i>
+    uint4 <b>qs</b>    [ROW_BLOCK * COL_BLOCK / 2];
+    bf16  <b>S</b>     [ROW_BLOCK * COL_BLOCK / 256];
+    bf16  <b>M</b>     [ROW_BLOCK * COL_BLOCK / 256];             <i>// stored negated</i>
+} q4k_block_t;</pre>
+  </div>
+
+  <div class="tbl-wrap wide">
+    <table>
+      <caption class="visually-hidden" hidden>Byte budget of one 32×256 q4k_block_t</caption>
+      <thead><tr>
+        <th>Field</th><th>Shape, column-major</th><th class="num">Bytes</th><th class="num">bits/weight</th>
+      </tr></thead>
+      <tbody>
+        <tr><td><span class="lead">scales</span></td><td>8 groups × 32 rows, uint8</td><td class="num">256</td><td class="num">0.250</td></tr>
+        <tr><td><span class="lead">mins</span></td><td>8 groups × 32 rows, uint8</td><td class="num">256</td><td class="num">0.250</td></tr>
+        <tr><td><span class="lead">qs</span></td><td>256 cols × 16 bytes (32 nibbles)</td><td class="num">4096</td><td class="num">4.000</td></tr>
+        <tr><td><span class="lead">S</span></td><td>1 super-block × 32 rows, bf16</td><td class="num">64</td><td class="num">0.0625</td></tr>
+        <tr><td><span class="lead">M</span></td><td>1 super-block × 32 rows, bf16</td><td class="num">64</td><td class="num">0.0625</td></tr>
+        <tr class="total"><td>q4k_block_t</td><td>8192 weights</td><td class="num">4736</td><td class="num">4.625</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>Within <code>qs</code>, one column is 32 nibbles — the whole row block — with rows paired into a byte, the even row in the low nibble, and columns ascending. Because a 256-column chunk holds exactly one super-block, <span class="term">S</span> and <span class="term">M</span> reduce to a single 32-wide bf16 vector each, and the kernel needs no super-block loop at all.</p>
+</section>
+
+<section>
+  <div class="rule-head"><span class="n">05</span><h2>Reduce first, scale after</h2></div>
+
+  <p>The kernel evaluates <span class="term">y += W·x</span> in a shape chosen so the scalar metadata meets the data as late as possible:</p>
+
+  <div class="eq">
+    <span class="eq-label">what the kernel computes</span>
+    w = <span class="p-scale">S′·s′<sub>j</sub></span>·q &nbsp;+&nbsp; <span class="p-min">M′·m′<sub>j</sub></span><br>
+    y = <span class="p-scale">S′ · Σ<sub>j</sub> s′<sub>j</sub>(Σ<sub>i</sub> q<sub>i</sub>x<sub>i</sub>)</span> &nbsp;+&nbsp; <span class="p-min">M′ · Σ<sub>j</sub> m′<sub>j</sub>(Σ<sub>i</sub> x<sub>i</sub>)</span>
+  </div>
+
+  <p>The whole 32-value group is reduced against <span class="term">x</span> in one float32 accumulator, and only then meets <span class="term">s′<sub>j</sub></span>. <span class="term">S′</span> is applied once per super-block. The min path never needs the quants at all — it only needs <span class="term">Σ<sub>i</sub> x<sub>i</sub></span> per group, which is the same for every row and is computed once per <code>mvm()</code> call.</p>
+
+  <p>Before the code, the shape. One super-block is 8 groups of 32 columns, and the reduce happens in three levels &#8212; each one folding a wider span of data into fewer numbers:</p>
+
+  <figure class="wide fig-scroll">
+    <svg viewBox="0 0 880 578" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="sb-t">
+      <title id="sb-t">One super-block of 256 columns is 8 groups of 32. Each group is reduced on its own, the 8 group results fold into two accumulators, and the two accumulators meet only once, at the very end.</title>
+      <defs>
+        <marker id="a2-s" viewBox="0 0 8 8" refX="6" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--scale-line)"></path></marker>
+        <marker id="a2-m" viewBox="0 0 8 8" refX="6" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--min-line)"></path></marker>
+        <marker id="a2-n" viewBox="0 0 8 8" refX="6" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--faint)"></path></marker>
+      </defs>
+      <style>
+        .sb-cell{fill:var(--sunk);stroke:var(--rule);stroke-width:1}
+        .sb-lv{font-family:var(--f-mono);font-size:9px;fill:var(--faint);letter-spacing:.13em}
+        .sb-lvn{font-family:var(--f-mono);font-size:9px;fill:var(--muted)}
+        .sb-j{font-family:var(--f-mono);font-size:11px;fill:var(--ink)}
+        .sb-c{font-family:var(--f-mono);font-size:10px;fill:var(--scale)}
+        .sb-t{font-family:var(--f-mono);font-size:10px;fill:var(--min)}
+      </style>
+      <text class="tl" x="104" y="17">ONE SUPER-BLOCK &#8212; 256 COLUMNS OF ONE 32-ROW BLOCK</text>
+      <rect x="640" y="9" width="9" height="9" fill="var(--scale-bg)" stroke="var(--scale-line)"></rect>
+      <text class="tl" x="654" y="17" fill="var(--scale)">SCALE PATH</text>
+      <rect x="740" y="9" width="9" height="9" fill="var(--min-bg)" stroke="var(--min-line)"></rect>
+      <text class="tl" x="754" y="17" fill="var(--min)">MIN PATH</text>
+      <text class="sb-lv" x="8" y="46">STORED</text>
+      <text class="sb-lvn" x="8" y="59">weights</text>
+      <rect class="sb-cell" x="104" y="26" width="84" height="54" rx="3"></rect>
+      <text class="sb-j" x="114" y="46">j = 0</text>
+      <text class="ts" x="114" y="62">32 cols</text>
+      <text class="ts" x="114" y="74">uint4 q</text>
+      <rect class="sb-cell" x="196" y="26" width="84" height="54" rx="3"></rect>
+      <text class="sb-j" x="206" y="46">j = 1</text>
+      <text class="ts" x="206" y="62">32 cols</text>
+      <text class="ts" x="206" y="74">uint4 q</text>
+      <rect class="sb-cell" x="288" y="26" width="84" height="54" rx="3"></rect>
+      <text class="sb-j" x="298" y="46">j = 2</text>
+      <text class="ts" x="298" y="62">32 cols</text>
+      <text class="ts" x="298" y="74">uint4 q</text>
+      <rect class="sb-cell" x="380" y="26" width="84" height="54" rx="3"></rect>
+      <text class="sb-j" x="390" y="46">j = 3</text>
+      <text class="ts" x="390" y="62">32 cols</text>
+      <text class="ts" x="390" y="74">uint4 q</text>
+      <rect class="sb-cell" x="472" y="26" width="84" height="54" rx="3"></rect>
+      <text class="sb-j" x="482" y="46">j = 4</text>
+      <text class="ts" x="482" y="62">32 cols</text>
+      <text class="ts" x="482" y="74">uint4 q</text>
+      <rect class="sb-cell" x="564" y="26" width="84" height="54" rx="3"></rect>
+      <text class="sb-j" x="574" y="46">j = 5</text>
+      <text class="ts" x="574" y="62">32 cols</text>
+      <text class="ts" x="574" y="74">uint4 q</text>
+      <rect class="sb-cell" x="656" y="26" width="84" height="54" rx="3"></rect>
+      <text class="sb-j" x="666" y="46">j = 6</text>
+      <text class="ts" x="666" y="62">32 cols</text>
+      <text class="ts" x="666" y="74">uint4 q</text>
+      <rect class="sb-cell" x="748" y="26" width="84" height="54" rx="3"></rect>
+      <text class="sb-j" x="758" y="46">j = 7</text>
+      <text class="ts" x="758" y="62">32 cols</text>
+      <text class="ts" x="758" y="74">uint4 q</text>
+      <text class="sb-lv" x="8" y="103">STORED</text>
+      <text class="sb-lvn" x="8" y="116">metadata</text>
+      <rect class="bx bx-s" x="104" y="88" width="39" height="24" rx="2"></rect>
+      <text class="sb-c" x="113" y="104">s&#8242;<tspan dy="3" font-size="8">0</tspan></text>
+      <rect class="bx bx-m" x="149" y="88" width="39" height="24" rx="2"></rect>
+      <text class="sb-t" x="157" y="104">m&#8242;<tspan dy="3" font-size="8">0</tspan></text>
+      <rect class="bx bx-s" x="196" y="88" width="39" height="24" rx="2"></rect>
+      <text class="sb-c" x="205" y="104">s&#8242;<tspan dy="3" font-size="8">1</tspan></text>
+      <rect class="bx bx-m" x="241" y="88" width="39" height="24" rx="2"></rect>
+      <text class="sb-t" x="249" y="104">m&#8242;<tspan dy="3" font-size="8">1</tspan></text>
+      <rect class="bx bx-s" x="288" y="88" width="39" height="24" rx="2"></rect>
+      <text class="sb-c" x="297" y="104">s&#8242;<tspan dy="3" font-size="8">2</tspan></text>
+      <rect class="bx bx-m" x="333" y="88" width="39" height="24" rx="2"></rect>
+      <text class="sb-t" x="341" y="104">m&#8242;<tspan dy="3" font-size="8">2</tspan></text>
+      <rect class="bx bx-s" x="380" y="88" width="39" height="24" rx="2"></rect>
+      <text class="sb-c" x="389" y="104">s&#8242;<tspan dy="3" font-size="8">3</tspan></text>
+      <rect class="bx bx-m" x="425" y="88" width="39" height="24" rx="2"></rect>
+      <text class="sb-t" x="433" y="104">m&#8242;<tspan dy="3" font-size="8">3</tspan></text>
+      <rect class="bx bx-s" x="472" y="88" width="39" height="24" rx="2"></rect>
+      <text class="sb-c" x="481" y="104">s&#8242;<tspan dy="3" font-size="8">4</tspan></text>
+      <rect class="bx bx-m" x="517" y="88" width="39" height="24" rx="2"></rect>
+      <text class="sb-t" x="525" y="104">m&#8242;<tspan dy="3" font-size="8">4</tspan></text>
+      <rect class="bx bx-s" x="564" y="88" width="39" height="24" rx="2"></rect>
+      <text class="sb-c" x="573" y="104">s&#8242;<tspan dy="3" font-size="8">5</tspan></text>
+      <rect class="bx bx-m" x="609" y="88" width="39" height="24" rx="2"></rect>
+      <text class="sb-t" x="617" y="104">m&#8242;<tspan dy="3" font-size="8">5</tspan></text>
+      <rect class="bx bx-s" x="656" y="88" width="39" height="24" rx="2"></rect>
+      <text class="sb-c" x="665" y="104">s&#8242;<tspan dy="3" font-size="8">6</tspan></text>
+      <rect class="bx bx-m" x="701" y="88" width="39" height="24" rx="2"></rect>
+      <text class="sb-t" x="709" y="104">m&#8242;<tspan dy="3" font-size="8">6</tspan></text>
+      <rect class="bx bx-s" x="748" y="88" width="39" height="24" rx="2"></rect>
+      <text class="sb-c" x="757" y="104">s&#8242;<tspan dy="3" font-size="8">7</tspan></text>
+      <rect class="bx bx-m" x="793" y="88" width="39" height="24" rx="2"></rect>
+      <text class="sb-t" x="801" y="104">m&#8242;<tspan dy="3" font-size="8">7</tspan></text>
+      <text class="tl" x="838" y="104">uint8</text>
+      <text class="sb-lv" x="8" y="143">INPUT</text>
+      <rect class="bx" x="104" y="124" width="728" height="30" rx="3"></rect>
+      <text class="ts" x="118" y="143">x[256] bf16 activations &#8212; the same 256 values for every output row</text>
+      <line x1="192" y1="126" x2="192" y2="152" stroke="var(--rule)" stroke-dasharray="2 3"></line>
+      <line x1="284" y1="126" x2="284" y2="152" stroke="var(--rule)" stroke-dasharray="2 3"></line>
+      <line x1="376" y1="126" x2="376" y2="152" stroke="var(--rule)" stroke-dasharray="2 3"></line>
+      <line x1="468" y1="126" x2="468" y2="152" stroke="var(--rule)" stroke-dasharray="2 3"></line>
+      <line x1="560" y1="126" x2="560" y2="152" stroke="var(--rule)" stroke-dasharray="2 3"></line>
+      <line x1="652" y1="126" x2="652" y2="152" stroke="var(--rule)" stroke-dasharray="2 3"></line>
+      <line x1="744" y1="126" x2="744" y2="152" stroke="var(--rule)" stroke-dasharray="2 3"></line>
+      <path class="ln" d="M146,158 L146,192" marker-end="url(#a2-n)"></path>
+      <path class="ln" d="M238,158 L238,192" marker-end="url(#a2-n)"></path>
+      <path class="ln" d="M330,158 L330,192" marker-end="url(#a2-n)"></path>
+      <path class="ln" d="M422,158 L422,192" marker-end="url(#a2-n)"></path>
+      <path class="ln" d="M514,158 L514,192" marker-end="url(#a2-n)"></path>
+      <path class="ln" d="M606,158 L606,192" marker-end="url(#a2-n)"></path>
+      <path class="ln" d="M698,158 L698,192" marker-end="url(#a2-n)"></path>
+      <path class="ln" d="M790,158 L790,192" marker-end="url(#a2-n)"></path>
+      <text class="sb-lv" x="8" y="212">LEVEL 1</text>
+      <text class="sb-lvn" x="8" y="225">per group</text>
+      <text class="sb-lvn" x="8" y="238">&#215; 8, float32</text>
+      <rect class="bx bx-s" x="106" y="198" width="39" height="28" rx="2"></rect>
+      <text class="sb-c" x="111" y="216">&#931;q&#183;x</text>
+      <rect class="bx bx-m" x="149" y="198" width="39" height="28" rx="2"></rect>
+      <text class="sb-t" x="160" y="216">&#931;x</text>
+      <rect class="bx bx-s" x="198" y="198" width="39" height="28" rx="2"></rect>
+      <text class="sb-c" x="203" y="216">&#931;q&#183;x</text>
+      <rect class="bx bx-m" x="241" y="198" width="39" height="28" rx="2"></rect>
+      <text class="sb-t" x="252" y="216">&#931;x</text>
+      <rect class="bx bx-s" x="290" y="198" width="39" height="28" rx="2"></rect>
+      <text class="sb-c" x="295" y="216">&#931;q&#183;x</text>
+      <rect class="bx bx-m" x="333" y="198" width="39" height="28" rx="2"></rect>
+      <text class="sb-t" x="344" y="216">&#931;x</text>
+      <rect class="bx bx-s" x="382" y="198" width="39" height="28" rx="2"></rect>
+      <text class="sb-c" x="387" y="216">&#931;q&#183;x</text>
+      <rect class="bx bx-m" x="425" y="198" width="39" height="28" rx="2"></rect>
+      <text class="sb-t" x="436" y="216">&#931;x</text>
+      <rect class="bx bx-s" x="474" y="198" width="39" height="28" rx="2"></rect>
+      <text class="sb-c" x="479" y="216">&#931;q&#183;x</text>
+      <rect class="bx bx-m" x="517" y="198" width="39" height="28" rx="2"></rect>
+      <text class="sb-t" x="528" y="216">&#931;x</text>
+      <rect class="bx bx-s" x="566" y="198" width="39" height="28" rx="2"></rect>
+      <text class="sb-c" x="571" y="216">&#931;q&#183;x</text>
+      <rect class="bx bx-m" x="609" y="198" width="39" height="28" rx="2"></rect>
+      <text class="sb-t" x="620" y="216">&#931;x</text>
+      <rect class="bx bx-s" x="658" y="198" width="39" height="28" rx="2"></rect>
+      <text class="sb-c" x="663" y="216">&#931;q&#183;x</text>
+      <rect class="bx bx-m" x="701" y="198" width="39" height="28" rx="2"></rect>
+      <text class="sb-t" x="712" y="216">&#931;x</text>
+      <rect class="bx bx-s" x="750" y="198" width="39" height="28" rx="2"></rect>
+      <text class="sb-c" x="755" y="216">&#931;q&#183;x</text>
+      <rect class="bx bx-m" x="793" y="198" width="39" height="28" rx="2"></rect>
+      <text class="sb-t" x="804" y="216">&#931;x</text>
+      <path class="ln-s" d="M125,226 L125,262"></path>
+      <path class="ln-m" d="M168,226 L168,284"></path>
+      <path class="ln-s" d="M217,226 L217,262"></path>
+      <path class="ln-m" d="M260,226 L260,284"></path>
+      <path class="ln-s" d="M309,226 L309,262"></path>
+      <path class="ln-m" d="M352,226 L352,284"></path>
+      <path class="ln-s" d="M401,226 L401,262"></path>
+      <path class="ln-m" d="M444,226 L444,284"></path>
+      <path class="ln-s" d="M493,226 L493,262"></path>
+      <path class="ln-m" d="M536,226 L536,284"></path>
+      <path class="ln-s" d="M585,226 L585,262"></path>
+      <path class="ln-m" d="M628,226 L628,284"></path>
+      <path class="ln-s" d="M677,226 L677,262"></path>
+      <path class="ln-m" d="M720,226 L720,284"></path>
+      <path class="ln-s" d="M769,226 L769,262"></path>
+      <path class="ln-m" d="M812,226 L812,284"></path>
+      <line x1="125" y1="262" x2="769" y2="262" stroke="var(--scale-line)" stroke-width="1.4"></line>
+      <line x1="168" y1="284" x2="266" y2="284" stroke="var(--min-line)" stroke-width="1.4"></line>
+      <line x1="284" y1="284" x2="812" y2="284" stroke="var(--min-line)" stroke-width="1.4"></line>
+      <path class="ln-s" d="M275,262 L275,304" marker-end="url(#a2-s)"></path>
+      <path class="ln-m" d="M663,284 L663,304" marker-end="url(#a2-m)"></path>
+      <text class="tl" x="285" y="278" fill="var(--scale)">&#215; s&#8242;&#8341;  uint8, exact in bf16</text>
+      <text class="tl" x="673" y="278" fill="var(--min)">&#215; m&#8242;&#8341;</text>
+      <text class="sb-lv" x="8" y="326">LEVEL 2</text>
+      <text class="sb-lvn" x="8" y="339">per super-block</text>
+      <text class="sb-lvn" x="8" y="352">2 accumulators</text>
+      <rect class="bx bx-s" x="104" y="308" width="340" height="58" rx="3"></rect>
+      <text class="t" x="120" y="330">acc_s += split(&#931;q&#183;x) &#183; s&#8242;&#8341;</text>
+      <text class="ts" x="120" y="347">all 8 groups fold into ONE float32 accumulator</text>
+      <text class="ts" x="120" y="360">split into 2 bf16 limbs first &#8212; 2 MACs, ~17 bits</text>
+      <rect class="bx bx-m" x="492" y="308" width="340" height="58" rx="3"></rect>
+      <text class="t" x="508" y="330">acc_m += m&#8242;&#8341; &#183; (lo, then hi)</text>
+      <text class="ts" x="508" y="347">&#931;x arrives pre-split by mvm(), smallest limb first</text>
+      <text class="ts" x="508" y="360">computed once, reused by every row block</text>
+      <path class="ln-s" d="M275,366 L275,404" marker-end="url(#a2-s)"></path>
+      <path class="ln-m" d="M663,366 L663,404" marker-end="url(#a2-m)"></path>
+      <text class="tl" x="285" y="388" fill="var(--scale)">&#215; S&#8242;  bf16, once</text>
+      <text class="tl" x="673" y="388" fill="var(--min)">&#215; M&#8242;  bf16, negated</text>
+      <text class="sb-lv" x="8" y="428">LEVEL 3</text>
+      <text class="sb-lvn" x="8" y="441">per K block</text>
+      <rect class="bx bx-s" x="104" y="408" width="340" height="52" rx="3"></rect>
+      <text class="t" x="120" y="430">c_accum_s += split(acc_s) &#183; S&#8242;</text>
+      <text class="ts" x="120" y="447">held in registers across the whole K loop</text>
+      <rect class="bx bx-m" x="492" y="408" width="340" height="52" rx="3"></rect>
+      <text class="t" x="508" y="430">c_accum_m += split(acc_m) &#183; M&#8242;</text>
+      <text class="ts" x="508" y="447">never touches the scale path until the end</text>
+      <path class="ln" d="M832,434 L856,434 L856,212 L832,212" marker-end="url(#a2-n)" stroke-dasharray="4 3"></path>
+      <text class="tl" x="866" y="360" transform="rotate(-90 866 360)">&#215; K/256 SUPER-BLOCKS</text>
+      <path class="ln-s" d="M275,460 L275,486 L410,486 L410,506" marker-end="url(#a2-s)"></path>
+      <path class="ln-m" d="M663,460 L663,486 L470,486 L470,506" marker-end="url(#a2-m)"></path>
+      <rect class="bx" x="250" y="510" width="400" height="52" rx="3"></rect>
+      <text class="t" x="268" y="532">y = c_accum_s + c_accum_m</text>
+      <text class="ts" x="268" y="549">the two paths meet exactly once, after every K block</text>
+    </svg>
+    <figcaption>Read it downward. <b>Level 1</b> reduces each of the 8 groups on its own &#8212; 32 multiply-accumulates for the scale path, and a plain sum of the activations for the min path. <b>Level 2</b> is where the per-group uint8 scalars enter and the 8 group results collapse into two accumulators. <b>Level 3</b> applies the two bf16 super-block scalars, once. The scale path (copper) and min path (teal) stay apart the entire way down, which is why the split into two bf16 limbs matters at every join: the final subtraction cancels most of both, so any error introduced above it is amplified ~2.3&#215;.</figcaption>
+  </figure>
+
+  <figure class="wide fig-scroll">
+    <svg viewBox="0 0 880 588" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="dp-t">
+      <title id="dp-t">Three-level accumulation: the scale path and the min path run as separate float32 accumulators and are added only after the K loop.</title>
+      <defs>
+        <marker id="ah-s" viewBox="0 0 8 8" refX="6" refY="4" markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M0,0 L8,4 L0,8 z" fill="var(--scale-line)"></path>
+        </marker>
+        <marker id="ah-m" viewBox="0 0 8 8" refX="6" refY="4" markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M0,0 L8,4 L0,8 z" fill="var(--min-line)"></path>
+        </marker>
+        <marker id="ah-n" viewBox="0 0 8 8" refX="6" refY="4" markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M0,0 L8,4 L0,8 z" fill="var(--faint)"></path>
+        </marker>
+      </defs>
+      <style>
+        .bx{fill:var(--surface);stroke:var(--rule);stroke-width:1;rx:3}
+        .bx-s{fill:var(--scale-bg);stroke:var(--scale-line)}
+        .bx-m{fill:var(--min-bg);stroke:var(--min-line)}
+        .t{font-family:var(--f-mono);font-size:12.5px;fill:var(--ink)}
+        .ts{font-family:var(--f-mono);font-size:10.5px;fill:var(--muted)}
+        .tl{font-family:var(--f-mono);font-size:9.5px;fill:var(--faint);letter-spacing:.1em}
+        .lbl-s{font-family:var(--f-mono);font-size:10px;fill:var(--scale);letter-spacing:.09em}
+        .lbl-m{font-family:var(--f-mono);font-size:10px;fill:var(--min);letter-spacing:.09em}
+        .ln{stroke:var(--faint);stroke-width:1;fill:none}
+        .ln-s{stroke:var(--scale-line);stroke-width:1.4;fill:none}
+        .ln-m{stroke:var(--min-line);stroke-width:1.4;fill:none}
+      </style>
+
+      <!-- stage A: inputs -->
+      <rect class="bx" x="60" y="16" width="760" height="46"></rect>
+      <text class="t" x="80" y="38">x[32] bf16 activations</text>
+      <text class="ts" x="80" y="53">one group of 32 columns</text>
+      <text class="t" x="480" y="38">q  32×32 uint4 nibbles</text>
+      <text class="ts" x="480" y="53">4 loads of 128 nibbles = 4 columns each</text>
+      <line class="ln" x1="440" y1="22" x2="440" y2="56" stroke-dasharray="3 3"></line>
+
+      <!-- column headings -->
+      <text class="lbl-s" x="60" y="93">SCALE PATH</text>
+      <text class="lbl-m" x="470" y="93">MIN PATH</text>
+      <line x1="60" y1="100" x2="420" y2="100" stroke="var(--scale-line)" stroke-width="1"></line>
+      <line x1="470" y1="100" x2="820" y2="100" stroke="var(--min-line)" stroke-width="1"></line>
+
+      <!-- stage B -->
+      <path class="ln-s" d="M240,62 L240,116" marker-end="url(#ah-s)"></path>
+      <path class="ln-m" d="M645,62 L645,116" marker-end="url(#ah-m)"></path>
+
+      <rect class="bx bx-s" x="60" y="120" width="360" height="62" rx="3"></rect>
+      <text class="t" x="78" y="144">temp_acc  =  Σᵢ qᵢ · xᵢ</text>
+      <text class="ts" x="78" y="162">32 MACs, PARALLEL_ROWS wide</text>
+      <text class="ts" x="78" y="176">accum&lt;accfloat, 32&gt;, zeroed per group</text>
+
+      <rect class="bx bx-m" x="470" y="120" width="350" height="62" rx="3"></rect>
+      <text class="t" x="488" y="144">Σᵢ xᵢ  →  (hi, lo) bf16 limbs</text>
+      <text class="ts" x="488" y="162">reduced in float32, once per mvm()</text>
+      <text class="ts" x="488" y="176">shared by every row block</text>
+
+      <!-- stage C -->
+      <path class="ln-s" d="M240,182 L240,220" marker-end="url(#ah-s)"></path>
+      <path class="ln-m" d="M645,182 L645,220" marker-end="url(#ah-m)"></path>
+      <text class="tl" x="250" y="206">× s′ⱼ  uint8 → bf16, exact</text>
+      <text class="tl" x="655" y="206">× m′ⱼ  uint8 → bf16, exact</text>
+
+      <rect class="bx bx-s" x="60" y="224" width="360" height="58" rx="3"></rect>
+      <text class="t" x="78" y="248">acc_s += split(temp_acc) · s′ⱼ</text>
+      <text class="ts" x="78" y="266">mac_f32_bf16_low — 2 MACs, ~17 bits</text>
+
+      <rect class="bx bx-m" x="470" y="224" width="350" height="58" rx="3"></rect>
+      <text class="t" x="488" y="248">acc_m += m′ⱼ · lo, then · hi</text>
+      <text class="ts" x="488" y="266">smallest limb joins the accumulator first</text>
+
+      <!-- group loop back -->
+      <path class="ln" d="M60,253 L36,253 L36,151 L60,151" marker-end="url(#ah-n)" stroke-dasharray="4 3"></path>
+      <text class="tl" x="8" y="200" transform="rotate(-90 8 200)">× 8 GROUPS</text>
+      <path class="ln" d="M820,253 L844,253 L844,151 L820,151" marker-end="url(#ah-n)" stroke-dasharray="4 3"></path>
+
+      <!-- stage D -->
+      <path class="ln-s" d="M240,282 L240,320" marker-end="url(#ah-s)"></path>
+      <path class="ln-m" d="M645,282 L645,320" marker-end="url(#ah-m)"></path>
+      <text class="tl" x="250" y="306">× S′  stored bf16</text>
+      <text class="tl" x="655" y="306">× M′  stored bf16, negated</text>
+
+      <rect class="bx bx-s" x="60" y="324" width="360" height="58" rx="3"></rect>
+      <text class="t" x="78" y="348">c_accum_s += split(acc_s) · S′</text>
+      <text class="ts" x="78" y="366">once per 32×256 block; lives in registers</text>
+
+      <rect class="bx bx-m" x="470" y="324" width="350" height="58" rx="3"></rect>
+      <text class="t" x="488" y="348">c_accum_m += split(acc_m) · M′</text>
+      <text class="ts" x="488" y="366">the two paths never meet inside the loop</text>
+
+      <!-- K loop back -->
+      <path class="ln" d="M60,353 L20,353 L20,140 L60,140" marker-end="url(#ah-n)" stroke-dasharray="4 3"></path>
+      <path class="ln" d="M820,353 L860,353 L860,140 L820,140" marker-end="url(#ah-n)" stroke-dasharray="4 3"></path>
+      <text class="tl" x="866" y="260" transform="rotate(-90 866 260)">× K/256 BLOCKS</text>
+
+      <!-- stage E -->
+      <path class="ln-s" d="M240,382 L240,420 L400,420 L400,448" marker-end="url(#ah-s)"></path>
+      <path class="ln-m" d="M645,382 L645,420 L480,420 L480,448" marker-end="url(#ah-m)"></path>
+
+      <rect class="bx" x="230" y="452" width="420" height="58" rx="3"></rect>
+      <text class="t" x="250" y="476">_Q4K_finalize:  y = c_accum_s + c_accum_m</text>
+      <text class="ts" x="250" y="494">one add, in the accumulator domain, per output row block</text>
+
+      <path class="ln" d="M440,510 L440,540" marker-end="url(#ah-n)"></path>
+      <rect class="bx" x="290" y="544" width="300" height="34" rx="3"></rect>
+      <text class="t" x="310" y="566">y_acc[32]  float32  →  bf16 out</text>
+    </svg>
+    <figcaption>_Q4K_x_bf16 (q4_core.h) and mvm (proj_main.cc). Dashed returns are loop carries; both accumulator pairs stay in registers for the entire K loop, so nothing round-trips through memory between blocks.</figcaption>
+  </figure>
+
+  <h3>The inner load shape</h3>
+  <p>One 512-bit uint4 load pulls 128 nibbles. At <code>PARALLEL_ROWS = 32</code> that is 4 whole columns, so a 32-column group takes 8 loads. Each load is widened to bf16 — exact, since uint4 ⊂ bf16 — and then split into 4 row-vectors, each MAC'd against one bf16 scalar from the activation vector. A 32-wide MAC already covers the accumulator dependency, so a single <code>temp_acc</code> suffices; there is nothing to interleave against.</p>
+
+  <pre>for g in 0..8:                          <i>// groups per super-block</i>
+  b_col = load_v&lt;32&gt;(x)
+  temp_acc = 0
+  for l in 0..8:                        <i>// 8 loads of 128 nibbles</i>
+    q_bf16 = to_float(load_v&lt;128&gt;(qs))  <i>// uint4 → bf16, exact</i>
+    for k in 0..4:                      <i>// 4 columns per load</i>
+      <b>temp_acc = mac(temp_acc, q_bf16.extract&lt;32&gt;(k), b_col.get(4*l+k))</b>
+  <b>acc_s = mac_f32_bf16_low(acc_s, temp_acc, s′)</b>
+  <b>acc_m = mac(mac(acc_m, m′, lo), m′, hi)</b></pre>
+</section>
+
+<section>
+  <div class="rule-head"><span class="n">06</span><h2>Where the rounding is allowed to land</h2></div>
+
+  <p>Every multiplier operand in this datapath is <strong>bf16-exact by construction</strong>. <span class="term">q</span> is a uint4; <span class="term">s′</span> and <span class="term">m′</span> are uint8, and bf16 holds every integer up to 256; <span class="term">S′</span> and <span class="term">M′</span> were <em>stored</em> as bf16. A rounding can therefore only ever land on an accumulator — and the design's whole numerical argument is about which of those accumulators are allowed to round.</p>
+
+  <div class="note-box hazard">
+    <span class="lab">The cancellation ratio</span>
+    The scale path and the min path are large and opposite; <span class="term">y</span> is the small difference between them. Measured RMS over real layers: the scale path runs 13.1 against a 5.67 output (2.32×) and 36.6 against 15.9 (2.30×). Any relative error introduced <em>before</em> that cancellation is amplified ~2.3×, and it does not average away over the K loop — it is measured against the small number. The one rounding that sits <em>after</em> the cancellation, the final bf16 on <span class="term">y</span>, comes in at 1.0×. <strong>The roundings to attack are the ones inside the group, not the ones at the end.</strong>
+  </div>
+
+  <p>Three accumulators reach the output, and none of them is rounded to bf16 on its way in. Each goes through a two-limb split instead — <code>split_f32</code> writes <span class="term">x ≈ l₀ + l₁</span> as two bf16 values, and each residual is exact in fp32 because <span class="term">l₀</span> is within a factor of two of <span class="term">x</span>:</p>
+
+  <div class="tbl-wrap wide">
+    <table class="ops">
+      <thead><tr>
+        <th>Operation</th><th class="num">MACs</th><th class="num">max rel err</th><th class="num">≈ mantissa bits</th><th>Used for</th>
+      </tr></thead>
+      <tbody>
+        <tr><td><span class="lead">bf16 × bf16</span></td><td class="num">1</td><td class="num mark-bad">3.9e−03</td><td class="num">8</td><td><span class="note">rejected for all three</span></td></tr>
+        <tr><td><span class="lead">mac_f32_bf16_low</span></td><td class="num">2</td><td class="num mark-good">7.6e−06</td><td class="num">17</td><td><span class="note">the group sum × s′, and both super-block accumulators × S′ / M′</span></td></tr>
+        <tr><td><span class="lead">mac_f32_bf16_safe</span></td><td class="num">3</td><td class="num">6.0e−08</td><td class="num">24</td><td><span class="note">fp32-exact; not needed here</span></td></tr>
+        <tr><td><span class="lead">aie::mac, 2× fp32</span></td><td class="num">9</td><td class="num">6.0e−08</td><td class="num">24</td><td><span class="note">vendor default — splits both operands, 7 wasted MACs when one side is already bf16</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>The three splits, and what each costs</h3>
+
+  <p><strong>The group sum.</strong> Rounding <code>temp_acc</code> to bf16 before it meets <span class="term">s′<sub>j</sub></span> would be the single largest error the kernel can introduce: 2e−03 relative, taken once per group, <em>correlated</em> across the 8 groups that share an <span class="term">S′</span>, and then amplified 2.3×. The split costs 1 extra MAC per group against the 32 MACs of the loop that produced the sum.</p>
+
+  <p><strong>The two super-block accumulators.</strong> Same reasoning one level up, and twice. The split costs 2 extra MACs and 2 <code>msc</code> per 32×256 block — amortized over roughly 800 vector ops, and landing in the loop's drain phase.</p>
+
+  <p><strong>The activation column reduce.</strong> <code>aie::reduce_add</code> over a bf16 vector already sums in accfloat, but it <em>returns</em> bf16 and discards 16 mantissa bits. That error would ride the entire min path and then meet the cancellation. So <code>mvm()</code> reduces in float32 and hands the kernel two bf16 limbs, smallest first, so the small term joins <code>acc_m</code> before it meets the large one. This runs only when <code>i == 0</code> and is read back by every row block, so in the steady state the split is free.</p>
+
+  <div class="eq">
+    <span class="eq-label">Emulated against an exact float64 reference — npu_q4k_emulate.py</span>
+    whole datapath vs. exact &nbsp;≈&nbsp; <span class="p-min">1e−05</span> relative<br>
+    the Q4_K format itself &nbsp;≈&nbsp; <span class="p-scale">4e−03</span> relative &nbsp;&nbsp;<span class="cmt">— two orders of magnitude apart</span>
+  </div>
+
+  <p>That gap is the point of the exercise. The arithmetic is far enough below the quantization floor that the kernel is not what limits accuracy — the format is.</p>
+</section>
+
+<section>
+  <div class="rule-head"><span class="n">07</span><h2>How the loop is driven</h2></div>
+
+  <p><code>mvm()</code> in <code>proj_main.cc</code> walks output row blocks on the outside and K blocks on the inside. For Q4_K it never zeroes <code>y_acc</code>: the accumulator pair is declared in registers, zeroed by <code>_Q4K_zero</code>, carried across the whole K loop, and collapsed by <code>_Q4K_finalize</code> only once the row is complete.</p>
+
+  <pre>for i in 0 .. M/32:
+    <b>_Q4K_zero(c_accum_s, c_accum_m)</b>            <i>// registers, not y_acc</i>
+    for j in 0 .. K/256:
+        acquire x, acquire w                    <i>// ping/pong double buffers</i>
+        <b>if i == 0:</b> fill b_col_reduce_add[j]      <i>// Σx per group, 2 bf16 limbs</i>
+        <b>_Q4K_x_bf16(c_accum_s, c_accum_m, x, w, b_col_reduce_add + …)</b>
+        release w, release x
+    <b>_Q4K_finalize(y_acc, c_accum_s, c_accum_m)</b>
+    copy_float_to_bf16&lt;32&gt;(y_out, y_acc)</pre>
+
+  <p>The <code>i == 0</code> guard is the one piece of state that crosses row blocks. <span class="term">Σ<sub>i</sub> x<sub>i</sub></span> depends only on the activations, which are identical for every output row, so the reduce runs on the first row block and every subsequent one reads it back. The buffer is sized <code>2 * INTERMEDIATE_SIZE / GGML_GROUP_SIZE</code> — two bf16 limbs per group across the widest K any phase will present.</p>
+
+  <p>Everything else is the standard FLM projection loop: five <code>mvm()</code> calls per layer for QKV, O, up/gate and down, ping-pong locks on <span class="term">x</span> and <span class="term">w</span>, and a packet id written ahead of the output so the result routes to RoPE, the GLU, or the residual add.</p>
+</section>
+
+
+<section>
+  <div class="rule-head"><span class="n">08</span><h2>The three datapaths, measured</h2></div>
+
+  <p>Two harnesses, two questions. <code>enob_flm_vs_llamacpp.py</code> models the computation graphs element for element against ports of llama.cpp's own reference encoders, and answers <em>how good is the format plus its datapath</em>. <code>npu_q4k_emulate.py</code> runs the real kernel's arithmetic over a real GGUF tensor, and answers <em>how much does the datapath add on top of the format</em>.</p>
+
+  <p>Two error terms are reported and then composed in quadrature as <span class="term">ENOB* = −log₂ ε</span>:</p>
+
+  <div class="eq">
+    <span class="eq-label">definitions</span>
+    <span class="p-scale">ε<sub>W</sub></span> = ‖W<sub>eff</sub> − w‖ / ‖w‖ &nbsp;&nbsp;<span class="cmt">— the format: what an exact accumulator would have multiplied</span><br>
+    <span class="p-min">ε<sub>path</sub></span> = ‖y − W<sub>eff</sub>x‖ / ‖wx‖ &nbsp;&nbsp;<span class="cmt">— the datapath, paired against its own effective weights</span>
+  </div>
+
+  <h3>Format and datapath together</h3>
+  <p>Synthetic, gaussian <span class="term">w</span> and <span class="term">x</span>, <code>M=512 K=4096 T=64</code>, seed 1234.</p>
+
+  <div class="tbl-wrap wide">
+    <table class="cmp">
+      <thead><tr>
+        <th>&nbsp;</th>
+        <th class="col-w16">BF16 exact<small>W16 &mdash; ceiling</small></th>
+        <th class="col-lk">llama.cpp Q4_K<small>LK &mdash; Q8_K acts</small></th>
+        <th class="col-fk">q4_core.h<small>FK &mdash; BF16 acts</small></th>
+      </tr></thead>
+      <tbody>
+        <tr class="grp"><td>Storage</td><td></td><td></td><td></td></tr>
+        <tr><td>Bits per weight</td><td>16.000</td><td>4.500</td><td class="col-fk">4.625</td></tr>
+        <tr><td>Metadata seen by the MAC</td><td>&mdash;</td><td>fp16 S,M &times; uint6</td><td class="col-fk">bf16 S&prime;,M&prime; &times; uint8</td></tr>
+        <tr><td>6-bit unpack at run time</td><td>&mdash;</td><td class="lose">yes</td><td class="col-fk win">no</td></tr>
+
+        <tr class="grp"><td>Activations</td><td></td><td></td><td></td></tr>
+        <tr><td>Representation</td><td>BF16</td><td>Q8_K int8</td><td class="col-fk">BF16</td></tr>
+        <tr><td>&epsilon;<sub>x</sub></td><td>1.661e&minus;03</td><td>6.877e&minus;03</td><td class="col-fk">1.661e&minus;03</td></tr>
+        <tr><td>ENOB<sub>x</sub></td><td>9.23</td><td class="lose">7.18</td><td class="col-fk win">9.23</td></tr>
+
+        <tr class="grp"><td>Format error</td><td></td><td></td><td></td></tr>
+        <tr><td>&epsilon;<sub>W</sub></td><td>1.661e&minus;03</td><td>7.131e&minus;02</td><td class="col-fk">7.138e&minus;02</td></tr>
+        <tr><td>ENOB<sub>W</sub></td><td>9.234</td><td>3.810</td><td class="col-fk">3.808</td></tr>
+
+        <tr class="grp"><td>Datapath error</td><td></td><td></td><td></td></tr>
+        <tr><td>&epsilon;<sub>path</sub></td><td>1.664e&minus;03</td><td>7.038e&minus;03</td><td class="col-fk">5.412e&minus;03</td></tr>
+        <tr><td>ENOB<sub>path</sub></td><td>9.231</td><td>7.151</td><td class="col-fk win">7.464</td></tr>
+
+        <tr class="grp"><td>Composed</td><td></td><td></td><td></td></tr>
+        <tr class="band"><td>ENOB* &mdash; gaussian x</td><td>8.732</td><td>3.803</td><td class="col-fk">3.804</td></tr>
+        <tr class="band"><td>ENOB* &mdash; outlier x</td><td>8.735</td><td class="lose">3.761</td><td class="col-fk win">3.804</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p><strong>The format decides everything; the datapath decides almost nothing.</strong> <span class="term">ε<sub>W</sub> ≈ 7·10⁻²</span> against datapath terms of <span class="term">~5·10⁻³</span> — in quadrature that moves the total by 0.004 bits. On gaussian activations the two vendors land within 0.001 bits of each other, having paid in opposite places: llama.cpp buys exact integer MACs with 2-bit-worse activations, FLM keeps BF16 activations and pays roundings later.</p>
+
+  <div class="note-box min">
+    <span class="lab">The tie breaks on real activations</span>
+    Gaussian <span class="term">x</span> is the best case for a block int8 quantizer. With 1% of values at 8× — what LLM activation channels actually look like — Q8_K's single scale across 256 values coarsens the whole super-block and llama.cpp loses 1.42 bits of ENOB<sub>path</sub> (7.151 → 5.733), for <strong>ENOB* 3.803 → 3.761</strong>. BF16 is scale-free, so FK is <strong>flat at 3.804</strong>.
+  </div>
+
+  <h3>The real kernel on a real tensor</h3>
+  <p><code>npu_q4k_emulate.py</code>, <code>qwen3.5-4b-q4k.gguf</code>, 512 rows, 4 trials. Here the datapath is measured against an exact matmul over the <em>same</em> re-fitted weights, so the format cancels out entirely and only the arithmetic is left:</p>
+
+  <figure class="wide">
+    <div class="tbl-wrap">
+    <table>
+      <thead><tr>
+        <th>Error term</th><th class="num">ffn_down<br>K=9216</th><th class="num">attn_qkv<br>K=2560</th>
+      </tr></thead>
+      <tbody>
+        <tr><td><span class="lead">format &mdash; the re-fit</span></td><td class="num">3.405e&minus;03</td><td class="num">3.404e&minus;03</td></tr>
+        <tr class="total"><td><span class="lead">datapath &mdash; as implemented</span></td><td class="num mark-good">1.010e&minus;05</td><td class="num mark-good">9.568e&minus;06</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <figcaption><b>format</b> is FLM&rsquo;s W&prime; against ggml&rsquo;s W &mdash; the (uint6, fp16) &rarr; (uint8, bf16) re-fit alone. <b>datapath</b> is the kernel against exact arithmetic on that same W&prime;, so the format cancels and only the rounding is left &mdash; two orders below it.</figcaption>
+  </figure>
+
+  <p>That second row is the number quoted in <code>q4_core.h</code>'s header comment, and it is the whole argument for the two-limb splits. The datapath contributes <span class="term">1e&minus;05</span> against a <span class="term">3.4e&minus;03</span> format &mdash; its quadrature contribution to ENOB is under 10<sup>&minus;4</sup> bits. Every rounding that mattered was one that landed <em>before</em> the min subtraction, where the cancellation charges 2.3&times; its nominal price; the limbs move all of them after it.</p>
+
+  <div class="note-box hazard">
+    <span class="lab">Reading the harnesses</span>
+    Both scripts carry rows that no longer describe the shipping kernel. <code>npu_q4k_emulate.py</code> defaults to <code>group_limb=False, reduce_limb=False</code>, which models an earlier datapath, not the one in today's <code>q4_core.h</code> and <code>proj_main.cc</code>. And <code>enob_flm_vs_llamacpp.py</code> splits only the two super-block accumulators, leaving bf16 casts on the group sum and on &Sigma;x &mdash; so the 5.412e&minus;03 in the table above is an <em>upper bound</em> on the real datapath, and the 1.010e&minus;05 measured on a real tensor is the honest figure.
+  </div>
+</section>
+
+<footer>
+  <div class="foot-in">
+    <div><b>Converter</b> &nbsp; FLM_Q4NX_Converter/q4nx/gguf_tensor.py · unpack_q4_k, _refit_one_side &nbsp;·&nbsp; q4nx/model_converter.py · _pack_q4k</div>
+    <div><b>Kernel</b> &nbsp; FLM_Xclbin/Qwen3_5/qwen3_5_decoding/kernels/q4_core.h · proj_main.cc · bf16_limb_math.hpp · model_spec.h</div>
+    <div><b>Analysis</b> &nbsp; FLM_Q4NX_Converter/quant.md · npu_q4k_emulate.py</div>
+  </div>
+</footer>
+
+</div>

@@ -1,0 +1,5 @@
+build/
+*.exe
+__pycache__/
+log/
+routes/

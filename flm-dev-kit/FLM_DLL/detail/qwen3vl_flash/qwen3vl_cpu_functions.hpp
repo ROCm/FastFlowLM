@@ -1,0 +1,243 @@
+// Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+
+#ifndef __QWEN3VL_CPU_FUNCTIONS_HPP__
+#define __QWEN3VL_CPU_FUNCTIONS_HPP__
+#include <cmath>
+#include <vector>
+#include <omp.h>
+#include "typedef.hpp"
+#include "buffer.hpp"
+
+/// @brief Host-side elementwise kernels used by the qwen3vl prefill path.
+/// @note  These used to be private members of qwen3vl_flash::Impl; they are free
+///        functions here so the prefill blocks can call them without a handle
+///        on the model.
+namespace qwen3vl_cpu_func {
+
+static constexpr int max_prefill_thread = 4;
+
+/// @brief y = rms_weight * x / rms(x), over one row.
+inline void _rms_norm(buffer<bf16>& y, buffer<bf16>& x, buffer<bf16>& rms_weight, f32 eps = 1e-6f) {
+    int n = x.size();
+    const int simd_width = 16;
+
+    __m512 sum_xx_vec = _mm512_setzero_ps();
+
+    // Step 1: Compute sum of squares using AVX-512
+    int i = 0;
+    for (; i <= n - simd_width; i += simd_width) {
+        __m256i bf16_vals = _mm256_loadu_si256((__m256i*)&x[i]);
+
+        // Convert BF16 to FP32
+        __m512 fp32_vals = bf16o_fp32_512(bf16_vals);
+        sum_xx_vec = _mm512_fmadd_ps(fp32_vals, fp32_vals, sum_xx_vec);  // sum_xx += x[i] * x[i];
+    }
+
+    // Horizontal sum of the AVX-512 register
+    f32 sum_xx = _mm512_reduce_add_ps(sum_xx_vec);
+
+    sum_xx /= (f32)n;
+    f32 rms_x = sqrtf(sum_xx + eps);
+
+    // Step 2: Compute element-wise operation y[i] = w[i] * x[i] / rms_x
+    __m512 rms_x_vec = _mm512_set1_ps(rms_x);
+    for (i = 0; i <= n - simd_width; i += simd_width) {
+        __m256i bf16_vals = _mm256_loadu_si256((__m256i*)&x[i]);
+        __m512 fp32_vals = bf16o_fp32_512(bf16_vals);
+        __m256i bf16_vals_w = _mm256_loadu_si256((__m256i*)&rms_weight[i]);
+        __m512 fp32_vals_w = bf16o_fp32_512(bf16_vals_w);
+        __m512 y_vec = _mm512_div_ps(_mm512_mul_ps(fp32_vals_w, fp32_vals), rms_x_vec);
+        __m256i result_bf16 = f32o_bf16_512(y_vec);
+        _mm256_storeu_si256((__m256i*)&y[i], result_bf16);
+    }
+}
+
+/// @brief Recomputes the mrope cos/sin table for one token position.
+///
+/// qwen3vl carries three positional clocks per token -- (t, h, w) -- and
+/// *interleaves* them across the first 60 frequency bins, three bins at a time.
+/// The remaining bins all use the temporal index. The result is packed as
+/// [cos(0..DH/2), sin(0..DH/2)] into `rope_values`.
+inline void _update_rope_values(std::vector<float>& rope_values, int idx_0, int idx_1, int idx_2,
+                                uint32_t DH, const f32* inv_freq) {
+    buffer<float> cos_buf(DH / 2);
+    buffer<float> sin_buf(DH / 2);
+
+    for (int j = 0; j < 60; j += 3) {
+        cos_buf[j] = std::cos(inv_freq[j] * idx_0);
+        sin_buf[j] = std::sin(inv_freq[j] * idx_0);
+        cos_buf[j + 1] = std::cos(inv_freq[j + 1] * idx_1);
+        sin_buf[j + 1] = std::sin(inv_freq[j + 1] * idx_1);
+        cos_buf[j + 2] = std::cos(inv_freq[j + 2] * idx_2);
+        sin_buf[j + 2] = std::sin(inv_freq[j + 2] * idx_2);
+    }
+
+    for (uint32_t j = 60; j < DH / 2; j++) {
+        cos_buf[j] = std::cos(inv_freq[j] * idx_0);
+        sin_buf[j] = std::sin(inv_freq[j] * idx_0);
+    }
+
+    for (uint32_t j = 0; j < DH / 2; j++) {
+        rope_values[j] = cos_buf[j];
+        rope_values[j + DH / 2] = sin_buf[j];
+    }
+}
+
+/// @brief Per-head rms norm followed by an in-place mrope, over one row at
+///        position (idx_0, idx_1, idx_2). qwen3vl norms every head before
+///        rotating it.
+/// @param rope_values scratch of DH floats, overwritten by this call.
+inline void _rope_rms(buffer<bf16>& x, int idx_0, int idx_1, int idx_2, buffer<bf16>& rms_weight,
+                      uint32_t DH, const f32* inv_freq, std::vector<float>& rope_values,
+                      f32 eps = 1e-6f) {
+    int heads = x.size() / DH;
+    _update_rope_values(rope_values, idx_0, idx_1, idx_2, DH, inv_freq);
+    for (int h = 0; h < heads; h++) {
+        buffer<bf16> x_head(x.data() + h * DH, DH);
+        _rms_norm(x_head, x_head, rms_weight, eps);
+        buffer<bf16> x_left(x_head.data(), DH / 2);
+        buffer<bf16> x_right(x_head.data() + DH / 2, DH / 2);
+        int i = 0, simd = 16;
+        // vectorized main loop
+        for (; i + simd <= (int)(DH / 2); i += simd) {
+            // load 16 BF16 -> float32
+            __m256i left_bf16  = _mm256_loadu_si256((__m256i*)(x_left.data()  + i));
+            __m256i right_bf16 = _mm256_loadu_si256((__m256i*)(x_right.data() + i));
+            __m512  L = bf16o_fp32_512(left_bf16);
+            __m512  R = bf16o_fp32_512(right_bf16);
+
+            // load sin/cos
+            __m512 C = _mm512_loadu_ps(rope_values.data() + i);
+            __m512 S = _mm512_loadu_ps(rope_values.data() + i + DH / 2);
+
+            // new_left  = L*C - R*S
+            __m512 newL = _mm512_sub_ps(_mm512_mul_ps(L, C),
+                                        _mm512_mul_ps(R, S));
+            // new_right = L*S + R*C
+            __m512 newR = _mm512_add_ps(_mm512_mul_ps(L, S),
+                                        _mm512_mul_ps(R, C));
+            // store back
+            __m256i newL_bf16 = f32o_bf16_512(newL);
+            __m256i newR_bf16 = f32o_bf16_512(newR);
+            _mm256_storeu_si256((__m256i*)(x_left.data()  + i), newL_bf16);
+            _mm256_storeu_si256((__m256i*)(x_right.data() + i), newR_bf16);
+        }
+    }
+}
+
+/// @brief dest = src + residual, over the whole of src.
+inline void _residual_add(buffer<bf16>& dest, buffer<bf16>& src, buffer<bf16>& residual) {
+    int n = src.size();
+    const int simd_width = 16;
+
+    for (int i = 0; i < n; i += simd_width) {
+        __m256i bf16_vals = _mm256_loadu_si256((__m256i*)&src[i]);
+        __m256i bf16_vals_r = _mm256_loadu_si256((__m256i*)&residual[i]);
+        __m512 fp32_vals = bf16o_fp32_512(bf16_vals);
+        __m512 fp32_vals_r = bf16o_fp32_512(bf16_vals_r);
+        __m512 result_vec = _mm512_add_ps(fp32_vals, fp32_vals_r);
+        __m256i result_bf16 = f32o_bf16_512(result_vec);
+        _mm256_storeu_si256((__m256i*)&dest[i], result_bf16);
+    }
+}
+
+/// @brief dest = a * b, elementwise over the whole of a. Four-way unrolled.
+inline void _elementwise_mul(buffer<bf16>& dest, buffer<bf16>& a, buffer<bf16>& b) {
+    int n = a.size();
+    const int simd_width = 16;
+    const int unroll = simd_width * 4;
+
+    int i = 0;
+    // 4-way unrolled loop for maximum throughput
+    for (; i <= n - unroll; i += unroll) {
+        __m256i bf16_vals_a0 = _mm256_loadu_si256((__m256i*)&a[i]);
+        __m256i bf16_vals_a1 = _mm256_loadu_si256((__m256i*)&a[i + simd_width]);
+        __m256i bf16_vals_a2 = _mm256_loadu_si256((__m256i*)&a[i + simd_width * 2]);
+        __m256i bf16_vals_a3 = _mm256_loadu_si256((__m256i*)&a[i + simd_width * 3]);
+
+        __m256i bf16_vals_b0 = _mm256_loadu_si256((__m256i*)&b[i]);
+        __m256i bf16_vals_b1 = _mm256_loadu_si256((__m256i*)&b[i + simd_width]);
+        __m256i bf16_vals_b2 = _mm256_loadu_si256((__m256i*)&b[i + simd_width * 2]);
+        __m256i bf16_vals_b3 = _mm256_loadu_si256((__m256i*)&b[i + simd_width * 3]);
+
+        __m512 fp32_vals_a0 = bf16o_fp32_512(bf16_vals_a0);
+        __m512 fp32_vals_a1 = bf16o_fp32_512(bf16_vals_a1);
+        __m512 fp32_vals_a2 = bf16o_fp32_512(bf16_vals_a2);
+        __m512 fp32_vals_a3 = bf16o_fp32_512(bf16_vals_a3);
+
+        __m512 fp32_vals_b0 = bf16o_fp32_512(bf16_vals_b0);
+        __m512 fp32_vals_b1 = bf16o_fp32_512(bf16_vals_b1);
+        __m512 fp32_vals_b2 = bf16o_fp32_512(bf16_vals_b2);
+        __m512 fp32_vals_b3 = bf16o_fp32_512(bf16_vals_b3);
+
+        __m512 result_vec0 = _mm512_mul_ps(fp32_vals_a0, fp32_vals_b0);
+        __m512 result_vec1 = _mm512_mul_ps(fp32_vals_a1, fp32_vals_b1);
+        __m512 result_vec2 = _mm512_mul_ps(fp32_vals_a2, fp32_vals_b2);
+        __m512 result_vec3 = _mm512_mul_ps(fp32_vals_a3, fp32_vals_b3);
+
+        __m256i result_bf16_0 = f32o_bf16_512(result_vec0);
+        __m256i result_bf16_1 = f32o_bf16_512(result_vec1);
+        __m256i result_bf16_2 = f32o_bf16_512(result_vec2);
+        __m256i result_bf16_3 = f32o_bf16_512(result_vec3);
+
+        _mm256_storeu_si256((__m256i*)&dest[i], result_bf16_0);
+        _mm256_storeu_si256((__m256i*)&dest[i + simd_width], result_bf16_1);
+        _mm256_storeu_si256((__m256i*)&dest[i + simd_width * 2], result_bf16_2);
+        _mm256_storeu_si256((__m256i*)&dest[i + simd_width * 3], result_bf16_3);
+    }
+
+    // Handle remaining elements
+    for (; i <= n - simd_width; i += simd_width) {
+        __m256i bf16_vals_a = _mm256_loadu_si256((__m256i*)&a[i]);
+        __m256i bf16_vals_b = _mm256_loadu_si256((__m256i*)&b[i]);
+        __m512 fp32_vals_a = bf16o_fp32_512(bf16_vals_a);
+        __m512 fp32_vals_b = bf16o_fp32_512(bf16_vals_b);
+        __m512 result_vec = _mm512_mul_ps(fp32_vals_a, fp32_vals_b);
+        __m256i result_bf16 = f32o_bf16_512(result_vec);
+        _mm256_storeu_si256((__m256i*)&dest[i], result_bf16);
+    }
+}
+
+/// @brief The multiply half of a SwiGLU, for when the array already applied silu.
+/// @note  up_gate layout: (L, intermediate_size / slice_size, 2, slice_size), the
+///        "2" axis being 0 = up, 1 = gate; dst is (L, intermediate_size).
+///        slice_size must match qwen3vl_desc::UP_GATE_OUTDIM_REORDER, which is how
+///        load_layer_weights interleaved the two projections.
+///
+///        Pair this with gen_dequant_mm_512(..., rtp_act = 1, n_stride = 2,
+///        n_first = 1) on the gate slabs -- see qwen3vl_mlp_prefill_context.
+///        The array computes silu in bf16 and rounds before this multiply, so the
+///        result is close to but not bit-identical with a fp32 host SwiGLU.
+inline void _glu_mul(bf16* dst, const bf16* up_gate, int L, int intermediate_size, int slice_size) {
+    const int simd_width = 16;
+    const int num_slices = intermediate_size / slice_size;
+    const int slice_stride = 2 * slice_size;
+
+    #pragma omp parallel for num_threads(max_prefill_thread) schedule(static)
+    for (int l = 0; l < L; l++) {
+        const bf16* ug_row  = up_gate + (size_t)l * intermediate_size * 2;
+        bf16*       dst_row = dst     + (size_t)l * intermediate_size;
+
+        for (int s = 0; s < num_slices; s++) {
+            const bf16* up_slice   = ug_row + (size_t)s * slice_stride;
+            const bf16* gate_slice = up_slice + slice_size;
+            bf16*       out_slice  = dst_row + (size_t)s * slice_size;
+
+            int i = 0;
+            for (; i + simd_width <= slice_size; i += simd_width) {
+                __m512 up_v   = bf16o_fp32_512(_mm256_loadu_si256((const __m256i*)(up_slice   + i)));
+                __m512 gate_v = bf16o_fp32_512(_mm256_loadu_si256((const __m256i*)(gate_slice + i)));
+                _mm256_storeu_si256((__m256i*)(out_slice + i),
+                                    f32o_bf16_512(_mm512_mul_ps(up_v, gate_v)));
+            }
+            for (; i < slice_size; i++) {
+                out_slice[i] = static_cast<bf16>(static_cast<float>(up_slice[i]) *
+                                                 static_cast<float>(gate_slice[i]));
+            }
+        }
+    }
+}
+
+} // namespace qwen3vl_cpu_func
+
+#endif

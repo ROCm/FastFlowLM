@@ -1,0 +1,8 @@
+build
+.vscode
+__pycache__/
+routes/
+*.safetensors
+q4nx_files/
+*.exe
+cpu_ref_mtp_head
