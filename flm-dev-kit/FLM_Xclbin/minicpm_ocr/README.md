@@ -12,7 +12,7 @@ Unmodified copies, byte-identical to their sources as of 2026-10-28:
 | `conv1d_prefill/` | `Qwen3_5/conv1d_prefill` |
 | `gate_delta_net_prefill/` | `Qwen3_5/gate_delta_net_prefill/hostDeltaNetPrefill` |
 
-Those are the sources `kernel_assignment.json` names for `minicpm-v-4.7:1b`, whose xclbins
+Those are the sources `FLM_Xclbin/kernel_assignment.md` names for `minicpm-v-4.7:1b`, whose xclbins
 MiniCPM-OCR reuses. **Note they are Qwen3_5's, not Qwen3_6's** — a similar GDN prefill kernel also
 lives under `Qwen3_6/`, and it is the wrong one.
 

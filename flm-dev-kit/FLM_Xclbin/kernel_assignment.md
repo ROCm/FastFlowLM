@@ -25,8 +25,8 @@ Push or open a PR to the `main` branch under the `FLM_Xclbin` folder. GitHub Act
 
 ## Limitations (will fix in the future)
 
-- Qwen3.5-Omni — no FastFlowLM model tag yet, so it is not in `kernel_assignment.json` and CI
-  doesn't bench it. FastFlowLM ships its `Qwen3.5-OMNI-NPU2` folder; see
+- Qwen3.5-Omni — no FastFlowLM model tag yet, so CI doesn't bench it. FastFlowLM ships its
+  `Qwen3.5-OMNI-NPU2` folder; see
   [Qwen3.5-Omni](#qwen35-omni) for what CI builds for it. `layer`, `lm_head` and `mm` have no CI
   build yet.
 
@@ -259,7 +259,7 @@ columns on each of the two DDR channels.
 
 #### Qwen3.5-Omni
 
-No model tag yet → `Qwen3.5-OMNI-NPU2`. Not in `kernel_assignment.json`, so CI neither assembles
+No model tag yet → `Qwen3.5-OMNI-NPU2`. CI neither assembles
 nor benches it. `attn`, `conv` and `GateDeltaNet_prefill` are the same files the Qwen3.5 models
 use. `—` means CI has no build target for that kernel yet; FastFlowLM ships a Chess build.
 

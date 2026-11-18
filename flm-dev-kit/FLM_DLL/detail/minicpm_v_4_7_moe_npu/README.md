@@ -14,7 +14,7 @@ exactly those two halves joined, and nothing else:
 | language: decode, prefill, MoE, prefix-cache states | `qwen3_6_moe_npu` (Qwen3.6-35B-A3B, same dims) | renamed (`minicpm_v_4_7_moe_*`, `mcvmoe_*`) so it can sit next to that engine in one process |
 | vision tower, slicing payload, canvas m-rope | `minicpm_v_4_7_npu` (the 1B) | `image/` is a copy with the namespaces renamed `mcv` -> `mcvm`; the projector output is 2048 (read from `vision_config`) |
 
-No kernel is new. `kernel_assignment.json` entry `minicpm-v-4.7-moe:35b-a3b` lists the Qwen3.6 text kernels and the
+No kernel is new. The `minicpm-v-4.7-moe:35b-a3b` entry in `FLM_Xclbin/kernel_assignment.md` lists the Qwen3.6 text kernels and the
 Qwen3.8 vision kernels (`vision_attn`, `vision_mm_a`, `vision_mm_b`).
 
 ## What differs from `qwen3_6_moe_npu`

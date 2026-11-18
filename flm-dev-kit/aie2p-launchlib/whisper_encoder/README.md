@@ -190,7 +190,7 @@ What shipping would take:
 | The engine change | the packet buffer of each switch as a kernel argument (`make_switch.exe` writes it too); `FLM_WHISPER_SWITCH_DIR` becomes "switch files present": on when they are there, an env variable to turn it off; the trial's debug switches (`_DUMP`, `_TRACE`) removed | today it is a trial flag with command-processor writes only |
 | HRX | run step 3 on the HRX runtime (FastFlowLM's `HRX-portable`) | only XRT was tested; HRX runs the same instruction streams, but its ELF and command path differ |
 | Windows | run step 3 on Windows (XRT and the MSI) | Windows uses the same files; the NPU firmware and driver differ |
-| CI | PR Check already benches Whisper on an `FLM_DLL/detail/whisper_npu` change (XRT and HRX) and npu_test's `asr` suite checks the transcripts | no new jobs; `kernel_assignment.json` gets the two files as artifacts of the two kernels |
+| CI | PR Check already benches Whisper on an `FLM_DLL/detail/whisper_npu` change (XRT and HRX) and npu_test's `asr` suite checks the transcripts | no new jobs; `FLM_Xclbin/kernel_assignment.md` lists the two files with the two kernels |
 | Risk owner | the switch writes registers a hw_context load normally writes (`launchlib/README.md`): new firmware or a new driver could break it | a kernel or firmware change must rerun step 2's probe and step 3; the fallback above limits the damage to "slower" only if the hash catches it |
 
 Not solved by shipping, and not caused by it: with another process on the NPU, Whisper is ~50× slower and

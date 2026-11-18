@@ -205,8 +205,8 @@ therefore rebinds the same bitstream's arguments — `arg0 = logits`,
 `arg1 = lm_head weights`, `arg2 = x`, `arg3 = model.norm weight` — where the
 layer sequence uses `arg0 = x`, `arg1 = proj weights`, `arg2 = rms weights`,
 `arg3 = rope/qk-norm weights`, `arg4 = kv cache`. `llama_npu` and
-`nanbeige_npu` do exactly the same; `kernel_assignment.json` needs no second
-kernel entry.
+`nanbeige_npu` do exactly the same; the model's xclbin folder needs no second
+kernel.
 
 Two consequences for the host:
 

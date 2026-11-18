@@ -64,8 +64,8 @@ From `xclbins/<model_name>/`, by filename only — the engine fails at load if o
 | `conv8.xclbin` | prefill, only when built with `PREFILL_CONV=npu` | `FLM_Xclbin/minicpm_ocr/conv1d_prefill` (all 8 columns, one q/k head + 64 v channels per core; laid out for D = 6144). Its runtime sequence is `gen_seq_conv1d()`; the old `conv.xclbin` does not work with it, hence the new name |
 | `vision_attn.xclbin`, `vision_mm_a.xclbin`, `vision_mm_b.xclbin` | vision tower | Qwen3.8-27B's, unchanged |
 
-No new `MODEL_TYPE` was needed for this port. `conv8.xclbin` is the one new kernel; it is not in
-`kernel_assignment.json` yet, so a packaged model folder has to get it by hand until it is.
+No new `MODEL_TYPE` was needed for this port. `conv8.xclbin` is the one new kernel; copy it into the
+packaged model folder (`src/xclbins/MiniCPM-OCR-1.0-NPU2/`) by hand.
 
 ## Config
 

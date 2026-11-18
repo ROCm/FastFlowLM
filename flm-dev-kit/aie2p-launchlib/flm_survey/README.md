@@ -104,8 +104,8 @@ models (more compute per switch). For comparison, Whisper's warm switches save ~
    prompts; npu_test `chat`, `serving` and `prefix_cache` suites; time to first token and decode speed; a second
    process on the NPU (as Whisper's step 3).
 4. **Second pilot with decode switches and vision: Qwen3.5-0.8B** (8 xclbins: GateDeltaNet prefill, LM head, vision).
-5. **Shipping, model by model**: CI builds the packages and switch files with the xclbins (`kernel_assignment.json`
-   artifacts), PR Check benches the touched models (XRT and HRX), Windows run; the same list as Whisper's step 4.
+5. **Shipping, model by model**: CI builds the packages and switch files with the xclbins (the kernel builds
+   `FLM_Xclbin/kernel_assignment.md` lists), PR Check benches the touched models (XRT and HRX), Windows run; the same list as Whisper's step 4.
 
 Open: warm switches of these kernels are not measured (the estimate's main uncertainty: 0.75 ms instead of 0.5 takes
 2-5 points off, Whisper's ~0.2 ms would add some); with another process on the NPU, today's path is already slow
