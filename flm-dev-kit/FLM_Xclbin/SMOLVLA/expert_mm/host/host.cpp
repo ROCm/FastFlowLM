@@ -32,6 +32,19 @@ void Silu(int dim, bf16* x, bf16* o) {
         o[i] = (bf16)(xi / (1.0f + std::exp(-xi)));
     }
 }
+/// \brief fp32 CPU reference of the kernel: y[r][n] = sum_k x[r][k] * w[n][k] (+ b[n]).
+void mm_cpu_ref(const bf16* x, const bf16* w, const bf16* b, bf16* y, int rows, int K, int N) {
+    for (int r = 0; r < rows; r++) {
+        for (int n = 0; n < N; n++) {
+            float acc = b ? (float)b[n] : 0.0f;
+            for (int k = 0; k < K; k++) {
+                acc += (float)x[(size_t)r * K + k] * (float)w[(size_t)n * K + k];
+            }
+            y[(size_t)r * N + n] = (bf16)acc;
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     // Fix the seed to ensure reproducibility in CI.
     srand(0);
@@ -45,6 +58,14 @@ int main(int argc, char **argv) {
     desc.add_options()("Trace,t", po::value<int>()->default_value(131072), "Trace size");
     desc.add_options()("Verify,v", po::value<bool>()->default_value(true), "Verify the result");
     desc.add_options()("EnableTrace,e", po::value<bool>()->default_value(false), "Enable trace");
+    desc.add_options()("Seed,s", po::value<unsigned int>()->default_value(32), "Random seed");
+    desc.add_options()("Random", po::value<bool>()->default_value(true), "Use random x/w + CPU reference instead of the safetensors dump");
+    const char* env_ref = std::getenv("FLM_REFERENCE_DIR");
+    const std::string ref_dir = env_ref ? env_ref : "";
+    desc.add_options()("reference", po::value<std::string>()->default_value(ref_dir.empty() ? "" : ref_dir + "/expert_reference.safetensors"),
+        "With --Random false: activations dump (default: $FLM_REFERENCE_DIR/expert_reference.safetensors; not shipped)");
+    desc.add_options()("weights", po::value<std::string>()->default_value(ref_dir.empty() ? "" : ref_dir + "/expert_weights_pad256.safetensors"),
+        "With --Random false: the matching weights (default: $FLM_REFERENCE_DIR/expert_weights_pad256.safetensors; not shipped)");
 
     arg_utils::parse_options(argc, argv, desc, vm);
 
@@ -61,36 +82,49 @@ int main(int argc, char **argv) {
     int bias = 0;
     bool pass = true;
 
-    std::string reference_path = "/path/to/models/SMOLVLA-NPU2/expert_reference.safetensors";
-    std::unique_ptr<SafeTensors> references = std::make_unique<SafeTensors>(reference_path);
-    std::string weight_path = "/path/to/models/SMOLVLA-NPU2/expert_weights_pad256.safetensors";
-    std::unique_ptr<SafeTensors> weights = std::make_unique<SafeTensors>(weight_path);
+    const bool RANDOM = vm["Random"].as<bool>();
+    const unsigned int SEED = vm["Seed"].as<unsigned int>();
+    const std::string reference_path = vm["reference"].as<std::string>();
+    const std::string weight_path = vm["weights"].as<std::string>();
+    if (!RANDOM && (reference_path.empty() || weight_path.empty())) {
+        header_print("error", "No reference: --Random false needs --reference and --weights, or FLM_REFERENCE_DIR (references are not shipped with the dev kit)");
+        return 1;
+    }
 
     buffer<bf16> x_in;
     buffer<bf16> w_in;
     buffer<bf16> b_in;
     buffer<bf16> y_ref;
-    int M;
-    int K;
-    int N;
+    int M = 64;    // padded rows for the kernel tile
+    int K = 768;
+    int N = (bias == 1) ? 768 : 1792;
 
-    if (bias == 1){
-        references->load_weights(x_in, "suffix.action_time");
-        weights->load_weights(w_in, "action_time_mlp_out.weight");
-        weights->load_weights(b_in, "action_time_mlp_out.bias");
-        references->load_weights(y_ref, "suffix.embs");
-        M = 64;    // padded rows for the kernel tile
-        K = 768;
-        N = 768;
-    }
-    else{
-
-        references->load_weights(x_in, "layer_0.input_layernorm");
-        weights->load_weights(w_in, "layer_0.qkv_proj.weight");
-        references->load_weights(y_ref, "layer_0.qkv_proj");
-        M = 64;    // padded rows for the kernel tile
-        K = 768;
-        N = 1792;
+    if (RANDOM) {
+        header_print("info", "Generating random x/w, seed " << SEED);
+        std::mt19937 rng(SEED);
+        auto fill_random = [&rng](buffer<bf16> &b, size_t n, float stddev) {
+            std::normal_distribution<float> dist(0.0f, stddev);
+            b.resize(n);
+            for (size_t i = 0; i < n; i++) b[i] = (bf16)dist(rng);
+        };
+        fill_random(x_in, SEQ * K, 1.0f);
+        fill_random(w_in, (size_t)N * K, 1.0f / std::sqrt((float)K));
+        if (bias == 1) fill_random(b_in, N, 1.0f);
+        y_ref.resize(SEQ * N);
+        mm_cpu_ref(x_in.data(), w_in.data(), bias == 1 ? b_in.data() : nullptr, y_ref.data(), SEQ, K, N);
+    } else {
+        std::unique_ptr<SafeTensors> references = std::make_unique<SafeTensors>(reference_path);
+        std::unique_ptr<SafeTensors> weights = std::make_unique<SafeTensors>(weight_path);
+        if (bias == 1) {
+            references->load_weights(x_in, "suffix.action_time");
+            weights->load_weights(w_in, "action_time_mlp_out.weight");
+            weights->load_weights(b_in, "action_time_mlp_out.bias");
+            references->load_weights(y_ref, "suffix.embs");
+        } else {
+            references->load_weights(x_in, "layer_0.input_layernorm");
+            weights->load_weights(w_in, "layer_0.qkv_proj.weight");
+            references->load_weights(y_ref, "layer_0.qkv_proj");
+        }
     }
 
     const int Y_VOLUME = M * N;
@@ -154,7 +188,10 @@ int main(int argc, char **argv) {
         utils::print_matrix(y_ref, N);
 
         error_metrics metrics = get_error_metrics(y_wanted, y_ref);
-        print_error_metrics(metrics);
+        print_error_metrics(metrics, RANDOM ? "NPU vs CPU reference" : "NPU vs reference dump");
+        if (RANDOM) {
+            pass = metrics.CosineSimilarity > 0.97f && metrics.NormalizedMSE < 6e-2f;
+        }
 
         header_print("info", "Finished running kernel");
         header_print("info", "Running kernel with bare call (run based).");
@@ -168,5 +205,5 @@ int main(int argc, char **argv) {
     } else {
         header_print("info", "FAILED!");
     }
-    return 0;
+    return pass ? 0 : 1;
 }

@@ -26,37 +26,47 @@
 
 namespace po = boost::program_options;
 
-void ref_attn_chunked(const bf16* q, int q_stride,
-                      const bf16* kv, int chunk_stride, int kv_row,
-                      bf16* out, int Lq, int d,
+/// \brief fp32 CPU reference of kernel/attn0.cc and attn1.cc.
+/// Chunk c of k and v holds rows [c * chunk_keys, (c + 1) * chunk_keys), each row [n_kv_heads * d].
+/// Query row i sees the first chunk_nvalid[c] keys of chunk c, and in a causal chunk only keys j <= i.
+/// Scores are scaled by 1 / sqrt(d), and query head h uses KV head h / (n_heads / n_kv_heads).
+void ref_attn_chunked(const bf16* q, const bf16* k, const bf16* v, bf16* out,
+                      int Lq, int d, int n_heads, int n_kv_heads, int chunk_keys,
                       const int* chunk_nvalid, const int* chunk_causal, int nchunks) {
     const float scale = 1.0f / std::sqrt((float)d);
+    const int dq = n_heads * d;
+    const int dk = n_kv_heads * d;
+    const int heads_per_kv = n_heads / n_kv_heads;
+    std::vector<float> scores;
+    std::vector<int> key_rows;
     std::vector<float> acc(d);
     for (int i = 0; i < Lq; i++) {
-        float m = -INFINITY, l = 0.0f;
-        std::fill(acc.begin(), acc.end(), 0.0f);
+        key_rows.clear();
         for (int c = 0; c < nchunks; c++) {
-            const bf16* Kc = kv + (size_t)c * chunk_stride;
-            const bf16* Vc = kv + (size_t)c * chunk_stride + d;
             int jmax = chunk_nvalid[c];
-            if (chunk_causal[c]) jmax = std::min(jmax, i + 1);   // key j <= query i
-            for (int j = 0; j < jmax; j++) {
-                float s = 0.0f;
-                for (int e = 0; e < d; e++)
-                    s += (float)q[i * q_stride + e] * (float)Kc[j * kv_row + e];
-                s *= scale;
-                float m_new = std::max(m, s);
-                float corr = std::exp(m - m_new);   // rescale prior accumulation
-                l = l * corr;
-                for (int e = 0; e < d; e++) acc[e] *= corr;
-                float pj = std::exp(s - m_new);
-                l += pj;
-                for (int e = 0; e < d; e++) acc[e] += pj * (float)Vc[j * kv_row + e];
-                m = m_new;
-            }
+            if (chunk_causal[c]) jmax = std::min(jmax, i + 1);
+            for (int j = 0; j < jmax; j++) key_rows.push_back(c * chunk_keys + j);
         }
-        float inv_l = (l > 0.0f) ? (1.0f / l) : 0.0f;
-        for (int e = 0; e < d; e++) out[i * d + e] = (bf16)(acc[e] * inv_l);
+        scores.resize(key_rows.size());
+        for (int h = 0; h < n_heads; h++) {
+            const int kv_col = (h / heads_per_kv) * d;
+            float max_score = -INFINITY;
+            for (size_t j = 0; j < key_rows.size(); j++) {
+                float dot = 0.0f;
+                for (int e = 0; e < d; e++)
+                    dot += (float)q[(size_t)i * dq + h * d + e] * (float)k[(size_t)key_rows[j] * dk + kv_col + e];
+                scores[j] = dot * scale;
+                max_score = std::max(max_score, scores[j]);
+            }
+            float sum = 0.0f;
+            std::fill(acc.begin(), acc.end(), 0.0f);
+            for (size_t j = 0; j < key_rows.size(); j++) {
+                const float p = std::exp(scores[j] - max_score);
+                sum += p;
+                for (int e = 0; e < d; e++) acc[e] += p * (float)v[(size_t)key_rows[j] * dk + kv_col + e];
+            }
+            for (int e = 0; e < d; e++) out[(size_t)i * dq + h * d + e] = (bf16)(acc[e] / sum);
+        }
     }
 }
 
@@ -74,12 +84,27 @@ int main(int argc, char **argv) {
     desc.add_options()("L_wanted,l", po::value<int>()->default_value(50), "L_wanted");
     desc.add_options()("L_begin,b", po::value<int>()->default_value(0), "L_begin");
     desc.add_options()("Iteration,i", po::value<int>()->default_value(500), "Iteration");
+    desc.add_options()("Random,r", po::value<bool>()->default_value(true), "Use random q/k/v + CPU reference instead of the safetensors dumps");
+    desc.add_options()("text_rows", po::value<int>()->default_value(40), "Random mode: valid text rows in the prefix (at most 48)");
+    const char* env_ref = std::getenv("FLM_REFERENCE_DIR");
+    const std::string ref_dir = env_ref ? env_ref : "";
+    desc.add_options()("reference", po::value<std::string>()->default_value(ref_dir.empty() ? "" : ref_dir + "/expert_reference.safetensors"),
+        "With -r false: the expert activations dump (default: $FLM_REFERENCE_DIR/expert_reference.safetensors; not shipped)");
+    desc.add_options()("layer_reference", po::value<std::string>()->default_value(ref_dir.empty() ? "" : ref_dir + "/ref.safetensors"),
+        "With -r false: the per-layer VLM/expert dump (default: $FLM_REFERENCE_DIR/ref.safetensors; not shipped)");
     arg_utils::parse_options(argc, argv, desc, vm);
 
     // User logic
     const int NT = vm["Iteration"].as<int>();
     const bool VERIFY = vm["Verify"].as<bool>();
     const unsigned int SEED = vm["Seed"].as<unsigned int>();
+    const bool RANDOM = vm["Random"].as<bool>();
+    const std::string reference_path = vm["reference"].as<std::string>();
+    const std::string layer_reference_path = vm["layer_reference"].as<std::string>();
+    if (!RANDOM && (reference_path.empty() || layer_reference_path.empty())) {
+        header_print("error", "No reference: -r false needs --reference and --layer_reference, or FLM_REFERENCE_DIR (references are not shipped with the dev kit)");
+        return 1;
+    }
 
     int num_heads = 15;
     int num_kv_heads = 5;
@@ -92,10 +117,12 @@ int main(int argc, char **argv) {
     buffer<bf16> v_cache;
     buffer<bf16> aux_out_whole;
 
-    std::string reference_path = "/path/to/models/SmolVLA/expert_reference.safetensors";
-    std::unique_ptr<SafeTensors> references = std::make_unique<SafeTensors>(reference_path);
-    std::string reference_path1 = "/path/to/models/SmolVLA/ref.safetensors";
-    std::unique_ptr<SafeTensors> references1 = std::make_unique<SafeTensors>(reference_path1);
+    std::unique_ptr<SafeTensors> references;
+    std::unique_ptr<SafeTensors> references1;
+    if (!RANDOM) {
+        references = std::make_unique<SafeTensors>(reference_path);
+        references1 = std::make_unique<SafeTensors>(layer_reference_path);
+    }
 
     buffer<bf16> q_in;
     buffer<bf16> k_in;
@@ -106,13 +133,30 @@ int main(int argc, char **argv) {
     buffer<bf16> y_ref1;
 
     const bool IS_SELF = true;
-    if (IS_SELF == false){
+    const int L_wanted = vm["L_wanted"].as<int>();
+    const int N_IMG = 128;
+    int eff_text = vm["text_rows"].as<int>();
+    if (RANDOM) {
+        header_print("info", "Generating random q/k/v, seed " << SEED);
+        std::mt19937 rng(SEED);
+        auto fill_random = [&rng](buffer<bf16> &b, size_t n) {
+            std::normal_distribution<float> dist(0.0f, 1.0f);
+            b.resize(n);
+            for (size_t i = 0; i < n; i++) b[i] = (bf16)dist(rng);
+        };
+        fill_random(q_in, (size_t)L_wanted * DQ);
+        fill_random(k_in, (size_t)(N_IMG + eff_text + 1) * DK);
+        fill_random(v_in, (size_t)(N_IMG + eff_text + 1) * DK);
+        fill_random(realk_in, (size_t)L_wanted * DK);
+        fill_random(realv_in, (size_t)L_wanted * DK);
+    }
+    else if (IS_SELF == false){
         references->load_weights(q_in, "layer_1.q_rope");
         references->load_weights(k_in, "cross_kv_cache.layer_1.key_states");
         references->load_weights(v_in, "cross_kv_cache.layer_1.value_states");
         references->load_weights(y_ref0, "layer_1.attention_out");
     }
-    else{
+    else {
         references->load_weights(q_in, "layer_0.q_rope");
         references1->load_weights(k_in, "vlm.layer.0.k_rope");
         references1->load_weights(v_in, "vlm.layer.0.v_proj");
@@ -122,7 +166,6 @@ int main(int argc, char **argv) {
         references1->load_weights(y_ref1, "expert.layer.0.attn_output");
     }
 
-    const int L_wanted = vm["L_wanted"].as<int>();
     int L_padded = 64;
 
     const int Q_VOLUME = L_padded * DQ;
@@ -157,18 +200,19 @@ int main(int argc, char **argv) {
     const int KV_HEAD = 0;
     const int NUM_KV_HEADS_SRC = 5;
     const int PREFIX_LEN = 177;
-    const int N_IMG = 128;
     const int N_LANG = 48;                      
     const int CHUNK_KEYS = 64;                 
     const int CHUNK_STRIDE = CHUNK_KEYS * DK;
     const int NCHUNKS = IS_SELF ? 4 : 3;
 
-    bytes pad_mask_bytes;
-    references->load_weights(pad_mask_bytes, "prefix_pad_masks");
-    const uint8_t* pad_mask = pad_mask_bytes.data();
-    int total_valid = 0;
-    for (int i = 0; i < PREFIX_LEN; i++) if (pad_mask[i]) total_valid++;
-    const int eff_text = total_valid - N_IMG - 1;   // exclude N_IMG image + 1 state
+    if (!RANDOM) {
+        bytes pad_mask_bytes;
+        references->load_weights(pad_mask_bytes, "prefix_pad_masks");
+        const uint8_t* pad_mask = pad_mask_bytes.data();
+        int total_valid = 0;
+        for (int i = 0; i < PREFIX_LEN; i++) if (pad_mask[i]) total_valid++;
+        eff_text = total_valid - N_IMG - 1;   // exclude N_IMG image + 1 state
+    }
     header_print("info", "eff_text = " << eff_text << " (valid prefix = " << (N_IMG + eff_text + 1) << ")");
 
     buffer<bf16> k_0 = app_0.create_bo_buffer<bf16>(NCHUNKS * CHUNK_STRIDE);
@@ -231,20 +275,19 @@ int main(int argc, char **argv) {
                DQ * sizeof(bf16));
     }
 
-    const int AO_ROW = 1024;
-    buffer<bf16> ref0((size_t)L_wanted * DQ);
-    ref0.memset((bf16)(0.0f));
-    for (int l = 0; l < L_wanted; l++){
-        memcpy(ref0.data() + l * DQ,
-               y_ref0.data() + l * AO_ROW + HEAD * d,
-               DQ * sizeof(bf16));
-    }
     buffer<bf16> ref1((size_t)L_wanted * DQ);
     ref1.memset((bf16)(0.0f));
-    for (int l = 0; l < L_wanted; l++){
-        memcpy(ref1.data() + l * DQ,
-               y_ref1.data() + l * DQ,
-               DQ * sizeof(bf16));
+    if (RANDOM) {
+        const int chunk_nvalid[4] = {CHUNK_KEYS, CHUNK_KEYS, eff_text + 1, CHUNK_KEYS};
+        const int chunk_causal[4] = {0, 0, 0, 1};
+        ref_attn_chunked(q_0.data(), k_0.data(), v_0.data(), ref1.data(), L_wanted, d, num_heads, num_kv_heads,
+                         CHUNK_KEYS, chunk_nvalid, chunk_causal, NCHUNKS);
+    } else {
+        for (int l = 0; l < L_wanted; l++){
+            memcpy(ref1.data() + l * DQ,
+                   y_ref1.data() + l * DQ,
+                   DQ * sizeof(bf16));
+        }
     }
 
     // tensor_2d<bf16> tensor_o(o_wanted, 8, 0);
@@ -258,7 +301,10 @@ int main(int argc, char **argv) {
     // utils::print_matrix(c_sin, 8, 50, 8);
 
     error_metrics metrics = get_error_metrics(o_wanted, ref1);
-    print_error_metrics(metrics);
+    print_error_metrics(metrics, RANDOM ? "NPU vs CPU reference" : "NPU vs reference dump");
+    if (RANDOM) {
+        pass = metrics.CosineSimilarity > 0.97f && metrics.NormalizedMSE < 6e-2f;
+    }
     header_print("info", "Finished running kernel");
     header_print("info", "Running kernel with bare call (run based).");
     header_print("info", "NPU time: " << npu_time.first << " us");
@@ -268,5 +314,5 @@ int main(int argc, char **argv) {
     } else {
         header_print("info", "FAILED!");
     }
-    return 0;
+    return pass ? 0 : 1;
 }
