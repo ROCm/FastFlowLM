@@ -27,6 +27,7 @@ TIERS = ("install", "pr", "full")
 # untested.
 PR_CHAT = {
     "hunyuan": "hy-mt2-flash:1.8b",
+    "hy-memory": None,        # 30B; runs when the change touches it
     "nanbeige": "nanbeige4.1:3b",
     "qwen3vl": "qwen3vl-it:4b",
     "qwen3vl-flash": "qwen3vl-flash:4b",
@@ -37,6 +38,7 @@ PR_CHAT = {
     "gemma4e-dflash": None,   # needs the 9 GB nemotron3.5-bolt:e4b package; runs when the change touches it
     "qwen3.5": "qwen3.5:0.8b",
     "minicpm-v-4.7": "minicpm-v-4.7:1b",
+    "minicpm-ocr": "minicpm-ocr:1.0",
     "qwen3.6-moe": None,      # 35 GB
     "qwen3.8-mtp": None,      # 27 GB, ~2 tok/s
     "qwen3.8-dflash2": None,   # needs the 27 GB qwen3.8-mtp:27b package; runs when the change touches it
@@ -57,8 +59,18 @@ PR_CHAT = {
     "qwen2vl": "qwen2.5vl-it:3b",
 }
 
-# Families that are not chat models; each has its own suite.
-NON_CHAT_FAMILIES = {"embed-gemma", "d3", "whisper-v3"}
+# Families that are not chat models; each has its own suite (r2t2: asr_chat).
+NON_CHAT_FAMILIES = {"embed-gemma", "d3", "whisper-v3", "r2t2"}
+
+# Backends that run their models on the GPU rather than the NPU. Only a run
+# that asks for one (--backend) tests its models, and then all of them.
+GPU_BACKENDS = {"oga-hipep"}
+
+# Suites with a fixed NPU model list that a GPU backend run gives its own chat
+# models instead: the OpenAI contract (tools, streaming, errors, usage) holds
+# for every backend the server drives, and flm must still end once it has
+# loaded the backend's runtime (shutdown).
+BACKEND_SUITES = {"api", "shutdown"}
 
 # Models that reason even when asked not to. Their answer comes after the
 # reasoning, so they need a larger token budget before any content appears.
@@ -84,6 +96,8 @@ SUITE_MODELS = {
         "pr": ["qwen3:0.6b", "llama3.2:1b"],
         "full": ["qwen3:0.6b", "llama3.2:1b"],
     },
+    # A GPU backend run only: a process that had loaded hip-ep could not end.
+    "shutdown": {"install": [], "pr": [], "full": []},
     # Chat models fed audio through /v1/chat/completions. Whisper itself is
     # always tested; these are the chat models with an audio encoder.
     "asr_chat": {
@@ -121,6 +135,13 @@ class Model:
     think: bool = False
     labels: list = field(default_factory=list)
     size: float = 0.0
+    backend: str = "flm"
+    # Whether this machine has the model's files, as `flm list --json` says
+    # (False also for an outdated or incompatible copy); None when it does not say.
+    installed: bool | None = None
+    # The model whose package this one loads on top of (a DFlash draft's
+    # target); `flm pull` downloads it first.
+    base: str = ""
 
     @property
     def single_turn(self) -> bool:
@@ -136,13 +157,17 @@ class Model:
         return "translation" in self.labels or self.id.startswith("translategemma")
 
 
-def load_catalog(flm_bin: str) -> dict[str, Model]:
+def load_catalog(flm_bin: str,
+                 model_extensions: list[str] | None = None) -> dict[str, Model]:
     """The catalog as `flm list --json --filter all` reports it on this machine.
 
     That is the only listing that carries the vlm/asr flags and families, and it
     already leaves out models this NPU cannot run.
     """
-    proc = subprocess.run([flm_bin, "list", "--json", "--filter", "all"],
+    command = [flm_bin, "list", "--json", "--filter", "all"]
+    for manifest in model_extensions or []:
+        command += ["--model-extension", manifest]
+    proc = subprocess.run(command,
                           capture_output=True, text=True, timeout=300, check=True)
     start = proc.stdout.find("{")  # tolerate banner lines before the JSON
     if start < 0:
@@ -161,25 +186,40 @@ def load_catalog(flm_bin: str) -> dict[str, Model]:
             think=bool(details.get("think")),
             labels=list(entry.get("label") or []),
             size=float(entry.get("size") or 0),
+            backend=entry.get("backend") or "flm",
+            installed=entry["installed"] if isinstance(entry.get("installed"), bool) else None,
+            base=entry.get("base_model") or "",
         )
     return models
 
 
 class Plan:
     def __init__(self, catalog: dict[str, Model], tier: str, families: list[str],
-                 only_models: list[str] | None = None):
+                 only_models: list[str] | None = None, backend: str = ""):
         if tier not in TIERS:
             raise ValueError(f"unknown tier {tier!r}")
+        if backend and backend not in GPU_BACKENDS:
+            raise ValueError(f"unknown GPU backend {backend!r}")
         self.catalog = catalog
         self.tier = tier
         self.families = set(families)
         self.only_models = only_models
+        self.backend = backend  # empty: the NPU backends
+        # Models the run could not pull (Context.pull), which no suite tests.
+        self.unavailable: set[str] = set()
+
+    def _serves(self, model_id: str) -> bool:
+        """Whether the backend under test runs this model, and it is not unavailable."""
+        if model_id in self.unavailable:
+            return False
+        backend = self.catalog[model_id].backend
+        return backend == self.backend if self.backend else backend not in GPU_BACKENDS
 
     def _known(self, ids) -> list[str]:
         """Keeps catalog models, in order, dropping ones this machine lacks."""
         out = []
         for model_id in ids:
-            if model_id in self.catalog and model_id not in out:
+            if model_id in self.catalog and model_id not in out and self._serves(model_id):
                 if not self.only_models or model_id in self.only_models:
                     out.append(model_id)
         return out
@@ -194,8 +234,11 @@ class Plan:
     def chat(self) -> list[str]:
         # --models names exactly what to test, whatever the tier would pick.
         if self.only_models:
-            return [m for m in self.only_models if m in self.catalog
+            return [m for m in self.only_models if m in self.catalog and self._serves(m)
                     and self.catalog[m].family not in NON_CHAT_FAMILIES]
+        if self.backend:
+            return self._known(m.id for m in self.catalog.values()
+                               if m.family not in NON_CHAT_FAMILIES)
         if self.tier == "install":
             return self._known(INSTALL_CHAT)
         chat_models = [m for m in self.catalog.values() if m.family not in NON_CHAT_FAMILIES]
@@ -215,6 +258,8 @@ class Plan:
 
     def suite(self, name: str) -> list[str]:
         """Models for a suite with a fixed list in SUITE_MODELS."""
+        if self.backend and name in BACKEND_SUITES:
+            return self.chat()
         table = SUITE_MODELS[name]
         listed = table[self.tier]
         if listed is None:  # full tier: derive from the catalog
@@ -234,6 +279,38 @@ class Plan:
                 "whisper": self._touched(lambda m: m.family == "whisper-v3"),
             }.get(name, [])
         return self._known(list(listed) + extra)
+
+    def planned(self, suites) -> list[str]:
+        """Every model the named suites will load, in order, without repeats."""
+        ids: list[str] = []
+        for name in suites:
+            if name == "chat":
+                ids += self.chat()
+            elif name == "asr":
+                ids += self.suite("whisper") + self.suite("asr_chat")
+            elif name in SUITE_MODELS:
+                ids += self.suite(name)
+        return list(dict.fromkeys(ids))
+
+    def missing(self, suites, everything: bool = False) -> list[str]:
+        """The planned models this machine lacks (every planned one if
+        everything), cheapest download first.
+
+        Cheapest first, so a download budget that runs out leaves the fewest
+        models untested. A model's download includes its base when that is
+        missing too: a 270 MB DFlash draft can bring a 9 GB target with it.
+        """
+        planned = self.planned(suites)
+        lacking = [m for m in planned
+                   if everything or self.catalog[m].installed is not True]
+
+        def cost(model_id: str) -> float:
+            model = self.catalog[model_id]
+            base = self.catalog.get(model.base)
+            extra = base.size if base is not None and base.installed is not True else 0.0
+            return model.size + extra
+
+        return sorted(lacking, key=lambda m: (cost(m), planned.index(m)))
 
     def model(self, model_id: str) -> Model:
         return self.catalog.get(model_id) or Model(id=model_id)

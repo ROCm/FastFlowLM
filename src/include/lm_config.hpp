@@ -69,8 +69,11 @@ class LM_Config{
 
         /// \brief from pretrained
         /// \param model_name the model name
-        void from_pretrained(std::string model_name){
-            this->_resolve_paths(model_name);
+        /// \param asset_root_override packaged execution assets, when provided
+        void from_pretrained(
+            std::string model_name,
+            const std::string& asset_root_override = ""){
+            this->_resolve_paths(model_name, asset_root_override);
             this->_load_json();
             this->_normalize_multi_modal();
             JSON_GET(this->flm_version, this->_json_config, "flm_version", "0.0.0", std::string);
@@ -83,16 +86,26 @@ class LM_Config{
 
     protected:
         /// \brief resolve model_path / model_name / exec_path
-        void _resolve_paths(const std::string& model_name){
+        void _resolve_paths(
+            const std::string& model_name,
+            const std::string& asset_root_override = ""){
             // #define DEV_BUILD
             #ifdef DEV_BUILD
-            #ifdef __WINDOWS__
-                this->exec_path = "..\\..\\..\\";
+                // three folders above the run folder, as a full path: XRT 2.27 refuses paths with ".."
+                const std::filesystem::path dev_root =
+                    (std::filesystem::current_path() / ".." / ".." / "..").lexically_normal();
+                this->exec_path = dev_root.string();
+                const char sep = (char)std::filesystem::path::preferred_separator;
+                if (this->exec_path.empty() || this->exec_path.back() != sep) {
+                    this->exec_path += sep;
+                }
             #else
-                this->exec_path = "../../../";
-            #endif
-            #else
+            if (!asset_root_override.empty()) {
+                this->exec_path = asset_root_override;
+            }
+            else {
                 this->exec_path = utils::find_xclbin_path();
+            }
             #endif
             this->model_path = model_name;
             this->model_name = std::filesystem::path(model_name).filename().string();

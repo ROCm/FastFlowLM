@@ -7,6 +7,7 @@
 #pragma once
 
 #include <ctime>
+#include <functional>
 #include <iomanip>
 #include <sstream>
 #include <memory>
@@ -30,20 +31,10 @@
 using json = nlohmann::ordered_json;
 
 
-typedef enum : u8 {
-    task_query = 0,
-    task_document = 1,
-    task_bitextmining = 2,
-    task_clustering = 3,
-    task_classification = 4,
-    task_code_retrieval = 5,
-    task_multilabel_classification = 6,
-    task_sentence_similarity = 7,
-    task_search_result = 8,
-    task_summarization = 9,
-} embedding_task_type_t;
-
-extern std::unordered_set<std::string> embeddingModelTags;
+struct EmbeddingResult {
+    std::vector<float> values;
+    uint64_t prompt_tokens = 0;
+};
 
 class AutoEmbeddingModel {
 protected:
@@ -69,7 +60,8 @@ public:
 	//************ Shared by all models *************/
 	virtual ~AutoEmbeddingModel() = default;
 
-	AutoEmbeddingModel(flm_rt::device* npu_device_inst, std::string current_model = "");
+	AutoEmbeddingModel(flm_rt::device* device, std::string name = "")
+        : current_model(std::move(name)), npu_device_inst(device) {}
 	/// \brief Get the current model
 	/// \return the current model
 	std::string get_current_model();
@@ -81,7 +73,6 @@ public:
 	//************ Unique for each model *************/
 	
 	virtual void load_model(std::string model_path, json model_info, bool enable_preemption) {}
-	virtual std::vector<float> embed(std::string& text, embedding_task_type_t task_type) = 0;
+    virtual EmbeddingResult embed(const json& request,
+                                  std::function<bool()> cancelled = [] { return false; }) = 0;
 };
-
-

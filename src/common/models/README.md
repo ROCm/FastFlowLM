@@ -24,9 +24,9 @@ either axis off the other is how adding corelib once took the FastFlowLM models
 away.
 
 `get_device()` asks the machine, once per process. A build that links corelib
-asks corelib what NPU it has (`CorelibRuntime::NpuArch`, corelib's
-`ryzenai_corelib_testing_npu_arch` until its public header names one): `AIEM`
-is `dev04`, and `AIE2P`, no NPU, or a corelib that cannot be loaded is
+asks corelib what NPU it has (`CorelibRuntime::NpuArch`, the
+`ryzenai_corelib_has_feature` NPU named by `ryzenai_corelib_feature_name`):
+`npu_aiem` is `dev04`, and `npu_aie2p`, no NPU, or a corelib that cannot be loaded is
 `default_npu_platform()`, `aie2p`. corelib reads the device itself, so
 FastFlowLM holds no table of devices and names none. A build without corelib
 answers `aie2p`: every `dev04` model is a corelib one. Linking corelib still
@@ -43,7 +43,7 @@ This is a contributor document. For *using* a backend once it exists — `--back
 |---|---|
 | **Platform** | Windows and Linux. Both configure and build; only Windows has been run on hardware, and the `src/test/phi4_core` suite is still Windows-only. |
 | **Hardware** | An dev04 NPU. There is no simulator; a wrong shape shows up as garbage output, not an error. |
-| **corelib headers** | The corelib ABI is still pre-1.0, so FastFlowLM requires an **exact `0.60.0`** match on major, minor and patch. [`corelib_api.hpp`](../../include/core/corelib_api.hpp) `#error`s on any other version — deliberately, because the C ABI has changed shape between patch releases. The version is queried before any other entry point, so a mismatched runtime reports a version error rather than a missing symbol. corelib's default build gives one `ryzenai_corelib_model_<name>` library per model, carrying its kernels, which must sit beside corelib. A per-op engine enables its model's kernel bundle on the stream it opens; a model corelib runs whole enables its own. |
+| **corelib headers** | The corelib ABI is still pre-1.0, so FastFlowLM requires an **exact `0.103.0`** match on major, minor and patch. [`corelib_api.hpp`](../../include/core/corelib_api.hpp) `#error`s on any other version — deliberately, because the C ABI has changed shape between patch releases. The version is queried before any other entry point, so a mismatched runtime reports a version error rather than a missing symbol. corelib's default build gives one `ryzenai_corelib_model_<name>` library per model, carrying its kernels, which must sit beside corelib. A per-op engine enables its model's kernel bundle on the stream it opens; a model corelib runs whole enables its own. |
 | **Weights** | A GGUF corelib's model reads: a Q4_G128 or Q4_G32 one, whose codes it packs as they are, or, for Qwen3 and Llama only, a Q8_0 one, which it requantizes on every load. The catalog pulls what corelib's own runner does: AMD's Q4 file, with no public fallback, for every model but Qwen3-0.6B and Llama, which AMD ships no Q4 of and which stay on a public Q8_0. See §6. |
 
 Configure with:
@@ -327,7 +327,7 @@ axes prune:
 | the entry is dropped when | said by |
 |---|---|
 | the host is not silicon the entry names | `"supported_platforms"` on the entry |
-| the build did not link the kernel flow the entry needs | the **family name**: a family ending in `-core` is corelib's, everything else is FastFlowLM's |
+| the build did not link the kernel flow the entry needs | the **family name**: a family ending in `-core` is corelib's, one ending in `-oga-hipep` is an OGA package for the GPU (`FLM_ENABLE_OGA_HIPEP`), everything else is FastFlowLM's |
 
 So the corelib flavour of a model is **its own top-level family**, named
 `<family>-core`, sitting beside the stock one rather than patching it:
@@ -363,7 +363,8 @@ Points that are easy to get wrong:
   once its family has an aie_next engine (built with
   `-DFLM_NPU_PLATFORM=aie_next`, from `lib/<runtime>/aie_next/`); every `-core`
   entry is `["dev04"]`. So a family can have two implementations on dev04, e.g.
-  `qwen3.6-moe` (FastFlowLM kernels) and `qwen3.6-moe-core` (corelib).
+  `qwen3.6-moe` (FastFlowLM kernels) and `qwen3.6-moe-core` (corelib). An
+  `-oga-hipep` entry runs on the GPU, so it names no generation and omits the key.
 - Separate families mean **separate tags**, so no `model_info_key` redirect is
   needed: `model_info.json` keys the corelib records under `<family>-core:<size>`
   directly, which is also the tag a user types.

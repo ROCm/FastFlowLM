@@ -150,8 +150,8 @@ private:
         assert(this->context != nullptr);
         std::string exe_key;
         this->exe = hrx::lookup_or_build_executable(
-            this->context->xclbin_bytes(), data.first, data.second,
-            &this->exe_ord, &exe_key);
+            this->context->xclbin_bytes(), this->context->digest(), data.first,
+            data.second, &this->exe_ord, &exe_key);
         if (this->exe == nullptr){
             header_print_r("ERROR", "Failed to build HRX executable from ctrl_seq");
             exit(1);

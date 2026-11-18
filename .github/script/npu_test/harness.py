@@ -13,18 +13,23 @@ SKIP, warn() records WARN, and any other exception records FAIL with its type.
 The block never raises, so one broken model cannot stop the suite. When the
 server dies under a case, it is restarted for the next one; once restarts run
 out, ServerGone ends the suite and its remaining models are reported as not
-attempted.
+attempted. A request that times out restarts the server the same way: flm
+keeps working on a request its client gave up on, and every later request
+would only queue behind it.
 """
 
 from __future__ import annotations
 
 import json
+import re
+import subprocess
 import sys
 import time
 import traceback
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from .client import is_timeout
 from .plan import Plan
 from .server import FlmServer, ServerError
 
@@ -107,9 +112,23 @@ class Case:
             detail = f"{exc_type.__name__}: {exc}"
             if self.ctx.verbose:
                 traceback.print_exception(exc_type, exc, tb)
+        # The server still holds a request that timed out (a model download,
+        # a hung load), and every later request would wait out its own timeout
+        # behind it. A restart drops it; it counts against the restart budget,
+        # so a run of timeouts ends the suite instead of the job's time limit.
+        timed_out = (exc is not None and is_timeout(exc) and self.server is not None
+                     and self.server.alive())
+        if timed_out:
+            detail += "; flm serve restarted to drop the request"
         self.ctx.record(Result(self.suite, self.name, self.status, self.model, detail,
                                round(seconds, 2), self.data))
-        if self.status == FAIL and self.server is not None and self.server.died():
+        if timed_out:
+            print(f"[server:{self.server.name}] restarting after a request timed out",
+                  flush=True)
+            if not self.server.restart():
+                raise ServerGone(f"server for {self.suite} could not be restarted "
+                                 f"after a request timed out")
+        elif self.status == FAIL and self.server is not None and self.server.died():
             self.ctx.record(Result(self.suite, "server-crash", FAIL, self.model,
                                    f"flm serve exited (code {self.server.proc.returncode}) "
                                    f"during {self.name}",
@@ -126,7 +145,8 @@ class Case:
 class Context:
     def __init__(self, *, flm_bin: str, label: str, tier: str, plan: Plan,
                  out_dir: Path, request_timeout: float, port: int | None = None,
-                 verbose: bool = False):
+                 verbose: bool = False,
+                 model_extensions: list[str] | None = None):
         self.flm_bin = flm_bin
         self.label = label
         self.tier = tier
@@ -136,6 +156,7 @@ class Context:
         self.request_timeout = request_timeout
         self.port = port
         self.verbose = verbose
+        self.model_extensions = list(model_extensions or [])
         self.results: list[Result] = []
         self.servers: list[FlmServer] = []
         self.version = "unknown"
@@ -147,7 +168,11 @@ class Context:
     def server(self, name: str, args: list[str] | None = None, **kwargs) -> FlmServer:
         """A server for one suite, not yet started; use it as a context manager."""
         kwargs.setdefault("port", self.port)
-        server = FlmServer(self.flm_bin, name=name, log_dir=self.out_dir, args=args,
+        server_args = list(args or [])
+        for manifest in self.model_extensions:
+            server_args += ["--model-extension", manifest]
+        server = FlmServer(self.flm_bin, name=name, log_dir=self.out_dir,
+                           args=server_args,
                            request_timeout=self.request_timeout, **kwargs)
         self.servers.append(server)
         return server
@@ -168,6 +193,46 @@ class Context:
     def not_attempted(self, suite: str, models: list[str], reason: str) -> None:
         for model in models:
             self.record(Result(suite, "not-attempted", FAIL, model, reason))
+
+    def pull(self, models: list[str], timeout: float, budget: float | None = None) -> None:
+        """Runs `flm pull` for each model before any suite, one setup case each.
+
+        A model that does not pull is left out of the plan: its suites would
+        only wait out their request timeouts on the same download. timeout
+        bounds each download and is a failure; budget (seconds, None for no
+        limit) bounds them all, and a model it leaves undownloaded is a
+        warning: the runner lacks it, not the package.
+        """
+        deadline = None if budget is None else time.monotonic() + budget
+        for model in models:
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
+                self.record(Result("setup", "pull", WARN, model,
+                                   f"not downloaded: the {budget / 60:g}-min download "
+                                   f"budget is used up, so this runner does not test it"))
+                self.plan.unavailable.add(model)
+                continue
+            limit = timeout if remaining is None else min(timeout, remaining)
+            log = self.out_dir / f"pull-{re.sub(r'[^A-Za-z0-9._-]+', '_', model)}.log"
+            print(f"  [setup] {model}: flm pull (log: {log.name})", flush=True)
+            with self.case("setup", "pull", model) as case:
+                case.data["log"] = log.name
+                try:
+                    with open(log, "wb") as out:
+                        command = [self.flm_bin, "pull", model]
+                        # A model an extension adds is unknown to flm without it.
+                        for manifest in self.model_extensions:
+                            command += ["--model-extension", manifest]
+                        proc = subprocess.run(command, stdout=out,
+                                              stderr=subprocess.STDOUT, timeout=limit)
+                except subprocess.TimeoutExpired:
+                    if limit < timeout:
+                        warn(f"not downloaded: the {budget / 60:g}-min download budget "
+                             f"ran out, so this runner does not test it")
+                    raise AssertionError(f"flm pull did not finish in {timeout / 60:.0f} min")
+                expect(proc.returncode == 0, f"flm pull exited with code {proc.returncode}")
+            if case.status != PASS:
+                self.plan.unavailable.add(model)
 
     def run_suite(self, module) -> None:
         """Runs one suite module, turning a fatal error into a recorded failure."""

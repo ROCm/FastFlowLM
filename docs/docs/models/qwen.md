@@ -111,7 +111,7 @@ flm run qwen3:8b
 - **Backend:** `core` — one engine for all four sizes. The GGUF's own metadata selects the size and is cross-checked against it.
 - **Source format:** GGUF, read directly by corelib. With a Hugging Face token that can read AMD's private repositories (`HF_TOKEN`, or `hf auth login`), `flm pull` fetches AMD's 4-bit file, which packs exactly as it is; without one, a tag below on an AMD file cannot be pulled, as corelib's own runner has no public fallback either. Only Qwen3-0.6B and Llama, which AMD ships no 4-bit file of, pull a public `Q8_0`, requantized to 4-bit groups on every load, which is lossy; corelib refuses `Q8_0` for Qwen3.5, Qwen3.6, Gemma 4 and Phi-4-mini.
 - **Context:** each tag's limit is the most corelib runs that model at; the default is lower where corelib or our own runs found answers going wrong past it. Over-capacity requests are rejected with HTTP 400 before any work reaches the device.
-- **Availability:** developer build against corelib 0.60.0 — see [Phi-4 on the core backend](phi.md).
+- **Availability:** developer build against corelib 0.103.0 — see [Phi-4 on the core backend](phi.md).
 
 The same corelib path runs every `-core` tag:
 
@@ -210,11 +210,11 @@ flm run qwen3vl-it:4b
 You can control image resizing when running or serving the model using the `--img-pre-resize` flag or simply `-r`:
 
 ```shell
-flm run qwen3vl-it:3b -r 1
+flm run qwen3vl-it:4b -r 1
 ```
 
 ```shell
-flm serve qwen3vl-it:3b -r 1
+flm serve qwen3vl-it:4b -r 1
 ```
 
 The `-r` option determines the image's height:
@@ -443,7 +443,6 @@ The `-r` option determines the image's height:
 - Host memory: the token embeddings are read straight from `model.q4nx` through a read-only memory map, one row per token, instead of being unpacked into a 970 MiB table. This saves about 1 GiB of RAM (private memory at 4k context: about 1.2 GiB before, 0.3 GiB now) with the same speed and the same output. Only the rows of tokens that were actually seen stay in memory, and the OS can drop them under memory pressure; if it does, a prompt full of new tokens takes about a second longer to start. On Windows, the loaded model's `model.q4nx` cannot be replaced or deleted, so stop the server before `flm remove` or `flm pull` of this model. This applies to the Qwen3.5 0.8B, 2B and 4B only; the 9B and the other model families still keep their embedding tables in RAM.
 
 ---
-
 ## 🧩 Model Card: [Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B)
 
 - **Type:** Image-Text-to-Text
@@ -610,7 +609,7 @@ The `-r` option determines the image's height:
 - **Speculative Decoding:** Yes — built-in MTP draft head (see note below)
 - **Base Model:** [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B)
 - **Quantization:** Q4_K
-- **Max Context Length:** 8k tokens  
+- **Max Context Length:** 16k tokens (exactly 16,377; a larger `--ctx-len` is lowered to that with a warning). A 16k context uses about 0.5 GB more memory than 8k  
 - **Default Context Length:** 4k tokens ([change default](https://fastflowlm.com/docs/instructions/cli/#-change-default-context-length-max))  
 - **[Set Context Length at Launch](https://fastflowlm.com/docs/instructions/cli/#-set-context-length-at-launch)**
 
@@ -659,13 +658,14 @@ Qwen3.8 ships with a **multi-token prediction (MTP) head** — a small draft mod
 
 1. The MTP head **drafts** several candidate tokens in one shot.
 2. The full model **verifies** them in a single pass.
-3. Accepted drafts are kept; the first rejected one is replaced by the base model's own choice, and drafting restarts from there.
+3. Each position is sampled from the full model with the request's sampling parameters. Drafts are kept while they match the sampled token; the first one that doesn't is replaced by the sampled token, and drafting restarts from there.
 
 What that means in practice:
 
-- **Faster decoding, same output.** Verification is an exact compare against what the base model would have emitted, so every token you receive is a token the base model would have produced on its own. Speculation changes throughput, not quality.
+- **Faster decoding, same output distribution.** This is standard speculative sampling: a draft is kept with the probability the full model gives it, and a rejected one is replaced by a token drawn from the rest of the distribution. Every token you receive is distributed as plain decoding would draw it (up to the bf16 rounding of the batched verify pass), with `temperature`, `top_k`, `top_p`, the penalties, `seed` and `tool_choice` / `response_format` applied. A `temperature: 0` (or `top_k: 1`) request is checked against the base model's top token instead, and tokens from a speculative batch skip the presence, frequency and repetition penalties (this model's default `presence_penalty` is 1.5); send `presence_penalty: 0` for output identical to plain greedy decoding.
+- **Sampling lowers the acceptance rate.** A greedy request keeps a draft whenever it is the top token; a sampled one keeps it as often as the model would have picked it. Higher temperatures accept fewer drafts and run closer to ordinary decode speed.
 - **Gains are prompt-dependent.** Predictable, low-entropy stretches — code, structured output, long reasoning chains — see the highest draft acceptance. Highly creative or surprising text accepts fewer drafts and converges toward ordinary decode speed.
-- **Nothing to configure.** Speculation is driven by the engine; there is no flag to set and no API change.
+- **No flag to set.** Speculation turns on by itself. A greedy request decodes one token at a time while `ignore_eos` or `min_tokens` keeps the end-of-sequence token out; a sampled request keeps speculating.
 
 📝 **Note:**
 
@@ -681,9 +681,9 @@ What that means in practice:
 - **What it is:** the same model as [`qwen3.8-mtp:27b`](#-model-card-qwen38-27b), decoded with z-lab's DFlash 2 draft instead of the built-in MTP head. The draft reads features of five layers of the main model, writes a block of 7 tokens in one pass and picks one coherent path through its top candidates; the NPU checks all 7 in one pass, with the same kernels as `qwen3.8-mtp:27b`
 - **Speed:** 1.16x the decode speed of `qwen3.8-mtp:27b` on average over ten mixed prompts, from 0.9x to 1.5x per prompt (code and structured answers gain most, short or unpredictable answers least; [benchmarks](https://fastflowlm.com/docs/benchmarks/qwen3.8_results/))
 - **Think / Tool Calling / Vision / Prefix cache:** as `qwen3.8-mtp:27b`
-- **Packages:** two downloads. The main weights are the `qwen3.8-mtp:27b` package (`Qwen3.8-27B-NPU2`, about 18 GB); the draft is [`Qwen3.8-27B-DFlash2-NPU2`](https://huggingface.co/FastFlowLM/Qwen3.8-27B-DFlash2-NPU2) (1.4 GB). `flm pull qwen3.8-dflash2:27b` downloads whichever is missing
+- **Packages:** two downloads. The main weights are the `qwen3.8-mtp:27b` package (`Qwen3.8-27B-NPU2`, about 16.8 GiB); the draft is [`Qwen3.8-27B-DFlash2-NPU2`](https://huggingface.co/FastFlowLM/Qwen3.8-27B-DFlash2-NPU2) (1.3 GiB). `flm pull qwen3.8-dflash2:27b` downloads whichever is missing
 - **Draft:** 5 layers, 2B parameters, Q4_K (the feature projection and the candidate tables stay BF16 where they are read row by row)
-- **Max Context Length:** 8k tokens
+- **Max Context Length:** 16k tokens (exactly 16,377, as `qwen3.8-mtp:27b`)
 - **Default Context Length:** 4k tokens ([change default](https://fastflowlm.com/docs/instructions/cli/#-change-default-context-length-max))
 - **License:** the draft is [Apache-2.0](https://huggingface.co/z-lab/Qwen3.8-27B-DFlash2); the main model's license applies to the main weights
 - **FastFlowLM:** 1.0.12 or later
@@ -711,9 +711,9 @@ Expected: a correct function with a docstring, decoding noticeably faster than w
 
 📝 **Note:**
 
-- Every step drafts 7 tokens and checks them together; the model keeps the longest prefix it agrees with plus one token of its own. As with `qwen3.8-mtp:27b`, drafted tokens are compared with the model's own most likely token and skip the sampler (see the ⚠️ note in [Request Parameters](https://fastflowlm.com/docs/instructions/server/request_parameters/)).
+- Every step drafts 7 tokens and checks them together; the model keeps the longest prefix it agrees with plus one token of its own. As with `qwen3.8-mtp:27b`, drafted tokens are compared with the token the model samples at that position, so the reply follows the request's sampling parameters; a greedy request compares them with the model's top token.
 - Greedy output can differ from `qwen3.8-mtp:27b` at near-ties: the NPU checks 8 positions in one pass, which rounds differently from decoding one token at a time, and the two drafts propose different blocks.
 - The draft sees the last 2048 tokens of the conversation. After a saved prompt is reused (server mode prefix cache) it starts without the reused part and fills up again from the tokens that follow, so the first steps accept less.
 - `FLM_DFLASH=0` in the environment loads the MTP head instead: the tag then behaves like `qwen3.8-mtp:27b`.
-- Image input, the 8k context and the image-resize options work as on `qwen3.8-mtp:27b` (`-r`).
+- Image input, the 16k context and the image-resize options work as on `qwen3.8-mtp:27b` (`-r`).
 - `flm remove qwen3.8-dflash2:27b` removes only the draft package; `qwen3.8-mtp:27b` stays installed.

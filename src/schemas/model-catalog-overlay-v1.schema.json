@@ -1,0 +1,274 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ROCm/FastFlowLM/schemas/model-catalog-overlay-v1.schema.json",
+  "title": "FastFlowLM model catalog overlay v1",
+  "description": "Adds model tags without replacing entries in FastFlowLM's built-in catalog.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "models"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "models": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "minProperties": 1,
+        "additionalProperties": {
+          "$ref": "#/$defs/modelEntry"
+        }
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "folderName": {
+      "description": "A single folder name inside the model root: no '/', '\\' or ':', no trailing '.' or space, and no Windows device name (CON, NUL, COM1, COM\u00b9, ...).",
+      "type": "string",
+      "pattern": "^(?!(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|(?:[Cc][Oo][Mm]|[Ll][Pp][Tt])[1-9\u00b9\u00b2\u00b3]) *(?:\\.|/|$))[^/\\\\:]*[^/\\\\:. ]$"
+    },
+    "relativePath": {
+      "description": "A '/'-separated path inside the model folder: no '\\' or ':', and no empty component, component ending in '.' or space, or Windows device name (CON, NUL, COM1, COM\u00b9, ...).",
+      "type": "string",
+      "pattern": "^(?:(?!(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|(?:[Cc][Oo][Mm]|[Ll][Pp][Tt])[1-9\u00b9\u00b2\u00b3]) *(?:\\.|/|$))[^/\\\\:]*[^/\\\\:. ]/)*(?!(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|(?:[Cc][Oo][Mm]|[Ll][Pp][Tt])[1-9\u00b9\u00b2\u00b3]) *(?:\\.|/|$))[^/\\\\:]*[^/\\\\:. ]$"
+    },
+    "modelEntry": {
+      "type": "object",
+      "required": [
+        "name",
+        "details",
+        "url",
+        "flm_min_version",
+        "files"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/folderName"
+        },
+        "xclbin_folder": {
+          "$ref": "#/$defs/folderName"
+        },
+        "url": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "flm_min_version": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/relativePath"
+          }
+        },
+        "file_sources": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/relativePath"
+          }
+        },
+        "preferred_source": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "$ref": "#/$defs/folderName"
+            },
+            "files": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/relativePath"
+              }
+            },
+            "file_records": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/fileRecords"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "backend": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "backend_provider": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "frontend_provider": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "default_context_length": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_prefill_len": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "supported_platforms": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "aie2p",
+              "dev04"
+            ]
+          }
+        },
+        "details": {
+          "type": "object",
+          "required": [
+            "family"
+          ],
+          "properties": {
+            "family": {
+              "$ref": "#/$defs/nonEmptyString"
+            }
+          },
+          "additionalProperties": true
+        },
+        "model_kind": {
+          "enum": [
+            "generation",
+            "embedding"
+          ],
+          "default": "generation"
+        },
+        "file_records": {
+          "$ref": "#/$defs/fileRecords"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "vlm": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "vlm"
+                ]
+              },
+              {
+                "properties": {
+                  "asr": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "asr"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "frontend_provider"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "model_kind": {
+                "const": "embedding"
+              }
+            },
+            "required": [
+              "model_kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "frontend_provider"
+            ]
+          },
+          "else": {
+            "required": [
+              "backend",
+              "backend_provider",
+              "default_context_length",
+              "max_prefill_len"
+            ]
+          }
+        }
+      ],
+      "additionalProperties": true
+    },
+    "fileRecord": {
+      "type": "object",
+      "required": [
+        "path",
+        "size"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$"
+        },
+        "oid": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{40}$"
+        },
+        "lfs": {
+          "type": "object",
+          "required": [
+            "oid"
+          ],
+          "properties": {
+            "oid": {
+              "type": "string",
+              "pattern": "^[0-9a-fA-F]{64}$"
+            }
+          }
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "sha256"
+          ]
+        },
+        {
+          "required": [
+            "lfs"
+          ]
+        },
+        {
+          "required": [
+            "oid"
+          ]
+        }
+      ]
+    },
+    "fileRecords": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/fileRecord"
+      },
+      "description": "Optional model_info.json-style records. Runtime validation also requires unique paths and a record for every entry in files."
+    }
+  }
+}

@@ -11,6 +11,7 @@
 #include <vector>
 #include <algorithm>
 #include <cstdlib>
+#include <clocale>
 #include <chrono>
 #include <thread>
 #ifndef _WIN32
@@ -26,7 +27,21 @@
 
 #ifndef _WIN32
 
-CLIWide::CLIWide() = default;
+CLIWide::CLIWide() {
+#ifdef FASTFLOWLM_USE_READLINE
+    // libedit decodes keystrokes through the C library's multibyte functions,
+    // so it only accepts non-ASCII input (Cyrillic, CJK, ...) when LC_CTYPE is
+    // a UTF-8 locale. A C++ program starts in the "C" locale until it calls
+    // setlocale(), and newer libedit releases (e.g. Fedora 45) drop those bytes
+    // instead of passing them through. Adopt the user's LC_CTYPE before the
+    // first readline() call; fall back to C.UTF-8 if the environment names a
+    // locale that is not installed. Only LC_CTYPE is changed, so number
+    // parsing and formatting (LC_NUMERIC) keep the "C" behaviour.
+    if (!std::setlocale(LC_CTYPE, "")) {
+        std::setlocale(LC_CTYPE, "C.UTF-8");
+    }
+#endif
+}
 
 CLIWide::~CLIWide() = default;
 

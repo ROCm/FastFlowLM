@@ -29,6 +29,7 @@
 #include "streaming_ostream.hpp"
 #include "model_downloader.hpp"
 #include "multipart.hpp"
+#include "http_guard.hpp"
 #include <queue>
 #include <functional>
 
@@ -47,14 +48,9 @@ extern std::mutex g_npu_access_mutex;
 extern std::atomic<bool> g_npu_in_use;
 extern std::atomic<int> g_npu_active_requests;
 
-// Helper function to check if an endpoint requires serialized accelerator access.
-inline bool requires_npu_access(const std::string& method, const std::string& path) {
-    if (method != "POST") return false;
-    return path == "/api/generate" || path == "/api/chat" ||
-           path == "/v1/chat/completions" || path == "/v1/completions" ||
-           path == "/v1/audio/transcriptions" || path == "/v1/embeddings" ||
-           path == "/v1/systemone" || path == "/v1/decisions";
-}
+// Which routes take the NPU queue, route normalization, Origin/Host/CORS policy and required
+// fields live in http_guard.hpp so the host tests can build them without Boost or XRT.
+using flm::http_guard::requires_npu_access;
 
 /// Routes whose handler reads the raw body itself (System One parses it with Python json
 /// semantics and answers 422, not 400, for a body that is not JSON).
@@ -79,6 +75,17 @@ public:
         tasks_.push(std::move(task));
         return true;
     }
+    enum class Admission { run_now, queued, queue_full };
+    /// \brief take the NPU (`try_acquire`) or else queue `task`, as one step with respect to complete_current: done separately, the
+    ///        running request could find the queue empty and release the NPU between a failed acquire and the enqueue, and the
+    ///        queued task would never run
+    Admission admit(Task task, const std::function<bool()>& try_acquire) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (try_acquire()) return Admission::run_now;
+        if (tasks_.size() >= capacity_) return Admission::queue_full;
+        tasks_.push(std::move(task));
+        return Admission::queued;
+    }
     Task take_next() {
         std::lock_guard<std::mutex> lock(mutex_);
         if (tasks_.empty()) return {};
@@ -89,10 +96,15 @@ public:
     void complete_current(const Scheduler& schedule,
                           const std::function<void()>& release,
                           std::chrono::milliseconds cooldown) {
-        auto task = take_next();
-        if (!task) {
-            release();
-            return;
+        Task task;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);   // dequeue or release as one step (see admit)
+            if (tasks_.empty()) {
+                release();
+                return;
+            }
+            task = std::move(tasks_.front());
+            tasks_.pop();
         }
         if (cooldown.count() > 0) std::this_thread::sleep_for(cooldown);
         schedule(std::move(task));
@@ -206,6 +218,9 @@ public:
     void set_npu_queue_length(size_t q_len) { npu_request_coordinator_.set_capacity(q_len); }
     // Maximum accepted HTTP request body size (in bytes)
     void set_max_body_size_bytes(std::size_t bytes) { max_body_size_bytes_ = bytes; }
+    /// --cors-origins: comma-separated origins allowed besides the local ones; "*" allows all.
+    void set_cors_origins(const std::string& list) { flm::http_guard::set_extra_origins(origin_policy_, list); }
+    const flm::http_guard::OriginPolicy& origin_policy() const { return origin_policy_; }
     std::size_t get_max_body_size_bytes() const { return max_body_size_bytes_; }
 
     void register_handler(const std::string& method, const std::string& path, RequestHandler handler);
@@ -242,6 +257,8 @@ private:
     ///@brief port
     int port;
     bool cors;
+    /// Origin/Host checks and CORS headers for every response (see http_guard.hpp).
+    flm::http_guard::OriginPolicy origin_policy_;
 
     // Concurrency configuration
     size_t max_connections_ = 10;

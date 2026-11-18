@@ -19,6 +19,7 @@
 #include "AutoModel/automodel.hpp"
 #include "image/image_reader.hpp"
 #include "image_process_utils/imageproc.hpp"
+#include "models/minicpm_v_4_7_moe/flm/aie2p/minicpm_v_4_7_moe_npu.hpp"
 #include "image_process_utils/imageprocAVX512.hpp"
 
 #include <iostream>

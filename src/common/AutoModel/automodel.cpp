@@ -6,12 +6,15 @@
 /// \note This is a source file for the auto_model class
 
 #include "AutoModel/automodel.hpp"
+#include "modules/top_k.hpp"
 #include "chat/chat_continue.hpp"
+#include "npu_utils/npu_utils.hpp"
 #include "utils/npu_platform.hpp"
 
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <numeric>
 #include <stdexcept>
 
 namespace {
@@ -32,8 +35,9 @@ int resolve_context_length(const nlohmann::ordered_json& model_info,
         std::find(model_info["label"].begin(), model_info["label"].end(),
                   "single-turn") != model_info["label"].end();
     if (single_turn) {
-        header_print("FLM", "Single-turn model, 1k max context length allowed only!");
-        return model_info["default_context_length"].get<int>();
+        const int fixed_length = model_info["default_context_length"].get<int>();
+        header_print("FLM", "Single-turn model, context length fixed at " + std::to_string(fixed_length) + " tokens");
+        return fixed_length;
     }
     return default_context_length;
 }
@@ -242,12 +246,18 @@ bool AutoModel::_shared_is_same_model(const std::string& model_path, const json&
 }
 
 void AutoModel::_shared_initialize_model_state(
-    std::string model_path, json model_info, int context_length) {
+    std::string model_path, json model_info, int context_length,
+    const std::string& asset_root) {
     this->model_path = std::move(model_path);
     this->draft_model_path = model_info.value("draft_model_path", std::string());
     header_print("FLM", "Loading model: " << this->model_path);
     this->lm_config = std::make_unique<LM_Config>();
-    this->lm_config->from_pretrained(this->model_path);
+    this->lm_config->from_pretrained(this->model_path, asset_root);
+    // A tag that shares another tag's weights but runs its own kernels (e.g. a flash tag) names the folder its xclbins
+    // are in; the engine looks them up under lm_config->model_name, which is the weights folder's name otherwise.
+    if (const std::string xclbin_folder = model_info.value("xclbin_folder", std::string()); !xclbin_folder.empty()) {
+        this->lm_config->model_name = xclbin_folder;
+    }
     if (!this->draft_model_path.empty()) {
         // The draft package's own config rides along in the config the engine reads;
         // the xclbins are looked up under the tag's own folder name (D16).
@@ -273,7 +283,9 @@ void AutoModel::_shared_load_backend(std::string model_path, json model_info,
                                      int default_context_length,
                                      bool enable_preemption,
                                      const std::string& requested_backend,
-                                     const nlohmann::json* tokenizer_config) {
+                                     const nlohmann::json* tokenizer_config,
+                                     bool initialize_host_frontend,
+                                     const std::string& frontend_provider) {
     if (!model_info.contains("details") ||
         !model_info["details"].contains("family")) {
         throw std::runtime_error("Model entry has no details.family");
@@ -285,21 +297,30 @@ void AutoModel::_shared_load_backend(std::string model_path, json model_info,
     // The entry carries the kernel flow its artifacts were built for -- the
     // weights differ between flows, so this belongs to the model rather than
     // to the build. model_list wrote it there from the tag the entry was
-    // found under; --backend and FLM_BACKEND still win over it.
+    // found under. --backend and FLM_BACKEND remain explicit demands, but a
+    // different contract is rejected until the package declares it compatible.
     const std::string catalog_backend = model_info.value(
         flm::backend::kBackendKey, std::string(flm::backend::kFlmBackendId));
-    const std::string id = flm::backend::resolve_backend_id(
-        family, catalog_backend, requested_backend, &source);
+    const std::string catalog_provider = model_info.value(
+        flm::backend::kBackendProviderKey,
+        std::string(flm::backend::kBuiltinProviderId));
+    const auto selection = flm::backend::resolve_backend_selection(
+        family, catalog_backend, catalog_provider, requested_backend, &source);
+    const std::string& id = selection.backend;
+    const std::string& provider = selection.provider;
 
     // Same model on the same backend is a no-op; a different backend is a real
     // reload even when the path has not changed.
     if (this->is_model_loaded && this->_shared_is_same_model(model_path, model_info) &&
-        this->backend_ && this->backend_->id() == id) {
+        this->backend_ && this->backend_->id() == id &&
+        this->backend_provider_ == provider) {
         header_print("FLM", "Model already loaded: " << this->model_path);
         return;
     }
 
-    const auto traits = registry.traits(family, id);
+    const auto traits = registry.traits(family, id, provider);
+    const std::string asset_root =
+        registry.asset_root(family, id, provider);
     if (enable_preemption && !traits.supports_preemption) {
         throw std::invalid_argument(
             "Backend '" + id + "' does not support preemption");
@@ -317,33 +338,59 @@ void AutoModel::_shared_load_backend(std::string model_path, json model_info,
     // Tear the old model down before building the new one: the engines hold
     // device memory, and a half-loaded model must never look loaded.
     this->backend_.reset();
+    this->backend_provider_.clear();
     this->lm_engine = nullptr;
     this->is_model_loaded = false;
 
     try {
-        this->_shared_initialize_model_state(
-            std::move(model_path), model_info, context_length);
+        if (initialize_host_frontend) {
+            this->_shared_initialize_model_state(
+                std::move(model_path), model_info, context_length,
+                asset_root);
+        } else {
+            this->model_path = std::move(model_path);
+            header_print("FLM", "Loading model: " << this->model_path);
+            this->MAX_L = context_length;
+            this->is_model_loaded = true;
+            this->token_history.clear();
+            this->token_history.reserve(this->MAX_L);
+            this->last_token = -1;
+            this->total_tokens = 0;
+            this->tokenizer.reset();
+            this->lm_config.reset();
+        }
         if (traits.needs_npu_xclbin) {
             this->_shared_initialize_legacy_npu(enable_preemption);
         } else {
             this->npu.reset();
-            this->enable_preemption = false;
+            this->enable_preemption = enable_preemption;
         }
 
         flm::backend::BackendContext context;
         context.model_path = this->model_path;
         context.model_info = model_info;
+        context.frontend_provider = frontend_provider;
         context.config = this->lm_config.get();
         context.npu = this->npu.get();
         context.device = this->npu_device_inst;
         context.context_length = static_cast<std::uint32_t>(context_length);
         context.enable_preemption = this->enable_preemption;
         context.tokenizer_config = tokenizer_config;
+        context.prefix_slots = this->prefix_slots_arg_;
+        context.prefix_cache_mb = this->prefix_cache_mb_arg_;
 
-        this->backend_ = registry.create(family, id, context);
+        this->backend_ = registry.create(family, id, provider, context);
+        if (initialize_host_frontend && !this->backend_->supports_state()) {
+            throw std::runtime_error(
+                "Backend provider '" + provider + "' for '" + family + "/" +
+                id + "' cannot drive the built-in frontend because it does "
+                "not implement the STATE capability");
+        }
+        this->backend_provider_ = provider;
         this->lm_engine = &this->backend_->engine();
     } catch (...) {
         this->backend_.reset();
+        this->backend_provider_.clear();
         this->lm_engine = nullptr;
         this->tokenizer.reset();
         this->sampler.reset();
@@ -360,6 +407,7 @@ void AutoModel::_shared_after_inference_failure(bool poisoned) {
     this->last_token = -1;
     this->token_history.clear();
     this->checkpoint_his.clear();
+    this->_forget_history_media();
     // A poisoned engine cannot be driven at all, not even to clear itself.
     if (!poisoned && this->lm_engine) {
         try { this->lm_engine->clear_context(); } catch (...) {}
@@ -409,6 +457,7 @@ size_t AutoModel::_prefix_resume(PrefixSlotCache& cache, const std::vector<int>&
     }
     this->total_tokens = resumed.match_len;
     this->token_history = std::move(matched);
+    this->history_media_.reset(); // the slot was only taken if its images are the prompt's
     // a cold prompt starts with an empty penalty history (clear_context); resuming must too,
     // or the tokens of earlier requests change what this one generates
     this->sampler->reset_penalties();
@@ -482,9 +531,11 @@ bool AutoModel::_prefix_insert(PrefixSlotCache& cache, chat_meta_info_t& meta_in
             head_prefill_ns = head_meta.prefill_duration;
             const std::vector<int> head_tokens(full_tokens.begin(), full_tokens.begin() + boundary);
             cache.set_live(head_tokens);
-            cache.save(head_tokens, {}, true, 0);
+            cache.save(head_tokens, image_hashes, true, 0); // keeps the hashes of the pictures inside the head
         } else {
             meta_info.stop_reason = head_meta.stop_reason;
+            meta_info.error_message = head_meta.error_message;
+            meta_info.error_code = head_meta.error_code;
         }
     }
     if (success) {
@@ -524,7 +575,33 @@ void AutoModel::_shared_validate_capacity(std::size_t rendered_tokens,
     }
 }
 
+prompt_reuse_t AutoModel::_plan_reuse(const std::vector<int>& tokens, const std::vector<prompt_media_t>& media) {
+    prompt_reuse_t plan = plan_prompt_reuse(this->token_history, tokens, media,
+                                            this->history_media_ ? &*this->history_media_ : nullptr);
+    if (plan.reason == prompt_reuse_t::kInsideMedia || plan.reason == prompt_reuse_t::kMediaChanged) {
+        // _shared_insert alone would keep the history: it does not see where the items are, nor what they hold
+        header_print("FLM", (plan.reason == prompt_reuse_t::kInsideMedia
+                                 ? "Prompt cache ends inside an image or audio clip, clearing context..."
+                                 : "An image or audio clip in the cached part of the prompt changed, clearing context..."));
+        clear_context();
+    }
+    // the other clears are _shared_insert's own, made when it gets there
+    this->planned_skip_ = plan.skip;
+    this->planned_media_ = media;
+    const size_t dropped = std::accumulate(plan.skipped_media.begin(), plan.skipped_media.end(), size_t{0});
+    if (dropped > 0) {
+        header_print("FLM", "Prompt-cache hit: dropped " << plan.skipped_media[prompt_media_t::kImage] << " cached image(s) and "
+                            << plan.skipped_media[prompt_media_t::kAudio] << " cached audio clip(s) from payload");
+    }
+    return plan;
+}
+
 bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, std::function<bool()> is_cancelled, void* payload, int first_len_run, std::optional<int> requested_max_new_tokens, bool sample_next) {
+    // taken first, so a request that throws below cannot leave it for the next one; a prefill-only head pass
+    // (_prefix_insert) leaves the plan to the pass that reads the rest of the prompt
+    const std::optional<size_t> planned_skip = sample_next ? std::exchange(this->planned_skip_, std::nullopt) : std::nullopt;
+    std::optional<std::vector<prompt_media_t>> planned_media;
+    if (sample_next) planned_media = std::exchange(this->planned_media_, std::nullopt);
     this->_shared_validate_capacity(tokens.size(), requested_max_new_tokens);
 
     // a prefill-only pass (sample_next false) is the head of a longer prompt: the
@@ -547,55 +624,64 @@ bool AutoModel::_shared_insert(chat_meta_info_t& meta_info, std::vector<int>& to
     // }
     // std::cout << std::endl;
 
-    // prefix check for tokens and token history to see if we can skip some tokens
-    const size_t idx = this->token_history.size();
-    size_t skip_count = 0;
-    for (size_t i = 0; i < idx; i++) {
-        if (i < tokens.size() && tokens[i] == this->token_history[i]) {
-            skip_count++;
-        }
-        else {
-            break;
-        }
-    }
-    if (skip_count != idx) {
-        if (is_server_mode) {
+    // skip the part of the prompt the engine already holds; the rule is plan_prompt_reuse's, which the
+    // models with media asked already (_plan_reuse) to trim their payload the same way
+    const prompt_reuse_t plan = plan_prompt_reuse(this->token_history, tokens);
+    if (plan.clear) {
+        if (is_server_mode && plan.reason == prompt_reuse_t::kDiverged) {
             header_print("FLM", "Conversation context diverged from cache, clearing context...");
         }
+        // kWholePrompt: the engine holds the whole prompt already (the same request again), but
+        // sampling needs the logits of its last token, and the cache cannot step back one
         clear_context();
-        skip_count = 0;
     }
-    else if (skip_count >= tokens.size() && !tokens.empty()) {
-        // The engine holds the whole prompt already (the same request again), but
-        // sampling needs the logits of its last token, and the cache cannot step
-        // back one: read it in again from the start.
+    const size_t skip_count = plan.skip;
+    if (payload != nullptr && planned_skip && *planned_skip != skip_count) {
+        // the payload was trimmed for another skip: its items would land on the wrong rows
         clear_context();
-        skip_count = 0;
+        throw std::logic_error("prompt cache: the payload was trimmed for a skip of " + std::to_string(*planned_skip) +
+                               " tokens, but the engine keeps " + std::to_string(skip_count));
     }
     tokens.erase(tokens.begin(), tokens.begin() + skip_count);
 
     if (this->total_tokens + tokens.size() >= this->MAX_L){
         header_print("WARNING", "Max length reached, stopping prefilling...");
+        meta_info.error_message = "Prompt does not fit in the context window: " + std::to_string(tokens.size()) +
+                                  " new prompt tokens on top of the " + std::to_string(this->total_tokens) +
+                                  " already held exceed the context length of " + std::to_string(this->MAX_L) + " tokens";
+        meta_info.error_code = 400;
         return false;
     }
     for (int token : tokens){
         this->token_history.push_back(token);
     }
+    if (planned_media) {
+        this->history_media_ = std::move(*planned_media);
+    } else if (skip_count == 0) {
+        this->history_media_ = std::vector<prompt_media_t>{};   // a prompt read in without a plan has no known media
+    }
     buffer<bf16> y;
 
+    const std::uint64_t replayed_before = this->backend_ ? this->backend_->replayed_tokens() : 0;
+    const std::uint64_t reused_before = this->backend_ ? this->backend_->reused_tokens() : 0;
     auto prefill_start_time = this->profiler_list[PREFILL_TIME].start();
-    
+
     y = _chunked_insert(meta_info, tokens, is_cancelled, payload, first_len_run);
 
     auto prefill_end_time = this->profiler_list[PREFILL_TIME].stop(tokens.size());
     meta_info.prefill_duration = (uint64_t)time_utils::duration_ns(prefill_start_time, prefill_end_time).first;
     // `tokens` was trimmed to the uncached suffix above, so add the prefix served
     // from the KV cache back on: usage.prompt_tokens is the whole prompt, and the
-    // cached part is reported separately rather than subtracted.
-    meta_info.cached_prompt_tokens = static_cast<int>(skip_count);
+    // cached part is reported separately rather than subtracted. What the engine
+    // had to run again of that prefix did not come from its cache; what it found
+    // already run of the rest (another conversation's state) did.
+    const std::uint64_t replayed = this->backend_ ? this->backend_->replayed_tokens() - replayed_before : 0;
+    const std::uint64_t reused = this->backend_ ? this->backend_->reused_tokens() - reused_before : 0;
+    meta_info.cached_prompt_tokens = static_cast<int>(skip_count - std::min<std::uint64_t>(skip_count, replayed) +
+                                                      std::min<std::uint64_t>(reused, tokens.size()));
     meta_info.prompt_tokens = static_cast<int>(skip_count + tokens.size());
 
-    if (meta_info.stop_reason == CANCEL_DETECTED) {
+    if (meta_info.stop_reason == CANCEL_DETECTED || meta_info.stop_reason == ERROR_DETECTED) {
         return false;
     }
 
@@ -622,6 +708,24 @@ buffer<bf16> AutoModel::_chunked_insert(chat_meta_info_t& meta_info, std::vector
         max_prefill_len = 1 << static_cast<int>(std::ceil(std::log2(max_prefill_len)));
     }
     buffer<bf16> y;
+    // test hook, off unless set: FLM_TEST_PREFILL_FAULT=throw|false makes a prefill whose prompt contains the text
+    // FLM_TEST_PREFILL_FAULT throw / be refused (ERROR_DETECTED), as a failing engine would (src/test/openai_api_test)
+    static const std::string prefill_fault = [] {
+        const char* v = std::getenv("FLM_TEST_PREFILL_FAULT");
+        return std::string(v != nullptr ? v : "");
+    }();
+    // An extension frontend owns its tokenizer, so the host has none to decode with.
+    if (!prefill_fault.empty() && this->tokenizer && this->tokenizer->decode(tokens).find("FLM_TEST_PREFILL_FAULT") != std::string::npos) {
+        if (prefill_fault == "throw") {
+            throw std::runtime_error("FLM_TEST_PREFILL_FAULT: injected prefill failure");
+        }
+        if (prefill_fault == "false") {
+            meta_info.stop_reason = ERROR_DETECTED;
+            meta_info.error_message = "FLM_TEST_PREFILL_FAULT: injected prefill refusal";
+            meta_info.error_code = 500;
+            return y;
+        }
+    }
     if (max_prefill_len < 512) {
         if (is_cancelled()) {
             meta_info.stop_reason = CANCEL_DETECTED;
@@ -644,6 +748,9 @@ buffer<bf16> AutoModel::_chunked_insert(chat_meta_info_t& meta_info, std::vector
             ? this->lm_engine->get_current_context_length() % max_prefill_len
             : 0;
         int chunks = (lead + static_cast<int>(tokens.size()) + max_prefill_len - 1) / max_prefill_len;
+        if (chunks > 1 && this->backend_) {
+            this->backend_->expect_prefill(tokens);
+        }
         for (int i = 0; i < chunks; i++) {
             int start = std::max(0, i * max_prefill_len - lead);
             int end = std::min(static_cast<int>(tokens.size()), (i + 1) * max_prefill_len - lead);
@@ -708,8 +815,10 @@ void AutoModel::_begin_turn(chat_meta_info_t& meta_info, const std::vector<int>&
         }
     }
     if (meta_info.constraint) {
+        // a grammar that lets a continued message stop inside a call is a tool grammar,
+        // so it starts inside that call; a token ban ignores the prefill
         meta_info.constraint->start(chat_format_prefill(this->chat_format, meta_info.prompt_tail,
-                                                        meta_info.continue_final_message));
+                                                        meta_info.continue_final_message, true));
     }
 }
 
@@ -723,38 +832,60 @@ std::string AutoModel::token_text(int token) {
     }
 }
 
-int AutoModel::_sample(buffer<bf16>& logits, chat_meta_info_t& meta_info) {
+std::vector<int> AutoModel::encode_text(const std::string& text) {
+    return tokenizer->encode(text);
+}
+
+std::string AutoModel::tokenizer_json_path() const {
+    return (std::filesystem::path(model_path) / "tokenizer.json").string();
+}
+
+template <typename At, typename Draw>
+int AutoModel::_sample_masked(std::size_t n, At at, Draw draw, chat_meta_info_t& meta_info, bool no_eos,
+                              sample_logprobs_t* raw) {
     decode_constraint* constraint = meta_info.constraint.get();
     bool masked = constraint != nullptr && constraint->fill_mask(this->constraint_mask_);
     // ignore_eos / min_tokens: take the EOS ids out of the allowed set
-    if (meta_info.ignore_eos || meta_info.generated_tokens < meta_info.min_tokens) {
-        const size_t words = (logits.size() + 31) / 32;
+    if (no_eos) {
+        const size_t words = (n + 31) / 32;
         if (!masked) {
             this->constraint_mask_.assign(words, 0xFFFFFFFFu);
         } else if (this->constraint_mask_.size() < words) {
             this->constraint_mask_.resize(words, 0u);
         }
-        std::vector<uint32_t> saved = this->constraint_mask_;
+        // only a grammar's mask needs restoring below: without one the mask goes unused
+        std::vector<uint32_t> saved;
+        if (masked) saved = this->constraint_mask_;
         for (int id : this->eos_token_ids) {
-            if (id >= 0 && static_cast<size_t>(id) < logits.size()) {
+            if (id >= 0 && static_cast<size_t>(id) < n) {
                 this->constraint_mask_[id / 32] &= ~(1u << (id % 32));
             }
         }
-        // a grammar that only allows EOS here keeps it: nothing else could be sampled
+        // A grammar that only allows EOS has nothing left once EOS is masked.
+        // min_tokens still keeps that EOS. ignore_eos must not: a fixed-length
+        // replay asks for a fixed completion length even when tools are bound,
+        // so drop the grammar and sample any non-EOS token until max_tokens.
         bool any = false;
         for (uint32_t w : this->constraint_mask_) { if (w) { any = true; break; } }
         if (any) {
             masked = true;
-        } else {
+        } else if (meta_info.ignore_eos) {
+            this->constraint_mask_.assign(words, 0xFFFFFFFFu);
+            for (int id : this->eos_token_ids) {
+                if (id >= 0 && static_cast<size_t>(id) < n) {
+                    this->constraint_mask_[id / 32] &= ~(1u << (id % 32));
+                }
+            }
+            masked = true;
+            meta_info.constraint.reset();
+            constraint = nullptr;
+        } else if (masked) {
             this->constraint_mask_ = saved;
         }
     }
-    sample_logprobs_t raw;
-    raw.top_n = meta_info.logprobs_top_n;
     // The mask goes to the sampler, which applies it to its own copy: the logits
     // live in the engine's device-mapped buffer and are never written here.
-    int token = this->sampler->sample(logits, masked ? &this->constraint_mask_ : nullptr,
-                                      meta_info.logprobs_top_n >= 0 ? &raw : nullptr);
+    int token = draw(masked ? &this->constraint_mask_ : nullptr, raw);
     auto allowed = [this](size_t i) {
         return i / 32 < this->constraint_mask_.size() && ((this->constraint_mask_[i / 32] >> (i % 32)) & 1u);
     };
@@ -764,11 +895,11 @@ int AutoModel::_sample(buffer<bf16>& logits, chat_meta_info_t& meta_info) {
         int first = -1;
         int best = -1;
         float best_logit = -std::numeric_limits<float>::infinity();
-        for (size_t i = 0; i < logits.size(); i++) {
+        for (size_t i = 0; i < n; i++) {
             if (!allowed(i)) {
                 continue;
             }
-            const float v = static_cast<float>(logits[i]);
+            const float v = at(i);
             if (first < 0) first = static_cast<int>(i);
             if (v > best_logit) {  // NaN never compares greater
                 best = static_cast<int>(i);
@@ -787,12 +918,50 @@ int AutoModel::_sample(buffer<bf16>& logits, chat_meta_info_t& meta_info) {
     if (constraint != nullptr) {
         constraint->accept(token);
     }
+    return token;
+}
+
+int AutoModel::_sample(buffer<bf16>& logits, chat_meta_info_t& meta_info) {
+    if (!this->sampler ||
+        logits.size() < static_cast<std::size_t>(this->sampler->in_features)) {
+        throw std::runtime_error(
+            "Backend returned fewer logits than the frontend vocabulary");
+    }
+    sample_logprobs_t raw;
+    raw.top_n = meta_info.logprobs_top_n;
+    const int token = this->_sample_masked(
+        logits.size(),
+        [&logits](size_t i) { return static_cast<float>(logits[i]); },
+        [this, &logits](const std::vector<uint32_t>* mask, sample_logprobs_t* lp) {
+            return this->sampler->sample(logits, mask, lp);
+        },
+        meta_info, meta_info.ignore_eos || meta_info.generated_tokens < meta_info.min_tokens,
+        meta_info.logprobs_top_n >= 0 ? &raw : nullptr);
     // The chosen token's logprob is read here rather than in the sampler: the
-    // fallback above may have replaced what the sampler picked.
+    // fallback in _sample_masked() may have replaced what the sampler picked.
     meta_info.last_sample_logged = meta_info.logprobs_top_n >= 0 &&
         this->_record_logprob(meta_info, token, static_cast<float>(logits[token]), raw);
     meta_info.insert_sample_pending = false;
     return token;
+}
+
+int AutoModel::_sample_row(const float* row, int vocab, chat_meta_info_t& meta_info, int ahead, bool greedy) {
+    if (!this->sampler || (!greedy && vocab < this->sampler->in_features)) {
+        throw std::runtime_error(
+            "Backend returned fewer logits than the frontend vocabulary");
+    }
+    return this->_sample_masked(
+        static_cast<std::size_t>(vocab),
+        [row](size_t i) { return row[i]; },
+        [this, row, vocab, greedy](const std::vector<uint32_t>* mask, sample_logprobs_t*) {
+            if (!greedy) return this->sampler->sample(row, mask, nullptr);
+            int token = Sampler::argmax(row, vocab, mask);
+            // nothing allowed, or NaN logits: the plain argmax (0 if every logit is NaN), which the fallback
+            // replaces with an allowed token if there is one
+            if (token < 0 && mask != nullptr) token = Sampler::argmax(row, vocab);
+            return token < 0 ? 0 : token;
+        },
+        meta_info, meta_info.ignore_eos || meta_info.generated_tokens + ahead < meta_info.min_tokens, nullptr);
 }
 
 bool AutoModel::_record_logprob(chat_meta_info_t& meta_info, int token, float token_logit,
@@ -830,14 +999,14 @@ std::shared_ptr<decode_constraint> AutoModel::make_constraint(const chat_constra
     chat_vocab vocab;
     vocab.size = static_cast<size_t>(this->sampler->in_features);
     vocab.encode = [this](const std::string& text) {
-        std::vector<int> ids = this->tokenizer->encode(text);
+        std::vector<int> ids = this->encode_text(text);
         if (this->has_bos_token && !ids.empty() && ids.front() == this->bos_token_id) {
             ids.erase(ids.begin());
         }
         return ids;
     };
     vocab.stop_tokens = this->eos_token_ids;
-    vocab.tokenizer_json = (std::filesystem::path(this->model_path) / "tokenizer.json").string();
+    vocab.tokenizer_json = this->tokenizer_json_path();
 
     auto engine = [this, &vocab]() -> chat_grammar_engine& {
         if (!this->grammar_engine_ || this->grammar_engine_path_ != vocab.tokenizer_json) {
@@ -883,12 +1052,12 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
     // the sample insert() took is the reply's first token, and counts toward the limit
     meta_info.generated_tokens++;
     if (this->is_normal_token(last_sampled_token) && last_sampled_token != -1){
-        std::string token_str = this->tokenizer->run_time_decoder(last_sampled_token);
+        std::string token_str = this->token_text(last_sampled_token);
         result += token_str;
         os << token_str << std::flush;
 
     }
-    if (this->is_eos(last_sampled_token)){
+    if (this->is_eos(last_sampled_token) && !meta_info.ignore_eos){
         // Sampled from the prefill, so no engine has run it.
         this->token_history.pop_back();
         meta_info.stop_reason = reason;
@@ -930,13 +1099,13 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
 
         this->profiler_list[TKOEN_DECODE_TIME].start();
         if (this->is_normal_token(sampled_token)){ // filter out special tokens
-            std::string token_str = this->tokenizer->run_time_decoder(sampled_token);
+            std::string token_str = this->token_text(sampled_token);
             os << token_str << std::flush;
             result += token_str;
         }
         this->profiler_list[TKOEN_DECODE_TIME].stop(1);
         this->token_history.push_back(sampled_token);
-        if (this->is_eos(sampled_token)){
+        if (this->is_eos(sampled_token) && !meta_info.ignore_eos){
             meta_info.generated_tokens++;
             // The FastFlowLM engines want one more forward() to keep their KV
             // cache in step. Two things can say no: a frontend whose cache is
@@ -947,6 +1116,10 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
             if (this->forward_on_eos && this->total_tokens < decode_cap &&
                 (!this->backend_ || this->backend_->forwards_past_eos())) {
                 this->lm_engine->forward(last_sampled_token);
+                // Counted like any other row: a model whose insert() prefix-matches
+                // the next prompt without a restore keeps total_tokens across turns,
+                // and every MAX_L check would otherwise fall one row short per turn.
+                this->total_tokens++;
             } else {
                 // The engine never ran it, so the next prompt has to carry it.
                 this->token_history.pop_back();
@@ -958,6 +1131,10 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
             reason = MAX_LENGTH_REACHED;
             break;
         }
+        if (this->_stop_generation(meta_info)){
+            reason = MAX_LENGTH_REACHED;
+            break;
+        }
     }
     meta_info.decoding_duration = (uint64_t)(time_utils::cast_to_us(this->profiler_list[DECODING_TIME].get_total_time()).first) * 1e3;
     meta_info.stop_reason = reason;
@@ -966,14 +1143,20 @@ std::string AutoModel::_shared_generate(chat_meta_info_t& meta_info, int length_
         // so the next prompt has to carry it.
         this->token_history.pop_back();
     }
-    if (this->total_tokens >= decode_cap){
+    // an eos run on the last row fills the window too, but nothing was stopped
+    if (reason == MAX_LENGTH_REACHED && this->total_tokens >= decode_cap){
         header_print("WARNING", "Max length reached, stopping generation...");
     }
     if (this->log_raw_output) {
         std::cout << std::endl;
-        header_print("FLM", "Model RAW Output: \n" + result);
+        this->print_raw_output(result);
     }
     return result;
+}
+
+void AutoModel::print_raw_output(const std::string& result) const {
+    if (!this->log_raw_output) return;
+    header_print("FLM", "Model RAW Output: \n" + result);
 }
 
 /// \brief Clear the context
@@ -992,6 +1175,7 @@ void AutoModel::_clear_live_context() {
     this->last_token = -1;
     this->token_history.clear();
     this->checkpoint_his.clear();
+    this->_forget_history_media();
     // A poisoned engine would throw; drop the conversation and leave it alone
     // so the caller can still reload.
     if (this->backend_ && this->backend_->poisoned()) {
@@ -1025,6 +1209,24 @@ void AutoModel::set_sampler(sampler_config& sampler_config) {
         this->sampler.reset();
     }
     this->sampler = std::make_unique<Sampler>(this->lm_config->get("vocab_size"), sampler_config);
+    this->loaded_sampler_config = sampler_config;
+}
+
+/// \brief Remember the settings a request may change, as the model loaded them
+/// \note Call after load_model()
+void AutoModel::save_request_settings() {
+    this->loaded_thinking = this->thinking_enabled();
+    this->save_model_request_settings();
+}
+
+/// \brief Put back the settings save_request_settings() remembered: sampling and thinking
+/// \note Recreates the sampler, so its penalty window starts empty and, without a seed, its
+///       random generator is seeded from the clock
+void AutoModel::restore_request_settings() {
+    sampler_config config = this->loaded_sampler_config;
+    this->set_sampler(config);
+    this->configure_parameter("enable_think", this->loaded_thinking);
+    this->restore_model_request_settings();
 }
 
 /// \brief Set the max length
@@ -1149,16 +1351,9 @@ void AutoModel::verbose() {
 /// \note The function will set the top-k
 /// \note The function will check if the top-k is valid
 void AutoModel::set_topk(int topk) {
-    if (topk < 1) {
-        header_print("WARNING", "Top-k must be greater than 0");
-        return;
-    }
-    if (topk > this->lm_config->get("vocab_size")) {
-        header_print("WARNING", "Top-k is greater than vocab size, set to vocab size: " << this->lm_config->get("vocab_size"));
-        topk = this->lm_config->get("vocab_size");
-    }
-    
-    this->sampler->top_k = topk;
+    const int vocab_size = this->sampler->in_features;
+    // top_k <= 0 turns top-k off: every token stays a candidate
+    this->sampler->top_k = effective_top_k(topk, vocab_size);
 }
 
 /// \brief Set the top-p
@@ -1232,14 +1427,6 @@ void AutoModel::set_frequency_penalty(float frequency_penalty) {
         return;
     }
     this->sampler->freq_penalty = frequency_penalty;
-}
-
-/// \brief Set the frequency penalty window
-/// \param frequency_penalty_window the frequency penalty window
-/// \note The function will set the frequency penalty window
-/// \note The function will check if the frequency penalty window is valid
-void AutoModel::set_frequency_penalty_window(int frequency_penalty_window) {
-    this->sampler->freq_penalty_window = frequency_penalty_window;
 }
 
 /// \brief Set the penalty window

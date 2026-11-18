@@ -55,8 +55,8 @@ The following endpoints are actively supported and maintained:
 
 - `v1/models`
 - `v1/chat/completions`
-- `v1/audio/transcriptions`
-- `v1/embeddings`
+- `v1/audio/transcriptions` (Whisper with `--asr 1`, or a speech model such as [`r2t2:1.7b`](/docs/models/r2t2/) when it is the requested `model`)
+- [`v1/embeddings`](../../models/embeddinggemma.md)
 
 ---
 
@@ -325,7 +325,7 @@ import gc
 gc.collect()
 ```
 
-> ⚠️ Sampling settings stay in effect for later requests that don't send them, until the model is reloaded; `seed` applies to its own request only. What each field does, `seed`, the penalty window and model defaults: [Request Parameters & Long Prompts](https://fastflowlm.com/docs/instructions/server/request_parameters/).
+> ℹ️ Sampling settings apply only to the request that sends them; a request that leaves one out gets the model's default. What each field does, `seed`, the penalty window and model defaults: [Request Parameters & Long Prompts](https://fastflowlm.com/docs/instructions/server/request_parameters/).
 
 ---
 
@@ -441,6 +441,8 @@ del response, client
 import gc
 gc.collect()
 ```
+
+> 🎞️ **Video frames:** `minicpm-v-4.7:1b` also accepts decoded RGB8 frames directly (`image_raw`), with no JPEG/PNG encoding. See [Raw RGB Images](https://fastflowlm.com/docs/instructions/server/raw_rgb_images/).
 
 ---
 

@@ -7,10 +7,10 @@
 #pragma once
 
 #include "model_list.hpp"
-#include "lm_config.hpp"
 #include "download_model.hpp"
 #include "nlohmann/json.hpp"
 #include <filesystem>
+#include <optional>
 #include <vector>
 #include <string>
 #include <iostream>
@@ -26,6 +26,11 @@ ModelFileSource resolve_file_source(
     const nlohmann::json& model_info,
     std::string_view filename,
     bool use_modelscope);
+
+// The folder of the model directory that a catalog file entry is in ("decoder" for
+// decoder/model.onnx), or none for a file at the top of the directory or an entry that
+// does not stay inside it ("/vision/x.bin", "C:x.bin", "../x.bin")
+std::optional<std::string> model_file_folder(std::string_view file);
 
 class ModelDownloader {
 public:

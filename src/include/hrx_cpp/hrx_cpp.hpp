@@ -24,6 +24,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -177,11 +178,61 @@ inline std::unordered_map<std::string, CachedExe>& exe_cache() {
     static std::unordered_map<std::string, CachedExe> c;
     return c;
 }
-inline std::string make_exe_key(const std::vector<uint8_t>& xclbin_bytes,
+// --- xclbin content digest -------------------------------------------------
+// The executable-cache key must distinguish xclbin images, but copying and
+// hashing the whole (~0.5 MB) image into the key on every create_run dominated
+// the HRX prefill path (thousands of create_run calls per prefill on MoE
+// models). Instead each image is digested EXACTLY ONCE, when its hw_context is
+// constructed, and the digest travels WITH the context (see
+// hw_context::digest()); make_exe_key then just appends the small precomputed
+// digest. No global registry, no address keying, no per-create_run mutex.
+//
+// Collision safety: the digest is TWO independent 64-bit content hashes
+// (FNV-1a and Jenkins one-at-a-time, different constructions), and the key also
+// pins the exact image size. A false cache hit would require a simultaneous
+// collision in both 64-bit hashes AND an identical size -- a ~2^-128 event,
+// far below the rate of an uncorrected memory error, so it is sound without a
+// per-hit full-image byte-compare (which would reintroduce O(image) work on the
+// hot per-expert loop we are optimizing). Both hashes are explicit and
+// deterministic across standard libraries, so keys are reproducible.
+struct xclbin_digest {
+    uint64_t h1 = 0;  // FNV-1a-64
+    uint64_t h2 = 0;  // Jenkins one-at-a-time (64-bit)
+    bool operator==(const xclbin_digest& o) const {
+        return h1 == o.h1 && h2 == o.h2;
+    }
+};
+inline xclbin_digest compute_xclbin_digest(const std::vector<uint8_t>& b) {
+    uint64_t h1 = 1469598103934665603ULL;        // FNV offset basis
+    uint64_t h2 = 0xcbf29ce484222325ULL ^ b.size();
+    for (uint8_t c : b) {
+        h1 ^= c;
+        h1 *= 1099511628211ULL;                  // FNV prime
+        h2 += c;
+        h2 += h2 << 10;
+        h2 ^= h2 >> 6;
+    }
+    h2 += h2 << 3;
+    h2 ^= h2 >> 11;
+    h2 += h2 << 15;
+    return xclbin_digest{h1, h2};
+}
+
+inline std::string make_exe_key(size_t xclbin_size, const xclbin_digest& dg,
                                 const uint32_t* cc, size_t n) {
+    // Identify the xclbin by its exact size + the two-hash content digest
+    // computed once when its hw_context was constructed, then append the
+    // control-code words. Distinct images differ in digest (and almost always
+    // size) so they never share a key; the same image reuses its stored digest,
+    // so repeated lookups never re-hash the (hundreds-of-KB) blob. Cache
+    // hit/miss semantics are identical to hashing the full image.
+    const uint64_t xsize = static_cast<uint64_t>(xclbin_size);
     std::string key;
-    key.reserve(xclbin_bytes.size() + n * sizeof(uint32_t) + 2 * sizeof(uint64_t));
-    append_key_bytes(key, xclbin_bytes.data(), xclbin_bytes.size());
+    key.reserve(sizeof(xsize) + sizeof(dg.h1) + sizeof(dg.h2) +
+                n * sizeof(uint32_t) + sizeof(uint64_t));
+    key.append(reinterpret_cast<const char*>(&xsize), sizeof(xsize));
+    key.append(reinterpret_cast<const char*>(&dg.h1), sizeof(dg.h1));
+    key.append(reinterpret_cast<const char*>(&dg.h2), sizeof(dg.h2));
     append_key_bytes(key, cc, n * sizeof(uint32_t));
     return key;
 }
@@ -191,9 +242,9 @@ inline std::string make_exe_key(const std::vector<uint8_t>& xclbin_bytes,
 // release_executable below. Returns nullptr on create failure (never cached, so
 // a later call can retry instead of dispatching a silent no-op).
 inline hrx_executable_t lookup_or_build_executable(
-    const std::vector<uint8_t>& xclbin_bytes, const uint32_t* cc, size_t n,
-    uint32_t* ord_out, std::string* key_out) {
-    std::string key = make_exe_key(xclbin_bytes, cc, n);
+    const std::vector<uint8_t>& xclbin_bytes, const xclbin_digest& digest,
+    const uint32_t* cc, size_t n, uint32_t* ord_out, std::string* key_out) {
+    std::string key = make_exe_key(xclbin_bytes.size(), digest, cc, n);
     std::lock_guard<std::mutex> lk(exe_cache_mu());
     auto& cache = exe_cache();
     auto it = cache.find(key);
@@ -277,7 +328,10 @@ inline void release_executable(const std::string& key) {
 inline hrx_executable_t build_or_get_executable(
     const std::vector<uint8_t>& xclbin_bytes, const uint32_t* cc, size_t n,
     uint32_t* ord_out) {
-    return lookup_or_build_executable(xclbin_bytes, cc, n, ord_out, nullptr);
+    // Backward-compat entry: not on the hot path, so digest the image inline.
+    return lookup_or_build_executable(xclbin_bytes,
+                                      compute_xclbin_digest(xclbin_bytes), cc, n,
+                                      ord_out, nullptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -352,10 +406,17 @@ public:
 class hw_context {
 public:
     std::shared_ptr<std::vector<uint8_t>> xclbin_bytes_;
+    // Content digest of xclbin_bytes_, computed ONCE at construction and carried
+    // with the context (the default copy ctor copies it alongside the bytes, so
+    // copies made in npu_app stay consistent). make_exe_key uses this instead of
+    // re-hashing the blob on every create_run.
+    xclbin_digest xclbin_digest_;
 
     hw_context() = default;
     hw_context(const device& /*dev*/, const xclbin& xc)
-        : xclbin_bytes_(xc.bytes_shared()) {}
+        : xclbin_bytes_(xc.bytes_shared()) {
+        if (xclbin_bytes_) xclbin_digest_ = compute_xclbin_digest(*xclbin_bytes_);
+    }
     // The (device, uuid) form is accepted for source compatibility; it carries
     // no xclbin bytes, so prefer the (device, xclbin) form.
     hw_context(const device& /*dev*/, const uuid& /*id*/) {}
@@ -364,6 +425,7 @@ public:
         static const std::vector<uint8_t> empty;
         return xclbin_bytes_ ? *xclbin_bytes_ : empty;
     }
+    const xclbin_digest& digest() const { return xclbin_digest_; }
 };
 
 // ---------------------------------------------------------------------------

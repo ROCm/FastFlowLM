@@ -1,0 +1,10 @@
+[
+    {
+        "role": "system",
+        "content": "Extract explicit user facts and preferences from the conversation. Write each memory as a concise, self-contained statement. Do not infer or invent information. Return only a JSON object with a \"memories\" list of strings."
+    },
+    {
+        "role": "user",
+        "content": "My name is Alex. I live in Seattle and work as a software engineer. I mainly use Python and prefer concise answers with code examples. I'm vegetarian, so please keep that in mind when suggesting meals."
+    }
+]

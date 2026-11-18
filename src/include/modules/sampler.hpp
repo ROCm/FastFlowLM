@@ -18,7 +18,6 @@
 /// \param top_p the top p
 /// \param rep_penalty the rep penalty
 /// \param freq_penalty the freq penalty
-/// \param rep_penalty_window the rep penalty window
 typedef struct sampler_config_{
     int top_k = 40;
     float top_p = 0.9f;
@@ -27,8 +26,6 @@ typedef struct sampler_config_{
     float rep_penalty = 1.0f;
     float freq_penalty = 0.0f;
     float pre_penalty = 0.0f;
-    int rep_penalty_window = 64;
-    int freq_penalty_window = 64;  // Window size for frequency penalty
     int repeat_last_n = 64;
     bool use_optimized_sampling = true;
     bool has_rng_seed = false;
@@ -82,15 +79,16 @@ public:
     
     // Ring buffer for frequency tracking
     std::deque<int> token_history;
-    size_t freq_penalty_window;
-    size_t rep_penalty_window;
     size_t repeat_last_n;
     
     std::unordered_map<int, int> token_counts_sparse;
 
     std::mt19937_64 rng_{};
-    std::uniform_real_distribution<float> uniform_dist_{0.0f, 1.0f};
     bool use_optimized_sampling = true;
+
+    // scratch for sampler_sort_all_apply(), sized on first use
+    std::vector<uint64_t> sort_keys_;
+    std::vector<uint64_t> sort_tmp_;
 
     /// \brief Constructor
     /// \param in_features the input features
@@ -100,6 +98,12 @@ public:
 
     /// \brief Restart the random generator from seed
     void set_seed(uint64_t seed);
+
+    /// \brief The next uniform draw in [0, 1)
+    /// \note (mt19937_64() >> 40) * 2^-24. The standard fixes the engine but not
+    ///       std::uniform_real_distribution, so this is what makes a seed give the same
+    ///       sequence on every compiler and standard library.
+    float next_uniform();
 
     /// \brief Change the penalty window
     /// \param n how many of the last sampled tokens the penalties look at, 0 turns them off
@@ -133,6 +137,13 @@ public:
                       sample_logprobs_t* logprobs = nullptr);
 
     void sampler_topk_apply(int k);
+
+    /// \brief top-k off: the list sampler_topk_apply(in_features) gives, in the same order, by a radix sort
+    /// \param min_p when in (0, 1], only the head of that list sampler_minp_apply(min_p) would keep. Callers pass
+    ///        0 while top-p is on: its normaliser sums the whole list, in order.
+    /// \return false, leaving top_k_logits alone, when a NaN logit leaves the order to the heap's internals
+    /// \note A heap sort of a 150k-260k vocabulary on every token is most of the cost of sampling with top-k off.
+    bool sampler_sort_all_apply(float min_p);
     void sampler_topp_apply(float p);
     void sampler_minp_apply(float p);
     void sampler_temp_apply(float temp);
@@ -149,6 +160,18 @@ public:
     /// \return the sampled token
     int sample(buffer<bf16>& x, const std::vector<uint32_t>* allowed = nullptr,
                sample_logprobs_t* logprobs = nullptr);
+
+    /// \brief sample() for an fp32 row of in_features logits, e.g. a verify row of a speculative batch
+    int sample(const float* x, const std::vector<uint32_t>* allowed = nullptr,
+               sample_logprobs_t* logprobs = nullptr);
+
+    /// \brief the first largest of x[0..n) whose bit is set in allowed (every id without one), -1 if none is allowed
+    /// \note Reads x only: no penalties, no penalty window, so it is the plain argmax a greedy draft is checked against.
+    static int argmax(const float* x, int n, const std::vector<uint32_t>* allowed = nullptr);
+
+    /// \brief sample() and sample_greedy() past the copy into this->logits
+    int sample_loaded(const std::vector<uint32_t>* allowed, sample_logprobs_t* logprobs);
+    int sample_greedy_loaded(const std::vector<uint32_t>* allowed, sample_logprobs_t* logprobs);
 
     /// \brief Push every token the bitmask does not allow to -inf in this->logits
     void sampler_allowed_apply(const std::vector<uint32_t>* allowed);

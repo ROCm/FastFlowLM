@@ -8,13 +8,21 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
   run_tests  false only when every changed file is documentation or otherwise
              never built or packaged, so no NPU runner is reserved for it
   families   comma-separated model families (details.family in
-             src/model_list.json) whose engine or catalog entry changed; the
-             pr tier tests every model in them instead of one per engine
+             src/model_list.json) whose engine or NPU catalog entry changed;
+             the pr tier tests every model in them instead of one per engine
   asr_full   true when speech-recognition code changed, so the pr tier runs
              the whole ASR evaluation set
   suites     "all", or the comma-separated npu_test suites the change can
              affect when every changed file is scoped to some (an ASR-only
-             change runs asr, a d3-only change runs decision)
+             change runs asr, a d3-only change runs decision); "none" when
+             every changed file is oga-hipep code, a GPU catalog entry or a
+             test of the shutdown suite, which no NPU job runs; a change to a
+             model_list.json field outside its model entries, such as
+             model_path, gives "all"
+  hipep      true when the change can reach qwen3.5-oga-hipep:9b, which Test
+             Windows HIPEP runs on the GPU: when every suite runs, or a changed
+             file is oga-hipep code, a GPU catalog entry, the qwen3.5 frontend,
+             or a test of the chat, api and shutdown suites that job runs
   summary    one line for the job log
 
 When in doubt it tests more: an all-zero or missing base (a new branch), or a
@@ -78,6 +86,7 @@ ENGINES = {
     ("qwen3_5vl",):                          ("qwen3.5",),
     ("minicpm_v_4_7", "minicpm_v"):          ("minicpm-v-4.7",),
     ("minicpm_v_4_7_moe", "minicpm_v_moe"): ("minicpm-v-4.7-moe",),
+    ("minicpm_ocr",):                        ("minicpm-ocr",),
     ("qwen3_6_moe",):                        ("qwen3.6-moe",),
     # qwen3.8-dflash2 is the same engine with a draft package (Qwen3_8DFlash2 derives from Qwen3_8MTP).
     ("qwen3_8mtp", "qwen3_8_mtp"):           ("qwen3.8-mtp", "qwen3.8-dflash2"),
@@ -90,6 +99,7 @@ ENGINES = {
     ("gemma4e_dflash_flash",):               ("gemma4e-dflash-flash",),
     ("gemma4_12b",):                         ("gemma4-12b",),
     ("hunyuan",):                            ("hunyuan",),
+    ("hy_mem", "hy_memory"):                 ("hy-memory",),
     ("gpt_oss",):                            ("gpt-oss",),
     ("lfm2",):                               ("lfm2", "lfm2.5-tk"),
     ("lfm3",):                               ("lfm3",),
@@ -124,7 +134,35 @@ SUBSYSTEMS = (
     # src/detail builds the gemma4e engine from source; gemma4e_flash
     # includes it.
     ("gemma4e engine source", r"src/detail/", ("gemma4e", "gemma4e-flash")),
+    # An oga-hipep header that the qwen3.5 frontend includes in every package.
+    ("header the qwen3.5 frontend includes", r"src/include/oga/oga_vision\.hpp$", ("qwen3.5",)),
 )
+
+# The oga-hipep backend, in the Windows XRT package only, runs on the GPU the
+# catalog entries whose effective backend is oga-hipep: their "backend" key,
+# or without one, a name ending in GPU_SUFFIX (model_list::backend_for_family).
+# No NPU model runs its code (bar the header above) or those entries, so they
+# name no family and run no NPU job: Test Windows HIPEP tests them, on
+# qwen3.5-oga-hipep:9b.
+GPU_ONLY = re.compile(r"^(src/(common|include)/oga/|src/test/oga_hipep/)")
+GPU_SUFFIX = "-oga-hipep"
+# An entry's "backend" key (flm::backend::kBackendKey), when present, overrides
+# the suffix rule; GPU_BACKEND is the oga-hipep backend's id.
+GPU_BACKEND_KEY = "backend"
+GPU_BACKEND = "oga-hipep"
+# The family of qwen3.5-oga-hipep:9b: a change to its frontend reaches that
+# model too, one to its NPU engine does not.
+GPU_FAMILIES = {"qwen3.5"}
+GPU_FRONTEND = re.compile(r"^src/(include|common)/AutoModel/")
+# The suites Test Windows HIPEP runs.
+GPU_SUITES = {"chat", "api", "shutdown"}
+# Those that test no NPU model, so a change to their tests runs no NPU job.
+GPU_ONLY_SUITES = {"shutdown"}
+
+# Tests of shared code kept in an engine's test directory, which name no family:
+# test_model_downloader tests src/pull, beside the phi4 corelib tests it came
+# with. A change to phi4's own entries shows in the catalog.
+SHARED_TESTS = re.compile(r"^src/test/phi4_core/test_model_downloader\.cpp$")
 
 # Files that only serve speech recognition: any change runs the whole ASR
 # set. Ported from the paths: filter of the old asr-test.yml and asr_gate.sh,
@@ -152,16 +190,21 @@ ASR_WORDS = re.compile(r"audio|transcri|whisper|multipart|speech|\basr\b|\bwav\b
 
 
 # The npu_test suites, in run order; "all" when a change is not scoped.
-SUITES = ("chat", "serving", "prefix_cache", "api", "embedding", "decision", "asr")
+SUITES = ("chat", "serving", "prefix_cache", "api", "embedding", "decision", "asr", "shutdown")
 
 # Test-side files that matter to one suite only. Anything else in npu_test
 # (the client, server, harness, plan) runs every suite.
 TEST_SCOPES = (
     (r"\.github/script/npu_test/suites/(\w+)\.py$", None),  # the suite itself
+    (r"\.github/script/npu_test/console\.py$", {"shutdown"}),
     (r"\.github/script/npu_test/assets/d3_goldens[^/]*\.jsonl$", {"decision"}),
     (r"\.github/script/npu_test/assets/vision/|\.github/script/npu_test/tools/make_vision_assets\.py$",
      {"chat"}),
     (r"src/test/(openai_api_test|openai_usage)/", {"api"}),
+    # The model-extension contracts run in cpu-tests.yml on every change; the
+    # Gemma4-open bundle and its NPU tests run with chat.
+    (r"src/test/(model_frontend|model_backend|model_list_platform|model_extension_\w+)/"
+     r"|src/schemas/|src/cmake/FastFlowLMModelExtension[^/]*\.cmake(\.in)?$", {"chat"}),
 )
 
 
@@ -231,6 +274,8 @@ class Decision:
     asr_full: bool = False
     # None: every suite. Otherwise the suites every changed file is scoped to.
     suites: Optional[set] = field(default_factory=set)
+    # A changed file reaches qwen3.5-oga-hipep:9b (every suite running does too).
+    hipep: bool = False
     reasons: list = field(default_factory=list)
 
     def all_suites(self, path: str) -> None:
@@ -242,18 +287,31 @@ class Decision:
         if self.suites is not None:
             self.suites |= names
 
+    def reach_hipep(self, reason: str) -> None:
+        self.hipep = True
+        self.reasons.append(reason)
+
+    def runs_hipep(self) -> bool:
+        return self.run_tests and (self.hipep or self.suites_value() == "all")
+
     def summary(self) -> str:
         if not self.run_tests:
             return "documentation only: NPU tests skipped"
+        hipep = "HIPEP: " + ("runs" if self.runs_hipep() else "skipped")
+        if self.suites_value() == "none":
+            return f"oga-hipep only: NPU tests skipped; {hipep}"
         parts = ["NPU tests run"]
         parts.append("families in full: " + (", ".join(sorted(self.families)) or "none"))
         parts.append("ASR: whole set" if self.asr_full else "ASR: pr subset")
         parts.append("suites: " + self.suites_value().replace(",", ", "))
+        parts.append(hipep)
         return "; ".join(parts)
 
     def suites_value(self) -> str:
-        if self.suites is None or not self.suites:
+        if self.suites is None:
             return "all"
+        if not self.suites:
+            return "none" if self.hipep else "all"
         return ",".join(s for s in SUITES if s in self.suites)
 
     def outputs(self) -> dict[str, str]:
@@ -261,6 +319,7 @@ class Decision:
                 "families": ",".join(sorted(self.families)),
                 "asr_full": str(self.asr_full).lower(),
                 "suites": self.suites_value(),
+                "hipep": str(self.runs_hipep()).lower(),
                 "summary": self.summary()}
 
 
@@ -281,19 +340,52 @@ def family_of(entry: dict) -> str:
     return details.get("family", "") if isinstance(details, dict) else ""
 
 
-def catalog_diff(base: dict[str, dict], head: dict[str, dict]) -> set:
-    """Families with an entry added, removed or edited between two catalogs."""
-    fams = set()
-    for mid in set(base) | set(head):
-        if base.get(mid) != head.get(mid):
-            fams.update(family_of(e) for e in (base.get(mid), head.get(mid)) if e)
-    return fams - {""}
+def runs_on_gpu(model_id: str, entry: Optional[dict] = None) -> bool:
+    """Whether the oga-hipep backend, not an NPU one, runs this catalog entry.
+    As in model_list::apply_support_filter, an entry's "backend" key overrides
+    the backend its name implies."""
+    backend = (entry or {}).get(GPU_BACKEND_KEY)
+    if backend is not None:
+        return backend == GPU_BACKEND
+    return model_id.split(":", 1)[0].endswith(GPU_SUFFIX)
+
+
+def catalog_diff(base: dict[str, dict], head: dict[str, dict]) -> tuple[set, list]:
+    """Families with an NPU entry added, removed or edited between two catalogs,
+    and the GPU entries that were. An entry is a GPU one only if it is on
+    every side that has it."""
+    fams, gpu = set(), []
+    for mid in sorted(set(base) | set(head)):
+        if base.get(mid) == head.get(mid):
+            continue
+        sides = [e for e in (base.get(mid), head.get(mid)) if e is not None]
+        split_entry(mid, sides, fams, gpu)
+    return fams - {""}, gpu
+
+
+def split_entry(mid: str, sides: list, fams: set, gpu: list) -> None:
+    """Files one changed entry: under GPU entries if it is on the GPU on any
+    side (Test Windows HIPEP runs it), and under its NPU family unless it is
+    on the GPU on every side."""
+    on_gpu = [runs_on_gpu(mid, e) for e in sides]
+    if any(on_gpu):
+        gpu.append(mid)
+    if not all(on_gpu):
+        fams.update(family_of(e) for e in sides if e)
+
+
+def catalog_fields_diff(base_text: str, head_text: str) -> list[str]:
+    """The top-level fields of two model_list.json texts, other than models,
+    that differ. Every model reads them: model_path is the folder of all."""
+    base, head = json.loads(base_text), json.loads(head_text)
+    return sorted(k for k in base.keys() | head.keys() if k != "models" and base.get(k) != head.get(k))
 
 
 def model_info_diff(base_text: Optional[str], head_text: Optional[str],
-                    catalogs: Iterable[dict[str, dict]]) -> Optional[set]:
-    """Families whose model_info.json entry changed. Keys are model ids or a
-    catalog entry's model_info_key."""
+                    catalogs: Iterable[dict[str, dict]]) -> Optional[tuple[set, list]]:
+    """Families with an NPU entry whose model_info.json entry changed, and the
+    GPU entries whose one did. Keys are model ids or a catalog entry's
+    model_info_key."""
     try:
         base = json.loads(base_text) if base_text else {}
         head = json.loads(head_text) if head_text else {}
@@ -302,12 +394,32 @@ def model_info_diff(base_text: Optional[str], head_text: Optional[str],
     if not isinstance(base, dict) or not isinstance(head, dict):
         return None
     keys = {k for k in set(base) | set(head) if base.get(k) != head.get(k)}
-    fams = set()
+    hits: dict[str, list] = {}
     for catalog in catalogs:
         for mid, entry in catalog.items():
             if mid in keys or entry.get("model_info_key") in keys:
-                fams.add(family_of(entry))
-    return fams - {""}
+                hits.setdefault(mid, []).append(entry)
+    fams, gpu = set(), []
+    for mid, entries in sorted(hits.items()):
+        split_entry(mid, entries, fams, gpu)
+    return fams - {""}, gpu
+
+
+def add_catalog_change(d: Decision, path: str, fams: set, gpu: list,
+                       catalog: dict[str, dict], neither: str) -> None:
+    """A catalog file's changed entries: their NPU families in full, and Test
+    Windows HIPEP for GPU entries. A change to neither is not scoped."""
+    d.families |= fams
+    if fams:
+        d.add_suites(family_suites(fams, catalog))
+    if not fams and not gpu:
+        d.all_suites(path)
+    what = ", ".join(sorted(fams)) or ("no NPU family" if gpu else neither)
+    if gpu:
+        d.hipep = True
+        what += (f"; {len(gpu)} oga-hipep entr{'y' if len(gpu) == 1 else 'ies'}, e.g. {gpu[0]},"
+                 " which only Test Windows HIPEP runs")
+    d.reasons.append(f"{path}: entries changed in {what}")
 
 
 def engine_families(path: str, xclbin_families: dict[str, set]) -> Optional[tuple[str, tuple]]:
@@ -381,16 +493,24 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
         if entry.get("name"):
             xclbin_families.setdefault(entry["name"], set()).add(family_of(entry))
 
+    gpu_code = []
     for path in code:
-        hit = engine_families(path, xclbin_families)
+        hit = None if SHARED_TESTS.match(path) else engine_families(path, xclbin_families)
         if hit is None:
             hit = next(((why, fams) for why, pattern, fams in SUBSYSTEMS
                         if re.match(pattern, path)), None)
+        if GPU_ONLY.match(path):
+            gpu_code.append(path)
+            if hit is None:
+                continue
         if hit and hit[1]:
             new = set(hit[1]) - d.families
             if new:
                 d.families |= new
                 d.reasons.append(f"{path}: {hit[0]} -> {', '.join(sorted(new))}")
+            if GPU_FAMILIES & set(hit[1]) and GPU_FRONTEND.match(path):
+                d.reach_hipep(f"{path}: {hit[0]} also runs qwen3.5-oga-hipep:9b,"
+                              " which Test Windows HIPEP tests")
 
         # Which suites this file can affect.
         scope = None
@@ -400,6 +520,11 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
                 scope = names if names is not None else (
                     {m.group(1)} if m.group(1) in SUITES else None)
                 break
+        if scope and scope & GPU_SUITES:
+            d.reach_hipep(f"{path}: tests the {', '.join(sorted(scope & GPU_SUITES))} suite,"
+                          " which Test Windows HIPEP runs")
+        if scope:
+            scope = scope - GPU_ONLY_SUITES
         if scope is None and ASR_ONLY.match(path):
             scope = {"asr"}
         if scope is None and hit and hit[1]:
@@ -408,36 +533,33 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
             d.all_suites(path)
         elif scope is not None:
             d.add_suites(scope)
+    if gpu_code:
+        more = f" and {len(gpu_code) - 1} more" if len(gpu_code) > 1 else ""
+        d.reach_hipep(f"{gpu_code[0]}{more}: oga-hipep backend, which Test Windows HIPEP tests")
 
     if MODEL_LIST in code:
-        base = load_catalog(git.show("base", MODEL_LIST)) if git else {}
+        base_text = git.show("base", MODEL_LIST) if git else None
+        base = load_catalog(base_text)
         if git is None or not base or not head_catalog:
             d.reasons.append(f"{MODEL_LIST} changed but cannot be compared; no family added for it")
             d.all_suites(MODEL_LIST)
         else:
-            fams = catalog_diff(base, head_catalog)
-            d.families |= fams
-            if fams:
-                d.add_suites(family_suites(fams, head_catalog))
-            else:
+            fields = catalog_fields_diff(base_text, head_catalog_text)
+            if fields:
+                d.reasons.append(f"{MODEL_LIST}: {', '.join(fields)} changed, outside its model entries")
                 d.all_suites(MODEL_LIST)
-            d.reasons.append(f"{MODEL_LIST}: entries changed in "
-                             + (", ".join(sorted(fams)) or "no family (top-level fields only)"))
+            add_catalog_change(d, MODEL_LIST, *catalog_diff(base, head_catalog), head_catalog,
+                               "no family (top-level fields only)")
     if MODEL_INFO in code:
-        fams = None
+        diff = None
         if git:
-            fams = model_info_diff(git.show("base", MODEL_INFO), git.show("head", MODEL_INFO),
+            diff = model_info_diff(git.show("base", MODEL_INFO), git.show("head", MODEL_INFO),
                                    [load_catalog(git.show("base", MODEL_LIST)), head_catalog])
-        if fams is None:
+        if diff is None:
             d.reasons.append(f"{MODEL_INFO} changed but cannot be compared; no family added for it")
             d.all_suites(MODEL_INFO)
         else:
-            d.families |= fams
-            if fams:
-                d.add_suites(family_suites(fams, head_catalog))
-            else:
-                d.all_suites(MODEL_INFO)
-            d.reasons.append(f"{MODEL_INFO}: entries changed in " + (", ".join(sorted(fams)) or "no family"))
+            add_catalog_change(d, MODEL_INFO, *diff, head_catalog, "no family")
 
     # A family the head catalog lacks (removed, or never listed) has no model
     # the plan could run.

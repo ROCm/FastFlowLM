@@ -54,7 +54,7 @@ flm run gpt-oss:20b
 ▶️ Run with FastFlowLM in PowerShell:  
 
 ```shell
-flm run gpt-oss-safeguard:20b
+flm run gpt-oss-sg:20b
 ```
 
 Default reasoning effort for both CLI and Server Modes is Medium
@@ -63,13 +63,13 @@ Set reasoning effort (CLI):
 
 ```shell
 # CLI
-flm run gpt-oss:20b
+flm run gpt-oss-sg:20b
 /set r-eff high
 ```
 
 > 📝 NOTE
 
 > - **Memory Requirements**  
-   ⚠️ **Note**: Running `gpt-oss-safeguard:20b` may need a system with **> 32 GB RAM**. The model itself uses ~15.1 GB of memory in FLM, and there is an internal cap (~15.6 GB) on NPU memory allocation enforced by AMD/Microsoft, which makes only about half of the total system RAM available to the NPU. **On 32 GB machines, it sometimes works and sometimes does not**, so we recommend more RAM for a smooth experience.
+   ⚠️ **Note**: Running `gpt-oss-sg:20b` may need a system with **> 32 GB RAM**. The model itself uses ~15.1 GB of memory in FLM, and there is an internal cap (~15.6 GB) on NPU memory allocation enforced by AMD/Microsoft, which makes only about half of the total system RAM available to the NPU. **On 32 GB machines, it sometimes works and sometimes does not**, so we recommend more RAM for a smooth experience.
 
 ---

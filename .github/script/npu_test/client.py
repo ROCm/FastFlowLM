@@ -8,11 +8,23 @@ need: JSON requests, Server-Sent Events streams, and multipart uploads.
 from __future__ import annotations
 
 import json
+import socket
 import time
 import urllib.error
 import urllib.request
 import uuid
 from dataclasses import dataclass, field
+
+
+def is_timeout(exc: BaseException) -> bool:
+    """Whether exc is a request that ran out of time, however urllib reports it.
+
+    socket.timeout is TimeoutError only from Python 3.10, and a timeout while
+    connecting arrives wrapped in a URLError.
+    """
+    if isinstance(exc, urllib.error.URLError) and not isinstance(exc, urllib.error.HTTPError):
+        exc = exc.reason if isinstance(exc.reason, BaseException) else exc
+    return isinstance(exc, (TimeoutError, socket.timeout))
 
 
 class HttpError(Exception):
@@ -132,22 +144,39 @@ class Client:
         The socket timeout bounds the wait for the next line only; deadline
         (seconds) bounds the whole stream, so a model that never stops
         producing tokens still ends the request.
+
+        A 2xx reply that is not an SSE stream (a JSON body, say) raises
+        HttpError "non-SSE response: <body>", and so does a stream with no
+        `data:` lines; one that stops before [DONE] raises too. Either would
+        otherwise read as an empty reply.
         """
+        url = f"{self.base_url}{path}"
         data = json.dumps(body).encode("utf-8")
         resp = self._open("POST", path, data, {"Content-Type": "application/json",
                                                "Accept": "text/event-stream"}, timeout)
         end = time.monotonic() + (deadline or timeout or self.timeout)
         try:
+            if not resp.headers.get("Content-Type", "").startswith("text/event-stream"):
+                text = resp.read().decode("utf-8", "replace")
+                raise HttpError(resp.status, f"non-SSE response: {text}", url)
+            saw_data = False
+            other: list[str] = []  # the non-data lines, for the error when that is all there is
             for raw_line in resp:
                 if time.monotonic() > end:
                     raise TimeoutError(f"stream exceeded {deadline or timeout or self.timeout:.0f}s")
                 line = raw_line.decode("utf-8", "replace").strip()
                 if not line.startswith("data:"):
+                    if line:
+                        other.append(line)
                     continue
+                saw_data = True
                 payload = line[len("data:"):].strip()
                 if payload == "[DONE]":
                     return
                 yield json.loads(payload)
+            if not saw_data:
+                raise HttpError(resp.status, "non-SSE response: " + "\n".join(other), url)
+            raise HttpError(resp.status, "stream ended without data: [DONE]", url)
         finally:
             resp.close()
 

@@ -12,6 +12,9 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   # The d3 System One contract (src/common/decision) against fixtures written by the upstream
   # package: prompt bytes, request/question errors and answer objects. CPU only, no NPU.
@@ -19,7 +22,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Build and run the d3 contract test
         run: |
           cmake -S src/test/d3_contract -B build-d3-contract -DCMAKE_BUILD_TYPE=Release
@@ -32,9 +37,345 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Build and run the chat continue test
         run: |
           cmake -S src/test/chat_continue -B build-chat-continue -DCMAKE_BUILD_TYPE=Release
           cmake --build build-chat-continue -j"$(nproc)"
           ctest --test-dir build-chat-continue --output-on-failure
+
+  # top_k <= 0 turns top-k off (effective_top_k, src/include/modules/top_k.hpp). Header only, no NPU.
+  top-k:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and run the top-k test
+        run: |
+          cmake -S src/test/top_k -B build-top-k -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-top-k -j"$(nproc)"
+          ctest --test-dir build-top-k --output-on-failure
+
+  # The HRX executable-cache key (src/include/hrx_cpp/hrx_cpp.hpp:
+  # make_exe_key / compute_xclbin_digest): distinct xclbin images -> distinct
+  # keys (including two images at a reused heap address), identical image ->
+  # identical key, and control-code sensitivity. The header pulls in the HRX C
+  # API, so the pinned public HRX release is fetched first for its headers; the
+  # test itself exercises only the pure key logic and needs no NPU.
+  hrx-exe-key:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Fetch pinned HRX release
+        run: |
+          set -euo pipefail
+          command -v zstd >/dev/null 2>&1 || sudo apt-get update && sudo apt-get install -y --no-install-recommends zstd
+          ./hrx-integration/fetch-hrx-release.sh
+      - name: Build and run the HRX exe-cache key test
+        run: |
+          set -euo pipefail
+          hdr="$(find hrx-integration/.hrx-release -name hrx_amdxdna.h -print | head -n1)"
+          if [ -z "$hdr" ]; then
+            echo "::error::hrx_amdxdna.h not found under hrx-integration/.hrx-release."
+            exit 1
+          fi
+          inc="$(dirname "$hdr")"
+          echo "Using HRX headers from: $inc"
+          g++ -std=c++17 -O2 -Wall -Wextra \
+            -I src/include -I "$inc" \
+            src/tests/hrx_exe_key_test.cpp -o /tmp/hrx_exe_key_test
+          /tmp/hrx_exe_key_test
+
+  # Tool calling (src/common/chat): the output parser on what models write, and the decoding grammar
+  # against the calls the chat templates render. CPU only, no NPU.
+  chat-tools:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # the grammar engine, and the headers it builds against; nothing else is needed
+      - name: Checkout xgrammar
+        run: |
+          for attempt in 1 2 3; do
+            git submodule update --init --depth 1 third_party/xgrammar &&
+              git -C third_party/xgrammar submodule update --init --depth 1 3rdparty/dlpack && exit 0
+            echo "Submodule fetch failed (attempt ${attempt}), retrying..."
+            sleep 10
+          done
+          exit 1
+      - name: Build and run the chat tools test
+        run: |
+          cmake -S src/test/chat_tools -B build-chat-tools -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-chat-tools -j"$(nproc)"
+          ctest --test-dir build-chat-tools --output-on-failure
+
+  # ignore_eos (AutoModel::_sample, src/common/AutoModel/automodel.cpp): with a grammar that allows only EOS, the
+  # request's ignore_eos samples a non-EOS token and drops the constraint. Stubbed runtime, CPU only, no NPU.
+  ignore-eos:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # the grammar engine automodel.cpp links, and the headers it builds against; nothing else is needed
+      - name: Checkout xgrammar
+        run: |
+          for attempt in 1 2 3; do
+            git submodule update --init --depth 1 third_party/xgrammar &&
+              git -C third_party/xgrammar submodule update --init --depth 1 3rdparty/dlpack && exit 0
+            echo "Submodule fetch failed (attempt ${attempt}), retrying..."
+            sleep 10
+          done
+          exit 1
+      - name: Build and run the ignore_eos test
+        run: |
+          cmake -S src/test/ignore_eos -B build-ignore-eos -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-ignore-eos -j"$(nproc)"
+          ctest --test-dir build-ignore-eos --output-on-failure
+
+  # empty thought channel (src/include/AutoModel/gemma4_12b_thought.hpp): Gemma4 12B drops the last four
+  # tokens only when the prompt ends with the empty thought channel. Header only, CPU only, no NPU.
+  gemma4-empty-thought:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and run the empty thought channel test
+        run: |
+          cmake -S src/test/gemma4_12b_thought -B build-gemma4-12b-thought -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-gemma4-12b-thought -j"$(nproc)"
+          ctest --test-dir build-gemma4-12b-thought --output-on-failure
+
+  # plan_prompt_reuse (src/include/prompt_reuse.hpp): how much of a prompt the engine keeps and which images /
+  # audio clips a model drops from its payload, the one rule every vision model and _shared_insert share. CPU only.
+  prompt-reuse:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and run the prompt reuse test
+        run: |
+          cmake -S src/test/prompt_reuse -B build-prompt-reuse -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-prompt-reuse -j"$(nproc)"
+          ctest --test-dir build-prompt-reuse --output-on-failure
+
+  # HTTP request checks (src/server/http_guard.hpp): route normalization, which routes take the NPU queue
+  # (read from server.cpp), Origin/Host policy, CORS headers and required fields. CPU only, no Boost.
+  http-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and run the HTTP guard test
+        run: |
+          cmake -S src/test/http_guard -B build-http-guard -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-http-guard -j"$(nproc)"
+          ctest --test-dir build-http-guard --output-on-failure
+
+  # Log privacy and download TLS (WP-15): the request log hides user text unless FLM_LOG_CONTENT=1, every
+  # "Model RAW Output" dump goes through one switch, downloads verify TLS unless FLM_INSECURE_DOWNLOAD=1. CPU only.
+  log-privacy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and run the log privacy test
+        run: |
+          cmake -S src/test/log_privacy -B build-log-privacy -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-log-privacy -j"$(nproc)"
+          ctest --test-dir build-log-privacy --output-on-failure
+
+  # PrefixSlotCache (src/common/prefix_slot_cache.cpp) against a fake engine: which snapshot a prompt resumes from,
+  # eviction, and that a snapshot is only reused for the same images (content hashes). CPU only.
+  prefix-slot-cache:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and run the prefix slot cache test
+        run: |
+          cmake -S src/test/prefix_slot_cache -B build-prefix-slot-cache -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-prefix-slot-cache -j"$(nproc)"
+          ctest --test-dir build-prefix-slot-cache --output-on-failure
+
+  # Sampler (src/common/modules/sampler.cpp): ties, top-k, tiny temperatures, seeds, penalties and the top-p/min-p
+  # distributions, on the scalar build and on the -DUSEAVX2=1 build the NPU test targets use. CPU only.
+  sampler:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and run the sampler tests
+        run: |
+          cmake -S src/test/sampler -B build-sampler -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-sampler -j"$(nproc)"
+          ctest --test-dir build-sampler --output-on-failure
+
+  # image_raw (src/include/image/raw_rgb8.hpp): request parsing, the --allow-raw-path file read (confined to the
+  # directory, also against a link swapped in mid-request), and the request log that keeps frame data out
+  # (src/include/utils/json_log.hpp). CPU only.
+  raw-rgb8:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and run the raw RGB8 test
+        run: |
+          cmake -S src/test/raw_rgb8 -B build-raw-rgb8 -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-raw-rgb8 -j"$(nproc)"
+          ctest --test-dir build-raw-rgb8 --output-on-failure
+
+  # The same on Windows, where UNC and device paths must be refused before anything is opened.
+  raw-rgb8-windows:
+    runs-on: windows-2025
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
+      - name: Build and run the raw RGB8 test
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          cmake -S src/test/raw_rgb8 -B build-raw-rgb8 -G Ninja -DCMAKE_BUILD_TYPE=Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build-raw-rgb8 --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --test-dir build-raw-rgb8 --output-on-failure
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  # Model extensions (src/common/AutoModel/model_extension_*, model_frontend.cpp, model_backend.cpp): the
+  # stable C ABI, manifest and catalog-overlay checks and registry rules, against fake extensions and stub
+  # runtimes, for each NPU runtime. CPU only, no NPU.
+  model-extension-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # the grammar engine and tokenizer headers automodel.cpp builds against; nothing is built from tokenizers-cpp
+      - name: Checkout submodules
+        run: |
+          for attempt in 1 2 3; do
+            git submodule update --init --depth 1 third_party/xgrammar third_party/tokenizers-cpp &&
+              git -C third_party/xgrammar submodule update --init --depth 1 3rdparty/dlpack && exit 0
+            echo "Submodule fetch failed (attempt ${attempt}), retrying..."
+            sleep 10
+          done
+          exit 1
+      - name: Build and run the model-extension contracts
+        run: |
+          set -euo pipefail
+          for hrx in OFF ON; do
+            cmake -S src/test/model_extension_contracts -B "build-contracts-hrx-${hrx}" \
+              -DCMAKE_BUILD_TYPE=Release -DFLM_USE_HRX="${hrx}"
+            cmake --build "build-contracts-hrx-${hrx}" -j"$(nproc)"
+            ctest --test-dir "build-contracts-hrx-${hrx}" --output-on-failure
+          done
+
+  # The same contracts on Windows, where extensions load as DLLs.
+  model-extension-contracts-windows:
+    runs-on: windows-2025
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Checkout submodules
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            git submodule update --init --depth 1 third_party/xgrammar third_party/tokenizers-cpp &&
+              git -C third_party/xgrammar submodule update --init --depth 1 3rdparty/dlpack && exit 0
+            echo "Submodule fetch failed (attempt ${attempt}), retrying..."
+            sleep 10
+          done
+          exit 1
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
+      # Ninja under the MSVC environment instead of the Visual Studio generator, which builds one target at a time.
+      - name: Build and run the model-extension contracts
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          foreach ($hrx in "OFF", "ON") {
+            cmake -S src/test/model_extension_contracts -B "build-contracts-hrx-$hrx" -G Ninja `
+              -DCMAKE_BUILD_TYPE=Release "-DFLM_USE_HRX=$hrx"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            cmake --build "build-contracts-hrx-$hrx" --parallel
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            ctest --test-dir "build-contracts-hrx-$hrx" --output-on-failure
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+  # The oga-hipep backend (src/common/oga, src/include/oga) against a fake OGA C API: generator reuse and
+  # rewind, images, package discovery, runtime install and uninstall; and the Qwen3.5 / GPT-OSS frontends that
+  # drive it. Windows only; no GPU, NPU or model (Test Windows HIPEP in build-and-test.yml runs the real one).
+  oga-hipep-windows:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # the frontend tests build automodel.cpp: xgrammar and the tokenizers-cpp headers
+      - name: Checkout submodules
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            git submodule update --init --depth 1 third_party/xgrammar third_party/tokenizers-cpp &&
+              git -C third_party/xgrammar submodule update --init --depth 1 3rdparty/dlpack && exit 0
+            echo "Submodule fetch failed (attempt ${attempt}), retrying..."
+            sleep 10
+          done
+          exit 1
+      # Boost, the XRT headers and the xrt_coreutil import library, as for the Windows package build.
+      # Restore only: this workflow also runs on tags, so it never writes the cache (zizmor cache-poisoning);
+      # the Windows package build saves it under the same key, and a miss is built by the next step.
+      - name: Restore build dependencies
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: C:\dev
+          key: windows-deps-${{ hashFiles('.github/script/ci/setup_windows_deps.ps1', '.github/windows-deps/**') }}
+      - name: Set up build dependencies
+        shell: powershell
+        run: .github\script\ci\setup_windows_deps.ps1
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
+      - name: Build and run the oga-hipep tests
+        shell: powershell
+        run: .github\script\ci\oga_hipep_tests.ps1 -DepsRoot C:\dev

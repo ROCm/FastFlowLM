@@ -8,6 +8,8 @@
 #pragma once
 #include "AutoModel/automodel.hpp"
 #include "metrices.hpp"
+#include "models/gemma4e/gemma4e_payload.hpp"
+#include "models/gemma4e/flm/aie2p/gemma4e_npu.hpp"
 
 
 #include "typedef.hpp"
@@ -84,8 +86,6 @@ private:
 
     bool enable_think = false;
     bool enable_tool = false;
-    // Nemotron-3.5-Bolt chat-template switch (spoken-style system instruction); stock Gemma4 templates ignore it
-    bool conversational_mode = false;
     void setup_tokenizer(std::string model_path);
     
     // Image processing functionality
@@ -100,7 +100,31 @@ private:
     std::vector<audio_data_t> clip_audio_length(audio_data_t& audio, double max_duration_second);
     void extract_spectrogram(std::vector<audio_data_t>& audio_inputs, gemma4e_audio_payload_t& audio_payload);
 
+    /// \brief Keep what the engine ran when the prompt goes on from its last reply
+    /// \note The template renders a past reply without the thought channel the
+    ///       engine ran with it (an empty one when thinking is off), so the prompt
+    ///       leaves the engine's history right after that reply's header. When the
+    ///       prompt's copy of the reply is the one the engine generated, the prompt
+    ///       is rewritten to the engine's history plus what follows the reply. A
+    ///       later turn renders the earlier replies as this prompt does, so it is
+    ///       matched against this prompt (continued_prompt_) and continues too.
+    ///       The template leaves the thought of earlier replies out, so a reply
+    ///       with a thought, or cut inside its thought channel, is not continued:
+    ///       that turn runs as rendered.
+    /// \param rendered gets the prompt as rendered when `tokens` is rewritten
+    /// \return whether `tokens` now continues token_history
+    bool _continue_verbatim(std::vector<int>& tokens, std::optional<int> requested_max_new_tokens,
+                            std::vector<int>& rendered);
+
+    /// \brief the last prompt _continue_verbatim rewrote, while the engine's history goes on from it
+    struct {
+        std::vector<int> rendered;  ///< as the template rendered it
+        std::vector<int> ran;       ///< as the engine ran it
+    } continued_prompt_;
+
 protected:
+    // Nemotron-3.5-Bolt chat-template switch (spoken-style system instruction); stock Gemma4 templates ignore it. Protected so a test can read it.
+    bool conversational_mode = false;
     /// Protected so Gemma4e_Flash can lower the default; see its constructor.
     int image_softtoken_budget = 280; // set a default value
 
@@ -178,6 +202,17 @@ public:
     }
 
 
+    /// \brief request settings the model loaded with (see AutoModel::save_request_settings)
+    bool loaded_conversational_mode = false;
+    int loaded_image_softtoken_budget = 280;
+    void save_model_request_settings() override {
+        loaded_conversational_mode = this->conversational_mode;
+        loaded_image_softtoken_budget = this->image_softtoken_budget;
+    }
+    void restore_model_request_settings() override {
+        this->conversational_mode = loaded_conversational_mode;
+        this->image_softtoken_budget = loaded_image_softtoken_budget;
+    }
     /// \brief Configure a parameter with type-erased value
 	/// \param parameter_name the name of the parameter
 	/// \param value the value to set (can be any type)
@@ -276,6 +311,10 @@ private:
     /// \brief Drop everything the previous turn left behind, back to the pin.
     void _reset_turn();
 
+    /// \brief forget the pin, so the next request with a system prompt pins it again
+    /// \note  Leaves the engine alone: callers clear it themselves.
+    void _forget_pin();
+
 protected:
     gemma4e_engine_config_t engine_config() const override;
 
@@ -293,6 +332,13 @@ public:
     bool insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled = [] { return false; }) override;
     std::string generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled = [] { return false; }) override;
     std::string generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os = std::cout) override;
+
+    /// \brief Clear the context, the pinned system prefix included
+    /// \note  The engine zeroes its KV cache but keeps the checkpoint, so a pin
+    ///        kept past this would restore zeroed rows on the next request. This
+    ///        also covers _shared_insert clearing a prompt that diverges from
+    ///        the pinned tokens: it prefills from row 0, over the pinned rows.
+    void clear_context() override;
 
     /// \brief Apply the chat template without tools — gemma4e_flash does not
     ///        support tool calling, so the tools argument is always dropped.

@@ -32,7 +32,7 @@ This page says what FLM does with the fields of a `/v1/chat/completions` or `/v1
 |---|---|---|
 | `temperature` | ≥ 0 | Sharpens (below 1) or flattens (above 1) the distribution. `0` always picks the most likely token. |
 | `top_p` | 0 – 1 | Keeps the smallest set of most likely tokens whose probabilities add up to `top_p`. |
-| `top_k` | ≥ 1 | FLM extension. Samples among the `top_k` most likely tokens. `1` is greedy decoding. |
+| `top_k` | any integer | FLM extension. Samples among the `top_k` most likely tokens. `1` is greedy decoding. `0` or `-1` turns top-k off (every token stays a candidate), as in vLLM; a value above the vocabulary size means the same. |
 | `presence_penalty` | ≥ 0 | See [Penalties](#-presence-frequency-and-repetition-penalties). |
 | `frequency_penalty` | ≥ 0 | See [Penalties](#-presence-frequency-and-repetition-penalties). |
 | `repetition_penalty` | > 0 | FLM extension. See [Penalties](#-presence-frequency-and-repetition-penalties). |
@@ -41,7 +41,7 @@ This page says what FLM does with the fields of a `/v1/chat/completions` or `/v1
 | `min_tokens` | integer ≥ 0 | vLLM-style extension. End-of-sequence tokens are not sampled until at least `min_tokens` tokens have been generated; the reply can run one or two tokens over (more with speculative decoding). `max_tokens` still ends the reply. |
 | `ignore_eos` | `true` / `false` | vLLM-style extension. End-of-sequence tokens are never sampled, so the reply runs to `max_tokens` (or the context limit). Meant for fixed-length benchmarking. |
 
-> `min_tokens` and `ignore_eos` mask the end-of-sequence ids before sampling, so they work on every sampling path. `qwen3.8-mtp` and `qwen3.8-dflash2` decode one token at a time while either is in force, because its draft head samples inside the engine; expect a much lower speed there.
+> `min_tokens` and `ignore_eos` mask the end-of-sequence ids before sampling, so they work on every sampling path. `qwen3.8-mtp` and `qwen3.8-dflash2` keep speculating for a sampled request, with the mask applied at every position. A greedy request (`temperature` 0 or `top_k` 1) on them decodes one token at a time while either is in force, because its drafts are checked against the model's top token inside the engine; expect a much lower speed there. With `ignore_eos`, `tool_choice` and `response_format` constrain the reply only until the grammar would end it; after that the rest of the reply is unconstrained, so tool calls and JSON output are not guaranteed to be valid.
 
 Each token is chosen in this order: penalties → the `tool_choice` / `response_format` grammar, if any → `top_k` → `top_p` and the model's min-p cut-off → `temperature` → sample.
 
@@ -63,7 +63,7 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
-> ⚠️ **Settings stick.** Sampling fields are applied to the loaded model and stay in effect for every later request that doesn't send them, including requests from other clients. They return to the model's defaults only when the model is reloaded. If your application mixes settings, send every sampling field on **every** request. `seed` is the exception: it applies only to the request that sends it. (`think` and `reasoning_effort` [stick the same way](https://fastflowlm.com/docs/instructions/server/reasoning_and_tools/#-turning-thinking-on-and-off).)
+> ℹ️ **Every request starts from the model's defaults.** A sampling field applies only to the request that sends it. A request that leaves a field out gets the model's default, not what an earlier request set. `think`, `reasoning_effort` (GPT-OSS's and Hy-Memory's levels too), `conversational_mode` and `image-max-tokens` [work the same way](https://fastflowlm.com/docs/instructions/server/reasoning_and_tools/#-turning-thinking-on-and-off).
 
 > ⚠️ **Out-of-range values are ignored, not rejected.** A negative `temperature` or `presence_penalty`, or a `top_p` above 1, gets HTTP 200: the server logs a warning and keeps the value it had. OpenAI accepts penalties from −2 to 2, but FLM ignores negative ones, so a penalty can't be used to *encourage* repetition. `repeat_last_n` and `seed` are stricter: a value that isn't an integer, or a `repeat_last_n` below −1, is rejected with HTTP 400.
 
@@ -77,7 +77,7 @@ A request that sends no sampling fields uses the model's own defaults, which dif
 | `gemma4-it:*`, `gemma4-it-core:*`, `gemma4e-flash:*`, `nemotron3.5-bolt:e4b`, `nemotron3.5-bolt-dflash:e4b`, `nemotron3.5-bolt-dflash-flash:e4b` | 1.0 |
 | every other model | 0 |
 
-Sending `presence_penalty=0` turns the default off, and it stays off until the model is reloaded (see *Settings stick* above).
+Sending `presence_penalty=0` turns the default off for that request.
 
 ---
 
@@ -101,7 +101,7 @@ Penalties also act on reasoning tokens, and on tokens that a `tool_choice` or `r
 
 The [log probabilities](https://fastflowlm.com/docs/instructions/server/openapi/#-example-token-log-probabilities) a response reports are taken **before** any penalty is applied.
 
-> ⚠️ **`qwen3.8-mtp:27b` and `qwen3.8-dflash2:27b`:** tokens accepted from the speculative draft are compared with the model's own most likely token and skip the sampler. Penalties, `temperature`, `top_k` and `top_p` only shape the tokens the model samples itself, and drafted tokens don't enter the penalty window.
+> **`qwen3.8-mtp:27b` and `qwen3.8-dflash2:27b`:** a sampled request (`temperature` above 0 and `top_k` not 1) samples every position, drafted or not, with the penalties, `temperature`, `top_k` and `top_p`, and every token enters the penalty window. A greedy request compares drafted tokens with the model's own most likely token: tokens from a speculative batch (drafted, or the model's own correction) skip the penalties and don't enter the penalty window.
 
 ---
 
@@ -132,7 +132,7 @@ response = client.chat.completions.create(
 )
 ```
 
-Like the other sampling fields, the window size [sticks](#️-sampling-fields) until the model is reloaded, which sets it back to 64. Making the window smaller takes effect at once: tokens it no longer covers stop being penalised from the first token of the request. Ollama-style `options.repeat_last_n` is not read by the `/v1` endpoints: send `repeat_last_n` at the top level.
+Like the other sampling fields, the window size applies to its own request; a request without it uses 64. Ollama-style `options.repeat_last_n` is not read by the `/v1` endpoints: send `repeat_last_n` at the top level.
 
 ---
 
@@ -146,7 +146,7 @@ response = client.chat.completions.create(
     messages=[{"role": "user", "content": "Invent a name for a pet dragon."}],
     temperature=0.8,
     top_p=0.9,
-    presence_penalty=0,     # send every sampling field: they stick across requests
+    presence_penalty=0,
     frequency_penalty=0,
     seed=42,
 )
@@ -154,9 +154,9 @@ response = client.chat.completions.create(
 
 What `seed` does:
 
-- **It applies to its own request only.** The sampler's random generator restarts from the seed when the request starts. A request without `seed` carries on from wherever the generator was, so it doesn't disturb the next seeded one.
-- **It empties the [penalty window](#-the-penalty-window).** Without this, a conversation the server continues from its KV cache would start with the end of the previous reply in the window, and the same seeded request would sample differently depending on what ran before it.
-- **It doesn't pin the other sampling fields.** They [stick](#️-sampling-fields) across requests, so another client can change them between your two calls. Send `temperature`, `top_p`, `top_k`, the penalties and `repeat_last_n` with every seeded request.
+- **It applies to its own request only.** The sampler's random generator restarts from the seed when the request starts. A request without `seed` gets a generator seeded from the clock.
+- **The [penalty window](#-the-penalty-window) starts empty**, as it does for every request, so the same seeded request samples the same way whatever ran before it.
+- **The other sampling fields come from the request or the model's defaults**, never from an earlier request, so two calls with the same fields and `seed` give the same text.
 
 There is no `system_fingerprint` to compare: non-streaming responses have none, and each stream gets a random one.
 
@@ -242,7 +242,7 @@ Rejected with HTTP 400 (`invalid_request_error`), for streaming requests too:
 | A field sent as `null` | Treated as not sent. Some clients send `null` for every option they leave unset. |
 | `stop`, `n`, `logit_bias`, `user` | Ignored, as above. `stop` sequences are not applied, and there is always exactly one choice. |
 | An `options` object (Ollama style) on a `/v1` endpoint | Ignored. Put sampling fields at the top level of the request. |
-| A sampling field outside its range | Ignored with a warning in the server log. The previous value stays in effect ([see above](#️-sampling-fields)). |
+| A sampling field outside its range | Ignored with a warning in the server log. The model's default is used ([see above](#️-sampling-fields)). |
 | A sampling field of the wrong JSON type, such as `"temperature": "0.7"` | The request fails with an error. Send numbers as JSON numbers. |
 | A malformed `messages`, `tool_choice`, `parallel_tool_calls`, `response_format`, `logprobs`, `top_logprobs`, `seed`, `repeat_last_n` or `continue_final_message` | Rejected with HTTP 400 and `"type": "invalid_request_error"` before anything is generated, for streaming requests too. |
 
@@ -295,7 +295,8 @@ flm serve llama3.2:1b --ctx-len 65536
 
 - **Only the new part is read.** When the start of the prompt is already in the KV cache (the prompt cache, or the [prefix cache](https://fastflowlm.com/docs/instructions/server/prefix_cache/) on Qwen3.5 / Qwen3.6), only the rest is chunked and read. `usage.prompt_tokens_details.cached_tokens` says how much was reused.
 - **Cancelling stops between chunks.** If the client disconnects during a long prefill, FLM stops before the next chunk instead of reading the whole prompt.
-- **Images can make the first chunk larger.** On some vision models the image encoder runs with the first chunk, so that chunk is widened to hold every image token. That chunk size, rounded up to a power of two, is then used for the rest of that prompt.
+- **MiniCPM-V has a limit on that chunk.** All the pictures of a request must fit its first chunk, and the engine cannot prefill more than about 17,300 tokens there. A request whose pictures need more gets a `400` that names the token count ([raw frames](https://fastflowlm.com/docs/instructions/server/raw_rgb_images/) are the usual case: about 73 tokens each).
+- **Images and audio can make the first chunk larger.** On some multimodal models the media encoders run with the first chunk, so that chunk is widened to hold every image and audio token. That chunk size, rounded up to a power of two, is then used for the rest of that prompt.
 - **On the `core` backend chunks are page-aligned.** They end on multiples of `max_prefill_len` counted from the start of the conversation, not from the start of the new part ([details](https://fastflowlm.com/docs/models/qwen/#-qwen3-06b--17b--4b--8b-on-the-core-backend-developer-preview)).
 
 ### Changing the chunk size

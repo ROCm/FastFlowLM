@@ -7,7 +7,20 @@
 
 
 #include "AutoModel/modeling_gemma4e.hpp"
+#include "chat/chat_gemma4_tools.hpp"
 #include "metrices.hpp"
+#include "models/gemma4e/flm/aie2p/gemma4e_npu.hpp"
+#include "models/gemma4e_flash/flm/aie2p/gemma4e_flash.hpp"
+
+#include <cctype>
+
+namespace {
+std::string trim(const std::string& text) {
+    const auto first = std::find_if(text.begin(), text.end(), [](unsigned char c) { return !std::isspace(c); });
+    const auto last = std::find_if(text.rbegin(), text.rend(), [](unsigned char c) { return !std::isspace(c); }).base();
+    return first < last ? std::string(first, last) : std::string();
+}
+} // namespace
 
 /************              Gemma4e family            **************/
 Gemma4e::Gemma4e(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "Gemma4e") {}
@@ -28,6 +41,7 @@ int Gemma4e_Flash::_pin_system_prefix(const std::string& system_text) {
     this->lm_engine->clear_context();
     this->token_history.clear();
     this->checkpoint_his.clear();
+    this->_forget_history_media();
     this->total_tokens = 0;
     this->last_token = -1;
     this->system_tokens = 0;
@@ -66,11 +80,14 @@ int Gemma4e_Flash::_pin_system_prefix(const std::string& system_text) {
         this->lm_engine->clear_context();
         this->token_history.clear();
         this->checkpoint_his.clear();
+        this->_forget_history_media();
         return 0;
     }
 
     this->system_his = this->token_history;
-    this->checkpoint_his = this->token_history;
+    // the probes are text only, read in without a payload: the pin holds no image or audio
+    this->history_media_ = std::vector<prompt_media_t>{};
+    this->_checkpoint_history();
     this->lm_engine->checkpoint();
     this->system_tokens = static_cast<int>(shared);
 
@@ -82,15 +99,30 @@ int Gemma4e_Flash::_pin_system_prefix(const std::string& system_text) {
     return this->system_tokens;
 }
 
+void Gemma4e_Flash::_forget_pin() {
+    this->pinned_system_text.clear();
+    this->system_his.clear();
+    this->system_tokens = 0;
+}
+
+void Gemma4e_Flash::clear_context() {
+    Gemma4e::clear_context();
+    this->_forget_pin();
+}
+
 void Gemma4e_Flash::_reset_turn() {
     if (this->system_tokens > 0) {
         this->total_tokens = static_cast<uint32_t>(this->lm_engine->restore());
         this->token_history = this->system_his;
         this->checkpoint_his = this->system_his;
+        // the pin is a text-only system prefix (_pin_system_prefix), so it holds no image or audio
+        this->history_media_ = std::vector<prompt_media_t>{};
+        this->checkpoint_media_ = std::vector<prompt_media_t>{};
     } else {
         this->lm_engine->clear_context();
         this->token_history.clear();
         this->checkpoint_his.clear();
+        this->_forget_history_media();
         this->total_tokens = 0;
     }
     this->sampler->reset_penalties();
@@ -219,7 +251,7 @@ std::string Gemma4e_Flash::generate(chat_meta_info_t& meta_info, int length_limi
         header_print("WARNING", "Max length reached, stopping generation...");
     }
     std::cout << std::endl;
-    header_print("FLM", "Model RAW Output: \n" + result);
+    this->print_raw_output(result);
 
     // Single-turn: do not checkpoint here — the only checkpoint that matters
     // is the pinned system prefix, which _pin_system_prefix() already owns.
@@ -301,8 +333,96 @@ std::string Gemma4e::apply_chat_template(nlohmann::ordered_json& messages, nlohm
     inputs.extra_context["enable_thinking"] = this->enable_think;
     inputs.extra_context["conversational_mode"] = this->conversational_mode;
     if (!tools.empty())
-        inputs.tools = tools;
+        inputs.tools = gemma4_template_tools(tools);
     return this->_render_chat_template(inputs, continue_final_message, opt);
+}
+
+bool Gemma4e::_continue_verbatim(std::vector<int>& tokens, std::optional<int> requested_max_new_tokens,
+                                 std::vector<int>& rendered) {
+    const std::vector<int>& ran = this->token_history;
+    if (ran.empty() || static_cast<size_t>(this->lm_engine->get_current_context_length()) != ran.size()) {
+        return false;
+    }
+    const std::vector<int> header = this->tokenizer->encode("<|turn>model\n");
+    const std::vector<int> turn_end = this->tokenizer->encode("<turn|>");
+    if (header.empty() || turn_end.size() != 1) {
+        return false;
+    }
+    // the reply the engine generated follows the last model header it ran
+    const auto at = std::find_end(ran.begin(), ran.end(), header.begin(), header.end());
+    if (at == ran.end()) {
+        return false;
+    }
+    // After a continued turn the history holds the earlier replies as the engine ran them (with
+    // their empty thought channels), where the prompt renders them as continued_prompt_.rendered does.
+    const std::vector<int>& held = this->continued_prompt_.ran;
+    const std::vector<int>& held_as_rendered = this->continued_prompt_.rendered;
+    std::vector<int> spliced;
+    if (!held.empty() && !held_as_rendered.empty() && held.size() <= ran.size() && tokens.size() > held_as_rendered.size() &&
+        std::equal(held.begin(), held.end(), ran.begin()) &&
+        std::equal(held_as_rendered.begin(), held_as_rendered.end(), tokens.begin())) {
+        spliced = held;
+        spliced.insert(spliced.end(), tokens.begin() + held_as_rendered.size(), tokens.end());
+    }
+    const std::vector<int>& prompt = spliced.empty() ? tokens : spliced;
+    const size_t start = static_cast<size_t>(at - ran.begin()) + header.size();
+    if (prompt.size() <= start || !std::equal(ran.begin(), ran.begin() + start, prompt.begin())) {
+        return false;
+    }
+    // A reply opens with its thought channel, which the template leaves out of earlier turns: a reply
+    // with a thought, or cut inside the channel, runs as rendered instead.
+    const auto reply = ran.begin() + start;
+    if (reply != ran.end() && *reply == think_start_id) {
+        const auto close = std::find(reply, ran.end(), think_end_id);
+        if (close == ran.end()) {
+            return false;
+        }
+        // an empty channel has the channel's name too
+        constexpr std::string_view kChannelName = "thought";
+        std::string thought = trim(this->tokenizer->decode(std::vector<int>(reply + 1, close)));
+        if (thought.rfind(kChannelName, 0) == 0) thought = trim(thought.substr(kChannelName.size()));
+        if (!thought.empty()) {
+            return false;
+        }
+    }
+    // the prompt's copy of that reply ends at the first <turn|> after its header
+    const auto reply_end = std::find(prompt.begin() + start, prompt.end(), turn_end[0]);
+    if (reply_end == prompt.end()) {
+        return false;
+    }
+    // an eos that ended the reply was run; a reply cut at the length limit lacks its last token
+    const bool ended = ran.back() == turn_end[0];
+    // A reply's content follows its thought channel; a reply cut inside that channel has none.
+    const auto content = [&](std::vector<int>::const_iterator begin, std::vector<int>::const_iterator end) {
+        if (begin != end && *begin == think_start_id) {
+            const auto close = std::find(begin, end, think_end_id);
+            if (close == end) return std::string();
+            begin = close + 1;
+        }
+        return trim(this->tokenizer->decode(std::vector<int>(begin, end)));
+    };
+    const std::string generated = content(ran.begin() + start, ended ? ran.end() - 1 : ran.end());
+    const std::string sent = content(prompt.begin() + start, reply_end);
+    std::vector<int> continued(ran);
+    if (generated != sent) {
+        // the client did get the token the engine did not run
+        if (ended || generated.empty() || sent.size() <= generated.size() || sent.compare(0, generated.size(), generated) != 0) {
+            return false;
+        }
+        const std::vector<int> rest = this->tokenizer->encode(sent.substr(generated.size()));
+        continued.insert(continued.end(), rest.begin(), rest.end());
+    }
+    continued.insert(continued.end(), ended ? reply_end + 1 : reply_end, prompt.end());
+    // the history keeps the empty thought channels the rendered prompt leaves out, so it can be the longer one
+    try {
+        this->_shared_validate_capacity(continued.size(), requested_max_new_tokens);
+    } catch (const ModelRequestError&) {
+        return false;
+    }
+    header_print("FLM", "Continuing the " << ran.size() << " tokens the engine ran, last reply included");
+    rendered = std::move(tokens);
+    tokens = std::move(continued);
+    return true;
 }
 
 bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
@@ -312,6 +432,22 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     if (input.messages.empty() && input.prompt.empty()) {
         header_print("WARNING", "No messages or prompt provided");
         return false;
+    }
+    // On OGA these models run text only. A ModelRequestError, not the engine_config()
+    // error: the handlers turn only the former into an HTTP 400.
+    if (this->backend_id() == flm::backend::kOgaHipepBackendId) {
+        bool images = !input.images.empty();
+        bool audios = !input.audios.empty();
+        for (const auto& message : input.messages) {
+            images = images || (message.contains("images") && !message["images"].empty());
+            audios = audios || (message.contains("audios") && !message["audios"].empty());
+        }
+        if (images || audios) {
+            throw ModelRequestError(400, false,
+                "the loaded backend '" + this->backend_id() + "' does not accept " +
+                    (images ? "image" : "audio") + " input",
+                "invalid_request_error");
+        }
     }
 
     constexpr bool DEBUG_IMAGE_PREPROCESS = false;
@@ -369,6 +505,8 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
                     newContent.push_back({{"type", "image"}, {"image", img}});
                 }
             }
+            // Gemma 4 does best with images before the text and audio after it (model card)
+            newContent.push_back({{"type", "text"}, {"text", message.value("content", "")}});
             // Process Audios
             if (message.contains("audios")) {
                 const gemma4e_engine_config_t gemma4e_engine = this->engine_config();
@@ -394,7 +532,6 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
                     newContent.push_back({{"type", "audio"}, {"audio", aud}});
                 }
             }
-            newContent.push_back({{"type", "text"}, {"text", message.value("content", "")}});
 
             nlohmann::ordered_json newItem = {
                 {"role", message.value("role", "user")},
@@ -505,11 +642,10 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
         for (int i = 0; i < input.images.size(); i++) {
             content["content"].push_back({{"type", "image"}, {"image", input.images[i]}});
         }
+        content["content"].push_back({{"type", "text"}, {"text", input.prompt}});
         for (int i = 0; i < total_audio_clips; i++) {
             content["content"].push_back({{"type", "audio"}, {"audio", input.audios[0]}}); // placeholder
         }
-        
-        content["content"].push_back({{"type", "text"}, {"text", input.prompt}});
         messages.push_back(content);
         templated_text = this->apply_chat_template(messages);
     }
@@ -533,6 +669,9 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     
     int image_counter = 0;
     int audio_counter = 0;
+    // soft tokens of each placeholder as expanded, in prompt order: the prompt-cache plan locates the items by them
+    std::vector<size_t> image_token_counts;
+    std::vector<size_t> audio_token_counts;
    
     for (int i = 0; i < tokens_init.size(); i++) {
         if (tokens_init[i] == image_token_id) {
@@ -541,6 +680,7 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
                 tokens.push_back(image_token_id);
             }
             tokens.push_back(eoi_token_id); // a separator token between images, not necessary but can help the model to better distinguish different images
+            image_token_counts.push_back(image_payload.num_soft_tokens_per_image[image_counter]);
             image_counter++;
         } 
         else if (tokens_init[i] == audio_token_id){
@@ -549,6 +689,7 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
                 tokens.push_back(audio_token_id);
             }
             tokens.push_back(eoa_token_id); // a separator token between audios, not necessary but can help the model to better distinguish different audios
+            audio_token_counts.push_back(audio_payload.num_soft_tokens_per_audio[audio_counter]);
             audio_counter++;
         }
         else {
@@ -560,155 +701,132 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
       
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
 
-    // ----------------------------------------------------------------------
-    // Prompt-cache aware multi-modal alignment.
-    //
-    // AutoModel::_shared_insert prefix-matches `tokens` against `checkpoint_his`
-    // over the FULL length of `checkpoint_his`. If every token matches, it
-    // erases that prefix before prefilling; otherwise it calls clear_context()
-    // and skips nothing. We must NOT erase `tokens` here -- _shared_insert
-    // needs the untrimmed sequence to run that very check. What we DO need
-    // to fix up locally is the multi-modal payload (which carries
-    // pixels/spectrograms for the WHOLE prompt, including images/audios from
-    // earlier turns that are already cached): drop the fully-cached leading
-    // images/audios so the surviving payload aligns with the surviving soft
-    // tokens after _shared_insert performs its own erase.
-    // ----------------------------------------------------------------------
-    size_t prefix_skip_count = 0;
-    {
-        const size_t idx = this->checkpoint_his.size();
-        for (size_t i = 0; i < idx; i++) {
-            if (i < tokens.size() && tokens[i] == this->checkpoint_his[i]) {
-                prefix_skip_count++;
-            } else {
-                break;
-            }
-        }
-        // Must match the entirety of checkpoint_his, otherwise _shared_insert
-        // will clear the context and not skip anything.
-        if (prefix_skip_count != idx) {
-            prefix_skip_count = 0;
-        }
-
-        if (prefix_skip_count > 0 && (image_payload.num_images > 0 || audio_payload.num_audios > 0)) {
-            // Count modal soft-tokens that landed inside the cached prefix.
-            int skipped_image_tokens = 0;
-            int skipped_audio_tokens = 0;
-            for (size_t i = 0; i < prefix_skip_count; i++) {
-                if (tokens[i] == image_token_id) skipped_image_tokens++;
-                else if (tokens[i] == audio_token_id) skipped_audio_tokens++;
-            }
-
-            // Walk images in order; each image's soft-token block is either
-            // entirely inside the cached prefix or not at all (chat-template
-            // boundaries never split a single image's block).
-            size_t images_to_drop = 0;
-            {
-                int consumed = 0;
-                for (unsigned i = 0; i < image_payload.num_images; i++) {
-                    const int n = static_cast<int>(image_payload.num_soft_tokens_per_image[i]);
-                    if (consumed + n <= skipped_image_tokens) {
-                        consumed += n;
-                        images_to_drop++;
-                    } else {
-                        break;
-                    }
-                }
-            }
-
-            // Same for audios.
-            size_t audios_to_drop = 0;
-            {
-                int consumed = 0;
-                for (unsigned i = 0; i < audio_payload.num_audios; i++) {
-                    const int n = static_cast<int>(audio_payload.num_soft_tokens_per_audio[i]);
-                    if (consumed + n <= skipped_audio_tokens) {
-                        consumed += n;
-                        audios_to_drop++;
-                    } else {
-                        break;
-                    }
-                }
-            }
-
-            auto drop_front = [](auto& vec, size_t n) {
-                if (n == 0) return;
-                if (n >= vec.size()) { vec.clear(); return; }
-                vec.erase(vec.begin(), vec.begin() + n);
-            };
-
-            if (images_to_drop > 0) {
-                drop_front(image_payload.image_patch__element_per_patch, images_to_drop);
-                drop_front(image_payload.valid_patch_size_per_image,     images_to_drop);
-                drop_front(image_payload.pixel_values,                   images_to_drop);
-                drop_front(image_payload.image_grid_pairs_per_image,     images_to_drop);
-                drop_front(image_payload.num_soft_tokens_per_image,      images_to_drop);
-                image_payload.num_images -= static_cast<unsigned>(images_to_drop);
-                header_print("FLM",
-                    "Prompt-cache hit: dropped " << images_to_drop
-                    << " cached image(s) from payload");
-            }
-
-            if (audios_to_drop > 0) {
-                drop_front(audio_payload.mel_spectrograms,                audios_to_drop);
-                drop_front(audio_payload.mel_spectrogram_frames_per_audio, audios_to_drop);
-                drop_front(audio_payload.mel_spectrogram_bins_per_audio,   audios_to_drop);
-                drop_front(audio_payload.num_soft_tokens_per_audio,        audios_to_drop);
-                audio_payload.num_audios -= static_cast<unsigned>(audios_to_drop);
-                header_print("FLM",
-                    "Prompt-cache hit: dropped " << audios_to_drop
-                    << " cached audio(s) from payload");
-            }
-        }
-    }
-
-    // find the last image token index, expressed relative to the tokens that
-    // will SURVIVE _shared_insert's prefix erase (i.e. shifted by -prefix_skip_count).
-    int last_image_token_index = -1;
-    for (int i = static_cast<int>(prefix_skip_count); i < (int)tokens.size(); i++) {
-        if ((tokens[i] == image_token_id || tokens[i] == boi_token_id)) {
-            last_image_token_index = i - static_cast<int>(prefix_skip_count);
-        }
-    }
-    last_image_token_index++; // plus the end of image tokens
-
-    // hardware
-    gemma4e_multi_modal_payload_t multi_modal_payload;
-    multi_modal_payload.image_payload = image_payload;
-    multi_modal_payload.audio_payload = audio_payload;
-
-    int restore_idx = -1;
-    const bool has_multimodal = image_payload.num_images > 0 || audio_payload.num_audios > 0;
-
     // Prefix slots, text-only prompts. A prompt that carries pictures or audio, or a text turn whose history still holds their
     // soft tokens (the payload is gone by then), takes the in-place path below. The generation prompt ("<|turn>model\n") is how
     // the next turn renders this reply's header: the whole prompt is saved (trim 0).
     const bool modal_tokens = std::any_of(tokens.begin(), tokens.end(), [this](int t) {
         return t == image_token_id || t == audio_token_id || t == boi_token_id || t == boa_token_id;
     });
-    if (!has_multimodal && !modal_tokens && this->_prefix_slot_mode(meta_info, tokens.size(), 0)) {
+    if (image_payload.num_images == 0 && audio_payload.num_audios == 0 && !modal_tokens
+        && this->_prefix_slot_mode(meta_info, tokens.size(), 0)) {
         checkpoint_his.clear();
         return this->_prefix_text_insert(meta_info, tokens, 0, "<|turn>user", is_cancelled);
     }
     this->_prefix_legacy_path();
 
+    // OGA cannot reuse a prompt that leaves the history it ran, so it runs on from that history instead
+    std::vector<int> rendered;
+    const bool continued = meta_info.restore_allowed && !modal_tokens &&
+                           this->backend_id() == flm::backend::kOgaHipepBackendId &&
+                           this->_continue_verbatim(tokens, input.requested_max_new_tokens, rendered);
+
+    int restore_idx = -1;
     // The legacy checkpoint keeps only the rings: it relies on the global rows still being the ones it was taken with. A slot request
     // overwrites them, so it drops the checkpoint's token history, and the in-place path below then has nothing to restore.
-    if (meta_info.restore_allowed && !checkpoint_his.empty()) {
+    if (meta_info.restore_allowed && !checkpoint_his.empty() && !continued) {
         restore_idx = this->lm_engine->restore();
         this->total_tokens = restore_idx;
-        this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
+        this->_restore_history(); // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
     }
 
+    // The payload carries every image and audio of the prompt, earlier turns included. _shared_insert skips what the engine
+    // already holds, so the items inside that skip leave the payload; _plan_reuse makes the same skip decision against the
+    // same token_history. Audio is located per placeholder, as it was expanded.
+    std::vector<prompt_media_t> media;
+    prompt_media_from_counts(tokens, image_token_id, image_token_counts, prompt_media_t::kImage, media);
+    prompt_media_from_counts(tokens, audio_token_id, audio_token_counts, prompt_media_t::kAudio, media);
+    // Content hash of each item over exactly what the engine reads for it, taken before the drop: the soft-token count
+    // only follows the aspect ratio (images) or the sample count (audio), so a same-sized other picture or clip would
+    // otherwise match the history and be reused.
+    size_t next_image = 0;
+    size_t next_audio = 0;
+    for (prompt_media_t& m : media) {
+        uint64_t h = 0;
+        if (m.kind == prompt_media_t::kImage && next_image < image_payload.num_images) {
+            const size_t i = next_image++;
+            const auto& dims = image_payload.image_patch__element_per_patch[i];
+            const uint64_t shape[4] = { static_cast<uint64_t>(static_cast<uint32_t>(dims.first)), static_cast<uint64_t>(static_cast<uint32_t>(dims.second)),
+                                        image_payload.valid_patch_size_per_image[i], image_payload.num_soft_tokens_per_image[i] };
+            const auto& pixels = image_payload.pixel_values[i];
+            const auto& grid = image_payload.image_grid_pairs_per_image[i];
+            h = prefix_hash_bytes(shape, sizeof(shape), 0xcbf29ce484222325ull);
+            h = prefix_hash_bytes(pixels.data(), pixels.size() * sizeof(pixels[0]), h);
+            h = prefix_hash_bytes(grid.data(), grid.size() * sizeof(grid[0]), h);
+        } else if (m.kind == prompt_media_t::kAudio && next_audio < audio_payload.num_audios) {
+            const size_t i = next_audio++;
+            const uint64_t shape[3] = { static_cast<uint64_t>(static_cast<uint32_t>(audio_payload.mel_spectrogram_frames_per_audio[i])),
+                                        static_cast<uint64_t>(static_cast<uint32_t>(audio_payload.mel_spectrogram_bins_per_audio[i])),
+                                        audio_payload.num_soft_tokens_per_audio[i] };
+            const auto& mel = audio_payload.mel_spectrograms[i];
+            h = prefix_hash_bytes(shape, sizeof(shape), 0x84222325cbf29ce4ull);
+            h = prefix_hash_bytes(mel.data(), mel.size() * sizeof(mel[0]), h);
+        } else {
+            continue;
+        }
+        m.hash = h != 0 ? h : 1; // 0 means "not hashed"
+    }
+    const prompt_reuse_t plan = this->_plan_reuse(tokens, media);
+
+    auto drop_front = [](auto& vec, size_t n) {
+        if (n == 0) return;
+        if (n >= vec.size()) { vec.clear(); return; }
+        vec.erase(vec.begin(), vec.begin() + n);
+    };
+    const size_t images_to_drop = std::min<size_t>(plan.skipped_media[prompt_media_t::kImage], image_payload.num_images);
+    if (images_to_drop > 0) {
+        drop_front(image_payload.image_patch__element_per_patch, images_to_drop);
+        drop_front(image_payload.valid_patch_size_per_image,     images_to_drop);
+        drop_front(image_payload.pixel_values,                   images_to_drop);
+        drop_front(image_payload.image_grid_pairs_per_image,     images_to_drop);
+        drop_front(image_payload.num_soft_tokens_per_image,      images_to_drop);
+        image_payload.num_images -= static_cast<unsigned>(images_to_drop);
+    }
+    const size_t audios_to_drop = std::min<size_t>(plan.skipped_media[prompt_media_t::kAudio], audio_payload.num_audios);
+    if (audios_to_drop > 0) {
+        drop_front(audio_payload.mel_spectrograms,                audios_to_drop);
+        drop_front(audio_payload.mel_spectrogram_frames_per_audio, audios_to_drop);
+        drop_front(audio_payload.mel_spectrogram_bins_per_audio,   audios_to_drop);
+        drop_front(audio_payload.num_soft_tokens_per_audio,        audios_to_drop);
+        audio_payload.num_audios -= static_cast<unsigned>(audios_to_drop);
+    }
+
+    // one past the last prefilled image or audio row, relative to the skip: the first chunk is widened to hold
+    // them, as their payload travels with it alone. Audio comes after the text, so a long text can push it past
+    // a first chunk sized for the images only.
+    const int first_len_run = static_cast<int>(plan.media_end);
+
+    // hardware
+    gemma4e_multi_modal_payload_t multi_modal_payload;
+    multi_modal_payload.image_payload = image_payload;
+    multi_modal_payload.audio_payload = audio_payload;
+
+    const bool has_multimodal = image_payload.num_images > 0 || audio_payload.num_audios > 0;
+
+    const size_t prompt_tokens = tokens.size();
     bool success = has_multimodal
-        ? this->_shared_insert(meta_info, tokens, is_cancelled, &multi_modal_payload, last_image_token_index)
+        ? this->_shared_insert(meta_info, tokens, is_cancelled, &multi_modal_payload, first_len_run)
         : this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
 
     // Single-turn (flash): the only checkpoint is the pinned system prefix, which Gemma4e_Flash owns. Taking this one would
     // overwrite it with the whole first prompt, and every later request would restore into that stale context.
     if (this->enable_think && !this->single_turn) {
-        checkpoint_his = token_history;
+        this->_checkpoint_history();
         int checkpoint_idx = this->lm_engine->checkpoint();
+    }
+    // a shorter history is not this prompt, which _shared_insert refused or a cancel cut short
+    if (continued && this->token_history.size() >= prompt_tokens) {
+        // Kept up to the header of the reply to come, which the next turn renders right after it, without the
+        // empty thought channel that ends the prompt when thinking is off.
+        const std::vector<int> header = this->tokenizer->encode("<|turn>model\n");
+        const auto through_header = [&](const std::vector<int>& prompt) {
+            const auto at = std::find_end(prompt.begin(), prompt.end(), header.begin(), header.end());
+            return at == prompt.end() ? std::vector<int>() : std::vector<int>(prompt.begin(), at + header.size());
+        };
+        this->continued_prompt_.rendered = through_header(rendered);
+        this->continued_prompt_.ran = through_header(this->token_history);
+    } else {
+        this->continued_prompt_.rendered.clear();
+        this->continued_prompt_.ran.clear();
     }
     
     return success;
@@ -805,7 +923,7 @@ std::string Gemma4e::generate(chat_meta_info_t& meta_info, int length_limit, std
         header_print("WARNING", "Max length reached, stopping generation...");
     }
     std::cout << std::endl;
-    header_print("FLM", "Model RAW Output: \n" + result);
+    this->print_raw_output(result);
     
     if (reason != EOT_DETECTED) {
         // Cut short after sampling its last token: no engine has run that one,
@@ -815,7 +933,7 @@ std::string Gemma4e::generate(chat_meta_info_t& meta_info, int length_limit, std
     if (!this->enable_think) {
         // the history the checkpoint holds: an eos ending the turn was run, a cut-off token was not
         int checkpoint_idx = this->lm_engine->checkpoint();
-        checkpoint_his = token_history;
+        this->_checkpoint_history();
     }
 
     return result;

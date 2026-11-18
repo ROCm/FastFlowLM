@@ -8,6 +8,31 @@
 #include "AutoModel/modeling_hunyuan.hpp"
 #include "models/hunyuan/flm/aie2p/hunyuan_npu.hpp"
 
+namespace {
+
+// Reply cap when the caller sends no max_tokens: a translation is about as long as its prompt.
+constexpr int kAutoLimitPerPromptToken = 2;
+constexpr int kAutoLimitExtra = 64;
+
+// Loop stop: the reply ends in a block of up to kLoopMaxPeriod tokens repeated at least
+// kLoopMinRepeats times, covering at least kLoopMinSpan tokens.
+constexpr int kLoopMaxPeriod = 32;
+constexpr int kLoopMinRepeats = 4;
+constexpr int kLoopMinSpan = 64;
+
+/// \brief whether the last `span` tokens repeat with period `period`
+bool tail_repeats(const std::vector<int>& tokens, int period, int span) {
+    const int end = static_cast<int>(tokens.size());
+    for (int i = end - span + period; i < end; i++) {
+        if (tokens[i] != tokens[i - period]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+}  // namespace
+
 /************              hunyuan-dense family            **************/
 Hunyuan::Hunyuan(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "Hunyuan") {
     this->single_turn = true;
@@ -61,6 +86,8 @@ chat_template_type_t Hunyuan::get_chat_template_type() {
 }
 
 bool Hunyuan::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
+    this->auto_length_limit = 0;
+
     // preprocess
     std::string templated_text;
     if (input.messages.empty() && input.prompt.empty()) {
@@ -125,6 +152,11 @@ bool Hunyuan::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
 
     std::vector<int> tokens = this->tokenizer->encode(templated_text);
 
+    const bool caller_set_limit = input.requested_max_new_tokens.has_value();
+    this->auto_length_limit = caller_set_limit
+        ? 0
+        : kAutoLimitPerPromptToken * static_cast<int>(tokens.size()) + kAutoLimitExtra;
+
     this->profiler_list[TKOEN_ENCODE_TIME].stop(tokens.size());
 
     // hardware
@@ -150,8 +182,7 @@ bool Hunyuan::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
             // rewind to the pinned system turn instead of clearing: _shared_insert
             // then prefix-matches against the history and prefills only the tail.
             // The token history has to move back with the cache or that match fails.
-            hunyuan_npu* engine = dynamic_cast<hunyuan_npu*>(this->lm_engine);
-            this->total_tokens = engine->restore();
+            this->total_tokens = this->lm_engine->restore();
             this->token_history = this->system_his;
             this->checkpoint_his = this->system_his;
             // the turns are independent translations, so nothing carries over
@@ -223,8 +254,7 @@ int Hunyuan::_pin_system_prefix(const std::string& system_text) {
     // prompt is prefix-matched against
     this->system_his = this->token_history;
     this->checkpoint_his = this->token_history;
-    hunyuan_npu* engine = dynamic_cast<hunyuan_npu*>(this->lm_engine);
-    engine->checkpoint();
+    this->lm_engine->checkpoint();
     this->system_tokens = static_cast<int>(shared);
 
     // the system turn costs nothing per turn from here on, so it should not sit
@@ -236,7 +266,27 @@ int Hunyuan::_pin_system_prefix(const std::string& system_text) {
 }
 
 std::string Hunyuan::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {
+    const bool cap_is_tighter = this->auto_length_limit > 0
+        && (length_limit <= 0 || length_limit > this->auto_length_limit);
+    if (cap_is_tighter) {
+        length_limit = this->auto_length_limit;
+    }
     return this->_shared_generate(meta_info, length_limit, os, is_cancelled);
+}
+
+bool Hunyuan::_stop_generation(const chat_meta_info_t& meta_info) const {
+    const int reply_len = std::min(meta_info.generated_tokens, static_cast<int>(this->token_history.size()));
+    for (int period = 1; period <= kLoopMaxPeriod; period++) {
+        const int span = std::max(kLoopMinRepeats * period, kLoopMinSpan);
+        if (span > reply_len) {
+            break;  // span only grows with period
+        }
+        if (tail_repeats(this->token_history, period, span)) {
+            header_print("WARNING", "Reply is repeating itself, stopping generation...");
+            return true;
+        }
+    }
+    return false;
 }
 
 std::string Hunyuan::generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os) {

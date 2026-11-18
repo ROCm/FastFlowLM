@@ -29,7 +29,12 @@ SIMILARITY_TRIPLE = (
     "A busker performs guitar music on the sidewalk.",
     "The quarterly earnings report exceeded analyst expectations.",
 )
-MIN_SIMILARITY_MARGIN = 0.05
+# A working model scores the triple at about 0.76 (paraphrase) and 0.01
+# (unrelated). The mismatched mm.xclbin of #932 scored 0.85 and 0.72: still a
+# 0.13 margin, so the margin alone must be wide and the unrelated pair must
+# also be near orthogonal.
+MIN_SIMILARITY_MARGIN = 0.3
+MAX_UNRELATED_SIMILARITY = 0.3
 # The same text through the same weights; anything below this is not noise.
 MIN_DETERMINISTIC_COSINE = 0.999
 
@@ -103,6 +108,8 @@ def check(ctx, server, model: str) -> None:
         expect(near - far >= MIN_SIMILARITY_MARGIN,
                f"paraphrase {near:.4f} vs unrelated {far:.4f}: margin "
                f"{near - far:.4f} below {MIN_SIMILARITY_MARGIN}")
+        expect(far <= MAX_UNRELATED_SIMILARITY,
+               f"unrelated sentence scored {far:.4f}, above {MAX_UNRELATED_SIMILARITY}")
 
     with ctx.case(NAME, "deterministic", model, server) as case:
         first = embed(server, model, SINGLE_INPUT)[0]

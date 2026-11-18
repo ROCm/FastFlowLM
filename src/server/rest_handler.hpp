@@ -8,12 +8,13 @@
  */
 #pragma once
 #include <optional>
+#include <mutex>
 
 #include "AutoModel/all_models.hpp"
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
 #include "whisper/modeling_whisper.hpp"
-#include "AutoEmbeddingModel/all_embedding_model.hpp"
 #endif
+#include "AutoEmbeddingModel/all_embedding_model.hpp"
 #include "AutoDecisionModel/auto_decision_model.hpp"
 #include "model_list.hpp"
 #include "chat/chat_parser.hpp"
@@ -60,7 +61,8 @@ public:
 
     void handle_embeddings(const json& request,
                           std::function<void(const json&)> send_response,
-                          StreamResponseCallback send_streaming_response);
+                          StreamResponseCallback send_streaming_response,
+                          std::function<bool()> cancelled = [] { return false; });
     
 
     void handle_models(const json& request,
@@ -134,27 +136,33 @@ private:
                                 chat_logprobs_aligner* logprobs = nullptr);
 
 
-    std::unique_ptr<AutoModel> auto_chat_engine;
+    // Declared before engines so the borrowed native handle stays valid
+    // through provider destruction (members are destroyed in reverse).
+    std::optional<flm_rt::device> owned_device;
+    flm_rt::device* npu_device_inst;
+    flm::frontend::FrontendPtr auto_chat_engine;
     std::unique_ptr<AutoDecisionModel> decision_engine;
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
     std::unique_ptr<Whisper> whisper_engine;
-    std::unique_ptr<AutoEmbeddingModel> auto_embedding_engine;
 #endif
-    // Non-RAI: RestHandler owns the device. RAI: main passes corelib's device.
-    flm_rt::device* npu_device_inst;
-    // Non-RAI path: owned device so constructor errors propagate.
-    std::optional<flm_rt::device> owned_device;
+    /// \brief the --asr model when it is an r2t2 (Qwen3-ASR) one: a second engine beside the chat model, used only for transcription
+    flm::frontend::FrontendPtr asr_sidecar_engine;
+    std::string asr_sidecar_tag;
+    std::unique_ptr<AutoEmbeddingModel> auto_embedding_engine;
+    std::string current_embedding_tag;
+    std::mutex embedding_mutex;
     model_list& supported_models;
     ModelDownloader& downloader;
     std::string current_model_tag;
     std::string default_model_tag;
     bool modelscope;
     bool asr;
-    bool embed;
     /// \brief the prefill chunk length of the loaded model
     int prefill_chunk_len;
     /// \brief the --prefill-chunk-len value, -1 when each model's own is used
     int prefill_chunk_len_arg;
+    /// \brief what one request may carry in raw RGB8 frames (--max-raw-frames, --max-raw-mb)
+    raw_rgb8_limits_t raw_rgb8_limits;
     int generate_context_id;
     int chat_context_id;
     int ctx_length;

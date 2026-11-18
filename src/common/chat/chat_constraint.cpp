@@ -17,6 +17,24 @@ const json& field(const json& object, const char* key) {
     return it == object.end() ? missing : *it;
 }
 
+/// \brief Whether a message calls a tool or answers one
+bool has_tool_turns(const json& messages) {
+    if (!messages.is_array()) {
+        return false;
+    }
+    for (const auto& message : messages) {
+        if (!message.is_object()) {
+            continue;
+        }
+        const json& role = field(message, "role");
+        const json& calls = field(message, "tool_calls");
+        if (role == "tool" || role == "function" || (calls.is_array() && !calls.empty())) {
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace
 
 bool chat_constraint_request_from_openai(const json& request, const json& tools,
@@ -59,11 +77,18 @@ bool chat_constraint_request_from_openai(const json& request, const json& tools,
         return false;
     }
 
+    const bool no_tools = !tools.is_array() || tools.empty();
     if (out.tool_choice == chat_tool_choice::REQUIRED || out.tool_choice == chat_tool_choice::FUNCTION) {
-        if (!tools.is_array() || tools.empty()) {
+        if (no_tools) {
             error = "tool_choice requires a tool call but the request has no tools";
             return false;
         }
+    }
+    // no tools, yet the conversation shows the model calling them: it calls again in
+    // the same markup, which no parser reads for a request without tools. Banning the
+    // opener costs speculative decoding, so a plain chat is left alone.
+    if (out.tool_choice == chat_tool_choice::AUTO && no_tools && has_tool_turns(field(request, "messages"))) {
+        out.tool_choice = chat_tool_choice::NONE;
     }
     if (out.tool_choice == chat_tool_choice::FUNCTION) {
         bool found = false;

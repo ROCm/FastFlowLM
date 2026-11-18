@@ -4,14 +4,25 @@ name: Build and Test
 # as its own build finishes.
 #
 #   Linux    XRT portable ─ test     HRX portable ─ test     Source portable ─ test
+#                └ extension ─ test      └ extension ─ test
 #            XRT .deb ─ install test (off)   HRX .deb ─ install test (off)
 #   Windows  XRT zip ─ test          HRX zip ─ test          Source zip ─ test
+#                └ extension ─ test      └ extension ─ test
+#            XRT zip ─ HIPEP test
 #            XRT MSI ─ install test (off)
 #
 # Each package is its own build call, so its tests do not wait on the other
 # packages' builds, and XRT and HRX are tested side by side. HRX skips the api
 # and serving suites: they test server logic the backend does not touch, and
 # the XRT run covers it.
+#
+# The Windows XRT package also holds the oga-hipep backend, which runs its
+# models on the GPU through hip-ep. Test Windows HIPEP runs the chat, api and
+# shutdown suites on qwen3.5-oga-hipep:9b from the same zip, and Test Windows
+# XRT tests the NPU models. HIPEP runs when every suite does, or when a change
+# reaches that model (the backend, its catalog entries, the qwen3.5 frontend,
+# the chat, api and shutdown tests); a change only to the backend or its
+# entries runs no NPU test.
 #
 # A pull request runs only the suites its changes can affect (an ASR-only
 # change runs asr, a d3-only change decision); see .github/script/ci/changes.py.
@@ -22,6 +33,11 @@ name: Build and Test
 # builds and tests nothing. The portable test jobs get 120 minutes on the pr
 # tier and 360 on the full one, which runs every model and every d3 size and
 # may first download tens of GB of weights.
+#
+# A dispatch can name the models to test (models, e.g. qwen3.5-oga-hipep:9b):
+# every test job then runs only those, so a package without them runs
+# nothing. fresh-hip-ep has Test Windows HIPEP install hip-ep from scratch,
+# instead of reusing the runner's copy.
 #
 # release.yml calls this with release: true before publishing a tag.
 on:
@@ -40,6 +56,14 @@ on:
         type: choice
         options: [pr, full, install]
         default: pr
+      models:
+        description: Comma-separated model ids to test instead of the tier's (e.g. qwen3.5-oga-hipep:9b)
+        type: string
+        default: ''
+      fresh-hip-ep:
+        description: Install hip-ep from scratch in Test Windows HIPEP
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       tier:
@@ -47,7 +71,7 @@ on:
         type: string
         default: pr
       release:
-        description: Build and test only what a release ships (no models-from-source).
+        description: Build and test only what a release ships (no models-from-source, no model-extension fixture).
         type: boolean
         default: false
     outputs:
@@ -80,9 +104,10 @@ jobs:
       suites: ${{ steps.detect.outputs.suites }}
       hrx-suites: ${{ steps.detect.outputs.hrx-suites }}
       source: ${{ steps.detect.outputs.source }}
+      hipep: ${{ steps.detect.outputs.hipep }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           filter: blob:none
@@ -92,6 +117,36 @@ jobs:
         uses: ./.github/actions/detect-changes
         with:
           tier: ${{ inputs.tier }}
+
+      # Every npu_test run imports every suite, but a change to the shutdown
+      # suite or console.py runs Test Windows HIPEP alone. A Windows-only
+      # import there would break the Linux NPU jobs unseen until a change that
+      # runs them, so load the whole package on Linux here on every run.
+      - name: Check npu_test imports on Linux
+        working-directory: .github/script
+        run: python3 -m npu_test --help > /dev/null
+
+  # ── NPU approval gate ────────────────────────────────────────────────────
+  # The NPU runners are few, so pull requests from anyone outside the core
+  # team wait for one of the npu-approval environment's reviewers before any
+  # job lands on them. Builds on hosted runners still start right away.
+  # Pushes to main, nightly, manual and release runs are never gated.
+  npu-gate:
+    needs: changes
+    if: >-
+      github.event_name == 'pull_request'
+      && !contains(fromJSON('["zaneni6", "michyu-amd", "tawei-amd", "alfxu-amd", "shdu-amd"]'), github.event.pull_request.user.login)
+      && (needs.changes.outputs.suites != 'none'
+          || needs.changes.outputs.hrx-suites != ''
+          || needs.changes.outputs.source == 'true'
+          || needs.changes.outputs.hipep == 'true'
+          || vars.FLM_INSTALL_TESTS == 'true')
+    runs-on: ubuntu-latest
+    environment: npu-approval
+    steps:
+      - env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: echo "NPU tests approved for ${PR_AUTHOR}'s pull request."
 
   # ── Linux builds ─────────────────────────────────────────────────────────
 
@@ -111,10 +166,12 @@ jobs:
     with:
       variants: HRX-portable
 
+  # The models-from-source builds are only tested when the chat suite runs, so
+  # they are only built then.
   build-lin-source-portable:
     name: Linux models-from-source portable
     needs: changes
-    if: needs.changes.outputs.run == 'true' && !inputs.release
+    if: needs.changes.outputs.run == 'true' && needs.changes.outputs.source == 'true' && !inputs.release
     uses: ./.github/workflows/lin-build.yml
     with:
       variants: Source-portable
@@ -158,11 +215,59 @@ jobs:
   build-win-source:
     name: Windows models-from-source
     needs: changes
-    if: needs.changes.outputs.run == 'true' && !inputs.release
+    if: needs.changes.outputs.run == 'true' && needs.changes.outputs.source == 'true' && !inputs.release
     uses: ./.github/workflows/win-build.yml
     with:
       variants: Source
       msi: false
+
+  # ── Model extensions ─────────────────────────────────────────────────────
+  # The Gemma4-open bundles build against the SDK in their package once it
+  # exists, outside the package build, so a failure here holds back no package
+  # or NPU test, only the verdict. A release run skips them, like the
+  # models-from-source builds: a fixture-only break (rustup, a submodule fetch)
+  # should not hold a release that pull requests already tested. The
+  # model-extension contracts need no package and run in cpu-tests.yml.
+
+  build-lin-extension-xrt:
+    name: Linux XRT model extension
+    needs: [changes, build-lin-xrt-portable]
+    if: needs.changes.outputs.source == 'true' && !inputs.release
+    uses: ./.github/workflows/model-extension-build.yml
+    with:
+      os: linux
+      runtime: XRT
+      package: portable
+
+  build-lin-extension-hrx:
+    name: Linux HRX model extension
+    needs: [changes, build-lin-hrx-portable]
+    if: needs.changes.outputs.source == 'true' && !inputs.release
+    uses: ./.github/workflows/model-extension-build.yml
+    with:
+      os: linux
+      runtime: HRX
+      package: HRX-portable
+
+  build-win-extension-xrt:
+    name: Windows XRT model extension
+    needs: [changes, build-win-xrt]
+    if: needs.changes.outputs.source == 'true' && !inputs.release
+    uses: ./.github/workflows/model-extension-build.yml
+    with:
+      os: windows
+      runtime: XRT
+      package: fastflowlm-windows-${{ github.sha }}
+
+  build-win-extension-hrx:
+    name: Windows HRX model extension
+    needs: [changes, build-win-hrx]
+    if: needs.changes.outputs.source == 'true' && !inputs.release
+    uses: ./.github/workflows/model-extension-build.yml
+    with:
+      os: windows
+      runtime: HRX
+      package: HRX-fastflowlm-windows-${{ github.sha }}
 
   # ── Linux tests ──────────────────────────────────────────────────────────
   # Only the test scripts and their assets are checked out, never the sources:
@@ -170,13 +275,21 @@ jobs:
 
   test-lin-xrt-portable:
     name: Test Linux XRT portable
-    needs: [changes, build-lin-xrt-portable]
+    needs: [changes, build-lin-xrt-portable, npu-gate]
+    # npu-gate is skipped for trusted authors, so spell out what the
+    # implicit success() check used to require.
+    if: >-
+      ${{ !cancelled()
+      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && needs.changes.result == 'success'
+      && needs.build-lin-xrt-portable.result == 'success'
+      && (needs.changes.outputs.suites != 'none') }}
     runs-on: [self-hosted, linux, x64, npu, sweep]
     timeout-minutes: ${{ needs.changes.outputs.tier == 'full' && 360 || 120 }}
     steps:
       - &checkout-tests
         name: Checkout test scripts
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: |
             .github/actions
@@ -186,7 +299,7 @@ jobs:
             src/test/d3_video/fixtures
           filter: blob:none
       - name: Download package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: portable
           path: package
@@ -204,19 +317,27 @@ jobs:
           tier: ${{ needs.changes.outputs.tier }}
           suites: ${{ needs.changes.outputs.suites }}
           families: ${{ needs.changes.outputs.families }}
+          models: ${{ inputs.models }}
           asr-full: ${{ needs.changes.outputs.asr-full }}
           asr-expected-key: linux
 
   test-lin-hrx-portable:
     name: Test Linux HRX portable
-    needs: [changes, build-lin-hrx-portable]
-    if: needs.changes.outputs.hrx-suites != ''
+    needs: [changes, build-lin-hrx-portable, npu-gate]
+    # npu-gate is skipped for trusted authors, so spell out what the
+    # implicit success() check used to require.
+    if: >-
+      ${{ !cancelled()
+      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && needs.changes.result == 'success'
+      && needs.build-lin-hrx-portable.result == 'success'
+      && (needs.changes.outputs.hrx-suites != '') }}
     runs-on: [self-hosted, linux, x64, npu, sweep]
     timeout-minutes: ${{ needs.changes.outputs.tier == 'full' && 360 || 120 }}
     steps:
       - *checkout-tests
       - name: Download package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: HRX-portable
           path: package
@@ -234,6 +355,7 @@ jobs:
           tier: ${{ needs.changes.outputs.tier }}
           suites: ${{ needs.changes.outputs.hrx-suites }}
           families: ${{ needs.changes.outputs.families }}
+          models: ${{ inputs.models }}
           asr-full: ${{ needs.changes.outputs.asr-full }}
           asr-expected-key: linux-hrx
 
@@ -241,14 +363,21 @@ jobs:
   # engines are built from source so far.
   test-lin-source-portable:
     name: Test Linux models-from-source portable
-    needs: [changes, build-lin-source-portable]
-    if: needs.changes.outputs.source == 'true'
+    needs: [changes, build-lin-source-portable, npu-gate]
+    # npu-gate is skipped for trusted authors, so spell out what the
+    # implicit success() check used to require.
+    if: >-
+      ${{ !cancelled()
+      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && needs.changes.result == 'success'
+      && needs.build-lin-source-portable.result == 'success'
+      && (needs.changes.outputs.source == 'true') }}
     runs-on: [self-hosted, linux, x64, npu, sweep]
     timeout-minutes: 60
     steps:
       - *checkout-tests
       - name: Download package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: models-from-source-portable
           path: package
@@ -265,7 +394,91 @@ jobs:
           label: linux-source-portable
           tier: ${{ needs.changes.outputs.tier }}
           suites: chat
-          models: gemma4-it:e2b,gemma4-it:e4b
+          models: ${{ inputs.models || 'gemma4-it:e2b,gemma4-it:e4b' }}
+
+  test-lin-extension-xrt:
+    name: Test Linux XRT model extension
+    needs: [changes, build-lin-xrt-portable, build-lin-extension-xrt, npu-gate]
+    # npu-gate is skipped for trusted authors, so spell out what the
+    # implicit success() check used to require.
+    if: >-
+      ${{ !cancelled()
+      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && needs.changes.result == 'success'
+      && needs.build-lin-xrt-portable.result == 'success'
+      && needs.build-lin-extension-xrt.result == 'success'
+      && (needs.changes.outputs.source == 'true') }}
+    runs-on: [self-hosted, linux, x64, npu, sweep]
+    timeout-minutes: 60
+    steps:
+      - *checkout-tests
+      - name: Download package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: portable
+          path: package
+      - name: Download model extension
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: gemma4-open-linux-xrt
+          path: model-extension
+      - name: Prepare package
+        id: package
+        uses: ./.github/actions/install-package
+        with:
+          kind: portable
+          path: package
+      - name: Test
+        uses: ./.github/actions/npu-test
+        with:
+          flm-bin: ${{ steps.package.outputs.flm-bin }}
+          label: linux-xrt-model-extension
+          tier: ${{ needs.changes.outputs.tier }}
+          suites: chat
+          models: gemma4-open-it:e2b
+          model-extension: ${{ github.workspace }}/model-extension/extension.json
+
+  test-lin-extension-hrx:
+    name: Test Linux HRX model extension
+    needs: [changes, build-lin-hrx-portable, build-lin-extension-hrx, npu-gate]
+    # npu-gate is skipped for trusted authors, so spell out what the
+    # implicit success() check used to require.
+    if: >-
+      ${{ !cancelled()
+      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && needs.changes.result == 'success'
+      && needs.build-lin-hrx-portable.result == 'success'
+      && needs.build-lin-extension-hrx.result == 'success'
+      && (needs.changes.outputs.source == 'true') }}
+    runs-on: [self-hosted, linux, x64, npu, sweep]
+    timeout-minutes: 60
+    steps:
+      - *checkout-tests
+      - name: Download package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: HRX-portable
+          path: package
+      - name: Download model extension
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: gemma4-open-linux-hrx
+          path: model-extension
+      - name: Prepare package
+        id: package
+        uses: ./.github/actions/install-package
+        with:
+          kind: portable
+          path: package
+      - name: Test
+        uses: ./.github/actions/npu-test
+        with:
+          flm-bin: ${{ steps.package.outputs.flm-bin }}
+          label: linux-hrx-model-extension
+          tier: ${{ needs.changes.outputs.tier }}
+          suites: chat
+          models: gemma4-open-it:e2b
+          model-extension: ${{ github.workspace }}/model-extension/extension.json
 
   # The .deb and MSI install tests are off unless the repository variable
   # FLM_INSTALL_TESTS is "true": the runners cannot install yet (no
@@ -277,14 +490,21 @@ jobs:
   # installed; the other distributions' builds are covered by their build.
   install-lin-xrt-deb:
     name: Install test Linux XRT .deb
-    needs: [changes, build-lin-xrt-deb]
-    if: vars.FLM_INSTALL_TESTS == 'true'
+    needs: [changes, build-lin-xrt-deb, npu-gate]
+    # npu-gate is skipped for trusted authors, so spell out what the
+    # implicit success() check used to require.
+    if: >-
+      ${{ !cancelled()
+      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && needs.changes.result == 'success'
+      && needs.build-lin-xrt-deb.result == 'success'
+      && (vars.FLM_INSTALL_TESTS == 'true') }}
     runs-on: [self-hosted, linux, x64, npu, sweep]
     timeout-minutes: 60
     steps:
       - *checkout-tests
       - name: Download package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: flm-ubuntu24.04-${{ needs.changes.outputs.short-sha }}-deb
           path: package
@@ -309,14 +529,21 @@ jobs:
 
   install-lin-hrx-deb:
     name: Install test Linux HRX .deb
-    needs: [changes, build-lin-hrx-deb]
-    if: vars.FLM_INSTALL_TESTS == 'true'
+    needs: [changes, build-lin-hrx-deb, npu-gate]
+    # npu-gate is skipped for trusted authors, so spell out what the
+    # implicit success() check used to require.
+    if: >-
+      ${{ !cancelled()
+      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && needs.changes.result == 'success'
+      && needs.build-lin-hrx-deb.result == 'success'
+      && (vars.FLM_INSTALL_TESTS == 'true') }}
     runs-on: [self-hosted, linux, x64, npu, sweep]
     timeout-minutes: 60
     steps:
       - *checkout-tests
       - name: Download package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: HRX-flm-ubuntu24.04-${{ needs.changes.outputs.short-sha }}-deb
           path: package
@@ -343,13 +570,21 @@ jobs:
 
   test-win-xrt:
     name: Test Windows XRT
-    needs: [changes, build-win-xrt]
+    needs: [changes, build-win-xrt, npu-gate]
+    # npu-gate is skipped for trusted authors, so spell out what the
+    # implicit success() check used to require.
+    if: >-
+      ${{ !cancelled()
+      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && needs.changes.result == 'success'
+      && needs.build-win-xrt.result == 'success'
+      && (needs.changes.outputs.suites != 'none') }}
     runs-on: [self-hosted, windows, x64, npu, sweep]
     timeout-minutes: ${{ needs.changes.outputs.tier == 'full' && 360 || 120 }}
     steps:
       - *checkout-tests
       - name: Download package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: fastflowlm-windows-${{ github.sha }}
           path: package
@@ -367,19 +602,84 @@ jobs:
           tier: ${{ needs.changes.outputs.tier }}
           suites: ${{ needs.changes.outputs.suites }}
           families: ${{ needs.changes.outputs.families }}
+          models: ${{ inputs.models }}
           asr-full: ${{ needs.changes.outputs.asr-full }}
           asr-expected-key: windows
 
+  # The XRT zip's oga-hipep models, on the GPU: its runner needs an AMD GPU
+  # that hip-ep runs on. Besides chat, they run the OpenAI contract tests (api),
+  # tool calls included, and shutdown: Ctrl+C and /bye must still end flm once
+  # it has loaded hip-ep. Every tier tests qwen3.5-oga-hipep:9b alone: the other
+  # oga-hipep packages are 4 to 72 GB each, and a dispatch that names them
+  # (models) tests them instead. npu_test pulls the models first, so a runner
+  # without them downloads them (7.5 GB for the 9b) outside the requests' timeouts.
+  test-win-hipep:
+    name: Test Windows HIPEP
+    needs: [changes, build-win-xrt, npu-gate]
+    # npu-gate is skipped for trusted authors, so spell out what the
+    # implicit success() check used to require.
+    if: >-
+      ${{ !cancelled()
+      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && needs.changes.result == 'success'
+      && needs.build-win-xrt.result == 'success'
+      && (needs.changes.outputs.hipep == 'true') }}
+    runs-on: [self-hosted, windows, x64, npu, sweep]
+    timeout-minutes: 120
+    steps:
+      - *checkout-tests
+      - name: Download package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: fastflowlm-windows-${{ github.sha }}
+          path: package
+      - name: Prepare package
+        id: package
+        uses: ./.github/actions/install-package
+        with:
+          kind: portable
+          path: package
+      - name: Show the GPU
+        shell: powershell
+        run: Get-CimInstance Win32_VideoController | ForEach-Object { "$($_.Name), driver $($_.DriverVersion)" }
+      # flm installs hip-ep into %LOCALAPPDATA%\hip-ep once and reuses it after,
+      # so only an empty one makes it download and install again. The runner
+      # empties its temp folder after every job. A short name: the deepest
+      # hip-ep file is 128 characters below the package root.
+      - name: Use an empty LOCALAPPDATA
+        if: inputs.fresh-hip-ep
+        shell: powershell
+        run: |
+          $dir = New-Item -ItemType Directory -Force (Join-Path $env:RUNNER_TEMP 'lad')
+          [System.IO.File]::AppendAllText($env:GITHUB_ENV, "LOCALAPPDATA=$($dir.FullName)`n")
+          Write-Host "LOCALAPPDATA=$($dir.FullName)"
+      - name: Test
+        uses: ./.github/actions/npu-test
+        with:
+          flm-bin: ${{ steps.package.outputs.flm-bin }}
+          label: windows-hipep
+          tier: ${{ needs.changes.outputs.tier }}
+          suites: chat,api,shutdown
+          models: ${{ inputs.models || 'qwen3.5-oga-hipep:9b' }}
+          backend: oga-hipep
+
   test-win-hrx:
     name: Test Windows HRX
-    needs: [changes, build-win-hrx]
-    if: needs.changes.outputs.hrx-suites != ''
+    needs: [changes, build-win-hrx, npu-gate]
+    # npu-gate is skipped for trusted authors, so spell out what the
+    # implicit success() check used to require.
+    if: >-
+      ${{ !cancelled()
+      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && needs.changes.result == 'success'
+      && needs.build-win-hrx.result == 'success'
+      && (needs.changes.outputs.hrx-suites != '') }}
     runs-on: [self-hosted, windows, x64, npu, sweep]
     timeout-minutes: ${{ needs.changes.outputs.tier == 'full' && 360 || 120 }}
     steps:
       - *checkout-tests
       - name: Download package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: HRX-fastflowlm-windows-${{ github.sha }}
           path: package
@@ -397,19 +697,27 @@ jobs:
           tier: ${{ needs.changes.outputs.tier }}
           suites: ${{ needs.changes.outputs.hrx-suites }}
           families: ${{ needs.changes.outputs.families }}
+          models: ${{ inputs.models }}
           asr-full: ${{ needs.changes.outputs.asr-full }}
           asr-expected-key: windows-hrx
 
   test-win-source:
     name: Test Windows models-from-source
-    needs: [changes, build-win-source]
-    if: needs.changes.outputs.source == 'true'
+    needs: [changes, build-win-source, npu-gate]
+    # npu-gate is skipped for trusted authors, so spell out what the
+    # implicit success() check used to require.
+    if: >-
+      ${{ !cancelled()
+      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && needs.changes.result == 'success'
+      && needs.build-win-source.result == 'success'
+      && (needs.changes.outputs.source == 'true') }}
     runs-on: [self-hosted, windows, x64, npu, sweep]
     timeout-minutes: 60
     steps:
       - *checkout-tests
       - name: Download package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: models-from-source-fastflowlm-windows-${{ github.sha }}
           path: package
@@ -426,18 +734,109 @@ jobs:
           label: windows-source
           tier: ${{ needs.changes.outputs.tier }}
           suites: chat
-          models: gemma4-it:e2b,gemma4-it:e4b
+          models: ${{ inputs.models || 'gemma4-it:e2b,gemma4-it:e4b' }}
 
-  install-win-msi:
-    name: Install test Windows MSI
-    needs: [changes, build-win-xrt]
-    if: vars.FLM_INSTALL_TESTS == 'true'
+  test-win-extension-xrt:
+    name: Test Windows XRT model extension
+    needs: [changes, build-win-xrt, build-win-extension-xrt, npu-gate]
+    # npu-gate is skipped for trusted authors, so spell out what the
+    # implicit success() check used to require.
+    if: >-
+      ${{ !cancelled()
+      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && needs.changes.result == 'success'
+      && needs.build-win-xrt.result == 'success'
+      && needs.build-win-extension-xrt.result == 'success'
+      && (needs.changes.outputs.source == 'true') }}
     runs-on: [self-hosted, windows, x64, npu, sweep]
     timeout-minutes: 60
     steps:
       - *checkout-tests
       - name: Download package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: fastflowlm-windows-${{ github.sha }}
+          path: package
+      - name: Download model extension
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: gemma4-open-windows-xrt
+          path: model-extension
+      - name: Prepare package
+        id: package
+        uses: ./.github/actions/install-package
+        with:
+          kind: portable
+          path: package
+      - name: Test
+        uses: ./.github/actions/npu-test
+        with:
+          flm-bin: ${{ steps.package.outputs.flm-bin }}
+          label: windows-xrt-model-extension
+          tier: ${{ needs.changes.outputs.tier }}
+          suites: chat
+          models: gemma4-open-it:e2b
+          model-extension: ${{ github.workspace }}/model-extension/extension.json
+
+  test-win-extension-hrx:
+    name: Test Windows HRX model extension
+    needs: [changes, build-win-hrx, build-win-extension-hrx, npu-gate]
+    # npu-gate is skipped for trusted authors, so spell out what the
+    # implicit success() check used to require.
+    if: >-
+      ${{ !cancelled()
+      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && needs.changes.result == 'success'
+      && needs.build-win-hrx.result == 'success'
+      && needs.build-win-extension-hrx.result == 'success'
+      && (needs.changes.outputs.source == 'true') }}
+    runs-on: [self-hosted, windows, x64, npu, sweep]
+    timeout-minutes: 60
+    steps:
+      - *checkout-tests
+      - name: Download package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: HRX-fastflowlm-windows-${{ github.sha }}
+          path: package
+      - name: Download model extension
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: gemma4-open-windows-hrx
+          path: model-extension
+      - name: Prepare package
+        id: package
+        uses: ./.github/actions/install-package
+        with:
+          kind: portable
+          path: package
+      - name: Test
+        uses: ./.github/actions/npu-test
+        with:
+          flm-bin: ${{ steps.package.outputs.flm-bin }}
+          label: windows-hrx-model-extension
+          tier: ${{ needs.changes.outputs.tier }}
+          suites: chat
+          models: gemma4-open-it:e2b
+          model-extension: ${{ github.workspace }}/model-extension/extension.json
+
+  install-win-msi:
+    name: Install test Windows MSI
+    needs: [changes, build-win-xrt, npu-gate]
+    # npu-gate is skipped for trusted authors, so spell out what the
+    # implicit success() check used to require.
+    if: >-
+      ${{ !cancelled()
+      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && needs.changes.result == 'success'
+      && needs.build-win-xrt.result == 'success'
+      && (vars.FLM_INSTALL_TESTS == 'true') }}
+    runs-on: [self-hosted, windows, x64, npu, sweep]
+    timeout-minutes: 60
+    steps:
+      - *checkout-tests
+      - name: Download package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: fastflowlm-windows-msi-${{ github.sha }}
           path: package
@@ -472,14 +871,23 @@ jobs:
       - build-lin-hrx-deb
       - build-win-xrt
       - build-win-hrx
+      - build-lin-extension-xrt
+      - build-lin-extension-hrx
+      - build-win-extension-xrt
+      - build-win-extension-hrx
       - test-lin-xrt-portable
       - test-lin-hrx-portable
       - test-lin-source-portable
+      - test-lin-extension-xrt
+      - test-lin-extension-hrx
       - install-lin-xrt-deb
       - install-lin-hrx-deb
       - test-win-xrt
+      - test-win-hipep
       - test-win-hrx
       - test-win-source
+      - test-win-extension-xrt
+      - test-win-extension-hrx
       - install-win-msi
     if: always()
     runs-on: ubuntu-latest
@@ -488,13 +896,13 @@ jobs:
       hrx-passed: ${{ steps.verdict.outputs.hrx }}
     steps:
       - name: Checkout scripts
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: .github/script/ci
           filter: blob:none
 
       - name: Download reports
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: npu-test-*
           path: reports
@@ -513,10 +921,15 @@ jobs:
             ${{ needs.build-lin-xrt-portable.result }} ${{ needs.build-lin-xrt-deb.result }}
             ${{ needs.build-win-xrt.result }}
             ${{ needs.test-lin-xrt-portable.result }} ${{ needs.test-win-xrt.result }}
+            ${{ needs.test-win-hipep.result }}
+            ${{ needs.build-lin-extension-xrt.result }} ${{ needs.build-win-extension-xrt.result }}
+            ${{ needs.test-lin-extension-xrt.result }} ${{ needs.test-win-extension-xrt.result }}
           HRX: >-
             ${{ needs.build-lin-hrx-portable.result }} ${{ needs.build-lin-hrx-deb.result }}
             ${{ needs.build-win-hrx.result }}
             ${{ needs.test-lin-hrx-portable.result }} ${{ needs.test-win-hrx.result }}
+            ${{ needs.build-lin-extension-hrx.result }} ${{ needs.build-win-extension-hrx.result }}
+            ${{ needs.test-lin-extension-hrx.result }} ${{ needs.test-win-extension-hrx.result }}
         run: |
           verdict() {
             for result in $1; do

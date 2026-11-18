@@ -254,6 +254,21 @@ void TestModelIsReadyOnlyWhenAllFourFinalFilesValidate() {
     TEST_REQUIRE(downloader.is_model_downloaded("test-model:1b") == ModelDownloader::ModelStatus::Missing);
 }
 
+void TestCatalogFileRecordsDoNotNeedGlobalMetadata() {
+    DownloaderFixture fixture;
+    fixture.WriteValidFiles();
+    auto catalog = ReadJson(fixture.catalog_path);
+    catalog["models"]["test-model"]["1b"]["file_records"] =
+        ReadJson(fixture.info_path).at("test-model:1b");
+    Write(fixture.catalog_path, catalog.dump());
+    fs::remove(fixture.info_path);
+    fixture.models = model_list(fixture.catalog_string, fixture.root_string);
+    ModelDownloader downloader(fixture.models);
+    TEST_REQUIRE(downloader.is_model_downloaded("test-model:1b") == ModelDownloader::ModelStatus::Ready);
+    Write(fixture.model_path() / "b.bin", "BETA");
+    TEST_REQUIRE(downloader.is_model_downloaded("test-model:1b") == ModelDownloader::ModelStatus::Missing);
+}
+
 void TestPartFileNeverMakesModelReady() {
     DownloaderFixture fixture;
     fixture.WriteValidFiles();
@@ -297,6 +312,11 @@ void TestLegacyReadyCheckDoesNotHashOrDeleteWeights() {
     TEST_REQUIRE(Read(model_path / "model.bin") == "bad-data");
 
     Write(model_path / "config.json", R"({"model_type":"legacy"})");
+    TEST_REQUIRE(downloader.is_model_downloaded("legacy-model:1b", true, true) ==
+                 ModelDownloader::ModelStatus::Outdated);
+
+    Write(model_path / "config.json",
+          R"({"model_type":"legacy","flm_version":null})");
     TEST_REQUIRE(downloader.is_model_downloaded("legacy-model:1b", true, true) ==
                  ModelDownloader::ModelStatus::Outdated);
 }
@@ -771,6 +791,57 @@ void TestRemovingBaseWarnsAndRemovingDependantKeepsBase() {
                  ModelDownloader::ModelStatus::Missing);
 }
 
+void TestRemovingAModelRemovesTheFoldersOfItsFiles() {
+    BaseModelFixture fixture("nested-remove", true,
+                             {{"files", {"config.json", "draft.bin", "decoder/model.onnx"}}});
+    fixture.InstallDependant();
+    Write(fixture.dep_path() / "decoder" / "model.onnx", "graph");
+    Write(fixture.dep_path() / "decoder" / "model.onnx.data.part", "partial");
+    ModelDownloader downloader(fixture.models);
+    bool removed = false;
+    Captured([&] { removed = downloader.remove_model(kDependantTag); });
+    TEST_REQUIRE(removed);
+    TEST_REQUIRE(!fs::exists(fixture.dep_path()));
+
+    // a folder that holds none of the model's files is not the model's to delete
+    fixture.InstallDependant();
+    Write(fixture.dep_path() / "notes" / "mine.txt", "keep");
+    Captured([&] { removed = downloader.remove_model(kDependantTag); });
+    TEST_REQUIRE(!removed);
+    TEST_REQUIRE(Read(fixture.dep_path() / "notes" / "mine.txt") == "keep");
+}
+
+void TestOnlyFoldersInsideTheModelDirectoryAreRemoved() {
+    TEST_REQUIRE(model_file_folder("decoder/model.onnx") == std::string("decoder"));
+    TEST_REQUIRE(model_file_folder("./vision//x.bin") == std::string("vision"));
+    TEST_REQUIRE(model_file_folder("vision/../decoder/model.onnx") == std::string("decoder"));
+    // at the top of the model directory, or outside it
+    for (const char* file : {"config.json", "./config.json", "vision/../config.json", "", ".",
+                             "/vision/x.bin", "//server/share/x.bin", "../vision/x.bin",
+                             "vision/../../x.bin"}) {
+        TEST_REQUIRE(!model_file_folder(file));
+    }
+#ifdef _WIN32
+    for (const char* file : {"\\vision\\x.bin", "C:vision/x.bin", "C:/vision/x.bin", "D:x.bin"}) {
+        TEST_REQUIRE(!model_file_folder(file));
+    }
+#endif
+
+    // ./decoder/model.onnx takes decoder/ with it, not the whole model directory
+    BaseModelFixture fixture("dotted-remove", true,
+                             {{"files", {"config.json", "draft.bin", "./decoder/model.onnx"}}});
+    fixture.InstallDependant();
+    Write(fixture.dep_path() / "decoder" / "model.onnx", "graph");
+    Write(fixture.dep_path() / "notes" / "mine.txt", "keep");
+    ModelDownloader downloader(fixture.models);
+    bool removed = true;
+    Captured([&] { removed = downloader.remove_model(kDependantTag); });
+    TEST_REQUIRE(!removed);
+    TEST_REQUIRE(!fs::exists(fixture.dep_path() / "decoder"));
+    TEST_REQUIRE(!fs::exists(fixture.dep_path() / "draft.bin"));
+    TEST_REQUIRE(Read(fixture.dep_path() / "notes" / "mine.txt") == "keep");
+}
+
 void TestModelscopeFlagReachesTheBase() {
     // Only the ModelScope sources exist: both pulls can succeed only if the flag
     // reaches the base as well as the dependant.
@@ -795,7 +866,7 @@ void TestShippedCatalogDeclaresTheDflashDependant() {
     TEST_REQUIRE(info.at("details").at("family") == "gemma4e-dflash");
     TEST_REQUIRE(info.at("xclbin_folder") == "Nemotron-3.5-Bolt-E4B-DFlash-NPU2");
     TEST_REQUIRE(info.at("files").get<std::vector<std::string>>() ==
-                 (std::vector<std::string>{"config.json", "dflash_weight.q4nx", "LICENSE.OpenMDW-1.1"}));
+                 (std::vector<std::string>{"config.json", "dflash_weight.q4nx"}));
     // the base entry is the shipped plain-decode tag, untouched
     const auto base = models.get_model_info("nemotron3.5-bolt:e4b").second;
     TEST_REQUIRE(base.at("name") == "Nemotron-3.5-Bolt-E4B-NPU2");
@@ -828,7 +899,7 @@ void TestShippedCatalogDeclaresTheDflashDependant() {
     TEST_REQUIRE(q38_info.at("details").at("family") == "qwen3.8-dflash2");
     TEST_REQUIRE(q38_info.at("xclbin_folder") == "Qwen3.8-27B-NPU2");
     TEST_REQUIRE(q38_info.at("files").get<std::vector<std::string>>() ==
-                 (std::vector<std::string>{"config.json", "dflash_weight.q4nx", "LICENSE"}));
+                 (std::vector<std::string>{"config.json", "dflash_weight.q4nx"}));
     TEST_REQUIRE(models.get_model_info("qwen3.8-mtp:27b").second.at("name") == "Qwen3.8-27B-NPU2");
 }
 
@@ -886,6 +957,7 @@ void TestSuccessfulForceDownloadAtomicallyReplacesFinalFile() {
 }  // namespace
 
 int main() {
+    RunTest(TestCatalogFileRecordsDoNotNeedGlobalMetadata, "extension file records");
     RunTest(TestCoreCatalogHasExactlyFourFilesAndExpectedDirectoryName, "core catalog");
     RunTest(TestGgufUrlContainsAmdRevisionAndFilename, "GGUF URL");
     RunTest(TestThreeFrontendUrlsContainMicrosoftRevisionAndFilename, "frontend URLs");
@@ -912,6 +984,8 @@ int main() {
     RunTest(TestStatusNeedsBothPackages, "status needs both packages");
     RunTest(TestCheckReportsAnIncompleteBase, "check reports incomplete base");
     RunTest(TestRemovingBaseWarnsAndRemovingDependantKeepsBase, "rm semantics");
+    RunTest(TestRemovingAModelRemovesTheFoldersOfItsFiles, "rm removes the folders of its files");
+    RunTest(TestOnlyFoldersInsideTheModelDirectoryAreRemoved, "rm stays inside the model directory");
     RunTest(TestModelscopeFlagReachesTheBase, "modelscope flag reaches base");
     RunTest(TestShippedCatalogDeclaresTheDflashDependant, "shipped dflash entry");
     RunTest(TestResumeAppendsToPartThenAtomicallyPromotes, "resume and promote");

@@ -6,10 +6,12 @@
 /// \note This is a source file for the main entry point
 #pragma once
 #include "AutoDecisionModel/auto_decision_model.hpp"
+#include "AutoEmbeddingModel/all_embedding_model.hpp"
 #include "runner.hpp"
 #include "server.hpp"
 #include "model_list.hpp"
 #include "AutoModel/model_backend.hpp"
+#include "AutoModel/model_frontend.hpp"
 #include "model_downloader.hpp"
 #include "update.hpp"
 #include "utils/utils.hpp"
@@ -42,6 +44,9 @@
 #error "FLM_ENABLE_CORE requires the XRT backend (FLM_USE_HRX=OFF): corelib opens the NPU through XRT"
 #endif
 #include "core/corelib_runtime.hpp"
+#endif
+#if defined(FLM_ENABLE_OGA_HIPEP)
+#include "oga/oga_hipep_backend.hpp"
 #endif
 
 #ifndef _WIN32
@@ -561,14 +566,31 @@ static flm_rt::device* open_npu_device(std::string* why) {
     }
 }
 
-///@brief main function
+#if defined(_WIN32) && defined(FLM_ENABLE_OGA_HIPEP)
+///@brief end a process that loaded hip-ep at Ctrl+C, Ctrl+Break or closing its console
+///@note The default handler, which runs when this one returns FALSE, ends the process
+///      through ExitProcess, which never finishes once hip-ep is loaded.
+static BOOL WINAPI end_hipep_process_on_console_event(DWORD event) {
+    if (event == CTRL_C_EVENT || event == CTRL_BREAK_EVENT || event == CTRL_CLOSE_EVENT) {
+        flm::oga::EndProcessIfHipEpLoaded(STATUS_CONTROL_C_EXIT);
+    }
+    return FALSE;
+}
+#endif
+
+///@brief run the command line; main ends the process with its result
 ///@param argc the number of arguments
 ///@param argv the arguments
 ///@return the exit code
-int main(int argc, char* argv[]) {
+static int run_flm(int argc, char* argv[]) {
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
+#if defined(FLM_ENABLE_OGA_HIPEP)
+    SetConsoleCtrlHandler(end_hipep_process_on_console_event, TRUE);
+    // The exit(EXIT_FAILURE) of an error path would hang the same way.
+    std::atexit([] { flm::oga::EndProcessIfHipEpLoaded(EXIT_FAILURE); });
+#endif
 #elif !defined(FLM_USE_HRX)
     // XRT backend: preload bundled XRT libraries from the executable directory.
     preload_bundled_libraries();
@@ -602,6 +624,20 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
+    if (parsed_args.command == "uninstall") {
+#if defined(FLM_ENABLE_OGA_HIPEP)
+        try {
+            return flm::oga::UninstallHipEp() ? 0 : 1;
+        } catch (const std::exception& e) {
+            header_print("ERROR", e.what());
+            return 1;
+        }
+#else
+        header_print("ERROR", "This flm build has no oga-hipep backend, so it installs no hip-ep runtime");
+        return 1;
+#endif
+    }
+
     // Get the command, model tag, and force flag
     std::string exe_dir = utils::get_executable_directory();
     std::string config_path;
@@ -614,15 +650,38 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+#ifdef FLM_ENABLE_CORE
+    // Declared before the extension guard so extension objects are destroyed
+    // before their underlying runtime is shut down.
+    CoreProcessGuard core_guard;
+#endif
+    auto& frontend_registry = flm::frontend::FrontendRegistry::instance();
+    struct ExtensionUnloadGuard {
+        flm::frontend::FrontendRegistry& registry;
+        ~ExtensionUnloadGuard() { registry.unload_extensions(); }
+    } extension_unload_guard{frontend_registry};
+
+    if (!parsed_args.model_extensions.empty()) {
+        try {
+            const auto reserved_model_tags =
+                flm::catalog::load_model_catalog_tags(config_path);
+            for (const auto& manifest : parsed_args.model_extensions) {
+                frontend_registry.load_extension(
+                    manifest, reserved_model_tags);
+            }
+        } catch (const std::exception& error) {
+            header_print("ERROR", "Failed to load model extension: "
+                                      << error.what());
+            return 1;
+        }
+    }
+
     // Get the models directory from environment variable or default
     std::string models_dir = utils::get_models_directory();
 
     // One NPU runtime for the whole process, brought up before the catalog so
     // the catalog can be filtered to what this NPU generation can actually run.
 #ifdef FLM_ENABLE_CORE
-    // Declared before anything that can return so the destructor covers the
-    // early exits and the catch-all below.
-    CoreProcessGuard core_guard;
     // Before this process takes the device, as in the build without corelib:
     // validate probes /dev/accel/* itself, and amdxdna refuses a second open.
     if (parsed_args.command == "validate") {
@@ -677,9 +736,11 @@ int main(int argc, char* argv[]) {
     // that were linked in, and a tag names its own flow.
     const utils::npu_platform platform = utils::get_device();
 
+    auto& backend_registry = flm::backend::BackendRegistry::instance();
     model_list availble_models(
         config_path, models_dir, std::string(utils::platform_id(platform)),
-        flm::backend::BackendRegistry::instance().backend_ids());
+        backend_registry.backend_ids(), frontend_registry.catalog_overlays(),
+        frontend_registry.available(), backend_registry.provider_inventory());
 
     const bool print_status = !parsed_args.json_output && !parsed_args.sub_process_mode;
     const bool needs_npu =
@@ -720,12 +781,43 @@ int main(int argc, char* argv[]) {
     }
 
     if (parsed_args.command == "run" || parsed_args.command == "serve" || parsed_args.command == "pull" || parsed_args.command == "remove" || parsed_args.command == "check" || parsed_args.command == "bench") {
+        parsed_args.model_tag = availble_models.rectify_model_tag(parsed_args.model_tag);
       if (parsed_args.model_tag != "model-faker" && (!availble_models.is_model_supported(parsed_args.model_tag))) {
             header_print("ERROR", "Model not found: " << parsed_args.model_tag << "; Please check with `flm list` and try again.");
             return 1;
         }
     }
   
+    if (parsed_args.command == "serve" || parsed_args.command == "run") {
+        // -a / -e must name a model of the right kind.
+        auto family_of = [&](const std::string& tag) {
+            auto [resolved_tag, info] = availble_models.get_model_info(tag);
+            return info.value("details", nlohmann::json::object()).value("family", std::string());
+        };
+        if (parsed_args.asr) {
+            if (!availble_models.is_model_supported(parsed_args.asr_tag)) {
+                header_print("ERROR", "ASR model not found: " << parsed_args.asr_tag << "; Please check with `flm list` and try again.");
+                return 1;
+            }
+            const std::string asr_family = family_of(parsed_args.asr_tag);
+            if (asr_family != "whisper-v3" && !(asr_family == "r2t2" && parsed_args.command == "serve")) {
+                header_print("ERROR", parsed_args.asr_tag << " is not an ASR model" << (asr_family == "r2t2" ? " for `flm run`; use `flm serve`" : "") << "; use e.g. -a whisper-v3:turbo");
+                return 1;
+            }
+        }
+        if (parsed_args.embed) {
+            parsed_args.embed_tag = availble_models.rectify_model_tag(parsed_args.embed_tag);
+            if (!availble_models.is_model_supported(parsed_args.embed_tag)) {
+                header_print("ERROR", "Embedding model not found: " << parsed_args.embed_tag << "; Please check with `flm list` and try again.");
+                return 1;
+            }
+            if (!is_embedding_model(availble_models.get_model_info(parsed_args.embed_tag).second)) {
+                header_print("ERROR", parsed_args.embed_tag << " is not an embedding model; use e.g. -e embed-gemma:300m");
+                return 1;
+            }
+        }
+    }
+
     if (parsed_args.command == "serve" || parsed_args.command == "run" || parsed_args.command == "bench"){
         // Configure AMD XRT for the specified power mode
         if (parsed_args.power_mode == "default" || parsed_args.power_mode == "powersaver" || parsed_args.power_mode == "balanced" || 
@@ -766,8 +858,8 @@ int main(int argc, char* argv[]) {
             header_print_g("FLM", "ASR mode enabled: reserving additional 1GB of memory");
         }
         if (parsed_args.embed) {
-            embedding_size = 300000000;
-            header_print_g("FLM", "Embedding mode enabled: reserving additional 300MB of memory");
+            embedding_size = availble_models.get_model_info(parsed_args.embed_tag).second.value("size", uint64_t{300000000});
+            header_print_g("FLM", "Embedding mode enabled: reserving additional " << embedding_size / 1000000 << "MB of memory");
         }
         if (!parsed_args.decision.empty()) {
             // the decision model's own weights (d3:edge ~0.6 GB, d3:lite 0.56 GB, d3:nano 1.34 GB, d3:mini 3.43 GB, d3:flash ~5.5 GB in the catalog's size) plus
@@ -828,7 +920,30 @@ int main(int argc, char* argv[]) {
                                 << parsed_args.model_tag << "` (optionally next to a chat model) and POST /v1/systemone");
             return 1;
         }
+        if ((parsed_args.command == "run" || parsed_args.command == "bench") &&
+            parsed_args.model_tag != "model-faker" &&
+            is_embedding_model(availble_models.get_model_info(parsed_args.model_tag).second)) {
+            header_print("ERROR", parsed_args.model_tag << " is an embedding model: use `flm serve "
+                                  << parsed_args.model_tag << "` and POST /v1/embeddings");
+            return 1;
+        }
         if (parsed_args.command == "bench") {
+            // Like run and serve: fetch the model (from HF, or ModelScope with --modelscope) if it is not on disk yet.
+            const std::string bench_tag = availble_models.get_model_info(parsed_args.model_tag).first;
+            switch (downloader.is_model_downloaded(bench_tag, false, /*fast_check=*/true)) {
+                case ModelDownloader::ModelStatus::Ready:
+                    break;
+                case ModelDownloader::ModelStatus::Outdated:
+                case ModelDownloader::ModelStatus::Missing:
+                    if (!downloader.pull_model(bench_tag, parsed_args.modelscope)) {
+                        header_print("ERROR", "Failed to pull model: " + bench_tag);
+                        return 1;
+                    }
+                    break;
+                case ModelDownloader::ModelStatus::Incompatible:
+                    header_print("ERROR", "Model is incompatible with this version of FastFlowLM: " + bench_tag);
+                    return 1;
+            }
             benchmarking::BenchmarkResults_t results = benchmarking::run_benchmarks(parsed_args.model_tag, parsed_args.input_file_name, availble_models, parsed_args.iterations, npu_device, parsed_args.backend, parsed_args.ctx_length);
         }
         else if (parsed_args.command == "run") {
@@ -944,4 +1059,17 @@ int main(int argc, char* argv[]) {
         std::cerr << "Error: " << e.what() << std::endl;
         return 1;
     }
+}
+
+///@brief main function
+///@param argc the number of arguments
+///@param argv the arguments
+///@return the exit code
+int main(int argc, char* argv[]) {
+    const int code = run_flm(argc, argv);
+#if defined(FLM_ENABLE_OGA_HIPEP)
+    // run_flm released what it held; ExitProcess would hang in hip-ep's DLL teardown.
+    flm::oga::EndProcessIfHipEpLoaded(static_cast<unsigned int>(code));
+#endif
+    return code;
 }

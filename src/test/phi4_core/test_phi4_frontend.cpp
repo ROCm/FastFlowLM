@@ -39,6 +39,9 @@ void register_builtin_backends(BackendRegistry&) {}
 namespace {
 
 constexpr const char* kGguf = "Phi-4-mini-instruct-Q4_G128.gguf";
+/// \brief config.json's vocab_size; a forward returns this many logits, as the
+///        frontend refuses fewer
+constexpr int kVocabSize = 200064;
 
 std::vector<int> g_encoded_tokens;
 std::vector<int> g_samples;
@@ -59,7 +62,7 @@ public:
             throw std::runtime_error("submitted inference failed");
         }
         ++position;
-        return buffer<bf16>(1);
+        return buffer<bf16>(kVocabSize);
     }
     buffer<bf16> prefill(std::vector<int>& tokens, void*) override {
         ++prefill_calls;
@@ -69,7 +72,7 @@ public:
             throw std::runtime_error("submitted inference failed");
         }
         position += static_cast<int>(tokens.size());
-        return buffer<bf16>(1);
+        return buffer<bf16>(kVocabSize);
     }
     void set_context_length(int value) override { position = value; }
     void load_weights(Q4NX&) override {}
@@ -183,7 +186,7 @@ nlohmann::json PackageConfig() {
     return {{"model_type", "phi3"}, {"num_hidden_layers", 32},
             {"hidden_size", 3072}, {"intermediate_size", 8192},
             {"num_attention_heads", 24}, {"num_key_value_heads", 8},
-            {"head_dim", 128}, {"vocab_size", 200064},
+            {"head_dim", 128}, {"vocab_size", kVocabSize},
             {"rms_norm_eps", 1.0e-5}, {"original_max_position_embeddings", 4096},
             {"eos_token_id", 199999}};
 }
@@ -296,8 +299,6 @@ Sampler::Sampler(int features, sampler_config& config)
       freq_penalty(config.freq_penalty), pre_penalty(config.pre_penalty),
       top_k(config.top_k), top_p(config.top_p), min_p(config.min_p),
       temperature(config.temperature), total_tokens(0),
-      freq_penalty_window(config.freq_penalty_window),
-      rep_penalty_window(config.rep_penalty_window),
       repeat_last_n(config.repeat_last_n),
       use_optimized_sampling(config.use_optimized_sampling) {
     logits.resize(1); counters.resize(1); token_positions.resize(1, -1);

@@ -625,6 +625,69 @@ bool ImageReader::decode_webp(const uint8_t* data, size_t size, image_data_t& ou
     return true;
 }
 
+bool ImageReader::validate_image_bytes(const std::string& encoded, std::string& why) {
+    const auto* data = reinterpret_cast<const uint8_t*>(encoded.data());
+    const size_t size = encoded.size();
+    if (size == 0) {
+        why = "the image is empty";
+        return false;
+    }
+
+    const ImageCodec codec = detect_codec(data, size);
+    if (codec == ImageCodec::None) {
+        const char* name = nullptr;
+        if (size >= 4 && std::memcmp(data, "GIF8", 4) == 0) name = "GIF";
+        else if (size >= 2 && data[0] == 'B' && data[1] == 'M') name = "BMP";
+        else if (size >= 4 && (std::memcmp(data, "II*\0", 4) == 0 || std::memcmp(data, "MM\0*", 4) == 0)) name = "TIFF";
+        else if (size >= 12 && std::memcmp(data + 4, "ftyp", 4) == 0) name = "HEIF/AVIF";
+        why = name ? std::string("unsupported image format ") + name + " (supported: PNG, JPEG, WebP)"
+                   : std::string("the data is not a PNG, JPEG or WebP image");
+        return false;
+    }
+    const char* codec_name = codec == ImageCodec::Png ? "PNG" : codec == ImageCodec::Jpeg ? "JPEG" : "WebP";
+
+    if (!has_basic_image_integrity(data, size, codec)) {
+        why = std::string("the ") + codec_name + " image is truncated or corrupt";
+        return false;
+    }
+
+    // Read the size from the header first, so an oversized image is refused before any pixel buffer exists.
+    size_t width = 0, height = 0;
+    if (codec == ImageCodec::Png) {
+        unsigned w = 0, h = 0;
+        lodepng::State state;
+        if (lodepng_inspect(&w, &h, &state, data, size) == 0) { width = w; height = h; }
+    } else if (codec == ImageCodec::Jpeg) {
+        JpegDecoder decoder;
+        if (decoder.read_header(data, size) && decoder.width() > 0 && decoder.height() > 0) {
+            width = static_cast<size_t>(decoder.width());
+            height = static_cast<size_t>(decoder.height());
+        }
+    } else {
+        int w = 0, h = 0;
+        if (WebPGetInfo(data, size, &w, &h) && w > 0 && h > 0) { width = w; height = h; }
+    }
+    if (width == 0 || height == 0) {
+        why = std::string("the ") + codec_name + " image header is corrupt";
+        return false;
+    }
+    if (width * height > kMaxImagePixels) {
+        why = "the image is " + std::to_string(width) + "x" + std::to_string(height) + " = " +
+              std::to_string(width * height) + " pixels, over the limit of " + std::to_string(kMaxImagePixels);
+        return false;
+    }
+
+    // Decode for real, with the decoder the model will use: anything accepted here also decodes there.
+    image_data_t image;
+    const bool ok = decode_bytes(data, size, image);
+    recycle(image);
+    if (!ok) {
+        why = std::string("the ") + codec_name + " image data is corrupt and could not be decoded";
+        return false;
+    }
+    return true;
+}
+
 bool ImageReader::decode_bytes(const uint8_t* data, size_t size, image_data_t& out_image) {
     const ImageCodec codec = detect_codec(data, size);
     if (codec == ImageCodec::None) {
@@ -684,6 +747,26 @@ bool ImageReader::load_image_base64(const std::string& base64_string, image_data
     }
 
     return decode_bytes(reinterpret_cast<const uint8_t*>(decoded.data()), decoded.size(), out_image);
+}
+
+bool ImageReader::from_rgb8(const uint8_t* rgb, int height, int width, image_data_t& out_image) {
+    if (!rgb || height <= 0 || width <= 0) {
+        return false;
+    }
+    const size_t pixel_count = static_cast<size_t>(width) * height;
+    if (pixel_count > kMaxImagePixels) {
+        return false;
+    }
+    bytes buffer = memory_pool_.acquire(pixel_count * 3);
+    if (buffer.size() == 0) {
+        return false;
+    }
+    std::memcpy(buffer.data(), rgb, pixel_count * 3);
+    recycle(out_image);
+    out_image.width = width;
+    out_image.height = height;
+    out_image.pixels = std::move(buffer);
+    return true;
 }
 
 bool ImageReader::resize_image(const image_data_t& input, int target_width, int target_height, image_data_t& output) {

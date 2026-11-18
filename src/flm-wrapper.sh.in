@@ -10,8 +10,9 @@
 # substituted in by CMake (see FLM_RUNTIME_NAME): 0 = XRT, 1 = HRX.
 FLM_RUNTIME="@FLM_RUNTIME_NAME@"
 
-# Directory containing this script (and the bundled tree).
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Directory containing this script (and the bundled tree). Resolve symlinks
+# first so `ln -s <install>/flm ~/.local/bin/flm` still finds flm-real and lib/.
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # Make the bundled libraries resolvable at runtime.
 export LD_LIBRARY_PATH="$SCRIPT_DIR/lib:$LD_LIBRARY_PATH"

@@ -35,7 +35,7 @@ TRIES = 3
 
 
 def no_penalties(**fields: Any) -> dict[str, Any]:
-    """Penalty fields set to off, overridable; they stick, so every case sends them."""
+    """Penalty fields set to off, overridable; every case sends them, so none depends on the model's defaults."""
     out: dict[str, Any] = {"presence_penalty": 0.0, "frequency_penalty": 0.0, "repetition_penalty": 1.0}
     out.update(fields)
     return out
@@ -126,6 +126,29 @@ def window_whole_reply(api: Api) -> None:
     whole = api.body(user(REPEAT), max_tokens=48, **no_penalties(repeat_last_n=-1, **fields))
     huge = api.body(user(REPEAT), max_tokens=48, **no_penalties(repeat_last_n=2 ** 40, **fields))
     expect_same(api, whole, huge, "repeat_last_n -1 and 2**40 differ")
+
+
+@case
+def top_k_zero_turns_top_k_off(api: Api) -> None:
+    """top_k 0 and -1 are accepted and turn top-k off; a vocabulary-wide top_k samples the same."""
+    for off in (0, -1):
+        body = api.body(user(STORY), max_tokens=16, **no_penalties(top_k=off, top_p=1.0, temperature=1.0, seed=5))
+        content(api, body)
+    seeded_off = sampled(api, STORY, seed=77)
+    seeded_off["top_k"] = 0
+    seeded_wide = sampled(api, STORY, seed=77)
+    seeded_wide["top_k"] = 10 ** 7  # above any vocabulary: clamped to it, the same as off
+    expect_same(api, seeded_off, seeded_wide, "top_k 0 and a top_k above the vocabulary sample differently")
+
+
+@case
+def settings_do_not_carry_over(api: Api) -> None:
+    """A request that leaves the sampling fields out gets the model's defaults, whatever ran before."""
+    plain = api.body(user(STORY), max_tokens=48, seed=7)
+    contaminating = api.body(user(STORY), max_tokens=16, temperature=0.0, top_k=1, top_p=0.1,
+                             presence_penalty=0.0, frequency_penalty=0.0, repetition_penalty=1.0,
+                             repeat_last_n=0, seed=1)
+    expect_same(api, plain, plain, "an earlier request's sampling fields carried over", between=contaminating)
 
 
 @case

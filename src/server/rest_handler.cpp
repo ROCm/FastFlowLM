@@ -7,10 +7,19 @@
  *  \version 0.9.24
  */
 #include "rest_handler.hpp"
+#include "http_guard.hpp"
 #include "wstream_buf.hpp"
 #include "streaming_ostream.hpp"
 #include "streaming_ostream_openai.hpp"
 #include "image/image_reader.hpp"
+#include "image/raw_rgb8.hpp"
+#include "base64.hpp"
+#include "utils/log_privacy.hpp"
+#include <algorithm>
+#include <cctype>
+#include <cstring>
+#include "AutoModel/modeling_minicpm_v.hpp"
+#include "AutoModel/modeling_qwen3_asr.hpp"
 #include "whisper/transcript_format.hpp"
 #include <sstream>
 #include <iostream>
@@ -34,6 +43,25 @@ json ExceptionResponse(const std::exception& error) {
     if (const auto* model_error = dynamic_cast<const ModelRequestError*>(&error))
         return ModelErrorResponse(*model_error);
     return {{"error", error.what()}};
+}
+
+/// \brief The reply to an exception on a /v1 endpoint: an OpenAI error body whose code makes it an HTTP 500
+/// \note ExceptionResponse above keeps the Ollama shape ({"error": "..."}, no code, so HTTP 200)
+///       that the /api/* handlers send; only the /v1 handlers use this one.
+json OpenAIExceptionResponse(const std::exception& error) {
+    if (const auto* model_error = dynamic_cast<const ModelRequestError*>(&error))
+        return ModelErrorResponse(*model_error);
+    return {{"error", {{"message", error.what()},
+                       {"type", "server_error"},
+                       {"code", 500}}}};
+}
+
+/// \brief The reply when insert() returned false without being cancelled: the reason the model gave, if any
+json PrefillFailedResponse(const chat_meta_info_t& meta_info) {
+    const std::string message = meta_info.error_message.empty() ? "Prefill failed (see server log)" : meta_info.error_message;
+    return {{"error", {{"message", message},
+                       {"type", meta_info.error_code >= 500 ? "server_error" : "invalid_request_error"},
+                       {"code", meta_info.error_code}}}};
 }
 
 /// \brief The reply to a model name the catalog does not have: a 404, as OpenAI's
@@ -197,10 +225,92 @@ static json normalize_messages(json messages) {
     return normalized;
 }
 
-static json normalize_template(json messages) {
-    json template_message = json::array();
+static bool starts_with_ci(const std::string& s, const char* prefix) {
+    const size_t n = std::strlen(prefix);
+    if (s.size() < n) return false;
+    for (size_t i = 0; i < n; ++i) {
+        if (std::tolower(static_cast<unsigned char>(s[i])) != prefix[i]) return false;
+    }
+    return true;
+}
 
-    for (auto& message : messages) {
+///@brief Check one OpenAI `image_url` content part and return its base64 payload, ready for the models' decoders.
+/// Accepts a base64 `data:image/...;base64,` URL (any image media type, any case; the bytes decide the format) or bare
+/// base64. On failure returns false with `why` set: the request is malformed or the image can't be used, and silently
+/// dropping it would let the model answer about an image it never saw.
+static bool image_url_payload(const json& part, ImageReader& reader, std::string& payload, std::string& why) {
+    if (!part.contains("image_url") || !part["image_url"].is_object()) {
+        why = "'image_url' must be an object like {\"url\": \"data:image/png;base64,...\"}";
+        return false;
+    }
+    const json& image_url = part["image_url"];
+    if (!image_url.contains("url") || !image_url["url"].is_string()) {
+        why = "'image_url.url' is missing or not a string";
+        return false;
+    }
+    const std::string url = image_url["url"].get<std::string>();
+    if (url.empty()) {
+        why = "'image_url.url' is empty";
+        return false;
+    }
+    if (starts_with_ci(url, "http://") || starts_with_ci(url, "https://")) {
+        why = "remote image URLs are not supported; send the image inline as a base64 data URL "
+              "(data:image/png;base64,...)";
+        return false;
+    }
+    std::string encoded;
+    if (starts_with_ci(url, "data:")) {
+        const size_t comma = url.find(',');
+        if (comma == std::string::npos) {
+            why = "malformed data URL: no ',' before the image data";
+            return false;
+        }
+        std::string header = url.substr(5, comma - 5);
+        std::transform(header.begin(), header.end(), header.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        const std::string media_type = header.substr(0, header.find(';'));
+        if (media_type.rfind("image/", 0) != 0) {
+            why = "data URL media type '" + media_type + "' is not an image";
+            return false;
+        }
+        if (header.size() < 7 || header.compare(header.size() - 7, 7, ";base64") != 0) {
+            why = "data URL must be base64-encoded (data:image/...;base64,...)";
+            return false;
+        }
+        payload = url.substr(comma + 1);
+    }
+    else {
+        payload = url;  // bare base64
+    }
+    if (payload.empty()) {
+        why = "the image data is empty";
+        return false;
+    }
+    try {
+        encoded = base64::from_base64(payload);
+    }
+    catch (const std::exception&) {
+        why = "the image data is not valid base64";
+        return false;
+    }
+    return reader.validate_image_bytes(encoded, why);
+}
+
+///@brief `raw`: where to keep the batches of any `image_raw` parts (null: the model takes none, so such a part is an
+/// error). A bad image or image part (and an image outside a user message) sets `error`, and the result must not be used
+static json normalize_template(json messages, std::vector<std::shared_ptr<const raw_rgb8_batch_t>>* raw = nullptr,
+                               std::string* error = nullptr, const raw_rgb8_limits_t& raw_limits = raw_rgb8_limits_t()) {
+    json template_message = json::array();
+    size_t raw_frames = 0;
+    size_t raw_bytes = 0;
+    ImageReader image_reader;
+    auto fail = [&](size_t m, size_t c, const std::string& why) {
+        if (error) *error = "messages[" + std::to_string(m) + "].content[" + std::to_string(c) + "]: " + why;
+        return template_message;
+    };
+
+    for (size_t message_index = 0; message_index < messages.size(); ++message_index) {
+        auto& message = messages[message_index];
         json new_message = message;
         std::string merged_text;
         nlohmann::ordered_json::array_t merged_images;
@@ -212,32 +322,48 @@ static json normalize_template(json messages) {
         }
         else if (message["content"].is_array()) {
             // Structured format: extract text and image URLs
-            for (auto& contentItem : message["content"]) {
+            for (size_t content_index = 0; content_index < message["content"].size(); ++content_index) {
+                auto& contentItem = message["content"][content_index];
+                const bool is_image = contentItem.is_object() && contentItem.contains("type") &&
+                                      (contentItem["type"] == "image_url" || contentItem["type"] == "image_raw");
+                if (is_image && message.value("role", "") != "user") {
+                    // OpenAI takes image parts in user messages only; the chat templates drop or reject the rest.
+                    return fail(message_index, content_index, "images are only supported in user messages, not in a message with role '" +
+                                (message.contains("role") && message["role"].is_string()
+                                     ? message["role"].get<std::string>() : std::string("?")) + "' message");
+                }
                 if (contentItem.contains("type") && contentItem["type"] == "text") {
                     merged_text += contentItem["text"].get<std::string>();
                 }
                 else if (contentItem.contains("type") && contentItem["type"] == "image_url") {
-                    std::string image_url = contentItem["image_url"]["url"].get<std::string>();
-                    const std::vector<std::string> prefixes = {
-                        "data:image/png;base64,",
-                        "data:image/jpeg;base64,",
-                        "data:image/jpg;base64,"
-                    };
-                    for (const auto& prefix : prefixes) {
-                        if (image_url.substr(0, prefix.length()) == prefix) {
-                            image_url = image_url.substr(prefix.length());
-                            break;
-                        }
+                    std::string payload, why;
+                    if (!image_url_payload(contentItem, image_reader, payload, why)) {
+                        header_print("Warning", "Rejecting image: " + why);
+                        return fail(message_index, content_index, why);
                     }
-                    if (image_url.substr(0, 5) == "data:") {
-                        header_print("Warning", "Unsupported image format, skipping this image.");
-                        continue;
+                    merged_images.push_back(payload);
+                }
+                else if (contentItem.contains("type") && contentItem["type"] == "image_raw") {
+                    std::string why;
+                    auto batch = std::make_shared<raw_rgb8_batch_t>();
+                    if (!raw) {
+                        why = "image_raw: raw RGB8 images are not supported by this model";
                     }
-                    if (image_url.empty()) {
-                        header_print("Warning", "Empty image, skipping this image.");
-                        continue;
+                    else if (!contentItem.contains("image_raw")) {
+                        why = "image_raw: the part has no 'image_raw' object";
                     }
-                    merged_images.push_back(image_url);
+                    else if (parse_image_raw(contentItem["image_raw"], raw_limits, raw_frames, raw_bytes, *batch, why)) {
+                        why.clear();
+                    }
+                    if (!why.empty()) {
+                        return fail(message_index, content_index, why);
+                    }
+                    raw_frames += (size_t)batch->frames;
+                    raw_bytes += batch->data.size();
+                    for (int f = 0; f < batch->frames; ++f) {
+                        merged_images.push_back({ {"rgb8", {{"batch", raw->size()}, {"frame", f}}} });
+                    }
+                    raw->push_back(std::move(batch));
                 }
                 else if (contentItem.contains("type") && contentItem["type"] == "input_audio") {
                     std::string audio_base64 = contentItem["input_audio"]["data"].get<std::string>();
@@ -322,7 +448,7 @@ static bool logprobs_request_from_openai(const json& request, int& top_n, std::s
 
 ///@brief The OpenAI request fields that steer sampling but are not plain numbers to set
 struct openai_sampling_request {
-    /// generated tokens the penalties look at, -1 the whole reply; sticks like the other sampling fields
+    /// generated tokens the penalties look at, -1 the whole reply; applies to its own request, like the other sampling fields
     std::optional<int> penalty_window;
     /// restarts the random generator for this request only
     std::optional<uint64_t> seed;
@@ -540,7 +666,7 @@ static json convert_tool_responses_gemma4(json messages) {
 ///@return the rest handler
 RestHandler::RestHandler(model_list& models, ModelDownloader& downloader, program_args_t& args,
                          flm_rt::device* npu_device)
-    : supported_models(models), downloader(downloader), default_model_tag(args.model_tag), current_model_tag(""), modelscope(args.modelscope), asr(args.asr), embed(args.embed), img_pre_resize(args.img_pre_resize), preemption(args.preemption), backend(args.backend) {
+    : supported_models(models), downloader(downloader), default_model_tag(args.model_tag), current_model_tag(""), modelscope(args.modelscope), asr(args.asr), img_pre_resize(args.img_pre_resize), preemption(args.preemption), backend(args.backend) {
 
     // RAI receives the device from corelib; non-RAI creates its own here.
     if (npu_device != nullptr) {
@@ -565,31 +691,40 @@ RestHandler::RestHandler(model_list& models, ModelDownloader& downloader, progra
     this->prefix_cache_mb = args.prefix_cache_mb;
     this->prefix_slots = args.prefix_slots;
     this->prefix_min_gain = args.prefix_min_gain;
+    this->raw_rgb8_limits.allow_path_dir = args.raw_path_dir;
+    if (!args.raw_path_dir.empty()) {
+        std::error_code raw_dir_ec;
+        if (!std::filesystem::is_directory(args.raw_path_dir, raw_dir_ec)) {
+            header_print("WARNING", "--allow-raw-path " << args.raw_path_dir << " is not a directory; raw frame files stay off");
+            this->raw_rgb8_limits.allow_path_dir.clear();
+        }
+    }
+    this->raw_rgb8_limits.max_frames = (size_t)std::max(args.max_raw_frames, 1);
+    this->raw_rgb8_limits.max_bytes = (size_t)std::max(args.max_raw_mb, 1) * 1024 * 1024;
 
+    default_model_tag = supported_models.rectify_model_tag(default_model_tag);
+    const bool embedding_only = supported_models.is_model_supported(default_model_tag) &&
+        is_embedding_model(supported_models.get_model_info(default_model_tag).second);
+    if (embedding_only) ensure_embed_model_loaded(default_model_tag);
     // Initialize chat bot with default model
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
     if (this->asr) {
-        std::string whisper_tag = "whisper-v3:turbo";
-        ensure_asr_model_loaded(whisper_tag);
-    }
-    if (this->embed) {
-        std::string embed_tag = "embed-gemma:300m";
-        ensure_embed_model_loaded(embed_tag);
+        ensure_asr_model_loaded(args.asr_tag);
     }
 #else
     if (this->asr) {
         header_print("Error", "ASR models are not supported in this build");
     }
-    if (this->embed) {
-        header_print("Error", "Embedding models are not supported in this build");
-    }
 #endif
+    if (args.embed && !embedding_only) {
+        ensure_embed_model_loaded(args.embed_tag);
+    }
 
     if (!args.decision.empty()) {
         ensure_decision_model_loaded(args.decision);
     }
 
-    if (default_model_tag != "model-faker") {
+    if (default_model_tag != "model-faker" && !embedding_only) {
         if (!supported_models.is_model_supported(default_model_tag)) {
             header_print("Warning", "Default model tag '" << default_model_tag << "' is not supported. Falling back to 'llama3.2:1b'.");
             this->default_model_tag = "llama3.2:1b";
@@ -672,6 +807,7 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag,
             engine->set_prefix_limits(this->prefix_cache_mb, this->prefix_slots, this->prefix_min_gain);
             const auto load_started = std::chrono::steady_clock::now();
             engine->load_model(supported_models.get_load_path(new_ensure_tag), model_info, ctx_length, preemption, requested_backend);
+            engine->save_request_settings();
             report_load_time(load_started);
 
             // Per model, not per process: the flash models take 1024-token
@@ -706,6 +842,8 @@ bool RestHandler::is_known_model(const std::string& model_tag) {
 void RestHandler::ensure_asr_model_loaded(const std::string& model_tag) {
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
     std::string ensure_tag = model_tag;
+    const bool sidecar_r2t2 = this->supported_models.get_model_info(ensure_tag).second
+        .value("details", json::object()).value("family", std::string()) == "r2t2";
     switch (downloader.is_model_downloaded(ensure_tag, false, /*fast_check=*/true)) {
         case ModelDownloader::ModelStatus::Ready:
             break;
@@ -717,6 +855,23 @@ void RestHandler::ensure_asr_model_loaded(const std::string& model_tag) {
             header_print("ERROR", "Whisper is incompatible with this version of FastFlowLM, skipping... ");
             this->asr = false;
             return;
+    }
+    if (sidecar_r2t2) {
+        // r2t2 transcribes by itself: load it as a second engine beside the chat model
+        try {
+            auto [tag, engine] = get_auto_model(ensure_tag, this->supported_models, this->npu_device_inst);
+            auto [new_tag, info] = this->supported_models.get_model_info(tag);
+            engine->set_server_mode(true);
+            engine->load_model(this->supported_models.get_load_path(new_tag), info, -1, this->preemption, "");
+            engine->save_request_settings();
+            this->asr_sidecar_engine = std::move(engine);
+            this->asr_sidecar_tag = tag;
+        }
+        catch (const std::exception& e) {
+            header_print("ERROR", "Failed to load ASR model: " + std::string(e.what()));
+            exit(EXIT_FAILURE);
+        }
+        return;
     }
     this->whisper_engine = std::make_unique<Whisper>(this->npu_device_inst);
     auto [new_ensure_tag, whisper_model_info] = this->supported_models.get_model_info(ensure_tag);
@@ -813,43 +968,11 @@ void RestHandler::handle_systemone(const std::string& raw_body,
     send_response(reply);
 }
 
-///@brief Ensure the embed model is loaded
-///@param model_tag the model tag
-void RestHandler::ensure_embed_model_loaded(const std::string& model_tag) {
-#ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
-    std::string ensure_tag = model_tag;
-    switch (this->downloader.is_model_downloaded(ensure_tag, false, /*fast_check=*/true)) {
-        case ModelDownloader::ModelStatus::Ready:
-            break;
-        case ModelDownloader::ModelStatus::Outdated:
-        case ModelDownloader::ModelStatus::Missing:
-            this->downloader.pull_model(ensure_tag, this->modelscope);
-            break;
-        case ModelDownloader::ModelStatus::Incompatible:
-            header_print("ERROR", "EmbeddingGemma is incompatible with this version of FastFlowLM, skipping... ");
-            this->embed = false;
-            return;
-    }
-    auto [embedding_model_tag, auto_embedding_engine] = get_auto_embedding_model(ensure_tag, this->npu_device_inst);
-    this->auto_embedding_engine = std::move(auto_embedding_engine);
-    auto [new_embedding_model_tag, embedding_model_info] = this->supported_models.get_model_info(embedding_model_tag);
-    std::string embedding_model_path = this->supported_models.get_model_path(new_embedding_model_tag);
-    try {
-        this->auto_embedding_engine->load_model(embedding_model_path, embedding_model_info, this->preemption);
-    }
-    catch (const std::exception& e) {
-        header_print("ERROR", "Failed to load embedding model: " + std::string(e.what()));
-        exit(EXIT_FAILURE);
-    }
-#else
-    throw std::runtime_error("Embedding models are not supported in this build");
-#endif
-}
-
 ///@brief Configure chat engine parameters from options and request
 ///@param options the options JSON object
 ///@param request the request JSON object
 void RestHandler::configure_chat_engine_parameters(const json& options, const json& request) {
+    auto_chat_engine->restore_request_settings();
     if (has_value(request, "temperature")) {
         float temperature = request["temperature"];
         auto_chat_engine->set_temperature(temperature);
@@ -902,7 +1025,8 @@ json RestHandler::build_nstream_response(const std::string& response_text, chat_
                                          chat_logprobs_aligner* logprobs) {
     const chat_format_spec& spec = auto_chat_engine->get_chat_format();
     chat_msg parsed = chat_parse(spec,
-                                 chat_format_prefill(spec, meta_info.prompt_tail, meta_info.continue_final_message) + response_text,
+                                 chat_format_prefill(spec, meta_info.prompt_tail, meta_info.continue_final_message,
+                                                     parse_options.parse_tool_calls) + response_text,
                                  false, parse_options);
 
     json message;
@@ -965,7 +1089,13 @@ void RestHandler::handle_show(const json& request,
     std::function<void(const json&)> send_response,
     StreamResponseCallback send_streaming_response) {
     try {
-        std::string model = request["model"];
+        // A missing key read through const operator[] is undefined behavior (a crash with
+        // ordered_json): check the required fields first and answer 400.
+        if (auto bad = flm::http_guard::validate_show(request)) {
+            send_response(*bad);
+            return;
+        }
+        std::string model = request.at("model").get<std::string>();
         json info = {
             {"modelfile", ""},
             {"parameters", ""},
@@ -1003,7 +1133,11 @@ void RestHandler::handle_generate(const json& request,
                                  StreamResponseCallback send_streaming_response,
                                  std::shared_ptr<CancellationToken> cancellation_token) {
     try {
-        std::string prompt = request["prompt"];
+        if (auto bad = flm::http_guard::validate_generate(request)) {
+            send_response(*bad);
+            return;
+        }
+        std::string prompt = request.at("prompt").get<std::string>();
         bool stream = request.value("stream", true);
         std::string model = request.value("model", current_model_tag);
         const std::string request_backend = request.value("backend", std::string());
@@ -1018,6 +1152,8 @@ void RestHandler::handle_generate(const json& request,
             return;
         }
         auto load_end_time = time_utils::now();
+        // It takes no settings, but must not run with what an earlier chat request set
+        auto_chat_engine->restore_request_settings();
       
         chat_meta_info_t meta_info;
         lm_uniform_input_t uniformed_input;
@@ -1127,7 +1263,11 @@ void RestHandler::handle_chat(const json& request,
                              StreamResponseCallback send_streaming_response,
                              std::shared_ptr<CancellationToken> cancellation_token) {
     try {
-        nlohmann::ordered_json messages = request["messages"];
+        if (auto bad = flm::http_guard::validate_chat(request)) {
+            send_response(*bad);
+            return;
+        }
+        nlohmann::ordered_json messages = request.at("messages");
         bool stream = request.value("stream", false);
         std::string model = request.value("model", current_model_tag);
         const std::string request_backend = request.value("backend", std::string());
@@ -1212,7 +1352,7 @@ void RestHandler::handle_chat(const json& request,
                 return;
             }
             // A character the generation stopped partway through can never be finished
-            response_text.resize(response_text.size() - incomplete_utf8_tail(response_text));
+            response_text = sanitize_utf8(response_text);
             //std::string response_text = chat_engine->generate_with_prompt(meta_info, prompts, length_limit, std::cout, payload);
             auto total_end_time = time_utils::now();
             meta_info.total_duration = (uint64_t)time_utils::duration_ns(total_start_time, total_end_time).first;
@@ -1241,64 +1381,6 @@ void RestHandler::handle_chat(const json& request,
             this->auto_chat_engine->clear_context();
         }
     } catch (const std::exception& e) {
-        json error_response = ExceptionResponse(e);
-        send_response(error_response);
-    }
-}
-
-///@brief Handle the embeddings request
-///@param request the request
-///@param send_response the send response
-///@param send_streaming_response the send streaming response
-void RestHandler::handle_embeddings(const json& request,
-                                   std::function<void(const json&)> send_response,
-                                   StreamResponseCallback send_streaming_response) {
-    try {
-        std::string model = request["model"];
-        std::vector<std::string> inputs;
-
-        if (request["input"].is_string()) {
-            inputs.push_back(request["input"].get<std::string>());
-        }
-        else if (request["input"].is_array()) {
-            for (const auto& item : request["input"]) {
-                inputs.push_back(item.get<std::string>());
-            }
-        }
-
-        json response;
-        if (this->embed) {
-            json embedding_data = json::array();
-#ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
-            for (size_t i = 0; i < inputs.size(); ++i) {
-                std::cout << "Embedding input[" << i << "]: " << "\n" << inputs[i] << std::endl;
-                std::vector<float> embedding_result = this->auto_embedding_engine->embed(inputs[i], embedding_task_type_t::task_query);
-                embedding_data.push_back({
-                    {"object", "embedding"},
-                    {"embedding", embedding_result},
-                    {"index", i}
-                });
-            }
-#else
-            throw std::runtime_error("Embedding models are not supported in this build");
-#endif
-
-            response = {
-                {"object", "list"},
-                {"data", embedding_data},
-                {"model", model},
-                {"usage", {
-                    {"prompt_tokens", 0},
-                    {"total_tokens", 0}
-                }}
-            };
-        }
-        else {
-            header_print("Warning", "No embedding model loaded");
-        }
-        send_response(response);
-    }
-    catch (const std::exception& e) {
         json error_response = ExceptionResponse(e);
         send_response(error_response);
     }
@@ -1539,7 +1621,17 @@ void RestHandler::handle_openai_chat_completion(const json& request,
         apply_sampling_request(*auto_chat_engine, sampling);
 
         current_messages = normalize_messages(current_messages);
-        current_messages = normalize_template(current_messages);
+        std::vector<std::shared_ptr<const raw_rgb8_batch_t>> raw_rgb8;
+        {
+            // raw RGB8 frames only go to MiniCPM-V; any other model gets a clear 400 rather than a dropped image
+            const bool takes_raw = dynamic_cast<MiniCPM_V*>(auto_chat_engine.get()) != nullptr;
+            std::string raw_error;
+            current_messages = normalize_template(current_messages, takes_raw ? &raw_rgb8 : nullptr, &raw_error, this->raw_rgb8_limits);
+            if (!raw_error.empty()) {
+                send_response({{"error", {{"message", raw_error}, {"type", "invalid_request_error"}, {"code", 400}}}});
+                return;
+            }
+        }
         if (continue_final) {
             request_error = continue_final_message_error(current_messages);
             if (!request_error.empty()) {
@@ -1612,6 +1704,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
 
         lm_uniform_input_t uniformed_input;
         uniformed_input.messages = current_messages;
+        uniformed_input.raw_rgb8 = std::move(raw_rgb8);
         uniformed_input.tools = tools;
         const std::optional<int> openai_chat_budget = has_value(request, "max_tokens")
             ? std::optional<int>(request.at("max_tokens").get<int>())
@@ -1676,21 +1769,13 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                         return;
                     }
 
-                    json error_response = {
-                        {"error", {
-                        {"message", "Max length reached!"},
-                        {"type", "model_error"},
-                        {"code", 400}
-                        }}
-                    };
-                    send_response(error_response);
+                    send_stream_error(PrefillFailedResponse(meta_info));
                     this->auto_chat_engine->clear_context();
                     this->prompt_cache.reset();
                     return;
                 }
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
-                send_response(error_response);
+                send_stream_error(OpenAIExceptionResponse(e));
                 this->auto_chat_engine->clear_context();
                 this->prompt_cache.reset();
                 return;
@@ -1704,7 +1789,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                 if (error.session_cleared()) this->prompt_cache.reset();
                 return;
             } catch (const std::exception& e) {
-                send_stream_error(ExceptionResponse(e));
+                send_stream_error(OpenAIExceptionResponse(e));
                 this->auto_chat_engine->clear_context();
                 this->prompt_cache.reset();
                 return;
@@ -1718,7 +1803,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                 ostream.finalize(meta_info);
             } catch (const std::exception& e) {
                 header_print("ERROR", std::string("Finishing the stream failed: ") + e.what());
-                send_stream_error(ExceptionResponse(e));
+                send_stream_error(OpenAIExceptionResponse(e));
             }
             log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
         }
@@ -1744,20 +1829,13 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                         this->prompt_cache.reset();
                         return;
                     }
-                    json error_response = {
-                        {"error", {
-                        {"message", "Max length reached!"},
-                        {"type", "model_error"},
-                        {"code", 400}
-                        }}
-                    };
-                    send_response(error_response);
+                    send_response(PrefillFailedResponse(meta_info));
                     this->auto_chat_engine->clear_context();
                     this->prompt_cache.reset();
                     return;
                 }
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
+                json error_response = OpenAIExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 this->prompt_cache.reset();
@@ -1768,14 +1846,14 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                 response_text = auto_chat_engine->generate(meta_info, length_limit, out, [&] { return cancellation_token->cancelled(); });
                 out.flush();
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
+                json error_response = OpenAIExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 this->prompt_cache.reset();
                 return;
             }
             // A character the generation stopped partway through can never be finished
-            response_text.resize(response_text.size() - incomplete_utf8_tail(response_text));
+            response_text = sanitize_utf8(response_text);
             // check response_text
             json choices = build_nstream_response(response_text, meta_info, parse_options,
                                                   lstream ? &lstream->aligner() : nullptr);
@@ -1829,13 +1907,23 @@ void RestHandler::handle_openai_audio_transcriptions(const json& request,
                                         StreamResponseCallback send_streaming_response,
                                         std::shared_ptr<CancellationToken> cancellation_token) {
     try {
+        if (!request.contains("file") || !request["file"].is_string()) {
+            send_response({{"error", {{"message", "the request has no audio file (multipart field \"file\")"}, {"type", "invalid_request_error"}, {"code", 400}}}});
+            return;
+        }
         std::string model = request["model"];
         std::string file_content = request["file"].get<std::string>();
         std::vector<uint8_t> audio_raw(file_content.begin(), file_content.end());
         std::string language = request.value("language", "");
         std::string prompt = request.value("prompt", "");
         std::string response_format = request.value("response_format", "json");
-        bool stream = request.value("stream", false);
+        const std::string stream_field = request.contains("stream") && request["stream"].is_string() ? request["stream"].get<std::string>() : "";
+        const bool stream = request.contains("stream") && (request["stream"].is_boolean() ? request["stream"].get<bool>() : (stream_field == "true" || stream_field == "1"));
+        auto form_int = [&request](const char* key, int fallback) {
+            if (!request.contains(key)) return fallback;
+            if (request[key].is_number_integer()) return request[key].get<int>();
+            try { return std::stoi(request[key].get<std::string>()); } catch (...) { throw std::invalid_argument(std::string(key) + " must be an integer"); }
+        };
         json response;
         if (response_format != "json" && response_format != "text" && response_format != "verbose_json" &&
             response_format != "srt" && response_format != "vtt") {
@@ -1844,27 +1932,71 @@ void RestHandler::handle_openai_audio_transcriptions(const json& request,
         }
         // Segments need the timestamps; json and text are the same transcript without them.
         const bool timed = response_format == "verbose_json" || response_format == "srt" || response_format == "vtt";
-        if (this->asr) {
+        // A model that transcribes by itself (r2t2) answers when it is the one asked for; any other model name is served by
+        // the Whisper sidecar (--asr 1), as before.
+        Qwen3_ASR* self_asr = nullptr;
+        // --asr r2t2:...: the sidecar answers every transcription, so the chat model stays loaded
+        if (this->asr_sidecar_engine) {
+            self_asr = dynamic_cast<Qwen3_ASR*>(this->asr_sidecar_engine.get());
+        } else if (!model.empty() && supported_models.is_model_supported(supported_models.rectify_model_tag(model))) {
+            auto [asr_tag, asr_info] = this->supported_models.get_model_info(model);
+            if (asr_info.contains("details") && asr_info["details"].value("family", "") == "r2t2") {
+                if (!ensure_model_loaded(model)) throw std::runtime_error("failed to load " + model);
+                self_asr = dynamic_cast<Qwen3_ASR*>(this->auto_chat_engine.get());
+            }
+        }
+        std::string audio_context;
+        std::string language_name;
+        double duration = 0.0;
+        if (this->asr || self_asr) {
+            // Transcripts are user speech: log them only when FLM_LOG_CONTENT or FLM_LOG_RAW_OUTPUT asks.
+            const bool log_transcript = flm::log_privacy::raw_output_enabled();
+            std::ostream no_log(nullptr);
+            std::ostream& transcript_log = log_transcript ? std::cout : no_log;
+            if (self_asr && stream) {
+                // Append-only text as the audio is processed chunk by chunk (OpenAI transcription events): the model's streaming mode on a whole file
+                header_print("FLM", "Transforming audio to text, streaming (" << model << ")...");
+                chat_meta_info_t asr_meta;
+                asr_meta.max_prefill_len = this->prefill_chunk_len;
+                cancellation_token->reset();
+                auto sse = [&send_streaming_response](const json& event, bool final) { send_streaming_response(json("data: " + event.dump() + "\n\n"), final); };
+                const int chunk_ms = form_int("chunk_size_ms", 1000);
+                const int lookahead_ms = form_int("lookahead_ms", 160);
+                const int unfixed = form_int("unfixed_token_num", 1);
+                try {
+                    audio_context = self_asr->transcribe_streaming(asr_meta, audio_raw, language, prompt, chunk_ms, lookahead_ms, unfixed,
+                        [&sse](const std::string& delta) { sse({{"type", "transcript.text.delta"}, {"delta", delta}}, false); },
+                        language_name, duration, [&] { return cancellation_token->cancelled(); });
+                } catch (const std::invalid_argument& e) {
+                    send_response({{"error", {{"message", e.what()}, {"type", "invalid_request_error"}, {"code", 400}}}});
+                    return;
+                }
+                sse({{"type", "transcript.text.done"}, {"text", audio_context}}, false);
+                send_streaming_response(json("data: [DONE]\n\n"), true);
+                return;
+            }
+            if (self_asr) {
+                header_print("FLM", "Transforming audio to text (" << model << ")...");
+                chat_meta_info_t asr_meta;
+                asr_meta.max_prefill_len = this->prefill_chunk_len;
+                transcript_log << "Audio content: " << std::flush;
+                audio_context = self_asr->transcribe(asr_meta, audio_raw, language, prompt, request.value("max_tokens", 8192), transcript_log,
+                                                     language_name, duration, [&] { return cancellation_token->cancelled(); });
+                transcript_log << std::endl;
+            } else {
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
             this->whisper_engine->load_audio(audio_raw);
             header_print("FLM", "Transforming audio to text...");
-            // Transcripts are user speech: log them only when FLM_LOG_RAW_OUTPUT asks.
-            const char* log_env = std::getenv("FLM_LOG_RAW_OUTPUT");
-            const bool log_transcript = log_env != nullptr && log_env[0] != '\0' && std::strcmp(log_env, "0") != 0;
-            std::ostream no_log(nullptr);
-            std::ostream& transcript_log = log_transcript ? std::cout : no_log;
             transcript_log << "Audio content: " << std::flush;
             std::pair<std::string, std::string> audio_result = this->whisper_engine->generate(Whisper::whisper_task_type_t::e_transcribe, true, timed, transcript_log, language, prompt);
-            std::string audio_context = audio_result.first;
-            std::string language_name = audio_result.second;
-            double duration = this->whisper_engine->audio_duration();
+            audio_context = audio_result.first;
+            language_name = audio_result.second;
+            duration = this->whisper_engine->audio_duration();
             transcript_log << std::endl;
 #else
             throw std::runtime_error("ASR models are not supported in this build");
-            std::string audio_context;
-            std::string language_name;
-            double duration = 0.0;
 #endif
+            }
 
             if (response_format == "json") {
                 response = {
@@ -2028,14 +2160,19 @@ void RestHandler::handle_openai_completion(const json& request,
             try {
                 bool success = auto_chat_engine->insert(meta_info, uniformed_input, [&] { return cancellation_token && cancellation_token->cancelled(); });
                 if (!success) {
-                    json error_response = { {"error", "Max length reached"} };
-                    send_response(error_response);
+                    if (meta_info.stop_reason == CANCEL_DETECTED || (cancellation_token && cancellation_token->cancelled())) {
+                        meta_info.stop_reason = CANCEL_DETECTED;
+                        header_print("❌ ", "Prefill Cancelled!");
+                        ostream.finalize(meta_info);
+                        this->auto_chat_engine->clear_context();
+                        return;
+                    }
+                    send_stream_error(PrefillFailedResponse(meta_info));
                     this->auto_chat_engine->clear_context();
                     return;
                 }
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
-                send_response(error_response);
+                send_stream_error(OpenAIExceptionResponse(e));
                 this->auto_chat_engine->clear_context();
                 return;
             }
@@ -2045,7 +2182,7 @@ void RestHandler::handle_openai_completion(const json& request,
                 send_stream_error(ModelErrorResponse(error));
                 return;
             } catch (const std::exception& e) {
-                send_stream_error(ExceptionResponse(e));
+                send_stream_error(OpenAIExceptionResponse(e));
                 this->auto_chat_engine->clear_context();
                 return;
             }
@@ -2053,7 +2190,7 @@ void RestHandler::handle_openai_completion(const json& request,
                 ostream.finalize(meta_info);
             } catch (const std::exception& e) {
                 header_print("ERROR", std::string("Finishing the stream failed: ") + e.what());
-                send_stream_error(ExceptionResponse(e));
+                send_stream_error(OpenAIExceptionResponse(e));
             }
             log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
 
@@ -2067,13 +2204,18 @@ void RestHandler::handle_openai_completion(const json& request,
             try {
                 bool success = auto_chat_engine->insert(meta_info, uniformed_input, [&] { return cancellation_token && cancellation_token->cancelled(); });
                 if (!success) {
-                    json error_response = { {"error", "Max length reached"} };
-                    send_response(error_response);
+                    if (meta_info.stop_reason == CANCEL_DETECTED || (cancellation_token && cancellation_token->cancelled())) {
+                        header_print("❌ ", "Prefill Cancelled!");
+                        send_response(json());
+                        this->auto_chat_engine->clear_context();
+                        return;
+                    }
+                    send_response(PrefillFailedResponse(meta_info));
                     this->auto_chat_engine->clear_context();
                     return;
                 }
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
+                json error_response = OpenAIExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -2081,7 +2223,7 @@ void RestHandler::handle_openai_completion(const json& request,
             try {
                 auto_chat_engine->generate(meta_info, length_limit, ostream, [&] { return cancellation_token && cancellation_token->cancelled(); });
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
+                json error_response = OpenAIExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;

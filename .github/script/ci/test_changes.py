@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -85,16 +86,24 @@ class Cli(unittest.TestCase):
             "src/include/models/qwen3/core/x.hpp": {"qwen3"},
             "src/common/models/qwen35/core/dev04/a.cpp": {"qwen3.5"},
             "src/test/gemma4_core/t.cpp": {"gemma4e"},
-            "src/test/qwen3_8_mtp_npu/t.cpp": {"qwen3.8-mtp"},
+            "src/test/qwen3_8_mtp_npu/t.cpp": {"qwen3.8-mtp", "qwen3.8-dflash2"},
             "src/detail/gemm/gemm.cpp": {"gemma4e", "gemma4e-flash"},
             "src/xclbins/Gemma3-4B-NPU2/a.xclbin": {"gemma3"},
             "src/common/AutoEmbeddingModel/modeling_gemma_embedding.cpp": {"embed-gemma"},
             "src/common/decision/py_json.cpp": {"d3"},
             "src/test/d3_contract/t.cpp": {"d3"},
             "src/include/whisper/whisper_npu.hpp": {"whisper-v3"},
+            "src/test/phi4_core/test_phi4_frontend.cpp": {"phi4"},
             # Shared by every engine: the pr tier's one model per engine covers it.
             "src/lib/xrt/libgemm.so": set(),
             "src/common/AutoModel/automodel.cpp": set(),
+            "src/test/phi4_core/test_model_downloader.cpp": set(),
+            # The oga-hipep backend, which no NPU model runs.
+            "src/common/oga/oga_runtime_install.cpp": set(),
+            "src/include/oga/oga_api.hpp": set(),
+            "src/test/oga_hipep/frontend/CMakeLists.txt": set(),
+            # ...but for the header the qwen3.5 frontend includes in every package.
+            "src/include/oga/oga_vision.hpp": {"qwen3.5"},
             # A built engine no catalog family uses.
             "src/test/qwen3_5_omni_npu/t.cpp": set(),
         }
@@ -121,7 +130,8 @@ class Cli(unittest.TestCase):
             cli("--files", "docs/a.md", "--github-output", env={**os.environ, "GITHUB_OUTPUT": str(target)})
             lines = target.read_text(encoding="utf-8").splitlines()
         self.assertIn("run_tests=false", lines)
-        self.assertEqual([l.split("=")[0] for l in lines], ["run_tests", "families", "asr_full", "suites", "summary"])
+        self.assertEqual([l.split("=")[0] for l in lines],
+                         ["run_tests", "families", "asr_full", "suites", "hipep", "summary"])
 
     def test_suites_scoped_to_the_change(self):
         cases = {
@@ -132,6 +142,21 @@ class Cli(unittest.TestCase):
             (".github/script/npu_test/suites/serving.py",): "serving",
             ("src/test/openai_api_test/test_errors.py",): "api",
             ("src/lib/xrt/libqwen3_npu.so",): "chat,prefix_cache",
+            # The oga-hipep backend alone runs no NPU suite, only Test Windows HIPEP.
+            ("src/common/oga/oga_hipep_backend.cpp",): "none",
+            # Nor does shutdown, which tests no NPU model.
+            (".github/script/npu_test/suites/shutdown.py",): "none",
+            (".github/script/npu_test/console.py",): "none",
+            (".github/script/npu_test/suites/shutdown.py", ".github/script/npu_test/suites/serving.py"):
+                "serving",
+            ("src/test/oga_hipep/test_oga_hipep.cpp", "src/lib/xrt/libqwen3_npu.so"): "chat,prefix_cache",
+            ("src/include/oga/oga_vision.hpp",): "chat,prefix_cache",
+            # Model-extension contracts, fixture and schemas: chat runs the extension jobs.
+            ("src/test/model_frontend/fake_model_extension.c",): "chat",
+            ("src/test/model_extension_gemma4e/model-list.json",): "chat",
+            ("src/test/model_list_platform/test_model_list_platform.cpp",): "chat",
+            ("src/schemas/model-catalog-overlay-v1.schema.json",): "chat",
+            ("src/cmake/FastFlowLMModelExtension.cmake",): "chat",
             # An engine with an audio encoder is also tested by asr.
             ("src/lib/xrt/libgemma4e_npu.so",): "chat,prefix_cache,asr",
             ("src/test/openai_api_test/test_errors.py", "src/lib/xrt/libd3_npu.so"): "api,decision",
@@ -144,6 +169,38 @@ class Cli(unittest.TestCase):
             with self.subTest(files=files):
                 self.assertEqual(cli("--files", *files)["suites"], expected)
 
+    def test_oga_hipep_code_runs_only_hipep(self):
+        out = cli("--files", "src/common/oga/oga_engine.cpp", "src/test/oga_hipep/test_oga_hipep.cpp")
+        self.assertEqual((out["run_tests"], out["families"], out["suites"], out["hipep"]),
+                         ("true", "", "none", "true"))
+
+    def test_hipep_runs_when_the_change_reaches_its_model(self):
+        cases = {
+            # The backend, and the qwen3.5 frontend's code.
+            ("src/test/oga_hipep/test_qwen_frontend.cpp",): "true",
+            ("src/include/oga/oga_vision.hpp",): "true",
+            ("src/common/AutoModel/modeling_qwen3_5vl.cpp",): "true",
+            ("src/include/AutoModel/modeling_qwen3_5vl.hpp",): "true",
+            ("src/common/AutoModel/modeling_qwen3_5vl_image.cpp",): "true",
+            # The tests of the suites it runs, and anything that runs every suite.
+            (".github/script/npu_test/suites/chat.py",): "true",
+            (".github/script/npu_test/suites/shutdown.py",): "true",
+            (".github/script/npu_test/console.py",): "true",
+            (".github/script/npu_test/assets/vision/cat.png",): "true",
+            ("src/test/openai_api_test/test_errors.py",): "true",
+            ("src/server/server.cpp",): "true",
+            # The qwen3.5 NPU engine, other frontends, other suites, docs.
+            ("src/lib/xrt/qwen3_5vl_npu.dll",): "false",
+            ("src/common/models/qwen35/core/dev04/a.cpp",): "false",
+            ("src/common/AutoModel/modeling_gemma4e.cpp",): "false",
+            (".github/script/npu_test/suites/serving.py",): "false",
+            ("src/common/whisper/whisper.cpp",): "false",
+            ("docs/index.md",): "false",
+        }
+        for files, expected in cases.items():
+            with self.subTest(files=files):
+                self.assertEqual(cli("--files", *files)["hipep"], expected)
+
 
 class Decide(unittest.TestCase):
     def test_model_list_change_names_changed_families(self):
@@ -155,6 +212,88 @@ class Decide(unittest.TestCase):
         git = FakeGit(base={changes.MODEL_LIST: base}, head={changes.MODEL_LIST: head})
         d = changes.decide([changes.MODEL_LIST], git, head)
         self.assertEqual(d.families, {"lfm2", "d3"})
+
+    def test_oga_hipep_entries_name_no_family(self):
+        base = catalog(qwen3__0_6b=("Qwen3-0.6B-NPU2", "qwen3"), lfm2__1b=("LFM2", "lfm2"))
+        head = json.loads(base)
+        head["models"]["gemma3-oga-hipep"] = {"4b": {"name": "Gemma3-4B_gpuep", "details": {"family": "gemma3"}}}
+        gpu_only = json.dumps(head)
+        git = FakeGit(base={changes.MODEL_LIST: base}, head={changes.MODEL_LIST: gpu_only})
+        d = changes.decide([changes.MODEL_LIST], git, gpu_only)
+        self.assertEqual((d.families, d.suites_value(), d.runs_hipep()), (set(), "none", True))
+        # An NPU entry changed beside it still names its family.
+        head["models"]["lfm2"]["1b"]["default_context_length"] = 4096
+        both = json.dumps(head)
+        git = FakeGit(base={changes.MODEL_LIST: base}, head={changes.MODEL_LIST: both})
+        d = changes.decide([changes.MODEL_LIST], git, both)
+        self.assertEqual((d.families, d.suites_value(), d.runs_hipep()), ({"lfm2"}, "chat,prefix_cache", True))
+
+    def test_backend_key_overrides_the_oga_hipep_suffix(self):
+        base = catalog(**{"gemma3-oga-hipep__4b": ("Gemma3-4B_gpuep", "gemma3"), "lfm2__1b": ("LFM2", "lfm2")})
+
+        def outcome(base, head):
+            git = FakeGit(base={changes.MODEL_LIST: base}, head={changes.MODEL_LIST: head})
+            d = changes.decide([changes.MODEL_LIST], git, head)
+            return d.families, d.suites_value()
+
+        # An -oga-hipep entry moved to an NPU backend runs on the NPU, and
+        # Test Windows HIPEP still runs, since it ran there before.
+        head = json.loads(base)
+        head["models"]["gemma3-oga-hipep"]["4b"]["backend"] = "flm"
+        moved = json.dumps(head)
+        self.assertEqual(outcome(base, moved)[0], {"gemma3"})
+        self.assertNotEqual(outcome(base, moved)[1], "none")
+        git = FakeGit(base={changes.MODEL_LIST: base}, head={changes.MODEL_LIST: moved})
+        self.assertTrue(changes.decide([changes.MODEL_LIST], git, moved).runs_hipep())
+        # And an edit to it, once there, names its family too.
+        head["models"]["gemma3-oga-hipep"]["4b"]["default_context_length"] = 4096
+        self.assertEqual(outcome(moved, json.dumps(head))[0], {"gemma3"})
+        # An entry that names the oga-hipep backend runs on the GPU whatever its name.
+        head = json.loads(base)
+        head["models"]["lfm2"]["1b"]["backend"] = "oga-hipep"
+        self.assertEqual(outcome(json.dumps(head), json.dumps(head).replace("LFM2", "LFM2b")),
+                         (set(), "none"))
+
+    def test_model_info_of_an_entry_moved_off_oga_hipep_names_its_family(self):
+        base = catalog(**{"gemma3-oga-hipep__4b": ("x", "gemma3"), "lfm2__1b": ("y", "lfm2")})
+        head = json.loads(base)
+        head["models"]["gemma3-oga-hipep"]["4b"]["backend"] = "flm"
+        head = json.dumps(head)
+        git = FakeGit(base={changes.MODEL_LIST: base, changes.MODEL_INFO: '{}'},
+                      head={changes.MODEL_LIST: head, changes.MODEL_INFO: '{"gemma3-oga-hipep:4b": 2}'})
+        d = changes.decide([changes.MODEL_INFO], git, head)
+        self.assertEqual(d.families, {"gemma3"})
+        self.assertNotEqual(d.suites_value(), "none")
+        self.assertTrue(d.runs_hipep())
+
+    def test_catalog_fields_outside_models_run_every_suite(self):
+        base = catalog(qwen3__0_6b=("Qwen3-0.6B-NPU2", "qwen3"), lfm2__1b=("LFM2", "lfm2"))
+
+        def outcome(head):
+            text = json.dumps(head)
+            git = FakeGit(base={changes.MODEL_LIST: base}, head={changes.MODEL_LIST: text})
+            d = changes.decide([changes.MODEL_LIST], git, text)
+            return d.families, d.suites_value(), d.runs_hipep()
+
+        head = json.loads(base)
+        head["model_path"] = "models2"
+        self.assertEqual(outcome(head), (set(), "all", True))
+        # model_path is the folder of every model: an entry changed beside it narrows nothing.
+        head["models"]["gemma3-oga-hipep"] = {"4b": {"name": "Gemma3-4B_gpuep", "details": {"family": "gemma3"}}}
+        self.assertEqual(outcome(head), (set(), "all", True))
+        head["models"]["lfm2"]["1b"]["default_context_length"] = 4096
+        self.assertEqual(outcome(head), ({"lfm2"}, "all", True))
+        # A field only one side has counts too.
+        head["model_path"] = "models"
+        head["schema"] = 2
+        self.assertEqual(outcome(head), ({"lfm2"}, "all", True))
+
+    def test_model_info_of_oga_hipep_entries_names_no_family(self):
+        cat = catalog(**{"gemma3-oga-hipep__4b": ("x", "gemma3"), "lfm2__1b": ("y", "lfm2")})
+        git = FakeGit(base={changes.MODEL_LIST: cat, changes.MODEL_INFO: '{"lfm2:1b": 1}'},
+                      head={changes.MODEL_LIST: cat, changes.MODEL_INFO: '{"lfm2:1b": 1, "gemma3-oga-hipep:4b": 2}'})
+        d = changes.decide([changes.MODEL_INFO], git, cat)
+        self.assertEqual((d.families, d.suites_value(), d.runs_hipep()), (set(), "none", True))
 
     def test_model_list_without_git_adds_nothing(self):
         d = changes.decide([changes.MODEL_LIST], None, catalog(a__b=("A", "qwen3")))
@@ -186,6 +325,16 @@ class Decide(unittest.TestCase):
         named |= {f for _, _, fams in changes.SUBSYSTEMS for f in fams}
         self.assertEqual(named - known, set())
         self.assertEqual(known - named, set())
+
+    def test_gpu_families_are_those_test_windows_hipep_tests(self):
+        """GPU_FAMILIES are the families of the models Test Windows HIPEP tests
+        when a dispatch names none."""
+        workflow = (changes.REPO_ROOT / ".github/workflows/build-and-test.yml").read_text(encoding="utf-8")
+        job = re.search(r"\n  test-win-hipep:\n(.*?)\n\n", workflow, re.S).group(1)
+        tested = re.search(r"inputs\.models \|\| '([^']+)'", job).group(1).split(",")
+        cat = changes.load_catalog((changes.REPO_ROOT / changes.MODEL_LIST).read_text(encoding="utf-8"))
+        self.assertTrue(all(changes.runs_on_gpu(m) for m in tested), tested)
+        self.assertEqual({changes.family_of(cat[m]) for m in tested}, changes.GPU_FAMILIES)
 
 
 @unittest.skipUnless(shutil.which("git"), "git not installed")

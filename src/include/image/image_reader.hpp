@@ -39,10 +39,15 @@ public:
 
 	bool load_image(const std::string& filename, image_data_t& out_image);
 	bool load_image_base64(const std::string& base64_string, image_data_t& out_image);
+	/// check that `data` (an encoded image file) is a PNG, JPEG or WebP image within the pixel limit that decodes
+	/// cleanly; on failure `why` says what is wrong, in words fit for an API error
+	bool validate_image_bytes(const std::string& data, std::string& why);
 	/// decode an encoded PNG, JPEG or WebP file held in memory to 8-bit RGB
 	bool load_image_bytes(const std::string& data, image_data_t& out_image) {
 		return decode_bytes(reinterpret_cast<const uint8_t*>(data.data()), data.size(), out_image);
 	}
+	/// copy 8-bit RGB pixels (HWC, 3 bytes per pixel, tightly packed) into `out_image`, as the decoders would leave them
+	bool from_rgb8(const uint8_t* rgb, int height, int width, image_data_t& out_image);
 	bool resize_image(const image_data_t& input, int target_width, int target_height, image_data_t& output);
 	bool reorder_hwc_to_chw(const image_data_t& input, image_data_t& output);
 	bool save_png(const std::string& filename, const image_data_t& image);

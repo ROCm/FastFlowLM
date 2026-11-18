@@ -44,10 +44,10 @@ constexpr npu_platform default_npu_platform() {
 }
 
 /// \brief the generation corelib's name for this machine's NPU stands for
-/// \param arch what corelib reports: "AIEM", "AIE2P", or "" for none it knows
+/// \param arch what corelib reports: "npu_aiem", "npu_aie2p", or "" for none it knows
 constexpr npu_platform platform_from_corelib_arch(std::string_view arch) {
-    if (arch == "AIEM") return npu_platform::dev04;
-    if (arch == "AIE2P") return npu_platform::aie2p;
+    if (arch == "npu_aiem") return npu_platform::dev04;
+    if (arch == "npu_aie2p") return npu_platform::aie2p;
     return default_npu_platform();
 }
 

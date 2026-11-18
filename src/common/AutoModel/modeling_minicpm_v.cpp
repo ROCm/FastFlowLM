@@ -7,6 +7,7 @@
 
 
 #include "AutoModel/modeling_minicpm_v.hpp"
+#include "models/minicpm_v_4_7/flm/aie2p/minicpm_v_4_7_npu.hpp"
 
 #include <cstdlib>
 #include <fstream>
@@ -88,15 +89,38 @@ bool MiniCPM_V::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
     minicpm_v_image_payload_t image_payload;
     image_payload.num_images = 0;
     std::vector<image_layout> layouts;
+    auto add_chw = [&](image_data_t& chw, int max_slice_nums = 0) {
+        layouts.push_back(this->preprocess_image(chw, image_payload, max_slice_nums));
+        image_reader_.recycle(chw);
+        return true;
+    };
     auto add_image = [&](const std::string& source, bool base64) {
         image_data_t chw;
         if (!this->load_image(source, base64, chw)) {
             header_print("ERROR", "Skipping image that failed to load");
             return false;
         }
-        layouts.push_back(this->preprocess_image(chw, image_payload));
-        image_reader_.recycle(chw);
-        return true;
+        return add_chw(chw);
+    };
+    // A raw frame joins the same path as a decoded picture: from here on it is the pixels a decoder would have left.
+    auto add_raw = [&](const nlohmann::ordered_json& ref) {
+        const auto& r = ref.at("rgb8");
+        const size_t batch = r.at("batch").get<size_t>();
+        const int frame = r.at("frame").get<int>();
+        if (batch >= input.raw_rgb8.size() || frame < 0 || frame >= input.raw_rgb8[batch]->frames) {
+            header_print("ERROR", "Skipping raw frame that does not exist");
+            return false;
+        }
+        const auto& b = *input.raw_rgb8[batch];
+        image_data_t decoded, chw;
+        if (!image_reader_.from_rgb8(b.frame(frame), b.height, b.width, decoded)
+            || !image_reader_.reorder_hwc_to_chw(decoded, chw)) {
+            image_reader_.recycle(decoded);
+            header_print("ERROR", "Skipping raw frame that failed to load");
+            return false;
+        }
+        image_reader_.recycle(decoded);
+        return add_chw(chw, b.max_slice_nums);
     };
 
     if (!input.messages.empty()) { // already a formated messages, usually from REST API
@@ -117,7 +141,7 @@ bool MiniCPM_V::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
             // placeholder in the template below.
             nlohmann::ordered_json content = nlohmann::ordered_json::array();
             for (const auto& img : message["images"]) {
-                if (add_image(img.get<std::string>(), true)) {
+                if (img.is_object() ? add_raw(img) : add_image(img.get<std::string>(), true)) {
                     content.push_back({ {"type", "image"} });
                 }
             }
@@ -149,7 +173,18 @@ bool MiniCPM_V::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
     // Expand each picture's single <|image_pad|> to the processor's placeholder.
     std::vector<int> tokens_init = this->tokenizer->encode(templated_text);
     std::vector<int> tokens;
+    // Each picture's whole placeholder, <image_id> through its last </slice> / </image>: the
+    // prompt cache must not split it, and the first prefill chunk must hold it whole.
+    std::vector<prompt_media_t> media;
+    // Content of each VIEW of the pictures, over the full payload: the slot cache keys on these, and each
+    // picture's media hash folds its views so a swapped image of the same geometry is not reused.
+    std::vector<uint64_t> image_hashes;
+    if (!layouts.empty()) {
+        auto* eng = reinterpret_cast<minicpm_v_4_7_npu*>(this->lm_engine);
+        image_hashes = prefix_image_hashes(image_payload, eng->MINICPM_V_PATCH_SIZE, eng->MINICPM_V_TEMPORAL_PATCH_SIZE);
+    }
     {
+        size_t first_view = 0;
         size_t extra = 0;
         for (const auto& l : layouts) extra += (size_t)l.tokens + 16 + 3 * (size_t)l.views;
         tokens.reserve(tokens_init.size() + extra);
@@ -161,14 +196,27 @@ bool MiniCPM_V::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
             }
             if (picture >= layouts.size()) {
                 header_print("ERROR", "the prompt has more <|image_pad|> than images");
+                meta_info.error_message = "The prompt has more <|image_pad|> than images";
                 return false;
             }
             const std::vector<int> ph = this->image_placeholder(layouts[picture], (int)picture);
+            prompt_media_t m;
+            m.kind = prompt_media_t::kImage;
+            m.begin = tokens.size();
             tokens.insert(tokens.end(), ph.begin(), ph.end());
+            m.end = tokens.size();
+            // seed: the slice grid; bytes: its views' hashes (each already covers that view's grid and pixels)
+            const image_layout& l = layouts[picture];
+            const uint64_t seed = 0xcbf29ce484222325ull ^ ((uint64_t)l.views << 40 | (uint64_t)l.rows << 20 | (uint64_t)l.cols);
+            m.hash = prefix_hash_bytes(image_hashes.data() + first_view, (size_t)l.views * sizeof(uint64_t), seed);
+            if (m.hash == 0) m.hash = 1; // 0 means "not hashed"
+            first_view += (size_t)l.views;
+            media.push_back(m);
             picture++;
         }
         if (picture != layouts.size()) {
             header_print("ERROR", "the prompt has " << picture << " <|image_pad|> for " << layouts.size() << " images");
+            meta_info.error_message = "The prompt has " + std::to_string(picture) + " <|image_pad|> for " + std::to_string(layouts.size()) + " images";
             return false;
         }
     }
@@ -183,11 +231,8 @@ bool MiniCPM_V::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
     const bool slot_mode = this->_prefix_slot_mode(meta_info, tokens.size(), think_trim);
     size_t match_len = 0;
     std::vector<int> full_tokens;          // what this prompt leaves in the engine
-    std::vector<uint64_t> image_hashes;    // content of each view of its pictures
     if (slot_mode) {
-        minicpm_v_4_7_npu* slot_eng = dynamic_cast<minicpm_v_4_7_npu*>(this->lm_engine);
         full_tokens.assign(tokens.begin(), tokens.end() - think_trim);
-        image_hashes = prefix_image_hashes(image_payload, slot_eng->MINICPM_V_PATCH_SIZE, slot_eng->MINICPM_V_TEMPORAL_PATCH_SIZE);
         match_len = this->_prefix_resume(this->prefix_cache_, full_tokens, image_hashes);
         // The single checkpoint keeps only the recurrent state and relies on the attention rows staying as they were: a slot request
         // overwrites them, so drop its token history; the path below then has nothing to restore.
@@ -201,7 +246,7 @@ bool MiniCPM_V::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
         const int restore_idx = this->lm_engine->restore();
         if (restore_idx >= 0) {
             this->total_tokens = restore_idx;
-            this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
+            this->_restore_history(); // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
         }
     }
 
@@ -211,70 +256,46 @@ bool MiniCPM_V::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
     // feeds them back.
     tokens.resize(tokens.size() - think_trim);
 
-    // ----------------------------------------------------------------------
-    // Prompt-cache aware image alignment. _shared_insert erases the prefix of
-    // `tokens` that matches token_history -- only when it matches ALL of
-    // token_history, else it clears the context and skips nothing. The payload
-    // must lose exactly the pictures that erased prefix fully covers (all of
-    // their views) so it lines up with the image rows that are prefilled.
-    //
-    // This is _shared_insert's rule on _shared_insert's inputs: token_history
-    // AFTER the restore above and `tokens` AFTER the think trim. Computing it
-    // against checkpoint_his instead (Qwen3_5VL's way) disagrees in the CLI,
-    // where token_history also holds the previous answer: a repeated question
-    // then "hits" here, its image is dropped, _shared_insert clears and
-    // re-prefills the whole prompt, and the engine is handed image rows with
-    // no pixels.
-    // ----------------------------------------------------------------------
-    size_t prefix_skip_count = 0;
+    // Prompt-cache aware image alignment: _shared_insert skips the part of `tokens`
+    // the engine already holds, so the payload must lose exactly the pictures (all
+    // of their views) inside that skip. _plan_reuse decides it with _shared_insert's
+    // rule on _shared_insert's inputs: token_history after the restore / slot resume
+    // above and `tokens` after the think trim. The pictures sit before the trimmed
+    // generation prompt, so their spans still hold.
+    const prompt_reuse_t plan = this->_plan_reuse(tokens, media);
     {
-        const size_t idx = this->token_history.size();
-        while (prefix_skip_count < idx && prefix_skip_count < tokens.size() &&
-               tokens[prefix_skip_count] == this->token_history[prefix_skip_count]) {
-            prefix_skip_count++;
+        const size_t drop_pictures = plan.skipped_media[prompt_media_t::kImage];
+        size_t drop_views = 0, drop_values = 0;
+        for (size_t i = 0; i < drop_pictures; i++) {
+            drop_views += (size_t)layouts[i].views;
+            drop_values += layouts[i].values;
         }
-        if (prefix_skip_count != idx) prefix_skip_count = 0;
-
-        if (prefix_skip_count > 0 && !layouts.empty()) {
-            int skipped_rows = 0;
-            for (size_t i = 0; i < prefix_skip_count; i++) skipped_rows += (tokens[i] == image_pad);
-            size_t drop_pictures = 0, drop_views = 0, drop_values = 0;
-            int consumed = 0;
-            for (const auto& l : layouts) {
-                if (consumed + l.tokens > skipped_rows) break;
-                consumed += l.tokens;
-                drop_pictures++;
-                drop_views += (size_t)l.views;
-                drop_values += l.values;
-            }
-            if (drop_pictures > 0) {
-                image_payload.images.erase(image_payload.images.begin(), image_payload.images.begin() + drop_views);
-                image_payload._data__processed.erase(image_payload._data__processed.begin(),
-                                                     image_payload._data__processed.begin() + drop_values);
-                image_payload.num_images = (unsigned)image_payload.images.size();
-                header_print("FLM", "Prompt-cache hit: dropped " << drop_pictures << " cached image(s) from payload");
-            }
+        if (drop_pictures > 0) {
+            image_payload.images.erase(image_payload.images.begin(), image_payload.images.begin() + drop_views);
+            image_payload._data__processed.erase(image_payload._data__processed.begin(),
+                                                 image_payload._data__processed.begin() + drop_values);
+            image_payload.num_images = (unsigned)image_payload.images.size();
         }
     }
 
     // The payload rides on the first prefill chunk only, so that chunk must hold
     // every image GROUP whole -- through the </slice> / </image> that close it,
     // which the canvas m-rope positions too -- not just up to the last pad row.
-    int first_len_run = 0;
-    {
-        int last = -1;
-        for (int i = (int)prefix_skip_count; i < (int)tokens.size(); i++) {
-            if (tokens[i] == image_pad) last = i;
-        }
-        if (last >= 0) {
-            auto structural = [](int t) {
-                return t == 248078 || t == 248079 || t == 248088 || t == 248089;
-            };
-            while (last + 1 < (int)tokens.size() && structural(tokens[last + 1])) last++;
-            first_len_run = last + 1 - (int)prefix_skip_count;
-        }
-    }
+    // The media spans end there, so media_end is that length past the skip.
+    const int first_len_run = (int)plan.media_end;
     const bool has_images = !image_payload.images.empty();
+
+    // The engine prefills this whole span in one go, and the buffer it allocates for it is about 123.5 KB per token,
+    // which no longer fits a 32-bit size at 2^31 / 123540 = 17382 tokens (measured: 17221 runs, 17.5k fails in
+    // xrt::ext::bo, poisoning the request). Refuse it up front, before anything reaches the NPU.
+    constexpr int kMaxImagePrefillTokens = 17300;
+    if (has_images && first_len_run > kMaxImagePrefillTokens) {
+        this->_shared_after_inference_failure(false);
+        throw ModelRequestError(400, true,
+            "The pictures take " + std::to_string(first_len_run) + " prompt tokens; at most " +
+            std::to_string(kMaxImagePrefillTokens) + " can be prefilled with them. Send fewer or smaller images/frames.",
+            "invalid_request_error");
+    }
 
     // FLM_MINICPM_V_DUMP=<dir>: the payload and the prompt exactly as the engine
     // gets them, for scoring the preprocessing against the HF processor
@@ -313,7 +334,7 @@ bool MiniCPM_V::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
         this->fail_inference();
     }
 
-    checkpoint_his = token_history;
+    this->_checkpoint_history();
     this->lm_engine->checkpoint();
     return success;
 }
@@ -433,7 +454,7 @@ std::string MiniCPM_V::decode(chat_meta_info_t& meta_info, int length_limit, std
 
     std::cout << std::endl;
     if (this->log_raw_output) {
-        header_print("FLM", "Model RAW Output: \n" + result);
+        this->print_raw_output(result);
     }
     return result;
 }

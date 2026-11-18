@@ -88,3 +88,9 @@ Open **Task Manager** (`Ctrl + Shift + Esc`). Go to the **Performance** tab → 
 > - Use `/verbose` during a session to turn on performance reporting (toggle off with `/verbose` again).   
 > - Type `/bye` to exit a conversation.  
 > - Run `flm list` in PowerShell to show all available models.  
+
+---
+
+## 🛠️ Building from Source
+
+To build `flm.exe` yourself instead of installing the release, see [Build from Source (Windows)](../build_win/). A single script, `src\WinSetup.ps1`, sets up the tools and dependencies and builds FastFlowLM.

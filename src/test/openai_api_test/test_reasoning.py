@@ -6,6 +6,8 @@
 * With ``think: false`` (or ``reasoning_effort: "none"``) there is no
   ``reasoning_content``, unless the model cannot stop thinking: pass
   ``--always-thinks`` for those.
+* A request without ``think`` gets the model's default, whatever an earlier
+  request set.
 * A stream sends every reasoning delta before the first content delta and
   folds to exactly the non-streaming message, so no half-written tag ever
   went out as text.
@@ -116,7 +118,24 @@ def history_with_reasoning(api: Api) -> None:
     flm_api.check_message_contract(choice)
 
 
+@case
+def think_does_not_carry_over(api: Api) -> None:
+    """A request without think gets the model's default, whatever an earlier request set."""
+    def thinks(**fields) -> bool:
+        body = api.body(user(PROMPT), max_tokens=THINK_BUDGET, **fields)
+        if "think" not in fields:
+            del body["think"]
+        return bool(flm_api.check_message_contract(api.ok(body)).get("reasoning_content"))
+
+    default = thinks()
+    for think in (True, False):
+        thinks(think=think)
+        expect(thinks() == default, f"after think={think} a request without think "
+               f"{'reasoned' if not default else 'did not reason'}, unlike the model's default")
+
+
 CASES = flm_api.collect(globals())
+
 
 if __name__ == "__main__":
     flm_api.main(CASES, __doc__.splitlines()[0])

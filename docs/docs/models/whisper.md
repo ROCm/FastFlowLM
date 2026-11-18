@@ -14,6 +14,37 @@ parent: Models
 - **Max Context Length:** NA
 - **Default Context Length:** NA
 
+### ⚡ Performance and memory
+
+Whisper processes audio in 30 s windows: the encoder runs once per window, then the decoder writes the text
+token by token. Measured on Ryzen AI MAX+ 395 (Strix Halo):
+
+| | before | now |
+|---|---|---|
+| encoder, per 30 s window | ~1.9 s | **~0.6 s** (Windows: ~0.7 s) |
+| 5-minute English recording, wall time | ~44 s | **~25 s** |
+| short clip (6 s), wall time | ~2.5 s | **~1.2 s** |
+
+Accuracy is unchanged (FLEURS, 7 languages, 84 files: pooled error 7.50 % before, 7.53 % now; the per-language
+differences are single words).
+
+The encoder keeps its dequantised weights in memory: a Whisper-only server uses about **2.3 GB** instead of
+~1.0 GB. To trade that memory for speed (~0.8 s per 30 s window instead of ~0.6 s), set
+`WHISPER_CACHE_DEQUANT=0` before starting FLM:
+
+```shell
+# Linux
+WHISPER_CACHE_DEQUANT=0 flm serve --asr whisper-v3:turbo
+```
+```powershell
+# Windows (PowerShell)
+$env:WHISPER_CACHE_DEQUANT = "0"; flm serve --asr whisper-v3:turbo
+```
+
+`WHISPER_PROFILE=1` prints one line per encoder window with the time spent in each stage (stderr).
+
+Full speed, accuracy and memory tables: [Whisper benchmarks](/docs/benchmarks/whisper_results/).
+
 ▶️ Run with FastFlowLM in PowerShell:  
 
 > The ASR model must be used with an LLM (loaded concurrently) in CLI Mode.
@@ -25,12 +56,14 @@ Start with ASR enabled:
 
 Load the ASR model (whisper-v3:turbo) in the background, with concurrent LLM loading (gemma3:4b).
 ```shell
-flm run gemma3:4b --asr 1 
+flm run gemma3:4b --asr whisper-v3:turbo
 ```
 or
 ```shell
-flm run gemma3:4b -a 1 
+flm run gemma3:4b -a whisper-v3:turbo
 ```
+
+`--asr 1` / `-a 1` is the same thing: `1` selects the default ASR model (whisper-v3:turbo).
 
 Then, type (replace `filename.mp3` with your audio file path):
 ```shell
@@ -43,21 +76,23 @@ Start with ASR enabled:
 
 - Load the ASR model (whisper-v3:turbo) in the background, with concurrent LLM loading (gemma3:4b).
 ```shell
-flm serve gemma3:4b --asr 1 
+flm serve gemma3:4b --asr whisper-v3:turbo
 ```
 or
 ```shell
-flm serve gemma3:4b -a 1 
+flm serve gemma3:4b -a whisper-v3:turbo
 ```
 
 - Load the ASR model (whisper-v3:turbo) as a standalone ASR model.
 ```shell
-flm serve --asr 1 
+flm serve --asr whisper-v3:turbo
 ```
 or
 ```shell
-flm serve -a 1 
+flm serve -a whisper-v3:turbo
 ```
+
+`--asr` / `-a` take an ASR model tag (see `flm list`); `1` selects the default (whisper-v3:turbo) and `0` turns it off. An unknown tag, or the tag of a different kind of model, stops flm with an error.
 
 Send audio to `POST /v1/audio/transcriptions` via any OpenAI Client or Open WebUI.
 

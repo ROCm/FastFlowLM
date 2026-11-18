@@ -60,12 +60,41 @@ chat_format_spec chat_format_make(chat_format_kind kind, bool with_reasoning);
 chat_format_spec chat_format_detect(const std::string& template_src,
                                     const std::function<bool(const std::string&)>& is_token);
 
+/// \brief What the text right after a tool_start marker is
+enum class chat_call_head {
+    CALL,   // a call opens there
+    PROSE,  // the model names the tag in its text, e.g. "write a <tool_call> tag"
+    UNSURE, // the text ends before it can tell
+};
+
+/// \brief Tell a call from prose that names the call tag
+/// \param spec the model's format
+/// \param text the text
+/// \param pos the index just past a tool_start marker
+/// \note Only formats whose call opens with a fixed token are told apart; a block
+///       of any other format is always a call.
+chat_call_head chat_format_call_head(const chat_format_spec& spec, const std::string& text, size_t pos);
+
+/// \brief Find the tool_end that closes the tool block whose body starts at from
+/// \param is_partial more text may follow
+/// \param hold set, when the text cannot tell yet, to where the block may end
+/// \return its index, or npos when the text does not close the block (yet)
+/// \note A Qwen XML value may hold the end tag itself: the block's own follows the
+///       call's "</function>". A call that left that out ends at the first end tag,
+///       which the next call, or the end of the output, settles.
+size_t chat_format_tool_end(const chat_format_spec& spec, const std::string& text, size_t from, bool is_partial,
+                            size_t& hold);
+
 /// \brief The part of the prompt the parser has to see before the generated text
 /// \param spec the model's format
 /// \param prompt_tail the decoded end of the prompt as fed to the model
 /// \param continuing the prompt ends inside the final assistant message
 ///        (continue_final_message), not at the start of a new turn; a model that
 ///        always opens its turn by reasoning has then already opened it, or not
+/// \param tool_calls the output is read for tool calls; a continued message that
+///        stops inside a call then hands the call's markup on, or its end would
+///        show as text and the call would be lost
 /// \return text to prepend to the output before parsing, e.g. "<think>" when the
 ///         template already opened the reasoning block
-std::string chat_format_prefill(const chat_format_spec& spec, const std::string& prompt_tail, bool continuing = false);
+std::string chat_format_prefill(const chat_format_spec& spec, const std::string& prompt_tail, bool continuing = false,
+                                bool tool_calls = false);

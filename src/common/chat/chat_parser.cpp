@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <initializer_list>
+#include <set>
 #include <vector>
 
 #include "chat/chat_args.hpp"
@@ -119,43 +120,91 @@ struct text_parts {
     }
 };
 
+/// \brief JSON schema types a value may take: "string", "integer", "null", ...
+using type_set = std::set<std::string>;
+
+/// \brief The JSON schema type of a value
+std::string json_type_of(const json& value) {
+    switch (value.type()) {
+        case json::value_t::string: return "string";
+        case json::value_t::number_integer:
+        case json::value_t::number_unsigned: return "integer";
+        case json::value_t::number_float: return "number";
+        case json::value_t::boolean: return "boolean";
+        case json::value_t::null: return "null";
+        case json::value_t::array: return "array";
+        default: return "object";
+    }
+}
+
+/// \brief Whether a value of this JSON type fits the allowed types
+bool type_allowed(const std::string& type, const type_set& allowed) {
+    return allowed.count(type) || (type == "integer" && allowed.count("number"));
+}
+
+/// \brief Collect the types a schema allows, through anyOf/oneOf/allOf and local $refs
+/// \param root the parameters schema, which local $refs point into
+void collect_types(const json& schema, const json& root, type_set& out, int depth = 0) {
+    if (!schema.is_object() || depth > 8) {
+        return;
+    }
+    const json& type = schema.contains("type") ? schema["type"] : json();
+    if (type.is_string()) {
+        out.insert(type.get<std::string>());
+    }
+    for (const auto& t : type.is_array() ? type : json::array()) {
+        if (t.is_string()) out.insert(t.get<std::string>());
+    }
+    if (schema.contains("enum") && schema["enum"].is_array()) {
+        for (const auto& v : schema["enum"]) out.insert(json_type_of(v));
+    }
+    if (schema.contains("const")) {
+        out.insert(json_type_of(schema["const"]));
+    }
+    for (const char* key : {"anyOf", "oneOf", "allOf"}) {
+        if (schema.contains(key) && schema[key].is_array()) {
+            for (const auto& option : schema[key]) collect_types(option, root, out, depth + 1);
+        }
+    }
+    if (schema.contains("$ref") && schema["$ref"].is_string()) {
+        // "#/$defs/Name": a JSON pointer into the parameters schema
+        const std::string ref = schema["$ref"].get<std::string>();
+        if (ref.compare(0, 2, "#/") == 0) {
+            try {
+                collect_types(root.at(json::json_pointer(ref.substr(1))), root, out, depth + 1);
+            } catch (const json::exception&) {
+            }
+        }
+    }
+}
+
 /// \brief JSON schema types of tool parameters, from the request's tools
 class param_types {
 public:
     explicit param_types(const json* tools) : tools_(tools) {}
 
-    /// \return the declared type, or empty when the schema does not say
-    std::string of(const std::string& tool, const std::string& param) const {
+    /// \return the types the schema allows, empty when it does not say
+    type_set of(const std::string& tool, const std::string& param) const {
+        type_set types;
         if (tools_ == nullptr || !tools_->is_array()) {
-            return "";
+            return types;
         }
         for (const auto& entry : *tools_) {
             const json& fn = entry.contains("function") ? entry["function"] : entry;
             if (!fn.is_object() || fn.value("name", "") != tool) {
                 continue;
             }
-            if (!fn.contains("parameters") || !fn["parameters"].contains("properties")) {
-                return "";
+            if (!fn.contains("parameters") || !fn["parameters"].is_object() ||
+                !fn["parameters"].contains("properties")) {
+                return types;
             }
             const json& props = fn["parameters"]["properties"];
-            if (!props.is_object() || !props.contains(param)) {
-                return "";
+            if (props.is_object() && props.contains(param)) {
+                collect_types(props[param], fn["parameters"], types);
             }
-            const json& type = props[param].contains("type") ? props[param]["type"] : json();
-            if (type.is_string()) {
-                return type.get<std::string>();
-            }
-            if (type.is_array()) {
-                // ["string", "null"] and the like: the first non-null type decides
-                for (const auto& t : type) {
-                    if (t.is_string() && t.get<std::string>() != "null") {
-                        return t.get<std::string>();
-                    }
-                }
-            }
-            return "";
+            return types;
         }
-        return "";
+        return types;
     }
 
 private:
@@ -281,19 +330,103 @@ const std::string XML_FUNCTION_CLOSE = "</function>";
 const std::string XML_PARAM_OPEN = "<parameter=";
 const std::string XML_PARAM_CLOSE = "</parameter>";
 
-/// \brief Typed JSON for a complete non-string parameter value
-std::string xml_value_to_json(const std::string& value, const std::string& type) {
-    if (type == "string") {
-        std::string out = "\"";
-        chat_json_escape_append(out, value);
-        return out + "\"";
-    }
+/// \brief Typed JSON for a complete parameter value
+/// \param allowed the types the schema allows, empty when it does not say
+/// \note The XML does not say what a value is. Without a schema it is read as JSON,
+///       a Python style literal, or else text. A schema that allows strings keeps the
+///       value as written, unless it also allows what the value reads as (Optional[int]
+///       given 5); a zip code 90210 stays "90210".
+std::string xml_value_to_json(const std::string& value, const type_set& allowed) {
+    std::string typed;
     try {
-        return json::parse(value).dump();
+        typed = json::parse(value).dump();
     } catch (const json::exception&) {
         // not JSON: still understand Python style True/False/None, else a string
-        return chat_scalar_to_json(value);
+        typed = chat_scalar_to_json(value);
     }
+    if (allowed.count("string")) {
+        std::string type = "string";
+        try {
+            type = json_type_of(json::parse(typed));
+        } catch (const json::exception&) {
+        }
+        if (value.empty() || type == "string" || !type_allowed(type, allowed)) {
+            std::string out = "\"";
+            chat_json_escape_append(out, value);
+            return out + "\"";
+        }
+    }
+    return typed;
+}
+
+/// \brief Whether the text from pos to end is a proper prefix of the marker
+bool partial_marker_at(const std::string& s, size_t pos, size_t end, const std::string& marker) {
+    const size_t len = end - pos;
+    return len < marker.size() && marker.compare(0, len, s, pos, len) == 0;
+}
+
+/// \brief Past the separator between two parts of a call: one whitespace character at most
+/// \note As the grammar has it (chat_grammar.cpp, qwen_xml_arguments): more is value text.
+size_t skip_separator(const std::string& s, size_t pos) {
+    return pos < s.size() && is_ws(s[pos]) ? pos + 1 : pos;
+}
+
+/// \brief Find the "</parameter>" that closes a value
+/// \param end where the function's parameters end
+/// \param function_closed no more parameters will follow end
+/// \param hold set, when the text cannot tell yet, to the first place it may close
+/// \return its index, or npos when none does yet
+/// \note The value itself may hold "</parameter>" (XML, or code that writes tool
+///       calls): the one that closes it is followed by the next parameter or the
+///       end of the function. Without one, a value the function closed ends at its
+///       first "</parameter>", so until then a stream holds the value back there.
+size_t xml_value_close(const std::string& body, size_t from, size_t end, bool function_closed, size_t& hold) {
+    hold = npos;
+    size_t first = npos;
+    for (size_t close = body.find(XML_PARAM_CLOSE, from); close != npos && close < end;
+         close = body.find(XML_PARAM_CLOSE, close + 1)) {
+        first = std::min(first, close);
+        size_t next = skip_separator(body, close + XML_PARAM_CLOSE.size());
+        if (next >= end) {
+            if (function_closed) {
+                return close;
+            }
+            break;
+        }
+        if (starts_with_at(body, next, XML_PARAM_OPEN) || starts_with_at(body, next, XML_FUNCTION_CLOSE)) {
+            return close;
+        }
+    }
+    if (function_closed) {
+        return first;
+    }
+    hold = first;
+    return npos;
+}
+
+/// \brief Find the "</function>" that closes a function, the same way
+/// \param closed the block is complete, nothing follows body
+size_t xml_function_close(const std::string& body, size_t from, bool closed, size_t& hold) {
+    hold = npos;
+    for (size_t close = body.find(XML_FUNCTION_CLOSE, from); close != npos;
+         close = body.find(XML_FUNCTION_CLOSE, close + 1)) {
+        if (skip_ws(body, close + XML_FUNCTION_CLOSE.size()) >= body.size()) {
+            if (closed) {
+                return close;
+            }
+            hold = close;
+            return npos;
+        }
+        size_t next = skip_separator(body, close + XML_FUNCTION_CLOSE.size());
+        if (starts_with_at(body, next, XML_FUNCTION_OPEN)) {
+            return close;
+        }
+        if (!closed && partial_marker_at(body, next, body.size(), XML_FUNCTION_OPEN)) {
+            hold = close;
+            return npos;
+        }
+    }
+    return npos;
 }
 
 /// \brief Arguments of one <function=..> between begin and end
@@ -318,17 +451,25 @@ std::string parse_xml_arguments(const std::string& body, size_t begin, size_t en
         std::string key = trim(body.substr(name_begin, name_end - name_begin));
         size_t value_begin = name_end + 1;
 
-        size_t close = body.find(XML_PARAM_CLOSE, value_begin);
+        size_t hold = npos;
+        size_t close = xml_value_close(body, value_begin, end, function_closed, hold);
         size_t next = body.find(XML_PARAM_OPEN, value_begin);
-        size_t value_end = std::min({close, next, end});
-        bool value_closed = value_end < end || function_closed;
+        size_t value_end = close;
+        bool value_closed = close != npos;
+        if (!value_closed) {
+            // a value left open runs to the next parameter; until the function ends, a
+            // "<parameter=" may still turn out to be part of it
+            value_end = std::min({hold, next, end});
+            value_closed = function_closed;
+        }
 
         std::string raw = body.substr(value_begin, value_end - value_begin);
-        if (!value_closed) {
+        if (!value_closed && value_end == body.size()) {
+            // a value stopped by a whole marker cannot end in part of one
             raw = cut_partial_marker(raw, {&XML_PARAM_CLOSE, &XML_PARAM_OPEN, &XML_FUNCTION_CLOSE});
         }
         std::string value = trim(raw);
-        std::string type = types.of(tool, key);
+        const type_set allowed = types.of(tool, key);
 
         if (!first) {
             out += ',';
@@ -338,15 +479,15 @@ std::string parse_xml_arguments(const std::string& body, size_t begin, size_t en
         chat_json_escape_append(out, key);
         out += "\":";
         if (!value_closed) {
-            if (type == "string") {
+            if (allowed == type_set{"string"}) {
                 // strings stream as they come; anything else waits for its end
                 out += '"';
                 chat_json_escape_append(out, value);
             }
             return out;
         }
-        out += xml_value_to_json(value, type);
-        p = value_end == close ? close + XML_PARAM_CLOSE.size() : value_end;
+        out += xml_value_to_json(value, allowed);
+        p = close != npos ? close + XML_PARAM_CLOSE.size() : value_end;
     }
     if (function_closed) {
         out += '}';
@@ -368,9 +509,10 @@ void parse_qwen_xml_block(const std::string& body, bool closed, const param_type
             return;
         }
         std::string name = trim(body.substr(name_begin, name_end - name_begin));
-        size_t function_end = body.find(XML_FUNCTION_CLOSE, name_end);
+        size_t hold = npos;
+        size_t function_end = xml_function_close(body, name_end, closed, hold);
         bool function_closed = function_end != npos || closed;
-        size_t args_end = function_end == npos ? body.size() : function_end;
+        size_t args_end = function_end != npos ? function_end : std::min(hold, body.size());
         add_call(calls, name, parse_xml_arguments(body, name_end + 1, args_end, function_closed, name, types));
         if (function_end == npos) {
             return;
@@ -464,6 +606,33 @@ void parse_tool_block(const chat_format_spec& spec, const std::string& body, boo
 
 // ---------------------------------------------------------------- tag based formats
 
+/// \brief What a reasoning end with no block open is
+enum class stray_close {
+    MARKUP, // the model closing a block the template already closed
+    TEXT,   // the answer's own text
+    UNSURE, // the text ends before it can tell
+};
+
+/// \brief Tell the model's stray close from the answer naming the tag
+/// \note The model reasons on after a block the template closed, then closes it right
+///       after its last word and goes on with the answer at once ("cloudy.</think>It's").
+///       The answer names the tag set apart, by spaces, quotes or code marks on both
+///       sides ("the </think> tag", "split('</think>')").
+stray_close classify_stray_close(const std::string& text, size_t from, size_t at, size_t after, bool is_partial) {
+    if (trim(text.substr(from, at - from)).empty()) {
+        return stray_close::MARKUP;
+    }
+    const char before = text[at - 1];
+    if (!is_ws(before) && std::string("`'\"(<[").find(before) == npos) {
+        return stray_close::MARKUP;
+    }
+    if (after >= text.size()) {
+        return is_partial ? stray_close::UNSURE : stray_close::TEXT;
+    }
+    const char next = text[after];
+    return is_ws(next) || std::string("`'\")>].,;:!?").find(next) != npos ? stray_close::TEXT : stray_close::MARKUP;
+}
+
 chat_msg parse_tagged(const chat_format_spec& spec, const std::string& full_text, bool is_partial,
                       const chat_parse_options& options) {
     std::string text = full_text;
@@ -479,6 +648,7 @@ chat_msg parse_tagged(const chat_format_spec& spec, const std::string& full_text
     const bool tools = options.parse_tool_calls && !spec.tool_start.empty();
     const std::string no_marker;
     const std::string& reasoning_start = spec.has_reasoning() ? spec.reasoning_start : no_marker;
+    const std::string& reasoning_end = spec.has_reasoning() ? spec.reasoning_end : no_marker;
     const std::string& tool_start = tools ? spec.tool_start : no_marker;
     const std::string& stop_marker = spec.stop_marker;
     const param_types types(options.tools);
@@ -488,7 +658,9 @@ chat_msg parse_tagged(const chat_format_spec& spec, const std::string& full_text
     text_parts content;
     bool in_reasoning = false;
     size_t pos = 0;
-    if (options.reasoning_may_close && spec.has_reasoning()) {
+    // a continued message that stopped inside a call is past any reasoning
+    const bool continued_call = tools && starts_with_at(text, 0, spec.tool_start);
+    if (options.reasoning_may_close && spec.has_reasoning() && !continued_call) {
         const size_t close = text.find(spec.reasoning_end);
         const size_t open = text.find(spec.reasoning_start);
         if (close != npos && (open == npos || close < open)) {
@@ -537,11 +709,33 @@ chat_msg parse_tagged(const chat_format_spec& spec, const std::string& full_text
         }
 
         const std::string* which = nullptr;
-        size_t at = find_first(text, pos, {&reasoning_start, &tool_start}, &which);
+        size_t at = pos;
+        chat_call_head head = chat_call_head::CALL;
+        stray_close stray = stray_close::MARKUP;
+        while (true) {
+            at = find_first(text, at, {&reasoning_start, &reasoning_end, &tool_start}, &which);
+            if (at != npos && which == &reasoning_end) {
+                stray = classify_stray_close(text, pos, at, at + reasoning_end.size(), is_partial);
+                if (stray == stray_close::TEXT) {
+                    at += reasoning_end.size();
+                    continue;
+                }
+                break;
+            }
+            if (at == npos || which != &tool_start) {
+                break;
+            }
+            // a call opens right after its tag; the tag in prose is text
+            head = chat_format_call_head(spec, text, at + tool_start.size());
+            if (head != chat_call_head::PROSE) {
+                break;
+            }
+            at += tool_start.size();
+        }
         if (at == npos) {
             std::string rest = text.substr(pos);
             if (is_partial) {
-                rest = cut_partial_marker(rest, {&reasoning_start, &tool_start, &stop_marker});
+                rest = cut_partial_marker(rest, {&reasoning_start, &reasoning_end, &tool_start, &stop_marker});
             }
             content.add(rest, lead(rest));
             break;
@@ -553,12 +747,24 @@ chat_msg parse_tagged(const chat_format_spec& spec, const std::string& full_text
             in_reasoning = true;
             continue;
         }
+        if (which == &reasoning_end) {
+            if (stray == stray_close::UNSURE) {
+                break; // what follows will tell
+            }
+            // a close with nothing open, the model reasoning on after the template closed its block
+            pos = at + reasoning_end.size();
+            continue;
+        }
+        if (head == chat_call_head::UNSURE && is_partial) {
+            break; // a call, or the tag in prose: what follows will tell
+        }
 
         size_t body_begin = at + tool_start.size();
-        size_t body_end = text.find(spec.tool_end, body_begin);
+        size_t hold = npos;
+        size_t body_end = chat_format_tool_end(spec, text, body_begin, is_partial, hold);
         if (body_end == npos) {
-            std::string body = text.substr(body_begin);
-            if (is_partial) {
+            std::string body = text.substr(body_begin, hold == npos ? npos : hold - body_begin);
+            if (is_partial && hold == npos) {
                 body = cut_partial_marker(body, {&spec.tool_end, &stop_marker});
             }
             // an unterminated block at the very end of a finished generation

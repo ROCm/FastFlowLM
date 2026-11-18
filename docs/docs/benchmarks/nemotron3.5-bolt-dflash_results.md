@@ -14,6 +14,7 @@ decoding layer) and the model keeps the longest prefix it agrees with plus one t
 > **Note:**
 > - FastFlowLM 1.0.12 (local build of the release branch), FLM's default NPU power mode (Performance), Linux.
 > - The baseline is `nemotron3.5-bolt:e4b` on the same build, same prompts, same settings.
+> - The prefill numbers were measured before the block-float prefill kernel and the other prefill, image and audio speedups reached these models (see the model cards); decode numbers are unaffected. The tables have not been re-measured.
 
 ---
 

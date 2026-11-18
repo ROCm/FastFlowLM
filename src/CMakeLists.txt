@@ -48,6 +48,22 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 # ———————————————————————————————————————————————
 option(FLM_USE_HRX "Use the HRX amdxdna NPU runtime instead of XRT (0=XRT default, 1=HRX)" OFF)
 option(FLM_PORTABLE_BUILD "Build portable distribution with bundled runtime libraries" OFF)
+
+# Export the stable C model-extension header and runtime selection. Other
+# source-tree headers are internal even though this build-tree include path can
+# physically reach them.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/FastFlowLMModelExtension.cmake")
+flm_add_model_extension_interface(flm_model_extension)
+add_library(FastFlowLM::ModelExtension ALIAS flm_model_extension)
+export(TARGETS flm_model_extension
+    NAMESPACE FastFlowLM::
+    FILE "${CMAKE_CURRENT_BINARY_DIR}/FastFlowLMModelExtensionTargets.cmake")
+if(FLM_USE_HRX)
+    set(FLM_MODEL_EXTENSION_NPU_RUNTIME "hrx")
+else()
+    set(FLM_MODEL_EXTENSION_NPU_RUNTIME "xrt")
+endif()
+
 # ryzenai-corelib (exactly 0.53.0) beside FastFlowLM's own engines: the two
 # share no engine, and each model tag is served by one of them (a family ending
 # in "-core" is corelib's), so both are offered side by side -- with
@@ -98,6 +114,15 @@ if(FLM_ENABLE_CORE)
                   "$ENV{USERPROFILE}/anaconda3/Library/include"
                   "C:/dev/boost_1_88_0" REQUIRED)
     endif()
+endif()
+
+# OGA packages on the GPU, through a hip-ep installed apart from flm. This adds a
+# backend rather than replacing one, and links nothing from hip-ep: its DLLs are
+# found and loaded when such a model is first loaded.
+option(FLM_ENABLE_OGA_HIPEP
+       "Add the oga-hipep backend: OGA models on the GPU through an installed hip-ep" OFF)
+if(FLM_ENABLE_OGA_HIPEP AND (NOT WIN32 OR FLM_USE_HRX))
+    message(FATAL_ERROR "FLM_ENABLE_OGA_HIPEP is supported only on Windows XRT builds (FLM_USE_HRX=OFF)")
 endif()
 
 if(FLM_USE_HRX)
@@ -259,6 +284,7 @@ include("${CMAKE_SOURCE_DIR}/common/chat/chat_sources.cmake")
 file(GLOB SOURCES "src/*.cpp" "runner/*.cpp" "common/*.cpp" "common/*/*.cpp" "server/*.cpp" "pull/*.cpp" )
 file(GLOB HEADERS "include/*.hpp" "runner/*.hpp" "common/*.hpp" "common/*/*.hpp" "server/*.hpp" "pull/*.hpp")
 list(FILTER SOURCES EXCLUDE REGEX ".*/common/core/.*\\.cpp$")
+list(FILTER SOURCES EXCLUDE REGEX ".*/common/oga/.*\\.cpp$")
 
 # Model sources live two levels deeper than the globs above reach. Only the core
 # half exists as loose sources; it is built separately, below.
@@ -374,6 +400,17 @@ elseif(NOT FLM_USE_HRX)
     target_compile_definitions(flm PRIVATE FLM_NPU_UTIL=1)
 endif()
 
+if(FLM_ENABLE_OGA_HIPEP)
+    target_sources(flm PRIVATE
+        "${CMAKE_SOURCE_DIR}/common/oga/oga_api.cpp"
+        "${CMAKE_SOURCE_DIR}/common/oga/oga_runtime_install.cpp"
+        "${CMAKE_SOURCE_DIR}/common/oga/oga_engine.cpp"
+        "${CMAKE_SOURCE_DIR}/common/oga/oga_hipep_backend.cpp")
+    target_compile_definitions(flm PRIVATE FLM_ENABLE_OGA_HIPEP=1)
+    # version.lib: the hip-ep package is checked by onnxruntime-genai.dll's file version.
+    target_link_libraries(flm PRIVATE version)
+endif()
+
 # ———————————————————————————————————————————————
 # Opt-in Windows dependency prefix.
 #
@@ -409,6 +446,61 @@ if(FLM_WIN_DEPS_PREFIX)
     message(STATUS "Windows deps from prefix: ${FLM_WIN_DEPS_PREFIX}")
 endif()
 
+# ———————————————————————————————————————————————
+# curl on Windows.
+#
+# Every Windows package ships src/lib/libcurl.dll, curl FLM_CURL_VERSION. The
+# default route (CI, WinSetup.ps1) compiles against the matching headers in
+# third_party/curl and links an import library generated from that DLL's
+# export list (third_party/curl/libcurl.def), so it always links the DLL it
+# ships. The vcpkg-toolchain and FLM_WIN_DEPS_PREFIX routes bring their own
+# curl and only get a warning when its version differs.
+# Updating the DLL: see third_party/curl/README.md.
+# ———————————————————————————————————————————————
+set(FLM_CURL_VERSION "8.15.0")
+if(WIN32)
+    set(FLM_CURL_DIR "${CMAKE_SOURCE_DIR}/../third_party/curl")
+
+    # The x.y.z part of LIBCURL_VERSION in a curlver.h ("" if not found).
+    function(flm_curl_header_version out_var curlver_h)
+        set(_ver "")
+        if(EXISTS "${curlver_h}")
+            file(STRINGS "${curlver_h}" _line REGEX "^#define LIBCURL_VERSION \"")
+            if(_line MATCHES "\"([0-9]+\\.[0-9]+\\.[0-9]+)")
+                set(_ver "${CMAKE_MATCH_1}")
+            endif()
+        endif()
+        set(${out_var} "${_ver}" PARENT_SCOPE)
+    endfunction()
+
+    flm_curl_header_version(_flm_curl_ver "${FLM_CURL_DIR}/include/curl/curlver.h")
+    if(NOT _flm_curl_ver STREQUAL FLM_CURL_VERSION)
+        message(FATAL_ERROR "third_party/curl/include is curl '${_flm_curl_ver}', but "
+                            "FLM_CURL_VERSION (the shipped src/lib/libcurl.dll) is "
+                            "${FLM_CURL_VERSION}; update them together")
+    endif()
+endif()
+
+if(WIN32 AND NOT VCPKG_TOOLCHAIN AND NOT FLM_WIN_DEPS_PREFIX)
+    # lib.exe (CMAKE_AR under MSVC) writes the import library; rerun it, and
+    # reconfigure, whenever the .def changes.
+    set(_flm_curl_def "${FLM_CURL_DIR}/libcurl.def")
+    set(FLM_CURL_IMPLIB "${CMAKE_BINARY_DIR}/third_party/curl/libcurl.lib")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_flm_curl_def}")
+    if(NOT EXISTS "${FLM_CURL_IMPLIB}" OR "${_flm_curl_def}" IS_NEWER_THAN "${FLM_CURL_IMPLIB}")
+        file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/third_party/curl")
+        execute_process(
+            COMMAND "${CMAKE_AR}" /nologo /machine:x64 "/def:${_flm_curl_def}" "/out:${FLM_CURL_IMPLIB}"
+            RESULT_VARIABLE _flm_curl_rc
+            OUTPUT_VARIABLE _flm_curl_out
+            ERROR_VARIABLE _flm_curl_out)
+        if(NOT _flm_curl_rc EQUAL 0)
+            message(FATAL_ERROR "Generating libcurl.lib with '${CMAKE_AR}' failed:\n${_flm_curl_out}")
+        endif()
+    endif()
+    message(STATUS "curl ${FLM_CURL_VERSION}: third_party/curl headers, import library ${FLM_CURL_IMPLIB}")
+endif()
+
 if(WIN32)
     if(VCPKG_TOOLCHAIN)
         # A vcpkg toolchain is active (e.g. the rocm-npu-staging dev.py build or
@@ -418,14 +510,27 @@ if(WIN32)
         # installed Boost version.
         find_package(Boost CONFIG REQUIRED COMPONENTS program_options)
         find_package(CURL CONFIG REQUIRED)
+        if(NOT CURL_VERSION VERSION_EQUAL FLM_CURL_VERSION)
+            message(WARNING "vcpkg provides curl ${CURL_VERSION}, but flm ships "
+                            "libcurl.dll ${FLM_CURL_VERSION}; calls into newer curl "
+                            "APIs would fail to load against the shipped DLL")
+        endif()
+    elseif(FLM_WIN_DEPS_PREFIX)
+        flm_curl_header_version(_flm_prefix_curl_ver
+            "${FLM_WIN_DEPS_PREFIX}/include/curl/curlver.h")
+        if(NOT _flm_prefix_curl_ver STREQUAL FLM_CURL_VERSION)
+            message(WARNING "FLM_WIN_DEPS_PREFIX provides curl '${_flm_prefix_curl_ver}', "
+                            "but flm ships libcurl.dll ${FLM_CURL_VERSION}; calls into "
+                            "newer curl APIs would fail to load against the shipped DLL")
+        endif()
     endif()
     # A third, opt-in route (FLM_WIN_DEPS_PREFIX, declared above) takes Boost
     # and curl from one local prefix, wired next to each CI-runner block.
     # Otherwise (the bare self-hosted CI runner) there is no vcpkg toolchain and
-    # no Boost in vcpkg: Boost is a standalone b2 build under C:/dev/boost_1_88_0
-    # and curl is linked by raw name from the vcpkg lib dir. That
-    # path is wired via the include/link dirs and raw library names guarded by
-    # NOT VCPKG_TOOLCHAIN below.
+    # Boost is a standalone b2 build under C:/dev/boost_1_88_0 and curl comes
+    # from third_party/curl (see the curl block above). That path is wired via
+    # the include/link dirs and library names guarded by NOT VCPKG_TOOLCHAIN
+    # below.
 else()
     find_package(Boost CONFIG REQUIRED COMPONENTS program_options)
     # The Linux build environment installs these via apt, which provides the
@@ -452,6 +557,7 @@ target_include_directories(flm PUBLIC
     ${CMAKE_SOURCE_DIR}/server
     ${CMAKE_SOURCE_DIR}/pull
 )
+target_link_libraries(flm PRIVATE FastFlowLM::ModelExtension)
 
 # XRT backend: add the XRT headers (HRX carries its own via the hrx::hrx target).
 if(NOT FLM_USE_HRX)
@@ -463,10 +569,10 @@ if(NOT FLM_USE_HRX)
 endif()
 
 if(WIN32 AND NOT VCPKG_TOOLCHAIN AND NOT FLM_WIN_DEPS_PREFIX)
-    # Bare CI runner: standalone Boost + vcpkg headers by absolute path.
+    # Bare CI runner: standalone Boost by absolute path, vendored curl headers.
     target_include_directories(flm PUBLIC
         C:/dev/boost_1_88_0
-        C:/dev/vcpkg/installed/x64-windows/include/
+        "${FLM_CURL_DIR}/include"
     )
 elseif(FLM_WIN_DEPS_PREFIX)
     target_include_directories(flm PUBLIC "${FLM_WIN_DEPS_PREFIX}/include")
@@ -497,9 +603,9 @@ if(WIN32)
 endif()
 
 if(WIN32 AND NOT VCPKG_TOOLCHAIN AND NOT FLM_WIN_DEPS_PREFIX)
-    # Bare CI runner: statically link the standalone Boost + curl.
+    # Bare CI runner: statically link the standalone Boost. curl is the shipped
+    # DLL, so its functions stay declared dllimport (no CURL_STATICLIB).
     target_compile_definitions(flm PUBLIC
-        CURL_STATICLIB
         BOOST_ALL_NO_LIB
         BOOST_ALL_STATIC_LINK
     )
@@ -529,10 +635,9 @@ if(NOT FLM_USE_HRX)
 endif()
 
 if(WIN32 AND NOT VCPKG_TOOLCHAIN AND NOT FLM_WIN_DEPS_PREFIX)
-    # Bare CI runner: standalone Boost stage libs + vcpkg import libs.
+    # Bare CI runner: standalone Boost stage libs (curl is linked by full path).
     target_link_directories(flm PUBLIC
         C:/dev/boost_1_88_0/stage/lib
-        C:/dev/vcpkg/installed/x64-windows/lib
     )
 elseif(FLM_WIN_DEPS_PREFIX)
     target_link_directories(flm PUBLIC "${FLM_WIN_DEPS_PREFIX}/lib")
@@ -563,10 +668,12 @@ list(APPEND FLM_ENGINE_LINK_LIBS qwen3vl_flash)
 list(APPEND FLM_ENGINE_LINK_LIBS
     qwen3_5vl_npu
     minicpm_v_4_7_npu
+    minicpm_ocr_npu
     minicpm_v_4_7_moe_npu
     qwen3_5_omni_npu
     qwen3_6_moe_npu
     qwen3_8mtp_npu
+    qwen3_asr_npu
     gemma_npu
     gemma_text_npu
     gemma4e_npu
@@ -586,6 +693,7 @@ list(APPEND FLM_ENGINE_LINK_LIBS
     phi4_npu
     nanbeige_npu
     hunyuan_npu
+    hy_mem_npu
 )
 
 # The d3 decision engine (--decision d3:lite). Linked where its library is vendored; elsewhere
@@ -726,10 +834,10 @@ elseif(WIN32 AND FLM_WIN_DEPS_PREFIX)
         ${FLM_WIN_DEPS_PREFIX_LIBS}
     )
 elseif(WIN32)
-    # Bare CI runner: link the native deps by raw name from the standalone Boost
-    # + vcpkg lib dirs wired above (no CMake package configs there).
+    # Bare CI runner: Boost by raw name from the stage lib dir wired above (no
+    # CMake package configs there), curl via the generated import library.
     target_link_libraries(flm PUBLIC
-        libcurl
+        "${FLM_CURL_IMPLIB}"
         libboost_program_options-vc143-mt-x64-1_88
     )
 else()
@@ -1092,6 +1200,35 @@ endif()
 
 install(FILES model_list.json DESTINATION "${FLM_SHARE_DESTINATION}")
 install(FILES model_info.json DESTINATION "${FLM_SHARE_DESTINATION}")
+# The SDK keeps one layout in every package (deb, portable tarball, Windows
+# zip and MSI), unlike the runtime files, which follow FLM_SHARE_DESTINATION.
+set(FLM_MODEL_EXTENSION_SCHEMA_DESTINATION "share/flm/schemas")
+install(DIRECTORY schemas/
+    DESTINATION "${FLM_MODEL_EXTENSION_SCHEMA_DESTINATION}"
+    COMPONENT ModelExtension)
+set(FLM_MODEL_EXTENSION_CMAKE_DESTINATION
+    "${CMAKE_INSTALL_LIBDIR}/cmake/FastFlowLMModelExtension")
+include(CMakePackageConfigHelpers)
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/FastFlowLMModelExtensionConfig.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/FastFlowLMModelExtensionConfig.cmake"
+    INSTALL_DESTINATION "${FLM_MODEL_EXTENSION_CMAKE_DESTINATION}"
+    PATH_VARS FLM_MODEL_EXTENSION_SCHEMA_DESTINATION)
+install(TARGETS flm_model_extension
+    EXPORT FastFlowLMModelExtensionTargets
+    COMPONENT ModelExtension)
+install(EXPORT FastFlowLMModelExtensionTargets
+    NAMESPACE FastFlowLM::
+    DESTINATION "${FLM_MODEL_EXTENSION_CMAKE_DESTINATION}"
+    COMPONENT ModelExtension)
+install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/FastFlowLMModelExtensionConfig.cmake"
+    DESTINATION "${FLM_MODEL_EXTENSION_CMAKE_DESTINATION}"
+    COMPONENT ModelExtension)
+install(FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/AutoModel/model_extension.h"
+    DESTINATION "include/AutoModel"
+    COMPONENT ModelExtension)
 
 # Ship both licenses with the binaries; LICENSE_BINARY.txt must accompany any
 # redistribution of the NPU kernels and engine libraries. THIRD_PARTY_NOTICES.txt

@@ -49,6 +49,10 @@ private:
         mix("tool_calls");
         mix("tool_call_id");
         mix("name");
+        // the engine's tokens only know an image's (or a clip's) size: another picture of the same size in an
+        // earlier message must not count as the same conversation
+        mix("images");
+        mix("audios");
         return sum;
     }
 

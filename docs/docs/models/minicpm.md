@@ -27,7 +27,7 @@ flm run minicpm-v-4.7:1b
 
 - Images are processed the same way as in the original MiniCPM-V: the model sees a downscaled view of the whole image, and large images are also split into up to 9 tiles. Because of this, the `--img-pre-resize` (`-r`) option has no effect on this model.
 - Image TTFT stops growing at about 1080p: from there up, every image is split into the maximum 9 tiles, so a 4K image costs about the same as a 1080p one. Each tile is about 448 × 448 pixels, so very fine detail in large images is downscaled.
-- Video and audio input are not supported.
+- Video and audio input are not supported. Decoded video frames can be sent as raw RGB8 images, without JPEG or PNG encoding: see [Raw RGB Images](https://fastflowlm.com/docs/instructions/server/raw_rgb_images/). Each frame is an independent picture, and about 235 frames of 398 × 224 fit one request.
 
 ---
 

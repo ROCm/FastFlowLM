@@ -19,6 +19,15 @@ private:
 
     void setup_tokenizer(std::string model_path);
 
+    /// \brief Keep what the engine ran when the prompt goes on from its last reply
+    /// \note The template renders a past reply as its final message alone. When
+    ///       the prompt's copy of the reply is the final message the engine
+    ///       generated, the prompt is rewritten to the engine's history plus what
+    ///       follows the reply, unless the reply has analysis, which would stay in
+    ///       the context the template leaves it out of: that turn runs as rendered.
+    /// \return whether `tokens` now continues token_history
+    bool _continue_verbatim(std::vector<int>& tokens, std::optional<int> requested_max_new_tokens);
+
 public:
     GPT_OSS(flm_rt::device* npu_device_inst);
 
@@ -31,6 +40,14 @@ public:
         return chat_template_type_t::harmony;
     }
 
+    /// \brief request settings the model loaded with (see AutoModel::save_request_settings)
+    std::string loaded_reasoning_effort = "low";
+    void save_model_request_settings() override {
+        loaded_reasoning_effort = this->reasoning_effort;
+    }
+    void restore_model_request_settings() override {
+        this->configure_parameter("reasoning_effort", loaded_reasoning_effort);
+    }
     /// \brief Override configure_parameter to handle GPT-oss-specific parameters
     bool configure_parameter(std::string parameter_name, const std::any& value) override {
         if (parameter_name == "reasoning_effort") {

@@ -48,6 +48,7 @@ Components
   33. PicoJSON
   34. DLPack
   35. AMD XDNA driver UAPI header (amdxdna_accel.h)
+  36. ONNX Runtime GenAI
 
 ==============================================================================
 1. libcurl
@@ -55,7 +56,8 @@ Components
 
 License:  curl License
 Homepage: https://curl.se
-Used in:  Windows: libcurl.dll (8.15.0).
+Used in:  Windows: libcurl.dll (8.15.0), and its headers in third_party/curl
+          for the Windows build.
 
 COPYRIGHT AND PERMISSION NOTICE
 
@@ -1244,6 +1246,41 @@ interface by normal system calls. FastFlowLM uses the header only for
 that purpose. The exception text is available at
 https://spdx.org/licenses/Linux-syscall-note.html and the GPL-2.0 text
 at https://www.gnu.org/licenses/old-licenses/gpl-2.0.txt.
+
+==============================================================================
+36. ONNX Runtime GenAI
+==============================================================================
+
+License:  MIT License
+Homepage: https://github.com/microsoft/onnxruntime-genai
+Used in:  Compiled into flm when FLM_ENABLE_OGA_HIPEP is on (the C API
+          header ort_genai_c.h only, v0.17.0, commit 1d67be30e5b1, SHA256
+          9c69cc16a779aec3191b8d1f19a629e59667f34597e74fcbf0cdc24f39e0aef3).
+          The library itself comes from the separately installed hip-ep
+          package and is not distributed with flm.
+
+MIT License
+
+Copyright (c) Microsoft Corporation.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 
 ==============================================================================
 Full license texts

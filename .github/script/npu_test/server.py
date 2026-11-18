@@ -31,10 +31,13 @@ class FlmServer:
     def __init__(self, flm_bin: str, *, name: str, log_dir: Path,
                  args: list[str] | None = None, host: str = "127.0.0.1",
                  port: int | None = None, ready_timeout: float = 300.0,
-                 request_timeout: float = 600.0, max_restarts: int = 3):
+                 request_timeout: float = 600.0, max_restarts: int = 3,
+                 env: dict[str, str] | None = None):
         self.flm_bin = flm_bin
         self.name = name
         self.args = list(args or [])
+        # variables added to ours for the server process, e.g. a test hook
+        self.env = dict(env or {})
         self.host = host
         # None: a free port per start. A server stuck in the NPU driver cannot
         # be killed and keeps its port, which would otherwise stop every later
@@ -104,6 +107,8 @@ class FlmServer:
             self._log.flush()
         print(f"[server:{self.name}] {' '.join(self.command)}", flush=True)
         kwargs: dict = {"stdout": self._log, "stderr": subprocess.STDOUT}
+        if self.env:
+            kwargs["env"] = dict(os.environ, **self.env)
         if IS_WINDOWS:
             # So Ctrl-Break can stop the server without also stopping us.
             kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP

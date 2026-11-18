@@ -33,8 +33,5 @@ override_dh_auto_install:
 	install -d debian/fastflowlm/opt/fastflowlm debian/fastflowlm/usr/bin
 	ln -sf /opt/fastflowlm/bin/flm debian/fastflowlm/usr/bin/flm
 
-	# Remove include directories
-	rm -rf debian/fastflowlm/opt/fastflowlm/include
-
 override_dh_gencontrol:
 	dh_gencontrol -- -Vflm:RuntimeDepends="$(FLM_RUNTIME_DEPENDS)"

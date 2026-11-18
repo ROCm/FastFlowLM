@@ -28,6 +28,14 @@ inputs:
     description: Comma-separated model ids that restrict every suite.
     required: false
     default: ""
+  backend:
+    description: A GPU backend (oga-hipep) whose models to test instead of the NPU models.
+    required: false
+    default: ""
+  model-extension:
+    description: Optional model-extension manifest passed to FLM.
+    required: false
+    default: ""
   asr-full:
     description: '"true" to run the whole ASR evaluation set on the pr tier.'
     required: false
@@ -79,7 +87,8 @@ runs:
         }
 
     # Models persist on the runner between jobs, so only the first job on a
-    # runner pays for a download.
+    # runner pays for a download. The harness pulls missing models before the
+    # suites, within a time budget on the pr tier (--pull-budget).
     - name: Run tests (Linux)
       id: linux
       if: runner.os == 'Linux'
@@ -92,14 +101,18 @@ runs:
         SUITES: ${{ inputs.suites }}
         FAMILIES: ${{ inputs.families }}
         MODELS: ${{ inputs.models }}
+        BACKEND: ${{ inputs.backend }}
+        MODEL_EXTENSION: ${{ inputs.model-extension }}
         ASR_FULL: ${{ inputs.asr-full }}
         ASR_KEY: ${{ inputs.asr-expected-key }}
       run: |
         export FLM_MODEL_PATH="${FLM_MODEL_PATH:-/scratch}"
         args=(--flm-bin "${FLM_BIN}" --label "${LABEL}" --tier "${TIER}" --suites "${SUITES}"
-              --families "${FAMILIES}" --models "${MODELS}" --asr-expected-key "${ASR_KEY}"
+              --families "${FAMILIES}" --models "${MODELS}" --backend "${BACKEND}"
+              --asr-expected-key "${ASR_KEY}"
               --output-dir "${GITHUB_WORKSPACE}/npu-test-results/${LABEL}")
         [ "${ASR_FULL}" = "true" ] && args+=(--asr-full)
+        [ -n "${MODEL_EXTENSION}" ] && args+=(--model-extension "${MODEL_EXTENSION}")
         code=0
         python3 -m npu_test "${args[@]}" || code=$?
         echo "code=${code}" >> "$GITHUB_OUTPUT"
@@ -116,6 +129,8 @@ runs:
         SUITES: ${{ inputs.suites }}
         FAMILIES: ${{ inputs.families }}
         MODELS: ${{ inputs.models }}
+        BACKEND: ${{ inputs.backend }}
+        MODEL_EXTENSION: ${{ inputs.model-extension }}
         ASR_FULL: ${{ inputs.asr-full }}
         ASR_KEY: ${{ inputs.asr-expected-key }}
       run: |
@@ -131,9 +146,12 @@ runs:
         $outDir = Join-Path $env:GITHUB_WORKSPACE "npu-test-results\$env:LABEL"
         $cmdArgs = @('-m', 'npu_test', "--flm-bin=$env:FLM_BIN", "--label=$env:LABEL",
                      "--tier=$env:TIER", "--suites=$env:SUITES", "--families=$env:FAMILIES",
-                     "--models=$env:MODELS", "--asr-expected-key=$env:ASR_KEY",
+                     "--models=$env:MODELS", "--backend=$env:BACKEND", "--asr-expected-key=$env:ASR_KEY",
                      "--output-dir=$outDir")
         if ($env:ASR_FULL -eq 'true') { $cmdArgs += '--asr-full' }
+        if ($env:MODEL_EXTENSION) {
+          $cmdArgs += "--model-extension=$env:MODEL_EXTENSION"
+        }
         & python $cmdArgs
         [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "code=$LASTEXITCODE`n")
         exit 0
@@ -166,7 +184,7 @@ runs:
     # Server logs included, so a failure can be diagnosed without the runner.
     - name: Upload report
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: npu-test-${{ inputs.label }}
         path: npu-test-results/${{ inputs.label }}/
@@ -177,13 +195,17 @@ runs:
     - name: Fail on test failures (Linux)
       if: runner.os == 'Linux' && steps.linux.outputs.code != '0'
       shell: bash
+      env:
+        LABEL: ${{ inputs.label }}
       run: |
-        echo "::error::NPU tests failed; see the summary and the npu-test-${{ inputs.label }} artifact."
+        echo "::error::NPU tests failed; see the summary and the npu-test-${LABEL} artifact."
         exit 1
 
     - name: Fail on test failures (Windows)
       if: runner.os == 'Windows' && steps.windows.outputs.code != '0'
       shell: powershell
+      env:
+        LABEL: ${{ inputs.label }}
       run: |
-        Write-Host "::error::NPU tests failed; see the summary and the npu-test-${{ inputs.label }} artifact."
+        Write-Host "::error::NPU tests failed; see the summary and the npu-test-$env:LABEL artifact."
         exit 1

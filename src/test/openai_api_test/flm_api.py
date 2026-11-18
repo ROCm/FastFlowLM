@@ -12,9 +12,7 @@ anywhere a FastFlowLM server is reachable:
   PASS / FAIL / SKIP per case and exiting non-zero on any failure.
 
 Every request the tests send pins ``think``, ``top_k``, ``temperature`` and
-``repeat_last_n`` explicitly: FastFlowLM applies those to the loaded model and
-keeps them for later requests, so a test must never rely on what an earlier one
-left set.
+``repeat_last_n`` explicitly, so a test does not depend on the model's defaults.
 """
 
 # Every check here reports on the server under test, not on a caller
@@ -83,7 +81,7 @@ class Stream:
     status: int
     chunks: list[dict[str, Any]] = field(default_factory=list)
     done: bool = False  # saw "data: [DONE]"
-    error: dict[str, Any] | None = None  # body of a non-200 reply
+    error: dict[str, Any] | None = None  # body of a non-200 reply, or of a 200 that is not SSE
 
 
 class Api:
@@ -119,20 +117,24 @@ class Api:
         body.update(fields)
         return body
 
-    def _open(self, body: dict[str, Any]):
+    def _open(self, body: dict[str, Any], url: str | None = None):
         req = urllib.request.Request(
-            self.url,
+            url or self.url,
             data=json.dumps(body).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
         return urllib.request.urlopen(req, timeout=self.timeout)
 
-    def post(self, body: dict[str, Any]) -> Response:
+    def completions_url(self) -> str:
+        """The /v1/completions URL of the same server, for ``url=`` below."""
+        return self.url.replace("/v1/chat/completions", "/v1/completions")
+
+    def post(self, body: dict[str, Any], url: str | None = None) -> Response:
         """Send a non-streaming request; HTTP errors are returned, not raised."""
         body = dict(body, stream=False)
         try:
-            with self._open(body) as resp:
+            with self._open(body, url) as resp:
                 return Response(resp.status, json.loads(resp.read().decode("utf-8")))
         except urllib.error.HTTPError as e:
             raw = e.read().decode("utf-8", "replace")
@@ -141,11 +143,11 @@ class Api:
             except json.JSONDecodeError:
                 return Response(e.code, {"error": {"message": raw}})
 
-    def stream(self, body: dict[str, Any]) -> Stream:
+    def stream(self, body: dict[str, Any], url: str | None = None) -> Stream:
         """Send a streaming request and collect its SSE payloads."""
         body = dict(body, stream=True)
         try:
-            resp = self._open(body)
+            resp = self._open(body, url)
         except urllib.error.HTTPError as e:
             raw = e.read().decode("utf-8", "replace")
             try:
@@ -155,15 +157,25 @@ class Api:
             return Stream(e.code, error=error)
         out = Stream(resp.status)
         with resp:
+            # a JSON body (an error, say) where SSE was asked for would read as an empty stream
+            if not resp.headers.get("Content-Type", "").startswith("text/event-stream"):
+                raw = resp.read().decode("utf-8", "replace")
+                out.error = {"error": {"message": f"non-SSE response: {raw}"}}
+                return out
+            other: list[str] = []
             for raw_line in resp:
                 line = raw_line.decode("utf-8").strip()
                 if not line.startswith("data:"):
+                    if line:
+                        other.append(line)
                     continue
                 payload = line[len("data:"):].strip()
                 if payload == "[DONE]":
                     out.done = True
                     break
                 out.chunks.append(json.loads(payload))
+        if not out.done and not out.chunks and other:
+            out.error = {"error": {"message": "non-SSE response: " + "\n".join(other)}}
         return out
 
     def ok(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -179,7 +191,7 @@ class Api:
     def ok_stream(self, body: dict[str, Any]) -> Stream:
         """Streaming request that must succeed and end with ``[DONE]``."""
         s = self.stream(body)
-        if s.status != 200:
+        if s.status != 200 or s.error is not None:
             message = str((s.error or {}).get("error", {}).get("message", s.error))
             raise_for_capability(message)
             raise AssertionError(f"HTTP {s.status}: {message}")

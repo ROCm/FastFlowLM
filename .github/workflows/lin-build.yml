@@ -49,6 +49,7 @@ jobs:
         env:
           VARIANTS: ${{ inputs.variants || 'all' }}
           SHA: ${{ github.sha }}
+          EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
           # The .debs ship for each of these; the portable tarballs are built
@@ -59,6 +60,14 @@ jobs:
             {"distro": "ubuntu", "version": "26.04", "codename": "resolute"},
             {"distro": "debian", "version": "13",    "codename": "trixie"}
           ]'
+          # A pull request builds only the Ubuntu 24.04 .deb (the first above, and
+          # the one the NPU runners run): the same source compiled for the other
+          # distributions only tells something about their toolchains, which a
+          # pull request does not change. Pushes to main, the nightly run and
+          # releases build them all.
+          if [ "${EVENT}" = "pull_request" ]; then
+            deb_distros=$(jq -c '.[:1]' <<< "${deb_distros}")
+          fi
           portable_distro='{"distro": "debian", "version": "13", "codename": "trixie"}'
           short_sha="${SHA:0:7}"
 
@@ -122,7 +131,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -139,6 +148,7 @@ jobs:
       - name: Package portable distribution
         id: portable
         if: endsWith(matrix.variant, '-portable')
+        shell: bash
         env:
           VARIANT: ${{ matrix.variant }}
           VERSION: ${{ steps.build.outputs.version }}
@@ -182,6 +192,8 @@ jobs:
             flm \
             flm-real \
             lib/ \
+            include/ \
+            share/ \
             xclbins/ \
             model_list.json \
             model_info.json \
@@ -200,7 +212,7 @@ jobs:
           echo "tarball=${tarball}" >> "$GITHUB_OUTPUT"
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.artifact }}
           path: ${{ steps.build.outputs.package || steps.portable.outputs.tarball }}

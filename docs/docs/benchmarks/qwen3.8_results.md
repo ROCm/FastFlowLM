@@ -15,7 +15,7 @@ This section reports the performance of Qwen 3.8 on NPU with FastFlowLM (FLM).
 > - Newer versions may deliver improved performance.
 > - Fine-tuned models show performance comparable to their base models.   
 > - `qwen3.8-mtp:27b` decodes with its built-in MTP draft head, so decoding speed is **prompt-dependent** — predictable text (code, structured output, long reasoning chains) accepts more drafts and decodes faster than highly creative text. See the [model card](https://fastflowlm.com/docs/models/qwen/#-model-card-qwen38-27b) for how speculation works.
-> - Benchmarks for this model are capped at 8k context.
+> - Benchmarks for this model were run up to 8k context. The model itself takes up to 16k (16,377 tokens).
 
 ---
 

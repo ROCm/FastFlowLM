@@ -178,7 +178,16 @@ public:
     ///       number a long prior chat has already averaged down.
     void clear_context() override;
 
+    /// \brief grow the context, but never past what the engine can hold
+    /// \note The engine's KV cache tops out at 16377 usable tokens (FLM#1001);
+    ///       a larger request is lowered to that, with a warning, so the stop
+    ///       rules in _speculative_generate end the reply cleanly at the top.
+    void set_max_length(unsigned int MAX_L) override;
+
 private:
+
+    /// \brief lower MAX_L to the engine's usable context (the engine prints the warning)
+    void _clamp_to_engine_limit();
 
     /// \brief this model's decode loop: MTP speculation, ordinary sampling as
     ///        the fallback

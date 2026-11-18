@@ -16,8 +16,20 @@ import sys
 import time
 
 from .harness import FAIL, Context, Result, configure_stdout
-from .plan import TIERS, Plan, load_catalog
+from .plan import GPU_BACKENDS, TIERS, Plan, load_catalog
 from .suites import SUITES, ORDER
+
+# Per model. A GPU backend's models are large (qwen3.5-oga-hipep:9b is 7.5 GB)
+# and new to most runners, some of which download at a few MB/s.
+PULL_TIMEOUT = 90 * 60
+
+# All NPU downloads together, on the install and pr tiers. A model new to the
+# catalog is on no runner yet, and the first job to want it would otherwise
+# spend its time limit on the download (a 30B model at a few MB/s takes over
+# an hour). What the budget leaves undownloaded is a warning, and goes
+# untested on that runner; the full tier and --backend runs wait for every
+# download.
+PULL_BUDGET_MIN = 30.0
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -37,11 +49,22 @@ def parse_args(argv=None) -> argparse.Namespace:
                         help="Run the whole ASR evaluation set even on the pr tier.")
     parser.add_argument("--models", default="",
                         help="Comma-separated model ids; restricts every suite to these.")
+    parser.add_argument("--backend", choices=["", *sorted(GPU_BACKENDS)], default="",
+                        help="Test every model of this GPU backend instead of the NPU models "
+                             "(default: the NPU models).")
+    parser.add_argument("--model-extension", action="append", default=[],
+                        help="Model-extension manifest passed to `flm list` and every "
+                             "server (repeatable).")
     parser.add_argument("--asr-expected-key", default="",
                         help="Row of asr_eval/expected.json to check WER against, "
                              "e.g. linux-hrx (default: none, core checks only).")
     parser.add_argument("--output-dir", default="npu-test-results")
     parser.add_argument("--request-timeout", type=float, default=600.0)
+    parser.add_argument("--pull-budget", type=float, default=None, metavar="MINUTES",
+                        help="Time for downloading the models this machine lacks, all "
+                             "together; 0 for no limit (default: "
+                             f"{PULL_BUDGET_MIN:.0f} on the install and pr tiers without "
+                             "--backend, else no limit).")
     # Not $FLM_SERVE_PORT: a runner may set it for an flm of its own, which then
     # holds that port (it did on a Windows runner, failing every server start).
     parser.add_argument("--port", type=int, default=None,
@@ -49,6 +72,14 @@ def parse_args(argv=None) -> argparse.Namespace:
                              "for each server).")
     parser.add_argument("-v", "--verbose", action="store_true")
     return parser.parse_args(argv)
+
+
+def pull_budget(args: argparse.Namespace) -> float | None:
+    """The download budget in seconds, None for no limit."""
+    minutes = args.pull_budget
+    if minutes is None:
+        minutes = 0.0 if args.tier == "full" or args.backend else PULL_BUDGET_MIN
+    return minutes * 60 if minutes > 0 else None
 
 
 def main(argv=None) -> int:
@@ -72,26 +103,44 @@ def main(argv=None) -> int:
     # report, so a broken package shows up as a failed case, not a traceback.
     catalog_error = ""
     try:
-        catalog = load_catalog(args.flm_bin)
+        catalog = load_catalog(args.flm_bin, args.model_extension)
     except Exception as exc:
         catalog, catalog_error = {}, f"`flm list --json` failed: {type(exc).__name__}: {exc}"
     families = [f.strip() for f in args.families.split(",") if f.strip()]
     only = [m.strip() for m in args.models.split(",") if m.strip()] or None
-    plan = Plan(catalog, args.tier, families, only_models=only)
+    plan = Plan(catalog, args.tier, families, only_models=only, backend=args.backend)
     ctx = Context(flm_bin=args.flm_bin, label=args.label, tier=args.tier, plan=plan,
                   out_dir=args.output_dir, request_timeout=args.request_timeout,
-                  port=args.port, verbose=args.verbose)
+                  port=args.port, verbose=args.verbose,
+                  model_extensions=args.model_extension)
     ctx.asr_full = args.asr_full or args.tier == "full"
     ctx.asr_expected_key = args.asr_expected_key
 
     print(f"{args.label}: {args.tier} tier, {len(catalog)} catalog models, "
           f"suites: {', '.join(names)}" + (f", touched families: {', '.join(families)}"
-                                           if families else ""))
+                                           if families else "")
+          + (f", backend: {args.backend}" if args.backend else ""))
     try:
         if catalog_error:
             print(catalog_error)
             ctx.record(Result("setup", "catalog", FAIL, detail=catalog_error))
         else:
+            # Pulled first, a download counts against no request's timeout: flm
+            # serve downloads a missing model inside the request that names it,
+            # and every request behind that one waits too.
+            # A GPU backend's models are pulled even when present: the pull
+            # checks their files against the pinned hashes and replaces any
+            # that do not match, which `flm list` does not.
+            missing = plan.missing(names, everything=bool(args.backend))
+            if missing:
+                budget = pull_budget(args)
+                limit = f"{budget / 60:g}-min budget" if budget else "no time limit"
+                what = ("pull (and verify) the models" if args.backend
+                        else "download the models this machine lacks")
+                print(f"\n== setup: {what} ({limit}): {', '.join(missing)}", flush=True)
+                started_pull = time.monotonic()
+                ctx.pull(missing, PULL_TIMEOUT, budget)
+                print(f"== setup done in {time.monotonic() - started_pull:.0f}s", flush=True)
             for name in names:
                 ctx.run_suite(SUITES[name])
     finally:

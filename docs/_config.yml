@@ -71,6 +71,8 @@ docs_nav:
     url: "/docs/install_win/"
   - label: Install-Linux
     url: "/docs/install_lin/"
+  - label: Build-Windows
+    url: "/docs/build_win/"
   - label: Instructions
     children:
       - label: Overview
@@ -137,6 +139,8 @@ docs_nav:
         url: "/docs/models/smolvla/"
       - label: Hy-MT2
         url: "/docs/models/hy-mt2/"
+      - label: Hy-Memory
+        url: "/docs/models/hy-memory/"
       - label: MiniCPM
         url: "/docs/models/minicpm/"
       - label: Nemotron Bolt
@@ -145,6 +149,8 @@ docs_nav:
         url: "/docs/models/nemotron3.5-bolt-dflash/"
       - label: Flash Models
         url: "/docs/models/flash/"
+      - label: Confucius4-R2T2
+        url: "/docs/models/r2t2/"
   - label: Benchmarks
     children:
       - label: Overview
@@ -181,6 +187,8 @@ docs_nav:
         url: "/docs/benchmarks/smolvla_results/"
       - label: Hy-MT2
         url: "/docs/benchmarks/hy-mt2_results/"
+      - label: Hy-Memory
+        url: "/docs/benchmarks/hy-memory_results/"
       - label: MiniCPM-V 4.7
         url: "/docs/benchmarks/minicpm-v-4.7_results/"
       - label: Nemotron Bolt
@@ -189,3 +197,7 @@ docs_nav:
         url: "/docs/benchmarks/nemotron3.5-bolt-dflash_results/"
       - label: Flash Models
         url: "/docs/benchmarks/flash_results/"
+      - label: Whisper
+        url: "/docs/benchmarks/whisper_results/"
+      - label: Confucius4-R2T2
+        url: "/docs/benchmarks/r2t2_results/"

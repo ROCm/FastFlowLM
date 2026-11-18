@@ -6,6 +6,7 @@
 /// \note This is a source file for the lfm2 class
 
 #include "AutoModel/modeling_lfm2.hpp"
+#include "models/lfm2/flm/aie2p/lfm2_npu.hpp"
 #include "utils/utils.hpp"
 #include "metrices.hpp"
 
@@ -103,9 +104,7 @@ void LFM2_5_TK::load_model(std::string model_path, json model_info, int default_
     config.temperature = 0.1;
     config.top_p = 0.1;
     config.top_k = 10;
-    config.rep_penalty_window = 1024;
     config.freq_penalty = 1.0;
-    config.freq_penalty_window = 1024;
     this->set_sampler(config);
     for (size_t i = 0; i < PROFILER_TYPE_NUM; i++) {
         this->profiler_list[i].reset();
@@ -153,8 +152,6 @@ bool LFM2_5_TK::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
 
     // hardware
     int restore_idx = -1;
-    lfm2_npu *lfm2_engine = dynamic_cast<lfm2_npu*>(this->lm_engine);
-
     // Prefix slots. The two tokens left out ("<think>\n") are fed by generate(); the next turn does not render them.
     // A continued message keeps all its tokens: they are the client's text, not the generation prompt.
     const size_t think_trim = meta_info.continue_final_message ? 0 : 2;
@@ -164,7 +161,7 @@ bool LFM2_5_TK::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
     this->_prefix_legacy_path();
 
     if (meta_info.restore_allowed) {
-        restore_idx = lfm2_engine->restore();
+        restore_idx = this->lm_engine->restore();
         this->total_tokens = restore_idx;
         this->token_history = checkpoint_his; // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
     }
@@ -176,7 +173,7 @@ bool LFM2_5_TK::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
     bool success = this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
 
     checkpoint_his = token_history;
-    int checkpoint_idx = lfm2_engine->checkpoint();
+    int checkpoint_idx = this->lm_engine->checkpoint();
 
     return success;
 }
@@ -305,7 +302,7 @@ std::string LFM2_5_TK::generate(chat_meta_info_t& meta_info, int length_limit, s
         token_history.pop_back();
     }
     std::cout << std::endl;
-    header_print("FLM", "Model RAW Output: \n" + result);
+    this->print_raw_output(result);
     return result;
 }
 

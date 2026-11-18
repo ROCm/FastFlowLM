@@ -2,7 +2,7 @@
 """Connection slots: every connection must give its slot back, however it ends.
 
 The server accepts at most ``--socket`` connections at once (default 10) and
-closes the rest on accept. A client that hangs up on a streaming reply used to
+turns the rest away with an HTTP 503. A client that hangs up on a streaming reply used to
 keep its slot forever, so after that many dropped streams the server turned
 every connection away until it was restarted. These cases drop more clients
 than the default limit allows, then check the limit is still exactly what it

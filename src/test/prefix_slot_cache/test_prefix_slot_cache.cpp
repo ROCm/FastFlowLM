@@ -308,6 +308,23 @@ void test_images() {
     CHECK(resume(cache, next, {222}) == 0);
     CHECK(resume(cache, next, {111}) == prompt.size());
 
+    // the same tokens with another picture of the same size replace the slot: the engine holds that one now
+    cache.set_live(prompt);
+    cache.save(prompt, {222}, false, 0);
+    CHECK(cache.slot_count() == 1);
+    CHECK(resume(cache, next, {111}) == 0);
+    CHECK(resume(cache, next, {222}) == prompt.size());
+
+    // a slot saved without the hash of a picture it holds is never resumed: the picture could be any
+    fake_engine e2;
+    PrefixSlotCache unhashed = make(e2);
+    unhashed.image_token_id = 99;
+    e2.length = static_cast<int>(prompt.size());
+    unhashed.set_live(prompt);
+    unhashed.save(prompt, {}, true, 0);
+    CHECK(unhashed.slot_count() == 1);
+    CHECK(resume(unhashed, next, {111}) == 0);
+
     struct image { int grid_h, grid_w; };
     struct payload { std::vector<image> images; std::vector<uint16_t> _data__processed; };
     payload p1{{{2, 2}, {2, 2}}, std::vector<uint16_t>(2 * 2 * 4 * 3 * 2, 7)};
@@ -318,6 +335,27 @@ void test_images() {
     CHECK(h1.size() == 2 && h2.size() == 2);
     CHECK(h1[0] == h2[0]);
     CHECK(h1[1] != h2[1]);
+}
+
+void test_picture_replaced_keeps_others() {
+    std::printf("a slot replaced for another picture takes only the slots that need its rows\n");
+    fake_engine e;
+    PrefixSlotCache cache = make(e);
+    cache.image_token_id = 99999;   // not a token of seq()
+    const auto sys = seq(1, 600);
+    const auto x = cat(sys, seq(5000, 100));                                   // a text conversation
+    prefill(cache, e, x, 600);                                                 // boundary H, end EX
+    const auto y = cat(cat(sys, std::vector<int>(16, 99999)), seq(6000, 100));    // an image conversation
+    CHECK(resume(cache, y, {111}) == sys.size());
+    e.length = static_cast<int>(y.size());
+    cache.set_live(y);
+    cache.save(y, {111}, false, cache.end_kv_from(y, 600));                    // EY
+    CHECK(cache.slot_count() == 3);
+    cache.save(y, {222}, false, cache.end_kv_from(y, 600));                    // the same question about another picture
+    CHECK(cache.slot_count() == 3);
+    CHECK(resume(cache, cat(y, seq(7000, 5)), {222}) == y.size());
+    CHECK(resume(cache, cat(y, seq(7000, 5)), {111}) == sys.size());
+    CHECK(resume(cache, cat(x, seq(8000, 5))) == x.size());                    // the text conversation keeps its end slot
 }
 
 void test_restore_failure_and_off() {
@@ -395,6 +433,7 @@ int main() {
     test_min_end_gain();
     test_budget();
     test_images();
+    test_picture_replaced_keeps_others();
     test_restore_failure_and_off();
     test_report();
     if (failures > 0) {

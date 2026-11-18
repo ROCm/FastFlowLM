@@ -35,6 +35,9 @@ const std::vector<int> kPackageEosIds = {128001, 128008, 128009};
 /// \brief what llama_core_backend.cpp states
 const std::vector<int> kCoreEosIds = {128009, 128008, 128001};
 constexpr int kBosId = 128000;
+/// \brief config.json's vocab_size; a forward returns this many logits, as the
+///        frontend refuses fewer
+constexpr int kVocabSize = 128256;
 
 std::vector<int> g_encoded_tokens;
 std::vector<int> g_samples;
@@ -49,14 +52,14 @@ public:
         forwarded.push_back(token);
         if (fail_forward) Fail();
         ++position;
-        return buffer<bf16>(1);
+        return buffer<bf16>(kVocabSize);
     }
     buffer<bf16> prefill(std::vector<int>& tokens, void*) override {
         ++prefill_calls;
         prefill_sizes.push_back(static_cast<int>(tokens.size()));
         if (fail_prefill) Fail();
         position += static_cast<int>(tokens.size());
-        return buffer<bf16>(1);
+        return buffer<bf16>(kVocabSize);
     }
     void set_context_length(int value) override { position = value; }
     void load_weights(Q4NX&) override {}
@@ -142,7 +145,7 @@ public:
             ("flm-llama-frontend-" + std::to_string(++serial));
         std::filesystem::create_directories(path_);
         Write(path_ / "config.json",
-              {{"model_type", "llama"}, {"vocab_size", 128256},
+              {{"model_type", "llama"}, {"vocab_size", kVocabSize},
                {"bos_token_id", kBosId}, {"eos_token_id", eos_token_id}});
         Write(path_ / "tokenizer_config.json",
               {{"bos_token", "<|begin_of_text|>"}, {"bos_token_id", kBosId},
@@ -209,8 +212,6 @@ Sampler::Sampler(int features, sampler_config& config)
       freq_penalty(config.freq_penalty), pre_penalty(config.pre_penalty),
       top_k(config.top_k), top_p(config.top_p), min_p(config.min_p),
       temperature(config.temperature), total_tokens(0),
-      freq_penalty_window(config.freq_penalty_window),
-      rep_penalty_window(config.rep_penalty_window),
       repeat_last_n(config.repeat_last_n),
       use_optimized_sampling(config.use_optimized_sampling) {
     logits.resize(1); counters.resize(1); token_positions.resize(1, -1);

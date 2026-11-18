@@ -52,8 +52,7 @@ public:
     ///       surfaces a clear message instead of crashing.
     buffer<bf16> say(std::string wav_out_path = "");
 
-    /// \brief Sampler / context / bookkeeping overrides (engine-driven).
-    void set_sampler(sampler_config& sampler_config) override;
+    /// \brief Context / bookkeeping overrides (engine-driven).
     void clear_context() override;
     void set_max_length(unsigned int MAX_L) override;
     int get_current_context_length() override;

@@ -56,8 +56,12 @@ function(_flm_audio_project name urls sha256 byproduct)
         BUILD_BYPRODUCTS ${byproduct})
 endfunction()
 
+# xiph/opus has no GitHub release asset for 1.6.1, and downloads.xiph.org
+# redirects to ftp.osuosl.org, whose certificate's revocation server Windows
+# (schannel) cannot always reach (CRYPT_E_REVOCATION_OFFLINE). The extra
+# mirrors serve the identical tarball under certificates from other CAs.
 _flm_audio_project(opus
-    "https://downloads.xiph.org/releases/opus/opus-1.6.1.tar.gz;https://ftp.osuosl.org/pub/xiph/releases/opus/opus-1.6.1.tar.gz"
+    "https://downloads.xiph.org/releases/opus/opus-1.6.1.tar.gz;https://ftp.osuosl.org/pub/xiph/releases/opus/opus-1.6.1.tar.gz;https://mirror.csclub.uwaterloo.ca/xiph/releases/opus/opus-1.6.1.tar.gz;https://distfiles.gentoo.org/distfiles/cb/opus-1.6.1.tar.gz"
     6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1
     ${_flm_opus_lib}
     -DOPUS_BUILD_PROGRAMS=OFF
