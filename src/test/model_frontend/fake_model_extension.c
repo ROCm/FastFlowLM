@@ -39,6 +39,10 @@ void flm_test_record_event(int event);
 #define FLM_TEST_FAMILY "plugin-test"
 #endif
 
+#ifndef FLM_TEST_PROVIDER
+#define FLM_TEST_PROVIDER "plugin-provider"
+#endif
+
 typedef struct fake_backend {
     uint16_t logits[4];
     int32_t context_length;
@@ -438,7 +442,7 @@ static int RegisterExtension(
     }
     status = registrar->register_backend_provider(
         registrar->host_context, FLM_TEST_FAMILY, "flm",
-        "plugin-provider", &traits, CreateBackend, state);
+        FLM_TEST_PROVIDER, &traits, CreateBackend, state);
     if (status != 0) return status;
 #if FLM_TEST_EXTENSION_MODE == FLM_TEST_EXTENSION_MODE_COMPLETE
     if (registrar->struct_size <
@@ -446,7 +450,7 @@ static int RegisterExtension(
         !registrar->register_frontend_provider)
         return FLM_MODEL_EXTENSION_STATUS_UNSUPPORTED;
     return registrar->register_frontend_provider(
-        registrar->host_context, FLM_TEST_FAMILY, "plugin-provider",
+        registrar->host_context, FLM_TEST_FAMILY, FLM_TEST_PROVIDER,
         CreateFrontend, state);
 #else
     return FLM_MODEL_EXTENSION_STATUS_OK;

@@ -58,6 +58,11 @@ add_fake_model_extension(
     fake_complete_model_extension "${FLM_TEST_NPU_RUNTIME}"
     "${FLM_TEST_EXTENSION_MODE_COMPLETE}")
 add_fake_model_extension(
+    fake_alternative_model_extension "${FLM_TEST_NPU_RUNTIME}"
+    "${FLM_TEST_EXTENSION_MODE_COMPLETE}")
+target_compile_definitions(fake_alternative_model_extension PRIVATE
+    FLM_TEST_PROVIDER="alternative-provider")
+add_fake_model_extension(
     fake_failing_model_extension "${FLM_TEST_NPU_RUNTIME}"
     "${FLM_TEST_EXTENSION_MODE_REGISTRATION_FAILURE}")
 add_fake_model_extension(
@@ -70,6 +75,7 @@ add_fake_model_extension(
     fake_downcast_family_model_extension "${FLM_TEST_NPU_RUNTIME}"
     "${FLM_TEST_EXTENSION_MODE_BACKEND}" "minicpm-v-4.7")
 foreach(target IN ITEMS
+        fake_alternative_model_extension
         fake_reserved_family_model_extension
         fake_downcast_family_model_extension)
     file(GENERATE
@@ -152,6 +158,7 @@ target_compile_definitions(test_model_frontend PRIVATE
     FLM_TEST_EXTENSION_DEPENDENCY_PATH="$<TARGET_FILE:fake_model_extension_dependency>"
     FLM_TEST_INCOMPATIBLE_EXTENSION_PATH="$<TARGET_FILE_DIR:fake_incompatible_model_extension>/fake-incompatible-model-extension.json"
     FLM_TEST_COMPLETE_EXTENSION_PATH="$<TARGET_FILE_DIR:fake_complete_model_extension>/fake-complete-model-extension.json"
+    FLM_TEST_ALTERNATIVE_EXTENSION_PATH="$<TARGET_FILE_DIR:fake_alternative_model_extension>/fake_alternative_model_extension.json"
     FLM_TEST_FAILING_EXTENSION_PATH="$<TARGET_FILE_DIR:fake_failing_model_extension>/fake-failing-model-extension.json"
     FLM_TEST_NO_CAPABILITY_EXTENSION_PATH="$<TARGET_FILE_DIR:fake_no_capability_model_extension>/fake-no-capability-model-extension.json"
     FLM_TEST_RESERVED_FAMILY_EXTENSION_PATH="$<TARGET_FILE_DIR:fake_reserved_family_model_extension>/fake_reserved_family_model_extension.json"
@@ -168,7 +175,7 @@ target_link_libraries(test_model_frontend PRIVATE
     flm_model_extension_contract ${CMAKE_DL_LIBS})
 add_dependencies(test_model_frontend
     fake_model_extension fake_incompatible_model_extension
-    fake_complete_model_extension fake_failing_model_extension
+    fake_complete_model_extension fake_alternative_model_extension fake_failing_model_extension
     fake_no_capability_model_extension
     fake_reserved_family_model_extension
     fake_downcast_family_model_extension)

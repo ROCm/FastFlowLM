@@ -760,11 +760,9 @@ void FrontendRegistry::load_extension(
         if (!inventory.emplace(Key{pending.family, pending.provider}, pending.create_embedding != nullptr).second)
             throw std::runtime_error("frontend '" + pending.family + "/" + pending.provider + "' is already registered");
     }
-    if (extension->catalog) {
-        std::vector<std::string> frontends;
-        for (const auto& [key, embedding] : inventory) frontends.push_back(key.first);
+    const auto validate_frontends = [&](const catalog::ModelCatalogOverlay& overlay) {
         for (const auto& [model_type, sizes] :
-             extension->catalog->document.at("models").items()) {
+             overlay.document.at("models").items()) {
             for (const auto& [size, catalog_entry] : sizes.items()) {
                 const std::string tag = model_type + ":" + size;
                 for (const auto& entry :
@@ -797,7 +795,14 @@ void FrontendRegistry::load_extension(
                 }
             }
         }
-
+    };
+    // New providers can make an earlier catalog's implicit selection ambiguous.
+    for (const auto& loaded : extensions_)
+        if (loaded->catalog) validate_frontends(*loaded->catalog);
+    if (extension->catalog) {
+        validate_frontends(*extension->catalog);
+        std::vector<std::string> frontends;
+        for (const auto& [key, embedding] : inventory) frontends.push_back(key.first);
         auto providers =
             backend::BackendRegistry::instance().provider_inventory();
         for (const auto& pending : registration.pending_backends) {

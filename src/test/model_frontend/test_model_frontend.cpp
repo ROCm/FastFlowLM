@@ -247,6 +247,51 @@ void test_competing_extension_frontends() {
     }
 }
 
+void test_catalog_frontend_selection_in_both_load_orders() {
+    const auto directory = std::filesystem::path(FLM_TEST_COMPLETE_EXTENSION_PATH).parent_path();
+    auto manifest = ReadJson(FLM_TEST_COMPLETE_EXTENSION_PATH);
+    const auto original = ReadJson(directory / manifest.at("catalog").get<std::string>());
+    manifest["catalog"] = "load-order-catalog.json";
+    const auto first = WriteManifest(directory, "load-order-extension.json", manifest).string();
+    const std::string second = FLM_TEST_ALTERNATIVE_EXTENSION_PATH;
+    const std::string family = "complete-plugin-test";
+    for (const std::string mode : {"implicit", "preferred", "explicit", "builtin"}) {
+        auto catalog = original;
+        auto& entry = catalog["models"]["complete-plugin-model"]["1b"];
+        if (mode == "implicit" || mode == "builtin") entry.erase("frontend_provider");
+        // A preferred source can also rely on the sole-provider default.
+        if (mode == "preferred") entry["preferred_source"] = {{"frontend_provider", nullptr}};
+        WriteManifest(directory, "load-order-catalog.json", catalog);
+        for (bool reverse : {false, true}) {
+            FrontendRegistry registry;
+            if (mode == "builtin")
+                registry.register_frontend(family, [](void*) { return MarkerFrontend(1); });
+            registry.load_extension(reverse ? second : first, {});
+            const auto catalogs_before = registry.catalog_overlays().size();
+            if (mode == "implicit" || mode == "preferred") {
+                RequireContains(RequireThrows([&] {
+                    registry.load_extension(reverse ? first : second, {});
+                }), "Ambiguous frontend family");
+                // Rejection must leave the first extension and its models usable.
+                TEST_REQUIRE(registry.catalog_overlays().size() == catalogs_before);
+                TEST_REQUIRE(Marker(registry.create(family, nullptr)) == 84);
+                const auto rejected = reverse ? "plugin-provider" : "alternative-provider";
+                RequireThrows([&] { registry.create(family, nullptr, rejected); });
+                TEST_REQUIRE(!BackendRegistry::instance().has_provider(family, "flm", rejected));
+            } else {
+                registry.load_extension(reverse ? first : second, {});
+                TEST_REQUIRE(registry.catalog_overlays().size() == 1);
+                const auto provider = entry.value("frontend_provider", "");
+                TEST_REQUIRE(Marker(registry.create(family, nullptr, provider)) == (mode == "builtin" ? 1 : 84));
+                for (const auto* id : {"plugin-provider", "alternative-provider"}) {
+                    TEST_REQUIRE(Marker(registry.create(family, nullptr, id)) == 84);
+                    TEST_REQUIRE(BackendRegistry::instance().has_provider(family, "flm", id));
+                }
+            }
+        }
+    }
+}
+
 void test_competing_embedding_providers() {
     auto& registry = FrontendRegistry::instance();
     registry.register_embedding("test-embedding", [](void*) { return std::make_unique<MarkerEmbedding>(7); });
@@ -946,6 +991,7 @@ int main() {
             "manifest schema fixtures match runtime contract");
     RunTest(test_frontend_provider_selection, "frontend provider selection");
     RunTest(test_competing_extension_frontends, "competing extension frontends");
+    RunTest(test_catalog_frontend_selection_in_both_load_orders, "catalog frontend selection in both load orders");
     RunTest(test_competing_embedding_providers, "competing embedding providers");
     std::cout << "All model frontend tests passed\n";
     return 0;
