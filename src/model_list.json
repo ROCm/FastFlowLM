@@ -2574,7 +2574,7 @@
                 }
             }
         },
-        "gemma4-12b-oga-hipep": {
+        "gemma4-it-oga-hipep": {
             "12b": {
                 "name": "Gemma-4-12B-it_gpuep_1.0_gpu_128",
                 "url": "https://huggingface.co/amd/Gemma-4-12B-it_gpuep_1.0_gpu_128/resolve/adc217f3ae0f54bd55aa049845f132c6706ba9d9",
@@ -2614,56 +2614,8 @@
                         "revision": "43c9d014b231474fa7212dbb48a762566c2b255d"
                     }
                 },
-                "model_info_key": "gemma4-it-oga-hipep:12b",
                 "label": [
-                    "text",
-                    "image",
-                    "reasoning",
-                    "tool-calling"
-                ]
-            }
-        },
-        "gemma4-it-oga-hipep": {
-            "12b": {
-                "name": "Gemma-4-12B-it_gpuep_1.0_gpu_128",
-                "url": "https://huggingface.co/amd/Gemma-4-12B-it_gpuep_1.0_gpu_128/resolve/adc217f3ae0f54bd55aa049845f132c6706ba9d9",
-                "file_url": "https://huggingface.co/api/models/amd/Gemma-4-12B-it_gpuep_1.0_gpu_128/tree/adc217f3ae0f54bd55aa049845f132c6706ba9d9",
-                "size": 9446605606,
-                "default_context_length": 32768,
-                "max_prefill_len": 4096,
-                "details": {
-                    "family": "gemma4e",
-                    "think": true,
-                    "think_toggleable": true,
-                    "parameter_size": "12B",
-                    "quantization_level": "INT4 K-quant group-32, fp16 activations"
-                },
-                "flm_min_version": "1.0.13",
-                "vlm": false,
-                "files": [
-                    "audio_encoder/model.onnx",
-                    "audio_encoder/model.onnx.data",
-                    "audio_feature_extraction.json",
-                    "chat_template.jinja",
-                    "config.json",
-                    "decoder/model.onnx",
-                    "decoder/model.onnx.data",
-                    "embedding/model.onnx",
-                    "embedding/model.onnx.data",
-                    "genai_config.json",
-                    "image_processor.json",
-                    "tokenizer.json",
-                    "tokenizer_config.json",
-                    "vision_encoder/model.onnx",
-                    "vision_encoder/model.onnx.data"
-                ],
-                "file_sources": {
-                    "config.json": {
-                        "url": "https://huggingface.co/google/gemma-4-12B-it",
-                        "revision": "43c9d014b231474fa7212dbb48a762566c2b255d"
-                    }
-                },
-                "label": [
+                    "vision",
                     "reasoning",
                     "tool-calling"
                 ]
@@ -2682,8 +2634,8 @@
                     "parameter_size": "26B-A4B",
                     "quantization_level": "INT4 block-32, QMoE experts, fp16 activations"
                 },
-                "flm_min_version": "1.0.13",
-                "vlm": false,
+                "flm_min_version": "1.0.14",
+                "vlm": true,
                 "files": [
                     "chat_template.jinja",
                     "config.json",
@@ -2705,6 +2657,7 @@
                     }
                 },
                 "label": [
+                    "vision",
                     "reasoning",
                     "tool-calling"
                 ]

@@ -2497,7 +2497,7 @@ void TestTheBackendRunsThePackagesImages() {
     TEST_REQUIRE(backend->replayed_tokens() == 0);
 }
 
-void TestGemma4UnifiedSharesThePresentBufferAndSkipsGraphCapture() {
+void TestGemma4UnifiedSkipsGraphCaptureAndKeepsThePackagesPresentBuffer() {
     g_fake = FakeOga{};
     const auto api = FakeApi();
     PackageDir package(kVocab, "<|im_end|>",
@@ -2505,7 +2505,7 @@ void TestGemma4UnifiedSharesThePresentBufferAndSkipsGraphCapture() {
                        "gemma4_unified");
     TEST_REQUIRE(flm::oga::OpenModel(*api, package.dir.path) != nullptr);
     TEST_REQUIRE(g_fake.overlays.size() == 2);
-    RequireContains(g_fake.overlays[1], R"("past_present_share_buffer":true)");
+    TEST_REQUIRE(g_fake.overlays[1].find("past_present_share_buffer") == std::string::npos);
     RequireContains(g_fake.overlays[1], R"("enable_graph_capture":"0")");
     RequireContains(g_fake.overlays[1], R"("hip_graph_enable":"0")");
     TEST_REQUIRE(g_fake.provider_options.size() == 6);
@@ -2518,7 +2518,7 @@ void TestGemma4UnifiedSharesThePresentBufferAndSkipsGraphCapture() {
     }
 }
 
-void TestAnotherModelTypeDoesNotShareThePresentBuffer() {
+void TestAnotherModelTypeTakesOnlyTheSessionOverlay() {
     g_fake = FakeOga{};
     const auto api = FakeApi();
     PackageDir package;
@@ -2534,7 +2534,6 @@ void TestTheGemma4UnifiedPackageStillRunsTextWithoutAVisionStartToken() {
                        R"(,"image_token_id":40,"vision":{"filename":"vision_encoder/model.onnx"})",
                        "gemma4_unified");
     auto backend = flm::oga::hipep_factory()(package.Context(64));
-    RequireContains(g_fake.overlays[1], R"("past_present_share_buffer":true)");
     std::vector<int> text{1, 2};
     backend->engine().prefill(text);
     TEST_REQUIRE(g_fake.appends.back() == (Tokens{1, 2}));
@@ -2692,8 +2691,8 @@ int main(int argc, char** argv) {
     RUN(TestARefusedRegistrationNamesTheLibrary);
     RUN(TestANonAsciiLibraryPathIsRefusedBeforeOgaSeesIt);
     RUN(TestOpenModelPutsTheDecoderOnTheRegisteredEpAlone);
-    RUN(TestGemma4UnifiedSharesThePresentBufferAndSkipsGraphCapture);
-    RUN(TestAnotherModelTypeDoesNotShareThePresentBuffer);
+    RUN(TestGemma4UnifiedSkipsGraphCaptureAndKeepsThePackagesPresentBuffer);
+    RUN(TestAnotherModelTypeTakesOnlyTheSessionOverlay);
     RUN(TestAStagedImagePromptIsTheNextPrefill);
     RUN(TestADroppedOrRefusedStageDoesNotReachTheNextPrefill);
     RUN(TestAStagedImagePromptTakesTheLeastRecentlyUsedSlot);

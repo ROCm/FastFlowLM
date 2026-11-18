@@ -11,6 +11,10 @@
 #include "metrices.hpp"
 #include "models/gemma4e/flm/aie2p/gemma4e_npu.hpp"
 #include "models/gemma4e_flash/flm/aie2p/gemma4e_flash.hpp"
+#if defined(FLM_ENABLE_OGA_HIPEP)
+#include "oga/oga_engine.hpp"
+#include "oga/oga_image_bytes.hpp"
+#endif
 
 #include <cctype>
 
@@ -433,22 +437,22 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
         header_print("WARNING", "No messages or prompt provided");
         return false;
     }
-    // On OGA these models run text only. A ModelRequestError, not the engine_config()
-    // error: the handlers turn only the former into an HTTP 400.
-    if (this->backend_id() == flm::backend::kOgaHipepBackendId) {
-        bool images = !input.images.empty();
+    // On OGA the package's processor takes the images, and there is no audio. A ModelRequestError,
+    // not the engine_config() error: the handlers turn only the former into an HTTP 400.
+    const bool oga = this->backend_id() == flm::backend::kOgaHipepBackendId;
+    if (oga) {
         bool audios = !input.audios.empty();
-        for (const auto& message : input.messages) {
-            images = images || (message.contains("images") && !message["images"].empty());
+        for (const auto& message : input.messages)
             audios = audios || (message.contains("audios") && !message["audios"].empty());
-        }
-        if (images || audios) {
+        if (audios) {
             throw ModelRequestError(400, false,
-                "the loaded backend '" + this->backend_id() + "' does not accept " +
-                    (images ? "image" : "audio") + " input",
+                "the loaded backend '" + this->backend_id() + "' does not accept audio input",
                 "invalid_request_error");
         }
     }
+#if defined(FLM_ENABLE_OGA_HIPEP)
+    std::vector<std::string> oga_image_bytes;
+#endif
 
     constexpr bool DEBUG_IMAGE_PREPROCESS = false;
     gemma4e_image_payload_t image_payload;
@@ -479,6 +483,14 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
             if (message.contains("images")) {
                 for (auto& img : message["images"]) {
                     std::string img_str = img.get<std::string>();
+#if defined(FLM_ENABLE_OGA_HIPEP)
+                    if (oga) {
+                        oga_image_bytes.push_back(flm::oga::ImageBytesFromBase64(std::move(img_str)));
+                        newContent.push_back({{"type", "image"}, {"image", img}});
+                        total_images++;
+                        continue;
+                    }
+#endif
 
                     gemma4e_image_t image = this->load_image_base64(img_str);
                     if (image.width <= 0 || image.height <= 0) {
@@ -571,6 +583,12 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
         }
 
         if (input.images.size() > 0) {
+#if defined(FLM_ENABLE_OGA_HIPEP)
+            if (oga) {
+                for (const auto& img_str : input.images)
+                    oga_image_bytes.push_back(flm::oga::ImageBytesFromFile(img_str));
+            } else
+#endif
             for (const auto& img_str : input.images) {
                 gemma4e_image_t image = this->load_image(img_str);
                 std::vector<bf16> pixel_values;
@@ -649,6 +667,43 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
         messages.push_back(content);
         templated_text = this->apply_chat_template(messages);
     }
+
+#if defined(FLM_ENABLE_OGA_HIPEP)
+    if (oga && !oga_image_bytes.empty()) {
+        auto* engine = dynamic_cast<flm::oga::OgaEngine*>(this->lm_engine);
+        if (!engine)
+            throw std::runtime_error("oga-hipep engine is not an OgaEngine");
+        this->_prefix_legacy_path();
+        // The whole prompt, its closing empty thought channel included: generate() does not feed that channel.
+        std::vector<int> image_tokens = engine->StagePromptImages(templated_text, oga_image_bytes);
+        this->profiler_list[TKOEN_ENCODE_TIME].stop(image_tokens.size());
+        // The processor already ran the whole prompt, so this prefill must not be chunked,
+        // nor start after a cached prefix: the staged inputs are prefilled from token 0.
+        if (!this->token_history.empty())
+            this->clear_context();
+        this->continued_prompt_.rendered.clear();
+        this->continued_prompt_.ran.clear();
+        const int saved_prefill = meta_info.max_prefill_len;
+        meta_info.max_prefill_len = 0;
+        bool success = false;
+        try {
+            success = this->_shared_insert(meta_info, image_tokens, is_cancelled, nullptr);
+        } catch (...) {
+            meta_info.max_prefill_len = saved_prefill;
+            engine->DropStagedPrompt();
+            throw;
+        }
+        meta_info.max_prefill_len = saved_prefill;
+        // A request that stopped before its prefill (cancelled, or refused for its
+        // length) must not leave its stage to the next request.
+        engine->DropStagedPrompt();
+        if (this->enable_think && !this->single_turn) {
+            this->_checkpoint_history();
+            this->lm_engine->checkpoint();
+        }
+        return success;
+    }
+#endif
 
     std::vector<int> tokens_init = this->tokenizer->encode(templated_text);
 
