@@ -31,7 +31,6 @@ QKV_buffer_L_head_row_major?=1 # 1 means the qkv buffer in Lx (  DQ*NUM_Q_K_HEAD
 
 HOME_DIR := $(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))/
 HOST_DIR := $(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
-MlirDIR ?= $(or $(MLIR_AIE_DIR),$(HOME)/mlir-aie)
 # 0 = Peano (default), 1 = chess. Both give bit-identical output; Peano is faster here
 ENABLE_CHESSCC ?= 0
 
@@ -126,7 +125,3 @@ route: ${IRON_BOTH_MLIR_TARGET}
 	aie-opt --aie-create-pathfinder-flows --aie-find-flows ${<} | aie-translate --aie-flows-to-json > ./routes/route.json
 	python visualize.py -j ./routes/route.json
 
-
-trace: trace.txt
-	${MlirDIR}/programming_examples/utils/parse_trace.py --input trace.txt --mlir build/mlir/MVM_q80.mlir  --output MVM_q80.json
-	${MlirDIR}/programming_examples/utils/get_trace_summary.py --input MVM_q80.json

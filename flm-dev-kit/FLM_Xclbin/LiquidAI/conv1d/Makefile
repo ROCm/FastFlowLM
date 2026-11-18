@@ -64,8 +64,3 @@ route: ${IRON_BOTH_MLIR_TARGET}
 	mkdir -p routes
 	aie-opt --aie-create-pathfinder-flows --aie-find-flows ${<} | aie-translate --aie-flows-to-json > ./routes/route.json
 	python visualize.py -j ./routes/route.json
-
-trace: ${HOST_C_TARGET}
-	${powershell} ./$< 
-	~/mlir-aie/programming_examples/utils/parse_trace.py --input trace.txt --mlir build/mlir/*.mlir --colshift 0 --output trace.json
-	~/mlir-aie/programming_examples/utils/get_trace_summary.py --input trace.json

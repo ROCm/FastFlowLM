@@ -68,11 +68,6 @@ clean_host:
 test: ${HOST_C_TARGET} ${XCLBIN_TARGETS}
 	./${HOST_C_TARGET}
 
-trace: ${HOST_C_TARGET}
-	${powershell} ./$< 
-	~/mlir-aie/programming_examples/utils/parse_trace.py --input trace.txt --mlir build/mlir/*.mlir --colshift 0 --output trace.json
-	~/mlir-aie/programming_examples/utils/get_trace_summary.py --input trace.json
-
 route: ${IRON_BOTH_MLIR_TARGET}
 	aie-opt --aie-create-pathfinder-flows --aie-find-flows ${<} | aie-translate --aie-flows-to-json > route.json
 	python visualize.py -j route.json

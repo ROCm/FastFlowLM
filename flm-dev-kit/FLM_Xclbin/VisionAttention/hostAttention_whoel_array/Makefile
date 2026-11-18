@@ -11,7 +11,6 @@ include ../makefiles/common.mk
 DEVICE ?= npu2
 HOME_DIR := $(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))/..
 HOST_DIR := $(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
-MlirDIR ?= $(or $(MLIR_AIE_DIR),$(HOME)/mlir-aie)
 # do you want chesscc? compiles slower
 ENABLE_CHESSCC ?= 0
 
@@ -266,7 +265,3 @@ route: ${IRON_BOTH_MLIR_TARGET}
 	aie-opt --aie-create-pathfinder-flows --aie-find-flows ${<} | aie-translate --aie-flows-to-json > ./routes/route.json
 	python visualize.py -j ./routes/route.json
 
-
-trace: trace.txt
-	${MlirDIR}/programming_examples/utils/parse_trace.py --input trace.txt --mlir build/mlir/attention_bf16.mlir  --output attention_bf16.json
-	${MlirDIR}/programming_examples/utils/get_trace_summary.py --input attention_bf16.json
