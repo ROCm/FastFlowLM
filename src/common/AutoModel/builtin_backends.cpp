@@ -135,8 +135,8 @@ void register_builtin_backends(BackendRegistry& registry) {
     registry.register_backend("gemma4e", flm::backend::kOgaHipepBackendId,
                               flm::oga::hipep_factory(),
                               flm::oga::hipep_traits());
-    // The Gemma 4 12B GPU package uses the gemma4-12b frontend. The tag
-    // gemma4-12b-oga-hipep selects this backend; details.family stays gemma4-12b.
+    // The Gemma 4 12B GPU package (gemma4-it-oga-hipep:12b) runs on the 12B's
+    // own frontend, as gemma4-it:12b does on the NPU.
     registry.register_backend("gemma4-12b", flm::backend::kOgaHipepBackendId,
                               flm::oga::hipep_factory(),
                               flm::oga::hipep_traits());

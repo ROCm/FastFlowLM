@@ -1,9 +1,10 @@
 // Copyright (c) 2026 Advanced Micro Devices, Inc.
 
 /// \file test_qwen_frontend.cpp
-/// \brief fake-backend regression coverage for the Qwen3.5VL OGA frontend
+/// \brief fake-backend regression coverage for the Qwen3.5VL and Qwen2 OGA frontends
 
 #include <AutoModel/model_backend.hpp>
+#include <AutoModel/modeling_qwen2.hpp>
 #include <AutoModel/modeling_qwen3_5vl.hpp>
 #include <oga/oga_vision.hpp>
 #include <tensor_utils/safe_tensors.hpp>
@@ -178,6 +179,36 @@ public:
     FakeEngine& engine() const { return *engine_; }
     void set_total_tokens(std::uint32_t value) { total_tokens = value; }
     void set_vision_geometry(const qwen3_5vl_vision_geometry_t& geometry) { vision_geometry = geometry; }
+
+private:
+    FakeEngine* engine_{};
+};
+
+/// \brief the Qwen2 frontend (qwen2.5-it, qwen2.5-coder-it) on the same fake OGA backend
+class Qwen2Harness final : public Qwen2 {
+public:
+    Qwen2Harness() : Qwen2(nullptr) {
+        auto backend = std::make_unique<FakeOgaBackend>(64);
+        engine_ = &backend->fake_engine();
+        backend_ = std::move(backend);
+        lm_engine = &backend_->engine();
+        tokenizer = std::make_unique<Tokenizer>("");
+        sampler_config config;
+        sampler = std::make_unique<Sampler>(kVocab, config);
+        MAX_L = 128;
+        eos_token_ids = {kEos, kImEnd};
+        bos_token_id = -1;
+        has_bos_token = false;
+        log_raw_output = false;
+    }
+
+    std::string apply_chat_template(nlohmann::ordered_json&,
+                                    nlohmann::ordered_json,
+                                    bool) override {
+        return "fake rendered prompt";
+    }
+
+    FakeEngine& engine() const { return *engine_; }
 
 private:
     FakeEngine* engine_{};
@@ -800,6 +831,36 @@ void ANewImageAfterACachedOneRunsAlone() {
     Require(meta.cached_prompt_tokens == 8, "the checkpoint with the cached image must count as cached");
 }
 
+void Qwen2RunsTextOnOga() {
+    Reset({10, 11, 12}, {7});
+    Qwen2Harness model;
+    auto meta = Meta();
+    auto input = TextInput();
+    Require(model.insert(meta, input), "a text prompt must still run");
+    Require(model.engine().prefills.back() == std::vector<int>({10, 11, 12}), "the whole prompt must run");
+}
+
+void RequireQwen2RefusesImage(lm_uniform_input_t input) {
+    Reset({10, 11, 12}, {7});
+    Qwen2Harness model;
+    auto meta = Meta();
+    try {
+        model.insert(meta, input);
+    } catch (const ModelRequestError& error) {
+        Require(error.http_code() == 400, "an image sent to Qwen2 on OGA must be an HTTP 400");
+        Require(model.engine().prefills.empty(), "nothing may run for a refused image");
+        return;
+    }
+    throw std::runtime_error("Qwen2 on OGA must refuse images, not answer without them");
+}
+
+void Qwen2RefusesImagesOnOga() {
+    RequireQwen2RefusesImage(ImageInput(1));
+    auto cli = TextInput();
+    cli.images = {"image.png"};
+    RequireQwen2RefusesImage(cli);
+}
+
 }  // namespace
 
 Tokenizer::Tokenizer(const std::string&) { is_doubled_encoded = false; }
@@ -882,6 +943,7 @@ void Qwen3_5VL::preprocess_image(qwen3_5vl_image_t& image, std::vector<bf16>& pi
 }
 
 extern "C" const flm_state_api* qwen3_5vl_state_api(void*) { return nullptr; }
+extern "C" const flm_state_api* qwen2_npu_state_api(void*) { return nullptr; }
 
 int main() {
     int failures = 0;
@@ -921,6 +983,8 @@ int main() {
     run("another image of the same size runs the prompt again", AnotherImageOfTheSameSizeRunsTheWholePromptAgain);
     run("the same image prompt again carries its image", TheSameImagePromptAgainCarriesItsImage);
     run("a new image after a cached one runs alone", ANewImageAfterACachedOneRunsAlone);
+    run("Qwen2 runs text on OGA", Qwen2RunsTextOnOga);
+    run("Qwen2 refuses images on OGA", Qwen2RefusesImagesOnOga);
     if (failures == 0) std::cout << "Qwen frontend regression tests passed\n";
     return failures == 0 ? 0 : 1;
 }

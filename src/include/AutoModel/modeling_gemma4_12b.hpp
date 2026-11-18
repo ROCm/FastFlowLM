@@ -31,6 +31,27 @@ private:
     ///        insert() trims those tokens from the prompt only when it already ends with them.
     bool feed_empty_thought_ = false;
 
+    /// \brief Keep what the engine ran when the prompt goes on from its last reply
+    /// \note As in Gemma4e: the template renders a past reply without the thought
+    ///       channel the engine ran with it (the empty one generate() feeds when
+    ///       thinking is off), so the prompt leaves the engine's history right after
+    ///       that reply's header. When the prompt's copy of the reply is the one the
+    ///       engine generated, the prompt is rewritten to the engine's history plus
+    ///       what follows the reply. A later turn renders the earlier replies as this
+    ///       prompt does, so it is matched against this prompt (continued_prompt_)
+    ///       and continues too. A reply with a thought, or cut inside its thought
+    ///       channel, is not continued: that turn runs as rendered.
+    /// \param rendered gets the prompt as rendered when `tokens` is rewritten
+    /// \return whether `tokens` now continues token_history
+    bool _continue_verbatim(std::vector<int>& tokens, std::optional<int> requested_max_new_tokens,
+                            std::vector<int>& rendered);
+
+    /// \brief the last prompt _continue_verbatim rewrote, while the engine's history goes on from it
+    struct {
+        std::vector<int> rendered;  ///< as the template rendered it
+        std::vector<int> ran;       ///< as the engine ran it
+    } continued_prompt_;
+
     void setup_tokenizer(std::string model_path);
 
 

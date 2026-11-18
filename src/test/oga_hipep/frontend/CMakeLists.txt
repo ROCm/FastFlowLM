@@ -24,13 +24,15 @@ set(XRT_LIB_DIR "${XRT_INCLUDE_DIR}/../lib" CACHE PATH "Directory containing xrt
 include("${FLM_SOURCE_DIR}/common/chat/chat_sources.cmake")
 include(CTest)
 
-function(add_frontend_test name frontend_source)
+function(add_frontend_test name)
+    set(frontend_sources ${ARGN})
+    list(TRANSFORM frontend_sources PREPEND "${FLM_SOURCE_DIR}/common/AutoModel/")
     add_executable(${name}
         "${FLM_SOURCE_DIR}/test/oga_hipep/${name}.cpp"
         "${FLM_SOURCE_DIR}/common/prefix_slot_cache.cpp"
         "${FLM_SOURCE_DIR}/common/AutoModel/automodel.cpp"
         "${FLM_SOURCE_DIR}/common/AutoModel/model_backend.cpp"
-        "${FLM_SOURCE_DIR}/common/AutoModel/${frontend_source}"
+        ${frontend_sources}
         ${FLM_CHAT_SOURCES})
 
     target_include_directories(${name} PRIVATE
@@ -55,5 +57,5 @@ function(add_frontend_test name frontend_source)
     add_test(NAME ${name} COMMAND ${name})
 endfunction()
 
-add_frontend_test(test_qwen_frontend modeling_qwen3_5vl.cpp)
+add_frontend_test(test_qwen_frontend modeling_qwen3_5vl.cpp modeling_qwen2.cpp)
 add_frontend_test(test_gpt_oss_frontend modeling_gpt_oss.cpp)
