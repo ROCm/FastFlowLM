@@ -358,6 +358,31 @@ void AnEngineThatRewindsRestoresTheCheckpoint() {
     Require(meta.cached_prompt_tokens == 4, "the checkpoint must count as cached");
 }
 
+void RequireImageRefused(lm_uniform_input_t input) {
+    Reset(kPrompt, {kChannel});
+    Harness model;
+    auto meta = Meta();
+    try {
+        model.insert(meta, input);
+    } catch (const ModelRequestError& error) {
+        Require(error.http_code() == 400, "an image sent to gpt-oss on OGA must be an HTTP 400");
+        Require(model.engine().prefills.empty(), "nothing may run for a refused image");
+        return;
+    }
+    throw std::runtime_error("gpt-oss on OGA must refuse images, not answer without them");
+}
+
+void ImagesAreRefusedOnOga() {
+    lm_uniform_input_t rest;
+    rest.messages = nlohmann::ordered_json::array();
+    rest.messages.push_back({{"role", "user"}, {"content", "what is this"},
+                             {"images", nlohmann::ordered_json::array({"aW1hZ2U="})}});
+    RequireImageRefused(rest);
+    auto cli = TextInput();
+    cli.images = {"image.png"};
+    RequireImageRefused(cli);
+}
+
 }  // namespace
 
 Tokenizer::Tokenizer(const std::string&) { is_doubled_encoded = false; }
@@ -435,6 +460,7 @@ int main() {
     run("a reply cut inside its analysis restores", AReplyCutInsideItsAnalysisRestoresTheCheckpoint);
     run("an edited reply restores and reports the replay", AnEditedReplyRestoresTheCheckpointAndReportsTheReplay);
     run("an engine that rewinds restores the checkpoint", AnEngineThatRewindsRestoresTheCheckpoint);
+    run("images are refused on OGA", ImagesAreRefusedOnOga);
     if (failures == 0) std::cout << "GPT-OSS frontend regression tests passed\n";
     return failures == 0 ? 0 : 1;
 }
