@@ -14,7 +14,8 @@ project(launchlib_tests LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(FLM_DLL ${CMAKE_CURRENT_SOURCE_DIR}/../../FLM_DLL) # nlohmann/json, aiebu headers and aiebu_static.lib
+set(FLM_DLL ${CMAKE_CURRENT_SOURCE_DIR}/../../FLM_DLL) # nlohmann/json and aiebu headers
+set(FLM_AIEBU_LIB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/lib/xrt) # aiebu_static.lib (FastFlowLM's copy)
 
 foreach(test test_txn test_rt test_build test_errors test_ctrlpkt)
   add_executable(${test} tests/${test}.cpp)
@@ -30,5 +31,5 @@ target_include_directories(test_elf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include 
 target_compile_definitions(test_elf PRIVATE _CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_WARNINGS)
 target_compile_options(test_elf PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/O2 /EHsc /utf-8 /Zc:__cplusplus /bigobj>)
 set_property(TARGET test_elf PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-target_link_directories(test_elf PRIVATE ${FLM_DLL}/external_libs)
+target_link_directories(test_elf PRIVATE ${FLM_AIEBU_LIB_DIR})
 target_link_libraries(test_elf PRIVATE aiebu_static)

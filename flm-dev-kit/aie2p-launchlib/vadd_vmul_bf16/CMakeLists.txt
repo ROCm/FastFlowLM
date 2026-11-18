@@ -16,8 +16,7 @@ set(EW_N 256 CACHE STRING "bf16 values per block")
 set(COLS 1 CACHE STRING "columns")
 set(CORES 1 CACHE STRING "cores per column")
 
-set(XRT_INCLUDE_DIR C:/dev/XRT/src/runtime_src/core/include CACHE PATH "Where XRT headers live")
-set(XRT_LIB_DIR C:/dev/xrtNPUfromDLL CACHE PATH "Where xrt_coreutil.lib lives")
+include(${CMAKE_CURRENT_SOURCE_DIR}/../../FLM_DLL/cmake/flm_xrt_win.cmake) # XRT_INCLUDE_DIR, XRT_LIB_DIR
 set(FLM_DLL ${CMAKE_CURRENT_SOURCE_DIR}/../../FLM_DLL) # nlohmann/json
 
 foreach(prog host stress)

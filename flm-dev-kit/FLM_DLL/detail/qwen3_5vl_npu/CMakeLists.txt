@@ -46,8 +46,7 @@ if(FLM_USE_HRX)
     set(FLM_NPU_CORE_LIB ${HRX_LIBRARIES})
     set(FLM_NPU_AIEBU_LIB "")
 else()
-    set(XRT_INCLUDE_DIR C:/dev/XRT/src/runtime_src/core/include CACHE PATH   "Where XRT headers live")
-    set(XRT_LIB_DIR     C:/dev/xrtNPUfromDLL     CACHE PATH   "Where XRT libs live")
+    include(${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/flm_xrt_win.cmake)
     set(HRX_INCLUDE_DIRS "")
     set(FLM_NPU_CORE_LIB xrt_coreutil)
     set(FLM_NPU_AIEBU_LIB aiebu_static)
@@ -100,9 +99,7 @@ set_target_properties(qwen3_5vl_npu PROPERTIES
 # ———————————————————————————————————————————————
 target_include_directories(qwen3_5vl_npu PUBLIC
     ${CMAKE_SOURCE_DIR}/../../include
-    ${XRT_INCLUDE_DIR} ${HRX_INCLUDE_DIRS}
-    C:/dev/boost_1_88_0
-    C:/dev/vcpkg/installed/x64-windows/include
+    ${XRT_INCLUDE_DIR} ${HRX_INCLUDE_DIRS} ${FLM_BOOST_INCLUDE_DIR}
 )
 
 # Add AVX2 specific definitions and flags
@@ -147,9 +144,7 @@ endif()
 
 target_link_directories(qwen3_5vl_npu PUBLIC
     ${XRT_LIB_DIR}
-    C:/dev/boost_1_88_0/stage/lib
-    ${CMAKE_SOURCE_DIR}/../../external_libs
-    C:/dev/vcpkg/installed/x64-windows/lib
+    ${FLM_AIEBU_LIB_DIR}
 )
 
 # Check if all required libraries exist

@@ -14,8 +14,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(COLS 8 CACHE STRING "columns of 4 cores")
 
-set(XRT_INCLUDE_DIR C:/dev/XRT/src/runtime_src/core/include CACHE PATH "Where XRT headers live")
-set(XRT_LIB_DIR C:/dev/xrtNPUfromDLL CACHE PATH "Where xrt_coreutil.lib lives")
+include(${CMAKE_CURRENT_SOURCE_DIR}/../../FLM_DLL/cmake/flm_xrt_win.cmake) # XRT_INCLUDE_DIR, XRT_LIB_DIR
 set(FLM_DLL ${CMAKE_CURRENT_SOURCE_DIR}/../../FLM_DLL) # nlohmann/json
 
 add_executable(test host_test/test.cpp)
@@ -38,11 +37,11 @@ endforeach()
 
 # ctx_probe: XRT's internal list of hardware contexts, printed and timed. Needs XRT's
 # source headers (core/common) and boost; the XRT DLL it runs against must be
-# the same XRT (C:/dev/XRT is not: pass -DXRT_SRC_DIR=<Xilinx/XRT at the hash
+# the same XRT (the XRT under FLM_WIN_DEPS_ROOT is not: pass -DXRT_SRC_DIR=<Xilinx/XRT at the hash
 # xrt-smi prints>/src/runtime_src; files the tree generates at build time come
 # from XRT_INCLUDE_DIR). The DLL CRT (the query hands back std::string).
-set(XRT_SRC_DIR C:/dev/XRT/src/runtime_src CACHE PATH "XRT source tree (core/common)")
-set(BOOST_INCLUDE_DIR C:/dev/boost_1_88_0 CACHE PATH "boost headers")
+set(XRT_SRC_DIR ${FLM_WIN_DEPS_ROOT}/XRT/src/runtime_src CACHE PATH "XRT source tree (core/common)")
+set(BOOST_INCLUDE_DIR ${FLM_WIN_DEPS_ROOT}/boost_1_88_0 CACHE PATH "boost headers")
 if(EXISTS ${XRT_SRC_DIR}/core/common/device.h AND EXISTS ${BOOST_INCLUDE_DIR}/boost/property_tree)
   add_executable(ctx_probe host_test/checks/ctx_probe.cpp)
   target_include_directories(ctx_probe PRIVATE

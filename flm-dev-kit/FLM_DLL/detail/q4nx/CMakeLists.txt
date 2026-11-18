@@ -32,8 +32,7 @@ if(FLM_USE_HRX)
     set(FLM_NPU_CORE_LIB ${HRX_LIBRARIES})
     set(FLM_NPU_AIEBU_LIB "")
 else()
-    set(XRT_INCLUDE_DIR C:/dev/XRT/src/runtime_src/core/include CACHE PATH   "Where XRT headers live")
-    set(XRT_LIB_DIR     C:/dev/xrtNPUfromDLL     CACHE PATH   "Where XRT libs live")
+    include(${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/flm_xrt_win.cmake)
     set(HRX_INCLUDE_DIRS "")
     set(FLM_NPU_CORE_LIB xrt_coreutil)
     set(FLM_NPU_AIEBU_LIB aiebu_static)
@@ -66,8 +65,7 @@ set_target_properties(q4_npu_eXpress PROPERTIES
 target_include_directories(q4_npu_eXpress PUBLIC
     ${CMAKE_SOURCE_DIR}/../../include
     ${CMAKE_SOURCE_DIR}
-    ${XRT_INCLUDE_DIR} ${HRX_INCLUDE_DIRS}
-    C:/dev/boost_1_88_0
+    ${XRT_INCLUDE_DIR} ${HRX_INCLUDE_DIRS} ${FLM_BOOST_INCLUDE_DIR}
 )
 
 target_compile_definitions(q4_npu_eXpress PUBLIC
@@ -82,7 +80,6 @@ target_compile_options(q4_npu_eXpress PRIVATE
 
 target_link_directories(q4_npu_eXpress PUBLIC
     ${XRT_LIB_DIR}
-    C:/Program\ Files/boost/boost_1_88_0/lib64-msvc-14.3
 )
 
 # Check if npu_utils library exists
