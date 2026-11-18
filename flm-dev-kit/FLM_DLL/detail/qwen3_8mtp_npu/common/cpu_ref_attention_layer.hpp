@@ -271,7 +271,7 @@ public:
     /// output rows and share only read-only weights, so the `parallel for` is a
     /// pure annotation -- no reduction, no ordering, and the fp32 arithmetic per
     /// element is unchanged, which is what keeps the reference bit-identical to
-    /// what it was. `verify_n8` and `verify_n12` compare against dumps and would
+    /// what it was. A check that compares against dumps would
     /// see a single changed ulp.
     ///
     /// They are threaded because, unlike the marshalling loops in

@@ -225,8 +225,8 @@ void gen_prefill_attn_seq(npu_sequence* seq, const Layout& t,
 // The two cache owners. Explicit rather than header-visible because the body is
 // ~200 descriptors of hardware detail that nothing else should be able to
 // instantiate by accident -- a third layout has to be added here deliberately,
-// and that is the moment to check it against the geometry guard in
-// verify_n5_mtp_prefill.
+// and that is the moment to check that it agrees with `attn_layout` on
+// every field the generator reads.
 template void gen_prefill_attn_seq<attn_layout>(npu_sequence*, const attn_layout&,
                                                 int, int,
                                                 const prefill_attn_rtp_addresses&);

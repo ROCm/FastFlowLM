@@ -17,9 +17,9 @@
 /// **The engine no longer reaches that second case.** Module 4 resolves all
 /// three vision xclbins or throws naming the missing one, and always calls
 /// `enable_mm`, so a shipping tower is "npu" or it does not start. The
-/// half-configured factory exists for `tools/verify_n15_vision_attn`, which
-/// scores the attention op against `cpu_mm_op`-driven surroundings and would
-/// otherwise have to stage two more bitstreams it tests nothing in.
+/// half-configured factory exists for a check that scores the attention op
+/// against `cpu_mm_op`-driven surroundings and would otherwise have to stage
+/// two more bitstreams it tests nothing in.
 ///
 /// `name()` says which halves are live, because `image_cpu::backend()` prints
 /// it: **"npu"** when the matmuls are on the device too, **"npu-attn"** when

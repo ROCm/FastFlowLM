@@ -213,7 +213,7 @@ void qwen3_8mtp_npu::Impl::load_weights(Q4NX& q4nx) {
     head      = std::make_unique<cpu_ref::lm_head>(*weights);
 
     // The L = 1 projection, for the draft loop's seven steps and get_logits().
-    // Verified equivalent in tools/verify_n7_lm_head.cpp -- 8/8 argmax against
+    // Verified equivalent when it was ported -- 8/8 argmax against
     // verify.logits, cos 0.99998 against its own Q8_0 bytes, and byte-identical
     // drafts and hit rate through the engine.
     //
@@ -366,8 +366,8 @@ void qwen3_8mtp_npu::Impl::load_weights(Q4NX& q4nx) {
     // seam. The seam is still what makes that swappable -- `image_cpu` asks a
     // factory for its 111 matmuls and its one attention and never learns what
     // it got -- but the engine now only ever hands it the device factory. The
-    // host ops survive as `vision::cpu_mm_op` / `cpu_attn_op`, which is what
-    // tools/verify_n14..n16 score the device against.
+    // host ops survive as `vision::cpu_mm_op` / `cpu_attn_op`, kept as the
+    // reference to score the device against.
     //
     // FLM_Q38_VISION=0 declines the whole tower, which is how to get a
     // text-only run out of a multimodal checkpoint. It is not a backend
@@ -412,8 +412,8 @@ void qwen3_8mtp_npu::Impl::load_weights(Q4NX& q4nx) {
             // activate.sh renames them on the way in, which is the trap
             // vision_attn.xclbin hit.
             //
-            // Scoring the port is now a job for tools/verify_n14..n16, which
-            // hold `vision::cpu_op_factory` and the two host ops for exactly
+            // Scoring the port is a job for a standalone check that holds
+            // `vision::cpu_op_factory` and the two host ops for exactly
             // this. Measure that host arm at -O2 and it reads 3x slower; the
             // first estimate here said the device LOST at L=256 for exactly
             // that reason. (memory: host-vs-device-ab-needs-shipping-flags,
@@ -455,7 +455,7 @@ void qwen3_8mtp_npu::Impl::load_weights(Q4NX& q4nx) {
         // the real stack and truncates at the first mismatch -- so the switch
         // cost throughput and nothing else. It is gone now that the device path
         // is the shipping one. `qwen38::speculate_cpu` survives as the
-        // *reference* tools/verify_n5, n6 and n7 score this against, which is
+        // *reference* to score this against, which is
         // the only job it had left. Note what that reference measures: the
         // CPU head is ~30
         // ms/step against the device's ~34, so this is parity-with-freed-cores,

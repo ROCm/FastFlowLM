@@ -329,7 +329,7 @@ address does not fault — it hangs in the wait for 60 s and then returns
    The test is still sensitive after the fix: `ATTN_POISON` at `ctx = 41`,
    which moves one row in each of chunks 0, 1 and 2, drops it from `0.999992`
    to `~0.99986`.
-2. `tools/verify_n2_attn` — the "decode reproduces the verify batch" check was
+2. The engine's attention-layer check (since removed) — the "decode reproduces the verify batch" check was
    tightened this session to be **per row** with a `0.9999999` gate (it was an
    aggregate `0.999`, which is why it passed at `0.99952867` while the batch was
    leaking). It currently reports:

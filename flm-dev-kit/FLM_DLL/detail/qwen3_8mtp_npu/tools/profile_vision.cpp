@@ -22,14 +22,14 @@
 /// Run:
 ///   /tmp/profile_vision [model_dir] [rounds] [L] [vision_mm_build_dir] [attn.xclbin]
 ///
-/// Why this exists rather than `verify_n16`'s check-10 arm: that one is the
-/// tail of an eight-minute suite that allocates 959 MB of weight BOs several
+/// Why this exists rather than a timing arm inside a full check suite: such
+/// an arm is the tail of an eight-minute suite that allocates 959 MB of weight BOs several
 /// times over, and it fixes the backend ladder. This runs one backend, the
 /// shipping one, as many times as asked, so an A/B of the tower's *host* half
 /// is one flag apart and takes a minute.
 ///
-/// It scores nothing. Correctness is `verify_n14` (the tower against the HF
-/// dump) and `verify_n16` (the matmuls against the host op). The only thing
+/// It scores nothing. Correctness is a separate check (the tower against the
+/// HF dump, the matmuls against the host op). The only thing
 /// here that has to be real is `L`, and 1200 is the operating point — the
 /// reference dump's 256 is 4.7x small and one round of the merger
 /// (memory: vision-tower-operating-point-is-l1200).
@@ -65,7 +65,7 @@ double ms_since(const std::chrono::steady_clock::time_point& t0) {
 }
 
 /// The dump's rows, repeated to `want` with N(0, 0.02) jitter so no two rows
-/// are bit-identical. Same helper as verify_n16's.
+/// are bit-identical.
 std::vector<float> tile_rows(const std::vector<float>& in, int rows, int cols,
                              int want, unsigned seed) {
     std::mt19937 rng(seed);

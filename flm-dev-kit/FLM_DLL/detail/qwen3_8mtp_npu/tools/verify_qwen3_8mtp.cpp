@@ -256,7 +256,7 @@ int main(int argc, char** argv) {
     // Not optional: load_weights registers attention_layer.xclbin and builds
     // the 16 attention layers on the device. Running the whole suite over them
     // -- M7, M9, M11, M13 -- is the only check that the offload is right *in
-    // the engine*; tools/verify_n2_attn.cpp only shows it is right in isolation.
+    // the engine*; a layer-alone check only shows it is right in isolation.
     //
     // exec_path is the root holding xclbins/<model_name>/, relative to wherever
     // the driver is run from.

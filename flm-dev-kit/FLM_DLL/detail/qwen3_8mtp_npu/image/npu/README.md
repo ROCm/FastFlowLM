@@ -18,10 +18,9 @@ being read as a finished one.
 | `vision_mm_op.hpp` | the `mm_op`: design choice, weight BO, **operand pre-rounding**, dispatch |
 | `vision_op_factory.hpp` | which backend each op gets |
 
-Verified by `tools/verify_n15_vision_attn.cpp` (8 checks) and
-`tools/verify_n16_vision_mm.cpp` (**19 checks, 0 failed** on hardware). Each
-driver's own header carries its build line and reasoning; the short version is
-below.
+Verified on hardware by two step-verification drivers, N15 (attention, 8
+checks) and N16 (matmuls, **19 checks, 0 failed**); they are not shipped.
+"N14/N15/N16 check k" below refers to their checks.
 
 ## The edits outside this folder
 
@@ -32,8 +31,8 @@ resolves `vision_attn.xclbin` and now also `vision_mm_a.xclbin` /
 
 It used to honour `FLM_Q38_VISION_NPU=0` and `FLM_Q38_VISION_MM=0` and fall
 back to the attention-only or the pure host factory. Both are gone with the
-rest of the host arms. The A/B they served moved to `tools/verify_n14/n15/n16`,
-which construct the factories directly and so can still put the real host path
+rest of the host arms. The A/B they served moved to the step-verification drivers,
+which constructed the factories directly and so could still put the real host path
 on the off-arm (`ab-off-arm-is-not-the-host`) — the thing an env var was needed
 for in the first place.
 
@@ -146,7 +145,7 @@ rows the language model reads, which is enough to move a near-tie argmax deep
 in a context. That was the case for keeping `FLM_Q38_VISION_MM=0` as a knob;
 the decision since has been to ship one configuration, so the knob is gone and
 the accuracy ladder above is the record of what it cost. Re-run it with
-`tools/verify_n16_vision_mm`, which builds both factories itself.
+a driver that builds both factories itself.
 
 **Build the host arm at `-O2` and it reads 3x slower**, which turns the
 attention ratios into 6.5x and 13.7x and made an early estimate claim the
@@ -305,27 +304,3 @@ B 7936**. A stale one does not fault — it writes into some other buffer and th
 dispatch hangs in `qds_device::wait()`. N15 check 1 and N16 check 1 diff the
 header constants against `build/rtp_addr.txt` *first*, so a rebuild is a
 readable FAIL and not a two-minute hang. (`rtp-addresses-are-per-build`)
-
-## Where N14 fits now
-
-`tools/verify_n14_vision.cpp` is unchanged and still host-only — it links no
-XRT. Its check 12 (block 0's attention rebuilt from `norm1`, with the rotated-
-head and no-rope controls) is reproduced in N15 against the device, plus the
-rotated-vs-rotated half N14 has no need for.
-
-N16 check 9 closes the loop the other way: it drives the **real `image_cpu`**
-through the device factory and scores N14's stage taps against
-`vision_ref.safetensors` with hardware underneath both ops —
-
-| tap | relL2 | cos |
-| --- | --- | --- |
-| `patch_embed` | 0.00622 | 0.9999807 |
-| `block_00.attn_proj` | 0.00775 | 0.9999714 |
-| `block_26.out` (27 deep) | 0.11352 | 0.9935379 |
-| `merger_fc1` | 0.06934 | 0.9976008 |
-| `image_embeds` | **0.04008** | **0.9991992** |
-
-The rise to 0.114 at block 26 and the fall back to 0.040 at the output is the
-expected shape: error accumulates through 27 residual blocks and the merger's
-`fc2` projects most of it out. N14 remains the tower's *stage-by-stage*
-host reference.

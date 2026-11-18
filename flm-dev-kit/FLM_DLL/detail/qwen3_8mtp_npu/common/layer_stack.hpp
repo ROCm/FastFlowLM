@@ -384,8 +384,8 @@ private:
     /// supported is a job for a driver, not a shipping env var: both arms
     /// produced fluent text, so a silent degrade presented as nothing but a
     /// slower verify, which nobody traced back to a file that was not staged.
-    /// `tools/verify_n12_delta_verify` is where that comparison lives now, and
-    /// it scores against `cpu_ref::delta_net_layer` directly.
+    /// That comparison is made outside the engine, against
+    /// `cpu_ref::delta_net_layer` directly.
     ///
     /// Underneath `_build_delta_proj` because the layer reads that phase's
     /// staged BO, including the a/b tail past `proj_bytes` that exists for this

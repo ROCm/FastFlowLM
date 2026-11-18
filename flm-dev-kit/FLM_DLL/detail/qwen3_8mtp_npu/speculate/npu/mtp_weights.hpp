@@ -77,8 +77,7 @@ struct mtp_layout {
     /// 128-token rounds with a kv broadcast that walks 128-row blocks. Named
     /// here rather than included from attn_cache for the same reason L_CHUNK
     /// and CHUNKS_LIMIT are: this struct states the constants it is built from,
-    /// and the geometry guard in verify_n5_mtp_prefill is what asserts the two
-    /// agree. It is also the alignment build() requires of MAX_L.
+    /// and the two must agree; nothing in the engine asserts it. It is also the alignment build() requires of MAX_L.
     static constexpr int PREFILL_CHUNK = 128;
 
     /// **The largest MAX_L this cache can address: 16384 tokens.**

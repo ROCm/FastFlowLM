@@ -32,7 +32,7 @@
 /// shortcut. Token identity changes nothing about the work: every layer runs
 /// the same matmuls over the same shapes whatever the ids decode to. What the
 /// ids would change is the *output*, and this driver scores nothing -- it is a
-/// stopwatch. Correctness lives in verify_qwen3_8mtp and the verify_n* suite.
+/// stopwatch. Correctness lives in verify_qwen3_8mtp.
 /// The one property that does have to be real is the window length, and that
 /// is the argument.
 ///

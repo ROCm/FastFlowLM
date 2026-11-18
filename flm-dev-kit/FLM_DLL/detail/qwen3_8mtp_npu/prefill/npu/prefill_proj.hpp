@@ -31,9 +31,9 @@
 /// read the woven `up|gate` as one 34816-row matrix, with no restaging and no
 /// second copy of the weights.
 ///
-/// The argument is checked, not trusted: `verify_n8_prefill_proj` re-runs
-/// `reorder_cpy` over the concatenation and `memcmp`s it against what the
-/// staging wrote, and every dispatch is scored against a same-bytes reference
+/// The argument was checked, not trusted, when this was ported: re-running
+/// `reorder_cpy` over the concatenation and `memcmp`ing it against what the
+/// staging wrote, and scoring every dispatch against a same-bytes reference
 /// with a rotated control.
 ///
 /// ## `q|k|v|z`, not `k|v|q|z`

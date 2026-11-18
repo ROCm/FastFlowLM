@@ -13,17 +13,15 @@ the matmuls and the attention onto bitstreams that already exist, without
 touching the tower itself.
 
 **Phase 2 is complete: both the attention and the matmuls are on the NPU**
-(`npu/`, verified by `tools/verify_n15_vision_attn.cpp` and
-`tools/verify_n16_vision_mm.cpp`). The tower reports `mm=npu attn=npu bf16`.
+(`npu/`, verified on hardware against the host ops). The tower reports `mm=npu attn=npu bf16`.
 The two knobs that used to take it back — `FLM_Q38_VISION_NPU=0` for the whole
 tower and `FLM_Q38_VISION_MM=0` for the matmuls alone — are gone. All three
 vision xclbins are required and module 4 throws naming a missing one.
 `FLM_Q38_VISION=0` remains and is a different thing: it disables the tower as a
 *feature*, for a text-only deployment, rather than choosing an implementation
 of it. The host ops (`vision::cpu_mm_op`, `cpu_attn_op`, `cpu_op_factory`) are
-still here as the reference `verify_n14` / `n15` / `n16` score the device
-against — including the accuracy ladder below, which is where the `_MM=0` A/B's
-numbers came from and is still re-runnable there.
+still here as the reference the device was scored against — including the
+accuracy ladder below, which is where the `_MM=0` A/B's numbers came from.
 
 `image_cpu.cpp` did not change to make any of that happen, which was the point
 of the `vision_ops.hpp` seam.
@@ -140,39 +138,9 @@ invocations, not two calls.
 
 ## Verification
 
-Two drivers, covering two different things. Both are needed, and neither
-subsumes the other.
-
-**`tools/verify_n14_vision.cpp`** — the tower, stage by stage, against
-`vision_ref.safetensors` (captured by `models_simple/capture_qwen3_8_vision.py`).
-19 checks, passing in both modes:
-
-```
-g++-13 -O2 -march=native -fopenmp -std=c++20 \
-    -I. -I../../include -I../q4nx -I/opt/xilinx/xrt/include \
-    tools/verify_n14_vision.cpp image/image_cpu.cpp image/vision_ops.cpp \
-    image/vision_glue.cpp image/vision_rope.cpp image/mrope.cpp \
-    -lpthread -o /tmp/verify_n14_vision
-```
-
-| | fp32 | bf16 (shipping) |
-| --- | --- | --- |
-| every stage through the blocks | cos 1.0000000, relL2 ≤ 2e-5 | worst `block_26.out` cos 0.9997824 |
-| `image_embeds` | cos 1.0000000 | cos 0.9999423, relL2 0.01075 |
-
-m-rope is exact: 0 differing words over 221 tokens × 3 channels.
-
-Controls that must collapse, and do: pos_embed in raster order (cos 0.450),
-`image_embeds` shifted by a row (0.735), a rotated `head_perm` (0.839).
-
-Note the rope control is gated on **relative L2, not cosine**. The vision
-softmax is diffuse — 18.6 effective keys of 256 — so the output is near an
-average of `v` no matter how the scores are tilted, and dropping RoPE entirely
-still scores cos 0.9975. relL2 sees it at 0.071 vs 0.0018, a factor of 40.
-
 **`FastFlowLM/src/test/qwen3_8mtp_npu/verify_preprocess.cpp`** — the *host*
-preprocessing, which N14 cannot test because it feeds the tower the reference's
-own `pixel_values`. A wrong patch order there passes all 19 checks above and
+preprocessing, which a tower check cannot test because it feeds the tower the reference's
+own `pixel_values`. A wrong patch order there passes every tower check and
 still scrambles the image. Run with `make verify`; it scores
 ffmpeg + AVX-512 bicubic against PIL + the HF processor at cos 1.000000
 (relL2 0.00183), with raster order, missing mean/std and a one-row shift

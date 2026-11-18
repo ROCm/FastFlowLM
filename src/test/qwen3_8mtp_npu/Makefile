@@ -54,7 +54,7 @@ $(BUILD_DIR)/test_qwen3_8mtp_npu: $(OBJECTS)
 # Scores the HOST image preprocessing against a captured pixel_values. Separate
 # from the test binary because it loads no model and touches no device -- see
 # the header comment in verify_preprocess.cpp for why it is not covered by
-# tools/verify_n14_vision.cpp.
+# the vision-tower check (it feeds the tower the reference's own pixel_values).
 VERIFY_SOURCES := $(filter-out test.cpp,$(CPP_SOURCES)) verify_preprocess.cpp
 VERIFY_OBJECTS := $(addprefix $(BUILD_DIR)/,$(notdir $(VERIFY_SOURCES:.cpp=.o)))
 DEPS += $(VERIFY_OBJECTS:.o=.d)

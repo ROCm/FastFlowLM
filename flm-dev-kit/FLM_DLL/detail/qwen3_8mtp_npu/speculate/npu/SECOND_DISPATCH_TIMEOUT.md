@@ -7,7 +7,7 @@
 Written for: the next engineer picking this up cold.
 
 **Status: fixed.** The design now sustains repeated dispatch, and
-`tools/verify_n3_mtp` passes 28 of 28 against the CPU reference on hardware.
+the draft head passed 28 of 28 against the CPU reference on hardware.
 This note is kept because the two false trails on the way to the fix are each
 worth more than the fix itself.
 
@@ -186,7 +186,7 @@ Scaffold-side, in `MTP_decoding/host`:
 | `FLM_MTP_TRUNC2=n` | the same, but only for the repeat dispatches, so the scored first pass stays whole |
 | `ATTN_REPEAT=n` | the same idea in `gated_attention_verify/host/host.cpp` |
 
-Port-side, in `tools/verify_n3_mtp.cpp`: `FLM_N3_PROBE=n` with `FLM_N3_BASE`,
+Port-side, the (since removed) N3 driver had `FLM_N3_PROBE=n` with `FLM_N3_BASE`,
 `FLM_N3_HOLD`, `FLM_N3_SAME`, `FLM_N3_NOISE`; and `FLM_N3_ROWS=1` for the
 per-row error distribution. `FLM_N3_DUMPCTX=n` went with `FLM_MTP_SEQDUMP` —
 it only ever emitted the port half of the diff above, so on its own it produced

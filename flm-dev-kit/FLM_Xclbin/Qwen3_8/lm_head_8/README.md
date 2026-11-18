@@ -166,9 +166,8 @@ the row norm (`per-row-cosine-reports-the-norm`).
 **Neither of them can see the rms_norm.** A build with the norm stripped out
 entirely, fed raw x, still scores 8/8 here at cos 0.9984 — argmax is
 scale-invariant and `nw` barely rotates the vector
-(`rmsnorm-is-cosine-invisible`). The checks that do separate them live in the
-engine driver, `FLM_DLL/detail/qwen3_8mtp_npu/tools/verify_n11_lm_head8.cpp`
-section 4: `||raw|| / ||normed||` must clear 1.5, and the device's output must
+(`rmsnorm-is-cosine-invisible`). The checks that do separate them (in the engine's port-time
+driver) were: `||raw|| / ||normed||` must clear 1.5, and the device's output must
 match a normed reference by *relative L2*, not cosine.
 
 **Always run the repeat test before believing a change:**

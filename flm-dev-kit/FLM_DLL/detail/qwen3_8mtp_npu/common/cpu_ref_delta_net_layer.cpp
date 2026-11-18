@@ -117,7 +117,7 @@ void delta_net_layer::reset() {
 // gated_rmsnorm -- join the two conv_silu and delta_rule already had. Each is a
 // loop whose iterations write disjoint output and share only read-only weights,
 // so the annotation changes no arithmetic and the reference stays bit-identical;
-// `verify_n12` would see a single changed ulp.
+// a check against dumps would see a single changed ulp.
 //
 // They matter more than the attention block's equivalents for one reason:
 // **this layer runs 48 times per window and that one runs 16**. At L = 1400 the

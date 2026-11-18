@@ -51,12 +51,12 @@ be mirrored in both copies.** Nothing enforces this — a drifted sequence hangs
 in `wait()` or reads silently wrong bytes.
 
 `lm_head_weights.hpp`'s closed form is checked against this file's
-running-pointer loop nest for every block by `tools/verify_n7_lm_head.cpp`
-(check 1), which is the only thing standing between the two derivations.
+running-pointer loop nest for every block (checked when it was ported);
+that check was the only thing standing between the two derivations.
 
 ### Status in the engine: verified, off by default
 
-19/19 on `verify_n7_lm_head`, 8/8 argmax against the reference dump, and
+19/19 on the port-time lm_head check, 8/8 argmax against the reference dump, and
 byte-identical drafts and acceptance rate through the engine. It ships behind
 `FLM_Q38_LM_HEAD=1` rather than on, because it is **not a speedup**: the
 projection measures 25.3 ms here against 25.9 ms on 32 host threads — both at

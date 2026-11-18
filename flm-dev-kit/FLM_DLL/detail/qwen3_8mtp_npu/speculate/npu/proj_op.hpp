@@ -216,7 +216,7 @@ public:
     /// and tile `t`'s read-back and widen happen while tile `t+1` is. The
     /// device order, and so the arithmetic, is exactly the serial order's --
     /// only host work moves, and it moves into wall clock the device was
-    /// already spending. Output is bit-identical and `verify_n8` checks it.
+    /// already spending. Output is bit-identical (checked when this was written).
     ///
     /// At `L <= ROWS` there is one tile and nothing to overlap, so the serial
     /// loop runs and the second slot is never allocated. That is the whole of
@@ -532,7 +532,7 @@ private:
     /// because there are two `npu_app`s in npu_utils.hpp behind a build
     /// switch -- the HRX one returns `hrx::run`, the XRT one `xrt::run` -- and
     /// this header is compiled against both (the `.so` takes HRX, the
-    /// `verify_n*` drivers link the sequence generators and take XRT). Both
+    /// tools that link the sequence generators take XRT). Both
     /// offer the default ctor, `start()` and an `ert_cmd_state wait()`, which
     /// is all of the type used below.
     using run_t = decltype(std::declval<npu_app&>().create_run(

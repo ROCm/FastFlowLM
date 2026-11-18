@@ -31,8 +31,12 @@ Each is an abstract interface in `*_module.hpp` with one implementation in
 `speculate_npu` walks the draft steps, but every matmul, every attention core
 and both projections are device ops, and each of those files throws rather
 than degrade when a bitstream is missing. All of it is in `namespace qwen38`;
-`cpu_ref` is the ported fp32 reference math the `tools/verify_n*` drivers score
+`cpu_ref` is the ported fp32 reference math the device ops are scored
 against, `q38npu` the NPU operators.
+
+N2-N16 in the notes below name the step-verification drivers used during the
+port (`tools/verify_nN_*.cpp`); they are not shipped, and the results quoted from
+them are kept as the record.
 
 ```cpp
 // prefill/prefill_module.hpp
@@ -77,8 +81,7 @@ Module 2 has its own NPU driver, `q38npu::npu_mtp_layer` (`speculate/npu/`),
 over `MTP_layer.xclbin`. The driver is matched to the scaffold under
 `FLM_Xclbin/Qwen3_8/MTP_decoding` and proven so — the two hosts' live sequence
 dumps are byte-identical at the same cursor, 41 896 words, and all five BO
-sizes agree. `tools/verify_n3_mtp` scores it against the CPU head on hardware
-and passes 29 of 29, from a cold window through a seeded context to the
+sizes agree. Scored against the CPU head on hardware, it passed 29 of 29, from a cold window through a seeded context to the
 16384-row cache ceiling.
 
 It did not always. The design's first dispatch completed and every one after it
@@ -93,8 +96,7 @@ MTP bitstream's second-dispatch bug was open. It is gone. The CPU head was the
 *faster* of the two, ~30 ms/step against ~34, but drafting is only 7–8% of
 cycle time, and keeping a second full implementation of the head alive to buy
 that back was not worth what it cost to maintain. `speculate_cpu.hpp` itself
-stays — it is the reference `verify_n5`, `verify_n6` and `verify_n7` score
-`speculate_npu::draft()` against.
+stays — it is the reference to score `speculate_npu::draft()` against.
 
 `common/layer_stack.hpp::build()` builds every layer on the device; there is
 no backend to choose and no environment switch. The 48 delta-net layers reach
@@ -156,7 +158,7 @@ Three things make the split safe to say plainly:
   `apply_gate` / `post_norm` / `swiglu` — and the path above calls the ones it
   keeps by name. So the host stages *are* the scored reference rather than a
   copy of it, and `project_qkv_rope()`, `attn_core()`, `gate_out_mlp()` and
-  `swiglu()` are now purely what `verify_n4` and `verify_n8` score against.
+  `swiglu()` are now purely the reference the device stages are scored against.
 - **The top of the buffer.** There is no apron: `plane_rows()` *is* `MAX_L`,
   the cache is two planes and nothing else, exactly as in `qwen3_5vl_npu`. A
   prefill pass streams kv through `round_up(L_begin + round_up(L, 128), 128)`
@@ -165,7 +167,7 @@ Three things make the split safe to say plainly:
   **padded** window rather than the requested one, and `_kv_buffer_rows` makes
   `MAX_L` a whole `PREFILL_CHUNK`, which leaves that round-up nowhere to reach.
   Both halves are load-bearing, and the pitch they define is `v_at()` for
-  *both* designs, which is why a change there re-runs `verify_n2_attn`.
+  *both* designs, which is why a change there needs the attention layer re-checked.
 - **The context limit: 16377 tokens** (FLM#1001). The replay counts its
   16-row chunks in a 10-bit BD field, so the buffer tops out at 16384 rows
   (`attn_cache::max_context()`). `_kv_buffer_rows` keeps the old sizes up to
@@ -218,21 +220,21 @@ the kernel's `rtp_activate` **twice**, `none` before the even output-column
 blocks and `silu` before the odd ones, so the device silu's the gate half of
 the weave and leaves the up half alone (§N-MTP-SWIGLU). The product folds into
 the un-weave the host was already doing. `cpu_ref::mtp_head::swiglu` stays
-where it is, as the reference N6 scores this against.
+where it is, as the reference to score this against.
 
 `base` is still read **before** `append_rows` — unchanged and load-bearing.
 The attention core can still be withheld (`FLM_Q38_MTP_PREFILL=0`, below); the
 projections cannot — `FLM_Q38_MTP_PROJ` is gone and `dequant_mm.xclbin` is now
-a required argument to `speculate_npu`. `verify_n6` still scores step 0's five
-projections against `cpu_ref::mtp_head`'s helpers, which is what that switch
+a required argument to `speculate_npu`. Step 0's five projections are still
+scored against `cpu_ref::mtp_head`'s helpers, which is what that switch
 was actually for.
 
 It is the same operator module 1 uses — `prefill_attn_op_t<Layout>` and
 `gen_prefill_attn_seq<Layout>` are templated on the layout, with
 `prefill_attn_op = ...<attn_layout>` for module 1 and `mtp_prefill_attn_op =
 ...<mtp_layout>` for module 2. The two layouts agree field-for-field on
-everything the generator reads, which `verify_n5_mtp_prefill`'s first check
-asserts rather than assumes.
+everything the generator reads; keep it that way, nothing asserts it at build
+time.
 
 Three things to know before touching it:
 
@@ -242,8 +244,8 @@ Three things to know before touching it:
   the pitch. `build()` throws unless `MAX_L % PREFILL_CHUNK == 0`; that is what
   makes both round-ups (the replay's to 16, step 0's to 128) land *on* the top
   of the buffer rather than past it. Changing either moves `v_at()` and every
-  descriptor `gen_mtp_layer_seq` emits, so `verify_n3_mtp` is a required
-  regression, not an optional one.
+  descriptor `gen_mtp_layer_seq` emits, so re-checking the draft head on
+  hardware is required, not optional.
 - **`speculate_npu::cpu_half_` is a `cpu_ref::mtp_head` built with `max_len =
   0`.** Its cache is never allocated and never read: only `fuse`,
   `project_qkv_rope`, `gate_out_mlp` and `out_norm()` are called on it, and
@@ -365,7 +367,7 @@ image/   image_module.hpp  image_cpu.hpp/.cpp  vision_model_def.hpp
          npu/ vision_attn_op.hpp  vision_attn_sequence.hpp/.cpp
               vision_mm_op.hpp  vision_mm_sequence.hpp/.cpp
               vision_op_factory.hpp  README.md
-tools/   verify_qwen3_8mtp.cpp  verify_n2 .. verify_n16  profile_prefill.cpp
+tools/   verify_qwen3_8mtp.cpp  profile_prefill.cpp  profile_vision.cpp
          bench_lm_head_rows.cpp  bench_verify_lm_head.cpp
          verify_cpu_simd.cpp            (have a main(); not globbed)
          dflash2_ref.py                 (fp32 reference of the DFlash2 drafter, replays FLM_DFLASH_DUMP dumps)
@@ -412,7 +414,7 @@ five times faster:
 |---|---|---|
 | `FLM_Q38_MTP_PREFILL=0` | draft step 0 on the decode bitstream, one row per dispatch, instead of `attn.xclbin` | both arms are hardware; a throughput choice |
 | `FLM_Q38_MTP_PREFILL_MIN` | the width floor below which step 0 is not worth batching (default 3) | drawn so only cycle 1's prompt-wide catch-up batches; cycle 2 onward is width 1 or 2 and stays per-row. `=2` restores the old floor and is the A/B |
-| `FLM_Q38_MTP_PROJ_MIN` | the width floor below which step 0's five projections run on the host instead of `dequant_mm` (default 1, i.e. off) | was 25, because `dequant_mm` is flat at ~52 ms below one 512-row tile and live widths were 1–4. With the step-0 clamp lifted, cycle 1 is prompt-wide (11–19× to the device) and every later cycle is width 1–2 and never reaches the prefill shape at all, so the floor has nothing left to protect. Set it high to restore the split arm, which is what `verify_n6` scores against |
+| `FLM_Q38_MTP_PROJ_MIN` | the width floor below which step 0's five projections run on the host instead of `dequant_mm` (default 1, i.e. off) | was 25, because `dequant_mm` is flat at ~52 ms below one 512-row tile and live widths were 1–4. With the step-0 clamp lifted, cycle 1 is prompt-wide (11–19× to the device) and every later cycle is width 1–2 and never reaches the prefill shape at all, so the floor has nothing left to protect. Set it high to restore the split arm (the host reference for step 0's projections) |
 | `FLM_Q38_DELTA_SYNC` | how module 1 syncs the delta-net state BOs | both arms are hardware |
 | `FLM_Q38_FAST_ROLLBACK` | `commit_prefix()` vs re-prefilling the accepted prefix | an algorithm choice; both arms already drive the device |
 | `FLM_Q38_VISION=0` | the vision tower off entirely, for a text-only deployment | not a backend choice — the feature, not its implementation |
@@ -433,8 +435,8 @@ file that was not staged.
 
 The reference implementations those switches used to reach are still here and
 still built: `speculate_cpu.hpp`, `cpu_ref::lm_head`, `vision::cpu_mm_op` /
-`cpu_attn_op`, and all of `cpu_ref::*`. They are what `tools/verify_n*` scores
-the device against. The engine does not reach them.
+`cpu_attn_op`, and all of `cpu_ref::*`. They are the reference the device was
+scored against. The engine does not reach them.
 
 ## Build and run
 
@@ -460,139 +462,6 @@ g++-13 -O2 -march=native -fopenmp -std=c++20 \
 /tmp/verify_qwen3_8mtp /path/to/models/Qwen3.8-27B-NPU2 \
                        /path/to/FastFlowLM/src      # ~10 min
 ```
-
-`tools/verify_n2_attn.cpp` scores the attention layer alone against
-`cpu_ref::attention_layer` — 39 checks, ~2 min. It links `verify/npu/
-attn_sequence.cpp` directly instead of the `.so`, and takes the xclbin
-*directory* rather than an `exec_path`:
-
-```bash
-g++-13 -O2 -march=native -fopenmp -std=c++20 -ffast-math \
-    -I. -I../../include -I../q4nx -I/opt/xilinx/xrt/include \
-    tools/verify_n2_attn.cpp verify/npu/attn_sequence.cpp \
-    ../q4nx/q4_npu_eXpress.cpp ../q4nx/safe_tensors.cpp \
-    -L../../../../src/lib/xrt -L../../build/lib -L/opt/xilinx/xrt/lib \
-    -lxrt_coreutil -laiebu -luuid -lpthread -o /tmp/verify_n2_attn
-```
-
-`tools/verify_n4_prefill_attn.cpp` scores the prefill attention core — 21
-checks, ~1 min. It links **both** sequence generators, takes both xclbins as
-*files*, and needs the model only for its second half:
-
-```bash
-g++-13 -O2 -march=native -fopenmp -std=c++20 -ffast-math \
-    -I. -I../../include -I../q4nx -I/opt/xilinx/xrt/include \
-    tools/verify_n4_prefill_attn.cpp \
-    prefill/npu/prefill_attn_sequence.cpp verify/npu/attn_sequence.cpp \
-    ../q4nx/q4_npu_eXpress.cpp ../q4nx/safe_tensors.cpp \
-    -L../../../../src/lib/xrt -L../../build/lib -L/opt/xilinx/xrt/lib \
-    -lxrt_coreutil -laiebu -luuid -lpthread -o /tmp/verify_n4_prefill_attn
-
-/tmp/verify_n4_prefill_attn      # defaults to the two in-tree build/ xclbins
-```
-
-Checks 1–7 use no model at all: synthetic low-rank *topic-code* q/k — N(0,1)
-keys put 99.98% of the softmax mass on one row and make the test blind, so it
-prints the effective-key count and refuses to score below ~4 — plus a
-**rotated-kv cross-head control**, because matching our own reference proves
-nothing about the head↔CU↔kv-stream mapping (0.99839 real against 0.00071
-rotated). Checks 8–9 are the integration gate: a hybrid layer against
-`cpu_ref::attention_layer::forward()`, the k/v rows that landed in the BO
-scored against the CPU cache, then an `L = 8` *verify* pass on the cache
-prefill just filled. The cache BO is deliberately allocated from an app that is
-not the prefill op's, so cross-app BO sharing is exercised rather than assumed.
-
-`tools/verify_n5_mtp_prefill.cpp` scores the draft head's split step 0 — 27
-checks, ~3 min. It links the prefill and MTP sequence generators plus
-`mtp_head.cpp`, and pulls in **both speculators** header-only, which is the
-point: its last two checks call the engine's own `draft()` rather than a
-driver-local copy of the loop. Build it **without** `-ffast-math`; check 4 wants
-an exact 1.0.
-
-```bash
-g++-13 -O2 -march=native -fopenmp -std=c++20 \
-    -I. -I../../include -I../q4nx -I/opt/xilinx/xrt/include \
-    tools/verify_n5_mtp_prefill.cpp \
-    prefill/npu/prefill_attn_sequence.cpp speculate/npu/mtp_sequence.cpp \
-    speculate/mtp_head.cpp speculate/npu/proj_sequence.cpp \
-    common/npu/lm_head_sequence.cpp \
-    ../q4nx/q4_npu_eXpress.cpp ../q4nx/safe_tensors.cpp \
-    -L../../../../src/lib/xrt -L../../build/lib -L/opt/xilinx/xrt/lib \
-    -lxrt_coreutil -laiebu -luuid -lpthread -o /tmp/verify_n5_mtp_prefill
-
-/tmp/verify_n5_mtp_prefill       # defaults to the four in-tree build/ xclbins
-```
-
-`proj_sequence.cpp` and `lm_head_sequence.cpp` are on that line even though N5
-tests nothing in either: N5 constructs a `speculate_npu`, which now requires
-`dequant_mm.xclbin` and an `npu_lm_head` because the host arms behind both are
-gone. That costs N5 a 1.35 GB staging pass it does not otherwise need, and it
-is the price of the speculator having exactly one configuration. Same for
-`verify_n3_mtp` and `verify_n6`.
-
-Two of its checks are worth knowing about because they are easy to leave out:
-
-- **Stale rows above the cursor.** `crop()` rolls the cursor back after a
-  rejected draft and leaves the rows in place — that is what makes the draft
-  loop snapshot-free — so the next step 0 runs over a plane still holding the
-  rejected draft's real keys. Every other check runs over *zeros* above the
-  cursor, and a mask leak is invisible through zeros. Check 4 reproduces the
-  post-`crop()` state and demands cos == 1.0 exactly.
-- **A drafted id is only evidence where the argmax is decided.** Drafting is a
-  7-deep autoregression, so the attention core's error floor is fed back six
-  times; at a step whose top two logits are a hair apart, which id falls out
-  reports the last bit of an accumulator. `draft_margins()` supplies the
-  reference's own top-1/top-2 gap per step, and a mismatch counts only above
-  `kDecisive`. At `T = 8` the one step that differs has a margin of **0.003**
-  where every step that agrees is ≥ 0.53.
-
-`tools/verify_n6_mtp_proj.cpp` scores step 0's *projections* on
-`dequant_mm.xclbin` — 38 checks, ~8 min, two head layers staged. Takes all
-four xclbins as files. Same `report()` / `cosine()` / `draft_margins()`
-scaffolding as N5, and the same `-ffast-math` prohibition (check 8 wants
-bit-for-bit). It was 40 checks: the two that went are the `FLM_Q38_MTP_PROJ=0`
-A/B and the "did the projection path open" guard, neither of which names a
-configuration the engine can still reach.
-
-```bash
-g++-13 -O2 -march=native -fopenmp -std=c++20 \
-    -I. -I../../include -I../q4nx -I/opt/xilinx/xrt/include \
-    tools/verify_n6_mtp_proj.cpp speculate/npu/proj_sequence.cpp \
-    prefill/npu/prefill_attn_sequence.cpp speculate/npu/mtp_sequence.cpp \
-    speculate/mtp_head.cpp common/npu/lm_head_sequence.cpp \
-    ../q4nx/q4_npu_eXpress.cpp ../q4nx/safe_tensors.cpp \
-    -L../../../../src/lib/xrt -L../../build/lib -L/opt/xilinx/xrt/lib \
-    -lxrt_coreutil -laiebu -luuid -lpthread -o /tmp/verify_n6_mtp_proj
-
-/tmp/verify_n6_mtp_proj          # defaults to the four in-tree build/ xclbins
-```
-
-References come from the **same quantized bytes** (`q4nx_matmul` on a
-bf16-rounded x), so Q4_K cancels and the bar is 0.999 rather than its ~0.997
-floor; what is left is the device's bfp16 mmul. Every score is paired with a
-control that must collapse, because a cosine near 1 is evidence about
-arithmetic and says nothing about addressing — `q|k|v` instead of `k|v|q`
-(0.64), concatenated instead of woven `up|gate` (0.13), `Din = D` for `o`
-(0.005), `silu(up)*gate` (0.50), and rotate-by-one-core-column on all five.
-
-Three of its checks are worth knowing about:
-
-- **Check 2 is the one that can fail without hardware.** The whole design rests
-  on `reorder_cpy`'s permutation being local to 64 weight rows, which makes
-  per-tensor staging byte-identical to staging the concatenation — and so makes
-  `k|v|q|z` one legal 14336-row matrix at one offset. It is an argument until
-  this `memcmp`s 40.5 MB and turns it into a fact.
-- **Check 8 catches what a cosine cannot.** A tail-tile pad row bleeding into a
-  real one moves that row a long way but is invisible in a cosine over
-  4096 × 5120 values. Seven ragged widths must reproduce their rows out of a
-  4096-row run *bit for bit*.
-- **k/v gets two bars, not one.** Worst-row cosine at **0.99** for addressing,
-  relative L2 at 0.04 for magnitude. N5's 0.999 worst-row bar does not survive
-  the move: a worst row is a minimum over `T` samples and drifts down with `T`
-  even at uniform error (0.99975 at T=1 → 0.99848 at 221, then flat, because
-  512 and 600 repeat the dump and refind the same row). The row's norm ratio is
-  printed so a sampling floor can be told from a real fault — it came back
-  0.99× mean, an ordinary row with an unlucky draw.
 
 Gates, in order: **M9** argmax matches `verify.argmax` exactly (8/8); **M15**
 ≥6/7 drafts match `mtp.draft_tokens`; **M17** greedy output is identical with
@@ -628,7 +497,7 @@ g++-13 -O2 -march=native -fopenmp -std=c++20 \
 
 Its ids are synthetic, and that is not a shortcut: token identity does not
 change which matmuls run over which shapes. It scores nothing — correctness is
-`verify_qwen3_8mtp` and the `verify_n*` suite. The one thing that has to be real
+`verify_qwen3_8mtp`. The one thing that has to be real
 is `L`, and that is the argument.
 
 **Where the time goes**, L = 1024, per 64-layer window. There are two numbers,
@@ -796,7 +665,7 @@ fp32.
    already takes `L` as a parameter; this module just always passes `ROWS`.
    5vl regenerates only when `L_padded` changes.
 3. *No precedent for the hand-off here.* `delta_proj::qkv_z_to_bo` already
-   implemented exactly this idiom for one hand-off, and N10 covers it.
+   implemented exactly this idiom for one hand-off.
 
 **What is done.** `dequant_mm_op` has the bf16 entry point —
 `stage()` hands out its x BO, `run_staged()` dispatches what the caller wrote

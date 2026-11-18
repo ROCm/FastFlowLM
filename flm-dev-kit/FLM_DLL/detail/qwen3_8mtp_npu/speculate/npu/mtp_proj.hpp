@@ -26,9 +26,9 @@
 /// dispatch read the woven up|gate as one 34816-row matrix, with no restaging
 /// and no second copy of the weights.
 ///
-/// The argument is checked, not trusted: `verify_n6_mtp_proj` re-runs
-/// `reorder_cpy` over the concatenation and `memcmp`s it against what the
-/// staging wrote, and every dispatch is scored against a same-bytes reference
+/// The argument was checked, not trusted, when this was ported: re-running
+/// `reorder_cpy` over the concatenation and `memcmp`ing it against what the
+/// staging wrote, and scoring every dispatch against a same-bytes reference
 /// with a rotated control.
 ///
 /// ## The two shapes that are not D
@@ -254,8 +254,8 @@ public:
     /// `dequant_mm_op`s, so `upgate_`'s y BO and `down_`'s x BO are distinct
     /// allocations and the loop below is not aliasing them.
     ///
-    /// `up_gate_swiglu` and `down` stay, unchanged: `verify_n6` scores each
-    /// dispatch on its own and needs the fp32 boundary to do it.
+    /// `up_gate_swiglu` and `down` stay, unchanged: scoring each dispatch on
+    /// its own needs the fp32 boundary.
     ///
     /// \param hn     [L][D] post-post_attention_layernorm
     /// \param resid  [L][D] added during the widen, or null

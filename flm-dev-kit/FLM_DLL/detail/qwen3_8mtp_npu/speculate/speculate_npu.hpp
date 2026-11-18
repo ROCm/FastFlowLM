@@ -65,9 +65,8 @@
 /// inside run-to-run spread. What it buys is that 32 cores go idle during a
 /// draft instead of saturated, which is the precondition for overlapping the
 /// draft with host work. The drafted ids and the acceptance rate were identical
-/// either way, which `verify_n7_lm_head` checks against `cpu_ref::lm_head`
-/// directly -- that driver is where the A/B lives now that the switch is gone.
-/// See REPLACEMENTWORK.md §N-MTP-LMHEAD.
+/// either way, measured against `cpu_ref::lm_head` directly before the
+/// switch was removed.
 ///
 /// Two pieces still stay on the host because they are in no xclbin: the
 /// embedding lookup, and `rms(h2, model.mtp.norm.weight)` -- and the norm only
@@ -432,8 +431,8 @@ private:
     /// is now unreachable on the live path in either direction.
     ///
     /// `FLM_Q38_MTP_PROJ_MIN` still overrides it, and that is the only way back
-    /// to the split arm -- `verify_n6` scores the device body against the host
-    /// one, so the host body has to stay reachable. Read once, like
+    /// to the split arm -- the host body stays reachable so the device body
+    /// can be scored against it. Read once, like
     /// `_prefill_min_width`, so the startup line and the decision cannot
     /// disagree.
     static int _proj_min_width() {
@@ -484,8 +483,8 @@ private:
     /// run; every norm, the RoPE, the gate and the SwiGLU are the same
     /// `cpu_ref::mtp_head` code in both. `FLM_Q38_MTP_PROJ=0` used to select
     /// between them and is gone -- `_use_proj()` now answers only the width
-    /// question -- but the split stays, because `verify_n6` scores the device
-    /// body against the host one and a shared spine is what makes that a
+    /// question -- but the split stays, because scoring the device body
+    /// against the host one needs a shared spine to make that a
     /// comparison rather than two implementations that happen to agree.
     void _prefill_step(const std::vector<int32_t>& ids, const float* hidden,
                        int width, int pos) {
@@ -600,7 +599,7 @@ private:
         // intermediate_size-wide fp32 buffer at all -- at width 4096 the one it
         // used to need between `up_gate_swiglu` and `down` was 285 MB, written
         // once and read back once. `up_gate_swiglu` and `down` remain, because
-        // N6 scores each dispatch on its own and needs the fp32 boundary to do
+        // scoring each dispatch on its own needs the fp32 boundary to do
         // it; only the live path takes the fused entry point.
         layer_out_.resize((size_t)width * D);
         proj_->mlp(hn_.data(), width, w, h1_.data(), layer_out_.data());
