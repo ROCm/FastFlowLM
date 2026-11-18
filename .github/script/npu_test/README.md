@@ -86,7 +86,7 @@ when the change touches their family (`--families`).
 The run also tests the models whose catalog entries the change added or
 edited (`--changed-models`), on the kinds of machine that test them (see
 [HIPEP machines](#hipep-machines)). The `full` tier tests every oga-hipep model (4 to
-124 GB each, about 410 GB in all).
+124 GB each, about 400 GB in all).
 Models larger than the machine holds are skipped either way, and a manual run
 that names the models (below) tests only those. Such a run gives `api` the
 backend's models in place of its NPU list, so the OpenAI contract tests, tool
@@ -128,7 +128,7 @@ memory dedicated to each GPU, which Windows leaves out of its own figure
   STX Halo machines) that also carry `oga-hipep`, whichever is free. It holds
   that runner for its run, as an NPU test job does. It tests the `pr` tier's
   models even nightly (`max-tier`), since each runner would otherwise
-  download all 410 GB and the NPU nightly needs them, and skips the models
+  download all 400 GB and the NPU nightly needs them, and skips the models
   above 32 GB (`max-model-gb`): gpt-oss and the 120B-class Qwen models. It
   leaves the changed entries' models to `stx-halo` (`changed-models`), so a
   change to many of them does not hold an NPU runner for hours.
@@ -160,7 +160,7 @@ A runner of a kind of its own (xconucstrhalo86 for `stx-halo`):
    `self-hosted`, `windows`, `x64`, `oga-hipep` and the kind's label
    (`stx-halo`), and neither `npu` nor `sweep`, or NPU test jobs would take it.
 3. `FLM_MODEL_PATH`, in the runner's `.env`, on a disk with room for every
-   model it tests (about 410 GB for all of them, which the nightly tests, and
+   model it tests (about 400 GB for all of them, which the nightly tests, and
    room for a new revision); otherwise they go to the machine's own
    `FLM_MODEL_PATH`, which installing flm may have set, or else to
    `%USERPROFILE%\.flm`.

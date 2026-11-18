@@ -79,12 +79,10 @@ GPU_BACKENDS = {"oga-hipep"}
 # never silently untested.
 PR_GPU = {
     "qwen3.5": "qwen3.8-oga-hipep:27b",   # the newest Qwen; Qwen3.5 and 3.6 too
-    # Not 12b, whose tool-call round trip fails on OGA 0.19 (the Gemma 4 tool
-    # grammar), which would fail every pull request.
     "gemma4e": "gemma4-it-oga-hipep:26b-a4b",
     "qwen2": "qwen2.5-it-oga-hipep:14b",
     "gemma3": "gemma3-oga-hipep:4b",
-    "gemma4-12b": "gemma4-12b-oga-hipep:12b",
+    "gemma4-12b": "gemma4-it-oga-hipep:12b",
     "gpt-oss": "gpt-oss-oga-hipep:120b",
 }
 
