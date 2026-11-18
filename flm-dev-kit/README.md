@@ -92,7 +92,11 @@ point them at through `$FLM_REFERENCE_DIR`. Reference data is not shipped.
 
 ## Windows
 
-Not tested in this release. [`FLM_DLL/README.md`](FLM_DLL/README.md) keeps the earlier Windows notes.
+The engines build on Windows (XRT) with Visual Studio's C++ tools. After FastFlowLM's
+`.github\script\ci\setup_windows_deps.ps1` has laid out its dependencies under `C:\dev`, run
+`flm-dev-kit\FLM_DLL\build.ps1` in a Developer PowerShell; the DLLs land in `flm-dev-kit/FLM_DLL/build/lib/`.
+Details and overrides: [`FLM_DLL/README.md`](FLM_DLL/README.md). Kernels are built on Linux.
+The Windows HRX engines (`-DFLM_USE_HRX=ON`) were not tested in this release.
 
 ## License
 

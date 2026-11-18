@@ -18,9 +18,9 @@ build\c8x4\Release\host.exe   --package precompiled\n256-c8x4-pair --n 16384 --i
 build\c8x4\Release\stress.exe --package precompiled\n256-c8x4-pair --mode all
 ```
 
-CMake defaults: XRT headers in `C:/dev/XRT/src/runtime_src/core/include`,
-`xrt_coreutil.lib` in `C:/dev/xrtNPUfromDLL` (as FLM_DLL); override with
-`-DXRT_INCLUDE_DIR=` / `-DXRT_LIB_DIR=`. `--preempt` (host and stress) puts a
+CMake defaults come from `FLM_DLL/cmake/flm_xrt_win.cmake` (as FLM_DLL): XRT headers in
+`C:/dev/XRT/src/runtime_src/core/include`, `xrt_coreutil.lib` in `C:/dev/xrtNPUfromDLL`;
+override with `-DFLM_WIN_DEPS_ROOT=`, or `-DXRT_INCLUDE_DIR=` / `-DXRT_LIB_DIR=`. `--preempt` (host and stress) puts a
 preemption point at the start of each sequence, as FLM does on Windows.
 
 Machine: Ryzen AI 7 350 (Krackan, 8 columns), Windows 11 26200, NPU driver
@@ -114,6 +114,6 @@ machine a hang there can end in bugcheck 0x119).
   instead of opening a new hw_context each time (status `stopped`, `reopen()`
   to go on). Pressure results of the Session on Windows:
   `../pm_runtime_load_singletile/README.md`.
-- aiebu: `FLM_DLL/external_libs/aiebu_static.lib` is built with /MT; link with
+- aiebu: FastFlowLM's `src/lib/xrt/aiebu_static.lib` is built with /MT; link with
   the static CRT.
 - `xrt-smi examine --report preemption` does not exist in XRT 2.21 on Windows.

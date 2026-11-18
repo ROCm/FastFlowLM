@@ -28,9 +28,11 @@ paired with, or that an engine matches either: a mismatch gives garbage output o
 flm-dev-kit/
 ├── FLM_DLL/                 C++20 engines, one .so/.dll per model family
 │   ├── build.sh             builds every unit: priority units first, then detail/*/
+│   ├── build.ps1            the same on Windows (XRT, CMake + MSVC)
 │   ├── build_<model>.sh     one engine + its deps (iteration)
 │   ├── build_manylinux.sh   HRX engines inside the pinned manylinux_2_28 container, then check_abi.sh
 │   ├── hrx.mk, cmake/flm_hrx.cmake   find the HRX package in ../hrx-integration/
+│   ├── cmake/flm_xrt_win.cmake   Windows XRT/aiebu/Boost-header paths (FLM_WIN_DEPS_ROOT, default C:/dev)
 │   ├── ADDING_A_NEW_MODEL.md  how to add an engine; read before creating one
 │   ├── model_list.json, model_list_linux.json   model registries (see §9)
 │   ├── include/             public headers: causal_lm.hpp, buffer.hpp, weight_desc.hpp,
@@ -81,6 +83,7 @@ from anywhere else.
 |---|---|---|
 | `bash FLM_DLL/build.sh` | `rm -rf FLM_DLL/build`, then every unit with `make clean && make -j4`; lists failed dirs, exits 1 on failure | ~6 min on 32 cores |
 | `bash FLM_DLL/build_<model>.sh` | one engine + its deps | minutes |
+| `FLM_DLL\build.ps1 [-Clean] [-DepsRoot <dir>]` | Windows: every engine → `FLM_DLL/build/lib/*.dll`; stops at the first priority failure. Developer PowerShell; deps from `../.github/script/ci/setup_windows_deps.ps1` | minutes |
 | `FLM_USE_HRX=1 bash FLM_DLL/build.sh` | the same against the HRX package (fetch it first: `bash ../hrx-integration/fetch-hrx-release.sh`) | ~6 min |
 | `bash FLM_DLL/build_manylinux.sh` | HRX engines in Docker + `check_abi.sh`; the only way to get HRX libs FastFlowLM can ship | tens of minutes |
 | `cd FLM_DLL/detail/<dir> && make clean && make -j4` | one unit → `FLM_DLL/build/lib/<TARGET>` (see the Makefile's `TARGET =`); needs its deps built first | 1-3 min |
@@ -215,8 +218,10 @@ Kernel build: `iron/*_aie.py` → `build/[<MT>/]mlir/*.mlir` → `aiecc.py` → 
   `makefiles/common.mk` (`PEANOWRAP2P_FLAGS` / `CHESSCCWRAP2P_FLAGS`), not all; check the kernel's
   `common.mk`. It changes numerics.
 - `FLM_DLL/detail/vision_common/` has no Makefile; it is compiled into the vision engines.
-- **Windows** is not tested in this release; `FLM_DLL/README.md` keeps the old notes (they assume
-  `C:/dev/`).
+- **Windows** engines take every dependency path from `FLM_DLL/cmake/flm_xrt_win.cmake`; do not add
+  `C:/...` paths to an engine CMakeLists. They need Boost *headers* (XRT's `xrt/detail/any.h` uses
+  `boost::any` under MSVC without `/Zc:__cplusplus`) but link no Boost library. An engine CMakeLists
+  only warns when a priority `.lib` is missing; use `build.ps1`, which stops instead.
 - Two registries, `FLM_DLL/model_list.json` and `model_list_linux.json`; FastFlowLM's
   `../src/model_list.json` is what `flm` reads.
 

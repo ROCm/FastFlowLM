@@ -7,73 +7,40 @@
 The engine libraries of FastFlowLM, one per model family (`detail/`). On Linux, build them with
 `bash build.sh` (every unit) or `bash build_<model>.sh` (one engine and what it needs).
 
-> **Windows: not tested in this release.** The Windows steps below are the old notes, kept for
-> reference until they are checked on a Windows machine.
+## Windows
 
-This repository contains:
-    - NPU xclbin code
-    - NPU xclbin driver host code
+Builds the XRT engines as `build/lib/<name>.dll` with Visual Studio's C++ tools. One-time setup,
+from the FastFlowLM root in PowerShell:
 
-# Setup instruction
-## 1. Create a new folder "C:/dev"
-
-## 1. Install visual studio 2022 Community
-Inside the "C:/dev", do 
-```bash
-git clone https://github.com/microsoft/vcpkg.git
-
-cd vcpkg; .\bootstrap-vcpkg.bat
-.\vcpkg install curl
-.\vcpkg install ffmpeg[zlib,avcodec,avformat,swscale]
-```
-## 2. Install boost
-Down the **zip file** [1.88](https://www.boost.org/releases/1.88.0/)
-
-Extract to "C:/dev"
-Open **Developer PowerShell of VS2022**
-```
-cd "C:\dev\boost_xxx"
-
-.\bootstrap.bat
-# or .\bootstrap.bat vc143 for vs 2018
-
-./b2 --build-type=complete link=static,shared
-```
-## 3. xrt setup
-1. clone the xrt  in C:/dev
-```shell
-C:\dev> git clone https://github.com/Xilinx/XRT -b 2025.1_mcdm_0430
-
-```
-Follow [step4](https://github.com/Xilinx/mlir-aie/blob/main/docs/buildHostWin.md)
-in WSL
-
-```shell
-sudo apt update
-sudo apt install mingw-w64-tools
-mkdir /mnt/c/dev/xrtNPUfromDLL; cd /mnt/c/dev/xrtNPUfromDLL
-
-cp /mnt/c/Windows/System32/xrt_coreutil.dll .
-
-gendef xrt_coreutil.dll
-```
-Then follow [Step 2 of prepare for windows 11](https://github.com/Xilinx/mlir-aie/blob/main/docs/buildHostWin.md)
-
-Got to a VisutalStudio terminal
-```shell
-C:\dev\xrtNPUfromDLL> lib /def:xrt_coreutil.def /machine:x64 /out:xrt_coreutil.lib
+```powershell
+.github\script\ci\setup_windows_deps.ps1        # XRT headers, xrt_coreutil.lib and Boost headers under C:\dev
 ```
 
-## 4. Cmake 
-## 5. Rust for windows
+That is the layout FastFlowLM's own Windows build uses. It ships `xrt/detail/version.h`, which a
+plain XRT checkout lacks. `aiebu_static.lib` comes from `../../src/lib/xrt/`. Then, in a Developer
+PowerShell for Visual Studio:
 
-# Build instruction
-### 1. install
-```bash
-bash build.sh        # from flm-dev-kit/FLM_DLL; on Windows through WSL: wsl bash build.sh
+```powershell
+flm-dev-kit\FLM_DLL\build.ps1                     # every engine; priority units first
+flm-dev-kit\FLM_DLL\build.ps1 -DepsRoot D:\deps   # the same layout elsewhere (add -Clean when changing it)
 ```
 
-### Note:
-If the build stops with `Cannot open include file: 'xrt/detail/version.h'`, the XRT checkout lacks
-that generated header. FastFlowLM's `.github/script/ci/setup_windows_deps.ps1` shows how CI
-provides it (it copies `.github/windows-deps/xrt_version.h` into place).
+One engine (after the priority units `q4nx mha gemm dequant lm_head`, whose `.lib` files it links
+from `build/lib/`):
+
+```powershell
+cmake -S flm-dev-kit\FLM_DLL\detail\qwen2_npu -B flm-dev-kit\FLM_DLL\build\qwen2_npu -A x64
+cmake --build flm-dev-kit\FLM_DLL\build\qwen2_npu --config Release
+```
+
+The paths come from [`cmake/flm_xrt_win.cmake`](cmake/flm_xrt_win.cmake): override them with
+`-DFLM_WIN_DEPS_ROOT=<dir>`, or `-DXRT_INCLUDE_DIR=<dir> -DXRT_LIB_DIR=<dir>`. Configuring stops
+with a message when XRT, `aiebu_static.lib` or the Boost headers are missing. Only Boost's
+headers are needed: XRT's `xrt/detail/any.h` uses `boost::any` under MSVC unless `/Zc:__cplusplus`
+is set, and the engines build like `flm`, without it.
+
+An engine CMakeLists only warns when a priority `.lib` is missing, and then links an incomplete DLL.
+`build.ps1` stops at the first priority failure for that reason.
+
+From WSL, `make` in an engine folder drives the same CMake through `powershell.exe`; that route was
+not tested in this release.
