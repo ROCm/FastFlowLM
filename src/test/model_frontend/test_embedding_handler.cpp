@@ -1,6 +1,7 @@
 /// \file test_embedding_handler.cpp
-/// \brief Exercise the production embedding request handler without a device or network.
+/// \brief Exercise model loading and embedding requests without a device or network.
 #include "rest_handler.hpp"
+#include "model_loader.hpp"
 #include "../phi4_core/test_support.hpp"
 #include <fstream>
 #include <future>
@@ -24,6 +25,7 @@ std::map<std::string, Status> statuses;
 int pulls = 0;
 bool pull_succeeds = false;
 bool npu_available = true;
+std::optional<bool> preferred_pull;
 }
 flm_rt::device* utils::require_npu_device(flm_rt::device* device, const std::string&) {
     static flm_rt::device fake_device;
@@ -36,8 +38,18 @@ ModelDownloader::ModelStatus ModelDownloader::is_model_downloaded(
     TEST_REQUIRE(fast_check);
     return statuses.at(tag);
 }
-bool ModelDownloader::pull_model(const std::string&, bool, bool) {
+bool ModelDownloader::pull_model(const std::string& tag, bool, bool) {
     ++pulls;
+    if (pull_succeeds && preferred_pull.has_value()) {
+        supported_models.choose_source(tag, *preferred_pull);
+        const auto info = supported_models.get_model_info(tag).second;
+        const auto path = std::filesystem::path(supported_models.get_model_path(tag));
+        std::filesystem::create_directories(path);
+        for (const auto& file : info.at("files"))
+            std::ofstream(path / file.get<std::string>()) << "downloaded";
+        // Like the real downloader, leave subsequent lookups to the files on disk.
+        supported_models.choose_source(tag, std::nullopt);
+    }
     return pull_succeeds;
 }
 
@@ -164,4 +176,69 @@ void test_embedding_handler() {
     first.get();
     second.get();
     registry.unload_extensions();
+}
+
+void test_frontend_selection_after_download() {
+    auto& registry = flm::frontend::FrontendRegistry::instance();
+    static int creations = 0;
+    for (const auto* provider : {"source-default", "source-preferred"}) {
+        registry.register_frontend("source-selection", [provider](void*) {
+            ++creations;
+            return flm::frontend::FrontendPtr(
+                reinterpret_cast<AutoModel*>(new std::string(provider)),
+                flm::frontend::FrontendDeleter{nullptr, [](void*, void* object) {
+                    delete static_cast<std::string*>(object);
+                }, nullptr});
+        }, provider);
+    }
+    const auto directory = std::filesystem::path(FLM_TEST_EMBEDDING_MANIFEST).parent_path()
+        / "source-selection-test";
+    std::filesystem::remove_all(directory);
+    std::filesystem::create_directories(directory);
+    std::string path = (directory / "models.json").string(), root = directory.string();
+    nlohmann::json catalog{
+        {"schema_version", 1}, {"models", {{"source-selection", {{"1", {
+            {"name", "source-selection"}, {"details", {{"family", "source-selection"}}},
+            {"url", "https://example.invalid/model"}, {"flm_min_version", "1.0.0"},
+            {"backend", "flm"}, {"backend_provider", "builtin"},
+            {"default_context_length", 4096}, {"max_prefill_len", 512},
+            {"frontend_provider", "source-default"}, {"files", {"ordinary.bin"}},
+            {"preferred_source", {{"frontend_provider", "source-preferred"}, {"files", {"preferred.bin"}}}}
+        }}}}}}};
+    std::ofstream(path) << catalog;
+    (void)flm::catalog::load_model_catalog_overlay(path);
+    catalog["model_path"] = "models";
+    std::ofstream(path) << catalog;
+    for (bool preferred : {false, true}) {
+        std::filesystem::remove_all(directory / "models");
+        model_list models(path, root);
+        ModelDownloader downloads(models);
+        // Runner owns a catalog copy; it must see the source through downloaded files.
+        model_list caller_models = models;
+        statuses["source-selection:1"] = Status::Missing;
+        preferred_pull = preferred;
+        pull_succeeds = true;
+        const std::string expected = preferred ? "source-preferred" : "source-default";
+        TEST_REQUIRE(caller_models.get_model_info("source-selection:1").second.at("frontend_provider") == "source-default");
+        auto [tag, frontend] = get_auto_model("Ollama/source-selection", caller_models, nullptr, downloads, false);
+        TEST_REQUIRE(tag == "source-selection:1");
+        TEST_REQUIRE(*reinterpret_cast<std::string*>(frontend.get()) == expected);
+        TEST_REQUIRE(caller_models.get_model_info(tag).second.at("frontend_provider") == expected);
+        statuses[tag] = Status::Ready;
+        const int pulled = pulls;
+        auto cached = get_auto_model(tag, caller_models, nullptr, downloads, false);
+        TEST_REQUIRE(*reinterpret_cast<std::string*>(cached.second.get()) == expected);
+        TEST_REQUIRE(pulls == pulled);
+    }
+    model_list models(path, root);
+    ModelDownloader downloads(models);
+    pull_succeeds = false;
+    const int created = creations;
+    for (const auto status : {Status::Missing, Status::Outdated, Status::Incompatible}) {
+        statuses["source-selection:1"] = status;
+        RequireThrows([&] { get_auto_model("source-selection:1", models, nullptr, downloads, false); });
+        TEST_REQUIRE(creations == created);
+    }
+    preferred_pull.reset();
+    std::filesystem::remove_all(directory);
 }

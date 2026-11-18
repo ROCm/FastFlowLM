@@ -902,11 +902,13 @@ void test_manifest_schema_fixtures_match_runtime_contract() {
 }  // namespace
 
 void test_embedding_handler();
+void test_frontend_selection_after_download();
 void test_gemma_embedding_request();
 
 int main() {
     RunTest(test_gemma_embedding_request, "built-in embedding request options");
     RunTest(test_embedding_handler, "embedding request failures and switching");
+    RunTest(test_frontend_selection_after_download, "frontend selection after download");
     RunTest(test_embedding_extension, "embedding provider lifecycle and rollback");
     RunTest(test_register_and_create, "register and create");
     RunTest(test_registration_validation, "registration validation");
