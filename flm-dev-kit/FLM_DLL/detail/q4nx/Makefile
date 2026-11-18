@@ -70,11 +70,6 @@ LDFLAGS += $(HRX_LIBS)
 else
 LDFLAGS += -lxrt_coreutil
 endif
-ifeq ($(FLM_USE_HRX),1)
-# HRX path links no Boost (no engine source uses Boost); Linux engine .so stay Boost-free.
-else
-LDFLAGS += -lboost_program_options -lboost_filesystem
-endif
 
 SOURCES = $(wildcard *.cpp)
 HEADERS = $(wildcard ../../include/*.hpp)

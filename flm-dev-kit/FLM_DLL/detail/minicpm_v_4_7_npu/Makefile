@@ -159,11 +159,6 @@ else
 # on every _setup_kernel().
 LDFLAGS += -lxrt_coreutil ../../../../src/lib/xrt/libaiebu.a
 endif
-ifeq ($(FLM_USE_HRX),1)
-# HRX path links no Boost (no engine source uses Boost); Linux engine .so stay Boost-free.
-else
-LDFLAGS += -lboost_program_options -lboost_filesystem
-endif
 
 
 # Each source compiles to an object under LIB_DIR mirroring the source tree, so

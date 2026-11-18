@@ -104,11 +104,6 @@ LDFLAGS += $(HRX_LIBS)
 else
 LDFLAGS += -lxrt_coreutil -laiebu
 endif
-ifeq ($(FLM_USE_HRX),1)
-# HRX path links no Boost (no engine source uses Boost); Linux engine .so stay Boost-free.
-else
-LDFLAGS += -lboost_program_options -lboost_filesystem
-endif
 
 
 # Each source compiles to an object under LIB_DIR, so dependency (.d) files are emitted
