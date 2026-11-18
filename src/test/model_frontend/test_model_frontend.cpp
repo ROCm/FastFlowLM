@@ -2,6 +2,7 @@
 /// \brief Hardware-free frontend registry and C loader tests
 #include "AutoModel/model_backend.hpp"
 #include "AutoModel/all_models.hpp"
+#include "model_loader.hpp"
 #include "AutoEmbeddingModel/all_embedding_model.hpp"
 #include "AutoEmbeddingModel/auto_embedding_model.hpp"
 #include "AutoModel/model_extension_frontend.hpp"
@@ -323,6 +324,31 @@ void test_competing_embedding_providers() {
     registry.unload_extensions();
     info.erase("frontend_provider");
     TEST_REQUIRE(get_auto_embedding_model(info, nullptr)->embed({}).values == std::vector<float>{8});
+
+    // Generation loading must reject both catalog formats before downloading or
+    // requesting a generation factory, even with embedding frontends registered.
+    const auto directory = std::filesystem::path(FLM_TEST_EMBEDDING_MANIFEST).parent_path();
+    auto legacy = info;
+    legacy.erase("model_kind");
+    legacy["name"] = "legacy-embedding";
+    auto extension_info = info;
+    extension_info["details"]["family"] = "test-embedding";
+    extension_info["name"] = "extension-embedding";
+    std::string path = WriteManifest(directory, "generation-guard-models.json", {
+        {"model_path", "models"}, {"models", {
+            {"embed-gemma", {{"300m", legacy}}}, {"extension-embedding", {{"1", extension_info}}}
+        }}
+    }).string(), root = directory.string();
+    model_list models(path, root);
+    ModelDownloader downloads(models);
+    for (const char* tag : {"embed-gemma:300m", "Ollama/embed-gemma", "extension-embedding:1"}) {
+        RequireContains(RequireThrows<std::invalid_argument>([&] {
+            get_auto_model(tag, models, nullptr);
+        }), "embedding model");
+        RequireContains(RequireThrows<std::invalid_argument>([&] {
+            get_auto_model(tag, models, nullptr, downloads, false);
+        }), "embedding model");
+    }
 }
 
 void test_register_and_create() {
