@@ -25,7 +25,7 @@
 ///        [--ref FILE] [--xclbins DIR] [--bench]
 ///   FLM_MINICPM_V_VISION_FP32=1 ...     # the precision control (host arm)
 ///
-/// The reference is `models_simple/capture_minicpm_v_vision.py`: one 960x720
+/// The reference is an HF transformers capture (not shipped): one 960x720
 /// image, FIVE views (a 28x36 source and a 2x2 grid of 28x36 slices), fp32
 /// arithmetic over the checkpoint's bf16 weight values.
 ///

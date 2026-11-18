@@ -61,7 +61,7 @@ ifeq ($(PREFILL_MM), cpu)
 CXX_FLAGS += -DFLM_PREFILL_MM_ON_CPU
 endif
 # RIG=1 compiles in named-checkpoint dumps (D3_RIG_DUMP=<dir> at run time), named like the
-# checkpoints models_simple/verify_d3_lite.py saves.
+# checkpoints of the PyTorch reference (not shipped with the dev kit).
 RIG ?= 0
 ifeq ($(RIG), 1)
 CXX_FLAGS += -DD3_RIG

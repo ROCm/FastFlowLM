@@ -206,7 +206,7 @@ The array kernel alone: 7.5 ms per layer at 2,048 tokens, 29 ms at 4,096, 1.8 s 
 The prefill is `minicpm_v_4_7_npu`'s (same text tower, same weight layout, same host kernels), restructured around
 `d3_batch`: row-wise stages (projections, norms, gates, GLU, residuals) run once over all rows of a pass;
 conv1d, the delta rule and attention run per segment. Upstream reference: `d3_runtime.PromptEncoder`;
-plain-PyTorch reference: `models_simple/verify_d3_lite.py`.
+plain-PyTorch reference: not shipped with the dev kit.
 
 ## Numerical contract
 
@@ -229,7 +229,7 @@ plain-PyTorch reference: `models_simple/verify_d3_lite.py`.
 make -j            # libd3_npu.so (+ copied to ../../build/lib)
 make harness       # + ../../build/d3_npu/bin/d3_engine_run (tools/d3_engine_run.cpp)
 make PREFILL_MM=cpu   # every projection on the host too: no xclbin, no device work
-make RIG=1            # named checkpoint dumps (D3_RIG_DUMP=<dir>), as models_simple/verify_d3_lite.py names them
+make RIG=1            # named checkpoint dumps (D3_RIG_DUMP=<dir>), named as the PyTorch reference names them
 make PREFILL_PROFILE=1   # per-stage prefill times
 make FLM_USE_HRX=1    # against the HRX runtime (hrx-integration/fetch-hrx-release.sh first)
 ```

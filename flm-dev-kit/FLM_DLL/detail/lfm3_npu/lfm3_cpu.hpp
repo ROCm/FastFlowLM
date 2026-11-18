@@ -7,7 +7,7 @@
 /// \brief Host (CPU) implementation of every stage of the LFM3 model.
 ///
 /// This is the "complete host model": it reads model.q4nx blocks as the converter wrote them and computes the same
-/// thing as models_simple/simple/lfm3_simple.py, with the same rounding points (activations are bf16 between ops,
+/// thing as the PyTorch reference, with the same rounding points (activations are bf16 between ops,
 /// every matmul accumulates in fp32 and rounds to bf16 once). It never touches the NPU, so it is safe to run anywhere
 /// and is the reference every NPU stage is checked against.
 #include <cassert>

@@ -67,7 +67,7 @@ at no measurable cost. `FLM_MINICPM_V_VISION_DEVICE_GELU=1` is the A/B
 
 ## Verification
 
-Reference: `models_simple/capture_minicpm_v_moe_vision.py` -> `vision_ref.safetensors`
+Reference: an HF transformers capture (not shipped) -> `vision_ref.safetensors`
 (960x720 photo, 5 views of 28x36, every stage tapped, plus the HF prompt, its
 canvas positions and HF fp32's greedy answer).
 

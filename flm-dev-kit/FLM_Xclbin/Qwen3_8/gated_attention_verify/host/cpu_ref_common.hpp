@@ -11,7 +11,7 @@
 ///     model.q4nx -- q4nx *is* a safetensors file with extra dtypes),
 ///   * the FLM Q4_K block layout and a fused dequantise+matmul,
 ///   * the handful of activations / norms the two layers share,
-///   * error_matrix(), mirroring models_simple/verify_qwen3_8.py.
+///   * error_matrix(), mirroring the PyTorch reference.
 ///
 /// Everything is fp32. This is a golden reference for the *math*, not a
 /// bit-accurate model of the AIE datapath, so the expected agreement with
@@ -489,7 +489,7 @@ inline void rms_norm(const float* x, const float* w, int n, float* y,
 }
 
 // --------------------------------------------------------------------------
-// error_matrix(), same four numbers verify_qwen3_8.py prints
+// error_matrix(), same four numbers the PyTorch reference prints
 // --------------------------------------------------------------------------
 struct err_stats { double rel_l1, rel_l2, cosine, rmse; };
 

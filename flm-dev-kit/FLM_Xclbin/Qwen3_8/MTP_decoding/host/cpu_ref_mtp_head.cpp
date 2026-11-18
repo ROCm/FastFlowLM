@@ -5,7 +5,7 @@
 /// \brief CPU golden reference for the Qwen3.8-27B MTP (multi-token-prediction)
 ///        draft head -- the T=1 chained decode steps and the T=221 priming step.
 ///
-/// Target: models_simple/docs/QWEN3_8_MTP_DATAFLOW.html. One speculative cycle
+/// One speculative cycle
 /// is seven draft steps through a single decoder layer that owns its own KV
 /// cache:
 ///

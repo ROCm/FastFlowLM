@@ -3,7 +3,7 @@
 
 """Compare the NPU SmolVLA against the PyTorch reference over several timesteps.
 
-This replaces the old models_simple/verify_smovla.py, which drove an
+This replaces an older internal script, which drove an
 instrumented copy of lerobot (enable_capture / enable_compact_prefix). Those
 hooks do not exist in a clean lerobot install, so the reference here comes from
 the public API only: policy.predict_action_chunk(batch, noise=...).

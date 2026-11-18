@@ -570,7 +570,7 @@ inline void l2_norm(const float* x, int n, float* y, float extra_scale = 1.0f,
 }
 
 // --------------------------------------------------------------------------
-// error_matrix(), same four numbers verify_qwen3_8.py prints
+// error_matrix(), same four numbers the PyTorch reference prints
 // --------------------------------------------------------------------------
 struct err_stats { double rel_l1, rel_l2, cosine, rmse; };
 

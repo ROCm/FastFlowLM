@@ -395,7 +395,7 @@ each one, and those are plain text ids, which breaks the run.
 
 **Audio is NOT a block.** Audio soft tokens are masked exactly like text. This is the most
 surprising rule of the whole scheme and the code calls it out explicitly in
-`gemma4_12b_prefill_blocks`'s doc comment. See `models_simple/GEMMA4_12B_QAT_MASKS.md`.
+`gemma4_12b_prefill_blocks`'s doc comment.
 
 **How it is implemented.** Rather than teach a fixed-function attention an arbitrary mask,
 the standard causal/sliding attention runs unchanged and the wrong rows are **recomputed

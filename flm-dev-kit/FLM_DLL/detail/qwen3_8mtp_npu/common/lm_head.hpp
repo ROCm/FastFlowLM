@@ -5,7 +5,7 @@
 ///
 /// Shared by the base model and the MTP head: the checkpoint has no
 /// mtp.lm_head, so mtp.norm feeds this same 248320 x 5120 Q8_0 table
-/// (verify_qwen3_8.py:615 projects the head's norm_out through model.lm_head).
+/// (the PyTorch reference projects the head's norm_out through model.lm_head).
 #pragma once
 
 #include "common/cpu_ref_common.hpp"

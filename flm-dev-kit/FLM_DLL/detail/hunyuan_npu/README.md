@@ -19,7 +19,7 @@ RMS norms and `fill_kv_cache` are still host. Sections below that name `fused_pr
 
 ## Architecture
 
-A Llama-shaped GQA decoder (see `models_simple/HUNYUAN_V1_DENSE.md`) with two
+A Llama-shaped GQA decoder (see the HunYuan V1 dense model card / HF modeling code) with two
 deviations, both of which this engine implements and both of which are easy to
 get wrong by pattern-matching another model:
 

@@ -94,7 +94,7 @@ namespace cpu_func {
     /// @brief RMSNorm, HunYuan flavour
     /// @note  out = w * (bf16)(x * rsqrt(mean(x^2) + eps)). The cast back to
     ///        bf16 happens *before* the weight multiply -- see
-    ///        models_simple/HUNYUAN_V1_DENSE.md, HunYuanRMSNorm.forward.
+    ///        HunYuanRMSNorm.forward in the HF modeling code.
     void _rms_norm(bf16* y, const bf16* x, const bf16* w_ptr, int D, int L, int L_offset_dest, int L_offset_input, f32 eps){
         const bf16* x_base = x + (size_t)L_offset_input * D;
         bf16*       y_base = y + (size_t)L_offset_dest  * D;

@@ -567,7 +567,7 @@ struct gemma4_12b_prefill_mm_shape {
 /// \brief One maximal run of image-or-video soft tokens, in absolute positions.
 ///
 /// Queries inside a block see the whole block, in both directions; everything else stays
-/// causal. See models_simple/GEMMA4_12B_QAT_MASKS.md section 3 for why a block is exactly
+/// causal. A block is exactly
 /// one image (or one video frame) and never spans two: the processor always emits the
 /// boi/eoi markers around each item, and those are plain text, which breaks the run.
 struct gemma4_12b_vision_block {

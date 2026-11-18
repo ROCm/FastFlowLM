@@ -9,7 +9,7 @@
 /// q4_k / q8_0 blocks) and leave behind exactly what an array stage leaves, so the GEMMs can
 /// move between host and array without touching their neighbours. Changes for d3: attention
 /// takes a `causal` flag (d3 runs it bidirectionally), and rig_dump() writes named checkpoints
-/// to compare with models_simple/verify_d3_lite.py.
+/// to compare with the PyTorch reference (not shipped with the dev kit).
 #ifndef __D3_PREFILL_CPU_HPP__
 #define __D3_PREFILL_CPU_HPP__
 
@@ -924,7 +924,7 @@ namespace d3_cpu {
         f.write(reinterpret_cast<const char*>(p), n * sizeof(float));
     }
 
-    /// \brief named checkpoint dump (the names models_simple/verify_d3_lite.py saves): <$D3_RIG_DUMP>/<name>.npy, float32 [rows, cols]
+    /// \brief named checkpoint dump (the names the PyTorch reference saves): <$D3_RIG_DUMP>/<name>.npy, float32 [rows, cols]
     /// \note  compiled in only with -DD3_RIG (d3_prefill.hpp's D3_RIG_DUMP macro); the engine
     ///        turns `rig_active` on around a single-prompt encode.
     inline bool& rig_active() { static bool on = false; return on; }

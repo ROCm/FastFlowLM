@@ -409,7 +409,7 @@ buffer<bf16> lfm3_npu::Impl::run(const int* ids, int n, bool want_logits) {
         std::memcpy(&x[(size_t)t * D], u16p(embedding.w.data()) + (size_t)ids[t] * D, (size_t)D * sizeof(uint16_t));
     }
     // LFM3_DUMP_DIR=<dir>: write the residual stream (bf16, n x D) after the embedding and after every layer, for the
-    // first call only. Used to find the first layer that disagrees with models_simple/simple/lfm3_simple.py.
+    // first call only. Used to find the first layer that disagrees with the PyTorch reference.
     static const char* dump_dir = std::getenv("LFM3_DUMP_DIR");
     auto dump = [&](const std::string& name) {
         if (!dump_dir || dump_done) return;

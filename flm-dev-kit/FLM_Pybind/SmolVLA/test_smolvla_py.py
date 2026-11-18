@@ -9,9 +9,9 @@ extension imports, that the single-instance rule holds (including releasing the
 NPU on delete), that forward() accepts torch tensors, and that repeated calls
 with the same explicit noise are bit-identical.
 
-Run from FLM_Xclbin/SMOLVLA/UI after `make python`:
+Run from FLM_Pybind/SmolVLA after `make python`:
 
-    /path/to/FastFlowLM_IRON/models_simple/.venv/bin/python test_smolvla_py.py
+    python test_smolvla_py.py   # any env with torch + the smolvla_npu module built by `make python`
 """
 
 import argparse

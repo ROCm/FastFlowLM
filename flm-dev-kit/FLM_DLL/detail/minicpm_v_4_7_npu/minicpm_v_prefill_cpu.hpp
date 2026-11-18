@@ -805,11 +805,11 @@ namespace minicpm_v_cpu {
     }
 
     // ---------------------------------------------------------------------------------
-    // Tensor dumps, for scoring the engine against models_simple/dumps/minicpm_v/.
+    // Tensor dumps, for scoring one build of the engine against another (host_ref/run_gate.sh).
     //
     // Compiled in at DEBUG_LEVEL >= 1 only (MINICPM_V_DUMP below expands to nothing
     // otherwise), and inert unless FLM_DUMP_DIR is set. Files follow
-    // REFERENCE_MANIFEST.md's names and layout -- <dir>/layers/NN/<name>.npy, float32 --
+    // one layout -- <dir>/layers/NN/<name>.npy, float32 --
     // so host_ref/compare_engine.py can diff the two trees directly.
     // ---------------------------------------------------------------------------------
     struct dumper_t {

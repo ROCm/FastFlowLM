@@ -9,7 +9,7 @@
 /// Every other QK-norm model in the tree (Qwen3) normalizes first, which is what
 /// rope.cc implements.  RMSNorm is scale-only and RoPE is a rotation, so the two
 /// orders are only equivalent when the norm weight is all ones -- they are not
-/// interchangeable here.  See models_simple/HUNYUAN_V1_DENSE.md §4.
+/// interchangeable here (HunYuan applies the per-head Q/K RMS norm after RoPE).
 ///
 /// The consequence for the cache is unchanged from rope.cc: the K this kernel
 /// hands to IT3 is post-RoPE *and* post-norm, so nothing is re-applied to

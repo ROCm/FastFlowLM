@@ -64,7 +64,7 @@ The chunked (WY transform) delta rule: process C tokens at once.
 | arithmetic intensity | ~1 | **~C** |
 
 This is what `chunk_gated_delta_rule` does in flash-linear-attention, and what the PyTorch reference
-already uses. **The reference exists for free:** `models_simple/verify_minicpm_ocr.py` cross-checks
+already uses. **The reference exists for free:** the PyTorch reference (not shipped) cross-checks
 the chunked formulation against token-serial per layer and currently passes at 1e-7.
 
 A second, independent cost worth measuring before assuming the maths is everything: `conv.xclbin`

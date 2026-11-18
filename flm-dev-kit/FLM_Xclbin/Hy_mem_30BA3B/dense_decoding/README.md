@@ -412,7 +412,7 @@ The test hosts default to `MAX_L = 131072` (128K): 256 MB per layer, one
 buffer per layer (DMA offsets are 32-bit byte offsets). Verified 2026-10-26:
 NPU time per call 0.72 / 3.05 / 5.38 / 10.04 ms at context 8 / 32K / 64K / 128K,
 and no accuracy loss at long context (`run.exe --kv_fill N --dump <prefix>`,
-then `models_simple/check_hy_long_kv.py`: layer update cos 0.99977 at fill 0
+then an offline recompute of the layer: layer update cos 0.99977 at fill 0
 and at 131064).
 
 ### Online softmax split across two cores

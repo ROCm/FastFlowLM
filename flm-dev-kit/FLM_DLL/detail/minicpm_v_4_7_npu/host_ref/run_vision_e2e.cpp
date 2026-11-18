@@ -6,7 +6,7 @@
 ///
 ///   run_vision_e2e <model_dir> <vision_ref.safetensors> <exec_path> <model_name> [--gen N] [--reps R]
 ///
-/// `vision_ref.safetensors` is models_simple/capture_minicpm_v_vision.py's: it
+/// `vision_ref.safetensors` comes from an HF transformers capture (not shipped): it
 /// carries the tower's input (`pixel_values`, `target_sizes`), the chat-templated
 /// prompt with its placeholders expanded (`e2e.input_ids`), HF's last-row logits
 /// and HF fp32's greedy continuation. So this scores the engine -- tower, splice,

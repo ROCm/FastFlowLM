@@ -6,7 +6,7 @@
 /// \author FastFlowLM Team
 /// \date 2026-09-01
 /// \note Hy-MT2-1.8B is a plain Llama-shaped GQA decoder with exactly two
-///       deviations (see models_simple/HUNYUAN_V1_DENSE.md):
+///       deviations (see the HunYuan V1 dense model card / HF modeling code):
 ///         * the per-head Q/K RMS norms run *after* RoPE, not before;
 ///         * the DynamicNTKAlpha rope base rescale is already folded into the
 ///           checkpoint's rope_theta, so build() only has to honour an explicit

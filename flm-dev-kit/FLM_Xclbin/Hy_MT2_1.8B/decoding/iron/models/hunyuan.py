@@ -10,7 +10,7 @@ class hunyuan_dense_1_8b_config(ModelConfig, model_arch=ModelArch.HUNYUAN_DENSE_
     A plain Llama-shaped GQA decoder; the one thing the array has to know about
     is that the per-head Q/K RMS norms run *after* RoPE rather than before, so
     the RoPE tile links against the rope_hunyuan.o variant.  See
-    models_simple/HUNYUAN_V1_DENSE.md and kernels/rope_hunyuan.cc.
+    the HunYuan V1 dense model card / HF modeling code and kernels/rope_hunyuan.cc.
 
     4 KV heads with 16/4 = 4 Q heads per group.  The array runs this as
     ATTN_IMPL_1x8x1 -- the 1x4x1 kernel bodies only ever emitted two Q heads per

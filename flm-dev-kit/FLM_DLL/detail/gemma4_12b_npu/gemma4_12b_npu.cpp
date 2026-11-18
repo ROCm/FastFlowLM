@@ -732,8 +732,7 @@ buffer<bf16> gemma4_12b_npu::Impl::_prefill_with_mm(std::vector<int>& ids, void*
     // Image and video soft tokens attend to each other in both directions, which is the
     // one place gemma4-12b's mask departs from plain causal / sliding. The runs are found
     // once here and every layer's attention corrects its own rows for them; audio is
-    // deliberately not included, it is masked exactly like text. See
-    // models_simple/GEMMA4_12B_QAT_MASKS.md.
+    // deliberately not included, it is masked exactly like text.
     this->prefill_mm->set_vision_blocks(tokens, L_in, L_prompt_begin,
                                         image_token_id, video_token_id);
 

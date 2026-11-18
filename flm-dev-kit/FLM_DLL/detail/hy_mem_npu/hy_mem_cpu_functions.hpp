@@ -5,7 +5,7 @@
 /// \brief The small per-row prefill steps of Hy-Memory-30B-A3B, on the host
 /// \note Norms, q/k norm + RoPE, the K/V rows into the decode cache, SiLU-GLU,
 ///       residual, and the MoE router. Rounding follows transformers' bf16 model
-///       (models_simple/simple/hy_mem_simple.py has the math): every step reads
+///       (the PyTorch reference has the same math): every step reads
 ///       and writes bf16, fp32 inside.
 #pragma once
 #include <algorithm>

@@ -4,7 +4,7 @@
 /// \file hy_mem_prefill.hpp
 /// \brief Batched prefill of Hy-Memory-30B-A3B: a chunk of prompt tokens through all
 ///        48 layers at once, writing the decode KV cache as it goes
-/// \note Per layer (models_simple/simple/hy_mem_simple.py has the math):
+/// \note Per layer:
 ///         x -> rms_norm -> dequant_mm(k|v|q) -> qk_norm_rope -> store_kv
 ///           -> attention -> dequant_mm(o) -> +x
 ///           -> rms_norm -> dense:  dequant_mm(up|gate) -> silu_glu -> dequant_mm(down) -> +x

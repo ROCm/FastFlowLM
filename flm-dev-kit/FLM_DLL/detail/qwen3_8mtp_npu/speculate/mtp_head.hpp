@@ -26,7 +26,7 @@ namespace cpu_ref {
 namespace mtp {
 /// fc's input is cat(norm_embed, norm_hidden) -- two hidden vectors.
 constexpr int FC_IN     = 2 * q38::MODEL_DIM;   // 10240
-/// Draft depth k. verify_qwen3_8.py drafts 7 and verifies k+1 = 8.
+/// Draft depth k. The PyTorch reference drafts 7 and verifies k+1 = 8.
 constexpr int MTP_STEPS = 7;
 } // namespace mtp
 

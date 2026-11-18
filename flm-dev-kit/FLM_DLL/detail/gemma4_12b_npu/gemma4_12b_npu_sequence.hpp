@@ -281,8 +281,7 @@ struct gemma4_12b_npu_sequence{
     /// tail of the last 8 key group. That is exactly the vision block rule of a global
     /// layer -- a query inside a block sees [0, block_end), *the same range for every row of
     /// the block*, because the causal bound opens up to the block end and the window bound
-    /// is absent (see gemma4_12b_mm_attn_block::_stage_vision_blocks and
-    /// models_simple/GEMMA4_12B_QAT_MASKS.md). A row independent range over an extent that
+    /// is absent (see gemma4_12b_mm_attn_block::_stage_vision_blocks). A row independent range over an extent that
     /// starts at position 0 is all this overlay can express, and all the rule needs.
     ///
     /// Since kv extent row 0 *is* context position 0, the decoding cache goes in verbatim,

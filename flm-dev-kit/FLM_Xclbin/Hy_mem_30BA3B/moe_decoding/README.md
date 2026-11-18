@@ -120,7 +120,7 @@ call: 0.76 / 2.55 / 4.35 / 7.94 ms at context 8 / 32K / 64K / 128K (2026-10-26).
 `--kv_fill N --dump <prefix>` is the long-context accuracy check: it fills KV
 rows 0..N-1 with the Q4_K reference's K/V rows (repeated), decodes at positions
 N.., and writes the outputs and new K/V rows for
-`models_simple/check_hy_long_kv.py`, which recomputes the layer from the same
+an offline check, which recomputes the layer from the same
 cache. Layer 1 update cos 0.9988 at fill 0, 0.9994 at 131064: no drift.
 
 It ends with one RESULT block: calls completed, time per token, and each check's
@@ -134,10 +134,9 @@ reloading the instruction sequence for the new context length.
 The per-token latency it prints includes the host syncing every buffer each call;
 `--bench N` times the NPU alone (N rounds of 480 back-to-back calls, context
 length 8). Use it to measure speed changes.
-References: `models_simple/hy_mem_30a3b_reference.safetensors` (bf16) and
-`models_simple/hy_mem_layer_q4k_layer_<N>.safetensors` (whole layer with the
-Q4_K weights, from `models_simple/ref_hy_mem_layer_q4k.py`, run with the
-FLM_Q4NX_Converter venv). Debug env vars: `HY_STOP_AFTER=<stage>` ends the run
+References (`--ref_dir`, or `$FLM_REFERENCE_DIR`; not shipped): `hy_mem_30a3b_reference.safetensors`
+(bf16) and `hy_mem_layer_q4k_layer_<N>.safetensors` (the whole layer recomputed with the Q4_K
+weights). Debug env vars: `HY_STOP_AFTER=<stage>` ends the run
 sequence early, `HY_DEBUG_TAP=x` reads the x tap.
 
 ## Peano

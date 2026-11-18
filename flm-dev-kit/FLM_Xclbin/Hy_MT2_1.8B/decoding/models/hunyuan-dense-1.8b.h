@@ -5,7 +5,7 @@
 ///@brief Define the model parameters for the Hy-MT2-1.8B model
 ///
 /// `hunyuan-dense` is a plain Llama-shaped GQA decoder (see
-/// models_simple/HUNYUAN_V1_DENSE.md) with exactly two deviations, only one of
+/// the HunYuan V1 dense model card / HF modeling code) with exactly two deviations, only one of
 /// which the overlay can see:
 ///
 ///   * QK norm is applied *after* RoPE, not before.  Every other QK-norm model

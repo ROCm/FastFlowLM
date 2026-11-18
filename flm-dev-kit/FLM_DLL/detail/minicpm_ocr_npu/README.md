@@ -173,7 +173,7 @@ practice the split is therefore between turns: a long first prompt runs on the a
 follow-up prefills only its new tokens, usually on the host, starting from the state the array
 left. Each path leaves the recurrent state current on both host and device, so any order is safe.
 
-Verified 2026-10-29 (`models_simple/prompts/minicpm_ocr/dispatch/`):
+Verified 2026-10-29:
 
 * **Routing** -- on one `.so`, default output is identical to forced-host below 1536 and to
   forced-array at or above it, checked at 12, 1024, **1535, 1536**, 2009, 4092 and 4200 prefill
@@ -925,12 +925,12 @@ target is still the user's to choose.
 
 | What | How |
 |---|---|
-| bf16 reference, per layer | `models_simple/verify_minicpm_ocr.py` — 24/24 layers at cos 1.0000000 |
+| bf16 reference, per layer | the PyTorch reference (not shipped) — 24/24 layers at cos 1.0000000 |
 | `model.q4nx` vs its GGUF | `FLM_Q4NX_Converter/verify_minicpm_v_q4nx.py --tied-lm-head --config configs/minicpm_ocr_1b.json --model-def .../minicpm_ocr_model_def.hpp` |
 | what quantization cost | `FLM_Q4NX_Converter/verify_minicpm_ocr_q4nx_vs_bf16.py` — Q4_K body at cos ~0.9973, rest free |
 
-`host_ref/` was carried over from the sibling and its scripts now point at `dumps/minicpm_ocr/`,
-but they have **not** been re-run for this model yet.
+`host_ref/` was carried over from the sibling. Its gate (the NPU build scored against the host
+build) runs and passes for this model; see `host_ref/README.md`.
 
 ## Known gaps
 

@@ -10,7 +10,7 @@ missing config.json / model.safetensors, which would take the interpreter down
 with it -- the binding validates the paths up front to turn that into an
 exception.
 
-    /path/to/FastFlowLM_IRON/models_simple/.venv/bin/python test_smolvla_badpath.py
+    python test_smolvla_badpath.py   # any env with torch + the smolvla_npu module built by `make python`
 """
 
 import sys

@@ -56,7 +56,7 @@
 #endif
 
 // ---------------------------------------------------------------------------
-// Rig dumps, named like the checkpoints models_simple/verify_d3_lite.py saves. -DD3_RIG compiles them in; D3_RIG_DUMP=<dir>
+// Rig dumps, named like the checkpoints of the PyTorch reference. -DD3_RIG compiles them in; D3_RIG_DUMP=<dir>
 // turns them on. Only segment 0 of a batch is dumped, rows [0, len).
 // ---------------------------------------------------------------------------
 #ifdef D3_RIG
