@@ -152,7 +152,7 @@ void check_prefix_stable(const chat_format_spec& spec, const std::string& text, 
 /// \brief A grammar engine over a vocabulary of single characters, enough to match text
 class grammar_fixture {
 public:
-    grammar_fixture() {
+    explicit grammar_fixture(const chat_format_spec& spec = QWEN_XML) : spec_(spec) {
         json vocab = json::object();
         for (int c = 1; c < 127; c++) vocab[std::string(1, static_cast<char>(c))] = c;
         // a plain decoder: every token is the text it stands for
@@ -164,7 +164,7 @@ public:
         chat_vocab v;
         v.size = 128;
         v.tokenizer_json = path_;
-        engine_ = std::make_unique<chat_grammar_engine>(v, QWEN_XML);
+        engine_ = std::make_unique<chat_grammar_engine>(v, spec_);
     }
     ~grammar_fixture() {
         std::error_code ec;
@@ -174,12 +174,12 @@ public:
     /// \brief Whether the request's grammar takes the text, without reporting
     bool takes(const chat_constraint_request& request, const std::string& text) {
         std::string error;
-        return engine_->accepts(QWEN_XML, request, "", text, error);
+        return engine_->accepts(spec_, request, "", text, error);
     }
 
     bool accepts(const chat_constraint_request& request, const std::string& text, const char* label) {
         std::string error;
-        if (!engine_->accepts(QWEN_XML, request, "", text, error)) {
+        if (!engine_->accepts(spec_, request, "", text, error)) {
             std::printf("  FAIL %s: the grammar rejects the template's call: %s\n", label, error.c_str());
             failures++;
             return false;
@@ -188,6 +188,7 @@ public:
     }
 
 private:
+    chat_format_spec spec_;
     std::string path_;
     std::unique_ptr<chat_grammar_engine> engine_;
 };
@@ -552,6 +553,129 @@ void test_gemma4_nullable_types() {
     CHECK_EQ(tmpl->render(minja::Context::make(minja::Value(json{{"value", out["note"]}}))), "STRING nullable");
 }
 
+/// \brief One tool whose string parameter has length bounds, as test_tool_calls.py sends it
+const json NOTE_TOOLS = json::array({tool(
+    "save_note", object_schema({{"text", {{"type", "string"}, {"minLength", 2}, {"maxLength", 6}, {"pattern", "\\S"}}},
+                                {"tags", {{"type", "array"}, {"items", {{"type", "string"}, {"maxLength", 3}}}}}},
+                               {"text"}))});
+
+chat_constraint_request note_request() {
+    chat_constraint_request request = tools_request(chat_tool_choice::FUNCTION, "save_note");
+    request.tools = &NOTE_TOOLS;
+    return request;
+}
+
+void test_gemma4_string_length() {
+    std::printf("gemma4 grammar holds a string to its minLength/maxLength\n");
+    grammar_fixture grammar(chat_format_make(chat_format_kind::GEMMA4, true));
+    auto note = [](const std::string& text, const std::string& more = "") {
+        return "<|tool_call>call:save_note{" + more + "text:<|\"|>" + text + "<|\"|>}<tool_call|>";
+    };
+    CHECK(grammar.takes(note_request(), note("ab")));
+    CHECK(grammar.takes(note_request(), note("abcdef")));
+    CHECK(!grammar.takes(note_request(), note("a")));
+    CHECK(!grammar.takes(note_request(), note("abcdefg")));
+    // "<" counts as one character, and "<|" still cannot occur in the text
+    CHECK(grammar.takes(note_request(), note("a<b")));
+    CHECK(grammar.takes(note_request(), note("abcd<e")));
+    CHECK(!grammar.takes(note_request(), note("abcde<f")));
+    CHECK(grammar.takes(note_request(), note("<a")));
+    CHECK(!grammar.takes(note_request(), note("a<|b")));
+    // array items keep their bounds too
+    CHECK(grammar.takes(note_request(), note("ab", "tags:[<|\"|>x<|\"|>,<|\"|>xyz<|\"|>],")));
+    CHECK(!grammar.takes(note_request(), note("ab", "tags:[<|\"|>wxyz<|\"|>],")));
+}
+
+void test_lfm2_string_length() {
+    std::printf("lfm2 grammar holds a string to its minLength/maxLength\n");
+    grammar_fixture grammar(chat_format_make(chat_format_kind::LFM2_PYTHONIC, true));
+    auto note = [](const std::string& text) {
+        return "<|tool_call_start|>[save_note(text=" + text + ")]<|tool_call_end|>";
+    };
+    CHECK(grammar.takes(note_request(), note("\"abcdef\"")));
+    CHECK(grammar.takes(note_request(), note("'ab'")));
+    CHECK(!grammar.takes(note_request(), note("\"a\"")));
+    CHECK(!grammar.takes(note_request(), note("\"abcdefg\"")));
+    // an escape is one character of the value
+    CHECK(grammar.takes(note_request(), note("\"abcd\\\"e\"")));
+    CHECK(!grammar.takes(note_request(), note("\"abcde\\\"f\"")));
+}
+
+chat_constraint_request string_schema_request(const json& property) {
+    chat_constraint_request request;
+    request.allow_reasoning = false;
+    request.json_schema = {{"type", "object"}, {"properties", {{"v", property}}}, {"required", {"v"}},
+                           {"additionalProperties", false}};
+    return request;
+}
+
+void test_string_pattern() {
+    std::printf("a string pattern matches anywhere, as JSON Schema reads it\n");
+    grammar_fixture grammar(HERMES);
+    auto takes = [&grammar](const json& property, const std::string& value) {
+        return grammar.takes(string_schema_request(property), "{\"v\": \"" + value + "\"}");
+    };
+    auto pattern = [](const std::string& p) { return json{{"type", "string"}, {"pattern", p}}; };
+    CHECK(takes(pattern("\\S"), "Paris"));
+    CHECK(takes(pattern("\\S"), "a"));
+    CHECK(!takes(pattern("\\S"), " "));
+    CHECK(takes(pattern("\\d{5}"), "zip 90210"));
+    // anchored at both ends: as sent
+    CHECK(takes(pattern("^\\d{4}$"), "2024"));
+    CHECK(!takes(pattern("^\\d{4}$"), "x2024"));
+    CHECK(takes(pattern("^ab"), "abc"));
+    CHECK(!takes(pattern("^ab"), "cab"));
+    CHECK(takes(pattern("^$"), ""));
+    CHECK(!takes(pattern("^$"), "a"));
+    // each alternative keeps its own anchor
+    CHECK(takes(pattern("^a|b"), "ax"));
+    CHECK(takes(pattern("^a|b"), "xbx"));
+    CHECK(!takes(pattern("^a|b"), "xa"));
+    // an anchor inside a group, which xgrammar would ignore: left as sent
+    CHECK(takes(pattern("(?:^abc)"), "abc"));
+    CHECK(!takes(pattern("(?:^abc)"), "xabc"));
+    // padding never ends the string: a non-ASCII pattern is compiled without xgrammar's
+    // JSON string guard, where ".*" took "x\", \"k\": \"y" and added a key
+    CHECK(takes(pattern("(\xC3\xA9|x)"), "ax"));
+    CHECK(!takes(pattern("(\xC3\xA9|x)"), "x\", \"k\": \"y"));
+    // a lone class folds its length bounds
+    const json bounded = {{"type", "string"}, {"minLength", 2}, {"maxLength", 5}, {"pattern", "\\S"}};
+    CHECK(takes(bounded, "abcde"));
+    CHECK(!takes(bounded, "abcdef"));
+    CHECK(!takes(bounded, "a"));
+    // past xgrammar's repetition limit the bounds stay and the pattern goes, nested too
+    const json caption = {{"type", "string"}, {"minLength", 1}, {"maxLength", 512}, {"pattern", "\\S"}};
+    chat_constraint_request nested = string_schema_request(
+        {{"type", "object"}, {"properties", {{"caption", caption}}}, {"required", {"caption"}}, {"additionalProperties", false}});
+    CHECK(grammar.takes(nested, "{\"v\": {\"caption\": \"Monthly sales\"}}"));
+}
+
+void test_string_pattern_inline_flag() {
+    std::printf("a pattern opening with an inline flag is left as sent\n");
+    grammar_fixture grammar(HERMES);
+    // padded, it would read ".*((?i)abc).*", which xgrammar cannot build
+    CHECK(grammar.takes(string_schema_request({{"type", "string"}, {"pattern", "(?i)abc"}}), "{\"v\": \"abc\"}"));
+}
+
+void test_schema_literals_untouched() {
+    std::printf("literal values and \"not\" are not rewritten as schemas\n");
+    grammar_fixture grammar(HERMES);
+    // a property named like a keyword is still a schema
+    chat_constraint_request request;
+    request.allow_reasoning = false;
+    request.json_schema = {{"type", "object"},
+                           {"properties", {{"default", {{"type", "string"}, {"pattern", "\\S"}}}}},
+                           {"required", {"default"}},
+                           {"additionalProperties", false}};
+    CHECK(grammar.takes(request, "{\"default\": \"Paris\"}"));
+    // an enum value shaped like a string schema is a value: it is matched as sent
+    request.json_schema = {{"type", "object"},
+                           {"properties", {{"v", {{"enum", {{{"type", "string"}, {"pattern", "\\S"}}}}}}}},
+                           {"required", {"v"}},
+                           {"additionalProperties", false}};
+    CHECK(grammar.takes(request, "{\"v\": {\"type\":\"string\",\"pattern\":\"\\\\S\"}}"));
+}
+
 } // namespace
 
 int main() {
@@ -565,6 +689,11 @@ int main() {
     test_continued_call();
     test_no_tools_after_tool_turns();
     test_gemma4_nullable_types();
+    test_gemma4_string_length();
+    test_lfm2_string_length();
+    test_string_pattern();
+    test_string_pattern_inline_flag();
+    test_schema_literals_untouched();
     if (failures) {
         std::printf("%d check(s) failed\n", failures);
         return 1;

@@ -174,10 +174,21 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             return current_detail.c_str();
         } else if constexpr (std::is_same_v<Tag, selftest_dependencies_tag>) {
             return state.selftest_status;
-        } else if constexpr (std::is_same_v<Tag, npu_usable_tag>) {
-            return state.npu_usable;
-        } else if constexpr (std::is_same_v<Tag, npu_arch_tag>) {
-            return state.npu_arch.c_str();
+        } else if constexpr (std::is_same_v<Tag, has_feature_tag>) {
+            const auto feature = std::get<0>(arguments);
+            if (feature == ryzenai_corelib_feature_npu) return state.npu != fake_corelib::kNoNpu;
+            return (feature == ryzenai_corelib_feature_npu_aiem ||
+                    feature == ryzenai_corelib_feature_npu_aie2p) &&
+                   feature == state.npu;
+        } else if constexpr (std::is_same_v<Tag, feature_name_tag>) {
+            switch (std::get<0>(arguments)) {
+            case ryzenai_corelib_feature_npu: return "npu";
+            case ryzenai_corelib_feature_npu_aiem: return "npu_aiem";
+            case ryzenai_corelib_feature_npu_aie2p: return "npu_aie2p";
+            case ryzenai_corelib_feature_gpu: return "gpu";
+            case ryzenai_corelib_feature_npu_direct: return "npu_direct";
+            default: return static_cast<const char*>(nullptr);
+            }
         } else if constexpr (std::is_same_v<Tag, object_release_tag>) {
             void* object = std::get<0>(arguments);
             if (object) {
@@ -227,7 +238,7 @@ struct TypedFake<Tag, Result (*)(Args...)> {
                 constexpr std::int64_t kPage = 4096;
                 const auto wanted = std::max<std::int64_t>(state.model_max_sequence_length, 1);
                 *out = {sizeof(*out), "fake", 16, state.model_vocab,
-                        4, (wanted + kPage - 1) / kPage * kPage, -1};
+                        4, (wanted + kPage - 1) / kPage * kPage, -1, 0, -1};
             }
             return Status(Tag::name);
         } else if constexpr (std::is_same_v<Tag, model_run_tag>) {
@@ -442,7 +453,8 @@ struct TypedFake<Tag, Result (*)(Args...)> {
                         for (const auto n : outputs) {
                             for (const auto m : shipped(n == 1024 ? "matmul-1024" : "matmul-3072")) {
                                 const ryzenai_corelib_matmul_bf16_kernel_info info{
-                                    sizeof(info), 0, m, 3072, n, 64, false, 0, 0};
+                                    sizeof(info), 0, m, 3072, n, 64, false, 0, 0,
+                                    ryzenai_corelib_matmul_bf16_weights_format_mladf_v4};
                                 callback(ctx, &info);
                             }
                         }
@@ -460,7 +472,8 @@ struct TypedFake<Tag, Result (*)(Args...)> {
                 if (callback) {
                     if constexpr (std::is_same_v<Tag, matmul_enum_kernels_tag>) {
                         const ryzenai_corelib_matmul_bf16_kernel_info info{
-                            sizeof(info), 0, -1, 0, 0, 0, false, 0, 0};
+                            sizeof(info), 0, -1, 0, 0, 0, false, 0, 0,
+                            ryzenai_corelib_matmul_bf16_weights_format_mladf_v4};
                         callback(ctx, &info);
                     } else {
                         const ryzenai_corelib_ssmlp_bf16_kernel_info info{
@@ -666,8 +679,7 @@ void Reset() {
                      RYZENAI_CORELIB_VERSION_PATCH};
     state.selftest_status = ryzenai_corelib_status_success;
     state.default_status = ryzenai_corelib_status_success;
-    state.npu_usable = true;
-    state.npu_arch = "AIEM";
+    state.npu = ryzenai_corelib_feature_npu_aiem;
     state.detail.clear();
     state.status_text = "success";
     state.missing_symbol.clear();

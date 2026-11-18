@@ -866,7 +866,7 @@ void TestShippedCatalogDeclaresTheDflashDependant() {
     TEST_REQUIRE(info.at("details").at("family") == "gemma4e-dflash");
     TEST_REQUIRE(info.at("xclbin_folder") == "Nemotron-3.5-Bolt-E4B-DFlash-NPU2");
     TEST_REQUIRE(info.at("files").get<std::vector<std::string>>() ==
-                 (std::vector<std::string>{"config.json", "dflash_weight.q4nx", "LICENSE.OpenMDW-1.1"}));
+                 (std::vector<std::string>{"config.json", "dflash_weight.q4nx"}));
     // the base entry is the shipped plain-decode tag, untouched
     const auto base = models.get_model_info("nemotron3.5-bolt:e4b").second;
     TEST_REQUIRE(base.at("name") == "Nemotron-3.5-Bolt-E4B-NPU2");
@@ -899,7 +899,7 @@ void TestShippedCatalogDeclaresTheDflashDependant() {
     TEST_REQUIRE(q38_info.at("details").at("family") == "qwen3.8-dflash2");
     TEST_REQUIRE(q38_info.at("xclbin_folder") == "Qwen3.8-27B-NPU2");
     TEST_REQUIRE(q38_info.at("files").get<std::vector<std::string>>() ==
-                 (std::vector<std::string>{"config.json", "dflash_weight.q4nx", "LICENSE"}));
+                 (std::vector<std::string>{"config.json", "dflash_weight.q4nx"}));
     TEST_REQUIRE(models.get_model_info("qwen3.8-mtp:27b").second.at("name") == "Qwen3.8-27B-NPU2");
 }
 
