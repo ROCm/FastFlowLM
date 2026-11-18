@@ -37,6 +37,14 @@ int round_up_to_multiple(int x, int multiple){
     return ((x + multiple - 1) / multiple) * multiple;
 }
 
+/// \brief Where flm keeps its models: $FLM_MODEL_PATH/models, else ~/.config/flm/models.
+inline std::string flm_models_dir() {
+    const char* root = std::getenv("FLM_MODEL_PATH");
+    if (root && *root) return std::string(root) + "/models";
+    const char* home = std::getenv("HOME");
+    return std::string(home ? home : ".") + "/.config/flm/models";
+}
+
 int main(int argc, char **argv) {
     // Fix the seed to ensure reproducibility in CI.
     srand(0);
@@ -44,14 +52,25 @@ int main(int argc, char **argv) {
     po::options_description desc("Allowed options");
     po::variables_map vm;
     arg_utils::add_default_options(desc);
+    const char* env_ref = std::getenv("FLM_REFERENCE_DIR");
+    desc.add_options()("reference_dir", po::value<std::string>()->default_value(env_ref ? env_ref : ""),
+        "Folder with gated_attention_0.8B.safetensors and gated_deltanet_0.8B.safetensors (default: $FLM_REFERENCE_DIR; not shipped)");
+    desc.add_options()("model", po::value<std::string>()->default_value(flm_models_dir() + "/Qwen3.5-0.8B-NPU2"),
+        "Qwen3.5-0.8B-NPU2 model folder (default: flm's models folder)");
     arg_utils::parse_options(argc, argv, desc, vm);
 
+    const std::string reference_dir = vm["reference_dir"].as<std::string>();
+    if (reference_dir.empty()) {
+        header_print("error", "No reference directory: pass --reference_dir or set FLM_REFERENCE_DIR (references are not shipped with the dev kit)");
+        return 1;
+    }
+
     // load reference data and weights
-    std::string q41_reference_path = "/path/to/gated_attention_0.8B.safetensors";
+    std::string q41_reference_path = reference_dir + "/gated_attention_0.8B.safetensors";
     std::unique_ptr<SafeTensors> q41_references = std::make_unique<SafeTensors>(q41_reference_path);
-    std::string q80_reference_path = "/scratch/Qwen3.5-0.8B-NPU2/gated_deltanet_0.8B.safetensors";
+    std::string q80_reference_path = reference_dir + "/gated_deltanet_0.8B.safetensors";
     std::unique_ptr<SafeTensors> q80_references = std::make_unique<SafeTensors>(q80_reference_path);
-    std::string weight_path = "/scratch/Qwen3.5-0.8B-NPU2/";
+    std::string weight_path = vm["model"].as<std::string>() + "/";
     Q4NX weights(weight_path);
     buffer<i32> input_ids;
     q41_references->load_weights(input_ids, "input_ids");

@@ -227,7 +227,7 @@ of the other.
 make                  # -> run.exe (find src -name '*.cpp' auto-includes new files)
 make python           # -> smolvla_npu.cpython-312-x86_64-linux-gnu.so
 make clean            # removes build/, run.exe, smolvla_npu*.so
-./run.exe -n SmolVLA          # model dir: /scratch/$USER/models/SmolVLA
+./run.exe -n SmolVLA          # model dir: $FLM_MODEL_PATH/models/SmolVLA (flm's models folder)
 ./run.exe -n SmolVLA -i 1     # -n model name, -i iterations
 ```
 
@@ -317,7 +317,7 @@ python verify_smolvla.py --dataset lerobot/abc_130k_v3_smoke \
 
 | flag | default | |
 |---|---|---|
-| `--model_path` | `/scratch/$USER/models/SmolVLA` | NPU model dir |
+| `--model_path` | `$FLM_MODEL_PATH/models/SmolVLA`, else `~/.config/flm/models/SmolVLA` | NPU model dir |
 | `--model_id` | `lerobot/smolvla_base` | reference torch checkpoint |
 | `--dataset` / `--episode` | `lerobot/libero` / 0 | observation source |
 | `--cameras` | dataset order | override the camera→slot pairing |
@@ -604,7 +604,7 @@ mkdir /tmp/pkgtest && tar xzf packaging/dist/smolvla-npu-0.1.0.tar.gz -C /tmp/pk
 cd /tmp/pkgtest/smolvla-npu-0.1.0
 ./setup.sh
 source activate.sh
-smolvla-verify --model_path /scratch/$USER/models/SmolVLA \
+smolvla-verify --model_path $FLM_MODEL_PATH/models/SmolVLA \
                --dataset lerobot/libero --steps 2
 ```
 

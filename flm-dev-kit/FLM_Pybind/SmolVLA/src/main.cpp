@@ -47,10 +47,6 @@ int main(int argc, char **argv) {
     // Warn (and wait) if the CPU kernels have no OpenMP thread team.
     check_openmp();
 
-    // Get Username for cross user
-    const char* user_env = std::getenv("USER");
-    std::string user_name = user_env ? user_env : "michyu";
-
     // Program arguments parsing
     po::options_description desc("Allowed options");
     po::variables_map vm;
@@ -71,7 +67,13 @@ int main(int argc, char **argv) {
     const int iterations = vm["iterations"].as<int>();
     const bool skip_prefill = vm["skip"].as<bool>();
 
-    std::string model_path = utils::path_join("/scratch", user_name, "models", model_name);
+    // flm's models folder: $FLM_MODEL_PATH/models, else ~/.config/flm/models
+    const char* flm_model_path = std::getenv("FLM_MODEL_PATH");
+    const char* home = std::getenv("HOME");
+    const std::string models_dir = (flm_model_path && *flm_model_path)
+        ? utils::path_join(flm_model_path, "models")
+        : utils::path_join(home ? home : ".", ".config", "flm", "models");
+    std::string model_path = utils::path_join(models_dir, model_name);
 
     header_print("info", "model path: " << model_path);
     header_print("info", "iterations: " << iterations);

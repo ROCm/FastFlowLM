@@ -48,11 +48,18 @@ def load_reference(model_path):
     return images, tokens, state, noise, pred
 
 
+def flm_models_dir():
+    """Where flm keeps its models: $FLM_MODEL_PATH/models, else ~/.config/flm/models."""
+    root = os.environ.get("FLM_MODEL_PATH")
+    if root:
+        return os.path.join(root, "models")
+    return os.path.join(os.path.expanduser("~"), ".config", "flm", "models")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--model_path",
-                    default=os.path.join("/scratch", os.environ.get("USER", "michyu"),
-                                         "models", "SmolVLA"),
+                    default=os.path.join(flm_models_dir(), "SmolVLA"),
                     help="model directory (config.json, model.safetensors, XCLBINS/)")
     args = ap.parse_args()
 

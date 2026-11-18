@@ -28,10 +28,17 @@ struct model_entry {
     bool tied_embedding;      // no model.embed_tokens.weight: rebuild it from lm_head
 };
 
+/// \brief Where flm keeps its models: $FLM_MODEL_PATH/models, else ~/.config/flm/models.
+inline std::string flm_models_dir() {
+    const char* root = std::getenv("FLM_MODEL_PATH");
+    if (root && *root) return std::string(root) + "/models";
+    const char* home = std::getenv("HOME");
+    return std::string(home ? home : ".") + "/.config/flm/models";
+}
+
 static std::map<std::string, model_entry> get_model_table() {
-    const char* user = std::getenv("USER");
-    const std::string qwen_base = "/path/to/models/";
-    const std::string hy_dir    = "/scratch/" + std::string(user ? user : "") + "/models/Hy-Memory-30B-A3B";
+    const std::string qwen_base = flm_models_dir() + "/";
+    const std::string hy_dir    = flm_models_dir() + "/Hy-Memory-30B-A3B";
     return {
         {"QWEN3_5_0_8B",      {qwen_base + "Qwen3.5-0.8B-NPU2", qwen_base + "Qwen3.5-0.8B-NPU2", false, true}},
         {"QWEN3_5_2B",        {qwen_base + "Qwen3.5-2B-NPU2",   qwen_base + "Qwen3.5-2B-NPU2",   false, true}},

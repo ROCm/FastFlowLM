@@ -45,6 +45,10 @@ int main(int argc, char **argv) {
     desc.add_options()("Trace,t", po::value<int>()->default_value(131072), "Trace size");
     desc.add_options()("Verify,v", po::value<bool>()->default_value(true), "Verify the result");
     desc.add_options()("EnableTrace,e", po::value<bool>()->default_value(false), "Enable trace");
+    const char* env_ref = std::getenv("FLM_REFERENCE_DIR");
+    desc.add_options()("reference", po::value<std::string>()->default_value(
+        env_ref ? std::string(env_ref) + "/matmul_test.safetensors" : ""),
+        "The x / w / y safetensors to check against (default: $FLM_REFERENCE_DIR/matmul_test.safetensors; not shipped)");
 
     arg_utils::parse_options(argc, argv, desc, vm);
 
@@ -66,7 +70,11 @@ int main(int argc, char **argv) {
 
     bool pass = true;
 
-    std::string reference_path = "/scratch/reference_qwen3_6/matmul_test.safetensors";
+    const std::string reference_path = vm["reference"].as<std::string>();
+    if (reference_path.empty()) {
+        header_print("error", "No reference: pass --reference or set FLM_REFERENCE_DIR (references are not shipped with the dev kit)");
+        return 1;
+    }
     std::unique_ptr<SafeTensors> references = std::make_unique<SafeTensors>(reference_path);
     buffer<bf16> x_in;
     references->load_weights(x_in, "x");

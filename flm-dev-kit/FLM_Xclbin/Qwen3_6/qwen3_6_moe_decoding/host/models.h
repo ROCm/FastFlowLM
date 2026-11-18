@@ -7,6 +7,14 @@
 #include "rope_weights.h"
 
 namespace model_list {
+    /// \brief Where flm keeps its models: $FLM_MODEL_PATH/models, else ~/.config/flm/models.
+    inline std::string flm_models_dir() {
+        const char* root = std::getenv("FLM_MODEL_PATH");
+        if (root && *root) return std::string(root) + "/models";
+        const char* home = std::getenv("HOME");
+        return std::string(home ? home : ".") + "/.config/flm/models";
+    }
+
     enum model_t {
         QWEN3_6_35B_A3B,
         UNKNOWN_MODEL
@@ -18,8 +26,7 @@ namespace model_list {
     }
 
     inline std::string get_model_path(model_t model) {
-        const char* user = std::getenv("USER");
-        static const std::string base_path = "/scratch/" + std::string(user ? user : "") + "/models/";
+        static const std::string base_path = flm_models_dir() + "/";
         switch (model) {
             case QWEN3_6_35B_A3B:
                 return base_path + "Qwen3.6-35B-A3B-NPU2";

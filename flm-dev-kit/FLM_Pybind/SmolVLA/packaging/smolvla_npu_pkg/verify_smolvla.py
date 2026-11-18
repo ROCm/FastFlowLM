@@ -169,12 +169,19 @@ DEFAULT_IDLE_PROBE = 6.0
 IDLE_SETTLE_DISCARD = 4.0
 
 
+def flm_models_dir():
+    """Where flm keeps its models: $FLM_MODEL_PATH/models, else ~/.config/flm/models."""
+    root = os.environ.get("FLM_MODEL_PATH")
+    if root:
+        return os.path.join(root, "models")
+    return os.path.join(os.path.expanduser("~"), ".config", "flm", "models")
+
+
 def parse_args():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model_path",
-                    default=os.path.join("/scratch", os.environ.get("USER", "michyu"),
-                                         "models", "SmolVLA"),
+                    default=os.path.join(flm_models_dir(), "SmolVLA"),
                     help="NPU model directory (config.json, model.safetensors)")
     ap.add_argument("--model_id", default="lerobot/smolvla_base",
                     help="huggingface id of the reference torch checkpoint")
