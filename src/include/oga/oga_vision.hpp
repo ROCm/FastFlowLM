@@ -12,15 +12,6 @@
 
 namespace flm::oga {
 
-/// \brief the most patches the images of one prompt may have together
-/// \note OGA runs every image of a prompt in one pass of the vision model. On
-///       hip-ep 0.5.2 (OGA 0.17.0) that pass gives wrong image features when it
-///       has many more patches than the first pass the model ran, or when that
-///       first pass had only a few hundred. The engine therefore runs one pass of
-///       this size before its first real image, and no prompt may have more.
-///       8100 patches is a 90x90 grid (1440x1440 pixels), 2025 image tokens.
-inline constexpr std::int64_t kMaxImagePatches = 90 * 90;
-
 /// \brief one image, preprocessed for the vision model
 struct OgaImage {
     std::int64_t grid_t = 1;

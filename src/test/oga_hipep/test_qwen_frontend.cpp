@@ -650,9 +650,9 @@ void OgaImagesReachTheEngineAsFloat16() {
     auto input = ImageInput(2);
     Require(model.insert(meta, input), "image prompt insert failed");
 
-    // OGA runs both in one vision pass of at most 8100 patches of 16x16 pixels
-    Require(g_max_pixels == (std::vector<unsigned>{4050 * 256, 4050 * 256}),
-            "the images of a prompt must share the vision model's patch budget");
+    // each image is sized on its own by the package's max_pixels: another image does not shrink it
+    Require(g_max_pixels == (std::vector<unsigned>{16777216, 16777216}),
+            "each image of a prompt must keep the package's max_pixels");
     const FakeEngine& engine = model.engine();
     Require(engine.vision.images.size() == 2, "both images must reach the engine");
     const std::size_t values = 4 * 6 * 3 * 2 * 16 * 16;
@@ -684,6 +684,47 @@ void ImagesAreRefusedWithoutImagePreprocessing() {
         return;
     }
     throw std::runtime_error("an engine without image preprocessing must refuse images");
+}
+
+void OgaImagesPastTheContextAreRefusedBeforeAllArePreprocessed() {
+    Reset({10, kVisionStart, kImagePad, kVisionEnd, 12, kThinkStart, 271, kThinkEnd, 271}, {7});
+    g_grid_h = 4;
+    g_grid_w = 6;  // 6 image tokens each
+    Harness model(16, 64);  // decode cap 15
+    model.set_vision_geometry(Geometry());
+    auto meta = Meta();
+    auto input = ImageInput(5);
+    try {
+        model.insert(meta, input);
+    } catch (const ModelRequestError& error) {
+        Require(error.http_code() == 400, "images past the context must be an HTTP 400");
+        // 6, 12, then 18 tokens: the third image passes the cap, the last two are never preprocessed
+        Require(g_max_pixels.size() == 3, "preprocessing must stop at the image that passes the context");
+        Require(model.engine().prefills.empty(), "nothing may run for a refused prompt");
+        return;
+    }
+    throw std::runtime_error("images past the context must be refused");
+}
+
+void OgaImagesAreRefusedAtTheImageThatReachesTheContext() {
+    // 6 image tokens each. Decode cap 12: the second image reaches it. Cap 13: only the third passes it.
+    for (const auto& [max_length, preprocessed] : {std::pair<std::uint32_t, std::size_t>{13, 2}, {14, 3}}) {
+        Reset({10, kVisionStart, kImagePad, kVisionEnd, 12, kThinkStart, 271, kThinkEnd, 271}, {7});
+        g_grid_h = 4;
+        g_grid_w = 6;
+        Harness model(max_length, 64);
+        model.set_vision_geometry(Geometry());
+        auto meta = Meta();
+        auto input = ImageInput(3);
+        bool refused = false;
+        try {
+            model.insert(meta, input);
+        } catch (const ModelRequestError& error) {
+            refused = error.http_code() == 400;
+        }
+        Require(refused, "images that reach the context must be an HTTP 400");
+        Require(g_max_pixels.size() == preprocessed, "preprocessing must stop at the image that reaches the context");
+    }
 }
 
 void MorePlaceholdersThanImagesIsARequestError() {
@@ -936,6 +977,8 @@ int main() {
     run("a second continuation reuses the first", ASecondContinuationReusesTheFirst);
     run("OGA images reach the engine as float16", OgaImagesReachTheEngineAsFloat16);
     run("images refused without preprocessing", ImagesAreRefusedWithoutImagePreprocessing);
+    run("OGA images past the context are refused early", OgaImagesPastTheContextAreRefusedBeforeAllArePreprocessed);
+    run("OGA images are refused at the image that reaches the context", OgaImagesAreRefusedAtTheImageThatReachesTheContext);
     run("more placeholders than images", MorePlaceholdersThanImagesIsARequestError);
     run("another image of the same size runs the prompt again", AnotherImageOfTheSameSizeRunsTheWholePromptAgain);
     run("the same image prompt again carries its image", TheSameImagePromptAgainCarriesItsImage);
