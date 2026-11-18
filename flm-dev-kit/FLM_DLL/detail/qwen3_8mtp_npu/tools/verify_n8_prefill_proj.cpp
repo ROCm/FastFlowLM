@@ -229,15 +229,15 @@ int main(int argc, char** argv) {
         argc > 1 ? argv[1] : "/path/to/models/Qwen3.8-27B-NPU2";
     const std::string proj_xclbin =
         argc > 2 ? argv[2]
-                 : "/path/to/FastFlowLM_IRON/FLM_Xclbin/Qwen3_8/"
+                 : "/path/to/FastFlowLM/flm-dev-kit/FLM_Xclbin/Qwen3_8/"
                    "dequant_mm/build/xclbins/dequant_mm.xclbin";
     const std::string prefill_xclbin =
         argc > 3 ? argv[3]
-                 : "/path/to/FastFlowLM_IRON/FLM_Xclbin/Qwen3_8/"
+                 : "/path/to/FastFlowLM/flm-dev-kit/FLM_Xclbin/Qwen3_8/"
                    "gated_attention_prefill/build/xclbins/attn.xclbin";
     const std::string verify_xclbin =
         argc > 4 ? argv[4]
-                 : "/path/to/FastFlowLM_IRON/FLM_Xclbin/Qwen3_8/"
+                 : "/path/to/FastFlowLM/flm-dev-kit/FLM_Xclbin/Qwen3_8/"
                    "gated_attention_verify/build/QWEN3_8_27B/xclbins/layer.xclbin";
 
     const int D = MODEL_DIM, DQ_ = DQ, DKV_ = DKV, DI = INTERMEDIATE_SIZE;

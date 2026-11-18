@@ -51,9 +51,8 @@ FLM_DLL/
   include/AutoModel/all_models.hpp         §4  family enum + tag -> class dispatch
 ```
 
-Two repos. `FastFlowLM_IRON/FLM_DLL` is the engine; `/path/to/FastFlowLM/src` is the
-application that links it. The xclbins are built from a third tree,
-`FastFlowLM_IRON/FLM_Xclbin/<MODEL>/`.
+One repo. `flm-dev-kit/FLM_DLL` is the engine; `src/` is the application that links it.
+The xclbins are built from `flm-dev-kit/FLM_Xclbin/<MODEL>/`.
 
 ---
 

@@ -283,7 +283,7 @@ int main(int argc, char** argv) {
     const std::string model_dir =
         argc > 1 ? argv[1] : "/path/to/models/Qwen3.8-27B-NPU2";
     const std::string mm_root =
-        "/path/to/FastFlowLM_IRON/FLM_Xclbin/Qwen3_8/vision_mm/"
+        "/path/to/FastFlowLM/flm-dev-kit/FLM_Xclbin/Qwen3_8/vision_mm/"
         "build/";
     const std::string xclbin_a =
         argc > 2 ? argv[2] : mm_root + "VISION_MM_A/xclbins/mm.xclbin";
@@ -291,7 +291,7 @@ int main(int argc, char** argv) {
         argc > 3 ? argv[3] : mm_root + "VISION_MM_B/xclbins/mm.xclbin";
     const std::string xclbin_attn =
         argc > 4 ? argv[4]
-                 : "/path/to/FastFlowLM_IRON/FLM_Xclbin/Qwen3_8/"
+                 : "/path/to/FastFlowLM/flm-dev-kit/FLM_Xclbin/Qwen3_8/"
                    "vision_attn/build/xclbins/attn.xclbin";
     const std::string ref_path = model_dir + "/vision_ref.safetensors";
 

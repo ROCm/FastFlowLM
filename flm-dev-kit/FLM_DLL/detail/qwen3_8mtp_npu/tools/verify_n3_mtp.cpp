@@ -117,7 +117,7 @@ int main(int argc, char** argv) {
         argc > 1 ? argv[1] : "/path/to/models/Qwen3.8-27B-NPU2";
     const std::string xclbin_dir =
         argc > 2 ? argv[2]
-                 : "/path/to/FastFlowLM_IRON/FLM_Xclbin/Qwen3_8/"
+                 : "/path/to/FastFlowLM/flm-dev-kit/FLM_Xclbin/Qwen3_8/"
                    "MTP_decoding/build/QWEN3_8_27B/xclbins";
     const std::string xclbin = xclbin_dir + "/MTP_layer.xclbin";
 

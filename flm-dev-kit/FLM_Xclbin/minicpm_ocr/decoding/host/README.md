@@ -9,7 +9,7 @@ Runs the **24 decode layers of Qwen3.5-2B** on the NPU the way the FLM_DLL engin
 10K context, and times one decode step (token 10,241).
 
 ```bash
-cd /path/to/FastFlowLM_IRON/FLM_Xclbin/Qwen3_5_2B/qwen3_5_decoding
+cd flm-dev-kit/FLM_Xclbin/minicpm_ocr/decoding
 source ~/setup.sh                 # only needed for make bitstream
 make bitstream                    # build/QWEN3_5_2B/xclbins/layer.xclbin (MODEL_TYPE defaults to QWEN3_5_2B)
 make test                         # 10K context, 20 timed steps after 3 warmup steps

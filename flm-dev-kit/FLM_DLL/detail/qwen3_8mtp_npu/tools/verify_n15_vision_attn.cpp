@@ -232,7 +232,7 @@ int main(int argc, char** argv) {
         argc > 1 ? argv[1] : "/path/to/models/Qwen3.8-27B-NPU2";
     const std::string xclbin =
         argc > 2 ? argv[2]
-                 : "/path/to/FastFlowLM_IRON/FLM_Xclbin/Qwen3_8/"
+                 : "/path/to/FastFlowLM/flm-dev-kit/FLM_Xclbin/Qwen3_8/"
                    "vision_attn/build/xclbins/attn.xclbin";
     const std::string ref_path = model_dir + "/vision_ref.safetensors";
 

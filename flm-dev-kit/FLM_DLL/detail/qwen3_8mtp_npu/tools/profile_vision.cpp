@@ -20,7 +20,7 @@
 ///       -L../../../../src/lib/xrt -L/opt/xilinx/xrt/lib
 ///       -lxrt_coreutil -laiebu -luuid -lpthread -o /tmp/profile_vision
 /// Run:
-///   /tmp/profile_vision [model_dir] [rounds] [L]
+///   /tmp/profile_vision [model_dir] [rounds] [L] [vision_mm_build_dir] [attn.xclbin]
 ///
 /// Why this exists rather than `verify_n16`'s check-10 arm: that one is the
 /// tail of an eight-minute suite that allocates 959 MB of weight BOs several
@@ -89,13 +89,15 @@ int main(int argc, char** argv) {
     const int L_want = argc > 3 ? std::atoi(argv[3]) : 1200;
 
     const std::string mm_root =
-        "/path/to/FastFlowLM_IRON/FLM_Xclbin/Qwen3_8/vision_mm/"
-        "build/";
+        argc > 4 ? std::string(argv[4]) + "/"
+                 : "/path/to/FastFlowLM/flm-dev-kit/FLM_Xclbin/Qwen3_8/vision_mm/"
+                   "build/";
     const std::string xclbin_a   = mm_root + "VISION_MM_A/xclbins/mm.xclbin";
     const std::string xclbin_b   = mm_root + "VISION_MM_B/xclbins/mm.xclbin";
     const std::string xclbin_attn =
-        "/path/to/FastFlowLM_IRON/FLM_Xclbin/Qwen3_8/"
-        "vision_attn/build/xclbins/attn.xclbin";
+        argc > 5 ? argv[5]
+                 : "/path/to/FastFlowLM/flm-dev-kit/FLM_Xclbin/Qwen3_8/"
+                   "vision_attn/build/xclbins/attn.xclbin";
 
     LM_Config config;
     config.model_path = model_dir;

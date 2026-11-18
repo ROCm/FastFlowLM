@@ -260,22 +260,22 @@ int main(int argc, char** argv) {
         argc > 1 ? argv[1] : "/path/to/models/Qwen3.8-27B-NPU2";
     const std::string mtp_xclbin =
         argc > 2 ? argv[2]
-                 : "/path/to/FastFlowLM_IRON/FLM_Xclbin/Qwen3_8/"
+                 : "/path/to/FastFlowLM/flm-dev-kit/FLM_Xclbin/Qwen3_8/"
                    "MTP_decoding/build/QWEN3_8_27B/xclbins/MTP_layer.xclbin";
     const std::string prefill_xclbin =
         argc > 3 ? argv[3]
-                 : "/path/to/FastFlowLM_IRON/FLM_Xclbin/Qwen3_8/"
+                 : "/path/to/FastFlowLM/flm-dev-kit/FLM_Xclbin/Qwen3_8/"
                    "gated_attention_prefill/build/xclbins/attn.xclbin";
     // Not under test here, but `speculate_npu` requires both: step 0's five
     // projections are a device op and so is the draft head's projection, so
     // there is no configuration of it that omits them.
     const std::string proj_xclbin =
         argc > 4 ? argv[4]
-                 : "/path/to/FastFlowLM_IRON/FLM_Xclbin/Qwen3_8/"
+                 : "/path/to/FastFlowLM/flm-dev-kit/FLM_Xclbin/Qwen3_8/"
                    "dequant_mm/build/xclbins/dequant_mm.xclbin";
     const std::string lm_xclbin =
         argc > 5 ? argv[5]
-                 : "/path/to/FastFlowLM_IRON/FLM_Xclbin/Qwen3_8/"
+                 : "/path/to/FastFlowLM/flm-dev-kit/FLM_Xclbin/Qwen3_8/"
                    "lm_head_npu_bin/build/QWEN3_8_27B/xclbins/lm_head.xclbin";
 
     using namespace cpu_ref::q38;

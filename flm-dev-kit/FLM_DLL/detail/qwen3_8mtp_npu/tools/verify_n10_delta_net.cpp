@@ -236,11 +236,11 @@ int main(int argc, char** argv) {
         argc > 1 ? argv[1] : "/path/to/models/Qwen3.8-27B-NPU2";
     const std::string conv_xclbin =
         argc > 2 ? argv[2]
-                 : "/path/to/FastFlowLM_IRON/FLM_Xclbin/Qwen3_8/"
+                 : "/path/to/FastFlowLM/flm-dev-kit/FLM_Xclbin/Qwen3_8/"
                    "conv1d_prefill/build/xclbins/conv.xclbin";
     const std::string dn_xclbin =
         argc > 3 ? argv[3]
-                 : "/path/to/FastFlowLM_IRON/FLM_Xclbin/Qwen3_8/"
+                 : "/path/to/FastFlowLM/flm-dev-kit/FLM_Xclbin/Qwen3_8/"
                    "gate_delta_net_prefill/build/xclbins/GateDeltaNet_prefill.xclbin";
 
     cpu_ref::delta_net_geometry geo;          // defaults are Qwen3.8-27B
