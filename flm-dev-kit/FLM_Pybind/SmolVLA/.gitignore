@@ -1,9 +1,6 @@
 build/
-# The bitstreams are shipped with the binary, not with the model directory, so
-# these three are tracked despite the repo-wide `*.xclbin` ignore. They are the
-# artifacts the resolver in host_common/utils/xclbin_path.hpp looks for next to
-# run.exe, and the ones build_package.sh copies into the wheel.
-!XCLBINS/*.xclbin
+# The three bitstreams are build outputs (see "Build & run" in README.md).
+XCLBINS/
 .venv/
 build/
 packaging/*

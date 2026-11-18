@@ -223,6 +223,18 @@ Two targets share every object except their entry point: `run.exe` takes
 compiled `-fPIC`, so one `build/` tree feeds both and neither forces a rebuild
 of the other.
 
+First build the three xclbins (`vision`, `text`, `expert`) and put them in `XCLBINS/`, where
+`run.exe` and the python module look for them. They are not stored in git. Set up the kernel
+toolchain once as in [`../../FLM_Xclbin/README.md`](../../FLM_Xclbin/README.md), then:
+
+```sh
+source ../../FLM_Xclbin/setup.sh       # set MLIR_AIE_DIR and PEANO_INSTALL_DIR first
+for k in vision text expert; do make -C ../../FLM_Xclbin/SMOLVLA/$k bitstream; done
+mkdir -p XCLBINS && cp ../../FLM_Xclbin/SMOLVLA/{vision,text,expert}/build/xclbins/*.xclbin XCLBINS/
+```
+
+Then build and run:
+
 ```sh
 make                  # -> run.exe (find src -name '*.cpp' auto-includes new files)
 make python           # -> smolvla_npu.cpython-312-x86_64-linux-gnu.so
@@ -548,7 +560,7 @@ cd packaging
 ./build_package.sh --offline-wheels # also vendor every dependency wheel (several GB)
 ```
 
-What goes in: the compiled `.so`, the three xclbins from `XCLBINS/`, the python
+What goes in: the compiled `.so`, the three xclbins from `XCLBINS/` (build them first), the python
 harness, the doctor, `setup.sh`, `requirements-runtime.txt`, `README.md`. What
 does not: any `.cpp`/`.hpp`, the Makefile, or the model directory.
 
@@ -726,7 +738,7 @@ one, taking the first that exists of:
 
 1. `$SMOLVLA_XCLBIN_DIR/<name>` — for testing a rebuilt bitstream in place.
 2. `<binary dir>/XCLBINS/<name>` — the normal case. That is this directory's
-   `XCLBINS/` (the tracked copies, beside `run.exe`) in the source tree, and
+   `XCLBINS/` (you build them, see [Build & run](#build--run); they are not stored in git) in the source tree, and
    `site-packages/smolvla_npu_pkg/XCLBINS/` for the installed wheel.
 3. `<binary dir>/<name>` — a flat, hand-assembled install.
 
