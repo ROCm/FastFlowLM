@@ -31,7 +31,7 @@ QKV_buffer_L_head_row_major?=1 # 1 means the qkv buffer in Lx (  DQ*NUM_Q_K_HEAD
 
 HOME_DIR := $(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))/
 HOST_DIR := $(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
-MlirDIR ?= ${HOME_DIR}/../mlir-aie
+MlirDIR ?= $(or $(MLIR_AIE_DIR),$(HOME)/mlir-aie)
 # 0 = Peano (default), 1 = chess. Both give bit-identical output; Peano is faster here
 ENABLE_CHESSCC ?= 0
 

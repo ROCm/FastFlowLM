@@ -7,14 +7,14 @@
 # Created by Alfred (Converted to CMake)
 
 # User can override AIETOOLS_DIR and AIEOPT_DIR
-set(AIETOOLS_DIR "" CACHE PATH "Path to AIETOOLS installation")
+set(AIETOOLS_DIR "$ENV{AIETOOLS_ROOT}" CACHE PATH "Path to AIETOOLS installation (Chess only)")
 set(AIEOPT_DIR "" CACHE PATH "Path to AIEOPT installation")
 
-# Find xchesscc if AIETOOLS_DIR not set
-if(NOT AIETOOLS_DIR)
+# Chess only (ENABLE_CHESSCC): find xchesscc if AIETOOLS_DIR is not set
+if(ENABLE_CHESSCC AND NOT AIETOOLS_DIR)
   find_program(XCHESSCC_PATH xchesscc)
   if(NOT XCHESSCC_PATH)
-    message(FATAL_ERROR "xchesscc not found in PATH and AIETOOLS_DIR not set")
+    message(FATAL_ERROR "ENABLE_CHESSCC needs Vitis AIE Essentials: xchesscc not found in PATH and AIETOOLS_DIR / AIETOOLS_ROOT not set")
   endif()
   get_filename_component(AIETOOLS_BIN_DIR "${XCHESSCC_PATH}" DIRECTORY)
   get_filename_component(AIETOOLS_DIR "${AIETOOLS_BIN_DIR}/.." ABSOLUTE)

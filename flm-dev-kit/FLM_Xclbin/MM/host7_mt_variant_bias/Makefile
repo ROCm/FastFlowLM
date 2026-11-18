@@ -8,9 +8,7 @@
 CXXFLAGS?= -O3 -march=native -mavx512f -mavx512bf16
 HOME_DIR := $(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
 HOST_DIR := $(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
-MlirDIR ?= ${HOME_DIR}/../../mlir-aie
-
-
+MlirDIR ?= $(or $(MLIR_AIE_DIR),$(HOME)/mlir-aie)
 DEVICE ?= npu2
 TRACE_SIZE ?= 0
 # do you want chesscc? compiles slower

@@ -12,7 +12,7 @@ DEVICE ?= npu2
 TRACE_SIZE ?= 0
 HOME_DIR := $(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))/..
 HOST_DIR := $(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
-MlirDIR ?= ${HOME_DIR}/../mlir-aie
+MlirDIR ?= $(or $(MLIR_AIE_DIR),$(HOME)/mlir-aie)
 # do you want chesscc? compiles slower
 ENABLE_CHESSCC ?= 0
 

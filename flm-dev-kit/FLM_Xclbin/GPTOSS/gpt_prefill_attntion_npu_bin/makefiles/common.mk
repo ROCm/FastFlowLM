@@ -12,9 +12,10 @@ else
     MAKEFLAGS += -j8
 endif
 
-# VITIS related variables
-# AIETOOLS_DIR ?= $(sh ell realpath $(dir $(shell which xchesscc))/../)
-AIETOOLS_DIR ?= /tools/ryzen_ai-1.4.0/vitis_aie_essentials
+# VITIS related variables (Chess only: ENABLE_CHESSCC=1; Peano builds never expand them)
+AIETOOLS_DIR ?= $(or $(AIETOOLS_ROOT),$(patsubst %/bin/,%,$(dir $(shell command -v xchesscc 2>/dev/null))))
+# Expanded only inside the Chess recipes, so it fires only for ENABLE_CHESSCC=1.
+AIETOOLS_CHECK = $(if $(strip $(AIETOOLS_DIR)),,$(error ENABLE_CHESSCC=1 needs Vitis AIE Essentials: set AIETOOLS_ROOT (or AIETOOLS_DIR), or put xchesscc on PATH))
 AIE_INCLUDE_DIR ?= ${AIETOOLS_DIR}/data/versal_prod/lib
 AIE2_INCLUDE_DIR ?= ${AIETOOLS_DIR}/data/aie_ml/lib
 
@@ -23,8 +24,8 @@ AIEOPT_DIR ?= $(shell realpath $(dir $(shell which aie-opt))/..)
 WARNING_FLAGS = -Wno-parentheses -Wno-attributes -Wno-macro-redefined
 
 
-CHESSCCWRAP1_FLAGS = aie -I ${AIETOOLS_DIR}/include 
-CHESSCCWRAP2_FLAGS = aie2 -I ${AIETOOLS_DIR}/include
-CHESSCCWRAP2P_FLAGS = aie2p -I ${AIETOOLS_DIR}/include
+CHESSCCWRAP1_FLAGS = aie $(AIETOOLS_CHECK)-I ${AIETOOLS_DIR}/include 
+CHESSCCWRAP2_FLAGS = aie2 $(AIETOOLS_CHECK)-I ${AIETOOLS_DIR}/include
+CHESSCCWRAP2P_FLAGS = aie2p $(AIETOOLS_CHECK)-I ${AIETOOLS_DIR}/include
 PEANOWRAP2_FLAGS = -O2 -v -std=c++20 --target=aie2-none-unknown-elf ${WARNING_FLAGS} -DNDEBUG -I ${AIEOPT_DIR}/include 
 PEANOWRAP2P_FLAGS = -O2 -v -std=c++20 --target=aie2p-none-unknown-elf ${WARNING_FLAGS} -DNDEBUG -I ${AIEOPT_DIR}/include 

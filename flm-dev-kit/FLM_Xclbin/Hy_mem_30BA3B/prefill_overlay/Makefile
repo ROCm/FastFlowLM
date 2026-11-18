@@ -15,10 +15,12 @@ HOME_DIR := $(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
 ENABLE_CHESSCC ?= 0
 export ENABLE_CHESSCC
 AIETOOLS_DIR ?= $(AIETOOLS_ROOT)
+# Expanded only inside the Chess recipes, so it fires only for ENABLE_CHESSCC=1.
+AIETOOLS_CHECK = $(if $(strip $(AIETOOLS_DIR)),,$(error ENABLE_CHESSCC=1 needs Vitis AIE Essentials: set AIETOOLS_ROOT (or AIETOOLS_DIR), or put xchesscc on PATH))
 AIEOPT_DIR ?= $(shell realpath $(dir $(shell which aie-opt))/..)
 
 WARNING_FLAGS = -Wno-parentheses -Wno-attributes -Wno-macro-redefined
-CHESSCCWRAP2P_FLAGS = aie2p -I ${AIETOOLS_DIR}/include -DAIE_API_EMULATE_BFLOAT16_MMUL_WITH_BFP16
+CHESSCCWRAP2P_FLAGS = aie2p $(AIETOOLS_CHECK)-I ${AIETOOLS_DIR}/include -DAIE_API_EMULATE_BFLOAT16_MMUL_WITH_BFP16
 PEANOWRAP2P_FLAGS = -O2 -std=c++20 --target=aie2p-none-unknown-elf ${WARNING_FLAGS} -DNDEBUG \
 	-DAIE_API_EMULATE_BFLOAT16_MMUL_WITH_BFP16 -I ${AIEOPT_DIR}/include
 KERNEL_INCLUDES = -DNPU2 -I. -I${HOME_DIR}/kernel -I${HOME_DIR}/kernel/dq -I${HOME_DIR}/kernel/attn
