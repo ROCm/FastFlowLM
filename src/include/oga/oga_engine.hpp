@@ -28,8 +28,6 @@ struct OgaVisionConfig {
     std::int64_t spatial_merge_size = 0;
     /// \brief values in one patch row of pixel_values
     std::int64_t patch_values = 0;
-    /// \brief the most patches the images of one prompt may have together
-    std::int64_t max_patches = kMaxImagePatches;
 };
 
 /// \brief how many generators an engine keeps, one per conversation, and the memory they may take
@@ -213,8 +211,6 @@ private:
     /// \note No images: the batch of one image without pixels (empty_image_batch)
     void SetInputs(OgaGenerator* generator, const std::vector<int>& ids,
                    const std::vector<const OgaImage*>& images) const;
-    /// \brief run the vision model once at max_patches, before the first real image
-    void WarmUpVision();
     /// \brief a tensor that OGA owns, with `bytes` of `data` copied in when given
     OgaApi::Owned<OgaTensor> NewTensor(const std::vector<std::int64_t>& shape,
                                        OgaElementType type, const void* data,
@@ -233,7 +229,6 @@ private:
     std::optional<OgaVisionConfig> vision_;
     bool empty_image_batch_ = false;
     bool rewinds_ = false;
-    bool vision_warm_ = false;
     OgaSlotLimits limits_;
     std::uint64_t replayed_ = 0;
     std::uint64_t reused_ = 0;
