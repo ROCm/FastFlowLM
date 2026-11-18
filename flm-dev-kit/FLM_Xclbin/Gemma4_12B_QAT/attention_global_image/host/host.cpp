@@ -23,6 +23,8 @@
 #include "seq_gen.hpp"
 #include "tensor_utils/q4_npu_eXpress.hpp"
 #include "tensor_2d.hpp"
+#include "attn_ref.hpp"
+#include <random>
 
 namespace po = boost::program_options;
 
@@ -38,6 +40,13 @@ int main(int argc, char **argv) {
     desc.add_options()("L_wanted,l", po::value<int>()->default_value(256), "L_wanted");
     desc.add_options()("L_begin,b", po::value<int>()->default_value(4738), "L_begin");
     desc.add_options()("Iteration,i", po::value<int>()->default_value(100), "Iteration");
+    desc.add_options()("Seed,s", po::value<unsigned int>()->default_value(32), "Random seed");
+    desc.add_options()("Random,r", po::value<bool>()->default_value(true), "Use random q/k/v + CPU reference instead of the safetensors dump");
+    const char* env_ref = std::getenv("FLM_REFERENCE_DIR");
+    desc.add_options()("reference", po::value<std::string>()->default_value(
+        env_ref ? std::string(env_ref) + "/gemma4_12b_qat_reference.safetensors" : ""),
+        "With -r false: the safetensors dump to read q/k/v and the expected output from "
+        "(default: $FLM_REFERENCE_DIR/gemma4_12b_qat_reference.safetensors; not shipped)");
     arg_utils::parse_options(argc, argv, desc, vm);
 
     // User logic
@@ -48,23 +57,13 @@ int main(int argc, char **argv) {
     int DK = d * 1;
     int DV = DK;
 
-    // load reference data
-    std::string reference_path = "/path/to/FastFlowLM_IRON/models_simple/gemma4_12b_qat_reference.safetensors";
-    std::unique_ptr<SafeTensors> references = std::make_unique<SafeTensors>(reference_path);
-    buffer<bf16> q_cache;
-    references->load_weights(q_cache, "layer_5.q_embed");
-    buffer<bf16> k_cache;
-    references->load_weights(k_cache, "layer_5.k_embed");
-    buffer<bf16> v_cache;
-    references->load_weights(v_cache, "layer_5.v_norm");
-    buffer<bf16> aux_out_whole;
-    references->load_weights(aux_out_whole, "layer_5.attention_out");
-
-    header_print("info", "Finished loading data");
-    header_print("info", "Q shape: " << q_cache.size() / DQ << "x" << DQ);
-    header_print("info", "K shape: " << k_cache.size() / DK << "x" << DK);
-    header_print("info", "V shape: " << v_cache.size() / DV << "x" << DV);
-    header_print("info", "O shape: " << aux_out_whole.size() / DQ << "x" << DQ);
+    const bool RANDOM = vm["Random"].as<bool>();
+    const unsigned int SEED = vm["Seed"].as<unsigned int>();
+    const std::string reference_path = vm["reference"].as<std::string>();
+    if (!RANDOM && reference_path.empty()) {
+        header_print("error", "No reference: -r false needs --reference or FLM_REFERENCE_DIR (references are not shipped with the dev kit)");
+        return 1;
+    }
 
     const int L_wanted = vm["L_wanted"].as<int>();
     const int L_begin = vm["L_begin"].as<int>();
@@ -76,6 +75,34 @@ int main(int argc, char **argv) {
     
     std::cout << "L_begin: " << L_begin << " L_wanted: " << L_wanted << " L_end: " << L_end
               << " L_wanted_chunked: " << L_wanted_chunked << " L_padded: " << L_padded << std::endl;
+
+    buffer<bf16> q_cache;
+    buffer<bf16> k_cache;
+    buffer<bf16> v_cache;
+    buffer<bf16> aux_out_whole;
+    if (RANDOM) {
+        header_print("info", "Generating random q/k/v, seed " << SEED);
+        std::mt19937 rng(SEED);
+        auto fill_random = [&rng](buffer<bf16> &b, size_t n, float stddev) {
+            std::normal_distribution<float> dist(0.0f, stddev);
+            b.resize(n);
+            for (size_t i = 0; i < n; i++) b[i] = (bf16)dist(rng);
+        };
+        fill_random(q_cache, (size_t)(L_begin + L_wanted) * DQ, 0.3f);
+        fill_random(k_cache, (size_t)L_end * DK, 0.3f);
+        fill_random(v_cache, (size_t)L_end * DV, 1.0f);
+    } else {
+        std::unique_ptr<SafeTensors> references = std::make_unique<SafeTensors>(reference_path);
+        references->load_weights(q_cache, "layer_5.q_embed");
+        references->load_weights(k_cache, "layer_5.k_embed");
+        references->load_weights(v_cache, "layer_5.v_norm");
+        references->load_weights(aux_out_whole, "layer_5.attention_out");
+        header_print("info", "Finished loading data");
+        header_print("info", "Q shape: " << q_cache.size() / DQ << "x" << DQ);
+        header_print("info", "K shape: " << k_cache.size() / DK << "x" << DK);
+        header_print("info", "V shape: " << v_cache.size() / DV << "x" << DV);
+        header_print("info", "O shape: " << aux_out_whole.size() / DQ << "x" << DQ);
+    }
 
     const int Q_VOLUME = L_wanted_chunked * DQ;
     const int K_VOLUME = L_padded * DK;
@@ -135,20 +162,27 @@ int main(int argc, char **argv) {
     buffer<bf16> o_wanted((size_t)L_wanted * DQ);
     o_wanted.copy_from(o_0.data(), (size_t)L_wanted * DQ);
     buffer<bf16> aux_out((size_t)L_wanted * DQ);
-    aux_out.copy_from(aux_out_whole.data() + L_begin * DQ, (size_t)L_wanted * DQ);
+    if (RANDOM) {
+        header_print("info", "CPU reference over " << L_end << " keys");
+        attn_ref_config cfg{Heads, 1, d};
+        attn_cpu_ref(q_0.data(), L_wanted, kv_0.data(), kv_0.data() + kv_v_offset, L_end, cfg, aux_out.data());
+    } else {
+        aux_out.copy_from(aux_out_whole.data() + L_begin * DQ, (size_t)L_wanted * DQ);
+    }
 
     header_print("info", "Aux out");
     utils::print_matrix(aux_out, DQ);
     header_print("info", "O out");
     utils::print_matrix(o_wanted, DQ);
 
-    // The verdict is the reference dump itself: layer_5.attention_out was produced by
-    // transformers with the full (block) mask on, so a causal-only overlay cannot reach
-    // it. The residual that remains is the bf16/bfp16 mmul floor of the array.
+    // With -r false the verdict is the reference dump itself: layer_5.attention_out was
+    // produced by transformers with the full (block) mask on, so a causal-only overlay
+    // cannot reach it. The residual that remains is the bf16/bfp16 mmul floor of the array.
     error_metrics metrics = get_error_metrics(o_wanted, aux_out);
-    print_error_metrics(metrics, "NPU vs reference dump");
+    print_error_metrics(metrics, RANDOM ? "NPU vs CPU reference" : "NPU vs reference dump");
 
-    bool pass = metrics.CosineSimilarity > 0.99f;
+    bool pass = RANDOM ? (metrics.CosineSimilarity > 0.97f && metrics.NormalizedMSE < 6e-2f)
+                       : metrics.CosineSimilarity > 0.99f;
 
     header_print("info", "Finished running kernel");
     header_print("info", "NPU time: " << npu_time.first << " us");

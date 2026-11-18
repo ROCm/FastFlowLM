@@ -24,6 +24,8 @@
 #include "tensor_utils/q4_npu_eXpress.hpp"
 #include "tensor_2d.hpp"
 #include "tensor_utils/safe_tensors.hpp"
+#include "attn_ref.hpp"
+#include <random>
 
 namespace po = boost::program_options;
 
@@ -50,6 +52,12 @@ int main(int argc, char **argv) {
     desc.add_options()("Iteration,i", po::value<int>()->default_value(500), "Iteration");
     desc.add_options()("Window,w", po::value<int>()->default_value(1024),
                        "Sliding attention window (0 = full causal)");
+    desc.add_options()("Random,r", po::value<bool>()->default_value(true), "Use random q/k/v + CPU reference instead of the safetensors dump");
+    const char* env_ref = std::getenv("FLM_REFERENCE_DIR");
+    desc.add_options()("reference", po::value<std::string>()->default_value(
+        env_ref ? std::string(env_ref) + "/gemma4_12b_qat_reference.safetensors" : ""),
+        "With -r false: the safetensors dump to read q/k/v and the expected output from "
+        "(default: $FLM_REFERENCE_DIR/gemma4_12b_qat_reference.safetensors; not shipped)");
     arg_utils::parse_options(argc, argv, desc, vm);
 
     // User logic
@@ -57,17 +65,12 @@ int main(int argc, char **argv) {
     const bool VERIFY = vm["Verify"].as<bool>();
     const unsigned int SEED = vm["Seed"].as<unsigned int>();
 
-    // load reference data
-    std::string reference_path = "/scratch/Gemma4-12B-QAT-NPU2/gemma4_12b_qat_reference.safetensors";
-    std::unique_ptr<SafeTensors> references = std::make_unique<SafeTensors>(reference_path);
-    buffer<bf16> q_in;
-    references->load_weights(q_in, "layer_0.q_embed");
-    buffer<bf16> k_in;
-    references->load_weights(k_in, "layer_0.k_cache");
-    buffer<bf16> v_in;
-    references->load_weights(v_in, "layer_0.v_norm");
-    buffer<bf16> aux_out;
-    references->load_weights(aux_out, "layer_0.attention_out");
+    const bool RANDOM = vm["Random"].as<bool>();
+    const std::string reference_path = vm["reference"].as<std::string>();
+    if (!RANDOM && reference_path.empty()) {
+        header_print("error", "No reference: -r false needs --reference or FLM_REFERENCE_DIR (references are not shipped with the dev kit)");
+        return 1;
+    }
 
     const int L_wanted = vm["L_wanted"].as<int>();
     const int L_begin = vm["L_begin"].as<int>();
@@ -99,6 +102,28 @@ int main(int argc, char **argv) {
     int DQ = DH * HEADS;
     int DK = DH * KV_HEADS;
 
+    buffer<bf16> q_in;
+    buffer<bf16> k_in;
+    buffer<bf16> v_in;
+    buffer<bf16> aux_out;
+    if (RANDOM) {
+        header_print("info", "Generating random q/k/v, seed " << SEED);
+        std::mt19937 rng(SEED);
+        auto fill_random = [&rng](buffer<bf16> &b, size_t n, float stddev) {
+            std::normal_distribution<float> dist(0.0f, stddev);
+            b.resize(n);
+            for (size_t i = 0; i < n; i++) b[i] = (bf16)dist(rng);
+        };
+        fill_random(q_in, (size_t)L_wanted * DQ, 0.3f);
+        fill_random(k_in, (size_t)L_total * DK, 0.3f);
+        fill_random(v_in, (size_t)L_total * DK, 1.0f);
+    } else {
+        std::unique_ptr<SafeTensors> references = std::make_unique<SafeTensors>(reference_path);
+        references->load_weights(q_in, "layer_0.q_embed");
+        references->load_weights(k_in, "layer_0.k_cache");
+        references->load_weights(v_in, "layer_0.v_norm");
+        references->load_weights(aux_out, "layer_0.attention_out");
+    }
     std::cout << "q in:" << q_in.size() / DH << std::endl;
     std::cout << "k in:" << k_in.size() / DK << std::endl;
     std::cout << "v in:" << v_in.size() / DK << std::endl;
@@ -170,17 +195,27 @@ int main(int argc, char **argv) {
     o_0.sync_from_device();
 
     buffer<bf16> o_ref(O_VOLUME);
-    o_ref.copy_from(aux_out.data() + (L_wanted - 1) * DQ, O_VOLUME);
+    if (RANDOM) {
+        attn_ref_config cfg{HEADS, KV_HEADS, DH};
+        attn_cpu_ref(q_0.data(), 1, kv_0.data(), kv_0.data() + offset, L_effective, cfg, o_ref.data());
+    } else {
+        o_ref.copy_from(aux_out.data() + (L_wanted - 1) * DQ, O_VOLUME);
+    }
     header_print("info", "Aux out");
     utils::print_matrix(o_ref, DH, 16);
     header_print("info", "O out");
     utils::print_matrix(o_0, DH, 16);
 
     error_metrics metrics = get_error_metrics(o_0, o_ref);
-    print_error_metrics(metrics);
+    print_error_metrics(metrics, RANDOM ? "NPU vs CPU reference" : "NPU vs reference dump");
+    const bool pass = metrics.CosineSimilarity > 0.97f && metrics.NormalizedMSE < 6e-2f;
 
     header_print("info", "Finished running kernel");
     header_print("info", "Running kernel with bare call (run based).");
     header_print("info", "NPU time: " << npu_time.first << " us");
+    if (RANDOM) {
+        header_print("info", (pass ? "PASSED " : "FAILED!"));
+        return pass ? 0 : 1;
+    }
     return 0;
 }
