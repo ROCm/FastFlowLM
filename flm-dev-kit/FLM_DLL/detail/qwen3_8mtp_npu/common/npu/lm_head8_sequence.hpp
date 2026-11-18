@@ -31,7 +31,6 @@
 ///      BD, which the memtile ring steps over after the first pass, so
 ///      dispatch 2's x landed in a weight BD and every logit came back NaN
 ///      while the command still reported COMPLETED.
-///      (memory: a-prologue-bd-breaks-the-second-dispatch)
 ///   2. **The final rms_norm is split across the k loop.** The core never
 ///      holds a whole row, but it does see every column of one across the k
 ///      loop, so the sum of squares is an ordinary reduction and the

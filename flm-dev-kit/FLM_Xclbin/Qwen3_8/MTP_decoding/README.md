@@ -150,8 +150,8 @@ VOCAB      248320   FC_IN 10240 = 2*D      GLU_SLICE 1024  rms_eps 1e-6
 - **q_proj is head-interleaved upstream** (`row h*512+0..255` = head *h* query,
   `+256..511` = head *h* gate) — **but the q4nx converter de-interleaves it** to
   `[all 24 q | all 24 gate]`, same as the main model's layers. The CPU ref
-  defaults to `q_interleaved = false` and that is the verified-correct setting
-  (see memory `mtp-q4nx-layout-and-error-floor`). `--q-interleaved` exists only
+  defaults to `q_interleaved = false` and that is the verified-correct setting.
+  `--q-interleaved` exists only
   as an escape hatch.
 - **q/k norm runs BEFORE RoPE.** Same as the other Qwen ports, unlike HunYuan.
 - **Attention scale 1/16 is applied by the attention op**, not folded into q_norm.
@@ -188,8 +188,8 @@ Plus shared `model.embed_tokens.weight` and `lm_head.weight`, Q8_0, 2.37 GiB eac
 
 Head total 424.7 M params = 810 MiB. `lm_head` is 75 % of a draft step's traffic.
 
-**Known error floor: cos ≈ 0.994 is Q4_K's floor for this head, not a bug**
-(memory `mtp-q4nx-layout-and-error-floor`). Don't chase it.
+**Known error floor: cos ≈ 0.994 is Q4_K's floor for this head, not a bug**.
+Don't chase it.
 
 ---
 
@@ -224,11 +224,9 @@ It scores every tap the dump carries: `inputs_embeds`, `norm_embed`,
 **Score `layer_out - residual`, not `layer_out`.** `layer_out` carries `fc_out`
 straight through the residual path, so its raw cosine is flattered by an identity
 term. The driver already subtracts the layer's input — that residual-free number
-is what actually moves when a head order or a mask is wrong. This is the same
-principle as memory `score-a-projection-against-its-own-input`.
+is what actually moves when a head order or a mask is wrong.
 
-Current status: **6/7 draft tokens match** (memory
-`qwen38-mtp-head-must-be-hand-built`).
+Current status: **6/7 draft tokens match**.
 
 The reference dump comes from an HF transformers run of the model (not shipped with the dev kit):
 generate `ref.safetensors` with such a reference and pass its path.
@@ -249,52 +247,52 @@ produces a **hang**, not an error.
 - A CT has **2 S2MM and 2 MM2S** channels; MT/IT have **6 and 6**.
 - Shim BD: the **iteration dim is not part of the length**. Splitting an axis
   across `iter x dim2` silently truncates the transfer — keep the pattern in
-  dims 1..3. (memory `shim-bd-iter-not-in-length`)
+  dims 1..3.
 - **`npu_dma_wait` is per-shim.** A DDR round trip must enter and leave on the
   same IT. A BD repeat expressed as a zero-stride axis hangs the design; put
-  repeats in `size[0]`. (memory `npu-dma-wait-is-per-shim`)
+  repeats in `size[0]`.
 
 ### Dataflow rules learned the hard way
 - **One S2MM channel, one producer.** Two flows into a DMA channel is a
   masterset error, and a merge has no ordering guarantee. Rejoin split operands
-  in neighbour memory instead. (memory `one-s2mm-channel-one-producer`)
+  in neighbour memory instead.
 - **Split the consumer, not the producer.** A CT has only 2 S2MM channels, so
   fan an elementwise op across N tiles rather than merging N operand pieces.
   And *test the mapping* — a symmetric swap can't hang, so it will pass a smoke
-  test while being wrong. (memory `split-the-consumer-not-the-producer`)
+  test while being wrong.
 - **A shared buffer's credits are counted per core.** The outbound BD must
   acquire N. The signature of getting this wrong is a hang whose **first few
-  tokens are correct**. (memory `shared-buffer-credits-per-core`)
+  tokens are correct**.
 - **MT[3]'s o/down DDR tap can't be removed** — the array config differs by
   exactly one flow yet it hangs, and the stall lands upstream at k/v, not at o.
-  (memory `mt3-o-tap-removal-hangs`)
+
 
 ### Arithmetic
 - **`aie::mmul<8,8,8,bf16>` truncates to bfp16 on npu2.** It floors both
   operands onto a shared-exponent-per-8 grid. Pre-round weights on the host to
-  recover ~20x accuracy. (memory `aie-mmul-bf16-truncates-to-bfp16`)
+  recover ~20x accuracy.
   The build already passes `-DAIE_API_EMULATE_BFLOAT16_MMUL_WITH_BFP16`.
 - **`aie::accum::to_vector<bf16>()` floors** (truncates toward -inf), as does
   every fp32->bf16 in an AIE kernel. Model it, or your CPU reference is 1 ulp
-  off half the time. (memory `aie-to-vector-bf16-floors`)
+  off half the time.
 - **An mmul C-operand is dim-block major.** Attention output needs a transpose
   out with the *real* head count (6), not the padded one (8). Period-8
   permutations tell you nothing, since every tile is 8x8x8.
-  (memory `mmul-c-operand-is-dim-block-major`)
+
 
 ### Host-side traps
 - **`_move_weights`' offset is in elements, not bytes.** A byte offset reads
   past the buffer end and the cores dequantise garbage into NaN. **All-NaN
-  output means addressing, not arithmetic.** (memory `move-weights-offset-is-in-elements`)
+  output means addressing, not arithmetic.**
 - **RTP addresses are per-build.** They come from that build's
   `input_with_addresses.mlir` (the bitstream rule already dumps them to
   `build/$(MODEL_TYPE)/xclbins/rtp_addresses.txt`). A stale address hangs in
-  `qds_device::wait()`. (memory `rtp-addresses-are-per-build`)
+  `qds_device::wait()`.
   Note `host/models.h::get_rms_addr()` for QWEN3_8_27B is a `TODO: take from
   rtp_addresses.txt` returning 0 in GAV.
 - **`#if` on a `constexpr` silently deletes the block.** `model_spec.h`
   constants are `constexpr`, not macros, so `#if X > 0` evaluates as `0 > 0`.
-  Use `if constexpr`. (memory `preprocessor-if-on-constexpr`)
+  Use `if constexpr`.
 
 ---
 
@@ -384,12 +382,12 @@ Reminder: `Makefile` currently defaults `MODEL_TYPE ?= QWEN3_5_9B` and
 
    - `h2 - h`, the residual removed: **0.999327**. This is the one to read for
      the MLP — `h2`'s raw cosine is flattered by the identity term, which is
-     the larger of the two. (memory: `score-a-projection-against-its-own-input`)
+     the larger of the two.
    - the control, `h2` scored against `down` alone: **0.743**. If the rms tile
      had dropped the add and forwarded down unchanged, that number and the
      end-to-end one would swap. A residual is exactly the kind of op that
      passes a smoke test while doing nothing, so it needs a control saying
-     the add happened. (memory: `score-elementwise-op-with-a-control`)
+     the add happened.
 
    Earlier phases, for comparison: `up|gate + SwiGLU` read 0.999482 with its
    up/gate-swap control at 0.293; the post-attention-norm tap read 0.999802
@@ -416,8 +414,7 @@ Reminder: `Makefile` currently defaults `MODEL_TYPE ?= QWEN3_5_9B` and
      buffers are `2 * INTERMEDIATE_SIZE / 4 = 8704`, not a multiple of the y
      tree's 512-element packets, so a packet would straddle the ping/pong
      boundary. `glu_slice = 1024` is exactly two rounds, so the engine's output
-     lands on the tile's own buffer. (memory:
-     `aux-memtile-buffer-must-divide-packets`)
+     lands on the tile's own buffer.
 
    One trap the final phase turned up, worth keeping: **`down` could not keep
    its own packet id.** As a DDR tap it travelled under `proj_pkt_id.to_out = 1`

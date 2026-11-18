@@ -22,7 +22,7 @@
 ///   * the two device dispatches.
 ///
 /// Like the other two profile flags this is a `-D` with no make dependency, so
-/// **`make clean` first** (memory: make-does-not-track-debug-level).
+/// **`make clean` first**.
 ///
 /// The counters are process-global and not thread safe. Every one of them is
 /// written from the serial driver thread — the `#pragma omp parallel for`s in

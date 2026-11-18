@@ -224,7 +224,7 @@ public:
     ///
     /// Each plane is copied WHOLE, not just [0, ctx_): the replay streams up to
     /// the L_CHUNK boundary above the cursor, and those rows move the result at
-    /// 1e-8. (memory: kv-rows-above-cursor-are-not-inert)
+    /// 1e-8.
     void set_max_length(int max_len) {
         if (max_len < ctx_)
             throw std::runtime_error("npu_mtp_layer::set_max_length(" +
@@ -262,7 +262,7 @@ public:
     /// Seed the cache from cpu_ref::mtp_head's planar fp32 k / v, `n` rows.
     /// Real keys, correlated with the queries that will read them -- random ones
     /// put ~all the softmax mass on the appended row and make the replay
-    /// untestable. (memory: random-kv-cache-cannot-test-attention)
+    /// untestable.
     void mirror_from_cpu(const std::vector<float>& k, const std::vector<float>& v,
                          int n) {
         const size_t DKV = (size_t)t_.DK;

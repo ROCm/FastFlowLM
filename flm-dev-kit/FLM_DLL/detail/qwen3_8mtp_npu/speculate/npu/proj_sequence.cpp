@@ -158,7 +158,6 @@ void emit_pass(npu_sequence* seq, const dequant_mm_pass& pass, const grid& g,
                 // IT[col*2 + 1] descriptor to write. Adding one does not
                 // fault, it deadlocks -- the extra MM2S has no consumer and
                 // parks holding the shim's lock credits.
-                // (memory: unrouted-mm2s-chain-still-fires)
                 seq->npu_dma_memcpy_nd(
                     sizeof(bf16), x_arg_id,
                     MM2S, IT[col * 2],

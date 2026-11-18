@@ -8,7 +8,7 @@
 ///
 /// `aie::mmul<8,8,8,bf16>` on npu2 floors both operands onto a shared-exponent
 /// grid, one exponent per 8 contiguous elements, and it floors toward -inf
-/// rather than rounding (memory: aie-mmul-bf16-truncates-to-bfp16). A floor is
+/// rather than rounding. A floor is
 /// a biased error, so over a K-long dot product it accumulates linearly instead
 /// of as sqrt(K); pre-rounding onto the same grid on the host converts the
 /// hardware's floor into a no-op and buys the bias back. `vision_mm_op::bind`

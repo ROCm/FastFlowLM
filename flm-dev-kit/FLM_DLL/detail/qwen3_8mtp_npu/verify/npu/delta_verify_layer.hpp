@@ -160,7 +160,7 @@ struct delta_engine {
 /// dispatch and writes the advanced ones back after, which is exactly the
 /// contract `recurrent_state_mut()` / `conv_window_mut()` document. It owns the
 /// advance *instead of* `conv_silu` and `delta_rule`, and still owes one
-/// `advance(L)`. (memory: score-a-fold-by-l1-vs-ln)
+/// `advance(L)`.
 class npu_delta_layer final : public qwen38::decoder_layer,
                               private qwen38::layer_state_slots {
 public:

@@ -38,8 +38,8 @@
 /// has to submit them and poll for completion. Sizing the team to the machine
 /// is what makes a runnable thread wait behind a spinning one.
 ///
-/// It is the same runtime behaviour module 1 found from the other side
-/// (memory: openmp-spin-wait-vs-blocking-dispatch), and the same caveat holds:
+/// It is the same runtime behaviour module 1 found from the other side,
+/// and the same caveat holds:
 /// the policy cannot be set from here, because libgomp reads `OMP_WAIT_POLICY`
 /// and `GOMP_SPINCOUNT` in its own ELF constructor, before any of ours.
 ///

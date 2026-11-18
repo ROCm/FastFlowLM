@@ -55,7 +55,6 @@ struct delta_layout {
     // the conversion happens -- handing a byte offset straight to a descriptor
     // addresses twice as far into the BO and streams whatever is past the end,
     // which the cores dequantise into NaN rather than rejecting.
-    // (memory: move-weights-offset-is-in-elements)
     size_t w_upgate_words()  const { return w_upgate_offset  / sizeof(uint16_t); }
     size_t w_down_words()    const { return w_down_offset    / sizeof(uint16_t); }
     size_t w_qkv_words()     const { return w_qkv_offset     / sizeof(uint16_t); }

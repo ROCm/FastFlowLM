@@ -102,7 +102,6 @@ constexpr int w_arg_id = 2;   ///< [Dout][Din] q4_k, reorder_cpy'd
 /// share one address pair, rows 3 and 5 the other. A stale value does not
 /// fault -- it writes into some other buffer and the dispatch hangs in
 /// `qds_device::wait()`.
-/// (memory: rtp-addresses-are-per-build)
 struct dequant_mm_rtp_addresses {
     uint32_t k_div_k_even = 54784;   ///< core rows 2 and 4: Din / K_TILE
     uint32_t act_even     = 54848;   ///< core rows 2 and 4: the fused activation

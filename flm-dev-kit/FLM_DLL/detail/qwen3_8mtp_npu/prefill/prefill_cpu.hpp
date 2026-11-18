@@ -196,8 +196,7 @@ struct prefill_linear_block {
     /// `delta_net_op::run` per DN_WINDOW pass, each covering a disjoint,
     /// consecutive slice -- `run()` advances `conv_state_` and `state_` by its
     /// own pass length through the layer's mutable accessors -- and `advance(L)`
-    /// once, at the end. A double advance is silent (memory:
-    /// score-a-fold-by-l1-vs-ln).
+    /// once, at the end. A double advance is silent.
     ///
     /// Every L is a legal L: `dequant_mm` tiles at 512 and zero-pads the tail,
     /// and a window longer than DN_WINDOW is tiled by the pass loop rather than

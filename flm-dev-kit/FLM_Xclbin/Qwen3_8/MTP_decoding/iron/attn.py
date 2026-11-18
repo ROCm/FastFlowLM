@@ -221,7 +221,6 @@ class kv_tile(AIE_CT_IP):
         # The stride is NQ_PER_CU * 8, the *real* head count, because that is
         # the block scale_div_aie actually emits. Using NQ_PER_CU_PADDED here
         # indexes past the end of the real data and scatters the output.
-        # (memory: mmul-c-operand-is-dim-block-major)
         self.o_out_len = self.NQ_PER_CU * self.DH
         self.o_out_order = [(self.NQ_PER_CU, 8),
                             (self.DH // 8, self.NQ_PER_CU * 8),
@@ -519,7 +518,7 @@ class attn_memtile(AIE_MT_IP):
             # Serialised by the lock chain so the buffer is only released once
             # both halves are in. One producer per channel -- merging the two CUs
             # onto one would be a masterset error and would have no ordering
-            # anyway. (memory: one-s2mm-channel-one-producer)
+            # anyway.
             with block[18]:
                 aie.dma_start(channel_dir = aie.DMAChannelDir.S2MM, channel_index = 2, dest=block[19], chain=block[20])
 

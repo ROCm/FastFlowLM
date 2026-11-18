@@ -33,7 +33,7 @@ It used to honour `FLM_Q38_VISION_NPU=0` and `FLM_Q38_VISION_MM=0` and fall
 back to the attention-only or the pure host factory. Both are gone with the
 rest of the host arms. The A/B they served moved to the step-verification drivers,
 which constructed the factories directly and so could still put the real host path
-on the off-arm (`ab-off-arm-is-not-the-host`) — the thing an env var was needed
+on the off-arm — the thing an env var was needed
 for in the first place.
 
 `activate.sh` needed three staging lines, and all three needed a **rename**:
@@ -150,7 +150,7 @@ a driver that builds both factories itself.
 **Build the host arm at `-O2` and it reads 3x slower**, which turns the
 attention ratios into 6.5x and 13.7x and made an early estimate claim the
 device *lost* at L=256. It does not; the crossover is below the smallest image
-this checkpoint produces. (`host-vs-device-ab-needs-shipping-flags`)
+this checkpoint produces.
 
 ## The accuracy fix the mm port needed: pre-round **both** operands
 
@@ -159,8 +159,8 @@ between a usable tower and an unusable one.
 
 `makefiles/common.mk:28` builds with `-DAIE_API_EMULATE_BFLOAT16_MMUL_WITH_BFP16`,
 so `aie::mmul<8,8,8,bf16>` floors **each block of 8 consecutive k** onto a
-shared-exponent, 7-mantissa-bit grid, **truncating toward -inf**
-(`aie-mmul-bf16-truncates-to-bfp16`). Truncation is a biased error, so it does
+shared-exponent, 7-mantissa-bit grid, **truncating toward -inf**.
+Truncation is a biased error, so it does
 not cancel across a long k; it accumulates.
 
 `preround_bfp16_inplace()` re-quantises onto that same grid with
@@ -190,12 +190,12 @@ bf16 bit pattern instead costs **0.20 ms**, a 20x difference, and is what keeps
 this free rather than eating the port's whole margin.
 
 The bias is **not** pre-rounded: it never enters the mmul, it seeds the
-accumulator (`bias-prologue-spans-k-chunks`).
+accumulator.
 
 ## The bind sites
 
 111 bound weights, ~954 MB, which is why `bind()` is separate from `run()` —
-and why each op gets its own weight BO (`xrt-bo-4gb-addressing-limit`: the 4 GB
+and why each op gets its own weight BO (the 4 GB
 cap is per-BO, not aggregate).
 
 `image_cpu::image_cpu()` makes one `mm_op` per tag. D=1152, D_ff=4608,
@@ -232,11 +232,11 @@ is a real separation and not a tautology. Adding an `rtp_act = 3` would mean
 rebuilding both bitstreams and re-extracting both RTP addresses for one
 dispatch out of 111; the epilogue is 1.38M `erff` on 16 threads, ~1-2 ms.
 
-**One `rtp_act` per round, not per dispatch** (`rtp-act-is-per-round-not-per-dispatch`).
+**One `rtp_act` per round, not per dispatch**.
 The activation belongs to `bind()` for this reason, and each op owns a private
 `npu_app` so no two bound weights ever share a sequence.
 
-**A fused matmul hides its narrow tensors** (`fused-matmul-cosine-hides-narrow-tensors`).
+**A fused matmul hides its narrow tensors**.
 `qkv` is `[Q|K|V]` in one 3456-wide output; N16 check 3 breaks relative L2 out
 per third — q 0.00446, k 0.00570, **v 0.01021** — and per N band at `tile_N`
 granularity, because the worst band (0.01094) is 2.3x the aggregate (0.00479).
@@ -253,13 +253,12 @@ agreement is 0.0246 against a 0.050 bar, which is loose on purpose: the two
 arms do not share an intermediate (the fused path applies gelu to the fp32
 accumulator, the host arm after a bf16 rounding) and gelu is steep where its
 output is small. The claim is carried by the **40x separation** from the
-unapplied arm (0.99500), not by the agreement's tightness
-(`score-an-elementwise-op-with-a-control`).
+unapplied arm (0.99500), not by the agreement's tightness.
 
-**The pad rows are not inert** here either (`kv-rows-above-cursor-are-not-inert`).
+**The pad rows are not inert** here either.
 `run()` zeroes rows `[M, M_pad)` on **every** call; N16 check 8 runs M=300
 after M=1200, twice, and requires bit-identity with a fresh op — and requires
-the second dispatch to equal the first (`a-prologue-bd-breaks-the-second-dispatch`).
+the second dispatch to equal the first.
 
 **`merger.fc1` runs 512 padded rows for 300 real ones** — design A's tile_M is
 256, and B is unavailable because `4608 % 1024 != 0`. 1.7x on 21.7 GFLOP: a
@@ -274,7 +273,7 @@ twice: rotated-vs-straight must **collapse** (relL2 1.448) and rotated-vs-
 rotated must **agree** (0.0043) — without the second half, a device that
 silently dropped `head_perm` would pass the first for the wrong reason.
 
-**The padding rows are not inert** (`kv-rows-above-cursor-are-not-inert`). The
+**The padding rows are not inert**. The
 kernel's mask covers the **key** tail, but the QK mmul still reads those rows
 and the v tail is not masked at all, so a previous, longer image's rows would
 be multiplied before being masked. `run()` zeroes rows `[L, L_pad)` of q, k and
@@ -285,22 +284,22 @@ L=1200 and requires the result to be **bit-identical** to a fresh op's.
 iteration of the round loop, so the BD ping-pong and the advancing q offset are
 untested by it. N15 check 7 tiles the real rows out to L=1200 (three rounds)
 with jitter that keeps the softmax diffuse — 86.5 effective keys of 1200, not
-the ~1 that independent Gaussians give (`random-kv-cache-cannot-test-attention`).
+the ~1 that independent Gaussians give.
 
 **Nothing is gated on cosine.** The vision softmax is diffuse enough that the
 output sits near an average of `v` however the scores are tilted: check 4's
 deliberately broken run scores relL2 1.448 at **cos 0.019**, but N14 already
 showed the other direction — dropping the rotary entirely still scores cos
-0.9975. The gate is relative L2, per head. (`per-row-cosine-reports-the-norm`)
+0.9975. The gate is relative L2, per head.
 
 **~0.03 relL2 is the floor, not a bug.** The kernel builds with
 `-DAIE_API_EMULATE_BFLOAT16_MMUL_WITH_BFP16`, so both operands of both the QK
 and the PV products are floored onto a shared-exponent-per-8 grid — 7 mantissa
 bits. `vision_attn`'s own harness reports 0.0329 at L=256 against its fp32
-reference, which is what says the gap is the mmul. (`aie-mmul-bf16-truncates-to-bfp16`)
+reference, which is what says the gap is the mmul.
 
 **The RTP address is per-build.** `vision_attn` 57344; `vision_mm` **A 24576,
 B 7936**. A stale one does not fault — it writes into some other buffer and the
 dispatch hangs in `qds_device::wait()`. N15 check 1 and N16 check 1 diff the
 header constants against `build/rtp_addr.txt` *first*, so a rebuild is a
-readable FAIL and not a two-minute hang. (`rtp-addresses-are-per-build`)
+readable FAIL and not a two-minute hang.

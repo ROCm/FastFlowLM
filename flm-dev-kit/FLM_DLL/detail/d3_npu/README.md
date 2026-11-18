@@ -161,7 +161,7 @@ d3-turbo (`vllm-sr/d3-turbo`, Qwen3.5-27B text tower: 64 layers = 48 linear + 16
 `vision_attn.xclbin` of `qwen3.5:9b` (the 27B vision tower has the same width 1,152 and 27 layers; its merger outputs 5,120).
 Local measurements (Strix Halo, host shared with other jobs, so times are upper bounds):
 
-| | plain Q4_K | own GPTQ (`pkg-turbo-gptq-a`) |
+| | plain Q4_K | own GPTQ |
 |---|---:|---:|
 | package | 15.5 GB | 15.5 GB |
 | text, 736 questions: cosine median (min) vs the iGPU BF16 `prefix_bidir` goldens | 0.9964 (0.963) | 0.99896 (0.981) |

@@ -41,7 +41,7 @@
 /// A (m=64,k=384,n=48) serves every shape whose N is a multiple of 384; B
 /// (m=32,k=384,n=128) exists for `merger.fc2`, whose N of 5120 is not. They are
 /// two bitstreams and therefore two `hw_context`s -- a runlist is bound to one,
-/// so they cannot be merged (memory: verify-xclbins-are-two-separate-bitstreams).
+/// so they cannot be merged.
 ///
 /// For this checkpoint every K and every N is already a multiple of its
 /// design's tile, so `bind()` is a plain memcpy and **only M is padded**:
@@ -151,7 +151,6 @@ private:
 /// accumulates as sqrt(K) and cancels. Pre-rounding the weights onto the same
 /// grid here makes the hardware's floor a no-op and buys back the bias: the
 /// same model on Gemma4's `patch_dense` went cos 0.9872 -> 0.9994.
-/// (memory: aie-mmul-bf16-truncates-to-bfp16)
 ///
 /// It runs on **both** operands. `bind()` rounds W once per weight; `run()`
 /// rounds x on every call, folded into the fp32 -> bf16 narrow. Gemma4 measured
@@ -162,8 +161,7 @@ private:
 ///
 /// What it does NOT do is touch the checkpoint. Only the copy in the weight BO
 /// moves, so the host reference in the verify driver still scores against the
-/// true weights and the improvement is real rather than common-mode
-/// (memory: score-dequant-mm-against-its-own-quantized-bytes).
+/// true weights and the improvement is real rather than common-mode.
 ///
 /// The clamp matters. Rounding to nearest can push a block's largest magnitude
 /// up over the next power of two, which would raise the block exponent the
@@ -209,7 +207,7 @@ public:
     /// A null bias is zero-filled rather than skipped. The kernel's prologue
     /// reads the leading `n` elements of the first w chunk unconditionally and
     /// seeds every accumulator from them, so "no bias" has to be an explicit N
-    /// zeros (memory: bias-prologue-spans-k-chunks).
+    /// zeros.
     void bind(const uint16_t* w, const uint16_t* bias,
               int K, int N, qwen38::vision::activation act) override {
         if (!w)
@@ -239,7 +237,7 @@ public:
         // on, so the whole [N][K] block is one run of 8-element groups and no
         // group ever straddles two rows (every K here is a multiple of 384).
         // The bias is NOT pre-rounded: it never enters the mmul, it seeds the
-        // accumulator (memory: bias-prologue-spans-k-chunks).
+        // accumulator.
         if (preround_enabled())
             preround_bfp16_inplace(d + N, (size_t)N * (size_t)K);
         w_bo_.sync_to_device();
@@ -269,8 +267,8 @@ public:
         // The pad rows are not inert -- there is no mask anywhere in this
         // design, so a previous, longer image's activations left there are
         // multiplied and accumulated before their output rows are dropped, and
-        // an overflowing bf16 accumulator does not stay in its own row
-        // (memory: kv-rows-above-cursor-are-not-inert). Zeroing is one memset
+        // an overflowing bf16 accumulator does not stay in its own row.
+        // Zeroing is one memset
         // on at most tile_M-1 rows and removes the question.
         bf16*        xd   = arena_->x().data();
         const size_t real = (size_t)M * (size_t)K_;
@@ -335,8 +333,7 @@ public:
         // The merger's erf gelu. Rounding the result back to bf16 under
         // emulation is what keeps this arm scoreable against `cpu_mm_op` on the
         // same bytes -- the device's `none` output is already bf16, so the only
-        // new rounding is the activation's
-        // (memory: score-dequant-mm-against-its-own-quantized-bytes).
+        // new rounding is the activation's.
         const bool emu = qwen38::vision::cpu_ops_emulate_bf16();
 #pragma omp parallel for schedule(static) num_threads(qwen38::vision::par_threads())
         for (int i = 0; i < M; i++) {

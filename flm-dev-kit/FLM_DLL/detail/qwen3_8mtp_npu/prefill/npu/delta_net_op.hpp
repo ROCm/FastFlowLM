@@ -330,7 +330,6 @@ public:
     // The op fuses them -- the conv's output never reaches the host on the
     // live path -- so this is the only way to charge each one for its own
     // error instead of for the pair's.
-    // (memory: score-a-projection-against-its-own-input)
 
     /// The conv's output and the fold's input, `[L_pad][conv_dim]` bf16. The
     /// caller owes a `sync_from_device()`; nothing on the live path reads it.

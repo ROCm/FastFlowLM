@@ -63,8 +63,7 @@ public:
             throw std::runtime_error(
                 "vision_op_factory: null vision_attn app manager -- construct "
                 "cpu_op_factory instead when the xclbin is absent, so the "
-                "off-arm of the A/B is the real host path "
-                "(memory: ab-off-arm-is-not-the-host)");
+                "off-arm of the A/B is the real host path");
     }
 
     /// Put the matmuls on the device as well.
@@ -78,7 +77,6 @@ public:
     /// \param mm_b  manager for vision_mm_b.xclbin (m=32,k=384,n=128)
     /// \param mm_rtp  the two per-build RTP addresses. A stale one does not
     ///        fault; it hangs in `qds_device::wait()`
-    ///        (memory: rtp-addresses-are-per-build)
     void enable_mm(npu_app_manager* mm_a, npu_app_manager* mm_b,
                    const vision_mm_rtp_addresses& mm_rtp =
                        vision_mm_rtp_addresses{}) {

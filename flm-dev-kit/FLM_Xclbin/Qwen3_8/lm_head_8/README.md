@@ -28,8 +28,7 @@ Time spent: 49 ms for 8 rows (6.1 ms/row)
 **49 ms against 204 ms** for eight L = 1 dispatches — 4.2x — at the same
 accuracy. The win is not arithmetic: it is reading the 169 MB of Q8_0 weights
 **once** for all 8 tokens instead of once per token. Row 1 is an exact tie in the
-bf16-rounded reference (two tokens at 24.75), scored by value rather than index —
-see `qwen38-lm-head-untied-and-argmax-ties`.
+bf16-rounded reference (two tokens at 24.75), scored by value rather than index.
 
 **Repeat dispatches work.** 20 back-to-back dispatches, token slots rotated on
 each, all score 8/8; steady state is ~31 ms per dispatch.
@@ -148,7 +147,7 @@ stage into — it hangs. `LOOKAHEAD = 2` uses 12 and costs ~3%.
 
 In `_Q80_x_bf16_L` the token loop sits *inside* the column loop. Converting a
 weight column from int8 to bf16 is the expensive part of this kernel — it is
-conversion-bound, not MAC-bound (`dequant-mm-conversion-bound`) — and the
+conversion-bound, not MAC-bound — and the
 converted column does not depend on the token. One conversion now feeds 8 MACs.
 
 ## Test
@@ -161,12 +160,12 @@ make host
 ```
 
 Gate on **argmax 8/8**. Cosine is secondary, and being per-row it largely reports
-the row norm (`per-row-cosine-reports-the-norm`).
+the row norm.
 
 **Neither of them can see the rms_norm.** A build with the norm stripped out
 entirely, fed raw x, still scores 8/8 here at cos 0.9984 — argmax is
-scale-invariant and `nw` barely rotates the vector
-(`rmsnorm-is-cosine-invisible`). The checks that do separate them (in the engine's port-time
+scale-invariant and `nw` barely rotates the vector.
+The checks that do separate them (in the engine's port-time
 driver) were: `||raw|| / ||normed||` must clear 1.5, and the device's output must
 match a normed reference by *relative L2*, not cosine.
 

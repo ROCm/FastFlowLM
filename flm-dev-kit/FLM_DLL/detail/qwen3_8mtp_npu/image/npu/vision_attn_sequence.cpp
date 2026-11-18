@@ -70,7 +70,7 @@ void gen_vision_attn_seq(npu_sequence* seq,
             // Ping-pong the BD ids across rounds. A shim has 16 BDs and a round
             // uses five of them, so two banks of eight let round r+1's
             // descriptors be written while round r is still in flight
-            // (memory: memtile-bd-ids-are-banked-by-parity -- a shim's budget
+            // (a shim's budget
             // is the tighter one).
             const int bd_offset = (round % 2) * 8;
 
@@ -138,8 +138,7 @@ void gen_vision_attn_seq(npu_sequence* seq,
                 // The chunking lives in dims 1..2 (`L_pad / KV_CHUNK` blocks of
                 // KV_CHUNK rows), never in the iteration dim, because an
                 // iteration count is not part of the transfer length and
-                // splitting an axis across it truncates silently
-                // (memory: shim-bd-iter-not-in-length).
+                // splitting an axis across it truncates silently.
                 const uint32_t kv_offset = (uint32_t)kv_head * (uint32_t)DH;
                 seq->npu_dma_memcpy_nd(
                     2, k_arg_id,

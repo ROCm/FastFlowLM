@@ -37,7 +37,6 @@
 /// earlier estimate of "the device loses at L=256" came from a driver built
 /// that way and was wrong by a factor of three in the host's favour; the
 /// crossover is in fact below the smallest image this checkpoint produces.
-/// (memory: host-vs-device-ab-needs-shipping-flags)
 ///
 /// There is no length threshold and no host fallback inside `run()`. One code
 /// path is what makes an end-to-end A/B measure what actually ships; the CPU
@@ -83,8 +82,7 @@ public:
     /// `1/sqrt(72)` in as a `const float`, so a caller passing anything else
     /// would get a silently differently-tempered softmax. Nothing downstream
     /// could tell -- the vision softmax is diffuse enough that a wrong
-    /// temperature still scores cos 0.99 (memory:
-    /// score-an-elementwise-op-with-a-control).
+    /// temperature still scores cos 0.99.
     void configure(int max_L, int heads, int dh, float scale) override {
         if (dh != vision_attn_tiles::DH_BAKED)
             throw std::runtime_error(
@@ -135,8 +133,7 @@ public:
         // allocation. The key mask makes the k/v tail inert in the SCORES, but
         // the QK mmul still reads it, and a previous (longer) image's rows left
         // there would be multiplied before being masked. Zeroing is one memset
-        // on <= 511 rows and removes the question
-        // (memory: kv-rows-above-cursor-are-not-inert).
+        // on <= 511 rows and removes the question.
         //
         // The q tail is different: those rows are computed, not masked, and
         // their outputs are dropped below. Zero q means every score is 0, the

@@ -84,8 +84,7 @@ constexpr uint32_t MAX_L_IN = 64 * X_BLK_TOKENS;
 /// Read out of the design's `input_with_addresses.mlir`, not out of anything
 /// checked in here; `conv1d_prefill/host/host.cpp:112` carries the same number.
 /// A stale one writes the length and the norm mode into whatever now lives at
-/// that address, and the design hangs in `qds_device::wait()`
-/// (memory: rtp-addresses-are-per-build).
+/// that address, and the design hangs in `qds_device::wait()`.
 struct conv1d_rtp_addresses {
     uint32_t l_buffer = 49664;
 };

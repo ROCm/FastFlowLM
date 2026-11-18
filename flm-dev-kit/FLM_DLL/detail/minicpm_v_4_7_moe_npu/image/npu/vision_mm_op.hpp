@@ -214,7 +214,7 @@ public:
 
         // x: the M real rows, and ROWS [M, M_pad) ZEROED ON EVERY CALL -- there
         // is no mask in this design, so a previous longer call's rows would be
-        // multiplied (memory: kv-rows-above-cursor-are-not-inert).
+        // multiplied.
         bf16* xd = arena_->x().data();
         {
             VPROF(mm_x_us);

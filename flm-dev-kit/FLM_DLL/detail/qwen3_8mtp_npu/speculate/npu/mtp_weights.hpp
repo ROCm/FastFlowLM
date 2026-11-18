@@ -14,8 +14,7 @@
 ///   - the head has a fusion projection in front of the layer, so arg 1 opens
 ///     with model.mtp.fc.weight (D x 2D) and arg 2 carries FOUR norm gains;
 ///   - the qkv walk is **k, v, q**, not q, k, v -- the RoPE tile consumes kv
-///     before q and the arrival order does the split for free
-///     (memory: rope-tile-consumes-kv-before-q);
+///     before q and the arrival order does the split for free;
 ///   - the bitstream is decode-only, T = 1, so arg 0 is one fusion row in and
 ///     one D-wide row out rather than an L_TOKENS x D tile.
 ///
@@ -99,7 +98,6 @@ struct mtp_layout {
     /// own BD whose only stride is one row. The hop is gone rather than raised,
     /// the interleave is no longer buying anything, and this cache is two planes
     /// again -- byte for byte the scaffold's.
-    /// (memory: planar-kv-cache-masks-stride-past-2048)
     static constexpr int MAX_L_LIMIT = CHUNKS_LIMIT * L_CHUNK;
     /// **How many positions the head's KV cache BO holds -- the buffer.**
     ///
@@ -136,7 +134,6 @@ struct mtp_layout {
     // element size of sizeof(bf16), so every offset it sees must be in the same
     // unit. The w_*_words() accessors are the single place that conversion
     // happens; never hand a byte offset straight to the sequence generator.
-    // (memory: move-weights-offset-is-in-elements)
     size_t w_fc_offset     = 0;   ///< model.mtp.fc.weight, D x 2D
     size_t w_qkv_offset    = 0;   ///< k | v | q, in that order
     size_t w_gate_offset   = 0;   ///< output gate z, q_proj's second DQ rows

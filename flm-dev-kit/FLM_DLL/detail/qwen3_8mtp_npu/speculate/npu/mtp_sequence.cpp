@@ -37,7 +37,6 @@ namespace {
 /// That failure is the one the base attention layer hit on 2026-09-17, and the
 /// draft loop is exactly the workload that exposes it: seven consecutive
 /// dispatches at consecutive cursors, one per step.
-/// (memory: bd-repeat-forces-uniform-consumer-trip-count)
 void _write_attn_L(npu_sequence* seq, const mtp_layout& t, int context_offset,
                    const mtp_rtp_addresses& rtp) {
     const uint32_t keys = (uint32_t)(context_offset + t.L_TOKENS);
@@ -87,7 +86,6 @@ void _send_fc_norm_weights(npu_sequence* seq, const mtp_layout& t) {
 /// routed it at a switch that was never told about the id. The first dispatch
 /// survived it; every one after it timed out. Both ends had to move together:
 /// iron/MTP_layer_aie.py drops the `pkt_id =` from that connect_port.
-/// (memory: packet-flow-on-a-point-to-point-link)
 void _send_fc_input(npu_sequence* seq, const mtp_layout& t) {
     const npu_bd_id bds[2] = {bd_0, bd_3};
     for (int half = 0; half < 2; half++) {
@@ -181,7 +179,7 @@ void _send_rope_weights(npu_sequence* seq, const mtp_layout& t) {
 /// It is on the attention shims and not IT3 because npu_dma_wait only orders
 /// transfers on one shim tile. The replay reads from these same shims, so this
 /// is what lets the sequence wait for the append before replaying -- and it now
-/// has to wait on BOTH channels. (memory: npu-dma-wait-is-per-shim)
+/// has to wait on BOTH channels.
 void _receive_kv_cache(npu_sequence* seq, const mtp_layout& t, int context_offset) {
     const uint32_t width = (uint32_t)(t.kv_heads_per_column * t.DH);
     assert(t.v_at(context_offset) + (size_t)t.DV <= t.kv_cache_size &&

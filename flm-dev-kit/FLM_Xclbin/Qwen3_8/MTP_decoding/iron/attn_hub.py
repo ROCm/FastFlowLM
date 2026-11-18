@@ -78,7 +78,7 @@ class attn_hub_memtile(AIE_MT_IP):
         # q: filled once, then read by each CU in turn. The credit only comes
         # back to the inbound BD after the last CU has taken its slice, so the
         # next row cannot overwrite a group still in flight.
-        # (memory: shared-buffer-credits-per-core -- here the chain does the
+        # (here the chain does the
         # counting instead of an acquire of N, since the four reads are ordered.)
         self.q_prod_lock = aie.lock(self.mt, lock_id = 0, init = 1)
         self.q_cons_locks = [
@@ -131,7 +131,7 @@ class attn_hub_memtile(AIE_MT_IP):
             # ---- S2MM ch2/ch3: the two columns' half-rows --------------------
             # One producer per channel: a column is one source, and merging both
             # onto a single channel would be a masterset error with no ordering
-            # guarantee either way. (memory: one-s2mm-channel-one-producer)
+            # guarantee either way.
             with block[o_base]:
                 aie.dma_start(channel_dir = aie.DMAChannelDir.S2MM, channel_index = 2,
                               dest = block[o_base + 1], chain = block[o_base + 2])

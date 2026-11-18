@@ -189,7 +189,6 @@ int main(int argc, char* argv[]) {
         time_utils::time_point start = time_utils::now();
         // Check the state: a timed-out dispatch leaves the output BO holding the
         // previous contents, which a value-only check reads as a pass.
-        // (memory: unchecked-ert-state-looks-like-a-pass)
         ert_cmd_state st = lm_head(lm_head_output, lm_head_weights, lm_head_input);
         if (st != ERT_CMD_STATE_COMPLETED)
             header_print("error", "dispatch state = " + std::to_string((int)st));
@@ -217,7 +216,6 @@ int main(int argc, char* argv[]) {
     // the first pass -- so whether a second dispatch re-reads x is a property
     // no single dispatch can report. Repeat with the rows reversed: the
     // argmaxes must reverse with them.
-    // (memory: one-shot-bench-cannot-see-dispatch-state)
     // FLM_LM8_REPEAT=same re-dispatches the *identical* x. That separates the two
     // ways a second dispatch can fail: if only the x prologue is spent, the array
     // still holds dispatch 1's x and "same" must score 8/8 while a permuted x

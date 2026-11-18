@@ -108,7 +108,7 @@ Two things to note:
   correct; the damage is entirely in the replay/softmax read.
 - The safe-band baseline decays with depth on its own (0.999999 at c < 9,
   0.99994 at c = 32..40) — that is the known
-  `prefill-attention-error-grows-with-kv-blocks` effect. The mismatch rows sit
+  growth of prefill-attention error with the number of KV blocks. The mismatch rows sit
   an order of magnitude below their own band's baseline, which is the signal.
 
 The first cursor of each mismatch band (9, 25) reads clean because its own
@@ -147,8 +147,7 @@ with `L_TOKENS` separate `npu_dma_memcpy_nd` calls, each of
 `ceil((ctx + i + 1) / 16)` chunks, makes the counts agree exactly. It
 **times out** (`dispatch state 8`). The token repeat has to live in the
 iteration dimension `size[0]` — see the note at
-`qwen3_8mtp_npu_attn_sequence.cpp:203-214` and the
-`npu-dma-wait-is-per-shim` memory — and a repeated BD by definition replays
+`qwen3_8mtp_npu_attn_sequence.cpp:203-214` — and a repeated BD by definition replays
 *one* descriptor, so a per-token length is not expressible in that form.
 
 **Dead end 2: the same, with alternating BD ids and `npu_dma_wait` between
@@ -306,7 +305,7 @@ hard-coded `q38npu::attn_rtp_addresses`** in
 `FLM_DLL/detail/qwen3_8mtp_npu/verify/npu/attn_sequence.hpp` (the DLL tree was
 reorganised; it used to be `qwen3_8mtp_npu_attn_weights.hpp`). A stale RTP
 address does not fault — it hangs in the wait for 60 s and then returns
-`ERT_CMD_STATE_TIMEOUT`. See the `rtp-addresses-are-per-build` memory.
+`ERT_CMD_STATE_TIMEOUT`.
 
 ## 7. How to know it is fixed
 

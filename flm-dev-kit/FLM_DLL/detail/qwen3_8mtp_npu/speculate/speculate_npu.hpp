@@ -109,7 +109,6 @@ public:
     /// otherwise gives this one its own hw_context, which is what we want: the
     /// draft head dispatches standalone, never inside an attention runlist, so
     /// the two bitstreams never need to share a context.
-    /// (memory: verify-xclbins-are-two-separate-bitstreams)
     ///
     /// \param prefill_xclbin_path  attn.xclbin, staged as
     ///             `attention_prefill.xclbin`. Optional: when it is empty or

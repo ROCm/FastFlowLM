@@ -88,7 +88,7 @@ class RoPE(AIE_CT_IP):
         # the replay share an IT and npu_dma_wait can order them. An append
         # landing on IT3 could not be waited on before the replay reads from
         # IT4/IT5, and the CUs would attend to a cache row that had not been
-        # written yet. (memory: npu-dma-wait-is-per-shim)
+        # written yet.
         #
         # The halves are contiguous: the cache row is head-major, so column c
         # owns [c * kv_col_width, + kv_col_width).

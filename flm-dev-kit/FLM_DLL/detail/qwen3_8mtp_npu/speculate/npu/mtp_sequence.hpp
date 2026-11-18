@@ -31,7 +31,6 @@
 ///      replay is posted -- and both sit on the same two shims, because
 ///      npu_dma_wait does not reach across shim tiles. k and v arrive on
 ///      separate channels, so that is two waits per column and not one.
-///      (memory: npu-dma-wait-is-per-shim)
 ///   4. o_proj's weight round goes AFTER the replay, and up|gate and down after
 ///      it, because the x each reduces over does not exist until the stage
 ///      before it has run.
@@ -92,13 +91,12 @@ constexpr int kv_cache_arg_id = 4;   ///< two planes: [MAX_L][DK] then [MAX_L][D
 
 /// Packet ids, from iron/constants.py's it1_pkt_id. These select a destination
 /// inside the column rather than a port, so a wrong one is delivered somewhere
-/// plausible instead of failing. (memory: repointing-a-tap-can-collide-pkt-ids)
+/// plausible instead of failing.
 ///
 /// There is deliberately no id for the fusion input. IT[3].MM2S[0] reaches one
 /// destination, so that link is circuit-switched and `_send_fc_input` sends -1;
 /// `it1_pkt_id.to_pass` exists in constants.py but no switch routes it, and
 /// using it hung every dispatch after the first.
-/// (memory: packet-flow-on-a-point-to-point-link)
 constexpr int rms_w_pkt_id  = 0;   ///< to_rms
 constexpr int rope_w_pkt_id = 1;   ///< to_rope
 
@@ -116,7 +114,6 @@ constexpr int rope_w_pkt_id = 1;   ///< to_rope
 ///
 /// Source: MTP_decoding/build/QWEN3_8_27B/xclbins/rtp_addresses.txt. Whenever
 /// that xclbin is rebuilt, diff it against these.
-/// (memory: rtp-addresses-are-per-build)
 struct mtp_rtp_addresses {
     uint32_t qk = 9216;    ///< RTP_L_attn_qk_core_{2,4}_{4,5}
     uint32_t kv = 36864;   ///< RTP_L_attn_kv_core_{3,5}_{4,5}

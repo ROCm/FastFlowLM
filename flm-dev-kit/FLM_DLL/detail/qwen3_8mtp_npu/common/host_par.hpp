@@ -63,12 +63,10 @@
 ///
 /// `FLM_Q38_HOST_PAR=1` forces threading on and `=0` off. `prefill_cpu`'s
 /// constructor prints which way it went.
-/// (memory: openmp-spin-wait-vs-blocking-dispatch)
 ///
 /// ## The small-L guard
 ///
-/// The same loops are the draft head's, at L = 1..4 (memory:
-/// mtp-step0-width-clamped-to-last-window). One row of a D = 5120 projection
+/// The same loops are the draft head's, at L = 1..4. One row of a D = 5120 projection
 /// is 5120 elements and stays on one core, where a fork would cost more than
 /// the loop.
 #ifndef __QWEN3_8MTP_NPU_HOST_PAR_HPP__

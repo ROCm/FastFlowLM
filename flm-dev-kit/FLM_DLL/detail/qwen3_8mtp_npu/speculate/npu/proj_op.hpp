@@ -463,8 +463,7 @@ public:
     }
 
     /// Whether `run()` may pipeline. `FLM_Q38_PIPELINE=0` turns it off, and
-    /// the off arm is the serial loop this replaced rather than a host path
-    /// (memory: an A/B's off-arm is not the host).
+    /// the off arm is the serial loop this replaced rather than a host path.
     static bool pipeline_enabled() {
         static const bool on = [] {
             const char* e = std::getenv("FLM_Q38_PIPELINE");
@@ -481,7 +480,7 @@ public:
     /// The pair costs `ROWS * (Din + Dout) * 2` bytes: 41 MB for the widest
     /// (`up|gate`, Dout = 34816), ~193 MB across module 1's eight prefill ops.
     /// That is against a 4 GB *per BO* addressing limit with no aggregate one
-    /// (memory: the XRT 4 GB limit is per-BO), and ~1% of the resident model.
+    /// and ~1% of the resident model.
     void _ensure_pipelined() {
         if (pipelined_) return;
         _build_slot(1);

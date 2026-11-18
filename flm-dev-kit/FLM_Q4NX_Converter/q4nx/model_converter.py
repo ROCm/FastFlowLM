@@ -541,8 +541,7 @@ class __Q4NX_Converter(ABC):
             
         ]
         where a0_0, a0_1 share a common scale
-        Thus, this mean the AIE kernel need to do a even_odd filter, as show in code 
-        https://github.com/ngdxzy/FastFlowLM_Dev/blob/30b43b59d77f5759e943cea52ff7a259ca0fa776/npu_framework/gpt_npu_bin/kernel/mvm_MXFP4.hpp#L76
+        Thus, this mean the AIE kernel need to do a even_odd filter.
         """
         
         # Thus, in this code, let us do the even odd filter for it
@@ -584,7 +583,6 @@ class __Q4NX_Converter(ABC):
         # Final shape: [..., 16]
         data_reordered = torch.cat([low_part_packed, high_part_packed], dim=-1)
         data = data_reordered.contiguous()
-        # NOW, this code change is reflected in https://github.com/ngdxzy/FastFlowLM_Dev/commit/028680d1f670d817fae0e7efe947bb1a4c19c8a3
         
         
         

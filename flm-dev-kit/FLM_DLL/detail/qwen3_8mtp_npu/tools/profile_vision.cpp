@@ -7,8 +7,7 @@
 /// Build -- **at the shipping flags**, not at -O2. The engine's own are
 /// `-O3 -march=native -ffast-math` plus the avx512 set; at -O2 this tower
 /// measures 2368 ms against the shipping build's 1823, a 30% error that is
-/// larger than anything being A/B'd (memory: host-vs-device-ab-needs-shipping-
-/// flags). Add `-DQWEN3_8MTP_VISION_PROFILE` for the per-stage table.
+/// larger than anything being A/B'd. Add `-DQWEN3_8MTP_VISION_PROFILE` for the per-stage table.
 ///   g++-13 -O3 -march=native -ffast-math -fopenmp -std=c++20
 ///       -mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma
 ///       -I. -I../../include -I../q4nx -I/opt/xilinx/xrt/include
@@ -30,8 +29,7 @@
 /// It scores nothing. Correctness is a separate check (the tower against the
 /// HF dump, the matmuls against the host op). The only thing
 /// here that has to be real is `L`, and 1200 is the operating point — the
-/// reference dump's 256 is 4.7x small and one round of the merger
-/// (memory: vision-tower-operating-point-is-l1200).
+/// reference dump's 256 is 4.7x small and one round of the merger.
 ///
 /// The rows are the dump's own patch rows tiled out with a little jitter, the
 /// same construction check 10 uses. Patch VALUES do not change which matmuls

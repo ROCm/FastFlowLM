@@ -229,8 +229,6 @@ void qwen3_8mtp_npu::Impl::load_weights(Q4NX& q4nx) {
     // cores come free. A draft step dispatches it as the SECOND of two, and
     // the pair serialises: ~4.9 ms/step on top (40.5 vs 35.8), which is 13% of
     // the step but only ~1% of a cycle, since drafting is 7-8% of cycle time.
-    // (memory: two-npu-dispatches-per-step-serialise,
-    //          npu-mtp-draft-head-is-not-faster)
     //
     // Module 3 is NOT routed here -- see get_logits(). It needs L = 8 and this
     // bitstream is L = 1; its backend is `lm_head8_npu`, built just below.
@@ -262,7 +260,6 @@ void qwen3_8mtp_npu::Impl::load_weights(Q4NX& q4nx) {
     // tile loop, so the table streams once regardless of L. Measured at the
     // shipping flags: 19-25 ms for 1 row, 61-76 for 8, against 29 ms steady
     // state on the device. So the projection itself is ~32 ms cheaper.
-    // (memory: host-lm-head-is-sublinear-in-rows)
     //
     // END TO END THAT IS NOT MEASURABLE, and it was measured rather than
     // assumed. tools/bench_verify_lm_head.cpp, 20 real cycles, three repeats
@@ -276,11 +273,9 @@ void qwen3_8mtp_npu::Impl::load_weights(Q4NX& q4nx) {
     // the noise floor. The move buys PARITY, not speed -- the same finding as
     // the draft head. What it does buy is bit-identical output and 32 host
     // threads freed for the rest of the cycle.
-    // (memory: npu-verify-lm-head-is-not-faster, npu-mtp-draft-head-is-not-faster)
     //
     // Unlike the draft head this does NOT pay the second-dispatch tax: verify
     // dispatches once, at the end of a 64-layer sweep, exactly like prefill.
-    // (memory: two-npu-dispatches-per-step-serialise)
     //
     // The cost is a second 1.35 GB weight BO, because a BO belongs to the app
     // that dispatches it and this is a different xclbin. That is now
@@ -416,8 +411,7 @@ void qwen3_8mtp_npu::Impl::load_weights(Q4NX& q4nx) {
             // `vision::cpu_op_factory` and the two host ops for exactly
             // this. Measure that host arm at -O2 and it reads 3x slower; the
             // first estimate here said the device LOST at L=256 for exactly
-            // that reason. (memory: host-vs-device-ab-needs-shipping-flags,
-            // ab-at-one-size-can-have-the-wrong-sign, ab-off-arm-is-not-the-host)
+            // that reason.
             const std::string vision_attn_xclbin =
                 utils::path_join(xclbin_dir, "vision_attn.xclbin");
             const std::string mm_a_xclbin =
@@ -459,7 +453,7 @@ void qwen3_8mtp_npu::Impl::load_weights(Q4NX& q4nx) {
         // the only job it had left. Note what that reference measures: the
         // CPU head is ~30
         // ms/step against the device's ~34, so this is parity-with-freed-cores,
-        // not a speedup. (memory: npu-mtp-draft-head-is-not-faster)
+        // not a speedup.
         //
         // The head's fused layer is its own bitstream and its own hw_context --
         // it dispatches standalone, never inside an attention runlist, so the

@@ -352,7 +352,7 @@ void _move_s(npu_sequence* seq, const delta_verify_layout& t) {
 /// `w_words` is a **bf16 word** offset, not a byte offset: this descriptor's
 /// element size is sizeof(bf16) and `a_block_size` is divided down to match.
 /// A byte offset here reads past the end of the BO and the cores dequantise it
-/// into NaN. (memory: move-weights-offset-is-in-elements)
+/// into NaN.
 void _move_weights(npu_sequence* seq, const delta_verify_layout& t,
                    size_t Dout, size_t Din, size_t w_words) {
     const int      m              = 32;

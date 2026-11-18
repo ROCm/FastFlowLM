@@ -22,7 +22,6 @@
 /// The answer it reached is recorded rather than re-measurable -- N11 put the
 /// projection at 29 ms on the device against 61 ms on the host, and that ~32 ms
 /// never rose above the phase counter's own spread.
-/// (memory: npu-verify-lm-head-is-not-faster)
 ///
 /// What survives is the driver: this is the only tool that puts the ENGINE
 /// through 20 real speculation cycles over a real prompt and prints
@@ -30,7 +29,6 @@
 /// budget sits, not to compare two builds of it -- a speculation cycle is
 /// 3.5 .. 3.9 s and repeats within 9% of itself, which is +-320 ms, so
 /// anything smaller than that is noise here.
-/// (memory: ab-at-one-size-can-have-the-wrong-sign)
 ///
 /// ---------------------------------------------------------------------------
 /// The prompt has to be real
@@ -39,7 +37,6 @@
 /// acceptance rate no real text reaches, and the cycle count then says nothing
 /// about production. This drives the checkpoint's own prefill window and lets
 /// the context genuinely grow.
-/// (memory: determinism-test-needs-real-prompt-and-real-grow)
 #include "models/qwen3_8mtp/qwen3_8mtp_npu.hpp"
 #include "common/cpu_ref_common.hpp"
 #include "lm_config.hpp"

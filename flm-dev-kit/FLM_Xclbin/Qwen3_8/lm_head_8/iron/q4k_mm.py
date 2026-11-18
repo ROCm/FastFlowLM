@@ -42,7 +42,7 @@ W_SLOTS_B = 2
 # BD ids in a memtile are banked by channel parity -- even channels may only use
 # ids 0-23 and odd channels 24-47 (AIETargetModel.h:469, isBdChannelAccessible).
 # So the budget that matters is 24 per bank, not 48 overall, and a hand count of
-# the total will mislead (memory: replay-ring-one-bd-not-n).
+# the total will mislead.
 #
 # It cannot simply be made as large as the banks allow: K_BLOCKS/UNITS_PER_SLOT_A
 # must stay a multiple of W_SLOTS_A, or the output ring ends a round part-way

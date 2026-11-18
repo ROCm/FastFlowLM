@@ -16,8 +16,7 @@
 /// would cost 8x; this does not. Measure the slope rather than assume it.
 ///
 /// Flags matter. Build at the ENGINE's flags -- at -O2 the host path is ~1.7x
-/// slower than it ships and the verdict comes out with the wrong sign
-/// (memory: host-vs-device-ab-needs-shipping-flags).
+/// slower than it ships and the verdict comes out with the wrong sign.
 ///
 ///   cd detail/qwen3_8mtp_npu
 ///   g++-13 -O3 -march=native -ffast-math -fopenmp -std=c++20 \

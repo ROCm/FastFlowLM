@@ -137,7 +137,7 @@ public:
         // therefore put the kernel's fused silu on the gate bands and nothing
         // else. The RTP is not uniform across a dispatch -- it is an
         // instruction at a position in the sequence, re-read by the cores every
-        // round. (memory: rtp-act-is-per-round-not-per-dispatch)
+        // round.
         upgate_ = std::make_unique<dequant_mm_op>(
             mgr->create_app(), 2 * DI, D, t_.w_upgate_offset,
             std::vector<dequant_mm_pass>{

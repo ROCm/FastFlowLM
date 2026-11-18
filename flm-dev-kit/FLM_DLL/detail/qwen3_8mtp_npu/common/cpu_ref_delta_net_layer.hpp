@@ -182,8 +182,8 @@ public:
     ///
     /// Such a caller owns the advance *instead of*, never as well as, those two
     /// stages: the fold is destructive and has no inverse, so running both
-    /// paths over the same tokens silently doubles the history
-    /// (memory: score-a-fold-by-l1-vs-ln). `advance(L)` is still owed exactly
+    /// paths over the same tokens silently doubles the history.
+    /// `advance(L)` is still owed exactly
     /// once. Purely additive -- forward()'s arithmetic does not read these.
     std::vector<float>& recurrent_state_mut() { return state_; }
     std::vector<float>& conv_window_mut()     { return conv_state_; }

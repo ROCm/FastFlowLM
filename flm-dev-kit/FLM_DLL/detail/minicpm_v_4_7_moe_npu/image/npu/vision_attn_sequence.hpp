@@ -35,8 +35,7 @@
 /// and the kernel runs inside `for _ in range_(0xFFFFFFFF)`. So the sequence
 /// must emit EXACTLY `L_pad / 512` rounds per head group and exactly
 /// `Heads / 4` head groups; a round more or fewer leaves the array a pass out
-/// of step for the next dispatch (memory:
-/// bd-repeat-forces-uniform-consumer-trip-count).
+/// of step for the next dispatch.
 #ifndef __MINICPM_V_4_7_NPU_VISION_ATTN_SEQUENCE_HPP__
 #define __MINICPM_V_4_7_NPU_VISION_ATTN_SEQUENCE_HPP__
 
@@ -90,7 +89,7 @@ constexpr int HEADS_PER_PASS = 4;
 /// `L_attn_core_2_0`, and `FLM_Xclbin/Qwen3_8/vision_attn/tools/
 /// extract_rtp_addr.sh` is what reads it. A stale value does not fault -- it
 /// writes into some other buffer and the dispatch hangs in
-/// `qds_device::wait()` (memory: rtp-addresses-are-per-build).
+/// `qds_device::wait()`.
 ///
 /// Whenever vision_attn.xclbin is rebuilt, diff this against
 /// `build/rtp_addr.txt`. The N15 driver prints both for exactly that reason.
@@ -121,7 +120,7 @@ struct vision_attn_rtp_addresses {
 ///                 cross-head control, and it is supported on the device
 ///                 rather than refused because a correct run has to be scored
 ///                 against an imposter that a *consistent permutation* would
-///                 agree with (memory: cross-head-control-catches-gqa-mapping)
+///                 agree with
 /// \param n_seg    segments in one dispatch -- MiniCPM's batching of same-shape
 ///                 views (added in this port; 1 is Qwen3.8's single image).
 ///                 Segment s occupies rows [s*L_pad, (s+1)*L_pad) of q/k/v/o and
@@ -130,7 +129,7 @@ struct vision_attn_rtp_addresses {
 ///                 outer iteration forever and reads the SAME two RTP lengths
 ///                 for every pass, which is why all segments of a dispatch
 ///                 must share L_pad AND L_valid. No RTP is rewritten
-///                 mid-sequence (memory: rtp-act-is-per-round-not-per-dispatch).
+///                 mid-sequence.
 void gen_vision_attn_seq(npu_sequence* seq,
                          int L_pad, int L_valid, int DH, int Heads,
                          const vision_attn_rtp_addresses& rtp,

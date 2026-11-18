@@ -37,8 +37,7 @@
 /// output-neutral, since `speculate()` verifies every drafted token against
 /// the real stack, but it moves the acceptance rate, which is the only thing
 /// drafting buys. `top2_margin()` exists so a driver can measure that rather
-/// than assume it. (memory: score-a-draft-loop-by-argmax-margin,
-/// qwen38-lm-head-untied-and-argmax-ties)
+/// than assume it.
 ///
 /// Measured, it costs nothing: over the reference rows exactly one top-1 gap
 /// lands inside a bf16 ulp (row 1, 0.125 against 0.097 -- the tie above), the

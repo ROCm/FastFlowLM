@@ -34,7 +34,7 @@
 ///
 ///   * rows [L, L_pad) of q, k AND v are zeroed on every call: the key mask
 ///     covers the k tail in the scores, but the QK mmul still reads it and the
-///     v tail is not masked at all (memory: kv-rows-above-cursor-are-not-inert);
+///     v tail is not masked at all;
 ///   * head_dim 72, 16 heads and scale 1/sqrt(72) are baked into the kernel and
 ///     are checked at configure() rather than at the first hang;
 ///   * head_perm is honoured, for the cross-head control.

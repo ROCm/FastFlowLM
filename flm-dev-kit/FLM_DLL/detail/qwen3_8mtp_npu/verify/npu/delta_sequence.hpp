@@ -53,7 +53,6 @@
 ///   5. The bias block leads *every* a/b weight send, inside the per-token
 ///      loop. Sending it once ahead of the loop is a prologue BD, and a
 ///      prologue works for exactly one dispatch per xclbin load.
-///      (memory: a-prologue-bd-breaks-the-second-dispatch)
 #ifndef __QWEN3_8MTP_NPU_DELTA_SEQUENCE_HPP__
 #define __QWEN3_8MTP_NPU_DELTA_SEQUENCE_HPP__
 

@@ -71,7 +71,7 @@ void gen_vision_mm_seq(npu_sequence* seq,
     // mm.cc's outer loop runs rtp[0] rounds and its k loop rtp[1] chunks, and
     // it re-reads rtp[2] on every round -- the activation is per-ROUND, not per
     // dispatch, so it cannot be rewritten mid-sequence to give two bound
-    // weights different epilogues (memory: rtp-act-is-per-round-not-per-dispatch).
+    // weights different epilogues.
     // That is why the seam puts `activation` in bind() rather than run().
     //
     // Rows 2..5 are the four CT rows; the shim is row 0 and the memtile row 1,

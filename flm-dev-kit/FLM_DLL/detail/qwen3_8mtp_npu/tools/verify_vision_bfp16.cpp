@@ -6,8 +6,7 @@
 /// The vectorised pre-round replaced a scalar one that had already shipped, and
 /// it was taken for speed, not for accuracy: **it must change no output.** A
 /// cosine cannot see the difference between the two -- the whole operation moves
-/// values by at most half a grid step -- so the gate is `memcmp`, not a score
-/// (memory: gate-an-overlapped-replay-on-bit-identity).
+/// values by at most half a grid step -- so the gate is `memcmp`, not a score.
 ///
 /// Three checks, each over the same adversarial corpus:
 ///

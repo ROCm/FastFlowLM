@@ -177,7 +177,7 @@ private:
     /// south to a shim, so the DDR tap moved one tile downstream with it. IT2's
     /// S2MM is otherwise free -- its two MM2S channels carry the rms and RoPE
     /// weight blocks, which is the other direction.
-    /// (memory: mt3-o-tap-removal-hangs -- the tap was relocated, not deleted,
+    /// (the tap was relocated, not deleted,
     /// so every channel that drained on each pass still does.)
     static constexpr npu_tiles o_tap_tile   = IT2;
     /// h2, the layer's scored output. IT2 again, on the other S2MM channel from
@@ -274,7 +274,6 @@ public:
     ///         h2 - h, not h2, when the question is whether the MLP is right;
     ///         the raw number is the one that matters only when the question is
     ///         whether the layer is. host.cpp prints both.
-    ///         (memory: score-a-projection-against-its-own-input)
     ///
     ///         No intermediate stage is separately observable any more -- the
     ///         post-attention norm, the SwiGLU row and down each became the next

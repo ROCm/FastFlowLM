@@ -536,7 +536,7 @@ dispatch time. A window that is not a multiple of 512 buys padding.
 This replaces an earlier 14.2 s / 13.9 ms/token profile that was 50% device /
 50% host. Seven changes closed that gap, all output-neutral — `verify_qwen3_8mtp`
 is byte-identical across every one of them apart from its timing lines, checked
-against a worktree build of HEAD (memory: a-broken-tree-fakes-its-own-baseline):
+against a worktree build of HEAD:
 
 - **The zero-fill line is gone.** Every `assign(n, 0.0f)` on this path sized a
   buffer that the very next dispatch or scatter loop then wrote in full, so it

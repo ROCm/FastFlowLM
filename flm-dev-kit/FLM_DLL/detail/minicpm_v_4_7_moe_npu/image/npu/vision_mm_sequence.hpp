@@ -31,8 +31,8 @@
 ///     VISION_MM_B   m=32 k=384 n=128   array pass 128 x 1024
 ///
 /// Both are separate bitstreams and therefore separate `hw_context`s -- a
-/// runlist is bound to one, so they cannot be merged
-/// (memory: verify-xclbins-are-two-separate-bitstreams). B exists for
+/// runlist is bound to one, so they cannot be merged.
+/// B exists for
 /// the projector's `merger.fc2` alone: its N of 1024 (MiniCPM's language D) is
 /// not a multiple of A's 384 but is exactly one of B's 1024. (In Qwen3.8 it was
 /// 5120, five of them.)
@@ -46,7 +46,7 @@
 /// The bias living in front of the weights is not a packing convenience: the
 /// kernel reads it out of row 0 of the memtile's `(n_slice, k)` block, one
 /// `k_slice`-wide band per chunk, so a bias wider than `k_slice` arrives spread
-/// over several chunks (memory: bias-prologue-spans-k-chunks). That is design
+/// over several chunks. That is design
 /// B's case, n_slice 128 > k_slice 64, and `passbias_aie()` in
 /// `FLM_Xclbin/Qwen3_8/vision_mm/kernel/mm.cc` is what handles it.
 #ifndef __MINICPM_V_4_7_NPU_VISION_MM_SEQUENCE_HPP__
@@ -109,7 +109,7 @@ constexpr int32_t RTP_GELU = 2;   ///< gelu_pytorch_tanh; kernel/lut_based_ops.h
 /// extract_rtp_addr.sh` is what reads them into `build/<design>/rtp_addr.txt`.
 /// A stale value does not fault -- it writes the trip counts into some other
 /// core buffer, the cores never see them, and the dispatch hangs in
-/// `qds_device::wait()` (memory: rtp-addresses-are-per-build).
+/// `qds_device::wait()`.
 ///
 /// Whenever either bitstream is rebuilt, diff these against the two
 /// `rtp_addr.txt` files. The N16 driver's check 1 does exactly that, first,

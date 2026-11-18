@@ -160,7 +160,6 @@ cpu_fc compute_fc(const std::string& q4nx_path, int32_t token_id,
     // q_proj is [2 * DQ][D] -- queries then output gate. The q4nx converter has
     // de-interleaved HF's per-head (q, gate) pairs, so the split is a clean
     // halfway cut with no per-head stride to undo.
-    // (memory: mtp-q4nx-layout-and-error-floor)
     std::vector<float> qg((size_t)2 * DQ, 0.0f);
     q4nx_matmul(w_q, r.xn.data(), 1, qg.data());
     r.q.assign(qg.begin(), qg.begin() + DQ);
@@ -475,7 +474,7 @@ void run_fc_test(model_list::model_t model, LM_Config& lm_config, Q4NX& q4nx,
     // The reference attends over the same cache the array did: the CPU's own
     // k and v at the appended row, and the seeded noise everywhere else. Using
     // the NPU's k|v here instead would charge the attention for the projection
-    // and rotation in front of it. (memory: score-a-projection-against-its-own-input)
+    // and rotation in front of it.
     std::memcpy(k_cache.data() + (size_t)slot * DK, cpu.k.data(), (size_t)DK * sizeof(float));
     std::memcpy(v_cache.data() + (size_t)slot * DV, cpu.v.data(), (size_t)DV * sizeof(float));
 
@@ -548,7 +547,6 @@ void run_fc_test(model_list::model_t model, LM_Config& lm_config, Q4NX& q4nx,
     // straight through an identity term, so its raw cosine is flattered by a
     // gain that has nothing to do with the MLP -- subtracting the CPU's own h
     // recovers down, which is what actually moves when the MLP is wrong.
-    // (memory: score-a-projection-against-its-own-input)
     {
         const std::string q4nx_path = cpu_ref::q4nx_path_of(model_path);
         cpu_ref::safetensors q4nx(q4nx_path);
@@ -568,7 +566,6 @@ void run_fc_test(model_list::model_t model, LM_Config& lm_config, Q4NX& q4nx,
         // sum and again before the reduction: the array adds what the DMA
         // delivered and reduces over what the adder wrote, so leaving these in
         // fp32 would read out as datapath error the hardware never committed.
-        // (memory: aie-to-vector-bf16-floors)
         std::vector<float> h((size_t)D);
         for (int i = 0; i < D; i++)
             h[i] = cpu_ref::round_bf16(cpu_ref::round_bf16(cpu.fc_out[i]) +
@@ -582,7 +579,7 @@ void run_fc_test(model_list::model_t model, LM_Config& lm_config, Q4NX& q4nx,
         // yn is rounded to bf16 first. The array's up|gate mvm reduces over what
         // the DMA delivered to the projection cores, so reducing over the
         // unrounded norm here would read out as datapath error the hardware
-        // never committed. (memory: aie-to-vector-bf16-floors)
+        // never committed.
         const int I = lm_config.intermediate_size;
         cpu_ref::q4nx_tensor w_up =
             cpu_ref::get_q4nx(q4nx, "model.mtp.layers.0.mlp.up_proj.weight");
@@ -595,7 +592,7 @@ void run_fc_test(model_list::model_t model, LM_Config& lm_config, Q4NX& q4nx,
         // post-attention norm as the input, and that row is no longer
         // observable: it became up|gate's x and the rms tile's y port had no
         // room for a second destination. The swapped control below is what
-        // stands in for it. (memory: score-a-projection-against-its-own-input)
+        // stands in for it.
         std::vector<float> yn_r((size_t)D);
         for (int i = 0; i < D; i++) yn_r[i] = cpu_ref::round_bf16(ref_norm[i]);
 
@@ -619,7 +616,7 @@ void run_fc_test(model_list::model_t model, LM_Config& lm_config, Q4NX& q4nx,
         //
         // hid is rounded to bf16 first, for the same reason yn was: the array's
         // down mvm reduces over what the GLU tile's MM2S delivered to the
-        // projection cores. (memory: aie-to-vector-bf16-floors)
+        // projection cores.
         cpu_ref::q4nx_tensor w_down =
             cpu_ref::get_q4nx(q4nx, "model.mtp.layers.0.mlp.down_proj.weight");
         if (w_down.rows != D || w_down.cols != I)
@@ -639,7 +636,7 @@ void run_fc_test(model_list::model_t model, LM_Config& lm_config, Q4NX& q4nx,
         //
         // Both operands rounded to bf16 before the sum, for the same reason the
         // attention residual's were: the rms tile adds what the DMA delivered to
-        // what residual_add left in x_buf. (memory: aie-to-vector-bf16-floors)
+        // what residual_add left in x_buf.
         std::vector<float> h2((size_t)D);
         for (int i = 0; i < D; i++)
             h2[i] = cpu_ref::round_bf16(cpu_ref::round_bf16(h[i]) +

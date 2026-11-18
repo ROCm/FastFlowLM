@@ -56,7 +56,7 @@
 /// up to bf16's resolution of the top-1 gap. `top2_margin()` is here so a
 /// driver can measure how often that gap is inside a ulp instead of assuming.
 /// Measured on the reference rows it is one row in eight, and that row is an
-/// exact tie in the reference too. (memory: qwen38-lm-head-untied-and-argmax-ties)
+/// exact tie in the reference too.
 #ifndef __QWEN3_8MTP_NPU_LM_HEAD8_OP_HPP__
 #define __QWEN3_8MTP_NPU_LM_HEAD8_OP_HPP__
 
@@ -226,7 +226,7 @@ private:
             // Lane ROWS: model.norm.weight. The same bytes every round and
             // every dispatch, but it is re-sent rather than held resident
             // because a one-shot fill BD is what broke this design's second
-            // dispatch (memory: a-prologue-bd-breaks-the-second-dispatch).
+            // dispatch.
             const float* nw  = norm_w + (size_t)k * C;
             bf16*        out = dst + ((size_t)k * LANES + (size_t)ROWS) * C;
             q38simd::f32_to_bf16(out, nw, (size_t)C);

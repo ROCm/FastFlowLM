@@ -69,7 +69,6 @@ class glu_tile(AIE_CT_IP):
         #
         # 10 is well under the lock's 63 ceiling. up|gate needed 68 and had to
         # go resident instead; this one does not.
-        # (memory: up-gate-must-be-resident-lock-63)
         self.replays = replays
         assert self.replays == self.D // self.m_per_round, \
             "the hid replay count is down_proj's row-block count"

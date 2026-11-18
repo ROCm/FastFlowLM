@@ -46,7 +46,6 @@
 /// the *head* of the row and the gate at the tail, `qg` takes two memcpys, and
 /// a reader that assumed the other order would get plausible garbage. The op
 /// itself cannot tell: both are legal 14336-row matrices.
-/// (memory: the-rope-tile-consumes-kv-before-q)
 ///
 /// ## The two shapes that are not D
 ///
@@ -107,7 +106,6 @@ public:
         // fused silu on the gate bands and nothing else. The RTP is not uniform
         // across a dispatch -- it is an instruction at a position in the
         // sequence, re-read by the cores every round. See dequant_mm_pass.
-        // (memory: rtp-act-is-per-round-not-per-dispatch)
         upgate_ = std::make_unique<dequant_mm_op>(
             mgr->create_app(), 2 * DI, D, t_.w_upgate_offset,
             std::vector<dequant_mm_pass>{

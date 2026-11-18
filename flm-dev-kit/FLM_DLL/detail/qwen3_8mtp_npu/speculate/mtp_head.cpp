@@ -383,7 +383,6 @@ void mtp_head::post_norm(const float* h1, int L, std::vector<float>& hn) {
 /// The order is not interchangeable: `silu(up) * gate` is just as plausible a
 /// reading of a SwiGLU and scores nearly as well, which is why the driver runs
 /// the swapped version as a control rather than trusting the cosine.
-/// (memory: score-swiglu-by-swapping-up-and-gate)
 void mtp_head::swiglu(const float* gate, const float* up, int L, float* g) const {
     // A row at a time so the induction variable is an `int` and each iteration
     // owns a disjoint span; the permitted aliasing is `g == gate`, which is
