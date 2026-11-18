@@ -5,20 +5,24 @@
 
 # minicpm_ocr_npu host reference and scoring harness
 
-The CPU path of `libminicpm_ocr_npu.so` (ADDING_A_NEW_MODEL.md S5 step 1) and the tools that
-score it. One command runs both S3 gates:
+The CPU path of `libminicpm_ocr_npu.so` (ADDING_A_NEW_MODEL.md S5 step 1) and the gate that checks the
+NPU path against it:
 
 ```bash
-bash FLM_DLL/detail/minicpm_ocr_npu/host_ref/run_gate.sh
+bash flm-dev-kit/FLM_DLL/detail/minicpm_ocr_npu/host_ref/run_gate.sh <model_dir> src/xclbins/MiniCPM-OCR-1.0-NPU2
 ```
 
-It builds the engine with every stage on the host at `DEBUG_LEVEL=1`, regenerates S2's dumps
-and the q4 oracle, runs the engine on S2's prompt, and scores it. It exits non-zero on any
-failure. Takes about a minute.
+It builds the engine with every stage on the host at `DEBUG_LEVEL=1` and runs it on a fixed prompt,
+rebuilds it with the Makefile's NPU defaults and runs it again, then scores the NPU run against the
+host run (`compare_engine.py`, numpy only). It exits non-zero on any failure and takes under a
+minute; run it while nothing else uses the NPU. Dumps and logs go to
+`FLM_DLL/build/minicpm_ocr_npu/gate/` (or `$FLM_GATE_OUT`). Afterwards the engine library is the
+`DEBUG_LEVEL=1` NPU build, so rebuild it with a plain `make`.
 
 ## Backend switches
 
-Defined in `../minicpm_ocr_prefill_cpu.hpp`. They are opt-out: a plain `make` is all-NPU.
+Defined in `../minicpm_ocr_prefill_cpu.hpp`. A plain `make` uses the Makefile's defaults: every stage on the NPU except that
+`PREFILL_CONV` defaults to `cpu` (a measured choice; see the Makefile).
 
 | make flag | macro | stage | overlay | owner |
 |---|---|---|---|---|
@@ -55,8 +59,7 @@ array's layout, so it is the golden reference for S4.
 | `../minicpm_ocr_prefill_cpu.hpp` | the switches, scratch discipline, and every host kernel (`namespace minicpm_ocr_cpu`) |
 | `../minicpm_ocr_prefill.hpp` | the prefill graph, split into `_npu` / `_host` stage pairs |
 | `run_engine.cpp` | drives the `.so`: full prefill, greedy decode, prefill+decode split, multi-turn chunks |
-| `q4_oracle.py` | S2's reference re-run on the weights in `model.q4nx` → `models_simple/dumps/minicpm_ocr_q4/` |
-| `compare_engine.py` | scores the engine's dumps against both references |
+| `compare_engine.py` | scores the NPU build's dumps against the host build's |
 | `run_gate.sh` | all of the above |
 
 `run_engine` with `FLM_DUMP_DIR=<dir>`, against a `DEBUG_LEVEL >= 1` engine, writes every
@@ -64,11 +67,32 @@ manifest tensor it has as `<dir>/layers/NN/<name>.npy`. Dumps are hooked at the 
 boundaries, so they work with the NPU stages on too. The exceptions are `linear_conv`,
 `linear_z`, `mlp_up` and `mlp_gate`, which only the host stages expose.
 
-## What "matches" means
+## What the gate checks
 
-The engine runs Q4_K weights; S2's dumps come from bf16 weights. Quantization alone caps the
-`residual_out` cosine at 0.958 by layer 23 and the logits at 0.947 (the Q4_K quantization floor). So the gate scores against the
-q4 oracle (same weights, fp32 activations) and prints the bf16 column next to it:
+`compare_engine.py` prints every tensor both builds dumped and gates these (measured on an NPU2 box
+with the gate's prompt):
+
+| | gate | MiniCPM-V-4.7-1B | MiniCPM-OCR-1.0 |
+|---|---|---|---|
+| `residual_out`, every layer | cosine > 0.995 | ≥ 0.99823 | ≥ 0.99727 |
+| last-row logits | cosine > 0.92, same argmax | 0.99499 | 0.99670 |
+| decode rows 11..33 (prefill 12, then one token at a time) | cosine > 0.92, same argmax unless the host's top-2 gap is under 0.25 | ≥ 0.97605 | ≥ 0.95826 |
+| multi-turn rows (chunks 12 + 2 + 20) | as decode | ≥ 0.99499 | ≥ 0.99670 |
+
+Decode-row cosines drift lower than prefill ones, but at every low row the two builds pick the same
+token with a wide gap; the argmax rule is the strict part. The one allowed argmax difference is an
+exact tie on the host side (gap 0.000). The greedy continuations agree for the first 10 (V) and 19
+(OCR) of 32 tokens, then take different but equally fluent paths; that is printed, not gated.
+
+### Recorded during the port: the host path against Hugging Face transformers
+
+Before the NPU path existed, the host path was scored once against a transformers reference. That
+reference is not shipped with the dev kit; the numbers are kept as the record.
+
+The engine runs Q4_K weights; the reference's dumps came from bf16 weights. Quantization alone caps the
+`residual_out` cosine at 0.958 by layer 23 and the logits at 0.947 (the Q4_K quantization floor). So that check scored
+against a q4 oracle (the same reference on model.q4nx's weights, fp32 activations) and printed
+the bf16 column next to it:
 
 | | vs q4 oracle | vs bf16 dumps | q4 floor |
 |---|---|---|---|
@@ -104,7 +128,7 @@ should keep it concise but informative. …"* The first token, 77264, matches HF
 ## Not covered by the NPU-vs-host cross reference
 
 These stages are the same `cpu_func` call on both backends, so a cross reference cannot see a
-bug in them. Only the S2 comparison above covers them:
+bug in them. Only the recorded transformers comparison above covered them:
 
 * the RMS norms, q/k norm + RoPE (`_rope_rms_batch`), the gated norm, the alpha/beta
   projections and their activation, the attention gate sigmoid and multiply, the residual adds;

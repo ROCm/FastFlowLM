@@ -2,10 +2,13 @@
 // Portions of this file consist of AI-generated content.
 
 /// \file run_engine.cpp
-/// \brief Drives libminicpm_ocr_npu.so directly on S2's fixed prompt, for scoring the engine
-///        against models_simple/dumps/minicpm_ocr/ (see README.md in this directory).
+/// \brief Drives libminicpm_ocr_npu.so directly on a fixed prompt, so that two builds of the engine
+///        (all-host and NPU) can be scored against each other (see README.md in this directory).
 ///
-///   run_engine <model_dir> <input_ids.npy> <out_dir> [--split K] [--gen N]
+///   run_engine <model_dir> <input_ids.npy> <out_dir> [--split K] [--gen N] [--xclbins DIR]
+///
+/// --xclbins DIR: the model's xclbin folder (e.g. <FastFlowLM>/src/xclbins/<model folder>); needed
+///                only when the engine was built with NPU stages.
 ///
 /// Writes to <out_dir>:
 ///   logits_last.npy   [1, V]  prefill of the whole prompt, last row
@@ -17,6 +20,7 @@
 /// manifest tensor it has.
 #include <chrono>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -74,21 +78,30 @@ static double ms_since(std::chrono::steady_clock::time_point t) {
 
 int main(int argc, char** argv) {
     if (argc < 4) {
-        std::cerr << "usage: " << argv[0] << " <model_dir> <input_ids.npy> <out_dir> [--split K] [--gen N]\n";
+        std::cerr << "usage: " << argv[0] << " <model_dir> <input_ids.npy> <out_dir> [--split K] [--gen N] [--xclbins DIR]\n";
         return 2;
     }
     const std::string model_dir = argv[1], ids_path = argv[2], out_dir = argv[3];
     int split = -1, gen = 16;
+    std::string xclbin_dir;
     for (int i = 4; i + 1 < argc; i += 2) {
         std::string a = argv[i];
         if (a == "--split") split = std::atoi(argv[i + 1]);
         else if (a == "--gen") gen = std::atoi(argv[i + 1]);
+        else if (a == "--xclbins") xclbin_dir = argv[i + 1];
     }
 
     LM_Config config;
     config.model_path = model_dir;
     config.model_name = "minicpm-v-4.7-1b";
     config.exec_path = ".";
+    if (!xclbin_dir.empty()) {
+        // The engine opens <exec_path>/xclbins/<model_name>/<file>.
+        std::filesystem::path dir = std::filesystem::absolute(xclbin_dir).lexically_normal();
+        if (dir.filename().empty()) dir = dir.parent_path();   // a trailing '/'
+        config.model_name = dir.filename().string();
+        config.exec_path = dir.parent_path().parent_path().string();
+    }
     {
         std::ifstream cf(model_dir + "/config.json");
         config._json_config = nlohmann::json::parse(cf);
