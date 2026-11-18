@@ -8,8 +8,6 @@
 
 #include <algorithm>
 #include <bit>
-#include <chrono>
-#include <cmath>
 #include <cstring>
 #include <iterator>
 #include <limits>
@@ -146,7 +144,7 @@ OgaEngine::OgaEngine(std::shared_ptr<const OgaApi> api, OgaApi::Owned<OgaModel> 
         };
         if (!in_vocabulary(v.image_token_id) || !in_vocabulary(v.vision_start_token_id) ||
             v.image_token_id == v.vision_start_token_id || v.spatial_merge_size <= 0 ||
-            v.patch_values <= 0 || v.max_patches < v.spatial_merge_size * v.spatial_merge_size)
+            v.patch_values <= 0)
             throw std::invalid_argument(display_name_ + " vision configuration is invalid");
     }
     const OgaFunctions& f = api_->functions();
@@ -321,9 +319,6 @@ std::vector<OgaEngine::ImageSpan> OgaEngine::ImageSpans(const std::vector<int>& 
     const OgaVisionConfig& config = *vision_;
     const std::size_t images = vision ? vision->images.size() : 0;
     const std::int64_t merged = config.spatial_merge_size * config.spatial_merge_size;
-    std::int64_t patches = 0;
-    for (const ImageSpan& span : images_)
-        patches += span.image->grid_t * span.image->grid_h * span.image->grid_w;
     for (std::size_t i = 0; i < fresh.size();) {
         if (fresh[i] != config.image_token_id) {
             ++i;
@@ -350,11 +345,6 @@ std::vector<OgaEngine::ImageSpan> OgaEngine::ImageSpans(const std::vector<int>& 
             throw std::invalid_argument(which + " has " + std::to_string(grid / merged) +
                                         " image tokens, but its run in the prompt has " +
                                         std::to_string(end - i));
-        patches += grid;
-        if (patches > config.max_patches)
-            throw std::invalid_argument(display_name_ + " prompt images have " + std::to_string(patches) +
-                                        " patches, more than the " + std::to_string(config.max_patches) +
-                                        " the vision model runs at once");
         spans.push_back({offset + i, end - i, std::make_shared<const OgaImage>(image), ImageHash(image)});
         i = end;
     }
@@ -370,7 +360,6 @@ bool OgaEngine::ImageAfter(std::size_t position) const {
 
 std::pair<OgaEngine::Reuse, std::size_t> OgaEngine::Append(const char** why) {
     active_.reset();  // so that a failure before Resume drops no other conversation's slot
-    if (!images_.empty() && !vision_warm_) WarmUpVision();
     const Reuse reuse = Resume(why);
     Live& run = Active();
     const std::size_t from = run.ran.size();
@@ -550,30 +539,6 @@ void OgaEngine::SetInputs(OgaGenerator* generator, const std::vector<int>& ids,
     set("num_image_tokens", NewTensor({count}, OgaElementType_int64, tokens.data(),
                                       tokens.size() * sizeof(std::int64_t)));
     api_->Check(f.generator_set_inputs(generator, named.get()), "OgaGenerator_SetInputs");
-}
-
-void OgaEngine::WarmUpVision() {
-    const OgaVisionConfig& config = *vision_;
-    auto side = static_cast<std::int64_t>(std::sqrt(static_cast<double>(config.max_patches)));
-    while (side * side > config.max_patches) --side;
-    side -= side % config.spatial_merge_size;
-    OgaImage image;
-    image.grid_h = side;
-    image.grid_w = side;
-    image.pixels.assign(static_cast<std::size_t>(side * side * config.patch_values), 0);
-    std::vector<int> ids(static_cast<std::size_t>(
-                             1 + side * side / (config.spatial_merge_size * config.spatial_merge_size)),
-                         config.image_token_id);
-    ids.front() = config.vision_start_token_id;
-    const auto start = std::chrono::steady_clock::now();
-    const OgaApi::Owned<OgaGenerator> generator = NewGenerator(static_cast<std::uint32_t>(ids.size()));
-    SetInputs(generator.get(), ids, {&image});
-    Logits(generator.get());
-    vision_warm_ = true;
-    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::steady_clock::now() - start).count();
-    header_print("FLM", "OGA vision: warmed up with a " << side << "x" << side << "-patch image in "
-                                                        << ms << " ms");
 }
 
 OgaApi::Owned<OgaTensor> OgaEngine::NewTensor(const std::vector<std::int64_t>& shape,
