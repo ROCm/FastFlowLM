@@ -9,8 +9,9 @@ description: >
   holding what the build put in build/[<MODEL_TYPE>/]xclbins/: the .xclbin
   files and rtp_addresses.txt where the unit writes one. Each build is "make
   bitstream [MODEL_TYPE=...] -j$(nproc)" in a fresh build/, run in the image
-  as the runner's user (HOME=/tmp, the FLM_Xclbin tree mounted at /src, as
-  docker/aie-build-check.sh does), with no setup.sh: the image's environment
+  as the runner's user (HOME=/tmp, the whole flm-dev-kit/ tree mounted at
+  /src/flm-dev-kit: some units read FLM_DLL, e.g. minicpm_ocr/vision_overlay's
+  check_engine compares its generated tables with the engine's copy), with no setup.sh: the image's environment
   is the toolchain. A build that fails, times out or makes no .xclbin does
   not stop the others and uploads nothing (so it cannot reach an assembly);
   the action fails at the end, after the upload, and lists them. Re-running
@@ -95,7 +96,7 @@ runs:
           # --pull=never: only the image this job pulled or loaded, never a
           # registry's guess at a bare local tag.
           docker run --rm --pull=never -u "$(id -u):$(id -g)" -e HOME=/tmp -e MT="${mt}" -e LIMIT="${LIMIT}" \
-            -v "${PWD}/${src}:/src" -w "/src/${unit}" "${IMAGE}" \
+            -v "${PWD}/flm-dev-kit:/src/flm-dev-kit" -w "/src/${src}/${unit}" "${IMAGE}" \
             bash -c 'rm -rf build && timeout -k 30 "${LIMIT}m" make -j"$(nproc)" bitstream ${MT:+MODEL_TYPE="$MT"}' || rc=$?
           secs=$((SECONDS - start))
           echo "::endgroup::"

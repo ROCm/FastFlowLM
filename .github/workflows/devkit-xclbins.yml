@@ -13,10 +13,11 @@ name: Dev-kit xclbins
 #             .github/script/ci/devkit_xclbin_plan.py. mode changed (pull
 #             requests): the units the change touches, the artifacts of the
 #             models whose kernel_assignment.json entry it changes, or for a
-#             toolchain or CI change two canary kernels; at most 4 shards of
-#             8 (16 filled shards when it falls back to every build, base
-#             unknown). assigned: every kernel the product ships; all: every
-#             build; at most 16 shards. Each build gets 5 minutes (the
+#             toolchain or CI change two canary kernels. assigned: every
+#             kernel the product ships; all: every build. A shard per 8
+#             builds, at most 16 (a pull request touching many kernels, as the
+#             import did with 137, spreads them instead of packing ~34 per
+#             shard). Each build gets 5 minutes (the
 #             longest measured takes about one), so hung builds cannot run
 #             the job into its own limit before the shard uploads
 #   image     the image to build in: the digest in
@@ -121,7 +122,7 @@ jobs:
           mode: ${{ inputs.mode || 'changed' }}
           base: ${{ inputs.base }}
           head: ${{ inputs.head || github.sha }}
-          shards: ${{ (inputs.mode || 'changed') == 'changed' && '4' || '16' }}
+          shards: '16'
           per-shard: ${{ (inputs.mode || 'changed') == 'changed' && '8' || '0' }}
           fallback-shards: '16'
 
