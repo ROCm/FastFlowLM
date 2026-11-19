@@ -43,6 +43,32 @@
 ARG UBUNTU_IMAGE
 
 # ---------------------------------------------------------------------------
+# Peano: the wheel unpacked to /opt/peano, as pip --no-deps --target does
+# (README.md step 2), from its URL and checked against its sha256.
+FROM ${UBUNTU_IMAGE} AS peano
+
+ARG LLVM_AIE_VERSION
+ARG LLVM_AIE_WHEEL_URL
+ARG LLVM_AIE_WHEEL_SHA256
+
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN for v in LLVM_AIE_VERSION LLVM_AIE_WHEEL_URL LLVM_AIE_WHEEL_SHA256; do \
+        [[ -n "${!v:-}" ]] || { echo "build arg $v is not set: pass flm-dev-kit/FLM_Xclbin/toolchain.lock" >&2; exit 1; }; \
+    done \
+    && [[ "$LLVM_AIE_WHEEL_URL" == *"llvm_aie-${LLVM_AIE_VERSION}-"* ]] \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl unzip \
+    && rm -rf /var/lib/apt/lists/* \
+    && whl="/tmp/${LLVM_AIE_WHEEL_URL##*/}" \
+    && curl -fsSL --retry 5 --retry-all-errors -o "$whl" "$LLVM_AIE_WHEEL_URL" \
+    && echo "${LLVM_AIE_WHEEL_SHA256}  ${whl}" | sha256sum -c - \
+    && unzip -q "$whl" -d /opt/peano \
+    && rm "$whl" \
+    && test -x /opt/peano/llvm-aie/bin/clang++
+
+# ---------------------------------------------------------------------------
 # mlir-aie, built from source exactly as flm-dev-kit/FLM_Xclbin/README.md
 # step 1 does, except that the MLIR wheel and the mlir_aie wheel are fetched by
 # URL and checked against their sha256, and the build is given the pinned
@@ -121,11 +147,13 @@ RUN mkdir -p /tmp/wheels \
     && rm -rf /tmp/wheels
 
 # The source build, against the MLIR wheel unpacked where the script itself
-# would put it. Peano's path is only recorded (as aiecc's default when
-# PEANO_INSTALL_DIR is unset); nothing here compiles with it. The script can
+# would put it, with the pinned Peano in place (its path is recorded as aiecc's
+# default when PEANO_INSTALL_DIR is unset). On failure the CMake and ninja logs
+# are printed: the script tees them into build/. The script can
 # report success after a failure, so the result is checked, and everything
 # but install/ is removed in this layer.
-RUN mkdir -p /opt/peano my_install \
+COPY --from=peano /opt/peano /opt/peano
+RUN mkdir -p my_install \
     && whl="my_install/${MLIR_WHEEL_URL##*/}" \
     && curl -fsSL --retry 5 --retry-all-errors -o "$whl" "$MLIR_WHEEL_URL" \
     && echo "${MLIR_WHEEL_SHA256}  ${whl}" | sha256sum -c - \
@@ -134,38 +162,15 @@ RUN mkdir -p /opt/peano my_install \
     && source ironenv/bin/activate \
     && { bash ./utils/build-mlir-aie-from-wheels.sh my_install/mlir build install /opt/peano/llvm-aie \
              > /tmp/mlir-aie-build.log 2>&1 \
-         || { tail -n 200 /tmp/mlir-aie-build.log; exit 1; }; } \
+         || { tail -n 100 /tmp/mlir-aie-build.log; \
+              for f in build/cmake.log build/CMakeFiles/CMakeError.log build/mlir-aie-ninja.log; do \
+                  [[ -f "$f" ]] && { echo "==== $f"; tail -n 150 "$f"; }; done; \
+              exit 1; }; } \
     && tail -n 5 /tmp/mlir-aie-build.log \
     && test -x install/bin/aiecc.py \
     && test -x install/bin/aie-opt \
     && test -f install/python/aie/compiler/aiecc/configure.py \
     && rm -rf build my_install /tmp/mlir-aie-build.log
-
-# ---------------------------------------------------------------------------
-# Peano: the wheel unpacked to /opt/peano, as pip --no-deps --target does
-# (README.md step 2), from its URL and checked against its sha256.
-FROM ${UBUNTU_IMAGE} AS peano
-
-ARG LLVM_AIE_VERSION
-ARG LLVM_AIE_WHEEL_URL
-ARG LLVM_AIE_WHEEL_SHA256
-
-SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
-ENV DEBIAN_FRONTEND=noninteractive
-
-RUN for v in LLVM_AIE_VERSION LLVM_AIE_WHEEL_URL LLVM_AIE_WHEEL_SHA256; do \
-        [[ -n "${!v:-}" ]] || { echo "build arg $v is not set: pass flm-dev-kit/FLM_Xclbin/toolchain.lock" >&2; exit 1; }; \
-    done \
-    && [[ "$LLVM_AIE_WHEEL_URL" == *"llvm_aie-${LLVM_AIE_VERSION}-"* ]] \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl unzip \
-    && rm -rf /var/lib/apt/lists/* \
-    && whl="/tmp/${LLVM_AIE_WHEEL_URL##*/}" \
-    && curl -fsSL --retry 5 --retry-all-errors -o "$whl" "$LLVM_AIE_WHEEL_URL" \
-    && echo "${LLVM_AIE_WHEEL_SHA256}  ${whl}" | sha256sum -c - \
-    && unzip -q "$whl" -d /opt/peano \
-    && rm "$whl" \
-    && test -x /opt/peano/llvm-aie/bin/clang++
 
 # ---------------------------------------------------------------------------
 # The image: the two trees above, xclbinutil, and what the kernel Makefiles
@@ -241,6 +246,14 @@ RUN [[ "$(command -v python3)" == /opt/mlir-aie/ironenv/bin/python3 ]] \
     && { [[ -n "$got" && "$got" == "${LLVM_AIE_VERSION##*+}"* ]] \
          || { echo "Peano is '${got:-unknown}', toolchain.lock pins ${LLVM_AIE_VERSION}" >&2; exit 1; }; }
 
+# Run as an unprivileged user by default; nothing in a kernel build needs root.
+# A GitHub Actions job that uses this image as its container needs root for
+# the runner's workspace mounts: give that job "options: --user root".
+# aie-build-check.sh runs it with the caller's uid (docker run -u).
+RUN useradd --create-home --uid 1001 --shell /bin/bash aie \
+    && mkdir -p /workspace && chown aie:aie /workspace
+
 WORKDIR /workspace
+USER aie
 
 CMD ["/bin/bash"]
