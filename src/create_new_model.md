@@ -307,6 +307,8 @@ Field notes:
 - `files` — the minimum set `flm pull` must fetch; a missing entry surfaces as a
   tokenizer or config load failure at first run.
 - `vlm` / `asr` — capability flags read by the runner to enable image / audio CLI paths.
+- `tools_in_prompt` — `qwen2` family only: the package's chat template renders the tools a
+  request offers, so the frontend passes them to it. Set it once that template has been checked.
 - `flm_min_version` — refuses to load on older FLM builds.
 - `footprint` — GiB of memory reported to the user for model-fits checks.
 

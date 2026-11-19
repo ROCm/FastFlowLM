@@ -14,6 +14,7 @@
 #include "image/image_reader.hpp"
 #include "image/raw_rgb8.hpp"
 #include "base64.hpp"
+#include "chat/positional_tool_results.hpp"
 #include "utils/log_privacy.hpp"
 #include <algorithm>
 #include <cctype>
@@ -124,12 +125,13 @@ T value_or(const json& request, const char* key, T fallback) {
 ///@brief Normalize messages by merging consecutive user messages (like Ollama does)
 ///@param messages the original messages
 ///@return normalized messages with consecutive user messages merged
-static json normalize_messages(json messages) {
+static json normalize_messages(json messages, std::vector<size_t>* original_indices = nullptr) {
     if (messages.empty()) return messages;
 
     json normalized = nlohmann::ordered_json::array();
 
     for (size_t i = 0; i < messages.size(); i++) {
+        if (original_indices) original_indices->push_back(i);
         auto current_msg = messages[i];
         std::string role = current_msg.value("role", "");
 
@@ -800,6 +802,8 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag,
         engine->save_request_settings();
         report_load_time(load_started);
         prefill_chunk_len = chunk;
+        positional_tool_results = plan.info.value("positional_tool_results", false)
+            && engine->backend_id() == flm::backend::kOgaHipepBackendId;
         {
             std::lock_guard lock(model_info_mutex);
             loaded_backend = engine->backend_id();
@@ -1627,7 +1631,8 @@ void RestHandler::handle_openai_chat_completion(const json& request,
         configure_chat_engine_parameters(options, request);
         apply_sampling_request(*auto_chat_engine, sampling);
 
-        current_messages = normalize_messages(current_messages);
+        std::vector<size_t> original_indices;
+        current_messages = normalize_messages(current_messages, positional_tool_results ? &original_indices : nullptr);
         std::vector<std::shared_ptr<const raw_rgb8_batch_t>> raw_rgb8;
         {
             // raw RGB8 frames only go to MiniCPM-V; any other model gets a clear 400 rather than a dropped image
@@ -1636,6 +1641,13 @@ void RestHandler::handle_openai_chat_completion(const json& request,
             current_messages = normalize_template(current_messages, takes_raw ? &raw_rgb8 : nullptr, &raw_error, this->raw_rgb8_limits);
             if (!raw_error.empty()) {
                 send_response({{"error", {{"message", raw_error}, {"type", "invalid_request_error"}, {"code", 400}}}});
+                return;
+            }
+        }
+        if (positional_tool_results) {
+            if (auto error = flm::chat::order_parallel_tool_results(current_messages, original_indices)) {
+                send_response({{"error", {{"message", error->message}, {"param", error->param},
+                                          {"type", "invalid_request_error"}, {"code", 400}}}});
                 return;
             }
         }

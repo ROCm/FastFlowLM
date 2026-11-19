@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <map>
@@ -41,6 +42,8 @@ constexpr int kVocab = 64;
 std::vector<int> g_encoded_tokens;
 /// \brief encodings of particular text; any other text encodes to g_encoded_tokens
 std::map<std::string, std::vector<int>> g_encodings;
+/// \brief every text the tokenizer was asked to encode since the last Reset
+std::vector<std::string> g_encoded_texts;
 /// \brief the text of each token; when empty, decode() gives "decoded"
 std::map<int, std::string> g_words;
 std::vector<int> g_samples;
@@ -184,6 +187,63 @@ private:
     FakeEngine* engine_{};
 };
 
+/// \brief chat_template.jinja of amd/Qwen2.5-14B-Instruct_gpuep_1.0_gpu_128 at efc1134c, as shipped
+const char* const kQwen25ChatTemplate = R"jinja({%- if tools %}
+    {{- '<|im_start|>system\n' }}
+    {%- if messages[0]['role'] == 'system' %}
+        {{- messages[0]['content'] }}
+    {%- else %}
+        {{- 'You are Qwen, created by Alibaba Cloud. You are a helpful assistant.' }}
+    {%- endif %}
+    {{- "\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>" }}
+    {%- for tool in tools %}
+        {{- "\n" }}
+        {{- tool | tojson }}
+    {%- endfor %}
+    {{- "\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call><|im_end|>\n" }}
+{%- else %}
+    {%- if messages[0]['role'] == 'system' %}
+        {{- '<|im_start|>system\n' + messages[0]['content'] + '<|im_end|>\n' }}
+    {%- else %}
+        {{- '<|im_start|>system\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>\n' }}
+    {%- endif %}
+{%- endif %}
+{%- for message in messages %}
+    {%- if (message.role == "user") or (message.role == "system" and not loop.first) or (message.role == "assistant" and not message.tool_calls) %}
+        {{- '<|im_start|>' + message.role + '\n' + message.content + '<|im_end|>' + '\n' }}
+    {%- elif message.role == "assistant" %}
+        {{- '<|im_start|>' + message.role }}
+        {%- if message.content %}
+            {{- '\n' + message.content }}
+        {%- endif %}
+        {%- for tool_call in message.tool_calls %}
+            {%- if tool_call.function is defined %}
+                {%- set tool_call = tool_call.function %}
+            {%- endif %}
+            {{- '\n<tool_call>\n{"name": "' }}
+            {{- tool_call.name }}
+            {{- '", "arguments": ' }}
+            {{- tool_call.arguments | tojson }}
+            {{- '}\n</tool_call>' }}
+        {%- endfor %}
+        {{- '<|im_end|>\n' }}
+    {%- elif message.role == "tool" %}
+        {%- if (loop.index0 == 0) or (messages[loop.index0 - 1].role != "tool") %}
+            {{- '<|im_start|>user' }}
+        {%- endif %}
+        {{- '\n<tool_response>\n' }}
+        {{- message.content }}
+        {{- '\n</tool_response>' }}
+        {%- if loop.last or (messages[loop.index0 + 1].role != "tool") %}
+            {{- '<|im_end|>\n' }}
+        {%- endif %}
+    {%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}
+    {{- '<|im_start|>assistant\n' }}
+{%- endif %}
+)jinja";
+
 /// \brief the Qwen2 frontend (qwen2.5-it, qwen2.5-coder-it) on the same fake OGA backend
 class Qwen2Harness final : public Qwen2 {
 public:
@@ -202,10 +262,18 @@ public:
         log_raw_output = false;
     }
 
-    std::string apply_chat_template(nlohmann::ordered_json&,
-                                    nlohmann::ordered_json,
-                                    bool) override {
-        return "fake rendered prompt";
+    /// \brief with the Qwen2.5 chat template, and what a catalog entry says about tools
+    explicit Qwen2Harness(const nlohmann::ordered_json& catalog_entry) : Qwen2Harness() {
+        chat_tmpl = std::make_unique<minja::chat_template>(kQwen25ChatTemplate, "", "<|im_end|>");
+        extra_context = nlohmann::ordered_json::object();
+        configure_tools(catalog_entry);
+    }
+
+    std::string apply_chat_template(nlohmann::ordered_json& messages,
+                                    nlohmann::ordered_json tools,
+                                    bool continue_final_message) override {
+        if (!chat_tmpl) return "fake rendered prompt";
+        return Qwen2::apply_chat_template(messages, std::move(tools), continue_final_message);
     }
 
     FakeEngine& engine() const { return *engine_; }
@@ -221,6 +289,7 @@ void Require(bool condition, const std::string& message) {
 void Reset(const std::vector<int>& encoded, const std::vector<int>& samples) {
     g_encoded_tokens = encoded;
     g_encodings.clear();
+    g_encoded_texts.clear();
     g_words.clear();
     g_samples = samples;
     g_sample_index = 0;
@@ -861,11 +930,119 @@ void Qwen2RefusesImagesOnOga() {
     RequireQwen2RefusesImage(cli);
 }
 
+/// \brief one size of a model in the catalog the server ships (src/model_list.json)
+nlohmann::ordered_json CatalogEntry(const std::string& model, const std::string& size) {
+    std::ifstream file(FLM_TEST_MODEL_LIST_PATH);
+    if (!file) throw std::runtime_error(std::string("cannot open ") + FLM_TEST_MODEL_LIST_PATH);
+    return nlohmann::ordered_json::parse(file).at("models").at(model).at(size);
+}
+
+/// \brief two functions as a request offers them; the first one's description is the argument
+nlohmann::ordered_json OfferedTools(const std::string& shelf_description) {
+    auto tools = nlohmann::ordered_json::parse(R"([
+        {"type": "function", "function": {"name": "read_shelf", "description": "",
+            "parameters": {"type": "object", "required": ["shelf"], "properties": {
+                "shelf": {"type": "string"},
+                "detail": {"type": "object", "properties": {"limit": {"type": "integer"}}}}}}},
+        {"type": "function", "function": {"name": "count_boxes", "description": "Count the boxes on a pallet.",
+            "parameters": {"type": "object", "properties": {"pallet": {"type": "number"}}}}}
+    ])");
+    tools[0]["function"]["description"] = shelf_description;
+    return tools;
+}
+
+lm_uniform_input_t ChatInput(nlohmann::ordered_json tools) {
+    lm_uniform_input_t input;
+    input.messages = nlohmann::ordered_json::array({{{"role", "user"}, {"content", "What is two plus four?"}}});
+    input.tools = std::move(tools);
+    return input;
+}
+
+/// \brief the prompt insert() handed to the tokenizer
+std::string InsertedPrompt(Qwen2Harness& model, lm_uniform_input_t input) {
+    Reset({10, 11, 12}, {7});
+    auto meta = Meta();
+    Require(model.insert(meta, input), "the chat prompt must run");
+    for (const std::string& text : g_encoded_texts) {
+        if (text.rfind("<|im_start|>system", 0) == 0) return text;
+    }
+    throw std::runtime_error("insert() did not encode a rendered chat prompt");
+}
+
+bool Has(const std::string& text, const std::string& part) { return text.find(part) != std::string::npos; }
+
+void Qwen2ShowsOfferedToolsOnTheInstructOgaPackage() {
+    Qwen2Harness model(CatalogEntry("qwen2.5-it-oga-hipep", "14b"));
+    const std::string prompt = InsertedPrompt(model, ChatInput(OfferedTools("Shelf inventory.")));
+    Require(Has(prompt, "<tools>") && Has(prompt, "</tools>"), "the prompt must carry the template's tool section");
+    for (const char* part : {"read_shelf", "Shelf inventory.", "count_boxes", "Count the boxes on a pallet.",
+                             "\"shelf\"", "\"string\"", "\"detail\"", "\"limit\"", "\"integer\"",
+                             "\"pallet\"", "\"number\""}) {
+        Require(Has(prompt, part), std::string("the prompt must show the model ") + part);
+    }
+    const std::string turn = "What is two plus four?<|im_end|>\n<|im_start|>assistant\n";
+    Require(prompt.size() > turn.size() && prompt.compare(prompt.size() - turn.size(), turn.size(), turn) == 0 &&
+                prompt.rfind("</tools>") < prompt.size() - turn.size(),
+            "the question and the generation prompt must follow the tools");
+
+    // the same text when the template is applied directly, as a caller outside insert() would
+    auto input = ChatInput(OfferedTools("Shelf inventory."));
+    Require(model.apply_chat_template(input.messages, input.tools, false) == prompt,
+            "apply_chat_template must render the tools insert() renders");
+}
+
+void Qwen2ShowsNoToolsWhenNoneAreOffered() {
+    Qwen2Harness model(CatalogEntry("qwen2.5-it-oga-hipep", "14b"));
+    // tool_choice "none" reaches the model as an empty list; a request without tools as an empty list too
+    const std::string none = InsertedPrompt(model, ChatInput(nlohmann::ordered_json::array()));
+    Require(!Has(none, "<tools>") && !Has(none, "# Tools"), "no offered tool, no tool section");
+    Require(none == InsertedPrompt(model, ChatInput(nlohmann::ordered_json())),
+            "a request without a tools field must render like an empty list");
+    auto input = ChatInput(nlohmann::ordered_json());
+    Require(model.apply_chat_template(input.messages, nlohmann::ordered_json::object(), false) == none,
+            "apply_chat_template without tools must render the plain prompt");
+}
+
+void Qwen2ChangedDefinitionChangesThePrompt() {
+    Qwen2Harness model(CatalogEntry("qwen2.5-it-oga-hipep", "14b"));
+    const std::string before = InsertedPrompt(model, ChatInput(OfferedTools("Shelf inventory.")));
+    const std::string after = InsertedPrompt(model, ChatInput(OfferedTools("Shelf inventory, by aisle.")));
+    Require(before != after, "a changed description must change the prompt, or the old prompt's cache would hit");
+    Require(Has(after, "Shelf inventory, by aisle.") && !Has(before, "by aisle"),
+            "each prompt must carry its own description");
+    const std::size_t common = static_cast<std::size_t>(
+        std::mismatch(before.begin(), before.end(), after.begin(), after.end()).first - before.begin());
+    // the template's instructions name the tags too; the definitions are between the last pair
+    Require(before.rfind("<tools>") < common && common < before.rfind("</tools>"),
+            "the prompts must part inside the tool section");
+
+    // a name or a parameter type is as much a part of the definition as its description
+    auto renamed = OfferedTools("Shelf inventory.");
+    renamed[0]["function"]["name"] = "read_rack";
+    auto retyped = OfferedTools("Shelf inventory.");
+    retyped[0]["function"]["parameters"]["properties"]["shelf"]["type"] = "integer";
+    Require(InsertedPrompt(model, ChatInput(renamed)) != before, "a renamed function must change the prompt");
+    Require(InsertedPrompt(model, ChatInput(retyped)) != before, "a changed parameter type must change the prompt");
+}
+
+void Qwen2PackagesWithoutTheCatalogFlagKeepTheirPrompt() {
+    Qwen2Harness instruct(CatalogEntry("qwen2.5-it-oga-hipep", "14b"));
+    const std::string plain = InsertedPrompt(instruct, ChatInput(nlohmann::ordered_json::array()));
+    const std::vector<std::pair<std::string, std::string>> others = {
+        {"qwen2.5-it", "3b"}, {"qwen2.5-coder-it-oga-hipep", "14b"}};
+    for (const auto& [name, size] : others) {
+        Qwen2Harness model(CatalogEntry(name, size));
+        Require(InsertedPrompt(model, ChatInput(OfferedTools("Shelf inventory."))) == plain,
+                name + " must keep the prompt it had: no tool section");
+    }
+}
+
 }  // namespace
 
 Tokenizer::Tokenizer(const std::string&) { is_doubled_encoded = false; }
 Tokenizer::~Tokenizer() = default;
 std::vector<int> Tokenizer::encode(const std::string& text) {
+    g_encoded_texts.push_back(text);
     const auto it = g_encodings.find(text);
     return it != g_encodings.end() ? it->second : g_encoded_tokens;
 }
@@ -985,6 +1162,10 @@ int main() {
     run("a new image after a cached one runs alone", ANewImageAfterACachedOneRunsAlone);
     run("Qwen2 runs text on OGA", Qwen2RunsTextOnOga);
     run("Qwen2 refuses images on OGA", Qwen2RefusesImagesOnOga);
+    run("Qwen2.5 Instruct on OGA is shown the offered tools", Qwen2ShowsOfferedToolsOnTheInstructOgaPackage);
+    run("Qwen2.5 Instruct on OGA is shown no tools when none are offered", Qwen2ShowsNoToolsWhenNoneAreOffered);
+    run("a changed tool definition changes the Qwen2.5 prompt", Qwen2ChangedDefinitionChangesThePrompt);
+    run("Qwen2 packages without the catalog flag keep their prompt", Qwen2PackagesWithoutTheCatalogFlagKeepTheirPrompt);
     if (failures == 0) std::cout << "Qwen frontend regression tests passed\n";
     return failures == 0 ? 0 : 1;
 }

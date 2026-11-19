@@ -6,6 +6,7 @@
 #include "chat/chat_gemma4_tools.hpp"
 #include "chat/chat_grammar.hpp"
 #include "chat/chat_parser.hpp"
+#include "chat/positional_tool_results.hpp"
 #include "minja/minja.hpp"
 
 #include <cstdio>
@@ -676,9 +677,56 @@ void test_schema_literals_untouched() {
     CHECK(grammar.takes(request, "{\"v\": {\"type\":\"string\",\"pattern\":\"\\\\S\"}}"));
 }
 
+void test_positional_tool_results() {
+    auto shelf = [](const char* id, const char* args) {
+        auto c = call("read_shelf", args);
+        c["id"] = id;
+        return c;
+    };
+    const json assistant = {{"role", "assistant"}, {"content", nullptr}, {"tool_calls", json::array({
+        shelf("z", R"({"shelf":"red"})"), shelf("a", R"({"shelf":"blue"})"), shelf("m", R"({"shelf":"green"})")})}};
+    const json red = {{"role", "tool"}, {"tool_call_id", "z"}, {"content", "731"}};
+    const json blue = {{"role", "tool"}, {"tool_call_id", "a"}, {"content", "482"}};
+    const json green = {{"role", "tool"}, {"tool_call_id", "m"}, {"content", json::array({
+        {{"type", "text"}, {"text", "993"}}})}};
+    const json boundary = {{"role", "user"}, {"content", "again"}};
+    const json group = json::array({assistant, red, blue, green});
+    // Two outstanding groups may reuse the same IDs; keep every part of the messages intact.
+    for (const json& separator : {boundary, json{{"role", "assistant"}, {"content", "done"}}}) {
+        json history = {assistant, green, red, blue, separator, assistant, blue, green, red};
+        CHECK(!flm::chat::order_parallel_tool_results(history));
+        CHECK(history == json::array({assistant, red, blue, green, separator, assistant, red, blue, green}));
+    }
+    auto invalid = [](json history, const std::string& path) {
+        auto err = flm::chat::order_parallel_tool_results(history);
+        CHECK(err && err->param == path && !err->message.empty());
+    };
+    for (const json& bad_id : {json(nullptr), json(7), json("")}) {
+        json history = group;
+        history[0]["tool_calls"][1]["id"] = bad_id;
+        invalid(history, "messages[0].tool_calls[1].id");
+        history = group;
+        history[2]["tool_call_id"] = bad_id;
+        invalid(history, "messages[2].tool_call_id");
+    }
+    json missing = group;
+    missing[0]["tool_calls"][1].erase("id");
+    invalid(missing, "messages[0].tool_calls[1].id");
+    invalid(json::array({assistant, blue, green, boundary, red}), "messages[0].tool_calls[0].id");
+    invalid(json::array({assistant, blue, green, assistant, red}), "messages[0].tool_calls[0].id");
+    invalid(json::array({assistant, blue, green}), "messages[0].tool_calls[0].id");
+    invalid(json::array({assistant, red, blue, green, red}), "messages[4].tool_call_id");
+    json single = assistant;
+    single["tool_calls"] = json::array({assistant["tool_calls"][0]});
+    json history = json::array({single, red});
+    CHECK(!flm::chat::order_parallel_tool_results(history));
+    CHECK(history == json::array({single, red}));
+}
+
 } // namespace
 
 int main() {
+    test_positional_tool_results();
     test_qwen_xml_grammar_takes_template_calls();
     test_call_without_arguments();
     test_stray_reasoning_end();

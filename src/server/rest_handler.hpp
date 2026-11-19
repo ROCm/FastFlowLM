@@ -176,5 +176,6 @@ private:
     /// \brief the --backend value, empty when the flag was not given
     std::string backend;
     flm::backend::BackendSelection loaded_selection;
+    bool positional_tool_results = false;
     PromptCache prompt_cache;
 };
