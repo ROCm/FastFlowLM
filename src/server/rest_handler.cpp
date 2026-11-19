@@ -20,6 +20,7 @@
 #include <cstring>
 #include "AutoModel/modeling_minicpm_v.hpp"
 #include "AutoModel/modeling_qwen3_asr.hpp"
+#include "AutoModel/modeling_qwen3_5vl.hpp"
 #include "whisper/transcript_format.hpp"
 #include <sstream>
 #include <iostream>
@@ -971,7 +972,8 @@ void RestHandler::handle_systemone(const std::string& raw_body,
 ///@brief Configure chat engine parameters from options and request
 ///@param options the options JSON object
 ///@param request the request JSON object
-void RestHandler::configure_chat_engine_parameters(const json& options, const json& request) {
+void RestHandler::configure_chat_engine_parameters(const json& options, const json& request,
+                                                   std::optional<bool> nested_think) {
     auto_chat_engine->restore_request_settings();
     if (has_value(request, "temperature")) {
         float temperature = request["temperature"];
@@ -1008,6 +1010,10 @@ void RestHandler::configure_chat_engine_parameters(const json& options, const js
     if (has_value(request, "reasoning_effort")) {
         std::string reasoning_effort = request["reasoning_effort"];
         auto_chat_engine->configure_parameter("reasoning_effort", reasoning_effort);
+    }
+    // chat_template_kwargs.enable_thinking, already checked against the two above
+    if (nested_think.has_value()) {
+        auto_chat_engine->configure_parameter("enable_think", *nested_think);
     }
     if (has_value(request, "conversational_mode")) {
         bool conversational_mode = request["conversational_mode"];
@@ -1617,7 +1623,20 @@ void RestHandler::handle_openai_chat_completion(const json& request,
             return;
         }
 
-        configure_chat_engine_parameters(options, request);
+        // The Qwen spelling of think, honored by the Qwen3.5 package only; any other model
+        // keeps ignoring it. Refused here, before anything streams.
+        std::optional<bool> nested_think;
+        if (dynamic_cast<Qwen3_5VL*>(auto_chat_engine.get()) != nullptr) {
+            if (!chat_thinking_override_from_openai(request, nested_think, request_error)) {
+                send_response({{"error", {{"message", request_error}, {"type", "invalid_request_error"}, {"code", 400}}}});
+                return;
+            }
+            if (nested_think.has_value() && !*nested_think) {
+                constraint_request.allow_reasoning = false;
+            }
+        }
+
+        configure_chat_engine_parameters(options, request, nested_think);
         apply_sampling_request(*auto_chat_engine, sampling);
 
         current_messages = normalize_messages(current_messages);

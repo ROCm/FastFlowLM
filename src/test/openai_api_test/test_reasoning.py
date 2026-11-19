@@ -21,6 +21,8 @@ Usage::
 
 from __future__ import annotations
 
+import os
+
 import flm_api
 from flm_api import Api, Skip, case, expect
 from fixtures import user
@@ -103,6 +105,128 @@ def think_switch_is_per_request(api: Api) -> None:
     if not api.always_thinks:
         expect("reasoning_content" not in off and "reasoning_content" not in off_again,
                "think=false returned reasoning_content after a think=true request")
+
+
+def not_nested(reason: str) -> None:
+    """Skip a nested-switch case on a model that ignores the switch.
+
+    FLM_TEST_NESTED_THINKING=on declares that the model reads it (the Qwen3.5 packages), so the
+    case fails instead of skipping, and a server that ignores the field cannot pass vacuously.
+    """
+    if os.environ.get("FLM_TEST_NESTED_THINKING", "").lower() == "on":
+        raise AssertionError(reason + " (FLM_TEST_NESTED_THINKING=on)")
+    raise Skip(reason)
+
+
+def nested_body(api: Api, enable_thinking, **fields) -> dict:
+    """A request in the Qwen model-card shape: no native think, the switch in chat_template_kwargs."""
+    body = api.body(user(PROMPT), max_tokens=THINK_BUDGET, **fields)
+    del body["think"]
+    body["chat_template_kwargs"] = {"enable_thinking": enable_thinking}
+    return body
+
+
+@case
+def nested_thinking_switch(api: Api) -> None:
+    """chat_template_kwargs.enable_thinking is think: on gives reasoning_content, off gives none.
+
+    Only the Qwen3.5 packages read it; on any other model the field is ignored and this skips.
+    """
+    on = api.ok(nested_body(api, True))["message"]
+    if not on.get("reasoning_content"):
+        not_nested("no reasoning_content with enable_thinking=true: the model does not read the nested switch")
+    off = api.ok(nested_body(api, False))["message"]
+    if not api.always_thinks:
+        expect("reasoning_content" not in off,
+               f"enable_thinking=false still returned reasoning_content: {off.get('reasoning_content', '')[:120]!r}")
+    expect(off["content"].strip() != "", "content is empty")
+
+
+@case
+def nested_thinking_switch_stream(api: Api) -> None:
+    """The same switch on a stream: reasoning deltas with it on, none with it off."""
+    s = api.ok_stream(nested_body(api, True))
+    on = flm_api.check_stream_contract(s, include_usage=False)
+    if on.reasoning == "":
+        not_nested("no reasoning with enable_thinking=true: the model does not read the nested switch")
+    off = flm_api.check_stream_contract(api.ok_stream(nested_body(api, False)), include_usage=False)
+    if not api.always_thinks:
+        expect(off.reasoning == "", f"enable_thinking=false streamed reasoning: {off.reasoning[:120]!r}")
+
+
+@case
+def nested_thinking_is_per_request(api: Api) -> None:
+    """Off, on, then no switch at all: a request without it gets the model's default again."""
+    default = api.body(user(PROMPT), max_tokens=THINK_BUDGET)
+    del default["think"]
+    before = api.ok(default)["message"]
+    if not api.ok(nested_body(api, True))["message"].get("reasoning_content"):
+        not_nested("the model does not read the nested switch")
+    api.ok(nested_body(api, False))
+    after = api.ok(default)["message"]
+    expect(bool(before.get("reasoning_content")) == bool(after.get("reasoning_content")),
+           "a request without the switch did not get the default back after enable_thinking=false")
+
+
+@case
+def nested_thinking_wrong_type_is_400(api: Api) -> None:
+    """A non-boolean value, a non-object container or a contradicting native control is a 400 that names the field."""
+    probe = api.post(nested_body(api, True))
+    if probe.status != 200 or not probe.body["choices"][0]["message"].get("reasoning_content"):
+        not_nested("the model does not read the nested switch")
+    for bad in ("yes", 1):
+        resp = api.post(nested_body(api, bad))
+        expect(resp.status == 400, f"enable_thinking={bad!r}: expected 400, got {resp.status}")
+        expect("chat_template_kwargs.enable_thinking" in resp.error_message(), resp.error_message())
+    body = nested_body(api, True)
+    body["chat_template_kwargs"] = "yes"
+    resp = api.post(body)
+    expect(resp.status == 400 and "chat_template_kwargs" in resp.error_message(), f"{resp.status} {resp.error_message()}")
+    conflict = nested_body(api, True)
+    conflict["think"] = False
+    resp = api.post(conflict)
+    expect(resp.status == 400 and "think" in resp.error_message(), f"{resp.status} {resp.error_message()}")
+    # the stream is refused before any frame, and the next valid request still works
+    s = api.stream(nested_body(api, "yes"))
+    expect(s.status == 400, f"stream with a bad switch: expected 400, got {s.status}")
+    api.ok(nested_body(api, True))
+
+
+@case
+def nested_thinking_off_with_json_object(api: Api) -> None:
+    """A grammar-constrained request sees the effective setting: off leaves no room to reason."""
+    if not api.ok(nested_body(api, True))["message"].get("reasoning_content"):
+        not_nested("the model does not read the nested switch")
+    body = nested_body(api, False, response_format={"type": "json_object"})
+    body["messages"] = user('Reply with a JSON object {"answer": "yes" or "no"}: is 7 a prime number?')
+    msg = flm_api.check_message_contract(api.ok(body))
+    if not api.always_thinks:
+        expect("reasoning_content" not in msg,
+               f"enable_thinking=false with json_object still reasoned: {msg.get('reasoning_content', '')[:120]!r}")
+    import json
+    try:
+        parsed = json.loads(msg["content"])
+    except ValueError:
+        raise AssertionError(f"content is not JSON: {msg['content'][:120]!r}")
+    expect(isinstance(parsed, dict), f"content is not a JSON object: {msg['content'][:120]!r}")
+
+
+@case
+def nested_thinking_error_leaves_no_state(api: Api) -> None:
+    """Off, then a refused conflict, then no switch: the refused request changed nothing."""
+    default = api.body(user(PROMPT), max_tokens=THINK_BUDGET)
+    del default["think"]
+    if not api.ok(nested_body(api, True))["message"].get("reasoning_content"):
+        not_nested("the model does not read the nested switch")
+    before = api.ok(default)["message"]
+    api.ok(nested_body(api, False))
+    conflict = nested_body(api, False)
+    conflict["think"] = True
+    resp = api.post(conflict)
+    expect(resp.status == 400, f"conflicting switches: expected 400, got {resp.status}")
+    after = api.ok(default)["message"]
+    expect(bool(before.get("reasoning_content")) == bool(after.get("reasoning_content")),
+           "a request without the switch did not get the default back after a refused conflict")
 
 
 @case
