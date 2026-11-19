@@ -1,3 +1,5 @@
+// Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+// Portions of this file consist of AI-generated content.
 // 8-row rms_residual of the verify layer (plan S6.6, D17): Gemma's sandwich norms on L_TOKENS rows with the residual h[8][D] resident on
 // the neighbour tile (3,3) (a core reaches its north window directly, no DMA).  Built only for L_TOKENS > 1; the L_TOKENS = 1 layer keeps
 // kernels/rms_residual.cc.

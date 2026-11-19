@@ -1,3 +1,4 @@
+// Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
 #include "aie_array_layout.h"
 #include "aie_kernel_utils.h"
 #include "typedef.hpp"

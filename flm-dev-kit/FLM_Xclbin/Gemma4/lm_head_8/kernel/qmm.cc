@@ -1,3 +1,5 @@
+// Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+// Portions of this file consist of AI-generated content.
 // lm_head_8: Gemma4 final vocabulary projection for 8 token rows per dispatch (verify phase of DFlash speculative decoding).
 // Same topology, weight layout (Q4NX q4k_block_t, reordered 4 blocks per column) and softcap convention as ../lm_head_npu_bin (L=1);
 // the differences are the activation (8 rows resident per core) and the core (q4_v4 of Gemma4/verify_decoding/toys/q4_mvm_L8).
