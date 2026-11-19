@@ -71,6 +71,9 @@ jobs:
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
+      # The image's default user is unprivileged (PR #1074); the runner's
+      # workspace mounts need root.
+      options: --user root
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
