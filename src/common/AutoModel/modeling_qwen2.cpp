@@ -27,7 +27,12 @@ void Qwen2::load_model(std::string model_path, json model_info, int default_cont
     for (size_t i = 0; i < PROFILER_TYPE_NUM; i++) {
         this->profiler_list[i].reset();
     }
-    this->_prefix_attach(this->lm_engine, qwen2_npu_state_api(this->lm_engine));
+    // The OGA engine has no NPU prefix-slot table. Not calling the export also keeps
+    // the NPU engine DLL unloaded, so a host without the NPU driver can run OGA.
+    const flm_state_api* state = this->backend_id() == flm::backend::kOgaHipepBackendId
+                                     ? nullptr
+                                     : qwen2_npu_state_api(this->lm_engine);
+    this->_prefix_attach(this->lm_engine, state);
 }
 
 void Qwen2::setup_tokenizer(std::string model_path) {

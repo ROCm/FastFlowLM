@@ -293,7 +293,12 @@ void Gemma4e::load_model(std::string model_path, json model_info, int default_co
     }
     // Gemma4e_Flash shares this function but runs a different engine: the table is nullptr for it, the cache stays off.
     // Text-only prompts only (see insert), so no image placeholder id is given.
-    _prefix_attach(lm_engine, this->engine_state_api());
+    // The OGA engine has no NPU prefix-slot table. Not calling the export also keeps
+    // the NPU engine DLL unloaded, so a host without the NPU driver can run OGA.
+    const flm_state_api* state = this->backend_id() == flm::backend::kOgaHipepBackendId
+                                     ? nullptr
+                                     : this->engine_state_api();
+    _prefix_attach(lm_engine, state);
 }
 
 void Gemma4e::setup_tokenizer(std::string model_path) {
