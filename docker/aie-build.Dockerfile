@@ -149,31 +149,46 @@ RUN mkdir -p /tmp/wheels \
     && [[ "$(python3 -m pip show mlir_aie | sed -n 's/^Version: //p')" == "$MLIR_AIE_WHEEL_VERSION" ]] \
     && rm -rf /tmp/wheels
 
-# The source build, against the MLIR wheel unpacked where the script itself
-# would put it, with the pinned Peano in place (its path is recorded as aiecc's
-# default when PEANO_INSTALL_DIR is unset). On failure the CMake and ninja logs
-# are printed: the script tees them into build/. The script can
-# report success after a failure, so the result is checked, and everything
-# but install/ is removed in this layer.
+# The source build, against the MLIR wheel and the pinned Peano. These are the
+# configure and build steps of utils/build-mlir-aie-from-wheels.sh at the
+# pinned commit, with the same CMake flags, run here directly: on failure that
+# script deletes build/ (its logs included) and still exits 0 on some errors.
+# LLVM_ENABLE_RTTI is empty because the script's ${LLVM_ENABLE_RTTI:OFF} is a
+# substring expansion that yields "" when the variable is unset; VITIS_VPP is
+# empty because there is no v++. Each step prints its log if it fails.
 COPY --from=peano /opt/peano /opt/peano
-RUN mkdir -p my_install \
+RUN mkdir -p my_install build \
     && whl="my_install/${MLIR_WHEEL_URL##*/}" \
     && curl -fsSL --retry 5 --retry-all-errors -o "$whl" "$MLIR_WHEEL_URL" \
     && echo "${MLIR_WHEEL_SHA256}  ${whl}" | sha256sum -c - \
     && unzip -q "$whl" -d my_install \
     && rm "$whl" \
     && source ironenv/bin/activate \
-    && { bash ./utils/build-mlir-aie-from-wheels.sh my_install/mlir build install /opt/peano/llvm-aie \
-             > /tmp/mlir-aie-build.log 2>&1 \
-         || { tail -n 100 /tmp/mlir-aie-build.log; \
-              for f in build/cmake.log build/CMakeFiles/CMakeError.log build/mlir-aie-ninja.log; do \
-                  [[ -f "$f" ]] && { echo "==== $f"; tail -n 150 "$f"; }; done; \
-              exit 1; }; } \
-    && tail -n 5 /tmp/mlir-aie-build.log \
+    && cd build \
+    && { cmake -GNinja \
+             -DCMAKE_PREFIX_PATH=/opt/mlir-aie/my_install/mlir \
+             -DVITIS_VPP= \
+             -DCMAKE_MODULE_PATH=/opt/mlir-aie/cmake/modulesXilinx \
+             -DLLVM_EXTERNAL_LIT="$(command -v lit)" \
+             -DCMAKE_INSTALL_PREFIX=../install \
+             -DCMAKE_BUILD_TYPE=Release \
+             -DLLVM_ENABLE_ASSERTIONS=ON \
+             -DAIE_ENABLE_BINDINGS_PYTHON=ON \
+             -DLLVM_ENABLE_RTTI= \
+             "-DAIE_VITIS_COMPONENTS=AIE2;AIE2P" \
+             -DAIE_RUNTIME_TARGETS=x86_64 \
+             -DAIE_RUNTIME_TEST_TARGET=x86_64 \
+             -DPEANO_INSTALL_DIR=/opt/peano/llvm-aie \
+             -DLLVM_USE_LINKER=lld \
+             .. > /tmp/cmake.log 2>&1 \
+         || { cat /tmp/cmake.log; [[ -f CMakeFiles/CMakeError.log ]] && tail -n 80 CMakeFiles/CMakeError.log; exit 1; }; } \
+    && { ninja > /tmp/ninja.log 2>&1 || { tail -n 200 /tmp/ninja.log; exit 1; }; } \
+    && { ninja install > /tmp/ninja-install.log 2>&1 || { tail -n 100 /tmp/ninja-install.log; exit 1; }; } \
+    && cd .. \
     && test -x install/bin/aiecc.py \
     && test -x install/bin/aie-opt \
     && test -f install/python/aie/compiler/aiecc/configure.py \
-    && rm -rf build my_install /tmp/mlir-aie-build.log
+    && rm -rf build my_install /tmp/cmake.log /tmp/ninja.log /tmp/ninja-install.log
 
 # ---------------------------------------------------------------------------
 # The image: the two trees above, xclbinutil, and what the kernel Makefiles
