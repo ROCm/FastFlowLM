@@ -10,6 +10,12 @@
 # make_package.py -- the package of each app, from its aiecc folder.
 #
 #   make_package.py -o PKG NAME=DESIGN_FOLDER [NAME=DESIGN_FOLDER ...]
+#                   [--state NAME@STATE=FILE.txn ...]
+#
+# --state adds a state to the package NAME (this call's or one already in
+# PKG): FILE.txn (a TXN binary of writes: the configuration of one of the app's
+# runtime ops, as its host writes it) becomes PKG/NAME/state_STATE.txn, and a
+# kernel can load "NAME@STATE" (formats/package.hpp: what a state may write).
 #
 # DESIGN_FOLDER is where aiecc ran with
 #   --aie-generate-xclbin --aie-generate-npu-insts --aie-generate-txn
@@ -188,13 +194,26 @@ def package(name, folder, out):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("-o", "--out", required=True)
-    ap.add_argument("apps", nargs="+", metavar="NAME=DESIGN_FOLDER")
+    ap.add_argument("--state", action="append", default=[], metavar="NAME@STATE=FILE.txn")
+    ap.add_argument("apps", nargs="*", metavar="NAME=DESIGN_FOLDER")
     a = ap.parse_args()
+    if not a.apps and not a.state:
+        ap.error("no app and no state")
     for spec in a.apps:
         if "=" not in spec:
             sys.exit(f"{spec}: expected NAME=DESIGN_FOLDER")
         name, folder = spec.split("=", 1)
         package(name, folder, a.out)
+    for spec in a.state:
+        m = re.fullmatch(r"([^@=/]+)@([\w.-]+)=(.+)", spec)
+        if not m:
+            sys.exit(f"--state {spec}: expected NAME@STATE=FILE.txn")
+        name, state, path = m.groups()
+        dest = os.path.join(a.out, name)
+        if not os.path.exists(os.path.join(dest, "init.txn")):
+            sys.exit(f"--state {spec}: no package {dest}")
+        shutil.copyfile(path, os.path.join(dest, f"state_{state}.txn"))
+        print(f"{name}@{state}: {dest}/state_{state}.txn")
 
 
 if __name__ == "__main__":

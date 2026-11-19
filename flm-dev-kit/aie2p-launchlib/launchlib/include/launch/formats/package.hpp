@@ -33,6 +33,21 @@
 // or a block write that crosses a class border stops the load with an error
 // that names the file.
 //
+// States. An app whose cores run several ops (an overlay: one program, the op
+// picked by registers the host writes) can be loaded set up for one of them.
+// "APP@STATE" names that: the package of APP plus the writes of
+// PKG/APP/state_STATE.txn (the op's configuration, as the host writes it
+// before the op's first run; make_package.py --state), sorted as init.txn's and
+// after them. A kernel that loads APP@STATE leaves the op ready, so the host's
+// next run of that op needs no configuring of its own: warm(other, "APP@STATE")
+// is the switch back to APP that also configures the op. A state may only add
+// to the app: no program, no core APP does not have, and no register or memory
+// word that init.txn sets to a value other than 0 (lock values excepted: a
+// state's lock values are the ones its op starts from). Channel reset writes
+// are dropped as init.txn's. The host must know that the state fits what it
+// runs next; the library cannot see that (an op that keeps state of its own
+// between runs, e.g. a ping/pong selector, must start from the state's values).
+//
 //===----------------------------------------------------------------------===//
 
 #pragma once
@@ -92,7 +107,8 @@ struct TileInit {
 };
 
 struct Package {
-  std::string name, dir;
+  std::string name, dir; ///< name: APP or APP@STATE; dir: PKG/APP
+  std::string state;     ///< STATE of APP@STATE, else empty
   std::string xclbin;  ///< path of design.xclbin
   txn::Header header;  ///< of init.txn: the device
   std::map<Tile, TileInit> tiles;
@@ -279,29 +295,99 @@ inline void sort_init(Package &p, const txn::Stream &s, const std::string &path)
 
 } // namespace detail
 
-/// Read PKG/<app>/. Throws std::runtime_error naming the file.
+namespace detail {
+
+inline txn::Stream read_txn(const std::string &path) {
+  txn::Stream s;
+  try {
+    s = txn::parse(txn::words_of(read_file(path)));
+  } catch (const std::exception &e) {
+    throw std::runtime_error(path + ": " + e.what());
+  }
+  if (s.header.dev_gen != hw::kTxnDevGen || s.header.cols != hw::kCols || s.header.rows != hw::kRows)
+    throw std::runtime_error(std::format("{}: device generation {} with {} x {} tiles; the library is for npu2 "
+                                         "(generation {}, {} x {})",
+                                         path, s.header.dev_gen, s.header.cols, s.header.rows, hw::kTxnDevGen,
+                                         hw::kCols, hw::kRows));
+  return s;
+}
+
+/// The registers and memory words the writes of `ops` set: address -> last value.
+inline std::map<uint32_t, uint32_t> values_of(const std::vector<txn::Op> &ops) {
+  std::map<uint32_t, uint32_t> v;
+  for (const txn::Op &op : ops)
+    if (const auto *w = std::get_if<txn::Write32>(&op))
+      v[w->addr] = w->value;
+    else if (const auto *m = std::get_if<txn::MaskWrite32>(&op))
+      v[m->addr] = (v[m->addr] & ~m->mask) | (m->value & m->mask);
+    else if (const auto *b = std::get_if<txn::BlockWrite>(&op))
+      for (size_t i = 0; i < b->words.size(); ++i)
+        v[b->addr + 4 * (uint32_t)i] = b->words[i];
+  return v;
+}
+
+/// A state against its app's init.txn (see the top of this file).
+inline void check_state(const txn::Stream &init, const txn::Stream &state, const std::string &path) {
+  const std::map<uint32_t, uint32_t> base = values_of(init.ops);
+  for (size_t i = 0; i < state.ops.size(); ++i) {
+    const txn::Op &op = state.ops[i];
+    if (const auto *m = std::get_if<txn::MaskWrite32>(&op); m && m->mask == hw::kDmaReset)
+      continue; // a channel reset: dropped as init.txn's
+    for (const auto &[addr, value] : values_of({op})) {
+      auto fail = [&](const std::string &m) {
+        throw std::runtime_error(std::format("{}: op {}: address {:#010x}: {}", path, i, addr, m));
+      };
+      hw::Cls cls = hw::Cls::data;
+      try {
+        cls = hw::classify(addr);
+      } catch (const std::logic_error &e) { // sort_init names it too; here first
+        fail(e.what());
+      }
+      if (cls == hw::Cls::program)
+        fail("a state cannot change the program");
+      auto it = base.find(addr);
+      if (cls != hw::Cls::lock && it != base.end() && it->second != 0 && it->second != value)
+        fail(std::format("the state writes {:#x} where init.txn sets {:#x} (a state may only set what the app "
+                         "leaves at 0)",
+                         value, it->second));
+    }
+  }
+}
+
+} // namespace detail
+
+/// Read PKG/<app>/, or PKG/APP/ with its state for "APP@STATE". Throws
+/// std::runtime_error naming the file.
 inline Package load_package(const std::string &package_dir, const std::string &app) {
   Package p;
   p.name = app;
-  p.dir = (std::filesystem::path(package_dir) / app).string();
+  const size_t at = app.find('@');
+  const std::string base = app.substr(0, at);
+  if (at != std::string::npos) {
+    p.state = app.substr(at + 1);
+    if (base.empty() || p.state.empty() || p.state.find('@') != std::string::npos)
+      throw std::runtime_error(std::format("app '{}': APP or APP@STATE expected", app));
+  }
+  p.dir = (std::filesystem::path(package_dir) / base).string();
   p.xclbin = (std::filesystem::path(p.dir) / "design.xclbin").string();
   if (!std::filesystem::exists(p.xclbin))
     throw std::runtime_error(std::format("app '{}': no {} (tools/make_package.py)", app, p.xclbin));
   detail::read_manifest(p, p.dir + "/manifest.txt");
   const std::string init = p.dir + "/init.txn";
-  txn::Stream s;
-  try {
-    s = txn::parse(txn::words_of(detail::read_file(init)));
-  } catch (const std::exception &e) {
-    throw std::runtime_error(init + ": " + e.what());
-  }
-  if (s.header.dev_gen != hw::kTxnDevGen || s.header.cols != hw::kCols || s.header.rows != hw::kRows)
-    throw std::runtime_error(std::format("{}: device generation {} with {} x {} tiles; the library is for npu2 "
-                                         "(generation {}, {} x {})",
-                                         init, s.header.dev_gen, s.header.cols, s.header.rows, hw::kTxnDevGen,
-                                         hw::kCols, hw::kRows));
+  const txn::Stream s = detail::read_txn(init);
   p.header = s.header;
   detail::sort_init(p, s, init);
+  if (!p.state.empty()) {
+    const std::string path = p.dir + "/state_" + p.state + ".txn";
+    if (!std::filesystem::exists(path))
+      throw std::runtime_error(std::format("app '{}': no {} (tools/make_package.py --state)", app, path));
+    const txn::Stream st = detail::read_txn(path);
+    detail::check_state(s, st, path);
+    const std::vector<Tile> cores = p.cores();
+    detail::sort_init(p, st, path);
+    if (p.cores() != cores)
+      throw std::runtime_error(std::format("{}: the state has a core that '{}' does not have", path, base));
+  }
   for (const Tile &t : p.cores())
     if (p.tiles.at(t).program.empty())
       throw std::runtime_error(std::format("{}: the {} has a core but no program", init, t.describe()));

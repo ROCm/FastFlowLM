@@ -126,7 +126,7 @@ each configuration, and encodes each kernel's ops.
 | `include/launch/transport/ctrlpkt_check.hpp` | `ctrlpkt::check_kernel`: replays a kernel on a switch model and compares its end state with its TXN twin |
 | `include/launch/hw/switch.hpp` | A model of the stream switches: register file, packet routes (`route`) |
 | `include/launch/rt/rt.hpp` | `Rt` (the aiex.py calls), `Arg`, `Memcpy`, `SequenceFn`, `SequenceMap`; the shim BD encoding |
-| `include/launch/formats/package.hpp` | `load_package` (the only file I/O), `Package`, `TileInit`, `floorplan_difference` |
+| `include/launch/formats/package.hpp` | `load_package` (the only file I/O; "APP@STATE" states, section 3.1), `Package`, `TileInit`, `floorplan_difference` |
 | `include/launch/txn/txn.hpp` | The instruction stream: `Op` (IR), `encode`, `parse` |
 | `include/launch/txn/elf.hpp` | `to_elf`: a stream as the ELF of XRT's ELF flow (the AddressPatch ops as relocations; aiebu's ELF without aiebu) |
 | `include/launch/txn/elf_aiebu.hpp` | `to_elf_aiebu`: the same by aiebu (needs `libaiebu.a`; for `make test_elf` and `SessionOptions::elf_writer`) |
@@ -135,7 +135,7 @@ each configuration, and encodes each kernel's ops.
 | `include/launch/xrt/npu_watch.hpp` | `NpuWatch`: every hw_context on the NPU from the amdxdna driver (Linux) or XRT's internal list (`LAUNCH_NPU_WATCH_XRT=1`: public XRT headers, query found by RTTI name, entry layout checked at run time) |
 | `include/launch/hw/aie2p.hpp` | AIE2P facts (sizes, offsets) with their aie-rt names; `classify(address)` |
 | `include/launch/hw/hw_gen.hpp` | **Generated** by `tools/gen_hw.py`: the stream-switch routing registers per tile kind |
-| `tools/make_package.py` | aiecc design folder → package (with the lock census of the core ELFs: llvm-objdump of Peano) |
+| `tools/make_package.py` | aiecc design folder → package (with the lock census of the core ELFs: llvm-objdump of Peano); `--state` adds a state |
 | `tools/op_cost.cpp` | `make op_cost`: what one TXN op costs on the NPU (write32 ~60 ns, maskwrite32 ~110, block write ~60 + ~4 per word, ~5 in program memory); the numbers of `launch::CostModel` |
 | `tools/gen_hw.py` | aie-rt `xaie2pgbl_params.h` → `hw_gen.hpp`; `--check` |
 | `tools/txn_dump.py` | Print a TXN binary |
@@ -166,6 +166,23 @@ DESIGN_FOLDER is where aiecc ran with `--aie-generate-xclbin --aie-generate-npu-
 
 A write without a class, a Sync or patch in `init.txn`, or a block write across a class border stops the load
 with an error naming the file. The library checks that the device is npu2 (header of `init.txn`).
+
+**States** (`make_package.py -o PKG --state NAME@STATE=FILE.txn`, also with apps in the same call): the app NAME
+loaded set up for one of its runtime ops. FILE.txn holds that op's configuration as its host writes it (BDs,
+routes, locks of the op); the tool copies it to `PKG/NAME/state_STATE.txn`. Any configuration may then name the
+app `"NAME@STATE"`: `load_package` loads NAME and sorts the state's writes after `init.txn`'s, so
+`warm(other, "ovl@P")` switches back to the overlay `ovl` with its op `P` ready (the host's next `P` launch writes
+no configuration), and `warm("ovl@P", other)` leaves it. The load refuses, naming the file, op and address:
+
+| A state may not | because |
+|---|---|
+| write a program (PM) or set up a core `init.txn` has not | the state is a configuration, not another design |
+| write a register or data word that `init.txn` sets to another nonzero value (locks excepted) | the app's other ops expect `init.txn`'s value |
+| hold a Sync, patch or a write without a class | as `init.txn` |
+
+Channel reset masks are dropped, as in `init.txn`. A state the host's switches used to merge into a copy of the
+package by hand (an "ovlP" folder) is the same kernel this way: the Qwen4 attention switch gives byte-identical
+`warm(attn, ovl@P)` / `warm(ovl@P, attn)` streams with both transports.
 
 ### 3.2 List of configurations
 
@@ -339,7 +356,7 @@ The example's README has the full table.
 
 | Where | What | Needs |
 |---|---|---|
-| `make test` | `gen_hw.py --check`; `test_txn` (round trip, classes; aiecc's binaries of a package); `test_rt` (C++ sequence == aiecc's, 8 columns); `test_build` (the kernels on a register model: cold = aiecc's configure, cold + warm = the next app's configure, program-only too; the parts of each kind; `breakdown`; JSON; `channel_ctrl_of`); `test_errors` (every mistake throws and names the configuration, file or op: bad Rt calls, bad lists, a throwing sequence, 11 kinds of broken package); `test_ctrlpkt` (every kernel under every `CtrlPktOptions` set passes its check and converts to the ELF flow; the check finds corrupted or cut packets, a missing Sync, a TXN write into a chain in flight, lost lanes without `rewrite_lanes`; an RTP lock goes by TXN) | a package (default: the example's precompiled 8 × 2) |
+| `make test` | `gen_hw.py --check`; `test_txn` (round trip, classes; aiecc's binaries of a package); `test_rt` (C++ sequence == aiecc's, 8 columns); `test_build` (the kernels on a register model: cold = aiecc's configure, cold + warm = the next app's configure, program-only too; the parts of each kind; `breakdown`; JSON; `channel_ctrl_of`); `test_errors` (every mistake throws and names the configuration, file or op: bad Rt calls, bad lists, a throwing sequence, 11 kinds of broken package); `test_ctrlpkt` (every kernel under every `CtrlPktOptions` set passes its check and converts to the ELF flow; the check finds corrupted or cut packets, a missing Sync, a TXN write into a chain in flight, lost lanes without `rewrite_lanes`; an RTP lock goes by TXN); `test_state` (a state of the first app: the Package fields, cold/warm/back/rerun with both transports, what it leaves; the bad names, a missing file, and each write a state may not make) | a package (default: the example's precompiled 8 × 2) |
 | `test_build PKG A B` with A, B of different floorplans | warm(A, B, program_only) is refused; cold(A), warm(A, B), warm(B, A) twice each give aiecc's state and leave no route, mux or channel Ctrl of the other app | a package (`../pm_runtime_load_singletile`: `make check`, all six pairs) |
 | `make test_elf` (or `build/test_elf FILE.txn ...`) | `txn::to_elf` against aiebu: BDs and relocations of hand-made streams, the streams it refuses; on every kernel of a package (and on TXN files, e.g. FLM's dumped streams) the same .ctrltext as aiebu's without its patch ops, the same relocations, `.dynamic` and header fields; host time of both | `libaiebu.a` (XRT), a package |
 | `../vadd_vmul_bf16`: `make check` | the same on the example's current package | |
