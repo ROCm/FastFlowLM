@@ -2494,6 +2494,7 @@
                 },
                 "flm_min_version": "1.0.13",
                 "vlm": false,
+                "tools_in_prompt": true,
                 "files": [
                     "chat_template.jinja",
                     "config.json",

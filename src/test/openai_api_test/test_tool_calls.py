@@ -14,6 +14,10 @@ validates against the tool's ``parameters``, and ``finish_reason``
 ``tool_calls``. Streamed calls must open with id/type/name and only
 append arguments after that.
 
+The definitions a request offers are part of the prompt, so its
+``prompt_tokens`` grow with them. A model whose prompt ignores them skips
+that case, unless it is one of the packages checked to render them.
+
 Whether a model *chooses* to call a tool under ``auto`` is up to the model,
 so those cases check the shape only. Models whose chat format has no tool
 call syntax skip everything that forces a call.
@@ -25,6 +29,7 @@ Usage::
 
 from __future__ import annotations
 
+import copy
 import json
 
 import flm_api
@@ -252,6 +257,58 @@ def none_stream(api: Api) -> None:
     s = api.ok_stream(api.body(user(WEATHER_PROMPT), tools=WEATHER_TOOLS, tool_choice="none", max_tokens=96))
     folded = flm_api.check_stream_contract(s, include_usage=False)
     expect(folded.tool_calls == [], f"tool_choice none streamed tool calls: {folded.tool_calls}")
+
+
+# ---------------------------------------------------------------- definitions
+
+SUM_PROMPT = "What is two plus four?"
+SHORT_DESCRIPTION = "Shelf inventory."
+LONG_DESCRIPTION = SHORT_DESCRIPTION + " Amber birch cobalt dune elm frost." * 64
+# Packages checked to render the tools they are offered: on these a prompt without the
+# definitions is a failure. Any other model whose prompt ignores them skips (see the README).
+SHOWN_DEFINITIONS = ("qwen2.5-it-oga-hipep:14b", "qwen3.5-oga-hipep:9b")
+
+
+def described(description: str) -> list[dict]:
+    """One tool the question does not need, with this description."""
+    tool = copy.deepcopy(GET_WEATHER)
+    tool["function"]["description"] = description
+    return [tool]
+
+
+def prompt_usage(api: Api, **fields) -> tuple[int, int | None]:
+    """(prompt_tokens, cached_tokens) of SUM_PROMPT sent with these fields."""
+    resp = api.post(api.body(user(SUM_PROMPT), max_tokens=1, **fields))
+    if resp.status != 200:
+        flm_api.raise_for_capability(resp.error_message())
+        raise AssertionError(f"HTTP {resp.status}: {resp.error_message()}")
+    usage = resp.body.get("usage") or {}
+    expect(isinstance(usage.get("prompt_tokens"), int), f"no usage.prompt_tokens: {usage}")
+    return usage["prompt_tokens"], (usage.get("prompt_tokens_details") or {}).get("cached_tokens")
+
+
+@case
+def definitions_reach_the_prompt(api: Api) -> None:
+    """Offered definitions are in the prompt: a longer description is a longer prompt; none shows nothing."""
+    plain, _ = prompt_usage(api)
+    short, _ = prompt_usage(api, tools=described(SHORT_DESCRIPTION))
+    # The next prompt parts from the last one inside the definitions: reusing all of
+    # the last one would be answering with the old description.
+    changed, cached = prompt_usage(api, tools=described(SHORT_DESCRIPTION + " Checked daily."))
+    long, _ = prompt_usage(api, tools=described(LONG_DESCRIPTION))
+    hidden, _ = prompt_usage(api, tools=described(SHORT_DESCRIPTION), tool_choice="none")
+    expect(hidden == plain,
+           f"tool_choice none must not show the tools: {hidden} prompt tokens, {plain} without tools")
+    if short == plain and long == plain:
+        if api.model in SHOWN_DEFINITIONS:
+            raise AssertionError(f"the definitions never reach the prompt: {plain} prompt tokens "
+                                 "with no tool, a short description and a long one")
+        raise Skip("the model's prompt does not carry tool definitions")
+    expect(plain < short < changed < long,
+           f"prompt tokens must grow with the definitions: none {plain}, short {short}, "
+           f"a longer description {changed}, long {long}")
+    expect(cached is None or cached < short,
+           f"a changed definition reused the whole earlier prompt: {cached} of its {short} tokens cached")
 
 
 # ---------------------------------------------------------------- multi turn
