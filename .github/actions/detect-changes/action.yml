@@ -37,8 +37,16 @@ outputs:
   hipep:
     description: '"true" when every suite runs or the change reaches an oga-hipep model, which Test Windows HIPEP tests one per family.'
     value: ${{ steps.tier.outputs.hipep }}
+  new-models:
+    description: >
+      Comma-separated NPU models the change adds (or points at new weights):
+      every NPU test job tests them, downloading them whatever their size.
+    value: ${{ steps.changes.outputs.new_models }}
   hipep-models:
-    description: Comma-separated oga-hipep models whose catalog entries the change added or edited, which Test Windows HIPEP tests too.
+    description: >
+      Comma-separated oga-hipep models whose catalog entries the change added
+      or edited (new weights or not): Test Windows HIPEP tests them as
+      required models, downloading them whatever their size.
     value: ${{ steps.changes.outputs.hipep_models }}
   tier:
     description: install, pr or full.

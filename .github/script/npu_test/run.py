@@ -15,7 +15,7 @@ import subprocess
 import sys
 import time
 
-from .harness import FAIL, PASS, SKIP, Context, Result, configure_stdout
+from .harness import FAIL, PASS, SKIP, WARN, Context, Result, configure_stdout
 from .model_cache import ModelCache
 from .plan import GPU_BACKENDS, TIERS, Plan, load_catalog
 from .suites import SUITES, ORDER
@@ -31,6 +31,14 @@ PULL_TIMEOUT = 90 * 60
 # untested on that runner; the full tier and --backend runs wait for every
 # download.
 PULL_BUDGET_MIN = 30.0
+
+# All the models the change adds (--required-models) together. They are
+# pulled first and outside PULL_BUDGET_MIN, since testing them is the point of
+# the change: a 120 GB package at a few MB/s takes hours. Build and Test gives
+# such a job 600 minutes, so this leaves three hours for the other downloads
+# and the suites, and the report is still written. A new model this leaves
+# undownloaded is a failure, not a warning.
+REQUIRED_PULL_BUDGET_MIN = 420.0
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -49,18 +57,25 @@ def parse_args(argv=None) -> argparse.Namespace:
                              "one of each that it tests only when touched.")
     parser.add_argument("--asr-full", action="store_true",
                         help="Run the whole ASR evaluation set even on the pr tier.")
+    parser.add_argument("--required-models", default="",
+                        help="Comma-separated model ids the change adds (with --backend: "
+                             "adds or edits). Every tier tests them, they are downloaded "
+                             "whatever their size, and the run fails if the package does not "
+                             "list them or they do not pull.")
+    parser.add_argument("--required-pull-budget", type=float, default=REQUIRED_PULL_BUDGET_MIN,
+                        metavar="MINUTES",
+                        help="Time for downloading the --required-models, all together; one "
+                             f"left undownloaded fails the run (default: {REQUIRED_PULL_BUDGET_MIN:g}).")
     parser.add_argument("--models", default="",
                         help="Comma-separated model ids; restricts every suite to these.")
     parser.add_argument("--backend", choices=["", *sorted(GPU_BACKENDS)], default="",
                         help="Test this GPU backend's models instead of the NPU models: one "
                              "per family, or every one on the full tier (default: the NPU "
                              "models).")
-    parser.add_argument("--changed-models", default="",
-                        help="With --backend: comma-separated models whose catalog entries "
-                             "the change touched, which the install and pr tiers test too.")
     parser.add_argument("--max-model-gb", type=float, default=0.0, metavar="GB",
                         help="Skip the models larger than this (catalog size), which this "
-                             "runner's memory cannot hold (default: 0, no limit).")
+                             "runner's memory cannot hold, --required-models too (default: 0, "
+                             "no limit).")
     parser.add_argument("--model-extension", action="append", default=[],
                         help="Model-extension manifest passed to `flm list` and every "
                              "server (repeatable).")
@@ -91,6 +106,41 @@ def pull_budget(args: argparse.Namespace) -> float | None:
     return minutes * 60 if minutes > 0 else None
 
 
+def check_required(ctx: Context, plan: Plan, names: list[str], skipped: set[str]) -> None:
+    """Records why a model the change adds would go untested in this run.
+
+    One the package does not list is a failure: the change added it to the
+    catalog, so a package built from that change must offer it. One of
+    another backend (a GPU model in an NPU run) is not this job's to test,
+    nor is one larger than this runner holds (skipped, by --max-model-gb,
+    and already recorded), which a HIPEP machine without that limit tests.
+    """
+    planned = set(plan.planned(names))
+    for model in plan.required:
+        if model in skipped:
+            continue
+        if model not in plan.catalog:
+            ctx.record(Result("setup", "new model", FAIL, model,
+                              "the change adds this model, but `flm list --json --filter all` "
+                              "does not list it on this machine"))
+        elif not plan.backend_serves(model):
+            ctx.record(Result("setup", "new model", SKIP, model,
+                              "another backend runs it; its own job tests it"))
+        elif model not in planned:
+            ctx.record(Result("setup", "new model", WARN, model,
+                              f"no suite this job runs ({', '.join(names)}) tests it"))
+
+
+def stamp(cache: ModelCache | None, plan: Plan, pulled: list[str]) -> None:
+    """Remembers the models a GPU backend run just pulled, and so verified."""
+    if cache is None:
+        return
+    for model_id in pulled:
+        why = "" if model_id in plan.unavailable else cache.stamp(model_id)
+        if why:
+            print(f"  [setup] {model_id}: not remembered as verified ({why})", flush=True)
+
+
 def main(argv=None) -> int:
     configure_stdout()
     args = parse_args(argv)
@@ -117,9 +167,9 @@ def main(argv=None) -> int:
         catalog, catalog_error = {}, f"`flm list --json` failed: {type(exc).__name__}: {exc}"
     families = [f.strip() for f in args.families.split(",") if f.strip()]
     only = [m.strip() for m in args.models.split(",") if m.strip()] or None
-    changed = [m.strip() for m in args.changed_models.split(",") if m.strip()]
+    required = [m.strip() for m in args.required_models.split(",") if m.strip()]
     plan = Plan(catalog, args.tier, families, only_models=only, backend=args.backend,
-                changed_models=changed)
+                required=required)
     ctx = Context(flm_bin=args.flm_bin, label=args.label, tier=args.tier, plan=plan,
                   out_dir=args.output_dir, request_timeout=args.request_timeout,
                   port=args.port, verbose=args.verbose,
@@ -131,13 +181,16 @@ def main(argv=None) -> int:
           f"suites: {', '.join(names)}" + (f", touched families: {', '.join(families)}"
                                            if families else "")
           + (f", backend: {args.backend}" if args.backend else "")
-          + (f", changed models: {', '.join(changed)}" if args.backend and changed else ""))
+          + (f", new models: {', '.join(required)}" if required else ""))
     try:
         if catalog_error:
             print(catalog_error)
             ctx.record(Result("setup", "catalog", FAIL, detail=catalog_error))
         else:
             # A model larger than the runner's memory would only fail to load.
+            # A required one too is a skip, not a failure: a HIPEP machine
+            # without the limit (stx-halo) tests it.
+            too_big = set()
             if args.max_model_gb > 0:
                 for model_id in plan.planned(names):
                     size_gb = plan.model(model_id).size / 1e9
@@ -146,6 +199,7 @@ def main(argv=None) -> int:
                                           f"{size_gb:.1f} GB, larger than this runner holds "
                                           f"(--max-model-gb {args.max_model_gb:g})"))
                         plan.unavailable.add(model_id)
+                        too_big.add(model_id)
             # Pulled first, a download counts against no request's timeout: flm
             # serve downloads a missing model inside the request that names it,
             # and every request behind that one waits too.
@@ -153,12 +207,17 @@ def main(argv=None) -> int:
             # checks their files against the pinned hashes and replaces any
             # that do not match, which `flm list` does not. That takes minutes
             # per model, so one a pull on this runner verified before, whose
-            # pins and files have not changed since, is not pulled again.
+            # pins and files have not changed since, is not pulled again;
+            # except a required one: the change adds or edits it, perhaps in
+            # a way the pins do not cover (a raised flm_min_version).
+            check_required(ctx, plan, names, too_big)
             missing = plan.missing(names, everything=bool(args.backend))
             cache = ModelCache.open(args.flm_bin) if args.backend else None
             verified = {}
             if cache is not None:
                 for model_id in missing:
+                    if model_id in plan.required:
+                        continue
                     when = cache.verified(model_id) if plan.model(model_id).installed else None
                     if when:
                         verified[model_id] = when
@@ -170,6 +229,18 @@ def main(argv=None) -> int:
                                       f"not pulled: verified {when}, and neither its pins nor "
                                       f"its files changed since", data={"cached": True}))
                 missing = [m for m in missing if m not in verified]
+            # The models the change adds first, with no budget: a large new
+            # model must not go untested because it is new to the runner.
+            new = [m for m in missing if m in plan.required]
+            missing = [m for m in missing if m not in plan.required]
+            if new:
+                limit = args.required_pull_budget * 60
+                print(f"\n== setup: download the models this change adds "
+                      f"({args.required_pull_budget:g} min for all): {', '.join(new)}", flush=True)
+                started_pull = time.monotonic()
+                ctx.pull(new, limit, limit, required=True)
+                print(f"== setup done in {time.monotonic() - started_pull:.0f}s", flush=True)
+                stamp(cache, plan, new)
             if missing:
                 budget = pull_budget(args)
                 limit = f"{budget / 60:g}-min budget" if budget else "no time limit"
@@ -179,12 +250,7 @@ def main(argv=None) -> int:
                 started_pull = time.monotonic()
                 ctx.pull(missing, PULL_TIMEOUT, budget)
                 print(f"== setup done in {time.monotonic() - started_pull:.0f}s", flush=True)
-                if cache is not None:
-                    for model_id in missing:
-                        why = "" if model_id in plan.unavailable else cache.stamp(model_id)
-                        if why:
-                            print(f"  [setup] {model_id}: not remembered as verified ({why})",
-                                  flush=True)
+                stamp(cache, plan, missing)
             for name in names:
                 ctx.run_suite(SUITES[name])
     finally:

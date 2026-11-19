@@ -113,6 +113,17 @@ def schema_keywords(api: Api) -> None:
 
 
 @case
+def schema_unanchored_pattern(api: Api) -> None:
+    """An unanchored pattern only has to match somewhere in the string."""
+    schema = {"type": "object", "properties": {"city": {"type": "string", "pattern": "\\S"}},
+              "required": ["city"], "additionalProperties": False}
+    body = api.body(user("Which city is the capital of France? Answer as JSON."),
+                    response_format=json_schema_format("city", schema), max_tokens=64)
+    _, value = nonstream_json(api, body, schema)
+    expect("paris" in value["city"].lower(), f"the pattern \\S did not leave room for the city: {value['city']!r}")
+
+
+@case
 def schema_stream(api: Api) -> None:
     """json_schema, streamed: the folded content validates."""
     body = api.body(user("Bob orders 2 apples and 3 pears. Extract the order."),

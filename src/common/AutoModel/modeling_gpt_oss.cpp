@@ -147,6 +147,19 @@ bool GPT_OSS::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
         header_print("WARNING", "No messages or prompt provided");
         return false;
     }
+    // On OGA a request with images is refused, not answered without them. A
+    // ModelRequestError: the handlers turn only that into an HTTP 400.
+    if (this->backend_id() == flm::backend::kOgaHipepBackendId) {
+        bool images = !input.images.empty();
+        for (const auto& message : input.messages) {
+            images = images || (message.contains("images") && !message["images"].empty());
+        }
+        if (images) {
+            throw ModelRequestError(400, false,
+                "the loaded backend '" + this->backend_id() + "' does not accept image input",
+                "invalid_request_error");
+        }
+    }
     if (!input.messages.empty()) { // already a formated messages, usually from REST API
         templated_text = this->apply_chat_template(input.messages);
         //templated_text = this->apply_chat_template(input.messages, input.tools);

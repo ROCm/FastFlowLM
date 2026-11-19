@@ -24,9 +24,18 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              runs, or a changed file is oga-hipep code, a GPU catalog entry,
              the frontend of a family with a GPU entry, or a test of the chat,
              api and shutdown suites that job runs
+  new_models comma-separated NPU catalog entries (model ids) the change adds,
+             or whose weights it points at another package (name or url):
+             entries no runner has yet. The test jobs download them whatever
+             their size, outside the pr tier's download budget, and fail if
+             they cannot; only entries an NPU2 (aie2p) runner can run
   hipep_models
-             comma-separated oga-hipep models whose catalog entries were added
-             or edited, which Test Windows HIPEP tests too
+             comma-separated oga-hipep entries (model ids) the change adds or
+             edits in model_list.json or model_info.json, new weights or not
+             (an edit names no family for the GPU, so this is how one gets
+             tested). Test Windows HIPEP requires them, as the NPU jobs do
+             new_models: downloaded whatever their size, and a failure if
+             they cannot be
   summary    one line for the job log
 
 When in doubt it tests more: an all-zero or missing base (a new branch), or a
@@ -112,6 +121,9 @@ ENGINES = {
     ("gemma_embedding",):                    ("embed-gemma",),
     ("d3",):                                 ("d3",),
     ("whisper",):                            ("whisper-v3",),
+    # r2t2 (Confucius4-R2T2) runs on the qwen3_asr engine; qwen3_asr_stream is
+    # its streaming frontend.
+    ("qwen3_asr", "qwen3_asr_stream"):       ("r2t2",),
     # Built but registered for no catalog family.
     ("qwen3_5_omni",):                       (),
 }
@@ -174,6 +186,11 @@ ASR_ONLY = re.compile(
     r"^(src/(common|include)/whisper/"
     r"|src/xclbins/Whisper-V3-Turbo-NPU2/"
     r"|src/lib/(xrt|hrx)/[^/]*whisper_npu"
+    r"|src/(common|include)/models/qwen3_asr/"
+    r"|src/(common|include)/AutoModel/modeling_qwen3_asr[^/]*\.(cpp|hpp)$"
+    r"|src/xclbins/Confucius4-R2T2-NPU2/"
+    r"|src/lib/(xrt|hrx)/[^/]*qwen3_asr_npu"
+    r"|src/test/qwen3_asr[^/]*/"
     r"|src/(common|include)/audio_process_utils/"
     r"|src/(common|include)/audio/"
     r"|src/common/AutoModel/[^/]*_audio\.cpp$"
@@ -279,7 +296,10 @@ class Decision:
     suites: Optional[set] = field(default_factory=set)
     # A changed file reaches an oga-hipep model (every suite running does too).
     hipep: bool = False
-    # The oga-hipep entries added or edited in the head catalog.
+    # NPU catalog entries no runner has yet (see new_downloads).
+    new_models: list = field(default_factory=list)
+    # The oga-hipep entries added or edited in the head catalog, which include
+    # those with new weights (new_downloads' GPU half).
     gpu_models: set = field(default_factory=set)
     reasons: list = field(default_factory=list)
 
@@ -291,6 +311,13 @@ class Decision:
     def add_suites(self, names: set) -> None:
         if self.suites is not None:
             self.suites |= names
+
+    def add_new_downloads(self, path: str, npu: list, gpu: list) -> None:
+        self.new_models = sorted(set(self.new_models) | set(npu))
+        self.gpu_models |= set(gpu)
+        if npu or gpu:
+            self.reasons.append(f"{path}: new weights, tested whatever their size: "
+                                + ", ".join(npu + gpu))
 
     def reach_hipep(self, reason: str) -> None:
         self.hipep = True
@@ -309,7 +336,11 @@ class Decision:
         parts.append("families in full: " + (", ".join(sorted(self.families)) or "none"))
         parts.append("ASR: whole set" if self.asr_full else "ASR: pr subset")
         parts.append("suites: " + self.suites_value().replace(",", ", "))
+        if self.new_models:
+            parts.append("new models: " + ", ".join(self.new_models))
         parts.append(hipep)
+        if self.gpu_models:
+            parts.append("GPU models added or edited: " + ", ".join(sorted(self.gpu_models)))
         return "; ".join(parts)
 
     def suites_value(self) -> str:
@@ -325,6 +356,7 @@ class Decision:
                 "asr_full": str(self.asr_full).lower(),
                 "suites": self.suites_value(),
                 "hipep": str(self.runs_hipep()).lower(),
+                "new_models": ",".join(self.new_models),
                 "hipep_models": ",".join(sorted(self.gpu_models)),
                 "summary": self.summary()}
 
@@ -377,6 +409,43 @@ def catalog_diff(base: dict[str, dict], head: dict[str, dict]) -> tuple[set, lis
     return fams - {""}, gpu
 
 
+# The NPU the self-hosted test runners have. A new entry for another NPU only
+# (a dev04 corelib entry) is one `flm list` leaves out there, so no runner can
+# test it.
+RUNNER_PLATFORMS = {"aie2p"}
+# The fields that decide what an entry downloads: a change to any is weights
+# no runner has yet. A raised flm_min_version marks a downloaded copy outdated
+# (model_downloader.cpp), so flm pull fetches the files again; that and new
+# model_info.json hashes are how republished weights ship.
+DOWNLOAD_FIELDS = ("name", "url", "file_url", "files", "flm_min_version")
+
+
+def split_downloads(ids: Iterable[str], head: dict[str, dict]) -> tuple[list, list]:
+    """(NPU, GPU) ids of head catalog entries, NPU ones only if a runner's NPU
+    can run them."""
+    npu, gpu = [], []
+    for mid in sorted(set(ids)):
+        entry = head.get(mid)
+        if entry is None:
+            continue
+        if runs_on_gpu(mid, entry):
+            gpu.append(mid)
+            continue
+        platforms = entry.get("supported_platforms")
+        if not platforms or RUNNER_PLATFORMS & set(platforms):
+            npu.append(mid)
+    return npu, gpu
+
+
+def new_downloads(base: dict[str, dict], head: dict[str, dict]) -> tuple[list, list]:
+    """(NPU, GPU) model ids whose weights no runner has yet: entries the head
+    catalog adds, or whose download fields it changes."""
+    return split_downloads(
+        (mid for mid, entry in head.items()
+         if base.get(mid) is None
+         or any(base[mid].get(k) != entry.get(k) for k in DOWNLOAD_FIELDS)), head)
+
+
 def split_entry(mid: str, sides: list, fams: set, gpu: list) -> None:
     """Files one changed entry: under GPU entries if it is on the GPU on any
     side (Test Windows HIPEP runs it), and under its NPU family unless it is
@@ -396,9 +465,10 @@ def catalog_fields_diff(base_text: str, head_text: str) -> list[str]:
 
 
 def model_info_diff(base_text: Optional[str], head_text: Optional[str],
-                    catalogs: Iterable[dict[str, dict]]) -> Optional[tuple[set, list]]:
-    """Families with an NPU entry whose model_info.json entry changed, and the
-    GPU entries whose one did. Keys are model ids or a catalog entry's
+                    catalogs: Iterable[dict[str, dict]]) -> Optional[tuple[set, list, list]]:
+    """Families with an NPU entry whose model_info.json entry changed, the GPU
+    entries whose one did, and every catalog id whose one did (new file
+    hashes: weights no runner has). Keys are model ids or a catalog entry's
     model_info_key."""
     try:
         base = json.loads(base_text) if base_text else {}
@@ -416,7 +486,7 @@ def model_info_diff(base_text: Optional[str], head_text: Optional[str],
     fams, gpu = set(), []
     for mid, entries in sorted(hits.items()):
         split_entry(mid, entries, fams, gpu)
-    return fams - {""}, gpu
+    return fams - {""}, gpu, sorted(hits)
 
 
 def add_catalog_change(d: Decision, path: str, fams: set, gpu: list,
@@ -567,6 +637,7 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
                 d.all_suites(MODEL_LIST)
             add_catalog_change(d, MODEL_LIST, *catalog_diff(base, head_catalog), head_catalog,
                                "no family (top-level fields only)")
+            d.add_new_downloads(MODEL_LIST, *new_downloads(base, head_catalog))
     if MODEL_INFO in code:
         diff = None
         if git:
@@ -576,7 +647,9 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
             d.reasons.append(f"{MODEL_INFO} changed but cannot be compared; no family added for it")
             d.all_suites(MODEL_INFO)
         else:
-            add_catalog_change(d, MODEL_INFO, *diff, head_catalog, "no family")
+            fams, gpu, ids = diff
+            add_catalog_change(d, MODEL_INFO, fams, gpu, head_catalog, "no family")
+            d.add_new_downloads(MODEL_INFO, *split_downloads(ids, head_catalog))
 
     # A family the head catalog lacks (removed, or never listed) has no model
     # the plan could run.

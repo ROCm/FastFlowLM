@@ -114,6 +114,8 @@ struct FakeOga {
     std::vector<std::string> processed_prompts;
     /// \brief image counts handed to OgaLoadImagesFromBuffers
     std::vector<std::size_t> loaded_images;
+    /// \brief the input_ids OgaProcessorProcessImages returns
+    std::vector<std::int32_t> processor_ids{7, 8, 9};
     std::optional<std::string> fail_registration;
 };
 
@@ -377,10 +379,10 @@ OgaResult* OGA_API_CALL FakeProcessImages(const OgaMultiModalProcessor*, const c
     auto* named = new OgaNamedTensors;
     OgaTensor ids;
     ids.type = OgaElementType_int32;
-    ids.shape = {1, 3};
-    const std::int32_t tokens[] = {7, 8, 9};
-    ids.data.resize(sizeof(tokens));
-    std::memcpy(ids.data.data(), tokens, sizeof(tokens));
+    const std::vector<std::int32_t>& tokens = g_fake.processor_ids;
+    ids.shape = {1, static_cast<std::int64_t>(tokens.size())};
+    ids.data.resize(tokens.size() * sizeof(std::int32_t));
+    std::memcpy(ids.data.data(), tokens.data(), ids.data.size());
     named->tensors.emplace("input_ids", std::move(ids));
     OgaTensor pixels;
     pixels.type = OgaElementType_float16;
@@ -471,14 +473,13 @@ std::unique_ptr<flm::oga::OgaEngine> MakeEngineOn(flm::oga::FileVersion version,
     return ConstructOn(FakeApi(std::move(symbols), {"test", {}, version}));
 }
 
-/// \brief 2x2 patches to an image token, 4 values to a patch, 64 patches to a prompt
+/// \brief 2x2 patches to an image token, 4 values to a patch
 flm::oga::OgaVisionConfig VisionConfig() {
     flm::oga::OgaVisionConfig config;
     config.image_token_id = kImageToken;
     config.vision_start_token_id = kVisionStart;
     config.spatial_merge_size = 2;
     config.patch_values = kPatchValues;
-    config.max_patches = 64;
     return config;
 }
 
@@ -1088,30 +1089,22 @@ void TestTheSlotCountFitsTheBudget() {
     TEST_REQUIRE(g_fake.last_max_length == 32);
 }
 
-void TestAnImagePromptRunsInOneSetInputsAfterAWarmUp() {
+void TestAnImagePromptRunsInOneSetInputs() {
     auto engine = MakeVisionEngine();
     const auto image = Image(4, 4);
     flm::oga::OgaVisionInput vision{{image}};
     std::vector<int> prompt = WithImage({1}, image, {2});
     RequireRan(engine->prefill(prompt, &vision), prompt);
-    TEST_REQUIRE(g_fake.set_inputs.size() == 2);
-    // the warm-up: blank pixels, at the most patches a prompt may have
-    const auto& warm = g_fake.set_inputs[0];
-    TEST_REQUIRE(warm.ids.size() == 17);
-    TEST_REQUIRE(warm.ids.front() == kVisionStart);
-    TEST_REQUIRE(std::count(warm.ids.begin(), warm.ids.end(), kImageToken) == 16);
-    TEST_REQUIRE(warm.pixel_shape == (std::vector<std::int64_t>{64, kPatchValues}));
-    TEST_REQUIRE(std::all_of(warm.pixels.begin(), warm.pixels.end(), [](std::uint16_t v) { return v == 0; }));
-    TEST_REQUIRE(warm.grids == (std::vector<std::int64_t>{1, 8, 8}));
-    TEST_REQUIRE(warm.image_tokens == (std::vector<std::int64_t>{16}));
-    const auto& run = g_fake.set_inputs[1];
+    // no warm-up pass before it: OGA 0.19 gives the same image features without one
+    TEST_REQUIRE(g_fake.set_inputs.size() == 1);
+    const auto& run = g_fake.set_inputs[0];
     TEST_REQUIRE(run.ids == prompt);
     TEST_REQUIRE(run.pixel_shape == (std::vector<std::int64_t>{16, kPatchValues}));
     TEST_REQUIRE(run.pixels == image.pixels);
     TEST_REQUIRE(run.grids == (std::vector<std::int64_t>{1, 4, 4}));
     TEST_REQUIRE(run.image_tokens == (std::vector<std::int64_t>{4}));
     TEST_REQUIRE(g_fake.appends.empty());
-    TEST_REQUIRE(g_fake.generators_created == 2);
+    TEST_REQUIRE(g_fake.generators_created == 1);
     TEST_REQUIRE(g_fake.generators_live == 1);
 
     // what follows the image continues the same generator
@@ -1119,7 +1112,7 @@ void TestAnImagePromptRunsInOneSetInputsAfterAWarmUp() {
     RequireRan(engine->prefill(more), Concat(prompt, more));
     RequireRan(engine->forward(5), Concat(prompt, {3, 4, 5}));
     TEST_REQUIRE(g_fake.appends == (std::vector<Tokens>{{3, 4}, {5}}));
-    TEST_REQUIRE(g_fake.generators_created == 2);
+    TEST_REQUIRE(g_fake.generators_created == 1);
     TEST_REQUIRE(engine->replayed_tokens() == 0);
 }
 
@@ -1147,8 +1140,8 @@ void TestANewImageReplaysTheHistoryWithEveryImage() {
     std::vector<int> turn2 = WithImage({4}, second, {5});
     const auto all = Concat(Concat(turn1, {3}), turn2);
     RequireRan(engine->prefill(turn2, &two), all);
-    // the warm-up, the first turn and the replay: the vision model warms up once
-    TEST_REQUIRE(g_fake.set_inputs.size() == 3);
+    // the first turn and the replay
+    TEST_REQUIRE(g_fake.set_inputs.size() == 2);
     const auto& replay = g_fake.set_inputs.back();
     TEST_REQUIRE(replay.ids == all);
     TEST_REQUIRE(replay.grids == (std::vector<std::int64_t>{1, 4, 4, 1, 2, 4}));
@@ -1174,7 +1167,7 @@ void TestARestoredCheckpointBringsBackItsImages() {
     std::vector<int> turn{5};
     const auto expected = Concat(prompt, turn);
     RequireRan(engine->prefill(turn), expected);
-    TEST_REQUIRE(g_fake.set_inputs.size() == 3);
+    TEST_REQUIRE(g_fake.set_inputs.size() == 2);
     TEST_REQUIRE(g_fake.set_inputs.back().ids == expected);
     TEST_REQUIRE(g_fake.set_inputs.back().pixels == image.pixels);
     TEST_REQUIRE(engine->replayed_tokens() == prompt.size());
@@ -1183,7 +1176,7 @@ void TestARestoredCheckpointBringsBackItsImages() {
     engine->clear_context();
     std::vector<int> text{1, 2};
     RequireRan(engine->prefill(text), text);
-    TEST_REQUIRE(g_fake.set_inputs.size() == 3);
+    TEST_REQUIRE(g_fake.set_inputs.size() == 2);
     TEST_REQUIRE(g_fake.appends.back() == (Tokens{1, 2}));
 }
 
@@ -1217,7 +1210,7 @@ void TestAnotherImageOfTheSameSizeRebuildsTheGenerator() {
     engine->clear_context();
     std::vector<int> again = Concat(prompt, {3, 4});
     RequireRan(engine->prefill(again, &two), again);
-    TEST_REQUIRE(g_fake.set_inputs.size() == 3);
+    TEST_REQUIRE(g_fake.set_inputs.size() == 2);
     TEST_REQUIRE(g_fake.set_inputs.back().pixels == second.pixels);
     TEST_REQUIRE(g_fake.generators_live == 1);
     TEST_REQUIRE(engine->replayed_tokens() == 0);
@@ -1227,7 +1220,7 @@ void TestAnotherImageOfTheSameSizeRebuildsTheGenerator() {
     flm::oga::OgaVisionInput copy{{second}};
     std::vector<int> more = Concat(again, {5});
     RequireRan(engine->prefill(more, &copy), more);
-    TEST_REQUIRE(g_fake.set_inputs.size() == 3);
+    TEST_REQUIRE(g_fake.set_inputs.size() == 2);
     TEST_REQUIRE(g_fake.appends.back() == (Tokens{5}));
 }
 
@@ -1273,24 +1266,22 @@ void TestImageRunsAndImagesMustAgree() {
     TEST_REQUIRE(engine->get_current_context_length() == 0);
 }
 
-void TestTheImagesOfAPromptShareThePatchBudget() {
-    auto engine = MakeVisionEngine();
-    const auto big = Image(6, 6);
+void TestTheImagesOfAPromptHaveNoSharedPatchBudget() {
+    g_fake = FakeOga{};
+    auto engine = ConstructOn(FakeApi(FakeSymbols(), {"test", {}, {0, 19, 0, 0}}), 4096, 4096, VisionConfig());
+    // 4096 patches each, 8192 in one vision pass
+    const auto big = Image(64, 64);
     flm::oga::OgaVisionInput one{{big}};
     std::vector<int> turn1 = WithImage({1}, big, {2});
     engine->prefill(turn1, &one);
-    // the earlier image counts too: a rebuilt generator runs both at once
+    // a second image rebuilds the generator with both, each as it came
     std::vector<int> turn2 = WithImage({3}, big, {4});
-    RequireContains(RequireThrows<std::invalid_argument>([&] { engine->prefill(turn2, &one); }),
-                    "prompt images have 72 patches, more than the 64");
-    TEST_REQUIRE(engine->get_current_context_length() == static_cast<int>(turn1.size()));
-    TEST_REQUIRE(g_fake.set_inputs.size() == 2);
-
-    engine->clear_context();
-    flm::oga::OgaVisionInput two{{Image(4, 4), Image(6, 6)}};
-    std::vector<int> both = WithImage(WithImage({1}, two.images[0], {2}), two.images[1], {3});
-    RequireRan(engine->prefill(both, &two), both);
-    TEST_REQUIRE(g_fake.set_inputs.back().image_tokens == (std::vector<std::int64_t>{4, 9}));
+    engine->prefill(turn2, &one);
+    // (the fake's bf16 logits cannot count this many tokens exactly: check the inputs)
+    TEST_REQUIRE(engine->get_current_context_length() == static_cast<int>(turn1.size() + turn2.size()));
+    TEST_REQUIRE(g_fake.set_inputs.back().ids == Concat(turn1, turn2));
+    TEST_REQUIRE(g_fake.set_inputs.back().image_tokens == (std::vector<std::int64_t>{1024, 1024}));
+    TEST_REQUIRE(g_fake.set_inputs.back().pixel_shape == (std::vector<std::int64_t>{8192, kPatchValues}));
 }
 
 void TestSetContextLengthKeepsWholeImagesOnly() {
@@ -1331,7 +1322,10 @@ void TestAnInvalidVisionConfigurationIsRefused() {
     config.vision_start_token_id = config.image_token_id;
     RequireThrows<std::invalid_argument>([&] { ConstructOn(FakeApi(), 32, 64, config); });
     config = VisionConfig();
-    config.max_patches = 3;
+    config.spatial_merge_size = 0;
+    RequireThrows<std::invalid_argument>([&] { ConstructOn(FakeApi(), 32, 64, config); });
+    config = VisionConfig();
+    config.patch_values = 0;
     RequireThrows<std::invalid_argument>([&] { ConstructOn(FakeApi(), 32, 64, config); });
 }
 
@@ -1520,11 +1514,44 @@ void TestAStagedImagePromptTakesTheLeastRecentlyUsedSlot() {
 void TestAStagedImagePromptAlwaysBuildsANewGenerator() {
     auto engine = MakeSlotsEngine(2);
     RunStagedPrompt(*engine);
-    // The same ids again may carry other images: the processor's inputs run in a new generator.
+    // The same ids again: the slot has already run all of them, and sampling needs the logits
+    // of the last prompt token, so the processor's inputs run in a new generator.
     RunStagedPrompt(*engine);
     TEST_REQUIRE(g_fake.generators_created == 2);
     TEST_REQUIRE(g_fake.set_inputs.size() == 2);
     TEST_REQUIRE(g_fake.appends.empty());
+}
+
+void TestAStagedPromptThatExtendsASlotWithTheSameImagesAppendsTheRest() {
+    auto engine = MakeSlotsEngine(2);
+    RunStagedPrompt(*engine);
+    engine->forward(10);
+    // The next turn of the same conversation: the same image, and the tokens the slot ran first.
+    g_fake.processor_ids = {7, 8, 9, 10, 11, 12};
+    const std::uint64_t reused_before = engine->reused_tokens();
+    std::vector<int> ids = engine->StagePromptImages("see <image> again", {"PNG_FAKE"});
+    engine->clear_context();
+    RequireState(engine->prefill(ids), 6, 12, 57);
+    TEST_REQUIRE(g_fake.set_inputs.size() == 1);
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{11, 12}));
+    TEST_REQUIRE(g_fake.generators_created == 1);
+    TEST_REQUIRE(engine->reused_tokens() - reused_before == 4);
+    TEST_REQUIRE(engine->get_current_context_length() == 6);
+
+    // Another image under the same tokens: the processor's inputs run in a new generator.
+    g_fake.processor_ids = {7, 8, 9, 10, 11, 12, 13};
+    ids = engine->StagePromptImages("see <image> again", {"JPEGFAKE"});
+    engine->clear_context();
+    engine->prefill(ids);
+    TEST_REQUIRE(g_fake.set_inputs.size() == 2);
+    TEST_REQUIRE(g_fake.generators_created == 2);
+
+    // Tokens that leave the slot's path: a new generator too.
+    g_fake.processor_ids = {7, 8, 9, 30, 11, 12, 13, 14};
+    ids = engine->StagePromptImages("see <image> again", {"JPEGFAKE"});
+    engine->clear_context();
+    engine->prefill(ids);
+    TEST_REQUIRE(g_fake.set_inputs.size() == 3);
 }
 
 void TestAFailedStagedPrefillDropsOnlyItsSlot() {
@@ -2488,16 +2515,14 @@ void TestTheBackendRunsThePackagesImages() {
     flm::oga::OgaVisionInput vision{{image}};
     std::vector<int> prompt = WithImage({1}, image, {2});
     backend->engine().prefill(prompt, &vision);
-    TEST_REQUIRE(g_fake.set_inputs.size() == 2);
-    // the package's warm-up is the full budget: 90x90 patches
-    TEST_REQUIRE(g_fake.set_inputs[0].grids == (std::vector<std::int64_t>{1, 90, 90}));
-    TEST_REQUIRE(g_fake.set_inputs[0].pixel_shape == (std::vector<std::int64_t>{8100, 4}));
-    TEST_REQUIRE(g_fake.set_inputs[1].ids == prompt);
-    TEST_REQUIRE(g_fake.set_inputs[1].pixel_shape == (std::vector<std::int64_t>{4, 4}));
+    // the image runs in the prompt's own SetInputs, with no warm-up before it
+    TEST_REQUIRE(g_fake.set_inputs.size() == 1);
+    TEST_REQUIRE(g_fake.set_inputs[0].ids == prompt);
+    TEST_REQUIRE(g_fake.set_inputs[0].pixel_shape == (std::vector<std::int64_t>{4, 4}));
     TEST_REQUIRE(backend->replayed_tokens() == 0);
 }
 
-void TestGemma4UnifiedSharesThePresentBufferAndSkipsGraphCapture() {
+void TestGemma4UnifiedSkipsGraphCaptureAndKeepsThePackagesPresentBuffer() {
     g_fake = FakeOga{};
     const auto api = FakeApi();
     PackageDir package(kVocab, "<|im_end|>",
@@ -2505,7 +2530,7 @@ void TestGemma4UnifiedSharesThePresentBufferAndSkipsGraphCapture() {
                        "gemma4_unified");
     TEST_REQUIRE(flm::oga::OpenModel(*api, package.dir.path) != nullptr);
     TEST_REQUIRE(g_fake.overlays.size() == 2);
-    RequireContains(g_fake.overlays[1], R"("past_present_share_buffer":true)");
+    TEST_REQUIRE(g_fake.overlays[1].find("past_present_share_buffer") == std::string::npos);
     RequireContains(g_fake.overlays[1], R"("enable_graph_capture":"0")");
     RequireContains(g_fake.overlays[1], R"("hip_graph_enable":"0")");
     TEST_REQUIRE(g_fake.provider_options.size() == 6);
@@ -2518,7 +2543,7 @@ void TestGemma4UnifiedSharesThePresentBufferAndSkipsGraphCapture() {
     }
 }
 
-void TestAnotherModelTypeDoesNotShareThePresentBuffer() {
+void TestAnotherModelTypeTakesOnlyTheSessionOverlay() {
     g_fake = FakeOga{};
     const auto api = FakeApi();
     PackageDir package;
@@ -2534,7 +2559,6 @@ void TestTheGemma4UnifiedPackageStillRunsTextWithoutAVisionStartToken() {
                        R"(,"image_token_id":40,"vision":{"filename":"vision_encoder/model.onnx"})",
                        "gemma4_unified");
     auto backend = flm::oga::hipep_factory()(package.Context(64));
-    RequireContains(g_fake.overlays[1], R"("past_present_share_buffer":true)");
     std::vector<int> text{1, 2};
     backend->engine().prefill(text);
     TEST_REQUIRE(g_fake.appends.back() == (Tokens{1, 2}));
@@ -2674,7 +2698,7 @@ int main(int argc, char** argv) {
     RUN(TestAChunkedPromptReachesALongerSlot);
     RUN(TestAnOgaErrorDropsOnlyItsSlot);
     RUN(TestTheSlotCountFitsTheBudget);
-    RUN(TestAnImagePromptRunsInOneSetInputsAfterAWarmUp);
+    RUN(TestAnImagePromptRunsInOneSetInputs);
     RUN(TestAnImageRunCanStartAChunk);
     RUN(TestANewImageReplaysTheHistoryWithEveryImage);
     RUN(TestARestoredCheckpointBringsBackItsImages);
@@ -2682,7 +2706,7 @@ int main(int argc, char** argv) {
     RUN(TestAnotherImageOfTheSameSizeRebuildsTheGenerator);
     RUN(TestOga019DoesNotRewindToAnotherImageOfTheSameSize);
     RUN(TestImageRunsAndImagesMustAgree);
-    RUN(TestTheImagesOfAPromptShareThePatchBudget);
+    RUN(TestTheImagesOfAPromptHaveNoSharedPatchBudget);
     RUN(TestSetContextLengthKeepsWholeImagesOnly);
     RUN(TestAPackageWithoutVisionTakesNoImages);
     RUN(TestAnInvalidVisionConfigurationIsRefused);
@@ -2692,12 +2716,13 @@ int main(int argc, char** argv) {
     RUN(TestARefusedRegistrationNamesTheLibrary);
     RUN(TestANonAsciiLibraryPathIsRefusedBeforeOgaSeesIt);
     RUN(TestOpenModelPutsTheDecoderOnTheRegisteredEpAlone);
-    RUN(TestGemma4UnifiedSharesThePresentBufferAndSkipsGraphCapture);
-    RUN(TestAnotherModelTypeDoesNotShareThePresentBuffer);
+    RUN(TestGemma4UnifiedSkipsGraphCaptureAndKeepsThePackagesPresentBuffer);
+    RUN(TestAnotherModelTypeTakesOnlyTheSessionOverlay);
     RUN(TestAStagedImagePromptIsTheNextPrefill);
     RUN(TestADroppedOrRefusedStageDoesNotReachTheNextPrefill);
     RUN(TestAStagedImagePromptTakesTheLeastRecentlyUsedSlot);
     RUN(TestAStagedImagePromptAlwaysBuildsANewGenerator);
+    RUN(TestAStagedPromptThatExtendsASlotWithTheSameImagesAppendsTheRest);
     RUN(TestAFailedStagedPrefillDropsOnlyItsSlot);
     RUN(TestStagingImagesNamesAMissingProcessorEntry);
     RUN(TestTheGemma4UnifiedPackageStillRunsTextWithoutAVisionStartToken);

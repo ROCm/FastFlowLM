@@ -136,7 +136,7 @@ function(add_npu_test TARGET_NAME OUTPUT_SUBDIR)
         tokenizers_c
         sentencepiece
         ntdll wsock32 ws2_32 Bcrypt
-        iphlpapi userenv psapi
+        iphlpapi userenv psapi synchronization
     )
     if(NPU_TEST_USE_AUTOMODEL)
         target_link_libraries(${TARGET_NAME} PRIVATE flm_xgrammar)

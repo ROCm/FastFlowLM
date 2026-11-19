@@ -12,8 +12,11 @@ exercises the engine, and the families a change touches run in full.
 
 A GPU backend run (--backend) tests that backend's models instead: one per
 family on the install and pr tiers (PR_GPU; some families only when the
-change touches them), plus those whose catalog entries the change touched
-(--changed-models), and every one on the full tier.
+change touches them), and every one on the full tier.
+
+Every tier also tests the models the change requires (--required-models):
+for the NPU, the entries it adds or whose weights it republishes; for a GPU
+backend, the entries it adds or edits.
 """
 
 from __future__ import annotations
@@ -44,9 +47,15 @@ PR_CHAT = {
     "qwen3.5": "qwen3.5:0.8b",
     "minicpm-v-4.7": "minicpm-v-4.7:1b",
     "minicpm-ocr": "minicpm-ocr:1.0",
-    "qwen3.6-moe": None,      # 35 GB
-    "qwen3.8-mtp": None,      # 27 GB, ~2 tok/s
-    "qwen3.8-dflash2": None,   # needs the 27 GB qwen3.8-mtp:27b package; runs when the change touches it
+    # Large, but on their own engines and among the most used: their six chat
+    # cases took 80-110 s per package in the nightly run of 2026-11-18, and
+    # the runners keep the weights, so they are tested on every change.
+    "qwen3.6-moe": "qwen3.6-moe:35b-a3b",
+    "qwen3.8-mtp": "qwen3.8-mtp:27b",
+    # The qwen3.8-mtp engine with a draft package (Qwen3_8DFlash2 derives from
+    # Qwen3_8MTP), which qwen3.8-mtp:27b already covers; up to 3 min on Windows.
+    "qwen3.8-dflash2": None,
+    "minicpm-v-4.7-moe": None,  # 22 GB, the only model of its engine; runs when the change touches it
     "lfm2": "lfm2:1.2b",
     "lfm3": "lfm3:1.7b",
     "lfm2.5-tk": "lfm2.5-tk:1.2b",
@@ -222,7 +231,7 @@ def load_catalog(flm_bin: str,
 class Plan:
     def __init__(self, catalog: dict[str, Model], tier: str, families: list[str],
                  only_models: list[str] | None = None, backend: str = "",
-                 changed_models: list[str] | None = None):
+                 required: list[str] | None = None):
         if tier not in TIERS:
             raise ValueError(f"unknown tier {tier!r}")
         if backend and backend not in GPU_BACKENDS:
@@ -232,7 +241,10 @@ class Plan:
         self.families = set(families)
         self.only_models = only_models
         self.backend = backend  # empty: the NPU backends
-        self.changed_models = list(changed_models or [])
+        # Models the change adds (changes.py new_models), or for a GPU backend
+        # run the entries it adds or edits (hipep_models): tested on every
+        # tier, even past --models, and downloaded whatever their size.
+        self.required = list(required or [])
         # Models no suite tests: ones the run could not pull (Context.pull), or
         # larger than the runner holds (--max-model-gb).
         self.unavailable: set[str] = set()
@@ -241,6 +253,10 @@ class Plan:
         """Whether the backend under test runs this model, and it is not unavailable."""
         if model_id in self.unavailable:
             return False
+        return self.backend_serves(model_id)
+
+    def backend_serves(self, model_id: str) -> bool:
+        """Whether the backend under test runs this catalog model."""
         backend = self.catalog[model_id].backend
         return backend == self.backend if self.backend else backend not in GPU_BACKENDS
 
@@ -249,21 +265,28 @@ class Plan:
         out = []
         for model_id in ids:
             if model_id in self.catalog and model_id not in out and self._serves(model_id):
-                if not self.only_models or model_id in self.only_models:
+                if (not self.only_models or model_id in self.only_models
+                        or model_id in self.required):
                     out.append(model_id)
         return out
 
     def _family(self, family: str) -> list[str]:
         return [m.id for m in self.catalog.values() if m.family == family]
 
+    def _added(self, predicate) -> list[str]:
+        """The models the change adds that predicate accepts."""
+        return [m for m in self.required if m in self.catalog and predicate(self.catalog[m])]
+
     def _touched(self, predicate) -> list[str]:
+        """Models of the families the change touches, and the models it adds."""
         return [m.id for m in self.catalog.values()
-                if m.family in self.families and predicate(m)]
+                if (m.family in self.families or m.id in self.required) and predicate(m)]
 
     def chat(self) -> list[str]:
         # --models names exactly what to test, whatever the tier would pick.
         if self.only_models:
-            return [m for m in self.only_models if m in self.catalog and self._serves(m)
+            return [m for m in dict.fromkeys(self.only_models + self.required)
+                    if m in self.catalog and self._serves(m)
                     and self.catalog[m].family not in NON_CHAT_FAMILIES]
         if self.backend:
             models = [m for m in self.catalog.values()
@@ -277,9 +300,9 @@ class Plan:
                 smallest = min((m for m in models if m.family == family),
                                key=lambda m: (m.size, m.id))
                 picked.append(PR_GPU.get(family, smallest.id))
-            return self._known(picked + self.changed_models)
+            return self._known(picked + self.required)
         if self.tier == "install":
-            return self._known(INSTALL_CHAT)
+            return self._known(INSTALL_CHAT + self._added(lambda m: m.family not in NON_CHAT_FAMILIES))
         chat_models = [m for m in self.catalog.values() if m.family not in NON_CHAT_FAMILIES]
         if self.tier == "full":
             return self._known(m.id for m in chat_models)
@@ -310,7 +333,14 @@ class Plan:
                 "whisper": self._family("whisper-v3"),
             }[name]
         extra = []
-        if self.tier == "pr":
+        if self.tier == "install":
+            extra = {
+                "asr_chat": self._added(lambda m: m.asr and m.family != "whisper-v3"),
+                "decision": self._added(lambda m: m.family == "d3"),
+                "embedding": self._added(lambda m: m.family == "embed-gemma"),
+                "whisper": self._added(lambda m: m.family == "whisper-v3"),
+            }.get(name, [])
+        elif self.tier == "pr":
             extra = {
                 "asr_chat": self._touched(lambda m: m.asr and m.family != "whisper-v3"),
                 "decision": self._touched(lambda m: m.family == "d3"),

@@ -171,7 +171,7 @@ if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/test_gemma4_tokenizer.cpp")
             "${FLM_SENTENCEPIECE_LIB}"
             # What the Rust staticlib needs on Windows -- copied from
             # third_party/tokenizers-cpp/CMakeLists.txt's own list.
-            ntdll wsock32 ws2_32 Bcrypt iphlpapi userenv psapi)
+            ntdll wsock32 ws2_32 Bcrypt iphlpapi userenv psapi synchronization)
         add_test(NAME test_gemma4_tokenizer COMMAND test_gemma4_tokenizer)
         # Opt-in on the real packages: without them it exits 77, a skip.
         set_tests_properties(test_gemma4_tokenizer PROPERTIES SKIP_RETURN_CODE 77)

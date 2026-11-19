@@ -32,11 +32,18 @@ name: Build and Test
 #
 # Tiers (.github/script/npu_test/plan.py): pull requests and pushes run the pr
 # tier, one model per engine family plus every model of a family the change
-# touches; the nightly run tests every model. A change that only touches docs
-# builds and tests nothing. The portable test jobs and Test Windows HIPEP get
-# 120 minutes on the pr tier and 360 on the full one, which runs every model
-# and every d3 size and may first download tens of GB of weights; HIPEP also
-# gets 360 where it tests the models whose catalog entries the change edited.
+# touches; the nightly run tests every model. A model the change adds to
+# src/model_list.json, or whose weights it republishes (new files, hashes in
+# src/model_info.json, or a raised flm_min_version), is tested whatever its
+# size: the test jobs get 600 minutes, of which the new models' downloads get
+# up to 420 outside the pr tier's 30-minute budget, and one that does not
+# download fails the job. An oga-hipep entry the change adds or edits, new
+# weights or not, is required the same way in Test Windows HIPEP, beside its
+# models of each family, on the kinds of machine that test changed models
+# (the STX Halo). A change that only touches docs builds and tests nothing.
+# The portable test jobs and Test Windows HIPEP otherwise get 120 minutes on
+# the pr tier and 360 on the full one, which runs every model and every d3
+# size and may first download tens of GB of weights.
 #
 # A dispatch can name the models to test (models, e.g. qwen3.5-oga-hipep:9b):
 # every test job then runs only those, so a package without them runs
@@ -110,6 +117,7 @@ jobs:
       source: ${{ steps.detect.outputs.source }}
       hipep: ${{ steps.detect.outputs.hipep }}
       hipep-machines: ${{ steps.hipep.outputs.machines }}
+      new-models: ${{ steps.detect.outputs.new-models }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -144,6 +152,13 @@ jobs:
       - name: Check npu_test imports on Linux
         working-directory: .github/script
         run: python3 -m npu_test --help > /dev/null
+
+      # The change-detection tests, including the ones that check its engine
+      # table and the pr tier's model table against src/model_list.json, so a
+      # model family added without them fails here, not silently later.
+      - name: Test change detection and the test plan
+        working-directory: .github/script
+        run: python3 -m unittest discover -s ci -p 'test_*.py' -t ci
 
   # ── NPU approval gate ────────────────────────────────────────────────────
   # The NPU runners are few, so pull requests from anyone outside the core
@@ -304,7 +319,7 @@ jobs:
       && needs.build-lin-xrt-portable.result == 'success'
       && (needs.changes.outputs.suites != 'none') }}
     runs-on: [self-hosted, linux, x64, npu, sweep]
-    timeout-minutes: ${{ needs.changes.outputs.tier == 'full' && 360 || 120 }}
+    timeout-minutes: ${{ needs.changes.outputs.new-models != '' && 600 || needs.changes.outputs.tier == 'full' && 360 || 120 }}
     steps:
       - &checkout-tests
         name: Checkout test scripts
@@ -333,6 +348,7 @@ jobs:
         with:
           flm-bin: ${{ steps.package.outputs.flm-bin }}
           label: linux-xrt-portable
+          required-models: ${{ needs.changes.outputs.new-models }}
           tier: ${{ needs.changes.outputs.tier }}
           suites: ${{ needs.changes.outputs.suites }}
           families: ${{ needs.changes.outputs.families }}
@@ -352,7 +368,7 @@ jobs:
       && needs.build-lin-hrx-portable.result == 'success'
       && (needs.changes.outputs.hrx-suites != '') }}
     runs-on: [self-hosted, linux, x64, npu, sweep]
-    timeout-minutes: ${{ needs.changes.outputs.tier == 'full' && 360 || 120 }}
+    timeout-minutes: ${{ needs.changes.outputs.new-models != '' && 600 || needs.changes.outputs.tier == 'full' && 360 || 120 }}
     steps:
       - *checkout-tests
       - name: Download package
@@ -371,6 +387,7 @@ jobs:
         with:
           flm-bin: ${{ steps.package.outputs.flm-bin }}
           label: linux-hrx-portable
+          required-models: ${{ needs.changes.outputs.new-models }}
           tier: ${{ needs.changes.outputs.tier }}
           suites: ${{ needs.changes.outputs.hrx-suites }}
           families: ${{ needs.changes.outputs.families }}
@@ -599,7 +616,7 @@ jobs:
       && needs.build-win-xrt.result == 'success'
       && (needs.changes.outputs.suites != 'none') }}
     runs-on: [self-hosted, windows, x64, npu, sweep]
-    timeout-minutes: ${{ needs.changes.outputs.tier == 'full' && 360 || 120 }}
+    timeout-minutes: ${{ needs.changes.outputs.new-models != '' && 600 || needs.changes.outputs.tier == 'full' && 360 || 120 }}
     steps:
       - *checkout-tests
       - name: Download package
@@ -618,6 +635,7 @@ jobs:
         with:
           flm-bin: ${{ steps.package.outputs.flm-bin }}
           label: windows-xrt
+          required-models: ${{ needs.changes.outputs.new-models }}
           tier: ${{ needs.changes.outputs.tier }}
           suites: ${{ needs.changes.outputs.suites }}
           families: ${{ needs.changes.outputs.families }}
@@ -638,16 +656,20 @@ jobs:
   # the change touches their family); the full tier tests every one, where
   # the kind's max-tier allows (the shared runners test the pr tier's models
   # nightly).
-  # The models whose catalog entries the change added or edited run too, on
-  # the kinds whose changed-models allows it (the STX Halo, not the shared
-  # runners), with the full tier's time: their new revisions download within
-  # the job, and a change may add or re-pin many at once. Each kind skips
-  # the models larger than its memory holds (max-model-gb), and a dispatch
-  # that names models (models) tests only those. npu_test pulls the models
-  # first, outside the requests' timeouts, and they stay on the runner: only
-  # its first run, or a new revision of a model, downloads (about 33 GB for
-  # the pr tier's, 400 GB for all), and a model verified before whose pins and
-  # files are unchanged is not verified again.
+  # The models whose catalog entries the change added or edited
+  # (hipep-models) run too, as required models (--required-models), on the
+  # kinds whose changed-models allows it (the STX Halo, not the shared
+  # runners; every kind that runs when none of those does): they download
+  # first, with 420 minutes for all of them, a failure if one does not, and
+  # the job gets 600 minutes, as an NPU test job does for its new models. A
+  # change may add or re-pin many at once. Each kind skips the models larger
+  # than its memory holds (max-model-gb), required ones too, and a dispatch
+  # that names models (models) tests only those and the required ones.
+  # npu_test pulls the models first, outside the requests' timeouts, and they
+  # stay on the runner: only its first run, or a new revision of a model,
+  # downloads (about 33 GB for the pr tier's, 400 GB for all), and a model
+  # verified before whose pins and files are unchanged is not verified again
+  # (a required one always is).
   test-win-hipep:
     name: Test Windows HIPEP (${{ matrix.id }})
     needs: [changes, build-win-xrt, npu-gate]
@@ -667,7 +689,7 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.changes.outputs.hipep-machines) }}
     runs-on: ${{ matrix.runs-on }}
-    timeout-minutes: ${{ (matrix.tier == 'full' || matrix.changed-models != '') && 360 || 120 }}
+    timeout-minutes: ${{ matrix.changed-models != '' && 600 || matrix.tier == 'full' && 360 || 120 }}
     steps:
       - *checkout-tests
       - name: Download package
@@ -712,8 +734,8 @@ jobs:
           suites: chat,api,shutdown
           families: ${{ needs.changes.outputs.families }}
           models: ${{ inputs.models }}
+          required-models: ${{ matrix.changed-models }}
           backend: oga-hipep
-          changed-models: ${{ matrix.changed-models }}
           max-model-gb: ${{ matrix.max-model-gb }}
 
   test-win-hrx:
@@ -728,7 +750,7 @@ jobs:
       && needs.build-win-hrx.result == 'success'
       && (needs.changes.outputs.hrx-suites != '') }}
     runs-on: [self-hosted, windows, x64, npu, sweep]
-    timeout-minutes: ${{ needs.changes.outputs.tier == 'full' && 360 || 120 }}
+    timeout-minutes: ${{ needs.changes.outputs.new-models != '' && 600 || needs.changes.outputs.tier == 'full' && 360 || 120 }}
     steps:
       - *checkout-tests
       - name: Download package
@@ -747,6 +769,7 @@ jobs:
         with:
           flm-bin: ${{ steps.package.outputs.flm-bin }}
           label: windows-hrx
+          required-models: ${{ needs.changes.outputs.new-models }}
           tier: ${{ needs.changes.outputs.tier }}
           suites: ${{ needs.changes.outputs.hrx-suites }}
           families: ${{ needs.changes.outputs.families }}

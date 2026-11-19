@@ -28,10 +28,16 @@ by a job of its own:
                    added or edited to the kinds that test them (true, the
                    default): a change to many entries downloads each new
                    revision within the job, which would hold a shared runner
-                   for hours
+                   for hours. The job requires them (npu_test
+                   --required-models): it downloads them whatever their size,
+                   and fails if one does not pull, bar one larger than its
+                   max-model-gb, a skip. When no kind that runs takes them
+                   (FLM_HIPEP_MACHINES names only kinds with false), every
+                   kind that runs does, with a warning, so that a change's
+                   models are never silently untested
 
 --tier is the run's tier; each machine in the matrix carries the tier its job
-runs. --changed-models, the change's (changes.py's hipep-models), goes to the
+runs. --changed-models, the change's (changes.py's hipep_models), goes to the
 machines that test them, and an empty list to the rest. --only, from the
 FLM_HIPEP_MACHINES repository variable, runs the named kinds instead of the
 enabled ones ("none" for none), to take one out or put it back without a
@@ -108,11 +114,19 @@ def tier_on(machine: dict, tier: str) -> str:
     return min(tier, machine["max-tier"], key=TIERS.index)
 
 
+def takes_changed(machines: list[dict]) -> set[str]:
+    """The ids of the machines that test the change's models: those whose
+    changed-models is true, or every one when none of them is."""
+    takers = {m["id"] for m in machines if m["changed-models"]}
+    return takers or {m["id"] for m in machines}
+
+
 def matrix(machines: list[dict], tier: str, changed: str = "") -> str:
     """The job matrix's include list, on one line for $GITHUB_OUTPUT."""
+    takers = takes_changed(machines)
     return json.dumps([{"id": m["id"], "runs-on": m["runs-on"], "max-model-gb": m["max-model-gb"],
                         "tier": tier_on(m, tier),
-                        "changed-models": changed if m["changed-models"] else ""}
+                        "changed-models": changed if m["id"] in takers else ""}
                        for m in machines],
                       separators=(",", ":"))
 
@@ -137,7 +151,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     chosen, unknown = pick(machines, args.only)
     for name in unknown:
         print(f"::warning::FLM_HIPEP_MACHINES names {name}, which {CONFIG} does not list")
-    value = matrix(chosen, args.tier, args.changed_models.strip())
+    changed = args.changed_models.strip()
+    if changed and not chosen:
+        print(f"::warning::no HIPEP machine runs, so nothing tests the oga-hipep models this "
+              f"change adds or edits: {changed}")
+    elif changed and not any(m["changed-models"] for m in chosen):
+        print(f"::warning::no HIPEP machine that runs tests changed models, so "
+              f"{', '.join(m['id'] for m in chosen)} test{'s' if len(chosen) == 1 else ''} "
+              f"them, bar those larger than its max-model-gb: {changed}")
+    value = matrix(chosen, args.tier, changed)
     names = [f"{m['id']} ({tier_on(m, args.tier)} tier)" for m in chosen]
     print(f"HIPEP machines: {', '.join(names) or 'none'}")
     print(f"machines={value}")

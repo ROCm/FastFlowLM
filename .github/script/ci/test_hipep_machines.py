@@ -104,6 +104,15 @@ class Pick(unittest.TestCase):
         self.assertEqual([(m["id"], m["changed-models"]) for m in rows],
                          [("stx-halo", "gemma3-oga-hipep:4b,gpt-oss-oga-hipep:120b"), ("npu-runners", "")])
 
+    def test_changed_models_go_to_every_kind_when_no_taker_runs(self):
+        """A change's models are required: with only kinds that leave them to
+        others running, those kinds test them (one larger than max-model-gb
+        is a skip there)."""
+        chosen, _ = hipep_machines.pick(self.MACHINES, "npu-runners")
+        rows = json.loads(hipep_machines.matrix(chosen, "pr", "gemma3-oga-hipep:4b"))
+        self.assertEqual([(m["id"], m["changed-models"]) for m in rows],
+                         [("npu-runners", "gemma3-oga-hipep:4b")])
+
     def test_max_tier(self):
         self.assertEqual(self.tiers("full"), [("stx-halo", "full"), ("npu-runners", "pr")])
         self.assertEqual(self.tiers("pr"), [("stx-halo", "pr"), ("npu-runners", "pr")])
@@ -129,6 +138,18 @@ class Cli(unittest.TestCase):
         key, value = lines[0].split("=", 1)
         self.assertEqual((key, [(m["id"], m["tier"], m["changed-models"]) for m in json.loads(value)]),
                          ("machines", [("stx-halo", "full", "gemma3-oga-hipep:4b"), ("npu-runners", "pr", "")]))
+
+    def test_changed_models_without_a_taker_warn(self):
+        code, out, lines = self.run_cli("--only", "npu-runners", "--changed-models", "gemma3-oga-hipep:4b",
+                                        text=config(machine("stx-halo", "stx-halo"), NPU_RUNNERS))
+        self.assertEqual(code, 0)
+        self.assertEqual([m["changed-models"] for m in json.loads(lines[0].split("=", 1)[1])],
+                         ["gemma3-oga-hipep:4b"])
+        self.assertIn("::warning::", out)
+        code, out, lines = self.run_cli("--only", "none", "--changed-models", "gemma3-oga-hipep:4b",
+                                        text=config(machine("stx-halo", "stx-halo")))
+        self.assertEqual((code, lines), (0, ["machines=[]"]))
+        self.assertIn("::warning::", out)
 
     def test_none_writes_an_empty_matrix(self):
         code, _, lines = self.run_cli("--only", "none", text=config(machine("stx-halo", "stx-halo")))

@@ -28,12 +28,16 @@ inputs:
     description: Comma-separated model ids that restrict every suite.
     required: false
     default: ""
-  backend:
-    description: A GPU backend (oga-hipep) whose models to test instead of the NPU models, one per family (every one on the full tier).
+  required-models:
+    description: >
+      Comma-separated model ids the change adds (with backend: adds or edits):
+      tested on every tier, even past models, and downloaded whatever their
+      size; the run fails if they are not listed or do not pull, bar one
+      larger than max-model-gb, a skip.
     required: false
     default: ""
-  changed-models:
-    description: With backend, comma-separated models whose catalog entries the change touched, which the pr tier tests too.
+  backend:
+    description: A GPU backend (oga-hipep) whose models to test instead of the NPU models, one per family (every one on the full tier).
     required: false
     default: ""
   max-model-gb:
@@ -96,10 +100,11 @@ runs:
 
     # Models persist on the runner between jobs, so only the first job on a
     # runner pays for a download. The harness pulls missing models before the
-    # suites, within a time budget on the pr tier (--pull-budget). A GPU
-    # backend run pulls every model it tests, which verifies its files, except
-    # one a pull on this runner verified before whose catalog pins and files
-    # are unchanged (npu_test/model_cache.py).
+    # suites, within a time budget on the pr tier (--pull-budget), except the
+    # models the change adds (required-models), which it always downloads. A
+    # GPU backend run pulls every model it tests, which verifies its files,
+    # except one a pull on this runner verified before whose catalog pins and
+    # files are unchanged (npu_test/model_cache.py), unless it is required.
     - name: Run tests (Linux)
       id: linux
       if: runner.os == 'Linux'
@@ -112,8 +117,8 @@ runs:
         SUITES: ${{ inputs.suites }}
         FAMILIES: ${{ inputs.families }}
         MODELS: ${{ inputs.models }}
+        REQUIRED_MODELS: ${{ inputs.required-models }}
         BACKEND: ${{ inputs.backend }}
-        CHANGED_MODELS: ${{ inputs.changed-models }}
         MAX_MODEL_GB: ${{ inputs.max-model-gb || '0' }}
         MODEL_EXTENSION: ${{ inputs.model-extension }}
         ASR_FULL: ${{ inputs.asr-full }}
@@ -122,7 +127,7 @@ runs:
         export FLM_MODEL_PATH="${FLM_MODEL_PATH:-/scratch}"
         args=(--flm-bin "${FLM_BIN}" --label "${LABEL}" --tier "${TIER}" --suites "${SUITES}"
               --families "${FAMILIES}" --models "${MODELS}" --backend "${BACKEND}"
-              --changed-models "${CHANGED_MODELS}"
+              --required-models "${REQUIRED_MODELS}"
               --max-model-gb "${MAX_MODEL_GB}" --asr-expected-key "${ASR_KEY}"
               --output-dir "${GITHUB_WORKSPACE}/npu-test-results/${LABEL}")
         [ "${ASR_FULL}" = "true" ] && args+=(--asr-full)
@@ -143,8 +148,8 @@ runs:
         SUITES: ${{ inputs.suites }}
         FAMILIES: ${{ inputs.families }}
         MODELS: ${{ inputs.models }}
+        REQUIRED_MODELS: ${{ inputs.required-models }}
         BACKEND: ${{ inputs.backend }}
-        CHANGED_MODELS: ${{ inputs.changed-models }}
         MAX_MODEL_GB: ${{ inputs.max-model-gb || '0' }}
         MODEL_EXTENSION: ${{ inputs.model-extension }}
         ASR_FULL: ${{ inputs.asr-full }}
@@ -162,8 +167,8 @@ runs:
         $outDir = Join-Path $env:GITHUB_WORKSPACE "npu-test-results\$env:LABEL"
         $cmdArgs = @('-m', 'npu_test', "--flm-bin=$env:FLM_BIN", "--label=$env:LABEL",
                      "--tier=$env:TIER", "--suites=$env:SUITES", "--families=$env:FAMILIES",
-                     "--models=$env:MODELS", "--backend=$env:BACKEND",
-                     "--changed-models=$env:CHANGED_MODELS", "--max-model-gb=$env:MAX_MODEL_GB",
+                     "--models=$env:MODELS", "--required-models=$env:REQUIRED_MODELS",
+                     "--backend=$env:BACKEND", "--max-model-gb=$env:MAX_MODEL_GB",
                      "--asr-expected-key=$env:ASR_KEY", "--output-dir=$outDir")
         if ($env:ASR_FULL -eq 'true') { $cmdArgs += '--asr-full' }
         if ($env:MODEL_EXTENSION) {
