@@ -1,0 +1,86 @@
+# Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+# Portions of this file consist of AI-generated content.
+
+name: Dev-kit engines (Windows)
+description: >
+  Builds the dev kit's engine libraries (flm-dev-kit/FLM_DLL) for Windows
+  against one runtime with build.ps1 and uploads the DLLs and import libraries
+  as devkit-libs-win-<runtime>. Needs the repository checked out first, on a
+  Windows runner with Visual Studio (windows-2025-vs2026); it sets up the
+  C:\dev dependencies (XRT headers, xrt_coreutil.lib, Boost) and the MSVC
+  environment itself. Needs only contents: read.
+
+inputs:
+  runtime:
+    description: xrt or hrx.
+    required: true
+  engines:
+    description: >
+      Engines to build after the priority units (flm-dev-kit/FLM_DLL/detail
+      directory names, comma-separated), or "all".
+    required: false
+    default: all
+
+runs:
+  using: composite
+  steps:
+    - name: Check inputs
+      shell: powershell
+      env:
+        RUNTIME: ${{ inputs.runtime }}
+        ENGINES: ${{ inputs.engines || 'all' }}
+      run: |
+        if ($env:RUNTIME -cnotmatch '^(xrt|hrx)$') {
+          Write-Host "::error::runtime must be xrt or hrx, not '$env:RUNTIME'."
+          exit 1
+        }
+        if ($env:ENGINES -notmatch '^[A-Za-z0-9_, ]+$') {
+          Write-Host "::error::engines must be detail/ directory names separated by commas, or all."
+          exit 1
+        }
+
+    # The C:\dev layout (XRT headers, xrt_coreutil.lib, Boost) and its
+    # cache, exactly as the win-build action restores them.
+    - name: Restore build dependencies
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: C:\dev
+        key: windows-deps-${{ hashFiles('.github/script/ci/setup_windows_deps.ps1', '.github/windows-deps/**') }}
+
+    - name: Set up build dependencies
+      shell: powershell
+      run: .github\script\ci\setup_windows_deps.ps1
+
+    - name: Set up MSVC environment
+      uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      with:
+        arch: x64
+
+    - name: Restore HRX release
+      if: inputs.runtime == 'hrx'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: hrx-integration/.hrx-release/*.zip
+        key: hrx-release-windows-${{ hashFiles('hrx-integration/hrx-release.env') }}
+
+    # build.ps1 -Runtime HRX runs fetch-hrx-release.ps1 itself, which
+    # reuses the restored archive when it matches the pin. -Runtime takes
+    # XRT or HRX, and build/lib/.runtime records it as given.
+    - name: Build engines
+      shell: powershell
+      env:
+        RUNTIME: ${{ inputs.runtime }}
+        ENGINES: ${{ inputs.engines || 'all' }}
+      run: |
+        & .\flm-dev-kit\FLM_DLL\build.ps1 -Runtime ($env:RUNTIME.ToUpperInvariant()) -Engines $env:ENGINES
+        exit $LASTEXITCODE
+
+    - name: Upload libraries
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: devkit-libs-win-${{ inputs.runtime }}
+        path: |
+          flm-dev-kit/FLM_DLL/build/lib/*.dll
+          flm-dev-kit/FLM_DLL/build/lib/*.lib
+        retention-days: 7
+        if-no-files-found: error

@@ -13,6 +13,11 @@ name: Dev-kit engines
 #   win-xrt  build.ps1 -Runtime XRT                     devkit-libs-win-xrt
 #   win-hrx  build.ps1 -Runtime HRX                     devkit-libs-win-hrx
 #
+# The steps are composite actions, devkit-build-lib-lin (both Linux jobs) and
+# devkit-build-lib-win (both Windows jobs), so another workflow can build the
+# same libraries; a job here only picks the runner, container, permissions and
+# timeout, and checks out.
+#
 # The libraries build with the product's AVX-512 flags (FLM_MARCH in
 # flm-dev-kit/FLM_DLL/flags.mk), never -march=native, so they do not depend
 # on the runner's CPU. The jobs are independent: one failing does not cancel
@@ -48,12 +53,18 @@ permissions:
   contents: read
 
 jobs:
+  # Each job sets up the runner and checks out; the build itself is in
+  # .github/actions/devkit-build-lib-lin and devkit-build-lib-win.
   lin-xrt:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: read
       packages: read
+    # Steps in a container default to sh (dash), which has no pipefail.
+    defaults:
+      run:
+        shell: bash
     container:
       # The image lin-build.yml builds the Ubuntu 24.04 packages in.
       image: ghcr.io/rocm/fastflowlm/build-environment:ubuntu24.04
@@ -66,36 +77,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Check engines input
-        env:
-          ENGINES: ${{ inputs.engines || 'all' }}
-        run: |
-          if ! printf '%s' "${ENGINES}" | grep -Eq '^[A-Za-z0-9_, ]+$'; then
-            echo "::error::engines must be detail/ directory names separated by commas, or all."
-            exit 1
-          fi
-
-      # The container has libxrt-dev (headers in /usr/include/xrt), not
-      # /opt/xilinx/xrt; flags.mk would pick /usr by itself, XRT_ROOT says so.
       - name: Build engines (XRT)
-        working-directory: flm-dev-kit/FLM_DLL
-        env:
-          FLM_ENGINES: ${{ inputs.engines || 'all' }}
-          XRT_ROOT: /usr
-        run: |
-          set -euo pipefail
-          g++-13 --version | head -1
-          test -f /usr/include/xrt/xrt_bo.h
-          bash build.sh
-
-      - name: Upload libraries
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: ./.github/actions/devkit-build-lib-lin
         with:
-          name: devkit-libs-lin-xrt
-          path: flm-dev-kit/FLM_DLL/build/lib/*.so
-          retention-days: 7
-          if-no-files-found: error
+          runtime: xrt
+          engines: ${{ inputs.engines || 'all' }}
 
+  # On the host, not in a container: build_manylinux.sh runs its own.
   lin-hrx:
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -107,90 +95,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Check engines input
-        env:
-          ENGINES: ${{ inputs.engines || 'all' }}
-        run: |
-          if ! printf '%s' "${ENGINES}" | grep -Eq '^[A-Za-z0-9_, ]+$'; then
-            echo "::error::engines must be detail/ directory names separated by commas, or all."
-            exit 1
-          fi
-
-      # The same key and path as lin-build's, so either job's download serves
-      # both.
-      - name: Restore HRX release
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Build engines (HRX)
+        uses: ./.github/actions/devkit-build-lib-lin
         with:
-          path: hrx-integration/.hrx-release/*.tar.zst
-          key: hrx-release-linux-${{ hashFiles('hrx-integration/hrx-release.env') }}
-
-      # build_manylinux.sh fetches the pinned package on the host (reusing the
-      # restored archive), builds every engine with FLM_USE_HRX=1 inside the
-      # digest-pinned manylinux_2_28 image as the runner user, then runs
-      # check_abi.sh and fails on a symbol version above manylinux_2_28.
-      - name: Build engines (HRX, manylinux_2_28)
-        env:
-          FLM_ENGINES: ${{ inputs.engines || 'all' }}
-        run: bash flm-dev-kit/FLM_DLL/build_manylinux.sh
-
-      - name: Test HRX executable ownership
-        run: |
-          set -euo pipefail
-          hdr=$(find hrx-integration/.hrx-release -name hrx_amdxdna.h -print -quit)
-          if [ -z "${hdr}" ]; then
-            echo "::error::hrx_amdxdna.h not found under hrx-integration/.hrx-release."
-            exit 1
-          fi
-          g++ -std=c++17 -O2 -Wall -Wextra \
-            -I flm-dev-kit/FLM_DLL/include -I "$(dirname "${hdr}")" \
-            flm-dev-kit/FLM_DLL/tests/hrx_executable_ownership_test.cpp \
-            -o "${RUNNER_TEMP}/hrx_executable_ownership_test"
-          "${RUNNER_TEMP}/hrx_executable_ownership_test"
-
-      # No library may need XRT or aiebu. A library that calls the hrx_* API
-      # must need libhrx.so; the CPU-only units (q4nx, gemm, ...) call none,
-      # so --as-needed leaves libhrx.so out of them. At least one library
-      # must call it, or this is not an HRX build.
-      - name: Check the libraries link HRX and not XRT
-        working-directory: flm-dev-kit/FLM_DLL/build/lib
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          libs=(*.so)
-          if [ ${#libs[@]} -eq 0 ]; then
-            echo "::error::No engine libraries were built."
-            exit 1
-          fi
-          rc=0
-          users=0
-          for lib in "${libs[@]}"; do
-            needed=$(readelf -d "${lib}" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p')
-            if grep -Eq '^lib(xrt_coreutil|aiebu)' <<< "${needed}"; then
-              echo "::error::${lib} needs XRT: $(tr '\n' ' ' <<< "${needed}")"
-              rc=1
-            fi
-            if nm -D --undefined-only "${lib}" | grep -Eq ' hrx_[a-z_]+'; then
-              users=$((users + 1))
-              if ! grep -q '^libhrx\.so' <<< "${needed}"; then
-                echo "::error::${lib} calls hrx_* but does not need libhrx.so"
-                rc=1
-              fi
-            fi
-          done
-          if [ "${users}" -eq 0 ]; then
-            echo "::error::No library calls the hrx_* API: not an HRX build."
-            rc=1
-          fi
-          echo "${#libs[@]} libraries, ${users} calling HRX."
-          exit "${rc}"
-
-      - name: Upload libraries
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: devkit-libs-lin-hrx
-          path: flm-dev-kit/FLM_DLL/build/lib/*.so
-          retention-days: 7
-          if-no-files-found: error
+          runtime: hrx
+          engines: ${{ inputs.engines || 'all' }}
 
   win:
     name: win-${{ matrix.runtime == 'HRX' && 'hrx' || 'xrt' }}
@@ -209,51 +118,8 @@ jobs:
         with:
           persist-credentials: false
 
-      # The C:\dev layout (XRT headers, xrt_coreutil.lib, Boost) and its
-      # cache, exactly as the win-build action restores them.
-      - name: Restore build dependencies
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: C:\dev
-          key: windows-deps-${{ hashFiles('.github/script/ci/setup_windows_deps.ps1', '.github/windows-deps/**') }}
-
-      - name: Set up build dependencies
-        shell: powershell
-        run: .github\script\ci\setup_windows_deps.ps1
-
-      - name: Set up MSVC environment
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
-        with:
-          arch: x64
-
-      - name: Restore HRX release
-        if: matrix.runtime == 'HRX'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: hrx-integration/.hrx-release/*.zip
-          key: hrx-release-windows-${{ hashFiles('hrx-integration/hrx-release.env') }}
-
-      # build.ps1 -Runtime HRX runs fetch-hrx-release.ps1 itself, which
-      # reuses the restored archive when it matches the pin.
       - name: Build engines
-        shell: powershell
-        env:
-          RUNTIME: ${{ matrix.runtime }}
-          ENGINES: ${{ inputs.engines || 'all' }}
-        run: |
-          if ($env:ENGINES -notmatch '^[A-Za-z0-9_, ]+$') {
-            Write-Host "::error::engines must be detail/ directory names separated by commas, or all."
-            exit 1
-          }
-          & .\flm-dev-kit\FLM_DLL\build.ps1 -Runtime $env:RUNTIME -Engines $env:ENGINES
-          exit $LASTEXITCODE
-
-      - name: Upload libraries
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: ./.github/actions/devkit-build-lib-win
         with:
-          name: devkit-libs-win-${{ matrix.runtime == 'HRX' && 'hrx' || 'xrt' }}
-          path: |
-            flm-dev-kit/FLM_DLL/build/lib/*.dll
-            flm-dev-kit/FLM_DLL/build/lib/*.lib
-          retention-days: 7
-          if-no-files-found: error
+          runtime: ${{ matrix.runtime == 'HRX' && 'hrx' || 'xrt' }}
+          engines: ${{ inputs.engines || 'all' }}

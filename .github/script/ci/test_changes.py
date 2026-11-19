@@ -506,7 +506,8 @@ class DevKit(unittest.TestCase):
     def test_devkit_ci_selects_every_area(self):
         for path in (".github/script/ci/changes.py", ".github/workflows/build-and-test.yml",
                      ".github/workflows/release.yml", ".github/actions/detect-changes/action.yml",
-                     ".github/actions/devkit-build/action.yml", ".github/workflows/devkit-engines.yml"):
+                     ".github/actions/devkit-build-lib-lin/action.yml",
+                     ".github/actions/devkit-build-lib-win/action.yml", ".github/workflows/devkit-engines.yml"):
             with self.subTest(path=path):
                 out = cli("--files", path)
                 self.assertEqual((out["run_tests"], out["devkit"], out["devkit_areas"]),

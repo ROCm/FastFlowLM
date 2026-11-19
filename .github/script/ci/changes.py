@@ -42,7 +42,8 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              aiebu_static.lib, any library its engines' -L order can pick
              up), hrx-integration/ (the HRX engine builds fetch the pinned
              package with it), or the CI that runs the dev-kit jobs
-             (including .github/workflows/devkit-*.yml); documentation under
+             (including .github/workflows/devkit-*.yml and
+             .github/actions/devkit-*); documentation under
              flm-dev-kit/ counts as nothing, as for the product. Nothing in
              the product consumes flm-dev-kit/ yet, so those paths select no
              product build, suite or family: a change only there builds and
@@ -158,7 +159,8 @@ DEVKIT_FROM_PRODUCT = (
     # (build_manylinux.sh, build.ps1 -Runtime HRX, hrx.mk, cmake/flm_hrx.cmake).
     (re.compile(r"^hrx-integration/"), {"dll"}),
     # setup_windows_deps.ps1 builds xrt_coreutil.lib from these files, and
-    # devkit-engines.yml's Windows jobs key their C:\dev cache on them.
+    # devkit-build-lib-win (devkit-engines.yml's Windows jobs) keys its C:\dev
+    # cache on them.
     (re.compile(r"^\.github/windows-deps/"), {"dll"}),
 )
 
