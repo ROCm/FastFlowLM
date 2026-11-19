@@ -19,18 +19,23 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              test of the shutdown suite, which no NPU job runs; a change to a
              model_list.json field outside its model entries, such as
              model_path, gives "all"
-  hipep      true when the change can reach qwen3.5-oga-hipep:9b, which Test
-             Windows HIPEP runs on the GPU: when every suite runs, or a changed
-             file is oga-hipep code, a GPU catalog entry, the qwen3.5 frontend,
-             or a test of the chat, api and shutdown suites that job runs
+  hipep      true when the change can reach an oga-hipep model, which Test
+             Windows HIPEP runs on the GPU (one per family): when every suite
+             runs, or a changed file is oga-hipep code, a GPU catalog entry,
+             the frontend of a family with a GPU entry, or a test of the chat,
+             api and shutdown suites that job runs
   new_models comma-separated NPU catalog entries (model ids) the change adds,
              or whose weights it points at another package (name or url):
              entries no runner has yet. The test jobs download them whatever
              their size, outside the pr tier's download budget, and fail if
              they cannot; only entries an NPU2 (aie2p) runner can run
-  new_gpu_models
-             the same for oga-hipep entries, which Test Windows HIPEP adds to
-             the model it always tests
+  hipep_models
+             comma-separated oga-hipep entries (model ids) the change adds or
+             edits in model_list.json or model_info.json, new weights or not
+             (an edit names no family for the GPU, so this is how one gets
+             tested). Test Windows HIPEP requires them, as the NPU jobs do
+             new_models: downloaded whatever their size, and a failure if
+             they cannot be
   summary    one line for the job log
 
 When in doubt it tests more: an all-zero or missing base (a new branch), or a
@@ -153,17 +158,16 @@ SUBSYSTEMS = (
 # catalog entries whose effective backend is oga-hipep: their "backend" key,
 # or without one, a name ending in GPU_SUFFIX (model_list::backend_for_family).
 # No NPU model runs its code (bar the header above) or those entries, so they
-# name no family and run no NPU job: Test Windows HIPEP tests them, on
-# qwen3.5-oga-hipep:9b.
+# name no family and run no NPU job: Test Windows HIPEP tests them, on every
+# GPU entry.
 GPU_ONLY = re.compile(r"^(src/(common|include)/oga/|src/test/oga_hipep/)")
 GPU_SUFFIX = "-oga-hipep"
 # An entry's "backend" key (flm::backend::kBackendKey), when present, overrides
 # the suffix rule; GPU_BACKEND is the oga-hipep backend's id.
 GPU_BACKEND_KEY = "backend"
 GPU_BACKEND = "oga-hipep"
-# The family of qwen3.5-oga-hipep:9b: a change to its frontend reaches that
-# model too, one to its NPU engine does not.
-GPU_FAMILIES = {"qwen3.5"}
+# A family's frontend also drives its GPU entries, and its NPU engine does not:
+# a change to the frontend of a family with one (gpu_families) reaches them.
 GPU_FRONTEND = re.compile(r"^src/(include|common)/AutoModel/")
 # The suites Test Windows HIPEP runs.
 GPU_SUITES = {"chat", "api", "shutdown"}
@@ -290,11 +294,13 @@ class Decision:
     asr_full: bool = False
     # None: every suite. Otherwise the suites every changed file is scoped to.
     suites: Optional[set] = field(default_factory=set)
-    # A changed file reaches qwen3.5-oga-hipep:9b (every suite running does too).
+    # A changed file reaches an oga-hipep model (every suite running does too).
     hipep: bool = False
-    # Catalog entries no runner has yet (see new_downloads), NPU and GPU.
+    # NPU catalog entries no runner has yet (see new_downloads).
     new_models: list = field(default_factory=list)
-    new_gpu_models: list = field(default_factory=list)
+    # The oga-hipep entries added or edited in the head catalog, which include
+    # those with new weights (new_downloads' GPU half).
+    gpu_models: set = field(default_factory=set)
     reasons: list = field(default_factory=list)
 
     def all_suites(self, path: str) -> None:
@@ -308,7 +314,7 @@ class Decision:
 
     def add_new_downloads(self, path: str, npu: list, gpu: list) -> None:
         self.new_models = sorted(set(self.new_models) | set(npu))
-        self.new_gpu_models = sorted(set(self.new_gpu_models) | set(gpu))
+        self.gpu_models |= set(gpu)
         if npu or gpu:
             self.reasons.append(f"{path}: new weights, tested whatever their size: "
                                 + ", ".join(npu + gpu))
@@ -333,8 +339,8 @@ class Decision:
         if self.new_models:
             parts.append("new models: " + ", ".join(self.new_models))
         parts.append(hipep)
-        if self.new_gpu_models:
-            parts.append("new GPU models: " + ", ".join(self.new_gpu_models))
+        if self.gpu_models:
+            parts.append("GPU models added or edited: " + ", ".join(sorted(self.gpu_models)))
         return "; ".join(parts)
 
     def suites_value(self) -> str:
@@ -351,7 +357,7 @@ class Decision:
                 "suites": self.suites_value(),
                 "hipep": str(self.runs_hipep()).lower(),
                 "new_models": ",".join(self.new_models),
-                "new_gpu_models": ",".join(self.new_gpu_models),
+                "hipep_models": ",".join(sorted(self.gpu_models)),
                 "summary": self.summary()}
 
 
@@ -380,6 +386,14 @@ def runs_on_gpu(model_id: str, entry: Optional[dict] = None) -> bool:
     if backend is not None:
         return backend == GPU_BACKEND
     return model_id.split(":", 1)[0].endswith(GPU_SUFFIX)
+
+
+def gpu_families(catalog: dict[str, dict]) -> Optional[set]:
+    """The families with a GPU entry, whose frontends drive the oga-hipep
+    backend too; None without a catalog, when any frontend might be one."""
+    if not catalog:
+        return None
+    return {family_of(e) for mid, e in catalog.items() if runs_on_gpu(mid, e)} - {""}
 
 
 def catalog_diff(base: dict[str, dict], head: dict[str, dict]) -> tuple[set, list]:
@@ -478,7 +492,8 @@ def model_info_diff(base_text: Optional[str], head_text: Optional[str],
 def add_catalog_change(d: Decision, path: str, fams: set, gpu: list,
                        catalog: dict[str, dict], neither: str) -> None:
     """A catalog file's changed entries: their NPU families in full, and Test
-    Windows HIPEP for GPU entries. A change to neither is not scoped."""
+    Windows HIPEP for GPU entries, which also tests those the head catalog
+    still runs on the GPU. A change to neither is not scoped."""
     d.families |= fams
     if fams:
         d.add_suites(family_suites(fams, catalog))
@@ -487,6 +502,7 @@ def add_catalog_change(d: Decision, path: str, fams: set, gpu: list,
     what = ", ".join(sorted(fams)) or ("no NPU family" if gpu else neither)
     if gpu:
         d.hipep = True
+        d.gpu_models |= {mid for mid in gpu if mid in catalog and runs_on_gpu(mid, catalog[mid])}
         what += (f"; {len(gpu)} oga-hipep entr{'y' if len(gpu) == 1 else 'ies'}, e.g. {gpu[0]},"
                  " which only Test Windows HIPEP runs")
     d.reasons.append(f"{path}: entries changed in {what}")
@@ -558,6 +574,7 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
     d.reasons.append(f"{len(code)} of {len(files)} changed file(s) are code, e.g. {code[0]}")
 
     head_catalog = load_catalog(head_catalog_text)
+    gpu_fams = gpu_families(head_catalog)
     xclbin_families: dict[str, set] = {}
     for entry in head_catalog.values():
         if entry.get("name"):
@@ -578,8 +595,8 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
             if new:
                 d.families |= new
                 d.reasons.append(f"{path}: {hit[0]} -> {', '.join(sorted(new))}")
-            if GPU_FAMILIES & set(hit[1]) and GPU_FRONTEND.match(path):
-                d.reach_hipep(f"{path}: {hit[0]} also runs qwen3.5-oga-hipep:9b,"
+            if GPU_FRONTEND.match(path) and (gpu_fams is None or gpu_fams & set(hit[1])):
+                d.reach_hipep(f"{path}: {hit[0]} also runs oga-hipep models,"
                               " which Test Windows HIPEP tests")
 
         # Which suites this file can affect.
