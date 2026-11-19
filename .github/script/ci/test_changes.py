@@ -132,7 +132,7 @@ class Cli(unittest.TestCase):
         self.assertIn("run_tests=false", lines)
         self.assertEqual([l.split("=")[0] for l in lines],
                          ["run_tests", "families", "asr_full", "suites", "hipep",
-                          "new_models", "new_gpu_models", "summary"])
+                          "new_models", "new_gpu_models", "devkit", "devkit_areas", "summary"])
 
     def test_suites_scoped_to_the_change(self):
         cases = {
@@ -401,6 +401,170 @@ class Decide(unittest.TestCase):
         cat = changes.load_catalog((changes.REPO_ROOT / changes.MODEL_LIST).read_text(encoding="utf-8"))
         self.assertTrue(all(changes.runs_on_gpu(m) for m in tested), tested)
         self.assertEqual({changes.family_of(cat[m]) for m in tested}, changes.GPU_FAMILIES)
+
+
+class DevKit(unittest.TestCase):
+    """flm-dev-kit/ selects dev-kit areas, never product builds or suites."""
+
+    def test_devkit_only_runs_no_product_job(self):
+        out = cli("--files", "flm-dev-kit/FLM_Xclbin/MM/iron/mm_aie.py",
+                  "flm-dev-kit/FLM_DLL/detail/qwen2_npu/qwen2_npu.cpp")
+        self.assertEqual((out["run_tests"], out["families"], out["asr_full"], out["hipep"], out["new_models"]),
+                         ("false", "", "false", "false", ""))
+        self.assertEqual((out["devkit"], out["devkit_areas"]), ("true", "xclbin,dll"))
+        self.assertIn("flm-dev-kit only", out["summary"])
+
+    def test_each_area(self):
+        cases = {
+            "flm-dev-kit/FLM_Xclbin/Gemma4/gemma4_decoding/kernel/k.cc": "xclbin",
+            "flm-dev-kit/FLM_DLL/detail/qwen2_npu/qwen2_npu.cpp": "dll",
+            "flm-dev-kit/FLM_Q4NX_Converter/q4nx/model_converter.py": "converter",
+            "flm-dev-kit/FLM_Pybind/SmolVLA/Makefile": "pybind",
+            "flm-dev-kit/aie2p-launchlib/launchlib/tools/txn_dump.py": "launchlib",
+            # In no area: every area, as an unknown product path runs every suite.
+            "flm-dev-kit/env.sh": "xclbin,dll,converter,pybind,launchlib",
+            # Files another area builds from (DEVKIT_ALSO), one per row.
+            "flm-dev-kit/FLM_Xclbin/host_common/buffer.hpp": "xclbin,pybind",
+            "flm-dev-kit/FLM_Xclbin/Whisper/encoder_MM/iron/mm.py": "xclbin,launchlib",
+            "flm-dev-kit/FLM_DLL/cmake/flm_xrt_win.cmake": "dll,launchlib",
+            "flm-dev-kit/FLM_DLL/detail/whisper_npu/whisper_encoder.cpp": "dll,launchlib",
+            "flm-dev-kit/FLM_DLL/include/buffer.hpp": "xclbin,dll,launchlib",
+            "flm-dev-kit/FLM_DLL/detail/q4nx/q4_npu_eXpress.cpp": "xclbin,dll,launchlib",
+            "flm-dev-kit/FLM_DLL/detail/hunyuan_npu/hunyuan_npu.cpp": "xclbin,dll",
+            "flm-dev-kit/FLM_DLL/detail/minicpm_ocr_npu/image/npu/x.cpp": "xclbin,dll",
+        }
+        for path, areas in cases.items():
+            with self.subTest(path=path):
+                out = cli("--files", path)
+                self.assertEqual((out["run_tests"], out["devkit"], out["devkit_areas"]), ("false", "true", areas))
+
+    def test_devkit_docs_are_nothing(self):
+        out = cli("--files", "flm-dev-kit/README.md", "flm-dev-kit/AGENTS.md",
+                  "flm-dev-kit/FLM_Xclbin/kernel_assignment.md", "flm-dev-kit/FLM_DLL/.gitignore")
+        self.assertEqual((out["run_tests"], out["devkit"], out["devkit_areas"]), ("false", "false", ""))
+        self.assertEqual(out["summary"], "documentation only: NPU tests skipped")
+
+    def test_mixed_keeps_product_rules_for_product_paths(self):
+        out = cli("--files", "flm-dev-kit/FLM_DLL/detail/qwen3_npu/qwen3_npu.cpp", "src/lib/xrt/libqwen3_npu.so")
+        self.assertEqual((out["run_tests"], out["suites"], out["devkit"], out["devkit_areas"]),
+                         ("true", "chat,prefix_cache", "true", "dll"))
+        self.assertEqual(families(out), {"qwen3", "qwen3-it", "qwen3-tk", "deepseek-r1-0528"})
+        out = cli("--files", "flm-dev-kit/FLM_Xclbin/MM/Makefile", "src/server/server.cpp")
+        self.assertEqual((out["run_tests"], out["suites"], out["devkit_areas"]), ("true", "all", "xclbin"))
+        # Product documentation beside dev-kit code still builds no product.
+        out = cli("--files", "flm-dev-kit/FLM_Xclbin/MM/Makefile", "docs/index.md")
+        self.assertEqual((out["run_tests"], out["devkit_areas"]), ("false", "xclbin"))
+
+    def test_product_files_the_devkit_links_select_its_areas(self):
+        # The prebuilt aiebu: every area that links it, and the product rules
+        # (a shared library: every suite) still apply.
+        for path in ("src/lib/xrt/libaiebu.a", "src/lib/xrt/aiebu_static.lib"):
+            with self.subTest(path=path):
+                out = cli("--files", path)
+                self.assertEqual((out["run_tests"], out["suites"], out["devkit"], out["devkit_areas"]),
+                                 ("true", "all", "true", "xclbin,dll,pybind,launchlib"))
+        # Anything else in src/lib/xrt is on the dev-kit engines' -L path.
+        out = cli("--files", "src/lib/xrt/libqwen3_npu.so")
+        self.assertEqual((out["run_tests"], out["devkit_areas"]), ("true", "dll"))
+        self.assertEqual(families(out), {"qwen3", "qwen3-it", "qwen3-tk", "deepseek-r1-0528"})
+        # The dev kit reads nothing from src/lib/hrx or src/lib itself.
+        for path in ("src/lib/hrx/libaiebu.a", "src/lib/libcurl.dll", "src/server/server.cpp"):
+            with self.subTest(path=path):
+                self.assertEqual(cli("--files", path)["devkit"], "false")
+
+    def test_devkit_ci_selects_every_area(self):
+        for path in (".github/script/ci/changes.py", ".github/workflows/build-and-test.yml",
+                     ".github/workflows/release.yml", ".github/actions/detect-changes/action.yml",
+                     ".github/actions/devkit-build/action.yml"):
+            with self.subTest(path=path):
+                out = cli("--files", path)
+                self.assertEqual((out["run_tests"], out["devkit"], out["devkit_areas"]),
+                                 ("true", "true", "xclbin,dll,converter,pybind,launchlib"))
+        self.assertEqual(cli("--files", ".github/workflows/lin-build.yml")["devkit"], "false")
+
+    def test_unknown_files_select_every_area(self):
+        out = cli("--base", "0" * 40, "--head", "HEAD")
+        self.assertEqual((out["devkit"], out["devkit_areas"]), ("true", "xclbin,dll,converter,pybind,launchlib"))
+
+    def test_no_changed_files_select_no_area(self):
+        d = changes.decide([])
+        self.assertEqual(d.outputs()["devkit"], "false")
+
+
+class Prebuilts(unittest.TestCase):
+    """src/lib and src/xclbins map to families; shared or unknown files run all."""
+
+    def test_engine_library_maps_to_its_family(self):
+        cases = {
+            "src/lib/xrt/libgemma_text_npu.so": {"gemma3-text"},
+            "src/lib/hrx/gemma4e_dflash.dll": {"gemma4e-dflash"},
+            "src/lib/hrx/gemma4e_dflash.lib": {"gemma4e-dflash"},
+            "src/lib/xrt/libqwen3vl_flash.so": {"qwen3vl-flash"},
+            "src/lib/hrx/libhy_mem_npu.so": {"hy-memory"},
+        }
+        for path, expected in cases.items():
+            with self.subTest(path=path):
+                out = cli("--files", path)
+                self.assertEqual(families(out), expected)
+                self.assertNotEqual(out["suites"], "all")
+
+    def test_shared_libraries_run_every_suite(self):
+        for path in ("src/lib/xrt/libaiebu.a", "src/lib/xrt/aiebu_static.lib", "src/lib/hrx/libmha.so",
+                     "src/lib/xrt/q4_npu_eXpress.dll", "src/lib/hrx/libhrx_runtime.so", "src/lib/libcurl.dll",
+                     "src/lib/xrt/sub/libqwen3_npu.so"):
+            with self.subTest(path=path):
+                d = changes.decide([path])
+                self.assertEqual((d.families, d.suites_value()), (set(), "all"))
+                self.assertTrue(any("not one engine's" in r for r in d.reasons), d.reasons)
+
+    def test_xclbin_folder_maps_to_the_families_that_load_it(self):
+        cat = json.dumps({"model_path": "m", "models": {
+            "base": {"1b": {"name": "Base-NPU2", "details": {"family": "fam-a"}}},
+            "draft": {"1b": {"name": "Draft-NPU2", "base_model": "base:1b", "xclbin_folder": "Base-NPU2",
+                             "details": {"family": "fam-b"}}},
+            # xclbin_folder counts on any entry, dependant or not, as in
+            # AutoModel::_shared_initialize_model_state.
+            "other": {"1b": {"name": "Other-NPU2", "xclbin_folder": "Base-NPU2",
+                             "details": {"family": "fam-c"}}}}})
+        d = changes.decide(["src/xclbins/Base-NPU2/attn.xclbin"], None, cat)
+        self.assertEqual(d.families, {"fam-a", "fam-b", "fam-c"})
+        for folder in ("Draft-NPU2", "Other-NPU2"):
+            with self.subTest(folder=folder):
+                d = changes.decide([f"src/xclbins/{folder}/attn.xclbin"], None, cat)
+                self.assertEqual((d.families, d.suites_value()), (set(), "all"))
+                self.assertTrue(any("no catalog entry loads this folder" in r for r in d.reasons), d.reasons)
+        # The real catalog: qwen3.8-dflash2 runs Qwen3.8-27B-NPU2's kernels.
+        out = cli("--files", "src/xclbins/Qwen3.8-27B-NPU2/layer.xclbin")
+        self.assertEqual(families(out), {"qwen3.8-mtp", "qwen3.8-dflash2"})
+        self.assertEqual(out["suites"], "chat,prefix_cache")
+
+    def test_unknown_xclbin_paths_run_every_suite(self):
+        for path in ("src/xclbins/No-Such-Model-NPU2/a.xclbin", "src/xclbins/README.txt"):
+            with self.subTest(path=path):
+                out = cli("--files", path)
+                self.assertEqual((families(out), out["suites"]), (set(), "all"))
+
+    def test_every_prebuilt_in_the_tree_is_mapped(self):
+        """Every src/xclbins folder is some catalog entry's, and every engine
+        library in src/lib/{xrt,hrx} is in ENGINES, bar the shared units."""
+        cat = changes.load_catalog((changes.REPO_ROOT / changes.MODEL_LIST).read_text(encoding="utf-8"))
+        folders = changes.xclbin_folders(cat)
+        xclbins = changes.REPO_ROOT / "src/xclbins"
+        if xclbins.is_dir():
+            for d in sorted(p.name for p in xclbins.iterdir() if p.is_dir()):
+                self.assertTrue(folders.get(d), f"src/xclbins/{d} is no catalog entry's folder")
+        shared = {"q4_npu_eXpress", "gemm", "mha", "dequant", "lm_head", "aiebu", "aiebu_static"}
+        for runtime in ("xrt", "hrx"):
+            lib = changes.REPO_ROOT / "src/lib" / runtime
+            if not lib.is_dir():
+                continue
+            for f in sorted(p.name for p in lib.iterdir() if p.is_file()):
+                why, fams = changes.engine_families(f"src/lib/{runtime}/{f}", {})
+                stem = re.sub(r"^lib|\.(so|dll|lib|a)$", "", f)
+                if stem in shared:
+                    self.assertEqual(fams, (), f)
+                elif stem.removesuffix("_npu") != "qwen3_5_omni":
+                    self.assertTrue(fams, f"src/lib/{runtime}/{f}: {why}")
 
 
 @unittest.skipUnless(shutil.which("git"), "git not installed")
