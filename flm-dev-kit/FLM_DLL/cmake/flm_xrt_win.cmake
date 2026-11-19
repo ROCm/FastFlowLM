@@ -18,6 +18,8 @@
 # boost/any.hpp; nothing links a Boost library. Same lookup as src/CMakeLists.txt.
 #
 # Exposes: XRT_INCLUDE_DIR, XRT_LIB_DIR, FLM_AIEBU_LIB_DIR, FLM_BOOST_INCLUDE_DIR.
+# Set FLM_XRT_WIN_XRT_ONLY to ON before the include() for the XRT paths alone:
+# no aiebu or Boost-header check (the aie2p-launchlib projects use neither).
 
 include_guard(GLOBAL)
 
@@ -31,6 +33,9 @@ if(NOT EXISTS "${XRT_INCLUDE_DIR}/xrt/xrt_bo.h" OR NOT EXISTS "${XRT_LIB_DIR}/xr
         "XRT not found (XRT_INCLUDE_DIR=${XRT_INCLUDE_DIR}, XRT_LIB_DIR=${XRT_LIB_DIR}). "
         "Run FastFlowLM's .github/script/ci/setup_windows_deps.ps1, or pass "
         "-DFLM_WIN_DEPS_ROOT=<dir> or -DXRT_INCLUDE_DIR=<dir> -DXRT_LIB_DIR=<dir>.")
+endif()
+if(FLM_XRT_WIN_XRT_ONLY)
+    return()
 endif()
 if(NOT EXISTS "${FLM_AIEBU_LIB_DIR}/aiebu_static.lib")
     message(FATAL_ERROR "aiebu_static.lib not found in ${FLM_AIEBU_LIB_DIR} (FastFlowLM's src/lib/xrt/).")

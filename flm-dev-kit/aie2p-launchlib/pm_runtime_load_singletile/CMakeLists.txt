@@ -14,6 +14,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(COLS 8 CACHE STRING "columns of 4 cores")
 
+set(FLM_XRT_WIN_XRT_ONLY ON) # XRT paths only: no aiebu, no Boost
 include(${CMAKE_CURRENT_SOURCE_DIR}/../../FLM_DLL/cmake/flm_xrt_win.cmake) # XRT_INCLUDE_DIR, XRT_LIB_DIR
 set(FLM_DLL ${CMAKE_CURRENT_SOURCE_DIR}/../../FLM_DLL) # nlohmann/json
 

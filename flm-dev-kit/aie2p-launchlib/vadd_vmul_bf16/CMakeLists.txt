@@ -16,6 +16,7 @@ set(EW_N 256 CACHE STRING "bf16 values per block")
 set(COLS 1 CACHE STRING "columns")
 set(CORES 1 CACHE STRING "cores per column")
 
+set(FLM_XRT_WIN_XRT_ONLY ON) # XRT paths only: no aiebu, no Boost
 include(${CMAKE_CURRENT_SOURCE_DIR}/../../FLM_DLL/cmake/flm_xrt_win.cmake) # XRT_INCLUDE_DIR, XRT_LIB_DIR
 set(FLM_DLL ${CMAKE_CURRENT_SOURCE_DIR}/../../FLM_DLL) # nlohmann/json
 
