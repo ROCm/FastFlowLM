@@ -104,8 +104,8 @@ target_compile_definitions(gemma_embedding PUBLIC
 
 # Enhanced compiler options for AVX512 and best optimization (O3)
 target_compile_options(gemma_embedding PUBLIC
-    $<$<CXX_COMPILER_ID:MSVC>:/arch:AVX512 /O2 /fp:fast>
-    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-mavx512 -mfma -march=native -O3>
+    $<$<BOOL:${MSVC}>:/arch:AVX512 /O2 /fp:fast>
+    $<$<NOT:$<BOOL:${MSVC}>>:-mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma -O3>
 )
 
 # Add AVX2 specific link flags for MSVC
@@ -115,7 +115,7 @@ if(MSVC)
     )
     # Add C++ standard library for RTTI and other symbols
     target_link_libraries(gemma_embedding PUBLIC
-        $<$<CXX_COMPILER_ID:MSVC>:msvcrt.lib>
+        $<$<BOOL:${MSVC}>:msvcrt.lib>
     )
 endif()
 

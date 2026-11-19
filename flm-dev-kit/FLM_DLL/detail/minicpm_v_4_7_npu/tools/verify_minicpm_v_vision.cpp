@@ -8,12 +8,12 @@
 ///
 /// Build (one line; from FLM_DLL/detail/minicpm_v_4_7_npu):
 ///
-///   g++-13 -O3 -march=native -fopenmp -std=c++20 -ffast-math
-///       -I. -I../../include -I../q4nx -I/opt/xilinx/xrt/include
+///   g++-13 -O3 -mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma -fopenmp -std=c++20 -ffast-math
+///       -I. -I../../include -I../q4nx -I$XRT_ROOT/include
 ///       tools/verify_minicpm_v_vision.cpp image/vision_tower.cpp image/vision_ops.cpp
 ///       image/vision_glue.cpp image/mrope.cpp image/npu/vision_mm_sequence.cpp
 ///       image/npu/vision_attn_sequence.cpp
-///       -L../../../../src/lib/xrt -L/opt/xilinx/xrt/lib -lxrt_coreutil -laiebu -luuid -lpthread
+///       -L../../../../src/lib/xrt -L$XRT_ROOT/lib -lxrt_coreutil -laiebu -luuid -lpthread
 ///       -o /tmp/verify_minicpm_v_vision
 ///
 /// -O3 -ffast-math, not -O2: the host arm is built here, and an A/B against the

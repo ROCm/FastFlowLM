@@ -87,8 +87,8 @@ target_compile_definitions(mha PUBLIC
 
 # Enhanced compiler options for AVX2
 target_compile_options(mha PUBLIC
-    $<$<CXX_COMPILER_ID:MSVC>:/arch:AVX2 /O2 /fp:fast>
-    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-mavx2 -mfma -march=native -O2>
+    $<$<BOOL:${MSVC}>:/arch:AVX512 /O2 /fp:fast>
+    $<$<NOT:$<BOOL:${MSVC}>>:-mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma -O2>
 )
 
 # Add AVX2 specific link flags for MSVC
@@ -98,7 +98,7 @@ if(MSVC)
     )
     # Add C++ standard library for RTTI and other symbols
     target_link_libraries(mha PUBLIC
-        $<$<CXX_COMPILER_ID:MSVC>:msvcrt.lib>
+        $<$<BOOL:${MSVC}>:msvcrt.lib>
     )
 endif()
 

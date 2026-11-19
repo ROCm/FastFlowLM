@@ -19,11 +19,11 @@
 /// slower than it ships and the verdict comes out with the wrong sign.
 ///
 ///   cd detail/qwen3_8mtp_npu
-///   g++-13 -O3 -march=native -ffast-math -fopenmp -std=c++20 \
+///   g++-13 -O3 -ffast-math -fopenmp -std=c++20 \
 ///       -mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma \
-///       -I. -I../../include -I../q4nx -I/opt/xilinx/xrt/include \
+///       -I. -I../../include -I../q4nx -I$XRT_ROOT/include \
 ///       tools/bench_lm_head_rows.cpp \
-///       -L../../../../src/lib/xrt -L/opt/xilinx/xrt/lib \
+///       -L../../../../src/lib/xrt -L$XRT_ROOT/lib \
 ///       -lxrt_coreutil -luuid -lpthread -o /tmp/bench_lm_head_rows
 ///   /tmp/bench_lm_head_rows
 #include "common/lm_head.hpp"

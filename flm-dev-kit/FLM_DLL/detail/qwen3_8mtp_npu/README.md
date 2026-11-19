@@ -450,11 +450,11 @@ model directory and an `exec_path` — the root holding
 not optional. `-lq4_npu_eXpress` is required:
 
 ```bash
-g++-13 -O2 -march=native -fopenmp -std=c++20 \
-    -I. -I../../include -I../q4nx -I/opt/xilinx/xrt/include \
+g++-13 -O2 -mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma -fopenmp -std=c++20 \
+    -I. -I../../include -I../q4nx -I$XRT_ROOT/include \
     tools/verify_qwen3_8mtp.cpp \
     -L../../build/lib -lqwen3_8mtp_npu -lq4_npu_eXpress \
-    -L/opt/xilinx/xrt/lib -lxrt_coreutil \
+    -L$XRT_ROOT/lib -lxrt_coreutil \
     -Wl,-rpath,$PWD/../../build/lib \
     -o /tmp/verify_qwen3_8mtp
 
@@ -484,11 +484,11 @@ the wrong shape. This one takes the window length as an argument and runs as
 many rounds as asked, so a resumed window gets measured too.
 
 ```bash
-g++-13 -O2 -march=native -fopenmp -std=c++20 \
-    -I. -I../../include -I../q4nx -I/opt/xilinx/xrt/include \
+g++-13 -O2 -mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma -fopenmp -std=c++20 \
+    -I. -I../../include -I../q4nx -I$XRT_ROOT/include \
     tools/profile_prefill.cpp \
     -L../../build/lib -lqwen3_8mtp_npu -lq4_npu_eXpress \
-    -L/opt/xilinx/xrt/lib -lxrt_coreutil \
+    -L$XRT_ROOT/lib -lxrt_coreutil \
     -Wl,-rpath,$PWD/../../build/lib -o /tmp/profile_prefill
 
 /tmp/profile_prefill [model_dir] [exec_path] [L] [rounds]
@@ -729,7 +729,7 @@ covers the 16-lane tail. 0.45 s, no device, no model:
 
 ```bash
 g++-13 -std=c++20 -O3 -fopenmp \
-  -mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma -march=native -ffast-math \
+  -mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma -ffast-math \
   -I. -I../../include -I../q4nx \
   tools/verify_cpu_simd.cpp -o /tmp/verify_cpu_simd
 /tmp/verify_cpu_simd          # ends "== bit-identical =="

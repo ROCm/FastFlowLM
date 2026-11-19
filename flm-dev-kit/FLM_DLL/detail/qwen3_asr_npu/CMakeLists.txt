@@ -113,16 +113,17 @@ target_compile_definitions(qwen3_asr_npu PUBLIC
 )
 
 # Enhanced compiler options for AVX2
+# The audio encoder and CPU decoder call AVX-512 BF16, VNNI and VBMI intrinsics without a guard (see the Makefile). MSVC needs no flag for them.
 target_compile_options(qwen3_asr_npu PUBLIC
-    $<$<CXX_COMPILER_ID:MSVC>:/arch:AVX512 /O3 /fp:fast>
-    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-mavx512f -mavx512bw -mavx512dq -mavx512vl -mfma -march=native -O3>
+    $<$<BOOL:${MSVC}>:/arch:AVX512 /O3 /fp:fast>
+    $<$<NOT:$<BOOL:${MSVC}>>:-mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma -mavx512bf16 -mavx512vnni -mavx512vbmi -O3>
 )
 
 # OpenMP (MSVC: OpenMP 2.0 - the loops are written for it: signed indices, no collapse)
 if(OpenMP_CXX_FOUND)
     target_compile_options(qwen3_asr_npu PUBLIC
-        $<$<CXX_COMPILER_ID:MSVC>:/openmp>
-        $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-fopenmp>
+        $<$<BOOL:${MSVC}>:/openmp>
+        $<$<NOT:$<BOOL:${MSVC}>>:-fopenmp>
     )
     target_link_libraries(qwen3_asr_npu PUBLIC OpenMP::OpenMP_CXX)
 endif()
@@ -134,7 +135,7 @@ if(MSVC)
     )
     # Add C++ standard library for RTTI and other symbols
     target_link_libraries(qwen3_asr_npu PUBLIC
-        $<$<CXX_COMPILER_ID:MSVC>:msvcrt.lib>
+        $<$<BOOL:${MSVC}>:msvcrt.lib>
     )
 endif()
 

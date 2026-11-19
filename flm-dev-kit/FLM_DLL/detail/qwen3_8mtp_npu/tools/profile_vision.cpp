@@ -5,17 +5,17 @@
 ///        else — the A/B harness for module 4's host half.
 ///
 /// Build -- **at the shipping flags**, not at -O2. The engine's own are
-/// `-O3 -march=native -ffast-math` plus the avx512 set; at -O2 this tower
+/// `-O3 -ffast-math` plus the avx512 set; at -O2 this tower
 /// measures 2368 ms against the shipping build's 1823, a 30% error that is
 /// larger than anything being A/B'd. Add `-DQWEN3_8MTP_VISION_PROFILE` for the per-stage table.
-///   g++-13 -O3 -march=native -ffast-math -fopenmp -std=c++20
+///   g++-13 -O3 -ffast-math -fopenmp -std=c++20
 ///       -mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma
-///       -I. -I../../include -I../q4nx -I/opt/xilinx/xrt/include
+///       -I. -I../../include -I../q4nx -I$XRT_ROOT/include
 ///       tools/profile_vision.cpp image/image_cpu.cpp image/vision_ops.cpp
 ///       image/vision_glue.cpp image/vision_rope.cpp image/mrope.cpp
 ///       image/npu/vision_attn_sequence.cpp image/npu/vision_mm_sequence.cpp
 ///       ../q4nx/q4_npu_eXpress.cpp ../q4nx/safe_tensors.cpp
-///       -L../../../../src/lib/xrt -L/opt/xilinx/xrt/lib
+///       -L../../../../src/lib/xrt -L$XRT_ROOT/lib
 ///       -lxrt_coreutil -laiebu -luuid -lpthread -o /tmp/profile_vision
 /// Run:
 ///   /tmp/profile_vision [model_dir] [rounds] [L] [vision_mm_build_dir] [attn.xclbin]

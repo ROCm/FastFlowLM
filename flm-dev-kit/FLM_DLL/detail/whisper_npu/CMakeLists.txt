@@ -103,9 +103,10 @@ target_compile_definitions(whisper_npu PUBLIC
 )
 
 # Enhanced compiler options for AVX512 and best optimization (O3)
+# whisper_decoder.hpp and whisper_encoder.hpp call AVX-512 BF16 intrinsics without a guard (see the Makefile). MSVC needs no flag for them.
 target_compile_options(whisper_npu PUBLIC
-    $<$<CXX_COMPILER_ID:MSVC>:/arch:AVX512 /O2 /fp:fast>
-    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-mavx512 -mfma -march=native -O3>
+    $<$<BOOL:${MSVC}>:/arch:AVX512 /O2 /fp:fast>
+    $<$<NOT:$<BOOL:${MSVC}>>:-mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma -mavx512bf16 -O3>
 )
 
 # Add AVX2 specific link flags for MSVC
@@ -115,7 +116,7 @@ if(MSVC)
     )
     # Add C++ standard library for RTTI and other symbols
     target_link_libraries(whisper_npu PUBLIC
-        $<$<CXX_COMPILER_ID:MSVC>:msvcrt.lib>
+        $<$<BOOL:${MSVC}>:msvcrt.lib>
     )
 endif()
 

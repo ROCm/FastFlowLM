@@ -7,11 +7,11 @@
 ///        nothing but the totals.
 ///
 /// Build (one line; -lq4_npu_eXpress is required, as for verify_qwen3_8mtp):
-///   g++-13 -O2 -march=native -fopenmp -std=c++20
-///       -I. -I../../include -I../q4nx -I/opt/xilinx/xrt/include
+///   g++-13 -O2 -mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma -fopenmp -std=c++20
+///       -I. -I../../include -I../q4nx -I$XRT_ROOT/include
 ///       tools/profile_prefill.cpp
 ///       -L../../build/lib -lqwen3_8mtp_npu -lq4_npu_eXpress
-///       -L/opt/xilinx/xrt/lib -lxrt_coreutil
+///       -L$XRT_ROOT/lib -lxrt_coreutil
 ///       -Wl,-rpath,$PWD/../../build/lib -o /tmp/profile_prefill
 ///
 /// Run:

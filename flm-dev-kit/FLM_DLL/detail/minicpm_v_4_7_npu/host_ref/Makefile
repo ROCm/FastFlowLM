@@ -13,11 +13,12 @@ LIB := ../../../build/lib
 BUILD := ../../../build/minicpm_v_4_7_npu/host_ref
 DEBUG_LEVEL ?= 1
 
-CXX_FLAGS := -std=c++20 -O2 -fopenmp -mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma -march=native
-CXX_FLAGS += -I../../../include -I../../q4nx -I/opt/xilinx/xrt/include
+include ../../../flags.mk
+CXX_FLAGS := -std=c++20 -O2 -fopenmp $(FLM_MARCH)
+CXX_FLAGS += -I../../../include -I../../q4nx -I$(XRT_ROOT)/include
 CXX_FLAGS += -DDEBUG_LEVEL=$(DEBUG_LEVEL) -DVERBOSE=0
 LDFLAGS := -L$(LIB) -Wl,-rpath,$(abspath $(LIB)) -lminicpm_v_4_7_npu -lq4_npu_eXpress
-LDFLAGS += -L/opt/xilinx/xrt/lib -lxrt_coreutil -fopenmp
+LDFLAGS += -L$(XRT_ROOT)/lib -lxrt_coreutil -fopenmp
 
 all: $(BUILD)/run_engine $(BUILD)/run_vision_e2e
 

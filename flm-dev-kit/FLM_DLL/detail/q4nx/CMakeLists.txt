@@ -74,8 +74,8 @@ target_compile_definitions(q4_npu_eXpress PUBLIC
 )
 
 target_compile_options(q4_npu_eXpress PRIVATE
-    $<$<CXX_COMPILER_ID:MSVC>:/arch:AVX2 /O2 /fp:fast>
-    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-mavx2 -mfma -march=native -O2>
+    $<$<BOOL:${MSVC}>:/arch:AVX512 /O2 /fp:fast>
+    $<$<NOT:$<BOOL:${MSVC}>>:-mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma -O2>
 )
 
 target_link_directories(q4_npu_eXpress PUBLIC

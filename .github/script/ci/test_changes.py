@@ -468,6 +468,20 @@ class DevKit(unittest.TestCase):
         out = cli("--files", "src/lib/xrt/libqwen3_npu.so")
         self.assertEqual((out["run_tests"], out["devkit_areas"]), ("true", "dll"))
         self.assertEqual(families(out), {"qwen3", "qwen3-it", "qwen3-tk", "deepseek-r1-0528"})
+        # The HRX engine builds fetch the pinned package through hrx-integration/:
+        # the dll area and every dev-kit engine's families; the product rules
+        # still run everything.
+        for path in ("hrx-integration/hrx-release.env", "hrx-integration/fetch-hrx-release.ps1"):
+            with self.subTest(path=path):
+                out = cli("--files", path)
+                self.assertEqual((out["run_tests"], out["devkit"], out["devkit_areas"]),
+                                 ("true", "true", "dll"))
+                self.assertEqual(devkit_families(out), changes.every_engine_family(changes.load_devkit_engines()))
+        # setup_windows_deps.ps1 builds xrt_coreutil.lib from .github/windows-deps/,
+        # which the dev-kit Windows engines link: the dll area too.
+        out = cli("--files", ".github/windows-deps/xrt_coreutil.def")
+        self.assertEqual((out["devkit"], out["devkit_areas"]), ("true", "dll"))
+        self.assertEqual(devkit_families(out), changes.every_engine_family(changes.load_devkit_engines()))
         # The dev kit reads nothing from src/lib/hrx or src/lib itself.
         for path in ("src/lib/hrx/libaiebu.a", "src/lib/libcurl.dll", "src/server/server.cpp"):
             with self.subTest(path=path):
@@ -476,7 +490,7 @@ class DevKit(unittest.TestCase):
     def test_devkit_ci_selects_every_area(self):
         for path in (".github/script/ci/changes.py", ".github/workflows/build-and-test.yml",
                      ".github/workflows/release.yml", ".github/actions/detect-changes/action.yml",
-                     ".github/actions/devkit-build/action.yml"):
+                     ".github/actions/devkit-build/action.yml", ".github/workflows/devkit-engines.yml"):
             with self.subTest(path=path):
                 out = cli("--files", path)
                 self.assertEqual((out["run_tests"], out["devkit"], out["devkit_areas"]),

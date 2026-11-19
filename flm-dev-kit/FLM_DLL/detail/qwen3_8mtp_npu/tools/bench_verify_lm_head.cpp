@@ -4,8 +4,8 @@
 /// \brief Phase-level timing for module 3: where does the verify phase go?
 ///
 /// Build:
-///   g++-13 -O3 -march=native -fopenmp -std=c++20
-///       -I. -I../../include -I../q4nx -I/opt/xilinx/xrt/include
+///   g++-13 -O3 -mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma -fopenmp -std=c++20
+///       -I. -I../../include -I../q4nx -I$XRT_ROOT/include
 ///       tools/bench_verify_lm_head.cpp ../q4nx/safe_tensors.cpp
 ///       -L../../build/lib -lqwen3_8mtp_npu -lq4_npu_eXpress -lxrt_coreutil
 ///       -Wl,-rpath,<abs>/FLM_DLL/build/lib -o /tmp/bench_verify_lm_head

@@ -15,6 +15,7 @@
 # Environment:
 #   MANYLINUX_IMAGE  container image (default: the pin below)
 #   SKIP_ABI_CHECK=1 skip the closing check_abi.sh run (the CI action runs it as its own step)
+#   FLM_ENGINES      build only these engines after the priority units (see build.sh)
 set -uo pipefail
 
 # The same image as the SDK's manylinux_2_28 FLM job, pinned by digest so CI and that link agree.
@@ -45,6 +46,7 @@ if [[ ${FLM_MANYLINUX_INNER:-0} != 1 ]]; then
     -e HOME=/tmp \
     -e FLM_MANYLINUX_INNER=1 \
     -e SKIP_ABI_CHECK="${SKIP_ABI_CHECK:-0}" \
+    -e FLM_ENGINES="${FLM_ENGINES:-}" \
     -v "$root:/work" \
     -w /work \
     "$MANYLINUX_IMAGE" \

@@ -9,8 +9,8 @@
 /// otherwise be linked into the shared library.
 ///
 /// Build:
-///   g++-13 -O3 -march=native -fopenmp -std=c++20 \
-///       -I../../../include -I../../q4nx -I/opt/xilinx/xrt/include \
+///   g++-13 -O3 -mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma -fopenmp -std=c++20 \
+///       -I../../../include -I../../q4nx -I$XRT_ROOT/include \
 ///       tools/verify_qwen3_8mtp.cpp \
 ///       -L../../../build/lib -lqwen3_8mtp_npu -lxrt_coreutil \
 ///       -Wl,-rpath,../../../build/lib -o verify_qwen3_8mtp

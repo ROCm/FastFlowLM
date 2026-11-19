@@ -96,8 +96,8 @@ target_compile_definitions(llama_npu PUBLIC
 
 # Enhanced compiler options for AVX512
 target_compile_options(llama_npu PUBLIC
-    $<$<CXX_COMPILER_ID:MSVC>:/arch:AVX512 /O3 /fp:fast>
-    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-mavx512f -mavx512bw -mavx512dq -mavx512vl -mfma -march=native -O3>
+    $<$<BOOL:${MSVC}>:/arch:AVX512 /O3 /fp:fast>
+    $<$<NOT:$<BOOL:${MSVC}>>:-mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma -O3>
 )
 
 # HRX uses the dynamic CRT, the same one as flm and hrx. std::codecvt::id
@@ -120,7 +120,7 @@ if(MSVC)
     )
     # Add C++ standard library for RTTI and other symbols
     target_link_libraries(llama_npu PUBLIC
-        $<$<CXX_COMPILER_ID:MSVC>:msvcrt.lib>
+        $<$<BOOL:${MSVC}>:msvcrt.lib>
     )
 endif()
 

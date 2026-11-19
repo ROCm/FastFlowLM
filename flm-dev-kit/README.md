@@ -43,6 +43,12 @@ bash flm-dev-kit/FLM_DLL/build.sh
 bash flm-dev-kit/FLM_DLL/build_hunyuan.sh      # or one engine and what it needs (build_<model>.sh)
 ```
 
+The engine libraries (`FLM_DLL`) build with the product's AVX-512 flags, not `-march=native`; pass
+`FLM_MARCH=-march=native` to tune for your own CPU. Their XRT comes from `/opt/xilinx/xrt`, or `/usr`
+when only the distribution's `libxrt-dev` is installed; `XRT_ROOT=<prefix>` picks another. Both live in
+[`FLM_DLL/flags.mk`](FLM_DLL/flags.mk). The kernel host programs under `FLM_Xclbin` do not read it:
+they still use `-march=native` and `/opt/xilinx/xrt`.
+
 **Engines (HRX):**
 
 ```bash
@@ -92,11 +98,12 @@ point them at through `$FLM_REFERENCE_DIR`. Reference data is not shipped.
 
 ## Windows
 
-The engines build on Windows (XRT) with Visual Studio's C++ tools. After FastFlowLM's
+The engines build on Windows (XRT or HRX) with Visual Studio's C++ tools. After FastFlowLM's
 `.github\script\ci\setup_windows_deps.ps1` has laid out its dependencies under `C:\dev`, run
-`flm-dev-kit\FLM_DLL\build.ps1` in a Developer PowerShell; the DLLs land in `flm-dev-kit/FLM_DLL/build/lib/`.
+`flm-dev-kit\FLM_DLL\build.ps1` in a Developer PowerShell (`-Runtime HRX` for the HRX engines, which
+fetches the pinned HRX package first); the DLLs land in `flm-dev-kit/FLM_DLL/build/lib/`.
 Details and overrides: [`FLM_DLL/README.md`](FLM_DLL/README.md). Kernels are built on Linux.
-The Windows HRX engines (`-DFLM_USE_HRX=ON`) were not tested in this release.
+The Windows HRX engines build in CI but were not run on an NPU in this release.
 
 ## License
 

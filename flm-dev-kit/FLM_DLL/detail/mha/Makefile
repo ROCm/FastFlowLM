@@ -33,15 +33,16 @@ ifeq ($(WSL), 0)
 TARGET = $(LIB_DIR)/libmha.so
 
 CXX := g++-13
+include ../../flags.mk
 CXX_FLAGS := -std=c++20 -fPIC -Wall -O3 -fopenmp
-CXX_FLAGS += -mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma -march=native -ffast-math
+CXX_FLAGS += $(FLM_MARCH) -ffast-math
 CXX_FLAGS += -fmax-errors=1
 CXX_FLAGS += -I../../include
 ifeq ($(FLM_USE_HRX),1)
 include ../../hrx.mk
 CXX_FLAGS += $(HRX_INC)
 else
-CXX_FLAGS += -I/opt/xilinx/xrt/include
+CXX_FLAGS += -I$(XRT_ROOT)/include
 endif
 CXX_FLAGS += -MMD -MP
 
@@ -65,7 +66,7 @@ TEST_FLAGS += -L$(LIB_DIR)
 ifeq ($(FLM_USE_HRX),1)
 LDFLAGS += $(HRX_RPATH)
 else
-LDFLAGS += -L/opt/xilinx/xrt/lib
+LDFLAGS += -L$(XRT_ROOT)/lib
 endif
 LDFLAGS += -fopenmp
 ifeq ($(FLM_USE_HRX),1)

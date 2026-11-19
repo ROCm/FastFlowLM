@@ -35,7 +35,9 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              (the kernel, engine, converter and pybind sources, built by their
              own jobs), a src/lib/xrt file the dev kit links (libaiebu.a,
              aiebu_static.lib, any library its engines' -L order can pick
-             up), or the CI that runs the dev-kit jobs; documentation under
+             up), hrx-integration/ (the HRX engine builds fetch the pinned
+             package with it), or the CI that runs the dev-kit jobs
+             (including .github/workflows/devkit-*.yml); documentation under
              flm-dev-kit/ counts as nothing, as for the product. Nothing in
              the product consumes flm-dev-kit/ yet, so those paths select no
              product build, suite or family: a change only there builds and
@@ -44,7 +46,8 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
   devkit_areas
              comma-separated dev-kit areas the change touches, from xclbin,
              dll, converter, pybind and launchlib, plus the areas that build
-             from a changed file of another area or of src/lib/xrt; every
+             from a changed file of another area, of src/lib/xrt or of
+             hrx-integration/; every
              area when the changed files are unknown, a changed dev-kit file
              is in none of them, or the dev-kit CI changed
   devkit_families
@@ -146,12 +149,18 @@ DEVKIT_ALSO = (
 DEVKIT_FROM_PRODUCT = (
     (re.compile(r"^src/lib/xrt/(libaiebu\.a|aiebu_static\.lib)$"), {"xclbin", "dll", "pybind", "launchlib"}),
     (re.compile(r"^src/lib/xrt/[^/]+$"), {"dll"}),
+    # The HRX engine builds fetch the pinned package with these scripts
+    # (build_manylinux.sh, build.ps1 -Runtime HRX, hrx.mk, cmake/flm_hrx.cmake).
+    (re.compile(r"^hrx-integration/"), {"dll"}),
+    # setup_windows_deps.ps1 builds xrt_coreutil.lib from these files, and
+    # devkit-engines.yml's Windows jobs key their C:\dev cache on them.
+    (re.compile(r"^\.github/windows-deps/"), {"dll"}),
 )
 
 # The CI that decides and runs the dev-kit jobs: a change to it runs every
 # dev-kit area, so it is exercised before it merges.
 DEVKIT_CI = re.compile(
-    r"^\.github/(workflows/build-and-test\.yml$|workflows/release\.yml$"
+    r"^\.github/(workflows/(build-and-test|release|devkit-[^/]+)\.yml$"
     r"|actions/(detect-changes|devkit[^/]*)/|script/ci/)")
 
 

@@ -108,15 +108,15 @@ target_compile_definitions(d3_npu PUBLIC
 
 # Enhanced compiler options for AVX-512
 target_compile_options(d3_npu PUBLIC
-    $<$<CXX_COMPILER_ID:MSVC>:/arch:AVX512 /O2 /fp:fast>
-    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-mavx512f -mavx512bw -mavx512dq -mavx512vl -mfma -march=native -O3>
+    $<$<BOOL:${MSVC}>:/arch:AVX512 /O2 /fp:fast>
+    $<$<NOT:$<BOOL:${MSVC}>>:-mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma -O3>
 )
 
 # Add OpenMP compiler flags if available
 if(OpenMP_CXX_FOUND)
     target_compile_options(d3_npu PUBLIC
-        $<$<CXX_COMPILER_ID:MSVC>:/openmp>
-        $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-fopenmp>
+        $<$<BOOL:${MSVC}>:/openmp>
+        $<$<NOT:$<BOOL:${MSVC}>>:-fopenmp>
     )
 endif()
 
@@ -132,7 +132,7 @@ if(MSVC)
     )
     # Add C++ standard library for RTTI and other symbols
     target_link_libraries(d3_npu PUBLIC
-        $<$<CXX_COMPILER_ID:MSVC>:msvcrt.lib>
+        $<$<BOOL:${MSVC}>:msvcrt.lib>
     )
 endif()
 

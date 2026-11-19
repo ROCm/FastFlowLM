@@ -32,7 +32,7 @@
 ///
 /// Build (any flags -- but run it at the module's, since `-ffast-math` is what
 /// makes the scalar constructor take the RNE path for inf and nan):
-///   g++-13 -O3 -march=native -ffast-math -fopenmp -std=c++20
+///   g++-13 -O3 -ffast-math -fopenmp -std=c++20
 ///       -mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma
 ///       -I. -I../../include -I../q4nx
 ///       tools/verify_vision_bfp16.cpp -o /tmp/verify_vision_bfp16

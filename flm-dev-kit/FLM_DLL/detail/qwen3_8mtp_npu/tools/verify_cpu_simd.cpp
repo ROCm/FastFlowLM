@@ -30,7 +30,7 @@
 /// than `libqwen3_8mtp_npu.so` tests a conversion nobody runs.
 ///
 ///     g++-13 -std=c++20 -O3 -fopenmp \
-///       -mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma -march=native \
+///       -mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma \
 ///       -ffast-math -I. -I../../include -I../q4nx \
 ///       tools/verify_cpu_simd.cpp -o /tmp/verify_cpu_simd
 ///     /tmp/verify_cpu_simd

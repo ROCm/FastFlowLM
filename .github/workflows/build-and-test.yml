@@ -38,9 +38,10 @@ name: Build and Test
 # HIPEP beside qwen3.5-oga-hipep:9b. A change that only touches docs
 # builds and tests nothing; one only under flm-dev-kit/ (which no product
 # package uses yet) builds and tests no package and runs only the dev-kit
-# checks (devkit-static). The portable test jobs get 120 minutes on the pr
-# tier and 360 on the full one, which runs every model and every d3 size and
-# may first download tens of GB of weights.
+# checks (devkit-static), plus the dev-kit engine builds (devkit-engines)
+# when it selects the dll area. The portable test jobs get 120 minutes on the
+# pr tier and 360 on the full one, which runs every model and every d3 size
+# and may first download tens of GB of weights.
 #
 # A dispatch can name the models to test (models, e.g. qwen3.5-oga-hipep:9b):
 # every test job then runs only those, so a package without them runs
@@ -183,6 +184,22 @@ jobs:
           BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
           HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
         run: python3 .github/script/ci/devkit_check.py --base "${BASE}" --head "${HEAD}"
+
+  # The dev kit's engine libraries (flm-dev-kit/FLM_DLL), built for Linux and
+  # Windows, XRT and HRX, on hosted runners (devkit-engines.yml): when a change
+  # selects the dll dev-kit area, and on every push to main and nightly run so
+  # main stays green. Not for a release: the dev kit ships in no package.
+  # packages: read pulls the build-environment container.
+  devkit-engines:
+    needs: changes
+    if: >-
+      ${{ !inputs.release && (github.event_name == 'schedule'
+      || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      || contains(format(',{0},', needs.changes.outputs.devkit-areas), ',dll,')) }}
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/devkit-engines.yml
 
   # ── NPU approval gate ────────────────────────────────────────────────────
   # The NPU runners are few and self-hosted, so no job lands on them unless
@@ -1096,6 +1113,7 @@ jobs:
     needs:
       - changes
       - devkit-static
+      - devkit-engines
       - npu-gate
       - npu-approve
       - build-lin-xrt-portable
@@ -1196,14 +1214,23 @@ jobs:
             echo "::error::a package failed to build or its tests failed"; exit 1
           fi
 
-      # A pull request whose dev-kit data does not check out fails here too,
-      # whatever the gate step above decided, so this job stays the single
-      # required check. Other runs only show devkit-static's own result: the
-      # dev kit ships in no package, so it does not hold up a release.
+      # A pull request whose dev-kit data does not check out, or whose dev-kit
+      # engines do not build, fails here too, whatever the gate step above
+      # decided, so this job stays the single required check. So does one
+      # whose change detection failed: every job after it is then skipped,
+      # and a skip would otherwise read as a pass. Other runs only show the
+      # dev-kit jobs' own results: the dev kit ships in no package, so it
+      # does not hold up a release.
       - name: Dev-kit checks
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         env:
+          CHANGES: ${{ needs.changes.result }}
           DEVKIT_STATIC: ${{ needs.devkit-static.result }}
+          DEVKIT_ENGINES: ${{ needs.devkit-engines.result }}
         run: |
-          echo "devkit-static: ${DEVKIT_STATIC}"
-          case "${DEVKIT_STATIC}" in success|skipped) ;; *) echo "::error::devkit-static did not pass"; exit 1 ;; esac
+          echo "changes: ${CHANGES}; devkit-static: ${DEVKIT_STATIC}; devkit-engines: ${DEVKIT_ENGINES}"
+          rc=0
+          case "${CHANGES}" in success) ;; *) echo "::error::changes did not succeed, so the dev-kit and build jobs were skipped"; rc=1 ;; esac
+          case "${DEVKIT_STATIC}" in success|skipped) ;; *) echo "::error::devkit-static did not pass"; rc=1 ;; esac
+          case "${DEVKIT_ENGINES}" in success|skipped) ;; *) echo "::error::devkit-engines did not pass"; rc=1 ;; esac
+          exit "${rc}"

@@ -9,7 +9,7 @@
 /// top-1 value is a tie and is reported, not failed). Prints acceptance length, per-phase timing, tok/s of both runs.
 ///
 /// Lives in tools/ so the Makefile's *.cpp glob misses it. Build (from FLM_DLL/detail/gemma4e_dflash_flash):
-///   g++-13 -O3 -march=native -fopenmp -std=c++20 -I../../include -I../q4nx -I/opt/xilinx/xrt/include \
+///   g++-13 -O3 -mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma -fopenmp -std=c++20 -I../../include -I../q4nx -I$XRT_ROOT/include \
 ///       tools/test_spec_engine.cpp -L../../build/lib -lgemma4e_dflash_flash -lxrt_coreutil \
 ///       -Wl,-rpath,$PWD/../../build/lib -o ../../build/test_spec_engine
 ///   HRX: add -DFLM_USE_HRX -I$HRX_HOME/include/hrx -I$HRX_HOME/include, link the HRX engine build and -L$HRX_HOME/lib -lhrx

@@ -147,9 +147,11 @@ not build or test the dev kit.
   `MODEL_TYPE`, `KERNEL_ARGS`, `IRON_ARGS`.
 - **`FLM_Xclbin/kernel_assignment.md`** is the model → kernel map. Update it when you change which
   kernel build a model uses.
-- **Engine flags:** `-std=c++20 -fPIC -Wall -O3 -fopenmp`, then
-  `-mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma -march=native -ffast-math`, and `-fmax-errors=1`
-  (q4nx: `-std=c++20 -fPIC -Wall` only). Threads via `OMP_NUM_THREADS`.
+- **Engine flags:** `-std=c++20 -fPIC -Wall -O3 -fopenmp`, then `$(FLM_MARCH) -ffast-math`, and
+  `-fmax-errors=1` (q4nx: `-std=c++20 -fPIC -Wall` only). `FLM_DLL/flags.mk` sets `FLM_MARCH` to the
+  product's AVX-512 set (`-mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma`, no `-march=native`) and
+  `XRT_ROOT` (default `/opt/xilinx/xrt`, `/usr` for a distro libxrt-dev); gemma, gpt_oss, whisper and
+  qwen3_asr add the BF16/VNNI/VBMI flags their unguarded intrinsics need. Threads via `OMP_NUM_THREADS`.
 - **Vendored, do not edit:** `FLM_DLL/include/nlohmann/`, `FLM_DLL/include/aiebu/`,
   `FLM_Xclbin/host_common/aiebu/`, `FLM_DLL/include/tokenizer/tokenizers_c.h` and `tokenizers_cpp.h`,
   `FLM_DLL/include/base64.hpp`, every `biovault_bfloat16.h` and every `npu_utils/amdxdna_accel.h`.
@@ -206,6 +208,7 @@ Kernel build: `iron/*_aie.py` → `build/[<MT>/]mlir/*.mlir` → `aiecc.py` → 
 ## 8. Gotchas
 
 - **AVX-512 is mandatory** for engines: built on a host without it they compile, then die with SIGILL.
+  `make FLM_MARCH=-march=native` tunes a local build to its host; such a library may fault elsewhere.
 - **Chess vs Peano.** Every kernel defaults to Peano (`ENABLE_CHESSCC ?= 0`: `clang++
   --target=aie2p-none-unknown-elf`, `aiecc --no-xchesscc --no-xbridge`). `make … ENABLE_CHESSCC=1`
   builds with Chess (`xchesscc_wrapper`, `--xchesscc --xbridge`); it needs Vitis AIE Essentials

@@ -7,6 +7,20 @@ if ! ls detail/*/Makefile >/dev/null 2>&1; then
 	exit 1
 fi
 
+# FLM_ENGINES (optional): the engines to build after the priority units, by
+# detail/ directory name, separated by spaces or commas. Unset or "all": every
+# detail/*/ with a Makefile.
+selected=()
+if [ -n "${FLM_ENGINES:-}" ] && [ "${FLM_ENGINES}" != all ]; then
+	read -r -a selected <<< "${FLM_ENGINES//,/ }"
+	for name in "${selected[@]}"; do
+		if [ ! -f "detail/${name}/Makefile" ]; then
+			echo "build.sh: FLM_ENGINES names ${name}, but detail/${name}/Makefile does not exist" >&2
+			exit 1
+		fi
+	done
+fi
+
 rm -rf build
 
 failed_dirs=()
@@ -29,6 +43,9 @@ for dir in detail/*/; do
 			continue
 			;;
 	esac
+	if [ ${#selected[@]} -ne 0 ] && [[ " ${selected[*]} " != *" ${name} "* ]]; then
+		continue
+	fi
 	if [ -f "${dir}Makefile" ]; then
 		if ! (cd "$dir" && make clean && make -j4); then
 			failed_dirs+=("${dir%/}")

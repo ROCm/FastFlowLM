@@ -96,8 +96,8 @@ target_compile_definitions(phi4_npu PUBLIC
 
 # Enhanced compiler options for AVX2
 target_compile_options(phi4_npu PUBLIC
-    $<$<CXX_COMPILER_ID:MSVC>:/arch:AVX2 /O2 /fp:fast>
-    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-mavx2 -mfma -march=native -O2>
+    $<$<BOOL:${MSVC}>:/arch:AVX512 /O2 /fp:fast>
+    $<$<NOT:$<BOOL:${MSVC}>>:-mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma -O2>
 )
 
 # HRX uses the dynamic CRT, the same one as flm and hrx. std::codecvt::id
@@ -120,7 +120,7 @@ if(MSVC)
     )
     # Add C++ standard library for RTTI and other symbols
     target_link_libraries(phi4_npu PUBLIC
-        $<$<CXX_COMPILER_ID:MSVC>:msvcrt.lib>
+        $<$<BOOL:${MSVC}>:msvcrt.lib>
     )
 endif()
 

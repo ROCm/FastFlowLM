@@ -12,7 +12,7 @@
 ///                  state    prefill, decode m, read_state, decode k (S1), write_state, decode k (S2), compare S1/S2;
 ///                           then checkpoint at the same length, decode k (S3), restore, decode k (S4), compare
 /// Build (from FLM_DLL/detail/gemma4e_dflash_flash):
-///   g++-13 -O3 -march=native -fopenmp -std=c++20 -I../../include -I../q4nx -I/opt/xilinx/xrt/include tools/test_swa_stream.cpp \
+///   g++-13 -O3 -mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma -fopenmp -std=c++20 -I../../include -I../q4nx -I$XRT_ROOT/include tools/test_swa_stream.cpp \
 ///       -L../../build/lib -lgemma4e_dflash_flash -lq4_npu_eXpress -lxrt_coreutil -Wl,-rpath,$PWD/../../build/lib -o ../../build/test_swa_stream_dflash
 ///   (same with -DENGINE_NPU and -lgemma4e_npu for the oracle build)
 /// Run: test_swa_stream <model_dir> <exec_path> <ids.json> <prompt_index> <n_tokens> <stream|state> <out|-> [max_l=12288]

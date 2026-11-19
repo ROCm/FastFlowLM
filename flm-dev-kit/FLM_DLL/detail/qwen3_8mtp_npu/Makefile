@@ -26,8 +26,9 @@ VERBOSE ?= 0
 TARGET = $(LIB_DIR)/libqwen3_8mtp_npu.so
 
 CXX := g++-13
+include ../../flags.mk
 CXX_FLAGS := -std=c++20 -fPIC -Wall -O3 -fopenmp
-CXX_FLAGS += -mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma -march=native -ffast-math
+CXX_FLAGS += $(FLM_MARCH) -ffast-math
 CXX_FLAGS += -fmax-errors=1
 CXX_FLAGS += -I../../include
 CXX_FLAGS += -I../q4nx
@@ -37,7 +38,7 @@ ifeq ($(FLM_USE_HRX),1)
 include ../../hrx.mk
 CXX_FLAGS += $(HRX_INC)
 else
-CXX_FLAGS += -I/opt/xilinx/xrt/include
+CXX_FLAGS += -I$(XRT_ROOT)/include
 endif
 CXX_FLAGS += -MMD -MP -DDEBUG_LEVEL=$(DEBUG_LEVEL) -DVERBOSE=$(VERBOSE)
 # make PREFILL_PROFILE=1 -- per-stage prefill timings on stdout, see
@@ -79,7 +80,7 @@ TEST_FLAGS += -L$(LIB_DIR)
 ifeq ($(FLM_USE_HRX),1)
 LDFLAGS += $(HRX_RPATH)
 else
-LDFLAGS += -L/opt/xilinx/xrt/lib
+LDFLAGS += -L$(XRT_ROOT)/lib
 endif
 
 LDFLAGS += -fopenmp
@@ -89,7 +90,7 @@ ifeq ($(FLM_USE_HRX),1)
 LDFLAGS += $(HRX_LIBS)
 else
 # Link the aiebu that matches ../../include/aiebu by path. With -laiebu, an
-# XRT installed in /opt/xilinx/xrt/lib (searched first) supplies its own
+# XRT installed in $(XRT_ROOT)/lib (searched first) supplies its own
 # libaiebu.a, whose assembler prints a "Header version ..." banner to stdout
 # on every _setup_kernel().
 LDFLAGS += -lxrt_coreutil ../../../../src/lib/xrt/libaiebu.a

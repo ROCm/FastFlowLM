@@ -73,10 +73,10 @@ canvas positions and HF fp32's greedy answer).
 
 ```
 # tower, stage by stage (from this directory's parent)
-g++-13 -O3 -march=native -fopenmp -std=c++20 -ffast-math -I. -I../../include -I../q4nx \
-  -I/opt/xilinx/xrt/include tools/verify_minicpm_v_moe_vision.cpp image/vision_tower.cpp \
+g++-13 -O3 -mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma -fopenmp -std=c++20 -ffast-math -I. -I../../include -I../q4nx \
+  -I$XRT_ROOT/include tools/verify_minicpm_v_moe_vision.cpp image/vision_tower.cpp \
   image/vision_ops.cpp image/vision_glue.cpp image/mrope.cpp image/npu/vision_mm_sequence.cpp \
-  image/npu/vision_attn_sequence.cpp -L../../../../src/lib/xrt -L/opt/xilinx/xrt/lib \
+  image/npu/vision_attn_sequence.cpp -L../../../../src/lib/xrt -L$XRT_ROOT/lib \
   -lxrt_coreutil -laiebu -luuid -lpthread -o /tmp/verify_minicpm_v_moe_vision
 FLM_MINICPM_V_VISION_FP32=1 /tmp/verify_minicpm_v_moe_vision --backend cpu   # logic
 /tmp/verify_minicpm_v_moe_vision --backend cpu                                # bf16 floor

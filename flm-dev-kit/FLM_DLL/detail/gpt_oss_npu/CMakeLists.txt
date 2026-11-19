@@ -112,9 +112,10 @@ target_compile_definitions(gpt_oss_npu PUBLIC
 )
 
 # Enhanced compiler options for AVX2
+# gpt_mlp.hpp and gpt_router.hpp call AVX-512 BF16 intrinsics without a guard (see the Makefile). MSVC needs no flag for them.
 target_compile_options(gpt_oss_npu PUBLIC
-    $<$<CXX_COMPILER_ID:MSVC>:/arch:AVX512 /O2 /fp:fast /openmp>
-    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-mavx2 -mavx512f -mfma -march=native -O3 -fopenmp>
+    $<$<BOOL:${MSVC}>:/arch:AVX512 /O2 /fp:fast /openmp>
+    $<$<NOT:$<BOOL:${MSVC}>>:-mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma -mavx512bf16 -O3 -fopenmp>
 )
 
 # Link OpenMP
@@ -129,7 +130,7 @@ if(MSVC)
     )
     # Add C++ standard library for RTTI and other symbols
     target_link_libraries(gpt_oss_npu PUBLIC
-        $<$<CXX_COMPILER_ID:MSVC>:msvcrt.lib>
+        $<$<BOOL:${MSVC}>:msvcrt.lib>
     )
 endif()
 
