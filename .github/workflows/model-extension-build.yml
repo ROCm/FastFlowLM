@@ -40,6 +40,9 @@ jobs:
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
+      # The image's default user is unprivileged; the runner's workspace mounts
+      # need root.
+      options: --user root
     defaults:
       run:
         shell: bash

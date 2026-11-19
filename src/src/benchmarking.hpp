@@ -248,14 +248,6 @@ void print_result(const BenchmarkResults_t& results) {
 }
 
 BenchmarkResults_t run_benchmarks(std::string model_tag, std::string bench_config_file, model_list& availble_models, int iterations, flm_rt::device* npu_device, const std::string& backend = "", int ctx_length = -1){
-    // RAI receives the device from corelib; non-RAI creates its own here.
-    // Declared first so it outlives the model engine below.
-    std::optional<flm_rt::device> owned_device;
-    if (npu_device == nullptr) {
-        owned_device = flm_rt::device(0);
-        npu_device = &(*owned_device);
-    }
-
     BenchmarkResults_t results;
     json bench_config;
     // this is used for our benchmarking, not for public use.
@@ -283,7 +275,7 @@ BenchmarkResults_t run_benchmarks(std::string model_tag, std::string bench_confi
     }
     auto [new_tag, model_info] = availble_models.get_model_info(model_tag);
     auto auto_model =
-        get_auto_model(new_tag, availble_models, npu_device);
+        get_auto_model(new_tag, availble_models, npu_device, backend);
     auto_chat_engine = std::move(auto_model.second);
 
     bool single_turn = model_info.contains("label") &&

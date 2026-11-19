@@ -43,7 +43,7 @@ using json = nlohmann::ordered_json;
 class RestHandler;
 class HttpSession;
 
-// Global NPU access control
+// Global accelerator access control
 extern std::mutex g_npu_access_mutex;
 extern std::atomic<bool> g_npu_in_use;
 extern std::atomic<int> g_npu_active_requests;
@@ -58,12 +58,12 @@ inline bool reads_raw_body(const std::string& method, const std::string& path) {
     return method == "POST" && (path == "/v1/systemone" || path == "/v1/decisions");
 }
 
-class NPURequestCoordinator final {
+class AcceleratorRequestCoordinator final {
 public:
     using Task = std::function<void()>;
     using Scheduler = std::function<void(Task)>;
 
-    explicit NPURequestCoordinator(std::size_t capacity = 10)
+    explicit AcceleratorRequestCoordinator(std::size_t capacity = 10)
         : capacity_(capacity) {}
     void set_capacity(std::size_t capacity) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -76,9 +76,8 @@ public:
         return true;
     }
     enum class Admission { run_now, queued, queue_full };
-    /// \brief take the NPU (`try_acquire`) or else queue `task`, as one step with respect to complete_current: done separately, the
-    ///        running request could find the queue empty and release the NPU between a failed acquire and the enqueue, and the
-    ///        queued task would never run
+    /// \brief Acquire the accelerator or queue the task atomically with respect to complete_current.
+    /// \note A separate acquire and enqueue could strand a request if the running task releases the lock in between.
     Admission admit(Task task, const std::function<bool()>& try_acquire) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (try_acquire()) return Admission::run_now;
@@ -127,18 +126,18 @@ private:
     std::size_t capacity_;
 };
 
-class NPURequestCompletionGuard final {
+class AcceleratorRequestCompletionGuard final {
 public:
-    explicit NPURequestCompletionGuard(std::function<void()> completion)
+    explicit AcceleratorRequestCompletionGuard(std::function<void()> completion)
         : completion_(std::move(completion)) {}
-    NPURequestCompletionGuard(const NPURequestCompletionGuard&) = delete;
-    NPURequestCompletionGuard& operator=(const NPURequestCompletionGuard&) = delete;
-    NPURequestCompletionGuard(NPURequestCompletionGuard&& other) noexcept
+    AcceleratorRequestCompletionGuard(const AcceleratorRequestCompletionGuard&) = delete;
+    AcceleratorRequestCompletionGuard& operator=(const AcceleratorRequestCompletionGuard&) = delete;
+    AcceleratorRequestCompletionGuard(AcceleratorRequestCompletionGuard&& other) noexcept
         : completion_(std::move(other.completion_)), active_(other.active_) {
         other.active_ = false;
     }
-    NPURequestCompletionGuard& operator=(NPURequestCompletionGuard&&) = delete;
-    ~NPURequestCompletionGuard() { complete(); }
+    AcceleratorRequestCompletionGuard& operator=(AcceleratorRequestCompletionGuard&&) = delete;
+    ~AcceleratorRequestCompletionGuard() { complete(); }
     void complete() noexcept {
         if (!active_) return;
         active_ = false;
@@ -153,8 +152,8 @@ private:
 ///@return the current time string
 std::string get_current_time_string();
 
-// NPU access manager class
-class NPUAccessManager {
+// Shared accelerator access
+class AcceleratorAccessManager {
 public:
     static bool try_acquire_npu_access();
     static void release_npu_access();
@@ -273,7 +272,7 @@ private:
     // Connection tracking
     std::atomic<size_t> active_connections_{0};
     std::vector<std::thread> io_threads_;
-    NPURequestCoordinator npu_request_coordinator_;
+    AcceleratorRequestCoordinator npu_request_coordinator_;
     // Friend declaration for HttpSession to access private members
     friend class HttpSession;
 };

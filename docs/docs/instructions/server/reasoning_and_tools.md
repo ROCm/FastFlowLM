@@ -242,6 +242,15 @@ client.chat.completions.create(model="qwen3:4b", messages=msgs, extra_body={"thi
 client.chat.completions.create(model="gpt-oss:20b", messages=msgs, reasoning_effort="low")
 ```
 
+For the Qwen3.5 models, FLM also reads the switch from the shape Qwen's model card uses, so a client written for another Qwen server works unchanged:
+
+```python
+client.chat.completions.create(model="qwen3.5:9b", messages=msgs,
+                               extra_body={"chat_template_kwargs": {"enable_thinking": False}})
+```
+
+`chat_template_kwargs.enable_thinking` means the same as `think`. Only this one key is read; other keys in `chat_template_kwargs` are ignored. A `null` container or value counts as not sent. A value that is not `true` or `false`, a `chat_template_kwargs` that is not an object, or a request whose `think` or `reasoning_effort` says the opposite is rejected with HTTP 400 before any output. Other models ignore the field.
+
 > ℹ️ **The setting applies to its own request.** A request that doesn't mention `think` or `reasoning_effort` gets the model's default, not what an earlier request set. This holds for the `reasoning_effort` levels of GPT-OSS and Hy-Memory too.
 
 What changes when thinking is off:

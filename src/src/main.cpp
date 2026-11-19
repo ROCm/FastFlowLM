@@ -543,29 +543,6 @@ struct CoreProcessGuard {
 };
 #endif
 
-///@brief open the NPU device that every engine in this process shares
-///@param why if non-null, receives why the device could not be opened
-///@return the shared device, or nullptr when no NPU could be opened
-///@note Function-local static, so the lifetime is tied to the process exactly as
-///      the per-Runner devices used to be. A machine with no NPU must still be
-///      able to run `flm list`/`pull`/`version`, so failure is a null pointer,
-///      not an error.
-static flm_rt::device* open_npu_device(std::string* why) {
-    try {
-        static flm_rt::device npu_device = flm_rt::device(0);
-        return &npu_device;
-    } catch (const std::exception& e) {
-        if (why) *why = e.what();
-        DO_VERBOSE(1, {
-            header_print("FLM", "No NPU device available: " << e.what());
-        });
-        return nullptr;
-    } catch (...) {
-        if (why) *why = "unknown error";
-        return nullptr;
-    }
-}
-
 #if defined(_WIN32) && defined(FLM_ENABLE_OGA_HIPEP)
 ///@brief end a process that loaded hip-ep at Ctrl+C, Ctrl+Break or closing its console
 ///@note The default handler, which runs when this one returns FALSE, ends the process
@@ -679,56 +656,10 @@ static int run_flm(int argc, char* argv[]) {
     // Get the models directory from environment variable or default
     std::string models_dir = utils::get_models_directory();
 
-    // One NPU runtime for the whole process, brought up before the catalog so
-    // the catalog can be filtered to what this NPU generation can actually run.
-#ifdef FLM_ENABLE_CORE
-    // Before this process takes the device, as in the build without corelib:
-    // validate probes /dev/accel/* itself, and amdxdna refuses a second open.
+    // validate opens its own probe device; do not open a model device first.
     if (parsed_args.command == "validate") {
         return sanity_check_npu_stack(false, parsed_args.json_output) ? 0 : 1;
     }
-    // Declared out here so the early exits below still see a device, and so a
-    // corelib that fails to come up leaves it null rather than undefined.
-    flm_rt::device* npu_device = nullptr;
-    // Kept so the reason survives into a release build. VERBOSE is a
-    // compile-time macro, so every DO_VERBOSE below is compiled out and a user
-    // is left with "NPU device instance is nullptr" -- raised much later, by
-    // whichever model reaches for the device first -- and nothing to act on.
-    std::string npu_open_error;
-    // Set when corelib failed: the core backend is gone, the rest of the build
-    // is not.
-    std::string corelib_note;
-
-    try {
-        // corelib serves the core models alone and keeps its device to itself,
-        // opening a hardware context per stream on it, so the engines here get
-        // the device opened below. A core model shares no buffer with them.
-        (void)flm::corelib::CorelibRuntime::GetOrCreate(std::filesystem::path(exe_dir));
-    } catch (const std::exception& e) {
-        corelib_note = std::string("corelib unavailable: ") + e.what();
-    }
-    // A box with no NPU must still run `flm list`/`pull`/`version`, so this
-    // stays a null device rather than an error, as in the non-core path.
-    std::string raw_error;
-    npu_device = open_npu_device(&raw_error);
-    if (npu_device == nullptr) {
-        npu_open_error = corelib_note.empty() ? raw_error : corelib_note + "; " + raw_error;
-        corelib_note.clear();
-    }
-#else
-    // validate probes /dev/accel/* itself, and amdxdna refuses a second open of
-    // the same device from one process: run it before this process takes the
-    // device, or every probe gets EBUSY and the check reports "No NPU device found".
-    if (parsed_args.command == "validate") {
-        return sanity_check_npu_stack(false, parsed_args.json_output) ? 0 : 1;
-    }
-
-    // Non-RAI builds open the device lazily (in the Runner constructor),
-    // letting constructor errors propagate to main()'s try-catch.
-    std::string npu_open_error;
-    std::string corelib_note;
-    flm_rt::device* npu_device = nullptr;
-#endif
 
     // Two things decide what this binary can run, and they are independent.
     // The generation is the machine's, answered by the device itself, and says
@@ -742,43 +673,13 @@ static int run_flm(int argc, char* argv[]) {
         backend_registry.backend_ids(), frontend_registry.catalog_overlays(),
         frontend_registry.available(), backend_registry.provider_inventory());
 
-    const bool print_status = !parsed_args.json_output && !parsed_args.sub_process_mode;
-    const bool needs_npu =
-        parsed_args.command == "run" || parsed_args.command == "serve" ||
-        parsed_args.command == "bench" || parsed_args.command == "validate";
-
-    // Say once, here, why there is no device. The commands below cannot run
-    // without one, and the message they eventually produce names the symptom
-    // rather than the cause: it is raised from whichever model first reaches
-    // for the device, long after the runtime that failed to come up. Only on
-    // dev04: elsewhere corelib has nothing to run and its absence is expected.
-    if (print_status && needs_npu && !corelib_note.empty() &&
-        platform == utils::npu_platform::dev04) {
-        header_print("FLM", "core backend unavailable (" << corelib_note << ")");
-    }
-    // Only print early error for RAI builds where the device is opened eagerly.
-#ifdef FLM_ENABLE_RAI
-    if (needs_npu && npu_device == nullptr
-            && !npu_open_error.empty()) {
-        header_print("ERROR", "No NPU device available"
-                                  << ": " + npu_open_error);
-    }
-#endif
-
-    // Extract parsed values
-    bool got_power_mode = (parsed_args.power_mode != "performance"); // Check if user explicitly set power mode
-    bool stable_stack = false;
+    const bool starts_model = parsed_args.command == "run" || parsed_args.command == "serve" ||
+                              parsed_args.command == "bench";
 
     // Set process priority to high for better performance
 #ifdef _WIN32
     SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
 #endif
-
-    // Check if the commands and args valid
-    if (parsed_args.command == "validate") {
-        stable_stack = sanity_check_npu_stack(parsed_args.command != "validate", parsed_args.command == "validate" && parsed_args.json_output);
-        return stable_stack ? 0 : 1;
-    }
 
     if (parsed_args.command == "run" || parsed_args.command == "serve" || parsed_args.command == "pull" || parsed_args.command == "remove" || parsed_args.command == "check" || parsed_args.command == "bench") {
         parsed_args.model_tag = availble_models.rectify_model_tag(parsed_args.model_tag);
@@ -818,21 +719,10 @@ static int run_flm(int argc, char* argv[]) {
         }
     }
 
-    if (parsed_args.command == "serve" || parsed_args.command == "run" || parsed_args.command == "bench"){
-        // Configure AMD XRT for the specified power mode
-        if (parsed_args.power_mode == "default" || parsed_args.power_mode == "powersaver" || parsed_args.power_mode == "balanced" || 
-            parsed_args.power_mode == "performance" || parsed_args.power_mode == "turbo") {
-#ifdef _WIN32
-            std::string xrt_cmd = "cd \"C:\\Windows\\System32\\AMD\" && .\\xrt-smi.exe configure --pmode " + parsed_args.power_mode + " > NUL 2>&1";
-            header_print("FLM", "Configuring NPU Power Mode to " + parsed_args.power_mode + (got_power_mode ? "" : " (flm default)"));
-            (void)system(xrt_cmd.c_str());
-#endif
-        }
-        else{
-            std::cout << "Invalid power mode: " << parsed_args.power_mode << std::endl;
-            std::cout << "Valid power modes: default, powersaver, balanced, performance, turbo" << std::endl;
-            return 1;
-        }
+    if (starts_model && !utils::valid_npu_power_mode(parsed_args.power_mode)) {
+        std::cout << "Invalid power mode: " << parsed_args.power_mode << std::endl;
+        std::cout << "Valid power modes: default, powersaver, balanced, performance, turbo" << std::endl;
+        return 1;
     }
 
     // Handle special case for serve command - use default tag if none provided
@@ -926,6 +816,15 @@ static int run_flm(int argc, char* argv[]) {
             header_print("ERROR", parsed_args.model_tag << " is an embedding model: use `flm serve "
                                   << parsed_args.model_tag << "` and POST /v1/embeddings");
             return 1;
+        }
+        flm_rt::device* npu_device = nullptr;
+        if ((parsed_args.command == "serve" || parsed_args.command == "bench") &&
+            parsed_args.model_tag != "model-faker") {
+            const auto info = availble_models.get_model_info(parsed_args.model_tag).second;
+            if (!is_embedding_model(info)) {
+                npu_device = resolve_model_load(parsed_args.model_tag, availble_models, parsed_args.backend)
+                                 .prepare_device(nullptr, parsed_args.power_mode);
+            }
         }
         if (parsed_args.command == "bench") {
             // Like run and serve: fetch the model (from HF, or ModelScope with --modelscope) if it is not on disk yet.

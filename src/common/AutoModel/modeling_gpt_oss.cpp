@@ -45,7 +45,12 @@ void GPT_OSS::load_model(std::string model_path, json model_info, int default_co
     for (size_t i = 0; i < PROFILER_TYPE_NUM; i++) {
         this->profiler_list[i].reset();
     }
-    _prefix_attach(lm_engine, gpt_oss_npu_state_api(lm_engine));
+    // The OGA engine has no NPU prefix-slot table. Not calling the export also keeps
+    // the NPU engine DLL unloaded, so a host without the NPU driver can run OGA.
+    const flm_state_api* state = this->backend_id() == flm::backend::kOgaHipepBackendId
+                                     ? nullptr
+                                     : gpt_oss_npu_state_api(lm_engine);
+    _prefix_attach(lm_engine, state);
 }
 
 void GPT_OSS::setup_tokenizer(std::string model_path){

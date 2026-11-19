@@ -62,6 +62,13 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
     && chmod -R a+w "$RUSTUP_HOME" "$CARGO_HOME" \
     && rustc --version
 
+# Run as an unprivileged user by default (trivy DS-0002). CI jobs that use this
+# image as their container need root for the runner's workspace mounts and
+# pass "options: --user root" (lin-build.yml, model-extension-build.yml).
+RUN useradd --create-home --uid 1001 --shell /bin/bash builder \
+    && mkdir -p /workspace && chown builder:builder /workspace
+
 WORKDIR /workspace
+USER builder
 
 CMD ["/bin/bash"]

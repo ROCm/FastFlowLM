@@ -21,6 +21,7 @@ inline flm::backend::BackendTraits hipep_traits() {
     flm::backend::BackendTraits traits;
     traits.needs_npu_xclbin = false;
     traits.supports_preemption = false;
+    traits.needs_npu_device = false;
     return traits;
 }
 

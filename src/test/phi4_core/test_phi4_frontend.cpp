@@ -892,10 +892,10 @@ void TestQueueCompletionIsExactlyOnceAndIncludesCompletionsEndpoint() {
     for (int path = 0; path < 5; ++path) {
         int releases = 0;
         {
-            NPURequestCompletionGuard guard([&] { ++releases; });
+            AcceleratorRequestCompletionGuard guard([&] { ++releases; });
             if (path == 0) guard.complete();
             else if (path == 1) { guard.complete(); guard.complete(); }
-            else if (path == 2) { NPURequestCompletionGuard moved(std::move(guard)); }
+            else if (path == 2) { AcceleratorRequestCompletionGuard moved(std::move(guard)); }
             else if (path == 3) { try { throw std::runtime_error("model"); } catch (...) {} }
             else { try { throw 1; } catch (...) {} }
         }
@@ -906,7 +906,7 @@ void TestQueueCompletionIsExactlyOnceAndIncludesCompletionsEndpoint() {
 void TestQueueCompletionReleasesImmediatelyOrDelaysQueuedHandoff() {
     constexpr auto cooldown = std::chrono::milliseconds(100);
 
-    NPURequestCoordinator empty;
+    AcceleratorRequestCoordinator empty;
     bool released = false;
     const auto empty_start = std::chrono::steady_clock::now();
     empty.complete_current([](auto) { TEST_REQUIRE(false); },
@@ -915,7 +915,7 @@ void TestQueueCompletionReleasesImmediatelyOrDelaysQueuedHandoff() {
     TEST_REQUIRE(released);
     TEST_REQUIRE(empty_elapsed < std::chrono::milliseconds(50));
 
-    NPURequestCoordinator queued;
+    AcceleratorRequestCoordinator queued;
     bool handed_off = false;
     bool released_while_queued = false;
     TEST_REQUIRE(queued.try_enqueue([] {}));
@@ -936,7 +936,7 @@ void TestCancellationAndCapacityErrorsLeaveTheServerQueueUsable() {
     TempPackage package;
     FactoryScope scope;
     auto model = ReadyCore(package);
-    NPURequestCoordinator coordinator(3);
+    AcceleratorRequestCoordinator coordinator(3);
     bool cancelled = false;
     bool capacity_failed = false;
     bool queued_request_ran = false;
@@ -973,13 +973,13 @@ void TestCancellationAndCapacityErrorsLeaveTheServerQueueUsable() {
                                      std::chrono::milliseconds(0));
     };
     execute = [&](std::function<void()> task) {
-        NPURequestCompletionGuard completion(complete);
+        AcceleratorRequestCompletionGuard completion(complete);
         task();
         completion.complete();
         completion.complete();
     };
     {
-        NPURequestCompletionGuard active_request_completion(complete);
+        AcceleratorRequestCompletionGuard active_request_completion(complete);
         active_request_completion.complete();
         active_request_completion.complete();
     }

@@ -213,7 +213,7 @@ void brief_print_message_response(nlohmann::json request) {
 }
 
 // NPU Access Manager implementation
-bool NPUAccessManager::try_acquire_npu_access() {
+bool AcceleratorAccessManager::try_acquire_npu_access() {
     std::lock_guard<std::mutex> lock(g_npu_access_mutex);
     if (g_npu_in_use.load()) {
         return false; // NPU is already in use
@@ -223,19 +223,19 @@ bool NPUAccessManager::try_acquire_npu_access() {
     return true;
 }
 
-void NPUAccessManager::release_npu_access() {
+void AcceleratorAccessManager::release_npu_access() {
 
-    header_print("🔵 ", "NPU Lock Released!" );
+    header_print("🔵 ", "Accelerator lock released");
     std::lock_guard<std::mutex> lock(g_npu_access_mutex);
     g_npu_in_use.store(false);
     g_npu_active_requests.fetch_sub(1);
 }
 
-bool NPUAccessManager::is_npu_available() {
+bool AcceleratorAccessManager::is_npu_available() {
     return !g_npu_in_use.load();
 }
 
-int NPUAccessManager::get_active_npu_requests() {
+int AcceleratorAccessManager::get_active_npu_requests() {
     return g_npu_active_requests.load();
 }
 
@@ -749,13 +749,13 @@ void WebServer::do_accept() {
 ///@brief process_next_npu_request Handles one queued NPU task at a time
 void WebServer::process_next_npu_request() {
     npu_request_coordinator_.complete_current(
-        [this](NPURequestCoordinator::Task task) {
+        [this](AcceleratorRequestCoordinator::Task task) {
             const auto remaining = npu_request_coordinator_.size();
-            header_print("🟡 ", "Dequeuing NPU request (" +
+            header_print("🟡 ", "Dequeuing accelerator request (" +
                 std::to_string(remaining) + " remaining)...");
             net::post(ioc, std::move(task));
         },
-        [] { NPUAccessManager::release_npu_access(); },
+        [] { AcceleratorAccessManager::release_npu_access(); },
         std::chrono::milliseconds(333));
 }
 
@@ -830,7 +830,7 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
     auto process_task = [this, it, req_ptr, res_ptr, session, needs_npu, key, path, is_json](bool is_deferred) {
         auto& req_ref = *req_ptr;
         auto& res_ref = *res_ptr;
-        NPURequestCompletionGuard completion([this, needs_npu] {
+        AcceleratorRequestCompletionGuard completion([this, needs_npu] {
             if (needs_npu) process_next_npu_request();
         });
 
@@ -996,14 +996,14 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
     }
 
     const auto admission = npu_request_coordinator_.admit([this, process_task]() { process_task(true); },
-                                                          [] { return NPUAccessManager::try_acquire_npu_access(); });
-    if (admission == NPURequestCoordinator::Admission::run_now) {
-        header_print("🟢 ", "NPU Locked!");
+                                                          [] { return AcceleratorAccessManager::try_acquire_npu_access(); });
+    if (admission == AcceleratorRequestCoordinator::Admission::run_now) {
+        header_print("🟢 ", "Accelerator locked");
         process_task(false); //  return false
         return false;
     }
 
-    if (admission == NPURequestCoordinator::Admission::queue_full) {
+    if (admission == AcceleratorRequestCoordinator::Admission::queue_full) {
         res.result(http::status::service_unavailable);
         res.body() = dump_error_body(json{
             {"error", "NPU is in use and request queue is full (limit: " +
@@ -1012,11 +1012,11 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
         });
         res.set(http::field::content_type, "application/json");
         res.prepare_payload();
-        header_print("🚫 ", "NPU busy and queue full, request denied: " + key);
+        header_print("🚫 ", "Accelerator busy and queue full, request denied: " + key);
         return false;
     }
 
-    header_print("🕒 ", "NPU busy, request queued (" +
+    header_print("🕒 ", "Accelerator busy, request queued (" +
         std::to_string(npu_request_coordinator_.size()) + "/" +
         std::to_string(npu_request_coordinator_.capacity()) + "): " + key);
     return true;
@@ -1126,9 +1126,9 @@ std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader&
            std::shared_ptr<HttpSession> session,
            std::shared_ptr<CancellationToken> cancellation_token) {
             json response = {
-                {"npu_available", NPUAccessManager::is_npu_available()},
-                {"active_requests", NPUAccessManager::get_active_npu_requests()},
-                {"message", NPUAccessManager::is_npu_available() ? "NPU is available" : "NPU is currently in use"}
+                {"npu_available", AcceleratorAccessManager::is_npu_available()},
+                {"active_requests", AcceleratorAccessManager::get_active_npu_requests()},
+                {"message", AcceleratorAccessManager::is_npu_available() ? "NPU is available" : "NPU is currently in use"}
             };
             send_response(response);
         });
