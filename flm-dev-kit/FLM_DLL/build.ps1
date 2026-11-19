@@ -32,9 +32,6 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-Set-Location $PSScriptRoot
-
-if ($Clean -and (Test-Path build)) { Remove-Item -Recurse -Force build }
 
 $priority = @("q4nx", "mha", "gemm", "dequant", "lm_head")
 $root = ($DepsRoot -replace '\\', '/')
@@ -48,23 +45,37 @@ function Build-Unit([string]$name) {
     return ($LASTEXITCODE -eq 0)
 }
 
-foreach ($name in $priority) {
-    if (-not (Build-Unit $name)) {
-        Write-Host "Priority unit $name failed; the engines would link without it. Stopping."
-        exit 1
+# Push/Pop: the caller's shell is back in its own folder afterwards, even on failure.
+Push-Location $PSScriptRoot
+$code = 0
+try {
+    if ($Clean -and (Test-Path build)) { Remove-Item -Recurse -Force build }
+
+    foreach ($name in $priority) {
+        if (-not (Build-Unit $name)) {
+            Write-Host "Priority unit $name failed; the engines would link without it. Stopping."
+            $code = 1
+            break
+        }
     }
-}
 
-$failed = @()
-foreach ($dir in Get-ChildItem -Directory detail) {
-    if ($priority -contains $dir.Name) { continue }
-    if (-not (Test-Path (Join-Path $dir.FullName "CMakeLists.txt"))) { continue }
-    if (-not (Build-Unit $dir.Name)) { $failed += $dir.Name }
-}
+    if ($code -eq 0) {
+        $failed = @()
+        foreach ($dir in Get-ChildItem -Directory detail) {
+            if ($priority -contains $dir.Name) { continue }
+            if (-not (Test-Path (Join-Path $dir.FullName "CMakeLists.txt"))) { continue }
+            if (-not (Build-Unit $dir.Name)) { $failed += $dir.Name }
+        }
 
-if ($failed.Count -ne 0) {
-    Write-Host "Build failures in:"
-    $failed | ForEach-Object { Write-Host "  - detail/$_" }
-    exit 1
+        if ($failed.Count -ne 0) {
+            Write-Host "Build failures in:"
+            $failed | ForEach-Object { Write-Host "  - detail/$_" }
+            $code = 1
+        } else {
+            Write-Host "All builds succeeded."
+        }
+    }
+} finally {
+    Pop-Location
 }
-Write-Host "All builds succeeded."
+exit $code
