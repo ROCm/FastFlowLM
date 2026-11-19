@@ -45,7 +45,9 @@ function(add_frontend_test name)
         "${XRT_INCLUDE_DIR}")
     target_compile_definitions(${name} PRIVATE
         DEV_BUILD=1 __WINDOWS__ USEAVX2=1 DISABLE_ABI_CHECK=1 _ENABLE_EXTENDED_ALIGNED_STORAGE
-        WIN32_LEAN_AND_MEAN NOMINMAX)
+        WIN32_LEAN_AND_MEAN NOMINMAX
+        # the shipped catalog: a test reads the tool setting of the entries it covers
+        FLM_TEST_MODEL_LIST_PATH="${FLM_SOURCE_DIR}/model_list.json")
     target_compile_options(${name} PRIVATE
         $<$<CXX_COMPILER_ID:MSVC>:/wd4005 /wd4244>)
     target_link_directories(${name} PRIVATE "${XRT_LIB_DIR}")

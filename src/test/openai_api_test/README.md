@@ -34,7 +34,7 @@ Each case prints `PASS`, `FAIL` or `SKIP`. The exit code is non-zero if anything
 |---|---|
 | `test_response_shape.py` | Message and chunk shape, one delta kind per chunk, `finish_reason`, `usage` only with `stream_options.include_usage`, stream folds to the non-stream message |
 | `test_reasoning.py` | `think: true` → `reasoning_content`, `think: false` / `reasoning_effort: "none"` → none, reasoning streamed before content, switch is per request, reasoning in history is accepted |
-| `test_tool_calls.py` | `auto` / `required` / forced function / `none`, `parallel_tool_calls: false`, ids, arguments are JSON matching the tool schema (typed: integer, number, boolean, enum, arrays, an unanchored string `pattern`, a `\S` pattern with `maxLength`, short or long, nested), `strict: false`, streamed call deltas, a tool round trip |
+| `test_tool_calls.py` | `auto` / `required` / forced function / `none`, `parallel_tool_calls: false`, ids, arguments are JSON matching the tool schema (typed: integer, number, boolean, enum, arrays, an unanchored string `pattern`, a `\S` pattern with `maxLength`, short or long, nested), `strict: false`, streamed call deltas, a tool round trip, offered definitions reach the prompt (`prompt_tokens` grow with a description, not under `none`; a changed definition does not reuse the whole earlier prompt) |
 | `test_response_format.py` | `json_object`, `json_schema` (flat, enum, Pydantic `$defs`/`$ref`, `const`/`anyOf`/bounds/`pattern`, unanchored `pattern`), streamed, with and without thinking, schema vs. `auto` tools, `text` |
 | `test_logprobs.py` | `logprobs` / `top_logprobs` shape in both modes, greedy token heads its `top_logprobs`, entries spell the content and nothing else (no reasoning, no tool call markup), stream and non-stream report the same tokens, `max_tokens` N writes at most N tokens and `completion_tokens` counts each, malformed values get 400 |
 | `test_sampling.py` | The same `seed` samples the same text (with an unseeded request in between, streamed or not), `repeat_last_n: 0` turns penalties off, `-1` covers the whole reply, malformed values get 400 |
@@ -48,6 +48,7 @@ Each case prints `PASS`, `FAIL` or `SKIP`. The exit code is non-zero if anything
 Some cases skip by design:
 
 - **Tool cases** skip on models whose chat format has no tool call syntax (the server answers `has no tool call syntax`), and on models too small to be shown tools (`does not support tool calling`).
+- **`definitions_reach_the_prompt`** skips on a model whose prompt is the same with and without tools (`qwen2.5-it:3b`, and the models too small to be shown tools). On the packages listed in `SHOWN_DEFINITIONS` in `test_tool_calls.py`, which were checked to render them, that is a failure instead.
 - **Thinking-on cases** skip on models that never reason.
 - **Multi-turn cases** skip on single-turn (flash) models.
 - **Image cases that need the model to see the image** skip on models that cannot say what colour a red PNG is (text models).
