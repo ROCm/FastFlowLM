@@ -35,9 +35,10 @@ name: Build and Test
 # size: the test jobs get 600 minutes, of which the new models' downloads get
 # up to 420 outside the pr tier's 30-minute budget, and one that does not
 # download fails the job. A new oga-hipep model is tested by Test Windows
-# HIPEP beside qwen3.5-oga-hipep:9b. A change that only touches docs, or
-# only flm-dev-kit/ (which no product package uses yet), builds and tests
-# nothing. The portable test jobs get 120 minutes on the pr
+# HIPEP beside qwen3.5-oga-hipep:9b. A change that only touches docs
+# builds and tests nothing; one only under flm-dev-kit/ (which no product
+# package uses yet) builds and tests no package and runs only the dev-kit
+# checks (devkit-static). The portable test jobs get 120 minutes on the pr
 # tier and 360 on the full one, which runs every model and every d3 size and
 # may first download tens of GB of weights.
 #
@@ -124,10 +125,11 @@ jobs:
       hipep: ${{ steps.detect.outputs.hipep }}
       new-models: ${{ steps.detect.outputs.new-models }}
       new-gpu-models: ${{ steps.detect.outputs.new-gpu-models }}
-      # For the dev-kit jobs (none yet). flm-dev-kit/ paths select no product
-      # build or suite; see .github/script/ci/changes.py.
+      # For the dev-kit jobs. flm-dev-kit/ paths select no product build or
+      # suite; see .github/script/ci/changes.py.
       devkit: ${{ steps.detect.outputs.devkit }}
       devkit-areas: ${{ steps.detect.outputs.devkit-areas }}
+      devkit-families: ${{ steps.detect.outputs.devkit-families }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -155,6 +157,32 @@ jobs:
       - name: Test change detection and the test plan
         working-directory: .github/script
         run: python3 -m unittest discover -s ci -p 'test_*.py' -t ci
+
+  # Static checks of the dev kit's CI data (flm-dev-kit/FLM_Xclbin/
+  # kernel_assignment.json and build_units.json, flm-dev-kit/FLM_DLL/
+  # engines.json, the -Bsymbolic-functions link flag, and on a pull request
+  # the copyright notice of every source file it adds under flm-dev-kit/).
+  # Standard-library Python on a hosted runner; its unit tests run in changes.
+  devkit-static:
+    needs: changes
+    if: needs.changes.outputs.devkit == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Check the dev kit
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+          HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: python3 .github/script/ci/devkit_check.py --base "${BASE}" --head "${HEAD}"
 
   # ── NPU approval gate ────────────────────────────────────────────────────
   # The NPU runners are few and self-hosted, so no job lands on them unless
@@ -1067,6 +1095,7 @@ jobs:
   summary:
     needs:
       - changes
+      - devkit-static
       - npu-gate
       - npu-approve
       - build-lin-xrt-portable
@@ -1166,3 +1195,15 @@ jobs:
           if [ "${XRT_OK}" != true ] || [ "${HRX_OK}" != true ]; then
             echo "::error::a package failed to build or its tests failed"; exit 1
           fi
+
+      # A pull request whose dev-kit data does not check out fails here too,
+      # whatever the gate step above decided, so this job stays the single
+      # required check. Other runs only show devkit-static's own result: the
+      # dev kit ships in no package, so it does not hold up a release.
+      - name: Dev-kit checks
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        env:
+          DEVKIT_STATIC: ${{ needs.devkit-static.result }}
+        run: |
+          echo "devkit-static: ${DEVKIT_STATIC}"
+          case "${DEVKIT_STATIC}" in success|skipped) ;; *) echo "::error::devkit-static did not pass"; exit 1 ;; esac

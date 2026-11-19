@@ -60,6 +60,15 @@ outputs:
       converter, pybind, launchlib, including the areas that build from a
       changed file of another area. Empty when devkit is "false".
     value: ${{ steps.changes.outputs.devkit_areas }}
+  devkit-families:
+    description: >
+      Comma-separated catalog families of the dev-kit engines the change
+      touches, for the dev-kit overlay tests: an engine's families and those
+      of the engines that use it, from flm-dev-kit/FLM_DLL/engines.json; every
+      engine's families when shared engine code, a src/lib/xrt library the
+      engines link, the dev-kit CI or an unknown set of files changed. Empty
+      when no dev-kit engine is touched.
+    value: ${{ steps.changes.outputs.devkit_families }}
   tier:
     description: install, pr or full.
     value: ${{ steps.tier.outputs.tier }}

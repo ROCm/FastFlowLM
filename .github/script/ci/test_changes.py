@@ -132,7 +132,8 @@ class Cli(unittest.TestCase):
         self.assertIn("run_tests=false", lines)
         self.assertEqual([l.split("=")[0] for l in lines],
                          ["run_tests", "families", "asr_full", "suites", "hipep",
-                          "new_models", "new_gpu_models", "devkit", "devkit_areas", "summary"])
+                          "new_models", "new_gpu_models", "devkit", "devkit_areas", "devkit_families",
+                          "summary"])
 
     def test_suites_scoped_to_the_change(self):
         cases = {
@@ -489,6 +490,123 @@ class DevKit(unittest.TestCase):
     def test_no_changed_files_select_no_area(self):
         d = changes.decide([])
         self.assertEqual(d.outputs()["devkit"], "false")
+
+
+def devkit_families(out: dict[str, str]) -> set[str]:
+    return set(filter(None, out["devkit_families"].split(",")))
+
+
+class DevKitFamilies(unittest.TestCase):
+    """devkit_families: the families of the dev-kit engines a change touches,
+    through flm-dev-kit/FLM_DLL/engines.json."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.engines = changes.load_devkit_engines()
+        assert cls.engines is not None, changes.DEVKIT_ENGINES
+        cls.all = cls.engines.all_families()
+
+    def test_engine_dir_maps_to_its_families(self):
+        out = cli("--files", "flm-dev-kit/FLM_DLL/detail/qwen3_npu/qwen3_npu.cpp")
+        self.assertEqual(devkit_families(out), {"qwen3", "qwen3-it", "qwen3-tk", "deepseek-r1-0528"})
+        self.assertEqual((out["run_tests"], out["families"]), ("false", ""))
+        # r2t2's engine (#1068): ASR only, through either spelling of its dirs.
+        for path in ("flm-dev-kit/FLM_DLL/detail/qwen3_asr_npu/qwen3_asr_npu.cpp",
+                     "flm-dev-kit/FLM_DLL/include/models/qwen3_asr/qwen3_asr_npu.hpp"):
+            self.assertEqual(devkit_families(cli("--files", path)), {"r2t2"}, path)
+
+    def test_engines_that_use_another_add_their_families(self):
+        # d3_npu compiles qwen3_5vl_npu's vision sources; gemma4e_flash,
+        # gemma4e_dflash and gemma4e_dflash_flash include gemma4e's headers.
+        self.assertEqual(devkit_families(cli("--files", "flm-dev-kit/FLM_DLL/detail/qwen3_5vl_npu/rot_pos_emb.cpp")),
+                         {"qwen3.5", "d3"})
+        self.assertEqual(devkit_families(cli("--files", "flm-dev-kit/FLM_DLL/include/models/gemma4e/gemma4e_npu.hpp")),
+                         {"gemma4e", "gemma4e-flash", "gemma4e-dflash", "gemma4e-dflash-flash"})
+        # A user does not pull in what it uses.
+        self.assertEqual(devkit_families(cli("--files", "flm-dev-kit/FLM_DLL/detail/d3_npu/d3_npu.cpp")), {"d3"})
+
+    def test_shared_code_maps_to_every_family(self):
+        for path in ("flm-dev-kit/FLM_DLL/detail/q4nx/q4_npu_eXpress.cpp",
+                     "flm-dev-kit/FLM_DLL/detail/mha/mha.cpp",
+                     "flm-dev-kit/FLM_DLL/detail/gemm/gemm.cpp",
+                     "flm-dev-kit/FLM_DLL/detail/dequant/dequant.cpp",
+                     "flm-dev-kit/FLM_DLL/detail/lm_head/lm_head.cpp",
+                     "flm-dev-kit/FLM_DLL/detail/vision_common/conv3dPatchEmbedding.cpp",
+                     "flm-dev-kit/FLM_DLL/include/buffer.hpp",
+                     "flm-dev-kit/FLM_DLL/include/models/nosuch/x.hpp",
+                     "flm-dev-kit/FLM_DLL/detail/nosuch/x.cpp",
+                     "flm-dev-kit/FLM_DLL/common/modules/sampler.cpp",
+                     "flm-dev-kit/FLM_DLL/cmake/flm_hrx.cmake",
+                     "flm-dev-kit/FLM_DLL/build.sh",
+                     "flm-dev-kit/FLM_DLL/build_manylinux.sh",
+                     "flm-dev-kit/FLM_DLL/hrx.mk",
+                     # Not dev-kit engine code, but the engines link or run under them.
+                     "src/lib/xrt/libaiebu.a",
+                     "src/lib/xrt/libqwen3_npu.so",
+                     ".github/script/ci/changes.py",
+                     "flm-dev-kit/env.sh"):
+            with self.subTest(path=path):
+                self.assertEqual(devkit_families(cli("--files", path)), self.all)
+        self.assertEqual(devkit_families(cli("--base", "0" * 40, "--head", "HEAD")), self.all)
+
+    def test_no_engine_change_gives_no_families(self):
+        for path in ("flm-dev-kit/FLM_DLL/build_qwen3vl.sh",
+                     "flm-dev-kit/FLM_DLL/model_list.json",
+                     "flm-dev-kit/FLM_DLL/README.md",
+                     "flm-dev-kit/FLM_DLL/detail/qwen3_npu/README.md",
+                     "flm-dev-kit/FLM_Xclbin/MM/host7_mt_variant_bias/iron/mm.py",
+                     "flm-dev-kit/FLM_Q4NX_Converter/convert.py",
+                     "src/lib/hrx/libqwen3_npu.so",
+                     "src/server/server.cpp"):
+            with self.subTest(path=path):
+                self.assertEqual(cli("--files", path)["devkit_families"], "")
+
+    def test_engines_json_change_tests_the_changed_entries(self):
+        head = json.loads((changes.REPO_ROOT / changes.DEVKIT_ENGINES).read_text(encoding="utf-8"))
+        base = json.loads(json.dumps(head))
+        base["engines"]["qwen2_npu"]["models"] = []
+        del base["engines"]["lfm3_npu"]
+        git = FakeGit(base={changes.DEVKIT_ENGINES: json.dumps(base)})
+        d = changes.decide([changes.DEVKIT_ENGINES], git, None, changes.DevkitEngines.parse(json.dumps(head)))
+        self.assertEqual(d.devkit_families, {"qwen2", "lfm3"})
+        # Without the base to compare with: every family.
+        d = changes.decide([changes.DEVKIT_ENGINES], None, None, changes.DevkitEngines.parse(json.dumps(head)))
+        self.assertEqual(d.devkit_families, self.all)
+
+    def test_malformed_engines_json_reads_as_unreadable(self):
+        good = {"shared": ["q4nx"], "engines": {"a_npu": {"families": ["a"], "models": [], "uses": []}}}
+        self.assertEqual(changes.DevkitEngines.parse(json.dumps(good)).families("a_npu"), {"a"})
+        for field, value in (("families", "qwen2"), ("uses", "b_npu"), ("models", [1])):
+            bad = json.loads(json.dumps(good))
+            bad["engines"]["a_npu"][field] = value
+            with self.subTest(field=field):
+                self.assertIsNone(changes.DevkitEngines.parse(json.dumps(bad)))
+        self.assertIsNone(changes.DevkitEngines.parse(json.dumps({**good, "engines": {"a_npu": []}})))
+        self.assertIsNone(changes.DevkitEngines.parse(json.dumps({**good, "shared": "q4nx"})))
+
+    def test_engines_json_agrees_with_engine_table(self):
+        """Every ENGINES row naming a dev-kit engine (<name> or <name>_npu
+        under flm-dev-kit/FLM_DLL/detail) has that engine's families, every
+        dev-kit engine has an ENGINES row, and its families are catalog
+        families of the models it serves."""
+        text = (changes.REPO_ROOT / changes.MODEL_LIST).read_text(encoding="utf-8")
+        cat = changes.load_catalog(text)
+        known = {changes.family_of(e) for e in cat.values()}
+        engines = self.engines.engines
+        for names, fams in changes.ENGINES.items():
+            for name in names:
+                eng = self.engines.header_owner(name)
+                if eng is None:
+                    continue
+                with self.subTest(engine=eng, names=names):
+                    self.assertEqual(sorted(engines[eng]["families"]), sorted(fams))
+        for eng, entry in engines.items():
+            with self.subTest(engine=eng):
+                name = eng[:-4] if eng.endswith("_npu") else eng
+                self.assertIn(name, changes.ENGINE_FAMILIES, f"{eng} has no row in changes.ENGINES")
+                self.assertEqual(set(entry["families"]) - known, set())
+                served = {changes.family_of(cat[m]) for m in entry["models"] if m in cat}
+                self.assertEqual(served - set(entry["families"]), set())
 
 
 class Prebuilts(unittest.TestCase):
