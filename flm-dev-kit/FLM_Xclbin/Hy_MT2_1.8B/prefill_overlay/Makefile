@@ -15,7 +15,7 @@
 
 HOME_DIR := $(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
 ENABLE_CHESSCC ?= 0
-AIETOOLS_DIR ?= $(AIETOOLS_ROOT)
+AIETOOLS_DIR ?= $(or $(AIETOOLS_ROOT),$(patsubst %/bin/,%,$(dir $(shell command -v xchesscc 2>/dev/null))))
 # Expanded only inside the Chess recipes, so it fires only for ENABLE_CHESSCC=1.
 AIETOOLS_CHECK = $(if $(strip $(AIETOOLS_DIR)),,$(error ENABLE_CHESSCC=1 needs Vitis AIE Essentials: set AIETOOLS_ROOT (or AIETOOLS_DIR), or put xchesscc on PATH))
 AIEOPT_DIR ?= $(shell realpath $(dir $(shell which aie-opt))/..)

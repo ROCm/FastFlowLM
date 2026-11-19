@@ -275,7 +275,7 @@ other version**, so point it at the interpreter you will import from:
 ```sh
 ./setup.sh                                  # dev venv: ./.venv from requirements.txt
 make clean && make python PROFILE=0         # PROFILE=1 buries harness output
-source activate.sh                          # venv + HF_HOME
+source activate.sh                          # activates .venv
 python -c "import smolvla_npu; print(smolvla_npu.SmolVLA)"
 ```
 
@@ -299,7 +299,7 @@ here, so the two venvs cannot drift apart.
 
 Three levels, cheapest first. All of them need an NPU device and a model
 directory; run them from this directory (`FLM_Pybind/SmolVLA`) with
-`source activate.sh` first — it activates `.venv` and sets `HF_HOME`.
+`source activate.sh` first — it activates `.venv`.
 
 **1. C++ numerics** — `./run.exe -n SmolVLA`. Checks the language kv cache and
 the expert core against `ref.safetensors`; see [Verification](#verification).
@@ -348,8 +348,9 @@ run against, grouped by camera count with a star on the best in each group, plus
 two (`lerobot/svla_so100_pickplace`, `lerobot/austin_sailor_dataset`) that are
 known to compare poorly.
 
-Datasets download to `$HF_HOME` on first use — `activate.sh` sets it, and a
-first run on a new dataset can take a while before any output appears.
+Datasets download to the Hugging Face cache (`$HF_HOME`, default `~/.cache/huggingface`)
+on first use — set `HF_HOME` yourself to put it elsewhere — and a first run on a new
+dataset can take a while before any output appears.
 
 Output per step, and the closing summary:
 

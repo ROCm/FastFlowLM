@@ -89,7 +89,7 @@ something changed beyond the known prefill gap.
 
 Run from FLM_Pybind/SmolVLA (the venv there has a clean lerobot):
 
-    source activate.sh          # sets HF_HOME
+    source activate.sh          # activates .venv
     python verify_smolvla.py --steps 8
 
 Build the module with `make python PROFILE=0` first for readable output --
