@@ -43,12 +43,19 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              up), hrx-integration/ (the HRX engine builds fetch the pinned
              package with it), or the CI that runs the dev-kit jobs
              (including .github/workflows/devkit-*.yml and
-             .github/actions/devkit-*); documentation under
+             .github/actions/devkit-*, except devkit-aie-image.yml);
+             documentation under
              flm-dev-kit/ counts as nothing, as for the product. Nothing in
              the product consumes flm-dev-kit/ yet, so those paths select no
              product build, suite or family: a change only there builds and
              tests no product package (run_tests false). The product files
-             above keep their product rules
+             above keep their product rules. The kernel build image selects
+             nothing: docker/aie-build* (its Dockerfile, kernel check and
+             pinned PDIs), flm-dev-kit/FLM_Xclbin/toolchain.lock and
+             devkit-aie-image.yml are built and tested by
+             devkit-aie-image.yml alone, as the dev-kit kernel jobs build in
+             the published image toolchain.image pins (a change to that
+             file is the xclbin area), not the pull request's
   devkit_areas
              comma-separated dev-kit areas the change touches, from xclbin,
              dll, converter, pybind and launchlib, plus the areas that build
@@ -164,8 +171,21 @@ DEVKIT_FROM_PRODUCT = (
     (re.compile(r"^\.github/windows-deps/"), {"dll"}),
 )
 
+# The kernel build image: its Dockerfile, kernel check script and pinned PDIs
+# (docker/aie-build*), its versions (toolchain.lock, which would otherwise be
+# in the xclbin area) and the workflow that builds it. Each selects the
+# dev-kit areas listed and no product build or suite. None: the dev-kit
+# kernel jobs build in the published image FLM_Xclbin/toolchain.image pins,
+# so rebuilding kernels there would test the old toolchain;
+# devkit-aie-image.yml builds the pull request's image and its kernels.
+DEVKIT_ONLY = (
+    (re.compile(r"^docker/aie-build[^/]*$|^flm-dev-kit/FLM_Xclbin/toolchain\.lock$"
+                r"|^\.github/workflows/devkit-aie-image\.yml$"), set()),
+)
+
 # The CI that decides and runs the dev-kit jobs: a change to it runs every
-# dev-kit area, so it is exercised before it merges.
+# dev-kit area, so it is exercised before it merges. DEVKIT_ONLY's workflow
+# is not part of it.
 DEVKIT_CI = re.compile(
     r"^\.github/(workflows/(build-and-test|release|devkit-[^/]+)\.yml$"
     r"|actions/(detect-changes|devkit[^/]*)/|script/ci/)")
@@ -255,6 +275,12 @@ class DevkitEngines:
 def devkit_area(path: str) -> Optional[str]:
     """The dev-kit area of a path under flm-dev-kit/, None outside all areas."""
     return next((area for area, prefix in DEVKIT_AREAS if path.startswith(prefix)), None)
+
+
+def devkit_only_areas(path: str) -> Optional[set]:
+    """The dev-kit areas of a kernel build image path (DEVKIT_ONLY), possibly
+    none; None for any other path."""
+    return next((set(areas) for rx, areas in DEVKIT_ONLY if rx.match(path)), None)
 
 
 def devkit_extra_areas(path: str) -> set:
@@ -494,6 +520,8 @@ class Decision:
     devkit_areas: set = field(default_factory=set)
     # Catalog families of the dev-kit engines the change touches.
     devkit_families: set = field(default_factory=set)
+    # Changed kernel build image files (DEVKIT_ONLY).
+    image_only: list = field(default_factory=list)
     reasons: list = field(default_factory=list)
 
     def all_suites(self, path: str, why: str = "") -> None:
@@ -530,6 +558,8 @@ class Decision:
         if not self.run_tests:
             if self.devkit_areas:
                 return f"flm-dev-kit only: product builds and NPU tests skipped{devkit}"
+            if self.image_only:
+                return "kernel build image only (devkit-aie-image.yml): NPU tests and dev-kit jobs skipped"
             return "documentation only: NPU tests skipped"
         return self._product_summary() + devkit
 
@@ -884,9 +914,19 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
         return d
 
     # flm-dev-kit/ code selects dev-kit areas only; the product rules below
-    # see the other files. Its documentation counts as nothing.
-    devkit = [f for f in files if f.startswith(DEVKIT_ROOT) and not is_non_code(f)]
+    # see the other files. Its documentation counts as nothing. The kernel
+    # build image (DEVKIT_ONLY) is handled here too and selects no area.
+    devkit = [f for f in files if (f.startswith(DEVKIT_ROOT) or devkit_only_areas(f) is not None)
+              and not is_non_code(f)]
     for path in devkit:
+        only = devkit_only_areas(path)
+        if only is not None:
+            new = only - d.devkit_areas
+            d.devkit_areas |= only
+            d.image_only.append(path)
+            d.reasons.append(f"{path}: the kernel build image, which devkit-aie-image.yml builds and "
+                             f"tests -> {', '.join(sorted(new)) or 'no dev-kit area'}")
+            continue
         area = devkit_area(path)
         if area is None:
             if not d.devkit_areas >= ALL_DEVKIT_AREAS:
@@ -898,11 +938,13 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
         if extra:
             d.devkit_areas |= extra
             d.reasons.append(f"{path}: {area}, and built by {', '.join(sorted(extra))}")
-    if devkit:
-        d.reasons.append(f"{len(devkit)} changed flm-dev-kit file(s), e.g. {devkit[0]}: dev-kit areas "
-                         f"{d.devkit_value()}; no product build or suite for them")
+    tree = [f for f in devkit if f not in d.image_only]
+    if tree:
+        d.reasons.append(f"{len(tree)} changed flm-dev-kit file(s), e.g. {tree[0]}: dev-kit areas "
+                         f"{d.devkit_value() or 'none'}; no product build or suite for them")
 
-    code = [f for f in files if not is_non_code(f) and not f.startswith(DEVKIT_ROOT)]
+    in_devkit = set(devkit)
+    code = [f for f in files if not is_non_code(f) and f not in in_devkit]
     add_devkit_families(d, files, code, devkit_engines, git)
     d.suites = set()  # narrowed per file below; None once any file is unscoped
     if not code:

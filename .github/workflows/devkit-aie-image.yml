@@ -1,0 +1,240 @@
+# Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+# Portions of this file consist of AI-generated content.
+
+name: Dev-kit AIE build image
+
+# Builds ghcr.io/rocm/fastflowlm/aie-build, the container the dev kit's kernels
+# (flm-dev-kit/FLM_Xclbin) build in, from docker/aie-build.Dockerfile with the
+# versions pinned in flm-dev-kit/FLM_Xclbin/toolchain.lock (each KEY=VALUE
+# line there is a build arg).
+#
+#   build    every event: builds the image without pushing it, then builds
+#            the kernels docker/aie-build.pdi.sha256 lists in it
+#            (docker/aie-build-check.sh) and requires each one's PDI to be the
+#            one IRON's toolchain made, byte for byte. A pull request that
+#            changes the toolchain shows whether it still makes the shipped
+#            kernels
+#   publish  main only (push, or workflow_dispatch run on main): builds again
+#            (from the build job's cache) and pushes by digest with no tag,
+#            pulls that digest and runs the same kernel check in it, and only
+#            then tags it :<toolchain hash> and :latest. A cache miss that
+#            makes a different image is checked like the one the build job
+#            tested, and an image that fails stays untagged. The toolchain
+#            hash is the first 16 hex digits of sha256(toolchain.lock +
+#            Dockerfile): a new tag for every change to either, an unchanged
+#            tag otherwise
+#
+# Pull the image by digest, not by tag, wherever its output matters; the
+# digest goes in flm-dev-kit/FLM_Xclbin/toolchain.image (not toolchain.lock,
+# whose every key is a build arg). Building mlir-aie takes about an hour on a
+# hosted runner the first time; the layers are kept in the GitHub Actions
+# cache (scope aie-build), so a change to Peano, XRT or the final stage does
+# not rebuild it.
+#
+# Once, after the first publish: GITHUB_TOKEN creates the package private.
+# In the ROCm organization's package settings for fastflowlm/aie-build, set
+# the visibility to public and check that it is linked to ROCm/FastFlowLM
+# (the image's org.opencontainers.image.source label links it on the first
+# push). Until then pull requests from forks cannot pull it, and publish's
+# last step, an anonymous pull of the new digest, fails.
+on:
+  pull_request:
+    paths:
+      - docker/aie-build*
+      - flm-dev-kit/FLM_Xclbin/toolchain.lock
+      - .github/workflows/devkit-aie-image.yml
+  push:
+    branches: [main]
+    paths:
+      - docker/aie-build*
+      - flm-dev-kit/FLM_Xclbin/toolchain.lock
+      - .github/workflows/devkit-aie-image.yml
+  workflow_dispatch:
+
+# Read-only token; only publish, which runs on main only, adds packages: write.
+permissions:
+  contents: read
+
+concurrency:
+  group: devkit-aie-image-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: ghcr.io/rocm/fastflowlm/aie-build
+  LOCK: flm-dev-kit/FLM_Xclbin/toolchain.lock
+  DOCKERFILE: docker/aie-build.Dockerfile
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The mlir-aie build stage needs about 10 GB (the unpacked MLIR wheel
+      # alone is 4.3 GB) on top of the image and its cache export.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Read toolchain.lock
+        id: lock
+        run: |
+          set -euo pipefail
+          # Every line is a comment, blank, or KEY=VALUE; every key is an ARG of
+          # the Dockerfile and every ARG without a default is a key, so a value
+          # cannot be dropped or misspelt on the way in.
+          bad="$(grep -nvE '^(#.*|[[:space:]]*|[A-Z0-9_]+=[^[:space:]]+)$' "$LOCK" || true)"
+          if [[ -n "$bad" ]]; then
+            echo "::error file=${LOCK}::not KEY=VALUE: ${bad}"
+            exit 1
+          fi
+          keys="$(sed -nE 's/^([A-Z0-9_]+)=.*/\1/p' "$LOCK" | sort)"
+          dups="$(uniq -d <<<"$keys")"
+          args="$(sed -nE 's/^ARG ([A-Z0-9_]+)[[:space:]]*$/\1/p' "$DOCKERFILE" | sort -u)"
+          missing="$(comm -13 <(echo "$keys") <(echo "$args"))"
+          unused="$(comm -23 <(echo "$keys") <(echo "$args"))"
+          # LLVM_AIE_INDEX documents where the wheel is published; nothing reads it.
+          unused="$(grep -vx 'LLVM_AIE_INDEX' <<<"$unused" || true)"
+          if [[ -n "$dups$missing$unused" ]]; then
+            echo "::error file=${LOCK}::repeated: ${dups:-none}; ARGs with no value: ${missing:-none}; keys no ARG reads: ${unused:-none}"
+            exit 1
+          fi
+          hash="$(cat "$LOCK" "$DOCKERFILE" | sha256sum | cut -c1-16)"
+          echo "hash=${hash}" >> "$GITHUB_OUTPUT"
+          {
+            echo 'build-args<<FLM_BUILD_ARGS'
+            grep -E '^[A-Z0-9_]+=' "$LOCK"
+            echo 'FLM_BUILD_ARGS'
+          } >> "$GITHUB_OUTPUT"
+          echo "Toolchain hash: \`${hash}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: docker
+          file: ${{ env.DOCKERFILE }}
+          build-args: ${{ steps.lock.outputs.build-args }}
+          push: false
+          load: true
+          tags: aie-build:ci
+          cache-from: type=gha,scope=aie-build
+          cache-to: type=gha,scope=aie-build,mode=max
+
+      # Kernels end to end (IRON Python -> MLIR -> Peano -> aiecc.py ->
+      # xclbinutil), with no setup.sh: the image's environment must be enough.
+      # Each one's PDI must match docker/aie-build.pdi.sha256; the xclbin
+      # around it differs on every build, so its hash is not compared.
+      - name: Build the pinned kernels in the image
+        run: bash docker/aie-build-check.sh aie-build:ci
+
+  publish:
+    needs: build
+    if: >-
+      github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+      && github.repository == 'ROCm/FastFlowLM'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      # The build job checked the file; this only reads it.
+      - name: Read toolchain.lock
+        id: lock
+        run: |
+          set -euo pipefail
+          echo "hash=$(cat "$LOCK" "$DOCKERFILE" | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+          {
+            echo 'build-args<<FLM_BUILD_ARGS'
+            grep -E '^[A-Z0-9_]+=' "$LOCK"
+            echo 'FLM_BUILD_ARGS'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # By digest, untagged: nothing points at it until the check below
+      # passes. The labels are the Dockerfile's own (no metadata-action, whose
+      # description label would be the repository's).
+      - name: Push image by digest
+        id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: docker
+          file: ${{ env.DOCKERFILE }}
+          build-args: ${{ steps.lock.outputs.build-args }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=aie-build
+          cache-to: type=gha,scope=aie-build,mode=max
+
+      # The pushed image itself, not the build job's: if the cache did not
+      # make the same image, this is the one that has to build the kernels.
+      - name: Build the pinned kernels in the pushed image
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" == sha256:* ]] || { echo "::error::no digest from the push"; exit 1; }
+          docker pull -q "${IMAGE}@${DIGEST}"
+          bash docker/aie-build-check.sh "${IMAGE}@${DIGEST}"
+
+      - name: Tag :<toolchain hash> and :latest
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          HASH: ${{ steps.lock.outputs.hash }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create -t "${IMAGE}:${HASH}" -t "${IMAGE}:latest" "${IMAGE}@${DIGEST}"
+          echo "${IMAGE}@${DIGEST}"
+          {
+            echo "Pushed \`${IMAGE}:${HASH}\` and \`:latest\`:"
+            echo
+            echo "\`${IMAGE}@${DIGEST}\`"
+            echo
+            echo "To build the dev kit's kernels in it, put that line in \`flm-dev-kit/FLM_Xclbin/toolchain.image\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Decision 2: the image is public, so a fork's pull request can pull it
+      # without a token. A new package is private until someone changes it
+      # (see the top of this file); this fails until then.
+      - name: Check the image is public
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          repo="${IMAGE#ghcr.io/}"
+          token="$(curl -fsS "https://ghcr.io/token?scope=repository:${repo}:pull" | jq -r '.token // empty' || true)"
+          if [[ -z "$token" ]] || ! curl -fsS -o /dev/null -H "Authorization: Bearer ${token}" \
+               -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+               "https://ghcr.io/v2/${repo}/manifests/${DIGEST}"; then
+            echo "::error::${IMAGE}@${DIGEST} cannot be pulled without credentials: make the package public in the ROCm organization's package settings (see the top of devkit-aie-image.yml)"
+            exit 1
+          fi
+          echo "${IMAGE}@${DIGEST} pulls anonymously"

@@ -514,6 +514,38 @@ class DevKit(unittest.TestCase):
                                  ("true", "true", "xclbin,dll,converter,pybind,launchlib"))
         self.assertEqual(cli("--files", ".github/workflows/lin-build.yml")["devkit"], "false")
 
+    def test_kernel_image_selects_nothing(self):
+        # The aie-build image, its check, its pins and the workflow that
+        # builds it: devkit-aie-image.yml tests them, so no dev-kit area (the
+        # kernel jobs build in the published image), no product build or
+        # suite, no engine family.
+        paths = ("docker/aie-build.Dockerfile", "docker/aie-build-check.sh", "docker/aie-build.pdi.sha256",
+                 "flm-dev-kit/FLM_Xclbin/toolchain.lock", ".github/workflows/devkit-aie-image.yml")
+        for path in paths:
+            with self.subTest(path=path):
+                out = cli("--files", path)
+                self.assertEqual((out["run_tests"], out["families"], out["devkit"], out["devkit_areas"],
+                                  out["devkit_families"]), ("false", "", "false", "", ""))
+                self.assertIn("kernel build image only", out["summary"])
+        out = cli("--files", *paths)
+        self.assertEqual((out["run_tests"], out["devkit"], out["devkit_areas"]), ("false", "false", ""))
+        # The pinned digest is what the kernel jobs build in: the xclbin area.
+        out = cli("--files", "flm-dev-kit/FLM_Xclbin/toolchain.image", "flm-dev-kit/FLM_Xclbin/toolchain.lock")
+        self.assertEqual((out["run_tests"], out["devkit_areas"]), ("false", "xclbin"))
+        self.assertIn("flm-dev-kit only", out["summary"])
+        # Beside a kernel source, the kernel source still selects its area.
+        out = cli("--files", "docker/aie-build.Dockerfile", "flm-dev-kit/FLM_Xclbin/MM/Makefile")
+        self.assertEqual((out["run_tests"], out["devkit_areas"]), ("false", "xclbin"))
+        # Beside product code, the product rules still see the product file.
+        out = cli("--files", "docker/aie-build.Dockerfile", "src/server/server.cpp")
+        self.assertEqual((out["run_tests"], out["suites"], out["devkit_areas"]), ("true", "all", ""))
+        # The product's own build image is product code, not the dev kit's.
+        out = cli("--files", "Dockerfile")
+        self.assertEqual((out["run_tests"], out["devkit"]), ("true", "false"))
+        # Other dev-kit workflows are still the dev-kit CI: every area.
+        out = cli("--files", ".github/workflows/devkit-xclbins.yml")
+        self.assertEqual(out["devkit_areas"], "xclbin,dll,converter,pybind,launchlib")
+
     def test_unknown_files_select_every_area(self):
         out = cli("--base", "0" * 40, "--head", "HEAD")
         self.assertEqual((out["devkit"], out["devkit_areas"]), ("true", "xclbin,dll,converter,pybind,launchlib"))

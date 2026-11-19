@@ -135,6 +135,13 @@ runs:
         echo "${#libs[@]} libraries, ${users} calling HRX."
         exit "${rc}"
 
+    # flm loads every engine into one process on Linux: two engines that
+    # export the same GNU-unique symbol (inline variable, function-local
+    # static) silently share one copy. See the script's docstring.
+    - name: Check engines do not share process-wide singletons
+      shell: bash
+      run: python3 .github/script/ci/devkit_symbol_clash.py flm-dev-kit/FLM_DLL/build/lib
+
     - name: Upload libraries
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:

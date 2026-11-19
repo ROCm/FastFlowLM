@@ -1,0 +1,17 @@
+# Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+# Portions of this file consist of AI-generated content.
+#
+# What docker/aie-build-check.sh requires of a kernel built in the aie-build
+# image: the PDI inside the xclbin (the AIE_PARTITION section, dumped with
+# xclbinutil --dump-section AIE_PARTITION:JSON), byte for byte. The PDI is
+# deterministic: these are the hashes of IRON's local, IRON CI and shipped
+# (src/xclbins) builds of the same unit, all three identical. The xclbin
+# around it is not (timestamp, UniqueID, XclBinUUID, PDI UUID, xclbinutil
+# version string), so its hash says nothing and is not compared.
+#
+# A change here means the toolchain makes different kernels: it needs the NPU
+# accuracy run toolchain.lock asks for, and new hashes from a shipped build.
+#
+# <PDI sha256> <PDI bytes> <build unit> <MODEL_TYPE, - for none> <xclbin in the unit>
+f70102a5c11f6e6814ab8198a38277efab4bd50a5a33e263877fe783886923d2 73808 Dequant_Q4_0_w128x512 - build/xclbins/dequant.xclbin
+a91fc3e9db217a44b499c937ecb48e904d5aab2e7a374c02dd2e6865c8e6f65a 347040 MM/host7_mt_variant_bias GENERIC build/xclbins/mm_bf16_accf32.xclbin
