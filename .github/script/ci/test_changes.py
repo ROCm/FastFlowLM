@@ -131,7 +131,8 @@ class Cli(unittest.TestCase):
             lines = target.read_text(encoding="utf-8").splitlines()
         self.assertIn("run_tests=false", lines)
         self.assertEqual([l.split("=")[0] for l in lines],
-                         ["run_tests", "families", "asr_full", "suites", "hipep", "summary"])
+                         ["run_tests", "families", "asr_full", "suites", "hipep",
+                          "new_models", "new_gpu_models", "summary"])
 
     def test_suites_scoped_to_the_change(self):
         cases = {
@@ -310,6 +311,71 @@ class Decide(unittest.TestCase):
         files = ["src/server/rest_handler.cpp"]
         self.assertFalse(changes.decide(files, FakeGit(lines="+  tag = \"qwen3\";")).asr_full)
         self.assertTrue(changes.decide(files, FakeGit(lines="-  // handle audio upload")).asr_full)
+
+    def test_r2t2_engine_runs_the_whole_asr_set_on_r2t2(self):
+        for f in ("src/lib/xrt/libqwen3_asr_npu.so", "src/lib/hrx/qwen3_asr_npu.dll",
+                  "src/include/models/qwen3_asr/flm/aie2p/qwen3_asr_npu.hpp",
+                  "src/include/AutoModel/modeling_qwen3_asr.hpp",
+                  "src/common/AutoModel/modeling_qwen3_asr_audio.cpp",
+                  "src/common/AutoModel/modeling_qwen3_asr_stream.cpp",
+                  "src/xclbins/Confucius4-R2T2-NPU2/a.xclbin"):
+            with self.subTest(f=f):
+                out = cli("--files", f)
+                self.assertEqual((families(out), out["suites"], out["asr_full"]),
+                                 ({"r2t2"}, "asr", "true"))
+
+    def test_new_models_are_entries_with_new_weights(self):
+        base = json.loads(catalog(qwen3__0_6b=("Qwen3-0.6B-NPU2", "qwen3"), lfm2__1b=("LFM2", "lfm2"),
+                                  **{"qwen3.5-oga-hipep__9b": ("Q35-9B_gpuep", "qwen3.5")}))
+        for tags in base["models"].values():
+            for e in tags.values():
+                e["supported_platforms"] = ["aie2p"]
+        base["models"]["qwen3.5-oga-hipep"]["9b"]["supported_platforms"] = None
+        head = json.loads(json.dumps(base))
+        # Metadata only: the runners already have these weights.
+        head["models"]["lfm2"]["1b"]["default_context_length"] = 4096
+        # New weights for an existing id.
+        head["models"]["qwen3"]["0_6b"]["name"] = "Qwen3-0.6B-NPU2-v2"
+        # A new NPU model, a new corelib-only one no runner can run, a new GPU one.
+        head["models"]["big"] = {"120b": {"name": "Big-120B-NPU2", "supported_platforms": ["aie2p"],
+                                          "details": {"family": "big"}},
+                                 "120b-core": {"name": "Big-core", "supported_platforms": ["dev04"],
+                                               "details": {"family": "big"}}}
+        head["models"]["big-oga-hipep"] = {"70b": {"name": "Big_gpuep", "details": {"family": "big"}}}
+        base, head = json.dumps(base), json.dumps(head)
+        git = FakeGit(base={changes.MODEL_LIST: base}, head={changes.MODEL_LIST: head})
+        d = changes.decide([changes.MODEL_LIST], git, head)
+        self.assertEqual(d.new_models, ["big:120b", "qwen3:0_6b"])
+        self.assertEqual(d.new_gpu_models, ["big-oga-hipep:70b"])
+        self.assertEqual(d.outputs()["new_models"], "big:120b,qwen3:0_6b")
+        self.assertTrue(d.runs_hipep())
+        self.assertIn("big", d.families)
+        # Without a base to compare, nothing is new: the run tests everything anyway.
+        self.assertEqual(changes.decide([changes.MODEL_LIST], None, head).new_models, [])
+
+    def test_republished_weights_are_new(self):
+        """Weights republished under the same name: another file list, or a raised
+        flm_min_version (which makes flm pull fetch them again)."""
+        base = catalog(qwen3__0_6b=("Qwen3-0.6B-NPU2", "qwen3"), lfm2__1b=("LFM2", "lfm2"),
+                       gemma3__1b=("Gemma3-1B", "gemma3-text"))
+        for field_, value in (("files", ["model.q4nx", "extra.bin"]), ("file_url", "https://x"),
+                              ("flm_min_version", "9.9.9")):
+            with self.subTest(field=field_):
+                head = json.loads(base)
+                head["models"]["lfm2"]["1b"][field_] = value
+                head = json.dumps(head)
+                git = FakeGit(base={changes.MODEL_LIST: base}, head={changes.MODEL_LIST: head})
+                self.assertEqual(changes.decide([changes.MODEL_LIST], git, head).new_models, ["lfm2:1b"])
+        # New file hashes in model_info.json, by id or by model_info_key.
+        cat = json.loads(base)
+        cat["models"]["gemma3"]["1b"]["model_info_key"] = "g1"
+        cat = json.dumps(cat)
+        git = FakeGit(base={changes.MODEL_LIST: cat,
+                            changes.MODEL_INFO: '{"lfm2:1b": [{"oid": "a"}], "g1": [{"oid": "b"}]}'},
+                      head={changes.MODEL_LIST: cat,
+                            changes.MODEL_INFO: '{"lfm2:1b": [{"oid": "c"}], "g1": [{"oid": "d"}]}'})
+        d = changes.decide([changes.MODEL_INFO], git, cat)
+        self.assertEqual((d.new_models, d.families), (["gemma3:1b", "lfm2:1b"], {"lfm2", "gemma3-text"}))
 
     def test_families_missing_from_catalog_are_dropped(self):
         d = changes.decide(["src/lib/hrx/libqwen3_npu.so"], None, catalog(a__b=("A", "qwen3")))
