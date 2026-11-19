@@ -177,5 +177,6 @@ private:
     std::string backend;
     /// \brief the backend the currently loaded model was asked for
     std::string current_backend;
+    bool positional_tool_results = false;
     PromptCache prompt_cache;
 };

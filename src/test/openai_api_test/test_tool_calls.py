@@ -280,6 +280,115 @@ def round_trip(api: Api) -> None:
     expect("23" in (msg["content"] or ""), f"the answer does not use the tool result: {msg['content']!r}")
 
 
+def positional_shelf_history(api: Api) -> tuple[list[dict], list[dict]]:
+    if api.model not in ("qwen3.5-oga-hipep:9b", "qwen2.5-it-oga-hipep:14b"):
+        raise Skip("only the two verified positional OGA packages use this adapter")
+    turns = user("Read the red and blue shelves. Report each shelf and its numeric value as JSON.")
+    calls = [{"id": ident, "type": "function", "function": {
+        "name": "read_shelf", "arguments": json.dumps({"shelf": shelf})}}
+        for ident, shelf in (("call_z", "red"), ("call_a", "blue"))]
+    turns.append({"role": "assistant", "content": None, "tool_calls": calls})
+    results = [{"role": "tool", "tool_call_id": ident, "content": value}
+               for ident, value in (("call_z", "731"), ("call_a", "482"))]
+    return turns, results
+
+
+@case
+def positional_parallel_results(api: Api) -> None:
+    """Cold reversed delivery, repeated history, and a genuine ID-only remap, over JSON and SSE."""
+    turns, results = positional_shelf_history(api)
+    schema = {"type": "object", "properties": {k: {"type": "integer"} for k in ("red", "blue")},
+              "required": ["red", "blue"], "additionalProperties": False}
+    fmt = {"type": "json_schema", "json_schema": {"name": "shelves", "strict": True, "schema": schema}}
+    remapped = [dict(r, tool_call_id=other["tool_call_id"]) for r, other in zip(results, reversed(results))]
+    mismatches = []
+    for stream in (False, True):
+        for name, delivery, values in (("reversed", results[::-1], (731, 482)),
+                                       ("ordered", results, (731, 482)),
+                                       ("remapped", remapped, (482, 731))):
+            body = api.body(turns + delivery, response_format=fmt, tool_choice="none", max_tokens=64)
+            if stream:
+                reply = api.stream(dict(body, stream_options={"include_usage": True}))
+                expect(reply.status == 200 and reply.done, f"{name}: incomplete stream: {reply.error}")
+                folded = flm_api.check_stream_contract(reply, include_usage=True)
+                text, usage = folded.content, folded.usage
+            else:
+                reply = api.post(body)
+                expect(reply.status == 200, f"{name}: HTTP {reply.status}: {reply.error_message()}")
+                text = flm_api.check_message_contract(reply.body["choices"][0])["content"]
+                usage = reply.body["usage"]
+            cached = usage["prompt_tokens_details"]["cached_tokens"]
+            print(f"  {name}, stream={stream}: {cached}/{usage['prompt_tokens']} prompt tokens cached")
+            try:
+                mapping = json.loads(text)
+            except (ValueError, TypeError):
+                mapping = None
+            if mapping != dict(zip(("red", "blue"), values)):
+                mismatches.append(f"{name}, stream={stream}: expected red/blue={values}, got {text!r}")
+    expect(not mismatches, "; ".join(mismatches))
+
+
+@case
+def positional_parallel_errors(api: Api) -> None:
+    """Unresolvable parallel histories get indexed JSON errors, even when streaming was requested."""
+    turns, (red, blue) = positional_shelf_history(api)
+    calls = turns[1]["tool_calls"]
+    for stream in (False, True):
+        for messages, path in (
+            (turns + [red, dict(blue, tool_call_id="other")], "messages[3].tool_call_id"),
+            (turns + [red, red], "messages[3].tool_call_id"),
+            (turns + [red, blue, red], "messages[4].tool_call_id"),
+            (turns + [red, {"role": "tool", "content": "482"}], "messages[3].tool_call_id"),
+            (turns + [red], "messages[1].tool_calls[1].id"),
+            (turns + [red, *user("Next task"), blue], "messages[1].tool_calls[1].id"),
+            ([turns[0], dict(turns[1], tool_calls=[calls[0], calls[0]]), red, blue],
+             "messages[1].tool_calls[1].id"),
+            (user("First message") + turns + [red, red], "messages[4].tool_call_id"),
+        ):
+            body = api.body(messages, tool_choice="none", max_tokens=1)
+            if stream:
+                s = api.stream(body)
+                status, error = s.status, s.error or {}
+                expect(not s.chunks and not s.done, "error arrived after SSE was committed")
+            else:
+                r = api.post(body)
+                status, error = r.status, r.body
+            expect(status == 400, f"{path}: expected HTTP 400, got {status}")
+            detail = error.get("error", {})
+            expect(detail.get("type") == "invalid_request_error" and detail.get("param") == path,
+                   f"{path}: wrong error: {detail}")
+    bad_part = dict(blue, content=[{"type": "image_url", "image_url": {"url": "invalid"}}])
+    r = api.post(api.body(turns + [bad_part, red], tool_choice="none"))
+    expect(r.status == 400 and "messages[2].content[0]" in r.error_message(),
+           f"the content error must name the original result: {r.error_message()}")
+    expect(api.post(api.body(turns + [blue, red], tool_choice="none", max_tokens=1)).status == 200,
+           "valid request failed after the errors")
+
+
+@case
+def positional_single_round_trips(api: Api) -> None:
+    """Replay a real named call using the ID returned on each wire format."""
+    positional_shelf_history(api)
+    for stream in (False, True):
+        messages = user(WEATHER_PROMPT)
+        body = api.body(messages, tools=WEATHER_TOOLS, tool_choice=function_choice("get_weather"))
+        try:
+            calls = (expect_streamed_calls(api, body, WEATHER_TOOLS) if stream
+                     else expect_calls(api.ok(body), WEATHER_TOOLS))
+        except Skip as error:
+            raise AssertionError(f"this package must support named calls: {error}") from error
+        expect(len(calls) == 1 and calls[0]["function"]["name"] == "get_weather", f"unexpected calls: {calls}")
+        messages += [{"role": "assistant", "content": None, "tool_calls": calls},
+                     {"role": "tool", "tool_call_id": calls[0]["id"], "content": '{"temperature_c": 23}'}]
+        follow = api.body(messages, tools=WEATHER_TOOLS, tool_choice="none", max_tokens=128)
+        try:
+            text = (flm_api.check_stream_contract(api.ok_stream(follow), include_usage=False).content
+                    if stream else flm_api.check_message_contract(api.ok(follow))["content"])
+        except Skip as error:
+            raise AssertionError(f"this package must accept the named call result: {error}") from error
+        expect("23" in text, f"single-call result missing from the answer: {text!r}")
+
+
 CASES = flm_api.collect(globals())
 
 if __name__ == "__main__":
