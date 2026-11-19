@@ -181,9 +181,18 @@ void test_embedding_handler() {
 void test_frontend_selection_after_download() {
     auto& registry = flm::frontend::FrontendRegistry::instance();
     static int creations = 0;
+    static void* last_device = nullptr;
+    auto& backends = flm::backend::BackendRegistry::instance();
+    const auto factory = [](const flm::backend::BackendContext&) {
+        return std::unique_ptr<flm::backend::ModelBackend>{};
+    };
+    backends.register_backend("source-selection", "flm", factory);
+    backends.register_backend("source-selection", "oga-hipep", factory,
+        {.needs_npu_xclbin = false, .needs_npu_device = false});
     for (const auto* provider : {"source-default", "source-preferred"}) {
-        registry.register_frontend("source-selection", [provider](void*) {
+        registry.register_frontend("source-selection", [provider](void* device) {
             ++creations;
+            last_device = device;
             return flm::frontend::FrontendPtr(
                 reinterpret_cast<AutoModel*>(new std::string(provider)),
                 flm::frontend::FrontendDeleter{nullptr, [](void*, void* object) {
@@ -222,6 +231,7 @@ void test_frontend_selection_after_download() {
         TEST_REQUIRE(caller_models.get_model_info("source-selection:1").second.at("frontend_provider") == "source-default");
         auto [tag, frontend] = get_auto_model("Ollama/source-selection", caller_models, nullptr, downloads, false);
         TEST_REQUIRE(tag == "source-selection:1");
+        TEST_REQUIRE(last_device != nullptr);
         TEST_REQUIRE(*reinterpret_cast<std::string*>(frontend.get()) == expected);
         TEST_REQUIRE(caller_models.get_model_info(tag).second.at("frontend_provider") == expected);
         statuses[tag] = Status::Ready;
@@ -239,6 +249,19 @@ void test_frontend_selection_after_download() {
         RequireThrows([&] { get_auto_model("source-selection:1", models, nullptr, downloads, false); });
         TEST_REQUIRE(creations == created);
     }
+    statuses["source-selection:1"] = Status::Missing;
+    pull_succeeds = true;
+    npu_available = false;
+    const int pulled = pulls;
+    RequireContains(RequireThrows([&] {
+        get_auto_model("source-selection:1", models, nullptr, downloads, false);
+    }), flm::backend::kNoNpuDevice);
+    TEST_REQUIRE(pulls == pulled && creations == created);
+    auto gpu = get_auto_model("source-selection:1", models, nullptr, downloads, false, "oga-hipep");
+    TEST_REQUIRE(last_device == nullptr);
+    TEST_REQUIRE(pulls == pulled + 1 && creations == created + 1);
+    TEST_REQUIRE(*reinterpret_cast<std::string*>(gpu.second.get()) == "source-preferred");
+    npu_available = true;
     preferred_pull.reset();
     std::filesystem::remove_all(directory);
 }
