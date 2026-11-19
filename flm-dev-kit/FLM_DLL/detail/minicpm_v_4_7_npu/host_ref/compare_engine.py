@@ -13,7 +13,9 @@ prompt and the same model.q4nx; run_gate.sh makes them. The gate:
                                             cosine > --min-cos-logits, and the same argmax
                                             unless the host's top two logits are within --tie
 
-Every other tensor both builds dumped is printed, not gated. Needs only numpy.
+A gated file missing from either dump fails, as does a layer only one build dumped or no layers at
+all; logits_split / logits_chunks may be absent, but not from one side only. Every other tensor is
+printed, not gated. Needs only numpy.
 """
 import argparse
 import os
@@ -51,26 +53,47 @@ def main():
 
     failures = []
 
+    def missing_from(rel):
+        return [side for side, root in (("npu", args.npu), ("cpu", args.cpu))
+                if not os.path.exists(os.path.join(root, rel))]
+
     def load_pair(rel):
-        a, b = os.path.join(args.npu, rel), os.path.join(args.cpu, rel)
-        if not (os.path.exists(a) and os.path.exists(b)):
-            return None, None
-        return np.load(a), np.load(b)
+        return np.load(os.path.join(args.npu, rel)), np.load(os.path.join(args.cpu, rel))
+
+    def list_dir(root, rel):
+        path = os.path.join(root, rel)
+        return set(os.listdir(path)) if os.path.isdir(path) else set()
 
     print(f"{'tensor':<44} {'cosine':>10} {'relL2':>9}")
-    layers = sorted(os.listdir(os.path.join(args.npu, "layers")))
-    for nn in layers:
-        for f in sorted(os.listdir(os.path.join(args.npu, "layers", nn))):
+    npu_layers = list_dir(args.npu, "layers")
+    cpu_layers = list_dir(args.cpu, "layers")
+    if not npu_layers or not cpu_layers:
+        failures.append(f"layers/: no layer dumps (npu {len(npu_layers)}, cpu {len(cpu_layers)})")
+    for nn in sorted(npu_layers ^ cpu_layers):
+        failures.append(f"layers/{nn}: dumped by one build only")
+    one_sided = set()
+    for nn in sorted(npu_layers & cpu_layers):
+        files = list_dir(args.npu, f"layers/{nn}") | list_dir(args.cpu, f"layers/{nn}") | {"residual_out.npy"}
+        for f in sorted(files):
             rel = f"layers/{nn}/{f}"
-            got, want = load_pair(rel)
-            if got is None:
-                continue
-            c = cosine(got, want)
             gated = f == "residual_out.npy"
+            missing = missing_from(rel)
+            if missing and gated:
+                failures.append(f"{rel}: missing from {' and '.join(missing)}")
+                print(f"{rel:<44} missing from {' and '.join(missing)}  FAIL")
+                continue
+            if missing:
+                one_sided.add(f)
+                continue
+            got, want = load_pair(rel)
+            c = cosine(got, want)
             ok = c > args.min_cos_layer
             if gated and not ok:
                 failures.append(f"{rel}: cosine {c:.6f} <= {args.min_cos_layer}")
             print(f"{rel:<44} {c:>10.6f} {rel_l2(got, want):>9.2e}  {('ok' if ok else 'FAIL') if gated else ''}")
+
+    if one_sided:
+        print(f"not compared, dumped by one build only: {', '.join(sorted(one_sided))}")
 
     def score_logit_rows(name, npu_rows, cpu_rows, row_ids):
         print(f"\n{name}")
@@ -84,21 +107,33 @@ def main():
                 failures.append(f"{name} row {i}: cosine {c:.6f}, argmax {a_n} vs {a_c} (gap {gap:.3f})")
             print(f"{i:<8} {c:>10.6f} {a_n:>8}/{a_c:<7} {gap:>14.3f}  {'' if ok else 'FAIL'}")
 
-    got, want = load_pair("logits_last.npy")
-    score_logit_rows("last-row logits of the full prefill", got, want, ["last"])
+    def gated_pair(rel, required):
+        missing = missing_from(rel)
+        if not missing:
+            return load_pair(rel)
+        if required or len(missing) == 1:
+            failures.append(f"{rel}: missing from {' and '.join(missing)}")
+            print(f"\n{rel}: missing from {' and '.join(missing)}  FAIL")
+        return None, None
 
-    got, want = load_pair("logits_split.npy")
+    got, want = gated_pair("logits_last.npy", required=True)
+    if got is not None:
+        score_logit_rows("last-row logits of the full prefill", got, want, ["last"])
+
+    got, want = gated_pair("logits_split.npy", required=False)
     if got is not None:
         K = args.split
         rows = [K - 1 + j for j in range(got.shape[0])]
         score_logit_rows(f"decode path: prefill {K} tokens, then forward() one token at a time", got, want, rows)
 
-    got, want = load_pair("logits_chunks.npy")
+    got, want = gated_pair("logits_chunks.npy", required=False)
     if got is not None:
         score_logit_rows("multi-turn prefill: three chunks", got, want, ["chunk 2", "chunk 3"])
 
-    got, want = load_pair("gen_ids.npy")
-    if got is not None:
+    if missing_from("gen_ids.npy"):
+        print(f"\ngen_ids.npy: missing from {' and '.join(missing_from('gen_ids.npy'))} (not gated)")
+    else:
+        got, want = load_pair("gen_ids.npy")
         same = 0
         while same < min(len(got), len(want)) and got[same] == want[same]:
             same += 1

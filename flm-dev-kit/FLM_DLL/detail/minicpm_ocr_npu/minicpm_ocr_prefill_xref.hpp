@@ -28,11 +28,12 @@
 /// | `attn.xclbin`                | `attention_out`                                 |
 ///
 /// \note What this can and cannot catch. It proves the two backends agree; it cannot prove
-///       either is right -- `host_ref/compare_engine.py` against `q4_oracle.py` is what
-///       does that. Only stages with two implementations are covered. The rms norms, the
-///       q/k norm + RoPE, the gated norm, the alpha/beta projections, the attention gate
-///       sigmoid and multiply, `fill_kv_cache` and the conv-state carry are the same
-///       `cpu_func` call in both builds, so a bug in one of those is invisible here.
+///       either is right. Neither can `host_ref/run_gate.sh`, which scores the NPU build
+///       against the all-host build; no independent reference ships with the dev kit. Only
+///       stages with two implementations are covered. The rms norms, the q/k norm + RoPE,
+///       the gated norm, the alpha/beta projections, the attention gate sigmoid and
+///       multiply, `fill_kv_cache` and the conv-state carry are the same `cpu_func` call
+///       in both builds, so a bug in one of those is invisible here.
 ///
 /// \note Everything is ENABLE_DEBUG only. With DEBUG_LEVEL=0 this header expands to
 ///       nothing, `minicpm_ocr_prefill.hpp` holds no xref member and issues no host
