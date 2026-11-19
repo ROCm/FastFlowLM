@@ -37,6 +37,8 @@ PYTHON312_VERSION=3.12.3-1ubuntu0.17
 # zlib1g-dev: the MLIR wheel's LLVM exports link ZLIB::ZLIB, so its CMake
 # package needs zlib's development files (CMake generate fails without them).
 ZLIB1G_DEV_VERSION=1:1.3.dfsg-3.1ubuntu2.3
+# libssl-dev: mlir-aie's tools/bootgen requires OpenSSL (find_package REQUIRED).
+LIBSSL_DEV_VERSION=3.0.13-0ubuntu3.16
 
 # mlir-aie: the FLM fork, built from source with its
 # utils/build-mlir-aie-from-wheels.sh. Its python/requirements.txt (exact

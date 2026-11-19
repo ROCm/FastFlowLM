@@ -90,6 +90,7 @@ ARG LLD18_VERSION
 ARG PYTHON312_VERSION
 ARG PIP_VERSION
 ARG ZLIB1G_DEV_VERSION
+ARG LIBSSL_DEV_VERSION
 
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -98,13 +99,15 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 RUN for v in MLIR_AIE_REPO MLIR_AIE_REF MLIR_AIE_SHA MLIR_WHEEL_VERSION MLIR_WHEEL_URL \
              MLIR_WHEEL_SHA256 MLIR_AIE_WHEEL_VERSION MLIR_AIE_WHEEL_URL MLIR_AIE_WHEEL_SHA256 \
-             GCC13_VERSION LLD_VERSION LLD18_VERSION PYTHON312_VERSION PIP_VERSION ZLIB1G_DEV_VERSION; do \
+             GCC13_VERSION LLD_VERSION LLD18_VERSION PYTHON312_VERSION PIP_VERSION ZLIB1G_DEV_VERSION LIBSSL_DEV_VERSION; do \
         [[ -n "${!v:-}" ]] || { echo "build arg $v is not set: pass flm-dev-kit/FLM_Xclbin/toolchain.lock" >&2; exit 1; }; \
     done
 
 # The host compiler and linker of the mlir-aie build (its script links with
 # lld whenever "lld" is on PATH) and ironenv's Python, at the lock's versions.
 # zlib1g-dev: the MLIR wheel's LLVM exports link ZLIB::ZLIB.
+# libssl-dev: tools/bootgen requires OpenSSL. These two are the only system
+# libraries the configure finds (checked against a working local configure).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential ca-certificates curl git ninja-build unzip \
@@ -113,6 +116,7 @@ RUN apt-get update \
         "python3.12=${PYTHON312_VERSION}" "python3.12-dev=${PYTHON312_VERSION}" \
         "python3.12-venv=${PYTHON312_VERSION}" \
         "zlib1g-dev=${ZLIB1G_DEV_VERSION}" \
+        "libssl-dev=${LIBSSL_DEV_VERSION}" \
     && rm -rf /var/lib/apt/lists/* \
     && [[ "$(c++ -dumpfullversion)" == 13.* ]] \
     && command -v lld
