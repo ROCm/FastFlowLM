@@ -130,7 +130,8 @@ private:
     void ensure_asr_model_loaded(const std::string& model_tag);
     void ensure_embed_model_loaded(const std::string& model_tag);
     void ensure_decision_model_loaded(const std::string& model_tag);
-    void configure_chat_engine_parameters(const json& options, const json& request);
+    void configure_chat_engine_parameters(const json& options, const json& request,
+                                          std::optional<bool> nested_think = std::nullopt);
     json build_nstream_response(const std::string& response_text, chat_meta_info_t& meta_info,
                                 const chat_parse_options& parse_options,
                                 chat_logprobs_aligner* logprobs = nullptr);

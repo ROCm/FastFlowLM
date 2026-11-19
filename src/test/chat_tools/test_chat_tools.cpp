@@ -529,6 +529,51 @@ void test_no_tools_after_tool_turns() {
     CHECK(chat_make_constraint(QWEN_XML, plain_request, vocab, never) == nullptr);
 }
 
+void test_thinking_switch_in_chat_template_kwargs() {
+    std::printf("chat_template_kwargs.enable_thinking is the Qwen spelling of think\n");
+    // returns: 0 no override, 1 override on, 2 override off, -1 rejected (message in error)
+    auto resolve = [](const json& request, std::string* message = nullptr) {
+        std::optional<bool> override_value;
+        std::string error;
+        const bool ok = chat_thinking_override_from_openai(request, override_value, error);
+        if (message != nullptr) {
+            *message = error;
+        }
+        return !ok ? -1 : !override_value.has_value() ? 0 : *override_value ? 1 : 2;
+    };
+    CHECK(resolve({{"chat_template_kwargs", {{"enable_thinking", true}}}}) == 1);
+    CHECK(resolve({{"chat_template_kwargs", {{"enable_thinking", false}}}}) == 2);
+    // absent or null at either level means no override, as for every other optional field
+    CHECK(resolve(json::object()) == 0);
+    CHECK(resolve({{"chat_template_kwargs", nullptr}}) == 0);
+    CHECK(resolve({{"chat_template_kwargs", json::object()}}) == 0);
+    CHECK(resolve({{"chat_template_kwargs", {{"enable_thinking", nullptr}}}}) == 0);
+    // only the named key: a neighbouring template variable changes nothing
+    CHECK(resolve({{"chat_template_kwargs", {{"add_generation_prompt", false}, {"enable_thinking", true}}}}) == 1);
+    CHECK(resolve({{"chat_template_kwargs", {{"preserve_thinking", true}}}}) == 0);
+    // wrong types name the field
+    std::string message;
+    CHECK(resolve({{"chat_template_kwargs", "yes"}}, &message) == -1);
+    CHECK(message.find("chat_template_kwargs") != std::string::npos);
+    CHECK(resolve({{"chat_template_kwargs", {{"enable_thinking", "yes"}}}}, &message) == -1);
+    CHECK(message.find("chat_template_kwargs.enable_thinking") != std::string::npos);
+    CHECK(resolve({{"chat_template_kwargs", {{"enable_thinking", 1}}}}) == -1);
+    // an agreeing native control is accepted, a contradicting one is not
+    CHECK(resolve({{"think", true}, {"chat_template_kwargs", {{"enable_thinking", true}}}}) == 1);
+    CHECK(resolve({{"think", false}, {"chat_template_kwargs", {{"enable_thinking", false}}}}) == 2);
+    CHECK(resolve({{"reasoning_effort", "none"}, {"chat_template_kwargs", {{"enable_thinking", false}}}}) == 2);
+    CHECK(resolve({{"reasoning_effort", "high"}, {"chat_template_kwargs", {{"enable_thinking", true}}}}) == 1);
+    CHECK(resolve({{"think", false}, {"chat_template_kwargs", {{"enable_thinking", true}}}}, &message) == -1);
+    CHECK(message.find("think") != std::string::npos);
+    CHECK(resolve({{"think", true}, {"chat_template_kwargs", {{"enable_thinking", false}}}}) == -1);
+    CHECK(resolve({{"reasoning_effort", "none"}, {"chat_template_kwargs", {{"enable_thinking", true}}}}) == -1);
+    CHECK(resolve({{"reasoning_effort", "low"}, {"chat_template_kwargs", {{"enable_thinking", false}}}}) == -1);
+    // null native controls count as absent
+    CHECK(resolve({{"think", nullptr}, {"chat_template_kwargs", {{"enable_thinking", false}}}}) == 2);
+    // without the nested field the native controls are not examined here
+    CHECK(resolve({{"think", false}, {"reasoning_effort", "high"}}) == 0);
+}
+
 void test_gemma4_nullable_types() {
     std::printf("gemma4 template gets nullable types in its own form\n");
     const json tools = json::array({tool(
@@ -736,6 +781,7 @@ int main() {
     test_streams_extend();
     test_continued_call();
     test_no_tools_after_tool_turns();
+    test_thinking_switch_in_chat_template_kwargs();
     test_gemma4_nullable_types();
     test_gemma4_string_length();
     test_lfm2_string_length();

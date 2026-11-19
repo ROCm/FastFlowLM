@@ -37,6 +37,45 @@ bool has_tool_turns(const json& messages) {
 
 } // namespace
 
+bool chat_thinking_override_from_openai(const json& request, std::optional<bool>& override_value,
+                                        std::string& error) {
+    override_value.reset();
+    const json& container = field(request, "chat_template_kwargs");
+    if (container.is_null()) {
+        return true;
+    }
+    if (!container.is_object()) {
+        error = "chat_template_kwargs must be an object";
+        return false;
+    }
+    const json& value = field(container, "enable_thinking");
+    if (value.is_null()) {
+        return true;
+    }
+    if (!value.is_boolean()) {
+        error = "chat_template_kwargs.enable_thinking must be a boolean";
+        return false;
+    }
+    const bool nested = value.get<bool>();
+    const json& think = field(request, "think");
+    if (think.is_boolean() && think.get<bool>() != nested) {
+        error = std::string("chat_template_kwargs.enable_thinking contradicts think: ") +
+                (nested ? "true" : "false") + " and " + (think.get<bool>() ? "true" : "false");
+        return false;
+    }
+    const json& effort = field(request, "reasoning_effort");
+    if (effort.is_string()) {
+        const std::string level = effort.get<std::string>();
+        const bool effort_on = level == "low" || level == "medium" || level == "high";
+        if ((level == "none" && nested) || (effort_on && !nested)) {
+            error = "chat_template_kwargs.enable_thinking contradicts reasoning_effort \"" + level + "\"";
+            return false;
+        }
+    }
+    override_value = nested;
+    return true;
+}
+
 bool chat_constraint_request_from_openai(const json& request, const json& tools,
                                          chat_constraint_request& out, std::string& error) {
     out = chat_constraint_request();

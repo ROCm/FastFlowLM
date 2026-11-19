@@ -6,6 +6,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -51,6 +52,17 @@ class chat_grammar_engine;
 bool chat_constraint_request_from_openai(const nlohmann::ordered_json& request,
                                          const nlohmann::ordered_json& tools,
                                          chat_constraint_request& out, std::string& error);
+
+/// \brief The thinking switch in the Qwen spelling, `chat_template_kwargs.enable_thinking`
+/// \param request the chat completion request body
+/// \param override_value set to the nested boolean, empty when the request does not carry one
+/// \param error set when the switch is ill-typed or contradicts `think` / `reasoning_effort`
+/// \return false when the request must be refused
+/// \note Null at either level reads as absent. Only this one key is read; the other template
+///       variables of the container are ignored. The native controls are examined only when the
+///       nested key is present, so a request without it behaves as before.
+bool chat_thinking_override_from_openai(const nlohmann::ordered_json& request,
+                                        std::optional<bool>& override_value, std::string& error);
 
 /// \brief Build the constraint for one request
 /// \param grammar_engine returns the model's grammar engine, only called when a grammar is needed
