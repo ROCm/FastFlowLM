@@ -126,7 +126,7 @@ each configuration, and encodes each kernel's ops.
 | `include/launch/transport/ctrlpkt_check.hpp` | `ctrlpkt::check_kernel`: replays a kernel on a switch model and compares its end state with its TXN twin |
 | `include/launch/hw/switch.hpp` | A model of the stream switches: register file, packet routes (`route`) |
 | `include/launch/rt/rt.hpp` | `Rt` (the aiex.py calls), `Arg`, `Memcpy`, `SequenceFn`, `SequenceMap`; the shim BD encoding |
-| `include/launch/formats/package.hpp` | `load_package` (the only file I/O; "APP@STATE" states, section 3.1), `Package`, `TileInit`, `floorplan_difference` |
+| `include/launch/formats/package.hpp` | `load_package` (the only file I/O; "APP@STATE" states and "APP[A-B]" columns, section 3.1), `Package`, `TileInit`, `floorplan_difference` |
 | `include/launch/txn/txn.hpp` | The instruction stream: `Op` (IR), `encode`, `parse` |
 | `include/launch/txn/elf.hpp` | `to_elf`: a stream as the ELF of XRT's ELF flow (the AddressPatch ops as relocations; aiebu's ELF without aiebu) |
 | `include/launch/txn/elf_aiebu.hpp` | `to_elf_aiebu`: the same by aiebu (needs `libaiebu.a`; for `make test_elf` and `SessionOptions::elf_writer`) |
@@ -183,6 +183,17 @@ no configuration), and `warm("ovl@P", other)` leaves it. The load refuses, namin
 Channel reset masks are dropped, as in `init.txn`. A state the host's switches used to merge into a copy of the
 package by hand (an "ovlP" folder) is the same kernel this way: the Qwen4 attention switch gives byte-identical
 `warm(attn, ovl@P)` / `warm(ovl@P, attn)` streams with both transports.
+
+**Columns** (`"NAME[A-B]"`, also `"NAME@STATE[A-B]"`): the part of NAME in columns A..B, its tiles there and
+nothing else. A warm kernel between it and a smaller app inside those columns (a guest) resets and loads those
+columns only: `warm("gemv[0-1]", attnd)` in, `warm(attnd, "gemv[0-1]")` back leave NAME's other columns as its
+last run left them, cores waiting, and reload only what the guest took. The array must hold NAME before (as for
+any warm kernel). NAME's columns must not depend on each other's progress (a DMA chain, a lock or data in flight
+across the border), since A..B start again from the init values and the other columns do not. The load checks the
+census (a core that acquires a lock across the border stops it); the rest is the host's knowledge of NAME, as with
+states. Measured on the Qwen4 decode GEMV (32 cores, the x vector broadcast from column 0, every column its own
+weight and y chains) with a 4-core attention guest in columns 0-1: 309 + 313 ops and 190 KB of packets per round
+trip instead of 1133 + 1250 ops and 760 KB.
 
 ### 3.2 List of configurations
 
@@ -356,7 +367,7 @@ The example's README has the full table.
 
 | Where | What | Needs |
 |---|---|---|
-| `make test` | `gen_hw.py --check`; `test_txn` (round trip, classes; aiecc's binaries of a package); `test_rt` (C++ sequence == aiecc's, 8 columns); `test_build` (the kernels on a register model: cold = aiecc's configure, cold + warm = the next app's configure, program-only too; the parts of each kind; `breakdown`; JSON; `channel_ctrl_of`); `test_errors` (every mistake throws and names the configuration, file or op: bad Rt calls, bad lists, a throwing sequence, 11 kinds of broken package); `test_ctrlpkt` (every kernel under every `CtrlPktOptions` set passes its check and converts to the ELF flow; the check finds corrupted or cut packets, a missing Sync, a TXN write into a chain in flight, lost lanes without `rewrite_lanes`; an RTP lock goes by TXN); `test_state` (a state of the first app: the Package fields, cold/warm/back/rerun with both transports, what it leaves; the bad names, a missing file, and each write a state may not make) | a package (default: the example's precompiled 8 × 2) |
+| `make test` | `gen_hw.py --check`; `test_txn` (round trip, classes; aiecc's binaries of a package); `test_rt` (C++ sequence == aiecc's, 8 columns); `test_build` (the kernels on a register model: cold = aiecc's configure, cold + warm = the next app's configure, program-only too; the parts of each kind; `breakdown`; JSON; `channel_ctrl_of`); `test_errors` (every mistake throws and names the configuration, file or op: bad Rt calls, bad lists, a throwing sequence, 11 kinds of broken package); `test_ctrlpkt` (every kernel under every `CtrlPktOptions` set passes its check and converts to the ELF flow; the check finds corrupted or cut packets, a missing Sync, a TXN write into a chain in flight, lost lanes without `rewrite_lanes`; an RTP lock goes by TXN); `test_state` (a state of the first app: the Package fields, cold/warm/back/rerun with both transports, what it leaves; the bad names, a missing file, and each write a state may not make); `test_columns` (`APP[A-B]` of the first app: its tiles, warm kernels in and out of it write only those columns with both transports and less than the whole app's, bad ranges, a census acquire across the border; skipped for a one-column app) | a package (default: the example's precompiled 8 × 2) |
 | `test_build PKG A B` with A, B of different floorplans | warm(A, B, program_only) is refused; cold(A), warm(A, B), warm(B, A) twice each give aiecc's state and leave no route, mux or channel Ctrl of the other app | a package (`../pm_runtime_load_singletile`: `make check`, all six pairs) |
 | `make test_elf` (or `build/test_elf FILE.txn ...`) | `txn::to_elf` against aiebu: BDs and relocations of hand-made streams, the streams it refuses; on every kernel of a package (and on TXN files, e.g. FLM's dumped streams) the same .ctrltext as aiebu's without its patch ops, the same relocations, `.dynamic` and header fields; host time of both | `libaiebu.a` (XRT), a package |
 | `../vadd_vmul_bf16`: `make check` | the same on the example's current package | |

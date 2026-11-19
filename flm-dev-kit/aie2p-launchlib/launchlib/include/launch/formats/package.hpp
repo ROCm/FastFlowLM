@@ -48,6 +48,18 @@
 // runs next; the library cannot see that (an op that keeps state of its own
 // between runs, e.g. a ping/pong selector, must start from the state's values).
 //
+// Columns. "APP[A-B]" is the part of APP in columns A..B: its tiles there,
+// nothing of the other columns. A warm kernel between it and an app inside
+// those columns (a guest) resets and loads those columns only, so APP's other
+// columns keep their state, cores waiting where APP's last run left them:
+// warm("APP[A-B]", guest) in, warm(guest, "APP[A-B]") back. The array must hold
+// APP before (as for any warm kernel); APP's columns must not depend on each
+// other's progress (a DMA chain or lock across the border, data still in
+// flight), since A..B start again from the init values and the others do not.
+// The library checks the census (no core waits on a lock across the border);
+// the rest is the host's knowledge of APP, as with states. Its next run of APP
+// is a run of the whole app.
+//
 //===----------------------------------------------------------------------===//
 
 #pragma once
@@ -55,6 +67,7 @@
 #include "launch/hw/aie2p.hpp"
 #include "launch/txn/txn.hpp"
 
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -121,6 +134,7 @@ struct Package {
   /// on. Without a census (an older package) every lock of a core tile counts.
   bool census = false;
   std::set<uint32_t> waits;
+  std::vector<std::pair<Tile, uint32_t>> acquires; ///< the census per core: (core, lock address) of every wait
   std::set<uint32_t> declared_locks; ///< array addresses of every aie.lock (manifest "declare", named or not)
 
   /// The locks whose values the app needs: the ones it declares and the ones
@@ -218,6 +232,7 @@ inline void read_manifest(Package &p, const std::string &path) {
           id >= hw::locks(hw::Kind::core).count)
         bad();
       p.waits.insert(at.addr(hw::locks(hw::Kind::core).at(id)));
+      p.acquires.push_back({core, at.addr(hw::locks(hw::Kind::core).at(id))});
     } else if (key == "acquire_any") {
       // An acquire through a register: any lock of the core's tile and of the
       // core tiles next to it.
@@ -228,8 +243,10 @@ inline void read_manifest(Package &p, const std::string &path) {
         const Tile t{core.col + dc, core.row + dr};
         if (t.col < 0 || t.col >= hw::kCols || t.row >= hw::kRows || t.kind() != hw::Kind::core)
           continue;
-        for (uint32_t i = 0; i < hw::locks(hw::Kind::core).count; ++i)
+        for (uint32_t i = 0; i < hw::locks(hw::Kind::core).count; ++i) {
           p.waits.insert(t.addr(hw::locks(hw::Kind::core).at(i)));
+          p.acquires.push_back({core, t.addr(hw::locks(hw::Kind::core).at(i))});
+        }
       }
     } else if (key == "alloc") {
       std::string name, dir;
@@ -354,17 +371,56 @@ inline void check_state(const txn::Stream &init, const txn::Stream &state, const
   }
 }
 
+/// "APP[A-B]": the columns A..B of the name, -1 -1 for none; `name` loses the suffix.
+inline std::pair<int, int> column_range(std::string &name, const std::string &app) {
+  if (name.empty() || name.back() != ']')
+    return {-1, -1};
+  const size_t open = name.rfind('[');
+  int lo = -1, hi = -1;
+  char dash = 0, end = 0;
+  if (open == std::string::npos ||
+      std::sscanf(name.c_str() + open, "[%d%c%d%c", &lo, &dash, &hi, &end) != 4 || dash != '-' || end != ']' ||
+      lo < 0 || hi < lo || hi >= hw::kCols)
+    throw std::runtime_error(std::format("app '{}': APP[A-B] expected, columns 0 <= A <= B < {}", app, hw::kCols));
+  name.resize(open);
+  return {lo, hi};
+}
+
+/// Keep the tiles of columns lo..hi (APP[A-B]). A core may not wait on a lock
+/// across the border: the census says which ones it acquires.
+inline void restrict_columns(Package &p, int lo, int hi) {
+  auto in = [&](int col) { return col >= lo && col <= hi; };
+  auto in_addr = [&](uint32_t a) { return in(hw::locate(a).col); };
+  for (const auto &[core, lock] : p.acquires)
+    if (in(core.col) != in_addr(lock))
+      throw std::runtime_error(std::format("app '{}': the {} acquires a lock of column {}, across the border",
+                                           p.name, core.describe(), hw::locate(lock).col));
+  std::erase_if(p.tiles, [&](const auto &e) { return !in(e.first.col); });
+  std::erase_if(p.controller_id, [&](const auto &e) { return !in(e.first.col); });
+  std::erase_if(p.buffers, [&](const auto &e) { return !in(e.second.tile.col); });
+  std::erase_if(p.lock_names, [&](const auto &e) { return !in(e.second.tile.col); });
+  std::erase_if(p.allocs, [&](const auto &e) { return !in(e.second.col); });
+  std::erase_if(p.waits, [&](uint32_t a) { return !in_addr(a); });
+  std::erase_if(p.declared_locks, [&](uint32_t a) { return !in_addr(a); });
+  std::erase_if(p.acquires, [&](const auto &e) { return !in(e.first.col); });
+  if (p.cores().empty())
+    throw std::runtime_error(std::format("app '{}': no core in columns {}..{}", p.name, lo, hi));
+}
+
 } // namespace detail
 
-/// Read PKG/<app>/, or PKG/APP/ with its state for "APP@STATE". Throws
-/// std::runtime_error naming the file.
+/// Read PKG/<app>/, or PKG/APP/ with its state for "APP@STATE", or the columns
+/// A..B of either for "APP[A-B]" / "APP@STATE[A-B]". Throws std::runtime_error
+/// naming the file.
 inline Package load_package(const std::string &package_dir, const std::string &app) {
   Package p;
   p.name = app;
-  const size_t at = app.find('@');
-  const std::string base = app.substr(0, at);
+  std::string name = app;
+  const auto [lo, hi] = detail::column_range(name, app);
+  const size_t at = name.find('@');
+  const std::string base = name.substr(0, at);
   if (at != std::string::npos) {
-    p.state = app.substr(at + 1);
+    p.state = name.substr(at + 1);
     if (base.empty() || p.state.empty() || p.state.find('@') != std::string::npos)
       throw std::runtime_error(std::format("app '{}': APP or APP@STATE expected", app));
   }
@@ -391,6 +447,8 @@ inline Package load_package(const std::string &package_dir, const std::string &a
   for (const Tile &t : p.cores())
     if (p.tiles.at(t).program.empty())
       throw std::runtime_error(std::format("{}: the {} has a core but no program", init, t.describe()));
+  if (lo >= 0)
+    detail::restrict_columns(p, lo, hi);
   return p;
 }
 
