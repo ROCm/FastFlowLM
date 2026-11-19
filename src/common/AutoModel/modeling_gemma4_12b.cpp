@@ -12,34 +12,25 @@
 #include "error_measure.hpp"
 #include "models/gemma4_12b/flm/aie2p/gemma4_12b_npu.hpp"
 #if defined(FLM_ENABLE_OGA_HIPEP)
-#include "base64.hpp"
 #include "oga/oga_engine.hpp"
-#include <fstream>
-#include <iterator>
+#include "oga/oga_image_bytes.hpp"
 #endif
+#include <algorithm>
 #include <cassert>
+#include <cctype>
+#include <string_view>
+
+namespace {
+std::string trim(const std::string& text) {
+    const auto first = std::find_if(text.begin(), text.end(), [](unsigned char c) { return !std::isspace(c); });
+    const auto last = std::find_if(text.rbegin(), text.rend(), [](unsigned char c) { return !std::isspace(c); }).base();
+    return first < last ? std::string(first, last) : std::string();
+}
+} // namespace
 
 #if defined(FLM_ENABLE_OGA_HIPEP)
-namespace {
-std::string ImageBytesFromBase64(std::string payload) {
-    const auto marker = payload.find("base64,");
-    if (marker != std::string::npos) payload.erase(0, marker + 7);
-    std::string bytes = base64::from_base64(payload);
-    if (bytes.size() < 8)
-        throw ModelRequestError(400, false, "image payload is not a valid encoded image", "invalid_request_error");
-    return bytes;
-}
-
-std::string ImageBytesFromFile(const std::string& path) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in)
-        throw ModelRequestError(400, false, "cannot read image " + path, "invalid_request_error");
-    std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    if (bytes.size() < 8)
-        throw ModelRequestError(400, false, "image file is empty: " + path, "invalid_request_error");
-    return bytes;
-}
-}  // namespace
+using flm::oga::ImageBytesFromBase64;
+using flm::oga::ImageBytesFromFile;
 #endif
 
 /************              Gemma4_12B family            **************/
@@ -125,6 +116,94 @@ std::string Gemma4_12B::apply_chat_template(nlohmann::ordered_json& messages, nl
     return this->_render_chat_template(inputs, continue_final_message, opt);
 }
 
+bool Gemma4_12B::_continue_verbatim(std::vector<int>& tokens, std::optional<int> requested_max_new_tokens,
+                                    std::vector<int>& rendered) {
+    const std::vector<int>& ran = this->token_history;
+    if (ran.empty() || static_cast<size_t>(this->lm_engine->get_current_context_length()) != ran.size()) {
+        return false;
+    }
+    const std::vector<int> header = this->tokenizer->encode("<|turn>model\n");
+    const std::vector<int> turn_end = this->tokenizer->encode("<turn|>");
+    if (header.empty() || turn_end.size() != 1) {
+        return false;
+    }
+    // the reply the engine generated follows the last model header it ran
+    const auto at = std::find_end(ran.begin(), ran.end(), header.begin(), header.end());
+    if (at == ran.end()) {
+        return false;
+    }
+    // After a continued turn the history holds the earlier replies as the engine ran them (with
+    // their empty thought channels), where the prompt renders them as continued_prompt_.rendered does.
+    const std::vector<int>& held = this->continued_prompt_.ran;
+    const std::vector<int>& held_as_rendered = this->continued_prompt_.rendered;
+    std::vector<int> spliced;
+    if (!held.empty() && !held_as_rendered.empty() && held.size() <= ran.size() && tokens.size() > held_as_rendered.size() &&
+        std::equal(held.begin(), held.end(), ran.begin()) &&
+        std::equal(held_as_rendered.begin(), held_as_rendered.end(), tokens.begin())) {
+        spliced = held;
+        spliced.insert(spliced.end(), tokens.begin() + held_as_rendered.size(), tokens.end());
+    }
+    const std::vector<int>& prompt = spliced.empty() ? tokens : spliced;
+    const size_t start = static_cast<size_t>(at - ran.begin()) + header.size();
+    if (prompt.size() <= start || !std::equal(ran.begin(), ran.begin() + start, prompt.begin())) {
+        return false;
+    }
+    // A reply opens with its thought channel, which the template leaves out of earlier turns: a reply
+    // with a thought, or cut inside the channel, runs as rendered instead.
+    const auto reply = ran.begin() + start;
+    if (reply != ran.end() && *reply == boc_token_id) {
+        const auto close = std::find(reply, ran.end(), eoc_token_id);
+        if (close == ran.end()) {
+            return false;
+        }
+        // an empty channel has the channel's name too
+        constexpr std::string_view kChannelName = "thought";
+        std::string thought = trim(this->tokenizer->decode(std::vector<int>(reply + 1, close)));
+        if (thought.rfind(kChannelName, 0) == 0) thought = trim(thought.substr(kChannelName.size()));
+        if (!thought.empty()) {
+            return false;
+        }
+    }
+    // the prompt's copy of that reply ends at the first <turn|> after its header
+    const auto reply_end = std::find(prompt.begin() + start, prompt.end(), turn_end[0]);
+    if (reply_end == prompt.end()) {
+        return false;
+    }
+    // an eos that ended the reply was run; a reply cut at the length limit lacks its last token
+    const bool ended = ran.back() == turn_end[0];
+    // A reply's content follows its thought channel; a reply cut inside that channel has none.
+    const auto content = [&](std::vector<int>::const_iterator begin, std::vector<int>::const_iterator end) {
+        if (begin != end && *begin == boc_token_id) {
+            const auto close = std::find(begin, end, eoc_token_id);
+            if (close == end) return std::string();
+            begin = close + 1;
+        }
+        return trim(this->tokenizer->decode(std::vector<int>(begin, end)));
+    };
+    const std::string generated = content(ran.begin() + start, ended ? ran.end() - 1 : ran.end());
+    const std::string sent = content(prompt.begin() + start, reply_end);
+    std::vector<int> continued(ran);
+    if (generated != sent) {
+        // the client did get the token the engine did not run
+        if (ended || generated.empty() || sent.size() <= generated.size() || sent.compare(0, generated.size(), generated) != 0) {
+            return false;
+        }
+        const std::vector<int> rest = this->tokenizer->encode(sent.substr(generated.size()));
+        continued.insert(continued.end(), rest.begin(), rest.end());
+    }
+    continued.insert(continued.end(), ended ? reply_end + 1 : reply_end, prompt.end());
+    // the history keeps the empty thought channels the rendered prompt leaves out, so it can be the longer one
+    try {
+        this->_shared_validate_capacity(continued.size(), requested_max_new_tokens);
+    } catch (const ModelRequestError&) {
+        return false;
+    }
+    header_print("FLM", "Continuing the " << ran.size() << " tokens the engine ran, last reply included");
+    rendered = std::move(tokens);
+    tokens = std::move(continued);
+    return true;
+}
+
 bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled) {
     this->feed_empty_thought_ = false;
     this->profiler_list[TKOEN_ENCODE_TIME].start();
@@ -173,7 +252,7 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
                     std::string img_str = img.get<std::string>();
 #if defined(FLM_ENABLE_OGA_HIPEP)
                     if (oga) {
-                        oga_image_bytes.push_back(ImageBytesFromBase64(std::move(img_str)));
+                        oga_image_bytes.push_back(flm::oga::ImageBytesFromBase64(std::move(img_str)));
                         newContent.push_back({{"type", "image"}, {"image", img}});
                         total_images++;
                         continue;
@@ -326,7 +405,7 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
 #if defined(FLM_ENABLE_OGA_HIPEP)
             if (oga) {
                 for (const auto& img_str : input.images)
-                    oga_image_bytes.push_back(ImageBytesFromFile(img_str));
+                    oga_image_bytes.push_back(flm::oga::ImageBytesFromFile(img_str));
             } else
 #endif
             for (const auto& img_str : input.images) {
@@ -398,6 +477,8 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
         // nor start after a cached prefix: the staged inputs are prefilled from token 0.
         if (!this->token_history.empty())
             this->clear_context();
+        this->continued_prompt_.rendered.clear();
+        this->continued_prompt_.ran.clear();
         const int saved_prefill = meta_info.max_prefill_len;
         meta_info.max_prefill_len = 0;
         bool success = false;
@@ -493,9 +574,15 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
     }
     this->_prefix_legacy_path();
 
+    // OGA cannot reuse a prompt that leaves the history it ran, so it runs on from that history instead
+    std::vector<int> rendered;
+    const bool continued = meta_info.restore_allowed && !modal_tokens &&
+                           this->backend_id() == flm::backend::kOgaHipepBackendId &&
+                           this->_continue_verbatim(tokens, input.requested_max_new_tokens, rendered);
+
     // The legacy checkpoint keeps only the rings: it relies on the global rows still being the ones it was taken with. A slot request
     // overwrites them, so it drops the checkpoint's token history, and the in-place path below then has nothing to restore.
-    if (meta_info.restore_allowed && !checkpoint_his.empty()) {
+    if (meta_info.restore_allowed && !checkpoint_his.empty() && !continued) {
         restore_idx = this->lm_engine->restore();
         this->total_tokens = restore_idx;
         this->_restore_history(); // restore the token history to be consistent with the restored KV cache, which is crucial for correct functioning of _shared_insert's prefix-matching logic
@@ -571,12 +658,28 @@ bool Gemma4_12B::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, 
     multi_modal_payload.audio_payload = audio_payload;
 
     const bool has_multimodal = image_payload.num_images > 0 || audio_payload.num_audios > 0;
+    const size_t prompt_tokens = tokens.size();
     bool success = has_multimodal
         ? this->_shared_insert(meta_info, tokens, is_cancelled, &multi_modal_payload, first_len_run)
         : this->_shared_insert(meta_info, tokens, is_cancelled, nullptr);
 
     this->_checkpoint_history();
     int checkpoint_idx = this->lm_engine->checkpoint();
+    // a shorter history is not this prompt, which _shared_insert refused or a cancel cut short
+    if (continued && this->token_history.size() >= prompt_tokens) {
+        // Kept up to the header of the reply to come, which the next turn renders right after it, without the
+        // empty thought channel that generate() feeds when thinking is off.
+        const std::vector<int> header = this->tokenizer->encode("<|turn>model\n");
+        const auto through_header = [&](const std::vector<int>& prompt) {
+            const auto at = std::find_end(prompt.begin(), prompt.end(), header.begin(), header.end());
+            return at == prompt.end() ? std::vector<int>() : std::vector<int>(prompt.begin(), at + header.size());
+        };
+        this->continued_prompt_.rendered = through_header(rendered);
+        this->continued_prompt_.ran = through_header(this->token_history);
+    } else {
+        this->continued_prompt_.rendered.clear();
+        this->continued_prompt_.ran.clear();
+    }
     return success;
 }
 

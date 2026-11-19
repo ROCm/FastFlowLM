@@ -8,8 +8,6 @@
 
 #include <algorithm>
 #include <bit>
-#include <chrono>
-#include <cmath>
 #include <cstring>
 #include <iterator>
 #include <limits>
@@ -84,6 +82,12 @@ std::string ShapeText(const std::vector<std::int64_t>& shape) {
     return text + "]";
 }
 
+std::uint64_t BytesHash(const std::string& bytes) {
+    std::uint64_t h = 0xcbf29ce484222325ull;
+    for (const unsigned char c : bytes) h = (h ^ c) * 0x100000001b3ull;
+    return h ^ bytes.size();
+}
+
 std::uint64_t ImageHash(const OgaImage& image) {
     std::uint64_t h = 0xcbf29ce484222325ull;
     const auto mix = [&h](std::uint64_t word) {
@@ -140,7 +144,7 @@ OgaEngine::OgaEngine(std::shared_ptr<const OgaApi> api, OgaApi::Owned<OgaModel> 
         };
         if (!in_vocabulary(v.image_token_id) || !in_vocabulary(v.vision_start_token_id) ||
             v.image_token_id == v.vision_start_token_id || v.spatial_merge_size <= 0 ||
-            v.patch_values <= 0 || v.max_patches < v.spatial_merge_size * v.spatial_merge_size)
+            v.patch_values <= 0)
             throw std::invalid_argument(display_name_ + " vision configuration is invalid");
     }
     const OgaFunctions& f = api_->functions();
@@ -315,9 +319,6 @@ std::vector<OgaEngine::ImageSpan> OgaEngine::ImageSpans(const std::vector<int>& 
     const OgaVisionConfig& config = *vision_;
     const std::size_t images = vision ? vision->images.size() : 0;
     const std::int64_t merged = config.spatial_merge_size * config.spatial_merge_size;
-    std::int64_t patches = 0;
-    for (const ImageSpan& span : images_)
-        patches += span.image->grid_t * span.image->grid_h * span.image->grid_w;
     for (std::size_t i = 0; i < fresh.size();) {
         if (fresh[i] != config.image_token_id) {
             ++i;
@@ -344,11 +345,6 @@ std::vector<OgaEngine::ImageSpan> OgaEngine::ImageSpans(const std::vector<int>& 
             throw std::invalid_argument(which + " has " + std::to_string(grid / merged) +
                                         " image tokens, but its run in the prompt has " +
                                         std::to_string(end - i));
-        patches += grid;
-        if (patches > config.max_patches)
-            throw std::invalid_argument(display_name_ + " prompt images have " + std::to_string(patches) +
-                                        " patches, more than the " + std::to_string(config.max_patches) +
-                                        " the vision model runs at once");
         spans.push_back({offset + i, end - i, std::make_shared<const OgaImage>(image), ImageHash(image)});
         i = end;
     }
@@ -364,7 +360,6 @@ bool OgaEngine::ImageAfter(std::size_t position) const {
 
 std::pair<OgaEngine::Reuse, std::size_t> OgaEngine::Append(const char** why) {
     active_.reset();  // so that a failure before Resume drops no other conversation's slot
-    if (!images_.empty() && !vision_warm_) WarmUpVision();
     const Reuse reuse = Resume(why);
     Live& run = Active();
     const std::size_t from = run.ran.size();
@@ -546,30 +541,6 @@ void OgaEngine::SetInputs(OgaGenerator* generator, const std::vector<int>& ids,
     api_->Check(f.generator_set_inputs(generator, named.get()), "OgaGenerator_SetInputs");
 }
 
-void OgaEngine::WarmUpVision() {
-    const OgaVisionConfig& config = *vision_;
-    auto side = static_cast<std::int64_t>(std::sqrt(static_cast<double>(config.max_patches)));
-    while (side * side > config.max_patches) --side;
-    side -= side % config.spatial_merge_size;
-    OgaImage image;
-    image.grid_h = side;
-    image.grid_w = side;
-    image.pixels.assign(static_cast<std::size_t>(side * side * config.patch_values), 0);
-    std::vector<int> ids(static_cast<std::size_t>(
-                             1 + side * side / (config.spatial_merge_size * config.spatial_merge_size)),
-                         config.image_token_id);
-    ids.front() = config.vision_start_token_id;
-    const auto start = std::chrono::steady_clock::now();
-    const OgaApi::Owned<OgaGenerator> generator = NewGenerator(static_cast<std::uint32_t>(ids.size()));
-    SetInputs(generator.get(), ids, {&image});
-    Logits(generator.get());
-    vision_warm_ = true;
-    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::steady_clock::now() - start).count();
-    header_print("FLM", "OGA vision: warmed up with a " << side << "x" << side << "-patch image in "
-                                                        << ms << " ms");
-}
-
 OgaApi::Owned<OgaTensor> OgaEngine::NewTensor(const std::vector<std::int64_t>& shape,
                                               OgaElementType type, const void* data,
                                               std::size_t bytes) const {
@@ -653,24 +624,52 @@ buffer<bf16> OgaEngine::Logits(OgaGenerator* generator) const {
 
 buffer<bf16> OgaEngine::PrefillStaged(const StagedPrompt& staged) {
     // The processor inputs hold the whole sequence and its images, which OGA takes only in a
-    // generator's first call: a new generator, in a free slot or the least recently used one.
+    // generator's first call. A slot given the same images that ran a prefix of the sequence
+    // takes the rest as text; otherwise a new generator, in a free slot or the least recently used one.
     active_.reset();  // so that a failure before Rebuild drops no other conversation's slot
     try {
         const char* why = nullptr;
-        Rebuild(std::nullopt, &why);
+        std::optional<std::size_t> found;
+        for (std::size_t i = 0; i < slots_.size(); ++i) {
+            const Live& slot = slots_[i];
+            if (!slot.staged_images.empty() && slot.staged_images == staged.images &&
+                slot.ran.size() < staged.ids.size() &&
+                staged.ids.size() <= std::min(slot.capacity, max_length_) &&
+                std::equal(slot.ran.begin(), slot.ran.end(), staged.ids.begin()) &&
+                (!found || slot.ran.size() > slots_[*found].ran.size()))
+                found = i;
+        }
+        std::size_t reused = 0;
+        if (found) {
+            active_ = found;
+            Live& run = Active();
+            run.used = ++clock_;
+            reused = run.ran.size();
+            AppendTokens(run.generator.get(), staged.ids.data() + reused, staged.ids.size() - reused);
+            run.rewound = false;
+        } else {
+            Rebuild(std::nullopt, &why);
+            api_->Check(api_->functions().generator_set_inputs(Active().generator.get(), staged.inputs.get()),
+                        "OgaGenerator_SetInputs");
+        }
         Live& run = Active();
-        api_->Check(api_->functions().generator_set_inputs(run.generator.get(), staged.inputs.get()),
-                    "OgaGenerator_SetInputs");
         buffer<bf16> logits = Logits(run.generator.get());
         // Only now: a failed prefill leaves `logical` without image tokens that a later
         // rebuild would replay without their images.
         run.ran = staged.ids;
+        run.staged_images = staged.images;
         logical_ = staged.ids;
         images_.clear();
         expected_.clear();
         saved_.reset();
-        header_print("FLM", "OGA generator: image prompt of " << logical_.size() << " tokens"
-                                << SlotText(why));
+        reused_ += reused;
+        if (found)
+            header_print("FLM", "OGA generator: image prompt of " << logical_.size() << " tokens, reusing "
+                                    << reused << " with its images, appending "
+                                    << logical_.size() - reused << SlotText());
+        else
+            header_print("FLM", "OGA generator: image prompt of " << logical_.size() << " tokens"
+                                    << SlotText(why));
         return logits;
     } catch (...) {
         if (active_) Drop(*active_);
@@ -725,7 +724,9 @@ std::vector<int> OgaEngine::StagePromptImages(const std::string& prompt,
     if (ids.size() > max_length_)
         throw std::out_of_range(display_name_ + " image prompt has " + std::to_string(ids.size()) +
                                 " tokens, past the context length of " + std::to_string(max_length_));
-    staged_prompt_ = std::make_unique<StagedPrompt>(StagedPrompt{std::move(inputs), ids});
+    std::vector<std::uint64_t> hashes;
+    for (const std::string& image : encoded_images) hashes.push_back(BytesHash(image));
+    staged_prompt_ = std::make_unique<StagedPrompt>(StagedPrompt{std::move(inputs), ids, std::move(hashes)});
     header_print("FLM", "OGA image processor: " << encoded_images.size() << " image(s), "
                                                 << ids.size() << " tokens");
     return ids;

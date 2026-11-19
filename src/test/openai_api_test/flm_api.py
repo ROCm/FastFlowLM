@@ -211,6 +211,8 @@ def raise_for_capability(message: str) -> None:
         raise Skip("the model cannot report logprobs")
     if "continue_final_message is not supported" in message:
         raise Skip("the model cannot continue a message")
+    if "does not accept image input" in message:
+        raise Skip("the model cannot take images on this backend")
 
 
 # ---------------------------------------------------------------- stream folding

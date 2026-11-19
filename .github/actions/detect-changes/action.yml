@@ -37,6 +37,14 @@ outputs:
   hipep:
     description: '"true" when every suite runs or the change reaches the model Test Windows HIPEP tests.'
     value: ${{ steps.tier.outputs.hipep }}
+  new-models:
+    description: >
+      Comma-separated NPU models the change adds (or points at new weights):
+      every NPU test job tests them, downloading them whatever their size.
+    value: ${{ steps.changes.outputs.new_models }}
+  new-gpu-models:
+    description: The same for oga-hipep models, which Test Windows HIPEP tests.
+    value: ${{ steps.changes.outputs.new_gpu_models }}
   tier:
     description: install, pr or full.
     value: ${{ steps.tier.outputs.tier }}

@@ -813,7 +813,7 @@ target_link_libraries(flm PRIVATE flm_image_codecs flm_audio_codecs)
 if(WIN32)
     target_link_libraries(flm PRIVATE
         ntdll wsock32 ws2_32 Bcrypt
-        iphlpapi userenv psapi
+        iphlpapi userenv psapi synchronization
         crypt32 secur32 advapi32 normaliz wldap32
     )
 else()

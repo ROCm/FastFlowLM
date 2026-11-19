@@ -39,11 +39,12 @@ std::string Text(const std::filesystem::path& path) {
 constexpr const char* kSessionOverlay =
     R"({"model":{"decoder":{"session_options":{"session.disable_cpu_ep_fallback":"1"}}}})";
 
-/// \brief gemma4_unified keeps the preallocated present buffer and does not capture a graph.
-/// \note With past_present_share_buffer the present OrtValue is allocated to max_length.
-///       A captured graph is baked for one sequence length, so capture stays off.
-constexpr const char* kGemmaSearchOverlay =
-    R"({"model":{"decoder":{"session_options":{"provider_options":[{"AMDGPU":{"profile":"hip","enable_graph_capture":"0","hip_graph_enable":"0"}}]}}},"search":{"past_present_share_buffer":true}})";
+/// \brief gemma4_unified does not capture a graph.
+/// \note A captured graph is baked for one sequence length. past_present_share_buffer stays
+///       as the package states it (false): this export's KV grows by concatenation, so a
+///       present buffer preallocated to max_length fails the first prefill.
+constexpr const char* kGemmaProviderOverlay =
+    R"({"model":{"decoder":{"session_options":{"provider_options":[{"AMDGPU":{"profile":"hip","enable_graph_capture":"0","hip_graph_enable":"0"}}]}}}})";
 
 nlohmann::json ReadJson(const std::filesystem::path& path) {
     flm::file_access::ObserveOpen(path);
@@ -234,7 +235,7 @@ OgaApi::Owned<OgaModel> OpenModel(const OgaApi& api, const std::filesystem::path
             api.Check(f.config_set_provider_option(config.get(), provider, "hip_graph_enable", "0"),
                       "OgaConfigSetProviderOption");
         }
-        api.Check(f.config_overlay(config.get(), kGemmaSearchOverlay), "OgaConfigOverlay");
+        api.Check(f.config_overlay(config.get(), kGemmaProviderOverlay), "OgaConfigOverlay");
     }
     OgaModel* raw_model = nullptr;
     api.Check(f.create_model_from_config(config.get(), &raw_model), "OgaCreateModelFromConfig");
