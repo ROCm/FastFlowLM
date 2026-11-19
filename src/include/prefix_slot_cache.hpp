@@ -62,7 +62,7 @@ struct prefix_cache_report_t {
     bool hit = false;             ///< the request resumed from a slot
     std::string miss_reason;      ///< why not, when it did not
     int slot = -1;                ///< id of the slot resumed from (ids are never reused)
-    bool slot_boundary = false;   ///< that slot is a boundary slot (system + tools head) rather than an end slot
+    bool slot_boundary = false;   ///< that slot is a boundary slot (a shared head) rather than an end slot
     int matched_tokens = 0;       ///< tokens of the prompt it covered
     int prompt_tokens = 0;        ///< tokens the cache considered (the prompt without its generation prompt)
     struct saved_t {
@@ -95,9 +95,10 @@ public:
     ///       28% / 44% fewer snapshots. 0 saves every end snapshot.
     static constexpr size_t kDefaultMinEndGain = 128;
     size_t min_end_gain = kDefaultMinEndGain;
-    /// \brief save boundary slots (the shared system + tools head) only, no end-of-prompt snapshots
+    /// \brief save the shared heads only (the system + tools head, and the history before the last user turn), no
+    ///        end-of-prompt snapshots
     /// \note For a model whose snapshot is too big to keep one per conversation turn (qwen3.8-mtp: ~160 MB of recurrent state
-    ///       and 64 KB per token): it keeps its own checkpoint for a conversation that continues and uses the head slot
+    ///       and 64 KB per token): it keeps its own checkpoint for a conversation that continues and uses a head slot
     ///       when another conversation ran in between.
     bool boundary_only = false;
     /// \brief limits while --prefix-cache-mb / --prefix-slots stay at their defaults (0 = the global defaults)
@@ -130,7 +131,8 @@ public:
     resume_t resume(const std::vector<int>& full_tokens, const std::vector<uint64_t>& image_hashes, std::vector<int>& matched_tokens);
 
     /// \brief read the engine's current context into a new slot; `tokens` is what the engine holds
-    /// \param boundary true for the end of system + tools (kv_from 0, evicted last)
+    /// \param boundary true for a shared head: the end of system + tools, or the history before the last user turn (kv_from 0,
+    ///        evicted last)
     /// \param kv_from first position whose K/V rows the slot saves (0 = self-contained)
     void save(const std::vector<int>& tokens, const std::vector<uint64_t>& image_hashes, bool boundary, int kv_from);
 
@@ -140,6 +142,11 @@ public:
 
     /// \brief tokens whose K/V rows the engine's cache holds now (what the last request left in it)
     void set_live(const std::vector<int>& tokens) { live_tokens_ = tokens; }
+    /// \brief remember the whole prompt of a request, for forked()
+    void set_last_prompt(const std::vector<int>& tokens) { last_prompt_ = tokens; }
+    /// \brief whether the prompt before this one shared the first `length` tokens of `tokens` and then went on differently
+    /// \note A prompt which `tokens` only continues, like the previous turn of a chat, is no fork.
+    bool forked(const std::vector<int>& tokens, size_t length) const;
     /// \param announce log that the engine's context was dropped while the slots were kept (a clear or a cancel, not a cold start)
     void clear_live(bool announce = false);
 
@@ -159,7 +166,7 @@ private:
         std::vector<uint64_t> image_hashes;  // content of the images inside `tokens`
         uint64_t last_used = 0;
         int id = 0;                          // told apart in logs and usage; never reused
-        bool boundary = false;               // end of system + tools; evicted last
+        bool boundary = false;               // a shared head; evicted last
         /// first position whose K/V rows the slot holds
         int kv_from() const { return state->kv_from(); }
     };
@@ -173,6 +180,7 @@ private:
     const flm_state_api* api_ = nullptr;
     std::vector<slot_t> slots_table_;
     std::vector<int> live_tokens_;
+    std::vector<int> last_prompt_;
     uint64_t clock_ = 0;
     int cache_mb_ = -1;
     int slots_ = -1;
