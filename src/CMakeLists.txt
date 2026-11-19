@@ -686,6 +686,16 @@ endif()
 # Link your custom libraries (these may still be DLLs if no static versions available)
 target_link_libraries(flm PRIVATE flm_xgrammar)
 
+if(FLM_ENABLE_OGA_HIPEP)
+    # Prebuilt engines export STL data that cannot be delay-loaded. Resolve it
+    # from the MSVC runtime before searching those import libraries.
+    target_link_libraries(flm PRIVATE "$<IF:$<CONFIG:Debug>,msvcprtd,msvcprt>" delayimp)
+    target_link_options(flm PRIVATE "/DELAYLOAD:xrt_coreutil.dll")
+    foreach(engine IN LISTS FLM_ENGINE_LINK_LIBS)
+        target_link_options(flm PRIVATE "/DELAYLOAD:${engine}.dll")
+    endforeach()
+endif()
+
 target_link_libraries(flm PUBLIC
     ${FLM_ENGINE_LINK_LIBS}
     # flm's own code calls nothing in the four shared-runtime libs below -- the

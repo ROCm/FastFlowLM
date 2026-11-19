@@ -13,6 +13,7 @@
 #include <iostream>
 #include <fstream>
 #include <filesystem>
+#include <string_view>
 #ifdef _WIN32
 #include <windows.h>
 #include <shlobj.h>
@@ -367,6 +368,10 @@ inline std::string path_join(fileName&&... args){
 ///@brief find and return the path to model_list.json
 ///@return path to model_list.json
 std::string find_model_list();
+
+bool valid_npu_power_mode(std::string_view mode);
+flm_rt::device* require_npu_device(flm_rt::device* shared_device,
+                                   const std::string& power_mode);
 
 std::string find_model_info();
 

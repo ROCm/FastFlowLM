@@ -129,6 +129,14 @@ std::unique_ptr<flm::backend::ModelBackend> MakeGemma4eStub(
                                          context.context_length);
 }
 
+/// rief the same stub under the oga-hipep id (gemma4-it-oga-hipep:26b-a4b runs on Gemma4e)
+std::unique_ptr<flm::backend::ModelBackend> MakeGemma4eOgaStub(
+    const flm::backend::BackendContext& context) {
+    ++g_factory.calls;
+    return std::make_unique<StubBackend>(std::string(flm::backend::kOgaHipepBackendId),
+                                         context.context_length);
+}
+
 /// \brief what tokenizer_config.json states about its own ids
 struct PackageOptions {
     /// \brief write a `bos_token_id`, which the real package does NOT
@@ -262,11 +270,29 @@ void Sampler::reset_penalties() {}
 void Sampler::set_seed(uint64_t) {}
 void Sampler::set_repeat_last_n(size_t n) { repeat_last_n = n; }
 
-// No engine library is linked; a null table leaves the prefix cache off.
-extern "C" const flm_state_api* gemma4e_npu_state_api(void*) { return nullptr; }
+// No engine library is linked; a null table leaves the prefix cache off. The
+// count says whether load_model asked the NPU engine for its table at all.
+int g_state_api_calls = 0;
+extern "C" const flm_state_api* gemma4e_npu_state_api(void*) {
+    ++g_state_api_calls;
+    return nullptr;
+}
 int Sampler::sample(buffer<bf16>&, const std::vector<uint32_t>*, sample_logprobs_t*) {
     if (g_sample_index < g_samples.size()) return g_samples[g_sample_index++];
     return 7;
+}
+// Speculative verify rows (AutoModel::_sample_row) sample the same scripted way.
+int Sampler::sample(const float*, const std::vector<uint32_t>*, sample_logprobs_t*) {
+    if (g_sample_index < g_samples.size()) return g_samples[g_sample_index++];
+    return 7;
+}
+int Sampler::argmax(const float* x, int n, const std::vector<uint32_t>* allowed) {
+    int best = -1;
+    for (int i = 0; i < n; i++) {
+        if (allowed && !((*allowed)[i / 32] >> (i % 32) & 1u)) continue;
+        if (best < 0 || x[i] > x[best]) best = i;
+    }
+    return best;
 }
 
 ImageMemoryPool::ImageMemoryPool(size_t max_cached_per_size)
@@ -296,6 +322,11 @@ struct FactoryScope {
         traits.needs_npu_xclbin = false;
         flm::backend::BackendRegistry::instance().replace_backend(
             "gemma4e", flm::backend::kFlmBackendId, MakeGemma4eStub, traits);
+        flm::backend::BackendTraits oga;
+        oga.needs_npu_xclbin = false;
+        oga.needs_npu_device = false;
+        flm::backend::BackendRegistry::instance().replace_backend(
+            "gemma4e", flm::backend::kOgaHipepBackendId, MakeGemma4eOgaStub, oga);
     }
 };
 
@@ -328,9 +359,9 @@ public:
 };
 
 std::unique_ptr<Gemma4eFrontendTestAccess> MakeGemma4eWithStubEngineForTest(
-    const TempPackage& package) {
+    const TempPackage& package, const std::string& backend = "") {
     auto model = std::make_unique<Gemma4eFrontendTestAccess>(nullptr);
-    model->load_model(package.path().string(), ModelInfo());
+    model->load_model(package.path().string(), ModelInfo(), -1, false, backend);
     return model;
 }
 
@@ -442,6 +473,27 @@ void TestTextGenerationNeverAsksForEngineConfig() {
     TEST_REQUIRE(model->engine_config_calls == 0);
 }
 
+void TestAnOgaLoadDoesNotCallTheNpuEngine() {
+    // WP-26 (PR #1066 review): the Windows OGA build delay-loads the NPU engine
+    // DLLs. Calling gemma4e_npu_state_api would load gemma4e_npu.dll, which
+    // needs XRT, and on a host without the NPU driver the process ends there.
+    TempPackage package;
+    FactoryScope scope;
+    g_state_api_calls = 0;
+    auto model = MakeGemma4eWithStubEngineForTest(package, flm::backend::kOgaHipepBackendId);
+    TEST_REQUIRE(model->backend_id() == flm::backend::kOgaHipepBackendId);
+    TEST_REQUIRE(g_state_api_calls == 0);
+}
+
+void TestAnNpuLoadStillAsksForTheStateTable() {
+    TempPackage package;
+    FactoryScope scope;
+    g_state_api_calls = 0;
+    auto model = MakeGemma4eWithStubEngineForTest(package);
+    TEST_REQUIRE(model->backend_id() == flm::backend::kFlmBackendId);
+    TEST_REQUIRE(g_state_api_calls == 1);
+}
+
 void TestRequestSettingsInModelFieldsFallBackToTheLoadedValues() {
     // WP-04: conversational_mode and image_max_tokens live in Gemma4e's own fields, so the base
     // class's sampler/think reset does not reach them; the model's save/restore hooks do.
@@ -495,5 +547,7 @@ int main() {
     RunTest(TestRequestSettingsInModelFieldsFallBackToTheLoadedValues,
              "TestRequestSettingsInModelFieldsFallBackToTheLoadedValues");
     RunTest(TestTopKOfZeroOrMinusOneTurnsTopKOff, "TestTopKOfZeroOrMinusOneTurnsTopKOff");
+    RunTest(TestAnOgaLoadDoesNotCallTheNpuEngine, "TestAnOgaLoadDoesNotCallTheNpuEngine");
+    RunTest(TestAnNpuLoadStillAsksForTheStateTable, "TestAnNpuLoadStillAsksForTheStateTable");
     std::cout << "test_gemma4_frontend: PASS\n";
 }

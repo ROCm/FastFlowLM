@@ -23,6 +23,12 @@ using Status = ModelDownloader::ModelStatus;
 std::map<std::string, Status> statuses;
 int pulls = 0;
 bool pull_succeeds = false;
+bool npu_available = true;
+}
+flm_rt::device* utils::require_npu_device(flm_rt::device* device, const std::string&) {
+    static flm_rt::device fake_device;
+    if (!npu_available) throw std::runtime_error(flm::backend::kNoNpuDevice);
+    return device ? device : &fake_device;
 }
 ModelDownloader::ModelDownloader(model_list& models) : supported_models(models) {}
 ModelDownloader::ModelStatus ModelDownloader::is_model_downloaded(
@@ -55,6 +61,15 @@ void test_embedding_handler() {
     std::ofstream(path) << nlohmann::json({{"model_path", "models"}, {"models", entries}});
     model_list models(path, root);
     TEST_REQUIRE(models.is_model_supported("generation:1"));
+    bool found_embedding = false;
+    const auto catalog = models.get_all_models_openai();
+    for (const auto& entry : catalog.at("data")) {
+        if (entry.at("id") != "first:1") continue;
+        found_embedding = true;
+        TEST_REQUIRE(entry.at("owned_by") == "FastFlowLM");
+        TEST_REQUIRE(!entry.contains("backend") && !entry.contains("device"));
+    }
+    TEST_REQUIRE(found_embedding);
     ModelDownloader downloads(models);
     program_args_t args{};
     RestHandler server(models, downloads, args, nullptr);
@@ -70,6 +85,11 @@ void test_embedding_handler() {
         const auto response = request(tag);
         TEST_REQUIRE(response.at("data").at(0).at("embedding") == json({5, 3, marker}));
     };
+    npu_available = false;
+    auto no_device = request("first:1");
+    npu_available = true;
+    TEST_REQUIRE(no_device.contains("error"));
+    TEST_REQUIRE(no_device["error"]["message"] == flm::backend::kNoNpuDevice);
     check("first:1", 0.5f);
     TEST_REQUIRE(request("first", "hello", {{"task", "provider-task"}}).at("data").at(0).at("embedding").at(1) == 4);
     TEST_REQUIRE(request("first", "hello", {{"task", "unknown"}}).at("error").at("code") == 400);

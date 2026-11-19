@@ -125,7 +125,7 @@ public:
 
 private:
     bool ensure_model_loaded(const std::string& model_tag,
-                             const std::string& request_backend = "");
+                             const std::string& request_backend = "", std::string* refusal = nullptr);
     bool is_known_model(const std::string& model_tag);
     void ensure_asr_model_loaded(const std::string& model_tag);
     void ensure_embed_model_loaded(const std::string& model_tag);
@@ -136,10 +136,8 @@ private:
                                 chat_logprobs_aligner* logprobs = nullptr);
 
 
-    // Declared before engines so the borrowed native handle stays valid
-    // through provider destruction (members are destroyed in reverse).
-    std::optional<flm_rt::device> owned_device;
     flm_rt::device* npu_device_inst;
+    std::string power_mode;
     flm::frontend::FrontendPtr auto_chat_engine;
     std::unique_ptr<AutoDecisionModel> decision_engine;
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
@@ -153,7 +151,9 @@ private:
     std::mutex embedding_mutex;
     model_list& supported_models;
     ModelDownloader& downloader;
-    std::string current_model_tag;
+    std::mutex model_info_mutex;
+    std::string current_model_tag = "model-faker";
+    std::string loaded_backend;
     std::string default_model_tag;
     bool modelscope;
     bool asr;
@@ -175,8 +175,7 @@ private:
     bool preemption;
     /// \brief the --backend value, empty when the flag was not given
     std::string backend;
-    /// \brief the backend the currently loaded model was asked for
-    std::string current_backend;
+    flm::backend::BackendSelection loaded_selection;
     bool positional_tool_results = false;
     PromptCache prompt_cache;
 };

@@ -64,19 +64,6 @@ struct BackendContext {
     int prefix_cache_mb = -1;
 };
 
-/// \brief what a backend needs from the frontend *before* it can be built
-/// \note These cannot live on ModelBackend: the frontend has to know them to
-///       assemble the BackendContext in the first place. The defaults describe
-///       the FastFlowLM NPU engines.
-struct BackendTraits {
-    /// \brief whether the frontend should build an npu_xclbin_manager for it
-    bool needs_npu_xclbin = true;
-    /// \brief whether this backend can run with preemption enabled
-    bool supports_preemption = true;
-    /// \brief the largest context length it accepts, or 0 when it has no ceiling
-    std::uint32_t max_context_length = 0;
-};
-
 /// \brief one engine plus every rule for driving it
 /// \note The defaults describe the FastFlowLM NPU engines, so a backend only
 ///       has to state what makes it different.
@@ -293,5 +280,12 @@ BackendSelection resolve_backend_selection(
     const std::string& catalog_provider = kBuiltinProviderId,
     const std::string& requested_backend = "",
     std::string* source = nullptr);
+
+inline BackendSelection resolve_model_backend(const nlohmann::json& info,
+                                              const std::string& requested_backend) {
+    return resolve_backend_selection(info.at("details").at("family").get<std::string>(),
+        info.value(kBackendKey, std::string(kFlmBackendId)),
+        info.value(kBackendProviderKey, std::string(kBuiltinProviderId)), requested_backend);
+}
 
 }  // namespace flm::backend

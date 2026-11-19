@@ -289,6 +289,13 @@ class model_list {
                         {"created", static_cast<long long>(now)},
                         {"owned_by", "FastFlowLM"}
                     };
+                    if (const auto it = model_info.find(flm::backend::kBackendKey); it != model_info.end()) {
+                        const auto& backend = it->get_ref<const std::string&>();
+                        model_entry["backend"] = backend;
+                        if (const auto device = flm::backend::device_for_backend(backend); !device.empty()) {
+                            model_entry["device"] = device;
+                        }
+                    }
                     response["data"].push_back(model_entry);
                 }
             }

@@ -40,15 +40,10 @@ std::map<std::string, runner_cmd_t> cmd_map = {
 /// \param tag - the tag of the model to load
 Runner::Runner(model_list& supported_models, ModelDownloader& downloader, program_args_t& args,
                flm_rt::device* npu_device)
-    : supported_models(supported_models), downloader(downloader), tag(args.model_tag), modelscope(args.modelscope), asr(args.asr), asr_tag(args.asr_tag), embed(args.embed), img_pre_resize(args.img_pre_resize), preemption(args.preemption), backend(args.backend) {
-
-    // RAI receives the device from corelib; non-RAI creates its own here.
-    if (npu_device != nullptr) {
-        npu_device_inst = npu_device;
-    } else {
-        owned_device = flm_rt::device(0);
-        npu_device_inst = &(*owned_device);
-    }
+    : tag(args.model_tag), modelscope(args.modelscope), asr(args.asr), asr_tag(args.asr_tag),
+      embed(args.embed), supported_models(supported_models), downloader(downloader),
+      npu_device_inst(npu_device), power_mode(args.power_mode), preemption(args.preemption),
+      backend(args.backend), img_pre_resize(args.img_pre_resize) {
 
     if (args.ctx_length != -1) {
         this->ctx_length = args.ctx_length >= 512 ? args.ctx_length : 512;
@@ -61,7 +56,7 @@ Runner::Runner(model_list& supported_models, ModelDownloader& downloader, progra
         this->auto_chat_engine.reset();
     }
     auto auto_model = get_auto_model(
-        this->tag, this->supported_models, this->npu_device_inst);
+        this->tag, this->supported_models, this->npu_device_inst, this->backend, this->power_mode);
     this->auto_chat_engine = std::move(auto_model.second);
     
     this->tag = auto_model.first;
@@ -129,7 +124,8 @@ Runner::Runner(model_list& supported_models, ModelDownloader& downloader, progra
                     header_print("ERROR", "Whisper is incompatible with this version of FastFlowLM, skipping... ");
                     return;
             }
-            this->whisper_engine = std::make_unique<Whisper>(this->npu_device_inst);
+            auto* device = utils::require_npu_device(npu_device_inst, power_mode);
+            this->whisper_engine = std::make_unique<Whisper>(device);
             auto [new_whisper_tag, whisper_model_info] = this->supported_models.get_model_info(whisper_tag);
             std::string whisper_model_path = this->supported_models.get_model_path(new_whisper_tag);
             try {
@@ -437,8 +433,13 @@ void Runner::cmd_status(std::vector<std::string>& input_list) {
 void Runner::cmd_load(std::vector<std::string>& input_list) {
     std::string model_name = input_list[1];
 
-    auto auto_model = get_auto_model(
-        model_name, this->supported_models, this->npu_device_inst);
+    std::pair<std::string, flm::frontend::FrontendPtr> auto_model;
+    try {
+        auto_model = get_auto_model(model_name, supported_models, npu_device_inst, backend, power_mode);
+    } catch (const std::exception& e) {
+        header_print("ERROR", "Failed to load model: " << e.what());
+        return;
+    }
     model_name = auto_model.first;
 
     if (model_name != this->tag) {

@@ -3,8 +3,11 @@
 ///        and execution code
 #pragma once
 
+#include <cstdint>
 #include <map>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace flm::backend {
@@ -39,6 +42,33 @@ inline constexpr const char* kCoreFamilySuffix = "-core";
 
 /// \brief Model-family suffix selecting an OGA package run through hip-ep
 inline constexpr const char* kOgaHipepFamilySuffix = "-oga-hipep";
+
+struct BackendTraits {
+    bool needs_npu_xclbin = true;
+    bool supports_preemption = true;
+    std::uint32_t max_context_length = 0;
+    bool needs_npu_device = true;
+};
+
+inline constexpr const char* kNoNpuDevice = "No NPU device available";
+
+struct NpuUnavailable : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
+template <class OpenDevice>
+auto prepare_backend_device(const BackendTraits& traits, OpenDevice&& open)
+    -> decltype(open()) {
+    if (!traits.needs_npu_device) return nullptr;
+    if (auto* device = open()) return device;
+    throw NpuUnavailable(kNoNpuDevice);
+}
+
+constexpr std::string_view device_for_backend(std::string_view backend) {
+    if (backend == kOgaHipepBackendId) return "gpu";
+    if (backend == kFlmBackendId || backend == kCoreBackendId) return "npu";
+    return {};
+}
 
 using BackendProviderInventory =
     std::map<std::string,

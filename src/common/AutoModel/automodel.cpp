@@ -293,19 +293,7 @@ void AutoModel::_shared_load_backend(std::string model_path, json model_info,
     const std::string family = model_info["details"]["family"].get<std::string>();
 
     auto& registry = flm::backend::BackendRegistry::instance();
-    std::string source;
-    // The entry carries the kernel flow its artifacts were built for -- the
-    // weights differ between flows, so this belongs to the model rather than
-    // to the build. model_list wrote it there from the tag the entry was
-    // found under. --backend and FLM_BACKEND remain explicit demands, but a
-    // different contract is rejected until the package declares it compatible.
-    const std::string catalog_backend = model_info.value(
-        flm::backend::kBackendKey, std::string(flm::backend::kFlmBackendId));
-    const std::string catalog_provider = model_info.value(
-        flm::backend::kBackendProviderKey,
-        std::string(flm::backend::kBuiltinProviderId));
-    const auto selection = flm::backend::resolve_backend_selection(
-        family, catalog_backend, catalog_provider, requested_backend, &source);
+    const auto selection = flm::backend::resolve_model_backend(model_info, requested_backend);
     const std::string& id = selection.backend;
     const std::string& provider = selection.provider;
 
@@ -398,8 +386,9 @@ void AutoModel::_shared_load_backend(std::string model_path, json model_info,
         this->is_model_loaded = false;
         throw;
     }
-    // Hide the log now.
-    // header_print("FLM", "Backend: " << id << " (from " << source << ")");
+    if (id == flm::backend::kOgaHipepBackendId) {
+        header_print("FLM", "Backend: " << id << " (GPU)");
+    }
 }
 
 void AutoModel::_shared_after_inference_failure(bool poisoned) {

@@ -32,7 +32,12 @@ void Gemma3::load_model(std::string model_path, json model_info, int default_con
     for (size_t i = 0; i < PROFILER_TYPE_NUM; i++) {
         this->profiler_list[i].reset();
     }
-    _prefix_attach(lm_engine, gemma_npu_state_api(lm_engine), 262144); // 262144 = the image placeholder id (IMAGE_TOKEN_ID in insert)
+    // The OGA engine has no NPU prefix-slot table. Not calling the export also keeps
+    // the NPU engine DLL unloaded, so a host without the NPU driver can run OGA.
+    const flm_state_api* state = this->backend_id() == flm::backend::kOgaHipepBackendId
+                                     ? nullptr
+                                     : gemma_npu_state_api(lm_engine);
+    _prefix_attach(lm_engine, state, 262144); // 262144 = the image placeholder id (IMAGE_TOKEN_ID in insert)
 }
 
 void Gemma3::setup_tokenizer(std::string model_path) {
