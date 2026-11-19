@@ -25,6 +25,8 @@ python3 -m npu_test --flm-bin flm --label dev --suites chat --models qwen3:0.6b,
 | `--models a,b` | Restrict every suite to these model ids |
 | `--backend oga-hipep` | Test every model of this GPU backend instead of the NPU models |
 | `--families a,b` | Families a change touches; the pr tier tests all their models |
+| `--required-models a,b` | Models a change adds: tested on every tier (even past `--models`), downloaded whatever their size, and a failure if the package does not list them or they do not download |
+| `--required-pull-budget MINUTES` | Time for downloading the `--required-models`, all together (default 420) |
 | `--asr-full` | The whole ASR evaluation set on the pr tier |
 | `--asr-expected-key KEY` | Check WER against this row of `assets/asr_eval/expected.json` |
 | `--pull-budget MINUTES` | Time for downloading missing models, all together (default 30 on `install`/`pr`, else no limit; 0 for no limit) |
@@ -42,6 +44,11 @@ tiers the downloads share a 30-minute budget (`--pull-budget MINUTES`, 0 for no
 limit), so a model new to the catalog cannot spend a job's time limit on one
 runner; a model the budget leaves undownloaded is a warning and goes untested
 on that runner. The `full` tier and `--backend` runs wait for every download.
+The models a change adds or republishes (`--required-models`, from
+`changes.py`'s `new_models` in CI) are pulled first and outside that budget,
+with 7 hours for all of them (`--required-pull-budget MINUTES`), so a new
+model is tested however large it is; one left undownloaded is a failure.
+Build and Test gives its test jobs 600 minutes when a change adds one.
 
 A request that times out restarts that suite's server, since flm keeps working
 on a request its client gave up on, and the model's remaining cases are

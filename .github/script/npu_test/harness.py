@@ -194,20 +194,22 @@ class Context:
         for model in models:
             self.record(Result(suite, "not-attempted", FAIL, model, reason))
 
-    def pull(self, models: list[str], timeout: float, budget: float | None = None) -> None:
+    def pull(self, models: list[str], timeout: float, budget: float | None = None,
+             required: bool = False) -> None:
         """Runs `flm pull` for each model before any suite, one setup case each.
 
         A model that does not pull is left out of the plan: its suites would
         only wait out their request timeouts on the same download. timeout
         bounds each download and is a failure; budget (seconds, None for no
         limit) bounds them all, and a model it leaves undownloaded is a
-        warning: the runner lacks it, not the package.
+        warning: the runner lacks it, not the package. For required models (the
+        ones the change adds) that is a failure too: they must be tested.
         """
         deadline = None if budget is None else time.monotonic() + budget
         for model in models:
             remaining = None if deadline is None else deadline - time.monotonic()
             if remaining is not None and remaining <= 0:
-                self.record(Result("setup", "pull", WARN, model,
+                self.record(Result("setup", "pull", FAIL if required else WARN, model,
                                    f"not downloaded: the {budget / 60:g}-min download "
                                    f"budget is used up, so this runner does not test it"))
                 self.plan.unavailable.add(model)
@@ -226,6 +228,9 @@ class Context:
                         proc = subprocess.run(command, stdout=out,
                                               stderr=subprocess.STDOUT, timeout=limit)
                 except subprocess.TimeoutExpired:
+                    if required:
+                        raise AssertionError(f"flm pull did not finish in the {budget / 60:g}-min "
+                                             f"budget for the models this change adds")
                     if limit < timeout:
                         warn(f"not downloaded: the {budget / 60:g}-min download budget "
                              f"ran out, so this runner does not test it")
