@@ -43,7 +43,8 @@ name: Build and Test
 # (the STX Halo). A change that only touches docs builds and tests nothing;
 # one only under flm-dev-kit/ (which no product package uses yet) builds and
 # tests no package and runs only the dev-kit checks (devkit-static), plus the
-# dev-kit engine builds (devkit-engines) when it selects the dll area.
+# dev-kit engine builds (devkit-engines) when it selects the dll area and the
+# kernel builds (devkit-xclbins) when it selects the xclbin area.
 # The portable test jobs and Test Windows HIPEP otherwise get 120 minutes on
 # the pr tier and 360 on the full one, which runs every model and every d3
 # size and may first download tens of GB of weights.
@@ -219,6 +220,35 @@ jobs:
       contents: read
       packages: read
     uses: ./.github/workflows/devkit-engines.yml
+
+  # The dev kit's NPU kernels (flm-dev-kit/FLM_Xclbin), built with Peano in
+  # the aie-build image on hosted runners (devkit-xclbins.yml): on a pull
+  # request that selects the xclbin dev-kit area, the builds its changes
+  # touch (mode changed, diffed like changes.py from the merge base of the
+  # pull request's base and head); on every push to main, every kernel the
+  # product ships (assigned); nightly, every build (all); on any other run
+  # that selects the area (workflow_dispatch: no base to diff), assigned.
+  # Not for a release.
+  # packages: read pulls the image from GHCR.
+  devkit-xclbins:
+    needs: changes
+    if: >-
+      ${{ !inputs.release && (github.event_name == 'schedule'
+      || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      || contains(format(',{0},', needs.changes.outputs.devkit-areas), ',xclbin,')) }}
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/devkit-xclbins.yml
+    with:
+      # changed only on a pull request, the one event with a base to diff;
+      # any other run that gets here (workflow_dispatch) builds what ships.
+      mode: >-
+        ${{ github.event_name == 'pull_request' && 'changed'
+        || github.event_name == 'schedule' && 'all'
+        || 'assigned' }}
+      base: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+      head: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
   # ── NPU approval gate ────────────────────────────────────────────────────
   # The NPU runners are few and self-hosted, so no job lands on them unless
@@ -1170,6 +1200,7 @@ jobs:
       - changes
       - devkit-static
       - devkit-engines
+      - devkit-xclbins
       - npu-gate
       - npu-approve
       - build-lin-xrt-portable
@@ -1283,10 +1314,12 @@ jobs:
           CHANGES: ${{ needs.changes.result }}
           DEVKIT_STATIC: ${{ needs.devkit-static.result }}
           DEVKIT_ENGINES: ${{ needs.devkit-engines.result }}
+          DEVKIT_XCLBINS: ${{ needs.devkit-xclbins.result }}
         run: |
-          echo "changes: ${CHANGES}; devkit-static: ${DEVKIT_STATIC}; devkit-engines: ${DEVKIT_ENGINES}"
+          echo "changes: ${CHANGES}; devkit-static: ${DEVKIT_STATIC}; devkit-engines: ${DEVKIT_ENGINES}; devkit-xclbins: ${DEVKIT_XCLBINS}"
           rc=0
           case "${CHANGES}" in success) ;; *) echo "::error::changes did not succeed, so the dev-kit and build jobs were skipped"; rc=1 ;; esac
           case "${DEVKIT_STATIC}" in success|skipped) ;; *) echo "::error::devkit-static did not pass"; rc=1 ;; esac
           case "${DEVKIT_ENGINES}" in success|skipped) ;; *) echo "::error::devkit-engines did not pass"; rc=1 ;; esac
+          case "${DEVKIT_XCLBINS}" in success|skipped) ;; *) echo "::error::devkit-xclbins did not pass"; rc=1 ;; esac
           exit "${rc}"

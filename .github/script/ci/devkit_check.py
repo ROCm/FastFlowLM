@@ -16,7 +16,10 @@ Checks, each failure printed as "devkit_check: error: ..." (exit 1):
   assignment    every artifact in FLM_Xclbin/kernel_assignment.json is one a
                 build unit produces (a unit, and a MODEL_TYPE of it when the
                 unit fans out); its schema is models -> {folder, kernels
-                {<slot>.xclbin: artifact}, optional vlm}
+                {<slot>.xclbin: artifact}, optional vlm}; folder is a plain
+                relative path and slot a plain file name (CI writes
+                <folder>/<slot>), and models sharing a folder put the same
+                artifact in a slot they share
   assignment md FLM_Xclbin/kernel_assignment.md, hand-written, agrees with the
                 JSON as far as it can be parsed: every "#### `<model>` →
                 `<folder>`" heading is a JSON model with that folder and the
@@ -184,12 +187,19 @@ def check_build_units(repo: Path, data: dict, errors: list) -> dict[str, tuple[s
     return index
 
 
+# A model's folder and its slots: devkit_assemble_xclbins.py writes
+# <folder>/<slot> under its output, and refuses anything else.
+SAFE_FOLDER = re.compile(r"[A-Za-z0-9_.+-]+(/[A-Za-z0-9_.+-]+)*")
+SAFE_SLOT = re.compile(r"[A-Za-z0-9_.+-]+\.xclbin")
+
+
 def check_assignment(data: dict, index: dict, errors: list) -> dict[str, dict]:
     """Checks kernel_assignment.json; returns its models."""
     models = data.get("models")
     if not isinstance(models, dict):
         errors.append(f"{ASSIGNMENT}: no \"models\" object")
         return {}
+    placed: dict[tuple[str, str], tuple[str, object]] = {}  # (folder, slot) -> (model, artifact)
     for model, entry in models.items():
         where = f"{ASSIGNMENT}: {model}"
         if not isinstance(entry, dict):
@@ -198,8 +208,13 @@ def check_assignment(data: dict, index: dict, errors: list) -> dict[str, dict]:
         extra = set(entry) - {"folder", "kernels", "vlm"}
         if extra:
             errors.append(f"{where}: unknown key(s) {', '.join(sorted(extra))}")
-        if not isinstance(entry.get("folder"), str) or not entry.get("folder"):
+        folder = entry.get("folder")
+        if not isinstance(folder, str) or not folder:
             errors.append(f"{where}: folder is not a non-empty string")
+            folder = None
+        elif not SAFE_FOLDER.fullmatch(folder) or any(p in (".", "..") for p in folder.split("/")):
+            errors.append(f"{where}: folder {folder!r} is not a plain relative path "
+                          "([A-Za-z0-9_.+-] parts separated by /, no . or ..)")
         if "vlm" in entry and not isinstance(entry["vlm"], bool):
             errors.append(f"{where}: vlm is not true or false")
         kernels = entry.get("kernels")
@@ -209,6 +224,13 @@ def check_assignment(data: dict, index: dict, errors: list) -> dict[str, dict]:
         for slot, art in kernels.items():
             if not slot.endswith(".xclbin"):
                 errors.append(f"{where}: kernel slot {slot!r} does not end in .xclbin")
+            elif not SAFE_SLOT.fullmatch(slot):
+                errors.append(f"{where}: kernel slot {slot!r} is not a plain file name ([A-Za-z0-9_.+-])")
+            if folder is not None:
+                other = placed.setdefault((folder, slot), (model, art))
+                if other[1] != art:
+                    errors.append(f"{where}: {folder}/{slot} is {art!r}, but {other[0]} puts {other[1]!r} "
+                                  "there (models sharing a folder must agree on a shared slot)")
             if not isinstance(art, str) or art not in index:
                 errors.append(f"{where}: {slot} -> {art!r} is no build unit's artifact "
                               f"(see {BUILD_UNITS}; a fanned-out unit needs the MODEL_TYPE there)")

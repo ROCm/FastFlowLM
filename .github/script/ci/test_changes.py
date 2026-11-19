@@ -507,7 +507,11 @@ class DevKit(unittest.TestCase):
         for path in (".github/script/ci/changes.py", ".github/workflows/build-and-test.yml",
                      ".github/workflows/release.yml", ".github/actions/detect-changes/action.yml",
                      ".github/actions/devkit-build-lib-lin/action.yml",
-                     ".github/actions/devkit-build-lib-win/action.yml", ".github/workflows/devkit-engines.yml"):
+                     ".github/actions/devkit-build-lib-win/action.yml", ".github/workflows/devkit-engines.yml",
+                     ".github/workflows/devkit-xclbins.yml", ".github/actions/devkit-xclbin-plan/action.yml",
+                     ".github/actions/devkit-build-xclbins/action.yml",
+                     ".github/actions/devkit-assemble-xclbins/action.yml",
+                     ".github/script/ci/devkit_xclbin_plan.py", ".github/script/ci/devkit_assemble_xclbins.py"):
             with self.subTest(path=path):
                 out = cli("--files", path)
                 self.assertEqual((out["run_tests"], out["devkit"], out["devkit_areas"]),

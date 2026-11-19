@@ -120,6 +120,27 @@ class Synthetic(unittest.TestCase):
         self.tree.write_units()
         self.assertError("m:1b: layer.xclbin -> 'xclbins-Fam_decoding_M_1B' is no build unit's artifact")
 
+    def test_assignment_folder_and_slot(self):
+        index = {"xclbins-Attn": ("Attn", None), "xclbins-Other": ("Other", None)}
+
+        def errors(models):
+            out = []
+            dc.check_assignment({"models": models}, index, out)
+            return out
+
+        ok = {"a": {"folder": "F-NPU2", "kernels": {"attn.xclbin": "xclbins-Attn"}},
+              "b": {"folder": "F-NPU2", "kernels": {"attn.xclbin": "xclbins-Attn", "mm.xclbin": "xclbins-Other"}}}
+        self.assertEqual(errors(ok), [])
+        clash = dict(ok, c={"folder": "F-NPU2", "kernels": {"attn.xclbin": "xclbins-Other"}})
+        self.assertTrue(any("F-NPU2/attn.xclbin is 'xclbins-Other', but a puts 'xclbins-Attn'" in e
+                            for e in errors(clash)), errors(clash))
+        for folder in ("/home/runner/work/_temp", "../../x", "a/../b", "a//b", "a b"):
+            with self.subTest(folder=folder):
+                e = errors({"a": {"folder": folder, "kernels": {"attn.xclbin": "xclbins-Attn"}}})
+                self.assertTrue(any("is not a plain relative path" in x for x in e), e)
+        e = errors({"a": {"folder": "F", "kernels": {"../attn.xclbin": "xclbins-Attn"}}})
+        self.assertTrue(any("is not a plain file name" in x for x in e), e)
+
     def test_markdown_must_agree(self):
         cases = {
             MD.replace("`M-1B-NPU2`", "`M-1B`"): "folder M-1B, but",

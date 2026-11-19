@@ -1,0 +1,165 @@
+# Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+# Portions of this file consist of AI-generated content.
+
+name: Dev-kit xclbin build
+description: >
+  Builds one shard of dev-kit kernels (flm-dev-kit/FLM_Xclbin) in the
+  aie-build image and uploads them as devkit-xclbins-shard-<shard>, one folder
+  per build named after its artifact (xclbins-<unit, / as _>[_<MODEL_TYPE>])
+  holding what the build put in build/[<MODEL_TYPE>/]xclbins/: the .xclbin
+  files and rtp_addresses.txt where the unit writes one. Each build is "make
+  bitstream [MODEL_TYPE=...] -j$(nproc)" in a fresh build/, run in the image
+  as the runner's user (HOME=/tmp, the FLM_Xclbin tree mounted at /src, as
+  docker/aie-build-check.sh does), with no setup.sh: the image's environment
+  is the toolchain. A build that fails, times out or makes no .xclbin does
+  not stop the others and uploads nothing (so it cannot reach an assembly);
+  the action fails at the end, after the upload, and lists them. Re-running
+  the job replaces the shard's artifact. Needs the repository checked out, Docker, and the image already
+  on the runner (pulled or loaded). Needs only contents: read.
+
+inputs:
+  image:
+    description: The aie-build image to build in, already on the runner (a ref docker run accepts).
+    required: true
+  units:
+    description: >
+      JSON list of builds, one shard of devkit-xclbin-plan's plan:
+      [{"unit", "model_type" (null or absent: none), "artifact_name"}, ...].
+    required: true
+  shard:
+    description: The shard's index, for the artifact name.
+    required: true
+  timeout-minutes:
+    description: Time limit of each build, in minutes.
+    required: false
+    default: "20"
+  retention-days:
+    description: Artifact retention.
+    required: false
+    default: "7"
+
+outputs:
+  failed:
+    description: Space-separated artifact names of the builds that failed.
+    value: ${{ steps.build.outputs.failed }}
+
+runs:
+  using: composite
+  steps:
+    - name: Build kernels
+      id: build
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        UNITS: ${{ inputs.units }}
+        SHARD: ${{ inputs.shard }}
+        LIMIT: ${{ inputs.timeout-minutes }}
+      run: |
+        set -euo pipefail
+        src="flm-dev-kit/FLM_Xclbin"
+        out="${RUNNER_TEMP}/devkit-xclbins-shard"
+        rm -rf "${out}"
+        mkdir -p "${out}"
+        [[ -d "${src}" ]] || { echo "::error::${src} not found: check out the repository first."; exit 1; }
+        [[ "${SHARD}" =~ ^[0-9]+$ && "${LIMIT}" =~ ^[0-9]+$ ]] || { echo "::error::shard and timeout-minutes must be numbers"; exit 1; }
+        docker image inspect "${IMAGE}" > /dev/null || { echo "::error::${IMAGE} is not on the runner: pull or load it first."; exit 1; }
+
+        # unit|model_type|artifact_name per line, each checked: they become
+        # paths and make arguments. Not tab-separated: read would merge the
+        # two tabs around an empty model_type.
+        python3 -c '
+        import json, os, re, sys
+        ok = re.compile(r"^[A-Za-z0-9_.+-]+(/[A-Za-z0-9_.+-]+)*$")
+        for b in json.loads(os.environ["UNITS"]):
+            unit, mt, name = b["unit"], b.get("model_type") or "", b["artifact_name"]
+            if not ok.match(unit) or ".." in unit.split("/") or (mt and not ok.match(mt)) \
+                    or "/" in mt or not ok.match(name) or "/" in name:
+                sys.exit(f"bad build entry: {b}")
+            print(f"{unit}|{mt}|{name}")
+        ' > "${RUNNER_TEMP}/xclbin-builds.txt"
+        mapfile -t builds < "${RUNNER_TEMP}/xclbin-builds.txt"
+        echo "${#builds[@]} builds in shard ${SHARD}, ${LIMIT} min each at most, $(nproc) cores"
+
+        failed=()
+        rows=()
+        for entry in "${builds[@]}"; do
+          IFS='|' read -r unit mt name <<< "${entry}"
+          label="${unit}${mt:+ ${mt}}"
+          [[ -f "${src}/${unit}/Makefile" ]] || { echo "::error::${label}: ${src}/${unit} has no Makefile"; failed+=("${name}"); rows+=("| \`${label}\` | no Makefile | |"); continue; }
+          echo "::group::make bitstream in ${label}"
+          start=${SECONDS}
+          rc=0
+          # MODEL_TYPE only when set: some Makefiles default it with ?=, which
+          # an empty value would defeat. timeout runs in the container, so
+          # the build stops with it (killing docker run would leave it).
+          # --pull=never: only the image this job pulled or loaded, never a
+          # registry's guess at a bare local tag.
+          docker run --rm --pull=never -u "$(id -u):$(id -g)" -e HOME=/tmp -e MT="${mt}" -e LIMIT="${LIMIT}" \
+            -v "${PWD}/${src}:/src" -w "/src/${unit}" "${IMAGE}" \
+            bash -c 'rm -rf build && timeout -k 30 "${LIMIT}m" make -j"$(nproc)" bitstream ${MT:+MODEL_TYPE="$MT"}' || rc=$?
+          secs=$((SECONDS - start))
+          echo "::endgroup::"
+          if (( rc != 0 )); then
+            why="failed (exit ${rc})"
+            (( rc == 124 || rc == 137 )) && why="timed out after ${LIMIT} min"
+            echo "::error::${label}: make bitstream ${why}"
+            failed+=("${name}")
+            rows+=("| \`${label}\` | ${why} | ${secs} s |")
+            continue
+          fi
+          # build/xclbins/ or build/<MODEL_TYPE>/xclbins/, the units'
+          # deliverables; the compiler's intermediate copies elsewhere in
+          # build/ are not taken.
+          dest="${out}/${name}"
+          mkdir -p "${dest}"
+          mapfile -t files < <(find "${src}/${unit}/build" -mindepth 2 -maxdepth 3 -type f -path '*/xclbins/*' | sort)
+          for f in "${files[@]}"; do
+            if [[ -e "${dest}/$(basename "${f}")" ]]; then
+              echo "::error::${label}: two files named $(basename "${f}") under build/*/xclbins"
+              rc=1
+            fi
+            cp "${f}" "${dest}/"
+          done
+          n=$(find "${dest}" -maxdepth 1 -name '*.xclbin' | wc -l)
+          if (( rc != 0 || n == 0 )); then
+            (( n == 0 )) && echo "::error::${label}: make bitstream made no .xclbin under build/[<MODEL_TYPE>/]xclbins/"
+            # Not uploaded: the assembly would take it as built.
+            rm -rf "${dest}"
+            failed+=("${name}")
+            rows+=("| \`${label}\` | no usable xclbin | ${secs} s |")
+            continue
+          fi
+          echo "${label}: $(cd "${dest}" && echo *) in ${secs} s"
+          rows+=("| \`${label}\` | $(cd "${dest}" && ls | sed 's/.*/`&`/' | paste -sd ' ') | ${secs} s |")
+        done
+
+        {
+          echo "### Dev-kit kernels, shard ${SHARD}"
+          echo
+          echo "| Build | Result | Time |"
+          echo "|---|---|---|"
+          printf '%s\n' "${rows[@]}"
+        } >> "${GITHUB_STEP_SUMMARY}"
+        echo "failed=${failed[*]}" >> "${GITHUB_OUTPUT}"
+        echo "dir=${out}" >> "${GITHUB_OUTPUT}"
+
+    # Whatever built, including when some builds failed.
+    - name: Upload kernels
+      if: ${{ !cancelled() && steps.build.outputs.dir != '' }}
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: devkit-xclbins-shard-${{ inputs.shard }}
+        path: ${{ steps.build.outputs.dir }}/
+        retention-days: ${{ inputs.retention-days }}
+        if-no-files-found: warn
+        # A re-run of a failed shard replaces what its first attempt uploaded.
+        overwrite: true
+
+    - name: Fail on failed builds
+      if: ${{ !cancelled() && steps.build.outputs.failed != '' }}
+      shell: bash
+      env:
+        FAILED: ${{ steps.build.outputs.failed }}
+      run: |
+        echo "::error::Kernel builds that failed: ${FAILED}"
+        exit 1

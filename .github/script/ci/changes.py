@@ -53,9 +53,13 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              nothing: docker/aie-build* (its Dockerfile, kernel check and
              pinned PDIs), flm-dev-kit/FLM_Xclbin/toolchain.lock and
              devkit-aie-image.yml are built and tested by
-             devkit-aie-image.yml alone, as the dev-kit kernel jobs build in
-             the published image toolchain.image pins (a change to that
-             file is the xclbin area), not the pull request's
+             devkit-aie-image.yml, which checks the pull request's image.
+             The dev-kit kernel jobs (devkit-xclbins.yml) build in the
+             digest FLM_Xclbin/toolchain.image pins when that file exists (a
+             change to it is the xclbin area); otherwise in
+             aie-build:<toolchain hash>, built in the run when it is not
+             published, so a pull request that also changes a kernel builds
+             it with its own toolchain.lock and Dockerfile
   devkit_areas
              comma-separated dev-kit areas the change touches, from xclbin,
              dll, converter, pybind and launchlib, plus the areas that build
@@ -174,10 +178,13 @@ DEVKIT_FROM_PRODUCT = (
 # The kernel build image: its Dockerfile, kernel check script and pinned PDIs
 # (docker/aie-build*), its versions (toolchain.lock, which would otherwise be
 # in the xclbin area) and the workflow that builds it. Each selects the
-# dev-kit areas listed and no product build or suite. None: the dev-kit
-# kernel jobs build in the published image FLM_Xclbin/toolchain.image pins,
-# so rebuilding kernels there would test the old toolchain;
-# devkit-aie-image.yml builds the pull request's image and its kernels.
+# dev-kit areas listed and no product build or suite. None:
+# devkit-aie-image.yml builds the pull request's image and checks its
+# kernels, so a toolchain-only change needs no kernel jobs. When another
+# change selects the xclbin area, the kernel jobs (devkit-xclbins.yml) build
+# in the digest FLM_Xclbin/toolchain.image pins if that file exists, else in
+# aie-build:<toolchain hash> of the pull request's toolchain.lock and
+# Dockerfile, built in the run when it is not published.
 DEVKIT_ONLY = (
     (re.compile(r"^docker/aie-build[^/]*$|^flm-dev-kit/FLM_Xclbin/toolchain\.lock$"
                 r"|^\.github/workflows/devkit-aie-image\.yml$"), set()),
