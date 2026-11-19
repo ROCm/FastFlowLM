@@ -136,6 +136,16 @@ int main(int argc, char **argv) {
     const int L_wanted = vm["L_wanted"].as<int>();
     const int N_IMG = 128;
     int eff_text = vm["text_rows"].as<int>();
+    const int MAX_L_WANTED = 64;
+    const int MAX_TEXT_ROWS = 48;
+    if (L_wanted < 1 || L_wanted > MAX_L_WANTED) {
+        header_print("error", "L_wanted must be 1.." << MAX_L_WANTED << ", got " << L_wanted);
+        return 1;
+    }
+    if (RANDOM && (eff_text < 0 || eff_text > MAX_TEXT_ROWS)) {
+        header_print("error", "--text_rows must be 0.." << MAX_TEXT_ROWS << ", got " << eff_text);
+        return 1;
+    }
     if (RANDOM) {
         header_print("info", "Generating random q/k/v, seed " << SEED);
         std::mt19937 rng(SEED);
