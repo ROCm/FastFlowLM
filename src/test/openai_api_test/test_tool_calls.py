@@ -14,6 +14,10 @@ validates against the tool's ``parameters``, and ``finish_reason``
 ``tool_calls``. Streamed calls must open with id/type/name and only
 append arguments after that.
 
+The definitions a request offers are part of the prompt, so its
+``prompt_tokens`` grow with them. A model whose prompt ignores them skips
+that case, unless it is one of the packages checked to render them.
+
 Whether a model *chooses* to call a tool under ``auto`` is up to the model,
 so those cases check the shape only. Models whose chat format has no tool
 call syntax skip everything that forces a call.
@@ -25,6 +29,7 @@ Usage::
 
 from __future__ import annotations
 
+import copy
 import json
 
 import flm_api
@@ -254,6 +259,58 @@ def none_stream(api: Api) -> None:
     expect(folded.tool_calls == [], f"tool_choice none streamed tool calls: {folded.tool_calls}")
 
 
+# ---------------------------------------------------------------- definitions
+
+SUM_PROMPT = "What is two plus four?"
+SHORT_DESCRIPTION = "Shelf inventory."
+LONG_DESCRIPTION = SHORT_DESCRIPTION + " Amber birch cobalt dune elm frost." * 64
+# Packages checked to render the tools they are offered: on these a prompt without the
+# definitions is a failure. Any other model whose prompt ignores them skips (see the README).
+SHOWN_DEFINITIONS = ("qwen2.5-it-oga-hipep:14b", "qwen3.5-oga-hipep:9b")
+
+
+def described(description: str) -> list[dict]:
+    """One tool the question does not need, with this description."""
+    tool = copy.deepcopy(GET_WEATHER)
+    tool["function"]["description"] = description
+    return [tool]
+
+
+def prompt_usage(api: Api, **fields) -> tuple[int, int | None]:
+    """(prompt_tokens, cached_tokens) of SUM_PROMPT sent with these fields."""
+    resp = api.post(api.body(user(SUM_PROMPT), max_tokens=1, **fields))
+    if resp.status != 200:
+        flm_api.raise_for_capability(resp.error_message())
+        raise AssertionError(f"HTTP {resp.status}: {resp.error_message()}")
+    usage = resp.body.get("usage") or {}
+    expect(isinstance(usage.get("prompt_tokens"), int), f"no usage.prompt_tokens: {usage}")
+    return usage["prompt_tokens"], (usage.get("prompt_tokens_details") or {}).get("cached_tokens")
+
+
+@case
+def definitions_reach_the_prompt(api: Api) -> None:
+    """Offered definitions are in the prompt: a longer description is a longer prompt; none shows nothing."""
+    plain, _ = prompt_usage(api)
+    short, _ = prompt_usage(api, tools=described(SHORT_DESCRIPTION))
+    # The next prompt parts from the last one inside the definitions: reusing all of
+    # the last one would be answering with the old description.
+    changed, cached = prompt_usage(api, tools=described(SHORT_DESCRIPTION + " Checked daily."))
+    long, _ = prompt_usage(api, tools=described(LONG_DESCRIPTION))
+    hidden, _ = prompt_usage(api, tools=described(SHORT_DESCRIPTION), tool_choice="none")
+    expect(hidden == plain,
+           f"tool_choice none must not show the tools: {hidden} prompt tokens, {plain} without tools")
+    if short == plain and long == plain:
+        if api.model in SHOWN_DEFINITIONS:
+            raise AssertionError(f"the definitions never reach the prompt: {plain} prompt tokens "
+                                 "with no tool, a short description and a long one")
+        raise Skip("the model's prompt does not carry tool definitions")
+    expect(plain < short < changed < long,
+           f"prompt tokens must grow with the definitions: none {plain}, short {short}, "
+           f"a longer description {changed}, long {long}")
+    expect(cached is None or cached < short,
+           f"a changed definition reused the whole earlier prompt: {cached} of its {short} tokens cached")
+
+
 # ---------------------------------------------------------------- multi turn
 
 
@@ -278,6 +335,115 @@ def round_trip(api: Api) -> None:
     if msg.get("tool_calls"):
         raise Skip("the model called another tool instead of answering; nothing to check")
     expect("23" in (msg["content"] or ""), f"the answer does not use the tool result: {msg['content']!r}")
+
+
+def positional_shelf_history(api: Api) -> tuple[list[dict], list[dict]]:
+    if api.model not in ("qwen3.5-oga-hipep:9b", "qwen2.5-it-oga-hipep:14b"):
+        raise Skip("only the two verified positional OGA packages use this adapter")
+    turns = user("Read the red and blue shelves. Report each shelf and its numeric value as JSON.")
+    calls = [{"id": ident, "type": "function", "function": {
+        "name": "read_shelf", "arguments": json.dumps({"shelf": shelf})}}
+        for ident, shelf in (("call_z", "red"), ("call_a", "blue"))]
+    turns.append({"role": "assistant", "content": None, "tool_calls": calls})
+    results = [{"role": "tool", "tool_call_id": ident, "content": value}
+               for ident, value in (("call_z", "731"), ("call_a", "482"))]
+    return turns, results
+
+
+@case
+def positional_parallel_results(api: Api) -> None:
+    """Cold reversed delivery, repeated history, and a genuine ID-only remap, over JSON and SSE."""
+    turns, results = positional_shelf_history(api)
+    schema = {"type": "object", "properties": {k: {"type": "integer"} for k in ("red", "blue")},
+              "required": ["red", "blue"], "additionalProperties": False}
+    fmt = {"type": "json_schema", "json_schema": {"name": "shelves", "strict": True, "schema": schema}}
+    remapped = [dict(r, tool_call_id=other["tool_call_id"]) for r, other in zip(results, reversed(results))]
+    mismatches = []
+    for stream in (False, True):
+        for name, delivery, values in (("reversed", results[::-1], (731, 482)),
+                                       ("ordered", results, (731, 482)),
+                                       ("remapped", remapped, (482, 731))):
+            body = api.body(turns + delivery, response_format=fmt, tool_choice="none", max_tokens=64)
+            if stream:
+                reply = api.stream(dict(body, stream_options={"include_usage": True}))
+                expect(reply.status == 200 and reply.done, f"{name}: incomplete stream: {reply.error}")
+                folded = flm_api.check_stream_contract(reply, include_usage=True)
+                text, usage = folded.content, folded.usage
+            else:
+                reply = api.post(body)
+                expect(reply.status == 200, f"{name}: HTTP {reply.status}: {reply.error_message()}")
+                text = flm_api.check_message_contract(reply.body["choices"][0])["content"]
+                usage = reply.body["usage"]
+            cached = usage["prompt_tokens_details"]["cached_tokens"]
+            print(f"  {name}, stream={stream}: {cached}/{usage['prompt_tokens']} prompt tokens cached")
+            try:
+                mapping = json.loads(text)
+            except (ValueError, TypeError):
+                mapping = None
+            if mapping != dict(zip(("red", "blue"), values)):
+                mismatches.append(f"{name}, stream={stream}: expected red/blue={values}, got {text!r}")
+    expect(not mismatches, "; ".join(mismatches))
+
+
+@case
+def positional_parallel_errors(api: Api) -> None:
+    """Unresolvable parallel histories get indexed JSON errors, even when streaming was requested."""
+    turns, (red, blue) = positional_shelf_history(api)
+    calls = turns[1]["tool_calls"]
+    for stream in (False, True):
+        for messages, path in (
+            (turns + [red, dict(blue, tool_call_id="other")], "messages[3].tool_call_id"),
+            (turns + [red, red], "messages[3].tool_call_id"),
+            (turns + [red, blue, red], "messages[4].tool_call_id"),
+            (turns + [red, {"role": "tool", "content": "482"}], "messages[3].tool_call_id"),
+            (turns + [red], "messages[1].tool_calls[1].id"),
+            (turns + [red, *user("Next task"), blue], "messages[1].tool_calls[1].id"),
+            ([turns[0], dict(turns[1], tool_calls=[calls[0], calls[0]]), red, blue],
+             "messages[1].tool_calls[1].id"),
+            (user("First message") + turns + [red, red], "messages[4].tool_call_id"),
+        ):
+            body = api.body(messages, tool_choice="none", max_tokens=1)
+            if stream:
+                s = api.stream(body)
+                status, error = s.status, s.error or {}
+                expect(not s.chunks and not s.done, "error arrived after SSE was committed")
+            else:
+                r = api.post(body)
+                status, error = r.status, r.body
+            expect(status == 400, f"{path}: expected HTTP 400, got {status}")
+            detail = error.get("error", {})
+            expect(detail.get("type") == "invalid_request_error" and detail.get("param") == path,
+                   f"{path}: wrong error: {detail}")
+    bad_part = dict(blue, content=[{"type": "image_url", "image_url": {"url": "invalid"}}])
+    r = api.post(api.body(turns + [bad_part, red], tool_choice="none"))
+    expect(r.status == 400 and "messages[2].content[0]" in r.error_message(),
+           f"the content error must name the original result: {r.error_message()}")
+    expect(api.post(api.body(turns + [blue, red], tool_choice="none", max_tokens=1)).status == 200,
+           "valid request failed after the errors")
+
+
+@case
+def positional_single_round_trips(api: Api) -> None:
+    """Replay a real named call using the ID returned on each wire format."""
+    positional_shelf_history(api)
+    for stream in (False, True):
+        messages = user(WEATHER_PROMPT)
+        body = api.body(messages, tools=WEATHER_TOOLS, tool_choice=function_choice("get_weather"))
+        try:
+            calls = (expect_streamed_calls(api, body, WEATHER_TOOLS) if stream
+                     else expect_calls(api.ok(body), WEATHER_TOOLS))
+        except Skip as error:
+            raise AssertionError(f"this package must support named calls: {error}") from error
+        expect(len(calls) == 1 and calls[0]["function"]["name"] == "get_weather", f"unexpected calls: {calls}")
+        messages += [{"role": "assistant", "content": None, "tool_calls": calls},
+                     {"role": "tool", "tool_call_id": calls[0]["id"], "content": '{"temperature_c": 23}'}]
+        follow = api.body(messages, tools=WEATHER_TOOLS, tool_choice="none", max_tokens=128)
+        try:
+            text = (flm_api.check_stream_contract(api.ok_stream(follow), include_usage=False).content
+                    if stream else flm_api.check_message_contract(api.ok(follow))["content"])
+        except Skip as error:
+            raise AssertionError(f"this package must accept the named call result: {error}") from error
+        expect("23" in text, f"single-call result missing from the answer: {text!r}")
 
 
 CASES = flm_api.collect(globals())

@@ -1,6 +1,9 @@
-# Labels of the self-hosted NPU runners, for actionlint's runs-on check.
+# Labels of the self-hosted runners, for actionlint's runs-on check: the NPU
+# runners, and the GPU machines in .github/hipep-machines.json.
 self-hosted-runner:
   labels:
     - flm
     - npu
     - sweep
+    - oga-hipep
+    - stx-halo

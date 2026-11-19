@@ -30,15 +30,20 @@ inputs:
     default: ""
   required-models:
     description: >
-      Comma-separated model ids the change adds: tested on every tier, even
-      past models, and downloaded whatever their size; the run fails if they
-      are not listed or do not pull.
+      Comma-separated model ids the change adds (with backend: adds or edits):
+      tested on every tier, even past models, and downloaded whatever their
+      size; the run fails if they are not listed or do not pull, bar one
+      larger than max-model-gb, a skip.
     required: false
     default: ""
   backend:
-    description: A GPU backend (oga-hipep) whose models to test instead of the NPU models.
+    description: A GPU backend (oga-hipep) whose models to test instead of the NPU models, one per family (every one on the full tier).
     required: false
     default: ""
+  max-model-gb:
+    description: Skip the models larger than this many GB (catalog size), which the runner's memory cannot hold; 0 for no limit.
+    required: false
+    default: "0"
   model-extension:
     description: Optional model-extension manifest passed to FLM.
     required: false
@@ -96,7 +101,10 @@ runs:
     # Models persist on the runner between jobs, so only the first job on a
     # runner pays for a download. The harness pulls missing models before the
     # suites, within a time budget on the pr tier (--pull-budget), except the
-    # models the change adds (required-models), which it always downloads.
+    # models the change adds (required-models), which it always downloads. A
+    # GPU backend run pulls every model it tests, which verifies its files,
+    # except one a pull on this runner verified before whose catalog pins and
+    # files are unchanged (npu_test/model_cache.py), unless it is required.
     - name: Run tests (Linux)
       id: linux
       if: runner.os == 'Linux'
@@ -111,6 +119,7 @@ runs:
         MODELS: ${{ inputs.models }}
         REQUIRED_MODELS: ${{ inputs.required-models }}
         BACKEND: ${{ inputs.backend }}
+        MAX_MODEL_GB: ${{ inputs.max-model-gb || '0' }}
         MODEL_EXTENSION: ${{ inputs.model-extension }}
         ASR_FULL: ${{ inputs.asr-full }}
         ASR_KEY: ${{ inputs.asr-expected-key }}
@@ -119,7 +128,7 @@ runs:
         args=(--flm-bin "${FLM_BIN}" --label "${LABEL}" --tier "${TIER}" --suites "${SUITES}"
               --families "${FAMILIES}" --models "${MODELS}" --backend "${BACKEND}"
               --required-models "${REQUIRED_MODELS}"
-              --asr-expected-key "${ASR_KEY}"
+              --max-model-gb "${MAX_MODEL_GB}" --asr-expected-key "${ASR_KEY}"
               --output-dir "${GITHUB_WORKSPACE}/npu-test-results/${LABEL}")
         [ "${ASR_FULL}" = "true" ] && args+=(--asr-full)
         [ -n "${MODEL_EXTENSION}" ] && args+=(--model-extension "${MODEL_EXTENSION}")
@@ -141,6 +150,7 @@ runs:
         MODELS: ${{ inputs.models }}
         REQUIRED_MODELS: ${{ inputs.required-models }}
         BACKEND: ${{ inputs.backend }}
+        MAX_MODEL_GB: ${{ inputs.max-model-gb || '0' }}
         MODEL_EXTENSION: ${{ inputs.model-extension }}
         ASR_FULL: ${{ inputs.asr-full }}
         ASR_KEY: ${{ inputs.asr-expected-key }}
@@ -158,8 +168,8 @@ runs:
         $cmdArgs = @('-m', 'npu_test', "--flm-bin=$env:FLM_BIN", "--label=$env:LABEL",
                      "--tier=$env:TIER", "--suites=$env:SUITES", "--families=$env:FAMILIES",
                      "--models=$env:MODELS", "--required-models=$env:REQUIRED_MODELS",
-                     "--backend=$env:BACKEND", "--asr-expected-key=$env:ASR_KEY",
-                     "--output-dir=$outDir")
+                     "--backend=$env:BACKEND", "--max-model-gb=$env:MAX_MODEL_GB",
+                     "--asr-expected-key=$env:ASR_KEY", "--output-dir=$outDir")
         if ($env:ASR_FULL -eq 'true') { $cmdArgs += '--asr-full' }
         if ($env:MODEL_EXTENSION) {
           $cmdArgs += "--model-extension=$env:MODEL_EXTENSION"

@@ -2213,6 +2213,7 @@
         "qwen3.5-oga-hipep": {
             "9b": {
                 "name": "Qwen3.5-9B_gpuep_1.0_gpu_128",
+                "positional_tool_results": true,
                 "url": "https://huggingface.co/amd/Qwen3.5-9B_gpuep_1.0_gpu_128/resolve/f3a9b4aeb60a42542cc4fec561e1f1095e427483",
                 "file_url": "https://huggingface.co/api/models/amd/Qwen3.5-9B_gpuep_1.0_gpu_128/tree/f3a9b4aeb60a42542cc4fec561e1f1095e427483",
                 "size": 7491571939,
@@ -2480,6 +2481,7 @@
         "qwen2.5-it-oga-hipep": {
             "14b": {
                 "name": "Qwen2.5-14B-Instruct_gpuep_1.0_gpu_128",
+                "positional_tool_results": true,
                 "url": "https://huggingface.co/amd/Qwen2.5-14B-Instruct_gpuep_1.0_gpu_128/resolve/efc1134c0ea60c296e823237b8c43fbdd4ab3c04",
                 "file_url": "https://huggingface.co/api/models/amd/Qwen2.5-14B-Instruct_gpuep_1.0_gpu_128/tree/efc1134c0ea60c296e823237b8c43fbdd4ab3c04",
                 "size": 8849120893,
@@ -2494,6 +2496,7 @@
                 },
                 "flm_min_version": "1.0.13",
                 "vlm": false,
+                "tools_in_prompt": true,
                 "files": [
                     "chat_template.jinja",
                     "config.json",

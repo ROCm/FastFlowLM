@@ -85,6 +85,28 @@ class Required(unittest.TestCase):
         self.assertNotIn("new-oga-hipep:70b", npu.chat())
         self.assertFalse(npu.backend_serves("new-oga-hipep:70b"))
 
+    def test_a_required_gpu_model_runs_beside_each_familys_pick(self):
+        """A GPU backend run without --models tests PR_GPU's pick of each
+        family (gemma3's only when touched), and the models the change adds or
+        edits, on every tier."""
+        cat = {m.id: m for m in (
+            Model(id="qwen3.8-oga-hipep:27b", family="qwen3.5", size=17e9, backend="oga-hipep"),
+            Model(id="qwen3.5-oga-hipep:9b", family="qwen3.5", size=7.5e9, backend="oga-hipep"),
+            Model(id="gemma3-oga-hipep:4b", family="gemma3", size=4e9, backend="oga-hipep"),
+            Model(id="gemma3-oga-hipep:27b", family="gemma3", size=20e9, backend="oga-hipep"),
+            Model(id="qwen3:0.6b", family="qwen3", size=0.6e9),
+        )}
+
+        def chat(tier, families=(), required=()):
+            return Plan(cat, tier, list(families), backend="oga-hipep", required=list(required)).chat()
+
+        self.assertEqual(chat("pr"), ["qwen3.8-oga-hipep:27b"])
+        self.assertEqual(chat("pr", ["gemma3"]), ["gemma3-oga-hipep:4b", "qwen3.8-oga-hipep:27b"])
+        for tier in ("install", "pr"):
+            with self.subTest(tier=tier):
+                self.assertEqual(chat(tier, required=["gemma3-oga-hipep:27b", "qwen3:0.6b"]),
+                                 ["qwen3.8-oga-hipep:27b", "gemma3-oga-hipep:27b"])
+        self.assertEqual(len(chat("full")), 4)
 
 if __name__ == "__main__":
     unittest.main()

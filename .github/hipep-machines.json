@@ -1,0 +1,18 @@
+{
+  "machines": [
+    {
+      "id": "stx-halo",
+      "runs-on": ["self-hosted", "windows", "x64", "oga-hipep", "stx-halo"],
+      "enabled": true,
+      "max-model-gb": 0
+    },
+    {
+      "id": "npu-runners",
+      "runs-on": ["self-hosted", "windows", "x64", "npu", "sweep", "oga-hipep"],
+      "enabled": true,
+      "max-model-gb": 32,
+      "max-tier": "pr",
+      "changed-models": false
+    }
+  ]
+}

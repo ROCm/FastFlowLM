@@ -35,16 +35,19 @@ outputs:
     description: '"true" when the chat suite runs, the only suite the models-from-source and model-extension tests run.'
     value: ${{ steps.tier.outputs.source }}
   hipep:
-    description: '"true" when every suite runs or the change reaches the model Test Windows HIPEP tests.'
+    description: '"true" when every suite runs or the change reaches an oga-hipep model, which Test Windows HIPEP tests one per family.'
     value: ${{ steps.tier.outputs.hipep }}
   new-models:
     description: >
       Comma-separated NPU models the change adds (or points at new weights):
       every NPU test job tests them, downloading them whatever their size.
     value: ${{ steps.changes.outputs.new_models }}
-  new-gpu-models:
-    description: The same for oga-hipep models, which Test Windows HIPEP tests.
-    value: ${{ steps.changes.outputs.new_gpu_models }}
+  hipep-models:
+    description: >
+      Comma-separated oga-hipep models whose catalog entries the change added
+      or edited (new weights or not): Test Windows HIPEP tests them as
+      required models, downloading them whatever their size.
+    value: ${{ steps.changes.outputs.hipep_models }}
   devkit:
     description: >
       "true" when a dev-kit job is needed, for the dev-kit jobs: code under
