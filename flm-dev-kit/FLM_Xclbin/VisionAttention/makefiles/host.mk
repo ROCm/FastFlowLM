@@ -19,7 +19,7 @@
 # Use g++-13 directly without CMake
 
 HOST_C_TARGET := run.exe
-HOST_COMMON_DIR := ../../host_common
+HOST_COMMON_DIR := ../host_common
 
 CXX := g++-13
 CXX_FLAGS := -std=c++23 -fPIC -Wall
@@ -36,8 +36,7 @@ CXX_FLAGS += -MMD -MP
 LDFLAGS += -L/opt/xilinx/xrt/lib
 LDFLAGS += -L/opt/xilinx/xrt/experimental
 LDFLAGS += -L$(HOST_COMMON_DIR)
-LDFLAGS += -L$(HOST_COMMON_DIR)/../../../src/lib/xrt
-LDFLAGS += -lxrt_coreutil -laiebu
+LDFLAGS += -lxrt_coreutil $(HOST_COMMON_DIR)/../../../src/lib/xrt/libaiebu.a
 LDFLAGS += -lboost_program_options -lboost_filesystem
 LDFLAGS += -fopenmp
 

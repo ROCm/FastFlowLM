@@ -91,7 +91,7 @@ HOST_COMMON_DIR := ../../host_common
 CXX := g++-13
 CXX_FLAGS := -std=c++20 -O2 -fPIC -Wall -Wno-sign-compare -Wno-unused-variable -march=native -fopenmp
 CXX_FLAGS += -Ihost -I$(HOST_COMMON_DIR) -I../../dequant_mm_512x512x512/host -I/opt/xilinx/xrt/include -MMD -MP
-LDFLAGS := -L/opt/xilinx/xrt/lib -L$(HOST_COMMON_DIR) -L$(HOST_COMMON_DIR)/../../../src/lib/xrt -lxrt_coreutil -laiebu
+LDFLAGS := -L/opt/xilinx/xrt/lib -L$(HOST_COMMON_DIR) -lxrt_coreutil $(HOST_COMMON_DIR)/../../../src/lib/xrt/libaiebu.a
 LDFLAGS += -lboost_program_options -lboost_filesystem -fopenmp
 
 run.exe: build/host/host.o

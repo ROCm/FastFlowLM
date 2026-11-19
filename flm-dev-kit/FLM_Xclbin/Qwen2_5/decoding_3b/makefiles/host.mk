@@ -32,12 +32,8 @@ CXX_FLAGS += -MMD -MP
 CXX_FLAGS += -DVERBOSE=0
 
 LDFLAGS += -L/opt/xilinx/xrt/lib
-LDFLAGS += -lxrt_coreutil
-# LDFLAGS += -L/opt/xilinx/xrt/aiebu/lib
-LDFLAGS += -laiebu
+LDFLAGS += -lxrt_coreutil $(HOST_COMMON_DIR)/../../../src/lib/xrt/libaiebu.a
 LDFLAGS += -lboost_program_options -lboost_filesystem
-LDFLAGS += -L../../host_common
-LDFLAGS += -laiebu
 
 # Find all source files in host/ directory (including subdirectories)
 HOST_SOURCES := $(shell find host -name '*.cpp')

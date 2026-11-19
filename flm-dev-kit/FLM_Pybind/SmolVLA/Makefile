@@ -64,8 +64,7 @@ endif
 LDFLAGS += -fopenmp
 LDFLAGS += -L/opt/xilinx/xrt/lib
 LDFLAGS += -L$(HOST_COMMON_DIR)
-LDFLAGS += -L$(HOST_COMMON_DIR)/../../../src/lib/xrt
-LDFLAGS += -lxrt_coreutil -laiebu
+LDFLAGS += -lxrt_coreutil $(HOST_COMMON_DIR)/../../../src/lib/xrt/libaiebu.a
 LDFLAGS += -lboost_program_options
 
 # Find all source files in src/ directory (including subdirectories). The two
@@ -125,7 +124,7 @@ $(PY_TARGET): build/$(PY_TARGET)
 build/$(PY_TARGET): $(PY_OBJECTS)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXX_FLAGS) -shared $^ -o $@ $(PY_LDFLAGS) \
-		-fopenmp -L/opt/xilinx/xrt/lib -L$(HOST_COMMON_DIR) -L$(HOST_COMMON_DIR)/../../../src/lib/xrt -lxrt_coreutil -laiebu
+		-fopenmp -L/opt/xilinx/xrt/lib -L$(HOST_COMMON_DIR) -lxrt_coreutil $(HOST_COMMON_DIR)/../../../src/lib/xrt/libaiebu.a
 
 # Run the executable
 run: $(HOST_C_TARGET)
