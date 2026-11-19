@@ -1,0 +1,19 @@
+# config/moe.toml -- the moe numbers of Qwen3.6-35B-A3B.
+#
+# make copy builds the op moe with this file. The keys are the keys of the
+# op's default config (moe/config.toml in the kernel tree).
+
+# Hidden size (hidden_size).
+D = 2048
+
+# Intermediate size of an expert (moe_intermediate_size).
+INTER = 512
+
+# Routed experts (num_experts).
+EXPERTS = 256
+
+# Experts that the router selects for a token (num_experts_per_tok).
+TOP_K = 8
+
+# Epsilon of the RMS norm of moe_norm (rms_norm_eps).
+EPS = 1e-6

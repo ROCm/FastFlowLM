@@ -8,7 +8,11 @@
 #pragma once
 #include "AutoModel/automodel.hpp"
 #include "metrices.hpp"
+#if defined(FLM_NPU_AIE_NEXT)
+#include "models/qwen3_6_moe/flm/aie_next/qwen3_6_moe_npu.hpp"
+#else
 #include "models/qwen3_6_moe/flm/aie2p/qwen3_6_moe_npu.hpp"
+#endif
 
 
 #include "typedef.hpp"

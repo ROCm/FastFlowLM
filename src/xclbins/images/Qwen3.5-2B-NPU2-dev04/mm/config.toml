@@ -1,0 +1,8 @@
+# config/common/mm.toml -- mm (bf16 W, run-time K, N, L, bias, activation): one build for both sizes; Qwen3.6's numbers.
+# make copy builds the op mm with this file.
+
+M_PAD = 64
+K_PAD = 128
+N_PAD = 64
+X_K = 4608
+X_ROWS = 512

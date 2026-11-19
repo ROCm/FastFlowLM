@@ -29,8 +29,16 @@
 #include "models/qwen2/flm/aie2p/qwen2_npu.hpp"
 #include "models/qwen2vl/flm/aie2p/qwen2vl_npu.hpp"
 #include "models/qwen3/flm/aie2p/qwen3_npu.hpp"
+#if defined(FLM_NPU_AIE_NEXT)
+#include "models/qwen3_5vl/flm/aie_next/qwen3_5vl_npu.hpp"
+#else
 #include "models/qwen3_5vl/flm/aie2p/qwen3_5vl_npu.hpp"
+#endif
+#if defined(FLM_NPU_AIE_NEXT)
+#include "models/qwen3_6_moe/flm/aie_next/qwen3_6_moe_npu.hpp"
+#else
 #include "models/qwen3_6_moe/flm/aie2p/qwen3_6_moe_npu.hpp"
+#endif
 #include "models/qwen3_8mtp/flm/aie2p/qwen3_8mtp_npu.hpp"
 #include "models/qwen3_asr/flm/aie2p/qwen3_asr_npu.hpp"
 #include "models/qwen3vl/flm/aie2p/qwen3vl_npu.hpp"
@@ -56,10 +64,13 @@ namespace {
 /// \tparam Engine the concrete engine type
 /// \param registry the registry to populate
 /// \param family the family name, as in details.family
+/// \param next_library its aie_next engine library, run on dev04 (flm_backend.hpp)
 template <class Engine>
-void RegisterFlm(BackendRegistry& registry, const char* family) {
+void RegisterFlm(BackendRegistry& registry, const char* family,
+                 const char* next_library = nullptr) {
     registry.register_backend(family, kFlmBackendId,
-                              flm_factory<Engine>());
+                              flm_factory<Engine>(next_library),
+                              flm_traits<Engine>(next_library));
 }
 
 }  // namespace
@@ -75,11 +86,11 @@ void register_builtin_backends(BackendRegistry& registry) {
     RegisterFlm<qwen3_npu>(registry, "qwen3-tk");
     RegisterFlm<qwen3vl_npu>(registry, "qwen3vl");
     RegisterFlm<qwen3vl_flash>(registry, "qwen3vl-flash");
-    RegisterFlm<qwen3_5vl_npu>(registry, "qwen3.5");
+    RegisterFlm<qwen3_5vl_npu>(registry, "qwen3.5", "qwen3_5vl_npu_aie_next");
     RegisterFlm<minicpm_v_4_7_npu>(registry, "minicpm-v-4.7");
     RegisterFlm<minicpm_ocr_npu>(registry, "minicpm-ocr");
     RegisterFlm<minicpm_v_4_7_moe_npu>(registry, "minicpm-v-4.7-moe");
-    RegisterFlm<qwen3_6_moe_npu>(registry, "qwen3.6-moe");
+    RegisterFlm<qwen3_6_moe_npu>(registry, "qwen3.6-moe", "qwen3_6_moe_npu_aie_next");
     RegisterFlm<qwen3_8mtp_npu>(registry, "qwen3.8-mtp");
     RegisterFlm<qwen3_8mtp_npu>(registry, "qwen3.8-dflash2");   // the same engine; the draft package turns the DFlash2 drafter on
     RegisterFlm<qwen3_asr_npu>(registry, "r2t2");

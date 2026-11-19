@@ -1,0 +1,10 @@
+# config/2b/gdn_prefill.toml -- the gdn_prefill numbers of Qwen3.5-2B.
+# make copy builds the op gdn_prefill with this file.
+
+D = 2048
+V_HEADS = 16
+QK_HEADS = 16
+DK = 128
+DV = 128
+L2_EPS = 1e-6
+CHUNK = 32
