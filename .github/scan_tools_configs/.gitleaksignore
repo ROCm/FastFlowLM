@@ -11,3 +11,8 @@
 #   3f2a9c1e...:tests/fixtures/creds.py:generic-api-key:12
 #
 # Entries here combine with a .gitleaksignore at the repository root.
+
+# False positive: generic-api-key matches $ErrorActionPreference='SilentlyContinue'
+# in this test script (the line's "# gitleaks:allow" is on the next line).
+# Listed here, not edited in the script, which another team owns.
+70f02cb83a6a21f60fd478503fa425944bb57e75:src/test/phi4_core/run_real_core_acceptance.ps1:generic-api-key:140
