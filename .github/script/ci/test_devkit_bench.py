@@ -2,7 +2,9 @@
 # Portions of this file consist of AI-generated content.
 """Tests for the dev-kit bench scripts (.github/script/devkit-bench): scoring,
 the gate, report rendering, comparisons and soft gates, machine kinds, model
-selection, run and artifact lookup, and the comment workflow's invariants.
+selection, the plan (Build and Test's inputs, or a dispatched run's
+artifacts), run and baseline lookup, and the bench and comment workflows'
+invariants.
 
 Here rather than beside the scripts so the changes job's
 `unittest discover -s ci` runs them.
@@ -396,44 +398,107 @@ def run(**kw):
 
 
 class Resolve(unittest.TestCase):
-    MATCH = {"repo": "ROCm/FastFlowLM", "head_sha": SHA_A, "head_repo": "ROCm/FastFlowLM", "event": "pull_request"}
+    REPO = "ROCm/FastFlowLM"
 
     def test_pick_build_run_pins_everything(self):
+        # Dispatch: this repository's Build and Test, its own branch, this commit.
         runs = [run(id=1, run_number=1), run(id=2, run_number=9, path=".github/workflows/evil.yml"),
                 run(id=3, run_number=8, head_repository={"full_name": "fork/FastFlowLM"}),
                 run(id=4, run_number=7, repository={"full_name": "fork/FastFlowLM"}),
                 run(id=6, run_number=6, head_sha=SHA_B), run(id=7, run_number=5, event="push"),
-                run(id=8, run_number=2)]
-        self.assertEqual(resolve.pick_build_run(runs, **self.MATCH)["id"], 8)
-        self.assertIsNone(resolve.pick_build_run(runs[1:6], **self.MATCH))
-        # Nightly: the newest scheduled run on main, whatever its commit.
-        nightly = [run(id=20, run_number=20, event="schedule", head_branch="main", head_sha=SHA_B),
-                   run(id=21, run_number=21, event="schedule", head_branch="main", head_sha="bad")]
-        self.assertEqual(resolve.pick_build_run(nightly, **{**self.MATCH, "event": "schedule",
-                                                           "head_sha": ""})["id"], 20)
-
-    def test_schedule_needs_main(self):
-        m = {**self.MATCH, "event": "schedule"}
-        self.assertFalse(resolve.run_matches(run(event="schedule", head_branch="main-fork"), **m))
-        self.assertTrue(resolve.run_matches(run(event="schedule", head_branch="main"), **m))
-        # A fork's branch named main does not pass for this repository's.
-        self.assertFalse(resolve.run_matches(run(event="schedule", head_branch="main",
-                                                 head_repository={"full_name": "x/FastFlowLM"}), **m))
+                run(id=8, run_number=2, event="workflow_dispatch")]
+        self.assertEqual(resolve.pick_build_run(runs, repo=self.REPO, head_sha=SHA_A)["id"], 7)
+        self.assertIsNone(resolve.pick_build_run(runs[1:5], repo=self.REPO, head_sha=SHA_A))
+        self.assertFalse(resolve.run_matches(run(head_sha="bad"), repo=self.REPO, head_sha="bad"))
 
     def test_pick_baseline(self):
-        good = run(id=10, path=resolve.BENCH_WORKFLOW, event="schedule", head_branch="main")
+        good = run(id=10, event="schedule", head_branch="main")
         runs = {10: good, 11: {**good, "id": 11, "conclusion": "cancelled"},
                 12: {**good, "id": 12, "head_repository": {"full_name": "fork/FastFlowLM"}},
                 13: {**good, "id": 13, "path": ".github/workflows/copy.yml"},
-                14: {**good, "id": 14, "event": "workflow_dispatch"}}
+                14: {**good, "id": 14, "event": "workflow_dispatch"},
+                15: {**good, "id": 15, "head_branch": "feature"},
+                16: {**good, "id": 16, "path": resolve.BENCH_WORKFLOW, "conclusion": "failure"}}
 
         def art(i, run_id, when, **kw):
             return {"id": i, "name": resolve.BASELINE_ARTIFACT, "expired": False, "created_at": when,
                     "workflow_run": {"id": run_id}, **kw}
         arts = [art(1, 10, "2026-11-01"), art(2, 11, "2026-11-05"), art(3, 12, "2026-11-06"),
-                art(4, 13, "2026-11-07"), art(5, 14, "2026-11-08"), art(6, 10, "2026-11-09", expired=True)]
-        self.assertEqual(resolve.pick_baseline(arts, runs, "ROCm/FastFlowLM")["artifact_id"], 1)
-        self.assertIsNone(resolve.pick_baseline(arts[1:], runs, "ROCm/FastFlowLM"))
+                art(4, 13, "2026-11-07"), art(5, 14, "2026-11-08"), art(6, 10, "2026-11-09", expired=True),
+                art(7, 15, "2026-11-10")]
+        self.assertEqual(resolve.pick_baseline(arts, runs, self.REPO)["artifact_id"], 1)
+        self.assertIsNone(resolve.pick_baseline(arts[1:], runs, self.REPO))
+        # A nightly of devkit-bench.yml from before Build and Test called it.
+        legacy = arts + [art(8, 16, "2026-10-30")]
+        self.assertEqual(resolve.pick_baseline(legacy[1:], runs, self.REPO)["run_id"], 16)
+
+    def test_write_plan(self):
+        builds = {"lin-xrt": "success", "lin-hrx": "failure", "win-xrt": "success", "win-hrx": "skipped"}
+        p = resolve.parse_plan(resolve.write_plan(
+            head_sha=SHA_A, package_sha=SHA_B, builds=builds, engines="success", families="qwen3",
+            xclbin_models='["gemma3:4b"]', bench_models="", xclbins="devkit-xclbins"))
+        self.assertTrue(p["bench"])
+        self.assertEqual(p["builds"]["lin-xrt"], {"ok": True, "package": "portable", "libs": "devkit-libs-lin-xrt"})
+        self.assertFalse(p["builds"]["lin-hrx"]["ok"])
+        self.assertEqual(p["builds"]["win-xrt"]["package"], f"fastflowlm-windows-{SHA_B}")
+        self.assertFalse(p["builds"]["win-hrx"]["ok"])
+        self.assertIsNone(p["bench_models"])
+        # Engines not asked for: packages bench without libraries; failed: nothing benches.
+        p = resolve.write_plan(head_sha=SHA_A, package_sha=SHA_B, builds=builds, engines="skipped")
+        self.assertEqual((p["builds"]["lin-xrt"]["ok"], p["builds"]["lin-xrt"]["libs"]), (True, ""))
+        p = resolve.write_plan(head_sha=SHA_A, package_sha=SHA_B, builds=builds, engines="failure")
+        self.assertFalse(any(b["ok"] for b in p["builds"].values()))
+        for bad in ({"lin-arm": "success"}, {"lin-xrt": "$(x)"}):
+            with self.subTest(bad=bad), self.assertRaises(resolve.PlanError):
+                resolve.write_plan(head_sha=SHA_A, package_sha=SHA_B, builds=bad, engines="success")
+
+    def test_write_plan_cli(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "plan.json")
+            args = ["write-plan", "--out", out, "--head-sha", SHA_A, "--package-sha", SHA_B,
+                    "--builds", "lin-xrt=success,lin-hrx=success,win-xrt=skipped,win-hrx=skipped",
+                    "--engines", "success", "--families", "qwen3"]
+            self.assertEqual(quiet(resolve.main, args), 0)
+            plan = resolve.parse_plan(json.loads(Path(out).read_text(encoding="utf-8")))
+            self.assertEqual(plan["families"], ["qwen3"])
+            self.assertEqual(quiet(resolve.main, args[:-2] + ["--families", "a b"]), 2)
+            self.assertEqual(quiet(resolve.main, [a if a != SHA_A else "HEAD" for a in args]), 2)
+
+    def test_plan_from_artifacts(self):
+        index = resolve.artifact_index([
+            {"id": 1, "name": "portable"}, {"id": 2, "name": "devkit-libs-lin-xrt"},
+            {"id": 3, "name": "HRX-portable", "expired": True}, {"id": 4, "name": f"fastflowlm-windows-{SHA_B}"},
+            {"id": 5, "name": "devkit-xclbins"}, {"id": 6, "name": "fastflowlm-windows-evil"}])
+        p = resolve.parse_plan(resolve.plan_from_artifacts(index, SHA_A))
+        self.assertEqual(p["head_sha"], SHA_A)
+        self.assertEqual(p["builds"]["lin-xrt"], {"ok": True, "package": "portable", "libs": "devkit-libs-lin-xrt"})
+        self.assertFalse(p["builds"]["lin-hrx"]["ok"])
+        self.assertEqual(p["builds"]["win-xrt"], {"ok": True, "package": f"fastflowlm-windows-{SHA_B}", "libs": ""})
+        self.assertNotIn("win-hrx", p["builds"])
+        self.assertEqual(p["xclbins"], "devkit-xclbins")
+        self.assertEqual((p["families"], p["xclbin_models"]), ([], []))
+
+    def test_plan_cli_pr(self):
+        # Called from Build and Test: this run's artifacts, no index.
+        plan = resolve.write_plan(head_sha=SHA_A, package_sha=SHA_B, engines="success", families="qwen3",
+                                  builds={"lin-xrt": "success", "lin-hrx": "failure"})
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "plan.json")
+            Path(path).write_text(json.dumps(plan), encoding="utf-8")
+            out = os.path.join(d, "out")
+            os.environ["GITHUB_OUTPUT"] = out
+            try:
+                self.assertEqual(quiet(resolve.main, ["plan", "--plan", path, "--mode", "pr",
+                                                      "--runtimes", "lin-xrt,lin-hrx"]), 0)
+            finally:
+                del os.environ["GITHUB_OUTPUT"]
+            values = dict(line.split("=", 1) for line in Path(out).read_text(encoding="utf-8").splitlines())
+        self.assertEqual(values["bench"], "true")
+        matrix = json.loads(values["matrix"])
+        self.assertTrue(matrix)
+        self.assertEqual({e["key"] for e in matrix}, {"lin-xrt"})
+        self.assertTrue(all(e["families"] == "qwen3" and e["libs"] == "devkit-libs-lin-xrt" for e in matrix))
+        self.assertEqual(values["head-sha"], SHA_A)
 
     def plan(self, **kw):
         p = {"schema": 1, "bench": "true", "head_sha": SHA_A, "families": "qwen3",

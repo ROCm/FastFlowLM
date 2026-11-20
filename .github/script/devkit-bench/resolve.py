@@ -1,48 +1,55 @@
 #!/usr/bin/env python3
 # Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
 # Portions of this file consist of AI-generated content.
-"""Decides what devkit-bench.yml benches, on a GitHub-hosted runner.
+"""Decides what the dev-kit benches (devkit-bench.yml) bench, on a
+GitHub-hosted runner.
 
-    resolve.py find-build    --repo R --event pull_request|schedule|any
-                             [--head-sha S] [--head-repo R] [--run-id N]
-                             [--require-success] [--wait-minutes 200]
+    resolve.py write-plan    --out plan.json --head-sha S --package-sha S
+                             --builds lin-xrt=success,lin-hrx=failure,...
+                             --engines success|failure|skipped
+                             [--families a,b] [--xclbin-models JSON]
+                             [--bench-models JSON] [--xclbins devkit-xclbins]
+    resolve.py find-build    --repo R --head-sha S [--run-id N]
+                             [--wait-minutes 200] --plan-out plan.json
                              [--artifacts-out artifacts.json]
     resolve.py find-baseline --repo R
-    resolve.py plan          --plan devkit-bench-plan.json
-                             --artifacts artifacts.json --mode pr|nightly|dispatch
+    resolve.py plan          --plan plan.json [--artifacts artifacts.json]
+                             --mode pr|nightly|dispatch
                              [--runtimes lin-xrt,lin-hrx] [--models a,b]
                              [--baseline baseline.json] [--force]
 
-find-build finds the Build and Test run whose artifacts the bench uses and
-waits (polling) for it to complete. The run must be of
-.github/workflows/build-and-test.yml in this repository, for exactly this
-head commit and head repository, of the given event (schedule: on main),
-the newest such run; a run id given (dispatch) is checked the same way.
-Nightly (schedule, no --head-sha) it is the newest completed scheduled run
-on main. It
-must have uploaded devkit-bench-plan (its summary job does when the change
-benches, and nightly) and the artifact must not have expired. A pull
-request also needs the run to have succeeded (--require-success); a
-nightly run may have failed on a product test, as long as the plan says
-the builds the bench needs succeeded. Outputs run-id, ok and reason; the
-run's artifact list goes to --artifacts-out.
+Build and Test (build-and-test.yml) calls devkit-bench.yml in the same run,
+after its builds: write-plan turns what it passes (the touched families,
+the models whose kernels were rebuilt, which portable packages and dev-kit
+builds succeeded) into the plan; their artifacts are in this run.
+
+find-build is the dispatch path only (rebenching an earlier Build and Test
+run): it finds that run and waits (polling) for it to complete. The run must
+be of .github/workflows/build-and-test.yml in this repository, for exactly
+this head commit (a run id given is checked the same way), the newest such
+run, completed with success or failure. Its plan is derived from the
+artifacts it uploaded (plan_from_artifacts): the packages and dev-kit
+libraries present, and devkit-xclbins if present. Outputs run-id, ok,
+head-sha and reason; the run's artifact list goes to --artifacts-out.
 
 find-baseline finds the newest unexpired devkit-bench-baseline artifact
-uploaded by a scheduled devkit-bench.yml run on main of this repository
-that completed (success, or failure: see baseline_run_ok), not a fork's or
-a branch's run with the same workflow name.
-Outputs baseline-run-id ("" when there is none).
+uploaded by a scheduled run on main of this repository (Build and Test's,
+or devkit-bench.yml's before it was called from there) that completed
+(success, or failure: see baseline_run_ok), not a fork's or a branch's run
+with the same workflow name. Outputs baseline-run-id ("" when there is
+none).
 
-plan reads the plan (validated field by field: it is an artifact), picks
-the models (select_models.py) and builds the bench matrix: one entry per
-runtime and model, with the package, dev-kit libraries and kernels that
-runtime's overlay takes. A runtime whose package or libraries did not
-build, or whose artifacts expired, is left out with a reason. Nightly, the
-bench runs only if dev-kit engine or kernel source changed since the commit
-the latest baseline benched (changes.py devkit_bench between the two), or
-with no baseline; otherwise the previous baseline stands. --force (dispatch)
-benches whatever the plan says. Outputs bench, matrix, docvqa-models,
-reason, and a summary on $GITHUB_STEP_SUMMARY.
+plan reads the plan (validated field by field), picks the models
+(select_models.py) and builds the bench matrix: one entry per runtime and
+model, with the package, dev-kit libraries and kernels that runtime's
+overlay takes. A runtime whose package or libraries did not build, or
+(dispatch, with --artifacts) whose artifacts expired, is left out with a
+reason. Nightly and dispatch, the bench runs only if dev-kit engine or
+kernel source changed since the commit the latest baseline benched
+(changes.py devkit_bench between the two), or with no baseline; otherwise
+the previous baseline stands. --force (dispatch) benches regardless.
+Outputs bench, matrix, docvqa, head-sha, reason, and a summary on
+$GITHUB_STEP_SUMMARY.
 
 The token (GITHUB_TOKEN, actions: read) is sent to api.github.com only.
 Standard library only.
@@ -68,7 +75,10 @@ import select_models  # noqa: E402
 API = "https://api.github.com"
 BUILD_WORKFLOW = ".github/workflows/build-and-test.yml"
 BENCH_WORKFLOW = ".github/workflows/devkit-bench.yml"
-PLAN_ARTIFACT = "devkit-bench-plan"
+# Whose scheduled runs upload the nightly baseline: Build and Test's, which
+# calls devkit-bench.yml, and devkit-bench.yml's own from before that (their
+# artifacts last 90 days).
+BASELINE_WORKFLOWS = (BUILD_WORKFLOW, BENCH_WORKFLOW)
 BASELINE_ARTIFACT = "devkit-bench-baseline"
 SHA = re.compile(r"^[0-9a-f]{40}$")
 REPO = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
@@ -77,6 +87,12 @@ FAMILY = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 # key -> (os, runtime). The keys of the plan's "builds".
 RUNTIMES = {"lin-xrt": ("linux", "xrt"), "lin-hrx": ("linux", "hrx"),
             "win-xrt": ("windows", "xrt"), "win-hrx": ("windows", "hrx")}
+# key -> Build and Test's portable package artifact ({sha}: that run's
+# github.sha, the merge commit on a pull request).
+PACKAGES = {"lin-xrt": "portable", "lin-hrx": "HRX-portable",
+            "win-xrt": "fastflowlm-windows-{sha}", "win-hrx": "HRX-fastflowlm-windows-{sha}"}
+XCLBINS_ARTIFACT = "devkit-xclbins"
+JOB_RESULTS = ("success", "failure", "cancelled", "skipped")
 PR_RUNTIMES = ("lin-xrt", "lin-hrx")
 NIGHTLY_RUNTIMES = ("lin-xrt", "lin-hrx")
 WEEKLY_RUNTIMES = ("win-xrt",)
@@ -116,21 +132,17 @@ def _full_name(obj) -> str:
     return (obj or {}).get("full_name", "") if isinstance(obj, dict) else ""
 
 
-def run_matches(run: dict, *, repo: str, head_sha: str, head_repo: str, event: str,
-                workflow: str = BUILD_WORKFLOW) -> bool:
-    """Whether a run is this repository's workflow file for this exact head
-    commit (any, when head_sha is empty: the newest nightly), head
-    repository and event (schedule: on main)."""
-    if (run.get("path") != workflow or _full_name(run.get("repository")) != repo
-            or _full_name(run.get("head_repository")) != head_repo
-            or not SHA.match(str(run.get("head_sha") or ""))
-            or (head_sha and run.get("head_sha") != head_sha)):
-        return False
-    if event != "any" and run.get("event") != event:
-        return False
-    if event == "schedule" and run.get("head_branch") != "main":
-        return False
-    return True
+def libs_artifact(key: str) -> str:
+    return f"devkit-libs-{key}"
+
+
+def run_matches(run: dict, *, repo: str, head_sha: str) -> bool:
+    """Whether a run is this repository's Build and Test, from this
+    repository's branch, for exactly this head commit."""
+    return (run.get("path") == BUILD_WORKFLOW and _full_name(run.get("repository")) == repo
+            and _full_name(run.get("head_repository")) == repo
+            and SHA.match(str(run.get("head_sha") or "")) is not None
+            and run.get("head_sha") == head_sha)
 
 
 def pick_build_run(runs: list[dict], **match) -> Optional[dict]:
@@ -154,11 +166,12 @@ def usable_artifact(index: dict, name: str) -> bool:
 
 
 def baseline_run_ok(run: dict, repo: str) -> bool:
-    """A nightly devkit-bench.yml run on this repository's main. A failed one
-    counts: a model's failed bench fails the run, and report.py only takes a
+    """A scheduled run on this repository's main of a workflow that uploads
+    the baseline (BASELINE_WORKFLOWS). A failed one counts: a model's failed
+    bench (or a product test) fails the run, and report.py only takes a
     model's usable results into the baseline (an upsert), so its artifact is
     as good as a successful run's; a cancelled run's is not."""
-    return (run.get("path") == BENCH_WORKFLOW and _full_name(run.get("repository")) == repo
+    return (run.get("path") in BASELINE_WORKFLOWS and _full_name(run.get("repository")) == repo
             and _full_name(run.get("head_repository")) == repo and run.get("event") == "schedule"
             and run.get("head_branch") == "main" and run.get("conclusion") in ("success", "failure"))
 
@@ -222,10 +235,51 @@ def parse_plan(plan) -> dict:
     return out
 
 
-def build_matrix(plan: dict, index: dict, runtimes: list[str], models: list[dict],
+def write_plan(*, head_sha: str, package_sha: str, builds: dict, engines: str, families: str = "",
+               xclbin_models: str = "[]", bench_models: str = "", xclbins: str = "") -> dict:
+    """The plan of this Build and Test run, from what it passes to
+    devkit-bench.yml: builds maps a runtime key to its portable package
+    build's result, engines is devkit-engines' result. A runtime is ok when
+    its package built and the engines built (all four, or none) or were not
+    asked for; its libraries count only when the engines built."""
+    libs_ok = engines == "success"
+    out = {"schema": 1, "bench": True, "head_sha": head_sha, "families": families,
+           "xclbin_models": xclbin_models or "[]", "bench_models": bench_models, "xclbins": xclbins,
+           "builds": {}}
+    for key, result in builds.items():
+        if key not in RUNTIMES or result not in JOB_RESULTS:
+            raise PlanError(f"builds: unexpected entry {str(key)[:40]!r}={str(result)[:20]!r}")
+        out["builds"][key] = {"ok": result == "success" and engines in ("success", "skipped"),
+                              "package": PACKAGES[key].format(sha=package_sha),
+                              "libs": libs_artifact(key) if libs_ok else ""}
+    return out
+
+
+def plan_from_artifacts(index: dict, head_sha: str) -> dict:
+    """The plan of an earlier Build and Test run (dispatch), from what it
+    uploaded: a runtime whose package is there is benched, with its dev-kit
+    libraries when those are there, and the kernels when devkit-xclbins is.
+    Which families and kernels the change touched is not known: dispatch
+    names its models, or benches the assigned set."""
+    builds = {}
+    for key, pattern in PACKAGES.items():
+        names = [n for n in index if re.fullmatch(pattern.format(sha="[0-9a-f]{40}"), n)]
+        if not names:
+            continue
+        name = sorted(names)[-1]
+        builds[key] = {"ok": usable_artifact(index, name), "package": name,
+                       "libs": libs_artifact(key) if usable_artifact(index, libs_artifact(key)) else ""}
+    return {"schema": 1, "bench": True, "head_sha": head_sha, "families": "", "xclbin_models": "[]",
+            "bench_models": "", "builds": builds,
+            "xclbins": XCLBINS_ARTIFACT if usable_artifact(index, XCLBINS_ARTIFACT) else ""}
+
+
+def build_matrix(plan: dict, index: Optional[dict], runtimes: list[str], models: list[dict],
                  all_families: set, overlay_all: bool) -> tuple[list[dict], list[str]]:
-    """(matrix entries, notes about runtimes left out). overlay_all
-    (nightly): every engine's library goes over the package, as the plan's
+    """(matrix entries, notes about runtimes left out). index is the run's
+    artifacts (dispatch: another run's, which may have expired); None for
+    this run's own, which its builds just uploaded. overlay_all (nightly,
+    dispatch): every engine's library goes over the package, as the plan's
     families are those of a pull request."""
     notes, entries = [], []
     for key in runtimes:
@@ -233,7 +287,8 @@ def build_matrix(plan: dict, index: dict, runtimes: list[str], models: list[dict
         if b is None or not b["ok"]:
             notes.append(f"{key}: its package or dev-kit libraries did not build; not benched")
             continue
-        missing = [n for n in (b["package"], b["libs"], plan["xclbins"]) if n and not usable_artifact(index, n)]
+        missing = [n for n in (b["package"], b["libs"], plan["xclbins"])
+                   if n and index is not None and not usable_artifact(index, n)]
         if missing:
             notes.append(f"{key}: artifacts missing or expired ({', '.join(missing)}): push or re-run "
                          f"Build and Test; not benched")
@@ -284,57 +339,65 @@ def step_summary(text: str) -> None:
             fh.write(text + "\n")
 
 
-def cmd_find_build(args) -> int:
-    if (not REPO.match(args.repo) or not REPO.match(args.head_repo or args.repo)
-            or not (SHA.match(args.head_sha) or (not args.head_sha and args.event == "schedule"))):
-        print("::error::bad --repo, --head-sha or --head-repo")
+def cmd_write_plan(args) -> int:
+    """This run's plan, from the inputs Build and Test passed."""
+    try:
+        if not SHA.match(args.head_sha) or not SHA.match(args.package_sha):
+            raise PlanError("bad --head-sha or --package-sha")
+        if args.engines not in JOB_RESULTS:
+            raise PlanError(f"--engines: unexpected value {args.engines[:20]!r}")
+        builds = dict(item.split("=", 1) for item in args.builds.split(",") if "=" in item)
+        plan = write_plan(head_sha=args.head_sha, package_sha=args.package_sha, builds=builds,
+                          engines=args.engines, families=args.families, xclbin_models=args.xclbin_models,
+                          bench_models=args.bench_models, xclbins=args.xclbins)
+        parse_plan(plan)
+    except PlanError as exc:
+        print(f"::error::bench plan: {exc}")
         return 2
-    match = {"repo": args.repo, "head_sha": args.head_sha, "head_repo": args.head_repo or args.repo,
-             "event": args.event}
+    Path(args.out).write_text(json.dumps(plan, indent=1), encoding="utf-8")
+    print(json.dumps(plan, indent=1))
+    return 0
+
+
+def cmd_find_build(args) -> int:
+    """Dispatch: the Build and Test run whose artifacts to bench."""
+    if not REPO.match(args.repo) or not SHA.match(args.head_sha) or (args.run_id and not args.run_id.isdigit()):
+        print("::error::bad --repo, --head-sha or --run-id")
+        return 2
     deadline = time.monotonic() + args.wait_minutes * 60
-    run = None
     while True:
         if args.run_id:
             candidate = api_get(f"repos/{args.repo}/actions/runs/{int(args.run_id)}")
-            run = candidate if run_matches(candidate, **{**match, "event": "any"}) else None
+            run = candidate if run_matches(candidate, repo=args.repo, head_sha=args.head_sha) else None
             if run is None:
                 write_outputs({"ok": "false", "run-id": "", "reason": "run is not this repository's "
                                "Build and Test run for this commit"})
                 return 0
         else:
-            params = {"per_page": 100}
-            if args.head_sha:
-                params["head_sha"] = args.head_sha
-            else:
-                params["status"] = "completed"
-            if args.event != "any":
-                params["event"] = args.event
-            if args.event == "schedule":
-                params["branch"] = "main"
-            runs = api_get(f"repos/{args.repo}/actions/workflows/build-and-test.yml/runs", params)
-            run = pick_build_run(runs.get("workflow_runs") or [], **match)
+            runs = api_get(f"repos/{args.repo}/actions/workflows/build-and-test.yml/runs",
+                           {"per_page": 100, "head_sha": args.head_sha})
+            run = pick_build_run(runs.get("workflow_runs") or [], repo=args.repo, head_sha=args.head_sha)
         if run is not None and run.get("status") == "completed":
             break
         if time.monotonic() >= deadline:
             write_outputs({"ok": "false", "run-id": "", "reason": "no completed Build and Test run for "
-                           f"{args.head_sha[:10]} within {args.wait_minutes} min"})
+                           f"{args.head_sha[:10]} within {args.wait_minutes:g} min"})
             return 0
         time.sleep(args.poll_seconds)
     conclusion = run.get("conclusion")
-    allowed = ("success",) if args.require_success else ("success", "failure")
-    if conclusion not in allowed:
+    if conclusion not in ("success", "failure"):
         write_outputs({"ok": "false", "run-id": str(run["id"]),
                        "reason": f"Build and Test run {run['id']} concluded {conclusion}"})
         return 0
-    artifacts = list_artifacts(args.repo, run["id"])
+    index = artifact_index(list_artifacts(args.repo, run["id"]))
     if args.artifacts_out:
-        Path(args.artifacts_out).write_text(json.dumps(artifact_index(artifacts)), encoding="utf-8")
-    index = artifact_index(artifacts)
-    if not usable_artifact(index, PLAN_ARTIFACT):
-        why = "expired" if PLAN_ARTIFACT in index else "not uploaded (the change benches nothing)"
+        Path(args.artifacts_out).write_text(json.dumps(index), encoding="utf-8")
+    plan = plan_from_artifacts(index, run["head_sha"])
+    if not plan["builds"]:
         write_outputs({"ok": "false", "run-id": str(run["id"]),
-                       "reason": f"Build and Test run {run['id']}: {PLAN_ARTIFACT} {why}"})
+                       "reason": f"Build and Test run {run['id']} uploaded no portable package"})
         return 0
+    Path(args.plan_out).write_text(json.dumps(plan, indent=1), encoding="utf-8")
     write_outputs({"ok": "true", "run-id": str(run["id"]), "head-sha": run["head_sha"],
                    "reason": f"Build and Test run {run['id']}"})
     return 0
@@ -359,22 +422,21 @@ def cmd_plan(args) -> int:
     no = {"bench": "false", "matrix": "[]", "docvqa": "false"}
     try:
         plan = parse_plan(json.loads(Path(args.plan).read_text(encoding="utf-8")))
-        index = json.loads(Path(args.artifacts).read_text(encoding="utf-8"))
+        index = json.loads(Path(args.artifacts).read_text(encoding="utf-8")) if args.artifacts else None
     except (OSError, ValueError) as exc:
         write_outputs({**no, "reason": f"unreadable plan: {exc}"})
         step_summary(f"### Dev-kit bench\n\nNot benched: unreadable plan ({exc}).")
         return 0
-    if args.head_sha and plan["head_sha"] != args.head_sha:
-        write_outputs({**no, "reason": f"the plan is for {plan['head_sha'][:10]}, not {args.head_sha[:10]}"})
-        step_summary("### Dev-kit bench\n\nNot benched: Build and Test's plan is for another commit.")
-        return 0
     if not plan["bench"] and not args.force:
-        write_outputs({**no, "reason": "Build and Test's plan: no dev-kit engine or kernel source to bench"})
+        write_outputs({**no, "reason": "no dev-kit engine or kernel source to bench"})
         step_summary("### Dev-kit bench\n\nNot benched: no dev-kit engine or kernel source changed.")
         return 0
 
     notes = []
-    if args.mode == "nightly" and not args.force:
+    # A pull request benches because its change is source (Build and Test's
+    # changes devkit-bench); the nightly and a dispatch only when the source
+    # changed since the baseline.
+    if args.mode in ("nightly", "dispatch") and not args.force:
         base = ""
         if args.baseline and Path(args.baseline).is_file():
             try:
@@ -386,7 +448,7 @@ def cmd_plan(args) -> int:
             if not changed:
                 write_outputs({**no, "reason": f"no dev-kit engine or kernel source change since the "
                                f"baseline's {base[:10]}: the previous baseline stands"})
-                step_summary(f"### Dev-kit bench (nightly)\n\nNot benched: nothing to bench changed "
+                step_summary(f"### Dev-kit bench ({args.mode})\n\nNot benched: nothing to bench changed "
                              f"between the baseline's `{base[:10]}` and `{plan['head_sha'][:10]}`; "
                              f"the previous baseline stands.")
                 return 0
@@ -449,30 +511,38 @@ def cmd_plan(args) -> int:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("write-plan")
+    p.add_argument("--out", required=True)
+    p.add_argument("--head-sha", required=True, help="the commit benched")
+    p.add_argument("--package-sha", required=True, help="the run's github.sha (Windows package names)")
+    p.add_argument("--builds", required=True, help="key=result,... of the portable package builds")
+    p.add_argument("--engines", required=True, help="devkit-engines' result")
+    p.add_argument("--families", default="")
+    p.add_argument("--xclbin-models", default="[]")
+    p.add_argument("--bench-models", default="")
+    p.add_argument("--xclbins", default="")
     p = sub.add_parser("find-build")
     p.add_argument("--repo", required=True)
-    p.add_argument("--event", choices=("pull_request", "schedule", "any"), required=True)
     p.add_argument("--head-sha", required=True)
-    p.add_argument("--head-repo", default="")
     p.add_argument("--run-id", default="")
-    p.add_argument("--require-success", action="store_true")
     p.add_argument("--wait-minutes", type=float, default=200)
     p.add_argument("--poll-seconds", type=float, default=60)
+    p.add_argument("--plan-out", required=True)
     p.add_argument("--artifacts-out", default="")
     p = sub.add_parser("find-baseline")
     p.add_argument("--repo", required=True)
     p = sub.add_parser("plan")
     p.add_argument("--plan", required=True)
-    p.add_argument("--artifacts", required=True)
+    p.add_argument("--artifacts", default="", help="another run's artifact list (dispatch)")
     p.add_argument("--mode", choices=("pr", "nightly", "dispatch"), required=True)
     p.add_argument("--runtimes", default=",".join(PR_RUNTIMES))
     p.add_argument("--models", default="")
     p.add_argument("--baseline", default="")
     p.add_argument("--force", action="store_true")
-    p.add_argument("--head-sha", default="", help="the commit the plan must be for")
     p.add_argument("--repo-root", default=str(HERE.parents[2]))
     args = ap.parse_args(argv)
-    return {"find-build": cmd_find_build, "find-baseline": cmd_find_baseline, "plan": cmd_plan}[args.cmd](args)
+    return {"write-plan": cmd_write_plan, "find-build": cmd_find_build, "find-baseline": cmd_find_baseline,
+            "plan": cmd_plan}[args.cmd](args)
 
 
 if __name__ == "__main__":

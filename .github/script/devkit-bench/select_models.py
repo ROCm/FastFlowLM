@@ -3,8 +3,8 @@
 # Portions of this file consist of AI-generated content.
 """Which models the dev-kit benches run.
 
-The inputs are read from Build and Test's devkit-bench-plan artifact and this
-checkout:
+The inputs are the bench plan (resolve.py: what Build and Test passed to
+devkit-bench.yml, or a dispatched run's artifacts) and this checkout:
 
   pull request  the models of the dev-kit engines serving the touched
                 families (engines.json "models", as IRON's

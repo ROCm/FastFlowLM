@@ -24,7 +24,7 @@ other free text from an artifact. Per-question reports stay in the result
 artifacts.
 
 baseline.json (schema 1):
-  {"schema": 1, "sha": <commit benched>, "run_id": <devkit-bench run>,
+  {"schema": 1, "sha": <commit benched>, "run_id": <the run that benched>,
    "updated": "YYYY-MM-DD",
    "entries": {<key, e.g. lin-xrt>: {<model>: {
        "gsm8k":  {score, total, unanswered, ..., server, sha, run_id},
@@ -316,7 +316,7 @@ def main(argv=None) -> int:
     ap.add_argument("--mode", choices=("pr", "nightly", "dispatch"), required=True)
     ap.add_argument("--head-sha", required=True)
     ap.add_argument("--build-run-id", default="")
-    ap.add_argument("--run-id", default="", help="this devkit-bench run")
+    ap.add_argument("--run-id", default="", help="this run (Build and Test's, or a dispatched devkit-bench.yml's)")
     ap.add_argument("--baseline", default="")
     ap.add_argument("--baseline-run-id", default="")
     ap.add_argument("--summary", required=True)
