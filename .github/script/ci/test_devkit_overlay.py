@@ -301,6 +301,54 @@ class Cli(unittest.TestCase):
                          prebuilt("xrt", "libmha.so").read_bytes())
 
 
+class RequireAll(unittest.TestCase):
+    """--require-all (the dev-kit full refresh): every NPU catalog model of
+    the package is required, so every kernel it loads counts as tested."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.root = self.tmp / "pkg"
+        (self.root / "xclbins" / "D3-Lite-NPU2").mkdir(parents=True)
+        (self.root / "model_list.json").write_text(json.dumps(CATALOG), encoding="utf-8")
+        self.xclbins = self.tmp / "xclbins"
+        (self.xclbins / "D3-Lite-NPU2").mkdir(parents=True)
+        (self.xclbins / "D3-Lite-NPU2" / "k.xclbin").write_bytes(b"new")
+
+    def run_main(self, *extra: str) -> tuple[int, str, dict]:
+        manifest = self.tmp / "manifest.json"
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = do.main(["--root", str(self.root), "--os", "linux", "--xclbins", str(self.xclbins),
+                            "--manifest", str(manifest), "--runtime", "xrt", "--xclbins-artifact",
+                            "devkit-xclbins", "--head-sha", "a" * 40, "--base-sha", "b" * 40, *extra])
+        data = json.loads(manifest.read_text(encoding="utf-8")) if manifest.is_file() else {}
+        return code, out.getvalue(), data
+
+    def test_every_catalog_model_is_required(self):
+        code, out, data = self.run_main("--require-all", "--full-refresh")
+        self.assertEqual(code, 0, out)
+        self.assertIn("required=d3:lite,llama3.2:1b,qwen3:0.6b,qwen3:8b\n", out)
+        self.assertIn("test=true\n", out)
+        self.assertTrue(data["tests_ran"] and data["full_refresh"])
+        # A kernel of a model nothing else selected is tested, through --require-all.
+        self.assertEqual([(f["repo_path"], f["tested"]) for f in data["files"]],
+                         [("src/xclbins/D3-Lite-NPU2/k.xclbin", True)])
+
+    def test_without_it_the_kernel_is_untested(self):
+        code, out, data = self.run_main()
+        self.assertEqual(code, 0, out)
+        self.assertIn("test=false\n", out)
+        self.assertEqual([f["tested"] for f in data["files"]], [False])
+
+    def test_empty_catalog(self):
+        (self.root / "model_list.json").write_text(json.dumps({"models": {}}), encoding="utf-8")
+        code, out, data = self.run_main("--require-all")
+        self.assertEqual(code, 0, out)
+        self.assertIn("required=\n", out)
+        self.assertFalse(data["tests_ran"])
+
+
 def do_units(case: Cli, units: list[str]) -> tuple[int, str]:
     """Runs the overlay with every family, restricted to these units."""
     original = do.units_to_overlay
