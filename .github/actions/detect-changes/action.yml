@@ -100,7 +100,8 @@ outputs:
       changed files are unknown. Documentation, CI-only changes (the bench
       CI included), the kernel build image and toolchain.lock, and the
       converter, pybind and launchlib give "false". Build and Test's
-      summary job puts it in the devkit-bench-plan artifact.
+      devkit-bench job calls devkit-bench.yml on a pull request when it is
+      "true".
     value: ${{ steps.changes.outputs.devkit_bench }}
   tier:
     description: install, pr or full.

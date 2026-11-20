@@ -7,6 +7,7 @@ baseline.
     report.py --results <dir> --matrix <json file> --mode pr|nightly|dispatch
               --head-sha <sha> [--build-run-id N] [--baseline <dir>]
               [--baseline-run-id N] --summary <file> [--new-baseline <dir>]
+              [--outputs <file>]
 
 <results> holds one directory per bench job (artifact
 devkit-bench-result-<key>-<model>), each with meta.json, machine.json,
@@ -24,7 +25,7 @@ other free text from an artifact. Per-question reports stay in the result
 artifacts.
 
 baseline.json (schema 1):
-  {"schema": 1, "sha": <commit benched>, "run_id": <devkit-bench run>,
+  {"schema": 1, "sha": <commit benched>, "run_id": <the run that benched>,
    "updated": "YYYY-MM-DD",
    "entries": {<key, e.g. lin-xrt>: {<model>: {
        "gsm8k":  {score, total, unanswered, ..., server, sha, run_id},
@@ -34,6 +35,13 @@ baseline.json (schema 1):
 usable accuracy results and successful perf runs replace its old ones; a
 model whose bench failed keeps its old numbers; others are kept as they
 were (an upsert, as IRON's merge-pr.yml did into baseline/).
+
+--outputs (the step's $GITHUB_OUTPUT) gets hard-gate=fail when some model's
+accuracy run failed acc_common's hard gate (no predictions, or too many
+unanswered), else hard-gate=pass: a bench job that failed for any other
+reason (perf giving no result, a pull, a timeout, a lost runner) is not a
+hard-gate failure. Build and Test's summary fails a pull request on
+hard-gate=fail only.
 
 Exit 0; the bench jobs carry the hard gate. Standard library only.
 """
@@ -253,6 +261,12 @@ def acc_section(results: list[dict], baseline: dict, key: str, bench: str, warni
     return lines if any_row else []
 
 
+def hard_gate_failures(results: list[dict]) -> list[str]:
+    """key model bench of every accuracy run that failed acc_common's gate."""
+    return [f"{r['key']} {r['model']} {bench}" for r in results for bench in compare.ACC_KEYS
+            if r["acc"].get(bench) is not None and not r["acc"][bench]["usable"]]
+
+
 def render(results: list[dict], baseline: dict, matrix: list[dict], *, mode: str, head_sha: str,
            build_run_id: Optional[int], baseline_run_id: Optional[int]) -> str:
     warnings: list[str] = []
@@ -316,11 +330,12 @@ def main(argv=None) -> int:
     ap.add_argument("--mode", choices=("pr", "nightly", "dispatch"), required=True)
     ap.add_argument("--head-sha", required=True)
     ap.add_argument("--build-run-id", default="")
-    ap.add_argument("--run-id", default="", help="this devkit-bench run")
+    ap.add_argument("--run-id", default="", help="this run (Build and Test's, or a dispatched devkit-bench.yml's)")
     ap.add_argument("--baseline", default="")
     ap.add_argument("--baseline-run-id", default="")
     ap.add_argument("--summary", required=True)
     ap.add_argument("--new-baseline", default="")
+    ap.add_argument("--outputs", default="", help="appends hard-gate=pass|fail (GITHUB_OUTPUT)")
     args = ap.parse_args(argv)
     if not SHA.match(args.head_sha):
         ap.error("--head-sha must be a full commit id")
@@ -335,6 +350,9 @@ def main(argv=None) -> int:
     Path(args.summary).parent.mkdir(parents=True, exist_ok=True)
     Path(args.summary).write_text(text, encoding="utf-8")
     print(text)
+    if args.outputs:
+        with open(args.outputs, "a", encoding="utf-8") as fh:
+            fh.write(f"hard-gate={'fail' if hard_gate_failures(results) else 'pass'}\n")
     if args.new_baseline:
         out = Path(args.new_baseline)
         out.mkdir(parents=True, exist_ok=True)

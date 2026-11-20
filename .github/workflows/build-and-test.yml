@@ -48,6 +48,10 @@ name: Build and Test
 # whose dev-kit engines or kernels serve some model, the Linux and Windows,
 # XRT and HRX portable packages build too, and the dev-kit overlay tests
 # (test-*-devkit) run those engines and kernels over them on the NPU runners.
+# When such a change is dev-kit engine or kernel source (changes.py
+# devkit_bench), devkit-bench then runs the perf and accuracy benches
+# (devkit-bench.yml) on those builds; the nightly run benches them too when
+# that source changed since the last nightly baseline.
 # The portable test jobs and Test Windows HIPEP otherwise get 120 minutes on
 # the pr tier and 360 on the full one, which runs every model and every d3
 # size and may first download tens of GB of weights.
@@ -143,8 +147,7 @@ jobs:
       devkit-areas: ${{ steps.detect.outputs.devkit-areas }}
       devkit-families: ${{ steps.detect.outputs.devkit-families }}
       devkit-overlay: ${{ steps.detect.outputs.devkit-overlay }}
-      # Whether devkit-bench.yml benches this commit: summary puts it in the
-      # devkit-bench-plan artifact (another run cannot read job outputs).
+      # Whether a pull request runs the dev-kit benches (devkit-bench).
       devkit-bench: ${{ steps.detect.outputs.devkit-bench }}
     steps:
       - name: Checkout code
@@ -1423,6 +1426,72 @@ jobs:
           harness-ref: ${{ github.event.pull_request.base.sha }}
           label: windows-hrx-devkit
 
+  # ── Dev-kit benches ──────────────────────────────────────────────────────
+  # Perf (flm bench, A/B against the base package on the same runner) and
+  # GSM8K accuracy of the dev-kit engines and kernels over this run's
+  # portable packages (devkit-bench.yml, which documents them), on the NPU
+  # sweep runners: on a pull request whose dev-kit engine or kernel source
+  # changed (changes devkit-bench; never for docs or CI alone), and nightly,
+  # which benches only when that source changed since the commit of the
+  # latest nightly baseline and uploads the next baseline. Not on pushes,
+  # dispatches or a release. Gated as the overlay tests (npu-gate,
+  # npu-approve: devkit-bench implies devkit-overlay, so npu-approve already
+  # asks for it). Waits for the overlay tests, so the benches do not take the
+  # sweep runners from them. The resolve job inside decides per runtime from
+  # the build results passed here; a failed build leaves its runtime out.
+  # summary's Dev-kit checks fails a pull request only when a model failed
+  # acc_common's hard gate (the bench's hard-gate output); any other bench
+  # failure (perf giving no result, a pull, a timeout, the GitHub API) only
+  # warns there, as do slowdowns and accuracy drops. summary, the required
+  # check, waits for the benches, so a bench pull request's check takes as
+  # long as its benches (three at a time, up to 150 minutes each).
+  # Nightly, the benches run beside the full-tier product tests on the same
+  # sweep runners (each job has its own runner, so the numbers are not
+  # affected; the night's queue is longer). devkit-bench-comment.yml posts
+  # the results on the pull request.
+  # actions: read: the nightly baseline is another run's artifact.
+  devkit-bench:
+    needs:
+      - changes
+      - npu-gate
+      - npu-approve
+      - devkit-engines
+      - devkit-xclbins
+      - build-lin-xrt-portable
+      - build-lin-hrx-portable
+      - build-win-xrt
+      - build-win-hrx
+      - test-lin-xrt-devkit
+      - test-lin-hrx-devkit
+      - test-win-xrt-devkit
+      - test-win-hrx-devkit
+    if: >-
+      ${{ !cancelled() && !inputs.release
+      && ((github.event_name == 'schedule'
+           || (github.event_name == 'push'
+               && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')))
+           || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+          || (needs.npu-gate.result == 'success'
+              && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
+      && needs.changes.result == 'success'
+      && (github.event_name == 'schedule'
+          || (github.event_name == 'pull_request' && needs.changes.outputs.devkit-bench == 'true')) }}
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/devkit-bench.yml
+    with:
+      mode: ${{ github.event_name == 'schedule' && 'nightly' || 'pr' }}
+      head-sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      builds: >-
+        lin-xrt=${{ needs.build-lin-xrt-portable.result }},lin-hrx=${{ needs.build-lin-hrx-portable.result }},win-xrt=${{ needs.build-win-xrt.result }},win-hrx=${{ needs.build-win-hrx.result }}
+      engines: ${{ needs.devkit-engines.result }}
+      # Nightly benches the assigned set over every engine.
+      families: ${{ github.event_name == 'pull_request' && needs.changes.outputs.devkit-families || '' }}
+      xclbin-models: ${{ needs.devkit-xclbins.outputs.touched-models || '[]' }}
+      bench-models: ${{ github.event_name == 'pull_request' && needs.devkit-xclbins.outputs.bench-models || '' }}
+      xclbins: ${{ needs.devkit-xclbins.result == 'success' && needs.devkit-xclbins.outputs.touched-models != '' && needs.devkit-xclbins.outputs.touched-models != '[]' && 'devkit-xclbins' || '' }}
+
   # ── Summary ──────────────────────────────────────────────────────────────
 
   # On a gated run (pull requests), make summary the one required check: a
@@ -1464,6 +1533,7 @@ jobs:
       - test-lin-hrx-devkit
       - test-win-xrt-devkit
       - test-win-hrx-devkit
+      - devkit-bench
     if: always()
     runs-on: ubuntu-latest
     outputs:
@@ -1475,6 +1545,7 @@ jobs:
         with:
           sparse-checkout: .github/script/ci
           filter: blob:none
+          persist-credentials: false
 
       - name: Download reports
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -1562,10 +1633,15 @@ jobs:
       # whose change detection failed: every job after it is then skipped,
       # and a skip would otherwise read as a pass. An overlay test skipped
       # because nothing was requested, or because no family was touched and
-      # the kernel build rebuilt no model's kernels, passes. Other runs only
-      # show the
-      # dev-kit jobs' own results: the dev kit ships in no package, so it
-      # does not hold up a release.
+      # the kernel build rebuilt no model's kernels, passes. The dev-kit
+      # benches (devkit-bench) fail it only when a model failed acc_common's
+      # hard gate (hard-gate=fail); any other failure of theirs (perf giving
+      # no result, a pull, a timeout, a lost runner, the GitHub API) only
+      # warns, as slowdowns and accuracy drops do; skipped, they pass
+      # (nothing to bench, or a build or the gate held them, which the
+      # checks above already report). Other runs only show the dev-kit
+      # jobs' own results: the dev kit ships in no package, so it does not
+      # hold up a release.
       - name: Dev-kit checks
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         env:
@@ -1573,6 +1649,8 @@ jobs:
           DEVKIT_STATIC: ${{ needs.devkit-static.result }}
           DEVKIT_ENGINES: ${{ needs.devkit-engines.result }}
           DEVKIT_XCLBINS: ${{ needs.devkit-xclbins.result }}
+          DEVKIT_BENCH: ${{ needs.devkit-bench.result }}
+          DEVKIT_BENCH_GATE: ${{ needs.devkit-bench.outputs.hard-gate }}
           OVERLAY: ${{ needs.changes.outputs.devkit-overlay }}
           OVERLAY_FAMILIES: ${{ needs.changes.outputs.devkit-families }}
           OVERLAY_MODELS: ${{ needs.devkit-xclbins.outputs.touched-models }}
@@ -1582,13 +1660,18 @@ jobs:
             test-win-xrt-devkit=${{ needs.test-win-xrt-devkit.result }}
             test-win-hrx-devkit=${{ needs.test-win-hrx-devkit.result }}
         run: |
-          echo "changes: ${CHANGES}; devkit-static: ${DEVKIT_STATIC}; devkit-engines: ${DEVKIT_ENGINES}; devkit-xclbins: ${DEVKIT_XCLBINS}"
+          echo "changes: ${CHANGES}; devkit-static: ${DEVKIT_STATIC}; devkit-engines: ${DEVKIT_ENGINES}; devkit-xclbins: ${DEVKIT_XCLBINS}; devkit-bench: ${DEVKIT_BENCH} (hard gate: ${DEVKIT_BENCH_GATE:-not reported})"
           echo "devkit-overlay: ${OVERLAY:-none}; ${OVERLAY_TESTS}"
           rc=0
           case "${CHANGES}" in success) ;; *) echo "::error::changes did not succeed, so the dev-kit and build jobs were skipped"; rc=1 ;; esac
           case "${DEVKIT_STATIC}" in success|skipped) ;; *) echo "::error::devkit-static did not pass"; rc=1 ;; esac
           case "${DEVKIT_ENGINES}" in success|skipped) ;; *) echo "::error::devkit-engines did not pass"; rc=1 ;; esac
           case "${DEVKIT_XCLBINS}" in success|skipped) ;; *) echo "::error::devkit-xclbins did not pass"; rc=1 ;; esac
+          if [ "${DEVKIT_BENCH_GATE}" = fail ]; then
+            echo "::error::devkit-bench: a model failed acc_common's hard gate (no predictions, or too many unanswered; see the bench summary)"; rc=1
+          else
+            case "${DEVKIT_BENCH}" in success|skipped) ;; *) echo "::warning::devkit-bench did not pass (${DEVKIT_BENCH}) but no model failed the hard gate: perf, a pull, a timeout or the bench infrastructure; see its jobs" ;; esac
+          fi
           requested=false
           if [ "${OVERLAY}" = true ] && { [ -n "${OVERLAY_FAMILIES}" ] || { [ -n "${OVERLAY_MODELS}" ] && [ "${OVERLAY_MODELS}" != "[]" ]; }; }; then
             requested=true
@@ -1605,57 +1688,3 @@ jobs:
             esac
           done
           exit "${rc}"
-
-      # What devkit-bench.yml benches for this run (it cannot read this
-      # run's job outputs, only its artifacts): on a pull request whose
-      # dev-kit engine or kernel source changed (changes devkit-bench), and
-      # nightly. The packages, dev-kit libraries and kernels that built, the
-      # touched families and the models whose kernels were rebuilt. The bench
-      # workflow validates every field: a pull request's run writes it.
-      - name: Write the dev-kit bench plan
-        id: bench-plan
-        if: >-
-          ${{ !cancelled() && !inputs.release
-          && (github.event_name == 'schedule'
-              || (github.event_name == 'pull_request' && needs.changes.outputs.devkit-bench == 'true')) }}
-        env:
-          BENCH: ${{ github.event_name == 'schedule' && 'true' || needs.changes.outputs.devkit-bench }}
-          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-          FAMILIES: ${{ github.event_name == 'pull_request' && needs.changes.outputs.devkit-families || '' }}
-          XCLBIN_MODELS: ${{ needs.devkit-xclbins.outputs.touched-models || '[]' }}
-          BENCH_MODELS: ${{ github.event_name == 'pull_request' && needs.devkit-xclbins.outputs.bench-models || '' }}
-          XCLBINS: ${{ needs.devkit-xclbins.result == 'success' && needs.devkit-xclbins.outputs.touched-models != '' && needs.devkit-xclbins.outputs.touched-models != '[]' && 'devkit-xclbins' || '' }}
-          ENGINES: ${{ needs.devkit-engines.result }}
-          LIN_XRT: ${{ needs.build-lin-xrt-portable.result }}
-          LIN_HRX: ${{ needs.build-lin-hrx-portable.result }}
-          WIN_XRT: ${{ needs.build-win-xrt.result }}
-          WIN_HRX: ${{ needs.build-win-hrx.result }}
-        run: |
-          python3 - <<'EOF'
-          import json, os
-          e = os.environ
-          sha = e["GITHUB_SHA"]
-          libs_ok = e["ENGINES"] == "success"
-          def build(result, package, libs):
-              # The engines built (all four, or none) or were not asked for.
-              ok = result == "success" and e["ENGINES"] in ("success", "skipped")
-              return {"ok": ok, "package": package, "libs": libs if libs_ok else ""}
-          plan = {"schema": 1, "bench": e["BENCH"] == "true", "head_sha": e["HEAD_SHA"],
-                  "families": e["FAMILIES"], "xclbin_models": e["XCLBIN_MODELS"],
-                  "bench_models": e["BENCH_MODELS"], "xclbins": e["XCLBINS"],
-                  "builds": {"lin-xrt": build(e["LIN_XRT"], "portable", "devkit-libs-lin-xrt"),
-                             "lin-hrx": build(e["LIN_HRX"], "HRX-portable", "devkit-libs-lin-hrx"),
-                             "win-xrt": build(e["WIN_XRT"], f"fastflowlm-windows-{sha}", "devkit-libs-win-xrt"),
-                             "win-hrx": build(e["WIN_HRX"], f"HRX-fastflowlm-windows-{sha}", "devkit-libs-win-hrx")}}
-          with open("devkit-bench-plan.json", "w", encoding="utf-8") as f:
-              json.dump(plan, f, indent=1)
-          print(json.dumps(plan, indent=1))
-          EOF
-
-      - name: Upload the dev-kit bench plan
-        if: ${{ !cancelled() && steps.bench-plan.outcome == 'success' }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: devkit-bench-plan
-          path: devkit-bench-plan.json
-          retention-days: 7

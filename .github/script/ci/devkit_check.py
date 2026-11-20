@@ -78,14 +78,18 @@ Checks, each failure printed as "devkit_check: error: ..." (exit 1):
                 on a line that is not a comment
   bench comment .github/workflows/devkit-bench-comment.yml, which runs with a
                 write token on artifacts a fork can write: it triggers on
-                workflow_run of exactly devkit-bench.yml's name; its
-                permissions are exactly actions: read and pull-requests:
-                write, at the workflow level and nowhere else; it checks out
-                nothing; its job condition pins the triggering run to
-                devkit-bench.yml's path in this repository, pull_request
-                events; no ${{ github.event.* }} expression appears in a
-                run: script. devkit-bench.yml keeps contents: read and
-                actions: read. Skipped when the files are absent
+                workflow_run of exactly build-and-test.yml's name (Build
+                and Test calls devkit-bench.yml, which uploads the
+                summary, in its own run); its permissions are exactly
+                actions: read and pull-requests: write, at the workflow
+                level and nowhere else; it checks out nothing; its job
+                condition pins the triggering run to build-and-test.yml's
+                path in this repository, pull_request events; no
+                ${{ github.event.* }} expression appears in a run: script.
+                devkit-bench.yml keeps contents: read and actions: read
+                and grants no write; build-and-test.yml's job calling it
+                grants exactly contents: read and actions: read and passes
+                no secrets. Skipped when the files are absent
   notices       with --base: every file added under flm-dev-kit/ between the
                 merge base of --base and --head (default HEAD), of a source or
                 script type, has an AMD copyright notice in its first 15
@@ -861,6 +865,8 @@ def check_notices(repo: Path, base: str, head: str, errors: list, notes: list) -
 
 BENCH_WORKFLOW = ".github/workflows/devkit-bench.yml"
 BENCH_COMMENT_WORKFLOW = ".github/workflows/devkit-bench-comment.yml"
+# Calls BENCH_WORKFLOW; the comment workflow follows its runs.
+BUILD_WORKFLOW = ".github/workflows/build-and-test.yml"
 
 
 def _top_block(text: str, key: str) -> list[str]:
@@ -877,6 +883,21 @@ def _top_block(text: str, key: str) -> list[str]:
             if line.strip() and not line.strip().startswith("#"):
                 out.append(line)
     return out
+
+
+def _caller_jobs(text: str, workflow: str) -> list[list[str]]:
+    """The jobs (their lines) of a workflow that call ./<workflow>."""
+    jobs, current = [], None
+    for line in text.splitlines():
+        if re.match(r"^  [A-Za-z0-9_-]+:\s*(#.*)?$", line):
+            current = []
+            jobs.append(current)
+        elif current is not None and line and not line[0].isspace() and not line.startswith("#"):
+            current = None
+        elif current is not None:
+            current.append(line)
+    return [j for j in jobs if any(re.match(rf"^    uses:\s*\./{re.escape(workflow)}\s*(#.*)?$", line)
+                                   for line in j)]
 
 
 def _run_scripts(text: str) -> list[str]:
@@ -905,16 +926,18 @@ def check_bench_workflows(repo: Path, errors: list) -> int:
     try:
         bench = (repo / BENCH_WORKFLOW).read_text(encoding="utf-8")
         comment = (repo / BENCH_COMMENT_WORKFLOW).read_text(encoding="utf-8")
+        build = (repo / BUILD_WORKFLOW).read_text(encoding="utf-8")
     except OSError:
         return 0
     where = BENCH_COMMENT_WORKFLOW
-    name = re.search(r"^name:\s*(.+?)\s*$", bench, re.M)
-    bench_name = name.group(1).strip("'\"") if name else ""
+    name = re.search(r"^name:\s*(.+?)\s*$", build, re.M)
+    build_name = name.group(1).strip("'\"") if name else ""
     on = _top_block(comment, "on")
     wf = re.search(r"workflows:\s*\[\s*['\"]?([^'\"\]]+?)['\"]?\s*\]", "\n".join(on))
-    if not bench_name or not wf or wf.group(1) != bench_name:
-        errors.append(f"{where}: on.workflow_run.workflows must be [\"{bench_name}\"], the name of "
-                      f"{BENCH_WORKFLOW} (workflow_run matches names, so a rename breaks it silently)")
+    if not build_name or not wf or wf.group(1) != build_name:
+        errors.append(f"{where}: on.workflow_run.workflows must be [\"{build_name}\"], the name of "
+                      f"{BUILD_WORKFLOW}, which runs the benches (workflow_run matches names, so a rename "
+                      f"breaks it silently)")
     if not any(re.match(r"^[ \t]+workflow_run:", line) for line in on) or \
             any(re.match(r"^[ \t]+(pull_request|pull_request_target|push|issue_comment):", line) for line in on):
         errors.append(f"{where}: must trigger on workflow_run only")
@@ -928,7 +951,7 @@ def check_bench_workflows(repo: Path, errors: list) -> int:
         errors.append(f"{where}: must not check anything out")
     if re.search(r"secrets\.", comment):
         errors.append(f"{where}: must use no secrets")
-    for needle in ("github.event.workflow_run.path == '.github/workflows/devkit-bench.yml'",
+    for needle in (f"github.event.workflow_run.path == '{BUILD_WORKFLOW}'",
                    "github.event.workflow_run.repository.full_name == github.repository",
                    "github.event.workflow_run.event == 'pull_request'"):
         if needle not in comment:
@@ -944,7 +967,25 @@ def check_bench_workflows(repo: Path, errors: list) -> int:
                       f"got {bench_perms}")
     if re.search(r"^[ \t]+[a-z-]+: write[ \t]*$", bench, re.M):
         errors.append(f"{BENCH_WORKFLOW}: no job may be granted a write permission")
-    return 2
+    callers = _caller_jobs(build, BENCH_WORKFLOW)
+    if len(callers) != 1:
+        errors.append(f"{BUILD_WORKFLOW}: exactly one job must call ./{BENCH_WORKFLOW} (found {len(callers)}): "
+                      f"the comment workflow follows {BUILD_WORKFLOW}'s runs")
+    for job in callers:
+        if any(re.match(r"^    secrets:", line) for line in job):
+            errors.append(f"{BUILD_WORKFLOW}: the job calling {BENCH_WORKFLOW} must pass no secrets")
+        perms, inside = [], False
+        for line in job:
+            if re.match(r"^    permissions:\s*(#.*)?$", line):
+                inside = True
+            elif inside and re.match(r"^      \S", line):
+                perms.append(line.strip())
+            elif inside and line.strip() and not line.strip().startswith("#"):
+                inside = False
+        if sorted(perms) != ["actions: read", "contents: read"]:
+            errors.append(f"{BUILD_WORKFLOW}: the job calling {BENCH_WORKFLOW} must grant exactly contents: read "
+                          f"and actions: read, got {sorted(perms)}")
+    return 3
 
 
 def run(repo: Path, base: str = "", head: str = "HEAD") -> tuple[list[str], list[str]]:
