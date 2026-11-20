@@ -1,0 +1,12 @@
+{
+    "q4nx_config": {
+        "row_block_size": 32,
+        "col_block_size": 256,
+        "parallel_size": 32,
+        "keep_block_in_2D": true
+    },
+    "default_tensor_type": "Q4_K",
+    "dflash2_config": {
+        "note": "z-lab/Qwen3.8-27B-DFlash2 draft. Q4_K (the format dequant_mm.xclbin reads) for the fc / q,k,v,o / gate,up,down matrices; BF16 for norms, the dynamic-conv tensors, the selector projection and the two selector codebooks (rows are gathered, never streamed)."
+    }
+}

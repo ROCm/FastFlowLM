@@ -1,0 +1,54 @@
+# Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+
+[build-system]
+requires = ["setuptools>=71", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smolvla-npu"
+version = "0.1.0"
+description = "SmolVLA vision-language-action policy on the AMD NPU (prebuilt extension)"
+readme = "README.md"
+requires-python = "==3.12.*"
+license = "MIT"
+
+# Deliberately empty. The heavy dependencies (torch, lerobot) need the PyTorch
+# CPU wheel index, which a plain `pip install smolvla_npu-*.whl` would not know
+# about -- pip would silently pull the default CUDA build and drag in ~3 GB of
+# nvidia-* wheels that this NPU/CPU-only package never uses. setup.sh passes
+# --extra-index-url and installs requirements-runtime.txt explicitly, so the
+# index is always in scope when those are resolved. Declaring them here as well
+# would only create a second, index-less resolution path that can silently
+# disagree with the first.
+dependencies = []
+
+[project.scripts]
+smolvla-verify = "smolvla_npu_pkg.verify_smolvla:main"
+smolvla-doctor = "smolvla_npu_pkg.doctor:main"
+
+[tool.setuptools]
+# zip-safe is meaningless for a package holding a .so, and a zipped egg would
+# hide the extension from the dynamic loader.
+zip-safe = false
+# The top-level import name. smolvla_npu.py is a shim that loads the real
+# extension out of smolvla_npu_pkg/ and substitutes itself for it, so
+# `import smolvla_npu` keeps working exactly as it does against a local build.
+py-modules = ["smolvla_npu"]
+
+[tool.setuptools.packages.find]
+include = ["smolvla_npu_pkg*"]
+
+[tool.setuptools.package-data]
+# The prebuilt extension rides along inside the package directory. Listing the
+# ABI tag explicitly (rather than *.so) keeps a stale build for another
+# interpreter from being packaged by accident.
+#
+# The NPU bitstreams ride along beside it: they are artifacts of the kernel
+# build, not of the checkpoint, so they belong to this package rather than to
+# whatever model directory the caller points at. A glob is fine for them --
+# there is no ABI tag to get wrong, and build_package.sh checks all three are
+# present before the wheel ships.
+smolvla_npu_pkg = [
+    "smolvla_npu.cpython-312-x86_64-linux-gnu.so",
+    "XCLBINS/*.xclbin",
+]

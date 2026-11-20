@@ -1,0 +1,31 @@
+# Runtime dependencies for the smolvla_npu verification harness.
+#
+# This is the slim CPU-only set, not a pip freeze. The default PyPI torch wheel
+# depends on ~15 nvidia-cuda-* packages (several GB) that an NPU/CPU host never
+# loads, so setup.sh passes
+#     --extra-index-url https://download.pytorch.org/whl/cpu
+# and the +cpu local versions below bind to it. Installing this file without
+# that index will fail to find them -- which is deliberate: the failure is
+# louder and cheaper than silently downloading the CUDA stack.
+#
+# Versions are the ones the harness is verified against. lerobot pulls the rest
+# of the tree (transformers, datasets, huggingface_hub, ...) at whatever it
+# resolves to; only the packages whose version actually matters are pinned, so
+# a security update to a leaf package does not require a reissue here.
+#
+# Note on transformers: lerobot 0.7.0 pins it to 5.22.x (>=5.22.0,<5.23.0),
+# the same 5.22.2 the development host runs.
+
+torch==2.13.0+cpu
+torchvision==0.28.0+cpu
+torchcodec==0.12.0
+
+# [smolvla] adds transformers/num2words/accelerate; [dataset] adds the
+# LeRobotDataset reader (datasets, pandas, pyarrow, torchcodec, jsonlines).
+lerobot[smolvla,dataset]==0.7.0
+
+# Video decode for LeRobotDataset. pyav bundles its own ffmpeg, so the host
+# needs no system libav; verify_smolvla.py asks for video_backend="pyav".
+av==15.1.0
+
+numpy==2.2.6

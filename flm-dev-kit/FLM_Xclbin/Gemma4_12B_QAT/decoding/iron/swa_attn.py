@@ -1,0 +1,471 @@
+# Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+
+import numpy as np
+import sys
+import os
+from typing import Any, List
+# Add the parent directory to the path so we can import iron as a package
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from iron.model_config import ModelConfig
+
+from ml_dtypes import bfloat16
+from aie.extras.context import mlir_mod_ctx
+import aie.dialects.aie as aie
+import aie.dialects.aiex as aiex
+from aie.helpers.dialects.ext.scf import _for as range_
+import aie.utils.trace as trace_utils
+from aie.utils.trace import MemTilePortEvent, MemTileEvent, PortEvent
+from aie.utils.trace_events_enum import CoreEvent, MemEvent, ShimTileEvent, MemTileEvent
+from aie.dialects import memref
+from constants import *
+from utils import ENABLE_CHESSCC
+from utils import connect_port, mlir_context, tile_with_location, lock_acquire, lock_release
+from utils import AIE_CT_IP, AIE_MT_IP, comment_print, ShimTile
+
+class swa_qk_tile(AIE_CT_IP):
+    dtype = np.dtype[bfloat16]
+
+    def __init__(self, tile: tile_with_location, ctx: mlir_context, shared_s_buffers: List[Any], s_ty: Any,  model_config: ModelConfig, stack_size: int = 1024, link_with: str = "swa_attn_qk.o"):
+        super().__init__(tile, stack_size = stack_size, link_with = link_with)
+        comment_print(f"Initializing swa_attn_qk_tile at ({self.ct_row}, {self.ct_col})")
+        self.Q_HEAD_PER_ROUND = model_config.SWA_Q_HEAD_PER_ROUND_PADDED
+        self.KV_HEAD_PER_ROUND = model_config.kv_head_per_round
+        self.DH = model_config.SWA_DH
+        self.lc = model_config.lq
+
+        self.attn_q_ty = np.ndarray[(self.Q_HEAD_PER_ROUND * self.DH,), self.dtype]
+        # One buffer per KV head: the kernel loops KV_HEAD_PER_ROUND times and takes a
+        # fresh k_cons_lock each time, so the memtile's per-round burst has to land in
+        # KV_HEAD_PER_ROUND successive ping/pong fills of a single-head buffer.
+        self.attn_k_ty = np.ndarray[(self.lc, self.DH), self.dtype]
+        comment_print(f"swa_attn_q_ty shape: ({self.Q_HEAD_PER_ROUND * self.DH},), swa_attn_k_ty shape: ({self.lc}, {self.DH}) x {self.KV_HEAD_PER_ROUND} heads")
+        self.attn_s_ty = s_ty
+        self.RTP_ty = ctx.data_tys["RTP_ty"]
+
+        self.swa_attn_qk = ctx.func("swa_attn_qk", [self.attn_q_ty, self.attn_q_ty, self.attn_k_ty, self.attn_k_ty, self.attn_s_ty, self.attn_s_ty, self.RTP_ty])
+
+        self.k_buffer_0 = ctx.buffer(tile = self.located_tile, dtype = self.attn_k_ty, name = f"k_0_{self.ct_row}_{self.ct_col}")
+        self.k_buffer_1 = ctx.buffer(tile = self.located_tile, dtype = self.attn_k_ty, name = f"k_1_{self.ct_row}_{self.ct_col}")
+
+        self.q_buffer_0 = ctx.buffer(tile = self.located_tile, dtype = self.attn_q_ty, name = f"q_0_{self.ct_row}_{self.ct_col}")
+        self.q_buffer_1 = ctx.buffer(tile = self.located_tile, dtype = self.attn_q_ty, name = f"q_1_{self.ct_row}_{self.ct_col}")
+        self.q_prod_lock = aie.lock(self.ct, lock_id = 0, init = 2)
+        self.q_cons_lock = aie.lock(self.ct, lock_id = 1, init = 0)
+        self.k_prod_lock = aie.lock(self.ct, lock_id = 2, init = 2)
+        self.k_cons_lock = aie.lock(self.ct, lock_id = 3, init = 0)
+        self.s_prod_lock = aie.lock(self.ct, lock_id = 4, init = 2)
+        self.s_cons_lock = aie.lock(self.ct, lock_id = 5, init = 0)
+        self.l_cons_lock = aie.lock(self.ct, lock_id = 8, init = 0)
+        self.s_buffer_0 = shared_s_buffers[0]
+        self.s_buffer_1 = shared_s_buffers[1]
+
+        self.L_buffer = ctx.buffer(f"RTP_L_swa_attn_qk_core_{self.ct_row}_{self.ct_col}", self.located_tile, self.RTP_ty, use_write_rtp = True)
+        self.q_heads_len = self.Q_HEAD_PER_ROUND * self.DH
+        self.q_in_order = [(self.Q_HEAD_PER_ROUND, 8), (self.DH // 8, self.Q_HEAD_PER_ROUND * 8), (8, 1)]
+
+        self.__call__()
+
+    def __call__(self):
+        @aie.core(self.ct, link_with = self.link_with, stack_size = self.stack_size)
+        def core_body():
+            for _ in range_(0xFFFFFFFF):
+                self.swa_attn_qk(self.q_buffer_0, self.q_buffer_1, self.k_buffer_0, self.k_buffer_1, self.s_buffer_0, self.s_buffer_1, self.L_buffer)
+
+            
+        @aie.mem(self.ct)
+        def mem_body(block):
+            s0 = aie.dma_start(channel_dir = aie.DMAChannelDir.S2MM, channel_index = 0, dest=block[1], chain=block[3])
+
+            with block[1]:
+                aie.use_lock(self.q_prod_lock, aie.LockAction.AcquireGreaterEqual, value = 1)
+                aie.dma_bd(self.q_buffer_0, offset = 0, len = self.q_heads_len, dimensions = self.q_in_order)
+                aie.use_lock(self.q_cons_lock, aie.LockAction.Release, value = 1)
+                aie.next_bd(block[2])
+
+            with block[2]:
+                aie.use_lock(self.q_prod_lock, aie.LockAction.AcquireGreaterEqual, value = 1)
+                aie.dma_bd(self.q_buffer_1, offset = 0, len = self.q_heads_len, dimensions = self.q_in_order)
+                aie.use_lock(self.q_cons_lock, aie.LockAction.Release, value = 1)
+                aie.next_bd(block[1])
+
+            with block[3]:
+                s1 = aie.dma_start(channel_dir = aie.DMAChannelDir.S2MM, channel_index = 1, dest=block[4], chain=block[6])
+            
+            with block[4]:
+                aie.use_lock(self.k_prod_lock, aie.LockAction.AcquireGreaterEqual, value = 1)
+                aie.dma_bd(self.k_buffer_0)
+                aie.use_lock(self.k_cons_lock, aie.LockAction.Release, value = 1)
+                aie.next_bd(block[5])
+
+            with block[5]:
+                aie.use_lock(self.k_prod_lock, aie.LockAction.AcquireGreaterEqual, value = 1)
+                aie.dma_bd(self.k_buffer_1)
+                aie.use_lock(self.k_cons_lock, aie.LockAction.Release, value = 1)
+                aie.next_bd(block[4])
+
+            with block[6]:
+                aie.EndOp()
+    
+    @property
+    def Q_in(self):
+        return self.S2MM[0]
+    
+    @property
+    def K_in(self):
+        return self.S2MM[1]
+
+class swa_kv_tile(AIE_CT_IP):
+    dtype = np.dtype[bfloat16]
+
+    def __init__(self, tile: tile_with_location, ctx: mlir_context, s_ty: Any, model_config: ModelConfig, stack_size: int = 1024, link_with: str = "swa_attn_kv.o"):
+        super().__init__(tile, stack_size = stack_size, link_with = link_with)
+        comment_print(f"Initializing swa_attn_kv_tile at ({self.ct_row}, {self.ct_col})")
+        self.NQ_PER_CU = model_config.SWA_Q_HEAD_PER_ROUND_PADDED
+        self.DH = model_config.SWA_DH
+        self.KV_HEAD_PER_ROUND = model_config.kv_head_per_round
+        self.lc = model_config.lk
+
+        self.O_REPEATS = model_config.D // (model_config.q4nx_row_block_size * 16)
+
+        # One buffer per KV head, for the same reason as swa_qk_tile's K buffers.
+        self.attn_v_ty = np.ndarray[(self.lc, self.DH), self.dtype]
+        self.attn_o_ty = np.ndarray[(self.DH * self.NQ_PER_CU, ), self.dtype]
+        self.attn_y_ty = np.ndarray[(self.DH * self.NQ_PER_CU, ), np.dtype[np.float32]]
+        comment_print(f"swa_attn_v_ty shape: ({self.lc}, {self.DH}) x {self.KV_HEAD_PER_ROUND} heads, swa_attn_o_ty shape: {(self.DH * self.NQ_PER_CU, )}")
+        self.attn_s_ty = s_ty
+        self.RTP_ty = ctx.data_tys["RTP_ty"]
+        self.s_ty = s_ty
+        kv_args = [self.attn_s_ty, self.attn_s_ty, self.attn_v_ty, self.attn_v_ty, self.attn_y_ty, self.attn_o_ty, self.RTP_ty]
+        self.extra_args = []
+        if not ENABLE_CHESSCC:
+            # Peano only: the kernel's ping/pong selectors. Peano links a core's
+            # statics above its highest buffer, and on this tile that leaves no room.
+            state_ty = np.ndarray[(4,), np.dtype[np.int32]]
+            self.extra_args = [aie.buffer(self.ct, state_ty, name = f"kv_state_{self.ct_row}_{self.ct_col}",
+                                          initial_value = np.zeros(4, dtype = np.int32))]
+            kv_args.append(state_ty)
+        self.attn_kv = ctx.func("swa_attn_kv", kv_args)
+
+        self.L_buffer = ctx.buffer(f"RTP_L_swa_attn_kv_core_{self.ct_row}_{self.ct_col}", self.located_tile, self.RTP_ty, use_write_rtp = True)
+        self.s_buffer_0 = ctx.buffer(f"s_shared_buffer_0_{self.ct_row + 1}_{self.ct_col}", tile = self.located_tile, dtype = self.s_ty)
+        self.s_buffer_1 = ctx.buffer(f"s_shared_buffer_1_{self.ct_row + 1}_{self.ct_col}", tile = self.located_tile, dtype = self.s_ty)
+        self.v_buffer_0 = ctx.buffer(tile = self.located_tile, dtype = self.attn_v_ty, name = f"v_0_{self.ct_row}_{self.ct_col}")
+        self.v_buffer_1 = ctx.buffer(tile = self.located_tile, dtype = self.attn_v_ty, name = f"v_1_{self.ct_row}_{self.ct_col}")
+
+        self.y_buffer = ctx.buffer(tile = self.located_tile, dtype = self.attn_y_ty, name = f"y_{self.ct_row}_{self.ct_col}")
+
+        self.o_buffer = ctx.buffer(tile = self.located_tile, dtype = self.attn_o_ty, name = f"o_{self.ct_row}_{self.ct_col}")
+
+        self.o_prod_lock = aie.lock(self.ct, lock_id = 0, init = self.O_REPEATS)
+        self.o_cons_lock = aie.lock(self.ct, lock_id = 1, init = 0)
+        self.v_prod_lock = aie.lock(self.ct, lock_id = 2, init = 2)
+        self.v_cons_lock = aie.lock(self.ct, lock_id = 3, init = 0)
+
+        self.__call__()
+    
+    def __call__(self):
+        @aie.core(self.ct, link_with = self.link_with, stack_size = self.stack_size)
+        def core_body():
+            for _ in range_(0xFFFFFFFF):
+                self.attn_kv(self.s_buffer_0, self.s_buffer_1, self.v_buffer_0, self.v_buffer_1, self.y_buffer, self.o_buffer, self.L_buffer, *self.extra_args)
+
+        @aie.mem(self.ct)
+        def mem_body(block):
+            s0 = aie.dma_start(channel_dir = aie.DMAChannelDir.S2MM, channel_index = 1, dest=block[1], chain=block[3])
+            
+            with block[1]:
+                aie.use_lock(self.v_prod_lock, aie.LockAction.AcquireGreaterEqual, value = 1)
+                aie.dma_bd(self.v_buffer_0)
+                aie.use_lock(self.v_cons_lock, aie.LockAction.Release, value = 1)
+                aie.next_bd(block[2])
+                
+            with block[2]:
+                aie.use_lock(self.v_prod_lock, aie.LockAction.AcquireGreaterEqual, value = 1)
+                aie.dma_bd(self.v_buffer_1)
+                aie.use_lock(self.v_cons_lock, aie.LockAction.Release, value = 1)
+                aie.next_bd(block[1])
+
+            with block[3]:
+                s1 = aie.dma_start(channel_dir = aie.DMAChannelDir.MM2S, channel_index = 0, dest=block[4], chain=block[6])
+
+            with block[4]:
+                aie.use_lock(self.o_cons_lock, aie.LockAction.AcquireGreaterEqual, value = 1)
+                aie.dma_bd(self.o_buffer, offset = 0, len = self.NQ_PER_CU * self.DH, dimensions = [(self.NQ_PER_CU, 8), (self.DH // 8, self.NQ_PER_CU * 8), (8, 1)])
+                aie.use_lock(self.o_prod_lock, aie.LockAction.Release, value = 1)
+                aie.next_bd(block[4])
+                
+            with block[6]:
+                aie.EndOp()
+    
+    @property
+    def V_in(self):
+        return self.S2MM[1]
+    
+    @property
+    def O_out(self):
+        return self.MM2S[0]
+    
+    @property
+    def get_s_buffers(self):
+        return [self.s_buffer_0, self.s_buffer_1]
+
+class swa_attn_cu:
+    def __init__(self, 
+        attn_qk_tile: tile_with_location, 
+        attn_kv_tile: tile_with_location, 
+        model_config: ModelConfig,
+        ctx: mlir_context, 
+        qk_stack_size: int, 
+        kv_stack_size: int, 
+        qk_link_with: str, 
+        kv_link_with: str
+    ):  
+        comment_print(f"Initializing swa_attn_cu at QK({attn_qk_tile.row}, {attn_qk_tile.col}) KV({attn_kv_tile.row}, {attn_kv_tile.col})")
+        self.NQ_PER_CU = model_config.SWA_Q_HEAD_PER_ROUND_PADDED
+        self.s_ty = np.ndarray[(self.NQ_PER_CU * 16 + 32, 1), np.dtype[bfloat16]] # for attention score and correction
+        comment_print(f"\tswa_attn_s_ty shape: {(self.NQ_PER_CU * 16 + 32, 1)}")
+        self.kv_core = swa_kv_tile(attn_kv_tile, ctx, self.s_ty, model_config, stack_size = kv_stack_size, link_with = kv_link_with)
+        self.qk_core = swa_qk_tile(attn_qk_tile, ctx, self.kv_core.get_s_buffers, self.s_ty, model_config, stack_size = qk_stack_size, link_with = qk_link_with)
+    
+    @property
+    def Q_in(self):
+        return self.qk_core.Q_in
+    
+    @property
+    def K_in(self):
+        return self.qk_core.K_in
+    
+    @property
+    def V_in(self):
+        return self.kv_core.V_in
+    
+    @property
+    def O_out(self):
+        return self.kv_core.O_out
+
+class swa_attn_memtile(AIE_MT_IP):
+
+    def __init__(self, tile, mctx: mlir_context, model_config: ModelConfig):
+        super().__init__(tile)
+        self.swa_num_kv_heads = model_config.swa_num_kv_heads
+        self.swa_num_kv_heads_per_round = model_config.kv_head_per_round
+        self.SWA_DH = model_config.SWA_DH
+        self.lc = model_config.lk
+
+        self.swa_k_mem_ty = np.ndarray[(self.lc, self.swa_num_kv_heads * self.SWA_DH), np.dtype[bfloat16]]
+        self.swa_v_mem_ty = np.ndarray[(self.lc, self.swa_num_kv_heads * self.SWA_DH), np.dtype[bfloat16]]
+        comment_print(f"Initializing attn_memtile at ({self.mt_row}, {self.mt_col}) with lc: {self.lc}, d: { self.swa_num_kv_heads * self.SWA_DH }")
+
+        self.swa_k_buffer_0 = aie.buffer(self.mt, self.swa_k_mem_ty, name = f"swa_k_mem_buffer_0_{self.mt_row}_{self.mt_col}")
+        self.swa_k_buffer_1 = aie.buffer(self.mt, self.swa_k_mem_ty, name = f"swa_k_mem_buffer_1_{self.mt_row}_{self.mt_col}")
+        self.swa_v_buffer_0 = aie.buffer(self.mt, self.swa_v_mem_ty, name = f"swa_v_mem_buffer_0_{self.mt_row}_{self.mt_col}")
+        self.swa_v_buffer_1 = aie.buffer(self.mt, self.swa_v_mem_ty, name = f"swa_v_mem_buffer_1_{self.mt_row}_{self.mt_col}")
+
+        self.swa_k_prod_lock = aie.lock(self.mt, lock_id = 5, init = 2)
+        self.swa_k_cons_lock_0 = aie.lock(self.mt, lock_id = 6, init = 0)
+        self.swa_k_cons_lock_1 = aie.lock(self.mt, lock_id = 7, init = 0)
+        self.swa_v_prod_lock = aie.lock(self.mt, lock_id = 8, init = 2)
+        self.swa_v_cons_lock_0 = aie.lock(self.mt, lock_id = 9, init = 0)
+        self.swa_v_cons_lock_1 = aie.lock(self.mt, lock_id = 10, init = 0)
+
+        self.swa_k_mem_row_size = self.swa_num_kv_heads * self.SWA_DH
+        self.swa_k_mem_cu_row_size = self.swa_num_kv_heads_per_round * self.SWA_DH
+        self.swa_k_order = [(self.swa_k_mem_cu_row_size // 8, 8), (self.lc, self.swa_k_mem_row_size), (8, 1)]
+        self.swa_k_offset = self.swa_k_mem_cu_row_size
+        comment_print(f"\tattn_memtile swa_k_order: {self.swa_k_order}")
+        self.swa_k_len_per_cu = self.swa_k_mem_cu_row_size * self.lc
+
+        # attn_kv.cc's 4x2x1 attn_fv walks V as [dim block][token][8 dims], the same
+        # layout K uses -- not the token-half-major order attn_kv_e2b.cc expects.
+        self.swa_v_mem_row_size = self.swa_num_kv_heads * self.SWA_DH
+        self.swa_v_mem_cu_row_size = self.swa_num_kv_heads_per_round * self.SWA_DH
+        self.swa_v_order = [(self.swa_v_mem_cu_row_size // 8, 8), (self.lc, self.swa_v_mem_row_size), (8, 1)]
+        comment_print(f"\tattn_memtile swa_v_order: {self.swa_v_order}")
+        self.swa_v_len_per_cu = self.swa_v_mem_cu_row_size * self.lc
+        self.swa_v_offset = self.swa_v_mem_cu_row_size
+        self.__call__()
+
+    def __call__(self):
+        @aie.memtile_dma(self.mt)
+        def memtile_dma_body(block):
+            s0 = aie.dma_start(channel_dir = aie.DMAChannelDir.S2MM, channel_index = 0, dest=block[1], chain=block[3])
+
+            with block[1]:
+                aie.use_lock(self.swa_k_prod_lock, aie.LockAction.AcquireGreaterEqual, value=1)
+                aie.dma_bd(self.swa_k_buffer_0)
+                aie.use_lock(self.swa_k_cons_lock_0, aie.LockAction.Release, value=1)
+                aie.next_bd(block[2])
+
+            with block[2]:
+                aie.use_lock(self.swa_k_prod_lock, aie.LockAction.AcquireGreaterEqual, value=1)
+                aie.dma_bd(self.swa_k_buffer_1)
+                aie.use_lock(self.swa_k_cons_lock_0, aie.LockAction.Release, value=1)
+                aie.next_bd(block[1])
+
+            with block[3]:
+                s1 = aie.dma_start(channel_dir = aie.DMAChannelDir.MM2S, channel_index = 0, dest=block[4], chain=block[6])
+
+            with block[4]:
+                aie.use_lock(self.swa_k_cons_lock_0, aie.LockAction.AcquireGreaterEqual, value=1)
+                aie.dma_bd(self.swa_k_buffer_0, offset = 0, len = self.swa_k_len_per_cu, dimensions = self.swa_k_order)
+                aie.use_lock(self.swa_k_cons_lock_1, aie.LockAction.Release, value=1)
+                aie.next_bd(block[5])
+
+            with block[5]:
+                aie.use_lock(self.swa_k_cons_lock_0, aie.LockAction.AcquireGreaterEqual, value=1)
+                aie.dma_bd(self.swa_k_buffer_1, offset = 0, len = self.swa_k_len_per_cu, dimensions = self.swa_k_order)
+                aie.use_lock(self.swa_k_cons_lock_1, aie.LockAction.Release, value=1)
+                aie.next_bd(block[4])
+
+            with block[6]:
+                s2 = aie.dma_start(channel_dir = aie.DMAChannelDir.MM2S, channel_index = 1, dest=block[7], chain=block[9])
+
+            with block[7]:
+                aie.use_lock(self.swa_k_cons_lock_1, aie.LockAction.AcquireGreaterEqual, value=1)
+                aie.dma_bd(self.swa_k_buffer_0, offset = self.swa_k_offset, len = self.swa_k_len_per_cu, dimensions = self.swa_k_order)
+                aie.use_lock(self.swa_k_prod_lock, aie.LockAction.Release, value=1)
+                aie.next_bd(block[8])
+
+            with block[8]:
+                aie.use_lock(self.swa_k_cons_lock_1, aie.LockAction.AcquireGreaterEqual, value=1)
+                aie.dma_bd(self.swa_k_buffer_1, offset = self.swa_k_offset, len = self.swa_k_len_per_cu, dimensions = self.swa_k_order)
+                aie.use_lock(self.swa_k_prod_lock, aie.LockAction.Release, value=1)
+                aie.next_bd(block[7])
+
+            with block[9]:
+                s3 = aie.dma_start(channel_dir = aie.DMAChannelDir.S2MM, channel_index = 1, dest=block[10], chain=block[12])
+
+            with block[10]:
+                aie.use_lock(self.swa_v_prod_lock, aie.LockAction.AcquireGreaterEqual, value=1)
+                aie.dma_bd(self.swa_v_buffer_0)
+                aie.use_lock(self.swa_v_cons_lock_0, aie.LockAction.Release, value=1)
+                aie.next_bd(block[11])
+
+            with block[11]:
+                aie.use_lock(self.swa_v_prod_lock, aie.LockAction.AcquireGreaterEqual, value=1)
+                aie.dma_bd(self.swa_v_buffer_1)
+                aie.use_lock(self.swa_v_cons_lock_0, aie.LockAction.Release, value=1)
+                aie.next_bd(block[10])
+
+            with block[12]:
+                s4 = aie.dma_start(channel_dir = aie.DMAChannelDir.MM2S, channel_index = 2, dest=block[13], chain=block[15])
+
+            with block[13]:
+                aie.use_lock(self.swa_v_cons_lock_0, aie.LockAction.AcquireGreaterEqual, value = 1)
+                aie.dma_bd(self.swa_v_buffer_0, offset = 0, len = self.swa_v_len_per_cu, dimensions = self.swa_v_order)
+                aie.use_lock(self.swa_v_cons_lock_1, aie.LockAction.Release, value = 1)
+                aie.next_bd(block[14])
+
+            with block[14]:
+                aie.use_lock(self.swa_v_cons_lock_0, aie.LockAction.AcquireGreaterEqual, value = 1)
+                aie.dma_bd(self.swa_v_buffer_1, offset = 0, len = self.swa_v_len_per_cu, dimensions = self.swa_v_order)
+                aie.use_lock(self.swa_v_cons_lock_1, aie.LockAction.Release, value = 1)
+                aie.next_bd(block[13])
+
+            with block[15]:
+                s5 = aie.dma_start(channel_dir = aie.DMAChannelDir.MM2S, channel_index = 3, dest=block[16], chain=block[18])
+
+            with block[16]:
+                aie.use_lock(self.swa_v_cons_lock_1, aie.LockAction.AcquireGreaterEqual, value = 1)
+                aie.dma_bd(self.swa_v_buffer_0, offset = self.swa_v_offset, len = self.swa_v_len_per_cu, dimensions = self.swa_v_order)
+                aie.use_lock(self.swa_v_prod_lock, aie.LockAction.Release, value = 1)
+                aie.next_bd(block[17])
+
+            with block[17]:
+                aie.use_lock(self.swa_v_cons_lock_1, aie.LockAction.AcquireGreaterEqual, value = 1)
+                aie.dma_bd(self.swa_v_buffer_1, offset = self.swa_v_offset, len = self.swa_v_len_per_cu, dimensions = self.swa_v_order)
+                aie.use_lock(self.swa_v_prod_lock, aie.LockAction.Release, value = 1)
+                aie.next_bd(block[16])
+
+            with block[18]:
+                aie.EndOp()
+    
+    @property
+    def SWA_K_in(self):
+        return self.S2MM[0]
+    
+    @property
+    def SWA_V_in(self):
+        return self.S2MM[1]
+    
+    @property
+    def SWA_K_out0(self):
+        return self.MM2S[0]
+    
+    @property
+    def SWA_K_out1(self):
+        return self.MM2S[1]
+    
+    @property
+    def SWA_V_out0(self):
+        return self.MM2S[2]
+    
+    @property
+    def SWA_V_out1(self):
+        return self.MM2S[3]
+
+class SWA_attn_column:
+    def __init__(self, 
+        attn_qk_tiles: List[tile_with_location], 
+        attn_kv_tiles: List[tile_with_location], 
+        memtile: tile_with_location,
+        shim_tile: ShimTile,
+        model_config: ModelConfig,
+        ctx: mlir_context, 
+        qk_stack_size: int, 
+        kv_stack_size: int, 
+        swa_qk_link_with: str, 
+        swa_kv_link_with: str
+    ):  
+        comment_print(f"Initializing attn_column at MT({memtile.row}, {memtile.col})")
+
+        self.sliding_swa_attn_cu0 = swa_attn_cu(
+            attn_qk_tile = attn_qk_tiles[0],
+            attn_kv_tile = attn_kv_tiles[0],
+            model_config = model_config,
+            ctx = ctx,
+            qk_stack_size = qk_stack_size,
+            kv_stack_size = kv_stack_size,
+            qk_link_with = swa_qk_link_with,
+            kv_link_with = swa_kv_link_with
+        )
+
+        self.sliding_swa_attn_cu1 = swa_attn_cu(
+            attn_qk_tile = attn_qk_tiles[1],
+            attn_kv_tile = attn_kv_tiles[1],
+            model_config = model_config,
+            ctx = ctx,
+            qk_stack_size = qk_stack_size,
+            kv_stack_size = kv_stack_size,
+            qk_link_with = swa_qk_link_with,
+            kv_link_with = swa_kv_link_with
+        )
+
+        self.memtile = swa_attn_memtile(memtile, ctx, model_config)
+        self.IT = shim_tile
+
+    def route(self):
+        connect_port(self.IT.MM2S[0], self.memtile.SWA_K_in, pkt_id = 13, keep_pkt_header = False)
+        connect_port(self.IT.MM2S[1], self.memtile.SWA_V_in, pkt_id = 13, keep_pkt_header = False)
+        connect_port(self.memtile.SWA_K_out0, self.sliding_swa_attn_cu0.K_in)
+        connect_port(self.memtile.SWA_V_out0, self.sliding_swa_attn_cu0.V_in)
+        connect_port(self.memtile.SWA_K_out1, self.sliding_swa_attn_cu1.K_in)
+        connect_port(self.memtile.SWA_V_out1, self.sliding_swa_attn_cu1.V_in)
+    
+    @property
+    def SWA_Q_in0(self):
+        return self.sliding_swa_attn_cu0.Q_in
+
+    @property
+    def SWA_Q_in1(self):
+        return self.sliding_swa_attn_cu1.Q_in
+
+    @property
+    def SWA_O_out0(self):
+        return self.sliding_swa_attn_cu0.O_out
+
+    @property
+    def SWA_O_out1(self):
+        return self.sliding_swa_attn_cu1.O_out
+    

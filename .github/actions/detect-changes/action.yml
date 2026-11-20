@@ -13,7 +13,7 @@ inputs:
 
 outputs:
   run:
-    description: '"true" unless only documentation changed.'
+    description: '"true" unless only documentation or flm-dev-kit/ files changed.'
     value: ${{ steps.changes.outputs.run_tests }}
   families:
     description: Comma-separated model families the change touches.
@@ -48,6 +48,30 @@ outputs:
       or edited (new weights or not): Test Windows HIPEP tests them as
       required models, downloading them whatever their size.
     value: ${{ steps.changes.outputs.hipep_models }}
+  devkit:
+    description: >
+      "true" when a dev-kit job is needed, for the dev-kit jobs: code under
+      flm-dev-kit/ changed, a src/lib/xrt file it links changed (libaiebu.a,
+      aiebu_static.lib, any library on its engines' -L path), the CI that
+      runs the dev-kit jobs changed, or the changed files are unknown.
+      flm-dev-kit/ paths never select product builds or suites: a change
+      only there gives run "false".
+    value: ${{ steps.changes.outputs.devkit }}
+  devkit-areas:
+    description: >
+      Comma-separated dev-kit areas the change touches: xclbin, dll,
+      converter, pybind, launchlib, including the areas that build from a
+      changed file of another area. Empty when devkit is "false".
+    value: ${{ steps.changes.outputs.devkit_areas }}
+  devkit-families:
+    description: >
+      Comma-separated catalog families of the dev-kit engines the change
+      touches, for the dev-kit overlay tests: an engine's families and those
+      of the engines that use it, from flm-dev-kit/FLM_DLL/engines.json; every
+      engine's families when shared engine code, a src/lib/xrt library the
+      engines link, the dev-kit CI or an unknown set of files changed. Empty
+      when no dev-kit engine is touched.
+    value: ${{ steps.changes.outputs.devkit_families }}
   tier:
     description: install, pr or full.
     value: ${{ steps.tier.outputs.tier }}

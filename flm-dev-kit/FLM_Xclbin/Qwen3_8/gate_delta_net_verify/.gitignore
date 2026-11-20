@@ -1,0 +1,7 @@
+build
+.vscode
+__pycache__/
+routes/
+*.safetensors
+q4nx_files/
+*.exe

@@ -1,0 +1,7 @@
+# host test/bench tools are built by build.sh; do not commit binaries
+ab_bench
+gemm_shapes_bench
+glu_test
+rtm_bench
+rtm_test
+ts_test

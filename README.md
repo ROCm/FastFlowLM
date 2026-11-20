@@ -117,6 +117,8 @@ No model rewrites, no tuning — it just works.
 
 - All orchestration code and CLI tools are open-source under the [MIT License](./LICENSE_RUNTIME.txt).  
 - The NPU-accelerated binary kernels are not open source, but are completely free for any use, including non-commercial and commercial use, and may be freely redistributed in unmodified form under the [FastFlowLM NPU Binary License](./LICENSE_BINARY.txt).
+- The FastFlowLM developer kit in [`flm-dev-kit/`](./flm-dev-kit/) (NPU engine and kernel sources, the Q4NX converter, and the prebuilt aiebu libraries the engines link) is open-source under the [MIT License](./LICENSE_RUNTIME.txt). Files that carry their own license line, such as code derived from mlir-aie, keep that license.  
+- Third-party components and their licenses are listed in [THIRD_PARTY_NOTICES.txt](./THIRD_PARTY_NOTICES.txt).
 - Please acknowledge FastFlowLM in your README/project page (or product) as follows:
   ```
   Powered by [FastFlowLM](https://github.com/ROCm/FastFlowLM)
@@ -142,6 +144,8 @@ No model rewrites, no tuning — it just works.
 ## 🛠️ Building from Source
 
 For developers who want to build FastFlowLM from source, we provide CMake presets for a convenient and consistent build experience.
+
+To build the NPU engines, kernels and weight converter themselves, see [flm-dev-kit/README.md](flm-dev-kit/README.md).
 
 ### Prerequisites
 

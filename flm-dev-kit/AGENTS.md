@@ -1,0 +1,234 @@
+<!--
+  Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+  Portions of this file consist of AI-generated content.
+-->
+
+# AGENTS.md — FastFlowLM dev kit
+
+Guide for coding agents and contributors working in `flm-dev-kit/`, the sources of FastFlowLM's NPU
+engines, kernels and weight converter. Paths below are relative to `flm-dev-kit/`; `../` is the
+FastFlowLM repository root. For building the `flm` application itself, pull requests and licensing,
+read [`../CONTRIBUTING.md`](../CONTRIBUTING.md) first; this file covers only the dev kit. Outside users
+start at [`README.md`](README.md).
+
+## 1. What the dev kit produces
+
+| Artifact | Produced by | Consumed by |
+|---|---|---|
+| `model.q4nx` (quantized weights) | `FLM_Q4NX_Converter/convert.py` | an engine at load time |
+| `*.xclbin` (NPU kernels) | `FLM_Xclbin/<kernel>/Makefile` → IRON → `aiecc.py` | an engine at load time (`../src/xclbins/<MODEL>-NPU2/`) |
+| engine library (`.so` / `.dll`) | `FLM_DLL/build.sh` (g++-13), `FLM_DLL/build_manylinux.sh` (HRX), or the Windows/CMake path | `flm`: `../src/lib/xrt/` for XRT and `../src/lib/hrx/` for HRX. Both are needed; see "Adding a model?" in `../CONTRIBUTING.md`. Windows XRT libraries are named `<family>_npu.dll`, without the `lib` prefix. |
+
+A model runs only when all three agree. Nothing validates that a `.q4nx` matches the xclbins it is
+paired with, or that an engine matches either: a mismatch gives garbage output or a hang, not an error.
+
+## 2. Map
+
+```
+flm-dev-kit/
+├── FLM_DLL/                 C++20 engines, one .so/.dll per model family
+│   ├── build.sh             builds every unit: priority units first, then detail/*/
+│   ├── build.ps1            the same on Windows (XRT, CMake + MSVC)
+│   ├── build_<model>.sh     one engine + its deps (iteration)
+│   ├── build_manylinux.sh   HRX engines inside the pinned manylinux_2_28 container, then check_abi.sh
+│   ├── hrx.mk, cmake/flm_hrx.cmake   find the HRX package in ../hrx-integration/
+│   ├── cmake/flm_xrt_win.cmake   Windows XRT/aiebu/Boost-header paths (FLM_WIN_DEPS_ROOT, default C:/dev)
+│   ├── ADDING_A_NEW_MODEL.md  how to add an engine; read before creating one
+│   ├── model_list.json, model_list_linux.json   model registries (see §9)
+│   ├── include/             public headers: causal_lm.hpp, buffer.hpp, weight_desc.hpp,
+│   │                        lm_config.hpp, models/<m>/, modules/, npu_utils/, tensor_utils/ …
+│   └── detail/              implementations; each unit owns a Makefile + CMakeLists.txt
+│       ├── q4nx/ mha/ gemm/ dequant/ lm_head/   priority units, built before any engine
+│       ├── <family>_npu/    one engine (most dirs; see §5 Naming)
+│       └── vision_common/   source pool, no Makefile (not a build unit)
+├── FLM_Xclbin/              NPU kernel sources; a build unit is any dir with a Makefile
+│   ├── setup.sh             kernel build environment (MLIR_AIE_DIR, PEANO_INSTALL_DIR; Chess vars optional)
+│   ├── README.md            toolchain versions and one-time setup
+│   ├── kernel_assignment.md which kernel build feeds which model, and with which compiler
+│   └── host_common/         shared host-side C++ (buffer.hpp, npu_utils, aiebu headers)
+├── FLM_Q4NX_Converter/      GGUF/safetensors → Q4NX (Python, pinned requirements.txt)
+├── FLM_Pybind/SmolVLA/      pybind11 module for the SmolVLA policy
+└── aie2p-launchlib/         EXPERIMENTAL app switching inside one AIE2P hw_context; nothing
+                             else in the dev kit links it. Needs MLIR_AIE_DIR.
+```
+
+The aiebu libraries are not in the dev kit: XRT builds link FastFlowLM's `../src/lib/xrt/libaiebu.a`
+(`aiebu_static.lib` on Windows), the same files `flm` ships.
+
+## 3. Where to change what
+
+| Task | Location |
+|---|---|
+| Add a model family | Follow `FLM_DLL/ADDING_A_NEW_MODEL.md` (template: `detail/gemma4_12b_npu/`). `build.sh` picks up any `detail/*/` with a Makefile. Then follow "Adding a model?" in `../CONTRIBUTING.md` (both backends, `../src/model_list.json`, `../src/xclbins/<MODEL>-NPU2/`). |
+| Inference logic of one engine | `FLM_DLL/detail/<family>_npu/<family>_npu.cpp` |
+| NPU instruction sequence | `FLM_DLL/detail/<family>_npu/<family>_npu_sequence.cpp` |
+| Engine state | `FLM_DLL/detail/<family>_npu/<family>_npu_detail.hpp` (the `Impl` struct) |
+| Public model interface | `FLM_DLL/include/causal_lm.hpp`. Every text engine implements it. |
+| Shared layer (gemm/mha/dequant/lm_head) | `FLM_DLL/detail/<layer>/` + `FLM_DLL/include/modules/`. Rebuild everything. |
+| Q4NX parsing | `FLM_DLL/detail/q4nx/`, `FLM_DLL/include/weight_desc.hpp` |
+| Kernel dataflow (tiles, DMA, RTPs) | `FLM_Xclbin/<kernel>/iron/*_aie.py` |
+| AIE compute code | `FLM_Xclbin/<kernel>/kernel*/*.cc` |
+| Kernel model parameters | `FLM_Xclbin/<kernel>/iron/models/*.py`, `iron/model_config.py` (where present) |
+| Chess vs Peano | `ENABLE_CHESSCC` (§8) |
+| Converter support for an architecture | `FLM_Q4NX_Converter/q4nx/model_converter.py` + `FLM_Q4NX_Converter/configs/` |
+| HRX package version | `../hrx-integration/hrx-release.env` (also used by the `flm` build) |
+| manylinux image for HRX engines | `MANYLINUX_IMAGE` default in `FLM_DLL/build_manylinux.sh` |
+
+## 4. Commands
+
+Run from `flm-dev-kit/` unless noted. The build scripts change to their own folder, so they also work
+from anywhere else.
+
+| Command | Result | Time |
+|---|---|---|
+| `bash FLM_DLL/build.sh` | `rm -rf FLM_DLL/build`, then every unit with `make clean && make -j4`; lists failed dirs, exits 1 on failure | ~6 min on 32 cores |
+| `bash FLM_DLL/build_<model>.sh` | one engine + its deps | minutes |
+| `FLM_DLL\build.ps1 [-Clean] [-DepsRoot <dir>]` | Windows: every engine → `FLM_DLL/build/lib/*.dll`; stops at the first priority failure. Developer PowerShell; deps from `../.github/script/ci/setup_windows_deps.ps1` | minutes |
+| `FLM_USE_HRX=1 bash FLM_DLL/build.sh` | the same against the HRX package (fetch it first: `bash ../hrx-integration/fetch-hrx-release.sh`) | ~6 min |
+| `bash FLM_DLL/build_manylinux.sh` | HRX engines in Docker + `check_abi.sh`; the only way to get HRX libs FastFlowLM can ship | tens of minutes |
+| `cd FLM_DLL/detail/<dir> && make clean && make -j4` | one unit → `FLM_DLL/build/lib/<TARGET>` (see the Makefile's `TARGET =`); needs its deps built first | 1-3 min |
+| `source FLM_Xclbin/setup.sh` | kernel toolchain env; set `MLIR_AIE_DIR` and `PEANO_INSTALL_DIR` first (`FLM_Xclbin/README.md`) | seconds |
+| `cd FLM_Xclbin/<kernel> && make bitstream [MODEL_TYPE=<T>]` | IRON → MLIR → `aiecc.py` → `build/[<T>/]xclbins/*.xclbin` + `rtp_addresses.txt` | seconds to 30 min |
+| `make kernel` / `make link` / `make host` | single stages (`.cc`→`.o` / IRON→`.mlir` / host exe); not every unit has `link` | seconds-minutes |
+| `make clean_all` (or `make clean`) | wipe the unit's build tree; not in every unit | instant |
+| `cd FLM_Q4NX_Converter && ./setup_venv.sh && source activate.sh` | venv from the pinned `requirements.txt` | minutes |
+| `python convert.py -i model.gguf -o out/` | `model.q4nx`; `-t {language,vision,audio}`, `-f <arch>`, `-e <safetensors>`; `--help` for the rest | minutes |
+| `cd FLM_Pybind/SmolVLA && make` / `make python` | `run.exe` / `smolvla_npu*.so`; then `python verify_smolvla.py --steps 8` | minutes |
+| `make -C aie2p-launchlib/launchlib test` | launchlib host unit tests (no NPU; needs a precompiled package, see that Makefile) | minutes |
+
+Kernel makefiles add `-j8` (`makefiles/common.mk`) unless `-j` is set. Test hosts find models the way
+`flm` does (`$FLM_MODEL_PATH/models/<model>`, else `~/.config/flm/models/<model>`) and reference data in
+`$FLM_REFERENCE_DIR` or a `--reference` option; reference data is not shipped.
+
+**Testing.** There is no unit-test suite, lint or formatter for the dev kit as a whole. What exists:
+- Kernel test hosts (`make host`, then `./run.exe`): many compare the NPU against a CPU reference on
+  random inputs by default (for example the Gemma4_12B_QAT and SMOLVLA expert attention hosts) and print
+  PASSED / FAILED; others need reference data from `$FLM_REFERENCE_DIR`.
+- `FLM_DLL/detail/minicpm_{v_4_7,ocr}_npu/host_ref/run_gate.sh <model_dir> <xclbin_dir>`: the NPU build
+  of the engine scored against its all-host build.
+- `aie2p-launchlib/launchlib` (`make test`) and `FLM_Pybind/SmolVLA` (`test_smolvla_*.py`).
+
+Engines and kernels are otherwise validated by running the model in `flm` and comparing outputs and
+accuracy. Do not invent a `make test` or claim tests pass. FastFlowLM CI (`../.github/workflows/`) does
+not build or test the dev kit.
+
+## 5. Conventions
+
+- **Copyright header on every new source file**, after any shebang or coding line:
+  `// Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.` for
+  `.cpp/.cc/.h/.hpp`; the same with `#` for `.py/.sh/.mk/Makefile/CMakeLists.txt/.cmake/.yml`;
+  inside `<!-- -->` for `.md/.html`. No year, no SPDX line: AMD code is MIT, see
+  [`../LICENSE_RUNTIME.txt`](../LICENSE_RUNTIME.txt). A copied file keeps its header. Files written
+  with an AI assistant add `Portions of this file consist of AI-generated content.` on the next line.
+  - Code copied or adapted from mlir-aie/IRON: the AMD notice plus the upstream license line
+    `SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception` (`MIT` for `aie_kernel_utils.h`).
+    Never a Xilinx notice.
+  - Other third-party code (Hugging Face transformers, llama.cpp, model cards …): keep the
+    original notice and license; add
+    `Modifications Copyright(C) <year> Advanced Micro Devices, Inc. All rights reserved.` below it,
+    and record the component in `../THIRD_PARTY_NOTICES.txt`.
+  - If a copied file lost its notice, restore the upstream copyright line and license from its
+    source (file header or `LICENSE`) and name the source in the PR.
+  - Data and generated files (`.json`, `.csv`) get no header.
+- **Scalar 1/sqrt in a kernel:** use `flm_rsqrt()` from the unit's `flm_rsqrt.h` (copy it into a
+  new kernel folder). Do not hand-roll or copy bit-trick approximations.
+- **pimpl pairing.** `include/models/<m>/<m>_npu.hpp` declares the class with `struct Impl; Impl* _impl;`;
+  `detail/<m>_npu/<m>_npu_detail.hpp` defines `Impl`. State goes in `Impl`. Engines are non-copyable.
+- **Naming.** Most engine dirs are `detail/<family>_npu/` → `lib<family>_npu.so`; each Makefile's
+  `TARGET =` line is authoritative (exceptions include `gemma4e_flash`, `gemma4e_dflash`,
+  `gemma4e_dflash_flash`, `gemma_embedding`, `qwen3vl_flash`, `qwen3_5_omni`). Use the `_npu` form
+  for new engines. Kernel dirs are descriptive (`Dequant_Q4_1_w128x512`) or `<Family>/<stage>`
+  (`Qwen3_6/attention_decoding`).
+- **Kernel artifact names** in `FLM_Xclbin/kernel_assignment.md` are `xclbins-<folder>[_<MODEL_TYPE>]`:
+  the kernel's folder path under `FLM_Xclbin/` with `/` replaced by `_`, plus the `MODEL_TYPE`
+  if the unit fans out (e.g. `xclbins-generic_prefill_attention_attention_DH_128_GQA_1_4`).
+- **Kernel unit anatomy.** `iron/` (dataflow), `kernel/` or `kernels/` (AIE C++), `host/` (driver),
+  `makefiles/` (`common.mk`, `kernel.mk`, `bitstream.mk`, `host.mk`). The top `Makefile` sets
+  `MODEL_TYPE`, `KERNEL_ARGS`, `IRON_ARGS`.
+- **`FLM_Xclbin/kernel_assignment.md`** is the model → kernel map. Update it when you change which
+  kernel build a model uses.
+- **Engine flags:** `-std=c++20 -fPIC -Wall -O3 -fopenmp`, then `$(FLM_MARCH) -ffast-math`, and
+  `-fmax-errors=1` (q4nx: `-std=c++20 -fPIC -Wall` only). `FLM_DLL/flags.mk` sets `FLM_MARCH` to the
+  product's AVX-512 set (`-mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma`, no `-march=native`) and
+  `XRT_ROOT` (default `/opt/xilinx/xrt`, `/usr` for a distro libxrt-dev); gemma, gpt_oss, whisper and
+  qwen3_asr add the BF16/VNNI/VBMI flags their unguarded intrinsics need. Threads via `OMP_NUM_THREADS`.
+- **Vendored, do not edit:** `FLM_DLL/include/nlohmann/`, `FLM_DLL/include/aiebu/`,
+  `FLM_Xclbin/host_common/aiebu/`, `FLM_DLL/include/tokenizer/tokenizers_c.h` and `tokenizers_cpp.h`,
+  `FLM_DLL/include/base64.hpp`, every `biovault_bfloat16.h` and every `npu_utils/amdxdna_accel.h`.
+  Full list: `../THIRD_PARTY_NOTICES.txt`; FastFlowLM's own vendored trees are in `../CONTRIBUTING.md`.
+
+## 6. Data and control flow
+
+Engine: `LM_Config` parses `config.json` → `npu_xclbin_manager` opens the device and registers the
+model's xclbins → the constructor allocates KV caches and per-kernel `npu_app`s →
+`load_weights(Q4NX&)` stages weights → `prefill(ids)` runs the prompt, `forward(id)` decodes one
+token; `checkpoint()` / `restore()` save and restore KV state.
+
+Kernel build: `iron/*_aie.py` → `build/[<MT>/]mlir/*.mlir` → `aiecc.py` → `.xclbin` →
+`build/[<MT>/]xclbins/`. The bitstream rule also writes `%RTP` buffer addresses to
+`xclbins/rtp_addresses.txt`. That file is part of the host contract (§7).
+
+## 7. Constraints: these break silently
+
+1. **`-Wl,-Bsymbolic-functions` in every `FLM_DLL/detail/*/Makefile`.** Each engine `.so` compiles its
+   own copy of the shared runtime (`npu_sequence`, `npu_app_manager`, `weight_desc_t`, `buffer`, …)
+   with default visibility, and `flm` links every engine at once. Without the flag, ELF
+   interposition binds every reference, including calls inside one `.so`, to whichever engine is
+   first in `DT_NEEDED`: you silently run another model's code. Functions only, so vtables and
+   typeinfo stay interposable and `dynamic_cast` across `.so`s works. Copy the flag and the comment
+   above `LIB_FLAGS += -Wl,-Bsymbolic-functions` into every new engine Makefile. Do not share
+   headers with inline functions across `detail/` dirs; copy them under a new namespace (see
+   `detail/minicpm_*/image/vision_common.hpp`).
+2. **`buffer.hpp` ownership.** Rules for `bytes` / `buffer<T>`:
+   - `FLM_Xclbin/host_common/buffer.hpp` and the HRX branch (`FLM_USE_HRX`) of
+     `FLM_DLL/include/buffer.hpp` share the allocation on copy (`shared_ptr`) and zero-fill on
+     `resize()`. Do not regress either.
+   - The XRT branch of `FLM_DLL/include/buffer.hpp` (the default build) still copies **without**
+     ownership: `unique_ptr`, and both the copy constructor and copy assignment set
+     `is_owner_ = false`. Its constructor zero-fills but its `resize()` does not. A copy of an
+     owning buffer dangles once the original dies: heap-use-after-free, garbage that appears far
+     from the cause. Move owning buffers (`std::move`), never copy or copy-assign them, and never
+     rely on contents after `resize()`.
+3. **Build order.** `q4nx mha gemm dequant lm_head` (`FLM_DLL/build.sh`, `priority_dirs`) build
+   first because engines depend on them (some link their libraries from `FLM_DLL/build/lib`,
+   others compile their sources directly). Do not reorder or parallelize across that boundary.
+4. **RTP addresses.** The host writes runtime parameters at fixed addresses. If a kernel rebuild
+   or an `iron/` change moves an RTP, the engine writes to a stale address: wrong output or a
+   decode hang, no error. After rebuilding, diff `build/[<MT>/]xclbins/rtp_addresses.txt` against
+   the addresses the engine hardcodes (for example `detail/hy_mem_npu/hy_mem_npu_sequence.hpp`) and
+   the `rtp_expected/` files where a unit has them. Never invent RTP values in a config.
+5. **`include/causal_lm.hpp`** is implemented by every text engine (11 pure virtuals). Adding or
+   changing a virtual is a lockstep, dev-kit-wide edit and a change to `flm`.
+6. **Weights/kernels/engine agree only by convention** (§1). Rebuilding one without the others is
+   a silent mismatch.
+7. **Toolchain versions.** Build kernels only with the mlir-aie commit and Peano version in
+   `FLM_Xclbin/README.md`. A newer or older one can build without error and compute wrong numbers;
+   the Peano that mlir-aie's build puts in its venv (21.x) is one of them.
+
+## 8. Gotchas
+
+- **AVX-512 is mandatory** for engines: built on a host without it they compile, then die with SIGILL.
+  `make FLM_MARCH=-march=native` tunes a local build to its host; such a library may fault elsewhere.
+- **Chess vs Peano.** Every kernel defaults to Peano (`ENABLE_CHESSCC ?= 0`: `clang++
+  --target=aie2p-none-unknown-elf`, `aiecc --no-xchesscc --no-xbridge`). `make … ENABLE_CHESSCC=1`
+  builds with Chess (`xchesscc_wrapper`, `--xchesscc --xbridge`); it needs Vitis AIE Essentials
+  (`AIETOOLS_ROOT`, or `xchesscc` on `PATH`) and a license (`LM_LICENSE_FILE`), and stops with a clear
+  message when Vitis is missing. There is no automatic fallback. Clean the unit when switching.
+- **`setup.sh` and `PEANO_INSTALL_DIR`.** Set it before sourcing `FLM_Xclbin/setup.sh`: without it
+  mlir-aie's `env_setup.sh` uses the venv's Peano, or pip-installs the newest nightly.
+- **Kernel builds take seconds to 30 min** per `MODEL_TYPE`. Fail fast with `make kernel`.
+- **BFP16 emulation.** `-DAIE_API_EMULATE_BFLOAT16_MMUL_WITH_BFP16` is set in most kernels'
+  `makefiles/common.mk` (`PEANOWRAP2P_FLAGS` / `CHESSCCWRAP2P_FLAGS`), not all; check the kernel's
+  `common.mk`. It changes numerics.
+- `FLM_DLL/detail/vision_common/` has no Makefile; it is compiled into the vision engines.
+- **Windows** engines take every dependency path from `FLM_DLL/cmake/flm_xrt_win.cmake`; do not add
+  `C:/...` paths to an engine CMakeLists. They need Boost *headers* (XRT's `xrt/detail/any.h` uses
+  `boost::any` under MSVC without `/Zc:__cplusplus`) but link no Boost library. An engine CMakeLists
+  only warns when a priority `.lib` is missing; use `build.ps1`, which stops instead.
+- Two registries, `FLM_DLL/model_list.json` and `model_list_linux.json`; FastFlowLM's
+  `../src/model_list.json` is what `flm` reads.
+
+## 9. Not documented anywhere
+
+- No exported-symbol contract for engine libraries; the ABI is the C++ headers.
+- Which of the two `FLM_DLL` model registries is authoritative per platform.

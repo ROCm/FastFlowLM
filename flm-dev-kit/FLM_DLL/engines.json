@@ -1,0 +1,340 @@
+{
+  "_doc": "FLM_DLL engines. engines: every detail/<engine> directory with a Makefile that builds a model library (lib<engine>.so / <engine>.dll) -> families: the FastFlowLM catalog families (details.family in src/model_list.json) to test when the engine changes, the same as the engine's row in ENGINES in .github/script/ci/changes.py; models: the kernel_assignment.json models it serves (from FastFlowLM_IRON .github/scripts/dll_assignment.json, plus hy_mem_npu -> hy-memory:30b-a3b, which that file omits; [] = none yet); uses: the other engines whose sources or include/models/<x>/ headers it compiles, so a change to one of those also tests this engine's families. shared: detail/ directories every engine builds against, which serve no model on their own; a change to one tests every engine's families. served_elsewhere: kernel_assignment.json models no engine here serves -> what runs them. Read by changes.py (devkit-families), checked by devkit_check.py.",
+  "shared": [
+    "q4nx",
+    "mha",
+    "gemm",
+    "dequant",
+    "lm_head",
+    "vision_common"
+  ],
+  "engines": {
+    "d3_npu": {
+      "families": [
+        "d3"
+      ],
+      "models": [
+        "d3:lite",
+        "d3:nano",
+        "d3:mini",
+        "d3:turbo",
+        "d3:ultra",
+        "d3:flash",
+        "d3:edge"
+      ],
+      "uses": [
+        "qwen3_5vl_npu"
+      ]
+    },
+    "gemma4_12b_npu": {
+      "families": [
+        "gemma4-12b"
+      ],
+      "models": [
+        "gemma4-it:12b"
+      ],
+      "uses": []
+    },
+    "gemma4e_dflash": {
+      "families": [
+        "gemma4e-dflash"
+      ],
+      "models": [
+        "nemotron3.5-bolt-dflash:e4b"
+      ],
+      "uses": [
+        "gemma4e_npu"
+      ]
+    },
+    "gemma4e_dflash_flash": {
+      "families": [
+        "gemma4e-dflash-flash"
+      ],
+      "models": [
+        "nemotron3.5-bolt-dflash-flash:e4b"
+      ],
+      "uses": [
+        "gemma4e_npu"
+      ]
+    },
+    "gemma4e_flash": {
+      "families": [
+        "gemma4e-flash"
+      ],
+      "models": [
+        "gemma4e-flash:e2b",
+        "gemma4e-flash:e4b"
+      ],
+      "uses": [
+        "gemma4e_npu"
+      ]
+    },
+    "gemma4e_npu": {
+      "families": [
+        "gemma4e",
+        "gemma4e-flash",
+        "gemma4e-dflash",
+        "gemma4e-dflash-flash"
+      ],
+      "models": [
+        "gemma4-it:e2b",
+        "gemma4-it:e4b",
+        "nemotron3.5-bolt:e4b"
+      ],
+      "uses": []
+    },
+    "gemma_embedding": {
+      "families": [
+        "embed-gemma"
+      ],
+      "models": [
+        "embed-gemma:300m"
+      ],
+      "uses": []
+    },
+    "gemma_npu": {
+      "families": [
+        "gemma3"
+      ],
+      "models": [
+        "gemma3:4b",
+        "medgemma:4b",
+        "medgemma1.5:4b",
+        "translategemma:4b"
+      ],
+      "uses": []
+    },
+    "gemma_text_npu": {
+      "families": [
+        "gemma3-text"
+      ],
+      "models": [
+        "gemma3:1b"
+      ],
+      "uses": []
+    },
+    "gpt_oss_npu": {
+      "families": [
+        "gpt-oss"
+      ],
+      "models": [
+        "gpt-oss:20b",
+        "gpt-oss-sg:20b"
+      ],
+      "uses": []
+    },
+    "hunyuan_npu": {
+      "families": [
+        "hunyuan"
+      ],
+      "models": [
+        "hy-mt2-flash:1.8b"
+      ],
+      "uses": []
+    },
+    "hy_mem_npu": {
+      "families": [
+        "hy-memory"
+      ],
+      "models": [
+        "hy-memory:30b-a3b"
+      ],
+      "uses": []
+    },
+    "lfm2_npu": {
+      "families": [
+        "lfm2",
+        "lfm2.5-tk"
+      ],
+      "models": [
+        "lfm2:1.2b",
+        "lfm2:2.6b",
+        "lfm2-trans:2.6b",
+        "lfm2.5-it:1.2b",
+        "lfm2.5-tk:1.2b"
+      ],
+      "uses": []
+    },
+    "lfm3_npu": {
+      "families": [
+        "lfm3"
+      ],
+      "models": [
+        "lfm3:1.7b"
+      ],
+      "uses": []
+    },
+    "llama_npu": {
+      "families": [
+        "llama3",
+        "deepseek-r1"
+      ],
+      "models": [
+        "llama3.1:8b",
+        "llama3.2:1b",
+        "llama3.2:3b",
+        "deepseek-r1:8b"
+      ],
+      "uses": []
+    },
+    "minicpm_ocr_npu": {
+      "families": [
+        "minicpm-ocr"
+      ],
+      "models": [
+        "minicpm-ocr:1.0"
+      ],
+      "uses": []
+    },
+    "minicpm_v_4_7_moe_npu": {
+      "families": [
+        "minicpm-v-4.7-moe"
+      ],
+      "models": [
+        "minicpm-v-4.7-moe:35b-a3b"
+      ],
+      "uses": []
+    },
+    "minicpm_v_4_7_npu": {
+      "families": [
+        "minicpm-v-4.7"
+      ],
+      "models": [
+        "minicpm-v-4.7:1b"
+      ],
+      "uses": []
+    },
+    "nanbeige_npu": {
+      "families": [
+        "nanbeige"
+      ],
+      "models": [
+        "nanbeige4.1:3b"
+      ],
+      "uses": []
+    },
+    "phi4_npu": {
+      "families": [
+        "phi4"
+      ],
+      "models": [
+        "phi4-mini-it:4b"
+      ],
+      "uses": []
+    },
+    "qwen2_npu": {
+      "families": [
+        "qwen2"
+      ],
+      "models": [
+        "qwen2.5-it:3b"
+      ],
+      "uses": []
+    },
+    "qwen2vl_npu": {
+      "families": [
+        "qwen2vl"
+      ],
+      "models": [
+        "qwen2.5vl-it:3b"
+      ],
+      "uses": []
+    },
+    "qwen3_5_omni": {
+      "families": [],
+      "models": [],
+      "uses": []
+    },
+    "qwen3_5vl_npu": {
+      "families": [
+        "qwen3.5"
+      ],
+      "models": [
+        "qwen3.5:0.8b",
+        "qwen3.5:2b",
+        "qwen3.5:4b",
+        "qwen3.5:9b"
+      ],
+      "uses": []
+    },
+    "qwen3_6_moe_npu": {
+      "families": [
+        "qwen3.6-moe"
+      ],
+      "models": [
+        "qwen3.6-moe:35b-a3b"
+      ],
+      "uses": []
+    },
+    "qwen3_8mtp_npu": {
+      "families": [
+        "qwen3.8-mtp",
+        "qwen3.8-dflash2"
+      ],
+      "models": [
+        "qwen3.8-mtp:27b"
+      ],
+      "uses": []
+    },
+    "qwen3_asr_npu": {
+      "families": [
+        "r2t2"
+      ],
+      "models": [
+        "r2t2:1.7b"
+      ],
+      "uses": []
+    },
+    "qwen3_npu": {
+      "families": [
+        "qwen3",
+        "qwen3-it",
+        "qwen3-tk",
+        "deepseek-r1-0528"
+      ],
+      "models": [
+        "qwen3:0.6b",
+        "qwen3:1.7b",
+        "qwen3:4b",
+        "qwen3:8b",
+        "qwen3-it:4b",
+        "qwen3-tk:4b",
+        "deepseek-r1-0528:8b"
+      ],
+      "uses": []
+    },
+    "qwen3vl_flash": {
+      "families": [
+        "qwen3vl-flash"
+      ],
+      "models": [
+        "qwen3vl-flash:4b"
+      ],
+      "uses": [
+        "qwen3vl_npu"
+      ]
+    },
+    "qwen3vl_npu": {
+      "families": [
+        "qwen3vl",
+        "qwen3vl-flash"
+      ],
+      "models": [
+        "qwen3vl-it:4b"
+      ],
+      "uses": []
+    },
+    "whisper_npu": {
+      "families": [
+        "whisper-v3"
+      ],
+      "models": [
+        "whisper-v3:turbo"
+      ],
+      "uses": []
+    }
+  },
+  "served_elsewhere": {
+    "smolvla:500m": "FLM_Pybind/SmolVLA, a pybind11 module, not an FLM_DLL engine"
+  }
+}

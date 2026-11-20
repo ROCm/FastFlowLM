@@ -1,0 +1,583 @@
+# Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+
+import numpy as np
+import sys
+
+from ml_dtypes import bfloat16
+from aie.extras.context import mlir_mod_ctx
+from aie.dialects.aie import *
+from aie.dialects.aiex import *
+from aie.helpers.dialects.ext.scf import _for as range_
+import aie.utils.trace as trace_utils
+from aie.utils.trace import MemTilePortEvent, MemTileEvent, PortEvent
+from aie.utils.trace_events_enum import CoreEvent, MemEvent, ShimTileEvent, MemTileEvent
+from typing import List
+from utils import mlir_context, tile_with_location, connect_dma, connect_port, lock_acquire, lock_release
+
+def attn_cttile0(tile: tile_with_location, mctx: mlir_context):
+
+    ct = tile.tile
+    ct_row = tile.row
+    ct_col = tile.col
+
+    attn0 = mctx.attn0
+    o_ty = mctx.o_ty
+    q_ty_0 = mctx.q_ty_0
+    in_ty = mctx.in_ty
+    s_ty = mctx.s_ty
+    attn_y_ty = mctx.attn_y_ty
+    rtp_buffer = mctx.buffers[f"rtp_{ct_row}_{ct_col}"]
+
+    q_buffer = aie.buffer(tile = ct, datatype = q_ty_0, name = f"q_{ct_row}_{ct_col}")
+    in_buffer_0 = aie.buffer(tile = ct, datatype = in_ty, name = f"in_0_{ct_row}_{ct_col}")
+    in_buffer_1 = aie.buffer(tile = ct, datatype = in_ty, name = f"in_1_{ct_row}_{ct_col}")
+    o_buffer_0 = aie.buffer(tile = ct, datatype = o_ty, name = f"o_0_{ct_row}_{ct_col}")
+    o_buffer_1 = aie.buffer(tile = ct, datatype = o_ty, name = f"o_1_{ct_row}_{ct_col}")
+    s_buffer = aie.buffer(tile = ct, datatype = s_ty, name = f"s_{ct_row}_{ct_col}")
+    y_buffer = aie.buffer(tile = ct, datatype = attn_y_ty, name = f"y_{ct_row}_{ct_col}")
+    
+    q_prod_lock = aie.lock(ct, lock_id = 0, init = 1)
+    q_cons_lock = aie.lock(ct, lock_id = 1, init = 0)
+    in_prod_lock = aie.lock(ct, lock_id = 2, init = 2)
+    in_cons_lock = aie.lock(ct, lock_id = 3, init = 0)
+    o_prod_lock = aie.lock(ct, lock_id = 4, init = 2)
+    o_cons_lock = aie.lock(ct, lock_id = 5, init = 0)
+
+    @aie.core(ct, link_with = "attn0.o", stack_size = 1024*4)
+    def core_body():
+        for _ in range_(0xFFFFFFFF):
+            attn0(o_buffer_0, o_buffer_1, q_buffer, in_buffer_0, in_buffer_1, s_buffer, y_buffer, rtp_buffer)
+    
+    @aie.mem(ct)
+    def mem_body(block):
+        s0 = aie.dma_start(channel_dir = aie.DMAChannelDir.S2MM, channel_index = 0, dest=block[1], chain=block[2])
+
+        with block[1]:
+            lock_acquire(q_prod_lock, 1)
+            aie.dma_bd(q_buffer)
+            lock_release(q_cons_lock, 1)
+            aie.next_bd(block[1]) 
+
+        with block[2]:
+            s1 = aie.dma_start(channel_dir = aie.DMAChannelDir.S2MM, channel_index = 1, dest=block[3], chain=block[5])
+        
+        with block[3]:
+            lock_acquire(in_prod_lock, 1)
+            aie.dma_bd(in_buffer_0)
+            lock_release(in_cons_lock, 1)
+            aie.next_bd(block[4])
+        
+        with block[4]:
+            lock_acquire(in_prod_lock, 1)
+            aie.dma_bd(in_buffer_1)
+            lock_release(in_cons_lock, 1)
+            aie.next_bd(block[3])
+        
+        with block[5]:
+            s2 = aie.dma_start(channel_dir = aie.DMAChannelDir.MM2S, channel_index = 0, dest=block[6], chain=block[8])
+        
+        with block[6]:
+            lock_acquire(o_cons_lock, 1)
+            aie.dma_bd(o_buffer_0)
+            lock_release(o_prod_lock, 1)
+            aie.next_bd(block[7])
+        
+        with block[7]:
+            lock_acquire(o_cons_lock, 1)
+            aie.dma_bd(o_buffer_1)
+            lock_release(o_prod_lock, 1)
+            aie.next_bd(block[6])
+        
+        with block[8]:
+            aie.EndOp()
+
+def attn_memtile0(tile: tile_with_location, mctx: mlir_context):
+    mt = tile.tile
+    mt_row = tile.row
+    mt_col = tile.col
+
+    q_mem_ty_0 = mctx.q_mem_ty_0
+    in_mem_ty_0 = mctx.in_mem_ty_0
+    o_mem_ty_0 = mctx.o_mem_ty_0
+
+    lq = mctx.lq
+    lk = mctx.lk
+    d = mctx.d
+
+    q_buffer_0 = aie.buffer(tile = mt, datatype = q_mem_ty_0, name = f"q_0_{mt_row}_{mt_col}")
+    q_buffer_1 = aie.buffer(tile = mt, datatype = q_mem_ty_0, name = f"q_1_{mt_row}_{mt_col}")
+    in_buffer_0 = aie.buffer(tile = mt, datatype = in_mem_ty_0, name = f"in_0_{mt_row}_{mt_col}")
+    in_buffer_1 = aie.buffer(tile = mt, datatype = in_mem_ty_0, name = f"in_1_{mt_row}_{mt_col}")
+    o_buffer_0 = aie.buffer(tile = mt, datatype = o_mem_ty_0, name = f"o_0_{mt_row}_{mt_col}")
+    o_buffer_1 = aie.buffer(tile = mt, datatype = o_mem_ty_0, name = f"o_1_{mt_row}_{mt_col}")
+
+    q_prod_lock = aie.lock(mt, lock_id = 0, init = 2)
+    q_cons_lock_0 = aie.lock(mt, lock_id = 1, init = 0)
+    q_cons_lock_1 = aie.lock(mt, lock_id = 2, init = 0)
+    q_cons_lock_2 = aie.lock(mt, lock_id = 3, init = 0)
+    in_prod_lock = aie.lock(mt, lock_id = 4, init = 2)
+    in_cons_lock = aie.lock(mt, lock_id = 5, init = 0)
+    o_prod_lock_0 = aie.lock(mt, lock_id = 6, init = 2)
+    o_prod_lock_1 = aie.lock(mt, lock_id = 7, init = 0)
+    o_prod_lock_2 = aie.lock(mt, lock_id = 8, init = 0)
+    o_cons_lock = aie.lock(mt, lock_id = 9, init = 0)
+
+    @aie.memtile_dma(mt)
+    def memtile_dma_body(block):
+        s0 = aie.dma_start(channel_dir = aie.DMAChannelDir.S2MM, channel_index = 0, dest=block[1], chain=block[3])
+        
+        with block[1]:
+            lock_acquire(q_prod_lock, 1)
+            aie.dma_bd(q_buffer_0, offset = 0, len = lq * d * 3)
+            lock_release(q_cons_lock_0, 1)
+            aie.next_bd(block[2])
+        
+        with block[2]:
+            lock_acquire(q_prod_lock, 1)
+            aie.dma_bd(q_buffer_1, offset = 0, len = lq * d * 3)
+            lock_release(q_cons_lock_0, 1)
+            aie.next_bd(block[1])
+        
+        with block[3]:
+            s1 = aie.dma_start(channel_dir = aie.DMAChannelDir.MM2S, channel_index = 0, dest=block[4], chain=block[6])
+        
+        with block[4]:
+            lock_acquire(q_cons_lock_0, 1)
+            aie.dma_bd(q_buffer_0, offset = 0, len = lq * d, dimensions = [(d // 8, 8), (lq, d * 3), (8, 1)])
+            lock_release(q_cons_lock_1, 1)
+            aie.next_bd(block[5])
+            
+        with block[5]:
+            lock_acquire(q_cons_lock_0, 1)
+            aie.dma_bd(q_buffer_1, offset = 0, len = lq * d, dimensions = [(d // 8, 8), (lq, d * 3), (8, 1)])
+            lock_release(q_cons_lock_1, 1)
+            aie.next_bd(block[4])
+
+
+        with block[6]:
+            s2 = aie.dma_start(channel_dir = aie.DMAChannelDir.MM2S, channel_index = 1, dest=block[7], chain=block[9])
+        
+        with block[7]:
+            lock_acquire(q_cons_lock_1, 1)
+            aie.dma_bd(q_buffer_0, offset = d, len = lq * d, dimensions = [(d // 8, 8), (lq, d * 3), (8, 1)])
+            lock_release(q_cons_lock_2, 1)
+            aie.next_bd(block[8])
+            
+        with block[8]:
+            lock_acquire(q_cons_lock_1, 1)
+            aie.dma_bd(q_buffer_1, offset = d, len = lq * d, dimensions = [(d // 8, 8), (lq, d * 3), (8, 1)])
+            lock_release(q_cons_lock_2, 1)
+            aie.next_bd(block[7])
+
+        with block[9]:
+            s3 = aie.dma_start(channel_dir = aie.DMAChannelDir.MM2S, channel_index = 2, dest=block[10], chain=block[12])
+        
+        with block[10]:
+            lock_acquire(q_cons_lock_2, 1)
+            aie.dma_bd(q_buffer_0, offset = 2 * d, len = lq * d, dimensions = [(d // 8, 8), (lq, d * 3), (8, 1)])
+            lock_release(q_prod_lock, 1)
+            aie.next_bd(block[11])
+            
+        with block[11]:
+            lock_acquire(q_cons_lock_2, 1)
+            aie.dma_bd(q_buffer_1, offset = 2 * d, len = lq * d, dimensions = [(d // 8, 8), (lq, d * 3), (8, 1)])
+            lock_release(q_prod_lock, 1)
+            aie.next_bd(block[10])
+        
+        with block[12]:
+            s4 = aie.dma_start(channel_dir = aie.DMAChannelDir.S2MM, channel_index = 1, dest=block[13], chain=block[15])
+        
+        with block[13]:
+            lock_acquire(in_prod_lock, 1)
+            aie.dma_bd(in_buffer_0)
+            lock_release(in_cons_lock, 1)
+            aie.next_bd(block[14])
+        
+        with block[14]:
+            lock_acquire(in_prod_lock, 1)
+            aie.dma_bd(in_buffer_1)
+            lock_release(in_cons_lock, 1)
+            aie.next_bd(block[13])
+        
+        with block[15]:
+            s5 = aie.dma_start(channel_dir = aie.DMAChannelDir.MM2S, channel_index = 3, dest=block[16], chain=block[18])
+        
+        with block[16]:
+            lock_acquire(in_cons_lock, 1)
+            aie.dma_bd(in_buffer_0, offset = 0, len = 2 * lk * d, dimensions = [(2, lk * d), (d // 8, 8), (lk, d), (8, 1)])
+            lock_release(in_prod_lock, 1)
+            aie.next_bd(block[17])
+            
+        with block[17]:
+            lock_acquire(in_cons_lock, 1)
+            aie.dma_bd(in_buffer_1, offset = 0, len = 2 * lk * d, dimensions = [(2, lk * d), (d // 8, 8), (lk, d), (8, 1)])
+            lock_release(in_prod_lock, 1)
+            aie.next_bd(block[16])
+    
+        with block[18]:
+            s6 = aie.dma_start(channel_dir = aie.DMAChannelDir.S2MM, channel_index = 2, dest=block[19], chain=block[21])
+        
+        with block[19]:
+            lock_acquire(o_prod_lock_0, 1)
+            aie.dma_bd(o_buffer_0, offset = 0, len = lq * d, dimensions = [(lq // 8, 8 * d), (8, 8), (8, lq), (8, 1)])
+            lock_release(o_prod_lock_1, 1)
+            aie.next_bd(block[20])
+
+        with block[20]:
+            lock_acquire(o_prod_lock_0, 1)
+            aie.dma_bd(o_buffer_1, offset = 0, len = lq * d, dimensions = [(lq // 8, 8 * d), (8, 8), (8, lq), (8, 1)])
+            lock_release(o_prod_lock_1, 1)
+            aie.next_bd(block[19])
+    
+        with block[21]:
+            s7 = aie.dma_start(channel_dir = aie.DMAChannelDir.S2MM, channel_index = 3, dest=block[22], chain=block[24])
+        
+        with block[22]:
+            lock_acquire(o_prod_lock_1, 1)
+            aie.dma_bd(o_buffer_0, offset = lq * d, len = lq * d, dimensions = [(lq // 8, 8 * d), (8, 8), (8, lq), (8, 1)])
+            lock_release(o_prod_lock_2, 1)
+            aie.next_bd(block[23])
+
+        with block[23]:
+            lock_acquire(o_prod_lock_1, 1)
+            aie.dma_bd(o_buffer_1, offset = lq * d, len = lq * d, dimensions = [(lq // 8, 8 * d), (8, 8), (8, lq), (8, 1)])
+            lock_release(o_prod_lock_2, 1)
+            aie.next_bd(block[22])
+    
+        with block[24]:
+            s8 = aie.dma_start(channel_dir = aie.DMAChannelDir.S2MM, channel_index = 4, dest=block[25], chain=block[27])
+        
+        with block[25]:
+            lock_acquire(o_prod_lock_2, 1)
+            aie.dma_bd(o_buffer_0, offset = 2 * lq * d, len = lq * d, dimensions = [(lq // 8, 8 * d), (8, 8), (8, lq), (8, 1)])
+            lock_release(o_cons_lock, 1)
+            aie.next_bd(block[26])
+
+        with block[26]:
+            lock_acquire(o_prod_lock_2, 1)
+            aie.dma_bd(o_buffer_1, offset = 2 * lq * d, len = lq * d, dimensions = [(lq // 8, 8 * d), (8, 8), (8, lq), (8, 1)])
+            lock_release(o_cons_lock, 1)
+            aie.next_bd(block[25])
+        
+        with block[27]:
+            s12 = aie.dma_start(channel_dir = aie.DMAChannelDir.MM2S, channel_index = 4, dest=block[28], chain=block[30])
+        
+        with block[28]:
+            lock_acquire(o_cons_lock, 1)
+            aie.dma_bd(o_buffer_0, offset = 0, len = lq * d * 3, dimensions = [(lq, d), (3, lq * d), (d, 1)])
+            lock_release(o_prod_lock_0, 1)
+            aie.next_bd(block[29])
+        
+        with block[29]:
+            lock_acquire(o_cons_lock, 1)
+            aie.dma_bd(o_buffer_1, offset = 0, len = lq * d * 3, dimensions = [(lq, d), (3, lq * d), (d, 1)])
+            lock_release(o_prod_lock_0, 1)
+            aie.next_bd(block[28])
+        
+        with block[30]:
+            aie.EndOp()
+
+def attn_cttile1(tile: tile_with_location, mctx: mlir_context):
+
+    ct = tile.tile
+    ct_row = tile.row
+    ct_col = tile.col
+
+    attn1 = mctx.attn1
+    o_ty = mctx.o_ty
+    q_ty_1 = mctx.q_ty_1
+    in_ty = mctx.in_ty
+    s_ty = mctx.s_ty
+    attn_y_ty = mctx.attn_y_ty
+    rtp_buffer = mctx.buffers[f"rtp_{ct_row}_{ct_col}"]
+
+    q_buffer = aie.buffer(tile = ct, datatype = q_ty_1, name = f"q_{ct_row}_{ct_col}")
+    in_buffer_0 = aie.buffer(tile = ct, datatype = in_ty, name = f"in_0_{ct_row}_{ct_col}")
+    in_buffer_1 = aie.buffer(tile = ct, datatype = in_ty, name = f"in_1_{ct_row}_{ct_col}")
+    o_buffer_0 = aie.buffer(tile = ct, datatype = o_ty, name = f"o_0_{ct_row}_{ct_col}")
+    o_buffer_1 = aie.buffer(tile = ct, datatype = o_ty, name = f"o_1_{ct_row}_{ct_col}")
+    s_buffer = aie.buffer(tile = ct, datatype = s_ty, name = f"s_{ct_row}_{ct_col}")
+    y_buffer = aie.buffer(tile = ct, datatype = attn_y_ty, name = f"y_{ct_row}_{ct_col}")
+    
+    q_prod_lock = aie.lock(ct, lock_id = 0, init = 1)
+    q_cons_lock = aie.lock(ct, lock_id = 1, init = 0)
+    in_prod_lock = aie.lock(ct, lock_id = 2, init = 2)
+    in_cons_lock = aie.lock(ct, lock_id = 3, init = 0)
+    o_prod_lock = aie.lock(ct, lock_id = 4, init = 2)
+    o_cons_lock = aie.lock(ct, lock_id = 5, init = 0)
+
+    @aie.core(ct, link_with = "attn1.o", stack_size = 1024*4)
+    def core_body():
+        for _ in range_(0xFFFFFFFF):
+            attn1(o_buffer_0, o_buffer_1, q_buffer, in_buffer_0, in_buffer_1, s_buffer, y_buffer, rtp_buffer, (ct_row - 2) & 0x1)
+    
+    @aie.mem(ct)
+    def mem_body(block):
+        s0 = aie.dma_start(channel_dir = aie.DMAChannelDir.S2MM, channel_index = 0, dest=block[1], chain=block[2])
+
+        with block[1]:
+            lock_acquire(q_prod_lock, 1)
+            aie.dma_bd(q_buffer)
+            lock_release(q_cons_lock, 1)
+            aie.next_bd(block[1]) 
+
+        with block[2]:
+            s1 = aie.dma_start(channel_dir = aie.DMAChannelDir.S2MM, channel_index = 1, dest=block[3], chain=block[5])
+        
+        with block[3]:
+            lock_acquire(in_prod_lock, 1)
+            aie.dma_bd(in_buffer_0)
+            lock_release(in_cons_lock, 1)
+            aie.next_bd(block[4])
+        
+        with block[4]:
+            lock_acquire(in_prod_lock, 1)
+            aie.dma_bd(in_buffer_1)
+            lock_release(in_cons_lock, 1)
+            aie.next_bd(block[3])
+        
+        with block[5]:
+            s2 = aie.dma_start(channel_dir = aie.DMAChannelDir.MM2S, channel_index = 0, dest=block[6], chain=block[8])
+        
+        with block[6]:
+            lock_acquire(o_cons_lock, 1)
+            aie.dma_bd(o_buffer_0)
+            lock_release(o_prod_lock, 1)
+            aie.next_bd(block[7])
+        
+        with block[7]:
+            lock_acquire(o_cons_lock, 1)
+            aie.dma_bd(o_buffer_1)
+            lock_release(o_prod_lock, 1)
+            aie.next_bd(block[6])
+        
+        with block[8]:
+            aie.EndOp()
+
+def attn_memtile1(tile: tile_with_location, mctx: mlir_context):
+    mt = tile.tile
+    mt_row = tile.row
+    mt_col = tile.col
+
+    q_mem_ty_1 = mctx.q_mem_ty_1
+    in_mem_ty_1 = mctx.in_mem_ty_1
+    o_mem_ty_1 = mctx.o_mem_ty_1
+
+    lq = mctx.lq
+    lk = mctx.lk
+    d = mctx.d
+
+    q_buffer_0 = aie.buffer(tile = mt, datatype = q_mem_ty_1, name = f"q_0_{mt_row}_{mt_col}")
+    q_buffer_1 = aie.buffer(tile = mt, datatype = q_mem_ty_1, name = f"q_1_{mt_row}_{mt_col}")
+    in_buffer_0 = aie.buffer(tile = mt, datatype = in_mem_ty_1, name = f"in_0_{mt_row}_{mt_col}")
+    in_buffer_1 = aie.buffer(tile = mt, datatype = in_mem_ty_1, name = f"in_1_{mt_row}_{mt_col}")
+    o_buffer_0 = aie.buffer(tile = mt, datatype = o_mem_ty_1, name = f"o_0_{mt_row}_{mt_col}")
+    o_buffer_1 = aie.buffer(tile = mt, datatype = o_mem_ty_1, name = f"o_1_{mt_row}_{mt_col}")
+
+    q_prod_lock = aie.lock(mt, lock_id = 0, init = 2)
+    q_cons_lock_0 = aie.lock(mt, lock_id = 1, init = 0)
+    q_cons_lock_1 = aie.lock(mt, lock_id = 2, init = 0)
+    in_prod_lock = aie.lock(mt, lock_id = 5, init = 4)
+    in_cons_lock_0 = aie.lock(mt, lock_id = 6, init = 0)
+    in_cons_lock_1 = aie.lock(mt, lock_id = 8, init = 0)
+    o_prod_lock_0 = aie.lock(mt, lock_id = 9, init = 2)
+    o_prod_lock_1 = aie.lock(mt, lock_id = 10, init = 0)
+    o_prod_lock_2 = aie.lock(mt, lock_id = 11, init = 0)
+    o_prod_lock_3 = aie.lock(mt, lock_id = 12, init = 0)
+    o_cons_lock = aie.lock(mt, lock_id = 13, init = 0)
+
+    @aie.memtile_dma(mt)
+    def memtile_dma_body(block):
+        s0 = aie.dma_start(channel_dir = aie.DMAChannelDir.S2MM, channel_index = 0, dest=block[1], chain=block[3])
+        
+        with block[1]:
+            lock_acquire(q_prod_lock, 1)
+            aie.dma_bd(q_buffer_0, offset = 0, len = lq * d * 4)
+            lock_release(q_cons_lock_0, 1)
+            aie.next_bd(block[2])
+        
+        with block[2]:
+            lock_acquire(q_prod_lock, 1)
+            aie.dma_bd(q_buffer_1, offset = 0, len = lq * d * 4)
+            lock_release(q_cons_lock_0, 1)
+            aie.next_bd(block[1])
+        
+        with block[3]:
+            s1 = aie.dma_start(channel_dir = aie.DMAChannelDir.MM2S, channel_index = 0, dest=block[4], chain=block[6])
+        
+        with block[4]:
+            lock_acquire(q_cons_lock_0, 1)
+            aie.dma_bd(q_buffer_0, offset = 0, len = 2 * lq * d, dimensions = [(d * 2 // 8, 8), (lq, d * 4), (8, 1)])
+            lock_release(q_cons_lock_1, 1)
+            aie.next_bd(block[5])
+            
+        with block[5]:
+            lock_acquire(q_cons_lock_0, 1)
+            aie.dma_bd(q_buffer_1, offset = 0, len = 2 * lq * d, dimensions = [(d * 2 // 8, 8), (lq, d * 4), (8, 1)])
+            lock_release(q_cons_lock_1, 1)
+            aie.next_bd(block[4])
+
+
+        with block[6]:
+            s2 = aie.dma_start(channel_dir = aie.DMAChannelDir.MM2S, channel_index = 1, dest=block[7], chain=block[9])
+        
+        with block[7]:
+            lock_acquire(q_cons_lock_1, 1)
+            aie.dma_bd(q_buffer_0, offset = 2 * d, len = 2 * lq * d, dimensions = [(d * 2 // 8, 8), (lq, d * 4), (8, 1)])
+            lock_release(q_prod_lock, 1)
+            aie.next_bd(block[8])
+            
+        with block[8]:
+            lock_acquire(q_cons_lock_1, 1)
+            aie.dma_bd(q_buffer_1, offset = 2 * d, len = 2 * lq * d, dimensions = [(d * 2 // 8, 8), (lq, d * 4), (8, 1)])
+            lock_release(q_prod_lock, 1)
+            aie.next_bd(block[7])
+
+        with block[9]:
+            s4 = aie.dma_start(channel_dir = aie.DMAChannelDir.S2MM, channel_index = 1, dest=block[10], chain=block[12])
+        
+        with block[10]:
+            lock_acquire(in_prod_lock, 2)
+            aie.dma_bd(in_buffer_0)
+            lock_release(in_cons_lock_0, 2)
+            aie.next_bd(block[11])
+        
+        with block[11]:
+            lock_acquire(in_prod_lock, 2)
+            aie.dma_bd(in_buffer_1)
+            lock_release(in_cons_lock_0, 2)
+            aie.next_bd(block[10])
+        
+        with block[12]:
+            s5 = aie.dma_start(channel_dir = aie.DMAChannelDir.MM2S, channel_index = 2, dest=block[13], chain=block[15])
+
+        # k0
+        with block[13]:
+            lock_acquire(in_cons_lock_0, 1)
+            aie.dma_bd(in_buffer_0, offset = 0, len = lk * d, dimensions = [(d // 8, 8), (lk, 2 * d), (8, 1)])
+            lock_release(in_cons_lock_1, 1)
+            aie.next_bd(block[14])
+        # v0
+        with block[14]:
+            lock_acquire(in_cons_lock_0, 1)
+            aie.dma_bd(in_buffer_0, offset = 2 * lk * d, len = lk * d, dimensions = [(d // 8, 8), (lk, 2 * d), (8, 1)])
+            lock_release(in_cons_lock_1, 1)
+            aie.next_bd(block[114])
+            
+        with block[114]:
+            lock_acquire(in_cons_lock_0, 1)
+            aie.dma_bd(in_buffer_1, offset = 0, len = lk * d, dimensions = [(d // 8, 8), (lk, d * 2), (8, 1)])
+            lock_release(in_cons_lock_1, 1)
+            aie.next_bd(block[113])
+            
+        with block[113]:
+            lock_acquire(in_cons_lock_0, 1)
+            aie.dma_bd(in_buffer_1, offset = 2 * lk * d, len = lk * d, dimensions = [(d // 8, 8), (lk, d * 2), (8, 1)])
+            lock_release(in_cons_lock_1, 1)
+            aie.next_bd(block[13])
+        
+        with block[15]:
+            s6 = aie.dma_start(channel_dir = aie.DMAChannelDir.MM2S, channel_index = 3, dest=block[16], chain=block[18])
+
+        # k1
+        with block[16]:
+            lock_acquire(in_cons_lock_1, 1)
+            aie.dma_bd(in_buffer_0, offset = d, len = lk * d, dimensions = [(d // 8, 8), (lk, d * 2), (8, 1)])
+            lock_release(in_prod_lock, 1)
+            aie.next_bd(block[17])
+        # v1
+        with block[17]:
+            lock_acquire(in_cons_lock_1, 1)
+            aie.dma_bd(in_buffer_0, offset = 2 * lk * d + d, len = lk * d, dimensions = [(d // 8, 8), (lk, d * 2), (8, 1)])
+            lock_release(in_prod_lock, 1)
+            aie.next_bd(block[117])
+            
+        with block[117]:
+            lock_acquire(in_cons_lock_1, 1)
+            aie.dma_bd(in_buffer_1, offset = d, len = lk * d, dimensions = [(d // 8, 8), (lk, d * 2), (8, 1)])
+            lock_release(in_prod_lock, 1)
+            aie.next_bd(block[116])
+            
+        with block[116]:
+            lock_acquire(in_cons_lock_1, 1)
+            aie.dma_bd(in_buffer_1, offset = 2 * lk * d + d, len = lk * d, dimensions = [(d // 8, 8), (lk, d * 2), (8, 1)])
+            lock_release(in_prod_lock, 1)
+            aie.next_bd(block[16])
+    
+        with block[18]:
+            s6 = aie.dma_start(channel_dir = aie.DMAChannelDir.S2MM, channel_index = 2, dest=block[19], chain=block[21])
+        
+        with block[19]:
+            lock_acquire(o_prod_lock_0, 1)
+            aie.dma_bd(o_buffer_0, offset = 0, len = lq * d, dimensions = [(lq // 8, 8 * d), (8, 8), (8, lq), (8, 1)])
+            lock_release(o_prod_lock_1, 1)
+            aie.next_bd(block[20])
+
+        with block[20]:
+            lock_acquire(o_prod_lock_0, 1)
+            aie.dma_bd(o_buffer_1, offset = 0, len = lq * d, dimensions = [(lq // 8, 8 * d), (8, 8), (8, lq), (8, 1)])
+            lock_release(o_prod_lock_1, 1)
+            aie.next_bd(block[19])
+    
+        with block[21]:
+            s7 = aie.dma_start(channel_dir = aie.DMAChannelDir.S2MM, channel_index = 3, dest=block[22], chain=block[24])
+        
+        with block[22]:
+            lock_acquire(o_prod_lock_1, 1)
+            aie.dma_bd(o_buffer_0, offset = lq * d, len = lq * d, dimensions = [(lq // 8, 8 * d), (8, 8), (8, lq), (8, 1)])
+            lock_release(o_prod_lock_2, 1)
+            aie.next_bd(block[23])
+
+        with block[23]:
+            lock_acquire(o_prod_lock_1, 1)
+            aie.dma_bd(o_buffer_1, offset = lq * d, len = lq * d, dimensions = [(lq // 8, 8 * d), (8, 8), (8, lq), (8, 1)])
+            lock_release(o_prod_lock_2, 1)
+            aie.next_bd(block[22])
+    
+        with block[24]:
+            s8 = aie.dma_start(channel_dir = aie.DMAChannelDir.S2MM, channel_index = 4, dest=block[25], chain=block[27])
+        
+        with block[25]:
+            lock_acquire(o_prod_lock_2, 1)
+            aie.dma_bd(o_buffer_0, offset = 2 * lq * d, len = lq * d, dimensions = [(lq // 8, 8 * d), (8, 8), (8, lq), (8, 1)])
+            lock_release(o_prod_lock_3, 1)
+            aie.next_bd(block[26])
+
+        with block[26]:
+            lock_acquire(o_prod_lock_2, 1)
+            aie.dma_bd(o_buffer_1, offset = 2 * lq * d, len = lq * d, dimensions = [(lq // 8, 8 * d), (8, 8), (8, lq), (8, 1)])
+            lock_release(o_prod_lock_3, 1)
+            aie.next_bd(block[25])
+    
+        with block[27]:
+            s9 = aie.dma_start(channel_dir = aie.DMAChannelDir.S2MM, channel_index = 5, dest=block[28], chain=block[30])
+        
+        with block[28]:
+            lock_acquire(o_prod_lock_3, 1)
+            aie.dma_bd(o_buffer_0, offset = 3 * lq * d, len = lq * d, dimensions = [(lq // 8, 8 * d), (8, 8), (8, lq), (8, 1)])
+            lock_release(o_cons_lock, 1)
+            aie.next_bd(block[29])
+
+        with block[29]:
+            lock_acquire(o_prod_lock_3, 1)
+            aie.dma_bd(o_buffer_1, offset = 3 * lq * d, len = lq * d, dimensions = [(lq // 8, 8 * d), (8, 8), (8, lq), (8, 1)])
+            lock_release(o_cons_lock, 1)
+            aie.next_bd(block[28])
+        
+        with block[30]:
+            s12 = aie.dma_start(channel_dir = aie.DMAChannelDir.MM2S, channel_index = 5, dest=block[31], chain=block[33])
+        
+        with block[31]:
+            lock_acquire(o_cons_lock, 1)
+            aie.dma_bd(o_buffer_0, offset = 0, len = lq * d * 4, dimensions = [(lq, d), (4, lq * d), (d, 1)])
+            lock_release(o_prod_lock_0, 1)
+            aie.next_bd(block[32])
+        
+        with block[32]:
+            lock_acquire(o_cons_lock, 1)
+            aie.dma_bd(o_buffer_1, offset = 0, len = lq * d * 4, dimensions = [(lq, d), (4, lq * d), (d, 1)])
+            lock_release(o_prod_lock_0, 1)
+            aie.next_bd(block[31])
+        
+        with block[33]:
+            aie.EndOp()

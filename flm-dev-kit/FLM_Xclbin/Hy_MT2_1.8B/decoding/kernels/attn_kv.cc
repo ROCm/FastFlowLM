@@ -1,0 +1,923 @@
+// Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+// Portions of this file consist of AI-generated content.
+
+#include "lut_based_ops.h"
+#include "aie_kernel_utils.h"
+#include "aie_array_layout.h"
+
+typedef float y_acc_dtype;
+void calculate_l(bf16 *__restrict pS, float *__restrict c, float *__restrict l);
+template <unsigned colQ, unsigned r, unsigned s, unsigned t>
+void attn_fv(bf16 *__restrict pS, bf16 *__restrict pV, y_acc_dtype *__restrict pY, float *__restrict c);
+template <unsigned colQ>
+void attn_fv_bfp16(bf16 *__restrict pS, const uint8_t *__restrict pV, y_acc_dtype *__restrict pY, float *__restrict c);
+template <unsigned N>
+void scale_div_aie(bf16 *a, bf16* o, float *l);
+template <typename T_in, typename T_out, int N>
+void passThrough_aie(T_in *restrict in0, T_out *restrict out);
+
+
+constexpr int s_prod_lock = 4;
+constexpr int s_cons_lock = 5;
+constexpr int v_prod_lock = 2;
+constexpr int v_cons_lock = 3;
+constexpr int o_prod_lock = 0;
+constexpr int o_cons_lock = 1;  
+// constexpr int l_prod_lock = 6;
+constexpr int l_cons_lock = 7;      // on the Q·K tile below
+constexpr int vt_prod_lock = 6;     // on this tile
+constexpr int vt_cons_lock = 7;
+
+extern "C"{
+
+void attn_kv(
+    bf16 *__restrict s_ping,
+    bf16 *__restrict s_pong,
+    bf16 *__restrict v_ping,
+    bf16 *__restrict v_pong,
+    bf16 *__restrict v_tail,
+    bf16 *__restrict o_ping,
+    bf16 *__restrict o_pong,
+    int* L
+)
+{
+    alignas(aie::vector_decl_align) static y_acc_dtype y[8 * DH] = {};
+    alignas(aie::vector_decl_align) static bf16 y_bf16[8 * DH] = {};
+    alignas(aie::vector_decl_align) static float l[16] = {};
+    const aie::vector<float, 16> zero = aie::broadcast<float, 16>(0);
+
+    AIE_PERSIST_ZERO static bool is_s_ping = false;
+    AIE_PERSIST_ZERO static bool is_v_ping = false;
+    AIE_PERSIST_ZERO static bool is_lo_ping = false;
+    zero_vectorized<y_acc_dtype, 8*DH>(y);
+    aie::store_v(l, zero);
+    _down_lock_acquire(l_cons_lock);
+
+    AIE_LOCK_LOOP_CTR n_bfp16 = L[1];
+    while (n_bfp16 > 0) {
+        _down_lock_acquire(s_cons_lock);
+        _lock_acquire(v_cons_lock);
+        is_s_ping = !is_s_ping;
+        is_v_ping = !is_v_ping;
+        bf16 *s = is_s_ping ? s_ping : s_pong;
+        const uint8_t *v = (const uint8_t *)(is_v_ping ? v_ping : v_pong);
+        float *c = (float *)(s + Q_HEADS_PADDED_PER_CU * 16);
+#if !defined(DECODE_STUB_ATTN) && !defined(DECODE_STUB_KV) && !defined(DECODE_STUB_L)
+        calculate_l(s, c, l);
+#endif
+#if !defined(DECODE_STUB_ATTN) && !defined(DECODE_STUB_KV) && !defined(DECODE_STUB_FV)
+        attn_fv_bfp16<DH / 8>(s, v, y, c);
+#endif
+        _down_lock_release(s_prod_lock);
+        _lock_release(v_prod_lock);
+        n_bfp16 -= 1;
+    }
+
+    {
+        _down_lock_acquire(s_cons_lock);
+        _lock_acquire(vt_cons_lock);
+        is_s_ping = !is_s_ping;
+        bf16 *s = is_s_ping ? s_ping : s_pong;
+        float *c = (float *)(s + Q_HEADS_PADDED_PER_CU * 16);
+#if !defined(DECODE_STUB_ATTN) && !defined(DECODE_STUB_KV) && !defined(DECODE_STUB_L)
+        calculate_l(s, c, l);
+#endif
+#if !defined(DECODE_STUB_ATTN) && !defined(DECODE_STUB_KV) && !defined(DECODE_STUB_FV)
+        attn_fv<DH / 8, GQA_R, GQA_S, GQA_T>(s, v_tail + 16 * DH, y, c);   // tail = [K][V]
+#endif
+        _down_lock_release(s_prod_lock);
+        _lock_release(vt_prod_lock);
+    }
+    passThrough_aie<y_acc_dtype, bf16, 8*DH>(y, y_bf16);
+    is_lo_ping = !is_lo_ping;
+    bf16 *o = is_lo_ping ? o_ping : o_pong;
+    _lock_acquire(o_prod_lock);
+    scale_div_aie<8 * DH>(y_bf16, o, l);
+    _lock_release(o_cons_lock);
+}
+}
+
+
+template <typename T_in, typename T_out, int N>
+void passThrough_aie(T_in *restrict in0, T_out *restrict out) {
+    
+    const int vec_factor = 16;
+
+    aie::vector<T_out, vec_factor> Out;
+
+    const int F = N / vec_factor;
+    for (int i = 0; i < F; i++) AIE_LOOP_FLATTEN {
+            aie::accum<accfloat, vec_factor> c_acc_in;
+            c_acc_in.from_vector(aie::load_v<vec_factor>(in0));
+            aie::store_v(out, c_acc_in.template to_vector<T_out>());
+            in0 += vec_factor;
+            out += vec_factor;
+        }
+}
+
+#if ATTN_IMPL == ATTN_IMPL_2x4x1
+void calculate_l(bf16 *__restrict pS, float *__restrict c, float *__restrict l) {
+    using MMUL = aie::mmul<8, 8, 8, bf16, bf16, accfloat>;
+
+    bf16 *__restrict pS1 = pS;
+   
+    aie::vector<bf16, 64> S_up = aie::load_v<64>(pS1);
+    pS1 += 64;
+    aie::vector<bf16, 64> S_down = aie::load_v<64>(pS1);
+
+    aie::vector<bf16, 32> S10 = aie::filter_even(S_up, 8);
+    aie::vector<bf16, 32> S11 = aie::filter_odd(S_up, 8);
+    aie::vector<bf16, 32> S20 = aie::filter_even(S_down, 8);
+    aie::vector<bf16, 32> S21 = aie::filter_odd(S_down, 8);
+    
+    aie::vector<bf16, MMUL::size_A> S0 = aie::concat(S10, S20);
+    aie::vector<bf16, MMUL::size_A> S1 = aie::concat(S11, S21);
+    aie::vector<bf16, MMUL::size_B> ones = aie::broadcast<bf16, MMUL::size_B>(1);
+
+    aie::vector<bf16, MMUL::size_C> acc_C00 = aie::zeros<bf16, MMUL::size_C>(); 
+
+    MMUL C00(acc_C00);
+
+    C00.mac(S0, ones);
+    C00.mac(S1, ones);
+
+    aie::vector<float, MMUL::size_C> sumf = C00.template to_vector<float>();
+    auto sum03 = aie::filter_even(sumf, 4);
+    auto sum02 = aie::filter_even(sum03, 2);
+    auto sum01 = aie::filter_even(sum02, 1);
+    auto sum00 = aie::concat(sum01, sum01);
+    aie::accum<accfloat, 16> sum;
+    sum.from_vector(sum00);
+
+    aie::vector<float, 8> c_float32 = aie::load_v<8>(c);
+    aie::vector<float, 16> c_in = aie::concat(c_float32, c_float32);
+    
+    aie::vector<float, 8> l_float32 = aie::load_v<8>(l);
+    aie::vector<float, 16> l_in = aie::concat(l_float32, l_float32);
+
+    aie::accum<accfloat, 16> l_out;
+    l_out = mac_elem_16_accuracy_safe(l_in, c_in, sum, 0, 0, 0);
+    aie::store_v(l, l_out.template to_vector<float>());
+
+    // bf16 sums[8] = {};
+    // aie::vector<bf16, 16> s0 = aie::load_v<16>(pS);
+    // aie::vector<bf16, 16> s1 = aie::load_v<16>(pS + 16);
+    // aie::vector<bf16, 16> s2 = aie::load_v<16>(pS + 32);
+    // aie::vector<bf16, 16> s3 = aie::load_v<16>(pS + 48);
+    // aie::vector<bf16, 16> s4 = aie::load_v<16>(pS + 64);
+    // aie::vector<bf16, 16> s5 = aie::load_v<16>(pS + 80);
+    // aie::vector<bf16, 16> s6 = aie::load_v<16>(pS + 96);
+    // aie::vector<bf16, 16> s7 = aie::load_v<16>(pS + 112);
+
+    // sums[0] = aie::reduce_add(s0);
+    // sums[1] = aie::reduce_add(s1);
+    // sums[2] = aie::reduce_add(s2);
+    // sums[3] = aie::reduce_add(s3);
+    // sums[4] = aie::reduce_add(s4);
+    // sums[5] = aie::reduce_add(s5);
+    // sums[6] = aie::reduce_add(s6);
+    // sums[7] = aie::reduce_add(s7);
+
+    // aie::vector<bf16, 8> sum_bf16 = aie::load_v<8>(sums);
+    // aie::vector<bf16, 16> sum_16 = aie::concat(sum_bf16, sum_bf16);
+    // aie::accum<accfloat, 16> sum_float32_16;
+    // sum_float32_16.from_vector(sum_16);
+
+    // aie::vector<float, 8> c_float32 = aie::load_v<8>(c);
+    // aie::vector<float, 16> c_in = aie::concat(c_float32, c_float32);
+    // aie::vector<float, 8> l_float32 = aie::load_v<8>(l);
+    // aie::vector<float, 16> l_in = aie::concat(l_float32, l_float32);
+
+    // aie::accum<accfloat, 16> l_out;
+    // l_out = mac_elem_16_accuracy_safe(l_in, c_in, sum_float32_16, 0, 0, 0);
+    // aie::store_v(l, l_out.template to_vector<float>());
+}
+
+template <unsigned colQ, unsigned r, unsigned s, unsigned t>
+void attn_fv(bf16 *__restrict pS, bf16 *__restrict pV, y_acc_dtype *__restrict pY, float *__restrict c) {
+
+    using MMUL = aie::mmul<r, s, t, bf16, bf16, accfloat>;
+
+    
+
+    y_acc_dtype *__restrict pY1 = pY;
+    bf16 *__restrict pS1 = pS;
+   
+    aie::vector<bf16, 64> S_up = aie::load_v<64>(pS1);
+    pS1 += 64;
+    aie::vector<bf16, 64> S_down = aie::load_v<64>(pS1);
+
+    aie::vector<bf16, 32> S10 = aie::filter_even(S_up, 8);
+    aie::vector<bf16, 32> S11 = aie::filter_odd(S_up, 8);
+    aie::vector<bf16, 32> S20 = aie::filter_even(S_down, 8);
+    aie::vector<bf16, 32> S21 = aie::filter_odd(S_down, 8);
+    
+    aie::vector<bf16, MMUL::size_A> S0 = aie::concat(S10, S20);
+    aie::vector<bf16, MMUL::size_A> S1 = aie::concat(S11, S21);
+    
+    aie::vector<y_acc_dtype, 8> c0 = aie::broadcast<float, 8>(c[0]);
+    aie::vector<y_acc_dtype, 8> c1 = aie::broadcast<float, 8>(c[1]);
+    aie::vector<y_acc_dtype, 8> c2 = aie::broadcast<float, 8>(c[2]);
+    aie::vector<y_acc_dtype, 8> c3 = aie::broadcast<float, 8>(c[3]);   
+    aie::vector<y_acc_dtype, 8> c4 = aie::broadcast<float, 8>(c[4]);
+    aie::vector<y_acc_dtype, 8> c5 = aie::broadcast<float, 8>(c[5]);
+    aie::vector<y_acc_dtype, 8> c6 = aie::broadcast<float, 8>(c[6]);
+    aie::vector<y_acc_dtype, 8> c7 = aie::broadcast<float, 8>(c[7]);
+    aie::vector<y_acc_dtype, 64> CORRECT = aie::concat(c0, c1, c2, c3, c4, c5, c6, c7);
+
+    bf16 *__restrict pV1 = pV;
+    bf16 *__restrict pV2 = pV + MMUL::size_B * colQ;
+
+    AIE_PREPARE_FOR_PIPELINING AIE_LOOP_RANGE(2)
+	for (unsigned j = 0; j < colQ; j += 4) {
+        //v0
+        bf16 *__restrict pV01 = pV1 + (j + 0) * MMUL::size_B;
+        bf16 *__restrict pV02 = pV1 + (j + 1) * MMUL::size_B;
+
+        aie::vector<bf16, MMUL::size_B> V00 = aie::load_v<MMUL::size_B>(pV01);
+        pV01 += MMUL::size_B * colQ * 2;
+        aie::vector<bf16, MMUL::size_B> V01 = aie::load_v<MMUL::size_B>(pV02);
+        pV02 += MMUL::size_B * colQ * 2;
+
+        aie::vector<y_acc_dtype, MMUL::size_C> acc_Y00 = aie::load_v<MMUL::size_C>(pY1);
+        aie::vector<y_acc_dtype, MMUL::size_C> acc_Y01 = aie::load_v<MMUL::size_C>(pY1 + MMUL::size_C);
+
+        aie::accum<accfloat, MMUL::size_C> ACC_Y00;
+        aie::accum<accfloat, MMUL::size_C> ACC_Y01;
+        ACC_Y00 = aie::mul(CORRECT, acc_Y00);
+        ACC_Y01 = aie::mul(CORRECT, acc_Y01);
+        
+        MMUL Y00(ACC_Y00);
+        MMUL Y01(ACC_Y01);
+        MMUL Y10(ACC_Y00);
+        MMUL Y11(ACC_Y01);
+
+
+        Y00.mac(S0, V00);
+        Y01.mac(S0, V01);
+
+        V00 = aie::load_v<MMUL::size_B>(pV01);
+        V01 = aie::load_v<MMUL::size_B>(pV02);
+
+        Y00.mac(S1, V00);
+        Y01.mac(S1, V01);
+
+        //v1
+        bf16 *__restrict pV11 = pV2 + (j + 0) * MMUL::size_B;
+        bf16 *__restrict pV12 = pV2 + (j + 1) * MMUL::size_B;
+
+        aie::vector<bf16, MMUL::size_B> V10 = aie::load_v<MMUL::size_B>(pV11);
+        pV11 += MMUL::size_B * colQ * 2;
+        aie::vector<bf16, MMUL::size_B> V11 = aie::load_v<MMUL::size_B>(pV12);
+        pV12 += MMUL::size_B * colQ * 2;
+
+        Y10.mac(S0, V10);
+        Y11.mac(S0, V11);
+
+        V10 = aie::load_v<MMUL::size_B>(pV11);
+        V11 = aie::load_v<MMUL::size_B>(pV12);
+
+        Y10.mac(S1, V10);
+        Y11.mac(S1, V11);
+
+        auto Y20 = aie::filter_even(Y00.template to_vector<y_acc_dtype>(), 32);
+        auto Y22 = aie::filter_even(Y01.template to_vector<y_acc_dtype>(), 32);
+
+        auto Y31 = aie::filter_odd (Y10.template to_vector<y_acc_dtype>(), 32);
+        auto Y33 = aie::filter_odd (Y11.template to_vector<y_acc_dtype>(), 32);
+
+        auto Y = aie::concat(Y20, Y31); //, Y22, Y33, Y24, Y35, Y26, Y37);
+        aie::store_v(pY1, Y);
+        pY1 += MMUL::size_C;
+
+        Y = aie::concat(Y22, Y33);
+        aie::store_v(pY1, Y);
+        pY1 += MMUL::size_C;
+
+        bf16 *__restrict pV03 = pV1 + (j + 2) * MMUL::size_B;
+        bf16 *__restrict pV04 = pV1 + (j + 3) * MMUL::size_B;
+
+        aie::vector<bf16, MMUL::size_B> V02 = aie::load_v<MMUL::size_B>(pV03);
+        pV03 += MMUL::size_B * colQ * 2;
+        aie::vector<bf16, MMUL::size_B> V03 = aie::load_v<MMUL::size_B>(pV04);
+        pV04 += MMUL::size_B * colQ * 2;
+
+        aie::vector<y_acc_dtype, MMUL::size_C> acc_Y02 = aie::load_v<MMUL::size_C>(pY1);
+        aie::vector<y_acc_dtype, MMUL::size_C> acc_Y03 = aie::load_v<MMUL::size_C>(pY1 + MMUL::size_C);
+
+        aie::accum<accfloat, MMUL::size_C> ACC_Y02;
+        aie::accum<accfloat, MMUL::size_C> ACC_Y03;
+        ACC_Y02 = aie::mul(CORRECT, acc_Y02);
+        ACC_Y03 = aie::mul(CORRECT, acc_Y03);
+    
+        
+        MMUL Y02(ACC_Y02);
+        MMUL Y03(ACC_Y03);
+        MMUL Y12(ACC_Y02);
+        MMUL Y13(ACC_Y03);
+
+
+        Y02.mac(S0, V02);
+        Y03.mac(S0, V03);
+
+        V02 = aie::load_v<MMUL::size_B>(pV03);
+        V03 = aie::load_v<MMUL::size_B>(pV04);
+
+        Y02.mac(S1, V02);
+        Y03.mac(S1, V03);
+
+        //v1
+        bf16 *__restrict pV13 = pV2 + (j + 2) * MMUL::size_B;
+        bf16 *__restrict pV14 = pV2 + (j + 3) * MMUL::size_B;
+
+        aie::vector<bf16, MMUL::size_B> V12 = aie::load_v<MMUL::size_B>(pV13);
+        pV13 += MMUL::size_B * colQ * 2;
+        aie::vector<bf16, MMUL::size_B> V13 = aie::load_v<MMUL::size_B>(pV14);
+        pV14 += MMUL::size_B * colQ * 2;
+
+
+        Y12.mac(S0, V12);
+        Y13.mac(S0, V13);
+
+        V12 = aie::load_v<MMUL::size_B>(pV13);
+        V13 = aie::load_v<MMUL::size_B>(pV14);
+
+        Y12.mac(S1, V12);
+        Y13.mac(S1, V13);
+
+        auto Y24 = aie::filter_even(Y02.template to_vector<y_acc_dtype>(), 32);
+        auto Y26 = aie::filter_even(Y03.template to_vector<y_acc_dtype>(), 32);
+
+        auto Y35 = aie::filter_odd (Y12.template to_vector<y_acc_dtype>(), 32);
+        auto Y37 = aie::filter_odd (Y13.template to_vector<y_acc_dtype>(), 32);
+
+        Y = aie::concat(Y24, Y35); //, Y22, Y33, Y24, Y35, Y26, Y37);
+        aie::store_v(pY1, Y);
+        pY1 += MMUL::size_C;
+
+        Y = aie::concat(Y26, Y37);
+        aie::store_v(pY1, Y);
+        pY1 += MMUL::size_C;
+    }
+    
+}
+
+template <unsigned N>
+void scale_div_aie(bf16 *a, bf16* o, float *l) {
+    
+    constexpr int vec_factor = 64;
+    const int F = N / vec_factor;
+
+    bf16* pA1 = a;
+    bf16* pO1 = o;
+    bf16 l00 = (bf16)getInvBf16(l[0]);
+    aie::vector<bf16, 8> L0 = aie::broadcast<bf16, 8>(l00);
+    bf16 l01 = (bf16)getInvBf16(l[1]);
+    aie::vector<bf16, 8> L1 = aie::broadcast<bf16, 8>(l01);
+    bf16 l02 = (bf16)getInvBf16(l[2]);
+    aie::vector<bf16, 8> L2 = aie::broadcast<bf16, 8>(l02);
+    bf16 l03 = (bf16)getInvBf16(l[3]);
+    aie::vector<bf16, 8> L3 = aie::broadcast<bf16, 8>(l03);
+    bf16 l04 = (bf16)getInvBf16(l[4]);
+    aie::vector<bf16, 8> L4 = aie::broadcast<bf16, 8>(l04);
+    bf16 l05 = (bf16)getInvBf16(l[5]);
+    aie::vector<bf16, 8> L5 = aie::broadcast<bf16, 8>(l05);
+    bf16 l06 = (bf16)getInvBf16(l[6]);
+    aie::vector<bf16, 8> L6 = aie::broadcast<bf16, 8>(l06);
+    bf16 l07 = (bf16)getInvBf16(l[7]);
+    aie::vector<bf16, 8> L7 = aie::broadcast<bf16, 8>(l07);
+
+    auto L = aie::concat(L0, L1, L2, L3, L4, L5, L6, L7);
+
+    for (int d = 0; d < N / vec_factor; d++){
+        aie::vector<bf16, vec_factor> A0 = aie::load_v<vec_factor>(pA1);
+        aie::accum<accfloat, vec_factor> AL = aie::mul(A0, L);
+        aie::vector<bf16, vec_factor> AL_bf16 = AL.template to_vector<bf16>();
+#if defined(__chess__)
+        for (int g = 0; g < KV_HEADS_PER_CU; g++) AIE_LOOP_FLATTEN {
+            int v_offset = g * 4;
+            for (int h = 0; h < Q_HEADS_PER_GROUP; h++) {
+                aie::vector<bf16, 8> temp = AL_bf16.extract<8>(v_offset + h);
+                aie::store_v(pO1, temp);
+                pO1 += 8;
+            }
+        }
+#else
+        // Peano miscompiles extract<8> with a runtime index (it lowers it to a
+        // jump table and stores the wrong slice, which swaps Q heads within a
+        // GQA group). Store the vector and reload the slices from memory.
+        alignas(aie::vector_decl_align) bf16 al_buf[vec_factor];
+        aie::store_v(al_buf, AL_bf16);
+        for (int g = 0; g < KV_HEADS_PER_CU; g++) {
+            int v_offset = g * 4;
+            for (int h = 0; h < Q_HEADS_PER_GROUP; h++) {
+                aie::store_v(pO1, aie::load_v<8>(al_buf + (v_offset + h) * 8));
+                pO1 += 8;
+            }
+        }
+#endif
+        pA1 += vec_factor;
+    }
+
+}
+
+#elif ATTN_IMPL == ATTN_IMPL_1x4x1
+
+void calculate_l(bf16 *__restrict pS, float *__restrict c, float *__restrict l) {
+    using MMUL = aie::mmul<GQA_R, GQA_S, GQA_T, bf16, bf16, accfloat>;
+    bf16 *__restrict pS1 = pS;
+   
+    aie::vector<bf16, 32> S_up = aie::load_v<32>(pS1);
+    pS1 += 32;
+
+    aie::vector<bf16, 16> S10 = aie::filter_even(S_up, 8);
+    aie::vector<bf16, 16> S11 = aie::filter_odd(S_up, 8);
+    aie::vector<bf16, 16> zeros = aie::zeros<bf16, 16>();
+    
+    aie::vector<bf16, MMUL::size_A> S0 = aie::concat(S10, zeros);
+    aie::vector<bf16, MMUL::size_A> S1 = aie::concat(S11, zeros);
+    aie::vector<bf16, MMUL::size_B> ones = aie::broadcast<bf16, MMUL::size_B>(1);
+
+    aie::vector<bf16, MMUL::size_C> acc_C00 = aie::zeros<bf16, MMUL::size_C>(); 
+
+    MMUL C00(acc_C00);
+
+    C00.mac(S0, ones);
+    C00.mac(S1, ones);
+
+    aie::vector<float, MMUL::size_C> sumf = C00.template to_vector<float>();
+    auto sum03 = aie::filter_even(sumf, 4);
+    auto sum02 = aie::filter_even(sum03, 2);
+    auto sum01 = aie::filter_even(sum02, 1);
+
+    float sum0 = sum01[0];
+    float sum1 = sum01[1];
+
+    l[0] = l[0] * c[0] + sum0;
+    l[1] = l[1] * c[1] + sum1;
+}
+
+typedef float y_acc_dtype;
+template <unsigned colQ, unsigned r, unsigned s, unsigned t>
+void attn_fv(bf16 *__restrict pS, bf16 *__restrict pV, y_acc_dtype *__restrict pY, float *__restrict c) {
+
+    using MMUL = aie::mmul<r, s, t, bf16, bf16, accfloat>;
+
+    
+
+    y_acc_dtype *__restrict pY1 = pY;
+    bf16 *__restrict pS1 = pS;
+   
+    aie::vector<bf16, 32> S_up = aie::load_v<32>(pS1);
+    pS1 += 32;
+
+    aie::vector<bf16, 16> S10 = aie::filter_even(S_up, 8);
+    aie::vector<bf16, 16> S11 = aie::filter_odd(S_up, 8);
+    aie::vector<bf16, 16> zeros_vec = aie::zeros<bf16, 16>();
+    
+    aie::vector<bf16, MMUL::size_A> S0 = aie::concat(S10, zeros_vec);
+    aie::vector<bf16, MMUL::size_A> S1 = aie::concat(S11, zeros_vec);
+    
+    aie::vector<y_acc_dtype, 8> c0 = aie::broadcast<float, 8>(c[0]);
+    aie::vector<y_acc_dtype, 8> c1 = aie::broadcast<float, 8>(c[1]);
+    aie::vector<y_acc_dtype, 8> c2 = aie::broadcast<float, 8>(c[2]);
+    aie::vector<y_acc_dtype, 8> c3 = aie::broadcast<float, 8>(c[3]); 
+    aie::vector<y_acc_dtype, 32> CORRECT = aie::concat(c0, c1, c2, c3);
+
+    bf16 *__restrict pV1 = pV;
+    aie::vector<float, 16> zeros_float = aie::zeros<float, 16>();
+
+    AIE_PREPARE_FOR_PIPELINING AIE_LOOP_RANGE(2)
+	for (unsigned j = 0; j < colQ; j += 4) {
+        //v0
+        bf16 *__restrict pV01 = pV1 + (j + 0) * MMUL::size_B;
+        bf16 *__restrict pV02 = pV1 + (j + 1) * MMUL::size_B;
+
+        aie::vector<bf16, MMUL::size_B> V00 = aie::load_v<MMUL::size_B>(pV01);
+        pV01 += MMUL::size_B * colQ;
+        aie::vector<bf16, MMUL::size_B> V01 = aie::load_v<MMUL::size_B>(pV02);
+        pV02 += MMUL::size_B * colQ;
+
+        aie::vector<y_acc_dtype, 16> acc_y00 = aie::load_v<16>(pY1);
+        aie::vector<y_acc_dtype, 16> acc_y01 = aie::load_v<16>(pY1 + 16);
+        aie::vector<y_acc_dtype, MMUL::size_C> acc_Y00 = aie::concat(acc_y00, zeros_float);
+        aie::vector<y_acc_dtype, MMUL::size_C> acc_Y01 = aie::concat(acc_y01, zeros_float);
+
+        aie::accum<accfloat, MMUL::size_C> ACC_Y00;
+        aie::accum<accfloat, MMUL::size_C> ACC_Y01;
+        ACC_Y00 = aie::mul(CORRECT, acc_Y00);
+        ACC_Y01 = aie::mul(CORRECT, acc_Y01);
+        
+        MMUL Y00(ACC_Y00);
+        MMUL Y01(ACC_Y01);
+
+
+        Y00.mac(S0, V00);
+        Y01.mac(S0, V01);
+
+        V00 = aie::load_v<MMUL::size_B>(pV01);
+        V01 = aie::load_v<MMUL::size_B>(pV02);
+
+        Y00.mac(S1, V00);
+        Y01.mac(S1, V01);
+
+        auto Y0 = aie::filter_even(Y00.template to_vector<y_acc_dtype>(), 16);
+        auto Y1 = aie::filter_even (Y01.template to_vector<y_acc_dtype>(), 16);
+
+        aie::store_v(pY1, Y0);
+        pY1 += 16;
+
+        aie::store_v(pY1, Y1);
+        pY1 += 16;
+
+        bf16 *__restrict pV03 = pV1 + (j + 2) * MMUL::size_B;
+        bf16 *__restrict pV04 = pV1 + (j + 3) * MMUL::size_B;
+
+        aie::vector<bf16, MMUL::size_B> V02 = aie::load_v<MMUL::size_B>(pV03);
+        pV03 += MMUL::size_B * colQ;
+        aie::vector<bf16, MMUL::size_B> V03 = aie::load_v<MMUL::size_B>(pV04);
+        pV04 += MMUL::size_B * colQ;
+
+        aie::vector<y_acc_dtype, 16> acc_y02 = aie::load_v<16>(pY1);
+        aie::vector<y_acc_dtype, 16> acc_y03 = aie::load_v<16>(pY1 + 16);
+        aie::vector<y_acc_dtype, MMUL::size_C> acc_Y02 = aie::concat(acc_y02, zeros_float);
+        aie::vector<y_acc_dtype, MMUL::size_C> acc_Y03 = aie::concat(acc_y03, zeros_float);
+
+        aie::accum<accfloat, MMUL::size_C> ACC_Y02;
+        aie::accum<accfloat, MMUL::size_C> ACC_Y03;
+        ACC_Y02 = aie::mul(CORRECT, acc_Y02);
+        ACC_Y03 = aie::mul(CORRECT, acc_Y03);
+    
+        
+        MMUL Y02(ACC_Y02);
+        MMUL Y03(ACC_Y03);
+
+        Y02.mac(S0, V02);
+        Y03.mac(S0, V03);
+
+        V02 = aie::load_v<MMUL::size_B>(pV03);
+        V03 = aie::load_v<MMUL::size_B>(pV04);
+
+        Y02.mac(S1, V02);
+        Y03.mac(S1, V03);
+
+        auto Y2 = aie::filter_even(Y02.template to_vector<y_acc_dtype>(), 16);
+        auto Y3 = aie::filter_even(Y03.template to_vector<y_acc_dtype>(), 16);
+
+        aie::store_v(pY1, Y2);
+        pY1 += 16;
+
+        aie::store_v(pY1, Y3);
+        pY1 += 16;
+    }
+    
+}
+
+template <unsigned N>
+void scale_div_aie(bf16 *a, bf16* o, float *l) {
+    
+    constexpr int vec_factor = 16;
+    const int F = N / vec_factor;
+
+    bf16* pA1 = a;
+    bf16* pO1 = o;
+    bf16 l00 = (bf16)getInvBf16(l[0]);
+    aie::vector<bf16, 8> L0 = aie::broadcast<bf16, 8>(l00);
+    bf16 l01 = (bf16)getInvBf16(l[1]);
+    aie::vector<bf16, 8> L1 = aie::broadcast<bf16, 8>(l01);
+
+    auto L = aie::concat(L0, L1);
+
+    for (int d = 0; d < N / vec_factor; d++){
+        aie::vector<bf16, vec_factor> A0 = aie::load_v<vec_factor>(pA1);
+        aie::accum<accfloat, vec_factor> AL = aie::mul(A0, L);
+        aie::vector<bf16, vec_factor> AL_bf16 = AL.template to_vector<bf16>();
+        aie::store_v(pO1, AL_bf16);
+        pO1 += vec_factor;
+        pA1 += vec_factor;
+    }
+    
+}
+
+
+#elif ATTN_IMPL == ATTN_IMPL_1x8x1
+
+void calculate_l(bf16 *__restrict pS, float *__restrict c, float *__restrict l) {
+    using MMUL = aie::mmul<GQA_R, GQA_S, GQA_T, bf16, bf16, accfloat>;
+    bf16 *__restrict pS1 = pS;
+   
+    aie::vector<bf16, 64> S_up = aie::load_v<64>(pS1);
+    pS1 += 64;
+    aie::vector<bf16, 64> S_down = aie::load_v<64>(pS1);
+    pS1 += 64;
+
+    aie::vector<bf16, 32> S10 = aie::filter_even(S_up, 8);
+    aie::vector<bf16, 32> S11 = aie::filter_odd(S_up, 8);
+    aie::vector<bf16, 32> S20 = aie::filter_even(S_down, 8);
+    aie::vector<bf16, 32> S21 = aie::filter_odd(S_down, 8);
+    
+    aie::vector<bf16, MMUL::size_A> S0 = aie::concat(S10, S20);
+    aie::vector<bf16, MMUL::size_A> S1 = aie::concat(S11, S21);
+    aie::vector<bf16, MMUL::size_B> ones = aie::broadcast<bf16, MMUL::size_B>(1);
+
+    aie::vector<bf16, MMUL::size_C> acc_C00 = aie::zeros<bf16, MMUL::size_C>(); 
+
+    MMUL C00(acc_C00);
+
+    C00.mac(S0, ones);
+    C00.mac(S1, ones);
+
+    aie::vector<float, MMUL::size_C> sumf = C00.template to_vector<float>();
+    auto sum03 = aie::filter_even(sumf, 4);
+    auto sum02 = aie::filter_even(sum03, 2);
+    auto sum01 = aie::filter_even(sum02, 1);
+    auto sum00 = aie::concat(sum01, sum01);
+    aie::accum<accfloat, 16> sum;
+    sum.from_vector(sum00);
+
+    aie::vector<float, 8> c_float32 = aie::load_v<8>(c);
+    aie::vector<float, 16> c_in = aie::concat(c_float32, c_float32);
+    
+    aie::vector<float, 8> l_float32 = aie::load_v<8>(l);
+    aie::vector<float, 16> l_in = aie::concat(l_float32, l_float32);
+
+    aie::accum<accfloat, 16> l_out;
+    l_out = mac_elem_16_accuracy_safe(l_in, c_in, sum, 0, 0, 0);
+    aie::store_v(l, l_out.template to_vector<float>());
+}
+
+typedef float y_acc_dtype;
+
+/// true unless every real head's correction factor is exactly 1.0f (its row max did not
+/// move). Only the first Q_HEADS_PER_CU rows: the padding rows are never updated by the
+/// Q·K core and never emitted. Compared as bits, there is no scalar FPU. See
+/// "Decode attention" in ../README.md.
+inline bool needs_rescale(const float *__restrict c) {
+    const uint32_t *bits = (const uint32_t *)c;
+    uint32_t diff = 0;
+    for (int i = 0; i < Q_HEADS_PER_CU; i++) diff |= bits[i] ^ 0x3F800000u;
+    return diff != 0;
+}
+
+template <unsigned colQ, unsigned r, unsigned s, unsigned t, bool RESCALE>
+void attn_fv_impl(bf16 *__restrict pS, bf16 *__restrict pV, y_acc_dtype *__restrict pY, float *__restrict c);
+
+template <unsigned colQ, unsigned r, unsigned s, unsigned t>
+void attn_fv(bf16 *__restrict pS, bf16 *__restrict pV, y_acc_dtype *__restrict pY, float *__restrict c) {
+    if (needs_rescale(c)) {
+        attn_fv_impl<colQ, r, s, t, true>(pS, pV, pY, c);
+    } else {
+        attn_fv_impl<colQ, r, s, t, false>(pS, pV, pY, c);
+    }
+}
+
+template <unsigned colQ, unsigned r, unsigned s, unsigned t, bool RESCALE>
+void attn_fv_impl(bf16 *__restrict pS, bf16 *__restrict pV, y_acc_dtype *__restrict pY, float *__restrict c) {
+
+    using MMUL = aie::mmul<r, s, t, bf16, bf16, accfloat>;
+
+    y_acc_dtype *__restrict pY1 = pY;
+    bf16 *__restrict pS1 = pS;
+    
+    aie::vector<bf16, 64> S_up = aie::load_v<64>(pS1);
+    pS1 += 64;
+    aie::vector<bf16, 64> S_down = aie::load_v<64>(pS1);
+    pS1 += 64;
+
+    aie::vector<bf16, 32> S10 = aie::filter_even(S_up, 8);
+    aie::vector<bf16, 32> S11 = aie::filter_odd(S_up, 8);
+    aie::vector<bf16, 32> S20 = aie::filter_even(S_down, 8);
+    aie::vector<bf16, 32> S21 = aie::filter_odd(S_down, 8);
+    
+    aie::vector<bf16, MMUL::size_A> S0 = aie::concat(S10, S20);
+    aie::vector<bf16, MMUL::size_A> S1 = aie::concat(S11, S21);
+    
+    aie::vector<y_acc_dtype, 8> c0 = aie::broadcast<float, 8>(c[0]);
+    aie::vector<y_acc_dtype, 8> c1 = aie::broadcast<float, 8>(c[1]);
+    aie::vector<y_acc_dtype, 8> c2 = aie::broadcast<float, 8>(c[2]);
+    aie::vector<y_acc_dtype, 8> c3 = aie::broadcast<float, 8>(c[3]); 
+    aie::vector<y_acc_dtype, 8> c4 = aie::broadcast<float, 8>(c[4]);
+    aie::vector<y_acc_dtype, 8> c5 = aie::broadcast<float, 8>(c[5]);
+    aie::vector<y_acc_dtype, 8> c6 = aie::broadcast<float, 8>(c[6]);
+    aie::vector<y_acc_dtype, 8> c7 = aie::broadcast<float, 8>(c[7]);
+    aie::vector<y_acc_dtype, 64> CORRECT = aie::concat(c0, c1, c2, c3, c4, c5, c6, c7);
+
+    bf16 *__restrict pV1 = pV;
+
+    AIE_PREPARE_FOR_PIPELINING AIE_LOOP_RANGE(2)
+	for (unsigned j = 0; j < colQ; j += 4) {
+        //v0
+        bf16 *__restrict pV01 = pV1 + (j + 0) * MMUL::size_B;
+        bf16 *__restrict pV02 = pV1 + (j + 1) * MMUL::size_B;
+        bf16 *__restrict pV03 = pV1 + (j + 2) * MMUL::size_B;
+        bf16 *__restrict pV04 = pV1 + (j + 3) * MMUL::size_B;
+
+        aie::vector<bf16, MMUL::size_B> V00 = aie::load_v<MMUL::size_B>(pV01);
+        pV01 += MMUL::size_B * colQ;
+        aie::vector<bf16, MMUL::size_B> V01 = aie::load_v<MMUL::size_B>(pV02);
+        pV02 += MMUL::size_B * colQ;
+        aie::vector<bf16, MMUL::size_B> V02 = aie::load_v<MMUL::size_B>(pV03);
+        pV03 += MMUL::size_B * colQ;
+        aie::vector<bf16, MMUL::size_B> V03 = aie::load_v<MMUL::size_B>(pV04);
+        pV04 += MMUL::size_B * colQ;
+
+        aie::vector<y_acc_dtype, MMUL::size_C> acc_y00 = aie::load_v<MMUL::size_C>(pY1);
+        aie::vector<y_acc_dtype, MMUL::size_C> acc_y01 = aie::load_v<MMUL::size_C>(pY1 + MMUL::size_C);
+        aie::vector<y_acc_dtype, MMUL::size_C> acc_y02 = aie::load_v<MMUL::size_C>(pY1 + MMUL::size_C * 2);
+        aie::vector<y_acc_dtype, MMUL::size_C> acc_y03 = aie::load_v<MMUL::size_C>(pY1 + MMUL::size_C * 3);
+
+        aie::accum<accfloat, MMUL::size_C> ACC_Y00;
+        aie::accum<accfloat, MMUL::size_C> ACC_Y01;
+        aie::accum<accfloat, MMUL::size_C> ACC_Y02;
+        aie::accum<accfloat, MMUL::size_C> ACC_Y03;
+        if constexpr (RESCALE) {
+            ACC_Y00 = aie::mul(CORRECT, acc_y00);
+            ACC_Y01 = aie::mul(CORRECT, acc_y01);
+            ACC_Y02 = aie::mul(CORRECT, acc_y02);
+            ACC_Y03 = aie::mul(CORRECT, acc_y03);
+        } else {
+            ACC_Y00.from_vector(acc_y00);
+            ACC_Y01.from_vector(acc_y01);
+            ACC_Y02.from_vector(acc_y02);
+            ACC_Y03.from_vector(acc_y03);
+        }
+        
+        MMUL Y00(ACC_Y00);
+        MMUL Y01(ACC_Y01);
+        MMUL Y02(ACC_Y02);
+        MMUL Y03(ACC_Y03);
+
+        Y00.mac(S0, V00);
+        Y01.mac(S0, V01);
+        Y02.mac(S0, V02);
+        Y03.mac(S0, V03);
+
+        V00 = aie::load_v<MMUL::size_B>(pV01);
+        V01 = aie::load_v<MMUL::size_B>(pV02);
+        V02 = aie::load_v<MMUL::size_B>(pV03);
+        V03 = aie::load_v<MMUL::size_B>(pV04);
+
+        Y00.mac(S1, V00);
+        Y01.mac(S1, V01);
+        Y02.mac(S1, V02);
+        Y03.mac(S1, V03);
+
+        aie::store_v(pY1, Y00.template to_vector<y_acc_dtype>());
+        pY1 += MMUL::size_C;
+        aie::store_v(pY1, Y01.template to_vector<y_acc_dtype>());
+        pY1 += MMUL::size_C;
+        aie::store_v(pY1, Y02.template to_vector<y_acc_dtype>());
+        pY1 += MMUL::size_C;
+        aie::store_v(pY1, Y03.template to_vector<y_acc_dtype>());
+        pY1 += MMUL::size_C;
+    }
+    
+}
+
+template <unsigned colQ, bool RESCALE>
+void attn_fv_bfp16_impl(bf16 *__restrict pS, const uint8_t *__restrict pV, y_acc_dtype *__restrict pY, float *__restrict c);
+
+template <unsigned colQ>
+void attn_fv_bfp16(bf16 *__restrict pS, const uint8_t *__restrict pV, y_acc_dtype *__restrict pY, float *__restrict c) {
+    if (needs_rescale(c)) {
+        attn_fv_bfp16_impl<colQ, true>(pS, pV, pY, c);
+    } else {
+        attn_fv_bfp16_impl<colQ, false>(pS, pV, pY, c);
+    }
+}
+
+/// attn_fv on a host-packed bfp16 V^T chunk: [DH / 8][2 key blocks][72 B]. Same result bit
+/// for bit; see "bfp16 V" in ../README.md.
+template <unsigned colQ, bool RESCALE>
+void attn_fv_bfp16_impl(bf16 *__restrict pS, const uint8_t *__restrict pV, y_acc_dtype *__restrict pY, float *__restrict c) {
+    using ACC = aie::accum<accfloat, 64>;
+
+    y_acc_dtype *__restrict pY1 = pY;
+    bf16 *__restrict pS1 = pS;
+
+    aie::vector<bf16, 64> S_up = aie::load_v<64>(pS1);
+    pS1 += 64;
+    aie::vector<bf16, 64> S_down = aie::load_v<64>(pS1);
+
+    aie::vector<bf16, 32> S10 = aie::filter_even(S_up, 8);
+    aie::vector<bf16, 32> S11 = aie::filter_odd(S_up, 8);
+    aie::vector<bf16, 32> S20 = aie::filter_even(S_down, 8);
+    aie::vector<bf16, 32> S21 = aie::filter_odd(S_down, 8);
+
+    aie::vector<bf16, 64> S0 = aie::concat(S10, S20);
+    aie::vector<bf16, 64> S1 = aie::concat(S11, S21);
+    const v64bfp16ebs8 P0 = ::to_v64bfp16ebs8(ACC(S0));
+    const v64bfp16ebs8 P1 = ::to_v64bfp16ebs8(ACC(S1));
+
+    aie::vector<y_acc_dtype, 8> c0 = aie::broadcast<float, 8>(c[0]);
+    aie::vector<y_acc_dtype, 8> c1 = aie::broadcast<float, 8>(c[1]);
+    aie::vector<y_acc_dtype, 8> c2 = aie::broadcast<float, 8>(c[2]);
+    aie::vector<y_acc_dtype, 8> c3 = aie::broadcast<float, 8>(c[3]);
+    aie::vector<y_acc_dtype, 8> c4 = aie::broadcast<float, 8>(c[4]);
+    aie::vector<y_acc_dtype, 8> c5 = aie::broadcast<float, 8>(c[5]);
+    aie::vector<y_acc_dtype, 8> c6 = aie::broadcast<float, 8>(c[6]);
+    aie::vector<y_acc_dtype, 8> c7 = aie::broadcast<float, 8>(c[7]);
+    aie::vector<y_acc_dtype, 64> CORRECT = aie::concat(c0, c1, c2, c3, c4, c5, c6, c7);
+
+    aie::block_vector_input_buffer_stream<bfp16ebs8, 64> v_in((const bfp16ebs8 *)pV);
+
+    AIE_PREPARE_FOR_PIPELINING AIE_LOOP_RANGE(2)
+    for (unsigned j = 0; j < colQ; j += 4) {
+        aie::block_vector<bfp16ebs8, 64> V00 = v_in.pop();
+        aie::block_vector<bfp16ebs8, 64> V10 = v_in.pop();
+        aie::block_vector<bfp16ebs8, 64> V01 = v_in.pop();
+        aie::block_vector<bfp16ebs8, 64> V11 = v_in.pop();
+        aie::block_vector<bfp16ebs8, 64> V02 = v_in.pop();
+        aie::block_vector<bfp16ebs8, 64> V12 = v_in.pop();
+        aie::block_vector<bfp16ebs8, 64> V03 = v_in.pop();
+        aie::block_vector<bfp16ebs8, 64> V13 = v_in.pop();
+
+        aie::vector<y_acc_dtype, 64> acc_y00 = aie::load_v<64>(pY1);
+        aie::vector<y_acc_dtype, 64> acc_y01 = aie::load_v<64>(pY1 + 64);
+        aie::vector<y_acc_dtype, 64> acc_y02 = aie::load_v<64>(pY1 + 64 * 2);
+        aie::vector<y_acc_dtype, 64> acc_y03 = aie::load_v<64>(pY1 + 64 * 3);
+
+        ACC Y00, Y01, Y02, Y03;
+        if constexpr (RESCALE) {
+            Y00 = aie::mul(CORRECT, acc_y00);
+            Y01 = aie::mul(CORRECT, acc_y01);
+            Y02 = aie::mul(CORRECT, acc_y02);
+            Y03 = aie::mul(CORRECT, acc_y03);
+        } else {
+            Y00.from_vector(acc_y00);
+            Y01.from_vector(acc_y01);
+            Y02.from_vector(acc_y02);
+            Y03.from_vector(acc_y03);
+        }
+
+        Y00 = ::mac_8x8_8x8T_conf(P0, V00, Y00, 0, 0, 0);
+        Y01 = ::mac_8x8_8x8T_conf(P0, V01, Y01, 0, 0, 0);
+        Y02 = ::mac_8x8_8x8T_conf(P0, V02, Y02, 0, 0, 0);
+        Y03 = ::mac_8x8_8x8T_conf(P0, V03, Y03, 0, 0, 0);
+        Y00 = ::mac_8x8_8x8T_conf(P1, V10, Y00, 0, 0, 0);
+        Y01 = ::mac_8x8_8x8T_conf(P1, V11, Y01, 0, 0, 0);
+        Y02 = ::mac_8x8_8x8T_conf(P1, V12, Y02, 0, 0, 0);
+        Y03 = ::mac_8x8_8x8T_conf(P1, V13, Y03, 0, 0, 0);
+
+        aie::store_v(pY1, Y00.template to_vector<y_acc_dtype>());
+        pY1 += 64;
+        aie::store_v(pY1, Y01.template to_vector<y_acc_dtype>());
+        pY1 += 64;
+        aie::store_v(pY1, Y02.template to_vector<y_acc_dtype>());
+        pY1 += 64;
+        aie::store_v(pY1, Y03.template to_vector<y_acc_dtype>());
+        pY1 += 64;
+    }
+}
+
+template <unsigned N>
+void scale_div_aie(bf16 *a, bf16* o, float *l) {
+    
+    constexpr int vec_factor = 64;
+    const int F = N / vec_factor;
+
+    bf16* pA1 = a;
+    bf16* pO1 = o;
+    bf16 l00 = (bf16)getInvBf16(l[0]);
+    aie::vector<bf16, 8> L0 = aie::broadcast<bf16, 8>(l00);
+    bf16 l01 = (bf16)getInvBf16(l[1]);
+    aie::vector<bf16, 8> L1 = aie::broadcast<bf16, 8>(l01);
+    bf16 l02 = (bf16)getInvBf16(l[2]);
+    aie::vector<bf16, 8> L2 = aie::broadcast<bf16, 8>(l02);
+    bf16 l03 = (bf16)getInvBf16(l[3]);
+    aie::vector<bf16, 8> L3 = aie::broadcast<bf16, 8>(l03);
+    bf16 l04 = (bf16)getInvBf16(l[4]);
+    aie::vector<bf16, 8> L4 = aie::broadcast<bf16, 8>(l04);
+    bf16 l05 = (bf16)getInvBf16(l[5]);
+    aie::vector<bf16, 8> L5 = aie::broadcast<bf16, 8>(l05);
+    bf16 l06 = (bf16)getInvBf16(l[6]);
+    aie::vector<bf16, 8> L6 = aie::broadcast<bf16, 8>(l06);
+    bf16 l07 = (bf16)getInvBf16(l[7]);
+    aie::vector<bf16, 8> L7 = aie::broadcast<bf16, 8>(l07);
+    auto L = aie::concat(L0, L1, L2, L3, L4, L5, L6, L7);
+
+    for (int d = 0; d < N / vec_factor; d++){
+        aie::vector<bf16, vec_factor> A0 = aie::load_v<vec_factor>(pA1);
+        aie::accum<accfloat, vec_factor> AL = aie::mul(A0, L);
+        aie::vector<bf16, vec_factor> AL_bf16 = AL.template to_vector<bf16>();
+#if defined(__chess__)
+        for (int h = 0; h < Q_HEADS_PER_GROUP; h++) {
+            aie::vector<bf16, 8> temp = AL_bf16.extract<8>(h);
+            aie::store_v(pO1, temp);
+            pO1 += 8;
+        }
+#else
+        // Peano: no runtime-index extract, see the 2x4x1 scale_div_aie above.
+        alignas(aie::vector_decl_align) bf16 al_buf[vec_factor];
+        aie::store_v(al_buf, AL_bf16);
+        for (int h = 0; h < Q_HEADS_PER_GROUP; h++) {
+            aie::store_v(pO1, aie::load_v<8>(al_buf + h * 8));
+            pO1 += 8;
+        }
+#endif
+        pA1 += vec_factor;
+    }
+    
+}
+
+#endif

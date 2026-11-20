@@ -36,11 +36,55 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              tested). Test Windows HIPEP requires them, as the NPU jobs do
              new_models: downloaded whatever their size, and a failure if
              they cannot be
+  devkit     true when a change needs a dev-kit job: code under flm-dev-kit/
+             (the kernel, engine, converter and pybind sources, built by their
+             own jobs), a src/lib/xrt file the dev kit links (libaiebu.a,
+             aiebu_static.lib, any library its engines' -L order can pick
+             up), hrx-integration/ (the HRX engine builds fetch the pinned
+             package with it), or the CI that runs the dev-kit jobs
+             (including .github/workflows/devkit-*.yml and
+             .github/actions/devkit-*, except devkit-aie-image.yml);
+             documentation under
+             flm-dev-kit/ counts as nothing, as for the product. Nothing in
+             the product consumes flm-dev-kit/ yet, so those paths select no
+             product build, suite or family: a change only there builds and
+             tests no product package (run_tests false). The product files
+             above keep their product rules. The kernel build image selects
+             nothing: docker/aie-build* (its Dockerfile, kernel check and
+             pinned PDIs), flm-dev-kit/FLM_Xclbin/toolchain.lock and
+             devkit-aie-image.yml are built and tested by
+             devkit-aie-image.yml, which checks the pull request's image.
+             The dev-kit kernel jobs (devkit-xclbins.yml) build in the
+             digest FLM_Xclbin/toolchain.image pins when that file exists (a
+             change to it is the xclbin area); otherwise in
+             aie-build:<toolchain hash>, built in the run when it is not
+             published, so a pull request that also changes a kernel builds
+             it with its own toolchain.lock and Dockerfile
+  devkit_areas
+             comma-separated dev-kit areas the change touches, from xclbin,
+             dll, converter, pybind and launchlib, plus the areas that build
+             from a changed file of another area, of src/lib/xrt or of
+             hrx-integration/; every
+             area when the changed files are unknown, a changed dev-kit file
+             is in none of them, or the dev-kit CI changed
+  devkit_families
+             comma-separated catalog families whose dev-kit engines the change
+             touches, for the dev-kit overlay tests: from
+             flm-dev-kit/FLM_DLL/engines.json, a change under
+             detail/<engine>/ or its include/models/<x>/ headers gives the
+             engine's families and those of every engine that uses it; a
+             change to anything else that builds into the engines (the
+             shared units, the common headers, common/, cmake/, the build
+             scripts, a src/lib/xrt library they link), to the dev-kit CI, or
+             an unknown change gives every engine's families. Per-model
+             helper scripts (build_<model>.sh) and model_list*.json give
+             none; an engines.json change gives the engines whose entry
+             changed. Empty when no dev-kit engine is touched
   summary    one line for the job log
 
 When in doubt it tests more: an all-zero or missing base (a new branch), or a
 range git cannot diff (shallow clone, force-push), counts as "everything
-changed". It still names no families then: the pr tier already runs one model
+changed" (every dev-kit area too). It still names no families then: the pr tier already runs one model
 of every engine, and testing every model of every family is the nightly job.
 
 Standard library only; --files skips git for the file list, for tests.
@@ -76,6 +120,189 @@ NON_CODE = re.compile(
     r"|.*\.md$"
     r"|.*~$)",                  # editor backups such as src/home_install.sh~
     re.IGNORECASE)
+
+# The FLM dev kit: kernel, engine, converter and pybind sources imported from
+# FastFlowLM_IRON, built and tested by dev-kit jobs of their own. No product
+# build reads them yet, so they select no product build or suite (a product
+# change that starts consuming one must add it to the product rules here).
+# Area -> the prefix that selects it, in output order.
+DEVKIT_ROOT = "flm-dev-kit/"
+DEVKIT_AREAS = (
+    ("xclbin", "flm-dev-kit/FLM_Xclbin/"),
+    ("dll", "flm-dev-kit/FLM_DLL/"),
+    ("converter", "flm-dev-kit/FLM_Q4NX_Converter/"),
+    ("pybind", "flm-dev-kit/FLM_Pybind/"),
+    ("launchlib", "flm-dev-kit/aie2p-launchlib/"),
+)
+
+
+ALL_DEVKIT_AREAS = frozenset(area for area, _ in DEVKIT_AREAS)
+
+# Areas that build from another area's files, beyond the one their prefix
+# selects: dev-kit path pattern -> the extra areas it selects.
+DEVKIT_ALSO = (
+    # FLM_Pybind/SmolVLA/Makefile: HOST_COMMON_DIR := ../../FLM_Xclbin/host_common.
+    (re.compile(r"^flm-dev-kit/FLM_Xclbin/host_common/"), {"pybind"}),
+    # aie2p-launchlib/whisper_encoder/tools build from FLM_Xclbin/Whisper.
+    (re.compile(r"^flm-dev-kit/FLM_Xclbin/Whisper/"), {"launchlib"}),
+    # launchlib and its trials include FLM_DLL/include and
+    # FLM_DLL/cmake/flm_xrt_win.cmake; whisper_encoder/Makefile builds
+    # FLM_DLL/detail/{q4nx,whisper_npu}.
+    (re.compile(r"^flm-dev-kit/FLM_DLL/(include/|cmake/|detail/(q4nx|whisper_npu)/)"), {"launchlib"}),
+    # The host builds of MiniCPM_V/decoding, Hy_MT2_1.8B/{decoding,
+    # prefill_overlay} and minicpm_ocr/{decoding,vision_overlay} compile
+    # against FLM_DLL/include and detail/{q4nx,hunyuan_npu,minicpm_ocr_npu}.
+    (re.compile(r"^flm-dev-kit/FLM_DLL/(include/|detail/(q4nx|hunyuan_npu|minicpm_ocr_npu)/)"), {"xclbin"}),
+    # The RTP address lock records what the engines hard-code: a change to it
+    # goes with an engine change (devkit_check.py requires one), so it
+    # rebuilds the kernels whose stanza changed (devkit_xclbin_plan.py) and
+    # the engines.
+    (re.compile(r"^flm-dev-kit/FLM_Xclbin/rtp_addresses\.lock\.txt$"), {"dll"}),
+)
+
+# Product files the dev kit builds from (it reads them by relative path), so
+# a change to one also selects these dev-kit areas. The prebuilt aiebu is
+# linked by the dev-kit engines (libaiebu.a; aiebu_static.lib through
+# FLM_DLL/cmake/flm_xrt_win.cmake), every FLM_Xclbin host build, SmolVLA and
+# launchlib. The dev-kit engine Makefiles also put -L../../../../src/lib/xrt
+# ahead of their own build/lib, so any library there can stand in for a unit
+# they link. This lasts until libaiebu.a is vendored into
+# flm-dev-kit/FLM_DLL/external_libs.
+DEVKIT_FROM_PRODUCT = (
+    (re.compile(r"^src/lib/xrt/(libaiebu\.a|aiebu_static\.lib)$"), {"xclbin", "dll", "pybind", "launchlib"}),
+    (re.compile(r"^src/lib/xrt/[^/]+$"), {"dll"}),
+    # The HRX engine builds fetch the pinned package with these scripts
+    # (build_manylinux.sh, build.ps1 -Runtime HRX, hrx.mk, cmake/flm_hrx.cmake).
+    (re.compile(r"^hrx-integration/"), {"dll"}),
+    # setup_windows_deps.ps1 builds xrt_coreutil.lib from these files, and
+    # devkit-build-lib-win (devkit-engines.yml's Windows jobs) keys its C:\dev
+    # cache on them.
+    (re.compile(r"^\.github/windows-deps/"), {"dll"}),
+)
+
+# The kernel build image: its Dockerfile, kernel check script and pinned PDIs
+# (docker/aie-build*), its versions (toolchain.lock, which would otherwise be
+# in the xclbin area) and the workflow that builds it. Each selects the
+# dev-kit areas listed and no product build or suite. None:
+# devkit-aie-image.yml builds the pull request's image and checks its
+# kernels, so a toolchain-only change needs no kernel jobs. When another
+# change selects the xclbin area, the kernel jobs (devkit-xclbins.yml) build
+# in the digest FLM_Xclbin/toolchain.image pins if that file exists, else in
+# aie-build:<toolchain hash> of the pull request's toolchain.lock and
+# Dockerfile, built in the run when it is not published.
+DEVKIT_ONLY = (
+    (re.compile(r"^docker/aie-build[^/]*$|^flm-dev-kit/FLM_Xclbin/toolchain\.lock$"
+                r"|^\.github/workflows/devkit-aie-image\.yml$"), set()),
+)
+
+# The CI that decides and runs the dev-kit jobs: a change to it runs every
+# dev-kit area, so it is exercised before it merges. DEVKIT_ONLY's workflow
+# is not part of it.
+DEVKIT_CI = re.compile(
+    r"^\.github/(workflows/(build-and-test|release|devkit-[^/]+)\.yml$"
+    r"|actions/(detect-changes|devkit[^/]*)/|script/ci/)")
+
+
+# The dev-kit engines (flm-dev-kit/FLM_DLL/detail/<engine>) and what they
+# serve: engine -> families, models, uses (the engines whose code it
+# compiles), plus the shared detail/ units. ENGINES below maps the product's
+# src/ engine names; this maps the dev kit's directories, and test_changes.py
+# checks the two agree for every engine both have.
+DEVKIT_DLL = "flm-dev-kit/FLM_DLL/"
+DEVKIT_ENGINES = "flm-dev-kit/FLM_DLL/engines.json"
+# FLM_DLL files that build into no engine library: the per-model dev helpers
+# (CI runs build.sh and build_manylinux.sh) and the model registries.
+DEVKIT_DLL_NO_BUILD = re.compile(
+    r"^flm-dev-kit/FLM_DLL/(build_(?!manylinux\.sh$)[A-Za-z0-9_]+\.sh|model_list[^/]*\.json"
+    r"|(.*/)?\.gitattributes)$")
+
+
+@dataclass
+class DevkitEngines:
+    """flm-dev-kit/FLM_DLL/engines.json, parsed."""
+    engines: dict  # engine -> {"families": [...], "models": [...], "uses": [...]}
+    shared: frozenset
+
+    @classmethod
+    def parse(cls, text: Optional[str]) -> Optional["DevkitEngines"]:
+        try:
+            data = json.loads(text) if text else None
+        except ValueError:
+            return None
+        if not isinstance(data, dict) or not isinstance(data.get("engines"), dict):
+            return None
+
+        def str_list(v) -> bool:
+            return isinstance(v, list) and all(isinstance(x, str) for x in v)
+
+        # A malformed entry (devkit_check reports it) makes the whole file
+        # unreadable, so callers fall back to every family rather than test
+        # a wrong set (a string "families" would split into characters).
+        fields = ("families", "models", "uses")
+        if not all(isinstance(v, dict) and all(str_list(v.get(f, [])) for f in fields)
+                   for v in data["engines"].values()):
+            return None
+        shared = data.get("shared", [])
+        if not str_list(shared):
+            return None
+        engines = {k: {f: list(v.get(f, [])) for f in fields} for k, v in data["engines"].items()}
+        return cls(engines, frozenset(shared))
+
+    def families(self, engine: str) -> set:
+        return set(self.engines.get(engine, {}).get("families") or [])
+
+    def all_families(self) -> set:
+        return {f for e in self.engines for f in self.families(e)}
+
+    def with_users(self, engines: set) -> set:
+        """These engines and every engine that uses one of them, transitively."""
+        out, todo = set(), list(engines)
+        while todo:
+            e = todo.pop()
+            if e in out:
+                continue
+            out.add(e)
+            todo += [u for u, entry in self.engines.items() if e in (entry.get("uses") or [])]
+        return out
+
+    def header_owner(self, name: str) -> Optional[str]:
+        """include/models/<name> pairs with detail/<name> or detail/<name>_npu."""
+        return next((c for c in (name, f"{name}_npu") if c in self.engines), None)
+
+    def engines_of(self, path: str) -> Optional[set]:
+        """The engines a flm-dev-kit/FLM_DLL path builds into, before adding
+        their users: a set, or None for every engine. Call only for paths
+        under FLM_DLL that are not DEVKIT_DLL_NO_BUILD."""
+        parts = path[len(DEVKIT_DLL):].split("/")
+        if parts[0] == "detail" and len(parts) >= 3:
+            if parts[1] in self.engines:
+                return {parts[1]}
+            return None  # a shared unit, or a directory engines.json does not know
+        if parts[:2] == ["include", "models"] and len(parts) >= 4:
+            owner = self.header_owner(parts[2])
+            return {owner} if owner else None
+        return None
+
+
+def devkit_area(path: str) -> Optional[str]:
+    """The dev-kit area of a path under flm-dev-kit/, None outside all areas."""
+    return next((area for area, prefix in DEVKIT_AREAS if path.startswith(prefix)), None)
+
+
+def devkit_only_areas(path: str) -> Optional[set]:
+    """The dev-kit areas of a kernel build image path (DEVKIT_ONLY), possibly
+    none; None for any other path."""
+    return next((set(areas) for rx, areas in DEVKIT_ONLY if rx.match(path)), None)
+
+
+def devkit_extra_areas(path: str) -> set:
+    """The areas besides its own that a dev-kit path selects (DEVKIT_ALSO)."""
+    out: set = set()
+    for rx, areas in DEVKIT_ALSO:
+        if rx.match(path):
+            out |= areas
+    return out
+
 
 # Engine -> the catalog families it serves, from the registry in
 # src/common/AutoModel/builtin_backends.cpp (RegisterFlm<engine>(family)) and
@@ -263,7 +490,7 @@ class Git:
 
     def _git(self, *args: str) -> Optional[str]:
         try:
-            res = subprocess.run(["git", "-C", str(self.repo), *args],
+            res = subprocess.run(["git", "-c", "core.quotePath=false", "-C", str(self.repo), *args],
                                  capture_output=True, text=True, encoding="utf-8", errors="replace")
         except OSError:
             return None
@@ -301,11 +528,18 @@ class Decision:
     # The oga-hipep entries added or edited in the head catalog, which include
     # those with new weights (new_downloads' GPU half).
     gpu_models: set = field(default_factory=set)
+    # Dev-kit areas (DEVKIT_AREAS) a changed flm-dev-kit/ file needs.
+    devkit_areas: set = field(default_factory=set)
+    # Catalog families of the dev-kit engines the change touches.
+    devkit_families: set = field(default_factory=set)
+    # Changed kernel build image files (DEVKIT_ONLY).
+    image_only: list = field(default_factory=list)
     reasons: list = field(default_factory=list)
 
-    def all_suites(self, path: str) -> None:
+    def all_suites(self, path: str, why: str = "") -> None:
         if self.suites is not None:
-            self.reasons.append(f"{path} is not scoped to particular suites: running them all")
+            why = f" ({why})" if why else ""
+            self.reasons.append(f"{path}{why} is not scoped to particular suites: running them all")
         self.suites = None
 
     def add_suites(self, names: set) -> None:
@@ -326,9 +560,22 @@ class Decision:
     def runs_hipep(self) -> bool:
         return self.run_tests and (self.hipep or self.suites_value() == "all")
 
+    def devkit_value(self) -> str:
+        return ",".join(area for area, _ in DEVKIT_AREAS if area in self.devkit_areas)
+
     def summary(self) -> str:
+        devkit = f"; dev kit: {self.devkit_value().replace(',', ', ')}" if self.devkit_areas else ""
+        if self.devkit_families:
+            devkit += f" (engine families: {len(self.devkit_families)})"
         if not self.run_tests:
+            if self.devkit_areas:
+                return f"flm-dev-kit only: product builds and NPU tests skipped{devkit}"
+            if self.image_only:
+                return "kernel build image only (devkit-aie-image.yml): NPU tests and dev-kit jobs skipped"
             return "documentation only: NPU tests skipped"
+        return self._product_summary() + devkit
+
+    def _product_summary(self) -> str:
         hipep = "HIPEP: " + ("runs" if self.runs_hipep() else "skipped")
         if self.suites_value() == "none":
             return f"oga-hipep only: NPU tests skipped; {hipep}"
@@ -358,6 +605,9 @@ class Decision:
                 "hipep": str(self.runs_hipep()).lower(),
                 "new_models": ",".join(self.new_models),
                 "hipep_models": ",".join(sorted(self.gpu_models)),
+                "devkit": str(bool(self.devkit_areas)).lower(),
+                "devkit_areas": self.devkit_value(),
+                "devkit_families": ",".join(sorted(self.devkit_families)),
                 "summary": self.summary()}
 
 
@@ -514,14 +764,20 @@ def engine_families(path: str, xclbin_families: dict[str, set]) -> Optional[tupl
     if len(parts) < 3 or parts[0] != "src":
         return None
     top, sub = parts[1], parts[2]
-    if top == "lib" and sub in ("xrt", "hrx") and len(parts) == 4:
-        stem = parts[3].rsplit(".", 1)[0]
-        if parts[3].endswith(".so") and stem.startswith("lib"):
-            stem = stem[3:]
-        name = stem[:-4] if stem.endswith("_npu") else stem
-        if name in ENGINE_FAMILIES:
-            return f"engine library {name}", ENGINE_FAMILIES[name]
-        return None
+    if top == "lib":
+        # Prebuilt engines: src/lib/{xrt,hrx}/[lib]<engine>[_npu].{so,dll,lib}.
+        # Anything else there is shared by every engine (the q4nx, gemm, mha,
+        # dequant and lm_head units, libaiebu.a, aiebu_static.lib, runtime
+        # libraries) or by the whole package (the Windows DLLs in src/lib):
+        # no families, so every suite runs.
+        if sub in ("xrt", "hrx") and len(parts) == 4:
+            stem = parts[3].rsplit(".", 1)[0]
+            if parts[3].endswith(".so") and stem.startswith("lib"):
+                stem = stem[3:]
+            name = stem[:-4] if stem.endswith("_npu") else stem
+            if name in ENGINE_FAMILIES:
+                return f"engine library {name}", ENGINE_FAMILIES[name]
+        return f"library {parts[-1]}, not one engine's", ()
     if top == "include" and sub == "models" and len(parts) >= 5:
         name, kind = parts[3], parts[4]
         if kind == "core" and name in CORE_FAMILIES:
@@ -543,42 +799,195 @@ def engine_families(path: str, xclbin_families: dict[str, set]) -> Optional[tupl
         if name in ENGINE_FAMILIES:
             return f"{sub} tests", ENGINE_FAMILIES[name]
         return None
-    if top == "xclbins" and len(parts) >= 4:
-        return f"xclbins {sub}", tuple(sorted(xclbin_families.get(sub, ())))
+    if top == "xclbins":
+        # src/xclbins/<folder>/**: the families of the catalog entries that
+        # load their kernels from that folder (see xclbin_folders).
+        fams = tuple(sorted(xclbin_families.get(sub, ()))) if len(parts) >= 4 else ()
+        if fams:
+            return f"xclbins {sub}", fams
+        return (f"xclbins {sub}: no catalog entry loads this folder" if len(parts) >= 4
+                else f"{sub}: at the top of src/xclbins, no model's folder"), ()
     return None
 
 
+def xclbin_folders(head_catalog: dict[str, dict]) -> dict[str, set]:
+    """xclbin folder under src/xclbins -> the families of the catalog entries
+    that load it. As AutoModel::_shared_initialize_model_state
+    (src/common/AutoModel/automodel.cpp): an entry's xclbin_folder when it is
+    a non-empty string, on any entry, else its own name (model_list::
+    resolve_source only defaults it for dependants); qwen3.8-dflash2 runs the
+    kernels of Qwen3.8-27B-NPU2."""
+    out: dict[str, set] = {}
+    for entry in head_catalog.values():
+        own = entry.get("xclbin_folder")
+        folder = own if isinstance(own, str) and own else entry.get("name")
+        if isinstance(folder, str) and folder:
+            out.setdefault(folder, set()).add(family_of(entry))
+    return {k: v - {""} for k, v in out.items()}
+
+
+def load_devkit_engines(text: Optional[str] = None) -> Optional[DevkitEngines]:
+    """engines.json from text, else from the checkout; None if unreadable."""
+    if text is None:
+        try:
+            text = (REPO_ROOT / DEVKIT_ENGINES).read_text(encoding="utf-8")
+        except OSError:
+            return None
+    return DevkitEngines.parse(text)
+
+
+def every_engine_family(engines: Optional[DevkitEngines]) -> set:
+    """Every dev-kit engine's families; ENGINES' if engines.json is unreadable."""
+    if engines is not None:
+        return engines.all_families()
+    return {f for fams in ENGINES.values() for f in fams}
+
+
+def add_devkit_families(d: Decision, files: list[str], code: list[str],
+                        engines: Optional[DevkitEngines], git: Optional[Git]) -> None:
+    """d.devkit_families for the changed dev-kit files and the product files
+    that select the dll area (see devkit_families in the docstring)."""
+    everything = None  # the first path that needs every engine's families
+    hit: set = set()
+    for path in files:
+        if not path.startswith(DEVKIT_DLL) or is_non_code(path) or DEVKIT_DLL_NO_BUILD.match(path):
+            continue
+        if path == DEVKIT_ENGINES:
+            changed = devkit_engines_diff(git, engines)
+            if changed is None:
+                everything = everything or f"{path} (cannot compare it with the base)"
+            else:
+                hit |= changed
+            continue
+        if engines is None:
+            everything = everything or f"{path} ({DEVKIT_ENGINES} unreadable)"
+            continue
+        owners = engines.engines_of(path)
+        if owners is None:
+            everything = everything or f"{path} (builds into every engine)"
+        else:
+            hit |= owners
+    for path in files:
+        if path.startswith(DEVKIT_ROOT) and not is_non_code(path) and devkit_area(path) is None:
+            everything = everything or f"{path} (in no dev-kit area)"
+    for path in code:
+        if DEVKIT_CI.match(path):
+            everything = everything or f"{path} (CI that runs the dev-kit jobs)"
+        elif any(rx.match(path) and "dll" in areas for rx, areas in DEVKIT_FROM_PRODUCT):
+            everything = everything or f"{path} (linked by the dev-kit engines)"
+    if everything:
+        d.devkit_families = every_engine_family(engines)
+        d.reasons.append(f"{everything}: every dev-kit engine's families")
+        return
+    if hit and engines is not None:
+        users = engines.with_users(hit)
+        d.devkit_families = {f for e in users for f in engines.families(e)}
+        more = sorted(users - hit)
+        d.reasons.append(f"dev-kit engine(s) {', '.join(sorted(hit))}"
+                         + (f", used by {', '.join(more)}" if more else "")
+                         + f" -> families {', '.join(sorted(d.devkit_families)) or 'none'}")
+
+
+def devkit_engines_diff(git: Optional[Git], head: Optional[DevkitEngines]) -> Optional[set]:
+    """Engines whose engines.json entry differs between base and head (an
+    engine on one side only included); None when the two cannot be read."""
+    if git is None or head is None:
+        return None
+    base = DevkitEngines.parse(git.show("base", DEVKIT_ENGINES))
+    if base is None:
+        return None
+    if base.shared != head.shared:
+        return None
+    return {e for e in set(base.engines) | set(head.engines)
+            if base.engines.get(e) != head.engines.get(e)}
+
+
 def decide(files: Optional[list[str]], git: Optional[Git] = None,
-           head_catalog_text: Optional[str] = None) -> Decision:
+           head_catalog_text: Optional[str] = None,
+           devkit_engines: Optional[DevkitEngines] = None) -> Decision:
     """The decision for a list of changed files (None: git could not tell).
 
     git supplies the changed lines and the base and head versions of the
     catalogs; without it those checks fall back as described inline.
+    devkit_engines is the head engines.json; None reads the checkout's.
     """
     d = Decision(suites=None)
+    if devkit_engines is None:
+        devkit_engines = load_devkit_engines()
     if files is None:
         d.asr_full = True
+        d.devkit_areas = set(ALL_DEVKIT_AREAS)
+        d.devkit_families = every_engine_family(devkit_engines)
         d.reasons.append("changed files unknown (new branch, shallow clone or force-push): "
-                         "running everything, ASR set in full")
+                         "running everything, ASR set in full, every dev-kit area and engine family")
         return d
     if not files:
         d.reasons.append("no changed files: running the tests anyway")
         return d
 
-    code = [f for f in files if not is_non_code(f)]
+    # flm-dev-kit/ code selects dev-kit areas only; the product rules below
+    # see the other files. Its documentation counts as nothing. The kernel
+    # build image (DEVKIT_ONLY) is handled here too and selects no area.
+    devkit = [f for f in files if (f.startswith(DEVKIT_ROOT) or devkit_only_areas(f) is not None)
+              and not is_non_code(f)]
+    for path in devkit:
+        only = devkit_only_areas(path)
+        if only is not None:
+            new = only - d.devkit_areas
+            d.devkit_areas |= only
+            d.image_only.append(path)
+            d.reasons.append(f"{path}: the kernel build image, which devkit-aie-image.yml builds and "
+                             f"tests -> {', '.join(sorted(new)) or 'no dev-kit area'}")
+            continue
+        area = devkit_area(path)
+        if area is None:
+            if not d.devkit_areas >= ALL_DEVKIT_AREAS:
+                d.reasons.append(f"{path} is in no dev-kit area: every dev-kit area")
+            d.devkit_areas |= ALL_DEVKIT_AREAS
+            continue
+        d.devkit_areas.add(area)
+        extra = devkit_extra_areas(path) - d.devkit_areas
+        if extra:
+            d.devkit_areas |= extra
+            d.reasons.append(f"{path}: {area}, and built by {', '.join(sorted(extra))}")
+    tree = [f for f in devkit if f not in d.image_only]
+    if tree:
+        d.reasons.append(f"{len(tree)} changed flm-dev-kit file(s), e.g. {tree[0]}: dev-kit areas "
+                         f"{d.devkit_value() or 'none'}; no product build or suite for them")
+
+    in_devkit = set(devkit)
+    code = [f for f in files if not is_non_code(f) and f not in in_devkit]
+    add_devkit_families(d, files, code, devkit_engines, git)
     d.suites = set()  # narrowed per file below; None once any file is unscoped
     if not code:
         d.run_tests = False
-        d.reasons.append(f"all {len(files)} changed file(s) are documentation or non-code")
+        if devkit:
+            d.reasons.append("no product code changed: product builds and NPU tests skipped")
+        else:
+            d.reasons.append(f"all {len(files)} changed file(s) are documentation or non-code")
         return d
-    d.reasons.append(f"{len(code)} of {len(files)} changed file(s) are code, e.g. {code[0]}")
+    d.reasons.append(f"{len(code)} of {len(files)} changed file(s) are product code, e.g. {code[0]}")
+
+    # Product files the dev kit builds from, and the CI that runs it, also
+    # select dev-kit areas; their product rules below are unchanged.
+    for path in code:
+        if DEVKIT_CI.match(path):
+            new = ALL_DEVKIT_AREAS - d.devkit_areas
+            d.devkit_areas |= ALL_DEVKIT_AREAS
+            if new:
+                d.reasons.append(f"{path}: CI that runs the dev-kit jobs -> every dev-kit area")
+            continue
+        for rx, areas in DEVKIT_FROM_PRODUCT:
+            if rx.match(path):
+                new = areas - d.devkit_areas
+                d.devkit_areas |= areas
+                if new:
+                    d.reasons.append(f"{path}: linked by the dev kit -> {', '.join(sorted(new))}")
+                break
 
     head_catalog = load_catalog(head_catalog_text)
     gpu_fams = gpu_families(head_catalog)
-    xclbin_families: dict[str, set] = {}
-    for entry in head_catalog.values():
-        if entry.get("name"):
-            xclbin_families.setdefault(entry["name"], set()).add(family_of(entry))
+    xclbin_families = xclbin_folders(head_catalog)
 
     gpu_code = []
     for path in code:
@@ -617,7 +1026,7 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
         if scope is None and hit and hit[1]:
             scope = family_suites(hit[1], head_catalog)
         if scope is None and path not in (MODEL_LIST, MODEL_INFO):
-            d.all_suites(path)
+            d.all_suites(path, hit[0] if hit else "")
         elif scope is not None:
             d.add_suites(scope)
     if gpu_code:
@@ -706,7 +1115,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         except OSError:
             head_catalog = None
 
-    decision = decide(files, git, head_catalog)
+    engines_text = git.show("head", DEVKIT_ENGINES) if git else None
+    if engines_text is None:
+        try:
+            engines_text = (args.repo / DEVKIT_ENGINES).read_text(encoding="utf-8")
+        except OSError:
+            engines_text = None
+    devkit_engines = DevkitEngines.parse(engines_text)
+    decision = decide(files, git, head_catalog, devkit_engines)
     for reason in decision.reasons:
         print(f"changes: {reason}")
     outputs = decision.outputs()

@@ -1,0 +1,9 @@
+# Development venv for FLM_Pybind/SmolVLA: the CPU-only runtime set plus the
+# tools that build the extension (make python) and the wheel (build_package.sh).
+--extra-index-url https://download.pytorch.org/whl/cpu
+-r packaging/requirements-runtime.txt
+
+pybind11==3.0.4
+build==1.5.0
+setuptools==84.1.0
+wheel==0.47.0

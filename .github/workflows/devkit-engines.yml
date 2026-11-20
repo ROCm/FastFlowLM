@@ -1,0 +1,128 @@
+# Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+# Portions of this file consist of AI-generated content.
+
+name: Dev-kit engines
+
+# Builds the dev kit's engine libraries (flm-dev-kit/FLM_DLL) on GitHub-hosted
+# runners, one job per platform and runtime, and uploads them:
+#
+#   lin-xrt  build.sh in the build-environment container (Ubuntu 24.04,
+#            g++-13, the distribution's libxrt-dev)    devkit-libs-lin-xrt
+#   lin-hrx  build_manylinux.sh: the pinned manylinux_2_28 container, the
+#            pinned HRX package, check_abi.sh           devkit-libs-lin-hrx
+#   win-xrt  build.ps1 -Runtime XRT                     devkit-libs-win-xrt
+#   win-hrx  build.ps1 -Runtime HRX                     devkit-libs-win-hrx
+#
+# The steps are composite actions, devkit-build-lib-lin (both Linux jobs) and
+# devkit-build-lib-win (both Windows jobs), so another workflow can build the
+# same libraries; a job here only picks the runner, container, permissions and
+# timeout, and checks out.
+#
+# The libraries build with the product's AVX-512 flags (FLM_MARCH in
+# flm-dev-kit/FLM_DLL/flags.mk), never -march=native, so they do not depend
+# on the runner's CPU. The jobs are independent: one failing does not cancel
+# the others. Nothing here runs on a self-hosted runner.
+#
+# Build and Test (build-and-test.yml) calls this when a change selects the
+# dev kit's dll area, and on every push to main and nightly run.
+#
+# No compiler cache: 21 of the 36 FLM_DLL Makefiles compile and link in one
+# g++ call, which ccache cannot cache (the other 15, such as gemma4e*,
+# hunyuan and the qwen3_5/qwen3_6 ones, build per-object); build.ps1 drives the
+# Visual Studio generator, which sccache does not wrap; and a full build
+# fits well inside the timeout without one.
+on:
+  workflow_call:
+    inputs:
+      engines:
+        description: >
+          Engines to build after the priority units (flm-dev-kit/FLM_DLL/detail
+          directory names, comma-separated), or "all".
+        type: string
+        default: all
+  workflow_dispatch:
+    inputs:
+      engines:
+        description: Engines to build after the priority units (comma-separated detail/ names), or "all"
+        type: string
+        default: all
+
+# Read-only token; lin-xrt adds packages: read to pull the build-environment
+# container from GHCR. A caller can only narrow this.
+permissions:
+  contents: read
+
+jobs:
+  # Each job sets up the runner and checks out; the build itself is in
+  # .github/actions/devkit-build-lib-lin and devkit-build-lib-win.
+  lin-xrt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: read
+    # Steps in a container default to sh (dash), which has no pipefail.
+    defaults:
+      run:
+        shell: bash
+    container:
+      # The image lin-build.yml builds the Ubuntu 24.04 packages in.
+      image: ghcr.io/rocm/fastflowlm/build-environment:ubuntu24.04
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      # The image's default user is unprivileged (PR #1074); the runner's
+      # workspace mounts need root.
+      options: --user root
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build engines (XRT)
+        uses: ./.github/actions/devkit-build-lib-lin
+        with:
+          runtime: xrt
+          engines: ${{ inputs.engines || 'all' }}
+
+  # On the host, not in a container: build_manylinux.sh runs its own.
+  lin-hrx:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build engines (HRX)
+        uses: ./.github/actions/devkit-build-lib-lin
+        with:
+          runtime: hrx
+          engines: ${{ inputs.engines || 'all' }}
+
+  win:
+    name: win-${{ matrix.runtime == 'HRX' && 'hrx' || 'xrt' }}
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      # Independent builds: one failing must not cancel the other.
+      fail-fast: false
+      matrix:
+        runtime: [XRT, HRX]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build engines
+        uses: ./.github/actions/devkit-build-lib-win
+        with:
+          runtime: ${{ matrix.runtime == 'HRX' && 'hrx' || 'xrt' }}
+          engines: ${{ inputs.engines || 'all' }}

@@ -1,0 +1,18 @@
+# Ignore all Python bytecode caches
+**/__pycache__/
+
+# (optional) Ignore compiled Python files too
+*.py[cod]
+
+
+# Ignore all builds
+**/build/
+
+# Ignore vscode
+.vscode
+
+# Ignore all binary
+*.bin
+*.exe
+
+*.ppm

@@ -1,0 +1,97 @@
+# Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+# Portions of this file consist of AI-generated content.
+
+name: Dev-kit xclbin plan
+description: >
+  Decides which dev-kit kernel builds (flm-dev-kit/FLM_Xclbin build units, one
+  per MODEL_TYPE) a run makes, and splits them into shards for a matrix job,
+  with .github/script/ci/devkit_xclbin_plan.py (see its docstring for the
+  rules of each mode). Needs the repository checked out first; changed mode
+  needs the history between base and head (fetch-depth: 0), and plans every
+  build when it cannot diff. Needs only contents: read.
+
+inputs:
+  mode:
+    description: changed, assigned or all.
+    required: false
+    default: changed
+  base:
+    description: Base commit for changed mode (diffed from its merge base with head); empty or all zeros means unknown.
+    required: false
+    default: ""
+  head:
+    description: Head commit for changed mode.
+    required: false
+    default: HEAD
+  shards:
+    description: The most shards.
+    required: false
+    default: "4"
+  per-shard:
+    description: Builds per shard before another shard is added; 0 fills every shard.
+    required: false
+    default: "0"
+  fallback-shards:
+    description: >
+      The most shards when changed mode falls back to all (unknown base); then
+      every shard is filled, whatever shards and per-shard say.
+    required: false
+    default: "16"
+
+outputs:
+  matrix:
+    description: 'A strategy.matrix: {"shard":[0,1,...]}; index plan''s shards with it.'
+    value: ${{ steps.plan.outputs.matrix }}
+  plan:
+    description: >
+      The plan as JSON: {mode, units:[{unit, model_type, artifact_name}],
+      shards:[[...]], touched_models:[...], bench_models:[...]}.
+    value: ${{ steps.plan.outputs.plan }}
+  count:
+    description: Number of builds.
+    value: ${{ steps.plan.outputs.count }}
+  empty:
+    description: '"true" when there is nothing to build: skip the build job then (an empty matrix is an error).'
+    value: ${{ steps.plan.outputs.empty }}
+  touched-models:
+    description: JSON list of the kernel_assignment.json models that use a planned build.
+    value: ${{ steps.plan.outputs.touched-models }}
+  bench-models:
+    description: >
+      JSON list of the models worth benching: in changed mode the users of a
+      build whose source changed plus the models whose assignment changed (not
+      the users of a canary build or of a kernel rebuilt only for a changed
+      model); touched-models otherwise.
+    value: ${{ steps.plan.outputs.bench-models }}
+  mode:
+    description: The mode used (changed falls back to all when the changed files are unknown).
+    value: ${{ steps.plan.outputs.mode }}
+
+runs:
+  using: composite
+  steps:
+    - name: Plan kernel builds
+      id: plan
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+        BASE: ${{ inputs.base }}
+        HEAD_REF: ${{ inputs.head || 'HEAD' }}
+        SHARDS: ${{ inputs.shards }}
+        PER_SHARD: ${{ inputs.per-shard }}
+        FALLBACK_SHARDS: ${{ inputs.fallback-shards }}
+      run: |
+        set -euo pipefail
+        python3 .github/script/ci/devkit_xclbin_plan.py --mode "${MODE}" --base "${BASE}" --head "${HEAD_REF}" \
+          --shards "${SHARDS}" --per-shard "${PER_SHARD}" --fallback-shards "${FALLBACK_SHARDS}" --github-output > "${RUNNER_TEMP}/xclbin-plan.json"
+        python3 - "${RUNNER_TEMP}/xclbin-plan.json" >> "${GITHUB_STEP_SUMMARY}" <<'PY'
+        import json, sys
+        plan = json.load(open(sys.argv[1]))
+        print(f"### Dev-kit kernel builds ({plan['mode']}): {len(plan['units'])} in {len(plan['shards'])} shards\n")
+        if plan["units"]:
+            print("| Shard | Unit | MODEL_TYPE |\n|---|---|---|")
+            for i, shard in enumerate(plan["shards"]):
+                for b in shard:
+                    print(f"| {i} | `{b['unit']}` | {b['model_type'] or '—'} |")
+            print(f"\nModels using them: {len(plan['touched_models'])}; to bench: {len(plan['bench_models'])}")
+        PY

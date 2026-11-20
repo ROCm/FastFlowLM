@@ -40,7 +40,11 @@ name: Build and Test
 # download fails the job. An oga-hipep entry the change adds or edits, new
 # weights or not, is required the same way in Test Windows HIPEP, beside its
 # models of each family, on the kinds of machine that test changed models
-# (the STX Halo). A change that only touches docs builds and tests nothing.
+# (the STX Halo). A change that only touches docs builds and tests nothing;
+# one only under flm-dev-kit/ (which no product package uses yet) builds and
+# tests no package and runs only the dev-kit checks (devkit-static), plus the
+# dev-kit engine builds (devkit-engines) when it selects the dll area and the
+# kernel builds (devkit-xclbins) when it selects the xclbin area.
 # The portable test jobs and Test Windows HIPEP otherwise get 120 minutes on
 # the pr tier and 360 on the full one, which runs every model and every d3
 # size and may first download tens of GB of weights.
@@ -96,6 +100,16 @@ on:
         description: How many distributions each .deb variant was built for.
         value: ${{ jobs.build-lin-xrt-deb.outputs.deb_distros }}
 
+# The token is read-only unless a job says otherwise: pull requests run code
+# from their branch, some of it on the self-hosted NPU runners. Jobs that call
+# lin-build.yml or model-extension-build.yml also get packages: read, to pull
+# the build-environment container from GHCR; nothing here pushes, comments or
+# releases (release.yml's publish jobs grant themselves contents: write). A
+# called workflow can only narrow what its caller job grants. Artifacts and
+# caches use the runtime token, not this one, and need no grant.
+permissions:
+  contents: read
+
 # A superseded pull request commit only holds the NPU and HIPEP runners up, so
 # a new push cancels its run. Pushes to main, nightly runs and tags each get
 # their own group and always finish.
@@ -118,6 +132,11 @@ jobs:
       hipep: ${{ steps.detect.outputs.hipep }}
       hipep-machines: ${{ steps.hipep.outputs.machines }}
       new-models: ${{ steps.detect.outputs.new-models }}
+      # For the dev-kit jobs. flm-dev-kit/ paths select no product build or
+      # suite; see .github/script/ci/changes.py.
+      devkit: ${{ steps.detect.outputs.devkit }}
+      devkit-areas: ${{ steps.detect.outputs.devkit-areas }}
+      devkit-families: ${{ steps.detect.outputs.devkit-families }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -160,16 +179,158 @@ jobs:
         working-directory: .github/script
         run: python3 -m unittest discover -s ci -p 'test_*.py' -t ci
 
-  # ── NPU approval gate ────────────────────────────────────────────────────
-  # The NPU runners are few, so pull requests from anyone outside the core
-  # team wait for one of the npu-approval environment's reviewers before any
-  # job lands on them. Builds on hosted runners still start right away.
-  # Pushes to main, nightly, manual and release runs are never gated.
-  npu-gate:
+  # Static checks of the dev kit's CI data (flm-dev-kit/FLM_Xclbin/
+  # kernel_assignment.json and build_units.json, flm-dev-kit/FLM_DLL/
+  # engines.json, the -Bsymbolic-functions link flag, and on a pull request
+  # the copyright notice of every source file it adds under flm-dev-kit/).
+  # Standard-library Python on a hosted runner; its unit tests run in changes.
+  devkit-static:
+    needs: changes
+    if: needs.changes.outputs.devkit == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Check the dev kit
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+          HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: python3 .github/script/ci/devkit_check.py --base "${BASE}" --head "${HEAD}"
+
+  # The dev kit's engine libraries (flm-dev-kit/FLM_DLL), built for Linux and
+  # Windows, XRT and HRX, on hosted runners (devkit-engines.yml): when a change
+  # selects the dll dev-kit area, and on every push to main and nightly run so
+  # main stays green. Not for a release: the dev kit ships in no package.
+  # packages: read pulls the build-environment container.
+  devkit-engines:
     needs: changes
     if: >-
-      github.event_name == 'pull_request'
-      && !contains(fromJSON('["zaneni6", "michyu-amd", "tawei-amd", "alfxu-amd", "shdu-amd"]'), github.event.pull_request.user.login)
+      ${{ !inputs.release && (github.event_name == 'schedule'
+      || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      || contains(format(',{0},', needs.changes.outputs.devkit-areas), ',dll,')) }}
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/devkit-engines.yml
+
+  # The dev kit's NPU kernels (flm-dev-kit/FLM_Xclbin), built with Peano in
+  # the aie-build image on hosted runners (devkit-xclbins.yml): on a pull
+  # request that selects the xclbin dev-kit area, the builds its changes
+  # touch (mode changed, diffed like changes.py from the merge base of the
+  # pull request's base and head); on every push to main, every kernel the
+  # product ships (assigned); nightly, every build (all); on any other run
+  # that selects the area (workflow_dispatch: no base to diff), assigned.
+  # Not for a release.
+  # packages: read pulls the image from GHCR.
+  devkit-xclbins:
+    needs: changes
+    if: >-
+      ${{ !inputs.release && (github.event_name == 'schedule'
+      || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      || contains(format(',{0},', needs.changes.outputs.devkit-areas), ',xclbin,')) }}
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/devkit-xclbins.yml
+    with:
+      # changed only on a pull request, the one event with a base to diff;
+      # any other run that gets here (workflow_dispatch) builds what ships.
+      mode: >-
+        ${{ github.event_name == 'pull_request' && 'changed'
+        || github.event_name == 'schedule' && 'all'
+        || 'assigned' }}
+      base: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+      head: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+  # ── NPU approval gate ────────────────────────────────────────────────────
+  # The NPU runners are few and self-hosted, so no job lands on them unless
+  # the run is ungated or npu-gate succeeded and either it found the run
+  # trusted or npu-approve was approved by one of the npu-approval
+  # environment's reviewers. Builds on hosted runners still start right away.
+  # Ungated: nightly, a push to main or a tag (release.yml), and a dispatch on
+  # main (also release.yml's). Everything else is gated: pull requests, and a
+  # dispatch of this workflow or release.yml on any other branch or tag.
+  #
+  # This gate is defense in depth, not the boundary: a pull request runs this
+  # file and ./.github/actions from its own merge commit, so it can edit the
+  # gate away. What holds regardless are repository settings: fork pull
+  # request workflows need approval for all external contributors, the npu
+  # and sweep runners are in a runner group limited to this repository, and
+  # a tag ruleset limits who can push tags. Do not limit the runner group to
+  # workflows on refs/heads/main: a pull request's workflow ref is
+  # refs/pull/<n>/merge, so that blocks every pull request's NPU jobs.
+  #
+  # npu-gate runs on every gated run, whatever changed, so a self-hosted job
+  # can require its success: a skipped gate never counts as passed.
+  # Trusted means: on a pull request, the author and whoever triggered this
+  # run (a push by someone else to the branch, or "Re-run all jobs") are on
+  # the list, and the branch is in this repository, not a fork; on a gated
+  # dispatch, whoever dispatched it is on the list. Trust covers whoever
+  # triggered this run, not every commit's author: an untrusted user's commit
+  # on a trusted author's branch runs unapproved once a trusted user triggers
+  # the next run. "Re-run failed jobs" and single-job re-runs keep the
+  # original run's npu-gate and npu-approve results, so the re-runner is not
+  # checked (the commit is the same, so no new code runs).
+  #
+  # The npu-approval environment's reviewers are a separate list, kept by
+  # repository admins; it should prevent self-review and not let admins
+  # bypass it.
+  npu-gate:
+    if: >-
+      ${{ !(github.event_name == 'schedule'
+           || (github.event_name == 'push'
+               && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')))
+           || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')) }}
+    runs-on: ubuntu-latest
+    outputs:
+      trusted: ${{ steps.trust.outputs.trusted }}
+    env:
+      # The one list of trusted logins, for both checks below.
+      NPU_TRUSTED: '["zaneni6", "michyu-amd", "tawei-amd", "alfxu-amd", "shdu-amd"]'
+    steps:
+      - name: Check whether the run is trusted
+        id: trust
+        env:
+          IS_PR: ${{ github.event_name == 'pull_request' }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          ACTOR: ${{ github.triggering_actor }}
+          AUTHOR_TRUSTED: ${{ contains(fromJSON(env.NPU_TRUSTED), github.event.pull_request.user.login) }}
+          ACTOR_TRUSTED: ${{ contains(fromJSON(env.NPU_TRUSTED), github.triggering_actor) }}
+          SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+        run: |
+          trusted=false
+          if [ "${IS_PR}" = "true" ]; then
+            if [ "${AUTHOR_TRUSTED}" = "true" ] && [ "${ACTOR_TRUSTED}" = "true" ] && [ "${SAME_REPO}" = "true" ]; then
+              trusted=true
+            fi
+            echo "Author ${AUTHOR} trusted: ${AUTHOR_TRUSTED}; triggered by ${ACTOR}, trusted: ${ACTOR_TRUSTED};" \
+                 "branch in this repository: ${SAME_REPO} -> trusted: ${trusted}"
+          else
+            # A gated dispatch (or push) has no author or fork: the one
+            # triggering it decides.
+            if [ "${ACTOR_TRUSTED}" = "true" ]; then trusted=true; fi
+            echo "${GITHUB_EVENT_NAME} on ${GITHUB_REF} by ${ACTOR}, trusted: ${trusted}"
+          fi
+          echo "trusted=${trusted}" >> "$GITHUB_OUTPUT"
+
+  # The approval path for a gated run that is not trusted, asked only when
+  # a package is built and some NPU job would run (the conditions below are
+  # those of the self-hosted jobs; a job added there must be added here, or it
+  # will not run for such pull requests). Approval holds for one run: every
+  # new push asks again.
+  npu-approve:
+    needs: [changes, npu-gate]
+    if: >-
+      needs.npu-gate.outputs.trusted != 'true'
+      && needs.changes.outputs.run == 'true'
       && (needs.changes.outputs.suites != 'none'
           || needs.changes.outputs.hrx-suites != ''
           || needs.changes.outputs.source == 'true'
@@ -180,7 +341,10 @@ jobs:
     steps:
       - env:
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-        run: echo "NPU tests approved for ${PR_AUTHOR}'s pull request."
+          ACTOR: ${{ github.triggering_actor }}
+        run: >-
+          echo "NPU tests approved for ${GITHUB_EVENT_NAME} on ${GITHUB_REF}
+          (pull request author ${PR_AUTHOR:-none}), run triggered by ${ACTOR}."
 
   # ── Linux builds ─────────────────────────────────────────────────────────
 
@@ -188,6 +352,9 @@ jobs:
     name: Linux XRT portable
     needs: changes
     if: needs.changes.outputs.run == 'true'
+    permissions:
+      contents: read
+      packages: read  # the build-environment container on GHCR
     uses: ./.github/workflows/lin-build.yml
     with:
       variants: XRT-portable
@@ -196,6 +363,9 @@ jobs:
     name: Linux HRX portable
     needs: changes
     if: needs.changes.outputs.run == 'true'
+    permissions:
+      contents: read
+      packages: read  # the build-environment container on GHCR
     uses: ./.github/workflows/lin-build.yml
     with:
       variants: HRX-portable
@@ -206,6 +376,9 @@ jobs:
     name: Linux models-from-source portable
     needs: changes
     if: needs.changes.outputs.run == 'true' && needs.changes.outputs.source == 'true' && !inputs.release
+    permissions:
+      contents: read
+      packages: read  # the build-environment container on GHCR
     uses: ./.github/workflows/lin-build.yml
     with:
       variants: Source-portable
@@ -214,6 +387,9 @@ jobs:
     name: Linux XRT .deb
     needs: changes
     if: needs.changes.outputs.run == 'true'
+    permissions:
+      contents: read
+      packages: read  # the build-environment container on GHCR
     uses: ./.github/workflows/lin-build.yml
     with:
       variants: XRT-deb
@@ -222,6 +398,9 @@ jobs:
     name: Linux HRX .deb
     needs: changes
     if: needs.changes.outputs.run == 'true'
+    permissions:
+      contents: read
+      packages: read  # the build-environment container on GHCR
     uses: ./.github/workflows/lin-build.yml
     with:
       variants: HRX-deb
@@ -267,6 +446,9 @@ jobs:
     name: Linux XRT model extension
     needs: [changes, build-lin-xrt-portable]
     if: needs.changes.outputs.source == 'true' && !inputs.release
+    permissions:
+      contents: read
+      packages: read  # the build-environment container on GHCR
     uses: ./.github/workflows/model-extension-build.yml
     with:
       os: linux
@@ -277,6 +459,9 @@ jobs:
     name: Linux HRX model extension
     needs: [changes, build-lin-hrx-portable]
     if: needs.changes.outputs.source == 'true' && !inputs.release
+    permissions:
+      contents: read
+      packages: read  # the build-environment container on GHCR
     uses: ./.github/workflows/model-extension-build.yml
     with:
       os: linux
@@ -287,6 +472,9 @@ jobs:
     name: Windows XRT model extension
     needs: [changes, build-win-xrt]
     if: needs.changes.outputs.source == 'true' && !inputs.release
+    permissions:
+      contents: read
+      packages: read  # the build-environment container on GHCR
     uses: ./.github/workflows/model-extension-build.yml
     with:
       os: windows
@@ -297,6 +485,9 @@ jobs:
     name: Windows HRX model extension
     needs: [changes, build-win-hrx]
     if: needs.changes.outputs.source == 'true' && !inputs.release
+    permissions:
+      contents: read
+      packages: read  # the build-environment container on GHCR
     uses: ./.github/workflows/model-extension-build.yml
     with:
       os: windows
@@ -309,12 +500,20 @@ jobs:
 
   test-lin-xrt-portable:
     name: Test Linux XRT portable
-    needs: [changes, build-lin-xrt-portable, npu-gate]
-    # npu-gate is skipped for trusted authors, so spell out what the
-    # implicit success() check used to require.
+    needs: [changes, build-lin-xrt-portable, npu-gate, npu-approve]
+    # Self-hosted: ungated only for nightly, a push to main or a tag, and a
+    # dispatch on main; otherwise npu-gate must have succeeded and found the
+    # run trusted, or npu-approve must have been approved (see npu-gate).
+    # npu-approve is skipped for trusted ones, so spell out what the implicit
+    # success() check would require.
     if: >-
       ${{ !cancelled()
-      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && ((github.event_name == 'schedule'
+           || (github.event_name == 'push'
+               && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')))
+           || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+          || (needs.npu-gate.result == 'success'
+              && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
       && needs.changes.result == 'success'
       && needs.build-lin-xrt-portable.result == 'success'
       && (needs.changes.outputs.suites != 'none') }}
@@ -325,6 +524,9 @@ jobs:
         name: Checkout test scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Self-hosted runners outlive the job: leave no token in .git/config
+          # for the pull request's code to find. Nothing here fetches again.
+          persist-credentials: false
           sparse-checkout: |
             .github/actions
             .github/script
@@ -358,12 +560,16 @@ jobs:
 
   test-lin-hrx-portable:
     name: Test Linux HRX portable
-    needs: [changes, build-lin-hrx-portable, npu-gate]
-    # npu-gate is skipped for trusted authors, so spell out what the
-    # implicit success() check used to require.
+    needs: [changes, build-lin-hrx-portable, npu-gate, npu-approve]
+    # Self-hosted: gated as test-lin-xrt-portable (see npu-gate).
     if: >-
       ${{ !cancelled()
-      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && ((github.event_name == 'schedule'
+           || (github.event_name == 'push'
+               && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')))
+           || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+          || (needs.npu-gate.result == 'success'
+              && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
       && needs.changes.result == 'success'
       && needs.build-lin-hrx-portable.result == 'success'
       && (needs.changes.outputs.hrx-suites != '') }}
@@ -399,12 +605,16 @@ jobs:
   # engines are built from source so far.
   test-lin-source-portable:
     name: Test Linux models-from-source portable
-    needs: [changes, build-lin-source-portable, npu-gate]
-    # npu-gate is skipped for trusted authors, so spell out what the
-    # implicit success() check used to require.
+    needs: [changes, build-lin-source-portable, npu-gate, npu-approve]
+    # Self-hosted: gated as test-lin-xrt-portable (see npu-gate).
     if: >-
       ${{ !cancelled()
-      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && ((github.event_name == 'schedule'
+           || (github.event_name == 'push'
+               && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')))
+           || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+          || (needs.npu-gate.result == 'success'
+              && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
       && needs.changes.result == 'success'
       && needs.build-lin-source-portable.result == 'success'
       && (needs.changes.outputs.source == 'true') }}
@@ -434,12 +644,16 @@ jobs:
 
   test-lin-extension-xrt:
     name: Test Linux XRT model extension
-    needs: [changes, build-lin-xrt-portable, build-lin-extension-xrt, npu-gate]
-    # npu-gate is skipped for trusted authors, so spell out what the
-    # implicit success() check used to require.
+    needs: [changes, build-lin-xrt-portable, build-lin-extension-xrt, npu-gate, npu-approve]
+    # Self-hosted: gated as test-lin-xrt-portable (see npu-gate).
     if: >-
       ${{ !cancelled()
-      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && ((github.event_name == 'schedule'
+           || (github.event_name == 'push'
+               && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')))
+           || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+          || (needs.npu-gate.result == 'success'
+              && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
       && needs.changes.result == 'success'
       && needs.build-lin-xrt-portable.result == 'success'
       && needs.build-lin-extension-xrt.result == 'success'
@@ -476,12 +690,16 @@ jobs:
 
   test-lin-extension-hrx:
     name: Test Linux HRX model extension
-    needs: [changes, build-lin-hrx-portable, build-lin-extension-hrx, npu-gate]
-    # npu-gate is skipped for trusted authors, so spell out what the
-    # implicit success() check used to require.
+    needs: [changes, build-lin-hrx-portable, build-lin-extension-hrx, npu-gate, npu-approve]
+    # Self-hosted: gated as test-lin-xrt-portable (see npu-gate).
     if: >-
       ${{ !cancelled()
-      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && ((github.event_name == 'schedule'
+           || (github.event_name == 'push'
+               && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')))
+           || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+          || (needs.npu-gate.result == 'success'
+              && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
       && needs.changes.result == 'success'
       && needs.build-lin-hrx-portable.result == 'success'
       && needs.build-lin-extension-hrx.result == 'success'
@@ -526,12 +744,16 @@ jobs:
   # installed; the other distributions' builds are covered by their build.
   install-lin-xrt-deb:
     name: Install test Linux XRT .deb
-    needs: [changes, build-lin-xrt-deb, npu-gate]
-    # npu-gate is skipped for trusted authors, so spell out what the
-    # implicit success() check used to require.
+    needs: [changes, build-lin-xrt-deb, npu-gate, npu-approve]
+    # Self-hosted: gated as test-lin-xrt-portable (see npu-gate).
     if: >-
       ${{ !cancelled()
-      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && ((github.event_name == 'schedule'
+           || (github.event_name == 'push'
+               && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')))
+           || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+          || (needs.npu-gate.result == 'success'
+              && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
       && needs.changes.result == 'success'
       && needs.build-lin-xrt-deb.result == 'success'
       && (vars.FLM_INSTALL_TESTS == 'true') }}
@@ -565,12 +787,16 @@ jobs:
 
   install-lin-hrx-deb:
     name: Install test Linux HRX .deb
-    needs: [changes, build-lin-hrx-deb, npu-gate]
-    # npu-gate is skipped for trusted authors, so spell out what the
-    # implicit success() check used to require.
+    needs: [changes, build-lin-hrx-deb, npu-gate, npu-approve]
+    # Self-hosted: gated as test-lin-xrt-portable (see npu-gate).
     if: >-
       ${{ !cancelled()
-      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && ((github.event_name == 'schedule'
+           || (github.event_name == 'push'
+               && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')))
+           || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+          || (needs.npu-gate.result == 'success'
+              && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
       && needs.changes.result == 'success'
       && needs.build-lin-hrx-deb.result == 'success'
       && (vars.FLM_INSTALL_TESTS == 'true') }}
@@ -606,12 +832,16 @@ jobs:
 
   test-win-xrt:
     name: Test Windows XRT
-    needs: [changes, build-win-xrt, npu-gate]
-    # npu-gate is skipped for trusted authors, so spell out what the
-    # implicit success() check used to require.
+    needs: [changes, build-win-xrt, npu-gate, npu-approve]
+    # Self-hosted: gated as test-lin-xrt-portable (see npu-gate).
     if: >-
       ${{ !cancelled()
-      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && ((github.event_name == 'schedule'
+           || (github.event_name == 'push'
+               && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')))
+           || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+          || (needs.npu-gate.result == 'success'
+              && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
       && needs.changes.result == 'success'
       && needs.build-win-xrt.result == 'success'
       && (needs.changes.outputs.suites != 'none') }}
@@ -672,12 +902,16 @@ jobs:
   # (a required one always is).
   test-win-hipep:
     name: Test Windows HIPEP (${{ matrix.id }})
-    needs: [changes, build-win-xrt, npu-gate]
-    # npu-gate is skipped for trusted authors, so spell out what the
-    # implicit success() check used to require.
+    needs: [changes, build-win-xrt, npu-gate, npu-approve]
+    # Self-hosted: gated as test-lin-xrt-portable (see npu-gate).
     if: >-
       ${{ !cancelled()
-      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && ((github.event_name == 'schedule'
+           || (github.event_name == 'push'
+               && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')))
+           || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+          || (needs.npu-gate.result == 'success'
+              && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
       && needs.changes.result == 'success'
       && needs.build-win-xrt.result == 'success'
       && (needs.changes.outputs.hipep == 'true')
@@ -740,12 +974,16 @@ jobs:
 
   test-win-hrx:
     name: Test Windows HRX
-    needs: [changes, build-win-hrx, npu-gate]
-    # npu-gate is skipped for trusted authors, so spell out what the
-    # implicit success() check used to require.
+    needs: [changes, build-win-hrx, npu-gate, npu-approve]
+    # Self-hosted: gated as test-lin-xrt-portable (see npu-gate).
     if: >-
       ${{ !cancelled()
-      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && ((github.event_name == 'schedule'
+           || (github.event_name == 'push'
+               && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')))
+           || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+          || (needs.npu-gate.result == 'success'
+              && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
       && needs.changes.result == 'success'
       && needs.build-win-hrx.result == 'success'
       && (needs.changes.outputs.hrx-suites != '') }}
@@ -779,12 +1017,16 @@ jobs:
 
   test-win-source:
     name: Test Windows models-from-source
-    needs: [changes, build-win-source, npu-gate]
-    # npu-gate is skipped for trusted authors, so spell out what the
-    # implicit success() check used to require.
+    needs: [changes, build-win-source, npu-gate, npu-approve]
+    # Self-hosted: gated as test-lin-xrt-portable (see npu-gate).
     if: >-
       ${{ !cancelled()
-      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && ((github.event_name == 'schedule'
+           || (github.event_name == 'push'
+               && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')))
+           || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+          || (needs.npu-gate.result == 'success'
+              && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
       && needs.changes.result == 'success'
       && needs.build-win-source.result == 'success'
       && (needs.changes.outputs.source == 'true') }}
@@ -814,12 +1056,16 @@ jobs:
 
   test-win-extension-xrt:
     name: Test Windows XRT model extension
-    needs: [changes, build-win-xrt, build-win-extension-xrt, npu-gate]
-    # npu-gate is skipped for trusted authors, so spell out what the
-    # implicit success() check used to require.
+    needs: [changes, build-win-xrt, build-win-extension-xrt, npu-gate, npu-approve]
+    # Self-hosted: gated as test-lin-xrt-portable (see npu-gate).
     if: >-
       ${{ !cancelled()
-      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && ((github.event_name == 'schedule'
+           || (github.event_name == 'push'
+               && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')))
+           || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+          || (needs.npu-gate.result == 'success'
+              && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
       && needs.changes.result == 'success'
       && needs.build-win-xrt.result == 'success'
       && needs.build-win-extension-xrt.result == 'success'
@@ -856,12 +1102,16 @@ jobs:
 
   test-win-extension-hrx:
     name: Test Windows HRX model extension
-    needs: [changes, build-win-hrx, build-win-extension-hrx, npu-gate]
-    # npu-gate is skipped for trusted authors, so spell out what the
-    # implicit success() check used to require.
+    needs: [changes, build-win-hrx, build-win-extension-hrx, npu-gate, npu-approve]
+    # Self-hosted: gated as test-lin-xrt-portable (see npu-gate).
     if: >-
       ${{ !cancelled()
-      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && ((github.event_name == 'schedule'
+           || (github.event_name == 'push'
+               && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')))
+           || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+          || (needs.npu-gate.result == 'success'
+              && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
       && needs.changes.result == 'success'
       && needs.build-win-hrx.result == 'success'
       && needs.build-win-extension-hrx.result == 'success'
@@ -898,12 +1148,16 @@ jobs:
 
   install-win-msi:
     name: Install test Windows MSI
-    needs: [changes, build-win-xrt, npu-gate]
-    # npu-gate is skipped for trusted authors, so spell out what the
-    # implicit success() check used to require.
+    needs: [changes, build-win-xrt, npu-gate, npu-approve]
+    # Self-hosted: gated as test-lin-xrt-portable (see npu-gate).
     if: >-
       ${{ !cancelled()
-      && (needs.npu-gate.result == 'success' || needs.npu-gate.result == 'skipped')
+      && ((github.event_name == 'schedule'
+           || (github.event_name == 'push'
+               && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')))
+           || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+          || (needs.npu-gate.result == 'success'
+              && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
       && needs.changes.result == 'success'
       && needs.build-win-xrt.result == 'success'
       && (vars.FLM_INSTALL_TESTS == 'true') }}
@@ -938,9 +1192,17 @@ jobs:
 
   # ── Summary ──────────────────────────────────────────────────────────────
 
+  # On a gated run (pull requests), make summary the one required check: a
+  # test job skipped because npu-gate failed or npu-approve was rejected
+  # reports "skipped", which branch protection counts as passing.
   summary:
     needs:
       - changes
+      - devkit-static
+      - devkit-engines
+      - devkit-xclbins
+      - npu-gate
+      - npu-approve
       - build-lin-xrt-portable
       - build-lin-hrx-portable
       - build-lin-xrt-deb
@@ -1017,3 +1279,47 @@ jobs:
           echo "hrx=$(verdict "${HRX}")" >> "$GITHUB_OUTPUT"
           echo "XRT: ${XRT} -> $(verdict "${XRT}")"
           echo "HRX: ${HRX} -> $(verdict "${HRX}")"
+
+      # Fails a gated run whose NPU jobs did not get to run (gate failed or
+      # approval rejected) or whose packages did not pass, so the skipped test
+      # jobs cannot pass as green. Ungated runs only report the verdict.
+      - name: Gate and verdict
+        if: github.event_name == 'pull_request' || needs.npu-gate.result != 'skipped'
+        env:
+          GATE: ${{ needs.npu-gate.result }}
+          APPROVE: ${{ needs.npu-approve.result }}
+          TRUSTED: ${{ needs.npu-gate.outputs.trusted }}
+          XRT_OK: ${{ steps.verdict.outputs.xrt }}
+          HRX_OK: ${{ steps.verdict.outputs.hrx }}
+        run: |
+          echo "npu-gate: ${GATE} (trusted: ${TRUSTED}); npu-approve: ${APPROVE}; xrt: ${XRT_OK}; hrx: ${HRX_OK}"
+          case "${GATE}" in success) ;; *) echo "::error::npu-gate did not succeed"; exit 1 ;; esac
+          if [ "${TRUSTED}" != true ] && [ "${APPROVE}" != success ] && [ "${APPROVE}" != skipped ]; then
+            echo "::error::NPU tests were not approved"; exit 1
+          fi
+          if [ "${XRT_OK}" != true ] || [ "${HRX_OK}" != true ]; then
+            echo "::error::a package failed to build or its tests failed"; exit 1
+          fi
+
+      # A pull request whose dev-kit data does not check out, or whose dev-kit
+      # engines do not build, fails here too, whatever the gate step above
+      # decided, so this job stays the single required check. So does one
+      # whose change detection failed: every job after it is then skipped,
+      # and a skip would otherwise read as a pass. Other runs only show the
+      # dev-kit jobs' own results: the dev kit ships in no package, so it
+      # does not hold up a release.
+      - name: Dev-kit checks
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          DEVKIT_STATIC: ${{ needs.devkit-static.result }}
+          DEVKIT_ENGINES: ${{ needs.devkit-engines.result }}
+          DEVKIT_XCLBINS: ${{ needs.devkit-xclbins.result }}
+        run: |
+          echo "changes: ${CHANGES}; devkit-static: ${DEVKIT_STATIC}; devkit-engines: ${DEVKIT_ENGINES}; devkit-xclbins: ${DEVKIT_XCLBINS}"
+          rc=0
+          case "${CHANGES}" in success) ;; *) echo "::error::changes did not succeed, so the dev-kit and build jobs were skipped"; rc=1 ;; esac
+          case "${DEVKIT_STATIC}" in success|skipped) ;; *) echo "::error::devkit-static did not pass"; rc=1 ;; esac
+          case "${DEVKIT_ENGINES}" in success|skipped) ;; *) echo "::error::devkit-engines did not pass"; rc=1 ;; esac
+          case "${DEVKIT_XCLBINS}" in success|skipped) ;; *) echo "::error::devkit-xclbins did not pass"; rc=1 ;; esac
+          exit "${rc}"

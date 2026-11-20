@@ -1,0 +1,9 @@
+{
+  "package_dir": "precompiled/c4",
+  "transport": "ctrlpkt",
+  "configs": [
+    { "kind": "cold", "app": "vadd" },
+    { "kind": "warm", "prev": "vadd", "app": "vmul" },
+    { "kind": "warm", "prev": "vmul", "app": "vadd" }
+  ]
+}

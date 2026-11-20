@@ -1,0 +1,89 @@
+{
+    "q4nx_config": {
+        "row_block_size": 32,
+        "col_block_size": 256,
+        "parallel_size": 16,
+        "keep_block_in_2D": false,
+        "q4_0_keep_min_plane": true,
+        "optimize_ddr": true
+    },
+    "default_tensor_type": "Q4_0",
+    "name_map": {
+        "embedding": {
+            "gguf_name": "token_embd.weight",
+            "q4nx_name": "model.token_embd.weight"
+        },
+        "q_proj": {
+            "gguf_name": "blk.{bid}.attn_q.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.q_proj.weight"
+        },
+        "k_proj": {
+            "gguf_name": "blk.{bid}.attn_k.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.k_proj.weight"
+        },
+        "v_proj": {
+            "gguf_name": "blk.{bid}.attn_v.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.v_proj.weight"
+        },
+        "q_norm": {
+            "gguf_name": "blk.{bid}.attn_q_norm.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.q_norm.weight"
+        },
+        "k_norm": {
+            "gguf_name": "blk.{bid}.attn_k_norm.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.k_norm.weight"
+        },
+        "o_proj": {
+            "gguf_name": "blk.{bid}.attn_output.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.o_proj.weight"
+        },
+        "attn_gate": {
+            "gguf_name": "blk.{bid}.attn_gate.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.gate_proj.weight"
+        },
+        "up_proj": {
+            "gguf_name": "blk.{bid}.ffn_up.weight",
+            "q4nx_name": "model.layers.{bid}.feed_forward.w3.weight"
+        },
+        "gate_proj": {
+            "gguf_name": "blk.{bid}.ffn_gate.weight",
+            "q4nx_name": "model.layers.{bid}.feed_forward.w1.weight"
+        },
+        "down_proj": {
+            "gguf_name": "blk.{bid}.ffn_down.weight",
+            "q4nx_name": "model.layers.{bid}.feed_forward.w2.weight"
+        },
+        "short_conv_in_proj": {
+            "gguf_name": "blk.{bid}.shortconv.in_proj.weight",
+            "q4nx_name": "model.layers.{bid}.conv.in_proj.weight"
+        },
+        "short_conv_out_proj": {
+            "gguf_name": "blk.{bid}.shortconv.out_proj.weight",
+            "q4nx_name": "model.layers.{bid}.conv.out_proj.weight"
+        },
+        "short_conv_conv": {
+            "gguf_name": "blk.{bid}.shortconv.conv.weight",
+            "q4nx_name": "model.layers.{bid}.conv.conv.weight"
+        },
+        "operator_norm": {
+            "gguf_name": "blk.{bid}.attn_norm.weight",
+            "q4nx_name": "model.layers.{bid}.operator_norm.weight"
+        },
+        "post_operator_norm": {
+            "gguf_name": "blk.{bid}.post_attention_norm.weight",
+            "q4nx_name": "model.layers.{bid}.post_operator_norm.weight"
+        },
+        "ffn_norm": {
+            "gguf_name": "blk.{bid}.ffn_norm.weight",
+            "q4nx_name": "model.layers.{bid}.ffn_norm.weight"
+        },
+        "post_ffn_norm": {
+            "gguf_name": "blk.{bid}.post_ffw_norm.weight",
+            "q4nx_name": "model.layers.{bid}.post_ffn_norm.weight"
+        },
+        "embedding_norm": {
+            "gguf_name": "output_norm.weight",
+            "q4nx_name": "model.embedding_norm.weight"
+        }
+    }
+}

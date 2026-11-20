@@ -1,0 +1,8 @@
+build/
+# The three bitstreams are build outputs (see "Build & run" in README.md).
+XCLBINS/
+.venv/
+build/
+packaging/*
+*.so
+*.exe
