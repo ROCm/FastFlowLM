@@ -16,8 +16,9 @@ must compute it here.
 
 Normalised: line endings made "\\n", trailing whitespace stripped, and blank
 lines and comment lines (first non-blank character "#") dropped, so an edit
-to the comments of either file keeps the tag and does not rebuild and
-republish an identical image. Docker ignores those lines, and every
+to the comments of either file keeps the tag; devkit-aie-image.yml then
+finds the tag published and neither rebuilds nor republishes the image (it
+still runs the kernel check in it). Docker ignores those lines, and every
 toolchain.lock line that is not KEY=VALUE is one of them. The exception is a
 Dockerfile's parser directives (# syntax=, # escape=, # check=) at the top of
 the file: they are comment-shaped but change the build, so they are kept.

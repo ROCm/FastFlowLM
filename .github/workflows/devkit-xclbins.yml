@@ -26,8 +26,8 @@ name: Dev-kit xclbins
 #   image     the image to build in: the digest in
 #             flm-dev-kit/FLM_Xclbin/toolchain.image when that file exists;
 #             else ghcr.io/rocm/fastflowlm/aie-build:<toolchain hash>
-#             (.github/script/ci/aie_image_hash.py: the first 16 hex digits
-#             of sha256(toolchain.lock + Dockerfile), comments and blank lines
+#             (.github/script/ci/aie_image_hash.py: 16 hex digits of a sha256
+#             of toolchain.lock and the Dockerfile, comments and blank lines
 #             left out; the tag devkit-aie-image.yml publishes) when the
 #             registry has it;
 #             else built here from the same Dockerfile and build args, reading
