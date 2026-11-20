@@ -5,7 +5,7 @@
 
 # Phase 8: the fused 8-row verify in the gemma4e_dflash engine (2026-10-29)
 
-IRON `FLM_DLL/detail/gemma4e_dflash`, branch feat/bolt-dflash: commits `b4068405d` (fused verify + lm_head_8), `d28e86fcd` (overlap/lazy commit/ranged flush), `a300556bd` (HRX stubs), `7f689ba6a` (adaptive guard).
+Engine: `FLM_DLL/detail/gemma4e_dflash`: fused verify + lm_head_8, overlap/lazy commit/ranged flush, HRX stubs, adaptive guard.
 Files: `gemma4e_dflash_verify.cpp` (new), `gemma4e_dflash_spec_state.hpp` (new, shared Spec state), `gemma4e_dflash_spec.cpp`, `gemma4e_dflash_detail.hpp`,
 `gemma4e_dflash.cpp` (lazy decode streams), `tools/test_spec_engine.cpp`.
 

@@ -343,6 +343,14 @@ STOCK_ENV
 )"
 fi
 
+# The model directory: the FLM_MODEL_PATH this installer ran with, if any;
+# otherwise flm's own default (~/.config/flm on Linux).
+if [[ -n "${FLM_MODEL_PATH:-}" ]]; then
+    MODEL_PATH_LINE="export FLM_MODEL_PATH=\"$FLM_MODEL_PATH\""
+else
+    MODEL_PATH_LINE="# FLM_MODEL_PATH is not set: flm uses its default model directory."
+fi
+
 ENV_SCRIPT="$FLM_PREFIX/flm_env.sh"
 echo "[home_install] writing env script: $ENV_SCRIPT"
 cat > "$ENV_SCRIPT" <<EOF
@@ -364,7 +372,7 @@ $XRT_ENV_BLOCK
 
 # 3. Put flm on PATH.
 export PATH="\$FLM_PREFIX/bin:\$PATH"
-export FLM_MODEL_PATH="/scratch/alfxu"
+$MODEL_PATH_LINE
 
 echo "[flm_env] FastFlowLM environment ready (prefix: \$FLM_PREFIX)"
 EOF

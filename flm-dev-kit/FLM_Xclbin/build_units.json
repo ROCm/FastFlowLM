@@ -1,5 +1,5 @@
 {
-  "_doc": "Every FLM_Xclbin build unit (a directory owning a Makefile, path relative to FLM_Xclbin/) -> model_types: the MODEL_TYPE values it is built for, one build each (make bitstream MODEL_TYPE=<t>; [] = built once, no MODEL_TYPE); artifacts: the CI artifact names those builds produce, xclbins-<unit with / as _>[_<MODEL_TYPE>], the names kernel_assignment.json refers to. Ported from the MULTI_MODEL table of FastFlowLM_IRON .github/actions/xclbin-build-matrix/action.yml. Checked by .github/script/ci/devkit_check.py.",
+  "_doc": "Every FLM_Xclbin build unit (a directory owning a Makefile, path relative to FLM_Xclbin/) -> model_types: the MODEL_TYPE values it is built for, one build each (make bitstream MODEL_TYPE=<t>; [] = built once, no MODEL_TYPE); artifacts: the CI artifact names those builds produce, xclbins-<unit with / as _>[_<MODEL_TYPE>], the names kernel_assignment.json refers to. Checked by .github/script/ci/devkit_check.py.",
   "units": {
     "Dequant_Q4_0_w128x512": {
       "model_types": [],

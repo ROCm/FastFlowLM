@@ -5,10 +5,10 @@
 
 # End-to-end results: DFlash speculative decoding with the attnx verify xclbin (2026-10-29)
 
-Engine IRON `1a6fc4cd7` (attnx host contract in gemma4e_dflash_verify.cpp; FLM_DFLASH_ATTN=8 selects verify_attn8.xclbin for A/B).
-Verify xclbins rebuilt from IRON HEAD (all stream P kernels): `verify.xclbin` = build/fused8x_full_L8 (attnx), `verify_attn8.xclbin` = build/fused88_full_L8;
+Engine: `gemma4e_dflash` as of the original development tree (attnx host contract in gemma4e_dflash_verify.cpp; FLM_DFLASH_ATTN=8 selects verify_attn8.xclbin for A/B).
+Verify xclbins rebuilt from the same tree (all stream P kernels): `verify.xclbin` = build/fused8x_full_L8 (attnx), `verify_attn8.xclbin` = build/fused88_full_L8;
 both passed the whole-layer oracle (layers 0/5/40/35 x cursors 0/9/505/1000/2000, poison, repeat 2: 20/20 each) before deployment
-into work/local-xclbins/xclbins/Nemotron-3.5-Bolt-E4B-DFlash-NPU2/. DFlash package: fc BF16 (IRON 3e458215b), 270 MB.
+into work/local-xclbins/xclbins/Nemotron-3.5-Bolt-E4B-DFlash-NPU2/. DFlash package: fc BF16, 270 MB.
 Box: quiet (load < 0.5), only one NPU job at a time. All runs greedy unless stated.
 
 ## 1. Accuracy on real text

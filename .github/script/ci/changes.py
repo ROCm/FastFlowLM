@@ -148,8 +148,8 @@ NON_CODE = re.compile(
     r"|.*~$)",                  # editor backups such as src/home_install.sh~
     re.IGNORECASE)
 
-# The FLM dev kit: kernel, engine, converter and pybind sources imported from
-# FastFlowLM_IRON, built and tested by dev-kit jobs of their own. No product
+# The FLM dev kit: kernel, engine, converter and pybind sources, built and
+# tested by dev-kit jobs of their own. No product
 # build reads them yet, so they select no product build or suite (a product
 # change that starts consuming one must add it to the product rules here).
 # Area -> the prefix that selects it, in output order.

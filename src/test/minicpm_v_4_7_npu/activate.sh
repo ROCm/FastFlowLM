@@ -10,7 +10,7 @@
 #                                # (the thinking turn generates 4x LENGTH)
 #
 # Why this is needed: the harness links -lminicpm_v_4_7_npu out of src/lib/xrt/, but
-# that engine is built in the *other* repo (FastFlowLM_IRON) and is deliberately
+# that engine is built in the dev kit (flm-dev-kit/FLM_DLL) and is deliberately
 # not committed here -- it is a build artifact whose host/NPU flavour changes.
 # Without staging it you get:
 #     /usr/bin/ld: cannot find -lminicpm_v_4_7_npu: No such file or directory
@@ -21,8 +21,8 @@
 # model folders.
 
 # --- settings, override by exporting before sourcing -------------------------
-IRON_REPO="${IRON_REPO:-/scratch/michyu/Projects/FastFlowLM_IRON}"
-FLM_MODEL_PATH="${FLM_MODEL_PATH:-/scratch/michyu}"
+FLM_DEVKIT_DIR="${FLM_DEVKIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/flm-dev-kit}"
+FLM_MODEL_PATH="${FLM_MODEL_PATH:-/scratch/$USER}"
 MODEL_NAME="${MODEL_NAME:-MiniCPM-V-4.7-1B-NPU2}"
 
 # Host build: every stage on the CPU. Correct but slow (~20 tok/s decode).
@@ -36,13 +36,13 @@ _sourced=1
 
 _here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _libdir="$(cd "$_here/../../lib/xrt" && pwd)"
-_engdir="$IRON_REPO/FLM_DLL/detail/minicpm_v_4_7_npu"
-_built="$IRON_REPO/FLM_DLL/build/lib/libminicpm_v_4_7_npu.so"
+_engdir="$FLM_DEVKIT_DIR/FLM_DLL/detail/minicpm_v_4_7_npu"
+_built="$FLM_DEVKIT_DIR/FLM_DLL/build/lib/libminicpm_v_4_7_npu.so"
 
 _fail() { echo "[activate] ERROR: $*" >&2; return 1; }
 
 _main() {
-    [ -d "$_engdir" ] || { _fail "engine dir not found: $_engdir (set IRON_REPO)"; return 1; }
+    [ -d "$_engdir" ] || { _fail "engine dir not found: $_engdir (set FLM_DEVKIT_DIR)"; return 1; }
 
     case "${1:-}" in
         host) echo "[activate] building all-host engine ..."

@@ -249,7 +249,7 @@ another NPU2 design), or lm_head computed by the layer design's projection engin
 ## 16. Feasibility: one xclbin for layers + lm_head (overlay), 2026-11-02
 
 `../lm_head_npu_bin/` was an unchanged copy of `Qwen3_5/lm_head_npu_bin`, built for QWEN3_5_2B (Peano, 4 s). It was
-removed on 2026-11-03 (lm_head now runs inside layer.xclbin, so nothing used it); it is in git at IRON `2261dffc2`.
+removed on 2026-11-03 (lm_head now runs inside layer.xclbin, so nothing used it).
 
 - **Program memory (16 KB per core on NPU2, aie-rt `xaie2pgbl_reginit.c`):** fits. lm_head = 4.8 KB on all 32
   cores; decode = 6.96 KB (projection), 4.5-5.4 KB (attention), 2.8 KB (GDN), max 10.5 KB (conv core (5,2)).

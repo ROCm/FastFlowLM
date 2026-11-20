@@ -1516,8 +1516,7 @@ Used in:  flm-dev-kit/FLM_DLL/detail/minicpm_v_4_7_npu/image/
 
 Published by OpenBMB as remote code with the MiniCPM-V 4.7 model; no
 copyright line was published with that file, and it is no longer present at
-the head revision of the model repositories. Listed for attribution; whether
-this reimplementation needs attribution is pending Legal review.
+the head revision of the model repositories. Listed for attribution.
 
 Licensed under the Apache License, Version 2.0. The license text is
 reproduced at the end of this file.

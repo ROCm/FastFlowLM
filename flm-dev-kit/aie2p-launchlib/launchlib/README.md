@@ -57,7 +57,7 @@ runlists fail; on Windows it made launches much slower. Do not share the NPU wit
 Without a context list (Windows without `LAUNCH_NPU_WATCH_XRT`, or on an XRT whose list it does not recognize, or `accel`
 empty; `Session::watch_why()` says which) the Session cannot see other contexts, so it takes the NPU as shared: by the policy, every warm and rerun launch runs as cold (`cold_only`), unless `SessionOptions::exclusive`
 says no other process uses the NPU. On Windows a warm or rerun launch after another app's context hangs the NPU, and
-repeated hangs ended in bugcheck 0x119 on a shared machine. The order check and the recovery still work.
+repeated hangs can make the machine unresponsive (reboot to recover). The order check and the recovery still work.
 
 What it costs: one driver query per run, ~1 µs with no context on the NPU but 35–55 µs once any context exists
 (ours too: the driver asks the firmware). Within `max_gap` of its last query the Session asks only after the run (a

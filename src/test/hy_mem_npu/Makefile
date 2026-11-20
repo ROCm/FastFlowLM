@@ -25,9 +25,10 @@ PROMPT_TOKENS ?= 128,512,2048
 # runs per length; prefill speed moves ~20% run to run, so raise this to compare
 REPEAT ?= 1
 TAG      ?= hy-memory:30b-a3b
-# models_simple/ref_hy_mem_e2e_q4k.py (same Q4_K weights as the NPU); the bf16
-# one, hy_mem_e2e_reference.safetensors, says how far Q4_K is from the original
-REFERENCE ?= /scratch/$(USER)/Projects/FastFlowLM_IRON/models_simple/hy_mem_e2e_reference_q4k.safetensors
+# the PyTorch reference's output, ref_hy_mem_e2e_q4k.py (same Q4_K weights as the NPU;
+# not in this repository); the bf16 one, hy_mem_e2e_reference.safetensors, says how far
+# Q4_K is from the original
+REFERENCE ?= /scratch/$(USER)/hy_mem_e2e_reference_q4k.safetensors
 # weights at $(FLM_MODEL_PATH)/models/Hy-Memory-30B-A3B-NPU2 (as in activate.sh)
 FLM_MODEL_PATH ?= /scratch/$(USER)
 # test / chain: write each request's messages and reply here (empty = off)
