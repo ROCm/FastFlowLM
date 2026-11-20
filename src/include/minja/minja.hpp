@@ -2750,8 +2750,42 @@ inline std::shared_ptr<Context> Context::builtins() {
   globals.set("raise_exception", simple_function("raise_exception", { "message" }, [](const std::shared_ptr<Context> &, Value & args) -> Value {
     throw std::runtime_error(args.at("message").get<std::string>());
   }));
-  globals.set("tojson", simple_function("tojson", { "value", "indent" }, [](const std::shared_ptr<Context> &, Value & args) {
-    return Value(args.at("value").dump(args.get<int64_t>("indent", -1), /* to_json= */ true));
+  // Upstream minja takes no ensure_ascii and throws on an argument it does not
+  // know, so `x | tojson(ensure_ascii=False)` failed the whole render.
+  // Laguna-2.1's chat template writes it for every non-string tool call
+  // argument. dump() keeps non-ASCII text as it is, which is ensure_ascii=False;
+  // ensure_ascii=True escapes it as json.dumps does, \uXXXX with surrogate pairs
+  // past U+FFFF.
+  globals.set("tojson", simple_function("tojson", { "value", "indent", "ensure_ascii" }, [](const std::shared_ptr<Context> &, Value & args) {
+    auto text = args.at("value").dump(args.get<int64_t>("indent", -1), /* to_json= */ true);
+    if (!args.get<bool>("ensure_ascii", false)) {
+      return Value(text);
+    }
+    static const char hex[] = "0123456789abcdef";
+    std::string out;
+    auto escape = [&](uint32_t unit) {
+      out += "\\u";
+      for (int shift = 12; shift >= 0; shift -= 4) out += hex[(unit >> shift) & 0xF];
+    };
+    for (size_t i = 0; i < text.size();) {
+      const auto lead = static_cast<unsigned char>(text[i]);
+      if (lead < 0x80) {
+        out += text[i++];
+        continue;
+      }
+      const size_t len = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : 2;
+      uint32_t code = lead & (0x7F >> len);
+      for (size_t k = 1; k < len && i + k < text.size(); ++k) code = (code << 6) | (static_cast<unsigned char>(text[i + k]) & 0x3F);
+      i += len;
+      if (code >= 0x10000) {
+        code -= 0x10000;
+        escape(0xD800 + (code >> 10));
+        escape(0xDC00 + (code & 0x3FF));
+      } else {
+        escape(code);
+      }
+    }
+    return Value(out);
   }));
   globals.set("items", simple_function("items", { "object" }, [](const std::shared_ptr<Context> &, Value & args) {
     auto items = Value::array();

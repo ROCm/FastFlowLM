@@ -338,8 +338,9 @@ def round_trip(api: Api) -> None:
 
 
 def positional_shelf_history(api: Api) -> tuple[list[dict], list[dict]]:
-    if api.model not in ("qwen3.5-oga-hipep:9b", "qwen2.5-it-oga-hipep:14b"):
-        raise Skip("only the two verified positional OGA packages use this adapter")
+    if api.model not in ("qwen3.5-oga-hipep:9b", "qwen2.5-it-oga-hipep:14b", "laguna2.1-oga-hipep:33b-a3b",
+                         "laguna2.1-oga-hipep:118b-a8b", "nemotron3.5-lightning-oga-hipep:30b-a3b"):
+        raise Skip("only the verified positional OGA packages use this adapter")
     turns = user("Read the red and blue shelves. Report each shelf and its numeric value as JSON.")
     calls = [{"id": ident, "type": "function", "function": {
         "name": "read_shelf", "arguments": json.dumps({"shelf": shelf})}}
