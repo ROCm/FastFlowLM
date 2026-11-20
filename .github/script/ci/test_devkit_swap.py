@@ -372,11 +372,10 @@ class Fetch(SwapCase):
         self.api.jobs_by_run[RUN].append({"name": "devkit-xclbins / build (3)", "conclusion": "failure"})
         self.refused("devkit-xclbins / build (3) did not pass")
 
-    def test_bench_failure_alone_is_accepted(self):
+    def test_failed_run_is_refused_even_if_only_a_bench_failed(self):
         self.api.runs[RUN]["conclusion"] = "failure"
         self.api.jobs_by_run[RUN].append({"name": "devkit-bench / Bench lin-xrt m:1", "conclusion": "failure"})
-        code, out, err = self.fetch()
-        self.assertEqual(code, 0, out + err)
+        self.refused("the run concluded failure, not success (devkit-bench / Bench lin-xrt m:1)")
 
     def test_no_overlay_ran(self):
         self.api.jobs_by_run[RUN] = [j for j in self.api.jobs_by_run[RUN] if "overlay" not in j["name"]]
@@ -568,6 +567,47 @@ class Verify(SwapCase):
         self.assertFalse(ok)
         self.assertIn("merge main and let CI test again", why)
 
+    def test_partial_swap(self):
+        # The Windows half of the engine left out: Linux would ship a new
+        # build beside an old Windows one.
+        self.swapped()
+        self.repo.git("checkout", "-q", self.head, "--", XRT_WIN, XRT_LIB)
+        self.repo.git("commit", "-q", "--amend", "--no-edit")
+        self.assertEqual(sorted(self.repo.git("diff", "--name-only", self.head, "HEAD").splitlines()),
+                         sorted([XRT_LIN, KERNEL]))
+        ok, why = self.verify()
+        self.assertFalse(ok)
+        self.assertIn("tested 2 file(s)", why)
+        self.assertIn("does not carry", why)
+        code, out = self.check()
+        self.assertIn(f"::warning::{XRT_LIN}", out)
+
+    def test_pull_request_that_changes_swap_ci(self):
+        # The pull request's own code writes and checks the manifests: a
+        # swap that comes with a change to it is not trusted.
+        self.head = self.repo.commit({".github/script/ci/devkit_swap.py": b"# changed\n"}, "ci")
+        self.repo.git("push", "-q", "origin", "feature")
+        self.api.pulls[PR]["head"]["sha"] = self.head
+        self.api.runs.clear()
+        self.api.artifacts_by_run.clear()
+        self.add_run(RUN)
+        self.swapped()
+        self.api.downloads.clear()
+        ok, why = self.verify()
+        self.assertFalse(ok)
+        self.assertIn("also changes the dev-kit CI that checks a swap (.github/script/ci/devkit_swap.py)", why)
+        self.assertEqual(self.api.downloads, [])
+        code, out = self.check()
+        self.assertIn("not trusted, the pull request also changes the dev-kit CI", out)
+        self.assertIn(f"::warning::{XRT_LIN}", out)
+
+    def test_unexpected_error_is_not_verified(self):
+        self.swapped()
+        with mock.patch.object(ds, "verify_swap", side_effect=AttributeError("'list' object has no attribute 'get'")):
+            ok, why = self.verify()
+        self.assertFalse(ok)
+        self.assertIn("unexpected AttributeError", why)
+
     def test_api_unreachable(self):
         self.swapped()
         self.api.runs.clear()
@@ -627,6 +667,13 @@ class Check(SwapCase):
         code, out = self.check()
         self.assertNotIn("::warning::", out)
         self.assertIn("third-party", out)
+
+    def test_unexpected_error_warns_while_not_enforced(self):
+        self.repo.commit({XRT_LIN: b"hand"})
+        with mock.patch.object(ds.devkit_check, "required_binaries", side_effect=ValueError("bad data")):
+            code, out = self.check()
+        self.assertEqual(code, 0)
+        self.assertIn("::warning::devkit_swap check could not run: unexpected ValueError: bad data", out)
 
     def test_fake_trailers_do_not_excuse(self):
         self.repo.commit({XRT_LIN: b"hand"}, f"x\n\n{ds.TRAILER_RUN}: {RUN}\n{ds.TRAILER_TESTED}: {self.head}")
@@ -712,10 +759,21 @@ class Manifests(unittest.TestCase):
         m["files"].append(dict(m["files"][0]))
         with self.assertRaisesRegex(ds.ManifestError, "listed twice"):
             self.parse(m)
-        bad_kernel = self.good()
-        bad_kernel["files"][-1]["repo_path"] = "src/xclbins/attn.xclbin"
-        with self.assertRaises(ds.ManifestError):
-            self.parse(bad_kernel)
+        for path in ("src/xclbins/attn.xclbin", "src/xclbins/M-NPU2/sub/attn.xclbin"):
+            with self.subTest(kernel=path):
+                bad_kernel = self.good()
+                entry = next(e for e in bad_kernel["files"] if e["repo_path"] == KERNEL)
+                entry["repo_path"], entry["artifact_path"] = path, path[len("src/xclbins/"):]
+                with self.assertRaisesRegex(ds.ManifestError, "src/xclbins/<folder>/<slot>.xclbin"):
+                    self.parse(bad_kernel)
+        # A third-party file is no dev-kit build, whatever its name.
+        third = manifest("windows", "xrt", {"src/lib/xrt/aiebu_static.lib": b"a"}, head=self.HEAD, base=self.BASE)
+        with self.assertRaisesRegex(ds.ManifestError, "third-party"):
+            self.parse(third)
+        # An import library comes with its DLL.
+        lone = manifest("windows", "xrt", {XRT_LIB: b"l", KERNEL: b"k"}, head=self.HEAD, base=self.BASE)
+        with self.assertRaisesRegex(ds.ManifestError, "no foo_npu.dll beside it"):
+            self.parse(lone)
         with self.assertRaises(ds.ManifestError):
             ds.parse_manifest(b"{", "windows", "xrt")
         with self.assertRaises(ds.ManifestError):
@@ -768,6 +826,43 @@ class Zips(unittest.TestCase):
             self.read(zip_of({"a/b.xclbin": b"abc"}, symlinks=("a/l",)))
         with self.assertRaisesRegex(ds.SwapError, "unreadable"):
             self.read(b"not a zip")
+
+
+class Redirects(unittest.TestCase):
+    """Api sends its token to the API host only: no redirect is followed."""
+
+    def test_api_call_does_not_follow_a_redirect(self):
+        import http.server
+        import threading
+        seen = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                seen.append((self.path, self.headers.get("Authorization")))
+                if self.path.startswith("/elsewhere"):
+                    body = b"{}"
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                else:
+                    self.send_response(301)
+                    self.send_header("Location", f"http://127.0.0.1:{self.server.server_port}/elsewhere")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        api = ds.Api(REPO, "secret", base=f"http://127.0.0.1:{server.server_port}")
+        with self.assertRaisesRegex(ds.SwapError, r"HTTP 301 \(a redirect, not followed"):
+            api.run("1")
+        self.assertEqual([p for p, _ in seen], [f"/repos/{REPO}/actions/runs/1"])
 
 
 class Targets(unittest.TestCase):

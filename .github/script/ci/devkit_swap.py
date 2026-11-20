@@ -49,17 +49,26 @@ verify (Build and Test's changes job, pull requests): whether the pull
 request's head is a swap commit CI can trust without testing again: it has
 the trailers (whoever wrote it), its only parent is the tested commit, it
 changes only paths the run's manifests list, each to exactly the manifest's
-bytes (SHA-256 of the blob at head), the recorded run passes the checks
-fetch makes (read with the job's token, actions: read: only the small
-manifests are downloaded), and main gained no dev-kit source or binary
-change between the run's base and the pull request's base. Prints the
-reasons and writes swap-verified=true|false with --github-output. Build and
-Test then runs no product build, NPU test, dev-kit build, overlay or bench
-for a verified swap; devkit-static still runs.
+bytes, and carries every file the run tested (no half swap: one system's
+build of an engine, part of the kernels), the recorded run passes the
+checks fetch makes (read with the job's token, actions: read: only the
+small manifests are downloaded), main gained no dev-kit source or binary
+change between the run's base and the pull request's base, and the pull
+request changes none of SWAP_CI_PATHS (the code that writes and checks the
+manifests: it runs from the pull request's merge commit, so a swap must not
+come with changes to it). The bytes are compared by git blob id (the
+manifest records it beside the SHA-256; both hash exactly the bytes), read
+from the trees alone, so the changes job's blob:none clone downloads no
+binary. Prints the reasons and writes swap-verified=true|false with
+--github-output. Build and Test then runs no product build, NPU test,
+dev-kit build, overlay or bench for a verified swap; devkit-static still
+runs. verify and check run the pull request's own code: they keep honest
+authors on the flow, the guarantee is review of any .github/ change and
+branch protection.
 
 check (every pull request): every path under src/lib/ or src/xclbins/ the
-pull request changes against its merge base must be (a) byte-equal to the
-manifest entry for that path of a swap commit in the pull request that
+pull request changes against its merge base must be (a) byte-equal (blob
+id) to the manifest entry for that path of a swap commit in the pull request that
 verifies against its run, (b) a deletion of a file no assigned kernel slot
 or shipped engine library needs (devkit_check.required_binaries), or (c) a
 third-party file (third_party(): the src/lib entries of devkit_check's
@@ -85,8 +94,8 @@ regular zip members named by a manifest are read (no absolute paths, no
 "..", no backslashes, no symlinks), every byte is hashed before anything is
 written, and only src/lib/{xrt,hrx}/*.{so,dll,lib} and
 src/xclbins/<folder>/<slot>.xclbin are ever written, through no symlink.
-The token goes to api.github.com only; artifact downloads follow GitHub's
-redirect without it. Standard library only; every GitHub call goes through
+The token goes to api.github.com only: API calls follow no redirect, and
+artifact downloads follow GitHub's redirect without it. Standard library only; every GitHub call goes through
 Api, which the tests replace.
 """
 
@@ -140,10 +149,8 @@ SHORT_OS = {"linux": "lin", "windows": "win"}
 XCLBINS_ARTIFACT = "devkit-xclbins"
 SUMMARY_JOB = "summary"
 # Jobs of the called dev-kit builds ("<caller job> / <job>"), which must not
-# have failed, and the benches, whose failure alone (perf, a pull, a lost
-# runner) fails the run but not its summary.
+# have failed.
 BUILD_JOB_PREFIXES = ("devkit-engines / ", "devkit-xclbins / ")
-BENCH_JOB_PREFIX = "devkit-bench / "
 
 BINARY_ROOTS = ("src/lib/", "src/xclbins/")
 # What a change on main since the run's base must not touch: the dev-kit
@@ -239,9 +246,11 @@ def check_entry_path(kind: str, repo_path: str, os_name: str, runtime: str) -> O
             return f"{repo_path}: an engine file must be src/lib/{runtime}/<file>"
         if not ENGINE_FILE[os_name].match(parts[3]):
             return f"{repo_path}: not a {os_name} engine library name"
+        if third_party(repo_path):
+            return f"{repo_path}: a third-party file, no dev-kit build"
         return None
     if kind == "kernel":
-        if len(parts) < 4 or parts[:2] != ["src", "xclbins"] or not KERNEL_SLOT.match(parts[-1]):
+        if len(parts) != 4 or parts[:2] != ["src", "xclbins"] or not KERNEL_SLOT.match(parts[-1]):
             return f"{repo_path}: a kernel must be src/xclbins/<folder>/<slot>.xclbin"
         return None
     return f"unknown kind {kind!r}"
@@ -301,6 +310,10 @@ def parse_manifest(data: bytes, os_name: str, runtime: str) -> Manifest:
             raise ManifestError(f"{path}: bad tested")
         out.files.append(Entry(kind, path, f["artifact"], f["artifact_path"], size, f["sha256"],
                                f["git_sha1"], f["tested"] and raw["tests_ran"]))
+    # A Windows import library is recorded beside its overlaid DLL, never alone.
+    for e in out.files:
+        if e.repo_path.endswith(".lib") and e.repo_path[:-4] + ".dll" not in seen:
+            raise ManifestError(f"{e.repo_path}: no {e.repo_path.rsplit('/', 1)[1][:-4]}.dll beside it")
     return out
 
 
@@ -374,11 +387,15 @@ class Api:
         return req
 
     def _get(self, path: str, params: Optional[dict] = None):
+        # No redirect is followed: urllib would send the token to wherever
+        # it points (a moved repository answers 301).
+        opener = urllib.request.build_opener(_NoRedirect)
         try:
-            with urllib.request.urlopen(self._request(path, params), timeout=60) as resp:
+            with opener.open(self._request(path, params), timeout=60) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
-            raise SwapError(f"GitHub API {path}: HTTP {exc.code}") from None
+            moved = " (a redirect, not followed: is --repo the repository's current name?)"                 if 300 <= exc.code < 400 else ""
+            raise SwapError(f"GitHub API {path}: HTTP {exc.code}{moved}") from None
         except (urllib.error.URLError, OSError, ValueError) as exc:
             raise SwapError(f"GitHub API {path}: {exc}") from None
 
@@ -592,10 +609,10 @@ def check_run(run: dict, repo: str, sha: str, pr: Pr) -> list[str]:
 
 def check_jobs(jobs: list, conclusion: str) -> tuple[list[str], set]:
     """(why the run's jobs do not allow a swap, the (os, runtime) whose
-    overlay job passed). The summary job (the required check) must pass,
-    every overlay job pass or be skipped, no dev-kit build job fail, and the
-    run succeed, or fail only in its benches (which summary only warns
-    about, bar acc_common's hard gate, which fails summary)."""
+    overlay job passed). The run must have concluded success (a failed
+    bench too fails it: re-run the failed jobs), the summary job (the
+    required check) pass, every overlay job pass or be skipped, and no
+    dev-kit build job fail."""
     why, passed = [], set()
     by_name = {j.get("name"): j for j in jobs if isinstance(j, dict)}
     summary = by_name.get(SUMMARY_JOB)
@@ -614,11 +631,11 @@ def check_jobs(jobs: list, conclusion: str) -> tuple[list[str], set]:
         if name.startswith(BUILD_JOB_PREFIXES) and result not in ("success", "skipped"):
             why.append(f"{name} did not pass ({result})")
     if conclusion != "success":
-        bad = [str(j.get("name")) for j in jobs
-               if j.get("conclusion") not in ("success", "skipped", "neutral")
-               and not str(j.get("name")).startswith(BENCH_JOB_PREFIX)]
-        if bad:
-            why.append(f"the run concluded {conclusion}: {', '.join(sorted(bad)[:5])}")
+        bad = sorted(str(j.get("name")) for j in jobs
+                     if j.get("conclusion") not in ("success", "skipped", "neutral"))
+        why.append(f"the run concluded {conclusion}, not success"
+                   + (f" ({', '.join(bad[:5])})" if bad else "")
+                   + ": fix it or re-run the failed jobs, then fetch")
     return why, passed
 
 
@@ -735,6 +752,24 @@ def main_moved(git: Git, since: str, until: str) -> list[str]:
 
 # ── verify ───────────────────────────────────────────────────────────────────
 
+# What writes, reads or acts on the manifests a swap is checked against. A
+# pull request that changes any of them gets no verified swap: its own code
+# would vouch for it (the checks run from the pull request's merge commit).
+SWAP_CI_PATHS = (
+    ".github/script/ci/devkit_overlay.py", ".github/script/ci/devkit_swap.py",
+    ".github/script/ci/changes.py", ".github/script/ci/devkit_check.py",
+    ".github/actions/devkit-npu-overlay/", ".github/actions/devkit-overlay-package/",
+    ".github/actions/detect-changes/", ".github/workflows/build-and-test.yml",
+    ".github/workflows/devkit-engines.yml", ".github/workflows/devkit-xclbins.yml",
+)
+
+
+def swap_ci_changed(git: Git, base: str, head: str) -> list[str]:
+    """The SWAP_CI_PATHS files head changes against its merge base with base."""
+    merge_base = git.run("merge-base", base, head).strip()
+    return sorted({p for _, p in git.changes(merge_base, head, SWAP_CI_PATHS)})
+
+
 def verify_swap(api, git: Git, repo: str, commit: str, pr: Pr, tmp: Path,
                 base: str = "") -> tuple[bool, list[str], dict]:
     """(verified, reasons, repo path -> Entry it swapped) for one commit."""
@@ -759,7 +794,7 @@ def verify_swap(api, git: Git, repo: str, commit: str, pr: Pr, tmp: Path,
     changed = git.changes(tested, commit)
     if not changed:
         reasons.append(f"{commit[:10]} changes nothing")
-    swapped, candidates = {}, []
+    candidates = []
     for status, path in changed:
         entry = rc.entries.get(path)
         if entry is None:
@@ -770,16 +805,20 @@ def verify_swap(api, git: Git, repo: str, commit: str, pr: Pr, tmp: Path,
             candidates.append(path)
     if reasons:
         return False, reasons, {}
-    # The blob ids first (trees only, nothing to download), then every
-    # byte, hashed.
-    ids = git.blob_ids(commit, candidates)
-    wrong = [p for p in candidates if ids.get(p) != rc.entries[p].git_sha1]
-    digests = {} if wrong else git.sha256s(commit, candidates)
+    # The bytes, by their git blob ids (a hash of exactly the bytes, which
+    # the manifest records beside the SHA-256): read from the trees alone,
+    # so the changes job's blob:none clone downloads no binary.
+    ids = git.blob_ids(commit, BINARY_ROOTS)
     for path in candidates:
-        if path in wrong or digests.get(path) != rc.entries[path].sha256:
+        if ids.get(path) != rc.entries[path].git_sha1:
             reasons.append(f"{path} at {commit[:10]} is not the bytes run {run_id} tested")
-        else:
-            swapped[path] = rc.entries[path]
+    # All of them: a commit carrying part of what the run tested (one
+    # system's build of an engine, some of the kernels) is no swap of it.
+    missing = sorted(p for p, e in rc.entries.items() if p not in candidates and ids.get(p) != e.git_sha1)
+    if missing:
+        reasons.append(f"run {run_id} tested {len(missing)} file(s) {commit[:10]} does not carry "
+                       f"(e.g. {missing[0]}): run devkit_swap.py fetch for the whole swap")
+    swapped = {} if reasons else {p: rc.entries[p] for p in candidates}
     if base and rc.manifests and not reasons:
         try:
             moved = main_moved(git, next(iter(rc.manifests.values())).base_sha, base)
@@ -793,8 +832,13 @@ def verify_swap(api, git: Git, repo: str, commit: str, pr: Pr, tmp: Path,
 
 def cmd_verify(args, api, git: Git) -> int:
     pr = Pr(args.pr, args.head_ref, args.head, args.head_repo)
+    ci = swap_ci_changed(git, args.base, args.head) if args.head_repo == args.repo else []
     if args.head_repo != args.repo:
         ok, reasons = False, ["the pull request is from a fork: no swap to trust"]
+    elif ci and trailer_values(git, args.head) is not None:
+        ok, reasons = False, [f"the pull request also changes the dev-kit CI that checks a swap ({', '.join(ci[:3])}"
+                              f"{', ...' if len(ci) > 3 else ''}): keep swaps and CI changes in separate pull "
+                              "requests"]
     else:
         with tempfile.TemporaryDirectory() as tmp:
             ok, reasons, swapped = verify_swap(api, git, args.repo, args.head, pr, Path(tmp), args.base)
@@ -829,6 +873,7 @@ def cmd_check(args, api, git: Git) -> int:
     accepted: dict[str, set] = {}
     notes = []
     commits = git.run("rev-list", f"{merge_base}..{args.head}").split()
+    ci = swap_ci_changed(git, args.base, args.head)
     with tempfile.TemporaryDirectory() as tmp:
         for commit in commits:
             try:
@@ -841,16 +886,20 @@ def cmd_check(args, api, git: Git) -> int:
             if args.head_repo != args.repo:
                 notes.append(f"{commit[:10]}: a swap commit on a fork's branch is not trusted")
                 continue
+            if ci:
+                notes.append(f"{commit[:10]}: not trusted, the pull request also changes the dev-kit CI "
+                             f"that checks swaps ({', '.join(ci[:3])})")
+                continue
             ok, reasons, swapped = verify_swap(api, git, args.repo, commit, pr, Path(tmp))
             if ok:
                 for path, entry in swapped.items():
-                    accepted.setdefault(path, set()).add(entry.sha256)
+                    accepted.setdefault(path, set()).add(entry.git_sha1)
                 notes.append(f"swap commit {commit[:10]}: {len(swapped)} file(s) verified")
             else:
                 notes += [f"swap commit {commit[:10]} does not verify: {r}" for r in reasons]
     required = devkit_check.required_binaries(Path(args.repo_root))
-    present = [p for s, p in changed if s != "D" and not third_party(p) and p in accepted]
-    digests = git.sha256s(args.head, present) if present else {}
+    # Blob ids from the trees alone (see verify_swap): no binary is downloaded.
+    ids = git.blob_ids(args.head, BINARY_ROOTS) if accepted else {}
     hand = []
     for status, path in changed:
         if third_party(path):
@@ -858,7 +907,7 @@ def cmd_check(args, api, git: Git) -> int:
         elif status == "D":
             if path in required:
                 hand.append(f"{path} is deleted, but the dev kit still assigns or builds it")
-        elif digests.get(path) in accepted.get(path, ()):
+        elif ids.get(path) in accepted.get(path, ()):
             continue
         else:
             hand.append(f"{path} is not the bytes a verified swap commit of this pull request brought in")
@@ -1135,7 +1184,11 @@ def main(argv: Optional[list[str]] = None, api=None) -> int:
         if api is None:
             api = Api(args.repo, os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or "")
         return {"verify": cmd_verify, "check": cmd_check}[args.cmd](args, api, git)
-    except SwapError as exc:
+    except Exception as exc:  # noqa: BLE001 -- verify and check never break the changes job
+        if not isinstance(exc, SwapError) and args.cmd not in ("verify", "check"):
+            raise
+        if not isinstance(exc, SwapError):
+            exc = f"unexpected {type(exc).__name__}: {exc}"
         print(f"devkit_swap: {args.cmd}: {exc}", file=sys.stderr)
         if args.cmd == "verify":
             print("swap-verified=false")
