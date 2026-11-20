@@ -177,6 +177,31 @@ class Changed(unittest.TestCase):
         self.assertEqual(builds(r), [("MM/host", "GENERIC")])
         self.assertEqual((r["touched_models"], r["bench_models"]), (["m:1b", "m:new"], ["m:new"]))
 
+    def test_shipped_kernel_builds_its_assigned_artifact(self):
+        # Every model using the folder; models sharing it put the same
+        # artifact in a shared slot (devkit_check enforces it).
+        assignment = dict(ASSIGNMENT, **{"f:1b": {"folder": "M-1B", "kernels": {
+            "layer.xclbin": "xclbins-Fam_decoding_A", "extra.xclbin": "xclbins-Fam_decoding_C"}}})
+        r = xp.make_plan("changed", UNITS, assignment, files=["src/xclbins/M-1B/layer.xclbin"],
+                         canary=CANARY, base_units=UNITS, base_assignment=assignment)
+        self.assertEqual(builds(r), [("Fam/decoding", "A")])
+        self.assertEqual(r["touched_models"], ["f:1b", "m:1b"])
+        self.assertEqual(r["bench_models"], [])  # no source changed
+        r = xp.make_plan("changed", UNITS, assignment, files=["src/xclbins/M-1B/extra.xclbin"],
+                         canary=CANARY, base_units=UNITS, base_assignment=assignment)
+        self.assertEqual(builds(r), [("Fam/decoding", "C")])
+        # A slot or folder no model assigns, and files that are no kernel: nothing.
+        for path in ("src/xclbins/M-1B/conv.xclbin", "src/xclbins/Nope/layer.xclbin",
+                     "src/xclbins/M-1B/notes.txt", "src/xclbins/layer.xclbin"):
+            with self.subTest(path=path):
+                self.assertEqual(builds(plan(files=[path])), [])
+        self.assertTrue(any("no " in x and "assigns: nothing to build" in x
+                            for x in plan(files=["src/xclbins/M-1B/conv.xclbin"])["reasons"]))
+        # Beside a source change: both, and only the source's users bench.
+        r = plan(files=["src/xclbins/M-3B/attn.xclbin", f"{X}/Dequant/kernel/k.cc"])
+        self.assertEqual(builds(r), [("Dequant", None), ("Fam/prefill", None)])
+        self.assertEqual(r["bench_models"], ["m:1b"])
+
     def test_unit_for_walks_up_to_the_nearest_unit(self):
         self.assertEqual(xp.unit_for(f"{X}/MM/host/kernel/a/b.cc", UNITS), ["MM/host"])
         self.assertEqual(xp.unit_for(f"{X}/MM/host/Makefile", UNITS), ["MM/host"])

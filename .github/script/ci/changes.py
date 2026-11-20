@@ -63,12 +63,22 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              aie-build:<toolchain hash>, built in the run when it is not
              published, so a pull request that also changes a kernel builds
              it with its own toolchain.lock and Dockerfile
+  devkit_catalog
+             true when a file the dev-kit catalog check (devkit_check.py's
+             catalog rules: what src/ ships against the dev kit's JSON)
+             reads changed: src/model_list.json, src/xclbins/, src/lib/,
+             flm-dev-kit/FLM_DLL/engines.json or FLM_Xclbin/
+             kernel_assignment.{json,md} or build_units.json, or the changed
+             files are unknown. Runs devkit-static (as devkit does) and
+             nothing else: no product suite, dev-kit build or overlay
   devkit_areas
              comma-separated dev-kit areas the change touches, from xclbin,
              dll, converter, pybind and launchlib, plus the areas that build
              from a changed file of another area, of src/lib/xrt or of
-             hrx-integration/; every
-             area when the changed files are unknown, a changed dev-kit file
+             hrx-integration/, and xclbin for a shipped kernel
+             (src/xclbins/<folder>/<slot>.xclbin), which devkit-xclbins
+             rebuilds from its sources to compare (devkit_xclbin_plan.py);
+             every area when the changed files are unknown, a changed dev-kit file
              is in none of them, or the dev-kit CI changed
   devkit_families
              comma-separated catalog families whose dev-kit engines the change
@@ -86,7 +96,9 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
   devkit_overlay
              true when the dev-kit overlay tests run (build-and-test.yml
              test-*-devkit): the dll area with devkit_families, or the xclbin
-             area (the kernel build names the models it rebuilt). On a pull
+             area (the kernel build names the models it rebuilt), unless only
+             shipped kernels selected it: the product suites test those,
+             and the rebuild is only compared with them. On a pull
              request the portable packages the overlay starts from (Linux
              XRT and HRX, Windows XRT and HRX) are then built even when
              run_tests is false, which then gives suites "none", so no
@@ -206,6 +218,19 @@ DEVKIT_FROM_PRODUCT = (
     # cache on them.
     (re.compile(r"^\.github/windows-deps/"), {"dll"}),
 )
+
+# The files devkit_check.py's catalog rules read: what the product ships
+# (src/model_list.json, src/xclbins, src/lib) and the dev-kit JSON describing
+# where it comes from. A change to one runs devkit-static (devkit_catalog)
+# without selecting a dev-kit area, so no dev-kit build or overlay starts.
+DEVKIT_CATALOG = re.compile(
+    r"^(src/model_list\.json$|src/xclbins/|src/lib/|flm-dev-kit/FLM_DLL/engines\.json$"
+    r"|flm-dev-kit/FLM_Xclbin/(kernel_assignment\.(json|md)|build_units\.json)$)")
+# A shipped kernel: devkit-xclbins rebuilds the artifact kernel_assignment.json
+# maps to its slot and compares the two (report only). It selects the xclbin
+# area, but no overlay: the product suites test the shipped file, and the
+# rebuild comes from sources this change did not touch.
+SHIPPED_KERNEL = re.compile(r"^src/xclbins/.+/[^/]+\.xclbin$")
 
 # The kernel build image: its Dockerfile, kernel check script and pinned PDIs
 # (docker/aie-build*), its versions (toolchain.lock, which would otherwise be
@@ -597,6 +622,10 @@ class Decision:
     bench_source: Optional[str] = None
     # Changed bench CI files (BENCH_CI), which Build and Test leaves alone.
     bench_ci: list = field(default_factory=list)
+    # A file the dev-kit catalog check reads changed (DEVKIT_CATALOG).
+    devkit_catalog: bool = False
+    # Only shipped kernels (SHIPPED_KERNEL) selected the xclbin area.
+    xclbin_compare_only: bool = False
     reasons: list = field(default_factory=list)
 
     def all_suites(self, path: str, why: str = "") -> None:
@@ -638,7 +667,8 @@ class Decision:
         and then every overlay job skips (summary does not hold the missing
         approval against it). Narrowing it would mean running the kernel
         plan (devkit_xclbin_plan.py) here."""
-        return bool(self.devkit_families and "dll" in self.devkit_areas) or "xclbin" in self.devkit_areas
+        return (bool(self.devkit_families and "dll" in self.devkit_areas)
+                or ("xclbin" in self.devkit_areas and not self.xclbin_compare_only))
 
     def bench(self) -> bool:
         """Whether the dev-kit benches (devkit-bench.yml) run: engine or kernel
@@ -651,10 +681,14 @@ class Decision:
         devkit = f"; dev kit: {self.devkit_value().replace(',', ', ')}" if self.devkit_areas else ""
         if self.devkit_families:
             devkit += f" (engine families: {len(self.devkit_families)})"
+        if self.xclbin_compare_only:
+            devkit += " (shipped kernels rebuilt to compare)"
         if self.devkit_overlay():
             devkit += "; dev-kit overlay tests run"
         if self.bench():
             devkit += "; dev-kit benches run"
+        if self.devkit_catalog and not self.devkit_areas:
+            devkit += "; dev-kit catalog check runs"
         if not self.run_tests:
             if self.devkit_areas:
                 what = ("product NPU tests skipped, portable packages built for the overlay"
@@ -664,7 +698,7 @@ class Decision:
                 return "kernel build image only (devkit-aie-image.yml): NPU tests and dev-kit jobs skipped"
             if self.bench_ci:
                 return "bench CI only (devkit-bench.yml): NPU tests and dev-kit jobs skipped"
-            return "documentation only: NPU tests skipped"
+            return "documentation only: NPU tests skipped" + devkit
         return self._product_summary() + devkit
 
     def _product_summary(self) -> str:
@@ -700,6 +734,7 @@ class Decision:
                 "new_models": ",".join(self.new_models),
                 "hipep_models": ",".join(sorted(self.gpu_models)),
                 "devkit": str(bool(self.devkit_areas)).lower(),
+                "devkit_catalog": str(self.devkit_catalog).lower(),
                 "devkit_areas": self.devkit_value(),
                 "devkit_families": ",".join(sorted(self.devkit_families)),
                 "devkit_overlay": str(self.devkit_overlay()).lower(),
@@ -1012,6 +1047,7 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
         devkit_engines = load_devkit_engines()
     if files is None:
         d.asr_full = True
+        d.devkit_catalog = True
         d.devkit_areas = set(ALL_DEVKIT_AREAS)
         d.devkit_families = every_engine_family(devkit_engines)
         d.bench_source = "changed files unknown"
@@ -1024,6 +1060,12 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
         # bench only when engine or kernel source changed.
         d.reasons.append("no changed files: running the tests anyway; no dev-kit benches")
         return d
+
+    catalog = [f for f in files if DEVKIT_CATALOG.match(f)]
+    if catalog:
+        d.devkit_catalog = True
+        d.reasons.append(f"{catalog[0]}{f' and {len(catalog) - 1} more' if len(catalog) > 1 else ''}: "
+                         "read by the dev-kit catalog check (devkit-static)")
 
     bench_ci = [f for f in files if BENCH_CI.match(f)]
     if bench_ci:
@@ -1102,6 +1144,12 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
                 if new:
                     d.reasons.append(f"{path}: linked by the dev kit -> {', '.join(sorted(new))}")
                 break
+    shipped = [f for f in code if SHIPPED_KERNEL.match(f)]
+    if shipped and "xclbin" not in d.devkit_areas:
+        d.devkit_areas.add("xclbin")
+        d.xclbin_compare_only = True
+        d.reasons.append(f"{shipped[0]}{f' and {len(shipped) - 1} more' if len(shipped) > 1 else ''}: "
+                         "shipped kernel(s) -> xclbin, rebuilt from the dev kit to compare (no overlay)")
 
     head_catalog = load_catalog(head_catalog_text)
     gpu_fams = gpu_families(head_catalog)
