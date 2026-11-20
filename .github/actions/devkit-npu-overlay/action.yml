@@ -1,0 +1,189 @@
+# Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+# Portions of this file consist of AI-generated content.
+
+name: Dev-kit NPU overlay test
+description: >
+  Tests a pull request's dev-kit engines and kernels on an NPU runner: puts
+  them over this run's product portable package and runs npu_test on the
+  families and models they serve. Downloads the package, the
+  devkit-libs-<os>-<runtime> and devkit-xclbins artifacts; unpacks the
+  package as install-package does; overlays the engine libraries of the
+  engines serving the families (every one, shared units included, when every
+  family is touched) and the rebuilt kernels over the package's xclbins/
+  tree, checking first that the package's imports still resolve
+  (.github/script/ci/devkit_overlay.py); then runs npu-test on the pr tier
+  in a clean environment with the npu_test harness of harness-ref (the pull
+  request's base), so that a pull request's harness edits do not judge its
+  own binaries. This is not a security boundary: the pull request's workflow
+  and actions (this one, npu-test, devkit_overlay.py) decide what runs, and
+  npu-approve is the only gate, so approvers must review .github/ changes.
+  The npu-test action itself is the pull request's, running the base's
+  harness: a change to the flags npu-test passes to npu_test must land on
+  its own before a dev-kit pull request that depends on it. Needs a checkout
+  of .github/actions, .github/script/ci and flm-dev-kit/FLM_DLL/engines.json,
+  and only contents: read.
+
+inputs:
+  runtime:
+    description: xrt or hrx.
+    required: true
+  os:
+    description: linux or windows; must be the runner's.
+    required: true
+  package:
+    description: This run's product portable package artifact (portable, HRX-portable, fastflowlm-windows-<sha>, ...).
+    required: true
+  libs:
+    description: The dev-kit engine libraries artifact (devkit-libs-<os>-<runtime>); empty when the engines were not built.
+    required: false
+    default: ""
+  xclbins:
+    description: The dev-kit kernels artifact (devkit-xclbins); empty when the kernels were not built.
+    required: false
+    default: ""
+  xclbin-models:
+    description: JSON list of the models that got a rebuilt kernel (devkit-xclbins.yml touched-models).
+    required: false
+    default: "[]"
+  families:
+    description: Comma-separated families of the dev-kit engines the change touches (changes.py devkit-families).
+    required: false
+    default: ""
+  required-models:
+    description: Comma-separated models the change adds (changes.py new-models), tested whatever their size.
+    required: false
+    default: ""
+  harness-ref:
+    description: Commit whose .github/script/npu_test and test assets run.
+    required: true
+  label:
+    description: Names the run in the report, e.g. linux-xrt-devkit.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # The harness that judges the pull request's binaries is the base's, so
+    # its own harness edits do not. Not a security boundary: the pull
+    # request's code can change this action and harness-ref (npu-approve is
+    # the gate).
+    - name: Checkout the test harness
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        ref: ${{ inputs.harness-ref }}
+        path: devkit-harness
+        persist-credentials: false
+        sparse-checkout: |
+          .github/script
+          src/test/openai_api_test
+          src/test/openai_usage
+          src/test/d3_video/fixtures
+        filter: blob:none
+
+    - name: Download package
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        name: ${{ inputs.package }}
+        path: package
+
+    - name: Download dev-kit engines
+      if: inputs.libs != ''
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        name: ${{ inputs.libs }}
+        path: devkit-libs
+
+    - name: Download dev-kit kernels
+      if: inputs.xclbins != ''
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        name: ${{ inputs.xclbins }}
+        path: devkit-xclbins
+
+    - name: Prepare package
+      id: package
+      uses: ./.github/actions/install-package
+      with:
+        kind: portable
+        path: package
+
+    # flm reads its kernels from one xclbins/ root, never two merged, so the
+    # rebuilt ones go over the package's own tree; FLM_XCLBIN_PATH names it
+    # so a runner-wide setting cannot point flm elsewhere.
+    - name: Overlay (Linux)
+      id: linux
+      if: runner.os == 'Linux'
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        FLM_BIN: ${{ steps.package.outputs.flm-bin }}
+        LIBS: ${{ inputs.libs }}
+        XCLBINS: ${{ inputs.xclbins }}
+        # JSON, so in the environment: PowerShell 5.1 strips the quotes of
+        # a native program's argument.
+        DEVKIT_XCLBIN_MODELS: ${{ inputs.xclbin-models || '[]' }}
+        FAMILIES: ${{ inputs.families }}
+        NEW_MODELS: ${{ inputs.required-models }}
+        TARGET_OS: ${{ inputs.os }}
+        RUNTIME: ${{ inputs.runtime }}
+      run: |
+        set -euo pipefail
+        if [ "${TARGET_OS}" != linux ] || { [ "${RUNTIME}" != xrt ] && [ "${RUNTIME}" != hrx ]; }; then
+          echo "::error::os must be the runner's (linux here) and runtime xrt or hrx: got ${TARGET_OS}, ${RUNTIME}"
+          exit 1
+        fi
+        root="$(dirname "${FLM_BIN}")"
+        args=(--root "${root}" --os linux --families "${FAMILIES}" --new-models "${NEW_MODELS}"
+              --github-output)
+        [ -n "${LIBS}" ] && args+=(--libs "${GITHUB_WORKSPACE}/devkit-libs")
+        [ -n "${XCLBINS}" ] && args+=(--xclbins "${GITHUB_WORKSPACE}/devkit-xclbins")
+        python3 .github/script/ci/devkit_overlay.py "${args[@]}"
+        echo "FLM_XCLBIN_PATH=${root}" >> "$GITHUB_ENV"
+
+    - name: Overlay (Windows)
+      id: windows
+      if: runner.os == 'Windows'
+      shell: powershell
+      working-directory: ${{ github.workspace }}
+      env:
+        FLM_BIN: ${{ steps.package.outputs.flm-bin }}
+        LIBS: ${{ inputs.libs }}
+        XCLBINS: ${{ inputs.xclbins }}
+        # JSON, so in the environment: PowerShell 5.1 strips the quotes of
+        # a native program's argument.
+        DEVKIT_XCLBIN_MODELS: ${{ inputs.xclbin-models || '[]' }}
+        FAMILIES: ${{ inputs.families }}
+        NEW_MODELS: ${{ inputs.required-models }}
+        TARGET_OS: ${{ inputs.os }}
+        RUNTIME: ${{ inputs.runtime }}
+      run: |
+        if ($env:TARGET_OS -ne 'windows' -or $env:RUNTIME -notin @('xrt', 'hrx')) {
+          Write-Host "::error::os must be the runner's (windows here) and runtime xrt or hrx: got $env:TARGET_OS, $env:RUNTIME"
+          exit 1
+        }
+        $root = Split-Path $env:FLM_BIN
+        # --opt=value throughout: Windows PowerShell 5.1 drops an empty
+        # argument when calling a native program.
+        $cmdArgs = @('.github\script\ci\devkit_overlay.py', "--root=$root", '--os=windows',
+                     "--families=$env:FAMILIES", "--new-models=$env:NEW_MODELS", '--github-output')
+        if ($env:LIBS) { $cmdArgs += "--libs=$(Join-Path $env:GITHUB_WORKSPACE 'devkit-libs')" }
+        if ($env:XCLBINS) { $cmdArgs += "--xclbins=$(Join-Path $env:GITHUB_WORKSPACE 'devkit-xclbins')" }
+        $env:PYTHONUTF8 = '1'
+        & python $cmdArgs
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        [System.IO.File]::AppendAllText($env:GITHUB_ENV, "FLM_XCLBIN_PATH=$root`n")
+
+    - name: Test
+      if: (steps.linux.outputs.test || steps.windows.outputs.test) == 'true'
+      uses: ./.github/actions/npu-test
+      with:
+        flm-bin: ${{ steps.package.outputs.flm-bin }}
+        label: ${{ inputs.label }}
+        tier: pr
+        suites: ${{ steps.linux.outputs.suites || steps.windows.outputs.suites }}
+        families: ${{ steps.linux.outputs.families || steps.windows.outputs.families }}
+        models: ${{ steps.linux.outputs.models || steps.windows.outputs.models }}
+        required-models: ${{ steps.linux.outputs.required || steps.windows.outputs.required }}
+        asr-expected-key: ${{ inputs.os }}${{ inputs.runtime == 'hrx' && '-hrx' || '' }}
+        harness-dir: ${{ github.workspace }}/devkit-harness
+        clean-env: "true"

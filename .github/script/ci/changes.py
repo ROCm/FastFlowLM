@@ -16,7 +16,8 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              affect when every changed file is scoped to some (an ASR-only
              change runs asr, a d3-only change runs decision); "none" when
              every changed file is oga-hipep code, a GPU catalog entry or a
-             test of the shutdown suite, which no NPU job runs; a change to a
+             test of the shutdown suite, which no NPU job runs, and when
+             run_tests is false; a change to a
              model_list.json field outside its model entries, such as
              model_path, gives "all"
   hipep      true when the change can reach an oga-hipep model, which Test
@@ -47,8 +48,9 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              documentation under
              flm-dev-kit/ counts as nothing, as for the product. Nothing in
              the product consumes flm-dev-kit/ yet, so those paths select no
-             product build, suite or family: a change only there builds and
-             tests no product package (run_tests false). The product files
+             product suite or family: a change only there tests no product
+             package (run_tests false; it builds the portable ones only for
+             the overlay tests, see devkit_overlay). The product files
              above keep their product rules. The kernel build image selects
              nothing: docker/aie-build* (its Dockerfile, kernel check and
              pinned PDIs), flm-dev-kit/FLM_Xclbin/toolchain.lock and
@@ -80,6 +82,14 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              helper scripts (build_<model>.sh) and model_list*.json give
              none; an engines.json change gives the engines whose entry
              changed. Empty when no dev-kit engine is touched
+  devkit_overlay
+             true when the dev-kit overlay tests run (build-and-test.yml
+             test-*-devkit): the dll area with devkit_families, or the xclbin
+             area (the kernel build names the models it rebuilt). On a pull
+             request the portable packages the overlay starts from (Linux
+             XRT and HRX, Windows XRT and HRX) are then built even when
+             run_tests is false, which then gives suites "none", so no
+             product test job runs
   summary    one line for the job log
 
 When in doubt it tests more: an all-zero or missing base (a new branch), or a
@@ -563,13 +573,31 @@ class Decision:
     def devkit_value(self) -> str:
         return ",".join(area for area, _ in DEVKIT_AREAS if area in self.devkit_areas)
 
+    def devkit_overlay(self) -> bool:
+        """Whether the dev-kit overlay tests run: the change touches a dev-kit
+        engine's families, or the kernels (which kernels, and so which models,
+        the xclbin build decides).
+
+        Accepted cost: any xclbin-area change counts, before the kernel plan
+        is known, so one that rebuilds no catalog model's kernel (an
+        unassigned build unit, SmolVLA only, a CI edit) still builds the four
+        portable packages and asks an untrusted pull request for npu-approve,
+        and then every overlay job skips (summary does not hold the missing
+        approval against it). Narrowing it would mean running the kernel
+        plan (devkit_xclbin_plan.py) here."""
+        return bool(self.devkit_families and "dll" in self.devkit_areas) or "xclbin" in self.devkit_areas
+
     def summary(self) -> str:
         devkit = f"; dev kit: {self.devkit_value().replace(',', ', ')}" if self.devkit_areas else ""
         if self.devkit_families:
             devkit += f" (engine families: {len(self.devkit_families)})"
+        if self.devkit_overlay():
+            devkit += "; dev-kit overlay tests run"
         if not self.run_tests:
             if self.devkit_areas:
-                return f"flm-dev-kit only: product builds and NPU tests skipped{devkit}"
+                what = ("product NPU tests skipped, portable packages built for the overlay"
+                        if self.devkit_overlay() else "product builds and NPU tests skipped")
+                return f"flm-dev-kit only: {what}{devkit}"
             if self.image_only:
                 return "kernel build image only (devkit-aie-image.yml): NPU tests and dev-kit jobs skipped"
             return "documentation only: NPU tests skipped"
@@ -601,13 +629,16 @@ class Decision:
         return {"run_tests": str(self.run_tests).lower(),
                 "families": ",".join(sorted(self.families)),
                 "asr_full": str(self.asr_full).lower(),
-                "suites": self.suites_value(),
+                # No product suite when no product code changed, even if the
+                # portable packages build for the dev-kit overlay.
+                "suites": self.suites_value() if self.run_tests else "none",
                 "hipep": str(self.runs_hipep()).lower(),
                 "new_models": ",".join(self.new_models),
                 "hipep_models": ",".join(sorted(self.gpu_models)),
                 "devkit": str(bool(self.devkit_areas)).lower(),
                 "devkit_areas": self.devkit_value(),
                 "devkit_families": ",".join(sorted(self.devkit_families)),
+                "devkit_overlay": str(self.devkit_overlay()).lower(),
                 "summary": self.summary()}
 
 
