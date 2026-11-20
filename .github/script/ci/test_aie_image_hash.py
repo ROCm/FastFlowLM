@@ -77,7 +77,7 @@ class SameHash(unittest.TestCase):
         self.assertEqual(h(LOCK.replace("\n", "\n\n"), "\n" + DOCKERFILE + "\n   \n"), h())
 
     def test_trailing_whitespace(self):
-        self.assertEqual(h(LOCK.replace("1.2.3\n", "1.2.3  \t\n"),
+        self.assertEqual(h(LOCK.replace("pinned.\n", "pinned.  \t\n"),
                            DOCKERFILE.replace("AS build\n", "AS build \n")), h())
 
     def test_line_endings(self):
@@ -118,7 +118,74 @@ class DifferentHash(unittest.TestCase):
 
     def test_lock_and_dockerfile_kept_apart(self):
         # The same line moved from one file to the other is a different input.
-        self.assertNotEqual(h(LOCK + "ARG X\n", DOCKERFILE), h(LOCK, "ARG X\n" + DOCKERFILE))
+        self.assertNotEqual(h(LOCK + "X=1\n", DOCKERFILE), h(LOCK, "X=1\n" + DOCKERFILE))
+        self.assertNotEqual(h(LOCK.replace("PEANO_VERSION=1.2.3\n", ""), "PEANO_VERSION=1.2.3\n" + DOCKERFILE),
+                            h())
+
+
+HEREDOC = """\
+# syntax=docker/dockerfile:1
+FROM x
+COPY <<EOF /etc/tool.conf
+# a setting, commented out
+key=value
+
+EOF
+RUN <<'SCRIPT'
+#!/bin/sh
+echo hi
+SCRIPT
+"""
+
+
+class Heredoc(unittest.TestCase):
+    def test_detected(self):
+        self.assertTrue(ah.has_heredoc(HEREDOC))
+        self.assertTrue(ah.has_heredoc('RUN <<-"EOF" bash\n'))
+        self.assertFalse(ah.has_heredoc(DOCKERFILE))
+        self.assertFalse(ah.has_heredoc("FROM x\n# RUN <<EOF\n"))
+
+    def test_comment_line_in_body_is_content(self):
+        self.assertNotEqual(h(dockerfile=HEREDOC.replace("# a setting", "# another setting")),
+                            h(dockerfile=HEREDOC))
+        self.assertNotEqual(h(dockerfile=HEREDOC.replace("#!/bin/sh", "#!/bin/bash")), h(dockerfile=HEREDOC))
+
+    def test_blank_line_and_trailing_whitespace_in_body_are_content(self):
+        self.assertNotEqual(h(dockerfile=HEREDOC.replace("key=value\n\n", "key=value\n")),
+                            h(dockerfile=HEREDOC))
+        self.assertNotEqual(h(dockerfile=HEREDOC.replace("key=value", "key=value ")), h(dockerfile=HEREDOC))
+
+    def test_line_endings_still_normalised(self):
+        self.assertEqual(h(dockerfile=HEREDOC.replace("\n", "\r\n")), h(dockerfile=HEREDOC))
+
+
+class Lock(unittest.TestCase):
+    def test_accepted(self):
+        ah.check_lock(LOCK)
+        ah.check_lock(LOCK.replace("\n", "\r\n") + "   \n")
+
+    def test_rejected(self):
+        for bad in ("PEANO_VERSION=1.2.3 \n",       # trailing whitespace a build arg would carry
+                    "PEANO_VERSION=1.2 3\n",        # whitespace inside the value
+                    "  PEANO_VERSION=1.2.3\n",      # indented: hashed, but no build arg
+                    "  # indented comment\n",
+                    "PEANO_VERSION=\n",
+                    "peano_version=1\n",
+                    "ARG X\n"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                h(LOCK + bad)
+
+    def test_cli_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            lock, dockerfile = Path(d) / "toolchain.lock", Path(d) / "Dockerfile"
+            lock.write_text(LOCK + "X=1 \n", encoding="utf-8", newline="\n")
+            dockerfile.write_text(DOCKERFILE, encoding="utf-8", newline="\n")
+            err, out = io.StringIO(), io.StringIO()
+            with redirect_stderr(err), redirect_stdout(out):
+                self.assertEqual(ah.main([str(lock), str(dockerfile)]), 1)
+            self.assertEqual(out.getvalue(), "")
+            self.assertIn("::error file=", err.getvalue())
+            self.assertIn("line 8", err.getvalue())
 
 
 class Directives(unittest.TestCase):
