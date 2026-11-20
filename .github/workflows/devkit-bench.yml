@@ -132,7 +132,7 @@ jobs:
       build-run-id: ${{ steps.build.outputs.run-id }}
       baseline-run-id: ${{ steps.baseline.outputs.baseline-run-id }}
       mode: ${{ steps.mode.outputs.mode }}
-      scripts-ref: ${{ steps.mode.outputs.scripts-ref }}
+      scripts-ref: ${{ github.event.pull_request.base.sha || github.sha }}
     steps:
       - name: Mode
         id: mode
@@ -151,7 +151,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ steps.mode.outputs.scripts-ref }}
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
           fetch-depth: 0
           filter: blob:none
           persist-credentials: false
@@ -303,7 +303,7 @@ jobs:
       - name: Checkout the bench scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.resolve.outputs.scripts-ref }}
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
           sparse-checkout: .github/script/devkit-bench
           filter: blob:none
@@ -380,7 +380,7 @@ jobs:
       - name: Checkout the bench scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.resolve.outputs.scripts-ref }}
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
           path: bench-scripts
           persist-credentials: false
           sparse-checkout-cone-mode: true
@@ -506,7 +506,7 @@ jobs:
       - name: Checkout the bench scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.resolve.outputs.scripts-ref }}
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
           sparse-checkout: .github/script
           filter: blob:none
