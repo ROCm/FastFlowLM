@@ -108,7 +108,8 @@ runs:
         path: package
 
     # flm reads its kernels from one xclbins/ root, never two merged, so the
-    # rebuilt ones go over the package's own tree; FLM_XCLBIN_PATH names it
+    # rebuilt ones go over the package's own tree; FLM_XCLBIN_PATH (set on
+    # the Test step from the overlay step's root output) names it
     # so a runner-wide setting cannot point flm elsewhere.
     - name: Overlay (Linux)
       id: linux
@@ -138,7 +139,7 @@ runs:
         [ -n "${LIBS}" ] && args+=(--libs "${GITHUB_WORKSPACE}/devkit-libs")
         [ -n "${XCLBINS}" ] && args+=(--xclbins "${GITHUB_WORKSPACE}/devkit-xclbins")
         python3 .github/script/ci/devkit_overlay.py "${args[@]}"
-        echo "FLM_XCLBIN_PATH=${root}" >> "$GITHUB_ENV"
+        echo "root=${root}" >> "$GITHUB_OUTPUT"
 
     - name: Overlay (Windows)
       id: windows
@@ -171,11 +172,15 @@ runs:
         $env:PYTHONUTF8 = '1'
         & python $cmdArgs
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        [System.IO.File]::AppendAllText($env:GITHUB_ENV, "FLM_XCLBIN_PATH=$root`n")
+        [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "root=$root`n")
 
     - name: Test
       if: (steps.linux.outputs.test || steps.windows.outputs.test) == 'true'
       uses: ./.github/actions/npu-test
+      # FLM_XCLBIN_PATH on this step, not through $GITHUB_ENV (zizmor
+      # github-env): the overlaid package's own xclbins/ root.
+      env:
+        FLM_XCLBIN_PATH: ${{ steps.linux.outputs.root || steps.windows.outputs.root }}
       with:
         flm-bin: ${{ steps.package.outputs.flm-bin }}
         label: ${{ inputs.label }}
