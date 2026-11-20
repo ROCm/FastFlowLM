@@ -619,7 +619,8 @@ def check_catalog(repo: Path, catalog: dict, assignment: dict, engines: dict,
         else:
             errors.append(f"{MODEL_LIST}: NPU ({NPU_PLATFORM}) model {tag} has no {ASSIGNMENT} entry: add "
                           f"\"{tag}\": {{\"folder\": \"{folder}\", \"kernels\": {{\"<slot>.xclbin\": "
-                          f"\"<artifact of {BUILD_UNITS}>\", ...}}}} {md} (a tag that runs another "
+                          f"\"<artifact of {BUILD_UNITS}>\", ...}}}} and its \"#### `{tag}` → `{folder}`\" "
+                          f"section to {ASSIGNMENT_MD} (a tag that runs another "
                           "model's kernels names that model's folder in xclbin_folder instead)")
 
     # 2. Every assignment is an NPU model, or runs outside FLM_DLL.
