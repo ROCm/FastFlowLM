@@ -41,7 +41,29 @@ Checks, each failure printed as "devkit_check: error: ..." (exit 1):
                 detail/ sources ("../<engine>", also as "-I../<engine>") or
                 include/models/<x>/ headers its Makefile or CMakeLists.txt
                 (outside # comments) or the #include lines of its sources and
-                own headers name. The JSON files must not repeat a key
+                own headers name; a model with no assignment of its own
+                may be listed when it is a catalog alias (see catalog).
+                The JSON files must not repeat a key
+  catalog       what the product ships (src/) is what the dev kit describes.
+                The NPU models of src/model_list.json are the entries flm
+                keeps on an aie2p machine (supported_platforms naming aie2p
+                or absent, backend flm); a model's xclbin folder is its
+                xclbin_folder, else its name. (1) every NPU model has a
+                kernel_assignment.json entry, unless it is an alias: no entry
+                but an xclbin_folder that some entry's folder is; (2) every
+                assignment model is an NPU model, unless engines.json lists
+                it under served_elsewhere; (3) an entry's folder is its
+                model's xclbin folder; (4) every assigned slot ships as
+                src/xclbins/<folder>/<slot> (served_elsewhere skipped); (5)
+                every src/xclbins/<folder>/*.xclbin is a slot some model with
+                that folder assigns; (6) every NPU model is listed by an
+                engine and every engine model is an NPU model; (7) every
+                file in src/lib/{xrt,hrx} is lib<name>.so, <name>.dll or
+                <name>.lib of a library an engine or shared directory builds
+                (its Makefile TARGET and CMakeLists.txt add_library, which
+                must agree), and each such library ships all three in both.
+                CATALOG_ALLOW excuses named files and alias tags, each with
+                its reason; an entry that excuses nothing is an error
   rtp lock      FLM_Xclbin/rtp_addresses.lock.txt (devkit_rtp_lock.py) parses
                 and names only artifacts a build unit produces and some
                 kernel_assignment.json model uses. With --base, when the pull
@@ -380,7 +402,10 @@ def scan_engine_uses(dll_root: Path | str, engines: set, shared: set) -> dict[st
     return out
 
 
-def check_engines(repo: Path, data: dict, models: dict, errors: list) -> None:
+def check_engines(repo: Path, data: dict, models: dict, errors: list,
+                  aliases: frozenset | set = frozenset()) -> None:
+    """aliases: catalog tags with no kernel_assignment.json entry that run
+    another model's kernels (catalog_aliases); an engine may list them."""
     detail = repo / DLL / "detail"
     shared = data.get("shared")
     engines = data.get("engines")
@@ -425,7 +450,7 @@ def check_engines(repo: Path, data: dict, models: dict, errors: list) -> None:
                 if m in owner and owner[m] != name:
                     errors.append(f"{where}: model {m} is also served by {owner[m]}")
                 owner.setdefault(m, name)
-                if models and m not in models:
+                if models and m not in models and m not in aliases:
                     errors.append(f"{where}: model {m} is not in {ASSIGNMENT}")
         for u in entry.get("uses") or []:
             if u not in engines:
@@ -446,6 +471,240 @@ def check_engines(repo: Path, data: dict, models: dict, errors: list) -> None:
         if declared != scanned[name]:
             errors.append(f"{ENGINES}: {name} uses {sorted(declared)}, but its sources and headers "
                           f"reference {sorted(scanned[name])}")
+
+
+# ── catalog: what the product ships (src/) against the dev kit ──────────────
+# The product builds nothing from flm-dev-kit/: it ships prebuilt engine
+# libraries (src/lib/<runtime>/) and kernels (src/xclbins/<folder>/<slot>).
+# These rules keep the dev kit the source of both, so a model cannot ship
+# under src/ without its engine, its engines.json entry and its
+# kernel_assignment.json entry.
+MODEL_LIST = "src/model_list.json"
+SHIPPED_XCLBINS = "src/xclbins"
+# src/CMakeLists.txt links the engines from src/lib/${FLM_RUNTIME_NAME}, xrt or
+# hrx: lib<name>.so on Linux, the <name>.lib import library on Windows, whose
+# <name>.dll .github/workflows/win-build.yml copies from the same directory
+# into the package. Each runtime ships all three, built by the dev-kit dir.
+SHIPPED_RUNTIMES = ("xrt", "hrx")
+NPU_PLATFORM = "aie2p"           # the generation the FLM_DLL engines and kernels are built for
+FLM_BACKEND = "flm"              # flm::backend::kFlmBackendId
+BACKEND_SUFFIXES = {"-core": "core", "-oga-hipep": "oga-hipep"}  # catalog::backend_for_model_type
+# Shipped files and catalog tags the catalog rules accept without a dev-kit
+# source (key: a src/ path, or a model tag) -> why. An entry that no longer
+# excuses anything is an error, so the list cannot go stale.
+CATALOG_ALLOW = {
+    f"{SHIPPED_XCLBINS}/MiniCPM-OCR-1.0-NPU2/conv.xclbin":
+        "loaded by no engine: minicpm_ocr_npu registers conv8.xclbin (and only when built with "
+        "PREFILL_CONV=npu); conv.xclbin is the older conv1d kernel it does not work with "
+        "(FLM_DLL/detail/minicpm_ocr_npu/README.md). Kept: binaries under src/ are not removed here",
+    "src/lib/xrt/libaiebu.a":
+        "the prebuilt AIE assembler the dev-kit engines and kernel hosts link, no engine library",
+    "src/lib/xrt/aiebu_static.lib":
+        "the prebuilt AIE assembler (Windows) the dev-kit engines link, no engine library",
+}
+
+MK_TARGET = re.compile(r"^\s*TARGET\s*[:?]?=\s*\$\((?:LIB_DIR|BUILD_DIR)\)/(?:lib)?([A-Za-z0-9_]+)\.(?:so|dll)\s*$")
+CMAKE_LIBRARY = re.compile(r"\badd_library\s*\(\s*([A-Za-z0-9_]+)\s+SHARED\b")
+
+
+def entry_backend(family: str, entry: dict) -> str:
+    """The backend that runs a catalog entry: its "backend" key, else the
+    family's suffix (model_list::backend_for_family)."""
+    backend = entry.get("backend")
+    if isinstance(backend, str) and backend:
+        return backend
+    return next((b for sfx, b in BACKEND_SUFFIXES.items()
+                 if family.endswith(sfx) and len(family) > len(sfx)), FLM_BACKEND)
+
+
+def npu_catalog(data: dict) -> dict[str, dict]:
+    """tag -> entry for the catalog models the FLM_DLL engines and kernels run:
+    those flm on an NPU2 (aie2p) machine keeps (model_list::
+    apply_support_filter): backend flm (any backend for an embedding model)
+    and supported_platforms naming aie2p, or absent (every generation)."""
+    out = {}
+    for family, sizes in (data.get("models") or {}).items():
+        if not isinstance(sizes, dict):
+            continue
+        for size, entry in sizes.items():
+            if not isinstance(entry, dict):
+                continue
+            platforms = entry.get("supported_platforms")
+            if platforms is not None and (not isinstance(platforms, list) or NPU_PLATFORM not in platforms):
+                continue
+            if entry.get("model_kind") != "embedding" and entry_backend(family, entry) != FLM_BACKEND:
+                continue
+            out[f"{family}:{size}"] = entry
+    return out
+
+
+def xclbin_folder(entry: dict) -> str:
+    """The src/xclbins folder the engine loads: xclbin_folder, else name
+    (AutoModel::_shared_initialize_model_state, model_list::resolve_source)."""
+    folder = entry.get("xclbin_folder")
+    return folder if isinstance(folder, str) and folder else str(entry.get("name") or "")
+
+
+def catalog_aliases(catalog: dict, assignment: dict) -> set[str]:
+    """NPU tags without a kernel_assignment.json entry that name an
+    xclbin_folder: they run the kernels of whichever model uses it."""
+    return {t for t, e in npu_catalog(catalog).items()
+            if t not in assignment and isinstance(e.get("xclbin_folder"), str) and e["xclbin_folder"]}
+
+
+def unit_library(dll: Path, unit: str, errors: list) -> Optional[str]:
+    """The library a detail/<unit> builds: its Makefile's TARGET
+    (lib<name>.so, <name>.dll) and its CMakeLists.txt add_library(<name>
+    SHARED), which must agree; None when it builds none (vision_common)."""
+    names = set()
+    for f, rx in (("Makefile", MK_TARGET), ("CMakeLists.txt", CMAKE_LIBRARY)):
+        try:
+            lines = (dll / "detail" / unit / f).read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        names |= {m.group(1) for l in lines for m in [rx.search(l.split("#", 1)[0])] if m}
+    if len(names) > 1:
+        errors.append(f"{DLL}/detail/{unit}: its Makefile TARGET and CMakeLists.txt add_library name "
+                      f"different libraries ({', '.join(sorted(names))}): make them build one")
+        return None
+    return next(iter(names), None)
+
+
+def shipped_names(lib: str) -> tuple[str, ...]:
+    """The files of library lib each runtime directory ships."""
+    return (f"lib{lib}.so", f"{lib}.dll", f"{lib}.lib")
+
+
+def check_catalog(repo: Path, catalog: dict, assignment: dict, engines: dict,
+                  errors: list, allow: Optional[dict] = None) -> str:
+    """src/model_list.json, src/xclbins and src/lib against kernel_assignment
+    .json and engines.json; returns a note. allow: CATALOG_ALLOW."""
+    allow = CATALOG_ALLOW if allow is None else allow
+    used: set[str] = set()
+
+    def excused(key: str) -> bool:
+        if key in allow:
+            used.add(key)
+            return True
+        return False
+
+    npu = npu_catalog(catalog)
+    elsewhere = engines.get("served_elsewhere") or {}
+    elsewhere = elsewhere if isinstance(elsewhere, dict) else {}
+    eng = engines.get("engines") or {}
+    eng = eng if isinstance(eng, dict) else {}
+    folders: dict[str, set] = {}  # folder -> the slots its kernel_assignment.json models assign
+    for m, e in assignment.items():
+        if isinstance(e, dict) and isinstance(e.get("folder"), str):
+            folders.setdefault(e["folder"], set()).update((e.get("kernels") or {}) if isinstance(
+                e.get("kernels"), dict) else ())
+    aliases = catalog_aliases(catalog, assignment)
+    md = f"and its \"#### `<tag>` → `<folder>`\" section to {ASSIGNMENT_MD}"
+
+    # 1. Every NPU tag has kernels: its own entry, or another model's folder.
+    for tag, entry in sorted(npu.items()):
+        folder = xclbin_folder(entry)
+        if tag in assignment:
+            # 3. The folder the assignment fills is the one the engine loads.
+            ka = assignment[tag].get("folder") if isinstance(assignment[tag], dict) else None
+            if ka != folder:
+                errors.append(f"{ASSIGNMENT}: {tag} has folder {ka}, but {MODEL_LIST} gives it xclbin folder "
+                              f"{folder} (its xclbin_folder, else its name), which the engine loads: "
+                              f"make the two agree (and the {ASSIGNMENT_MD} heading)")
+        elif tag in aliases:
+            if folder not in folders:
+                errors.append(f"{MODEL_LIST}: {tag} runs the kernels of xclbin_folder {folder}, but no "
+                              f"{ASSIGNMENT} model has that folder: point it at a model's folder, or give "
+                              f"{tag} an entry of its own in {ASSIGNMENT} {md}")
+        else:
+            errors.append(f"{MODEL_LIST}: NPU ({NPU_PLATFORM}) model {tag} has no {ASSIGNMENT} entry: add "
+                          f"\"{tag}\": {{\"folder\": \"{folder}\", \"kernels\": {{\"<slot>.xclbin\": "
+                          f"\"<artifact of {BUILD_UNITS}>\", ...}}}} {md} (a tag that runs another "
+                          "model's kernels names that model's folder in xclbin_folder instead)")
+
+    # 2. Every assignment is an NPU model, or runs outside FLM_DLL.
+    for m in sorted(set(assignment) - set(npu) - set(elsewhere)):
+        errors.append(f"{ASSIGNMENT}: {m} is no NPU ({NPU_PLATFORM}) model of {MODEL_LIST}: drop its entry "
+                      f"and section in {ASSIGNMENT_MD}, fix the tag, or list it under served_elsewhere in "
+                      f"{ENGINES} if no FLM_DLL engine runs it")
+
+    # 4. Every assigned slot ships.
+    for m, e in sorted(assignment.items()):
+        if m in elsewhere or not isinstance(e, dict) or not isinstance(e.get("folder"), str):
+            continue
+        for slot in sorted(e.get("kernels") or {}):
+            if not (repo / SHIPPED_XCLBINS / e["folder"] / slot).is_file():
+                errors.append(f"{ASSIGNMENT}: {m} assigns {slot}, but {SHIPPED_XCLBINS}/{e['folder']}/{slot} "
+                              f"is not shipped: add the kernel there, or drop the slot from {ASSIGNMENT} "
+                              f"and {ASSIGNMENT_MD}")
+
+    # 5. Every shipped kernel is assigned by a model using its folder.
+    root = repo / SHIPPED_XCLBINS
+    shipped = sorted(p.relative_to(root).as_posix() for p in root.rglob("*.xclbin") if p.is_file()) \
+        if root.is_dir() else []
+    for rel in shipped:
+        folder, slot = rel.rsplit("/", 1) if "/" in rel else ("", rel)
+        path = f"{SHIPPED_XCLBINS}/{rel}"
+        if slot in folders.get(folder, ()) or excused(path):
+            continue
+        whose = (f"no {ASSIGNMENT} model with folder {folder} assigns {slot}" if folder in folders
+                 else f"no {ASSIGNMENT} model has folder {folder}")
+        errors.append(f"{path} is shipped, but {whose}: add the slot and the build-unit artifact that "
+                      f"builds it to {ASSIGNMENT} {md}; if no engine loads it, say why in CATALOG_ALLOW "
+                      "(.github/script/ci/devkit_check.py)")
+
+    # 6. Every NPU tag is served by exactly one engine (check_engines reports
+    # two), and engines serve catalog models.
+    served: dict[str, list] = {}
+    for name, e in sorted(eng.items()):
+        for m in (e.get("models") or []) if isinstance(e, dict) else []:
+            served.setdefault(m, []).append(name)
+            if isinstance(m, str) and m not in npu and m not in elsewhere:
+                errors.append(f"{ENGINES}: {name} lists {m}, which is no NPU ({NPU_PLATFORM}) model of "
+                              f"{MODEL_LIST}: drop it or fix the tag")
+    for tag in sorted(set(npu) - set(served)):
+        if tag in aliases and excused(tag):
+            continue
+        errors.append(f"{ENGINES}: NPU model {tag} of {MODEL_LIST} is served by no engine: add it to the "
+                      f"models of the engine that runs it; a new model family needs its engine under "
+                      f"{DLL}/detail/<engine>/ (Makefile with -Wl,-Bsymbolic-functions, CMakeLists.txt, "
+                      f"sources, include/models/<x>/ header) and an entry in {ENGINES}")
+
+    # 7. Every shipped engine library is a dev-kit dir's, and every dir's
+    # library ships for each runtime.
+    dirs = [d for d in (engines.get("shared") or []) if isinstance(d, str)] + sorted(eng)
+    libs: dict[str, str] = {}
+    for d in dirs:
+        lib = unit_library(repo / DLL, d, errors)
+        if lib:
+            libs[lib] = d
+    owned = {f: lib for lib in libs for f in shipped_names(lib)}
+    count = 0
+    for rt in SHIPPED_RUNTIMES:
+        lib_dir = repo / "src" / "lib" / rt
+        files = sorted(p.name for p in lib_dir.iterdir() if p.is_file()) if lib_dir.is_dir() else []
+        count += len(files)
+        for f in files:
+            path = f"src/lib/{rt}/{f}"
+            if f in owned or excused(path):
+                continue
+            errors.append(f"{path} is no library of an {ENGINES} engine or shared unit (their "
+                          f"{DLL}/detail/<dir>/Makefile TARGET and CMakeLists.txt add_library name it): add "
+                          f"the sources that build it under {DLL}/detail/<dir>/ and the dir to {ENGINES}")
+        for lib, d in sorted(libs.items()):
+            missing = [f for f in shipped_names(lib) if f not in files]
+            if missing:
+                errors.append(f"{ENGINES}: {d} builds {lib}, but src/lib/{rt}/ lacks {', '.join(missing)}, "
+                              f"which src/CMakeLists.txt links for {rt} (lib<name>.so on Linux, <name>.lib "
+                              "and <name>.dll on Windows): ship them, or drop the dir from "
+                              f"{ENGINES} and {DLL}/detail/")
+
+    for key in sorted(set(allow) - used):
+        errors.append(f"CATALOG_ALLOW (.github/script/ci/devkit_check.py): {key} excuses nothing any more "
+                      f"({allow[key]}): drop the entry")
+    return (f"catalog: {len(npu)} NPU models ({len(aliases)} reusing another's kernels), "
+            f"{len(shipped)} shipped kernels, {count} prebuilt library files, {len(libs)} dev-kit libraries, "
+            f"{len(used)} allow-listed")
 
 
 def check_bsymbolic(repo: Path, errors: list) -> int:
@@ -707,11 +966,15 @@ def run(repo: Path, base: str = "", head: str = "HEAD") -> tuple[list[str], list
     if md_text is not None and assignment is not None:
         check_assignment_md(md_text, models, index, errors)
         notes.append(f"assignment md: {len(parse_assignment_md(md_text)[0])} model sections compared")
+    catalog = load_json(repo, MODEL_LIST, errors)
     engines = load_json(repo, ENGINES, errors)
     if engines is not None:
-        check_engines(repo, engines, models, errors)
+        check_engines(repo, engines, models, errors,
+                      catalog_aliases(catalog, models) if catalog is not None else set())
         notes.append(f"engines: {len(engines.get('engines') or {})} engines, "
                      f"{len(engines.get('shared') or [])} shared")
+    if catalog is not None and engines is not None and assignment is not None:
+        notes.append(check_catalog(repo, catalog, models, engines, errors))
     notes.append(f"rtp lock: {check_rtp_lock(repo, index, assignment, errors)} stanzas")
     notes.append(f"Bsymbolic: {check_bsymbolic(repo, errors)} Makefiles")
     notes.append(f"bench workflows: {check_bench_workflows(repo, errors)} checked")
