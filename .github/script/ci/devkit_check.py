@@ -712,6 +712,32 @@ def check_catalog(repo: Path, catalog: dict, assignment: dict, engines: dict,
             f"{len(used)} allow-listed")
 
 
+def required_binaries(repo: Path) -> set[str]:
+    """The src/ paths check_catalog needs to exist: every assigned slot
+    (src/xclbins/<folder>/<slot>, served_elsewhere models skipped, rule 4)
+    and every file of every dev-kit library for each runtime
+    (src/lib/<rt>/lib<name>.so, <name>.dll, <name>.lib, rule 7). A
+    deletion of anything else loses nothing the catalog asks for
+    (devkit_swap.py check). Unreadable data gives what could be read."""
+    errors: list = []
+    assignment = (load_json(repo, ASSIGNMENT, errors) or {}).get("models") or {}
+    engines = load_json(repo, ENGINES, errors) or {}
+    elsewhere = engines.get("served_elsewhere") or {}
+    out = set()
+    for m, e in (assignment.items() if isinstance(assignment, dict) else ()):
+        if m in elsewhere or not isinstance(e, dict) or not isinstance(e.get("folder"), str):
+            continue
+        out |= {f"{SHIPPED_XCLBINS}/{e['folder']}/{slot}" for slot in (e.get("kernels") or {})}
+    eng = engines.get("engines") or {}
+    dirs = [d for d in (engines.get("shared") or []) if isinstance(d, str)]
+    dirs += sorted(eng) if isinstance(eng, dict) else []
+    for d in dirs:
+        lib = unit_library(repo / DLL, d, errors)
+        if lib:
+            out |= {f"src/lib/{rt}/{f}" for rt in SHIPPED_RUNTIMES for f in shipped_names(lib)}
+    return out
+
+
 def check_bsymbolic(repo: Path, errors: list) -> int:
     detail = repo / DLL / "detail"
     count = 0
