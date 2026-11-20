@@ -3,8 +3,6 @@
 # Portions of this file consist of AI-generated content.
 """Run the DocVQA accuracy bench against an already-running `flm serve` model.
 
-Ported from FastFlowLM_IRON's .github/scripts/vlm-acc-bench.
-
 Streams the eval set built by docvqa_fetch.py through /v1/chat/completions
 (image + question), asks for a single word or phrase, and writes one
 prediction record per question. Greedy decoding, so results are deterministic

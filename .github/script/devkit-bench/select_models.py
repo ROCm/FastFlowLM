@@ -3,9 +3,7 @@
 # Portions of this file consist of AI-generated content.
 """Which models the dev-kit benches run.
 
-Adapted from FastFlowLM_IRON's .github/actions/select-bench-models and
-.github/scripts/dll-bench-models/resolve.py; the inputs are FastFlowLM's
-equivalents, read from Build and Test's devkit-bench-plan artifact and this
+The inputs are read from Build and Test's devkit-bench-plan artifact and this
 checkout:
 
   pull request  the models of the dev-kit engines serving the touched

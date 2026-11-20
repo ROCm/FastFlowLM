@@ -3,8 +3,6 @@
 # Portions of this file consist of AI-generated content.
 """Accuracy for GSM8K predictions written by gsm8k_run.py.
 
-Ported from FastFlowLM_IRON's .github/scripts/llm-acc-bench.
-
 Accuracy = 100 * (# correct) / (# total). A question counts as correct when
 the parsed final numeric answer exactly matches the reference answer.
 

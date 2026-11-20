@@ -15,7 +15,7 @@ description: >
   CSV, for the job's final gate. Runs the scripts of scripts-dir (a checkout
   of .github/script at the pull request's base, so the pull request's own
   edits do not measure it) under clean_run.py: no token or GitHub variable
-  reaches flm. Ported from FastFlowLM_IRON's bench-perf action.
+  reaches flm.
 
 inputs:
   flm-bin:

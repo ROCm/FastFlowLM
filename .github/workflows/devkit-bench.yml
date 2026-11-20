@@ -5,8 +5,7 @@ name: Dev-kit Bench
 
 # Perf (flm bench) and accuracy (GSM8K; DocVQA when enabled) benches of the
 # dev kit's engines (flm-dev-kit/FLM_DLL) and kernels (flm-dev-kit/FLM_Xclbin)
-# on the NPU runners, ported from FastFlowLM_IRON's PR Check benches
-# (scripts in .github/script/devkit-bench, actions devkit-bench-perf and
+# on the NPU runners (scripts in .github/script/devkit-bench, actions devkit-bench-perf and
 # devkit-bench-acc). They run only when dev-kit engine or kernel source
 # changed (code or build inputs; not docs, CI, the converter, pybind or
 # launchlib; changes.py devkit_bench). Nothing is rebuilt here: the bench
