@@ -294,6 +294,17 @@ class Report(unittest.TestCase):
         self.assertNotIn("bogus", new["entries"])
         self.assertEqual(report.parse_baseline(json.loads(json.dumps(new)))["entries"], new["entries"])
 
+    def test_refresh_reports_numbers_only(self):
+        write_result(self.root, "lin-xrt", "qwen3:0.6b", devkit=CSV.format(p1=900, d1=18, p2=800, d2=17),
+                     gsm8k=self.gsm(40.0))
+        results = report.load_results(self.root)
+        text = report.render(results, report.parse_baseline(None), [{"key": "lin-xrt", "model": "qwen3:0.6b"}],
+                             mode="refresh", head_sha=SHA_B, build_run_id=12, baseline_run_id=None)
+        self.assertIn("## Dev-kit bench (refresh)", text)
+        self.assertIn("this run's numbers only, no comparison", text)
+        self.assertNotIn("no nightly baseline yet", text)
+        self.assertIn("No hard-gate failure and no soft-gate warning", text)
+
     def test_hard_gate_output(self):
         # Only an accuracy run failing acc_common's gate is a hard-gate failure:
         # a job that gave no results, or perf without a CSV, is not.
@@ -391,6 +402,12 @@ class SelectModels(unittest.TestCase):
         res = self.select(mode="dispatch", requested=["qwen3:8b", "qwen3.5-oga-hipep:9b", "qwen3:0.6b"])
         self.assertEqual(self.names(res), ["qwen3:8b", "qwen3:0.6b"])
         self.assertEqual(res["skipped"], ["qwen3.5-oga-hipep:9b"])
+
+    def test_refresh_benches_the_whole_assigned_set(self):
+        res = self.select(mode="refresh")
+        self.assertEqual(self.names(res), ["qwen3:0.6b", "llama3.2:1b", "gemma3:4b", "qwen3-it:4b", "qwen3:8b"])
+        self.assertEqual(res["dropped"], [])
+        self.assertIn("embed-gemma:300m", res["skipped"])
 
     def test_real_maps_load(self):
         engines = select_models.changes.DevkitEngines.parse(
@@ -612,6 +629,12 @@ class Resolve(unittest.TestCase):
         # Called for a pull request: never the baseline rule.
         v = self.plan_cli(nightly, "--mode", "pr")
         self.assertEqual(v["calls"], [])
+        # The dev-kit full refresh: never the baseline rule, every engine.
+        v = self.plan_cli(nightly, "--mode", "refresh")
+        self.assertEqual((v["bench"], v["calls"]), ("true", []))
+        matrix = json.loads(v["matrix"])
+        self.assertTrue(matrix)
+        self.assertTrue(all(e["families"] for e in matrix))
 
     def test_plan_cli_pr(self):
         # Called from Build and Test: this run's artifacts, no index.

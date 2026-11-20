@@ -4,7 +4,7 @@
 """Turns the bench jobs' results into bench-summary.md and, nightly, the next
 baseline.
 
-    report.py --results <dir> --matrix <json file> --mode pr|nightly|dispatch
+    report.py --results <dir> --matrix <json file> --mode pr|nightly|refresh|dispatch
               --head-sha <sha> [--build-run-id N] [--baseline <dir>]
               [--baseline-run-id N] --summary <file> [--new-baseline <dir>]
               [--outputs <file>]
@@ -19,7 +19,9 @@ The summary (at most MAX_BYTES, cut with a note beyond that) has, per
 runtime: perf A/B (dev-kit against the base package on the same runner)
 with the change against the nightly baseline for the same machine kind,
 GSM8K and DocVQA against the nightly baseline, the soft-gate warnings and
-the jobs that failed or produced nothing. It holds only numbers, validated
+the jobs that failed or produced nothing. The dev-kit full refresh
+(--mode refresh) is given no baseline and runs no A/B: its summary is this
+run's numbers, compared with nothing. It holds only numbers, validated
 model ids and machine kinds, and fixed wording: no model output, log or
 other free text from an artifact. Per-question reports stay in the result
 artifacts.
@@ -289,7 +291,9 @@ def render(results: list[dict], baseline: dict, matrix: list[dict], *, mode: str
     where = []
     if build_run_id:
         where.append(f"Build and Test run {build_run_id}")
-    if baseline_run_id and baseline.get("sha"):
+    if mode == "refresh":
+        where.append("dev-kit full refresh: this run's numbers only, no comparison")
+    elif baseline_run_id and baseline.get("sha"):
         where.append(f"nightly baseline: run {baseline_run_id} on `{baseline['sha'][:10]}`"
                      + (f" ({baseline['updated']})" if baseline.get("updated") else ""))
     else:
@@ -327,7 +331,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--results", required=True)
     ap.add_argument("--matrix", default="")
-    ap.add_argument("--mode", choices=("pr", "nightly", "dispatch"), required=True)
+    ap.add_argument("--mode", choices=("pr", "nightly", "refresh", "dispatch"), required=True)
     ap.add_argument("--head-sha", required=True)
     ap.add_argument("--build-run-id", default="")
     ap.add_argument("--run-id", default="", help="this run (Build and Test's, or a dispatched devkit-bench.yml's)")

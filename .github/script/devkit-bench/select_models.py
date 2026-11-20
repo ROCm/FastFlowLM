@@ -20,6 +20,8 @@ devkit-bench.yml, or a dispatched run's artifacts) and this checkout:
                 NIGHTLY_CAP each day (rotation, the day number), so the
                 whole set is benched every few nights; the baseline keeps
                 each model's latest numbers.
+  refresh       the dev-kit full refresh: the whole assigned set,
+                uncapped, smallest first.
   dispatch      the models named, uncapped.
 
 Only models the NPU catalog (src/model_list.json, aie2p, not oga-hipep)
@@ -102,7 +104,7 @@ def select(*, mode: str, catalog: dict[str, dict], engines: Optional[changes.Dev
            xclbin_bench_models: Optional[Iterable[str]] = None, requested: Iterable[str] = (),
            cap: Optional[int] = None, rotation: int = 0) -> dict:
     """{"models": [{"model", "vlm"}], "dropped": [...], "skipped": [...]}.
-    mode: pr, nightly or dispatch."""
+    mode: pr, nightly, refresh or dispatch."""
     catalog = npu_catalog(catalog)
     assigned = assignment.get("models", {}) if isinstance(assignment, dict) else {}
     families = set(families)
@@ -111,6 +113,8 @@ def select(*, mode: str, catalog: dict[str, dict], engines: Optional[changes.Dev
     elif mode == "nightly":
         wanted = list(assigned)
         cap = NIGHTLY_CAP if cap is None else cap
+    elif mode == "refresh":
+        wanted = list(assigned)
     elif mode == "pr":
         kernels = list(xclbin_models)
         if xclbin_bench_models is not None:
