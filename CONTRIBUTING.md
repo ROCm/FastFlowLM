@@ -41,6 +41,14 @@ matrix.
 `FLM_USE_HRX=ON` build at link time while the default build stays green. Also register it in
 `src/model_list.json` and add `src/xclbins/<MODEL>-NPU2/`.
 
+**Never edit `src/lib/xrt/`, `src/lib/hrx/` or `src/xclbins/` by hand.** The engine libraries
+and NPU kernels there come from the dev kit (`flm-dev-kit/`), and a pull request commits exactly
+the files its own CI run built and tested on the NPU: change the dev-kit source and push; when
+Build and Test has passed, run `python .github/script/ci/devkit_swap.py fetch` on a clean checkout
+of the tested commit and push the swap commit it makes; CI checks its hashes against that run and
+skips the NPU tests for it. Steps, conditions and the full refresh: "Prebuilt binaries" in
+[flm-dev-kit/AGENTS.md](flm-dev-kit/AGENTS.md).
+
 **Adding a docs page?** It's invisible until you add it to the hardcoded `docs_nav` list in
 `docs/_config.yml` — the sidebar is not generated from front matter. Give the URL a trailing
 slash; the active-page highlight is an exact match on `page.url`.
@@ -55,6 +63,5 @@ driver than the binary enforces, so report the version you actually have.
 
 Source code is MIT ([LICENSE_RUNTIME.txt](LICENSE_RUNTIME.txt)). The NPU kernel binaries in
 `src/xclbins/` and `src/lib/hrx/` are **not** open source, but are free to use and redistribute
-unmodified — see [LICENSE_BINARY.txt](LICENSE_BINARY.txt). They're
-built from a separate toolchain and refreshed by maintainers, so if your change needs new
-kernels, open an issue first; a source-only PR won't be enough.
+unmodified — see [LICENSE_BINARY.txt](LICENSE_BINARY.txt). CI builds them from the dev kit
+(`flm-dev-kit/`), and they are committed only through the swap flow under Gotchas.
