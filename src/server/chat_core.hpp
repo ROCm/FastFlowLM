@@ -10,6 +10,7 @@
  */
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -56,6 +57,7 @@ struct chat_turn_start {
     int cached_prompt_tokens = 0;  ///< the part of it that was reused
     /// \brief The logprobs entries of the tokens a piece of content was made from, in order;
     ///        empty when the request asked for no logprobs
+    /// \note It reads the turn's own state: call it only until on_end or on_error, and drop it there
     std::function<nlohmann::ordered_json(const std::string&)> content_logprobs;
 };
 
@@ -82,7 +84,8 @@ struct chat_turn_end {
 /// \note The calls of one turn: on_begin, on_start, any number of on_delta (only when the turn
 ///       is streamed), on_end. A turn cancelled during the prompt goes from on_begin to on_end.
 ///       on_error can come at any point and ends the turn. It can also come after on_end or after
-///       another on_error, when cleaning up after the turn fails: a sink has to take that too.
+///       another on_error, when cleaning up after the turn fails, or when the sink's own on_error
+///       threw: a sink has to take that too, and must not call content_logprobs any more.
 class chat_sink {
 public:
     virtual ~chat_sink() = default;

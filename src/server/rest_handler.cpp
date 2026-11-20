@@ -1791,8 +1791,9 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
         if (stream){
             cancellation_token->reset();
             sink.on_begin({model, true});
-            chat_turn_ostream ostream(spec, parse_options, sink);  // parses the text, the sink gets the deltas
+            // declared first, so it outlives the stream whose flush hook reads it
             std::unique_ptr<chat_logprobs_aligner> logprobs;
+            chat_turn_ostream ostream(spec, parse_options, sink);  // parses the text, the sink gets the deltas
 
             header_print("FLM", "Start prefill...");
             try {
@@ -1874,7 +1875,8 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
                     if (meta_info.stop_reason == CANCEL_DETECTED || cancellation_token->cancelled()) {
                         meta_info.stop_reason = CANCEL_DETECTED;
                         header_print("❌ ", "Prefill Cancelled!");
-                        sink.on_end(turn_end(chat_msg(), false));
+                        const chat_msg no_message;  // end.message points at it
+                        sink.on_end(turn_end(no_message, false));
                         this->auto_chat_engine->clear_context();
                         this->prompt_cache.reset();
                         return;

@@ -10,10 +10,13 @@
 
 #include <cstdio>
 #include <fstream>
+#include <optional>
+#include <ostream>
 #include <regex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -84,11 +87,11 @@ std::vector<case_t> cases() {
     c = {}; c.name = "prefix_cache"; c.chunks = {"Hel", "lo"}; c.prefix_cache = true;
     all.push_back(c);
 
-    // tool markup is content when the request offered no tools
     // only content has logprobs: the reasoning's tokens are left out
     c = {}; c.name = "logprobs"; c.logprobs = true; c.chunks = {"<think>", "hm", "</think>", "Hel", "lo"};
     all.push_back(c);
 
+    // tool markup is content when the request offered no tools
     c = {}; c.name = "tools_not_offered";
     c.chunks = {"<tool_call>\n{\"name\": \"get_weather\", \"arguments\": {\"city\": \"Paris\"}}\n</tool_call>"};
     all.push_back(c);
@@ -240,6 +243,125 @@ std::vector<std::pair<std::string, std::string>> blocks(const std::string& text)
     }
     return out;
 }
+
+/// \brief Fails the test with what was expected and what came
+int check(const std::string& what, const std::string& got, const std::string& expected) {
+    if (got == expected) return 0;
+    std::printf("  FAIL %s\n    got:      [%s]\n    expected: [%s]\n", what.c_str(), got.c_str(), expected.c_str());
+    return 1;
+}
+
+/// \brief Where an error goes once the turn is under way. Not in the recording, because the
+///        scripted model cannot make cleaning up fail; the expected lines are those of
+///        send_stream_error and the outer catch of handle_openai_chat_completion at 1dfa10bf.
+int error_routing() {
+    int failures = 0;
+    std::string out;
+    bool throw_on_error_event = false;
+    auto send_response = [&](const json& response) { out += "response " + response.dump() + "\n"; };
+    auto send_streaming_response = [&](const json& data, bool is_final) {
+        const std::string text = data.get<std::string>();
+        if (throw_on_error_event && text.find("\"error\"") != std::string::npos) {
+            throw std::runtime_error("the client is gone");
+        }
+        out += (is_final ? "final " : "chunk ") + text.substr(0, text.find('\n')) + "\n";
+    };
+    const chat_error first{500, "server_error", "first", "", std::nullopt};
+    const chat_error second{500, "server_error", "second", "", std::nullopt};
+    const std::string first_event = "chunk data: " + openai_error_json(first).dump() + "\nfinal data: [DONE]\n";
+    const std::string second_object = "response " + openai_error_json(second).dump() + "\n";
+    chat_msg_delta hi;
+    hi.content = "Hi";
+    chat_msg message;
+    message.content = "Hi";
+    chat_turn_end end;
+    end.message = &message;
+
+    // no chunk out yet: the error object alone
+    {
+        out.clear();
+        openai_chat_sink sink(send_response, send_streaming_response, false);
+        sink.on_begin({"m", true});
+        sink.on_start({});
+        sink.on_error(first);
+        failures += check("error before any chunk", out, "response " + openai_error_json(first).dump() + "\n");
+    }
+    // the stream was ended and cleaning up failed: one more event and [DONE], as before
+    {
+        out.clear();
+        openai_chat_sink sink(send_response, send_streaming_response, false);
+        sink.on_begin({"m", true});
+        sink.on_start({});
+        sink.on_end(end);
+        const size_t ended = out.size();
+        sink.on_error(first);
+        failures += check("error after the stream ended", out.substr(ended), first_event);
+    }
+    // an error after an error is the error object alone
+    {
+        out.clear();
+        openai_chat_sink sink(send_response, send_streaming_response, false);
+        sink.on_begin({"m", true});
+        sink.on_start({});
+        sink.on_delta(hi);
+        const size_t streamed = out.size();
+        sink.on_error(first);
+        sink.on_error(second);
+        failures += check("error after an error", out.substr(streamed), first_event + second_object);
+    }
+    // writing the error failed: the error about that is the error object alone
+    {
+        out.clear();
+        openai_chat_sink sink(send_response, send_streaming_response, false);
+        sink.on_begin({"m", true});
+        sink.on_start({});
+        sink.on_delta(hi);
+        const size_t streamed = out.size();
+        throw_on_error_event = true;
+        try {
+            sink.on_error(first);
+        } catch (const std::exception&) {
+        }
+        throw_on_error_event = false;
+        sink.on_error(second);
+        failures += check("error while writing an error", out.substr(streamed), second_object);
+    }
+    return failures;
+}
+
+/// \brief The flush hook sees each flush's bytes, the incomplete ones too, before the parser does
+int flush_hook() {
+    struct log_sink : chat_sink {
+        std::vector<std::string>& log;
+        explicit log_sink(std::vector<std::string>& log) : log(log) {}
+        void on_begin(const chat_turn_begin&) override {}
+        void on_start(const chat_turn_start&) override {}
+        void on_delta(const chat_msg_delta& d) override { log.push_back("delta " + d.content); }
+        void on_end(const chat_turn_end&) override {}
+        void on_error(const chat_error&) override {}
+    };
+    std::vector<std::string> log;
+    log_sink sink(log);
+    const chat_format_spec spec = chat_format_make(chat_format_kind::HERMES_JSON, true);
+    const json tools = json::array();
+    chat_parse_options options;
+    options.tools = &tools;
+    chat_turn_ostream ostream(spec, options, sink);
+    ostream.start(chat_format_prefill(spec, "<|im_start|>assistant\n", false, false),
+                  [&log](const std::string& written) { log.push_back("hook " + written); });
+    ostream << "Hel" << std::flush;
+    ostream << "lo \xE2" << std::flush;
+    ostream.finish();
+
+    int failures = 0;
+    failures += check("flush hook, first flush", log.size() >= 2 ? log[0] + "|" + log[1] : "", "hook Hel|delta Hel");
+    std::string hooked;
+    for (const std::string& line : log) {
+        if (line.rfind("hook ", 0) == 0) hooked += line.substr(5);
+    }
+    failures += check("flush hook, every byte", hooked, "Hello \xE2");
+    return failures;
+}
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -272,6 +394,11 @@ int main(int argc, char* argv[]) {
             std::printf("  FAIL error with param: %s\n", with_param.dump().c_str());
             failures++;
         }
+        failures += check("model error that kept the conversation",
+                          openai_error_json({503, "model_error", "busy", "", false}).dump(),
+                          R"({"error":{"message":"busy","type":"model_error","code":503,"session_cleared":false}})");
+        failures += error_routing();
+        failures += flush_hook();
     } catch (const std::exception& e) {
         std::printf("  FAIL: %s\n", e.what());
         failures++;

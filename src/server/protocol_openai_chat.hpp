@@ -130,25 +130,28 @@ public:
         else {
             send_completion(end);
         }
-        finished = true;
         content_logprobs = nullptr;  // it reads the turn's state, which ends with the turn
     }
 
     void on_error(const chat_error& error) override {
+        // Set before anything is sent: if writing this error fails, the error about that
+        // failure is the plain object
+        const bool as_event = stream_started && !failed;
+        failed = true;
+        content_logprobs = nullptr;
         const json error_response = openai_error_json(error);
         // Once a chunk is out the headers are sent, so an error can only go
         // out as one more event, and the stream still has to be ended or the
-        // client waits on it until its own timeout. A failure after the response
-        // was ended has no stream left to go out on.
-        if (stream_started && !finished) {
+        // client waits on it until its own timeout. That holds after the final
+        // chunk too (cleaning up after a cancelled prompt can fail). Only the
+        // first error goes out as an event; a later one is the plain object.
+        if (as_event) {
             send_streaming_response(json("data: " + error_response.dump() + "\n\n"), false);
             send_streaming_response(json("data: [DONE]\n\n"), true);
         }
         else {
             send_response(error_response);
         }
-        finished = true;
-        content_logprobs = nullptr;
     }
 
 private:
@@ -333,8 +336,8 @@ private:
     bool stream = false;
     ///@brief A chunk went out, so the response's status and headers are sent
     bool stream_started = false;
-    ///@brief The response was ended: by on_end, or by an error
-    bool finished = false;
+    ///@brief An error was reported
+    bool failed = false;
     ///@brief Stream ID
     std::string stream_id;
     long created = 0;
