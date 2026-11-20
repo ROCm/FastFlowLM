@@ -823,10 +823,15 @@ namespace d3_cpu {
         d3_for((long long)Hv * slabs, [&](long long task) {
             const int hv = (int)(task / slabs);
             const int vs = (int)(task % slabs);
-            std::vector<float> qf((size_t)DK), kf((size_t)DK);
+            std::vector<float> qf((size_t)DK), kf((size_t)DK), Sl((size_t)DK * 16);
             {
                 {
-                    float*    Sh = S + (size_t)hv * DK * DV + (size_t)vs * 16;
+                    // the slab is DK rows of 16 floats at a DV-float stride (512 B): that aliases into 8 L1 sets and
+                    // thrashes, so it works on a contiguous copy and writes it back
+                    float*    Sg = S + (size_t)hv * DK * DV + (size_t)vs * 16;
+                    for (int i = 0; i < DK; i++) _mm512_storeu_ps(&Sl[(size_t)i * 16], _mm512_loadu_ps(Sg + (size_t)i * DV));
+                    float*    Sh = Sl.data();
+                    const int SD = 16;
                     const int hq = hv / groups;
                     for (int l = 0; l < L; l++) {
                         const bf16* row = qkv + (size_t)l * ld;
@@ -840,28 +845,47 @@ namespace d3_cpu {
                         const __m512 a = _mm512_set1_ps(alpha[(size_t)l * Hv + hv]);
                         const __m512 b = _mm512_set1_ps(beta[(size_t)l * Hv + hv]);
 
-                        // decay, and kv_mem = S^T k against the decayed state
-                        __m512 mem = _mm512_setzero_ps();
-                        for (int i = 0; i < DK; i++) {
-                            float* sp = Sh + (size_t)i * DV;
-                            const __m512 s = _mm512_mul_ps(_mm512_loadu_ps(sp), a);
-                            _mm512_storeu_ps(sp, s);
-                            mem = _mm512_fmadd_ps(s, _mm512_set1_ps(kf[i]), mem);
+                        // kv_mem = S^T k against the decayed state = a * (S^T k): read-only pass, four independent
+                        // accumulators (one chain of DK dependent FMAs is latency bound)
+                        __m512 m0 = _mm512_setzero_ps(), m1 = m0, m2 = m0, m3 = m0;
+                        int i = 0;
+                        for (; i + 4 <= DK; i += 4) {
+                            const float* sp = Sh + (size_t)i * SD;
+                            m0 = _mm512_fmadd_ps(_mm512_loadu_ps(sp),          _mm512_set1_ps(kf[i]),     m0);
+                            m1 = _mm512_fmadd_ps(_mm512_loadu_ps(sp + SD),     _mm512_set1_ps(kf[i + 1]), m1);
+                            m2 = _mm512_fmadd_ps(_mm512_loadu_ps(sp + 2 * SD), _mm512_set1_ps(kf[i + 2]), m2);
+                            m3 = _mm512_fmadd_ps(_mm512_loadu_ps(sp + 3 * SD), _mm512_set1_ps(kf[i + 3]), m3);
                         }
+                        for (; i < DK; i++) m0 = _mm512_fmadd_ps(_mm512_loadu_ps(Sh + (size_t)i * SD), _mm512_set1_ps(kf[i]), m0);
+                        const __m512 mem   = _mm512_mul_ps(_mm512_add_ps(_mm512_add_ps(m0, m1), _mm512_add_ps(m2, m3)), a);
                         const __m512 vv    = bf16o_fp32_512(_mm256_loadu_si256((const __m256i*)vp));
                         const __m512 delta = _mm512_mul_ps(_mm512_sub_ps(vv, mem), b);
 
-                        // rank-1 update, and the output against the new state
-                        __m512 o = _mm512_setzero_ps();
-                        for (int i = 0; i < DK; i++) {
-                            float* sp = Sh + (size_t)i * DV;
-                            const __m512 s = _mm512_fmadd_ps(_mm512_set1_ps(kf[i]), delta, _mm512_loadu_ps(sp));
-                            _mm512_storeu_ps(sp, s);
-                            o = _mm512_fmadd_ps(s, _mm512_set1_ps(qf[i]), o);
+                        // decay + rank-1 update in one pass, and the output against the new state
+                        __m512 o0 = _mm512_setzero_ps(), o1 = o0, o2 = o0, o3 = o0;
+                        i = 0;
+                        for (; i + 4 <= DK; i += 4) {
+                            float* sp = Sh + (size_t)i * SD;
+                            const __m512 s0 = _mm512_fmadd_ps(_mm512_set1_ps(kf[i]),     delta, _mm512_mul_ps(_mm512_loadu_ps(sp),          a));
+                            const __m512 s1 = _mm512_fmadd_ps(_mm512_set1_ps(kf[i + 1]), delta, _mm512_mul_ps(_mm512_loadu_ps(sp + SD),     a));
+                            const __m512 s2 = _mm512_fmadd_ps(_mm512_set1_ps(kf[i + 2]), delta, _mm512_mul_ps(_mm512_loadu_ps(sp + 2 * SD), a));
+                            const __m512 s3 = _mm512_fmadd_ps(_mm512_set1_ps(kf[i + 3]), delta, _mm512_mul_ps(_mm512_loadu_ps(sp + 3 * SD), a));
+                            _mm512_storeu_ps(sp, s0);          o0 = _mm512_fmadd_ps(s0, _mm512_set1_ps(qf[i]),     o0);
+                            _mm512_storeu_ps(sp + SD, s1);     o1 = _mm512_fmadd_ps(s1, _mm512_set1_ps(qf[i + 1]), o1);
+                            _mm512_storeu_ps(sp + 2 * SD, s2); o2 = _mm512_fmadd_ps(s2, _mm512_set1_ps(qf[i + 2]), o2);
+                            _mm512_storeu_ps(sp + 3 * SD, s3); o3 = _mm512_fmadd_ps(s3, _mm512_set1_ps(qf[i + 3]), o3);
                         }
+                        for (; i < DK; i++) {
+                            float* sp = Sh + (size_t)i * SD;
+                            const __m512 s0 = _mm512_fmadd_ps(_mm512_set1_ps(kf[i]), delta, _mm512_mul_ps(_mm512_loadu_ps(sp), a));
+                            _mm512_storeu_ps(sp, s0);
+                            o0 = _mm512_fmadd_ps(s0, _mm512_set1_ps(qf[i]), o0);
+                        }
+                        const __m512 o = _mm512_add_ps(_mm512_add_ps(o0, o1), _mm512_add_ps(o2, o3));
                         _mm256_storeu_si256((__m256i*)(out + (size_t)l * Hv * DV + (size_t)hv * DV + (size_t)vs * 16),
                                             cpu_func::f32_bf16_rne_512(o));
                     }
+                    for (int i = 0; i < DK; i++) _mm512_storeu_ps(Sg + (size_t)i * DV, _mm512_loadu_ps(&Sl[(size_t)i * 16]));
                 }
             }
         });
