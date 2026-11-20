@@ -127,10 +127,12 @@ accuracy. Do not invent a `make test` or claim tests pass.
   `FLM_Xclbin/rtp_addresses.lock.txt` fails the job.
 - Pull requests only: the NPU overlay jobs (`test-*-devkit`) put the engines and kernels built above
   into the product's portable packages and run the NPU tests on the models they serve.
-- `../.github/workflows/devkit-bench.yml` (its own workflow, after Build and Test): perf (`flm bench`,
-  the dev-kit build against the unmodified package on the same runner) and GSM8K accuracy, only
-  when engine or kernel source changed: on pull requests, and nightly when the source changed since
-  the last baseline. Results go to one pull request comment; slowdowns and accuracy drops warn.
+- `devkit-bench` (`../.github/workflows/devkit-bench.yml`, called by Build and Test after its builds,
+  in the same run): perf (`flm bench`, the dev-kit build against the unmodified package on the same
+  runner) and GSM8K accuracy, only when engine or kernel source changed: on pull requests, and
+  nightly when the source changed since the last baseline. Results go to one pull request comment;
+  slowdowns and accuracy drops warn, a model failing the accuracy hard gate fails the check. A
+  manual dispatch of that workflow re-benches an earlier Build and Test run.
 
 Keep in sync, in the same pull request: `FLM_Xclbin/build_units.json` (every directory with a
 Makefile and its `MODEL_TYPE`s), `FLM_Xclbin/kernel_assignment.json` and `.md` (model → folder → slot
