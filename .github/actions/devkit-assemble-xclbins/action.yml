@@ -8,7 +8,9 @@ description: >
   assigns them (the layout of FastFlowLM's xclbins/ tree), with
   .github/script/ci/devkit_assemble_xclbins.py, then uploads the tree as
   devkit-xclbins. A model some of whose kernels were not built gets the ones
-  that were (partial). Then checks the RTP
+  that were (partial). Then compares the tree with FastFlowLM's
+  src/xclbins/ (devkit_xclbin_compare.py: a report in the job summary and the
+  devkit-xclbins-compare artifact, never a failure), and checks the RTP
   address files of every kernel built against
   flm-dev-kit/FLM_Xclbin/rtp_addresses.lock.txt (devkit_rtp_lock.py check):
   one that moved fails the action, naming the models and engines to update.
@@ -27,6 +29,10 @@ inputs:
     description: The RTP address lock to check the built kernels against; empty skips the check.
     required: false
     default: flm-dev-kit/FLM_Xclbin/rtp_addresses.lock.txt
+  shipped:
+    description: FastFlowLM's xclbins tree to compare the assembled one with; empty skips the comparison.
+    required: false
+    default: src/xclbins
   retention-days:
     description: Artifact retention.
     required: false
@@ -80,6 +86,31 @@ runs:
         retention-days: ${{ inputs.retention-days }}
         if-no-files-found: error
         # A re-run (after a failed shard) replaces the first attempt's tree.
+        overwrite: true
+
+    # Report only: how far the dev kit's kernels are from the ones the
+    # product ships. Never fails the job.
+    - name: Compare with the shipped xclbins
+      id: compare
+      if: ${{ !cancelled() && steps.assemble.outputs.found == 'true' && inputs.shipped != '' }}
+      continue-on-error: true
+      shell: bash
+      env:
+        OUT: ${{ runner.temp }}/devkit-xclbins
+        SHIPPED: ${{ inputs.shipped }}
+      run: |
+        python3 .github/script/ci/devkit_xclbin_compare.py --devkit "${OUT}" --shipped "${SHIPPED}" \
+          --json "${RUNNER_TEMP}/devkit-xclbins-compare/compare.json" --github-output
+
+    - name: Upload the comparison
+      if: ${{ !cancelled() && steps.compare.outcome == 'success' }}
+      continue-on-error: true
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ inputs.artifact-name }}-compare
+        path: ${{ runner.temp }}/devkit-xclbins-compare/compare.json
+        retention-days: ${{ inputs.retention-days }}
+        if-no-files-found: warn
         overwrite: true
 
     # The engines hard-code the RTP addresses: a kernel built here whose
