@@ -452,14 +452,106 @@ namespace d3_cpu {
 
     /// One thread's per-task scratch for the attention kernels: ATT_NV query vectors of DH, their limits and (row, head).
     struct AttScratch {
-        std::vector<float> qf;
+        std::vector<uint32_t> qb;            // the query vectors as bf16 pairs (d, d + 1), [nv][dh / 2]
         std::vector<int> lim, vrow, vhead;   // lim: last visible key per vector, -1 none
         void init(int nv, int dh) {
-            if (!qf.empty()) return;
-            qf.resize((size_t)nv * dh);
+            if (!qb.empty()) return;
+            qb.resize((size_t)nv * dh / 2);
             lim.resize(nv); vrow.resize(nv); vhead.resize(nv);
         }
     };
+
+
+    inline size_t keys_t_floats(int L, int num_kv_heads, int DH);
+    inline void transpose_keys(float* kt_f, const bf16* k, int L, int k_stride, int num_kv_heads, int DH);
+
+    /// scores[n][j] = scale * q_n . k_j for ATT_NV queries and `len` keys (16 per vdpbf16ps tile): q and k are bf16 and
+    /// the products exact in fp32, the accumulation is vdpbf16ps's (pairs of d, fp32). K is transpose_keys()'s
+    /// [DH / 2][ldk] dword layout (keys j0..j0 + 15 of d-pair dd are one 64-byte load).
+    inline void att_scores(float* P, int ldp, const uint32_t* K, int ldk, int len, const uint32_t* qb, int DH, float scale) {
+        const __m512 sc = _mm512_set1_ps(scale);
+        const int DH2 = DH / 2;
+        for (int j0 = 0; j0 < len; j0 += 16) {
+            __m512 acc[ATT_NV];
+            for (int n = 0; n < ATT_NV; n++) acc[n] = _mm512_setzero_ps();
+            for (int dd = 0; dd < DH2; dd++) {
+                const __m512bh kv = (__m512bh)_mm512_loadu_si512(K + (size_t)dd * ldk + j0);
+                for (int n = 0; n < ATT_NV; n++)
+                    acc[n] = _mm512_dpbf16_ps(acc[n], (__m512bh)_mm512_set1_epi32((int)qb[(size_t)n * DH2 + dd]), kv);
+            }
+            for (int n = 0; n < ATT_NV; n++) _mm512_storeu_ps(P + (size_t)n * ldp + j0, _mm512_mul_ps(acc[n], sc));
+        }
+    }
+
+    /// softmax of pn[0, n) in place, vectorized (16 lanes, masked tail). One function for attention() and attention_prefix(), so a
+    /// row's result depends only on its n scores, never on which of them computed it.
+    inline void att_softmax_row(float* pn, int n) {
+        __m512 mv = _mm512_set1_ps(-INFINITY);
+        int j = 0;
+        for (; j + 16 <= n; j += 16) mv = _mm512_max_ps(mv, _mm512_loadu_ps(pn + j));
+        __mmask16 tail = 0;
+        if (j < n) {
+            tail = (__mmask16)((1u << (n - j)) - 1);
+            mv = _mm512_mask_max_ps(mv, tail, mv, _mm512_maskz_loadu_ps(tail, pn + j));
+        }
+        const __m512 m = _mm512_set1_ps(_mm512_reduce_max_ps(mv));
+        __m512 sv = _mm512_setzero_ps();
+        for (j = 0; j + 16 <= n; j += 16) {
+            const __m512 e = _mm512_exp_ps_corrected(_mm512_sub_ps(_mm512_loadu_ps(pn + j), m));
+            _mm512_storeu_ps(pn + j, e);
+            sv = _mm512_add_ps(sv, e);
+        }
+        if (tail) {
+            const __m512 e = _mm512_exp_ps_corrected(_mm512_sub_ps(_mm512_maskz_loadu_ps(tail, pn + j), m));
+            _mm512_mask_storeu_ps(pn + j, tail, e);
+            sv = _mm512_mask_add_ps(sv, tail, sv, e);
+        }
+        const __m512 inv = _mm512_set1_ps(1.0f / _mm512_reduce_add_ps(sv));
+        for (j = 0; j + 16 <= n; j += 16) _mm512_storeu_ps(pn + j, _mm512_mul_ps(_mm512_loadu_ps(pn + j), inv));
+        if (tail) _mm512_mask_storeu_ps(pn + j, tail, _mm512_mul_ps(_mm512_maskz_loadu_ps(tail, pn + j), inv));
+    }
+
+    /// the probabilities of one score row as bf16 (round to nearest even), in place: p16[j] for j in [0, n) read from the
+    /// floats p[j] (the bf16 row is the first half of the float row; every store lands at or below the loads still to do)
+    inline void att_round_row(float* p, int n) {
+        uint16_t* p16 = reinterpret_cast<uint16_t*>(p);
+        int j = 0;
+        for (; j + 16 <= n; j += 16) {
+            const __m256bh r = _mm512_cvtneps_pbh(_mm512_loadu_ps(p + j));
+            _mm256_storeu_si256((__m256i*)(p16 + j), (__m256i)r);
+        }
+        if (j < n) {
+            float tmp[16] = {};
+            for (int i = j; i < n; i++) tmp[i - j] = p[i];
+            const __m256bh r = _mm512_cvtneps_pbh(_mm512_loadu_ps(tmp));
+            uint16_t o[16];
+            _mm256_storeu_si256((__m256i*)o, (__m256i)r);
+            for (int i = j; i < n; i++) p16[i] = o[i - j];
+        }
+    }
+
+    /// out[n][d0..d0 + 15] = sum over keys j < nkeys of p16[n][j] * v_j[d0..], for ATT_NV rows, accumulated in key order
+    /// two keys per vdpbf16ps; vrow(j) is key j's V row at the kv head's columns, bf16
+    template <class VRow>
+    inline void att_pv(__m512* acc, const uint16_t* p16, int ldp16, int nkeys, int d0, VRow&& vrow) {
+        for (int n = 0; n < ATT_NV; n++) acc[n] = _mm512_setzero_ps();
+        int j = 0;
+        for (; j + 2 <= nkeys; j += 2) {
+            const __m512i lo = _mm512_cvtepu16_epi32(_mm256_loadu_si256((const __m256i*)(vrow(j) + d0)));
+            const __m512i hi = _mm512_slli_epi32(_mm512_cvtepu16_epi32(_mm256_loadu_si256((const __m256i*)(vrow(j + 1) + d0))), 16);
+            const __m512bh vv = (__m512bh)_mm512_or_si512(lo, hi);
+            for (int n = 0; n < ATT_NV; n++) {
+                uint32_t pp;
+                memcpy(&pp, p16 + (size_t)n * ldp16 + j, 4);
+                acc[n] = _mm512_dpbf16_ps(acc[n], (__m512bh)_mm512_set1_epi32((int)pp), vv);
+            }
+        }
+        if (j < nkeys) {   // odd key count: the last key pairs with a zero
+            const __m512bh vv = (__m512bh)_mm512_cvtepu16_epi32(_mm256_loadu_si256((const __m256i*)(vrow(j) + d0)));
+            for (int n = 0; n < ATT_NV; n++)
+                acc[n] = _mm512_dpbf16_ps(acc[n], (__m512bh)_mm512_set1_epi32((int)p16[(size_t)n * ldp16 + j]), vv);
+        }
+    }
 
     inline void attention(bf16* out, const bf16* q, const bf16* k, const bf16* v,
                           int L_q, int L_kv, int num_heads, int num_kv_heads, int DH,
@@ -467,8 +559,8 @@ namespace d3_cpu {
                           int k_stride, int v_stride, float scale, bool causal,
                           std::vector<float>& kt_buf) {
         // hard checks (release builds define NDEBUG: an assert here would let a bad shape through)
-        if (num_kv_heads <= 0 || num_heads <= 0 || num_heads % num_kv_heads != 0 || DH <= 0 || DH % 16 != 0)
-            throw std::invalid_argument("d3_cpu::attention: num_heads must be a multiple of num_kv_heads and head_dim of 16");
+        if (num_kv_heads <= 0 || num_heads <= 0 || num_heads % num_kv_heads != 0 || DH <= 0 || DH % 32 != 0)
+            throw std::invalid_argument("d3_cpu::attention: num_heads must be a multiple of num_kv_heads and head_dim of 32");
         if (L_q <= 0) return;
         if (L_kv <= 0) throw std::invalid_argument("d3_cpu::attention: no keys");
         const int groups   = num_heads / num_kv_heads;
@@ -484,31 +576,12 @@ namespace d3_cpu {
         // K^T in fp32, [kv head][DH][Lp], padding keys zero (their scores are masked below),
         // then each thread's scores [ATT_NV][Lp]
         const int nthreads = prefill_threads();
-        const size_t kt_size = (size_t)num_kv_heads * DH * Lp;
+        const size_t kt_size = keys_t_floats(L_kv, num_kv_heads, DH);
         const size_t need = kt_size + (size_t)nthreads * ATT_NV * Lp;
         if (kt_buf.size() < need) kt_buf.resize(need);
         float* const kt = kt_buf.data();
 
-        const int j_tiles = Lp / 16;
-        d3_for((long long)num_kv_heads * j_tiles, [&](long long task) {
-                    const int hk = (int)(task / j_tiles);
-                    const int j0 = (int)(task % j_tiles) * 16;
-                    float tile[16][16];
-                    for (int d0 = 0; d0 < DH; d0 += 16) {
-                        for (int jj = 0; jj < 16; jj++) {
-                            const int j = j0 + jj;
-                            if (j < L_kv) {
-                                _mm512_storeu_ps(tile[jj], bf16o_fp32_512(_mm256_loadu_si256(
-                                    (const __m256i*)(k + (size_t)j * k_stride + (size_t)hk * DH + d0))));
-                            } else {
-                                _mm512_storeu_ps(tile[jj], _mm512_setzero_ps());
-                            }
-                        }
-                        float* dst = kt + ((size_t)hk * DH + d0) * Lp + j0;
-                        for (int dd = 0; dd < 16; dd++)
-                            for (int jj = 0; jj < 16; jj++) dst[(size_t)dd * Lp + jj] = tile[jj][dd];
-                    }
-        });
+        transpose_keys(kt, k, L_kv, k_stride, num_kv_heads, DH);
 
         // then (kv head, row task) pairs as threads come free; each thread has its own scratch
         std::vector<AttScratch> scratch_of(nthreads);
@@ -517,7 +590,7 @@ namespace d3_cpu {
                     const int rt = (int)(task % row_tasks);
                     AttScratch& sc_ = scratch_of[tid];
                     sc_.init(ATT_NV, DH);
-                    std::vector<float>& qf = sc_.qf;
+                    std::vector<uint32_t>& qb = sc_.qb;
                     std::vector<int>& lim = sc_.lim;
                     std::vector<int>& vrow = sc_.vrow;
                     std::vector<int>& vhead = sc_.vhead;
@@ -534,26 +607,13 @@ namespace d3_cpu {
                         for (int n = 0; n < ATT_NV; n++) {
                             const int src = n < nv ? n : 0;
                             const bf16* qh = q + (size_t)vrow[src] * q_stride + (size_t)vhead[src] * DH;
-                            for (int d = 0; d < DH; d += 16)
-                                _mm512_storeu_ps(qf.data() + (size_t)n * DH + d, bf16o_fp32_512(_mm256_loadu_si256((const __m256i*)(qh + d))));
+                            memcpy(qb.data() + (size_t)n * (DH / 2), qh, (size_t)DH * sizeof(bf16));
                             int j1 = causal ? q_pos_begin + vrow[src] - kv_pos_begin : L_kv - 1;
                             lim[n] = std::min(j1, L_kv - 1);
                         }
 
                         // scores = (q . k) * scale, 16 keys at a time for all ATT_NV vectors
-                        const float* K = kt + (size_t)hk * DH * Lp;
-                        for (int j0 = 0; j0 < Lp; j0 += 16) {
-                            __m512 acc[ATT_NV];
-                            for (int n = 0; n < ATT_NV; n++) acc[n] = _mm512_setzero_ps();
-                            for (int d = 0; d < DH; d++) {
-                                const __m512 kv = _mm512_loadu_ps(K + (size_t)d * Lp + j0);
-                                for (int n = 0; n < ATT_NV; n++)
-                                    acc[n] = _mm512_fmadd_ps(_mm512_set1_ps(qf[(size_t)n * DH + d]), kv, acc[n]);
-                            }
-                            const __m512 sc = _mm512_set1_ps(scale);
-                            for (int n = 0; n < ATT_NV; n++)
-                                _mm512_storeu_ps(p + (size_t)n * Lp + j0, _mm512_mul_ps(acc[n], sc));
-                        }
+                        att_scores(p, Lp, reinterpret_cast<const uint32_t*>(kt) + (size_t)hk * (DH / 2) * Lp, Lp, Lp, qb.data(), DH, scale);
 
                         // softmax over each vector's visible keys; invisible keys get weight 0
                         for (int n = 0; n < ATT_NV; n++) {
@@ -563,30 +623,17 @@ namespace d3_cpu {
                                 std::fill(pn, pn + Lp, 0.0f);
                                 continue;
                             }
-                            float m = -INFINITY;
-                            for (int j = 0; j <= j1; j++) m = std::max(m, pn[j]);
-                            float sum = 0.0f;
-                            for (int j = 0; j <= j1; j++) {
-                                const float e = expf(pn[j] - m);
-                                pn[j] = e;
-                                sum += e;
-                            }
-                            const float inv = 1.0f / sum;
-                            for (int j = 0; j <= j1; j++) pn[j] *= inv;
+                            att_softmax_row(pn, j1 + 1);
                             std::fill(pn + j1 + 1, pn + Lp, 0.0f);
                         }
 
-                        // out = p . V, 16 output dims at a time for all ATT_NV vectors
+                        // out = p . V (p rounded to bf16), 16 output dims at a time for all ATT_NV vectors
                         const int jmax = *std::max_element(lim.begin(), lim.end());
+                        for (int n = 0; n < ATT_NV; n++) att_round_row(p + (size_t)n * Lp, jmax + 1);
                         for (int d0 = 0; d0 < DH; d0 += 16) {
                             __m512 acc[ATT_NV];
-                            for (int n = 0; n < ATT_NV; n++) acc[n] = _mm512_setzero_ps();
-                            for (int j = 0; j <= jmax; j++) {
-                                const __m512 vv = bf16o_fp32_512(_mm256_loadu_si256(
-                                    (const __m256i*)(v + (size_t)j * v_stride + (size_t)hk * DH + d0)));
-                                for (int n = 0; n < ATT_NV; n++)
-                                    acc[n] = _mm512_fmadd_ps(_mm512_set1_ps(p[(size_t)n * Lp + j]), vv, acc[n]);
-                            }
+                            att_pv(acc, reinterpret_cast<const uint16_t*>(p), 2 * Lp, jmax + 1, d0,
+                                   [&](int j) { return v + (size_t)j * v_stride + (size_t)hk * DH; });
                             for (int n = 0; n < nv; n++)
                                 _mm256_storeu_si256((__m256i*)(out + (size_t)vrow[n] * q_stride + (size_t)vhead[n] * DH + d0),
                                                     cpu_func::f32_bf16_rne_512(acc[n]));
@@ -595,32 +642,30 @@ namespace d3_cpu {
         });
     }
 
-    /// \brief floats of K^T scratch transpose_keys() writes for L keys
+    /// \brief uint32s (= floats) of K^T scratch transpose_keys() writes for L keys
     inline size_t keys_t_floats(int L, int num_kv_heads, int DH) {
-        return (size_t)num_kv_heads * DH * (size_t)((L + 15) / 16 * 16);
+        return (size_t)num_kv_heads * (DH / 2) * (size_t)((L + 15) / 16 * 16);
     }
 
-    /// \brief K^T in fp32, [kv head][DH][Lp] with Lp = L rounded up to 16 and the padding keys zero:
-    ///        the layout attention() and attention_prefix() score against (16 keys per FMA)
+    /// \brief K^T as bf16 pairs, [kv head][DH / 2][Lp] dwords (d-pair dd of key j = k[j][2dd], k[j][2dd + 1] in the low and
+    ///        high halves) with Lp = L rounded up to 16 and the padding keys zero: the layout att_scores() reads
+    /// \param kt the buffer, as floats (keys_t_floats of them)
     /// \param k [L, k_stride] bf16, kv head hk at column hk * DH
-    inline void transpose_keys(float* kt, const bf16* k, int L, int k_stride, int num_kv_heads, int DH) {
+    inline void transpose_keys(float* kt_f, const bf16* k, int L, int k_stride, int num_kv_heads, int DH) {
+        uint32_t* kt = reinterpret_cast<uint32_t*>(kt_f);
         const int Lp = (L + 15) / 16 * 16;
         const int j_tiles = Lp / 16;
         d3_for((long long)num_kv_heads * j_tiles, [&](long long task) {
                 const int hk = (int)(task / j_tiles);
                 const int j0 = (int)(task % j_tiles) * 16;
-                float tile[16][16];
-                for (int d0 = 0; d0 < DH; d0 += 16) {
+                uint32_t tile[16][16];
+                for (int d0 = 0; d0 < DH; d0 += 32) {
                     for (int jj = 0; jj < 16; jj++) {
                         const int j = j0 + jj;
-                        if (j < L) {
-                            _mm512_storeu_ps(tile[jj], bf16o_fp32_512(_mm256_loadu_si256(
-                                (const __m256i*)(k + (size_t)j * k_stride + (size_t)hk * DH + d0))));
-                        } else {
-                            _mm512_storeu_ps(tile[jj], _mm512_setzero_ps());
-                        }
+                        if (j < L) memcpy(tile[jj], k + (size_t)j * k_stride + (size_t)hk * DH + d0, 64);
+                        else memset(tile[jj], 0, 64);
                     }
-                    float* dst = kt + ((size_t)hk * DH + d0) * Lp + j0;
+                    uint32_t* dst = kt + ((size_t)hk * (DH / 2) + d0 / 2) * Lp + j0;
                     for (int dd = 0; dd < 16; dd++)
                         for (int jj = 0; jj < 16; jj++) dst[(size_t)dd * Lp + jj] = tile[jj][dd];
                 }
@@ -650,8 +695,8 @@ namespace d3_cpu {
                                  int num_heads, int num_kv_heads, int DH,
                                  int k_stride, int v_stride, int state_v_stride, float scale,
                                  std::vector<float>& scratch) {
-        if (num_kv_heads <= 0 || num_heads <= 0 || num_heads % num_kv_heads != 0 || DH <= 0 || DH % 16 != 0)
-            throw std::invalid_argument("d3_cpu::attention_prefix: num_heads must be a multiple of num_kv_heads and head_dim of 16");
+        if (num_kv_heads <= 0 || num_heads <= 0 || num_heads % num_kv_heads != 0 || DH <= 0 || DH % 32 != 0)
+            throw std::invalid_argument("d3_cpu::attention_prefix: num_heads must be a multiple of num_kv_heads and head_dim of 32");
         if (L_q <= 0) return;
         if (S < 0 || (S > 0 && (!state_kt || !state_v))) throw std::invalid_argument("d3_cpu::attention_prefix: bad state range");
         const int groups   = num_heads / num_kv_heads;
@@ -675,7 +720,7 @@ namespace d3_cpu {
                     const int rt = (int)(task % row_tasks);
                     AttScratch& sc_ = scratch_of[tid];
                     sc_.init(ATT_NV, DH);
-                    std::vector<float>& qf = sc_.qf;
+                    std::vector<uint32_t>& qb = sc_.qb;
                     std::vector<int>& vrow = sc_.vrow;
                     std::vector<int>& vhead = sc_.vhead;
                     float* const p = kt + kt_size + (size_t)tid * ATT_NV * T;
@@ -689,63 +734,29 @@ namespace d3_cpu {
                     for (int n = 0; n < ATT_NV; n++) {
                         const int src = n < nv ? n : 0;
                         const bf16* qh = q + (size_t)vrow[src] * q_stride + (size_t)vhead[src] * DH;
-                        for (int d = 0; d < DH; d += 16)
-                            _mm512_storeu_ps(qf.data() + (size_t)n * DH + d, bf16o_fp32_512(_mm256_loadu_si256((const __m256i*)(qh + d))));
+                        memcpy(qb.data() + (size_t)n * (DH / 2), qh, (size_t)DH * sizeof(bf16));
                     }
 
                     // scores = (q . k) * scale: the state tiles, then the own tiles
-                    const __m512 scv = _mm512_set1_ps(scale);
-                    for (int range = 0; range < 2; range++) {
-                        const int    len = range == 0 ? S : L_q;
-                        const int    ldp = range == 0 ? Sp : Lp;
-                        const float* K = (range == 0 ? state_kt : kt) + (size_t)hk * DH * ldp;
-                        float*       P = p + (range == 0 ? 0 : S);   // own scores directly after the S state scores
-                        for (int j0 = 0; j0 < len; j0 += 16) {
-                            __m512 acc[ATT_NV];
-                            for (int n = 0; n < ATT_NV; n++) acc[n] = _mm512_setzero_ps();
-                            for (int d = 0; d < DH; d++) {
-                                const __m512 kv = _mm512_loadu_ps(K + (size_t)d * ldp + j0);
-                                for (int n = 0; n < ATT_NV; n++)
-                                    acc[n] = _mm512_fmadd_ps(_mm512_set1_ps(qf[(size_t)n * DH + d]), kv, acc[n]);
-                            }
-                            for (int n = 0; n < ATT_NV; n++)
-                                _mm512_storeu_ps(P + (size_t)n * T + j0, _mm512_mul_ps(acc[n], scv));
-                        }
-                    }
+                    if (S > 0) att_scores(p, T, reinterpret_cast<const uint32_t*>(state_kt) + (size_t)hk * (DH / 2) * Sp, Sp, S, qb.data(), DH, scale);
+                    att_scores(p + S, T, reinterpret_cast<const uint32_t*>(kt) + (size_t)hk * (DH / 2) * Lp, Lp, L_q, qb.data(), DH, scale);
 
                     // softmax over the joint key list [state..., own...]: the SAME loops as attention() over a
                     // contiguous score row (-ffast-math may vectorize the sum; the same source in the same
                     // function body keeps its order identical)
                     for (int n = 0; n < ATT_NV; n++) {
                         float* pn = p + (size_t)n * T;
-                        float m = -INFINITY;
-                        for (int j = 0; j < J; j++) m = std::max(m, pn[j]);
-                        float sum = 0.0f;
-                        for (int j = 0; j < J; j++) {
-                            const float e = expf(pn[j] - m);
-                            pn[j] = e;
-                            sum += e;
-                        }
-                        const float inv = 1.0f / sum;
-                        for (int j = 0; j < J; j++) pn[j] *= inv;
+                        att_softmax_row(pn, J);
                     }
 
-                    // out = p . V, 16 output dims at a time for all ATT_NV vectors
+                    // out = p . V over the joint key list (p rounded to bf16), 16 output dims at a time for all ATT_NV vectors
+                    for (int n = 0; n < ATT_NV; n++) att_round_row(p + (size_t)n * T, J);
                     for (int d0 = 0; d0 < DH; d0 += 16) {
                         __m512 acc[ATT_NV];
-                        for (int n = 0; n < ATT_NV; n++) acc[n] = _mm512_setzero_ps();
-                        for (int j = 0; j < S; j++) {
-                            const __m512 vv = bf16o_fp32_512(_mm256_loadu_si256(
-                                (const __m256i*)(state_v + (size_t)j * state_v_stride + (size_t)hk * DH + d0)));
-                            for (int n = 0; n < ATT_NV; n++)
-                                acc[n] = _mm512_fmadd_ps(_mm512_set1_ps(p[(size_t)n * T + j]), vv, acc[n]);
-                        }
-                        for (int j = 0; j < L_q; j++) {
-                            const __m512 vv = bf16o_fp32_512(_mm256_loadu_si256(
-                                (const __m256i*)(own_v + (size_t)j * v_stride + (size_t)hk * DH + d0)));
-                            for (int n = 0; n < ATT_NV; n++)
-                                acc[n] = _mm512_fmadd_ps(_mm512_set1_ps(p[(size_t)n * T + S + j]), vv, acc[n]);
-                        }
+                        att_pv(acc, reinterpret_cast<const uint16_t*>(p), 2 * T, J, d0, [&](int j) {
+                            return j < S ? state_v + (size_t)j * state_v_stride + (size_t)hk * DH
+                                         : own_v + (size_t)(j - S) * v_stride + (size_t)hk * DH;
+                        });
                         for (int n = 0; n < nv; n++)
                             _mm256_storeu_si256((__m256i*)(out + (size_t)vrow[n] * q_stride + (size_t)vhead[n] * DH + d0),
                                                 cpu_func::f32_bf16_rne_512(acc[n]));

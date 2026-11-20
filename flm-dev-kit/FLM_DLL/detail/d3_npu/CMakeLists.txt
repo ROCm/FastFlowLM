@@ -109,7 +109,7 @@ target_compile_definitions(d3_npu PUBLIC
 # Enhanced compiler options for AVX-512
 target_compile_options(d3_npu PUBLIC
     $<$<BOOL:${MSVC}>:/arch:AVX512 /O2 /fp:fast>
-    $<$<NOT:$<BOOL:${MSVC}>>:-mavx512f -mavx512vl -mavx512bw -mavx512dq -mfma -O3>
+    $<$<NOT:$<BOOL:${MSVC}>>:-mavx512f -mavx512vl -mavx512bw -mavx512dq -mavx512bf16 -mfma -O3>
 )
 
 # Add OpenMP compiler flags if available
