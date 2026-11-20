@@ -80,6 +80,17 @@ outputs:
       builds the portable packages they start from even when run is "false"
       (suites is then "none", so no product test runs).
     value: ${{ steps.changes.outputs.devkit_overlay }}
+  devkit-bench:
+    description: >
+      "true" when the dev-kit perf and accuracy benches (devkit-bench.yml)
+      run: dev-kit engine or kernel source changed (code or build inputs
+      under flm-dev-kit/FLM_DLL/ or flm-dev-kit/FLM_Xclbin/) and the
+      dev-kit overlay builds something to bench (devkit-overlay), or the
+      changed files are unknown. Documentation, CI-only changes (the bench
+      CI included), the kernel build image and toolchain.lock, and the
+      converter, pybind and launchlib give "false". Build and Test's
+      summary job puts it in the devkit-bench-plan artifact.
+    value: ${{ steps.changes.outputs.devkit_bench }}
   tier:
     description: install, pr or full.
     value: ${{ steps.tier.outputs.tier }}

@@ -133,7 +133,7 @@ class Cli(unittest.TestCase):
         self.assertEqual([l.split("=")[0] for l in lines],
                          ["run_tests", "families", "asr_full", "suites", "hipep",
                           "new_models", "hipep_models", "devkit", "devkit_areas", "devkit_families",
-                          "devkit_overlay", "summary"])
+                          "devkit_overlay", "devkit_bench", "summary"])
 
     def test_suites_scoped_to_the_change(self):
         cases = {
@@ -591,6 +591,125 @@ class DevKit(unittest.TestCase):
     def test_no_changed_files_select_no_area(self):
         d = changes.decide([])
         self.assertEqual(d.outputs()["devkit"], "false")
+
+
+class DevKitBench(unittest.TestCase):
+    """devkit_bench: the perf and accuracy benches run only for dev-kit engine
+    or kernel source (code or build inputs under FLM_DLL or FLM_Xclbin), and
+    only when Build and Test builds something for them (devkit_overlay)."""
+
+    def bench(self, *paths: str) -> str:
+        out = cli("--files", *paths)
+        # Invariant: a bench always has the overlay's artifacts to bench.
+        if out["devkit_bench"] == "true":
+            self.assertEqual(out["devkit_overlay"], "true", paths)
+        return out["devkit_bench"]
+
+    def test_ci_only_changes_do_not_bench(self):
+        for path in (".github/workflows/devkit-bench.yml", ".github/workflows/devkit-bench-comment.yml",
+                     ".github/actions/devkit-bench-perf/action.yml",
+                     ".github/actions/devkit-bench-acc/action.yml",
+                     ".github/actions/devkit-overlay-package/action.yml",
+                     ".github/script/devkit-bench/compare.py", ".github/script/ci/changes.py",
+                     ".github/workflows/build-and-test.yml", ".github/workflows/devkit-aie-image.yml",
+                     ".github/script/npu_test/harness.py"):
+            with self.subTest(path=path):
+                self.assertEqual(self.bench(path), "false")
+
+    def test_bench_ci_selects_nothing(self):
+        # Build and Test runs none of the bench CI, so it builds and tests
+        # nothing for it; dispatching devkit-bench.yml exercises it.
+        for path in (".github/script/devkit-bench/acc_common.py", ".github/workflows/devkit-bench.yml",
+                     ".github/workflows/devkit-bench-comment.yml",
+                     ".github/actions/devkit-bench-perf/action.yml",
+                     ".github/actions/devkit-bench-acc/action.yml",
+                     ".github/script/ci/test_devkit_bench.py"):
+            with self.subTest(path=path):
+                out = cli("--files", path)
+                self.assertEqual((out["devkit"], out["devkit_areas"], out["devkit_bench"], out["run_tests"]),
+                                 ("false", "", "false", "false"))
+                self.assertIn("bench CI only", out["summary"])
+
+    def test_bench_ci_beside_other_changes(self):
+        out = cli("--files", ".github/workflows/devkit-bench.yml", "flm-dev-kit/FLM_DLL/detail/qwen3_npu/qwen3_npu.cpp")
+        self.assertEqual((out["devkit_areas"], out["devkit_bench"], out["run_tests"]), ("dll", "true", "false"))
+        # The overlay action the bench reuses is dev-kit CI, still.
+        out = cli("--files", ".github/actions/devkit-overlay-package/action.yml")
+        self.assertEqual(out["devkit"], "true")
+
+    def test_docs_only_do_not_bench(self):
+        self.assertEqual(self.bench("flm-dev-kit/FLM_DLL/README.md", "flm-dev-kit/FLM_Xclbin/kernel_assignment.md",
+                                    "flm-dev-kit/README.md", "docs/index.md",
+                                    "flm-dev-kit/FLM_Xclbin/Whisper/Figures/Architecture.png",
+                                    "flm-dev-kit/FLM_Xclbin/Whisper/Figures/LICENSE.openai-whisper",
+                                    "flm-dev-kit/FLM_DLL/.gitignore"), "false")
+
+    def test_engine_source_benches(self):
+        for path in ("flm-dev-kit/FLM_DLL/detail/qwen3_npu/qwen3_npu.cpp",
+                     "flm-dev-kit/FLM_DLL/detail/qwen3_npu/qwen3_npu_detail.hpp",
+                     "flm-dev-kit/FLM_DLL/detail/qwen3_npu/Makefile",
+                     "flm-dev-kit/FLM_DLL/detail/qwen3_npu/CMakeLists.txt",
+                     "flm-dev-kit/FLM_DLL/include/models/qwen3/qwen3_npu.hpp",
+                     "flm-dev-kit/FLM_DLL/include/causal_lm.hpp",
+                     "flm-dev-kit/FLM_DLL/detail/gemm/gemm.cpp",
+                     "flm-dev-kit/FLM_DLL/build.sh", "flm-dev-kit/FLM_DLL/build_manylinux.sh",
+                     "flm-dev-kit/FLM_DLL/engines.json"):
+            with self.subTest(path=path):
+                self.assertEqual(self.bench(path), "true")
+
+    def test_engine_serving_no_family_does_not_bench(self):
+        # qwen3_5_omni serves no catalog family: no overlay, nothing to bench.
+        self.assertEqual(self.bench("flm-dev-kit/FLM_DLL/detail/qwen3_5_omni/qwen3_5_omni_npu.cpp"), "false")
+
+    def test_kernel_source_benches(self):
+        for path in ("flm-dev-kit/FLM_Xclbin/Gemma4/decoding/kernel/k.cc",
+                     "flm-dev-kit/FLM_Xclbin/Gemma4/decoding/kernel/k.h",
+                     "flm-dev-kit/FLM_Xclbin/MM/iron/mm_aie.py",
+                     "flm-dev-kit/FLM_Xclbin/MM/Makefile",
+                     "flm-dev-kit/FLM_Xclbin/MM/makefiles/common.mk",
+                     "flm-dev-kit/FLM_Xclbin/build_units.json",
+                     "flm-dev-kit/FLM_Xclbin/kernel_assignment.json",
+                     "flm-dev-kit/FLM_Xclbin/rtp_addresses.lock.txt",
+                     # Selects the xclbin area: the kernels rebuild in the pinned image.
+                     "flm-dev-kit/FLM_Xclbin/toolchain.image"):
+            with self.subTest(path=path):
+                self.assertEqual(self.bench(path), "true")
+
+    def test_kernel_build_image_does_not_bench(self):
+        # devkit-aie-image.yml tests these; Build and Test builds nothing for
+        # them, so there is nothing to bench.
+        for path in ("flm-dev-kit/FLM_Xclbin/toolchain.lock", "docker/aie-build.Dockerfile",
+                     "docker/aie-build-check.sh", "docker/aie-build.pdi.sha256"):
+            with self.subTest(path=path):
+                out = cli("--files", path)
+                self.assertEqual(out["devkit_bench"], "false")
+                self.assertNotIn("benches run", out["summary"])
+        self.assertEqual(self.bench("Dockerfile"), "false")
+
+    def test_other_areas_and_non_build_files_do_not_bench(self):
+        for path in ("flm-dev-kit/FLM_Q4NX_Converter/q4nx/model_converter.py",
+                     "flm-dev-kit/FLM_Pybind/SmolVLA/Makefile",
+                     "flm-dev-kit/aie2p-launchlib/launchlib/tools/txn_dump.py",
+                     "flm-dev-kit/FLM_DLL/build_qwen3vl.sh",
+                     "flm-dev-kit/FLM_DLL/model_list.json", "flm-dev-kit/FLM_DLL/model_list_linux.json",
+                     "flm-dev-kit/env.sh",
+                     "src/lib/xrt/libaiebu.a", "src/lib/xrt/libqwen3_npu.so", "hrx-integration/hrx-release.env",
+                     "src/server/server.cpp", "src/model_list.json"):
+            with self.subTest(path=path):
+                self.assertEqual(self.bench(path), "false")
+
+    def test_mixed_benches_when_any_file_is_source(self):
+        self.assertEqual(self.bench(".github/workflows/devkit-bench.yml", "docs/a.md",
+                                    "flm-dev-kit/FLM_Xclbin/MM/iron/mm_aie.py"), "true")
+
+    def test_unknown_and_empty(self):
+        self.assertEqual(cli("--base", "0" * 40, "--head", "HEAD")["devkit_bench"], "true")
+        # No changed files tests more on the product side ("when in doubt it
+        # tests more"), but the user's rule (bench only when engine or kernel
+        # source changed) deliberately overrides that for the benches.
+        d = changes.decide([])
+        self.assertEqual(d.outputs()["devkit_bench"], "false")
+        self.assertTrue(any("no dev-kit benches" in r for r in d.reasons))
 
 
 def devkit_families(out: dict[str, str]) -> set[str]:

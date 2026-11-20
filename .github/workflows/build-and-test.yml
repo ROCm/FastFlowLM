@@ -142,6 +142,9 @@ jobs:
       devkit-areas: ${{ steps.detect.outputs.devkit-areas }}
       devkit-families: ${{ steps.detect.outputs.devkit-families }}
       devkit-overlay: ${{ steps.detect.outputs.devkit-overlay }}
+      # Whether devkit-bench.yml benches this commit: summary puts it in the
+      # devkit-bench-plan artifact (another run cannot read job outputs).
+      devkit-bench: ${{ steps.detect.outputs.devkit-bench }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1585,3 +1588,57 @@ jobs:
             esac
           done
           exit "${rc}"
+
+      # What devkit-bench.yml benches for this run (it cannot read this
+      # run's job outputs, only its artifacts): on a pull request whose
+      # dev-kit engine or kernel source changed (changes devkit-bench), and
+      # nightly. The packages, dev-kit libraries and kernels that built, the
+      # touched families and the models whose kernels were rebuilt. The bench
+      # workflow validates every field: a pull request's run writes it.
+      - name: Write the dev-kit bench plan
+        id: bench-plan
+        if: >-
+          ${{ !cancelled() && !inputs.release
+          && (github.event_name == 'schedule'
+              || (github.event_name == 'pull_request' && needs.changes.outputs.devkit-bench == 'true')) }}
+        env:
+          BENCH: ${{ github.event_name == 'schedule' && 'true' || needs.changes.outputs.devkit-bench }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          FAMILIES: ${{ github.event_name == 'pull_request' && needs.changes.outputs.devkit-families || '' }}
+          XCLBIN_MODELS: ${{ needs.devkit-xclbins.outputs.touched-models || '[]' }}
+          BENCH_MODELS: ${{ github.event_name == 'pull_request' && needs.devkit-xclbins.outputs.bench-models || '' }}
+          XCLBINS: ${{ needs.devkit-xclbins.result == 'success' && needs.devkit-xclbins.outputs.touched-models != '' && needs.devkit-xclbins.outputs.touched-models != '[]' && 'devkit-xclbins' || '' }}
+          ENGINES: ${{ needs.devkit-engines.result }}
+          LIN_XRT: ${{ needs.build-lin-xrt-portable.result }}
+          LIN_HRX: ${{ needs.build-lin-hrx-portable.result }}
+          WIN_XRT: ${{ needs.build-win-xrt.result }}
+          WIN_HRX: ${{ needs.build-win-hrx.result }}
+        run: |
+          python3 - <<'EOF'
+          import json, os
+          e = os.environ
+          sha = e["GITHUB_SHA"]
+          libs_ok = e["ENGINES"] == "success"
+          def build(result, package, libs):
+              # The engines built (all four, or none) or were not asked for.
+              ok = result == "success" and e["ENGINES"] in ("success", "skipped")
+              return {"ok": ok, "package": package, "libs": libs if libs_ok else ""}
+          plan = {"schema": 1, "bench": e["BENCH"] == "true", "head_sha": e["HEAD_SHA"],
+                  "families": e["FAMILIES"], "xclbin_models": e["XCLBIN_MODELS"],
+                  "bench_models": e["BENCH_MODELS"], "xclbins": e["XCLBINS"],
+                  "builds": {"lin-xrt": build(e["LIN_XRT"], "portable", "devkit-libs-lin-xrt"),
+                             "lin-hrx": build(e["LIN_HRX"], "HRX-portable", "devkit-libs-lin-hrx"),
+                             "win-xrt": build(e["WIN_XRT"], f"fastflowlm-windows-{sha}", "devkit-libs-win-xrt"),
+                             "win-hrx": build(e["WIN_HRX"], f"HRX-fastflowlm-windows-{sha}", "devkit-libs-win-hrx")}}
+          with open("devkit-bench-plan.json", "w", encoding="utf-8") as f:
+              json.dump(plan, f, indent=1)
+          print(json.dumps(plan, indent=1))
+          EOF
+
+      - name: Upload the dev-kit bench plan
+        if: ${{ !cancelled() && steps.bench-plan.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: devkit-bench-plan
+          path: devkit-bench-plan.json
+          retention-days: 7

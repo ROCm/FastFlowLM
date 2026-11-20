@@ -44,7 +44,8 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              up), hrx-integration/ (the HRX engine builds fetch the pinned
              package with it), or the CI that runs the dev-kit jobs
              (including .github/workflows/devkit-*.yml and
-             .github/actions/devkit-*, except devkit-aie-image.yml);
+             .github/actions/devkit-*, except devkit-aie-image.yml and the
+             bench CI, BENCH_CI);
              documentation under
              flm-dev-kit/ counts as nothing, as for the product. Nothing in
              the product consumes flm-dev-kit/ yet, so those paths select no
@@ -90,6 +91,22 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              XRT and HRX, Windows XRT and HRX) are then built even when
              run_tests is false, which then gives suites "none", so no
              product test job runs
+  devkit_bench
+             true when the dev-kit perf and accuracy benches
+             (devkit-bench.yml) run: a changed file is dev-kit engine or
+             kernel source, that is a code or build-input file under
+             flm-dev-kit/FLM_DLL/ or flm-dev-kit/FLM_Xclbin/ (sources,
+             Makefiles, CMakeLists, iron/ Python, build_units.json,
+             kernel_assignment.json, engines.json, the RTP lock and
+             toolchain.image), and Build and Test builds something for it to
+             bench (devkit_overlay). Documentation, images and licence files,
+             the per-model helper scripts and model registries under FLM_DLL
+             (DEVKIT_DLL_NO_BUILD), the kernel build image and its
+             toolchain.lock (DEVKIT_ONLY: devkit-aie-image.yml tests those),
+             the converter, pybind and launchlib, the product, and CI-only
+             changes (.github/, the dev-kit and bench CI included) give
+             false. Unknown changed files give true, as everything else here
+             does; no changed files give false (nothing changed to bench)
   summary    one line for the job log
 
 When in doubt it tests more: an all-zero or missing base (a new branch), or a
@@ -209,8 +226,18 @@ DEVKIT_ONLY = (
 # dev-kit area, so it is exercised before it merges. DEVKIT_ONLY's workflow
 # is not part of it.
 DEVKIT_CI = re.compile(
-    r"^\.github/(workflows/(build-and-test|release|devkit-[^/]+)\.yml$"
-    r"|actions/(detect-changes|devkit[^/]*)/|script/ci/)")
+    r"^\.github/(workflows/(build-and-test|release|devkit-(?!bench)[^/]+)\.yml$"
+    r"|actions/(detect-changes|devkit(?!-bench)[^/]*)/|script/ci/)")
+
+# The dev-kit bench CI (devkit-bench.yml, devkit-bench-comment.yml, their
+# actions, scripts and the scripts' tests). Build and Test runs none of it,
+# so a change to it selects nothing there: no product suite, no dev-kit area
+# and no bench (the benches run only for engine or kernel source). Its unit
+# tests still run in the changes job; the rest is exercised by dispatching
+# devkit-bench.yml on the branch.
+BENCH_CI = re.compile(
+    r"^\.github/(workflows/devkit-bench(-comment)?\.yml$|actions/devkit-bench[^/]*/"
+    r"|script/devkit-bench/|script/ci/test_devkit_bench[^/]*\.py$)")
 
 
 # The dev-kit engines (flm-dev-kit/FLM_DLL/detail/<engine>) and what they
@@ -225,6 +252,25 @@ DEVKIT_ENGINES = "flm-dev-kit/FLM_DLL/engines.json"
 DEVKIT_DLL_NO_BUILD = re.compile(
     r"^flm-dev-kit/FLM_DLL/(build_(?!manylinux\.sh$)[A-Za-z0-9_]+\.sh|model_list[^/]*\.json"
     r"|(.*/)?\.gitattributes)$")
+
+# What the dev-kit perf and accuracy benches (devkit-bench.yml) measure: the
+# dev-kit engine and kernel sources and what builds them. Under these
+# prefixes every file counts but documentation (NON_CODE), the FLM_DLL files
+# that build no engine (DEVKIT_DLL_NO_BUILD) and BENCH_NOT_SOURCE.
+DEVKIT_BENCH_SOURCE = re.compile(r"^flm-dev-kit/(FLM_DLL|FLM_Xclbin)/")
+# Figures, rendered pages and licence copies beside the sources: no build
+# reads them.
+BENCH_NOT_SOURCE = re.compile(r"\.(png|jpe?g|gif|svg|pdf|html?)$|(^|/)LICENSE[^/]*$", re.IGNORECASE)
+
+
+def is_bench_source(path: str) -> bool:
+    """Whether a changed file is dev-kit engine or kernel source (devkit_bench,
+    which also needs Build and Test to build something to bench). The kernel
+    build image's files (DEVKIT_ONLY, toolchain.lock included) are not:
+    devkit-aie-image.yml tests them, and Build and Test builds nothing for
+    them."""
+    return bool(DEVKIT_BENCH_SOURCE.match(path)) and devkit_only_areas(path) is None and not (
+        is_non_code(path) or DEVKIT_DLL_NO_BUILD.match(path) or BENCH_NOT_SOURCE.search(path))
 
 
 @dataclass
@@ -544,6 +590,13 @@ class Decision:
     devkit_families: set = field(default_factory=set)
     # Changed kernel build image files (DEVKIT_ONLY).
     image_only: list = field(default_factory=list)
+    # The first changed dev-kit engine or kernel source (is_bench_source), or
+    # a reason for benching when the changed files are unknown; None: no
+    # source changed. The benches run only when Build and Test also builds
+    # something to bench (bench()).
+    bench_source: Optional[str] = None
+    # Changed bench CI files (BENCH_CI), which Build and Test leaves alone.
+    bench_ci: list = field(default_factory=list)
     reasons: list = field(default_factory=list)
 
     def all_suites(self, path: str, why: str = "") -> None:
@@ -587,12 +640,21 @@ class Decision:
         plan (devkit_xclbin_plan.py) here."""
         return bool(self.devkit_families and "dll" in self.devkit_areas) or "xclbin" in self.devkit_areas
 
+    def bench(self) -> bool:
+        """Whether the dev-kit benches (devkit-bench.yml) run: engine or kernel
+        source changed and Build and Test builds the dev-kit artifacts and
+        portable packages they bench (devkit_overlay). An engine serving no
+        catalog family (qwen3_5_omni) is source but builds nothing to bench."""
+        return self.bench_source is not None and self.devkit_overlay()
+
     def summary(self) -> str:
         devkit = f"; dev kit: {self.devkit_value().replace(',', ', ')}" if self.devkit_areas else ""
         if self.devkit_families:
             devkit += f" (engine families: {len(self.devkit_families)})"
         if self.devkit_overlay():
             devkit += "; dev-kit overlay tests run"
+        if self.bench():
+            devkit += "; dev-kit benches run"
         if not self.run_tests:
             if self.devkit_areas:
                 what = ("product NPU tests skipped, portable packages built for the overlay"
@@ -600,6 +662,8 @@ class Decision:
                 return f"flm-dev-kit only: {what}{devkit}"
             if self.image_only:
                 return "kernel build image only (devkit-aie-image.yml): NPU tests and dev-kit jobs skipped"
+            if self.bench_ci:
+                return "bench CI only (devkit-bench.yml): NPU tests and dev-kit jobs skipped"
             return "documentation only: NPU tests skipped"
         return self._product_summary() + devkit
 
@@ -639,6 +703,7 @@ class Decision:
                 "devkit_areas": self.devkit_value(),
                 "devkit_families": ",".join(sorted(self.devkit_families)),
                 "devkit_overlay": str(self.devkit_overlay()).lower(),
+                "devkit_bench": str(self.bench()).lower(),
                 "summary": self.summary()}
 
 
@@ -949,12 +1014,34 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
         d.asr_full = True
         d.devkit_areas = set(ALL_DEVKIT_AREAS)
         d.devkit_families = every_engine_family(devkit_engines)
+        d.bench_source = "changed files unknown"
         d.reasons.append("changed files unknown (new branch, shallow clone or force-push): "
-                         "running everything, ASR set in full, every dev-kit area and engine family")
+                         "running everything, ASR set in full, every dev-kit area and engine family, "
+                         "dev-kit benches")
         return d
     if not files:
-        d.reasons.append("no changed files: running the tests anyway")
+        # Tests more, as everywhere here, but no bench: the user's rule is to
+        # bench only when engine or kernel source changed.
+        d.reasons.append("no changed files: running the tests anyway; no dev-kit benches")
         return d
+
+    bench_ci = [f for f in files if BENCH_CI.match(f)]
+    if bench_ci:
+        d.bench_ci = bench_ci
+        files = [f for f in files if not BENCH_CI.match(f)]
+        d.reasons.append(f"{len(bench_ci)} bench CI file(s), e.g. {bench_ci[0]}: Build and Test runs "
+                         f"none of it (dispatch devkit-bench.yml on the branch to exercise it)")
+        if not files:
+            d.run_tests = False
+            d.suites = set()
+            d.reasons.append("bench CI only: product builds, NPU tests and dev-kit jobs skipped")
+            return d
+
+    bench = next((f for f in files if is_bench_source(f)), None)
+    if bench is not None:
+        d.bench_source = bench
+        d.reasons.append(f"{bench}: dev-kit engine or kernel source (benched when the dev-kit "
+                         f"overlay builds something for it)")
 
     # flm-dev-kit/ code selects dev-kit areas only; the product rules below
     # see the other files. Its documentation counts as nothing. The kernel
