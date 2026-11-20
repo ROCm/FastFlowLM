@@ -23,8 +23,9 @@ outputs:
     value: ${{ steps.changes.outputs.asr_full }}
   suites:
     description: >
-      "all", "none" when only oga-hipep code or GPU catalog entries changed, or
-      the comma-separated npu_test suites the change can affect.
+      "all", "none" when only oga-hipep code or GPU catalog entries changed or
+      run is "false", or the comma-separated npu_test suites the change can
+      affect.
     value: ${{ steps.tier.outputs.suites }}
   hrx-suites:
     description: >
@@ -54,8 +55,8 @@ outputs:
       flm-dev-kit/ changed, a src/lib/xrt file it links changed (libaiebu.a,
       aiebu_static.lib, any library on its engines' -L path), the CI that
       runs the dev-kit jobs changed, or the changed files are unknown.
-      flm-dev-kit/ paths never select product builds or suites: a change
-      only there gives run "false".
+      flm-dev-kit/ paths never select product suites: a change only there
+      gives run "false" (see devkit-overlay for the packages it may build).
     value: ${{ steps.changes.outputs.devkit }}
   devkit-areas:
     description: >
@@ -72,6 +73,13 @@ outputs:
       engines link, the dev-kit CI or an unknown set of files changed. Empty
       when no dev-kit engine is touched.
     value: ${{ steps.changes.outputs.devkit_families }}
+  devkit-overlay:
+    description: >
+      "true" when the dev-kit overlay tests run: the change touches a dev-kit
+      engine's families or selects the xclbin area. A pull request then
+      builds the portable packages they start from even when run is "false"
+      (suites is then "none", so no product test runs).
+    value: ${{ steps.changes.outputs.devkit_overlay }}
   tier:
     description: install, pr or full.
     value: ${{ steps.tier.outputs.tier }}

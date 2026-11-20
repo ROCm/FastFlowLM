@@ -133,7 +133,7 @@ class Cli(unittest.TestCase):
         self.assertEqual([l.split("=")[0] for l in lines],
                          ["run_tests", "families", "asr_full", "suites", "hipep",
                           "new_models", "hipep_models", "devkit", "devkit_areas", "devkit_families",
-                          "summary"])
+                          "devkit_overlay", "summary"])
 
     def test_suites_scoped_to_the_change(self):
         cases = {
@@ -551,6 +551,38 @@ class DevKit(unittest.TestCase):
         # Other dev-kit workflows are still the dev-kit CI: every area.
         out = cli("--files", ".github/workflows/devkit-xclbins.yml")
         self.assertEqual(out["devkit_areas"], "xclbin,dll,converter,pybind,launchlib")
+
+    def test_overlay(self):
+        # A dev-kit engine: the overlay runs, and no product suite (run_tests
+        # false: only the portable packages it starts from build).
+        out = cli("--files", "flm-dev-kit/FLM_DLL/detail/qwen3_npu/qwen3_npu.cpp")
+        self.assertEqual((out["run_tests"], out["suites"], out["hipep"], out["devkit_overlay"]),
+                         ("false", "none", "false", "true"))
+        self.assertIn("portable packages built for the overlay", out["summary"])
+        # A kernel: the kernel build names the models, so the overlay runs.
+        out = cli("--files", "flm-dev-kit/FLM_Xclbin/MM/iron/mm_aie.py")
+        self.assertEqual((out["run_tests"], out["suites"], out["devkit_families"], out["devkit_overlay"]),
+                         ("false", "none", "", "true"))
+        # Areas with no NPU test, and dll files that build no engine: none.
+        for path in ("flm-dev-kit/FLM_Q4NX_Converter/q4nx/model_converter.py",
+                     "flm-dev-kit/FLM_Pybind/SmolVLA/Makefile",
+                     "flm-dev-kit/aie2p-launchlib/launchlib/tools/txn_dump.py",
+                     "flm-dev-kit/FLM_DLL/build_qwen3vl.sh",
+                     "flm-dev-kit/FLM_DLL/model_list.json"):
+            with self.subTest(path=path):
+                out = cli("--files", path)
+                self.assertEqual((out["run_tests"], out["suites"], out["devkit_overlay"]),
+                                 ("false", "none", "false"))
+                self.assertIn("product builds and NPU tests skipped", out["summary"])
+        # Beside product code the product rules still decide the suites.
+        out = cli("--files", "flm-dev-kit/FLM_DLL/detail/qwen3_npu/qwen3_npu.cpp", "src/server/server.cpp")
+        self.assertEqual((out["run_tests"], out["suites"], out["devkit_overlay"]), ("true", "all", "true"))
+        # The dev-kit CI and unknown changes: every family, so the overlay too.
+        self.assertEqual(cli("--files", ".github/workflows/build-and-test.yml")["devkit_overlay"], "true")
+        self.assertEqual(cli("--base", "0" * 40, "--head", "HEAD")["devkit_overlay"], "true")
+        # Documentation and product-only changes: none.
+        self.assertEqual(cli("--files", "docs/a.md")["suites"], "none")
+        self.assertEqual(cli("--files", "src/server/server.cpp")["devkit_overlay"], "false")
 
     def test_unknown_files_select_every_area(self):
         out = cli("--base", "0" * 40, "--head", "HEAD")

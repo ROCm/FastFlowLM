@@ -41,10 +41,13 @@ name: Build and Test
 # weights or not, is required the same way in Test Windows HIPEP, beside its
 # models of each family, on the kinds of machine that test changed models
 # (the STX Halo). A change that only touches docs builds and tests nothing;
-# one only under flm-dev-kit/ (which no product package uses yet) builds and
-# tests no package and runs only the dev-kit checks (devkit-static), plus the
-# dev-kit engine builds (devkit-engines) when it selects the dll area and the
-# kernel builds (devkit-xclbins) when it selects the xclbin area.
+# one only under flm-dev-kit/ (which no product package uses yet) runs no
+# product suite and only the dev-kit checks (devkit-static), plus the dev-kit
+# engine builds (devkit-engines) when it selects the dll area and the kernel
+# builds (devkit-xclbins) when it selects the xclbin area. On a pull request
+# whose dev-kit engines or kernels serve some model, the Linux and Windows,
+# XRT and HRX portable packages build too, and the dev-kit overlay tests
+# (test-*-devkit) run those engines and kernels over them on the NPU runners.
 # The portable test jobs and Test Windows HIPEP otherwise get 120 minutes on
 # the pr tier and 360 on the full one, which runs every model and every d3
 # size and may first download tens of GB of weights.
@@ -132,11 +135,13 @@ jobs:
       hipep: ${{ steps.detect.outputs.hipep }}
       hipep-machines: ${{ steps.hipep.outputs.machines }}
       new-models: ${{ steps.detect.outputs.new-models }}
-      # For the dev-kit jobs. flm-dev-kit/ paths select no product build or
-      # suite; see .github/script/ci/changes.py.
+      # For the dev-kit jobs. flm-dev-kit/ paths select no product suite,
+      # only the portable builds the overlay tests start from
+      # (devkit-overlay); see .github/script/ci/changes.py.
       devkit: ${{ steps.detect.outputs.devkit }}
       devkit-areas: ${{ steps.detect.outputs.devkit-areas }}
       devkit-families: ${{ steps.detect.outputs.devkit-families }}
+      devkit-overlay: ${{ steps.detect.outputs.devkit-overlay }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -325,17 +330,24 @@ jobs:
   # a package is built and some NPU job would run (the conditions below are
   # those of the self-hosted jobs; a job added there must be added here, or it
   # will not run for such pull requests). Approval holds for one run: every
-  # new push asks again.
+  # new push asks again. Approvers must review the pull request's .github/
+  # changes: its workflow and actions decide what runs on the runners (the
+  # dev-kit overlay tests run the base's npu_test harness, but through the
+  # pull request's actions, so that is no boundary). A pull request that
+  # selects the xclbin area asks for approval before the kernel build has
+  # said whether any model's kernel was rebuilt; when none was, no overlay
+  # test runs and summary does not need the approval.
   npu-approve:
     needs: [changes, npu-gate]
     if: >-
       needs.npu-gate.outputs.trusted != 'true'
-      && needs.changes.outputs.run == 'true'
-      && (needs.changes.outputs.suites != 'none'
-          || needs.changes.outputs.hrx-suites != ''
-          || needs.changes.outputs.source == 'true'
-          || (needs.changes.outputs.hipep == 'true' && needs.changes.outputs.hipep-machines != '[]')
-          || vars.FLM_INSTALL_TESTS == 'true')
+      && ((needs.changes.outputs.run == 'true'
+           && (needs.changes.outputs.suites != 'none'
+               || needs.changes.outputs.hrx-suites != ''
+               || needs.changes.outputs.source == 'true'
+               || (needs.changes.outputs.hipep == 'true' && needs.changes.outputs.hipep-machines != '[]')
+               || vars.FLM_INSTALL_TESTS == 'true'))
+          || (github.event_name == 'pull_request' && needs.changes.outputs.devkit-overlay == 'true'))
     runs-on: ubuntu-latest
     environment: npu-approval
     steps:
@@ -351,7 +363,10 @@ jobs:
   build-lin-xrt-portable:
     name: Linux XRT portable
     needs: changes
-    if: needs.changes.outputs.run == 'true'
+    # Also the base of the dev-kit overlay tests (test-*-devkit).
+    if: >-
+      needs.changes.outputs.run == 'true'
+      || (github.event_name == 'pull_request' && needs.changes.outputs.devkit-overlay == 'true')
     permissions:
       contents: read
       packages: read  # the build-environment container on GHCR
@@ -362,7 +377,10 @@ jobs:
   build-lin-hrx-portable:
     name: Linux HRX portable
     needs: changes
-    if: needs.changes.outputs.run == 'true'
+    # Also the base of the dev-kit overlay tests (test-*-devkit).
+    if: >-
+      needs.changes.outputs.run == 'true'
+      || (github.event_name == 'pull_request' && needs.changes.outputs.devkit-overlay == 'true')
     permissions:
       contents: read
       packages: read  # the build-environment container on GHCR
@@ -410,16 +428,23 @@ jobs:
   build-win-xrt:
     name: Windows XRT
     needs: changes
-    if: needs.changes.outputs.run == 'true'
+    # Also the base of the dev-kit overlay tests (test-*-devkit).
+    if: >-
+      needs.changes.outputs.run == 'true'
+      || (github.event_name == 'pull_request' && needs.changes.outputs.devkit-overlay == 'true')
     uses: ./.github/workflows/win-build.yml
     with:
       variants: XRT
-      msi: true
+      # Not when built only for the dev-kit overlay: nothing installs it then.
+      msi: ${{ needs.changes.outputs.run == 'true' }}
 
   build-win-hrx:
     name: Windows HRX
     needs: changes
-    if: needs.changes.outputs.run == 'true'
+    # Also the base of the dev-kit overlay tests (test-*-devkit).
+    if: >-
+      needs.changes.outputs.run == 'true'
+      || (github.event_name == 'pull_request' && needs.changes.outputs.devkit-overlay == 'true')
     uses: ./.github/workflows/win-build.yml
     with:
       variants: HRX
@@ -1160,6 +1185,7 @@ jobs:
               && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
       && needs.changes.result == 'success'
       && needs.build-win-xrt.result == 'success'
+      && needs.changes.outputs.run == 'true'
       && (vars.FLM_INSTALL_TESTS == 'true') }}
     runs-on: [self-hosted, windows, x64, npu, sweep]
     timeout-minutes: 60
@@ -1189,6 +1215,195 @@ jobs:
           kind: msi
           mode: ${{ steps.package.outputs.mode }}
           path: package
+
+  # ── Dev-kit overlay tests ────────────────────────────────────────────────
+  # A pull request's dev-kit engines (devkit-engines) and kernels
+  # (devkit-xclbins) over this run's product portable package, on the NPU
+  # runners: .github/actions/devkit-npu-overlay replaces the libraries of the
+  # engines serving the touched families (all of them, shared units included,
+  # when every family is touched) and the rebuilt kernels, checks that the
+  # package's imports still resolve, and runs npu_test on the pr tier with
+  # the base commit's harness in a clean environment: every model of the
+  # touched families (one per family when every family is), the models whose
+  # kernels were rebuilt and the models the change adds. A dev-kit-only
+  # change builds the four portable packages for this and runs no product
+  # suite (changes.py devkit_overlay). summary's Dev-kit checks fails the
+  # pull request when one of these fails, or is skipped though requested.
+
+  test-lin-xrt-devkit:
+    name: Test Linux XRT dev-kit overlay
+    needs: [changes, build-lin-xrt-portable, npu-gate, npu-approve, devkit-engines, devkit-xclbins]
+    # Self-hosted: gated as test-lin-xrt-portable (see npu-gate), on pull
+    # requests only: pushes and the nightly build the dev kit but test no
+    # overlay. Runs when the change touches a dev-kit engine's families or a
+    # kernel build rebuilt some model's kernels, once both dev-kit builds
+    # that ran passed (a failed one fails summary's Dev-kit checks anyway).
+    if: >-
+      ${{ !cancelled()
+      && ((github.event_name == 'schedule'
+           || (github.event_name == 'push'
+               && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')))
+           || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+          || (needs.npu-gate.result == 'success'
+              && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
+      && needs.changes.result == 'success'
+      && github.event_name == 'pull_request'
+      && needs.changes.outputs.devkit-overlay == 'true'
+      && needs.build-lin-xrt-portable.result == 'success'
+      && (needs.devkit-engines.result == 'success' || needs.devkit-engines.result == 'skipped')
+      && (needs.devkit-xclbins.result == 'success' || needs.devkit-xclbins.result == 'skipped')
+      && (needs.changes.outputs.devkit-families != ''
+          || (needs.devkit-xclbins.outputs.touched-models != '' && needs.devkit-xclbins.outputs.touched-models != '[]')) }}
+    runs-on: [self-hosted, linux, x64, npu, sweep]
+    timeout-minutes: ${{ (needs.changes.outputs.new-models != '' || (needs.devkit-xclbins.outputs.touched-models != '' && needs.devkit-xclbins.outputs.touched-models != '[]')) && 600 || 120 }}
+    steps:
+      - &checkout-devkit
+        name: Checkout overlay scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # As checkout-tests: no token left in .git/config. The npu_test
+          # harness runs from the pull request's base (devkit-npu-overlay) so
+          # its own harness edits do not judge its binaries. Not a security
+          # boundary: the pull request's workflow and actions decide what
+          # runs, and npu-approve is the only gate.
+          persist-credentials: false
+          # Cone mode, directories only: the NPU runners reuse their work
+          # folder, whose git config keeps core.sparseCheckoutCone=true from
+          # the product test jobs' cone checkouts, and in cone mode a file
+          # pattern (flm-dev-kit/FLM_DLL/engines.json) matches nothing.
+          sparse-checkout-cone-mode: true
+          sparse-checkout: |
+            .github/actions
+            .github/script
+            flm-dev-kit/FLM_DLL
+          filter: blob:none
+      - name: Overlay and test
+        uses: ./.github/actions/devkit-npu-overlay
+        with:
+          runtime: xrt
+          os: linux
+          package: portable
+          libs: ${{ needs.devkit-engines.result == 'success' && 'devkit-libs-lin-xrt' || '' }}
+          xclbins: ${{ needs.devkit-xclbins.result == 'success' && needs.devkit-xclbins.outputs.touched-models != '' && needs.devkit-xclbins.outputs.touched-models != '[]' && 'devkit-xclbins' || '' }}
+          xclbin-models: ${{ needs.devkit-xclbins.outputs.touched-models || '[]' }}
+          families: ${{ needs.changes.outputs.devkit-families }}
+          required-models: ${{ needs.changes.outputs.new-models }}
+          harness-ref: ${{ github.event.pull_request.base.sha }}
+          label: linux-xrt-devkit
+
+  test-lin-hrx-devkit:
+    name: Test Linux HRX dev-kit overlay
+    needs: [changes, build-lin-hrx-portable, npu-gate, npu-approve, devkit-engines, devkit-xclbins]
+    # Self-hosted: gated as test-lin-xrt-devkit.
+    if: >-
+      ${{ !cancelled()
+      && ((github.event_name == 'schedule'
+           || (github.event_name == 'push'
+               && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')))
+           || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+          || (needs.npu-gate.result == 'success'
+              && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
+      && needs.changes.result == 'success'
+      && github.event_name == 'pull_request'
+      && needs.changes.outputs.devkit-overlay == 'true'
+      && needs.build-lin-hrx-portable.result == 'success'
+      && (needs.devkit-engines.result == 'success' || needs.devkit-engines.result == 'skipped')
+      && (needs.devkit-xclbins.result == 'success' || needs.devkit-xclbins.result == 'skipped')
+      && (needs.changes.outputs.devkit-families != ''
+          || (needs.devkit-xclbins.outputs.touched-models != '' && needs.devkit-xclbins.outputs.touched-models != '[]')) }}
+    runs-on: [self-hosted, linux, x64, npu, sweep]
+    timeout-minutes: ${{ (needs.changes.outputs.new-models != '' || (needs.devkit-xclbins.outputs.touched-models != '' && needs.devkit-xclbins.outputs.touched-models != '[]')) && 600 || 120 }}
+    steps:
+      - *checkout-devkit
+      - name: Overlay and test
+        uses: ./.github/actions/devkit-npu-overlay
+        with:
+          runtime: hrx
+          os: linux
+          package: HRX-portable
+          libs: ${{ needs.devkit-engines.result == 'success' && 'devkit-libs-lin-hrx' || '' }}
+          xclbins: ${{ needs.devkit-xclbins.result == 'success' && needs.devkit-xclbins.outputs.touched-models != '' && needs.devkit-xclbins.outputs.touched-models != '[]' && 'devkit-xclbins' || '' }}
+          xclbin-models: ${{ needs.devkit-xclbins.outputs.touched-models || '[]' }}
+          families: ${{ needs.changes.outputs.devkit-families }}
+          required-models: ${{ needs.changes.outputs.new-models }}
+          harness-ref: ${{ github.event.pull_request.base.sha }}
+          label: linux-hrx-devkit
+
+  test-win-xrt-devkit:
+    name: Test Windows XRT dev-kit overlay
+    needs: [changes, build-win-xrt, npu-gate, npu-approve, devkit-engines, devkit-xclbins]
+    # Self-hosted: gated as test-lin-xrt-devkit.
+    if: >-
+      ${{ !cancelled()
+      && ((github.event_name == 'schedule'
+           || (github.event_name == 'push'
+               && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')))
+           || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+          || (needs.npu-gate.result == 'success'
+              && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
+      && needs.changes.result == 'success'
+      && github.event_name == 'pull_request'
+      && needs.changes.outputs.devkit-overlay == 'true'
+      && needs.build-win-xrt.result == 'success'
+      && (needs.devkit-engines.result == 'success' || needs.devkit-engines.result == 'skipped')
+      && (needs.devkit-xclbins.result == 'success' || needs.devkit-xclbins.result == 'skipped')
+      && (needs.changes.outputs.devkit-families != ''
+          || (needs.devkit-xclbins.outputs.touched-models != '' && needs.devkit-xclbins.outputs.touched-models != '[]')) }}
+    runs-on: [self-hosted, windows, x64, npu, sweep]
+    timeout-minutes: ${{ (needs.changes.outputs.new-models != '' || (needs.devkit-xclbins.outputs.touched-models != '' && needs.devkit-xclbins.outputs.touched-models != '[]')) && 600 || 120 }}
+    steps:
+      - *checkout-devkit
+      - name: Overlay and test
+        uses: ./.github/actions/devkit-npu-overlay
+        with:
+          runtime: xrt
+          os: windows
+          package: fastflowlm-windows-${{ github.sha }}
+          libs: ${{ needs.devkit-engines.result == 'success' && 'devkit-libs-win-xrt' || '' }}
+          xclbins: ${{ needs.devkit-xclbins.result == 'success' && needs.devkit-xclbins.outputs.touched-models != '' && needs.devkit-xclbins.outputs.touched-models != '[]' && 'devkit-xclbins' || '' }}
+          xclbin-models: ${{ needs.devkit-xclbins.outputs.touched-models || '[]' }}
+          families: ${{ needs.changes.outputs.devkit-families }}
+          required-models: ${{ needs.changes.outputs.new-models }}
+          harness-ref: ${{ github.event.pull_request.base.sha }}
+          label: windows-xrt-devkit
+
+  test-win-hrx-devkit:
+    name: Test Windows HRX dev-kit overlay
+    needs: [changes, build-win-hrx, npu-gate, npu-approve, devkit-engines, devkit-xclbins]
+    # Self-hosted: gated as test-lin-xrt-devkit.
+    if: >-
+      ${{ !cancelled()
+      && ((github.event_name == 'schedule'
+           || (github.event_name == 'push'
+               && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')))
+           || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+          || (needs.npu-gate.result == 'success'
+              && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
+      && needs.changes.result == 'success'
+      && github.event_name == 'pull_request'
+      && needs.changes.outputs.devkit-overlay == 'true'
+      && needs.build-win-hrx.result == 'success'
+      && (needs.devkit-engines.result == 'success' || needs.devkit-engines.result == 'skipped')
+      && (needs.devkit-xclbins.result == 'success' || needs.devkit-xclbins.result == 'skipped')
+      && (needs.changes.outputs.devkit-families != ''
+          || (needs.devkit-xclbins.outputs.touched-models != '' && needs.devkit-xclbins.outputs.touched-models != '[]')) }}
+    runs-on: [self-hosted, windows, x64, npu, sweep]
+    timeout-minutes: ${{ (needs.changes.outputs.new-models != '' || (needs.devkit-xclbins.outputs.touched-models != '' && needs.devkit-xclbins.outputs.touched-models != '[]')) && 600 || 120 }}
+    steps:
+      - *checkout-devkit
+      - name: Overlay and test
+        uses: ./.github/actions/devkit-npu-overlay
+        with:
+          runtime: hrx
+          os: windows
+          package: HRX-fastflowlm-windows-${{ github.sha }}
+          libs: ${{ needs.devkit-engines.result == 'success' && 'devkit-libs-win-hrx' || '' }}
+          xclbins: ${{ needs.devkit-xclbins.result == 'success' && needs.devkit-xclbins.outputs.touched-models != '' && needs.devkit-xclbins.outputs.touched-models != '[]' && 'devkit-xclbins' || '' }}
+          xclbin-models: ${{ needs.devkit-xclbins.outputs.touched-models || '[]' }}
+          families: ${{ needs.changes.outputs.devkit-families }}
+          required-models: ${{ needs.changes.outputs.new-models }}
+          harness-ref: ${{ github.event.pull_request.base.sha }}
+          label: windows-hrx-devkit
 
   # ── Summary ──────────────────────────────────────────────────────────────
 
@@ -1227,6 +1442,10 @@ jobs:
       - test-win-extension-xrt
       - test-win-extension-hrx
       - install-win-msi
+      - test-lin-xrt-devkit
+      - test-lin-hrx-devkit
+      - test-win-xrt-devkit
+      - test-win-hrx-devkit
     if: always()
     runs-on: ubuntu-latest
     outputs:
@@ -1291,21 +1510,40 @@ jobs:
           TRUSTED: ${{ needs.npu-gate.outputs.trusted }}
           XRT_OK: ${{ steps.verdict.outputs.xrt }}
           HRX_OK: ${{ steps.verdict.outputs.hrx }}
+          RUN: ${{ needs.changes.outputs.run }}
+          OVERLAY: ${{ needs.changes.outputs.devkit-overlay }}
+          OVERLAY_FAMILIES: ${{ needs.changes.outputs.devkit-families }}
+          OVERLAY_MODELS: ${{ needs.devkit-xclbins.outputs.touched-models }}
         run: |
           echo "npu-gate: ${GATE} (trusted: ${TRUSTED}); npu-approve: ${APPROVE}; xrt: ${XRT_OK}; hrx: ${HRX_OK}"
           case "${GATE}" in success) ;; *) echo "::error::npu-gate did not succeed"; exit 1 ;; esac
-          if [ "${TRUSTED}" != true ] && [ "${APPROVE}" != success ] && [ "${APPROVE}" != skipped ]; then
+          # A missing approval fails only when some NPU job needed it: a
+          # dev-kit pull request whose kernel build rebuilt no model's
+          # kernels and touched no engine family runs none (npu-approve asks
+          # before that is known). Dev-kit checks fails a requested overlay
+          # test that the gate held.
+          overlay_requested=false
+          if [ "${OVERLAY}" = true ] && { [ -n "${OVERLAY_FAMILIES}" ] || { [ -n "${OVERLAY_MODELS}" ] && [ "${OVERLAY_MODELS}" != "[]" ]; }; }; then
+            overlay_requested=true
+          fi
+          if [ "${TRUSTED}" != true ] && [ "${APPROVE}" != success ] && [ "${APPROVE}" != skipped ] \
+             && { [ "${RUN}" = true ] || [ "${overlay_requested}" = true ]; }; then
             echo "::error::NPU tests were not approved"; exit 1
           fi
           if [ "${XRT_OK}" != true ] || [ "${HRX_OK}" != true ]; then
             echo "::error::a package failed to build or its tests failed"; exit 1
           fi
 
-      # A pull request whose dev-kit data does not check out, or whose dev-kit
-      # engines do not build, fails here too, whatever the gate step above
+      # A pull request whose dev-kit data does not check out, whose dev-kit
+      # engines do not build, or whose overlay tests (test-*-devkit) fail or
+      # are skipped though requested (a package or dev-kit build failed, or
+      # the gate held them), fails here too, whatever the gate step above
       # decided, so this job stays the single required check. So does one
       # whose change detection failed: every job after it is then skipped,
-      # and a skip would otherwise read as a pass. Other runs only show the
+      # and a skip would otherwise read as a pass. An overlay test skipped
+      # because nothing was requested, or because no family was touched and
+      # the kernel build rebuilt no model's kernels, passes. Other runs only
+      # show the
       # dev-kit jobs' own results: the dev kit ships in no package, so it
       # does not hold up a release.
       - name: Dev-kit checks
@@ -1315,11 +1553,35 @@ jobs:
           DEVKIT_STATIC: ${{ needs.devkit-static.result }}
           DEVKIT_ENGINES: ${{ needs.devkit-engines.result }}
           DEVKIT_XCLBINS: ${{ needs.devkit-xclbins.result }}
+          OVERLAY: ${{ needs.changes.outputs.devkit-overlay }}
+          OVERLAY_FAMILIES: ${{ needs.changes.outputs.devkit-families }}
+          OVERLAY_MODELS: ${{ needs.devkit-xclbins.outputs.touched-models }}
+          OVERLAY_TESTS: >-
+            test-lin-xrt-devkit=${{ needs.test-lin-xrt-devkit.result }}
+            test-lin-hrx-devkit=${{ needs.test-lin-hrx-devkit.result }}
+            test-win-xrt-devkit=${{ needs.test-win-xrt-devkit.result }}
+            test-win-hrx-devkit=${{ needs.test-win-hrx-devkit.result }}
         run: |
           echo "changes: ${CHANGES}; devkit-static: ${DEVKIT_STATIC}; devkit-engines: ${DEVKIT_ENGINES}; devkit-xclbins: ${DEVKIT_XCLBINS}"
+          echo "devkit-overlay: ${OVERLAY:-none}; ${OVERLAY_TESTS}"
           rc=0
           case "${CHANGES}" in success) ;; *) echo "::error::changes did not succeed, so the dev-kit and build jobs were skipped"; rc=1 ;; esac
           case "${DEVKIT_STATIC}" in success|skipped) ;; *) echo "::error::devkit-static did not pass"; rc=1 ;; esac
           case "${DEVKIT_ENGINES}" in success|skipped) ;; *) echo "::error::devkit-engines did not pass"; rc=1 ;; esac
           case "${DEVKIT_XCLBINS}" in success|skipped) ;; *) echo "::error::devkit-xclbins did not pass"; rc=1 ;; esac
+          requested=false
+          if [ "${OVERLAY}" = true ] && { [ -n "${OVERLAY_FAMILIES}" ] || { [ -n "${OVERLAY_MODELS}" ] && [ "${OVERLAY_MODELS}" != "[]" ]; }; }; then
+            requested=true
+          fi
+          for entry in ${OVERLAY_TESTS}; do
+            job="${entry%%=*}"; result="${entry#*=}"
+            case "${result}" in
+              success) ;;
+              skipped)
+                if [ "${requested}" = true ]; then
+                  echo "::error::${job} was skipped though the change asks for it (a package or dev-kit build failed, or the NPU gate held it)"; rc=1
+                fi ;;
+              *) echo "::error::${job} did not pass (${result})"; rc=1 ;;
+            esac
+          done
           exit "${rc}"

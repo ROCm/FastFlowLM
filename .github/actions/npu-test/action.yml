@@ -56,6 +56,25 @@ inputs:
     description: Row of asr_eval/expected.json to check WER against (linux, linux-hrx, windows, windows-hrx).
     required: false
     default: ""
+  harness-dir:
+    description: >
+      Absolute path of a checkout whose .github/script/npu_test to run, with
+      the src/test assets it reads beside it (another commit's, e.g. a pull
+      request's base); empty for the workspace's.
+    required: false
+    default: ""
+  clean-env:
+    description: >
+      "true" runs the harness, and so flm, in an emptied environment that
+      keeps only PATH, the user's home, temp and locale variables (on Windows
+      also the system ones a process needs: SystemRoot, ProgramFiles, ...),
+      PYTHONUTF8, the proxy and CA variables (http_proxy, https_proxy,
+      no_proxy and their upper-case forms, SSL_CERT_FILE, SSL_CERT_DIR,
+      CURL_CA_BUNDLE, REQUESTS_CA_BUNDLE: flm downloads weights through the
+      runners' proxy) and every FLM_*, XRT_*, XILINX_* and HRX_* variable: no
+      token, runner or GitHub variable reaches the code under test.
+    required: false
+    default: "false"
 
 runs:
   using: composite
@@ -109,7 +128,7 @@ runs:
       id: linux
       if: runner.os == 'Linux'
       shell: bash
-      working-directory: ${{ github.workspace }}/.github/script
+      working-directory: ${{ inputs.harness-dir || github.workspace }}/.github/script
       env:
         FLM_BIN: ${{ inputs.flm-bin }}
         LABEL: ${{ inputs.label }}
@@ -123,6 +142,7 @@ runs:
         MODEL_EXTENSION: ${{ inputs.model-extension }}
         ASR_FULL: ${{ inputs.asr-full }}
         ASR_KEY: ${{ inputs.asr-expected-key }}
+        CLEAN_ENV: ${{ inputs.clean-env }}
       run: |
         export FLM_MODEL_PATH="${FLM_MODEL_PATH:-/scratch}"
         args=(--flm-bin "${FLM_BIN}" --label "${LABEL}" --tier "${TIER}" --suites "${SUITES}"
@@ -132,15 +152,31 @@ runs:
               --output-dir "${GITHUB_WORKSPACE}/npu-test-results/${LABEL}")
         [ "${ASR_FULL}" = "true" ] && args+=(--asr-full)
         [ -n "${MODEL_EXTENSION}" ] && args+=(--model-extension "${MODEL_EXTENSION}")
+        run=(python3)
+        if [ "${CLEAN_ENV}" = "true" ]; then
+          keep=()
+          # Proxy and CA variables too: flm downloads weights with libcurl,
+          # which finds the runners' proxy only through them.
+          for name in PATH HOME USER LOGNAME LANG LC_ALL LC_CTYPE TMPDIR PYTHONUTF8 \
+                      http_proxy https_proxy no_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY \
+                      SSL_CERT_FILE SSL_CERT_DIR CURL_CA_BUNDLE REQUESTS_CA_BUNDLE; do
+            [ -n "${!name+x}" ] && keep+=("${name}=${!name}")
+          done
+          while IFS= read -r name; do
+            keep+=("${name}=${!name}")
+          done < <(compgen -e | grep -E '^(FLM|XRT|XILINX|HRX)_' || true)
+          run=(env -i "${keep[@]}" "$(command -v python3)")
+          echo "Clean environment: ${keep[*]%%=*}"
+        fi
         code=0
-        python3 -m npu_test "${args[@]}" || code=$?
+        "${run[@]}" -m npu_test "${args[@]}" || code=$?
         echo "code=${code}" >> "$GITHUB_OUTPUT"
 
     - name: Run tests (Windows)
       id: windows
       if: runner.os == 'Windows'
       shell: powershell
-      working-directory: ${{ github.workspace }}/.github/script
+      working-directory: ${{ inputs.harness-dir || github.workspace }}/.github/script
       env:
         FLM_BIN: ${{ inputs.flm-bin }}
         LABEL: ${{ inputs.label }}
@@ -154,6 +190,7 @@ runs:
         MODEL_EXTENSION: ${{ inputs.model-extension }}
         ASR_FULL: ${{ inputs.asr-full }}
         ASR_KEY: ${{ inputs.asr-expected-key }}
+        CLEAN_ENV: ${{ inputs.clean-env }}
       run: |
         if (-not $env:FLM_MODEL_PATH) {
           $env:FLM_MODEL_PATH = Join-Path $env:USERPROFILE ".flm"
@@ -174,8 +211,41 @@ runs:
         if ($env:MODEL_EXTENSION) {
           $cmdArgs += "--model-extension=$env:MODEL_EXTENSION"
         }
-        & python $cmdArgs
-        [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "code=$LASTEXITCODE`n")
+        if ($env:CLEAN_ENV -eq 'true') {
+          $keep = @('Path', 'PATHEXT', 'SystemRoot', 'SystemDrive', 'windir', 'ComSpec', 'OS',
+                    'TEMP', 'TMP', 'USERPROFILE', 'USERNAME', 'USERDOMAIN', 'HOMEDRIVE', 'HOMEPATH',
+                    'APPDATA', 'LOCALAPPDATA', 'ProgramData', 'ALLUSERSPROFILE', 'PUBLIC',
+                    'ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432', 'CommonProgramFiles',
+                    'CommonProgramFiles(x86)', 'CommonProgramW6432', 'COMPUTERNAME',
+                    'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE', 'PROCESSOR_IDENTIFIER',
+                    'PYTHONUTF8', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy',
+                    'https_proxy', 'no_proxy', 'SSL_CERT_FILE', 'CURL_CA_BUNDLE',
+                    'REQUESTS_CA_BUNDLE')
+          $keep += Get-ChildItem env: | Where-Object { $_.Name -match '^(FLM|XRT|XILINX|HRX)_' } |
+            ForEach-Object { $_.Name }
+          $psi = New-Object System.Diagnostics.ProcessStartInfo
+          $psi.FileName = (Get-Command python).Source
+          $psi.WorkingDirectory = (Get-Location).Path
+          $psi.UseShellExecute = $false
+          $psi.EnvironmentVariables.Clear()
+          foreach ($name in $keep) {
+            $value = [Environment]::GetEnvironmentVariable($name)
+            if ($null -ne $value) { $psi.EnvironmentVariables[$name] = $value }
+          }
+          # One command line, quoted as the C runtime splits it.
+          $psi.Arguments = ($cmdArgs | ForEach-Object {
+            if ($_ -and $_ -notmatch '[\s"]') { $_ }
+            else { '"' + (($_ -replace '(\\*)"', '$1$1\"') -replace '(\\+)$', '$1$1') + '"' }
+          }) -join ' '
+          Write-Host "Clean environment: $(@($psi.EnvironmentVariables.Keys) -join ' ')"
+          $proc = [System.Diagnostics.Process]::Start($psi)
+          $proc.WaitForExit()
+          $code = $proc.ExitCode
+        } else {
+          & python $cmdArgs
+          $code = $LASTEXITCODE
+        }
+        [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "code=$code`n")
         exit 0
 
     - name: Add summary (Linux)
