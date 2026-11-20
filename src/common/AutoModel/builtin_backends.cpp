@@ -91,6 +91,8 @@ void register_builtin_backends(BackendRegistry& registry) {
     RegisterFlm<minicpm_ocr_npu>(registry, "minicpm-ocr");
     RegisterFlm<minicpm_v_4_7_moe_npu>(registry, "minicpm-v-4.7-moe");
     RegisterFlm<qwen3_6_moe_npu>(registry, "qwen3.6-moe", "qwen3_6_moe_npu_aie_next");
+    // the same class, a 192-expert build: one aie_next library per family
+    RegisterFlm<qwen3_6_moe_npu>(registry, "qwen3.6-moe-pruned", "qwen3_6_pruned_npu3_aie_next");
     RegisterFlm<qwen3_8mtp_npu>(registry, "qwen3.8-mtp");
     RegisterFlm<qwen3_8mtp_npu>(registry, "qwen3.8-dflash2");   // the same engine; the draft package turns the DFlash2 drafter on
     RegisterFlm<qwen3_asr_npu>(registry, "r2t2");

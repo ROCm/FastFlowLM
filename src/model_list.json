@@ -823,6 +823,52 @@
                 "footprint": 20.6
             }
         },
+        "qwen3.6-moe-pruned": {
+            "35b-a3b": {
+                "supported_platforms": ["dev04"],
+                "platform_sources": {
+                    "dev04": {
+                        "name": "Qwen3.6-35B-A3B-pruned-NPU2-dev04",
+                        "model_info_key": "qwen3.6-moe-pruned:35b-a3b-dev04",
+                        "url": "https://huggingface.co/FastFlowLM/Qwen3.6-35B-A3B-pruned-NPU2/resolve/aie_next",
+                        "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.6-35B-A3B-pruned-NPU2/tree/aie_next",
+                        "ms_url": null,
+                        "size": 16401606892
+                    }
+                },
+                "name": "Qwen3.6-35B-A3B-pruned-NPU2-dev04",
+                "url": "https://huggingface.co/FastFlowLM/Qwen3.6-35B-A3B-pruned-NPU2/resolve/aie_next",
+                "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.6-35B-A3B-pruned-NPU2/tree/aie_next",
+                "ms_url": null,
+                "size": 16401606892,
+                "flm_min_version": "1.0.3",
+                "files": [
+                    "config.json",
+                    "model.q4nx",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "vision_weight.q4nx",
+                    "chat_template.jinja"
+                ],
+                "vlm": true,
+                "default_context_length": 32768,
+                "max_prefill_len": 4096,
+                "details": {
+                    "format": "NPU2",
+                    "family": "qwen3.6-moe-pruned",
+                    "think": true,
+                    "think_toggleable": true,
+                    "parameter_size": "27B",
+                    "quantization_level": "Q4_K"
+                },
+                "label": [
+                    "vision",
+                    "reasoning",
+                    "tool-calling"
+                ],
+                "footprint": 16.5
+            }
+        },
         "qwen3.8-mtp": {
             "27b": {
                 "supported_platforms": ["aie2p"],

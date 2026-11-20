@@ -41,37 +41,17 @@ route 0 0 0 DMA 0 0 4 DMA 0
 route 0 0 0 DMA 0 0 5 DMA 0
 route 1 0 0 DMA 0 0 1 DMA 0
 route 8 0 2 DMA 0 0 1 DMA 2
-route 2 0 0 DMA 1 0 1 DMA 1
-route 9 0 3 DMA 0 0 1 DMA 3
-route 3 0 0 DMA 2 0 1 DMA 4
-route 10 0 4 DMA 0 0 1 DMA 6
-route 4 0 0 DMA 3 0 1 DMA 5
-route 11 0 5 DMA 0 0 1 DMA 7
 route 6 0 2 DMA 0 0 0 DMA 1
 route 0 1 0 DMA 0 1 2 DMA 0
 route 0 1 0 DMA 0 1 3 DMA 0
 route 0 1 0 DMA 0 1 4 DMA 0
 route 0 1 0 DMA 0 1 5 DMA 0
 route 1 1 0 DMA 0 1 1 DMA 0
-route 8 1 2 DMA 0 1 1 DMA 2
-route 2 1 0 DMA 1 1 1 DMA 1
-route 9 1 3 DMA 0 1 1 DMA 3
-route 3 1 0 DMA 2 1 1 DMA 4
-route 10 1 4 DMA 0 1 1 DMA 6
-route 4 1 0 DMA 3 1 1 DMA 5
-route 11 1 5 DMA 0 1 1 DMA 7
 route 0 2 0 DMA 0 2 2 DMA 0
 route 0 2 0 DMA 0 2 3 DMA 0
 route 0 2 0 DMA 0 2 4 DMA 0
 route 0 2 0 DMA 0 2 5 DMA 0
 route 1 2 0 DMA 0 2 1 DMA 0
-route 8 2 2 DMA 0 2 1 DMA 2
-route 2 2 0 DMA 1 2 1 DMA 1
-route 9 2 3 DMA 0 2 1 DMA 3
-route 3 2 0 DMA 2 2 1 DMA 4
-route 10 2 4 DMA 0 2 1 DMA 6
-route 4 2 0 DMA 3 2 1 DMA 5
-route 11 2 5 DMA 0 2 1 DMA 7
 core 0 2
 core 0 3
 core 0 4
