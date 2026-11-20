@@ -922,7 +922,7 @@ jobs:
   # that names models (models) tests only those and the required ones.
   # npu_test pulls the models first, outside the requests' timeouts, and they
   # stay on the runner: only its first run, or a new revision of a model,
-  # downloads (about 33 GB for the pr tier's, 400 GB for all), and a model
+  # downloads (about 33 GB for the pr tier's, 500 GB for all), and a model
   # verified before whose pins and files are unchanged is not verified again
   # (a required one always is).
   test-win-hipep:
