@@ -1,6 +1,9 @@
 /// \file test_gemma_embedding_request.cpp
 /// \brief Exercise the built-in request formatting with stand-in tokenization and inference.
+#include "AutoEmbeddingModel/all_embedding_model.hpp"
+#ifdef FASTFLOWLM_LINUX_LIMITED_MODELS
 #include "AutoEmbeddingModel/modeling_gemma_embedding.hpp"
+#endif
 #include "../phi4_core/test_support.hpp"
 
 namespace {
@@ -30,6 +33,13 @@ void AutoEmbeddingModel::_shared_load_model(std::string, json, bool) {
 }
 
 void test_gemma_embedding_request() {
+    const json info = {{"model_kind", "embedding"}, {"details", {{"family", "embed-gemma"}}}};
+#ifdef FASTFLOWLM_LINUX_LIMITED_MODELS
+    RequireContains(RequireThrows([&] { get_auto_embedding_model(info, nullptr); }), "no frontend");
+#else
+    auto builtin = get_auto_embedding_model(info, nullptr);
+    TEST_REQUIRE(dynamic_cast<Gemma_Embedding*>(builtin.get()));
+#endif
     TestGemma model;
     const std::pair<const char*, const char*> tasks[] = {
         {"query", "task: search result | query: "},
@@ -41,21 +51,23 @@ void test_gemma_embedding_request() {
         {"summarization", "task: summarization | query: "},
     };
     for (const auto& [task, prefix] : tasks) {
-        const auto result = model.embed({{"input", "hello"}, {"task", task}, {"dimensions", 768}});
+        const auto result = model.embed({{"input", {{"text", "hello"}, {"task", task}}}, {"dimensions", 768}});
         TEST_REQUIRE(encoded_text == std::string("<bos>") + prefix + "hello<eos>");
         TEST_REQUIRE(result.values.size() == 768 && result.prompt_tokens == 3);
     }
-    for (const json& request : {json{{"input", "hello"}}, json{{"input", "hello"}, {"task", ""}}}) {
+    for (const json& request : {json{{"input", "hello"}}, json{{"input", {{"text", "hello"}, {"task", ""}}}},
+                                json{{"input", {{"text", "hello"}, {"task", nullptr}}}}}) {
         model.embed(request);
         TEST_REQUIRE(encoded_text == "<bos>task: search result | query: hello<eos>");
     }
-    model.embed({{"input", "hello"}, {"task", "document"}, {"title", "Example"}});
+    model.embed({{"input", {{"text", "hello"}, {"title", "Example"}, {"task", "document"}}}});
     TEST_REQUIRE(encoded_text == "<bos>title: Example | text: hello<eos>");
     for (const char* task : {"BitextMining", "Retrieval", "Clustering", "Classification",
                             "MultilabelClassification", "CodeRetrieval", "SentenceSimilarity",
                             "Summarization", "STS", "unknown"}) {
-        RequireThrows<std::invalid_argument>([&] { model.embed({{"input", "hello"}, {"task", task}}); });
+        RequireThrows<std::invalid_argument>([&] { model.embed({{"input", {{"text", "hello"}, {"task", task}}}}); });
     }
-    RequireThrows<std::invalid_argument>([&] { model.embed({{"input", "hello"}, {"title", "Example"}}); });
+    RequireThrows<std::invalid_argument>([&] { model.embed({{"input", {{"text", "hello"}, {"title", "Example"}}}}); });
+    RequireThrows<nlohmann::json::exception>([&] { model.embed({{"input", {{"text", "hello"}, {"task", 42}}}}); });
     RequireThrows<std::invalid_argument>([&] { model.embed({{"input", "hello"}, {"dimensions", 128}}); });
 }

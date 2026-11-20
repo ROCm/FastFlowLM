@@ -7,6 +7,7 @@
 *  \version 0.9.21
 */
 #include "runner.hpp"
+#include "model_loader.hpp"
 #include "harmony_filter.hpp"
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
 #include "AutoEmbeddingModel/all_embedding_model.hpp"
@@ -55,21 +56,15 @@ Runner::Runner(model_list& supported_models, ModelDownloader& downloader, progra
     if (this->auto_chat_engine != nullptr) {
         this->auto_chat_engine.reset();
     }
-    auto auto_model = get_auto_model(
-        this->tag, this->supported_models, this->npu_device_inst, this->backend, this->power_mode);
-    this->auto_chat_engine = std::move(auto_model.second);
-    
-    this->tag = auto_model.first;
-
-    switch (this->downloader.is_model_downloaded(this->tag, false, /*fast_check=*/true)) {
-        case ModelDownloader::ModelStatus::Ready:
-            break;
-        case ModelDownloader::ModelStatus::Outdated:
-        case ModelDownloader::ModelStatus::Missing:
-            this->downloader.pull_model(this->tag, this->modelscope);
-            break;
-        case ModelDownloader::ModelStatus::Incompatible:
-            exit(EXIT_FAILURE);
+    try {
+        auto auto_model = get_auto_model(this->tag, this->supported_models,
+            this->npu_device_inst, this->downloader, this->modelscope, this->backend, this->power_mode);
+        this->tag = auto_model.first;
+        this->auto_chat_engine = std::move(auto_model.second);
+    }
+    catch (const std::exception& e) {
+        header_print("ERROR", "Failed to load model: " + std::string(e.what()));
+        exit(EXIT_FAILURE);
     }
     auto [new_tag, model_info] = this->supported_models.get_model_info(this->tag);
     this->asr_supported = model_info.contains("asr") && model_info["asr"];
@@ -431,39 +426,29 @@ void Runner::cmd_status(std::vector<std::string>& input_list) {
 /// \brief Load a model
 /// \param input_list, std::vector<std::string>
 void Runner::cmd_load(std::vector<std::string>& input_list) {
-    std::string model_name = input_list[1];
-
-    std::pair<std::string, flm::frontend::FrontendPtr> auto_model;
+    std::string model_name;
     try {
-        auto_model = get_auto_model(model_name, supported_models, npu_device_inst, backend, power_mode);
-    } catch (const std::exception& e) {
-        header_print("ERROR", "Failed to load model: " << e.what());
+        auto plan = resolve_model_load(input_list[1], supported_models, backend);
+        plan.prepare_device(npu_device_inst, power_mode);
+        model_name = std::move(plan.tag);
+    }
+    catch (const std::exception& e) {
+        header_print("ERROR", e.what());
         return;
     }
-    model_name = auto_model.first;
 
     if (model_name != this->tag) {
         this->tag = model_name;
 
-        switch (this->downloader.is_model_downloaded(this->tag, false, /*fast_check=*/true)) {
-            case ModelDownloader::ModelStatus::Ready:
-                break;
-            case ModelDownloader::ModelStatus::Outdated:
-            case ModelDownloader::ModelStatus::Missing:
-                this->downloader.pull_model(this->tag, this->modelscope);
-                break;
-            case ModelDownloader::ModelStatus::Incompatible:
-                header_print("ERROR", "Model is incompatible with this version of FastFlowLM: " + this->tag);
-                exit(EXIT_FAILURE);
-        }
         auto_chat_engine.reset();
         if(model_name=="gpt-oss:20b")
             std::this_thread::sleep_for(std::chrono::milliseconds(2800));
-        this->auto_chat_engine = std::move(auto_model.second);
-
-        auto [new_tag, model_info] = this->supported_models.get_model_info(this->tag);
-        this->auto_chat_engine->configure_parameter("img_pre_resize", this->img_pre_resize);
         try {
+            auto auto_model = get_auto_model(this->tag, this->supported_models,
+                this->npu_device_inst, this->downloader, this->modelscope, this->backend, this->power_mode);
+            this->auto_chat_engine = std::move(auto_model.second);
+            auto [new_tag, model_info] = this->supported_models.get_model_info(this->tag);
+            this->auto_chat_engine->configure_parameter("img_pre_resize", this->img_pre_resize);
             const auto load_started = std::chrono::steady_clock::now();
             this->auto_chat_engine->load_model(this->supported_models.get_load_path(new_tag), model_info, this->ctx_length, this->preemption, this->backend);
             report_load_time(load_started);

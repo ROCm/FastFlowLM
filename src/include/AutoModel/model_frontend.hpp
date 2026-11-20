@@ -1,10 +1,11 @@
 /// \file model_frontend.hpp
-/// \brief Frontend factories keyed by model family
+/// \brief Frontend factories keyed by model family and provider
 #pragma once
 
 #include "AutoModel/model_catalog_overlay.hpp"
 #include "AutoModel/model_extension.h"
 
+#include <compare>
 #include <functional>
 #include <map>
 #include <memory>
@@ -12,6 +13,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 class AutoModel;
@@ -36,7 +38,7 @@ using EmbeddingFactory = std::function<std::unique_ptr<AutoEmbeddingModel>(void*
 /// \brief Make a host-owned frontend use the registry's ownership shape.
 FrontendPtr own_frontend(std::unique_ptr<AutoModel> frontend);
 
-/// \brief The family -> frontend factory table.
+/// \brief The (family, provider) -> frontend factory table.
 class FrontendRegistry {
 public:
     FrontendRegistry();
@@ -48,20 +50,27 @@ public:
     /// \brief Process-wide registry populated with built-in frontends.
     static FrontendRegistry& instance();
 
-    /// \brief Register one frontend family.
-    /// \throws std::runtime_error for an empty value or duplicate family
+    /// \brief Register one frontend implementation.
+    /// \throws std::runtime_error for an empty value or duplicate (family, provider)
     void register_frontend(
         std::string family, FrontendFactory factory,
         std::string provider = "builtin");
 
+    void register_embedding(
+        std::string family, EmbeddingFactory factory,
+        std::string provider = "builtin");
+
     bool has(const std::string& family) const;
     std::unique_ptr<AutoEmbeddingModel> create_embedding(
-        const std::string& family, void* device) const;
+        const std::string& family, void* device,
+        const std::string& provider = "") const;
     std::vector<std::string> available() const;
 
     /// \brief Construct a frontend.
-    /// \throws std::runtime_error when the family is not registered
-    FrontendPtr create(const std::string& family, void* device) const;
+    /// \note Without a provider, prefer builtin, otherwise require a sole provider.
+    /// \throws std::runtime_error for an unavailable or ambiguous selection
+    FrontendPtr create(const std::string& family, void* device,
+        const std::string& provider = "") const;
 
     /// \brief Load and atomically register one stable-ABI backend extension.
     /// \param manifest_path extension.json naming the library and optional
@@ -86,13 +95,21 @@ private:
     struct LoadedExtension;
 
     mutable std::mutex mutex_;
-    std::map<std::string, FrontendFactory> factories_;
-    std::map<std::string, EmbeddingFactory> embeddings_;
-    std::map<std::string, std::string> providers_;
+    struct Key {
+        std::string family;
+        std::string provider;
+        auto operator<=>(const Key&) const = default;
+    };
+    struct Factories {
+        FrontendFactory generation;
+        EmbeddingFactory embedding;
+    };
+    void register_provider(Key key, Factories factories);
+    std::map<Key, Factories> factories_;
     std::vector<std::shared_ptr<LoadedExtension>> extensions_;
 };
 
-/// \brief Register every causal-generation frontend shipped with FastFlowLM.
+/// \brief Register every generation and embedding frontend shipped with FastFlowLM.
 void register_builtin_frontends(FrontendRegistry& registry);
 
 /// \brief Whether a family belongs to a built-in model outside the

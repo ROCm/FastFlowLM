@@ -9,6 +9,8 @@ namespace {
 using namespace flm::extension::detail;
 
 void Check(int status, const ErrorCapture &error, bool request = false) {
+    if (request && status == FLM_MODEL_EXTENSION_STATUS_CANCELLED)
+        throw EmbeddingCancelled();
     if (request && (status == FLM_MODEL_EXTENSION_STATUS_INVALID_ARGUMENT ||
                     status == FLM_MODEL_EXTENSION_STATUS_UNSUPPORTED))
         throw std::invalid_argument("Embedding provider: " + error.message);
@@ -29,8 +31,9 @@ class ExtensionEmbeddingModel final : public AutoEmbeddingModel {
         const std::string metadata = info.dump();
         ErrorCapture error;
         auto sink = error.sink();
-        Check(api_.load(api_.object, span(path), span(metadata), preemption, &sink),
-              error);
+        const flm_embedding_load_context_v1 context{
+            sizeof(context), span(path), span(metadata), static_cast<uint32_t>(preemption)};
+        Check(api_.load(api_.object, &context, &sink), error);
         model_path = std::move(path);
         is_model_loaded = true;
     }

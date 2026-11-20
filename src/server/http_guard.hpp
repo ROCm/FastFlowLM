@@ -316,9 +316,19 @@ inline std::optional<ojson> validate_chat(const ojson& r) { return require_array
 /// Embedding requests name a model and supply input; providers validate each input item's contents.
 inline std::optional<ojson> validate_embeddings(const ojson& r) {
     if (auto e = require_string(r, "model")) return e;
+    if (const auto dims = r.find("dimensions"); dims != r.end() && !dims->is_null() &&
+        (!dims->is_number_integer() || dims->get<int64_t>() <= 0 || dims->get<uint64_t>() > UINT32_MAX))
+        return error_body("'dimensions' must be a positive uint32.", 400, "dimensions");
     const auto it = r.find("input");
     if (it == r.end()) return error_body("Missing required parameter: 'input'.", 400, "input");
     if (it->is_array() && it->empty()) return error_body("'input' must not be an empty batch.", 400, "input");
+    const auto valid_item = [](const ojson& value) { return value.is_string() || value.is_object(); };
+    if (it->is_array()) {
+        for (const auto& item : *it)
+            if (!valid_item(item)) return error_body("Each 'input' item must be text or an object.", 400, "input");
+    } else if (!valid_item(*it)) {
+        return error_body("'input' must be text, an object, or a batch of them.", 400, "input");
+    }
     return std::nullopt;
 }
 

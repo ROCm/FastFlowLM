@@ -88,6 +88,13 @@ json ModelLoadFailedResponse(const std::string& model, const std::string& refusa
                        {"code", 500}}}};
 }
 
+// Keep Ollama's string-valued error body while setting the HTTP status.
+json OllamaErrorResponse(const json& response) {
+    const auto& error = response.at("error");
+    return {{"__http_status", error.at("code")},
+            {"__http_body", {{"error", error.at("message")}}}};
+}
+
 /// \brief One line per finished request in the server log, streamed or not, whatever the client asked for
 /// \note The prefix "Request done:" is stable so tools can grep it
 void log_request_summary(const chat_meta_info_t& m, size_t kv_used, size_t kv_max) {
@@ -702,6 +709,7 @@ RestHandler::RestHandler(model_list& models, ModelDownloader& downloader, progra
     default_model_tag = supported_models.rectify_model_tag(default_model_tag);
     const bool embedding_only = supported_models.is_model_supported(default_model_tag) &&
         is_embedding_model(supported_models.get_model_info(default_model_tag).second);
+    embeddings_enabled = args.embed || embedding_only;
     if (embedding_only) ensure_embed_model_loaded(default_model_tag);
     // Initialize chat bot with default model
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
@@ -744,16 +752,8 @@ RestHandler::~RestHandler() = default;
 ///@param model_tag the model tag
 bool RestHandler::ensure_model_loaded(const std::string& model_tag,
                                       const std::string& request_backend, std::string* refusal) {
-    // Refuse a name the catalog does not have before anything resolves it;
-    // an unknown name used to load a substitute model (and on dev04 could
-    // end the process). Checked after rectify_model_tag, as get_model_info
-    // does, so "Ollama/<tag>" and bare family names still resolve.
-    // "model-faker" means no model was chosen.
-    if (model_tag != "model-faker" &&
-        !supported_models.is_model_supported(
-            supported_models.rectify_model_tag(model_tag))) {
-        header_print_r("ERROR", "Model tag '" << model_tag
-            << "' is not supported. Please check with `flm list`.");
+    if (auto error = generation_model_error(model_tag)) {
+        header_print("ERROR", (*error)["error"]["message"].get<std::string>());
         return false;
     }
 
@@ -794,7 +794,7 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag,
         }
         auto_chat_engine.reset();
         prompt_cache.reset();
-        auto engine = flm::frontend::FrontendRegistry::instance().create(plan.family, device);
+        auto engine = flm::frontend::FrontendRegistry::instance().create(plan.family, device, plan.info.value("frontend_provider", ""));
         engine->set_server_mode(true);
         engine->configure_parameter("img_pre_resize", img_pre_resize);
         engine->set_prefix_limits(prefix_cache_mb, prefix_slots, prefix_min_gain);
@@ -822,13 +822,18 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag,
     return false;
 }
 
-///@brief Whether ensure_model_loaded's gate would admit the model tag
-///@note The same tolerant form as that gate, so a handler can answer a name the
-///      catalog does not have with a 404 instead of a failed load.
-///@param model_tag the model tag
-bool RestHandler::is_known_model(const std::string& model_tag) {
-    return model_tag == "model-faker" ||
-           supported_models.is_model_supported(supported_models.rectify_model_tag(model_tag));
+// Validate selection before loading can release the current engine. A known
+// embedding tag is a wrong-kind request (400), not an unknown model (404).
+std::optional<json> RestHandler::generation_model_error(const std::string& model_tag) {
+    if (model_tag == "model-faker") return std::nullopt;
+    const auto tag = supported_models.rectify_model_tag(model_tag);
+    if (!supported_models.is_model_supported(tag)) return UnknownModelResponse(model_tag);
+    if (is_embedding_model(supported_models.get_model_info(tag).second)) {
+        return json{{"error", {{"message", "Model '" + tag + "' is an embedding model, not a generation model."},
+                               {"type", "invalid_request_error"},
+                               {"param", "model"}, {"code", 400}}}};
+    }
+    return std::nullopt;
 }
 
 ///@brief Ensure the asr model is loaded
@@ -1147,10 +1152,13 @@ void RestHandler::handle_generate(const json& request,
         int length_limit = request.value("max_tokens", 4096);
         auto load_start_time = time_utils::now();
         // TODO: Use Another Check Function avoid loading again
+        if (auto error = generation_model_error(model)) {
+            send_response(OllamaErrorResponse(*error));
+            return;
+        }
         std::string refusal;
         if (!ensure_model_loaded(model, request_backend, &refusal)) {
-            json error_response = {{"error", refusal.empty() ? "Failed to load " + model + " model!" : refusal}};
-            send_response(error_response);
+            send_response(OllamaErrorResponse(ModelLoadFailedResponse(model, refusal)));
             return;
         }
         auto load_end_time = time_utils::now();
@@ -1277,10 +1285,13 @@ void RestHandler::handle_chat(const json& request,
         int length_limit = options.value("num_predict", 4096);
 
         auto load_start_time = time_utils::now();
+        if (auto error = generation_model_error(model)) {
+            send_response(OllamaErrorResponse(*error));
+            return;
+        }
         std::string refusal;
         if (!ensure_model_loaded(model, request_backend, &refusal)) {
-            json error_response = {{"error", refusal.empty() ? "Failed to load " + model + " model!" : refusal}};
-            send_response(error_response);
+            send_response(OllamaErrorResponse(ModelLoadFailedResponse(model, refusal)));
             return;
         }
         auto load_end_time = time_utils::now();
@@ -1612,8 +1623,8 @@ void RestHandler::handle_openai_chat_completion(const json& request,
             return;
         }
 
-        if (!is_known_model(model)) {
-            send_response(UnknownModelResponse(model));
+        if (auto error = generation_model_error(model)) {
+            send_response(*error);
             return;
         }
         auto load_start_time = time_utils::now();
@@ -2144,8 +2155,8 @@ void RestHandler::handle_openai_completion(const json& request,
         }
 
         // direct return if model not supported
-        if (!is_known_model(model)) {
-            send_response(UnknownModelResponse(model));
+        if (auto error = generation_model_error(model)) {
+            send_response(*error);
             return;
         }
 

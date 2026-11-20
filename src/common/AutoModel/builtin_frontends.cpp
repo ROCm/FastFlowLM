@@ -27,6 +27,10 @@
 #include "AutoModel/modeling_qwen3_asr.hpp"
 #include "AutoModel/modeling_qwen3vl.hpp"
 
+#ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
+#include "AutoEmbeddingModel/modeling_gemma_embedding.hpp"
+#endif
+
 #include "device_runtime.hpp"
 
 #include <memory>
@@ -57,6 +61,11 @@ FrontendPtr own_frontend(std::unique_ptr<AutoModel> frontend) {
 }
 
 void register_builtin_frontends(FrontendRegistry& registry) {
+#ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
+    registry.register_embedding("embed-gemma", [](void* device) {
+        return std::make_unique<Gemma_Embedding>(static_cast<flm_rt::device*>(device));
+    });
+#endif
     Register<Llama3>(registry, "llama3");
     Register<DeepSeek_r1_8b>(registry, "deepseek-r1");
     Register<DeepSeek_r1_0528_8b>(registry, "deepseek-r1-0528");
