@@ -571,28 +571,49 @@ class Workflows(unittest.TestCase):
 
     def test_check_catches_violations(self):
         import devkit_check
-        bench, comment = workflow("devkit-bench.yml"), workflow("devkit-bench-comment.yml")
+        bench, comment, build = (workflow("devkit-bench.yml"), workflow("devkit-bench-comment.yml"),
+                                 workflow("build-and-test.yml"))
+        caller = "    uses: ./.github/workflows/devkit-bench.yml\n"
+        self.assertEqual(build.count(caller), 1)
         cases = {
-            "renamed": (bench.replace("name: Dev-kit Bench\n", "name: Dev-kit Benches\n", 1), comment),
-            "write": (bench, comment.replace("  actions: read\n", "  actions: read\n  contents: write\n", 1)),
+            "renamed": (bench, comment, build.replace("name: Build and Test\n", "name: Build and Tests\n", 1)),
+            "write": (bench, comment.replace("  actions: read\n", "  actions: read\n  contents: write\n", 1), build),
             "job perms": (bench, comment.replace("    runs-on: ubuntu-latest", "    permissions: {}\n"
-                                                 "    runs-on: ubuntu-latest", 1)),
-            "checkout": (bench, comment + "      - uses: actions/checkout@" + "0" * 40 + "\n"),
-            "path": (bench, comment.replace("github.event.workflow_run.path == '.github/workflows/devkit-bench.yml'",
-                                            "true", 1)),
+                                                 "    runs-on: ubuntu-latest", 1), build),
+            "checkout": (bench, comment + "      - uses: actions/checkout@" + "0" * 40 + "\n", build),
+            "path": (bench, comment.replace("github.event.workflow_run.path == '.github/workflows/build-and-test.yml'",
+                                            "true", 1), build),
             "inline": (bench, comment.replace('echo "number=$(jq', 'echo "${{ github.event.workflow_run.head_branch }}"\n'
-                                              '          echo "number=$(jq', 1)),
+                                              '          echo "number=$(jq', 1), build),
             "bench write": (bench.replace("  actions: read\n", "  actions: read\n  pull-requests: write\n", 1),
-                            comment),
+                            comment, build),
+            "bench inline input": (bench.replace('--engines "${ENGINES}"', '--engines "${{ inputs.engines }}"', 1),
+                                   comment, build),
+            "not called": (bench, comment, build.replace(caller, "    uses: ./.github/workflows/other.yml\n", 1)),
+            "caller secrets": (bench, comment, build.replace(caller, caller + "    secrets: inherit\n", 1)),
+            "caller perms": (bench, comment, build.replace(
+                "      actions: read\n" + caller, "      actions: read\n      pull-requests: write\n" + caller, 1)),
         }
-        for name, (b, c) in cases.items():
+        for name, (b, c, w) in cases.items():
             with self.subTest(name=name), tempfile.TemporaryDirectory() as d:
+                self.assertTrue(b != bench or c != comment or w != build, name)
                 (Path(d) / ".github/workflows").mkdir(parents=True)
                 (Path(d) / devkit_check.BENCH_WORKFLOW).write_text(b, encoding="utf-8")
                 (Path(d) / devkit_check.BENCH_COMMENT_WORKFLOW).write_text(c, encoding="utf-8")
+                (Path(d) / devkit_check.BUILD_WORKFLOW).write_text(w, encoding="utf-8")
                 errors: list = []
                 devkit_check.check_bench_workflows(Path(d), errors)
                 self.assertTrue(errors, name)
+
+    def test_build_and_test_calls_the_bench(self):
+        build = workflow("build-and-test.yml")
+        # The summary no longer hands a plan to another run.
+        self.assertNotIn("devkit-bench-plan", build)
+        self.assertIn("      - devkit-bench\n", build)
+        self.assertNotIn("devkit-bench-plan", workflow("devkit-bench.yml"))
+        # Called and dispatched only: Build and Test's own triggers run it.
+        on = "\n".join(__import__("devkit_check")._top_block(workflow("devkit-bench.yml"), "on"))
+        self.assertNotRegex(on, r"(?m)^  (pull_request|schedule|push):")
 
     def test_bench_workflow_has_no_secrets_or_writes(self):
         text = workflow("devkit-bench.yml")
