@@ -1,6 +1,6 @@
 /// \file auto_decision_model.hpp
 /// \brief AutoDecisionModel: System One decisions (`POST /v1/systemone`) from a d3 decision model.
-/// \note  The engine (d3_npu, IRON) returns one final-norm hidden row per question; everything else
+/// \note  The engine (d3_npu, flm-dev-kit/FLM_DLL) returns one final-norm hidden row per question; everything else
 ///        -- request checks, the prompt, tokenization, the 255-way readout and the answer objects --
 ///        is the d3 contract in src/common/decision, which reproduces the upstream package
 ///        (vllm-sr/d3-lite v3.1.3) byte for byte (src/test/d3_contract).

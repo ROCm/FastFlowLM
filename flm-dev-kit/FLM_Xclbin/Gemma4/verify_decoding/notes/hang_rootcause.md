@@ -37,8 +37,8 @@ Evidence
 - lm_head_8 (`gen_seq_l8`) was checked by inspection: its only token BDs are the per-round S2MM y BDs, each waited.
 
 ## Fix
-- `FLM_Xclbin/Gemma4/verify_decoding/host/test_fused8.hpp` (`f8::run`, commit 98f02c173) and the engine generator
-  `FLM_DLL/detail/gemma4e_dflash/gemma4e_dflash_verify.cpp` (`verify_gen_seq`, commit 33a9c40ed) keep a **token
+- `FLM_Xclbin/Gemma4/verify_decoding/host/test_fused8.hpp` (`f8::run`) and the engine generator
+  `FLM_DLL/detail/gemma4e_dflash/gemma4e_dflash_verify.cpp` (`verify_gen_seq`) keep a **token
   ledger**: every token-issuing memcpy increments a counter per (tile, direction, channel), every wait decrements it;
   the final waits are emitted from the ledger (one per outstanding token) and the generator throws if any counter is
   nonzero when the stream is closed. So an unbalanced stream cannot be generated any more.
@@ -64,7 +64,7 @@ engine (rounding level), but it breaks strict reproducibility of the first verif
 | A/B, same binary (`hammer8`, layer 5, cursor 64): old stream (`FUSED8_OLD_WAITS=1`) | **fails at dispatch #254** (earlier also #254 on layer 0 / cursor 64 with the pre-fix build): deterministic |
 | fused8, balanced stream: `hammer8` 21,000 consecutive dispatches in ONE hardware context, round robin over layers 0/5/40/35 x cursors 0/505/1000/4000 (16 pairs), KV state restored before every dispatch | **21000/21000 complete, 0 diffs** vs each pair's reference (2nd dispatch); 3 first-after-load diffs (SWA L0 at 505/1000/4000, see above); 252 s |
 | lm_head_8: 5000 dispatches alternating two inputs (`lm_head_8/run.exe --repeat 5000`) | 5000/5000 bit-exact vs the first results, PASS |
-| engine (`test_spec_engine`, clean build of HEAD 80d3b38ea in a separate worktree), `FLM_DFLASH_VERIFY_RELOAD=0`, 15 prompts (12 chat + 3 long, up to 1024 tokens each) in ONE process | **7783 tokens generated speculatively, 1982 cycles = 83,244 verify layer dispatches** (+ ~4000 lm_head_8 dispatches) in one verify context, no timeout; mean AL 3.26, 0 stream mismatches |
+| engine (`test_spec_engine`, clean build with the fix in a separate worktree), `FLM_DFLASH_VERIFY_RELOAD=0`, 15 prompts (12 chat + 3 long, up to 1024 tokens each) in ONE process | **7783 tokens generated speculatively, 1982 cycles = 83,244 verify layer dispatches** (+ ~4000 lm_head_8 dispatches) in one verify context, no timeout; mean AL 3.26, 0 stream mismatches |
 | whole layer vs the oracle (8 sequential decode dispatches), layers 0/5/40/35 x cursors 0,1,9,16,505,511,512,520,1000,4000, repeat 3, MAX_L 4608 | all 40 cases within tolerance (min cos 0.99916, typ 0.9995-0.9998; K/V min cos 0.99934); the only "FAIL" flags are the repeat-identity check of SWA L0 at cursor >= 505 = the first-after-load anomaly |
 
 Two earlier attempts of the engine run died with `ERT_CMD_STATE_TIMEOUT` / context-creation errors that were NOT this design:
@@ -74,13 +74,13 @@ killed by the driver reset 60 s later. A hung design on the NPU stalls every har
 16-context limit (another fork's engine held 12 contexts, mine needs 12).
 
 ## Other findings
-- **Harness poison bug class (pre-existing, also at 23ea54996):** `verify8 --poison` with several cursors in one process fails
+- **Harness poison bug class (pre-existing, also before the fix):** `verify8 --poison` with several cursors in one process fails
   (e.g. layer 5: cursor 0 then 9 -> cos 0.83; cursor 9 alone with poison passes, cursor 0 then 9 without poison passes and is
   bit-identical to cursor 9 alone). So a dispatch can be influenced by ON-CHIP data left by the previous dispatch when that data is
   extreme (the poisoned V rows of the previous dispatch); with sane data the effect is invisible. Same family as the first-after-load
   anomaly: some attention-path buffer is read before it is rewritten in the current dispatch. Owner: stream A (attention rewrite);
   repro: `run.exe -t verify8 --mode verify --fused-xclbin ... --layers 5 --cursors 0,9 --repeat 1 --poison`.
 - **My own harness bug, fixed:** the pli memo was keyed by object address; the harness re-creates decoding_layer objects at the same
-  address, so layer 40 got layer 5's pli rows (cos 0.89). Keyed by layer index now (80d3b38ea).
+  address, so layer 40 got layer 5's pli rows (cos 0.89). Keyed by layer index now.
 - **Partial-stage debug xclbins (`fused8_attn_L8` etc.) hang by design** on repeated dispatch (partial phase sets desync the cores):
   never run them in a loop.

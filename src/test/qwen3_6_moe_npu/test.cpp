@@ -104,7 +104,7 @@ int main(int argc, char* argv[]) {
       chat->clear_context();            
     }
     else{
-        std::ifstream file("/scratch/alfxu/FastFlowLM/src/tb_files/8k.txt", std::ios::binary);
+        std::ifstream file("../../../tb_files/8k.txt", std::ios::binary);
         if (!file.is_open()) {
             std::cout << "Failed to open prompt file" << std::endl;
             return 1;

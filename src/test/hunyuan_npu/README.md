@@ -14,7 +14,7 @@ Added 2026-11-03 for the long-context work (engine change: `FLM_DLL/detail/hunyu
 "Long context" in its README).
 
 ```
-python3 make_long_text.py /scratch/michyu/datasets/locomo-mc10/raw/locomo10.json long.txt
+python3 make_long_text.py /path/to/locomo-mc10/raw/locomo10.json long.txt
 test_long --text long.txt --lengths 512,1024,2048,4096,8192,16384,32768 --decode 16 --dump out/
 ```
 
@@ -66,8 +66,8 @@ fall as the prompt grows.
 
 The accuracy gate of the Hy-MT2 plan (G4) uses the all-CPU reference instead
 (`make HOST_ATTN=1 HOST_MM=1 BUILD_DIR=../../build/hunyuan_npu_host`): on Krackan the
-`HOST_ATTN=1`-only build hangs from ~4K. Dumps for 512 ... 24K are in
-`/scratch/michyu/hy_mt2_stage/long/host_acc`.
+`HOST_ATTN=1`-only build hangs from ~4K. Dumps for 512 ... 24K were kept
+outside the repository.
 
 ## prof_summary.py
 

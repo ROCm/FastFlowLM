@@ -1,7 +1,8 @@
 # locomo_mc10.cpp
 
 LoCoMo-MC10 multiple-choice scoring for Hy-Memory on the NPU. The full plan, the
-prompt format and the results live in `/scratch/michyu/Projects/hy_locomo_eval/NOTES.md`.
+prompt format and the results live in the `hy_locomo_eval` workspace (`NOTES.md`), which is
+not part of this repository.
 
 ## How it works
 - Input is `prompts.json` from `Projects/hy_locomo_eval/make_prompts.py`: token ids made

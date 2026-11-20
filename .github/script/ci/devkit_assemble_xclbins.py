@@ -13,7 +13,7 @@ devkit-xclbins-shard-<i> artifacts downloaded side by side
 merged. For every model of flm-dev-kit/FLM_Xclbin/kernel_assignment.json,
 each {<slot>.xclbin: artifact} whose artifact was built is copied to
 <out>/<model folder>/<slot>.xclbin, as FastFlowLM's xclbins/ tree lays them
-out. Ported from FastFlowLM_IRON's assemble-xclbins action: of an
+out. Of an
 artifact's .xclbin files, the one named <slot>.xclbin is taken (a unit that
 builds several designs names each after the slot it fills); otherwise the
 only one, and an artifact with several and none of that name is ambiguous

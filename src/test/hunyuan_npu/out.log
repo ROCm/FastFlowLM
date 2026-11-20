@@ -2,8 +2,8 @@ cp ../../model_list.json ../../build/test/hunyuan_npu/model_list.json
 cd ../../build/test/hunyuan_npu && ./test_hunyuan --model hy-mt2:1.8b --warmup 1 --count 40 --Length 512 --pin 1 --csv bench.csv
 Model: hy-mt2:1.8b
 [info]  Initializing chat model...
-Model path: /scratch/alfxu/models/Hy-MT2-1.8B-NPU2
-[FLM]  Loading model: /scratch/alfxu/models/Hy-MT2-1.8B-NPU2
+Model path: $FLM_MODEL_PATH/models/Hy-MT2-1.8B-NPU2
+[FLM]  Loading model: $FLM_MODEL_PATH/models/Hy-MT2-1.8B-NPU2
   Model: 
     model_name:             Hy-MT2-1.8B-NPU2
     compatible_flm_version: >= 0.0.0

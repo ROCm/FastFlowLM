@@ -5,7 +5,7 @@
 
 # 8-token projection engine on hardware (plan S6.3 / S6.4 / S6.5a), 2026-10-29
 
-Designs (IRON `FLM_Xclbin/Gemma4/verify_decoding`, branch feat/bolt-dflash, commits 5a32344f6, dc32e4f9c, 3a0e5815f):
+Designs (`FLM_Xclbin/Gemma4/verify_decoding`):
 - `DESIGN=projonly`: 16 Q4 projection cores + assembly memtiles + MT3 x landing/replay + shim feed/capture (y packets de-permuted by a shim BD).
 - `DESIGN=projstage`: same, y goes through the MT4 token-major stage (`y_depermute_mt`) and IT4.
 - `make bitstream MODEL_TYPE=GEMMA4_E4B L_TOKENS=8 DESIGN=projonly` (build/GEMMA4_E4B_L8/xclbins/projonly.xclbin); `L_TOKENS=1` runs the shipping core through the same replay machinery.

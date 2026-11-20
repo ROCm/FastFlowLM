@@ -12,8 +12,7 @@ description: >
   output is non-zero when the gate fails, for the job's final gate, so the
   other benches and the upload still run. Runs the scripts of scripts-dir
   (the pull request's base) under clean_run.py: no token or GitHub variable
-  reaches flm. Ported from FastFlowLM_IRON's bench-acc and bench-vlm-acc
-  actions.
+  reaches flm.
 
 inputs:
   bench:

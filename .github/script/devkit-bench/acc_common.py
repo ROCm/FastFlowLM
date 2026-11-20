@@ -2,8 +2,6 @@
 # Portions of this file consist of AI-generated content.
 """Shared plumbing for the two dev-kit accuracy benches.
 
-Ported from FastFlowLM_IRON's .github/scripts/acc-bench-common.
-
 gsm8k_run.py (GSM8K) and run_vqa.py (DocVQA) both stream questions through
 an already-running `flm serve` over /v1/chat/completions. They used to handle
 a bad question differently -- GSM8K counted a request failure, DocVQA silently

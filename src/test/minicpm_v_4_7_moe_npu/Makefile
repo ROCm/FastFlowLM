@@ -25,8 +25,7 @@ SOURCES += ../../common/AutoModel/modeling_minicpm_v_moe.cpp
 # Same file list as the other VLM harnesses. MiniCPM does NOT call the shared
 # resize -- it ships a PIL-exact one in modeling_minicpm_v_moe_image.cpp, because the
 # shared bicubic differs from PIL by up to 29 levels and SigLIP amplifies that
-# more than every device rounding combined
-# (notes/tricks/2026-10-05-siglip-amplifies-resize-differences.md in FLM_IRON).
+# more than every device rounding combined.
 # imageproc.cpp is still linked: imageprocAVX512.cpp references it regardless.
 SOURCES += ../../common/AutoModel/modeling_minicpm_v_moe_image.cpp
 SOURCES += ../../common/image/image_reader.cpp

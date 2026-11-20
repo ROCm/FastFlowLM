@@ -3,8 +3,6 @@
 # Portions of this file consist of AI-generated content.
 """Build the DocVQA evaluation subset from a pinned public source.
 
-Adapted from FastFlowLM_IRON's .github/scripts/vlm-acc-bench/build_dataset.py.
-
 Runs on a GitHub-hosted runner (devkit-bench.yml's docvqa job), never on an
 NPU runner: it downloads one validation shard of the Hugging Face dataset
 lmms-lab/DocVQA at a pinned commit (REVISION), checks its SHA-256 and size

@@ -4,9 +4,10 @@
 # Weights live at $FLM_MODEL_PATH/models/Hy-Memory-30B-A3B-NPU2
 export FLM_MODEL_PATH="/scratch/$USER"
 
-FLM_IRON="/scratch/$USER/Projects/FastFlowLM_IRON"
-FLM_DLL_BUILD="$FLM_IRON/FLM_DLL/build"
-XCLBIN_SRC="$FLM_IRON/FLM_Xclbin/Hy_mem_30BA3B"
+# The dev kit in this repository; FLM_DEVKIT_DIR overrides it.
+FLM_DEVKIT_DIR="${FLM_DEVKIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/flm-dev-kit}"
+FLM_DLL_BUILD="$FLM_DEVKIT_DIR/FLM_DLL/build"
+XCLBIN_SRC="$FLM_DEVKIT_DIR/FLM_Xclbin/Hy_mem_30BA3B"
 XCLBIN_DST="../../xclbins/Hy-Memory-30B-A3B-NPU2"
 
 # copy src to dst only if the contents differ

@@ -10,10 +10,10 @@ committed kernels are copied back to verify_decoding). Scripts: work/scripts/pw_
 shared, medians are often contention-inflated; quiet-box min == median).
 
 ## Committed
-| commit | change | before | after | accuracy |
+| # | change | before | after | accuracy |
 |---|---|---|---|---|
-| 4af6f3f92 | q4_l8: mmul pair scoped to one row half (all four 8x8 accumulators live -> compiler spilled them every k-tile) | toy 1.92 us/block (Peano slope), projonly L5 min 1724-1732 us | toy 1.62 us/block, projonly L5 min 1510-1549 us (L0 1346-1388) | bit-identical (proj8 relL2 0.0143-0.0202 unchanged; fused8 oracle unchanged) |
-| 8a10e416a | PLE MVM: two tokens per 64-lane accumulator, all 8 tokens one pass, column loop unrolled | toy 1.10 us per [128k x 32] x 8 tok | 0.91 us | bit-identical (ple8 stage relL2 0.0063-0.0091 unchanged, 4 layers) |
+| 1 | q4_l8: mmul pair scoped to one row half (all four 8x8 accumulators live -> compiler spilled them every k-tile) | toy 1.92 us/block (Peano slope), projonly L5 min 1724-1732 us | toy 1.62 us/block, projonly L5 min 1510-1549 us (L0 1346-1388) | bit-identical (proj8 relL2 0.0143-0.0202 unchanged; fused8 oracle unchanged) |
+| 2 | PLE MVM: two tokens per 64-lane accumulator, all 8 tokens one pass, column loop unrolled | toy 1.10 us per [128k x 32] x 8 tok | 0.91 us | bit-identical (ple8 stage relL2 0.0063-0.0091 unchanged, 4 layers) |
 
 Reference points (same session): projonly L=1 decode core L5 min 1271-1289 us; projonly 8-token with compute removed (stream floor) min 1427-1453 us.
 -> the 8-token projection is now within ~5-8 % of its weight-stream floor (was ~20 %).

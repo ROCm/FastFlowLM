@@ -3,8 +3,6 @@
 # Portions of this file consist of AI-generated content.
 """Comparisons and soft gates of the dev-kit benches (pure functions).
 
-Adapted from FastFlowLM_IRON's .github/scripts/comparer-perf/compare.py and
-comparer-acc/compare.py (which drew matplotlib plots and set no threshold);
 report.py renders what these return.
 
 Perf (flm bench CSVs: context_length_k, prefill/decoding avg tok/s, TTFT):

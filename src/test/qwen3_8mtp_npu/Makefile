@@ -64,8 +64,8 @@ verify_preprocess: $(BUILD_DIR)/verify_preprocess
 $(BUILD_DIR)/verify_preprocess: $(VERIFY_OBJECTS)
 	$(CXX) $(CXX_FLAGS) -o $@ $^ $(LDFLAGS) $(DEPENDENCY_LDFLAGS)
 
-REF_IMAGE ?= /scratch/michyu/Projects/FastFlowLM_IRON/models_simple/test_input/observation_images_image.png
-REF_DUMP  ?= /scratch/michyu/models/Qwen3.8-27B-NPU2/vision_ref.safetensors
+REF_IMAGE ?= /scratch/$(USER)/observation_images_image.png
+REF_DUMP  ?= /scratch/$(USER)/models/Qwen3.8-27B-NPU2/vision_ref.safetensors
 
 verify: $(BUILD_DIR)/verify_preprocess
 	cd $(BUILD_DIR) && export LD_LIBRARY_PATH=../../../lib/xrt \

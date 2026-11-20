@@ -5,7 +5,7 @@
 
 # fused8: the whole 8-row verify layer on hardware (plan S6.11 / S6.12), 2026-10-29
 
-IRON `FLM_Xclbin/Gemma4/verify_decoding`, branch feat/bolt-dflash: commit 3d1a586a3 (design + host driver) and the chain8 test commit after it.
+Design: `FLM_Xclbin/Gemma4/verify_decoding` (design + host driver, and the chain8 test).
 Design `DESIGN=fused8` (`iron/fused8_aie.py`, `iron/fused8_mt.py`), build `work/scripts/build_fused8.sh <attn|nople|full>` (kernels: proj_main rms_residual_l8 glu_l8 rope swa_rope
 attn_qk_e4b attn_kv_e4b swa_attn_qk swa_attn_kv ple8_gate ple8_up ple8_norm; Peano; the three xclbins build and route in 2-6 s, `full` = 211,980 B).
 Allocation table: `fused8_allocation.md` (this folder).  Test: `run.exe -t chain8` (42 layers).

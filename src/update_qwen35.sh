@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
 # update_qwen35.sh — copy freshly built Qwen3.5 / Qwen3.6-35B-A3B artifacts
-#                    (xclbins + shared libs) from the FastFlowLM_IRON build
-#                    tree into this repo.
+#                    (xclbins + shared libs) from the dev kit's build
+#                    trees (flm-dev-kit/) into this repo's src/.
 #
 # Usage:
 #   ./update_qwen35.sh                 # copy the standard set (0.8B/2B/4B/9B + 35B-A3B)
@@ -11,13 +11,14 @@
 #   ./update_qwen35.sh --exe ~/flm_exe # additionally mirror into an installed flm_exe tree
 #
 # Sources can be overridden via env:
+#   FLM_DEVKIT_DIR=/path/to/flm-dev-kit ./update_qwen35.sh
 #   FLM_XCL=/path/to/FLM_Xclbin  FLM_DLL=/path/to/FLM_DLL  ./update_qwen35.sh
 #
 set -uo pipefail
 
-IRON="${IRON:-/scratch/alfxu/FastFlowLM_IRON}"
-FLM_XCL="${FLM_XCL:-$IRON/FLM_Xclbin}"
-FLM_DLL="${FLM_DLL:-$IRON/FLM_DLL}"
+FLM_DEVKIT_DIR="${FLM_DEVKIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/flm-dev-kit}"
+FLM_XCL="${FLM_XCL:-$FLM_DEVKIT_DIR/FLM_Xclbin}"
+FLM_DLL="${FLM_DLL:-$FLM_DEVKIT_DIR/FLM_DLL}"
 
 # This script lives in the repo's src/ dir.
 REPO_SRC="${REPO_SRC:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
@@ -30,7 +31,7 @@ while [[ $# -gt 0 ]]; do
     -n|--dry-run) DRY=1 ;;
     --gdn)        DO_GDN=1 ;;
     --exe)        EXE_DIR="${2:?--exe needs a path}"; shift ;;
-    -h|--help)    sed -n '2,17p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help)    sed -n '2,16p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *)            echo "unknown option: $1" >&2; exit 2 ;;
   esac
   shift

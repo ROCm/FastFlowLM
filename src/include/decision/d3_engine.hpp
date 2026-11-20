@@ -1,7 +1,7 @@
 /// \file d3_engine.hpp
 /// \brief The engine-facing interface of the d3 contract: what one state-once call needs and returns.
 /// \note  This is the ONLY header between the contract (src/common/decision, CPU only) and an engine. The real
-///        engine (d3_npu, IRON: `encode_state_once`, see work/m2_api.md) is wrapped by one adapter class
+///        engine (d3_npu, flm-dev-kit/FLM_DLL: `encode_state_once`, see work/m2_api.md) is wrapped by one adapter class
 ///        (src/common/AutoDecisionModel/d3_engine_adapter.*); when the engine's header changes only that file does.
 ///        `ScriptedEngine` (d3_engine_stub.hpp) is the CPU stand-in the tests use.
 #pragma once

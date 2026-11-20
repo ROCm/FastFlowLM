@@ -8,7 +8,7 @@
 Goal: the 8 verify tokens read K/V ONCE per verify (attn8 replayed K/V once per token: 8x the single-token traffic).
 Target: global and SWA 8-token attention <= ~2x the single-token (decode) attention at 4k.  Status: **met** (stage design and fused8).
 
-## Design (committed: 3f6f16708, 07b552da1, b2d10ea22)
+## Design
 Files: `kernels/attnx_common.h`, `kernels/attnx_score.cc`, `kernels/attnx_pv.cc`, `iron/attnx.py` (tiles, q park, o assembly),
 `iron/attnx_aie.py` (stand-alone stage design, DESIGN=attnx), `host_attn8/attnx_host.hpp` (stage host, `attn8.exe --stage attnx`),
 `iron/fused8_aie.py` (`FUSED8_ATTN=x` selects attnx, default `8` = old attention), `host/test_fused8.hpp` (attnx RTPs + K/V replay).
@@ -71,7 +71,7 @@ fused8x (`build/fused8x_full_L8`):
   Fixed by the o assembly memtile with circuits.
 - ~11:08: an ATTNX_DBG=1 debug build (debug branches broken; DBG builds must not be used again).
 
-## Read-before-write bug (coordinator item 3): ROOT CAUSE = test harness, fixed in b2d10ea22
+## Read-before-write bug (coordinator item 3): ROOT CAUSE = test harness, fixed
 Repro: `-t verify8 --mode verify --layers 5 --cursors 0,9 --poison` (cos 0.83 at c=9 when c=0 runs first).
 
 Cause: `kv_cache` is `buffer<bf16>`, and `size()` returns ELEMENTS.
@@ -141,7 +141,7 @@ fused pass then start from the same snapshot; logs work/attnx/chain_*.log)
   - Stream acceptance on real text (AL in the engine) is the right judge.
   - Open question for the coordinator: whether the rows with large fused margins (e.g. 102 vs oracle 1.9) are random-token
     artefacts (huge hidden norms) or an accumulated bf16 bias of the fused projections.
-- Rig speed: seeding costs ~1.8 s per 8-position fused pass on the host (pli_row made ~10x faster in 5dd31ecb0; the rest is per-call host
+- Rig speed: seeding costs ~1.8 s per 8-position fused pass on the host (pli_row since made ~10x faster; the rest is per-call host
   BO setup), so a 16k chain takes ~75 min.
 
 ## Summary

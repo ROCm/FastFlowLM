@@ -3,8 +3,6 @@
 # Portions of this file consist of AI-generated content.
 """Official DocVQA metric: ANLS (Average Normalized Levenshtein Similarity).
 
-Ported from FastFlowLM_IRON's .github/scripts/vlm-acc-bench.
-
 For each question, score = max over ground-truth answers of
     (1 - NL(pred, gt))   if that value >= 0.5   else 0
 where NL is the Levenshtein distance normalized by the longer string length.

@@ -3,8 +3,6 @@
 # Portions of this file consist of AI-generated content.
 """Run the GSM8K accuracy bench against an already-running `flm serve` model.
 
-Ported from FastFlowLM_IRON's .github/scripts/llm-acc-bench.
-
 Streams the vendored GSM8K test questions (data/gsm8k_100.jsonl, the first
 100 of the GSM8K test set; see THIRD_PARTY_NOTICES.txt) through
 /v1/chat/completions, asks for step-by-step work ending in a fixed
