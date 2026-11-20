@@ -188,6 +188,11 @@ jobs:
         working-directory: .github/script
         run: python3 -m unittest discover -s ci -p 'test_*.py' -t ci
 
+      # Every event, whatever it touches: no tracked file may name internal
+      # repositories, tickets, personal paths or NPU crash details.
+      - name: Check for internal references
+        run: python3 .github/script/ci/check_internal_refs.py
+
   # Static checks of the dev kit's CI data (flm-dev-kit/FLM_Xclbin/
   # kernel_assignment.json and build_units.json, flm-dev-kit/FLM_DLL/
   # engines.json, the -Bsymbolic-functions link flag, and on a pull request

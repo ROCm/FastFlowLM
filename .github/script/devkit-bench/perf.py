@@ -4,8 +4,6 @@
 """Runs `flm bench` for one model, on the dev-kit build and optionally on the
 package it was overlaid on, back to back on the same runner.
 
-Adapted from FastFlowLM_IRON's .github/scripts/bench-perf/bench-perf.sh.
-
     perf.py --flm-bin <overlaid flm> [--base-flm-bin <unmodified flm>]
             --model <tag> --out-dir <dir> [--ctx-len 8192]
             [--timeout 3600] [--pull]

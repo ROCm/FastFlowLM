@@ -17,7 +17,7 @@ count=, empty=, touched-models=, bench-models= and mode= to $GITHUB_OUTPUT):
    "touched_models": [<kernel_assignment.json models using a built artifact>],
    "bench_models": [<the models worth benching: see below>]}
 
-bench_models, as FastFlowLM_IRON's bench-models: in mode changed, the models
+bench_models: in mode changed, the models
 using a build selected because its source (or its build_units.json entry)
 changed, plus the models whose kernel_assignment.json entry was added or
 changed. A canary build, or one rebuilt only because a changed model uses
@@ -257,8 +257,8 @@ class Plan:
 def changed_plan(plan: Plan, files: list[str], base_units: dict[str, list],
                  base_assignment: Optional[dict], canary: list,
                  base_lock: Optional[str] = None, head_lock: Optional[str] = None) -> None:
-    # Units removed or renamed: their old paths select nothing (as IRON's
-    # walk-up, which found no Makefile there at head).
+    # Units removed or renamed: their old paths select nothing (a walk-up
+    # from them finds no Makefile at head).
     gone = set(base_units) - set(plan.units)
     for path in files:
         if TOOLCHAIN.match(path) or DEVKIT_CI.match(path):

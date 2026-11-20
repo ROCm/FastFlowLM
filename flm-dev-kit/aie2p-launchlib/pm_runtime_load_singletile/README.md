@@ -101,7 +101,7 @@ powershell -File tools/pressure.ps1 -Bin C:\b\pm\Release -Package precompiled/c8
 
 Ryzen AI 7 350 (Krackan, 8 columns), XRT 2.21.0, 32 cores: the table above and the walks in
 `results/pressure_32core.md` pass. Not run on Windows: P5b, P8, P9, P10 (`-Group hang`). They hang the NPU on
-purpose, and on two machines that ended with the machine offline (one in bugcheck 0x119).
+purpose, and repeated hangs can make the machine unresponsive (reboot to recover).
 
 The builds above are blind (no context list). With `-DNPU_WATCH=ON` (public XRT headers only), `test` and `stress`
 see other contexts through XRT's list, and warm and rerun launches run as asked while the NPU is theirs; they print

@@ -22,7 +22,7 @@ engine compiles from the same shared header with the same value; add one only
 after checking that it is the same in every library.
 
 Run by devkit-engines.yml on flm-dev-kit/FLM_DLL/build/lib (Linux XRT and
-HRX). Ported from the internal FLM_IRON CI. Standard library and binutils' nm.
+HRX). Standard library and binutils' nm.
 """
 import argparse
 import collections

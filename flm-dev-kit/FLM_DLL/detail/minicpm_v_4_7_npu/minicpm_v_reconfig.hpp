@@ -3,7 +3,7 @@
 
 #pragma once
 // Reconfigure the NPU array from inside an instruction stream, instead of switching hardware contexts.
-// (Adapted from the Gemma4e vision single-context reconfiguration, IRON PR #137 / feat/vision-single-ctx.)
+// (Adapted from the Gemma4e vision single-context reconfiguration.)
 //
 // The MiniCPM-V language prefill alternates between two overlays: mm.xclbin (projections) and attn.xclbin (full attention, 6 layers).
 // Each overlay is its own xclbin = its own hw_context, and every switch between contexts costs about 2.4 ms (the firmware reloads the PDI);

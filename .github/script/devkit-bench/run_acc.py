@@ -4,9 +4,6 @@
 """Runs one accuracy bench (GSM8K or DocVQA) for one model against its own
 `flm serve`.
 
-Adapted from the serve/poll/run/score/stop steps of FastFlowLM_IRON's
-.github/actions/bench-acc and bench-vlm-acc.
-
     run_acc.py --bench gsm8k|docvqa --flm-bin <flm> --model <tag>
                --out-dir <dir> [--n 50] [--data eval.jsonl]
                [--max-unanswered 5] [--time-budget-s 0]

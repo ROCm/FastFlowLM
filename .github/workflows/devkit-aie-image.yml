@@ -11,7 +11,7 @@ name: Dev-kit AIE build image
 #   build    every event: builds the image without pushing it, then builds
 #            the kernels docker/aie-build.pdi.sha256 lists in it
 #            (docker/aie-build-check.sh) and requires each one's PDI to be the
-#            one IRON's toolchain made, byte for byte. A pull request that
+#            one the original toolchain made, byte for byte. A pull request that
 #            changes the toolchain shows whether it still makes the shipped
 #            kernels
 #   publish  main only (push, or workflow_dispatch run on main): builds again

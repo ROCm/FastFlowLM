@@ -4,7 +4,7 @@
 /// \brief q4nx arithmetic shared by every NPU layer here: the two block-size
 ///        formulae and the row-block interleave.
 ///
-/// Duplicated from the IRON tree's quant_size.hpp and
+/// Duplicated from FLM_Xclbin's quant_size.hpp and
 /// decoding_layer::reorder_cpy rather than included, since the DLL does not
 /// otherwise reach under FLM_Xclbin. A divergence dequantises garbage rather
 /// than failing to compile -- hence the static assertions below.

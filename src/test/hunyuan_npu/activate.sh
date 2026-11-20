@@ -3,7 +3,9 @@
 # Weights live at $FLM_MODEL_PATH/models/Hy-MT2-1.8B-NPU2
 export FLM_MODEL_PATH="/scratch/$USER"
 
-FLM_DLL_BUILD="/scratch/$USER/FastFlowLM_IRON/FLM_DLL/build"
+# The dev kit in this repository; FLM_DEVKIT_DIR overrides it.
+FLM_DEVKIT_DIR="${FLM_DEVKIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/flm-dev-kit}"
+FLM_DLL_BUILD="$FLM_DEVKIT_DIR/FLM_DLL/build"
 
 # copy src to dst dir only if the contents differ
 copy_if_different() {

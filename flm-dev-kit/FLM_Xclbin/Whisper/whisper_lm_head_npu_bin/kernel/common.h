@@ -11,7 +11,7 @@ typedef bfloat16 bf16;
 // .bss is not zeroed when a Peano-built core is loaded. AIE_PERSIST_ZERO puts a
 // zero-initialized static that must keep its value across calls in .data, and
 // AIE_PING_FLAG makes a ping/pong selector volatile there too: under Peano a lock
-// acquire is not a memory barrier. Both do nothing under chess. (As IRON#148.)
+// acquire is not a memory barrier. Both do nothing under chess.
 #if defined(__chess__)
 #define AIE_PERSIST_ZERO
 #define AIE_PING_FLAG bool

@@ -93,7 +93,7 @@ int main(int argc, char* argv[]) {
     arg_utils::po::variables_map vm;
     desc.add_options()("model,m", arg_utils::po::value<std::string>()->default_value("hy-memory:30b-a3b"), "Model tag");
     desc.add_options()("prompts", arg_utils::po::value<std::string>()->default_value(
-        "/scratch/michyu/Projects/hy_locomo_eval/out/prompts.json"), "make_prompts.py output");
+        "prompts.json"), "make_prompts.py output");
     desc.add_options()("out", arg_utils::po::value<std::string>()->required(), "results, one JSON line per question (appended)");
     desc.add_options()("set", arg_utils::po::value<std::string>()->default_value("pilot"), "pilot or all");
     desc.add_options()("convs", arg_utils::po::value<std::string>()->default_value(""), "only these conversations, e.g. conv-41,conv-30");

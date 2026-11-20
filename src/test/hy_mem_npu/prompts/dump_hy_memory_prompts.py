@@ -15,7 +15,7 @@ import json
 import os
 import sys
 
-HY_MEMORY_SRC = sys.argv[1] if len(sys.argv) > 1 else "/scratch/michyu/Projects/hy_memory_src/Hy-Memory"
+HY_MEMORY_SRC = sys.argv[1] if len(sys.argv) > 1 else "Hy-Memory"
 
 # key in the json -> (file in the Hy-Memory clone, constant name)
 PROMPTS = {

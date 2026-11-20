@@ -5,8 +5,8 @@
 
 # Stream D: acceptance length and host-side cycle time (2026-10-29)
 
-Code: IRON `FLM_DLL/detail/gemma4e_dflash` commits `536b0e0f2` (drafter GEMM), `5566e669e` (async inject, draft-head re-scoring,
-measured guard, tf_replay rig), `e0f68c28b` (verify preparation overlaps the draft head, dynamic GEMM schedule). Rigs: `tools/tf_replay.cpp` (teacher-forced / free AL), `work/scripts/run_d_seqs.py` (one sequence
+Code: `FLM_DLL/detail/gemma4e_dflash`: drafter GEMM; async inject, draft-head re-scoring,
+measured guard, tf_replay rig; verify preparation overlaps the draft head, dynamic GEMM schedule. Rigs: `tools/tf_replay.cpp` (teacher-forced / free AL), `work/scripts/run_d_seqs.py` (one sequence
 per process, retries after a device reset), `work/scripts/eval_d.sh`, offline analysis `work/ref/al_analysis.py`,
 `al_subvocab.py`, `al_rescore.py`, `al_rescore_q8.py`, `vocab_select.py`. Private builds: `work/dfork/build` (D), `work/dfork/build_head`
 (HEAD before D, for A/B).
@@ -53,15 +53,15 @@ generations 90% at 32k ids; TF AL static 32k 3.156, static 64k 3.458, static 64k
 (TF AL is deterministic to ~0.3% run to run; per sequence the cycle boundaries shift when a draft changes, so per-sequence numbers
 move both ways while the mean improves.)
 
-**Package proposal**: `configs/dflash.json` `"bf16_tensors": ["model.fc.weight"]` (converter commit 6f0f77b9e supports it; the host
+**Package proposal**: `configs/dflash.json` `"bf16_tensors": ["model.fc.weight"]` (the converter supports it; the host
 drafter already reads BF16 blocks; checked: C++ vs fp32 reference on the same weights cos >= 0.999998, tokens 7/7 on the S5.2 cases).
 Package grows 225 MB -> 270 MB. The package is not published yet, so this is the moment (D13).
 
 ## 3. Host side
 
-- Drafter GEMM (`536b0e0f2`): bf16 scale/min pairs (-17% weight bytes), weight tile reused across 8-token tiles (prompt priming in
+- Drafter GEMM: bf16 scale/min pairs (-17% weight bytes), weight tile reused across 8-token tiles (prompt priming in
   64-row chunks), q|k|v and gate|up in one parallel region, 16 threads by default. Bit-identical outputs.
-- Speculative injection (`5566e669e`): the verify rows' taps are injected on a background thread during the verify's `lm_head_8` and
+- Speculative injection: the verify rows' taps are injected on a background thread during the verify's `lm_head_8` and
   the caller's sampling; commit truncates (`truncate()`) to the kept rows. Inject wait at commit: ~0.05 ms (was ~1.4 ms on the path).
 - Draft head re-scoring costs ~0.3 ms (56 Q8 rows dequantised + dotted) on top of the NPU dispatch.
 - Guard: measured cycle and plain-step costs of the session replace the fitted constants once available.
@@ -79,8 +79,8 @@ thinking on, free-running greedy speculation, 256 tokens; `tf_replay free`, logs
 
 | engine | cycles | AL | tok/s | ms/cycle | host draft | draft head | verify | accept | commit |
 |---|--:|--:|--:|--:|--:|--:|--:|--:|--:|
-| HEAD (`7f689ba6a`+H fix) | 2750 | 3.613 | 21.52 | 167.9 | 12.07 | 11.57 | 141.87 | 1.77 | 0.02 |
-| D (`e0f68c28b`) | 2686 | **3.708** | **23.05** | **160.9** | **6.66** | 11.66 | 141.49 | 0.51 | 0.02 |
+| HEAD (+H fix) | 2750 | 3.613 | 21.52 | 167.9 | 12.07 | 11.57 | 141.87 | 1.77 | 0.02 |
+| D | 2686 | **3.708** | **23.05** | **160.9** | **6.66** | 11.66 | 141.49 | 0.51 | 0.02 |
 | change | | +2.6% | **+7.1%** | -7.0 ms | -5.4 | +0.1 | (same) | -1.3 | |
 
 (verify includes the 42 layers and lm_head_8; at these contexts the NPU part is unchanged by D. llama.cpp reference on the same
