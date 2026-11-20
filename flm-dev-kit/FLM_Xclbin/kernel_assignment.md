@@ -29,7 +29,8 @@ assemble them per model. To try them on your machine:
    - **Linux:** `<install dir>/opt/fastflowlm/share/flm/xclbins/`
    - **Windows:** `<install dir>/xclbins/`
 
-The run fails when a kernel's RTP
+The run also compares each kernel with the one FastFlowLM ships (the job summary and the
+`devkit-xclbins-compare` artifact; a report, never a failure). It fails when a kernel's RTP
 addresses differ from `rtp_addresses.lock.txt`: the engines hard-code them, so in the same pull
 request update the constants in `flm-dev-kit/FLM_DLL/detail/<engine>/` of every engine serving a
 model that uses the kernel (and FastFlowLM's `src/detail/<engine>/`), and regenerate the lock

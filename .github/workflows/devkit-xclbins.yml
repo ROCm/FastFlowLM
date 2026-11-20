@@ -37,7 +37,10 @@ name: Dev-kit xclbins
 #   assemble  .github/actions/devkit-assemble-xclbins: the shards' kernels as
 #             <model folder>/<slot>.xclbin per kernel_assignment.json,
 #             uploaded as devkit-xclbins; its touched-models are the models
-#             that got any kernel. Then the RTP check: a kernel built here whose rtp_addresses file differs
+#             that got any kernel. Then a report comparing them with
+#             FastFlowLM's src/xclbins/ (job summary and the
+#             devkit-xclbins-compare artifact; never fails), and the RTP
+#             check: a kernel built here whose rtp_addresses file differs
 #             from flm-dev-kit/FLM_Xclbin/rtp_addresses.lock.txt fails the
 #             job, as the engines hard-code those addresses
 #
