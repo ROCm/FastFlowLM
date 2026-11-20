@@ -122,6 +122,21 @@ class Changed(unittest.TestCase):
         same = {m: dict(reversed(list(e.items()))) for m, e in ASSIGNMENT.items()}
         self.assertEqual(plan(files=[f"{X}/kernel_assignment.json"], base_assignment=same)["units"], [])
 
+    def test_rtp_lock_change_builds_the_changed_stanzas_artifacts(self):
+        lock = f"{X}/rtp_addresses.lock.txt"
+        self.assertEqual(lock, xp.RTP_LOCK)
+        base = "[xclbins-Fam_decoding_A/rtp_addresses.txt]\nR 1\n\n[xclbins-Fam_decoding_B/rtp_addresses.txt]\nR 2\n"
+        head = base.replace("R 2", "R 3") + "\n[xclbins-Fam_prefill/rtp_addresses.txt]\nR 4\n"
+        r = plan(files=[lock], base_lock=base, head_lock=head)
+        # B changed, Fam/prefill added; A unchanged. Not a source change.
+        self.assertEqual(builds(r), [("Fam/decoding", "B"), ("Fam/prefill", None)])
+        self.assertEqual(r["bench_models"], [])
+        # No lock at the base: every stanza; a removed stanza still rebuilds.
+        self.assertEqual(len(plan(files=[lock], base_lock=None, head_lock=head)["units"]), 3)
+        self.assertEqual(builds(plan(files=[lock], base_lock=base, head_lock=base.split("\n\n")[0])),
+                         [("Fam/decoding", "B")])
+        self.assertEqual(plan(files=[lock], base_lock=base, head_lock=base)["units"], [])
+
     def test_build_units_change_builds_changed_units(self):
         base = dict(UNITS, **{"Fam/decoding": ["A", "B"]})
         del base["Fam/prefill"]

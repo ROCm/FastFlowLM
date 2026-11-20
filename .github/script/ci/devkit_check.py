@@ -42,6 +42,16 @@ Checks, each failure printed as "devkit_check: error: ..." (exit 1):
                 include/models/<x>/ headers its Makefile or CMakeLists.txt
                 (outside # comments) or the #include lines of its sources and
                 own headers name. The JSON files must not repeat a key
+  rtp lock      FLM_Xclbin/rtp_addresses.lock.txt (devkit_rtp_lock.py) parses
+                and names only artifacts a build unit produces and some
+                kernel_assignment.json model uses. With --base, when the pull
+                request changes the lock: every artifact whose stanza it adds,
+                changes or removes must come with a change under
+                FLM_DLL/detail/<engine>/ of every engine serving a model that
+                uses the artifact (engines.json), since each engine keeps its
+                own copy of those addresses; an engine also counts as changed
+                when an engine it uses (its "uses") changed. The engines are
+                reported. A lock new at the base needs no engine change
   Bsymbolic     every FLM_DLL/detail/*/Makefile has -Wl,-Bsymbolic-functions
                 on a line that is not a comment
   notices       with --base: every file added under flm-dev-kit/ between the
@@ -69,7 +79,10 @@ import sys
 from pathlib import Path
 from typing import Iterable, Optional
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+HERE = Path(__file__).resolve().parent
+REPO_ROOT = HERE.parents[2]
+sys.path.insert(0, str(HERE))
+from devkit_rtp_lock import LOCK_REL as RTP_LOCK, assigned, changed_artifacts, parse_lock, users  # noqa: E402
 DEVKIT = "flm-dev-kit"
 XCLBIN = f"{DEVKIT}/FLM_Xclbin"
 DLL = f"{DEVKIT}/FLM_DLL"
@@ -437,6 +450,79 @@ def check_bsymbolic(repo: Path, errors: list) -> int:
     return count
 
 
+def check_rtp_lock(repo: Path, index: dict, assignment: Optional[dict], errors: list) -> int:
+    """The lock parses and names known artifacts some model uses; returns its
+    stanza count."""
+    try:
+        entries, _ = parse_lock((repo / RTP_LOCK).read_text(encoding="utf-8"))
+    except OSError as exc:
+        errors.append(f"{RTP_LOCK}: cannot read: {exc}")
+        return 0
+    except ValueError as exc:
+        errors.append(f"{RTP_LOCK}: {exc}")
+        return 0
+    if index:
+        for artifact in sorted({a for a, _ in entries} - set(index)):
+            errors.append(f"{RTP_LOCK}: {artifact} is no build unit's artifact (build_units.json)")
+    if assignment:
+        used = assigned(assignment)
+        for artifact in sorted({a for a, _ in entries} - used):
+            errors.append(f"{RTP_LOCK}: {artifact} is used by no {ASSIGNMENT} model, so no engine "
+                          "loads it: drop its stanza (devkit_rtp_lock.py generate leaves it out)")
+    return len(entries)
+
+
+def git_out(repo: Path, *args: str) -> Optional[str]:
+    try:
+        res = subprocess.run(["git", "-c", "core.quotePath=false", "-C", str(repo), *args],
+                             capture_output=True, text=True, encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    return res.stdout if res.returncode == 0 else None
+
+
+def check_rtp_lock_change(repo: Path, base: str, head: str, assignment: dict, engines: dict,
+                          errors: list, notes: list) -> None:
+    """A changed lock stanza needs a change to every engine serving a model
+    that uses it (or to an engine that engine uses)."""
+    changed = git_out(repo, "diff", "--name-only", "--no-renames", f"{base}...{head}")
+    mb = git_out(repo, "merge-base", base, head)
+    if changed is None or mb is None:
+        errors.append(f"rtp lock: git cannot diff {base}...{head} (fetch the history: fetch-depth: 0)")
+        return
+    files = [l for l in changed.splitlines() if l.strip()]
+    if RTP_LOCK not in files:
+        notes.append("rtp lock: unchanged")
+        return
+    base_text = git_out(repo, "show", f"{mb.strip()}:{RTP_LOCK}")
+    if base_text is None:
+        notes.append(f"rtp lock: {RTP_LOCK} is new: no engine change required")
+        return
+    head_text = git_out(repo, "show", f"{head}:{RTP_LOCK}") or ""
+    for artifact in changed_artifacts(base_text, head_text):
+        models, serving = users(artifact, assignment, engines)
+        dirs = [e for e in serving if e.startswith(f"{DLL}/detail/")]
+        if not dirs:
+            notes.append(f"rtp lock: {artifact} changed; no engine serves a model using it "
+                         f"(models: {', '.join(models) or 'none'})")
+            continue
+        missing = [d for d in dirs if not engine_touched(d, engines, files)]
+        if missing:
+            errors.append(f"{RTP_LOCK}: the stanza of {artifact} changed, but these engines serving its "
+                          f"models ({', '.join(models)}) did not: {', '.join(missing)}: update their "
+                          "hard-coded RTP addresses in the same pull request")
+        else:
+            notes.append(f"rtp lock: {artifact} changed with {', '.join(dirs)}")
+
+
+def engine_touched(engine_dir: str, engines: dict, files: list[str]) -> bool:
+    """files change engine_dir (FLM_DLL/detail/<engine>/) or an engine it uses."""
+    eng = engine_dir[len(f"{DLL}/detail/"):].rstrip("/")
+    entry = (engines.get("engines") or {}).get(eng) or {}
+    deps = {eng, *(entry.get("uses") or [])}
+    return any(f.startswith(f"{DLL}/detail/{x}/") for x in deps for f in files)
+
+
 def needs_notice(path: str) -> bool:
     name = path.rsplit("/", 1)[-1]
     return name in NOTICE_NAMES or name.endswith(NOTICE_EXT)
@@ -528,9 +614,11 @@ def run(repo: Path, base: str = "", head: str = "HEAD") -> tuple[list[str], list
         check_engines(repo, engines, models, errors)
         notes.append(f"engines: {len(engines.get('engines') or {})} engines, "
                      f"{len(engines.get('shared') or [])} shared")
+    notes.append(f"rtp lock: {check_rtp_lock(repo, index, assignment, errors)} stanzas")
     notes.append(f"Bsymbolic: {check_bsymbolic(repo, errors)} Makefiles")
     if base.strip("0 "):
         notes.append(f"notices: {check_notices(repo, base, head, errors, notes)} added source/script files")
+        check_rtp_lock_change(repo, base, head, assignment or {}, engines or {}, errors, notes)
     else:
         notes.append("notices: skipped (no --base)")
     return errors, notes
@@ -540,7 +628,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--repo", type=Path, default=REPO_ROOT)
     parser.add_argument("--base", default="",
-                        help="Check the notices of files added since the merge base with this commit; "
+                        help="Check the notices of files added, and the RTP lock's changes, since the "
+                             "merge base with this commit; "
                              "empty or all-zero skips that check.")
     parser.add_argument("--head", default="HEAD")
     args = parser.parse_args(argv)

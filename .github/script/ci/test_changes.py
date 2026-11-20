@@ -449,6 +449,8 @@ class DevKit(unittest.TestCase):
             "flm-dev-kit/FLM_DLL/detail/q4nx/q4_npu_eXpress.cpp": "xclbin,dll,launchlib",
             "flm-dev-kit/FLM_DLL/detail/hunyuan_npu/hunyuan_npu.cpp": "xclbin,dll",
             "flm-dev-kit/FLM_DLL/detail/minicpm_ocr_npu/image/npu/x.cpp": "xclbin,dll",
+            # The RTP lock goes with an engine change.
+            "flm-dev-kit/FLM_Xclbin/rtp_addresses.lock.txt": "xclbin,dll",
         }
         for path, areas in cases.items():
             with self.subTest(path=path):

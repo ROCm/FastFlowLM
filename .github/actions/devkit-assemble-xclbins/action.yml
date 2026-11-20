@@ -8,8 +8,11 @@ description: >
   assigns them (the layout of FastFlowLM's xclbins/ tree), with
   .github/script/ci/devkit_assemble_xclbins.py, then uploads the tree as
   devkit-xclbins. A model some of whose kernels were not built gets the ones
-  that were (partial). Needs the repository checked out first, and only
-  contents: read.
+  that were (partial). Then checks the RTP
+  address files of every kernel built against
+  flm-dev-kit/FLM_Xclbin/rtp_addresses.lock.txt (devkit_rtp_lock.py check):
+  one that moved fails the action, naming the models and engines to update.
+  Needs the repository checked out first, and only contents: read.
 
 inputs:
   fail-on-partial:
@@ -20,6 +23,10 @@ inputs:
     description: Name of the assembled tree's artifact.
     required: false
     default: devkit-xclbins
+  rtp-lock:
+    description: The RTP address lock to check the built kernels against; empty skips the check.
+    required: false
+    default: flm-dev-kit/FLM_Xclbin/rtp_addresses.lock.txt
   retention-days:
     description: Artifact retention.
     required: false
@@ -74,3 +81,15 @@ runs:
         if-no-files-found: error
         # A re-run (after a failed shard) replaces the first attempt's tree.
         overwrite: true
+
+    # The engines hard-code the RTP addresses: a kernel built here whose
+    # RTP file moved from the lock fails, with the engines to update. Last,
+    # so the kernels and the comparison are uploaded whatever it finds;
+    # also when the assembly failed, from the shards themselves.
+    - name: Check RTP addresses
+      if: ${{ !cancelled() && inputs.rtp-lock != '' }}
+      shell: bash
+      env:
+        SHARDS: ${{ runner.temp }}/devkit-xclbins-shards
+        LOCK: ${{ inputs.rtp-lock }}
+      run: python3 .github/script/ci/devkit_rtp_lock.py check "${SHARDS}" --lock "${LOCK}" --github-output

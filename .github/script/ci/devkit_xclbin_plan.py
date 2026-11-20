@@ -43,6 +43,9 @@ build_units.json ("make bitstream [MODEL_TYPE=...]" in that unit).
               uses none
             - kernel_assignment.json: the artifacts of the models whose entry
               was added or changed, exactly
+            - rtp_addresses.lock.txt: the artifacts whose stanzas were
+              added, changed or removed (every artifact the lock names when
+              the base's lock is unknown), so the RTP check runs on them
             - build_units.json: the units whose entry was added or changed:
               the MODEL_TYPEs added to a unit, or when none was (a new unit
               without MODEL_TYPEs, one removed), as for a changed unit
@@ -88,6 +91,7 @@ HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[2]
 sys.path.insert(0, str(HERE))
 from changes import DEVKIT_CI  # noqa: E402
+from devkit_rtp_lock import LOCK_REL as RTP_LOCK, changed_artifacts  # noqa: E402
 
 XCLBIN = "flm-dev-kit/FLM_Xclbin"
 BUILD_UNITS = f"{XCLBIN}/build_units.json"
@@ -244,7 +248,8 @@ class Plan:
 
 
 def changed_plan(plan: Plan, files: list[str], base_units: dict[str, list],
-                 base_assignment: Optional[dict], canary: list) -> None:
+                 base_assignment: Optional[dict], canary: list,
+                 base_lock: Optional[str] = None, head_lock: Optional[str] = None) -> None:
     # Units removed or renamed: their old paths select nothing (as IRON's
     # walk-up, which found no Makefile there at head).
     gone = set(base_units) - set(plan.units)
@@ -263,6 +268,12 @@ def changed_plan(plan: Plan, files: list[str], base_units: dict[str, list],
                 for a in sorted(set((plan.assignment[m].get("kernels") or {}).values())):
                     if not plan.add_artifact(a):
                         plan.reasons.append(f"warning: {m} names {a}, which no build unit produces")
+        elif path == RTP_LOCK:
+            changed = changed_artifacts(base_lock, head_lock)
+            plan.reasons.append(f"{path}: RTP stanzas changed: {', '.join(changed) or 'none'}")
+            for a in changed:
+                if not plan.add_artifact(a):
+                    plan.reasons.append(f"warning: {path} names {a}, which no build unit produces")
         elif path == BUILD_UNITS:
             changed = sorted(u for u, mts in plan.units.items() if base_units.get(u) != mts)
             plan.reasons.append(f"{path}: units added or changed: {', '.join(changed) or 'none'}")
@@ -305,6 +316,7 @@ def touched_models(assignment: dict[str, dict], builds: list[dict]) -> list[str]
 def make_plan(mode: str, units: dict[str, list], assignment: dict[str, dict], *,
               files: Optional[list[str]] = None, base_units: Optional[dict] = None,
               base_assignment: Optional[dict] = None, canary: Optional[list] = None,
+              base_lock: Optional[str] = None, head_lock: Optional[str] = None,
               max_shards: int = 4, per_shard: int = 0, fallback_shards: int = 16) -> dict:
     plan = Plan(units, assignment)
     if mode == "changed" and files is None:
@@ -314,7 +326,8 @@ def make_plan(mode: str, units: dict[str, list], assignment: dict[str, dict], *,
         max_shards, per_shard = max(max_shards, fallback_shards), 0
     if mode == "changed":
         changed_plan(plan, files, base_units or {}, base_assignment,
-                     canary if canary is not None else load_canary(None, units))
+                     canary if canary is not None else load_canary(None, units),
+                     base_lock, head_lock)
     else:
         plan.add_all(only_used=(mode == "assigned"))
     builds = plan.builds()
@@ -370,7 +383,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"devkit_xclbin_plan: error: {BUILD_UNITS} has no units", file=sys.stderr)
         return 1
 
-    files = base_units = base_assignment = None
+    files = base_units = base_assignment = base_lock = head_lock = None
     if args.mode == "changed":
         if args.files is not None:
             files = [f.replace("\\", "/") for f in args.files]
@@ -380,12 +393,16 @@ def main(argv: Optional[list[str]] = None) -> int:
             base_units = load_units(git.show(git.base, BUILD_UNITS))
             # No file at the base (it is new): every entry counts as added.
             base_assignment = load_assignment(git.show(git.base, ASSIGNMENT))
+            # None (no lock at the base, or git cannot tell): every stanza.
+            base_lock = git.show(git.base, RTP_LOCK)
+        head_lock = head_text(RTP_LOCK)
         canary = load_canary(head_text(PINS), units)
     else:
         canary = None
 
     result = make_plan(args.mode, units, assignment, files=files, base_units=base_units,
                        base_assignment=base_assignment, canary=canary,
+                       base_lock=base_lock, head_lock=head_lock,
                        max_shards=args.shards, per_shard=args.per_shard,
                        fallback_shards=args.fallback_shards)
     for reason in result.pop("reasons"):

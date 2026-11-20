@@ -16,6 +16,12 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import devkit_check as dc  # noqa: E402
 
+LOCK = """# header
+
+[xclbins-Fam_decoding_M_1B/rtp_addresses.txt]
+RTP_A 1024
+RTP_B 2048
+"""
 MAKEFILE = "LDFLAGS += -Wl,-Bsymbolic-functions\n"
 NOTICE = "// Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.\n"
 
@@ -65,6 +71,7 @@ class Tree:
             "m_npu": {"families": ["m"], "models": ["m:1b"], "uses": []},
             "m_flash": {"families": ["m-flash"], "models": [], "uses": ["m_npu"]}}}
         self.write_json(dc.ENGINES, self.engines)
+        self.write(dc.RTP_LOCK, LOCK)
 
     def write(self, rel: str, text: str) -> None:
         p = self.root / rel
@@ -257,6 +264,95 @@ class Synthetic(unittest.TestCase):
         self.assertTrue(any("third.h: third-party" in n for n in notes), notes)
         # Without a base the check is skipped.
         self.assertFalse(any("copyright notice" in e for e in dc.run(self.tmp)[0]))
+
+
+    def test_rtp_lock_must_parse_and_resolve(self):
+        self.tree.write(dc.RTP_LOCK, LOCK.replace("Fam_decoding_M_1B", "Gone"))
+        self.assertError("xclbins-Gone is no build unit's artifact")
+        self.tree.write(dc.RTP_LOCK, LOCK.replace("[xclbins-", "xclbins-"))
+        self.assertError(dc.RTP_LOCK, "expected [<artifact>/<file>]")
+        # A stanza of an artifact no model uses: nothing would enforce it.
+        self.tree.write(dc.RTP_LOCK, LOCK + "\n[xclbins-Fam_decoding_M_2B/rtp_addresses.txt]\nRTP_C 1\n")
+        self.assertError("xclbins-Fam_decoding_M_2B is used by no")
+        (self.tmp / dc.RTP_LOCK).unlink()
+        self.assertError(dc.RTP_LOCK, "cannot read")
+
+    def test_rtp_lock_change_needs_an_engine_change(self):
+        if shutil.which("git") is None:
+            self.skipTest("no git")
+
+        def git(*args):
+            subprocess.run(["git", "-C", str(self.tmp), *args], check=True, capture_output=True)
+
+        def commit(msg):
+            git("add", "-A")
+            git("-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
+                "commit", "-q", "--allow-empty", "-m", msg)
+
+        def lock_errors(base="HEAD~1"):
+            errors, notes = dc.run(self.tmp, base, "HEAD")
+            return [e for e in errors if "stanza of" in e], notes
+
+        # Two more models on the same kernel: f:1b served by m_flash (which
+        # uses m_npu), o:1b by o_npu (which uses nothing).
+        t = self.tree
+        for model, folder in (("f:1b", "F-1B-NPU2"), ("o:1b", "O-1B-NPU2")):
+            t.assignment["models"][model] = {"folder": folder, "kernels": {
+                "layer.xclbin": "xclbins-Fam_decoding_M_1B"}}
+        t.write_json(dc.ASSIGNMENT, t.assignment)
+        t.write(dc.ASSIGNMENT_MD, MD.replace("#### No tag yet", "".join(
+            f"#### `{m}` → `{f}`\n\n| Kernels | Artifacts | Compiler |\n|---|---|---|\n"
+            "| `layer.xclbin` | `xclbins-Fam_decoding_M_1B` | Peano |\n\n"
+            for m, f in (("f:1b", "F-1B-NPU2"), ("o:1b", "O-1B-NPU2"))) + "#### No tag yet"))
+        t.engines["engines"]["m_flash"]["models"] = ["f:1b"]
+        t.engines["engines"]["o_npu"] = {"families": ["o"], "models": ["o:1b"], "uses": []}
+        t.write_json(dc.ENGINES, t.engines)
+        t.write(f"{dc.DLL}/detail/o_npu/Makefile", MAKEFILE)
+        self.assertEqual(dc.run(self.tmp)[0], [])
+
+        lock = self.tmp / dc.RTP_LOCK
+        lock.unlink()
+        git("init", "-q")
+        commit("no lock")
+        lock.write_text(LOCK, encoding="utf-8")
+        commit("lock added")
+        errors, notes = lock_errors()
+        self.assertEqual(errors, [])
+        self.assertTrue(any("is new: no engine change required" in n for n in notes), notes)
+
+        # A stanza moved, only m_flash touched: m_npu and o_npu are missing.
+        lock.write_text(LOCK.replace("RTP_B 2048", "RTP_B 4096"), encoding="utf-8")
+        t.write(f"{dc.DLL}/detail/m_flash/m_flash.cpp", '#include "models/m/m_npu.hpp"\n// x\n')
+        commit("moved")
+        errors, _ = lock_errors()
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("xclbins-Fam_decoding_M_1B", errors[0])
+        self.assertIn("m:1b", errors[0])
+        missing = errors[0].split("did not:", 1)[1]
+        self.assertIn(f"{dc.DLL}/detail/m_npu/", missing)
+        self.assertIn(f"{dc.DLL}/detail/o_npu/", missing)
+        self.assertNotIn("m_flash", missing)
+
+        # m_npu changed too (which also covers m_flash, as it uses m_npu):
+        # one engine of three serving the kernel's models is still missing.
+        lock.write_text(LOCK.replace("RTP_B 2048", "RTP_B 8192"), encoding="utf-8")
+        t.write(f"{dc.DLL}/detail/m_npu/m_npu.cpp", "// constants moved\n")
+        commit("moved with one engine")
+        errors, _ = lock_errors()
+        self.assertEqual(len(errors), 1, errors)
+        missing = errors[0].split("did not:", 1)[1]
+        self.assertIn(f"{dc.DLL}/detail/o_npu/", missing)
+        self.assertNotIn("m_npu", missing)
+        self.assertNotIn("m_flash", missing)
+
+        # Every serving engine changed: a note.
+        lock.write_text(LOCK.replace("RTP_B 2048", "RTP_B 16384"), encoding="utf-8")
+        t.write(f"{dc.DLL}/detail/m_npu/m_npu.cpp", "// constants moved again\n")
+        t.write(f"{dc.DLL}/detail/o_npu/o_npu.cpp", "// constants moved\n")
+        commit("moved with every engine")
+        errors, notes = lock_errors()
+        self.assertEqual(errors, [])
+        self.assertTrue(any("changed with" in n and "o_npu" in n and "m_npu" in n for n in notes), notes)
 
 
 class RealTree(unittest.TestCase):

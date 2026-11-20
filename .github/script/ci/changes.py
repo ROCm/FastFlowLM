@@ -153,6 +153,11 @@ DEVKIT_ALSO = (
     # prefill_overlay} and minicpm_ocr/{decoding,vision_overlay} compile
     # against FLM_DLL/include and detail/{q4nx,hunyuan_npu,minicpm_ocr_npu}.
     (re.compile(r"^flm-dev-kit/FLM_DLL/(include/|detail/(q4nx|hunyuan_npu|minicpm_ocr_npu)/)"), {"xclbin"}),
+    # The RTP address lock records what the engines hard-code: a change to it
+    # goes with an engine change (devkit_check.py requires one), so it
+    # rebuilds the kernels whose stanza changed (devkit_xclbin_plan.py) and
+    # the engines.
+    (re.compile(r"^flm-dev-kit/FLM_Xclbin/rtp_addresses\.lock\.txt$"), {"dll"}),
 )
 
 # Product files the dev kit builds from (it reads them by relative path), so

@@ -5,23 +5,45 @@
 
 # Kernel Assignment
 
-Each table below maps a `model_tag` to its kernel folder and CI artifacts:
+Each table below maps a `model_tag` to its model folder, the kernel (slot) files in it, and the
+CI build each comes from: `xclbins-<unit, / as _>[_<MODEL_TYPE>]`, a folder of the run's
+`devkit-xclbins-shard-<i>` artifacts (download them all with
+`gh run download <run id> -R ROCm/FastFlowLM -p 'devkit-xclbins-shard-*' -D <dir>`).
 
 | Kernels | Artifacts | Compiler |
 |---|---|---|
-| kernel name | CI artifacts | compiler name |
+| slot file | CI build (folder in `devkit-xclbins-shard-<i>`) | compiler |
 
 ## How to Test Your Kernel Code
 
-Push or open a PR to the `main` branch under the `FLM_Xclbin` folder. GitHub Actions will build the modified kernels and publish the artifacts. To apply them locally:
+Open a pull request that changes files under `flm-dev-kit/FLM_Xclbin`. Its **Build and Test**
+run's `devkit-xclbins` jobs build the kernels the change touches (and those of any model whose
+`kernel_assignment.json` entry it changes) with Peano in the pinned `aie-build` image, then
+assemble them per model. To try them on your machine:
 
-1. Download the artifact from the GitHub Actions run.
-2. Navigate to the xclbins directory for your platform and open the kernel folder for your `model_tag`:
+1. Download the `devkit-xclbins` artifact from that run (the run's page, or
+   `gh run download <run id> -R ROCm/FastFlowLM -n devkit-xclbins -D <dir>`). It is laid out as
+   FastFlowLM's xclbins tree: `<model folder>/<slot>.xclbin`, the folders and slots of the
+   tables below. A model only some of whose kernels the change rebuilt gets only those.
+2. Copy the model folders you want over the installed ones, keeping the file names:
    - **Linux:** `<install dir>/opt/fastflowlm/share/flm/xclbins/`
    - **Windows:** `<install dir>/xclbins/`
-3. Replace the target `.xclbin` file with the downloaded one.
 
-> **Note:** If the artifact filename differs from the original, rename it to match before replacing.
+The run fails when a kernel's RTP
+addresses differ from `rtp_addresses.lock.txt`: the engines hard-code them, so in the same pull
+request update the constants in `flm-dev-kit/FLM_DLL/detail/<engine>/` of every engine serving a
+model that uses the kernel (and FastFlowLM's `src/detail/<engine>/`), and regenerate the lock
+from the run's shards:
+`gh run download <run id> -R ROCm/FastFlowLM -p 'devkit-xclbins-shard-*' -D <dir>`, then
+`python3 .github/script/ci/devkit_rtp_lock.py generate <dir> -o flm-dev-kit/FLM_Xclbin/rtp_addresses.lock.txt --update`.
+`devkit_check.py` fails a pull request that changes a lock stanza without touching each of
+those engines.
+
+To build a kernel yourself, run `make bitstream` (with `MODEL_TYPE=<type>` for the units that fan
+out) in its directory, either inside the `ghcr.io/rocm/fastflowlm/aie-build` image, which holds
+the toolchain CI uses, or after `source setup.sh` with a local toolchain. The kernels land in
+`build/[<MODEL_TYPE>/]xclbins/`; copy the one a table below assigns to a slot to
+`<model folder>/<slot>.xclbin` as in step 2.
 
 ## Limitations (will fix in the future)
 

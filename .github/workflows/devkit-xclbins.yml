@@ -37,7 +37,9 @@ name: Dev-kit xclbins
 #   assemble  .github/actions/devkit-assemble-xclbins: the shards' kernels as
 #             <model folder>/<slot>.xclbin per kernel_assignment.json,
 #             uploaded as devkit-xclbins; its touched-models are the models
-#             that got any kernel
+#             that got any kernel. Then the RTP check: a kernel built here whose rtp_addresses file differs
+#             from flm-dev-kit/FLM_Xclbin/rtp_addresses.lock.txt fails the
+#             job, as the engines hard-code those addresses
 #
 # No build cache: a build takes 7-61 s, under a runner's start-up time, and
 # some units (generic_decoding_layer) do not build bit for bit the same
