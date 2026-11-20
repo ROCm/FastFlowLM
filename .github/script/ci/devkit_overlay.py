@@ -7,7 +7,10 @@
                       [--engines flm-dev-kit/FLM_DLL/engines.json]
                       [--families <csv>] [--libs <dir>] [--xclbins <dir>]
                       [--xclbin-models <json list, default $DEVKIT_XCLBIN_MODELS>]
-                      [--new-models <csv>]
+                      [--new-models <csv>] [--require-all]
+                      [--manifest <file> --runtime xrt|hrx
+                       [--libs-artifact <name>] [--xclbins-artifact <name>]
+                       [--head-sha <sha>] [--base-sha <sha>] [--full-refresh]]
                       [--github-output]
 
 <root> is an unpacked portable package: the directory of flm (Linux, engines
@@ -59,7 +62,37 @@ Test selection, for .github/actions/npu-test with the pr tier:
   test       "false" when nothing is left to test (an error when some model
              is required: it would go untested)
 --xclbin-models outside the catalog (smolvla:500m, a pybind module) are
-reported and left out.
+reported and left out. --require-all (Build and Test's dev-kit full refresh)
+makes every NPU catalog model of the package required.
+
+Manifest (--manifest, the overlay tests only): a JSON record of every file
+the overlay put into the package, which devkit_swap.py reads to commit
+exactly the bytes CI built and tested (flm-dev-kit/AGENTS.md, "Prebuilt
+binaries"). Schema 1:
+  schema, os, runtime, run_id and run_attempt ($GITHUB_RUN_ID,
+  $GITHUB_RUN_ATTEMPT), head_sha (--head-sha: the commit tested), base_sha
+  (--base-sha: the main commit the run built on), full_refresh, tests_ran
+  (the overlay left something for npu-test to test), and files, one entry
+  per file:
+    kind          engine or kernel
+    package_path  relative to <root>; null for a Windows import library
+    repo_path     the file it stands for in this repository: Linux
+                  <root>/lib/<lib>.so -> src/lib/<runtime>/<lib>.so, Windows
+                  <root>/<lib>.dll -> src/lib/<runtime>/<lib>.dll,
+                  <root>/xclbins/<folder>/<slot> -> src/xclbins/<folder>/<slot>
+    artifact, artifact_path
+                  where the bytes came from (--libs-artifact,
+                  --xclbins-artifact, and the path inside it)
+    size, sha256, git_sha1 (the git blob id of the bytes)
+    tested        tests_ran, and for a kernel also that some model the
+                  selection tests (models, required) loads its folder: a
+                  kernel of a model this package's catalog lacks is
+                  overlaid but not tested
+On Windows each overlaid <lib>.dll brings the <lib>.lib of the same dev-kit
+build too: not overlaid, but shipped beside it in src/lib/<runtime>/ and
+needed to link (src/CMakeLists.txt); a missing one is an error then. The
+action uploads the manifest only after its Test step passed, so an uploaded
+manifest's tested files were tested in that job.
 
 Writes a Markdown summary to $GITHUB_STEP_SUMMARY when that is set. Exit 1 on
 an error (nothing is copied then), 2 on bad arguments. Standard library only.
@@ -68,6 +101,7 @@ an error (nothing is copied then), 2 on bad arguments. Standard library only.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -378,15 +412,16 @@ def csv(value: str) -> list[str]:
     return [v.strip() for v in value.split(",") if v.strip()]
 
 
-def overlay(args: argparse.Namespace) -> tuple[dict, list[str], list[str], list[str]]:
-    """(outputs, copied, notes, errors); copies nothing when there are errors."""
+def overlay(args: argparse.Namespace) -> tuple[dict, list[str], list[str], list[str], list[tuple[Path, Path]]]:
+    """(outputs, copied, notes, errors, the (source, destination) pairs
+    copied); copies nothing when there are errors."""
     errors: list[str] = []
     notes: list[str] = []
     root, os_name = args.root, args.os
     engines = changes.load_devkit_engines(args.engines.read_text(encoding="utf-8")
                                           if args.engines.is_file() else "")
     if engines is None:
-        return {}, [], notes, [f"{args.engines} is missing or unreadable"]
+        return {}, [], notes, [f"{args.engines} is missing or unreadable"], []
     families = set(csv(args.families))
     unknown = families - engines.all_families()
     if unknown:
@@ -430,21 +465,105 @@ def overlay(args: argparse.Namespace) -> tuple[dict, list[str], list[str], list[
                 notes.append(f"xclbins/{rel.parts[0]} is new to the package")
             plan.append((src, dest_root / rel))
 
-    outputs, more = select_tests(npu_catalog(root), families, every,
-                                 json.loads(args.xclbin_models or "[]"), csv(args.new_models),
+    catalog = npu_catalog(root)
+    new_models = csv(args.new_models)
+    if getattr(args, "require_all", False):
+        new_models = list(dict.fromkeys(new_models + sorted(catalog)))
+    outputs, more = select_tests(catalog, families, every,
+                                 json.loads(args.xclbin_models or "[]"), new_models,
                                  test_families)
     notes += more
+    if getattr(args, "manifest", None) is not None and os_name == "windows":
+        for new in replace.values():
+            if not (new.parent / f"{new.stem}.lib").is_file():
+                errors.append(f"{new.name}: the dev-kit libraries lack {new.stem}.lib, which ships "
+                              f"beside it (src/lib/<runtime>/) and is needed to link")
     if outputs.get("required") and outputs.get("test") != "true":
         errors.append(f"required models {outputs['required']} select no suite or model in this "
                       f"package's NPU catalog, so they would go untested")
     if errors:
-        return outputs, [], notes, errors
+        return outputs, [], notes, errors, []
     copied = []
     for src, dest in plan:
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(src, dest)
         copied.append(str(dest.relative_to(root)).replace("\\", "/"))
-    return outputs, copied, notes, errors
+    return outputs, copied, notes, errors, plan
+
+
+# ── Manifest ─────────────────────────────────────────────────────────────────
+
+MANIFEST_SCHEMA = 1
+
+
+def file_digests(path: Path) -> dict:
+    """size, sha256 and the git blob id (sha1 of "blob <size>", a NUL byte and the bytes)."""
+    data = path.read_bytes()
+    blob = hashlib.sha1(f"blob {len(data)}\0".encode() + data).hexdigest()
+    return {"size": len(data), "sha256": hashlib.sha256(data).hexdigest(), "git_sha1": blob}
+
+
+def tested_folders(catalog: dict[str, dict], outputs: dict) -> set:
+    """The xclbin folders (xclbin_folder, else name) of the models the test
+    selection runs: models and required."""
+    picked = set(csv(outputs.get("models", ""))) | set(csv(outputs.get("required", "")))
+    out = set()
+    for mid in picked & set(catalog):
+        folder = catalog[mid].get("xclbin_folder") or catalog[mid].get("name")
+        if isinstance(folder, str) and folder:
+            out.add(folder)
+    return out
+
+
+def manifest_entries(root: Path, os_name: str, runtime: str, pairs: list[tuple[Path, Path]],
+                     libs: Optional[Path], libs_artifact: str, xclbins: Optional[Path],
+                     xclbins_artifact: str, tests_ran: bool, folders: set) -> list[dict]:
+    """The manifest's files: what the overlay copied (see the docstring), and
+    on Windows the import library of each overlaid engine."""
+    out = []
+    kernels = root / "xclbins"
+    for src, dest in pairs:
+        package_path = dest.relative_to(root).as_posix()
+        if dest.is_relative_to(kernels):
+            rel = dest.relative_to(kernels).as_posix()
+            entry = {"kind": "kernel", "package_path": package_path, "repo_path": f"src/xclbins/{rel}",
+                     "artifact": xclbins_artifact, "artifact_path": src.relative_to(xclbins).as_posix()}
+            tested = tests_ran and rel.rsplit("/", 1)[0] in folders
+        else:
+            entry = {"kind": "engine", "package_path": package_path,
+                     "repo_path": f"src/lib/{runtime}/{dest.name}",
+                     "artifact": libs_artifact, "artifact_path": src.relative_to(libs).as_posix()}
+            tested = tests_ran
+        out.append({**entry, **file_digests(src), "tested": tested})
+        if entry["kind"] == "engine" and os_name == "windows":
+            imp = src.parent / f"{src.stem}.lib"
+            out.append({"kind": "engine", "package_path": None,
+                        "repo_path": f"src/lib/{runtime}/{imp.name}", "artifact": libs_artifact,
+                        "artifact_path": imp.relative_to(libs).as_posix(), **file_digests(imp),
+                        "tested": tested})
+    return sorted(out, key=lambda e: e["repo_path"])
+
+
+def write_manifest(args: argparse.Namespace, outputs: dict, pairs: list[tuple[Path, Path]]) -> dict:
+    tests_ran = outputs.get("test") == "true"
+    manifest = {
+        "schema": MANIFEST_SCHEMA,
+        "os": args.os,
+        "runtime": args.runtime,
+        "run_id": os.environ.get("GITHUB_RUN_ID", ""),
+        "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
+        "head_sha": args.head_sha,
+        "base_sha": args.base_sha,
+        "full_refresh": bool(args.full_refresh),
+        "tests_ran": tests_ran,
+        "files": manifest_entries(args.root, args.os, args.runtime, pairs, args.libs, args.libs_artifact,
+                                  args.xclbins, args.xclbins_artifact, tests_ran,
+                                  tested_folders(npu_catalog(args.root), outputs)),
+    }
+    args.manifest.parent.mkdir(parents=True, exist_ok=True)
+    # Bytes, so the file is the same on every runner (no CRLF on Windows).
+    args.manifest.write_bytes((json.dumps(manifest, indent=1) + "\n").encode("utf-8"))
+    return manifest
 
 
 def summary(outputs: dict, copied: list[str], notes: list[str], errors: list[str]) -> str:
@@ -477,8 +596,25 @@ def main(argv: Optional[list[str]] = None) -> int:
                         help="JSON list; default $DEVKIT_XCLBIN_MODELS (PowerShell 5.1 mangles "
                              "quotes in a native program's arguments)")
     parser.add_argument("--new-models", default="")
+    parser.add_argument("--require-all", action="store_true",
+                        help="every NPU catalog model of the package is required (full refresh)")
+    parser.add_argument("--manifest", type=Path, default=None,
+                        help="write the manifest of the copied files here (see the docstring)")
+    parser.add_argument("--runtime", choices=("xrt", "hrx"), default=None)
+    parser.add_argument("--libs-artifact", default="")
+    parser.add_argument("--xclbins-artifact", default="")
+    parser.add_argument("--head-sha", default="")
+    parser.add_argument("--base-sha", default="")
+    parser.add_argument("--full-refresh", action="store_true")
     parser.add_argument("--github-output", action="store_true")
     args = parser.parse_args(argv)
+    if args.manifest is not None:
+        if args.runtime is None:
+            parser.error("--manifest needs --runtime")
+        if args.libs is not None and not args.libs_artifact:
+            parser.error("--manifest with --libs needs --libs-artifact")
+        if args.xclbins is not None and not args.xclbins_artifact:
+            parser.error("--manifest with --xclbins needs --xclbins-artifact")
     try:
         if not isinstance(json.loads(args.xclbin_models or "[]"), list):
             raise ValueError
@@ -487,7 +623,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     if not args.root.is_dir():
         parser.error(f"--root {args.root} is not a directory")
 
-    outputs, copied, notes, errors = overlay(args)
+    outputs, copied, notes, errors, pairs = overlay(args)
+    if args.manifest is not None and not errors:
+        manifest = write_manifest(args, outputs, pairs)
+        notes.append(f"manifest: {len(manifest['files'])} file(s), tests ran: "
+                     f"{str(manifest['tests_ran']).lower()} ({args.manifest.name})")
     text = summary(outputs, copied, notes, errors)
     print(text, end="")
     if os.environ.get("GITHUB_STEP_SUMMARY"):
