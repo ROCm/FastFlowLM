@@ -16,7 +16,7 @@ GitHub-hosted runner.
     resolve.py plan          --plan plan.json [--artifacts artifacts.json]
                              --mode pr|nightly|dispatch
                              [--runtimes lin-xrt,lin-hrx] [--models a,b]
-                             [--baseline baseline.json] [--force]
+                             [--baseline baseline.json] [--no-force]
 
 Build and Test (build-and-test.yml) calls devkit-bench.yml in the same run,
 after its builds: write-plan turns what it passes (the touched families,
@@ -28,9 +28,13 @@ run): it finds that run and waits (polling) for it to complete. The run must
 be of .github/workflows/build-and-test.yml in this repository, for exactly
 this head commit (a run id given is checked the same way), the newest such
 run, completed with success or failure. Its plan is derived from the
-artifacts it uploaded (plan_from_artifacts): the packages and dev-kit
-libraries present, and devkit-xclbins if present. Outputs run-id, ok,
-head-sha and reason; the run's artifact list goes to --artifacts-out.
+artifacts it uploaded and its devkit-engines job's result
+(plan_from_artifacts), with write-plan's rules: a runtime benches when its
+package is there and the engines built (then with that runtime's dev-kit
+libraries, which must be there too) or were not asked for; the kernels when
+devkit-xclbins is there. A run that built neither engines nor kernels has
+nothing of the dev kit to bench. Outputs run-id, ok, head-sha and reason;
+the run's artifact list goes to --artifacts-out.
 
 find-baseline finds the newest unexpired devkit-bench-baseline artifact
 uploaded by a scheduled run on main of this repository (Build and Test's,
@@ -44,10 +48,11 @@ plan reads the plan (validated field by field), picks the models
 model, with the package, dev-kit libraries and kernels that runtime's
 overlay takes. A runtime whose package or libraries did not build, or
 (dispatch, with --artifacts) whose artifacts expired, is left out with a
-reason. Nightly and dispatch, the bench runs only if dev-kit engine or
-kernel source changed since the commit the latest baseline benched
-(changes.py devkit_bench between the two), or with no baseline; otherwise
-the previous baseline stands. --force (dispatch) benches regardless.
+reason. Nightly, the bench runs only if dev-kit engine or kernel source
+changed since the commit the latest baseline benched (changes.py
+devkit_bench between the two), or with no baseline; otherwise the previous
+baseline stands. A dispatch benches regardless (it was asked for); only a
+dispatch with --no-force and no --models follows the nightly rule.
 Outputs bench, matrix, docvqa, head-sha, reason, and a summary on
 $GITHUB_STEP_SUMMARY.
 
@@ -113,6 +118,18 @@ def api_get(path: str, params: Optional[dict] = None) -> dict:
         "Authorization": f"Bearer {os.environ.get('GH_TOKEN') or os.environ.get('GITHUB_TOKEN', '')}"})
     with urllib.request.urlopen(req, timeout=60) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def list_jobs(repo: str, run_id: int) -> list[dict]:
+    out, page = [], 1
+    while True:
+        data = api_get(f"repos/{repo}/actions/runs/{run_id}/jobs",
+                       {"filter": "latest", "per_page": 100, "page": page})
+        batch = data.get("jobs") or []
+        out += batch
+        if len(batch) < 100:
+            return out
+        page += 1
 
 
 def list_artifacts(repo: str, run_id: int) -> list[dict]:
@@ -255,20 +272,38 @@ def write_plan(*, head_sha: str, package_sha: str, builds: dict, engines: str, f
     return out
 
 
-def plan_from_artifacts(index: dict, head_sha: str) -> dict:
+def engines_result(jobs: list[dict]) -> str:
+    """devkit-engines' result in a Build and Test run, from its jobs (the
+    caller job "devkit-engines" when skipped, the called workflow's
+    "devkit-engines / ..." jobs when it ran): skipped, success, or failure
+    (any of them failed, was cancelled or did not finish)."""
+    mine = [j for j in jobs if isinstance(j, dict) and isinstance(j.get("name"), str)
+            and (j["name"] == "devkit-engines" or j["name"].startswith("devkit-engines / "))]
+    if all(j.get("conclusion") == "skipped" for j in mine):
+        return "skipped"
+    if all(j.get("conclusion") in ("success", "skipped") for j in mine):
+        return "success"
+    return "failure"
+
+
+def plan_from_artifacts(index: dict, head_sha: str, engines: str) -> dict:
     """The plan of an earlier Build and Test run (dispatch), from what it
-    uploaded: a runtime whose package is there is benched, with its dev-kit
-    libraries when those are there, and the kernels when devkit-xclbins is.
-    Which families and kernels the change touched is not known: dispatch
-    names its models, or benches the assigned set."""
+    uploaded and devkit-engines' result there, with write_plan's rules: a
+    runtime whose package is there is benched when the engines were not
+    asked for, or built and its dev-kit libraries are there; never over a
+    failed engine build. The kernels when devkit-xclbins is there. Which
+    families and kernels the change touched is not known: a dispatch names
+    its models, or gets the nightly selection."""
     builds = {}
     for key, pattern in PACKAGES.items():
         names = [n for n in index if re.fullmatch(pattern.format(sha="[0-9a-f]{40}"), n)]
         if not names:
             continue
         name = sorted(names)[-1]
-        builds[key] = {"ok": usable_artifact(index, name), "package": name,
-                       "libs": libs_artifact(key) if usable_artifact(index, libs_artifact(key)) else ""}
+        libs = libs_artifact(key) if engines == "success" else ""
+        builds[key] = {"ok": usable_artifact(index, name) and engines in ("success", "skipped")
+                       and (not libs or usable_artifact(index, libs)),
+                       "package": name, "libs": libs}
     return {"schema": 1, "bench": True, "head_sha": head_sha, "families": "", "xclbin_models": "[]",
             "bench_models": "", "builds": builds,
             "xclbins": XCLBINS_ARTIFACT if usable_artifact(index, XCLBINS_ARTIFACT) else ""}
@@ -392,10 +427,15 @@ def cmd_find_build(args) -> int:
     index = artifact_index(list_artifacts(args.repo, run["id"]))
     if args.artifacts_out:
         Path(args.artifacts_out).write_text(json.dumps(index), encoding="utf-8")
-    plan = plan_from_artifacts(index, run["head_sha"])
+    engines = engines_result(list_jobs(args.repo, run["id"]))
+    plan = plan_from_artifacts(index, run["head_sha"], engines)
     if not plan["builds"]:
         write_outputs({"ok": "false", "run-id": str(run["id"]),
                        "reason": f"Build and Test run {run['id']} uploaded no portable package"})
+        return 0
+    if engines == "skipped" and not plan["xclbins"]:
+        write_outputs({"ok": "false", "run-id": str(run["id"]),
+                       "reason": f"Build and Test run {run['id']} built no dev-kit engines or kernels"})
         return 0
     Path(args.plan_out).write_text(json.dumps(plan, indent=1), encoding="utf-8")
     write_outputs({"ok": "true", "run-id": str(run["id"]), "head-sha": run["head_sha"],
@@ -427,16 +467,19 @@ def cmd_plan(args) -> int:
         write_outputs({**no, "reason": f"unreadable plan: {exc}"})
         step_summary(f"### Dev-kit bench\n\nNot benched: unreadable plan ({exc}).")
         return 0
-    if not plan["bench"] and not args.force:
+    force = args.mode == "dispatch" and args.force
+    if not plan["bench"] and not force:
         write_outputs({**no, "reason": "no dev-kit engine or kernel source to bench"})
         step_summary("### Dev-kit bench\n\nNot benched: no dev-kit engine or kernel source changed.")
         return 0
 
     notes = []
+    requested = [m.strip() for m in args.models.split(",") if m.strip()]
     # A pull request benches because its change is source (Build and Test's
-    # changes devkit-bench); the nightly and a dispatch only when the source
-    # changed since the baseline.
-    if args.mode in ("nightly", "dispatch") and not args.force:
+    # changes devkit-bench); the nightly only when the source changed since
+    # the baseline. A dispatch was asked for: it benches unless it opted
+    # out of force and named no models.
+    if args.mode == "nightly" or (args.mode == "dispatch" and not force and not requested):
         base = ""
         if args.baseline and Path(args.baseline).is_file():
             try:
@@ -466,12 +509,11 @@ def cmd_plan(args) -> int:
     except (OSError, ValueError) as exc:
         write_outputs({**no, "reason": f"cannot read the catalog or dev-kit maps: {exc}"})
         return 1
-    requested = [m.strip() for m in args.models.split(",") if m.strip()]
     if requested:
         mode = "dispatch"
     elif args.mode == "dispatch":
-        # What the build changed, else the assigned set.
-        mode = "pr" if plan["families"] or plan["xclbin_models"] else "nightly"
+        # Which families and kernels the build changed is not known here.
+        mode = "nightly"
     else:
         mode = args.mode
     chosen = select_models.select(mode=mode, catalog=catalog, engines=engines, assignment=assignment,
@@ -538,7 +580,9 @@ def main(argv=None) -> int:
     p.add_argument("--runtimes", default=",".join(PR_RUNTIMES))
     p.add_argument("--models", default="")
     p.add_argument("--baseline", default="")
-    p.add_argument("--force", action="store_true")
+    p.add_argument("--force", action=argparse.BooleanOptionalAction, default=True,
+                   help="dispatch: bench even with no source change since the baseline (default); "
+                        "the nightly ignores it")
     p.add_argument("--repo-root", default=str(HERE.parents[2]))
     args = ap.parse_args(argv)
     return {"write-plan": cmd_write_plan, "find-build": cmd_find_build, "find-baseline": cmd_find_baseline,

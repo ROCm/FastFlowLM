@@ -1439,9 +1439,16 @@ jobs:
   # asks for it). Waits for the overlay tests, so the benches do not take the
   # sweep runners from them. The resolve job inside decides per runtime from
   # the build results passed here; a failed build leaves its runtime out.
-  # summary's Dev-kit checks fails a pull request whose bench failed (acc_common's
-  # hard gate, or perf giving no result); slowdowns and accuracy drops only
-  # warn. devkit-bench-comment.yml posts the results on the pull request.
+  # summary's Dev-kit checks fails a pull request only when a model failed
+  # acc_common's hard gate (the bench's hard-gate output); any other bench
+  # failure (perf giving no result, a pull, a timeout, the GitHub API) only
+  # warns there, as do slowdowns and accuracy drops. summary, the required
+  # check, waits for the benches, so a bench pull request's check takes as
+  # long as its benches (three at a time, up to 150 minutes each).
+  # Nightly, the benches run beside the full-tier product tests on the same
+  # sweep runners (each job has its own runner, so the numbers are not
+  # affected; the night's queue is longer). devkit-bench-comment.yml posts
+  # the results on the pull request.
   # actions: read: the nightly baseline is another run's artifact.
   devkit-bench:
     needs:
@@ -1627,9 +1634,10 @@ jobs:
       # and a skip would otherwise read as a pass. An overlay test skipped
       # because nothing was requested, or because no family was touched and
       # the kernel build rebuilt no model's kernels, passes. The dev-kit
-      # benches (devkit-bench) fail it only when they ran and failed: a
-      # model's bench failing acc_common's hard gate or giving no perf
-      # result (slowdowns and accuracy drops only warn); skipped, they pass
+      # benches (devkit-bench) fail it only when a model failed acc_common's
+      # hard gate (hard-gate=fail); any other failure of theirs (perf giving
+      # no result, a pull, a timeout, a lost runner, the GitHub API) only
+      # warns, as slowdowns and accuracy drops do; skipped, they pass
       # (nothing to bench, or a build or the gate held them, which the
       # checks above already report). Other runs only show the dev-kit
       # jobs' own results: the dev kit ships in no package, so it does not
@@ -1642,6 +1650,7 @@ jobs:
           DEVKIT_ENGINES: ${{ needs.devkit-engines.result }}
           DEVKIT_XCLBINS: ${{ needs.devkit-xclbins.result }}
           DEVKIT_BENCH: ${{ needs.devkit-bench.result }}
+          DEVKIT_BENCH_GATE: ${{ needs.devkit-bench.outputs.hard-gate }}
           OVERLAY: ${{ needs.changes.outputs.devkit-overlay }}
           OVERLAY_FAMILIES: ${{ needs.changes.outputs.devkit-families }}
           OVERLAY_MODELS: ${{ needs.devkit-xclbins.outputs.touched-models }}
@@ -1651,14 +1660,18 @@ jobs:
             test-win-xrt-devkit=${{ needs.test-win-xrt-devkit.result }}
             test-win-hrx-devkit=${{ needs.test-win-hrx-devkit.result }}
         run: |
-          echo "changes: ${CHANGES}; devkit-static: ${DEVKIT_STATIC}; devkit-engines: ${DEVKIT_ENGINES}; devkit-xclbins: ${DEVKIT_XCLBINS}; devkit-bench: ${DEVKIT_BENCH}"
+          echo "changes: ${CHANGES}; devkit-static: ${DEVKIT_STATIC}; devkit-engines: ${DEVKIT_ENGINES}; devkit-xclbins: ${DEVKIT_XCLBINS}; devkit-bench: ${DEVKIT_BENCH} (hard gate: ${DEVKIT_BENCH_GATE:-not reported})"
           echo "devkit-overlay: ${OVERLAY:-none}; ${OVERLAY_TESTS}"
           rc=0
           case "${CHANGES}" in success) ;; *) echo "::error::changes did not succeed, so the dev-kit and build jobs were skipped"; rc=1 ;; esac
           case "${DEVKIT_STATIC}" in success|skipped) ;; *) echo "::error::devkit-static did not pass"; rc=1 ;; esac
           case "${DEVKIT_ENGINES}" in success|skipped) ;; *) echo "::error::devkit-engines did not pass"; rc=1 ;; esac
           case "${DEVKIT_XCLBINS}" in success|skipped) ;; *) echo "::error::devkit-xclbins did not pass"; rc=1 ;; esac
-          case "${DEVKIT_BENCH}" in success|skipped) ;; *) echo "::error::devkit-bench did not pass (a model failed acc_common's hard gate or gave no perf result; see its jobs)"; rc=1 ;; esac
+          if [ "${DEVKIT_BENCH_GATE}" = fail ]; then
+            echo "::error::devkit-bench: a model failed acc_common's hard gate (no predictions, or too many unanswered; see the bench summary)"; rc=1
+          else
+            case "${DEVKIT_BENCH}" in success|skipped) ;; *) echo "::warning::devkit-bench did not pass (${DEVKIT_BENCH}) but no model failed the hard gate: perf, a pull, a timeout or the bench infrastructure; see its jobs" ;; esac
+          fi
           requested=false
           if [ "${OVERLAY}" = true ] && { [ -n "${OVERLAY_FAMILIES}" ] || { [ -n "${OVERLAY_MODELS}" ] && [ "${OVERLAY_MODELS}" != "[]" ]; }; }; then
             requested=true

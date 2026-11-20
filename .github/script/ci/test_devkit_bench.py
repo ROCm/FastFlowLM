@@ -294,6 +294,23 @@ class Report(unittest.TestCase):
         self.assertNotIn("bogus", new["entries"])
         self.assertEqual(report.parse_baseline(json.loads(json.dumps(new)))["entries"], new["entries"])
 
+    def test_hard_gate_output(self):
+        # Only an accuracy run failing acc_common's gate is a hard-gate failure:
+        # a job that gave no results, or perf without a CSV, is not.
+        write_result(self.root, "lin-xrt", "qwen3:0.6b", status="no CSV", gsm8k=self.gsm(40.0))
+        out = self.root / "out.txt"
+        summary = self.root / "s" / "summary.md"
+        args = ["--results", str(self.root), "--mode", "pr", "--head-sha", SHA_A, "--summary", str(summary),
+                "--outputs", str(out)]
+        self.assertEqual(quiet(report.main, args), 0)
+        self.assertEqual(out.read_text(encoding="utf-8"), "hard-gate=pass\n")
+        write_result(self.root, "lin-hrx", "qwen3:0.6b",
+                     gsm8k=self.gsm(10.0, usable=False, unanswered=9, failed=9, failures={"timeout": 9}))
+        out.unlink()
+        self.assertEqual(quiet(report.main, args), 0)
+        self.assertEqual(out.read_text(encoding="utf-8"), "hard-gate=fail\n")
+        self.assertEqual(report.hard_gate_failures(report.load_results(self.root)), ["lin-hrx qwen3:0.6b gsm8k"])
+
     def test_cap(self):
         text = report.cap("line\n" * 30000, limit=1000)
         self.assertLessEqual(len(text.encode()), 1000)
@@ -469,14 +486,132 @@ class Resolve(unittest.TestCase):
             {"id": 1, "name": "portable"}, {"id": 2, "name": "devkit-libs-lin-xrt"},
             {"id": 3, "name": "HRX-portable", "expired": True}, {"id": 4, "name": f"fastflowlm-windows-{SHA_B}"},
             {"id": 5, "name": "devkit-xclbins"}, {"id": 6, "name": "fastflowlm-windows-evil"}])
-        p = resolve.parse_plan(resolve.plan_from_artifacts(index, SHA_A))
+        p = resolve.parse_plan(resolve.plan_from_artifacts(index, SHA_A, "success"))
         self.assertEqual(p["head_sha"], SHA_A)
         self.assertEqual(p["builds"]["lin-xrt"], {"ok": True, "package": "portable", "libs": "devkit-libs-lin-xrt"})
         self.assertFalse(p["builds"]["lin-hrx"]["ok"])
-        self.assertEqual(p["builds"]["win-xrt"], {"ok": True, "package": f"fastflowlm-windows-{SHA_B}", "libs": ""})
+        # Engines built but this runtime's libraries are missing: not the
+        # unmodified package benched as the dev-kit build.
+        self.assertEqual(p["builds"]["win-xrt"], {"ok": False, "package": f"fastflowlm-windows-{SHA_B}",
+                                                  "libs": "devkit-libs-win-xrt"})
         self.assertNotIn("win-hrx", p["builds"])
         self.assertEqual(p["xclbins"], "devkit-xclbins")
         self.assertEqual((p["families"], p["xclbin_models"]), ([], []))
+        # Engines not asked for (a kernel-only change): packages bench without libraries.
+        p = resolve.parse_plan(resolve.plan_from_artifacts(index, SHA_A, "skipped"))
+        self.assertEqual(p["builds"]["win-xrt"], {"ok": True, "package": f"fastflowlm-windows-{SHA_B}", "libs": ""})
+        self.assertEqual(p["builds"]["lin-xrt"]["libs"], "")
+        # Engines failed: nothing benches, as write_plan.
+        p = resolve.parse_plan(resolve.plan_from_artifacts(index, SHA_A, "failure"))
+        self.assertFalse(any(b["ok"] for b in p["builds"].values()))
+
+    def test_engines_result(self):
+        def job(name, conclusion):
+            return {"name": name, "conclusion": conclusion}
+        self.assertEqual(resolve.engines_result([job("build-win-xrt", "failure")]), "skipped")
+        self.assertEqual(resolve.engines_result([job("devkit-engines", "skipped")]), "skipped")
+        ok = [job("devkit-engines / Build (linux)", "success"), job("devkit-engines / Build (windows)", "success")]
+        self.assertEqual(resolve.engines_result(ok), "success")
+        self.assertEqual(resolve.engines_result(ok + [job("devkit-engines / x", "cancelled")]), "failure")
+        self.assertEqual(resolve.engines_result(ok + [job("devkit-engines / x", None)]), "failure")
+        self.assertEqual(resolve.engines_result([job("devkit-engines-other", "failure")] + ok), "success")
+
+    def find_build(self, *, run_obj, artifacts, jobs, run_id="5"):
+        """cmd_find_build with the GitHub API stubbed; (rc, outputs, plan or None)."""
+        saved = resolve.api_get, resolve.list_artifacts, resolve.list_jobs
+        resolve.api_get = lambda path, params=None: (run_obj if path.endswith(f"/runs/{run_id}")
+                                                     else {"workflow_runs": [run_obj]})
+        resolve.list_artifacts = lambda repo, rid: artifacts
+        resolve.list_jobs = lambda repo, rid: jobs
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                out, plan = os.path.join(d, "out"), os.path.join(d, "plan.json")
+                os.environ["GITHUB_OUTPUT"] = out
+                try:
+                    rc = quiet(resolve.main, ["find-build", "--repo", self.REPO, "--head-sha", SHA_A,
+                                              "--run-id", run_id, "--wait-minutes", "0", "--poll-seconds", "0",
+                                              "--plan-out", plan, "--artifacts-out", os.path.join(d, "a.json")])
+                finally:
+                    del os.environ["GITHUB_OUTPUT"]
+                values = dict(line.split("=", 1) for line in Path(out).read_text(encoding="utf-8").splitlines())
+                written = json.loads(Path(plan).read_text(encoding="utf-8")) if Path(plan).exists() else None
+        finally:
+            resolve.api_get, resolve.list_artifacts, resolve.list_jobs = saved
+        return rc, values, written
+
+    def test_find_build(self):
+        arts = [{"id": 1, "name": "portable"}, {"id": 2, "name": "devkit-libs-lin-xrt"}]
+        built = [{"name": "devkit-engines / Build", "conclusion": "success"}]
+        rc, out, plan = self.find_build(run_obj=run(), artifacts=arts, jobs=built)
+        self.assertEqual((rc, out["ok"], out["run-id"], out["head-sha"]), (0, "true", "5", SHA_A))
+        self.assertEqual(resolve.parse_plan(plan)["builds"]["lin-xrt"]["libs"], "devkit-libs-lin-xrt")
+        # Another workflow's run, another commit's, a fork's: refused.
+        for bad in (run(path=".github/workflows/evil.yml"), run(head_sha=SHA_B),
+                    run(head_repository={"full_name": "fork/FastFlowLM"})):
+            with self.subTest(bad=bad):
+                rc, out, plan = self.find_build(run_obj=bad, artifacts=arts, jobs=built)
+                self.assertEqual((rc, out["ok"], plan), (0, "false", None))
+        rc, out, plan = self.find_build(run_obj=run(conclusion="cancelled"), artifacts=arts, jobs=built)
+        self.assertEqual((out["ok"], plan), ("false", None))
+        self.assertIn("cancelled", out["reason"])
+        rc, out, plan = self.find_build(run_obj=run(), artifacts=arts[1:], jobs=built)
+        self.assertIn("no portable package", out["reason"])
+        # A product-only run: no dev-kit engines or kernels to bench.
+        rc, out, plan = self.find_build(run_obj=run(), artifacts=arts[:1],
+                                        jobs=[{"name": "devkit-engines", "conclusion": "skipped"}])
+        self.assertEqual((out["ok"], plan), ("false", None))
+        self.assertIn("no dev-kit engines or kernels", out["reason"])
+        # Still running and no time to wait.
+        rc, out, plan = self.find_build(run_obj=run(status="in_progress"), artifacts=arts, jobs=built)
+        self.assertEqual((out["ok"], plan), ("false", None))
+
+    def plan_cli(self, plan, *extra, changed=False):
+        """cmd_plan with source_changed stubbed; its outputs."""
+        saved = resolve.source_changed
+        calls = []
+        resolve.source_changed = lambda root, base, head: (calls.append((base, head)) or (changed, "x"))
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                path, base = os.path.join(d, "plan.json"), os.path.join(d, "baseline.json")
+                Path(path).write_text(json.dumps(plan), encoding="utf-8")
+                Path(base).write_text(json.dumps({"sha": SHA_B}), encoding="utf-8")
+                out = os.path.join(d, "out")
+                os.environ["GITHUB_OUTPUT"] = out
+                try:
+                    self.assertEqual(quiet(resolve.main, ["plan", "--plan", path, "--runtimes", "lin-xrt",
+                                                          "--baseline", base, *extra]), 0)
+                finally:
+                    del os.environ["GITHUB_OUTPUT"]
+                values = dict(line.split("=", 1) for line in Path(out).read_text(encoding="utf-8").splitlines())
+        finally:
+            resolve.source_changed = saved
+        values["calls"] = calls
+        return values
+
+    def test_plan_baseline_gate(self):
+        index = resolve.artifact_index([{"id": 1, "name": "portable"}, {"id": 2, "name": "devkit-libs-lin-xrt"}])
+        plan = resolve.plan_from_artifacts(index, SHA_A, "success")
+        nightly = resolve.write_plan(head_sha=SHA_A, package_sha=SHA_A, engines="success",
+                                     builds={"lin-xrt": "success"})
+        # Nightly: nothing changed since the baseline, the baseline stands.
+        v = self.plan_cli(nightly, "--mode", "nightly")
+        self.assertEqual((v["bench"], v["calls"]), ("false", [(SHA_B, SHA_A)]))
+        self.assertIn("previous baseline stands", v["reason"])
+        self.assertEqual(self.plan_cli(nightly, "--mode", "nightly", changed=True)["bench"], "true")
+        # The nightly ignores force.
+        self.assertEqual(self.plan_cli(nightly, "--mode", "nightly", "--force")["bench"], "false")
+        # A dispatch benches by default, and with models even with force off.
+        v = self.plan_cli(plan, "--mode", "dispatch")
+        self.assertEqual((v["bench"], v["calls"]), ("true", []))
+        v = self.plan_cli(plan, "--mode", "dispatch", "--no-force", "--models", "qwen3:0.6b")
+        self.assertEqual((v["bench"], v["calls"]), ("true", []))
+        self.assertEqual({e["model"] for e in json.loads(v["matrix"])}, {"qwen3:0.6b"})
+        # Force off and no models: the nightly rule.
+        v = self.plan_cli(plan, "--mode", "dispatch", "--no-force")
+        self.assertEqual((v["bench"], v["calls"]), ("false", [(SHA_B, SHA_A)]))
+        # Called for a pull request: never the baseline rule.
+        v = self.plan_cli(nightly, "--mode", "pr")
+        self.assertEqual(v["calls"], [])
 
     def test_plan_cli_pr(self):
         # Called from Build and Test: this run's artifacts, no index.
@@ -614,6 +749,18 @@ class Workflows(unittest.TestCase):
         # Called and dispatched only: Build and Test's own triggers run it.
         on = "\n".join(__import__("devkit_check")._top_block(workflow("devkit-bench.yml"), "on"))
         self.assertNotRegex(on, r"(?m)^  (pull_request|schedule|push):")
+
+    def test_only_the_hard_gate_fails_summary(self):
+        bench, build = workflow("devkit-bench.yml"), workflow("build-and-test.yml")
+        self.assertIn("value: ${{ jobs.report.outputs.hard-gate }}", bench)
+        self.assertIn("hard-gate: ${{ steps.report.outputs.hard-gate }}", bench)
+        self.assertIn('--outputs "${GITHUB_OUTPUT}"', bench)
+        self.assertIn("DEVKIT_BENCH_GATE: ${{ needs.devkit-bench.outputs.hard-gate }}", build)
+        self.assertNotRegex(build, r'case "\$\{DEVKIT_BENCH\}".*rc=1')
+        # A rerun of report replaces its uploads rather than failing on them.
+        for step in ("Upload the summary", "Upload the baseline"):
+            block = bench.split(f"- name: {step}\n", 1)[1].split("\n\n")[0]
+            self.assertIn("overwrite: true", block, step)
 
     def test_bench_workflow_has_no_secrets_or_writes(self):
         text = workflow("devkit-bench.yml")

@@ -131,8 +131,11 @@ accuracy. Do not invent a `make test` or claim tests pass.
   in the same run): perf (`flm bench`, the dev-kit build against the unmodified package on the same
   runner) and GSM8K accuracy, only when engine or kernel source changed: on pull requests, and
   nightly when the source changed since the last baseline. Results go to one pull request comment;
-  slowdowns and accuracy drops warn, a model failing the accuracy hard gate fails the check. A
-  manual dispatch of that workflow re-benches an earlier Build and Test run.
+  slowdowns and accuracy drops warn, and so does any other bench failure (perf, a pull, a timeout,
+  infrastructure); only a model failing the accuracy hard gate (acc_common: no predictions, or too
+  many unanswered) fails the required check, which therefore waits for the benches. A manual
+  dispatch of that workflow re-benches an earlier Build and Test run: it benches by default (force),
+  and without `models` takes the nightly's rotation, so name the models to re-bench a pull request's.
 
 Keep in sync, in the same pull request: `FLM_Xclbin/build_units.json` (every directory with a
 Makefile and its `MODEL_TYPE`s), `FLM_Xclbin/kernel_assignment.json` and `.md` (model → folder → slot
