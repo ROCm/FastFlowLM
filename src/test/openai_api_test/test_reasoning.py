@@ -21,7 +21,9 @@ Usage::
 
 from __future__ import annotations
 
+import json
 import os
+import urllib.request
 
 import flm_api
 from flm_api import Api, Skip, case, expect
@@ -115,7 +117,34 @@ def reads_nested_switch(api: Api) -> bool:
     declared = os.environ.get("FLM_TEST_NESTED_THINKING", "").lower()
     if declared in ("on", "off"):
         return declared == "on"
+    family = loaded_family(api)
+    if family is not None:
+        return family == "qwen3.5"
     return "qwen3.5" in api.model.lower()
+
+
+_families: dict[str, str | None] = {}
+
+
+def loaded_family(api: Api) -> str | None:
+    """The catalog family /api/ps reports for api.model, or None if it is not the loaded model.
+
+    The server reads the switch for every model on the Qwen3.5 frontend, whose catalog family
+    is qwen3.5 whatever the tag says (qwen3.6-oga-hipep, qwen3.8-oga-hipep, ...).
+    """
+    if _families.get(api.model) is None:
+        family = None
+        try:
+            url = api.url.removesuffix("/v1/chat/completions") + "/api/ps"
+            with urllib.request.urlopen(url, timeout=api.timeout) as reply:
+                for loaded in json.load(reply).get("models", []):
+                    if loaded.get("model") == api.model or loaded.get("name") == api.model:
+                        family = (loaded.get("details") or {}).get("family") or None
+        except (OSError, ValueError):
+            family = None
+        # Not cached while unknown: the model may not be loaded yet.
+        _families[api.model] = family
+    return _families[api.model]
 
 
 def not_nested(api: Api, reason: str) -> None:
