@@ -105,7 +105,8 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              product test job runs
   devkit_bench
              true when the dev-kit perf and accuracy benches
-             (devkit-bench.yml) run: a changed file is dev-kit engine or
+             (devkit-bench.yml, which Build and Test's devkit-bench job
+             calls on a pull request) run: a changed file is dev-kit engine or
              kernel source, that is a code or build-input file under
              flm-dev-kit/FLM_DLL/ or flm-dev-kit/FLM_Xclbin/ (sources,
              Makefiles, CMakeLists, iron/ Python, build_units.json,
@@ -255,11 +256,13 @@ DEVKIT_CI = re.compile(
     r"|actions/(detect-changes|devkit(?!-bench)[^/]*)/|script/ci/)")
 
 # The dev-kit bench CI (devkit-bench.yml, devkit-bench-comment.yml, their
-# actions, scripts and the scripts' tests). Build and Test runs none of it,
-# so a change to it selects nothing there: no product suite, no dev-kit area
-# and no bench (the benches run only for engine or kernel source). Its unit
-# tests still run in the changes job; the rest is exercised by dispatching
-# devkit-bench.yml on the branch.
+# actions, scripts and the scripts' tests). Build and Test calls
+# devkit-bench.yml only for engine or kernel source (the user's rule), so a
+# change to the bench CI alone selects nothing there: no product suite, no
+# dev-kit area and no bench. Its unit tests still run in the changes job;
+# the rest is exercised by dispatching devkit-bench.yml on the branch
+# against a Build and Test run. build-and-test.yml itself, which calls it,
+# is DEVKIT_CI.
 BENCH_CI = re.compile(
     r"^\.github/(workflows/devkit-bench(-comment)?\.yml$|actions/devkit-bench[^/]*/"
     r"|script/devkit-bench/|script/ci/test_devkit_bench[^/]*\.py$)")
@@ -671,9 +674,10 @@ class Decision:
                 or ("xclbin" in self.devkit_areas and not self.xclbin_compare_only))
 
     def bench(self) -> bool:
-        """Whether the dev-kit benches (devkit-bench.yml) run: engine or kernel
-        source changed and Build and Test builds the dev-kit artifacts and
-        portable packages they bench (devkit_overlay). An engine serving no
+        """Whether Build and Test runs the dev-kit benches (its devkit-bench
+        job, devkit-bench.yml) on a pull request: engine or kernel source
+        changed and it builds the dev-kit artifacts and portable packages
+        they bench (devkit_overlay). An engine serving no
         catalog family (qwen3_5_omni) is source but builds nothing to bench."""
         return self.bench_source is not None and self.devkit_overlay()
 
@@ -697,7 +701,8 @@ class Decision:
             if self.image_only:
                 return "kernel build image only (devkit-aie-image.yml): NPU tests and dev-kit jobs skipped"
             if self.bench_ci:
-                return "bench CI only (devkit-bench.yml): NPU tests and dev-kit jobs skipped"
+                return ("bench CI only (devkit-bench.yml, called for engine or kernel source only): "
+                        "NPU tests, dev-kit jobs and benches skipped")
             return "documentation only: NPU tests skipped" + devkit
         return self._product_summary() + devkit
 
@@ -1072,7 +1077,7 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
         d.bench_ci = bench_ci
         files = [f for f in files if not BENCH_CI.match(f)]
         d.reasons.append(f"{len(bench_ci)} bench CI file(s), e.g. {bench_ci[0]}: Build and Test runs "
-                         f"none of it (dispatch devkit-bench.yml on the branch to exercise it)")
+                         f"none of it for that alone (dispatch devkit-bench.yml on the branch to exercise it)")
         if not files:
             d.run_tests = False
             d.suites = set()

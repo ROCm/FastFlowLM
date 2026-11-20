@@ -663,8 +663,9 @@ class DevKitBench(unittest.TestCase):
                 self.assertEqual(self.bench(path), "false")
 
     def test_bench_ci_selects_nothing(self):
-        # Build and Test runs none of the bench CI, so it builds and tests
-        # nothing for it; dispatching devkit-bench.yml exercises it.
+        # Build and Test calls devkit-bench.yml only for engine or kernel
+        # source, so it builds, tests and benches nothing for the bench CI
+        # alone; dispatching devkit-bench.yml against a run exercises it.
         for path in (".github/script/devkit-bench/acc_common.py", ".github/workflows/devkit-bench.yml",
                      ".github/workflows/devkit-bench-comment.yml",
                      ".github/actions/devkit-bench-perf/action.yml",
@@ -679,6 +680,10 @@ class DevKitBench(unittest.TestCase):
     def test_bench_ci_beside_other_changes(self):
         out = cli("--files", ".github/workflows/devkit-bench.yml", "flm-dev-kit/FLM_DLL/detail/qwen3_npu/qwen3_npu.cpp")
         self.assertEqual((out["devkit_areas"], out["devkit_bench"], out["run_tests"]), ("dll", "true", "false"))
+        # build-and-test.yml, which calls the bench, is dev-kit CI: every
+        # area runs, but it benches nothing by itself.
+        out = cli("--files", ".github/workflows/build-and-test.yml")
+        self.assertEqual((out["devkit"], out["devkit_bench"]), ("true", "false"))
         # The overlay action the bench reuses is dev-kit CI, still.
         out = cli("--files", ".github/actions/devkit-overlay-package/action.yml")
         self.assertEqual(out["devkit"], "true")
