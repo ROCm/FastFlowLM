@@ -36,7 +36,8 @@ TARGET = $(LIB_DIR)/libq4_npu_eXpress.so
 
 CXX := g++-13
 include ../../flags.mk
-CXX_FLAGS := -std=c++20 -fPIC -Wall
+CXX_FLAGS := -std=c++20 -fPIC -Wall -O3
+CXX_FLAGS += $(FLM_MARCH)
 CXX_FLAGS += -I../../include
 ifeq ($(FLM_USE_HRX),1)
 include ../../hrx.mk
