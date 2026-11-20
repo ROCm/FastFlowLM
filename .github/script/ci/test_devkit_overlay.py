@@ -337,7 +337,8 @@ class Workflow(unittest.TestCase):
             with self.subTest(job=job):
                 block = blocks[job]
                 self.assertIn(GATE, block)
-                self.assertIn("github.event_name == 'pull_request'", block)
+                self.assertIn("(github.event_name == 'pull_request' "
+                              "|| needs.changes.outputs.devkit-full-refresh == 'true')", block)
                 self.assertIn("needs.changes.outputs.devkit-overlay == 'true'", block)
                 self.assertRegex(block, r"runs-on: \[self-hosted, (linux|windows), x64, npu, sweep\]")
                 self.assertIn("uses: ./.github/actions/devkit-npu-overlay", block)
@@ -354,7 +355,11 @@ class Workflow(unittest.TestCase):
         self.assertIn("persist-credentials: false", text)
         self.assertIn('clean-env: "true"', text)
         self.assertIn("harness-dir: ${{ github.workspace }}/devkit-harness", text)
-        self.assertIn("harness-ref: ${{ github.event.pull_request.base.sha }}", WORKFLOW.read_text(encoding="utf-8"))
+        # The full refresh, a dispatch, has no pull request: the main commit
+        # its binaries were built on (changes devkit-base).
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertEqual(workflow.count(
+            "harness-ref: ${{ github.event.pull_request.base.sha || needs.changes.outputs.devkit-base }}"), 4)
 
 
 if __name__ == "__main__":

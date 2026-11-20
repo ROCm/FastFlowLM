@@ -865,7 +865,53 @@ class OverlayManifest(unittest.TestCase):
 
 
 class Wiring(unittest.TestCase):
-    """devkit_check.py's side of the swap."""
+    """devkit_check.py's swap wiring rule, on this tree and on a broken copy."""
+
+    def test_tree(self):
+        errors: list = []
+        self.assertEqual(dc.check_swap_wiring(dc.REPO_ROOT, errors), 2)
+        self.assertEqual(errors, [])
+
+    def test_broken(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(rmtree, tmp)
+        for rel in (dc.BUILD_WORKFLOW, dc.OVERLAY_ACTION):
+            (tmp / rel).parent.mkdir(parents=True, exist_ok=True)
+            text = (dc.REPO_ROOT / rel).read_text(encoding="utf-8")
+            text = text.replace("devkit-overlay-manifest-${{ inputs.os }}", "overlay-manifest-${{ inputs.os }}")
+            text = text.replace("name: Test Windows HRX dev-kit overlay", "name: Test Windows HRX overlay")
+            text = text.replace("devkit_swap.py check", "devkit_swap.py chek")
+            (tmp / rel).write_text(text, encoding="utf-8")
+        errors: list = []
+        dc.check_swap_wiring(tmp, errors)
+        joined = "\n".join(errors)
+        self.assertIn("must upload", joined)
+        self.assertIn("Test Windows HRX dev-kit overlay", joined)
+        self.assertIn("must run devkit_swap.py check", joined)
+
+    def test_build_and_test(self):
+        text = (dc.REPO_ROOT / dc.BUILD_WORKFLOW).read_text(encoding="utf-8")
+        jobs = {k: "\n".join(v) for k, v in dc._jobs(text).items()}
+        self.assertIn("      devkit-full-refresh:\n", text)
+        changes_job = jobs["changes"]
+        self.assertLess(changes_job.index("devkit_swap.py verify"),
+                        changes_job.index("uses: ./.github/actions/detect-changes"))
+        self.assertIn("swap-verified: ${{ steps.swap.outputs.swap-verified }}", changes_job)
+        self.assertIn("if: github.event_name == 'pull_request'", changes_job)
+        for job in ("test-lin-xrt-devkit", "test-lin-hrx-devkit", "test-win-xrt-devkit", "test-win-hrx-devkit"):
+            with self.subTest(job=job):
+                for line in ("require-all: ${{ needs.changes.outputs.devkit-full-refresh }}",
+                             "full-refresh: ${{ needs.changes.outputs.devkit-full-refresh }}",
+                             "head-sha: ${{ github.event.pull_request.head.sha || github.sha }}",
+                             "base-sha: ${{ needs.changes.outputs.devkit-base }}",
+                             "tier: ${{ needs.changes.outputs.devkit-full-refresh == 'true' && 'full' || 'pr' }}"):
+                    self.assertIn(line, jobs[job])
+        self.assertIn("&& 'refresh'", jobs["devkit-bench"])
+        summary = jobs["summary"]
+        self.assertIn('[ "${SWAP_VERIFIED}" = true ] && requested=false', summary)
+        self.assertIn("devkit_swap.py guide", summary)
+        # Nothing here writes: no grant of a write permission.
+        self.assertNotRegex(text, r"(?m)^\s+[a-z-]+: write\s*$")
 
     def test_required_binaries(self):
         req = dc.required_binaries(dc.REPO_ROOT)

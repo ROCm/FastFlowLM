@@ -53,6 +53,40 @@ def catalog(**entries) -> str:
     return json.dumps({"model_path": "models", "models": models})
 
 
+class SwapVerified(unittest.TestCase):
+    """--swap-verified true (devkit_swap.py verify accepted the head): the
+    run builds and tests nothing again; devkit-static still runs."""
+
+    FILES = ("flm-dev-kit/FLM_DLL/detail/qwen3_npu/qwen3_npu.cpp", "flm-dev-kit/FLM_Xclbin/README.md",
+             "src/lib/xrt/libqwen3_npu.so", "src/xclbins/Qwen3-0.6B-NPU2/attn.xclbin",
+             "src/runner/runner.cpp", ".github/workflows/build-and-test.yml")
+
+    def test_skips_everything_but_devkit_static(self):
+        out = cli("--files", *self.FILES, "--swap-verified", "true")
+        self.assertEqual({k: out[k] for k in ("run_tests", "suites", "families", "hipep", "new_models",
+                                              "devkit", "devkit_catalog", "devkit_areas", "devkit_families",
+                                              "devkit_overlay", "devkit_bench", "swap_verified")},
+                         {"run_tests": "false", "suites": "none", "families": "", "hipep": "false",
+                          "new_models": "", "devkit": "false", "devkit_catalog": "true", "devkit_areas": "",
+                          "devkit_families": "", "devkit_overlay": "false", "devkit_bench": "false",
+                          "swap_verified": "true"})
+        self.assertIn("verified dev-kit swap", out["summary"])
+
+    def test_default_and_false_change_nothing(self):
+        plain = cli("--files", *self.FILES)
+        self.assertEqual(plain["swap_verified"], "false")
+        self.assertEqual(plain["run_tests"], "true")
+        self.assertEqual(plain["devkit_overlay"], "true")
+        self.assertEqual(cli("--files", *self.FILES, "--swap-verified", "false"), plain)
+        self.assertEqual(cli("--files", *self.FILES, "--swap-verified", ""), plain)
+
+    def test_decision(self):
+        d = changes.decide(list(self.FILES))
+        d.skip_for_swap()
+        self.assertFalse(d.devkit_overlay() or d.bench() or d.runs_hipep())
+        self.assertTrue(d.devkit_catalog)
+
+
 class Cli(unittest.TestCase):
     def test_docs_only(self):
         out = cli("--files", "docs/docs/models/d3.md", "README.md", "src/README.md",
@@ -133,7 +167,7 @@ class Cli(unittest.TestCase):
         self.assertEqual([l.split("=")[0] for l in lines],
                          ["run_tests", "families", "asr_full", "suites", "hipep",
                           "new_models", "hipep_models", "devkit", "devkit_catalog", "devkit_areas",
-                          "devkit_families", "devkit_overlay", "devkit_bench", "summary"])
+                          "devkit_families", "devkit_overlay", "devkit_bench", "swap_verified", "summary"])
 
     def test_suites_scoped_to_the_change(self):
         cases = {

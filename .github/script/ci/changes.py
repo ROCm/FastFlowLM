@@ -120,6 +120,13 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              changes (.github/, the dev-kit and bench CI included) give
              false. Unknown changed files give true, as everything else here
              does; no changed files give false (nothing changed to bench)
+  swap_verified
+             true with --swap-verified true: the head is a dev-kit swap
+             commit devkit_swap.py verify accepted (it holds exactly the
+             binaries an earlier Build and Test run of its parent built and
+             NPU-tested). Everything else is then off: run_tests false,
+             suites "none", no family, model, dev-kit area or bench;
+             devkit_catalog true, so devkit-static still checks the catalog
   summary    one line for the job log
 
 When in doubt it tests more: an all-zero or missing base (a new branch), or a
@@ -629,7 +636,28 @@ class Decision:
     devkit_catalog: bool = False
     # Only shipped kernels (SHIPPED_KERNEL) selected the xclbin area.
     xclbin_compare_only: bool = False
+    # The head is a verified dev-kit swap commit (devkit_swap.py verify).
+    swap_verified: bool = False
     reasons: list = field(default_factory=list)
+
+    def skip_for_swap(self) -> None:
+        """A verified swap commit: the run that tested its parent built and
+        NPU-tested exactly these binaries, so nothing is built or tested
+        again; only devkit-static (the catalog check) runs."""
+        self.swap_verified = True
+        self.run_tests = False
+        self.suites = set()
+        self.families = set()
+        self.hipep = False
+        self.new_models = []
+        self.gpu_models = set()
+        self.devkit_areas = set()
+        self.devkit_families = set()
+        self.bench_source = None
+        self.xclbin_compare_only = False
+        self.devkit_catalog = True
+        self.reasons.append("the head is a verified dev-kit swap commit (devkit_swap.py verify): no product "
+                            "build, NPU test, dev-kit build, overlay or bench; devkit-static only")
 
     def all_suites(self, path: str, why: str = "") -> None:
         if self.suites is not None:
@@ -682,6 +710,8 @@ class Decision:
         return self.bench_source is not None and self.devkit_overlay()
 
     def summary(self) -> str:
+        if self.swap_verified:
+            return "verified dev-kit swap commit: builds and NPU tests skipped; devkit-static runs"
         devkit = f"; dev kit: {self.devkit_value().replace(',', ', ')}" if self.devkit_areas else ""
         if self.devkit_families:
             devkit += f" (engine families: {len(self.devkit_families)})"
@@ -744,6 +774,7 @@ class Decision:
                 "devkit_families": ",".join(sorted(self.devkit_families)),
                 "devkit_overlay": str(self.devkit_overlay()).lower(),
                 "devkit_bench": str(self.bench()).lower(),
+                "swap_verified": str(self.swap_verified).lower(),
                 "summary": self.summary()}
 
 
@@ -1271,6 +1302,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--repo", type=Path, default=REPO_ROOT)
     parser.add_argument("--github-output", action="store_true",
                         help="Also append the outputs to $GITHUB_OUTPUT.")
+    parser.add_argument("--swap-verified", default="", choices=("", "true", "false"),
+                        help="\"true\": the head is a verified dev-kit swap commit (devkit_swap.py verify), "
+                             "so nothing is built or tested again")
     args = parser.parse_args(argv)
 
     known_base = bool(args.base.strip("0 "))
@@ -1294,6 +1328,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             engines_text = None
     devkit_engines = DevkitEngines.parse(engines_text)
     decision = decide(files, git, head_catalog, devkit_engines)
+    if args.swap_verified == "true":
+        decision.skip_for_swap()
     for reason in decision.reasons:
         print(f"changes: {reason}")
     outputs = decision.outputs()
