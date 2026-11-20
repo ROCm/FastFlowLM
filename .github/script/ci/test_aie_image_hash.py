@@ -206,6 +206,39 @@ class Directives(unittest.TestCase):
         self.assertNotIn("#", ah.normalise(LOCK))
 
 
+class Workflows(unittest.TestCase):
+    """The publisher and the lookup must both compute the tag with the
+    script: an inline hash in one of them makes the tags silently differ."""
+
+    CALL = 'python3 -I .github/script/ci/aie_image_hash.py "$LOCK" "$DOCKERFILE"'
+    EXPECTED = {"devkit-aie-image.yml": 2, "devkit-xclbins.yml": 1}
+
+    def steps(self, text: str) -> list[str]:
+        """The "Read toolchain.lock" steps of a workflow, each up to the next step."""
+        blocks = re.split(r"(?m)^\s*- name: ", text)
+        return [b for b in blocks if b.startswith("Read toolchain.lock")]
+
+    def test_read_steps_call_the_script(self):
+        for name, count in self.EXPECTED.items():
+            path = REPO / ".github" / "workflows" / name
+            if not path.is_file():
+                self.skipTest("not in a FastFlowLM checkout")
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(workflow=name):
+                self.assertIn(f"LOCK: {ah.LOCK}\n", text.replace("\r\n", "\n"))
+                self.assertIn(f"DOCKERFILE: {ah.DOCKERFILE}\n", text.replace("\r\n", "\n"))
+                steps = self.steps(text)
+                self.assertEqual(len(steps), count)
+                for step in steps:
+                    self.assertIn(self.CALL, step)
+                    self.assertNotIn("sha256sum", step)
+
+    def test_steps_split(self):
+        text = ("    steps:\n      - name: Read toolchain.lock\n        run: a\n"
+                "      - name: Other\n        run: sha256sum\n")
+        self.assertEqual(self.steps(text), ["Read toolchain.lock\n        run: a\n"])
+
+
 class Cli(unittest.TestCase):
     def test_files(self):
         with tempfile.TemporaryDirectory() as d:
