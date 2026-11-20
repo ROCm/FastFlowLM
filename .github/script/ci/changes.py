@@ -257,7 +257,7 @@ DEVKIT_CI = re.compile(
 
 # The dev-kit bench CI (devkit-bench.yml, devkit-bench-comment.yml, their
 # actions, scripts and the scripts' tests). Build and Test calls
-# devkit-bench.yml only for engine or kernel source (the user's rule), so a
+# devkit-bench.yml only for engine or kernel source, so a
 # change to the bench CI alone selects nothing there: no product suite, no
 # dev-kit area and no bench. Its unit tests still run in the changes job;
 # the rest is exercised by dispatching devkit-bench.yml on the branch
