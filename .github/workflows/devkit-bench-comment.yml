@@ -65,7 +65,8 @@ jobs:
         id: summary
         run: |
           set -euo pipefail
-          art=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts?per_page=100" \
+          # By name: a Build and Test run can upload more than a page of artifacts.
+          art=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts?name=bench-summary&per_page=100" \
                   --jq '[.artifacts[] | select(.name == "bench-summary" and .expired == false)] | max_by(.id) // empty')
           if [ -z "${art}" ]; then
             echo "The run uploaded no bench-summary (it benched nothing): not commenting."
