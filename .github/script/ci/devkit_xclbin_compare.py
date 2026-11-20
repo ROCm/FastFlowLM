@@ -23,7 +23,10 @@ out the same. Every <folder>/<slot>.xclbin of either tree is one of:
                  a file has no AIE_PARTITION section, cannot be parsed or
                  cannot be read
   only-devkit    the dev kit built it; FastFlowLM ships no such file
-  only-shipped   FastFlowLM ships it; this run did not build it
+  only-shipped   FastFlowLM ships it in a model folder this run built, but this
+                 run did not build this slot
+  not-built      FastFlowLM ships it in a model folder this run did not build
+                 at all (a pull request builds only the kernels it touches)
 
 The comparison is only a report: it never fails (exit 0 whatever it finds,
 2 for bad arguments). Some units (generic_decoding_layer and the like) do not
@@ -74,7 +77,7 @@ PARTITION_SIZE = 184
 # reserved[64].
 PDI_SIZE = 96
 
-CLASSES = ("identical", "same-pdi", "differs", "only-devkit", "only-shipped")
+CLASSES = ("identical", "same-pdi", "differs", "only-devkit", "only-shipped", "not-built")
 
 
 class XclbinError(ValueError):
@@ -187,11 +190,13 @@ def xclbins(root: Path) -> set[str]:
 def compare_trees(devkit: Path, shipped: Path) -> list[dict]:
     rows = []
     a, b = xclbins(devkit), xclbins(shipped)
+    built_folders = {rel.split("/", 1)[0] for rel in a}
     for rel in sorted(a | b):
         if rel not in b:
             rows.append({"path": rel, "class": "only-devkit"})
         elif rel not in a:
-            rows.append({"path": rel, "class": "only-shipped"})
+            folder = rel.split("/", 1)[0]
+            rows.append({"path": rel, "class": "only-shipped" if folder in built_folders else "not-built"})
         else:
             try:
                 row = compare_files((devkit / rel).read_bytes(), (shipped / rel).read_bytes())
@@ -227,13 +232,13 @@ def markdown(rows: list[dict], shipped: str) -> str:
            "twice, so \"differs\" alone is no failure.", "",
            " · ".join(f"{k}: **{v}**" for k, v in c.items()), "",
            "| Slot | Result | Detail |", "|---|---|---|"]
-    # The only-shipped rows of a pull request that built a few kernels
-    # would bury the rest: counted above, listed in the JSON.
+    # The not-built rows of a pull request that built a few kernels would
+    # bury the rest: counted above, listed in the JSON.
     for r in rows:
-        if r["class"] != "only-shipped":
+        if r["class"] != "not-built":
             out.append(f"| `{r['path']}` | {r['class']} | {detail(r)} |")
-    if c["only-shipped"]:
-        out += ["", f"{c['only-shipped']} shipped slots this run did not build are not listed."]
+    if c["not-built"]:
+        out += ["", f"{c['not-built']} shipped slots in model folders this run did not build are not listed."]
     return "\n".join(out) + "\n"
 
 

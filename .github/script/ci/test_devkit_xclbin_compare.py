@@ -129,7 +129,8 @@ class Trees(unittest.TestCase):
         self.put("devkit/A-NPU2/layer.xclbin", xclbin([(xc.AIE_PARTITION, partition([PDI[::-1]]))]))
         self.put("shipped/A-NPU2/layer.xclbin", base)
         self.put("devkit/B-NPU2/new.xclbin", base)
-        self.put("shipped/C-NPU2/old.xclbin", base)
+        self.put("shipped/A-NPU2/vision.xclbin", base)  # a folder the run built, slot it did not
+        self.put("shipped/C-NPU2/old.xclbin", base)     # a folder the run did not build
         summary = self.tmp / "summary.md"
         out = io.StringIO()
         os.environ["GITHUB_STEP_SUMMARY"] = str(summary)
@@ -142,15 +143,16 @@ class Trees(unittest.TestCase):
         self.assertEqual(rc, 0)
         report = json.loads((self.tmp / "out/compare.json").read_text())
         self.assertEqual(report["counts"], {"identical": 1, "same-pdi": 1, "differs": 1,
-                                            "only-devkit": 1, "only-shipped": 1})
+                                            "only-devkit": 1, "only-shipped": 1, "not-built": 1})
         self.assertEqual({r["path"]: r["class"] for r in report["rows"]}, {
             "A-NPU2/attn.xclbin": "identical", "A-NPU2/layer.xclbin": "differs",
             "A-NPU2/mm.xclbin": "same-pdi", "B-NPU2/new.xclbin": "only-devkit",
-            "C-NPU2/old.xclbin": "only-shipped"})
+            "A-NPU2/vision.xclbin": "only-shipped", "C-NPU2/old.xclbin": "not-built"})
         md = summary.read_text()
         self.assertIn("| `A-NPU2/mm.xclbin` | same-pdi |", md)
+        self.assertIn("| `A-NPU2/vision.xclbin` | only-shipped |", md)
         self.assertNotIn("C-NPU2/old.xclbin", md)  # counted, not listed
-        self.assertIn("1 shipped slots this run did not build", md)
+        self.assertIn("1 shipped slots in model folders this run did not build", md)
 
     def run_main(self, *args: str) -> tuple[int, str]:
         out = io.StringIO()
