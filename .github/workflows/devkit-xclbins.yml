@@ -12,8 +12,10 @@ name: Dev-kit xclbins
 #             split into shards: .github/actions/devkit-xclbin-plan, rules in
 #             .github/script/ci/devkit_xclbin_plan.py. mode changed (pull
 #             requests): the units the change touches, the artifacts of the
-#             models whose kernel_assignment.json entry it changes, or for a
-#             toolchain or CI change two canary kernels. assigned: every
+#             models whose kernel_assignment.json entry it changes, the
+#             artifact assigned to each shipped kernel it replaces
+#             (src/xclbins/<folder>/<slot>, so the compare below reports
+#             it), or for a toolchain or CI change two canary kernels. assigned: every
 #             kernel the product ships; all: every build. A shard per 8
 #             builds, at most 16 (a pull request touching many kernels, as the
 #             import did with 137, spreads them instead of packing ~34 per

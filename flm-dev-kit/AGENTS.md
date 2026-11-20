@@ -109,8 +109,42 @@ Kernel makefiles add `-j8` (`makefiles/common.mk`) unless `-j` is set. Test host
 - `aie2p-launchlib/launchlib` (`make test`) and `FLM_Pybind/SmolVLA` (`test_smolvla_*.py`).
 
 Engines and kernels are otherwise validated by running the model in `flm` and comparing outputs and
-accuracy. Do not invent a `make test` or claim tests pass. FastFlowLM CI (`../.github/workflows/`) does
-not build or test the dev kit.
+accuracy. Do not invent a `make test` or claim tests pass.
+
+**FastFlowLM CI** (`../.github/workflows/build-and-test.yml`; which jobs a change selects is decided by
+`../.github/script/ci/changes.py`) runs these dev-kit jobs:
+- `devkit-static` (`../.github/script/ci/devkit_check.py`, seconds): the data files below agree with
+  each other and with the tree, every engine Makefile has `-Wl,-Bsymbolic-functions`, files a pull
+  request adds carry the copyright notice, and an RTP lock change comes with the engines that
+  hard-code those addresses. Its catalog rules also run when `../src/model_list.json`,
+  `../src/xclbins/` or `../src/lib/` change.
+- `devkit-engines`: `FLM_DLL` built for Linux and Windows, XRT and HRX, on hosted runners, when a
+  change touches it or a `../src/lib/xrt/` library it links, and on every push to main and nightly.
+- `devkit-xclbins`: `FLM_Xclbin` built with Peano in the `aie-build` image (Chess needs a license no
+  hosted runner has). A pull request builds the kernels it touches, plus the kernel assigned to each
+  `../src/xclbins/` file it replaces; main builds every assigned kernel, nightly every build unit. The result is compared with
+  `../src/xclbins/` (a report, never a failure), and a kernel whose RTP addresses differ from
+  `FLM_Xclbin/rtp_addresses.lock.txt` fails the job.
+- Pull requests only: the NPU overlay jobs (`test-*-devkit`) put the engines and kernels built above
+  into the product's portable packages and run the NPU tests on the models they serve.
+- `../.github/workflows/devkit-bench.yml` (its own workflow, after Build and Test): perf (`flm bench`,
+  the dev-kit build against the unmodified package on the same runner) and GSM8K accuracy, only
+  when engine or kernel source changed: on pull requests, and nightly when the source changed since
+  the last baseline. Results go to one pull request comment; slowdowns and accuracy drops warn.
+
+Keep in sync, in the same pull request: `FLM_Xclbin/build_units.json` (every directory with a
+Makefile and its `MODEL_TYPE`s), `FLM_Xclbin/kernel_assignment.json` and `.md` (model → folder → slot
+→ artifact), `FLM_DLL/engines.json` (engine → families, models, uses; shared units;
+`served_elsewhere`), `FLM_Xclbin/rtp_addresses.lock.txt`, and the engine table in
+`../.github/script/ci/changes.py`. **The dev kit is the source of what `flm` ships:** every NPU
+(`aie2p`) model in `../src/model_list.json` needs a `kernel_assignment.json` entry whose folder is
+its xclbin folder (a tag that only reuses another model's kernels names that folder in
+`xclbin_folder` instead) and an `engines.json` engine listing it; every assigned slot ships as
+`../src/xclbins/<folder>/<slot>`, and every shipped `.xclbin` is assigned; every library in
+`../src/lib/{xrt,hrx}/` is built by an `FLM_DLL/detail/` directory in `engines.json`, and each such
+library ships as `lib<name>.so`, `<name>.dll` and `<name>.lib` for both runtimes. A model added
+only under `../src/` fails `devkit-static`. The few deliberate exceptions are listed, with reasons,
+in `CATALOG_ALLOW` in `devkit_check.py`.
 
 ## 5. Conventions
 

@@ -132,8 +132,8 @@ class Cli(unittest.TestCase):
         self.assertIn("run_tests=false", lines)
         self.assertEqual([l.split("=")[0] for l in lines],
                          ["run_tests", "families", "asr_full", "suites", "hipep",
-                          "new_models", "hipep_models", "devkit", "devkit_areas", "devkit_families",
-                          "devkit_overlay", "devkit_bench", "summary"])
+                          "new_models", "hipep_models", "devkit", "devkit_catalog", "devkit_areas",
+                          "devkit_families", "devkit_overlay", "devkit_bench", "summary"])
 
     def test_suites_scoped_to_the_change(self):
         cases = {
@@ -461,6 +461,11 @@ class DevKit(unittest.TestCase):
         out = cli("--files", "flm-dev-kit/README.md", "flm-dev-kit/AGENTS.md",
                   "flm-dev-kit/FLM_Xclbin/kernel_assignment.md", "flm-dev-kit/FLM_DLL/.gitignore")
         self.assertEqual((out["run_tests"], out["devkit"], out["devkit_areas"]), ("false", "false", ""))
+        # kernel_assignment.md is read by the catalog check, which still runs.
+        self.assertEqual(out["devkit_catalog"], "true")
+        self.assertEqual(out["summary"], "documentation only: NPU tests skipped; dev-kit catalog check runs")
+        out = cli("--files", "flm-dev-kit/README.md", "flm-dev-kit/AGENTS.md")
+        self.assertEqual((out["devkit"], out["devkit_catalog"]), ("false", "false"))
         self.assertEqual(out["summary"], "documentation only: NPU tests skipped")
 
     def test_mixed_keeps_product_rules_for_product_paths(self):
@@ -583,6 +588,47 @@ class DevKit(unittest.TestCase):
         # Documentation and product-only changes: none.
         self.assertEqual(cli("--files", "docs/a.md")["suites"], "none")
         self.assertEqual(cli("--files", "src/server/server.cpp")["devkit_overlay"], "false")
+
+    def test_catalog_files_run_the_catalog_check(self):
+        """What src/ ships and the dev-kit JSON describing it run
+        devkit-static (devkit_catalog), and select no dev-kit build."""
+        for path in ("src/model_list.json", "src/xclbins/Qwen3-8B-NPU2/attn.xclbin",
+                     "src/xclbins/Qwen3-8B-NPU2/README.txt", "src/lib/hrx/libqwen3_npu.so",
+                     "src/lib/xrt/libqwen3_npu.so", "src/lib/libcurl.dll",
+                     "flm-dev-kit/FLM_DLL/engines.json", "flm-dev-kit/FLM_Xclbin/kernel_assignment.json",
+                     "flm-dev-kit/FLM_Xclbin/kernel_assignment.md", "flm-dev-kit/FLM_Xclbin/build_units.json"):
+            with self.subTest(path=path):
+                self.assertEqual(cli("--files", path)["devkit_catalog"], "true")
+        # Only the model list: no dev-kit area, so no dev-kit build or overlay.
+        out = cli("--files", "src/model_list.json")
+        self.assertEqual((out["devkit"], out["devkit_areas"], out["devkit_overlay"]), ("false", "", "false"))
+        self.assertIn("dev-kit catalog check runs", out["summary"])
+        out = cli("--files", "src/lib/hrx/libqwen3_npu.so")
+        self.assertEqual((out["devkit"], out["devkit_areas"]), ("false", ""))
+        for path in ("src/server/server.cpp", "src/model_info.json", "flm-dev-kit/FLM_DLL/model_list.json",
+                     "flm-dev-kit/FLM_Xclbin/MM/Makefile", "docs/a.md"):
+            with self.subTest(path=path):
+                self.assertEqual(cli("--files", path)["devkit_catalog"], "false")
+        self.assertEqual(cli("--base", "0" * 40, "--head", "HEAD")["devkit_catalog"], "true")
+        self.assertEqual(changes.decide([]).outputs()["devkit_catalog"], "false")
+
+    def test_shipped_kernel_is_rebuilt_to_compare_without_overlay(self):
+        out = cli("--files", "src/xclbins/Llama-3.1-8B-NPU2/layer.xclbin")
+        self.assertEqual((out["run_tests"], out["devkit"], out["devkit_areas"], out["devkit_families"],
+                          out["devkit_overlay"]), ("true", "true", "xclbin", "", "false"))
+        self.assertEqual(families(out), {"llama3"})
+        self.assertIn("shipped kernels rebuilt to compare", out["summary"])
+        # Other files in the folder are no kernel.
+        self.assertEqual(cli("--files", "src/xclbins/Llama-3.1-8B-NPU2/rtp.txt")["devkit_areas"], "")
+        # With a kernel source the overlay runs as for that source alone.
+        out = cli("--files", "src/xclbins/Llama-3.1-8B-NPU2/layer.xclbin",
+                  "flm-dev-kit/FLM_Xclbin/MM/iron/mm_aie.py")
+        self.assertEqual((out["devkit_areas"], out["devkit_overlay"]), ("xclbin", "true"))
+        self.assertNotIn("rebuilt to compare", out["summary"])
+        # With a dev-kit engine: the engine's overlay, the kernel compared.
+        out = cli("--files", "src/xclbins/Llama-3.1-8B-NPU2/layer.xclbin",
+                  "flm-dev-kit/FLM_DLL/detail/llama_npu/llama_npu.cpp")
+        self.assertEqual((out["devkit_areas"], out["devkit_overlay"]), ("xclbin,dll", "true"))
 
     def test_unknown_files_select_every_area(self):
         out = cli("--base", "0" * 40, "--head", "HEAD")

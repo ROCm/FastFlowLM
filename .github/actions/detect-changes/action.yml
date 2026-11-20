@@ -58,11 +58,21 @@ outputs:
       flm-dev-kit/ paths never select product suites: a change only there
       gives run "false" (see devkit-overlay for the packages it may build).
     value: ${{ steps.changes.outputs.devkit }}
+  devkit-catalog:
+    description: >
+      "true" when a file the dev-kit catalog check reads changed (what src/
+      ships: src/model_list.json, src/xclbins/, src/lib/; and the dev kit's
+      engines.json, kernel_assignment.json/.md and build_units.json), or the
+      changed files are unknown: devkit-static runs, as it does for devkit,
+      and nothing else.
+    value: ${{ steps.changes.outputs.devkit_catalog }}
   devkit-areas:
     description: >
       Comma-separated dev-kit areas the change touches: xclbin, dll,
       converter, pybind, launchlib, including the areas that build from a
-      changed file of another area. Empty when devkit is "false".
+      changed file of another area, and xclbin for a shipped kernel
+      (src/xclbins/<folder>/<slot>.xclbin, rebuilt to compare). Empty when
+      devkit is "false".
     value: ${{ steps.changes.outputs.devkit_areas }}
   devkit-families:
     description: >
@@ -76,7 +86,8 @@ outputs:
   devkit-overlay:
     description: >
       "true" when the dev-kit overlay tests run: the change touches a dev-kit
-      engine's families or selects the xclbin area. A pull request then
+      engine's families or selects the xclbin area (other than through
+      shipped kernels alone, which are only compared). A pull request then
       builds the portable packages they start from even when run is "false"
       (suites is then "none", so no product test runs).
     value: ${{ steps.changes.outputs.devkit_overlay }}

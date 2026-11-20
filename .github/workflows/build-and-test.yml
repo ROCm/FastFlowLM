@@ -139,6 +139,7 @@ jobs:
       # only the portable builds the overlay tests start from
       # (devkit-overlay); see .github/script/ci/changes.py.
       devkit: ${{ steps.detect.outputs.devkit }}
+      devkit-catalog: ${{ steps.detect.outputs.devkit-catalog }}
       devkit-areas: ${{ steps.detect.outputs.devkit-areas }}
       devkit-families: ${{ steps.detect.outputs.devkit-families }}
       devkit-overlay: ${{ steps.detect.outputs.devkit-overlay }}
@@ -195,11 +196,19 @@ jobs:
   # Static checks of the dev kit's CI data (flm-dev-kit/FLM_Xclbin/
   # kernel_assignment.json and build_units.json, flm-dev-kit/FLM_DLL/
   # engines.json, the -Bsymbolic-functions link flag, and on a pull request
-  # the copyright notice of every source file it adds under flm-dev-kit/).
-  # Standard-library Python on a hosted runner; its unit tests run in changes.
+  # the copyright notice of every source file it adds under flm-dev-kit/),
+  # and the catalog rules: every model, kernel and engine library src/ ships
+  # has its dev-kit sources and entries. Runs for any dev-kit change
+  # (devkit) and for a change to what src/ ships or to the dev-kit JSON
+  # (devkit-catalog: src/model_list.json, src/xclbins/, src/lib/), which
+  # start no dev-kit build. Standard-library Python on a hosted runner; its
+  # unit tests run in changes. A release runs it too (its changes job sees
+  # every file as changed), deliberately: it checks the very catalog being
+  # released, in about a minute, but only summary's Dev-kit checks, which
+  # runs on pull requests, acts on its result, so it holds no release up.
   devkit-static:
     needs: changes
-    if: needs.changes.outputs.devkit == 'true'
+    if: needs.changes.outputs.devkit == 'true' || needs.changes.outputs.devkit-catalog == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -238,7 +247,8 @@ jobs:
   # the aie-build image on hosted runners (devkit-xclbins.yml): on a pull
   # request that selects the xclbin dev-kit area, the builds its changes
   # touch (mode changed, diffed like changes.py from the merge base of the
-  # pull request's base and head); on every push to main, every kernel the
+  # pull request's base and head; a replaced src/xclbins/<folder>/<slot>
+  # rebuilds the artifact assigned to that slot, only to compare it); on every push to main, every kernel the
   # product ships (assigned); nightly, every build (all); on any other run
   # that selects the area (workflow_dispatch: no base to diff), assigned.
   # Not for a release.
@@ -1542,8 +1552,10 @@ jobs:
             echo "::error::a package failed to build or its tests failed"; exit 1
           fi
 
-      # A pull request whose dev-kit data does not check out, whose dev-kit
-      # engines do not build, or whose overlay tests (test-*-devkit) fail or
+      # A pull request whose dev-kit data does not check out (devkit-static,
+      # whose catalog rules also run for changes to src/model_list.json,
+      # src/xclbins and src/lib), whose dev-kit engines do not build, or
+      # whose overlay tests (test-*-devkit) fail or
       # are skipped though requested (a package or dev-kit build failed, or
       # the gate held them), fails here too, whatever the gate step above
       # decided, so this job stays the single required check. So does one
