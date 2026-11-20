@@ -17,8 +17,9 @@ name: Dev-kit xclbins
 #             kernel the product ships; all: every build. A shard per 8
 #             builds, at most 16 (a pull request touching many kernels, as the
 #             import did with 137, spreads them instead of packing ~34 per
-#             shard). Each build gets 5 minutes (the
-#             longest measured takes about one), so hung builds cannot run
+#             shard). Each build gets 20 minutes (on a
+#             4-core hosted runner the slowest take ~5: VisionAttention
+#             units, 286 s and more), so hung builds cannot run
 #             the job into its own limit before the shard uploads
 #   image     the image to build in: the digest in
 #             flm-dev-kit/FLM_Xclbin/toolchain.image when that file exists;
@@ -248,7 +249,7 @@ jobs:
     needs: [plan, image]
     if: needs.plan.outputs.empty == 'false'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     permissions:
       contents: read
       packages: read
@@ -293,7 +294,7 @@ jobs:
           units: ${{ toJSON(fromJSON(needs.plan.outputs.plan).shards[matrix.shard]) }}
           shard: ${{ matrix.shard }}
           # The longest measured build takes about a minute.
-          timeout-minutes: '5'
+          timeout-minutes: '20'
 
   assemble:
     needs: [plan, build]
