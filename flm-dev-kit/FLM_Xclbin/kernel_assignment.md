@@ -875,6 +875,7 @@ that model's two vision kernels; no kernel is built for it.
 | Kernels | Artifacts | Compiler |
 |---|---|---|
 | `mm.xclbin` | `xclbins-dequant_mm_512x512x512` | Peano |
+| `mm_rtm2_glu.xclbin` | `xclbins-dequant_mm_bfp16_rtm2_glu_512x512x512` | Peano |
 | `attn.xclbin` | `xclbins-Qwen3_5_bidirectional_attention_prefill` | Peano |
 | `vision_mm.xclbin` | `xclbins-MM_host7_mt_variant_bias_QWEN3_5_0_8B-VISION-MM` | Peano |
 | `vision_attn.xclbin` | `xclbins-VisionAttention_hostAttention_whoel_array_QWEN3_5_0_8B-VISION-ATTENTION` | Peano |
