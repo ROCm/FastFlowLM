@@ -20,7 +20,7 @@ description: >
   The npu-test action itself is the pull request's, running the base's
   harness: a change to the flags npu-test passes to npu_test must land on
   its own before a dev-kit pull request that depends on it. Needs a checkout
-  of .github/actions, .github/script/ci and flm-dev-kit/FLM_DLL/engines.json,
+  of .github/actions, .github/script and flm-dev-kit/FLM_DLL (cone mode),
   and only contents: read.
 
 inputs:

@@ -1267,11 +1267,15 @@ jobs:
           # boundary: the pull request's workflow and actions decide what
           # runs, and npu-approve is the only gate.
           persist-credentials: false
-          sparse-checkout-cone-mode: false
+          # Cone mode, directories only: the NPU runners reuse their work
+          # folder, whose git config keeps core.sparseCheckoutCone=true from
+          # the product test jobs' cone checkouts, and in cone mode a file
+          # pattern (flm-dev-kit/FLM_DLL/engines.json) matches nothing.
+          sparse-checkout-cone-mode: true
           sparse-checkout: |
-            /.github/actions/
-            /.github/script/ci/
-            /flm-dev-kit/FLM_DLL/engines.json
+            .github/actions
+            .github/script
+            flm-dev-kit/FLM_DLL
           filter: blob:none
       - name: Overlay and test
         uses: ./.github/actions/devkit-npu-overlay
