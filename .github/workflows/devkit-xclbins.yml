@@ -25,9 +25,11 @@ name: Dev-kit xclbins
 #             the job into its own limit before the shard uploads
 #   image     the image to build in: the digest in
 #             flm-dev-kit/FLM_Xclbin/toolchain.image when that file exists;
-#             else ghcr.io/rocm/fastflowlm/aie-build:<toolchain hash> (the
-#             first 16 hex digits of sha256(toolchain.lock + Dockerfile), the
-#             tag devkit-aie-image.yml publishes) when the registry has it;
+#             else ghcr.io/rocm/fastflowlm/aie-build:<toolchain hash>
+#             (.github/script/ci/aie_image_hash.py: the first 16 hex digits
+#             of sha256(toolchain.lock + Dockerfile), comments and blank lines
+#             left out; the tag devkit-aie-image.yml publishes) when the
+#             registry has it;
 #             else built here from the same Dockerfile and build args, reading
 #             devkit-aie-image.yml's layer cache (GitHub Actions cache scope
 #             aie-build; only devkit-aie-image.yml writes it), and handed to
@@ -158,7 +160,8 @@ jobs:
         id: lock
         run: |
           set -euo pipefail
-          echo "hash=$(cat "$LOCK" "$DOCKERFILE" | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+          hash="$(python3 -I .github/script/ci/aie_image_hash.py "$LOCK" "$DOCKERFILE")"
+          echo "hash=${hash}" >> "$GITHUB_OUTPUT"
           {
             echo 'build-args<<FLM_BUILD_ARGS'
             grep -E '^[A-Z0-9_]+=' "$LOCK"

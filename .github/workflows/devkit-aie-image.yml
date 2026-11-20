@@ -20,9 +20,12 @@ name: Dev-kit AIE build image
 #            then tags it :<toolchain hash> and :latest. A cache miss that
 #            makes a different image is checked like the one the build job
 #            tested, and an image that fails stays untagged. The toolchain
-#            hash is the first 16 hex digits of sha256(toolchain.lock +
-#            Dockerfile): a new tag for every change to either, an unchanged
-#            tag otherwise
+#            hash (.github/script/ci/aie_image_hash.py) is the first 16 hex
+#            digits of sha256(toolchain.lock + Dockerfile) with their blank
+#            and comment lines dropped (the Dockerfile's parser directives
+#            kept): a new tag for every change to a value, an instruction or
+#            a directive, an unchanged tag for a comment-only or blank-line
+#            edit of either file
 #
 # Pull the image by digest, not by tag, wherever its output matters; the
 # digest goes in flm-dev-kit/FLM_Xclbin/toolchain.image (not toolchain.lock,
@@ -43,12 +46,14 @@ on:
       - docker/aie-build*
       - flm-dev-kit/FLM_Xclbin/toolchain.lock
       - .github/workflows/devkit-aie-image.yml
+      - .github/script/ci/aie_image_hash.py
   push:
     branches: [main]
     paths:
       - docker/aie-build*
       - flm-dev-kit/FLM_Xclbin/toolchain.lock
       - .github/workflows/devkit-aie-image.yml
+      - .github/script/ci/aie_image_hash.py
   workflow_dispatch:
 
 # Read-only token; only publish, which runs on main only, adds packages: write.
@@ -106,7 +111,7 @@ jobs:
             echo "::error file=${LOCK}::repeated: ${dups:-none}; ARGs with no value: ${missing:-none}; keys no ARG reads: ${unused:-none}"
             exit 1
           fi
-          hash="$(cat "$LOCK" "$DOCKERFILE" | sha256sum | cut -c1-16)"
+          hash="$(python3 -I .github/script/ci/aie_image_hash.py "$LOCK" "$DOCKERFILE")"
           echo "hash=${hash}" >> "$GITHUB_OUTPUT"
           {
             echo 'build-args<<FLM_BUILD_ARGS'
@@ -163,7 +168,8 @@ jobs:
         id: lock
         run: |
           set -euo pipefail
-          echo "hash=$(cat "$LOCK" "$DOCKERFILE" | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+          hash="$(python3 -I .github/script/ci/aie_image_hash.py "$LOCK" "$DOCKERFILE")"
+          echo "hash=${hash}" >> "$GITHUB_OUTPUT"
           {
             echo 'build-args<<FLM_BUILD_ARGS'
             grep -E '^[A-Z0-9_]+=' "$LOCK"
