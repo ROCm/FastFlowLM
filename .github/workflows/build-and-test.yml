@@ -73,6 +73,12 @@ name: Build and Test
 # a verified one builds and tests nothing again and runs devkit-static only.
 # devkit_swap.py check reports, on every pull request, any change under
 # src/lib or src/xclbins that no verified swap brought in (a warning for now).
+# Both run from the pull request's merge commit, like the npu-gate: defense in
+# depth, not the boundary. A swap that comes with a change to the code that
+# writes or checks the manifests is not verified (devkit_swap.py
+# SWAP_CI_PATHS), and reviewers must read any .github/ change in a pull
+# request that touches src/lib or src/xclbins; review and branch protection
+# are the guarantee.
 #
 # A dispatch with devkit-full-refresh, on a pull request's branch, is the
 # dev-kit full refresh: every engine and every shipped kernel (devkit-xclbins
@@ -200,10 +206,12 @@ jobs:
       # A swap commit (devkit_swap.py fetch) at the head of a pull request:
       # its parent's Build and Test run built and NPU-tested exactly these
       # binaries, so verified, nothing is built or tested again. Prints why
-      # not otherwise; never fails the job.
+      # not otherwise; never fails the job (a crash leaves the output empty,
+      # which is not verified).
       - name: Verify a dev-kit swap commit
         id: swap
         if: github.event_name == 'pull_request'
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}

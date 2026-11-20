@@ -155,7 +155,8 @@ nothing is rebuilt afterwards: the tested files themselves are committed, as a *
    `python .github/script/ci/devkit_swap.py fetch` (add `--run <id>` for a particular run,
    `--dry-run` for the plan only). It uses your own GitHub access (the `gh` login, or `GH_TOKEN`;
    read access is enough), checks the run (this pull request's Build and Test at your `HEAD`, passed,
-   every overlay test that ran passed and tested its files, and no commit on main since the run's
+   with conclusion success: a failed bench fails it too, so re-run the failed jobs first; every
+   overlay test that ran passed and tested its files, and no commit on main since the run's
    base touches `FLM_DLL/`, `FLM_Xclbin/`, `../src/lib/` or `../src/xclbins/`: otherwise merge main and
    let CI run again), downloads the tested files, checks every SHA-256 against the manifests, writes
    them and makes one commit with the trailers `Devkit-Swap-Run: <run id>` and
@@ -163,8 +164,17 @@ nothing is rebuilt afterwards: the tested files themselves are committed, as a *
    once they expire, re-run the workflow.
 4. `git push`. Build and Test's changes job verifies the swap commit (`devkit_swap.py verify`: its
    parent is the tested commit, it changes only files the run's manifests list, each to exactly the
-   tested bytes, and the run passed) and then builds and tests nothing again; `devkit-static` still
-   checks the catalog. Then the pull request is reviewed and merged.
+   tested bytes, it carries every file the run tested, and the run passed) and then builds and tests
+   nothing again; `devkit-static` still checks the catalog. Then the pull request is reviewed and
+   merged.
+
+A swap pull request must not change the dev-kit CI that writes and checks the manifests
+(`devkit_overlay.py`, `devkit_swap.py`, `changes.py`, `devkit_check.py`, the `devkit-npu-overlay`,
+`devkit-overlay-package` and `detect-changes` actions, `build-and-test.yml`, `devkit-engines.yml`,
+`devkit-xclbins.yml`): `verify` then refuses the swap and the full CI runs. `verify` and `check` run
+from the pull request's own merge commit, so they keep the flow honest but are no enforcement
+boundary: reviewers must read any `.github/` change in a pull request that touches `../src/lib/` or
+`../src/xclbins/`, and the real guarantee is that review plus branch protection.
 
 `devkit_swap.py check` runs on every pull request and reports any change under `../src/lib/` or
 `../src/xclbins/` that a verified swap commit did not bring in, other than the deletion of a file the
