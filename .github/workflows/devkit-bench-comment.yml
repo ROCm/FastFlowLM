@@ -1,0 +1,142 @@
+# Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+# Portions of this file consist of AI-generated content.
+
+name: Dev-kit Bench comment
+
+# Posts a pull request's dev-kit bench summary (devkit-bench.yml's
+# bench-summary artifact) as one sticky comment on it. devkit-bench.yml
+# runs the pull request's code with a read-only token; this workflow holds
+# the write token, so it runs from the default branch only (workflow_run),
+# checks nothing out, executes nothing from the artifact and treats it as
+# untrusted text: a fork's pull request writes that artifact.
+#
+#   - fires for exactly .github/workflows/devkit-bench.yml of this
+#     repository, a pull_request run that succeeded or failed (workflow_run
+#     matches by name, so a fork could add another workflow of the same
+#     name: the path and repository conditions keep it out). The name in
+#     workflows: must stay devkit-bench.yml's; devkit_check.py checks it
+#   - the pull request comes from the event (pull_requests[0], empty for a
+#     fork's), else from the API by the head owner and branch, and is used
+#     only if exactly one open pull request of this repository has that head
+#     commit and head repository; never from the artifact
+#   - the artifact: only bench-summary, at most 64 KB as listed, a zip of
+#     exactly summary.md (no links or other entries), at most 60000 bytes
+#     read; @ is defused so nothing mentions anyone, and the text goes in a
+#     code fence longer than any backtick run in it, inside <details>, so it
+#     cannot close the fence, forge the header or hide a marker
+#   - the comment to update is the newest by github-actions[bot] starting
+#     with the marker; otherwise a new one
+#   - every event field reaches the scripts through env:
+# zizmor's dangerous-triggers flags every workflow_run; the conditions above
+# are its documented mitigations.
+on:  # zizmor: ignore[dangerous-triggers] no checkout, artifact read as text, run pinned by path and repository
+  workflow_run:
+    workflows: ["Dev-kit Bench"]
+    types: [completed]
+
+permissions:
+  actions: read
+  pull-requests: write
+
+jobs:
+  comment:
+    if: >-
+      github.event.workflow_run.path == '.github/workflows/devkit-bench.yml'
+      && github.event.workflow_run.repository.full_name == github.repository
+      && github.event.workflow_run.event == 'pull_request'
+      && contains(fromJSON('["success", "failure"]'), github.event.workflow_run.conclusion)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RUN_ID: ${{ github.event.workflow_run.id }}
+      RUN_URL: ${{ github.event.workflow_run.html_url }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+      HEAD_OWNER: ${{ github.event.workflow_run.head_repository.owner.login }}
+      HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+      EVENT_PR: ${{ github.event.workflow_run.pull_requests[0].number }}
+      MARKER: '<!-- devkit-bench-comment -->'
+    steps:
+      - name: Find the pull request
+        id: pr
+        run: |
+          set -euo pipefail
+          match='[.[] | select(.head.sha == env.HEAD_SHA and .head.repo.full_name == env.HEAD_REPO
+                               and .base.repo.full_name == env.GITHUB_REPOSITORY and .state == "open") | .number]'
+          if [ -n "${EVENT_PR}" ]; then
+            numbers=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${EVENT_PR}" | jq -c "[.] | ${match}")
+          else
+            numbers=$(gh api -X GET "repos/${GITHUB_REPOSITORY}/pulls" -f state=open \
+                        -f head="${HEAD_OWNER}:${HEAD_BRANCH}" -f per_page=100 | jq -c "${match}")
+          fi
+          if [ "$(jq length <<<"${numbers}")" != 1 ]; then
+            echo "No single open pull request has head ${HEAD_SHA} from ${HEAD_REPO}: not commenting." \
+              >> "$GITHUB_STEP_SUMMARY"
+            echo "number=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "number=$(jq -r '.[0]' <<<"${numbers}")" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch the summary
+        id: summary
+        if: steps.pr.outputs.number != ''
+        run: |
+          set -euo pipefail
+          art=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts?per_page=100" \
+                  --jq '[.artifacts[] | select(.name == "bench-summary" and .expired == false)] | max_by(.id) // empty')
+          if [ -z "${art}" ]; then
+            echo "The bench run uploaded no bench-summary (nothing was benched): not commenting." >> "$GITHUB_STEP_SUMMARY"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          size=$(jq -r '.size_in_bytes' <<<"${art}")
+          if [ "${size}" -gt 65536 ]; then
+            echo "::error::bench-summary is ${size} bytes, over 64 KB: not commenting"
+            exit 1
+          fi
+          dir="${RUNNER_TEMP}/summary"
+          mkdir -p "${dir}"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/$(jq -r '.id' <<<"${art}")/zip" > "${dir}/art.zip"
+          entries=$(unzip -Z1 "${dir}/art.zip")
+          if [ "${entries}" != "summary.md" ] || unzip -Z -l "${dir}/art.zip" | grep -q '^l'; then
+            echo "::error::bench-summary must hold exactly summary.md: not commenting"
+            exit 1
+          fi
+          unzip -p "${dir}/art.zip" summary.md | head -c 60000 > "${dir}/summary.md"
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+
+      - name: Post or update the comment
+        if: steps.summary.outputs.ok == 'true'
+        env:
+          PR: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          python3 - <<'EOF'
+          import json, os, re
+          e = os.environ
+          raw = open(os.path.join(e["RUNNER_TEMP"], "summary", "summary.md"), "rb").read()
+          text = raw.decode("utf-8", errors="replace").replace("\r", "")
+          # No mentions or team pings: a zero-width space after every @.
+          text = text.replace("@", "@\u200b")
+          fence = "`" * max(3, 1 + max((len(m) for m in re.findall(r"`+", text)), default=0))
+          run_id = re.sub(r"\D", "", e["RUN_ID"])
+          sha = re.sub(r"[^0-9a-f]", "", e["HEAD_SHA"])[:10]
+          url = f"https://github.com/{e['GITHUB_REPOSITORY']}/actions/runs/{run_id}"
+          body = (f"{e['MARKER']}\n### Dev-kit bench\n\n"
+                  f"Results of [Dev-kit Bench run {run_id}]({url}) for `{sha}`, as that run reported "
+                  f"them (its artifacts hold the per-model reports).\n\n"
+                  f"<details open><summary>Summary</summary>\n\n{fence}text\n{text}\n{fence}\n\n</details>\n")
+          with open(os.path.join(e["RUNNER_TEMP"], "body.json"), "w", encoding="utf-8") as f:
+              json.dump({"body": body}, f)
+          EOF
+          existing=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments?per_page=100" \
+                       --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith(env.MARKER))) | .id' \
+                     | tail -1)
+          if [ -n "${existing}" ]; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing}" --input "${RUNNER_TEMP}/body.json" > /dev/null
+            echo "Updated comment ${existing} on #${PR}." >> "$GITHUB_STEP_SUMMARY"
+          else
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" --input "${RUNNER_TEMP}/body.json" > /dev/null
+            echo "Commented on #${PR}." >> "$GITHUB_STEP_SUMMARY"
+          fi

@@ -54,6 +54,16 @@ Checks, each failure printed as "devkit_check: error: ..." (exit 1):
                 reported. A lock new at the base needs no engine change
   Bsymbolic     every FLM_DLL/detail/*/Makefile has -Wl,-Bsymbolic-functions
                 on a line that is not a comment
+  bench comment .github/workflows/devkit-bench-comment.yml, which runs with a
+                write token on artifacts a fork can write: it triggers on
+                workflow_run of exactly devkit-bench.yml's name; its
+                permissions are exactly actions: read and pull-requests:
+                write, at the workflow level and nowhere else; it checks out
+                nothing; its job condition pins the triggering run to
+                devkit-bench.yml's path in this repository, pull_request
+                events; no ${{ github.event.* }} expression appears in a
+                run: script. devkit-bench.yml keeps contents: read and
+                actions: read. Skipped when the files are absent
   notices       with --base: every file added under flm-dev-kit/ between the
                 merge base of --base and --head (default HEAD), of a source or
                 script type, has an AMD copyright notice in its first 15
@@ -589,6 +599,94 @@ def check_notices(repo: Path, base: str, head: str, errors: list, notes: list) -
     return checked
 
 
+BENCH_WORKFLOW = ".github/workflows/devkit-bench.yml"
+BENCH_COMMENT_WORKFLOW = ".github/workflows/devkit-bench-comment.yml"
+
+
+def _top_block(text: str, key: str) -> list[str]:
+    """The lines of a top-level YAML mapping (key: on its own line), unindented."""
+    lines = text.splitlines()
+    out, inside = [], False
+    for line in lines:
+        if re.match(rf"^{re.escape(key)}:\s*(#.*)?$", line):
+            inside = True
+            continue
+        if inside:
+            if line and not line[0].isspace() and not line.startswith("#"):
+                break
+            if line.strip() and not line.strip().startswith("#"):
+                out.append(line)
+    return out
+
+
+def _run_scripts(text: str) -> list[str]:
+    """The bodies of run: | blocks (and one-line run: values)."""
+    out, lines, i = [], text.splitlines(), 0
+    while i < len(lines):
+        m = re.match(r"^(\s*)(- )?run:\s*(.*)$", lines[i])
+        if m:
+            indent = len(m.group(1)) + (2 if m.group(2) else 0)
+            rest = m.group(3)
+            if rest and rest[0] not in "|>":
+                out.append(rest)
+            else:
+                i += 1
+                while i < len(lines) and (not lines[i].strip() or len(lines[i]) - len(lines[i].lstrip()) > indent):
+                    out.append(lines[i])
+                    i += 1
+                continue
+        i += 1
+    return out
+
+
+def check_bench_workflows(repo: Path, errors: list) -> int:
+    """The bench comment workflow's invariants (see the docstring); returns
+    how many files were checked."""
+    try:
+        bench = (repo / BENCH_WORKFLOW).read_text(encoding="utf-8")
+        comment = (repo / BENCH_COMMENT_WORKFLOW).read_text(encoding="utf-8")
+    except OSError:
+        return 0
+    where = BENCH_COMMENT_WORKFLOW
+    name = re.search(r"^name:\s*(.+?)\s*$", bench, re.M)
+    bench_name = name.group(1).strip("'\"") if name else ""
+    on = _top_block(comment, "on")
+    wf = re.search(r"workflows:\s*\[\s*['\"]?([^'\"\]]+?)['\"]?\s*\]", "\n".join(on))
+    if not bench_name or not wf or wf.group(1) != bench_name:
+        errors.append(f"{where}: on.workflow_run.workflows must be [\"{bench_name}\"], the name of "
+                      f"{BENCH_WORKFLOW} (workflow_run matches names, so a rename breaks it silently)")
+    if not any(re.match(r"^[ \t]+workflow_run:", line) for line in on) or \
+            any(re.match(r"^[ \t]+(pull_request|pull_request_target|push|issue_comment):", line) for line in on):
+        errors.append(f"{where}: must trigger on workflow_run only")
+    perms = sorted(line.strip() for line in _top_block(comment, "permissions"))
+    if perms != ["actions: read", "pull-requests: write"]:
+        errors.append(f"{where}: workflow permissions must be exactly actions: read and pull-requests: write, "
+                      f"got {perms}")
+    if re.search(r"^[ \t]+permissions:", comment, re.M):
+        errors.append(f"{where}: no job may set its own permissions")
+    if re.search(r"actions/checkout@", comment):
+        errors.append(f"{where}: must not check anything out")
+    if re.search(r"secrets\.", comment):
+        errors.append(f"{where}: must use no secrets")
+    for needle in ("github.event.workflow_run.path == '.github/workflows/devkit-bench.yml'",
+                   "github.event.workflow_run.repository.full_name == github.repository",
+                   "github.event.workflow_run.event == 'pull_request'"):
+        if needle not in comment:
+            errors.append(f"{where}: the job condition must include {needle}")
+    for text, path in ((comment, where), (bench, BENCH_WORKFLOW)):
+        for line in _run_scripts(text):
+            if re.search(r"\$\{\{\s*(github\.event\.|github\.head_ref|inputs\.)", line):
+                errors.append(f"{path}: an event field or input is expanded inside a run: script "
+                              f"(pass it through env:): {line.strip()[:80]}")
+    bench_perms = sorted(line.strip() for line in _top_block(bench, "permissions"))
+    if bench_perms != ["actions: read", "contents: read"]:
+        errors.append(f"{BENCH_WORKFLOW}: workflow permissions must be exactly contents: read and actions: read, "
+                      f"got {bench_perms}")
+    if re.search(r"^[ \t]+[a-z-]+: write[ \t]*$", bench, re.M):
+        errors.append(f"{BENCH_WORKFLOW}: no job may be granted a write permission")
+    return 2
+
+
 def run(repo: Path, base: str = "", head: str = "HEAD") -> tuple[list[str], list[str]]:
     """(errors, notes) for the tree at repo."""
     errors: list[str] = []
@@ -616,6 +714,7 @@ def run(repo: Path, base: str = "", head: str = "HEAD") -> tuple[list[str], list
                      f"{len(engines.get('shared') or [])} shared")
     notes.append(f"rtp lock: {check_rtp_lock(repo, index, assignment, errors)} stanzas")
     notes.append(f"Bsymbolic: {check_bsymbolic(repo, errors)} Makefiles")
+    notes.append(f"bench workflows: {check_bench_workflows(repo, errors)} checked")
     if base.strip("0 "):
         notes.append(f"notices: {check_notices(repo, base, head, errors, notes)} added source/script files")
         check_rtp_lock_change(repo, base, head, assignment or {}, engines or {}, errors, notes)

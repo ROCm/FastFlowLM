@@ -67,6 +67,7 @@ Components
   43. Boost C++ Libraries (in aiebu)
   44. GNU libstdc++ (GCC runtime)
   45. OpenAI Whisper architecture figure
+  46. GSM8K test questions (subset)
 
 ==============================================================================
 1. libcurl
@@ -1631,6 +1632,40 @@ Used in:  flm-dev-kit/FLM_Xclbin/Whisper/Figures/Architecture.png, an
 MIT License
 
 Copyright (c) 2022 OpenAI
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+==============================================================================
+46. GSM8K test questions (subset)
+==============================================================================
+
+License:  MIT License
+Homepage: https://github.com/openai/grade-school-math
+Used in:  .github/script/devkit-bench/data/gsm8k_100.jsonl, the first 100
+          questions of the GSM8K test set (grade_school_math/data/test.jsonl),
+          each reference solution reduced to its final numeric answer. Read
+          by the dev-kit accuracy bench in CI; not part of any FastFlowLM
+          package.
+
+MIT License
+
+Copyright (c) 2021 OpenAI
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
