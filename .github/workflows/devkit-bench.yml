@@ -6,20 +6,23 @@ name: Dev-kit Bench
 # Perf (flm bench) and accuracy (GSM8K; DocVQA when enabled) benches of the
 # dev kit's engines (flm-dev-kit/FLM_DLL) and kernels (flm-dev-kit/FLM_Xclbin)
 # on the NPU runners (scripts in .github/script/devkit-bench, actions devkit-bench-perf and
-# devkit-bench-acc). Build and Test (build-and-test.yml, job devkit-bench)
+# devkit-bench-acc). Build and Test (build-and-test.yml, job devkit-bench; nightly, devkit-bench-nightly)
 # calls this after its builds, in the same run, so the run's concurrency
 # group covers the benches and a new push cancels them: on a pull request
 # whose dev-kit engine or kernel source changed (code or build inputs; not
-# docs, CI, the converter, pybind or launchlib; changes.py devkit_bench),
-# on its nightly schedule, and on the dev-kit full refresh (a dispatch of
-# Build and Test with devkit-full-refresh; mode refresh: every benchable
-# assigned model on the four runtimes, the dev-kit build only, reporting
-# this run's numbers with no A/B and no baseline comparison). Nothing is
-# rebuilt here: the benches take
-# that run's artifacts (its portable packages, devkit-libs-<os>-<runtime>,
-# devkit-xclbins) and overlay the dev-kit builds on the packages
-# (devkit-overlay-package). Build and Test's npu-gate / npu-approve gate the
-# call; this workflow has its own only for a dispatch.
+# docs, CI, the converter, pybind or launchlib; changes.py devkit_bench)
+# and whose run staged it into its product builds (mode pr), on its nightly
+# schedule, and on the dev-kit full refresh (a dispatch of Build and Test
+# with devkit-full-refresh; mode refresh: every benchable assigned model on
+# the four runtimes). Nothing is rebuilt here: the benches take that run's
+# artifacts. A pull request's and the full refresh's portable packages were
+# built with the dev-kit files staged in (Build and Test's devkit-stage), so
+# they are benched as they are, and the summary reports that run's numbers
+# only: no A/B against a base package and no nightly-baseline comparison (a
+# comparison is to be designed later). Nightly and a dispatch overlay the
+# dev-kit builds (devkit-libs-<os>-<runtime>, devkit-xclbins) on the
+# packages (devkit-overlay-package). Build and Test's npu-gate / npu-approve
+# gate the call; this workflow has its own only for a dispatch.
 #
 #   resolve   hosted: turns the caller's inputs (what was built and
 #             succeeded, the touched families, the models whose kernels
@@ -39,12 +42,11 @@ name: Dev-kit Bench
 #             enable once DocVQA's terms (beyond its Hugging Face card's
 #             Apache-2.0) are cleared; nothing of it is committed here.
 #   bench     one NPU job per runtime and model, three at a time (four
-#             nightly), on the sweep runners: overlay, `flm pull` (verifies
-#             the model's files against the catalog's hashes), perf A/B
-#             (the dev-kit build against the base package back to back on
-#             the same runner; nightly the dev-kit build only), GSM8K (first
-#             50 questions) and DocVQA for vision models. Results go to
-#             devkit-bench-result-<runtime>-<model>.
+#             nightly), on the sweep runners: the package (overlaid nightly
+#             and on a dispatch), `flm pull` (verifies the model's files
+#             against the catalog's hashes), perf of that package alone,
+#             GSM8K (first 50 questions) and DocVQA for vision models.
+#             Results go to devkit-bench-result-<runtime>-<model>.
 #   report    hosted: bench-summary (summary.md, at most 60 KB, numbers and
 #             fixed wording only) and the job summary; nightly the next
 #             devkit-bench-baseline artifact (90 days), an upsert of the
@@ -59,15 +61,15 @@ name: Dev-kit Bench
 # giving no result, `flm pull`, a timeout, a lost runner, the GitHub API in
 # resolve, report itself) fails its job here and Build and Test's
 # devkit-bench job, which summary only warns about. Soft gates (warnings in
-# the summary only):
-# perf more than 7% slower than the base package on the same runner,
-# accuracy more than 10 points below the nightly baseline. The runners are
-# not pinned, so perf against the nightly baseline is informational and
-# compared only on the same machine kind (machine.py).
+# the summary only), where a comparison is made (a dispatch): accuracy more
+# than 10 points below the nightly baseline; perf against the nightly
+# baseline is informational and compared only on the same machine kind
+# (machine.py), as the runners are not pinned. A pull request's and the
+# full refresh's summaries compare nothing.
 #
-# Baselines are artifacts until the GitHub App for ci-baselines lands: a
-# pull request compares against the newest devkit-bench-baseline uploaded by
-# a scheduled Build and Test run on this repository's main.
+# Baselines are artifacts until the GitHub App for ci-baselines lands: the
+# newest devkit-bench-baseline uploaded by a scheduled Build and Test run on
+# this repository's main.
 #
 # Trust: the bench scripts run from the pull request's base commit, so its
 # edits to them do not judge it, under clean_run.py (no token reaches flm),
@@ -255,12 +257,13 @@ jobs:
         run: |
           echo "### Dev-kit bench: not run (${REASON})" >> "$GITHUB_STEP_SUMMARY"
 
-      # Not for the full refresh, which compares nothing.
+      # Not for a pull request or the full refresh, which compare nothing
+      # for now (a comparison is to be designed later).
       - name: Find the nightly baseline
         id: baseline
         if: >-
           (steps.write-plan.outcome == 'success' || steps.build.outputs.ok == 'true')
-          && steps.mode.outputs.mode != 'refresh'
+          && steps.mode.outputs.mode != 'refresh' && steps.mode.outputs.mode != 'pr'
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 .github/script/devkit-bench/resolve.py find-baseline --repo "${GITHUB_REPOSITORY}"
@@ -299,6 +302,12 @@ jobs:
           [ "${MODE}" = dispatch ] && args+=(--artifacts "${RUNNER_TEMP}/artifacts.json")
           # A dispatch benches unless force is off and no models are named.
           if [ "${MODE}" = dispatch ] && [ "${FORCE}" != true ]; then args+=(--no-force); fi
+          # A pull request selects from its own catalog and dev-kit maps (data,
+          # read with git show) so a model it adds is benched; the scripts stay
+          # the base's. A base from before that option selects from its own.
+          if [ "${MODE}" = pr ] && grep -q -- '--data-from-head' .github/script/devkit-bench/resolve.py; then
+            args+=(--data-from-head)
+          fi
           python3 .github/script/devkit-bench/resolve.py "${args[@]}"
 
   # ── NPU approval gate, dispatch only ─────────────────────────────────────
@@ -412,9 +421,11 @@ jobs:
           if (Test-Path $out) { Remove-Item $out -Recurse -Force }
           New-Item -ItemType Directory -Force $out | Out-Null
 
-      # The pull request's actions and overlay script (as the overlay tests;
-      # not a boundary, see above). Cone mode, directories only (see
-      # build-and-test.yml's checkout-devkit).
+      # The pull request's actions and overlay script (not a boundary, see
+      # above). Cone mode, directories only: the NPU runners reuse their
+      # work folder, whose git config keeps core.sparseCheckoutCone=true from
+      # the product test jobs' checkouts, and in cone mode a file pattern
+      # matches nothing.
       - name: Checkout actions
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -437,6 +448,10 @@ jobs:
           sparse-checkout: .github/script
           filter: blob:none
 
+      # A pull request's and the full refresh's packages already hold the
+      # staged dev-kit files: nothing to overlay. Nightly and a dispatch
+      # overlay the dev-kit builds. No unmodified base copy is kept: no A/B
+      # for now (a comparison is to be designed later).
       - name: Overlay
         id: overlay
         uses: ./.github/actions/devkit-overlay-package
@@ -444,15 +459,12 @@ jobs:
           runtime: ${{ matrix.runtime }}
           os: ${{ matrix.os }}
           package: ${{ matrix.package }}
-          libs: ${{ matrix.libs }}
-          xclbins: ${{ matrix.xclbins }}
-          families: ${{ matrix.families }}
+          libs: ${{ (inputs.mode == 'nightly' || !inputs.mode) && matrix.libs || '' }}
+          xclbins: ${{ (inputs.mode == 'nightly' || !inputs.mode) && matrix.xclbins || '' }}
+          families: ${{ (inputs.mode == 'nightly' || !inputs.mode) && matrix.families || '' }}
           # Dispatch: the earlier Build and Test run's; called: this run's.
           run-id: ${{ needs.resolve.outputs.build-run-id }}
           github-token: ${{ needs.resolve.outputs.build-run-id != '' && github.token || '' }}
-          # A/B against the base package on pull requests and dispatches;
-          # nightly and the full refresh bench the dev-kit build only.
-          keep-base: ${{ inputs.mode != 'nightly' && inputs.mode != 'refresh' }}
 
       - name: Download the DocVQA subset
         if: matrix.vlm && needs.docvqa.result == 'success'

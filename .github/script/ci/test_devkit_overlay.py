@@ -7,7 +7,6 @@ from __future__ import annotations
 import contextlib
 import io
 import json
-import re
 import shutil
 import struct
 import sys
@@ -186,6 +185,21 @@ class Abi(unittest.TestCase):
         self.assertEqual(errors, ["qwen3_npu.dll imports 1 name(s) the package mha.dll does not export: "
                                   "?new@@YAXXZ"])
 
+    def test_a_library_new_to_the_set(self):
+        # devkit_stage.py: a new library (no earlier build) provides what a
+        # replaced one now imports, and is not itself compared.
+        root = self.package("windows", ["mha.dll", "qwen3_npu.dll"])
+        (self.tmp / "new.dll").write_bytes(make_pe(["e"], {"newunit.dll": ["?f@@YAXXZ"]}))
+        (self.tmp / "newunit.dll").write_bytes(make_pe(["?f@@YAXXZ"]))
+        final = {p: p for p in do.package_binaries(root, "windows")}
+        final[root / "qwen3_npu.dll"] = self.tmp / "new.dll"
+        final[root / "newunit.dll"] = self.tmp / "newunit.dll"
+        self.assertEqual(do.abi_errors_of(final, "windows", {root / "qwen3_npu.dll"}), [])
+        (self.tmp / "newunit.dll").write_bytes(make_pe(["?g@@YAXXZ"]))
+        errors = do.abi_errors_of(final, "windows", {root / "qwen3_npu.dll"})
+        self.assertEqual(errors, ["qwen3_npu.dll imports 1 name(s) the package newunit.dll does not export: "
+                                  "?f@@YAXXZ"])
+
 
 CATALOG = {"models": {
     "qwen3": {"0.6b": {"name": "Qwen3-0.6B-NPU2", "details": {"family": "qwen3"}},
@@ -301,54 +315,6 @@ class Cli(unittest.TestCase):
                          prebuilt("xrt", "libmha.so").read_bytes())
 
 
-class RequireAll(unittest.TestCase):
-    """--require-all (the dev-kit full refresh): every NPU catalog model of
-    the package is required, so every kernel it loads counts as tested."""
-
-    def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, self.tmp)
-        self.root = self.tmp / "pkg"
-        (self.root / "xclbins" / "D3-Lite-NPU2").mkdir(parents=True)
-        (self.root / "model_list.json").write_text(json.dumps(CATALOG), encoding="utf-8")
-        self.xclbins = self.tmp / "xclbins"
-        (self.xclbins / "D3-Lite-NPU2").mkdir(parents=True)
-        (self.xclbins / "D3-Lite-NPU2" / "k.xclbin").write_bytes(b"new")
-
-    def run_main(self, *extra: str) -> tuple[int, str, dict]:
-        manifest = self.tmp / "manifest.json"
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            code = do.main(["--root", str(self.root), "--os", "linux", "--xclbins", str(self.xclbins),
-                            "--manifest", str(manifest), "--runtime", "xrt", "--xclbins-artifact",
-                            "devkit-xclbins", "--head-sha", "a" * 40, "--base-sha", "b" * 40, *extra])
-        data = json.loads(manifest.read_text(encoding="utf-8")) if manifest.is_file() else {}
-        return code, out.getvalue(), data
-
-    def test_every_catalog_model_is_required(self):
-        code, out, data = self.run_main("--require-all", "--full-refresh")
-        self.assertEqual(code, 0, out)
-        self.assertIn("required=d3:lite,llama3.2:1b,qwen3:0.6b,qwen3:8b\n", out)
-        self.assertIn("test=true\n", out)
-        self.assertTrue(data["tests_ran"] and data["full_refresh"])
-        # A kernel of a model nothing else selected is tested, through --require-all.
-        self.assertEqual([(f["repo_path"], f["tested"]) for f in data["files"]],
-                         [("src/xclbins/D3-Lite-NPU2/k.xclbin", True)])
-
-    def test_without_it_the_kernel_is_untested(self):
-        code, out, data = self.run_main()
-        self.assertEqual(code, 0, out)
-        self.assertIn("test=false\n", out)
-        self.assertEqual([f["tested"] for f in data["files"]], [False])
-
-    def test_empty_catalog(self):
-        (self.root / "model_list.json").write_text(json.dumps({"models": {}}), encoding="utf-8")
-        code, out, data = self.run_main("--require-all")
-        self.assertEqual(code, 0, out)
-        self.assertIn("required=\n", out)
-        self.assertFalse(data["tests_ran"])
-
-
 def do_units(case: Cli, units: list[str]) -> tuple[int, str]:
     """Runs the overlay with every family, restricted to these units."""
     original = do.units_to_overlay
@@ -357,57 +323,6 @@ def do_units(case: Cli, units: list[str]) -> tuple[int, str]:
         return case.run_main("--families", ",".join(sorted(ENGINES.all_families())))
     finally:
         do.units_to_overlay = original
-
-
-WORKFLOW = REPO / ".github" / "workflows" / "build-and-test.yml"
-ACTION = REPO / ".github" / "actions" / "devkit-npu-overlay" / "action.yml"
-GATE = """          || (needs.npu-gate.result == 'success'
-              && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))"""
-
-
-def jobs(text: str) -> dict[str, str]:
-    """Job id -> its block of build-and-test.yml (text between job headers)."""
-    body = text[text.index("\njobs:\n"):]
-    parts = re.split(r"(?m)^  ([A-Za-z0-9_-]+):\n", body)
-    return dict(zip(parts[1::2], parts[2::2]))
-
-
-class Workflow(unittest.TestCase):
-    """The overlay jobs keep the NPU jobs' gate and count in summary."""
-
-    def test_overlay_jobs(self):
-        text = WORKFLOW.read_text(encoding="utf-8")
-        blocks = jobs(text)
-        overlay = sorted(j for j in blocks if j.endswith("-devkit"))
-        self.assertEqual(overlay, ["test-lin-hrx-devkit", "test-lin-xrt-devkit",
-                                   "test-win-hrx-devkit", "test-win-xrt-devkit"])
-        for job in overlay:
-            with self.subTest(job=job):
-                block = blocks[job]
-                self.assertIn(GATE, block)
-                self.assertIn("(github.event_name == 'pull_request' "
-                              "|| needs.changes.outputs.devkit-full-refresh == 'true')", block)
-                self.assertIn("needs.changes.outputs.devkit-overlay == 'true'", block)
-                self.assertRegex(block, r"runs-on: \[self-hosted, (linux|windows), x64, npu, sweep\]")
-                self.assertIn("uses: ./.github/actions/devkit-npu-overlay", block)
-                self.assertIn(f"      - {job}\n", blocks["summary"])
-                self.assertIn(f"{job}=${{{{ needs.{job}.result }}}}", blocks["summary"])
-        self.assertIn("persist-credentials: false", blocks["test-lin-xrt-devkit"])
-        self.assertIn("devkit-overlay == 'true'", blocks["npu-approve"])
-        for build in ("build-lin-xrt-portable", "build-lin-hrx-portable", "build-win-xrt", "build-win-hrx"):
-            self.assertIn("needs.changes.outputs.devkit-overlay == 'true'", blocks[build], build)
-
-    def test_harness_is_the_base(self):
-        text = ACTION.read_text(encoding="utf-8")
-        self.assertIn("ref: ${{ inputs.harness-ref }}", text)
-        self.assertIn("persist-credentials: false", text)
-        self.assertIn('clean-env: "true"', text)
-        self.assertIn("harness-dir: ${{ github.workspace }}/devkit-harness", text)
-        # The full refresh, a dispatch, has no pull request: the main commit
-        # its binaries were built on (changes devkit-base).
-        workflow = WORKFLOW.read_text(encoding="utf-8")
-        self.assertEqual(workflow.count(
-            "harness-ref: ${{ github.event.pull_request.base.sha || needs.changes.outputs.devkit-base }}"), 4)
 
 
 if __name__ == "__main__":

@@ -273,8 +273,11 @@ class Report(unittest.TestCase):
             "bogus": {}, }})
         matrix = [{"key": "lin-xrt", "model": "qwen3:0.6b"}, {"key": "lin-hrx", "model": "qwen3:0.6b"},
                   {"key": "lin-hrx", "model": "gemma3:1b"}]
-        text = report.render(results, old, matrix, mode="pr", head_sha=SHA_B, build_run_id=12, baseline_run_id=7)
-        self.assertIn("## Dev-kit bench (pr) on `bbbbbbbbbb`", text)
+        # A dispatch is the one comparison left (a pull request's compares
+        # nothing for now: test_pr_reports_numbers_only).
+        text = report.render(results, old, matrix, mode="dispatch", head_sha=SHA_B, build_run_id=12,
+                             baseline_run_id=7)
+        self.assertIn("## Dev-kit bench (dispatch) on `bbbbbbbbbb`", text)
         self.assertIn("nightly baseline: run 7 on `aaaaaaaaaa` (2026-11-19)", text)
         self.assertIn("Linux XRT qwen3:0.6b: decode at 1k is -10.0%", text)
         self.assertIn("gsm8k: -15.0 points", text)
@@ -303,6 +306,21 @@ class Report(unittest.TestCase):
         self.assertIn("## Dev-kit bench (refresh)", text)
         self.assertIn("this run's numbers only, no comparison", text)
         self.assertNotIn("no nightly baseline yet", text)
+        self.assertIn("No hard-gate failure and no soft-gate warning", text)
+
+    def test_pr_reports_numbers_only(self):
+        # A pull request benches its staged packages alone: no base package
+        # (no base.csv) and no nightly baseline; its own numbers, no warning.
+        write_result(self.root, "lin-xrt", "qwen3:0.6b", devkit=CSV.format(p1=900, d1=18, p2=800, d2=17),
+                     gsm8k=self.gsm(40.0))
+        results = report.load_results(self.root)
+        text = report.render(results, report.parse_baseline(None), [{"key": "lin-xrt", "model": "qwen3:0.6b"}],
+                             mode="pr", head_sha=SHA_B, build_run_id=12, baseline_run_id=None)
+        self.assertIn("## Dev-kit bench (pr)", text)
+        self.assertIn("this run's numbers only, no comparison (to be designed later)", text)
+        self.assertNotIn("no nightly baseline yet", text)
+        self.assertIn("| qwen3:0.6b | strix | 1k | — → 18.0 | — |", text)
+        self.assertIn("| qwen3:0.6b | — | 40.0 | — |", text)
         self.assertIn("No hard-gate failure and no soft-gate warning", text)
 
     def test_hard_gate_output(self):
@@ -658,6 +676,89 @@ class Resolve(unittest.TestCase):
         self.assertTrue(all(e["families"] == "qwen3" and e["libs"] == "devkit-libs-lin-xrt" for e in matrix))
         self.assertEqual(values["head-sha"], SHA_A)
 
+    def head_maps_with_new_model(self):
+        """The repository's maps plus a model family only the pull request's
+        head has: nova:1b, served by a new engine nova_npu."""
+        catalog, _, assignment = resolve.load_maps(REPO)
+        entry = json.loads(json.dumps(catalog["llama3.2:1b"]))
+        entry["name"] = "Nova-1B-NPU2"
+        entry.setdefault("details", {})["family"] = "nova"
+        catalog["nova:1b"] = entry
+        engines = json.loads((REPO / select_models.changes.DEVKIT_ENGINES).read_text(encoding="utf-8"))
+        engines["engines"]["nova_npu"] = {"families": ["nova"], "models": ["nova:1b"], "uses": []}
+        return catalog, select_models.changes.DevkitEngines.parse(json.dumps(engines)), assignment
+
+    def test_pr_selects_a_new_model_from_the_heads_maps(self):
+        plan = resolve.write_plan(head_sha=SHA_A, package_sha=SHA_B, engines="success", families="nova",
+                                  builds={"lin-xrt": "success"})
+        real, refs = resolve.load_maps, []
+        head = self.head_maps_with_new_model()
+
+        def stub(root, ref=""):
+            refs.append(ref)
+            return head if ref == SHA_A else real(root)
+        resolve.load_maps = stub
+        try:
+            # The base's maps do not know nova:1b: the gap this option closes.
+            v = self.plan_cli(plan, "--mode", "pr")
+            self.assertEqual(refs, [""])
+            self.assertNotIn("nova:1b", {e["model"] for e in json.loads(v.get("matrix") or "[]")})
+            refs.clear()
+            v = self.plan_cli(plan, "--mode", "pr", "--data-from-head")
+            self.assertEqual(refs, [SHA_A])
+            self.assertEqual(v["bench"], "true")
+            self.assertIn("nova:1b", {e["model"] for e in json.loads(v["matrix"])})
+        finally:
+            resolve.load_maps = real
+
+    def test_unreadable_head_maps_fall_back_to_the_base(self):
+        plan = resolve.write_plan(head_sha=SHA_A, package_sha=SHA_B, engines="success", families="qwen3",
+                                  builds={"lin-xrt": "success"})
+        real, refs = resolve.load_maps, []
+
+        def stub(root, ref=""):
+            refs.append(ref)
+            if ref:
+                raise OSError("not fetched")
+            return real(root)
+        resolve.load_maps = stub
+        try:
+            v = self.plan_cli(plan, "--mode", "pr", "--data-from-head")
+        finally:
+            resolve.load_maps = real
+        self.assertEqual(refs, [SHA_A, ""])
+        self.assertEqual(v["bench"], "true")
+        self.assertTrue(json.loads(v["matrix"]))
+
+    def test_read_data_from_a_commit(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as d:
+            def git(*a):
+                return subprocess.run(["git", "-C", d, *a], check=True, capture_output=True,
+                                      text=True).stdout.strip()
+            git("init", "-q")
+            git("config", "user.email", "t@example.com")
+            git("config", "user.name", "t")
+            Path(d, "data.json").write_text('{"v": 1}', encoding="utf-8")
+            git("add", "data.json")
+            git("commit", "-qm", "one")
+            first = git("rev-parse", "HEAD")
+            Path(d, "data.json").write_text('{"v": 2}', encoding="utf-8")
+            root = Path(d)
+            self.assertEqual(json.loads(resolve.read_data(root, "data.json")), {"v": 2})
+            self.assertEqual(json.loads(resolve.read_data(root, "data.json", first)), {"v": 1})
+            with self.assertRaises(OSError):
+                resolve.read_data(root, "data.json", "not-a-sha")
+            with self.assertRaises(OSError):
+                resolve.read_data(root, "data.json", "c" * 40)
+            with self.assertRaises(OSError):
+                resolve.read_data(root, "missing.json", first)
+
+    def test_workflow_selects_from_the_head_only_on_a_pr(self):
+        text = workflow("devkit-bench.yml")
+        self.assertIn("[ \"${MODE}\" = pr ] && grep -q -- '--data-from-head'", text)
+        self.assertIn("args+=(--data-from-head)", text)
+
     def plan(self, **kw):
         p = {"schema": 1, "bench": "true", "head_sha": SHA_A, "families": "qwen3",
              "xclbin_models": '["gemma3:4b"]', "bench_models": '["gemma3:4b"]', "xclbins": "devkit-xclbins",
@@ -732,7 +833,10 @@ class Workflows(unittest.TestCase):
         bench, comment, build = (workflow("devkit-bench.yml"), workflow("devkit-bench-comment.yml"),
                                  workflow("build-and-test.yml"))
         caller = "    uses: ./.github/workflows/devkit-bench.yml\n"
-        self.assertEqual(build.count(caller), 1)
+        # devkit-bench (pull requests, the full refresh) and devkit-bench-nightly.
+        self.assertEqual(build.count(caller), 2)
+        nightly_if = "    if: ${{ github.event_name == 'schedule' && "
+        self.assertEqual(build.count(nightly_if), 1)
         cases = {
             "renamed": (bench, comment, build.replace("name: Build and Test\n", "name: Build and Tests\n", 1)),
             "write": (bench, comment.replace("  actions: read\n", "  actions: read\n  contents: write\n", 1), build),
@@ -747,7 +851,9 @@ class Workflows(unittest.TestCase):
                             comment, build),
             "bench inline input": (bench.replace('--engines "${ENGINES}"', '--engines "${{ inputs.engines }}"', 1),
                                    comment, build),
-            "not called": (bench, comment, build.replace(caller, "    uses: ./.github/workflows/other.yml\n", 1)),
+            "not called": (bench, comment, build.replace(caller, "    uses: ./.github/workflows/other.yml\n")),
+            "nightly on every event": (bench, comment, build.replace(nightly_if, "    if: ${{ ", 1)),
+            "renamed caller": (bench, comment, build.replace("  devkit-bench-nightly:\n", "  devkit-bench-night:\n", 1)),
             "caller secrets": (bench, comment, build.replace(caller, caller + "    secrets: inherit\n", 1)),
             "caller perms": (bench, comment, build.replace(
                 "      actions: read\n" + caller, "      actions: read\n      pull-requests: write\n" + caller, 1)),
@@ -768,6 +874,12 @@ class Workflows(unittest.TestCase):
         # The summary no longer hands a plan to another run.
         self.assertNotIn("devkit-bench-plan", build)
         self.assertIn("      - devkit-bench\n", build)
+        # Nightly, the bench does not wait for the full-tier product tests.
+        jobs = __import__("devkit_check")._jobs(build)
+        nightly = "\n".join(jobs["devkit-bench-nightly"])
+        self.assertNotIn("- test-", nightly)
+        self.assertIn("mode: nightly", nightly)
+        self.assertIn("      - test-win-hrx\n", "\n".join(jobs["devkit-bench"]) + "\n")
         self.assertNotIn("devkit-bench-plan", workflow("devkit-bench.yml"))
         # Called and dispatched only: Build and Test's own triggers run it.
         on = "\n".join(__import__("devkit_check")._top_block(workflow("devkit-bench.yml"), "on"))

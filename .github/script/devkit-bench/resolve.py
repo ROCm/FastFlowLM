@@ -346,6 +346,31 @@ def select_models_safe(model: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]", "_", model)
 
 
+ASSIGNMENT = "flm-dev-kit/FLM_Xclbin/kernel_assignment.json"
+
+
+def read_data(repo_root: Path, path: str, ref: str = "") -> str:
+    """A data file the model selection reads: from the checkout, or, with
+    ref, from that commit (git show; data only, never code)."""
+    if not ref:
+        return (repo_root / path).read_text(encoding="utf-8")
+    if not SHA.match(ref):
+        raise OSError(f"not a commit sha: {ref!r}")
+    proc = subprocess.run(["git", "-C", str(repo_root), "show", f"{ref}:{path}"], capture_output=True)
+    if proc.returncode != 0:
+        raise OSError(f"{path} at {ref[:10]}: {proc.stderr.decode('utf-8', 'replace').strip()}")
+    return proc.stdout.decode("utf-8")
+
+
+def load_maps(repo_root: Path, ref: str = "") -> tuple[dict, "select_models.changes.DevkitEngines", dict]:
+    """The catalog, engines.json and kernel_assignment.json the selection uses."""
+    changes = select_models.changes
+    catalog = changes.load_catalog(read_data(repo_root, changes.MODEL_LIST, ref))
+    engines = changes.DevkitEngines.parse(read_data(repo_root, changes.DEVKIT_ENGINES, ref))
+    assignment = json.loads(read_data(repo_root, ASSIGNMENT, ref))
+    return catalog, engines, assignment
+
+
 def source_changed(repo_root: Path, base: str, head: str) -> tuple[bool, str]:
     """changes.py devkit_bench between two commits."""
     proc = subprocess.run([sys.executable, str(repo_root / ".github/script/ci/changes.py"),
@@ -501,16 +526,24 @@ def cmd_plan(args) -> int:
         else:
             notes.append("no baseline yet: benching the assigned set")
 
-    try:
-        catalog = select_models.changes.load_catalog(
-            (repo_root / select_models.changes.MODEL_LIST).read_text(encoding="utf-8"))
-        engines = select_models.changes.DevkitEngines.parse(
-            (repo_root / select_models.changes.DEVKIT_ENGINES).read_text(encoding="utf-8"))
-        assignment = json.loads((repo_root / "flm-dev-kit/FLM_Xclbin/kernel_assignment.json")
-                                .read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        write_outputs({**no, "reason": f"cannot read the catalog or dev-kit maps: {exc}"})
-        return 1
+    # The scripts are the base's, so a pull request cannot change how it is
+    # judged. The data they select from is the benched commit's with
+    # --data-from-head: a model the pull request adds is only in its catalog
+    # and engines.json, and is benched like the NPU tests test it. Without
+    # that commit (a fork's head is not fetched) the base's data is used.
+    catalog = None
+    if args.data_from_head:
+        try:
+            catalog, engines, assignment = load_maps(repo_root, plan["head_sha"])
+        except (OSError, ValueError) as exc:
+            notes.append(f"the catalog and dev-kit maps of {plan['head_sha'][:10]} are not readable "
+                         f"({exc}): selecting from the base's")
+    if catalog is None:
+        try:
+            catalog, engines, assignment = load_maps(repo_root)
+        except (OSError, ValueError) as exc:
+            write_outputs({**no, "reason": f"cannot read the catalog or dev-kit maps: {exc}"})
+            return 1
     if requested:
         mode = "dispatch"
     elif args.mode == "dispatch":
@@ -585,6 +618,9 @@ def main(argv=None) -> int:
     p.add_argument("--force", action=argparse.BooleanOptionalAction, default=True,
                    help="dispatch: bench even with no source change since the baseline (default); "
                         "the nightly ignores it")
+    p.add_argument("--data-from-head", action="store_true",
+                   help="select from the benched commit's catalog, engines.json and "
+                        "kernel_assignment.json (git show), not the checkout's")
     p.add_argument("--repo-root", default=str(HERE.parents[2]))
     args = ap.parse_args(argv)
     return {"write-plan": cmd_write_plan, "find-build": cmd_find_build, "find-baseline": cmd_find_baseline,

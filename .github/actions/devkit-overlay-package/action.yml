@@ -13,11 +13,11 @@ description: >
   one, shared units included, when every family is given) and the kernels
   over the package's xclbins/ tree, after checking that the package's
   imports still resolve (.github/script/ci/devkit_overlay.py). Used by
-  devkit-npu-overlay (the overlay tests) and devkit-bench.yml (the benches:
-  this run's artifacts when Build and Test calls it, an earlier run's on a
-  dispatch). With manifest, also writes the record of every file it put in
-  (devkit_overlay.py; devkit-npu-overlay uploads it for devkit_swap.py).
-  Needs a checkout of .github/actions, .github/script and flm-dev-kit/FLM_DLL.
+  devkit-bench.yml: nightly over this run's artifacts, on a dispatch over an
+  earlier run's; for a pull request's bench (whose packages already hold the
+  staged dev-kit files) with no libs, xclbins or families, so it only
+  unpacks the package. Needs a checkout of .github/actions, .github/script
+  and flm-dev-kit/FLM_DLL.
 
 inputs:
   runtime:
@@ -59,28 +59,6 @@ inputs:
     default: ""
   keep-base:
     description: '"true" keeps an unmodified copy of the package (outputs base-flm-bin).'
-    required: false
-    default: "false"
-  require-all:
-    description: '"true" requires every NPU catalog model of the package (the dev-kit full refresh).'
-    required: false
-    default: "false"
-  manifest:
-    description: >
-      Path to write devkit_overlay.py's manifest of the files put into the
-      package (the overlay tests; devkit_swap.py reads it); empty writes none.
-    required: false
-    default: ""
-  head-sha:
-    description: For the manifest, the commit tested (the pull request's head).
-    required: false
-    default: ""
-  base-sha:
-    description: For the manifest, the main commit the run built on (the pull request's base).
-    required: false
-    default: ""
-  full-refresh:
-    description: For the manifest, '"true"' on a dev-kit full refresh run.
     required: false
     default: "false"
 
@@ -195,11 +173,6 @@ runs:
         NEW_MODELS: ${{ inputs.new-models }}
         TARGET_OS: ${{ inputs.os }}
         RUNTIME: ${{ inputs.runtime }}
-        REQUIRE_ALL: ${{ inputs.require-all }}
-        MANIFEST: ${{ inputs.manifest }}
-        HEAD_SHA: ${{ inputs.head-sha }}
-        BASE_SHA: ${{ inputs.base-sha }}
-        FULL_REFRESH: ${{ inputs.full-refresh }}
       run: |
         set -euo pipefail
         if [ "${TARGET_OS}" != linux ] || { [ "${RUNTIME}" != xrt ] && [ "${RUNTIME}" != hrx ]; }; then
@@ -209,13 +182,8 @@ runs:
         root="$(dirname "${FLM_BIN}")"
         args=(--root "${root}" --os linux --families "${FAMILIES}" --new-models "${NEW_MODELS}"
               --github-output)
-        [ -n "${LIBS}" ] && args+=(--libs "${GITHUB_WORKSPACE}/devkit-libs" --libs-artifact "${LIBS}")
-        [ -n "${XCLBINS}" ] && args+=(--xclbins "${GITHUB_WORKSPACE}/devkit-xclbins" --xclbins-artifact "${XCLBINS}")
-        [ "${REQUIRE_ALL}" = true ] && args+=(--require-all)
-        if [ -n "${MANIFEST}" ]; then
-          args+=(--manifest "${MANIFEST}" --runtime "${RUNTIME}" --head-sha "${HEAD_SHA}" --base-sha "${BASE_SHA}")
-          [ "${FULL_REFRESH}" = true ] && args+=(--full-refresh)
-        fi
+        [ -n "${LIBS}" ] && args+=(--libs "${GITHUB_WORKSPACE}/devkit-libs")
+        [ -n "${XCLBINS}" ] && args+=(--xclbins "${GITHUB_WORKSPACE}/devkit-xclbins")
         python3 .github/script/ci/devkit_overlay.py "${args[@]}"
         echo "root=${root}" >> "$GITHUB_OUTPUT"
 
@@ -233,11 +201,6 @@ runs:
         NEW_MODELS: ${{ inputs.new-models }}
         TARGET_OS: ${{ inputs.os }}
         RUNTIME: ${{ inputs.runtime }}
-        REQUIRE_ALL: ${{ inputs.require-all }}
-        MANIFEST: ${{ inputs.manifest }}
-        HEAD_SHA: ${{ inputs.head-sha }}
-        BASE_SHA: ${{ inputs.base-sha }}
-        FULL_REFRESH: ${{ inputs.full-refresh }}
       run: |
         if ($env:TARGET_OS -ne 'windows' -or $env:RUNTIME -notin @('xrt', 'hrx')) {
           Write-Host "::error::os must be the runner's (windows here) and runtime xrt or hrx: got $env:TARGET_OS, $env:RUNTIME"
@@ -248,14 +211,8 @@ runs:
         # argument when calling a native program.
         $cmdArgs = @('.github\script\ci\devkit_overlay.py', "--root=$root", '--os=windows',
                      "--families=$env:FAMILIES", "--new-models=$env:NEW_MODELS", '--github-output')
-        if ($env:LIBS) { $cmdArgs += @("--libs=$(Join-Path $env:GITHUB_WORKSPACE 'devkit-libs')", "--libs-artifact=$env:LIBS") }
-        if ($env:XCLBINS) { $cmdArgs += @("--xclbins=$(Join-Path $env:GITHUB_WORKSPACE 'devkit-xclbins')", "--xclbins-artifact=$env:XCLBINS") }
-        if ($env:REQUIRE_ALL -eq 'true') { $cmdArgs += '--require-all' }
-        if ($env:MANIFEST) {
-          $cmdArgs += @("--manifest=$env:MANIFEST", "--runtime=$env:RUNTIME", "--head-sha=$env:HEAD_SHA",
-                        "--base-sha=$env:BASE_SHA")
-          if ($env:FULL_REFRESH -eq 'true') { $cmdArgs += '--full-refresh' }
-        }
+        if ($env:LIBS) { $cmdArgs += "--libs=$(Join-Path $env:GITHUB_WORKSPACE 'devkit-libs')" }
+        if ($env:XCLBINS) { $cmdArgs += "--xclbins=$(Join-Path $env:GITHUB_WORKSPACE 'devkit-xclbins')" }
         $env:PYTHONUTF8 = '1'
         & python $cmdArgs
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

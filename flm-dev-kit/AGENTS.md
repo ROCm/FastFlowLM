@@ -117,7 +117,9 @@ accuracy. Do not invent a `make test` or claim tests pass.
   each other and with the tree, every engine Makefile has `-Wl,-Bsymbolic-functions`, files a pull
   request adds carry the copyright notice, and an RTP lock change comes with the engines that
   hard-code those addresses. Its catalog rules also run when `../src/model_list.json`,
-  `../src/xclbins/` or `../src/lib/` change.
+  `../src/xclbins/` or `../src/lib/` change. On a pull request, a binary the catalog needs and
+  `../src/` lacks yet (a new model's kernels, a new engine's libraries) is *pending*, not an error,
+  as long as the run stages it (below); anywhere else it is an error.
 - `devkit-engines`: `FLM_DLL` built for Linux and Windows, XRT and HRX, on hosted runners, when a
   change touches it or a `../src/lib/xrt/` library it links, and on every push to main and nightly.
 - `devkit-xclbins`: `FLM_Xclbin` built with Peano in the `aie-build` image (Chess needs a license no
@@ -125,70 +127,117 @@ accuracy. Do not invent a `make test` or claim tests pass.
   `../src/xclbins/` file it replaces; main builds every assigned kernel, nightly every build unit. The result is compared with
   `../src/xclbins/` (a report, never a failure), and a kernel whose RTP addresses differ from
   `FLM_Xclbin/rtp_addresses.lock.txt` fails the job.
-- Pull requests only (and the full refresh below): the NPU overlay jobs (`test-*-devkit`) put the
-  engines and kernels built above into the product's portable packages and run the NPU tests on the
-  models they serve. Each one that passes uploads a manifest of the files it tested
-  (`devkit-overlay-manifest-<os>-<runtime>`, kept 30 days), which the swap below reads.
-- `devkit-bench` (`../.github/workflows/devkit-bench.yml`, called by Build and Test after its builds,
-  in the same run): perf (`flm bench`, the dev-kit build against the unmodified package on the same
-  runner) and GSM8K accuracy, only when engine or kernel source changed: on pull requests, and
-  nightly when the source changed since the last baseline. Results go to one pull request comment;
-  slowdowns and accuracy drops warn, and so does any other bench failure (perf, a pull, a timeout,
-  infrastructure); only a model failing the accuracy hard gate (acc_common: no predictions, or too
-  many unanswered) fails the required check, which therefore waits for the benches. A manual
-  dispatch of that workflow re-benches an earlier Build and Test run: it benches by default (force),
-  and without `models` takes the nightly's rotation, so name the models to re-bench a pull request's.
-  The full refresh benches every benchable model on the four runtimes and reports only its own
-  numbers (no A/B, no baseline comparison).
+- `devkit-stage` (pull requests whose engine or kernel source changed, and the full refresh below;
+  `../.github/script/ci/devkit_stage.py`): puts what the two builds above made into every product
+  build, before CMake runs, in the build's workspace only (never committed): the libraries of the
+  engines serving the families the change touches (`.so`; `.dll` and `.lib` on Windows) into
+  `../src/lib/<runtime>/`, and the rebuilt kernels of the models whose kernel source or
+  `kernel_assignment.json` entry changed into `../src/xclbins/<folder>/<slot>`. A file `../src/`
+  has is replaced; a new one only when `engines.json` or `kernel_assignment.json` declares it. A
+  replaced library must keep the exports and imports the other libraries need (the ABI check). It
+  uploads a manifest of every staged file (`devkit-stage-manifest-<os>-<runtime>`, kept 30 days),
+  which the swap below reads. The product packages are then exactly what main would ship after the
+  swap, and the product's NPU test jobs (Linux and Windows, XRT and HRX portable) test them once, on
+  the union of the product's selection and the staged files' (the touched families, the models
+  whose kernels were rebuilt and the new models, which are required). A change to the dev-kit CI
+  alone builds the dev kit but stages nothing. The product builds of a pull request that stages
+  wait for the dev-kit builds.
+- `devkit-bench` (`../.github/workflows/devkit-bench.yml`, called by Build and Test after its tests on a pull request,
+  in the same run): perf (`flm bench`) and GSM8K accuracy, only when engine or kernel source changed:
+  on pull requests, of their own staged packages, reporting the pull request's numbers only (no
+  comparison with a base package or the nightly baseline for now; a comparison is to be designed
+  later), and nightly (job `devkit-bench-nightly`, which does not wait for the tests) when the
+  source changed since the last baseline. Results go to one pull request
+  comment; any bench failure other than the accuracy hard gate (perf, a pull, a timeout,
+  infrastructure) warns; only a model failing that gate (acc_common: no predictions, or too many
+  unanswered) fails the required check, which therefore waits for the benches. A manual dispatch of
+  that workflow re-benches an earlier Build and Test run: it benches by default (force), and without
+  `models` takes the nightly's rotation, so name the models to re-bench a pull request's. The full
+  refresh benches every benchable model on the four runtimes and reports only its own numbers.
 
 **Prebuilt binaries: never edit `../src/lib/{xrt,hrx}/` or `../src/xclbins/` by hand.** The engine
 libraries (`.so`, `.dll`, `.lib`) and kernels (`<folder>/<slot>.xclbin`) that `flm` ships are
 updated only by a pull request that changes dev-kit source, and the bytes committed are exactly the
-bytes its Build and Test run built and NPU-tested. Kernel builds are not byte-reproducible, so
-nothing is rebuilt afterwards: the tested files themselves are committed, as a *swap commit*.
+bytes its Build and Test run built, staged into its product builds and NPU-tested. Kernel builds are
+not byte-reproducible, so nothing is rebuilt afterwards: the tested files themselves are committed,
+as a *swap commit*.
 1. Change the dev-kit source and push. Do not touch `../src/lib/` or `../src/xclbins/`.
 2. Build and Test builds the engines and kernels the change touches (`devkit-engines`,
-   `devkit-xclbins`), overlays them on the portable packages and NPU-tests them (`test-*-devkit`);
-   each overlay job records the files it tested in its manifest. Fix and push until the run passes.
-3. When the run has passed, its summary shows the command. From a clean checkout of the pull
-   request's branch at exactly the tested commit (nothing committed after it, nothing unpushed):
-   `python .github/script/ci/devkit_swap.py fetch` (add `--run <id>` for a particular run,
-   `--dry-run` for the plan only). It uses your own GitHub access (the `gh` login, or `GH_TOKEN`;
-   read access is enough), checks the run (this pull request's Build and Test at your `HEAD`, passed,
-   with conclusion success: a failed bench fails it too, so re-run the failed jobs first; every
-   overlay test that ran passed and tested its files, and no commit on main since the run's
-   base touches `FLM_DLL/`, `FLM_Xclbin/`, `../src/lib/` or `../src/xclbins/`: otherwise merge main and
-   let CI run again), downloads the tested files, checks every SHA-256 against the manifests, writes
-   them and makes one commit with the trailers `Devkit-Swap-Run: <run id>` and
-   `Devkit-Swap-Tested: <tested sha>`. It does not push. The dev-kit artifacts are kept 7 days:
-   once they expire, re-run the workflow.
+   `devkit-xclbins`), stages them into the product builds (`devkit-stage`, which records every
+   staged file in its manifests) and NPU-tests those packages in the product test jobs. Fix and push
+   until everything passes. While the branch lacks the staged files, the run's `summary` (the
+   required check) fails at its *Dev-kit swap pending* step, which prints the command below: the
+   pull request cannot merge without its swap.
+3. From a clean checkout of the pull request's branch at exactly the tested commit (nothing
+   committed after it, nothing unpushed): `python .github/script/ci/devkit_swap.py fetch --run <id>`
+   (`--dry-run` for the plan only; without `--run` it takes the newest run of `HEAD`). It uses your
+   own GitHub access (the `gh` login, or `GH_TOKEN`; read access is enough), checks the run (this pull
+   request's Build and Test at your `HEAD`, completed, every job passed one by one, the only failure
+   allowed being the *Dev-kit swap pending* step; a failed bench job does not count unless a model
+   failed the accuracy hard gate, which fails `summary`'s *Dev-kit checks*; the product test job of every system and runtime it staged files into passed;
+   and no commit on main since the run's base touches `FLM_DLL/`, `FLM_Xclbin/`, `../src/lib/` or
+   `../src/xclbins/`: otherwise merge main and let CI run again), downloads the staged files, checks
+   every SHA-256 against the manifests, writes them and makes one commit with the trailers
+   `Devkit-Swap-Run: <run id>` and `Devkit-Swap-Tested: <tested sha>`. It does not push. The dev-kit
+   artifacts are kept 7 days: once they expire, re-run the workflow.
 4. `git push`. Build and Test's changes job verifies the swap commit (`devkit_swap.py verify`: its
    parent is the tested commit, it changes only files the run's manifests list, each to exactly the
-   tested bytes, it carries every file the run tested, and the run passed) and then builds and tests
-   nothing again; `devkit-static` still checks the catalog. Then the pull request is reviewed and
-   merged.
+   staged bytes, it carries every file the run staged, and the run passed as fetch requires) and then
+   builds and tests nothing again; `devkit-static` still checks the catalog. Then the pull request is
+   reviewed and merged.
+5. Pushes after the swap (a review fix, a merge of main): when they change no dev-kit engine or
+   kernel source or build input (`changes.py` `after_swap` decides from the files changed since the
+   newest swap commit), nothing is rebuilt or staged; the product test jobs test the committed
+   binaries and `devkit_swap.py check` re-verifies the swap commit. When they do change dev-kit
+   source, the run builds and stages again and asks for a new swap: run `fetch` again on that run.
+   So make the swap after the last dev-kit source change.
 
-A swap pull request must not change the dev-kit CI that writes and checks the manifests
-(`devkit_overlay.py`, `devkit_swap.py`, `changes.py`, `devkit_check.py`, the `devkit-npu-overlay`,
-`devkit-overlay-package` and `detect-changes` actions, `build-and-test.yml`, `devkit-engines.yml`,
-`devkit-xclbins.yml`): `verify` then refuses the swap and the full CI runs. `verify` and `check` run
-from the pull request's own merge commit, so they keep the flow honest but are no enforcement
-boundary: reviewers must read any `.github/` change in a pull request that touches `../src/lib/` or
-`../src/xclbins/`, and the real guarantee is that review plus branch protection.
+A swap pull request must not change the CI that stages the files, writes and checks the manifests
+or builds the packages they are tested in (`devkit_stage.py`, `devkit_overlay.py`, `devkit_swap.py`,
+`devkit_check.py`, the `devkit-stage-apply`, `detect-changes`, `lin-build` and `win-build` actions,
+`build-and-test.yml`, `lin-build.yml`, `win-build.yml`, `devkit-engines.yml`, `devkit-xclbins.yml`,
+and the NPU test harness that decides whether they pass: `../.github/script/npu_test/`, the
+`npu-test` and `install-package` actions; `devkit_swap.py SWAP_CI_PATHS`): `verify` then refuses
+the swap, the *Dev-kit swap pending* step says so, and the pull request has to be split (the CI change first). `changes.py` is not on that list: a
+new model family needs its engine table. `verify` and `check` run from the pull request's own merge
+commit, so they keep the flow honest but are no enforcement boundary: reviewers must read any
+`.github/` change in a pull request that touches `../src/lib/` or `../src/xclbins/`, and the real
+guarantee is that review plus branch protection.
 
-`devkit_swap.py check` runs on every pull request and reports any change under `../src/lib/` or
-`../src/xclbins/` that a verified swap commit did not bring in, other than the deletion of a file the
-catalog no longer needs and the third-party files (`libaiebu.a`, `aiebu_static.lib`, the runtime
-libraries directly under `../src/lib/`). It warns for now (`SWAP_ENFORCE` in that script) and will
-fail the pull request later.
+`devkit_swap.py check` runs on every pull request and fails it (through `summary`) on any change
+under `../src/lib/` or `../src/xclbins/` that a verified swap commit did not bring in, other than the
+deletion of a file the catalog no longer needs and the third-party files (`libaiebu.a`,
+`aiebu_static.lib`, the runtime libraries directly under `../src/lib/`).
+
+**Adding a model** (engine, kernels, catalog entry) goes through the same flow; its binaries are
+committed only by the swap:
+1. Add the dev-kit source: the engine under `FLM_DLL/detail/<engine>/` (or the model in an existing
+   engine), its kernels under `FLM_Xclbin/`, and their entries in `FLM_DLL/engines.json`,
+   `FLM_Xclbin/kernel_assignment.json` and `.md`, `build_units.json` and the RTP lock as needed.
+2. Add the product side: the catalog entry in `../src/model_list.json` (and `model_info.json`), the
+   frontend, the engine's line in `FLM_ENGINE_LINK_LIBS` (`../src/CMakeLists.txt`), and the engine
+   table in `../.github/script/ci/changes.py`. Do not add anything under `../src/lib/` or
+   `../src/xclbins/`, and do not change the NPU test harness (`../.github/script/npu_test/`) in this
+   pull request: it is swap CI (above). A new family needs no `plan.py` entry (the pr tier then
+   takes its smallest model); a pr-tier entry or a new suite goes in a pull request of its own.
+3. Push. `devkit-static` reports the engine's libraries and the model's kernel slots as pending
+   (not in `../src/` yet); `devkit-engines` and `devkit-xclbins` build them; `devkit-stage` stages
+   them as new files (declared by `engines.json` and `kernel_assignment.json`), so the product builds
+   link the new engine and package the new kernels; the product test jobs test the new model as a
+   required model, beside the rest of their selection.
+4. `summary` says *Dev-kit swap pending*: run `python .github/script/ci/devkit_swap.py fetch --run
+   <id>` and push. CI verifies the swap commit and tests nothing again; the pull request is reviewed
+   and merged, and main has the engine, its kernels and the source they were built from. A later
+   push that changes dev-kit source needs a new run and a new fetch (step 5 above).
 
 **Full refresh** (to align main with the dev kit once, or after a toolchain change): dispatch Build
 and Test on the pull request's branch with `gh workflow run build-and-test.yml --ref <branch> -f
-devkit-full-refresh=true`. It builds every engine and every shipped kernel, overlay-tests them on
-the four overlay jobs on the full tier with every NPU catalog model required, and benches every
-benchable model; the product jobs run as for any dispatch. When it has passed (no commit pushed to
-the branch meanwhile), run `python .github/script/ci/devkit_swap.py fetch --run <its run id>` and
-push: the swap commit takes every file its manifests list, and `verify` accepts it as above.
+devkit-full-refresh=true`. It builds every engine and every shipped kernel, stages all of them into
+the product builds, runs the product test jobs with every NPU catalog model required (on the
+pr tier by default; add `-f tier=full` for the full tier), and benches every benchable model. When everything but the *Dev-kit swap pending* step
+has passed (no commit pushed to the branch meanwhile), run `python .github/script/ci/devkit_swap.py
+fetch --run <its run id>` and push: the swap commit takes every file its manifests list, and
+`verify` accepts it as above.
 
 Keep in sync, in the same pull request: `FLM_Xclbin/build_units.json` (every directory with a
 Makefile and its `MODEL_TYPE`s), `FLM_Xclbin/kernel_assignment.json` and `.md` (model → folder → slot
