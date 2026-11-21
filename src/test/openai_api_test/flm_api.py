@@ -178,15 +178,20 @@ class Api:
             out.error = {"error": {"message": "non-SSE response: " + "\n".join(other)}}
         return out
 
-    def ok(self, body: dict[str, Any]) -> dict[str, Any]:
-        """Non-streaming request that must succeed; returns ``choices[0]``."""
+    def ok_body(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Non-streaming request that must succeed; returns the whole response body."""
         resp = self.post(body)
         if resp.status != 200:
             raise_for_capability(resp.error_message())
             raise AssertionError(f"HTTP {resp.status}: {resp.error_message()}")
-        expect(isinstance(resp.body.get("choices"), list) and len(resp.body["choices"]) == 1,
-               f"expected one choice, got {resp.body.get('choices')!r}")
-        return resp.body["choices"][0]
+        return resp.body
+
+    def ok(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Non-streaming request that must succeed; returns ``choices[0]``."""
+        body = self.ok_body(body)
+        expect(isinstance(body.get("choices"), list) and len(body["choices"]) == 1,
+               f"expected one choice, got {body.get('choices')!r}")
+        return body["choices"][0]
 
     def ok_stream(self, body: dict[str, Any]) -> Stream:
         """Streaming request that must succeed and end with ``[DONE]``."""

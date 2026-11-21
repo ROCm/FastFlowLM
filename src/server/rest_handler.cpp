@@ -123,7 +123,8 @@ T value_or(const json& request, const char* key, T fallback) {
 }
 }
 
-///@brief Fold the leading system messages into one, and drop the reasoning from assistant messages
+///@brief Fold the leading system messages into one, and keep assistant reasoning only within the
+/// current turn, as reasoning_content
 ///@param original_indices if set, receives each returned message's index in the request
 static json normalize_messages(json messages, std::vector<size_t>* original_indices = nullptr) {
     // Several templates accept one system message only, at the start (Qwen3.5/3.6/3.8, D3,
@@ -155,9 +156,25 @@ static json normalize_messages(json messages, std::vector<size_t>* original_indi
         const size_t folded = leading > 1 ? leading - 1 : 0;
         for (size_t i = 0; i < messages.size(); i++) original_indices->push_back(i == 0 ? 0 : i + folded);
     }
-    for (auto& msg : messages) {
+    // The current turn: the messages after the last user message, or all of them without one.
+    // Reasoning from earlier turns is not fed back to the model, but within the current turn it is:
+    // the model reasons, calls a tool and goes on from the result, and must still see what it
+    // reasoned before the call. The templates read reasoning_content, so the other names clients
+    // use for it are moved there.
+    size_t turn_start = 0;
+    for (size_t i = 0; i < messages.size(); i++) {
+        if (messages[i].value("role", "") == "user") turn_start = i + 1;
+    }
+    for (size_t i = 0; i < messages.size(); i++) {
+        json& msg = messages[i];
         if (msg.value("role", "") != "assistant") continue;
-        for (const char* key : {"thinking", "reasoning", "reasoning_content"}) msg.erase(key);
+        json reasoning;
+        for (const char* key : {"reasoning_content", "reasoning", "thinking"}) {
+            const json value = msg.value(key, json());
+            if (reasoning.is_null() && value.is_string() && !value.get<std::string>().empty()) reasoning = value;
+            msg.erase(key);
+        }
+        if (i >= turn_start && !reasoning.is_null()) msg["reasoning_content"] = reasoning;
     }
     return messages;
 }
