@@ -302,6 +302,12 @@ jobs:
           [ "${MODE}" = dispatch ] && args+=(--artifacts "${RUNNER_TEMP}/artifacts.json")
           # A dispatch benches unless force is off and no models are named.
           if [ "${MODE}" = dispatch ] && [ "${FORCE}" != true ]; then args+=(--no-force); fi
+          # A pull request selects from its own catalog and dev-kit maps (data,
+          # read with git show) so a model it adds is benched; the scripts stay
+          # the base's. A base from before that option selects from its own.
+          if [ "${MODE}" = pr ] && grep -q -- '--data-from-head' .github/script/devkit-bench/resolve.py; then
+            args+=(--data-from-head)
+          fi
           python3 .github/script/devkit-bench/resolve.py "${args[@]}"
 
   # ── NPU approval gate, dispatch only ─────────────────────────────────────

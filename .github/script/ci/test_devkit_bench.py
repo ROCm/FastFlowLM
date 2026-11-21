@@ -676,6 +676,89 @@ class Resolve(unittest.TestCase):
         self.assertTrue(all(e["families"] == "qwen3" and e["libs"] == "devkit-libs-lin-xrt" for e in matrix))
         self.assertEqual(values["head-sha"], SHA_A)
 
+    def head_maps_with_new_model(self):
+        """The repository's maps plus a model family only the pull request's
+        head has: nova:1b, served by a new engine nova_npu."""
+        catalog, _, assignment = resolve.load_maps(REPO)
+        entry = json.loads(json.dumps(catalog["llama3.2:1b"]))
+        entry["name"] = "Nova-1B-NPU2"
+        entry.setdefault("details", {})["family"] = "nova"
+        catalog["nova:1b"] = entry
+        engines = json.loads((REPO / select_models.changes.DEVKIT_ENGINES).read_text(encoding="utf-8"))
+        engines["engines"]["nova_npu"] = {"families": ["nova"], "models": ["nova:1b"], "uses": []}
+        return catalog, select_models.changes.DevkitEngines.parse(json.dumps(engines)), assignment
+
+    def test_pr_selects_a_new_model_from_the_heads_maps(self):
+        plan = resolve.write_plan(head_sha=SHA_A, package_sha=SHA_B, engines="success", families="nova",
+                                  builds={"lin-xrt": "success"})
+        real, refs = resolve.load_maps, []
+        head = self.head_maps_with_new_model()
+
+        def stub(root, ref=""):
+            refs.append(ref)
+            return head if ref == SHA_A else real(root)
+        resolve.load_maps = stub
+        try:
+            # The base's maps do not know nova:1b: the gap this option closes.
+            v = self.plan_cli(plan, "--mode", "pr")
+            self.assertEqual(refs, [""])
+            self.assertNotIn("nova:1b", {e["model"] for e in json.loads(v.get("matrix") or "[]")})
+            refs.clear()
+            v = self.plan_cli(plan, "--mode", "pr", "--data-from-head")
+            self.assertEqual(refs, [SHA_A])
+            self.assertEqual(v["bench"], "true")
+            self.assertIn("nova:1b", {e["model"] for e in json.loads(v["matrix"])})
+        finally:
+            resolve.load_maps = real
+
+    def test_unreadable_head_maps_fall_back_to_the_base(self):
+        plan = resolve.write_plan(head_sha=SHA_A, package_sha=SHA_B, engines="success", families="qwen3",
+                                  builds={"lin-xrt": "success"})
+        real, refs = resolve.load_maps, []
+
+        def stub(root, ref=""):
+            refs.append(ref)
+            if ref:
+                raise OSError("not fetched")
+            return real(root)
+        resolve.load_maps = stub
+        try:
+            v = self.plan_cli(plan, "--mode", "pr", "--data-from-head")
+        finally:
+            resolve.load_maps = real
+        self.assertEqual(refs, [SHA_A, ""])
+        self.assertEqual(v["bench"], "true")
+        self.assertTrue(json.loads(v["matrix"]))
+
+    def test_read_data_from_a_commit(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as d:
+            def git(*a):
+                return subprocess.run(["git", "-C", d, *a], check=True, capture_output=True,
+                                      text=True).stdout.strip()
+            git("init", "-q")
+            git("config", "user.email", "t@example.com")
+            git("config", "user.name", "t")
+            Path(d, "data.json").write_text('{"v": 1}', encoding="utf-8")
+            git("add", "data.json")
+            git("commit", "-qm", "one")
+            first = git("rev-parse", "HEAD")
+            Path(d, "data.json").write_text('{"v": 2}', encoding="utf-8")
+            root = Path(d)
+            self.assertEqual(json.loads(resolve.read_data(root, "data.json")), {"v": 2})
+            self.assertEqual(json.loads(resolve.read_data(root, "data.json", first)), {"v": 1})
+            with self.assertRaises(OSError):
+                resolve.read_data(root, "data.json", "not-a-sha")
+            with self.assertRaises(OSError):
+                resolve.read_data(root, "data.json", "c" * 40)
+            with self.assertRaises(OSError):
+                resolve.read_data(root, "missing.json", first)
+
+    def test_workflow_selects_from_the_head_only_on_a_pr(self):
+        text = workflow("devkit-bench.yml")
+        self.assertIn("[ \"${MODE}\" = pr ] && grep -q -- '--data-from-head'", text)
+        self.assertIn("args+=(--data-from-head)", text)
+
     def plan(self, **kw):
         p = {"schema": 1, "bench": "true", "head_sha": SHA_A, "families": "qwen3",
              "xclbin_models": '["gemma3:4b"]', "bench_models": '["gemma3:4b"]', "xclbins": "devkit-xclbins",
