@@ -838,13 +838,13 @@ int main(int argc, char **argv) {
       // destroyed `count` times in this process.
       std::printf("P7 hw_context churn: %d times build + hw_context + 100 launches + destroy, transport %s\n", count,
                   launch::transport_name(opts.transport));
-      Options small = opts;
-      small.lengths = {2};
-      small.quiet = true;
+      Options brief = opts; // not "small": a macro in Windows' rpcndr.h
+      brief.lengths = {2};
+      brief.quiet = true;
       int failed = 0;
       const auto t0 = std::chrono::steady_clock::now();
       for (int i = 0; i < count; ++i) {
-        Stress s(package, seed + (unsigned)i, small);
+        Stress s(package, seed + (unsigned)i, brief);
         failed += s.random_walk(100, 16) ? 0 : 1;
       }
       const double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
