@@ -8,13 +8,14 @@
 # run what they built.
 #
 # Windows runs only what never hangs there: no parity, prev or ctx (they give
-# wrong data on purpose or need another context) and pressure.ps1 -SkipFullWalk.
+# wrong data on purpose or need another context) and pressure.ps1 -SkipFullWalk;
+# session.exe with resident lanes only in a process alone on the NPU.
 
 name: launchlib pressure
 
 on:
   push:
-    branches: [ci/launchlib-flow-elf-pressure]
+    branches: [ci/launchlib-resident-lanes-pressure]
   workflow_dispatch:
 
 permissions:
@@ -54,7 +55,7 @@ jobs:
             d=$out/$name
             mkdir -p "$d"
             flags="-std=c++20 -O2 -Wall -I ../launchlib/include -I include -I kernels -I ../../FLM_DLL/include -DEW_N=256 -DEW_COLS=$cols -DEW_CORES=$cores"
-            for p in host stress ovlp; do
+            for p in host stress ovlp session; do
               g++-13 $flags host/$p.cpp -o "$d/$p.exe" -lxrt_coreutil -luuid
             done
             g++-13 $flags host/make_overlay.cpp -o "$d/make_overlay.exe"
@@ -105,7 +106,7 @@ jobs:
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
             $d = "$out\$name"
             New-Item -ItemType Directory -Force -Path $d | Out-Null
-            foreach ($p in 'host', 'stress', 'ovlp', 'make_overlay') { Copy-Item "$b\Release\$p.exe" $d }
+            foreach ($p in 'host', 'stress', 'session', 'ovlp', 'make_overlay') { Copy-Item "$b\Release\$p.exe" $d }
             Copy-Item -Recurse "precompiled\$name" "$d\pkg"
           }
           Copy-Item tools\pressure.ps1 $out
@@ -139,7 +140,7 @@ jobs:
           cat "$LL/xrt-version.txt" || true
           ls -l /dev/accel || true
           # Another NPU user would turn the must-pass walks into shared ones.
-          if pgrep -a -x 'flm|flm-real|stress.exe|host.exe|ovlp.exe'; then echo "::error::NPU processes left on the runner"; exit 1; fi
+          if pgrep -a -x 'flm|flm-real|stress.exe|host.exe|ovlp.exe|session.exe'; then echo "::error::NPU processes left on the runner"; exit 1; fi
       # APP@STATE packages, as make ovlp does (make_package.py --state only copies the txn).
       - name: Overlay packages
         shell: bash
@@ -183,6 +184,44 @@ jobs:
             done
           done
           exit $fail
+      - name: session, both flows, resident lanes off and on
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          fail=0
+          for name in n256-c1x1 n256-c8x2 n256-c8x4-pair; do
+            d=$LL/$name
+            c=${name#n256-c}; c=${c%-pair}; n=$(( 2 * 256 * ${c%x*} * ${c#*x} ))
+            for flow in elf xclbin; do
+              for res in off on; do
+                echo "=== $name session --other --flow $flow --resident $res"
+                "$d/session.exe" --package "$d/pkg" --n $n --flow $flow --resident $res --other || fail=1
+              done
+            done
+          done
+          exit $fail
+      # One session.exe looping, short ones coming and going (resident lanes off,
+      # the default: with them on, a newcomer can hang the NPU for ~60 s).
+      - name: session churn 8x4, resident lanes off
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          d=$LL/n256-c8x4-pair; o=$LL/out/session_churn; mkdir -p "$o"
+          "$d/session.exe" --package "$d/pkg" --n 16384 --iters 5 --seconds 120 > "$o/main.txt" 2>&1 &
+          main=$!
+          sleep 3
+          fail=0; i=0; end=$((SECONDS + 110))
+          while [ $SECONDS -lt $end ]; do
+            i=$((i + 1))
+            "$d/session.exe" --package "$d/pkg" --n 16384 --iters 1 --pairs 1 > "$o/child_$i.txt" 2>&1 || { fail=1; echo "child $i failed"; tail -5 "$o/child_$i.txt"; }
+            sleep 1
+          done
+          wait $main || fail=1
+          echo "$i short processes"
+          grep "rounds\|^launches\|^statuses\|ok_but_wrong\|^SESSION" "$o/main.txt"
+          exit $fail
       - name: pressure 8x4, ELF
         if: ${{ !cancelled() }}
         shell: bash
@@ -223,7 +262,7 @@ jobs:
             ForEach-Object { Write-Host "$($_.DeviceName): driver $($_.DriverVersion)" }
           Get-Item C:\Windows\System32\xrt_coreutil.dll | ForEach-Object { Write-Host "xrt_coreutil $($_.VersionInfo.FileVersion)" }
           # Another NPU user would turn the must-pass walks into shared ones.
-          $p = Get-Process -Name flm*, stress, host -ErrorAction SilentlyContinue
+          $p = Get-Process -Name flm*, stress, host, session -ErrorAction SilentlyContinue
           if ($p) { $p | Format-Table Id, Name, StartTime; Write-Host '::error::NPU processes left on the runner'; exit 1 }
       - name: Overlay packages
         shell: powershell
@@ -270,6 +309,25 @@ jobs:
                 & "$name\stress.exe" --package "$name\pkg" --flow $flow --mode $mode --seed 1 --launches 20000
                 if ($LASTEXITCODE) { $fail = 1 }
               }
+            }
+          }
+          exit $fail
+      - name: session, both flows
+        if: ${{ !cancelled() }}
+        shell: powershell
+        working-directory: launchlib
+        run: |
+          $fail = 0
+          foreach ($cfg in @(@('n256-c1x1', 512), @('n256-c8x2', 8192), @('n256-c8x4-pair', 16384))) {
+            $name, $n = $cfg
+            foreach ($flow in 'elf', 'xclbin') {
+              Write-Host "=== $name session --other --flow $flow (resident lanes off)"
+              & "$name\session.exe" --package "$name\pkg" --n $n --flow $flow --other
+              if ($LASTEXITCODE) { $fail = 1 }
+              # Alone on the NPU: nothing can take the lanes.
+              Write-Host "=== $name session --flow $flow --resident on"
+              & "$name\session.exe" --package "$name\pkg" --n $n --flow $flow --resident on
+              if ($LASTEXITCODE) { $fail = 1 }
             }
           }
           exit $fail
