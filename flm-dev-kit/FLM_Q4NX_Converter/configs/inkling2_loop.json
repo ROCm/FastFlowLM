@@ -42,13 +42,11 @@
         },
         "v_proj": {
             "gguf_name": "blk.{bid}.attn_v.weight",
-            "q4nx_name": "model.layer.{bid}.self_attn.v_proj.weight",
-            "default_tensor_type": "Q8_0"
+            "q4nx_name": "model.layer.{bid}.self_attn.v_proj.weight"
         },
         "o_proj": {
             "gguf_name": "blk.{bid}.attn_output.weight",
-            "q4nx_name": "model.layer.{bid}.self_attn.o_proj.weight",
-            "default_tensor_type": "Q8_0"
+            "q4nx_name": "model.layer.{bid}.self_attn.o_proj.weight"
         },
         "gate_proj": {
             "gguf_name": "blk.{bid}.attn_gate.weight",
