@@ -28,15 +28,31 @@ from __future__ import annotations
 import json
 import os
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 import flm_api
 from fixtures import user
 from flm_api import Api, Skip, case, expect
 
-# single-turn models: their context is fixed (src/model_list.json, label "single-turn")
-SINGLE_TURN = {"gemma4e-flash:e2b": 1024, "gemma4e-flash:e4b": 1024, "qwen3vl-flash:4b": 1024,
-               "nemotron3.5-bolt-dflash-flash:e4b": 1024, "hy-mt2-flash:1.8b": 32768}
+
+
+def single_turn_models() -> dict[str, int]:
+    """The single-turn models of the shipped catalog and the context each is fixed at.
+
+    The loader keeps a model labelled ``single-turn`` at its own ``default_context_length``
+    whatever `--ctx-len` says. Read from the catalog next to this suite, so that a label that
+    moves is followed here.
+    """
+    catalog = json.loads((Path(__file__).resolve().parents[2] / "model_list.json")
+                         .read_text(encoding="utf-8"))
+    return {f"{family}:{size}": entry["default_context_length"]
+            for family, sizes in catalog["models"].items()
+            for size, entry in sizes.items()
+            if "single-turn" in entry.get("label", [])}
+
+
+SINGLE_TURN = single_turn_models()
 WORDS = {"completion", "tools", "vision", "audio", "thinking", "embedding"}
 PARAMETERS = {"tools", "tool_choice", "reasoning"}
 # a 1x1 PNG

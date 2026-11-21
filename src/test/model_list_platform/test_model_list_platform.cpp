@@ -966,12 +966,27 @@ bool lists(const nlohmann::json& array, const char* word) {
     return false;
 }
 
+/// \brief the families whose frontend decides in code whether a request's
+///        tools reach the chat template: the size an entry must exceed
+///        (Qwen3::load_model, Qwen3_5VL::load_model), or -1 where the class
+///        drops the tools (the flash classes' apply_chat_template)
+/// \note Keep in step with those classes. The other families either pass the
+///       tools always or never, and the field says which.
+const std::map<std::string, long long> kToolGates = {
+    {"qwen3", 1700000000LL},
+    {"qwen3.5", 800000000LL},
+    {"qwen3vl-flash", -1},
+    {"gemma4e-flash", -1},
+    {"gemma4e-dflash-flash", -1},
+};
+
 /// \brief every shipped entry yields a capability record, and each capability
 ///        agrees with the one catalog field it is read from
 void test_every_shipped_entry_has_a_capability_record() {
     const auto catalog = read_json(kCatalogPath);
     int chat_models = 0;
     int tool_models = 0;
+    int gated = 0;
 
     for (const auto& [family, sizes] : catalog.at("models").items()) {
         for (const auto& [size, entry] : sizes.items()) {
@@ -979,6 +994,7 @@ void test_every_shipped_entry_has_a_capability_record() {
             const auto record = model_list::capabilities_of(entry);
             const auto words = record.words();
             const std::string kind = entry.at("details").at("family").get<std::string>();
+            if (kToolGates.count(kind)) ++gated;
 
             // the label on the model card says what the field says, so it is
             // never a second place to decide it
@@ -987,6 +1003,16 @@ void test_every_shipped_entry_has_a_capability_record() {
             }
             if (entry.contains("tools_in_prompt")) {
                 throw std::runtime_error(tag + ": tools_in_prompt is retired; use \"tools\"");
+            }
+            // the listing must not claim tools for an entry whose frontend
+            // will not show them to the model
+            if (const auto gate = kToolGates.find(kind); gate != kToolGates.end()) {
+                const bool shown = gate->second >= 0 &&
+                                   entry.at("size").get<long long>() > gate->second;
+                if (entry.value("tools", false) != shown) {
+                    throw std::runtime_error(
+                        tag + ": \"tools\" disagrees with what the " + kind + " frontend does");
+                }
             }
 
             if (kind == "embed-gemma") {
@@ -1028,6 +1054,7 @@ void test_every_shipped_entry_has_a_capability_record() {
         }
     }
     TEST_REQUIRE(chat_models > 60);
+    TEST_REQUIRE(gated > 10);
     TEST_REQUIRE(tool_models >= 35);
 
     // --ctx-len replaces the entry's default for a chat model
