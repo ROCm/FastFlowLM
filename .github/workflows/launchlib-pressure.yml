@@ -158,17 +158,17 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: |
-          set -uo pipefail
+          set +e -uo pipefail
           fail=0
-          s=$(( ${{ matrix.shard }} * 1000 ))
+          s=$(( ${{ matrix.shard }} * 1000 + ${{ github.run_attempt }} * 100 ))
           for name in n256-c8x4-pair n256-c8x2; do
             d=$LL/$name
             walk() { # tag must_pass args...
               local tag=$1 must=$2; shift 2
               local log=$LL/out/${name}_$tag.log
               echo "=== $name $tag: stress $*"
-              "$d/stress.exe" --package "$d/pkg" --lengths 2,4,8 "$@" > "$log" 2>&1
-              local rc=$?
+              local rc=0
+              "$d/stress.exe" --package "$d/pkg" --lengths 2,4,8 "$@" > "$log" 2>&1 || rc=$?
               grep -E '^S[0-9]|^  [0-9]+ launches|^  runlists by|^  gap|^  [<>0-9].*ms |launches the Session|^    launch [0-9]|^    runlist|error' "$log" | head -60
               echo "--- $name $tag: exit $rc"
               if [ "$must" = 1 ] && [ $rc -ne 0 ]; then fail=1; fi
