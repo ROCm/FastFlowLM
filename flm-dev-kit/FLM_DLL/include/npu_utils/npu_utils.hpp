@@ -1314,6 +1314,12 @@ public:
         return npu_app(this->device_gen, this->device, this->context.get(), this->kernel_name, this->enable_preemption);
     }
 
+    ///@brief The device, hardware context and kernel name of the loaded xclbin, for a caller that runs
+    ///       its own instruction streams in this context (d3's launchlib control-packet switches)
+    xrt::device* get_device() { return this->device; }
+    xrt::hw_context* get_context() { return this->context.get(); }
+    const std::string& get_kernel_name() const { return this->kernel_name; }
+
     ///@brief Create a buffer with real bo
     ///@param size size of the buffer
     ///@see buffer

@@ -55,4 +55,18 @@ struct d3_npu_sequence{
     ///        4 kv heads).
     void gen_bidirectional_attention(npu_sequence* seq, const uint32_t L_valid, const size_t q_base,
                                      const size_t o_base, const size_t kv_half, const uint32_t q_rows = 0);
+
+    // conv1d.xclbin (FLM_Xclbin/Qwen3_8/conv1d_prefill, the build with a norm mode per core): the
+    // depthwise causal conv1d + silu of the gated delta net, q and k l2-normalised on the way out.
+    /// @brief core RTP address of the conv's L_buffer (length, norm mode)
+    static constexpr uint32_t conv_l_buffer_address = 49664;
+    /// @brief longest conv input: the x descriptor's 6-bit iteration field over 128-row blocks
+    static constexpr uint32_t CONV_MAX_L_IN = 64 * 128;
+
+    /// @brief y[L_out][D] = silu(conv1d(x[L_out + 3][D])) with q (first DQ channels) and k (next DQ)
+    ///        l2-normalised per 128-channel head, no scale (the delta rule applies 1/sqrt(DH) itself).
+    ///        The 3 rows ahead of the L_out rows are the conv state (zeros: a sequence start).
+    ///        Arguments: y (0), x (1), w (2): w is [4][D] bf16 tap-major from element weight_offset.
+    ///        D % 1024 == 0 is not needed, but DQ % 1024 must be 0 (a core column never straddles q / k).
+    void gen_conv1d(npu_sequence* seq, const uint32_t L_out, const uint32_t D, const uint32_t DQ, const uint32_t weight_offset);
 };

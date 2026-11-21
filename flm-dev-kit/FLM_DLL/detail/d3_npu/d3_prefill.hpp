@@ -34,6 +34,7 @@
 #include "utils/avx512_util.hpp"
 #include "cpu_functions.hpp"
 #include "d3_prefill_cpu.hpp"
+#include "d3_launch.hpp"
 
 // ---------------------------------------------------------------------------
 // Prefill profiling: -DD3_PREFILL_PROFILE (zero cost otherwise). Same macros as the
@@ -286,6 +287,39 @@ struct d3_mm {
     template <typename... A> auto create_run(A&... a) { return cur->create_run(a...); }
 };
 
+/// @brief load the control-packet switches of D3_SWITCH_DIR once (rig); true when attention and conv1d
+///        can share the mm hardware context. A failure is logged once and leaves everything on the old paths.
+inline bool d3_launch_ensure(d3_launch& ll, npu_app_manager* gemm) {
+#if !defined(FLM_USE_HRX)
+    if (ll.tried) return ll.ready;
+    ll.tried = true;
+    const char* sw_dir = std::getenv("D3_SWITCH_DIR");
+    if (!sw_dir || !sw_dir[0] || !gemm) return false;
+    try {
+        ll.load(sw_dir, gemm->get_device(), gemm->get_context(), gemm->get_kernel_name());
+        header_print("d3", "attention and conv1d share the mm hardware context (control-packet switches from " << sw_dir << ")");
+    } catch (const std::exception& e) {
+        ll.ready = false;
+        header_print("d3", "control-packet switches off: " << e.what());
+    }
+    return ll.ready;
+#else
+    (void)ll; (void)gemm;
+    return false;
+#endif
+}
+
+/// @brief shortest segment whose conv1d runs on the array: below it the host conv is faster than two
+///        switches plus the transfers (measured: loses at 256 / 512 rows, -8% at 2,048, even at 4,096).
+///        D3_CONV_ARRAY_MIN=<rows> overrides (rig).
+inline int d3_conv_array_min() {
+    static const int v = [] {
+        const char* e = std::getenv("D3_CONV_ARRAY_MIN");
+        return e && e[0] ? std::atoi(e) : 1536;
+    }();
+    return v;
+}
+
 struct d3_linear_block{
     d3_desc* desc;
     d3_npu_sequence* seq_gen;
@@ -294,12 +328,16 @@ struct d3_linear_block{
     int layer_idx = -1;
 
     d3_mm qkv_proj, g_proj, o_proj;
+    d3_mm conv;                  //!< conv1d on the array (control-packet switch in the mm context), an app per segment length
+    d3_launch* ll = nullptr;     //!< the context's switches (shared with attention)
+    npu_app_manager* gemm_mgr = nullptr;
 
     std::vector<bf16> conv_in;   //!< one segment's conv input: KS - 1 zero state rows, then its rows
     std::vector<float> S;        //!< one segment's recurrent state [Hv][DK][DV], zeroed (or copied from a state-once cache) per segment
 
     d3_linear_block(d3_desc* desc, d3_npu_sequence* seq_gen, npu_app_manager* gemm)
-        : desc(desc), seq_gen(seq_gen) {
+        : desc(desc), seq_gen(seq_gen), gemm_mgr(gemm) {
+        conv.build(gemm);
         qkv_proj.build(gemm);
         g_proj.build(gemm);
         o_proj.build(gemm);
@@ -313,7 +351,7 @@ struct d3_linear_block{
     void reserve(int R_padded) {
         if (R_padded_old == R_padded) return;
 #if D3_MM_ON_NPU
-        if (qkv_proj.select(R_padded)) seq_gen->gen_dequant_mm_512(qkv_proj.seq(), R_padded, desc->D, desc->Linear_DQKV, desc->get_linear_qkv_offset(), 0, 0);
+        if (qkv_proj.select(R_padded)) seq_gen->gen_dequant_mm_512(qkv_proj.seq(), R_padded, desc->D, desc->Linear_DQKV, desc->get_linear_qkv_offset(), (size_t)(desc->conv_kernel_size - 1) * desc->Linear_DQKV, 0);
         // rtp_act = 0: the array's fused silu (rtp_act = 1) is off by up to ~0.015 absolute for
         // negative inputs (-0.055 for -0.042), and the gated norm amplifies that per channel.
         // _in_proj applies the silu on the host instead.
@@ -325,24 +363,28 @@ struct d3_linear_block{
 
     void drop_above(int rows) {
         for (d3_mm* m : {&qkv_proj, &g_proj, &o_proj}) m->drop_above(rows);
+        conv.drop_above(-1);
         if (R_padded_old > rows) R_padded_old = -1;
         // conv_in only grows: give back a longer prompt's (0.4 GB at 32,768 rows)
         if (conv_in.capacity() > (size_t)rows * desc->Linear_DQKV + 64 * desc->Linear_DQKV) std::vector<bf16>().swap(conv_in);
     }
 
-    void _in_proj(const d3_batch& b, buffer<u8>& proj_weights) {
+    /// @brief qkv holds KS - 1 zero rows (the conv state of a sequence start) before the R projection rows
+    bf16* qkv_rows() { return sc->qkv.data() + (size_t)(desc->conv_kernel_size - 1) * desc->Linear_DQKV; }
+
+    void _in_proj(const d3_batch& b, buffer<u8>& proj_weights, bool qkv_to_host) {
         buffer<bf16>& qkv = sc->qkv;
 #if D3_MM_ON_NPU
         qkv_proj(qkv, sc->x, proj_weights);
         g_proj(sc->gate, sc->x, proj_weights);
-        qkv.sync_from_device();
+        if (qkv_to_host) qkv.sync_from_device();
         sc->gate.sync_from_device();
         D3_RIG_DUMP(_n("gdn.z"), sc->gate.data(), b.segs[0].len, desc->Linear_DV, desc->Linear_DV);
         d3_cpu::silu_inplace(sc->gate.data(), (size_t)b.R * desc->Linear_DV);
         d3_cpu::scratch_push(sc->gate);   // keep the BO coherent (scratch discipline)
 #else
         const int DQKV = desc->Linear_DQKV;
-        d3_cpu::dequant_mm(qkv.data(), DQKV, proj_weights.data() + desc->get_linear_qkv_offset(),
+        d3_cpu::dequant_mm(qkv_rows(), DQKV, proj_weights.data() + desc->get_linear_qkv_offset(),
                            sc->x.data(), desc->D, b.R, desc->D, DQKV, d3_cpu::BODY_LAYOUT);
         d3_cpu::dequant_mm(sc->gate.data(), desc->Linear_DV, proj_weights.data() + desc->get_linear_g_offset(),
                            sc->x.data(), desc->D, b.R, desc->D, desc->Linear_DV, d3_cpu::BODY_LAYOUT);
@@ -364,8 +406,16 @@ struct d3_linear_block{
         const int Hv = desc->linear_num_v_heads;
         reserve(b.R_padded);
 
-        _in_proj(b, proj_weights);
-        D3_RIG_DUMP(_n("gdn.qkv"), qkv.data(), b.segs[0].len, DQKV, DQKV);
+        // conv1d on the array: one segment from a zero state (the common prompt); rig builds dump the host copy
+        bool conv_npu = false;
+#if D3_MM_ON_NPU && !defined(FLM_USE_HRX) && !defined(D3_RIG)
+        conv_npu = ll && d3_launch_ensure(*ll, gemm_mgr) && ll->has_conv && b.segs.size() == 1 &&
+                   !b.segs[0].dependent && !b.segs[0].save && b.segs[0].len >= d3_conv_array_min() &&
+                   (uint32_t)(b.segs[0].len + KS - 1) <= d3_npu_sequence::CONV_MAX_L_IN &&
+                   desc->Linear_DQ % 1024 == 0 && desc->Linear_DQ == desc->Linear_DK;
+#endif
+        _in_proj(b, proj_weights, !conv_npu);
+        D3_RIG_DUMP(_n("gdn.qkv"), qkv_rows(), b.segs[0].len, DQKV, DQKV);
         D3_RIG_DUMP(_n("gdn.z_silu"), sc->gate.data(), b.segs[0].len, desc->Linear_DV, desc->Linear_DV);
         PREFILL_PROF_TICK("linear:qkv+g_proj");
 
@@ -373,16 +423,29 @@ struct d3_linear_block{
         // from the state's conv tail, the state saves it)
         const bf16* conv_w = ssm_weights.data() + weights().ssm_conv1d.offset / sizeof(bf16);
         d3_layer_cache* lc = b.cache ? &b.cache->layers[layer_idx] : nullptr;
+#if D3_MM_ON_NPU && !defined(FLM_USE_HRX)
+        if (conv_npu) {
+            const uint32_t L = (uint32_t)b.segs[0].len;
+            const uint32_t woff = (uint32_t)(weights().ssm_conv1d.offset / sizeof(bf16));
+            if (conv.select((int64_t)L | ((int64_t)woff << 32))) seq_gen->gen_conv1d(conv.seq(), L, DQKV, desc->Linear_DQ, woff);
+            d3_cpu::scratch_push(conv_qkv);
+            ll->to_conv();
+            conv(conv_qkv, qkv, ssm_weights);
+            ll->conv_to_mm();
+            conv_qkv.sync_from_device();
+        } else
+#endif
         for (const auto& s : b.segs) {
             if (s.save) lc->tail.assign((size_t)(KS - 1) * DQKV, bf16(0.0f));
-            d3_cpu::conv1d_silu_carry(conv_qkv.data() + (size_t)s.begin * DQKV, qkv.data() + (size_t)s.begin * DQKV,
+            d3_cpu::conv1d_silu_carry(conv_qkv.data() + (size_t)s.begin * DQKV, qkv_rows() + (size_t)s.begin * DQKV,
                                       s.dependent ? lc->tail.data() : nullptr, conv_w, s.len, DQKV, KS, conv_in,
                                       s.save ? lc->tail.data() : nullptr);
         }
         D3_RIG_DUMP(_n("gdn.conv"), conv_qkv.data(), b.segs[0].len, DQKV, DQKV);
-        d3_cpu::l2norm_heads(conv_qkv.data(), DQKV, b.R,
-                             (desc->Linear_DQ + desc->Linear_DK) / desc->linear_qk_head_dim,
-                             desc->linear_qk_head_dim);
+        if (!conv_npu)   // the array's conv normalises q and k itself
+            d3_cpu::l2norm_heads(conv_qkv.data(), DQKV, b.R,
+                                 (desc->Linear_DQ + desc->Linear_DK) / desc->linear_qk_head_dim,
+                                 desc->linear_qk_head_dim);
         PREFILL_PROF_TICK("linear:conv1d");
 
         float* alpha_ptr = alpha_beta.data();
@@ -464,6 +527,8 @@ struct d3_attn_block{
     std::string attn_xclbin;
     npu_app_manager* attn_mgr = nullptr;
     bool attn_unavailable = false;
+    npu_app_manager* gemm_mgr = nullptr;   //!< the mm xclbin's context: attention runs here when launchlib switches are on
+    d3_launch* ll = nullptr;               //!< the context's control-packet switches (D3_SWITCH_DIR); ll->ready = attention shares the mm context
     d3_mm attn;                        //!< an app per prompt length (len, or state << 32 | len for prefix_bidir's question run) in the current call (one per attention layer)
     d3_mm attn_state;                  //!< prefix_bidir's state run, an app per state length
     buffer<bf16> st_kv, st_q, st_o;    //!< staging: K then V always; q / o for a segment not at row 0
@@ -472,6 +537,7 @@ struct d3_attn_block{
     d3_attn_block(d3_desc* desc, d3_npu_sequence* seq_gen, npu_app_manager* gemm, npu_xclbin_manager* npu,
                   std::string attn_xclbin)
         : desc(desc), seq_gen(seq_gen), npu(npu), attn_xclbin(std::move(attn_xclbin)) {
+        gemm_mgr = gemm;
         q_proj.build(gemm); k_proj.build(gemm); v_proj.build(gemm); g_proj.build(gemm); o_proj.build(gemm);
     }
 
@@ -512,6 +578,15 @@ struct d3_attn_block{
         if (attn_mgr) return true;
         if (attn_unavailable) return false;
         try {
+#if !defined(FLM_USE_HRX)
+            if (ll && d3_launch_ensure(*ll, gemm_mgr)) {
+                // attention in the mm context: the array switches with control packets, no second hardware context
+                attn_mgr = gemm_mgr;
+                attn.build(attn_mgr);
+                attn_state.build(attn_mgr);
+                return true;
+            }
+#endif
             if (!std::filesystem::exists(attn_xclbin)) throw std::runtime_error(attn_xclbin + " not found");
             attn_mgr = npu->register_xclbin(attn_xclbin);
             attn.build(attn_mgr);
@@ -568,6 +643,9 @@ struct d3_attn_block{
         // the host wrote after_mix last (the previous layer's mixer): flush it before the array
         // writes it, or its dirty lines land over the array's output at the sync below
         d3_cpu::scratch_push(ob);
+#if !defined(FLM_USE_HRX)
+        if (ll && ll->ready) ll->to_attn();
+#endif
         if (!S) {
             if (attn.select((int64_t)L)) seq_gen->gen_bidirectional_attention(attn.seq(), (uint32_t)L, 0, 0, kv_half);
             attn(ob, qb, st_kv);
@@ -589,6 +667,9 @@ struct d3_attn_block{
                 seq_gen->gen_bidirectional_attention(attn.seq(), (uint32_t)L, S * DQ, S * DQ, kv_half, (uint32_t)(L - S));
             attn(ob, qb, st_kv);
         }
+#if !defined(FLM_USE_HRX)
+        if (ll && ll->ready) ll->to_mm();
+#endif
         ob.sync_from_device();
         if (!direct) memcpy(sc->after_mix.data() + (size_t)s.begin * DQ, st_o.data(), L * DQ * sizeof(bf16));
     }
@@ -833,6 +914,7 @@ struct d3_prefill_context{
     uint64_t tick = 0;
 
     npu_app_manager* gemm_app_manager = nullptr;
+    d3_launch ll;   //!< control-packet switches shared by the blocks (D3_SWITCH_DIR)
     std::unique_ptr<d3_attn_block> attn_block;
     std::unique_ptr<d3_linear_block> linear_block;
     std::unique_ptr<d3_mlp_block> mlp;
@@ -856,6 +938,7 @@ struct d3_prefill_context{
         attn_block = std::make_unique<d3_attn_block>(desc, seq_gen, gemm_app_manager, npu,
             utils::path_join(config.exec_path, "xclbins", config.model_name, "attn.xclbin"));
         mlp = std::make_unique<d3_mlp_block>(desc, seq_gen, gemm_app_manager);
+        linear_block->ll = attn_block->ll = &ll;
     }
 
     /// @brief after_mix holds either mixer's output
@@ -908,8 +991,12 @@ struct d3_prefill_context{
         s->x = d3_cpu::scratch_alloc<bf16>(npu, R * desc->D);
         s->gate = d3_cpu::scratch_alloc<bf16>(npu, R * desc->Linear_DV);
         s->after_mix = d3_cpu::scratch_alloc<bf16>(npu, R * mix_cols());
-        s->qkv = d3_cpu::scratch_alloc<bf16>(npu, R * desc->Linear_DQKV);
-        s->conv_qkv = buffer<bf16>(R * desc->Linear_DQKV);
+        // qkv: KS - 1 zero rows (conv state) ahead of the R projection rows; conv_qkv: the array's conv writes it
+        const size_t lead = (size_t)(desc->conv_kernel_size - 1) * desc->Linear_DQKV;
+        s->qkv = d3_cpu::scratch_alloc<bf16>(npu, R * desc->Linear_DQKV + lead);
+        std::fill(s->qkv.data(), s->qkv.data() + lead, bf16(0.0f));
+        s->qkv.sync_to_device();
+        s->conv_qkv = d3_cpu::scratch_alloc<bf16>(npu, R * desc->Linear_DQKV);
         s->alpha_beta = buffer<float>(R * desc->linear_num_v_heads * 2);
         s->q = d3_cpu::scratch_alloc<bf16>(npu, R * desc->DQ);
         s->k = d3_cpu::scratch_alloc<bf16>(npu, R * desc->DK);
