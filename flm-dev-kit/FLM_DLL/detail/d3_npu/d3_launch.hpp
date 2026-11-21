@@ -16,7 +16,7 @@
 ///        its own run, so the mm sequences are the ones d3 always used.
 ///
 ///        Contract: the array is mm's whenever d3 is not inside an attention or conv1d call; a call
-///        switches to attn (conv), runs, and switches back (to_attn / to_mm, to_conv / conv_to_mm).
+///        switches to attn (conv), runs, and switches back, all in one submission (window).
 ///        Needs the xclbins the switches were built with (the mm xclbin is the package's base);
 ///        nothing checks that, as for every dev-kit artifact.
 ///        On by default when the model's xclbin folder has d3.switches (and the mm xclbin is
@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iterator>
@@ -34,6 +35,15 @@
 #include <sstream>
 #include <string>
 #include <vector>
+
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <fcntl.h>
+#include <sys/file.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 #if !defined(FLM_USE_HRX)
 #include <xrt/xrt_bo.h>
@@ -46,11 +56,56 @@
 #include <aiebu/aiebu.h>
 #endif
 
+/// @brief the array to this process for a pass on the switches. Warm switches rely on the array staying as the last
+///        launch left it, and another process's context (a second FLM server on the same NPU) takes it at any command
+///        boundary: the device hangs for every client until the commands time out. So a pass takes a system-wide
+///        lock (flock on a file in the temp directory, a named mutex on Windows) from its first layer to its last;
+///        the next pass starts every window from cold_mm. A lock that cannot be made leaves the pass unlocked.
+class d3_array_lock {
+#if defined(_WIN32)
+    HANDLE h = nullptr;
+#else
+    int fd = -1;
+#endif
+public:
+    explicit d3_array_lock(bool on) {
+        if (!on) return;
+#if defined(_WIN32)
+        h = CreateMutexA(nullptr, FALSE, "Global\\flm_d3_array");
+        if (h && WaitForSingleObject(h, INFINITE) == WAIT_FAILED) { CloseHandle(h); h = nullptr; }
+#else
+        const char* tmp = std::getenv("TMPDIR");
+        const std::string path = std::string(tmp && tmp[0] ? tmp : "/tmp") + "/flm_d3_array.lock";
+        const mode_t old = umask(0);   // shared between users
+        fd = open(path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0666);
+        umask(old);
+        if (fd >= 0 && flock(fd, LOCK_EX) != 0) { close(fd); fd = -1; }
+#endif
+    }
+    ~d3_array_lock() {
+#if defined(_WIN32)
+        if (h) { ReleaseMutex(h); CloseHandle(h); }
+#else
+        if (fd >= 0) close(fd);   // closing drops the lock
+#endif
+    }
+    d3_array_lock(const d3_array_lock&) = delete;
+    d3_array_lock& operator=(const d3_array_lock&) = delete;
+};
+
 struct d3_launch {
     bool ready = false;
     bool has_conv = false;   //!< the mm <-> conv1d switches are loaded too
     bool tried = false;      //!< load() was attempted (the context does it once)
     std::string file;        //!< <xclbin folder>/d3.switches, set by the context when its mm xclbin is the one they were built with
+
+    /// @brief the switches are, or may still turn out to be, in use (load happens at the first pass)
+    bool possible() const {
+        if (tried) return ready;
+        const char* off = std::getenv("D3_NO_SWITCH");
+        const char* dir = std::getenv("D3_SWITCH_DIR");
+        return !(off && off[0] == '1') && (!file.empty() || (dir && dir[0]));
+    }
 
 #if !defined(FLM_USE_HRX)
     struct Sw {
@@ -61,7 +116,6 @@ struct d3_launch {
         int arg = 0;
     };
     std::map<std::string, Sw> sw;
-    bool cold_done = false;
     long long launches = 0;
 
     static std::vector<char> _read(const std::string& path) {
@@ -148,28 +202,35 @@ struct d3_launch {
         _finish(path);
     }
 
-    void run(const std::string& name) {
+    /// @brief one switch as a run, not started
+    xrt::run make_run(const std::string& name) {
         Sw& s = sw.at(name);
         xrt::run r(*s.kernel);
         r.set_arg(0, 3);
         r.set_arg(1, 0);
         r.set_arg(2, 0);
         r.set_arg(s.arg, s.pkt);
-        r.start();
-        r.wait();
-        launches++;
+        return r;
     }
 
-    /// @brief the array: mm's -> attn's. The first call also runs cold_mm, which sets the lanes
-    ///        control packets rely on.
-    void to_attn() { _cold(); run("mm_then_attn"); }
-    void to_mm() { run("attn_then_mm"); }
-    /// @brief the array: mm's -> conv1d's and back (has_conv)
-    void to_conv() { _cold(); run("mm_then_conv"); }
-    void conv_to_mm() { run("conv_then_mm"); }
-
-    void _cold() {
-        if (!cold_done) { run("cold_mm"); cold_done = true; }
+    /// @brief the array's turn as ONE submission: cold_mm, the switch to the guest, the guest's runs, the switch back.
+    ///        Warm switches rely on the array staying as the last launch left it; with the launches apart, another
+    ///        process's context can take the array between two of them (it comes back as the xclbin's own state,
+    ///        the next launch times out). A runlist goes to the device as one chain.
+    template <class Mgr>
+    void window(Mgr* mgr, const char* to, const char* back, std::vector<xrt::run>& guest) {
+        // cold_mm first, every time: the window then starts from mm's own state whatever ran on the array since
+        // the last one (it sets the lanes the control packets rely on)
+        {
+            xrt::runlist rl = mgr->create_runlist();
+            rl.add(make_run("cold_mm"));
+            rl.add(make_run(to));
+            for (xrt::run& g : guest) rl.add(g);
+            rl.add(make_run(back));
+            rl.execute();
+            rl.wait();
+        }
+        launches += 3;
     }
 #endif
 };

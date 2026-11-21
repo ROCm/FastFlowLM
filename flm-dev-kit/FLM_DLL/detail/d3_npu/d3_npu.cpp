@@ -598,11 +598,16 @@ d3_npu::~d3_npu() {
 
 void d3_npu::load_weights(Q4NX& q4nx) { this->_impl->load_weights(q4nx); }
 
+// A request owns the array from its vision tower to its last layer when the prefill runs switches (d3_array_lock).
 std::vector<buffer<bf16>> d3_npu::encode_batch(const std::vector<std::vector<int>>& ids, void* payload) {
+    d3_array_lock array(this->_impl->pctx->ll.possible());
     return this->_impl->encode_batch(ids, static_cast<const d3_image_payload*>(payload));
 }
 
-std::vector<buffer<bf16>> d3_npu::encode_state_once(const d3_state_request& req) { return this->_impl->encode_state_once(req); }
+std::vector<buffer<bf16>> d3_npu::encode_state_once(const d3_state_request& req) {
+    d3_array_lock array(this->_impl->pctx->ll.possible());
+    return this->_impl->encode_state_once(req);
+}
 
 extern "C" int d3_npu_abi_version() { return D3_NPU_ABI_VERSION; }
 extern "C" int d3_npu_abi_minor() { return D3_NPU_ABI_MINOR; }

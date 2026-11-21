@@ -439,9 +439,9 @@ struct d3_linear_block{
             const uint32_t woff = (uint32_t)(weights().ssm_conv1d.offset / sizeof(bf16));
             if (conv.select((int64_t)L | ((int64_t)woff << 32))) seq_gen->gen_conv1d(conv.seq(), L, DQKV, desc->Linear_DQ, woff);
             d3_cpu::scratch_push(conv_qkv);
-            ll->to_conv();
-            conv(conv_qkv, qkv, ssm_weights);
-            ll->conv_to_mm();
+            std::vector<xrt::run> guest;
+            guest.push_back(conv.create_run(conv_qkv, qkv, ssm_weights));
+            ll->window(gemm_mgr, "mm_then_conv", "conv_then_mm", guest);
             conv_qkv.sync_from_device();
         } else
 #endif
@@ -653,12 +653,20 @@ struct d3_attn_block{
         // the host wrote after_mix last (the previous layer's mixer): flush it before the array
         // writes it, or its dirty lines land over the array's output at the sync below
         d3_cpu::scratch_push(ob);
+        // On the switches the runs go into one submission with the switches to and from attention's app
+        // (d3_launch::window); else each runs on its own.
+        bool sw = false;
 #if !defined(FLM_USE_HRX)
-        if (ll && ll->ready) ll->to_attn();
+        sw = ll && ll->ready;
 #endif
+        std::vector<decltype(attn.create_run(ob, qb, st_kv))> guest;   // xrt::run (hrx::run on HRX, never filled there)
+        auto go = [&](d3_mm& m, buffer<bf16>& kv) {
+            if (sw) guest.push_back(m.create_run(ob, qb, kv));
+            else m(ob, qb, kv);
+        };
         if (!S) {
             if (attn.select((int64_t)L)) seq_gen->gen_bidirectional_attention(attn.seq(), (uint32_t)L, 0, 0, kv_half);
-            attn(ob, qb, st_kv);
+            go(attn, st_kv);
         } else {
             // run A: the state over itself, K / V of its own (rows past S zero, as for a prompt of S tokens)
             const size_t Sc = up(S);
@@ -671,14 +679,14 @@ struct d3_attn_block{
             memset(va + S * DK, 0, (Sc - S) * DK * sizeof(bf16));
             st_kv_state.sync_to_device();
             if (attn_state.select((int64_t)S)) seq_gen->gen_bidirectional_attention(attn_state.seq(), (uint32_t)S, 0, 0, Sc * DK);
-            attn_state(ob, qb, st_kv_state);
+            go(attn_state, st_kv_state);
             // run B: the question rows over every key
             if (attn.select(((int64_t)S << 32) | (int64_t)L))
                 seq_gen->gen_bidirectional_attention(attn.seq(), (uint32_t)L, S * DQ, S * DQ, kv_half, (uint32_t)(L - S));
-            attn(ob, qb, st_kv);
+            go(attn, st_kv);
         }
 #if !defined(FLM_USE_HRX)
-        if (ll && ll->ready) ll->to_mm();
+        if (sw) ll->window(gemm_mgr, "mm_then_attn", "attn_then_mm", guest);
 #endif
         ob.sync_from_device();
         if (!direct) memcpy(sc->after_mix.data() + (size_t)s.begin * DQ, st_o.data(), L * DQ * sizeof(bf16));

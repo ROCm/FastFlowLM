@@ -1,3 +1,8 @@
+<!--
+  Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+  Portions of this file consist of AI-generated content.
+-->
+
 # d3_switches
 
 The control-packet switches of the d3 engine (`FLM_DLL/detail/d3_npu`, `d3_launch.hpp`).
@@ -20,5 +25,12 @@ it when it is there and the mm kernel is `mm_rtm2_glu.xclbin` (the switches load
 `cold_mm`, so the context's xclbin only has to have the same partition): attention from 512 tokens, conv1d from 1,536
 rows (single non-dependent segment); `D3_NO_SWITCH=1` turns it off, `D3_ATTN_ARRAY_MIN` and `D3_CONV_ARRAY_MIN` move the
 thresholds. Without the file nothing changes (host attention below 1,536 tokens, host conv1d).
+
+Sharing the NPU: warm switches rely on the array staying as the last launch left it, and a second process's hardware
+context takes the array at any command boundary (measured: two FLM servers on one NPU hung the device for every client
+until the commands timed out, over and over). So each array turn is one submission (`cold_mm`, switch, guest kernel,
+switch back as one `xrt::runlist`, `d3_launch::window`), and a request holds a system-wide lock (`d3_array_lock`: flock
+on `$TMPDIR/flm_d3_array.lock`, a named mutex on Windows) from its vision tower to its last layer. Another FLM process
+that does not take this lock (another model's engine) can still take the array; run d3 with `D3_NO_SWITCH=1` next to it.
 
 Not covered: HRX (the engine falls back), prefix_bidir and multi-segment prompts' conv1d (host).
