@@ -98,9 +98,13 @@ Checks, each failure printed as "devkit_check: error: ..." (exit 1):
                 path in this repository, pull_request events; no
                 ${{ github.event.* }} expression appears in a run: script.
                 devkit-bench.yml keeps contents: read and actions: read
-                and grants no write; build-and-test.yml's job calling it
-                grants exactly contents: read and actions: read and passes
-                no secrets. Skipped when the files are absent
+                and grants no write; build-and-test.yml's jobs calling it
+                (devkit-bench, and devkit-bench-nightly, whose condition
+                starts with github.event_name == 'schedule' while
+                devkit-bench's starts with github.event_name !=
+                'schedule', so a run calls it once) grant exactly contents:
+                read and actions: read and pass no secrets. Skipped when the
+                files are absent
   swap wiring   the names devkit_swap.py reads another Build and Test run
                 by match the CI that makes them: build-and-test.yml has a
                 devkit-stage job (STAGE_JOB) that runs devkit_stage.py and
@@ -941,19 +945,34 @@ def _top_block(text: str, key: str) -> list[str]:
     return out
 
 
-def _caller_jobs(text: str, workflow: str) -> list[list[str]]:
-    """The jobs (their lines) of a workflow that call ./<workflow>."""
+def _caller_jobs(text: str, workflow: str, with_ids: bool = False):
+    """The jobs (their lines) of a workflow that call ./<workflow>: a list,
+    or with_ids a dict job id -> lines."""
     jobs, current = [], None
     for line in text.splitlines():
-        if re.match(r"^  [A-Za-z0-9_-]+:\s*(#.*)?$", line):
+        m = re.match(r"^  ([A-Za-z0-9_-]+):\s*(#.*)?$", line)
+        if m:
             current = []
-            jobs.append(current)
+            jobs.append((m.group(1), current))
         elif current is not None and line and not line[0].isspace() and not line.startswith("#"):
             current = None
         elif current is not None:
             current.append(line)
-    return [j for j in jobs if any(re.match(rf"^    uses:\s*\./{re.escape(workflow)}\s*(#.*)?$", line)
-                                   for line in j)]
+    found = [(k, j) for k, j in jobs if any(re.match(rf"^    uses:\s*\./{re.escape(workflow)}\s*(#.*)?$", line)
+                                            for line in j)]
+    return dict(found) if with_ids else [j for _, j in found]
+
+
+def _job_condition(job: list[str]) -> str:
+    """A job's if: expression (one line, or the first line of a >- block)."""
+    for k, line in enumerate(job):
+        m = re.match(r"^    if:\s*(.*)$", line)
+        if m:
+            value = m.group(1).strip()
+            if value in (">-", ">", "|", "|-") and k + 1 < len(job):
+                value = job[k + 1].strip()
+            return value
+    return ""
 
 
 def _run_scripts(text: str) -> list[str]:
@@ -1023,11 +1042,21 @@ def check_bench_workflows(repo: Path, errors: list) -> int:
                       f"got {bench_perms}")
     if re.search(r"^[ \t]+[a-z-]+: write[ \t]*$", bench, re.M):
         errors.append(f"{BENCH_WORKFLOW}: no job may be granted a write permission")
-    callers = _caller_jobs(build, BENCH_WORKFLOW)
-    if len(callers) != 1:
-        errors.append(f"{BUILD_WORKFLOW}: exactly one job must call ./{BENCH_WORKFLOW} (found {len(callers)}): "
-                      f"the comment workflow follows {BUILD_WORKFLOW}'s runs")
-    for job in callers:
+    callers = _caller_jobs(build, BENCH_WORKFLOW, with_ids=True)
+    ids = sorted(callers)
+    if ids not in (["devkit-bench"], ["devkit-bench", "devkit-bench-nightly"]):
+        errors.append(f"{BUILD_WORKFLOW}: the jobs calling ./{BENCH_WORKFLOW} must be devkit-bench and optionally "
+                      f"devkit-bench-nightly (found {', '.join(ids) or 'none'}): the comment workflow follows "
+                      f"{BUILD_WORKFLOW}'s runs")
+    elif len(ids) == 2:
+        # One call per run: the two conditions exclude each other.
+        for job_id, needle in (("devkit-bench", "${{ github.event_name != 'schedule' && "),
+                               ("devkit-bench-nightly", "${{ github.event_name == 'schedule' && ")):
+            cond = _job_condition(callers[job_id])
+            if not cond.startswith(needle.strip()):
+                errors.append(f"{BUILD_WORKFLOW}: {job_id}'s condition must start with {needle.strip()}, so a run "
+                              f"calls ./{BENCH_WORKFLOW} once")
+    for job in callers.values():
         if any(re.match(r"^    secrets:", line) for line in job):
             errors.append(f"{BUILD_WORKFLOW}: the job calling {BENCH_WORKFLOW} must pass no secrets")
         perms, inside = [], False

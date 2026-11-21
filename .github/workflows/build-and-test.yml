@@ -1658,27 +1658,23 @@ jobs:
   # alone) and that staged something, of its own portable packages, which
   # hold the staged files: the pull request's numbers only, no A/B against
   # a base package and no nightly-baseline comparison (a comparison is to be
-  # designed later); nightly, of the dev-kit builds over the nightly's
-  # packages, only when that source changed since the commit of the latest
-  # nightly baseline, uploading the next baseline. Not on pushes, dispatches
-  # or a release. Gated as the NPU test jobs (npu-gate, npu-approve:
-  # devkit-bench implies devkit-stage, so npu-approve already asks for it).
-  # Waits for the portable test jobs, so the benches do not take the sweep
-  # runners from them. The resolve job inside decides per runtime from the
-  # build results passed here; a failed build leaves its runtime out.
-  # summary's Dev-kit checks fails a pull request only when a model failed
-  # acc_common's hard gate (the bench's hard-gate output); any other bench
-  # failure (perf giving no result, a pull, a timeout, the GitHub API) only
-  # warns there. summary, the required
-  # check, waits for the benches, so a bench pull request's check takes as
-  # long as its benches (three at a time, up to 150 minutes each).
-  # Nightly, the benches run beside the full-tier product tests on the same
-  # sweep runners (each job has its own runner, so the numbers are not
-  # affected; the night's queue is longer). devkit-bench-comment.yml posts
-  # the results on the pull request. The dev-kit full refresh benches every
-  # benchable model on the four runtimes (mode refresh): this run's numbers,
-  # no A/B and no baseline comparison.
-  # actions: read: the nightly baseline is another run's artifact.
+  # designed later). The dev-kit full refresh benches every benchable model
+  # on the four runtimes (mode refresh): this run's numbers, no A/B and no
+  # baseline comparison. Nightly, devkit-bench-nightly below. Not on
+  # pushes, other dispatches or a release. Gated as the NPU test jobs
+  # (npu-gate, npu-approve: devkit-bench implies devkit-stage, so
+  # npu-approve already asks for it). Waits for the portable test jobs, so
+  # the benches do not take the sweep runners from them. The resolve job
+  # inside decides per runtime from the build results passed here; a failed
+  # build leaves its runtime out. summary's Dev-kit checks fails a pull
+  # request only when a model failed acc_common's hard gate (the bench's
+  # hard-gate output); any other bench failure (perf giving no result, a
+  # pull, a timeout, the GitHub API) only warns there, and devkit_swap.py
+  # fetch does not count it either. summary, the required check, waits for
+  # the benches, so a bench pull request's check takes as long as its
+  # benches (three at a time, up to 150 minutes each).
+  # devkit-bench-comment.yml posts the results on the pull request.
+  # actions: read: devkit-bench.yml reads artifacts of this run.
   devkit-bench:
     needs:
       - changes
@@ -1686,8 +1682,6 @@ jobs:
       - npu-approve
       - devkit-engines
       - devkit-xclbins
-      - devkit-engines-main
-      - devkit-xclbins-main
       - build-lin-xrt-portable
       - build-lin-hrx-portable
       - build-win-xrt
@@ -1698,16 +1692,12 @@ jobs:
       - test-win-xrt
       - test-win-hrx
     if: >-
-      ${{ !cancelled() && !inputs.release
-      && ((github.event_name == 'schedule'
-           || (github.event_name == 'push'
-               && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')))
-           || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+      ${{ github.event_name != 'schedule' && !cancelled() && !inputs.release
+      && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
           || (needs.npu-gate.result == 'success'
               && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
       && needs.changes.result == 'success'
-      && (github.event_name == 'schedule'
-          || needs.changes.outputs.devkit-full-refresh == 'true'
+      && (needs.changes.outputs.devkit-full-refresh == 'true'
           || (github.event_name == 'pull_request' && needs.changes.outputs.devkit-bench == 'true'
               && needs.devkit-stage.outputs.staged == 'true')) }}
     permissions:
@@ -1715,27 +1705,56 @@ jobs:
       actions: read
     uses: ./.github/workflows/devkit-bench.yml
     with:
-      mode: >-
-        ${{ github.event_name == 'schedule' && 'nightly'
-        || needs.changes.outputs.devkit-full-refresh == 'true' && 'refresh'
-        || 'pr' }}
+      mode: ${{ needs.changes.outputs.devkit-full-refresh == 'true' && 'refresh' || 'pr' }}
       head-sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
       builds: >-
         lin-xrt=${{ needs.build-lin-xrt-portable.result }},lin-hrx=${{ needs.build-lin-hrx-portable.result }},win-xrt=${{ needs.build-win-xrt.result }},win-hrx=${{ needs.build-win-hrx.result }}
-      # Nightly: the -main dev-kit builds, over every engine and the
-      # assigned set; otherwise the ones staged into the packages.
-      engines: ${{ github.event_name == 'schedule' && needs.devkit-engines-main.result || needs.devkit-engines.result }}
+      # The dev-kit builds staged into the packages.
+      engines: ${{ needs.devkit-engines.result }}
       families: ${{ github.event_name == 'pull_request' && needs.changes.outputs.devkit-families || '' }}
-      xclbin-models: >-
-        ${{ (github.event_name == 'schedule' && needs.devkit-xclbins-main.outputs.touched-models
-        || needs.devkit-xclbins.outputs.touched-models) || '[]' }}
+      xclbin-models: ${{ needs.devkit-xclbins.outputs.touched-models || '[]' }}
       bench-models: ${{ github.event_name == 'pull_request' && needs.devkit-xclbins.outputs.bench-models || '' }}
       xclbins: >-
-        ${{ github.event_name == 'schedule'
-        && (needs.devkit-xclbins-main.result == 'success' && needs.devkit-xclbins-main.outputs.touched-models != ''
-            && needs.devkit-xclbins-main.outputs.touched-models != '[]' && 'devkit-xclbins' || '')
-        || (needs.devkit-xclbins.result == 'success' && needs.devkit-xclbins.outputs.touched-models != ''
-            && needs.devkit-xclbins.outputs.touched-models != '[]' && 'devkit-xclbins' || '') }}
+        ${{ needs.devkit-xclbins.result == 'success' && needs.devkit-xclbins.outputs.touched-models != ''
+        && needs.devkit-xclbins.outputs.touched-models != '[]' && 'devkit-xclbins' || '' }}
+
+  # The nightly benches (devkit-bench.yml mode nightly): of the -main dev-kit
+  # builds, over every engine and the assigned set, over the nightly's
+  # packages, only when that source changed since the commit of the latest
+  # nightly baseline, uploading the next baseline. A job of its own so it
+  # does not wait for the product test jobs (needs cannot depend on the
+  # event): it runs beside the full-tier product tests on the same sweep
+  # runners (each job has its own runner, so the numbers are not affected;
+  # the night's queue is longer). Mutually exclusive with devkit-bench, so
+  # one run calls devkit-bench.yml at most once (devkit_check.py's bench
+  # comment rule).
+  # actions: read: the nightly baseline is another run's artifact.
+  devkit-bench-nightly:
+    needs:
+      - changes
+      - devkit-engines-main
+      - devkit-xclbins-main
+      - build-lin-xrt-portable
+      - build-lin-hrx-portable
+      - build-win-xrt
+      - build-win-hrx
+    if: ${{ github.event_name == 'schedule' && !cancelled() && !inputs.release && needs.changes.result == 'success' }}
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/devkit-bench.yml
+    with:
+      mode: nightly
+      head-sha: ${{ github.sha }}
+      builds: >-
+        lin-xrt=${{ needs.build-lin-xrt-portable.result }},lin-hrx=${{ needs.build-lin-hrx-portable.result }},win-xrt=${{ needs.build-win-xrt.result }},win-hrx=${{ needs.build-win-hrx.result }}
+      engines: ${{ needs.devkit-engines-main.result }}
+      families: ''
+      xclbin-models: ${{ needs.devkit-xclbins-main.outputs.touched-models || '[]' }}
+      bench-models: ''
+      xclbins: >-
+        ${{ needs.devkit-xclbins-main.result == 'success' && needs.devkit-xclbins-main.outputs.touched-models != ''
+        && needs.devkit-xclbins-main.outputs.touched-models != '[]' && 'devkit-xclbins' || '' }}
 
   # ── Summary ──────────────────────────────────────────────────────────────
 
@@ -1778,6 +1797,7 @@ jobs:
       - install-win-msi
       - devkit-stage
       - devkit-bench
+      - devkit-bench-nightly
     if: always()
     runs-on: ubuntu-latest
     outputs:

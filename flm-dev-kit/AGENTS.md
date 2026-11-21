@@ -142,11 +142,12 @@ accuracy. Do not invent a `make test` or claim tests pass.
   whose kernels were rebuilt and the new models, which are required). A change to the dev-kit CI
   alone builds the dev kit but stages nothing. The product builds of a pull request that stages
   wait for the dev-kit builds.
-- `devkit-bench` (`../.github/workflows/devkit-bench.yml`, called by Build and Test after its tests,
+- `devkit-bench` (`../.github/workflows/devkit-bench.yml`, called by Build and Test after its tests on a pull request,
   in the same run): perf (`flm bench`) and GSM8K accuracy, only when engine or kernel source changed:
   on pull requests, of their own staged packages, reporting the pull request's numbers only (no
   comparison with a base package or the nightly baseline for now; a comparison is to be designed
-  later), and nightly when the source changed since the last baseline. Results go to one pull request
+  later), and nightly (job `devkit-bench-nightly`, which does not wait for the tests) when the
+  source changed since the last baseline. Results go to one pull request
   comment; any bench failure other than the accuracy hard gate (perf, a pull, a timeout,
   infrastructure) warns; only a model failing that gate (acc_common: no predictions, or too many
   unanswered) fails the required check, which therefore waits for the benches. A manual dispatch of

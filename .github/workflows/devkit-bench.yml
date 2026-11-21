@@ -6,7 +6,7 @@ name: Dev-kit Bench
 # Perf (flm bench) and accuracy (GSM8K; DocVQA when enabled) benches of the
 # dev kit's engines (flm-dev-kit/FLM_DLL) and kernels (flm-dev-kit/FLM_Xclbin)
 # on the NPU runners (scripts in .github/script/devkit-bench, actions devkit-bench-perf and
-# devkit-bench-acc). Build and Test (build-and-test.yml, job devkit-bench)
+# devkit-bench-acc). Build and Test (build-and-test.yml, job devkit-bench; nightly, devkit-bench-nightly)
 # calls this after its builds, in the same run, so the run's concurrency
 # group covers the benches and a new push cancels them: on a pull request
 # whose dev-kit engine or kernel source changed (code or build inputs; not

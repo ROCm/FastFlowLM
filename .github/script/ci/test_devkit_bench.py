@@ -750,7 +750,10 @@ class Workflows(unittest.TestCase):
         bench, comment, build = (workflow("devkit-bench.yml"), workflow("devkit-bench-comment.yml"),
                                  workflow("build-and-test.yml"))
         caller = "    uses: ./.github/workflows/devkit-bench.yml\n"
-        self.assertEqual(build.count(caller), 1)
+        # devkit-bench (pull requests, the full refresh) and devkit-bench-nightly.
+        self.assertEqual(build.count(caller), 2)
+        nightly_if = "    if: ${{ github.event_name == 'schedule' && "
+        self.assertEqual(build.count(nightly_if), 1)
         cases = {
             "renamed": (bench, comment, build.replace("name: Build and Test\n", "name: Build and Tests\n", 1)),
             "write": (bench, comment.replace("  actions: read\n", "  actions: read\n  contents: write\n", 1), build),
@@ -765,7 +768,9 @@ class Workflows(unittest.TestCase):
                             comment, build),
             "bench inline input": (bench.replace('--engines "${ENGINES}"', '--engines "${{ inputs.engines }}"', 1),
                                    comment, build),
-            "not called": (bench, comment, build.replace(caller, "    uses: ./.github/workflows/other.yml\n", 1)),
+            "not called": (bench, comment, build.replace(caller, "    uses: ./.github/workflows/other.yml\n")),
+            "nightly on every event": (bench, comment, build.replace(nightly_if, "    if: ${{ ", 1)),
+            "renamed caller": (bench, comment, build.replace("  devkit-bench-nightly:\n", "  devkit-bench-night:\n", 1)),
             "caller secrets": (bench, comment, build.replace(caller, caller + "    secrets: inherit\n", 1)),
             "caller perms": (bench, comment, build.replace(
                 "      actions: read\n" + caller, "      actions: read\n      pull-requests: write\n" + caller, 1)),
@@ -786,6 +791,12 @@ class Workflows(unittest.TestCase):
         # The summary no longer hands a plan to another run.
         self.assertNotIn("devkit-bench-plan", build)
         self.assertIn("      - devkit-bench\n", build)
+        # Nightly, the bench does not wait for the full-tier product tests.
+        jobs = __import__("devkit_check")._jobs(build)
+        nightly = "\n".join(jobs["devkit-bench-nightly"])
+        self.assertNotIn("- test-", nightly)
+        self.assertIn("mode: nightly", nightly)
+        self.assertIn("      - test-win-hrx\n", "\n".join(jobs["devkit-bench"]) + "\n")
         self.assertNotIn("devkit-bench-plan", workflow("devkit-bench.yml"))
         # Called and dispatched only: Build and Test's own triggers run it.
         on = "\n".join(__import__("devkit_check")._top_block(workflow("devkit-bench.yml"), "on"))
