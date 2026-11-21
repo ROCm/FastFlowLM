@@ -15,7 +15,7 @@ private:
     std::string current_model = "Qwen2";
     /// \brief Whether the request's tools are rendered into the prompt
     /// \note Only for a package whose catalog entry says its template renders them
-    ///       (`tools_in_prompt`); every other Qwen2 package keeps a prompt without them.
+    ///       (`tools`); every other Qwen2 package keeps a prompt without them.
     ///       Not tools_enabled(): that stays true for all of them, so a forced call
     ///       is still answered, by the grammar alone, where the prompt has no tools.
     bool tools_in_prompt = false;

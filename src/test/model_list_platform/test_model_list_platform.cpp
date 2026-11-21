@@ -8,6 +8,7 @@
 #include "../phi4_core/test_support.hpp"
 
 #include <fstream>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
@@ -949,6 +950,155 @@ void test_platform_helpers() {
     TEST_REQUIRE(utils::get_device() == utils::get_device());
 }
 
+bool has_label(const nlohmann::json& entry, const char* label) {
+    if (!entry.contains("label")) return false;
+    for (const auto& item : entry.at("label")) {
+        if (item == label) return true;
+    }
+    return false;
+}
+
+bool lists(const nlohmann::json& array, const char* word) {
+    for (const auto& item : array) {
+        if (item == word) return true;
+    }
+    return false;
+}
+
+/// \brief every shipped entry yields a capability record, and each capability
+///        agrees with the one catalog field it is read from
+void test_every_shipped_entry_has_a_capability_record() {
+    const auto catalog = read_json(kCatalogPath);
+    int chat_models = 0;
+    int tool_models = 0;
+
+    for (const auto& [family, sizes] : catalog.at("models").items()) {
+        for (const auto& [size, entry] : sizes.items()) {
+            const std::string tag = family + ":" + size;
+            const auto record = model_list::capabilities_of(entry);
+            const auto words = record.words();
+            const std::string kind = entry.at("details").at("family").get<std::string>();
+
+            // the label on the model card says what the field says, so it is
+            // never a second place to decide it
+            if (entry.value("tools", false) != has_label(entry, "tool-calling")) {
+                throw std::runtime_error(tag + ": \"tools\" and the tool-calling label disagree");
+            }
+            if (entry.contains("tools_in_prompt")) {
+                throw std::runtime_error(tag + ": tools_in_prompt is retired; use \"tools\"");
+            }
+
+            if (kind == "embed-gemma") {
+                TEST_REQUIRE(record.embedding && !record.completion);
+                TEST_REQUIRE(words == std::vector<std::string>{"embedding"});
+                continue;
+            }
+            if (kind == "whisper-v3" || kind == "r2t2") {
+                TEST_REQUIRE(record.audio && !record.completion && !record.tools);
+                continue;
+            }
+            if (kind == "d3") {
+                TEST_REQUIRE(words.empty());
+                continue;
+            }
+
+            ++chat_models;
+            if (!record.completion || words.empty() || words.front() != "completion") {
+                throw std::runtime_error(tag + ": a chat model must list completion first");
+            }
+            if (record.vision != entry.value("vlm", false)) {
+                throw std::runtime_error(tag + ": vision is not the vlm field");
+            }
+            if (record.tools != entry.value("tools", false)) {
+                throw std::runtime_error(tag + ": tools is not the tools field");
+            }
+            if (record.audio != entry.value("asr", false)) {
+                throw std::runtime_error(tag + ": audio is not the asr field");
+            }
+            const auto& details = entry.at("details");
+            if (record.thinking !=
+                (details.value("think", false) || details.value("think_toggleable", false))) {
+                throw std::runtime_error(tag + ": thinking is not details.think");
+            }
+            if (record.context_length != entry.at("default_context_length").get<long long>()) {
+                throw std::runtime_error(tag + ": context length is not the entry's default");
+            }
+            if (record.tools) ++tool_models;
+        }
+    }
+    TEST_REQUIRE(chat_models > 60);
+    TEST_REQUIRE(tool_models >= 35);
+
+    // --ctx-len replaces the entry's default for a chat model
+    const auto& entry = catalog.at("models").at("llama3.2").at("1b");
+    TEST_REQUIRE(model_list::capabilities_of(entry, 8192).context_length == 8192);
+    // a field of the wrong type is not a capability
+    auto odd = entry;
+    odd["tools"] = "yes";
+    odd["vlm"] = 1;
+    TEST_REQUIRE(!model_list::capabilities_of(odd).tools);
+    TEST_REQUIRE(!model_list::capabilities_of(odd).vision);
+    // an extension's embedding model is one by its model_kind
+    auto embedding = entry;
+    embedding["model_kind"] = "embedding";
+    TEST_REQUIRE(model_list::capabilities_of(embedding).words() ==
+                 std::vector<std::string>{"embedding"});
+}
+
+/// \brief /v1/models renders the record in the names clients read, and keeps
+///        the OpenAI fields it always had
+void test_the_openai_listing_reports_capabilities() {
+    auto models = open_stock();
+    const auto listing = models.get_all_models_openai();
+    std::map<std::string, nlohmann::json> by_id;
+    for (const auto& entry : listing.at("data")) {
+        by_id[entry.at("id").get<std::string>()] = entry;
+        TEST_REQUIRE(entry.at("object") == "model");
+        TEST_REQUIRE(entry.at("owned_by") == "FastFlowLM");
+        TEST_REQUIRE(entry.at("created").is_number_integer());
+        TEST_REQUIRE(entry.at("capabilities").is_array());
+        TEST_REQUIRE(entry.at("architecture").at("input_modalities").is_array());
+        TEST_REQUIRE(entry.at("architecture").at("output_modalities").is_array());
+        TEST_REQUIRE(entry.at("supported_parameters").is_array());
+        TEST_REQUIRE(!entry.contains("api_capabilities"));
+        if (lists(entry.at("capabilities"), "completion")) {
+            TEST_REQUIRE(entry.at("context_length").get<long long>() > 0);
+        }
+        // one rendering of one record: the two vocabularies cannot disagree
+        TEST_REQUIRE(lists(entry.at("capabilities"), "vision") ==
+                     lists(entry.at("architecture").at("input_modalities"), "image"));
+        TEST_REQUIRE(lists(entry.at("capabilities"), "tools") ==
+                     lists(entry.at("supported_parameters"), "tools"));
+        TEST_REQUIRE(lists(entry.at("capabilities"), "tools") ==
+                     lists(entry.at("supported_parameters"), "tool_choice"));
+        TEST_REQUIRE(lists(entry.at("capabilities"), "thinking") ==
+                     lists(entry.at("supported_parameters"), "reasoning"));
+    }
+
+    const auto& vision = by_id.at("qwen3.5:4b");
+    TEST_REQUIRE(lists(vision.at("capabilities"), "tools"));
+    TEST_REQUIRE(lists(vision.at("capabilities"), "vision"));
+    TEST_REQUIRE(lists(vision.at("capabilities"), "thinking"));
+    TEST_REQUIRE(vision.at("capabilities").front() == "completion");
+    TEST_REQUIRE(vision.at("context_length") == 32768);
+    TEST_REQUIRE(vision.at("architecture").at("output_modalities") ==
+                 nlohmann::json::array({"text"}));
+
+    const auto& text = by_id.at("llama3.2:1b");
+    TEST_REQUIRE(text.at("capabilities") == nlohmann::json::array({"completion"}));
+    TEST_REQUIRE(text.at("architecture").at("input_modalities") ==
+                 nlohmann::json::array({"text"}));
+    TEST_REQUIRE(text.at("supported_parameters").empty());
+
+    // the context the server was started with is the one it reports
+    const auto resized = models.get_all_models_openai(8192);
+    for (const auto& entry : resized.at("data")) {
+        if (lists(entry.at("capabilities"), "completion")) {
+            TEST_REQUIRE(entry.at("context_length") == 8192);
+        }
+    }
+}
+
 void test_shipped_catalog_is_well_formed() {
     const auto catalog = read_json(kCatalogPath);
     bool saw_core = false;
@@ -1063,6 +1213,10 @@ int main() {
     RunTest(test_platform_helpers, "platform helpers");
     RunTest(test_shipped_catalog_is_well_formed,
             "shipped catalog is well formed");
+    RunTest(test_every_shipped_entry_has_a_capability_record,
+            "every shipped entry has a capability record");
+    RunTest(test_the_openai_listing_reports_capabilities,
+            "the OpenAI listing reports capabilities");
     std::cout << "All model_list platform tests passed\n";
     return 0;
 }
