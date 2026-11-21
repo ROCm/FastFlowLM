@@ -760,9 +760,20 @@ buffer<bf16> AutoModel::_chunked_insert(chat_meta_info_t& meta_info, std::vector
 
 std::string AutoModel::_render_chat_template(minja::chat_template_inputs& inputs, bool continue_final_message,
                                              const minja::chat_template_options& options) {
+    // A template that rejects the messages (raise_exception, e.g. roles that must alternate)
+    // throws std::runtime_error. The request can never succeed, so it is a 400, not a 500 that
+    // clients retry and that clears the engine's context.
+    const auto apply = [&](const minja::chat_template_inputs& chat) {
+        try {
+            return this->chat_tmpl->apply(chat, options);
+        } catch (const std::runtime_error& e) {
+            throw ModelRequestError(400, false, std::string("the chat template rejected the messages: ") + e.what(),
+                                    "invalid_request_error");
+        }
+    };
     if (!continue_final_message) {
         inputs.add_generation_prompt = true;
-        return this->chat_tmpl->apply(inputs, options);
+        return apply(inputs);
     }
     if (inputs.messages.empty() || inputs.messages.back().value("role", "") != "assistant") {
         throw ModelRequestError(400, false, "continue_final_message requires the last message to have role \"assistant\"",
@@ -772,7 +783,7 @@ std::string AutoModel::_render_chat_template(minja::chat_template_inputs& inputs
         minja::chat_template_inputs chat = inputs;
         chat.messages = messages;
         chat.add_generation_prompt = add_generation_prompt;
-        return this->chat_tmpl->apply(chat, options);
+        return apply(chat);
     };
     try {
         chat_continued continued = chat_continue_prompt(render, inputs.messages);

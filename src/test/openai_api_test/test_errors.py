@@ -5,7 +5,9 @@ Each malformed tool_choice / response_format is rejected with a 400, and a
 model name the catalog does not have with a 404, before any generation
 starts, with an OpenAI style error body
 (``{"error": {"message", "type": "invalid_request_error", "code": 400}}``),
-for streaming requests too. A good request afterwards must still work:
+for streaming requests too. A conversation the chat template rejects (two user
+messages in a row on a template that needs alternating roles) gets a 400 too.
+A good request afterwards must still work:
 a rejection must not leave the server in a bad state.
 
 A prompt that cannot be prefilled is refused too, on /v1/chat/completions and
@@ -227,6 +229,22 @@ def prefill_fault(api: Api) -> None:
     # the failed prefill must not leave anything behind for the next request
     flm_api.check_message_contract(api.ok(api.body(user("Say hi."), max_tokens=16)))
     flm_api.check_stream_contract(api.ok_stream(api.body(user("Say hi."), max_tokens=16)), include_usage=False)
+
+
+@case
+def consecutive_messages(api: Api) -> None:
+    """Leading system messages are joined; repeated user turns are served, or refused with a 400."""
+    system = [{"role": "system", "content": "You are terse."}, {"role": "system", "content": "Answer in English."}]
+    flm_api.check_message_contract(api.ok(api.body(system + user("Say hi."), max_tokens=16)))
+    # a template that needs alternating roles rejects this; that is the request's fault, not a 500
+    resp = api.post(api.body(user("Hi.") + user("What is 2+2?"), max_tokens=16))
+    if resp.status == 200:
+        flm_api.check_message_contract(resp.body["choices"][0])
+        return
+    err = resp.body.get("error")
+    expect(resp.status == 400, f"expected HTTP 200 or 400, got {resp.status}: {resp.body}")
+    expect(isinstance(err, dict) and err.get("type") == "invalid_request_error",
+           f"expected an invalid_request_error, got {resp.body}")
 
 
 @case
