@@ -100,6 +100,25 @@
 // another context took away hangs the kernel, so check_order = false and
 // SharedPolicy::allow are refused (std::invalid_argument).
 //
+// Resident lanes (SessionOptions::resident_lanes; off by default, opt-in).
+// A warm kernel built with CtrlPktOptions::rewrite_lanes writes every register
+// of its lanes again, in case another context's xclbin took them away. When a
+// warm launch runs as warm, the guard saw no other context and the array state
+// is known: every kernel since the last cold one was ours, and each left its
+// app's routes with the lanes (ctrlpkt_lane.hpp, `final`). Then the Session
+// runs the kernel's twin built without rewrite_lanes ("resident_<name>"):
+// vadd_vmul_bf16 8 x 4, ELF flow, program-only switch 25.6 -> 10.7 us, full
+// switch 73 -> 65 us. Otherwise, as before, the cold kernel; and not before
+// `resident_quiet` (100 ms) without another context, after open and after any
+// change: a Session that sees ours closes and opens its context, which no
+// query sees while it happens. What no guard can see is a context that starts
+// inside one of our runlists. Measured on Linux (a session.exe looping, a
+// short one every 2 s): 2 of 5 newcomers hung the twin, and the driver's
+// recovery failed the runlists of every context for ~60 s (status failed, no
+// wrong data). With rewrite_lanes the same moment costs a status
+// other_context_ran and a reopen. Hence off by default; on Windows each such
+// hang is also an NPU reset.
+//
 //===----------------------------------------------------------------------===//
 
 #pragma once
@@ -163,6 +182,15 @@ struct SessionOptions {
 #else
   size_t max_failures = 0;
 #endif
+  /// Transport::ctrlpkt with rewrite_lanes: a warm launch that runs as warm
+  /// runs its twin without rewrite_lanes (the lanes are still in the array).
+  /// Off by default: another process that starts on the NPU during such a
+  /// runlist hangs it, and the driver's recovery stalls every context (~60 s
+  /// on Linux). For a process that has the NPU to itself.
+  bool resident_lanes = false;
+  /// Resident twins only once the guard has seen no other context for this long
+  /// (also after open and reopen).
+  std::chrono::milliseconds resident_quiet{100};
 };
 
 /// One launch: a kernel of the list (its name) and the sequence's buffers.
@@ -182,6 +210,7 @@ struct RunReport {
   Status status = Status::ok;
   std::vector<std::string> ran; ///< the kernel each launch ran
   size_t substituted = 0;       ///< warm or rerun launches that ran as the cold kernel
+  size_t resident = 0;          ///< warm launches that ran as their resident-lanes twin
   size_t done = 0;              ///< launches whose runlist finished
   size_t runlists = 0;
   bool other_context_seen = false; ///< another context existed or ran
@@ -209,6 +238,7 @@ public:
     add_cold_kernels(list);
     list_ = std::move(list);
     result_ = build(list_, seqs);
+    add_resident_kernels(seqs);
     for (size_t i = 0; i < list_.configs.size(); ++i)
       index_[list_.configs[i].name] = i;
     // The array a new hw_context holds: the app of the xclbin it is opened on
@@ -242,6 +272,11 @@ public:
     rep.other_context_seen = !before || !before->empty() || changed;
     // Blind and not exclusive: another context may be there.
     const bool shared = rep.other_context_seen || (!watch_.available() && !opts_.exclusive);
+    // Twins only after resident_quiet with no other context: a Session that
+    // sees ours closes and opens its context, unseen while it does.
+    if (rep.other_context_seen)
+      quiet_since_ = now;
+    const bool quiet = now - quiet_since_ >= opts_.resident_quiet;
 
     // Plan: the kernel of each launch, and the array state after it.
     std::vector<size_t> plan;
@@ -269,6 +304,9 @@ public:
       if (dependent && ((shared && opts_.shared == SharedPolicy::cold_only) || (!state && opts_.check_order))) {
         k = cold_of_.at(k);
         ++rep.substituted;
+      } else if (auto r = resident_of_.find(k); quiet && r != resident_of_.end()) {
+        k = r->second; // no other context, the state known: our lanes are there
+        ++rep.resident;
       }
       depends |= list_.configs[k].kind() == Config::Kind::warm || list_.configs[k].kind() == Config::Kind::rerun;
       plan.push_back(k);
@@ -309,6 +347,7 @@ public:
     last_time_ = std::chrono::steady_clock::now();
     if (!after || !before || *after != *before) {
       rep.other_context_seen = true;
+      quiet_since_ = last_time_;
       if (depends) {
         rep.status = RunReport::Status::other_context_ran;
         rep.message = "another hw_context came, went or ran during the runlist";
@@ -369,6 +408,33 @@ private:
         cold[key] = k.name;
       }
       cold_name_[c.name] = cold[key];
+    }
+  }
+
+  /// A twin without rewrite_lanes for each warm kernel ("resident_<name>"),
+  /// after the kernels of the list (list_ and result_ stay in step).
+  void add_resident_kernels(const SequenceMap &seqs) {
+    if (!opts_.resident_lanes || list_.transport != Transport::ctrlpkt || !list_.ctrlpkt.rewrite_lanes)
+      return;
+    ConfigList twins = list_;
+    twins.configs.clear();
+    twins.ctrlpkt.rewrite_lanes = false;
+    std::vector<size_t> of;
+    for (size_t i = 0; i < list_.configs.size(); ++i)
+      if (list_.configs[i].kind() == Config::Kind::warm) {
+        Config c = list_.configs[i];
+        c.name = "resident_" + c.name;
+        twins.configs.push_back(std::move(c));
+        of.push_back(i);
+      }
+    if (twins.configs.empty())
+      return;
+    Result r = build(twins, seqs);
+    result_.build_ms += r.build_ms;
+    for (size_t j = 0; j < of.size(); ++j) {
+      resident_of_[of[j]] = list_.configs.size();
+      list_.configs.push_back(std::move(twins.configs[j]));
+      result_.kernels.push_back(std::move(r.kernels[j]));
     }
   }
 
@@ -435,6 +501,7 @@ private:
     state_ = list_.transport == Transport::ctrlpkt ? std::nullopt : std::optional<std::string>(base_app_);
     last_ = others();
     last_time_ = std::chrono::steady_clock::now();
+    quiet_since_ = last_time_;
   }
 
   /// The end of the runlist that starts at `first`: all of them (xclbin flow),
@@ -524,6 +591,7 @@ private:
   std::map<std::string, size_t> index_;
   std::map<std::string, std::string> cold_name_; ///< warm or rerun kernel -> its cold kernel
   std::map<size_t, size_t> cold_of_;
+  std::map<size_t, size_t> resident_of_; ///< warm kernel -> its twin without rewrite_lanes
   std::string base_app_;
 
   xrt::device device_{0u};
@@ -541,6 +609,7 @@ private:
   std::vector<xrt_support::ContextKey> mine_;
   std::optional<xrt_support::Snapshot> last_;
   std::chrono::steady_clock::time_point last_time_;
+  std::chrono::steady_clock::time_point quiet_since_; ///< since then no other context seen (resident_quiet)
   std::optional<std::string> state_;
   size_t reopens_ = 0;
   size_t failures_ = 0; ///< failed runlists in a row

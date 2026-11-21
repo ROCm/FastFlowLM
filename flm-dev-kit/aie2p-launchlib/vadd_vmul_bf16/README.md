@@ -145,6 +145,7 @@ cd aie2p-launchlib/vadd_vmul_bf16
 ./env.sh make run COLS=8 CORES=4 RUN_ARGS="--flow xclbin"    # the same, instruction BOs
 ./env.sh make check                 # the library's tests on this package (no NPU)
 ./env.sh make stress COLS=8 CORES=2 # stress and corner cases on the NPU
+./env.sh make session COLS=8 CORES=2 # through launch::Session (RUN_ARGS="--resident on": the twins)
 ./env.sh make ovlp COLS=8 CORES=2   # the overlay app with its op as a state (APP@STATE)
 ./env.sh make precompile COLS=4 CORES=1
 ./env.sh tools/sweep.sh             # the results table
