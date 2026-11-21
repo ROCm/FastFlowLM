@@ -114,7 +114,11 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              dev-kit builds; the Linux and Windows, XRT and HRX portable
              packages build even when run_tests is false (suites "none")
              and their test jobs run the union of the product's selection
-             and the staged files' (devkit_stage.py)
+             and the staged files' (devkit_stage.py). After a swap commit
+             (the newest commit carrying the Devkit-Swap-Run trailer), false
+             unless the files changed since it would stage something by
+             themselves (after_swap): a review fix or a merge of main then
+             tests the committed binaries instead of rebuilding them
   devkit_bench
              true when the dev-kit perf and accuracy benches
              (devkit-bench.yml, which Build and Test's devkit-bench job
@@ -164,6 +168,8 @@ from typing import Iterable, Optional
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MODEL_LIST = "src/model_list.json"
 MODEL_INFO = "src/model_info.json"
+# devkit_swap.py TRAILER_RUN: marks a swap commit (after_swap).
+SWAP_TRAILER = "Devkit-Swap-Run"
 
 # Files that are never built, packaged or read by a test. A change made only
 # of these skips the NPU tests. LICENSE_*.txt and THIRD_PARTY_NOTICES.txt are
@@ -620,6 +626,19 @@ class Git:
         rev = self.merge_base if rev_side == "base" else self.head
         return self._git("show", f"{rev}:{path}") if rev else None
 
+    def last_swap(self) -> Optional[str]:
+        """The newest commit since the merge base whose message carries the
+        dev-kit swap trailer (devkit_swap.py TRAILER_RUN), or None."""
+        if not self.merge_base:
+            return None
+        out = self._git("rev-list", "-n", "1", f"--grep=^{SWAP_TRAILER}:", f"{self.merge_base}..{self.head}")
+        return (out or "").strip() or None
+
+    def files_since(self, commit: str) -> Optional[list[str]]:
+        """The files head changes against commit (merges from main included)."""
+        out = self._git("diff", "--name-only", "--no-renames", commit, self.head)
+        return None if out is None else [l for l in out.splitlines() if l.strip()]
+
 
 @dataclass
 class Decision:
@@ -658,6 +677,21 @@ class Decision:
     # The head is a verified dev-kit swap commit (devkit_swap.py verify).
     swap_verified: bool = False
     reasons: list = field(default_factory=list)
+
+    def keep_swap(self, swap: str, since: "Decision") -> None:
+        """A swap commit is in the pull request and nothing a dev-kit build
+        reads changed after it (since: the decision for the files changed
+        since then stages nothing): the committed binaries are what its run
+        tested, so nothing is staged again; the product tests test them.
+        The dev-kit areas are those of the later changes alone."""
+        self.devkit_areas = set(since.devkit_areas)
+        self.source_areas = set()
+        self.devkit_families = set()
+        self.bench_source = None
+        self.xclbin_compare_only = since.xclbin_compare_only
+        self.reasons.append(f"swap commit {swap[:10]} brought in this pull request's dev-kit binaries and no "
+                            "dev-kit source changed since (devkit_swap.py check verifies it): nothing staged "
+                            "again; the product tests test the committed files")
 
     def skip_for_swap(self) -> None:
         """A verified swap commit: the run that tested its parent built and
@@ -1349,6 +1383,27 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
     return d
 
 
+def after_swap(d: Decision, git, head_catalog_text: Optional[str],
+               engines: Optional[DevkitEngines], repo: Path = REPO_ROOT) -> None:
+    """A push after a swap commit (a review fix, a merge of main): the
+    base...head diff still holds the dev-kit source the swap came from, but
+    when nothing a dev-kit build reads changed since the newest swap commit
+    (decide() on the files changed since then stages nothing), staging again
+    would rebuild bytes that differ from the swapped ones (kernel builds and
+    Windows DLLs are not byte-reproducible) and ask for another swap. A swap
+    commit that does not verify fails devkit_swap.py check, which keeps its
+    binaries out whatever this says."""
+    swap = git.last_swap()
+    if not swap:
+        return
+    files = git.files_since(swap)
+    if files is None:
+        return
+    since = decide(files, None, head_catalog_text, engines, engine_library_files(engines, repo))
+    if not since.devkit_stage():
+        d.keep_swap(swap, since)
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--base", default="", help="Base commit; empty or all-zero means unknown.")
@@ -1388,6 +1443,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                       engine_library_files(devkit_engines, args.repo))
     if args.swap_verified == "true":
         decision.skip_for_swap()
+    elif git and decision.devkit_stage():
+        after_swap(decision, git, head_catalog, devkit_engines, args.repo)
     for reason in decision.reasons:
         print(f"changes: {reason}")
     outputs = decision.outputs()

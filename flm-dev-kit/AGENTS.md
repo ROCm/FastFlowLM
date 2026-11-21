@@ -185,14 +185,20 @@ as a *swap commit*.
    staged bytes, it carries every file the run staged, and the run passed as fetch requires) and then
    builds and tests nothing again; `devkit-static` still checks the catalog. Then the pull request is
    reviewed and merged.
+5. Pushes after the swap (a review fix, a merge of main): when they change no dev-kit engine or
+   kernel source or build input (`changes.py` `after_swap` decides from the files changed since the
+   newest swap commit), nothing is rebuilt or staged; the product test jobs test the committed
+   binaries and `devkit_swap.py check` re-verifies the swap commit. When they do change dev-kit
+   source, the run builds and stages again and asks for a new swap: run `fetch` again on that run.
+   So make the swap after the last dev-kit source change.
 
 A swap pull request must not change the CI that stages the files, writes and checks the manifests
 or builds the packages they are tested in (`devkit_stage.py`, `devkit_overlay.py`, `devkit_swap.py`,
 `devkit_check.py`, the `devkit-stage-apply`, `detect-changes`, `lin-build` and `win-build` actions,
 `build-and-test.yml`, `lin-build.yml`, `win-build.yml`, `devkit-engines.yml`, `devkit-xclbins.yml`,
 and the NPU test harness that decides whether they pass: `../.github/script/npu_test/`, the
-`npu-test` and `install-package` actions; `devkit_swap.py SWAP_CI_PATHS`): `verify` then refuses the swap, the *Dev-kit swap pending* step says
-so, and the pull request has to be split (the CI change first). `changes.py` is not on that list: a
+`npu-test` and `install-package` actions; `devkit_swap.py SWAP_CI_PATHS`): `verify` then refuses
+the swap, the *Dev-kit swap pending* step says so, and the pull request has to be split (the CI change first). `changes.py` is not on that list: a
 new model family needs its engine table. `verify` and `check` run from the pull request's own merge
 commit, so they keep the flow honest but are no enforcement boundary: reviewers must read any
 `.github/` change in a pull request that touches `../src/lib/` or `../src/xclbins/`, and the real
@@ -221,7 +227,8 @@ committed only by the swap:
    required model, beside the rest of their selection.
 4. `summary` says *Dev-kit swap pending*: run `python .github/script/ci/devkit_swap.py fetch --run
    <id>` and push. CI verifies the swap commit and tests nothing again; the pull request is reviewed
-   and merged, and main has the engine, its kernels and the source they were built from.
+   and merged, and main has the engine, its kernels and the source they were built from. A later
+   push that changes dev-kit source needs a new run and a new fetch (step 5 above).
 
 **Full refresh** (to align main with the dev kit once, or after a toolchain change): dispatch Build
 and Test on the pull request's branch with `gh workflow run build-and-test.yml --ref <branch> -f

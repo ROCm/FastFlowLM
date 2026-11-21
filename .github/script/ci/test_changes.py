@@ -1128,5 +1128,87 @@ class StageSelection(unittest.TestCase):
                           out["devkit_bench"], out["devkit_catalog"]), ("false", "none", "", "false", "false", "true"))
 
 
+class AfterSwap(unittest.TestCase):
+    """A push after a swap commit stages nothing again unless dev-kit source
+    changed since the swap (changes.after_swap)."""
+
+    SRC = "flm-dev-kit/FLM_DLL/detail/gemma_npu/x.cpp"
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(self._cleanup)
+        self.git("init", "-q", "-b", "main")
+        self.git("config", "user.email", "t@example.com")
+        self.git("config", "user.name", "t")
+        self.git("config", "core.autocrlf", "false")
+        self.commit({"README.txt": "base\n"}, "base")
+        self.base = self.git("rev-parse", "HEAD")
+        self.commit({self.SRC: "int x;\n"}, "engine change")
+
+    def _cleanup(self):
+        import stat
+
+        def fix(func, p, _exc):
+            os.chmod(p, stat.S_IWRITE)
+            func(p)
+        if sys.version_info >= (3, 12):
+            shutil.rmtree(self.tmp, onexc=fix)
+        else:
+            shutil.rmtree(self.tmp, onerror=fix)
+
+    def git(self, *args: str) -> str:
+        return subprocess.run(["git", "-C", str(self.tmp), *args], capture_output=True, text=True,
+                              check=True).stdout.strip()
+
+    def commit(self, files: dict, message: str) -> str:
+        for rel, text in files.items():
+            (self.tmp / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.tmp / rel).write_text(text, encoding="utf-8")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", message)
+        return self.git("rev-parse", "HEAD")
+
+    def decide(self) -> changes.Decision:
+        git = changes.Git(self.tmp, self.base, "HEAD")
+        engines = changes.load_devkit_engines()
+        d = changes.decide(git.files(), git, None, engines)
+        if d.devkit_stage():
+            changes.after_swap(d, git, None, engines)
+        return d
+
+    def swap(self) -> str:
+        return self.commit({"src/lib/xrt/gemma_npu.dll": "dll\n", "src/lib/xrt/libgemma_npu.so": "so\n"},
+                           "dev kit: swap\n\nDevkit-Swap-Run: 1\nDevkit-Swap-Tested: abc\n")
+
+    def test_before_the_swap_it_stages(self):
+        d = self.decide()
+        self.assertTrue(d.devkit_stage())
+        self.assertEqual(d.devkit_families, {"gemma3"})
+
+    def test_a_later_product_or_docs_push_stages_nothing(self):
+        swap = self.swap()
+        self.commit({"docs/a.md": "x\n", "src/server/server.cpp": "y\n"}, "review fix")
+        d = self.decide()
+        self.assertFalse(d.devkit_stage())
+        self.assertFalse(d.bench())
+        self.assertEqual((d.devkit_families, d.devkit_areas), (set(), set()))
+        self.assertTrue(any(f"swap commit {swap[:10]}" in r for r in d.reasons), d.reasons)
+        # The product tests still run, on the committed binaries.
+        self.assertTrue(d.run_tests)
+        self.assertEqual(changes.Git(self.tmp, self.base, "HEAD").last_swap(), swap)
+
+    def test_dev_kit_source_after_the_swap_stages_again(self):
+        self.swap()
+        self.commit({self.SRC: "int y;\n"}, "engine fix")
+        d = self.decide()
+        self.assertTrue(d.devkit_stage())
+        self.assertEqual(d.devkit_families, {"gemma3"})
+
+    def test_no_swap_commit(self):
+        self.commit({"docs/a.md": "x\n"}, "docs")
+        self.assertIsNone(changes.Git(self.tmp, self.base, "HEAD").last_swap())
+        self.assertTrue(self.decide().devkit_stage())
+
+
 if __name__ == "__main__":
     unittest.main()

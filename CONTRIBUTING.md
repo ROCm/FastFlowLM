@@ -43,8 +43,10 @@ dev-kit source and push; CI builds it, stages it into every product build and ru
 NPU tests on those packages; while the branch lacks those files, the required check fails with
 "Dev-kit swap pending" and the command to run: `python .github/script/ci/devkit_swap.py fetch
 --run <id>` on a clean checkout of the tested commit, then push the swap commit it makes; CI
-checks its hashes against that run and skips the NPU tests for it. Steps, conditions and the full
-refresh: "Prebuilt binaries" in [flm-dev-kit/AGENTS.md](flm-dev-kit/AGENTS.md).
+checks its hashes against that run and skips the NPU tests for it. Make the swap after your last
+dev-kit source change: a later push that changes no dev-kit source (a review fix, a merge of main)
+tests the committed files, but one that does needs a new run and a new fetch. Steps, conditions
+and the full refresh: "Prebuilt binaries" in [flm-dev-kit/AGENTS.md](flm-dev-kit/AGENTS.md).
 
 **Adding a model?** Add its dev-kit source (engine under `flm-dev-kit/FLM_DLL/detail/`,
 kernels under `flm-dev-kit/FLM_Xclbin/`) with its `engines.json` and `kernel_assignment.json`
