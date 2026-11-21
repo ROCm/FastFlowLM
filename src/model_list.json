@@ -793,6 +793,43 @@
                 "footprint": 20.6
             }
         },
+        "qwen3.6-moe-pruned": {
+            "35b-a3b": {
+                "supported_platforms": ["aie2p"],
+                "name": "Qwen3.6-35B-A3B-NPU2-pruned",
+                "_comment": "PRIVATE pruned (192-expert) Qwen3.6 MoE. Not published: there is no Hugging Face / ModelScope repo behind the urls below, which exist only so the download code has well-formed fields. Place the converted folder at <models dir>/models/Qwen3.6-35B-A3B-NPU2-pruned and flm reports it Ready without touching the network (flm_min_version 0.0.0 keeps it out of the outdated/verify path, which would need a model_info.json record set this model has none of).",
+                "url": "https://huggingface.co/FastFlowLM/Qwen3.6-35B-A3B-NPU2-pruned/resolve/main",
+                "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.6-35B-A3B-NPU2-pruned/tree/main",
+                "ms_url": "https://modelscope.cn/models/amd/Qwen3.6-35B-A3B-NPU2-pruned/resolve/main",
+                "size": 35000000000,
+                "flm_min_version": "0.0.0",
+                "files": [
+                    "config.json",
+                    "model.q4nx",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "vision_weight.q4nx",
+                    "chat_template.jinja"
+                ],
+                "vlm": true,
+                "default_context_length": 32768,
+                "max_prefill_len": 4096,
+                "details": {
+                    "format": "NPU2",
+                    "family": "qwen3.6-moe-pruned",
+                    "think": true,
+                    "think_toggleable": true,
+                    "parameter_size": "35B",
+                    "quantization_level": "Q4_K"
+                },
+                "label": [
+                    "vision",
+                    "reasoning",
+                    "tool-calling"
+                ],
+                "footprint": 16.0
+            }
+        },
         "qwen3.8-mtp": {
             "27b": {
                 "supported_platforms": ["aie2p"],

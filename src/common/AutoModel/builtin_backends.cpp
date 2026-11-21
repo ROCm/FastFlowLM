@@ -31,6 +31,7 @@
 #include "models/qwen3/flm/aie2p/qwen3_npu.hpp"
 #include "models/qwen3_5vl/flm/aie2p/qwen3_5vl_npu.hpp"
 #include "models/qwen3_6_moe/flm/aie2p/qwen3_6_moe_npu.hpp"
+#include "models/qwen3_6_moe_pruned/flm/aie2p/qwen3_6_moe_pruned_npu.hpp"
 #include "models/qwen3_8mtp/flm/aie2p/qwen3_8mtp_npu.hpp"
 #include "models/qwen3_asr/flm/aie2p/qwen3_asr_npu.hpp"
 #include "models/qwen3vl/flm/aie2p/qwen3vl_npu.hpp"
@@ -80,6 +81,8 @@ void register_builtin_backends(BackendRegistry& registry) {
     RegisterFlm<minicpm_ocr_npu>(registry, "minicpm-ocr");
     RegisterFlm<minicpm_v_4_7_moe_npu>(registry, "minicpm-v-4.7-moe");
     RegisterFlm<qwen3_6_moe_npu>(registry, "qwen3.6-moe");
+    // private pruned (192-expert) Qwen3.6 MoE: its own engine library, no overlap with the above
+    RegisterFlm<qwen3_6_moe_pruned_npu>(registry, "qwen3.6-moe-pruned");
     RegisterFlm<qwen3_8mtp_npu>(registry, "qwen3.8-mtp");
     RegisterFlm<qwen3_8mtp_npu>(registry, "qwen3.8-dflash2");   // the same engine; the draft package turns the DFlash2 drafter on
     RegisterFlm<qwen3_asr_npu>(registry, "r2t2");

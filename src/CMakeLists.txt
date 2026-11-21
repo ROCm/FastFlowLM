@@ -612,6 +612,9 @@ list(APPEND FLM_ENGINE_LINK_LIBS
     minicpm_v_4_7_moe_npu
     qwen3_5_omni_npu
     qwen3_6_moe_npu
+    # private pruned (192-expert) Qwen3.6 MoE: an independent engine library,
+    # dropped into lib/${FLM_RUNTIME_NAME} like every other prebuilt engine
+    qwen3_6_moe_pruned_npu
     qwen3_8mtp_npu
     qwen3_asr_npu
     gemma_npu

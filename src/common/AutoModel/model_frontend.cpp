@@ -347,7 +347,8 @@ bool is_reserved_builtin_family(std::string_view family) {
 bool builtin_frontend_requires_builtin_engine(std::string_view family) {
     // Keep in sync with the frontends that reinterpret_cast lm_engine or
     // dereference an unchecked dynamic_cast of it.
-    return family == "qwen3.6-moe" || family == "minicpm-v-4.7" ||
+    return family == "qwen3.6-moe" || family == "qwen3.6-moe-pruned" ||
+           family == "minicpm-v-4.7" ||
            family == "minicpm-v-4.7-moe" || family == "gemma4-12b";
 }
 
