@@ -9,7 +9,9 @@
 # Read by docker/aie-build.Dockerfile (every KEY below is one of its build
 # ARGs) through .github/workflows/devkit-aie-image.yml, which tags the image
 # ghcr.io/rocm/fastflowlm/aie-build with a hash of this file and the
-# Dockerfile. This file holds only what goes into the image, never the
+# Dockerfile (.github/script/ci/aie_image_hash.py), comment and blank lines
+# left out: editing these comments keeps the tag.
+# This file holds only what goes into the image, never the
 # image's digest: a digest here would change that hash and fail the
 # workflow's every-key-is-an-ARG check. The published digest the kernel builds
 # pull (ghcr.io/rocm/fastflowlm/aie-build@sha256:...) goes in toolchain.image

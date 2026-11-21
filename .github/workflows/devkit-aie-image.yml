@@ -13,16 +13,26 @@ name: Dev-kit AIE build image
 #            (docker/aie-build-check.sh) and requires each one's PDI to be the
 #            one the original toolchain made, byte for byte. A pull request that
 #            changes the toolchain shows whether it still makes the shipped
-#            kernels
+#            kernels. If :<toolchain hash> is already published (and public),
+#            it skips the build and runs the kernel check in that image: a
+#            comment-only edit costs a pull, and a change to the check or the
+#            PDI list, which the hash does not cover, is still tested
 #   publish  main only (push, or workflow_dispatch run on main): builds again
 #            (from the build job's cache) and pushes by digest with no tag,
 #            pulls that digest and runs the same kernel check in it, and only
 #            then tags it :<toolchain hash> and :latest. A cache miss that
 #            makes a different image is checked like the one the build job
-#            tested, and an image that fails stays untagged. The toolchain
-#            hash is the first 16 hex digits of sha256(toolchain.lock +
-#            Dockerfile): a new tag for every change to either, an unchanged
-#            tag otherwise
+#            tested, and an image that fails stays untagged. On a push it
+#            first looks :<toolchain hash> up and stops if it exists: the
+#            same hash is the same build, so the tag is not moved to a new
+#            digest. workflow_dispatch always republishes (and moves the tag)
+#
+# The toolchain hash (.github/script/ci/aie_image_hash.py) covers
+# toolchain.lock and the Dockerfile with their blank and comment lines dropped
+# (the Dockerfile's parser directives kept): a new tag for every change to a
+# value, an instruction or a directive, an unchanged tag for a comment-only or
+# blank-line edit of either file. It covers every input of the build only
+# while the Dockerfile copies nothing from the build context (docker/).
 #
 # Pull the image by digest, not by tag, wherever its output matters; the
 # digest goes in flm-dev-kit/FLM_Xclbin/toolchain.image (not toolchain.lock,
@@ -43,12 +53,14 @@ on:
       - docker/aie-build*
       - flm-dev-kit/FLM_Xclbin/toolchain.lock
       - .github/workflows/devkit-aie-image.yml
+      - .github/script/ci/aie_image_hash.py
   push:
     branches: [main]
     paths:
       - docker/aie-build*
       - flm-dev-kit/FLM_Xclbin/toolchain.lock
       - .github/workflows/devkit-aie-image.yml
+      - .github/script/ci/aie_image_hash.py
   workflow_dispatch:
 
 # Read-only token; only publish, which runs on main only, adds packages: write.
@@ -106,7 +118,7 @@ jobs:
             echo "::error file=${LOCK}::repeated: ${dups:-none}; ARGs with no value: ${missing:-none}; keys no ARG reads: ${unused:-none}"
             exit 1
           fi
-          hash="$(cat "$LOCK" "$DOCKERFILE" | sha256sum | cut -c1-16)"
+          hash="$(python3 -I .github/script/ci/aie_image_hash.py "$LOCK" "$DOCKERFILE")"
           echo "hash=${hash}" >> "$GITHUB_OUTPUT"
           {
             echo 'build-args<<FLM_BUILD_ARGS'
@@ -118,7 +130,25 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
+      # Anonymous, so found only once the package is public. Not on
+      # workflow_dispatch, which always builds.
+      - name: Look up :<toolchain hash>
+        id: published
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          HASH: ${{ steps.lock.outputs.hash }}
+        run: |
+          set -euo pipefail
+          if digest="$(docker buildx imagetools inspect "${IMAGE}:${HASH}" --format '{{json .Manifest}}' 2>/dev/null | jq -r '.digest // empty')" \
+             && [[ "$digest" == sha256:* ]]; then
+            echo "ref=${IMAGE}@${digest}" >> "$GITHUB_OUTPUT"
+            echo "Already published: \`${IMAGE}@${digest}\`; the kernel check runs in it, no build." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "${IMAGE}:${HASH} is not published (or not public): building it"
+          fi
+
       - name: Build image
+        if: steps.published.outputs.ref == ''
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: docker
@@ -135,7 +165,16 @@ jobs:
       # Each one's PDI must match docker/aie-build.pdi.sha256; the xclbin
       # around it differs on every build, so its hash is not compared.
       - name: Build the pinned kernels in the image
-        run: bash docker/aie-build-check.sh aie-build:ci
+        env:
+          PUBLISHED: ${{ steps.published.outputs.ref }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$PUBLISHED" ]]; then
+            docker pull -q "$PUBLISHED"
+            bash docker/aie-build-check.sh "$PUBLISHED"
+          else
+            bash docker/aie-build-check.sh aie-build:ci
+          fi
 
   publish:
     needs: build
@@ -153,17 +192,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
-          df -h /
-
       # The build job checked the file; this only reads it.
       - name: Read toolchain.lock
         id: lock
         run: |
           set -euo pipefail
-          echo "hash=$(cat "$LOCK" "$DOCKERFILE" | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+          hash="$(python3 -I .github/script/ci/aie_image_hash.py "$LOCK" "$DOCKERFILE")"
+          echo "hash=${hash}" >> "$GITHUB_OUTPUT"
           {
             echo 'build-args<<FLM_BUILD_ARGS'
             grep -E '^[A-Z0-9_]+=' "$LOCK"
@@ -180,11 +215,41 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Logged in, so a still-private package is found too. On a push an
+      # existing tag ends the job: the same toolchain hash is the same build,
+      # so it is neither rebuilt nor moved to a new digest. workflow_dispatch
+      # skips this and republishes.
+      - name: Look up :<toolchain hash>
+        id: published
+        if: github.event_name == 'push'
+        env:
+          HASH: ${{ steps.lock.outputs.hash }}
+        run: |
+          set -euo pipefail
+          if digest="$(docker buildx imagetools inspect "${IMAGE}:${HASH}" --format '{{json .Manifest}}' 2>/dev/null | jq -r '.digest // empty')" \
+             && [[ "$digest" == sha256:* ]]; then
+            echo "ref=${IMAGE}@${digest}" >> "$GITHUB_OUTPUT"
+            {
+              echo "Unchanged toolchain hash \`${HASH}\`, already published; nothing pushed or tagged:"
+              echo
+              echo "\`${IMAGE}@${digest}\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "${IMAGE}:${HASH} is not published: publishing it"
+          fi
+
+      - name: Free disk space
+        if: steps.published.outputs.ref == ''
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+
       # By digest, untagged: nothing points at it until the check below
       # passes. The labels are the Dockerfile's own (no metadata-action, whose
       # description label would be the repository's).
       - name: Push image by digest
         id: push
+        if: steps.published.outputs.ref == ''
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: docker
@@ -197,6 +262,7 @@ jobs:
       # The pushed image itself, not the build job's: if the cache did not
       # make the same image, this is the one that has to build the kernels.
       - name: Build the pinned kernels in the pushed image
+        if: steps.published.outputs.ref == ''
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
         run: |
@@ -206,6 +272,7 @@ jobs:
           bash docker/aie-build-check.sh "${IMAGE}@${DIGEST}"
 
       - name: Tag :<toolchain hash> and :latest
+        if: steps.published.outputs.ref == ''
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
           HASH: ${{ steps.lock.outputs.hash }}
@@ -225,6 +292,7 @@ jobs:
       # without a token. A new package is private until someone changes it
       # (see the top of this file); this fails until then.
       - name: Check the image is public
+        if: steps.published.outputs.ref == ''
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
         run: |
