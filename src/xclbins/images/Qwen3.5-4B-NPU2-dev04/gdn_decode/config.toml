@@ -1,0 +1,12 @@
+# config/4b/gdn_decode.toml -- the gdn_decode numbers of Qwen3.5-4B (z right after the qkv row: Z_OFFSET = LIN_QKV).
+# make copy builds the op gdn_decode with this file.
+
+D = 2560
+V_HEADS = 32
+QK_HEADS = 16
+DK = 128
+DV = 128
+TAPS = 4
+Z_OFFSET = 8192
+L2_EPS = 1e-6
+RN_EPS = 1e-6

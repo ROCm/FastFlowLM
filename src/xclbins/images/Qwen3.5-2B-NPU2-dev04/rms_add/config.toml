@@ -1,0 +1,5 @@
+# config/2b/rms_add.toml -- the rms_add numbers of Qwen3.5-2B.
+# make copy builds the op rms_add with this file.
+
+D = 2048
+EPS = 1e-6

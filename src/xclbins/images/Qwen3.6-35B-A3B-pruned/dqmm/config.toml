@@ -1,0 +1,30 @@
+# config/dqmm.toml -- the dqmm numbers of Qwen3.6-35B-A3B.
+#
+# make copy builds the op dqmm with this file. The keys are the keys of the
+# op's default config (dqmm/config.toml in the kernel tree). The file must have
+# each key below and no other key. No program has the hidden size, the expert
+# size or the v dim: the call gives K, L and N (stage D, 2026-11-13).
+
+# Hidden size (hidden_size): K of dqmm_ab (the alpha | beta of a linear layer).
+# This is the one program with a K built in. (It was the key D.)
+AB_K = 2048
+
+# Padding granule of K of the run-time images dqmm and dqmm_s (K of a call is a
+# multiple of it). A core loop does whole Q4_K chunks of 256 k, and the x and
+# Q4_K slots of a core go back to slot 0 after a panel: an even number of chunks.
+K_PAD = 512
+
+# K of the x store of the run-time images dqmm and dqmm_s: the largest K of a
+# call (a multiple of K_PAD). 4096 = linear_v_dim (K of out_proj). If an image
+# cannot hold it, the build stops with a message. The most that fits: dqmm at
+# X_ROWS 128: 5632; dqmm_s at STREAM_ROWS 256: 4096.
+X_K = 4096
+
+# Rows of x in one mem tile block of the image dqmm: 32, 64 or 128 (the largest
+# L block of a call). 128 = 4 M tiles of 32 rows. The jobs of the batched MoE
+# have 64 rows: X_ROWS must be at least 64.
+X_ROWS = 128
+
+# Rows of x that the stream image dqmm_s holds in the mem tile at K = X_K: a
+# multiple of 256 (the group of a call has 256 or 512 rows).
+STREAM_ROWS = 256

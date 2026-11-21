@@ -8,7 +8,11 @@
 
 #include "AutoModel/modeling_qwen3_5vl.hpp"
 #include "metrices.hpp"
+#if defined(FLM_NPU_AIE_NEXT)
+#include "models/qwen3_5vl/flm/aie_next/qwen3_5vl_npu.hpp"
+#else
 #include "models/qwen3_5vl/flm/aie2p/qwen3_5vl_npu.hpp"
+#endif
 #include "oga/oga_vision.hpp"
 
 #include <algorithm>

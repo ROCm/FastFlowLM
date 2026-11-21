@@ -8,7 +8,11 @@
 
 #include "AutoModel/modeling_qwen3_6_moe.hpp"
 #include "metrices.hpp"
+#if defined(FLM_NPU_AIE_NEXT)
+#include "models/qwen3_6_moe/flm/aie_next/qwen3_6_moe_npu.hpp"
+#else
 #include "models/qwen3_6_moe/flm/aie2p/qwen3_6_moe_npu.hpp"
+#endif
 
 
 /************              Qwen3_6_MOE family            **************/

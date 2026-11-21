@@ -6,7 +6,11 @@
 /// \note This is a source file for the Qwen3_5VL image processing functionality
 
 #include "AutoModel/modeling_qwen3_5vl.hpp"
+#if defined(FLM_NPU_AIE_NEXT)
+#include "models/qwen3_5vl/flm/aie_next/qwen3_5vl_npu.hpp"
+#else
 #include "models/qwen3_5vl/flm/aie2p/qwen3_5vl_npu.hpp"
+#endif
 
 qwen3_5vl_image_t Qwen3_5VL::load_image(const std::string& filename) {
     qwen3_5vl_image_t empty_result;

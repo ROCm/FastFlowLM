@@ -74,7 +74,11 @@ void register_builtin_frontends(FrontendRegistry& registry) {
     Register<MiniCPM_OCR>(registry, "minicpm-ocr");
     Register<Qwen3_5_Omni>(registry, "qwen3.5-omni");
     Register<Qwen3_6_MOE>(registry, "qwen3.6-moe");
+#if defined(FLM_NPU_AIE_NEXT)
+    Register<Qwen3_6_MOE>(registry, "qwen3.6-moe-pruned");
+#else
     Register<Qwen3_6_MOE_Pruned>(registry, "qwen3.6-moe-pruned");
+#endif
     Register<Qwen3_8MTP>(registry, "qwen3.8-mtp");
     Register<Qwen3_8DFlash2>(registry, "qwen3.8-dflash2");
     Register<Qwen3_ASR>(registry, "r2t2");

@@ -1,0 +1,305 @@
+design dqmm_s
+route 0 0 0 Control32 0 0 0 Controller32 0
+route 0 0 0 Control32 1 0 0 Controller32 0
+route 1 1 0 Control32 0 0 0 Controller32 0
+route 1 1 0 Control32 1 0 0 Controller32 0
+route 2 2 0 Control32 0 0 0 Controller32 0
+route 2 2 0 Control32 1 0 0 Controller32 0
+route 26 0 0 DMAControl 0 0 1 TileControl 0
+route 27 0 0 DMAControl 0 0 2 TileControl 0
+route 29 0 0 DMAControl 0 0 3 TileControl 0
+route 30 0 0 DMAControl 1 0 4 TileControl 0
+route 31 0 0 DMAControl 1 0 5 TileControl 0
+route 1 0 1 Control32 0 0 0 DMATrace 0
+route 1 0 2 Control32 0 0 0 DMATrace 0
+route 1 0 3 Control32 0 0 0 DMATrace 0
+route 1 0 4 Control32 0 0 0 DMATrace 0
+route 1 0 5 Control32 0 0 0 DMATrace 0
+route 26 1 0 DMAControl 0 1 1 TileControl 0
+route 27 1 0 DMAControl 0 1 2 TileControl 0
+route 29 1 0 DMAControl 0 1 3 TileControl 0
+route 30 1 0 DMAControl 1 1 4 TileControl 0
+route 31 1 0 DMAControl 1 1 5 TileControl 0
+route 1 1 1 Control32 0 1 0 DMATrace 0
+route 1 1 2 Control32 0 1 0 DMATrace 0
+route 1 1 3 Control32 0 1 0 DMATrace 0
+route 1 1 4 Control32 0 1 0 DMATrace 0
+route 1 1 5 Control32 0 1 0 DMATrace 0
+route 26 2 0 DMAControl 0 2 1 TileControl 0
+route 27 2 0 DMAControl 0 2 2 TileControl 0
+route 29 2 0 DMAControl 0 2 3 TileControl 0
+route 30 2 0 DMAControl 1 2 4 TileControl 0
+route 31 2 0 DMAControl 1 2 5 TileControl 0
+route 1 2 1 Control32 0 2 0 DMATrace 0
+route 1 2 2 Control32 0 2 0 DMATrace 0
+route 1 2 3 Control32 0 2 0 DMATrace 0
+route 1 2 4 Control32 0 2 0 DMATrace 0
+route 1 2 5 Control32 0 2 0 DMATrace 0
+core 0 2
+core 0 3
+core 0 4
+core 0 5
+core 1 2
+core 1 3
+core 1 4
+core 1 5
+core 2 2
+core 2 3
+core 2 4
+core 2 5
+buffer dqs_q_0_0 0 2 4096 9472
+buffer dqs_w0_0_0 0 2 98304 32768
+buffer dqs_w1_0_0 0 2 65536 32768
+buffer dqs_y0_0_0 0 2 32768 8192
+buffer dqs_y1_0_0 0 2 13568 8192
+buffer dqs_gu_0_0 0 2 40960 8192
+buffer dqs_scale_0_0 0 2 21760 3072
+buffer dqs_pick_0_0 0 2 49152 2048
+buffer dqs_rtp_0_0 0 2 51200 8
+buffer core_data_0_2 0 2 24832 25
+buffer dqs_q_0_1 0 3 4096 9472
+buffer dqs_w0_0_1 0 3 98304 32768
+buffer dqs_w1_0_1 0 3 65536 32768
+buffer dqs_y0_0_1 0 3 32768 8192
+buffer dqs_y1_0_1 0 3 13568 8192
+buffer dqs_gu_0_1 0 3 40960 8192
+buffer dqs_scale_0_1 0 3 21760 3072
+buffer dqs_pick_0_1 0 3 49152 2048
+buffer dqs_rtp_0_1 0 3 51200 8
+buffer core_data_0_3 0 3 24832 25
+buffer dqs_q_0_2 0 4 4096 9472
+buffer dqs_w0_0_2 0 4 98304 32768
+buffer dqs_w1_0_2 0 4 65536 32768
+buffer dqs_y0_0_2 0 4 32768 8192
+buffer dqs_y1_0_2 0 4 13568 8192
+buffer dqs_gu_0_2 0 4 40960 8192
+buffer dqs_scale_0_2 0 4 21760 3072
+buffer dqs_pick_0_2 0 4 49152 2048
+buffer dqs_rtp_0_2 0 4 51200 8
+buffer core_data_0_4 0 4 24832 25
+buffer dqs_q_0_3 0 5 4096 9472
+buffer dqs_w0_0_3 0 5 98304 32768
+buffer dqs_w1_0_3 0 5 65536 32768
+buffer dqs_y0_0_3 0 5 32768 8192
+buffer dqs_y1_0_3 0 5 13568 8192
+buffer dqs_gu_0_3 0 5 40960 8192
+buffer dqs_scale_0_3 0 5 21760 3072
+buffer dqs_pick_0_3 0 5 49152 2048
+buffer dqs_rtp_0_3 0 5 51200 8
+buffer core_data_0_5 0 5 24832 25
+buffer dqs_mt_arena_0 0 1 0 2838528
+buffer dqs_q_1_0 1 2 4096 9472
+buffer dqs_w0_1_0 1 2 98304 32768
+buffer dqs_w1_1_0 1 2 65536 32768
+buffer dqs_y0_1_0 1 2 32768 8192
+buffer dqs_y1_1_0 1 2 13568 8192
+buffer dqs_gu_1_0 1 2 40960 8192
+buffer dqs_scale_1_0 1 2 21760 3072
+buffer dqs_pick_1_0 1 2 49152 2048
+buffer dqs_rtp_1_0 1 2 51200 8
+buffer core_data_1_2 1 2 24832 25
+buffer dqs_q_1_1 1 3 4096 9472
+buffer dqs_w0_1_1 1 3 98304 32768
+buffer dqs_w1_1_1 1 3 65536 32768
+buffer dqs_y0_1_1 1 3 32768 8192
+buffer dqs_y1_1_1 1 3 13568 8192
+buffer dqs_gu_1_1 1 3 40960 8192
+buffer dqs_scale_1_1 1 3 21760 3072
+buffer dqs_pick_1_1 1 3 49152 2048
+buffer dqs_rtp_1_1 1 3 51200 8
+buffer core_data_1_3 1 3 24832 25
+buffer dqs_q_1_2 1 4 4096 9472
+buffer dqs_w0_1_2 1 4 98304 32768
+buffer dqs_w1_1_2 1 4 65536 32768
+buffer dqs_y0_1_2 1 4 32768 8192
+buffer dqs_y1_1_2 1 4 13568 8192
+buffer dqs_gu_1_2 1 4 40960 8192
+buffer dqs_scale_1_2 1 4 21760 3072
+buffer dqs_pick_1_2 1 4 49152 2048
+buffer dqs_rtp_1_2 1 4 51200 8
+buffer core_data_1_4 1 4 24832 25
+buffer dqs_q_1_3 1 5 4096 9472
+buffer dqs_w0_1_3 1 5 98304 32768
+buffer dqs_w1_1_3 1 5 65536 32768
+buffer dqs_y0_1_3 1 5 32768 8192
+buffer dqs_y1_1_3 1 5 13568 8192
+buffer dqs_gu_1_3 1 5 40960 8192
+buffer dqs_scale_1_3 1 5 21760 3072
+buffer dqs_pick_1_3 1 5 49152 2048
+buffer dqs_rtp_1_3 1 5 51200 8
+buffer core_data_1_5 1 5 24832 25
+buffer dqs_mt_arena_1 1 1 0 2838528
+buffer dqs_q_2_0 2 2 4096 9472
+buffer dqs_w0_2_0 2 2 98304 32768
+buffer dqs_w1_2_0 2 2 65536 32768
+buffer dqs_y0_2_0 2 2 32768 8192
+buffer dqs_y1_2_0 2 2 13568 8192
+buffer dqs_gu_2_0 2 2 40960 8192
+buffer dqs_scale_2_0 2 2 21760 3072
+buffer dqs_pick_2_0 2 2 49152 2048
+buffer dqs_rtp_2_0 2 2 51200 8
+buffer core_data_2_2 2 2 24832 25
+buffer dqs_q_2_1 2 3 4096 9472
+buffer dqs_w0_2_1 2 3 98304 32768
+buffer dqs_w1_2_1 2 3 65536 32768
+buffer dqs_y0_2_1 2 3 32768 8192
+buffer dqs_y1_2_1 2 3 13568 8192
+buffer dqs_gu_2_1 2 3 40960 8192
+buffer dqs_scale_2_1 2 3 21760 3072
+buffer dqs_pick_2_1 2 3 49152 2048
+buffer dqs_rtp_2_1 2 3 51200 8
+buffer core_data_2_3 2 3 24832 25
+buffer dqs_q_2_2 2 4 4096 9472
+buffer dqs_w0_2_2 2 4 98304 32768
+buffer dqs_w1_2_2 2 4 65536 32768
+buffer dqs_y0_2_2 2 4 32768 8192
+buffer dqs_y1_2_2 2 4 13568 8192
+buffer dqs_gu_2_2 2 4 40960 8192
+buffer dqs_scale_2_2 2 4 21760 3072
+buffer dqs_pick_2_2 2 4 49152 2048
+buffer dqs_rtp_2_2 2 4 51200 8
+buffer core_data_2_4 2 4 24832 25
+buffer dqs_q_2_3 2 5 4096 9472
+buffer dqs_w0_2_3 2 5 98304 32768
+buffer dqs_w1_2_3 2 5 65536 32768
+buffer dqs_y0_2_3 2 5 32768 8192
+buffer dqs_y1_2_3 2 5 13568 8192
+buffer dqs_gu_2_3 2 5 40960 8192
+buffer dqs_scale_2_3 2 5 21760 3072
+buffer dqs_pick_2_3 2 5 49152 2048
+buffer dqs_rtp_2_3 2 5 51200 8
+buffer core_data_2_5 2 5 24832 25
+buffer dqs_mt_arena_2 2 1 0 2838528
+lock lock_0_2 0 2 0 2
+lock lock_0_2_0 0 2 1 0
+lock lock_0_2_1 0 2 2 2
+lock lock_0_2_2 0 2 3 0
+lock dqs_go_0_0 0 2 4 0
+lock lock_0_3 0 3 0 2
+lock lock_0_3_3 0 3 1 0
+lock lock_0_3_4 0 3 2 2
+lock lock_0_3_5 0 3 3 0
+lock dqs_go_0_1 0 3 4 0
+lock lock_0_4 0 4 0 2
+lock lock_0_4_6 0 4 1 0
+lock lock_0_4_7 0 4 2 2
+lock lock_0_4_8 0 4 3 0
+lock dqs_go_0_2 0 4 4 0
+lock lock_0_5 0 5 0 2
+lock lock_0_5_9 0 5 1 0
+lock lock_0_5_10 0 5 2 2
+lock lock_0_5_11 0 5 3 0
+lock dqs_go_0_3 0 5 4 0
+lock dqs_mt_qfree_0_0 0 1 0 1
+lock dqs_mt_qfree_0_1 0 1 1 1
+lock dqs_mt_qfree_0_2 0 1 2 1
+lock dqs_mt_qfree_0_3 0 1 3 1
+lock lock_0_1 0 1 4 0
+lock lock_0_1_12 0 1 5 0
+lock lock_0_1_13 0 1 6 0
+lock lock_0_1_14 0 1 7 0
+lock dqs_mt_wfree_0_0 0 1 8 1
+lock dqs_mt_wfree_0_1 0 1 9 1
+lock dqs_mt_wfree_0_2 0 1 10 1
+lock dqs_mt_wfree_0_3 0 1 11 1
+lock lock_0_1_15 0 1 12 0
+lock lock_0_1_16 0 1 13 0
+lock lock_0_1_17 0 1 14 0
+lock lock_0_1_18 0 1 15 0
+lock dqs_mt_yfree_0_0 0 1 16 1
+lock dqs_mt_yfree_0_1 0 1 17 1
+lock dqs_mt_yfree_0_2 0 1 18 1
+lock dqs_mt_yfree_0_3 0 1 19 1
+lock lock_0_1_19 0 1 20 0
+lock lock_0_1_20 0 1 21 0
+lock lock_0_1_21 0 1 22 0
+lock lock_0_1_22 0 1 23 0
+lock lock_1_2 1 2 0 2
+lock lock_1_2_23 1 2 1 0
+lock lock_1_2_24 1 2 2 2
+lock lock_1_2_25 1 2 3 0
+lock dqs_go_1_0 1 2 4 0
+lock lock_1_3 1 3 0 2
+lock lock_1_3_26 1 3 1 0
+lock lock_1_3_27 1 3 2 2
+lock lock_1_3_28 1 3 3 0
+lock dqs_go_1_1 1 3 4 0
+lock lock_1_4 1 4 0 2
+lock lock_1_4_29 1 4 1 0
+lock lock_1_4_30 1 4 2 2
+lock lock_1_4_31 1 4 3 0
+lock dqs_go_1_2 1 4 4 0
+lock lock_1_5 1 5 0 2
+lock lock_1_5_32 1 5 1 0
+lock lock_1_5_33 1 5 2 2
+lock lock_1_5_34 1 5 3 0
+lock dqs_go_1_3 1 5 4 0
+lock dqs_mt_qfree_1_0 1 1 0 1
+lock dqs_mt_qfree_1_1 1 1 1 1
+lock dqs_mt_qfree_1_2 1 1 2 1
+lock dqs_mt_qfree_1_3 1 1 3 1
+lock lock_1_1 1 1 4 0
+lock lock_1_1_35 1 1 5 0
+lock lock_1_1_36 1 1 6 0
+lock lock_1_1_37 1 1 7 0
+lock dqs_mt_wfree_1_0 1 1 8 1
+lock dqs_mt_wfree_1_1 1 1 9 1
+lock dqs_mt_wfree_1_2 1 1 10 1
+lock dqs_mt_wfree_1_3 1 1 11 1
+lock lock_1_1_38 1 1 12 0
+lock lock_1_1_39 1 1 13 0
+lock lock_1_1_40 1 1 14 0
+lock lock_1_1_41 1 1 15 0
+lock dqs_mt_yfree_1_0 1 1 16 1
+lock dqs_mt_yfree_1_1 1 1 17 1
+lock dqs_mt_yfree_1_2 1 1 18 1
+lock dqs_mt_yfree_1_3 1 1 19 1
+lock lock_1_1_42 1 1 20 0
+lock lock_1_1_43 1 1 21 0
+lock lock_1_1_44 1 1 22 0
+lock lock_1_1_45 1 1 23 0
+lock lock_2_2 2 2 0 2
+lock lock_2_2_46 2 2 1 0
+lock lock_2_2_47 2 2 2 2
+lock lock_2_2_48 2 2 3 0
+lock dqs_go_2_0 2 2 4 0
+lock lock_2_3 2 3 0 2
+lock lock_2_3_49 2 3 1 0
+lock lock_2_3_50 2 3 2 2
+lock lock_2_3_51 2 3 3 0
+lock dqs_go_2_1 2 3 4 0
+lock lock_2_4 2 4 0 2
+lock lock_2_4_52 2 4 1 0
+lock lock_2_4_53 2 4 2 2
+lock lock_2_4_54 2 4 3 0
+lock dqs_go_2_2 2 4 4 0
+lock lock_2_5 2 5 0 2
+lock lock_2_5_55 2 5 1 0
+lock lock_2_5_56 2 5 2 2
+lock lock_2_5_57 2 5 3 0
+lock dqs_go_2_3 2 5 4 0
+lock dqs_mt_qfree_2_0 2 1 0 1
+lock dqs_mt_qfree_2_1 2 1 1 1
+lock dqs_mt_qfree_2_2 2 1 2 1
+lock dqs_mt_qfree_2_3 2 1 3 1
+lock lock_2_1 2 1 4 0
+lock lock_2_1_58 2 1 5 0
+lock lock_2_1_59 2 1 6 0
+lock lock_2_1_60 2 1 7 0
+lock dqs_mt_wfree_2_0 2 1 8 1
+lock dqs_mt_wfree_2_1 2 1 9 1
+lock dqs_mt_wfree_2_2 2 1 10 1
+lock dqs_mt_wfree_2_3 2 1 11 1
+lock lock_2_1_61 2 1 12 0
+lock lock_2_1_62 2 1 13 0
+lock lock_2_1_63 2 1 14 0
+lock lock_2_1_64 2 1 15 0
+lock dqs_mt_yfree_2_0 2 1 16 1
+lock dqs_mt_yfree_2_1 2 1 17 1
+lock dqs_mt_yfree_2_2 2 1 18 1
+lock dqs_mt_yfree_2_3 2 1 19 1
+lock lock_2_1_65 2 1 20 0
+lock lock_2_1_66 2 1 21 0
+lock lock_2_1_67 2 1 22 0
+lock lock_2_1_68 2 1 23 0
+trace 0

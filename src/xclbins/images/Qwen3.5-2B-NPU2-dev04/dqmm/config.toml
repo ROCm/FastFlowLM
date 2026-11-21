@@ -1,0 +1,8 @@
+# config/2b/dqmm.toml -- the dqmm numbers of Qwen3.5-2B: AB_K is the hidden size (dqmm_ab); the rest as Qwen3.6.
+# make copy builds the op dqmm with this file.
+
+AB_K = 2048
+K_PAD = 512
+X_K = 4096
+X_ROWS = 128
+STREAM_ROWS = 256

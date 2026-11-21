@@ -1,0 +1,19 @@
+# config/qk_norm_rope.toml -- the qk_norm_rope numbers of Qwen3.6-35B-A3B.
+#
+# make copy builds the op qk_norm_rope with this file. The keys are the keys
+# of the op's default config (qk_norm_rope/config.toml in the kernel tree).
+
+# Dimension of a head (head_dim).
+HEAD_DIM = 256
+
+# Query heads (num_attention_heads).
+Q_HEADS = 16
+
+# Key / value heads (num_key_value_heads).
+KV_HEADS = 2
+
+# Dimensions of a head that get the rope (partial_rotary_factor x head_dim).
+ROPE_DIM = 64
+
+# Epsilon of the q / k norm (rms_norm_eps).
+EPS = 1e-6
