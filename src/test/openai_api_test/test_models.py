@@ -35,8 +35,8 @@ from fixtures import user
 from flm_api import Api, Skip, case, expect
 
 # single-turn models: their context is fixed (src/model_list.json, label "single-turn")
-SINGLE_TURN = {"gemma4e-flash:e2b", "gemma4e-flash:e4b", "qwen3vl-flash:4b",
-               "nemotron3.5-bolt-dflash-flash:e4b", "hy-mt2-flash:1.8b"}
+SINGLE_TURN = {"gemma4e-flash:e2b": 1024, "gemma4e-flash:e4b": 1024, "qwen3vl-flash:4b": 1024,
+               "nemotron3.5-bolt-dflash-flash:e4b": 1024, "hy-mt2-flash:1.8b": 32768}
 WORDS = {"completion", "tools", "vision", "audio", "thinking", "embedding"}
 PARAMETERS = {"tools", "tool_choice", "reasoning"}
 # a 1x1 PNG
@@ -140,6 +140,9 @@ def context_length_follows_ctx_len(api: Api) -> None:
         if "completion" not in entry.get("capabilities", ["completion"]):
             continue
         if entry["id"] in SINGLE_TURN:   # the loader keeps these at their own context
+            expect(entry.get("context_length") == SINGLE_TURN[entry["id"]],
+                   f"{entry['id']}: context_length {entry.get('context_length')}, "
+                   f"a single-turn model keeps {SINGLE_TURN[entry['id']]}")
             continue
         followed += 1
         expect(entry.get("context_length") == int(declared),

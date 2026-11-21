@@ -782,6 +782,7 @@ void test_overlay_paths_stay_inside_the_model_folder() {
              {{{"url", ""}}, "url"},
              {{{"backend_provider", ""}}, "backend_provider"},
              {{{"vlm", true}}, "frontend_provider"},
+             {{{"tools", "yes"}}, "tools"},
              {{{"preferred_source", nlohmann::json::object()}},
               "preferred_source"}}) {
         nlohmann::json entry = complete;
@@ -1108,8 +1109,43 @@ void test_the_openai_listing_reports_capabilities() {
         }
     }
     TEST_REQUIRE(fixed > 0);
-    TEST_REQUIRE(by_id.at("gemma4e-flash:e2b").at("context_length") == 1024);
     TEST_REQUIRE(resized.at("data").size() == listing.at("data").size());
+}
+
+void test_the_openai_listing_describes_the_source_in_use() {
+    // get_model_info hands the loader the entry with preferred_source merged
+    // in once that source is the one in use; the listing reads the same entry.
+    const auto base = write_catalog(
+        "flm_listing_source_catalog.json",
+        {{"model_path", "models"},
+         {"models",
+          {{"demo",
+            {{"1b",
+              {{"name", "Demo-Model-NPU2"},
+               {"default_context_length", 4096},
+               {"details", {{"family", "base-frontend"}}},
+               {"preferred_source",
+                {{"default_context_length", 16384}, {"tools", true}}}}}}}}}});
+    std::string base_path = base.string();
+    std::string exe_dir = ".";
+    model_list models(base_path, exe_dir, "aie2p", {"flm"}, {}, {"base-frontend"},
+                      {{"base-frontend", {{"flm", {"builtin"}}}}});
+    const auto demo = [&] {
+        const auto listing = models.get_all_models_openai();
+        TEST_REQUIRE(listing.at("data").size() == 1);
+        return listing.at("data").at(0);
+    };
+
+    models.choose_source("demo:1b", false);
+    TEST_REQUIRE(demo().at("context_length") == 4096);
+    TEST_REQUIRE(!lists(demo().at("capabilities"), "tools"));
+
+    models.choose_source("demo:1b", true);
+    TEST_REQUIRE(demo().at("context_length") == 16384);
+    TEST_REQUIRE(lists(demo().at("capabilities"), "tools"));
+    TEST_REQUIRE(demo().at("context_length") ==
+                 models.get_model_info("demo:1b").second.at("default_context_length"));
+    std::filesystem::remove(base);
 }
 
 void test_shipped_catalog_is_well_formed() {
@@ -1228,6 +1264,8 @@ int main() {
             "shipped catalog is well formed");
     RunTest(test_every_shipped_entry_has_a_capability_record,
             "every shipped entry has a capability record");
+    RunTest(test_the_openai_listing_describes_the_source_in_use,
+            "the OpenAI listing describes the source in use");
     RunTest(test_the_openai_listing_reports_capabilities,
             "the OpenAI listing reports capabilities");
     std::cout << "All model_list platform tests passed\n";

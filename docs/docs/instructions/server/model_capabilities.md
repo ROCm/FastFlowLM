@@ -19,7 +19,7 @@ A client that lets you add your own endpoint (VS Code's custom endpoint, the pi 
 curl http://127.0.0.1:52625/v1/models
 ```
 
-Each entry keeps the OpenAI fields (`id`, `object`, `created`, `owned_by`) and adds:
+Each entry keeps the OpenAI fields (`id`, `object`, `created`, `owned_by`) and the two fields that say where the model runs (`backend`, `device`), and adds:
 
 ```json
 {
@@ -27,6 +27,8 @@ Each entry keeps the OpenAI fields (`id`, `object`, `created`, `owned_by`) and a
   "object": "model",
   "created": 1795270650,
   "owned_by": "FastFlowLM",
+  "backend": "flm",
+  "device": "npu",
   "capabilities": ["completion", "tools", "vision", "thinking"],
   "context_length": 32768,
   "architecture": {
@@ -88,3 +90,5 @@ VS Code does not show a model in its model picker for agent use unless `toolCall
 - `context_length` changes with `--ctx-len`. If you restart the server with another value, read the listing again.
 - A `--ctx-len` above what a model's engine can hold is not honored: the model is loaded with less, or is refused. Keep `--ctx-len` at or below the model's default unless you know the model takes more.
 - The listing describes the models this build and this machine can run. A model that needs a backend your build does not have is not listed.
+- `thinking` says that the model reasons before it answers, not that you can switch the reasoning off. Some models always think (`deepseek-r1:8b`, for example) and ignore `think`.
+- The built-in embedding model (`embed-gemma:300m`) and `whisper-v3:turbo` are not in this listing; you call them through `/v1/embeddings` and `/v1/audio/transcriptions`. An embedding model that an extension adds is listed.

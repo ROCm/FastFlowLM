@@ -303,6 +303,11 @@ inline void validate_catalog_entry(const nlohmann::json& entry,
             }
         }
     }
+    if (entry.contains("tools") && !entry["tools"].is_boolean()) {
+        throw std::runtime_error(
+            "Model extension catalog entry '" + tag +
+            "' tools must be true or false");
+    }
     if ((kind == kEmbeddingModelKind || entry.value("vlm", false) ||
          entry.value("asr", false)) &&
         (!entry.contains("frontend_provider") ||

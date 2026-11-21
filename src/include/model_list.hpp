@@ -383,7 +383,11 @@ class model_list {
                 if (model_type == "whisper-v3") continue;
                 else if (model_type == "embed-gemma") continue;
                 else if (model_type == "d3") continue;   // decision models answer /v1/systemone only
-                for (const auto& [size, model_info] : model_subset.items()) {
+                for (const auto& [size, catalog_entry] : model_subset.items()) {
+                    // the entry as get_model_info resolves it, so the listing
+                    // describes the source the loader will use
+                    const nlohmann::json model_info =
+                        this->resolve_source_impl(model_type + ":" + size, catalog_entry);
                     // id uses the same "type:size" convention; created uses current epoch seconds
                     nlohmann::json model_entry = {
                         {"id", model_type + ":" + size},
