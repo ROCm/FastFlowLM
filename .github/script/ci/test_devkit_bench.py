@@ -273,8 +273,11 @@ class Report(unittest.TestCase):
             "bogus": {}, }})
         matrix = [{"key": "lin-xrt", "model": "qwen3:0.6b"}, {"key": "lin-hrx", "model": "qwen3:0.6b"},
                   {"key": "lin-hrx", "model": "gemma3:1b"}]
-        text = report.render(results, old, matrix, mode="pr", head_sha=SHA_B, build_run_id=12, baseline_run_id=7)
-        self.assertIn("## Dev-kit bench (pr) on `bbbbbbbbbb`", text)
+        # A dispatch is the one comparison left (a pull request's compares
+        # nothing for now: test_pr_reports_numbers_only).
+        text = report.render(results, old, matrix, mode="dispatch", head_sha=SHA_B, build_run_id=12,
+                             baseline_run_id=7)
+        self.assertIn("## Dev-kit bench (dispatch) on `bbbbbbbbbb`", text)
         self.assertIn("nightly baseline: run 7 on `aaaaaaaaaa` (2026-11-19)", text)
         self.assertIn("Linux XRT qwen3:0.6b: decode at 1k is -10.0%", text)
         self.assertIn("gsm8k: -15.0 points", text)
@@ -303,6 +306,21 @@ class Report(unittest.TestCase):
         self.assertIn("## Dev-kit bench (refresh)", text)
         self.assertIn("this run's numbers only, no comparison", text)
         self.assertNotIn("no nightly baseline yet", text)
+        self.assertIn("No hard-gate failure and no soft-gate warning", text)
+
+    def test_pr_reports_numbers_only(self):
+        # A pull request benches its staged packages alone: no base package
+        # (no base.csv) and no nightly baseline; its own numbers, no warning.
+        write_result(self.root, "lin-xrt", "qwen3:0.6b", devkit=CSV.format(p1=900, d1=18, p2=800, d2=17),
+                     gsm8k=self.gsm(40.0))
+        results = report.load_results(self.root)
+        text = report.render(results, report.parse_baseline(None), [{"key": "lin-xrt", "model": "qwen3:0.6b"}],
+                             mode="pr", head_sha=SHA_B, build_run_id=12, baseline_run_id=None)
+        self.assertIn("## Dev-kit bench (pr)", text)
+        self.assertIn("this run's numbers only, no comparison (to be designed later)", text)
+        self.assertNotIn("no nightly baseline yet", text)
+        self.assertIn("| qwen3:0.6b | strix | 1k | — → 18.0 | — |", text)
+        self.assertIn("| qwen3:0.6b | — | 40.0 | — |", text)
         self.assertIn("No hard-gate failure and no soft-gate warning", text)
 
     def test_hard_gate_output(self):
