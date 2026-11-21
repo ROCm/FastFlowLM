@@ -1009,8 +1009,38 @@ class Wiring(unittest.TestCase):
 
     def test_tree(self):
         errors: list = []
-        self.assertEqual(dc.check_swap_wiring(dc.REPO_ROOT, errors), 1)
+        self.assertEqual(dc.check_swap_wiring(dc.REPO_ROOT, errors), 4)
         self.assertEqual(errors, [])
+
+    def test_stage_artifact_names(self):
+        # The staged files' artifact: uploaded by devkit-stage, mapped by
+        # devkit-stage-apply, named by the build workflows.
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(rmtree, tmp)
+        texts = {}
+        for rel in (dc.BUILD_WORKFLOW, dc.STAGE_APPLY_ACTION, dc.LIN_BUILD_WORKFLOW, dc.WIN_BUILD_WORKFLOW):
+            texts[rel] = (dc.REPO_ROOT / rel).read_text(encoding="utf-8")
+            (tmp / rel).parent.mkdir(parents=True, exist_ok=True)
+        cases = {
+            dc.BUILD_WORKFLOW: ("name: devkit-stage-win-hrx\n", "name: devkit-stage-windows-hrx\n",
+                                "must upload the staged files as devkit-stage-win-hrx"),
+            dc.STAGE_APPLY_ACTION: ("devkit-stage-lin-hrx)", "devkit-stage-linux-hrx)",
+                                    "must map devkit-stage-lin-hrx"),
+            dc.LIN_BUILD_WORKFLOW: ("artifact: devkit-stage-lin-${{", "artifact: devkit-stage-linux-${{",
+                                    "must name the artifact devkit-stage-lin-<xrt|hrx>"),
+            dc.WIN_BUILD_WORKFLOW: ("&& 'hrx' || 'xrt' }}", "&& 'HRX' || 'xrt' }}",
+                                    "must name the artifact devkit-stage-win-<xrt|hrx>"),
+        }
+        for broken, (old, new, needle) in cases.items():
+            with self.subTest(file=broken):
+                for rel, text in texts.items():
+                    if rel == broken:
+                        self.assertIn(old, text)
+                        text = text.replace(old, new)
+                    (tmp / rel).write_text(text, encoding="utf-8")
+                errors: list = []
+                self.assertEqual(dc.check_swap_wiring(tmp, errors), 4)
+                self.assertTrue(any(needle in e for e in errors), errors)
 
     def test_broken(self):
         tmp = Path(tempfile.mkdtemp())

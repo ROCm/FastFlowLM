@@ -69,7 +69,7 @@ Checks, each failure printed as "devkit_check: error: ..." (exit 1):
                 an engine library file (7) src/ lacks is no error but
                 "pending": printed, and written as pending=<csv> with
                 --github-output. The pull request's run must then stage
-                every one (devkit_stage.py --pending fails otherwise, and
+                every one (devkit_stage.py's plan fails otherwise, and
                 summary fails a run with pending binaries that staged
                 nothing), so a new model or engine can get through CI
                 before its swap commits the binaries. Without --pending-ok
@@ -110,13 +110,18 @@ Checks, each failure printed as "devkit_check: error: ..." (exit 1):
                 devkit-stage job (STAGE_JOB) that runs devkit_stage.py and
                 uploads manifest-<os>-<runtime>/manifest.json as
                 devkit-stage-manifest-<os>-<runtime> (MANIFEST_ARTIFACT,
-                MANIFEST_FILE) for each os and runtime; one job named as
-                TEST_JOBS gives for each, downloading that runtime's product
-                package; a summary job with a step named PENDING_STEP that
+                MANIFEST_FILE) for each os and runtime, and the staged
+                files as devkit_stage.py's stage_artifact()
+                (devkit-stage-<lin|win>-<xrt|hrx>), which the
+                devkit-stage-apply action maps to its runtime and
+                lin-build.yml and win-build.yml download by that name; one
+                job with each name TEST_JOBS gives (only the name is
+                checked); a summary job with a step named PENDING_STEP that
                 runs devkit_swap.py pending --expect-staged; the
-                devkit-engines and devkit-xclbins jobs; and a changes job that runs
-                devkit_swap.py verify and check with actions: read. Skipped
-                when the workflow is absent
+                devkit-engines and devkit-xclbins jobs; and a changes job
+                that runs devkit_swap.py verify and check with actions:
+                read. Skipped when the workflow is absent (the action and
+                build workflows each when absent)
   notices       with --base: every file added under flm-dev-kit/ between the
                 merge base of --base and --head (default HEAD), of a source or
                 script type, has an AMD copyright notice in its first 15
@@ -927,6 +932,9 @@ BENCH_WORKFLOW = ".github/workflows/devkit-bench.yml"
 BENCH_COMMENT_WORKFLOW = ".github/workflows/devkit-bench-comment.yml"
 # Calls BENCH_WORKFLOW; the comment workflow follows its runs.
 BUILD_WORKFLOW = ".github/workflows/build-and-test.yml"
+LIN_BUILD_WORKFLOW = ".github/workflows/lin-build.yml"
+WIN_BUILD_WORKFLOW = ".github/workflows/win-build.yml"
+STAGE_APPLY_ACTION = ".github/actions/devkit-stage-apply/action.yml"
 
 
 def _top_block(text: str, key: str) -> list[str]:
@@ -1131,6 +1139,37 @@ def check_swap_wiring(repo: Path, errors: list) -> int:
         errors.append(f"{BUILD_WORKFLOW}: the summary job needs a step named \"{devkit_swap.PENDING_STEP}\" "
                       f"running devkit_swap.py pending --expect-staged ({where} PENDING_STEP: fetch accepts a "
                       "run whose only failure is that step; a missing manifest must fail it)")
+    count = 1
+    # The staged files: devkit-stage uploads devkit_stage.stage_artifact()
+    # for each system and runtime, and the product builds download them by
+    # name through devkit-stage-apply, which maps each to its runtime.
+    import devkit_stage  # here: it imports this module
+    apply = repo / STAGE_APPLY_ACTION
+    try:
+        apply_text = apply.read_text(encoding="utf-8")
+        count += 1
+    except OSError:
+        apply_text = None
+    for (os_name, runtime) in devkit_swap.TEST_JOBS:
+        artifact = devkit_stage.stage_artifact(os_name, runtime)
+        if not re.search(rf"^\s*name:[ \t]*{re.escape(artifact)}[ \t]*$", stage, re.M):
+            errors.append(f"{BUILD_WORKFLOW}: the {devkit_swap.STAGE_JOB} job must upload the staged files as "
+                          f"{artifact} (devkit_stage.py stage_artifact), the name the product builds download")
+        if apply_text is not None and not re.search(rf"(^|\s|')({re.escape(artifact)}\)|'{re.escape(artifact)}')",
+                                                    apply_text, re.M):
+            errors.append(f"{STAGE_APPLY_ACTION}: must map {artifact} to its runtime (devkit_stage.py "
+                          f"stage_artifact)")
+    for os_name, workflow in (("linux", LIN_BUILD_WORKFLOW), ("windows", WIN_BUILD_WORKFLOW)):
+        prefix = devkit_stage.stage_artifact(os_name, "xrt")[:-len("-xrt")]
+        try:
+            text = (repo / workflow).read_text(encoding="utf-8")
+            count += 1
+        except OSError:
+            continue
+        lines = [l for l in text.splitlines() if re.match(rf"^\s*artifact:[ \t]*{re.escape(prefix)}-\$\{{\{{", l)]
+        if len(lines) != 1 or "'hrx'" not in lines[0] or "'xrt'" not in lines[0]:
+            errors.append(f"{workflow}: its devkit-stage-apply step must name the artifact {prefix}-<xrt|hrx> "
+                          f"(devkit_stage.py stage_artifact), choosing 'xrt' or 'hrx' by the variant")
     changes_job = "\n".join(jobs.get("changes", []))
     for sub in ("verify", "check"):
         if f"devkit_swap.py {sub}" not in changes_job:
@@ -1138,7 +1177,7 @@ def check_swap_wiring(repo: Path, errors: list) -> int:
     if not re.search(r"^      actions: read\s*$", changes_job, re.M):
         errors.append(f"{BUILD_WORKFLOW}: the changes job needs actions: read (devkit_swap.py verify reads "
                       "another run's manifests)")
-    return 1
+    return count
 
 
 def run(repo: Path, base: str = "", head: str = "HEAD",
