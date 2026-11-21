@@ -62,7 +62,7 @@ outputs:
       aiebu_static.lib, any library on its engines' -L path), the CI that
       runs the dev-kit jobs changed, or the changed files are unknown.
       flm-dev-kit/ paths never select product suites: a change only there
-      gives run "false" (see devkit-overlay for the packages it may build).
+      gives run "false" (see devkit-stage for the packages it may build).
     value: ${{ steps.changes.outputs.devkit }}
   devkit-catalog:
     description: >
@@ -83,26 +83,28 @@ outputs:
   devkit-families:
     description: >
       Comma-separated catalog families of the dev-kit engines the change
-      touches, for the dev-kit overlay tests: an engine's families and those
-      of the engines that use it, from flm-dev-kit/FLM_DLL/engines.json; every
+      rebuilds from changed source (an engine's families and those of the
+      engines that use it, from flm-dev-kit/FLM_DLL/engines.json; every
       engine's families when shared engine code, a src/lib/xrt library the
-      engines link, the dev-kit CI or an unknown set of files changed. Empty
+      engines link or an unknown set of files changed; none for the dev-kit
+      CI alone), whose libraries are staged into the product builds. Empty
       when no dev-kit engine is touched.
     value: ${{ steps.changes.outputs.devkit_families }}
-  devkit-overlay:
+  devkit-stage:
     description: >
-      "true" when the dev-kit overlay tests run: the change touches a dev-kit
-      engine's families or selects the xclbin area (other than through
-      shipped kernels alone, which are only compared). A pull request then
-      builds the portable packages they start from even when run is "false"
-      (suites is then "none", so no product test runs).
-    value: ${{ steps.changes.outputs.devkit_overlay }}
+      "true" when a pull request's run stages dev-kit files into its product
+      builds (build-and-test.yml devkit-stage): the change touches a dev-kit
+      engine's families or selects the xclbin area through kernel source
+      (not through the dev-kit CI or shipped kernels alone). The portable
+      packages then build, with the files staged, even when run is "false"
+      (suites is then "none"; the staging adds its own selection).
+    value: ${{ steps.changes.outputs.devkit_stage }}
   devkit-bench:
     description: >
       "true" when the dev-kit perf and accuracy benches (devkit-bench.yml)
       run: dev-kit engine or kernel source changed (code or build inputs
       under flm-dev-kit/FLM_DLL/ or flm-dev-kit/FLM_Xclbin/) and the
-      dev-kit overlay builds something to bench (devkit-overlay), or the
+      run stages something to bench (devkit-stage), or the
       changed files are unknown. Documentation, CI-only changes (the bench
       CI included), the kernel build image and toolchain.lock, and the
       converter, pybind and launchlib give "false". Build and Test's
@@ -113,7 +115,7 @@ outputs:
     description: >
       "true" when the head is a verified dev-kit swap commit (the swap-verified
       input): the run then builds and tests nothing (run "false", suites
-      "none", no dev-kit area, overlay or bench) and only devkit-static runs.
+      "none", no dev-kit area, staging or bench) and only devkit-static runs.
     value: ${{ steps.changes.outputs.swap_verified }}
   tier:
     description: install, pr or full.

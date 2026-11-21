@@ -65,10 +65,10 @@ class SwapVerified(unittest.TestCase):
         out = cli("--files", *self.FILES, "--swap-verified", "true")
         self.assertEqual({k: out[k] for k in ("run_tests", "suites", "families", "hipep", "new_models",
                                               "devkit", "devkit_catalog", "devkit_areas", "devkit_families",
-                                              "devkit_overlay", "devkit_bench", "swap_verified")},
+                                              "devkit_stage", "devkit_bench", "swap_verified")},
                          {"run_tests": "false", "suites": "none", "families": "", "hipep": "false",
                           "new_models": "", "devkit": "false", "devkit_catalog": "true", "devkit_areas": "",
-                          "devkit_families": "", "devkit_overlay": "false", "devkit_bench": "false",
+                          "devkit_families": "", "devkit_stage": "false", "devkit_bench": "false",
                           "swap_verified": "true"})
         self.assertIn("verified dev-kit swap", out["summary"])
 
@@ -76,14 +76,14 @@ class SwapVerified(unittest.TestCase):
         plain = cli("--files", *self.FILES)
         self.assertEqual(plain["swap_verified"], "false")
         self.assertEqual(plain["run_tests"], "true")
-        self.assertEqual(plain["devkit_overlay"], "true")
+        self.assertEqual(plain["devkit_stage"], "true")
         self.assertEqual(cli("--files", *self.FILES, "--swap-verified", "false"), plain)
         self.assertEqual(cli("--files", *self.FILES, "--swap-verified", ""), plain)
 
     def test_decision(self):
         d = changes.decide(list(self.FILES))
         d.skip_for_swap()
-        self.assertFalse(d.devkit_overlay() or d.bench() or d.runs_hipep())
+        self.assertFalse(d.devkit_stage() or d.bench() or d.runs_hipep())
         self.assertTrue(d.devkit_catalog)
 
 
@@ -167,7 +167,7 @@ class Cli(unittest.TestCase):
         self.assertEqual([l.split("=")[0] for l in lines],
                          ["run_tests", "families", "asr_full", "suites", "hipep",
                           "new_models", "hipep_models", "devkit", "devkit_catalog", "devkit_areas",
-                          "devkit_families", "devkit_overlay", "devkit_bench", "swap_verified", "summary"])
+                          "devkit_families", "devkit_stage", "devkit_bench", "swap_verified", "summary"])
 
     def test_suites_scoped_to_the_change(self):
         cases = {
@@ -591,16 +591,17 @@ class DevKit(unittest.TestCase):
         out = cli("--files", ".github/workflows/devkit-xclbins.yml")
         self.assertEqual(out["devkit_areas"], "xclbin,dll,converter,pybind,launchlib")
 
-    def test_overlay(self):
-        # A dev-kit engine: the overlay runs, and no product suite (run_tests
-        # false: only the portable packages it starts from build).
+    def test_stage(self):
+        # A dev-kit engine: its files are staged, and no product suite of its
+        # own (run_tests false: the portable packages build for the staged
+        # files, whose selection devkit_stage.py adds).
         out = cli("--files", "flm-dev-kit/FLM_DLL/detail/qwen3_npu/qwen3_npu.cpp")
-        self.assertEqual((out["run_tests"], out["suites"], out["hipep"], out["devkit_overlay"]),
+        self.assertEqual((out["run_tests"], out["suites"], out["hipep"], out["devkit_stage"]),
                          ("false", "none", "false", "true"))
-        self.assertIn("portable packages built for the overlay", out["summary"])
-        # A kernel: the kernel build names the models, so the overlay runs.
+        self.assertIn("portable packages built with the dev-kit files staged", out["summary"])
+        # A kernel: the kernel build names the models, so staging runs.
         out = cli("--files", "flm-dev-kit/FLM_Xclbin/MM/iron/mm_aie.py")
-        self.assertEqual((out["run_tests"], out["suites"], out["devkit_families"], out["devkit_overlay"]),
+        self.assertEqual((out["run_tests"], out["suites"], out["devkit_families"], out["devkit_stage"]),
                          ("false", "none", "", "true"))
         # Areas with no NPU test, and dll files that build no engine: none.
         for path in ("flm-dev-kit/FLM_Q4NX_Converter/q4nx/model_converter.py",
@@ -610,18 +611,27 @@ class DevKit(unittest.TestCase):
                      "flm-dev-kit/FLM_DLL/model_list.json"):
             with self.subTest(path=path):
                 out = cli("--files", path)
-                self.assertEqual((out["run_tests"], out["suites"], out["devkit_overlay"]),
+                self.assertEqual((out["run_tests"], out["suites"], out["devkit_stage"]),
                                  ("false", "none", "false"))
                 self.assertIn("product builds and NPU tests skipped", out["summary"])
         # Beside product code the product rules still decide the suites.
         out = cli("--files", "flm-dev-kit/FLM_DLL/detail/qwen3_npu/qwen3_npu.cpp", "src/server/server.cpp")
-        self.assertEqual((out["run_tests"], out["suites"], out["devkit_overlay"]), ("true", "all", "true"))
-        # The dev-kit CI and unknown changes: every family, so the overlay too.
-        self.assertEqual(cli("--files", ".github/workflows/build-and-test.yml")["devkit_overlay"], "true")
-        self.assertEqual(cli("--base", "0" * 40, "--head", "HEAD")["devkit_overlay"], "true")
+        self.assertEqual((out["run_tests"], out["suites"], out["devkit_stage"]), ("true", "all", "true"))
+        # The dev-kit CI builds every area but stages nothing (no source
+        # changed: nothing to swap); unknown changes stage every family.
+        for path in (".github/workflows/build-and-test.yml", ".github/script/ci/changes.py",
+                     ".github/workflows/devkit-xclbins.yml", ".github/actions/devkit-stage-apply/action.yml"):
+            with self.subTest(path=path):
+                out = cli("--files", path)
+                self.assertEqual((out["devkit_areas"], out["devkit_families"], out["devkit_stage"]),
+                                 ("xclbin,dll,converter,pybind,launchlib", "", "false"))
+        self.assertEqual(cli("--base", "0" * 40, "--head", "HEAD")["devkit_stage"], "true")
+        # Beside the CI change, the source still stages.
+        out = cli("--files", ".github/script/ci/changes.py", "flm-dev-kit/FLM_DLL/detail/d3_npu/d3_npu.cpp")
+        self.assertEqual((out["devkit_families"], out["devkit_stage"]), ("d3", "true"))
         # Documentation and product-only changes: none.
         self.assertEqual(cli("--files", "docs/a.md")["suites"], "none")
-        self.assertEqual(cli("--files", "src/server/server.cpp")["devkit_overlay"], "false")
+        self.assertEqual(cli("--files", "src/server/server.cpp")["devkit_stage"], "false")
 
     def test_catalog_files_run_the_catalog_check(self):
         """What src/ ships and the dev-kit JSON describing it run
@@ -635,7 +645,7 @@ class DevKit(unittest.TestCase):
                 self.assertEqual(cli("--files", path)["devkit_catalog"], "true")
         # Only the model list: no dev-kit area, so no dev-kit build or overlay.
         out = cli("--files", "src/model_list.json")
-        self.assertEqual((out["devkit"], out["devkit_areas"], out["devkit_overlay"]), ("false", "", "false"))
+        self.assertEqual((out["devkit"], out["devkit_areas"], out["devkit_stage"]), ("false", "", "false"))
         self.assertIn("dev-kit catalog check runs", out["summary"])
         out = cli("--files", "src/lib/hrx/libqwen3_npu.so")
         self.assertEqual((out["devkit"], out["devkit_areas"]), ("false", ""))
@@ -646,23 +656,23 @@ class DevKit(unittest.TestCase):
         self.assertEqual(cli("--base", "0" * 40, "--head", "HEAD")["devkit_catalog"], "true")
         self.assertEqual(changes.decide([]).outputs()["devkit_catalog"], "false")
 
-    def test_shipped_kernel_is_rebuilt_to_compare_without_overlay(self):
+    def test_shipped_kernel_is_rebuilt_to_compare_without_staging(self):
         out = cli("--files", "src/xclbins/Llama-3.1-8B-NPU2/layer.xclbin")
         self.assertEqual((out["run_tests"], out["devkit"], out["devkit_areas"], out["devkit_families"],
-                          out["devkit_overlay"]), ("true", "true", "xclbin", "", "false"))
+                          out["devkit_stage"]), ("true", "true", "xclbin", "", "false"))
         self.assertEqual(families(out), {"llama3"})
         self.assertIn("shipped kernels rebuilt to compare", out["summary"])
         # Other files in the folder are no kernel.
         self.assertEqual(cli("--files", "src/xclbins/Llama-3.1-8B-NPU2/rtp.txt")["devkit_areas"], "")
-        # With a kernel source the overlay runs as for that source alone.
+        # With a kernel source it stages as for that source alone.
         out = cli("--files", "src/xclbins/Llama-3.1-8B-NPU2/layer.xclbin",
                   "flm-dev-kit/FLM_Xclbin/MM/iron/mm_aie.py")
-        self.assertEqual((out["devkit_areas"], out["devkit_overlay"]), ("xclbin", "true"))
+        self.assertEqual((out["devkit_areas"], out["devkit_stage"]), ("xclbin", "true"))
         self.assertNotIn("rebuilt to compare", out["summary"])
-        # With a dev-kit engine: the engine's overlay, the kernel compared.
+        # With a dev-kit engine: the engine staged, the kernel compared.
         out = cli("--files", "src/xclbins/Llama-3.1-8B-NPU2/layer.xclbin",
                   "flm-dev-kit/FLM_DLL/detail/llama_npu/llama_npu.cpp")
-        self.assertEqual((out["devkit_areas"], out["devkit_overlay"]), ("xclbin,dll", "true"))
+        self.assertEqual((out["devkit_areas"], out["devkit_stage"]), ("xclbin,dll", "true"))
 
     def test_unknown_files_select_every_area(self):
         out = cli("--base", "0" * 40, "--head", "HEAD")
@@ -676,13 +686,13 @@ class DevKit(unittest.TestCase):
 class DevKitBench(unittest.TestCase):
     """devkit_bench: the perf and accuracy benches run only for dev-kit engine
     or kernel source (code or build inputs under FLM_DLL or FLM_Xclbin), and
-    only when Build and Test builds something for them (devkit_overlay)."""
+    only when Build and Test stages something for them (devkit_stage)."""
 
     def bench(self, *paths: str) -> str:
         out = cli("--files", *paths)
-        # Invariant: a bench always has the overlay's artifacts to bench.
+        # Invariant: a bench always has staged packages to bench.
         if out["devkit_bench"] == "true":
-            self.assertEqual(out["devkit_overlay"], "true", paths)
+            self.assertEqual(out["devkit_stage"], "true", paths)
         return out["devkit_bench"]
 
     def test_ci_only_changes_do_not_bench(self):
@@ -743,7 +753,7 @@ class DevKitBench(unittest.TestCase):
                 self.assertEqual(self.bench(path), "true")
 
     def test_engine_serving_no_family_does_not_bench(self):
-        # qwen3_5_omni serves no catalog family: no overlay, nothing to bench.
+        # qwen3_5_omni serves no catalog family: nothing staged, nothing to bench.
         self.assertEqual(self.bench("flm-dev-kit/FLM_DLL/detail/qwen3_5_omni/qwen3_5_omni_npu.cpp"), "false")
 
     def test_kernel_source_benches(self):
@@ -848,7 +858,6 @@ class DevKitFamilies(unittest.TestCase):
                      # Not dev-kit engine code, but the engines link or run under them.
                      "src/lib/xrt/libaiebu.a",
                      "src/lib/xrt/libqwen3_npu.so",
-                     ".github/script/ci/changes.py",
                      "flm-dev-kit/env.sh"):
             with self.subTest(path=path):
                 self.assertEqual(devkit_families(cli("--files", path)), self.all)
@@ -1036,6 +1045,66 @@ class RealGit(unittest.TestCase):
         self.assertEqual(self.run_cli()["run_tests"], "false")
         self.write("src/server/server.cpp", "int main() { transcribe(); }\n")
         self.assertEqual(self.run_cli()["asr_full"], "true")
+
+
+class StageSelection(unittest.TestCase):
+    """What a pull request builds, stages and tests, by kind of change (the
+    rest of the selection, for staged runs, is devkit_stage.py's: see
+    test_devkit_stage.py)."""
+
+    def outputs(self, *paths: str) -> dict:
+        return cli("--files", *paths)
+
+    def test_product_only(self):
+        out = self.outputs("src/server/server.cpp")
+        self.assertEqual((out["run_tests"], out["suites"], out["devkit"], out["devkit_stage"]),
+                         ("true", "all", "false", "false"))
+
+    def test_devkit_only(self):
+        out = self.outputs("flm-dev-kit/FLM_DLL/detail/qwen3_npu/qwen3_npu.cpp")
+        self.assertEqual((out["run_tests"], out["suites"], out["devkit_stage"], out["devkit_bench"]),
+                         ("false", "none", "true", "true"))
+        self.assertEqual(set(out["devkit_families"].split(",")), {"qwen3", "qwen3-it", "qwen3-tk",
+                                                                   "deepseek-r1-0528"})
+
+    def test_mixed(self):
+        # Product suites and staged files: one test job per runtime runs the
+        # union (devkit_stage.py), not a product and an overlay pass.
+        out = self.outputs("flm-dev-kit/FLM_DLL/detail/d3_npu/d3_npu.cpp", "src/common/whisper/whisper.cpp")
+        self.assertEqual((out["run_tests"], out["suites"], out["devkit_families"], out["devkit_stage"]),
+                         ("true", "asr", "d3", "true"))
+
+    def test_new_model(self):
+        """A new engine (engines.json entry), its kernels (kernel_assignment
+        entry), the catalog entry, the link line and the engine table: the
+        new engine's families stage, the kernels are the plan's, and the new
+        model is required."""
+        head_engines = json.loads((changes.REPO_ROOT / changes.DEVKIT_ENGINES).read_text(encoding="utf-8"))
+        base_engines = json.loads(json.dumps(head_engines))
+        head_engines["engines"]["newm_npu"] = {"families": ["newm"], "models": ["newm:1b"], "uses": []}
+        base_cat = json.loads((changes.REPO_ROOT / changes.MODEL_LIST).read_text(encoding="utf-8"))
+        head_cat = json.loads(json.dumps(base_cat))
+        head_cat["models"]["newm"] = {"1b": {"name": "NewM-1B-NPU2", "url": "u/NewM", "details": {"family": "newm"}}}
+        git = FakeGit(base={changes.DEVKIT_ENGINES: json.dumps(base_engines),
+                            changes.MODEL_LIST: json.dumps(base_cat)},
+                      head={changes.MODEL_LIST: json.dumps(head_cat)})
+        files = ["flm-dev-kit/FLM_DLL/detail/newm_npu/newm_npu.cpp", changes.DEVKIT_ENGINES,
+                 "flm-dev-kit/FLM_Xclbin/kernel_assignment.json", "flm-dev-kit/FLM_Xclbin/kernel_assignment.md",
+                 changes.MODEL_LIST, "src/CMakeLists.txt", ".github/script/ci/changes.py"]
+        d = changes.decide(files, git, json.dumps(head_cat), changes.DevkitEngines.parse(json.dumps(head_engines)))
+        out = d.outputs()
+        self.assertEqual((out["devkit_families"], out["devkit_stage"], out["new_models"], out["devkit_catalog"]),
+                         ("newm", "true", "newm:1b", "true"))
+        self.assertIn("xclbin", out["devkit_areas"].split(","))
+        self.assertIn("dll", out["devkit_areas"].split(","))
+        # The engine table change does not stage every engine.
+        self.assertNotIn("qwen3", out["devkit_families"])
+
+    def test_verified_swap(self):
+        out = cli("--files", "flm-dev-kit/FLM_DLL/detail/qwen3_npu/qwen3_npu.cpp", "src/lib/xrt/libqwen3_npu.so",
+                  "--swap-verified", "true")
+        self.assertEqual((out["run_tests"], out["suites"], out["devkit_areas"], out["devkit_stage"],
+                          out["devkit_bench"], out["devkit_catalog"]), ("false", "none", "", "false", "false", "true"))
 
 
 if __name__ == "__main__":
