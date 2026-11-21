@@ -1,0 +1,60 @@
+design vmul
+tile 0 0 15
+tile 0 1 26
+tile 0 2 27
+core 0 2
+buffer rhs0_0_cons_buff_0 0 2 1024 512
+buffer rhs0_0_cons_buff_1 0 2 16384 512
+buffer lhs0_0_cons_buff_0 0 2 32768 512
+buffer lhs0_0_cons_buff_1 0 2 49152 512
+buffer out0_0_cons_buff_0 0 1 0 512
+buffer out0_0_cons_buff_1 0 1 65536 512
+buffer out0_0_buff_0 0 2 1536 512
+buffer out0_0_buff_1 0 2 16896 512
+buffer rhs0_cons_buff_0 0 1 131072 512
+buffer rhs0_cons_buff_1 0 1 196608 512
+buffer lhs0_cons_buff_0 0 1 262144 512
+buffer lhs0_cons_buff_1 0 1 327680 512
+declare 0 2 4
+lock rhs0_0_cons_prod_lock_0 0 2 4 2
+declare 0 2 5
+lock rhs0_0_cons_cons_lock_0 0 2 5 0
+declare 0 2 2
+lock lhs0_0_cons_prod_lock_0 0 2 2 2
+declare 0 2 3
+lock lhs0_0_cons_cons_lock_0 0 2 3 0
+declare 0 1 4
+lock out0_0_cons_prod_lock_0 0 1 4 2
+declare 0 1 5
+lock out0_0_cons_cons_lock_0 0 1 5 0
+declare 0 2 0
+lock out0_0_prod_lock_0 0 2 0 2
+declare 0 2 1
+lock out0_0_cons_lock_0 0 2 1 0
+declare 0 0 4
+lock out0_cons_prod_lock_0 0 0 4 0
+declare 0 0 5
+lock out0_cons_cons_lock_0 0 0 5 0
+declare 0 1 2
+lock rhs0_cons_prod_lock_0 0 1 2 2
+declare 0 1 3
+lock rhs0_cons_cons_lock_0 0 1 3 0
+declare 0 0 2
+lock rhs0_prod_lock_0 0 0 2 0
+declare 0 0 3
+lock rhs0_cons_lock_0 0 0 3 0
+declare 0 1 0
+lock lhs0_cons_prod_lock_0 0 1 0 2
+declare 0 1 1
+lock lhs0_cons_cons_lock_0 0 1 1 0
+declare 0 0 0
+lock lhs0_prod_lock_0 0 0 0 0
+declare 0 0 1
+lock lhs0_cons_lock_0 0 0 1 0
+alloc lhs0 mm2s 0 0
+alloc rhs0 mm2s 1 0
+alloc out0 s2mm 0 0
+census objdump
+acquire 0 2 0 2 0
+acquire 0 2 0 2 3
+acquire 0 2 0 2 5

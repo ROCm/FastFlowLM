@@ -1,0 +1,294 @@
+# Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+# Portions of this file consist of AI-generated content.
+#
+# Pressure tests of aie2p-launchlib (vadd_vmul_bf16) on the NPU test runners,
+# Linux and Windows, in both flows (ELF, the default, and xclbin). Runs on a
+# push to the branch that carries it (and the precompiled packages, which are
+# gitignored elsewhere), or by hand. Hosted runners build; the NPU runners only
+# run what they built.
+#
+# Windows runs only what never hangs there: no parity, prev or ctx (they give
+# wrong data on purpose or need another context) and pressure.ps1 -SkipFullWalk.
+
+name: launchlib pressure
+
+on:
+  push:
+    branches: [ci/launchlib-flow-elf-pressure]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: launchlib-pressure
+  cancel-in-progress: false
+
+jobs:
+  build-lin:
+    name: Build Linux
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read  # the build-environment container on GHCR
+    container:
+      image: ghcr.io/rocm/fastflowlm/build-environment:ubuntu24.04
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user root
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build
+        shell: bash
+        working-directory: flm-dev-kit/aie2p-launchlib/vadd_vmul_bf16
+        run: |
+          set -euo pipefail
+          out=$GITHUB_WORKSPACE/dist
+          for cfg in 1x1 8x2 8x4; do
+            cols=${cfg%x*} cores=${cfg#*x}
+            name=n256-c${cols}x${cores}$([ "$cores" -ge 3 ] && echo -pair)
+            d=$out/$name
+            mkdir -p "$d"
+            flags="-std=c++20 -O2 -Wall -I ../launchlib/include -I include -I kernels -DEW_N=256 -DEW_COLS=$cols -DEW_CORES=$cores"
+            for p in host stress ovlp; do
+              g++-13 $flags host/$p.cpp -o "$d/$p.exe" -lxrt_coreutil -luuid
+            done
+            g++-13 $flags host/make_overlay.cpp -o "$d/make_overlay.exe"
+            cp -r precompiled/$name "$d/pkg"
+          done
+          # XRT from the container, where both of XRT's lookups find it
+          # (XILINX_XRT/lib/x86_64-linux-gnu, and dladdr of libxrt_coreutil).
+          x=$out/xrt/lib/x86_64-linux-gnu
+          mkdir -p "$x"
+          cp -a /usr/lib/x86_64-linux-gnu/libxrt*.so* /usr/lib/x86_64-linux-gnu/libboost_program_options.so* "$x/"
+          cp tools/pressure.sh "$out/"
+          dpkg-query -W libxrt-dev > "$out/xrt-version.txt" || true
+          tar czf "$GITHUB_WORKSPACE/launchlib-lin.tgz" -C "$out" .
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: launchlib-lin
+          path: launchlib-lin.tgz
+          retention-days: 7
+
+  build-win:
+    name: Build Windows
+    runs-on: windows-2025-vs2026
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Restore build dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: C:\dev
+          key: windows-deps-${{ hashFiles('.github/script/ci/setup_windows_deps.ps1', '.github/windows-deps/**') }}
+      - name: Set up build dependencies
+        shell: powershell
+        run: .github\script\ci\setup_windows_deps.ps1
+      - name: Build
+        shell: powershell
+        working-directory: flm-dev-kit/aie2p-launchlib/vadd_vmul_bf16
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = "$env:GITHUB_WORKSPACE\dist"
+          foreach ($cfg in @(@(1, 1, 'n256-c1x1'), @(8, 2, 'n256-c8x2'), @(8, 4, 'n256-c8x4-pair'))) {
+            $cols, $cores, $name = $cfg
+            # A short build path: CMake's try-compile trips MAX_PATH under the workspace.
+            $b = "$env:RUNNER_TEMP\b\c${cols}x${cores}"
+            cmake -S . -B $b -A x64 "-DCOLS=$cols" "-DCORES=$cores"
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            cmake --build $b --config Release
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            $d = "$out\$name"
+            New-Item -ItemType Directory -Force -Path $d | Out-Null
+            foreach ($p in 'host', 'stress', 'ovlp', 'make_overlay') { Copy-Item "$b\Release\$p.exe" $d }
+            Copy-Item -Recurse "precompiled\$name" "$d\pkg"
+          }
+          Copy-Item tools\pressure.ps1 $out
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: launchlib-win
+          path: dist
+          retention-days: 7
+
+  test-lin:
+    name: NPU Linux
+    needs: build-lin
+    runs-on: [self-hosted, linux, x64, npu, sweep]
+    timeout-minutes: 150
+    env:
+      LL: ${{ github.workspace }}/launchlib
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: launchlib-lin
+      - name: Unpack and probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$LL"
+          mkdir -p "$LL"
+          tar xzf launchlib-lin.tgz -C "$LL"
+          echo "XILINX_XRT=$LL/xrt" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$LL/xrt/lib/x86_64-linux-gnu" >> "$GITHUB_ENV"
+          echo "runner $RUNNER_NAME, kernel $(uname -r), amdxdna $(cat /sys/module/amdxdna/version 2>/dev/null || echo '?')"
+          cat "$LL/xrt-version.txt" || true
+          ls -l /dev/accel || true
+          # Another NPU user would turn the must-pass walks into shared ones.
+          if pgrep -a -x 'flm|flm-real|stress.exe|host.exe|ovlp.exe'; then echo "::error::NPU processes left on the runner"; exit 1; fi
+      # APP@STATE packages, as make ovlp does (make_package.py --state only copies the txn).
+      - name: Overlay packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          for d in "$LL"/n256-*; do
+            rm -rf "$d/pkg_ovl"; mkdir "$d/pkg_ovl"
+            cp -r "$d/pkg/vadd" "$d/pkg/vmul" "$d/pkg_ovl/"
+            "$d/make_overlay.exe" "$d/pkg_ovl" "$d/add.txn"
+            cp "$d/add.txn" "$d/pkg_ovl/ovl/state_add.txn"
+          done
+      - name: host and ovlp, both flows
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          fail=0
+          for name in n256-c1x1 n256-c8x2 n256-c8x4-pair; do
+            d=$LL/$name
+            c=${name#n256-c}; c=${c%-pair}; n=$(( 2 * 256 * ${c%x*} * ${c#*x} ))
+            for flow in elf xclbin; do
+              echo "=== $name host --flow $flow"
+              "$d/host.exe" --package "$d/pkg" --n $n --iters 50 --pairs 16 --flow $flow || fail=1
+              echo "=== $name ovlp --flow $flow"
+              "$d/ovlp.exe" --package "$d/pkg_ovl" --n $n --iters 50 --pairs 16 --flow $flow || fail=1
+            done
+          done
+          exit $fail
+      - name: stress all + ctx
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          fail=0
+          for name in n256-c1x1 n256-c8x2 n256-c8x4-pair; do
+            d=$LL/$name
+            for flow in elf xclbin; do
+              echo "=== $name stress all, ctx --flow $flow"
+              "$d/stress.exe" --package "$d/pkg" --flow $flow --mode all --seed 1 --launches 20000 || fail=1
+              "$d/stress.exe" --package "$d/pkg" --flow $flow --mode ctx --seed 1 || fail=1
+            done
+          done
+          exit $fail
+      - name: pressure 8x4, ELF
+        if: ${{ !cancelled() }}
+        shell: bash
+        working-directory: ${{ env.LL }}
+        run: |
+          d=$LL/n256-c8x4-pair
+          EXE=$d/stress.exe PKG=$d/pkg FLOW=elf bash pressure.sh "$LL/out/pressure_elf"
+      - name: pressure 8x4, xclbin
+        if: ${{ !cancelled() }}
+        shell: bash
+        working-directory: ${{ env.LL }}
+        run: |
+          d=$LL/n256-c8x4-pair
+          EXE=$d/stress.exe PKG=$d/pkg FLOW=xclbin bash pressure.sh "$LL/out/pressure_xclbin"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ always() }}
+        with:
+          name: pressure-logs-lin
+          path: ${{ env.LL }}/out
+          retention-days: 14
+
+  test-win:
+    name: NPU Windows
+    needs: build-win
+    runs-on: [self-hosted, windows, x64, npu, sweep]
+    timeout-minutes: 150
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: launchlib-win
+          path: launchlib
+      - name: Probe
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host "runner $env:RUNNER_NAME"
+          Get-CimInstance Win32_PnPSignedDriver | Where-Object { $_.DeviceName -match 'NPU' } |
+            ForEach-Object { Write-Host "$($_.DeviceName): driver $($_.DriverVersion)" }
+          Get-Item C:\Windows\System32\xrt_coreutil.dll | ForEach-Object { Write-Host "xrt_coreutil $($_.VersionInfo.FileVersion)" }
+          # Another NPU user would turn the must-pass walks into shared ones.
+          $p = Get-Process -Name flm*, stress, host -ErrorAction SilentlyContinue
+          if ($p) { $p | Format-Table Id, Name, StartTime; Write-Host '::error::NPU processes left on the runner'; exit 1 }
+      - name: Overlay packages
+        shell: powershell
+        working-directory: launchlib
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($d in Get-ChildItem -Directory n256-*) {
+            $o = "$($d.FullName)\pkg_ovl"
+            if (Test-Path $o) { Remove-Item -Recurse -Force $o }
+            New-Item -ItemType Directory $o | Out-Null
+            Copy-Item -Recurse "$($d.FullName)\pkg\vadd", "$($d.FullName)\pkg\vmul" $o
+            & "$($d.FullName)\make_overlay.exe" $o "$($d.FullName)\add.txn"
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            Copy-Item "$($d.FullName)\add.txn" "$o\ovl\state_add.txn"
+          }
+      - name: host and ovlp, both flows
+        if: ${{ !cancelled() }}
+        shell: powershell
+        working-directory: launchlib
+        run: |
+          $fail = 0
+          foreach ($cfg in @(@('n256-c1x1', 512), @('n256-c8x2', 8192), @('n256-c8x4-pair', 16384))) {
+            $name, $n = $cfg
+            foreach ($flow in 'elf', 'xclbin') {
+              Write-Host "=== $name host --flow $flow"
+              & "$name\host.exe" --package "$name\pkg" --n $n --iters 50 --pairs 16 --flow $flow
+              if ($LASTEXITCODE) { $fail = 1 }
+              Write-Host "=== $name ovlp --flow $flow"
+              & "$name\ovlp.exe" --package "$name\pkg_ovl" --n $n --iters 50 --pairs 16 --flow $flow
+              if ($LASTEXITCODE) { $fail = 1 }
+            }
+          }
+          exit $fail
+      - name: stress lengths, special, big, random
+        if: ${{ !cancelled() }}
+        shell: powershell
+        working-directory: launchlib
+        run: |
+          $fail = 0
+          foreach ($name in 'n256-c1x1', 'n256-c8x2', 'n256-c8x4-pair') {
+            foreach ($flow in 'elf', 'xclbin') {
+              foreach ($mode in 'lengths', 'special', 'big', 'random') {
+                Write-Host "=== $name stress $mode --flow $flow"
+                & "$name\stress.exe" --package "$name\pkg" --flow $flow --mode $mode --seed 1 --launches 20000
+                if ($LASTEXITCODE) { $fail = 1 }
+              }
+            }
+          }
+          exit $fail
+      - name: pressure 8x4, ELF
+        if: ${{ !cancelled() }}
+        shell: powershell
+        working-directory: launchlib
+        run: |
+          powershell -File pressure.ps1 -Exe n256-c8x4-pair\stress.exe -Package n256-c8x4-pair\pkg -SkipFullWalk -Flow elf -Out out\pressure_elf
+          exit $LASTEXITCODE
+      - name: pressure 8x4, xclbin
+        if: ${{ !cancelled() }}
+        shell: powershell
+        working-directory: launchlib
+        run: |
+          powershell -File pressure.ps1 -Exe n256-c8x4-pair\stress.exe -Package n256-c8x4-pair\pkg -SkipFullWalk -Flow xclbin -Out out\pressure_xclbin
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ always() }}
+        with:
+          name: pressure-logs-win
+          path: launchlib/out
+          retention-days: 14

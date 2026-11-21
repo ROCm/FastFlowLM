@@ -1,0 +1,874 @@
+design vmul
+tile 0 0 15
+tile 1 0 15
+tile 2 0 15
+tile 3 0 15
+tile 4 0 15
+tile 5 0 15
+tile 6 0 15
+tile 7 0 15
+tile 0 1 26
+tile 1 1 26
+tile 2 1 26
+tile 3 1 26
+tile 4 1 26
+tile 5 1 26
+tile 6 1 26
+tile 7 1 26
+tile 0 2 27
+tile 0 3 29
+tile 0 4 30
+tile 0 5 31
+tile 1 2 27
+tile 1 3 29
+tile 1 4 30
+tile 1 5 31
+tile 2 2 27
+tile 2 3 29
+tile 2 4 30
+tile 2 5 31
+tile 3 2 27
+tile 3 3 29
+tile 3 4 30
+tile 3 5 31
+tile 4 2 27
+tile 4 3 29
+tile 4 4 30
+tile 4 5 31
+tile 5 2 27
+tile 5 3 29
+tile 5 4 30
+tile 5 5 31
+tile 6 2 27
+tile 6 3 29
+tile 6 4 30
+tile 6 5 31
+tile 7 2 27
+tile 7 3 29
+tile 7 4 30
+tile 7 5 31
+core 0 2
+core 0 3
+core 0 4
+core 0 5
+core 1 2
+core 1 3
+core 1 4
+core 1 5
+core 2 2
+core 2 3
+core 2 4
+core 2 5
+core 3 2
+core 3 3
+core 3 4
+core 3 5
+core 4 2
+core 4 3
+core 4 4
+core 4 5
+core 5 2
+core 5 3
+core 5 4
+core 5 5
+core 6 2
+core 6 3
+core 6 4
+core 6 5
+core 7 2
+core 7 3
+core 7 4
+core 7 5
+buffer pair7_0_cons_buff_0 7 2 1024 4096
+buffer pair7_0_cons_buff_1 7 2 16384 4096
+buffer pair7_1_cons_buff_0 7 3 1024 4096
+buffer pair7_1_cons_buff_1 7 3 16384 4096
+buffer pair7_2_cons_buff_0 7 4 1024 4096
+buffer pair7_2_cons_buff_1 7 4 16384 4096
+buffer pair7_3_cons_buff_0 7 5 1024 4096
+buffer pair7_3_cons_buff_1 7 5 16384 4096
+buffer pair7_buff_0 7 1 0 4096
+buffer pair7_buff_1 7 1 65536 4096
+buffer out7_3_buff_0 7 5 32768 512
+buffer out7_3_buff_1 7 5 49152 512
+buffer out7_2_buff_0 7 4 32768 512
+buffer out7_2_buff_1 7 4 49152 512
+buffer out7_1_buff_0 7 3 32768 512
+buffer out7_1_buff_1 7 3 49152 512
+buffer out7_0_buff_0 7 2 32768 512
+buffer out7_0_buff_1 7 2 49152 512
+buffer out7_buff_0 7 1 131072 2048
+buffer out7_buff_1 7 1 196608 2048
+buffer pair6_0_cons_buff_0 6 2 1024 4096
+buffer pair6_0_cons_buff_1 6 2 16384 4096
+buffer pair6_1_cons_buff_0 6 3 1024 4096
+buffer pair6_1_cons_buff_1 6 3 16384 4096
+buffer pair6_2_cons_buff_0 6 4 1024 4096
+buffer pair6_2_cons_buff_1 6 4 16384 4096
+buffer pair6_3_cons_buff_0 6 5 1024 4096
+buffer pair6_3_cons_buff_1 6 5 16384 4096
+buffer pair6_buff_0 6 1 0 4096
+buffer pair6_buff_1 6 1 65536 4096
+buffer out6_3_buff_0 6 5 32768 512
+buffer out6_3_buff_1 6 5 49152 512
+buffer out6_2_buff_0 6 4 32768 512
+buffer out6_2_buff_1 6 4 49152 512
+buffer out6_1_buff_0 6 3 32768 512
+buffer out6_1_buff_1 6 3 49152 512
+buffer out6_0_buff_0 6 2 32768 512
+buffer out6_0_buff_1 6 2 49152 512
+buffer out6_buff_0 6 1 131072 2048
+buffer out6_buff_1 6 1 196608 2048
+buffer pair5_0_cons_buff_0 5 2 1024 4096
+buffer pair5_0_cons_buff_1 5 2 16384 4096
+buffer pair5_1_cons_buff_0 5 3 1024 4096
+buffer pair5_1_cons_buff_1 5 3 16384 4096
+buffer pair5_2_cons_buff_0 5 4 1024 4096
+buffer pair5_2_cons_buff_1 5 4 16384 4096
+buffer pair5_3_cons_buff_0 5 5 1024 4096
+buffer pair5_3_cons_buff_1 5 5 16384 4096
+buffer pair5_buff_0 5 1 0 4096
+buffer pair5_buff_1 5 1 65536 4096
+buffer out5_3_buff_0 5 5 32768 512
+buffer out5_3_buff_1 5 5 49152 512
+buffer out5_2_buff_0 5 4 32768 512
+buffer out5_2_buff_1 5 4 49152 512
+buffer out5_1_buff_0 5 3 32768 512
+buffer out5_1_buff_1 5 3 49152 512
+buffer out5_0_buff_0 5 2 32768 512
+buffer out5_0_buff_1 5 2 49152 512
+buffer out5_buff_0 5 1 131072 2048
+buffer out5_buff_1 5 1 196608 2048
+buffer pair4_0_cons_buff_0 4 2 1024 4096
+buffer pair4_0_cons_buff_1 4 2 16384 4096
+buffer pair4_1_cons_buff_0 4 3 1024 4096
+buffer pair4_1_cons_buff_1 4 3 16384 4096
+buffer pair4_2_cons_buff_0 4 4 1024 4096
+buffer pair4_2_cons_buff_1 4 4 16384 4096
+buffer pair4_3_cons_buff_0 4 5 1024 4096
+buffer pair4_3_cons_buff_1 4 5 16384 4096
+buffer pair4_buff_0 4 1 0 4096
+buffer pair4_buff_1 4 1 65536 4096
+buffer out4_3_buff_0 4 5 32768 512
+buffer out4_3_buff_1 4 5 49152 512
+buffer out4_2_buff_0 4 4 32768 512
+buffer out4_2_buff_1 4 4 49152 512
+buffer out4_1_buff_0 4 3 32768 512
+buffer out4_1_buff_1 4 3 49152 512
+buffer out4_0_buff_0 4 2 32768 512
+buffer out4_0_buff_1 4 2 49152 512
+buffer out4_buff_0 4 1 131072 2048
+buffer out4_buff_1 4 1 196608 2048
+buffer pair3_0_cons_buff_0 3 2 1024 4096
+buffer pair3_0_cons_buff_1 3 2 16384 4096
+buffer pair3_1_cons_buff_0 3 3 1024 4096
+buffer pair3_1_cons_buff_1 3 3 16384 4096
+buffer pair3_2_cons_buff_0 3 4 1024 4096
+buffer pair3_2_cons_buff_1 3 4 16384 4096
+buffer pair3_3_cons_buff_0 3 5 1024 4096
+buffer pair3_3_cons_buff_1 3 5 16384 4096
+buffer pair3_buff_0 3 1 0 4096
+buffer pair3_buff_1 3 1 65536 4096
+buffer out3_3_buff_0 3 5 32768 512
+buffer out3_3_buff_1 3 5 49152 512
+buffer out3_2_buff_0 3 4 32768 512
+buffer out3_2_buff_1 3 4 49152 512
+buffer out3_1_buff_0 3 3 32768 512
+buffer out3_1_buff_1 3 3 49152 512
+buffer out3_0_buff_0 3 2 32768 512
+buffer out3_0_buff_1 3 2 49152 512
+buffer out3_buff_0 3 1 131072 2048
+buffer out3_buff_1 3 1 196608 2048
+buffer pair2_0_cons_buff_0 2 2 1024 4096
+buffer pair2_0_cons_buff_1 2 2 16384 4096
+buffer pair2_1_cons_buff_0 2 3 1024 4096
+buffer pair2_1_cons_buff_1 2 3 16384 4096
+buffer pair2_2_cons_buff_0 2 4 1024 4096
+buffer pair2_2_cons_buff_1 2 4 16384 4096
+buffer pair2_3_cons_buff_0 2 5 1024 4096
+buffer pair2_3_cons_buff_1 2 5 16384 4096
+buffer pair2_buff_0 2 1 0 4096
+buffer pair2_buff_1 2 1 65536 4096
+buffer out2_3_buff_0 2 5 32768 512
+buffer out2_3_buff_1 2 5 49152 512
+buffer out2_2_buff_0 2 4 32768 512
+buffer out2_2_buff_1 2 4 49152 512
+buffer out2_1_buff_0 2 3 32768 512
+buffer out2_1_buff_1 2 3 49152 512
+buffer out2_0_buff_0 2 2 32768 512
+buffer out2_0_buff_1 2 2 49152 512
+buffer out2_buff_0 2 1 131072 2048
+buffer out2_buff_1 2 1 196608 2048
+buffer pair1_0_cons_buff_0 1 2 1024 4096
+buffer pair1_0_cons_buff_1 1 2 16384 4096
+buffer pair1_1_cons_buff_0 1 3 1024 4096
+buffer pair1_1_cons_buff_1 1 3 16384 4096
+buffer pair1_2_cons_buff_0 1 4 1024 4096
+buffer pair1_2_cons_buff_1 1 4 16384 4096
+buffer pair1_3_cons_buff_0 1 5 1024 4096
+buffer pair1_3_cons_buff_1 1 5 16384 4096
+buffer pair1_buff_0 1 1 0 4096
+buffer pair1_buff_1 1 1 65536 4096
+buffer out1_3_buff_0 1 5 32768 512
+buffer out1_3_buff_1 1 5 49152 512
+buffer out1_2_buff_0 1 4 32768 512
+buffer out1_2_buff_1 1 4 49152 512
+buffer out1_1_buff_0 1 3 32768 512
+buffer out1_1_buff_1 1 3 49152 512
+buffer out1_0_buff_0 1 2 32768 512
+buffer out1_0_buff_1 1 2 49152 512
+buffer out1_buff_0 1 1 131072 2048
+buffer out1_buff_1 1 1 196608 2048
+buffer pair0_0_cons_buff_0 0 2 1024 4096
+buffer pair0_0_cons_buff_1 0 2 16384 4096
+buffer pair0_1_cons_buff_0 0 3 1024 4096
+buffer pair0_1_cons_buff_1 0 3 16384 4096
+buffer pair0_2_cons_buff_0 0 4 1024 4096
+buffer pair0_2_cons_buff_1 0 4 16384 4096
+buffer pair0_3_cons_buff_0 0 5 1024 4096
+buffer pair0_3_cons_buff_1 0 5 16384 4096
+buffer pair0_buff_0 0 1 0 4096
+buffer pair0_buff_1 0 1 65536 4096
+buffer out0_3_buff_0 0 5 32768 512
+buffer out0_3_buff_1 0 5 49152 512
+buffer out0_2_buff_0 0 4 32768 512
+buffer out0_2_buff_1 0 4 49152 512
+buffer out0_1_buff_0 0 3 32768 512
+buffer out0_1_buff_1 0 3 49152 512
+buffer out0_0_buff_0 0 2 32768 512
+buffer out0_0_buff_1 0 2 49152 512
+buffer out0_buff_0 0 1 131072 2048
+buffer out0_buff_1 0 1 196608 2048
+declare 7 2 2
+lock pair7_0_cons_prod_lock_0 7 2 2 2
+declare 7 2 3
+lock pair7_0_cons_cons_lock_0 7 2 3 0
+declare 7 3 2
+lock pair7_1_cons_prod_lock_0 7 3 2 2
+declare 7 3 3
+lock pair7_1_cons_cons_lock_0 7 3 3 0
+declare 7 4 2
+lock pair7_2_cons_prod_lock_0 7 4 2 2
+declare 7 4 3
+lock pair7_2_cons_cons_lock_0 7 4 3 0
+declare 7 5 2
+lock pair7_3_cons_prod_lock_0 7 5 2 2
+declare 7 5 3
+lock pair7_3_cons_cons_lock_0 7 5 3 0
+declare 7 1 8
+lock pair7_prod_lock_0 7 1 8 2
+declare 7 1 9
+lock pair7_cons_lock_0 7 1 9 0
+declare 7 1 10
+lock pair7_prod_lock_1 7 1 10 2
+declare 7 1 11
+lock pair7_cons_lock_1 7 1 11 0
+declare 7 5 0
+lock out7_3_prod_lock_0 7 5 0 2
+declare 7 5 1
+lock out7_3_cons_lock_0 7 5 1 0
+declare 7 4 0
+lock out7_2_prod_lock_0 7 4 0 2
+declare 7 4 1
+lock out7_2_cons_lock_0 7 4 1 0
+declare 7 3 0
+lock out7_1_prod_lock_0 7 3 0 2
+declare 7 3 1
+lock out7_1_cons_lock_0 7 3 1 0
+declare 7 2 0
+lock out7_0_prod_lock_0 7 2 0 2
+declare 7 2 1
+lock out7_0_cons_lock_0 7 2 1 0
+declare 7 0 4
+lock out7_cons_prod_lock_0 7 0 4 0
+declare 7 0 5
+lock out7_cons_cons_lock_0 7 0 5 0
+declare 7 1 0
+lock out7_prod_lock_0 7 1 0 2
+declare 7 1 1
+lock out7_cons_lock_0 7 1 1 0
+declare 7 1 2
+lock out7_prod_lock_1 7 1 2 2
+declare 7 1 3
+lock out7_cons_lock_1 7 1 3 0
+declare 7 1 4
+lock out7_prod_lock_2 7 1 4 2
+declare 7 1 5
+lock out7_cons_lock_2 7 1 5 0
+declare 7 1 6
+lock out7_prod_lock_3 7 1 6 2
+declare 7 1 7
+lock out7_cons_lock_3 7 1 7 0
+declare 7 0 2
+lock rhs7_prod_lock_0 7 0 2 0
+declare 7 0 3
+lock rhs7_cons_lock_0 7 0 3 0
+declare 7 0 0
+lock lhs7_prod_lock_0 7 0 0 0
+declare 7 0 1
+lock lhs7_cons_lock_0 7 0 1 0
+declare 6 2 2
+lock pair6_0_cons_prod_lock_0 6 2 2 2
+declare 6 2 3
+lock pair6_0_cons_cons_lock_0 6 2 3 0
+declare 6 3 2
+lock pair6_1_cons_prod_lock_0 6 3 2 2
+declare 6 3 3
+lock pair6_1_cons_cons_lock_0 6 3 3 0
+declare 6 4 2
+lock pair6_2_cons_prod_lock_0 6 4 2 2
+declare 6 4 3
+lock pair6_2_cons_cons_lock_0 6 4 3 0
+declare 6 5 2
+lock pair6_3_cons_prod_lock_0 6 5 2 2
+declare 6 5 3
+lock pair6_3_cons_cons_lock_0 6 5 3 0
+declare 6 1 8
+lock pair6_prod_lock_0 6 1 8 2
+declare 6 1 9
+lock pair6_cons_lock_0 6 1 9 0
+declare 6 1 10
+lock pair6_prod_lock_1 6 1 10 2
+declare 6 1 11
+lock pair6_cons_lock_1 6 1 11 0
+declare 6 5 0
+lock out6_3_prod_lock_0 6 5 0 2
+declare 6 5 1
+lock out6_3_cons_lock_0 6 5 1 0
+declare 6 4 0
+lock out6_2_prod_lock_0 6 4 0 2
+declare 6 4 1
+lock out6_2_cons_lock_0 6 4 1 0
+declare 6 3 0
+lock out6_1_prod_lock_0 6 3 0 2
+declare 6 3 1
+lock out6_1_cons_lock_0 6 3 1 0
+declare 6 2 0
+lock out6_0_prod_lock_0 6 2 0 2
+declare 6 2 1
+lock out6_0_cons_lock_0 6 2 1 0
+declare 6 0 4
+lock out6_cons_prod_lock_0 6 0 4 0
+declare 6 0 5
+lock out6_cons_cons_lock_0 6 0 5 0
+declare 6 1 0
+lock out6_prod_lock_0 6 1 0 2
+declare 6 1 1
+lock out6_cons_lock_0 6 1 1 0
+declare 6 1 2
+lock out6_prod_lock_1 6 1 2 2
+declare 6 1 3
+lock out6_cons_lock_1 6 1 3 0
+declare 6 1 4
+lock out6_prod_lock_2 6 1 4 2
+declare 6 1 5
+lock out6_cons_lock_2 6 1 5 0
+declare 6 1 6
+lock out6_prod_lock_3 6 1 6 2
+declare 6 1 7
+lock out6_cons_lock_3 6 1 7 0
+declare 6 0 2
+lock rhs6_prod_lock_0 6 0 2 0
+declare 6 0 3
+lock rhs6_cons_lock_0 6 0 3 0
+declare 6 0 0
+lock lhs6_prod_lock_0 6 0 0 0
+declare 6 0 1
+lock lhs6_cons_lock_0 6 0 1 0
+declare 5 2 2
+lock pair5_0_cons_prod_lock_0 5 2 2 2
+declare 5 2 3
+lock pair5_0_cons_cons_lock_0 5 2 3 0
+declare 5 3 2
+lock pair5_1_cons_prod_lock_0 5 3 2 2
+declare 5 3 3
+lock pair5_1_cons_cons_lock_0 5 3 3 0
+declare 5 4 2
+lock pair5_2_cons_prod_lock_0 5 4 2 2
+declare 5 4 3
+lock pair5_2_cons_cons_lock_0 5 4 3 0
+declare 5 5 2
+lock pair5_3_cons_prod_lock_0 5 5 2 2
+declare 5 5 3
+lock pair5_3_cons_cons_lock_0 5 5 3 0
+declare 5 1 8
+lock pair5_prod_lock_0 5 1 8 2
+declare 5 1 9
+lock pair5_cons_lock_0 5 1 9 0
+declare 5 1 10
+lock pair5_prod_lock_1 5 1 10 2
+declare 5 1 11
+lock pair5_cons_lock_1 5 1 11 0
+declare 5 5 0
+lock out5_3_prod_lock_0 5 5 0 2
+declare 5 5 1
+lock out5_3_cons_lock_0 5 5 1 0
+declare 5 4 0
+lock out5_2_prod_lock_0 5 4 0 2
+declare 5 4 1
+lock out5_2_cons_lock_0 5 4 1 0
+declare 5 3 0
+lock out5_1_prod_lock_0 5 3 0 2
+declare 5 3 1
+lock out5_1_cons_lock_0 5 3 1 0
+declare 5 2 0
+lock out5_0_prod_lock_0 5 2 0 2
+declare 5 2 1
+lock out5_0_cons_lock_0 5 2 1 0
+declare 5 0 4
+lock out5_cons_prod_lock_0 5 0 4 0
+declare 5 0 5
+lock out5_cons_cons_lock_0 5 0 5 0
+declare 5 1 0
+lock out5_prod_lock_0 5 1 0 2
+declare 5 1 1
+lock out5_cons_lock_0 5 1 1 0
+declare 5 1 2
+lock out5_prod_lock_1 5 1 2 2
+declare 5 1 3
+lock out5_cons_lock_1 5 1 3 0
+declare 5 1 4
+lock out5_prod_lock_2 5 1 4 2
+declare 5 1 5
+lock out5_cons_lock_2 5 1 5 0
+declare 5 1 6
+lock out5_prod_lock_3 5 1 6 2
+declare 5 1 7
+lock out5_cons_lock_3 5 1 7 0
+declare 5 0 2
+lock rhs5_prod_lock_0 5 0 2 0
+declare 5 0 3
+lock rhs5_cons_lock_0 5 0 3 0
+declare 5 0 0
+lock lhs5_prod_lock_0 5 0 0 0
+declare 5 0 1
+lock lhs5_cons_lock_0 5 0 1 0
+declare 4 2 2
+lock pair4_0_cons_prod_lock_0 4 2 2 2
+declare 4 2 3
+lock pair4_0_cons_cons_lock_0 4 2 3 0
+declare 4 3 2
+lock pair4_1_cons_prod_lock_0 4 3 2 2
+declare 4 3 3
+lock pair4_1_cons_cons_lock_0 4 3 3 0
+declare 4 4 2
+lock pair4_2_cons_prod_lock_0 4 4 2 2
+declare 4 4 3
+lock pair4_2_cons_cons_lock_0 4 4 3 0
+declare 4 5 2
+lock pair4_3_cons_prod_lock_0 4 5 2 2
+declare 4 5 3
+lock pair4_3_cons_cons_lock_0 4 5 3 0
+declare 4 1 8
+lock pair4_prod_lock_0 4 1 8 2
+declare 4 1 9
+lock pair4_cons_lock_0 4 1 9 0
+declare 4 1 10
+lock pair4_prod_lock_1 4 1 10 2
+declare 4 1 11
+lock pair4_cons_lock_1 4 1 11 0
+declare 4 5 0
+lock out4_3_prod_lock_0 4 5 0 2
+declare 4 5 1
+lock out4_3_cons_lock_0 4 5 1 0
+declare 4 4 0
+lock out4_2_prod_lock_0 4 4 0 2
+declare 4 4 1
+lock out4_2_cons_lock_0 4 4 1 0
+declare 4 3 0
+lock out4_1_prod_lock_0 4 3 0 2
+declare 4 3 1
+lock out4_1_cons_lock_0 4 3 1 0
+declare 4 2 0
+lock out4_0_prod_lock_0 4 2 0 2
+declare 4 2 1
+lock out4_0_cons_lock_0 4 2 1 0
+declare 4 0 4
+lock out4_cons_prod_lock_0 4 0 4 0
+declare 4 0 5
+lock out4_cons_cons_lock_0 4 0 5 0
+declare 4 1 0
+lock out4_prod_lock_0 4 1 0 2
+declare 4 1 1
+lock out4_cons_lock_0 4 1 1 0
+declare 4 1 2
+lock out4_prod_lock_1 4 1 2 2
+declare 4 1 3
+lock out4_cons_lock_1 4 1 3 0
+declare 4 1 4
+lock out4_prod_lock_2 4 1 4 2
+declare 4 1 5
+lock out4_cons_lock_2 4 1 5 0
+declare 4 1 6
+lock out4_prod_lock_3 4 1 6 2
+declare 4 1 7
+lock out4_cons_lock_3 4 1 7 0
+declare 4 0 2
+lock rhs4_prod_lock_0 4 0 2 0
+declare 4 0 3
+lock rhs4_cons_lock_0 4 0 3 0
+declare 4 0 0
+lock lhs4_prod_lock_0 4 0 0 0
+declare 4 0 1
+lock lhs4_cons_lock_0 4 0 1 0
+declare 3 2 2
+lock pair3_0_cons_prod_lock_0 3 2 2 2
+declare 3 2 3
+lock pair3_0_cons_cons_lock_0 3 2 3 0
+declare 3 3 2
+lock pair3_1_cons_prod_lock_0 3 3 2 2
+declare 3 3 3
+lock pair3_1_cons_cons_lock_0 3 3 3 0
+declare 3 4 2
+lock pair3_2_cons_prod_lock_0 3 4 2 2
+declare 3 4 3
+lock pair3_2_cons_cons_lock_0 3 4 3 0
+declare 3 5 2
+lock pair3_3_cons_prod_lock_0 3 5 2 2
+declare 3 5 3
+lock pair3_3_cons_cons_lock_0 3 5 3 0
+declare 3 1 8
+lock pair3_prod_lock_0 3 1 8 2
+declare 3 1 9
+lock pair3_cons_lock_0 3 1 9 0
+declare 3 1 10
+lock pair3_prod_lock_1 3 1 10 2
+declare 3 1 11
+lock pair3_cons_lock_1 3 1 11 0
+declare 3 5 0
+lock out3_3_prod_lock_0 3 5 0 2
+declare 3 5 1
+lock out3_3_cons_lock_0 3 5 1 0
+declare 3 4 0
+lock out3_2_prod_lock_0 3 4 0 2
+declare 3 4 1
+lock out3_2_cons_lock_0 3 4 1 0
+declare 3 3 0
+lock out3_1_prod_lock_0 3 3 0 2
+declare 3 3 1
+lock out3_1_cons_lock_0 3 3 1 0
+declare 3 2 0
+lock out3_0_prod_lock_0 3 2 0 2
+declare 3 2 1
+lock out3_0_cons_lock_0 3 2 1 0
+declare 3 0 4
+lock out3_cons_prod_lock_0 3 0 4 0
+declare 3 0 5
+lock out3_cons_cons_lock_0 3 0 5 0
+declare 3 1 0
+lock out3_prod_lock_0 3 1 0 2
+declare 3 1 1
+lock out3_cons_lock_0 3 1 1 0
+declare 3 1 2
+lock out3_prod_lock_1 3 1 2 2
+declare 3 1 3
+lock out3_cons_lock_1 3 1 3 0
+declare 3 1 4
+lock out3_prod_lock_2 3 1 4 2
+declare 3 1 5
+lock out3_cons_lock_2 3 1 5 0
+declare 3 1 6
+lock out3_prod_lock_3 3 1 6 2
+declare 3 1 7
+lock out3_cons_lock_3 3 1 7 0
+declare 3 0 2
+lock rhs3_prod_lock_0 3 0 2 0
+declare 3 0 3
+lock rhs3_cons_lock_0 3 0 3 0
+declare 3 0 0
+lock lhs3_prod_lock_0 3 0 0 0
+declare 3 0 1
+lock lhs3_cons_lock_0 3 0 1 0
+declare 2 2 2
+lock pair2_0_cons_prod_lock_0 2 2 2 2
+declare 2 2 3
+lock pair2_0_cons_cons_lock_0 2 2 3 0
+declare 2 3 2
+lock pair2_1_cons_prod_lock_0 2 3 2 2
+declare 2 3 3
+lock pair2_1_cons_cons_lock_0 2 3 3 0
+declare 2 4 2
+lock pair2_2_cons_prod_lock_0 2 4 2 2
+declare 2 4 3
+lock pair2_2_cons_cons_lock_0 2 4 3 0
+declare 2 5 2
+lock pair2_3_cons_prod_lock_0 2 5 2 2
+declare 2 5 3
+lock pair2_3_cons_cons_lock_0 2 5 3 0
+declare 2 1 8
+lock pair2_prod_lock_0 2 1 8 2
+declare 2 1 9
+lock pair2_cons_lock_0 2 1 9 0
+declare 2 1 10
+lock pair2_prod_lock_1 2 1 10 2
+declare 2 1 11
+lock pair2_cons_lock_1 2 1 11 0
+declare 2 5 0
+lock out2_3_prod_lock_0 2 5 0 2
+declare 2 5 1
+lock out2_3_cons_lock_0 2 5 1 0
+declare 2 4 0
+lock out2_2_prod_lock_0 2 4 0 2
+declare 2 4 1
+lock out2_2_cons_lock_0 2 4 1 0
+declare 2 3 0
+lock out2_1_prod_lock_0 2 3 0 2
+declare 2 3 1
+lock out2_1_cons_lock_0 2 3 1 0
+declare 2 2 0
+lock out2_0_prod_lock_0 2 2 0 2
+declare 2 2 1
+lock out2_0_cons_lock_0 2 2 1 0
+declare 2 0 4
+lock out2_cons_prod_lock_0 2 0 4 0
+declare 2 0 5
+lock out2_cons_cons_lock_0 2 0 5 0
+declare 2 1 0
+lock out2_prod_lock_0 2 1 0 2
+declare 2 1 1
+lock out2_cons_lock_0 2 1 1 0
+declare 2 1 2
+lock out2_prod_lock_1 2 1 2 2
+declare 2 1 3
+lock out2_cons_lock_1 2 1 3 0
+declare 2 1 4
+lock out2_prod_lock_2 2 1 4 2
+declare 2 1 5
+lock out2_cons_lock_2 2 1 5 0
+declare 2 1 6
+lock out2_prod_lock_3 2 1 6 2
+declare 2 1 7
+lock out2_cons_lock_3 2 1 7 0
+declare 2 0 2
+lock rhs2_prod_lock_0 2 0 2 0
+declare 2 0 3
+lock rhs2_cons_lock_0 2 0 3 0
+declare 2 0 0
+lock lhs2_prod_lock_0 2 0 0 0
+declare 2 0 1
+lock lhs2_cons_lock_0 2 0 1 0
+declare 1 2 2
+lock pair1_0_cons_prod_lock_0 1 2 2 2
+declare 1 2 3
+lock pair1_0_cons_cons_lock_0 1 2 3 0
+declare 1 3 2
+lock pair1_1_cons_prod_lock_0 1 3 2 2
+declare 1 3 3
+lock pair1_1_cons_cons_lock_0 1 3 3 0
+declare 1 4 2
+lock pair1_2_cons_prod_lock_0 1 4 2 2
+declare 1 4 3
+lock pair1_2_cons_cons_lock_0 1 4 3 0
+declare 1 5 2
+lock pair1_3_cons_prod_lock_0 1 5 2 2
+declare 1 5 3
+lock pair1_3_cons_cons_lock_0 1 5 3 0
+declare 1 1 8
+lock pair1_prod_lock_0 1 1 8 2
+declare 1 1 9
+lock pair1_cons_lock_0 1 1 9 0
+declare 1 1 10
+lock pair1_prod_lock_1 1 1 10 2
+declare 1 1 11
+lock pair1_cons_lock_1 1 1 11 0
+declare 1 5 0
+lock out1_3_prod_lock_0 1 5 0 2
+declare 1 5 1
+lock out1_3_cons_lock_0 1 5 1 0
+declare 1 4 0
+lock out1_2_prod_lock_0 1 4 0 2
+declare 1 4 1
+lock out1_2_cons_lock_0 1 4 1 0
+declare 1 3 0
+lock out1_1_prod_lock_0 1 3 0 2
+declare 1 3 1
+lock out1_1_cons_lock_0 1 3 1 0
+declare 1 2 0
+lock out1_0_prod_lock_0 1 2 0 2
+declare 1 2 1
+lock out1_0_cons_lock_0 1 2 1 0
+declare 1 0 4
+lock out1_cons_prod_lock_0 1 0 4 0
+declare 1 0 5
+lock out1_cons_cons_lock_0 1 0 5 0
+declare 1 1 0
+lock out1_prod_lock_0 1 1 0 2
+declare 1 1 1
+lock out1_cons_lock_0 1 1 1 0
+declare 1 1 2
+lock out1_prod_lock_1 1 1 2 2
+declare 1 1 3
+lock out1_cons_lock_1 1 1 3 0
+declare 1 1 4
+lock out1_prod_lock_2 1 1 4 2
+declare 1 1 5
+lock out1_cons_lock_2 1 1 5 0
+declare 1 1 6
+lock out1_prod_lock_3 1 1 6 2
+declare 1 1 7
+lock out1_cons_lock_3 1 1 7 0
+declare 1 0 2
+lock rhs1_prod_lock_0 1 0 2 0
+declare 1 0 3
+lock rhs1_cons_lock_0 1 0 3 0
+declare 1 0 0
+lock lhs1_prod_lock_0 1 0 0 0
+declare 1 0 1
+lock lhs1_cons_lock_0 1 0 1 0
+declare 0 2 2
+lock pair0_0_cons_prod_lock_0 0 2 2 2
+declare 0 2 3
+lock pair0_0_cons_cons_lock_0 0 2 3 0
+declare 0 3 2
+lock pair0_1_cons_prod_lock_0 0 3 2 2
+declare 0 3 3
+lock pair0_1_cons_cons_lock_0 0 3 3 0
+declare 0 4 2
+lock pair0_2_cons_prod_lock_0 0 4 2 2
+declare 0 4 3
+lock pair0_2_cons_cons_lock_0 0 4 3 0
+declare 0 5 2
+lock pair0_3_cons_prod_lock_0 0 5 2 2
+declare 0 5 3
+lock pair0_3_cons_cons_lock_0 0 5 3 0
+declare 0 1 8
+lock pair0_prod_lock_0 0 1 8 2
+declare 0 1 9
+lock pair0_cons_lock_0 0 1 9 0
+declare 0 1 10
+lock pair0_prod_lock_1 0 1 10 2
+declare 0 1 11
+lock pair0_cons_lock_1 0 1 11 0
+declare 0 5 0
+lock out0_3_prod_lock_0 0 5 0 2
+declare 0 5 1
+lock out0_3_cons_lock_0 0 5 1 0
+declare 0 4 0
+lock out0_2_prod_lock_0 0 4 0 2
+declare 0 4 1
+lock out0_2_cons_lock_0 0 4 1 0
+declare 0 3 0
+lock out0_1_prod_lock_0 0 3 0 2
+declare 0 3 1
+lock out0_1_cons_lock_0 0 3 1 0
+declare 0 2 0
+lock out0_0_prod_lock_0 0 2 0 2
+declare 0 2 1
+lock out0_0_cons_lock_0 0 2 1 0
+declare 0 0 4
+lock out0_cons_prod_lock_0 0 0 4 0
+declare 0 0 5
+lock out0_cons_cons_lock_0 0 0 5 0
+declare 0 1 0
+lock out0_prod_lock_0 0 1 0 2
+declare 0 1 1
+lock out0_cons_lock_0 0 1 1 0
+declare 0 1 2
+lock out0_prod_lock_1 0 1 2 2
+declare 0 1 3
+lock out0_cons_lock_1 0 1 3 0
+declare 0 1 4
+lock out0_prod_lock_2 0 1 4 2
+declare 0 1 5
+lock out0_cons_lock_2 0 1 5 0
+declare 0 1 6
+lock out0_prod_lock_3 0 1 6 2
+declare 0 1 7
+lock out0_cons_lock_3 0 1 7 0
+declare 0 0 2
+lock rhs0_prod_lock_0 0 0 2 0
+declare 0 0 3
+lock rhs0_cons_lock_0 0 0 3 0
+declare 0 0 0
+lock lhs0_prod_lock_0 0 0 0 0
+declare 0 0 1
+lock lhs0_cons_lock_0 0 0 1 0
+alloc lhs0 mm2s 0 0
+alloc rhs0 mm2s 1 0
+alloc out0 s2mm 0 0
+alloc lhs1 mm2s 0 1
+alloc rhs1 mm2s 1 1
+alloc out1 s2mm 0 1
+alloc lhs2 mm2s 0 2
+alloc rhs2 mm2s 1 2
+alloc out2 s2mm 0 2
+alloc lhs3 mm2s 0 3
+alloc rhs3 mm2s 1 3
+alloc out3 s2mm 0 3
+alloc lhs4 mm2s 0 4
+alloc rhs4 mm2s 1 4
+alloc out4 s2mm 0 4
+alloc lhs5 mm2s 0 5
+alloc rhs5 mm2s 1 5
+alloc out5 s2mm 0 5
+alloc lhs6 mm2s 0 6
+alloc rhs6 mm2s 1 6
+alloc out6 s2mm 0 6
+alloc lhs7 mm2s 0 7
+alloc rhs7 mm2s 1 7
+alloc out7 s2mm 0 7
+census objdump
+acquire 0 2 0 2 0
+acquire 0 2 0 2 3
+acquire 0 3 0 3 0
+acquire 0 3 0 3 3
+acquire 0 4 0 4 0
+acquire 0 4 0 4 3
+acquire 0 5 0 5 0
+acquire 0 5 0 5 3
+acquire 1 2 1 2 0
+acquire 1 2 1 2 3
+acquire 1 3 1 3 0
+acquire 1 3 1 3 3
+acquire 1 4 1 4 0
+acquire 1 4 1 4 3
+acquire 1 5 1 5 0
+acquire 1 5 1 5 3
+acquire 2 2 2 2 0
+acquire 2 2 2 2 3
+acquire 2 3 2 3 0
+acquire 2 3 2 3 3
+acquire 2 4 2 4 0
+acquire 2 4 2 4 3
+acquire 2 5 2 5 0
+acquire 2 5 2 5 3
+acquire 3 2 3 2 0
+acquire 3 2 3 2 3
+acquire 3 3 3 3 0
+acquire 3 3 3 3 3
+acquire 3 4 3 4 0
+acquire 3 4 3 4 3
+acquire 3 5 3 5 0
+acquire 3 5 3 5 3
+acquire 4 2 4 2 0
+acquire 4 2 4 2 3
+acquire 4 3 4 3 0
+acquire 4 3 4 3 3
+acquire 4 4 4 4 0
+acquire 4 4 4 4 3
+acquire 4 5 4 5 0
+acquire 4 5 4 5 3
+acquire 5 2 5 2 0
+acquire 5 2 5 2 3
+acquire 5 3 5 3 0
+acquire 5 3 5 3 3
+acquire 5 4 5 4 0
+acquire 5 4 5 4 3
+acquire 5 5 5 5 0
+acquire 5 5 5 5 3
+acquire 6 2 6 2 0
+acquire 6 2 6 2 3
+acquire 6 3 6 3 0
+acquire 6 3 6 3 3
+acquire 6 4 6 4 0
+acquire 6 4 6 4 3
+acquire 6 5 6 5 0
+acquire 6 5 6 5 3
+acquire 7 2 7 2 0
+acquire 7 2 7 2 3
+acquire 7 3 7 3 0
+acquire 7 3 7 3 3
+acquire 7 4 7 4 0
+acquire 7 4 7 4 3
+acquire 7 5 7 5 0
+acquire 7 5 7 5 3
