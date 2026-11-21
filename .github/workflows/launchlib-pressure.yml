@@ -49,7 +49,8 @@ jobs:
           out=$GITHUB_WORKSPACE/dist
           for cfg in 1x1 8x2 8x4; do
             cols=${cfg%x*} cores=${cfg#*x}
-            name=n256-c${cols}x${cores}$([ "$cores" -ge 3 ] && echo -pair)
+            name=n256-c${cols}x${cores}
+            if [ "$cores" -ge 3 ]; then name=$name-pair; fi
             d=$out/$name
             mkdir -p "$d"
             flags="-std=c++20 -O2 -Wall -I ../launchlib/include -I include -I kernels -DEW_N=256 -DEW_COLS=$cols -DEW_CORES=$cores"
