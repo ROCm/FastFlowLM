@@ -782,12 +782,16 @@ def main_moved(git: Git, since: str, until: str) -> list[str]:
 # ── verify ───────────────────────────────────────────────────────────────────
 
 # What stages the dev-kit files into the builds, writes, reads or acts on
-# the manifests a swap is checked against, and builds the packages the
-# staged files are tested in. A pull request that changes any of them gets
-# no verified swap: its own code would vouch for it (the checks run from the
-# pull request's merge commit). changes.py is not here: a new model family
-# needs its engine table (ENGINES) and comes with its swap; what it decides
-# runs from the pull request's code whatever this says.
+# the manifests a swap is checked against, builds the packages the staged
+# files are tested in, and the NPU test harness that decides whether they
+# pass (the product test jobs run the pull request's own: npu_test, the
+# npu-test and install-package actions). A pull request that changes any of
+# them gets no verified swap: its own code would vouch for it (the checks
+# run from the pull request's merge commit). changes.py is not here: a new
+# model family needs its engine table (ENGINES) and comes with its swap;
+# what it decides runs from the pull request's code whatever this says.
+# npu_test's pr-tier table (plan.py PR_CHAT) needs no entry for a new
+# family (it gets its smallest model), so a new model needs no harness edit.
 SWAP_CI_PATHS = (
     ".github/script/ci/devkit_stage.py", ".github/script/ci/devkit_overlay.py",
     ".github/script/ci/devkit_swap.py", ".github/script/ci/devkit_check.py",
@@ -796,6 +800,7 @@ SWAP_CI_PATHS = (
     ".github/workflows/build-and-test.yml", ".github/workflows/lin-build.yml",
     ".github/workflows/win-build.yml", ".github/workflows/devkit-engines.yml",
     ".github/workflows/devkit-xclbins.yml",
+    ".github/script/npu_test/", ".github/actions/npu-test/", ".github/actions/install-package/",
 )
 
 

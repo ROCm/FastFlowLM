@@ -644,6 +644,24 @@ class Verify(SwapCase):
         self.assertIn("not trusted, the pull request also changes the dev-kit CI", out)
         self.assertIn(f"::error::{XRT_LIN}", out)
 
+    def test_harness_change_is_swap_ci(self):
+        # The product test jobs run the pull request's own harness: a change
+        # to it cannot come with a swap its tests vouch for.
+        for path in (".github/script/npu_test/plan.py", ".github/actions/npu-test/action.yml",
+                     ".github/actions/install-package/action.yml"):
+            with self.subTest(path=path):
+                self.assertTrue(any(path.startswith(p) for p in ds.SWAP_CI_PATHS), path)
+        self.head = self.repo.commit({".github/script/npu_test/plan.py": b"# changed\n"}, "harness")
+        self.repo.git("push", "-q", "origin", "feature")
+        self.api.pulls[PR]["head"]["sha"] = self.head
+        self.api.runs.clear()
+        self.api.artifacts_by_run.clear()
+        self.add_run(RUN)
+        self.swapped()
+        ok, why = self.verify()
+        self.assertFalse(ok)
+        self.assertIn("also changes the dev-kit CI that checks a swap (.github/script/npu_test/plan.py)", why)
+
     def test_unexpected_error_is_not_verified(self):
         self.swapped()
         with mock.patch.object(ds, "verify_swap", side_effect=AttributeError("'list' object has no attribute 'get'")):

@@ -954,9 +954,10 @@ jobs:
   # product change often comes with its tests. The base's harness would also
   # judge the product change by old tests, and was never a boundary (the
   # pull request's workflow decides what runs; npu-approve is the gate).
-  # Review covers harness edits; a swap cannot be verified in a pull request
-  # that changes the CI that stages and checks it (devkit_swap.py
-  # SWAP_CI_PATHS).
+  # A swap cannot be verified in a pull request that changes the CI that
+  # stages and checks it, this harness included (npu_test, the npu-test and
+  # install-package actions; devkit_swap.py SWAP_CI_PATHS): a harness change
+  # and a swap land in separate pull requests.
 
   test-lin-xrt-portable:
     name: Test Linux XRT portable

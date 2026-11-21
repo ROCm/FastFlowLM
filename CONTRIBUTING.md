@@ -49,8 +49,9 @@ refresh: "Prebuilt binaries" in [flm-dev-kit/AGENTS.md](flm-dev-kit/AGENTS.md).
 **Adding a model?** Add its dev-kit source (engine under `flm-dev-kit/FLM_DLL/detail/`,
 kernels under `flm-dev-kit/FLM_Xclbin/`) with its `engines.json` and `kernel_assignment.json`
 entries, its `src/model_list.json` entry, the engine's line in `FLM_ENGINE_LINK_LIBS`
-(`src/CMakeLists.txt`) and the CI tables (`.github/script/ci/changes.py`,
-`.github/script/npu_test/plan.py`), but nothing under `src/lib/` or `src/xclbins/`. CI builds the
+(`src/CMakeLists.txt`) and the engine table in `.github/script/ci/changes.py`, but nothing under
+`src/lib/` or `src/xclbins/` and no change to the NPU test harness (`.github/script/npu_test/`,
+which goes in a pull request of its own: a swap cannot come with it). CI builds the
 engine for both NPU backends and the kernels, stages them into the product builds (which then
 link the new engine), tests the model, and says "Dev-kit swap pending"; fetch and push as above.
 The walkthrough: "Adding a model" in [flm-dev-kit/AGENTS.md](flm-dev-kit/AGENTS.md).

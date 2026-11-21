@@ -189,8 +189,9 @@ as a *swap commit*.
 A swap pull request must not change the CI that stages the files, writes and checks the manifests
 or builds the packages they are tested in (`devkit_stage.py`, `devkit_overlay.py`, `devkit_swap.py`,
 `devkit_check.py`, the `devkit-stage-apply`, `detect-changes`, `lin-build` and `win-build` actions,
-`build-and-test.yml`, `lin-build.yml`, `win-build.yml`, `devkit-engines.yml`, `devkit-xclbins.yml`;
-`devkit_swap.py SWAP_CI_PATHS`): `verify` then refuses the swap, the *Dev-kit swap pending* step says
+`build-and-test.yml`, `lin-build.yml`, `win-build.yml`, `devkit-engines.yml`, `devkit-xclbins.yml`,
+and the NPU test harness that decides whether they pass: `../.github/script/npu_test/`, the
+`npu-test` and `install-package` actions; `devkit_swap.py SWAP_CI_PATHS`): `verify` then refuses the swap, the *Dev-kit swap pending* step says
 so, and the pull request has to be split (the CI change first). `changes.py` is not on that list: a
 new model family needs its engine table. `verify` and `check` run from the pull request's own merge
 commit, so they keep the flow honest but are no enforcement boundary: reviewers must read any
@@ -209,8 +210,10 @@ committed only by the swap:
    `FLM_Xclbin/kernel_assignment.json` and `.md`, `build_units.json` and the RTP lock as needed.
 2. Add the product side: the catalog entry in `../src/model_list.json` (and `model_info.json`), the
    frontend, the engine's line in `FLM_ENGINE_LINK_LIBS` (`../src/CMakeLists.txt`), and the engine
-   and pr-tier tables in `../.github/script/ci/changes.py` and `../.github/script/npu_test/plan.py`.
-   Do not add anything under `../src/lib/` or `../src/xclbins/`.
+   table in `../.github/script/ci/changes.py`. Do not add anything under `../src/lib/` or
+   `../src/xclbins/`, and do not change the NPU test harness (`../.github/script/npu_test/`) in this
+   pull request: it is swap CI (above). A new family needs no `plan.py` entry (the pr tier then
+   takes its smallest model); a pr-tier entry or a new suite goes in a pull request of its own.
 3. Push. `devkit-static` reports the engine's libraries and the model's kernel slots as pending
    (not in `../src/` yet); `devkit-engines` and `devkit-xclbins` build them; `devkit-stage` stages
    them as new files (declared by `engines.json` and `kernel_assignment.json`), so the product builds
