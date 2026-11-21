@@ -90,6 +90,16 @@ Checks, each failure printed as "devkit_check: error: ..." (exit 1):
                 and grants no write; build-and-test.yml's job calling it
                 grants exactly contents: read and actions: read and passes
                 no secrets. Skipped when the files are absent
+  swap wiring   the names devkit_swap.py reads another Build and Test run
+                by match the CI that makes them: devkit-npu-overlay uploads
+                manifest.json as devkit-overlay-manifest-<os>-<runtime>
+                (MANIFEST_ARTIFACT); build-and-test.yml has one job named as
+                OVERLAYS gives for each os and runtime, running
+                devkit-npu-overlay with that os, runtime and
+                devkit-libs-<lin|win>-<runtime>, a summary job and the
+                devkit-engines and devkit-xclbins jobs; its changes job runs
+                devkit_swap.py verify and check with actions: read. Skipped
+                when the files are absent
   notices       with --base: every file added under flm-dev-kit/ between the
                 merge base of --base and --head (default HEAD), of a source or
                 script type, has an AMD copyright notice in its first 15
@@ -712,6 +722,32 @@ def check_catalog(repo: Path, catalog: dict, assignment: dict, engines: dict,
             f"{len(used)} allow-listed")
 
 
+def required_binaries(repo: Path) -> set[str]:
+    """The src/ paths check_catalog needs to exist: every assigned slot
+    (src/xclbins/<folder>/<slot>, served_elsewhere models skipped, rule 4)
+    and every file of every dev-kit library for each runtime
+    (src/lib/<rt>/lib<name>.so, <name>.dll, <name>.lib, rule 7). A
+    deletion of anything else loses nothing the catalog asks for
+    (devkit_swap.py check). Unreadable data gives what could be read."""
+    errors: list = []
+    assignment = (load_json(repo, ASSIGNMENT, errors) or {}).get("models") or {}
+    engines = load_json(repo, ENGINES, errors) or {}
+    elsewhere = engines.get("served_elsewhere") or {}
+    out = set()
+    for m, e in (assignment.items() if isinstance(assignment, dict) else ()):
+        if m in elsewhere or not isinstance(e, dict) or not isinstance(e.get("folder"), str):
+            continue
+        out |= {f"{SHIPPED_XCLBINS}/{e['folder']}/{slot}" for slot in (e.get("kernels") or {})}
+    eng = engines.get("engines") or {}
+    dirs = [d for d in (engines.get("shared") or []) if isinstance(d, str)]
+    dirs += sorted(eng) if isinstance(eng, dict) else []
+    for d in dirs:
+        lib = unit_library(repo / DLL, d, errors)
+        if lib:
+            out |= {f"src/lib/{rt}/{f}" for rt in SHIPPED_RUNTIMES for f in shipped_names(lib)}
+    return out
+
+
 def check_bsymbolic(repo: Path, errors: list) -> int:
     detail = repo / DLL / "detail"
     count = 0
@@ -988,6 +1024,68 @@ def check_bench_workflows(repo: Path, errors: list) -> int:
     return 3
 
 
+OVERLAY_ACTION = ".github/actions/devkit-npu-overlay/action.yml"
+
+
+def _jobs(text: str) -> dict[str, list[str]]:
+    """Job id -> its lines, for the jobs: block of a workflow."""
+    jobs: dict[str, list[str]] = {}
+    current, inside = None, False
+    for line in text.splitlines():
+        if re.match(r"^jobs:\s*(#.*)?$", line):
+            inside = True
+            continue
+        if inside and line and not line[0].isspace() and not line.startswith("#"):
+            break
+        m = re.match(r"^  ([A-Za-z0-9_-]+):\s*(#.*)?$", line) if inside else None
+        if m:
+            current = jobs.setdefault(m.group(1), [])
+        elif current is not None:
+            current.append(line)
+    return jobs
+
+
+def check_swap_wiring(repo: Path, errors: list) -> int:
+    """The names devkit_swap.py reads another run by agree with the CI that
+    makes them (see the docstring); returns how many files were checked."""
+    try:
+        build = (repo / BUILD_WORKFLOW).read_text(encoding="utf-8")
+        action = (repo / OVERLAY_ACTION).read_text(encoding="utf-8")
+    except OSError:
+        return 0
+    import devkit_swap  # here: devkit_swap imports this module
+    where = "devkit_swap.py"
+    if devkit_swap.WORKFLOW_PATH != BUILD_WORKFLOW:
+        errors.append(f"{where}: WORKFLOW_PATH is {devkit_swap.WORKFLOW_PATH}, not {BUILD_WORKFLOW}")
+    upload = re.search(r"name:[ \t]*(devkit-overlay-manifest-.+?)[ \t]*\n\s*path:[ \t]*(.+?)[ \t]*$", action, re.M)
+    want = devkit_swap.MANIFEST_ARTIFACT.format(os="${{ inputs.os }}", runtime="${{ inputs.runtime }}")
+    if not upload or upload.group(1) != want or not upload.group(2).endswith("/" + devkit_swap.MANIFEST_FILE):
+        errors.append(f"{OVERLAY_ACTION}: must upload .../{devkit_swap.MANIFEST_FILE} as {want}, the "
+                      f"artifact {where} fetch and verify read (MANIFEST_ARTIFACT, MANIFEST_FILE)")
+    jobs = _jobs(build)
+    for job in (devkit_swap.SUMMARY_JOB,) + tuple(p.split(" / ")[0] for p in devkit_swap.BUILD_JOB_PREFIXES):
+        if job not in jobs:
+            errors.append(f"{BUILD_WORKFLOW}: no job {job}, which {where} reads a run's results by")
+    for (os_name, runtime), name in devkit_swap.OVERLAYS.items():
+        found = [lines for lines in jobs.values() if f"    name: {name}" in lines]
+        body = "\n".join(found[0]) if len(found) == 1 else ""
+        libs = devkit_swap.libs_artifact(os_name, runtime)
+        if (not body or "uses: ./.github/actions/devkit-npu-overlay" not in body
+                or not re.search(rf"^\s+os: {os_name}\s*$", body, re.M)
+                or not re.search(rf"^\s+runtime: {runtime}\s*$", body, re.M)
+                or f"'{libs}'" not in body):
+            errors.append(f"{BUILD_WORKFLOW}: {where} OVERLAYS expects exactly one job named \"{name}\" "
+                          f"running devkit-npu-overlay with os {os_name}, runtime {runtime} and libs {libs}")
+    changes_job = "\n".join(jobs.get("changes", []))
+    for sub in ("verify", "check"):
+        if f"devkit_swap.py {sub}" not in changes_job:
+            errors.append(f"{BUILD_WORKFLOW}: the changes job must run devkit_swap.py {sub}")
+    if not re.search(r"^      actions: read\s*$", changes_job, re.M):
+        errors.append(f"{BUILD_WORKFLOW}: the changes job needs actions: read (devkit_swap.py verify reads "
+                      "another run's manifests)")
+    return 2
+
+
 def run(repo: Path, base: str = "", head: str = "HEAD") -> tuple[list[str], list[str]]:
     """(errors, notes) for the tree at repo."""
     errors: list[str] = []
@@ -1020,6 +1118,7 @@ def run(repo: Path, base: str = "", head: str = "HEAD") -> tuple[list[str], list
     notes.append(f"rtp lock: {check_rtp_lock(repo, index, assignment, errors)} stanzas")
     notes.append(f"Bsymbolic: {check_bsymbolic(repo, errors)} Makefiles")
     notes.append(f"bench workflows: {check_bench_workflows(repo, errors)} checked")
+    notes.append(f"swap wiring: {check_swap_wiring(repo, errors)} files checked")
     if base.strip("0 "):
         notes.append(f"notices: {check_notices(repo, base, head, errors, notes)} added source/script files")
         check_rtp_lock_change(repo, base, head, assignment or {}, engines or {}, errors, notes)

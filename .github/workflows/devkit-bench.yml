@@ -11,7 +11,11 @@ name: Dev-kit Bench
 # group covers the benches and a new push cancels them: on a pull request
 # whose dev-kit engine or kernel source changed (code or build inputs; not
 # docs, CI, the converter, pybind or launchlib; changes.py devkit_bench),
-# and on its nightly schedule. Nothing is rebuilt here: the benches take
+# on its nightly schedule, and on the dev-kit full refresh (a dispatch of
+# Build and Test with devkit-full-refresh; mode refresh: every benchable
+# assigned model on the four runtimes, the dev-kit build only, reporting
+# this run's numbers with no A/B and no baseline comparison). Nothing is
+# rebuilt here: the benches take
 # that run's artifacts (its portable packages, devkit-libs-<os>-<runtime>,
 # devkit-xclbins) and overlay the dev-kit builds on the packages
 # (devkit-overlay-package). Build and Test's npu-gate / npu-approve gate the
@@ -92,7 +96,7 @@ on:
   workflow_call:
     inputs:
       mode:
-        description: pr or nightly.
+        description: pr, nightly or refresh (the dev-kit full refresh).
         type: string
         required: true
       head-sha:
@@ -179,14 +183,14 @@ jobs:
       baseline-run-id: ${{ steps.baseline.outputs.baseline-run-id }}
       mode: ${{ steps.mode.outputs.mode }}
     steps:
-      # Called: pr or nightly; dispatched: no mode input.
+      # Called: pr, nightly or refresh; dispatched: no mode input.
       - name: Mode
         id: mode
         env:
           MODE: ${{ inputs.mode }}
         run: |
           case "${MODE}" in
-            pr|nightly) echo "mode=${MODE}" >> "$GITHUB_OUTPUT" ;;
+            pr|nightly|refresh) echo "mode=${MODE}" >> "$GITHUB_OUTPUT" ;;
             '') echo "mode=dispatch" >> "$GITHUB_OUTPUT" ;;
             *) echo "::error::unknown mode"; exit 1 ;;
           esac
@@ -251,9 +255,12 @@ jobs:
         run: |
           echo "### Dev-kit bench: not run (${REASON})" >> "$GITHUB_STEP_SUMMARY"
 
+      # Not for the full refresh, which compares nothing.
       - name: Find the nightly baseline
         id: baseline
-        if: steps.write-plan.outcome == 'success' || steps.build.outputs.ok == 'true'
+        if: >-
+          (steps.write-plan.outcome == 'success' || steps.build.outputs.ok == 'true')
+          && steps.mode.outputs.mode != 'refresh'
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 .github/script/devkit-bench/resolve.py find-baseline --repo "${GITHUB_REPOSITORY}"
@@ -282,6 +289,8 @@ jobs:
           FORCE: ${{ inputs.force }}
         run: |
           runtimes="${RUNTIMES:-lin-xrt,lin-hrx}"
+          # The full refresh benches what it swaps: all four runtimes.
+          if [ "${MODE}" = refresh ]; then runtimes=lin-xrt,lin-hrx,win-xrt,win-hrx; fi
           # Windows XRT weekly, on Monday's nightly.
           if [ "${MODE}" = nightly ] && [ "$(date -u +%u)" = 1 ]; then runtimes="${runtimes},win-xrt"; fi
           args=(plan --plan "${RUNNER_TEMP}/plan.json" --mode "${MODE}" --runtimes "${runtimes}"
@@ -379,7 +388,7 @@ jobs:
     timeout-minutes: ${{ inputs.mode == 'nightly' && 240 || 150 }}
     strategy:
       fail-fast: false
-      max-parallel: ${{ inputs.mode == 'nightly' && 4 || 3 }}
+      max-parallel: ${{ (inputs.mode == 'nightly' || inputs.mode == 'refresh') && 4 || 3 }}
       matrix:
         include: ${{ fromJSON(needs.resolve.outputs.matrix) }}
     steps:
@@ -441,7 +450,9 @@ jobs:
           # Dispatch: the earlier Build and Test run's; called: this run's.
           run-id: ${{ needs.resolve.outputs.build-run-id }}
           github-token: ${{ needs.resolve.outputs.build-run-id != '' && github.token || '' }}
-          keep-base: ${{ inputs.mode != 'nightly' }}
+          # A/B against the base package on pull requests and dispatches;
+          # nightly and the full refresh bench the dev-kit build only.
+          keep-base: ${{ inputs.mode != 'nightly' && inputs.mode != 'refresh' }}
 
       - name: Download the DocVQA subset
         if: matrix.vlm && needs.docvqa.result == 'success'

@@ -10,6 +10,12 @@ inputs:
     description: Tier requested by the caller or dispatch; empty picks one from the event.
     required: false
     default: ""
+  swap-verified:
+    description: >
+      "true" when the head is a dev-kit swap commit .github/script/ci/devkit_swap.py
+      verify accepted: nothing is built or tested again (see swap-verified below).
+    required: false
+    default: ""
 
 outputs:
   run:
@@ -103,6 +109,12 @@ outputs:
       devkit-bench job calls devkit-bench.yml on a pull request when it is
       "true".
     value: ${{ steps.changes.outputs.devkit_bench }}
+  swap-verified:
+    description: >
+      "true" when the head is a verified dev-kit swap commit (the swap-verified
+      input): the run then builds and tests nothing (run "false", suites
+      "none", no dev-kit area, overlay or bench) and only devkit-static runs.
+    value: ${{ steps.changes.outputs.swap_verified }}
   tier:
     description: install, pr or full.
     value: ${{ steps.tier.outputs.tier }}
@@ -126,7 +138,10 @@ runs:
       env:
         BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.event_name == 'push' && github.ref_type == 'branch' && github.event.before) || '' }}
         HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-      run: python3 .github/script/ci/changes.py --base "${BASE}" --head "${HEAD}" --github-output
+        SWAP_VERIFIED: ${{ inputs.swap-verified }}
+      run: |
+        python3 .github/script/ci/changes.py --base "${BASE}" --head "${HEAD}" \
+          --swap-verified "${SWAP_VERIFIED}" --github-output
 
     - name: Pick tier
       id: tier

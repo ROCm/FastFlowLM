@@ -14,7 +14,7 @@ GitHub-hosted runner.
                              [--artifacts-out artifacts.json]
     resolve.py find-baseline --repo R
     resolve.py plan          --plan plan.json [--artifacts artifacts.json]
-                             --mode pr|nightly|dispatch
+                             --mode pr|nightly|refresh|dispatch
                              [--runtimes lin-xrt,lin-hrx] [--models a,b]
                              [--baseline baseline.json] [--no-force]
 
@@ -52,7 +52,9 @@ reason. Nightly, the bench runs only if dev-kit engine or kernel source
 changed since the commit the latest baseline benched (changes.py
 devkit_bench between the two), or with no baseline; otherwise the previous
 baseline stands. A dispatch benches regardless (it was asked for); only a
-dispatch with --no-force and no --models follows the nightly rule.
+dispatch with --no-force and no --models follows the nightly rule. The
+dev-kit full refresh (refresh) benches the whole assigned set, uncapped,
+every engine overlaid, whatever changed.
 Outputs bench, matrix, docvqa, head-sha, reason, and a summary on
 $GITHUB_STEP_SUMMARY.
 
@@ -576,7 +578,7 @@ def main(argv=None) -> int:
     p = sub.add_parser("plan")
     p.add_argument("--plan", required=True)
     p.add_argument("--artifacts", default="", help="another run's artifact list (dispatch)")
-    p.add_argument("--mode", choices=("pr", "nightly", "dispatch"), required=True)
+    p.add_argument("--mode", choices=("pr", "nightly", "refresh", "dispatch"), required=True)
     p.add_argument("--runtimes", default=",".join(PR_RUNTIMES))
     p.add_argument("--models", default="")
     p.add_argument("--baseline", default="")

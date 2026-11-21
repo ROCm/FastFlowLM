@@ -61,6 +61,34 @@ name: Build and Test
 # nothing. fresh-hip-ep has Test Windows HIPEP install hip-ep from scratch,
 # instead of reusing the runner's copy.
 #
+# Prebuilt binaries (flm-dev-kit/AGENTS.md, "Prebuilt binaries"): the engine
+# libraries in src/lib/{xrt,hrx}/ and the kernels in src/xclbins/ are never
+# edited by hand. A pull request changes dev-kit source; its run builds and
+# overlay-tests the binaries, and each overlay job uploads a manifest of the
+# files it tested (devkit-overlay-manifest-<os>-<runtime>). The author then
+# runs .github/script/ci/devkit_swap.py fetch, which commits exactly those
+# bytes as a swap commit, and pushes it. The changes job verifies a swap
+# commit at the head (devkit_swap.py verify: its parent is the tested commit,
+# it holds only the manifests' files, byte for byte, and that run passed);
+# a verified one builds and tests nothing again and runs devkit-static only.
+# devkit_swap.py check reports, on every pull request, any change under
+# src/lib or src/xclbins that no verified swap brought in (a warning for now).
+# Both run from the pull request's merge commit, like the npu-gate: defense in
+# depth, not the boundary. A swap that comes with a change to the code that
+# writes or checks the manifests is not verified (devkit_swap.py
+# SWAP_CI_PATHS), and reviewers must read any .github/ change in a pull
+# request that touches src/lib or src/xclbins; review and branch protection
+# are the guarantee.
+#
+# A dispatch with devkit-full-refresh, on a pull request's branch, is the
+# dev-kit full refresh: every engine and every shipped kernel (devkit-xclbins
+# mode assigned) overlay-tested on the four overlay jobs on the full tier,
+# with every NPU catalog model of the package required, then benched
+# (devkit-bench.yml mode refresh: this run's numbers, no comparison); the
+# product jobs run as for any dispatch. devkit_swap.py fetch takes such a run
+# for the pull request whose head it built:
+#   gh workflow run build-and-test.yml --ref <branch> -f devkit-full-refresh=true
+#
 # release.yml calls this with release: true before publishing a tag.
 on:
   push:
@@ -84,6 +112,12 @@ on:
         default: ''
       fresh-hip-ep:
         description: Install hip-ep from scratch in Test Windows HIPEP
+        type: boolean
+        default: false
+      devkit-full-refresh:
+        description: >-
+          Dev-kit full refresh (a pull request's branch only): build every dev-kit engine and shipped
+          kernel, overlay-test them all on the full tier and bench them, for devkit_swap.py fetch
         type: boolean
         default: false
   workflow_call:
@@ -127,6 +161,11 @@ concurrency:
 jobs:
   changes:
     runs-on: ubuntu-latest
+    # actions: read: devkit_swap.py verify and check read the manifests of
+    # the Build and Test run a swap commit names (release.yml grants it).
+    permissions:
+      contents: read
+      actions: read
     outputs:
       run: ${{ steps.detect.outputs.run }}
       families: ${{ steps.detect.outputs.families }}
@@ -149,6 +188,14 @@ jobs:
       devkit-overlay: ${{ steps.detect.outputs.devkit-overlay }}
       # Whether a pull request runs the dev-kit benches (devkit-bench).
       devkit-bench: ${{ steps.detect.outputs.devkit-bench }}
+      # "true": the head is a verified dev-kit swap commit; nothing builds.
+      swap-verified: ${{ steps.detect.outputs.swap-verified }}
+      # "true" on a dev-kit full refresh dispatch (see the top).
+      devkit-full-refresh: ${{ steps.refresh.outputs.full-refresh }}
+      # The main commit the dev-kit binaries were built on, for the overlay
+      # manifests: the pull request's base, or the full refresh's merge base
+      # with main.
+      devkit-base: ${{ steps.refresh.outputs.base }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -156,11 +203,72 @@ jobs:
           fetch-depth: 0
           filter: blob:none
 
+      # A swap commit (devkit_swap.py fetch) at the head of a pull request:
+      # its parent's Build and Test run built and NPU-tested exactly these
+      # binaries, so verified, nothing is built or tested again. Prints why
+      # not otherwise; never fails the job (a crash leaves the output empty,
+      # which is not verified).
+      - name: Verify a dev-kit swap commit
+        id: swap
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: >-
+          python3 .github/script/ci/devkit_swap.py verify --head "${HEAD_SHA}" --base "${BASE_SHA}"
+          --pr "${PR_NUMBER}" --head-ref "${HEAD_REF}" --head-repo "${HEAD_REPO}" --github-output
+
       - name: Detect changes
         id: detect
         uses: ./.github/actions/detect-changes
         with:
           tier: ${{ inputs.tier }}
+          swap-verified: ${{ steps.swap.outputs.swap-verified }}
+
+      # Every pull request: a change under src/lib or src/xclbins that no
+      # verified swap commit brought in is a hand edit (devkit_swap.py
+      # SWAP_ENFORCE: a warning for now, an error once it is flipped).
+      - name: Check the prebuilt binaries come from CI
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: >-
+          python3 .github/script/ci/devkit_swap.py check --head "${HEAD_SHA}" --base "${BASE_SHA}"
+          --pr "${PR_NUMBER}" --head-ref "${HEAD_REF}" --head-repo "${HEAD_REPO}"
+
+      # The dev-kit full refresh (see the top): a dispatch on a branch other
+      # than main. Its binaries build on the branch's head, whose merge base
+      # with main is the base devkit_swap.py checks main against.
+      - name: Dev-kit full refresh
+        id: refresh
+        env:
+          REQUESTED: ${{ github.event_name == 'workflow_dispatch' && inputs.devkit-full-refresh && 'true' || 'false' }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          refresh=false
+          base="${PR_BASE}"
+          if [ "${REQUESTED}" = true ]; then
+            case "${GITHUB_REF}" in
+              refs/heads/main|refs/tags/*|refs/pull/*)
+                echo "::error::devkit-full-refresh is dispatched on a pull request's branch, not on ${GITHUB_REF}"
+                exit 1 ;;
+            esac
+            refresh=true
+            base="$(git merge-base origin/main HEAD)"
+          fi
+          echo "full-refresh=${refresh}" >> "$GITHUB_OUTPUT"
+          echo "base=${base}" >> "$GITHUB_OUTPUT"
+          echo "dev-kit full refresh: ${refresh}; base: ${base:-none}"
 
       # One Test Windows HIPEP job per kind of GPU machine, each with the tier
       # it runs and the changed models it tests. The repository variable
@@ -1250,15 +1358,22 @@ jobs:
   # change builds the four portable packages for this and runs no product
   # suite (changes.py devkit_overlay). summary's Dev-kit checks fails the
   # pull request when one of these fails, or is skipped though requested.
+  # Once its tests passed, each job uploads devkit-overlay-manifest-<os>-
+  # <runtime>, the files it put into the package with their SHA-256 and the
+  # src/lib or src/xclbins path each stands for, from which the author
+  # commits exactly those bytes (devkit_swap.py fetch). The dev-kit full
+  # refresh (see the top) runs them too, over every engine and shipped
+  # kernel, on the full tier with every NPU catalog model required.
 
   test-lin-xrt-devkit:
     name: Test Linux XRT dev-kit overlay
     needs: [changes, build-lin-xrt-portable, npu-gate, npu-approve, devkit-engines, devkit-xclbins]
     # Self-hosted: gated as test-lin-xrt-portable (see npu-gate), on pull
-    # requests only: pushes and the nightly build the dev kit but test no
-    # overlay. Runs when the change touches a dev-kit engine's families or a
-    # kernel build rebuilt some model's kernels, once both dev-kit builds
-    # that ran passed (a failed one fails summary's Dev-kit checks anyway).
+    # requests and the dev-kit full refresh only: pushes and the nightly
+    # build the dev kit but test no overlay. Runs when the change touches a
+    # dev-kit engine's families or a kernel build rebuilt some model's
+    # kernels, once both dev-kit builds that ran passed (a failed one fails
+    # summary's Dev-kit checks anyway).
     if: >-
       ${{ !cancelled()
       && ((github.event_name == 'schedule'
@@ -1268,7 +1383,7 @@ jobs:
           || (needs.npu-gate.result == 'success'
               && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
       && needs.changes.result == 'success'
-      && github.event_name == 'pull_request'
+      && (github.event_name == 'pull_request' || needs.changes.outputs.devkit-full-refresh == 'true')
       && needs.changes.outputs.devkit-overlay == 'true'
       && needs.build-lin-xrt-portable.result == 'success'
       && (needs.devkit-engines.result == 'success' || needs.devkit-engines.result == 'skipped')
@@ -1309,7 +1424,12 @@ jobs:
           xclbin-models: ${{ needs.devkit-xclbins.outputs.touched-models || '[]' }}
           families: ${{ needs.changes.outputs.devkit-families }}
           required-models: ${{ needs.changes.outputs.new-models }}
-          harness-ref: ${{ github.event.pull_request.base.sha }}
+          harness-ref: ${{ github.event.pull_request.base.sha || needs.changes.outputs.devkit-base }}
+          tier: ${{ needs.changes.outputs.devkit-full-refresh == 'true' && 'full' || 'pr' }}
+          require-all: ${{ needs.changes.outputs.devkit-full-refresh }}
+          head-sha: ${{ github.event.pull_request.head.sha || github.sha }}
+          base-sha: ${{ needs.changes.outputs.devkit-base }}
+          full-refresh: ${{ needs.changes.outputs.devkit-full-refresh }}
           label: linux-xrt-devkit
 
   test-lin-hrx-devkit:
@@ -1325,7 +1445,7 @@ jobs:
           || (needs.npu-gate.result == 'success'
               && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
       && needs.changes.result == 'success'
-      && github.event_name == 'pull_request'
+      && (github.event_name == 'pull_request' || needs.changes.outputs.devkit-full-refresh == 'true')
       && needs.changes.outputs.devkit-overlay == 'true'
       && needs.build-lin-hrx-portable.result == 'success'
       && (needs.devkit-engines.result == 'success' || needs.devkit-engines.result == 'skipped')
@@ -1347,7 +1467,12 @@ jobs:
           xclbin-models: ${{ needs.devkit-xclbins.outputs.touched-models || '[]' }}
           families: ${{ needs.changes.outputs.devkit-families }}
           required-models: ${{ needs.changes.outputs.new-models }}
-          harness-ref: ${{ github.event.pull_request.base.sha }}
+          harness-ref: ${{ github.event.pull_request.base.sha || needs.changes.outputs.devkit-base }}
+          tier: ${{ needs.changes.outputs.devkit-full-refresh == 'true' && 'full' || 'pr' }}
+          require-all: ${{ needs.changes.outputs.devkit-full-refresh }}
+          head-sha: ${{ github.event.pull_request.head.sha || github.sha }}
+          base-sha: ${{ needs.changes.outputs.devkit-base }}
+          full-refresh: ${{ needs.changes.outputs.devkit-full-refresh }}
           label: linux-hrx-devkit
 
   test-win-xrt-devkit:
@@ -1363,7 +1488,7 @@ jobs:
           || (needs.npu-gate.result == 'success'
               && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
       && needs.changes.result == 'success'
-      && github.event_name == 'pull_request'
+      && (github.event_name == 'pull_request' || needs.changes.outputs.devkit-full-refresh == 'true')
       && needs.changes.outputs.devkit-overlay == 'true'
       && needs.build-win-xrt.result == 'success'
       && (needs.devkit-engines.result == 'success' || needs.devkit-engines.result == 'skipped')
@@ -1385,7 +1510,12 @@ jobs:
           xclbin-models: ${{ needs.devkit-xclbins.outputs.touched-models || '[]' }}
           families: ${{ needs.changes.outputs.devkit-families }}
           required-models: ${{ needs.changes.outputs.new-models }}
-          harness-ref: ${{ github.event.pull_request.base.sha }}
+          harness-ref: ${{ github.event.pull_request.base.sha || needs.changes.outputs.devkit-base }}
+          tier: ${{ needs.changes.outputs.devkit-full-refresh == 'true' && 'full' || 'pr' }}
+          require-all: ${{ needs.changes.outputs.devkit-full-refresh }}
+          head-sha: ${{ github.event.pull_request.head.sha || github.sha }}
+          base-sha: ${{ needs.changes.outputs.devkit-base }}
+          full-refresh: ${{ needs.changes.outputs.devkit-full-refresh }}
           label: windows-xrt-devkit
 
   test-win-hrx-devkit:
@@ -1401,7 +1531,7 @@ jobs:
           || (needs.npu-gate.result == 'success'
               && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
       && needs.changes.result == 'success'
-      && github.event_name == 'pull_request'
+      && (github.event_name == 'pull_request' || needs.changes.outputs.devkit-full-refresh == 'true')
       && needs.changes.outputs.devkit-overlay == 'true'
       && needs.build-win-hrx.result == 'success'
       && (needs.devkit-engines.result == 'success' || needs.devkit-engines.result == 'skipped')
@@ -1423,7 +1553,12 @@ jobs:
           xclbin-models: ${{ needs.devkit-xclbins.outputs.touched-models || '[]' }}
           families: ${{ needs.changes.outputs.devkit-families }}
           required-models: ${{ needs.changes.outputs.new-models }}
-          harness-ref: ${{ github.event.pull_request.base.sha }}
+          harness-ref: ${{ github.event.pull_request.base.sha || needs.changes.outputs.devkit-base }}
+          tier: ${{ needs.changes.outputs.devkit-full-refresh == 'true' && 'full' || 'pr' }}
+          require-all: ${{ needs.changes.outputs.devkit-full-refresh }}
+          head-sha: ${{ github.event.pull_request.head.sha || github.sha }}
+          base-sha: ${{ needs.changes.outputs.devkit-base }}
+          full-refresh: ${{ needs.changes.outputs.devkit-full-refresh }}
           label: windows-hrx-devkit
 
   # ── Dev-kit benches ──────────────────────────────────────────────────────
@@ -1448,7 +1583,9 @@ jobs:
   # Nightly, the benches run beside the full-tier product tests on the same
   # sweep runners (each job has its own runner, so the numbers are not
   # affected; the night's queue is longer). devkit-bench-comment.yml posts
-  # the results on the pull request.
+  # the results on the pull request. The dev-kit full refresh benches every
+  # benchable model on the four runtimes (mode refresh): this run's numbers,
+  # no A/B and no baseline comparison.
   # actions: read: the nightly baseline is another run's artifact.
   devkit-bench:
     needs:
@@ -1475,13 +1612,17 @@ jobs:
               && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
       && needs.changes.result == 'success'
       && (github.event_name == 'schedule'
+          || needs.changes.outputs.devkit-full-refresh == 'true'
           || (github.event_name == 'pull_request' && needs.changes.outputs.devkit-bench == 'true')) }}
     permissions:
       contents: read
       actions: read
     uses: ./.github/workflows/devkit-bench.yml
     with:
-      mode: ${{ github.event_name == 'schedule' && 'nightly' || 'pr' }}
+      mode: >-
+        ${{ github.event_name == 'schedule' && 'nightly'
+        || needs.changes.outputs.devkit-full-refresh == 'true' && 'refresh'
+        || 'pr' }}
       head-sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
       builds: >-
         lin-xrt=${{ needs.build-lin-xrt-portable.result }},lin-hrx=${{ needs.build-lin-hrx-portable.result }},win-xrt=${{ needs.build-win-xrt.result }},win-hrx=${{ needs.build-win-hrx.result }}
@@ -1639,13 +1780,16 @@ jobs:
       # no result, a pull, a timeout, a lost runner, the GitHub API) only
       # warns, as slowdowns and accuracy drops do; skipped, they pass
       # (nothing to bench, or a build or the gate held them, which the
-      # checks above already report). Other runs only show the dev-kit
-      # jobs' own results: the dev kit ships in no package, so it does not
-      # hold up a release.
+      # checks above already report). The dev-kit full refresh is checked
+      # the same way. A verified swap commit (swap-verified) requests no
+      # build or overlay, so only changes and devkit-static count for it.
+      # Other runs only show the dev-kit jobs' own results: the dev kit
+      # ships in no package, so it does not hold up a release.
       - name: Dev-kit checks
-        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        if: ${{ !cancelled() && (github.event_name == 'pull_request' || needs.changes.outputs.devkit-full-refresh == 'true') }}
         env:
           CHANGES: ${{ needs.changes.result }}
+          SWAP_VERIFIED: ${{ needs.changes.outputs.swap-verified }}
           DEVKIT_STATIC: ${{ needs.devkit-static.result }}
           DEVKIT_ENGINES: ${{ needs.devkit-engines.result }}
           DEVKIT_XCLBINS: ${{ needs.devkit-xclbins.result }}
@@ -1661,7 +1805,7 @@ jobs:
             test-win-hrx-devkit=${{ needs.test-win-hrx-devkit.result }}
         run: |
           echo "changes: ${CHANGES}; devkit-static: ${DEVKIT_STATIC}; devkit-engines: ${DEVKIT_ENGINES}; devkit-xclbins: ${DEVKIT_XCLBINS}; devkit-bench: ${DEVKIT_BENCH} (hard gate: ${DEVKIT_BENCH_GATE:-not reported})"
-          echo "devkit-overlay: ${OVERLAY:-none}; ${OVERLAY_TESTS}"
+          echo "devkit-overlay: ${OVERLAY:-none}; ${OVERLAY_TESTS}; verified swap: ${SWAP_VERIFIED:-false}"
           rc=0
           case "${CHANGES}" in success) ;; *) echo "::error::changes did not succeed, so the dev-kit and build jobs were skipped"; rc=1 ;; esac
           case "${DEVKIT_STATIC}" in success|skipped) ;; *) echo "::error::devkit-static did not pass"; rc=1 ;; esac
@@ -1676,6 +1820,9 @@ jobs:
           if [ "${OVERLAY}" = true ] && { [ -n "${OVERLAY_FAMILIES}" ] || { [ -n "${OVERLAY_MODELS}" ] && [ "${OVERLAY_MODELS}" != "[]" ]; }; }; then
             requested=true
           fi
+          # A verified swap was tested by its parent's run (changes leaves
+          # devkit-overlay off for it; this keeps it so).
+          [ "${SWAP_VERIFIED}" = true ] && requested=false
           for entry in ${OVERLAY_TESTS}; do
             job="${entry%%=*}"; result="${entry#*=}"
             case "${result}" in
@@ -1688,3 +1835,32 @@ jobs:
             esac
           done
           exit "${rc}"
+
+      # When this run passed and its overlay jobs tested dev-kit binaries
+      # that differ from the branch: the command that commits them
+      # (devkit_swap.py guide), in the job summary and as a notice. Writes
+      # nothing to the repository or the pull request.
+      - name: Download the dev-kit overlay manifests
+        if: >-
+          ${{ success() && needs.changes.outputs.swap-verified != 'true'
+          && (github.event_name == 'pull_request' || needs.changes.outputs.devkit-full-refresh == 'true') }}
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: devkit-overlay-manifest-*
+          path: devkit-overlay-manifests
+
+      - name: Dev-kit binaries to commit
+        if: >-
+          ${{ success() && needs.changes.outputs.swap-verified != 'true'
+          && (github.event_name == 'pull_request' || needs.changes.outputs.devkit-full-refresh == 'true') }}
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          [ -d devkit-overlay-manifests ] || exit 0
+          python3 .github/script/ci/devkit_swap.py guide --manifests devkit-overlay-manifests \
+            --head "${HEAD_SHA}" --run "${GITHUB_RUN_ID}" > "${RUNNER_TEMP}/devkit-swap.md" || exit 0
+          if [ -s "${RUNNER_TEMP}/devkit-swap.md" ]; then
+            cat "${RUNNER_TEMP}/devkit-swap.md" >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=Dev-kit binaries to commit::Run python .github/script/ci/devkit_swap.py fetch --run ${GITHUB_RUN_ID} on a clean checkout of ${HEAD_SHA:0:12}, then push (see the run summary)."
+          fi

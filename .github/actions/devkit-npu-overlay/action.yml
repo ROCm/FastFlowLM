@@ -22,7 +22,11 @@ description: >
   harness: a change to the flags npu-test passes to npu_test must land on
   its own before a dev-kit pull request that depends on it. Needs a checkout
   of .github/actions, .github/script and flm-dev-kit/FLM_DLL (cone mode),
-  and only contents: read (plus actions: read with run-id).
+  and only contents: read (plus actions: read with run-id). Once the tests
+  passed it uploads devkit-overlay-manifest-<os>-<runtime>, the record of
+  every file the overlay put into the package (devkit_overlay.py), from
+  which the pull request's author commits exactly those bytes
+  (.github/script/ci/devkit_swap.py fetch).
 
 inputs:
   runtime:
@@ -68,6 +72,26 @@ inputs:
   label:
     description: Names the run in the report, e.g. linux-xrt-devkit.
     required: true
+  tier:
+    description: npu-test tier, pr (pull requests) or full (the dev-kit full refresh).
+    required: false
+    default: pr
+  require-all:
+    description: '"true" requires every NPU catalog model of the package (the dev-kit full refresh).'
+    required: false
+    default: "false"
+  head-sha:
+    description: For the manifest, the commit tested (the pull request's head, or the full refresh's).
+    required: false
+    default: ""
+  base-sha:
+    description: For the manifest, the main commit the run built on (the pull request's base).
+    required: false
+    default: ""
+  full-refresh:
+    description: For the manifest, '"true"' on a dev-kit full refresh run.
+    required: false
+    default: "false"
 
 runs:
   using: composite
@@ -103,6 +127,11 @@ runs:
         new-models: ${{ inputs.required-models }}
         run-id: ${{ inputs.run-id }}
         github-token: ${{ inputs.github-token }}
+        require-all: ${{ inputs.require-all }}
+        manifest: ${{ runner.temp }}/devkit-overlay-manifest/manifest.json
+        head-sha: ${{ inputs.head-sha }}
+        base-sha: ${{ inputs.base-sha }}
+        full-refresh: ${{ inputs.full-refresh }}
 
     - name: Test
       if: steps.overlay.outputs.test == 'true'
@@ -114,7 +143,7 @@ runs:
       with:
         flm-bin: ${{ steps.overlay.outputs.flm-bin }}
         label: ${{ inputs.label }}
-        tier: pr
+        tier: ${{ inputs.tier }}
         suites: ${{ steps.overlay.outputs.suites }}
         families: ${{ steps.overlay.outputs.families }}
         models: ${{ steps.overlay.outputs.models }}
@@ -122,3 +151,16 @@ runs:
         asr-expected-key: ${{ inputs.os }}${{ inputs.runtime == 'hrx' && '-hrx' || '' }}
         harness-dir: ${{ github.workspace }}/devkit-harness
         clean-env: "true"
+
+    # Only once the tests passed (a failed Test step skips this): the record
+    # of every file the overlay put into the package, with its hashes and
+    # the repository path it stands for, from which devkit_swap.py fetch
+    # commits exactly these bytes. Small, kept 30 days.
+    - name: Upload the overlay manifest
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: devkit-overlay-manifest-${{ inputs.os }}-${{ inputs.runtime }}
+        path: ${{ runner.temp }}/devkit-overlay-manifest/manifest.json
+        retention-days: 30
+        if-no-files-found: error
+        overwrite: true

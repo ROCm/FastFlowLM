@@ -125,8 +125,10 @@ accuracy. Do not invent a `make test` or claim tests pass.
   `../src/xclbins/` file it replaces; main builds every assigned kernel, nightly every build unit. The result is compared with
   `../src/xclbins/` (a report, never a failure), and a kernel whose RTP addresses differ from
   `FLM_Xclbin/rtp_addresses.lock.txt` fails the job.
-- Pull requests only: the NPU overlay jobs (`test-*-devkit`) put the engines and kernels built above
-  into the product's portable packages and run the NPU tests on the models they serve.
+- Pull requests only (and the full refresh below): the NPU overlay jobs (`test-*-devkit`) put the
+  engines and kernels built above into the product's portable packages and run the NPU tests on the
+  models they serve. Each one that passes uploads a manifest of the files it tested
+  (`devkit-overlay-manifest-<os>-<runtime>`, kept 30 days), which the swap below reads.
 - `devkit-bench` (`../.github/workflows/devkit-bench.yml`, called by Build and Test after its builds,
   in the same run): perf (`flm bench`, the dev-kit build against the unmodified package on the same
   runner) and GSM8K accuracy, only when engine or kernel source changed: on pull requests, and
@@ -136,6 +138,57 @@ accuracy. Do not invent a `make test` or claim tests pass.
   many unanswered) fails the required check, which therefore waits for the benches. A manual
   dispatch of that workflow re-benches an earlier Build and Test run: it benches by default (force),
   and without `models` takes the nightly's rotation, so name the models to re-bench a pull request's.
+  The full refresh benches every benchable model on the four runtimes and reports only its own
+  numbers (no A/B, no baseline comparison).
+
+**Prebuilt binaries: never edit `../src/lib/{xrt,hrx}/` or `../src/xclbins/` by hand.** The engine
+libraries (`.so`, `.dll`, `.lib`) and kernels (`<folder>/<slot>.xclbin`) that `flm` ships are
+updated only by a pull request that changes dev-kit source, and the bytes committed are exactly the
+bytes its Build and Test run built and NPU-tested. Kernel builds are not byte-reproducible, so
+nothing is rebuilt afterwards: the tested files themselves are committed, as a *swap commit*.
+1. Change the dev-kit source and push. Do not touch `../src/lib/` or `../src/xclbins/`.
+2. Build and Test builds the engines and kernels the change touches (`devkit-engines`,
+   `devkit-xclbins`), overlays them on the portable packages and NPU-tests them (`test-*-devkit`);
+   each overlay job records the files it tested in its manifest. Fix and push until the run passes.
+3. When the run has passed, its summary shows the command. From a clean checkout of the pull
+   request's branch at exactly the tested commit (nothing committed after it, nothing unpushed):
+   `python .github/script/ci/devkit_swap.py fetch` (add `--run <id>` for a particular run,
+   `--dry-run` for the plan only). It uses your own GitHub access (the `gh` login, or `GH_TOKEN`;
+   read access is enough), checks the run (this pull request's Build and Test at your `HEAD`, passed,
+   with conclusion success: a failed bench fails it too, so re-run the failed jobs first; every
+   overlay test that ran passed and tested its files, and no commit on main since the run's
+   base touches `FLM_DLL/`, `FLM_Xclbin/`, `../src/lib/` or `../src/xclbins/`: otherwise merge main and
+   let CI run again), downloads the tested files, checks every SHA-256 against the manifests, writes
+   them and makes one commit with the trailers `Devkit-Swap-Run: <run id>` and
+   `Devkit-Swap-Tested: <tested sha>`. It does not push. The dev-kit artifacts are kept 7 days:
+   once they expire, re-run the workflow.
+4. `git push`. Build and Test's changes job verifies the swap commit (`devkit_swap.py verify`: its
+   parent is the tested commit, it changes only files the run's manifests list, each to exactly the
+   tested bytes, it carries every file the run tested, and the run passed) and then builds and tests
+   nothing again; `devkit-static` still checks the catalog. Then the pull request is reviewed and
+   merged.
+
+A swap pull request must not change the dev-kit CI that writes and checks the manifests
+(`devkit_overlay.py`, `devkit_swap.py`, `changes.py`, `devkit_check.py`, the `devkit-npu-overlay`,
+`devkit-overlay-package` and `detect-changes` actions, `build-and-test.yml`, `devkit-engines.yml`,
+`devkit-xclbins.yml`): `verify` then refuses the swap and the full CI runs. `verify` and `check` run
+from the pull request's own merge commit, so they keep the flow honest but are no enforcement
+boundary: reviewers must read any `.github/` change in a pull request that touches `../src/lib/` or
+`../src/xclbins/`, and the real guarantee is that review plus branch protection.
+
+`devkit_swap.py check` runs on every pull request and reports any change under `../src/lib/` or
+`../src/xclbins/` that a verified swap commit did not bring in, other than the deletion of a file the
+catalog no longer needs and the third-party files (`libaiebu.a`, `aiebu_static.lib`, the runtime
+libraries directly under `../src/lib/`). It warns for now (`SWAP_ENFORCE` in that script) and will
+fail the pull request later.
+
+**Full refresh** (to align main with the dev kit once, or after a toolchain change): dispatch Build
+and Test on the pull request's branch with `gh workflow run build-and-test.yml --ref <branch> -f
+devkit-full-refresh=true`. It builds every engine and every shipped kernel, overlay-tests them on
+the four overlay jobs on the full tier with every NPU catalog model required, and benches every
+benchable model; the product jobs run as for any dispatch. When it has passed (no commit pushed to
+the branch meanwhile), run `python .github/script/ci/devkit_swap.py fetch --run <its run id>` and
+push: the swap commit takes every file its manifests list, and `verify` accepts it as above.
 
 Keep in sync, in the same pull request: `FLM_Xclbin/build_units.json` (every directory with a
 Makefile and its `MODEL_TYPE`s), `FLM_Xclbin/kernel_assignment.json` and `.md` (model → folder → slot
