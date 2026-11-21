@@ -24,6 +24,14 @@ the first such prompt; if it cannot be registered, attention stays on the host. 
 (`vdpbf16ps`; the engine builds with `-mavx512bf16`), so host results differ from the old fp32-probability path by bf16 rounding (top-1
 agreement 98.8% on a 2,172-request text sample), and are bit-identical run to run.
 
+**Control-packet switches** (`d3.switches`, built by `FLM_Xclbin/d3_switches`, format in `d3_launch.hpp`): when the xclbin folder has the file and
+the mm kernel is `mm_rtm2_glu.xclbin`, attention and conv1d run in the mm kernel's hardware context. The array switches app with aie2p-launchlib
+control packets (about 0.12 ms per switch, against 2.2-2.8 ms for a second hardware context), so attention goes to the array from 512 tokens
+(`D3_ATTN_ARRAY_MIN`, encode ms host / array: 256 45.7 / 54.0, 512 67.7 / 64.9, 1,024 167.9 / 140.2, 2,048 315.3 / 304.4, 4,096 701.8 / 670.5) and conv1d
+(`Qwen3_8/conv1d_prefill`, the q/k L2 norm fused in the kernel, three zero history rows in front of qkv) from 1,536 rows (`D3_CONV_ARRAY_MIN`; 2,048 tokens
+304 -> 281 ms; slower below). conv1d needs one non-dependent segment; other batches keep the host conv. `D3_NO_SWITCH=1` or no file: attention from
+1,536 tokens in its own context, host conv1d, as before. Not for HRX. The delta rule stays on the host.
+
 **Attention modes** (decision_config.json `attention_mode`): `noncausal_full_attention` (lite / nano / mini: every
 token sees every token of its prompt, the default) and `prefix_bidir` (d3-turbo, see below). The engine does not read
 the mode itself: the application passes `d3_image_payload::state_len` per prompt for `prefix_bidir`.
@@ -253,7 +261,10 @@ make FLM_USE_HRX=1    # against the HRX runtime (hrx-integration/fetch-hrx-relea
 | `D3_BO_LIMIT_MB=<n>` | tests: largest device buffer one array run may write (default 2^31 - 16 MiB); lowering it forces the two-part up/gate GEMM |
 | `FLM_PREFILL_THREADS=<n>` | host threads (default: one per physical core) |
 | `D3_PAR_SPIN_US=<us>` | microseconds an idle host worker spins before it sleeps (default 30; `0` = sleep at once). The host loops run on `d3_par.hpp`'s own pool, not OpenMP (FLM issue #882: OpenMP workers spin through every NPU wait) |
-| `D3_ATTN_ARRAY_MIN=<tokens>` | NPU builds: prompts whose attention work (query-key pairs) reaches that of a prompt of this many tokens run attention on the array (default 1,536 = prompts of 1,536 tokens or more when unsplit); `0` = never |
+| `D3_ATTN_ARRAY_MIN=<tokens>` | NPU builds: prompts whose attention work (query-key pairs) reaches that of a prompt of this many tokens run attention on the array (default 512 with `d3.switches`, else 1,536 = prompts of that many tokens or more when unsplit); `0` = never |
+| `D3_NO_SWITCH=1` | NPU builds: ignore `d3.switches` (attention in its own context, conv1d on the host) |
+| `D3_CONV_ARRAY_MIN=<rows>` | NPU builds with `d3.switches`: shortest segment whose conv1d runs on the array (default 1,536) |
+| `D3_SWITCH_DIR=<dir>` | rig: load loose switch files (`K.txn`, `K.pkt`, `switches.txt`) instead of `d3.switches` |
 
 ## Harness
 

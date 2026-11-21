@@ -833,6 +833,12 @@
         "xclbins-dequant_mm_bfp16_rtm2_glu_512x512x512"
       ]
     },
+    "d3_switches": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-d3_switches"
+      ]
+    },
     "generic_decoding_layer": {
       "model_types": [
         "LLAMA_3_2_1B",
