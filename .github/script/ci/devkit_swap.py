@@ -198,7 +198,7 @@ RUN_ID = re.compile(r"^[1-9][0-9]{0,19}$")
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_+-][A-Za-z0-9_.+-]*$")
 ENGINE_FILE = {"linux": re.compile(r"^lib[A-Za-z0-9_+-]+\.so$"),
                "windows": re.compile(r"^[A-Za-z0-9_+-]+\.(dll|lib)$")}
-KERNEL_SLOT = re.compile(r"^[A-Za-z0-9_+-][A-Za-z0-9_.+-]*\.xclbin$")
+KERNEL_SLOT = re.compile(r"^[A-Za-z0-9_+-][A-Za-z0-9_.+-]*\.(xclbin|switches)$")
 
 
 class SwapError(Exception):
@@ -267,7 +267,7 @@ def check_entry_path(kind: str, repo_path: str, os_name: str, runtime: str) -> O
         return None
     if kind == "kernel":
         if len(parts) != 4 or parts[:2] != ["src", "xclbins"] or not KERNEL_SLOT.match(parts[-1]):
-            return f"{repo_path}: a kernel must be src/xclbins/<folder>/<slot>.xclbin"
+            return f"{repo_path}: a kernel must be src/xclbins/<folder>/<slot>.xclbin (or .switches)"
         return None
     return f"unknown kind {kind!r}"
 

@@ -111,16 +111,21 @@ inline bool d3_host_gemm(const char* which) {
 ///        0.84 at 2,048, 0.76 at 4,096, 0.40 at 16,384. Below it the array's fixed costs per
 ///        attention layer (the switch to attn.xclbin, staging K/V) outweigh its speed. Not re-swept
 ///        for prefix_bidir prompts or GQA 6.
+///        With the control-packet switches (d3_launch: attention in the mm context, ~0.12 ms per switch
+///        instead of 2.2-2.8 ms) the crossover is 512 tokens (encode ms host / switched: 256 45.7 / 54.0,
+///        512 67.7 / 64.9, 1,024 167.9 / 140.2, 2,048 315.3 / 304.4, 4,096 701.8 / 670.5).
 static constexpr int D3_ATTN_ARRAY_MIN_DEFAULT = 1536;
-inline int d3_attn_array_min() {
+static constexpr int D3_ATTN_ARRAY_MIN_SWITCHED = 512;
+inline int d3_attn_array_min(bool switched = false) {
 #if D3_MM_ON_NPU
-    static const int n = [] {
+    static const int env = [] {
         const char* e = std::getenv("D3_ATTN_ARRAY_MIN");
-        if (!e) return D3_ATTN_ARRAY_MIN_DEFAULT;
+        if (!e) return -1;
         const int v = std::atoi(e);
         return v > 0 ? v : INT_MAX;
     }();
-    return n;
+    if (env >= 0) return env;
+    return switched ? D3_ATTN_ARRAY_MIN_SWITCHED : D3_ATTN_ARRAY_MIN_DEFAULT;
 #else
     return INT_MAX;
 #endif
@@ -287,17 +292,22 @@ struct d3_mm {
     template <typename... A> auto create_run(A&... a) { return cur->create_run(a...); }
 };
 
-/// @brief load the control-packet switches of D3_SWITCH_DIR once (rig); true when attention and conv1d
+/// @brief load the control-packet switches once: D3_SWITCH_DIR (a directory, rig), else the model's d3.switches
+///        (ll.file, set when the mm xclbin is mm_rtm2_glu), unless D3_NO_SWITCH=1. True when attention and conv1d
 ///        can share the mm hardware context. A failure is logged once and leaves everything on the old paths.
 inline bool d3_launch_ensure(d3_launch& ll, npu_app_manager* gemm) {
 #if !defined(FLM_USE_HRX)
     if (ll.tried) return ll.ready;
     ll.tried = true;
+    const char* off = std::getenv("D3_NO_SWITCH");
+    if (!gemm || (off && off[0] == '1')) return false;
     const char* sw_dir = std::getenv("D3_SWITCH_DIR");
-    if (!sw_dir || !sw_dir[0] || !gemm) return false;
+    const bool dir = sw_dir && sw_dir[0];
+    if (!dir && (ll.file.empty() || !std::filesystem::exists(ll.file))) return false;
     try {
-        ll.load(sw_dir, gemm->get_device(), gemm->get_context(), gemm->get_kernel_name());
-        header_print("d3", "attention and conv1d share the mm hardware context (control-packet switches from " << sw_dir << ")");
+        if (dir) ll.load(sw_dir, gemm->get_device(), gemm->get_context(), gemm->get_kernel_name());
+        else ll.load_file(ll.file, gemm->get_device(), gemm->get_context(), gemm->get_kernel_name());
+        header_print("d3", "attention and conv1d share the mm hardware context (control-packet switches from " << (dir ? sw_dir : ll.file.c_str()) << ")");
     } catch (const std::exception& e) {
         ll.ready = false;
         header_print("d3", "control-packet switches off: " << e.what());
@@ -528,7 +538,7 @@ struct d3_attn_block{
     npu_app_manager* attn_mgr = nullptr;
     bool attn_unavailable = false;
     npu_app_manager* gemm_mgr = nullptr;   //!< the mm xclbin's context: attention runs here when launchlib switches are on
-    d3_launch* ll = nullptr;               //!< the context's control-packet switches (D3_SWITCH_DIR); ll->ready = attention shares the mm context
+    d3_launch* ll = nullptr;               //!< the context's control-packet switches (d3.switches); ll->ready = attention shares the mm context
     d3_mm attn;                        //!< an app per prompt length (len, or state << 32 | len for prefix_bidir's question run) in the current call (one per attention layer)
     d3_mm attn_state;                  //!< prefix_bidir's state run, an app per state length
     buffer<bf16> st_kv, st_q, st_o;    //!< staging: K then V always; q / o for a segment not at row 0
@@ -755,7 +765,7 @@ struct d3_attn_block{
         // writes past its end belong to a later segment, whose attention then rewrites them.
         std::vector<char> on_array(b.segs.size(), 0);
 #if D3_MM_ON_NPU
-        const int64_t array_min = d3_attn_array_min();
+        const int64_t array_min = d3_attn_array_min(ll && d3_launch_ensure(*ll, gemm_mgr));
         for (size_t i = 0; i < b.segs.size(); i++) {
             const int st = causal ? 0 : b.segs[i].state;
             if (b.segs[i].dependent) continue;   // question blocks of a cached state run on the host
@@ -914,7 +924,7 @@ struct d3_prefill_context{
     uint64_t tick = 0;
 
     npu_app_manager* gemm_app_manager = nullptr;
-    d3_launch ll;   //!< control-packet switches shared by the blocks (D3_SWITCH_DIR)
+    d3_launch ll;   //!< control-packet switches shared by the blocks (d3.switches)
     std::unique_ptr<d3_attn_block> attn_block;
     std::unique_ptr<d3_linear_block> linear_block;
     std::unique_ptr<d3_mlp_block> mlp;
@@ -930,6 +940,7 @@ struct d3_prefill_context{
         const char* no_bfp = std::getenv("D3_NO_BFP_MM");
         const bool use_bfp = std::filesystem::exists(bfp_mm) && !(no_bfp && no_bfp[0] == '1');
         d3_bfp_kernel_loaded = use_bfp;
+        if (use_bfp) ll.file = utils::path_join(xdir, "d3.switches");   // built against mm_rtm2_glu (FLM_Xclbin/d3_switches)
         gemm_app_manager = npu->register_xclbin(use_bfp ? bfp_mm : utils::path_join(xdir, "mm.xclbin"));
 #else
         (void)config;
