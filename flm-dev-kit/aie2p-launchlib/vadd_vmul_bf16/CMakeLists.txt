@@ -20,7 +20,7 @@ set(FLM_XRT_WIN_XRT_ONLY ON) # XRT paths only: no aiebu, no Boost
 include(${CMAKE_CURRENT_SOURCE_DIR}/../../FLM_DLL/cmake/flm_xrt_win.cmake) # XRT_INCLUDE_DIR, XRT_LIB_DIR
 set(FLM_DLL ${CMAKE_CURRENT_SOURCE_DIR}/../../FLM_DLL) # nlohmann/json
 
-foreach(prog host stress ovlp make_overlay)
+foreach(prog host stress session ovlp make_overlay)
   add_executable(${prog} host/${prog}.cpp)
   target_include_directories(${prog} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../launchlib/include

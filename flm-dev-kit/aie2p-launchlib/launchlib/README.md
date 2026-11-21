@@ -296,6 +296,12 @@ free); `Session` passes it, other hosts use `xrt/packets.hpp`. Reset and rerun k
   - `CtrlPktOptions::rewrite_lanes` (default on): warm and program-only kernels write every lane register,
     so a lane another hw_context's switch took away gives wrong data (as with txn), not a hang. Off saves
     ~23 ops per column; then the lane must still be in the array.
+  - `SessionOptions::resident_lanes` (default off): the Session also builds every warm kernel without
+    `rewrite_lanes` (`resident_<name>`) and runs that twin when the guard saw no other context for
+    `resident_quiet` (100 ms) and the array state is known. 8 × 4, ELF flow: program-only switch 25.6 → 10.7 us,
+    full 73 → 65 us. A process that starts on the NPU during such a runlist hangs it, and the amdxdna
+    driver's recovery fails every context's runlists for ~60 s (measured: 2 of 5 newcomers; no wrong data).
+    Only for a process that has the NPU to itself (`vadd_vmul_bf16`: `make session`).
 - Words the runtime sequence writes too (an RTP lock) go by TXN after the chains: a packet still in flight
   could land after the sequence's write.
 - A column without a lane, or without enough free shim BDs, loads by TXN writes; so does every column of a
@@ -375,6 +381,7 @@ The example's README has the full table.
 | `../vadd_vmul_bf16`: `make check` | the same on the example's current package | |
 | `../vadd_vmul_bf16`: `make run` | the device: every kind, 1,600-launch loops, checks, the ELF flow, timing | the NPU |
 | `../vadd_vmul_bf16`: `make stress` | the device: random walks over every kind, runlist lengths, odd lengths, wrong prev, other contexts and processes, special values, the largest length | the NPU |
+| `../vadd_vmul_bf16`: `make session` | the device through `launch::Session`: expression, switches, reruns, a second hw_context, every result checked; `RUN_ARGS="--resident on"` for the resident twins, `--seconds S` to loop next to other processes | the NPU |
 
 ## 9. Not done
 
