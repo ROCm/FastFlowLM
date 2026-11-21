@@ -93,7 +93,7 @@ SWAP_CI_PATHS, which no verified swap can come with (split it).
 The dev-kit full refresh: a workflow_dispatch of Build and Test on a pull
 request's branch with devkit-full-refresh (build-and-test.yml) builds every
 engine and every assigned kernel, stages all of them into the product
-builds, runs the product test jobs on the full tier with every NPU catalog
+builds, runs the product test jobs on the dispatch's tier (default pr) with every NPU catalog
 model required, and marks its manifests full_refresh. fetch and verify
 accept such a run for the pull request whose head is the run's head.
 

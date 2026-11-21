@@ -106,7 +106,8 @@ name: Build and Test
 # A dispatch with devkit-full-refresh, on a pull request's branch, is the
 # dev-kit full refresh: every engine and every shipped kernel (devkit-xclbins
 # mode assigned) staged into the product builds, whose test jobs run on the
-# full tier with every NPU catalog model required, then benched
+# dispatch's tier (default pr; -f tier=full for the full one) with every NPU
+# catalog model required, then benched
 # (devkit-bench.yml mode refresh: this run's numbers, no comparison).
 # devkit_swap.py fetch takes such a run for the pull request whose head it
 # built:
@@ -140,7 +141,8 @@ on:
       devkit-full-refresh:
         description: >-
           Dev-kit full refresh (a pull request's branch only): build every dev-kit engine and shipped
-          kernel, stage them all into the product builds, test those on the full tier and bench them,
+          kernel, stage them all into the product builds, test those (on the tier input, every catalog
+          model required) and bench them,
           for devkit_swap.py fetch
         type: boolean
         default: false
@@ -250,12 +252,14 @@ jobs:
           python3 .github/script/ci/devkit_swap.py verify --head "${HEAD_SHA}" --base "${BASE_SHA}"
           --pr "${PR_NUMBER}" --head-ref "${HEAD_REF}" --head-repo "${HEAD_REPO}" --github-output
 
-      # The dev-kit full refresh tests on the full tier.
+      # The dev-kit full refresh tests on the dispatch's tier input (default pr), with
+      # every catalog model required: the full tier's known failures elsewhere would
+      # otherwise block every refresh. -f tier=full runs it there.
       - name: Detect changes
         id: detect
         uses: ./.github/actions/detect-changes
         with:
-          tier: ${{ github.event_name == 'workflow_dispatch' && inputs.devkit-full-refresh && 'full' || inputs.tier }}
+          tier: ${{ inputs.tier }}
           swap-verified: ${{ steps.swap.outputs.swap-verified }}
 
       # Every pull request: a change under src/lib or src/xclbins that no

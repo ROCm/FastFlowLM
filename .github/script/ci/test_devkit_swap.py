@@ -1082,9 +1082,10 @@ class Wiring(unittest.TestCase):
                         changes_job.index("uses: ./.github/actions/detect-changes"))
         self.assertIn("swap-verified: ${{ steps.swap.outputs.swap-verified }}", changes_job)
         self.assertIn("if: github.event_name == 'pull_request'", changes_job)
-        # The full refresh tests on the full tier, every catalog model required.
-        self.assertIn("tier: ${{ github.event_name == 'workflow_dispatch' && inputs.devkit-full-refresh "
-                      "&& 'full' || inputs.tier }}", changes_job)
+        # The full refresh tests on the dispatch's tier (default pr), every
+        # catalog model required; it does not force the full tier.
+        self.assertIn("tier: ${{ inputs.tier }}", changes_job)
+        self.assertNotIn("inputs.devkit-full-refresh && 'full'", changes_job)
         stage = jobs[ds.STAGE_JOB]
         for line in ('[ "${FULL_REFRESH}" = true ] && args+=(--require-all --full-refresh)',
                      "HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}",

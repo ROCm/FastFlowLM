@@ -233,8 +233,8 @@ committed only by the swap:
 **Full refresh** (to align main with the dev kit once, or after a toolchain change): dispatch Build
 and Test on the pull request's branch with `gh workflow run build-and-test.yml --ref <branch> -f
 devkit-full-refresh=true`. It builds every engine and every shipped kernel, stages all of them into
-the product builds, runs the product test jobs on the full tier with every NPU catalog model
-required, and benches every benchable model. When everything but the *Dev-kit swap pending* step
+the product builds, runs the product test jobs with every NPU catalog model required (on the
+pr tier by default; add `-f tier=full` for the full tier), and benches every benchable model. When everything but the *Dev-kit swap pending* step
 has passed (no commit pushed to the branch meanwhile), run `python .github/script/ci/devkit_swap.py
 fetch --run <its run id>` and push: the swap commit takes every file its manifests list, and
 `verify` accepts it as above.
