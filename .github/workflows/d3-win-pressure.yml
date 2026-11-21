@@ -1,0 +1,90 @@
+name: d3 Windows pressure (temporary)
+
+# Branch-only, not for main: runs .github/script/d3_pressure.py on a Windows NPU runner against the
+# Windows package that Build and Test run 44844976982 built for PR #1091 (d3:edge speed-up).
+# Push to pressure/d3-edge-win to run it.
+
+on:
+  push:
+    branches: [pressure/d3-edge-win]
+
+concurrency:
+  group: d3-win-pressure
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  pressure:
+    name: d3:edge pressure (Windows XRT)
+    if: github.ref == 'refs/heads/pressure/d3-edge-win'
+    runs-on: [self-hosted, windows, x64, npu, sweep]
+    timeout-minutes: 60
+    env:
+      PKG_RUN: "44844976982"
+      PKG_NAME: fastflowlm-windows-0d067fbb96a8fd9580c019bbda66393996020286
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            .github/actions
+            .github/script
+      - name: Download package built by the PR's CI
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ env.PKG_NAME }}
+          run-id: ${{ env.PKG_RUN }}
+          github-token: ${{ github.token }}
+          path: package
+      - name: Prepare package
+        id: package
+        uses: ./.github/actions/install-package
+        with:
+          kind: portable
+          path: package
+      - name: Machine
+        shell: powershell
+        run: |
+          Write-Host "runner $env:RUNNER_NAME"
+          Get-CimInstance Win32_Processor | Select-Object -First 1 Name | Format-List
+          Get-Process -Name flm -ErrorAction SilentlyContinue | Format-Table Id, Path
+      - name: Pull d3:edge
+        shell: powershell
+        env:
+          FLM_BIN: ${{ steps.package.outputs.flm-bin }}
+        run: |
+          if (-not $env:FLM_MODEL_PATH) {
+            $env:FLM_MODEL_PATH = Join-Path $env:USERPROFILE ".flm"
+            New-Item -ItemType Directory -Force $env:FLM_MODEL_PATH | Out-Null
+          }
+          & $env:FLM_BIN pull d3:edge
+          if ($LASTEXITCODE -ne 0) { throw "flm pull d3:edge failed ($LASTEXITCODE)" }
+      - name: Pressure
+        shell: powershell
+        working-directory: .github/script
+        env:
+          FLM_BIN: ${{ steps.package.outputs.flm-bin }}
+          PYTHONUTF8: "1"
+        run: |
+          if (-not $env:FLM_MODEL_PATH) { $env:FLM_MODEL_PATH = Join-Path $env:USERPROFILE ".flm" }
+          python d3_pressure.py --flm-bin $env:FLM_BIN --out "$env:GITHUB_WORKSPACE\pressure-out" --seconds 300 --seconds2 120 --threads 4
+          if ($LASTEXITCODE -ne 0) { throw "pressure failed ($LASTEXITCODE)" }
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: d3-win-pressure-logs
+          path: pressure-out
+          if-no-files-found: ignore
+      - name: Clear stale flm
+        if: always()
+        shell: powershell
+        run: |
+          $work = Split-Path (Split-Path $env:GITHUB_WORKSPACE)
+          Get-Process -Name flm -ErrorAction SilentlyContinue |
+            Where-Object { $_.Path -and $_.Path.StartsWith($work, [StringComparison]::OrdinalIgnoreCase) } |
+            Stop-Process -Force -ErrorAction SilentlyContinue
