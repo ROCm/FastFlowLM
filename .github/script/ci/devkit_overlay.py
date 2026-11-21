@@ -106,9 +106,10 @@ NO_LIBRARY = {"vision_common"}
 STD_SYMBOL = re.compile(r"^_Z(?:T[ISVT]|GV)?N?[KVRO]*S[tabsiod]")
 # The system's, not the package's: operators new and delete, __cxxabiv1 and
 # __gnu_cxx (libstdc++, libsupc++) and the vector math variants the
-# compiler calls (_ZGV<isa><mask><length>..., glibc's libmvec).
+# compiler calls (_ZGV<isa><mask><length>..., glibc's libmvec), and the XRT
+# runtime (namespace xrt, libxrt_coreutil), which the system supplies.
 RUNTIME_SYMBOL = re.compile(r"^_Z(?:n[wa]|d[la])|^_Z(?:T[ISVT])?N\d+__(?:cxxabiv1|gnu_cxx)"
-                            r"|^_ZGV[a-z][MN]\d")
+                            r"|^_ZGV[a-z][MN]\d|^_ZN[K]?3xrt")
 
 
 def lib_stem(unit: str) -> str:
