@@ -384,9 +384,12 @@ jobs:
   bench:
     name: Bench ${{ matrix.key }} ${{ matrix.model }}
     needs: [resolve, npu-gate, npu-approve, docvqa]
+    # Called (inputs.mode set: pr, nightly or refresh), Build and Test's own
+    # NPU gate already held this run and npu-gate here is skipped; every
+    # called mode must be listed, or its bench is skipped.
     if: >-
       ${{ !cancelled() && needs.resolve.outputs.bench == 'true'
-      && ((inputs.mode == 'pr' || inputs.mode == 'nightly')
+      && ((inputs.mode == 'pr' || inputs.mode == 'nightly' || inputs.mode == 'refresh')
           || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
           || (needs.npu-gate.result == 'success'
               && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
