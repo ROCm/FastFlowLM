@@ -14,6 +14,7 @@
 #include "image/image_reader.hpp"
 #include "image/raw_rgb8.hpp"
 #include "base64.hpp"
+#include "chat/message_roles.hpp"
 #include "chat/positional_tool_results.hpp"
 #include "utils/log_privacy.hpp"
 #include <algorithm>
@@ -121,111 +122,6 @@ template <typename T>
 T value_or(const json& request, const char* key, T fallback) {
     return has_value(request, key) ? request.at(key).get<T>() : fallback;
 }
-}
-
-///@brief Normalize messages by merging consecutive user messages (like Ollama does)
-///@param messages the original messages
-///@return normalized messages with consecutive user messages merged
-static json normalize_messages(json messages, std::vector<size_t>* original_indices = nullptr) {
-    if (messages.empty()) return messages;
-
-    json normalized = nlohmann::ordered_json::array();
-
-    for (size_t i = 0; i < messages.size(); i++) {
-        if (original_indices) original_indices->push_back(i);
-        auto current_msg = messages[i];
-        std::string role = current_msg.value("role", "");
-
-        if (role == "user") {
-            json merged_content_array = json::array();
-
-            // Merge all consecutive user messages into array format
-            while (i < messages.size() && messages[i].value("role", "") == "user") {
-                if (messages[i].contains("content")) {
-                    if (messages[i]["content"].is_array()) {
-                        for (auto& item : messages[i]["content"]) {
-                            merged_content_array.push_back(item);
-                        }
-                    }
-                    else if (messages[i]["content"].is_string()) {
-                        std::string text = messages[i]["content"].get<std::string>();
-                        if (!text.empty()) {
-                            nlohmann::ordered_json text_item;
-                            text_item["type"] = "text";
-                            text_item["text"] = text;
-                            merged_content_array.push_back(text_item);
-                        }
-                    }
-                }
-                if (i + 1 < messages.size() && messages[i + 1].value("role", "") == "user") i++;
-                else break;
-            }
-
-            current_msg["content"] = merged_content_array;
-        }
-        else if (role == "system") {
-            json merged_content_array = json::array();
-
-            // Merge all consecutive system messages into array format
-            while (i < messages.size() && messages[i].value("role", "") == "system") {
-                if (messages[i].contains("content")) {
-                    if (messages[i]["content"].is_array()) {
-                        for (auto& item : messages[i]["content"]) {
-                            merged_content_array.push_back(item);
-                        }
-                    }
-                    else if (messages[i]["content"].is_string()) {
-                        std::string text = messages[i]["content"].get<std::string>();
-                        if (!text.empty()) {
-                            json text_item;
-                            text_item["type"] = "text";
-                            text_item["text"] = text;
-                            merged_content_array.push_back(text_item);
-                        }
-                    }
-                }
-                if (i + 1 < messages.size() && messages[i + 1].value("role", "") == "system") i++;
-                else break;
-            }
-
-            current_msg["content"] = merged_content_array;
-        }
-        else if (role == "assistant") {
-            // Strip prior assistant "thinking" / reasoning fields so they are not
-            // fed back into the model on subsequent turns.
-            if (current_msg.contains("thinking")) {
-                current_msg.erase("thinking");
-            }
-            if (current_msg.contains("reasoning")) {
-                current_msg.erase("reasoning");
-            }
-            if (current_msg.contains("reasoning_content")) {
-                current_msg.erase("reasoning_content");
-            }
-            // Also strip <think>...</think> blocks from string content if present.
-            // if (current_msg.contains("content") && current_msg["content"].is_string()) {
-            //     std::string text = current_msg["content"].get<std::string>();
-            //     size_t start = text.find("<think>");
-            //     while (start != std::string::npos) {
-            //         size_t end = text.find("</think>", start);
-            //         if (end == std::string::npos) {
-            //             text.erase(start);
-            //             break;
-            //         }
-            //         text.erase(start, (end + std::string("</think>").size()) - start);
-            //         start = text.find("<think>");
-            //     }
-            //     // Trim leading whitespace/newlines left after removal.
-            //     size_t first = text.find_first_not_of(" \t\r\n");
-            //     if (first == std::string::npos) text.clear();
-            //     else if (first > 0) text.erase(0, first);
-            //     current_msg["content"] = text;
-            // }
-        }
-        normalized.push_back(current_msg);
-    }
-
-    return normalized;
 }
 
 static bool starts_with_ci(const std::string& s, const char* prefix) {
@@ -1651,7 +1547,13 @@ void RestHandler::handle_openai_chat_completion(const json& request,
         apply_sampling_request(*auto_chat_engine, sampling);
 
         std::vector<size_t> original_indices;
-        current_messages = normalize_messages(current_messages, positional_tool_results ? &original_indices : nullptr);
+        try {
+            current_messages = flm::chat::normalize_messages(current_messages, auto_chat_engine->message_roles(),
+                                                              positional_tool_results ? &original_indices : nullptr);
+        } catch (const flm::chat::message_error& e) {
+            send_response({{"error", {{"message", e.what()}, {"type", "invalid_request_error"}, {"code", 400}}}});
+            return;
+        }
         std::vector<std::shared_ptr<const raw_rgb8_batch_t>> raw_rgb8;
         {
             // raw RGB8 frames only go to MiniCPM-V; any other model gets a clear 400 rather than a dropped image
