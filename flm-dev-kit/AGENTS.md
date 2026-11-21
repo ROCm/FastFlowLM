@@ -173,8 +173,8 @@ as a *swap commit*.
    (`--dry-run` for the plan only; without `--run` it takes the newest run of `HEAD`). It uses your
    own GitHub access (the `gh` login, or `GH_TOKEN`; read access is enough), checks the run (this pull
    request's Build and Test at your `HEAD`, completed, every job passed one by one, the only failure
-   allowed being the *Dev-kit swap pending* step: a failed bench refuses it too, so re-run the
-   failed jobs first; the product test job of every system and runtime it staged files into passed;
+   allowed being the *Dev-kit swap pending* step; a failed bench job does not count unless a model
+   failed the accuracy hard gate, which fails `summary`'s *Dev-kit checks*; the product test job of every system and runtime it staged files into passed;
    and no commit on main since the run's base touches `FLM_DLL/`, `FLM_Xclbin/`, `../src/lib/` or
    `../src/xclbins/`: otherwise merge main and let CI run again), downloads the staged files, checks
    every SHA-256 against the manifests, writes them and makes one commit with the trailers

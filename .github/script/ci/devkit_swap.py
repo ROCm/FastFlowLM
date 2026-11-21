@@ -32,8 +32,9 @@ tested commit) and the run's head, that the run is this repository's Build
 and Test for that pull request (or a dev-kit full refresh dispatched on its
 branch, see below), completed, that every job of it passed (check_jobs: one
 by one, not the run's conclusion, so that the one failure a staged run
-always has, summary's PENDING_STEP saying the swap is pending, is allowed;
-any other failed job or summary step is not), that the product test job of
+always has, summary's PENDING_STEP saying the swap is pending, is allowed,
+and so is a failed bench job, which summary only warns about; any other
+failed job or summary step is not), that the product test job of
 every system and runtime the run staged files into passed, that the pull
 request is not from a fork, and that main gained no commit touching the
 dev-kit engine or kernel sources or the prebuilt binaries since the run's
@@ -163,6 +164,10 @@ PENDING_STEP = "Dev-kit swap pending"
 # Jobs of the called dev-kit builds ("<caller job> / <job>"), which
 # devkit_check.py checks exist.
 BUILD_JOB_PREFIXES = ("devkit-engines / ", "devkit-xclbins / ")
+# Jobs of the called dev-kit benches. Their failures do not count (summary's
+# Dev-kit checks only warns about them) except a model failing the accuracy
+# hard gate, which fails that summary step and so the run.
+BENCH_JOB_PREFIX = "devkit-bench / "
 
 BINARY_ROOTS = ("src/lib/", "src/xclbins/")
 # What a change on main since the run's base must not touch: the dev-kit
@@ -626,10 +631,11 @@ def summary_failures(job: dict) -> list[str]:
 def check_jobs(jobs: list) -> tuple[list[str], dict]:
     """(why the run's jobs do not allow a swap, (os, runtime) -> the
     conclusion of its product test job). Every job must have passed or been
-    skipped, one by one (a failed bench too: re-run the failed jobs), except
-    the summary job (the required check), which may have failed at
-    PENDING_STEP alone: that is the swap fetch makes. The staging job must
-    have passed."""
+    skipped, one by one, except the summary job (the required check), which
+    may have failed at PENDING_STEP alone: that is the swap fetch makes, and
+    the bench jobs (BENCH_JOB_PREFIX), which summary only warns about unless
+    a model failed the accuracy hard gate (then its Dev-kit checks step
+    failed, which counts). The staging job must have passed."""
     why = []
     by_name = {j.get("name"): j for j in jobs if isinstance(j, dict)}
     summary = by_name.get(SUMMARY_JOB)
@@ -642,6 +648,7 @@ def check_jobs(jobs: list) -> tuple[list[str], dict]:
                        f"{', '.join(other[:5]) or 'see the run'}")
     bad = sorted(f"{j.get('name')} ({j.get('conclusion')})" for j in jobs
                  if isinstance(j, dict) and j.get("name") != SUMMARY_JOB
+                 and not str(j.get("name")).startswith(BENCH_JOB_PREFIX)
                  and j.get("conclusion") not in ("success", "skipped", "neutral"))
     if bad:
         why.append(f"{len(bad)} job(s) did not pass: {', '.join(bad[:5])}{', ...' if len(bad) > 5 else ''}: "

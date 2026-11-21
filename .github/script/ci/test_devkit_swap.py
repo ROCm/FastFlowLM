@@ -407,9 +407,17 @@ class Fetch(SwapCase):
         self.api.jobs_by_run[RUN].append({"name": "devkit-xclbins / build (3)", "conclusion": "failure"})
         self.refused("devkit-xclbins / build (3) (failure)")
 
-    def test_failed_run_is_refused_even_if_only_a_bench_failed(self):
+    def test_a_failed_bench_alone_does_not_block_the_swap(self):
+        # summary only warns about it, so fetch does not count it either.
         self.api.jobs_by_run[RUN].append({"name": "devkit-bench / Bench lin-xrt m:1", "conclusion": "failure"})
-        self.refused("devkit-bench / Bench lin-xrt m:1 (failure)")
+        code, out, err = self.fetch()
+        self.assertEqual(code, 0, out + err)
+
+    def test_bench_hard_gate_failure_is_refused(self):
+        # A model failing the accuracy hard gate fails summary's Dev-kit checks.
+        self.api.jobs_by_run[RUN].append({"name": "devkit-bench / Report", "conclusion": "failure"})
+        self.api.jobs_by_run[RUN][0]["steps"][2]["conclusion"] = "failure"
+        self.refused("its summary job did not pass (failure): Dev-kit checks")
 
     def test_nothing_staged(self):
         self.api.jobs_by_run[RUN] = [j for j in self.api.jobs_by_run[RUN] if j["name"] != ds.STAGE_JOB]
