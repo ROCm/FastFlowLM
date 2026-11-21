@@ -66,12 +66,17 @@
 #endif
 
 /// @brief round a GEMM input to the array's bfp16 grid (d3_cpu::bfp16_round_rows) when the
-///        array runs the GEMMs; D3_BFP_ROUND=0 turns it off (rig comparisons)
+///        array runs the GEMMs; D3_BFP_ROUND=0 turns it off (rig comparisons). The bfp16 kernel
+///        (mm_rtm2_glu) converts its activations itself, so the rounding is off by default then
+///        (D3_BFP_ROUND=1 forces it on).
+inline bool d3_bfp_kernel_loaded = false;
 inline void d3_round_gemm_input(bf16* p, int ld, int rows, int cols) {
 #if D3_MM_ON_NPU
     static const bool on = [] {
         const char* e = std::getenv("D3_BFP_ROUND");
-        return !(e && e[0] == '0');
+        if (e && e[0] == '0') return false;
+        if (e && e[0] == '1') return true;
+        return !d3_bfp_kernel_loaded;
     }();
     if (on) d3_cpu::bfp16_round_rows(p, ld, rows, cols);
 #else
@@ -835,7 +840,15 @@ struct d3_prefill_context{
     d3_prefill_context(npu_xclbin_manager* npu, d3_desc* model_desc, d3_npu_sequence* seq_gen, LM_Config& config)
         : desc(model_desc), seq_gen(seq_gen), npu(npu) {
 #if D3_MM_ON_NPU
-        gemm_app_manager = npu->register_xclbin(utils::path_join(config.exec_path, "xclbins", config.model_name, "mm.xclbin"));
+        // mm_rtm2_glu.xclbin (FLM_Xclbin/dequant_mm_bfp16_rtm2_glu_512x512x512): the same Q4_K weights, dequantized in the core, with the
+        // activations converted to bfp16 and a native bfp16 multiply; same dispatch layout as mm.xclbin, 1.3-1.9x faster and closer to the
+        // fp32 result. Used when the model's xclbin folder has it; D3_NO_BFP_MM=1 keeps mm.xclbin.
+        const std::string xdir = utils::path_join(config.exec_path, "xclbins", config.model_name);
+        const std::string bfp_mm = utils::path_join(xdir, "mm_rtm2_glu.xclbin");
+        const char* no_bfp = std::getenv("D3_NO_BFP_MM");
+        const bool use_bfp = std::filesystem::exists(bfp_mm) && !(no_bfp && no_bfp[0] == '1');
+        d3_bfp_kernel_loaded = use_bfp;
+        gemm_app_manager = npu->register_xclbin(use_bfp ? bfp_mm : utils::path_join(xdir, "mm.xclbin"));
 #else
         (void)config;
 #endif

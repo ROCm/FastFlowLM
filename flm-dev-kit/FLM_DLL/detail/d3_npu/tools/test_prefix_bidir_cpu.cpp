@@ -114,7 +114,7 @@ static void test_attention() {
             double max_rel = 0;
             for (size_t i = 0; i < ref.size(); i++) {
                 const double g = (double)(float)got[i], e = std::fabs(g - ref[i]);
-                const double tol = 4.2e-3 * std::fabs(ref[i]) + 2e-5;
+                const double tol = 4.2e-3 * std::fabs(ref[i]) + 6e-3; // + bf16 P and V operands (2^-9 each, averaged over keys)
                 if (e > tol) bad++;
                 max_rel = std::max(max_rel, e / (std::fabs(ref[i]) + 1e-3));
             }

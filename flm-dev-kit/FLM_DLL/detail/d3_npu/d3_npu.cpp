@@ -625,3 +625,8 @@ void d3_npu::set_pack_rows(int rows) {
 }
 
 void d3_npu::set_causal(bool causal) { this->_impl->pctx->attn_block->causal = causal; }
+
+void d3_vision_host_attention(bf16* out, const bf16* q, const bf16* k, const bf16* v, int L, int heads, int DH, int kv_stride,
+                              float scale, std::vector<float>& kt_buf) {
+    d3_cpu::attention(out, q, k, v, L, L, heads, heads, DH, 0, 0, kv_stride, kv_stride, scale, false, kt_buf);
+}

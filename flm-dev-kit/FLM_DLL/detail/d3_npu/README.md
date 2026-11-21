@@ -13,12 +13,16 @@ returning the final-norm hidden state of the last token. No LM head, no decode, 
 
 Public interface: `include/decision_model.hpp` (`decision_model`), `include/models/d3/d3_npu.hpp` (`d3_npu`).
 
-**Status: text.** Every projection runs on the array (`mm.xclbin` = `xclbins-dequant_mm_512x512x512`,
-Qwen3.5-0.8B's); conv1d and the gated delta rule run on the host. Token-serial stages do not amortize a bitstream
-switch at d3's prompt lengths.
+**Status: text.** Every projection runs on the array: `mm_rtm2_glu.xclbin` (`xclbins-dequant_mm_bfp16_rtm2_glu_512x512x512`, Q4_K
+dequantised in the core and multiplied in native bfp16) when the package's xclbin folder has it, else `mm.xclbin`
+(`xclbins-dequant_mm_512x512x512`, Qwen3.5-0.8B's). With the bfp16 kernel the host skips its bfp16 pre-rounding. conv1d and the gated
+delta rule run on the host (the delta rule on one contiguous state slab); token-serial stages do not amortize a bitstream switch at d3's
+prompt lengths. d3:edge uses `mm_rtm2_glu.xclbin` (prefill 1.34-1.69x faster than on `mm.xclbin` at 64-4,096 tokens, same label accuracy).
 **Attention** runs on the host for prompts under 1,536 tokens and on the array from 1,536 (`attn.xclbin` =
 `xclbins-Qwen3_5_bidirectional_attention_prefill`, Qwen3.5's prefill attention made bidirectional), registered on
-the first such prompt; if it cannot be registered, attention stays on the host.
+the first such prompt; if it cannot be registered, attention stays on the host. Host attention computes QK and PV in bf16
+(`vdpbf16ps`; the engine builds with `-mavx512bf16`), so host results differ from the old fp32-probability path by bf16 rounding (top-1
+agreement 98.8% on a 2,172-request text sample), and are bit-identical run to run.
 
 **Attention modes** (decision_config.json `attention_mode`): `noncausal_full_attention` (lite / nano / mini: every
 token sees every token of its prompt, the default) and `prefix_bidir` (d3-turbo, see below). The engine does not read
@@ -29,6 +33,11 @@ the mode itself: the application passes `d3_image_payload::state_len` per prompt
 `config.json` values; `vision_mm.xclbin` + `vision_attn.xclbin`, `vision_weight.q4nx`) is built on the first call with
 images and runs once per call; its merger rows replace each prompt's image tokens in order. Positions are Qwen3.5's 3D
 M-RoPE (`get_rope_index`): an image's tokens at (s, s + row, s + col), text resuming at s + max(grid_h, grid_w) / 2.
+Vision attention runs on the host (bf16, same kernel as the text) for calls of at most 1,024 patches in total (`D3_VISION_HOST_ATTN_MAX`,
+default 1024, 0 = never), which saves the two ~2.7 ms hw_context switches per layer that the array attention (its own xclbin) costs: one
+784-patch image 131-137 -> 89 ms. Above that the array attention is faster and stays. The rotary-applied qkv buffer is synced back to the
+device in both paths (the matmul reads the device copy). A segment encoded alone and inside a larger call can sit on different sides of the
+threshold, so their rows are equally accurate but not bit-identical.
 
 ## prefix_bidir attention
 

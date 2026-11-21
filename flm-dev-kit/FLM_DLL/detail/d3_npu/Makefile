@@ -41,7 +41,7 @@ TARGET = $(LIB_DIR)/libd3_npu.so
 CXX := g++-13
 include ../../flags.mk
 CXX_FLAGS := -std=c++20 -fPIC -Wall -O3 -fopenmp
-CXX_FLAGS += $(FLM_MARCH) -ffast-math
+CXX_FLAGS += $(FLM_MARCH) -mavx512bf16 -ffast-math   # bf16 attention (vdpbf16ps)
 CXX_FLAGS += -fmax-errors=1
 CXX_FLAGS += -I.
 CXX_FLAGS += -I../../include
