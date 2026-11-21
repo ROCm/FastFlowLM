@@ -68,12 +68,32 @@ public:
         return buffer<bf16>(kVocab);
     }
     buffer<bf16> prefill(std::vector<int>& tokens, void* payload) override {
+        if (fail_prefill) {
+            throw std::runtime_error("fake OGA engine injected prefill failure");
+        }
         if (position + static_cast<int>(tokens.size()) > static_cast<int>(max_length)) {
             throw std::runtime_error("fake OGA engine prefill limit exceeded");
         }
         position += static_cast<int>(tokens.size());
         prefills.push_back(tokens);
-        if (payload) vision = *static_cast<const flm::oga::OgaVisionInput*>(payload);
+        if (payload) {
+            const auto& incoming = *static_cast<const flm::oga::OgaVisionInput*>(payload);
+            bool pixels_changed = executed.empty() && !vision.images.empty() &&
+                                  (incoming.images.size() != vision.images.size());
+            if (!pixels_changed && executed.empty() && !vision.images.empty()) {
+                for (std::size_t i = 0; i < incoming.images.size(); ++i) {
+                    if (incoming.images[i].pixels != vision.images[i].pixels) {
+                        pixels_changed = true;
+                        break;
+                    }
+                }
+            }
+            if (pixels_changed) {
+                ran.clear();
+                snapshot.reset();
+            }
+            vision = incoming;
+        }
         Run(tokens);
         return buffer<bf16>(kVocab);
     }
@@ -84,13 +104,19 @@ public:
         position = 0;
         executed.clear();
         forwarded.clear();
+        expected.clear();
         saved.reset();
     }
     buffer<bf16> get_k_cache(int, int) override { return buffer<bf16>(1); }
     buffer<bf16> get_v_cache(int, int) override { return buffer<bf16>(1); }
     int get_current_context_length() override { return position; }
     int checkpoint() override {
+        ++checkpoints;
         saved = position;
+        expected.clear();
+        if (rewinds && !executed.empty() && ran == executed && !rewound) {
+            snapshot = executed.size();
+        }
         return position;
     }
     int restore() override {
@@ -99,6 +125,10 @@ public:
         position = *saved;
         executed.resize(static_cast<std::size_t>(*saved));
         return position;
+    }
+    void expect_prefill(const std::vector<int>& ids) {
+        expected = executed;
+        expected.insert(expected.end(), ids.begin(), ids.end());
     }
 
     std::uint32_t max_length;
@@ -110,28 +140,71 @@ public:
     /// \brief the images of the last prefill that had any
     flm::oga::OgaVisionInput vision;
     std::optional<int> saved;
+    /// \brief slot-level prompt-end snapshot that outlives clear_context(), matching OgaEngine::Live::snapshot
+    std::optional<std::size_t> snapshot;
+    int checkpoints{};
     int restores{};
+    int snapshot_rewinds{};
     /// \brief whether, like OGA 0.19, it can go back to the checkpoint without running it again
     bool rewinds = false;
+    bool rewound = false;
+    bool fail_next_rewind = false;
+    bool fail_prefill = false;
     /// \brief what the engine's generator has run, as OgaEngine keeps it
     std::vector<int> ran;
+    /// \brief token slices the fake engine actually had to execute (not served from slot)
+    std::vector<std::vector<int>> engine_appends;
+    /// \brief whole chunked prompt announced by expect_prefill()
+    std::vector<int> expected;
     /// \brief tokens run a second time, counted as OgaEngine::replayed_tokens counts them
     std::uint64_t replayed{};
+    /// \brief whether FakeOgaBackend exposes reused_tokens() to AutoModel (opt-in so pre-existing Qwen3_5VL tests keep origin/main expectations)
+    bool reports_reused_tokens = false;
+    /// \brief tokens served from the slot instead of re-prefilled, counted as OgaEngine::reused_tokens counts them
+    std::uint64_t reused_total{};
 
 private:
     void Run(const std::vector<int>& fresh) {
         const std::size_t before = executed.size();
         executed.insert(executed.end(), fresh.begin(), fresh.end());
+        const std::vector<int>& target =
+            expected.size() > executed.size() &&
+                    std::equal(executed.begin(), executed.end(), expected.begin())
+                ? expected
+                : executed;
+        if (&target == &executed) expected.clear();
+
         std::size_t reused = 0;
-        if (ran.size() <= executed.size() && std::equal(ran.begin(), ran.end(), executed.begin())) {
+        if (ran.size() <= target.size() && std::equal(ran.begin(), ran.end(), target.begin())) {
             reused = ran.size();
-        } else if (rewinds && saved && static_cast<std::size_t>(*saved) <= ran.size() &&
-                   static_cast<std::size_t>(*saved) < executed.size() &&
-                   std::equal(ran.begin(), ran.begin() + *saved, executed.begin())) {
-            reused = static_cast<std::size_t>(*saved);
+        } else if (rewinds && snapshot && *snapshot <= ran.size() &&
+                   *snapshot <= target.size() &&
+                   std::equal(ran.begin(), ran.begin() + static_cast<std::ptrdiff_t>(*snapshot), target.begin())) {
+            if (fail_next_rewind) {
+                // Mirrors OgaEngine::Append() when OgaGenerator_RewindTo fails: disable rewinds and rebuild.
+                fail_next_rewind = false;
+                rewinds = false;
+                snapshot.reset();
+            } else {
+                ran.resize(*snapshot);
+                rewound = true;
+                ++snapshot_rewinds;
+                reused = *snapshot;
+            }
         }
-        if (reused < before) replayed += before - reused;
-        ran = executed;
+
+        const std::size_t covered = std::min(reused, executed.size());
+        if (covered < before) {
+            replayed += before - covered;
+        } else {
+            reused_total += covered - before;
+        }
+        if (reused < executed.size()) {
+            rewound = false;
+            engine_appends.emplace_back(executed.begin() + static_cast<std::ptrdiff_t>(covered),
+                                        executed.end());
+            ran = executed;
+        }
     }
 };
 
@@ -142,11 +215,30 @@ public:
 
     causal_lm& engine() override { return *engine_; }
     std::string id() const override { return flm::backend::kOgaHipepBackendId; }
-    std::uint32_t max_decode_length() const override { return engine_->max_length - 1; }
+    std::uint32_t max_decode_length() const override {
+        return engine_->max_length ? engine_->max_length - 1 : 0;
+    }
     bool forwards_past_eos() const override { return false; }
     bool keeps_state_on_restore() const override { return engine_->rewinds; }
     std::uint64_t replayed_tokens() const override { return engine_->replayed; }
+    std::uint64_t reused_tokens() const override {
+        return engine_->reports_reused_tokens ? engine_->reused_total : 0;
+    }
+    void expect_prefill(const std::vector<int>& ids) override { engine_->expect_prefill(ids); }
     bool matches_token_prefixes() const override { return true; }
+    FakeEngine& fake_engine() const { return *engine_; }
+
+private:
+    std::unique_ptr<FakeEngine> engine_;
+};
+
+class FakeFlmBackend final : public flm::backend::ModelBackend {
+public:
+    explicit FakeFlmBackend(std::uint32_t max_length)
+        : engine_(std::make_unique<FakeEngine>(max_length)) {}
+
+    causal_lm& engine() override { return *engine_; }
+    std::string id() const override { return flm::backend::kFlmBackendId; }
     FakeEngine& fake_engine() const { return *engine_; }
 
 private:
@@ -247,15 +339,25 @@ const char* const kQwen25ChatTemplate = R"jinja({%- if tools %}
 /// \brief the Qwen2 frontend (qwen2.5-it, qwen2.5-coder-it) on the same fake OGA backend
 class Qwen2Harness final : public Qwen2 {
 public:
-    Qwen2Harness() : Qwen2(nullptr) {
-        auto backend = std::make_unique<FakeOgaBackend>(64);
-        engine_ = &backend->fake_engine();
-        backend_ = std::move(backend);
+    explicit Qwen2Harness(std::uint32_t backend_max_length = 64,
+                          std::uint32_t frontend_max_length = 128,
+                          bool oga = true)
+        : Qwen2(nullptr) {
+        if (oga) {
+            auto backend = std::make_unique<FakeOgaBackend>(backend_max_length);
+            engine_ = &backend->fake_engine();
+            engine_->reports_reused_tokens = true;
+            backend_ = std::move(backend);
+        } else {
+            auto backend = std::make_unique<FakeFlmBackend>(backend_max_length);
+            engine_ = &backend->fake_engine();
+            backend_ = std::move(backend);
+        }
         lm_engine = &backend_->engine();
         tokenizer = std::make_unique<Tokenizer>("");
         sampler_config config;
         sampler = std::make_unique<Sampler>(kVocab, config);
-        MAX_L = 128;
+        MAX_L = frontend_max_length;
         eos_token_ids = {kEos, kImEnd};
         bos_token_id = -1;
         has_bos_token = false;
@@ -1037,6 +1139,291 @@ void Qwen2PackagesWithoutTheCatalogFlagKeepTheirPrompt() {
     }
 }
 
+void Qwen2ExactRetryRewindsToPromptCheckpoint() {
+    Reset({10, 11, 12, 13}, {7, 100, 101, kImEnd, 7, 100, 101, kImEnd, 7, kImEnd});
+    Qwen2Harness model;
+    model.engine().rewinds = true;
+
+    const auto run_turn = [&model] {
+        auto meta = Meta();
+        meta.restore_allowed = true;
+        auto input = TextInput();
+        Require(model.insert(meta, input), "Qwen2 OGA insert failed");
+        std::ostringstream output;
+        model.generate(meta, 0, output);
+        return meta;
+    };
+
+    const auto first = run_turn();
+    Require(first.prompt_tokens == 4 && first.cached_prompt_tokens == 0,
+            "the first prompt must run cold");
+    Require(model.engine().checkpoints == 1 && model.engine().snapshot == std::optional<std::size_t>{4},
+            "a successful Qwen2 OGA prefill must establish a prompt-end checkpoint before decode");
+
+    const auto retry1 = run_turn();
+    Require(model.engine().snapshot_rewinds == 1,
+            "retrying the identical prompt after decode must rewind to the prompt-end checkpoint");
+    Require(retry1.prompt_tokens == 4 && retry1.cached_prompt_tokens == 4,
+            "an exact retry must report the whole prompt as cached");
+    Require(model.engine().replayed == 0, "an exact retry must replay zero tokens");
+
+    // a second immediate retry still reuses the same prompt-end checkpoint
+    const auto retry2 = run_turn();
+    Require(retry2.prompt_tokens == 4 && retry2.cached_prompt_tokens == 4,
+            "a repeated exact retry must keep reusing the prompt-end checkpoint");
+    Require(model.engine().replayed == 0, "a repeated exact retry must replay zero tokens");
+}
+
+void Qwen2ChunkedExactRetryRewindsOnce() {
+    std::vector<int> prompt(1200);
+    for (std::size_t i = 0; i < prompt.size(); ++i) prompt[i] = 1000 + static_cast<int>(i);
+    Reset(prompt, {7, 100, kImEnd, 7, 100, kImEnd});
+    Qwen2Harness model(2048, 4096);
+    model.engine().rewinds = true;
+
+    const auto run_turn = [&model] {
+        auto meta = Meta();
+        meta.max_prefill_len = 512;
+        meta.restore_allowed = true;
+        auto input = TextInput();
+        Require(model.insert(meta, input), "Qwen2 chunked OGA insert failed");
+        std::ostringstream output;
+        model.generate(meta, 0, output);
+        return meta;
+    };
+
+    const auto first = run_turn();
+    Require(first.prompt_tokens == 1200 && first.cached_prompt_tokens == 0,
+            "the cold chunked prompt must run all 1,200 tokens");
+    Require(model.engine().snapshot == std::optional<std::size_t>{1200},
+            "the prompt-end checkpoint must cover the whole chunked prompt");
+
+    const auto retry = run_turn();
+    Require(model.engine().snapshot_rewinds == 1,
+            "retrying a multi-chunk prompt must rewind once");
+    Require(retry.prompt_tokens == 1200 && retry.cached_prompt_tokens == 1200,
+            "retrying a multi-chunk prompt must cache every prompt token");
+    Require(model.engine().replayed == 0, "a chunked exact retry must replay zero tokens");
+}
+
+void Qwen2ExactRetryReplaysHonestlyWhenEngineCannotRewind() {
+    // 1. Engine without rewind after decode advanced past prompt end: must replay full prompt and report 0 cached.
+    {
+        Reset({10, 11, 12, 13}, {7, 100, kImEnd, 7, 100, kImEnd});
+        Qwen2Harness model;
+        model.engine().rewinds = false;
+
+        const auto run_turn = [&model] {
+            auto meta = Meta();
+            meta.restore_allowed = true;
+            auto input = TextInput();
+            Require(model.insert(meta, input), "Qwen2 insert failed");
+            std::ostringstream output;
+            model.generate(meta, 0, output);
+            return meta;
+        };
+
+        run_turn();
+        Require(model.engine().checkpoints == 1 && !model.engine().snapshot,
+                "an engine that cannot rewind must not record a rewindable snapshot");
+        const auto appends_before_retry = model.engine().engine_appends.size();
+        const auto retry = run_turn();
+        Require(model.engine().prefills.back() == (std::vector<int>{10, 11, 12, 13}),
+                "non-rewinding retry must send the full prompt to the engine");
+        Require(model.engine().engine_appends.size() > appends_before_retry &&
+                    model.engine().engine_appends[appends_before_retry] == (std::vector<int>{10, 11, 12, 13}),
+                "non-rewinding retry after decode must execute the full prompt again");
+        Require(retry.prompt_tokens == 4 && retry.cached_prompt_tokens == 0,
+                "when the engine cannot rewind after decode, retry must report zero cached tokens");
+    }
+
+    // 2. Engine without rewind when first sampled token is EOS (generator stays at prompt end):
+    //    matches OgaEngine::Run() counting live-slot reuse without needing a rewind.
+    {
+        Reset({10, 11, 12, 13}, {kImEnd, kImEnd});
+        Qwen2Harness model;
+        model.engine().rewinds = false;
+        auto meta1 = Meta();
+        auto input = TextInput();
+        Require(model.insert(meta1, input), "first immediate-EOS insert failed");
+        std::ostringstream out1;
+        model.generate(meta1, 0, out1);
+        const auto appends_after_first = model.engine().engine_appends.size();
+
+        auto meta2 = Meta();
+        Require(model.insert(meta2, input), "second immediate-EOS insert failed");
+        Require(model.engine().snapshot_rewinds == 0, "live-slot hit at prompt end does not rewind");
+        Require(model.engine().engine_appends.size() == appends_after_first,
+                "live-slot hit at prompt end must not re-execute the prompt");
+        Require(meta2.prompt_tokens == 4 && meta2.cached_prompt_tokens == 4,
+                "live-slot hit at prompt end must report full prompt reuse even when rewinds is false");
+    }
+
+    // 3. Snapshot was established, decode advanced, then provider refuses RewindTo on retry:
+    //    must drop the snapshot, replay the whole prompt, and report zero cached tokens.
+    {
+        Reset({10, 11, 12, 13}, {7, 100, kImEnd, 7, 100, kImEnd});
+        Qwen2Harness model;
+        model.engine().rewinds = true;
+
+        auto first = Meta();
+        auto input = TextInput();
+        Require(model.insert(first, input), "cold insert before refused rewind failed");
+        std::ostringstream out1;
+        model.generate(first, 0, out1);
+        Require(model.engine().snapshot == std::optional<std::size_t>{4},
+                "cold insert must establish the prompt-end snapshot");
+
+        model.engine().fail_next_rewind = true;
+        const auto appends_before_retry = model.engine().engine_appends.size();
+        auto retry = Meta();
+        Require(model.insert(retry, input), "retry insert after refused rewind failed");
+        std::ostringstream out2;
+        model.generate(retry, 0, out2);
+        Require(model.engine().snapshot_rewinds == 0 && !model.engine().rewinds && !model.engine().snapshot,
+                "a refused rewind must disable further rewinds and clear the snapshot");
+        Require(model.engine().engine_appends.size() > appends_before_retry &&
+                    model.engine().engine_appends[appends_before_retry] == (std::vector<int>{10, 11, 12, 13}),
+                "a refused rewind must replay the whole prompt");
+        Require(retry.prompt_tokens == 4 && retry.cached_prompt_tokens == 0,
+                "a refused rewind must report zero cached tokens instead of a false hit");
+    }
+}
+
+void Qwen2FailedOrCancelledPrefillDoesNotCheckpoint() {
+    // 1. cancelled before prefill
+    Reset({10, 11, 12, 13}, {7});
+    {
+        Qwen2Harness model;
+        model.engine().rewinds = true;
+        auto meta = Meta();
+        auto input = TextInput();
+        Require(!model.insert(meta, input, [] { return true; }),
+                "a cancelled prefill must return false");
+        Require(model.engine().checkpoints == 0 && !model.engine().snapshot,
+                "a cancelled prefill must not establish a checkpoint");
+    }
+    // 2. cancelled mid-chunk after the first 512-token chunk ran
+    {
+        std::vector<int> prompt(1024);
+        for (std::size_t i = 0; i < prompt.size(); ++i) prompt[i] = 100 + static_cast<int>(i);
+        Reset(prompt, {7});
+        Qwen2Harness model(2048, 4096);
+        model.engine().rewinds = true;
+        auto meta = Meta();
+        meta.max_prefill_len = 512;
+        auto input = TextInput();
+        int checks = 0;
+        Require(!model.insert(meta, input, [&checks] { return ++checks >= 2; }),
+                "a mid-chunk cancellation must return false");
+        Require(model.engine().checkpoints == 0 && !model.engine().snapshot,
+                "a half-prefilled prompt must not establish a checkpoint");
+    }
+    // 3. prompt exceeding context capacity (throws HTTP 400 in _shared_validate_capacity)
+    {
+        Reset({10, 11, 12, 13, 14}, {7});
+        Qwen2Harness model(64, 4);
+        model.engine().rewinds = true;
+        auto meta = Meta();
+        auto input = TextInput();
+        bool threw = false;
+        try {
+            model.insert(meta, input);
+        } catch (const ModelRequestError& error) {
+            threw = error.http_code() == 400;
+        }
+        Require(threw, "an oversized prompt must throw HTTP 400");
+        Require(model.engine().checkpoints == 0 && !model.engine().snapshot,
+                "a refused oversized prompt must not establish a checkpoint");
+    }
+    // 4. refused image request
+    {
+        Reset({10, 11, 12}, {7});
+        Qwen2Harness model;
+        model.engine().rewinds = true;
+        auto meta = Meta();
+        bool threw = false;
+        try {
+            auto img = ImageInput(1);
+            model.insert(meta, img);
+        } catch (const ModelRequestError& error) {
+            threw = error.http_code() == 400;
+        }
+        Require(threw, "an image on Qwen2 OGA must throw HTTP 400");
+        Require(model.engine().checkpoints == 0 && !model.engine().snapshot,
+                "a refused image request must not establish a checkpoint");
+    }
+    // 5. engine prefill throws mid-request
+    {
+        Reset({10, 11, 12, 13}, {7});
+        Qwen2Harness model;
+        model.engine().rewinds = true;
+        model.engine().fail_prefill = true;
+        auto meta = Meta();
+        auto input = TextInput();
+        bool threw = false;
+        try {
+            model.insert(meta, input);
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+        Require(threw, "a failing engine prefill must propagate");
+        Require(model.engine().checkpoints == 0 && !model.engine().snapshot,
+                "a failed engine prefill must not establish a checkpoint");
+    }
+}
+
+void Qwen2ChangedEndingDoesNotFalseHit() {
+    Reset({10, 11, 12, 13}, {7, 100, kImEnd, 7, 100, kImEnd, 7, 100, kImEnd});
+    Qwen2Harness model;
+    model.engine().rewinds = true;
+
+    auto first_meta = Meta();
+    first_meta.restore_allowed = true;
+    auto input = TextInput();
+    Require(model.insert(first_meta, input), "first Qwen2 insert failed");
+    std::ostringstream first_out;
+    model.generate(first_meta, 0, first_out);
+
+    // same prefix [10, 11, 12], changed final token 99
+    g_encoded_tokens = {10, 11, 12, 99};
+    const auto appends_before_changed = model.engine().engine_appends.size();
+    auto changed_meta = Meta();
+    changed_meta.restore_allowed = true;
+    Require(model.insert(changed_meta, input), "changed-ending Qwen2 insert failed");
+    Require(model.engine().snapshot_rewinds == 0,
+            "a prompt whose ending changed must not rewind to the previous prompt-end snapshot");
+    Require(model.engine().engine_appends.size() > appends_before_changed &&
+                model.engine().engine_appends[appends_before_changed] == (std::vector<int>{10, 11, 12, 99}),
+            "a prompt whose ending changed must execute the new prompt from scratch");
+    Require(changed_meta.prompt_tokens == 4 && changed_meta.cached_prompt_tokens == 0,
+            "a prompt whose ending changed must not report a false cache hit");
+
+    // positive control: decoding the changed prompt and retrying it identically DOES hit its new checkpoint
+    std::ostringstream changed_out;
+    model.generate(changed_meta, 0, changed_out);
+    const auto appends_before_retry = model.engine().engine_appends.size();
+    auto retry_meta = Meta();
+    retry_meta.restore_allowed = true;
+    Require(model.insert(retry_meta, input), "retry of changed prompt failed");
+    Require(model.engine().snapshot_rewinds == 1,
+            "retrying the changed prompt after decode must rewind to its own prompt-end snapshot");
+    Require(model.engine().engine_appends.size() == appends_before_retry,
+            "retrying the changed prompt must not re-execute prompt tokens");
+    Require(retry_meta.prompt_tokens == 4 && retry_meta.cached_prompt_tokens == 4,
+            "retrying the changed prompt must report full cache reuse");
+}
+
+void Qwen2NonOgaLegacyInsertDoesNotCheckpoint() {
+    Reset({10, 11, 12, 13}, {7});
+    Qwen2Harness model(64, 128, /*oga=*/false);
+    auto meta = Meta();
+    auto input = TextInput();
+    Require(model.insert(meta, input), "non-OGA Qwen2 insert must still succeed");
+    Require(model.engine().checkpoints == 0,
+            "the OGA prompt-end checkpoint must not run on non-OGA backends");
+}
+
 }  // namespace
 
 Tokenizer::Tokenizer(const std::string&) { is_doubled_encoded = false; }
@@ -1166,6 +1553,12 @@ int main() {
     run("Qwen2.5 Instruct on OGA is shown no tools when none are offered", Qwen2ShowsNoToolsWhenNoneAreOffered);
     run("a changed tool definition changes the Qwen2.5 prompt", Qwen2ChangedDefinitionChangesThePrompt);
     run("Qwen2 packages without the catalog flag keep their prompt", Qwen2PackagesWithoutTheCatalogFlagKeepTheirPrompt);
+    run("Qwen2 exact retry rewinds to the prompt-end checkpoint", Qwen2ExactRetryRewindsToPromptCheckpoint);
+    run("Qwen2 chunked exact retry rewinds once", Qwen2ChunkedExactRetryRewindsOnce);
+    run("Qwen2 exact retry replays honestly when engine cannot rewind", Qwen2ExactRetryReplaysHonestlyWhenEngineCannotRewind);
+    run("Qwen2 failed or cancelled prefill does not checkpoint", Qwen2FailedOrCancelledPrefillDoesNotCheckpoint);
+    run("Qwen2 changed ending does not false hit", Qwen2ChangedEndingDoesNotFalseHit);
+    run("Qwen2 non-OGA legacy insert does not checkpoint", Qwen2NonOgaLegacyInsertDoesNotCheckpoint);
     if (failures == 0) std::cout << "Qwen frontend regression tests passed\n";
     return failures == 0 ? 0 : 1;
 }

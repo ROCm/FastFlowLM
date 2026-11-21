@@ -20,6 +20,12 @@ Usage::
 
 from __future__ import annotations
 
+import json
+import os
+import urllib.error
+import urllib.request
+import uuid
+
 import flm_api
 from flm_api import Api, case, expect
 from fixtures import WEATHER_TOOLS, function_choice, user
@@ -89,6 +95,181 @@ def stream_matches_nonstream_tools(api: Api) -> None:
                     tool_choice=function_choice("get_weather"))
     flm_api.assert_parity(
         api, body, lambda m: [(c["function"]["name"], c["function"]["arguments"]) for c in m["tool_calls"]])
+
+
+# OGA frontends that still lack a text-only / think=False prompt-end checkpoint (tracked as follow-ups).
+EXACT_RETRY_UNSUPPORTED_PREFIXES = (
+    "gemma3-oga-hipep",
+    "gemma4-it-oga-hipep:e2b",
+    "gemma4-it-oga-hipep:e4b",
+)
+
+
+def _require_oga_exact_retry(api: Api) -> str:
+    """Skip unless the server's loaded model runs on oga-hipep with prompt-end rewind support."""
+    base_url = api.url.removesuffix("/v1/chat/completions")
+    try:
+        with urllib.request.urlopen(base_url + "/api/ps", timeout=api.timeout) as reply:
+            if reply.status != 200:
+                raise flm_api.Skip(f"/api/ps returned HTTP {reply.status}")
+            ps = json.load(reply)
+    except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
+        raise flm_api.Skip(f"server does not expose /api/ps backend metadata ({exc})")
+
+    models = ps.get("models") or []
+    loaded = next((m for m in models if m.get("name") == api.model), None)
+    if loaded is None and len(models) == 1:
+        loaded = models[0]
+    if loaded is None:
+        raise flm_api.Skip(f"{api.model} is not loaded in /api/ps; cannot verify OGA backend")
+
+    details = loaded.get("details") or {}
+    backend = details.get("backend")
+    if backend != "oga-hipep":
+        raise flm_api.Skip(f"loaded backend is {backend!r}, not 'oga-hipep'")
+
+    canonical = str(loaded.get("name") or "")
+    if any(canonical.startswith(prefix) for prefix in EXACT_RETRY_UNSUPPORTED_PREFIXES):
+        raise flm_api.Skip(f"{canonical} does not yet checkpoint text-only / think=False prompts")
+    return canonical
+
+
+def _check_retry_usage(
+    resp_usage: dict,
+    label: str,
+    *,
+    expect_hit: bool,
+    expected_prompt_tokens: int | None = None,
+) -> int:
+    prompt_tokens = resp_usage.get("prompt_tokens")
+    completion_tokens = resp_usage.get("completion_tokens")
+    cached = (resp_usage.get("prompt_tokens_details") or {}).get("cached_tokens")
+    expect(isinstance(prompt_tokens, int) and prompt_tokens > 0, f"{label} missing prompt_tokens: {resp_usage}")
+    expect(
+        isinstance(completion_tokens, int) and completion_tokens > 1,
+        f"{label} decoded only {completion_tokens} token(s); retry must run after decode advances past prompt end",
+    )
+    expect(isinstance(cached, int), f"{label} missing integer prompt_tokens_details.cached_tokens: {resp_usage}")
+    if expected_prompt_tokens is not None:
+        expect(
+            prompt_tokens == expected_prompt_tokens,
+            f"{label} prompt_tokens changed from {expected_prompt_tokens} to {prompt_tokens}",
+        )
+    if expect_hit:
+        expect(
+            cached == prompt_tokens,
+            f"{label} exact retry cached {cached}/{prompt_tokens} tokens (expected full reuse)",
+        )
+    else:
+        expect(cached == 0, f"{label} cold run unexpectedly cached {cached}/{prompt_tokens} tokens")
+    return prompt_tokens
+
+
+@case
+def exact_retry_reuses_prompt(api: Api) -> None:
+    """Single-slot exact retries (JSON and SSE include_usage) reuse the full prompt."""
+    _require_oga_exact_retry(api)
+    nonce = uuid.uuid4().hex[:8]
+    prompt = user(f"[run {nonce}] Write a short sentence explaining why two plus four equals six.")
+    body = api.body(prompt, max_tokens=32)
+
+    cold = api.post(body)
+    expect(cold.status == 200, f"plain cold HTTP {cold.status}: {cold.error_message()}")
+    prompt_n = _check_retry_usage(cold.body.get("usage") or {}, "plain-cold", expect_hit=False)
+    cold_msg = flm_api.check_message_contract(cold.body["choices"][0])
+
+    retry = api.post(body)
+    expect(retry.status == 200, f"plain retry HTTP {retry.status}: {retry.error_message()}")
+    _check_retry_usage(retry.body.get("usage") or {}, "plain-retry", expect_hit=True, expected_prompt_tokens=prompt_n)
+    retry_msg = flm_api.check_message_contract(retry.body["choices"][0])
+    expect(
+        retry_msg["content"] == cold_msg["content"],
+        f"plain retry changed greedy output: {cold_msg['content']!r} vs {retry_msg['content']!r}",
+    )
+
+    sse = flm_api.check_stream_contract(
+        api.ok_stream(api.body(prompt, max_tokens=32, stream_options={"include_usage": True})),
+        include_usage=True,
+    )
+    _check_retry_usage(sse.usage or {}, "plain-sse", expect_hit=True, expected_prompt_tokens=prompt_n)
+    expect(
+        sse.content == cold_msg["content"],
+        f"plain SSE retry changed greedy output: {cold_msg['content']!r} vs {sse.content!r}",
+    )
+
+
+@case
+def exact_retry_multi_chunk_reuses_prompt(api: Api) -> None:
+    """A >4,096-token prompt (spanning default 4,096-token prefill chunks) reuses the full prompt on retry.
+
+    Requires server --ctx-len > ~4,850 (skips cleanly if the server rejects the prompt for context capacity)
+    and default --prefill-chunk-len <= 4096 to exercise multi-chunk expect_prefill + rewind.
+    """
+    _require_oga_exact_retry(api)
+    nonce = uuid.uuid4().hex[:8]
+    long_system = (
+        f"[run {nonce}] You are a concise warehouse assistant. Follow the SOP exactly.\n"
+        + "Section note: verify bin tag, pallet count, aisle label, and seal code before dispatch. " * 250
+    )
+    chunked = [
+        {"role": "system", "content": long_system},
+        {"role": "user", "content": "Write a five-word sentence confirming you have read the warehouse SOP."},
+    ]
+    body_long = api.body(chunked, max_tokens=32)
+
+    cold = api.post(body_long)
+    if cold.status == 400:
+        err = cold.error_message()
+        if "exceeds the" in err.lower() or "context" in err.lower():
+            raise flm_api.Skip(f"server context window cannot hold the >4096-token prompt: {err}")
+    expect(cold.status == 200, f"chunked cold HTTP {cold.status}: {cold.error_message()}")
+    long_n = _check_retry_usage(cold.body.get("usage") or {}, "chunked-cold", expect_hit=False)
+    expect(long_n > 4096, f"chunked prompt was only {long_n} tokens (expected >4096 to span chunks)")
+    cold_msg = flm_api.check_message_contract(cold.body["choices"][0])
+
+    retry = api.post(body_long)
+    expect(retry.status == 200, f"chunked retry HTTP {retry.status}: {retry.error_message()}")
+    _check_retry_usage(retry.body.get("usage") or {}, "chunked-retry", expect_hit=True, expected_prompt_tokens=long_n)
+    retry_msg = flm_api.check_message_contract(retry.body["choices"][0])
+    expect(
+        retry_msg["content"] == cold_msg["content"],
+        f"chunked retry changed greedy output: {cold_msg['content']!r} vs {retry_msg['content']!r}",
+    )
+
+
+@case
+def exact_retry_interleaved_aba_reuses_prompt(api: Api) -> None:
+    """Interleaved A/B/A exact retry reuses slot A when the server is configured with >= 2 effective slots."""
+    _require_oga_exact_retry(api)
+    if os.environ.get("FLM_TEST_MULTI_SLOT") != "1":
+        raise flm_api.Skip("set FLM_TEST_MULTI_SLOT=1 when the server is configured with >= 2 effective OGA slots")
+    nonce = uuid.uuid4().hex[:8]
+    body_a = api.body(
+        user(f"[run {nonce}] Write a short sentence explaining why two plus four equals six."),
+        max_tokens=32,
+    )
+    body_b = api.body(
+        user(f"[run {nonce}] Write a short sentence explaining why three plus five equals eight."),
+        max_tokens=32,
+    )
+
+    cold_a = api.post(body_a)
+    expect(cold_a.status == 200, f"A/B/A cold A HTTP {cold_a.status}: {cold_a.error_message()}")
+    n_a = _check_retry_usage(cold_a.body.get("usage") or {}, "aba-cold-A", expect_hit=False)
+    cold_a_msg = flm_api.check_message_contract(cold_a.body["choices"][0])
+
+    cold_b = api.post(body_b)
+    expect(cold_b.status == 200, f"A/B/A cold B HTTP {cold_b.status}: {cold_b.error_message()}")
+    _check_retry_usage(cold_b.body.get("usage") or {}, "aba-cold-B", expect_hit=False)
+
+    retry_a = api.post(body_a)
+    expect(retry_a.status == 200, f"A/B/A retry A HTTP {retry_a.status}: {retry_a.error_message()}")
+    _check_retry_usage(retry_a.body.get("usage") or {}, "aba-retry-A", expect_hit=True, expected_prompt_tokens=n_a)
+    retry_a_msg = flm_api.check_message_contract(retry_a.body["choices"][0])
+    expect(
+        retry_a_msg["content"] == cold_a_msg["content"],
+        f"A/B/A retry changed greedy output: {cold_a_msg['content']!r} vs {retry_a_msg['content']!r}",
+    )
 
 
 CASES = flm_api.collect(globals())
