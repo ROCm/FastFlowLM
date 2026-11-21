@@ -77,6 +77,7 @@ jobs:
 
   build-win:
     name: Build Windows
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: windows-2025-vs2026
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -116,8 +117,82 @@ jobs:
           path: dist
           retention-days: 7
 
+  # Does launch::Session keep the walks right on the runners whose array loses
+  # its state between runlists (out-of-tree amdxdna DKMS)? Raw walks (controls,
+  # wrong launches counted by the time since the last runlist) and the same walk
+  # through the Session (guard on: must pass; --no-guard: control). Even lengths.
+  session-lin:
+    name: Session Linux ${{ matrix.shard }}
+    needs: build-lin
+    runs-on: [self-hosted, linux, x64, npu, sweep]
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    env:
+      LL: ${{ github.workspace }}/launchlib
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: launchlib-lin
+      - name: Unpack and probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$LL"
+          mkdir -p "$LL/out"
+          tar xzf launchlib-lin.tgz -C "$LL"
+          echo "XILINX_XRT=$LL/xrt" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$LL/xrt/lib/x86_64-linux-gnu" >> "$GITHUB_ENV"
+          echo "runner $RUNNER_NAME, kernel $(uname -r), amdxdna $(cat /sys/module/amdxdna/version 2>/dev/null || echo in-tree)"
+          modinfo amdxdna 2>/dev/null | grep -E '^(filename|version|srcversion):' || true
+          for f in /sys/bus/pci/drivers/amdxdna/*/power/{control,runtime_status,autosuspend_delay_ms}; do
+            [ -e "$f" ] && echo "$f: $(cat "$f")"
+          done
+          ls /sys/module/amdxdna/parameters 2>/dev/null | while read -r p; do
+            echo "amdxdna.$p = $(cat /sys/module/amdxdna/parameters/$p 2>/dev/null)"
+          done
+          if pgrep -a -x 'flm|flm-real|stress.exe|host.exe|ovlp.exe'; then echo "::error::NPU processes left on the runner"; exit 1; fi
+      - name: walks, raw and through the Session
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          fail=0
+          s=$(( ${{ matrix.shard }} * 1000 ))
+          for name in n256-c8x4-pair n256-c8x2; do
+            d=$LL/$name
+            walk() { # tag must_pass args...
+              local tag=$1 must=$2; shift 2
+              local log=$LL/out/${name}_$tag.log
+              echo "=== $name $tag: stress $*"
+              "$d/stress.exe" --package "$d/pkg" --lengths 2,4,8 "$@" > "$log" 2>&1
+              local rc=$?
+              grep -E '^S[0-9]|^  [0-9]+ launches|^  runlists by|^  gap|^  [<>0-9].*ms |launches the Session|^    launch [0-9]|^    runlist|error' "$log" | head -60
+              echo "--- $name $tag: exit $rc"
+              if [ "$must" = 1 ] && [ $rc -ne 0 ]; then fail=1; fi
+            }
+            walk raw_r8_idle0      0 --mode random  --seed $((s+1)) --max-runlist 8 --launches 50000
+            walk raw_r64_idle0     0 --mode random  --seed $((s+2)) --launches 50000
+            walk raw_r8_idle5ms    0 --mode random  --seed $((s+3)) --max-runlist 8 --idle-us 5000 --launches 30000
+            walk raw_r8_idle100ms  0 --mode random  --seed $((s+4)) --max-runlist 8 --idle-us 100000 --launches 4000
+            walk session_r8        1 --mode session --seed $((s+5)) --max-runlist 8 --launches 100000
+            walk session_r64       1 --mode session --seed $((s+6)) --launches 50000
+            walk session_r8_idle5ms 1 --mode session --seed $((s+7)) --max-runlist 8 --idle-us 5000 --launches 30000
+            walk noguard_r8_idle5ms 0 --mode session --no-guard --seed $((s+8)) --max-runlist 8 --idle-us 5000 --launches 30000
+          done
+          exit $fail
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ always() }}
+        with:
+          name: session-logs-lin-${{ matrix.shard }}
+          path: ${{ env.LL }}/out
+          retention-days: 14
+
   test-lin:
     name: NPU Linux ${{ matrix.shard }}
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     needs: build-lin
     runs-on: [self-hosted, linux, x64, npu, sweep]
     timeout-minutes: 240
@@ -229,6 +304,7 @@ jobs:
 
   test-win:
     name: NPU Windows ${{ matrix.shard }}
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     needs: build-win
     runs-on: [self-hosted, windows, x64, npu, sweep]
     timeout-minutes: 240

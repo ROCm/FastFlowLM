@@ -46,9 +46,15 @@
 //   latency  P4: one-launch runlists of each kind, timed one by one (--count
 //            per kind): mean, p50, p90, p99, p99.9, max.
 //   churn    P7: --count times: build, open a hw_context, 100 launches, close.
+//   session  S9: the random walk through launch::Session, which runs a rerun or
+//            program-only switch as the cold kernel when the array state is
+//            unknown (another context, or more than max_gap since its last
+//            runlist); --no-guard: max_gap 0. Even --lengths only. Launches the
+//            Session reports ok must be right.
 //
 // Options of the random walk: --lengths B,B,... (blocks per core it picks from;
-// default 1,2,3,4,8), --robust (only kernels that do not depend on the array's
+// default 1,2,3,4,8), --idle-us U (sleep U us before each runlist; wrong
+// launches are counted by the time since the previous runlist), --robust (only kernels that do not depend on the array's
 // state: full switches, cold, reset; safe while another process uses the NPU).
 //
 // --transport (default ctrlpkt): how the kernels load (launch::Transport); the
@@ -73,6 +79,7 @@
 
 #include "launch/launch.hpp"
 #include "launch/xrt/packets.hpp"
+#include "launch/xrt/session.hpp"
 
 #include <xrt/xrt_bo.h>
 #include <xrt/xrt_device.h>
@@ -141,7 +148,20 @@ struct Options {
   bool preempt = false;               ///< every sequence starts with a preemption point
   launch::Transport transport = launch::Transport::ctrlpkt;
   bool elf = true;                    ///< --flow elf (else xclbin)
+  bool session = false;               ///< run through launch::Session (mode session)
+  bool guard = true;                  ///< Session: its max_gap rule (--no-guard: max_gap 0)
+  int idle_us = 0;                    ///< walk: sleep before each runlist (--idle-us)
 };
+
+/// Runlists by the time since the previous one ended.
+struct GapBucket {
+  long runlists = 0;
+  long dep_start = 0;  ///< first launch a rerun or program-only switch, run as asked
+  long wrong = 0;      ///< wrong launches
+  long wrong_first = 0; ///< ... of which the first launch of a dep_start runlist
+};
+constexpr double kGapEdges[] = {2000, 10000, 100000}; // us
+const char *const kGapNames[] = {"< 2 ms", "2-10 ms", "10-100 ms", ">= 100 ms"};
 
 class Stress {
 public:
@@ -186,6 +206,8 @@ public:
       max_elements_ = std::max(max_elements_, n);
     }
     result_ = launch::build(list, seqs);
+    list_ = list;
+    seqs_ = seqs;
     if (!opts_.quiet) {
       size_t packets = 0;
       for (const launch::Kernel &k : result_.kernels)
@@ -198,15 +220,25 @@ public:
   // --- XRT --------------------------------------------------------------------------
 
   void open() {
-    xclbin_ = xrt::xclbin(result_.base_xclbin);
-    device_.register_xclbin(xclbin_);
-    context_ = xrt::hw_context(device_, xclbin_.get_uuid());
-    kernel_ = xrt::kernel(context_, "MLIR_AIE");
-    kernels_ = std::make_unique<ew::FlowKernels>(device_, context_, kernel_, result_, opts_.elf);
     bytes_ = (size_t)max_elements_ * 2;
+    if (opts_.session) {
+      // Only the Session's hw_context: one of ours would count as another context.
+      launch::SessionOptions so;
+      so.flow = opts_.elf ? launch::Flow::elf : launch::Flow::xclbin;
+      if (!opts_.guard)
+        so.max_gap = std::chrono::microseconds(0);
+      session_ = std::make_unique<launch::Session>(list_, seqs_, so);
+    } else {
+      xclbin_ = xrt::xclbin(result_.base_xclbin);
+      device_.register_xclbin(xclbin_);
+      context_ = xrt::hw_context(device_, xclbin_.get_uuid());
+      kernel_ = xrt::kernel(context_, "MLIR_AIE");
+      kernels_ = std::make_unique<ew::FlowKernels>(device_, context_, kernel_, result_, opts_.elf);
+    }
     std::uniform_real_distribution<float> dis(-2.0f, 2.0f);
     for (int i = 0; i < kInputs; ++i) {
-      xrt::bo &bo = inputs_.emplace_back(device_, bytes_, XRT_BO_FLAGS_HOST_ONLY, kernel_.group_id(3 + i % 2));
+      xrt::bo &bo = session_ ? inputs_.emplace_back(session_->buffer(bytes_, i % 2))
+                             : inputs_.emplace_back(device_, bytes_, XRT_BO_FLAGS_HOST_ONLY, kernel_.group_id(3 + i % 2));
       uint16_t *p = bo.map<uint16_t *>();
       for (int e = 0; e < max_elements_; ++e)
         p[e] = ew::to_bf16(dis(rng_));
@@ -229,17 +261,17 @@ public:
 
   xrt::bo &out_bo(int i) {
     while ((int)outputs_.size() <= i)
-      outputs_.emplace_back(device_, bytes_, XRT_BO_FLAGS_HOST_ONLY, kernel_.group_id(5));
+      if (session_)
+        outputs_.push_back(session_->buffer(bytes_, 2));
+      else
+        outputs_.emplace_back(device_, bytes_, XRT_BO_FLAGS_HOST_ONLY, kernel_.group_id(5));
     return outputs_[i];
   }
 
   /// Run launches as one runlist and check them. Returns the launches that failed.
   int run(const std::vector<Launch> &ls, bool expect_ok = true, bool quiet = false) {
-    for (size_t i = 0; i < ls.size(); ++i) {
-      xrt::bo &o = out_bo((int)i);
-      std::memset(o.map<char *>(), 0xFF, bytes_);
-      o.sync(XCL_BO_SYNC_BO_TO_DEVICE);
-    }
+    poison(ls.size());
+    const double gap = before_runlist();
     std::vector<size_t> ks;
     for (const Launch &l : ls)
       ks.push_back((size_t)l.kernel);
@@ -259,7 +291,46 @@ public:
       rl.wait();
       first = end;
     }
+    last_end_ = std::chrono::steady_clock::now();
+    return check(ls, gap, depends_at_start(ls), expect_ok, quiet);
+  }
+
+  /// Poison the first `n` outputs.
+  void poison(size_t n) {
+    for (size_t i = 0; i < n; ++i) {
+      xrt::bo &o = out_bo((int)i);
+      std::memset(o.map<char *>(), 0xFF, bytes_);
+      o.sync(XCL_BO_SYNC_BO_TO_DEVICE);
+    }
+  }
+
+  /// Sleep --idle-us, then the time since the last runlist ended (us; -1: none yet).
+  double before_runlist() {
+    if (opts_.idle_us > 0)
+      std::this_thread::sleep_for(std::chrono::microseconds(opts_.idle_us));
+    if (last_end_ == std::chrono::steady_clock::time_point{})
+      return -1;
+    return std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - last_end_).count();
+  }
+
+  /// The first launch is a rerun or a program-only switch: it depends on the
+  /// state the previous runlist left.
+  static bool depends_at_start(const std::vector<Launch> &ls) {
+    return !ls.empty() && (ls[0].what == "rerun" || ls[0].what == "pm" || ls[0].what == "pm self");
+  }
+
+  /// Check the outputs of a finished runlist that started `gap` us after the last one.
+  int check(const std::vector<Launch> &ls, double gap, bool dep_start, bool expect_ok, bool quiet) {
     ++stats_.runlists;
+    GapBucket *bucket = nullptr;
+    if (gap >= 0) {
+      size_t b = 0;
+      while (b < std::size(kGapEdges) && gap >= kGapEdges[b])
+        ++b;
+      bucket = &gaps_[b];
+      ++bucket->runlists;
+      bucket->dep_start += dep_start;
+    }
     int failed = 0;
     for (size_t i = 0; i < ls.size(); ++i) {
       const Launch &l = ls[i];
@@ -282,10 +353,15 @@ public:
         if (expect_ok) {
           stats_.bad += bad ? 1 : 0;
           stats_.overwrites += over ? 1 : 0;
+          if (bucket) {
+            ++bucket->wrong;
+            bucket->wrong_first += i == 0 && dep_start;
+          }
         }
         if (!quiet && failed <= 3)
-          std::printf("    launch %zu (%s, %d elements): %d wrong, %d words written past the end\n", i,
-                      l.what.c_str(), l.elements, bad, over);
+          std::printf("    launch %zu of %zu (%s, %d elements): %d wrong, %d words written past the end; "
+                      "%.0f us after the last runlist\n",
+                      i, ls.size(), l.what.c_str(), l.elements, bad, over, gap);
       }
     }
     return failed;
@@ -459,7 +535,80 @@ public:
     if (!opts_.quiet || bad)
       std::printf("  %ld launches in %.1f s (%.1f us per launch, checks included): %s\n", done, s,
                   1e6 * s / (double)done, bad ? "FAIL" : "PASS");
+    if (!opts_.quiet)
+      print_gaps();
     return bad == 0;
+  }
+
+  /// Wrong launches by the time since the previous runlist ended.
+  void print_gaps() const {
+    std::printf("  %-10s %9s %24s %7s %18s\n", "gap", "runlists", "start: rerun/pm as asked", "wrong",
+                "wrong at that start");
+    for (size_t b = 0; b < std::size(gaps_); ++b)
+      if (gaps_[b].runlists)
+        std::printf("  %-10s %9ld %24ld %7ld %18ld\n", kGapNames[b], gaps_[b].runlists, gaps_[b].dep_start,
+                    gaps_[b].wrong, gaps_[b].wrong_first);
+  }
+
+  /// S9: the random walk through launch::Session. Its guard runs a rerun or
+  /// program-only switch as the cold kernel when the array state is unknown
+  /// (another context, or more than max_gap since the last runlist); with
+  /// --no-guard max_gap is 0 (the state is trusted across any gap). Even
+  /// lengths only: the Session does not know the ping/pong position, so a
+  /// cold kernel in place of a rerun must not move it.
+  bool session_walk(long launches, int max_runlist) {
+    for (int b : opts_.lengths)
+      if (b % 2)
+        throw std::invalid_argument("mode session needs even --lengths (the Session does not track ping/pong)");
+    std::printf("S9 random walk through launch::Session (guard %s, %s), %d us idle before each runlist: %ld "
+                "launches, runlists of 1..%d, lengths",
+                opts_.guard ? "on" : "off", session_->watching() ? "watching the driver" : session_->watch_why().c_str(),
+                opts_.idle_us, launches, max_runlist);
+    for (int b : opts_.lengths)
+      std::printf(" %d", b);
+    std::printf(" blocks per core\n");
+    std::uniform_int_distribution<int> len(1, max_runlist);
+    const auto t0 = std::chrono::steady_clock::now();
+    const long bad0 = stats_.bad + stats_.overwrites;
+    std::map<std::string, long> status;
+    long done = 0, substituted = 0, as_asked = 0, not_ok_wrong = 0;
+    while (done < launches) {
+      std::vector<Launch> ls;
+      const int n = (int)std::min<long>(len(rng_), launches - done);
+      while ((int)ls.size() < n)
+        step(ls);
+      std::vector<launch::Launch> sl;
+      for (size_t i = 0; i < ls.size(); ++i)
+        sl.push_back({list_.configs[ls[i].kernel].name, {inputs_[ls[i].lhs], inputs_[ls[i].rhs], out_bo((int)i)}});
+      poison(ls.size());
+      const double gap = before_runlist();
+      const launch::RunReport rep = session_->run(sl);
+      last_end_ = std::chrono::steady_clock::now();
+      ++status[launch::status_name(rep.status)];
+      substituted += (long)rep.substituted;
+      const bool asked = depends_at_start(ls) && !rep.ran.empty() && rep.ran[0] == sl[0].kernel;
+      as_asked += asked;
+      const bool ok = rep.status == launch::RunReport::Status::ok;
+      if (!ok && rep.status != launch::RunReport::Status::other_context_ran)
+        std::printf("    runlist of %zu: %s (%s)\n", ls.size(), launch::status_name(rep.status), rep.message.c_str());
+      const int wrong = check(ls, gap, asked, ok, !ok);
+      if (!ok)
+        not_ok_wrong += wrong;
+      done += (long)ls.size();
+    }
+    const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    const long bad = stats_.bad + stats_.overwrites - bad0;
+    std::printf("  %ld launches in %.1f s; %ld launches run as the cold kernel, %ld runlists started with a rerun "
+                "or program-only switch as asked\n",
+                done, s, substituted, as_asked);
+    std::printf("  runlists by status:");
+    for (const auto &[k, v] : status)
+      std::printf(" %s %ld", k.c_str(), v);
+    std::printf("; %ld wrong launches in runlists not reported ok\n", not_ok_wrong);
+    print_gaps();
+    const bool failed = bad || status.count("failed") || status.count("stopped");
+    std::printf("  launches the Session reports ok: %ld wrong: %s\n", bad, failed ? "FAIL" : "PASS");
+    return !failed;
   }
 
   bool lengths() {
@@ -760,6 +909,11 @@ private:
   std::mt19937 rng_;
   Options opts_;
   launch::Result result_;
+  launch::ConfigList list_;
+  launch::SequenceMap seqs_;
+  std::unique_ptr<launch::Session> session_;
+  std::chrono::steady_clock::time_point last_end_{}; ///< the last runlist ended
+  GapBucket gaps_[std::size(kGapNames)];
   std::map<int, LengthKernels> lengths_;
   int max_elements_ = 0;
   size_t bytes_ = 0;
@@ -793,6 +947,10 @@ int main(int argc, char **argv) {
       opts.preempt = true;
       continue;
     }
+    if (opt == "--no-guard") {
+      opts.guard = false;
+      continue;
+    }
     if (opt == "--hang-risk") {
       hang_risk = true;
       continue;
@@ -806,6 +964,7 @@ int main(int argc, char **argv) {
     else if (opt == "--launches") launches = std::atol(v);
     else if (opt == "--max-runlist") max_runlist = std::atoi(v);
     else if (opt == "--count") count = std::atoi(v);
+    else if (opt == "--idle-us") opts.idle_us = std::atoi(v);
     else if (opt == "--progress") progress = v;
     else if (opt == "--transport") opts.transport = launch::transport_from_name(v), transport_set = true;
     else if (opt == "--flow") opts.elf = ew::elf_flow(v);
@@ -819,7 +978,7 @@ int main(int argc, char **argv) {
   if (package.empty() || opts.lengths.empty()) {
     std::cerr << "usage: stress.exe --package DIR [--mode MODE] [--seed S] [--launches L] [--max-runlist R]\n"
                  "                  [--lengths B,B,...] [--robust] [--preempt] [--count C] [--transport txn|ctrlpkt]\n"
-                 "                  [--flow elf|xclbin] [--hang-risk]\n";
+                 "                  [--flow elf|xclbin] [--hang-risk] [--idle-us U] [--no-guard]\n";
     return 2;
   }
   // Other hw_contexts on the NPU: txn unless asked (the children of ctx are).
@@ -832,6 +991,7 @@ int main(int argc, char **argv) {
     return 2;
   }
   opts.big = mode == "big" || mode == "all";
+  opts.session = mode == "session";
   try {
     if (mode == "churn") {
       // P7: a whole Stress (build, hw_context, buffers, a short walk) made and
@@ -868,6 +1028,7 @@ int main(int argc, char **argv) {
     if (mode == "ctx") ok &= s.context(argv[0]);
     if (mode == "latency") ok &= s.latency(count);
     if (mode == "random" || mode == "all") ok &= s.random_walk(launches, max_runlist);
+    if (mode == "session") ok &= s.session_walk(launches, max_runlist);
     s.report();
     std::printf("stress %s: %s\n", mode.c_str(), ok ? "PASS" : "FAIL");
     return ok ? 0 : 1;
