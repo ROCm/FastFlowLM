@@ -76,7 +76,10 @@ Two rules:
 
 - **One context.** The array's state lives only while this hw_context is the only one running on the NPU; when
   another runs, this context comes back as its xclbin. Start each runlist with `cold` after anything else may
-  have used the NPU (`launch::Session` checks it for you; `launchlib/README.md` §3.2).
+  have used the NPU (`launch::Session` checks it for you; `launchlib/README.md` §3.2). On the out-of-tree
+  amdxdna 2.21 DKMS driver (seen on kernel 7.0) the context can also come back as its xclbin after an idle gap
+  between two of its own runlists (seen from ~6 ms); the Session's `max_gap` (2 ms) covers that, so without
+  the Session start with `cold` after any idle gap.
 - **No empty-context churn.** A process that keeps opening and closing hw_contexts that run nothing can corrupt
   our runlists without the Session seeing it (Linux) or slow them down a lot (Windows). Do not share the NPU with
   one.
