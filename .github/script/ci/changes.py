@@ -41,7 +41,8 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              (the kernel, engine, converter and pybind sources, built by their
              own jobs), a src/lib/xrt file the dev kit links (libaiebu.a,
              aiebu_static.lib, any library its engines' -L order can pick
-             up), hrx-integration/ (the HRX engine builds fetch the pinned
+             up, except the libraries the engines.json units build: those
+             are the dev kit's output, which a swap commits), hrx-integration/ (the HRX engine builds fetch the pinned
              package with it), or the CI that runs the dev-kit jobs
              (including .github/workflows/devkit-*.yml and
              .github/actions/devkit-*, except devkit-aie-image.yml and the
@@ -225,7 +226,10 @@ DEVKIT_ALSO = (
 # launchlib. The dev-kit engine Makefiles also put -L../../../../src/lib/xrt
 # ahead of their own build/lib, so any library there can stand in for a unit
 # they link. This lasts until libaiebu.a is vendored into
-# flm-dev-kit/FLM_DLL/external_libs.
+# flm-dev-kit/FLM_DLL/external_libs. A library an engines.json unit builds
+# (engine_library_files) is not an input here: it is the dev kit's own output,
+# which a swap commits, and counting it would make every push after a swap
+# rebuild and stage every engine (devkit_from_product).
 DEVKIT_FROM_PRODUCT = (
     (re.compile(r"^src/lib/xrt/(libaiebu\.a|aiebu_static\.lib)$"), {"xclbin", "dll", "pybind", "launchlib"}),
     (re.compile(r"^src/lib/xrt/[^/]+$"), {"dll"}),
@@ -1028,8 +1032,35 @@ def every_engine_family(engines: Optional[DevkitEngines]) -> set:
     return {f for fams in ENGINES.values() for f in fams}
 
 
+def engine_library_files(engines: Optional[DevkitEngines], repo: Path = REPO_ROOT) -> frozenset:
+    """The file names every runtime directory ships for the libraries the
+    engines.json units (shared and engines) build: lib<name>.so, <name>.dll
+    and <name>.lib, the names devkit_check.py's rule 7 requires. Empty when
+    engines.json is unreadable, so every src/lib/xrt file stays a link input."""
+    if engines is None:
+        return frozenset()
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import devkit_check  # noqa: E402  (reads the units' Makefile and CMakeLists.txt)
+    out: set = set()
+    for unit in sorted(engines.shared | set(engines.engines)):
+        lib = devkit_check.unit_library(repo / devkit_check.DLL, unit, [])
+        if lib:
+            out |= set(devkit_check.shipped_names(lib))
+    return frozenset(out)
+
+
+def devkit_from_product(path: str, engine_libs: frozenset) -> Optional[set]:
+    """The dev-kit areas product file path selects (DEVKIT_FROM_PRODUCT), or
+    None. A dev-kit engine library in src/lib/xrt selects none: it is what a
+    swap commits, not something the engines build from."""
+    if path.startswith("src/lib/xrt/") and path[len("src/lib/xrt/"):] in engine_libs:
+        return None
+    return next((areas for rx, areas in DEVKIT_FROM_PRODUCT if rx.match(path)), None)
+
+
 def add_devkit_families(d: Decision, files: list[str], code: list[str],
-                        engines: Optional[DevkitEngines], git: Optional[Git]) -> None:
+                        engines: Optional[DevkitEngines], git: Optional[Git],
+                        engine_libs: frozenset = frozenset()) -> None:
     """d.devkit_families for the changed dev-kit files and the product files
     that select the dll area (see devkit_families in the docstring)."""
     everything = None  # the first path that needs every engine's families
@@ -1057,8 +1088,7 @@ def add_devkit_families(d: Decision, files: list[str], code: list[str],
             everything = everything or f"{path} (in no dev-kit area)"
     for path in code:
         # The dev-kit CI rebuilds the engines (every area) but stages none.
-        if not DEVKIT_CI.match(path) and any(rx.match(path) and "dll" in areas
-                                             for rx, areas in DEVKIT_FROM_PRODUCT):
+        if not DEVKIT_CI.match(path) and "dll" in (devkit_from_product(path, engine_libs) or ()):
             everything = everything or f"{path} (linked by the dev-kit engines)"
     if everything:
         d.devkit_families = every_engine_family(engines)
@@ -1089,16 +1119,20 @@ def devkit_engines_diff(git: Optional[Git], head: Optional[DevkitEngines]) -> Op
 
 def decide(files: Optional[list[str]], git: Optional[Git] = None,
            head_catalog_text: Optional[str] = None,
-           devkit_engines: Optional[DevkitEngines] = None) -> Decision:
+           devkit_engines: Optional[DevkitEngines] = None,
+           engine_libs: Optional[frozenset] = None) -> Decision:
     """The decision for a list of changed files (None: git could not tell).
 
     git supplies the changed lines and the base and head versions of the
     catalogs; without it those checks fall back as described inline.
     devkit_engines is the head engines.json; None reads the checkout's.
+    engine_libs is engine_library_files' answer; None reads the checkout.
     """
     d = Decision(suites=None)
     if devkit_engines is None:
         devkit_engines = load_devkit_engines()
+    if engine_libs is None:
+        engine_libs = engine_library_files(devkit_engines)
     if files is None:
         d.asr_full = True
         d.devkit_catalog = True
@@ -1175,7 +1209,7 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
 
     in_devkit = set(devkit)
     code = [f for f in files if not is_non_code(f) and f not in in_devkit]
-    add_devkit_families(d, files, code, devkit_engines, git)
+    add_devkit_families(d, files, code, devkit_engines, git, engine_libs)
     d.suites = set()  # narrowed per file below; None once any file is unscoped
     if not code:
         d.run_tests = False
@@ -1196,14 +1230,13 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
                 d.reasons.append(f"{path}: CI that runs the dev-kit jobs -> every dev-kit area "
                                  "(built to exercise it; nothing staged for it)")
             continue
-        for rx, areas in DEVKIT_FROM_PRODUCT:
-            if rx.match(path):
-                new = areas - d.devkit_areas
-                d.devkit_areas |= areas
-                d.source_areas |= areas
-                if new:
-                    d.reasons.append(f"{path}: linked by the dev kit -> {', '.join(sorted(new))}")
-                break
+        areas = devkit_from_product(path, engine_libs)
+        if areas:
+            new = areas - d.devkit_areas
+            d.devkit_areas |= areas
+            d.source_areas |= areas
+            if new:
+                d.reasons.append(f"{path}: linked by the dev kit -> {', '.join(sorted(new))}")
     shipped = [f for f in code if SHIPPED_KERNEL.match(f)]
     if shipped and "xclbin" not in d.devkit_areas:
         d.devkit_areas.add("xclbin")
@@ -1351,7 +1384,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         except OSError:
             engines_text = None
     devkit_engines = DevkitEngines.parse(engines_text)
-    decision = decide(files, git, head_catalog, devkit_engines)
+    decision = decide(files, git, head_catalog, devkit_engines,
+                      engine_library_files(devkit_engines, args.repo))
     if args.swap_verified == "true":
         decision.skip_for_swap()
     for reason in decision.reasons:

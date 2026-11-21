@@ -522,9 +522,30 @@ class DevKit(unittest.TestCase):
                 self.assertEqual((out["run_tests"], out["suites"], out["devkit"], out["devkit_areas"]),
                                  ("true", "all", "true", "xclbin,dll,pybind,launchlib"))
         # Anything else in src/lib/xrt is on the dev-kit engines' -L path.
-        out = cli("--files", "src/lib/xrt/libqwen3_npu.so")
+        out = cli("--files", "src/lib/xrt/libcurl_extra.so")
         self.assertEqual((out["run_tests"], out["devkit_areas"]), ("true", "dll"))
+        self.assertEqual(devkit_families(out), changes.every_engine_family(changes.load_devkit_engines()))
+        # A library an engines.json unit builds is the dev kit's output (what
+        # a swap commits), not a link input: the product rules only.
+        for path in ("src/lib/xrt/libqwen3_npu.so", "src/lib/xrt/qwen3_npu.dll", "src/lib/xrt/qwen3_npu.lib",
+                     "src/lib/xrt/q4_npu_eXpress.dll", "src/lib/xrt/libgemm.so"):
+            with self.subTest(path=path):
+                out = cli("--files", path)
+                self.assertEqual((out["run_tests"], out["devkit"], out["devkit_areas"], out["devkit_stage"]),
+                                 ("true", "false", "", "false"))
+        out = cli("--files", "src/lib/xrt/libqwen3_npu.so")
         self.assertEqual(families(out), {"qwen3", "qwen3-it", "qwen3-tk", "deepseek-r1-0528"})
+
+    def test_push_after_a_swap_selects_only_the_changed_engine(self):
+        # A later push diffs base...head with the swapped libraries in it:
+        # they must not widen the selection to every engine.
+        src = "flm-dev-kit/FLM_DLL/detail/gemma_npu/x.cpp"
+        alone = cli("--files", src)
+        swapped = cli("--files", src, "src/lib/xrt/gemma_npu.dll", "src/lib/xrt/gemma_npu.lib",
+                      "src/lib/xrt/libgemma_npu.so", "src/lib/hrx/gemma_npu.dll", "src/lib/hrx/libgemma_npu.so")
+        self.assertEqual(devkit_families(alone), {"gemma3"})
+        for key in ("devkit_families", "devkit_areas", "devkit_stage", "devkit_bench"):
+            self.assertEqual(swapped[key], alone[key], key)
         # The HRX engine builds fetch the pinned package through hrx-integration/:
         # the dll area and every dev-kit engine's families; the product rules
         # still run everything.
@@ -857,7 +878,7 @@ class DevKitFamilies(unittest.TestCase):
                      "flm-dev-kit/FLM_DLL/hrx.mk",
                      # Not dev-kit engine code, but the engines link or run under them.
                      "src/lib/xrt/libaiebu.a",
-                     "src/lib/xrt/libqwen3_npu.so",
+                     "src/lib/xrt/libcurl_extra.so",
                      "flm-dev-kit/env.sh"):
             with self.subTest(path=path):
                 self.assertEqual(devkit_families(cli("--files", path)), self.all)
