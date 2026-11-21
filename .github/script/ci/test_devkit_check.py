@@ -568,7 +568,9 @@ class Catalog(Synthetic):
 
 class RealTree(unittest.TestCase):
     def test_tree_passes(self):
-        errors, _ = dc.run(dc.REPO_ROOT)
+        # A pull request that adds a slot has it pending until its swap commit (the CLI's --pending-ok);
+        # the strict check runs on the swap commit and on main.
+        errors, _ = dc.run(dc.REPO_ROOT, pending=[])
         self.assertEqual(errors, [])
 
 
