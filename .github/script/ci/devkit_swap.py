@@ -3,40 +3,45 @@
 # Portions of this file consist of AI-generated content.
 """Commits the dev-kit binaries CI built and tested, and checks that it did.
 
-    devkit_swap.py fetch  [--pr <n>] [--run <id>] [--repo <owner/name>] [--remote origin]
-                          [--dry-run] [--no-git-fetch]
-    devkit_swap.py verify --head <sha> --base <sha> --pr <n> --head-ref <branch>
-                          --head-repo <owner/name> [--repo <owner/name>] [--github-output]
-    devkit_swap.py check  --head <sha> --base <sha> --pr <n> --head-ref <branch>
-                          --head-repo <owner/name> [--repo <owner/name>]
-    devkit_swap.py guide  --manifests <dir> --head <sha> --run <id> [--tree <commit>]
+    devkit_swap.py fetch   [--pr <n>] [--run <id>] [--repo <owner/name>] [--remote origin]
+                           [--dry-run] [--no-git-fetch]
+    devkit_swap.py verify  --head <sha> --base <sha> --pr <n> --head-ref <branch>
+                           --head-repo <owner/name> [--repo <owner/name>] [--github-output]
+    devkit_swap.py check   --head <sha> --base <sha> --pr <n> --head-ref <branch>
+                           --head-repo <owner/name> [--repo <owner/name>]
+    devkit_swap.py pending --manifests <dir> --head <sha> --run <id> [--tree <commit>]
+                           [--base <sha>] [--summary <file>]
 
 The policy (flm-dev-kit/AGENTS.md, "Prebuilt binaries"): the prebuilt engine
 libraries (src/lib/{xrt,hrx}/*.so, *.dll, *.lib) and kernels
 (src/xclbins/<folder>/<slot>.xclbin) are never edited by hand. Only a pull
 request that changes dev-kit source updates them, and the bytes committed
 are exactly the bytes its Build and Test run built (devkit-engines,
-devkit-xclbins) and tested on the NPU (the overlay jobs test-*-devkit).
-Kernel builds are not byte-reproducible, so nothing is rebuilt after the
-fact: the overlay jobs record what they put into the package (the
-devkit-overlay-manifest-<os>-<runtime> artifacts, devkit_overlay.py
---manifest), and the pull request's author copies exactly those files.
+devkit-xclbins), staged into its product builds before they compiled
+(devkit-stage, devkit_stage.py) and NPU-tested in its product test jobs
+(TEST_JOBS). Kernel builds are not byte-reproducible, so nothing is rebuilt
+after the fact: the staging step records what it put into each system's
+and runtime's build (the devkit-stage-manifest-<os>-<runtime> artifacts,
+schema 2, documented in devkit_stage.py), and the pull request's author
+copies exactly those files.
 
 fetch (the author, locally; read access is enough: the gh CLI's login, or
 $GH_TOKEN / $GITHUB_TOKEN): checks that the working tree is clean, that the
 local HEAD is the pull request's head (nothing unpushed, nothing after the
 tested commit) and the run's head, that the run is this repository's Build
 and Test for that pull request (or a dev-kit full refresh dispatched on its
-branch, see below), completed with its summary job passing, that every
-overlay job that ran passed and its manifest says its tests ran, that
-devkit-engines and devkit-xclbins did not fail, that the pull request is
-not from a fork, and that main gained no commit touching the dev-kit engine
-or kernel sources or the prebuilt binaries since the run's base (else merge
-main and let CI run again). Then it downloads the manifests and the
-artifacts holding the files that differ from the branch, checks every
-file's size and SHA-256 against the manifests, writes them under src/lib
-and src/xclbins, and makes ONE commit (no push) whose message ends with
-the trailers
+branch, see below), completed, that every job of it passed (check_jobs: one
+by one, not the run's conclusion, so that the one failure a staged run
+always has, summary's PENDING_STEP saying the swap is pending, is allowed;
+any other failed job or summary step is not), that the product test job of
+every system and runtime the run staged files into passed, that the pull
+request is not from a fork, and that main gained no commit touching the
+dev-kit engine or kernel sources or the prebuilt binaries since the run's
+base (else merge main and let CI run again). Then it downloads the manifests
+and the artifacts holding the files that differ from the branch, checks
+every file's size and SHA-256 against the manifests, writes them under
+src/lib and src/xclbins, and makes ONE commit (no push) whose message ends
+with the trailers
 
     Devkit-Swap-Run: <Build and Test run id>
     Devkit-Swap-Tested: <the commit that run tested>
@@ -49,19 +54,19 @@ verify (Build and Test's changes job, pull requests): whether the pull
 request's head is a swap commit CI can trust without testing again: it has
 the trailers (whoever wrote it), its only parent is the tested commit, it
 changes only paths the run's manifests list, each to exactly the manifest's
-bytes, and carries every file the run tested (no half swap: one system's
+bytes, and carries every file the run staged (no half swap: one system's
 build of an engine, part of the kernels), the recorded run passes the
 checks fetch makes (read with the job's token, actions: read: only the
 small manifests are downloaded), main gained no dev-kit source or binary
 change between the run's base and the pull request's base, and the pull
-request changes none of SWAP_CI_PATHS (the code that writes and checks the
-manifests: it runs from the pull request's merge commit, so a swap must not
-come with changes to it). The bytes are compared by git blob id (the
-manifest records it beside the SHA-256; both hash exactly the bytes), read
-from the trees alone, so the changes job's blob:none clone downloads no
-binary. Prints the reasons and writes swap-verified=true|false with
---github-output. Build and Test then runs no product build, NPU test,
-dev-kit build, overlay or bench for a verified swap; devkit-static still
+request changes none of SWAP_CI_PATHS (the code that stages, writes and
+checks the manifests: it runs from the pull request's merge commit, so a
+swap must not come with changes to it). The bytes are compared by git blob
+id (the manifest records it beside the SHA-256; both hash exactly the
+bytes), read from the trees alone, so the changes job's blob:none clone
+downloads no binary. Prints the reasons and writes swap-verified=true|false
+with --github-output. Build and Test then runs no product build, NPU test,
+dev-kit build, staging or bench for a verified swap; devkit-static still
 runs. verify and check run the pull request's own code: they keep honest
 authors on the flow, the guarantee is review of any .github/ change and
 branch protection.
@@ -73,20 +78,23 @@ verifies against its run, (b) a deletion of a file no assigned kernel slot
 or shipped engine library needs (devkit_check.required_binaries), or (c) a
 third-party file (third_party(): the src/lib entries of devkit_check's
 CATALOG_ALLOW, and the runtime libraries directly under src/lib/).
-Anything else is a hand edit: a warning while SWAP_ENFORCE is False, an
-error once it is True.
+Anything else is a hand edit: an error (SWAP_ENFORCE), which Build and
+Test's summary reports.
 
-guide (Build and Test's summary job): from this run's manifests, the tested
-files whose blob ids differ from those of --tree (the run's commit), and
-the fetch command, as Markdown for the job summary. Prints nothing when
-there are none.
+pending (Build and Test's summary job, its step PENDING_STEP): from this
+run's manifests, the staged files whose blob ids differ from those of
+--tree (the commit built): a swap is pending. Prints nothing and exits 0
+when there is none; otherwise writes the fetch command to stdout and to
+--summary (the job summary) and exits 1, so the pull request cannot merge
+without its swap. With --base, also says when the pull request changes
+SWAP_CI_PATHS, which no verified swap can come with (split it).
 
 The dev-kit full refresh: a workflow_dispatch of Build and Test on a pull
 request's branch with devkit-full-refresh (build-and-test.yml) builds every
-engine and every assigned kernel, runs the four overlay jobs over all of
-them on the full tier with every NPU catalog model required, and marks its
-manifests full_refresh. fetch and verify accept such a run for the pull
-request whose head is the run's head.
+engine and every assigned kernel, stages all of them into the product
+builds, runs the product test jobs on the full tier with every NPU catalog
+model required, and marks its manifests full_refresh. fetch and verify
+accept such a run for the pull request whose head is the run's head.
 
 Untrusted data: the artifacts are written by code from the pull request.
 Names, sizes and zip entries are checked before anything is read; only
@@ -124,32 +132,36 @@ REPO_ROOT = HERE.parents[2]
 sys.path.insert(0, str(HERE))
 import devkit_check  # noqa: E402
 
-# Flip to True once pull requests follow the swap flow: check then fails a
-# pull request with a hand-edited binary instead of warning.
-SWAP_ENFORCE = False
+# check fails a pull request with a hand-edited binary (False: it only warns).
+SWAP_ENFORCE = True
 
 WORKFLOW_PATH = ".github/workflows/build-and-test.yml"
 DEFAULT_REPO = "ROCm/FastFlowLM"
 TRAILER_RUN = "Devkit-Swap-Run"
 TRAILER_TESTED = "Devkit-Swap-Tested"
 
-# (os, runtime) -> the overlay job's name in build-and-test.yml, and the
-# artifacts its manifest names. devkit_check.py checks these against the
-# workflow and the actions.
-OVERLAYS = {
-    ("linux", "xrt"): "Test Linux XRT dev-kit overlay",
-    ("linux", "hrx"): "Test Linux HRX dev-kit overlay",
-    ("windows", "xrt"): "Test Windows XRT dev-kit overlay",
-    ("windows", "hrx"): "Test Windows HRX dev-kit overlay",
+# (os, runtime) -> the product test job in build-and-test.yml that tests
+# the package that system's and runtime's staged files went into.
+# devkit_check.py checks these names against the workflow.
+TEST_JOBS = {
+    ("linux", "xrt"): "Test Linux XRT portable",
+    ("linux", "hrx"): "Test Linux HRX portable",
+    ("windows", "xrt"): "Test Windows XRT",
+    ("windows", "hrx"): "Test Windows HRX",
 }
-MANIFEST_ARTIFACT = "devkit-overlay-manifest-{os}-{runtime}"
+MANIFEST_ARTIFACT = "devkit-stage-manifest-{os}-{runtime}"
 MANIFEST_FILE = "manifest.json"
+MANIFEST_SCHEMA = 2
 LIBS_ARTIFACT = "devkit-libs-{short}-{runtime}"
 SHORT_OS = {"linux": "lin", "windows": "win"}
 XCLBINS_ARTIFACT = "devkit-xclbins"
 SUMMARY_JOB = "summary"
-# Jobs of the called dev-kit builds ("<caller job> / <job>"), which must not
-# have failed.
+STAGE_JOB = "devkit-stage"
+# The summary step that fails while a swap is pending: the one failure a
+# run may have and still be swapped in.
+PENDING_STEP = "Dev-kit swap pending"
+# Jobs of the called dev-kit builds ("<caller job> / <job>"), which
+# devkit_check.py checks exist.
 BUILD_JOB_PREFIXES = ("devkit-engines / ", "devkit-xclbins / ")
 
 BINARY_ROOTS = ("src/lib/", "src/xclbins/")
@@ -189,7 +201,7 @@ class SwapError(Exception):
 
 
 # ── Manifests ────────────────────────────────────────────────────────────────
-# The one reader of devkit_overlay.py's manifest (schema 1, documented
+# The one reader of devkit_stage.py's manifest (schema 2, documented
 # there). Everything else here works on Manifest and Entry.
 
 class ManifestError(ValueError):
@@ -205,7 +217,7 @@ class Entry:
     size: int
     sha256: str
     git_sha1: str
-    tested: bool
+    new: bool           # no file at repo_path in the commit built
 
 
 @dataclass
@@ -216,7 +228,6 @@ class Manifest:
     head_sha: str
     base_sha: str
     full_refresh: bool
-    tests_ran: bool
     files: list = field(default_factory=list)
 
 
@@ -257,16 +268,16 @@ def check_entry_path(kind: str, repo_path: str, os_name: str, runtime: str) -> O
 
 
 def parse_manifest(data: bytes, os_name: str, runtime: str) -> Manifest:
-    """The manifest of the overlay job of os_name and runtime, validated
-    field by field; ManifestError on anything unexpected."""
+    """The staging step's manifest for os_name and runtime, validated field
+    by field; ManifestError on anything unexpected."""
     if len(data) > MAX_MANIFEST_BYTES:
         raise ManifestError("too large")
     try:
         raw = json.loads(data.decode("utf-8"))
     except (UnicodeDecodeError, ValueError) as exc:
         raise ManifestError(f"not JSON: {exc}") from None
-    if not isinstance(raw, dict) or raw.get("schema") != 1:
-        raise ManifestError("not a schema 1 manifest")
+    if not isinstance(raw, dict) or raw.get("schema") != MANIFEST_SCHEMA:
+        raise ManifestError(f"not a schema {MANIFEST_SCHEMA} manifest")
     if raw.get("os") != os_name or raw.get("runtime") != runtime:
         raise ManifestError(f"says {raw.get('os')!r}/{raw.get('runtime')!r}, its artifact {os_name}/{runtime}")
     run_id, head, base = raw.get("run_id"), raw.get("head_sha"), raw.get("base_sha")
@@ -274,12 +285,12 @@ def parse_manifest(data: bytes, os_name: str, runtime: str) -> Manifest:
         raise ManifestError("bad run_id")
     if not (isinstance(head, str) and SHA1.match(head)) or not (isinstance(base, str) and SHA1.match(base)):
         raise ManifestError("bad head_sha or base_sha")
-    if not isinstance(raw.get("full_refresh"), bool) or not isinstance(raw.get("tests_ran"), bool):
-        raise ManifestError("bad full_refresh or tests_ran")
+    if not isinstance(raw.get("full_refresh"), bool):
+        raise ManifestError("bad full_refresh")
     files = raw.get("files")
     if not isinstance(files, list):
         raise ManifestError("files is not a list")
-    out = Manifest(os_name, runtime, run_id, head, base, raw["full_refresh"], raw["tests_ran"])
+    out = Manifest(os_name, runtime, run_id, head, base, raw["full_refresh"])
     seen = set()
     for f in files:
         if not isinstance(f, dict):
@@ -306,20 +317,24 @@ def parse_manifest(data: bytes, os_name: str, runtime: str) -> Manifest:
             raise ManifestError(f"{path}: bad sha256")
         if not (isinstance(f.get("git_sha1"), str) and SHA1.match(f["git_sha1"])):
             raise ManifestError(f"{path}: bad git_sha1")
-        if not isinstance(f.get("tested"), bool):
-            raise ManifestError(f"{path}: bad tested")
+        if not isinstance(f.get("new"), bool):
+            raise ManifestError(f"{path}: bad new")
         out.files.append(Entry(kind, path, f["artifact"], f["artifact_path"], size, f["sha256"],
-                               f["git_sha1"], f["tested"] and raw["tests_ran"]))
-    # A Windows import library is recorded beside its overlaid DLL, never alone.
+                               f["git_sha1"], f["new"]))
+    # A Windows engine is staged as its DLL and its import library together:
+    # the build links the one and the package ships the other.
     for e in out.files:
-        if e.repo_path.endswith(".lib") and e.repo_path[:-4] + ".dll" not in seen:
-            raise ManifestError(f"{e.repo_path}: no {e.repo_path.rsplit('/', 1)[1][:-4]}.dll beside it")
+        name = e.repo_path.rsplit("/", 1)[1]
+        for mine, other in ((".lib", ".dll"), (".dll", ".lib")):
+            if e.repo_path.endswith(mine) and e.repo_path[:-4] + other not in seen:
+                raise ManifestError(f"{e.repo_path}: no {name[:-4]}{other} beside it")
     return out
 
 
 def plan_swap(manifests: dict, run_id: str, head_sha: str) -> tuple[dict, list[str], list[str]]:
-    """(repo path -> Entry of the tested files, notes, errors) from a run's
-    manifests ((os, runtime) -> Manifest)."""
+    """(repo path -> Entry of the staged files, notes, errors) from a run's
+    manifests ((os, runtime) -> Manifest). Whether the test jobs that
+    tested them passed is check_recorded_run's."""
     errors, notes = [], []
     entries: dict[str, Entry] = {}
     bases = {m.base_sha for m in manifests.values()}
@@ -334,17 +349,10 @@ def plan_swap(manifests: dict, run_id: str, head_sha: str) -> tuple[dict, list[s
             errors.append(f"the {label} manifest is of run {m.run_id} at {m.head_sha[:10]}, "
                           f"not run {run_id} at {head_sha[:10]}")
             continue
-        if m.files and not m.tests_ran:
-            errors.append(f"the {label} overlay put {len(m.files)} file(s) in its package but tested nothing")
-            continue
         stems.setdefault(runtime, {})[os_name] = {
             re.sub(r"^lib|\.(so|dll|lib)$", "", e.repo_path.rsplit("/", 1)[1])
             for e in m.files if e.kind == "engine"}
         for e in m.files:
-            if not e.tested:
-                notes.append(f"{e.repo_path}: overlaid by the {label} job but no model it tested loads it; "
-                             "not swapped")
-                continue
             other = entries.get(e.repo_path)
             if other is not None and other.sha256 != e.sha256:
                 errors.append(f"{e.repo_path}: the manifests disagree on its bytes")
@@ -356,11 +364,9 @@ def plan_swap(manifests: dict, run_id: str, head_sha: str) -> tuple[dict, list[s
         linux, windows = by_os.get("linux", set()), by_os.get("windows", set())
         if linux != windows:
             diff = sorted(linux ^ windows)
-            errors.append(f"the Linux and Windows {runtime} overlays did not both test the engines "
+            errors.append(f"the Linux and Windows {runtime} builds did not both stage the engines "
                           f"{', '.join(diff)}: the swap would leave {runtime} half updated")
-    # A file listed but untested somewhere and tested elsewhere stays in.
-    notes = [n for n in notes if n.split(":", 1)[0] not in entries]
-    return entries, sorted(set(notes)), errors
+    return entries, notes, errors
 
 
 # ── GitHub ───────────────────────────────────────────────────────────────────
@@ -607,36 +613,45 @@ def check_run(run: dict, repo: str, sha: str, pr: Pr) -> list[str]:
     return why
 
 
-def check_jobs(jobs: list, conclusion: str) -> tuple[list[str], set]:
-    """(why the run's jobs do not allow a swap, the (os, runtime) whose
-    overlay job passed). The run must have concluded success (a failed
-    bench too fails it: re-run the failed jobs), the summary job (the
-    required check) pass, every overlay job pass or be skipped, and no
-    dev-kit build job fail."""
-    why, passed = [], set()
+def summary_failures(job: dict) -> list[str]:
+    """The summary job's failed steps other than PENDING_STEP (its result
+    when its steps are not listed)."""
+    steps = [st for st in job.get("steps") or [] if isinstance(st, dict)]
+    if not steps:
+        return [f"its result {job.get('conclusion')}"]
+    return [str(st.get("name")) for st in steps
+            if st.get("conclusion") not in ("success", "skipped", None) and st.get("name") != PENDING_STEP]
+
+
+def check_jobs(jobs: list) -> tuple[list[str], dict]:
+    """(why the run's jobs do not allow a swap, (os, runtime) -> the
+    conclusion of its product test job). Every job must have passed or been
+    skipped, one by one (a failed bench too: re-run the failed jobs), except
+    the summary job (the required check), which may have failed at
+    PENDING_STEP alone: that is the swap fetch makes. The staging job must
+    have passed."""
+    why = []
     by_name = {j.get("name"): j for j in jobs if isinstance(j, dict)}
     summary = by_name.get(SUMMARY_JOB)
-    if summary is None or summary.get("conclusion") != "success":
-        why.append(f"its {SUMMARY_JOB} job did not pass "
-                   f"({summary.get('conclusion') if summary else 'not found'})")
-    for key, name in OVERLAYS.items():
-        job = by_name.get(name)
-        result = job.get("conclusion") if job else "skipped"
-        if result == "success":
-            passed.add(key)
-        elif result != "skipped":
-            why.append(f"{name} did not pass ({result})")
-    for j in jobs:
-        name, result = str(j.get("name")), j.get("conclusion")
-        if name.startswith(BUILD_JOB_PREFIXES) and result not in ("success", "skipped"):
-            why.append(f"{name} did not pass ({result})")
-    if conclusion != "success":
-        bad = sorted(str(j.get("name")) for j in jobs
-                     if j.get("conclusion") not in ("success", "skipped", "neutral"))
-        why.append(f"the run concluded {conclusion}, not success"
-                   + (f" ({', '.join(bad[:5])})" if bad else "")
-                   + ": fix it or re-run the failed jobs, then fetch")
-    return why, passed
+    if summary is None:
+        why.append(f"no {SUMMARY_JOB} job")
+    elif summary.get("conclusion") != "success":
+        other = summary_failures(summary)
+        if summary.get("conclusion") != "failure" or other:
+            why.append(f"its {SUMMARY_JOB} job did not pass ({summary.get('conclusion')}): "
+                       f"{', '.join(other[:5]) or 'see the run'}")
+    bad = sorted(f"{j.get('name')} ({j.get('conclusion')})" for j in jobs
+                 if isinstance(j, dict) and j.get("name") != SUMMARY_JOB
+                 and j.get("conclusion") not in ("success", "skipped", "neutral"))
+    if bad:
+        why.append(f"{len(bad)} job(s) did not pass: {', '.join(bad[:5])}{', ...' if len(bad) > 5 else ''}: "
+                   "fix them or re-run the failed jobs, then fetch")
+    stage = by_name.get(STAGE_JOB)
+    if stage is None or stage.get("conclusion") != "success":
+        why.append(f"its {STAGE_JOB} job did not run or pass "
+                   f"({stage.get('conclusion') if stage else 'not found'}): it staged nothing to swap")
+    tests = {key: (by_name.get(name) or {}).get("conclusion") or "not run" for key, name in TEST_JOBS.items()}
+    return why, tests
 
 
 def read_zip_member(zip_path: Path, member: str, size: Optional[int], limit: int = MAX_FILE_BYTES) -> bytes:
@@ -678,11 +693,11 @@ def usable(artifact: Optional[dict], limit: int) -> bool:
             and isinstance(artifact.get("size_in_bytes"), int) and artifact["size_in_bytes"] <= limit)
 
 
-def load_manifests(api, run_id: str, artifacts: list, passed: set, tmp: Path) -> tuple[dict, list[str]]:
-    """((os, runtime) -> Manifest for each overlay job that passed, errors)."""
+def load_manifests(api, run_id: str, artifacts: list, tmp: Path) -> tuple[dict, list[str]]:
+    """((os, runtime) -> the staging step's Manifest for each, errors)."""
     index = {a.get("name"): a for a in artifacts if isinstance(a, dict)}
     out, errors = {}, []
-    for os_name, runtime in sorted(passed):
+    for os_name, runtime in sorted(TEST_JOBS):
         name = manifest_artifact(os_name, runtime)
         art = index.get(name)
         if not usable(art, MAX_MANIFEST_BYTES):
@@ -714,25 +729,32 @@ class RunCheck:
 
 def check_recorded_run(api, repo: str, run_id: str, tested: str, pr: Pr, tmp: Path) -> RunCheck:
     """Everything fetch and verify ask of the run: check_run, check_jobs,
-    its manifests and the swap they plan."""
+    its manifests, that the product test job of every system and runtime
+    with staged files passed, and the swap they plan."""
     run = api.run(run_id)
     errors = check_run(run, repo, tested, pr)
     if errors:
         return RunCheck(run, {}, {}, [], errors)
-    why, passed = check_jobs(api.jobs(run_id), str(run.get("conclusion")))
+    why, tests = check_jobs(api.jobs(run_id))
     errors += why
-    if not passed:
-        errors.append(f"run {run_id} ran no dev-kit overlay test: nothing it tested to swap")
-    manifests, more = load_manifests(api, run_id, api.artifacts(run_id), passed, tmp)
+    if why and any(w.startswith(f"its {STAGE_JOB} job") for w in why):
+        return RunCheck(run, {}, {}, [], errors)
+    manifests, more = load_manifests(api, run_id, api.artifacts(run_id), tmp)
     errors += more
+    for key, m in sorted(manifests.items()):
+        if m.files and tests[key] != "success":
+            errors.append(f"the {key[0]} {key[1]} build staged {len(m.files)} file(s), but {TEST_JOBS[key]} "
+                          f"did not pass ({tests[key]}): they are untested")
+    if manifests and not any(m.files for m in manifests.values()):
+        errors.append(f"run {run_id} staged no dev-kit file: nothing to swap")
     entries, notes, more = plan_swap(manifests, run_id, tested)
     errors += more
     full = {m.full_refresh for m in manifests.values()}
     if run.get("event") == "workflow_dispatch":
         if full != {True}:
             errors.append(f"run {run_id} is a dispatch but not a dev-kit full refresh")
-        elif passed != set(OVERLAYS):
-            errors.append(f"run {run_id} is a dev-kit full refresh, but not all four overlay jobs passed")
+        elif any(v != "success" for v in tests.values()):
+            errors.append(f"run {run_id} is a dev-kit full refresh, but not all four product test jobs passed")
     if run.get("event") == "pull_request" and True in full:
         errors.append(f"run {run_id} is a pull request run with full-refresh manifests")
     return RunCheck(run, manifests, entries, notes, errors)
@@ -752,15 +774,21 @@ def main_moved(git: Git, since: str, until: str) -> list[str]:
 
 # ── verify ───────────────────────────────────────────────────────────────────
 
-# What writes, reads or acts on the manifests a swap is checked against. A
-# pull request that changes any of them gets no verified swap: its own code
-# would vouch for it (the checks run from the pull request's merge commit).
+# What stages the dev-kit files into the builds, writes, reads or acts on
+# the manifests a swap is checked against, and builds the packages the
+# staged files are tested in. A pull request that changes any of them gets
+# no verified swap: its own code would vouch for it (the checks run from the
+# pull request's merge commit). changes.py is not here: a new model family
+# needs its engine table (ENGINES) and comes with its swap; what it decides
+# runs from the pull request's code whatever this says.
 SWAP_CI_PATHS = (
-    ".github/script/ci/devkit_overlay.py", ".github/script/ci/devkit_swap.py",
-    ".github/script/ci/changes.py", ".github/script/ci/devkit_check.py",
-    ".github/actions/devkit-npu-overlay/", ".github/actions/devkit-overlay-package/",
-    ".github/actions/detect-changes/", ".github/workflows/build-and-test.yml",
-    ".github/workflows/devkit-engines.yml", ".github/workflows/devkit-xclbins.yml",
+    ".github/script/ci/devkit_stage.py", ".github/script/ci/devkit_overlay.py",
+    ".github/script/ci/devkit_swap.py", ".github/script/ci/devkit_check.py",
+    ".github/actions/devkit-stage-apply/", ".github/actions/detect-changes/",
+    ".github/actions/lin-build/", ".github/actions/win-build/",
+    ".github/workflows/build-and-test.yml", ".github/workflows/lin-build.yml",
+    ".github/workflows/win-build.yml", ".github/workflows/devkit-engines.yml",
+    ".github/workflows/devkit-xclbins.yml",
 )
 
 
@@ -856,7 +884,7 @@ def cmd_verify(args, api, git: Git) -> int:
         with open(summary, "a", encoding="utf-8") as fh:
             fh.write(f"### Dev-kit swap: {'verified' if ok else 'not verified'}\n\n"
                      + "".join(f"- {r}\n" for r in reasons)
-                     + ("\nNo product build, NPU test or dev-kit build runs for it.\n" if ok
+                     + ("\nNo product build, NPU test, dev-kit build or staging runs for it.\n" if ok
                         else "\nBuild and Test runs as for any other commit.\n"))
     return 0
 
@@ -921,9 +949,9 @@ def cmd_check(args, api, git: Git) -> int:
     for h in hand:
         print(f"::{level}::{h}")
     print(f"devkit_swap: check: {len(hand)} prebuilt file(s) edited by hand. src/lib and src/xclbins are "
-          "never edited by hand: change the dev-kit source (flm-dev-kit/), push, let Build and Test build "
-          "and NPU-test it, then run `python .github/script/ci/devkit_swap.py fetch` and push the swap "
-          "commit it makes (flm-dev-kit/AGENTS.md, \"Prebuilt binaries\").")
+          "never edited by hand: drop the edit, change the dev-kit source (flm-dev-kit/) instead, push, let "
+          "Build and Test build, stage and NPU-test it, then run `python .github/script/ci/devkit_swap.py "
+          "fetch` and push the swap commit it makes (flm-dev-kit/AGENTS.md, \"Prebuilt binaries\").")
     return 1 if SWAP_ENFORCE else 0
 
 
@@ -991,9 +1019,9 @@ def commit_message(run_id: str, tested: str, entries: list) -> str:
     engines = sum(1 for e in entries if e.kind == "engine")
     lines = [f"devkit: swap in the binaries Build and Test run {run_id} tested", "",
              f"The dev-kit engine libraries and kernels that run {run_id} built from",
-             f"{tested[:12]} and tested on the NPU (devkit_swap.py fetch): {engines} engine",
-             f"file(s), {len(entries) - engines} kernel(s). CI checks these bytes against the run's",
-             "overlay manifests.", ""]
+             f"{tested[:12]}, staged into its product builds and tested on the NPU",
+             f"(devkit_swap.py fetch): {engines} engine file(s), {len(entries) - engines} kernel(s).",
+             "CI checks these bytes against the run's staging manifests.", ""]
     lines += [f"  {e.repo_path}" for e in entries[:60]]
     if len(entries) > 60:
         lines.append(f"  ... and {len(entries) - 60} more")
@@ -1042,7 +1070,7 @@ def cmd_fetch(args, api, git: Git) -> int:
                        if file_sha256(safe_target(repo_root, e.repo_path)) != e.sha256),
                       key=lambda e: e.repo_path)
         if not todo:
-            raise SwapError("nothing to swap: the branch already has every file the run tested")
+            raise SwapError("nothing to swap: the branch already has every file the run staged")
         index = {a.get("name"): a for a in api.artifacts(run_id) if isinstance(a, dict)}
         needed = sorted({e.artifact for e in todo})
         gone = [n for n in needed if not usable(index.get(n), MAX_ARTIFACT_BYTES)]
@@ -1102,42 +1130,65 @@ def cmd_fetch(args, api, git: Git) -> int:
     return 0
 
 
-# ── guide ────────────────────────────────────────────────────────────────────
+# ── pending ──────────────────────────────────────────────────────────────────
 
-def cmd_guide(args, git: Git) -> int:
-    """Markdown for the job summary (stdout): the files this run tested
-    that differ from the tree of --tree, and the fetch command. Nothing
-    when there are none."""
+def pending_text(todo: list[str], run_id: str, head: str, full: bool, ci: list[str]) -> str:
+    lines = ["### Dev-kit swap pending", "",
+             f"This run built {len(todo)} dev-kit file(s) under src/lib and src/xclbins from this pull "
+             f"request's dev-kit source (e.g. `{todo[0]}`), staged them into its product builds and "
+             "NPU-tested those packages, but the branch does not have them yet. Without them main would "
+             "ship binaries out of step with the source (or, for a new engine, fail to build), so this "
+             "pull request cannot merge until they are committed. They are never edited by hand: from a "
+             f"clean checkout of the branch at `{head[:12]}`"
+             f"{' (the dev-kit full refresh)' if full else ''}, run", "",
+             f"```\npython .github/script/ci/devkit_swap.py fetch --run {run_id}\ngit push\n```", "",
+             "fetch commits exactly the bytes this run tested. Build and Test then verifies the swap "
+             "commit against this run and runs no NPU test again for it (flm-dev-kit/AGENTS.md, "
+             "\"Prebuilt binaries\")."]
+    if ci:
+        lines += ["", f"This pull request also changes the CI that stages and checks swaps "
+                      f"({', '.join(f'`{c}`' for c in ci[:3])}{', ...' if len(ci) > 3 else ''}), which no "
+                      "verified swap can come with: move that change to a pull request of its own first."]
+    return "\n".join(lines) + "\n"
+
+
+def cmd_pending(args, git: Git) -> int:
+    """PENDING_STEP: exit 1, with the fetch command, while the run staged
+    files the branch (--tree) does not have."""
     manifests = {}
-    for key in OVERLAYS:
+    for key in TEST_JOBS:
         path = args.manifests / manifest_artifact(*key) / MANIFEST_FILE
         if path.is_file():
             try:
                 manifests[key] = parse_manifest(path.read_bytes(), *key)
             except ManifestError as exc:
-                print(f"devkit_swap: guide: {path.parent.name}: {exc}", file=sys.stderr)
+                print(f"::error::devkit_swap pending: {path.parent.name}: {exc}")
+                return 1
     if not manifests:
+        print("devkit_swap: pending: no staging manifest: nothing staged")
         return 0
     entries, _, errors = plan_swap(manifests, args.run, args.head)
     if errors:
         for e in errors:
-            print(f"devkit_swap: guide: {e}", file=sys.stderr)
-        return 0
+            print(f"::error::devkit_swap pending: {e}")
+        return 1
     # Blob ids from the trees alone: a blob:none checkout reads no blob.
     have = git.blob_ids(args.tree, BINARY_ROOTS)
     todo = sorted(p for p, e in entries.items() if have.get(p) != e.git_sha1)
     if not todo:
+        print(f"devkit_swap: pending: the branch has all {len(entries)} staged file(s): no swap pending")
         return 0
-    full = any(m.full_refresh for m in manifests.values())
-    print("### Dev-kit binaries to commit\n")
-    print(f"This run built and NPU-tested {len(todo)} dev-kit file(s) under src/lib and src/xclbins that "
-          f"differ from the branch (e.g. `{todo[0]}`). They are never edited by hand: once the change is "
-          "ready, commit exactly these bytes from a clean checkout of the branch at "
-          f"`{args.head[:12]}`{' (the dev-kit full refresh)' if full else ''}:\n")
-    print(f"```\npython .github/script/ci/devkit_swap.py fetch --run {args.run}\ngit push\n```\n")
-    print("Build and Test then checks the swap commit against this run and runs no NPU test for it "
-          "(flm-dev-kit/AGENTS.md, \"Prebuilt binaries\").")
-    return 0
+    ci = swap_ci_changed(git, args.base, args.head) if args.base else []
+    text = pending_text(todo, args.run, args.head, any(m.full_refresh for m in manifests.values()), ci)
+    print(text, end="")
+    if args.summary:
+        with open(args.summary, "a", encoding="utf-8") as fh:
+            fh.write(text)
+    print(f"::error title={PENDING_STEP}::{len(todo)} staged dev-kit file(s) are not committed: run "
+          f"`python .github/script/ci/devkit_swap.py fetch --run {args.run}` on a clean checkout of "
+          f"{args.head[:12]} and push; CI then verifies the swap and runs no NPU test again"
+          + (". First move the swap CI change to its own pull request." if ci else "."))
+    return 1
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
@@ -1163,16 +1214,19 @@ def main(argv: Optional[list[str]] = None, api=None) -> int:
         p.add_argument("--repo-root", default=str(REPO_ROOT))
         if name == "verify":
             p.add_argument("--github-output", action="store_true")
-    p = sub.add_parser("guide")
+    p = sub.add_parser("pending")
     p.add_argument("--manifests", type=Path, required=True)
-    p.add_argument("--head", required=True, help="the commit the run tested")
+    p.add_argument("--head", required=True, help="the commit the run built")
     p.add_argument("--run", required=True)
-    p.add_argument("--tree", default="HEAD", help="the commit whose files to compare (default HEAD)")
+    p.add_argument("--tree", default="", help="the commit whose files to compare (default --head)")
+    p.add_argument("--base", default="", help="the pull request's base, to name a swap CI change")
+    p.add_argument("--summary", default="", help="also append the Markdown here")
     p.add_argument("--repo-root", default=str(REPO_ROOT))
     args = parser.parse_args(argv)
     try:
-        if args.cmd == "guide":
-            return cmd_guide(args, Git(Path(args.repo_root)))
+        if args.cmd == "pending":
+            args.tree = args.tree or args.head
+            return cmd_pending(args, Git(Path(args.repo_root)))
         if args.cmd == "fetch":
             git = Git(Path.cwd())
             args.repo = args.repo or repo_from_remote(git, args.remote)

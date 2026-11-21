@@ -3,7 +3,7 @@
 # Portions of this file consist of AI-generated content.
 """Fast static checks of the FLM dev kit's CI data (flm-dev-kit/).
 
-    devkit_check.py [--repo <root>] [--base <sha> [--head <sha>]]
+    devkit_check.py [--repo <root>] [--base <sha> [--head <sha>]] [--pending-ok [--github-output]]
 
 Checks, each failure printed as "devkit_check: error: ..." (exit 1):
 
@@ -63,7 +63,18 @@ Checks, each failure printed as "devkit_check: error: ..." (exit 1):
                 (its Makefile TARGET and CMakeLists.txt add_library, which
                 must agree), and each such library ships all three in both.
                 CATALOG_ALLOW excuses named files and alias tags, each with
-                its reason; an entry that excuses nothing is an error
+                its reason; an entry that excuses nothing is an error.
+                Pending swap: with --pending-ok (Build and Test's
+                devkit-static, pull requests only) an assigned slot (4) or
+                an engine library file (7) src/ lacks is no error but
+                "pending": printed, and written as pending=<csv> with
+                --github-output. The pull request's run must then stage
+                every one (devkit_stage.py --pending fails otherwise, and
+                summary fails a run with pending binaries that staged
+                nothing), so a new model or engine can get through CI
+                before its swap commits the binaries. Without --pending-ok
+                (pushes, the nightly, a release) they are errors, so main
+                never lacks a binary
   rtp lock      FLM_Xclbin/rtp_addresses.lock.txt (devkit_rtp_lock.py) parses
                 and names only artifacts a build unit produces and some
                 kernel_assignment.json model uses. With --base, when the pull
@@ -91,15 +102,17 @@ Checks, each failure printed as "devkit_check: error: ..." (exit 1):
                 grants exactly contents: read and actions: read and passes
                 no secrets. Skipped when the files are absent
   swap wiring   the names devkit_swap.py reads another Build and Test run
-                by match the CI that makes them: devkit-npu-overlay uploads
-                manifest.json as devkit-overlay-manifest-<os>-<runtime>
-                (MANIFEST_ARTIFACT); build-and-test.yml has one job named as
-                OVERLAYS gives for each os and runtime, running
-                devkit-npu-overlay with that os, runtime and
-                devkit-libs-<lin|win>-<runtime>, a summary job and the
-                devkit-engines and devkit-xclbins jobs; its changes job runs
+                by match the CI that makes them: build-and-test.yml has a
+                devkit-stage job (STAGE_JOB) that runs devkit_stage.py and
+                uploads manifest-<os>-<runtime>/manifest.json as
+                devkit-stage-manifest-<os>-<runtime> (MANIFEST_ARTIFACT,
+                MANIFEST_FILE) for each os and runtime; one job named as
+                TEST_JOBS gives for each, downloading that runtime's product
+                package; a summary job with a step named PENDING_STEP that
+                runs devkit_swap.py pending; the devkit-engines and
+                devkit-xclbins jobs; and a changes job that runs
                 devkit_swap.py verify and check with actions: read. Skipped
-                when the files are absent
+                when the workflow is absent
   notices       with --base: every file added under flm-dev-kit/ between the
                 merge base of --base and --head (default HEAD), of a source or
                 script type, has an AMD copyright notice in its first 15
@@ -590,9 +603,11 @@ def shipped_names(lib: str) -> tuple[str, ...]:
 
 
 def check_catalog(repo: Path, catalog: dict, assignment: dict, engines: dict,
-                  errors: list, allow: Optional[dict] = None) -> str:
+                  errors: list, allow: Optional[dict] = None, pending: Optional[list] = None) -> str:
     """src/model_list.json, src/xclbins and src/lib against kernel_assignment
-    .json and engines.json; returns a note. allow: CATALOG_ALLOW."""
+    .json and engines.json; returns a note. allow: CATALOG_ALLOW. pending:
+    a list (--pending-ok) gets the paths of the binaries rules 4 and 7 find
+    missing, instead of errors."""
     allow = CATALOG_ALLOW if allow is None else allow
     used: set[str] = set()
 
@@ -649,6 +664,9 @@ def check_catalog(repo: Path, catalog: dict, assignment: dict, engines: dict,
             continue
         for slot in sorted(e.get("kernels") or {}):
             if not (repo / SHIPPED_XCLBINS / e["folder"] / slot).is_file():
+                if pending is not None:
+                    pending.append(f"{SHIPPED_XCLBINS}/{e['folder']}/{slot}")
+                    continue
                 errors.append(f"{ASSIGNMENT}: {m} assigns {slot}, but {SHIPPED_XCLBINS}/{e['folder']}/{slot} "
                               f"is not shipped: add the kernel there, or drop the slot from {ASSIGNMENT} "
                               f"and {ASSIGNMENT_MD}")
@@ -708,7 +726,9 @@ def check_catalog(repo: Path, catalog: dict, assignment: dict, engines: dict,
                           f"the sources that build it under {DLL}/detail/<dir>/ and the dir to {ENGINES}")
         for lib, d in sorted(libs.items()):
             missing = [f for f in shipped_names(lib) if f not in files]
-            if missing:
+            if missing and pending is not None:
+                pending += [f"src/lib/{rt}/{f}" for f in missing]
+            elif missing:
                 errors.append(f"{ENGINES}: {d} builds {lib}, but src/lib/{rt}/ lacks {', '.join(missing)}, "
                               f"which src/CMakeLists.txt links for {rt} (lib<name>.so on Linux, <name>.lib "
                               "and <name>.dll on Windows): ship them, or drop the dir from "
@@ -1024,9 +1044,6 @@ def check_bench_workflows(repo: Path, errors: list) -> int:
     return 3
 
 
-OVERLAY_ACTION = ".github/actions/devkit-npu-overlay/action.yml"
-
-
 def _jobs(text: str) -> dict[str, list[str]]:
     """Job id -> its lines, for the jobs: block of a workflow."""
     jobs: dict[str, list[str]] = {}
@@ -1050,32 +1067,40 @@ def check_swap_wiring(repo: Path, errors: list) -> int:
     makes them (see the docstring); returns how many files were checked."""
     try:
         build = (repo / BUILD_WORKFLOW).read_text(encoding="utf-8")
-        action = (repo / OVERLAY_ACTION).read_text(encoding="utf-8")
     except OSError:
         return 0
     import devkit_swap  # here: devkit_swap imports this module
     where = "devkit_swap.py"
     if devkit_swap.WORKFLOW_PATH != BUILD_WORKFLOW:
         errors.append(f"{where}: WORKFLOW_PATH is {devkit_swap.WORKFLOW_PATH}, not {BUILD_WORKFLOW}")
-    upload = re.search(r"name:[ \t]*(devkit-overlay-manifest-.+?)[ \t]*\n\s*path:[ \t]*(.+?)[ \t]*$", action, re.M)
-    want = devkit_swap.MANIFEST_ARTIFACT.format(os="${{ inputs.os }}", runtime="${{ inputs.runtime }}")
-    if not upload or upload.group(1) != want or not upload.group(2).endswith("/" + devkit_swap.MANIFEST_FILE):
-        errors.append(f"{OVERLAY_ACTION}: must upload .../{devkit_swap.MANIFEST_FILE} as {want}, the "
-                      f"artifact {where} fetch and verify read (MANIFEST_ARTIFACT, MANIFEST_FILE)")
     jobs = _jobs(build)
-    for job in (devkit_swap.SUMMARY_JOB,) + tuple(p.split(" / ")[0] for p in devkit_swap.BUILD_JOB_PREFIXES):
+    for job in (devkit_swap.SUMMARY_JOB, devkit_swap.STAGE_JOB) + tuple(
+            p.split(" / ")[0] for p in devkit_swap.BUILD_JOB_PREFIXES):
         if job not in jobs:
             errors.append(f"{BUILD_WORKFLOW}: no job {job}, which {where} reads a run's results by")
-    for (os_name, runtime), name in devkit_swap.OVERLAYS.items():
+    stage = "\n".join(jobs.get(devkit_swap.STAGE_JOB, []))
+    if stage and ("devkit_stage.py" not in stage or any(re.match(r"^    name:", l) for l in
+                                                         jobs[devkit_swap.STAGE_JOB])):
+        errors.append(f"{BUILD_WORKFLOW}: the {devkit_swap.STAGE_JOB} job must run devkit_stage.py and keep "
+                      f"its id as its name ({where} STAGE_JOB)")
+    for (os_name, runtime), name in devkit_swap.TEST_JOBS.items():
+        artifact = devkit_swap.manifest_artifact(os_name, runtime)
+        upload = re.search(rf"name:[ \t]*{re.escape(artifact)}[ \t]*\n\s*path:[ \t]*(.+?)[ \t]*$", stage, re.M)
+        if not upload or not upload.group(1).endswith(
+                f"/manifest-{os_name}-{runtime}/{devkit_swap.MANIFEST_FILE}"):
+            errors.append(f"{BUILD_WORKFLOW}: the {devkit_swap.STAGE_JOB} job must upload "
+                          f".../manifest-{os_name}-{runtime}/{devkit_swap.MANIFEST_FILE} as {artifact}, the "
+                          f"artifact {where} reads (MANIFEST_ARTIFACT, MANIFEST_FILE)")
         found = [lines for lines in jobs.values() if f"    name: {name}" in lines]
-        body = "\n".join(found[0]) if len(found) == 1 else ""
-        libs = devkit_swap.libs_artifact(os_name, runtime)
-        if (not body or "uses: ./.github/actions/devkit-npu-overlay" not in body
-                or not re.search(rf"^\s+os: {os_name}\s*$", body, re.M)
-                or not re.search(rf"^\s+runtime: {runtime}\s*$", body, re.M)
-                or f"'{libs}'" not in body):
-            errors.append(f"{BUILD_WORKFLOW}: {where} OVERLAYS expects exactly one job named \"{name}\" "
-                          f"running devkit-npu-overlay with os {os_name}, runtime {runtime} and libs {libs}")
+        if len(found) != 1:
+            errors.append(f"{BUILD_WORKFLOW}: {where} TEST_JOBS expects exactly one job named \"{name}\" "
+                          f"(the product test job of {os_name} {runtime})")
+    summary = jobs.get(devkit_swap.SUMMARY_JOB, [])
+    step = next((i for i, l in enumerate(summary) if l.strip() == f"- name: {devkit_swap.PENDING_STEP}"), None)
+    if step is None or "devkit_swap.py pending" not in "\n".join(summary[step:step + 30]):
+        errors.append(f"{BUILD_WORKFLOW}: the summary job needs a step named \"{devkit_swap.PENDING_STEP}\" "
+                      f"running devkit_swap.py pending ({where} PENDING_STEP: fetch accepts a run whose only "
+                      "failure is that step)")
     changes_job = "\n".join(jobs.get("changes", []))
     for sub in ("verify", "check"):
         if f"devkit_swap.py {sub}" not in changes_job:
@@ -1083,11 +1108,12 @@ def check_swap_wiring(repo: Path, errors: list) -> int:
     if not re.search(r"^      actions: read\s*$", changes_job, re.M):
         errors.append(f"{BUILD_WORKFLOW}: the changes job needs actions: read (devkit_swap.py verify reads "
                       "another run's manifests)")
-    return 2
+    return 1
 
 
-def run(repo: Path, base: str = "", head: str = "HEAD") -> tuple[list[str], list[str]]:
-    """(errors, notes) for the tree at repo."""
+def run(repo: Path, base: str = "", head: str = "HEAD",
+        pending: Optional[list] = None) -> tuple[list[str], list[str]]:
+    """(errors, notes) for the tree at repo; pending: see check_catalog."""
     errors: list[str] = []
     notes: list[str] = []
     units = load_json(repo, BUILD_UNITS, errors)
@@ -1114,7 +1140,7 @@ def run(repo: Path, base: str = "", head: str = "HEAD") -> tuple[list[str], list
         notes.append(f"engines: {len(engines.get('engines') or {})} engines, "
                      f"{len(engines.get('shared') or [])} shared")
     if catalog is not None and engines is not None and assignment is not None:
-        notes.append(check_catalog(repo, catalog, models, engines, errors))
+        notes.append(check_catalog(repo, catalog, models, engines, errors, pending=pending))
     notes.append(f"rtp lock: {check_rtp_lock(repo, index, assignment, errors)} stanzas")
     notes.append(f"Bsymbolic: {check_bsymbolic(repo, errors)} Makefiles")
     notes.append(f"bench workflows: {check_bench_workflows(repo, errors)} checked")
@@ -1135,10 +1161,25 @@ def main(argv: Optional[list[str]] = None) -> int:
                              "merge base with this commit; "
                              "empty or all-zero skips that check.")
     parser.add_argument("--head", default="HEAD")
+    parser.add_argument("--pending-ok", action="store_true",
+                        help="a pull request's run: missing assigned slots and engine libraries are pending "
+                             "(its run must stage them), not errors")
+    parser.add_argument("--github-output", action="store_true", help="append pending=<csv> to $GITHUB_OUTPUT")
     args = parser.parse_args(argv)
-    errors, notes = run(args.repo, args.base, args.head)
+    pending: Optional[list] = [] if args.pending_ok else None
+    errors, notes = run(args.repo, args.base, args.head, pending)
     for note in notes:
         print(f"devkit_check: {note}")
+    for path in pending or []:
+        print(f"devkit_check: pending swap: {path} is not in src/ yet; this pull request's run must stage it, "
+              "and its swap commit it")
+    if args.github_output:
+        target = os.environ.get("GITHUB_OUTPUT")
+        if not target:
+            print("--github-output given but $GITHUB_OUTPUT is not set", file=sys.stderr)
+            return 2
+        with open(target, "a", encoding="utf-8") as fh:
+            fh.write(f"pending={','.join(sorted(set(pending or [])))}\n")
     for err in errors:
         print(f"devkit_check: error: {err}")
     if errors:

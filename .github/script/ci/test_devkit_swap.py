@@ -1,6 +1,7 @@
 # Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
 # Portions of this file consist of AI-generated content.
-"""Tests for devkit_swap.py and the manifests devkit_overlay.py writes:
+"""Tests for devkit_swap.py (the manifests devkit_stage.py writes are
+tested in test_devkit_stage.py):
 python3 -m unittest discover -s ci -p 'test_*.py' -t ci
 
 The GitHub API is FakeApi (devkit_swap.Api's methods over in-memory runs,
@@ -27,7 +28,6 @@ from unittest import mock
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import devkit_check as dc  # noqa: E402
-import devkit_overlay as do  # noqa: E402
 import devkit_swap as ds  # noqa: E402
 
 REPO = "o/r"
@@ -73,20 +73,27 @@ def zip_of(files: dict[str, bytes], symlinks: tuple = ()) -> bytes:
 
 
 def manifest(os_name: str, runtime: str, files: dict[str, bytes], *, head: str, base: str,
-             run_id: str = RUN, tests_ran: bool = True, full_refresh: bool = False,
-             untested: tuple = ()) -> dict:
-    """A schema 1 manifest as devkit_overlay.py writes it, for repo path -> bytes."""
+             run_id: str = RUN, full_refresh: bool = False) -> dict:
+    """A schema 2 manifest as devkit_stage.py writes it, for repo path -> bytes."""
     entries = []
     for path, data in sorted(files.items()):
         kind = "kernel" if path.startswith("src/xclbins/") else "engine"
         prefix = "src/xclbins/" if kind == "kernel" else f"src/lib/{runtime}/"
         artifact = ds.XCLBINS_ARTIFACT if kind == "kernel" else ds.libs_artifact(os_name, runtime)
-        entries.append({"kind": kind, "package_path": path[len(prefix):], "repo_path": path,
-                        "artifact": artifact, "artifact_path": path[len(prefix):], **digests(data),
-                        "tested": tests_ran and path not in untested})
-    return {"schema": 1, "os": os_name, "runtime": runtime, "run_id": run_id, "run_attempt": "1",
-            "head_sha": head, "base_sha": base, "full_refresh": full_refresh, "tests_ran": tests_ran,
-            "files": entries}
+        entries.append({"kind": kind, "repo_path": path, "artifact": artifact,
+                        "artifact_path": path[len(prefix):], **digests(data), "new": False})
+    return {"schema": 2, "os": os_name, "runtime": runtime, "run_id": run_id, "run_attempt": "1",
+            "head_sha": head, "base_sha": base, "full_refresh": full_refresh, "files": entries}
+
+
+def summary_job(pending: bool) -> dict:
+    """Build and Test's summary job as the jobs API lists it: failed at
+    PENDING_STEP alone while a swap is pending."""
+    steps = [{"name": "Set up job", "conclusion": "success"}, {"name": "Gate and verdict", "conclusion": "success"},
+             {"name": "Dev-kit checks", "conclusion": "success"},
+             {"name": ds.PENDING_STEP, "conclusion": "failure" if pending else "success"},
+             {"name": "Complete job", "conclusion": "success"}]
+    return {"name": "summary", "conclusion": "failure" if pending else "success", "steps": steps}
 
 
 class FakeApi:
@@ -183,7 +190,9 @@ NEW = {XRT_LIN: blob("new-so", 200), XRT_WIN: blob("new-dll", 300), XRT_LIB: blo
 
 class SwapCase(unittest.TestCase):
     """A pull request (feature, #7) whose head changed dev-kit source and whose
-    Build and Test run 100 passed, with the Linux and Windows XRT overlays."""
+    Build and Test run 100 staged the Linux and Windows XRT builds' files,
+    passed every job and failed only at summary's PENDING_STEP (the swap is
+    pending, as it always is before fetch)."""
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -204,24 +213,27 @@ class SwapCase(unittest.TestCase):
         self.addCleanup(os.chdir, cwd)
 
     def add_run(self, run_id: str, *, event: str = "pull_request", head: str | None = None,
-                full_refresh: bool = False, overlays: tuple = (("linux", "xrt"), ("windows", "xrt")),
+                full_refresh: bool = False, staged: tuple = (("linux", "xrt"), ("windows", "xrt")),
                 new: dict | None = None, manifests: dict | None = None, jobs: list | None = None,
-                **run_fields) -> None:
+                pending: bool = True, **run_fields) -> None:
         head = head or self.head
         new = NEW if new is None else new
         self.api.runs[run_id] = {
             "id": int(run_id), "path": ds.WORKFLOW_PATH, "repository": {"full_name": REPO},
             "head_repository": {"full_name": REPO}, "head_sha": head, "head_branch": "feature",
-            "status": "completed", "conclusion": "success", "event": event,
+            "status": "completed", "conclusion": "failure" if pending else "success", "event": event,
             "pull_requests": [{"number": PR}] if event == "pull_request" else [], **run_fields}
         self.api.jobs_by_run[run_id] = jobs if jobs is not None else (
-            [{"name": "summary", "conclusion": "success"},
+            [summary_job(pending), {"name": ds.STAGE_JOB, "conclusion": "success"},
              {"name": "devkit-engines / Linux XRT", "conclusion": "success"},
              {"name": "devkit-xclbins / assemble", "conclusion": "success"}]
-            + [{"name": ds.OVERLAYS[k], "conclusion": "success"} for k in overlays])
-        for os_name, runtime in overlays:
-            mine = {p: d for p, d in new.items() if p.startswith("src/xclbins/")
-                    or (p.startswith(f"src/lib/{runtime}/") and (p.endswith(".so") == (os_name == "linux")))}
+            + [{"name": name, "conclusion": "success"} for name in ds.TEST_JOBS.values()])
+        # The staging step uploads a manifest for every system and runtime,
+        # empty where it staged nothing.
+        for os_name, runtime in ds.TEST_JOBS:
+            mine = {p: d for p, d in new.items() if (os_name, runtime) in staged and (
+                p.startswith("src/xclbins/")
+                or (p.startswith(f"src/lib/{runtime}/") and (p.endswith(".so") == (os_name == "linux"))))}
             m = (manifests or {}).get((os_name, runtime)) or manifest(
                 os_name, runtime, mine, head=head, base=self.base, run_id=run_id, full_refresh=full_refresh)
             self.api.add_artifact(run_id, ds.manifest_artifact(os_name, runtime),
@@ -296,11 +308,24 @@ class Fetch(SwapCase):
             self.assertIn(path, out)
         self.assertEqual(self.repo.git("rev-parse", "HEAD"), self.head)
         self.assertEqual(self.repo.git("status", "--porcelain"), "")
-        self.assertEqual(self.api.downloads, [a["id"] for a in self.api.artifacts(RUN)
-                                              if a["name"].startswith("devkit-overlay-manifest-")])
+        self.assertEqual(sorted(self.api.downloads), [a["id"] for a in self.api.artifacts(RUN)
+                                                      if a["name"].startswith("devkit-stage-manifest-")])
+
+    def test_pending_is_the_one_failure_allowed(self):
+        # The run failed, at summary's PENDING_STEP alone: that is the swap.
+        self.assertEqual(self.api.runs[RUN]["conclusion"], "failure")
+        code, out, err = self.fetch()
+        self.assertEqual(code, 0, out + err)
+
+    def test_run_without_pending_failure(self):
+        self.api.runs.clear()
+        self.api.artifacts_by_run.clear()
+        self.add_run(RUN, pending=False)
+        code, out, err = self.fetch()
+        self.assertEqual(code, 0, out + err)
 
     def test_full_refresh_run(self):
-        self.add_run("200", event="workflow_dispatch", full_refresh=True, overlays=tuple(ds.OVERLAYS),
+        self.add_run("200", event="workflow_dispatch", full_refresh=True, staged=tuple(ds.TEST_JOBS),
                      new={**NEW, "src/lib/hrx/libfoo_npu.so": blob("h-so"), "src/lib/hrx/foo_npu.dll": blob("h-dll"),
                           "src/lib/hrx/foo_npu.lib": blob("h-lib")})
         code, out, err = self.fetch("--run", "200")
@@ -360,36 +385,44 @@ class Fetch(SwapCase):
         self.refused("not #7", "--run", RUN)
 
     def test_summary_failed(self):
-        self.api.jobs_by_run[RUN][0]["conclusion"] = "failure"
-        self.api.runs[RUN]["conclusion"] = "failure"
-        self.refused("its summary job did not pass")
+        # Another summary step failed beside the pending one.
+        self.api.jobs_by_run[RUN][0]["steps"][1]["conclusion"] = "failure"
+        self.refused("its summary job did not pass (failure): Gate and verdict")
 
-    def test_overlay_failed(self):
-        self.api.jobs_by_run[RUN].append({"name": ds.OVERLAYS[("linux", "hrx")], "conclusion": "failure"})
-        self.refused("Test Linux HRX dev-kit overlay did not pass")
+    def test_summary_cancelled(self):
+        self.api.jobs_by_run[RUN][0]["conclusion"] = "cancelled"
+        self.refused("its summary job did not pass (cancelled)")
+
+    def test_test_job_failed(self):
+        name = ds.TEST_JOBS[("linux", "xrt")]
+        next(j for j in self.api.jobs_by_run[RUN] if j["name"] == name)["conclusion"] = "failure"
+        self.refused(f"{name} (failure)")
+
+    def test_staged_but_untested(self):
+        name = ds.TEST_JOBS[("windows", "xrt")]
+        next(j for j in self.api.jobs_by_run[RUN] if j["name"] == name)["conclusion"] = "skipped"
+        self.refused(f"the windows xrt build staged 3 file(s), but {name} did not pass (skipped): they are untested")
 
     def test_build_failed(self):
         self.api.jobs_by_run[RUN].append({"name": "devkit-xclbins / build (3)", "conclusion": "failure"})
-        self.refused("devkit-xclbins / build (3) did not pass")
+        self.refused("devkit-xclbins / build (3) (failure)")
 
     def test_failed_run_is_refused_even_if_only_a_bench_failed(self):
-        self.api.runs[RUN]["conclusion"] = "failure"
         self.api.jobs_by_run[RUN].append({"name": "devkit-bench / Bench lin-xrt m:1", "conclusion": "failure"})
-        self.refused("the run concluded failure, not success (devkit-bench / Bench lin-xrt m:1)")
+        self.refused("devkit-bench / Bench lin-xrt m:1 (failure)")
 
-    def test_no_overlay_ran(self):
-        self.api.jobs_by_run[RUN] = [j for j in self.api.jobs_by_run[RUN] if "overlay" not in j["name"]]
-        self.refused("ran no dev-kit overlay test")
+    def test_nothing_staged(self):
+        self.api.jobs_by_run[RUN] = [j for j in self.api.jobs_by_run[RUN] if j["name"] != ds.STAGE_JOB]
+        self.refused("its devkit-stage job did not run or pass (not found)")
 
-    def test_tests_did_not_run(self):
+    def test_empty_manifests(self):
         self.api.artifacts_by_run[RUN] = []
-        self.add_run(RUN, manifests={("linux", "xrt"): manifest(
-            "linux", "xrt", {XRT_LIN: NEW[XRT_LIN]}, head=self.head, base=self.base, tests_ran=False)})
-        self.refused("tested nothing")
+        self.add_run(RUN, staged=())
+        self.refused("staged no dev-kit file: nothing to swap")
 
     def test_manifest_expired(self):
         for a in self.api.artifacts(RUN):
-            if a["name"].startswith("devkit-overlay-manifest-"):
+            if a["name"].startswith("devkit-stage-manifest-"):
                 a["expired"] = True
         self.refused("is missing, expired or too large")
 
@@ -460,17 +493,18 @@ class Fetch(SwapCase):
 
     def test_half_updated_runtime(self):
         self.api.artifacts_by_run[RUN] = []
-        self.add_run(RUN, overlays=(("linux", "xrt"),))
-        self.api.jobs_by_run[RUN].append({"name": ds.OVERLAYS[("windows", "xrt")], "conclusion": "skipped"})
-        self.refused("did not both test the engines foo_npu")
+        self.add_run(RUN, staged=(("linux", "xrt"),))
+        self.refused("did not both stage the engines foo_npu")
 
     def test_dispatch_that_is_no_full_refresh(self):
-        self.add_run("200", event="workflow_dispatch", overlays=tuple(ds.OVERLAYS))
+        self.add_run("200", event="workflow_dispatch", staged=tuple(ds.TEST_JOBS))
         self.refused("is a dispatch but not a dev-kit full refresh", "--run", "200")
 
-    def test_full_refresh_needs_all_four_overlays(self):
+    def test_full_refresh_needs_all_four_test_jobs(self):
         self.add_run("200", event="workflow_dispatch", full_refresh=True)
-        self.refused("not all four overlay jobs passed", "--run", "200")
+        name = ds.TEST_JOBS[("linux", "hrx")]
+        next(j for j in self.api.jobs_by_run["200"] if j["name"] == name)["conclusion"] = "skipped"
+        self.refused("not all four product test jobs passed", "--run", "200")
 
 
 class Verify(SwapCase):
@@ -545,10 +579,10 @@ class Verify(SwapCase):
 
     def test_run_failed_after_all(self):
         self.swapped()
-        self.api.jobs_by_run[RUN][0]["conclusion"] = "failure"
+        self.api.jobs_by_run[RUN][0]["steps"][2]["conclusion"] = "failure"
         ok, why = self.verify()
         self.assertFalse(ok)
-        self.assertIn("summary job did not pass", why)
+        self.assertIn("summary job did not pass (failure): Dev-kit checks", why)
 
     def test_fork(self):
         self.swapped()
@@ -580,7 +614,8 @@ class Verify(SwapCase):
         self.assertIn("tested 2 file(s)", why)
         self.assertIn("does not carry", why)
         code, out = self.check()
-        self.assertIn(f"::warning::{XRT_LIN}", out)
+        self.assertEqual(code, 1)
+        self.assertIn(f"::error::{XRT_LIN}", out)
 
     def test_pull_request_that_changes_swap_ci(self):
         # The pull request's own code writes and checks the manifests: a
@@ -599,7 +634,7 @@ class Verify(SwapCase):
         self.assertEqual(self.api.downloads, [])
         code, out = self.check()
         self.assertIn("not trusted, the pull request also changes the dev-kit CI", out)
-        self.assertIn(f"::warning::{XRT_LIN}", out)
+        self.assertIn(f"::error::{XRT_LIN}", out)
 
     def test_unexpected_error_is_not_verified(self):
         self.swapped()
@@ -623,54 +658,61 @@ class Check(SwapCase):
         self.assertIn("no prebuilt binary changed", out)
         self.assertEqual(self.api.downloads, [])
 
-    def test_hand_edit_warns(self):
+    def test_hand_edit_fails(self):
+        self.assertTrue(ds.SWAP_ENFORCE)
         self.repo.commit({XRT_LIN: b"hand"})
         code, out = self.check()
-        self.assertEqual(code, 0)
-        self.assertIn(f"::warning::{XRT_LIN} is not the bytes a verified swap commit", out)
+        self.assertEqual(code, 1)
+        self.assertIn(f"::error::{XRT_LIN} is not the bytes a verified swap commit", out)
         self.assertIn("devkit_swap.py fetch", out)
 
-    def test_enforced(self):
+    def test_not_enforced_warns(self):
         self.repo.commit({XRT_LIN: b"hand"})
-        with mock.patch.object(ds, "SWAP_ENFORCE", True):
+        with mock.patch.object(ds, "SWAP_ENFORCE", False):
             code, out = self.check()
-        self.assertEqual(code, 1)
-        self.assertIn(f"::error::{XRT_LIN}", out)
+        self.assertEqual(code, 0)
+        self.assertIn(f"::warning::{XRT_LIN}", out)
 
     def test_verified_swap_passes(self):
         code, out, err = self.fetch()
         self.assertEqual(code, 0, out + err)
         code, out = self.check()
         self.assertEqual(code, 0)
-        self.assertNotIn("::warning::", out)
+        self.assertNotIn("::error::", out)
         self.assertIn("4 file(s) verified", out)
 
     def test_edit_after_the_swap(self):
         self.fetch()
         self.repo.commit({KERNEL: blob("later", 150)})
         code, out = self.check()
-        self.assertIn(f"::warning::{KERNEL}", out)
-        self.assertNotIn(f"::warning::{XRT_LIN}", out)
+        self.assertEqual(code, 1)
+        self.assertIn(f"::error::{KERNEL}", out)
+        self.assertNotIn(f"::error::{XRT_LIN}", out)
 
     def test_deletions(self):
         self.repo.git("rm", "-q", "src/xclbins/M-NPU2/extra.xclbin")
         self.repo.git("commit", "-q", "-m", "drop an unassigned kernel")
         code, out = self.check()
-        self.assertNotIn("::warning::", out)
+        self.assertEqual(code, 0, out)
         self.repo.git("rm", "-q", KERNEL)
         self.repo.git("commit", "-q", "-m", "drop an assigned kernel")
         code, out = self.check()
-        self.assertIn(f"::warning::{KERNEL} is deleted, but the dev kit still assigns or builds it", out)
+        self.assertIn(f"::error::{KERNEL} is deleted, but the dev kit still assigns or builds it", out)
 
     def test_third_party(self):
         self.repo.commit({"src/lib/xrt/libaiebu.a": b"new aiebu", "src/lib/zlib1.dll": b"new zlib"})
         code, out = self.check()
-        self.assertNotIn("::warning::", out)
+        self.assertEqual(code, 0, out)
         self.assertIn("third-party", out)
 
-    def test_unexpected_error_warns_while_not_enforced(self):
+    def test_unexpected_error_fails_when_enforced(self):
         self.repo.commit({XRT_LIN: b"hand"})
         with mock.patch.object(ds.devkit_check, "required_binaries", side_effect=ValueError("bad data")):
+            code, out = self.check()
+        self.assertEqual(code, 1)
+        self.assertIn("unexpected ValueError: bad data", out)
+        with mock.patch.object(ds.devkit_check, "required_binaries", side_effect=ValueError("bad data")), \
+                mock.patch.object(ds, "SWAP_ENFORCE", False):
             code, out = self.check()
         self.assertEqual(code, 0)
         self.assertIn("::warning::devkit_swap check could not run: unexpected ValueError: bad data", out)
@@ -678,38 +720,65 @@ class Check(SwapCase):
     def test_fake_trailers_do_not_excuse(self):
         self.repo.commit({XRT_LIN: b"hand"}, f"x\n\n{ds.TRAILER_RUN}: {RUN}\n{ds.TRAILER_TESTED}: {self.head}")
         code, out = self.check()
-        self.assertIn(f"::warning::{XRT_LIN}", out)
+        self.assertIn(f"::error::{XRT_LIN}", out)
         self.assertIn("does not verify", out)
 
 
-class Guide(SwapCase):
+class Pending(SwapCase):
+    """summary's PENDING_STEP: fails while the branch lacks the staged files."""
+
     def write_manifests(self, new: dict) -> Path:
         d = self.tmp / "manifests"
-        for os_name, runtime in (("linux", "xrt"), ("windows", "xrt")):
-            mine = {p: v for p, v in new.items() if p.startswith("src/xclbins/")
-                    or p.endswith(".so") == (os_name == "linux")}
+        for os_name, runtime in ds.TEST_JOBS:
+            mine = {p: v for p, v in new.items() if runtime == "xrt" and (
+                p.startswith("src/xclbins/") or p.endswith(".so") == (os_name == "linux"))}
             m = manifest(os_name, runtime, mine, head=self.head, base=self.base)
             (d / ds.manifest_artifact(os_name, runtime)).mkdir(parents=True)
             (d / ds.manifest_artifact(os_name, runtime) / ds.MANIFEST_FILE).write_text(json.dumps(m))
         return d
 
-    def guide(self, d: Path) -> str:
-        code, out, _ = self.main("guide", "--manifests", str(d), "--head", self.head, "--run", RUN,
-                                 "--repo-root", str(self.repo.path))
-        self.assertEqual(code, 0)
-        return out
+    def pending(self, d: Path, *extra: str) -> tuple[int, str]:
+        summary = self.tmp / "summary.md"
+        code, out, _ = self.main("pending", "--manifests", str(d), "--head", self.head, "--run", RUN,
+                                 "--summary", str(summary), "--repo-root", str(self.repo.path), *extra)
+        self.summary = summary.read_text(encoding="utf-8") if summary.is_file() else ""
+        return code, out
 
-    def test_command_when_files_differ(self):
-        out = self.guide(self.write_manifests(NEW))
-        self.assertIn(f"devkit_swap.py fetch --run {RUN}", out)
+    def test_fails_with_the_command_when_files_differ(self):
+        code, out = self.pending(self.write_manifests(NEW))
+        self.assertEqual(code, 1)
+        self.assertIn(f"python .github/script/ci/devkit_swap.py fetch --run {RUN}", out)
         self.assertIn("4 dev-kit file(s)", out)
+        self.assertIn(f"::error title={ds.PENDING_STEP}::", out)
+        self.assertIn("runs no NPU test again", out)
+        self.assertIn("### Dev-kit swap pending", self.summary)
+        self.assertNotIn("pull request of its own", out)
 
-    def test_nothing_when_the_branch_has_them(self):
+    def test_passes_when_the_branch_has_them(self):
         self.repo.commit(NEW)
-        self.assertEqual(self.guide(self.write_manifests(NEW)), "")
+        self.head = self.repo.git("rev-parse", "HEAD")
+        code, out = self.pending(self.write_manifests(NEW))
+        self.assertEqual(code, 0, out)
+        self.assertIn("no swap pending", out)
+        self.assertEqual(self.summary, "")
 
-    def test_nothing_without_manifests(self):
-        self.assertEqual(self.guide(self.tmp / "none"), "")
+    def test_passes_without_manifests(self):
+        code, _ = self.pending(self.tmp / "none")
+        self.assertEqual(code, 0)
+
+    def test_names_a_swap_ci_change(self):
+        self.head = self.repo.commit({".github/workflows/build-and-test.yml": b"x: 1\n"}, "ci")
+        code, out = self.pending(self.write_manifests(NEW), "--base", self.base)
+        self.assertEqual(code, 1)
+        self.assertIn("`.github/workflows/build-and-test.yml`", out)
+        self.assertIn("move that change to a pull request of its own first", out)
+
+    def test_broken_manifest_fails(self):
+        d = self.write_manifests(NEW)
+        (d / ds.manifest_artifact("linux", "xrt") / ds.MANIFEST_FILE).write_text("{")
+        code, out = self.pending(d)
+        self.assertEqual(code, 1)
+        self.assertIn("::error::devkit_swap pending:", out)
 
 
 class Manifests(unittest.TestCase):
@@ -727,7 +796,7 @@ class Manifests(unittest.TestCase):
     def test_good(self):
         m = self.parse(self.good())
         self.assertEqual(sorted(e.repo_path for e in m.files), sorted([XRT_WIN, XRT_LIB, KERNEL]))
-        self.assertTrue(all(e.tested for e in m.files))
+        self.assertFalse(any(e.new for e in m.files))
 
     def test_bad(self):
         cases = {
@@ -745,6 +814,7 @@ class Manifests(unittest.TestCase):
             "bool size": ("size", True),
             "sha256": ("sha256", "zz"),
             "kind": ("kind", "script"),
+            "new": ("new", "yes"),
         }
         for why, (key, value) in cases.items():
             with self.subTest(why):
@@ -774,17 +844,25 @@ class Manifests(unittest.TestCase):
         lone = manifest("windows", "xrt", {XRT_LIB: b"l", KERNEL: b"k"}, head=self.HEAD, base=self.BASE)
         with self.assertRaisesRegex(ds.ManifestError, "no foo_npu.dll beside it"):
             self.parse(lone)
+        # And a DLL with its import library: the build links the one.
+        lone = manifest("windows", "xrt", {XRT_WIN: b"d"}, head=self.HEAD, base=self.BASE)
+        with self.assertRaisesRegex(ds.ManifestError, "no foo_npu.lib beside it"):
+            self.parse(lone)
+        # A manifest from before the staging (schema 1).
+        old = self.good()
+        old["schema"] = 1
+        with self.assertRaisesRegex(ds.ManifestError, "not a schema 2 manifest"):
+            self.parse(old)
         with self.assertRaises(ds.ManifestError):
             ds.parse_manifest(b"{", "windows", "xrt")
         with self.assertRaises(ds.ManifestError):
             ds.parse_manifest(b" " * (ds.MAX_MANIFEST_BYTES + 1), "windows", "xrt")
 
-    def test_untested_entries_are_left_out(self):
+    def test_every_staged_entry_is_swapped(self):
         lin = manifest("linux", "xrt", {KERNEL: b"k", "src/xclbins/N-NPU2/a.xclbin": b"n"}, head=self.HEAD,
-                       base=self.BASE, untested=("src/xclbins/N-NPU2/a.xclbin",))
+                       base=self.BASE)
         entries, notes, errors = ds.plan_swap({("linux", "xrt"): self.parse(lin, "linux")}, RUN, self.HEAD)
-        self.assertEqual((sorted(entries), errors), ([KERNEL], []))
-        self.assertIn("not swapped", notes[0])
+        self.assertEqual((sorted(entries), notes, errors), ([KERNEL, "src/xclbins/N-NPU2/a.xclbin"], [], []))
 
     def test_disagreeing_manifests(self):
         lin = manifest("linux", "xrt", {KERNEL: b"k1"}, head=self.HEAD, base=self.BASE)
@@ -879,109 +957,31 @@ class Targets(unittest.TestCase):
             ds.safe_target(tmp / "repo", "src/xclbins/M/a.xclbin")
 
 
-class OverlayManifest(unittest.TestCase):
-    """devkit_overlay.py's side: what the overlay jobs record."""
-
-    def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp())
-        self.addCleanup(rmtree, self.tmp)
-        self.root = self.tmp / "pkg"
-        self.libs = self.tmp / "libs"
-        self.xclbins = self.tmp / "xclbins"
-        for d in (self.root, self.libs, self.xclbins / "M-NPU2", self.xclbins / "Other-NPU2"):
-            d.mkdir(parents=True)
-        (self.libs / "foo_npu.dll").write_bytes(b"dll")
-        (self.libs / "foo_npu.lib").write_bytes(b"lib")
-        (self.libs / "libfoo_npu.so").write_bytes(b"so")
-        (self.xclbins / "M-NPU2" / "attn.xclbin").write_bytes(b"k")
-        (self.xclbins / "Other-NPU2" / "x.xclbin").write_bytes(b"o")
-        self.kernels = [(self.xclbins / "M-NPU2" / "attn.xclbin", self.root / "xclbins" / "M-NPU2" / "attn.xclbin"),
-                        (self.xclbins / "Other-NPU2" / "x.xclbin", self.root / "xclbins" / "Other-NPU2" / "x.xclbin")]
-
-    def entries(self, os_name: str, pairs: list, tests_ran: bool = True) -> dict:
-        out = do.manifest_entries(self.root, os_name, "xrt", pairs, self.libs, "devkit-libs-win-xrt"
-                                  if os_name == "windows" else "devkit-libs-lin-xrt", self.xclbins,
-                                  "devkit-xclbins", tests_ran, {"M-NPU2"})
-        return {e["repo_path"]: e for e in out}
-
-    def test_windows_records_the_import_library(self):
-        got = self.entries("windows", [(self.libs / "foo_npu.dll", self.root / "foo_npu.dll")] + self.kernels)
-        self.assertEqual(sorted(got), ["src/lib/xrt/foo_npu.dll", "src/lib/xrt/foo_npu.lib",
-                                       "src/xclbins/M-NPU2/attn.xclbin", "src/xclbins/Other-NPU2/x.xclbin"])
-        self.assertEqual(got["src/lib/xrt/foo_npu.dll"]["package_path"], "foo_npu.dll")
-        self.assertIsNone(got["src/lib/xrt/foo_npu.lib"]["package_path"])
-        self.assertEqual(got["src/lib/xrt/foo_npu.lib"]["sha256"], hashlib.sha256(b"lib").hexdigest())
-        self.assertEqual(got["src/lib/xrt/foo_npu.lib"]["git_sha1"], digests(b"lib")["git_sha1"])
-        # A kernel no tested model loads is recorded, but not as tested.
-        self.assertTrue(got["src/xclbins/M-NPU2/attn.xclbin"]["tested"])
-        self.assertFalse(got["src/xclbins/Other-NPU2/x.xclbin"]["tested"])
-
-    def test_linux_paths(self):
-        got = self.entries("linux", [(self.libs / "libfoo_npu.so", self.root / "lib" / "libfoo_npu.so")])
-        self.assertEqual(got["src/lib/xrt/libfoo_npu.so"]["package_path"], "lib/libfoo_npu.so")
-        self.assertEqual(got["src/lib/xrt/libfoo_npu.so"]["artifact_path"], "libfoo_npu.so")
-        self.assertEqual(len(got), 1)
-
-    def test_nothing_tested(self):
-        got = self.entries("linux", self.kernels, tests_ran=False)
-        self.assertFalse(any(e["tested"] for e in got.values()))
-
-    def test_written_manifest_parses(self):
-        # Kernels only (no ABI check needed): the overlay writes the
-        # manifest, and devkit_swap.py reads it back.
-        (self.root / "xclbins" / "M-NPU2").mkdir(parents=True)
-        (self.root / "model_list.json").write_text(json.dumps(
-            {"models": {"qwen3": {"0.6b": {"name": "M-NPU2", "details": {"family": "qwen3"}}}}}),
-            encoding="utf-8")
-        out_file = self.tmp / "m" / "manifest.json"
-        buf = io.StringIO()
-        env = {"GITHUB_RUN_ID": RUN, "GITHUB_RUN_ATTEMPT": "2"}
-        with contextlib.redirect_stdout(buf), mock.patch.dict(os.environ, env):
-            code = do.main(["--root", str(self.root), "--os", "linux", "--xclbins", str(self.xclbins),
-                            "--xclbin-models", '["qwen3:0.6b"]', "--manifest", str(out_file), "--runtime", "hrx",
-                            "--xclbins-artifact", "devkit-xclbins", "--head-sha", "a" * 40,
-                            "--base-sha", "b" * 40])
-        self.assertEqual(code, 0, buf.getvalue())
-        raw = json.loads(out_file.read_text(encoding="utf-8"))
-        self.assertEqual((raw["run_id"], raw["run_attempt"], raw["tests_ran"], raw["full_refresh"]),
-                         (RUN, "2", True, False))
-        m = ds.parse_manifest(out_file.read_bytes(), "linux", "hrx")
-        tested = {e.repo_path: e.tested for e in m.files}
-        self.assertEqual(tested, {"src/xclbins/M-NPU2/attn.xclbin": True,
-                                  "src/xclbins/Other-NPU2/x.xclbin": False})
-        self.assertNotIn(b"\r\n", out_file.read_bytes())
-
-    def test_manifest_needs_its_arguments(self):
-        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-            do.main(["--root", str(self.root), "--os", "linux", "--manifest", str(self.tmp / "m.json")])
-        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-            do.main(["--root", str(self.root), "--os", "linux", "--xclbins", str(self.xclbins),
-                     "--manifest", str(self.tmp / "m.json"), "--runtime", "xrt"])
-
-
 class Wiring(unittest.TestCase):
     """devkit_check.py's swap wiring rule, on this tree and on a broken copy."""
 
     def test_tree(self):
         errors: list = []
-        self.assertEqual(dc.check_swap_wiring(dc.REPO_ROOT, errors), 2)
+        self.assertEqual(dc.check_swap_wiring(dc.REPO_ROOT, errors), 1)
         self.assertEqual(errors, [])
 
     def test_broken(self):
         tmp = Path(tempfile.mkdtemp())
         self.addCleanup(rmtree, tmp)
-        for rel in (dc.BUILD_WORKFLOW, dc.OVERLAY_ACTION):
-            (tmp / rel).parent.mkdir(parents=True, exist_ok=True)
-            text = (dc.REPO_ROOT / rel).read_text(encoding="utf-8")
-            text = text.replace("devkit-overlay-manifest-${{ inputs.os }}", "overlay-manifest-${{ inputs.os }}")
-            text = text.replace("name: Test Windows HRX dev-kit overlay", "name: Test Windows HRX overlay")
-            text = text.replace("devkit_swap.py check", "devkit_swap.py chek")
-            (tmp / rel).write_text(text, encoding="utf-8")
+        rel = dc.BUILD_WORKFLOW
+        (tmp / rel).parent.mkdir(parents=True, exist_ok=True)
+        text = (dc.REPO_ROOT / rel).read_text(encoding="utf-8")
+        text = text.replace("name: devkit-stage-manifest-windows-hrx", "name: stage-manifest-windows-hrx")
+        text = text.replace("    name: Test Windows HRX\n", "    name: Test Win HRX\n")
+        text = text.replace(f"- name: {ds.PENDING_STEP}", "- name: Swap pending")
+        text = text.replace("devkit_swap.py check", "devkit_swap.py chek")
+        (tmp / rel).write_text(text, encoding="utf-8")
         errors: list = []
         dc.check_swap_wiring(tmp, errors)
         joined = "\n".join(errors)
-        self.assertIn("must upload", joined)
-        self.assertIn("Test Windows HRX dev-kit overlay", joined)
+        self.assertIn("as devkit-stage-manifest-windows-hrx", joined)
+        self.assertIn('exactly one job named "Test Windows HRX"', joined)
+        self.assertIn(f'a step named "{ds.PENDING_STEP}"', joined)
         self.assertIn("must run devkit_swap.py check", joined)
 
     def test_build_and_test(self):
@@ -993,18 +993,34 @@ class Wiring(unittest.TestCase):
                         changes_job.index("uses: ./.github/actions/detect-changes"))
         self.assertIn("swap-verified: ${{ steps.swap.outputs.swap-verified }}", changes_job)
         self.assertIn("if: github.event_name == 'pull_request'", changes_job)
-        for job in ("test-lin-xrt-devkit", "test-lin-hrx-devkit", "test-win-xrt-devkit", "test-win-hrx-devkit"):
+        # The full refresh tests on the full tier, every catalog model required.
+        self.assertIn("tier: ${{ github.event_name == 'workflow_dispatch' && inputs.devkit-full-refresh "
+                      "&& 'full' || inputs.tier }}", changes_job)
+        stage = jobs[ds.STAGE_JOB]
+        for line in ('[ "${FULL_REFRESH}" = true ] && args+=(--require-all --full-refresh)',
+                     "HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}",
+                     "BASE_SHA: ${{ needs.changes.outputs.devkit-base }}",
+                     # Only the pull request's dev-kit builds: pushes and the
+                     # nightly (the -main callers) leave the product builds
+                     # waiting for nothing.
+                     "    needs: [changes, devkit-engines, devkit-xclbins]"):
+            self.assertIn(line, stage)
+        for job in ("devkit-engines-main", "devkit-xclbins-main"):
+            self.assertIn("github.event_name != 'pull_request'", jobs[job])
+        for job in ("build-lin-xrt-portable", "build-lin-hrx-deb", "build-win-xrt", "build-win-source"):
             with self.subTest(job=job):
-                for line in ("require-all: ${{ needs.changes.outputs.devkit-full-refresh }}",
-                             "full-refresh: ${{ needs.changes.outputs.devkit-full-refresh }}",
-                             "head-sha: ${{ github.event.pull_request.head.sha || github.sha }}",
-                             "base-sha: ${{ needs.changes.outputs.devkit-base }}",
-                             "tier: ${{ needs.changes.outputs.devkit-full-refresh == 'true' && 'full' || 'pr' }}"):
-                    self.assertIn(line, jobs[job])
+                self.assertIn("    needs: [changes, devkit-stage]", jobs[job])
+                self.assertIn("(needs.devkit-stage.result == 'success' || needs.devkit-stage.result == 'skipped')",
+                              jobs[job])
+                self.assertIn("devkit-stage: ${{ needs.devkit-stage.outputs.staged == 'true' }}", jobs[job])
+        # The binaries check fails summary, not the changes job.
+        self.assertIn("continue-on-error: true", changes_job)
+        self.assertIn("binaries-check: ${{ steps.binaries.outcome }}", changes_job)
         self.assertIn("&& 'refresh'", jobs["devkit-bench"])
         summary = jobs["summary"]
-        self.assertIn('[ "${SWAP_VERIFIED}" = true ] && requested=false', summary)
-        self.assertIn("devkit_swap.py guide", summary)
+        self.assertIn('[ "${SWAP_VERIFIED}" = true ] && STAGE_REQUESTED=false', summary)
+        self.assertIn('if [ "${BINARIES}" = failure ]; then', summary)
+        self.assertIn("devkit_swap.py pending", summary)
         # Nothing here writes: no grant of a write permission.
         self.assertNotRegex(text, r"(?m)^\s+[a-z-]+: write\s*$")
 
