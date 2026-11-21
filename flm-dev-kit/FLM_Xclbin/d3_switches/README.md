@@ -30,7 +30,9 @@ Sharing the NPU: warm switches rely on the array staying as the last launch left
 context takes the array at any command boundary (measured: two FLM servers on one NPU hung the device for every client
 until the commands timed out, over and over). So each array turn is one submission (`cold_mm`, switch, guest kernel,
 switch back as one `xrt::runlist`, `d3_launch::window`), and a request holds a system-wide lock (`d3_array_lock`: flock
-on `$TMPDIR/flm_d3_array.lock`, a named mutex on Windows) from its vision tower to its last layer. Another FLM process
-that does not take this lock (another model's engine) can still take the array; run d3 with `D3_NO_SWITCH=1` next to it.
+on `$TMPDIR/flm_d3_array.lock`, a named mutex on Windows) from its vision tower to its last layer. Two d3 servers on one
+NPU: 406 + 406 identical requests in 180 s, no errors (the build without switches: 201 + 201). A process that does not
+take this lock (another model's engine) still shares the NPU as before: d3 next to a llama3.2:1b server stalls ~60 s
+and fails one request with and without the switches.
 
 Not covered: HRX (the engine falls back), prefix_bidir and multi-segment prompts' conv1d (host).
