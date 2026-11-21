@@ -442,6 +442,15 @@ private:
       for (const auto &[row, r] : rest)
         if (!r.empty())
           out.push_back({ctrlpkt::row_id(row), hw::Kind::core, r});
+    } else if (auto patched = patch_rows(*c.lane, head)) {
+      // Programs that differ in a few words (a row constant): what the rows
+      // share broadcast, then each row's other words and its rest.
+      out.push_back({ctrlpkt::kBroadcastId, hw::Kind::core, std::move(patched->common)});
+      for (auto &[row, w] : patched->rows) {
+        w.insert(w.end(), rest[row].begin(), rest[row].end());
+        if (!w.empty())
+          out.push_back({ctrlpkt::row_id(row), hw::Kind::core, std::move(w)});
+      }
     } else {
       for (const auto &[row, w] : whole)
         if (!w.empty())
@@ -506,6 +515,72 @@ private:
       if (w != first)
         return false;
     return true;
+  }
+
+  /// Rows that write the same words but for a few (a row constant in the
+  /// program): the broadcast of the words every row writes, each with the
+  /// value most rows write, then per row its words the broadcast did not leave right,
+  /// in runs. None when that sends no fewer words than one chunk per row.
+  struct Patched {
+    std::vector<ctrlpkt::Write> common;
+    std::map<int, std::vector<ctrlpkt::Write>> rows;
+  };
+  static std::optional<Patched> patch_rows(const ctrlpkt::Lane &l,
+                                           const std::map<int, std::vector<ctrlpkt::Write>> &rows) {
+    if ((int)rows.size() != l.top - hw::kFirstCoreRow + 1 || rows.empty())
+      return std::nullopt;
+    auto words = [](const std::vector<ctrlpkt::Write> &w) {
+      std::map<uint32_t, uint32_t> m;
+      for (const ctrlpkt::Write &x : w)
+        for (size_t i = 0; i < x.words.size(); ++i)
+          m[x.offset + 4 * (uint32_t)i] = x.words[i];
+      return m;
+    };
+    auto append = [](std::vector<ctrlpkt::Write> &w, uint32_t off, uint32_t v) {
+      if (!w.empty() && w.back().offset + 4 * (uint32_t)w.back().words.size() == off)
+        w.back().words.push_back(v);
+      else
+        w.push_back({off, {v}});
+    };
+    std::map<int, std::map<uint32_t, uint32_t>> all;
+    for (const auto &[row, w] : rows)
+      all[row] = words(w);
+    std::map<uint32_t, uint32_t> common;
+    for (const auto &[off, v] : all.begin()->second) {
+      std::map<uint32_t, int> votes;
+      bool everywhere = true;
+      for (const auto &[row, m] : all) {
+        auto at = m.find(off);
+        everywhere = everywhere && at != m.end();
+        if (at != m.end())
+          ++votes[at->second];
+      }
+      if (!everywhere)
+        continue;
+      auto most = votes.begin();
+      for (auto x = votes.begin(); x != votes.end(); ++x)
+        if (x->second > most->second)
+          most = x;
+      common[off] = most->first;
+    }
+    Patched p;
+    for (const auto &[off, v] : common)
+      append(p.common, off, v);
+    size_t sent = common.size(), whole = 0;
+    for (const auto &[row, m] : all) {
+      whole += m.size();
+      std::vector<ctrlpkt::Write> &w = p.rows[row];
+      for (const auto &[off, v] : m) {
+        auto c = common.find(off);
+        if (c != common.end() && c->second == v)
+          continue;
+        append(w, off, v);
+        ++sent;
+      }
+    }
+    if (common.empty() || sent >= whole)
+      return std::nullopt;
+    return p;
   }
 
   static std::vector<Chunk> per_row_or_broadcast(const ctrlpkt::Lane &l,

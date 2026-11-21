@@ -54,7 +54,7 @@ lane_report: build/lane_report
 	./build/lane_report $(PKG)
 
 .PHONY: test test_elf clean op_cost lane_report
-test: build/test_txn build/test_rt build/test_build build/test_errors build/test_ctrlpkt
+test: build/test_txn build/test_rt build/test_build build/test_errors build/test_ctrlpkt build/test_state build/test_columns
 	@test -f $(PKG)/$(firstword $(APPS))/init.txn || { echo "no package in $(PKG): see the top of this Makefile"; exit 2; }
 	python3 tools/gen_hw.py --check
 	./build/test_txn $(foreach a,$(APPS),$(PKG)/$(a)/init.txn $(PKG)/$(a)/insts.bin)
@@ -62,6 +62,8 @@ test: build/test_txn build/test_rt build/test_build build/test_errors build/test
 	./build/test_build $(PKG) $(APPS)
 	./build/test_errors $(PKG) $(firstword $(APPS))
 	./build/test_ctrlpkt $(PKG) $(APPS)
+	./build/test_state $(PKG) $(firstword $(APPS))
+	./build/test_columns $(PKG) $(firstword $(APPS))
 
 clean:
 	rm -rf build

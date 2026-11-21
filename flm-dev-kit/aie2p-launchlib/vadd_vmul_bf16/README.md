@@ -58,8 +58,11 @@ kernels also need an even number of blocks per core per launch (ping/pong chains
 checks that vadd and vmul share a floorplan, the host checks the block count.
 
 The host runs, in one hw_context: the expression (full and program-only switches), 1,600-launch loops of each
-switch, reruns, the expression through FLM's ELF flow (`--elf`: an ELF per kernel, `txn::to_elf`), and the FLM way
-(vadd.xclbin and vmul.xclbin in two hw_contexts). Every case is checked (one bf16 ulp; +0 = −0).
+switch, reruns, and the FLM way (vadd.xclbin and vmul.xclbin in two hw_contexts). Every case is checked (one bf16
+ulp; +0 = −0). `--flow` picks how the kernels run (`include/flow.hpp`; host, ovlp and stress):
+
+- `elf` (default, FLM's flow): an ELF per kernel (`txn::to_elf`), an `xrt::ext::kernel` of it;
+- `xclbin`: the base xclbin's kernel, the instructions in a BO per kernel. `--elf` is `--flow elf`.
 
 ## Program-only switch vs full switch
 
@@ -122,7 +125,8 @@ kernels/      vadd_bf16.cc, vmul_bf16.cc (16 bf16 lanes; the *_pair_bf16 functio
 iron/         vadd_vmul_bf16_aie.py: the design (npu2, --op add|mul --cols --cores --n --layout split|pair)
 include/      elementwise_sequence.hpp: the C++ runtime sequence (any length); bf16.hpp: conversions, the check;
               spawn.hpp: the stress test's second process (fork/exec, CreateProcess)
-host/         host.cpp: the kernels, checks, timing; stress.cpp: stress and corner cases
+host/         host.cpp: the kernels, checks, timing; stress.cpp: stress and corner cases;
+              make_overlay.cpp, ovlp.cpp: an overlay app and its op as a state (APP@STATE)
 precompiled/  n256-c1x1, n256-c4x2, n256-c8x2, n256-c8x4-pair: the packages (make precompile)
 tools/        sweep.sh, summarize.py: the results table; stress_all.sh: the stress runs;
               pressure.sh: the long runs on one array (default 32 cores)
@@ -137,9 +141,11 @@ CMakeLists.txt, WINDOWS.md   the Windows (MSVC, XRT) build of host and stress, a
 cd aie2p-launchlib/vadd_vmul_bf16
 ./env.sh make                       # host; the package from precompiled/ (or aiecc + Peano)
 ./env.sh make run                   # 1 x 1, N = 512
-./env.sh make run COLS=8 CORES=4 N=262144 RUN_ARGS=--elf    # 32 cores (pair layout)
+./env.sh make run COLS=8 CORES=4 N=262144                   # 32 cores (pair layout)
+./env.sh make run COLS=8 CORES=4 RUN_ARGS="--flow xclbin"    # the same, instruction BOs
 ./env.sh make check                 # the library's tests on this package (no NPU)
 ./env.sh make stress COLS=8 CORES=2 # stress and corner cases on the NPU
+./env.sh make ovlp COLS=8 CORES=2   # the overlay app with its op as a state (APP@STATE)
 ./env.sh make precompile COLS=4 CORES=1
 ./env.sh tools/sweep.sh             # the results table
 ./env.sh tools/stress_all.sh        # the stress table
@@ -148,8 +154,9 @@ LAUNCHES=1000000 ./env.sh tools/pressure.sh   # 32-core pressure runs (~22 min)
 
 ## Results
 
-RyzenAI-npu5 (Strix Halo), XRT 2.21.75, amdxdna 7.0.0-rc1, `Transport::ctrlpkt`. µs per launch, median of 3 runs
-of 50 runlists of 32 launches; all 57 runs passed every check. Switch cost = alternate − rerun (the same
+RyzenAI-npu5 (Strix Halo), XRT 2.21.75, amdxdna 7.0.0-rc1, `Transport::ctrlpkt`, `--flow xclbin` (the ELF flow,
+now the default, is faster: next section). µs per launch, median of 3 runs of 50 runlists of 32 launches; all 57
+runs passed every check. Switch cost = alternate − rerun (the same
 buffers); 2 hw_contexts = the same two apps in two contexts, alternating, minus one context alone. Full table:
 `results/sweep.md` (`./env.sh tools/sweep.sh`).
 
@@ -191,6 +198,70 @@ buffers); 2 hw_contexts = the same two apps in two contexts, alternating, minus 
 - The switches do not depend on N; the large-N rows only add data movement.
 - Windows (Krackan, `WINDOWS.md`): 8 × 4 program-only switch 26.2 µs, full 89.7, two hw_contexts 2,321.
 - For comparison, AIE4 with the PM ping-pong (6 uCs, control packets): 7.6 µs (1×1), 9.0 µs (3×4).
+
+### ELF flow vs xclbin flow
+
+The same kernels, µs per launch in a runlist (alternate = vadd ↔ vmul), median of 3 runs of `make run` and
+`make ovlp`, N = 512 per core; all 36 runs passed every check (`--flow xclbin` → **`--flow elf`**):
+
+| array | rerun | alternate, program-only | alternate, full | ovlp: ovl@add ↔ vmul |
+|---|---|---|---|---|
+| 1×1 | 19.7 → **11.6** | 23.9 → **14.6** | 27.1 → **18.9** | |
+| 8×2 | 29.9 → **17.0** | 45.7 → **31.1** | 93.6 → **75.7** | |
+| 8×4 (pair) | 30.0 → **17.5** | 55.1 → **36.2** | 108.5 → **84.5** | 108.7 → **85.5** |
+
+An ELF run costs 8–13 µs less per launch than one with an instruction BO; the switches cost
+about the same in both flows (8×4: program-only 19.0 vs 25.3, full 67.0 vs 78.8). Each ELF run keeps its own copy
+of the ELF in the process's 64 MB device heap, so long runlists are cut where `launch::Session` cuts them (24 MB of
+instructions, 1,024 runs; `FlowKernels::chunk_end`).
+
+## An overlay and its op as a state (`host/ovlp.cpp`, APP@STATE)
+
+An engine with many ops of one program often builds one *overlay* app — the cores, locks and shim routes —
+and gives each op only its data movement. `make ovlp` builds that from vadd:
+
+- `make_overlay.exe` splits vadd's `init.txn`: the mem-tile and core-tile BD, channel and route writes become
+  the op `add` (`build/<cfg>/add.txn`); the rest stays in the app `ovl` (the shim routes carry the Sync tokens,
+  and the channel reset masks are part of the reset). On 8 × 2: 800 of vadd's 1616 init ops stay in `ovl`;
+  `add` has 816 ops (25 KB; 1.7 KB on 1 × 1, 30 KB on 8 × 4 pair).
+- `make_package.py --state ovl@add=build/<cfg>/add.txn` adds the op as a state of `ovl`
+  (`build/<cfg>/pkg_ovl/ovl/state_add.txn`).
+
+`ovlp.exe` runs vadd ↔ vmul three ways, each with the `{cold A+B, A+B→·C, ·+D}` check and an alternating
+runlist (32 launches, timed):
+
+| way | the program before vmul | how vadd's op gets into the array |
+|---|---|---|
+| vadd | `warm(vmul, vadd)` | the whole app (the reference) |
+| ovl, host writes `add` | `warm(vmul, ovl)` + `state_add.txn` + the sequence, joined as TXN | by the host, after the kernel |
+| ovl@add | `warm(vmul, ovl@add)` | by the kernel: the planner sees the op |
+
+`warm(vmul, ovl@add)` is byte-identical to `warm(vmul, vadd)` and `warm(ovl@add, vmul)` to `warm(vadd, vmul)`
+(`ovlp.exe` checks this); `rerun(ovl@add)` is checked on the NPU as well.
+
+**Why the second way is TXN after the kernel.** With control packets, the kernel parks its lane routes in the
+switch registers the app leaves at 0. `ovl` leaves vadd's mem-tile routes at 0, so writing `add` through the
+runtime sequence overwrites the lanes, and `build()` rejects that kernel (*switch register … not the final
+route*). As a state, the planner knows those registers are taken and picks other lanes.
+
+RyzenAI-npu5 (Strix Halo), µs per launch, median of 3 runs (`make ovlp COLS=… CORES=… RUN_ARGS="--transport …"`),
+all 42 runs passed all 7 checks. vadd / ovl with host-written `add` / **ovl@add**:
+
+| array | control packets | txn |
+|---|---|---|
+| 1×1 | 27.4 / 29.7 / **27.3** | 27.2 / 27.6 / **27.5** |
+| 2×1 | 34.8 / 38.4 / **34.8** | 34.1 / 36.8 / **34.8** |
+| 4×2 | 56.2 / 69.8 / **55.9** | 74.3 / 83.0 / **73.6** |
+| 8×1 | 82.1 / 94.2 / **82.8** | 84.9 / 95.9 / **85.6** |
+| 8×2 | 94.0 / 119.8 / **94.0** | 130.3 / 146.9 / **131.0** |
+| 4×4 (pair) | 63.7 / 83.7 / **63.4** | 92.2 / 105.0 / **92.6** |
+| 8×4 (pair) | 108.3 / 148.7 / **108.2** | 163.3 / 188.6 / **164.3** |
+
+- **ovl@add costs what the whole app costs** (within 1 µs): the state is merged into the kernel, so the op's
+  writes go out as packets with everything else.
+- **Writing the op from the host costs 2–40 µs more per launch** (8 × 4: switch 118 µs instead of 78): the
+  op's 2–30 KB go through the command processor after the kernel.
+- A rerun costs 20–30 µs.
 
 ## Stress and corner cases (`host/stress.cpp`)
 
