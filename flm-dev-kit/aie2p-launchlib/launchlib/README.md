@@ -27,8 +27,10 @@ launch::Result r = launch::build(list, seqs);
 The host makes one `xrt::hw_context` on `r.base_xclbin` and runs kernel `i` as `xrt::run` of the xclbin's kernel
 `MLIR_AIE`: argument 0 = 3 (opcode), 1 = an instruction BO with `r.kernels[i].words`, 2 = its word count, 3.. =
 the buffers of the runtime sequence. Or, FLM's way, `launch/txn/elf.hpp` turns the words into an ELF for
-`xrt::elf` → `xrt::module` → `xrt::ext::kernel` (arguments 3, 0, 0, buffers). A full host program is
-`../vadd_vmul_bf16/host/host.cpp`.
+`xrt::elf` → `xrt::module` → `xrt::ext::kernel` (arguments 3, 0, 0, buffers); that is the default
+(`SessionOptions::flow = Flow::elf`, and `--flow elf` in the examples) and costs 8–13 µs less per launch
+(`../vadd_vmul_bf16/README.md`, "ELF flow vs xclbin flow"). A full host program is
+`../vadd_vmul_bf16/host/host.cpp` (`include/flow.hpp` there runs either flow).
 
 Or let **`launch::Session`** (`launch/xrt/session.hpp`, the one header with XRT) do all of that, safely:
 

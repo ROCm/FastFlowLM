@@ -3,7 +3,8 @@
 //
 // ovlp.cpp - an overlay app back from a guest with its op set up (APP@STATE)
 //
-//   ovlp.exe --package DIR [--n N] [--iters N] [--pairs P] [--transport txn|ctrlpkt] [--build-only]
+//   ovlp.exe --package DIR [--n N] [--iters N] [--pairs P] [--transport txn|ctrlpkt]
+//            [--flow elf|xclbin] [--build-only]
 //
 // DIR holds vadd, vmul and the overlay ovl with its state add (make ovlp:
 // host/make_overlay.cpp, make_package.py --state). vmul is the guest; the add
@@ -28,6 +29,7 @@
 
 #include "bf16.hpp"
 #include "elementwise_sequence.hpp"
+#include "flow.hpp"
 
 #include "launch/launch.hpp"
 #include "launch/xrt/packets.hpp"
@@ -50,7 +52,6 @@
 #include <string>
 #include <vector>
 
-constexpr unsigned kOpcode = 3;
 
 using ew::from_bf16;
 using ew::to_bf16;
@@ -58,7 +59,7 @@ using ew::to_bf16;
 int main(int argc, char **argv) {
   std::string package;
   int n = 2 * ew::kBlockElements, iters = 50, pairs = 16;
-  bool build_only = false;
+  bool build_only = false, use_elf = true;
   launch::Transport transport = launch::Transport::ctrlpkt;
   for (int i = 1; i < argc; ++i) {
     const std::string opt = argv[i];
@@ -67,7 +68,14 @@ int main(int argc, char **argv) {
     else if (i + 1 < argc && opt == "--n") n = std::atoi(argv[++i]);
     else if (i + 1 < argc && opt == "--iters") iters = std::atoi(argv[++i]);
     else if (i + 1 < argc && opt == "--pairs") pairs = std::atoi(argv[++i]);
-    else if (i + 1 < argc && opt == "--transport") {
+    else if (i + 1 < argc && opt == "--flow") {
+      try {
+        use_elf = ew::elf_flow(argv[++i]);
+      } catch (const std::exception &e) {
+        std::cerr << e.what() << "\n";
+        return 2;
+      }
+    } else if (i + 1 < argc && opt == "--transport") {
       try {
         transport = launch::transport_from_name(argv[++i]);
       } catch (const std::exception &e) {
@@ -78,7 +86,7 @@ int main(int argc, char **argv) {
   }
   if (package.empty() || iters < 1 || pairs < 1) {
     std::cerr << "usage: ovlp.exe --package DIR [--n N] [--iters N] [--pairs P] [--transport txn|ctrlpkt]"
-                 " [--build-only]\n";
+                 " [--flow elf|xclbin] [--build-only]\n";
     return 2;
   }
 
@@ -143,13 +151,8 @@ int main(int argc, char **argv) {
     device.register_xclbin(xclbin);
     xrt::hw_context context(device, xclbin.get_uuid());
     xrt::kernel kernel(context, "MLIR_AIE");
-    std::vector<xrt::bo> instr;
-    for (const launch::Kernel &k : r.kernels) {
-      xrt::bo &bo = instr.emplace_back(device, k.words.size() * 4, XCL_BO_FLAGS_CACHEABLE, kernel.group_id(1));
-      std::memcpy(bo.map<void *>(), k.words.data(), k.words.size() * 4);
-      bo.sync(XCL_BO_SYNC_BO_TO_DEVICE);
-    }
-    const std::vector<xrt::bo> packets = launch::packet_buffers(device, kernel, r);
+    const ew::FlowKernels kernels(device, context, kernel, r, use_elf);
+    std::printf("flow %s\n", ew::flow_name(use_elf));
 
     const size_t bytes = (size_t)n * sizeof(uint16_t);
     std::vector<xrt::bo> bo;
@@ -191,14 +194,10 @@ int main(int argc, char **argv) {
     struct Launch { int kernel; xrt::bo *l, *r, *o; };
     std::vector<std::unique_ptr<xrt::run>> runs;
     auto make_run = [&](const Launch &l) -> xrt::run & {
-      auto run = std::make_unique<xrt::run>(kernel);
-      run->set_arg(0, kOpcode);
-      run->set_arg(1, instr[l.kernel]);
-      run->set_arg(2, (uint32_t)r.kernels[l.kernel].words.size());
+      std::unique_ptr<xrt::run> run = kernels.run(l.kernel);
       run->set_arg(3 + ew::kArgLhs, *l.l);
       run->set_arg(3 + ew::kArgRhs, *l.r);
       run->set_arg(3 + ew::kArgOut, *l.o);
-      launch::set_packets(*run, r.kernels[l.kernel], packets[l.kernel]);
       runs.push_back(std::move(run));
       return *runs.back();
     };

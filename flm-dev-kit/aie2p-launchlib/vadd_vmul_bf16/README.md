@@ -58,8 +58,11 @@ kernels also need an even number of blocks per core per launch (ping/pong chains
 checks that vadd and vmul share a floorplan, the host checks the block count.
 
 The host runs, in one hw_context: the expression (full and program-only switches), 1,600-launch loops of each
-switch, reruns, the expression through FLM's ELF flow (`--elf`: an ELF per kernel, `txn::to_elf`), and the FLM way
-(vadd.xclbin and vmul.xclbin in two hw_contexts). Every case is checked (one bf16 ulp; +0 = −0).
+switch, reruns, and the FLM way (vadd.xclbin and vmul.xclbin in two hw_contexts). Every case is checked (one bf16
+ulp; +0 = −0). `--flow` picks how the kernels run (`include/flow.hpp`; host, ovlp and stress):
+
+- `elf` (default, FLM's flow): an ELF per kernel (`txn::to_elf`), an `xrt::ext::kernel` of it;
+- `xclbin`: the base xclbin's kernel, the instructions in a BO per kernel. `--elf` is `--flow elf`.
 
 ## Program-only switch vs full switch
 
@@ -138,7 +141,8 @@ CMakeLists.txt, WINDOWS.md   the Windows (MSVC, XRT) build of host and stress, a
 cd aie2p-launchlib/vadd_vmul_bf16
 ./env.sh make                       # host; the package from precompiled/ (or aiecc + Peano)
 ./env.sh make run                   # 1 x 1, N = 512
-./env.sh make run COLS=8 CORES=4 N=262144 RUN_ARGS=--elf    # 32 cores (pair layout)
+./env.sh make run COLS=8 CORES=4 N=262144                   # 32 cores (pair layout)
+./env.sh make run COLS=8 CORES=4 RUN_ARGS="--flow xclbin"    # the same, instruction BOs
 ./env.sh make check                 # the library's tests on this package (no NPU)
 ./env.sh make stress COLS=8 CORES=2 # stress and corner cases on the NPU
 ./env.sh make ovlp COLS=8 CORES=2   # the overlay app with its op as a state (APP@STATE)
@@ -150,8 +154,9 @@ LAUNCHES=1000000 ./env.sh tools/pressure.sh   # 32-core pressure runs (~22 min)
 
 ## Results
 
-RyzenAI-npu5 (Strix Halo), XRT 2.21.75, amdxdna 7.0.0-rc1, `Transport::ctrlpkt`. µs per launch, median of 3 runs
-of 50 runlists of 32 launches; all 57 runs passed every check. Switch cost = alternate − rerun (the same
+RyzenAI-npu5 (Strix Halo), XRT 2.21.75, amdxdna 7.0.0-rc1, `Transport::ctrlpkt`, `--flow xclbin` (the ELF flow,
+now the default, is faster: next section). µs per launch, median of 3 runs of 50 runlists of 32 launches; all 57
+runs passed every check. Switch cost = alternate − rerun (the same
 buffers); 2 hw_contexts = the same two apps in two contexts, alternating, minus one context alone. Full table:
 `results/sweep.md` (`./env.sh tools/sweep.sh`).
 
@@ -193,6 +198,22 @@ buffers); 2 hw_contexts = the same two apps in two contexts, alternating, minus 
 - The switches do not depend on N; the large-N rows only add data movement.
 - Windows (Krackan, `WINDOWS.md`): 8 × 4 program-only switch 26.2 µs, full 89.7, two hw_contexts 2,321.
 - For comparison, AIE4 with the PM ping-pong (6 uCs, control packets): 7.6 µs (1×1), 9.0 µs (3×4).
+
+### ELF flow vs xclbin flow
+
+The same kernels, µs per launch in a runlist (alternate = vadd ↔ vmul), median of 3 runs of `make run` and
+`make ovlp`, N = 512 per core; all 36 runs passed every check (`--flow xclbin` → **`--flow elf`**):
+
+| array | rerun | alternate, program-only | alternate, full | ovlp: ovl@add ↔ vmul |
+|---|---|---|---|---|
+| 1×1 | 19.7 → **11.6** | 23.9 → **14.6** | 27.1 → **18.9** | |
+| 8×2 | 29.9 → **17.0** | 45.7 → **31.1** | 93.6 → **75.7** | |
+| 8×4 (pair) | 30.0 → **17.5** | 55.1 → **36.2** | 108.5 → **84.5** | 108.7 → **85.5** |
+
+An ELF run costs 8–13 µs less per launch than one with an instruction BO; the switches cost
+about the same in both flows (8×4: program-only 19.0 vs 25.3, full 67.0 vs 78.8). Each ELF run keeps its own copy
+of the ELF in the process's 64 MB device heap, so long runlists are cut where `launch::Session` cuts them (24 MB of
+instructions, 1,024 runs; `FlowKernels::chunk_end`).
 
 ## An overlay and its op as a state (`host/ovlp.cpp`, APP@STATE)
 

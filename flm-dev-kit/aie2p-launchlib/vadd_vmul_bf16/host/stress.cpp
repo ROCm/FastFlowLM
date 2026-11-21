@@ -10,7 +10,7 @@
 //===----------------------------------------------------------------------===//
 //
 //   stress.exe --package DIR --mode MODE [--seed S] [--launches L] [--max-runlist R]
-//              [--transport txn|ctrlpkt] [--hang-risk]
+//              [--transport txn|ctrlpkt] [--flow elf|xclbin] [--hang-risk]
 //
 // The kernels: for each length (1, 2, 3, 4, 8 blocks per core) cold, warm full,
 // warm program-only, self-switch and rerun of both apps, and one reset kernel.
@@ -58,12 +58,17 @@
 // --transport ctrlpkt they also need --hang-risk (Linux only: there a hang is a
 // timeout).
 //
+// --flow (default elf; include/flow.hpp): an ELF per kernel or the xclbin's
+// kernel with instruction BOs. ELF runlists end where launch::Session's do
+// (24 MB of instructions, 1,024 runs) and the next one starts.
+//
 // Exit 0 when every check a mode expects to pass passes.
 //
 //===----------------------------------------------------------------------===//
 
 #include "bf16.hpp"
 #include "elementwise_sequence.hpp"
+#include "flow.hpp"
 #include "spawn.hpp"
 
 #include "launch/launch.hpp"
@@ -135,6 +140,7 @@ struct Options {
   bool quiet = false;
   bool preempt = false;               ///< every sequence starts with a preemption point
   launch::Transport transport = launch::Transport::ctrlpkt;
+  bool elf = true;                    ///< --flow elf (else xclbin)
 };
 
 class Stress {
@@ -196,12 +202,7 @@ public:
     device_.register_xclbin(xclbin_);
     context_ = xrt::hw_context(device_, xclbin_.get_uuid());
     kernel_ = xrt::kernel(context_, "MLIR_AIE");
-    for (const launch::Kernel &k : result_.kernels) {
-      xrt::bo &bo = instr_.emplace_back(device_, k.words.size() * 4, XCL_BO_FLAGS_CACHEABLE, kernel_.group_id(1));
-      std::memcpy(bo.map<void *>(), k.words.data(), k.words.size() * 4);
-      bo.sync(XCL_BO_SYNC_BO_TO_DEVICE);
-    }
-    packets_ = launch::packet_buffers(device_, kernel_, result_);
+    kernels_ = std::make_unique<ew::FlowKernels>(device_, context_, kernel_, result_, opts_.elf);
     bytes_ = (size_t)max_elements_ * 2;
     std::uniform_real_distribution<float> dis(-2.0f, 2.0f);
     for (int i = 0; i < kInputs; ++i) {
@@ -239,23 +240,25 @@ public:
       std::memset(o.map<char *>(), 0xFF, bytes_);
       o.sync(XCL_BO_SYNC_BO_TO_DEVICE);
     }
-    std::vector<xrt::run> runs;
-    runs.reserve(ls.size());
-    xrt::runlist rl(context_);
-    for (size_t i = 0; i < ls.size(); ++i) {
-      const Launch &l = ls[i];
-      xrt::run &r = runs.emplace_back(kernel_);
-      r.set_arg(0, kOpcode);
-      r.set_arg(1, instr_[l.kernel]);
-      r.set_arg(2, (uint32_t)result_.kernels[l.kernel].words.size());
-      r.set_arg(3, inputs_[l.lhs]);
-      r.set_arg(4, inputs_[l.rhs]);
-      r.set_arg(5, out_bo((int)i));
-      launch::set_packets(r, result_.kernels[l.kernel], packets_[l.kernel]);
-      rl.add(r);
+    std::vector<size_t> ks;
+    for (const Launch &l : ls)
+      ks.push_back((size_t)l.kernel);
+    for (size_t first = 0; first < ls.size();) {
+      const size_t end = kernels_->chunk_end(ks, first);
+      std::vector<std::unique_ptr<xrt::run>> runs;
+      xrt::runlist rl(context_);
+      for (size_t i = first; i < end; ++i) {
+        const Launch &l = ls[i];
+        std::unique_ptr<xrt::run> &r = runs.emplace_back(kernels_->run(l.kernel));
+        r->set_arg(3, inputs_[l.lhs]);
+        r->set_arg(4, inputs_[l.rhs]);
+        r->set_arg(5, out_bo((int)i));
+        rl.add(*r);
+      }
+      rl.execute();
+      rl.wait();
+      first = end;
     }
-    rl.execute();
-    rl.wait();
     ++stats_.runlists;
     int failed = 0;
     for (size_t i = 0; i < ls.size(); ++i) {
@@ -363,14 +366,10 @@ public:
     // One runlist per launch spec, made once and executed again and again.
     auto runlist_of = [&](const Launch &l, int out) {
       auto rl = std::make_unique<xrt::runlist>(context_);
-      auto r = std::make_unique<xrt::run>(kernel_);
-      r->set_arg(0, kOpcode);
-      r->set_arg(1, instr_[l.kernel]);
-      r->set_arg(2, (uint32_t)result_.kernels[l.kernel].words.size());
+      std::unique_ptr<xrt::run> r = kernels_->run(l.kernel);
       r->set_arg(3, inputs_[l.lhs]);
       r->set_arg(4, inputs_[l.rhs]);
       r->set_arg(5, out_bo(out));
-      launch::set_packets(*r, result_.kernels[l.kernel], packets_[l.kernel]);
       rl->add(*r);
       keep.push_back(std::move(r));
       return rl;
@@ -610,6 +609,7 @@ public:
     if (opts_.preempt)
       a.push_back("--preempt");
     a.insert(a.end(), {"--transport", launch::transport_name(opts_.transport)});
+    a.insert(a.end(), {"--flow", ew::flow_name(opts_.elf)});
     a.insert(a.end(), more.begin(), more.end());
     return a;
   }
@@ -767,7 +767,8 @@ private:
   xrt::xclbin xclbin_;
   xrt::hw_context context_;
   xrt::kernel kernel_;
-  std::vector<xrt::bo> instr_, inputs_, outputs_, packets_;
+  std::unique_ptr<ew::FlowKernels> kernels_;
+  std::vector<xrt::bo> inputs_, outputs_;
   App state_ = App::none;
   int parity_ = 0; ///< blocks per core since the last DMA reset, mod 2
   Stats stats_;
@@ -807,6 +808,7 @@ int main(int argc, char **argv) {
     else if (opt == "--count") count = std::atoi(v);
     else if (opt == "--progress") progress = v;
     else if (opt == "--transport") opts.transport = launch::transport_from_name(v), transport_set = true;
+    else if (opt == "--flow") opts.elf = ew::elf_flow(v);
     else if (opt == "--lengths") {
       opts.lengths.clear();
       std::stringstream ss(v);
@@ -817,7 +819,7 @@ int main(int argc, char **argv) {
   if (package.empty() || opts.lengths.empty()) {
     std::cerr << "usage: stress.exe --package DIR [--mode MODE] [--seed S] [--launches L] [--max-runlist R]\n"
                  "                  [--lengths B,B,...] [--robust] [--preempt] [--count C] [--transport txn|ctrlpkt]\n"
-                 "                  [--hang-risk]\n";
+                 "                  [--flow elf|xclbin] [--hang-risk]\n";
     return 2;
   }
   // Other hw_contexts on the NPU: txn unless asked (the children of ctx are).
@@ -855,8 +857,8 @@ int main(int argc, char **argv) {
       return s.child() ? 0 : 1;
     if (mode == "child-loop")
       return s.child_loop(progress) ? 0 : 1;
-    std::printf("%d x %d cores, seed %u, transport %s\n", EW_COLS, EW_CORES, seed,
-                launch::transport_name(opts.transport));
+    std::printf("%d x %d cores, seed %u, transport %s, flow %s\n", EW_COLS, EW_CORES, seed,
+                launch::transport_name(opts.transport), ew::flow_name(opts.elf));
     bool ok = true;
     if (mode == "lengths" || mode == "all") ok &= s.lengths();
     if (mode == "parity" || mode == "all") ok &= s.parity();

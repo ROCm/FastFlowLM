@@ -51,7 +51,7 @@ Run from this folder. `env.sh` sets up the toolchain (only needed to build the d
 
 `test.exe --package DIR [--apps a,b,c | --config FILE.json] [--iters N] [--flow xclbin|elf] [--build-only]
 [--exclusive]`.
-`stress.exe --mode random|lengths|order|recover|cap|ctx|guard|watch|lifetime|latency|churn|all [--flow elf] [--policy P]
+`stress.exe --mode random|lengths|order|recover|cap|ctx|guard|watch|lifetime|latency|churn|all [--flow elf|xclbin] [--policy P]
 [--max-gap US] [--no-guard] [--blind] [--exclusive] [--max-failures N] [--child loop|churn]` (header of
 `host_test/stress.cpp`).
 
