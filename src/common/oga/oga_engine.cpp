@@ -373,6 +373,8 @@ std::pair<OgaEngine::Reuse, std::size_t> OgaEngine::Append(const char** why) {
             run.images.push_back(span.hash);
         }
         SetInputs(run.generator.get(), logical_, images);
+    } else if (from == 0) {
+        AppendFirst(run, logical_);
     } else {
         AppendTokens(run.generator.get(), logical_.data() + from, logical_.size() - from);
     }
@@ -573,6 +575,27 @@ OgaApi::Owned<OgaGenerator> OgaEngine::NewGenerator(std::uint32_t max_length) co
 void OgaEngine::AppendTokens(OgaGenerator* generator, const int* ids, std::size_t count) const {
     api_->Check(api_->functions().generator_append_tokens(generator, ids, count),
                 "OgaGenerator_AppendTokens");
+}
+
+void OgaEngine::AppendFirst(Live& run, const std::vector<int>& ids) {
+    const std::size_t count = ids.size();
+    if (!split_first_run_ || count < 2) {
+        AppendTokens(run.generator.get(), ids.data(), count);
+        if (split_first_run_ || count < 2) return;
+        const buffer<bf16> logits = Logits(run.generator.get());
+        if (std::any_of(logits.data(), logits.data() + logits.size(),
+                        [](const bf16& value) { return static_cast<float>(value) != 0.0f; }))
+            return;
+        split_first_run_ = true;
+        header_print("WARNING", display_name_ << ": a new generator's first run gave all-zero logits;"
+                                " running it again, and from now on each new generator runs the"
+                                " first prompt token on its own");
+        // The old generator goes before the new one takes its memory.
+        run.generator.reset();
+        run.generator = NewGenerator(run.capacity);
+    }
+    AppendTokens(run.generator.get(), ids.data(), 1);
+    AppendTokens(run.generator.get(), ids.data() + 1, count - 1);
 }
 
 buffer<bf16> OgaEngine::Logits(OgaGenerator* generator) const {

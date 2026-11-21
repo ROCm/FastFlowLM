@@ -521,6 +521,69 @@ void parse_qwen_xml_block(const std::string& body, bool closed, const param_type
     }
 }
 
+// ---------------------------------------------------------------- glm xml
+
+const std::string GLM_KEY_OPEN = "<arg_key>";
+const std::string GLM_KEY_CLOSE = "</arg_key>";
+const std::string GLM_VALUE_OPEN = "<arg_value>";
+const std::string GLM_VALUE_CLOSE = "</arg_value>";
+
+/// \brief The call in one GLM block: name<arg_key>k</arg_key><arg_value>v</arg_value>...
+/// \note Laguna's template writes a string value raw and anything else as JSON, so a
+///       value is typed by the tool's schema the way a Qwen XML one is. A value ends
+///       at its first "</arg_value>", as the grammar has it.
+void parse_glm_xml_block(const std::string& body, bool closed, const param_types& types,
+                         std::vector<chat_tool_call>& calls) {
+    size_t p = body.find(GLM_KEY_OPEN);
+    if (p == npos && !closed) {
+        return; // the name may still be growing
+    }
+    const std::string name = trim(body.substr(0, p));
+    if (name.empty()) {
+        return;
+    }
+    std::string out = "{";
+    bool first = true;
+    while (p != npos) {
+        const size_t key_begin = p + GLM_KEY_OPEN.size();
+        const size_t key_end = body.find(GLM_KEY_CLOSE, key_begin);
+        if (key_end == npos) {
+            break;
+        }
+        const size_t value_open = skip_ws(body, key_end + GLM_KEY_CLOSE.size());
+        if (!starts_with_at(body, value_open, GLM_VALUE_OPEN)) {
+            break;
+        }
+        const std::string key = trim(body.substr(key_begin, key_end - key_begin));
+        const size_t value_begin = value_open + GLM_VALUE_OPEN.size();
+        const size_t value_end = body.find(GLM_VALUE_CLOSE, value_begin);
+        const std::string raw = body.substr(value_begin, (value_end == npos ? body.size() : value_end) - value_begin);
+        const type_set allowed = types.of(name, key);
+        out += first ? "\"" : ",\"";
+        first = false;
+        chat_json_escape_append(out, key);
+        out += "\":";
+        if (value_end == npos && !closed) {
+            if (allowed == type_set{"string"}) {
+                // strings stream as they come; anything else waits for its end
+                out += '"';
+                chat_json_escape_append(out, cut_partial_marker(raw, {&GLM_VALUE_CLOSE}));
+            }
+            add_call(calls, name, out);
+            return;
+        }
+        out += xml_value_to_json(raw, allowed);
+        if (value_end == npos) {
+            break;
+        }
+        p = body.find(GLM_KEY_OPEN, value_end + GLM_VALUE_CLOSE.size());
+    }
+    if (closed) {
+        out += '}';
+    }
+    add_call(calls, name, out);
+}
+
 // ---------------------------------------------------------------- lfm2 / gemma4
 
 void parse_lfm2_block(const std::string& body, bool closed, std::vector<chat_tool_call>& calls) {
@@ -591,6 +654,9 @@ void parse_tool_block(const chat_format_spec& spec, const std::string& body, boo
             break;
         case chat_format_kind::QWEN_XML:
             parse_qwen_xml_block(body, closed, types, calls);
+            break;
+        case chat_format_kind::GLM_XML:
+            parse_glm_xml_block(body, closed, types, calls);
             break;
         case chat_format_kind::LFM2_PYTHONIC:
             parse_lfm2_block(body, closed, calls);
