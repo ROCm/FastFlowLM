@@ -6,6 +6,7 @@
 /// \note This class is used to manage the model list.
 #pragma once
 #include "AutoModel/backend_contract.hpp"
+#include "AutoModel/context_length.hpp"
 #include "AutoModel/model_catalog_overlay.hpp"
 #include "nlohmann/json.hpp"
 #include <algorithm>
@@ -299,6 +300,10 @@ class model_list {
         ///        (--ctx-len); negative when it uses each entry's default
         /// \return the record; a field that is missing or has the wrong type
         ///         is a capability the model does not have
+        /// \note The context is the one the loader asks for
+        ///       (flm::context_length_for). A backend can still hold less: an
+        ///       engine with a lower limit clamps or refuses a larger --ctx-len,
+        ///       and the catalog does not name that limit.
         static capabilities capabilities_of(const nlohmann::json& model_info, int ctx_length = -1) {
             const auto flag = [](const nlohmann::json& object, const char* key) {
                 const auto it = object.find(key);
@@ -330,12 +335,7 @@ class model_list {
             record.vision = flag(model_info, "vlm");
             record.audio = flag(model_info, "asr");
             record.thinking = flag(details, "think") || flag(details, "think_toggleable");
-            if (ctx_length >= 0) {
-                record.context_length = ctx_length;
-            } else if (const auto it = model_info.find("default_context_length");
-                       it != model_info.end() && it->is_number_integer()) {
-                record.context_length = it->get<long long>();
-            }
+            record.context_length = flm::context_length_for(model_info, ctx_length);
             return record;
         }
 

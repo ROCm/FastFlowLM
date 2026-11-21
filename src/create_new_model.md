@@ -285,6 +285,7 @@ variant. The CLI tag is `<family>:<variant>` (e.g. `gemma4-12b:12b`).
               "tokenizer_config.json", "chat_template.jinja"],
     "vlm": false,
     "asr": false,
+    "tools": true,
     "default_context_length": 32768,
     "max_prefill_len": 4096,
     "details": {

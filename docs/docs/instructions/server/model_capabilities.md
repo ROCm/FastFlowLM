@@ -40,10 +40,10 @@ Each entry keeps the OpenAI fields (`id`, `object`, `created`, `owned_by`) and a
 | Field | Meaning |
 |---|---|
 | `capabilities` | What the model is for. `completion` comes first for every chat model. The other words: `tools` (the model is shown the tools a request offers), `vision` (takes images), `audio` (takes audio), `thinking` (can reason before it answers), `embedding`. |
-| `context_length` | The context, in tokens, that the server uses for this model: the value of `--ctx-len` when the server was started with it, otherwise the model's default. Present for chat models. |
-| `architecture.input_modalities` | `text`, plus `image` and `audio` when the model takes them. |
+| `context_length` | The context, in tokens, that the server asks for when it loads this model: the value of `--ctx-len` when the server was started with it, otherwise the model's default. A single-turn model (a dedicated translation model, for example) always keeps its own. Present for chat models. |
+| `architecture.input_modalities` | `text`, plus `image` and `audio` when the model takes them. A transcription-only model lists `audio` alone and has no `completion`. |
 | `architecture.output_modalities` | `text` for a chat model, `embeddings` for an embedding model. |
-| `supported_parameters` | The request parameters that the capabilities imply: `tools` and `tool_choice` for a model with `tools`, `reasoning` for a model with `thinking`. An empty list for a model with neither. |
+| `supported_parameters` | The capabilities again, in the names OpenRouter's model list uses: `tools` and `tool_choice` for a model with `tools`, `reasoning` for a model with `thinking`. An empty list for a model with neither. To switch thinking in a request, send `think` or `reasoning_effort` (see [Reasoning, Tool Calls & Streaming](https://fastflowlm.com/docs/instructions/server/reasoning_and_tools/)); FLM does not read a `reasoning` object. |
 
 The capability words are the ones Ollama uses; `context_length`, `architecture` and `supported_parameters` are the names OpenRouter uses for an OpenAI-style model list. All of them are read from one record per model, so they never disagree with each other.
 
@@ -86,4 +86,5 @@ VS Code does not show a model in its model picker for agent use unless `toolCall
 
 - Do not use a model that does not list `tools` for an agent: FLM lists `tools` only for models whose prompt shows them the tools a request offers.
 - `context_length` changes with `--ctx-len`. If you restart the server with another value, read the listing again.
+- A `--ctx-len` above what a model's engine can hold is not honored: the model is loaded with less, or is refused. Keep `--ctx-len` at or below the model's default unless you know the model takes more.
 - The listing describes the models this build and this machine can run. A model that needs a backend your build does not have is not listed.

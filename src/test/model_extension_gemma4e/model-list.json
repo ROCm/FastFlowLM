@@ -34,6 +34,7 @@
         "frontend_provider": "gemma4-open",
         "backend": "flm",
         "backend_provider": "gemma4-open",
+        "tools": true,
         "label": [
           "audio",
           "vision",

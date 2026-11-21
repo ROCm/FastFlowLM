@@ -1090,13 +1090,26 @@ void test_the_openai_listing_reports_capabilities() {
                  nlohmann::json::array({"text"}));
     TEST_REQUIRE(text.at("supported_parameters").empty());
 
-    // the context the server was started with is the one it reports
+    // the context the server was started with is the one it reports, except
+    // for a single-turn model, which the loader keeps at its own default
+    const auto catalog = read_json(kCatalogPath);
     const auto resized = models.get_all_models_openai(8192);
+    int fixed = 0;
     for (const auto& entry : resized.at("data")) {
-        if (lists(entry.at("capabilities"), "completion")) {
+        if (!lists(entry.at("capabilities"), "completion")) continue;
+        const std::string id = entry.at("id").get<std::string>();
+        const auto colon = id.find(':');
+        const auto& source = catalog.at("models").at(id.substr(0, colon)).at(id.substr(colon + 1));
+        if (has_label(source, "single-turn")) {
+            ++fixed;
+            TEST_REQUIRE(entry.at("context_length") == source.at("default_context_length"));
+        } else {
             TEST_REQUIRE(entry.at("context_length") == 8192);
         }
     }
+    TEST_REQUIRE(fixed > 0);
+    TEST_REQUIRE(by_id.at("gemma4e-flash:e2b").at("context_length") == 1024);
+    TEST_REQUIRE(resized.at("data").size() == listing.at("data").size());
 }
 
 void test_shipped_catalog_is_well_formed() {

@@ -7,7 +7,8 @@ tools, takes images and thinks, and how long its context is. Each entry keeps th
 
 * ``capabilities``: Ollama's words, ``completion`` first (``tools``, ``vision``, ``audio``,
   ``thinking``, ``embedding``);
-* ``context_length``: the context the server will use, `--ctx-len` when it was started with it;
+* ``context_length``: the context the server will use, `--ctx-len` when it was started with it
+  (a single-turn model keeps its own);
 * ``architecture.input_modalities`` / ``output_modalities`` and ``supported_parameters``
   (``tools``, ``tool_choice``, ``reasoning``): the same facts in OpenRouter's names.
 
@@ -33,6 +34,9 @@ import flm_api
 from fixtures import user
 from flm_api import Api, Skip, case, expect
 
+# single-turn models: their context is fixed (src/model_list.json, label "single-turn")
+SINGLE_TURN = {"gemma4e-flash:e2b", "gemma4e-flash:e4b", "qwen3vl-flash:4b",
+               "nemotron3.5-bolt-dflash-flash:e4b", "hy-mt2-flash:1.8b"}
 WORDS = {"completion", "tools", "vision", "audio", "thinking", "embedding"}
 PARAMETERS = {"tools", "tool_choice", "reasoning"}
 # a 1x1 PNG
@@ -131,11 +135,17 @@ def context_length_follows_ctx_len(api: Api) -> None:
     declared = os.environ.get("FLM_TEST_CTX_LEN")
     if not declared:
         raise Skip("set FLM_TEST_CTX_LEN to the --ctx-len the server was started with")
+    followed = 0
     for entry in listing(api):
-        if "completion" in entry.get("capabilities", ["completion"]):
-            expect(entry.get("context_length") == int(declared),
-                   f"{entry['id']}: context_length {entry.get('context_length')}, "
-                   f"the server was started with --ctx-len {declared}")
+        if "completion" not in entry.get("capabilities", ["completion"]):
+            continue
+        if entry["id"] in SINGLE_TURN:   # the loader keeps these at their own context
+            continue
+        followed += 1
+        expect(entry.get("context_length") == int(declared),
+               f"{entry['id']}: context_length {entry.get('context_length')}, "
+               f"the server was started with --ctx-len {declared}")
+    expect(followed > 0, "the listing has no chat model to check")
 
 
 def needs_engine(api: Api) -> dict[str, Any]:
