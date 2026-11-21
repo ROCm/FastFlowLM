@@ -1987,5 +1987,5 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: >-
-          python3 .github/script/ci/devkit_swap.py pending --manifests devkit-stage-manifests
+          python3 .github/script/ci/devkit_swap.py pending --manifests devkit-stage-manifests --expect-staged
           --head "${HEAD_SHA}" --run "${GITHUB_RUN_ID}" --base "${BASE_SHA}" --summary "${GITHUB_STEP_SUMMARY}"

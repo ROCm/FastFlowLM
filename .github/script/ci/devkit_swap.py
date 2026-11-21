@@ -1166,10 +1166,16 @@ def pending_text(todo: list[str], run_id: str, head: str, full: bool, ci: list[s
 
 def cmd_pending(args, git: Git) -> int:
     """PENDING_STEP: exit 1, with the fetch command, while the run staged
-    files the branch (--tree) does not have."""
+    files the branch (--tree) does not have. With --expect-staged (the run's
+    devkit-stage said it staged), every system's and runtime's manifest must
+    be there: a lost download must not read as nothing pending."""
     manifests = {}
     for key in TEST_JOBS:
         path = args.manifests / manifest_artifact(*key) / MANIFEST_FILE
+        if not path.is_file() and args.expect_staged:
+            print(f"::error::devkit_swap pending: {manifest_artifact(*key)}/{MANIFEST_FILE} is missing, but "
+                  f"devkit-stage staged files: re-run the failed jobs")
+            return 1
         if path.is_file():
             try:
                 manifests[key] = parse_manifest(path.read_bytes(), *key)
@@ -1233,6 +1239,8 @@ def main(argv: Optional[list[str]] = None, api=None) -> int:
     p.add_argument("--tree", default="", help="the commit whose files to compare (default --head)")
     p.add_argument("--base", default="", help="the pull request's base, to name a swap CI change")
     p.add_argument("--summary", default="", help="also append the Markdown here")
+    p.add_argument("--expect-staged", action="store_true",
+                   help="the run staged files: fail when any manifest is missing")
     p.add_argument("--repo-root", default=str(REPO_ROOT))
     args = parser.parse_args(argv)
     try:

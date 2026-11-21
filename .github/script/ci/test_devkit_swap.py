@@ -792,6 +792,27 @@ class Pending(SwapCase):
         code, _ = self.pending(self.tmp / "none")
         self.assertEqual(code, 0)
 
+    def test_missing_manifest_fails_when_staged(self):
+        # devkit-stage said it staged: a lost or expired download must not
+        # turn the pending verdict green.
+        code, out = self.pending(self.tmp / "none", "--expect-staged")
+        self.assertEqual(code, 1)
+        self.assertIn("devkit-stage-manifest-linux-xrt/manifest.json is missing", out)
+        d = self.write_manifests(NEW)
+        (d / ds.manifest_artifact("windows", "hrx") / ds.MANIFEST_FILE).unlink()
+        code, out = self.pending(d, "--expect-staged")
+        self.assertEqual(code, 1)
+        self.assertIn("devkit-stage-manifest-windows-hrx/manifest.json is missing", out)
+        self.repo.commit(NEW)
+        self.head = self.repo.git("rev-parse", "HEAD")
+        code, out = self.pending(self.write_manifests_again(NEW), "--expect-staged")
+        self.assertEqual(code, 0, out)
+
+    def write_manifests_again(self, new: dict) -> Path:
+        import shutil
+        shutil.rmtree(self.tmp / "manifests")
+        return self.write_manifests(new)
+
     def test_names_a_swap_ci_change(self):
         self.head = self.repo.commit({".github/workflows/build-and-test.yml": b"x: 1\n"}, "ci")
         code, out = self.pending(self.write_manifests(NEW), "--base", self.base)
@@ -1009,6 +1030,18 @@ class Wiring(unittest.TestCase):
         self.assertIn('exactly one job named "Test Windows HRX"', joined)
         self.assertIn(f'a step named "{ds.PENDING_STEP}"', joined)
         self.assertIn("must run devkit_swap.py check", joined)
+
+    def test_pending_without_expect_staged(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(rmtree, tmp)
+        rel = dc.BUILD_WORKFLOW
+        (tmp / rel).parent.mkdir(parents=True, exist_ok=True)
+        text = (dc.REPO_ROOT / rel).read_text(encoding="utf-8")
+        self.assertIn(" --expect-staged", text)
+        (tmp / rel).write_text(text.replace(" --expect-staged", ""), encoding="utf-8")
+        errors: list = []
+        dc.check_swap_wiring(tmp, errors)
+        self.assertIn("devkit_swap.py pending --expect-staged", "\n".join(errors))
 
     def test_build_and_test(self):
         text = (dc.REPO_ROOT / dc.BUILD_WORKFLOW).read_text(encoding="utf-8")

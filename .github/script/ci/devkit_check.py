@@ -113,8 +113,8 @@ Checks, each failure printed as "devkit_check: error: ..." (exit 1):
                 MANIFEST_FILE) for each os and runtime; one job named as
                 TEST_JOBS gives for each, downloading that runtime's product
                 package; a summary job with a step named PENDING_STEP that
-                runs devkit_swap.py pending; the devkit-engines and
-                devkit-xclbins jobs; and a changes job that runs
+                runs devkit_swap.py pending --expect-staged; the
+                devkit-engines and devkit-xclbins jobs; and a changes job that runs
                 devkit_swap.py verify and check with actions: read. Skipped
                 when the workflow is absent
   notices       with --base: every file added under flm-dev-kit/ between the
@@ -1126,10 +1126,11 @@ def check_swap_wiring(repo: Path, errors: list) -> int:
                           f"(the product test job of {os_name} {runtime})")
     summary = jobs.get(devkit_swap.SUMMARY_JOB, [])
     step = next((i for i, l in enumerate(summary) if l.strip() == f"- name: {devkit_swap.PENDING_STEP}"), None)
-    if step is None or "devkit_swap.py pending" not in "\n".join(summary[step:step + 30]):
+    body = "\n".join(summary[step:step + 30]) if step is not None else ""
+    if "devkit_swap.py pending" not in body or "--expect-staged" not in body:
         errors.append(f"{BUILD_WORKFLOW}: the summary job needs a step named \"{devkit_swap.PENDING_STEP}\" "
-                      f"running devkit_swap.py pending ({where} PENDING_STEP: fetch accepts a run whose only "
-                      "failure is that step)")
+                      f"running devkit_swap.py pending --expect-staged ({where} PENDING_STEP: fetch accepts a "
+                      "run whose only failure is that step; a missing manifest must fail it)")
     changes_job = "\n".join(jobs.get("changes", []))
     for sub in ("verify", "check"):
         if f"devkit_swap.py {sub}" not in changes_job:
