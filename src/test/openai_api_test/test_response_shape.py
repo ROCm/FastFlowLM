@@ -97,12 +97,13 @@ def stream_matches_nonstream_tools(api: Api) -> None:
         api, body, lambda m: [(c["function"]["name"], c["function"]["arguments"]) for c in m["tool_calls"]])
 
 
-# OGA frontends that still lack a text-only / think=False prompt-end checkpoint (tracked as follow-ups).
-EXACT_RETRY_UNSUPPORTED_PREFIXES = (
-    "gemma3-oga-hipep",
-    "gemma4-it-oga-hipep:e2b",
-    "gemma4-it-oga-hipep:e4b",
-)
+# The frontend, chosen by the catalog's details.family, takes the prompt-end checkpoint that an exact
+# retry rewinds to. These families do, and the cases passed on a model of each
+# (qwen2.5-it-oga-hipep:14b, qwen3.8-oga-hipep:27b).
+EXACT_RETRY_FAMILIES = ("qwen2", "qwen3.5")
+# These do not yet: Gemma3 on a text-only prompt, Gemma4e (gemma4-it-oga-hipep:26b-a4b) with thinking
+# off. An exact retry there replays the prompt (cached_tokens 0). Follow-up of WP-33.
+EXACT_RETRY_MISSING_FAMILIES = ("gemma3", "gemma4e")
 
 
 def _require_oga_exact_retry(api: Api) -> str:
@@ -129,8 +130,11 @@ def _require_oga_exact_retry(api: Api) -> str:
         raise flm_api.Skip(f"loaded backend is {backend!r}, not 'oga-hipep'")
 
     canonical = str(loaded.get("name") or "")
-    if any(canonical.startswith(prefix) for prefix in EXACT_RETRY_UNSUPPORTED_PREFIXES):
-        raise flm_api.Skip(f"{canonical} does not yet checkpoint text-only / think=False prompts")
+    family = details.get("family")
+    if family in EXACT_RETRY_MISSING_FAMILIES:
+        raise flm_api.Skip(f"{canonical}: the {family} frontend does not yet checkpoint the prompt end")
+    if family not in EXACT_RETRY_FAMILIES:
+        raise flm_api.Skip(f"{canonical}: exact retry is not verified for the {family!r} frontend")
     return canonical
 
 
