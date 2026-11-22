@@ -7,8 +7,7 @@
 
 `launchlib` is a header-only C++20 library. The host gives it a list of configurations and a runtime sequence per
 app. The library reads the package of each app and makes one **instruction stream** (TXN binary) for each
-configuration. It is the AIE2P counterpart of `aie4-launchlib/launchlib` (branch `flm_aie4_double_pm`), with the
-same concepts and without the PM ping-pong. Control packets (`Transport::ctrlpkt`, section 4.1) are the primary
+configuration. Control packets (`Transport::ctrlpkt`, section 4.1) are the primary
 transport and the default: the stream sends the bulk of a load as packets, with a packet buffer next to it.
 `Transport::txn` (command-processor writes only) is the fallback.
 

@@ -828,6 +828,16 @@ class Workflows(unittest.TestCase):
         devkit_check.check_bench_workflows(REPO, errors)
         self.assertEqual(errors, [])
 
+    def test_bench_job_runs_in_every_called_mode(self):
+        # Called, npu-gate here is skipped and Build and Test's gate holds the
+        # run, so the bench job must let every called mode through: the full
+        # refresh's benches were skipped when 'refresh' was missing.
+        text = workflow("devkit-bench.yml")
+        bench = text[text.index("\n  bench:\n"):]
+        cond = bench[:bench.index("runs-on:")]
+        for mode in ("pr", "nightly", "refresh"):
+            self.assertIn(f"inputs.mode == '{mode}'", cond)
+
     def test_check_catches_violations(self):
         import devkit_check
         bench, comment, build = (workflow("devkit-bench.yml"), workflow("devkit-bench-comment.yml"),

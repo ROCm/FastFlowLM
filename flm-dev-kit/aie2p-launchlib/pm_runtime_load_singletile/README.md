@@ -5,7 +5,7 @@
 
 # pm_runtime_load_singletile (AIE2P): three apps, three floorplans, one hw_context
 
-The AIE2P counterpart of `aie4-launchlib/pm_runtime_load_singletile` (branch `flm_aie4_double_pm`). Three fp32
+Three fp32
 apps that use the same cores in **different floorplans** (other routes, other DMA channels, other locks), switched
 by the launch kernels of `../launchlib` in one hw_context, and the AIE4 host test with its rows and JSON lists.
 

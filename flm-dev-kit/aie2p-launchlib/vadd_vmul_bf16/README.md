@@ -5,7 +5,7 @@
 
 # vadd_vmul_bf16 — two programs, one hw_context, the launch library
 
-The AIE2P (npu2) counterpart of `aie4-launchlib/vadd_vmul_bf16`: the same two kernels on the same cores compute
+Two kernels on the same cores of an AIE2P (npu2) array compute
 
 ```
 T1 = A + B     vadd
