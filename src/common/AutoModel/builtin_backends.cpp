@@ -143,6 +143,13 @@ void register_builtin_backends(BackendRegistry& registry) {
     registry.register_backend("gpt-oss", flm::backend::kOgaHipepBackendId,
                               flm::oga::hipep_factory(),
                               flm::oga::hipep_traits());
+    // Text models with no NPU engine: their packages run only here.
+    registry.register_backend("laguna", flm::backend::kOgaHipepBackendId,
+                              flm::oga::hipep_factory(),
+                              flm::oga::hipep_traits());
+    registry.register_backend("nemotron-h", flm::backend::kOgaHipepBackendId,
+                              flm::oga::hipep_factory(),
+                              flm::oga::hipep_traits());
 #endif
 }
 

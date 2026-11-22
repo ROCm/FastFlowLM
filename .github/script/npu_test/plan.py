@@ -93,13 +93,17 @@ PR_GPU = {
     "gemma3": "gemma3-oga-hipep:4b",
     "gemma4-12b": "gemma4-it-oga-hipep:12b",
     "gpt-oss": "gpt-oss-oga-hipep:120b",
+    "laguna": "laguna2.1-oga-hipep:33b-a3b",
+    "nemotron-h": "nemotron3.5-lightning-oga-hipep:30b-a3b",
 }
 
 # Families whose PR_GPU model the install and pr tiers test only when the
 # change touches the family (--families), so that every pull request tests
 # just the newest Qwen and Gemma: Qwen2.5 and Gemma 3, the generations before;
-# gemma4-12b, a second Gemma 4 family; and gpt-oss, whose one model is 69 GB.
-PR_GPU_WHEN_TOUCHED = {"qwen2", "gemma3", "gemma4-12b", "gpt-oss"}
+# gemma4-12b, a second Gemma 4 family; gpt-oss, whose one model is 69 GB; and
+# laguna and nemotron-h, on the TemplateChat frontend that only they use.
+PR_GPU_WHEN_TOUCHED = {"qwen2", "gemma3", "gemma4-12b", "gpt-oss",
+                       "laguna", "nemotron-h"}
 
 # Suites with a fixed NPU model list that a GPU backend run gives its own chat
 # models instead: the OpenAI contract (tools, streaming, errors, usage) holds

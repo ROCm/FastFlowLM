@@ -554,20 +554,28 @@ const char* BOUNDED_NUMBER_RULES =
     "integer ::= \"-\"? (\"0\" | [1-9] [0-9]{0,15})\n"
     "number ::= integer (\".\" [0-9]{1,15})? ([eE] [+-]? [0-9]{1,3})?\n";
 
-/// \brief Rules for Gemma4 string text of a bounded length, named gstr_<low>_<high>
-/// \note Gemma4 writes strings raw between <|"|> marks, so the text may hold no "<|".
-///       A step takes one character other than "<", or "<" with the character after
-///       it (neither "<" nor "|"), and counts what it took: the length comes out exact,
-///       which a {low,high} repetition over the two-character step would not give.
-class gemma4_bounded_strings {
+/// \brief Rules for raw string text of a bounded length, named <prefix><low>_<high>
+/// \note Gemma4 and GLM write strings raw up to a mark that starts with "<" (<|"|>,
+///       </arg_value>), so the text may not hold "<" followed by the mark's next
+///       character. A step takes one character other than "<", or "<" with the
+///       character after it (one the dialect allows there), and counts what it took:
+///       the length comes out exact, which a {low,high} repetition over the
+///       two-character step would not give.
+class bounded_raw_strings {
 public:
-    /// \brief EBNF for a string of low..high characters (high -1: no upper bound)
-    std::string value(int64_t low, int64_t high) {
+    /// \param prefix starts the rule names
+    /// \param after_lt EBNF class of the character after a "<" that a step takes
+    /// \param unbounded EBNF for text of any length
+    bounded_raw_strings(std::string prefix, std::string after_lt, std::string unbounded)
+        : prefix_(std::move(prefix)), after_lt_(std::move(after_lt)), unbounded_(std::move(unbounded)) {}
+
+    /// \brief The rule for text of low..high characters (high -1: no upper bound)
+    std::string rule(int64_t low, int64_t high) {
         wanted_.insert({low, high});
-        return "(\"<|\\\"|>\" " + name(low, high) + " \"<|\\\"|>\")";
+        return name(low, high);
     }
 
-    /// \brief The rules every value() so far refers to
+    /// \brief The rules every rule() so far refers to
     std::string rules() const {
         std::ostringstream g;
         std::set<std::pair<int64_t, int64_t>> done;
@@ -579,7 +587,7 @@ public:
                 continue;
             }
             if (low == 0 && high < 0) {
-                g << name(low, high) << " ::= ([^<] | \"<\" [^|])*\n";
+                g << name(low, high) << " ::= " << unbounded_ << "\n";
                 continue;
             }
             std::string steps;
@@ -589,8 +597,8 @@ public:
                 }
                 const std::pair<int64_t, int64_t> next = {std::max<int64_t>(low - width, 0),
                                                           high < 0 ? -1 : high - width};
-                steps += std::string(steps.empty() ? "" : " | ") + (width == 1 ? "[^<]" : "\"<\" [^<|]") + " " +
-                         name(next.first, next.second);
+                steps += std::string(steps.empty() ? "" : " | ") + (width == 1 ? "[^<]" : "\"<\" " + after_lt_) +
+                         " " + name(next.first, next.second);
                 todo.push_back(next);
             }
             if (steps.empty()) {
@@ -605,18 +613,22 @@ public:
     }
 
 private:
-    static std::string name(int64_t low, int64_t high) {
-        return "gstr_" + std::to_string(low) + "_" + (high < 0 ? std::string("x") : std::to_string(high));
+    std::string name(int64_t low, int64_t high) const {
+        return prefix_ + std::to_string(low) + "_" + (high < 0 ? std::string("x") : std::to_string(high));
     }
 
+    std::string prefix_, after_lt_, unbounded_;
     std::set<std::pair<int64_t, int64_t>> wanted_;
 };
 
 /// \brief Gemma4 call arguments: {key:<|"|>text<|"|>,n:5,flag:true,list:[...]}
 std::string gemma4_arguments_grammar(const json& schema) {
-    gemma4_bounded_strings strings;
+    // a string's text may hold no "<|"
+    bounded_raw_strings strings("gstr_", "[^<|]", "([^<] | \"<\" [^|])*");
     const value_syntax syntax{[](const std::string& s) { return ebnf_literal("<|\"|>" + s + "<|\"|>"); }, "\",\"",
-                              [&strings](int64_t low, int64_t high) { return strings.value(low, high); }};
+                              [&strings](int64_t low, int64_t high) {
+                                  return "(\"<|\\\"|>\" " + strings.rule(low, high) + " \"<|\\\"|>\")";
+                              }};
     std::ostringstream g;
     g << "root ::= \"{\" args \"}\"\n"
       << argument_list_rules(schema, "", "\":\"", "\",\"", syntax, true)
@@ -665,6 +677,108 @@ std::string python_calls_grammar(const std::vector<tool_def>& tools, bool parall
     return g.str();
 }
 
+// ---------------------------------------------------------------- glm xml arguments
+
+/// \brief Whether GLM writes a value of this schema raw: it may be a string, or anything
+/// \param root the parameters schema, which a "#/$defs/..." reference points into
+bool glm_raw_value(const json& property, const json& root, int depth = 0) {
+    if (!property.is_object() || depth > 8) {
+        return true;
+    }
+    if (property.contains("$ref")) {
+        const std::string ref = property["$ref"].is_string() ? property["$ref"].get<std::string>() : "";
+        for (const std::string defs : {"$defs", "definitions"}) {
+            const std::string prefix = "#/" + defs + "/";
+            if (ref.compare(0, prefix.size(), prefix) == 0 && root.contains(defs) && root[defs].is_object() &&
+                root[defs].contains(ref.substr(prefix.size()))) {
+                return glm_raw_value(root[defs][ref.substr(prefix.size())], root, depth + 1);
+            }
+        }
+        return false;
+    }
+    if (property.contains("const")) {
+        return property["const"].is_string();
+    }
+    if (property.contains("enum") && property["enum"].is_array()) {
+        return std::any_of(property["enum"].begin(), property["enum"].end(), [](const json& v) { return v.is_string(); });
+    }
+    if (property.contains("type")) {
+        return is_string_schema(property);
+    }
+    for (const char* key : {"anyOf", "oneOf"}) {
+        if (property.contains(key) && property[key].is_array()) {
+            return std::any_of(property[key].begin(), property[key].end(),
+                               [&](const json& option) { return glm_raw_value(option, root, depth + 1); });
+        }
+    }
+    return !property.contains("allOf") && !property.contains("properties") && !property.contains("items");
+}
+
+/// \brief A raw GLM string of low..high characters (high -1: no upper bound)
+/// \note The parser ends a value at its first "</arg_value>", so a "<" in the text is
+///       followed by neither "/" nor "<" (whose step would let a "</" through).
+json glm_bounded_string(int64_t low, int64_t high) {
+    bounded_raw_strings strings("s", "[^</]", "([^<] | \"<\" [^</])*");
+    const std::string root = "root ::= " + strings.rule(low, high) + "\n";
+    return grammar_content(root + strings.rules());
+}
+
+/// \brief The arguments of a GLM call: <arg_key>k</arg_key><arg_value>v</arg_value> for each
+/// \note Laguna's template writes a string raw and anything else as JSON, with nothing
+///       between the parts. The parser ends a value at its first "</arg_value>" and the
+///       call at its first "</tool_call>", so a raw value holds neither. As in the
+///       other dialects, declared properties come in their order, each optional one
+///       free to be left out, and a string keeps its minLength/maxLength; a schema
+///       without declared properties takes any keys.
+/// \param schema the parameters schema, normalized for xgrammar
+/// \param sent the schema as the request sent it, where a string still has its bounds
+json glm_arguments(const json& schema, const json& sent) {
+    static const std::vector<std::string> RAW_EXCLUDES = {"</tool_call>"};
+    const bool declared = schema.is_object() && schema.contains("properties") && schema["properties"].is_object() &&
+                          !schema["properties"].empty() && schema.value("additionalProperties", false) == false;
+    const json none;
+    const json& sent_properties =
+        sent.is_object() && sent.contains("properties") && sent["properties"].is_object() ? sent["properties"] : none;
+    if (!declared) {
+        return {{"type", "star"},
+                {"content", sequence({tag("<arg_key>", any_text(RAW_EXCLUDES), "</arg_key>"),
+                                      tag("<arg_value>", any_text(RAW_EXCLUDES), "</arg_value>")})}};
+    }
+    std::set<std::string> required;
+    for (const auto& name : schema.value("required", json::array())) {
+        if (name.is_string()) required.insert(name.get<std::string>());
+    }
+    std::vector<json> pairs;
+    for (const auto& [name, property] : schema["properties"].items()) {
+        json value;
+        const bool string_enum = property.is_object() && property.contains("enum") && property["enum"].is_array() &&
+                                 !property["enum"].empty() &&
+                                 std::all_of(property["enum"].begin(), property["enum"].end(),
+                                             [](const json& v) { return v.is_string(); });
+        if (string_enum) {
+            std::vector<json> options;
+            for (const auto& option : property["enum"]) options.push_back(const_string(option.get<std::string>()));
+            value = {{"type", "or"}, {"elements", std::move(options)}};
+        } else if (glm_raw_value(property, schema)) {
+            std::optional<std::pair<int64_t, int64_t>> bounds;
+            if (sent_properties.contains(name) && sent_properties[name].is_object()) {
+                bounds = string_length_bounds(sent_properties[name]);
+            }
+            value = bounds ? glm_bounded_string(bounds->first, bounds->second) : any_text(RAW_EXCLUDES);
+        } else {
+            // a $ref in the property points into the schema it came from
+            json sub = property;
+            for (const char* defs : {"$defs", "definitions"}) {
+                if (schema.contains(defs) && !sub.contains(defs)) sub[defs] = schema[defs];
+            }
+            value = schema_content(sub);
+        }
+        json pair = tag("<arg_key>" + name + "</arg_key><arg_value>", std::move(value), "</arg_value>");
+        pairs.push_back(required.count(name) ? std::move(pair) : optional_format(std::move(pair)));
+    }
+    return sequence(std::move(pairs));
+}
+
 // ---------------------------------------------------------------- per format tool tags
 
 struct tool_syntax {
@@ -703,6 +817,11 @@ tool_syntax tool_tags(const chat_format_spec& spec, const std::vector<tool_def>&
                 syntax.trigger = "<|tool_call>";
                 syntax.tags.push_back(tag("<|tool_call>call:" + tool.name,
                                           grammar_content(gemma4_arguments_grammar(tool.declared)), "<tool_call|>"));
+                break;
+            case chat_format_kind::GLM_XML:
+                syntax.trigger = "<tool_call>";
+                syntax.tags.push_back(
+                    tag("<tool_call>" + tool.name, glm_arguments(tool.parameters, tool.declared), "</tool_call>"));
                 break;
             case chat_format_kind::LFM2_PYTHONIC:
             case chat_format_kind::CONTENT_ONLY:
