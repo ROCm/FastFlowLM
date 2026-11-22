@@ -211,6 +211,9 @@ private:
     Live& Active() { return slots_[*active_]; }
     OgaApi::Owned<OgaGenerator> NewGenerator(std::uint32_t max_length) const;
     void AppendTokens(OgaGenerator* generator, const int* ids, std::size_t count) const;
+    /// \brief give the empty generator of `run` the text `ids`, starting with a run of the
+    ///        first token alone once a first run has given all-zero logits (split_first_run_)
+    void AppendFirst(Live& run, const std::vector<int>& ids);
     /// \brief give an empty generator `ids` and `images` in one call
     /// \note No images: the batch of one image without pixels (empty_image_batch)
     void SetInputs(OgaGenerator* generator, const std::vector<int>& ids,
@@ -233,6 +236,12 @@ private:
     std::optional<OgaVisionConfig> vision_;
     bool empty_image_batch_ = false;
     bool rewinds_ = false;
+    /// \brief whether a new generator runs a prompt's first token on its own
+    /// \note Set once a first run gives all-zero logits, as Laguna 2.1's does on OGA 0.19 with
+    ///       hip-ep 0.5.3: in a run of 8 or more tokens its BOS token leaves the cache wrong,
+    ///       and every later run of 8 or more then gives all-zero logits too. Run alone, the
+    ///       token leaves the cache right.
+    bool split_first_run_ = false;
     OgaSlotLimits limits_;
     std::uint64_t replayed_ = 0;
     std::uint64_t reused_ = 0;
