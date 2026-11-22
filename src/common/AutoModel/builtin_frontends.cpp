@@ -26,6 +26,7 @@
 #include "AutoModel/modeling_qwen3_8mtp.hpp"
 #include "AutoModel/modeling_qwen3_asr.hpp"
 #include "AutoModel/modeling_qwen3vl.hpp"
+#include "AutoModel/modeling_template_chat.hpp"
 
 #include "device_runtime.hpp"
 
@@ -91,6 +92,8 @@ void register_builtin_frontends(FrontendRegistry& registry) {
     Register<Hunyuan>(registry, "hunyuan");
     Register<HyMemory>(registry, "hy-memory");
     Register<Phi4>(registry, "phi4");
+    Register<Laguna>(registry, "laguna");
+    Register<NemotronH>(registry, "nemotron-h");
 }
 
 }  // namespace flm::frontend

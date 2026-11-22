@@ -41,17 +41,34 @@ name: Build and Test
 # weights or not, is required the same way in Test Windows HIPEP, beside its
 # models of each family, on the kinds of machine that test changed models
 # (the STX Halo). A change that only touches docs builds and tests nothing;
-# one only under flm-dev-kit/ (which no product package uses yet) runs no
-# product suite and only the dev-kit checks (devkit-static), plus the dev-kit
-# engine builds (devkit-engines) when it selects the dll area and the kernel
-# builds (devkit-xclbins) when it selects the xclbin area. On a pull request
-# whose dev-kit engines or kernels serve some model, the Linux and Windows,
-# XRT and HRX portable packages build too, and the dev-kit overlay tests
-# (test-*-devkit) run those engines and kernels over them on the NPU runners.
-# When such a change is dev-kit engine or kernel source (changes.py
-# devkit_bench), devkit-bench then runs the perf and accuracy benches
-# (devkit-bench.yml) on those builds; the nightly run benches them too when
-# that source changed since the last nightly baseline.
+# one only under flm-dev-kit/ runs no product suite of its own, the dev-kit
+# checks (devkit-static), and the dev-kit engine builds (devkit-engines) when
+# it selects the dll area and the kernel builds (devkit-xclbins) when it
+# selects the xclbin area. Pushes to main, the nightly and dispatches build
+# the dev kit too (devkit-engines-main, devkit-xclbins-main), which no
+# product job waits for.
+#
+# Dev-kit staging: on a pull request whose dev-kit engine or kernel source
+# changed (changes.py devkit_stage), devkit-stage puts what those builds
+# made into every product build before CMake runs (.github/script/ci/
+# devkit_stage.py, .github/actions/devkit-stage-apply): the libraries of
+# the engines serving the touched families into src/lib/<runtime>/ and the
+# rebuilt kernels of the models whose kernel source or assignment changed
+# into src/xclbins/<folder>/<slot>, in the build's workspace only, never
+# committed. The packages are then what main would ship after the swap
+# (below), and one NPU test pass tests them: the four portable test jobs
+# run the union of the product's selection and the staged files' (the
+# families of the staged engines, the staged kernels' models and the new
+# models, required), even when only the dev kit changed. The Linux and
+# Windows, XRT and HRX portable packages build for that even then. The
+# product builds wait for the dev-kit builds on such a pull request (and on
+# one that changes the dev-kit CI, which runs them but stages nothing);
+# product-only pull requests, pushes, the nightly and releases stage nothing
+# and wait for nothing. When the change is dev-kit engine or kernel source
+# (changes.py devkit_bench), devkit-bench then runs the perf and accuracy
+# benches (devkit-bench.yml) on the staged packages; the nightly run benches
+# the dev-kit builds too when that source changed since the last nightly
+# baseline.
 # The portable test jobs and Test Windows HIPEP otherwise get 120 minutes on
 # the pr tier and 360 on the full one, which runs every model and every d3
 # size and may first download tens of GB of weights.
@@ -63,30 +80,37 @@ name: Build and Test
 #
 # Prebuilt binaries (flm-dev-kit/AGENTS.md, "Prebuilt binaries"): the engine
 # libraries in src/lib/{xrt,hrx}/ and the kernels in src/xclbins/ are never
-# edited by hand. A pull request changes dev-kit source; its run builds and
-# overlay-tests the binaries, and each overlay job uploads a manifest of the
-# files it tested (devkit-overlay-manifest-<os>-<runtime>). The author then
-# runs .github/script/ci/devkit_swap.py fetch, which commits exactly those
-# bytes as a swap commit, and pushes it. The changes job verifies a swap
-# commit at the head (devkit_swap.py verify: its parent is the tested commit,
-# it holds only the manifests' files, byte for byte, and that run passed);
-# a verified one builds and tests nothing again and runs devkit-static only.
-# devkit_swap.py check reports, on every pull request, any change under
-# src/lib or src/xclbins that no verified swap brought in (a warning for now).
-# Both run from the pull request's merge commit, like the npu-gate: defense in
-# depth, not the boundary. A swap that comes with a change to the code that
-# writes or checks the manifests is not verified (devkit_swap.py
-# SWAP_CI_PATHS), and reviewers must read any .github/ change in a pull
-# request that touches src/lib or src/xclbins; review and branch protection
-# are the guarantee.
+# edited by hand. A pull request changes dev-kit source; its run builds the
+# binaries, stages them into the product builds and NPU-tests those
+# packages, and devkit-stage uploads a manifest of the files it staged
+# (devkit-stage-manifest-<os>-<runtime>). While the branch lacks any of
+# them, summary's "Dev-kit swap pending" fails the pull request with the
+# command that commits them: the author runs .github/script/ci/
+# devkit_swap.py fetch --run <id>, which commits exactly those bytes as a
+# swap commit (it accepts a run whose only failure is that step), and
+# pushes it. The changes job verifies a swap commit at the head
+# (devkit_swap.py verify: its parent is the tested commit, it holds only the
+# manifests' files, byte for byte, and that run passed); a verified one
+# builds and tests nothing again and runs devkit-static only. A new model
+# gets through the same way: its engine and kernels are staged before they
+# exist in src/ (devkit_check.py reports them as pending on a pull request,
+# an error anywhere else). devkit_swap.py check fails, on every pull
+# request, any change under src/lib or src/xclbins that no verified swap
+# brought in (summary reports it). Both run from the pull request's merge
+# commit, like the npu-gate: defense in depth, not the boundary. A swap that
+# comes with a change to the code that stages, writes or checks the
+# manifests is not verified (devkit_swap.py SWAP_CI_PATHS), and reviewers
+# must read any .github/ change in a pull request that touches src/lib or
+# src/xclbins; review and branch protection are the guarantee.
 #
 # A dispatch with devkit-full-refresh, on a pull request's branch, is the
 # dev-kit full refresh: every engine and every shipped kernel (devkit-xclbins
-# mode assigned) overlay-tested on the four overlay jobs on the full tier,
-# with every NPU catalog model of the package required, then benched
-# (devkit-bench.yml mode refresh: this run's numbers, no comparison); the
-# product jobs run as for any dispatch. devkit_swap.py fetch takes such a run
-# for the pull request whose head it built:
+# mode assigned) staged into the product builds, whose test jobs run on the
+# dispatch's tier (default pr; -f tier=full for the full one) with every NPU
+# catalog model required, then benched
+# (devkit-bench.yml mode refresh: this run's numbers, no comparison).
+# devkit_swap.py fetch takes such a run for the pull request whose head it
+# built:
 #   gh workflow run build-and-test.yml --ref <branch> -f devkit-full-refresh=true
 #
 # release.yml calls this with release: true before publishing a tag.
@@ -117,7 +141,9 @@ on:
       devkit-full-refresh:
         description: >-
           Dev-kit full refresh (a pull request's branch only): build every dev-kit engine and shipped
-          kernel, overlay-test them all on the full tier and bench them, for devkit_swap.py fetch
+          kernel, stage them all into the product builds, test those (on the tier input, every catalog
+          model required) and bench them,
+          for devkit_swap.py fetch
         type: boolean
         default: false
   workflow_call:
@@ -179,23 +205,26 @@ jobs:
       hipep-machines: ${{ steps.hipep.outputs.machines }}
       new-models: ${{ steps.detect.outputs.new-models }}
       # For the dev-kit jobs. flm-dev-kit/ paths select no product suite,
-      # only the portable builds the overlay tests start from
-      # (devkit-overlay); see .github/script/ci/changes.py.
+      # only the portable builds their staged files are tested in
+      # (devkit-stage); see .github/script/ci/changes.py.
       devkit: ${{ steps.detect.outputs.devkit }}
       devkit-catalog: ${{ steps.detect.outputs.devkit-catalog }}
       devkit-areas: ${{ steps.detect.outputs.devkit-areas }}
       devkit-families: ${{ steps.detect.outputs.devkit-families }}
-      devkit-overlay: ${{ steps.detect.outputs.devkit-overlay }}
+      devkit-stage: ${{ steps.detect.outputs.devkit-stage }}
       # Whether a pull request runs the dev-kit benches (devkit-bench).
       devkit-bench: ${{ steps.detect.outputs.devkit-bench }}
       # "true": the head is a verified dev-kit swap commit; nothing builds.
       swap-verified: ${{ steps.detect.outputs.swap-verified }}
       # "true" on a dev-kit full refresh dispatch (see the top).
       devkit-full-refresh: ${{ steps.refresh.outputs.full-refresh }}
-      # The main commit the dev-kit binaries were built on, for the overlay
+      # The main commit the dev-kit binaries were built on, for the staging
       # manifests: the pull request's base, or the full refresh's merge base
       # with main.
       devkit-base: ${{ steps.refresh.outputs.base }}
+      # success, failure or skipped: devkit_swap.py check (summary fails a
+      # pull request on failure).
+      binaries-check: ${{ steps.binaries.outcome }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -223,6 +252,9 @@ jobs:
           python3 .github/script/ci/devkit_swap.py verify --head "${HEAD_SHA}" --base "${BASE_SHA}"
           --pr "${PR_NUMBER}" --head-ref "${HEAD_REF}" --head-repo "${HEAD_REPO}" --github-output
 
+      # The dev-kit full refresh tests on the dispatch's tier input (default pr), with
+      # every catalog model required: the full tier's known failures elsewhere would
+      # otherwise block every refresh. -f tier=full runs it there.
       - name: Detect changes
         id: detect
         uses: ./.github/actions/detect-changes
@@ -232,9 +264,12 @@ jobs:
 
       # Every pull request: a change under src/lib or src/xclbins that no
       # verified swap commit brought in is a hand edit (devkit_swap.py
-      # SWAP_ENFORCE: a warning for now, an error once it is flipped).
+      # SWAP_ENFORCE), an error. The job carries on, so the run still
+      # builds and tests; summary fails the pull request on it.
       - name: Check the prebuilt binaries come from CI
+        id: binaries
         if: github.event_name == 'pull_request'
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -317,6 +352,11 @@ jobs:
   # every file as changed), deliberately: it checks the very catalog being
   # released, in about a minute, but only summary's Dev-kit checks, which
   # runs on pull requests, acts on its result, so it holds no release up.
+  # On a pull request a binary the catalog needs and src/ lacks (a new
+  # model's kernels, a new engine's libraries) is pending, not an error
+  # (--pending-ok): devkit-stage must stage every one, and summary fails a
+  # run that has pending binaries and staged nothing. Anywhere else it is
+  # an error, so main never lacks one.
   devkit-static:
     needs: changes
     if: needs.changes.outputs.devkit == 'true' || needs.changes.outputs.devkit-catalog == 'true'
@@ -324,6 +364,8 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+    outputs:
+      pending: ${{ steps.check.outputs.pending }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -333,56 +375,275 @@ jobs:
           persist-credentials: false
 
       - name: Check the dev kit
+        id: check
         env:
           BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
           HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-        run: python3 .github/script/ci/devkit_check.py --base "${BASE}" --head "${HEAD}"
+          PENDING_OK: ${{ github.event_name == 'pull_request' && '--pending-ok' || '' }}
+        run: |
+          python3 .github/script/ci/devkit_check.py --base "${BASE}" --head "${HEAD}" ${PENDING_OK} --github-output
 
   # The dev kit's engine libraries (flm-dev-kit/FLM_DLL), built for Linux and
-  # Windows, XRT and HRX, on hosted runners (devkit-engines.yml): when a change
-  # selects the dll dev-kit area, and on every push to main and nightly run so
-  # main stays green. Not for a release: the dev kit ships in no package.
-  # packages: read pulls the build-environment container.
+  # Windows, XRT and HRX, on hosted runners (devkit-engines.yml), by two
+  # callers that never run in the same run. devkit-engines: on a pull
+  # request that selects the dll dev-kit area, and on the dev-kit full
+  # refresh; devkit-stage, and so the product builds, wait for it.
+  # devkit-engines-main: on every push to main and nightly run (so main
+  # stays green), and a dispatch that selects the area; nothing waits for
+  # it, so those runs' product builds start at once. Not for a release: the
+  # dev kit ships in no package. packages: read pulls the build-environment
+  # container.
   devkit-engines:
     needs: changes
     if: >-
-      ${{ !inputs.release && (github.event_name == 'schedule'
-      || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-      || contains(format(',{0},', needs.changes.outputs.devkit-areas), ',dll,')) }}
+      ${{ !inputs.release
+      && ((github.event_name == 'pull_request'
+           && contains(format(',{0},', needs.changes.outputs.devkit-areas), ',dll,'))
+          || needs.changes.outputs.devkit-full-refresh == 'true') }}
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/devkit-engines.yml
+
+  devkit-engines-main:
+    needs: changes
+    if: >-
+      ${{ !inputs.release && github.event_name != 'pull_request'
+      && needs.changes.outputs.devkit-full-refresh != 'true'
+      && (github.event_name == 'schedule'
+          || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+          || contains(format(',{0},', needs.changes.outputs.devkit-areas), ',dll,')) }}
     permissions:
       contents: read
       packages: read
     uses: ./.github/workflows/devkit-engines.yml
 
   # The dev kit's NPU kernels (flm-dev-kit/FLM_Xclbin), built with Peano in
-  # the aie-build image on hosted runners (devkit-xclbins.yml): on a pull
-  # request that selects the xclbin dev-kit area, the builds its changes
-  # touch (mode changed, diffed like changes.py from the merge base of the
-  # pull request's base and head; a replaced src/xclbins/<folder>/<slot>
-  # rebuilds the artifact assigned to that slot, only to compare it); on every push to main, every kernel the
-  # product ships (assigned); nightly, every build (all); on any other run
-  # that selects the area (workflow_dispatch: no base to diff), assigned.
-  # Not for a release.
-  # packages: read pulls the image from GHCR.
+  # the aie-build image on hosted runners (devkit-xclbins.yml), by two
+  # callers as the engines. devkit-xclbins: on a pull request that selects
+  # the xclbin dev-kit area, the builds its changes touch (mode changed,
+  # diffed like changes.py from the merge base of the pull request's base
+  # and head; a replaced src/xclbins/<folder>/<slot> rebuilds the artifact
+  # assigned to that slot, only to compare it), and on the dev-kit full
+  # refresh every kernel the product ships (assigned); devkit-stage waits
+  # for it. devkit-xclbins-main: on every push to main, every kernel the
+  # product ships (assigned); nightly, every build (all); on a dispatch that
+  # selects the area (no base to diff), assigned; nothing waits for it. Not
+  # for a release. packages: read pulls the image from GHCR.
   devkit-xclbins:
     needs: changes
     if: >-
-      ${{ !inputs.release && (github.event_name == 'schedule'
-      || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-      || contains(format(',{0},', needs.changes.outputs.devkit-areas), ',xclbin,')) }}
+      ${{ !inputs.release
+      && ((github.event_name == 'pull_request'
+           && contains(format(',{0},', needs.changes.outputs.devkit-areas), ',xclbin,'))
+          || needs.changes.outputs.devkit-full-refresh == 'true') }}
     permissions:
       contents: read
       packages: read
     uses: ./.github/workflows/devkit-xclbins.yml
     with:
-      # changed only on a pull request, the one event with a base to diff;
-      # any other run that gets here (workflow_dispatch) builds what ships.
-      mode: >-
-        ${{ github.event_name == 'pull_request' && 'changed'
-        || github.event_name == 'schedule' && 'all'
-        || 'assigned' }}
+      mode: ${{ github.event_name == 'pull_request' && 'changed' || 'assigned' }}
       base: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
       head: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+  devkit-xclbins-main:
+    needs: changes
+    if: >-
+      ${{ !inputs.release && github.event_name != 'pull_request'
+      && needs.changes.outputs.devkit-full-refresh != 'true'
+      && (github.event_name == 'schedule'
+          || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+          || contains(format(',{0},', needs.changes.outputs.devkit-areas), ',xclbin,')) }}
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/devkit-xclbins.yml
+    with:
+      mode: ${{ github.event_name == 'schedule' && 'all' || 'assigned' }}
+      head: ${{ github.sha }}
+
+  # ── Dev-kit staging ──────────────────────────────────────────────────────
+  # On a pull request whose dev-kit engine or kernel source changed
+  # (changes devkit-stage), and on the dev-kit full refresh: what the
+  # dev-kit builds made, checked and laid out for the product builds
+  # (.github/script/ci/devkit_stage.py, which documents the rules): the
+  # libraries of the engines serving devkit-families (every engine and
+  # shared unit when every family is touched) for each system and runtime,
+  # and the kernels of devkit-xclbins' bench-models (the models whose kernel
+  # source or assignment changed; not canary or compare-only rebuilds).
+  # Existing files are replaced; a new one only when engines.json or
+  # kernel_assignment.json declares it. The ABI check runs here, on each
+  # runtime's libraries as they will be, and every binary the catalog needs
+  # that src/ lacks (devkit-static's pending ones: a new model's kernels, a
+  # new engine's libraries) must be staged. Uploads devkit-stage-<lin|win>-
+  # <xrt|hrx> (the files at their repository paths, for .github/actions/
+  # devkit-stage-apply in each product build; 7 days, as the dev-kit
+  # builds) and devkit-stage-manifest-<os>-<runtime> (devkit_swap.py's
+  # record of every staged file; 30 days), and gives the product test jobs
+  # their selection. A dev-kit build that failed fails this job, which
+  # leaves the product builds skipped: nothing is built from half the
+  # change. It waits only for changes and the pull request's dev-kit builds
+  # (devkit-engines, devkit-xclbins, which run on pull requests and the full
+  # refresh only), so a run that stages nothing (a product-only pull
+  # request, a push, the nightly, a release) skips it as soon as changes is
+  # done; a pull request that builds the dev kit but stages nothing (a
+  # dev-kit CI change) waits for those builds. Its id is its name:
+  # devkit_swap.py reads it as STAGE_JOB.
+  devkit-stage:
+    needs: [changes, devkit-engines, devkit-xclbins]
+    if: >-
+      ${{ !cancelled() && !inputs.release && needs.changes.result == 'success'
+      && ((github.event_name == 'pull_request' && needs.changes.outputs.devkit-stage == 'true')
+          || needs.changes.outputs.devkit-full-refresh == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      staged: ${{ steps.stage.outputs.staged }}
+      suites: ${{ steps.stage.outputs.suites }}
+      hrx-suites: ${{ steps.stage.outputs.hrx-suites }}
+      families: ${{ steps.stage.outputs.families }}
+      required: ${{ steps.stage.outputs.required }}
+    steps:
+      - name: Check the dev-kit builds
+        env:
+          ENGINES: ${{ needs.devkit-engines.result }}
+          XCLBINS: ${{ needs.devkit-xclbins.result }}
+        run: |
+          rc=0
+          for entry in "devkit-engines=${ENGINES}" "devkit-xclbins=${XCLBINS}"; do
+            case "${entry#*=}" in
+              success|skipped) ;;
+              *) echo "::error::${entry%%=*} did not pass (${entry#*=}): nothing is staged, so the product builds and their NPU tests do not run; fix the dev-kit build and push"; rc=1 ;;
+            esac
+          done
+          exit "${rc}"
+
+      # src/lib and src/xclbins (the ABI check, the replaced files, what is
+      # pending), the dev kit's engines.json, Makefiles and
+      # kernel_assignment.json, and the catalog.
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            .github/script
+            flm-dev-kit/FLM_DLL
+            flm-dev-kit/FLM_Xclbin
+            src/lib
+            src/xclbins
+
+      - name: Download the dev-kit engines
+        if: needs.devkit-engines.result == 'success'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: devkit-libs-*
+          path: ${{ runner.temp }}/devkit-libs
+
+      - name: Download the dev-kit kernels
+        if: needs.devkit-xclbins.result == 'success'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: devkit-xclbins
+          path: ${{ runner.temp }}/devkit-xclbins
+
+      - name: Stage
+        id: stage
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          BASE_SHA: ${{ needs.changes.outputs.devkit-base }}
+          FAMILIES: ${{ needs.changes.outputs.devkit-families }}
+          # JSON, so in the environment.
+          DEVKIT_KERNEL_MODELS: ${{ needs.devkit-xclbins.result == 'success' && needs.devkit-xclbins.outputs.bench-models || '[]' }}
+          SUITES: ${{ needs.changes.outputs.suites }}
+          PRODUCT_FAMILIES: ${{ needs.changes.outputs.families }}
+          NEW_MODELS: ${{ needs.changes.outputs.new-models }}
+          FULL_REFRESH: ${{ needs.changes.outputs.devkit-full-refresh }}
+        run: |
+          set -euo pipefail
+          args=(--out "${RUNNER_TEMP}/devkit-stage" --head-sha "${HEAD_SHA}" --base-sha "${BASE_SHA}"
+                --families "${FAMILIES}" --suites "${SUITES}" --product-families "${PRODUCT_FAMILIES}"
+                --new-models "${NEW_MODELS}" --github-output)
+          for dir in "${RUNNER_TEMP}"/devkit-libs/devkit-libs-*; do
+            [ -d "${dir}" ] && args+=(--libs "${dir##*/devkit-libs-}=${dir}")
+          done
+          [ -d "${RUNNER_TEMP}/devkit-xclbins" ] && args+=(--xclbins "${RUNNER_TEMP}/devkit-xclbins")
+          [ "${FULL_REFRESH}" = true ] && args+=(--require-all --full-refresh)
+          python3 .github/script/ci/devkit_stage.py "${args[@]}"
+
+      # What the product builds copy in (only when something was staged).
+      - name: Upload the Linux XRT files
+        if: steps.stage.outputs.staged == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: devkit-stage-lin-xrt
+          path: ${{ runner.temp }}/devkit-stage/stage-lin-xrt/
+          retention-days: 7
+          if-no-files-found: error
+          overwrite: true
+      - name: Upload the Linux HRX files
+        if: steps.stage.outputs.staged == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: devkit-stage-lin-hrx
+          path: ${{ runner.temp }}/devkit-stage/stage-lin-hrx/
+          retention-days: 7
+          if-no-files-found: error
+          overwrite: true
+      - name: Upload the Windows XRT files
+        if: steps.stage.outputs.staged == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: devkit-stage-win-xrt
+          path: ${{ runner.temp }}/devkit-stage/stage-win-xrt/
+          retention-days: 7
+          if-no-files-found: error
+          overwrite: true
+      - name: Upload the Windows HRX files
+        if: steps.stage.outputs.staged == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: devkit-stage-win-hrx
+          path: ${{ runner.temp }}/devkit-stage/stage-win-hrx/
+          retention-days: 7
+          if-no-files-found: error
+          overwrite: true
+
+      # The records devkit_swap.py fetch, verify and pending read
+      # (devkit_swap.py MANIFEST_ARTIFACT). Small, kept 30 days.
+      - name: Upload the Linux XRT manifest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: devkit-stage-manifest-linux-xrt
+          path: ${{ runner.temp }}/devkit-stage/manifest-linux-xrt/manifest.json
+          retention-days: 30
+          if-no-files-found: error
+          overwrite: true
+      - name: Upload the Linux HRX manifest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: devkit-stage-manifest-linux-hrx
+          path: ${{ runner.temp }}/devkit-stage/manifest-linux-hrx/manifest.json
+          retention-days: 30
+          if-no-files-found: error
+          overwrite: true
+      - name: Upload the Windows XRT manifest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: devkit-stage-manifest-windows-xrt
+          path: ${{ runner.temp }}/devkit-stage/manifest-windows-xrt/manifest.json
+          retention-days: 30
+          if-no-files-found: error
+          overwrite: true
+      - name: Upload the Windows HRX manifest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: devkit-stage-manifest-windows-hrx
+          path: ${{ runner.temp }}/devkit-stage/manifest-windows-hrx/manifest.json
+          retention-days: 30
+          if-no-files-found: error
+          overwrite: true
 
   # ── NPU approval gate ────────────────────────────────────────────────────
   # The NPU runners are few and self-hosted, so no job lands on them unless
@@ -460,12 +721,12 @@ jobs:
   # those of the self-hosted jobs; a job added there must be added here, or it
   # will not run for such pull requests). Approval holds for one run: every
   # new push asks again. Approvers must review the pull request's .github/
-  # changes: its workflow and actions decide what runs on the runners (the
-  # dev-kit overlay tests run the base's npu_test harness, but through the
-  # pull request's actions, so that is no boundary). A pull request that
-  # selects the xclbin area asks for approval before the kernel build has
-  # said whether any model's kernel was rebuilt; when none was, no overlay
-  # test runs and summary does not need the approval.
+  # changes: its workflow and actions decide what runs on the runners, and
+  # on a pull request that stages dev-kit files (devkit-stage) the product
+  # test jobs run its binaries with its npu_test harness. Such a pull
+  # request asks for approval before the dev-kit builds have said whether
+  # anything is staged; when nothing is and no product suite runs, no NPU
+  # job runs and summary does not need the approval.
   npu-approve:
     needs: [changes, npu-gate]
     if: >-
@@ -476,7 +737,7 @@ jobs:
                || needs.changes.outputs.source == 'true'
                || (needs.changes.outputs.hipep == 'true' && needs.changes.outputs.hipep-machines != '[]')
                || vars.FLM_INSTALL_TESTS == 'true'))
-          || (github.event_name == 'pull_request' && needs.changes.outputs.devkit-overlay == 'true'))
+          || (github.event_name == 'pull_request' && needs.changes.outputs.devkit-stage == 'true'))
     runs-on: ubuntu-latest
     environment: npu-approval
     steps:
@@ -491,102 +752,134 @@ jobs:
 
   build-lin-xrt-portable:
     name: Linux XRT portable
-    needs: changes
-    # Also the base of the dev-kit overlay tests (test-*-devkit).
+    needs: [changes, devkit-stage]
+    # Also for a dev-kit-only change that stages files (devkit-stage). Waits
+    # for devkit-stage, which runs only then; skipped, it holds nothing up.
     if: >-
-      needs.changes.outputs.run == 'true'
-      || (github.event_name == 'pull_request' && needs.changes.outputs.devkit-overlay == 'true')
+      ${{ !cancelled() && needs.changes.result == 'success'
+      && (needs.devkit-stage.result == 'success' || needs.devkit-stage.result == 'skipped')
+      && (needs.changes.outputs.run == 'true'
+          || (github.event_name == 'pull_request' && needs.changes.outputs.devkit-stage == 'true')) }}
     permissions:
       contents: read
       packages: read  # the build-environment container on GHCR
     uses: ./.github/workflows/lin-build.yml
     with:
       variants: XRT-portable
+      devkit-stage: ${{ needs.devkit-stage.outputs.staged == 'true' }}
 
   build-lin-hrx-portable:
     name: Linux HRX portable
-    needs: changes
-    # Also the base of the dev-kit overlay tests (test-*-devkit).
+    needs: [changes, devkit-stage]
+    # Also for a dev-kit-only change that stages files (devkit-stage). Waits
+    # for devkit-stage, which runs only then; skipped, it holds nothing up.
     if: >-
-      needs.changes.outputs.run == 'true'
-      || (github.event_name == 'pull_request' && needs.changes.outputs.devkit-overlay == 'true')
+      ${{ !cancelled() && needs.changes.result == 'success'
+      && (needs.devkit-stage.result == 'success' || needs.devkit-stage.result == 'skipped')
+      && (needs.changes.outputs.run == 'true'
+          || (github.event_name == 'pull_request' && needs.changes.outputs.devkit-stage == 'true')) }}
     permissions:
       contents: read
       packages: read  # the build-environment container on GHCR
     uses: ./.github/workflows/lin-build.yml
     with:
       variants: HRX-portable
+      devkit-stage: ${{ needs.devkit-stage.outputs.staged == 'true' }}
 
   # The models-from-source builds are only tested when the chat suite runs, so
-  # they are only built then.
+  # they are only built then. Every product build stages the run's dev-kit
+  # files (devkit-stage) when there are any, so each package is what main
+  # would ship after the swap.
   build-lin-source-portable:
     name: Linux models-from-source portable
-    needs: changes
-    if: needs.changes.outputs.run == 'true' && needs.changes.outputs.source == 'true' && !inputs.release
+    needs: [changes, devkit-stage]
+    if: >-
+      ${{ !cancelled() && needs.changes.result == 'success'
+      && (needs.devkit-stage.result == 'success' || needs.devkit-stage.result == 'skipped')
+      && needs.changes.outputs.run == 'true' && needs.changes.outputs.source == 'true' && !inputs.release }}
     permissions:
       contents: read
       packages: read  # the build-environment container on GHCR
     uses: ./.github/workflows/lin-build.yml
     with:
       variants: Source-portable
+      devkit-stage: ${{ needs.devkit-stage.outputs.staged == 'true' }}
 
   build-lin-xrt-deb:
     name: Linux XRT .deb
-    needs: changes
-    if: needs.changes.outputs.run == 'true'
+    needs: [changes, devkit-stage]
+    if: >-
+      ${{ !cancelled() && needs.changes.result == 'success'
+      && (needs.devkit-stage.result == 'success' || needs.devkit-stage.result == 'skipped')
+      && needs.changes.outputs.run == 'true' }}
     permissions:
       contents: read
       packages: read  # the build-environment container on GHCR
     uses: ./.github/workflows/lin-build.yml
     with:
       variants: XRT-deb
+      devkit-stage: ${{ needs.devkit-stage.outputs.staged == 'true' }}
 
   build-lin-hrx-deb:
     name: Linux HRX .deb
-    needs: changes
-    if: needs.changes.outputs.run == 'true'
+    needs: [changes, devkit-stage]
+    if: >-
+      ${{ !cancelled() && needs.changes.result == 'success'
+      && (needs.devkit-stage.result == 'success' || needs.devkit-stage.result == 'skipped')
+      && needs.changes.outputs.run == 'true' }}
     permissions:
       contents: read
       packages: read  # the build-environment container on GHCR
     uses: ./.github/workflows/lin-build.yml
     with:
       variants: HRX-deb
+      devkit-stage: ${{ needs.devkit-stage.outputs.staged == 'true' }}
 
   # ── Windows builds ───────────────────────────────────────────────────────
 
   build-win-xrt:
     name: Windows XRT
-    needs: changes
-    # Also the base of the dev-kit overlay tests (test-*-devkit).
+    needs: [changes, devkit-stage]
+    # Also for a dev-kit-only change that stages files (as Linux XRT portable).
     if: >-
-      needs.changes.outputs.run == 'true'
-      || (github.event_name == 'pull_request' && needs.changes.outputs.devkit-overlay == 'true')
+      ${{ !cancelled() && needs.changes.result == 'success'
+      && (needs.devkit-stage.result == 'success' || needs.devkit-stage.result == 'skipped')
+      && (needs.changes.outputs.run == 'true'
+          || (github.event_name == 'pull_request' && needs.changes.outputs.devkit-stage == 'true')) }}
     uses: ./.github/workflows/win-build.yml
     with:
       variants: XRT
-      # Not when built only for the dev-kit overlay: nothing installs it then.
+      # Not when built only for a dev-kit-only change: nothing installs it then.
       msi: ${{ needs.changes.outputs.run == 'true' }}
+      devkit-stage: ${{ needs.devkit-stage.outputs.staged == 'true' }}
 
   build-win-hrx:
     name: Windows HRX
-    needs: changes
-    # Also the base of the dev-kit overlay tests (test-*-devkit).
+    needs: [changes, devkit-stage]
+    # Also for a dev-kit-only change that stages files (as Linux XRT portable).
     if: >-
-      needs.changes.outputs.run == 'true'
-      || (github.event_name == 'pull_request' && needs.changes.outputs.devkit-overlay == 'true')
+      ${{ !cancelled() && needs.changes.result == 'success'
+      && (needs.devkit-stage.result == 'success' || needs.devkit-stage.result == 'skipped')
+      && (needs.changes.outputs.run == 'true'
+          || (github.event_name == 'pull_request' && needs.changes.outputs.devkit-stage == 'true')) }}
     uses: ./.github/workflows/win-build.yml
     with:
       variants: HRX
       msi: false
+      devkit-stage: ${{ needs.devkit-stage.outputs.staged == 'true' }}
 
   build-win-source:
     name: Windows models-from-source
-    needs: changes
-    if: needs.changes.outputs.run == 'true' && needs.changes.outputs.source == 'true' && !inputs.release
+    needs: [changes, devkit-stage]
+    if: >-
+      ${{ !cancelled() && needs.changes.result == 'success'
+      && (needs.devkit-stage.result == 'success' || needs.devkit-stage.result == 'skipped')
+      && needs.changes.outputs.run == 'true' && needs.changes.outputs.source == 'true' && !inputs.release }}
     uses: ./.github/workflows/win-build.yml
     with:
       variants: Source
       msi: false
+      devkit-stage: ${{ needs.devkit-stage.outputs.staged == 'true' }}
 
   # ── Model extensions ─────────────────────────────────────────────────────
   # The Gemma4-open bundles build against the SDK in their package once it
@@ -651,10 +944,28 @@ jobs:
   # ── Linux tests ──────────────────────────────────────────────────────────
   # Only the test scripts and their assets are checked out, never the sources:
   # these jobs run a prebuilt package and compile nothing.
+  #
+  # The four portable test jobs (Linux and Windows, XRT and HRX) are also the
+  # dev kit's one NPU test pass: when devkit-stage staged files into their
+  # packages, they run the union of the product's selection and the staged
+  # files' (devkit-stage's suites, families and required models: the new
+  # models and the staged kernels' models), even when no product suite runs,
+  # and get 600 minutes when models are required. devkit_swap.py counts a
+  # system's and runtime's staged files as tested when its job passed
+  # (TEST_JOBS: keep their names). Their npu_test harness is the pull
+  # request's own (its merge commit), as for any product change: one pass
+  # tests the product change and the dev-kit binaries together, and a
+  # product change often comes with its tests. The base's harness would also
+  # judge the product change by old tests, and was never a boundary (the
+  # pull request's workflow decides what runs; npu-approve is the gate).
+  # A swap cannot be verified in a pull request that changes the CI that
+  # stages and checks it, this harness included (npu_test, the npu-test and
+  # install-package actions; devkit_swap.py SWAP_CI_PATHS): a harness change
+  # and a swap land in separate pull requests.
 
   test-lin-xrt-portable:
     name: Test Linux XRT portable
-    needs: [changes, build-lin-xrt-portable, npu-gate, npu-approve]
+    needs: [changes, devkit-stage, build-lin-xrt-portable, npu-gate, npu-approve]
     # Self-hosted: ungated only for nightly, a push to main or a tag, and a
     # dispatch on main; otherwise npu-gate must have succeeded and found the
     # run trusted, or npu-approve must have been approved (see npu-gate).
@@ -670,9 +981,9 @@ jobs:
               && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
       && needs.changes.result == 'success'
       && needs.build-lin-xrt-portable.result == 'success'
-      && (needs.changes.outputs.suites != 'none') }}
+      && (needs.changes.outputs.suites != 'none' || needs.devkit-stage.outputs.staged == 'true') }}
     runs-on: [self-hosted, linux, x64, npu, sweep]
-    timeout-minutes: ${{ needs.changes.outputs.new-models != '' && 600 || needs.changes.outputs.tier == 'full' && 360 || 120 }}
+    timeout-minutes: ${{ (needs.changes.outputs.new-models != '' || (needs.devkit-stage.outputs.staged == 'true' && needs.devkit-stage.outputs.required != '')) && 600 || needs.changes.outputs.tier == 'full' && 360 || 120 }}
     steps:
       - &checkout-tests
         name: Checkout test scripts
@@ -704,17 +1015,17 @@ jobs:
         with:
           flm-bin: ${{ steps.package.outputs.flm-bin }}
           label: linux-xrt-portable
-          required-models: ${{ needs.changes.outputs.new-models }}
+          required-models: ${{ needs.devkit-stage.outputs.staged == 'true' && needs.devkit-stage.outputs.required || needs.changes.outputs.new-models }}
           tier: ${{ needs.changes.outputs.tier }}
-          suites: ${{ needs.changes.outputs.suites }}
-          families: ${{ needs.changes.outputs.families }}
+          suites: ${{ needs.devkit-stage.outputs.staged == 'true' && needs.devkit-stage.outputs.suites || needs.changes.outputs.suites }}
+          families: ${{ needs.devkit-stage.outputs.staged == 'true' && needs.devkit-stage.outputs.families || needs.changes.outputs.families }}
           models: ${{ inputs.models }}
           asr-full: ${{ needs.changes.outputs.asr-full }}
           asr-expected-key: linux
 
   test-lin-hrx-portable:
     name: Test Linux HRX portable
-    needs: [changes, build-lin-hrx-portable, npu-gate, npu-approve]
+    needs: [changes, devkit-stage, build-lin-hrx-portable, npu-gate, npu-approve]
     # Self-hosted: gated as test-lin-xrt-portable (see npu-gate).
     if: >-
       ${{ !cancelled()
@@ -726,9 +1037,9 @@ jobs:
               && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
       && needs.changes.result == 'success'
       && needs.build-lin-hrx-portable.result == 'success'
-      && (needs.changes.outputs.hrx-suites != '') }}
+      && (needs.changes.outputs.hrx-suites != '' || needs.devkit-stage.outputs.staged == 'true') }}
     runs-on: [self-hosted, linux, x64, npu, sweep]
-    timeout-minutes: ${{ needs.changes.outputs.new-models != '' && 600 || needs.changes.outputs.tier == 'full' && 360 || 120 }}
+    timeout-minutes: ${{ (needs.changes.outputs.new-models != '' || (needs.devkit-stage.outputs.staged == 'true' && needs.devkit-stage.outputs.required != '')) && 600 || needs.changes.outputs.tier == 'full' && 360 || 120 }}
     steps:
       - *checkout-tests
       - name: Download package
@@ -747,10 +1058,10 @@ jobs:
         with:
           flm-bin: ${{ steps.package.outputs.flm-bin }}
           label: linux-hrx-portable
-          required-models: ${{ needs.changes.outputs.new-models }}
+          required-models: ${{ needs.devkit-stage.outputs.staged == 'true' && needs.devkit-stage.outputs.required || needs.changes.outputs.new-models }}
           tier: ${{ needs.changes.outputs.tier }}
-          suites: ${{ needs.changes.outputs.hrx-suites }}
-          families: ${{ needs.changes.outputs.families }}
+          suites: ${{ needs.devkit-stage.outputs.staged == 'true' && needs.devkit-stage.outputs.hrx-suites || needs.changes.outputs.hrx-suites }}
+          families: ${{ needs.devkit-stage.outputs.staged == 'true' && needs.devkit-stage.outputs.families || needs.changes.outputs.families }}
           models: ${{ inputs.models }}
           asr-full: ${{ needs.changes.outputs.asr-full }}
           asr-expected-key: linux-hrx
@@ -986,7 +1297,7 @@ jobs:
 
   test-win-xrt:
     name: Test Windows XRT
-    needs: [changes, build-win-xrt, npu-gate, npu-approve]
+    needs: [changes, devkit-stage, build-win-xrt, npu-gate, npu-approve]
     # Self-hosted: gated as test-lin-xrt-portable (see npu-gate).
     if: >-
       ${{ !cancelled()
@@ -998,9 +1309,9 @@ jobs:
               && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
       && needs.changes.result == 'success'
       && needs.build-win-xrt.result == 'success'
-      && (needs.changes.outputs.suites != 'none') }}
+      && (needs.changes.outputs.suites != 'none' || needs.devkit-stage.outputs.staged == 'true') }}
     runs-on: [self-hosted, windows, x64, npu, sweep]
-    timeout-minutes: ${{ needs.changes.outputs.new-models != '' && 600 || needs.changes.outputs.tier == 'full' && 360 || 120 }}
+    timeout-minutes: ${{ (needs.changes.outputs.new-models != '' || (needs.devkit-stage.outputs.staged == 'true' && needs.devkit-stage.outputs.required != '')) && 600 || needs.changes.outputs.tier == 'full' && 360 || 120 }}
     steps:
       - *checkout-tests
       - name: Download package
@@ -1019,10 +1330,10 @@ jobs:
         with:
           flm-bin: ${{ steps.package.outputs.flm-bin }}
           label: windows-xrt
-          required-models: ${{ needs.changes.outputs.new-models }}
+          required-models: ${{ needs.devkit-stage.outputs.staged == 'true' && needs.devkit-stage.outputs.required || needs.changes.outputs.new-models }}
           tier: ${{ needs.changes.outputs.tier }}
-          suites: ${{ needs.changes.outputs.suites }}
-          families: ${{ needs.changes.outputs.families }}
+          suites: ${{ needs.devkit-stage.outputs.staged == 'true' && needs.devkit-stage.outputs.suites || needs.changes.outputs.suites }}
+          families: ${{ needs.devkit-stage.outputs.staged == 'true' && needs.devkit-stage.outputs.families || needs.changes.outputs.families }}
           models: ${{ inputs.models }}
           asr-full: ${{ needs.changes.outputs.asr-full }}
           asr-expected-key: windows
@@ -1051,7 +1362,7 @@ jobs:
   # that names models (models) tests only those and the required ones.
   # npu_test pulls the models first, outside the requests' timeouts, and they
   # stay on the runner: only its first run, or a new revision of a model,
-  # downloads (about 33 GB for the pr tier's, 400 GB for all), and a model
+  # downloads (about 33 GB for the pr tier's, 500 GB for all), and a model
   # verified before whose pins and files are unchanged is not verified again
   # (a required one always is).
   test-win-hipep:
@@ -1128,7 +1439,7 @@ jobs:
 
   test-win-hrx:
     name: Test Windows HRX
-    needs: [changes, build-win-hrx, npu-gate, npu-approve]
+    needs: [changes, devkit-stage, build-win-hrx, npu-gate, npu-approve]
     # Self-hosted: gated as test-lin-xrt-portable (see npu-gate).
     if: >-
       ${{ !cancelled()
@@ -1140,9 +1451,9 @@ jobs:
               && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
       && needs.changes.result == 'success'
       && needs.build-win-hrx.result == 'success'
-      && (needs.changes.outputs.hrx-suites != '') }}
+      && (needs.changes.outputs.hrx-suites != '' || needs.devkit-stage.outputs.staged == 'true') }}
     runs-on: [self-hosted, windows, x64, npu, sweep]
-    timeout-minutes: ${{ needs.changes.outputs.new-models != '' && 600 || needs.changes.outputs.tier == 'full' && 360 || 120 }}
+    timeout-minutes: ${{ (needs.changes.outputs.new-models != '' || (needs.devkit-stage.outputs.staged == 'true' && needs.devkit-stage.outputs.required != '')) && 600 || needs.changes.outputs.tier == 'full' && 360 || 120 }}
     steps:
       - *checkout-tests
       - name: Download package
@@ -1161,10 +1472,10 @@ jobs:
         with:
           flm-bin: ${{ steps.package.outputs.flm-bin }}
           label: windows-hrx
-          required-models: ${{ needs.changes.outputs.new-models }}
+          required-models: ${{ needs.devkit-stage.outputs.staged == 'true' && needs.devkit-stage.outputs.required || needs.changes.outputs.new-models }}
           tier: ${{ needs.changes.outputs.tier }}
-          suites: ${{ needs.changes.outputs.hrx-suites }}
-          families: ${{ needs.changes.outputs.families }}
+          suites: ${{ needs.devkit-stage.outputs.staged == 'true' && needs.devkit-stage.outputs.hrx-suites || needs.changes.outputs.hrx-suites }}
+          families: ${{ needs.devkit-stage.outputs.staged == 'true' && needs.devkit-stage.outputs.families || needs.changes.outputs.families }}
           models: ${{ inputs.models }}
           asr-full: ${{ needs.changes.outputs.asr-full }}
           asr-expected-key: windows-hrx
@@ -1345,248 +1656,30 @@ jobs:
           mode: ${{ steps.package.outputs.mode }}
           path: package
 
-  # ── Dev-kit overlay tests ────────────────────────────────────────────────
-  # A pull request's dev-kit engines (devkit-engines) and kernels
-  # (devkit-xclbins) over this run's product portable package, on the NPU
-  # runners: .github/actions/devkit-npu-overlay replaces the libraries of the
-  # engines serving the touched families (all of them, shared units included,
-  # when every family is touched) and the rebuilt kernels, checks that the
-  # package's imports still resolve, and runs npu_test on the pr tier with
-  # the base commit's harness in a clean environment: every model of the
-  # touched families (one per family when every family is), the models whose
-  # kernels were rebuilt and the models the change adds. A dev-kit-only
-  # change builds the four portable packages for this and runs no product
-  # suite (changes.py devkit_overlay). summary's Dev-kit checks fails the
-  # pull request when one of these fails, or is skipped though requested.
-  # Once its tests passed, each job uploads devkit-overlay-manifest-<os>-
-  # <runtime>, the files it put into the package with their SHA-256 and the
-  # src/lib or src/xclbins path each stands for, from which the author
-  # commits exactly those bytes (devkit_swap.py fetch). The dev-kit full
-  # refresh (see the top) runs them too, over every engine and shipped
-  # kernel, on the full tier with every NPU catalog model required.
-
-  test-lin-xrt-devkit:
-    name: Test Linux XRT dev-kit overlay
-    needs: [changes, build-lin-xrt-portable, npu-gate, npu-approve, devkit-engines, devkit-xclbins]
-    # Self-hosted: gated as test-lin-xrt-portable (see npu-gate), on pull
-    # requests and the dev-kit full refresh only: pushes and the nightly
-    # build the dev kit but test no overlay. Runs when the change touches a
-    # dev-kit engine's families or a kernel build rebuilt some model's
-    # kernels, once both dev-kit builds that ran passed (a failed one fails
-    # summary's Dev-kit checks anyway).
-    if: >-
-      ${{ !cancelled()
-      && ((github.event_name == 'schedule'
-           || (github.event_name == 'push'
-               && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')))
-           || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
-          || (needs.npu-gate.result == 'success'
-              && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
-      && needs.changes.result == 'success'
-      && (github.event_name == 'pull_request' || needs.changes.outputs.devkit-full-refresh == 'true')
-      && needs.changes.outputs.devkit-overlay == 'true'
-      && needs.build-lin-xrt-portable.result == 'success'
-      && (needs.devkit-engines.result == 'success' || needs.devkit-engines.result == 'skipped')
-      && (needs.devkit-xclbins.result == 'success' || needs.devkit-xclbins.result == 'skipped')
-      && (needs.changes.outputs.devkit-families != ''
-          || (needs.devkit-xclbins.outputs.touched-models != '' && needs.devkit-xclbins.outputs.touched-models != '[]')) }}
-    runs-on: [self-hosted, linux, x64, npu, sweep]
-    timeout-minutes: ${{ (needs.changes.outputs.new-models != '' || (needs.devkit-xclbins.outputs.touched-models != '' && needs.devkit-xclbins.outputs.touched-models != '[]')) && 600 || 120 }}
-    steps:
-      - &checkout-devkit
-        name: Checkout overlay scripts
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # As checkout-tests: no token left in .git/config. The npu_test
-          # harness runs from the pull request's base (devkit-npu-overlay) so
-          # its own harness edits do not judge its binaries. Not a security
-          # boundary: the pull request's workflow and actions decide what
-          # runs, and npu-approve is the only gate.
-          persist-credentials: false
-          # Cone mode, directories only: the NPU runners reuse their work
-          # folder, whose git config keeps core.sparseCheckoutCone=true from
-          # the product test jobs' cone checkouts, and in cone mode a file
-          # pattern (flm-dev-kit/FLM_DLL/engines.json) matches nothing.
-          sparse-checkout-cone-mode: true
-          sparse-checkout: |
-            .github/actions
-            .github/script
-            flm-dev-kit/FLM_DLL
-          filter: blob:none
-      - name: Overlay and test
-        uses: ./.github/actions/devkit-npu-overlay
-        with:
-          runtime: xrt
-          os: linux
-          package: portable
-          libs: ${{ needs.devkit-engines.result == 'success' && 'devkit-libs-lin-xrt' || '' }}
-          xclbins: ${{ needs.devkit-xclbins.result == 'success' && needs.devkit-xclbins.outputs.touched-models != '' && needs.devkit-xclbins.outputs.touched-models != '[]' && 'devkit-xclbins' || '' }}
-          xclbin-models: ${{ needs.devkit-xclbins.outputs.touched-models || '[]' }}
-          families: ${{ needs.changes.outputs.devkit-families }}
-          required-models: ${{ needs.changes.outputs.new-models }}
-          harness-ref: ${{ github.event.pull_request.base.sha || needs.changes.outputs.devkit-base }}
-          tier: ${{ needs.changes.outputs.devkit-full-refresh == 'true' && 'full' || 'pr' }}
-          require-all: ${{ needs.changes.outputs.devkit-full-refresh }}
-          head-sha: ${{ github.event.pull_request.head.sha || github.sha }}
-          base-sha: ${{ needs.changes.outputs.devkit-base }}
-          full-refresh: ${{ needs.changes.outputs.devkit-full-refresh }}
-          label: linux-xrt-devkit
-
-  test-lin-hrx-devkit:
-    name: Test Linux HRX dev-kit overlay
-    needs: [changes, build-lin-hrx-portable, npu-gate, npu-approve, devkit-engines, devkit-xclbins]
-    # Self-hosted: gated as test-lin-xrt-devkit.
-    if: >-
-      ${{ !cancelled()
-      && ((github.event_name == 'schedule'
-           || (github.event_name == 'push'
-               && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')))
-           || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
-          || (needs.npu-gate.result == 'success'
-              && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
-      && needs.changes.result == 'success'
-      && (github.event_name == 'pull_request' || needs.changes.outputs.devkit-full-refresh == 'true')
-      && needs.changes.outputs.devkit-overlay == 'true'
-      && needs.build-lin-hrx-portable.result == 'success'
-      && (needs.devkit-engines.result == 'success' || needs.devkit-engines.result == 'skipped')
-      && (needs.devkit-xclbins.result == 'success' || needs.devkit-xclbins.result == 'skipped')
-      && (needs.changes.outputs.devkit-families != ''
-          || (needs.devkit-xclbins.outputs.touched-models != '' && needs.devkit-xclbins.outputs.touched-models != '[]')) }}
-    runs-on: [self-hosted, linux, x64, npu, sweep]
-    timeout-minutes: ${{ (needs.changes.outputs.new-models != '' || (needs.devkit-xclbins.outputs.touched-models != '' && needs.devkit-xclbins.outputs.touched-models != '[]')) && 600 || 120 }}
-    steps:
-      - *checkout-devkit
-      - name: Overlay and test
-        uses: ./.github/actions/devkit-npu-overlay
-        with:
-          runtime: hrx
-          os: linux
-          package: HRX-portable
-          libs: ${{ needs.devkit-engines.result == 'success' && 'devkit-libs-lin-hrx' || '' }}
-          xclbins: ${{ needs.devkit-xclbins.result == 'success' && needs.devkit-xclbins.outputs.touched-models != '' && needs.devkit-xclbins.outputs.touched-models != '[]' && 'devkit-xclbins' || '' }}
-          xclbin-models: ${{ needs.devkit-xclbins.outputs.touched-models || '[]' }}
-          families: ${{ needs.changes.outputs.devkit-families }}
-          required-models: ${{ needs.changes.outputs.new-models }}
-          harness-ref: ${{ github.event.pull_request.base.sha || needs.changes.outputs.devkit-base }}
-          tier: ${{ needs.changes.outputs.devkit-full-refresh == 'true' && 'full' || 'pr' }}
-          require-all: ${{ needs.changes.outputs.devkit-full-refresh }}
-          head-sha: ${{ github.event.pull_request.head.sha || github.sha }}
-          base-sha: ${{ needs.changes.outputs.devkit-base }}
-          full-refresh: ${{ needs.changes.outputs.devkit-full-refresh }}
-          label: linux-hrx-devkit
-
-  test-win-xrt-devkit:
-    name: Test Windows XRT dev-kit overlay
-    needs: [changes, build-win-xrt, npu-gate, npu-approve, devkit-engines, devkit-xclbins]
-    # Self-hosted: gated as test-lin-xrt-devkit.
-    if: >-
-      ${{ !cancelled()
-      && ((github.event_name == 'schedule'
-           || (github.event_name == 'push'
-               && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')))
-           || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
-          || (needs.npu-gate.result == 'success'
-              && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
-      && needs.changes.result == 'success'
-      && (github.event_name == 'pull_request' || needs.changes.outputs.devkit-full-refresh == 'true')
-      && needs.changes.outputs.devkit-overlay == 'true'
-      && needs.build-win-xrt.result == 'success'
-      && (needs.devkit-engines.result == 'success' || needs.devkit-engines.result == 'skipped')
-      && (needs.devkit-xclbins.result == 'success' || needs.devkit-xclbins.result == 'skipped')
-      && (needs.changes.outputs.devkit-families != ''
-          || (needs.devkit-xclbins.outputs.touched-models != '' && needs.devkit-xclbins.outputs.touched-models != '[]')) }}
-    runs-on: [self-hosted, windows, x64, npu, sweep]
-    timeout-minutes: ${{ (needs.changes.outputs.new-models != '' || (needs.devkit-xclbins.outputs.touched-models != '' && needs.devkit-xclbins.outputs.touched-models != '[]')) && 600 || 120 }}
-    steps:
-      - *checkout-devkit
-      - name: Overlay and test
-        uses: ./.github/actions/devkit-npu-overlay
-        with:
-          runtime: xrt
-          os: windows
-          package: fastflowlm-windows-${{ github.sha }}
-          libs: ${{ needs.devkit-engines.result == 'success' && 'devkit-libs-win-xrt' || '' }}
-          xclbins: ${{ needs.devkit-xclbins.result == 'success' && needs.devkit-xclbins.outputs.touched-models != '' && needs.devkit-xclbins.outputs.touched-models != '[]' && 'devkit-xclbins' || '' }}
-          xclbin-models: ${{ needs.devkit-xclbins.outputs.touched-models || '[]' }}
-          families: ${{ needs.changes.outputs.devkit-families }}
-          required-models: ${{ needs.changes.outputs.new-models }}
-          harness-ref: ${{ github.event.pull_request.base.sha || needs.changes.outputs.devkit-base }}
-          tier: ${{ needs.changes.outputs.devkit-full-refresh == 'true' && 'full' || 'pr' }}
-          require-all: ${{ needs.changes.outputs.devkit-full-refresh }}
-          head-sha: ${{ github.event.pull_request.head.sha || github.sha }}
-          base-sha: ${{ needs.changes.outputs.devkit-base }}
-          full-refresh: ${{ needs.changes.outputs.devkit-full-refresh }}
-          label: windows-xrt-devkit
-
-  test-win-hrx-devkit:
-    name: Test Windows HRX dev-kit overlay
-    needs: [changes, build-win-hrx, npu-gate, npu-approve, devkit-engines, devkit-xclbins]
-    # Self-hosted: gated as test-lin-xrt-devkit.
-    if: >-
-      ${{ !cancelled()
-      && ((github.event_name == 'schedule'
-           || (github.event_name == 'push'
-               && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')))
-           || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
-          || (needs.npu-gate.result == 'success'
-              && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
-      && needs.changes.result == 'success'
-      && (github.event_name == 'pull_request' || needs.changes.outputs.devkit-full-refresh == 'true')
-      && needs.changes.outputs.devkit-overlay == 'true'
-      && needs.build-win-hrx.result == 'success'
-      && (needs.devkit-engines.result == 'success' || needs.devkit-engines.result == 'skipped')
-      && (needs.devkit-xclbins.result == 'success' || needs.devkit-xclbins.result == 'skipped')
-      && (needs.changes.outputs.devkit-families != ''
-          || (needs.devkit-xclbins.outputs.touched-models != '' && needs.devkit-xclbins.outputs.touched-models != '[]')) }}
-    runs-on: [self-hosted, windows, x64, npu, sweep]
-    timeout-minutes: ${{ (needs.changes.outputs.new-models != '' || (needs.devkit-xclbins.outputs.touched-models != '' && needs.devkit-xclbins.outputs.touched-models != '[]')) && 600 || 120 }}
-    steps:
-      - *checkout-devkit
-      - name: Overlay and test
-        uses: ./.github/actions/devkit-npu-overlay
-        with:
-          runtime: hrx
-          os: windows
-          package: HRX-fastflowlm-windows-${{ github.sha }}
-          libs: ${{ needs.devkit-engines.result == 'success' && 'devkit-libs-win-hrx' || '' }}
-          xclbins: ${{ needs.devkit-xclbins.result == 'success' && needs.devkit-xclbins.outputs.touched-models != '' && needs.devkit-xclbins.outputs.touched-models != '[]' && 'devkit-xclbins' || '' }}
-          xclbin-models: ${{ needs.devkit-xclbins.outputs.touched-models || '[]' }}
-          families: ${{ needs.changes.outputs.devkit-families }}
-          required-models: ${{ needs.changes.outputs.new-models }}
-          harness-ref: ${{ github.event.pull_request.base.sha || needs.changes.outputs.devkit-base }}
-          tier: ${{ needs.changes.outputs.devkit-full-refresh == 'true' && 'full' || 'pr' }}
-          require-all: ${{ needs.changes.outputs.devkit-full-refresh }}
-          head-sha: ${{ github.event.pull_request.head.sha || github.sha }}
-          base-sha: ${{ needs.changes.outputs.devkit-base }}
-          full-refresh: ${{ needs.changes.outputs.devkit-full-refresh }}
-          label: windows-hrx-devkit
-
   # ── Dev-kit benches ──────────────────────────────────────────────────────
-  # Perf (flm bench, A/B against the base package on the same runner) and
-  # GSM8K accuracy of the dev-kit engines and kernels over this run's
-  # portable packages (devkit-bench.yml, which documents them), on the NPU
-  # sweep runners: on a pull request whose dev-kit engine or kernel source
-  # changed (changes devkit-bench; never for docs or CI alone), and nightly,
-  # which benches only when that source changed since the commit of the
-  # latest nightly baseline and uploads the next baseline. Not on pushes,
-  # dispatches or a release. Gated as the overlay tests (npu-gate,
-  # npu-approve: devkit-bench implies devkit-overlay, so npu-approve already
-  # asks for it). Waits for the overlay tests, so the benches do not take the
-  # sweep runners from them. The resolve job inside decides per runtime from
-  # the build results passed here; a failed build leaves its runtime out.
-  # summary's Dev-kit checks fails a pull request only when a model failed
-  # acc_common's hard gate (the bench's hard-gate output); any other bench
-  # failure (perf giving no result, a pull, a timeout, the GitHub API) only
-  # warns there, as do slowdowns and accuracy drops. summary, the required
-  # check, waits for the benches, so a bench pull request's check takes as
-  # long as its benches (three at a time, up to 150 minutes each).
-  # Nightly, the benches run beside the full-tier product tests on the same
-  # sweep runners (each job has its own runner, so the numbers are not
-  # affected; the night's queue is longer). devkit-bench-comment.yml posts
-  # the results on the pull request. The dev-kit full refresh benches every
-  # benchable model on the four runtimes (mode refresh): this run's numbers,
-  # no A/B and no baseline comparison.
-  # actions: read: the nightly baseline is another run's artifact.
+  # Perf (flm bench) and GSM8K accuracy (devkit-bench.yml, which documents
+  # them), on the NPU sweep runners: on a pull request whose dev-kit engine
+  # or kernel source changed (changes devkit-bench; never for docs or CI
+  # alone) and that staged something, of its own portable packages, which
+  # hold the staged files: the pull request's numbers only, no A/B against
+  # a base package and no nightly-baseline comparison (a comparison is to be
+  # designed later). The dev-kit full refresh benches every benchable model
+  # on the four runtimes (mode refresh): this run's numbers, no A/B and no
+  # baseline comparison. Nightly, devkit-bench-nightly below. Not on
+  # pushes, other dispatches or a release. Gated as the NPU test jobs
+  # (npu-gate, npu-approve: devkit-bench implies devkit-stage, so
+  # npu-approve already asks for it). Waits for the portable test jobs, so
+  # the benches do not take the sweep runners from them. The resolve job
+  # inside decides per runtime from the build results passed here; a failed
+  # build leaves its runtime out. summary's Dev-kit checks fails a pull
+  # request only when a model failed acc_common's hard gate (the bench's
+  # hard-gate output); any other bench failure (perf giving no result, a
+  # pull, a timeout, the GitHub API) only warns there, and devkit_swap.py
+  # fetch does not count it either. summary, the required check, waits for
+  # the benches, so a bench pull request's check takes as long as its
+  # benches (three at a time, up to 150 minutes each).
+  # devkit-bench-comment.yml posts the results on the pull request.
+  # actions: read: devkit-bench.yml reads artifacts of this run.
   devkit-bench:
     needs:
       - changes
@@ -1598,40 +1691,75 @@ jobs:
       - build-lin-hrx-portable
       - build-win-xrt
       - build-win-hrx
-      - test-lin-xrt-devkit
-      - test-lin-hrx-devkit
-      - test-win-xrt-devkit
-      - test-win-hrx-devkit
+      - devkit-stage
+      - test-lin-xrt-portable
+      - test-lin-hrx-portable
+      - test-win-xrt
+      - test-win-hrx
     if: >-
-      ${{ !cancelled() && !inputs.release
-      && ((github.event_name == 'schedule'
-           || (github.event_name == 'push'
-               && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')))
-           || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+      ${{ github.event_name != 'schedule' && !cancelled() && !inputs.release
+      && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
           || (needs.npu-gate.result == 'success'
               && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
       && needs.changes.result == 'success'
-      && (github.event_name == 'schedule'
-          || needs.changes.outputs.devkit-full-refresh == 'true'
-          || (github.event_name == 'pull_request' && needs.changes.outputs.devkit-bench == 'true')) }}
+      && (needs.changes.outputs.devkit-full-refresh == 'true'
+          || (github.event_name == 'pull_request' && needs.changes.outputs.devkit-bench == 'true'
+              && needs.devkit-stage.outputs.staged == 'true')) }}
     permissions:
       contents: read
       actions: read
     uses: ./.github/workflows/devkit-bench.yml
     with:
-      mode: >-
-        ${{ github.event_name == 'schedule' && 'nightly'
-        || needs.changes.outputs.devkit-full-refresh == 'true' && 'refresh'
-        || 'pr' }}
+      mode: ${{ needs.changes.outputs.devkit-full-refresh == 'true' && 'refresh' || 'pr' }}
       head-sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
       builds: >-
         lin-xrt=${{ needs.build-lin-xrt-portable.result }},lin-hrx=${{ needs.build-lin-hrx-portable.result }},win-xrt=${{ needs.build-win-xrt.result }},win-hrx=${{ needs.build-win-hrx.result }}
+      # The dev-kit builds staged into the packages.
       engines: ${{ needs.devkit-engines.result }}
-      # Nightly benches the assigned set over every engine.
       families: ${{ github.event_name == 'pull_request' && needs.changes.outputs.devkit-families || '' }}
       xclbin-models: ${{ needs.devkit-xclbins.outputs.touched-models || '[]' }}
       bench-models: ${{ github.event_name == 'pull_request' && needs.devkit-xclbins.outputs.bench-models || '' }}
-      xclbins: ${{ needs.devkit-xclbins.result == 'success' && needs.devkit-xclbins.outputs.touched-models != '' && needs.devkit-xclbins.outputs.touched-models != '[]' && 'devkit-xclbins' || '' }}
+      xclbins: >-
+        ${{ needs.devkit-xclbins.result == 'success' && needs.devkit-xclbins.outputs.touched-models != ''
+        && needs.devkit-xclbins.outputs.touched-models != '[]' && 'devkit-xclbins' || '' }}
+
+  # The nightly benches (devkit-bench.yml mode nightly): of the -main dev-kit
+  # builds, over every engine and the assigned set, over the nightly's
+  # packages, only when that source changed since the commit of the latest
+  # nightly baseline, uploading the next baseline. A job of its own so it
+  # does not wait for the product test jobs (needs cannot depend on the
+  # event): it runs beside the full-tier product tests on the same sweep
+  # runners (each job has its own runner, so the numbers are not affected;
+  # the night's queue is longer). Mutually exclusive with devkit-bench, so
+  # one run calls devkit-bench.yml at most once (devkit_check.py's bench
+  # comment rule).
+  # actions: read: the nightly baseline is another run's artifact.
+  devkit-bench-nightly:
+    needs:
+      - changes
+      - devkit-engines-main
+      - devkit-xclbins-main
+      - build-lin-xrt-portable
+      - build-lin-hrx-portable
+      - build-win-xrt
+      - build-win-hrx
+    if: ${{ github.event_name == 'schedule' && !cancelled() && !inputs.release && needs.changes.result == 'success' }}
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/devkit-bench.yml
+    with:
+      mode: nightly
+      head-sha: ${{ github.sha }}
+      builds: >-
+        lin-xrt=${{ needs.build-lin-xrt-portable.result }},lin-hrx=${{ needs.build-lin-hrx-portable.result }},win-xrt=${{ needs.build-win-xrt.result }},win-hrx=${{ needs.build-win-hrx.result }}
+      engines: ${{ needs.devkit-engines-main.result }}
+      families: ''
+      xclbin-models: ${{ needs.devkit-xclbins-main.outputs.touched-models || '[]' }}
+      bench-models: ''
+      xclbins: >-
+        ${{ needs.devkit-xclbins-main.result == 'success' && needs.devkit-xclbins-main.outputs.touched-models != ''
+        && needs.devkit-xclbins-main.outputs.touched-models != '[]' && 'devkit-xclbins' || '' }}
 
   # ── Summary ──────────────────────────────────────────────────────────────
 
@@ -1644,6 +1772,8 @@ jobs:
       - devkit-static
       - devkit-engines
       - devkit-xclbins
+      - devkit-engines-main
+      - devkit-xclbins-main
       - npu-gate
       - npu-approve
       - build-lin-xrt-portable
@@ -1670,21 +1800,22 @@ jobs:
       - test-win-extension-xrt
       - test-win-extension-hrx
       - install-win-msi
-      - test-lin-xrt-devkit
-      - test-lin-hrx-devkit
-      - test-win-xrt-devkit
-      - test-win-hrx-devkit
+      - devkit-stage
       - devkit-bench
+      - devkit-bench-nightly
     if: always()
     runs-on: ubuntu-latest
     outputs:
       xrt-passed: ${{ steps.verdict.outputs.xrt }}
       hrx-passed: ${{ steps.verdict.outputs.hrx }}
     steps:
+      # History, trees only (blob:none): devkit_swap.py pending compares the
+      # staged files' blob ids with the branch's and names a swap CI change.
       - name: Checkout scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: .github/script/ci
+          fetch-depth: 0
           filter: blob:none
           persist-credentials: false
 
@@ -1741,23 +1872,16 @@ jobs:
           XRT_OK: ${{ steps.verdict.outputs.xrt }}
           HRX_OK: ${{ steps.verdict.outputs.hrx }}
           RUN: ${{ needs.changes.outputs.run }}
-          OVERLAY: ${{ needs.changes.outputs.devkit-overlay }}
-          OVERLAY_FAMILIES: ${{ needs.changes.outputs.devkit-families }}
-          OVERLAY_MODELS: ${{ needs.devkit-xclbins.outputs.touched-models }}
+          STAGED: ${{ needs.devkit-stage.outputs.staged }}
         run: |
           echo "npu-gate: ${GATE} (trusted: ${TRUSTED}); npu-approve: ${APPROVE}; xrt: ${XRT_OK}; hrx: ${HRX_OK}"
           case "${GATE}" in success) ;; *) echo "::error::npu-gate did not succeed"; exit 1 ;; esac
           # A missing approval fails only when some NPU job needed it: a
-          # dev-kit pull request whose kernel build rebuilt no model's
-          # kernels and touched no engine family runs none (npu-approve asks
-          # before that is known). Dev-kit checks fails a requested overlay
-          # test that the gate held.
-          overlay_requested=false
-          if [ "${OVERLAY}" = true ] && { [ -n "${OVERLAY_FAMILIES}" ] || { [ -n "${OVERLAY_MODELS}" ] && [ "${OVERLAY_MODELS}" != "[]" ]; }; }; then
-            overlay_requested=true
-          fi
+          # dev-kit pull request that staged nothing runs none (npu-approve
+          # asks before that is known). Dev-kit checks fails a staged run
+          # whose test jobs the gate held.
           if [ "${TRUSTED}" != true ] && [ "${APPROVE}" != success ] && [ "${APPROVE}" != skipped ] \
-             && { [ "${RUN}" = true ] || [ "${overlay_requested}" = true ]; }; then
+             && { [ "${RUN}" = true ] || [ "${STAGED}" = true ]; }; then
             echo "::error::NPU tests were not approved"; exit 1
           fi
           if [ "${XRT_OK}" != true ] || [ "${HRX_OK}" != true ]; then
@@ -1766,101 +1890,106 @@ jobs:
 
       # A pull request whose dev-kit data does not check out (devkit-static,
       # whose catalog rules also run for changes to src/model_list.json,
-      # src/xclbins and src/lib), whose dev-kit engines do not build, or
-      # whose overlay tests (test-*-devkit) fail or
-      # are skipped though requested (a package or dev-kit build failed, or
-      # the gate held them), fails here too, whatever the gate step above
-      # decided, so this job stays the single required check. So does one
-      # whose change detection failed: every job after it is then skipped,
-      # and a skip would otherwise read as a pass. An overlay test skipped
-      # because nothing was requested, or because no family was touched and
-      # the kernel build rebuilt no model's kernels, passes. The dev-kit
-      # benches (devkit-bench) fail it only when a model failed acc_common's
-      # hard gate (hard-gate=fail); any other failure of theirs (perf giving
-      # no result, a pull, a timeout, a lost runner, the GitHub API) only
-      # warns, as slowdowns and accuracy drops do; skipped, they pass
-      # (nothing to bench, or a build or the gate held them, which the
-      # checks above already report). The dev-kit full refresh is checked
-      # the same way. A verified swap commit (swap-verified) requests no
-      # build or overlay, so only changes and devkit-static count for it.
-      # Other runs only show the dev-kit jobs' own results: the dev kit
-      # ships in no package, so it does not hold up a release.
+      # src/xclbins and src/lib), whose dev-kit builds or staging fail, whose
+      # staged packages' test jobs did not run, whose binaries src/ lacks
+      # (pending) without this run staging them, or that edits src/lib or
+      # src/xclbins by hand (changes' devkit_swap.py check), fails here too,
+      # whatever the gate step above decided, so this job stays the single
+      # required check. So does one whose change detection failed: every job
+      # after it is then skipped, and a skip would otherwise read as a pass.
+      # The dev-kit benches (devkit-bench) fail it only when a model failed
+      # acc_common's hard gate (hard-gate=fail); any other failure of theirs
+      # (perf giving no result, a pull, a timeout, a lost runner, the GitHub
+      # API) only warns; skipped, they pass (nothing to bench, or a build or
+      # the gate held them, which the checks above already report). The
+      # dev-kit full refresh is checked the same way. A verified swap commit
+      # (swap-verified) requests no build or staging, so only changes and
+      # devkit-static count for it. Other runs only show the dev-kit jobs'
+      # own results: the dev kit ships in no package, so it does not hold up
+      # a release.
       - name: Dev-kit checks
         if: ${{ !cancelled() && (github.event_name == 'pull_request' || needs.changes.outputs.devkit-full-refresh == 'true') }}
         env:
           CHANGES: ${{ needs.changes.result }}
           SWAP_VERIFIED: ${{ needs.changes.outputs.swap-verified }}
+          BINARIES: ${{ needs.changes.outputs.binaries-check }}
           DEVKIT_STATIC: ${{ needs.devkit-static.result }}
+          PENDING: ${{ needs.devkit-static.outputs.pending }}
           DEVKIT_ENGINES: ${{ needs.devkit-engines.result }}
           DEVKIT_XCLBINS: ${{ needs.devkit-xclbins.result }}
+          DEVKIT_STAGE: ${{ needs.devkit-stage.result }}
+          STAGE_REQUESTED: >-
+            ${{ (github.event_name == 'pull_request' && needs.changes.outputs.devkit-stage == 'true')
+            || needs.changes.outputs.devkit-full-refresh == 'true' }}
+          STAGED: ${{ needs.devkit-stage.outputs.staged }}
           DEVKIT_BENCH: ${{ needs.devkit-bench.result }}
           DEVKIT_BENCH_GATE: ${{ needs.devkit-bench.outputs.hard-gate }}
-          OVERLAY: ${{ needs.changes.outputs.devkit-overlay }}
-          OVERLAY_FAMILIES: ${{ needs.changes.outputs.devkit-families }}
-          OVERLAY_MODELS: ${{ needs.devkit-xclbins.outputs.touched-models }}
-          OVERLAY_TESTS: >-
-            test-lin-xrt-devkit=${{ needs.test-lin-xrt-devkit.result }}
-            test-lin-hrx-devkit=${{ needs.test-lin-hrx-devkit.result }}
-            test-win-xrt-devkit=${{ needs.test-win-xrt-devkit.result }}
-            test-win-hrx-devkit=${{ needs.test-win-hrx-devkit.result }}
+          STAGED_TESTS: >-
+            test-lin-xrt-portable=${{ needs.test-lin-xrt-portable.result }}
+            test-lin-hrx-portable=${{ needs.test-lin-hrx-portable.result }}
+            test-win-xrt=${{ needs.test-win-xrt.result }}
+            test-win-hrx=${{ needs.test-win-hrx.result }}
         run: |
-          echo "changes: ${CHANGES}; devkit-static: ${DEVKIT_STATIC}; devkit-engines: ${DEVKIT_ENGINES}; devkit-xclbins: ${DEVKIT_XCLBINS}; devkit-bench: ${DEVKIT_BENCH} (hard gate: ${DEVKIT_BENCH_GATE:-not reported})"
-          echo "devkit-overlay: ${OVERLAY:-none}; ${OVERLAY_TESTS}; verified swap: ${SWAP_VERIFIED:-false}"
+          echo "changes: ${CHANGES}; devkit-static: ${DEVKIT_STATIC}; devkit-engines: ${DEVKIT_ENGINES}; devkit-xclbins: ${DEVKIT_XCLBINS}; devkit-stage: ${DEVKIT_STAGE} (requested: ${STAGE_REQUESTED}, staged: ${STAGED:-false}); devkit-bench: ${DEVKIT_BENCH} (hard gate: ${DEVKIT_BENCH_GATE:-not reported})"
+          echo "${STAGED_TESTS}; verified swap: ${SWAP_VERIFIED:-false}; pending binaries: ${PENDING:-none}; binaries check: ${BINARIES:-not run}"
           rc=0
           case "${CHANGES}" in success) ;; *) echo "::error::changes did not succeed, so the dev-kit and build jobs were skipped"; rc=1 ;; esac
+          if [ "${BINARIES}" = failure ]; then
+            echo "::error::src/lib or src/xclbins changed by hand (not by a verified swap commit): see the changes job's \"Check the prebuilt binaries come from CI\" step"; rc=1
+          fi
           case "${DEVKIT_STATIC}" in success|skipped) ;; *) echo "::error::devkit-static did not pass"; rc=1 ;; esac
           case "${DEVKIT_ENGINES}" in success|skipped) ;; *) echo "::error::devkit-engines did not pass"; rc=1 ;; esac
           case "${DEVKIT_XCLBINS}" in success|skipped) ;; *) echo "::error::devkit-xclbins did not pass"; rc=1 ;; esac
+          # A verified swap was tested by its parent's run (changes leaves
+          # devkit-stage off for it; this keeps it so).
+          [ "${SWAP_VERIFIED}" = true ] && STAGE_REQUESTED=false
+          if [ "${STAGE_REQUESTED}" = true ] && [ "${DEVKIT_STAGE}" != success ]; then
+            echo "::error::devkit-stage did not pass (${DEVKIT_STAGE}): the dev-kit files were not staged, so the product builds and their NPU tests did not run"; rc=1
+          fi
+          if [ -n "${PENDING}" ] && [ "${DEVKIT_STAGE}" != success ]; then
+            echo "::error::src/ lacks binaries the dev kit assigns or builds (${PENDING}) and this run staged none: add the dev-kit source that builds them, or drop their entries"; rc=1
+          fi
+          if [ "${STAGED}" = true ]; then
+            for entry in ${STAGED_TESTS}; do
+              job="${entry%%=*}"; result="${entry#*=}"
+              case "${result}" in
+                success) ;;
+                skipped) echo "::error::${job} was skipped though dev-kit files were staged into its package (a build failed, or the NPU gate held it)"; rc=1 ;;
+                *) echo "::error::${job} did not pass (${result})"; rc=1 ;;
+              esac
+            done
+          fi
           if [ "${DEVKIT_BENCH_GATE}" = fail ]; then
             echo "::error::devkit-bench: a model failed acc_common's hard gate (no predictions, or too many unanswered; see the bench summary)"; rc=1
           else
             case "${DEVKIT_BENCH}" in success|skipped) ;; *) echo "::warning::devkit-bench did not pass (${DEVKIT_BENCH}) but no model failed the hard gate: perf, a pull, a timeout or the bench infrastructure; see its jobs" ;; esac
           fi
-          requested=false
-          if [ "${OVERLAY}" = true ] && { [ -n "${OVERLAY_FAMILIES}" ] || { [ -n "${OVERLAY_MODELS}" ] && [ "${OVERLAY_MODELS}" != "[]" ]; }; }; then
-            requested=true
-          fi
-          # A verified swap was tested by its parent's run (changes leaves
-          # devkit-overlay off for it; this keeps it so).
-          [ "${SWAP_VERIFIED}" = true ] && requested=false
-          for entry in ${OVERLAY_TESTS}; do
-            job="${entry%%=*}"; result="${entry#*=}"
-            case "${result}" in
-              success) ;;
-              skipped)
-                if [ "${requested}" = true ]; then
-                  echo "::error::${job} was skipped though the change asks for it (a package or dev-kit build failed, or the NPU gate held it)"; rc=1
-                fi ;;
-              *) echo "::error::${job} did not pass (${result})"; rc=1 ;;
-            esac
-          done
           exit "${rc}"
 
-      # When this run passed and its overlay jobs tested dev-kit binaries
-      # that differ from the branch: the command that commits them
-      # (devkit_swap.py guide), in the job summary and as a notice. Writes
-      # nothing to the repository or the pull request.
-      - name: Download the dev-kit overlay manifests
+      # Fails while this run staged dev-kit files the branch does not have:
+      # a swap is pending (devkit_swap.py pending), with the fetch command in
+      # the job summary. This step must be the only failure of a run that
+      # fetch takes (devkit_swap.py PENDING_STEP, check_jobs): keep its name.
+      # After the author pushes the swap commit, the changes job verifies it
+      # and the next run builds and tests nothing again.
+      - name: Download the dev-kit staging manifests
         if: >-
-          ${{ success() && needs.changes.outputs.swap-verified != 'true'
+          ${{ !cancelled() && needs.changes.outputs.swap-verified != 'true'
+          && needs.devkit-stage.outputs.staged == 'true'
           && (github.event_name == 'pull_request' || needs.changes.outputs.devkit-full-refresh == 'true') }}
-        continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: devkit-overlay-manifest-*
-          path: devkit-overlay-manifests
+          pattern: devkit-stage-manifest-*
+          path: devkit-stage-manifests
 
-      - name: Dev-kit binaries to commit
+      - name: Dev-kit swap pending
         if: >-
-          ${{ success() && needs.changes.outputs.swap-verified != 'true'
+          ${{ !cancelled() && needs.changes.outputs.swap-verified != 'true'
+          && needs.devkit-stage.outputs.staged == 'true'
           && (github.event_name == 'pull_request' || needs.changes.outputs.devkit-full-refresh == 'true') }}
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          [ -d devkit-overlay-manifests ] || exit 0
-          python3 .github/script/ci/devkit_swap.py guide --manifests devkit-overlay-manifests \
-            --head "${HEAD_SHA}" --run "${GITHUB_RUN_ID}" > "${RUNNER_TEMP}/devkit-swap.md" || exit 0
-          if [ -s "${RUNNER_TEMP}/devkit-swap.md" ]; then
-            cat "${RUNNER_TEMP}/devkit-swap.md" >> "$GITHUB_STEP_SUMMARY"
-            echo "::notice title=Dev-kit binaries to commit::Run python .github/script/ci/devkit_swap.py fetch --run ${GITHUB_RUN_ID} on a clean checkout of ${HEAD_SHA:0:12}, then push (see the run summary)."
-          fi
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: >-
+          python3 .github/script/ci/devkit_swap.py pending --manifests devkit-stage-manifests --expect-staged
+          --head "${HEAD_SHA}" --run "${GITHUB_RUN_ID}" --base "${BASE_SHA}" --summary "${GITHUB_STEP_SUMMARY}"

@@ -25,8 +25,11 @@
 # always run txn (another context on the NPU, or ours opened and closed again,
 # can take the packets' route: a ctrlpkt kernel that loses it waits on a Sync
 # that never ends, and that has not been tested).
+# FLOW (default elf): --flow of every part (elf or xclbin).
+# EXE and PKG: a stress.exe and its package built elsewhere (no make).
 #
 # One log per part in OUT_DIR (default build/pressure); a summary line each.
+# Exit 1 when a part that must pass fails (P5b's full walk is expected to fail).
 
 set -u
 OUT=${1:-build/pressure}
@@ -36,24 +39,33 @@ SEEDS=${SEEDS:-"11 12 13"}
 LAUNCHES=${LAUNCHES:-200000}
 CHURN=${CHURN:-50}
 TRANSPORT=${TRANSPORT:-ctrlpkt}
+FLOW=${FLOW:-elf}
 mkdir -p "$OUT"
 
-make all COLS=$COLS CORES=$CORES > "$OUT/build.log" 2>&1 || { echo "build failed"; exit 1; }
-cfg=$(make -s print-config COLS=$COLS CORES=$CORES | awk '/^config/ {print $3}')
-pkg=$(make -s print-config COLS=$COLS CORES=$CORES | awk '/^package/ {print $3}')
-make build/$cfg/stress.exe COLS=$COLS CORES=$CORES >> "$OUT/build.log" 2>&1 || { echo "stress build failed"; exit 1; }
-exe=build/$cfg/stress.exe
+if [ -n "${EXE:-}" ]; then
+    exe=$EXE
+    pkg=${PKG:?PKG: the package of EXE}
+else
+    make all COLS=$COLS CORES=$CORES > "$OUT/build.log" 2>&1 || { echo "build failed"; exit 1; }
+    cfg=$(make -s print-config COLS=$COLS CORES=$CORES | awk '/^config/ {print $3}')
+    pkg=$(make -s print-config COLS=$COLS CORES=$CORES | awk '/^package/ {print $3}')
+    make build/$cfg/stress.exe COLS=$COLS CORES=$CORES >> "$OUT/build.log" 2>&1 || { echo "stress build failed"; exit 1; }
+    exe=build/$cfg/stress.exe
+fi
+failed=0
 
-# summary NAME LOG STATUS SECONDS
+# summary NAME LOG STATUS SECONDS [MUST_PASS=1]
 summary() {
     echo "$1: exit $3, $4 s, $(grep -E '^stress ' "$2" | tail -1)," \
          "$(grep -o 'unexpected: [0-9]* wrong, [0-9]* written past the end' "$2" | tail -1)"
+    # No result line: the run did not get going (counts as a failure).
+    if [ "${5:-1}" = 1 ] && { [ "$3" != 0 ] || ! grep -qE '^stress ' "$2"; }; then failed=1; fi
 }
 timed() { # NAME LOG ARGS...
     local name=$1 log=$2
     shift 2
     local start=$(date +%s)
-    "$exe" --package "$pkg" --transport $TRANSPORT "$@" > "$log" 2>&1
+    "$exe" --package "$pkg" --transport $TRANSPORT --flow $FLOW "$@" > "$log" 2>&1
     local status=$?
     summary "$name" "$log" $status $(( $(date +%s) - start ))
 }
@@ -67,31 +79,34 @@ timed "P4 latency" "$OUT/p4.log" --mode latency --count 2000
 
 # P5: two processes at the same time, txn.
 start=$(date +%s)
-"$exe" --package "$pkg" --transport txn --mode random --robust --seed 51 --launches 50000 > "$OUT/p5a_1.log" 2>&1 &
+"$exe" --package "$pkg" --transport txn --flow $FLOW --mode random --robust --seed 51 --launches 50000 > "$OUT/p5a_1.log" 2>&1 &
 pid=$!
-"$exe" --package "$pkg" --transport txn --mode random --robust --seed 52 --launches 50000 > "$OUT/p5a_2.log" 2>&1
+"$exe" --package "$pkg" --transport txn --flow $FLOW --mode random --robust --seed 52 --launches 50000 > "$OUT/p5a_2.log" 2>&1
 status2=$?
 wait $pid
 status1=$?
 summary "P5a robust + robust, process 1" "$OUT/p5a_1.log" $status1 $(( $(date +%s) - start ))
 summary "P5a robust + robust, process 2" "$OUT/p5a_2.log" $status2 $(( $(date +%s) - start ))
 start=$(date +%s)
-"$exe" --package "$pkg" --transport txn --mode random --robust --seed 53 --launches 50000 > "$OUT/p5b_robust.log" 2>&1 &
+"$exe" --package "$pkg" --transport txn --flow $FLOW --mode random --robust --seed 53 --launches 50000 > "$OUT/p5b_robust.log" 2>&1 &
 pid=$!
-"$exe" --package "$pkg" --transport txn --mode random --seed 54 --launches 50000 > "$OUT/p5b_full.log" 2>&1
+"$exe" --package "$pkg" --transport txn --flow $FLOW --mode random --seed 54 --launches 50000 > "$OUT/p5b_full.log" 2>&1
 status2=$?
 wait $pid
 status1=$?
 summary "P5b robust next to a full walk: robust" "$OUT/p5b_robust.log" $status1 $(( $(date +%s) - start ))
 summary "P5b robust next to a full walk: full (state-dependent kinds expected to fail)" "$OUT/p5b_full.log" \
-    $status2 $(( $(date +%s) - start ))
+    $status2 $(( $(date +%s) - start )) 0
 
 # P6: process churn.
 start=$(date +%s)
-failed=0
+bad=0
 for i in $(seq 1 "$CHURN"); do
-    "$exe" --package "$pkg" --transport $TRANSPORT --mode random --seed $((600 + i)) --launches 500 > "$OUT/p6_last.log" 2>&1 || failed=$((failed + 1))
+    "$exe" --package "$pkg" --transport $TRANSPORT --flow $FLOW --mode random --seed $((600 + i)) --launches 500 \
+        > "$OUT/p6_last.log" 2>&1 || bad=$((bad + 1))
 done
-echo "P6 process churn: $CHURN processes, $failed failed, $(( $(date +%s) - start )) s"
+echo "P6 process churn: $CHURN processes, $bad failed, $(( $(date +%s) - start )) s"
+[ $bad = 0 ] || failed=1
 
 TRANSPORT=txn timed "P7 context churn" "$OUT/p7.log" --mode churn --count "$CHURN"
+exit $failed

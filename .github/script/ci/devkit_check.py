@@ -3,7 +3,7 @@
 # Portions of this file consist of AI-generated content.
 """Fast static checks of the FLM dev kit's CI data (flm-dev-kit/).
 
-    devkit_check.py [--repo <root>] [--base <sha> [--head <sha>]]
+    devkit_check.py [--repo <root>] [--base <sha> [--head <sha>]] [--pending-ok [--github-output]]
 
 Checks, each failure printed as "devkit_check: error: ..." (exit 1):
 
@@ -63,7 +63,18 @@ Checks, each failure printed as "devkit_check: error: ..." (exit 1):
                 (its Makefile TARGET and CMakeLists.txt add_library, which
                 must agree), and each such library ships all three in both.
                 CATALOG_ALLOW excuses named files and alias tags, each with
-                its reason; an entry that excuses nothing is an error
+                its reason; an entry that excuses nothing is an error.
+                Pending swap: with --pending-ok (Build and Test's
+                devkit-static, pull requests only) an assigned slot (4) or
+                an engine library file (7) src/ lacks is no error but
+                "pending": printed, and written as pending=<csv> with
+                --github-output. The pull request's run must then stage
+                every one (devkit_stage.py's plan fails otherwise, and
+                summary fails a run with pending binaries that staged
+                nothing), so a new model or engine can get through CI
+                before its swap commits the binaries. Without --pending-ok
+                (pushes, the nightly, a release) they are errors, so main
+                never lacks a binary
   rtp lock      FLM_Xclbin/rtp_addresses.lock.txt (devkit_rtp_lock.py) parses
                 and names only artifacts a build unit produces and some
                 kernel_assignment.json model uses. With --base, when the pull
@@ -87,19 +98,30 @@ Checks, each failure printed as "devkit_check: error: ..." (exit 1):
                 path in this repository, pull_request events; no
                 ${{ github.event.* }} expression appears in a run: script.
                 devkit-bench.yml keeps contents: read and actions: read
-                and grants no write; build-and-test.yml's job calling it
-                grants exactly contents: read and actions: read and passes
-                no secrets. Skipped when the files are absent
+                and grants no write; build-and-test.yml's jobs calling it
+                (devkit-bench, and devkit-bench-nightly, whose condition
+                starts with github.event_name == 'schedule' while
+                devkit-bench's starts with github.event_name !=
+                'schedule', so a run calls it once) grant exactly contents:
+                read and actions: read and pass no secrets. Skipped when the
+                files are absent
   swap wiring   the names devkit_swap.py reads another Build and Test run
-                by match the CI that makes them: devkit-npu-overlay uploads
-                manifest.json as devkit-overlay-manifest-<os>-<runtime>
-                (MANIFEST_ARTIFACT); build-and-test.yml has one job named as
-                OVERLAYS gives for each os and runtime, running
-                devkit-npu-overlay with that os, runtime and
-                devkit-libs-<lin|win>-<runtime>, a summary job and the
-                devkit-engines and devkit-xclbins jobs; its changes job runs
-                devkit_swap.py verify and check with actions: read. Skipped
-                when the files are absent
+                by match the CI that makes them: build-and-test.yml has a
+                devkit-stage job (STAGE_JOB) that runs devkit_stage.py and
+                uploads manifest-<os>-<runtime>/manifest.json as
+                devkit-stage-manifest-<os>-<runtime> (MANIFEST_ARTIFACT,
+                MANIFEST_FILE) for each os and runtime, and the staged
+                files as devkit_stage.py's stage_artifact()
+                (devkit-stage-<lin|win>-<xrt|hrx>), which the
+                devkit-stage-apply action maps to its runtime and
+                lin-build.yml and win-build.yml download by that name; one
+                job with each name TEST_JOBS gives (only the name is
+                checked); a summary job with a step named PENDING_STEP that
+                runs devkit_swap.py pending --expect-staged; the
+                devkit-engines and devkit-xclbins jobs; and a changes job
+                that runs devkit_swap.py verify and check with actions:
+                read. Skipped when the workflow is absent (the action and
+                build workflows each when absent)
   notices       with --base: every file added under flm-dev-kit/ between the
                 merge base of --base and --head (default HEAD), of a source or
                 script type, has an AMD copyright notice in its first 15
@@ -171,7 +193,7 @@ INCLUDE = re.compile(r"^\s*#\s*include\b")
 
 MD_MODEL = re.compile(r"^#### `([^`]+)` → `([^`]+)`\s*$")
 MD_HEADING = re.compile(r"^#{1,6}\s")
-MD_ROW = re.compile(r"^\|\s*`([^`]+\.xclbin)`\s*\|\s*(?:`([^`]+)`|(—))\s*\|")
+MD_ROW = re.compile(r"^\|\s*`([^`]+\.(?:xclbin|switches))`\s*\|\s*(?:`([^`]+)`|(—))\s*\|")
 
 
 def artifact_names(unit: str, model_types: list) -> list[str]:
@@ -249,7 +271,7 @@ def check_build_units(repo: Path, data: dict, errors: list) -> dict[str, tuple[s
 # A model's folder and its slots: devkit_assemble_xclbins.py writes
 # <folder>/<slot> under its output, and refuses anything else.
 SAFE_FOLDER = re.compile(r"[A-Za-z0-9_.+-]+(/[A-Za-z0-9_.+-]+)*")
-SAFE_SLOT = re.compile(r"[A-Za-z0-9_.+-]+\.xclbin")
+SAFE_SLOT = re.compile(r"[A-Za-z0-9_.+-]+\.(xclbin|switches)")
 
 
 def check_assignment(data: dict, index: dict, errors: list) -> dict[str, dict]:
@@ -281,8 +303,8 @@ def check_assignment(data: dict, index: dict, errors: list) -> dict[str, dict]:
             errors.append(f"{where}: kernels is not an object")
             continue
         for slot, art in kernels.items():
-            if not slot.endswith(".xclbin"):
-                errors.append(f"{where}: kernel slot {slot!r} does not end in .xclbin")
+            if not slot.endswith((".xclbin", ".switches")):
+                errors.append(f"{where}: kernel slot {slot!r} does not end in .xclbin or .switches")
             elif not SAFE_SLOT.fullmatch(slot):
                 errors.append(f"{where}: kernel slot {slot!r} is not a plain file name ([A-Za-z0-9_.+-])")
             if folder is not None:
@@ -495,6 +517,7 @@ def check_engines(repo: Path, data: dict, models: dict, errors: list,
 # kernel_assignment.json entry.
 MODEL_LIST = "src/model_list.json"
 SHIPPED_XCLBINS = "src/xclbins"
+SHIPPED_SUFFIXES = (".xclbin", ".switches")   # kernels, and d3's control-packet switches
 # src/CMakeLists.txt links the engines from src/lib/${FLM_RUNTIME_NAME}, xrt or
 # hrx: lib<name>.so on Linux, the <name>.lib import library on Windows, whose
 # <name>.dll .github/workflows/win-build.yml copies from the same directory
@@ -507,10 +530,6 @@ BACKEND_SUFFIXES = {"-core": "core", "-oga-hipep": "oga-hipep"}  # catalog::back
 # source (key: a src/ path, or a model tag) -> why. An entry that no longer
 # excuses anything is an error, so the list cannot go stale.
 CATALOG_ALLOW = {
-    f"{SHIPPED_XCLBINS}/MiniCPM-OCR-1.0-NPU2/conv.xclbin":
-        "loaded by no engine: minicpm_ocr_npu registers conv8.xclbin (and only when built with "
-        "PREFILL_CONV=npu); conv.xclbin is the older conv1d kernel it does not work with "
-        "(FLM_DLL/detail/minicpm_ocr_npu/README.md). Kept: binaries under src/ are not removed here",
     "src/lib/xrt/libaiebu.a":
         "the prebuilt AIE assembler the dev-kit engines and kernel hosts link, no engine library",
     "src/lib/xrt/aiebu_static.lib":
@@ -590,9 +609,11 @@ def shipped_names(lib: str) -> tuple[str, ...]:
 
 
 def check_catalog(repo: Path, catalog: dict, assignment: dict, engines: dict,
-                  errors: list, allow: Optional[dict] = None) -> str:
+                  errors: list, allow: Optional[dict] = None, pending: Optional[list] = None) -> str:
     """src/model_list.json, src/xclbins and src/lib against kernel_assignment
-    .json and engines.json; returns a note. allow: CATALOG_ALLOW."""
+    .json and engines.json; returns a note. allow: CATALOG_ALLOW. pending:
+    a list (--pending-ok) gets the paths of the binaries rules 4 and 7 find
+    missing, instead of errors."""
     allow = CATALOG_ALLOW if allow is None else allow
     used: set[str] = set()
 
@@ -649,13 +670,16 @@ def check_catalog(repo: Path, catalog: dict, assignment: dict, engines: dict,
             continue
         for slot in sorted(e.get("kernels") or {}):
             if not (repo / SHIPPED_XCLBINS / e["folder"] / slot).is_file():
+                if pending is not None:
+                    pending.append(f"{SHIPPED_XCLBINS}/{e['folder']}/{slot}")
+                    continue
                 errors.append(f"{ASSIGNMENT}: {m} assigns {slot}, but {SHIPPED_XCLBINS}/{e['folder']}/{slot} "
                               f"is not shipped: add the kernel there, or drop the slot from {ASSIGNMENT} "
                               f"and {ASSIGNMENT_MD}")
 
     # 5. Every shipped kernel is assigned by a model using its folder.
     root = repo / SHIPPED_XCLBINS
-    shipped = sorted(p.relative_to(root).as_posix() for p in root.rglob("*.xclbin") if p.is_file()) \
+    shipped = sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file() and p.suffix in SHIPPED_SUFFIXES) \
         if root.is_dir() else []
     for rel in shipped:
         folder, slot = rel.rsplit("/", 1) if "/" in rel else ("", rel)
@@ -708,7 +732,9 @@ def check_catalog(repo: Path, catalog: dict, assignment: dict, engines: dict,
                           f"the sources that build it under {DLL}/detail/<dir>/ and the dir to {ENGINES}")
         for lib, d in sorted(libs.items()):
             missing = [f for f in shipped_names(lib) if f not in files]
-            if missing:
+            if missing and pending is not None:
+                pending += [f"src/lib/{rt}/{f}" for f in missing]
+            elif missing:
                 errors.append(f"{ENGINES}: {d} builds {lib}, but src/lib/{rt}/ lacks {', '.join(missing)}, "
                               f"which src/CMakeLists.txt links for {rt} (lib<name>.so on Linux, <name>.lib "
                               "and <name>.dll on Windows): ship them, or drop the dir from "
@@ -903,6 +929,9 @@ BENCH_WORKFLOW = ".github/workflows/devkit-bench.yml"
 BENCH_COMMENT_WORKFLOW = ".github/workflows/devkit-bench-comment.yml"
 # Calls BENCH_WORKFLOW; the comment workflow follows its runs.
 BUILD_WORKFLOW = ".github/workflows/build-and-test.yml"
+LIN_BUILD_WORKFLOW = ".github/workflows/lin-build.yml"
+WIN_BUILD_WORKFLOW = ".github/workflows/win-build.yml"
+STAGE_APPLY_ACTION = ".github/actions/devkit-stage-apply/action.yml"
 
 
 def _top_block(text: str, key: str) -> list[str]:
@@ -921,19 +950,34 @@ def _top_block(text: str, key: str) -> list[str]:
     return out
 
 
-def _caller_jobs(text: str, workflow: str) -> list[list[str]]:
-    """The jobs (their lines) of a workflow that call ./<workflow>."""
+def _caller_jobs(text: str, workflow: str, with_ids: bool = False):
+    """The jobs (their lines) of a workflow that call ./<workflow>: a list,
+    or with_ids a dict job id -> lines."""
     jobs, current = [], None
     for line in text.splitlines():
-        if re.match(r"^  [A-Za-z0-9_-]+:\s*(#.*)?$", line):
+        m = re.match(r"^  ([A-Za-z0-9_-]+):\s*(#.*)?$", line)
+        if m:
             current = []
-            jobs.append(current)
+            jobs.append((m.group(1), current))
         elif current is not None and line and not line[0].isspace() and not line.startswith("#"):
             current = None
         elif current is not None:
             current.append(line)
-    return [j for j in jobs if any(re.match(rf"^    uses:\s*\./{re.escape(workflow)}\s*(#.*)?$", line)
-                                   for line in j)]
+    found = [(k, j) for k, j in jobs if any(re.match(rf"^    uses:\s*\./{re.escape(workflow)}\s*(#.*)?$", line)
+                                            for line in j)]
+    return dict(found) if with_ids else [j for _, j in found]
+
+
+def _job_condition(job: list[str]) -> str:
+    """A job's if: expression (one line, or the first line of a >- block)."""
+    for k, line in enumerate(job):
+        m = re.match(r"^    if:\s*(.*)$", line)
+        if m:
+            value = m.group(1).strip()
+            if value in (">-", ">", "|", "|-") and k + 1 < len(job):
+                value = job[k + 1].strip()
+            return value
+    return ""
 
 
 def _run_scripts(text: str) -> list[str]:
@@ -1003,11 +1047,21 @@ def check_bench_workflows(repo: Path, errors: list) -> int:
                       f"got {bench_perms}")
     if re.search(r"^[ \t]+[a-z-]+: write[ \t]*$", bench, re.M):
         errors.append(f"{BENCH_WORKFLOW}: no job may be granted a write permission")
-    callers = _caller_jobs(build, BENCH_WORKFLOW)
-    if len(callers) != 1:
-        errors.append(f"{BUILD_WORKFLOW}: exactly one job must call ./{BENCH_WORKFLOW} (found {len(callers)}): "
-                      f"the comment workflow follows {BUILD_WORKFLOW}'s runs")
-    for job in callers:
+    callers = _caller_jobs(build, BENCH_WORKFLOW, with_ids=True)
+    ids = sorted(callers)
+    if ids not in (["devkit-bench"], ["devkit-bench", "devkit-bench-nightly"]):
+        errors.append(f"{BUILD_WORKFLOW}: the jobs calling ./{BENCH_WORKFLOW} must be devkit-bench and optionally "
+                      f"devkit-bench-nightly (found {', '.join(ids) or 'none'}): the comment workflow follows "
+                      f"{BUILD_WORKFLOW}'s runs")
+    elif len(ids) == 2:
+        # One call per run: the two conditions exclude each other.
+        for job_id, needle in (("devkit-bench", "${{ github.event_name != 'schedule' && "),
+                               ("devkit-bench-nightly", "${{ github.event_name == 'schedule' && ")):
+            cond = _job_condition(callers[job_id])
+            if not cond.startswith(needle.strip()):
+                errors.append(f"{BUILD_WORKFLOW}: {job_id}'s condition must start with {needle.strip()}, so a run "
+                              f"calls ./{BENCH_WORKFLOW} once")
+    for job in callers.values():
         if any(re.match(r"^    secrets:", line) for line in job):
             errors.append(f"{BUILD_WORKFLOW}: the job calling {BENCH_WORKFLOW} must pass no secrets")
         perms, inside = [], False
@@ -1022,9 +1076,6 @@ def check_bench_workflows(repo: Path, errors: list) -> int:
             errors.append(f"{BUILD_WORKFLOW}: the job calling {BENCH_WORKFLOW} must grant exactly contents: read "
                           f"and actions: read, got {sorted(perms)}")
     return 3
-
-
-OVERLAY_ACTION = ".github/actions/devkit-npu-overlay/action.yml"
 
 
 def _jobs(text: str) -> dict[str, list[str]]:
@@ -1050,32 +1101,72 @@ def check_swap_wiring(repo: Path, errors: list) -> int:
     makes them (see the docstring); returns how many files were checked."""
     try:
         build = (repo / BUILD_WORKFLOW).read_text(encoding="utf-8")
-        action = (repo / OVERLAY_ACTION).read_text(encoding="utf-8")
     except OSError:
         return 0
     import devkit_swap  # here: devkit_swap imports this module
     where = "devkit_swap.py"
     if devkit_swap.WORKFLOW_PATH != BUILD_WORKFLOW:
         errors.append(f"{where}: WORKFLOW_PATH is {devkit_swap.WORKFLOW_PATH}, not {BUILD_WORKFLOW}")
-    upload = re.search(r"name:[ \t]*(devkit-overlay-manifest-.+?)[ \t]*\n\s*path:[ \t]*(.+?)[ \t]*$", action, re.M)
-    want = devkit_swap.MANIFEST_ARTIFACT.format(os="${{ inputs.os }}", runtime="${{ inputs.runtime }}")
-    if not upload or upload.group(1) != want or not upload.group(2).endswith("/" + devkit_swap.MANIFEST_FILE):
-        errors.append(f"{OVERLAY_ACTION}: must upload .../{devkit_swap.MANIFEST_FILE} as {want}, the "
-                      f"artifact {where} fetch and verify read (MANIFEST_ARTIFACT, MANIFEST_FILE)")
     jobs = _jobs(build)
-    for job in (devkit_swap.SUMMARY_JOB,) + tuple(p.split(" / ")[0] for p in devkit_swap.BUILD_JOB_PREFIXES):
+    for job in (devkit_swap.SUMMARY_JOB, devkit_swap.STAGE_JOB) + tuple(
+            p.split(" / ")[0] for p in devkit_swap.BUILD_JOB_PREFIXES):
         if job not in jobs:
             errors.append(f"{BUILD_WORKFLOW}: no job {job}, which {where} reads a run's results by")
-    for (os_name, runtime), name in devkit_swap.OVERLAYS.items():
+    stage = "\n".join(jobs.get(devkit_swap.STAGE_JOB, []))
+    if stage and ("devkit_stage.py" not in stage or any(re.match(r"^    name:", l) for l in
+                                                         jobs[devkit_swap.STAGE_JOB])):
+        errors.append(f"{BUILD_WORKFLOW}: the {devkit_swap.STAGE_JOB} job must run devkit_stage.py and keep "
+                      f"its id as its name ({where} STAGE_JOB)")
+    for (os_name, runtime), name in devkit_swap.TEST_JOBS.items():
+        artifact = devkit_swap.manifest_artifact(os_name, runtime)
+        upload = re.search(rf"name:[ \t]*{re.escape(artifact)}[ \t]*\n\s*path:[ \t]*(.+?)[ \t]*$", stage, re.M)
+        if not upload or not upload.group(1).endswith(
+                f"/manifest-{os_name}-{runtime}/{devkit_swap.MANIFEST_FILE}"):
+            errors.append(f"{BUILD_WORKFLOW}: the {devkit_swap.STAGE_JOB} job must upload "
+                          f".../manifest-{os_name}-{runtime}/{devkit_swap.MANIFEST_FILE} as {artifact}, the "
+                          f"artifact {where} reads (MANIFEST_ARTIFACT, MANIFEST_FILE)")
         found = [lines for lines in jobs.values() if f"    name: {name}" in lines]
-        body = "\n".join(found[0]) if len(found) == 1 else ""
-        libs = devkit_swap.libs_artifact(os_name, runtime)
-        if (not body or "uses: ./.github/actions/devkit-npu-overlay" not in body
-                or not re.search(rf"^\s+os: {os_name}\s*$", body, re.M)
-                or not re.search(rf"^\s+runtime: {runtime}\s*$", body, re.M)
-                or f"'{libs}'" not in body):
-            errors.append(f"{BUILD_WORKFLOW}: {where} OVERLAYS expects exactly one job named \"{name}\" "
-                          f"running devkit-npu-overlay with os {os_name}, runtime {runtime} and libs {libs}")
+        if len(found) != 1:
+            errors.append(f"{BUILD_WORKFLOW}: {where} TEST_JOBS expects exactly one job named \"{name}\" "
+                          f"(the product test job of {os_name} {runtime})")
+    summary = jobs.get(devkit_swap.SUMMARY_JOB, [])
+    step = next((i for i, l in enumerate(summary) if l.strip() == f"- name: {devkit_swap.PENDING_STEP}"), None)
+    body = "\n".join(summary[step:step + 30]) if step is not None else ""
+    if "devkit_swap.py pending" not in body or "--expect-staged" not in body:
+        errors.append(f"{BUILD_WORKFLOW}: the summary job needs a step named \"{devkit_swap.PENDING_STEP}\" "
+                      f"running devkit_swap.py pending --expect-staged ({where} PENDING_STEP: fetch accepts a "
+                      "run whose only failure is that step; a missing manifest must fail it)")
+    count = 1
+    # The staged files: devkit-stage uploads devkit_stage.stage_artifact()
+    # for each system and runtime, and the product builds download them by
+    # name through devkit-stage-apply, which maps each to its runtime.
+    import devkit_stage  # here: it imports this module
+    apply = repo / STAGE_APPLY_ACTION
+    try:
+        apply_text = apply.read_text(encoding="utf-8")
+        count += 1
+    except OSError:
+        apply_text = None
+    for (os_name, runtime) in devkit_swap.TEST_JOBS:
+        artifact = devkit_stage.stage_artifact(os_name, runtime)
+        if not re.search(rf"^\s*name:[ \t]*{re.escape(artifact)}[ \t]*$", stage, re.M):
+            errors.append(f"{BUILD_WORKFLOW}: the {devkit_swap.STAGE_JOB} job must upload the staged files as "
+                          f"{artifact} (devkit_stage.py stage_artifact), the name the product builds download")
+        if apply_text is not None and not re.search(rf"(^|\s|')({re.escape(artifact)}\)|'{re.escape(artifact)}')",
+                                                    apply_text, re.M):
+            errors.append(f"{STAGE_APPLY_ACTION}: must map {artifact} to its runtime (devkit_stage.py "
+                          f"stage_artifact)")
+    for os_name, workflow in (("linux", LIN_BUILD_WORKFLOW), ("windows", WIN_BUILD_WORKFLOW)):
+        prefix = devkit_stage.stage_artifact(os_name, "xrt")[:-len("-xrt")]
+        try:
+            text = (repo / workflow).read_text(encoding="utf-8")
+            count += 1
+        except OSError:
+            continue
+        lines = [l for l in text.splitlines() if re.match(rf"^\s*artifact:[ \t]*{re.escape(prefix)}-\$\{{\{{", l)]
+        if len(lines) != 1 or "'hrx'" not in lines[0] or "'xrt'" not in lines[0]:
+            errors.append(f"{workflow}: its devkit-stage-apply step must name the artifact {prefix}-<xrt|hrx> "
+                          f"(devkit_stage.py stage_artifact), choosing 'xrt' or 'hrx' by the variant")
     changes_job = "\n".join(jobs.get("changes", []))
     for sub in ("verify", "check"):
         if f"devkit_swap.py {sub}" not in changes_job:
@@ -1083,11 +1174,12 @@ def check_swap_wiring(repo: Path, errors: list) -> int:
     if not re.search(r"^      actions: read\s*$", changes_job, re.M):
         errors.append(f"{BUILD_WORKFLOW}: the changes job needs actions: read (devkit_swap.py verify reads "
                       "another run's manifests)")
-    return 2
+    return count
 
 
-def run(repo: Path, base: str = "", head: str = "HEAD") -> tuple[list[str], list[str]]:
-    """(errors, notes) for the tree at repo."""
+def run(repo: Path, base: str = "", head: str = "HEAD",
+        pending: Optional[list] = None) -> tuple[list[str], list[str]]:
+    """(errors, notes) for the tree at repo; pending: see check_catalog."""
     errors: list[str] = []
     notes: list[str] = []
     units = load_json(repo, BUILD_UNITS, errors)
@@ -1114,7 +1206,7 @@ def run(repo: Path, base: str = "", head: str = "HEAD") -> tuple[list[str], list
         notes.append(f"engines: {len(engines.get('engines') or {})} engines, "
                      f"{len(engines.get('shared') or [])} shared")
     if catalog is not None and engines is not None and assignment is not None:
-        notes.append(check_catalog(repo, catalog, models, engines, errors))
+        notes.append(check_catalog(repo, catalog, models, engines, errors, pending=pending))
     notes.append(f"rtp lock: {check_rtp_lock(repo, index, assignment, errors)} stanzas")
     notes.append(f"Bsymbolic: {check_bsymbolic(repo, errors)} Makefiles")
     notes.append(f"bench workflows: {check_bench_workflows(repo, errors)} checked")
@@ -1135,10 +1227,25 @@ def main(argv: Optional[list[str]] = None) -> int:
                              "merge base with this commit; "
                              "empty or all-zero skips that check.")
     parser.add_argument("--head", default="HEAD")
+    parser.add_argument("--pending-ok", action="store_true",
+                        help="a pull request's run: missing assigned slots and engine libraries are pending "
+                             "(its run must stage them), not errors")
+    parser.add_argument("--github-output", action="store_true", help="append pending=<csv> to $GITHUB_OUTPUT")
     args = parser.parse_args(argv)
-    errors, notes = run(args.repo, args.base, args.head)
+    pending: Optional[list] = [] if args.pending_ok else None
+    errors, notes = run(args.repo, args.base, args.head, pending)
     for note in notes:
         print(f"devkit_check: {note}")
+    for path in pending or []:
+        print(f"devkit_check: pending swap: {path} is not in src/ yet; this pull request's run must stage it, "
+              "and its swap commit it")
+    if args.github_output:
+        target = os.environ.get("GITHUB_OUTPUT")
+        if not target:
+            print("--github-output given but $GITHUB_OUTPUT is not set", file=sys.stderr)
+            return 2
+        with open(target, "a", encoding="utf-8") as fh:
+            fh.write(f"pending={','.join(sorted(set(pending or [])))}\n")
     for err in errors:
         print(f"devkit_check: error: {err}")
     if errors:

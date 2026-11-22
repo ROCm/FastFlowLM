@@ -12,6 +12,7 @@
 #   powershell -File tools/pressure.ps1 -Exe build/c8x4/Release/stress.exe -Package precompiled/n256-c8x4-pair
 #
 # -Transport (default ctrlpkt): as TRANSPORT there: P1-P4 and P6; P5 and P7 run txn.
+# -Flow (default elf): as FLOW there, --flow of every part.
 #
 # One log per part in -Out (default build/pressure); a summary line each. Exit 1
 # when a part that must pass fails (P5b's full walk is expected to fail).
@@ -25,7 +26,8 @@ param(
     [int] $Churn = 50,
     # leave out P5b: a full walk (warm and rerun as asked) next to another process
     [switch] $SkipFullWalk,
-    [ValidateSet('txn', 'ctrlpkt')] [string] $Transport = 'ctrlpkt'
+    [ValidateSet('txn', 'ctrlpkt')] [string] $Transport = 'ctrlpkt',
+    [ValidateSet('elf', 'xclbin')] [string] $Flow = 'elf'
 )
 
 $Exe = (Resolve-Path $Exe -ErrorAction Stop).Path
@@ -44,17 +46,17 @@ function Summary($name, $log, $status, $seconds, $mustPass = $true) {
 
 function Timed($name, $log, [string[]] $more, $tr = $Transport) {
     $t = [Diagnostics.Stopwatch]::StartNew()
-    & $Exe --package $Package --transport $tr @more *> $log
+    & $Exe --package $Package --transport $tr --flow $Flow @more *> $log
     $status = $LASTEXITCODE
     Summary $name $log $status ([int]$t.Elapsed.TotalSeconds)
 }
 
 # Two processes at once, txn; returns their exit codes after both end.
 function Pair($log1, [string[]] $args1, $log2, [string[]] $args2) {
-    $a = Start-Process -FilePath $Exe -ArgumentList (@('--package', $Package, '--transport', 'txn') + $args1) `
+    $a = Start-Process -FilePath $Exe -ArgumentList (@('--package', $Package, '--transport', 'txn', '--flow', $Flow) + $args1) `
         -NoNewWindow -PassThru -RedirectStandardOutput $log1 -RedirectStandardError "$log1.err"
     $null = $a.Handle # keeps the exit code readable
-    & $Exe --package $Package --transport txn @args2 *> $log2
+    & $Exe --package $Package --transport txn --flow $Flow @args2 *> $log2
     $s2 = $LASTEXITCODE
     $a.WaitForExit()
     return @($a.ExitCode, $s2)
@@ -88,7 +90,8 @@ if ($SkipFullWalk) {
 $t = [Diagnostics.Stopwatch]::StartNew()
 $bad = 0
 for ($i = 1; $i -le $Churn; $i++) {
-    & $Exe --package $Package --transport $Transport --mode random --seed (600 + $i) --launches 500 *> "$Out/p6_last.log"
+    & $Exe --package $Package --transport $Transport --flow $Flow --mode random --seed (600 + $i) --launches 500 `
+        *> "$Out/p6_last.log"
     if ($LASTEXITCODE) { $bad++ }
 }
 Write-Host "P6 process churn: $Churn processes, $bad failed, $([int]$t.Elapsed.TotalSeconds) s"

@@ -1,7 +1,7 @@
 # Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
 # Portions of this file consist of AI-generated content.
 
-# Windows (MSVC + XRT) build of the two host programs; Linux uses the Makefile.
+# Windows (MSVC + XRT) build of the host programs; Linux uses the Makefile.
 # The packages are built on Linux (`make precompile`) and read from precompiled/.
 #
 #   cmake -S . -B build/c8x2 -DCOLS=8 -DCORES=2
@@ -20,7 +20,7 @@ set(FLM_XRT_WIN_XRT_ONLY ON) # XRT paths only: no aiebu, no Boost
 include(${CMAKE_CURRENT_SOURCE_DIR}/../../FLM_DLL/cmake/flm_xrt_win.cmake) # XRT_INCLUDE_DIR, XRT_LIB_DIR
 set(FLM_DLL ${CMAKE_CURRENT_SOURCE_DIR}/../../FLM_DLL) # nlohmann/json
 
-foreach(prog host stress)
+foreach(prog host stress ovlp make_overlay)
   add_executable(${prog} host/${prog}.cpp)
   target_include_directories(${prog} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../launchlib/include

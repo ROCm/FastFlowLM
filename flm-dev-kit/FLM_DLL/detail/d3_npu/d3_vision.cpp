@@ -535,6 +535,17 @@ std::vector<std::vector<bf16>> D3VisionEncoder::encode(const d3_image_payload& p
     utils::print_matrix(hidden_state, Padded_QWEN3_5_VISION_HIDDEN_SIZE, 8, 10);
     )
 
+    // host attention when the call has at most D3_VISION_HOST_ATTN_MAX patches (default 1024, 0 = never; measured: it wins up to ~1.5k and loses from 3k), and the head layout is packed
+    bool host_attn = false;
+    {
+        const char* e = std::getenv("D3_VISION_HOST_ATTN_MAX");
+        const int max_tokens = e ? std::atoi(e) : 1024;
+        int total = 0;
+        for (const auto& g : image_grid_thw) total += g[1] * g[2];
+        host_attn = max_tokens > 0 && total <= max_tokens && !ENABLE_QKV_REORDER &&
+                    QWEN3_5_VISION_NUM_HEADS * QWEN3_5_VISION_HEAD_DIM == _QWEN3_5_VISION_HIDDEN_SIZE &&
+                    _QWEN3_5_VISION_HIDDEN_SIZE == Padded_QWEN3_5_VISION_HIDDEN_SIZE && QWEN3_5_VISION_HEAD_DIM % 32 == 0;
+    }
     constexpr bool DEBUG_NO_REGRESSION_ERROR = false;
 
     for(int layer_idx = 0; layer_idx < QWEN3_5_VISION_NUM_LAYERS; layer_idx++){
@@ -713,10 +724,34 @@ std::vector<std::vector<bf16>> D3VisionEncoder::encode(const d3_image_payload& p
 
         // now mha
         auto time_start_mha = std::chrono::high_resolution_clock::now();
+        if (host_attn) {
+            // small segments: attention on the host. The array's attention is its own xclbin, so each layer would switch
+            // hw_contexts twice (~2.7 ms each, more than the attention itself); no device work between the two matmuls
+            const size_t HD = (size_t)QWEN3_5_VISION_NUM_HEADS * QWEN3_5_VISION_HEAD_DIM;
+            const size_t ldq = 3 * (size_t)Padded_QWEN3_5_VISION_HIDDEN_SIZE;
+            const float scale = 1.0f / std::sqrt((float)QWEN3_5_VISION_HEAD_DIM);
+            const bf16* qkv = mm_qkv_output_mha_input.data();
+            bf16* attn_out = mha_qkv_output_mm_o_input.data();
+            size_t row0 = 0;
+            for (const auto& g : image_grid_thw) {
+                const int n = g[1] * g[2];
+                host_attn_q.resize((size_t)n * HD);
+                host_attn_o.resize((size_t)n * HD);
+                for (int r = 0; r < n; r++) memcpy(&host_attn_q[(size_t)r * HD], qkv + (row0 + r) * ldq, HD * sizeof(bf16));
+                d3_vision_host_attention(host_attn_o.data(), host_attn_q.data(), qkv + row0 * ldq + HD, qkv + row0 * ldq + 2 * HD,
+                                         n, (int)QWEN3_5_VISION_NUM_HEADS, (int)QWEN3_5_VISION_HEAD_DIM, (int)ldq, scale, host_attn_kt);
+                for (int r = 0; r < n; r++)
+                    memcpy(attn_out + (row0 + r) * Padded_QWEN3_5_VISION_HIDDEN_SIZE, &host_attn_o[(size_t)r * HD], HD * sizeof(bf16));
+                row0 += n;
+            }
+            // the qkv matmul reads its output buffer's device copy, so the rotary'd host copy must go back, as in the array path
+            mm_qkv_output_mha_input.sync_to_device();
+        } else {
         mm_qkv_output_mha_input.sync_to_device();
         mha_qkv_output_mm_o_input.sync_to_device();
         flash_attention_app(mha_qkv_output_mm_o_input, mm_qkv_output_mha_input);
         mha_qkv_output_mm_o_input.sync_from_device();
+        }
 
         DEBUG_BLOCK(1,
         if (layer_idx == 0) {

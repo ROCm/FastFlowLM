@@ -41,7 +41,8 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              (the kernel, engine, converter and pybind sources, built by their
              own jobs), a src/lib/xrt file the dev kit links (libaiebu.a,
              aiebu_static.lib, any library its engines' -L order can pick
-             up), hrx-integration/ (the HRX engine builds fetch the pinned
+             up, except the libraries the engines.json units build: those
+             are the dev kit's output, which a swap commits), hrx-integration/ (the HRX engine builds fetch the pinned
              package with it), or the CI that runs the dev-kit jobs
              (including .github/workflows/devkit-*.yml and
              .github/actions/devkit-*, except devkit-aie-image.yml and the
@@ -49,9 +50,11 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              documentation under
              flm-dev-kit/ counts as nothing, as for the product. Nothing in
              the product consumes flm-dev-kit/ yet, so those paths select no
-             product suite or family: a change only there tests no product
-             package (run_tests false; it builds the portable ones only for
-             the overlay tests, see devkit_overlay). The product files
+             product suite or family: a change only there runs no product
+             suite of its own (run_tests false); when it is engine or
+             kernel source, the portable packages build with its binaries
+             staged in and their tests run for it (devkit_stage). The
+             product files
              above keep their product rules. The kernel build image selects
              nothing: docker/aie-build* (its Dockerfile, kernel check and
              pinned PDIs), flm-dev-kit/FLM_Xclbin/toolchain.lock and
@@ -70,7 +73,7 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              flm-dev-kit/FLM_DLL/engines.json or FLM_Xclbin/
              kernel_assignment.{json,md} or build_units.json, or the changed
              files are unknown. Runs devkit-static (as devkit does) and
-             nothing else: no product suite, dev-kit build or overlay
+             nothing else: no product suite, dev-kit build or staging
   devkit_areas
              comma-separated dev-kit areas the change touches, from xclbin,
              dll, converter, pybind and launchlib, plus the areas that build
@@ -82,27 +85,40 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              is in none of them, or the dev-kit CI changed
   devkit_families
              comma-separated catalog families whose dev-kit engines the change
-             touches, for the dev-kit overlay tests: from
+             rebuilds from changed source, whose libraries are staged into
+             the product builds (devkit_stage): from
              flm-dev-kit/FLM_DLL/engines.json, a change under
              detail/<engine>/ or its include/models/<x>/ headers gives the
              engine's families and those of every engine that uses it; a
              change to anything else that builds into the engines (the
              shared units, the common headers, common/, cmake/, the build
-             scripts, a src/lib/xrt library they link), to the dev-kit CI, or
-             an unknown change gives every engine's families. Per-model
-             helper scripts (build_<model>.sh) and model_list*.json give
-             none; an engines.json change gives the engines whose entry
-             changed. Empty when no dev-kit engine is touched
-  devkit_overlay
-             true when the dev-kit overlay tests run (build-and-test.yml
-             test-*-devkit): the dll area with devkit_families, or the xclbin
-             area (the kernel build names the models it rebuilt), unless only
-             shipped kernels selected it: the product suites test those,
-             and the rebuild is only compared with them. On a pull
-             request the portable packages the overlay starts from (Linux
-             XRT and HRX, Windows XRT and HRX) are then built even when
-             run_tests is false, which then gives suites "none", so no
-             product test job runs
+             scripts, a src/lib/xrt library they link) or an unknown change
+             gives every engine's families. Per-model helper scripts
+             (build_<model>.sh) and model_list*.json give none; an
+             engines.json change gives the engines whose entry changed (a
+             new engine's). The dev-kit CI gives none: it runs the dev-kit
+             builds (every area) to exercise them, but stages nothing, as
+             no source changed (a swap of every binary for a CI change
+             would be noise, and no verified swap can come with a change
+             to the CI that checks it). Empty when no dev-kit engine is
+             touched
+  devkit_stage
+             true when a pull request's run (and the dev-kit full refresh)
+             stages dev-kit files into its product builds (build-and-test.yml
+             devkit-stage, .github/script/ci/devkit_stage.py): the dll area
+             with devkit_families, or the xclbin area selected by kernel
+             source or anything else but the dev-kit CI and shipped kernels
+             (which are only rebuilt to compare). Which kernels are staged
+             the kernel build decides (the models whose kernel source or
+             assignment changed). The product builds then wait for the
+             dev-kit builds; the Linux and Windows, XRT and HRX portable
+             packages build even when run_tests is false (suites "none")
+             and their test jobs run the union of the product's selection
+             and the staged files' (devkit_stage.py). After a swap commit
+             (the newest commit carrying the Devkit-Swap-Run trailer), false
+             unless the files changed since it would stage something by
+             themselves (after_swap): a review fix or a merge of main then
+             tests the committed binaries instead of rebuilding them
   devkit_bench
              true when the dev-kit perf and accuracy benches
              (devkit-bench.yml, which Build and Test's devkit-bench job
@@ -111,8 +127,8 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              flm-dev-kit/FLM_DLL/ or flm-dev-kit/FLM_Xclbin/ (sources,
              Makefiles, CMakeLists, iron/ Python, build_units.json,
              kernel_assignment.json, engines.json, the RTP lock and
-             toolchain.image), and Build and Test builds something for it to
-             bench (devkit_overlay). Documentation, images and licence files,
+             toolchain.image), and Build and Test stages something for it to
+             bench (devkit_stage). Documentation, images and licence files,
              the per-model helper scripts and model registries under FLM_DLL
              (DEVKIT_DLL_NO_BUILD), the kernel build image and its
              toolchain.lock (DEVKIT_ONLY: devkit-aie-image.yml tests those),
@@ -125,7 +141,7 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              commit devkit_swap.py verify accepted (it holds exactly the
              binaries an earlier Build and Test run of its parent built and
              NPU-tested). Everything else is then off: run_tests false,
-             suites "none", no family, model, dev-kit area or bench;
+             suites "none", no family, model, dev-kit area, staging or bench;
              devkit_catalog true, so devkit-static still checks the catalog
   summary    one line for the job log
 
@@ -152,6 +168,8 @@ from typing import Iterable, Optional
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MODEL_LIST = "src/model_list.json"
 MODEL_INFO = "src/model_info.json"
+# devkit_swap.py TRAILER_RUN: marks a swap commit (after_swap).
+SWAP_TRAILER = "Devkit-Swap-Run"
 
 # Files that are never built, packaged or read by a test. A change made only
 # of these skips the NPU tests. LICENSE_*.txt and THIRD_PARTY_NOTICES.txt are
@@ -214,7 +232,10 @@ DEVKIT_ALSO = (
 # launchlib. The dev-kit engine Makefiles also put -L../../../../src/lib/xrt
 # ahead of their own build/lib, so any library there can stand in for a unit
 # they link. This lasts until libaiebu.a is vendored into
-# flm-dev-kit/FLM_DLL/external_libs.
+# flm-dev-kit/FLM_DLL/external_libs. A library an engines.json unit builds
+# (engine_library_files) is not an input here: it is the dev kit's own output,
+# which a swap commits, and counting it would make every push after a swap
+# rebuild and stage every engine (devkit_from_product).
 DEVKIT_FROM_PRODUCT = (
     (re.compile(r"^src/lib/xrt/(libaiebu\.a|aiebu_static\.lib)$"), {"xclbin", "dll", "pybind", "launchlib"}),
     (re.compile(r"^src/lib/xrt/[^/]+$"), {"dll"}),
@@ -230,13 +251,13 @@ DEVKIT_FROM_PRODUCT = (
 # The files devkit_check.py's catalog rules read: what the product ships
 # (src/model_list.json, src/xclbins, src/lib) and the dev-kit JSON describing
 # where it comes from. A change to one runs devkit-static (devkit_catalog)
-# without selecting a dev-kit area, so no dev-kit build or overlay starts.
+# without selecting a dev-kit area, so no dev-kit build or staging starts.
 DEVKIT_CATALOG = re.compile(
     r"^(src/model_list\.json$|src/xclbins/|src/lib/|flm-dev-kit/FLM_DLL/engines\.json$"
     r"|flm-dev-kit/FLM_Xclbin/(kernel_assignment\.(json|md)|build_units\.json)$)")
 # A shipped kernel: devkit-xclbins rebuilds the artifact kernel_assignment.json
 # maps to its slot and compares the two (report only). It selects the xclbin
-# area, but no overlay: the product suites test the shipped file, and the
+# area, but nothing is staged: the product suites test the shipped file, and the
 # rebuild comes from sources this change did not touch.
 SHIPPED_KERNEL = re.compile(r"^src/xclbins/.+/[^/]+\.xclbin$")
 
@@ -256,7 +277,8 @@ DEVKIT_ONLY = (
 )
 
 # The CI that decides and runs the dev-kit jobs: a change to it runs every
-# dev-kit area, so it is exercised before it merges. DEVKIT_ONLY's workflow
+# dev-kit area, so it is exercised before it merges, but stages nothing into
+# the product builds (devkit_families, devkit_stage). DEVKIT_ONLY's workflow
 # is not part of it.
 DEVKIT_CI = re.compile(
     r"^\.github/(workflows/(build-and-test|release|devkit-(?!bench)[^/]+)\.yml$"
@@ -442,6 +464,8 @@ ENGINES = {
     # r2t2 (Confucius4-R2T2) runs on the qwen3_asr engine; qwen3_asr_stream is
     # its streaming frontend.
     ("qwen3_asr", "qwen3_asr_stream"):       ("r2t2",),
+    # A frontend with no engine library: its families run on oga-hipep alone.
+    ("template_chat",):                      ("laguna", "nemotron-h"),
     # Built but registered for no catalog family.
     ("qwen3_5_omni",):                       (),
 }
@@ -604,6 +628,19 @@ class Git:
         rev = self.merge_base if rev_side == "base" else self.head
         return self._git("show", f"{rev}:{path}") if rev else None
 
+    def last_swap(self) -> Optional[str]:
+        """The newest commit since the merge base whose message carries the
+        dev-kit swap trailer (devkit_swap.py TRAILER_RUN), or None."""
+        if not self.merge_base:
+            return None
+        out = self._git("rev-list", "-n", "1", f"--grep=^{SWAP_TRAILER}:", f"{self.merge_base}..{self.head}")
+        return (out or "").strip() or None
+
+    def files_since(self, commit: str) -> Optional[list[str]]:
+        """The files head changes against commit (merges from main included)."""
+        out = self._git("diff", "--name-only", "--no-renames", commit, self.head)
+        return None if out is None else [l for l in out.splitlines() if l.strip()]
+
 
 @dataclass
 class Decision:
@@ -621,6 +658,9 @@ class Decision:
     gpu_models: set = field(default_factory=set)
     # Dev-kit areas (DEVKIT_AREAS) a changed flm-dev-kit/ file needs.
     devkit_areas: set = field(default_factory=set)
+    # The areas something other than the dev-kit CI or a shipped kernel
+    # selected: source the dev-kit builds read (devkit_stage).
+    source_areas: set = field(default_factory=set)
     # Catalog families of the dev-kit engines the change touches.
     devkit_families: set = field(default_factory=set)
     # Changed kernel build image files (DEVKIT_ONLY).
@@ -640,6 +680,21 @@ class Decision:
     swap_verified: bool = False
     reasons: list = field(default_factory=list)
 
+    def keep_swap(self, swap: str, since: "Decision") -> None:
+        """A swap commit is in the pull request and nothing a dev-kit build
+        reads changed after it (since: the decision for the files changed
+        since then stages nothing): the committed binaries are what its run
+        tested, so nothing is staged again; the product tests test them.
+        The dev-kit areas are those of the later changes alone."""
+        self.devkit_areas = set(since.devkit_areas)
+        self.source_areas = set()
+        self.devkit_families = set()
+        self.bench_source = None
+        self.xclbin_compare_only = since.xclbin_compare_only
+        self.reasons.append(f"swap commit {swap[:10]} brought in this pull request's dev-kit binaries and no "
+                            "dev-kit source changed since (devkit_swap.py check verifies it): nothing staged "
+                            "again; the product tests test the committed files")
+
     def skip_for_swap(self) -> None:
         """A verified swap commit: the run that tested its parent built and
         NPU-tested exactly these binaries, so nothing is built or tested
@@ -652,12 +707,13 @@ class Decision:
         self.new_models = []
         self.gpu_models = set()
         self.devkit_areas = set()
+        self.source_areas = set()
         self.devkit_families = set()
         self.bench_source = None
         self.xclbin_compare_only = False
         self.devkit_catalog = True
         self.reasons.append("the head is a verified dev-kit swap commit (devkit_swap.py verify): no product "
-                            "build, NPU test, dev-kit build, overlay or bench; devkit-static only")
+                            "build, NPU test, dev-kit build, staging or bench; devkit-static only")
 
     def all_suites(self, path: str, why: str = "") -> None:
         if self.suites is not None:
@@ -686,28 +742,29 @@ class Decision:
     def devkit_value(self) -> str:
         return ",".join(area for area, _ in DEVKIT_AREAS if area in self.devkit_areas)
 
-    def devkit_overlay(self) -> bool:
-        """Whether the dev-kit overlay tests run: the change touches a dev-kit
-        engine's families, or the kernels (which kernels, and so which models,
-        the xclbin build decides).
+    def devkit_stage(self) -> bool:
+        """Whether a pull request's run stages dev-kit files into its product
+        builds (see devkit_stage in the docstring): the change touches a
+        dev-kit engine's families, or kernel source (which kernels, and so
+        which models, the xclbin build decides).
 
-        Accepted cost: any xclbin-area change counts, before the kernel plan
+        Accepted cost: any such xclbin change counts, before the kernel plan
         is known, so one that rebuilds no catalog model's kernel (an
-        unassigned build unit, SmolVLA only, a CI edit) still builds the four
-        portable packages and asks an untrusted pull request for npu-approve,
-        and then every overlay job skips (summary does not hold the missing
-        approval against it). Narrowing it would mean running the kernel
-        plan (devkit_xclbin_plan.py) here."""
+        unassigned build unit, SmolVLA only) still makes the product builds
+        wait for the kernel build and asks an untrusted pull request for
+        npu-approve; the staging then stages nothing and the product jobs
+        run as for any other change. Narrowing it would mean running the
+        kernel plan (devkit_xclbin_plan.py) here."""
         return (bool(self.devkit_families and "dll" in self.devkit_areas)
-                or ("xclbin" in self.devkit_areas and not self.xclbin_compare_only))
+                or "xclbin" in self.source_areas)
 
     def bench(self) -> bool:
         """Whether Build and Test runs the dev-kit benches (its devkit-bench
         job, devkit-bench.yml) on a pull request: engine or kernel source
-        changed and it builds the dev-kit artifacts and portable packages
-        they bench (devkit_overlay). An engine serving no
+        changed and it stages it into the portable packages they bench
+        (devkit_stage). An engine serving no
         catalog family (qwen3_5_omni) is source but builds nothing to bench."""
-        return self.bench_source is not None and self.devkit_overlay()
+        return self.bench_source is not None and self.devkit_stage()
 
     def summary(self) -> str:
         if self.swap_verified:
@@ -717,16 +774,16 @@ class Decision:
             devkit += f" (engine families: {len(self.devkit_families)})"
         if self.xclbin_compare_only:
             devkit += " (shipped kernels rebuilt to compare)"
-        if self.devkit_overlay():
-            devkit += "; dev-kit overlay tests run"
+        if self.devkit_stage():
+            devkit += "; dev-kit files staged into the product builds"
         if self.bench():
             devkit += "; dev-kit benches run"
         if self.devkit_catalog and not self.devkit_areas:
             devkit += "; dev-kit catalog check runs"
         if not self.run_tests:
             if self.devkit_areas:
-                what = ("product NPU tests skipped, portable packages built for the overlay"
-                        if self.devkit_overlay() else "product builds and NPU tests skipped")
+                what = ("portable packages built with the dev-kit files staged, NPU-tested for them"
+                        if self.devkit_stage() else "product builds and NPU tests skipped")
                 return f"flm-dev-kit only: {what}{devkit}"
             if self.image_only:
                 return "kernel build image only (devkit-aie-image.yml): NPU tests and dev-kit jobs skipped"
@@ -763,7 +820,8 @@ class Decision:
                 "families": ",".join(sorted(self.families)),
                 "asr_full": str(self.asr_full).lower(),
                 # No product suite when no product code changed, even if the
-                # portable packages build for the dev-kit overlay.
+                # portable packages build with staged dev-kit files (whose
+                # own selection devkit_stage.py adds).
                 "suites": self.suites_value() if self.run_tests else "none",
                 "hipep": str(self.runs_hipep()).lower(),
                 "new_models": ",".join(self.new_models),
@@ -772,7 +830,7 @@ class Decision:
                 "devkit_catalog": str(self.devkit_catalog).lower(),
                 "devkit_areas": self.devkit_value(),
                 "devkit_families": ",".join(sorted(self.devkit_families)),
-                "devkit_overlay": str(self.devkit_overlay()).lower(),
+                "devkit_stage": str(self.devkit_stage()).lower(),
                 "devkit_bench": str(self.bench()).lower(),
                 "swap_verified": str(self.swap_verified).lower(),
                 "summary": self.summary()}
@@ -1010,8 +1068,35 @@ def every_engine_family(engines: Optional[DevkitEngines]) -> set:
     return {f for fams in ENGINES.values() for f in fams}
 
 
+def engine_library_files(engines: Optional[DevkitEngines], repo: Path = REPO_ROOT) -> frozenset:
+    """The file names every runtime directory ships for the libraries the
+    engines.json units (shared and engines) build: lib<name>.so, <name>.dll
+    and <name>.lib, the names devkit_check.py's rule 7 requires. Empty when
+    engines.json is unreadable, so every src/lib/xrt file stays a link input."""
+    if engines is None:
+        return frozenset()
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import devkit_check  # noqa: E402  (reads the units' Makefile and CMakeLists.txt)
+    out: set = set()
+    for unit in sorted(engines.shared | set(engines.engines)):
+        lib = devkit_check.unit_library(repo / devkit_check.DLL, unit, [])
+        if lib:
+            out |= set(devkit_check.shipped_names(lib))
+    return frozenset(out)
+
+
+def devkit_from_product(path: str, engine_libs: frozenset) -> Optional[set]:
+    """The dev-kit areas product file path selects (DEVKIT_FROM_PRODUCT), or
+    None. A dev-kit engine library in src/lib/xrt selects none: it is what a
+    swap commits, not something the engines build from."""
+    if path.startswith("src/lib/xrt/") and path[len("src/lib/xrt/"):] in engine_libs:
+        return None
+    return next((areas for rx, areas in DEVKIT_FROM_PRODUCT if rx.match(path)), None)
+
+
 def add_devkit_families(d: Decision, files: list[str], code: list[str],
-                        engines: Optional[DevkitEngines], git: Optional[Git]) -> None:
+                        engines: Optional[DevkitEngines], git: Optional[Git],
+                        engine_libs: frozenset = frozenset()) -> None:
     """d.devkit_families for the changed dev-kit files and the product files
     that select the dll area (see devkit_families in the docstring)."""
     everything = None  # the first path that needs every engine's families
@@ -1038,9 +1123,8 @@ def add_devkit_families(d: Decision, files: list[str], code: list[str],
         if path.startswith(DEVKIT_ROOT) and not is_non_code(path) and devkit_area(path) is None:
             everything = everything or f"{path} (in no dev-kit area)"
     for path in code:
-        if DEVKIT_CI.match(path):
-            everything = everything or f"{path} (CI that runs the dev-kit jobs)"
-        elif any(rx.match(path) and "dll" in areas for rx, areas in DEVKIT_FROM_PRODUCT):
+        # The dev-kit CI rebuilds the engines (every area) but stages none.
+        if not DEVKIT_CI.match(path) and "dll" in (devkit_from_product(path, engine_libs) or ()):
             everything = everything or f"{path} (linked by the dev-kit engines)"
     if everything:
         d.devkit_families = every_engine_family(engines)
@@ -1071,20 +1155,25 @@ def devkit_engines_diff(git: Optional[Git], head: Optional[DevkitEngines]) -> Op
 
 def decide(files: Optional[list[str]], git: Optional[Git] = None,
            head_catalog_text: Optional[str] = None,
-           devkit_engines: Optional[DevkitEngines] = None) -> Decision:
+           devkit_engines: Optional[DevkitEngines] = None,
+           engine_libs: Optional[frozenset] = None) -> Decision:
     """The decision for a list of changed files (None: git could not tell).
 
     git supplies the changed lines and the base and head versions of the
     catalogs; without it those checks fall back as described inline.
     devkit_engines is the head engines.json; None reads the checkout's.
+    engine_libs is engine_library_files' answer; None reads the checkout.
     """
     d = Decision(suites=None)
     if devkit_engines is None:
         devkit_engines = load_devkit_engines()
+    if engine_libs is None:
+        engine_libs = engine_library_files(devkit_engines)
     if files is None:
         d.asr_full = True
         d.devkit_catalog = True
         d.devkit_areas = set(ALL_DEVKIT_AREAS)
+        d.source_areas = set(ALL_DEVKIT_AREAS)
         d.devkit_families = every_engine_family(devkit_engines)
         d.bench_source = "changed files unknown"
         d.reasons.append("changed files unknown (new branch, shallow clone or force-push): "
@@ -1119,7 +1208,7 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
     if bench is not None:
         d.bench_source = bench
         d.reasons.append(f"{bench}: dev-kit engine or kernel source (benched when the dev-kit "
-                         f"overlay builds something for it)")
+                         f"run stages something for it)")
 
     # flm-dev-kit/ code selects dev-kit areas only; the product rules below
     # see the other files. Its documentation counts as nothing. The kernel
@@ -1140,8 +1229,11 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
             if not d.devkit_areas >= ALL_DEVKIT_AREAS:
                 d.reasons.append(f"{path} is in no dev-kit area: every dev-kit area")
             d.devkit_areas |= ALL_DEVKIT_AREAS
+            d.source_areas |= ALL_DEVKIT_AREAS
             continue
         d.devkit_areas.add(area)
+        d.source_areas.add(area)
+        d.source_areas |= devkit_extra_areas(path)
         extra = devkit_extra_areas(path) - d.devkit_areas
         if extra:
             d.devkit_areas |= extra
@@ -1153,7 +1245,7 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
 
     in_devkit = set(devkit)
     code = [f for f in files if not is_non_code(f) and f not in in_devkit]
-    add_devkit_families(d, files, code, devkit_engines, git)
+    add_devkit_families(d, files, code, devkit_engines, git, engine_libs)
     d.suites = set()  # narrowed per file below; None once any file is unscoped
     if not code:
         d.run_tests = False
@@ -1171,21 +1263,22 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
             new = ALL_DEVKIT_AREAS - d.devkit_areas
             d.devkit_areas |= ALL_DEVKIT_AREAS
             if new:
-                d.reasons.append(f"{path}: CI that runs the dev-kit jobs -> every dev-kit area")
+                d.reasons.append(f"{path}: CI that runs the dev-kit jobs -> every dev-kit area "
+                                 "(built to exercise it; nothing staged for it)")
             continue
-        for rx, areas in DEVKIT_FROM_PRODUCT:
-            if rx.match(path):
-                new = areas - d.devkit_areas
-                d.devkit_areas |= areas
-                if new:
-                    d.reasons.append(f"{path}: linked by the dev kit -> {', '.join(sorted(new))}")
-                break
+        areas = devkit_from_product(path, engine_libs)
+        if areas:
+            new = areas - d.devkit_areas
+            d.devkit_areas |= areas
+            d.source_areas |= areas
+            if new:
+                d.reasons.append(f"{path}: linked by the dev kit -> {', '.join(sorted(new))}")
     shipped = [f for f in code if SHIPPED_KERNEL.match(f)]
     if shipped and "xclbin" not in d.devkit_areas:
         d.devkit_areas.add("xclbin")
         d.xclbin_compare_only = True
         d.reasons.append(f"{shipped[0]}{f' and {len(shipped) - 1} more' if len(shipped) > 1 else ''}: "
-                         "shipped kernel(s) -> xclbin, rebuilt from the dev kit to compare (no overlay)")
+                         "shipped kernel(s) -> xclbin, rebuilt from the dev kit to compare (nothing staged)")
 
     head_catalog = load_catalog(head_catalog_text)
     gpu_fams = gpu_families(head_catalog)
@@ -1292,6 +1385,27 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
     return d
 
 
+def after_swap(d: Decision, git, head_catalog_text: Optional[str],
+               engines: Optional[DevkitEngines], repo: Path = REPO_ROOT) -> None:
+    """A push after a swap commit (a review fix, a merge of main): the
+    base...head diff still holds the dev-kit source the swap came from, but
+    when nothing a dev-kit build reads changed since the newest swap commit
+    (decide() on the files changed since then stages nothing), staging again
+    would rebuild bytes that differ from the swapped ones (kernel builds and
+    Windows DLLs are not byte-reproducible) and ask for another swap. A swap
+    commit that does not verify fails devkit_swap.py check, which keeps its
+    binaries out whatever this says."""
+    swap = git.last_swap()
+    if not swap:
+        return
+    files = git.files_since(swap)
+    if files is None:
+        return
+    since = decide(files, None, head_catalog_text, engines, engine_library_files(engines, repo))
+    if not since.devkit_stage():
+        d.keep_swap(swap, since)
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--base", default="", help="Base commit; empty or all-zero means unknown.")
@@ -1327,9 +1441,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         except OSError:
             engines_text = None
     devkit_engines = DevkitEngines.parse(engines_text)
-    decision = decide(files, git, head_catalog, devkit_engines)
+    decision = decide(files, git, head_catalog, devkit_engines,
+                      engine_library_files(devkit_engines, args.repo))
     if args.swap_verified == "true":
         decision.skip_for_swap()
+    elif git and decision.devkit_stage():
+        after_swap(decision, git, head_catalog, devkit_engines, args.repo)
     for reason in decision.reasons:
         print(f"changes: {reason}")
     outputs = decision.outputs()

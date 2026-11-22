@@ -86,10 +86,11 @@ takes 6.4 s, not 8 × 1.5 s. The first request with images loads the vision towe
 hardware contexts.
 ## ⚡ d3-edge on the NPU
 
-Accuracy and latency of `d3:edge` (vllm-sr/d3-edge, revision c454ee39, 12 layers, package D3-Edge-NPU2, Q4_K with GPTQ), served by FastFlowLM 1.0.12, same machine and settings as above.
+Accuracy and latency of `d3:edge` (vllm-sr/d3-edge, revision c454ee39, 12 layers, package D3-Edge-NPU2, Q4_K with GPTQ). The accuracy tables below were measured with FastFlowLM 1.0.12; the latency table and the image timings with 1.0.14, same machine and settings as above.
 
 > **Note:**
-> - Latency is end to end over HTTP (`flm serve --decision d3:edge`), median of 3 runs on an otherwise idle machine (16,384 tokens: 2 runs; 31,545 and 32,767 tokens: 1 run). Rows of 31,545 tokens and more are real documentation text.
+> - Latency is end to end over HTTP (`flm serve --decision d3:edge`), median of 5 runs on an otherwise idle machine (8,192 and 16,384 tokens: 3 runs; 31,545 and 32,767 tokens: 1 run). The prompts are a repeated news paragraph, so the token counts are exact; the build before these changes, measured the same way on the same machine, is in the last column of the table below.
+> - 1.0.14 runs the prefill matrix multiplications on the bfp16 kernel, attention on the host in bf16 for short prompts and images, and the gated delta rule on a contiguous state. On 2,172 classification requests (ARC and ag_news) the label accuracy is 67.6% against 67.9% before (95% interval ±2.0), top-1 agreement with the previous build 98.8%.
 
 ### Accuracy against the upstream BF16 model
 
@@ -115,25 +116,27 @@ and d3-flash (+2.5 and +2.3). The GPTQ calibration prompts (192 synthetic questi
 
 ### Images (d3-edge)
 
-Latency over HTTP, one question, median of 3: 0.61 s with a 1,024 × 768 image (880 input tokens), 0.89 s with two images, 1.4 s with a
-2000 × 1500 image (downscaled to the 1.6 MP budget; 1,676 tokens). A request with 8 questions about one image takes 2.0 s (one image encoding).
+Latency over HTTP, one question, median of 5: 0.50 s with a 1,024 × 768 image, 0.93 s with two images, 1.2 s with a
+2000 × 1500 image (downscaled to the 1.6 MP budget). A request with 8 questions about one image takes 1.5 s (one image encoding).
+Before these changes, on the same machine, they were 0.60 s, 1.06 s, 1.4 s and 2.0 s. The vision tower runs its attention on the host for
+images up to 1,024 patches in total, which saves two hardware-context switches per layer (`D3_VISION_HOST_ATTN_MAX`, 0 = always on the array).
 PNG, JPEG and WebP data URLs are accepted; web addresses, file paths, corrupt images and videos are refused with HTTP 422.
 
 ### Latency
 
-| Request | Median (ms) |
-|---|---:|
-| 1 question, 128 tokens | 60 |
-| 1 question, 330 tokens | 83 |
-| 1 question, 1,024 tokens | 263 |
-| 1 question, 2,047 tokens | 467 |
-| 1 question, 4,096 tokens | 1007 |
-| 1 question, 8,192 tokens | 2402 |
-| 1 question, 16,384 tokens | 5983 |
-| 1 question, 31,545 tokens | 16180 |
-| 1 question, 32,767 tokens | 16896 |
-| 4 questions, 330 tokens each | 291 |
-| 16 questions, 330 tokens each | 1045 |
+| Request | Median (ms) | Before 1.0.14 (ms) |
+|---|---:|---:|
+| 1 question, 128 tokens | 41 | 62 |
+| 1 question, 330 tokens | 55 | 88 |
+| 1 question, 1,024 tokens | 178 | 255 |
+| 1 question, 2,047 tokens | 323 | 461 |
+| 1 question, 4,096 tokens | 710 | 967 |
+| 1 question, 8,192 tokens | 1870 | 2414 |
+| 1 question, 16,384 tokens | 5034 | 6021 |
+| 1 question, 31,545 tokens | 14313 | 16128 |
+| 1 question, 32,767 tokens | 15215 | 17105 |
+| 4 questions, 330 tokens each | 173 | 271 |
+| 16 questions, 330 tokens each | 670 | 1058 |
 
 Memory: 2.0 GB resident after the load, 4.6 GB at 31,545 tokens and 4.8 GB at most in a mixed soak (four 31,545-token requests,
 60 short ones and 6 with images). A prompt of 32,769 tokens is refused.

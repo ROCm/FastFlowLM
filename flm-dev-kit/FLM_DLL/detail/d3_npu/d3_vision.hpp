@@ -17,6 +17,11 @@
 #include "vision/rot_pos_emb.hpp"
 #include "vision/norm.hpp"
 
+/// Full (bidirectional) multi-head attention of one segment on the host (d3_prefill_cpu.hpp, defined in d3_npu.cpp): q and out packed [L][heads * DH],
+/// k and v rows `kv_stride` apart. The vision tower uses it for small segments.
+void d3_vision_host_attention(bf16* out, const bf16* q, const bf16* k, const bf16* v, int L, int heads, int DH, int kv_stride,
+                              float scale, std::vector<float>& kt_buf);
+
 class D3VisionEncoder{
 
     public:
@@ -120,6 +125,8 @@ class D3VisionEncoder{
 
         // the vectors
         buffer<bf16> hidden_state;
+        std::vector<float> host_attn_kt;           // host attention scratch (small segments)
+        std::vector<bf16> host_attn_q, host_attn_o;
         buffer<bf16> residual_buffer;
 
         buffer<bf16> mm_qkv_input;

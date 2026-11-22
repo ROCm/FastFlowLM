@@ -4,7 +4,10 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -529,9 +532,45 @@ class Catalog(Synthetic):
                          "libraries (m_npu, m_other)")
 
 
+    def test_pending_on_a_pull_request(self):
+        """A new model's kernels and a new engine's libraries, not in src/
+        yet: errors anywhere, pending (for the run to stage) with
+        --pending-ok."""
+        (self.tmp / dc.SHIPPED_XCLBINS / "M-1B-NPU2" / "layer.xclbin").unlink()
+        self.library("m_npu", "m_npu")
+        for rt in ("xrt", "hrx"):
+            self.ship(f"src/lib/{rt}/m_npu.dll", f"src/lib/{rt}/m_npu.lib")
+        self.assertError("src/xclbins/M-1B-NPU2/layer.xclbin is not shipped")
+        self.assertError("m_npu builds m_npu, but src/lib/xrt/ lacks libm_npu.so")
+        pending: list = []
+        errors, _ = dc.run(self.tmp, pending=pending)
+        self.assertEqual(errors, [])
+        self.assertEqual(sorted(pending), ["src/lib/hrx/libm_npu.so", "src/lib/xrt/libm_npu.so",
+                                           "src/xclbins/M-1B-NPU2/layer.xclbin"])
+        # Only missing binaries are pending: anything else stays an error.
+        self.ship(f"{dc.SHIPPED_XCLBINS}/M-1B-NPU2/stray.xclbin")
+        errors, _ = dc.run(self.tmp, pending=[])
+        self.assertTrue(any("stray.xclbin is shipped, but no" in e for e in errors), errors)
+
+    def test_pending_cli(self):
+        (self.tmp / dc.SHIPPED_XCLBINS / "M-1B-NPU2" / "layer.xclbin").unlink()
+        target = self.tmp / "out.txt"
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"GITHUB_OUTPUT": str(target)}), contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(dc.main(["--repo", str(self.tmp), "--pending-ok", "--github-output"]), 0)
+            self.assertEqual(target.read_text(encoding="utf-8"), "pending=src/xclbins/M-1B-NPU2/layer.xclbin\n")
+            self.assertIn("pending swap: src/xclbins/M-1B-NPU2/layer.xclbin", out.getvalue())
+            target.unlink()
+            self.assertEqual(dc.main(["--repo", str(self.tmp), "--github-output"]), 1)
+            self.assertEqual(target.read_text(encoding="utf-8"), "pending=\n")
+
+
 class RealTree(unittest.TestCase):
     def test_tree_passes(self):
-        errors, _ = dc.run(dc.REPO_ROOT)
+        # A pull request that adds a slot has it pending until its swap commit (the CLI's --pending-ok);
+        # the strict check runs on the swap commit and on main.
+        errors, _ = dc.run(dc.REPO_ROOT, pending=[])
         self.assertEqual(errors, [])
 
 

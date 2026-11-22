@@ -17,6 +17,7 @@ enum class chat_format_kind {
     LFM2_PYTHONIC,  // <|tool_call_start|>[f(a=1, b="x")]<|tool_call_end|>               (LFM2)
     GEMMA4,         // <|tool_call>call:f{a:<|"|>x<|"|>}<tool_call|>                     (Gemma4)
     HARMONY,        // <|channel|>analysis / commentary to=functions.f / final           (gpt-oss)
+    GLM_XML,        // <tool_call>f<arg_key>k</arg_key><arg_value>v</arg_value></tool_call>  (Laguna, GLM-4.5)
 };
 
 /// \brief Everything the parser needs to know about one model's output syntax
@@ -71,8 +72,8 @@ enum class chat_call_head {
 /// \param spec the model's format
 /// \param text the text
 /// \param pos the index just past a tool_start marker
-/// \note Only formats whose call opens with a fixed token are told apart; a block
-///       of any other format is always a call.
+/// \note Only formats whose call opens with a fixed token, or with a name and then
+///       one (GLM XML), are told apart; a block of any other format is always a call.
 chat_call_head chat_format_call_head(const chat_format_spec& spec, const std::string& text, size_t pos);
 
 /// \brief Find the tool_end that closes the tool block whose body starts at from

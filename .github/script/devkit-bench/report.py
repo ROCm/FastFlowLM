@@ -19,9 +19,10 @@ The summary (at most MAX_BYTES, cut with a note beyond that) has, per
 runtime: perf A/B (dev-kit against the base package on the same runner)
 with the change against the nightly baseline for the same machine kind,
 GSM8K and DocVQA against the nightly baseline, the soft-gate warnings and
-the jobs that failed or produced nothing. The dev-kit full refresh
-(--mode refresh) is given no baseline and runs no A/B: its summary is this
-run's numbers, compared with nothing. It holds only numbers, validated
+the jobs that failed or produced nothing. A pull request (--mode pr) and
+the dev-kit full refresh (--mode refresh) are given no baseline and run no
+A/B: their summary is the run's numbers, compared with nothing (a
+comparison is to be designed later). It holds only numbers, validated
 model ids and machine kinds, and fixed wording: no model output, log or
 other free text from an artifact. Per-question reports stay in the result
 artifacts.
@@ -293,6 +294,9 @@ def render(results: list[dict], baseline: dict, matrix: list[dict], *, mode: str
         where.append(f"Build and Test run {build_run_id}")
     if mode == "refresh":
         where.append("dev-kit full refresh: this run's numbers only, no comparison")
+    elif mode == "pr":
+        where.append("the pull request's staged packages: this run's numbers only, no comparison "
+                     "(to be designed later)")
     elif baseline_run_id and baseline.get("sha"):
         where.append(f"nightly baseline: run {baseline_run_id} on `{baseline['sha'][:10]}`"
                      + (f" ({baseline['updated']})" if baseline.get("updated") else ""))

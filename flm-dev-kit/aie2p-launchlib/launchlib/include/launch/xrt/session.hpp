@@ -137,7 +137,7 @@ enum class Flow { xclbin, elf };
 enum class SharedPolicy { cold_only, refuse, allow };
 
 struct SessionOptions {
-  Flow flow = Flow::xclbin;
+  Flow flow = Flow::elf;                   ///< elf: an ELF per kernel (xrt::ext::kernel); xclbin: instruction BOs
   SharedPolicy shared = SharedPolicy::cold_only;
   bool check_order = true;                 ///< false: run any order as asked (tests of what happens)
   size_t elf_budget = 24u << 20;           ///< ELF flow: instruction bytes per runlist (heap: 64 MB)
