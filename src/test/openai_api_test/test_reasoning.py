@@ -158,6 +158,17 @@ def not_nested(api: Api, reason: str) -> None:
     raise Skip(reason)
 
 
+def ignores_switch(api: Api) -> None:
+    """Skip a case that needs the server to validate the nested switch on a model that never reads it.
+
+    A model that always reasons (gpt-oss) answers the enable_thinking=true probe with reasoning_content
+    without reading the field, so the probe cannot tell it from a model that does; the server validates
+    the field only where it reads it.
+    """
+    if not reads_nested_switch(api):
+        raise Skip("the model does not read the nested switch, so the server does not validate it")
+
+
 def nested_body(api: Api, enable_thinking, **fields) -> dict:
     """A request in the Qwen model-card shape: no native think, the switch in chat_template_kwargs."""
     body = api.body(user(PROMPT), max_tokens=THINK_BUDGET, **fields)
@@ -211,6 +222,7 @@ def nested_thinking_is_per_request(api: Api) -> None:
 @case
 def nested_thinking_wrong_type_is_400(api: Api) -> None:
     """A non-boolean value, a non-object container or a contradicting native control is a 400 that names the field."""
+    ignores_switch(api)
     probe = api.post(nested_body(api, True))
     if probe.status != 200 or not probe.body["choices"][0]["message"].get("reasoning_content"):
         not_nested(api, "the model does not read the nested switch")
@@ -254,6 +266,7 @@ def nested_thinking_off_with_json_object(api: Api) -> None:
 @case
 def nested_thinking_error_leaves_no_state(api: Api) -> None:
     """Off, then a refused conflict, then no switch: the refused request changed nothing."""
+    ignores_switch(api)
     default = api.body(user(PROMPT), max_tokens=THINK_BUDGET)
     del default["think"]
     if not api.ok(nested_body(api, True))["message"].get("reasoning_content"):
