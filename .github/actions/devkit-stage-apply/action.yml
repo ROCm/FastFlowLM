@@ -51,7 +51,7 @@ runs:
           echo "Nothing staged for this build."; exit 0
         fi
         # Every listed path: this runtime's engine library, or a kernel slot.
-        bad=$(cut -c67- "${list}" | grep -vE "^(src/lib/${runtime}/lib[A-Za-z0-9_+-]+\.so|src/xclbins/[A-Za-z0-9_+-][A-Za-z0-9_.+-]*/[A-Za-z0-9_+-][A-Za-z0-9_.+-]*\.xclbin)$" || true)
+        bad=$(cut -c67- "${list}" | grep -vE "^(src/lib/${runtime}/lib[A-Za-z0-9_+-]+\.so|src/xclbins/[A-Za-z0-9_+-][A-Za-z0-9_.+-]*/[A-Za-z0-9_+-][A-Za-z0-9_.+-]*\.(xclbin|switches))$" || true)
         if [ -n "${bad}" ]; then echo "::error::${ARTIFACT} lists paths it may not stage: ${bad}"; exit 1; fi
         # Exactly the listed files, regular ones, and their bytes.
         if [ -n "$(find . ! -type f ! -type d)" ]; then echo "::error::${ARTIFACT} holds a link or special file"; exit 1; fi
@@ -89,7 +89,7 @@ runs:
         }
         $list = Join-Path $env:STAGE 'devkit-stage.sha256'
         if (-not (Test-Path -LiteralPath $list -PathType Leaf)) { Write-Host "::error::no devkit-stage.sha256"; exit 1 }
-        $pattern = "^(src/lib/$runtime/[A-Za-z0-9_+-]+\.(dll|lib)|src/xclbins/[A-Za-z0-9_+-][A-Za-z0-9_.+-]*/[A-Za-z0-9_+-][A-Za-z0-9_.+-]*\.xclbin)$"
+        $pattern = "^(src/lib/$runtime/[A-Za-z0-9_+-]+\.(dll|lib)|src/xclbins/[A-Za-z0-9_+-][A-Za-z0-9_.+-]*/[A-Za-z0-9_+-][A-Za-z0-9_.+-]*\.(xclbin|switches))$"
         $entries = @()
         foreach ($line in [System.IO.File]::ReadAllLines($list)) {
           if ($line -notmatch '^([0-9a-f]{64})  (.+)$') { Write-Host "::error::bad line in devkit-stage.sha256: $line"; exit 1 }

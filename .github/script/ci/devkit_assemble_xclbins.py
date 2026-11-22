@@ -11,7 +11,8 @@ build's artifact (xclbins-<unit, / as _>[_<MODEL_TYPE>]), at any depth: the
 devkit-xclbins-shard-<i> artifacts downloaded side by side
 (<artifacts>/devkit-xclbins-shard-0/xclbins-Dequant_Q4_0_w128x512/...) or
 merged. For every model of flm-dev-kit/FLM_Xclbin/kernel_assignment.json,
-each {<slot>.xclbin: artifact} whose artifact was built is copied to
+each {<slot>.xclbin: artifact} (or <slot>.switches, d3's packed control-packet
+switches) whose artifact was built is copied to
 <out>/<model folder>/<slot>.xclbin, as FastFlowLM's xclbins/ tree lays them
 out. Of an
 artifact's .xclbin files, the one named <slot>.xclbin is taken (a unit that
@@ -23,7 +24,7 @@ build artifacts: no product reads it from the model folder.
 Models may share a folder; two that put different artifacts in the same
 <folder>/<slot> are an error (exit 1), not a silent overwrite. A folder or
 slot that is not a plain relative path ([A-Za-z0-9_.+-] parts, no "..", a
-slot ending in .xclbin) is never written: the slot counts as missing.
+slot ending in .xclbin or .switches) is never written: the slot counts as missing.
 
 Prints one line per model (OK, PARTIAL with its missing slots, SKIP) and
 a JSON summary: {"complete": [...], "partial": [...], "touched": [complete +
@@ -52,7 +53,8 @@ ASSIGNMENT = REPO_ROOT / "flm-dev-kit/FLM_Xclbin/kernel_assignment.json"
 
 # What a model folder and a slot may be: they become paths under --out.
 SAFE_FOLDER = re.compile(r"[A-Za-z0-9_.+-]+(/[A-Za-z0-9_.+-]+)*")
-SAFE_SLOT = re.compile(r"[A-Za-z0-9_.+-]+\.xclbin")
+# A slot is a kernel (<name>.xclbin) or the d3 control-packet switches (<name>.switches, one packed file).
+SAFE_SLOT = re.compile(r"[A-Za-z0-9_.+-]+\.(xclbin|switches)")
 
 
 def safe_folder(folder: object) -> bool:
@@ -76,15 +78,16 @@ def find_artifacts(root: Path) -> dict[str, Path]:
 
 
 def pick(folder: Path, slot: str) -> tuple[Optional[Path], str]:
-    """The xclbin of folder for slot, or (None, why not)."""
-    found = sorted(p for p in folder.rglob("*.xclbin") if p.is_file())
+    """The file of folder for slot (an .xclbin, or a .switches file for a .switches slot), or (None, why not)."""
+    suffix = Path(slot).suffix
+    found = sorted(p for p in folder.rglob("*" + suffix) if p.is_file())
     if not found:
-        return None, "no .xclbin"
+        return None, f"no {suffix}"
     for p in found:
         if p.name == slot:
             return p, ""
     if len(found) > 1:
-        return None, f"ambiguous: {len(found)} .xclbin files, none named {slot}"
+        return None, f"ambiguous: {len(found)} {suffix} files, none named {slot}"
     return found[0], ""
 
 
