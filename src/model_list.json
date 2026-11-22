@@ -2757,6 +2757,7 @@
                     "quantization_level": "INT4 RTN group-128, QMoE experts, fp16 activations"
                 },
                 "flm_min_version": "1.0.14",
+                "tools": true,
                 "vlm": false,
                 "files": [
                     "chat_template.jinja",
@@ -2795,6 +2796,7 @@
                     "quantization_level": "INT4 RTN group-128, QMoE experts, fp16 activations"
                 },
                 "flm_min_version": "1.0.14",
+                "tools": true,
                 "vlm": false,
                 "files": [
                     "chat_template.jinja",
@@ -2835,6 +2837,7 @@
                     "quantization_level": "INT4 RTN group-32, QMoE experts, fp16 activations"
                 },
                 "flm_min_version": "1.0.14",
+                "tools": true,
                 "vlm": false,
                 "files": [
                     "chat_template.jinja",
