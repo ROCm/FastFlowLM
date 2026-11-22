@@ -104,6 +104,10 @@ EXACT_RETRY_FAMILIES = ("qwen2", "qwen3.5")
 # These do not yet: Gemma3 on a text-only prompt, Gemma4e (gemma4-it-oga-hipep:26b-a4b) with thinking
 # off. An exact retry there replays the prompt (cached_tokens 0). Follow-up of WP-33.
 EXACT_RETRY_MISSING_FAMILIES = ("gemma3", "gemma4e")
+# Not known either way: the cases have not run on a model of these families.
+EXACT_RETRY_UNVERIFIED_FAMILIES = ("gemma4-12b", "gpt-oss", "laguna", "nemotron-h")
+# check_exact_retry_families.py (CPU CI) holds the three lists to the catalog: every family with an
+# oga-hipep model is in exactly one of them, and none names a family the catalog does not have.
 
 
 def _require_oga_exact_retry(api: Api) -> str:
@@ -133,8 +137,10 @@ def _require_oga_exact_retry(api: Api) -> str:
     family = details.get("family")
     if family in EXACT_RETRY_MISSING_FAMILIES:
         raise flm_api.Skip(f"{canonical}: the {family} frontend does not yet checkpoint the prompt end")
+    if family in EXACT_RETRY_UNVERIFIED_FAMILIES:
+        raise flm_api.Skip(f"{canonical}: exact retry is not verified for the {family} frontend")
     if family not in EXACT_RETRY_FAMILIES:
-        raise flm_api.Skip(f"{canonical}: exact retry is not verified for the {family!r} frontend")
+        raise flm_api.Skip(f"{canonical}: family {family!r} is in none of the exact-retry lists")
     return canonical
 
 
