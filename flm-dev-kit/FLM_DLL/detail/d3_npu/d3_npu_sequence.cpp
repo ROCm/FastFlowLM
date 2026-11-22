@@ -209,3 +209,61 @@ void d3_npu_sequence::gen_bidirectional_attention(npu_sequence* seq, const uint3
     }
     seq->cmds2seq();
 }
+
+// Port of the Qwen3_8 delta-net prefill conv1d sequence (qwen3_8mtp_npu conv1d_sequence.hpp): 8 columns x
+// 4 rows, 256 channels a core, 1,024 a column, 8,192 a pass; q and k columns told to l2-normalise (scale 1).
+void d3_npu_sequence::gen_conv1d(npu_sequence* seq, const uint32_t L_out, const uint32_t D, const uint32_t DQ, const uint32_t weight_offset){
+    static constexpr npu_tiles IT[8] = {IT0, IT1, IT2, IT3, IT4, IT5, IT6, IT7};
+    static constexpr uint32_t COL_CHANNELS = 1024, NUM_COLS = 8, PASS_CHANNELS = NUM_COLS * COL_CHANNELS;
+    static constexpr uint32_t X_BLK = 128, Y_CHUNK = 1024;
+    static constexpr uint32_t NORM_NONE = 0, NORM_K = 1;
+    const uint32_t L_in = L_out + 3;
+    if (L_in > CONV_MAX_L_IN) throw std::runtime_error("d3 conv1d: " + std::to_string(L_in) + " input rows exceed " + std::to_string(CONV_MAX_L_IN));
+    if (DQ % COL_CHANNELS != 0) throw std::runtime_error("d3 conv1d: DQ is not a whole number of columns");
+
+    seq->clear_cmds();
+    constexpr int CT_lock_address_base = 0x000001F000;
+    constexpr int CT_rtp_sync_lock_id = 6;
+    const uint32_t num_passes = (D + PASS_CHANNELS - 1) / PASS_CHANNELS;
+    for (uint32_t pass = 0; pass < num_passes; pass++){
+        const uint32_t pass_base = pass * PASS_CHANNELS;
+        const uint32_t active_cols = std::min<uint32_t>(NUM_COLS, (D - pass_base + COL_CHANNELS - 1) / COL_CHANNELS);
+        for (uint32_t col = 0; col < active_cols; col++){
+            const uint32_t col_base = pass_base + col * COL_CHANNELS;
+            uint32_t norm_mode = NORM_NONE;
+            if (col_base < 2 * DQ) norm_mode = NORM_K;
+            for (int row = 2; row < 6; row++){
+                npu_tiles tile = get_tile(row, col);
+                seq->rtp_write(tile, conv_l_buffer_address, L_out);
+                seq->rtp_write(tile, conv_l_buffer_address + 4, norm_mode);
+                seq->rtp_write(tile, CT_lock_address_base + 16 * CT_rtp_sync_lock_id, 1);
+            }
+        }
+        for (uint32_t col = 0; col < active_cols; col++){
+            seq->npu_dma_memcpy_nd(2, 2, MM2S, IT[col], (npu_bd_id)(1), it_channel_1,
+                {0, 0, 0, pass_base + col * COL_CHANNELS + weight_offset}, {1, 1, 4, COL_CHANNELS}, {0, 0, D, 1}, -1, 0, false);
+        }
+        const uint32_t num_blocks = L_in / X_BLK, remainder = L_in % X_BLK;
+        for (uint32_t col = 0; col < active_cols; col++){
+            const uint32_t col_base = pass_base + col * COL_CHANNELS;
+            if (num_blocks > 0)
+                seq->npu_dma_memcpy_nd(2, 1, MM2S, IT[col], (npu_bd_id)(2), it_channel_0,
+                    {0, 0, 0, col_base}, {1, num_blocks, X_BLK, COL_CHANNELS}, {0, X_BLK * D, D, 1}, -1, 0, false);
+            if (remainder > 0)
+                seq->npu_dma_memcpy_nd(2, 1, MM2S, IT[col], (npu_bd_id)(10), it_channel_0,
+                    {0, 0, 0, col_base + num_blocks * X_BLK * D}, {1, 1, remainder, COL_CHANNELS}, {0, 0, D, 1}, -1, 0, false);
+        }
+        const uint32_t rounds = (L_out + Y_CHUNK - 1) / Y_CHUNK;
+        for (uint32_t round = 0; round < rounds; round++){
+            const int bd_offset = (round % 2) * 8;
+            const uint32_t rows = std::min<uint32_t>(Y_CHUNK, L_out - round * Y_CHUNK);
+            for (uint32_t col = 0; col < active_cols; col++)
+                seq->npu_dma_memcpy_nd(2, 0, S2MM, IT[col], (npu_bd_id)(bd_offset), it_channel_0,
+                    {0, 0, 0, pass_base + col * COL_CHANNELS + round * Y_CHUNK * D}, {1, 1, rows, COL_CHANNELS}, {0, 0, D, 1}, -1, 0, true);
+            if (round > 0)
+                for (uint32_t col = 0; col < active_cols; col++) seq->npu_dma_wait(IT[col], S2MM, it_channel_0);
+        }
+        for (uint32_t col = 0; col < active_cols; col++) seq->npu_dma_wait(IT[col], S2MM, it_channel_0);
+    }
+    seq->cmds2seq();
+}
