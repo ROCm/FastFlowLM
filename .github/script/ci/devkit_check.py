@@ -193,7 +193,7 @@ INCLUDE = re.compile(r"^\s*#\s*include\b")
 
 MD_MODEL = re.compile(r"^#### `([^`]+)` → `([^`]+)`\s*$")
 MD_HEADING = re.compile(r"^#{1,6}\s")
-MD_ROW = re.compile(r"^\|\s*`([^`]+\.xclbin)`\s*\|\s*(?:`([^`]+)`|(—))\s*\|")
+MD_ROW = re.compile(r"^\|\s*`([^`]+\.(?:xclbin|switches))`\s*\|\s*(?:`([^`]+)`|(—))\s*\|")
 
 
 def artifact_names(unit: str, model_types: list) -> list[str]:
@@ -271,7 +271,7 @@ def check_build_units(repo: Path, data: dict, errors: list) -> dict[str, tuple[s
 # A model's folder and its slots: devkit_assemble_xclbins.py writes
 # <folder>/<slot> under its output, and refuses anything else.
 SAFE_FOLDER = re.compile(r"[A-Za-z0-9_.+-]+(/[A-Za-z0-9_.+-]+)*")
-SAFE_SLOT = re.compile(r"[A-Za-z0-9_.+-]+\.xclbin")
+SAFE_SLOT = re.compile(r"[A-Za-z0-9_.+-]+\.(xclbin|switches)")
 
 
 def check_assignment(data: dict, index: dict, errors: list) -> dict[str, dict]:
@@ -303,8 +303,8 @@ def check_assignment(data: dict, index: dict, errors: list) -> dict[str, dict]:
             errors.append(f"{where}: kernels is not an object")
             continue
         for slot, art in kernels.items():
-            if not slot.endswith(".xclbin"):
-                errors.append(f"{where}: kernel slot {slot!r} does not end in .xclbin")
+            if not slot.endswith((".xclbin", ".switches")):
+                errors.append(f"{where}: kernel slot {slot!r} does not end in .xclbin or .switches")
             elif not SAFE_SLOT.fullmatch(slot):
                 errors.append(f"{where}: kernel slot {slot!r} is not a plain file name ([A-Za-z0-9_.+-])")
             if folder is not None:
@@ -517,6 +517,7 @@ def check_engines(repo: Path, data: dict, models: dict, errors: list,
 # kernel_assignment.json entry.
 MODEL_LIST = "src/model_list.json"
 SHIPPED_XCLBINS = "src/xclbins"
+SHIPPED_SUFFIXES = (".xclbin", ".switches")   # kernels, and d3's control-packet switches
 # src/CMakeLists.txt links the engines from src/lib/${FLM_RUNTIME_NAME}, xrt or
 # hrx: lib<name>.so on Linux, the <name>.lib import library on Windows, whose
 # <name>.dll .github/workflows/win-build.yml copies from the same directory
@@ -678,7 +679,7 @@ def check_catalog(repo: Path, catalog: dict, assignment: dict, engines: dict,
 
     # 5. Every shipped kernel is assigned by a model using its folder.
     root = repo / SHIPPED_XCLBINS
-    shipped = sorted(p.relative_to(root).as_posix() for p in root.rglob("*.xclbin") if p.is_file()) \
+    shipped = sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file() and p.suffix in SHIPPED_SUFFIXES) \
         if root.is_dir() else []
     for rel in shipped:
         folder, slot = rel.rsplit("/", 1) if "/" in rel else ("", rel)
