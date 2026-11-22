@@ -48,7 +48,7 @@ import changes  # noqa: E402
 # benches to about two hours of six NPU runners.
 PR_CAP = 4
 # The assigned set is about 50 models, 40-odd of them benchable; GSM8K alone
-# took IRON ~1050 runner-minutes over 49 models per runtime. 16 a night, on
+# took ~1050 runner-minutes over 49 models per runtime. 16 a night, on
 # two runtimes four at a time, is about four hours.
 NIGHTLY_CAP = 16
 NOT_BENCHED = {"embed-gemma", "whisper-v3", "r2t2", "d3"}
