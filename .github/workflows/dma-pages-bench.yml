@@ -1,0 +1,120 @@
+# 1k-token prefill of main's packages on Linux and Windows NPU runners, for FastFlowLM#1080 (branch
+# ci/win-dma-pages only, never merged): same chip, two OSes, to size the gap the DMA probe explains.
+# Nothing is built: the packages come from one Build and Test run on main (BUILD_RUN).
+
+name: dma pages bench
+
+on:
+  push:
+    branches: [ci/win-dma-pages]
+    paths: [.github/workflows/dma-pages-bench.yml]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: dma-pages-bench
+  cancel-in-progress: false
+
+env:
+  BUILD_RUN: '45224687285'
+  BUILD_SHA: bb5acee17f2cdda8df492e58071375f9dc103675
+  MODELS: llama3.2:1b qwen3.5:2b
+
+jobs:
+  bench-lin:
+    name: Bench Linux ${{ matrix.shard }}
+    runs-on: [self-hosted, linux, x64, npu, sweep]
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: portable
+          path: pkg
+          run-id: ${{ env.BUILD_RUN }}
+          github-token: ${{ github.token }}
+      - name: Bench
+        shell: bash
+        run: |
+          set -uo pipefail
+          W=$GITHUB_WORKSPACE
+          rm -rf "$W/flm" "$W/out" && mkdir -p "$W/flm" "$W/out"
+          tar xzf "$(ls pkg/*_linux.tar.gz | head -1)" -C "$W/flm"
+          export FLM_MODEL_PATH="${FLM_MODEL_PATH:-/scratch}"
+          o=$W/out/lin-$RUNNER_NAME.txt
+          {
+            echo "runner $RUNNER_NAME"
+            echo "cpu $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2-)"
+            echo "kernel $(uname -r), amdxdna $(cat /sys/module/amdxdna/version 2>/dev/null || echo in-tree)"
+            echo "package $BUILD_SHA"
+            pgrep -a -x 'flm|flm-real' && echo "WARNING: other flm processes" || true
+            for m in $MODELS; do
+              echo "== model $m"
+              "$W/flm/flm" pull "$m" 2>&1 | tail -2
+              d=$W/out/run-${m//:/_}; mkdir -p "$d"
+              (cd "$d" && timeout 600 "$W/flm/flm" bench "$m" -c 1024 --bench-iterations 3 2>&1 | grep -E "TTFT|Prefill|rror")
+              cat "$d"/bench_*.csv 2>/dev/null
+            done
+          } 2>&1 | tee "$o"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ always() }}
+        with:
+          name: dma-pages-bench-lin-${{ matrix.shard }}
+          path: out
+          retention-days: 14
+
+  bench-win:
+    name: Bench Windows ${{ matrix.shard }}
+    runs-on: [self-hosted, windows, x64, npu, sweep]
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: fastflowlm-windows-${{ env.BUILD_SHA }}
+          path: pkg
+          run-id: ${{ env.BUILD_RUN }}
+          github-token: ${{ github.token }}
+      - name: Bench
+        shell: powershell
+        run: |
+          $flm = Join-Path (Resolve-Path pkg) 'flm.exe'
+          if (-not $env:FLM_MODEL_PATH) { $env:FLM_MODEL_PATH = Join-Path $env:USERPROFILE '.flm' }
+          New-Item -ItemType Directory -Force $env:FLM_MODEL_PATH, out | Out-Null
+          $env:PYTHONUTF8 = '1'
+          $o = "out\win-$env:RUNNER_NAME.txt"
+          & {
+            Write-Output "runner $env:RUNNER_NAME"
+            Write-Output "cpu $((Get-CimInstance Win32_Processor).Name)"
+            Write-Output "os $((Get-CimInstance Win32_OperatingSystem).Version)"
+            Get-CimInstance Win32_PnPSignedDriver | Where-Object { $_.DeviceName -match 'NPU' } |
+              ForEach-Object { Write-Output "$($_.DeviceName): driver $($_.DriverVersion)" }
+            Write-Output "package $env:BUILD_SHA"
+            $p = Get-Process -Name flm* -ErrorAction SilentlyContinue
+            if ($p) { Write-Output "WARNING: other flm processes: $($p.Name -join ' ')" }
+            foreach ($m in $env:MODELS -split ' ') {
+              Write-Output "== model $m"
+              & $flm pull $m 2>&1 | Select-Object -Last 2
+              $d = "out\run-$($m -replace ':', '_')"
+              New-Item -ItemType Directory -Force $d | Out-Null
+              Push-Location $d
+              & $flm bench $m -c 1024 --bench-iterations 3 2>&1 | Select-String -Pattern 'TTFT|Prefill|rror'
+              Get-Content bench_*.csv -ErrorAction SilentlyContinue
+              Pop-Location
+            }
+          } 2>&1 | Tee-Object -FilePath $o
+          exit 0
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ always() }}
+        with:
+          name: dma-pages-bench-win-${{ matrix.shard }}
+          path: out
+          retention-days: 14

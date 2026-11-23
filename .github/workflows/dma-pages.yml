@@ -9,6 +9,7 @@ name: dma pages probe
 on:
   push:
     branches: [ci/win-dma-pages]
+    paths-ignore: [.github/workflows/dma-pages-bench.yml]
   workflow_dispatch:
 
 permissions:
