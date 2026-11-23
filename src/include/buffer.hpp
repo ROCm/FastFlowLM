@@ -18,6 +18,12 @@
 
 #define FLM_DEVICE_BUFFER
 
+#if defined(FLM_DEVICE_BUFFER) && !defined(FLM_USE_HRX) && defined(__linux__)
+#include <sys/mman.h>
+#include <cstdio>
+#include <cstdlib>
+#endif
+
 #ifdef FLM_DEVICE_BUFFER
 // Pulls in the selected NPU runtime backend (XRT or HRX) behind the neutral
 // `flm_rt` alias. All device buffer types below are referenced as flm_rt::bo.
@@ -25,6 +31,40 @@
 #endif
 
 #include "utils/debug_utils.hpp"
+
+#ifdef FLM_DEVICE_BUFFER
+#if !defined(FLM_USE_HRX) && defined(__linux__)
+/// \brief Host memory with 2 MB pages for a device buffer (experiment, FLM_HUGEPAGE_BO).
+/// \note amdxdna BOs are shmem and distributions ship shmem THP off, so the NPU translates every
+///       4 KB page it touches. A user-pointer BO over anonymous memory with MADV_HUGEPAGE gets 2 MB pages.
+/// \note FLM_HUGEPAGE_BO=1 rounds the memory up to 2 MB; =2 maps only the buffer's size, so its
+///       whole 2 MB blocks get large pages and the tail stays 4 KB. FLM_HUGEPAGE_BO_MIN=<bytes>
+///       keeps smaller buffers plain BOs. FLM_HUGEPAGE_BO_LOG prints every buffer to stderr.
+/// \note Kept identical in src/include/buffer.hpp and flm-dev-kit/FLM_DLL/include/buffer.hpp:
+///       `bytes` objects cross between flm and the engines, so both copies need the same layout.
+/// \return the memory, unmapped when its last owner goes, or null for a plain BO
+inline std::shared_ptr<void> flm_hugepage_alloc(size_t size) {
+    static const int mode = [] { const char* e = std::getenv("FLM_HUGEPAGE_BO"); return e ? std::atoi(e) : 0; }();
+    static const size_t min_size = [] { const char* e = std::getenv("FLM_HUGEPAGE_BO_MIN"); return e ? (size_t)std::strtoull(e, nullptr, 0) : (size_t)0; }();
+    static const bool log = std::getenv("FLM_HUGEPAGE_BO_LOG") != nullptr;
+    const size_t huge = 2ull * 1024 * 1024;
+    const bool use = mode != 0 && size >= min_size;
+    const size_t n = mode == 2 ? size : (size + huge - 1) / huge * huge;
+    if (log) std::fprintf(stderr, "[hugepage] bo %zu %s %zu\n", size, use ? "huge" : "plain", use ? n : size);
+    if (!use) return nullptr;
+    void* raw = mmap(nullptr, n + huge, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (raw == MAP_FAILED) return nullptr;
+    uintptr_t base = reinterpret_cast<uintptr_t>(raw);
+    uintptr_t aligned = (base + huge - 1) / huge * huge;
+    if (aligned > base) munmap(raw, aligned - base);
+    if (aligned + n < base + n + huge) munmap(reinterpret_cast<void*>(aligned + n), base + n + huge - (aligned + n));
+    void* p = reinterpret_cast<void*>(aligned);
+    madvise(p, n, MADV_HUGEPAGE);
+    std::memset(p, 0, n);   // fault the pages in now, while THP can still back them
+    return std::shared_ptr<void>(p, [n](void* q) { munmap(q, n); });
+}
+#endif
+#endif
 
 /// \brief bytes class
 /// \note This is a buffer wrapper that maps to a bo_buffer or other memory without performing a deep copy.
@@ -44,6 +84,9 @@ protected:
 #ifdef FLM_DEVICE_BUFFER
     bool is_bo_owner_;
     flm_rt::bo* bo_;
+#if !defined(FLM_USE_HRX)
+    std::shared_ptr<void> host_mem_;   // 2 MB-page memory under owned_bo_ (flm_hugepage_alloc); declared first so it outlives the BO
+#endif
 #if defined(FLM_USE_HRX)
     std::shared_ptr<flm_rt::bo> owned_bo_;
 #else
@@ -82,7 +125,11 @@ public:
     bytes(bytes&& other) noexcept
         : owned_data_(std::move(other.owned_data_)), data_(other.data_), size_(other.size_), is_owner_(other.is_owner_)
 #ifdef FLM_DEVICE_BUFFER
+#if defined(FLM_USE_HRX)
         , is_bo_owner_(other.is_bo_owner_), bo_(other.bo_), owned_bo_(std::move(other.owned_bo_))
+#else
+        , is_bo_owner_(other.is_bo_owner_), bo_(other.bo_), host_mem_(std::move(other.host_mem_)), owned_bo_(std::move(other.owned_bo_))
+#endif
 #endif
     {
         other.data_ = nullptr;
@@ -157,6 +204,20 @@ public:
 #if defined(FLM_USE_HRX)
             owned_bo_ = std::make_shared<flm_rt::ext::bo>(device, padded_size);
 #else
+#ifdef __linux__
+            // FLM_HUGEPAGE_BO_CONTROL: hold the 2 MB memory but use a plain BO (A/B control)
+            if ((host_mem_ = flm_hugepage_alloc(padded_size)) && !std::getenv("FLM_HUGEPAGE_BO_CONTROL")) {
+                try {
+                    owned_bo_ = std::make_unique<flm_rt::ext::bo>(device, host_mem_.get(), padded_size);
+                    if (std::getenv("FLM_HUGEPAGE_BO_LOG")) std::fprintf(stderr, "[hugepage] user-ptr bo ok\n");
+                }
+                catch (const std::exception& e) {
+                    if (std::getenv("FLM_HUGEPAGE_BO_LOG")) std::fprintf(stderr, "[hugepage] user-ptr bo failed, plain bo: %s\n", e.what());
+                    host_mem_.reset();   // fall back to a plain BO below
+                }
+            }
+            if (!owned_bo_)
+#endif
             owned_bo_ = std::make_unique<flm_rt::ext::bo>(device, padded_size);
 #endif
         }
@@ -187,6 +248,9 @@ public:
 #ifdef FLM_DEVICE_BUFFER
         if (is_bo_owner_) {
             owned_bo_.reset();
+#if !defined(FLM_USE_HRX)
+            host_mem_.reset();
+#endif
         }
         bo_ = nullptr;
 #endif
@@ -216,6 +280,9 @@ public:
 #ifdef FLM_DEVICE_BUFFER
             if (is_bo_owner_){
                 owned_bo_.reset();
+#if !defined(FLM_USE_HRX)
+                host_mem_.reset();
+#endif
             }
             is_bo_owner_ = false;
             bo_ = other.bo_;
@@ -239,9 +306,15 @@ public:
 #ifdef FLM_DEVICE_BUFFER
             if (is_bo_owner_){
                 owned_bo_.reset();
+#if !defined(FLM_USE_HRX)
+                host_mem_.reset();
+#endif
             }
             is_bo_owner_ = other.is_bo_owner_;
             owned_bo_ = std::move(other.owned_bo_);
+#if !defined(FLM_USE_HRX)
+            host_mem_ = std::move(other.host_mem_);
+#endif
             bo_ = other.bo_;
             other.bo_ = nullptr;
             other.is_bo_owner_ = false;
@@ -324,6 +397,9 @@ public:
 #ifdef FLM_DEVICE_BUFFER
         if (is_bo_owner_){
             owned_bo_.reset();
+#if !defined(FLM_USE_HRX)
+            host_mem_.reset();
+#endif
         }
         is_bo_owner_ = false;
         bo_ = nullptr;

@@ -1,16 +1,17 @@
 #!/bin/bash
 # Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
 # Portions of this file consist of AI-generated content.
-# check_out.sh <hugepage 0|1> <out file>: greedy answers of minicpm-v-4.7:1b to a short and a ~2k-token
-# prompt through flm serve, to compare the switch off and on.
+# check_out.sh <out file> [VAR=value ...]: greedy answers of minicpm-v-4.7:1b to a short and a ~2k-token
+# prompt through flm serve with the given FLM_HUGEPAGE_BO* settings, to compare the switch off and on.
 W=$(cd "$(dirname "$0")" && pwd)
 F=${FLM_DIR:-$W/pkg/flm}
 PORT=${PORT:-52637}
-FLM_HUGEPAGE_BO=$1 $F/flm serve minicpm-v-4.7:1b --port $PORT > $2.serve.log 2>&1 &
+out=$1; shift
+env "$@" $F/flm serve minicpm-v-4.7:1b --port $PORT > $out.serve.log 2>&1 &
 pid=$!
 for i in $(seq 1 120); do curl -s -m 2 localhost:$PORT/v1/models > /dev/null && break; sleep 2; done
 sleep 5
-python3 - "$PORT" "$2" <<'EOF'
+python3 - "$PORT" "$out" <<'EOF'
 import json, sys, urllib.request
 port, out = sys.argv[1], sys.argv[2]
 para = ("The history of the printing press begins in the fifteenth century, when movable type changed how "

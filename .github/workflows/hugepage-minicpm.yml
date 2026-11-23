@@ -2,11 +2,16 @@
 # Portions of this file consist of AI-generated content.
 
 # 2 MB pages for NPU buffers, minicpm-v-4.7:1b text (branch ci/hugepage-minicpm only, never merged).
-# Follow-up to FastFlowLM#1080: FLM_HUGEPAGE_BO=1 (flm-dev-kit/FLM_DLL/include/buffer.hpp, this
-# branch) backs every engine buffer with 2 MB user-pointer pages. The engine is built here and
-# swapped into main's portable package of the same commit (BUILD_RUN); each Linux NPU runner then
-# checks greedy output off vs on and benches off/on interleaved, plus the package's own engine.
-# Windows has no 2 MB path (SeLockMemoryPrivilege) and is not run. No deliberate hangs.
+# Follow-up to FastFlowLM#1080. Round 2: the 2 MB memory is owned by the buffer and freed with it, which
+# changes the `bytes` layout in both buffer.hpp copies, so flm and every engine are built from this branch
+# (engines -> devkit-stage-lin-xrt -> Linux XRT portable package). Each Linux NPU runner then runs:
+#   - uptr / buf_life: a user-pointer BO outside the engine, and the buffer lifecycle under both headers;
+#   - output check: greedy answers for off, mode 1, mode 2;
+#   - leak check: model switches minicpm <-> llama3.2:1b in one server, memory after each, off and mode 1;
+#   - bench: off, mode 1, mode 2, mode 1 with FLM_HUGEPAGE_BO_MIN=2 MB, and a control (2 MB memory
+#     held, plain BO), twice interleaved, with every buffer logged and peak Rss / Pss / AnonHugePages.
+# Windows: a read-only check of large-page rights on the NPU runners (no policy change, no NPU use).
+# No deliberate hangs.
 
 name: hugepage minicpm
 
@@ -17,21 +22,16 @@ on:
 
 permissions:
   contents: read
-  actions: read
 
 concurrency:
   group: hugepage-minicpm
   cancel-in-progress: false
 
-env:
-  BUILD_RUN: '45267409915'
-  BUILD_SHA: a4b1235cd32107cec8034ec3647060fa659c62a1
-
 jobs:
-  build:
-    name: Build engine
+  engines:
+    name: Build engines
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     permissions:
       contents: read
       packages: read
@@ -48,27 +48,55 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Build
+      - name: Build all engines
         working-directory: flm-dev-kit/FLM_DLL
         env:
-          FLM_ENGINES: minicpm_v_4_7_npu
           XRT_ROOT: /usr
         run: |
           set -euo pipefail
           bash build.sh
-          mkdir -p "$GITHUB_WORKSPACE/dist"
-          cp build/lib/libminicpm_v_4_7_npu.so "$GITHUB_WORKSPACE/ci/hugepage-minicpm/"*.sh "$GITHUB_WORKSPACE/dist/"
+      - name: Stage engines, build tools
+        run: |
+          set -euo pipefail
+          W=$GITHUB_WORKSPACE
+          mkdir -p stage/src/lib/xrt tools
+          for f in flm-dev-kit/FLM_DLL/build/lib/lib*.so; do
+            n=$(basename "$f")
+            if [ -f "src/lib/xrt/$n" ]; then cp "$f" stage/src/lib/xrt/; else echo "not staged (not in src/lib/xrt): $n"; fi
+          done
+          (cd stage && sha256sum src/lib/xrt/*.so > devkit-stage.sha256 && cat devkit-stage.sha256)
+          T=ci/hugepage-minicpm
+          g++ -std=c++20 -O2 -I"$W/src/include" -I/usr/include "$T/buf_life.cpp" -o tools/buf_life_src -lxrt_coreutil -lpthread
+          g++ -std=c++20 -O2 -I"$W/flm-dev-kit/FLM_DLL/include" -I/usr/include "$T/buf_life.cpp" -o tools/buf_life_devkit -lxrt_coreutil -lpthread
+          g++ -std=c++20 -O2 -I/usr/include "$T/uptr.cpp" -o tools/uptr -lxrt_coreutil
+          cp "$T"/*.sh tools/
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: hugepage-minicpm-engine
-          path: dist
+          name: devkit-stage-lin-xrt
+          path: stage
           retention-days: 7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: hugepage-tools
+          path: tools
+          retention-days: 7
+
+  package:
+    name: Linux XRT portable
+    needs: engines
+    permissions:
+      contents: read
+      packages: read  # the build-environment container on GHCR
+    uses: ./.github/workflows/lin-build.yml
+    with:
+      variants: XRT-portable
+      devkit-stage: true
 
   bench-lin:
     name: Bench Linux ${{ matrix.shard }}
-    needs: build
+    needs: package
     runs-on: [self-hosted, linux, x64, npu, sweep]
-    timeout-minutes: 60
+    timeout-minutes: 170
     strategy:
       fail-fast: false
       matrix:
@@ -78,21 +106,21 @@ jobs:
         with:
           name: portable
           path: pkg
-          run-id: ${{ env.BUILD_RUN }}
-          github-token: ${{ github.token }}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: hugepage-minicpm-engine
-          path: eng
+          name: hugepage-tools
+          path: tools
       - name: Bench
         shell: bash
         run: |
           set +e -uo pipefail
           W=$GITHUB_WORKSPACE
+          chmod +x "$W"/tools/buf_life_* "$W/tools/uptr"
           rm -rf "$W/flm" "$W/out" && mkdir -p "$W/flm" "$W/out"
           tar xzf "$(ls pkg/*_linux.tar.gz | head -1)" -C "$W/flm"
-          cp "$W/flm/lib/libminicpm_v_4_7_npu.so" "$W/stock.so"
           export FLM_MODEL_PATH="${FLM_MODEL_PATH:-/scratch}"
+          export FLM_DIR=$W/flm
+          MIN=2097152
           o=$W/out/lin-$RUNNER_NAME.txt
           {
             echo "runner $RUNNER_NAME"
@@ -102,20 +130,31 @@ jobs:
             echo "thp shmem_enabled: $(cat /sys/kernel/mm/transparent_hugepage/shmem_enabled)"
             echo "thp defrag: $(cat /sys/kernel/mm/transparent_hugepage/defrag)"
             grep -E "MemTotal|MemAvailable" /proc/meminfo
-            echo "package $BUILD_SHA, engine $GITHUB_SHA"
+            echo "package and engines $GITHUB_SHA"
             pgrep -a -x 'flm|flm-real' && echo "WARNING: other flm processes" || true
-            "$W/flm/flm" pull minicpm-v-4.7:1b 2>&1 | tail -2
-            cp "$W/eng/libminicpm_v_4_7_npu.so" "$W/flm/lib/"
+            "$W/flm/flm" pull minicpm-v-4.7:1b 2>&1 | tail -1
+            "$W/flm/flm" pull llama3.2:1b 2>&1 | tail -1
+            echo "== uptr (user-pointer BO, no hw context)"
+            timeout 120 "$W/tools/uptr"
+            for h in src devkit; do for m in 1 2; do
+              echo "== buf_life $h mode $m"
+              FLM_HUGEPAGE_BO_LOG=1 timeout 300 "$W/tools/buf_life_$h" $m 5 2>&1 | grep -v "^\[hugepage\] bo " | uniq -c
+            done; done
             echo "== output check"
-            FLM_DIR=$W/flm bash "$W/eng/check_out.sh" 0 "$W/out/out_off.json"
-            FLM_DIR=$W/flm bash "$W/eng/check_out.sh" 1 "$W/out/out_on.json"
-            cmp "$W/out/out_off.json" "$W/out/out_on.json" && echo "OUTPUT IDENTICAL" || echo "OUTPUT DIFFERS"
+            bash "$W/tools/check_out.sh" "$W/out/out_off.json" FLM_HUGEPAGE_BO=0
+            bash "$W/tools/check_out.sh" "$W/out/out_m1.json" FLM_HUGEPAGE_BO=1
+            bash "$W/tools/check_out.sh" "$W/out/out_m2.json" FLM_HUGEPAGE_BO=2
+            cmp "$W/out/out_off.json" "$W/out/out_m1.json" && echo "OUTPUT IDENTICAL m1" || echo "OUTPUT DIFFERS m1"
+            cmp "$W/out/out_off.json" "$W/out/out_m2.json" && echo "OUTPUT IDENTICAL m2" || echo "OUTPUT DIFFERS m2"
+            echo "== leak off"; bash "$W/tools/leak.sh" "$W/out/leak_off.txt" FLM_HUGEPAGE_BO=0
+            echo "== leak m1";  bash "$W/tools/leak.sh" "$W/out/leak_m1.txt" FLM_HUGEPAGE_BO=1 FLM_HUGEPAGE_BO_LOG=1
             for r in 1 2; do
-              echo "== bench r$r-off"; bash "$W/eng/bench.sh" "$W/flm" r$r-off 0 "$W/out"
-              echo "== bench r$r-on";  bash "$W/eng/bench.sh" "$W/flm" r$r-on 1 "$W/out"
+              echo "== bench r$r-off"; bash "$W/tools/bench.sh" "$W/flm" r$r-off "$W/out" FLM_HUGEPAGE_BO=0
+              echo "== bench r$r-m1";  bash "$W/tools/bench.sh" "$W/flm" r$r-m1 "$W/out" FLM_HUGEPAGE_BO=1
+              echo "== bench r$r-m2";  bash "$W/tools/bench.sh" "$W/flm" r$r-m2 "$W/out" FLM_HUGEPAGE_BO=2
+              echo "== bench r$r-min"; bash "$W/tools/bench.sh" "$W/flm" r$r-min "$W/out" FLM_HUGEPAGE_BO=1 FLM_HUGEPAGE_BO_MIN=$MIN
+              echo "== bench r$r-ctl"; bash "$W/tools/bench.sh" "$W/flm" r$r-ctl "$W/out" FLM_HUGEPAGE_BO=1 FLM_HUGEPAGE_BO_CONTROL=1
             done
-            cp "$W/stock.so" "$W/flm/lib/libminicpm_v_4_7_npu.so"
-            echo "== bench stock"; bash "$W/eng/bench.sh" "$W/flm" stock 0 "$W/out"
           } 2>&1 | tee "$o"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ always() }}
@@ -124,4 +163,29 @@ jobs:
           path: |
             out
             !out/run-*
+          retention-days: 14
+
+  win-priv:
+    name: Windows large-page rights ${{ matrix.shard }}
+    runs-on: [self-hosted, windows, x64, npu, sweep]
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: ci/hugepage-minicpm
+      - name: Large-page rights (read-only)
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          & ci\hugepage-minicpm\win_priv.ps1 *>&1 | Tee-Object -FilePath "out\win-$env:RUNNER_NAME.txt"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ always() }}
+        with:
+          name: hugepage-minicpm-win-${{ matrix.shard }}
+          path: out
           retention-days: 14
