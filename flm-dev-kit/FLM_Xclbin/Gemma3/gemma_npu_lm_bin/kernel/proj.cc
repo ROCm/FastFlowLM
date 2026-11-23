@@ -275,8 +275,12 @@ void linear_proj_iD(
             is_wx_ping = !is_wx_ping;
             q4k_block* w_using = is_wx_ping ? w_ping : w_pong;
             bf16* x_using = is_wx_ping ? x_ping : x_pong;
+#ifndef PROBE_NO_W
             _lock_acquire(w_cons_lock);
+#endif
+#ifndef PROBE_NO_X
             _lock_acquire(x_cons_lock);
+#endif
             bf16* b_col_reduce_add_ptr = b_col_reduce_add + j *(k/32);
             // special logic for i==0:
             if(i == 0){
@@ -290,10 +294,15 @@ void linear_proj_iD(
 #ifndef FLM_STUB
             _qmm_q4k_bf16<m, k>(w_using, x_using, y_acc, b_col_reduce_add_ptr);
 #endif
+#ifndef PROBE_NO_W
             _lock_release(w_prod_lock);
+#endif
+#ifndef PROBE_NO_X
             _lock_release(x_prod_lock);
+#endif
             j++;
         } while (j < K / k);
+#ifndef PROBE_NO_Y
         _lock_acquire(y_prod_lock);
         is_y_ping = !is_y_ping;
         uint32* pkt_id_using = is_y_ping ? pkt_id_ping : pkt_id_pong;
@@ -301,6 +310,7 @@ void linear_proj_iD(
         *pkt_id_using = pkt_id;
         copy_y<m>(y_using + 16, y_acc);
         _lock_release(y_cons_lock);
+#endif
         i++;
     } while (i < M / m);
 }

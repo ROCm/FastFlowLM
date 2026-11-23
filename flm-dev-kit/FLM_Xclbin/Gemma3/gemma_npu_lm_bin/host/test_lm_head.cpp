@@ -35,6 +35,7 @@ struct Options {
     int iters = 10;
     int cpu_ref = 2;
     bool stub = false;
+    std::string probe;
 };
 
 Options parse(int argc, char** argv) {
@@ -50,6 +51,7 @@ Options parse(int argc, char** argv) {
         else if (k == "--iters") o.iters = std::stoi(v);
         else if (k == "--cpu-ref") o.cpu_ref = std::stoi(v);
         else if (k == "--stub") o.stub = (v == "1");
+        else if (k == "--probe") { o.probe = v; o.stub = true; }
         else { std::cerr << "unknown option " << k << std::endl; std::exit(2); }
     }
     if (o.model_dir.empty() || o.new_xclbin.empty() || (!o.stub && o.old_xclbin.empty())) {
@@ -218,6 +220,64 @@ void gen_old_lm_head_seq(npu_sequence* seq, int D, uint32_t rows) {
     seq->cmds2seq();
 }
 
+// Timing probes (README "Weight streaming probes"): gemma_npu_sequence::gen_lm_head_in_layer_seq, optionally without
+// the weights (PROBE=NO_W build) or without receiving the logits (PROBE=NO_Y build).
+void gen_probe_lm_head_seq(npu_sequence* seq, int D, uint32_t rows, bool send_weights, bool receive_logits) {
+    static constexpr npu_tiles proj_tiles[] = {CT02, CT12, CT22, CT32, CT03, CT13, CT23, CT33,
+                                               CT04, CT14, CT24, CT34, CT05, CT15, CT25, CT35};
+    static constexpr npu_tiles mvm_tiles[] = {IT2, IT3, IT4, IT5};
+    constexpr size_t lock_base = 0x000001F000;
+    constexpr int rtp_lock = 6;
+    constexpr uint32_t proj_addr = 33280;
+    constexpr uint32_t rms_addr = 54272;
+    constexpr uint32_t a_block_size = 32 * 256 * 5 / 8 / 2;
+    const uint32_t blocks_per_row = D / 256;
+    seq->clear_cmds();
+    seq->npu_preemption(0);
+    for (npu_tiles t : proj_tiles) {
+        seq->rtp_write(t, proj_addr, 0);
+        seq->rtp_write(t, lock_base + 16 * rtp_lock, 1);
+    }
+    seq->rtp_write(CT01, rms_addr, 2);
+    seq->rtp_write(CT01, lock_base + 16 * rtp_lock, 1);
+    seq->npu_dma_memcpy_nd(sizeof(bf16), 0, MM2S, IT1, bd_0, it_channel_0, {0, 0, 0, 0}, {1, 1, 1, (uint32_t)D},
+                           {0, 0, 0, 1}, 0, 0, false);
+    seq->npu_dma_memcpy_nd(sizeof(bf16), 2, MM2S, IT1, bd_1, it_channel_1, {0, 0, 0, 0}, {1, 1, 1, (uint32_t)D},
+                           {0, 0, 0, 1}, 0, 0, false);
+    if (receive_logits) {
+        seq->npu_dma_memcpy_nd(sizeof(bf16), 4, S2MM, IT1, bd_10, it_channel_0, {0, 0, 0, 0}, {1, 1, 1, rows},
+                               {0, 0, 0, 1}, -1, 0, true);
+    }
+    if (send_weights) {
+        const uint32_t rounds = rows / 32 / 16;
+        for (uint32_t round = 0; round < rounds; round++) {
+            const uint32_t bd_offset = (round % 2) * 8;
+            for (uint32_t col = 0; col < 4; col++) {
+                for (uint32_t ch = 0; ch < 2; ch++) {
+                    const uint32_t offset = (round * 16 + col * 4 + ch * 2) * a_block_size * blocks_per_row;
+                    seq->npu_dma_memcpy_nd(sizeof(bf16), 1, MM2S, mvm_tiles[col], npu_bd_id((ch == 0 ? bd_1 : bd_2) + bd_offset),
+                                           ch == 0 ? it_channel_0 : it_channel_1, {0, 0, 0, offset},
+                                           {1, 1, 1, blocks_per_row * a_block_size * 2}, {0, 0, 0, 1}, -1, 0, true);
+                }
+            }
+            if (round > 0) {
+                for (uint32_t col = 0; col < 4; col++) {
+                    seq->npu_dma_wait(mvm_tiles[col], MM2S, it_channel_0);
+                    seq->npu_dma_wait(mvm_tiles[col], MM2S, it_channel_1);
+                }
+            }
+        }
+        for (uint32_t col = 0; col < 4; col++) {
+            seq->npu_dma_wait(mvm_tiles[col], MM2S, it_channel_0);
+            seq->npu_dma_wait(mvm_tiles[col], MM2S, it_channel_1);
+        }
+    }
+    if (receive_logits) {
+        seq->npu_dma_wait(IT1, S2MM, it_channel_0);
+    }
+    seq->cmds2seq();
+}
+
 std::vector<std::vector<bf16>> load_x(const Options& o, int D, const buffer<bf16>& norm) {
     std::vector<std::vector<bf16>> xs;
     if (!o.x_file.empty()) {
@@ -280,7 +340,12 @@ int main(int argc, char** argv) {
 
     npu_app_manager* new_mgr = npu.register_xclbin(o.new_xclbin);
     npu_app new_app = new_mgr->create_app();
-    sequence.gen_lm_head_in_layer_seq(new_app.seq());
+    if (o.probe.empty()) {
+        sequence.gen_lm_head_in_layer_seq(new_app.seq());
+    } else {
+        gen_probe_lm_head_seq(new_app.seq(), D, new_rows, o.probe != "NO_W", o.probe != "NO_Y");
+        std::cout << "probe " << o.probe << std::endl;
+    }
     buffer<bf16> new_x = new_app.create_bo_buffer<bf16>(D);
     buffer<u8> new_w = new_app.create_bo_buffer<u8>((size_t)new_rows * D * 5 / 8);
     buffer<bf16> new_norm = new_app.create_bo_buffer<bf16>(D);

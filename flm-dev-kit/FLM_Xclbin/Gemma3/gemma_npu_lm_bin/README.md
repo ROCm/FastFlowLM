@@ -129,3 +129,26 @@ One layer run alone, median of 7, ms (bf16 / bfp16 / bfp16 stub without attentio
 | sliding, ring full | 1.35 | 1.32 | 1.28 |
 
 At 4K-8K the global layers' attention math is now partly visible (stub vs bfp16: 0.2-0.4 ms).
+
+## Weight streaming probes (2026-11-23)
+
+Why lm_head inside this design (9.8 ms) is slower than the old 32-core `lm_head.xclbin` (7.5 ms) although both
+stream the same 421 MB on 8 channels. Timing-only builds, all on top of `STUB=1` (no math), each removing one data
+path (`make bitstream STUB=1 PROBE=<p>`, `build/test/test_lm_head --new <that xclbin> --probe <p>`; the test then
+uses a probe copy of the lm_head sequence):
+
+| Build | What it removes | lm_head ms (median of 10) |
+|---|---|---|
+| `STUB=1` | the math | 9.64 |
+| `PROBE=NO_X` | the x re-send: proj cores take no x slices, the rms core sends none | 7.67 |
+| `PROBE=NO_Y` | the logits: proj cores send no outputs, the rms core collects none | 7.76 |
+| `PROBE=NO_W` | the weights: proj cores take none, the sequence sends none | 2.75 |
+
+Removing either the x re-send or the logits collection brings lm_head to the DDR floor (~7.5 ms). Both run through
+the rms core, which works one 512-row round at a time: send x to the 16 proj cores, wait for the round's logits,
+copy them out, wait until the x send is done, and only then send x for the next round. So between rounds the proj
+cores wait for x and the weight stream stalls. The host side is not the limit: one 3-D descriptor per channel and
+matrix instead of one per round with a wait each gave 9.77 / 9.57 ms (tried, reverted). Shared probe: rounds of
+2.75 ms of x + logits traffic alone.
+
+`PROBE` only adds `#ifdef`s; the normal build's program sizes are unchanged.

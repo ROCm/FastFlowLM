@@ -199,7 +199,10 @@ void rms_residual(
         constexpr int vocab_size_per_round = vocab_size_padded / D;
         constexpr int y_repeats_per_round = D / m_per_round;
         for (int i = 0; i < vocab_size_per_round; i++) {
+#ifndef PROBE_NO_X
             _lock_release(y_cons_lock, y_repeats_per_round);
+#endif
+#ifndef PROBE_NO_Y
             _lock_acquire(lm_head_out_prod_lock, 1);
             _lock_acquire(x_cons_lock);
 
@@ -211,7 +214,10 @@ void rms_residual(
 
             _lock_release(x_prod_lock);
             _lock_release(lm_head_out_cons_lock, 1);
+#endif
+#ifndef PROBE_NO_X
             _lock_acquire(y_prod_lock, y_repeats_per_round);
+#endif
         }
     }
 }

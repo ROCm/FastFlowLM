@@ -15,9 +15,14 @@ KERNEL_ARGS := -DMODEL_TYPE=${MODEL_TYPE}
 IRON_ARGS := ${MODEL_TYPE}
 
 STUB ?= 0
-BUILD_NAME := $(MODEL_TYPE)$(if $(filter 1,$(STUB)),_STUB)
+PROBE ?=
+BUILD_NAME := $(MODEL_TYPE)$(if $(filter 1,$(STUB)),_STUB)$(if $(PROBE),_P$(PROBE))
 ifeq ($(STUB),1)
 KERNEL_ARGS += -DFLM_STUB
+endif
+# lm_head data-flow probes (timing only, README "Weight streaming probes"): NO_X, NO_W, NO_Y
+ifneq ($(PROBE),)
+KERNEL_ARGS += -DPROBE_$(PROBE)
 endif
 
 # Kernel makefile
