@@ -3,11 +3,12 @@
   Portions of this file consist of AI-generated content.
 -->
 
-# gemma3:4b decode layer with lm_head (`layer_lm.xclbin`)
+# Gemma3 4B decode layer with lm_head (`layer_lm.xclbin`)
 
-A copy of `Gemma3/gemma_npu_bin` (the decode layer that medgemma:4b, medgemma1.5:4b and translategemma:4b
-also use) for **gemma3:4b only**. It adds a way to run lm_head on the same xclbin as the layers, so a decode
-token needs no hw_context switch (today: layer.xclbin <-> lm_head.xclbin, ~2.4 + ~2.7 ms a token on Strix Halo).
+The decode layer of gemma3:4b, medgemma:4b, medgemma1.5:4b and translategemma:4b (engine `gemma_npu`), with
+lm_head on the same xclbin, so a decode token needs no hw_context switch. It replaces `Gemma3/gemma_npu_bin`
+(`layer.xclbin`) and `Gemma3/gemma_lm_head_npu_bin` (`lm_head.xclbin`), which cost ~2.4 + ~2.7 ms of switches a
+token on Strix Halo; both are in git history (removed 2026-11-23).
 
 ## Build
 
@@ -70,7 +71,7 @@ context + 4 random:
 
 ## Program size (`.text`, bytes)
 
-| Core | `gemma_npu_bin` | this copy |
+| Core | old `Gemma3/gemma_npu_bin` | this folder |
 |---|---|---|
 | proj (16 cores) | 10,864 | 10,864 |
 | rms (`core_1_2`) | 6,608 | 6,736 |

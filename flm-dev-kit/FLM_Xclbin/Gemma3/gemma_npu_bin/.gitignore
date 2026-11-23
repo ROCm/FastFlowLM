@@ -1,8 +1,0 @@
-build
-*.txt
-*.log
-*.exe
-*.json
-__pycache__
-weights
-*.bin

@@ -10,7 +10,7 @@ the same text shape (D 2560, 34 layers, vocab 262,208).
 
 ## Decode: lm_head inside the layer xclbin (2026-11-23)
 
-Decode runs on one xclbin, `layer_lm.xclbin` (kernel folder `FLM_Xclbin/Gemma3/gemma3_4b_npu_bin`, see its
+Decode runs on one xclbin, `layer_lm.xclbin` (kernel folder `FLM_Xclbin/Gemma3/gemma_npu_lm_bin`, see its
 README for the kernel side). Before, lm_head was its own `lm_head.xclbin` in a second hw_context, so every token
 switched contexts twice (~2.4 ms into the layers, ~2.7 ms into lm_head on Strix Halo).
 

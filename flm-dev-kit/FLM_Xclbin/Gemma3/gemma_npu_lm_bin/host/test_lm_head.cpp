@@ -173,7 +173,7 @@ size_t argmax(const bf16* a, size_t n) {
     return best;
 }
 
-// The sequence of the old 32-core lm_head.xclbin (Gemma3/gemma_lm_head_npu_bin), kept here as the reference
+// The sequence of the old 32-core lm_head.xclbin (Gemma3/gemma_lm_head_npu_bin, removed; in git history), the reference
 // once the engine stopped using it. Args: 0 logits, 1 weights (reorder_cpy(..., 4)), 2 x.
 void gen_old_lm_head_seq(npu_sequence* seq, int D, uint32_t rows) {
     static constexpr npu_tiles tiles[] = {IT0, IT1, IT2, IT3, IT4, IT5, IT6, IT7};
