@@ -4,6 +4,7 @@
 
 #include <cassert>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -123,6 +124,54 @@ buffer<bf16> SmolVLA::embed_actions(buffer<bf16>& x_t, int L, float timestep) {
     buffer<bf16> aip_w = A(action_in_proj),      aip_b = A(action_in_proj_bias);
     buffer<bf16> mi_w  = A(action_time_mlp_in),  mi_b  = A(action_time_mlp_in_bias);
     buffer<bf16> mo_w  = A(action_time_mlp_out), mo_b  = A(action_time_mlp_out_bias);
+
+    static const bool fold = [] { const char* e = std::getenv("SMOLVLA_EMBED_FOLD"); return !(e && e[0] == '0'); }();
+    if (fold) {
+        constexpr float min_period = smolvla_cfg::TIME_MIN_PERIOD;
+        constexpr float max_period = smolvla_cfg::TIME_MAX_PERIOD;
+        const int half = D_expert / 2;
+        if (embed_wc.empty()) {
+            embed_wc.assign((size_t)D_expert * act_dim, 0.f);
+            embed_bias0.assign(D_expert, 0.f);
+            #pragma omp parallel for num_threads(2) schedule(static)
+            for (int o = 0; o < D_expert; o++) {
+                const bf16* w1 = mi_w.data() + (size_t)o * 2 * D_expert;
+                float* wc = embed_wc.data() + (size_t)o * act_dim;
+                float b0 = 0.f;
+                for (int j = 0; j < D_expert; j++) {
+                    const float w = (float)w1[j];
+                    b0 += w * (float)aip_b.data()[j];
+                    const bf16* wa = aip_w.data() + (size_t)j * act_dim;
+                    for (int k = 0; k < act_dim; k++) wc[k] += w * (float)wa[k];
+                }
+                embed_bias0[o] = b0;
+            }
+        }
+        auto tb = embed_time_bias.find(timestep);
+        if (tb == embed_time_bias.end()) {
+            std::vector<bf16> time_emb(D_expert);
+            for (int i = 0; i < half; i++) {
+                float frac    = (half > 1) ? (float)i / (float)(half - 1) : 0.0f;
+                float period  = min_period * std::pow(max_period / min_period, frac);
+                float scaling = 1.0f / period * 2.0f * (float)M_PI;
+                float s       = scaling * timestep;
+                time_emb[i]        = (bf16)std::sin(s);
+                time_emb[i + half] = (bf16)std::cos(s);
+            }
+            std::vector<float> b(D_expert);
+            cpu_func::_linear_biased_row_f32(b.data(), time_emb.data(), mi_w.data() + D_expert, mi_b.data(),
+                                             D_expert, D_expert, /*w_stride=*/2 * D_expert);
+            for (int o = 0; o < D_expert; o++) b[o] += embed_bias0[o];
+            tb = embed_time_bias.emplace(timestep, std::move(b)).first;
+        }
+        buffer<bf16> h((size_t)L * D_expert);
+        cpu_func::_cpu_mm<float>(h.data(), embed_wc.data(), x_t.data(), L, act_dim, D_expert, 0, tb->second.data());
+        buffer<bf16> sig((size_t)L * D_expert);
+        cpu_func::_sigmoid(sig.data(), h.data(), L * D_expert);
+        cpu_func::_elementwise_mul(h.data(), h.data(), sig.data(), L * D_expert);
+        cpu_func::_linear_biased(out.data(), h.data(), mo_w.data(), mo_b.data(), L, D_expert, D_expert);
+        return out;
+    }
 
     // action_in_proj: [L, action_dim] -> [L, D_expert].
     buffer<bf16> action_emb((size_t)L * D_expert);

@@ -6,132 +6,66 @@
 #include "aie_kernel_utils.h"
 #include "common.h"
 
-#if defined(__chess__) || !defined(AIE_API_EMULATE_BFLOAT16_MMUL_WITH_BFP16)
-template <typename T_in, typename T_out, unsigned rowA, unsigned colA, unsigned colB, unsigned r, unsigned s, unsigned t>
-void mm_aie(T_out *__restrict pY, const T_in *__restrict pX, const T_in *__restrict pW) {
-    using MMUL = aie::mmul<r, s, t, T_in, T_in, accauto>;
+// Expert matmul with the weights packed as bfp16 (bfp16ebs8: 9 B per 8 consecutive k of one n row: exponent byte
+// + 8 int8 mantissas). W reaches L1 as ready tiles, x arrives as bf16 [k8][16 rows][8 k] and is converted once per
+// chunk (vision_mm_c does the same). DDR carries 9/16 of the weight bytes of the bf16 design.
+//   w chunk (n_slice x k_slice): [n16 group][k8][B0 = n 0-7, B1 = n 8-15]
+// Round to nearest even for every narrowing in the call (power-on default is floor).
+struct KernelRneScope {
+    aie::rounding_mode saved;
+    inline __attribute__((always_inline)) KernelRneScope() { saved = aie::swap_rounding(aie::rounding_mode::conv_even); }
+    inline __attribute__((always_inline)) ~KernelRneScope() { aie::set_rounding(saved); }
+};
+#define KERNEL_RNE_SCOPE KernelRneScope _kernel_rne_scope;
 
-    for (unsigned z = 0; z < rowA; z += 2){
-        T_out *__restrict pY1 = pY + (z * colB) * MMUL::size_C;
-        T_out *__restrict pY2 = pY + ((z + 1) * colB) * MMUL::size_C;
+static constexpr int TILE_B   = 72;
+static constexpr int K8       = k_slice / 8;
+static constexpr int N_BLK    = n_slice / 8;
+static_assert(N_BLK % 2 == 0, "n_slice must hold whole pairs of n8 blocks");
+static_assert(m_slice == 16, "the multiply loop is written for 16-row x chunks");
 
-        for (unsigned j = 0; j < colB; j += 2)
-        chess_prepare_for_pipelining chess_loop_range(2, ) {
-            const T_in *__restrict pX1 = pX + z * MMUL::size_A;
-            const T_in *__restrict pX2 = pX + (z + 1) * MMUL::size_A;
-            const T_in *__restrict pW1 = pW + j * MMUL::size_B;
-            const T_in *__restrict pW2 = pW + (j + 1) * MMUL::size_B;
-
-            aie::vector<T_in, MMUL::size_A> X0 = aie::load_v<MMUL::size_A>(pX1);
-            pX1 += MMUL::size_A * rowA;
-            aie::vector<T_in, MMUL::size_A> X1 = aie::load_v<MMUL::size_A>(pX2);
-            pX2 += MMUL::size_A * rowA;
-            aie::vector<T_in, MMUL::size_B> W00 = aie::load_v<MMUL::size_B>(pW1);
-            aie::vector<T_in, MMUL::size_B> W0 = aie::transpose(W00, 8, 8);
-            pW1 += MMUL::size_B * colB;
-            aie::vector<T_in, MMUL::size_B> W10 = aie::load_v<MMUL::size_B>(pW2);
-            aie::vector<T_in, MMUL::size_B> W1 = aie::transpose(W10, 8, 8);
-            pW2 += MMUL::size_B * colB;
-
-            aie::vector<T_out, MMUL::size_C> acc_Y00 = aie::load_v<MMUL::size_C>(pY1); 
-            aie::vector<T_out, MMUL::size_C> acc_Y01 = aie::load_v<MMUL::size_C>(pY1 + MMUL::size_C);
-            aie::vector<T_out, MMUL::size_C> acc_Y10 = aie::load_v<MMUL::size_C>(pY2);
-            aie::vector<T_out, MMUL::size_C> acc_Y11 = aie::load_v<MMUL::size_C>(pY2 + MMUL::size_C);
-
-            MMUL Y00(acc_Y00);
-            MMUL Y01(acc_Y01);
-            MMUL Y10(acc_Y10);
-            MMUL Y11(acc_Y11);
-
-            Y00.mac(X0, W0);
-            Y01.mac(X0, W1);
-            Y10.mac(X1, W0);
-            Y11.mac(X1, W1);
-
-            for (unsigned i = 1; i < colA; ++i)
-            chess_prepare_for_pipelining chess_loop_range(7, 7) {
-                X0 = aie::load_v<MMUL::size_A>(pX1);
-                pX1 += MMUL::size_A * rowA;
-                X1 = aie::load_v<MMUL::size_A>(pX2);
-                pX2 += MMUL::size_A * rowA;
-                W00 = aie::load_v<MMUL::size_B>(pW1);
-                W0 = aie::transpose(W00, 8, 8);
-                pW1 += MMUL::size_B * colB;
-                W10 = aie::load_v<MMUL::size_B>(pW2);
-                W1 = aie::transpose(W10, 8, 8);
-                pW2 += MMUL::size_B * colB;
-
-                Y00.mac(X0, W0);
-                Y01.mac(X0, W1);
-                Y10.mac(X1, W0);
-                Y11.mac(X1, W1);
-            }
-            
-            aie::store_v(pY1, Y00.template to_vector<T_out>());
-            pY1 += MMUL::size_C;
-            aie::store_v(pY1, Y01.template to_vector<T_out>());
-            pY1 += MMUL::size_C;
-            aie::store_v(pY2, Y10.template to_vector<T_out>());
-            pY2 += MMUL::size_C;
-            aie::store_v(pY2, Y11.template to_vector<T_out>());
-            pY2 += MMUL::size_C;
-        }
+static inline __attribute__((always_inline)) void convert_x(const bf16 *__restrict px, uint8 *__restrict xc) {
+    aie::block_vector_output_buffer_stream<bfp16ebs8, 64> xo((bfp16ebs8 *)xc);
+    AIE_PREPARE_FOR_PIPELINING
+    AIE_LOOP_RANGE(K8, K8)
+    for (int k = 0; k < K8; k++) {
+        auto a0 = ::to_v64bfp16ebs8(aie::accum<accfloat, 64>(aie::load_v<64>(px)));
+        auto a1 = ::to_v64bfp16ebs8(aie::accum<accfloat, 64>(aie::load_v<64>(px + 64)));
+        px += 128;
+        xo << a0;
+        xo << a1;
     }
 }
-#else
-// Peano: not inlined (inlined into mm, its k loop gets one register for all the
-// conversions and runs serially), no peeled first k-step (Peano hoists and spills its
-// converted tiles out of the j loop), and W tiles go to the mmul as loaded (see
-// aie_mmul_bf16_888_bT). Every accumulator gets the same macs in the same order.
-template <typename T_in, typename T_out, unsigned rowA, unsigned colA, unsigned colB, unsigned r, unsigned s, unsigned t>
-__attribute__((noinline))
-void mm_aie(T_out *__restrict pY, const T_in *__restrict pX, const T_in *__restrict pW) {
-    using MMUL = aie::mmul<r, s, t, T_in, T_in, accauto>;
-    using MMUL_C = aie_mmul_bf16_888_bT;
 
-    for (unsigned z = 0; z < rowA; z += 2){
-        T_out *__restrict pY1 = pY + (z * colB) * MMUL::size_C;
-        T_out *__restrict pY2 = pY + ((z + 1) * colB) * MMUL::size_C;
-
-        for (unsigned j = 0; j < colB; j += 2){
-            const T_in *__restrict pX1 = pX + z * MMUL::size_A;
-            const T_in *__restrict pX2 = pX + (z + 1) * MMUL::size_A;
-            const T_in *__restrict pW1 = pW + j * MMUL::size_B;
-            const T_in *__restrict pW2 = pW + (j + 1) * MMUL::size_B;
-
-            MMUL_C Y00(aie::load_v<MMUL::size_C>(pY1));
-            MMUL_C Y01(aie::load_v<MMUL::size_C>(pY1 + MMUL::size_C));
-            MMUL_C Y10(aie::load_v<MMUL::size_C>(pY2));
-            MMUL_C Y11(aie::load_v<MMUL::size_C>(pY2 + MMUL::size_C));
-
-            for (unsigned i = 0; i < colA; ++i){
-                aie::vector<T_in, MMUL::size_A> X0 = aie::load_v<MMUL::size_A>(pX1);
-                pX1 += MMUL::size_A * rowA;
-                aie::vector<T_in, MMUL::size_A> X1 = aie::load_v<MMUL::size_A>(pX2);
-                pX2 += MMUL::size_A * rowA;
-                aie::vector<T_in, MMUL::size_B> W0 = aie::load_v<MMUL::size_B>(pW1);
-                pW1 += MMUL::size_B * colB;
-                aie::vector<T_in, MMUL::size_B> W1 = aie::load_v<MMUL::size_B>(pW2);
-                pW2 += MMUL::size_B * colB;
-
-                Y00.mac(X0, W0);
-                Y01.mac(X0, W1);
-                Y10.mac(X1, W0);
-                Y11.mac(X1, W1);
-            }
-
-            aie::store_v(pY1, Y00.template to_vector<T_out>());
-            pY1 += MMUL::size_C;
-            aie::store_v(pY1, Y01.template to_vector<T_out>());
-            pY1 += MMUL::size_C;
-            aie::store_v(pY2, Y10.template to_vector<T_out>());
-            pY2 += MMUL::size_C;
-            aie::store_v(pY2, Y11.template to_vector<T_out>());
-            pY2 += MMUL::size_C;
+// one 16-row x chunk against every n pair of the w chunk; y_group is the chunk's 2 x N_BLK C blocks
+static inline __attribute__((always_inline)) void mac_chunk(float *__restrict y_group, const uint8 *__restrict xc,
+                                                            const uint8 *__restrict wc) {
+    for (int p = 0; p < N_BLK / 2; p++) {
+        float *y0 = y_group + (2 * p) * 64;
+        float *y1 = y_group + (N_BLK + 2 * p) * 64;
+        aie::accum<accfloat, 64> c00(aie::load_v<64>(y0)), c01(aie::load_v<64>(y0 + 64));
+        aie::accum<accfloat, 64> c10(aie::load_v<64>(y1)), c11(aie::load_v<64>(y1 + 64));
+        aie::block_vector_input_buffer_stream<bfp16ebs8, 64> xs((const bfp16ebs8 *)xc);
+        aie::block_vector_input_buffer_stream<bfp16ebs8, 64> ws((const bfp16ebs8 *)(wc + p * K8 * 2 * TILE_B));
+        AIE_PREPARE_FOR_PIPELINING
+        AIE_LOOP_RANGE(K8, K8)
+        AIE_TRY_INITIATION_INTERVAL(4)
+        for (int k = 0; k < K8; k++) {
+            auto a0 = xs.pop();
+            auto a1 = xs.pop();
+            auto b0 = ws.pop();
+            auto b1 = ws.pop();
+            c00 = mac_8x8_8x8T(a0, b0, c00);
+            c01 = mac_8x8_8x8T(a0, b1, c01);
+            c10 = mac_8x8_8x8T(a1, b0, c10);
+            c11 = mac_8x8_8x8T(a1, b1, c11);
         }
+        aie::store_v(y0, c00.template to_vector<float>());
+        aie::store_v(y0 + 64, c01.template to_vector<float>());
+        aie::store_v(y1, c10.template to_vector<float>());
+        aie::store_v(y1 + 64, c11.template to_vector<float>());
     }
 }
-#endif
 
 void silu_aie(bf16 *__restrict x, bf16 *__restrict o, int D){
 
@@ -173,19 +107,25 @@ extern "C" {
     void mm(
         const bf16 *__restrict x_ping,
         const bf16 *__restrict x_pong,
-        const bf16 *__restrict w_ping,
-        const bf16 *__restrict w_pong,
+        const uint8 *__restrict w_ping,
+        const uint8 *__restrict w_pong,
         bf16 *__restrict y_ping,
         bf16 *__restrict y_pong,
         float *__restrict y_acc,
+        uint8 *__restrict xc,
+        bf16 *__restrict g_keep,
         int * rtp_value
 
     ){
+        KERNEL_RNE_SCOPE
         AIE_PERSIST_ZERO static bool is_w_ping = false;
         AIE_PERSIST_ZERO static bool is_y_ping = false;
         AIE_PERSIST_ZERO static bool is_x_ping = false;
+        // act 3 = SwiGLU pair: the host streams the gate strip, then the up strip, of every n block through this
+        // tile. The gate half keeps silu(gate) in g_keep and emits nothing; the up half emits bf16(g_keep * up).
+        // Every fused launch runs whole gate/up pairs, so the toggle is back at "gate" when the launch ends.
+        AIE_PERSIST_ZERO static bool is_up = false;
         int k_div_k_slice = NPU_K_TILE / k_slice; //colA
-        int n_div_n_slice = NPU_N_TILE / n_slice; //rowB
         int m_div_m_slice = NPU_M_TILE / m_slice; //rowA
 
         zero_vectorized<float, NPU_M_TILE * NPU_N_TILE>(y_acc);
@@ -195,18 +135,45 @@ extern "C" {
             for (int j = 0; j < k_div_k_slice; j++){
                 _lock_acquire(w_cons_lock);
                 is_w_ping = !is_w_ping;
-                const bf16 *w = is_w_ping ? w_ping : w_pong;
+                const uint8 *w = is_w_ping ? w_ping : w_pong;
                 for (int i = 0; i < m_div_m_slice; i++){
                     _lock_acquire(x_cons_lock);
                     is_x_ping = !is_x_ping;
                     const bf16 *x = is_x_ping ? x_ping : x_pong;
-                    mm_aie<bf16, float, m_slice / 8, k_slice / 8, n_slice / 8, 8, 8, 8>(y_acc + i * m_slice * n_slice, x, w);
+                    convert_x(x, xc);
+                    mac_chunk(y_acc + i * m_slice * n_slice, xc, w);
                     _lock_release(x_prod_lock);
                 }
                 _lock_release(w_prod_lock);
             }
             k += 1;
         } while (k < rtp_value[0]);
+
+        if (rtp_value[1] == 3) {
+            if (!is_up) {
+                for (int i = 0; i < y_num; i++){
+                    bf16 *g = g_keep + i * y_slice;
+                    passThrough_aie<float, bf16, 64>(y_acc + i * y_slice, g);
+                    silu_aie(g, g, y_slice);
+                }
+            } else {
+                for (int i = 0; i < y_num; i++){
+                    _lock_acquire(y_prod_lock);
+                    is_y_ping = !is_y_ping;
+                    bf16 *y = is_y_ping ? y_ping : y_pong;
+                    passThrough_aie<float, bf16, 64>(y_acc + i * y_slice, y);
+                    const bf16 *g = g_keep + i * y_slice;
+                    for (int v = 0; v < y_slice; v += 32) {
+                        aie::vector<bf16, 32> u = aie::load_v<32>(y + v);
+                        aie::vector<bf16, 32> gv = aie::load_v<32>(g + v);
+                        aie::store_v(y + v, aie::mul(u, gv).template to_vector<bf16>());
+                    }
+                    _lock_release(y_cons_lock);
+                }
+            }
+            is_up = !is_up;
+            return;
+        }
 
         for (int i = 0; i < y_num; i++){
             _lock_acquire(y_prod_lock);

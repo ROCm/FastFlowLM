@@ -3,6 +3,7 @@
 #ifndef __SMOLVLA__HPP__
 #define __SMOLVLA__HPP__
 
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -47,6 +48,13 @@ public:
     size_t adapter_byte_size = 0;
 
     buffer<bf16> out;
+
+    // embed_actions folds action_in_proj into the first half of action_time_mlp_in (both are linear, nothing
+    // between them but the bf16 rounding of action_emb): Wc = W1[:, :D] @ Wa [D_expert, action_dim] and
+    // bias0 = W1[:, :D] @ ba, built once from the adapter weights. time_bias caches the per-timestep
+    // time-embedding term. SMOLVLA_EMBED_FOLD=0 keeps the two separate GEMMs.
+    std::vector<float> embed_wc, embed_bias0;
+    std::map<float, std::vector<float>> embed_time_bias;
 
 
     SmolVLA(npu_xclbin_manager* xclbin_mgr) :

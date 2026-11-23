@@ -682,8 +682,11 @@
       "folder": "SmolVLA-500M-NPU2",
       "kernels": {
         "expert.xclbin": "xclbins-SMOLVLA_expert",
+        "expert_bf16.xclbin": "xclbins-SMOLVLA_expert_bf16",
         "text.xclbin":   "xclbins-SMOLVLA_text",
-        "vision.xclbin": "xclbins-SMOLVLA_vision"
+        "vision.xclbin": "xclbins-SMOLVLA_vision",
+        "vision_mm8.xclbin": "xclbins-SMOLVLA_vision_mm8",
+        "vision.switches": "xclbins-SMOLVLA_vision_switches"
       }
     }
   }

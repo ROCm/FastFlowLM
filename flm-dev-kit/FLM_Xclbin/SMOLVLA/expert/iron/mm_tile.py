@@ -37,6 +37,8 @@ def mm_cttile(tile: tile_with_location, mctx: mlir_context):
     y_buffer_0 = aie.buffer(tile = ct, datatype = mm_y_ty, name = f"y_0_{ct_row}_{ct_col}")
     y_buffer_1 = aie.buffer(tile = ct, datatype = mm_y_ty, name = f"y_1_{ct_row}_{ct_col}")
     y_acc_buffer = aie.buffer(tile = ct, datatype = y_acc_ty, name = f"y_acc_{ct_row}_{ct_col}")
+    xc_buffer = aie.buffer(tile = ct, datatype = mctx.xc_ty, name = f"xc_{ct_row}_{ct_col}")
+    g_buffer = aie.buffer(tile = ct, datatype = mctx.g_ty, name = f"g_{ct_row}_{ct_col}")
     rtp_buffer = mctx.buffers[f"rtp_{ct_row}_{ct_col}"]
     
     x_prod_lock = aie.lock(ct, lock_id = 0, init = 2)
@@ -50,7 +52,7 @@ def mm_cttile(tile: tile_with_location, mctx: mlir_context):
     @aie.core(ct, link_with = "mm.o", stack_size = 1024 * 3)
     def core_body():
         for _ in range_(0xFFFFFFFF):
-            mm(x_buffer_0, x_buffer_1, w_buffer_0, w_buffer_1, y_buffer_0, y_buffer_1, y_acc_buffer, rtp_buffer)
+            mm(x_buffer_0, x_buffer_1, w_buffer_0, w_buffer_1, y_buffer_0, y_buffer_1, y_acc_buffer, xc_buffer, g_buffer, rtp_buffer)
     
     @aie.mem(ct)
     def mem_body(block):
@@ -73,13 +75,13 @@ def mm_cttile(tile: tile_with_location, mctx: mlir_context):
 
         with block[4]:
             lock_acquire(w_prod_lock, 1)
-            aie.dma_bd(w_buffer_0, offset = 0, len = n_slice * k_slice, dimensions = [(n_slice, 8), (k_slice // 8, n_slice * 8), (8, 1)])
+            aie.dma_bd(w_buffer_0, offset = 0, len = (n_slice // 16) * (k_slice // 8) * 144)
             lock_release(w_cons_lock, 1)
             aie.next_bd(block[5])
         
         with block[5]:
             lock_acquire(w_prod_lock, 1)
-            aie.dma_bd(w_buffer_1, offset = 0, len = n_slice * k_slice, dimensions = [(n_slice, 8), (k_slice // 8, n_slice * 8), (8, 1)])
+            aie.dma_bd(w_buffer_1, offset = 0, len = (n_slice // 16) * (k_slice // 8) * 144)
             lock_release(w_cons_lock, 1)
             aie.next_bd(block[4])
 
@@ -185,13 +187,13 @@ def mm_memtile(tile: tile_with_location, mctx: mlir_context):
         
         with block[10]:
             lock_acquire(w_cons_lock, 1)
-            aie.dma_bd(w_buffer_0, offset = 0, len = n * k, dimensions = [(k // k_slice, k_slice), (n, k), (k_slice, 1)])
+            aie.dma_bd(w_buffer_0, offset = 0, len = (n // 16) * (k // 8) * 144)
             lock_release(w_prod_lock, 1)
             aie.next_bd(block[11])
 
         with block[11]:
             lock_acquire(w_cons_lock, 1)
-            aie.dma_bd(w_buffer_1, offset = 0, len = n * k, dimensions = [(k // k_slice, k_slice), (n, k), (k_slice, 1)])
+            aie.dma_bd(w_buffer_1, offset = 0, len = (n // 16) * (k // 8) * 144)
             lock_release(w_prod_lock, 1)
             aie.next_bd(block[10])
         

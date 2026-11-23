@@ -23,6 +23,9 @@ struct SmolVLA_language_layer {
     weight_desc_t k_proj;
     weight_desc_t v_proj;
     weight_desc_t o_proj;
+    // q|k|v seen as one [D -> DQ+DK+DV] matrix (they are adjacent in the layer buffer), so the three
+    // projections run as a single matmul. Not part of proj_all().
+    weight_desc_t qkv_proj;
 
     weight_desc_t gate_proj;
     weight_desc_t up_proj;
@@ -134,6 +137,11 @@ struct SmolVLA_Language_def {
             layer_helper.add_weight(*w);
         }
         this->layer_byte_size = layer_helper.get_size();
+        assert(layer_def.k_proj.offset == layer_def.q_proj.offset + (size_t)D * DQ * sizeof(bf16));
+        assert(layer_def.v_proj.offset == layer_def.k_proj.offset + (size_t)D * DK * sizeof(bf16));
+        layer_def.qkv_proj = weight_desc_t(flm_bf16, {D, DQ + DK + DV}, LYR + "self_attn.qkv_proj.weight");
+        layer_def.qkv_proj.offset = layer_def.q_proj.offset;
+        layer_def.qkv_proj.added  = true;
 
         weight_container norm_helper;
         for (weight_desc_t* w : layer_def.norm_all()) {

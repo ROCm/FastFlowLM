@@ -16,6 +16,29 @@ void passThrough_aie(T_in *restrict in, T_out *restrict out) {
     aie::store_v(out, c_acc_in.template to_vector<T_out>());
 }
 
+// rotate_half RoPE on one head held in tile layout [8 blocks of 8 dims][64 rows][8]. tab is
+// [cos blocks 0-3 | sin blocks 4-7], same layout, so dim j (block b) pairs with dim j+32 (block b+4).
+__attribute__((noinline)) void rope_tile(bf16*__restrict x, const bf16*__restrict tab){
+    for (int b = 0; b < 4; b++){
+        bf16 * lo = x + b * 512;
+        bf16 * hi = x + (b + 4) * 512;
+        const bf16 * c = tab + b * 512;
+        const bf16 * s = tab + (b + 4) * 512;
+        for (int i = 0; i < 512; i += 32){
+            aie::vector<bf16, 32> vl = aie::load_v<32>(lo + i);
+            aie::vector<bf16, 32> vh = aie::load_v<32>(hi + i);
+            aie::vector<bf16, 32> vc = aie::load_v<32>(c + i);
+            aie::vector<bf16, 32> vs = aie::load_v<32>(s + i);
+            aie::accum<accfloat, 32> a = aie::mul(vl, vc);
+            a = aie::msc(a, vh, vs);
+            aie::accum<accfloat, 32> d = aie::mul(vh, vc);
+            d = aie::mac(d, vl, vs);
+            aie::store_v(lo + i, a.template to_vector<bf16>());
+            aie::store_v(hi + i, d.template to_vector<bf16>());
+        }
+    }
+}
+
 void get_max(bf16*__restrict new_m, bf16*__restrict S, bf16*__restrict pre_m){
     for (int i = 0; i < lq / 8; i++){
         // vertical: element-wise max across this query-tile's key-tiles
