@@ -83,7 +83,9 @@ name: Dev-kit Bench
 # Dispatch (re-benches an earlier Build and Test run, or exercises a change
 # to the bench CI itself, for which Build and Test calls nothing): build-run
 # names the Build and Test run to bench (default the newest for this
-# commit), whose artifacts are looked up and checked across runs, with the
+# commit; on main, which moves on while a run builds, also a push run on main
+# of an earlier commit, whose commit is then the one benched and reported),
+# whose artifacts are looked up and checked across runs, with the
 # rules the call uses (a runtime whose dev-kit engines failed or whose
 # libraries are gone is left out; a run that built no dev-kit engines or
 # kernels benches nothing); models replaces the selection, which otherwise is
@@ -141,7 +143,7 @@ on:
   workflow_dispatch:
     inputs:
       build-run:
-        description: Build and Test run id whose artifacts to bench (default the newest for this commit)
+        description: Build and Test run id whose artifacts to bench (default the newest for this commit; on main, also a push run on main of an earlier commit)
         type: string
         default: ''
       models:
@@ -198,7 +200,8 @@ jobs:
           esac
 
       # The pull request's base: its scripts, catalog and dev-kit maps.
-      # Full history for the nightly's changes.py diff.
+      # Full history for the nightly's changes.py diff and a dispatch's
+      # ancestor check (find-build --ref on main).
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -238,7 +241,10 @@ jobs:
             --xclbins "${XCLBINS}"
 
       # Dispatch: an earlier Build and Test run, checked (this repository,
-      # this commit, completed) and its artifacts listed; waits for it.
+      # this commit, completed) and its artifacts listed; waits for it. On
+      # main, build-run may also be a push run on main of an ancestor of
+      # this commit (checked with git in the checkout above: fetch-depth 0);
+      # the plan then benches and names that run's commit.
       - name: Find Build and Test's run
         id: build
         if: steps.ready.outputs.ready == 'true' && steps.mode.outputs.mode == 'dispatch'
@@ -247,7 +253,7 @@ jobs:
           RUN_ID: ${{ inputs.build-run }}
         run: |
           python3 .github/script/devkit-bench/resolve.py find-build --repo "${GITHUB_REPOSITORY}" \
-            --head-sha "${GITHUB_SHA}" --run-id "${RUN_ID}" --wait-minutes 200 \
+            --head-sha "${GITHUB_SHA}" --ref "${GITHUB_REF}" --run-id "${RUN_ID}" --wait-minutes 200 \
             --plan-out "${RUNNER_TEMP}/plan.json" --artifacts-out "${RUNNER_TEMP}/artifacts.json"
 
       - name: Note why nothing is benched

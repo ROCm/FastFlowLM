@@ -9,7 +9,7 @@ GitHub-hosted runner.
                              --engines success|failure|skipped
                              [--families a,b] [--xclbin-models JSON]
                              [--bench-models JSON] [--xclbins devkit-xclbins]
-    resolve.py find-build    --repo R --head-sha S [--run-id N]
+    resolve.py find-build    --repo R --head-sha S [--run-id N] [--ref R]
                              [--wait-minutes 200] --plan-out plan.json
                              [--artifacts-out artifacts.json]
     resolve.py find-baseline --repo R
@@ -27,7 +27,14 @@ find-build is the dispatch path only (rebenching an earlier Build and Test
 run): it finds that run and waits (polling) for it to complete. The run must
 be of .github/workflows/build-and-test.yml in this repository, for exactly
 this head commit (a run id given is checked the same way), the newest such
-run, completed with success or failure. Its plan is derived from the
+run, completed with success or failure. On main (--ref refs/heads/main),
+which moves often, a run id given may also be this repository's Build and
+Test push run on main for an earlier commit: one whose head is an ancestor
+of the dispatched commit (git merge-base --is-ancestor in --repo-root, which
+needs the history: devkit-bench.yml checks out with fetch-depth 0). The
+plan, and so everything that names the benched commit, then has the run's
+head, not the dispatched commit: the packages and dev-kit builds benched
+are that run's. Its plan is derived from the
 artifacts it uploaded and its devkit-engines job's result
 (plan_from_artifacts), with write-plan's rules: a runtime benches when its
 package is there and the engines built (then with that runtime's dev-kit
@@ -87,6 +94,7 @@ BENCH_WORKFLOW = ".github/workflows/devkit-bench.yml"
 # artifacts last 90 days).
 BASELINE_WORKFLOWS = (BUILD_WORKFLOW, BENCH_WORKFLOW)
 BASELINE_ARTIFACT = "devkit-bench-baseline"
+MAIN_REF = "refs/heads/main"
 SHA = re.compile(r"^[0-9a-f]{40}$")
 REPO = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 ARTIFACT = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
@@ -162,6 +170,33 @@ def run_matches(run: dict, *, repo: str, head_sha: str) -> bool:
             and _full_name(run.get("head_repository")) == repo
             and SHA.match(str(run.get("head_sha") or "")) is not None
             and run.get("head_sha") == head_sha)
+
+
+def main_push_run(run: dict, *, repo: str) -> bool:
+    """Whether a run is this repository's Build and Test push run on main
+    (whatever its commit: see find_build_ok)."""
+    return (run.get("path") == BUILD_WORKFLOW and _full_name(run.get("repository")) == repo
+            and _full_name(run.get("head_repository")) == repo and run.get("event") == "push"
+            and run.get("head_branch") == "main" and SHA.match(str(run.get("head_sha") or "")) is not None)
+
+
+def is_ancestor(repo_root: Path, ancestor: str, commit: str) -> bool:
+    """Whether ancestor is commit or one of its ancestors, in repo_root's
+    history (False when either is not there)."""
+    proc = subprocess.run(["git", "-C", str(repo_root), "merge-base", "--is-ancestor", ancestor, commit],
+                          capture_output=True)
+    return proc.returncode == 0
+
+
+def find_build_ok(run: dict, *, repo: str, head_sha: str, ref: str, repo_root: Path) -> bool:
+    """Whether a dispatch may bench a run it names: this repository's Build
+    and Test for exactly the dispatched commit (run_matches), or, for a
+    dispatch on main only, its push run on main for that commit or an
+    ancestor of it (main moves on while a run builds and tests)."""
+    if run_matches(run, repo=repo, head_sha=head_sha):
+        return True
+    return (ref == MAIN_REF and main_push_run(run, repo=repo)
+            and is_ancestor(repo_root, run["head_sha"], head_sha))
 
 
 def pick_build_run(runs: list[dict], **match) -> Optional[dict]:
@@ -430,10 +465,13 @@ def cmd_find_build(args) -> int:
     while True:
         if args.run_id:
             candidate = api_get(f"repos/{args.repo}/actions/runs/{int(args.run_id)}")
-            run = candidate if run_matches(candidate, repo=args.repo, head_sha=args.head_sha) else None
+            run = candidate if find_build_ok(candidate, repo=args.repo, head_sha=args.head_sha, ref=args.ref,
+                                             repo_root=Path(args.repo_root)) else None
             if run is None:
-                write_outputs({"ok": "false", "run-id": "", "reason": "run is not this repository's "
-                               "Build and Test run for this commit"})
+                reason = "run is not this repository's Build and Test run for this commit"
+                if args.ref == MAIN_REF:
+                    reason += " nor its push run on main for an earlier commit of main"
+                write_outputs({"ok": "false", "run-id": "", "reason": reason})
                 return 0
         else:
             runs = api_get(f"repos/{args.repo}/actions/workflows/build-and-test.yml/runs",
@@ -465,8 +503,11 @@ def cmd_find_build(args) -> int:
                        "reason": f"Build and Test run {run['id']} built no dev-kit engines or kernels"})
         return 0
     Path(args.plan_out).write_text(json.dumps(plan, indent=1), encoding="utf-8")
+    # The run's head, which on main may be an earlier commit than the
+    # dispatched one: its packages and dev-kit builds are what is benched.
+    earlier = f" of {run['head_sha'][:10]}" if run["head_sha"] != args.head_sha else ""
     write_outputs({"ok": "true", "run-id": str(run["id"]), "head-sha": run["head_sha"],
-                   "reason": f"Build and Test run {run['id']}"})
+                   "reason": f"Build and Test run {run['id']}{earlier}"})
     return 0
 
 
@@ -602,6 +643,9 @@ def main(argv=None) -> int:
     p.add_argument("--repo", required=True)
     p.add_argument("--head-sha", required=True)
     p.add_argument("--run-id", default="")
+    p.add_argument("--ref", default="", help="the dispatch's github.ref: on main, --run-id may be the "
+                   "push run of an ancestor of --head-sha")
+    p.add_argument("--repo-root", default=str(HERE.parents[2]), help="a checkout with --head-sha's history")
     p.add_argument("--wait-minutes", type=float, default=200)
     p.add_argument("--poll-seconds", type=float, default=60)
     p.add_argument("--plan-out", required=True)
