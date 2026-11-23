@@ -49,16 +49,14 @@ struct gemma_npu_sequence::Impl{
     uint32_t sliding_window_pattern;
 
     // RTP addresses, fixed for every supported Gemma3 (vision) model.
-    static constexpr uint32_t l_qk_address = 9216;
+    static constexpr uint32_t l_qk_address = 20992;
     static constexpr uint32_t proj_addr = 33280;
-    static constexpr uint32_t l_kv_address = 33792;
+    static constexpr uint32_t l_kv_address = 50176;
     static constexpr uint32_t l_begin_mha_address = 15872;
     static constexpr uint32_t l_end_mha_address = 15904;
     static constexpr uint32_t window_size_address = 15936;
     static constexpr uint32_t rms_addr = 54272;
-    // the same RTPs in the KV_BFP16 build of the kernel (README "bfp16 KV cache"); L[1] = packed chunks
-    static constexpr uint32_t l_qk_address_kvb = 20992;
-    static constexpr uint32_t l_kv_address_kvb = 50176;
+    // L[0] = keys, L[1] = finished chunks read from the bfp16 copy (README "bfp16 KV cache")
     static constexpr uint32_t kv_bfp16_unit_elems = 4608;   // one stream's 16-row chunk as bfp16: 9,216 B
 
     // lm_head inside layer_lm.xclbin (gemma3:4b): mode values for the proj and rms RTPs, the vocab size the
@@ -77,7 +75,6 @@ struct gemma_npu_sequence::Impl{
     void _receive_kv_cache(npu_sequence* seq, const int L, bool is_sliding_window);
     void _move_weights(npu_sequence* seq, const size_t Dout, const size_t Din, const size_t w_offset);
     void _move_kv_cache(npu_sequence* seq, const size_t L, bool is_sliding_window);
-    void _move_kv_cache_bfp16(npu_sequence* seq, const size_t L, bool is_sliding_window);
     uint32_t kv_bfp16_packed_chunks(const uint32_t L, bool is_sliding_window) const;
     size_t kv_bfp16_offset(bool is_sliding_window, int stream) const;
 
@@ -93,7 +90,7 @@ struct gemma_npu_sequence::Impl{
     Impl(LM_Config config, uint32_t MAX_L);
     ~Impl();
 
-    void gen_layer_seq(npu_sequence* seq, const uint32_t L, bool is_sliding_window, bool kv_bfp16);
+    void gen_layer_seq(npu_sequence* seq, const uint32_t L, bool is_sliding_window);
     void gen_lm_head_in_layer_seq(npu_sequence* seq);
     void gen_mha_engine_seq(npu_sequence* seq, const uint32_t L_begin, const uint32_t L_end, bool is_sliding_window, int buffer_length);
 

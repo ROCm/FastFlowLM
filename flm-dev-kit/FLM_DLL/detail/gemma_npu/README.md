@@ -65,3 +65,45 @@ Measured (gemma3:4b, Strix Halo; engine harness, step-2 engine vs this one, same
   oldest-first, this one, and "always from row 0"): every pair differs alike, median cos 0.99984-0.99987, 5th
   percentile 0.99945-0.99963, top-1 the same at 95-99% of steps, KL median 5-10e-4. So the old order is not more
   accurate; the decode attention's bf16 running max and corrections are this sensitive to grouping.
+
+## bfp16 KV cache (2026-11-23)
+
+The decode layer (`layer_lm.xclbin`, kernel README "bfp16 KV") reads every finished 16-row chunk of K and V from a
+bfp16 copy (44% fewer bytes) and only the chunk with the newest row as bf16. The bf16 cache stays the source of
+truth: prefill, `get_k_cache` / `get_v_cache` and the state functions read and write it as before.
+
+Where the copy lives: behind the 4 bf16 regions in the same kv buffer (arg 4 of the layer run; no new argument):
+per stream (K01, K23, V01, V23) one 9,216 B unit per chunk (`gemma_npu_sequence::get_kv_bfp16_offset`; stream 4 =
+the buffer's total size). Global layers: `MAX_L / 16` units per stream (+56% on top of the bf16 rows), sliding
+layers: 64. `kv_bf16_elems(layer)` is the bf16 part; every sync or copy that only concerns the rows uses it, so
+states, checkpoints and prefill syncs do not grow.
+
+Who packs, when (`_kv_bfp16_ensure`, called by `set_context_length`, so before every layer run list):
+- the chunk that will get the next row is marked stale (the array reads it as bf16 and writes the row);
+- every other chunk the next run reads packed and that is stale is packed now: its rows are pulled from the device
+  (exact ranged syncs), packed on the host (`gemma_bfp16_pack.hpp`, OpenMP over chunks) and pushed back.
+- In decode `set_context_length` runs under the lm_head run, so the packing (one chunk per layer every 16 tokens)
+  is hidden. After a prefill, a restore or a state write, the first run packs everything stale at once.
+
+What makes chunks stale (`kv_packed_valid`): prefill rows written on the host (`_kv_bfp16_invalidate_positions`),
+`clear_context`, `write_state`, `write_state_kv` (all chunks), `restore` (the sliding rings; global rows below the
+checkpoint did not change, and a chunk above it is the newest chunk, so stale, before it is read packed again),
+`update_max_length` (new global buffers). `checkpoint`, `read_state`, `new_state` only read.
+
+Checked against the 3a engine (eded76ee: bf16 cache, same ring order, its bf16 kernel), gemma3:4b, Strix Halo,
+Performance mode; one process runs six scenarios, each after `clear_context`: logits and tokens byte-identical in
+all of them:
+- 510-token prompt + 514 tokens (context <= 1,024); 1K and 4K prompts + 256 tokens;
+- 1K prompt, 40 tokens, a second 300-token prefill, 60 tokens;
+- 600-token prompt, `checkpoint`, 40 tokens, `restore`, 40 tokens;
+- 700-token prompt, `read_state`, 30 tokens, another request, `write_state`, 30 tokens (replays exactly).
+
+Decode (`forward()`), median of 3 alternating rounds of 128 tokens: 1K 54.60 -> 53.75 ms (-0.85 ms, +1.6%), 4K 56.39
+-> 55.20 ms (-1.19 ms, +2.2%). Prefill time unchanged (1K 1.65 / 1.61 s, 4K 4.90 / 4.86 s, one run each, including
+the packing of the whole prompt).
+
+Seen while testing, not changed (same in the 3a engine): after `restore` the decode does not replay the checkpoint
+decode bit for bit (cos 0.99983 at the first step, greedy tokens differ from step 9). `restore` puts back only the
+sliding rings; the global rows above the checkpoint keep the first pass's K/V, and the attention takes the softmax
+max over all 16 lanes of the newest chunk without a mask, so those rows change the rounding. `write_state` zeroes
+them (`kv_rows_zero`) and replays exactly.

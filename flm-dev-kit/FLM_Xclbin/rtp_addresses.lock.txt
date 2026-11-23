@@ -35,14 +35,14 @@ IS_ATTN_PROJ_BUFFER_5_3 33280
 IS_ATTN_PROJ_BUFFER_5_4 33280
 IS_ATTN_PROJ_BUFFER_5_5 33280
 IS_ATTN_RMS_BUFFERS 54272
-L_attn_kv_core_3_0 33792
-L_attn_kv_core_3_7 33792
-L_attn_kv_core_5_0 33792
-L_attn_kv_core_5_7 33792
-L_attn_qk_core_2_0 9216
-L_attn_qk_core_2_7 9216
-L_attn_qk_core_4_0 9216
-L_attn_qk_core_4_7 9216
+L_attn_kv_core_3_0 50176
+L_attn_kv_core_3_7 50176
+L_attn_kv_core_5_0 50176
+L_attn_kv_core_5_7 50176
+L_attn_qk_core_2_0 20992
+L_attn_qk_core_2_7 20992
+L_attn_qk_core_4_0 20992
+L_attn_qk_core_4_7 20992
 
 [xclbins-Gemma4_12B_QAT_decoding/rtp_addresses.txt]
 RTP_L_attn_kv_core_3_2 14976

@@ -15,14 +15,9 @@ KERNEL_ARGS := -DMODEL_TYPE=${MODEL_TYPE}
 IRON_ARGS := ${MODEL_TYPE}
 
 STUB ?= 0
-KV_BFP16 ?= 0
-BUILD_NAME := $(MODEL_TYPE)$(if $(filter 1,$(KV_BFP16)),_KVB)$(if $(filter 1,$(STUB)),_STUB)
+BUILD_NAME := $(MODEL_TYPE)$(if $(filter 1,$(STUB)),_STUB)
 ifeq ($(STUB),1)
 KERNEL_ARGS += -DFLM_STUB
-endif
-ifeq ($(KV_BFP16),1)
-KERNEL_ARGS += -DKV_BFP16
-IRON_ARGS += kvb
 endif
 
 # Kernel makefile
@@ -37,7 +32,7 @@ include makefiles/host.mk
 # Standalone lm_head test
 include makefiles/test.mk
 
-.PHONY: run all kernel link bitstream txn host test_lm_head test_layer_kv clean clean_all instructions
+.PHONY: run all kernel link bitstream txn host test_lm_head clean clean_all instructions
 all: ${XCLBIN_TARGET} ${INSTS_TARGET} ${HOST_C_TARGET}
 
 clean_all:

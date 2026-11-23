@@ -24,13 +24,3 @@ ${TEST_TARGET}: ${TEST_SRCS}
 
 test_lm_head: ${TEST_TARGET}
 
-# Layer-level A/B of the default and KV_BFP16 builds (host/test_layer_kv.cpp)
-LAYER_KV_TARGET := ${TEST_O_DIR}/test_layer_kv
-LAYER_KV_SRCS := ${HOME_DIR}/host/test_layer_kv.cpp ${FLM_DLL_DIR}/detail/gemma_npu/gemma_npu_sequence.cpp
-LAYER_KV_SRCS += $(wildcard ${FLM_DLL_DIR}/detail/q4nx/*.cpp)
-
-${LAYER_KV_TARGET}: ${LAYER_KV_SRCS} ${FLM_DLL_DIR}/detail/gemma_npu/gemma_bfp16_pack.hpp
-	mkdir -p ${@D}
-	${TEST_CXX} ${TEST_FLAGS} -o $@ ${LAYER_KV_SRCS} ${TEST_LDFLAGS}
-
-test_layer_kv: ${LAYER_KV_TARGET}

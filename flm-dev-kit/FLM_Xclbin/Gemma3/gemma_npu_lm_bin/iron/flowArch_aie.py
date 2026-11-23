@@ -25,7 +25,7 @@ from attn import attn, attn_memtile
 from proj_assemble import proj_assemble
 from utils import dma_port, connect_port
 
-def flow_arch(model_type: str = "GEMMA3_4B", kvb: bool = False):
+def flow_arch(model_type: str = "GEMMA3_4B"):
     dev = aie.AIEDevice.npu2
     total_cols = 8
     total_rows = 4
@@ -81,9 +81,9 @@ def flow_arch(model_type: str = "GEMMA3_4B", kvb: bool = False):
             ctx.data_ty('rope_ty', (DH * 3, 1), dtype)
 
             attn_q_ty = ctx.data_ty('attn_q_ty', (kv_groups, DH), dtype)
-            # kvb: a core K/V buffer holds one head of one packed chunk (4,608 B) or 9 bf16 rows of the newest
-            # chunk; a mem tile buffer one stream's unit (9,216 B) = 9 rows x 2 heads (README "bfp16 KV")
-            kv_rows = 9 if kvb else 16
+            # a core K/V buffer holds one head of one packed chunk (4,608 B) or 9 bf16 rows of the newest chunk;
+            # a mem tile buffer one stream's unit (9,216 B) = 9 rows x 2 heads (README "bfp16 KV")
+            kv_rows = 9
             attn_k_ty = ctx.data_ty('attn_k_ty', (kv_rows, DH), dtype)
             attn_s_ty = ctx.data_ty('attn_s_ty', (kv_groups + 1, 16), dtype) # (2, l) + (1, 16)c
             attn_v_ty = ctx.data_ty('attn_v_ty', (kv_rows, DH), dtype)
@@ -102,7 +102,6 @@ def flow_arch(model_type: str = "GEMMA3_4B", kvb: bool = False):
             ctx.parameter("HIDDEN_SIZE", HIDDEN_SIZE)
             ctx.parameter("w_block_size", w_block_size)
             ctx.parameter("kv_groups", kv_groups)
-            ctx.parameter("kvb", 1 if kvb else 0)
 
 
             # AIE Core Function declarations
@@ -110,12 +109,8 @@ def flow_arch(model_type: str = "GEMMA3_4B", kvb: bool = False):
             ctx.func("rms_residual", [ctx.y_pkt_ty, ctx.x_ty, ctx.x_ty, ctx.w_ty, ctx.w_ty, ctx.x_ty, ctx.x_ty, L_ty])
             ctx.func("gelu", [ctx.hid_ty, ctx.hid_ty, ctx.ug_ty, ctx.ug_ty])
             ctx.func("rope", [ctx.q_ty, ctx.k_ty, ctx.v_ty, ctx.qkv_ty, ctx.rope_ty])
-            if kvb:
-                ctx.func("attn_qk", [attn_q_ty, attn_q_ty, attn_k_ty, attn_k_ty, attn_k_ty, attn_s_ty, attn_s_ty, L_ty])
-                ctx.func("attn_kv", [attn_s_ty, attn_s_ty, attn_v_ty, attn_v_ty, attn_v_ty, attn_o_ty, attn_o_ty, L_ty])
-            else:
-                ctx.func("attn_qk", [attn_q_ty, attn_q_ty, attn_k_ty, attn_k_ty, attn_s_ty, attn_s_ty, L_ty])
-                ctx.func("attn_kv", [attn_s_ty, attn_s_ty, attn_v_ty, attn_v_ty, attn_o_ty, attn_o_ty, L_ty])
+            ctx.func("attn_qk", [attn_q_ty, attn_q_ty, attn_k_ty, attn_k_ty, attn_k_ty, attn_s_ty, attn_s_ty, L_ty])
+            ctx.func("attn_kv", [attn_s_ty, attn_s_ty, attn_v_ty, attn_v_ty, attn_v_ty, attn_o_ty, attn_o_ty, L_ty])
             # rms_residual_core = rms_core
 
             gelu_core = CT[0][6]
@@ -236,10 +231,9 @@ def flow_arch(model_type: str = "GEMMA3_4B", kvb: bool = False):
 
 if __name__ == "__main__":
     model_type = "GEMMA3_4B"
-    if len(sys.argv) not in (2, 3):
-        print("Usage: python flowArch_aie.py <model_type> [kvb], Options: GEMMA3_4B")
+    if len(sys.argv) != 2:
+        print("Usage: python flowArch_aie.py <model_type>, Options: GEMMA3_4B")
         print("Use default model type: GEMMA3_4B")
     else:
         model_type = sys.argv[1]
-    kvb = len(sys.argv) == 3 and sys.argv[2] == "kvb"
-    flow_arch(model_type, kvb)
+    flow_arch(model_type)

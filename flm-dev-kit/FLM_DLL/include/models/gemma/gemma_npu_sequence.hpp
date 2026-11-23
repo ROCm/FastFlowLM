@@ -31,8 +31,8 @@ public:
     /// \brief Generate the layer sequence
     /// \param seq the sequence
     /// \param L the length
-    /// \param kv_bfp16 for the KV_BFP16 build of layer_lm.xclbin: finished chunks read from the bfp16 copy
-    void gen_layer_seq(npu_sequence* seq, const uint32_t L, bool is_sliding_window, bool kv_bfp16 = false);
+    /// \note finished chunks are read from the bfp16 copy behind the bf16 cache (get_kv_bfp16_offset)
+    void gen_layer_seq(npu_sequence* seq, const uint32_t L, bool is_sliding_window);
 
     /// \brief Offset (bf16 elements) of a stream's bfp16 copy in a layer's kv cache buffer; stream 0..3 = K01, K23,
     ///        V01, V23; stream 4 = the buffer's total size with the copy

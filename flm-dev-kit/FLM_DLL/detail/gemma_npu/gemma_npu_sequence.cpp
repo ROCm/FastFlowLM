@@ -201,253 +201,6 @@ void gemma_npu_sequence::Impl::_move_weights(npu_sequence* seq, const size_t Dou
     }
 }
 
-void gemma_npu_sequence::Impl::_move_kv_cache(npu_sequence* seq, const size_t L, bool is_sliding_window){
-
-    uint32_t k01_offset = is_sliding_window ? K01_sliding_offset : K01_offset;
-    uint32_t k23_offset = is_sliding_window ? K23_sliding_offset : K23_offset;
-    uint32_t v01_offset = is_sliding_window ? V01_sliding_offset : V01_offset;
-    uint32_t v23_offset = is_sliding_window ? V23_sliding_offset : V23_offset;
-    if (is_sliding_window){
-        // Past the window the ring is read in whole 16-row chunks, starting at the chunk after the newest row's, so
-        // the cores' key groups are ring chunks (README: "Sliding ring read order").
-        const uint32_t ring_split = (((L - 1) % sliding_window) / L_CHUNK + 1) * L_CHUNK % sliding_window;
-        if (L % sliding_window == 0 || (L > sliding_window && ring_split == 0)){ // the whole ring from row 0
-            const uint32_t data2move = sliding_window * DH * 2;
-            seq->npu_dma_memcpy_nd(
-                sizeof(bf16),
-                kv_cache_arg_idx,
-                MM2S,
-                kv_tiles[0],
-                bd_0,
-                it_channel_0,
-                {0, 0, 0, (uint32_t)k01_offset},
-                {1, 1, 1, data2move},
-                {0, 0, 0, 1},
-                -1, 0, false, aggressive_cache
-            );
-            seq->npu_dma_memcpy_nd(
-                sizeof(bf16),
-                kv_cache_arg_idx,
-                MM2S,
-                kv_tiles[1],
-                bd_0,
-                it_channel_0,
-                {0, 0, 0, (uint32_t)k23_offset},
-                {1, 1, 1, data2move},
-                {0, 0, 0, 1},
-                -1, 0, false, aggressive_cache
-            );
-            seq->npu_dma_memcpy_nd(
-                sizeof(bf16),
-                kv_cache_arg_idx,
-                MM2S,
-                kv_tiles[0],
-                bd_1,
-                it_channel_1,
-                {0, 0, 0, (uint32_t)v01_offset},
-                {1, 1, 1, data2move},
-                {0, 0, 0, 1},
-                -1, 0, false, aggressive_cache
-            );
-
-            seq->npu_dma_memcpy_nd(
-                sizeof(bf16),
-                kv_cache_arg_idx,
-                MM2S,
-                kv_tiles[1],
-                bd_1,
-                it_channel_1,
-                {0, 0, 0, (uint32_t)v23_offset},
-                {1, 1, 1, data2move},
-                {0, 0, 0, 1},
-                -1, 0, false, aggressive_cache
-            );
-            return;
-        }
-        else if (L > sliding_window){ // two phases: ring_split .. end, then 0 .. ring_split
-            uint32_t L_begin = ring_split;
-            uint32_t L_phase_1 = sliding_window - L_begin;
-            uint32_t L_phase_2 = L_begin;
-            uint32_t offset = L_begin * DH * 2;
-            uint32_t data2move_1 = L_phase_1 * DH * 2;
-            uint32_t data2move_2 = L_phase_2 * DH * 2;
-            // phase 1
-            seq->npu_dma_memcpy_nd(
-                sizeof(bf16),
-                kv_cache_arg_idx,
-                MM2S,
-                kv_tiles[0],
-                bd_0,
-                it_channel_0,
-                {0, 0, 0, (uint32_t)k01_offset + offset},
-                {1, 1, 1, data2move_1},
-                {0, 0, 0, 1},
-                -1, 0, false, aggressive_cache
-            );
-            seq->npu_dma_memcpy_nd(
-                sizeof(bf16),
-                kv_cache_arg_idx,
-                MM2S,
-                kv_tiles[1],
-                bd_0,
-                it_channel_0,
-                {0, 0, 0, (uint32_t)k23_offset + offset},
-                {1, 1, 1, data2move_1},
-                {0, 0, 0, 1},
-                -1, 0, false, aggressive_cache
-            );
-            seq->npu_dma_memcpy_nd(
-                sizeof(bf16),
-                kv_cache_arg_idx,
-                MM2S,
-                kv_tiles[0],
-                bd_1,
-                it_channel_1,
-                {0, 0, 0, (uint32_t)v01_offset + offset},
-                {1, 1, 1, data2move_1},
-                {0, 0, 0, 1},
-                -1, 0, false, aggressive_cache
-            );
-
-            seq->npu_dma_memcpy_nd(
-                sizeof(bf16),
-                kv_cache_arg_idx,
-                MM2S,
-                kv_tiles[1],
-                bd_1,
-                it_channel_1,
-                {0, 0, 0, (uint32_t)v23_offset + offset},
-                {1, 1, 1, data2move_1},
-                {0, 0, 0, 1},
-                -1, 0, false, aggressive_cache
-            );
-            // seq->npu_dma_wait(
-            //     kv_tiles[0],
-            //     MM2S,
-            //     it_channel_0
-            // );
-            // seq->npu_dma_wait(
-            //     kv_tiles[0],
-            //     MM2S,
-            //     it_channel_1
-            // );
-            // seq->npu_dma_wait(
-            //     kv_tiles[1],
-            //     MM2S,
-            //     it_channel_0
-            // );
-            // seq->npu_dma_wait(
-            //     kv_tiles[1],
-            //     MM2S,
-            //     it_channel_1
-            // );
-            // phase 2
-            seq->npu_dma_memcpy_nd(
-                sizeof(bf16),
-                kv_cache_arg_idx,
-                MM2S,
-                kv_tiles[0],
-                bd_2,
-                it_channel_0,
-                {0, 0, 0, (uint32_t)k01_offset},
-                {1, 1, 1, data2move_2},
-                {0, 0, 0, 1},
-                -1, 0, false, aggressive_cache
-            );
-            seq->npu_dma_memcpy_nd(
-                sizeof(bf16),
-                kv_cache_arg_idx,
-                MM2S,
-                kv_tiles[1],
-                bd_2,
-                it_channel_0,
-                {0, 0, 0, (uint32_t)k23_offset},
-                {1, 1, 1, data2move_2},
-                {0, 0, 0, 1},
-                -1, 0, false, aggressive_cache
-            );
-            seq->npu_dma_memcpy_nd(
-                sizeof(bf16),
-                kv_cache_arg_idx,
-                MM2S,
-                kv_tiles[0],
-                bd_3,
-                it_channel_1,
-                {0, 0, 0, (uint32_t)v01_offset},
-                {1, 1, 1, data2move_2},
-                {0, 0, 0, 1},
-                -1, 0, false, aggressive_cache
-            );
-
-            seq->npu_dma_memcpy_nd(
-                sizeof(bf16),
-                kv_cache_arg_idx,
-                MM2S,
-                kv_tiles[1],
-                bd_3,
-                it_channel_1,
-                {0, 0, 0, (uint32_t)v23_offset},
-                {1, 1, 1, data2move_2},
-                {0, 0, 0, 1},
-                -1, 0, false, aggressive_cache
-            );
-            return;
-        }
-    }
-    // fallback path, single phase, from zero to L
-    const int L_padded = (L + L_CHUNK - 1) / L_CHUNK * L_CHUNK;
-    const uint32_t data2move = L_padded * DH * 2;
-    seq->npu_dma_memcpy_nd(
-        sizeof(bf16),
-        kv_cache_arg_idx,
-        MM2S,
-        kv_tiles[0],
-        bd_0,
-        it_channel_0,
-        {0, 0, 0, (uint32_t)k01_offset},
-        {1, 1, 1, data2move},
-        {0, 0, 0, 1},
-        -1, 0, false, aggressive_cache
-    );
-    seq->npu_dma_memcpy_nd(
-        sizeof(bf16),
-        kv_cache_arg_idx,
-        MM2S,
-        kv_tiles[1],
-        bd_0,
-        it_channel_0,
-        {0, 0, 0, (uint32_t)k23_offset},
-        {1, 1, 1, data2move},
-        {0, 0, 0, 1},
-        -1, 0, false, aggressive_cache
-    );
-    seq->npu_dma_memcpy_nd(
-        sizeof(bf16),
-        kv_cache_arg_idx,
-        MM2S,
-        kv_tiles[0],
-        bd_1,
-        it_channel_1,
-        {0, 0, 0, (uint32_t)v01_offset},
-        {1, 1, 1, data2move},
-        {0, 0, 0, 1},
-        -1, 0, false, aggressive_cache
-    );
-
-    seq->npu_dma_memcpy_nd(
-        sizeof(bf16),
-        kv_cache_arg_idx,
-        MM2S,
-        kv_tiles[1],
-        bd_1,
-        it_channel_1,
-        {0, 0, 0, (uint32_t)v23_offset},
-        {1, 1, 1, data2move},
-        {0, 0, 0, 1},
-        -1, 0, false, aggressive_cache
-    );
-}
-
 // Finished 16-row chunks the decode layer reads from the bfp16 copy: all but the chunk holding the newest row
 // (README "bfp16 KV cache").
 uint32_t gemma_npu_sequence::Impl::kv_bfp16_packed_chunks(const uint32_t L, bool is_sliding_window) const{
@@ -465,7 +218,9 @@ size_t gemma_npu_sequence::Impl::kv_bfp16_offset(bool is_sliding_window, int str
     return bf16_region + (size_t)stream * (cap / L_CHUNK) * kv_bfp16_unit_elems;
 }
 
-void gemma_npu_sequence::Impl::_move_kv_cache_bfp16(npu_sequence* seq, const size_t L, bool is_sliding_window){
+// Finished chunks from the bfp16 copy, in ring order past the window (after the newest chunk to the end, then from
+// 0), then the newest chunk as bf16 rows (README "bfp16 KV cache").
+void gemma_npu_sequence::Impl::_move_kv_cache(npu_sequence* seq, const size_t L, bool is_sliding_window){
     const bool ring = is_sliding_window && L > sliding_window;
     const uint32_t chunks = (is_sliding_window ? sliding_window : MAX_L) / L_CHUNK;
     const uint32_t newest_row = ring ? (L - 1) % sliding_window : L - 1;
@@ -551,7 +306,7 @@ gemma_npu_sequence::Impl::Impl(LM_Config config, uint32_t MAX_L){
     V23_sliding_offset = 3 * kv_cache_size_sliding / 4;
 }
 
-void gemma_npu_sequence::Impl::gen_layer_seq(npu_sequence* seq, const uint32_t L, bool is_sliding_window, bool kv_bfp16){
+void gemma_npu_sequence::Impl::gen_layer_seq(npu_sequence* seq, const uint32_t L, bool is_sliding_window){
     assert(L <= MAX_L + 1);
     assert(L > 0);
     constexpr size_t CT_lock_address_base = 0x000001F000;
@@ -561,8 +316,8 @@ void gemma_npu_sequence::Impl::gen_layer_seq(npu_sequence* seq, const uint32_t L
 
     seq->npu_preemption(0);
 
-    const uint32_t qk_address = kv_bfp16 ? l_qk_address_kvb : l_qk_address;
-    const uint32_t kv_address = kv_bfp16 ? l_kv_address_kvb : l_kv_address;
+    const uint32_t qk_address = l_qk_address;
+    const uint32_t kv_address = l_kv_address;
     if (is_sliding_window){
         uint32_t L_local;
         if (L <= 1024) {
@@ -583,12 +338,10 @@ void gemma_npu_sequence::Impl::gen_layer_seq(npu_sequence* seq, const uint32_t L
             seq->rtp_write(attn_kv_tiles[i], kv_address, L);
         }
     }
-    if (kv_bfp16){
-        const uint32_t packed_chunks = kv_bfp16_packed_chunks(L, is_sliding_window);
-        for (int i = 0; i < 4; i++){
-            seq->rtp_write(attn_qk_tiles[i], qk_address + sizeof(int32_t), packed_chunks);
-            seq->rtp_write(attn_kv_tiles[i], kv_address + sizeof(int32_t), packed_chunks);
-        }
+    const uint32_t packed_chunks = kv_bfp16_packed_chunks(L, is_sliding_window);
+    for (int i = 0; i < 4; i++){
+        seq->rtp_write(attn_qk_tiles[i], qk_address + sizeof(int32_t), packed_chunks);
+        seq->rtp_write(attn_kv_tiles[i], kv_address + sizeof(int32_t), packed_chunks);
     }
     for (int i = 0; i < 16; i++){
         seq->rtp_write(proj_tiles[i], proj_addr, 1);
@@ -627,12 +380,7 @@ void gemma_npu_sequence::Impl::gen_layer_seq(npu_sequence* seq, const uint32_t L
         -1, 0, true
     );
     _receive_kv_cache(seq, L, is_sliding_window); // also move qkv weights
-    if (kv_bfp16){
-        _move_kv_cache_bfp16(seq, L, is_sliding_window);
-    }
-    else{
-        _move_kv_cache(seq, L, is_sliding_window);
-    }
+    _move_kv_cache(seq, L, is_sliding_window);
 
     seq->npu_dma_memcpy_nd(
         sizeof(bf16),
@@ -870,8 +618,8 @@ gemma_npu_sequence::gemma_npu_sequence(LM_Config config, uint32_t MAX_L){
     this->_impl = new Impl(config, MAX_L);
 }
 
-void gemma_npu_sequence::gen_layer_seq(npu_sequence* seq, const uint32_t L, bool is_sliding_window, bool kv_bfp16){
-    this->_impl->gen_layer_seq(seq, L, is_sliding_window, kv_bfp16);
+void gemma_npu_sequence::gen_layer_seq(npu_sequence* seq, const uint32_t L, bool is_sliding_window){
+    this->_impl->gen_layer_seq(seq, L, is_sliding_window);
 }
 
 size_t gemma_npu_sequence::get_kv_bfp16_offset(bool is_sliding_window, int stream) const{
