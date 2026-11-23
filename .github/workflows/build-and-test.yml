@@ -37,10 +37,11 @@ name: Build and Test
 # src/model_info.json, or a raised flm_min_version), is tested whatever its
 # size: the test jobs get 600 minutes, of which the new models' downloads get
 # up to 420 outside the pr tier's 30-minute budget, and one that does not
-# download fails the job. An oga-hipep entry the change adds or edits, new
-# weights or not, is required the same way in Test Windows HIPEP, beside its
-# models of each family, on the kinds of machine that test changed models
-# (the STX Halo). A change that only touches docs builds and tests nothing;
+# download fails the job. An oga-hipep entry with new weights (added,
+# republished, or moved onto the GPU) is required the same way in Test
+# Windows HIPEP, beside its models of each family, on the kinds of machine
+# that test changed models (the STX Halo); one edited without new weights
+# (a capability, a context length) tests its family's one model instead. A change that only touches docs builds and tests nothing;
 # one only under flm-dev-kit/ runs no product suite of its own, the dev-kit
 # checks (devkit-static), and the dev-kit engine builds (devkit-engines) when
 # it selects the dll area and the kernel builds (devkit-xclbins) when it
@@ -203,6 +204,7 @@ jobs:
       source: ${{ steps.detect.outputs.source }}
       hipep: ${{ steps.detect.outputs.hipep }}
       hipep-machines: ${{ steps.hipep.outputs.machines }}
+      hipep-families: ${{ steps.detect.outputs.hipep-families }}
       new-models: ${{ steps.detect.outputs.new-models }}
       # For the dev-kit jobs. flm-dev-kit/ paths select no product suite,
       # only the portable builds their staged files are tested in
@@ -1351,8 +1353,10 @@ jobs:
   # the change touches their family); the full tier tests every one, where
   # the kind's max-tier allows (the shared runners test the pr tier's models
   # nightly).
-  # The models whose catalog entries the change added or edited
-  # (hipep-models) run too, as required models (--required-models), on the
+  # An oga-hipep entry edited without new weights counts its family as
+  # touched (hipep-families), which runs that family's one model; one with
+  # new weights (hipep-models: added, republished or moved onto the GPU)
+  # runs too, as required models (--required-models), on the
   # kinds whose changed-models allows it (the STX Halo, not the shared
   # runners; every kind that runs when none of those does): they download
   # first, with 420 minutes for all of them, a failure if one does not, and
@@ -1431,7 +1435,7 @@ jobs:
           label: windows-hipep-${{ matrix.id }}
           tier: ${{ matrix.tier }}
           suites: chat,api,shutdown
-          families: ${{ needs.changes.outputs.families }}
+          families: ${{ needs.changes.outputs.hipep-families }}
           models: ${{ inputs.models }}
           required-models: ${{ matrix.changed-models }}
           backend: oga-hipep

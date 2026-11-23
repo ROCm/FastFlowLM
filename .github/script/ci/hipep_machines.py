@@ -24,8 +24,9 @@ by a job of its own:
                    default). A run of a higher tier runs this one there, so
                    runners that cannot hold every model, or that the NPU
                    nightly needs, test the pr tier's models nightly
-  changed-models   false leaves the models whose catalog entries the change
-                   added or edited to the kinds that test them (true, the
+  changed-models   false leaves the models the change gives new weights
+                   (added, republished or moved onto the GPU) to the kinds
+                   that test them (true, the
                    default): a change to many entries downloads each new
                    revision within the job, which would hold a shared runner
                    for hours. The job requires them (npu_test
@@ -154,7 +155,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     changed = args.changed_models.strip()
     if changed and not chosen:
         print(f"::warning::no HIPEP machine runs, so nothing tests the oga-hipep models this "
-              f"change adds or edits: {changed}")
+              f"change gives new weights: {changed}")
     elif changed and not any(m["changed-models"] for m in chosen):
         print(f"::warning::no HIPEP machine that runs tests changed models, so "
               f"{', '.join(m['id'] for m in chosen)} test{'s' if len(chosen) == 1 else ''} "

@@ -16,7 +16,8 @@ change touches them), and every one on the full tier.
 
 Every tier also tests the models the change requires (--required-models):
 for the NPU, the entries it adds or whose weights it republishes; for a GPU
-backend, the entries it adds or edits.
+backend, the entries it adds, republishes or moves onto it; an entry it
+only edits counts its family as touched (--families) instead.
 """
 
 from __future__ import annotations
@@ -246,7 +247,7 @@ class Plan:
         self.only_models = only_models
         self.backend = backend  # empty: the NPU backends
         # Models the change adds (changes.py new_models), or for a GPU backend
-        # run the entries it adds or edits (hipep_models): tested on every
+        # run the entries with new weights (hipep_models): tested on every
         # tier, even past --models, and downloaded whatever their size.
         self.required = list(required or [])
         # Models no suite tests: ones the run could not pull (Context.pull), or

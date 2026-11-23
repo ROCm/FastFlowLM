@@ -27,7 +27,7 @@ python3 -m npu_test --flm-bin flm --label dev --suites chat --models qwen3:0.6b,
 | `--backend oga-hipep` | Test this GPU backend's models instead of the NPU models: one per family, every one on the `full` tier |
 | `--max-model-gb GB` | Skip the models larger than this (catalog size), which the runner's memory cannot hold, `--required-models` too (default 0, no limit) |
 | `--families a,b` | Families a change touches; the pr tier tests all their models (with `--backend`, the model of each family it tests only when touched) |
-| `--required-models a,b` | Models a change adds (with `--backend`, adds or edits): tested on every tier (even past `--models`), downloaded whatever their size, and a failure if the package does not list them or they do not download |
+| `--required-models a,b` | Models a change adds (with `--backend`, adds, republishes or moves onto it): tested on every tier (even past `--models`), downloaded whatever their size, and a failure if the package does not list them or they do not download |
 | `--required-pull-budget MINUTES` | Time for downloading the `--required-models`, all together (default 420) |
 | `--asr-full` | The whole ASR evaluation set on the pr tier |
 | `--asr-expected-key KEY` | Check WER against this row of `assets/asr_eval/expected.json` |
@@ -47,7 +47,7 @@ untested on that runner. The `full` tier and `--backend` runs wait for every
 download.
 The models a change adds or republishes (`--required-models`, from
 `changes.py`'s `new_models` in CI; for Test Windows HIPEP its `hipep_models`,
-the oga-hipep entries the change adds or edits) are pulled first and outside
+the oga-hipep entries with weights no runner has yet) are pulled first and outside
 that budget, with 7 hours for all of them (`--required-pull-budget MINUTES`),
 so a new model is tested however large it is; one left undownloaded is a
 failure. Build and Test gives its test jobs 600 minutes when a change adds
@@ -65,7 +65,7 @@ says so. A new revision in the catalog, or a file changed on the runner, pulls
 it again, which downloads what changed and verifies the rest. An entry pinned
 to a branch rather than a revision is pulled every time. Delete a stamp, or
 the folder, to have the next run verify again. A required model is pulled
-whatever its stamp says: the change adds or edits it.
+whatever its stamp says: the change adds or republishes it.
 
 A request that times out restarts that suite's server, since flm keeps working
 on a request its client gave up on, and the model's remaining cases are
@@ -94,8 +94,11 @@ frontend and features, and differ only in weights. That is the newest Qwen
 12B on its own frontend (`gemma4-12b`), gpt-oss (69 GB) and the families on
 the TemplateChat frontend (`laguna`, `nemotron-h`; 18 GB each)
 run there only when the change touches their family (`--families`).
-The run also tests the models whose catalog entries the change added or
-edited (`changes.py`'s `hipep_models`, passed as `--required-models`), on
+An oga-hipep entry the change edits without new weights (a capability, a
+context length) counts its family as touched (`changes.py`'s
+`hipep_families`, passed as `--families`), so that family's one model runs.
+The run also tests the models with new weights: added, republished or moved
+onto the GPU (`changes.py`'s `hipep_models`, passed as `--required-models`), on
 the kinds of machine that test them (see [HIPEP machines](#hipep-machines)).
 The `full` tier tests every oga-hipep model (4 to 124 GB each, about 500 GB
 in all).
@@ -133,8 +136,8 @@ memory dedicated to each GPU, which Windows leaves out of its own figure
 
 - `stx-halo`: an STX Halo of its own (xconucstrhalo86), labelled `oga-hipep`
   and `stx-halo`, which no NPU job asks for, so it runs beside the NPU tests.
-  It tests every model nightly, and on a pull request also the models whose
-  catalog entries it added or edited, as required models, with 10 hours
+  It tests every model nightly, and on a pull request also the models it
+  gives new weights (added, republished or moved onto the GPU), as required models, with 10 hours
   instead of 2: their new revisions download within the job (7 hours for
   all of them, a failure if one does not), and a change may add or re-pin
   many.
@@ -169,7 +172,7 @@ runner: the nightly's every-model job would then land on it.
 | `enabled` | `false` leaves the kind out of every run |
 | `max-model-gb` | The largest model, by catalog size, its memory holds; larger ones are skipped there, each a `setup`/`size` case (0: no limit) |
 | `max-tier` | The highest tier its job runs (`install`, `pr` or `full`, the default); a run of a higher tier runs this one there |
-| `changed-models` | `false` leaves the models whose catalog entries the change added or edited to the kinds that test them (`true`, the default), whose job requires them (`--required-models`) and gets 600 minutes; when no kind that runs is `true`, every kind that runs tests them |
+| `changed-models` | `false` leaves the models the change gives new weights (added, republished or moved onto the GPU) to the kinds that test them (`true`, the default), whose job requires them (`--required-models`) and gets 600 minutes; when no kind that runs is `true`, every kind that runs tests them |
 
 A runner of a kind of its own (xconucstrhalo86 for `stx-halo`):
 
