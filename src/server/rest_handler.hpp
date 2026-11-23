@@ -132,6 +132,8 @@ private:
     void ensure_decision_model_loaded(const std::string& model_tag);
     void configure_chat_engine_parameters(const json& options, const json& request,
                                           std::optional<bool> nested_think = std::nullopt);
+    ///@brief Split the text /api/chat and /api/generate generated into reasoning and answer, as the OpenAI route does
+    chat_msg parse_ollama_output(const std::string& response_text, const chat_meta_info_t& meta_info);
     json build_nstream_response(const std::string& response_text, chat_meta_info_t& meta_info,
                                 const chat_parse_options& parse_options,
                                 chat_logprobs_aligner* logprobs = nullptr);

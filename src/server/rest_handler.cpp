@@ -1021,6 +1021,17 @@ void RestHandler::configure_chat_engine_parameters(const json& options, const js
     }
 }
 
+chat_msg RestHandler::parse_ollama_output(const std::string& response_text, const chat_meta_info_t& meta_info) {
+    // Ollama's routes carry no tools here (WP-21): tool markup stays in the content
+    chat_parse_options options;
+    options.parse_tool_calls = false;
+    const chat_format_spec& spec = auto_chat_engine->get_chat_format();
+    return chat_parse(spec,
+                      chat_format_prefill(spec, meta_info.prompt_tail, meta_info.continue_final_message,
+                                          options.parse_tool_calls) + response_text,
+                      false, options);
+}
+
 json RestHandler::build_nstream_response(const std::string& response_text, chat_meta_info_t& meta_info,
                                          const chat_parse_options& parse_options,
                                          chat_logprobs_aligner* logprobs) {
@@ -1173,7 +1184,7 @@ void RestHandler::handle_generate(const json& request,
         if (stream) {
             // Streaming response using streaming_ostream
             auto total_start_time = time_utils::now();
-            streaming_ostream ostream(model, send_streaming_response, false);
+            streaming_ostream ostream(model, auto_chat_engine.get(), send_streaming_response, false);
             uniformed_input.prompt = prompt;
             try {
                 bool success = auto_chat_engine->insert(meta_info, uniformed_input, [&] { return cancellation_token && cancellation_token->cancelled(); });
@@ -1189,6 +1200,7 @@ void RestHandler::handle_generate(const json& request,
                 this->auto_chat_engine->clear_context();
                 return;
             }
+            ostream.start(meta_info);
             try {
                 auto_chat_engine->generate(meta_info, length_limit, ostream, [&] { return cancellation_token && cancellation_token->cancelled(); });
             } catch (const std::exception& e) {
@@ -1231,11 +1243,11 @@ void RestHandler::handle_generate(const json& request,
                 this->auto_chat_engine->clear_context();
                 return;
             }
-            std::string response_text = ss.str();
+            const chat_msg parsed = parse_ollama_output(ss.str(), meta_info);
             auto history = this->auto_chat_engine->get_history();
             json response = {
                 {"model", model},
-                {"response", response_text},
+                {"response", parsed.content},
                 {"context", history.second},
                 {"done", true},
                 {"prompt_eval_count", meta_info.prompt_tokens},
@@ -1246,6 +1258,7 @@ void RestHandler::handle_generate(const json& request,
                 {"eval_duration", meta_info.decoding_duration},
                 {"done_reason", stop_reason_to_string(meta_info.stop_reason)}
             };
+            if (!parsed.reasoning.empty()) response["thinking"] = parsed.reasoning;
             // std::cout << "history: " << history.first << std::endl;
             log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
             send_response(response);
@@ -1304,7 +1317,7 @@ void RestHandler::handle_chat(const json& request,
         if (stream) {
             // Streaming response using streaming_ostream
             auto total_start_time = time_utils::now();
-            streaming_ostream ostream(model, send_streaming_response, true);  // true for chat format
+            streaming_ostream ostream(model, auto_chat_engine.get(), send_streaming_response, true);  // true for chat format
             uniformed_input.messages = messages;
             try {
                 bool success = auto_chat_engine->insert(meta_info, uniformed_input, [&] { return cancellation_token && cancellation_token->cancelled(); });
@@ -1320,6 +1333,7 @@ void RestHandler::handle_chat(const json& request,
                 this->auto_chat_engine->clear_context();
                 return;
             }
+            ostream.start(meta_info);
             try {
                 auto_chat_engine->generate(meta_info, length_limit, ostream,
                     [&] { return cancellation_token && cancellation_token->cancelled(); });
@@ -1360,11 +1374,12 @@ void RestHandler::handle_chat(const json& request,
             auto total_end_time = time_utils::now();
             meta_info.total_duration = (uint64_t)time_utils::duration_ns(total_start_time, total_end_time).first;
             
+            const chat_msg parsed = parse_ollama_output(response_text, meta_info);
             json response = {
                 {"model", model},
                 {"message", {
                     {"role", "assistant"},
-                    {"content", response_text},
+                    {"content", parsed.content},
                     {"images", nullptr}
                 }},
                 {"done", true},
@@ -1376,6 +1391,7 @@ void RestHandler::handle_chat(const json& request,
                 {"eval_duration", meta_info.decoding_duration},
                 {"done_reason", stop_reason_to_string(meta_info.stop_reason)}
             };
+            if (!parsed.reasoning.empty()) response["message"]["thinking"] = parsed.reasoning;
             log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
             send_response(response);
 

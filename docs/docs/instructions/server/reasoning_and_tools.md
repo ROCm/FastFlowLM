@@ -259,6 +259,10 @@ What changes when thinking is off:
 - With [constrained decoding](https://fastflowlm.com/docs/instructions/server/structured_output/) active (`tool_choice`, `response_format`), the grammar leaves no room for a reasoning block either, so the model can't slip into one.
 - Models that can't switch thinking off (for example `qwen3-tk`, `lfm2.5-tk`, `deepseek-r1`) keep reasoning. Their thinking still arrives in `reasoning_content`, never in `content`.
 
+### Ollama routes
+
+`/api/chat` and `/api/generate` split the reasoning the same way. With `think: true`, a thinking model's reasoning arrives in `message.thinking` (`/api/chat`) or `thinking` (`/api/generate`), and `message.content` / `response` carry the answer without `<think>` tags, streamed or not. A packet without reasoning has no `thinking` key. The split follows the model's own output format, not its name. Tool calls are not parsed on these routes: a tool-call block stays in `content`.
+
 ---
 
 ## 💭 Use Case: Show the Model's Thinking Live

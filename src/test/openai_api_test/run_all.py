@@ -18,6 +18,7 @@ import test_continue_final_message
 import test_errors
 import test_http_safety
 import test_log_privacy
+import test_ollama_thinking
 import test_images
 import test_logprobs
 import test_reasoning
@@ -28,7 +29,7 @@ import test_tool_calls
 
 MODULES = [test_response_shape, test_reasoning, test_tool_calls, test_response_format, test_logprobs, test_sampling,
            test_continue_final_message, test_errors, test_images, test_connections, test_http_safety,
-           test_log_privacy]
+           test_log_privacy, test_ollama_thinking]
 
 
 def main() -> None:
