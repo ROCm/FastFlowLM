@@ -45,6 +45,13 @@ inputs:
     description: Comma-separated families whose engines to overlay (changes.py devkit-families; every family overlays every engine).
     required: false
     default: ""
+  engines:
+    description: >
+      engines.json choosing the engines to overlay, relative to the
+      workspace; empty for the checkout's flm-dev-kit/FLM_DLL/engines.json.
+      A dispatch benching an earlier run passes that run's commit's.
+    required: false
+    default: ""
   new-models:
     description: Comma-separated models the change adds (changes.py new-models), for the test selection outputs.
     required: false
@@ -171,6 +178,7 @@ runs:
         DEVKIT_XCLBIN_MODELS: ${{ inputs.xclbin-models || '[]' }}
         FAMILIES: ${{ inputs.families }}
         NEW_MODELS: ${{ inputs.new-models }}
+        ENGINES: ${{ inputs.engines }}
         TARGET_OS: ${{ inputs.os }}
         RUNTIME: ${{ inputs.runtime }}
       run: |
@@ -184,6 +192,7 @@ runs:
               --github-output)
         [ -n "${LIBS}" ] && args+=(--libs "${GITHUB_WORKSPACE}/devkit-libs")
         [ -n "${XCLBINS}" ] && args+=(--xclbins "${GITHUB_WORKSPACE}/devkit-xclbins")
+        [ -n "${ENGINES}" ] && args+=(--engines "${ENGINES}")
         python3 .github/script/ci/devkit_overlay.py "${args[@]}"
         echo "root=${root}" >> "$GITHUB_OUTPUT"
 
@@ -199,6 +208,7 @@ runs:
         DEVKIT_XCLBIN_MODELS: ${{ inputs.xclbin-models || '[]' }}
         FAMILIES: ${{ inputs.families }}
         NEW_MODELS: ${{ inputs.new-models }}
+        ENGINES: ${{ inputs.engines }}
         TARGET_OS: ${{ inputs.os }}
         RUNTIME: ${{ inputs.runtime }}
       run: |
@@ -213,6 +223,7 @@ runs:
                      "--families=$env:FAMILIES", "--new-models=$env:NEW_MODELS", '--github-output')
         if ($env:LIBS) { $cmdArgs += "--libs=$(Join-Path $env:GITHUB_WORKSPACE 'devkit-libs')" }
         if ($env:XCLBINS) { $cmdArgs += "--xclbins=$(Join-Path $env:GITHUB_WORKSPACE 'devkit-xclbins')" }
+        if ($env:ENGINES) { $cmdArgs += "--engines=$env:ENGINES" }
         $env:PYTHONUTF8 = '1'
         & python $cmdArgs
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

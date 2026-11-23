@@ -14,6 +14,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -573,27 +574,30 @@ class Resolve(unittest.TestCase):
         self.assertEqual(resolve.engines_result(ok + [job("devkit-engines / x", None)]), "failure")
         self.assertEqual(resolve.engines_result([job("devkit-engines-other", "failure")] + ok), "success")
 
-    def find_build(self, *, run_obj, artifacts, jobs, run_id="5"):
-        """cmd_find_build with the GitHub API stubbed; (rc, outputs, plan or None)."""
-        saved = resolve.api_get, resolve.list_artifacts, resolve.list_jobs
+    def find_build(self, *, run_obj, artifacts, jobs, run_id="5", ref="refs/heads/feature",
+                   ancestors=(SHA_B,)):
+        """cmd_find_build with the GitHub API and git stubbed (ancestors: the
+        commits before SHA_A, the dispatched one); (rc, outputs, plan or None)."""
+        saved = resolve.api_get, resolve.list_artifacts, resolve.list_jobs, resolve.is_ancestor
         resolve.api_get = lambda path, params=None: (run_obj if path.endswith(f"/runs/{run_id}")
                                                      else {"workflow_runs": [run_obj]})
         resolve.list_artifacts = lambda repo, rid: artifacts
         resolve.list_jobs = lambda repo, rid: jobs
+        resolve.is_ancestor = lambda root, a, b: b == SHA_A and (a == SHA_A or a in ancestors)
         try:
             with tempfile.TemporaryDirectory() as d:
                 out, plan = os.path.join(d, "out"), os.path.join(d, "plan.json")
                 os.environ["GITHUB_OUTPUT"] = out
                 try:
                     rc = quiet(resolve.main, ["find-build", "--repo", self.REPO, "--head-sha", SHA_A,
-                                              "--run-id", run_id, "--wait-minutes", "0", "--poll-seconds", "0",
+                                              "--ref", ref, "--run-id", run_id, "--wait-minutes", "0", "--poll-seconds", "0",
                                               "--plan-out", plan, "--artifacts-out", os.path.join(d, "a.json")])
                 finally:
                     del os.environ["GITHUB_OUTPUT"]
                 values = dict(line.split("=", 1) for line in Path(out).read_text(encoding="utf-8").splitlines())
                 written = json.loads(Path(plan).read_text(encoding="utf-8")) if Path(plan).exists() else None
         finally:
-            resolve.api_get, resolve.list_artifacts, resolve.list_jobs = saved
+            resolve.api_get, resolve.list_artifacts, resolve.list_jobs, resolve.is_ancestor = saved
         return rc, values, written
 
     def test_find_build(self):
@@ -622,7 +626,75 @@ class Resolve(unittest.TestCase):
         rc, out, plan = self.find_build(run_obj=run(status="in_progress"), artifacts=arts, jobs=built)
         self.assertEqual((out["ok"], plan), ("false", None))
 
-    def plan_cli(self, plan, *extra, changed=False):
+    def test_find_build_earlier_push_run_on_main(self):
+        # main moved on (SHA_B, then SHA_A dispatched): SHA_B's push run.
+        arts = [{"id": 1, "name": "portable"}, {"id": 2, "name": "devkit-libs-lin-xrt"},
+                {"id": 3, "name": f"fastflowlm-windows-{SHA_B}"}, {"id": 4, "name": "devkit-xclbins"}]
+        built = [{"name": "devkit-engines / Build", "conclusion": "success"}]
+        main_run = run(event="push", head_branch="main", head_sha=SHA_B)
+        for conclusion in ("success", "failure"):
+            with self.subTest(conclusion=conclusion):
+                rc, out, plan = self.find_build(run_obj={**main_run, "conclusion": conclusion}, artifacts=arts,
+                                                jobs=built, ref="refs/heads/main")
+                self.assertEqual((rc, out["ok"], out["run-id"], out["head-sha"]), (0, "true", "5", SHA_B))
+                self.assertIn(SHA_B[:10], out["reason"])
+                # The plan names the run's commit, not the dispatched one.
+                plan = resolve.parse_plan(plan)
+                self.assertEqual(plan["head_sha"], SHA_B)
+                self.assertEqual(plan["builds"]["win-xrt"]["package"], f"fastflowlm-windows-{SHA_B}")
+        # Its own commit's push run on main is fine too.
+        rc, out, plan = self.find_build(run_obj={**main_run, "head_sha": SHA_A}, artifacts=arts, jobs=built,
+                                        ref="refs/heads/main")
+        self.assertEqual((out["ok"], out["head-sha"]), ("true", SHA_A))
+        refused = {
+            # The same run, dispatched on another branch: exactly this commit only.
+            "another branch": dict(run_obj=main_run, ref="refs/heads/feature"),
+            # Not an ancestor of the dispatched commit (a later or unrelated one).
+            "not an ancestor": dict(run_obj=main_run, ref="refs/heads/main", ancestors=()),
+            # Not a push run on main: a pull request's, a branch's push, a dispatch's.
+            "pull request": dict(run_obj={**main_run, "event": "pull_request"}, ref="refs/heads/main"),
+            "branch push": dict(run_obj={**main_run, "head_branch": "feature"}, ref="refs/heads/main"),
+            "dispatch": dict(run_obj={**main_run, "event": "workflow_dispatch"}, ref="refs/heads/main"),
+            "fork": dict(run_obj={**main_run, "head_repository": {"full_name": "fork/FastFlowLM"}},
+                         ref="refs/heads/main"),
+            "other workflow": dict(run_obj={**main_run, "path": ".github/workflows/evil.yml"},
+                                   ref="refs/heads/main"),
+        }
+        for why, kw in refused.items():
+            with self.subTest(why=why):
+                rc, out, plan = self.find_build(artifacts=arts, jobs=built, **kw)
+                self.assertEqual((rc, out["ok"], plan), (0, "false", None))
+                self.assertIn("is not this repository's Build and Test run", out["reason"])
+        # Still strict about how the run ended and what it holds.
+        rc, out, plan = self.find_build(run_obj={**main_run, "conclusion": "cancelled"}, artifacts=arts,
+                                        jobs=built, ref="refs/heads/main")
+        self.assertEqual((out["ok"], plan), ("false", None))
+        rc, out, plan = self.find_build(run_obj=main_run, artifacts=arts[:1], ref="refs/heads/main",
+                                        jobs=[{"name": "devkit-engines", "conclusion": "skipped"}])
+        self.assertEqual((out["ok"], plan), ("false", None))
+        self.assertIn("no dev-kit engines or kernels", out["reason"])
+        # Without a run id only a run of exactly this commit is taken.
+        rc, out, plan = self.find_build(run_obj=main_run, artifacts=arts, jobs=built, run_id="",
+                                        ref="refs/heads/main")
+        self.assertEqual((out["ok"], plan), ("false", None))
+
+    def test_is_ancestor(self):
+        with tempfile.TemporaryDirectory() as d:
+            def git(*args):
+                return subprocess.run(["git", "-C", d, "-c", "user.name=t", "-c", "user.email=t@example.com",
+                                       "-c", "commit.gpgsign=false", *args],
+                                      capture_output=True, text=True, check=True).stdout.strip()
+            git("init", "-q", "-b", "main")
+            git("commit", "-q", "--allow-empty", "-m", "a")
+            first = git("rev-parse", "HEAD")
+            git("commit", "-q", "--allow-empty", "-m", "b")
+            second = git("rev-parse", "HEAD")
+            self.assertTrue(resolve.is_ancestor(Path(d), first, second))
+            self.assertTrue(resolve.is_ancestor(Path(d), second, second))
+            self.assertFalse(resolve.is_ancestor(Path(d), second, first))
+            self.assertFalse(resolve.is_ancestor(Path(d), SHA_B, second))
+
+    def plan_cli(self, plan, *extra, changed=False, rc=0):
         """cmd_plan with source_changed stubbed; its outputs."""
         saved = resolve.source_changed
         calls = []
@@ -636,7 +708,7 @@ class Resolve(unittest.TestCase):
                 os.environ["GITHUB_OUTPUT"] = out
                 try:
                     self.assertEqual(quiet(resolve.main, ["plan", "--plan", path, "--runtimes", "lin-xrt",
-                                                          "--baseline", base, *extra]), 0)
+                                                          "--baseline", base, *extra]), rc)
                 finally:
                     del os.environ["GITHUB_OUTPUT"]
                 values = dict(line.split("=", 1) for line in Path(out).read_text(encoding="utf-8").splitlines())
@@ -646,6 +718,15 @@ class Resolve(unittest.TestCase):
         return values
 
     def test_plan_baseline_gate(self):
+        # A dispatch reads the benched commit's maps; SHA_A's are this checkout's here.
+        real = resolve.load_maps
+        resolve.load_maps = lambda root, ref="": real(root)
+        try:
+            self.check_plan_baseline_gate()
+        finally:
+            resolve.load_maps = real
+
+    def check_plan_baseline_gate(self):
         index = resolve.artifact_index([{"id": 1, "name": "portable"}, {"id": 2, "name": "devkit-libs-lin-xrt"}])
         plan = resolve.plan_from_artifacts(index, SHA_A, "success")
         nightly = resolve.write_plan(head_sha=SHA_A, package_sha=SHA_A, engines="success",
@@ -732,6 +813,70 @@ class Resolve(unittest.TestCase):
             self.assertIn("nova:1b", {e["model"] for e in json.loads(v["matrix"])})
         finally:
             resolve.load_maps = real
+
+    def test_dispatch_selects_from_the_benched_runs_maps(self):
+        # On main a dispatch may bench an earlier push run (SHA_A) while the
+        # checkout is the dispatched commit, whose maps differ: the selection
+        # and the engines overlaid are the benched commit's.
+        index = resolve.artifact_index([{"id": 1, "name": "portable"}, {"id": 2, "name": "devkit-libs-lin-xrt"}])
+        plan = resolve.plan_from_artifacts(index, SHA_A, "success")
+        real, refs = resolve.load_maps, []
+        head = self.head_maps_with_new_model()
+
+        def stub(root, ref=""):
+            refs.append(ref)
+            return head if ref == SHA_A else real(root)
+        resolve.load_maps = stub
+        try:
+            v = self.plan_cli(plan, "--mode", "dispatch", "--models", "nova:1b")
+        finally:
+            resolve.load_maps = real
+        self.assertEqual(refs, [SHA_A])
+        self.assertEqual(v["head-sha"], SHA_A)
+        self.assertEqual({e["model"] for e in json.loads(v["matrix"])}, {"nova:1b"})
+
+    def test_dispatch_never_selects_from_another_commits_maps(self):
+        index = resolve.artifact_index([{"id": 1, "name": "portable"}, {"id": 2, "name": "devkit-libs-lin-xrt"}])
+        plan = resolve.plan_from_artifacts(index, SHA_A, "success")
+        real, refs = resolve.load_maps, []
+
+        def stub(root, ref=""):
+            refs.append(ref)
+            if ref:
+                raise OSError("not fetched")
+            return real(root)
+        resolve.load_maps = stub
+        try:
+            v = self.plan_cli(plan, "--mode", "dispatch", rc=1)
+        finally:
+            resolve.load_maps = real
+        self.assertEqual(refs, [SHA_A])
+        self.assertEqual(v["bench"], "false")
+        self.assertIn(SHA_A[:10], v["reason"])
+
+    def test_bench_overlays_the_benched_runs_engines(self):
+        # The overlay's engines.json is the benched commit's on a dispatch:
+        # resolve reads it with git show and uploads it, and the bench job
+        # downloads it. No bench job checks out a computed commit (a checkout
+        # of needs.resolve.outputs.head-sha there is what code scanning flags
+        # as cache poisoning).
+        text = workflow("devkit-bench.yml")
+        resolve_job = text.split("\n  resolve:\n", 1)[1].split("\n  npu-gate:\n", 1)[0]
+        read = resolve_job.split("- name: Engine map of the benched commit\n", 1)[1].split("\n\n")[0]
+        self.assertIn("git show \"${HEAD_SHA}:flm-dev-kit/FLM_DLL/engines.json\"", read)
+        self.assertIn("HEAD_SHA: ${{ steps.plan.outputs.head-sha }}", read)
+        self.assertIn("name: devkit-bench-engines", resolve_job)
+        bench = text.split("\n  bench:\n", 1)[1].split("\n  report:\n", 1)[0]
+        download = bench.split("- name: Download the benched commit's engine map\n", 1)[1].split("\n\n")[0]
+        self.assertIn("name: devkit-bench-engines", download)
+        self.assertIn("if: ${{ !inputs.mode }}", download)
+        self.assertNotIn("needs.resolve.outputs.head-sha", bench.replace(
+            "head-sha: ${{ needs.resolve.outputs.head-sha }}", ""))
+        overlay = bench.split("- name: Overlay\n", 1)[1].split("\n\n")[0]
+        self.assertIn("engines: ${{ !inputs.mode && 'bench-run/engines.json' || '' }}", overlay)
+        action = (REPO / ".github/actions/devkit-overlay-package/action.yml").read_text(encoding="utf-8")
+        self.assertIn('args+=(--engines "${ENGINES}")', action)
+        self.assertIn('$cmdArgs += "--engines=$env:ENGINES"', action)
 
     def test_unreadable_head_maps_fall_back_to_the_base(self):
         plan = resolve.write_plan(head_sha=SHA_A, package_sha=SHA_B, engines="success", families="qwen3",
@@ -928,6 +1073,13 @@ class Workflows(unittest.TestCase):
         for step in ("Upload the summary", "Upload the baseline"):
             block = bench.split(f"- name: {step}\n", 1)[1].split("\n\n")[0]
             self.assertIn("overwrite: true", block, step)
+
+    def test_dispatch_ancestor_check_has_the_history(self):
+        # find-build on main checks ancestry in the resolve job's checkout.
+        job = workflow("devkit-bench.yml").split("\n  resolve:\n", 1)[1].split("\n  npu-gate:\n", 1)[0]
+        self.assertIn('--ref "${GITHUB_REF}"', job)
+        checkout = job.split("- name: Checkout\n", 1)[1].split("\n\n")[0]
+        self.assertIn("fetch-depth: 0", checkout)
 
     def test_bench_workflow_has_no_secrets_or_writes(self):
         text = workflow("devkit-bench.yml")

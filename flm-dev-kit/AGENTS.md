@@ -151,7 +151,10 @@ accuracy. Do not invent a `make test` or claim tests pass.
   comment; any bench failure other than the accuracy hard gate (perf, a pull, a timeout,
   infrastructure) warns; only a model failing that gate (acc_common: no predictions, or too many
   unanswered) fails the required check, which therefore waits for the benches. A manual dispatch of
-  that workflow re-benches an earlier Build and Test run: it benches by default (force), and without
+  that workflow re-benches an earlier Build and Test run (`build-run`, of the dispatched commit; a
+  dispatch on main may also name the push run on main of an earlier commit of main, whose commit is
+  then the one benched and reported, and whose catalog, `engines.json` and `kernel_assignment.json`
+  select the models and the engines overlaid): it benches by default (force), and without
   `models` takes the nightly's rotation, so name the models to re-bench a pull request's. The full
   refresh benches every benchable model on the four runtimes and reports only its own numbers.
 
@@ -176,7 +179,9 @@ as a *swap commit*.
    allowed being the *Dev-kit swap pending* step; a failed bench job does not count unless a model
    failed the accuracy hard gate, which fails `summary`'s *Dev-kit checks*; the product test job of every system and runtime it staged files into passed;
    and no commit on main since the run's base touches `FLM_DLL/`, `FLM_Xclbin/`, `../src/lib/` or
-   `../src/xclbins/`: otherwise merge main and let CI run again), downloads the staged files, checks
+   `../src/xclbins/` (documentation under `FLM_DLL/` and `FLM_Xclbin/`, what `changes.py`
+   `NON_CODE` calls non-code such as `*.md`, does not count; `devkit_swap.py` keeps a copy pinned equal
+   by its tests, so a pull request's `changes.py` cannot widen it): otherwise merge main and let CI run again), downloads the staged files, checks
    every SHA-256 against the manifests, writes them and makes one commit with the trailers
    `Devkit-Swap-Run: <run id>` and `Devkit-Swap-Tested: <tested sha>`. It does not push. The dev-kit
    artifacts are kept 7 days: once they expire, re-run the workflow.

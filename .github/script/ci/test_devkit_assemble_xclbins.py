@@ -69,7 +69,7 @@ class Assemble(unittest.TestCase):
         # No xclbin built (m:9b), and ambiguous (m:amb): nothing for them.
         self.assertFalse((out / "M-9B").exists())
         self.assertFalse((out / "M-AMB").exists())
-        self.assertEqual(sorted(str(p.relative_to(out)) for p in out.rglob("*") if p.is_file()), [
+        self.assertEqual(sorted(p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file()), [
             "M-1B/dequant.xclbin", "M-1B/layer.xclbin", "M-3B/dequant.xclbin",
             "M-3B/vision_mm_a.xclbin", "M-3B/vision_mm_b.xclbin"])
 
