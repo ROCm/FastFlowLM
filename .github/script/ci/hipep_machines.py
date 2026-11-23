@@ -147,9 +147,9 @@ def tested_models(sizes: dict[str, tuple[str, float]], families: set, models: li
     for family in sorted({fam for fam, _ in sizes.values()}):
         if family in PR_GPU_WHEN_TOUCHED and family not in families:
             continue
-        default = min((m for m, (fam, _) in sizes.items() if fam == family),
-                      key=lambda m: (sizes[m][1], m))
-        picked.append(PR_GPU.get(family, default))
+        members = [m for m, (fam, _) in sizes.items() if fam == family]
+        pick = PR_GPU.get(family)
+        picked.append(pick if pick in members else min(members, key=lambda m: (sizes[m][1], m)))
     return picked
 
 

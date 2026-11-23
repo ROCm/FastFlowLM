@@ -33,8 +33,9 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
   hipep_models
              comma-separated oga-hipep entries (model ids) with weights no
              runner has yet: entries the change adds, whose download fields
-             (DOWNLOAD_FIELDS) or model_info.json hashes it changes, or that
-             it moves onto the oga-hipep backend. Test Windows HIPEP requires
+             (DOWNLOAD_FIELDS) or model_info.json hashes it changes, that it
+             moves onto the oga-hipep backend, or that it edits and that have
+             no family to stand for them. Test Windows HIPEP requires
              them, as the NPU jobs do new_models: downloaded whatever their
              size, and a failure if they cannot be
   hipep_families
@@ -907,7 +908,8 @@ RUNNER_PLATFORMS = {"aie2p"}
 # no runner has yet. A raised flm_min_version marks a downloaded copy outdated
 # (model_downloader.cpp), so flm pull fetches the files again; that and new
 # model_info.json hashes are how republished weights ship.
-DOWNLOAD_FIELDS = ("name", "url", "file_url", "files", "flm_min_version")
+# model_info_key points the entry at other hashes in model_info.json.
+DOWNLOAD_FIELDS = ("name", "url", "file_url", "files", "flm_min_version", "model_info_key")
 
 
 def split_downloads(ids: Iterable[str], head: dict[str, dict]) -> tuple[list, list]:
@@ -1001,8 +1003,10 @@ def add_catalog_change(d: Decision, path: str, fams: set, gpu: list,
     what = ", ".join(sorted(fams)) or ("no NPU family" if gpu else neither)
     if gpu:
         d.hipep = True
-        d.gpu_edit_families |= {family_of(catalog[mid]) for mid in gpu
-                                if mid in catalog and runs_on_gpu(mid, catalog[mid])} - {""}
+        edited = [mid for mid in gpu if mid in catalog and runs_on_gpu(mid, catalog[mid])]
+        d.gpu_edit_families |= {family_of(catalog[mid]) for mid in edited} - {""}
+        # An entry with no family has no family model to stand for it.
+        d.gpu_models |= {mid for mid in edited if not family_of(catalog[mid])}
         what += (f"; {len(gpu)} oga-hipep entr{'y' if len(gpu) == 1 else 'ies'}, e.g. {gpu[0]},"
                  " which only Test Windows HIPEP runs")
     d.reasons.append(f"{path}: entries changed in {what}")

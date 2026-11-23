@@ -308,6 +308,25 @@ class Decide(unittest.TestCase):
         head["models"]["gemma3-oga-hipep"]["4b"]["flm_min_version"] = "9.9.9"
         self.assertEqual(outcome(head)[2:], ("gemma3-oga-hipep:4b", "gemma3"))
 
+    def test_oga_hipep_edits_that_still_need_the_entry_itself(self):
+        base = json.loads(catalog(**{"qwen3.5-oga-hipep__9b": ("Q35-9B_gpuep", "qwen3.5"),
+                                     "gemma3-oga-hipep__4b": ("Gemma3-4B_gpuep", "gemma3")}))
+
+        def outcome(head):
+            b, h = json.dumps(base), json.dumps(head)
+            git = FakeGit(base={changes.MODEL_LIST: b}, head={changes.MODEL_LIST: h})
+            out = changes.decide([changes.MODEL_LIST], git, h).outputs()
+            return out["hipep_models"], out["hipep_families"]
+
+        # Pointed at other hashes in model_info.json: new weights.
+        head = json.loads(json.dumps(base))
+        head["models"]["gemma3-oga-hipep"]["4b"]["model_info_key"] = "other"
+        self.assertEqual(outcome(head), ("gemma3-oga-hipep:4b", "gemma3"))
+        # Left without a family, it has no family model to stand for it.
+        head = json.loads(json.dumps(base))
+        head["models"]["gemma3-oga-hipep"]["4b"]["details"] = {}
+        self.assertEqual(outcome(head), ("gemma3-oga-hipep:4b", ""))
+
     def test_an_entry_moved_onto_oga_hipep_is_required(self):
         base = catalog(**{"lfm2__1b": ("LFM2", "lfm2"), "qwen3__0_6b": ("Q", "qwen3")})
         head = json.loads(base)

@@ -302,9 +302,11 @@ class Plan:
             for family in sorted({m.family for m in models}):
                 if family in PR_GPU_WHEN_TOUCHED and family not in self.families:
                     continue
-                smallest = min((m for m in models if m.family == family),
-                               key=lambda m: (m.size, m.id))
-                picked.append(PR_GPU.get(family, smallest.id))
+                members = [m for m in models if m.family == family]
+                smallest = min(members, key=lambda m: (m.size, m.id))
+                # The table's model, unless it left the family or the catalog.
+                pick = PR_GPU.get(family)
+                picked.append(pick if pick in {m.id for m in members} else smallest.id)
             return self._known(picked + self.required)
         if self.tier == "install":
             return self._known(INSTALL_CHAT + self._added(lambda m: m.family not in NON_CHAT_FAMILIES))

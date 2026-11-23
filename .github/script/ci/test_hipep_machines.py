@@ -171,6 +171,11 @@ class Standby(unittest.TestCase):
         cat["models"]["new-oga-hipep"] = {"200b": {"name": "n", "size": 200e9, "details": {"family": "newfam"}}}
         self.assertEqual(self.ids(catalog=json.dumps(cat)), ["stx-halo", "npu-runners"])
 
+    def test_a_pr_gpu_model_gone_from_the_catalog_falls_back_to_the_smallest(self):
+        cat = json.loads(CATALOG)
+        del cat["models"]["qwen3.8-oga-hipep"]  # PR_GPU's qwen3.5 pick; the 122B is left
+        self.assertEqual(self.ids(catalog=json.dumps(cat)), ["stx-halo", "npu-runners"])
+
     def test_the_repository_catalog_and_config(self):
         """With the committed files a plain pull request runs on the shared
         runners alone, and one touching gpt-oss on the STX Halo too."""
