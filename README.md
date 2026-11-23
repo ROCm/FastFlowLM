@@ -110,9 +110,9 @@ No model rewrites, no tuning — it just works.
 
 ## ✅ Highlights
 
-- **Runs fully on AMD Ryzen™ AI NPU** — no GPU or CPU load
+- **NPU-first on AMD Ryzen™ AI** — no discrete GPU needed, with iGPU support to use more of the SoC
 - **Lightweight runtime (17 MB)** — installs within **20 seconds**, easy to integrate    
-- **Developer-first flow** — a familiar single-command CLI, optimized for NPU  
+- **Familiar to use** — a single-command CLI, built for NPUs from the start  
 - **Support for long context windows** — up to 256k tokens (e.g., Qwen3-4B-Thinking-2507)  
 - **No low-level tuning required** — You focus on your app, we handle the rest
 

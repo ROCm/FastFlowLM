@@ -9,7 +9,7 @@ sections:
     kicker: "NPU-first runtime"
     title: "The fastest, most efficient LLM inference on NPUs"
     body: |
-      FastFlowLM (FLM) delivers a familiar single-command developer experience built exclusively for AMD Ryzen™ AI NPUs. Install in seconds, stream tokens instantly, and run context windows up to 256k — all with dramatically better efficiency than GPU-first stacks.
+      FastFlowLM (FLM) delivers a familiar single-command developer experience built exclusively for AMD Ryzen™ AI NPUs. Run LLMs with Vision, Audio, Embedding, and MoE support, with no discrete GPU needed. Install in seconds, stream tokens instantly, and run context windows up to 256k — with over 10× better efficiency than GPU-first stacks. With iGPU support added, FLM now uses more of the SoC, not just the NPU.
       
       The FastFlowLM team is now part of AMD.
     ctas:
