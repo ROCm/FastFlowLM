@@ -40,6 +40,8 @@ sections:
 
       FLM is dedicated to Ryzen™ AI: **no discrete GPU needed**, **over 10× more power-efficient**, and **context lengths up to 256k tokens**. It now runs on both the NPU and the iGPU.
 
+      Starting from **v1.0.13**, FLM has a **HIP EP backend** that enables **GPU (iGPU)** execution, alongside the NPU.
+
       **Learn more:** [Docs](/docs/) · [GitHub Releases](https://github.com/ROCm/FastFlowLM/releases)
 
   # - type: one_column
