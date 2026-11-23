@@ -185,6 +185,19 @@ as a *swap commit*.
    staged bytes, it carries every file the run staged, and the run passed as fetch requires) and then
    builds and tests nothing again; `devkit-static` still checks the catalog. Then the pull request is
    reviewed and merged.
+   **Or let the auto-swap do steps 3 and 4, and the merge** (`.github/workflows/devkit-auto-swap.yml`,
+   rules in `.github/script/ci/devkit_auto_swap.py`): once the run asks only for the swap, a
+   maintainer (write access or more, not the author) approving the pull request at exactly the
+   tested commit makes the bot run the same `fetch` (main's copy of the script) and push the swap
+   commit; when Build and Test passes on it, the bot merges the pull request (`gh pr merge
+   --match-head-commit`, squash unless `DEVKIT_AUTO_SWAP_MERGE_METHOD` says otherwise). It works on
+   branches of this repository only, does nothing while any maintainer's latest review requests
+   changes, checks the approval again before it pushes and before it merges, and merges only a head
+   that main's `devkit_swap.py verify` accepts as a swap commit, after a `pull_request` run of it
+   passed: a push after the swap stops the merge (merge by hand then), and so does a change under
+   `.github/workflows/` (the App may not merge one). It comments on
+   the pull request when it swapped, merged, why `fetch` refused, or that the pull request must be
+   split (below).
 5. Pushes after the swap (a review fix, a merge of main): when they change no dev-kit engine or
    kernel source or build input (`changes.py` `after_swap` decides from the files changed since the
    newest swap commit), nothing is rebuilt or staged; the product test jobs test the committed
