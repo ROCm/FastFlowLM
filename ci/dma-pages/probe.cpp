@@ -49,8 +49,19 @@ static bool enable_lock_memory() {
 static Host host_alloc(size_t n, bool huge) {
   Host h;
   h.n = (n + (2u << 20) - 1) & ~size_t((2u << 20) - 1);
-  if (huge && enable_lock_memory())
-    h.p = VirtualAlloc(nullptr, h.n, MEM_RESERVE | MEM_COMMIT | MEM_LARGE_PAGES, PAGE_READWRITE);
+  if (huge) {
+    bool priv = enable_lock_memory();
+    DWORD perr = GetLastError();
+    // large-page allocations must be a multiple of the large-page minimum (2 MB on x64)
+    size_t lp = GetLargePageMinimum();
+    if (priv && lp) {
+      h.n = (h.n + lp - 1) & ~(lp - 1);
+      h.p = VirtualAlloc(nullptr, h.n, MEM_RESERVE | MEM_COMMIT | MEM_LARGE_PAGES, PAGE_READWRITE);
+    }
+    if (getenv("PROBE_LP_LOG"))
+      std::fprintf(stderr, "[large-page] priv %s (err %lu), min %zu, alloc %s (err %lu)\n", priv ? "ok" : "no",
+                   perr, lp, h.p ? "ok" : "failed", h.p ? 0ul : GetLastError());
+  }
   h.large = h.p != nullptr;
   if (!h.p) h.p = VirtualAlloc(nullptr, h.n, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
   return h;
