@@ -31,7 +31,12 @@ public:
     /// \brief Generate the layer sequence
     /// \param seq the sequence
     /// \param L the length
-    void gen_layer_seq(npu_sequence* seq, const uint32_t L, bool is_sliding_window);
+    /// \param kv_bfp16 for the KV_BFP16 build of layer_lm.xclbin: finished chunks read from the bfp16 copy
+    void gen_layer_seq(npu_sequence* seq, const uint32_t L, bool is_sliding_window, bool kv_bfp16 = false);
+
+    /// \brief Offset (bf16 elements) of a stream's bfp16 copy in a layer's kv cache buffer; stream 0..3 = K01, K23,
+    ///        V01, V23; stream 4 = the buffer's total size with the copy
+    size_t get_kv_bfp16_offset(bool is_sliding_window, int stream) const;
 
     /// \brief Set the max length
     /// \param MAX_L the max length

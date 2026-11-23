@@ -27,8 +27,13 @@ endif
 # RTP addresses FLM_DLL/detail/gemma_npu/gemma_npu_sequence_detail.hpp writes to.
 RTP_PROJ_ADDR := 33280
 RTP_RMS_ADDR := 54272
+ifeq ($(KV_BFP16),1)
+RTP_QK_ADDR := 20992
+RTP_KV_ADDR := 50176
+else
 RTP_QK_ADDR := 9216
 RTP_KV_ADDR := 33792
+endif
 RTP_COUNT := 25
 RTP_NAMES := IS_ATTN_PROJ_BUFFER_[0-9_]+|IS_ATTN_RMS_BUFFERS|L_attn_(qk|kv)_core_[0-9_]+
 PROGRAM_MEMORY_BYTES := 16384

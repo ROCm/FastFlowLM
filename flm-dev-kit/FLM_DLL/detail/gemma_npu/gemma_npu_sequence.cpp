@@ -448,6 +448,81 @@ void gemma_npu_sequence::Impl::_move_kv_cache(npu_sequence* seq, const size_t L,
     );
 }
 
+// Finished 16-row chunks the decode layer reads from the bfp16 copy: all but the chunk holding the newest row
+// (README "bfp16 KV cache").
+uint32_t gemma_npu_sequence::Impl::kv_bfp16_packed_chunks(const uint32_t L, bool is_sliding_window) const{
+    if (is_sliding_window && L > sliding_window){
+        return sliding_window / L_CHUNK - 1;
+    }
+    return (L - 1) / L_CHUNK;
+}
+
+// bfp16 copy of one layer's cache, after its 4 bf16 regions in the same buffer: per stream (K01, K23, V01, V23) one
+// 9,216 B unit per 16-row chunk. Offsets in bf16 elements.
+size_t gemma_npu_sequence::Impl::kv_bfp16_offset(bool is_sliding_window, int stream) const{
+    const size_t cap = is_sliding_window ? sliding_window : MAX_L;
+    const size_t bf16_region = cap * (DK + DV);
+    return bf16_region + (size_t)stream * (cap / L_CHUNK) * kv_bfp16_unit_elems;
+}
+
+void gemma_npu_sequence::Impl::_move_kv_cache_bfp16(npu_sequence* seq, const size_t L, bool is_sliding_window){
+    const bool ring = is_sliding_window && L > sliding_window;
+    const uint32_t chunks = (is_sliding_window ? sliding_window : MAX_L) / L_CHUNK;
+    const uint32_t newest_row = ring ? (L - 1) % sliding_window : L - 1;
+    const uint32_t tail_chunk = newest_row / L_CHUNK;
+    const uint32_t row_elems = DH * 2;
+    const uint32_t chunk_elems = L_CHUNK * row_elems;
+
+    struct stream_t {
+        npu_tiles tile;
+        npu_it_channel channel;
+        uint32_t bf16_offset;
+        int index;
+        npu_bd_id bd_packed_1;
+        npu_bd_id bd_packed_2;
+        npu_bd_id bd_tail;
+    };
+    const stream_t streams[4] = {
+        {kv_tiles[0], it_channel_0, (uint32_t)(is_sliding_window ? K01_sliding_offset : K01_offset), 0, bd_0, bd_2, bd_4},
+        {kv_tiles[1], it_channel_0, (uint32_t)(is_sliding_window ? K23_sliding_offset : K23_offset), 1, bd_0, bd_2, bd_4},
+        {kv_tiles[0], it_channel_1, (uint32_t)(is_sliding_window ? V01_sliding_offset : V01_offset), 2, bd_1, bd_3, bd_5},
+        {kv_tiles[1], it_channel_1, (uint32_t)(is_sliding_window ? V23_sliding_offset : V23_offset), 3, bd_1, bd_3, bd_5},
+    };
+
+    for (const stream_t& s : streams){
+        const uint32_t packed = (uint32_t)kv_bfp16_offset(is_sliding_window, s.index);
+        // packed chunks in read order: after the newest chunk to the end (ring only), then from 0 to the newest chunk
+        const uint32_t first_count = ring ? chunks - 1 - tail_chunk : 0;
+        const uint32_t second_count = tail_chunk;
+        if (first_count > 0){
+            seq->npu_dma_memcpy_nd(
+                sizeof(bf16), kv_cache_arg_idx, MM2S, s.tile, s.bd_packed_1, s.channel,
+                {0, 0, 0, packed + (tail_chunk + 1) * kv_bfp16_unit_elems},
+                {1, 1, 1, first_count * kv_bfp16_unit_elems},
+                {0, 0, 0, 1},
+                -1, 0, false, aggressive_cache
+            );
+        }
+        if (second_count > 0){
+            seq->npu_dma_memcpy_nd(
+                sizeof(bf16), kv_cache_arg_idx, MM2S, s.tile, s.bd_packed_2, s.channel,
+                {0, 0, 0, packed},
+                {1, 1, 1, second_count * kv_bfp16_unit_elems},
+                {0, 0, 0, 1},
+                -1, 0, false, aggressive_cache
+            );
+        }
+        // the newest chunk as bf16: rows 0-8 then rows 8-16, two 9-row units (rows 8 and 16 are not used)
+        seq->npu_dma_memcpy_nd(
+            sizeof(bf16), kv_cache_arg_idx, MM2S, s.tile, s.bd_tail, s.channel,
+            {0, 0, 0, s.bf16_offset + tail_chunk * chunk_elems},
+            {1, 2, 9, row_elems},
+            {0, 8 * row_elems, row_elems, 1},
+            -1, 0, false, aggressive_cache
+        );
+    }
+}
+
 gemma_npu_sequence::Impl::Impl(LM_Config config, uint32_t MAX_L){
     D = config.get("hidden_size");
     DH = config.get("head_dim");
@@ -476,7 +551,7 @@ gemma_npu_sequence::Impl::Impl(LM_Config config, uint32_t MAX_L){
     V23_sliding_offset = 3 * kv_cache_size_sliding / 4;
 }
 
-void gemma_npu_sequence::Impl::gen_layer_seq(npu_sequence* seq, const uint32_t L, bool is_sliding_window){
+void gemma_npu_sequence::Impl::gen_layer_seq(npu_sequence* seq, const uint32_t L, bool is_sliding_window, bool kv_bfp16){
     assert(L <= MAX_L + 1);
     assert(L > 0);
     constexpr size_t CT_lock_address_base = 0x000001F000;
@@ -486,6 +561,8 @@ void gemma_npu_sequence::Impl::gen_layer_seq(npu_sequence* seq, const uint32_t L
 
     seq->npu_preemption(0);
 
+    const uint32_t qk_address = kv_bfp16 ? l_qk_address_kvb : l_qk_address;
+    const uint32_t kv_address = kv_bfp16 ? l_kv_address_kvb : l_kv_address;
     if (is_sliding_window){
         uint32_t L_local;
         if (L <= 1024) {
@@ -495,15 +572,22 @@ void gemma_npu_sequence::Impl::gen_layer_seq(npu_sequence* seq, const uint32_t L
             L_local = 1024;
         }
         for (int i = 0; i < 4; i++){
-            seq->rtp_write(attn_qk_tiles[i], l_qk_address, L_local);
-            seq->rtp_write(attn_kv_tiles[i], l_kv_address, L_local);
+            seq->rtp_write(attn_qk_tiles[i], qk_address, L_local);
+            seq->rtp_write(attn_kv_tiles[i], kv_address, L_local);
         }
     }
     else{
 
         for (int i = 0; i < 4; i++){
-            seq->rtp_write(attn_qk_tiles[i], l_qk_address, L);
-            seq->rtp_write(attn_kv_tiles[i], l_kv_address, L);
+            seq->rtp_write(attn_qk_tiles[i], qk_address, L);
+            seq->rtp_write(attn_kv_tiles[i], kv_address, L);
+        }
+    }
+    if (kv_bfp16){
+        const uint32_t packed_chunks = kv_bfp16_packed_chunks(L, is_sliding_window);
+        for (int i = 0; i < 4; i++){
+            seq->rtp_write(attn_qk_tiles[i], qk_address + sizeof(int32_t), packed_chunks);
+            seq->rtp_write(attn_kv_tiles[i], kv_address + sizeof(int32_t), packed_chunks);
         }
     }
     for (int i = 0; i < 16; i++){
@@ -543,7 +627,12 @@ void gemma_npu_sequence::Impl::gen_layer_seq(npu_sequence* seq, const uint32_t L
         -1, 0, true
     );
     _receive_kv_cache(seq, L, is_sliding_window); // also move qkv weights
-    _move_kv_cache(seq, L, is_sliding_window);
+    if (kv_bfp16){
+        _move_kv_cache_bfp16(seq, L, is_sliding_window);
+    }
+    else{
+        _move_kv_cache(seq, L, is_sliding_window);
+    }
 
     seq->npu_dma_memcpy_nd(
         sizeof(bf16),
@@ -781,8 +870,12 @@ gemma_npu_sequence::gemma_npu_sequence(LM_Config config, uint32_t MAX_L){
     this->_impl = new Impl(config, MAX_L);
 }
 
-void gemma_npu_sequence::gen_layer_seq(npu_sequence* seq, const uint32_t L, bool is_sliding_window){
-    this->_impl->gen_layer_seq(seq, L, is_sliding_window);
+void gemma_npu_sequence::gen_layer_seq(npu_sequence* seq, const uint32_t L, bool is_sliding_window, bool kv_bfp16){
+    this->_impl->gen_layer_seq(seq, L, is_sliding_window, kv_bfp16);
+}
+
+size_t gemma_npu_sequence::get_kv_bfp16_offset(bool is_sliding_window, int stream) const{
+    return this->_impl->kv_bfp16_offset(is_sliding_window, stream);
 }
 
 void gemma_npu_sequence::gen_mha_engine_seq(npu_sequence* seq, const uint32_t L_begin, const uint32_t L_end, bool is_sliding_window, int buffer_length){

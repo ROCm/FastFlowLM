@@ -76,3 +76,62 @@ context + 4 random:
 | proj (16 cores) | 10,864 | 10,864 |
 | rms (`core_1_2`) | 6,608 | 6,736 |
 | others | 1,184-4,192 | same |
+
+## bfp16 KV (`make bitstream KV_BFP16=1`, 2026-11-23)
+
+Temporary second build (`build/GEMMA3_4B_KVB/`) until the engine switches over (then it becomes the only one). The
+decode attention reads every finished 16-key chunk of K and V from a host-made bfp16 copy (8 values share one
+exponent: 9 bytes per 8 values, 44% fewer bytes than bf16) and uses the native bfp16 multiply; only the chunk with
+the newest row still comes as bf16 and is packed on the core. Same bits as the default build.
+
+Why the same bits: the default build's `aie::mmul<4, 8, 8, bf16, bf16>` is emulated (`-DAIE_API_EMULATE_BFLOAT16_
+MMUL_WITH_BFP16`): every multiply converts A and B to bfp16 (`to_v64bfp16ebs8`) and calls `mac_8x8_8x8T_conf`. The
+KV_BFP16 kernels feed that instruction the same blocks:
+- K: one block = one key's 8 dh values (host: `tile_group`); Q converted per dh block as the emulation does.
+- V: one block = one dh column's 8 keys, V^T (host: `vt_tile_group`); P converted once per chunk (the emulation
+  converted it again for each of the 32 dh blocks, to the same blocks).
+- y and the scores keep their accumulator lanes; rows 4-7 of the 8x8 result are unused, as before.
+- the host packer copies MiniCPM-OCR's (`FLM_DLL/detail/gemma_npu/gemma_bfp16_pack.hpp`); it truncates like the core
+  in its default rounding mode, so the kernels set `floor` at entry.
+
+Data path (per layer run, per stream K01 / K23 on IT0 / IT7 ch0, V01 / V23 on ch1):
+- one 9,216 B unit per finished chunk, from the copy behind the 4 bf16 regions of the same kv buffer (no new
+  buffer argument): `[9 slices][head 0: 512 B | head 1: 512 B]`, each head's 4,608 B packed bytes cut into 512 B
+  slices. That is the shape of 9 bf16 cache rows, so one fixed mem tile pattern (9 x 256 of every 512) splits both
+  packed units and bf16 rows to the two cores.
+- then the newest chunk as bf16: one shim descriptor reads rows 0-8 and 8-16, so each core gets keys 0-7 in one K/V
+  buffer and keys 8-15 in the other (rows 8 and 16 unused; row 16 can be the next region, still inside the buffer).
+- at most 3 descriptors per shim channel (two packed ranges for the sliding ring past 1,024 keys, one tail), no
+  waits; the ring is read in the same chunk order as the default build (`ring_split`, engine README).
+- RTP `L[1]` = packed chunks (`(L - 1) / 16`, or 63 for the ring past 1,024 keys). The attention RTPs move in this
+  build: `L_attn_qk` 20992, `L_attn_kv` 50176 (the build checks them; proj 33280 and rms 54272 did not move).
+- core K/V buffers 4,608 B (were 8 KB), mem tile buffers 9,216 B (were 16 KB), plus one 4,608 B tail buffer per
+  attention core (an IRON buffer argument, as in MiniCPM-OCR: kernel statics have little room).
+
+Program size: Q.K cores 2,736 -> 3,248 B, P.V cores 3,568 -> 4,256 B; all others unchanged. `make txn KV_BFP16=1`
+builds too.
+
+### Test (`test_layer_kv`)
+
+```
+make test_layer_kv
+build/test/test_layer_kv --model <Gemma3-4B-NPU2 dir> --bf16 build/GEMMA3_4B/xclbins/layer_lm.xclbin \
+    --kvb build/GEMMA3_4B_KVB/xclbins/layer_lm.xclbin [--kvb-stub build/GEMMA3_4B_KVB_STUB/xclbins/layer_lm.xclbin]
+```
+
+One decode layer run on both builds with the same random inputs (Q4_1 weight blocks, norms, rope tables, x, a random
+K/V cache and its bfp16 copy from the host packer): the output x and the K/V row the layer writes must be the same
+bytes. Results 2026-11-23 (Strix Halo, Performance mode): PASSED twice, 20 global lengths (1 ... 8,192) and 17
+sliding lengths (1 ... 5,000, every 16-row and 1,024-key edge); x checksums change with L (the sliding ring repeats
+itself at L and L + 1,024, as expected).
+
+One layer run alone, median of 7, ms (bf16 / KV_BFP16 / KV_BFP16 stub without attention math):
+
+| Layer | bf16 | KV_BFP16 | stub |
+|---|---|---|---|
+| global, L 1,088 | 1.42-1.52 | 1.37-1.49 | 1.33 |
+| global, L 4,160 | 1.72-1.83 | 1.62-1.66 | 1.43 |
+| global, L 8,192 | 2.19-2.25 | 2.00 | 1.62 |
+| sliding, ring full | 1.35 | 1.32 | 1.28 |
+
+At 4K-8K the global layers' attention math is now partly visible (stub vs KV_BFP16: 0.2-0.4 ms).

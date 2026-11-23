@@ -1,4 +1,5 @@
 # Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+# Portions of this file consist of AI-generated content.
 
 import numpy as np
 import sys
@@ -35,6 +36,10 @@ def attn(tile_qk: tile_with_location, tile_kv: tile_with_location, mctx: mlir_co
     k_buffer_0 = aie.buffer(tile = ct, datatype = attn_k_ty, name = f"k_0_{ct_row}_{ct_col}")
     k_buffer_1 = aie.buffer(tile = ct, datatype = attn_k_ty, name = f"k_1_{ct_row}_{ct_col}")
 
+    kvb = mctx.parameters["kvb"]
+    if kvb:
+        k_tail = aie.buffer(tile = ct, datatype = attn_k_ty, name = f"k_tail_{ct_row}_{ct_col}")
+
     q_buffer_0 = aie.buffer(tile = ct, datatype = attn_q_ty, name = f"q_0_{ct_row}_{ct_col}")
     q_buffer_1 = aie.buffer(tile = ct, datatype = attn_q_ty, name = f"q_1_{ct_row}_{ct_col}")
     q_prod_lock = aie.lock(ct, lock_id = 0, init = 2)
@@ -49,7 +54,10 @@ def attn(tile_qk: tile_with_location, tile_kv: tile_with_location, mctx: mlir_co
     @aie.core(ct, link_with = "attn_qk.o")
     def core_body():
         for _ in range_(0xFFFFFFFF):
-            attn_qk(q_buffer_0, q_buffer_1, k_buffer_0, k_buffer_1, s_buffer_0, s_buffer_1, L_qk_buffer)
+            if kvb:
+                attn_qk(q_buffer_0, q_buffer_1, k_buffer_0, k_buffer_1, k_tail, s_buffer_0, s_buffer_1, L_qk_buffer)
+            else:
+                attn_qk(q_buffer_0, q_buffer_1, k_buffer_0, k_buffer_1, s_buffer_0, s_buffer_1, L_qk_buffer)
 
     @aie.mem(ct)
     def mem_body(block):
@@ -98,6 +106,8 @@ def attn(tile_qk: tile_with_location, tile_kv: tile_with_location, mctx: mlir_co
     L_kv_buffer = mctx.buffers[f"L_attn_kv_core_{ct_row}_{ct_col}"]
     v_buffer_0 = aie.buffer(tile = ct, datatype = attn_v_ty, name = f"v_0_{ct_row}_{ct_col}")
     v_buffer_1 = aie.buffer(tile = ct, datatype = attn_v_ty, name = f"v_1_{ct_row}_{ct_col}")
+    if kvb:
+        v_tail = aie.buffer(tile = ct, datatype = attn_v_ty, name = f"v_tail_{ct_row}_{ct_col}")
     o_buffer_0 = aie.buffer(tile = ct, datatype = attn_o_ty, name = f"o_0_{ct_row}_{ct_col}")
     o_buffer_1 = aie.buffer(tile = ct, datatype = attn_o_ty, name = f"o_1_{ct_row}_{ct_col}")
     o_prod_lock = aie.lock(ct, lock_id = 0, init = 2)
@@ -110,7 +120,10 @@ def attn(tile_qk: tile_with_location, tile_kv: tile_with_location, mctx: mlir_co
     @aie.core(ct, link_with = "attn_kv.o")
     def core_body():
         for _ in range_(0xFFFFFFFF):
-            attn_kv(s_buffer_0, s_buffer_1, v_buffer_0, v_buffer_1, o_buffer_0, o_buffer_1, L_kv_buffer)
+            if kvb:
+                attn_kv(s_buffer_0, s_buffer_1, v_buffer_0, v_buffer_1, v_tail, o_buffer_0, o_buffer_1, L_kv_buffer)
+            else:
+                attn_kv(s_buffer_0, s_buffer_1, v_buffer_0, v_buffer_1, o_buffer_0, o_buffer_1, L_kv_buffer)
 
     @aie.mem(ct)
     def mem_body(block):
@@ -157,6 +170,19 @@ def attn_memtile(tile: tile_with_location, mctx: mlir_context):
     k_mem_ty = mctx.mem_k_ty
     v_mem_ty = mctx.mem_v_ty
 
+    # kvb: a unit is 9 slices x 2 heads x 256 bf16 (packed chunk, or 9 rows of the newest chunk); each head's MM2S
+    # takes its 256 of every 512, no reordering. Default: 16 rows, reordered into the cores' bf16 layouts.
+    if mctx.parameters["kvb"]:
+        k_len = 9 * DH
+        k_dims = [(9, DH * 2), (DH, 1)]
+        v_len = 9 * DH
+        v_dims = [(9, DH * 2), (DH, 1)]
+    else:
+        k_len = DH * 16
+        k_dims = [(DH * 2 // 8, 8), (16, DH * 2), (8, 1)]
+        v_len = 16 * DH
+        v_dims = [(2, 8 * DH * 2), (DH // 8, 8), (8, DH * 2), (8, 1)]
+
 
     k_buffer_0 = aie.buffer(mt, k_mem_ty, name = f"k_buffer_0_{mt_row}_{mt_col}")
     k_buffer_1 = aie.buffer(mt, k_mem_ty, name = f"k_buffer_1_{mt_row}_{mt_col}")
@@ -191,13 +217,13 @@ def attn_memtile(tile: tile_with_location, mctx: mlir_context):
 
         with block[4]:
             aie.use_lock(k_p0_cons_lock, aie.LockAction.AcquireGreaterEqual, value=1)
-            aie.dma_bd(k_buffer_0, offset = 0, len = DH * 16, dimensions = [(DH * 2 // 8, 8), (16, DH * 2), (8, 1)])
+            aie.dma_bd(k_buffer_0, offset = 0, len = k_len, dimensions = k_dims)
             aie.use_lock(k_p1_cons_lock, aie.LockAction.Release, value=1)
             aie.next_bd(block[5])
 
         with block[5]:
             aie.use_lock(k_p0_cons_lock, aie.LockAction.AcquireGreaterEqual, value=1)
-            aie.dma_bd(k_buffer_1, offset = 0, len = DH * 16, dimensions = [(DH * 2 // 8, 8), (16, DH * 2), (8, 1)])
+            aie.dma_bd(k_buffer_1, offset = 0, len = k_len, dimensions = k_dims)
             aie.use_lock(k_p1_cons_lock, aie.LockAction.Release, value=1)
             aie.next_bd(block[4])
 
@@ -206,13 +232,13 @@ def attn_memtile(tile: tile_with_location, mctx: mlir_context):
 
         with block[7]:
             aie.use_lock(k_p1_cons_lock, aie.LockAction.AcquireGreaterEqual, value=1)
-            aie.dma_bd(k_buffer_0, offset = DH, len = DH * 16, dimensions = [(DH * 2 // 8, 8), (16, DH * 2), (8, 1)])
+            aie.dma_bd(k_buffer_0, offset = DH, len = k_len, dimensions = k_dims)
             aie.use_lock(k_prod_lock, aie.LockAction.Release, value=1)
             aie.next_bd(block[8])
 
         with block[8]:
             aie.use_lock(k_p1_cons_lock, aie.LockAction.AcquireGreaterEqual, value=1)
-            aie.dma_bd(k_buffer_1, offset = DH, len = DH * 16, dimensions = [(DH * 2 // 8, 8), (16, DH * 2), (8, 1)])
+            aie.dma_bd(k_buffer_1, offset = DH, len = k_len, dimensions = k_dims)
             aie.use_lock(k_prod_lock, aie.LockAction.Release, value=1)
             aie.next_bd(block[7])
 
@@ -236,13 +262,13 @@ def attn_memtile(tile: tile_with_location, mctx: mlir_context):
 
         with block[13]:
             aie.use_lock(v_p0_cons_lock, aie.LockAction.AcquireGreaterEqual, value = 1)
-            aie.dma_bd(v_buffer_0, offset = 0, len = 16 * DH, dimensions = [(2, 8 * DH * 2), (DH // 8, 8), (8, DH * 2), (8, 1)])
+            aie.dma_bd(v_buffer_0, offset = 0, len = v_len, dimensions = v_dims)
             aie.use_lock(v_p1_cons_lock, aie.LockAction.Release, value = 1)
             aie.next_bd(block[14])
 
         with block[14]:
             aie.use_lock(v_p0_cons_lock, aie.LockAction.AcquireGreaterEqual, value = 1)
-            aie.dma_bd(v_buffer_1, offset = 0, len = 16 * DH, dimensions = [(2, 8 * DH * 2), (DH // 8, 8), (8, DH * 2), (8, 1)])
+            aie.dma_bd(v_buffer_1, offset = 0, len = v_len, dimensions = v_dims)
             aie.use_lock(v_p1_cons_lock, aie.LockAction.Release, value = 1)
             aie.next_bd(block[13])
 
@@ -251,13 +277,13 @@ def attn_memtile(tile: tile_with_location, mctx: mlir_context):
         
         with block[16]:
             aie.use_lock(v_p1_cons_lock, aie.LockAction.AcquireGreaterEqual, value = 1)
-            aie.dma_bd(v_buffer_0, offset = DH, len = 16 * DH, dimensions = [(2, 8 * DH * 2), (DH // 8, 8), (8, DH * 2), (8, 1)])
+            aie.dma_bd(v_buffer_0, offset = DH, len = v_len, dimensions = v_dims)
             aie.use_lock(v_prod_lock, aie.LockAction.Release, value = 1)
             aie.next_bd(block[17])
 
         with block[17]:
             aie.use_lock(v_p1_cons_lock, aie.LockAction.AcquireGreaterEqual, value = 1)
-            aie.dma_bd(v_buffer_1, offset = DH, len = 16 * DH, dimensions = [(2, 8 * DH * 2), (DH // 8, 8), (8, DH * 2), (8, 1)])
+            aie.dma_bd(v_buffer_1, offset = DH, len = v_len, dimensions = v_dims)
             aie.use_lock(v_prod_lock, aie.LockAction.Release, value = 1)
             aie.next_bd(block[16])
         
