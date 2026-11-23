@@ -671,8 +671,11 @@ void OgaEngine::AppendFirst(Live& run, const std::vector<int>& ids, bool skip_lo
     const std::size_t count = ids.size();
     if (!split_first_run_ || count < 2) {
         AppendTokens(run.generator.get(), ids.data(), count);
-        if (split_first_run_ || count < 2 || first_run_verified_) return;
-        if (!skip_logits || count < kFirstRunVerifyMinTokens) {
+        if (split_first_run_ || count < 2) return;
+        if (!skip_logits || first_run_verified_ || count < kFirstRunVerifyMinTokens) {
+            // Non-skipped first runs already fetch logits in EnsureLogits, so always check
+            // them at zero extra GetLogits cost. Skipped runs defer the check once >=8-token
+            // unsplit runs have been verified (or when count < 8).
             run.needs_first_run_check = true;
             run.first_run_len = count;
             return;

@@ -2797,11 +2797,14 @@ void TestPrefillAndCheckpointFetchLogitsOnce() {
     // Staged prefix-reuse (`found` branch) with skip_next_logits() invalidates last_logits so
     // checkpoint() fetches the new tail logits (5, 15, 65) rather than stale (3, 13, 36).
     const int before_staged_found = g_fake.get_logits_calls;
+    const std::size_t set_inputs_before_found = g_fake.set_inputs.size();
     g_fake.processor_ids = {11, 12, 13, 14, 15};
     std::vector<int> s_ext = staged_engine->StagePromptImages("see <image> more", {"JPEGFAKE"});
     staged_engine->clear_context();
     staged_engine->skip_next_logits();
     TEST_REQUIRE(staged_engine->prefill(s_ext).size() == 0);
+    TEST_REQUIRE(g_fake.set_inputs.size() == set_inputs_before_found);
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{14, 15}));
     TEST_REQUIRE(g_fake.get_logits_calls == before_staged_found);
     TEST_REQUIRE(staged_engine->checkpoint() == 5);
     TEST_REQUIRE(g_fake.get_logits_calls == before_staged_found + 1);
@@ -2894,22 +2897,50 @@ void TestSkipNextLogitsResetsAfterOneCallOrErrorAndPreservesLagunaRecovery() {
     TEST_REQUIRE((std::vector<Tokens>(g_fake.appends.end() - 2, g_fake.appends.end()) ==
                   std::vector<Tokens>{{12}, {13, 14, 15, 16, 17, 18, 19}}));
 
+    // A later generator whose sampled first run returns all-zero logits still triggers recovery
+    // even after an earlier >=8-token generator passed (SOL-1).
+    auto mixed = MakeSlotsEngine(2, 32);
+    std::vector<int> first_ok{1, 2, 3, 4, 5, 6, 7, 8};
+    RequireRan(mixed->prefill(first_ok), first_ok);
+    mixed->clear_context();
+    g_fake.zero_when_unsplit_at_least_8 = true;
+    std::vector<int> second_zero{9, 10, 11, 12, 13, 14, 15, 16};
+    RequireRan(mixed->prefill(second_zero), second_zero);
+    TEST_REQUIRE((std::vector<Tokens>(g_fake.appends.end() - 2, g_fake.appends.end()) ==
+                  std::vector<Tokens>{{9}, {10, 11, 12, 13, 14, 15, 16}}));
+
     // Multi-slot Laguna race: slot A runs an unsplit short chunk 1 with skip_next_logits(),
-    // slot B flips split_first_run_, and resuming slot A must rebuild with split first run
-    // rather than reusing the unsplit generator.
-    auto race = MakeSlotsEngine(2, 32);
+    // slot B flips split_first_run_, and resuming slot A (both skipped and non-skipped) must
+    // be rejected by ReachOf and rebuilt immediately without appending onto the unsplit slot.
+    auto race = MakeSlotsEngine(3, 32);
     g_fake.zero_first_run_logits = true;
     std::vector<int> slot_a{1, 2, 3};
     race->skip_next_logits();
     TEST_REQUIRE(race->prefill(slot_a).size() == 0);
     race->clear_context();
+    std::vector<int> slot_a2{4, 5, 6};
+    race->skip_next_logits();
+    TEST_REQUIRE(race->prefill(slot_a2).size() == 0);
+    race->clear_context();
     std::vector<int> slot_b{10, 11, 12};
     RequireRan(race->prefill(slot_b), slot_b);
+    // Non-skipped resume of slot A: must take exactly 2 appends ({1}, {2, 3, 4}), never append {4} first.
     race->clear_context();
+    const std::size_t appends_before_a = g_fake.appends.size();
     std::vector<int> slot_a_ext{1, 2, 3, 4};
     RequireRan(race->prefill(slot_a_ext), slot_a_ext);
+    TEST_REQUIRE(g_fake.appends.size() == appends_before_a + 2);
     TEST_REQUIRE((std::vector<Tokens>(g_fake.appends.end() - 2, g_fake.appends.end()) ==
                   std::vector<Tokens>{{1}, {2, 3, 4}}));
+    // Skipped resume of slot A2: ReachOf must still reject the unsplit slot and rebuild split.
+    race->clear_context();
+    const std::size_t appends_before_a2 = g_fake.appends.size();
+    std::vector<int> slot_a2_ext{4, 5, 6, 7};
+    race->skip_next_logits();
+    TEST_REQUIRE(race->prefill(slot_a2_ext).size() == 0);
+    TEST_REQUIRE(g_fake.appends.size() == appends_before_a2 + 2);
+    TEST_REQUIRE((std::vector<Tokens>(g_fake.appends.end() - 2, g_fake.appends.end()) ==
+                  std::vector<Tokens>{{4}, {5, 6, 7}}));
 
     // checkpoint() recovery failure cleans up the broken slot (no null generator left in slots_).
     auto ckpt_fail = MakeSlotsEngine(1, 16);
@@ -2934,6 +2965,21 @@ void TestSkipNextLogitsResetsAfterOneCallOrErrorAndPreservesLagunaRecovery() {
     TEST_REQUIRE(g_fake.get_logits_calls == 0);
     RequireRan(backend->engine().forward(3), {1, 2, 3});
     TEST_REQUIRE(g_fake.get_logits_calls == 1);
+
+    // Default ModelBackend::skip_next_logits() stays a no-op (for flm/core backends).
+    struct DefaultNoOpBackend final : flm::backend::ModelBackend {
+        explicit DefaultNoOpBackend(causal_lm& e) : engine_(e) {}
+        causal_lm& engine() override { return engine_; }
+        std::string id() const override { return "flm"; }
+        causal_lm& engine_;
+    };
+    auto plain_engine = MakeEngine(32);
+    DefaultNoOpBackend noop_backend(*plain_engine);
+    flm::backend::ModelBackend& base_ref = noop_backend;
+    base_ref.skip_next_logits();
+    std::vector<int> p_noop{1, 2};
+    RequireRan(base_ref.engine().prefill(p_noop), {1, 2});
+    TEST_REQUIRE(g_fake.get_logits_calls == 1);
 }
 
 void TestConvertFp32ToBf16MatchesScalarBitForBit() {
@@ -2954,10 +3000,11 @@ void TestConvertFp32ToBf16MatchesScalarBitForBit() {
     // Null/empty call is a safe no-op.
     flm::oga::ConvertFp32ToBf16(nullptr, nullptr, 0);
 
-    // Every edge length (SIMD chunks + scalar tails) and 248,320 random floats.
+    // Every edge length (all remainders 0..7 mod 8, SIMD chunks + scalar tails) and 248,320 random floats.
     std::mt19937 rng(20261123u);
     std::uniform_int_distribution<std::uint32_t> bits_dist(0u, 0xffffffffu);
-    for (const std::size_t n : {std::size_t{1}, std::size_t{2}, std::size_t{7}, std::size_t{8},
+    for (const std::size_t n : {std::size_t{1}, std::size_t{2}, std::size_t{3}, std::size_t{4},
+                                std::size_t{5}, std::size_t{6}, std::size_t{7}, std::size_t{8},
                                 std::size_t{9}, std::size_t{15}, std::size_t{16}, std::size_t{17},
                                 std::size_t{63}, std::size_t{64}, std::size_t{65}, std::size_t{248320}}) {
         std::vector<float> input(n);
