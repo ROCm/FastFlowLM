@@ -53,68 +53,82 @@ void RestHandler::handle_embeddings(const json& request,
             send_response(*bad);
             return;
         }
-        // The request's task prompt: `prompt_name`, with `task_type` as its
-        // alias, selects the prefix the engine prepends. An unknown,
-        // non-string, or conflicting value is refused with 400 instead of
-        // silently embedding as a query; no task keeps today's `task_query`
-        // default. One resolved task applies to every element of an `input`
-        // array. The integer code is what send_response turns into the HTTP
-        // status, so a 400 built here is sent as 400, not 200.
-        using TaskStatus = flm::EmbeddingTaskResolution::Status;
-        const auto task_resolution = flm::resolve_embedding_task(request);
-        if (task_resolution.status == TaskStatus::NotAString) {
-            send_response(flm::http_guard::error_body(
-                "'" + task_resolution.field + "' must be a string, one of [" +
-                    flm::embedding_task_names_csv() + "].",
-                400, task_resolution.field));
-            return;
-        }
-        if (task_resolution.status == TaskStatus::Unknown) {
-            send_response(flm::http_guard::error_body(
-                "unknown " + task_resolution.field + " '" + task_resolution.value +
-                    "'. Known: [" + flm::embedding_task_names_csv() +
-                    "]. Refusing to substitute one: an embedding under the wrong task "
-                    "prompt is correctly shaped and correctly normed, so nothing "
-                    "downstream can tell it is wrong.",
-                400, task_resolution.field));
-            return;
-        }
-        if (task_resolution.status == TaskStatus::Conflict) {
-            send_response(flm::http_guard::error_body(
-                "'prompt_name' and 'task_type' are aliases and disagree ('" +
-                    task_resolution.field + "' says '" + task_resolution.value +
-                    "'). Send one, or send the same task in both.",
-                400, task_resolution.field));
-            return;
-        }
-        std::string resolved_task;
-        if (task_resolution.status == TaskStatus::Ok) {
-            resolved_task = task_resolution.task;
-            // A `task` naming a different task than `prompt_name`/`task_type`
-            // is a conflict, not a silent override in either direction. A
-            // non-string `task` must still fail here: the resolved task below
-            // would otherwise overwrite it and turn a 400 into a 200.
-            if (request.contains("task")) {
-                const json& task = request.at("task");
-                if (!task.is_string()) {
-                    send_response(flm::http_guard::error_body(
-                        "'task' must be a string.", 400, "task"));
-                    return;
-                }
-                if (flm::canonical_embedding_task(task.get<std::string>()) != resolved_task) {
-                    send_response(flm::http_guard::error_body(
-                        "'task' and '" + task_resolution.field + "' disagree ('task' says '" +
-                            task.get<std::string>() + "'). Send one task.",
-                        400, "task"));
-                    return;
-                }
-            }
-        }
+        // The request's task prompt is resolved only for models that use the
+        // built-in task prompts (the built-in Gemma_Embedding engine, which
+        // prefixes the input with the task's prompt). The model is known only
+        // once it is loaded, so resolution happens after
+        // ensure_embed_model_loaded, keyed on the same model_kind check
+        // get_auto_embedding_model uses to pick the provider path: an
+        // extension/provider model never reads prompt_name / task_type and may
+        // have its own prompt_name vocabulary, so its requests are left
+        // untouched -- no built-in task is resolved, no value is refused, and
+        // the raw `task` field is what reaches the provider. For a built-in
+        // model, `prompt_name`, with `task_type` as its alias, selects the
+        // prefix the engine prepends. An unknown, non-string, or conflicting
+        // value is refused with 400 instead of silently embedding as a query;
+        // no task keeps today's `task_query` default. One resolved task
+        // applies to every element of an `input` array. The integer code is
+        // what send_response turns into the HTTP status, so a 400 built here
+        // is sent as 400, not 200.
         std::lock_guard lock(embedding_mutex);
         std::string model = request.at("model");
         const auto& input = request.at("input");
         const json inputs = input.is_array() ? input : json::array({input});
         ensure_embed_model_loaded(model);
+        std::string resolved_task;
+        if (flm::catalog::model_kind(
+                supported_models.get_model_info(model).second) !=
+            flm::catalog::kEmbeddingModelKind) {
+            using TaskStatus = flm::EmbeddingTaskResolution::Status;
+            const auto task_resolution = flm::resolve_embedding_task(request);
+            if (task_resolution.status == TaskStatus::NotAString) {
+                send_response(flm::http_guard::error_body(
+                    "'" + task_resolution.field + "' must be a string, one of [" +
+                        flm::embedding_task_names_csv() + "].",
+                    400, task_resolution.field));
+                return;
+            }
+            if (task_resolution.status == TaskStatus::Unknown) {
+                send_response(flm::http_guard::error_body(
+                    "unknown " + task_resolution.field + " '" + task_resolution.value +
+                        "'. Known: [" + flm::embedding_task_names_csv() +
+                        "]. Refusing to substitute one: an embedding under the wrong task "
+                        "prompt is correctly shaped and correctly normed, so nothing "
+                        "downstream can tell it is wrong.",
+                    400, task_resolution.field));
+                return;
+            }
+            if (task_resolution.status == TaskStatus::Conflict) {
+                send_response(flm::http_guard::error_body(
+                    "'prompt_name' and 'task_type' are aliases and disagree ('" +
+                        task_resolution.field + "' says '" + task_resolution.value +
+                        "'). Send one, or send the same task in both.",
+                    400, task_resolution.field));
+                return;
+            }
+            if (task_resolution.status == TaskStatus::Ok) {
+                resolved_task = task_resolution.task;
+                // A `task` naming a different task than `prompt_name`/`task_type`
+                // is a conflict, not a silent override in either direction. A
+                // non-string `task` must still fail here: the resolved task below
+                // would otherwise overwrite it and turn a 400 into a 200.
+                if (request.contains("task")) {
+                    const json& task = request.at("task");
+                    if (!task.is_string()) {
+                        send_response(flm::http_guard::error_body(
+                            "'task' must be a string.", 400, "task"));
+                        return;
+                    }
+                    if (flm::canonical_embedding_task(task.get<std::string>()) != resolved_task) {
+                        send_response(flm::http_guard::error_body(
+                            "'task' and '" + task_resolution.field + "' disagree ('task' says '" +
+                                task.get<std::string>() + "'). Send one task.",
+                            400, "task"));
+                        return;
+                    }
+                }
+            }
+        }
         json embedding_data = json::array();
         uint64_t prompt_tokens = 0;
         json item_request = request;

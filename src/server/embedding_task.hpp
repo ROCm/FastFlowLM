@@ -71,6 +71,8 @@ struct EmbeddingTaskResolution {
 /// Read `prompt_name`, or its accepted alias `task_type`. BOTH are checked: an
 /// invalid `task_type` beside a valid `prompt_name` is refused rather than
 /// ignored, and sending both is fine only when they name the same task.
+/// The handler calls this only for models that use the built-in task prompts;
+/// extension/provider models never reach it (their requests are untouched).
 inline EmbeddingTaskResolution resolve_embedding_task(const nlohmann::ordered_json& request) {
     EmbeddingTaskResolution out;
     bool have = false;
