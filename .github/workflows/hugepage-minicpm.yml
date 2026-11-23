@@ -1,0 +1,127 @@
+# Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+# Portions of this file consist of AI-generated content.
+
+# 2 MB pages for NPU buffers, minicpm-v-4.7:1b text (branch ci/hugepage-minicpm only, never merged).
+# Follow-up to FastFlowLM#1080: FLM_HUGEPAGE_BO=1 (flm-dev-kit/FLM_DLL/include/buffer.hpp, this
+# branch) backs every engine buffer with 2 MB user-pointer pages. The engine is built here and
+# swapped into main's portable package of the same commit (BUILD_RUN); each Linux NPU runner then
+# checks greedy output off vs on and benches off/on interleaved, plus the package's own engine.
+# Windows has no 2 MB path (SeLockMemoryPrivilege) and is not run. No deliberate hangs.
+
+name: hugepage minicpm
+
+on:
+  push:
+    branches: [ci/hugepage-minicpm]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: hugepage-minicpm
+  cancel-in-progress: false
+
+env:
+  BUILD_RUN: '45267409915'
+  BUILD_SHA: a4b1235cd32107cec8034ec3647060fa659c62a1
+
+jobs:
+  build:
+    name: Build engine
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+    defaults:
+      run:
+        shell: bash
+    container:
+      image: ghcr.io/rocm/fastflowlm/build-environment:ubuntu24.04
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user root
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build
+        working-directory: flm-dev-kit/FLM_DLL
+        env:
+          FLM_ENGINES: minicpm_v_4_7_npu
+          XRT_ROOT: /usr
+        run: |
+          set -euo pipefail
+          bash build.sh
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp build/lib/libminicpm_v_4_7_npu.so "$GITHUB_WORKSPACE/ci/hugepage-minicpm/"*.sh "$GITHUB_WORKSPACE/dist/"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: hugepage-minicpm-engine
+          path: dist
+          retention-days: 7
+
+  bench-lin:
+    name: Bench Linux ${{ matrix.shard }}
+    needs: build
+    runs-on: [self-hosted, linux, x64, npu, sweep]
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: portable
+          path: pkg
+          run-id: ${{ env.BUILD_RUN }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: hugepage-minicpm-engine
+          path: eng
+      - name: Bench
+        shell: bash
+        run: |
+          set -uo pipefail
+          W=$GITHUB_WORKSPACE
+          rm -rf "$W/flm" "$W/out" && mkdir -p "$W/flm" "$W/out"
+          tar xzf "$(ls pkg/*_linux.tar.gz | head -1)" -C "$W/flm"
+          cp "$W/flm/lib/libminicpm_v_4_7_npu.so" "$W/stock.so"
+          export FLM_MODEL_PATH="${FLM_MODEL_PATH:-/scratch}"
+          o=$W/out/lin-$RUNNER_NAME.txt
+          {
+            echo "runner $RUNNER_NAME"
+            echo "cpu $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2-)"
+            echo "kernel $(uname -r), amdxdna $(cat /sys/module/amdxdna/version 2>/dev/null || echo in-tree)"
+            echo "thp enabled: $(cat /sys/kernel/mm/transparent_hugepage/enabled)"
+            echo "thp shmem_enabled: $(cat /sys/kernel/mm/transparent_hugepage/shmem_enabled)"
+            echo "thp defrag: $(cat /sys/kernel/mm/transparent_hugepage/defrag)"
+            grep -E "MemTotal|MemAvailable" /proc/meminfo
+            echo "package $BUILD_SHA, engine $GITHUB_SHA"
+            pgrep -a -x 'flm|flm-real' && echo "WARNING: other flm processes" || true
+            "$W/flm/flm" pull minicpm-v-4.7:1b 2>&1 | tail -2
+            cp "$W/eng/libminicpm_v_4_7_npu.so" "$W/flm/lib/"
+            echo "== output check"
+            FLM_DIR=$W/flm bash "$W/eng/check_out.sh" 0 "$W/out/out_off.json"
+            FLM_DIR=$W/flm bash "$W/eng/check_out.sh" 1 "$W/out/out_on.json"
+            cmp "$W/out/out_off.json" "$W/out/out_on.json" && echo "OUTPUT IDENTICAL" || echo "OUTPUT DIFFERS"
+            for r in 1 2; do
+              echo "== bench r$r-off"; bash "$W/eng/bench.sh" "$W/flm" r$r-off 0 "$W/out"
+              echo "== bench r$r-on";  bash "$W/eng/bench.sh" "$W/flm" r$r-on 1 "$W/out"
+            done
+            cp "$W/stock.so" "$W/flm/lib/libminicpm_v_4_7_npu.so"
+            echo "== bench stock"; bash "$W/eng/bench.sh" "$W/flm" stock 0 "$W/out"
+          } 2>&1 | tee "$o"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ always() }}
+        with:
+          name: hugepage-minicpm-lin-${{ matrix.shard }}
+          path: |
+            out
+            !out/run-*
+          retention-days: 14

@@ -599,7 +599,38 @@ public:
 #include "xrt/experimental/xrt_ext.h"
 #endif
 
+#if defined(__XRT__) && defined(__linux__)
+#include <sys/mman.h>
+#include <cstdlib>
+#endif
+
 #include "utils/debug_utils.hpp"
+
+#if defined(__XRT__) && defined(__linux__)
+/// \brief Experiment (FLM_HUGEPAGE_BO=1): back device buffers with 2 MB pages.
+/// \note amdxdna BOs are shmem, and distributions ship shmem THP off, so the NPU translates every
+/// 4 KB page it touches. A user-pointer BO over anonymous memory with MADV_HUGEPAGE gets 2 MB pages.
+/// \note The memory is never unmapped: `bytes` has no member to own it, and adding one changes the
+/// class layout that flm and every engine share. Fine for a benchmark, not for a product.
+/// \return the aligned, zeroed host memory, or nullptr to fall back to a plain BO
+inline void* flm_hugepage_alloc(size_t& size) {
+    static const bool on = [] { const char* e = std::getenv("FLM_HUGEPAGE_BO"); return e && std::atoi(e) != 0; }();
+    if (!on) return nullptr;
+    const size_t huge = 2ull * 1024 * 1024;
+    size_t n = (size + huge - 1) / huge * huge;
+    void* raw = mmap(nullptr, n + huge, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (raw == MAP_FAILED) return nullptr;
+    uintptr_t base = reinterpret_cast<uintptr_t>(raw);
+    uintptr_t aligned = (base + huge - 1) / huge * huge;
+    if (aligned > base) munmap(raw, aligned - base);
+    if (aligned + n < base + n + huge) munmap(reinterpret_cast<void*>(aligned + n), base + huge - aligned);
+    void* p = reinterpret_cast<void*>(aligned);
+    madvise(p, n, MADV_HUGEPAGE);
+    std::memset(p, 0, n);   // fault the pages in now, while THP can still back them
+    size = n;
+    return p;
+}
+#endif
 
 /// \brief bytes class
 /// \note This is a buffer wrapper that maps to a bo_buffer or other memory without performing a deep copy.
@@ -706,6 +737,18 @@ public:
         size_t alignment = 1024 * 1024;
         int padded_size = (size + alignment - 1) / alignment * alignment; // 4KB alignment, , (xrt::ext::bo::access_mode)(xrt::ext::bo::access_mode::read_write | xrt::ext::bo::access_mode::process)
 
+#ifdef __linux__
+        size_t huge_size = padded_size;
+        if (void* mem = flm_hugepage_alloc(huge_size)) {
+            try {
+                owned_bo_ = std::make_unique<xrt::ext::bo>(device, mem, huge_size);
+            }
+            catch (const std::exception&) {
+                owned_bo_.reset();   // fall back to a plain BO below
+            }
+        }
+        if (!owned_bo_)
+#endif
         try {
             owned_bo_ = std::make_unique<xrt::ext::bo>(device, padded_size);
         }
