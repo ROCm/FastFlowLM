@@ -572,11 +572,21 @@ def cmd_plan(args) -> int:
     # --data-from-head: a model the pull request adds is only in its catalog
     # and engines.json, and is benched like the NPU tests test it. Without
     # that commit (a fork's head is not fetched) the base's data is used.
+    # A dispatch always selects from the benched commit's data: on main it
+    # may bench an earlier push run, whose packages hold that commit's
+    # models and engines, not the dispatched commit's. Its checkout has the
+    # whole history (find-build checked the ancestry in it), so a map it
+    # cannot read there fails the plan rather than select from another
+    # commit's.
     catalog = None
-    if args.data_from_head:
+    if args.data_from_head or args.mode == "dispatch":
         try:
             catalog, engines, assignment = load_maps(repo_root, plan["head_sha"])
         except (OSError, ValueError) as exc:
+            if args.mode == "dispatch":
+                write_outputs({**no, "reason": f"cannot read the catalog or dev-kit maps of the benched "
+                               f"{plan['head_sha'][:10]}: {exc}"})
+                return 1
             notes.append(f"the catalog and dev-kit maps of {plan['head_sha'][:10]} are not readable "
                          f"({exc}): selecting from the base's")
     if catalog is None:

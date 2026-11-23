@@ -153,7 +153,8 @@ accuracy. Do not invent a `make test` or claim tests pass.
   unanswered) fails the required check, which therefore waits for the benches. A manual dispatch of
   that workflow re-benches an earlier Build and Test run (`build-run`, of the dispatched commit; a
   dispatch on main may also name the push run on main of an earlier commit of main, whose commit is
-  then the one benched and reported): it benches by default (force), and without
+  then the one benched and reported, and whose catalog, `engines.json` and `kernel_assignment.json`
+  select the models and the engines overlaid): it benches by default (force), and without
   `models` takes the nightly's rotation, so name the models to re-bench a pull request's. The full
   refresh benches every benchable model on the four runtimes and reports only its own numbers.
 

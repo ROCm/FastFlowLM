@@ -694,7 +694,7 @@ class Resolve(unittest.TestCase):
             self.assertFalse(resolve.is_ancestor(Path(d), second, first))
             self.assertFalse(resolve.is_ancestor(Path(d), SHA_B, second))
 
-    def plan_cli(self, plan, *extra, changed=False):
+    def plan_cli(self, plan, *extra, changed=False, rc=0):
         """cmd_plan with source_changed stubbed; its outputs."""
         saved = resolve.source_changed
         calls = []
@@ -708,7 +708,7 @@ class Resolve(unittest.TestCase):
                 os.environ["GITHUB_OUTPUT"] = out
                 try:
                     self.assertEqual(quiet(resolve.main, ["plan", "--plan", path, "--runtimes", "lin-xrt",
-                                                          "--baseline", base, *extra]), 0)
+                                                          "--baseline", base, *extra]), rc)
                 finally:
                     del os.environ["GITHUB_OUTPUT"]
                 values = dict(line.split("=", 1) for line in Path(out).read_text(encoding="utf-8").splitlines())
@@ -718,6 +718,15 @@ class Resolve(unittest.TestCase):
         return values
 
     def test_plan_baseline_gate(self):
+        # A dispatch reads the benched commit's maps; SHA_A's are this checkout's here.
+        real = resolve.load_maps
+        resolve.load_maps = lambda root, ref="": real(root)
+        try:
+            self.check_plan_baseline_gate()
+        finally:
+            resolve.load_maps = real
+
+    def check_plan_baseline_gate(self):
         index = resolve.artifact_index([{"id": 1, "name": "portable"}, {"id": 2, "name": "devkit-libs-lin-xrt"}])
         plan = resolve.plan_from_artifacts(index, SHA_A, "success")
         nightly = resolve.write_plan(head_sha=SHA_A, package_sha=SHA_A, engines="success",
@@ -804,6 +813,60 @@ class Resolve(unittest.TestCase):
             self.assertIn("nova:1b", {e["model"] for e in json.loads(v["matrix"])})
         finally:
             resolve.load_maps = real
+
+    def test_dispatch_selects_from_the_benched_runs_maps(self):
+        # On main a dispatch may bench an earlier push run (SHA_A) while the
+        # checkout is the dispatched commit, whose maps differ: the selection
+        # and the engines overlaid are the benched commit's.
+        index = resolve.artifact_index([{"id": 1, "name": "portable"}, {"id": 2, "name": "devkit-libs-lin-xrt"}])
+        plan = resolve.plan_from_artifacts(index, SHA_A, "success")
+        real, refs = resolve.load_maps, []
+        head = self.head_maps_with_new_model()
+
+        def stub(root, ref=""):
+            refs.append(ref)
+            return head if ref == SHA_A else real(root)
+        resolve.load_maps = stub
+        try:
+            v = self.plan_cli(plan, "--mode", "dispatch", "--models", "nova:1b")
+        finally:
+            resolve.load_maps = real
+        self.assertEqual(refs, [SHA_A])
+        self.assertEqual(v["head-sha"], SHA_A)
+        self.assertEqual({e["model"] for e in json.loads(v["matrix"])}, {"nova:1b"})
+
+    def test_dispatch_never_selects_from_another_commits_maps(self):
+        index = resolve.artifact_index([{"id": 1, "name": "portable"}, {"id": 2, "name": "devkit-libs-lin-xrt"}])
+        plan = resolve.plan_from_artifacts(index, SHA_A, "success")
+        real, refs = resolve.load_maps, []
+
+        def stub(root, ref=""):
+            refs.append(ref)
+            if ref:
+                raise OSError("not fetched")
+            return real(root)
+        resolve.load_maps = stub
+        try:
+            v = self.plan_cli(plan, "--mode", "dispatch", rc=1)
+        finally:
+            resolve.load_maps = real
+        self.assertEqual(refs, [SHA_A])
+        self.assertEqual(v["bench"], "false")
+        self.assertIn(SHA_A[:10], v["reason"])
+
+    def test_bench_overlays_the_benched_runs_engines(self):
+        # The overlay's engines.json is the benched commit's on a dispatch.
+        text = workflow("devkit-bench.yml")
+        bench = text.split("\n  bench:\n", 1)[1].split("\n  report:\n", 1)[0]
+        checkout = bench.split("- name: Checkout the benched commit's engine map\n", 1)[1].split("\n\n")[0]
+        self.assertIn("ref: ${{ needs.resolve.outputs.head-sha }}", checkout)
+        self.assertIn("if: ${{ !inputs.mode }}", checkout)
+        overlay = bench.split("- name: Overlay\n", 1)[1].split("\n\n")[0]
+        self.assertIn("engines: ${{ !inputs.mode && 'bench-run/flm-dev-kit/FLM_DLL/engines.json' || '' }}",
+                      overlay)
+        action = (REPO / ".github/actions/devkit-overlay-package/action.yml").read_text(encoding="utf-8")
+        self.assertIn('args+=(--engines "${ENGINES}")', action)
+        self.assertIn('$cmdArgs += "--engines=$env:ENGINES"', action)
 
     def test_unreadable_head_maps_fall_back_to_the_base(self):
         plan = resolve.write_plan(head_sha=SHA_A, package_sha=SHA_B, engines="success", families="qwen3",

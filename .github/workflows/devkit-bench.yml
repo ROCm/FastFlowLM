@@ -84,7 +84,8 @@ name: Dev-kit Bench
 # to the bench CI itself, for which Build and Test calls nothing): build-run
 # names the Build and Test run to bench (default the newest for this
 # commit; on main, which moves on while a run builds, also a push run on main
-# of an earlier commit, whose commit is then the one benched and reported),
+# of an earlier commit, whose commit is then the one benched and reported, and
+# whose catalog and dev-kit maps select the models and the engines overlaid),
 # whose artifacts are looked up and checked across runs, with the
 # rules the call uses (a runtime whose dev-kit engines failed or whose
 # libraries are gone is left out; a run that built no dev-kit engines or
@@ -457,6 +458,20 @@ jobs:
           sparse-checkout: .github/script
           filter: blob:none
 
+      # A dispatch on main may bench an earlier push run: the engines it
+      # overlays are those its commit's engines.json names (the libraries
+      # were built from it), not the dispatched commit's. Data only.
+      - name: Checkout the benched commit's engine map
+        if: ${{ !inputs.mode }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.head-sha }}
+          path: bench-run
+          persist-credentials: false
+          sparse-checkout-cone-mode: true
+          sparse-checkout: flm-dev-kit/FLM_DLL
+          filter: blob:none
+
       # A pull request's and the full refresh's packages already hold the
       # staged dev-kit files: nothing to overlay. Nightly and a dispatch
       # overlay the dev-kit builds. No unmodified base copy is kept: no A/B
@@ -471,6 +486,7 @@ jobs:
           libs: ${{ (inputs.mode == 'nightly' || !inputs.mode) && matrix.libs || '' }}
           xclbins: ${{ (inputs.mode == 'nightly' || !inputs.mode) && matrix.xclbins || '' }}
           families: ${{ (inputs.mode == 'nightly' || !inputs.mode) && matrix.families || '' }}
+          engines: ${{ !inputs.mode && 'bench-run/flm-dev-kit/FLM_DLL/engines.json' || '' }}
           # Dispatch: the earlier Build and Test run's; called: this run's.
           run-id: ${{ needs.resolve.outputs.build-run-id }}
           github-token: ${{ needs.resolve.outputs.build-run-id != '' && github.token || '' }}
