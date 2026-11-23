@@ -28,7 +28,9 @@ from fixtures import user
 
 PROMPT = "Is 7 a prime number? Answer with yes or no."
 THINK_BUDGET = 1536
-TAGS = ("<think>", "</think>")
+# reasoning markers of every format; tool-call markers stay in the text on these routes
+TAGS = ("<think>", "</think>", "<|channel>", "<channel|>",
+        "<|channel|>", "<|message|>", "<|start|>", "<|end|>", "<|return|>")
 # sampling pinned as the /v1 tests do, so two requests for the same text give the same text
 PINS = {"temperature": 0.0, "top_k": 1, "repeat_last_n": 64, "seed": 1}
 
@@ -123,10 +125,12 @@ def chat_think_on_stream(api: Api) -> None:
 
 @case
 def generate_think_on(api: Api) -> None:
-    """/api/generate, think=true, stream and not: no tag in the answer, and any thinking is split off (whether the route reasons at all is WP-21)."""
+    """/api/generate, think=true, stream and not: no marker in the answer, and any thinking is split off (whether the route reasons at all is WP-21)."""
     for stream in (False, True):
         answer, thinking = fold(generate(api, stream, think=True), False)
         check_split(answer, thinking, f"/api/generate stream={stream}")
+        if api.always_thinks:
+            require_thinking(thinking, f"/api/generate stream={stream}")
 
 
 @case

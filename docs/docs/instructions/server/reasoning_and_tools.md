@@ -261,7 +261,7 @@ What changes when thinking is off:
 
 ### Ollama routes
 
-`/api/chat` and `/api/generate` split the reasoning the same way. With `think: true`, a thinking model's reasoning arrives in `message.thinking` (`/api/chat`) or `thinking` (`/api/generate`), and `message.content` / `response` carry the answer without `<think>` tags, streamed or not. A packet without reasoning has no `thinking` key. The split follows the model's own output format, not its name. Tool calls are not parsed on these routes: a tool-call block stays in `content`.
+`/api/chat` and `/api/generate` split the reasoning the same way. When a thinking model reasons, its reasoning arrives in `message.thinking` (`/api/chat`) or `thinking` (`/api/generate`), and `message.content` / `response` carry the answer without reasoning markers, streamed or not. `/api/chat` honours `think` for this. `/api/generate` runs with the model's loaded default and ignores `think` (tracked in WP-21), so on a model that loads with thinking off it returns no `thinking`. Like `/v1`, these routes strip leading and trailing whitespace from the text. A packet without reasoning has no `thinking` key. The split follows the model's own output format, not its name. Tool calls are not parsed on these routes: a tool-call block stays in `content`.
 
 ---
 
