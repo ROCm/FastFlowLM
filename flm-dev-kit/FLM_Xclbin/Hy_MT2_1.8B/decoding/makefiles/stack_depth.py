@@ -52,8 +52,11 @@ def deepest(fn, starts, frames, calls, seen=()):
 
 def main():
     starts, frames, calls, indirect = parse(sys.argv[1], sys.argv[2])
+    # No function in the disassembly is output this parser cannot read, not
+    # a core without a stack (that one prints 0): fail rather than print
+    # nothing, which check_peano_stack.sh would take for "nothing to check".
     if not frames:
-        return
+        sys.exit(f"stack_depth.py: {sys.argv[2]}: no functions in the llvm-objdump -d output")
     if indirect:
         print(sum(frames.values()))
     else:
