@@ -2019,7 +2019,7 @@
             "url": "https://huggingface.co/amd/gemma-4-E2B-it-Q4_G32-GGUF/resolve/cccdcfeae91175e7e5e64c41900b5e6a986148e6",
             "file_url": "https://huggingface.co/api/models/amd/gemma-4-E2B-it-Q4_G32-GGUF/tree/cccdcfeae91175e7e5e64c41900b5e6a986148e6",
             "use_hf_token": true,
-            "size": 6889739655,
+            "size": 6889725762,
             "default_context_length": 65536,
             "max_prefill_len": 4096,
             "details": {
@@ -2040,19 +2040,19 @@
             "file_sources": {
                 "tokenizer.json": {
                     "url": "https://huggingface.co/google/gemma-4-E2B-it",
-                    "revision": "3e22461f65e89153144f8adb70e3b8c2cc9845a7"
+                    "revision": "4adf15748de9e1a0097b6274cee9c15836c41c37"
                 },
                 "tokenizer_config.json": {
                     "url": "https://huggingface.co/google/gemma-4-E2B-it",
-                    "revision": "3e22461f65e89153144f8adb70e3b8c2cc9845a7"
+                    "revision": "4adf15748de9e1a0097b6274cee9c15836c41c37"
                 },
                 "config.json": {
                     "url": "https://huggingface.co/google/gemma-4-E2B-it",
-                    "revision": "3e22461f65e89153144f8adb70e3b8c2cc9845a7"
+                    "revision": "4adf15748de9e1a0097b6274cee9c15836c41c37"
                 },
                 "chat_template.jinja": {
                     "url": "https://huggingface.co/google/gemma-4-E2B-it",
-                    "revision": "3e22461f65e89153144f8adb70e3b8c2cc9845a7"
+                    "revision": "4adf15748de9e1a0097b6274cee9c15836c41c37"
                 }
             },
             "footprint": 6.92,
@@ -2071,7 +2071,7 @@
             "url": "https://huggingface.co/amd/gemma-4-E4B-it-Q4_G32-GGUF/resolve/1aeafabf9fb3f92c6858e506d56881bf78e55243",
             "file_url": "https://huggingface.co/api/models/amd/gemma-4-E4B-it-Q4_G32-GGUF/tree/1aeafabf9fb3f92c6858e506d56881bf78e55243",
             "use_hf_token": true,
-            "size": 9771106246,
+            "size": 9771093048,
             "default_context_length": 65536,
             "max_prefill_len": 4096,
             "details": {
@@ -2092,19 +2092,19 @@
             "file_sources": {
                 "tokenizer.json": {
                     "url": "https://huggingface.co/google/gemma-4-E4B-it",
-                    "revision": "ee0ef6023621cff504d758262d4e04895a5af4a2"
+                    "revision": "4ecc2ba63bcac23ba4a767fc87025b1450f84c9c"
                 },
                 "tokenizer_config.json": {
                     "url": "https://huggingface.co/google/gemma-4-E4B-it",
-                    "revision": "ee0ef6023621cff504d758262d4e04895a5af4a2"
+                    "revision": "4ecc2ba63bcac23ba4a767fc87025b1450f84c9c"
                 },
                 "config.json": {
                     "url": "https://huggingface.co/google/gemma-4-E4B-it",
-                    "revision": "ee0ef6023621cff504d758262d4e04895a5af4a2"
+                    "revision": "4ecc2ba63bcac23ba4a767fc87025b1450f84c9c"
                 },
                 "chat_template.jinja": {
                     "url": "https://huggingface.co/google/gemma-4-E4B-it",
-                    "revision": "ee0ef6023621cff504d758262d4e04895a5af4a2"
+                    "revision": "4ecc2ba63bcac23ba4a767fc87025b1450f84c9c"
                 }
             },
             "footprint": 9.74,
