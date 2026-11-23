@@ -1,4 +1,5 @@
 // Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+// Portions of this file consist of AI-generated content.
 
 #pragma once
 #include "models/gemma/gemma_npu.hpp"
@@ -103,7 +104,6 @@ struct gemma_npu::Impl{
     npu_app_manager* gemm_app_manager;
     npu_app_manager* dequant_app_manager;
     npu_app_manager* mha_app_manager;
-    npu_app_manager* lm_head_app_manager;
 
     npu_app layer;
     npu_app sliding_layer;
@@ -142,7 +142,6 @@ struct gemma_npu::Impl{
     int SLIDING_WINDOW;
     int SLIDING_WINDOW_PATTERN;
     uint32_t vocab_size;
-    uint32_t vocab_size_padded;
     // size
     std::vector<buffer<bf16>> rms_weights;
     std::vector<buffer<bf16>> rope_rms_weights;
@@ -163,6 +162,8 @@ struct gemma_npu::Impl{
     buffer<bf16> logits;
     buffer<bf16> logits_valid;
     buffer<u8> lm_head_weights;
+    buffer<bf16> lm_head_norm;
+    buffer<bf16> lm_head_unused;
     buffer<bf16> final_rms_weight;
     
     flm_rt::runlist layers_run;

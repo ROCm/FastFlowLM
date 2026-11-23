@@ -38,7 +38,6 @@ struct gemma_npu_sequence::Impl{
     uint32_t DQ;
     uint32_t MAX_L;
     uint32_t vocab_size;
-    uint32_t vocab_size_padded;
 
     uint32_t HIDDEN_SIZE;
     uint32_t kv_cache_size;
@@ -88,7 +87,6 @@ struct gemma_npu_sequence::Impl{
     ~Impl();
 
     void gen_layer_seq(npu_sequence* seq, const uint32_t L, bool is_sliding_window);
-    void gen_lm_head_seq(npu_sequence* seq);
     void gen_lm_head_in_layer_seq(npu_sequence* seq);
     void gen_mha_engine_seq(npu_sequence* seq, const uint32_t L_begin, const uint32_t L_end, bool is_sliding_window, int buffer_length);
 

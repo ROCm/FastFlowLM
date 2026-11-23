@@ -56,7 +56,8 @@ build/test/test_lm_head --model <Gemma3-4B-NPU2 dir> --old <lm_head.xclbin> \
 build/test/test_lm_head --model <dir> --new build/GEMMA3_4B_STUB/xclbins/layer_lm.xclbin --stub 1
 ```
 
-The same x goes to `lm_head.xclbin` and to `layer_lm.xclbin` in mode 2; every logit must have the same bits
+The engine no longer uses `lm_head.xclbin`; the test keeps its 32-core sequence (`gen_old_lm_head_seq`) as the
+reference. The same x goes to `lm_head.xclbin` and to `layer_lm.xclbin` in mode 2; every logit must have the same bits
 (PASSED / FAILED). Both are also compared with a CPU Q4_1 reference (`w = q * scale + min`, block layout as
 `proj.cc` reads it). Then it times each back to back and alternating (alternating pays a context switch).
 

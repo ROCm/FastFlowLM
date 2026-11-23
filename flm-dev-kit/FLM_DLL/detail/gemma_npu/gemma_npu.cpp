@@ -1,4 +1,5 @@
 // Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+// Portions of this file consist of AI-generated content.
 
 #include "gemma_npu_detail.hpp"
 
@@ -17,7 +18,6 @@ gemma_npu::Impl::Impl(LM_Config config, npu_xclbin_manager *npu_instance, int MA
     SLIDING_WINDOW = config.get("sliding_window");
     SLIDING_WINDOW_PATTERN = config.get("sliding_window_pattern");
     vocab_size = config.get("vocab_size");
-    vocab_size_padded = (vocab_size + 1024 - 1) / 1024 * 1024;
 
     this->MAX_L = std::max(MAX_L, 8192);
     // make MAX_L a power of 2
@@ -40,7 +40,7 @@ gemma_npu::Impl::Impl(LM_Config config, npu_xclbin_manager *npu_instance, int MA
         this->gemma_image_encoder = std::make_unique<GemmaImageEncoder>(config, npu);
     }
 
-    layer_app_manager = npu->register_xclbin(utils::path_join(config.exec_path, "xclbins", config.model_name, "layer.xclbin"));
+    layer_app_manager = npu->register_xclbin(utils::path_join(config.exec_path, "xclbins", config.model_name, "layer_lm.xclbin"));
     this->layer = layer_app_manager->create_app();
     this->sliding_layer = layer_app_manager->create_app();
     if (!this->npu->is_preemption_enabled()){
@@ -69,8 +69,7 @@ gemma_npu::Impl::Impl(LM_Config config, npu_xclbin_manager *npu_instance, int MA
     this->mha_engine = mha_app_manager->create_app();
     this->sliding_mha_engine = mha_app_manager->create_app();
 
-    lm_head_app_manager = npu->register_xclbin(utils::path_join(config.exec_path, "xclbins", config.model_name, "lm_head.xclbin"));
-    this->lm_head = lm_head_app_manager->create_app();
+    this->lm_head = layer_app_manager->create_app();
 
     // allocate all buffers
     rms_weights.resize(num_hidden_layers);
@@ -98,9 +97,12 @@ gemma_npu::Impl::Impl(LM_Config config, npu_xclbin_manager *npu_instance, int MA
     }
     this->sliding_temp_cache = this->mha_engine.create_bo_buffer<bf16>(kv_cache_size);
     x = layer.create_bo_buffer<bf16>(D);
-    this->logits = this->lm_head.create_bo_buffer<bf16>(vocab_size_padded);
+    const size_t lm_head_rows = this->sequence->get_lm_head_in_layer_rows();
+    this->logits = this->lm_head.create_bo_buffer<bf16>(lm_head_rows);
     this->logits_valid = buffer<bf16>(this->logits.data(), vocab_size);
-    this->lm_head_weights = this->lm_head.create_bo_buffer<u8>(vocab_size_padded * D * 5 / 8);
+    this->lm_head_weights = this->lm_head.create_bo_buffer<u8>(lm_head_rows * D * 5 / 8);
+    this->lm_head_norm = this->lm_head.create_bo_buffer<bf16>(D);
+    this->lm_head_unused = this->lm_head.create_bo_buffer<bf16>(D);
 
     this->K01_offset = sequence->get_k01_offset();
     this->K23_offset = sequence->get_k23_offset();
@@ -127,8 +129,8 @@ gemma_npu::Impl::Impl(LM_Config config, npu_xclbin_manager *npu_instance, int MA
 
     this->dequant_seq_generator->generate_dequant_q4_1_seq(this->down_dequant.seq(), INTERMEDIATE_SIZE, D, D * (DQ + DK + DV + DQ + 2 * INTERMEDIATE_SIZE) * 5 / 8,    0);
 
-    this->sequence->gen_lm_head_seq(this->lm_head.seq());
-    this->lm_head_run = this->lm_head.create_run(this->logits, this->lm_head_weights, this->x);
+    this->sequence->gen_lm_head_in_layer_seq(this->lm_head.seq());
+    this->lm_head_run = this->lm_head.create_run(this->x, this->lm_head_weights, this->lm_head_norm, this->lm_head_unused, this->logits);
 }
 
 void reorder_cpy(u8* dst, buffer<u8>& src, const int col, const int vertical_blocks = 2){
@@ -273,8 +275,10 @@ void gemma_npu::Impl::load_weights(Q4NX& q4nx){
         LOG_VERBOSE(1, "Loading lm head weights");
         buffer<u8> w_lm_head;
         q4nx.load_weights(w_lm_head, "lm_head.weight");
-        reorder_cpy(this->lm_head_weights.data(), w_lm_head, D, 4);
+        reorder_cpy(this->lm_head_weights.data(), w_lm_head, D, 2);
         this->lm_head_weights.sync_to_device();
+        memcpy(this->lm_head_norm.data(), this->final_rms_weight.data(), (size_t)D * sizeof(bf16));
+        this->lm_head_norm.sync_to_device();
     }
     this->clear_context();
 }

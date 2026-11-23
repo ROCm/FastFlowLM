@@ -452,7 +452,6 @@ gemma_npu_sequence::Impl::Impl(LM_Config config, uint32_t MAX_L){
     DK = config.get("head_dim") * config.get("num_key_value_heads");
     DV = config.get("head_dim") * config.get("num_key_value_heads");
     this->vocab_size = config.get("vocab_size");
-    this->vocab_size_padded = (vocab_size + 1024 - 1) / 1024 * 1024;
     this->lm_head_in_layer_rows = (lm_head_in_layer_vocab + D - 1) / D * D;
     this->sliding_window = config.get("sliding_window");
     this->sliding_window_pattern = config.get("sliding_window_pattern");
@@ -700,81 +699,6 @@ void gemma_npu_sequence::Impl::gen_mha_engine_seq(npu_sequence* seq, const uint3
     seq->cmds2seq();
 }
 
-void gemma_npu_sequence::Impl::gen_lm_head_seq(npu_sequence* seq){
-    static constexpr npu_tiles lm_head_tiles[] = {IT0, IT1, IT2, IT3, IT4, IT5, IT6, IT7};
-    static constexpr uint32_t columns = 8;
-    static constexpr int lm_head_y_arg_idx = 0;
-    static constexpr int lm_head_w_arg_idx = 1;
-    static constexpr int lm_head_x_arg_idx = 2;
-
-    constexpr int m_per_round = columns * 4 * 32;
-    constexpr int a_block_size = 32 * 256 * 5 / 8 / 2;
-    int blocks_per_row = D / 256;
-    constexpr int row_blocks_per_round = columns * 4;
-
-    int rounds = vocab_size_padded / m_per_round;
-
-    seq->clear_cmds();
-    seq->npu_preemption(0);
-
-    for (int round = 0; round < rounds; round++){
-        uint32_t round_offset = round * m_per_round;
-        uint32_t bd_offset = (round % 2) * 8;
-        // send x
-        seq->npu_dma_memcpy_nd(
-            sizeof(bf16), lm_head_x_arg_idx,
-            MM2S, lm_head_tiles[0], npu_bd_id(bd_0 + bd_offset), it_channel_0,
-            {0, 0, 0, 0},
-            {1, 1, 1, (uint32_t)D},
-            {0, 0, 0, 1},
-            -1, 0, false
-        );
-        // y_out
-        for (uint32_t col = 0; col < columns; col++){
-            uint32_t y_offset = 4 * m * col + round_offset;
-            seq->npu_dma_memcpy_nd(
-                sizeof(bf16), lm_head_y_arg_idx,
-                S2MM, lm_head_tiles[col], npu_bd_id(bd_2 + bd_offset), it_channel_0,
-                {0, 0, 0, y_offset},
-                {1, 1, 1, 4 * m},
-                {0, 0, 0, 1},
-                -1, 0, true
-            );
-        }
-
-        for (uint32_t col = 0; col < columns; col++){
-            seq->npu_dma_memcpy_nd(
-                sizeof(bf16),
-                lm_head_w_arg_idx,
-                MM2S,
-                lm_head_tiles[col],
-                npu_bd_id(bd_1 + bd_offset),
-                it_channel_1,
-                {0, 0, 0, (round * row_blocks_per_round + col * 4) * a_block_size * blocks_per_row},
-                {1, 1, 1, (uint32_t)(4 * a_block_size * blocks_per_row)},
-                {0, 0, 0, 1},
-                -1, 0, false
-            );
-        }
-        if (round > 0){
-            for (uint32_t col = 0; col < columns; col++){
-                seq->npu_dma_wait(
-                    lm_head_tiles[col],
-                    S2MM,
-                    it_channel_0
-                );
-            }
-        }
-    }
-    for (uint32_t col = 0; col < columns; col++){
-        seq->npu_dma_wait(
-            lm_head_tiles[col],
-            S2MM,
-            it_channel_0
-        );
-    }
-    seq->cmds2seq();
-}
 void gemma_npu_sequence::Impl::gen_lm_head_in_layer_seq(npu_sequence* seq){
     assert(vocab_size == lm_head_in_layer_vocab);
     assert(lm_head_in_layer_rows % (m * 16) == 0);
@@ -860,10 +784,6 @@ void gemma_npu_sequence::gen_layer_seq(npu_sequence* seq, const uint32_t L, bool
 
 void gemma_npu_sequence::gen_mha_engine_seq(npu_sequence* seq, const uint32_t L_begin, const uint32_t L_end, bool is_sliding_window, int buffer_length){
     this->_impl->gen_mha_engine_seq(seq, L_begin, L_end, is_sliding_window, buffer_length);
-}
-
-void gemma_npu_sequence::gen_lm_head_seq(npu_sequence* seq){
-    this->_impl->gen_lm_head_seq(seq);
 }
 
 void gemma_npu_sequence::gen_lm_head_in_layer_seq(npu_sequence* seq){

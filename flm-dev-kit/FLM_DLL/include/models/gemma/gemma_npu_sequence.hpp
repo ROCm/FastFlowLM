@@ -43,10 +43,6 @@ public:
     /// \param L_end the end length
     void gen_mha_engine_seq(npu_sequence* seq, const uint32_t L_begin, const uint32_t L_end, bool is_sliding_window, int buffer_length);
 
-    /// \brief Generate the lm head sequence
-    /// \param seq the sequence
-    void gen_lm_head_seq(npu_sequence* seq);
-
     /// \brief Generate the lm head sequence for layer_lm.xclbin (lm_head inside the layer design)
     /// \param seq the sequence; args: 0 x (already normalized), 1 lm_head weights, 2 any D bf16, 3 unused, 4 logits
     void gen_lm_head_in_layer_seq(npu_sequence* seq);
