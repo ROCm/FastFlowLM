@@ -108,3 +108,11 @@ the newest chunk without a mask, so those rows changed the rounding (cos 0.99983
 differed from step 9; the same before this engine). `restore` now zeroes them as `write_state` does
 (`kv_rows_zero` up to `dirty_rows`) and marks their chunks stale: the decode after `restore` is byte-identical to
 the one after `checkpoint` (40 / 40 steps); the other five scenarios are unchanged.
+
+## lm_head without the per-round stall (2026-11-23)
+
+The rms core now sends the next round's x before collecting the current logits (kernel README "Weight streaming
+probes"): lm_head in the layer design 9.84 -> 7.81 ms. Engine, same code, old vs new `layer_lm.xclbin`: logits
+byte-identical in the six scenarios above; decode, median of 3 alternating rounds of 128 tokens: 1K 53.74 -> 51.61
+ms, 4K 55.19 -> 53.06 ms (-2.13 ms, +4%). Since before lm_head moved into the layer xclbin: 1K 57.38 -> 51.61 ms
+(+11.2%), 4K 59.17 -> 53.06 ms (+11.5%).

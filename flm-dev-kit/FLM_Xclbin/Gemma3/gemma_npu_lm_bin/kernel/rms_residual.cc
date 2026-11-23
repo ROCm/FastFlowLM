@@ -198,9 +198,16 @@ void rms_residual(
 
         constexpr int vocab_size_per_round = vocab_size_padded / D;
         constexpr int y_repeats_per_round = D / m_per_round;
+        // x is the same for every round: round i + 1's x sends are queued before round i's logits are collected, so
+        // the proj cores (and the weight stream) do not wait for x between rounds (README "Weight streaming probes")
+#ifndef PROBE_NO_X
+        _lock_release(y_cons_lock, y_repeats_per_round);
+#endif
         for (int i = 0; i < vocab_size_per_round; i++) {
 #ifndef PROBE_NO_X
-            _lock_release(y_cons_lock, y_repeats_per_round);
+            if (i + 1 < vocab_size_per_round) {
+                _lock_release(y_cons_lock, y_repeats_per_round);
+            }
 #endif
 #ifndef PROBE_NO_Y
             _lock_acquire(lm_head_out_prod_lock, 1);

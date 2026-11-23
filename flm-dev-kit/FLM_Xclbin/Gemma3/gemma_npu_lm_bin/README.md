@@ -74,7 +74,7 @@ context + 4 random:
 | Core | old `Gemma3/gemma_npu_bin` | this folder |
 |---|---|---|
 | proj (16 cores) | 10,864 | 10,864 |
-| rms (`core_1_2`) | 6,608 | 6,736 |
+| rms (`core_1_2`) | 6,608 | 6,784 |
 | Q.K attention (4 cores) | 2,736 | 3,248 (bfp16 KV) |
 | P.V attention (4 cores) | 3,568 | 4,256 (bfp16 KV) |
 | others | 1,184-4,192 | same |
@@ -148,7 +148,12 @@ Removing either the x re-send or the logits collection brings lm_head to the DDR
 the rms core, which works one 512-row round at a time: send x to the 16 proj cores, wait for the round's logits,
 copy them out, wait until the x send is done, and only then send x for the next round. So between rounds the proj
 cores wait for x and the weight stream stalls. The host side is not the limit: one 3-D descriptor per channel and
-matrix instead of one per round with a wait each gave 9.77 / 9.57 ms (tried, reverted). Shared probe: rounds of
-2.75 ms of x + logits traffic alone.
+matrix instead of one per round with a wait each gave 9.77 / 9.57 ms (tried, reverted). The x and logits traffic
+alone (no weights) takes 2.75 ms.
+
+Fix (same day): x is the same for every round, so the rms core now queues round i + 1's x sends before it
+collects round i's logits (at most 10 sends outstanding; 515 in total as before). Same data, same order per
+stream: logits bit-identical to `lm_head.xclbin` (28 / 28 x vectors). lm_head inside the layer design: 9.84 ->
+7.81 ms (the separate `lm_head.xclbin`: 7.71 ms in the same run). rms core program 6,736 -> 6,784 B.
 
 `PROBE` only adds `#ifdef`s; the normal build's program sizes are unchanged.
