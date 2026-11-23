@@ -50,9 +50,16 @@ buffer<bf16> SmolVLA_vlm::forward(smolvla_vlm_input_t& vlm_in, buffer<bf16>& sta
     buffer<bf16> connector_mm_w = this->def.connector.locate_myself<bf16>(this->non_layer_weights);
     auto last_hidden = this->vision->forward(vlm_in.pixel_values);
     PROF_ACC(vision);
-    cpu_func::_cpu_mm(language_in.data(), connector_mm_w.data(), last_hidden.data(),
-                      smolvla_cfg::VISION_TOKENS_PER_IMAGE * num_images,
-                      smolvla_cfg::CONNECTOR_IN, this->language->def.D);
+    const int conn_M = smolvla_cfg::VISION_TOKENS_PER_IMAGE * num_images;
+    if (!conn_ready) {
+        this->vision->exec.init_connector(connector_mm_w.data(), (int)this->language->def.D);
+        conn_ready = true;
+    }
+    if (!this->vision->exec.connector(language_in.data(), (int)this->language->def.D,
+                                      last_hidden.data(), conn_M)) {
+        cpu_func::_cpu_mm(language_in.data(), connector_mm_w.data(), last_hidden.data(),
+                          conn_M, smolvla_cfg::CONNECTOR_IN, this->language->def.D);
+    }
     PROF_ACC(connector);
     buffer<bf16> kv_cache = this->language->forward(language_in, state_in, vlm_in.input_tokens, num_images, L);
     PROF_ACC(language);

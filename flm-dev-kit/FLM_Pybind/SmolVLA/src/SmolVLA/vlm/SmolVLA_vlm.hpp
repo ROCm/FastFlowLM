@@ -33,6 +33,7 @@ public:
     std::unique_ptr<SmolVLA_language> language;
 
     buffer<bf16> language_in;
+    bool conn_ready = false;       // connector weight uploaded to the NPU app
 
     buffer<u8> non_layer_weights;   // connector + lm_head
 
