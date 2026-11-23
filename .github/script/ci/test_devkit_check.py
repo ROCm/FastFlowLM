@@ -28,17 +28,6 @@ RTP_A 1024
 RTP_B 2048
 """
 MAKEFILE = "LDFLAGS += -Wl,-Bsymbolic-functions\n"
-def rmtree(path: Path) -> None:
-    """shutil.rmtree that also removes read-only files (git objects on Windows)."""
-    def fix(func, p, _exc):
-        os.chmod(p, stat.S_IWRITE)
-        func(p)
-    if sys.version_info >= (3, 12):
-        shutil.rmtree(path, onexc=fix)
-    else:
-        shutil.rmtree(path, onerror=fix)
-
-
 NOTICE = "// Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.\n"
 
 MD = """# Kernel Assignment
@@ -59,6 +48,17 @@ MD = """# Kernel Assignment
 | `attn.xclbin` | `xclbins-Attn` | Peano |
 | `mm.xclbin` | — | — |
 """
+
+
+def rmtree(path: Path) -> None:
+    """shutil.rmtree that also removes read-only files (git objects on Windows)."""
+    def fix(func, p, _exc):
+        os.chmod(p, stat.S_IWRITE)
+        func(p)
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=fix)
+    else:
+        shutil.rmtree(path, onerror=fix)
 
 
 class Tree:
