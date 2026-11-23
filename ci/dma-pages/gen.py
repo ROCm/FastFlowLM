@@ -21,7 +21,22 @@ for mode, R, P in CASES:
     open(os.path.join(d, "aie.mlir"), "w").write(mod)
     if not os.path.exists(os.path.join(d, "final.xclbin")):
         jobs.append(d)
-    rows.append(f"{name}\t{mode}\t{R}\t{P}\t{ib}\t{ob}\t{passes * P * pages.PAGE}\t{nch}")
+    rows.append(f"{name}\t{mode}\t{R}\t{P}\t{ib}\t{ob}\t{passes * P * pages.PAGE}\t{nch}\t0\t0")
+
+# the issue's layout: rows `pitch` apart (64 KB + R), against 4 KB + R
+for N in (64, 128, 256, 512, 1024):
+    for mode, R in (("xscatter", 128), ("xgather", 256)):
+        for pk in (4, 64):
+            pitch = pk * 1024 + R
+            name = f"{mode}_r{R}_n{N}_k{pk}"
+            d = os.path.join("build", name)
+            os.makedirs(d, exist_ok=True)
+            mod, ib, ob, passes = pages.design_x(mode, R, N, pitch, cols, fifos, total)
+            open(os.path.join(d, "aie.mlir"), "w").write(mod)
+            if not os.path.exists(os.path.join(d, "final.xclbin")):
+                jobs.append(d)
+            rows.append(f"{name}\t{mode}\t{R}\t{N}\t{ib}\t{ob}\t{passes * N * R}\t{nch}\t{pitch}\t"
+                        f"{pages.chan_base(N, R, pitch)}")
 
 
 def compile_one(d):

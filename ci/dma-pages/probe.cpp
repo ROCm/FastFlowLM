@@ -107,6 +107,9 @@ int main(int argc, char **argv) {
   size_t per_ch = std::strtoull(argv[8], nullptr, 0), nch = std::strtoull(argv[9], nullptr, 0);
   std::string backing = argv[10];
   int iters = argc > 11 ? std::atoi(argv[11]) : 20;
+  // x modes (pages.py design_x): rows `pitch` bytes apart, P = rows per channel
+  size_t pitch = argc > 12 ? std::strtoull(argv[12], nullptr, 0) : 0;
+  if (pitch) mode += "-k" + std::to_string(pitch / 1024);
 
   std::vector<uint32_t> instr;
   {
@@ -171,7 +174,11 @@ int main(int argc, char **argv) {
   // check channel 0 (see pages.py for the layouts): stream element j = slot q, page p
   size_t bad = 0;
   const size_t Q = PAGE / R, P1 = std::min<size_t>(P, 512), G = P / P1;
-  if (mode == "stream") {
+  if (pitch) {
+    const bool sc = mode[1] == 's';  // xscatter: C scattered, xgather: A scattered
+    for (size_t j = 0; j < P; ++j)
+      bad += std::memcmp(sc ? C + j * pitch : C + j * R, sc ? A + j * R : A + j * pitch, R) != 0;
+  } else if (mode == "stream") {
     bad = std::memcmp(A, C, P * PAGE) != 0;
   } else {
     for (size_t q = 0; q < Q; ++q)
@@ -183,7 +190,7 @@ int main(int argc, char **argv) {
           bad += std::memcmp(dst, src, R) != 0;
         }
   }
-  if (bad && getenv("PROBE_DUMP") && mode == "scatter") {
+  if (bad && getenv("PROBE_DUMP") && mode == "scatter" && !pitch) {
     // which input row j landed at (page, slot)
     for (size_t page = 0; page < std::min<size_t>(P, 4); ++page) {
       std::fprintf(stderr, "page %zu:", page);

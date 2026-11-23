@@ -93,6 +93,66 @@ def design(mode, R, P, cols, fifos, total):
     return str(ctx.module), in_words * 4, out_words * 4, passes
 
 
+def chan_base(N, R, pitch):
+    """Byte distance between channel regions on the scattered side: wide pitches interleave the
+    channels one page apart inside one region, narrow ones get their own region."""
+    return PAGE if pitch >= 16 * PAGE else N * pitch
+
+
+def design_x(mode, R, N, pitch, cols, fifos, total):
+    """xscatter / xgather: N rows of R bytes per channel, `pitch` bytes apart (the issue's
+    layout is pitch = 64 KB + R), each pass moves every row once. Chunks of <= 512 rows."""
+    nch = cols * fifos
+    w = R // 4
+    n1 = min(N, 512)
+    chunks = N // n1
+    assert chunks * n1 == N
+    passes = max(1, min(total // (N * R), 128 // chunks))  # <= 128 rounds keeps aiecc fast
+    rounds = passes * chunks
+    cb = chan_base(N, R, pitch)
+    sc_bytes = (nch - 1) * cb + N * pitch
+    co_bytes = nch * N * R
+    ssz, sst = [1, 1, n1, w], [0, 0, pitch // 4, 1]
+    csz, cst = contig(n1 * R) if n1 * R >= 2048 else ([1, 1, 1, n1 * w], [0, 0, 0, 1])
+    sc = lambda k, c: (k * cb + c * n1 * pitch) // 4
+    co = lambda k, c: (k * N * R + c * n1 * R) // 4
+    if mode == "xgather":
+        in_b, out_b, isz, ist, ioff, osz, ost, ooff = sc_bytes, co_bytes, ssz, sst, sc, csz, cst, co
+    else:
+        in_b, out_b, isz, ist, ioff, osz, ost, ooff = co_bytes, sc_bytes, csz, cst, co, ssz, sst, sc
+    line_ty = np.ndarray[(LINE // 4,), np.dtype[np.int32]]
+    in_ty = np.ndarray[(in_b // 4,), np.dtype[np.int32]]
+    out_ty = np.ndarray[(out_b // 4,), np.dtype[np.int32]]
+
+    with mlir_mod_ctx() as ctx:
+
+        @device(AIEDevice.npu2)
+        def device_body():
+            ins, outs = [], []
+            for c in range(cols):
+                shim = tile(c, 0)
+                mem = tile(c, 1)
+                for f in range(fifos):
+                    a = object_fifo(f"in{c}_{f}", shim, mem, 2, line_ty)
+                    b = object_fifo(f"out{c}_{f}", mem, shim, 2, line_ty)
+                    object_fifo_link(a, b)
+                    ins.append(a)
+                    outs.append(b)
+
+            @runtime_sequence(in_ty, out_ty)
+            def sequence(A, C):
+                for r in range(rounds):
+                    c = r % chunks
+                    for k in range(nch):
+                        npu_dma_memcpy_nd(metadata=outs[k], bd_id=0, mem=C, offsets=[0, 0, 0, ooff(k, c)],
+                                          sizes=osz, strides=ost, issue_token=True)
+                        npu_dma_memcpy_nd(metadata=ins[k], bd_id=1, mem=A, offsets=[0, 0, 0, ioff(k, c)],
+                                          sizes=isz, strides=ist)
+                    dma_wait(*outs)
+
+    return str(ctx.module), in_b, out_b, passes
+
+
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("mode", choices=["stream", "gather", "scatter"])
