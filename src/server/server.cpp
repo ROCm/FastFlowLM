@@ -246,13 +246,22 @@ HttpSession::HttpSession(tcp::socket socket, WebServer& server)
     : socket_(std::move(socket))
     , server_(server)
     , is_streaming_(false) {
+    // A client that reset while queued for accept leaves a socket these calls
+    // fail on (ENOTCONN); the session then ends through read_request's error
+    // path, so they must not throw.
+    boost::system::error_code ec;
     // Set socket timeout
-    socket_.set_option(tcp::socket::keep_alive(false));
+    socket_.set_option(tcp::socket::keep_alive(false), ec);
     // Avoid abortive close that can lead to client-side broken pipe on large uploads
-    socket_.set_option(tcp::socket::linger(false, 0));
+    socket_.set_option(tcp::socket::linger(false, 0), ec);
     
     // Debug: Log TCP connection formation
-    header_print("🔗 ", "TCP connection established - Remote: " + socket_.remote_endpoint().address().to_string() + ":" + std::to_string(socket_.remote_endpoint().port()));
+    auto remote = socket_.remote_endpoint(ec);
+    if (ec) {
+        header_print("🔗 ", "TCP connection established - Remote endpoint unavailable");
+    } else {
+        header_print("🔗 ", "TCP connection established - Remote: " + remote.address().to_string() + ":" + std::to_string(remote.port()));
+    }
 }
 
 ///@brief destructor: a session never outlives its slot in the connection limit
@@ -735,9 +744,19 @@ void WebServer::do_accept() {
                     // Increment connection counter
                     active_connections_.fetch_add(1);
                     
-                    // Create a new session for this connection
-                    auto session = std::make_shared<HttpSession>(std::move(socket), *this);
-                    session->start(cors);
+                    // A throw here must not skip the re-arm below, or the
+                    // server stops accepting for good. Nothing released the
+                    // slot yet: a session releases it only from a completion
+                    // handler, and none is queued if construction or start()
+                    // threw.
+                    try {
+                        // Create a new session for this connection
+                        auto session = std::make_shared<HttpSession>(std::move(socket), *this);
+                        session->start(cors);
+                    } catch (const std::exception& e) {
+                        header_print("LOG", "Failed to set up connection: " + std::string(e.what()));
+                        active_connections_.fetch_sub(1);
+                    }
                 }
             }
             if (running) {
