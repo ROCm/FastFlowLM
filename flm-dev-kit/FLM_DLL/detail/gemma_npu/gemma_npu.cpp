@@ -1341,7 +1341,16 @@ int gemma_npu::Impl::restore() {
             std::fill(this->kv_packed_valid[i].begin(), this->kv_packed_valid[i].end(), 0);
         }
     }
-    // global layers keep their rows below the checkpoint; a chunk above it is the newest chunk (stale) before it is read
+    // global layers: rows above the checkpoint still hold what was decoded after it; zero them as write_state does, so
+    // the decode replays bit for bit (the attention's max also sees the rows past the context in the newest chunk)
+    const size_t restored = static_cast<size_t>(checkpoint_context_length);
+    for (uint32_t i = 0; i < num_hidden_layers; i++){
+        if (!is_sliding_window(i)){
+            this->_kv_bfp16_invalidate_positions(i, restored, std::max(restored, this->dirty_rows));
+        }
+    }
+    kv_rows_zero(this->kv_caches, kv_layout(), restored, this->dirty_rows, &attn_mask);
+    this->dirty_rows = restored;
     this->set_context_length(checkpoint_context_length); // regenerate sequence
     return checkpoint_context_length;
 }

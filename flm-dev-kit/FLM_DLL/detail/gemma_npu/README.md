@@ -102,8 +102,9 @@ Decode (`forward()`), median of 3 alternating rounds of 128 tokens: 1K 54.60 -> 
 -> 55.20 ms (-1.19 ms, +2.2%). Prefill time unchanged (1K 1.65 / 1.61 s, 4K 4.90 / 4.86 s, one run each, including
 the packing of the whole prompt).
 
-Seen while testing, not changed (same in the 3a engine): after `restore` the decode does not replay the checkpoint
-decode bit for bit (cos 0.99983 at the first step, greedy tokens differ from step 9). `restore` puts back only the
-sliding rings; the global rows above the checkpoint keep the first pass's K/V, and the attention takes the softmax
-max over all 16 lanes of the newest chunk without a mask, so those rows change the rounding. `write_state` zeroes
-them (`kv_rows_zero`) and replays exactly.
+`restore` and a bit-for-bit replay (fixed 2026-11-23): `restore` puts back only the sliding rings, so the global
+rows above the checkpoint kept what was decoded after it. The attention takes the softmax max over all 16 lanes of
+the newest chunk without a mask, so those rows changed the rounding (cos 0.99983 at the first step, greedy tokens
+differed from step 9; the same before this engine). `restore` now zeroes them as `write_state` does
+(`kv_rows_zero` up to `dirty_rows`) and marks their chunks stale: the decode after `restore` is byte-identical to
+the one after `checkpoint` (40 / 40 steps); the other five scenarios are unchanged.
