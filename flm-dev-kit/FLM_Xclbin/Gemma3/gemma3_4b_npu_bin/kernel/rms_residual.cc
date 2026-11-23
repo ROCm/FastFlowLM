@@ -1,4 +1,5 @@
 // Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+// Portions of this file consist of AI-generated content.
 
 #include "common.h"
 #include "flm_rsqrt.h"
@@ -187,7 +188,11 @@ void rms_residual(
         x = is_x_ping ? x_ping : x_pong;
         is_w_ping = !is_w_ping;
         w = is_w_ping ? w_ping : w_pong;
-        rms_norm(y + 16, x, w);
+        if (IS_ATTN[0] == 2) {
+            memcpy(y + 16, x, D * sizeof(bf16));
+        } else {
+            rms_norm(y + 16, x, w);
+        }
         _lock_release(x_prod_lock);
         _lock_release(w_prod_lock);
 

@@ -1,4 +1,5 @@
 // Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+// Portions of this file consist of AI-generated content.
 
 #include "common.h"
 #include "q4_k.h"
@@ -286,7 +287,9 @@ void linear_proj_iD(
                     *(b_col_reduce_add_ptr+ l) = bf16(aie::reduce_add(  aie::load_v<32>(x_using + 32*l) ));
                 }
             }
+#ifndef FLM_STUB
             _qmm_q4k_bf16<m, k>(w_using, x_using, y_acc, b_col_reduce_add_ptr);
+#endif
             _lock_release(w_prod_lock);
             _lock_release(x_prod_lock);
             j++;

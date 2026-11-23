@@ -1,4 +1,5 @@
 // Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+// Portions of this file consist of AI-generated content.
 
 #pragma once
 
@@ -57,6 +58,14 @@ struct gemma_npu_sequence::Impl{
     static constexpr uint32_t window_size_address = 15936;
     static constexpr uint32_t rms_addr = 54272;
 
+    // lm_head inside layer_lm.xclbin (gemma3:4b): mode values for the proj and rms RTPs, the vocab size the
+    // kernel is built for (common.h), and its padded row count (whole rounds of D logits).
+    static constexpr uint32_t lm_head_proj_mode = 0;
+    static constexpr uint32_t lm_head_rms_passthrough_mode = 2;
+    static constexpr uint32_t lm_head_in_layer_vocab = 262208;
+    static constexpr int lm_head_in_layer_logits_arg_idx = 4;
+    uint32_t lm_head_in_layer_rows;
+
     // for overlapping the sequence generation
 
     void _send_x(npu_sequence* seq);
@@ -80,6 +89,7 @@ struct gemma_npu_sequence::Impl{
 
     void gen_layer_seq(npu_sequence* seq, const uint32_t L, bool is_sliding_window);
     void gen_lm_head_seq(npu_sequence* seq);
+    void gen_lm_head_in_layer_seq(npu_sequence* seq);
     void gen_mha_engine_seq(npu_sequence* seq, const uint32_t L_begin, const uint32_t L_end, bool is_sliding_window, int buffer_length);
 
     void set_max_length(const uint32_t MAX_L);

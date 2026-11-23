@@ -5,6 +5,7 @@
 #
 # Copyright (C) 2024, Advanced Micro Devices, Inc.
 # Modified by Alfred
+# Portions of this file consist of AI-generated content.
 
 include makefiles/common.mk
 MODEL_TYPE ?= GEMMA3_4B
@@ -12,6 +13,12 @@ HOME_DIR := $(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
 
 KERNEL_ARGS := -DMODEL_TYPE=${MODEL_TYPE}
 IRON_ARGS := ${MODEL_TYPE}
+
+STUB ?= 0
+BUILD_NAME := $(MODEL_TYPE)$(if $(filter 1,$(STUB)),_STUB)
+ifeq ($(STUB),1)
+KERNEL_ARGS += -DFLM_STUB
+endif
 
 # Kernel makefile
 include makefiles/kernel.mk
@@ -22,7 +29,10 @@ include makefiles/bitstream.mk
 # Host makefile
 include makefiles/host.mk
 
-.PHONY: run all kernel link bitstream host clean clean_all instructions
+# Standalone lm_head test
+include makefiles/test.mk
+
+.PHONY: run all kernel link bitstream txn host test_lm_head clean clean_all instructions
 all: ${XCLBIN_TARGET} ${INSTS_TARGET} ${HOST_C_TARGET}
 
 clean_all:
@@ -44,6 +54,9 @@ link: ${MLIR_TARGET}
 
 
 bitstream: ${XCLBIN_TARGETS}
+
+
+txn: ${TXN_TARGETS}
 
 
 host: ${HOST_C_TARGET}

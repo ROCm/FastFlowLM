@@ -8,7 +8,7 @@
 # Created by Alfred
 
 # Kernel stuff
-KERNEL_O_DIR := build/$(MODEL_TYPE)/kernel
+KERNEL_O_DIR := build/$(BUILD_NAME)/kernel
 KERNEL_SRCS := $(wildcard ${HOME_DIR}/kernel/*.cc)
 KERNEL_OBJS := $(patsubst ${HOME_DIR}/kernel/%.cc, ${KERNEL_O_DIR}/%.o, $(KERNEL_SRCS))
 KERNEL_HEADERS := $(wildcard ${HOME_DIR}/kernel/*.h)

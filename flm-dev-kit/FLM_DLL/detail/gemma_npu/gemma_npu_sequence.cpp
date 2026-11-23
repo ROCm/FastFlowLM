@@ -1,4 +1,5 @@
 // Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+// Portions of this file consist of AI-generated content.
 
 #include "gemma_npu_sequence_detail.hpp"
 
@@ -452,6 +453,7 @@ gemma_npu_sequence::Impl::Impl(LM_Config config, uint32_t MAX_L){
     DV = config.get("head_dim") * config.get("num_key_value_heads");
     this->vocab_size = config.get("vocab_size");
     this->vocab_size_padded = (vocab_size + 1024 - 1) / 1024 * 1024;
+    this->lm_head_in_layer_rows = (lm_head_in_layer_vocab + D - 1) / D * D;
     this->sliding_window = config.get("sliding_window");
     this->sliding_window_pattern = config.get("sliding_window_pattern");
     this->MAX_L = MAX_L;
@@ -773,6 +775,60 @@ void gemma_npu_sequence::Impl::gen_lm_head_seq(npu_sequence* seq){
     }
     seq->cmds2seq();
 }
+void gemma_npu_sequence::Impl::gen_lm_head_in_layer_seq(npu_sequence* seq){
+    assert(vocab_size == lm_head_in_layer_vocab);
+    assert(lm_head_in_layer_rows % (m * 16) == 0);
+    constexpr size_t CT_lock_address_base = 0x000001F000;
+    constexpr int rtp_lock_id = 6;
+    seq->clear_cmds();
+
+    seq->npu_preemption(0);
+
+    for (int i = 0; i < 16; i++){
+        seq->rtp_write(proj_tiles[i], proj_addr, lm_head_proj_mode);
+        seq->rtp_write(proj_tiles[i], CT_lock_address_base + 16 * rtp_lock_id, 1);
+    }
+    seq->rtp_write(rms_tile, rms_addr, lm_head_rms_passthrough_mode);
+    seq->rtp_write(rms_tile, CT_lock_address_base + 16 * rtp_lock_id, 1);
+
+    _send_x(seq);
+    seq->npu_dma_memcpy_nd(
+        sizeof(bf16),
+        w_rms_arg_idx,
+        MM2S,
+        xyr_tile,
+        bd_1,
+        it_channel_1,
+        {0, 0, 0, 0},
+        {1, 1, 1, (uint32_t)D},
+        {0, 0, 0, 1},
+        0, 0, false
+    );
+
+    seq->npu_dma_memcpy_nd(
+        sizeof(bf16),
+        lm_head_in_layer_logits_arg_idx,
+        S2MM,
+        xyr_tile,
+        bd_10,
+        it_channel_0,
+        {0, 0, 0, 0},
+        {1, 1, 1, lm_head_in_layer_rows},
+        {0, 0, 0, 1},
+        -1, 0, true
+    );
+
+    _move_weights(seq, lm_head_in_layer_rows, D, 0);
+
+    seq->npu_dma_wait(
+        xyr_tile,
+        S2MM,
+        it_channel_0
+    );
+
+    seq->cmds2seq();
+}
+
 void gemma_npu_sequence::Impl::set_max_length(const uint32_t MAX_L){
     this->MAX_L = MAX_L;
     this->kv_cache_size = MAX_L * (DK + DV);
@@ -808,6 +864,14 @@ void gemma_npu_sequence::gen_mha_engine_seq(npu_sequence* seq, const uint32_t L_
 
 void gemma_npu_sequence::gen_lm_head_seq(npu_sequence* seq){
     this->_impl->gen_lm_head_seq(seq);
+}
+
+void gemma_npu_sequence::gen_lm_head_in_layer_seq(npu_sequence* seq){
+    this->_impl->gen_lm_head_in_layer_seq(seq);
+}
+
+uint32_t gemma_npu_sequence::get_lm_head_in_layer_rows() const{
+    return this->_impl->lm_head_in_layer_rows;
 }
 
 void gemma_npu_sequence::set_max_length(const uint32_t MAX_L){

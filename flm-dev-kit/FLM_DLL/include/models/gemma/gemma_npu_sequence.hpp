@@ -1,4 +1,5 @@
 // Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+// Portions of this file consist of AI-generated content.
 
 /// \file gemma_npu_sequence.hpp
 /// \brief gemma_npu_sequence class
@@ -45,6 +46,13 @@ public:
     /// \brief Generate the lm head sequence
     /// \param seq the sequence
     void gen_lm_head_seq(npu_sequence* seq);
+
+    /// \brief Generate the lm head sequence for layer_lm.xclbin (lm_head inside the layer design)
+    /// \param seq the sequence; args: 0 x (already normalized), 1 lm_head weights, 2 any D bf16, 3 unused, 4 logits
+    void gen_lm_head_in_layer_seq(npu_sequence* seq);
+
+    /// \brief Logit rows layer_lm.xclbin writes (vocab padded to whole rounds of D)
+    uint32_t get_lm_head_in_layer_rows() const;
 
     /// \brief Get the k03 offset
     size_t get_k01_offset() const;
