@@ -24,3 +24,13 @@ ${TEST_TARGET}: ${TEST_SRCS}
 
 test_lm_head: ${TEST_TARGET}
 
+# Layer timing (host/test_layer_time.cpp)
+LAYER_TIME_TARGET := ${TEST_O_DIR}/test_layer_time
+LAYER_TIME_SRCS := ${HOME_DIR}/host/test_layer_time.cpp ${FLM_DLL_DIR}/detail/gemma_npu/gemma_npu_sequence.cpp
+LAYER_TIME_SRCS += $(wildcard ${FLM_DLL_DIR}/detail/q4nx/*.cpp)
+
+${LAYER_TIME_TARGET}: ${LAYER_TIME_SRCS} ${FLM_DLL_DIR}/detail/gemma_npu/gemma_bfp16_pack.hpp
+	mkdir -p ${@D}
+	${TEST_CXX} ${TEST_FLAGS} -o $@ ${LAYER_TIME_SRCS} ${TEST_LDFLAGS}
+
+test_layer_time: ${LAYER_TIME_TARGET}

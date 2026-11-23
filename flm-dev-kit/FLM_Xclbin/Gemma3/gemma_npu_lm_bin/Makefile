@@ -37,7 +37,7 @@ include makefiles/host.mk
 # Standalone lm_head test
 include makefiles/test.mk
 
-.PHONY: run all kernel link bitstream txn host test_lm_head clean clean_all instructions
+.PHONY: run all kernel link bitstream txn host test_lm_head test_layer_time clean clean_all instructions
 all: ${XCLBIN_TARGET} ${INSTS_TARGET} ${HOST_C_TARGET}
 
 clean_all:

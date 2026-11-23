@@ -157,3 +157,23 @@ stream: logits bit-identical to `lm_head.xclbin` (28 / 28 x vectors). lm_head in
 7.81 ms (the separate `lm_head.xclbin`: 7.71 ms in the same run). rms core program 6,736 -> 6,784 B.
 
 `PROBE` only adds `#ifdef`s; the normal build's program sizes are unchanged.
+
+## Layer time split (2026-11-23)
+
+`make test_layer_time`, then `build/test/test_layer_time --model <Gemma3-4B-NPU2 dir> --xclbin <layer_lm.xclbin>`:
+one decode layer run at context L = 16 / 1,088 / 4,160, random inputs, median of 20 (ms). Strix Halo, Performance
+mode, after the lm_head fix above:
+
+| Layer | L 16 | L 1,088 | L 4,160 |
+|---|---|---|---|
+| global | 1.24 | 1.34 | 1.63 |
+| global, `STUB=1` (no math) | 1.24 | 1.28 | 1.43 |
+| sliding | 1.27 | 1.34 | 1.34 |
+| sliding, `STUB=1` | 1.24 | 1.28 | 1.29 |
+
+- Weights alone (L 16) already take 1.24 ms for 59 MB (~85% of the ~55.7 GB/s DDR limit, which would be
+  ~1.06 ms); the math is hidden there. lm_head, one long matrix, now streams at ~97%. A layer streams 4 matrices
+  (q/k/v, o, up/gate, down) and between them the proj cores wait for the previous step (rope + attention, rms norm,
+  GELU), while each weight mem tile holds only 2 x 20 KB of read-ahead (41 KB of its 512 KB used), so the weight
+  stream stops at each step: ~0.18 ms per layer, ~6 ms a token.
+- K/V adds 0.04-0.19 ms; the attention math ~0.05 ms at 1K and ~0.2 ms for a global layer at 4K.
