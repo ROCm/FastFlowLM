@@ -163,7 +163,7 @@
         "down_exps": {
             "gguf_name": "blk.{bid}.ffn_down_exps.weight",
             "q4nx_name": "model.layer.{bid}.mlp.experts.down_proj.weight",
-            "default_tensor_type": "Q4_1"
+            "default_tensor_type": "Q4_K"
         },
         "loop_q_ctrl_down": {
             "gguf_name": "blk.{bid}.loop_q_ctrl_down.weight",
