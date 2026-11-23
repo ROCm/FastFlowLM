@@ -41,23 +41,6 @@ json ModelErrorResponse(const ModelRequestError& error) {
                        {"session_cleared", error.session_cleared()}}}};
 }
 
-json ExceptionResponse(const std::exception& error) {
-    if (const auto* model_error = dynamic_cast<const ModelRequestError*>(&error))
-        return ModelErrorResponse(*model_error);
-    return {{"error", error.what()}};
-}
-
-/// \brief The reply to an exception on a /v1 endpoint: an OpenAI error body whose code makes it an HTTP 500
-/// \note ExceptionResponse above keeps the Ollama shape ({"error": "..."}, no code, so HTTP 200)
-///       that the /api/* handlers send; only the /v1 handlers use this one.
-json OpenAIExceptionResponse(const std::exception& error) {
-    if (const auto* model_error = dynamic_cast<const ModelRequestError*>(&error))
-        return ModelErrorResponse(*model_error);
-    return {{"error", {{"message", error.what()},
-                       {"type", "server_error"},
-                       {"code", 500}}}};
-}
-
 /// \brief The reply when insert() returned false without being cancelled: the reason the model gave, if any
 json PrefillFailedResponse(const chat_meta_info_t& meta_info) {
     const std::string message = meta_info.error_message.empty() ? "Prefill failed (see server log)" : meta_info.error_message;
@@ -121,6 +104,22 @@ template <typename T>
 T value_or(const json& request, const char* key, T fallback) {
     return has_value(request, key) ? request.at(key).get<T>() : fallback;
 }
+}
+
+///@brief Build the error body for a caught exception, and log the exception itself.
+/// The response never carries the raw exception text: a request fault gets a fixed
+/// "Invalid request" (400), anything else a fixed "Internal error" (500), and a
+/// ModelRequestError keeps its own structured ModelErrorResponse body (its what()
+/// is a model-layer message, not a library exception). request_fault is true when
+/// the failing step was building the request (template/args parsing), false when
+/// it was running it (decode/prefill of a well-formed request).
+json exception_error(const std::string& where, const std::exception& e, bool request_fault) {
+    header_print("ERROR", where + ": " + std::string(e.what()));
+    if (const auto* model_error = dynamic_cast<const ModelRequestError*>(&e)) return ModelErrorResponse(*model_error);
+    if (request_fault || dynamic_cast<const json::exception*>(&e) || dynamic_cast<const std::invalid_argument*>(&e)) {
+        return flm::http_guard::error_body("Invalid request", 400);
+    }
+    return flm::http_guard::error_body("Internal error", 500, "", "server_error");
 }
 
 ///@brief Normalize messages by merging consecutive user messages (like Ollama does)
@@ -959,7 +958,7 @@ void RestHandler::handle_systemone(const std::string& raw_body,
     catch (const std::exception& e) {
         header_print("ERROR", "System One request failed: " << e.what());
         reply["__http_status"] = 500;
-        reply["__http_body"] = {{"detail", std::string("the server failed on this request (") + e.what() + ")"}};
+        reply["__http_body"] = {{"detail", "the server failed on this request"}};
     }
     send_response(reply);
 }
@@ -1120,7 +1119,7 @@ void RestHandler::handle_show(const json& request,
         send_response(info);
     }
     catch (const std::exception& e) {
-        json error_response = { {"error", e.what()} };
+        json error_response = exception_error("handle_show", e);
         send_response(error_response);
     }
 }
@@ -1184,7 +1183,7 @@ void RestHandler::handle_generate(const json& request,
                     return;
                 }
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
+                json error_response = exception_error("handle_generate", e, true);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -1192,7 +1191,7 @@ void RestHandler::handle_generate(const json& request,
             try {
                 auto_chat_engine->generate(meta_info, length_limit, ostream, [&] { return cancellation_token && cancellation_token->cancelled(); });
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
+                json error_response = exception_error("handle_generate", e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -1218,7 +1217,7 @@ void RestHandler::handle_generate(const json& request,
                     return;
                 }
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
+                json error_response = exception_error("handle_generate", e, true);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -1226,7 +1225,7 @@ void RestHandler::handle_generate(const json& request,
             try {
                 auto_chat_engine->generate(meta_info, length_limit, ostream, [&] { return cancellation_token && cancellation_token->cancelled(); });
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
+                json error_response = exception_error("handle_generate", e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -1251,7 +1250,7 @@ void RestHandler::handle_generate(const json& request,
             send_response(response);
         }
     } catch (const std::exception& e) {
-        json error_response = ExceptionResponse(e);
+        json error_response = exception_error("handle_generate", e);
         send_response(error_response);
     }
 }
@@ -1315,7 +1314,7 @@ void RestHandler::handle_chat(const json& request,
                     return;
                 }
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
+                json error_response = exception_error("handle_chat", e, true);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -1324,7 +1323,7 @@ void RestHandler::handle_chat(const json& request,
                 auto_chat_engine->generate(meta_info, length_limit, ostream,
                     [&] { return cancellation_token && cancellation_token->cancelled(); });
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
+                json error_response = exception_error("handle_chat", e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -1349,7 +1348,9 @@ void RestHandler::handle_chat(const json& request,
                     meta_info, uniformed_input, length_limit, nstream,
                     [&] { return cancellation_token && cancellation_token->cancelled(); });
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
+                // prompt_tokens starts at 0 and every insert path sets it right after prefill, so a
+                // zero here means the template/prefill step threw (a request fault), not decode.
+                json error_response = exception_error("handle_chat", e, meta_info.prompt_tokens == 0);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -1384,7 +1385,7 @@ void RestHandler::handle_chat(const json& request,
             this->auto_chat_engine->clear_context();
         }
     } catch (const std::exception& e) {
-        json error_response = ExceptionResponse(e);
+        json error_response = exception_error("handle_chat", e);
         send_response(error_response);
     }
 }
@@ -1400,7 +1401,7 @@ void RestHandler::handle_models(const json& request,
         json models = supported_models.get_all_models_ollama();
         send_response(models);
     } catch (const std::exception& e) {
-        json error_response = ExceptionResponse(e);
+        json error_response = exception_error("handle_models", e);
         send_response(error_response);
     }
 }
@@ -1429,7 +1430,7 @@ void RestHandler::handle_models_openai(const json& request,
         send_response(supported_models.get_all_models_openai());
     }
     catch (const std::exception& e) {
-        json error_response = { {"error", e.what()} };
+        json error_response = exception_error("handle_models_openai", e);
         send_response(error_response);
     }
 }
@@ -1480,30 +1481,49 @@ void RestHandler::handle_ps(const json& request,
             tag = current_model_tag;
             backend_id = loaded_backend;
         }
-        auto info = supported_models.get_model_info(tag).second;
-        auto& details = info["details"];
-        if (!backend_id.empty()) {
-            details["backend"] = backend_id;
-            if (const auto device = flm::backend::device_for_backend(backend_id); !device.empty()) {
-                details["device"] = device;
-            }
-        }
-        json response = {
-            {"models", json::array({
-                {
-                    {"name", tag},
-                    {"model", tag},
-                    {"size", info["size"]},
-                    {"details", details},
-                    {"expires_at", expires_at},
+        json models = json::array();
+        // Only list a chat model when one is actually loaded: the default
+        // current_model_tag ("model-faker") is not a model, and handing it to
+        // get_model_info falls back to a model that is not loaded.
+        if (auto_chat_engine && supported_models.is_model_supported(tag)) {
+            auto info = supported_models.get_model_info(tag).second;
+            auto& details = info["details"];
+            if (!backend_id.empty()) {
+                details["backend"] = backend_id;
+                if (const auto device = flm::backend::device_for_backend(backend_id); !device.empty()) {
+                    details["device"] = device;
                 }
-            })}
-        };
-        // std::cout << "response: " << response.dump(4) << std::endl;
-        send_response(response);
+            }
+            models.push_back({
+                {"name", tag},
+                {"model", tag},
+                {"size", info["size"]},
+                {"details", details},
+                {"expires_at", expires_at},
+            });
+        }
+#ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
+        std::string embedding_tag;
+        {
+            std::lock_guard lock(embedding_mutex);
+            if (auto_embedding_engine) embedding_tag = current_embedding_tag;
+        }
+        if (!embedding_tag.empty() && supported_models.is_model_supported(embedding_tag)) {
+            auto info = supported_models.get_model_info(embedding_tag).second;
+            models.push_back({
+                {"name", embedding_tag},
+                {"model", embedding_tag},
+                {"size", info["size"]},
+                {"details", info["details"]},
+                {"expires_at", expires_at},
+            });
+        }
+#endif
+        // With nothing loaded there is nothing to list: an empty array, not a
+        // fallback model that was never loaded.
+        send_response({{"models", models}});
     } catch (const std::exception& e) {
-        json error_response = ExceptionResponse(e);
-        send_response(error_response);
+        send_response(exception_error("handle_ps", e));
     }
 }
 
@@ -1813,7 +1833,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                     return;
                 }
             } catch (const std::exception& e) {
-                send_stream_error(OpenAIExceptionResponse(e));
+                send_stream_error(exception_error("handle_openai_chat_completion", e, true));
                 this->auto_chat_engine->clear_context();
                 this->prompt_cache.reset();
                 return;
@@ -1827,7 +1847,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                 if (error.session_cleared()) this->prompt_cache.reset();
                 return;
             } catch (const std::exception& e) {
-                send_stream_error(OpenAIExceptionResponse(e));
+                send_stream_error(exception_error("handle_openai_chat_completion", e));
                 this->auto_chat_engine->clear_context();
                 this->prompt_cache.reset();
                 return;
@@ -1841,7 +1861,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                 ostream.finalize(meta_info);
             } catch (const std::exception& e) {
                 header_print("ERROR", std::string("Finishing the stream failed: ") + e.what());
-                send_stream_error(OpenAIExceptionResponse(e));
+                send_stream_error(exception_error("handle_openai_chat_completion", e));
             }
             log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
         }
@@ -1873,7 +1893,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                     return;
                 }
             } catch (const std::exception& e) {
-                json error_response = OpenAIExceptionResponse(e);
+                json error_response = exception_error("handle_openai_chat_completion", e, true);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 this->prompt_cache.reset();
@@ -1884,7 +1904,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                 response_text = auto_chat_engine->generate(meta_info, length_limit, out, [&] { return cancellation_token->cancelled(); });
                 out.flush();
             } catch (const std::exception& e) {
-                json error_response = OpenAIExceptionResponse(e);
+                json error_response = exception_error("handle_openai_chat_completion", e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 this->prompt_cache.reset();
@@ -1925,14 +1945,7 @@ void RestHandler::handle_openai_chat_completion(const json& request,
         }
 
     } catch (const std::exception& e) {
-        json error_response = {
-            {"error", {
-                {"message", e.what()},
-                {"type", "server_error"},
-                {"code", 500}
-            }}
-        };
-        send_response(error_response);
+        send_response(exception_error("handle_openai_chat_completion", e));
     }
 }
 
@@ -2106,14 +2119,7 @@ void RestHandler::handle_openai_audio_transcriptions(const json& request,
         send_response(error_response);
     }
     catch (const std::exception& e) {
-        json error_response = {
-            {"error", {
-                {"message", e.what()},
-                {"type", "server_error"},
-                {"code", 500}
-            }}
-        };
-        send_response(error_response);
+        send_response(exception_error("handle_openai_audio_transcriptions", e));
     }
 }
 
@@ -2211,7 +2217,7 @@ void RestHandler::handle_openai_completion(const json& request,
                     return;
                 }
             } catch (const std::exception& e) {
-                send_stream_error(OpenAIExceptionResponse(e));
+                send_stream_error(exception_error("handle_openai_completion", e, true));
                 this->auto_chat_engine->clear_context();
                 return;
             }
@@ -2221,7 +2227,7 @@ void RestHandler::handle_openai_completion(const json& request,
                 send_stream_error(ModelErrorResponse(error));
                 return;
             } catch (const std::exception& e) {
-                send_stream_error(OpenAIExceptionResponse(e));
+                send_stream_error(exception_error("handle_openai_completion", e));
                 this->auto_chat_engine->clear_context();
                 return;
             }
@@ -2229,7 +2235,7 @@ void RestHandler::handle_openai_completion(const json& request,
                 ostream.finalize(meta_info);
             } catch (const std::exception& e) {
                 header_print("ERROR", std::string("Finishing the stream failed: ") + e.what());
-                send_stream_error(OpenAIExceptionResponse(e));
+                send_stream_error(exception_error("handle_openai_completion", e));
             }
             log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
 
@@ -2254,7 +2260,7 @@ void RestHandler::handle_openai_completion(const json& request,
                     return;
                 }
             } catch (const std::exception& e) {
-                json error_response = OpenAIExceptionResponse(e);
+                json error_response = exception_error("handle_openai_completion", e, true);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -2262,7 +2268,7 @@ void RestHandler::handle_openai_completion(const json& request,
             try {
                 auto_chat_engine->generate(meta_info, length_limit, ostream, [&] { return cancellation_token && cancellation_token->cancelled(); });
             } catch (const std::exception& e) {
-                json error_response = OpenAIExceptionResponse(e);
+                json error_response = exception_error("handle_openai_completion", e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -2296,13 +2302,6 @@ void RestHandler::handle_openai_completion(const json& request,
         }
     }
     catch (const std::exception& e) {
-        json error_response = {
-            {"error", {
-                {"message", e.what()},
-                {"type", "server_error"},
-                {"code", 500}
-            }}
-        };
-        send_response(error_response);
+        send_response(exception_error("handle_openai_completion", e));
     }
 }

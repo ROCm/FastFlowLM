@@ -86,10 +86,14 @@ void RestHandler::handle_embeddings(const json& request,
     }
     catch (const std::exception& e) {
         if (cancelled()) return;
+        // Same split as before (invalid_argument / json::exception -> 400, else 500),
+        // but the response carries a fixed message instead of the raw exception text.
+        // Kept local instead of exception_error(): this TU is also built into the
+        // link-light model_frontend test target, which does not link rest_handler.cpp.
         const int code = dynamic_cast<const std::invalid_argument*>(&e) ||
                          dynamic_cast<const nlohmann::json::exception*>(&e) ? 400 : 500;
-        send_response({{"error", {{"message", e.what()},
-                                  {"type", code == 400 ? "invalid_request_error" : "server_error"},
-                                  {"code", code}}}});
+        send_response(flm::http_guard::error_body(
+            code == 400 ? "Invalid request" : "Internal error", code, "",
+            code == 400 ? "invalid_request_error" : "server_error"));
     }
 }
