@@ -31,12 +31,21 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              their size, outside the pr tier's download budget, and fail if
              they cannot; only entries an NPU2 (aie2p) runner can run
   hipep_models
-             comma-separated oga-hipep entries (model ids) the change adds or
-             edits in model_list.json or model_info.json, new weights or not
-             (an edit names no family for the GPU, so this is how one gets
-             tested). Test Windows HIPEP requires them, as the NPU jobs do
-             new_models: downloaded whatever their size, and a failure if
-             they cannot be
+             comma-separated oga-hipep entries (model ids) with weights no
+             runner has yet: entries the change adds, whose download fields
+             (DOWNLOAD_FIELDS) or model_info.json hashes it changes, that it
+             moves onto the oga-hipep backend, or that it edits and that have
+             no family to stand for them. Test Windows HIPEP requires
+             them, as the NPU jobs do new_models: downloaded whatever their
+             size, and a failure if they cannot be
+  hipep_families
+             comma-separated families Test Windows HIPEP treats as touched:
+             families, and the families of the oga-hipep entries the change
+             edits without new weights (a capability, a context length).
+             Such an edit tests its family's one model (npu_test PR_GPU), not
+             every edited entry: an edit to many entries at once would
+             otherwise re-verify and test each, holding the one STX Halo for
+             hours
   devkit     true when a change needs a dev-kit job: code under flm-dev-kit/
              (the kernel, engine, converter and pybind sources, built by their
              own jobs), a src/lib/xrt file the dev kit links (libaiebu.a,
@@ -653,9 +662,12 @@ class Decision:
     hipep: bool = False
     # NPU catalog entries no runner has yet (see new_downloads).
     new_models: list = field(default_factory=list)
-    # The oga-hipep entries added or edited in the head catalog, which include
-    # those with new weights (new_downloads' GPU half).
+    # The oga-hipep entries with weights no runner has yet (new_downloads'
+    # GPU half, and entries moved onto the GPU).
     gpu_models: set = field(default_factory=set)
+    # The families of the oga-hipep entries edited without new weights:
+    # Test Windows HIPEP tests one model of each (hipep_families).
+    gpu_edit_families: set = field(default_factory=set)
     # Dev-kit areas (DEVKIT_AREAS) a changed flm-dev-kit/ file needs.
     devkit_areas: set = field(default_factory=set)
     # The areas something other than the dev-kit CI or a shipped kernel
@@ -706,6 +718,7 @@ class Decision:
         self.hipep = False
         self.new_models = []
         self.gpu_models = set()
+        self.gpu_edit_families = set()
         self.devkit_areas = set()
         self.source_areas = set()
         self.devkit_families = set()
@@ -805,7 +818,9 @@ class Decision:
             parts.append("new models: " + ", ".join(self.new_models))
         parts.append(hipep)
         if self.gpu_models:
-            parts.append("GPU models added or edited: " + ", ".join(sorted(self.gpu_models)))
+            parts.append("GPU models with new weights: " + ", ".join(sorted(self.gpu_models)))
+        if self.gpu_edit_families:
+            parts.append("GPU families edited: " + ", ".join(sorted(self.gpu_edit_families)))
         return "; ".join(parts)
 
     def suites_value(self) -> str:
@@ -826,6 +841,7 @@ class Decision:
                 "hipep": str(self.runs_hipep()).lower(),
                 "new_models": ",".join(self.new_models),
                 "hipep_models": ",".join(sorted(self.gpu_models)),
+                "hipep_families": ",".join(sorted(self.families | self.gpu_edit_families)),
                 "devkit": str(bool(self.devkit_areas)).lower(),
                 "devkit_catalog": str(self.devkit_catalog).lower(),
                 "devkit_areas": self.devkit_value(),
@@ -892,7 +908,8 @@ RUNNER_PLATFORMS = {"aie2p"}
 # no runner has yet. A raised flm_min_version marks a downloaded copy outdated
 # (model_downloader.cpp), so flm pull fetches the files again; that and new
 # model_info.json hashes are how republished weights ship.
-DOWNLOAD_FIELDS = ("name", "url", "file_url", "files", "flm_min_version")
+# model_info_key points the entry at other hashes in model_info.json.
+DOWNLOAD_FIELDS = ("name", "url", "file_url", "files", "flm_min_version", "model_info_key")
 
 
 def split_downloads(ids: Iterable[str], head: dict[str, dict]) -> tuple[list, list]:
@@ -919,6 +936,13 @@ def new_downloads(base: dict[str, dict], head: dict[str, dict]) -> tuple[list, l
         (mid for mid, entry in head.items()
          if base.get(mid) is None
          or any(base[mid].get(k) != entry.get(k) for k in DOWNLOAD_FIELDS)), head)
+
+
+def moved_onto_gpu(base: dict[str, dict], head: dict[str, dict]) -> list:
+    """Entries in both catalogs that only the head runs on the GPU: weights
+    no HIPEP machine has tested, whatever their download fields."""
+    return sorted(mid for mid, entry in head.items()
+                  if mid in base and runs_on_gpu(mid, entry) and not runs_on_gpu(mid, base[mid]))
 
 
 def split_entry(mid: str, sides: list, fams: set, gpu: list) -> None:
@@ -967,8 +991,10 @@ def model_info_diff(base_text: Optional[str], head_text: Optional[str],
 def add_catalog_change(d: Decision, path: str, fams: set, gpu: list,
                        catalog: dict[str, dict], neither: str) -> None:
     """A catalog file's changed entries: their NPU families in full, and Test
-    Windows HIPEP for GPU entries, which also tests those the head catalog
-    still runs on the GPU. A change to neither is not scoped."""
+    Windows HIPEP for GPU entries, which tests one model of the family of
+    each the head catalog still runs on the GPU (the entries with new
+    weights are required on their own, through add_new_downloads). A change
+    to neither is not scoped."""
     d.families |= fams
     if fams:
         d.add_suites(family_suites(fams, catalog))
@@ -977,7 +1003,10 @@ def add_catalog_change(d: Decision, path: str, fams: set, gpu: list,
     what = ", ".join(sorted(fams)) or ("no NPU family" if gpu else neither)
     if gpu:
         d.hipep = True
-        d.gpu_models |= {mid for mid in gpu if mid in catalog and runs_on_gpu(mid, catalog[mid])}
+        edited = [mid for mid in gpu if mid in catalog and runs_on_gpu(mid, catalog[mid])]
+        d.gpu_edit_families |= {family_of(catalog[mid]) for mid in edited} - {""}
+        # An entry with no family has no family model to stand for it.
+        d.gpu_models |= {mid for mid in edited if not family_of(catalog[mid])}
         what += (f"; {len(gpu)} oga-hipep entr{'y' if len(gpu) == 1 else 'ies'}, e.g. {gpu[0]},"
                  " which only Test Windows HIPEP runs")
     d.reasons.append(f"{path}: entries changed in {what}")
@@ -1342,6 +1371,11 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
             add_catalog_change(d, MODEL_LIST, *catalog_diff(base, head_catalog), head_catalog,
                                "no family (top-level fields only)")
             d.add_new_downloads(MODEL_LIST, *new_downloads(base, head_catalog))
+            moved = moved_onto_gpu(base, head_catalog)
+            if moved:
+                d.gpu_models |= set(moved)
+                d.reasons.append(f"{MODEL_LIST}: moved onto the oga-hipep backend, tested whatever "
+                                 "their size: " + ", ".join(moved))
     if MODEL_INFO in code:
         diff = None
         if git:
