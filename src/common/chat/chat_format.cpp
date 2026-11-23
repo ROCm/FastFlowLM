@@ -20,6 +20,7 @@ const format_name_entry FORMAT_NAMES[] = {
     {chat_format_kind::GEMMA4, "gemma4"},
     {chat_format_kind::HARMONY, "harmony"},
     {chat_format_kind::GLM_XML, "glm_xml"},
+    {chat_format_kind::INKLING, "inkling"},
 };
 
 bool is_call_space(char c) {
@@ -113,6 +114,16 @@ chat_format_spec chat_format_make(chat_format_kind kind, bool with_reasoning) {
             // a call ends the turn, the tool answers next; gpt-oss only lists <|return|> as eos
             spec.extra_stops = {"<|call|>"};
             break;
+        case chat_format_kind::INKLING:
+            // typed messages, not tags; the inkling parser knows its own markers. Every
+            // turn opens with a thinking message, at any reasoning effort
+            spec.reasoning_start = "<|content_thinking|>";
+            spec.reasoning_end = "<|end_message|>";
+            spec.reasoning_forced = true;
+            // taking this token away is enough to keep the model from calling a tool
+            spec.tool_start = "<|content_invoke_tool_json|>";
+            spec.tool_end = "<|end_message|>";
+            break;
     }
     return spec;
 }
@@ -129,6 +140,9 @@ chat_format_spec chat_format_detect(const std::string& template_src,
     const bool with_reasoning = known("<think>") && known("</think>");
 
     // most specific first: these markers are unique to one family
+    if (known("<|content_invoke_tool_json|>") && known("<|message_model|>")) {
+        return chat_format_make(chat_format_kind::INKLING, false);
+    }
     if (known("<|channel|>") && known("<|message|>")) {
         return chat_format_make(chat_format_kind::HARMONY, false);
     }
@@ -254,6 +268,15 @@ std::string chat_format_prefill(const chat_format_spec& spec, const std::string&
         // may have started a channel too; the header is parsed with the output
         size_t start = prompt_tail.rfind("<|start|>");
         return start == std::string::npos ? std::string() : prompt_tail.substr(start + 9);
+    }
+    if (spec.kind == chat_format_kind::INKLING) {
+        // a new turn opens with the model's own <|message_model|>; a continued message
+        // hands on its open header, which the output finishes
+        size_t open = continuing ? prompt_tail.rfind("<|message_model|>") : std::string::npos;
+        if (open == std::string::npos || prompt_tail.find("<|end_message|>", open) != std::string::npos) {
+            return "";
+        }
+        return prompt_tail.substr(open);
     }
     // a continued message may stop in the middle of a call, which the output finishes
     const std::string call = continuing && tool_calls ? open_tool_call(spec, prompt_tail) : "";

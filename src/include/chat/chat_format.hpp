@@ -18,6 +18,7 @@ enum class chat_format_kind {
     GEMMA4,         // <|tool_call>call:f{a:<|"|>x<|"|>}<tool_call|>                     (Gemma4)
     HARMONY,        // <|channel|>analysis / commentary to=functions.f / final           (gpt-oss)
     GLM_XML,        // <tool_call>f<arg_key>k</arg_key><arg_value>v</arg_value></tool_call>  (Laguna, GLM-4.5)
+    INKLING,        // <|message_model|>f<|content_invoke_tool_json|>{"name":"f","args":{..}}<|end_message|> (Inkling 2)
 };
 
 /// \brief Everything the parser needs to know about one model's output syntax
@@ -25,7 +26,8 @@ struct chat_format_spec {
     chat_format_kind kind = chat_format_kind::CONTENT_ONLY;
     std::string reasoning_start; // empty when the model has no reasoning block
     std::string reasoning_end;
-    std::string tool_start;      // opens one tool call block, empty for CONTENT_ONLY and HARMONY
+    std::string tool_start;      // opens one tool call block, empty for CONTENT_ONLY and HARMONY;
+                                 // INKLING: the call's content marker, its header comes before it
     std::string tool_end;
     std::string stop_marker;     // text after it is never part of the turn, e.g. Gemma4's <|tool_response>
     bool reasoning_forced = false; // the model always opens its turn by reasoning, tag or not (DeepSeek-R1)

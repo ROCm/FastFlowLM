@@ -1234,6 +1234,7 @@ class Prebuilts(unittest.TestCase):
             "src/lib/hrx/gemma4e_dflash.lib": {"gemma4e-dflash"},
             "src/lib/xrt/libqwen3vl_flash.so": {"qwen3vl-flash"},
             "src/lib/hrx/libhy_mem_npu.so": {"hy-memory"},
+            "src/lib/xrt/inkling2_npu.dll": {"inkling-2"},
         }
         for path, expected in cases.items():
             with self.subTest(path=path):

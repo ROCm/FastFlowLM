@@ -9,6 +9,7 @@
 #include "AutoModel/modeling_gpt_oss.hpp"
 #include "AutoModel/modeling_hunyuan.hpp"
 #include "AutoModel/modeling_hy_memory.hpp"
+#include "AutoModel/modeling_inkling2.hpp"
 #include "AutoModel/modeling_lfm2.hpp"
 #include "AutoModel/modeling_lfm3.hpp"
 #include "AutoModel/modeling_llama3.hpp"
@@ -91,6 +92,7 @@ void register_builtin_frontends(FrontendRegistry& registry) {
     Register<Nanbeige>(registry, "nanbeige");
     Register<Hunyuan>(registry, "hunyuan");
     Register<HyMemory>(registry, "hy-memory");
+    Register<Inkling2>(registry, "inkling-2");
     Register<Phi4>(registry, "phi4");
     Register<Laguna>(registry, "laguna");
     Register<NemotronH>(registry, "nemotron-h");

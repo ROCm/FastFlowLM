@@ -8,6 +8,7 @@
 */
 #include "runner.hpp"
 #include "harmony_filter.hpp"
+#include "inkling_filter.hpp"
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
 #include "AutoEmbeddingModel/all_embedding_model.hpp"
 #endif
@@ -390,6 +391,16 @@ void Runner::run() {
                 cli_harmony_filter harmony_filter_ostream(std::cout);
                 try {
                     this->auto_chat_engine->generate(meta_info, this->generate_limit, harmony_filter_ostream);
+                }
+                catch (const std::exception& e) {
+                    header_print("ERROR", "Generation error: " + std::string(e.what()));
+                    this->auto_chat_engine->clear_context();
+                    continue;
+                }
+            } else if (this->auto_chat_engine->get_current_model() == "Inkling2") {
+                cli_inkling_filter inkling_filter_ostream(base_ostream);
+                try {
+                    this->auto_chat_engine->generate(meta_info, this->generate_limit, inkling_filter_ostream);
                 }
                 catch (const std::exception& e) {
                     header_print("ERROR", "Generation error: " + std::string(e.what()));

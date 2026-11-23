@@ -520,6 +520,7 @@ ENGINES = {
     ("gemma4_12b",):                         ("gemma4-12b",),
     ("hunyuan",):                            ("hunyuan",),
     ("hy_mem", "hy_memory"):                 ("hy-memory",),
+    ("inkling2",):                           ("inkling-2",),
     ("gpt_oss",):                            ("gpt-oss",),
     ("lfm2",):                               ("lfm2", "lfm2.5-tk"),
     ("lfm3",):                               ("lfm3",),
