@@ -892,5 +892,12 @@ The engine uses it when it is in the folder and `mm_rtm2_glu.xclbin` is the mm k
 | Kernels | Artifacts | Compiler |
 |---|---|---|
 | `expert.xclbin` | `xclbins-SMOLVLA_expert` | Peano |
+| `expert_bf16.xclbin` | `xclbins-SMOLVLA_expert_bf16` | Peano |
 | `text.xclbin` | `xclbins-SMOLVLA_text` | Peano |
 | `vision.xclbin` | `xclbins-SMOLVLA_vision` | Peano |
+| `vision_mm8.xclbin` | `xclbins-SMOLVLA_vision_mm8` | Peano |
+| `vision.switches` | `xclbins-SMOLVLA_vision_switches` | Peano |
+
+`vision.switches` is not a kernel: it packs the aie2p-launchlib switches that let the vision tower's attention (`vision_attn32`) run in the
+hardware context of `vision_mm8.xclbin` (about 0.17 ms per switch as control packets); see `SMOLVLA/vision_switches/README.md`.
+`vision.xclbin` is the `SMOLVLA_VISION_L32=0` kill switch design, `expert_bf16.xclbin` the `SMOLVLA_EXPERT_BF16=1` one.

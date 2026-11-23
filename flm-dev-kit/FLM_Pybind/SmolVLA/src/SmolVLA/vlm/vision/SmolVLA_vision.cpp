@@ -50,8 +50,10 @@ buffer<bf16> SmolVLA_vision::forward(std::vector<buffer<bf16>>& pixel_tokens) {
     PROF_INIT();
     const int num_images = (int)pixel_tokens.size();
 
-    for (int i = 0; i < num_images; i++) {
-        this->exec.patch_embed(in_tensor[i], pixel_tokens[i], non_layer_weights);
+    if (!this->exec.patch_embed_batch(in_buffer.data(), pixel_tokens, non_layer_weights)) {
+        for (int i = 0; i < num_images; i++) {
+            this->exec.patch_embed(in_tensor[i], pixel_tokens[i], non_layer_weights);
+        }
     }
     PROF_TICK("Patch embedding");
     // num_layers identical pre-norm transformer layers (residual updated in

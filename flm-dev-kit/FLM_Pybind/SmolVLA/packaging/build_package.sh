@@ -30,7 +30,7 @@ OFFLINE_WHEELS=0
 REFRESH_HARNESS=0
 BUILD_PY="$SRC_DIR/.venv/bin/python"
 EXT_NAME="smolvla_npu.cpython-312-x86_64-linux-gnu.so"
-XCLBINS=(vision.xclbin text.xclbin expert.xclbin)
+XCLBINS=(vision.xclbin text.xclbin expert.xclbin expert_bf16.xclbin vision_mm8.xclbin vision.switches)
 TORCH_CPU_INDEX="https://download.pytorch.org/whl/cpu"
 
 die()  { printf '\nerror: %s\n' "$*" >&2; exit 1; }
