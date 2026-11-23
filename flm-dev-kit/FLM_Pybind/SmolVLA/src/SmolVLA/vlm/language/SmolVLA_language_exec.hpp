@@ -190,7 +190,7 @@ struct SmolVLA_language_attn_block {
         SmolVLA_language_layer& ld = def->layer_def;
         int L_padded = (L + 63) / 64 * 64;
         if (last_L != L) {
-            smolvla_vlm_text_seq::gen_text_attn_seq(this->mha.seq(), def->head_dim, def->num_attn_heads, def->num_kv_heads, L_padded / 64, L_padded / 64 - 1, L - (L / 64) * 64 - 1);
+            smolvla_vlm_text_seq::gen_text_attn_seq(this->mha.seq(), def->head_dim, def->num_attn_heads, def->num_kv_heads, L_padded / 64, L_padded / 64 - 1, L - (L / 64) * 64 - 1, /*force_rtp=*/true);
             last_L = L;
         }
         const int D  = (int)def->D;

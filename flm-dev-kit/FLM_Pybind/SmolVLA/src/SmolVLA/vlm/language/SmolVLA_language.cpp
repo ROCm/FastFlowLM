@@ -71,6 +71,10 @@ buffer<bf16> SmolVLA_language::forward(buffer<bf16>& embeds, buffer<bf16>& state
     // exact non-padded context length: image tokens + real text tokens + 1 state.
     L = text_begin + num_text + 1;
     this->valid_prefix_len = L;
+    // rows [L, L_padded) are read by the kernels (they work in whole 64-row blocks); clear what an earlier,
+    // longer prefix left there so the output does not depend on the call history.
+    const int L_padded = (L + 63) / 64 * 64;
+    memset(embeds.data() + (size_t)L * def.D, 0, (size_t)(L_padded - L) * def.D * sizeof(bf16));
     PROF_TICK("Token embedding");
 
     // run every layer, writing each layer's pre-rope k/v into the shared cache.

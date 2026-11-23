@@ -1,0 +1,112 @@
+name: smolvla-package
+# Builds the shippable smolvla-npu archive (extension compiled here with DIST=1, CI-built bitstreams) and
+# runs the call-history check against the packaged extension on the NPU runner.
+on:
+  workflow_dispatch:
+    inputs:
+      xclbin_run:
+        description: Run id whose devkit-xclbins artifact holds the SmolVLA bitstreams (default is the latest build-and-test run on main that has one).
+        type: string
+        default: ''
+  pull_request:
+    paths:
+      - 'flm-dev-kit/FLM_Pybind/SmolVLA/**'
+      - '.github/workflows/smolvla-package.yml'
+permissions:
+  contents: read
+  actions: read
+jobs:
+  package:
+    runs-on: [self-hosted, linux, x64, npu, sweep]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Tree
+        shell: bash
+        run: |
+          git sparse-checkout disable || true
+          git log --oneline -1
+          ls flm-dev-kit/FLM_Pybind/SmolVLA/packaging
+      - name: Find the bitstream run
+        id: xr
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_RUN: ${{ inputs.xclbin_run }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, urllib.request
+          def get(u):
+              r = urllib.request.Request("https://api.github.com/repos/" + os.environ["GITHUB_REPOSITORY"] + u,
+                                         headers={"Authorization": "Bearer " + os.environ["GH_TOKEN"], "Accept": "application/vnd.github+json"})
+              return json.load(urllib.request.urlopen(r))
+          run = os.environ.get("INPUT_RUN", "").strip()
+          if not run:
+              for r in get("/actions/workflows/build-and-test.yml/runs?branch=main&status=success&per_page=20")["workflow_runs"]:
+                  if any(a["name"] == "devkit-xclbins" and not a["expired"] for a in get("/actions/runs/%d/artifacts?per_page=100" % r["id"])["artifacts"]):
+                      run = str(r["id"]); break
+          assert run, "no run with a devkit-xclbins artifact"
+          print("run=" + run)
+          PY
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: devkit-xclbins
+          path: ci-xclbins
+          run-id: ${{ steps.xr.outputs.run }}
+          github-token: ${{ github.token }}
+      - name: Build venv
+        shell: bash
+        run: |
+          set -euo pipefail
+          S=flm-dev-kit/FLM_Pybind/SmolVLA
+          export PATH=$HOME/.local/bin:$PATH; command -v uv >/dev/null || python3 -m pip install -q --user --break-system-packages uv; PY=$(command -v python3.12 || true); if [ -z "$PY" ]; then uv venv --python 3.12 --seed "$S/.venv"; else "$PY" -m venv "$S/.venv"; fi; "$S/.venv/bin/python" --version
+          "$S/.venv/bin/python" -m pip install -q --upgrade pip
+          "$S/.venv/bin/python" -m pip install -q --extra-index-url https://download.pytorch.org/whl/cpu torch numpy safetensors pybind11 setuptools wheel build
+      - name: Stage CI-built bitstreams
+        shell: bash
+        run: |
+          set -euo pipefail
+          S=flm-dev-kit/FLM_Pybind/SmolVLA
+          mkdir -p "$S/XCLBINS"
+          cp ci-xclbins/SmolVLA-500M-NPU2/* "$S/XCLBINS/"
+          ls -l "$S/XCLBINS"
+          sha256sum "$S/XCLBINS"/*
+      - name: Package (extension built here, DIST=1)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v g++-13 >/dev/null; then
+            mkdir -p "$HOME/.local/bin"
+            ln -sf "$(command -v g++)" "$HOME/.local/bin/g++-13"
+            export PATH=$HOME/.local/bin:$PATH
+          fi
+          g++-13 --version | head -1
+          export CPATH=$PWD/flm-dev-kit/FLM_DLL/include
+          cd flm-dev-kit/FLM_Pybind/SmolVLA/packaging
+          chmod +x build_package.sh
+          ./build_package.sh > build.log 2>&1 || { grep -v -E "warning|^ +[0-9]+ \||\|  +[~^]" build.log | tail -n 60; ls -l .. ../build | head -40; exit 1; }
+          ls -l dist
+          sha256sum dist/*.tar.gz | tee dist/SHA256SUMS
+      - name: Call-history check (packaged extension, NPU)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd flm-dev-kit/FLM_Pybind/SmolVLA/packaging
+          rm -rf "$RUNNER_TEMP/pkg" && mkdir -p "$RUNNER_TEMP/pkg"
+          tar -xzf dist/smolvla-npu-*.tar.gz -C "$RUNNER_TEMP/pkg"
+          cd "$RUNNER_TEMP/pkg"/smolvla-npu-*
+          WHEEL=$(ls dist/*.whl)
+          python3.12 -m venv .venv 2>/dev/null || uv venv --python 3.12 --seed .venv
+          .venv/bin/python -m pip install -q --extra-index-url https://download.pytorch.org/whl/cpu "$WHEEL" -r requirements-runtime.txt
+          MODEL=$(ls -d "$HOME"/FLM_VLA/FLM_SmolVLA "$HOME"/*/FLM_SmolVLA /scratch/*/FLM_VLA/FLM_SmolVLA 2>/dev/null | head -1 || true)
+          if [ -z "$MODEL" ]; then echo "no SmolVLA model directory on this runner; skipping the NPU check"; exit 0; fi
+          cp "$GITHUB_WORKSPACE"/flm-dev-kit/FLM_Pybind/SmolVLA/test_smolvla_call_history.py .
+          .venv/bin/python test_smolvla_call_history.py "$MODEL"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: smolvla-npu-package
+          path: |
+            flm-dev-kit/FLM_Pybind/SmolVLA/packaging/dist/smolvla-npu-*.tar.gz
+            flm-dev-kit/FLM_Pybind/SmolVLA/packaging/dist/SHA256SUMS
+          if-no-files-found: error
