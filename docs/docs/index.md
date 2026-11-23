@@ -7,13 +7,13 @@ has_children: false
 
 # ⚡ FastFlowLM (FLM)
 
-**FLM** is the only **NPU-first runtime** built exclusively for AMD Ryzen™ AI.  
+**FLM** is the only out-of-box runtime built exclusively for AMD Ryzen™ AI, with both **NPU** and **iGPU** support.  
 
-Run **LLMs with Vision, Audio, Embedding, and MoE support** in minutes: **no discrete GPU needed**, **over 10× more power-efficient**, and **context lengths up to 256k tokens**. With iGPU support added, FLM now uses more of the SoC, not just the NPU.  
+Run **LLMs with Vision, Audio, Embedding, and MoE support** in minutes: **no discrete GPU needed**, **over 10× more power-efficient**, and **context lengths up to 256k tokens**. FLM now supports the iGPU as well as the NPU, for full SoC support.  
 
 A **familiar single-command CLI**, built for NPUs from the first line of code.  
 
-Your idle silicon is ready to work. **FastFlowLM puts it to use.**
+Your Ryzen™ AI silicon is ready to work. **FastFlowLM puts all of it to use.**
 
 ---
 

@@ -1,6 +1,6 @@
 # 📜 The Story of FastFlowLM (FLM)
 
-From a 2025 university research project to the NPU-first runtime for AMD Ryzen™ AI — now part of AMD.
+From a 2025 university research project to the dedicated runtime for AMD Ryzen™ AI — now part of AMD.
 
 ---
 

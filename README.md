@@ -8,19 +8,19 @@
   <img src="https://img.shields.io/badge/NPU-Optimized-red" />
 </p>
 
-## ⚡ FastFlowLM (FLM) — Unlock Ryzen™ AI NPUs
+## ⚡ FastFlowLM (FLM) — Unlock Ryzen™ AI
 
-**Chat, see, listen, and search with local AI — on the NPU already inside your Ryzen™ AI PC.**
+**Chat, see, listen, and search with local AI — on the silicon already inside your Ryzen™ AI PC.**
 
-FastFlowLM runs LLMs with **Vision**, **Audio**, **Embedding**, and **MoE** support on AMD Ryzen™ AI NPUs. With iGPU support added, it now uses more of the SoC, not just the NPU. Setup takes minutes.
+FastFlowLM runs LLMs with **Vision**, **Audio**, **Embedding**, and **MoE** support on AMD Ryzen™ AI, on both the **NPU** and the **iGPU** for full SoC support. Setup takes minutes.
 
 - 🔋 **No discrete GPU needed.** Over 10× more power-efficient than GPU-first stacks, and faster.
 - 🧠 **Long context.** Up to 256k tokens.
 - 🪶 **Tiny and quick to install.** A 17 MB runtime that installs in about 20 seconds.
 - 💻 **Familiar to use.** One command to run a model, built for NPUs from the first line of code.
-- 📦 **NPU-first by design.** The only out-of-box runtime built exclusively for Ryzen™ AI.
+- 📦 **Dedicated to Ryzen™ AI.** The only out-of-box runtime built exclusively for Ryzen™ AI, with both NPU and iGPU support.
 
-Your idle silicon is ready to work. FastFlowLM puts it to use.
+Your Ryzen™ AI silicon is ready to work. FastFlowLM puts all of it to use.
 
 > FastFlowLM (FLM) supports all Ryzen™ AI Series chips with XDNA2 NPUs (Strix, Strix Halo, Kraken, and Gorgon Point).
 
@@ -97,7 +97,7 @@ flm serve llama3.2:1b
 
 ---
 
-## 🧠 Local AI on NPU
+## 🧠 Local AI on Ryzen™ AI
 
 FLM makes it easy to run cutting-edge **LLMs** (and now **VLMs**) locally with:
 - ⚡ Fast and low power
@@ -110,7 +110,7 @@ No model rewrites, no tuning — it just works.
 
 ## ✅ Highlights
 
-- **NPU-first on AMD Ryzen™ AI** — no discrete GPU needed, with iGPU support to use more of the SoC
+- **Dedicated to AMD Ryzen™ AI** — runs on the NPU and the iGPU for full SoC support, no discrete GPU needed
 - **Lightweight runtime (17 MB)** — installs within **20 seconds**, easy to integrate    
 - **Familiar to use** — a single-command CLI, built for NPUs from the start  
 - **Support for long context windows** — up to 256k tokens (e.g., Qwen3-4B-Thinking-2507)  

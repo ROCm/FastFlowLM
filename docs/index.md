@@ -2,14 +2,14 @@
 layout: page
 title: "FastFlowLM"
 permalink: /
-description: "NPU-native runtime that unlocks AMD Ryzen AI NPUs with instant installs, rich models, and matching docs."
+description: "Runtime dedicated to AMD Ryzen AI, with NPU and iGPU support, instant installs, rich models, and matching docs."
 sections:
   - type: hero
     id: top
-    kicker: "NPU-first runtime"
-    title: "The fastest, most efficient LLM inference on NPUs"
+    kicker: "Dedicated to Ryzen™ AI"
+    title: "Fast, efficient LLM inference on Ryzen™ AI — NPU and iGPU"
     body: |
-      FastFlowLM (FLM) delivers a familiar single-command developer experience built exclusively for AMD Ryzen™ AI NPUs. Run LLMs with Vision, Audio, Embedding, and MoE support, with no discrete GPU needed. Install in seconds, stream tokens instantly, and run context windows up to 256k — with over 10× better efficiency than GPU-first stacks. With iGPU support added, FLM now uses more of the SoC, not just the NPU.
+      FastFlowLM (FLM) delivers a familiar single-command developer experience built exclusively for AMD Ryzen™ AI. Run LLMs with Vision, Audio, Embedding, and MoE support, with no discrete GPU needed. Install in seconds, stream tokens instantly, and run context windows up to 256k — with over 10× better efficiency than GPU-first stacks. FLM supports both the NPU and the iGPU for full SoC support.
       
       The FastFlowLM team is now part of AMD.
     ctas:
@@ -44,8 +44,8 @@ sections:
     right:
       carousel:
         slides:
-          - title: "NPU‑First Architecture"
-            description: "Built exclusively for AMD Ryzen™ AI NPUs with optimized kernels for maximum efficiency."
+          - title: "Dedicated to Ryzen™ AI"
+            description: "Built exclusively for AMD Ryzen™ AI, with NPU and iGPU support and optimized kernels for maximum efficiency."
             visual:
               type: "npu_orbit"
               title: "Ryzen™ AI"
@@ -55,7 +55,7 @@ sections:
                 - "256k ctx"
                 - "Vision · Audio · OMNI · Text"
           - title: "Familiar Developer Flow"
-            description: "Same simple CLI & API patterns you already know — deeply optimized for NPU performance."
+            description: "Same simple CLI & API patterns you already know — deeply optimized for Ryzen™ AI."
             visual:
               type: "code"
               title: "PowerShell"

@@ -38,7 +38,7 @@ sections:
 
       FastFlowLM (FLM) now supports the **iGPU** alongside the NPU, making it a **full SoC story** for AMD Ryzen™ AI.
 
-      FLM is still NPU-first: **no discrete GPU needed**, **over 10× more power-efficient**, and **context lengths up to 256k tokens**. With iGPU support added, it now uses more of the SoC, not just the NPU.
+      FLM is dedicated to Ryzen™ AI: **no discrete GPU needed**, **over 10× more power-efficient**, and **context lengths up to 256k tokens**. It now runs on both the NPU and the iGPU.
 
       **Learn more:** [Docs](/docs/) · [GitHub Releases](https://github.com/ROCm/FastFlowLM/releases)
 
