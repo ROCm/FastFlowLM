@@ -10,7 +10,7 @@ nav_order: 12
 This section reports the performance on NPU with FastFlowLM (FLM).
 
 > **Note:** 
-> - Results are based on FastFlowLM v1.0.0 with the XDNA2 performance update (the previous release measured 298 / 363 / 430 ms on the same table).
+> - Results are based on FastFlowLM v1.0.14 including the XDNA2 performance update (the previous release measured 298 / 363 / 430 ms on the same table).
 > - Under FLM's default NPU power mode (Performance)  
 > - Newer versions may deliver improved performance.
 > - SmolVLA is a Vision-Language-Action (robotics policy) model. It is measured as end-to-end latency per inference (camera images + instruction → action chunk), not in tokens per second.
