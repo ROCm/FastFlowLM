@@ -855,15 +855,25 @@ class Resolve(unittest.TestCase):
         self.assertIn(SHA_A[:10], v["reason"])
 
     def test_bench_overlays_the_benched_runs_engines(self):
-        # The overlay's engines.json is the benched commit's on a dispatch.
+        # The overlay's engines.json is the benched commit's on a dispatch:
+        # resolve reads it with git show and uploads it, and the bench job
+        # downloads it. No bench job checks out a computed commit (a checkout
+        # of needs.resolve.outputs.head-sha there is what code scanning flags
+        # as cache poisoning).
         text = workflow("devkit-bench.yml")
+        resolve_job = text.split("\n  resolve:\n", 1)[1].split("\n  npu-gate:\n", 1)[0]
+        read = resolve_job.split("- name: Engine map of the benched commit\n", 1)[1].split("\n\n")[0]
+        self.assertIn("git show \"${HEAD_SHA}:flm-dev-kit/FLM_DLL/engines.json\"", read)
+        self.assertIn("HEAD_SHA: ${{ steps.plan.outputs.head-sha }}", read)
+        self.assertIn("name: devkit-bench-engines", resolve_job)
         bench = text.split("\n  bench:\n", 1)[1].split("\n  report:\n", 1)[0]
-        checkout = bench.split("- name: Checkout the benched commit's engine map\n", 1)[1].split("\n\n")[0]
-        self.assertIn("ref: ${{ needs.resolve.outputs.head-sha }}", checkout)
-        self.assertIn("if: ${{ !inputs.mode }}", checkout)
+        download = bench.split("- name: Download the benched commit's engine map\n", 1)[1].split("\n\n")[0]
+        self.assertIn("name: devkit-bench-engines", download)
+        self.assertIn("if: ${{ !inputs.mode }}", download)
+        self.assertNotIn("needs.resolve.outputs.head-sha", bench.replace(
+            "head-sha: ${{ needs.resolve.outputs.head-sha }}", ""))
         overlay = bench.split("- name: Overlay\n", 1)[1].split("\n\n")[0]
-        self.assertIn("engines: ${{ !inputs.mode && 'bench-run/flm-dev-kit/FLM_DLL/engines.json' || '' }}",
-                      overlay)
+        self.assertIn("engines: ${{ !inputs.mode && 'bench-run/engines.json' || '' }}", overlay)
         action = (REPO / ".github/actions/devkit-overlay-package/action.yml").read_text(encoding="utf-8")
         self.assertIn('args+=(--engines "${ENGINES}")', action)
         self.assertIn('$cmdArgs += "--engines=$env:ENGINES"', action)

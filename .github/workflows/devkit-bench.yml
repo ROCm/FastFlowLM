@@ -317,6 +317,33 @@ jobs:
           fi
           python3 .github/script/devkit-bench/resolve.py "${args[@]}"
 
+      # A dispatch may bench an earlier run of main: the engines its overlay
+      # replaces are those that run's commit's engines.json names (the
+      # libraries were built from it), not the dispatched commit's. Read it
+      # here, as data, from this full-history checkout and hand it to the
+      # bench jobs as an artifact, so no bench job checks out a computed
+      # commit.
+      - name: Engine map of the benched commit
+        id: engines
+        if: ${{ !inputs.mode && steps.plan.outputs.bench == 'true' }}
+        env:
+          HEAD_SHA: ${{ steps.plan.outputs.head-sha }}
+        run: |
+          [[ "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::head-sha is not a commit sha"; exit 1; }
+          mkdir -p "${RUNNER_TEMP}/bench-engines"
+          git show "${HEAD_SHA}:flm-dev-kit/FLM_DLL/engines.json" > "${RUNNER_TEMP}/bench-engines/engines.json"
+          python3 -c 'import json, sys; json.load(open(sys.argv[1], encoding="utf-8"))' \
+            "${RUNNER_TEMP}/bench-engines/engines.json"
+
+      - name: Upload the engine map
+        if: steps.engines.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: devkit-bench-engines
+          path: ${{ runner.temp }}/bench-engines/engines.json
+          retention-days: 1
+          overwrite: true
+
   # ── NPU approval gate, dispatch only ─────────────────────────────────────
   # Called, Build and Test's npu-gate / npu-approve already gate the call
   # (the same rules; see there). A dispatch on main is ungated; one on any
@@ -460,17 +487,15 @@ jobs:
 
       # A dispatch on main may bench an earlier push run: the engines it
       # overlays are those its commit's engines.json names (the libraries
-      # were built from it), not the dispatched commit's. Data only.
-      - name: Checkout the benched commit's engine map
+      # were built from it), not the dispatched commit's. resolve read it
+      # (git show, data only) and uploaded it: nothing here checks out a
+      # computed commit.
+      - name: Download the benched commit's engine map
         if: ${{ !inputs.mode }}
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          ref: ${{ needs.resolve.outputs.head-sha }}
+          name: devkit-bench-engines
           path: bench-run
-          persist-credentials: false
-          sparse-checkout-cone-mode: true
-          sparse-checkout: flm-dev-kit/FLM_DLL
-          filter: blob:none
 
       # A pull request's and the full refresh's packages already hold the
       # staged dev-kit files: nothing to overlay. Nightly and a dispatch
@@ -486,7 +511,7 @@ jobs:
           libs: ${{ (inputs.mode == 'nightly' || !inputs.mode) && matrix.libs || '' }}
           xclbins: ${{ (inputs.mode == 'nightly' || !inputs.mode) && matrix.xclbins || '' }}
           families: ${{ (inputs.mode == 'nightly' || !inputs.mode) && matrix.families || '' }}
-          engines: ${{ !inputs.mode && 'bench-run/flm-dev-kit/FLM_DLL/engines.json' || '' }}
+          engines: ${{ !inputs.mode && 'bench-run/engines.json' || '' }}
           # Dispatch: the earlier Build and Test run's; called: this run's.
           run-id: ${{ needs.resolve.outputs.build-run-id }}
           github-token: ${{ needs.resolve.outputs.build-run-id != '' && github.token || '' }}
