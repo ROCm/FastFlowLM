@@ -10,12 +10,17 @@
 
 ## ⚡ FastFlowLM (FLM) — Unlock Ryzen™ AI NPUs
 
-Run large language models — now with **Vision**, **Audio**, **Embedding** and **MoE** support — on **AMD Ryzen™ AI NPUs** in minutes.  
-**No GPU required. Faster and over 10× more power-efficient. Supports context lengths up to 256k tokens. Ultra-Lightweight (17 MB). Installs within 20 seconds.**
+**Chat, see, listen, and search with local AI — on the NPU already inside your Ryzen™ AI PC.**
 
-📦 **The only out-of-box, NPU-first runtime built exclusively for Ryzen™ AI.**  
-🤝 **A familiar single-command CLI — deeply optimized for NPUs.**  
-✨ **From Idle Silicon to Instant Power — FastFlowLM Makes Ryzen™ AI Shine.**
+FastFlowLM runs LLMs with **Vision**, **Audio**, **Embedding**, and **MoE** support on AMD Ryzen™ AI NPUs. With iGPU support added, it now uses more of the SoC, not just the NPU. Setup takes minutes.
+
+- 🔋 **No discrete GPU needed.** Over 10× more power-efficient than GPU-first stacks, and faster.
+- 🧠 **Long context.** Up to 256k tokens.
+- 🪶 **Tiny and quick to install.** A 17 MB runtime that installs in about 20 seconds.
+- 💻 **Familiar to use.** One command to run a model, built for NPUs from the first line of code.
+- 📦 **NPU-first by design.** The only out-of-box runtime built exclusively for Ryzen™ AI.
+
+Your idle silicon is ready to work. FastFlowLM puts it to use.
 
 > FastFlowLM (FLM) supports all Ryzen™ AI Series chips with XDNA2 NPUs (Strix, Strix Halo, Kraken, and Gorgon Point).
 
