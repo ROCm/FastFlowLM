@@ -48,3 +48,20 @@ Engine-level A/B (gemma3:4b): the engine at 995203ba (layer.xclbin + lm_head.xcl
 
 The gain is less than the 5.1 ms of the two switches because lm_head in the layer design takes ~9.8 ms instead
 of ~7.6 ms (the layer design's weight flow reads ~44 GB/s; see the kernel README).
+
+## Sliding ring read order (2026-11-23)
+
+A sliding layer keeps its last 1,024 K/V rows in a ring (row = position % 1024). Past 1,024 tokens the decode layer
+now reads the ring in whole 16-row chunks, starting at the chunk after the one holding the newest row
+(`ring_split` in `_move_kv_cache`), instead of oldest-first from `L % 1024`. The attention cores take keys in groups
+of 16, so each group is now one ring chunk. That lets a later bfp16 copy of the cache be packed once per chunk.
+
+Same keys, same mask (all 1,024 valid), different grouping, so past 1,024 tokens the bf16 online softmax rounds
+differently. Up to 1,024 tokens, and whenever `L % 16 == 0`, the read is exactly as before.
+
+Measured (gemma3:4b, Strix Halo; engine harness, step-2 engine vs this one, same kernels):
+- 510-token prompt + 514 tokens (context <= 1,024): logits byte-identical at all 515 steps.
+- 1K / 4K prompt, 256 forced tokens (same context at every step), three orders compared pairwise (old
+  oldest-first, this one, and "always from row 0"): every pair differs alike, median cos 0.99984-0.99987, 5th
+  percentile 0.99945-0.99963, top-1 the same at 95-99% of steps, KL median 5-10e-4. So the old order is not more
+  accurate; the decode attention's bf16 running max and corrections are this sensitive to grouping.

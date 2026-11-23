@@ -208,7 +208,10 @@ void gemma_npu_sequence::Impl::_move_kv_cache(npu_sequence* seq, const size_t L,
     uint32_t v01_offset = is_sliding_window ? V01_sliding_offset : V01_offset;
     uint32_t v23_offset = is_sliding_window ? V23_sliding_offset : V23_offset;
     if (is_sliding_window){
-        if (L % sliding_window == 0){ // corner case, just from zero to end
+        // Past the window the ring is read in whole 16-row chunks, starting at the chunk after the newest row's, so
+        // the cores' key groups are ring chunks (README: "Sliding ring read order").
+        const uint32_t ring_split = (((L - 1) % sliding_window) / L_CHUNK + 1) * L_CHUNK % sliding_window;
+        if (L % sliding_window == 0 || (L > sliding_window && ring_split == 0)){ // the whole ring from row 0
             const uint32_t data2move = sliding_window * DH * 2;
             seq->npu_dma_memcpy_nd(
                 sizeof(bf16),
@@ -261,8 +264,8 @@ void gemma_npu_sequence::Impl::_move_kv_cache(npu_sequence* seq, const size_t L,
             );
             return;
         }
-        else if (L > sliding_window){ // still single phase, from zero to L
-            uint32_t L_begin = L % sliding_window;
+        else if (L > sliding_window){ // two phases: ring_split .. end, then 0 .. ring_split
+            uint32_t L_begin = ring_split;
             uint32_t L_phase_1 = sliding_window - L_begin;
             uint32_t L_phase_2 = L_begin;
             uint32_t offset = L_begin * DH * 2;
