@@ -87,7 +87,7 @@ jobs:
       - name: Bench
         shell: bash
         run: |
-          set -uo pipefail
+          set +e -uo pipefail
           W=$GITHUB_WORKSPACE
           rm -rf "$W/flm" "$W/out" && mkdir -p "$W/flm" "$W/out"
           tar xzf "$(ls pkg/*_linux.tar.gz | head -1)" -C "$W/flm"

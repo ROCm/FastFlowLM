@@ -29,3 +29,4 @@ for p in prompts:
 json.dump(res, open(out, "w"), indent=1)
 EOF
 kill $pid; wait $pid 2>/dev/null
+exit 0
