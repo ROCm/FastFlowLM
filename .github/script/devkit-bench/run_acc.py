@@ -13,7 +13,9 @@ harness the NPU tests use: waits for /v1/version, stops it with SIGINT then
 SIGKILL), runs gsm8k_run.py or run_vqa.py against it and scores the
 predictions with gsm8k_score.py or score_anls.py, which write summary.json
 and report.md into <out-dir> and apply acc_common.gate: the benches' one
-hard gate (no predictions, or more than --max-unanswered unanswered). The
+hard gate (no predictions, or more than --max-unanswered unanswered); a run
+with no predictions (flm serve did not start) gets an unusable summary.json
+here so report.py's hard gate sees it. The
 server's log stays in <out-dir>. FLM_XCLBIN_PATH is the flm binary's own
 directory, so it reads the overlaid package's xclbins/ tree.
 
@@ -23,6 +25,7 @@ either way). Standard library only.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -36,6 +39,20 @@ BENCHES = {
     "gsm8k": ("gsm8k_run.py", "gsm8k_score.py"),
     "docvqa": ("run_vqa.py", "score_anls.py"),
 }
+
+
+SCORE_KEYS = {"gsm8k": "accuracy", "docvqa": "anls"}  # compare.ACC_KEYS
+
+
+def write_unusable(out: Path, bench: str, model: str, n: int, why: str) -> None:
+    """The summary.json of a run that produced no predictions (flm serve did
+    not start, or the run recorded nothing): score 0, usable false. Without
+    it report.py would see no accuracy result for the model, and its hard
+    gate would pass a dev-kit build that cannot even load the model."""
+    summary = {SCORE_KEYS[bench]: 0.0, "usable": False, "problems": [why],
+               "total": 0, "unanswered": 0, "failed": 0, "model": model,
+               "config": {"n": n, "asked": 0}}
+    (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
 
 
 def main(argv=None) -> int:
@@ -81,6 +98,8 @@ def main(argv=None) -> int:
 
     if not preds.is_file() or preds.stat().st_size == 0:
         print(f"::error::{args.bench} {args.model}: no predictions were recorded.", flush=True)
+        write_unusable(out, args.bench, args.model, args.n,
+                       "flm serve did not start" if run_rc else "no predictions were recorded")
         return 1
     score_rc = subprocess.run([sys.executable, score_script, str(preds), "--model", args.model,
                                "--out-dir", str(out), "--max-unanswered", str(args.max_unanswered)]).returncode
