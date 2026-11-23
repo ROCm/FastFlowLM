@@ -102,6 +102,10 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
+      # The runner workspace is shared with other workflows: clear old packages so this run's is the only one.
+      - name: Clean workspace
+        shell: bash
+        run: rm -rf pkg tools flm out
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: portable
@@ -117,7 +121,9 @@ jobs:
           W=$GITHUB_WORKSPACE
           chmod +x "$W"/tools/buf_life_* "$W/tools/uptr"
           rm -rf "$W/flm" "$W/out" && mkdir -p "$W/flm" "$W/out"
-          tar xzf "$(ls pkg/*_linux.tar.gz | head -1)" -C "$W/flm"
+          ls -l pkg
+          [ "$(ls pkg/*_linux.tar.gz | wc -l)" = 1 ] || { echo "expected one package"; exit 1; }
+          tar xzf pkg/*_linux.tar.gz -C "$W/flm"
           export FLM_MODEL_PATH="${FLM_MODEL_PATH:-/scratch}"
           export FLM_DIR=$W/flm
           MIN=2097152
@@ -130,7 +136,9 @@ jobs:
             echo "thp shmem_enabled: $(cat /sys/kernel/mm/transparent_hugepage/shmem_enabled)"
             echo "thp defrag: $(cat /sys/kernel/mm/transparent_hugepage/defrag)"
             grep -E "MemTotal|MemAvailable" /proc/meminfo
-            echo "package and engines $GITHUB_SHA"
+            echo "package and engines $GITHUB_SHA, $(ls pkg/*_linux.tar.gz)"
+            sha256sum "$W/flm/lib/libminicpm_v_4_7_npu.so"
+            grep -c "user-ptr bo ok" "$W/flm/lib/libminicpm_v_4_7_npu.so" | sed 's/^/hugepage strings in engine: /'
             pgrep -a -x 'flm|flm-real' && echo "WARNING: other flm processes" || true
             "$W/flm/flm" pull minicpm-v-4.7:1b 2>&1 | tail -1
             "$W/flm/flm" pull llama3.2:1b 2>&1 | tail -1
