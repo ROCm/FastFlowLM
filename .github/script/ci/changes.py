@@ -7,8 +7,8 @@
 Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
   run_tests  false only when every changed file is documentation, otherwise
              never built or packaged, or used by no Build and Test job
-             (OUTSIDE_BUILD_AND_TEST: other workflows, scan configs, the CI
-             unit tests, the src/test programs cpu-tests.yml runs or no CI
+             (OUTSIDE_BUILD_AND_TEST: workflows, actions and script/ci files
+             outside build_and_test_closure, scan configs, the CI unit tests, the src/test programs cpu-tests.yml runs or no CI
              builds, developer scripts), so no NPU runner is reserved for it.
              A package or installer input no test observes (BUILD_ONLY)
              builds the packages with suites "none" and no HIPEP
@@ -176,6 +176,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -324,6 +325,10 @@ BENCH_CI = re.compile(
 # scan; release.yml, which calls Build and Test, never the other way), or by
 # hand (the engine test harnesses under src/test, the developer scripts).
 # src/test is all of it but NPU_TEST_INPUTS, which a Build and Test job reads.
+# Workflows, actions and script/ci files are also outside when they are not
+# in build_and_test_closure, so a new standalone workflow and its script need
+# no entry here; the workflows listed below are the fallback for a checkout
+# where the closure cannot be worked out.
 NPU_TEST_INPUTS = ("openai_api_test/", "openai_usage/", "d3_video/fixtures/",
                    "model_extension_gemma4e/", "model_extension_consumer/")
 OUTSIDE_BUILD_AND_TEST = re.compile(
@@ -646,6 +651,77 @@ def family_suites(families: Iterable[str], catalog: dict[str, dict]) -> set:
             if any(family_of(e) == fam and e.get("asr") for e in catalog.values()):
                 out.add("asr")
     return out
+
+
+# The CI files Build and Test can run (build_and_test_closure): workflows,
+# actions and the scripts in script/ci. A changed one outside the closure is
+# OUTSIDE_BUILD_AND_TEST, whatever its name (a new standalone workflow and its
+# script, say), so no list of them has to be kept.
+CLOSURE_DIRS = (".github/workflows/", ".github/actions/", ".github/script/ci/")
+USES_WORKFLOW = re.compile(r"uses:\s*\./\.github/workflows/([\w.-]+\.ya?ml)")
+USES_ACTION = re.compile(r"uses:\s*\./\.github/actions/([\w.-]+)")
+PY_IMPORT = re.compile(r"^\s*(?:from|import)\s+([A-Za-z_]\w*)", re.MULTILINE)
+
+
+@lru_cache(maxsize=None)
+def build_and_test_closure(repo: Path = REPO_ROOT, gone: frozenset = frozenset()) -> Optional[frozenset]:
+    """The CI files a Build and Test run can use, as repository paths (an
+    action as its directory, ending in /): build-and-test.yml, the workflows
+    and actions it calls through uses:, transitively, and the script/ci files
+    (bar the test_* unit tests) any of them names (by file name, comments
+    included) or imports. A reference counts whether or not its target is in the checkout, so a
+    change that deletes or renames away a file Build and Test still names
+    (gone: the changed script/ci file names the checkout lacks) is tested,
+    and fails there. A mention is enough, so it errs towards testing. None
+    when build-and-test.yml cannot be read: then no CI file counts as outside."""
+    gh = repo / ".github"
+    start = gh / "workflows" / "build-and-test.yml"
+    if not start.is_file():
+        return None
+    ci = gh / "script" / "ci"
+    # The CI unit tests (test_*) run in the changes job on every event and
+    # call no other script: they are neither followed nor collected.
+    names = {p.name for p in ci.iterdir() if p.is_file()} if ci.is_dir() else set()
+    names = {n for n in names | set(gone) if not n.startswith("test_")}
+    named = re.compile(r"(?<![\w-])(" + "|".join(sorted(map(re.escape, names), key=len, reverse=True))
+                       + r")(?!\w)") if names else None
+    out: set = set()
+    todo = [start]
+    while todo:
+        path = todo.pop()
+        rel = path.relative_to(repo).as_posix()
+        if rel in out:
+            continue
+        out.add(rel)
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        todo += [gh / "workflows" / m for m in USES_WORKFLOW.findall(text)]
+        for action in USES_ACTION.findall(text):
+            key = f".github/actions/{action}/"
+            if key not in out:
+                out.add(key)
+                todo += [f for f in (gh / "actions" / action).rglob("*") if f.is_file()]
+        if named:
+            todo += [ci / n for n in set(named.findall(text))]
+        if path.suffix == ".py":
+            todo += [ci / (m + ".py") for m in PY_IMPORT.findall(text) if m + ".py" in names]
+    return frozenset(p for p in out if not (p.startswith(".github/actions/") and not p.endswith("/")))
+
+
+def unused_ci(path: str, closure: Optional[frozenset]) -> bool:
+    """A workflow, action or script/ci file no Build and Test run uses. A
+    file in a subdirectory of script/ci counts as used (the closure tracks
+    top-level scripts only)."""
+    if closure is None or not path.startswith(CLOSURE_DIRS) or devkit_only_areas(path) is not None:
+        return False
+    if path.startswith(".github/actions/"):
+        return "/".join(path.split("/")[:3]) + "/" not in closure
+    if path.startswith(".github/workflows/") and not path.endswith((".yml", ".yaml")):
+        return False
+    if path.startswith(".github/script/ci/") and "/" in path[len(".github/script/ci/"):]:
+        return False
+    return path not in closure
 
 
 def is_non_code(path: str) -> bool:
@@ -1251,7 +1327,8 @@ def devkit_engines_diff(git: Optional[Git], head: Optional[DevkitEngines]) -> Op
 def decide(files: Optional[list[str]], git: Optional[Git] = None,
            head_catalog_text: Optional[str] = None,
            devkit_engines: Optional[DevkitEngines] = None,
-           engine_libs: Optional[frozenset] = None) -> Decision:
+           engine_libs: Optional[frozenset] = None,
+           repo: Optional[Path] = None) -> Decision:
     """The decision for a list of changed files (None: git could not tell).
 
     git supplies the changed lines and the base and head versions of the
@@ -1299,12 +1376,21 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
             d.reasons.append("bench CI only: product builds, NPU tests and dev-kit jobs skipped")
             return d
 
-    outside = [f for f in files if OUTSIDE_BUILD_AND_TEST.match(f) and not is_non_code(f)]
+    root = repo or REPO_ROOT
+    gone = frozenset(f.rsplit("/", 1)[1] for f in files
+                     if f.startswith(".github/script/ci/") and f.count("/") == 3 and not (root / f).exists())
+    closure = build_and_test_closure(root, gone)
+
+    def is_outside(f: str) -> bool:
+        return bool(OUTSIDE_BUILD_AND_TEST.match(f)) or unused_ci(f, closure)
+
+    outside = [f for f in files if is_outside(f) and not is_non_code(f)]
     if outside:
         d.outside = outside
-        files = [f for f in files if not OUTSIDE_BUILD_AND_TEST.match(f)]
+        files = [f for f in files if not is_outside(f)]
         d.reasons.append(f"{len(outside)} file(s) no Build and Test job uses, e.g. {outside[0]}: "
-                         "nothing built or tested for them here (OUTSIDE_BUILD_AND_TEST)")
+                         "nothing built or tested for them here (OUTSIDE_BUILD_AND_TEST, or CI "
+                         "outside build_and_test_closure)")
         if not [f for f in files if not is_non_code(f)]:
             d.run_tests = False
             d.suites = set()
@@ -1518,7 +1604,7 @@ def after_swap(d: Decision, git, head_catalog_text: Optional[str],
     files = git.files_since(swap)
     if files is None:
         return
-    since = decide(files, None, head_catalog_text, engines, engine_library_files(engines, repo))
+    since = decide(files, None, head_catalog_text, engines, engine_library_files(engines, repo), repo)
     if not since.devkit_stage():
         d.keep_swap(swap, since)
 
@@ -1559,7 +1645,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             engines_text = None
     devkit_engines = DevkitEngines.parse(engines_text)
     decision = decide(files, git, head_catalog, devkit_engines,
-                      engine_library_files(devkit_engines, args.repo))
+                      engine_library_files(devkit_engines, args.repo), args.repo)
     if args.swap_verified == "true":
         decision.skip_for_swap()
     elif git and decision.devkit_stage():

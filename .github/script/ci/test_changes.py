@@ -97,7 +97,7 @@ class Cli(unittest.TestCase):
         self.assertEqual(out["asr_full"], "false")
 
     def test_packaged_text_runs(self):
-        for f in (".github/workflows/ci.yml", "src/CMakeLists.txt", "hrx-integration/x.patch"):
+        for f in ("src/CMakeLists.txt", "hrx-integration/x.patch"):
             self.assertEqual(cli("--files", f)["run_tests"], "true", f)
 
     def test_packaging_only_builds_and_tests_nothing(self):
@@ -176,6 +176,116 @@ class Cli(unittest.TestCase):
                 out = cli("--files", f)
                 self.assertEqual((out["run_tests"], out["suites"], out["hipep"], out["devkit"]),
                                  ("true", "none", "true", "false"))
+
+    def test_ci_build_and_test_does_not_use_runs_nothing(self):
+        """PR #1124: a new standalone workflow pair and its script, which no
+        Build and Test workflow or action names. Nothing runs, whatever the
+        devkit- prefix of the names."""
+        files = (".github/workflows/devkit-auto-swap.yml", ".github/workflows/devkit-swap-review.yml",
+                 ".github/script/ci/devkit_auto_swap.py", ".github/script/ci/test_devkit_auto_swap.py",
+                 "flm-dev-kit/AGENTS.md")
+        out = cli("--files", *files)
+        self.assertEqual((out["run_tests"], out["suites"], out["hipep"], out["devkit"], out["devkit_bench"]),
+                         ("false", "none", "false", "false", "false"))
+        for f in (".github/workflows/new.yml", ".github/actions/new-thing/action.yml",
+                  ".github/script/ci/new_helper.py"):
+            with self.subTest(f=f):
+                self.assertEqual(cli("--files", f)["run_tests"], "false")
+        # A script Build and Test runs, deleted in the change: still tested.
+        with tempfile.TemporaryDirectory() as tmp:
+            shutil.copytree(changes.REPO_ROOT / ".github", Path(tmp) / ".github")
+            (Path(tmp) / ".github/script/ci/setup_windows_deps.ps1").unlink()
+            changes.build_and_test_closure.cache_clear()
+            d = changes.decide([".github/script/ci/setup_windows_deps.ps1"], repo=Path(tmp))
+            changes.build_and_test_closure.cache_clear()
+            self.assertTrue(d.run_tests)
+        # What Build and Test uses keeps its rules.
+        for f in (".github/workflows/lin-build.yml", ".github/actions/npu-test/action.yml",
+                  ".github/script/ci/setup_windows_deps.ps1", ".github/script/ci/devkit_swap.py"):
+            with self.subTest(f=f):
+                self.assertEqual(cli("--files", f)["run_tests"], "true")
+
+    def test_build_and_test_closure(self):
+        c = changes.build_and_test_closure()
+        for path in (".github/workflows/build-and-test.yml", ".github/workflows/lin-build.yml",
+                     ".github/workflows/win-build.yml", ".github/workflows/devkit-engines.yml",
+                     ".github/workflows/devkit-xclbins.yml", ".github/workflows/model-extension-build.yml",
+                     ".github/workflows/devkit-bench.yml", ".github/actions/npu-test/",
+                     ".github/actions/detect-changes/", ".github/script/ci/changes.py",
+                     ".github/script/ci/devkit_check.py", ".github/script/ci/setup_windows_deps.ps1"):
+            with self.subTest(path=path):
+                self.assertIn(path, c)
+        for path in (".github/workflows/cpu-tests.yml", ".github/workflows/release.yml",
+                     ".github/workflows/smolvla-package.yml"):
+            with self.subTest(path=path):
+                self.assertNotIn(path, c)
+        # Every action is used by Build and Test today.
+        root = changes.REPO_ROOT
+        for d in (root / ".github/actions").iterdir():
+            with self.subTest(action=d.name):
+                self.assertIn(f".github/actions/{d.name}/", c)
+
+    def test_closure_follows_uses_names_and_imports(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / ".github/workflows").mkdir(parents=True)
+            (repo / ".github/actions/a").mkdir(parents=True)
+            (repo / ".github/script/ci").mkdir(parents=True)
+            self.assertIsNone(changes.build_and_test_closure(repo))
+            changes.build_and_test_closure.cache_clear()
+            (repo / ".github/workflows/build-and-test.yml").write_text(
+                "jobs:\n  b:\n    uses: ./.github/workflows/called.yml\n")
+            (repo / ".github/workflows/called.yml").write_text(
+                "steps:\n  - uses: ./.github/actions/a\n")
+            (repo / ".github/workflows/alone.yml").write_text("run: python3 alone.py\n")
+            (repo / ".github/actions/a/action.yml").write_text("run: python3 .github/script/ci/top.py\n")
+            (repo / ".github/script/ci/top.py").write_text("import helper\n")
+            (repo / ".github/script/ci/helper.py").write_text("x = 1\n")
+            (repo / ".github/script/ci/alone.py").write_text("x = 2\n")
+            (repo / ".github/script/ci/top_extra.py").write_text("x = 3\n")
+            c = changes.build_and_test_closure(repo)
+            self.assertEqual(c, frozenset({
+                ".github/workflows/build-and-test.yml", ".github/workflows/called.yml", ".github/actions/a/",
+                ".github/script/ci/top.py", ".github/script/ci/helper.py"}))
+            self.assertTrue(changes.unused_ci(".github/workflows/alone.yml", c))
+            self.assertTrue(changes.unused_ci(".github/script/ci/alone.py", c))
+            self.assertFalse(changes.unused_ci(".github/actions/a/run.sh", c))
+            self.assertFalse(changes.unused_ci("src/server/server.cpp", c))
+            self.assertFalse(changes.unused_ci(".github/workflows/alone.yml", None))
+            # Wiring a script into Build and Test (in the head checkout) brings it in.
+            changes.build_and_test_closure.cache_clear()
+            (repo / ".github/workflows/build-and-test.yml").write_text(
+                "jobs:\n  b:\n    uses: ./.github/workflows/called.yml\n  c:\n    run: python3 alone.py\n")
+            self.assertIn(".github/script/ci/alone.py", changes.build_and_test_closure(repo))
+            # Deleted while Build and Test still names it: the reference keeps it in, so it is
+            # tested (and fails there); a workflow it still calls likewise.
+            (repo / ".github/script/ci/helper.py").unlink()
+            (repo / ".github/script/ci/top.py").write_text("x = 4  # runs gone_now.py\n")
+            (repo / ".github/workflows/called.yml").write_text(
+                "steps:\n  - uses: ./.github/actions/a\n  - uses: ./.github/workflows/missing.yml\n")
+            changes.build_and_test_closure.cache_clear()
+            c = changes.build_and_test_closure(repo, frozenset({"gone_now.py", "really_gone.py"}))
+            self.assertIn(".github/script/ci/gone_now.py", c)
+            self.assertIn(".github/workflows/missing.yml", c)
+            self.assertNotIn(".github/script/ci/really_gone.py", c)
+            # A file below a script/ci subdirectory counts as used.
+            self.assertFalse(changes.unused_ci(".github/script/ci/lib/h.py", c))
+        changes.build_and_test_closure.cache_clear()
+
+    def test_ci_scripts_outside_the_closure_have_a_caller(self):
+        """A script/ci file Build and Test does not use is a test, or another
+        workflow names it: anything else is dead, or called in a way the
+        closure cannot see (a name built at run time), so look at it."""
+        root = changes.REPO_ROOT
+        c = changes.build_and_test_closure()
+        others = " ".join(p.read_text(encoding="utf-8", errors="replace")
+                          for p in (root / ".github/workflows").glob("*.y*ml")
+                          if f".github/workflows/{p.name}" not in c)
+        for p in sorted((root / ".github/script/ci").iterdir()):
+            path = f".github/script/ci/{p.name}"
+            if p.is_file() and path not in c and not p.name.startswith("test_"):
+                with self.subTest(path=path):
+                    self.assertIn(p.name, others, f"{path}: no Build and Test file or other workflow names it")
 
     def test_every_workflow_is_classified(self):
         """A new workflow is either called by Build and Test, the dev-kit or
