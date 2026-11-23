@@ -94,6 +94,24 @@ void test_embedding_handler() {
     TEST_REQUIRE(request("first", "hello", {{"task", "provider-task"}}).at("data").at(0).at("embedding").at(1) == 4);
     TEST_REQUIRE(request("first", "hello", {{"task", "unknown"}}).at("error").at("code") == 400);
     TEST_REQUIRE(request("first", "hello", {{"task", 42}}).at("error").at("code") == 400);
+    // prompt_name, with task_type as its alias, selects the task the engine
+    // embeds under; one resolved task applies to every element of a batch.
+    TEST_REQUIRE(request("first", "hello", {{"prompt_name", "document"}}).at("data").at(0).at("embedding").at(1) == 2);
+    TEST_REQUIRE(request("first", "hello", {{"prompt_name", "search_document"}}).at("data").at(0).at("embedding").at(1) == 2);
+    TEST_REQUIRE(request("first", "hello", {{"prompt_name", "search_query"}}).at("data").at(0).at("embedding").at(1) == 1);
+    TEST_REQUIRE(request("first", "hello", {{"task_type", "document"}}).at("data").at(0).at("embedding").at(1) == 2);
+    TEST_REQUIRE(request("first", "hello", {{"prompt_name", "document"}, {"task_type", "search_document"}}).at("data").at(0).at("embedding").at(1) == 2);
+    TEST_REQUIRE(request("first", "hello", {{"prompt_name", "document"}, {"task", "document"}}).at("data").at(0).at("embedding").at(1) == 2);
+    for (const auto& bad : {json{{"prompt_name", "not_a_task"}}, json{{"prompt_name", 7}},
+                            json{{"task_type", "nope"}},
+                            json{{"prompt_name", "query"}, {"task_type", "document"}},
+                            json{{"prompt_name", "document"}, {"task", "query"}},
+                            json{{"prompt_name", "document"}, {"task", 42}}})
+        TEST_REQUIRE(request("first", "hello", bad).at("error").at("code") == 400);
+    const auto task_batch = request("first", json::array({"hi", "hello"}), {{"prompt_name", "document"}});
+    TEST_REQUIRE(task_batch.at("data").size() == 2);
+    TEST_REQUIRE(task_batch.at("data").at(0).at("embedding").at(1) == 2);
+    TEST_REQUIRE(task_batch.at("data").at(1).at("embedding").at(1) == 2);
     check("first", 0.5f);
     check("Ollama/first", 0.5f);
     for (const char* tag : {"missing:1", "incompatible:1", "absent:1", "Ollama/absent", "generation:1"}) {

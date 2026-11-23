@@ -757,10 +757,12 @@ void test_manifest_schema_fixtures_match_runtime_contract() {
 }  // namespace
 
 void test_embedding_handler();
+void test_embedding_task();
 void test_gemma_embedding_request();
 
 int main() {
     RunTest(test_gemma_embedding_request, "built-in embedding request options");
+    RunTest(test_embedding_task, "embedding task-prompt resolution");
     RunTest(test_embedding_handler, "embedding request failures and switching");
     RunTest(test_embedding_extension, "embedding provider lifecycle and rollback");
     RunTest(test_register_and_create, "register and create");
