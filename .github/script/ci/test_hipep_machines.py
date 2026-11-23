@@ -38,8 +38,8 @@ class Load(unittest.TestCase):
 
     def test_defaults(self):
         (m,) = hipep_machines.load(config(machine("stx-halo", "stx-halo")))
-        self.assertEqual((m["enabled"], m["max-model-gb"], m["max-tier"], m["changed-models"]),
-                         (True, 0, "full", True))
+        self.assertEqual((m["enabled"], m["max-model-gb"], m["max-tier"], m["changed-models"],
+                          m["standby"]), (True, 0, "full", True, False))
 
     def test_shares_the_npu_runners(self):
         (m,) = hipep_machines.load(config(NPU_RUNNERS))
@@ -56,6 +56,7 @@ class Load(unittest.TestCase):
             "enabled as a string": machine("stx", "stx", enabled="false"),
             "unknown max-tier": machine("stx", "stx", **{"max-tier": "nightly"}),
             "changed-models as a string": machine("stx", "stx", **{"changed-models": "false"}),
+            "standby as a string": machine("stx", "stx", standby="true"),
         }
         for why, entry in bad.items():
             with self.subTest(why):
@@ -119,6 +120,77 @@ class Pick(unittest.TestCase):
         self.assertEqual(self.tiers("install"), [("stx-halo", "install"), ("npu-runners", "install")])
 
 
+# A catalog of oga-hipep models, as src/model_list.json has them (size in bytes).
+CATALOG = json.dumps({"models": {
+    "qwen3.8-oga-hipep": {"27b": {"name": "q38", "size": 16.9e9, "details": {"family": "qwen3.5"}}},
+    "qwen3.5-oga-hipep": {"122b-a10b": {"name": "q35", "size": 71.8e9, "details": {"family": "qwen3.5"}}},
+    "gemma4-it-oga-hipep": {"26b-a4b": {"name": "g4", "size": 16.6e9, "details": {"family": "gemma4e"}}},
+    "gemma3-oga-hipep": {"4b": {"name": "g3", "size": 4.4e9, "details": {"family": "gemma3"}}},
+    "gpt-oss-oga-hipep": {"120b": {"name": "go", "size": 69.3e9, "details": {"family": "gpt-oss"}}},
+    "lfm2": {"1b": {"name": "lfm2", "size": 1e9, "details": {"family": "lfm2"}}},
+}})
+
+
+class Standby(unittest.TestCase):
+    MACHINES = hipep_machines.load(config(machine("stx-halo", "stx-halo", standby=True), NPU_RUNNERS))
+
+    def ids(self, tier="pr", changed="", families=(), models=(), only="", catalog=CATALOG):
+        chosen, _ = hipep_machines.pick(self.MACHINES, only)
+        kept, notes = hipep_machines.standby(chosen, tier, changed, set(families), list(models), catalog)
+        return [m["id"] for m in kept]
+
+    def test_the_shared_runners_test_a_plain_pull_request(self):
+        self.assertEqual(self.ids(), ["npu-runners"])
+        # A family whose model they hold.
+        self.assertEqual(self.ids(families=["gemma3", "qwen3.5", "lfm2"]), ["npu-runners"])
+
+    def test_the_full_tier_runs_every_kind(self):
+        self.assertEqual(self.ids("full"), ["stx-halo", "npu-runners"])
+
+    def test_new_weights_need_the_standby_kind(self):
+        self.assertEqual(self.ids(changed="gemma3-oga-hipep:4b"), ["stx-halo", "npu-runners"])
+        rows = json.loads(hipep_machines.matrix(
+            [m for m in self.MACHINES], "pr", "gemma3-oga-hipep:4b"))
+        self.assertEqual([(m["id"], m["changed-models"]) for m in rows],
+                         [("stx-halo", "gemma3-oga-hipep:4b"), ("npu-runners", "")])
+
+    def test_a_model_larger_than_the_others_hold_needs_it(self):
+        self.assertEqual(self.ids(families=["gpt-oss"]), ["stx-halo", "npu-runners"])
+        self.assertEqual(self.ids(models=["qwen3.5-oga-hipep:122b-a10b"]), ["stx-halo", "npu-runners"])
+        # A dispatch naming only small models leaves it out, whatever the families.
+        self.assertEqual(self.ids(families=["gpt-oss"], models=["gemma3-oga-hipep:4b"]), ["npu-runners"])
+
+    def test_it_runs_when_no_other_kind_does(self):
+        self.assertEqual(self.ids(only="stx-halo"), ["stx-halo"])
+
+    def test_an_unreadable_catalog_keeps_it(self):
+        self.assertEqual(self.ids(catalog=None), ["stx-halo", "npu-runners"])
+
+    def test_a_family_missing_from_pr_gpu_gets_its_smallest_model(self):
+        cat = json.loads(CATALOG)
+        cat["models"]["new-oga-hipep"] = {"200b": {"name": "n", "size": 200e9, "details": {"family": "newfam"}}}
+        self.assertEqual(self.ids(catalog=json.dumps(cat)), ["stx-halo", "npu-runners"])
+
+    def test_the_repository_catalog_and_config(self):
+        """With the committed files a plain pull request runs on the shared
+        runners alone, and one touching gpt-oss on the STX Halo too."""
+        machines = hipep_machines.load(
+            (hipep_machines.REPO_ROOT / hipep_machines.CONFIG).read_text(encoding="utf-8"))
+        text = (hipep_machines.REPO_ROOT / hipep_machines.MODEL_LIST).read_text(encoding="utf-8")
+        chosen, _ = hipep_machines.pick(machines, "")
+
+        def ids(**kw):
+            kept, _ = hipep_machines.standby(chosen, kw.get("tier", "pr"), kw.get("changed", ""),
+                                             set(kw.get("families", ())), [], text)
+            return [m["id"] for m in kept]
+
+        self.assertEqual(ids(), ["npu-runners"])
+        self.assertEqual(ids(families=["qwen2", "gemma3", "gemma4-12b", "laguna", "nemotron-h"]),
+                         ["npu-runners"])
+        self.assertEqual(ids(families=["gpt-oss"]), ["stx-halo", "npu-runners"])
+        self.assertEqual(ids(tier="full"), ["stx-halo", "npu-runners"])
+
+
 class Cli(unittest.TestCase):
     def run_cli(self, *args: str, text: str) -> tuple[int, str, list[str]]:
         with tempfile.TemporaryDirectory() as tmp:
@@ -150,6 +222,19 @@ class Cli(unittest.TestCase):
                                         text=config(machine("stx-halo", "stx-halo")))
         self.assertEqual((code, lines), (0, ["machines=[]"]))
         self.assertIn("::warning::", out)
+
+    def test_standby_prints_why(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cat = Path(tmp) / "model_list.json"
+            cat.write_text(CATALOG, encoding="utf-8")
+            text = config(machine("stx-halo", "stx-halo", standby=True), NPU_RUNNERS)
+            code, out, lines = self.run_cli("--catalog", str(cat), text=text)
+            self.assertEqual([m["id"] for m in json.loads(lines[0].split("=", 1)[1])], ["npu-runners"])
+            self.assertIn("stx-halo (standby): not needed", out)
+            code, out, lines = self.run_cli("--catalog", str(cat), "--families", "gpt-oss", text=text)
+            self.assertEqual([m["id"] for m in json.loads(lines[0].split("=", 1)[1])],
+                             ["stx-halo", "npu-runners"])
+            self.assertIn("gpt-oss-oga-hipep:120b (69 GB) is larger", out)
 
     def test_none_writes_an_empty_matrix(self):
         code, _, lines = self.run_cli("--only", "none", text=config(machine("stx-halo", "stx-halo")))

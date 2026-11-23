@@ -136,11 +136,16 @@ memory dedicated to each GPU, which Windows leaves out of its own figure
 
 - `stx-halo`: an STX Halo of its own (xconucstrhalo86), labelled `oga-hipep`
   and `stx-halo`, which no NPU job asks for, so it runs beside the NPU tests.
-  It tests every model nightly, and on a pull request also the models it
-  gives new weights (added, republished or moved onto the GPU), as required models, with 10 hours
-  instead of 2: their new revisions download within the job (7 hours for
-  all of them, a failure if one does not), and a change may add or re-pin
-  many.
+  It tests every model nightly. It is on `standby` below the `full` tier, so
+  that one machine does not test every pull request: it runs only when
+  `npu-runners` cannot test the change, that is when the change gives models
+  new weights (added, republished or moved onto the GPU), which it tests as
+  required models with 10 hours instead of 2 (their new revisions download
+  within the job, 7 hours for all of them, a failure if one does not, and a
+  change may add or re-pin many); when a model the run tests is larger than
+  `npu-runners` holds (gpt-oss, for a change to its family); or when
+  `npu-runners` does not run (`FLM_HIPEP_MACHINES`). The changes job prints
+  why it runs, or that it is not needed.
 - `npu-runners`: the shared NPU test runners (`npu`, `sweep`: STX, Krackan and
   STX Halo machines) that also carry `oga-hipep`, whichever is free. It holds
   that runner for its run, as an NPU test job does. It tests the `pr` tier's
@@ -173,6 +178,7 @@ runner: the nightly's every-model job would then land on it.
 | `max-model-gb` | The largest model, by catalog size, its memory holds; larger ones are skipped there, each a `setup`/`size` case (0: no limit) |
 | `max-tier` | The highest tier its job runs (`install`, `pr` or `full`, the default); a run of a higher tier runs this one there |
 | `changed-models` | `false` leaves the models the change gives new weights (added, republished or moved onto the GPU) to the kinds that test them (`true`, the default), whose job requires them (`--required-models`) and gets 600 minutes; when no kind that runs is `true`, every kind that runs tests them |
+| `standby` | `true`: below the `full` tier the kind runs only when the other kinds that run cannot test the change: none of them runs, the change has models it takes (`changed-models`), or a model the run tests (one per family the change touches, as `PR_GPU` picks it, or those a dispatch names) is larger than every one of their `max-model-gb`. `false` (the default): it runs on every tier |
 
 A runner of a kind of its own (xconucstrhalo86 for `stx-halo`):
 

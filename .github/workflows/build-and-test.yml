@@ -19,9 +19,11 @@ name: Build and Test
 # The Windows XRT package also holds the oga-hipep backend, which runs its
 # models on the GPU through hip-ep. Test Windows HIPEP runs the chat, api and
 # shutdown suites on the oga-hipep models from the same zip, on each kind of
-# machine in .github/hipep-machines.json: an STX Halo of its own, beside the
-# NPU tests, and whichever shared NPU runner labelled oga-hipep (STX, Krackan
-# or STX Halo) is free. Test Windows XRT tests the NPU models.
+# machine in .github/hipep-machines.json: whichever shared NPU runner
+# labelled oga-hipep (STX, Krackan or STX Halo) is free, and an STX Halo of
+# its own, beside the NPU tests, on standby: it runs every model nightly, and
+# a pull request only when the shared runners cannot test it (new weights, or
+# a model larger than they hold). Test Windows XRT tests the NPU models.
 # HIPEP runs when every suite does, or when a change reaches an oga-hipep
 # model (the backend, its catalog entries, the frontend of a family that has
 # one, the chat, api and shutdown tests); a change only to the backend or its
@@ -308,7 +310,9 @@ jobs:
           echo "dev-kit full refresh: ${refresh}; base: ${base:-none}"
 
       # One Test Windows HIPEP job per kind of GPU machine, each with the tier
-      # it runs and the changed models it tests. The repository variable
+      # it runs and the changed models it tests. A standby kind (the STX
+      # Halo) runs below the full tier only when the others cannot test the
+      # change: its new weights, or a model larger than they hold. The repository variable
       # FLM_HIPEP_MACHINES names other kinds, or "none", without a commit,
       # e.g. while a kind's only runner is down.
       - name: Pick HIPEP machines
@@ -317,9 +321,11 @@ jobs:
           ONLY: ${{ vars.FLM_HIPEP_MACHINES }}
           TIER: ${{ steps.detect.outputs.tier }}
           CHANGED: ${{ steps.detect.outputs.hipep-models }}
+          FAMILIES: ${{ steps.detect.outputs.hipep-families }}
+          MODELS: ${{ inputs.models }}
         run: |
           python3 .github/script/ci/hipep_machines.py --tier "${TIER}" --changed-models "${CHANGED}" \
-            --only "${ONLY}" --github-output
+            --families "${FAMILIES}" --models "${MODELS}" --only "${ONLY}" --github-output
 
       # Every npu_test run imports every suite, but a change to the shutdown
       # suite or console.py runs Test Windows HIPEP alone. A Windows-only
@@ -1342,7 +1348,8 @@ jobs:
 
   # The XRT zip's oga-hipep models, on the GPU, one job per kind of machine in
   # .github/hipep-machines.json: the STX Halo, whose labels (oga-hipep,
-  # stx-halo) no NPU job asks for, so it runs beside the NPU test jobs, and
+  # stx-halo) no NPU job asks for, so it runs beside the NPU test jobs (on
+  # standby: below the full tier only when the change needs it), and
   # the shared NPU runners also labelled oga-hipep, those whose memory holds
   # the pr tier's models (STX, Krackan and STX Halo, whichever is free), one
   # of which it holds for the job as an NPU test job does. Besides chat, the
