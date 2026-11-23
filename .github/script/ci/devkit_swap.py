@@ -132,7 +132,6 @@ from typing import Iterable, Optional
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[2]
 sys.path.insert(0, str(HERE))
-import changes  # noqa: E402
 import devkit_check  # noqa: E402
 
 # check fails a pull request with a hand-edited binary (False: it only warns).
@@ -174,9 +173,24 @@ BENCH_JOB_PREFIX = "devkit-bench / "
 BINARY_ROOTS = ("src/lib/", "src/xclbins/")
 # What a change on main since the run's base must not touch: the dev-kit
 # engine and kernel sources and build inputs, and the binaries themselves
-# (main_moved: documentation under them, changes.py is_non_code, does not
-# count; anything under BINARY_ROOTS does).
+# (main_moved: documentation under them, NON_CODE, does not count; anything
+# under BINARY_ROOTS does).
 SOURCE_PATHS = ("flm-dev-kit/FLM_DLL/", "flm-dev-kit/FLM_Xclbin/", "src/lib/", "src/xclbins/")
+# changes.py's NON_CODE, copied rather than imported: verify runs the pull
+# request's code, and changes.py is not in SWAP_CI_PATHS, so a pull request
+# widening its NON_CODE would otherwise hide source commits on main from
+# main_moved. test_devkit_swap pins the two equal.
+NON_CODE = re.compile(
+    r"^(docs/"
+    r"|assets/"                 # README images and the like, at the repo root
+    r"|src/tb_files/"
+    r"|src/iceCream\.jpg$"
+    r"|\.github/ISSUE_TEMPLATE/"
+    r"|\.github/(PULL_REQUEST_TEMPLATE[^/]*|CODEOWNERS|FUNDING\.yml)$"
+    r"|(.*/)?\.gitignore$|\.mailmap$"
+    r"|.*\.md$"
+    r"|.*~$)",                  # editor backups such as src/home_install.sh~
+    re.IGNORECASE)
 THIRD_PARTY = {k: v for k, v in devkit_check.CATALOG_ALLOW.items() if k.startswith("src/lib/")}
 
 
@@ -774,8 +788,8 @@ def check_recorded_run(api, repo: str, run_id: str, tested: str, pr: Pr, tmp: Pa
 def counts_for_swap(path: str) -> bool:
     """Whether a change to path (under SOURCE_PATHS) on main makes a run's
     swap stale: every binary does, and every source or build input but
-    documentation (changes.py is_non_code, so that the two agree)."""
-    return path.startswith(BINARY_ROOTS) or not changes.is_non_code(path)
+    documentation (NON_CODE, changes.py's, so that the two agree)."""
+    return path.startswith(BINARY_ROOTS) or not NON_CODE.match(path)
 
 
 def main_moved(git: Git, since: str, until: str) -> list[str]:
@@ -811,6 +825,8 @@ def main_moved(git: Git, since: str, until: str) -> list[str]:
 # run from the pull request's merge commit). changes.py is not here: a new
 # model family needs its engine table (ENGINES) and comes with its swap;
 # what it decides runs from the pull request's code whatever this says.
+# verify does not depend on it: main_moved uses this file's copy of its
+# NON_CODE.
 # npu_test's pr-tier table (plan.py PR_CHAT) needs no entry for a new
 # family (it gets its smallest model), so a new model needs no harness edit.
 SWAP_CI_PATHS = (

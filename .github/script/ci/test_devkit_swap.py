@@ -1069,6 +1069,15 @@ class MainMoved(unittest.TestCase):
         with self.assertRaisesRegex(ds.SwapError, "is not a commit of main"):
             ds.main_moved(self.git, other, "main")
 
+    def test_non_code_is_changes_pys(self):
+        # verify runs the pull request's code, and changes.py is not in
+        # SWAP_CI_PATHS: main_moved keeps its own copy of NON_CODE, which
+        # must stay equal to changes.py's.
+        import changes
+        self.assertEqual((ds.NON_CODE.pattern, ds.NON_CODE.flags),
+                         (changes.NON_CODE.pattern, changes.NON_CODE.flags))
+        self.assertNotIn("changes", vars(ds))
+
 
 class Wiring(unittest.TestCase):
     """devkit_check.py's swap wiring rule, on this tree and on a broken copy."""
