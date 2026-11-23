@@ -206,12 +206,14 @@ def collect_stream(stream):
                 call["function"]["arguments"] += tc.function.arguments
 
     message = {"role": "assistant", "content": "".join(content) or None}
+    if reasoning:
+        message["reasoning_content"] = "".join(reasoning)
     if calls:
         message["tool_calls"] = [calls[i] for i in sorted(calls)]
-    return message, "".join(reasoning), finish_reason, usage
+    return message, finish_reason, usage
 ```
 
-`message` can go straight back into `messages` for the next turn. Leave the reasoning out: FLM strips `reasoning_content` from earlier assistant turns before it builds the prompt anyway.
+`message` can go straight back into `messages` for the next request. Keep the reasoning in it: when the model called a tool, it goes on from the tool's result with what it reasoned before the call still in the prompt. FLM drops `reasoning_content` from the assistant messages before the last user message, so earlier turns cost nothing. It also accepts the reasoning as `reasoning` or `thinking`.
 
 ### 📊 Usage in streams
 
@@ -348,7 +350,7 @@ for step in range(5):                       # never loop forever
         model=MODEL, messages=messages, tools=tools, stream=True,
         extra_body={"think": False},
     )
-    message, _reasoning, finish_reason, _ = collect_stream(stream)
+    message, finish_reason, _ = collect_stream(stream)
     messages.append(message)
 
     if finish_reason != "tool_calls":

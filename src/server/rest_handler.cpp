@@ -123,109 +123,60 @@ T value_or(const json& request, const char* key, T fallback) {
 }
 }
 
-///@brief Normalize messages by merging consecutive user messages (like Ollama does)
-///@param messages the original messages
-///@return normalized messages with consecutive user messages merged
+///@brief Fold the leading system messages into one, and keep assistant reasoning only within the
+/// current turn, as reasoning_content
+///@param original_indices if set, receives each returned message's index in the request
 static json normalize_messages(json messages, std::vector<size_t>* original_indices = nullptr) {
-    if (messages.empty()) return messages;
-
-    json normalized = nlohmann::ordered_json::array();
-
-    for (size_t i = 0; i < messages.size(); i++) {
-        if (original_indices) original_indices->push_back(i);
-        auto current_msg = messages[i];
-        std::string role = current_msg.value("role", "");
-
-        if (role == "user") {
-            json merged_content_array = json::array();
-
-            // Merge all consecutive user messages into array format
-            while (i < messages.size() && messages[i].value("role", "") == "user") {
-                if (messages[i].contains("content")) {
-                    if (messages[i]["content"].is_array()) {
-                        for (auto& item : messages[i]["content"]) {
-                            merged_content_array.push_back(item);
-                        }
-                    }
-                    else if (messages[i]["content"].is_string()) {
-                        std::string text = messages[i]["content"].get<std::string>();
-                        if (!text.empty()) {
-                            nlohmann::ordered_json text_item;
-                            text_item["type"] = "text";
-                            text_item["text"] = text;
-                            merged_content_array.push_back(text_item);
-                        }
-                    }
-                }
-                if (i + 1 < messages.size() && messages[i + 1].value("role", "") == "user") i++;
-                else break;
-            }
-
-            current_msg["content"] = merged_content_array;
+    // Several templates accept one system message only, at the start (Qwen3.5/3.6/3.8, D3,
+    // MiniCPM-V, Gemma 3, Hy-MT2), so clients that send a base prompt plus an injected one need
+    // them joined. Other consecutive messages stay separate: the template decides how to render them.
+    size_t leading = 0;
+    while (leading < messages.size() && messages[leading].value("role", "") == "system") leading++;
+    if (leading > 1) {
+        json parts = json::array();
+        bool has_text = false;
+        for (size_t i = 0; i < leading; i++) {
+            json own = json::array();
+            const json content = messages[i].value("content", json());
+            if (content.is_array()) own = content;
+            else if (content.is_string() && !content.get<std::string>().empty())
+                own.push_back({{"type", "text"}, {"text", content}});
+            const bool own_text = std::any_of(own.begin(), own.end(), [](const json& part) {
+                return part.is_object() && part.value("type", "") == "text";
+            });
+            // a blank line between the texts, so they don't run together
+            if (has_text && own_text) parts.push_back({{"type", "text"}, {"text", "\n\n"}});
+            has_text = has_text || own_text;
+            for (auto& part : own) parts.push_back(part);
         }
-        else if (role == "system") {
-            json merged_content_array = json::array();
-
-            // Merge all consecutive system messages into array format
-            while (i < messages.size() && messages[i].value("role", "") == "system") {
-                if (messages[i].contains("content")) {
-                    if (messages[i]["content"].is_array()) {
-                        for (auto& item : messages[i]["content"]) {
-                            merged_content_array.push_back(item);
-                        }
-                    }
-                    else if (messages[i]["content"].is_string()) {
-                        std::string text = messages[i]["content"].get<std::string>();
-                        if (!text.empty()) {
-                            json text_item;
-                            text_item["type"] = "text";
-                            text_item["text"] = text;
-                            merged_content_array.push_back(text_item);
-                        }
-                    }
-                }
-                if (i + 1 < messages.size() && messages[i + 1].value("role", "") == "system") i++;
-                else break;
-            }
-
-            current_msg["content"] = merged_content_array;
-        }
-        else if (role == "assistant") {
-            // Strip prior assistant "thinking" / reasoning fields so they are not
-            // fed back into the model on subsequent turns.
-            if (current_msg.contains("thinking")) {
-                current_msg.erase("thinking");
-            }
-            if (current_msg.contains("reasoning")) {
-                current_msg.erase("reasoning");
-            }
-            if (current_msg.contains("reasoning_content")) {
-                current_msg.erase("reasoning_content");
-            }
-            // Also strip <think>...</think> blocks from string content if present.
-            // if (current_msg.contains("content") && current_msg["content"].is_string()) {
-            //     std::string text = current_msg["content"].get<std::string>();
-            //     size_t start = text.find("<think>");
-            //     while (start != std::string::npos) {
-            //         size_t end = text.find("</think>", start);
-            //         if (end == std::string::npos) {
-            //             text.erase(start);
-            //             break;
-            //         }
-            //         text.erase(start, (end + std::string("</think>").size()) - start);
-            //         start = text.find("<think>");
-            //     }
-            //     // Trim leading whitespace/newlines left after removal.
-            //     size_t first = text.find_first_not_of(" \t\r\n");
-            //     if (first == std::string::npos) text.clear();
-            //     else if (first > 0) text.erase(0, first);
-            //     current_msg["content"] = text;
-            // }
-        }
-        normalized.push_back(current_msg);
+        messages[0]["content"] = parts;
+        messages.erase(messages.begin() + 1, messages.begin() + static_cast<std::ptrdiff_t>(leading));
     }
-
-    return normalized;
+    if (original_indices) {
+        const size_t folded = leading > 1 ? leading - 1 : 0;
+        for (size_t i = 0; i < messages.size(); i++) original_indices->push_back(i == 0 ? 0 : i + folded);
+    }
+    // The current turn: the messages after the last user message, or all of them without one.
+    // Reasoning from earlier turns is not fed back to the model, but within the current turn it is:
+    // the model reasons, calls a tool and goes on from the result, and must still see what it
+    // reasoned before the call. The templates read reasoning_content, so the other names clients
+    // use for it are moved there.
+    size_t turn_start = 0;
+    for (size_t i = 0; i < messages.size(); i++) {
+        if (messages[i].value("role", "") == "user") turn_start = i + 1;
+    }
+    for (size_t i = 0; i < messages.size(); i++) {
+        json& msg = messages[i];
+        if (msg.value("role", "") != "assistant") continue;
+        json reasoning;
+        for (const char* key : {"reasoning_content", "reasoning", "thinking"}) {
+            const json value = msg.value(key, json());
+            if (reasoning.is_null() && value.is_string() && !value.get<std::string>().empty()) reasoning = value;
+            msg.erase(key);
+        }
+        if (i >= turn_start && !reasoning.is_null()) msg["reasoning_content"] = reasoning;
+    }
+    return messages;
 }
 
 static bool starts_with_ci(const std::string& s, const char* prefix) {

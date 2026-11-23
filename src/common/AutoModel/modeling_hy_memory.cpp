@@ -93,7 +93,7 @@ std::string HyMemory::apply_chat_template(nlohmann::ordered_json& messages, nloh
     }
     inputs.extra_context = this->extra_context;
     inputs.extra_context["reasoning_effort"] = this->reasoning_effort;
-    return this->chat_tmpl->apply(inputs);
+    return this->_render_chat_template(inputs, false);
 }
 
 bool HyMemory::configure_parameter(std::string parameter_name, const std::any& value) {

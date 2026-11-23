@@ -447,6 +447,40 @@ def positional_single_round_trips(api: Api) -> None:
         expect("23" in text, f"single-call result missing from the answer: {text!r}")
 
 
+# The model families whose chat templates render reasoning_content on a tool call
+# (Gemma 4, Qwen3 and later Qwen); elsewhere the reasoning is not part of the prompt.
+REASONING_ON_TOOL_CALLS = ("gemma4", "qwen3")
+
+
+@case
+def reasoning_kept_within_turn(api: Api) -> None:
+    """Reasoning sent back with a tool call stays in the prompt until the next user message."""
+    if not api.model.startswith(REASONING_ON_TOOL_CALLS):
+        raise Skip("the chat template does not render reasoning on a tool call")
+    call = {"id": "call_1", "type": "function",
+            "function": {"name": "get_weather", "arguments": json.dumps({"city": "Paris"})}}
+    reasoning = "The user wants the weather in Paris, so I call get_weather for Paris."
+
+    def prompt_tokens(follow_up: bool, **fields) -> int:
+        messages = user(WEATHER_PROMPT) + [
+            {"role": "assistant", "content": None, "tool_calls": [call], **fields},
+            {"role": "tool", "tool_call_id": "call_1", "content": json.dumps({"temperature_c": 23})},
+        ]
+        if follow_up:
+            messages += [{"role": "assistant", "content": "It is 23 degrees."}] + user("And tomorrow?")
+        return api.ok_body(api.body(messages, tools=WEATHER_TOOLS, max_tokens=1))["usage"]["prompt_tokens"]
+
+    without = prompt_tokens(False)
+    kept = prompt_tokens(False, reasoning_content=reasoning)
+    expect(kept > without, f"reasoning sent back with the tool call was dropped ({kept} vs {without} prompt tokens)")
+    for fields in ({"reasoning": reasoning}, {"thinking": reasoning},
+                   {"reasoning_content": None, "thinking": reasoning},
+                   {"reasoning_content": "", "reasoning": reasoning}):
+        expect(prompt_tokens(False, **fields) == kept, f"reasoning sent as {fields} was not kept")
+    expect(prompt_tokens(True, reasoning_content=reasoning) == prompt_tokens(True),
+           "reasoning from an earlier turn was fed back to the model")
+
+
 CASES = flm_api.collect(globals())
 
 if __name__ == "__main__":
