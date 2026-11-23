@@ -464,6 +464,8 @@ ENGINES = {
     # r2t2 (Confucius4-R2T2) runs on the qwen3_asr engine; qwen3_asr_stream is
     # its streaming frontend.
     ("qwen3_asr", "qwen3_asr_stream"):       ("r2t2",),
+    # A frontend with no engine library: its families run on oga-hipep alone.
+    ("template_chat",):                      ("laguna", "nemotron-h"),
     # Built but registered for no catalog family.
     ("qwen3_5_omni",):                       (),
 }

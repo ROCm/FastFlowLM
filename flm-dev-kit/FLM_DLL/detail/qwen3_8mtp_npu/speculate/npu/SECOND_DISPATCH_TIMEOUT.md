@@ -89,7 +89,7 @@ which is the one signal a stale buffer cannot fake.
 ## False trail 2: a correct change credited with the wrong fix
 
 Dropping the packet id on `IT[3].MM2S[0]` — a point-to-point link with nothing
-to demux — is correct and is still in the IRON. But it was signed off against
+to demux — is correct and is still in the IRON design. But it was signed off against
 the unchecked return above, and it did **not** fix the second-dispatch timeout.
 A correct change and a fix for the symptom in front of you are different
 claims; the second one needs its own evidence.

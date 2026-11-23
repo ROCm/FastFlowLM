@@ -183,6 +183,15 @@ class npu_sequence{
             this->instr_version++;
         }
 
+        ///@brief Take the npu sequence from words already in memory (not parsed into commands).
+        ///@param words the sequence, one uint32_t per instruction word
+        ///@note The cmds list is empty afterwards: dump() returns the words, the next generator call clears them.
+        void from_vector(const std::vector<uint32_t>& words){
+            this->npu_seq = words;
+            this->is_valid = true;
+            this->instr_version++;
+        }
+
         /// @brief  write out the npu sequence to a file
         /// @param filename 
         void write_out_sequence(std::string filename){

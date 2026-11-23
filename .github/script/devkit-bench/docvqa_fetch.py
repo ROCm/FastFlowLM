@@ -6,8 +6,8 @@
 Runs on a GitHub-hosted runner (devkit-bench.yml's docvqa job), never on an
 NPU runner: it downloads one validation shard of the Hugging Face dataset
 lmms-lab/DocVQA at a pinned commit (REVISION), checks its SHA-256 and size
-against SHARD, samples N questions with a fixed seed (the same sample as
-IRON's build_dataset.py, which read only this shard for N <= 200) and writes
+against SHARD, samples N questions with a fixed seed (only this shard is
+read for N <= 200) and writes
 
   <out>/eval.jsonl        one record per question (question_id, image, prompt, answers)
   <out>/images/<qid>.jpg  the image of each question
@@ -96,7 +96,7 @@ def fetch(cache: str) -> str:
 
 
 def sample(qids: list[str], n: int, seed: int = SEED) -> list[int]:
-    """Indices of the N questions to ask, in shard order (IRON's sampling)."""
+    """Indices of the N questions to ask, in shard order (a fixed-seed sample)."""
     rng = random.Random(seed)
     return sorted(rng.sample(range(len(qids)), min(n, len(qids))))
 

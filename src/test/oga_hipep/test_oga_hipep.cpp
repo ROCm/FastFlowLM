@@ -44,6 +44,8 @@ struct OgaGenerator {
     double max_length = 0;
     /// \brief the length of the last OgaGenerator_SnapshotState
     std::optional<std::size_t> snapshot;
+    /// \brief OgaGenerator_AppendTokens calls it has taken
+    int runs = 0;
 };
 struct OgaImages {
     std::size_t count = 0;
@@ -91,6 +93,8 @@ struct FakeOga {
     std::vector<std::size_t> rewinds;
     std::optional<std::string> fail_next_rewind;
     OgaElementType logits_type = OgaElementType_float32;
+    /// \brief a generator's first run gives all-zero logits, as Laguna 2.1's does
+    bool zero_first_run_logits = false;
     std::int64_t logits_rows = 0;  ///< 0: rank 2 [1, vocab]; n: rank 3 [1, n, vocab]
     std::int64_t logits_width = kVocab;
     /// \brief raw 16-bit values for the last row's first entries, for f16/bf16
@@ -210,6 +214,7 @@ OgaResult* OGA_API_CALL FakeAppendTokens(OgaGenerator* generator, const std::int
         return Error(text);
     }
     g_fake.appends.emplace_back(ids, ids + count);
+    ++generator->runs;
     generator->tokens.insert(generator->tokens.end(), ids, ids + count);
     if (generator->tokens.size() > static_cast<std::size_t>(generator->max_length))
         return Error("past max_length");
@@ -222,7 +227,8 @@ OgaResult* OGA_API_CALL FakeGetLogits(OgaGenerator* generator, OgaTensor** out) 
     tensor->shape = g_fake.logits_rows ? std::vector<std::int64_t>{1, rows, g_fake.logits_width}
                                        : std::vector<std::int64_t>{1, g_fake.logits_width};
     const auto count = static_cast<std::size_t>(rows * g_fake.logits_width);
-    const auto last = SequenceLogits(generator->tokens);
+    const auto last = g_fake.zero_first_run_logits && generator->runs == 1 ? std::vector<float>(kVocab, 0.0f)
+                                                                         : SequenceLogits(generator->tokens);
     if (g_fake.logits_type == OgaElementType_float32) {
         std::vector<float> values(count, 99.0f);
         for (std::size_t i = 0; i < kVocab && i < static_cast<std::size_t>(g_fake.logits_width); ++i)
@@ -554,6 +560,26 @@ void TestPrefillThenForwardAppendsOnlyTheNewToken() {
     TEST_REQUIRE(g_fake.appends == (std::vector<Tokens>{{1, 2, 3}, {4}}));
     TEST_REQUIRE(g_fake.last_max_length == 32);
     TEST_REQUIRE(engine->get_current_context_length() == 4);
+}
+
+void TestAFirstRunWithoutLogitsRunsAgainWithTheFirstTokenOnItsOwn() {
+    auto engine = MakeEngine();
+    g_fake.zero_first_run_logits = true;
+    std::vector<int> prompt{1, 2, 3};
+    RequireRan(engine->prefill(prompt), {1, 2, 3});
+    TEST_REQUIRE(g_fake.generators_created == 2);
+    TEST_REQUIRE(g_fake.generators_live == 1);
+    TEST_REQUIRE(g_fake.appends == (std::vector<Tokens>{{1, 2, 3}, {1}, {2, 3}}));
+    RequireRan(engine->forward(4), {1, 2, 3, 4});
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{4}));
+
+    // every later generator splits its first run without trying the whole prompt first
+    engine->clear_context();
+    std::vector<int> other{7, 8, 9};
+    RequireRan(engine->prefill(other), {7, 8, 9});
+    TEST_REQUIRE(g_fake.generators_created == 3);
+    TEST_REQUIRE((std::vector<Tokens>(g_fake.appends.end() - 2, g_fake.appends.end()) ==
+                  std::vector<Tokens>{{7}, {8, 9}}));
 }
 
 void TestRestoreIsBookkeepingAndAContinuationReusesTheGenerator() {
@@ -2670,6 +2696,7 @@ int main(int argc, char** argv) {
     RUN(TestConstructionDoesNotRunInference);
     RUN(TestBackendCapacityTracksContextUpdates);
     RUN(TestPrefillThenForwardAppendsOnlyTheNewToken);
+    RUN(TestAFirstRunWithoutLogitsRunsAgainWithTheFirstTokenOnItsOwn);
     RUN(TestRestoreIsBookkeepingAndAContinuationReusesTheGenerator);
     RUN(TestADivergentPassReplaysEverythingInOneAppend);
     RUN(TestRetokenizedSequenceReplaysUsingTheNewTokenIds);

@@ -2706,6 +2706,123 @@
                 ]
             }
         },
+        "laguna2.1-oga-hipep": {
+            "33b-a3b": {
+                "name": "Laguna-XS-2.1_gpuep_1.0_gpu_128",
+                "positional_tool_results": true,
+                "url": "https://huggingface.co/amd/Laguna-XS-2.1_gpuep_1.0_gpu_128/resolve/ad83e0041d8af1b93ad5de1d88e8f8d34a978ed3",
+                "file_url": "https://huggingface.co/api/models/amd/Laguna-XS-2.1_gpuep_1.0_gpu_128/tree/ad83e0041d8af1b93ad5de1d88e8f8d34a978ed3",
+                "size": 18150008789,
+                "default_context_length": 2048,
+                "max_prefill_len": 4096,
+                "details": {
+                    "family": "laguna",
+                    "think": true,
+                    "think_toggleable": true,
+                    "parameter_size": "33B-A3B",
+                    "quantization_level": "INT4 RTN group-128, QMoE experts, fp16 activations"
+                },
+                "flm_min_version": "1.0.14",
+                "vlm": false,
+                "files": [
+                    "chat_template.jinja",
+                    "config.json",
+                    "genai_config.json",
+                    "lm_head.onnx.data",
+                    "model.onnx",
+                    "model.onnx.data",
+                    "tokenizer.json",
+                    "tokenizer_config.json"
+                ],
+                "file_sources": {
+                    "config.json": {
+                        "url": "https://huggingface.co/poolside/Laguna-XS-2.1",
+                        "revision": "c5f36269bbdbd3f27fddc9a9f9dbae0cf2cf57db"
+                    }
+                },
+                "label": [
+                    "reasoning",
+                    "tool-calling"
+                ]
+            },
+            "118b-a8b": {
+                "name": "Laguna-S-2.1_gpuep_1.0_gpu_128",
+                "positional_tool_results": true,
+                "url": "https://huggingface.co/amd/Laguna-S-2.1_gpuep_1.0_gpu_128/resolve/43d688ac7758e710997e55f354170672a7e1f184",
+                "file_url": "https://huggingface.co/api/models/amd/Laguna-S-2.1_gpuep_1.0_gpu_128/tree/43d688ac7758e710997e55f354170672a7e1f184",
+                "size": 62246872480,
+                "default_context_length": 2048,
+                "max_prefill_len": 4096,
+                "details": {
+                    "family": "laguna",
+                    "think": true,
+                    "think_toggleable": true,
+                    "parameter_size": "118B-A8B",
+                    "quantization_level": "INT4 RTN group-128, QMoE experts, fp16 activations"
+                },
+                "flm_min_version": "1.0.14",
+                "vlm": false,
+                "files": [
+                    "chat_template.jinja",
+                    "config.json",
+                    "genai_config.json",
+                    "lm_head.onnx.data",
+                    "model.onnx",
+                    "model.onnx.data",
+                    "tokenizer.json",
+                    "tokenizer_config.json"
+                ],
+                "file_sources": {
+                    "config.json": {
+                        "url": "https://huggingface.co/poolside/Laguna-S-2.1",
+                        "revision": "0f573140834b11cfac0c2af97a101a7a69a13e22"
+                    }
+                },
+                "label": [
+                    "reasoning",
+                    "tool-calling"
+                ]
+            }
+        },
+        "nemotron3.5-lightning-oga-hipep": {
+            "30b-a3b": {
+                "name": "Nemotron-3.5-Lightning-30B-A3B-BF16_gpuep_1.0_gpu_128",
+                "positional_tool_results": true,
+                "url": "https://huggingface.co/amd/Nemotron-3.5-Lightning-30B-A3B-BF16_gpuep_1.0_gpu_128/resolve/320be095510cfb4ba9b115c834913eac1a8f0630",
+                "file_url": "https://huggingface.co/api/models/amd/Nemotron-3.5-Lightning-30B-A3B-BF16_gpuep_1.0_gpu_128/tree/320be095510cfb4ba9b115c834913eac1a8f0630",
+                "size": 17782500699,
+                "default_context_length": 32768,
+                "max_prefill_len": 4096,
+                "details": {
+                    "family": "nemotron-h",
+                    "think": true,
+                    "think_toggleable": true,
+                    "parameter_size": "30B-A3B",
+                    "quantization_level": "INT4 RTN group-32, QMoE experts, fp16 activations"
+                },
+                "flm_min_version": "1.0.14",
+                "vlm": false,
+                "files": [
+                    "chat_template.jinja",
+                    "config.json",
+                    "genai_config.json",
+                    "model.onnx",
+                    "model.onnx.data",
+                    "tokenizer.json",
+                    "tokenizer_config.json"
+                ],
+                "file_sources": {
+                    "config.json": {
+                        "url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+                        "revision": "a9904d24bcc1d289a1950fa9d2b978c47cf903b9"
+                    }
+                },
+                "label": [
+                    "reasoning",
+                    "tool-calling"
+                ]
+            }
+        },
         "qwen3.6-moe-core":     {
         "35b-a3b": {
             "supported_platforms": [

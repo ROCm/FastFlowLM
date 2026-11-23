@@ -2,15 +2,19 @@
 
 #ifndef __SMOLVLA__EXPERT__EXEC__HPP__
 #define __SMOLVLA__EXPERT__EXEC__HPP__
+#include <unordered_map>
+#include <chrono>
 
 #include <memory>
 #include <string>
 #include <cstring>
+#include <cstdlib>
 
 #include "buffer.hpp"
 #include "typedef.hpp"
 #include "SmolVLA_config.hpp"
 #include "SmolVLA_expert_def.hpp"
+#include "expert_mode.hpp"
 #include "npu_utils/npu_utils.hpp"
 #include "cpu_functions.hpp"
 #include "utils/prof_utils.hpp"
@@ -62,6 +66,12 @@
 // language tower writes packed. Both are named explicitly at their call sites.
 // ---------------------------------------------------------------------------
 
+/// @brief kill switch: SMOLVLA_NO_FUSE=1 restores the one-launch-per-op expert path.
+static inline bool smolvla_expert_fuse_enabled() {
+    static const bool on = [] { const char* e = std::getenv("SMOLVLA_NO_FUSE"); return !(e && *e && *e != '0'); }();
+    return on;
+}
+
 // scratch sizing: the action chunk and the VLM prefix it attends over are both
 // bounded by smolvla_cfg, so every block below allocates once at its worst case.
 static constexpr int EXPERT_MAX_CHUNK  = smolvla_cfg::MAX_ACTION_CHUNK;
@@ -101,6 +111,20 @@ static inline void _sync_rows_to_device(buffer<bf16>& b, size_t first_row,
     b.bo().sync(XCL_BO_SYNC_BO_TO_DEVICE, nbytes, elem_off * sizeof(bf16));
 }
 
+/// 64 positions of the rope table in the layout attn_kernel.h rope_tile reads: [cos blocks 0-3 | sin blocks 4-7], each
+/// block [64 rows][8], dim j = 8*block + e of the first half. Row r is position pos_offset + r.
+static constexpr size_t EXPERT_ROPE_TABLE_ELEMS = 64 * 64;
+static inline void expert_fill_rope_table(bf16* dst, const float* inv_freq, int pos_offset) {
+    for (int b = 0; b < 4; b++)
+        for (int r = 0; r < 64; r++)
+            for (int e = 0; e < 8; e++) {
+                const float angle = inv_freq[8 * b + e] * (float)(pos_offset + r);
+                dst[(size_t)b * 512 + r * 8 + e]       = (bf16)cosf(angle);
+                dst[(size_t)(4 + b) * 512 + r * 8 + e] = (bf16)sinf(angle);
+            }
+}
+
+
 /// @brief self-attention block (even layers). q/k/v projected from the expert
 ///        hidden state; attention runs over [VLM prefix kv ; expert kv],
 ///        block-causal (each action token sees the full prefix + causally the
@@ -124,6 +148,7 @@ struct SmolVLA_expert_self_attn_block {
     npu_app q_proj;
     npu_app k_proj;
     npu_app v_proj;
+    npu_app qkv_proj;     // q|k|v as one matmul (self layers; the fused path)
     npu_app o_proj;
     npu_app mha;
 
@@ -139,12 +164,29 @@ struct SmolVLA_expert_self_attn_block {
     std::vector<buffer<bf16>> v_layers;  // [num_self][MAX_KV, pDV]
 
     xrt::runlist rl;
+    npu_app_manager* mgr = nullptr;
+    // q/k/v and o_proj runs per layer: their sequences and buffers never change, so they are built once
+    // (the mha run is not cached -- its sequence is regenerated when the prefix length changes).
+    struct layer_runs { xrt::run q, v, k, o, qkv;
+                        // runlists built once and re-executed (reset/add per call costs ~20 us); the mha+o one is
+                        // rebuilt when the prefix length changes, as the mha sequence is
+                        xrt::runlist rl_qkv, rl_mo; bool qkv_built = false; int mo_P = -1; };
+    buffer<bf16> qkv;     // [MAX_CHUNK, pDQ+pDK+pDV]: q | k | v per row
+    /// q, k, v in one launch (their weights are one matrix, see SmolVLA_expert_layer::qkv_proj).
+    /// SMOLVLA_QKV_UNFUSED=1 or the bf16 kill switch keep the three separate launches.
+    static bool qkv_fused() {
+        static const bool v = !smolvla_expert_mode::bf16_weights() && std::getenv("SMOLVLA_QKV_UNFUSED") == nullptr;
+        return v;
+    }
+    std::unordered_map<const void*, layer_runs> runs_by_weights;
     // prefix length the cached mha sequence was built for; -1 = not yet built.
     int last_P = -1;
     // prefix length whose rows are currently resident in k_layers/v_layers, and
     // the tail row each step writes at (num_blocks * 64). Set by prepare_kv().
     int prepared_P = -1;
     int tail_row   = 0;
+    // prefix length the rope table behind qkv was filled for (rope-in-kernel path)
+    int table_P    = -1;
 
     SmolVLA_expert_self_attn_block(
         SmolVLA_Expert_def* def,
@@ -154,12 +196,15 @@ struct SmolVLA_expert_self_attn_block {
         this->q_proj = expert_app_manager->create_app();
         this->k_proj = expert_app_manager->create_app();
         this->v_proj = expert_app_manager->create_app();
+        this->qkv_proj = expert_app_manager->create_app();
         this->o_proj = expert_app_manager->create_app();
         this->mha    = expert_app_manager->create_app();
 
         q     = this->q_proj.create_bo_buffer<bf16>(EXPERT_MAX_CHUNK * def->pDQ);
         k     = this->k_proj.create_bo_buffer<bf16>(EXPERT_MAX_CHUNK * def->pDK);
         v     = this->v_proj.create_bo_buffer<bf16>(EXPERT_MAX_CHUNK * def->pDV);
+        qkv   = this->qkv_proj.create_bo_buffer<bf16>(EXPERT_MAX_CHUNK * (def->pDQ + def->pDK + def->pDV) + EXPERT_ROPE_TABLE_ELEMS);
+        memset(qkv.data(), 0, qkv.size() * sizeof(bf16));
         attn  = this->o_proj.create_bo_buffer<bf16>(EXPERT_MAX_CHUNK * def->pDQ);
         o     = this->o_proj.create_bo_buffer<bf16>(EXPERT_MAX_CHUNK * def->pD);
 
@@ -185,6 +230,7 @@ struct SmolVLA_expert_self_attn_block {
         }
 
         rl = expert_app_manager->create_runlist();
+        mgr = expert_app_manager;
     }
 
     /// @brief build the four mm sequences. Split out of the constructor because
@@ -193,9 +239,13 @@ struct SmolVLA_expert_self_attn_block {
     ///        runs in execution order -- see the note in seq_gen.hpp. The owner
     ///        calls this on self, then mlp, then cross.
     void gen_seqs() {
-        smolvla_expert_seq::gen_expert_mm_seq(this->q_proj.seq(), EXPERT_MAX_CHUNK, def->self_layer_def.q_proj, 0);
-        smolvla_expert_seq::gen_expert_mm_seq(this->k_proj.seq(), EXPERT_MAX_CHUNK, def->self_layer_def.k_proj, 0);
-        smolvla_expert_seq::gen_expert_mm_seq(this->v_proj.seq(), EXPERT_MAX_CHUNK, def->self_layer_def.v_proj, 0);
+        if (qkv_fused()) {
+            smolvla_expert_seq::gen_expert_mm_seq(this->qkv_proj.seq(), EXPERT_MAX_CHUNK, def->self_layer_def.qkv_proj, 0);
+        } else {
+            smolvla_expert_seq::gen_expert_mm_seq(this->q_proj.seq(), EXPERT_MAX_CHUNK, def->self_layer_def.q_proj, 0);
+            smolvla_expert_seq::gen_expert_mm_seq(this->k_proj.seq(), EXPERT_MAX_CHUNK, def->self_layer_def.k_proj, 0);
+            smolvla_expert_seq::gen_expert_mm_seq(this->v_proj.seq(), EXPERT_MAX_CHUNK, def->self_layer_def.v_proj, 0);
+        }
         smolvla_expert_seq::gen_expert_mm_seq(this->o_proj.seq(), EXPERT_MAX_CHUNK, def->self_layer_def.o_proj, 0);
     }
 
@@ -234,6 +284,49 @@ struct SmolVLA_expert_self_attn_block {
         tail_row   = tail;
     }
 
+    /// rope-in-kernel path: qkv -> mha -> o_proj is ONE runlist. The mha reads q and the expert's own K/V rows
+    /// straight out of the qkv output, and ropes q and the tail K itself from the table stored behind qkv.
+    buffer<bf16> forward_rope(int L, buffer<bf16>& input, buffer<bf16>& weights, const float* inv_freq,
+                              uint32_t slot, int P, int num_blocks, int effect) {
+        const int pDQ = (int)def->pDQ, pDK = (int)def->pDK, pDV = (int)def->pDV;
+        const int S = pDQ + pDK + pDV;
+        const size_t table_off = (size_t)EXPERT_MAX_CHUNK * S;
+        buffer<bf16>& k_cat = k_layers[slot];
+        buffer<bf16>& v_cat = v_layers[slot];
+        PROF_INIT();
+        if (table_P != P) {
+            expert_fill_rope_table(qkv.data() + table_off, inv_freq, P);
+            qkv.bo().sync(XCL_BO_SYNC_BO_TO_DEVICE, EXPERT_ROPE_TABLE_ELEMS * sizeof(bf16), table_off * sizeof(bf16));
+            table_P = P;
+            last_P = -1;
+        }
+        if (P != last_P) {
+            smolvla_expert_seq::gen_expert_attn_seq_rope(this->mha.seq(), def->head_dim, pDQ, pDK, S, table_off,
+                                                         pDQ, pDQ + pDK, num_blocks, effect, 1, /*force_rtp=*/true);
+            last_P = P;
+        }
+        auto it = runs_by_weights.find(weights.data());
+        if (it == runs_by_weights.end()) {
+            layer_runs lr;
+            lr.qkv = qkv_proj.create_run(qkv, input, weights);
+            lr.o = o_proj.create_run(o, attn, weights);
+            it = runs_by_weights.emplace(weights.data(), std::move(lr)).first;
+        }
+        auto& lr = it->second;
+        if (lr.mo_P != P) {
+            lr.rl_mo = mgr->create_runlist();
+            lr.rl_mo.add(lr.qkv);
+            lr.rl_mo.add(mha.create_run(attn, qkv, k_cat, v_cat));
+            lr.rl_mo.add(lr.o);
+            lr.mo_P = P;
+        }
+        lr.rl_mo.execute();
+        lr.rl_mo.wait();
+        o.sync_from_device();
+        PROF_TICK("expert.self_attn:qkv+mha+o_proj");
+        return o;
+    }
+
     /// @param L      action chunk length
     /// @param input  rms-normed expert hidden state, [L, pD] (D real columns)
     /// @param weights packed per-layer weight buffer (self layer)
@@ -253,6 +346,10 @@ struct SmolVLA_expert_self_attn_block {
         // the prefix rows in k_layers/v_layers have to be the ones this P names.
         assert(prepared_P == P && "self_attn::prepare_kv not run for this prefix");
 
+        if (smolvla_expert_mode::rope_in_kernel() && qkv_fused()) {
+            return forward_rope(L, input, weights, inv_freq, slot, P, num_blocks, effect);
+        }
+
         // The attention sequence depends on the shapes only through P, so it is
         // identical for every self layer and every denoise step of a run. Build
         // it on the first call and whenever the prefix length changes.
@@ -270,15 +367,39 @@ struct SmolVLA_expert_self_attn_block {
         buffer<bf16>& v_cat = v_layers[slot];
 
         PROF_INIT();
+        auto it = runs_by_weights.find(weights.data());
+        if (it == runs_by_weights.end()) {
+            layer_runs lr;
+            if (qkv_fused()) lr.qkv = qkv_proj.create_run(qkv, input, weights);
+            else { lr.q = q_proj.create_run(q, input, weights); lr.v = v_proj.create_run(v, input, weights);
+                   lr.k = k_proj.create_run(k, input, weights); }
+            lr.o = o_proj.create_run(o, attn, weights);
+            it = runs_by_weights.emplace(weights.data(), std::move(lr)).first;
+        }
         rl.reset();
-        rl.add(q_proj.create_run(q, input, weights));
-        rl.add(v_proj.create_run(v, input, weights));
-        rl.add(k_proj.create_run(k, input, weights));
-        rl.execute();
-        rl.wait();
-        q.sync_from_device();
-        k.sync_from_device();
-        v.sync_from_device();
+        if (qkv_fused()) {
+            auto& lr = it->second;
+            if (!lr.qkv_built) { lr.rl_qkv = mgr->create_runlist(); lr.rl_qkv.add(lr.qkv); lr.qkv_built = true; }
+            lr.rl_qkv.execute();
+            lr.rl_qkv.wait();
+            qkv.sync_from_device();
+            // split the rows: the mha wants q at stride pDQ, K/V rows go to the tail at their own strides
+            const size_t S = (size_t)pDQ + pDK + pDV;
+            for (int r = 0; r < L; r++) {
+                memcpy(q.data() + (size_t)r * pDQ, qkv.data() + r * S, pDQ * sizeof(bf16));
+                memcpy(k.data() + (size_t)r * pDK, qkv.data() + r * S + pDQ, pDK * sizeof(bf16));
+                memcpy(v.data() + (size_t)r * pDV, qkv.data() + r * S + pDQ + pDK, pDV * sizeof(bf16));
+            }
+        } else {
+            rl.add(it->second.q);
+            rl.add(it->second.v);
+            rl.add(it->second.k);
+            rl.execute();
+            rl.wait();
+            q.sync_from_device();
+            k.sync_from_device();
+            v.sync_from_device();
+        }
         cpu_func::_rope(q.data(), L, def->num_attn_heads, def->head_dim, inv_freq, P, pDQ);
         q.sync_to_device();
         // K/V = [VLM prefix (rows 0..P) ; expert (L rows at tail_row)]. The
@@ -292,6 +413,22 @@ struct SmolVLA_expert_self_attn_block {
         _sync_rows_to_device(v_cat, tail_row, L, pDV);
         PROF_TICK("expert.self_attn:qkv");
 
+        if (smolvla_expert_fuse_enabled()) {
+            // mha -> o_proj has no host step between them: one submit, no host sync
+            auto& lr = it->second;
+            if (lr.mo_P != P) {
+                lr.rl_mo = mgr->create_runlist();
+                lr.rl_mo.add(mha.create_run(attn, q, k_cat, v_cat));
+                lr.rl_mo.add(lr.o);
+                lr.mo_P = P;
+            }
+            lr.rl_mo.execute();
+            lr.rl_mo.wait();
+            o.sync_from_device();
+            attn.sync_from_device();
+            PROF_TICK("expert.self_attn:mha+o_proj");
+            return o;
+        }
         mha(attn, q, k_cat, v_cat);
 
         PROF_TICK("expert.self_attn:mha");
@@ -338,6 +475,11 @@ struct SmolVLA_expert_cross_attn_block {
     std::vector<buffer<bf16>> v_layers;  // [num_cross][MAX_PREFIX, pDV]
 
     xrt::runlist rl;
+    std::vector<xrt::runlist> prep_rl;     // per cross layer: k_proj + v_proj re-projection, built once
+    std::vector<const void*> prep_w;       // weight buffer each prep_rl was built for
+    npu_app_manager* mgr = nullptr;
+    struct layer_runs { xrt::run q, o; xrt::runlist rl_q, rl_mo; bool q_built = false; int mo_P = -1; };
+    std::unordered_map<const void*, layer_runs> runs_by_weights;
 
     // prefix length the cached mha sequence was built for; -1 = not yet built.
     int last_P = -1;
@@ -353,7 +495,7 @@ struct SmolVLA_expert_cross_attn_block {
         this->o_proj = expert_app_manager->create_app();
         this->mha    = expert_app_manager->create_app();
 
-        q     = this->q_proj.create_bo_buffer<bf16>(EXPERT_MAX_CHUNK * def->pDQ);
+        q     = this->q_proj.create_bo_buffer<bf16>(EXPERT_MAX_CHUNK * def->pDQ + EXPERT_ROPE_TABLE_ELEMS);
         k_cat = this->k_proj.create_bo_buffer<bf16>(EXPERT_MAX_PREFIX * def->pDK);
         v_cat = this->v_proj.create_bo_buffer<bf16>(EXPERT_MAX_PREFIX * def->pDV);
         attn  = this->mha.create_bo_buffer<bf16>(EXPERT_MAX_CHUNK * def->pDQ);
@@ -382,6 +524,7 @@ struct SmolVLA_expert_cross_attn_block {
         }
 
         rl = expert_app_manager->create_runlist();
+        mgr = expert_app_manager;
     }
 
     /// @brief build the four mm sequences; see the self block's gen_seqs().
@@ -417,6 +560,24 @@ struct SmolVLA_expert_cross_attn_block {
         // is built for exactly P).
         _copy_rows_padded(k_cat.data(), vlm_k, P, DK, pDK);
         _copy_rows_padded(v_cat.data(), vlm_v, P, DV, pDV);
+        // only the P prefix rows were rewritten; the rows past them are never read
+        // (the mha is built for exactly P), so the rest of the buffer stays put.
+        static const bool cached = [](){ const char* e = std::getenv("SMOLVLA_XPREP_CACHE"); return !(e && e[0] == '0'); }();
+        if (cached) {
+            _sync_rows_to_device(k_cat, 0, P, pDK);
+            _sync_rows_to_device(v_cat, 0, P, pDV);
+            // one two-run list per cross layer, built once for the layer's weight buffer
+            if (prep_rl.size() <= slot) { prep_rl.resize(slot + 1); prep_w.resize(slot + 1, nullptr); }
+            if (prep_w[slot] != weights.data()) {
+                prep_rl[slot] = mgr->create_runlist();
+                prep_rl[slot].add(k_proj.create_run(k_layers[slot], k_cat, weights));
+                prep_rl[slot].add(v_proj.create_run(v_layers[slot], v_cat, weights));
+                prep_w[slot] = weights.data();
+            }
+            prep_rl[slot].execute();
+            prep_rl[slot].wait();
+            return;
+        }
         k_cat.sync_to_device();
         v_cat.sync_to_device();
 
@@ -426,6 +587,45 @@ struct SmolVLA_expert_cross_attn_block {
         rl.execute();
         rl.wait();
         // the results stay on the device for the mha to read; no sync back.
+    }
+
+    // the cross rope table (positions 0..63) behind q is written once
+    bool table_ready = false;
+
+    /// rope-in-kernel path: q_proj -> mha -> o_proj is ONE runlist; the mha ropes q from the table behind q.
+    buffer<bf16> forward_rope(int L, buffer<bf16>& input, buffer<bf16>& weights, const float* inv_freq,
+                              uint32_t slot, int P, int num_blocks, int effect) {
+        const int pDQ = (int)def->pDQ, pDK = (int)def->pDK;
+        const size_t table_off = (size_t)EXPERT_MAX_CHUNK * pDQ;
+        PROF_INIT();
+        if (!table_ready) {
+            expert_fill_rope_table(q.data() + table_off, inv_freq, 0);
+            q.bo().sync(XCL_BO_SYNC_BO_TO_DEVICE, EXPERT_ROPE_TABLE_ELEMS * sizeof(bf16), table_off * sizeof(bf16));
+            table_ready = true;
+        }
+        if (P != last_P) {
+            smolvla_expert_seq::gen_expert_attn_seq_rope(this->mha.seq(), def->head_dim, pDQ, pDK, pDQ, table_off,
+                                                         0, 0, num_blocks, effect, 0);
+            last_P = P;
+        }
+        auto it = runs_by_weights.find(weights.data());
+        if (it == runs_by_weights.end()) {
+            it = runs_by_weights.emplace(weights.data(), layer_runs{q_proj.create_run(q, input, weights),
+                                                                    o_proj.create_run(o, attn, weights)}).first;
+        }
+        auto& lr = it->second;
+        if (lr.mo_P != P) {
+            lr.rl_mo = mgr->create_runlist();
+            lr.rl_mo.add(lr.q);
+            lr.rl_mo.add(mha.create_run(attn, q, k_layers[slot], v_layers[slot]));
+            lr.rl_mo.add(lr.o);
+            lr.mo_P = P;
+        }
+        lr.rl_mo.execute();
+        lr.rl_mo.wait();
+        o.sync_from_device();
+        PROF_TICK("expert.cross_attn:q+mha+o_proj");
+        return o;
     }
 
     /// @param slot index of this layer among the cross layers, selecting the K/V
@@ -438,6 +638,10 @@ struct SmolVLA_expert_cross_attn_block {
         int num_blocks = (P + 63) / 64;
         int effect = P - (P / 64) * 64;
 
+        if (smolvla_expert_mode::rope_in_kernel()) {
+            return forward_rope(L, input, weights, inv_freq, slot, P, num_blocks, effect);
+        }
+
         // Cached on P like the self block's. No force_rtp: the self sequence
         // always runs first after the xclbin switch and repopulates the tiles,
         // so the only slot this one has to correct is is_self -- which is
@@ -448,10 +652,19 @@ struct SmolVLA_expert_cross_attn_block {
             last_P = P;
         }
 
+
         PROF_INIT();
         // K/V were re-projected once per prefix by prepare_kv(); only q depends
         // on the denoise step, so it is all that runs here.
-        q_proj(q, input, weights);
+        auto it = runs_by_weights.find(weights.data());
+        if (it == runs_by_weights.end()) {
+            it = runs_by_weights.emplace(weights.data(), layer_runs{q_proj.create_run(q, input, weights),
+                                                                    o_proj.create_run(o, attn, weights)}).first;
+        }
+        auto& lr = it->second;
+        if (!lr.q_built) { lr.rl_q = mgr->create_runlist(); lr.rl_q.add(lr.q); lr.q_built = true; }
+        lr.rl_q.execute();
+        lr.rl_q.wait();
         q.sync_from_device();
         // Cross layers rope the query at positions 0..L-1, NOT offset by the VLM
         // prefix P (the reference subtracts the prefix min so the chunk "starts
@@ -460,6 +673,19 @@ struct SmolVLA_expert_cross_attn_block {
         q.sync_to_device();
         PROF_TICK("expert.cross_attn:q+rope");
 
+        if (smolvla_expert_fuse_enabled()) {
+            if (lr.mo_P != P) {
+                lr.rl_mo = mgr->create_runlist();
+                lr.rl_mo.add(mha.create_run(attn, q, k_layers[slot], v_layers[slot]));
+                lr.rl_mo.add(lr.o);
+                lr.mo_P = P;
+            }
+            lr.rl_mo.execute();
+            lr.rl_mo.wait();
+            o.sync_from_device();
+            PROF_TICK("expert.cross_attn:mha+o_proj");
+            return o;
+        }
         mha(attn, q, k_layers[slot], v_layers[slot]);
         PROF_TICK("expert.cross_attn:mha");
 
@@ -486,6 +712,20 @@ struct SmolVLA_expert_mlp_block {
 
     xrt::runlist rl;
 
+    /// The mlp sequences are generated once, and every buffer a layer's runs touch is persistent, so the two runs
+    /// of a layer are built once and re-added to the runlist on every step (create_run costs ~20 us a run).
+    struct layer_runs { xrt::run gate_up, down; xrt::runlist rlc; bool built = false; };
+    std::unordered_map<const void*, layer_runs> runs_by_weights;
+    npu_app_manager* mgr = nullptr;
+
+    /// gate+up+SwiGLU is one launch and the down projection follows in the same runlist, with no host step in
+    /// between. Needs the swiglu kernel (bfp16 expert.xclbin); SMOLVLA_MLP_UNFUSED=1 or the bf16 kill switch
+    /// fall back to separate gate / up launches with the multiply on the CPU.
+    static bool fused() {
+        static const bool v = !smolvla_expert_mode::bf16_weights() && std::getenv("SMOLVLA_MLP_UNFUSED") == nullptr;
+        return v;
+    }
+
     SmolVLA_expert_mlp_block(
         SmolVLA_Expert_def* def,
         npu_app_manager* expert_app_manager
@@ -505,6 +745,7 @@ struct SmolVLA_expert_mlp_block {
         memset(o.data(), 0, o.size() * sizeof(bf16));
 
         rl = expert_app_manager->create_runlist();
+        mgr = expert_app_manager;
     }
 
     /// @brief build the three mm sequences; see the self block's gen_seqs().
@@ -513,8 +754,13 @@ struct SmolVLA_expert_mlp_block {
     ///        cross o_proj are the same shape with the same act, so they leave
     ///        the same mm RTP state behind.
     void gen_seqs() {
-        smolvla_expert_seq::gen_expert_mm_seq(this->gate_proj.seq(), EXPERT_MAX_CHUNK, def->mlp_def.gate_proj, 1);
-        smolvla_expert_seq::gen_expert_mm_seq(this->up_proj.seq(), EXPERT_MAX_CHUNK, def->mlp_def.up_proj, 0);
+        if (fused()) {
+            smolvla_expert_seq::gen_expert_mm_seq(this->gate_proj.seq(), EXPERT_MAX_CHUNK, def->mlp_def.gate_proj, 3, false,
+                                                  &def->mlp_def.up_proj);
+        } else {
+            smolvla_expert_seq::gen_expert_mm_seq(this->gate_proj.seq(), EXPERT_MAX_CHUNK, def->mlp_def.gate_proj, 1);
+            smolvla_expert_seq::gen_expert_mm_seq(this->up_proj.seq(), EXPERT_MAX_CHUNK, def->mlp_def.up_proj, 0);
+        }
         smolvla_expert_seq::gen_expert_mm_seq(this->down_proj.seq(), EXPERT_MAX_CHUNK, def->mlp_def.down_proj, 0);
     }
 
@@ -524,6 +770,26 @@ struct SmolVLA_expert_mlp_block {
         const int pD = (int)def->pD, pinter = (int)def->pintermediate_size;
 
         PROF_INIT();
+        if (fused()) {
+            // hid = silu(gate) * up comes straight out of the array; down reads it from the device
+            auto it = runs_by_weights.find(weights.data());
+            if (it == runs_by_weights.end()) {
+                it = runs_by_weights.emplace(weights.data(), layer_runs{gate_proj.create_run(hid, input, weights),
+                                                                        down_proj.create_run(o, hid, weights)}).first;
+            }
+            // the two-run list is built once per layer and re-executed: no reset/add per call
+            if (!it->second.built) {
+                it->second.rlc = mgr->create_runlist();
+                it->second.rlc.add(it->second.gate_up);
+                it->second.rlc.add(it->second.down);
+                it->second.built = true;
+            }
+            it->second.rlc.execute();
+            it->second.rlc.wait();
+            o.sync_from_device();
+            PROF_TICK("expert.mlp:gate_up_swiglu_down");
+            return o;
+        }
         // input is [L, pD]; gate/up are [L, pinter].
         rl.reset();
         rl.add(gate_proj.create_run(gate, input, weights));
@@ -571,7 +837,7 @@ struct SmolVLA_expert_exec {
         x = npu->create_bo_buffer<bf16>(EXPERT_MAX_CHUNK * def->pD);
         x.memset((bf16)(0.0f));
         // register xclbin
-        this->fused_xclbin = npu->register_xclbin(utils::xclbin_path("expert.xclbin"));
+        this->fused_xclbin = npu->register_xclbin(utils::xclbin_path(smolvla_expert_mode::bf16_weights() ? "expert_bf16.xclbin" : "expert.xclbin"));
         this->self_attn  = std::make_unique<SmolVLA_expert_self_attn_block>(def, fused_xclbin);
         this->cross_attn = std::make_unique<SmolVLA_expert_cross_attn_block>(def, fused_xclbin);
         this->mlp        = std::make_unique<SmolVLA_expert_mlp_block>(def, fused_xclbin);

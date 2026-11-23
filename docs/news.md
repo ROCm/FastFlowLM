@@ -30,6 +30,18 @@ sections:
         - heading: "Technical updates"
           body: "Deep dives into kernel optimizations and architecture improvements."
 
+  - type: one_column
+    kicker: Latest
+    title: FastFlowLM now supports the iGPU — full SoC support for Ryzen™ AI 🚀
+    body: |
+      **Published: November 23, 2026**
+
+      FastFlowLM (FLM) now supports the **iGPU** alongside the NPU, making it a **full SoC story** for AMD Ryzen™ AI.
+
+      FLM is dedicated to Ryzen™ AI: **no discrete GPU needed**, **over 10× more power-efficient**, and **context lengths up to 256k tokens**. It now runs on both the NPU and the iGPU.
+
+      **Learn more:** [Docs](/docs/) · [GitHub Releases](https://github.com/ROCm/FastFlowLM/releases)
+
   # - type: one_column
   #   kicker: The Blog
   #   title: Holy Wow! NPU Is Now Actually Usable 🚀

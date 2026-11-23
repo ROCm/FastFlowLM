@@ -168,7 +168,8 @@ class Abi(unittest.TestCase):
         for name in ("_ZNKRSt7__cxx1115basic_stringbufIcSt11char_traitsIcESaIcEE3strEv",
                      "_ZTTNSt7__cxx1118basic_stringstreamIwSt11char_traitsIwESaIwEEE",
                      "_ZNSo9_M_insertIbEERSoT_", "_ZGVbN2v_exp", "_Znwm", "_ZdlPvm",
-                     "_ZTVN10__cxxabiv117__class_type_infoE"):
+                     "_ZTVN10__cxxabiv117__class_type_infoE",
+                     "_ZN3xrt7runlist3addERKNS_3runE", "_ZNK3xrt6kernel8group_idEi"):
             self.assertTrue(do.STD_SYMBOL.match(name) or do.RUNTIME_SYMBOL.match(name), name)
         for name in ("_ZN3MHAD1Ev", "_ZN7DequantD1Ev", "_ZGVZN3foo3barEvE1x"):
             self.assertFalse(do.STD_SYMBOL.match(name) or do.RUNTIME_SYMBOL.match(name), name)

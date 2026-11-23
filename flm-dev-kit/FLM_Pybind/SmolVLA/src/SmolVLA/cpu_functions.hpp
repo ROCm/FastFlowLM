@@ -7,6 +7,7 @@
 #include <vector>
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include "avx512_util.hpp"
 #ifdef _OPENMP
 #include <omp.h>
@@ -22,8 +23,10 @@ namespace cpu_func {
     /// number of fp32 lanes in one AVX-512 vector; every kernel blocks by this.
     static constexpr int simd_width = 16;
 
-    /// OpenMP team size used by the prefill-shaped kernels.
-    static constexpr int max_prefill_thread = 8;
+    /// OpenMP team size used by the prefill-shaped kernels: up to 8, but never
+    /// more than the OpenMP runtime offers (OMP_NUM_THREADS / the CPU affinity
+    /// mask), so a 2-core cap runs 2 threads instead of 8 time-sliced ones.
+    inline const int max_prefill_thread = std::min(8, omp_get_max_threads());
 
     /// _cpu_mm's blocked fast path emits this many output columns per pass.
     static constexpr int mm_unroll_n = 4;
@@ -578,6 +581,8 @@ namespace cpu_func {
                       /*w_stride=*/0, bias ? bias_f.data() : nullptr);
     }
 
+    inline void _elementwise_mul(bf16* dst, bf16* src_0, bf16* src_1, int length);
+
     inline void _elementwise_mul(bf16* dst, bf16* src_0, bf16* src_1, int length){
         const int unroll = simd_width * 4;
 
@@ -704,7 +709,52 @@ namespace cpu_func {
     // Since 0.5 * (1 + tanh(z)) == sigmoid(2z), this collapses to
     //   y = x * sigmoid(2*sqrt(2/pi) * (x + 0.044715 * x^3))
     // which needs a single exp instead of the two a tanh would cost.
+    /// exp(x) for the GELU: range reduction with roundscale + scalef (no int round trip), degree-5 polynomial.
+    /// Relative error ~2e-7 over [-87, 87], far below the bf16 store.
+    static inline __m512 _exp_scalef(__m512 x) {
+        x = _mm512_max_ps(_mm512_min_ps(x, _mm512_set1_ps(87.0f)), _mm512_set1_ps(-87.0f));
+        const __m512 n = _mm512_roundscale_ps(_mm512_mul_ps(x, _mm512_set1_ps(1.44269504088896341f)),
+                                              _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+        __m512 r = _mm512_fnmadd_ps(n, _mm512_set1_ps(0.6931471824645996f), x);
+        r = _mm512_fnmadd_ps(n, _mm512_set1_ps(1.9082149292705877e-10f), r);
+        __m512 p = _mm512_fmadd_ps(_mm512_set1_ps(0.008333333333333333f), r, _mm512_set1_ps(0.041666666666666664f));
+        p = _mm512_fmadd_ps(p, r, _mm512_set1_ps(0.16666666666666666f));
+        p = _mm512_fmadd_ps(p, r, _mm512_set1_ps(0.5f));
+        p = _mm512_fmadd_ps(p, r, _mm512_set1_ps(1.0f));
+        p = _mm512_fmadd_ps(p, r, _mm512_set1_ps(1.0f));
+        return _mm512_scalef_ps(p, n);
+    }
+
+    /// Faster _gelu_tanh: scalef exp and rcp14 + one Newton step instead of the divide (SMOLVLA_GELU_FAST=0 selects
+    /// the original path below).
+    inline void _gelu_tanh_fast(bf16* y, const bf16* x, int length) {
+        const __m512 v_one   = _mm512_set1_ps(1.0f);
+        const __m512 v_two   = _mm512_set1_ps(2.0f);
+        const __m512 v_scale = _mm512_set1_ps(1.5957691216057308f);
+        const __m512 v_coeff = _mm512_set1_ps(0.044715f);
+        const int simd_end = length - (length % simd_width);
+
+        #pragma omp parallel for num_threads(max_prefill_thread) schedule(static)
+        for (int i = 0; i < simd_end; i += simd_width) {
+            __m512 xv = bf16o_fp32_512(_mm256_loadu_si256((const __m256i*)(x + i)));
+            __m512 x3    = _mm512_mul_ps(_mm512_mul_ps(xv, xv), xv);
+            __m512 inner = _mm512_fmadd_ps(v_coeff, x3, xv);
+            __m512 u     = _mm512_mul_ps(v_scale, inner);
+            __m512 denom = _mm512_add_ps(v_one, _exp_scalef(_mm512_sub_ps(_mm512_setzero_ps(), u)));
+            __m512 rcp   = _mm512_rcp14_ps(denom);
+            rcp = _mm512_mul_ps(rcp, _mm512_fnmadd_ps(denom, rcp, v_two));   // Newton: r * (2 - d*r)
+            _mm256_storeu_si256((__m256i*)(y + i), f32o_bf16_512(_mm512_mul_ps(xv, rcp)));
+        }
+        for (int i = simd_end; i < length; i++) {
+            float v = static_cast<float>(x[i]);
+            float u = 1.5957691216057308f * (v + 0.044715f * v * v * v);
+            y[i] = static_cast<bf16>(v / (1.0f + expf(-u)));
+        }
+    }
+
     inline void _gelu_tanh(bf16* y, const bf16* x, int length) {
+        static const bool fast = std::getenv("SMOLVLA_GELU_FAST") == nullptr || std::getenv("SMOLVLA_GELU_FAST")[0] != '0';
+        if (fast) { _gelu_tanh_fast(y, x, length); return; }
         const __m512 v_one   = _mm512_set1_ps(1.0f);
         const __m512 v_scale = _mm512_set1_ps(1.5957691216057308f);  // 2*sqrt(2/pi)
         const __m512 v_coeff = _mm512_set1_ps(0.044715f);

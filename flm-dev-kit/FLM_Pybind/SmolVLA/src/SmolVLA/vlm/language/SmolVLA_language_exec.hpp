@@ -5,6 +5,8 @@
 
 #include <memory>
 #include <string>
+#include <unordered_map>
+#include <cstdlib>
 
 #include "buffer.hpp"
 #include "typedef.hpp"
@@ -53,6 +55,62 @@ struct SmolVLA_language_attn_block {
 
     int last_L = -1;
 
+    // runs are bound to a layer's weight buffer, and everything else they touch is persistent, so they are
+    // built once per layer instead of per call (create_run ~20 us each). SMOLVLA_LANG_NOCACHE=1 = old path.
+    static bool cache_runs() { static const bool on = !std::getenv("SMOLVLA_LANG_NOCACHE"); return on; }
+    struct layer_runs { xrt::run q, k, v, o, qkv; xrt::runlist rl_mo; int mo_L = -1; };
+    npu_app_manager* mgr = nullptr;
+    // mha -> o_proj in one runlist: the kernel's last query row is wrong (the CPU recomputes it), so that row of
+    // attn is wrong on the device, but o_proj rows are independent: the CPU computes the last row of o itself from
+    // its own attention row. SMOLVLA_LANG_MO=0 keeps the two submits.
+    bool fuse_mo = false;
+    // q, k, v as one launch over the adjacent weights (bf16 text only; SMOLVLA_LANG_QKV=0 keeps three)
+    bool fuse_qkv = false;
+    buffer<bf16> qkv;                       // [MAX_L, DQ+DK+DV]
+    std::vector<float> rope_cos, rope_sin;  // [MAX_L, head_dim/2]
+
+    /// split the fused qkv rows into q/k/v and rope q (if do_q) and k, rows [0, L) roped, rows [L, Lp) plain
+    /// copies (the kernel reads whole 64-row blocks). Same maths as cpu_func::_rope, AVX-512, tables cached.
+    void split_rope(int L, int Lp, bool do_q) {
+        const int DQ = (int)def->DQ, DK = (int)def->DK, DV = (int)def->DV, S = DQ + DK + DV;
+        const int H = (int)def->num_attn_heads, HK = (int)def->num_kv_heads, hd = (int)def->head_dim, half = hd / 2;
+        const bf16* src = qkv.data();
+        #pragma omp parallel for num_threads(2) schedule(static)
+        for (int p = 0; p < Lp; p++) {
+            const bf16* s = src + (size_t)p * S;
+            bf16* qd = q.data() + (size_t)p * DQ;
+            bf16* kd = k.data() + (size_t)p * DK;
+            memcpy(v.data() + (size_t)p * DV, s + DQ + DK, DV * sizeof(bf16));
+            if (p >= L) {
+                memcpy(qd, s, DQ * sizeof(bf16));
+                memcpy(kd, s + DQ, DK * sizeof(bf16));
+                continue;
+            }
+            const float* cs = rope_cos.data() + (size_t)p * half;
+            const float* sn = rope_sin.data() + (size_t)p * half;
+            auto rot = [&](const bf16* in, bf16* out, int heads) {
+                for (int h = 0; h < heads; h++) {
+                    const bf16* xh = in + h * hd;
+                    bf16* oh = out + h * hd;
+                    for (int j = 0; j < half; j += 16) {
+                        __m512 l = bf16o_fp32_512(_mm256_loadu_si256((const __m256i*)(xh + j)));
+                        __m512 r = bf16o_fp32_512(_mm256_loadu_si256((const __m256i*)(xh + j + half)));
+                        __m512 c = _mm512_loadu_ps(cs + j), n = _mm512_loadu_ps(sn + j);
+                        _mm256_storeu_si256((__m256i*)(oh + j),
+                            f32o_bf16_512(_mm512_sub_ps(_mm512_mul_ps(l, c), _mm512_mul_ps(r, n))));
+                        _mm256_storeu_si256((__m256i*)(oh + j + half),
+                            f32o_bf16_512(_mm512_add_ps(_mm512_mul_ps(l, n), _mm512_mul_ps(r, c))));
+                    }
+                }
+            };
+            if (do_q) rot(s, qd, H); else memcpy(qd, s, DQ * sizeof(bf16));
+            rot(s + DQ, kd, HK);
+        }
+    }
+    std::unordered_map<const void*, layer_runs> runs_by_weights;
+    xrt::run mha_run_c;       // mha run for the current L (its buffers are shared by all layers)
+    int mha_run_L = -1;
+
     buffer<bf16> q;
     buffer<bf16> k;
     buffer<bf16> v;
@@ -66,6 +124,11 @@ struct SmolVLA_language_attn_block {
         npu_app_manager* text_app_manager
         )
         : def(def) {
+        mgr = text_app_manager;
+        {
+            const char* e = std::getenv("SMOLVLA_LANG_MO");
+            fuse_mo = cache_runs() && !(e && e[0] == '0');
+        }
         this->q_proj = text_app_manager->create_app();
         this->k_proj = text_app_manager->create_app();
         this->v_proj = text_app_manager->create_app();
@@ -84,9 +147,28 @@ struct SmolVLA_language_attn_block {
 
         this->temp_attn_out = buffer<bf16>(def->DQ);
 
-        smolvla_vlm_text_seq::gen_text_mm_seq(this->q_proj.seq(), MAX_L, def->layer_def.q_proj, 0);
-        smolvla_vlm_text_seq::gen_text_mm_seq(this->k_proj.seq(), MAX_L, def->layer_def.k_proj, 0);
-        smolvla_vlm_text_seq::gen_text_mm_seq(this->v_proj.seq(), MAX_L, def->layer_def.v_proj, 0);
+        {
+            const char* e = std::getenv("SMOLVLA_LANG_QKV");
+            fuse_qkv = cache_runs() && !(e && e[0] == '0');
+        }
+        if (fuse_qkv) {
+            // the fused launch takes q_proj's slot in the sequence cycle (it is the first, so it writes every RTP)
+            this->qkv = this->q_proj.create_bo_buffer<bf16>((size_t)MAX_L * (def->DQ + def->DK + def->DV));
+            const int half = (int)def->head_dim / 2;
+            rope_cos.resize((size_t)MAX_L * half);
+            rope_sin.resize((size_t)MAX_L * half);
+            for (int pos = 0; pos < MAX_L; pos++)
+                for (int j = 0; j < half; j++) {
+                    float angle = inv_freq[j] * (float)pos;
+                    rope_cos[(size_t)pos * half + j] = cosf(angle);
+                    rope_sin[(size_t)pos * half + j] = sinf(angle);
+                }
+            smolvla_vlm_text_seq::gen_text_mm_seq(this->q_proj.seq(), MAX_L, def->layer_def.qkv_proj, 0);
+        } else {
+            smolvla_vlm_text_seq::gen_text_mm_seq(this->q_proj.seq(), MAX_L, def->layer_def.q_proj, 0);
+            smolvla_vlm_text_seq::gen_text_mm_seq(this->k_proj.seq(), MAX_L, def->layer_def.k_proj, 0);
+            smolvla_vlm_text_seq::gen_text_mm_seq(this->v_proj.seq(), MAX_L, def->layer_def.v_proj, 0);
+        }
         smolvla_vlm_text_seq::gen_text_mm_seq(this->o_proj.seq(), MAX_L, def->layer_def.o_proj, 0);
     }
 
@@ -125,10 +207,39 @@ struct SmolVLA_language_attn_block {
         // q_proj's sequence the one carrying the K_div_k write that k_proj and
         // v_proj rely on. Dropping the launch would leave the tiles holding
         // down_proj's K_div_k from the previous layer and silently corrupt k/v.
-        auto q_run = q_proj.create_run(q, input, weights);
-        auto k_run = k_proj.create_run(k, input, weights);
-        auto v_run = v_proj.create_run(v, input, weights);
+        xrt::run q_run, k_run, v_run;
+        layer_runs* lr = nullptr;
+        if (cache_runs()) {
+            auto it = runs_by_weights.find(weights.data());
+            if (it == runs_by_weights.end()) {
+                layer_runs n;
+                if (fuse_qkv) {
+                    n.qkv = q_proj.create_run(qkv, input, weights);
+                } else {
+                    n.q = q_proj.create_run(q, input, weights);
+                    n.k = k_proj.create_run(k, input, weights);
+                    n.v = v_proj.create_run(v, input, weights);
+                }
+                n.o = o_proj.create_run(o, attn, weights);
+                it = runs_by_weights.emplace(weights.data(), std::move(n)).first;
+            }
+            lr = &it->second;
+            q_run = lr->q; k_run = lr->k; v_run = lr->v;
+        } else {
+            q_run = q_proj.create_run(q, input, weights);
+            k_run = k_proj.create_run(k, input, weights);
+            v_run = v_proj.create_run(v, input, weights);
+        }
 
+        if (fuse_qkv) {
+            lr->qkv.start();
+            lr->qkv.wait();
+            qkv.sync_from_device();
+            split_rope(L, L_padded, !early_stop);
+            q.sync_to_device();
+            k.sync_to_device();
+            v.sync_to_device();
+        } else {
         q_run.start();
         q_run.wait();
 
@@ -149,6 +260,7 @@ struct SmolVLA_language_attn_block {
         k.sync_to_device();
         v_run.wait();
         v.sync_from_device();
+        }
 
         PROF_TICK("language.attn:qkv");
 
@@ -170,13 +282,43 @@ struct SmolVLA_language_attn_block {
         // attention over the full prefix (image + text + state). The VLM prefix
         // attends bidirectionally, so causal=false.
         const int q_last = L - 1;
-        auto mha_run = mha.create_run(attn, q, k, v);
+        xrt::run mha_run;
+        if (cache_runs()) {
+            if (mha_run_L != L) { mha_run_c = mha.create_run(attn, q, k, v); mha_run_L = L; }
+            mha_run = mha_run_c;
+        } else {
+            mha_run = mha.create_run(attn, q, k, v);
+        }
+        if (fuse_mo && lr) {
+            if (lr->mo_L != L) {
+                lr->rl_mo = mgr->create_runlist();
+                lr->rl_mo.add(mha_run);
+                lr->rl_mo.add(lr->o);
+                lr->mo_L = L;
+            }
+            lr->rl_mo.execute();
+            cpu_func::_gqa_mha(temp_attn_out.data(), q.data() + (size_t)q_last * DQ,
+                               k.data(), v.data(),
+                               /*L_q=*/1, /*L_kv=*/L,
+                               def->num_attn_heads, def->num_kv_heads, def->head_dim,
+                               /*causal=*/false);
+            bf16 o_last[1024];
+            cpu_func::_cpu_mm<bf16>(o_last, (bf16*)((uint8_t*)weights.data() + ld.o_proj.offset),
+                                    temp_attn_out.data(), 1, DQ, D);
+            PROF_TICK("language.attn:mha_cpu");
+            lr->rl_mo.wait();
+            o.sync_from_device();
+            memcpy(o.data() + (size_t)q_last * D, o_last, D * sizeof(bf16));
+            PROF_TICK("language.attn:mha+o_proj");
+            return o;
+        }
         mha_run.start();
         cpu_func::_gqa_mha(temp_attn_out.data(), q.data() + (size_t)q_last * DQ,
                            k.data(), v.data(),
                            /*L_q=*/1, /*L_kv=*/L,
                            def->num_attn_heads, def->num_kv_heads, def->head_dim,
                            /*causal=*/false);
+        PROF_TICK("language.attn:mha_cpu");
         mha_run.wait();
         attn.sync_from_device();
         memcpy(attn.data() + (size_t)q_last * DQ, temp_attn_out.data(), DQ * sizeof(bf16));
@@ -184,7 +326,8 @@ struct SmolVLA_language_attn_block {
 
         attn.sync_to_device();
         // 5. out = o_proj(attn) for the state row only            // [1, D]
-        o_proj(o, attn, weights);
+        if (lr) { lr->o.start(); lr->o.wait(); }
+        else o_proj(o, attn, weights);
         o.sync_from_device();
         PROF_TICK("language.attn:o_proj");
         return o;
@@ -209,6 +352,9 @@ struct SmolVLA_language_mlp_block {
 
 
     xrt::runlist rl;
+    npu_app_manager* mgr = nullptr;
+    struct layer_runs { xrt::run down; xrt::runlist gu; };
+    std::unordered_map<const void*, layer_runs> runs_by_weights;
 
     SmolVLA_language_mlp_block(
         SmolVLA_Language_def* def,
@@ -225,7 +371,8 @@ struct SmolVLA_language_mlp_block {
         this->o    = this->down_proj.create_bo_buffer<bf16>(MAX_L * def->D);
 
         rl = fused_xclbin->create_runlist();
-        
+        mgr = fused_xclbin;
+
         smolvla_vlm_text_seq::gen_text_mm_seq(this->gate_proj.seq(), MAX_L, def->layer_def.gate_proj, 1);
         smolvla_vlm_text_seq::gen_text_mm_seq(this->up_proj.seq(), MAX_L, def->layer_def.up_proj, 0);
         smolvla_vlm_text_seq::gen_text_mm_seq(this->down_proj.seq(), MAX_L, def->layer_def.down_proj, 0);
@@ -243,11 +390,27 @@ struct SmolVLA_language_mlp_block {
 
         PROF_INIT();
         // 1. gate = gate_proj(input); up = up_proj(input)  // [L, intermediate]
-        rl.reset();
-        rl.add(gate_proj.create_run(gate, input, weights));
-        rl.add(up_proj.create_run(up, input, weights));
-        rl.execute();
-        rl.wait();
+        layer_runs* lr = nullptr;
+        if (SmolVLA_language_attn_block::cache_runs()) {
+            auto it = runs_by_weights.find(weights.data());
+            if (it == runs_by_weights.end()) {
+                layer_runs n;
+                n.gu = mgr->create_runlist();
+                n.gu.add(gate_proj.create_run(gate, input, weights));
+                n.gu.add(up_proj.create_run(up, input, weights));
+                n.down = down_proj.create_run(o, hid, weights);
+                it = runs_by_weights.emplace(weights.data(), std::move(n)).first;
+            }
+            lr = &it->second;
+            lr->gu.execute();
+            lr->gu.wait();
+        } else {
+            rl.reset();
+            rl.add(gate_proj.create_run(gate, input, weights));
+            rl.add(up_proj.create_run(up, input, weights));
+            rl.execute();
+            rl.wait();
+        }
         gate.sync_from_device();
         up.sync_from_device();
         PROF_TICK("language.mlp:gate+up");
@@ -259,7 +422,8 @@ struct SmolVLA_language_mlp_block {
         PROF_TICK("language.mlp:swiglu");
 
         // 3. out = down_proj(hid), [L, D]
-        down_proj(o, hid, weights);
+        if (lr) { lr->down.start(); lr->down.wait(); }
+        else down_proj(o, hid, weights);
         PROF_TICK("language.mlp:down");
         o.sync_from_device();
         return o;

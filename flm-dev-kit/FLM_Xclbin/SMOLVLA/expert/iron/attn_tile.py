@@ -42,6 +42,8 @@ def attn_cttile0(tile: tile_with_location, mctx: mlir_context):
     in_cons_lock = aie.lock(ct, lock_id = 3, init = 0)
     o_prod_lock = aie.lock(ct, lock_id = 4, init = 2)
     o_cons_lock = aie.lock(ct, lock_id = 5, init = 0)
+    t_prod_lock = aie.lock(ct, lock_id = 6, init = 1)
+    t_cons_lock = aie.lock(ct, lock_id = 7, init = 0)
 
     @aie.core(ct, link_with = "attn0.o", stack_size = 1024*4)
     def core_body():
@@ -56,7 +58,15 @@ def attn_cttile0(tile: tile_with_location, mctx: mlir_context):
             lock_acquire(q_prod_lock, 1)
             aie.dma_bd(q_buffer)
             lock_release(q_cons_lock, 1)
-            aie.next_bd(block[1]) 
+            aie.next_bd(block[9])
+
+        # rope table (cos/sin, tile layout) lands in the s scratch right behind q; the kernel
+        # consumes it before its first QK
+        with block[9]:
+            lock_acquire(t_prod_lock, 1)
+            aie.dma_bd(s_buffer)
+            lock_release(t_cons_lock, 1)
+            aie.next_bd(block[1])
 
         with block[2]:
             s1 = aie.dma_start(channel_dir = aie.DMAChannelDir.S2MM, channel_index = 1, dest=block[3], chain=block[5])
@@ -115,6 +125,9 @@ def attn_memtile0(tile: tile_with_location, mctx: mlir_context):
     q_cons_lock_0 = aie.lock(mt, lock_id = 1, init = 0)
     q_cons_lock_1 = aie.lock(mt, lock_id = 2, init = 0)
     q_cons_lock_2 = aie.lock(mt, lock_id = 3, init = 0)
+    q_mid_lock_0 = aie.lock(mt, lock_id = 10, init = 0)
+    q_mid_lock_1 = aie.lock(mt, lock_id = 11, init = 0)
+    q_mid_lock_2 = aie.lock(mt, lock_id = 12, init = 0)
     in_prod_lock = aie.lock(mt, lock_id = 4, init = 2)
     in_cons_lock = aie.lock(mt, lock_id = 5, init = 0)
     o_prod_lock_0 = aie.lock(mt, lock_id = 6, init = 2)
@@ -128,13 +141,13 @@ def attn_memtile0(tile: tile_with_location, mctx: mlir_context):
         
         with block[1]:
             lock_acquire(q_prod_lock, 1)
-            aie.dma_bd(q_buffer_0, offset = 0, len = lq * d * 3)
+            aie.dma_bd(q_buffer_0, offset = 0, len = lq * d * 4)
             lock_release(q_cons_lock_0, 1)
             aie.next_bd(block[2])
         
         with block[2]:
             lock_acquire(q_prod_lock, 1)
-            aie.dma_bd(q_buffer_1, offset = 0, len = lq * d * 3)
+            aie.dma_bd(q_buffer_1, offset = 0, len = lq * d * 4)
             lock_release(q_cons_lock_0, 1)
             aie.next_bd(block[1])
         
@@ -144,12 +157,24 @@ def attn_memtile0(tile: tile_with_location, mctx: mlir_context):
         with block[4]:
             lock_acquire(q_cons_lock_0, 1)
             aie.dma_bd(q_buffer_0, offset = 0, len = lq * d, dimensions = [(d // 8, 8), (lq, d * 3), (8, 1)])
+            lock_release(q_mid_lock_0, 1)
+            aie.next_bd(block[40])
+
+        with block[40]:
+            lock_acquire(q_mid_lock_0, 1)
+            aie.dma_bd(q_buffer_0, offset = 3 * lq * d, len = lq * d)
             lock_release(q_cons_lock_1, 1)
             aie.next_bd(block[5])
-            
+
         with block[5]:
             lock_acquire(q_cons_lock_0, 1)
             aie.dma_bd(q_buffer_1, offset = 0, len = lq * d, dimensions = [(d // 8, 8), (lq, d * 3), (8, 1)])
+            lock_release(q_mid_lock_0, 1)
+            aie.next_bd(block[50])
+
+        with block[50]:
+            lock_acquire(q_mid_lock_0, 1)
+            aie.dma_bd(q_buffer_1, offset = 3 * lq * d, len = lq * d)
             lock_release(q_cons_lock_1, 1)
             aie.next_bd(block[4])
 
@@ -160,12 +185,24 @@ def attn_memtile0(tile: tile_with_location, mctx: mlir_context):
         with block[7]:
             lock_acquire(q_cons_lock_1, 1)
             aie.dma_bd(q_buffer_0, offset = d, len = lq * d, dimensions = [(d // 8, 8), (lq, d * 3), (8, 1)])
+            lock_release(q_mid_lock_1, 1)
+            aie.next_bd(block[70])
+
+        with block[70]:
+            lock_acquire(q_mid_lock_1, 1)
+            aie.dma_bd(q_buffer_0, offset = 3 * lq * d, len = lq * d)
             lock_release(q_cons_lock_2, 1)
             aie.next_bd(block[8])
-            
+
         with block[8]:
             lock_acquire(q_cons_lock_1, 1)
             aie.dma_bd(q_buffer_1, offset = d, len = lq * d, dimensions = [(d // 8, 8), (lq, d * 3), (8, 1)])
+            lock_release(q_mid_lock_1, 1)
+            aie.next_bd(block[80])
+
+        with block[80]:
+            lock_acquire(q_mid_lock_1, 1)
+            aie.dma_bd(q_buffer_1, offset = 3 * lq * d, len = lq * d)
             lock_release(q_cons_lock_2, 1)
             aie.next_bd(block[7])
 
@@ -175,12 +212,24 @@ def attn_memtile0(tile: tile_with_location, mctx: mlir_context):
         with block[10]:
             lock_acquire(q_cons_lock_2, 1)
             aie.dma_bd(q_buffer_0, offset = 2 * d, len = lq * d, dimensions = [(d // 8, 8), (lq, d * 3), (8, 1)])
+            lock_release(q_mid_lock_2, 1)
+            aie.next_bd(block[100])
+
+        with block[100]:
+            lock_acquire(q_mid_lock_2, 1)
+            aie.dma_bd(q_buffer_0, offset = 3 * lq * d, len = lq * d)
             lock_release(q_prod_lock, 1)
             aie.next_bd(block[11])
-            
+
         with block[11]:
             lock_acquire(q_cons_lock_2, 1)
             aie.dma_bd(q_buffer_1, offset = 2 * d, len = lq * d, dimensions = [(d // 8, 8), (lq, d * 3), (8, 1)])
+            lock_release(q_mid_lock_2, 1)
+            aie.next_bd(block[110])
+
+        with block[110]:
+            lock_acquire(q_mid_lock_2, 1)
+            aie.dma_bd(q_buffer_1, offset = 3 * lq * d, len = lq * d)
             lock_release(q_prod_lock, 1)
             aie.next_bd(block[10])
         
@@ -305,6 +354,8 @@ def attn_cttile1(tile: tile_with_location, mctx: mlir_context):
     in_cons_lock = aie.lock(ct, lock_id = 3, init = 0)
     o_prod_lock = aie.lock(ct, lock_id = 4, init = 2)
     o_cons_lock = aie.lock(ct, lock_id = 5, init = 0)
+    t_prod_lock = aie.lock(ct, lock_id = 6, init = 1)
+    t_cons_lock = aie.lock(ct, lock_id = 7, init = 0)
 
     @aie.core(ct, link_with = "attn1.o", stack_size = 1024*4)
     def core_body():
@@ -319,7 +370,15 @@ def attn_cttile1(tile: tile_with_location, mctx: mlir_context):
             lock_acquire(q_prod_lock, 1)
             aie.dma_bd(q_buffer)
             lock_release(q_cons_lock, 1)
-            aie.next_bd(block[1]) 
+            aie.next_bd(block[9])
+
+        # rope table (cos/sin, tile layout) lands in the s scratch right behind q; the kernel
+        # consumes it before its first QK
+        with block[9]:
+            lock_acquire(t_prod_lock, 1)
+            aie.dma_bd(s_buffer)
+            lock_release(t_cons_lock, 1)
+            aie.next_bd(block[1])
 
         with block[2]:
             s1 = aie.dma_start(channel_dir = aie.DMAChannelDir.S2MM, channel_index = 1, dest=block[3], chain=block[5])
@@ -377,6 +436,8 @@ def attn_memtile1(tile: tile_with_location, mctx: mlir_context):
     q_prod_lock = aie.lock(mt, lock_id = 0, init = 2)
     q_cons_lock_0 = aie.lock(mt, lock_id = 1, init = 0)
     q_cons_lock_1 = aie.lock(mt, lock_id = 2, init = 0)
+    q_mid_lock_0 = aie.lock(mt, lock_id = 3, init = 0)
+    q_mid_lock_1 = aie.lock(mt, lock_id = 4, init = 0)
     in_prod_lock = aie.lock(mt, lock_id = 5, init = 4)
     in_cons_lock_0 = aie.lock(mt, lock_id = 6, init = 0)
     in_cons_lock_1 = aie.lock(mt, lock_id = 8, init = 0)
@@ -392,28 +453,41 @@ def attn_memtile1(tile: tile_with_location, mctx: mlir_context):
         
         with block[1]:
             lock_acquire(q_prod_lock, 1)
-            aie.dma_bd(q_buffer_0, offset = 0, len = lq * d * 4)
+            aie.dma_bd(q_buffer_0, offset = 0, len = lq * d * 5)
             lock_release(q_cons_lock_0, 1)
             aie.next_bd(block[2])
         
         with block[2]:
             lock_acquire(q_prod_lock, 1)
-            aie.dma_bd(q_buffer_1, offset = 0, len = lq * d * 4)
+            aie.dma_bd(q_buffer_1, offset = 0, len = lq * d * 5)
             lock_release(q_cons_lock_0, 1)
             aie.next_bd(block[1])
         
         with block[3]:
             s1 = aie.dma_start(channel_dir = aie.DMAChannelDir.MM2S, channel_index = 0, dest=block[4], chain=block[6])
         
+        # each q BD is followed by the rope table (the 5th lq*d chunk of the buffer, contiguous)
         with block[4]:
             lock_acquire(q_cons_lock_0, 1)
             aie.dma_bd(q_buffer_0, offset = 0, len = 2 * lq * d, dimensions = [(d * 2 // 8, 8), (lq, d * 4), (8, 1)])
+            lock_release(q_mid_lock_0, 1)
+            aie.next_bd(block[40])
+
+        with block[40]:
+            lock_acquire(q_mid_lock_0, 1)
+            aie.dma_bd(q_buffer_0, offset = 4 * lq * d, len = lq * d)
             lock_release(q_cons_lock_1, 1)
             aie.next_bd(block[5])
-            
+
         with block[5]:
             lock_acquire(q_cons_lock_0, 1)
             aie.dma_bd(q_buffer_1, offset = 0, len = 2 * lq * d, dimensions = [(d * 2 // 8, 8), (lq, d * 4), (8, 1)])
+            lock_release(q_mid_lock_0, 1)
+            aie.next_bd(block[50])
+
+        with block[50]:
+            lock_acquire(q_mid_lock_0, 1)
+            aie.dma_bd(q_buffer_1, offset = 4 * lq * d, len = lq * d)
             lock_release(q_cons_lock_1, 1)
             aie.next_bd(block[4])
 
@@ -424,12 +498,24 @@ def attn_memtile1(tile: tile_with_location, mctx: mlir_context):
         with block[7]:
             lock_acquire(q_cons_lock_1, 1)
             aie.dma_bd(q_buffer_0, offset = 2 * d, len = 2 * lq * d, dimensions = [(d * 2 // 8, 8), (lq, d * 4), (8, 1)])
+            lock_release(q_mid_lock_1, 1)
+            aie.next_bd(block[70])
+
+        with block[70]:
+            lock_acquire(q_mid_lock_1, 1)
+            aie.dma_bd(q_buffer_0, offset = 4 * lq * d, len = lq * d)
             lock_release(q_prod_lock, 1)
             aie.next_bd(block[8])
-            
+
         with block[8]:
             lock_acquire(q_cons_lock_1, 1)
             aie.dma_bd(q_buffer_1, offset = 2 * d, len = 2 * lq * d, dimensions = [(d * 2 // 8, 8), (lq, d * 4), (8, 1)])
+            lock_release(q_mid_lock_1, 1)
+            aie.next_bd(block[80])
+
+        with block[80]:
+            lock_acquire(q_mid_lock_1, 1)
+            aie.dma_bd(q_buffer_1, offset = 4 * lq * d, len = lq * d)
             lock_release(q_prod_lock, 1)
             aie.next_bd(block[7])
 

@@ -52,11 +52,11 @@ def flow_arch():
             mctx = mlir_context()
             in_ty = mctx.data_ty('in_ty', (lk, d), k_dtype) 
             q_ty_0 = mctx.data_ty('q_ty_0', (lq, d), q_dtype)
-            q_mem_ty_0 = mctx.data_ty('q_mem_ty_0', (lq, d * 3), q_dtype)
+            q_mem_ty_0 = mctx.data_ty('q_mem_ty_0', (lq, d * 4), q_dtype)
             in_mem_ty_0 = mctx.data_ty('in_mem_ty_0', (2 * lk, d), k_dtype)
 
             q_ty_1 = mctx.data_ty('q_ty_1', (lq, d * 2), q_dtype)
-            q_mem_ty_1 = mctx.data_ty('q_mem_ty_1', (lq, d * 4), q_dtype)
+            q_mem_ty_1 = mctx.data_ty('q_mem_ty_1', (lq, d * 5), q_dtype)
             in_mem_ty_1 = mctx.data_ty('in_mem_ty_1', (4 * lk, d), k_dtype)
 
             o_ty = mctx.data_ty('o_ty', (64, ), o_dtype)
@@ -68,12 +68,14 @@ def flow_arch():
 
             x_ty = mctx.data_ty('x_ty', (m_slice, k_slice), x_dtype)
             x_mem_ty = mctx.data_ty('x_mem_ty', (m, k), x_dtype)
-            w_ty = mctx.data_ty('w_ty', (n_slice, k_slice), w_dtype) 
-            w_mem_ty = mctx.data_ty('w_mem_ty', (n, k), w_dtype)
+            w_ty = mctx.data_ty('w_ty', ((n_slice // 16) * (k_slice // 8) * 144,), np.dtype[np.uint8])
+            w_mem_ty = mctx.data_ty('w_mem_ty', ((n // 16) * (k // 8) * 144,), np.dtype[np.uint8])
+            xc_ty = mctx.data_ty('xc_ty', ((k_slice // 8) * 2 * 72,), np.dtype[np.uint8])
             mm_y_ty = mctx.data_ty('mm_y_ty', (y_slice,), y_dtype)
             y_acc_ty = mctx.data_ty('y_acc_ty', (m * n, ), y_acc_dtype)
             y_mem_ty = mctx.data_ty('y_mem_ty', (m, n * 4), y_dtype)
             K_div_k_ty = mctx.data_ty('K_div_k_ty', (16, ), np.dtype[np.int32])
+            g_ty = mctx.data_ty('g_ty', (m * n, ), y_dtype)
 
 
             mctx.parameter('lq', lq)
@@ -87,7 +89,7 @@ def flow_arch():
             mctx.parameter('n_slice', n_slice)
             mctx.func("attn0", [o_ty, o_ty, q_ty_0, in_ty, in_ty, s_ty, attn_y_ty, L_ty])
             mctx.func("attn1", [o_ty, o_ty, q_ty_1, in_ty, in_ty, s_ty, attn_y_ty, L_ty, T.i32()])
-            mctx.func("mm", [mctx.x_ty, mctx.x_ty, mctx.w_ty, mctx.w_ty, mctx.mm_y_ty, mctx.mm_y_ty, mctx.y_acc_ty, mctx.K_div_k_ty])
+            mctx.func("mm", [mctx.x_ty, mctx.x_ty, mctx.w_ty, mctx.w_ty, mctx.mm_y_ty, mctx.mm_y_ty, mctx.y_acc_ty, mctx.xc_ty, mctx.g_ty, mctx.K_div_k_ty])
 
             attn_core_0 = [CT[i][6] for i in range(3)]
             attn_core_1 = [[CT[i][0], CT[i][1], CT[i][7]] for i in range(total_rows)]

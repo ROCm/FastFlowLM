@@ -80,6 +80,22 @@ class Assemble(unittest.TestCase):
         self.assertEqual(da.pick(self.art / "devkit-xclbins-shard-1/xclbins-Dec_C", "layer.xclbin"),
                          (None, "no .xclbin"))
 
+    def test_switches_slot(self):
+        # d3's packed switches: a .switches slot takes the artifact's .switches file, never its base .xclbin
+        self.put("devkit-xclbins-shard-1/xclbins-Sw/d3_switches_base.xclbin", "base")
+        self.put("devkit-xclbins-shard-1/xclbins-Sw/d3.switches", "SW")
+        assignment = {"models": {"d:e": {"folder": "D-E", "kernels": {"d3.switches": "xclbins-Sw"}}}}
+        out = self.root / "out"
+        with contextlib.redirect_stdout(io.StringIO()):
+            r = da.assemble(assignment, da.find_artifacts(self.art), out)
+        self.assertEqual(r["complete"], ["d:e"])
+        self.assertEqual((out / "D-E/d3.switches").read_text(), "SW")
+        self.assertEqual(sorted(p.name for p in (out / "D-E").iterdir()), ["d3.switches"])
+        self.assertEqual(da.pick(self.art / "devkit-xclbins-shard-1/xclbins-Dec_C", "d3.switches"),
+                         (None, "no .switches"))
+        self.assertTrue(da.safe_slot("d3.switches"))
+        self.assertFalse(da.safe_slot("d3.bin"))
+
     def test_duplicate_artifact_is_an_error(self):
         self.put("devkit-xclbins-shard-1/xclbins-Dequant/dequant.xclbin", "D2")
         with self.assertRaises(ValueError):

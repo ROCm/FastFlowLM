@@ -655,6 +655,12 @@
         "xclbins-SMOLVLA_expert_attn"
       ]
     },
+    "SMOLVLA/expert_bf16": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-SMOLVLA_expert_bf16"
+      ]
+    },
     "SMOLVLA/expert_mm": {
       "model_types": [],
       "artifacts": [
@@ -695,6 +701,24 @@
       "model_types": [],
       "artifacts": [
         "xclbins-SMOLVLA_vision_attn"
+      ]
+    },
+    "SMOLVLA/vision_attn32": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-SMOLVLA_vision_attn32"
+      ]
+    },
+    "SMOLVLA/vision_mm8": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-SMOLVLA_vision_mm8"
+      ]
+    },
+    "SMOLVLA/vision_switches": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-SMOLVLA_vision_switches"
       ]
     },
     "SMOLVLA/vision_mm_884": {
@@ -831,6 +855,12 @@
       "model_types": [],
       "artifacts": [
         "xclbins-dequant_mm_bfp16_rtm2_glu_512x512x512"
+      ]
+    },
+    "d3_switches": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-d3_switches"
       ]
     },
     "generic_decoding_layer": {

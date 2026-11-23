@@ -340,6 +340,28 @@ class Report(unittest.TestCase):
         self.assertEqual(out.read_text(encoding="utf-8"), "hard-gate=fail\n")
         self.assertEqual(report.hard_gate_failures(report.load_results(self.root)), ["lin-hrx qwen3:0.6b gsm8k"])
 
+    def test_no_predictions_fail_the_hard_gate(self):
+        # flm serve did not start (or recorded nothing): run_acc.py writes an
+        # unusable summary.json, so the hard gate fails instead of seeing no
+        # accuracy result at all and passing.
+        import run_acc
+        d = write_result(self.root, "lin-xrt", "qwen3:0.6b", status="no CSV")
+        (d / "gsm8k").mkdir()
+        run_acc.write_unusable(d / "gsm8k", "gsm8k", "qwen3:0.6b", 50, "flm serve did not start")
+        results = report.load_results(self.root)
+        acc = results[0]["acc"]["gsm8k"]
+        self.assertEqual((acc["score"], acc["usable"]), (0.0, False))
+        self.assertEqual(report.hard_gate_failures(results), ["lin-xrt qwen3:0.6b gsm8k"])
+        out = self.root / "out.txt"
+        args = ["--results", str(self.root), "--mode", "pr", "--head-sha", SHA_A,
+                "--summary", str(self.root / "s" / "summary.md"), "--outputs", str(out)]
+        self.assertEqual(quiet(report.main, args), 0)
+        self.assertEqual(out.read_text(encoding="utf-8"), "hard-gate=fail\n")
+
+    def test_run_acc_score_keys_match_compare(self):
+        import run_acc
+        self.assertEqual(run_acc.SCORE_KEYS, compare.ACC_KEYS)
+
     def test_cap(self):
         text = report.cap("line\n" * 30000, limit=1000)
         self.assertLessEqual(len(text.encode()), 1000)
