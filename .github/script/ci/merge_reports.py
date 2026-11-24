@@ -6,6 +6,10 @@
 Each package's job already puts its own report on its job page; this puts
 them side by side on the run page, so one look shows which packages and
 runners failed which suites.
+
+Build and Test's summary job runs it on every run (its Summarize step, before
+Verdict): test_merge_reports.py tests it, on reports the npu_test harness
+writes, so a change to it alone runs no NPU test (changes.py).
 """
 
 from __future__ import annotations
@@ -16,11 +20,11 @@ import sys
 from pathlib import Path
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("reports", type=Path)
     parser.add_argument("--output", type=Path)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     reports = []
     for path in sorted(args.reports.glob("**/results.json")):

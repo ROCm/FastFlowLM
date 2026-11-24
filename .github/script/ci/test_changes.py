@@ -133,6 +133,7 @@ class Cli(unittest.TestCase):
                   ".github/dependabot.yml", ".github/actionlint.yaml", ".github/scan_tools_configs/trivy.yml",
                   ".github/script/ci/test_changes.py", ".github/script/ci/test_devkit_check.py",
                   ".github/script/ci/check_internal_refs.py", ".github/script/ci/oga_hipep_tests.ps1",
+                  ".github/script/ci/merge_reports.py",
                   ".github/script/npu_test/tools/make_vision_assets.py",
                   ".github/script/npu_test/tools/build_asr_eval.py",
                   ".github/script/npu_test/assets/test_image2.jpg", ".github/script/assets/d3_goldens_flash.jsonl",
@@ -154,6 +155,9 @@ class Cli(unittest.TestCase):
         out = cli("--files", ".github/workflows/devkit-bench.yml", ".github/workflows/cpu-tests.yml")
         self.assertEqual(out["run_tests"], "false")
         self.assertIn("bench CI and files Build and Test does not use", out["summary"])
+        # merge_reports.py's other side, the harness that writes the reports, runs every suite.
+        self.assertEqual(cli("--files", ".github/script/ci/merge_reports.py",
+                             ".github/script/npu_test/harness.py")["suites"], "all")
         # Beside product code, the product code decides.
         out = cli("--files", ".github/workflows/cpu-tests.yml", "src/lib/xrt/libqwen3_npu.so")
         self.assertEqual((out["run_tests"], out["suites"]), ("true", "chat,prefix_cache"))

@@ -314,7 +314,11 @@ BENCH_CI = re.compile(
 
 # Files no job of a pull request's Build and Test run builds, packages or
 # reads, beyond the changes job's own checks (the CI unit tests,
-# check_internal_refs.py), which run on every event: a change made only of
+# check_internal_refs.py), which run on every event, and the summary job's
+# merge_reports.py, which runs on every run whatever changed (an NPU suite
+# only feeds it reports; test_merge_reports.py tests it on reports the
+# npu_test harness writes, so a harness change, which runs every suite,
+# checks the contract both ways): a change made only of
 # these (and documentation) builds and tests nothing, and they select no
 # dev-kit area. Other workflows test them on the same pull request where
 # they can: cpu-tests.yml builds and runs the src/test and src/tests
@@ -337,7 +341,7 @@ OUTSIDE_BUILD_AND_TEST = re.compile(
     r"|\.github/scan_tools_configs/"
     r"|\.github/workflows/(smolvla-package|cpu-tests|pr-security-scan|weekly-security-scan"
     r"|build-container|release)\.yml$"
-    r"|\.github/script/ci/(test_[^/]*\.py|check_internal_refs\.py|oga_hipep_tests\.ps1)$"
+    r"|\.github/script/ci/(test_[^/]*\.py|check_internal_refs\.py|merge_reports\.py|oga_hipep_tests\.ps1)$"
     r"|\.github/script/npu_test/tools/(build_asr_eval|make_vision_assets)\.py$"
     r"|\.github/script/npu_test/assets/(test_audio\.mp3|test_image2\.jpg)$"
     r"|\.github/script/assets/d3_goldens_flash\.jsonl$"
