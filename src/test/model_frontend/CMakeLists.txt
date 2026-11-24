@@ -101,6 +101,7 @@ file(GENERATE
 add_executable(test_model_frontend
     test_model_frontend.cpp
     test_embedding_handler.cpp
+    test_embedding_task.cpp
     test_gemma_embedding_request.cpp
     "${FLM_SOURCE_DIR}/common/AutoEmbeddingModel/modeling_gemma_embedding.cpp"
     "${FLM_SOURCE_DIR}/server/embedding_handler.cpp"

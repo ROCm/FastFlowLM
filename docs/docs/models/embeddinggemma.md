@@ -58,6 +58,22 @@ per string. Each vector has 768 dimensions; omit `dimensions` or set it to `768`
 | `sentence_similarity` | <code>task: sentence similarity &#124; query: </code> |
 | `summarization` | <code>task: summarization &#124; query: </code> |
 
+`prompt_name` selects the same task, with `task_type` accepted as an alias:
+`search_query` for `query`, `search_document` for `document`, `STS` for
+`sentence_similarity`, and `Retrieval-query` / `Retrieval-document` /
+`Clustering` / `Classification` / `Summarization` for their lowercase tasks.
+One resolved task applies to every element of an `input` array. An unknown or
+non-string value, or `prompt_name` and `task_type` naming different tasks, is
+refused with HTTP 400 instead of silently embedding as a query, and a `task`
+naming a different task than `prompt_name` / `task_type` is refused the same
+way. The same applies to `POST /api/embeddings`.
+
+This validation applies only to the built-in model: an extension/provider
+model never reads `prompt_name` / `task_type`, so those fields are ignored
+for it -- an unknown value is answered with a 200 exactly as before, and a
+provider's own `prompt_name` vocabulary is untouched. A provider's own task
+vocabulary stays reachable through the raw `task` field.
+
 The optional `title` string is available with `task: "document"`:
 
 ```json

@@ -94,6 +94,33 @@ void test_embedding_handler() {
     TEST_REQUIRE(request("first", "hello", {{"task", "provider-task"}}).at("data").at(0).at("embedding").at(1) == 4);
     TEST_REQUIRE(request("first", "hello", {{"task", "unknown"}}).at("error").at("code") == 400);
     TEST_REQUIRE(request("first", "hello", {{"task", 42}}).at("error").at("code") == 400);
+    // "first" is a provider (extension) model, so prompt_name / task_type are
+    // left untouched: no built-in task is resolved and nothing is refused.
+    // The provider never reads those fields and may have its own prompt_name
+    // vocabulary, so an unknown prompt_name is answered with a 200 exactly as
+    // before this change, and a known one is ignored rather than resolved.
+    // The raw `task` field is what reaches the provider.
+    for (const auto& options : {json{{"prompt_name", "document"}},
+                                json{{"prompt_name", "search_document"}},
+                                json{{"prompt_name", "search_query"}},
+                                json{{"task_type", "document"}},
+                                json{{"prompt_name", "document"}, {"task_type", "search_document"}},
+                                json{{"prompt_name", "not_a_task"}},
+                                json{{"prompt_name", 7}},
+                                json{{"task_type", "nope"}},
+                                json{{"prompt_name", "query"}, {"task_type", "document"}}}) {
+        const auto response = request("first", "hello", options);
+        TEST_REQUIRE(response.at("data").at(0).at("embedding").at(1) == 3);
+    }
+    TEST_REQUIRE(request("first", "hello", {{"prompt_name", "document"}, {"task", "document"}}).at("data").at(0).at("embedding").at(1) == 2);
+    TEST_REQUIRE(request("first", "hello", {{"prompt_name", "document"}, {"task", "query"}}).at("data").at(0).at("embedding").at(1) == 1);
+    // A non-string raw `task` is still refused -- by the provider, not by the
+    // prompt_name check that no longer runs for this model.
+    TEST_REQUIRE(request("first", "hello", {{"prompt_name", "document"}, {"task", 42}}).at("error").at("code") == 400);
+    const auto task_batch = request("first", json::array({"hi", "hello"}), {{"prompt_name", "document"}});
+    TEST_REQUIRE(task_batch.at("data").size() == 2);
+    TEST_REQUIRE(task_batch.at("data").at(0).at("embedding").at(1) == 3);
+    TEST_REQUIRE(task_batch.at("data").at(1).at("embedding").at(1) == 3);
     check("first", 0.5f);
     check("Ollama/first", 0.5f);
     for (const char* tag : {"missing:1", "incompatible:1", "absent:1", "Ollama/absent", "generation:1"}) {
