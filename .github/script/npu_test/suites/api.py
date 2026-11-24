@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -138,6 +139,13 @@ def run_script(ctx, script: Path, args: list[str], model: str, timeout: float,
     out = ScriptOutput(script, ctx.out_dir / f"api-{script.stem}-{safe}.log")
     env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8",
                PYTHONDONTWRITEBYTECODE="1")
+    # The catalog the package under test ships (beside flm in the Linux portable tarball
+    # and the Windows zip): the test jobs check out only src/test, not src/model_list.json.
+    # Absolute: the script runs in its own directory.
+    flm = shutil.which(ctx.flm_bin) or ctx.flm_bin
+    catalog = Path(flm).absolute().parent / "model_list.json"
+    if catalog.is_file():
+        env.setdefault("FLM_MODEL_LIST", str(catalog))
     cmd = [sys.executable, "-u", str(script)] + args
     print(f"  [{NAME}] {model}: {script.name} (log: {out.log.name})", flush=True)
     started = time.monotonic()

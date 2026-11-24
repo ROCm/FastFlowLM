@@ -16,7 +16,9 @@ The listing cases need no model and also run on the HTTP harness. The last two c
 request to the model named on the command line and need the engine: set
 ``FLM_TEST_NO_ENGINE=1`` to skip them on the harness. ``FLM_TEST_CTX_LEN=<n>`` declares the
 `--ctx-len` the server was started with, so a server that ignores it fails instead of the case
-being skipped.
+being skipped. ``FLM_MODEL_LIST=<path>`` names the catalog the server ships (the npu_test
+harness sets it to the package's model_list.json); otherwise src/model_list.json beside this
+suite.
 
 Usage::
 
@@ -25,6 +27,7 @@ Usage::
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import urllib.request
@@ -37,22 +40,31 @@ from flm_api import Api, Skip, case, expect
 
 
 
+def catalog_path() -> Path:
+    """The catalog the server under test ships: $FLM_MODEL_LIST (the npu_test harness points
+    it at the package's model_list.json, as its test jobs check out only src/test), else
+    src/model_list.json beside this suite."""
+    env = os.environ.get("FLM_MODEL_LIST")
+    return Path(env) if env else Path(__file__).resolve().parents[2] / "model_list.json"
+
+
+@functools.cache
 def single_turn_models() -> dict[str, int]:
     """The single-turn models of the shipped catalog and the context each is fixed at.
 
     The loader keeps a model labelled ``single-turn`` at its own ``default_context_length``
-    whatever `--ctx-len` says. Read from the catalog next to this suite, so that a label that
-    moves is followed here.
+    whatever `--ctx-len` says. Read from the catalog (catalog_path), so that a label that
+    moves is followed here; read when a case needs it, so a missing catalog fails that case,
+    not the import of every suite run_all.py loads.
     """
-    catalog = json.loads((Path(__file__).resolve().parents[2] / "model_list.json")
-                         .read_text(encoding="utf-8"))
+    path = catalog_path()
+    expect(path.is_file(), f"no model catalog at {path}: set FLM_MODEL_LIST to the server's "
+                           "model_list.json")
+    catalog = json.loads(path.read_text(encoding="utf-8"))
     return {f"{family}:{size}": entry["default_context_length"]
             for family, sizes in catalog["models"].items()
             for size, entry in sizes.items()
             if "single-turn" in entry.get("label", [])}
-
-
-SINGLE_TURN = single_turn_models()
 WORDS = {"completion", "tools", "vision", "audio", "thinking", "embedding"}
 PARAMETERS = {"tools", "tool_choice", "reasoning"}
 # a 1x1 PNG
@@ -155,10 +167,11 @@ def context_length_follows_ctx_len(api: Api) -> None:
     for entry in listing(api):
         if "completion" not in entry.get("capabilities", ["completion"]):
             continue
-        if entry["id"] in SINGLE_TURN:   # the loader keeps these at their own context
-            expect(entry.get("context_length") == SINGLE_TURN[entry["id"]],
+        single_turn = single_turn_models()
+        if entry["id"] in single_turn:   # the loader keeps these at their own context
+            expect(entry.get("context_length") == single_turn[entry["id"]],
                    f"{entry['id']}: context_length {entry.get('context_length')}, "
-                   f"a single-turn model keeps {SINGLE_TURN[entry['id']]}")
+                   f"a single-turn model keeps {single_turn[entry['id']]}")
             continue
         followed += 1
         expect(entry.get("context_length") == int(declared),
