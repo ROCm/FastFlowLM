@@ -139,6 +139,8 @@ docs_nav:
         url: "/docs/models/smolvla/"
       - label: Hy-MT2
         url: "/docs/models/hy-mt2/"
+      - label: Hy-MT3
+        url: "/docs/models/hy-mt3/"
       - label: Hy-Memory
         url: "/docs/models/hy-memory/"
       - label: MiniCPM
@@ -187,6 +189,8 @@ docs_nav:
         url: "/docs/benchmarks/smolvla_results/"
       - label: Hy-MT2
         url: "/docs/benchmarks/hy-mt2_results/"
+      - label: Hy-MT3
+        url: "/docs/benchmarks/hy-mt3_results/"
       - label: Hy-Memory
         url: "/docs/benchmarks/hy-memory_results/"
       - label: MiniCPM-V 4.7

@@ -16,6 +16,7 @@ parent: Models
 | `nemotron3.5-bolt-dflash-flash:e4b` | Any-to-Text (image, audio), speculative decoding | [Nemotron Bolt E4B — DFlash Flash](https://fastflowlm.com/docs/models/nemotron3.5-bolt-dflash/#-model-card-nvidia-nemotron-35-bolt-e4b--dflash-flash) |
 | `qwen3vl-flash:4b` | Image-Text-to-Text | [Qwen3-VL-4B — Flash](https://fastflowlm.com/docs/models/qwen/#-model-card-qwen3-vl-4b-instruct--flash) |
 | `hy-mt2-flash:1.8b` | Text-to-Text (Translation) | [Hy-MT2](https://fastflowlm.com/docs/models/hy-mt2/) |
+| `hy-mt3-flash:1.8b` | Text-to-Text (Translation) | [Hy-MT3](https://fastflowlm.com/docs/models/hy-mt3/) |
 
 - 📊 [Flash benchmarks](https://fastflowlm.com/docs/benchmarks/flash_results/)
 - 🔌 [Flash models in server mode](https://fastflowlm.com/docs/instructions/server/openapi/#-example-flash-models-single-turn-pinned-system-prompt)
