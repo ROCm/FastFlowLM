@@ -223,3 +223,18 @@ The correction pass alone costs as much as all P.V math: `aie::mul` of two float
 emulated fp32 multiply on this core, 512 of them per 16-key chunk. Skipping it when c == 1 (the max did not move,
 nearly every chunk at long context) is what MiniCPM-OCR's decoding calls the rescale skip; it is not bit-identical
 there (the emulated multiply by 1.0 does not keep very small y exactly).
+
+### Correction skip when c == 1 (2026-11-23)
+
+The P.V core now leaves y as it is when both heads' correction c is exactly 1.0 (bits 0x3F800000: the running max
+did not move), instead of `y *= c`. Not the same bits: a one-core probe of that exact multiply (`aie::mul` of two
+float vectors, floor rounding) over ~1 M float bit patterns showed that multiplying by 1.0 changes ~0.23% of
+negative values in the normal range by +-1 ulp, with no cheap rule to tell which (only ~11% have a simple bit
+pattern), so a bit-identical guarded skip is not possible; the skip keeps y exact instead.
+
+gemma3:4b, Strix Halo, vs the kernel before: one global layer 1.641 -> 1.457 ms (L 4,160), 2.044 -> 1.661 ms
+(L 8,192); decode 51.58 -> 50.17 ms at 1K (+2.8%), 53.05 -> 50.87 ms at 4K (+4.3%). Same forced tokens: logits
+byte-identical for the first 221 (1K) / 109 (4K) of 257 steps, then cos >= 0.99965, top-1 the same at 99.6% /
+97.3% (reading the same keys in another order already gives median cos 0.99985, top-1 95-99%, engine README "Sliding
+ring read order"); free greedy replies identical for 232 / 115 tokens, then different, fluent wording. P.V core
+program 4,256 -> 4,368 B.

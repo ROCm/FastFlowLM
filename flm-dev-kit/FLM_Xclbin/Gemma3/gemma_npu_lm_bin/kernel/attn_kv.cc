@@ -101,6 +101,10 @@ void attn_fv_bfp16(bf16 *__restrict pS, const uint8_t *__restrict pV, y_acc_dtyp
     const v64bfp16ebs8 S1b = ::to_v64bfp16ebs8(ACC(aie::concat(S11, zeros_vec, zeros_vec, zeros_vec)));
     const aie::vector<y_acc_dtype, 16> zeros_float = aie::zeros<y_acc_dtype, 16>();
 #ifndef PROBE_NO_KV_CORR
+    // c == 1.0 for both heads (bits): the max did not move, y stays as it is. Not the same bits as multiplying by 1.0,
+    // which on this core (emulated fp32 multiply) moves ~0.23% of negative y by 1 ulp (README "Attention math").
+    const uint32_t *c_bits = reinterpret_cast<const uint32_t *>(c);
+    if (c_bits[0] != 0x3F800000u || c_bits[1] != 0x3F800000u)
     {
         aie::vector<y_acc_dtype, 16> CORRECT16 = aie::concat(
             aie::broadcast<float, 8>(c[0]), aie::broadcast<float, 8>(c[1]));
