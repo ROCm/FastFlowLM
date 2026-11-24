@@ -1,0 +1,683 @@
+# Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+# Portions of this file consist of AI-generated content.
+
+name: Dev-kit Bench
+
+# Perf (flm bench) and accuracy (GSM8K; DocVQA when enabled) benches of the
+# dev kit's engines (flm-dev-kit/FLM_DLL) and kernels (flm-dev-kit/FLM_Xclbin)
+# on the NPU runners (scripts in .github/script/devkit-bench, actions devkit-bench-perf and
+# devkit-bench-acc). Build and Test (build-and-test.yml, job devkit-bench; nightly, devkit-bench-nightly)
+# calls this after its builds, in the same run, so the run's concurrency
+# group covers the benches and a new push cancels them: on a pull request
+# whose dev-kit engine or kernel source changed (code or build inputs; not
+# docs, CI, the converter, pybind or launchlib; changes.py devkit_bench)
+# and whose run staged it into its product builds (mode pr), on its nightly
+# schedule, and on the dev-kit full refresh (a dispatch of Build and Test
+# with devkit-full-refresh; mode refresh: every benchable assigned model on
+# the four runtimes). Nothing is rebuilt here: the benches take that run's
+# artifacts. A pull request's and the full refresh's portable packages were
+# built with the dev-kit files staged in (Build and Test's devkit-stage), so
+# they are benched as they are, and the summary reports that run's numbers
+# only: no A/B against a base package and no nightly-baseline comparison (a
+# comparison is to be designed later). Nightly and a dispatch overlay the
+# dev-kit builds (devkit-libs-<os>-<runtime>, devkit-xclbins) on the
+# packages (devkit-overlay-package). Build and Test's npu-gate / npu-approve
+# gate the call; this workflow has its own only for a dispatch.
+#
+#   resolve   hosted: turns the caller's inputs (what was built and
+#             succeeded, the touched families, the models whose kernels
+#             were rebuilt) into the plan (resolve.py write-plan); picks the
+#             models (select_models.py: the touched engines' models and
+#             those whose kernels were rebuilt, at most 4 per runtime,
+#             smallest first; nightly, 16 of the assigned set in turns) and
+#             the runtimes (Linux XRT and HRX; nightly on Mondays also
+#             Windows XRT); finds the latest nightly baseline. Nightly
+#             benches only if engine or kernel source changed since the
+#             commit that baseline benched; otherwise the baseline stands.
+#             Runs the scripts of the pull request's base.
+#   docvqa    hosted, when enabled (repository variable FLM_BENCH_DOCVQA, or
+#             the dispatch input) and a vision model is benched: the DocVQA
+#             subset from a pinned revision of the public dataset, checked
+#             by SHA-256, handed on as an artifact. Off by default: TODO
+#             enable once DocVQA's terms (beyond its Hugging Face card's
+#             Apache-2.0) are cleared; nothing of it is committed here.
+#   bench     one NPU job per runtime and model, three at a time (four
+#             nightly), on the sweep runners: the package (overlaid nightly
+#             and on a dispatch), `flm pull` (verifies the model's files
+#             against the catalog's hashes), perf of that package alone,
+#             GSM8K (first 50 questions) and DocVQA for vision models.
+#             Results go to devkit-bench-result-<runtime>-<model>.
+#   report    hosted: bench-summary (summary.md, at most 60 KB, numbers and
+#             fixed wording only) and the job summary; nightly the next
+#             devkit-bench-baseline artifact (90 days), an upsert of the
+#             previous one. devkit-bench-comment.yml posts the summary on
+#             the pull request once Build and Test completes; this workflow
+#             writes nothing.
+#
+# Gates: the hard gate is acc_common's (no predictions, or more than 5 of
+# the questions unanswered). report passes it on as this workflow's
+# hard-gate output (fail or pass), and Build and Test's summary (Dev-kit
+# checks) fails a pull request on hard-gate=fail only. Any other failure (perf
+# giving no result, `flm pull`, a timeout, a lost runner, the GitHub API in
+# resolve, report itself) fails its job here and Build and Test's
+# devkit-bench job, which summary only warns about. Soft gates (warnings in
+# the summary only), where a comparison is made (a dispatch): accuracy more
+# than 10 points below the nightly baseline; perf against the nightly
+# baseline is informational and compared only on the same machine kind
+# (machine.py), as the runners are not pinned. A pull request's and the
+# full refresh's summaries compare nothing.
+#
+# Baselines are artifacts until the GitHub App for ci-baselines lands: the
+# newest devkit-bench-baseline uploaded by a scheduled Build and Test run on
+# this repository's main.
+#
+# Trust: the bench scripts run from the pull request's base commit, so its
+# edits to them do not judge it, under clean_run.py (no token reaches flm),
+# with results and summary built only from files the bench writes. Model
+# weights live in the runner's shared cache (/scratch; %USERPROFILE%\.flm on
+# Windows), which any job on the runner can write: every bench pulls first,
+# which hashes each file against src/model_info.json's pins. A per-job
+# read-only model cache needs the NPU runner group administration (design
+# decision 4).
+#
+# Dispatch (re-benches an earlier Build and Test run, or exercises a change
+# to the bench CI itself, for which Build and Test calls nothing): build-run
+# names the Build and Test run to bench (default the newest for this
+# commit; on main, which moves on while a run builds, also a push run on main
+# of an earlier commit, whose commit is then the one benched and reported, and
+# whose catalog and dev-kit maps select the models and the engines overlaid),
+# whose artifacts are looked up and checked across runs, with the
+# rules the call uses (a runtime whose dev-kit engines failed or whose
+# libraries are gone is left out; a run that built no dev-kit engines or
+# kernels benches nothing); models replaces the selection, which otherwise is
+# the nightly's (16 of the assigned set in turns: which families or kernels
+# that run's change touched is not known here, so name the models when
+# re-benching a pull request); runtimes (e.g. lin-xrt,lin-hrx,win-xrt);
+# force (default on) benches even when no engine or kernel source changed
+# since the nightly baseline, and untick it, with no models, to follow the
+# nightly's rule; docvqa enables DocVQA for the run. Gated by this
+# workflow's own npu-gate / npu-approve.
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: pr, nightly or refresh (the dev-kit full refresh).
+        type: string
+        required: true
+      head-sha:
+        description: The commit benched (the pull request's head; github.sha nightly).
+        type: string
+        required: true
+      builds:
+        description: >
+          The portable package builds' results, key=result comma-separated
+          (lin-xrt, lin-hrx, win-xrt, win-hrx).
+        type: string
+        required: true
+      engines:
+        description: devkit-engines' result (success, failure, cancelled or skipped).
+        type: string
+        default: skipped
+      families:
+        description: Comma-separated families the change touches (changes devkit-families); empty nightly.
+        type: string
+        default: ''
+      xclbin-models:
+        description: JSON list of the models that got a rebuilt kernel (devkit-xclbins touched-models).
+        type: string
+        default: '[]'
+      bench-models:
+        description: JSON list of the rebuilt-kernel models worth benching (devkit-xclbins bench-models); empty nightly.
+        type: string
+        default: ''
+      xclbins:
+        description: The dev-kit kernels artifact (devkit-xclbins) when kernels were rebuilt; else empty.
+        type: string
+        default: ''
+    outputs:
+      hard-gate:
+        description: >
+          fail when some model's accuracy run failed acc_common's hard gate,
+          pass when none did, empty when report did not run (nothing benched,
+          or it failed).
+        value: ${{ jobs.report.outputs.hard-gate }}
+  workflow_dispatch:
+    inputs:
+      build-run:
+        description: Build and Test run id whose artifacts to bench (default the newest for this commit; on main, also a push run on main of an earlier commit)
+        type: string
+        default: ''
+      models:
+        description: Comma-separated model ids to bench (default the nightly's rotation of the assigned set; name them to re-bench a pull request's)
+        type: string
+        default: ''
+      runtimes:
+        description: Comma-separated runtimes (lin-xrt, lin-hrx, win-xrt, win-hrx)
+        type: string
+        default: lin-xrt,lin-hrx
+      force:
+        description: Bench even if no engine or kernel source changed since the nightly baseline (off, with no models, follows the nightly's rule)
+        type: boolean
+        default: true
+      docvqa:
+        description: Run DocVQA for vision models
+        type: boolean
+        default: false
+
+# Read-only: the nightly baseline (and, on a dispatch, the Build and Test
+# run's artifacts) belong to other runs and need actions: read; Build and
+# Test's caller job grants it. Nothing here pushes, comments or uses a
+# secret.
+permissions:
+  contents: read
+  actions: read
+
+# No concurrency group: called, Build and Test's covers this; dispatches
+# never cancel or queue behind each other.
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    outputs:
+      bench: ${{ steps.plan.outputs.bench || 'false' }}
+      matrix: ${{ steps.plan.outputs.matrix || '[]' }}
+      docvqa: ${{ steps.plan.outputs.docvqa || 'false' }}
+      head-sha: ${{ steps.plan.outputs.head-sha }}
+      build-run-id: ${{ steps.build.outputs.run-id }}
+      baseline-run-id: ${{ steps.baseline.outputs.baseline-run-id }}
+      mode: ${{ steps.mode.outputs.mode }}
+    steps:
+      # Called: pr, nightly or refresh; dispatched: no mode input.
+      - name: Mode
+        id: mode
+        env:
+          MODE: ${{ inputs.mode }}
+        run: |
+          case "${MODE}" in
+            pr|nightly|refresh) echo "mode=${MODE}" >> "$GITHUB_OUTPUT" ;;
+            '') echo "mode=dispatch" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::unknown mode"; exit 1 ;;
+          esac
+
+      # The pull request's base: its scripts, catalog and dev-kit maps.
+      # Full history for the nightly's changes.py diff and a dispatch's
+      # ancestor check (find-build --ref on main).
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Check the bench scripts
+        id: ready
+        run: |
+          # write-plan: the scripts of a base from before Build and Test
+          # called this cannot plan its call.
+          if grep -q 'write-plan' .github/script/devkit-bench/resolve.py 2>/dev/null; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "### Dev-kit bench: not run (the base commit's bench scripts predate this workflow)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # Called: this run's builds, as Build and Test passed them.
+      - name: Write the plan
+        id: write-plan
+        if: steps.ready.outputs.ready == 'true' && steps.mode.outputs.mode != 'dispatch'
+        env:
+          HEAD_SHA: ${{ inputs.head-sha }}
+          BUILDS: ${{ inputs.builds }}
+          ENGINES: ${{ inputs.engines }}
+          FAMILIES: ${{ inputs.families }}
+          XCLBIN_MODELS: ${{ inputs.xclbin-models }}
+          BENCH_MODELS: ${{ inputs.bench-models }}
+          XCLBINS: ${{ inputs.xclbins }}
+        run: |
+          python3 .github/script/devkit-bench/resolve.py write-plan --out "${RUNNER_TEMP}/plan.json" \
+            --head-sha "${HEAD_SHA}" --package-sha "${GITHUB_SHA}" --builds "${BUILDS}" --engines "${ENGINES}" \
+            --families "${FAMILIES}" --xclbin-models "${XCLBIN_MODELS}" --bench-models "${BENCH_MODELS}" \
+            --xclbins "${XCLBINS}"
+
+      # Dispatch: an earlier Build and Test run, checked (this repository,
+      # this commit, completed) and its artifacts listed; waits for it. On
+      # main, build-run may also be a push run on main of an ancestor of
+      # this commit (checked with git in the checkout above: fetch-depth 0);
+      # the plan then benches and names that run's commit.
+      - name: Find Build and Test's run
+        id: build
+        if: steps.ready.outputs.ready == 'true' && steps.mode.outputs.mode == 'dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.build-run }}
+        run: |
+          python3 .github/script/devkit-bench/resolve.py find-build --repo "${GITHUB_REPOSITORY}" \
+            --head-sha "${GITHUB_SHA}" --ref "${GITHUB_REF}" --run-id "${RUN_ID}" --wait-minutes 200 \
+            --plan-out "${RUNNER_TEMP}/plan.json" --artifacts-out "${RUNNER_TEMP}/artifacts.json"
+
+      - name: Note why nothing is benched
+        if: steps.mode.outputs.mode == 'dispatch' && steps.ready.outputs.ready == 'true' && steps.build.outputs.ok != 'true'
+        env:
+          REASON: ${{ steps.build.outputs.reason }}
+        run: |
+          echo "### Dev-kit bench: not run (${REASON})" >> "$GITHUB_STEP_SUMMARY"
+
+      # Not for a pull request or the full refresh, which compare nothing
+      # for now (a comparison is to be designed later).
+      - name: Find the nightly baseline
+        id: baseline
+        if: >-
+          (steps.write-plan.outcome == 'success' || steps.build.outputs.ok == 'true')
+          && steps.mode.outputs.mode != 'refresh' && steps.mode.outputs.mode != 'pr'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/script/devkit-bench/resolve.py find-baseline --repo "${GITHUB_REPOSITORY}"
+
+      # Whether the source changed since its commit: nightly, and a
+      # dispatch with force off and no models.
+      - name: Download the nightly baseline
+        if: >-
+          steps.baseline.outputs.baseline-run-id != ''
+          && (steps.mode.outputs.mode == 'nightly'
+              || (steps.mode.outputs.mode == 'dispatch' && !inputs.force && inputs.models == ''))
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: devkit-bench-baseline
+          path: ${{ runner.temp }}/baseline
+          run-id: ${{ steps.baseline.outputs.baseline-run-id }}
+          github-token: ${{ github.token }}
+
+      - name: Plan
+        id: plan
+        if: steps.write-plan.outcome == 'success' || steps.build.outputs.ok == 'true'
+        env:
+          MODE: ${{ steps.mode.outputs.mode }}
+          MODELS: ${{ inputs.models }}
+          RUNTIMES: ${{ inputs.runtimes }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          runtimes="${RUNTIMES:-lin-xrt,lin-hrx}"
+          # The full refresh benches what it swaps: all four runtimes.
+          if [ "${MODE}" = refresh ]; then runtimes=lin-xrt,lin-hrx,win-xrt,win-hrx; fi
+          # Windows XRT weekly, on Monday's nightly.
+          if [ "${MODE}" = nightly ] && [ "$(date -u +%u)" = 1 ]; then runtimes="${runtimes},win-xrt"; fi
+          args=(plan --plan "${RUNNER_TEMP}/plan.json" --mode "${MODE}" --runtimes "${runtimes}"
+                --models "${MODELS}" --baseline "${RUNNER_TEMP}/baseline/baseline.json")
+          # Another run's artifacts may have expired; this run's were just uploaded.
+          [ "${MODE}" = dispatch ] && args+=(--artifacts "${RUNNER_TEMP}/artifacts.json")
+          # A dispatch benches unless force is off and no models are named.
+          if [ "${MODE}" = dispatch ] && [ "${FORCE}" != true ]; then args+=(--no-force); fi
+          # A pull request selects from its own catalog and dev-kit maps (data,
+          # read with git show) so a model it adds is benched; the scripts stay
+          # the base's. A base from before that option selects from its own.
+          if [ "${MODE}" = pr ] && grep -q -- '--data-from-head' .github/script/devkit-bench/resolve.py; then
+            args+=(--data-from-head)
+          fi
+          python3 .github/script/devkit-bench/resolve.py "${args[@]}"
+
+      # A dispatch may bench an earlier run of main: the engines its overlay
+      # replaces are those that run's commit's engines.json names (the
+      # libraries were built from it), not the dispatched commit's. Read it
+      # here, as data, from this full-history checkout and hand it to the
+      # bench jobs as an artifact, so no bench job checks out a computed
+      # commit.
+      - name: Engine map of the benched commit
+        id: engines
+        if: ${{ !inputs.mode && steps.plan.outputs.bench == 'true' }}
+        env:
+          HEAD_SHA: ${{ steps.plan.outputs.head-sha }}
+        run: |
+          [[ "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::head-sha is not a commit sha"; exit 1; }
+          mkdir -p "${RUNNER_TEMP}/bench-engines"
+          git show "${HEAD_SHA}:flm-dev-kit/FLM_DLL/engines.json" > "${RUNNER_TEMP}/bench-engines/engines.json"
+          python3 -c 'import json, sys; json.load(open(sys.argv[1], encoding="utf-8"))' \
+            "${RUNNER_TEMP}/bench-engines/engines.json"
+
+      - name: Upload the engine map
+        if: steps.engines.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: devkit-bench-engines
+          path: ${{ runner.temp }}/bench-engines/engines.json
+          retention-days: 1
+          overwrite: true
+
+  # ── NPU approval gate, dispatch only ─────────────────────────────────────
+  # Called, Build and Test's npu-gate / npu-approve already gate the call
+  # (the same rules; see there). A dispatch on main is ungated; one on any
+  # other branch is trusted when whoever dispatched it is on the list, and
+  # otherwise npu-approve asks the npu-approval environment's reviewers,
+  # who must review the branch's .github/ changes, which decide what runs.
+  # A skipped gate never counts as passed.
+  npu-gate:
+    if: ${{ !inputs.mode && github.ref != 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      trusted: ${{ steps.trust.outputs.trusted }}
+    env:
+      NPU_TRUSTED: '["zaneni6", "michyu-amd", "tawei-amd", "alfxu-amd", "shdu-amd"]'
+    steps:
+      - name: Check whether the run is trusted
+        id: trust
+        env:
+          ACTOR: ${{ github.triggering_actor }}
+          ACTOR_TRUSTED: ${{ contains(fromJSON(env.NPU_TRUSTED), github.triggering_actor) }}
+        run: |
+          trusted=false
+          if [ "${ACTOR_TRUSTED}" = "true" ]; then trusted=true; fi
+          echo "${GITHUB_EVENT_NAME} on ${GITHUB_REF} by ${ACTOR}, trusted: ${trusted}"
+          echo "trusted=${trusted}" >> "$GITHUB_OUTPUT"
+
+  npu-approve:
+    needs: [resolve, npu-gate]
+    if: >-
+      needs.npu-gate.result == 'success' && needs.npu-gate.outputs.trusted != 'true'
+      && needs.resolve.outputs.bench == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: npu-approval
+    steps:
+      - env:
+          ACTOR: ${{ github.triggering_actor }}
+        run: >-
+          echo "NPU benches approved for ${GITHUB_EVENT_NAME} on ${GITHUB_REF}, run triggered by ${ACTOR}."
+
+  docvqa:
+    needs: resolve
+    if: >-
+      needs.resolve.outputs.bench == 'true' && needs.resolve.outputs.docvqa == 'true'
+      && (vars.FLM_BENCH_DOCVQA == 'true' || inputs.docvqa)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout the bench scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+          sparse-checkout: .github/script/devkit-bench
+          filter: blob:none
+
+      - name: Build the DocVQA subset
+        run: |
+          python3 -m venv "${RUNNER_TEMP}/venv"
+          "${RUNNER_TEMP}/venv/bin/pip" install --quiet 'pyarrow==18.1.0' 'pillow==11.0.0'
+          "${RUNNER_TEMP}/venv/bin/python" .github/script/devkit-bench/docvqa_fetch.py --n 50 \
+            --out "${RUNNER_TEMP}/docvqa"
+
+      - name: Upload the DocVQA subset
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: devkit-bench-docvqa
+          path: ${{ runner.temp }}/docvqa
+          retention-days: 3
+
+  bench:
+    name: Bench ${{ matrix.key }} ${{ matrix.model }}
+    needs: [resolve, npu-gate, npu-approve, docvqa]
+    # Called (inputs.mode set: pr, nightly or refresh), Build and Test's own
+    # NPU gate already held this run and npu-gate here is skipped; every
+    # called mode must be listed, or its bench is skipped.
+    if: >-
+      ${{ !cancelled() && needs.resolve.outputs.bench == 'true'
+      && ((inputs.mode == 'pr' || inputs.mode == 'nightly' || inputs.mode == 'refresh')
+          || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+          || (needs.npu-gate.result == 'success'
+              && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))
+      && (needs.docvqa.result == 'success' || needs.docvqa.result == 'skipped') }}
+    runs-on: [self-hosted, "${{ matrix.os }}", x64, npu, sweep]
+    # A model's perf A/B, pull and GSM8K; the acc benches stop asking at
+    # their time budget, so results are uploaded before this.
+    timeout-minutes: ${{ inputs.mode == 'nightly' && 240 || 150 }}
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ (inputs.mode == 'nightly' || inputs.mode == 'refresh') && 4 || 3 }}
+      matrix:
+        include: ${{ fromJSON(needs.resolve.outputs.matrix) }}
+    steps:
+      - name: Clear stale flm processes and results (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          work="$(dirname "$(dirname "${GITHUB_WORKSPACE}")")"
+          stale=$(pgrep -u "$(id -u)" -f "^${work}/.*flm(-real)? (serve|bench)" || true)
+          [ -n "${stale}" ] && { echo "::warning::Killing flm left over from an earlier job"; kill -9 ${stale} || true; }
+          rm -rf "${RUNNER_TEMP}/bench-out" && mkdir -p "${RUNNER_TEMP}/bench-out"
+
+      - name: Clear stale flm processes and results (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $work = Split-Path (Split-Path $env:GITHUB_WORKSPACE)
+          Get-Process -Name flm -ErrorAction SilentlyContinue |
+            Where-Object { $_.Path -and $_.Path.StartsWith($work, [StringComparison]::OrdinalIgnoreCase) } |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+          $out = Join-Path $env:RUNNER_TEMP 'bench-out'
+          if (Test-Path $out) { Remove-Item $out -Recurse -Force }
+          New-Item -ItemType Directory -Force $out | Out-Null
+
+      # The pull request's actions and overlay script (not a boundary, see
+      # above). Cone mode, directories only: the NPU runners reuse their
+      # work folder, whose git config keeps core.sparseCheckoutCone=true from
+      # the product test jobs' checkouts, and in cone mode a file pattern
+      # matches nothing.
+      - name: Checkout actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: true
+          sparse-checkout: |
+            .github/actions
+            .github/script
+            flm-dev-kit/FLM_DLL
+          filter: blob:none
+
+      # The bench scripts that measure, score and report: the base's.
+      - name: Checkout the bench scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          path: bench-scripts
+          persist-credentials: false
+          sparse-checkout-cone-mode: true
+          sparse-checkout: .github/script
+          filter: blob:none
+
+      # A dispatch on main may bench an earlier push run: the engines it
+      # overlays are those its commit's engines.json names (the libraries
+      # were built from it), not the dispatched commit's. resolve read it
+      # (git show, data only) and uploaded it: nothing here checks out a
+      # computed commit.
+      - name: Download the benched commit's engine map
+        if: ${{ !inputs.mode }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: devkit-bench-engines
+          path: bench-run
+
+      # A pull request's and the full refresh's packages already hold the
+      # staged dev-kit files: nothing to overlay. Nightly and a dispatch
+      # overlay the dev-kit builds. No unmodified base copy is kept: no A/B
+      # for now (a comparison is to be designed later).
+      - name: Overlay
+        id: overlay
+        uses: ./.github/actions/devkit-overlay-package
+        with:
+          runtime: ${{ matrix.runtime }}
+          os: ${{ matrix.os }}
+          package: ${{ matrix.package }}
+          libs: ${{ (inputs.mode == 'nightly' || !inputs.mode) && matrix.libs || '' }}
+          xclbins: ${{ (inputs.mode == 'nightly' || !inputs.mode) && matrix.xclbins || '' }}
+          families: ${{ (inputs.mode == 'nightly' || !inputs.mode) && matrix.families || '' }}
+          engines: ${{ !inputs.mode && 'bench-run/engines.json' || '' }}
+          # Dispatch: the earlier Build and Test run's; called: this run's.
+          run-id: ${{ needs.resolve.outputs.build-run-id }}
+          github-token: ${{ needs.resolve.outputs.build-run-id != '' && github.token || '' }}
+
+      - name: Download the DocVQA subset
+        if: matrix.vlm && needs.docvqa.result == 'success'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: devkit-bench-docvqa
+          path: docvqa-data
+
+      - name: Perf
+        id: perf
+        uses: ./.github/actions/devkit-bench-perf
+        with:
+          flm-bin: ${{ steps.overlay.outputs.flm-bin }}
+          base-flm-bin: ${{ steps.overlay.outputs.base-flm-bin }}
+          model: ${{ matrix.model }}
+          runtime: ${{ matrix.runtime }}
+          key: ${{ matrix.key }}
+          vlm: ${{ matrix.vlm }}
+          out-dir: ${{ runner.temp }}/bench-out
+          scripts-dir: ${{ github.workspace }}/bench-scripts
+          # Pull requests stop at 8k (1k-8k), the nightly runs to the
+          # model's maximum (32k at most).
+          ctx-len: ${{ inputs.mode == 'nightly' && '0' || '8192' }}
+
+      - name: GSM8K
+        id: gsm8k
+        uses: ./.github/actions/devkit-bench-acc
+        with:
+          bench: gsm8k
+          flm-bin: ${{ steps.overlay.outputs.flm-bin }}
+          model: ${{ matrix.model }}
+          out-dir: ${{ runner.temp }}/bench-out
+          scripts-dir: ${{ github.workspace }}/bench-scripts
+          time-budget-seconds: ${{ inputs.mode == 'nightly' && '7200' || '3000' }}
+
+      - name: DocVQA
+        id: docvqa
+        if: matrix.vlm && needs.docvqa.result == 'success'
+        uses: ./.github/actions/devkit-bench-acc
+        with:
+          bench: docvqa
+          flm-bin: ${{ steps.overlay.outputs.flm-bin }}
+          model: ${{ matrix.model }}
+          data: ${{ github.workspace }}/docvqa-data/eval.jsonl
+          out-dir: ${{ runner.temp }}/bench-out
+          scripts-dir: ${{ github.workspace }}/bench-scripts
+          time-budget-seconds: '1800'
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: devkit-bench-result-${{ matrix.key }}-${{ matrix.safe }}
+          path: ${{ runner.temp }}/bench-out
+          if-no-files-found: warn
+          retention-days: 14
+          # "Re-run failed jobs" replaces a failed attempt's upload.
+          overwrite: true
+
+      - name: Stop flm (Linux)
+        if: always() && runner.os == 'Linux'
+        run: |
+          work="$(dirname "$(dirname "${GITHUB_WORKSPACE}")")"
+          pkill -9 -u "$(id -u)" -f "^${work}/.*flm(-real)? (serve|bench)" || true
+
+      - name: Stop flm (Windows)
+        if: always() && runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $work = Split-Path (Split-Path $env:GITHUB_WORKSPACE)
+          Get-Process -Name flm -ErrorAction SilentlyContinue |
+            Where-Object { $_.Path -and $_.Path.StartsWith($work, [StringComparison]::OrdinalIgnoreCase) } |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+
+      # Last, so every bench ran and uploaded. Perf failing to produce its
+      # CSV, or an accuracy run failing acc_common's gate, fails the job.
+      - name: Gate
+        if: runner.os == 'Linux'
+        env:
+          PERF: ${{ steps.perf.outputs.code }}
+          GSM8K: ${{ steps.gsm8k.outputs.code }}
+          DOCVQA: ${{ steps.docvqa.outputs.code || '0' }}
+        run: |
+          echo "perf: ${PERF:-not run}; gsm8k: ${GSM8K:-not run}; docvqa: ${DOCVQA}"
+          [ "${PERF}" = 0 ] && [ "${GSM8K}" = 0 ] && [ "${DOCVQA}" = 0 ]
+
+      - name: Gate (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        env:
+          PERF: ${{ steps.perf.outputs.code }}
+          GSM8K: ${{ steps.gsm8k.outputs.code }}
+          DOCVQA: ${{ steps.docvqa.outputs.code || '0' }}
+        run: |
+          Write-Host "perf: $env:PERF; gsm8k: $env:GSM8K; docvqa: $env:DOCVQA"
+          if ($env:PERF -ne '0' -or $env:GSM8K -ne '0' -or $env:DOCVQA -ne '0') { exit 1 }
+
+  report:
+    needs: [resolve, bench]
+    if: ${{ !cancelled() && needs.resolve.outputs.bench == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      hard-gate: ${{ steps.report.outputs.hard-gate }}
+    steps:
+      - name: Checkout the bench scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+          sparse-checkout: .github/script
+          filter: blob:none
+
+      # None when every bench job failed before uploading: report.py then
+      # lists them all as giving no results.
+      - name: Download results
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: devkit-bench-result-*
+          path: ${{ runner.temp }}/results
+
+      - name: Download the nightly baseline
+        if: needs.resolve.outputs.baseline-run-id != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: devkit-bench-baseline
+          path: ${{ runner.temp }}/baseline
+          run-id: ${{ needs.resolve.outputs.baseline-run-id }}
+          github-token: ${{ github.token }}
+
+      - name: Report
+        id: report
+        env:
+          MATRIX: ${{ needs.resolve.outputs.matrix }}
+          MODE: ${{ needs.resolve.outputs.mode }}
+          HEAD_SHA: ${{ needs.resolve.outputs.head-sha }}
+          BUILD_RUN_ID: ${{ needs.resolve.outputs.build-run-id || github.run_id }}
+          BASELINE_RUN_ID: ${{ needs.resolve.outputs.baseline-run-id }}
+        run: |
+          printf '%s' "${MATRIX}" > "${RUNNER_TEMP}/matrix.json"
+          args=(--results "${RUNNER_TEMP}/results" --matrix "${RUNNER_TEMP}/matrix.json" --mode "${MODE}"
+                --head-sha "${HEAD_SHA}" --build-run-id "${BUILD_RUN_ID}" --run-id "${GITHUB_RUN_ID}"
+                --baseline "${RUNNER_TEMP}/baseline" --baseline-run-id "${BASELINE_RUN_ID}"
+                --summary "${RUNNER_TEMP}/bench-summary/summary.md" --outputs "${GITHUB_OUTPUT}")
+          [ "${MODE}" = nightly ] && args+=(--new-baseline "${RUNNER_TEMP}/new-baseline")
+          python3 .github/script/devkit-bench/report.py "${args[@]}" > /dev/null
+          cat "${RUNNER_TEMP}/bench-summary/summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the summary
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bench-summary
+          path: ${{ runner.temp }}/bench-summary/summary.md
+          retention-days: 14
+          # "Re-run failed jobs" reruns report too: replace the first attempt's.
+          overwrite: true
+
+      - name: Upload the baseline
+        if: needs.resolve.outputs.mode == 'nightly'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: devkit-bench-baseline
+          path: ${{ runner.temp }}/new-baseline/baseline.json
+          retention-days: 90
+          overwrite: true

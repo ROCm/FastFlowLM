@@ -19,6 +19,8 @@
 #   ./env.sh make run N=4096 COLS=4 CORES=2
 #   ./env.sh make check            the library's tests on this package (no NPU)
 #   ./env.sh make stress           stress and corner-case tests on the NPU (host/stress.cpp)
+#   ./env.sh make ovlp             vadd as an overlay with its op as a state (APP@STATE,
+#                                  host/ovlp.cpp): back from vmul with the op set up
 #   ./env.sh make precompile       refresh precompiled/<config>/ from source
 #   make print-config | clean | clean_all
 #
@@ -121,6 +123,25 @@ $(STRESS_TARGET): $(HOME_DIR)/host/stress.cpp $(filter-out $(HOME_DIR)/host/host
 	mkdir -p $(@D)
 	$(HOST_CXX) $(HOST_FLAGS) $(HOME_DIR)/host/stress.cpp -o $@ $(HOST_LIBS)
 
+# APP@STATE: vadd split into the overlay ovl and the state add (make_overlay.exe),
+# next to a copy of the package.
+OVL_TOOL    := $(BUILD_DIR)/make_overlay.exe
+OVLP_TARGET := $(BUILD_DIR)/ovlp.exe
+OVL_PKG     := $(BUILD_DIR)/pkg_ovl
+$(OVL_TOOL): $(HOME_DIR)/host/make_overlay.cpp $(filter-out $(HOME_DIR)/host/host.cpp,$(HOST_DEPS))
+	mkdir -p $(@D)
+	$(HOST_CXX) $(HOST_FLAGS) $(HOME_DIR)/host/make_overlay.cpp -o $@
+$(OVLP_TARGET): $(HOME_DIR)/host/ovlp.cpp $(filter-out $(HOME_DIR)/host/host.cpp,$(HOST_DEPS))
+	mkdir -p $(@D)
+	$(HOST_CXX) $(HOST_FLAGS) $(HOME_DIR)/host/ovlp.cpp -o $@ $(HOST_LIBS)
+$(OVL_PKG)/.stamp: $(PKG_STAMP) $(OVL_TOOL)
+	rm -rf $(OVL_PKG)
+	mkdir -p $(OVL_PKG)
+	cp -r $(foreach a,$(APPS),$(PKG_DIR)/$(a)) $(OVL_PKG)/
+	$(OVL_TOOL) $(OVL_PKG) $(BUILD_DIR)/add.txn
+	python3 $(LAUNCHLIB)/tools/make_package.py -o $(OVL_PKG) --state ovl@add=$(BUILD_DIR)/add.txn
+	touch $@
+
 # --- targets ----------------------------------------------------------------------
 
 N     ?= $(shell echo $$(( 2 * $(EW_N) * $(COLS) * $(CORES) )))
@@ -128,7 +149,7 @@ ITERS ?= 50
 PAIRS ?= 16
 RUN_ARGS ?=
 
-.PHONY: all kernel bitstream package host run stress check precompile clean clean_all print-config
+.PHONY: all kernel bitstream package host run stress ovlp check precompile clean clean_all print-config
 
 all: $(PKG_STAMP) $(HOST_TARGET)
 kernel: $(KERNEL_OBJS)
@@ -145,6 +166,9 @@ LAUNCHES ?= 20000
 stress: $(PKG_STAMP) $(STRESS_TARGET)
 	$(STRESS_TARGET) --package $(PKG_DIR) --mode all --seed $(SEED) --launches $(LAUNCHES)
 	$(STRESS_TARGET) --package $(PKG_DIR) --mode ctx --seed $(SEED)
+
+ovlp: $(OVL_PKG)/.stamp $(OVLP_TARGET)
+	$(OVLP_TARGET) --package $(OVL_PKG) --n $(N) --iters $(ITERS) --pairs $(PAIRS) $(RUN_ARGS)
 
 # The library's tests on this package: the C++ sequence equals aiecc's, and the
 # kernels configure what aiecc configures (register model). No NPU.

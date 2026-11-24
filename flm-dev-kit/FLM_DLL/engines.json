@@ -1,5 +1,5 @@
 {
-  "_doc": "FLM_DLL engines. engines: every detail/<engine> directory with a Makefile that builds a model library (lib<engine>.so / <engine>.dll) -> families: the FastFlowLM catalog families (details.family in src/model_list.json) to test when the engine changes, the same as the engine's row in ENGINES in .github/script/ci/changes.py; models: the kernel_assignment.json models it serves (from FastFlowLM_IRON .github/scripts/dll_assignment.json, plus hy_mem_npu -> hy-memory:30b-a3b, which that file omits; [] = none yet); uses: the other engines whose sources or include/models/<x>/ headers it compiles, so a change to one of those also tests this engine's families. shared: detail/ directories every engine builds against, which serve no model on their own; a change to one tests every engine's families. served_elsewhere: kernel_assignment.json models no engine here serves -> what runs them. Read by changes.py (devkit-families), checked by devkit_check.py.",
+  "_doc": "FLM_DLL engines. engines: every detail/<engine> directory with a Makefile that builds a model library (lib<engine>.so / <engine>.dll) -> families: the FastFlowLM catalog families (details.family in src/model_list.json) to test when the engine changes, the same as the engine's row in ENGINES in .github/script/ci/changes.py; models: the kernel_assignment.json models it serves ([] = none yet), and the src/model_list.json NPU tags without an assignment of their own that it runs on another model's kernels (xclbin_folder, as qwen3.8-dflash2:27b); every NPU tag of src/model_list.json is listed by exactly one engine; uses: the other engines whose sources or include/models/<x>/ headers it compiles, so a change to one of those also tests this engine's families. shared: detail/ directories every engine builds against, which serve no model on their own; a change to one tests every engine's families. served_elsewhere: kernel_assignment.json models no engine here serves -> what runs them. The library each engine and shared directory builds (its Makefile TARGET and CMakeLists.txt add_library, e.g. q4nx -> q4_npu_eXpress) must ship as src/lib/{xrt,hrx}/lib<name>.so, <name>.dll and <name>.lib, and every library there must be one of them. Read by changes.py (devkit-families), checked by devkit_check.py.",
   "shared": [
     "q4nx",
     "mha",
@@ -272,7 +272,8 @@
         "qwen3.8-dflash2"
       ],
       "models": [
-        "qwen3.8-mtp:27b"
+        "qwen3.8-mtp:27b",
+        "qwen3.8-dflash2:27b"
       ],
       "uses": []
     },

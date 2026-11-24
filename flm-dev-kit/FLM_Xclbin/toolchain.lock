@@ -9,7 +9,9 @@
 # Read by docker/aie-build.Dockerfile (every KEY below is one of its build
 # ARGs) through .github/workflows/devkit-aie-image.yml, which tags the image
 # ghcr.io/rocm/fastflowlm/aie-build with a hash of this file and the
-# Dockerfile. This file holds only what goes into the image, never the
+# Dockerfile (.github/script/ci/aie_image_hash.py), comment and blank lines
+# left out: editing these comments keeps the tag.
+# This file holds only what goes into the image, never the
 # image's digest: a digest here would change that hash and fail the
 # workflow's every-key-is-an-ARG check. The published digest the kernel builds
 # pull (ghcr.io/rocm/fastflowlm/aie-build@sha256:...) goes in toolchain.image
@@ -63,11 +65,11 @@ MLIR_AIE_WHEEL_VERSION=0.0.1.2025101504+ae29ec5
 MLIR_AIE_WHEEL_URL=https://github.com/Xilinx/mlir-aie/releases/download/latest-wheels-2/mlir_aie-0.0.1.2025101504+ae29ec5-cp312-cp312-manylinux_2_35_x86_64.whl
 MLIR_AIE_WHEEL_SHA256=54fb1bf62451290f402c96b86d23a01cca09fa5f6ebc402606ed917717baabdd
 
-# The pip ironenv installs everything with (the one IRON's ironenv has).
+# The pip ironenv installs everything with.
 PIP_VERSION=26.2.1
 
 # Peano (llvm-aie), the AIE core compiler of every ENABLE_CHESSCC=0 build: the
-# version IRON's wheel-aie-env action pinned, from the llvm-aie nightly index
+# version the kernels were developed with, from the llvm-aie nightly index
 # (LLVM_AIE_INDEX, which pip -f would read; the image downloads the wheel by
 # URL and checks its digest). The image installs it outside the venv and also
 # passes it to the mlir-aie build, so ironenv has no second (older) Peano.

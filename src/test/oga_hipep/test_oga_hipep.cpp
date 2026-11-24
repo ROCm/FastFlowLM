@@ -14,6 +14,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -25,6 +26,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <random>
 #include <set>
 #include <string>
 #include <string_view>
@@ -44,6 +46,11 @@ struct OgaGenerator {
     double max_length = 0;
     /// \brief the length of the last OgaGenerator_SnapshotState
     std::optional<std::size_t> snapshot;
+    /// \brief OgaGenerator_AppendTokens calls it has taken
+    int runs = 0;
+    /// \brief token count of the first and latest AppendTokens calls
+    std::size_t first_run_len = 0;
+    std::size_t last_run_len = 0;
 };
 struct OgaImages {
     std::size_t count = 0;
@@ -81,6 +88,7 @@ struct FakeOga {
     int generators_created = 0;
     int generators_live = 0;
     int results_destroyed = 0;
+    int get_logits_calls = 0;
     double last_max_length = 0;
     std::vector<std::vector<std::int32_t>> appends;
     std::optional<std::string> fail_next_append;
@@ -91,8 +99,14 @@ struct FakeOga {
     std::vector<std::size_t> rewinds;
     std::optional<std::string> fail_next_rewind;
     OgaElementType logits_type = OgaElementType_float32;
+    /// \brief a generator's first run gives all-zero logits, as Laguna 2.1's does
+    bool zero_first_run_logits = false;
+    /// \brief models Laguna 2.1: all-zero logits whenever first run >= 8 and current run >= 8
+    bool zero_when_unsplit_at_least_8 = false;
     std::int64_t logits_rows = 0;  ///< 0: rank 2 [1, vocab]; n: rank 3 [1, n, vocab]
     std::int64_t logits_width = kVocab;
+    /// \brief custom float32 values for the last row when non-empty
+    std::vector<float> custom_fp32_row;
     /// \brief raw 16-bit values for the last row's first entries, for f16/bf16
     std::vector<std::uint16_t> raw_head;
     /// \brief handles destroyed, in the order they happened
@@ -210,23 +224,34 @@ OgaResult* OGA_API_CALL FakeAppendTokens(OgaGenerator* generator, const std::int
         return Error(text);
     }
     g_fake.appends.emplace_back(ids, ids + count);
+    if (generator->runs == 0) generator->first_run_len = count;
+    generator->last_run_len = count;
+    ++generator->runs;
     generator->tokens.insert(generator->tokens.end(), ids, ids + count);
     if (generator->tokens.size() > static_cast<std::size_t>(generator->max_length))
         return Error("past max_length");
     return nullptr;
 }
 OgaResult* OGA_API_CALL FakeGetLogits(OgaGenerator* generator, OgaTensor** out) {
+    ++g_fake.get_logits_calls;
     auto* tensor = new OgaTensor;
     tensor->type = g_fake.logits_type;
     const std::int64_t rows = g_fake.logits_rows ? g_fake.logits_rows : 1;
     tensor->shape = g_fake.logits_rows ? std::vector<std::int64_t>{1, rows, g_fake.logits_width}
                                        : std::vector<std::int64_t>{1, g_fake.logits_width};
     const auto count = static_cast<std::size_t>(rows * g_fake.logits_width);
-    const auto last = SequenceLogits(generator->tokens);
+    const bool force_zero = (g_fake.zero_first_run_logits && generator->runs == 1) ||
+                            (g_fake.zero_when_unsplit_at_least_8 && generator->first_run_len >= 8 &&
+                             generator->last_run_len >= 8);
+    const auto last = force_zero ? std::vector<float>(static_cast<std::size_t>(g_fake.logits_width), 0.0f)
+                                 : (!g_fake.custom_fp32_row.empty() ? g_fake.custom_fp32_row
+                                                                    : SequenceLogits(generator->tokens));
     if (g_fake.logits_type == OgaElementType_float32) {
         std::vector<float> values(count, 99.0f);
-        for (std::size_t i = 0; i < kVocab && i < static_cast<std::size_t>(g_fake.logits_width); ++i)
-            values[count - g_fake.logits_width + i] = last[i];
+        const std::size_t width = static_cast<std::size_t>(g_fake.logits_width);
+        const std::size_t copy_len = std::min(last.size(), width);
+        for (std::size_t i = 0; i < copy_len; ++i)
+            values[count - width + i] = last[i];
         tensor->data.resize(count * sizeof(float));
         std::memcpy(tensor->data.data(), values.data(), tensor->data.size());
     } else {
@@ -554,6 +579,26 @@ void TestPrefillThenForwardAppendsOnlyTheNewToken() {
     TEST_REQUIRE(g_fake.appends == (std::vector<Tokens>{{1, 2, 3}, {4}}));
     TEST_REQUIRE(g_fake.last_max_length == 32);
     TEST_REQUIRE(engine->get_current_context_length() == 4);
+}
+
+void TestAFirstRunWithoutLogitsRunsAgainWithTheFirstTokenOnItsOwn() {
+    auto engine = MakeEngine();
+    g_fake.zero_first_run_logits = true;
+    std::vector<int> prompt{1, 2, 3};
+    RequireRan(engine->prefill(prompt), {1, 2, 3});
+    TEST_REQUIRE(g_fake.generators_created == 2);
+    TEST_REQUIRE(g_fake.generators_live == 1);
+    TEST_REQUIRE(g_fake.appends == (std::vector<Tokens>{{1, 2, 3}, {1}, {2, 3}}));
+    RequireRan(engine->forward(4), {1, 2, 3, 4});
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{4}));
+
+    // every later generator splits its first run without trying the whole prompt first
+    engine->clear_context();
+    std::vector<int> other{7, 8, 9};
+    RequireRan(engine->prefill(other), {7, 8, 9});
+    TEST_REQUIRE(g_fake.generators_created == 3);
+    TEST_REQUIRE((std::vector<Tokens>(g_fake.appends.end() - 2, g_fake.appends.end()) ==
+                  std::vector<Tokens>{{7}, {8, 9}}));
 }
 
 void TestRestoreIsBookkeepingAndAContinuationReusesTheGenerator() {
@@ -2653,6 +2698,349 @@ void TestBackendCapacityTracksContextUpdates() {
     TEST_REQUIRE(backend->max_decode_length() == 15);
 }
 
+void TestPrefillAndCheckpointFetchLogitsOnce() {
+    auto engine = MakeSlotsEngine(2, 64);
+
+    // 1. Cold 2-chunk prefill + checkpoint(): GetLogits called exactly once.
+    std::vector<int> full{1, 2, 3, 4, 5, 6};
+    std::vector<int> chunk1{1, 2, 3, 4};
+    std::vector<int> chunk2{5, 6};
+    engine->expect_prefill(full);
+    engine->skip_next_logits();
+    const auto skipped = engine->prefill(chunk1);
+    TEST_REQUIRE(skipped.size() == 0);
+    TEST_REQUIRE(g_fake.get_logits_calls == 0);
+    RequireRan(engine->prefill(chunk2), full);
+    TEST_REQUIRE(g_fake.get_logits_calls == 1);
+    TEST_REQUIRE(engine->checkpoint() == 6);
+    TEST_REQUIRE(g_fake.get_logits_calls == 1);
+
+    // Exact retry after decoding rewinds and returns snapshot_logits with 0 extra GetLogits calls.
+    RequireRan(engine->forward(7), {1, 2, 3, 4, 5, 6, 7});
+    TEST_REQUIRE(g_fake.get_logits_calls == 2);
+    engine->clear_context();
+    std::vector<int> retry = full;
+    RequireRan(engine->prefill(retry), full);
+    TEST_REQUIRE(engine->checkpoint() == 6);
+    TEST_REQUIRE(g_fake.get_logits_calls == 2);
+
+    // 2. Preamble forward() with skip_next_logits() skips GetLogits; sampled forward() fetches it.
+    engine->skip_next_logits();
+    TEST_REQUIRE(engine->forward(8).size() == 0);
+    TEST_REQUIRE(g_fake.get_logits_calls == 2);
+    RequireRan(engine->forward(9), {1, 2, 3, 4, 5, 6, 8, 9});
+    TEST_REQUIRE(g_fake.get_logits_calls == 3);
+
+    // 3. Warm 2-chunk continuation + checkpoint(): GetLogits called once.
+    const int before_warm = g_fake.get_logits_calls;
+    std::vector<int> w1{10, 11};
+    std::vector<int> w2{12, 13};
+    engine->skip_next_logits();
+    TEST_REQUIRE(engine->prefill(w1).size() == 0);
+    TEST_REQUIRE(g_fake.get_logits_calls == before_warm);
+    RequireRan(engine->prefill(w2), {1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13});
+    TEST_REQUIRE(engine->checkpoint() == 12);
+    TEST_REQUIRE(g_fake.get_logits_calls == before_warm + 1);
+
+    // 4. Second conversation slot 1-chunk prefill + checkpoint(): GetLogits called once.
+    const int before_slot2 = g_fake.get_logits_calls;
+    RequireRan(NewPrompt(*engine, {20, 21, 22}), {20, 21, 22});
+    TEST_REQUIRE(g_fake.get_logits_calls == before_slot2 + 1);
+
+    // 5. Same-sequence re-prefill reuses cached last_logits with 0 extra GetLogits calls.
+    engine->clear_context();
+    std::vector<int> same{20, 21, 22};
+    RequireRan(engine->prefill(same), same);
+    TEST_REQUIRE(g_fake.get_logits_calls == before_slot2 + 1);
+
+    // 5b. forward() invalidates last_logits so re-prefilling A+x fetches fresh logits for A+x.
+    RequireRan(engine->forward(23), {20, 21, 22, 23});
+    engine->clear_context();
+    std::vector<int> same_plus{20, 21, 22, 23};
+    RequireRan(engine->prefill(same_plus), same_plus);
+
+    // 5c. Verified engine (>=8-token unsplit prompt already passed) makes 0 GetLogits on cold
+    //     2-chunk prefill chunk 1 even when chunk 1 has >=8 tokens.
+    auto verified = MakeSlotsEngine(2, 64);
+    RequireRan(NewPrompt(*verified, {1, 2, 3, 4, 5, 6, 7, 8}), {1, 2, 3, 4, 5, 6, 7, 8});
+    const int before_cold_8 = g_fake.get_logits_calls;
+    verified->clear_context();
+    std::vector<int> long_full{10, 11, 12, 13, 14, 15, 16, 17, 18, 19};
+    std::vector<int> long_c1(long_full.begin(), long_full.begin() + 8);
+    std::vector<int> long_c2(long_full.begin() + 8, long_full.end());
+    verified->expect_prefill(long_full);
+    verified->skip_next_logits();
+    TEST_REQUIRE(verified->prefill(long_c1).size() == 0);
+    TEST_REQUIRE(g_fake.get_logits_calls == before_cold_8);
+    RequireRan(verified->prefill(long_c2), long_full);
+    TEST_REQUIRE(verified->checkpoint() == 10);
+    TEST_REQUIRE(g_fake.get_logits_calls == before_cold_8 + 1);
+
+    // 6. Staged image prompt + checkpoint() calls GetLogits once, and prefix-reuse invalidates
+    //    cached last_logits; skip_next_logits() works on both Rebuild and found paths.
+    auto staged_engine = MakeSlotsEngine(2, 64);
+    const int before_staged = g_fake.get_logits_calls;
+    RequireState(RunStagedPrompt(*staged_engine), 3, 9, 24);
+    TEST_REQUIRE(g_fake.get_logits_calls == before_staged + 1);
+
+    // Staged Rebuild with skip_next_logits() skips GetLogits; checkpoint() then fetches once.
+    const int before_staged_skip = g_fake.get_logits_calls;
+    g_fake.processor_ids = {11, 12, 13};
+    std::vector<int> s_ids = staged_engine->StagePromptImages("see <image>", {"JPEGFAKE"});
+    staged_engine->clear_context();
+    staged_engine->skip_next_logits();
+    TEST_REQUIRE(staged_engine->prefill(s_ids).size() == 0);
+    TEST_REQUIRE(g_fake.get_logits_calls == before_staged_skip);
+    TEST_REQUIRE(staged_engine->checkpoint() == 3);
+    TEST_REQUIRE(g_fake.get_logits_calls == before_staged_skip + 1);
+
+    // Staged prefix-reuse (`found` branch) with skip_next_logits() invalidates last_logits so
+    // checkpoint() fetches the new tail logits (5, 15, 65) rather than stale (3, 13, 36).
+    const int before_staged_found = g_fake.get_logits_calls;
+    const std::size_t set_inputs_before_found = g_fake.set_inputs.size();
+    g_fake.processor_ids = {11, 12, 13, 14, 15};
+    std::vector<int> s_ext = staged_engine->StagePromptImages("see <image> more", {"JPEGFAKE"});
+    staged_engine->clear_context();
+    staged_engine->skip_next_logits();
+    TEST_REQUIRE(staged_engine->prefill(s_ext).size() == 0);
+    TEST_REQUIRE(g_fake.set_inputs.size() == set_inputs_before_found);
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{14, 15}));
+    TEST_REQUIRE(g_fake.get_logits_calls == before_staged_found);
+    TEST_REQUIRE(staged_engine->checkpoint() == 5);
+    TEST_REQUIRE(g_fake.get_logits_calls == before_staged_found + 1);
+    RequireState(staged_engine->forward(16), 6, 16, 81);
+    staged_engine->clear_context();
+    std::vector<int> retry_ext{11, 12, 13, 14, 15};
+    RequireState(staged_engine->prefill(retry_ext), 5, 15, 65);
+}
+
+void TestSkipNextLogitsResetsAfterOneCallOrErrorAndPreservesLagunaRecovery() {
+    auto engine = MakeSlotsEngine(2, 8);
+
+    // Consumed on validation errors in prefill() and forward().
+    engine->skip_next_logits();
+    std::vector<int> empty;
+    RequireThrows<std::invalid_argument>([&] { engine->prefill(empty); });
+    std::vector<int> ok{1, 2};
+    RequireRan(engine->prefill(ok), {1, 2});
+
+    engine->skip_next_logits();
+    RequireThrows<std::out_of_range>([&] { engine->forward(static_cast<int>(kVocab)); });
+    RequireRan(engine->forward(3), {1, 2, 3});
+
+    // Consumed on OGA execution error.
+    engine->skip_next_logits();
+    g_fake.fail_next_append = "device lost";
+    RequireThrows<flm::oga::OgaError>([&] { engine->forward(4); });
+    RequireRan(engine->forward(4), {1, 2, 3, 4});
+
+    // Cleared by clear_context(), checkpoint(), restore(), set_context_length(), update_max_length().
+    engine->skip_next_logits();
+    engine->checkpoint();
+    RequireRan(engine->forward(5), {1, 2, 3, 4, 5});
+
+    engine->skip_next_logits();
+    TEST_REQUIRE(engine->restore() == 4);
+    RequireRan(engine->forward(6), {1, 2, 3, 4, 6});
+
+    engine->skip_next_logits();
+    engine->set_context_length(3);
+    RequireRan(engine->forward(7), {1, 2, 3, 7});
+
+    engine->skip_next_logits();
+    engine->update_max_length(16);
+    RequireRan(engine->forward(8), {1, 2, 3, 7, 8});
+
+    engine->skip_next_logits();
+    engine->clear_context();
+    std::vector<int> fresh{1, 2, 3};
+    RequireRan(engine->prefill(fresh), fresh);
+
+    // checkpoint() right after a skipped prefill still fetches logits and saves snapshot_logits.
+    auto ckpt_engine = MakeSlotsEngine(1, 16);
+    std::vector<int> seq{4, 5, 6};
+    ckpt_engine->skip_next_logits();
+    TEST_REQUIRE(ckpt_engine->prefill(seq).size() == 0);
+    TEST_REQUIRE(g_fake.get_logits_calls == 0);
+    TEST_REQUIRE(ckpt_engine->checkpoint() == 3);
+    TEST_REQUIRE(g_fake.get_logits_calls == 1);
+    RequireRan(ckpt_engine->forward(7), {4, 5, 6, 7});
+    ckpt_engine->clear_context();
+    std::vector<int> retry_seq{4, 5, 6};
+    const int calls_before_retry = g_fake.get_logits_calls;
+    RequireRan(ckpt_engine->prefill(retry_seq), {4, 5, 6});
+    TEST_REQUIRE(g_fake.get_logits_calls == calls_before_retry);
+
+    // Realistic Laguna 2.1 multi-chunk recovery: >=8-token skipped chunk 1 + <8-token chunk 2.
+    // Even though chunk 2 (<8 tokens) would not return all-zero logits on its own, chunk 1
+    // probes once on an unverified engine and recovers immediately before chunk 2 runs.
+    auto laguna = MakeSlotsEngine(2, 32);
+    g_fake.zero_when_unsplit_at_least_8 = true;
+    // A short 3-token prompt must NOT mark >=8-token runs as verified.
+    std::vector<int> short_ok{20, 21, 22};
+    RequireRan(laguna->prefill(short_ok), short_ok);
+    laguna->clear_context();
+    std::vector<int> c1{1, 2, 3, 4, 5, 6, 7, 8};
+    std::vector<int> c2{9, 10, 11};
+    laguna->expect_prefill({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11});
+    laguna->skip_next_logits();
+    TEST_REQUIRE(laguna->prefill(c1).size() == 0);
+    RequireRan(laguna->prefill(c2), {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11});
+    TEST_REQUIRE(g_fake.generators_created == 3);
+    TEST_REQUIRE(g_fake.generators_live == 2);
+    TEST_REQUIRE((std::vector<Tokens>(g_fake.appends.end() - 4, g_fake.appends.end()) ==
+                  std::vector<Tokens>{{1, 2, 3, 4, 5, 6, 7, 8}, {1}, {2, 3, 4, 5, 6, 7, 8}, {9, 10, 11}}));
+    // Subsequent new slot splits immediately without probing.
+    laguna->clear_context();
+    std::vector<int> next_conv{12, 13, 14, 15, 16, 17, 18, 19};
+    RequireRan(laguna->prefill(next_conv), next_conv);
+    TEST_REQUIRE((std::vector<Tokens>(g_fake.appends.end() - 2, g_fake.appends.end()) ==
+                  std::vector<Tokens>{{12}, {13, 14, 15, 16, 17, 18, 19}}));
+
+    // A later generator whose sampled first run returns all-zero logits still triggers recovery
+    // even after an earlier >=8-token generator passed (SOL-1).
+    auto mixed = MakeSlotsEngine(2, 32);
+    std::vector<int> first_ok{1, 2, 3, 4, 5, 6, 7, 8};
+    RequireRan(mixed->prefill(first_ok), first_ok);
+    mixed->clear_context();
+    g_fake.zero_when_unsplit_at_least_8 = true;
+    std::vector<int> second_zero{9, 10, 11, 12, 13, 14, 15, 16};
+    RequireRan(mixed->prefill(second_zero), second_zero);
+    TEST_REQUIRE((std::vector<Tokens>(g_fake.appends.end() - 2, g_fake.appends.end()) ==
+                  std::vector<Tokens>{{9}, {10, 11, 12, 13, 14, 15, 16}}));
+
+    // Multi-slot Laguna race: slot A runs an unsplit short chunk 1 with skip_next_logits(),
+    // slot B flips split_first_run_, and resuming slot A (both skipped and non-skipped) must
+    // be rejected by ReachOf and rebuilt immediately without appending onto the unsplit slot.
+    auto race = MakeSlotsEngine(3, 32);
+    g_fake.zero_first_run_logits = true;
+    std::vector<int> slot_a{1, 2, 3};
+    race->skip_next_logits();
+    TEST_REQUIRE(race->prefill(slot_a).size() == 0);
+    race->clear_context();
+    std::vector<int> slot_a2{4, 5, 6};
+    race->skip_next_logits();
+    TEST_REQUIRE(race->prefill(slot_a2).size() == 0);
+    race->clear_context();
+    std::vector<int> slot_b{10, 11, 12};
+    RequireRan(race->prefill(slot_b), slot_b);
+    // Non-skipped resume of slot A: must take exactly 2 appends ({1}, {2, 3, 4}), never append {4} first.
+    race->clear_context();
+    const std::size_t appends_before_a = g_fake.appends.size();
+    std::vector<int> slot_a_ext{1, 2, 3, 4};
+    RequireRan(race->prefill(slot_a_ext), slot_a_ext);
+    TEST_REQUIRE(g_fake.appends.size() == appends_before_a + 2);
+    TEST_REQUIRE((std::vector<Tokens>(g_fake.appends.end() - 2, g_fake.appends.end()) ==
+                  std::vector<Tokens>{{1}, {2, 3, 4}}));
+    // Skipped resume of slot A2: ReachOf must still reject the unsplit slot and rebuild split.
+    race->clear_context();
+    const std::size_t appends_before_a2 = g_fake.appends.size();
+    std::vector<int> slot_a2_ext{4, 5, 6, 7};
+    race->skip_next_logits();
+    TEST_REQUIRE(race->prefill(slot_a2_ext).size() == 0);
+    TEST_REQUIRE(g_fake.appends.size() == appends_before_a2 + 2);
+    TEST_REQUIRE((std::vector<Tokens>(g_fake.appends.end() - 2, g_fake.appends.end()) ==
+                  std::vector<Tokens>{{4}, {5, 6, 7}}));
+
+    // checkpoint() recovery failure cleans up the broken slot (no null generator left in slots_).
+    auto ckpt_fail = MakeSlotsEngine(1, 16);
+    g_fake.zero_first_run_logits = true;
+    std::vector<int> ckpt_seq{1, 2, 3};
+    ckpt_fail->skip_next_logits();
+    TEST_REQUIRE(ckpt_fail->prefill(ckpt_seq).size() == 0);
+    g_fake.fail_next_append = "recovery boom";
+    TEST_REQUIRE(ckpt_fail->checkpoint() == 3);
+    TEST_REQUIRE(g_fake.generators_live == 0);
+    RequireRan(ckpt_fail->forward(4), {1, 2, 3, 4});
+    TEST_REQUIRE(g_fake.generators_live == 1);
+
+    // ModelBackend::skip_next_logits() forwards through OgaHipepBackend.
+    g_fake = FakeOga{};
+    auto api = flm::oga::OgaApi::GetOrCreateWith([] { return FakeApi(); });
+    PackageDir package;
+    auto backend = flm::oga::hipep_factory()(package.Context(32));
+    backend->skip_next_logits();
+    std::vector<int> t1{1, 2};
+    TEST_REQUIRE(backend->engine().prefill(t1).size() == 0);
+    TEST_REQUIRE(g_fake.get_logits_calls == 0);
+    RequireRan(backend->engine().forward(3), {1, 2, 3});
+    TEST_REQUIRE(g_fake.get_logits_calls == 1);
+
+    // Default ModelBackend::skip_next_logits() stays a no-op (for flm/core backends).
+    struct DefaultNoOpBackend final : flm::backend::ModelBackend {
+        explicit DefaultNoOpBackend(causal_lm& e) : engine_(e) {}
+        causal_lm& engine() override { return engine_; }
+        std::string id() const override { return "flm"; }
+        causal_lm& engine_;
+    };
+    auto plain_engine = MakeEngine(32);
+    DefaultNoOpBackend noop_backend(*plain_engine);
+    flm::backend::ModelBackend& base_ref = noop_backend;
+    base_ref.skip_next_logits();
+    std::vector<int> p_noop{1, 2};
+    RequireRan(base_ref.engine().prefill(p_noop), {1, 2});
+    TEST_REQUIRE(g_fake.get_logits_calls == 1);
+}
+
+void TestConvertFp32ToBf16MatchesScalarBitForBit() {
+    const std::vector<std::uint32_t> specials = {
+        0x00000000u, 0x80000000u,                                      // +0, -0
+        0x00000001u, 0x007fffffu, 0x80000001u, 0x807fffffu,            // subnormals
+        0x00800000u, 0x80800000u,                                      // min normals
+        0x3f807fffu, 0x3f808000u, 0x3f808001u,                         // +RNE ties (even)
+        0x3f817fffu, 0x3f818000u, 0x3f818001u,                         // +RNE ties (odd)
+        0xbf807fffu, 0xbf808000u, 0xbf808001u,                         // -RNE ties (even)
+        0xbf817fffu, 0xbf818000u, 0xbf818001u,                         // -RNE ties (odd)
+        0x7f7fffffu, 0xff7fffffu,                                      // max normals -> +-Inf
+        0x7f800000u, 0xff800000u,                                      // +Inf, -Inf
+        0x7f800001u, 0x7fbfffffu, 0x7fc00000u, 0x7fffffffu,            // +sNaN, +qNaN
+        0xff800001u, 0xffbfffffu, 0xffc00000u, 0xffffffffu,            // -sNaN, -qNaN
+    };
+
+    // Null/empty call is a safe no-op.
+    flm::oga::ConvertFp32ToBf16(nullptr, nullptr, 0);
+
+    // Every edge length (all remainders 0..7 mod 8, SIMD chunks + scalar tails) and 248,320 random floats.
+    std::mt19937 rng(20261123u);
+    std::uniform_int_distribution<std::uint32_t> bits_dist(0u, 0xffffffffu);
+    for (const std::size_t n : {std::size_t{1}, std::size_t{2}, std::size_t{3}, std::size_t{4},
+                                std::size_t{5}, std::size_t{6}, std::size_t{7}, std::size_t{8},
+                                std::size_t{9}, std::size_t{15}, std::size_t{16}, std::size_t{17},
+                                std::size_t{63}, std::size_t{64}, std::size_t{65}, std::size_t{248320}}) {
+        std::vector<float> input(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            const std::uint32_t raw = i < specials.size() ? specials[i] : bits_dist(rng);
+            input[i] = std::bit_cast<float>(raw);
+        }
+        std::vector<bf16> got(n);
+        flm::oga::ConvertFp32ToBf16(input.data(), got.data(), n);
+        for (std::size_t i = 0; i < n; ++i) {
+            const std::uint16_t expected = biovault::get_raw_bits(bf16(input[i]));
+            const std::uint16_t actual = biovault::get_raw_bits(got[i]);
+            TEST_REQUIRE(actual == expected);
+        }
+    }
+
+    // End-to-end through OgaEngine::prefill() on a non-multiple-of-8 vocabulary (19).
+    constexpr std::uint32_t kOddVocab = 19;
+    g_fake = FakeOga{};
+    g_fake.logits_type = OgaElementType_float32;
+    g_fake.logits_rows = 2;
+    g_fake.logits_width = kOddVocab;
+    g_fake.custom_fp32_row.resize(kOddVocab);
+    for (std::uint32_t i = 0; i < kOddVocab; ++i)
+        g_fake.custom_fp32_row[i] = std::bit_cast<float>(specials[i]);
+    flm::oga::OgaApi::Owned<OgaModel> model(new OgaModel, {&FakeDestroyModel});
+    flm::oga::OgaEngine odd_engine(FakeApi(), std::move(model), "OddVocab", kOddVocab, 32, 16);
+    std::vector<int> prompt{1};
+    const auto logits = odd_engine.prefill(prompt);
+    TEST_REQUIRE(logits.size() == kOddVocab);
+    for (std::uint32_t i = 0; i < kOddVocab; ++i) {
+        const std::uint16_t expected = biovault::get_raw_bits(bf16(g_fake.custom_fp32_row[i]));
+        TEST_REQUIRE(biovault::get_raw_bits(logits[i]) == expected);
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -2670,6 +3058,7 @@ int main(int argc, char** argv) {
     RUN(TestConstructionDoesNotRunInference);
     RUN(TestBackendCapacityTracksContextUpdates);
     RUN(TestPrefillThenForwardAppendsOnlyTheNewToken);
+    RUN(TestAFirstRunWithoutLogitsRunsAgainWithTheFirstTokenOnItsOwn);
     RUN(TestRestoreIsBookkeepingAndAContinuationReusesTheGenerator);
     RUN(TestADivergentPassReplaysEverythingInOneAppend);
     RUN(TestRetokenizedSequenceReplaysUsingTheNewTokenIds);
@@ -2775,6 +3164,9 @@ int main(int argc, char** argv) {
     RUN(TestAGemma3PackageGivesItsTextAnEmptyImageBatch);
     RUN(TestABackendOnOga019KeepsItsStateOnRestore);
     RUN(TestTheBackendSaysHowToGetHipep);
+    RUN(TestPrefillAndCheckpointFetchLogitsOnce);
+    RUN(TestSkipNextLogitsResetsAfterOneCallOrErrorAndPreservesLagunaRecovery);
+    RUN(TestConvertFp32ToBf16MatchesScalarBitForBit);
 #undef RUN
     std::cout << "All oga-hipep tests passed\n";
     return 0;

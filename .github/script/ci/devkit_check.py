@@ -3,7 +3,7 @@
 # Portions of this file consist of AI-generated content.
 """Fast static checks of the FLM dev kit's CI data (flm-dev-kit/).
 
-    devkit_check.py [--repo <root>] [--base <sha> [--head <sha>]]
+    devkit_check.py [--repo <root>] [--base <sha> [--head <sha>]] [--pending-ok [--github-output]]
 
 Checks, each failure printed as "devkit_check: error: ..." (exit 1):
 
@@ -41,7 +41,40 @@ Checks, each failure printed as "devkit_check: error: ..." (exit 1):
                 detail/ sources ("../<engine>", also as "-I../<engine>") or
                 include/models/<x>/ headers its Makefile or CMakeLists.txt
                 (outside # comments) or the #include lines of its sources and
-                own headers name. The JSON files must not repeat a key
+                own headers name; a model with no assignment of its own
+                may be listed when it is a catalog alias (see catalog).
+                The JSON files must not repeat a key
+  catalog       what the product ships (src/) is what the dev kit describes.
+                The NPU models of src/model_list.json are the entries flm
+                keeps on an aie2p machine (supported_platforms naming aie2p
+                or absent, backend flm); a model's xclbin folder is its
+                xclbin_folder, else its name. (1) every NPU model has a
+                kernel_assignment.json entry, unless it is an alias: no entry
+                but an xclbin_folder that some entry's folder is; (2) every
+                assignment model is an NPU model, unless engines.json lists
+                it under served_elsewhere; (3) an entry's folder is its
+                model's xclbin folder; (4) every assigned slot ships as
+                src/xclbins/<folder>/<slot> (served_elsewhere skipped); (5)
+                every src/xclbins/<folder>/*.xclbin is a slot some model with
+                that folder assigns; (6) every NPU model is listed by an
+                engine and every engine model is an NPU model; (7) every
+                file in src/lib/{xrt,hrx} is lib<name>.so, <name>.dll or
+                <name>.lib of a library an engine or shared directory builds
+                (its Makefile TARGET and CMakeLists.txt add_library, which
+                must agree), and each such library ships all three in both.
+                CATALOG_ALLOW excuses named files and alias tags, each with
+                its reason; an entry that excuses nothing is an error.
+                Pending swap: with --pending-ok (Build and Test's
+                devkit-static, pull requests only) an assigned slot (4) or
+                an engine library file (7) src/ lacks is no error but
+                "pending": printed, and written as pending=<csv> with
+                --github-output. The pull request's run must then stage
+                every one (devkit_stage.py's plan fails otherwise, and
+                summary fails a run with pending binaries that staged
+                nothing), so a new model or engine can get through CI
+                before its swap commits the binaries. Without --pending-ok
+                (pushes, the nightly, a release) they are errors, so main
+                never lacks a binary
   rtp lock      FLM_Xclbin/rtp_addresses.lock.txt (devkit_rtp_lock.py) parses
                 and names only artifacts a build unit produces and some
                 kernel_assignment.json model uses. With --base, when the pull
@@ -54,6 +87,41 @@ Checks, each failure printed as "devkit_check: error: ..." (exit 1):
                 reported. A lock new at the base needs no engine change
   Bsymbolic     every FLM_DLL/detail/*/Makefile has -Wl,-Bsymbolic-functions
                 on a line that is not a comment
+  bench comment .github/workflows/devkit-bench-comment.yml, which runs with a
+                write token on artifacts a fork can write: it triggers on
+                workflow_run of exactly build-and-test.yml's name (Build
+                and Test calls devkit-bench.yml, which uploads the
+                summary, in its own run); its permissions are exactly
+                actions: read and pull-requests: write, at the workflow
+                level and nowhere else; it checks out nothing; its job
+                condition pins the triggering run to build-and-test.yml's
+                path in this repository, pull_request events; no
+                ${{ github.event.* }} expression appears in a run: script.
+                devkit-bench.yml keeps contents: read and actions: read
+                and grants no write; build-and-test.yml's jobs calling it
+                (devkit-bench, and devkit-bench-nightly, whose condition
+                starts with github.event_name == 'schedule' while
+                devkit-bench's starts with github.event_name !=
+                'schedule', so a run calls it once) grant exactly contents:
+                read and actions: read and pass no secrets. Skipped when the
+                files are absent
+  swap wiring   the names devkit_swap.py reads another Build and Test run
+                by match the CI that makes them: build-and-test.yml has a
+                devkit-stage job (STAGE_JOB) that runs devkit_stage.py and
+                uploads manifest-<os>-<runtime>/manifest.json as
+                devkit-stage-manifest-<os>-<runtime> (MANIFEST_ARTIFACT,
+                MANIFEST_FILE) for each os and runtime, and the staged
+                files as devkit_stage.py's stage_artifact()
+                (devkit-stage-<lin|win>-<xrt|hrx>), which the
+                devkit-stage-apply action maps to its runtime and
+                lin-build.yml and win-build.yml download by that name; one
+                job with each name TEST_JOBS gives (only the name is
+                checked); a summary job with a step named PENDING_STEP that
+                runs devkit_swap.py pending --expect-staged; the
+                devkit-engines and devkit-xclbins jobs; and a changes job
+                that runs devkit_swap.py verify and check with actions:
+                read. Skipped when the workflow is absent (the action and
+                build workflows each when absent)
   notices       with --base: every file added under flm-dev-kit/ between the
                 merge base of --base and --head (default HEAD), of a source or
                 script type, has an AMD copyright notice in its first 15
@@ -62,8 +130,8 @@ Checks, each failure printed as "devkit_check: error: ..." (exit 1):
                 third-party notice ("Copyright (c)", "Copyright ©",
                 "Copyright <year>" or an SPDX line) or a "Generated by ... Do
                 not edit" first line passes, as AGENTS.md's notice rules give
-                those no AMD notice. NOTICE_HELD lists the files SCL-5105
-                holds without any notice, each with its reason
+                those no AMD notice. NOTICE_HELD lists the files held
+                without any notice pending review, each with its reason
 
 Standard library only.
 """
@@ -111,12 +179,12 @@ NOTICE_LINES = 15
 THIRD_PARTY_NOTICE = re.compile(r"Copyright\s*(?:\(c\)|©|\d{4})|SPDX-(?:License-Identifier|FileCopyrightText):",
                                 re.IGNORECASE)
 GENERATED = re.compile(r"\bGenerated by\b.*\bDo not edit\b", re.IGNORECASE)
-# Files SCL-5105 holds without any notice (path -> reason). A held file is
+# Files held without any notice pending review (path -> reason). A held file is
 # reported as a note, not an error; drop it here once its notice lands.
 NOTICE_HELD = {
     f"{DEVKIT}/FLM_Xclbin/Gemma4/test_top.py":
-        "the Gemma 4 model-card example (Hugging Face transformers usage); SCL-5105 holds it "
-        "without a notice (Phase 2b exclusion candidate, kept held in IRON 867542752)",
+        "the Gemma 4 model-card example (Hugging Face transformers usage); kept without a "
+        "notice pending review",
 }
 VENDORED = (f"{DEVKIT}/FLM_DLL/include/nlohmann/", f"{DEVKIT}/FLM_DLL/include/aiebu/",
             f"{DEVKIT}/FLM_DLL/external_libs/", f"{DEVKIT}/FLM_Xclbin/host_common/aiebu/")
@@ -125,7 +193,7 @@ INCLUDE = re.compile(r"^\s*#\s*include\b")
 
 MD_MODEL = re.compile(r"^#### `([^`]+)` → `([^`]+)`\s*$")
 MD_HEADING = re.compile(r"^#{1,6}\s")
-MD_ROW = re.compile(r"^\|\s*`([^`]+\.xclbin)`\s*\|\s*(?:`([^`]+)`|(—))\s*\|")
+MD_ROW = re.compile(r"^\|\s*`([^`]+\.(?:xclbin|switches))`\s*\|\s*(?:`([^`]+)`|(—))\s*\|")
 
 
 def artifact_names(unit: str, model_types: list) -> list[str]:
@@ -203,7 +271,7 @@ def check_build_units(repo: Path, data: dict, errors: list) -> dict[str, tuple[s
 # A model's folder and its slots: devkit_assemble_xclbins.py writes
 # <folder>/<slot> under its output, and refuses anything else.
 SAFE_FOLDER = re.compile(r"[A-Za-z0-9_.+-]+(/[A-Za-z0-9_.+-]+)*")
-SAFE_SLOT = re.compile(r"[A-Za-z0-9_.+-]+\.xclbin")
+SAFE_SLOT = re.compile(r"[A-Za-z0-9_.+-]+\.(xclbin|switches)")
 
 
 def check_assignment(data: dict, index: dict, errors: list) -> dict[str, dict]:
@@ -235,8 +303,8 @@ def check_assignment(data: dict, index: dict, errors: list) -> dict[str, dict]:
             errors.append(f"{where}: kernels is not an object")
             continue
         for slot, art in kernels.items():
-            if not slot.endswith(".xclbin"):
-                errors.append(f"{where}: kernel slot {slot!r} does not end in .xclbin")
+            if not slot.endswith((".xclbin", ".switches")):
+                errors.append(f"{where}: kernel slot {slot!r} does not end in .xclbin or .switches")
             elif not SAFE_SLOT.fullmatch(slot):
                 errors.append(f"{where}: kernel slot {slot!r} is not a plain file name ([A-Za-z0-9_.+-])")
             if folder is not None:
@@ -370,7 +438,10 @@ def scan_engine_uses(dll_root: Path | str, engines: set, shared: set) -> dict[st
     return out
 
 
-def check_engines(repo: Path, data: dict, models: dict, errors: list) -> None:
+def check_engines(repo: Path, data: dict, models: dict, errors: list,
+                  aliases: frozenset | set = frozenset()) -> None:
+    """aliases: catalog tags with no kernel_assignment.json entry that run
+    another model's kernels (catalog_aliases); an engine may list them."""
     detail = repo / DLL / "detail"
     shared = data.get("shared")
     engines = data.get("engines")
@@ -415,7 +486,7 @@ def check_engines(repo: Path, data: dict, models: dict, errors: list) -> None:
                 if m in owner and owner[m] != name:
                     errors.append(f"{where}: model {m} is also served by {owner[m]}")
                 owner.setdefault(m, name)
-                if models and m not in models:
+                if models and m not in models and m not in aliases:
                     errors.append(f"{where}: model {m} is not in {ASSIGNMENT}")
         for u in entry.get("uses") or []:
             if u not in engines:
@@ -436,6 +507,271 @@ def check_engines(repo: Path, data: dict, models: dict, errors: list) -> None:
         if declared != scanned[name]:
             errors.append(f"{ENGINES}: {name} uses {sorted(declared)}, but its sources and headers "
                           f"reference {sorted(scanned[name])}")
+
+
+# ── catalog: what the product ships (src/) against the dev kit ──────────────
+# The product builds nothing from flm-dev-kit/: it ships prebuilt engine
+# libraries (src/lib/<runtime>/) and kernels (src/xclbins/<folder>/<slot>).
+# These rules keep the dev kit the source of both, so a model cannot ship
+# under src/ without its engine, its engines.json entry and its
+# kernel_assignment.json entry.
+MODEL_LIST = "src/model_list.json"
+SHIPPED_XCLBINS = "src/xclbins"
+SHIPPED_SUFFIXES = (".xclbin", ".switches")   # kernels, and d3's control-packet switches
+# src/CMakeLists.txt links the engines from src/lib/${FLM_RUNTIME_NAME}, xrt or
+# hrx: lib<name>.so on Linux, the <name>.lib import library on Windows, whose
+# <name>.dll .github/workflows/win-build.yml copies from the same directory
+# into the package. Each runtime ships all three, built by the dev-kit dir.
+SHIPPED_RUNTIMES = ("xrt", "hrx")
+NPU_PLATFORM = "aie2p"           # the generation the FLM_DLL engines and kernels are built for
+FLM_BACKEND = "flm"              # flm::backend::kFlmBackendId
+BACKEND_SUFFIXES = {"-core": "core", "-oga-hipep": "oga-hipep"}  # catalog::backend_for_model_type
+# Shipped files and catalog tags the catalog rules accept without a dev-kit
+# source (key: a src/ path, or a model tag) -> why. An entry that no longer
+# excuses anything is an error, so the list cannot go stale.
+CATALOG_ALLOW = {
+    "src/lib/xrt/libaiebu.a":
+        "the prebuilt AIE assembler the dev-kit engines and kernel hosts link, no engine library",
+    "src/lib/xrt/aiebu_static.lib":
+        "the prebuilt AIE assembler (Windows) the dev-kit engines link, no engine library",
+}
+
+MK_TARGET = re.compile(r"^\s*TARGET\s*[:?]?=\s*\$\((?:LIB_DIR|BUILD_DIR)\)/(?:lib)?([A-Za-z0-9_]+)\.(?:so|dll)\s*$")
+CMAKE_LIBRARY = re.compile(r"\badd_library\s*\(\s*([A-Za-z0-9_]+)\s+SHARED\b")
+
+
+def entry_backend(family: str, entry: dict) -> str:
+    """The backend that runs a catalog entry: its "backend" key, else the
+    family's suffix (model_list::backend_for_family)."""
+    backend = entry.get("backend")
+    if isinstance(backend, str) and backend:
+        return backend
+    return next((b for sfx, b in BACKEND_SUFFIXES.items()
+                 if family.endswith(sfx) and len(family) > len(sfx)), FLM_BACKEND)
+
+
+def npu_catalog(data: dict) -> dict[str, dict]:
+    """tag -> entry for the catalog models the FLM_DLL engines and kernels run:
+    those flm on an NPU2 (aie2p) machine keeps (model_list::
+    apply_support_filter): backend flm (any backend for an embedding model)
+    and supported_platforms naming aie2p, or absent (every generation)."""
+    out = {}
+    for family, sizes in (data.get("models") or {}).items():
+        if not isinstance(sizes, dict):
+            continue
+        for size, entry in sizes.items():
+            if not isinstance(entry, dict):
+                continue
+            platforms = entry.get("supported_platforms")
+            if platforms is not None and (not isinstance(platforms, list) or NPU_PLATFORM not in platforms):
+                continue
+            if entry.get("model_kind") != "embedding" and entry_backend(family, entry) != FLM_BACKEND:
+                continue
+            out[f"{family}:{size}"] = entry
+    return out
+
+
+def xclbin_folder(entry: dict) -> str:
+    """The src/xclbins folder the engine loads: xclbin_folder, else name
+    (AutoModel::_shared_initialize_model_state, model_list::resolve_source)."""
+    folder = entry.get("xclbin_folder")
+    return folder if isinstance(folder, str) and folder else str(entry.get("name") or "")
+
+
+def catalog_aliases(catalog: dict, assignment: dict) -> set[str]:
+    """NPU tags without a kernel_assignment.json entry that name an
+    xclbin_folder: they run the kernels of whichever model uses it."""
+    return {t for t, e in npu_catalog(catalog).items()
+            if t not in assignment and isinstance(e.get("xclbin_folder"), str) and e["xclbin_folder"]}
+
+
+def unit_library(dll: Path, unit: str, errors: list) -> Optional[str]:
+    """The library a detail/<unit> builds: its Makefile's TARGET
+    (lib<name>.so, <name>.dll) and its CMakeLists.txt add_library(<name>
+    SHARED), which must agree; None when it builds none (vision_common)."""
+    names = set()
+    for f, rx in (("Makefile", MK_TARGET), ("CMakeLists.txt", CMAKE_LIBRARY)):
+        try:
+            lines = (dll / "detail" / unit / f).read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        names |= {m.group(1) for l in lines for m in [rx.search(l.split("#", 1)[0])] if m}
+    if len(names) > 1:
+        errors.append(f"{DLL}/detail/{unit}: its Makefile TARGET and CMakeLists.txt add_library name "
+                      f"different libraries ({', '.join(sorted(names))}): make them build one")
+        return None
+    return next(iter(names), None)
+
+
+def shipped_names(lib: str) -> tuple[str, ...]:
+    """The files of library lib each runtime directory ships."""
+    return (f"lib{lib}.so", f"{lib}.dll", f"{lib}.lib")
+
+
+def check_catalog(repo: Path, catalog: dict, assignment: dict, engines: dict,
+                  errors: list, allow: Optional[dict] = None, pending: Optional[list] = None) -> str:
+    """src/model_list.json, src/xclbins and src/lib against kernel_assignment
+    .json and engines.json; returns a note. allow: CATALOG_ALLOW. pending:
+    a list (--pending-ok) gets the paths of the binaries rules 4 and 7 find
+    missing, instead of errors."""
+    allow = CATALOG_ALLOW if allow is None else allow
+    used: set[str] = set()
+
+    def excused(key: str) -> bool:
+        if key in allow:
+            used.add(key)
+            return True
+        return False
+
+    npu = npu_catalog(catalog)
+    elsewhere = engines.get("served_elsewhere") or {}
+    elsewhere = elsewhere if isinstance(elsewhere, dict) else {}
+    eng = engines.get("engines") or {}
+    eng = eng if isinstance(eng, dict) else {}
+    folders: dict[str, set] = {}  # folder -> the slots its kernel_assignment.json models assign
+    for m, e in assignment.items():
+        if isinstance(e, dict) and isinstance(e.get("folder"), str):
+            folders.setdefault(e["folder"], set()).update((e.get("kernels") or {}) if isinstance(
+                e.get("kernels"), dict) else ())
+    aliases = catalog_aliases(catalog, assignment)
+    md = f"and its \"#### `<tag>` → `<folder>`\" section to {ASSIGNMENT_MD}"
+
+    # 1. Every NPU tag has kernels: its own entry, or another model's folder.
+    for tag, entry in sorted(npu.items()):
+        folder = xclbin_folder(entry)
+        if tag in assignment:
+            # 3. The folder the assignment fills is the one the engine loads.
+            ka = assignment[tag].get("folder") if isinstance(assignment[tag], dict) else None
+            if ka != folder:
+                errors.append(f"{ASSIGNMENT}: {tag} has folder {ka}, but {MODEL_LIST} gives it xclbin folder "
+                              f"{folder} (its xclbin_folder, else its name), which the engine loads: "
+                              f"make the two agree (and the {ASSIGNMENT_MD} heading)")
+        elif tag in aliases:
+            if folder not in folders:
+                errors.append(f"{MODEL_LIST}: {tag} runs the kernels of xclbin_folder {folder}, but no "
+                              f"{ASSIGNMENT} model has that folder: point it at a model's folder, or give "
+                              f"{tag} an entry of its own in {ASSIGNMENT} {md}")
+        else:
+            errors.append(f"{MODEL_LIST}: NPU ({NPU_PLATFORM}) model {tag} has no {ASSIGNMENT} entry: add "
+                          f"\"{tag}\": {{\"folder\": \"{folder}\", \"kernels\": {{\"<slot>.xclbin\": "
+                          f"\"<artifact of {BUILD_UNITS}>\", ...}}}} and its \"#### `{tag}` → `{folder}`\" "
+                          f"section to {ASSIGNMENT_MD} (a tag that runs another "
+                          "model's kernels names that model's folder in xclbin_folder instead)")
+
+    # 2. Every assignment is an NPU model, or runs outside FLM_DLL.
+    for m in sorted(set(assignment) - set(npu) - set(elsewhere)):
+        errors.append(f"{ASSIGNMENT}: {m} is no NPU ({NPU_PLATFORM}) model of {MODEL_LIST}: drop its entry "
+                      f"and section in {ASSIGNMENT_MD}, fix the tag, or list it under served_elsewhere in "
+                      f"{ENGINES} if no FLM_DLL engine runs it")
+
+    # 4. Every assigned slot ships.
+    for m, e in sorted(assignment.items()):
+        if m in elsewhere or not isinstance(e, dict) or not isinstance(e.get("folder"), str):
+            continue
+        for slot in sorted(e.get("kernels") or {}):
+            if not (repo / SHIPPED_XCLBINS / e["folder"] / slot).is_file():
+                if pending is not None:
+                    pending.append(f"{SHIPPED_XCLBINS}/{e['folder']}/{slot}")
+                    continue
+                errors.append(f"{ASSIGNMENT}: {m} assigns {slot}, but {SHIPPED_XCLBINS}/{e['folder']}/{slot} "
+                              f"is not shipped: add the kernel there, or drop the slot from {ASSIGNMENT} "
+                              f"and {ASSIGNMENT_MD}")
+
+    # 5. Every shipped kernel is assigned by a model using its folder.
+    root = repo / SHIPPED_XCLBINS
+    shipped = sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file() and p.suffix in SHIPPED_SUFFIXES) \
+        if root.is_dir() else []
+    for rel in shipped:
+        folder, slot = rel.rsplit("/", 1) if "/" in rel else ("", rel)
+        path = f"{SHIPPED_XCLBINS}/{rel}"
+        if slot in folders.get(folder, ()) or excused(path):
+            continue
+        whose = (f"no {ASSIGNMENT} model with folder {folder} assigns {slot}" if folder in folders
+                 else f"no {ASSIGNMENT} model has folder {folder}")
+        errors.append(f"{path} is shipped, but {whose}: add the slot and the build-unit artifact that "
+                      f"builds it to {ASSIGNMENT} {md}; if no engine loads it, say why in CATALOG_ALLOW "
+                      "(.github/script/ci/devkit_check.py)")
+
+    # 6. Every NPU tag is served by exactly one engine (check_engines reports
+    # two), and engines serve catalog models.
+    served: dict[str, list] = {}
+    for name, e in sorted(eng.items()):
+        for m in (e.get("models") or []) if isinstance(e, dict) else []:
+            served.setdefault(m, []).append(name)
+            if isinstance(m, str) and m not in npu and m not in elsewhere:
+                errors.append(f"{ENGINES}: {name} lists {m}, which is no NPU ({NPU_PLATFORM}) model of "
+                              f"{MODEL_LIST}: drop it or fix the tag")
+    for tag in sorted(set(npu) - set(served)):
+        if tag in aliases and excused(tag):
+            continue
+        errors.append(f"{ENGINES}: NPU model {tag} of {MODEL_LIST} is served by no engine: add it to the "
+                      f"models of the engine that runs it; a new model family needs its engine under "
+                      f"{DLL}/detail/<engine>/ (Makefile with -Wl,-Bsymbolic-functions, CMakeLists.txt, "
+                      f"sources, include/models/<x>/ header) and an entry in {ENGINES}")
+
+    # 7. Every shipped engine library is a dev-kit dir's, and every dir's
+    # library ships for each runtime.
+    dirs = [d for d in (engines.get("shared") or []) if isinstance(d, str)] + sorted(eng)
+    libs: dict[str, str] = {}
+    for d in dirs:
+        lib = unit_library(repo / DLL, d, errors)
+        if lib:
+            libs[lib] = d
+    owned = {f: lib for lib in libs for f in shipped_names(lib)}
+    count = 0
+    for rt in SHIPPED_RUNTIMES:
+        lib_dir = repo / "src" / "lib" / rt
+        files = sorted(p.name for p in lib_dir.iterdir() if p.is_file()) if lib_dir.is_dir() else []
+        count += len(files)
+        for f in files:
+            path = f"src/lib/{rt}/{f}"
+            if f in owned or excused(path):
+                continue
+            errors.append(f"{path} is no library of an {ENGINES} engine or shared unit (their "
+                          f"{DLL}/detail/<dir>/Makefile TARGET and CMakeLists.txt add_library name it): add "
+                          f"the sources that build it under {DLL}/detail/<dir>/ and the dir to {ENGINES}")
+        for lib, d in sorted(libs.items()):
+            missing = [f for f in shipped_names(lib) if f not in files]
+            if missing and pending is not None:
+                pending += [f"src/lib/{rt}/{f}" for f in missing]
+            elif missing:
+                errors.append(f"{ENGINES}: {d} builds {lib}, but src/lib/{rt}/ lacks {', '.join(missing)}, "
+                              f"which src/CMakeLists.txt links for {rt} (lib<name>.so on Linux, <name>.lib "
+                              "and <name>.dll on Windows): ship them, or drop the dir from "
+                              f"{ENGINES} and {DLL}/detail/")
+
+    for key in sorted(set(allow) - used):
+        errors.append(f"CATALOG_ALLOW (.github/script/ci/devkit_check.py): {key} excuses nothing any more "
+                      f"({allow[key]}): drop the entry")
+    return (f"catalog: {len(npu)} NPU models ({len(aliases)} reusing another's kernels), "
+            f"{len(shipped)} shipped kernels, {count} prebuilt library files, {len(libs)} dev-kit libraries, "
+            f"{len(used)} allow-listed")
+
+
+def required_binaries(repo: Path) -> set[str]:
+    """The src/ paths check_catalog needs to exist: every assigned slot
+    (src/xclbins/<folder>/<slot>, served_elsewhere models skipped, rule 4)
+    and every file of every dev-kit library for each runtime
+    (src/lib/<rt>/lib<name>.so, <name>.dll, <name>.lib, rule 7). A
+    deletion of anything else loses nothing the catalog asks for
+    (devkit_swap.py check). Unreadable data gives what could be read."""
+    errors: list = []
+    assignment = (load_json(repo, ASSIGNMENT, errors) or {}).get("models") or {}
+    engines = load_json(repo, ENGINES, errors) or {}
+    elsewhere = engines.get("served_elsewhere") or {}
+    out = set()
+    for m, e in (assignment.items() if isinstance(assignment, dict) else ()):
+        if m in elsewhere or not isinstance(e, dict) or not isinstance(e.get("folder"), str):
+            continue
+        out |= {f"{SHIPPED_XCLBINS}/{e['folder']}/{slot}" for slot in (e.get("kernels") or {})}
+    eng = engines.get("engines") or {}
+    dirs = [d for d in (engines.get("shared") or []) if isinstance(d, str)]
+    dirs += sorted(eng) if isinstance(eng, dict) else []
+    for d in dirs:
+        lib = unit_library(repo / DLL, d, errors)
+        if lib:
+            out |= {f"src/lib/{rt}/{f}" for rt in SHIPPED_RUNTIMES for f in shipped_names(lib)}
+    return out
 
 
 def check_bsymbolic(repo: Path, errors: list) -> int:
@@ -589,8 +925,261 @@ def check_notices(repo: Path, base: str, head: str, errors: list, notes: list) -
     return checked
 
 
-def run(repo: Path, base: str = "", head: str = "HEAD") -> tuple[list[str], list[str]]:
-    """(errors, notes) for the tree at repo."""
+BENCH_WORKFLOW = ".github/workflows/devkit-bench.yml"
+BENCH_COMMENT_WORKFLOW = ".github/workflows/devkit-bench-comment.yml"
+# Calls BENCH_WORKFLOW; the comment workflow follows its runs.
+BUILD_WORKFLOW = ".github/workflows/build-and-test.yml"
+LIN_BUILD_WORKFLOW = ".github/workflows/lin-build.yml"
+WIN_BUILD_WORKFLOW = ".github/workflows/win-build.yml"
+STAGE_APPLY_ACTION = ".github/actions/devkit-stage-apply/action.yml"
+
+
+def _top_block(text: str, key: str) -> list[str]:
+    """The lines of a top-level YAML mapping (key: on its own line), unindented."""
+    lines = text.splitlines()
+    out, inside = [], False
+    for line in lines:
+        if re.match(rf"^{re.escape(key)}:\s*(#.*)?$", line):
+            inside = True
+            continue
+        if inside:
+            if line and not line[0].isspace() and not line.startswith("#"):
+                break
+            if line.strip() and not line.strip().startswith("#"):
+                out.append(line)
+    return out
+
+
+def _caller_jobs(text: str, workflow: str, with_ids: bool = False):
+    """The jobs (their lines) of a workflow that call ./<workflow>: a list,
+    or with_ids a dict job id -> lines."""
+    jobs, current = [], None
+    for line in text.splitlines():
+        m = re.match(r"^  ([A-Za-z0-9_-]+):\s*(#.*)?$", line)
+        if m:
+            current = []
+            jobs.append((m.group(1), current))
+        elif current is not None and line and not line[0].isspace() and not line.startswith("#"):
+            current = None
+        elif current is not None:
+            current.append(line)
+    found = [(k, j) for k, j in jobs if any(re.match(rf"^    uses:\s*\./{re.escape(workflow)}\s*(#.*)?$", line)
+                                            for line in j)]
+    return dict(found) if with_ids else [j for _, j in found]
+
+
+def _job_condition(job: list[str]) -> str:
+    """A job's if: expression (one line, or the first line of a >- block)."""
+    for k, line in enumerate(job):
+        m = re.match(r"^    if:\s*(.*)$", line)
+        if m:
+            value = m.group(1).strip()
+            if value in (">-", ">", "|", "|-") and k + 1 < len(job):
+                value = job[k + 1].strip()
+            return value
+    return ""
+
+
+def _run_scripts(text: str) -> list[str]:
+    """The bodies of run: | blocks (and one-line run: values)."""
+    out, lines, i = [], text.splitlines(), 0
+    while i < len(lines):
+        m = re.match(r"^(\s*)(- )?run:\s*(.*)$", lines[i])
+        if m:
+            indent = len(m.group(1)) + (2 if m.group(2) else 0)
+            rest = m.group(3)
+            if rest and rest[0] not in "|>":
+                out.append(rest)
+            else:
+                i += 1
+                while i < len(lines) and (not lines[i].strip() or len(lines[i]) - len(lines[i].lstrip()) > indent):
+                    out.append(lines[i])
+                    i += 1
+                continue
+        i += 1
+    return out
+
+
+def check_bench_workflows(repo: Path, errors: list) -> int:
+    """The bench comment workflow's invariants (see the docstring); returns
+    how many files were checked."""
+    try:
+        bench = (repo / BENCH_WORKFLOW).read_text(encoding="utf-8")
+        comment = (repo / BENCH_COMMENT_WORKFLOW).read_text(encoding="utf-8")
+        build = (repo / BUILD_WORKFLOW).read_text(encoding="utf-8")
+    except OSError:
+        return 0
+    where = BENCH_COMMENT_WORKFLOW
+    name = re.search(r"^name:\s*(.+?)\s*$", build, re.M)
+    build_name = name.group(1).strip("'\"") if name else ""
+    on = _top_block(comment, "on")
+    wf = re.search(r"workflows:\s*\[\s*['\"]?([^'\"\]]+?)['\"]?\s*\]", "\n".join(on))
+    if not build_name or not wf or wf.group(1) != build_name:
+        errors.append(f"{where}: on.workflow_run.workflows must be [\"{build_name}\"], the name of "
+                      f"{BUILD_WORKFLOW}, which runs the benches (workflow_run matches names, so a rename "
+                      f"breaks it silently)")
+    if not any(re.match(r"^[ \t]+workflow_run:", line) for line in on) or \
+            any(re.match(r"^[ \t]+(pull_request|pull_request_target|push|issue_comment):", line) for line in on):
+        errors.append(f"{where}: must trigger on workflow_run only")
+    perms = sorted(line.strip() for line in _top_block(comment, "permissions"))
+    if perms != ["actions: read", "pull-requests: write"]:
+        errors.append(f"{where}: workflow permissions must be exactly actions: read and pull-requests: write, "
+                      f"got {perms}")
+    if re.search(r"^[ \t]+permissions:", comment, re.M):
+        errors.append(f"{where}: no job may set its own permissions")
+    if re.search(r"actions/checkout@", comment):
+        errors.append(f"{where}: must not check anything out")
+    if re.search(r"secrets\.", comment):
+        errors.append(f"{where}: must use no secrets")
+    for needle in (f"github.event.workflow_run.path == '{BUILD_WORKFLOW}'",
+                   "github.event.workflow_run.repository.full_name == github.repository",
+                   "github.event.workflow_run.event == 'pull_request'"):
+        if needle not in comment:
+            errors.append(f"{where}: the job condition must include {needle}")
+    for text, path in ((comment, where), (bench, BENCH_WORKFLOW)):
+        for line in _run_scripts(text):
+            if re.search(r"\$\{\{\s*(github\.event\.|github\.head_ref|inputs\.)", line):
+                errors.append(f"{path}: an event field or input is expanded inside a run: script "
+                              f"(pass it through env:): {line.strip()[:80]}")
+    bench_perms = sorted(line.strip() for line in _top_block(bench, "permissions"))
+    if bench_perms != ["actions: read", "contents: read"]:
+        errors.append(f"{BENCH_WORKFLOW}: workflow permissions must be exactly contents: read and actions: read, "
+                      f"got {bench_perms}")
+    if re.search(r"^[ \t]+[a-z-]+: write[ \t]*$", bench, re.M):
+        errors.append(f"{BENCH_WORKFLOW}: no job may be granted a write permission")
+    callers = _caller_jobs(build, BENCH_WORKFLOW, with_ids=True)
+    ids = sorted(callers)
+    if ids not in (["devkit-bench"], ["devkit-bench", "devkit-bench-nightly"]):
+        errors.append(f"{BUILD_WORKFLOW}: the jobs calling ./{BENCH_WORKFLOW} must be devkit-bench and optionally "
+                      f"devkit-bench-nightly (found {', '.join(ids) or 'none'}): the comment workflow follows "
+                      f"{BUILD_WORKFLOW}'s runs")
+    elif len(ids) == 2:
+        # One call per run: the two conditions exclude each other.
+        for job_id, needle in (("devkit-bench", "${{ github.event_name != 'schedule' && "),
+                               ("devkit-bench-nightly", "${{ github.event_name == 'schedule' && ")):
+            cond = _job_condition(callers[job_id])
+            if not cond.startswith(needle.strip()):
+                errors.append(f"{BUILD_WORKFLOW}: {job_id}'s condition must start with {needle.strip()}, so a run "
+                              f"calls ./{BENCH_WORKFLOW} once")
+    for job in callers.values():
+        if any(re.match(r"^    secrets:", line) for line in job):
+            errors.append(f"{BUILD_WORKFLOW}: the job calling {BENCH_WORKFLOW} must pass no secrets")
+        perms, inside = [], False
+        for line in job:
+            if re.match(r"^    permissions:\s*(#.*)?$", line):
+                inside = True
+            elif inside and re.match(r"^      \S", line):
+                perms.append(line.strip())
+            elif inside and line.strip() and not line.strip().startswith("#"):
+                inside = False
+        if sorted(perms) != ["actions: read", "contents: read"]:
+            errors.append(f"{BUILD_WORKFLOW}: the job calling {BENCH_WORKFLOW} must grant exactly contents: read "
+                          f"and actions: read, got {sorted(perms)}")
+    return 3
+
+
+def _jobs(text: str) -> dict[str, list[str]]:
+    """Job id -> its lines, for the jobs: block of a workflow."""
+    jobs: dict[str, list[str]] = {}
+    current, inside = None, False
+    for line in text.splitlines():
+        if re.match(r"^jobs:\s*(#.*)?$", line):
+            inside = True
+            continue
+        if inside and line and not line[0].isspace() and not line.startswith("#"):
+            break
+        m = re.match(r"^  ([A-Za-z0-9_-]+):\s*(#.*)?$", line) if inside else None
+        if m:
+            current = jobs.setdefault(m.group(1), [])
+        elif current is not None:
+            current.append(line)
+    return jobs
+
+
+def check_swap_wiring(repo: Path, errors: list) -> int:
+    """The names devkit_swap.py reads another run by agree with the CI that
+    makes them (see the docstring); returns how many files were checked."""
+    try:
+        build = (repo / BUILD_WORKFLOW).read_text(encoding="utf-8")
+    except OSError:
+        return 0
+    import devkit_swap  # here: devkit_swap imports this module
+    where = "devkit_swap.py"
+    if devkit_swap.WORKFLOW_PATH != BUILD_WORKFLOW:
+        errors.append(f"{where}: WORKFLOW_PATH is {devkit_swap.WORKFLOW_PATH}, not {BUILD_WORKFLOW}")
+    jobs = _jobs(build)
+    for job in (devkit_swap.SUMMARY_JOB, devkit_swap.STAGE_JOB) + tuple(
+            p.split(" / ")[0] for p in devkit_swap.BUILD_JOB_PREFIXES):
+        if job not in jobs:
+            errors.append(f"{BUILD_WORKFLOW}: no job {job}, which {where} reads a run's results by")
+    stage = "\n".join(jobs.get(devkit_swap.STAGE_JOB, []))
+    if stage and ("devkit_stage.py" not in stage or any(re.match(r"^    name:", l) for l in
+                                                         jobs[devkit_swap.STAGE_JOB])):
+        errors.append(f"{BUILD_WORKFLOW}: the {devkit_swap.STAGE_JOB} job must run devkit_stage.py and keep "
+                      f"its id as its name ({where} STAGE_JOB)")
+    for (os_name, runtime), name in devkit_swap.TEST_JOBS.items():
+        artifact = devkit_swap.manifest_artifact(os_name, runtime)
+        upload = re.search(rf"name:[ \t]*{re.escape(artifact)}[ \t]*\n\s*path:[ \t]*(.+?)[ \t]*$", stage, re.M)
+        if not upload or not upload.group(1).endswith(
+                f"/manifest-{os_name}-{runtime}/{devkit_swap.MANIFEST_FILE}"):
+            errors.append(f"{BUILD_WORKFLOW}: the {devkit_swap.STAGE_JOB} job must upload "
+                          f".../manifest-{os_name}-{runtime}/{devkit_swap.MANIFEST_FILE} as {artifact}, the "
+                          f"artifact {where} reads (MANIFEST_ARTIFACT, MANIFEST_FILE)")
+        found = [lines for lines in jobs.values() if f"    name: {name}" in lines]
+        if len(found) != 1:
+            errors.append(f"{BUILD_WORKFLOW}: {where} TEST_JOBS expects exactly one job named \"{name}\" "
+                          f"(the product test job of {os_name} {runtime})")
+    summary = jobs.get(devkit_swap.SUMMARY_JOB, [])
+    step = next((i for i, l in enumerate(summary) if l.strip() == f"- name: {devkit_swap.PENDING_STEP}"), None)
+    body = "\n".join(summary[step:step + 30]) if step is not None else ""
+    if "devkit_swap.py pending" not in body or "--expect-staged" not in body:
+        errors.append(f"{BUILD_WORKFLOW}: the summary job needs a step named \"{devkit_swap.PENDING_STEP}\" "
+                      f"running devkit_swap.py pending --expect-staged ({where} PENDING_STEP: fetch accepts a "
+                      "run whose only failure is that step; a missing manifest must fail it)")
+    count = 1
+    # The staged files: devkit-stage uploads devkit_stage.stage_artifact()
+    # for each system and runtime, and the product builds download them by
+    # name through devkit-stage-apply, which maps each to its runtime.
+    import devkit_stage  # here: it imports this module
+    apply = repo / STAGE_APPLY_ACTION
+    try:
+        apply_text = apply.read_text(encoding="utf-8")
+        count += 1
+    except OSError:
+        apply_text = None
+    for (os_name, runtime) in devkit_swap.TEST_JOBS:
+        artifact = devkit_stage.stage_artifact(os_name, runtime)
+        if not re.search(rf"^\s*name:[ \t]*{re.escape(artifact)}[ \t]*$", stage, re.M):
+            errors.append(f"{BUILD_WORKFLOW}: the {devkit_swap.STAGE_JOB} job must upload the staged files as "
+                          f"{artifact} (devkit_stage.py stage_artifact), the name the product builds download")
+        if apply_text is not None and not re.search(rf"(^|\s|')({re.escape(artifact)}\)|'{re.escape(artifact)}')",
+                                                    apply_text, re.M):
+            errors.append(f"{STAGE_APPLY_ACTION}: must map {artifact} to its runtime (devkit_stage.py "
+                          f"stage_artifact)")
+    for os_name, workflow in (("linux", LIN_BUILD_WORKFLOW), ("windows", WIN_BUILD_WORKFLOW)):
+        prefix = devkit_stage.stage_artifact(os_name, "xrt")[:-len("-xrt")]
+        try:
+            text = (repo / workflow).read_text(encoding="utf-8")
+            count += 1
+        except OSError:
+            continue
+        lines = [l for l in text.splitlines() if re.match(rf"^\s*artifact:[ \t]*{re.escape(prefix)}-\$\{{\{{", l)]
+        if len(lines) != 1 or "'hrx'" not in lines[0] or "'xrt'" not in lines[0]:
+            errors.append(f"{workflow}: its devkit-stage-apply step must name the artifact {prefix}-<xrt|hrx> "
+                          f"(devkit_stage.py stage_artifact), choosing 'xrt' or 'hrx' by the variant")
+    changes_job = "\n".join(jobs.get("changes", []))
+    for sub in ("verify", "check"):
+        if f"devkit_swap.py {sub}" not in changes_job:
+            errors.append(f"{BUILD_WORKFLOW}: the changes job must run devkit_swap.py {sub}")
+    if not re.search(r"^      actions: read\s*$", changes_job, re.M):
+        errors.append(f"{BUILD_WORKFLOW}: the changes job needs actions: read (devkit_swap.py verify reads "
+                      "another run's manifests)")
+    return count
+
+
+def run(repo: Path, base: str = "", head: str = "HEAD",
+        pending: Optional[list] = None) -> tuple[list[str], list[str]]:
+    """(errors, notes) for the tree at repo; pending: see check_catalog."""
     errors: list[str] = []
     notes: list[str] = []
     units = load_json(repo, BUILD_UNITS, errors)
@@ -609,13 +1198,19 @@ def run(repo: Path, base: str = "", head: str = "HEAD") -> tuple[list[str], list
     if md_text is not None and assignment is not None:
         check_assignment_md(md_text, models, index, errors)
         notes.append(f"assignment md: {len(parse_assignment_md(md_text)[0])} model sections compared")
+    catalog = load_json(repo, MODEL_LIST, errors)
     engines = load_json(repo, ENGINES, errors)
     if engines is not None:
-        check_engines(repo, engines, models, errors)
+        check_engines(repo, engines, models, errors,
+                      catalog_aliases(catalog, models) if catalog is not None else set())
         notes.append(f"engines: {len(engines.get('engines') or {})} engines, "
                      f"{len(engines.get('shared') or [])} shared")
+    if catalog is not None and engines is not None and assignment is not None:
+        notes.append(check_catalog(repo, catalog, models, engines, errors, pending=pending))
     notes.append(f"rtp lock: {check_rtp_lock(repo, index, assignment, errors)} stanzas")
     notes.append(f"Bsymbolic: {check_bsymbolic(repo, errors)} Makefiles")
+    notes.append(f"bench workflows: {check_bench_workflows(repo, errors)} checked")
+    notes.append(f"swap wiring: {check_swap_wiring(repo, errors)} files checked")
     if base.strip("0 "):
         notes.append(f"notices: {check_notices(repo, base, head, errors, notes)} added source/script files")
         check_rtp_lock_change(repo, base, head, assignment or {}, engines or {}, errors, notes)
@@ -632,10 +1227,25 @@ def main(argv: Optional[list[str]] = None) -> int:
                              "merge base with this commit; "
                              "empty or all-zero skips that check.")
     parser.add_argument("--head", default="HEAD")
+    parser.add_argument("--pending-ok", action="store_true",
+                        help="a pull request's run: missing assigned slots and engine libraries are pending "
+                             "(its run must stage them), not errors")
+    parser.add_argument("--github-output", action="store_true", help="append pending=<csv> to $GITHUB_OUTPUT")
     args = parser.parse_args(argv)
-    errors, notes = run(args.repo, args.base, args.head)
+    pending: Optional[list] = [] if args.pending_ok else None
+    errors, notes = run(args.repo, args.base, args.head, pending)
     for note in notes:
         print(f"devkit_check: {note}")
+    for path in pending or []:
+        print(f"devkit_check: pending swap: {path} is not in src/ yet; this pull request's run must stage it, "
+              "and its swap commit it")
+    if args.github_output:
+        target = os.environ.get("GITHUB_OUTPUT")
+        if not target:
+            print("--github-output given but $GITHUB_OUTPUT is not set", file=sys.stderr)
+            return 2
+        with open(target, "a", encoding="utf-8") as fh:
+            fh.write(f"pending={','.join(sorted(set(pending or [])))}\n")
     for err in errors:
         print(f"devkit_check: error: {err}")
     if errors:

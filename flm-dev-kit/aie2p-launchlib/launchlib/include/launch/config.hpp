@@ -32,6 +32,12 @@
 // A configuration may name the runtime sequence (`sequence`, default: the app),
 // so one app can have several sequences (other shapes or buffers).
 //
+// An app may be "APP@STATE": APP loaded set up for one of its runtime ops (the
+// package's state_STATE.txn, formats/package.hpp). warm(other, "ovl@P") is the
+// switch back to an overlay that also configures its op P, so the host's next
+// P run needs no configuring; the host then knows the array holds ovl with P
+// ready. As a prev, "APP@STATE" is what such a kernel left.
+//
 // JSON form (config_from_json / config_to_json):
 //   { "package_dir": "build/pkg", "transport": "ctrlpkt",
 //     "configs":[ {"kind": "cold", "app": "vadd"},

@@ -30,7 +30,7 @@ inputs:
     default: ""
   required-models:
     description: >
-      Comma-separated model ids the change adds (with backend: adds or edits):
+      Comma-separated model ids the change adds (with backend: adds, republishes or moves onto it):
       tested on every tier, even past models, and downloaded whatever their
       size; the run fails if they are not listed or do not pull, bar one
       larger than max-model-gb, a skip.

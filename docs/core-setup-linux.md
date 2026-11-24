@@ -188,7 +188,7 @@ source /scratch/$USER/flm_exe_core/flm_env.sh
 ```
 
 `flm_env.sh` sets `FLM_CONFIG_PATH`, `FLM_XCLBIN_PATH`, `FLM_MODEL_PATH`
-(`/scratch/alfxu`) and pins `XILINX_XRT`. It does **not** set `ulimit` — step 4
+(the value it had when `home_install.sh` ran; left unset otherwise) and pins `XILINX_XRT`. It does **not** set `ulimit` — step 4
 is on you.
 
 Models live under `$FLM_MODEL_PATH/models/<name>`. The shipped

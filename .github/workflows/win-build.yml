@@ -10,6 +10,8 @@ name: Windows Build
 #
 # Build and Test (build-and-test.yml) calls this once per package on every pull
 # request, push and tag; dispatch it to build packages without testing them.
+# With devkit-stage, a pull request's dev-kit engines and kernels are copied
+# into the checkout first (.github/actions/devkit-stage-apply).
 on:
   workflow_call:
     inputs:
@@ -21,6 +23,13 @@ on:
         description: Also build the MSI installer when the XRT variant is built.
         type: boolean
         default: true
+      devkit-stage:
+        description: >
+          Copy this run's staged dev-kit files (artifact
+          devkit-stage-win-<xrt|hrx>, Build and Test's devkit-stage job) over
+          the checkout before building, so the package is built from them.
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       variants:
@@ -103,6 +112,15 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+
+      # A pull request's dev-kit engines (DLL and import library) and
+      # kernels, before CMake runs: the package is then what main would ship
+      # after their swap. Source is an XRT build.
+      - name: Stage the dev-kit files
+        if: inputs.devkit-stage
+        uses: ./.github/actions/devkit-stage-apply
+        with:
+          artifact: devkit-stage-win-${{ matrix.variant == 'HRX' && 'hrx' || 'xrt' }}
 
       - name: Build
         id: build

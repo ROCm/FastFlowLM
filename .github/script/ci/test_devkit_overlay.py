@@ -7,7 +7,6 @@ from __future__ import annotations
 import contextlib
 import io
 import json
-import re
 import shutil
 import struct
 import sys
@@ -169,7 +168,8 @@ class Abi(unittest.TestCase):
         for name in ("_ZNKRSt7__cxx1115basic_stringbufIcSt11char_traitsIcESaIcEE3strEv",
                      "_ZTTNSt7__cxx1118basic_stringstreamIwSt11char_traitsIwESaIwEEE",
                      "_ZNSo9_M_insertIbEERSoT_", "_ZGVbN2v_exp", "_Znwm", "_ZdlPvm",
-                     "_ZTVN10__cxxabiv117__class_type_infoE"):
+                     "_ZTVN10__cxxabiv117__class_type_infoE",
+                     "_ZN3xrt7runlist3addERKNS_3runE", "_ZNK3xrt6kernel8group_idEi"):
             self.assertTrue(do.STD_SYMBOL.match(name) or do.RUNTIME_SYMBOL.match(name), name)
         for name in ("_ZN3MHAD1Ev", "_ZN7DequantD1Ev", "_ZGVZN3foo3barEvE1x"):
             self.assertFalse(do.STD_SYMBOL.match(name) or do.RUNTIME_SYMBOL.match(name), name)
@@ -185,6 +185,21 @@ class Abi(unittest.TestCase):
         errors = do.abi_errors(root, "windows", {root / "qwen3_npu.dll": self.tmp / "new.dll"})
         self.assertEqual(errors, ["qwen3_npu.dll imports 1 name(s) the package mha.dll does not export: "
                                   "?new@@YAXXZ"])
+
+    def test_a_library_new_to_the_set(self):
+        # devkit_stage.py: a new library (no earlier build) provides what a
+        # replaced one now imports, and is not itself compared.
+        root = self.package("windows", ["mha.dll", "qwen3_npu.dll"])
+        (self.tmp / "new.dll").write_bytes(make_pe(["e"], {"newunit.dll": ["?f@@YAXXZ"]}))
+        (self.tmp / "newunit.dll").write_bytes(make_pe(["?f@@YAXXZ"]))
+        final = {p: p for p in do.package_binaries(root, "windows")}
+        final[root / "qwen3_npu.dll"] = self.tmp / "new.dll"
+        final[root / "newunit.dll"] = self.tmp / "newunit.dll"
+        self.assertEqual(do.abi_errors_of(final, "windows", {root / "qwen3_npu.dll"}), [])
+        (self.tmp / "newunit.dll").write_bytes(make_pe(["?g@@YAXXZ"]))
+        errors = do.abi_errors_of(final, "windows", {root / "qwen3_npu.dll"})
+        self.assertEqual(errors, ["qwen3_npu.dll imports 1 name(s) the package newunit.dll does not export: "
+                                  "?f@@YAXXZ"])
 
 
 CATALOG = {"models": {
@@ -309,52 +324,6 @@ def do_units(case: Cli, units: list[str]) -> tuple[int, str]:
         return case.run_main("--families", ",".join(sorted(ENGINES.all_families())))
     finally:
         do.units_to_overlay = original
-
-
-WORKFLOW = REPO / ".github" / "workflows" / "build-and-test.yml"
-ACTION = REPO / ".github" / "actions" / "devkit-npu-overlay" / "action.yml"
-GATE = """          || (needs.npu-gate.result == 'success'
-              && (needs.npu-gate.outputs.trusted == 'true' || needs.npu-approve.result == 'success')))"""
-
-
-def jobs(text: str) -> dict[str, str]:
-    """Job id -> its block of build-and-test.yml (text between job headers)."""
-    body = text[text.index("\njobs:\n"):]
-    parts = re.split(r"(?m)^  ([A-Za-z0-9_-]+):\n", body)
-    return dict(zip(parts[1::2], parts[2::2]))
-
-
-class Workflow(unittest.TestCase):
-    """The overlay jobs keep the NPU jobs' gate and count in summary."""
-
-    def test_overlay_jobs(self):
-        text = WORKFLOW.read_text(encoding="utf-8")
-        blocks = jobs(text)
-        overlay = sorted(j for j in blocks if j.endswith("-devkit"))
-        self.assertEqual(overlay, ["test-lin-hrx-devkit", "test-lin-xrt-devkit",
-                                   "test-win-hrx-devkit", "test-win-xrt-devkit"])
-        for job in overlay:
-            with self.subTest(job=job):
-                block = blocks[job]
-                self.assertIn(GATE, block)
-                self.assertIn("github.event_name == 'pull_request'", block)
-                self.assertIn("needs.changes.outputs.devkit-overlay == 'true'", block)
-                self.assertRegex(block, r"runs-on: \[self-hosted, (linux|windows), x64, npu, sweep\]")
-                self.assertIn("uses: ./.github/actions/devkit-npu-overlay", block)
-                self.assertIn(f"      - {job}\n", blocks["summary"])
-                self.assertIn(f"{job}=${{{{ needs.{job}.result }}}}", blocks["summary"])
-        self.assertIn("persist-credentials: false", blocks["test-lin-xrt-devkit"])
-        self.assertIn("devkit-overlay == 'true'", blocks["npu-approve"])
-        for build in ("build-lin-xrt-portable", "build-lin-hrx-portable", "build-win-xrt", "build-win-hrx"):
-            self.assertIn("needs.changes.outputs.devkit-overlay == 'true'", blocks[build], build)
-
-    def test_harness_is_the_base(self):
-        text = ACTION.read_text(encoding="utf-8")
-        self.assertIn("ref: ${{ inputs.harness-ref }}", text)
-        self.assertIn("persist-credentials: false", text)
-        self.assertIn('clean-env: "true"', text)
-        self.assertIn("harness-dir: ${{ github.workspace }}/devkit-harness", text)
-        self.assertIn("harness-ref: ${{ github.event.pull_request.base.sha }}", WORKFLOW.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

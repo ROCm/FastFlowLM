@@ -26,14 +26,15 @@
 //   switch cost     alternate - rerun
 // and the FLM way: vadd.xclbin and vmul.xclbin in two hw_contexts.
 //
-//   host.exe --package DIR [--n N] [--iters N] [--pairs P] [--elf] [--skip-baseline] [--build-only]
-//            [--transport txn|ctrlpkt]
+//   host.exe --package DIR [--n N] [--iters N] [--pairs P] [--flow elf|xclbin] [--skip-baseline]
+//            [--build-only] [--transport txn|ctrlpkt]
 //
 // --build-only builds the kernels, prints what the switches write (BREAKDOWN
 // lines: part, register class, ops, words) and stops before XRT.
 //
-// --elf also runs the expression through FLM's ELF flow (an ELF per kernel,
-// xrt::module, xrt::ext::kernel) and checks it.
+// --flow (default elf): how a launch reaches the NPU (include/flow.hpp): an ELF
+// per kernel (xrt::module, xrt::ext::kernel), or the xclbin's kernel with an
+// instruction BO. --elf is --flow elf.
 //
 // --transport (default ctrlpkt): how the kernels load (launch::Transport). A
 // ctrlpkt kernel also takes its control packets (launch/xrt/packets.hpp).
@@ -42,19 +43,15 @@
 
 #include "bf16.hpp"
 #include "elementwise_sequence.hpp"
+#include "flow.hpp"
 
 #include "launch/launch.hpp"
-#include "launch/txn/elf.hpp"
-#include "launch/xrt/packets.hpp"
 
 #include <xrt/xrt_bo.h>
 #include <xrt/xrt_device.h>
 #include <xrt/xrt_hw_context.h>
 #include <xrt/xrt_kernel.h>
-#include <xrt/experimental/xrt_elf.h>
-#include <xrt/experimental/xrt_ext.h>
 #include <xrt/experimental/xrt_kernel.h>
-#include <xrt/experimental/xrt_module.h>
 #include <xrt/experimental/xrt_xclbin.h>
 
 #include <cctype>
@@ -80,13 +77,23 @@ using ew::to_bf16;
 int main(int argc, char **argv) {
   std::string package;
   int n = 2 * ew::kBlockElements, iters = 50, pairs = 16;
-  bool use_elf = false, baseline = true, build_only = false, preempt = false;
+  bool use_elf = true, baseline = true, build_only = false, preempt = false;
   launch::Transport transport = launch::Transport::ctrlpkt;
+  launch::CtrlPktOptions ctrlpkt;
   for (int i = 1; i < argc; ++i) {
     const std::string opt = argv[i];
     if (opt == "--elf") use_elf = true;
+    else if (i + 1 < argc && opt == "--flow") {
+      try {
+        use_elf = ew::elf_flow(argv[++i]);
+      } catch (const std::exception &e) {
+        std::cerr << e.what() << "\n";
+        return 2;
+      }
+    }
     else if (opt == "--preempt") preempt = true;
     else if (opt == "--build-only") build_only = true;
+    else if (opt == "--keep-lanes") ctrlpkt.rewrite_lanes = false;
     else if (opt == "--skip-baseline") baseline = false;
     else if (i + 1 < argc && opt == "--package") package = argv[++i];
     else if (i + 1 < argc && opt == "--n") n = std::atoi(argv[++i]);
@@ -102,8 +109,8 @@ int main(int argc, char **argv) {
     }
   }
   if (package.empty() || iters < 1 || pairs < 1) {
-    std::cerr << "usage: host.exe --package DIR [--n N] [--iters N] [--pairs P] [--elf] [--skip-baseline]\n"
-                 "                [--build-only] [--preempt] [--transport txn|ctrlpkt]\n";
+    std::cerr << "usage: host.exe --package DIR [--n N] [--iters N] [--pairs P] [--flow elf|xclbin]\n"
+                 "                [--skip-baseline] [--build-only] [--preempt] [--transport txn|ctrlpkt]\n";
     return 2;
   }
 
@@ -114,7 +121,7 @@ int main(int argc, char **argv) {
     const bool pm_ok = ew::blocks_per_core(n) % 2 == 0;
 
     // 1. The kernels.
-    launch::ConfigList list{package, transport, {}};
+    launch::ConfigList list{package, transport, {}, ctrlpkt};
     list.configs = {
         launch::cold("vadd"),
         launch::warm("vadd", "vmul"),
@@ -144,19 +151,15 @@ int main(int argc, char **argv) {
     if (build_only)
       return 0;
 
-    // 3. XRT: one hw_context on the base xclbin; a kernel is an instruction BO.
+    // 3. XRT: one hw_context on the base xclbin; a kernel is an ELF or an
+    // instruction BO (--flow).
     xrt::device device(0);
     xrt::xclbin xclbin(r.base_xclbin);
     device.register_xclbin(xclbin);
     xrt::hw_context context(device, xclbin.get_uuid());
     xrt::kernel kernel(context, "MLIR_AIE");
-    std::vector<xrt::bo> instr;
-    for (const launch::Kernel &k : r.kernels) {
-      xrt::bo &bo = instr.emplace_back(device, k.words.size() * 4, XCL_BO_FLAGS_CACHEABLE, kernel.group_id(1));
-      std::memcpy(bo.map<void *>(), k.words.data(), k.words.size() * 4);
-      bo.sync(XCL_BO_SYNC_BO_TO_DEVICE);
-    }
-    const std::vector<xrt::bo> packets = launch::packet_buffers(device, kernel, r);
+    const ew::FlowKernels kernels(device, context, kernel, r, use_elf);
+    std::printf("flow %s\n", ew::flow_name(use_elf));
 
     // Buffers: the four inputs, the two temporaries and the result.
     const size_t bytes = (size_t)n * sizeof(uint16_t);
@@ -213,14 +216,10 @@ int main(int argc, char **argv) {
     struct Launch { int kernel; xrt::bo *l, *r, *o; };
     std::vector<std::unique_ptr<xrt::run>> runs;
     auto make_run = [&](const Launch &l) -> xrt::run & {
-      auto run = std::make_unique<xrt::run>(kernel);
-      run->set_arg(0, kOpcode);
-      run->set_arg(1, instr[l.kernel]);
-      run->set_arg(2, (uint32_t)r.kernels[l.kernel].words.size());
+      std::unique_ptr<xrt::run> run = kernels.run(l.kernel);
       run->set_arg(3 + ew::kArgLhs, *l.l);
       run->set_arg(3 + ew::kArgRhs, *l.r);
       run->set_arg(3 + ew::kArgOut, *l.o);
-      launch::set_packets(*run, r.kernels[l.kernel], packets[l.kernel]);
       runs.push_back(std::move(run));
       return *runs.back();
     };
@@ -299,31 +298,6 @@ int main(int argc, char **argv) {
         if (!std::isalnum((unsigned char)ch))
           ch = '_';
       std::printf("RESULT %s %.2f\n", key.c_str(), v);
-    }
-
-    if (use_elf) {
-      // FLM's ELF flow on the same hw_context: one ELF per kernel.
-      std::vector<std::unique_ptr<xrt::ext::kernel>> elf_kernels;
-      for (int k : {0, 1, 2}) {
-        const std::vector<char> elf = launch::txn::to_elf(r.kernels[k].words);
-        xrt::module mod{xrt::elf(elf.data(), elf.size())};
-        elf_kernels.push_back(std::make_unique<xrt::ext::kernel>(context, mod, "MLIR_AIE"));
-      }
-      poison();
-      xrt::bo *args[3][3] = {{&A, &B, &T1}, {&T1, &C, &T2}, {&T2, &D, &Y}};
-      for (int k = 0; k < 3; ++k) {
-        xrt::run run(*elf_kernels[k]);
-        run.set_arg(0, kOpcode);
-        run.set_arg(1, 0);
-        run.set_arg(2, 0);
-        run.set_arg(3 + ew::kArgLhs, *args[k][0]);
-        run.set_arg(3 + ew::kArgRhs, *args[k][1]);
-        run.set_arg(3 + ew::kArgOut, *args[k][2]);
-        launch::set_packets(run, r.kernels[k], packets[k]);
-        run.start();
-        run.wait();
-      }
-      check("expression, ELF flow");
     }
 
     if (baseline) {

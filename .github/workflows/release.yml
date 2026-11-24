@@ -18,11 +18,14 @@ on:
 jobs:
   # What build-and-test.yml's jobs ask for, and no more: a called workflow
   # gets at most what this job grants, and it builds and tests only (GHCR
-  # pulls need packages: read). The publish jobs below grant their own write.
+  # pulls need packages: read; its devkit-bench job, which a release skips,
+  # asks for actions: read, and a nested job may not ask for more than this
+  # grants even when skipped). The publish jobs below grant their own write.
   build-and-test:
     permissions:
       contents: read
       packages: read
+      actions: read
     uses: ./.github/workflows/build-and-test.yml
     with:
       tier: pr

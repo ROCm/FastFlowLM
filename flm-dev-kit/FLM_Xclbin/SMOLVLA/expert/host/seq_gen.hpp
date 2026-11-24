@@ -183,7 +183,7 @@ void gen_mm_seq(npu_sequence* seq, const uint32_t M, const uint32_t K, const uin
     assert(N % 256 == 0);
     seq->clear_cmds();
 
-    constexpr int rtp_address = 51200;
+    constexpr int rtp_address = 9728;  // mm tiles (input_with_addresses.mlir)
     int K_div_k = K / k;
     const int M_div_m = M / m / total_rows;
     const int N_div_n  = N / n / total_cols; 
@@ -201,19 +201,21 @@ void gen_mm_seq(npu_sequence* seq, const uint32_t M, const uint32_t K, const uin
             int bd_offset = (round % 2) * 8;
             int y_offset = i * m * N * total_rows + j * n * total_cols;
             int x_offset = i * m * K * total_rows;
-            uint32_t w_offset = j * n * K * total_cols;
+            // W is bfp16ebs8 bytes: strip s = j*total_cols + c (64 n rows) is contiguous, 72*K bytes
+            const uint32_t strip_bytes = (uint32_t)n * K / 8 * 9;
+            uint32_t w_offset = j * total_cols * strip_bytes;
             npu_bd_id y_bd = npu_bd_id(0 + bd_offset);
             npu_bd_id x_bd = npu_bd_id(1 + bd_offset);
             npu_bd_id w_bd = npu_bd_id(2 + bd_offset);
             // send w
             for (int c = 0; c < total_cols; c++){
                 seq->npu_dma_memcpy_nd(
-                    2, 2,
+                    1, 2,
                     MM2S, IT[c],
                     w_bd, it_channel_1,
-                    {0, 0, 0, w_offset + c * n * K},
-                    {1, K_div_k, n, (uint32_t)k},
-                    {0, k, K, 1},
+                    {0, 0, 0, w_offset + c * strip_bytes},
+                    {1, 1, strip_bytes / 2304, 2304},
+                    {0, 0, 2304, 1},
                     -1, 0, false
                 );
                 // receive y

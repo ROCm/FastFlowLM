@@ -5,7 +5,7 @@
 
 # attention path of the 8-token verify layer: RoPE, q park, global + SWA attention (plan S6.5 second half, S6.9, S6.10), 2026-10-29
 
-IRON `FLM_Xclbin/Gemma4/verify_decoding`, branch feat/bolt-dflash, commits 022d7c637 (RoPE), c84ebd8ce (q park + global), aca5666cb (SWA).
+Design: `FLM_Xclbin/Gemma4/verify_decoding`, built in three steps: RoPE, q park + global, SWA.
 Stage designs (stand-alone, shim-fed): `DESIGN=attn8rope` (RoPE tiles only), `DESIGN=attn8attn` (RoPE + q park + global and SWA attention columns).
 
 ## Build / run

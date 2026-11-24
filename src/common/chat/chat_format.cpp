@@ -19,7 +19,41 @@ const format_name_entry FORMAT_NAMES[] = {
     {chat_format_kind::LFM2_PYTHONIC, "lfm2_pythonic"},
     {chat_format_kind::GEMMA4, "gemma4"},
     {chat_format_kind::HARMONY, "harmony"},
+    {chat_format_kind::GLM_XML, "glm_xml"},
 };
+
+bool is_call_space(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
+
+/// \brief A GLM call opens with the function's name, then its first argument or the end of the call
+chat_call_head glm_call_head(const chat_format_spec& spec, const std::string& text, size_t pos) {
+    static const std::string KEY_OPEN = "<arg_key>";
+    size_t end = pos;
+    while (end < text.size() && (std::isalnum(static_cast<unsigned char>(text[end])) || text[end] == '_' ||
+                                 text[end] == '-' || text[end] == '.' || text[end] == ':')) {
+        end++;
+    }
+    if (end == pos) {
+        return chat_call_head::PROSE;
+    }
+    while (end < text.size() && is_call_space(text[end])) {
+        end++;
+    }
+    const size_t avail = text.size() - end;
+    if (avail == 0) {
+        return chat_call_head::UNSURE;
+    }
+    for (const std::string* next : {&KEY_OPEN, &spec.tool_end}) {
+        if (text.compare(end, next->size(), *next) == 0) {
+            return chat_call_head::CALL;
+        }
+        if (avail < next->size() && next->compare(0, avail, text, end, avail) == 0) {
+            return chat_call_head::UNSURE;
+        }
+    }
+    return chat_call_head::PROSE;
+}
 
 } // namespace
 
@@ -54,6 +88,7 @@ chat_format_spec chat_format_make(chat_format_kind kind, bool with_reasoning) {
             break;
         case chat_format_kind::HERMES_JSON:
         case chat_format_kind::QWEN_XML:
+        case chat_format_kind::GLM_XML:
             spec.tool_start = "<tool_call>";
             spec.tool_end = "</tool_call>";
             break;
@@ -105,6 +140,11 @@ chat_format_spec chat_format_detect(const std::string& template_src,
     if (in_template("<function=") && in_template("<parameter=")) {
         return chat_format_make(chat_format_kind::QWEN_XML, with_reasoning);
     }
+    // GLM-style arguments inside <tool_call>, so ahead of the Hermes check below. Hy-Memory also
+    // writes <arg_key>, but with <tool_sep> after the name, which the GLM parser does not read.
+    if (in_template("<arg_key>") && in_template("<arg_value>") && !in_template("<tool_sep>")) {
+        return chat_format_make(chat_format_kind::GLM_XML, with_reasoning);
+    }
     if (known("<|tool_call_start|>")) {
         return chat_format_make(chat_format_kind::LFM2_PYTHONIC, with_reasoning);
     }
@@ -126,15 +166,18 @@ chat_call_head chat_format_call_head(const chat_format_spec& spec, const std::st
     const std::vector<std::string>* openers = spec.kind == chat_format_kind::QWEN_XML    ? &QWEN_XML_OPENERS
                                               : spec.kind == chat_format_kind::HERMES_JSON ? &HERMES_OPENERS
                                                                                            : nullptr;
-    if (openers == nullptr) {
+    if (openers == nullptr && spec.kind != chat_format_kind::GLM_XML) {
         return chat_call_head::CALL;
     }
-    while (pos < text.size() && (text[pos] == ' ' || text[pos] == '\t' || text[pos] == '\n' || text[pos] == '\r')) {
+    while (pos < text.size() && is_call_space(text[pos])) {
         pos++;
     }
     const size_t avail = text.size() - pos;
     if (avail == 0) {
         return chat_call_head::UNSURE;
+    }
+    if (spec.kind == chat_format_kind::GLM_XML) {
+        return glm_call_head(spec, text, pos);
     }
     if (spec.kind == chat_format_kind::HERMES_JSON && text[pos] == '[') {
         // a list of calls is a list of objects; "[docs]" is prose

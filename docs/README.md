@@ -242,7 +242,7 @@ Displays an image or media with accompanying text content.
     src: "/assets/demo.gif"
     alt: "FastFlowLM demo"
     title: "Interactive Demo"
-    body: "Experience the power of NPU-first AI"
+    body: "Experience the power of local AI on Ryzen™ AI"
     items:
       - heading: "Feature 1"
         body: "Description of feature"

@@ -6,8 +6,7 @@
 # aie2p-launchlib
 
 Switch the NPU from one app to another **inside one hw_context**, with control packets, instead of switching
-hw_contexts. For AIE2P (npu2: Strix, Strix Halo, Krackan). The same design concept as `aie4-launchlib` (branch
-`flm_aie4_double_pm`), without the PM ping-pong.
+hw_contexts. For AIE2P (npu2: Strix, Strix Halo, Krackan).
 
 ## Why
 
@@ -31,7 +30,10 @@ Strix Halo, Windows = Krackan):
 | 1 core (1 × 1), Linux | 143 | 7.3 | **3.4** | 20–42× |
 
 Linux: median of 3 runs, every array from 1 to 32 cores in `vadd_vmul_bf16/results/sweep.md`; Windows: one run
-(`vadd_vmul_bf16/WINDOWS.md`).
+(`vadd_vmul_bf16/WINDOWS.md`). Measured in the xclbin flow; the ELF flow, now the default, makes every launch 8–13 µs
+cheaper and the switches cost about the same (32 cores, µs per launch: rerun 30.0 → 17.5, alternating with
+program-only switches 55.1 → 36.2, with full switches 108.5 → 84.5; `vadd_vmul_bf16/README.md`, "ELF flow vs
+xclbin flow").
 
 A *full* switch works between any two apps; a *program-only* switch needs the two apps to share a floorplan (same
 BDs, locks, routes) and is then just the new program.
@@ -60,17 +62,24 @@ stream per kernel of the list:
 | `warm(prev, app)` | switches the array from `prev` to `app`: the whole switch, or only the program (`{.program_only = true}`) | between apps |
 | `rerun(app)` | the app's runtime sequence again | the same app again |
 
-The host launches them as `xrt::run`s of one xclbin's kernel in an `xrt::runlist`, all in one hw_context, or as
-ELFs (FLM's flow; the library writes them, no aiebu). `Transport::ctrlpkt` (default) sends the program, locks,
-BDs and chain starts as control packets on each column's shim DMA, all columns in parallel, and checks every kernel
-on a switch model before it runs; `Transport::txn` (command-processor writes only) is the fallback. Details:
-`launchlib/README.md`.
+The host launches them in an `xrt::runlist`, all in one hw_context: as ELFs by default (`Flow::elf`, FLM's flow;
+the library writes them, no aiebu), or as `xrt::run`s of one xclbin's kernel with an instruction BO each
+(`Flow::xclbin`). `Transport::ctrlpkt` (default) sends the program, locks, BDs and chain starts as control packets
+on each column's shim DMA, all columns in parallel, and checks every kernel on a switch model before it runs;
+`Transport::txn` (command-processor writes only) is the fallback. Details: `launchlib/README.md`.
+
+An app in a list may also be `APP@STATE`, the app with one of its runtime ops already set up (an overlay switches
+back with its op ready, `vadd_vmul_bf16`'s `make ovlp`), or `APP[A-B]`, its columns A..B only (a smaller guest app
+there reloads only those columns; the others keep their state). `launchlib/README.md` §3.1.
 
 Two rules:
 
 - **One context.** The array's state lives only while this hw_context is the only one running on the NPU; when
   another runs, this context comes back as its xclbin. Start each runlist with `cold` after anything else may
-  have used the NPU (`launch::Session` checks it for you; `launchlib/README.md` §3.2).
+  have used the NPU (`launch::Session` checks it for you; `launchlib/README.md` §3.2). On the out-of-tree
+  amdxdna 2.21 DKMS driver (seen on kernel 7.0) the context can also come back as its xclbin after an idle gap
+  between two of its own runlists (seen from ~6 ms); the Session's `max_gap` (2 ms) covers that, so without
+  the Session start with `cold` after any idle gap.
 - **No empty-context churn.** A process that keeps opening and closing hw_contexts that run nothing can corrupt
   our runlists without the Session seeing it (Linux) or slow them down a lot (Windows). Do not share the NPU with
   one.
@@ -107,5 +116,7 @@ checked in: the first `make` of an example builds them from source (aiecc, Peano
 | `cd vadd_vmul_bf16 && ./env.sh make run COLS=8 CORES=4` | The switch-cost table's row for 32 cores. |
 | `cd vadd_vmul_bf16 && ./env.sh tools/sweep.sh` | The switch costs of every array (`vadd_vmul_bf16/results/sweep.md`). |
 | `cd vadd_vmul_bf16 && ./env.sh make stress COLS=8 CORES=4` | Stress and corner-case tests (32 cores). |
+| `cd vadd_vmul_bf16 && ./env.sh make ovlp COLS=8 CORES=2` | An overlay app and its op as a state (APP@STATE). |
+| `... make run COLS=8 CORES=4 RUN_ARGS="--flow xclbin"` | The same row in the xclbin flow (instruction BOs). |
 | `cd pm_runtime_load_singletile && ./env.sh make test COLS=8` | The three-app host test (32 cores). |
 | `cd whisper_encoder && ../vadd_vmul_bf16/env.sh make switch` | Whisper's matmul ↔ attention, one context vs two. |

@@ -671,7 +671,9 @@
       "folder": "D3-Edge-NPU2",
       "kernels": {
         "mm.xclbin": "xclbins-dequant_mm_512x512x512",
+        "mm_rtm2_glu.xclbin": "xclbins-dequant_mm_bfp16_rtm2_glu_512x512x512",
         "attn.xclbin": "xclbins-Qwen3_5_bidirectional_attention_prefill",
+        "d3.switches": "xclbins-d3_switches",
         "vision_mm.xclbin": "xclbins-MM_host7_mt_variant_bias_QWEN3_5_0_8B-VISION-MM",
         "vision_attn.xclbin": "xclbins-VisionAttention_hostAttention_whoel_array_QWEN3_5_0_8B-VISION-ATTENTION"
       }
@@ -680,8 +682,11 @@
       "folder": "SmolVLA-500M-NPU2",
       "kernels": {
         "expert.xclbin": "xclbins-SMOLVLA_expert",
+        "expert_bf16.xclbin": "xclbins-SMOLVLA_expert_bf16",
         "text.xclbin":   "xclbins-SMOLVLA_text",
-        "vision.xclbin": "xclbins-SMOLVLA_vision"
+        "vision.xclbin": "xclbins-SMOLVLA_vision",
+        "vision_mm8.xclbin": "xclbins-SMOLVLA_vision_mm8",
+        "vision.switches": "xclbins-SMOLVLA_vision_switches"
       }
     }
   }

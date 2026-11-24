@@ -27,7 +27,7 @@ python3 -m npu_test --flm-bin flm --label dev --suites chat --models qwen3:0.6b,
 | `--backend oga-hipep` | Test this GPU backend's models instead of the NPU models: one per family, every one on the `full` tier |
 | `--max-model-gb GB` | Skip the models larger than this (catalog size), which the runner's memory cannot hold, `--required-models` too (default 0, no limit) |
 | `--families a,b` | Families a change touches; the pr tier tests all their models (with `--backend`, the model of each family it tests only when touched) |
-| `--required-models a,b` | Models a change adds (with `--backend`, adds or edits): tested on every tier (even past `--models`), downloaded whatever their size, and a failure if the package does not list them or they do not download |
+| `--required-models a,b` | Models a change adds (with `--backend`, adds, republishes or moves onto it): tested on every tier (even past `--models`), downloaded whatever their size, and a failure if the package does not list them or they do not download |
 | `--required-pull-budget MINUTES` | Time for downloading the `--required-models`, all together (default 420) |
 | `--asr-full` | The whole ASR evaluation set on the pr tier |
 | `--asr-expected-key KEY` | Check WER against this row of `assets/asr_eval/expected.json` |
@@ -47,7 +47,7 @@ untested on that runner. The `full` tier and `--backend` runs wait for every
 download.
 The models a change adds or republishes (`--required-models`, from
 `changes.py`'s `new_models` in CI; for Test Windows HIPEP its `hipep_models`,
-the oga-hipep entries the change adds or edits) are pulled first and outside
+the oga-hipep entries with weights no runner has yet) are pulled first and outside
 that budget, with 7 hours for all of them (`--required-pull-budget MINUTES`),
 so a new model is tested however large it is; one left undownloaded is a
 failure. Build and Test gives its test jobs 600 minutes when a change adds
@@ -65,7 +65,7 @@ says so. A new revision in the catalog, or a file changed on the runner, pulls
 it again, which downloads what changed and verifies the rest. An entry pinned
 to a branch rather than a revision is pulled every time. Delete a stamp, or
 the folder, to have the next run verify again. A required model is pulled
-whatever its stamp says: the change adds or edits it.
+whatever its stamp says: the change adds or republishes it.
 
 A request that times out restarts that suite's server, since flm keeps working
 on a request its client gave up on, and the model's remaining cases are
@@ -91,12 +91,16 @@ one model per family (`PR_GPU` in `plan.py`): a family's models share its
 frontend and features, and differ only in weights. That is the newest Qwen
 (`qwen3.8-oga-hipep:27b`, for the Qwen3.5, 3.6 and 3.8 models) and Gemma 4
 (`gemma4-it-oga-hipep:26b-a4b`), about 33 GB; Qwen2.5, Gemma 3, the Gemma 4
-12B on its own frontend (`gemma4-12b`) and gpt-oss (69 GB) run there only
-when the change touches their family (`--families`).
-The run also tests the models whose catalog entries the change added or
-edited (`changes.py`'s `hipep_models`, passed as `--required-models`), on
+12B on its own frontend (`gemma4-12b`), gpt-oss (69 GB) and the families on
+the TemplateChat frontend (`laguna`, `nemotron-h`; 18 GB each)
+run there only when the change touches their family (`--families`).
+An oga-hipep entry the change edits without new weights (a capability, a
+context length) counts its family as touched (`changes.py`'s
+`hipep_families`, passed as `--families`), so that family's one model runs.
+The run also tests the models with new weights: added, republished or moved
+onto the GPU (`changes.py`'s `hipep_models`, passed as `--required-models`), on
 the kinds of machine that test them (see [HIPEP machines](#hipep-machines)).
-The `full` tier tests every oga-hipep model (4 to 124 GB each, about 400 GB
+The `full` tier tests every oga-hipep model (4 to 124 GB each, about 500 GB
 in all).
 Models larger than the machine holds are skipped either way, and a manual run
 that names the models (below) tests only those. Such a run gives `api` the
@@ -110,8 +114,8 @@ when any changed file is shared code. The HRX packages never run `api` or
 `serving`, which test server logic the backend does not touch. Test Windows
 HIPEP runs when every suite does, or when the change reaches an oga-hipep
 model: the oga-hipep backend or its catalog entries, the frontend of a family
-with an oga-hipep entry (qwen3.5, qwen2, gemma3, gemma4e, gemma4-12b, gpt-oss
-today, read from the catalog), the `chat`, `api` and `shutdown` tests. A change only to
+with an oga-hipep entry (qwen3.5, qwen2, gemma3, gemma4e, gemma4-12b, gpt-oss,
+laguna, nemotron-h today, read from the catalog), the `chat`, `api` and `shutdown` tests. A change only to
 the backend, its entries or the `shutdown` tests touches no NPU family and
 runs no NPU test job.
 
@@ -132,17 +136,23 @@ memory dedicated to each GPU, which Windows leaves out of its own figure
 
 - `stx-halo`: an STX Halo of its own (xconucstrhalo86), labelled `oga-hipep`
   and `stx-halo`, which no NPU job asks for, so it runs beside the NPU tests.
-  It tests every model nightly, and on a pull request also the models whose
-  catalog entries it added or edited, as required models, with 10 hours
-  instead of 2: their new revisions download within the job (7 hours for
-  all of them, a failure if one does not), and a change may add or re-pin
-  many.
+  It tests every model nightly. It is on `standby` below the `full` tier, so
+  that one machine does not test every pull request: it runs only when
+  `npu-runners` cannot test the change, that is when the change gives models
+  new weights (added, republished or moved onto the GPU), which it tests as
+  required models with 10 hours instead of 2 (their new revisions download
+  within the job, 7 hours for all of them, a failure if one does not, and a
+  change may add or re-pin many); when a model the run tests is larger than
+  `npu-runners` holds (gpt-oss, for a change to its family); or when
+  `npu-runners` does not run (`FLM_HIPEP_MACHINES`). The changes job prints
+  why it runs, or that it is not needed.
 - `npu-runners`: the shared NPU test runners (`npu`, `sweep`: STX, Krackan and
   STX Halo machines) that also carry `oga-hipep`, whichever is free. It holds
   that runner for its run, as an NPU test job does. It tests the `pr` tier's
   models even nightly (`max-tier`), since each runner would otherwise
-  download all 400 GB and the NPU nightly needs them, and skips the models
-  above 32 GB (`max-model-gb`): gpt-oss and the 120B-class Qwen models. It
+  download all 500 GB and the NPU nightly needs them, and skips the models
+  above 32 GB (`max-model-gb`): gpt-oss and the 120B-class Qwen and Laguna
+  models. It
   leaves the changed entries' models to `stx-halo` (`changed-models`), so a
   change to many of them does not hold an NPU runner for hours. When
   `FLM_HIPEP_MACHINES` leaves `stx-halo` out, it tests them itself, those up
@@ -167,7 +177,8 @@ runner: the nightly's every-model job would then land on it.
 | `enabled` | `false` leaves the kind out of every run |
 | `max-model-gb` | The largest model, by catalog size, its memory holds; larger ones are skipped there, each a `setup`/`size` case (0: no limit) |
 | `max-tier` | The highest tier its job runs (`install`, `pr` or `full`, the default); a run of a higher tier runs this one there |
-| `changed-models` | `false` leaves the models whose catalog entries the change added or edited to the kinds that test them (`true`, the default), whose job requires them (`--required-models`) and gets 600 minutes; when no kind that runs is `true`, every kind that runs tests them |
+| `changed-models` | `false` leaves the models the change gives new weights (added, republished or moved onto the GPU) to the kinds that test them (`true`, the default), whose job requires them (`--required-models`) and gets 600 minutes; when no kind that runs is `true`, every kind that runs tests them |
+| `standby` | `true`: below the `full` tier the kind runs only when the other kinds that run cannot test the change: none of them runs, the change has models it takes (`changed-models`), or a model the run tests (one per family the change touches, as `PR_GPU` picks it, or those a dispatch names) is larger than every one of their `max-model-gb`. `false` (the default): it runs on every tier |
 
 A runner of a kind of its own (xconucstrhalo86 for `stx-halo`):
 
@@ -177,7 +188,7 @@ A runner of a kind of its own (xconucstrhalo86 for `stx-halo`):
    `self-hosted`, `windows`, `x64`, `oga-hipep` and the kind's label
    (`stx-halo`), and neither `npu` nor `sweep`, or NPU test jobs would take it.
 3. `FLM_MODEL_PATH`, in the runner's `.env`, on a disk with room for every
-   model it tests (about 400 GB for all of them, which the nightly tests, and
+   model it tests (about 500 GB for all of them, which the nightly tests, and
    room for a new revision); otherwise they go to the machine's own
    `FLM_MODEL_PATH`, which installing flm may have set, or else to
    `%USERPROFILE%\.flm`.

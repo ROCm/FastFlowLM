@@ -107,6 +107,9 @@ class Required(unittest.TestCase):
                 self.assertEqual(chat(tier, required=["gemma3-oga-hipep:27b", "qwen3:0.6b"]),
                                  ["qwen3.8-oga-hipep:27b", "gemma3-oga-hipep:27b"])
         self.assertEqual(len(chat("full")), 4)
+        # A PR_GPU model gone from the catalog: the family's smallest stands in.
+        del cat["qwen3.8-oga-hipep:27b"]
+        self.assertEqual(chat("pr"), ["qwen3.5-oga-hipep:9b"])
 
 if __name__ == "__main__":
     unittest.main()

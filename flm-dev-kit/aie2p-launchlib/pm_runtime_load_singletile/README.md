@@ -5,7 +5,7 @@
 
 # pm_runtime_load_singletile (AIE2P): three apps, three floorplans, one hw_context
 
-The AIE2P counterpart of `aie4-launchlib/pm_runtime_load_singletile` (branch `flm_aie4_double_pm`). Three fp32
+Three fp32
 apps that use the same cores in **different floorplans** (other routes, other DMA channels, other locks), switched
 by the launch kernels of `../launchlib` in one hw_context, and the AIE4 host test with its rows and JSON lists.
 
@@ -51,7 +51,7 @@ Run from this folder. `env.sh` sets up the toolchain (only needed to build the d
 
 `test.exe --package DIR [--apps a,b,c | --config FILE.json] [--iters N] [--flow xclbin|elf] [--build-only]
 [--exclusive]`.
-`stress.exe --mode random|lengths|order|recover|cap|ctx|guard|watch|lifetime|latency|churn|all [--flow elf] [--policy P]
+`stress.exe --mode random|lengths|order|recover|cap|ctx|guard|watch|lifetime|latency|churn|all [--flow elf|xclbin] [--policy P]
 [--max-gap US] [--no-guard] [--blind] [--exclusive] [--max-failures N] [--child loop|churn]` (header of
 `host_test/stress.cpp`).
 
@@ -101,7 +101,7 @@ powershell -File tools/pressure.ps1 -Bin C:\b\pm\Release -Package precompiled/c8
 
 Ryzen AI 7 350 (Krackan, 8 columns), XRT 2.21.0, 32 cores: the table above and the walks in
 `results/pressure_32core.md` pass. Not run on Windows: P5b, P8, P9, P10 (`-Group hang`). They hang the NPU on
-purpose, and on two machines that ended with the machine offline (one in bugcheck 0x119).
+purpose, and repeated hangs can make the machine unresponsive (reboot to recover).
 
 The builds above are blind (no context list). With `-DNPU_WATCH=ON` (public XRT headers only), `test` and `stress`
 see other contexts through XRT's list, and warm and rerun launches run as asked while the NPU is theirs; they print

@@ -4,13 +4,18 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
+import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -45,6 +50,17 @@ MD = """# Kernel Assignment
 """
 
 
+def rmtree(path: Path) -> None:
+    """shutil.rmtree that also removes read-only files (git objects on Windows)."""
+    def fix(func, p, _exc):
+        os.chmod(p, stat.S_IWRITE)
+        func(p)
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=fix)
+    else:
+        shutil.rmtree(path, onerror=fix)
+
+
 class Tree:
     """A minimal repository with every file devkit_check reads."""
 
@@ -72,6 +88,23 @@ class Tree:
             "m_flash": {"families": ["m-flash"], "models": [], "uses": ["m_npu"]}}}
         self.write_json(dc.ENGINES, self.engines)
         self.write(dc.RTP_LOCK, LOCK)
+        # What the product ships: the catalog and every assigned kernel.
+        self.catalog = {"model_path": "models", "models": {}}
+        self.sync_catalog()
+
+    def sync_catalog(self) -> None:
+        """src/model_list.json and src/xclbins for every assignment model
+        (served_elsewhere skipped), named after its folder."""
+        elsewhere = self.engines.get("served_elsewhere") or {}
+        for model, entry in self.assignment["models"].items():
+            if model in elsewhere:
+                continue
+            family, size = model.split(":")
+            self.catalog["models"].setdefault(family, {}).setdefault(size, {
+                "supported_platforms": ["aie2p"], "name": entry["folder"], "details": {"family": family}})
+            for slot in entry["kernels"]:
+                self.write(f"{dc.SHIPPED_XCLBINS}/{entry['folder']}/{slot}", "")
+        self.write_json(dc.MODEL_LIST, self.catalog)
 
     def write(self, rel: str, text: str) -> None:
         p = self.root / rel
@@ -93,9 +126,13 @@ class Synthetic(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.tree = Tree(self.tmp)
+        # The real allow-list names real files: in a fixture it is all stale.
+        patcher = mock.patch.dict(dc.CATALOG_ALLOW, {}, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def tearDown(self):
-        shutil.rmtree(self.tmp)
+        rmtree(self.tmp)
 
     def assertError(self, *fragments: str) -> None:
         errors = self.tree.errors()
@@ -308,6 +345,7 @@ class Synthetic(unittest.TestCase):
         t.engines["engines"]["o_npu"] = {"families": ["o"], "models": ["o:1b"], "uses": []}
         t.write_json(dc.ENGINES, t.engines)
         t.write(f"{dc.DLL}/detail/o_npu/Makefile", MAKEFILE)
+        t.sync_catalog()
         self.assertEqual(dc.run(self.tmp)[0], [])
 
         lock = self.tmp / dc.RTP_LOCK
@@ -355,9 +393,196 @@ class Synthetic(unittest.TestCase):
         self.assertTrue(any("changed with" in n and "o_npu" in n and "m_npu" in n for n in notes), notes)
 
 
+class Catalog(Synthetic):
+    """src/ (model_list.json, xclbins, lib) against the dev kit's JSON."""
+
+    def entry(self, tag: str, **fields) -> None:
+        family, size = tag.split(":")
+        self.tree.catalog["models"].setdefault(family, {})[size] = {
+            "supported_platforms": ["aie2p"], "details": {"family": family}, **fields}
+        self.tree.write_json(dc.MODEL_LIST, self.tree.catalog)
+
+    def engines(self, **models) -> None:
+        for engine, ms in models.items():
+            self.tree.engines["engines"][engine]["models"] = ms
+        self.tree.write_json(dc.ENGINES, self.tree.engines)
+
+    def library(self, unit: str, name: str, cmake: str = "") -> None:
+        self.tree.write(f"{dc.DLL}/detail/{unit}/Makefile",
+                        MAKEFILE + f"TARGET = $(LIB_DIR)/lib{name}.so\nelse\nTARGET = $(BUILD_DIR)/{name}.dll\n")
+        self.tree.write(f"{dc.DLL}/detail/{unit}/CMakeLists.txt",
+                        f"# add_library(old SHARED)\nadd_library({cmake or name} SHARED ${{SOURCES}})\n")
+
+    def ship(self, *rels: str) -> None:
+        for rel in rels:
+            self.tree.write(rel, "")
+
+    def test_npu_catalog_follows_flm_filter(self):
+        cat = {"models": {
+            "m": {"1b": {"supported_platforms": ["aie2p"]}, "2b": {"supported_platforms": ["dev04"]},
+                  "3b": {}, "4b": {"supported_platforms": ["aie2p"], "backend": "oga-hipep"}},
+            "m-core": {"1b": {"supported_platforms": ["dev04"]}, "2b": {"supported_platforms": ["aie2p"]}},
+            "m-oga-hipep": {"1b": {}, "2b": {"backend": "flm"}},
+            "e": {"1b": {"supported_platforms": ["aie2p"], "model_kind": "embedding", "backend": "x"}}}}
+        self.assertEqual(sorted(dc.npu_catalog(cat)), ["e:1b", "m-oga-hipep:2b", "m:1b", "m:3b"])
+        self.assertEqual(dc.xclbin_folder({"name": "A"}), "A")
+        self.assertEqual(dc.xclbin_folder({"name": "A", "xclbin_folder": "B"}), "B")
+
+    def test_gpu_and_other_platform_entries_need_nothing(self):
+        self.entry("m:2b", name="M-2B")  # no supported_platforms: an NPU model
+        self.assertError("model m:2b has no", "add \"m:2b\": {\"folder\": \"M-2B\"")
+        del self.tree.catalog["models"]["m"]["2b"]
+        self.entry("m:3b", name="M-3B", supported_platforms=["dev04"])
+        self.entry("m-core:1b", name="M-Core", supported_platforms=["aie2p"])
+        self.entry("m-oga-hipep:1b", name="M-GPU", supported_platforms=None)
+        self.assertEqual(self.tree.errors(), [])
+
+    def test_rule1_npu_model_needs_an_assignment(self):
+        self.entry("n:1b", name="N-1B-NPU2")
+        self.assertError(f"{dc.MODEL_LIST}: NPU (aie2p) model n:1b has no {dc.ASSIGNMENT} entry",
+                         '"folder": "N-1B-NPU2"', dc.ASSIGNMENT_MD)
+        self.assertError("NPU model n:1b of", "is served by no engine", "detail/<engine>/")
+
+    def test_rule1_alias_reuses_a_folder(self):
+        self.entry("n:1b", name="N-1B-NPU2", xclbin_folder="M-1B-NPU2")
+        self.assertEqual(dc.catalog_aliases(self.tree.catalog, self.tree.assignment["models"]), {"n:1b"})
+        # An alias still needs an engine (or an allow-list entry).
+        self.assertError("NPU model n:1b of", "is served by no engine")
+        self.engines(m_npu=["m:1b", "n:1b"])
+        self.assertEqual(self.tree.errors(), [])
+        self.entry("n:1b", name="N-1B-NPU2", xclbin_folder="Nope-NPU2")
+        self.assertError("n:1b runs the kernels of xclbin_folder Nope-NPU2, but no", "model has that folder")
+
+    def test_rule1_alias_allow_listed(self):
+        self.entry("n:1b", name="N-1B-NPU2", xclbin_folder="M-1B-NPU2")
+        with mock.patch.dict(dc.CATALOG_ALLOW, {"n:1b": "runs elsewhere"}):
+            self.assertEqual(self.tree.errors(), [])
+        # Only an alias can be excused; a model with no kernels at all cannot.
+        self.entry("o:1b", name="O-1B-NPU2")
+        with mock.patch.dict(dc.CATALOG_ALLOW, {"o:1b": "no"}):
+            self.assertError("model o:1b has no")
+            self.assertError("CATALOG_ALLOW", "o:1b excuses nothing any more")
+
+    def test_rule2_assignment_must_be_a_catalog_model(self):
+        del self.tree.catalog["models"]["m"]
+        self.tree.write_json(dc.MODEL_LIST, self.tree.catalog)
+        self.assertError(f"{dc.ASSIGNMENT}: m:1b is no NPU (aie2p) model of {dc.MODEL_LIST}", "served_elsewhere")
+        self.assertError("m_npu lists m:1b, which is no NPU (aie2p) model")
+
+    def test_rule2_and_4_served_elsewhere(self):
+        t = self.tree
+        t.assignment["models"]["vla:1b"] = {"folder": "VLA", "kernels": {"attn.xclbin": "xclbins-Attn"}}
+        t.write_json(dc.ASSIGNMENT, t.assignment)
+        t.write(dc.ASSIGNMENT_MD, MD + "\n#### `vla:1b` → `VLA`\n\n| Kernels | Artifacts |\n|---|---|\n"
+                "| `attn.xclbin` | `xclbins-Attn` |\n")
+        self.assertError("vla:1b is no NPU (aie2p) model")
+        t.engines["served_elsewhere"] = {"vla:1b": "a pybind module"}
+        t.write_json(dc.ENGINES, t.engines)
+        # Not in the catalog and nothing shipped under src/xclbins/VLA: fine.
+        self.assertEqual(t.errors(), [])
+
+    def test_rule3_folder_is_the_catalog_folder(self):
+        self.entry("m:1b", name="M-1B")
+        self.assertError(f"{dc.ASSIGNMENT}: m:1b has folder M-1B-NPU2, but", "xclbin folder M-1B")
+        self.entry("m:1b", name="M-1B", xclbin_folder="M-1B-NPU2")
+        self.assertEqual(self.tree.errors(), [])
+
+    def test_rule4_assigned_slot_ships(self):
+        (self.tmp / dc.SHIPPED_XCLBINS / "M-1B-NPU2" / "layer.xclbin").unlink()
+        self.assertError("m:1b assigns layer.xclbin, but src/xclbins/M-1B-NPU2/layer.xclbin is not shipped")
+
+    def test_rule5_shipped_kernel_is_assigned(self):
+        self.ship(f"{dc.SHIPPED_XCLBINS}/M-1B-NPU2/conv.xclbin", f"{dc.SHIPPED_XCLBINS}/M-1B-NPU2/notes.txt")
+        self.assertError("src/xclbins/M-1B-NPU2/conv.xclbin is shipped, but no", "with folder M-1B-NPU2 assigns "
+                         "conv.xclbin", "CATALOG_ALLOW")
+        with mock.patch.dict(dc.CATALOG_ALLOW, {"src/xclbins/M-1B-NPU2/conv.xclbin": "unused"}):
+            self.assertEqual(self.tree.errors(), [])
+        self.ship(f"{dc.SHIPPED_XCLBINS}/X-NPU2/a.xclbin")
+        self.assertError("src/xclbins/X-NPU2/a.xclbin is shipped, but no", "model has folder X-NPU2")
+
+    def test_rule5_union_over_models_sharing_a_folder(self):
+        # f:1b shares M-1B-NPU2 and adds a slot m:1b does not assign.
+        t = self.tree
+        t.assignment["models"]["f:1b"] = {"folder": "M-1B-NPU2", "kernels": {"mm.xclbin": "xclbins-Attn"}}
+        t.write_json(dc.ASSIGNMENT, t.assignment)
+        t.write(dc.ASSIGNMENT_MD, MD + "\n#### `f:1b` → `M-1B-NPU2`\n\n| Kernels | Artifacts |\n|---|---|\n"
+                "| `mm.xclbin` | `xclbins-Attn` |\n")
+        t.engines["engines"]["m_flash"]["models"] = ["f:1b"]
+        t.write_json(dc.ENGINES, t.engines)
+        t.sync_catalog()
+        self.entry("f:1b", name="F-1B-NPU2", xclbin_folder="M-1B-NPU2")
+        self.assertEqual(t.errors(), [])
+
+    def test_stale_allow_list_entry(self):
+        with mock.patch.dict(dc.CATALOG_ALLOW, {"src/xclbins/M-1B-NPU2/gone.xclbin": "was unused"}):
+            self.assertError("src/xclbins/M-1B-NPU2/gone.xclbin excuses nothing any more (was unused)")
+
+    def test_rule6_engine_model_must_be_in_the_catalog(self):
+        self.engines(m_flash=["m:9b"])
+        self.assertError("m_flash lists m:9b, which is no NPU (aie2p) model of")
+
+    def test_rule7_library_mapping(self):
+        self.assertEqual(self.tree.errors(), [])  # no TARGET, no library: nothing to ship
+        self.library("q4nx", "q4_npu_eXpress")
+        self.library("m_npu", "m_npu")
+        self.assertError(f"{dc.ENGINES}: q4nx builds q4_npu_eXpress, but src/lib/xrt/ lacks "
+                         "libq4_npu_eXpress.so, q4_npu_eXpress.dll, q4_npu_eXpress.lib")
+        self.assertError("m_npu builds m_npu, but src/lib/hrx/ lacks")
+        for rt in ("xrt", "hrx"):
+            self.ship(*(f"src/lib/{rt}/{f}" for lib in ("q4_npu_eXpress", "m_npu") for f in dc.shipped_names(lib)))
+        self.assertEqual(self.tree.errors(), [])
+        (self.tmp / "src/lib/hrx/m_npu.lib").unlink()
+        self.assertError("m_npu builds m_npu, but src/lib/hrx/ lacks m_npu.lib")
+        self.ship("src/lib/hrx/m_npu.lib", "src/lib/xrt/libnova_npu.so", "src/lib/xrt/libaiebu.a")
+        self.assertError("src/lib/xrt/libnova_npu.so is no library of an", "detail/<dir>/")
+        self.assertError("src/lib/xrt/libaiebu.a is no library of an")
+        with mock.patch.dict(dc.CATALOG_ALLOW, {"src/lib/xrt/libnova_npu.so": "x", "src/lib/xrt/libaiebu.a": "y"}):
+            self.assertEqual(self.tree.errors(), [])
+        # The Makefile and CMakeLists.txt must build the same library.
+        self.library("m_npu", "m_npu", cmake="m_other")
+        self.assertError("detail/m_npu: its Makefile TARGET and CMakeLists.txt add_library name different "
+                         "libraries (m_npu, m_other)")
+
+
+    def test_pending_on_a_pull_request(self):
+        """A new model's kernels and a new engine's libraries, not in src/
+        yet: errors anywhere, pending (for the run to stage) with
+        --pending-ok."""
+        (self.tmp / dc.SHIPPED_XCLBINS / "M-1B-NPU2" / "layer.xclbin").unlink()
+        self.library("m_npu", "m_npu")
+        for rt in ("xrt", "hrx"):
+            self.ship(f"src/lib/{rt}/m_npu.dll", f"src/lib/{rt}/m_npu.lib")
+        self.assertError("src/xclbins/M-1B-NPU2/layer.xclbin is not shipped")
+        self.assertError("m_npu builds m_npu, but src/lib/xrt/ lacks libm_npu.so")
+        pending: list = []
+        errors, _ = dc.run(self.tmp, pending=pending)
+        self.assertEqual(errors, [])
+        self.assertEqual(sorted(pending), ["src/lib/hrx/libm_npu.so", "src/lib/xrt/libm_npu.so",
+                                           "src/xclbins/M-1B-NPU2/layer.xclbin"])
+        # Only missing binaries are pending: anything else stays an error.
+        self.ship(f"{dc.SHIPPED_XCLBINS}/M-1B-NPU2/stray.xclbin")
+        errors, _ = dc.run(self.tmp, pending=[])
+        self.assertTrue(any("stray.xclbin is shipped, but no" in e for e in errors), errors)
+
+    def test_pending_cli(self):
+        (self.tmp / dc.SHIPPED_XCLBINS / "M-1B-NPU2" / "layer.xclbin").unlink()
+        target = self.tmp / "out.txt"
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"GITHUB_OUTPUT": str(target)}), contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(dc.main(["--repo", str(self.tmp), "--pending-ok", "--github-output"]), 0)
+            self.assertEqual(target.read_text(encoding="utf-8"), "pending=src/xclbins/M-1B-NPU2/layer.xclbin\n")
+            self.assertIn("pending swap: src/xclbins/M-1B-NPU2/layer.xclbin", out.getvalue())
+            target.unlink()
+            self.assertEqual(dc.main(["--repo", str(self.tmp), "--github-output"]), 1)
+            self.assertEqual(target.read_text(encoding="utf-8"), "pending=\n")
+
+
 class RealTree(unittest.TestCase):
     def test_tree_passes(self):
-        errors, _ = dc.run(dc.REPO_ROOT)
+        # A pull request that adds a slot has it pending until its swap commit (the CLI's --pending-ok);
+        # the strict check runs on the swap commit and on main.
+        errors, _ = dc.run(dc.REPO_ROOT, pending=[])
         self.assertEqual(errors, [])
 
 

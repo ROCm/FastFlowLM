@@ -137,7 +137,7 @@ So the encoder in one context gives the same K/V. The other examples' stress and
 ## Step 3: the whole engine in FastFlowLM
 
 The engine of this tree inside a shipped FastFlowLM: `build/rt/stock` is a copy of a v1.0.12 portable build (XRT,
-with the Whisper speed-up of IRON#155), `build/rt/tree` the same with this tree's `libwhisper_npu.so` and Whisper
+with an earlier Whisper speed-up), `build/rt/tree` the same with this tree's `libwhisper_npu.so` and Whisper
 xclbins (`build/xroot`). Three variants: **stock** (as shipped), **tree** (this tree, the switch off) and
 **switch** (`FLM_WHISPER_SWITCH_DIR=build/switch`). The transcripts come from FastFlowLM's own ASR test
 (`npu_test --suites asr`, `flm serve -a 1`): the FLEURS set of 84 clips in 7 languages, 4 of them longer than one

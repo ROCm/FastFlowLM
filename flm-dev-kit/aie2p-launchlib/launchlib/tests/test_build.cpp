@@ -354,7 +354,7 @@ int main(int argc, char **argv) {
   namespace fs = std::filesystem;
   const fs::path tmp = fs::temp_directory_path() / ("launchlib_test_" + std::to_string(::getpid()));
   fs::create_directories(tmp);
-  fs::copy(pa.dir, tmp / a, fs::copy_options::recursive);
+  fs::copy(pa.dir, tmp / fs::path(pa.dir).filename(), fs::copy_options::recursive); // APP of "APP@STATE"
   fs::copy(pb.dir, tmp / "changed", fs::copy_options::recursive);
   txn::Stream init = txn::parse(txn::words_of(read_bytes(pb.dir + "/init.txn")));
   for (txn::Op &op : init.ops)

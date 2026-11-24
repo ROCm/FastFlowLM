@@ -145,7 +145,7 @@ run already works. A new `xrt::kernel` on the same context does not help. So:
 | 3 | 1 s | try 2 failed fast |
 
 A second **timeout** stops it: the op throws as before. A context that keeps timing out is truly
-stuck; sending it more work is what came before the 0x139 bugcheck in the Windows test. One failure
+stuck; sending it more work can make the machine unresponsive (reboot to recover). One failure
 costs the driver's timeout once; the tries themselves take milliseconds.
 
 Off the overlay (the three-xclbin path, design B) nothing changes: a separate xclbin has no host-written

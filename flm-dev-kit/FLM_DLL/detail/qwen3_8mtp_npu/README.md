@@ -87,7 +87,7 @@ sizes agree. Scored against the CPU head on hardware, it passed 29 of 29, from a
 It did not always. The design's first dispatch completed and every one after it
 timed out; the cause was `enable_tb` in `iron/gate.py` building an MM2S chain
 that `MTP_layer_aie.py` never routes, so the gate tile's producer lock ran pass
-1 on its initial credit and was never recharged. Fixed in the IRON, with the
+1 on its initial credit and was never recharged. Fixed in the IRON design (`iron/gate.py`), with the
 history — including two confident wrong conclusions — in
 `speculate/npu/SECOND_DISPATCH_TIMEOUT.md`.
 

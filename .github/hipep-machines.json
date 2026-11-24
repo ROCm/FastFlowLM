@@ -4,7 +4,8 @@
       "id": "stx-halo",
       "runs-on": ["self-hosted", "windows", "x64", "oga-hipep", "stx-halo"],
       "enabled": true,
-      "max-model-gb": 0
+      "max-model-gb": 0,
+      "standby": true
     },
     {
       "id": "npu-runners",

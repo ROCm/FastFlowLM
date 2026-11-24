@@ -347,7 +347,7 @@ void Gemma4_12B::preprocess_image(
 
 
     // // debug, compare with reference tensor to see the error
-    // SafeTensors referencetensor("/scratch/shdu/transformerExplorer/gemma4_unified_image_debug.safetensors");
+    // SafeTensors referencetensor("/path/to/gemma4_unified_image_debug.safetensors");
 
 
 

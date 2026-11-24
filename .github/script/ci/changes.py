@@ -5,8 +5,13 @@
     changes.py --files src/server/server.cpp docs/index.md
 
 Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
-  run_tests  false only when every changed file is documentation or otherwise
-             never built or packaged, so no NPU runner is reserved for it
+  run_tests  false only when every changed file is documentation, otherwise
+             never built or packaged, or used by no Build and Test job
+             (OUTSIDE_BUILD_AND_TEST: workflows, actions and script/ci files
+             outside build_and_test_closure, scan configs, the CI unit tests, the src/test programs cpu-tests.yml runs or no CI
+             builds, developer scripts), so no NPU runner is reserved for it.
+             A package or installer input no test observes (BUILD_ONLY)
+             builds the packages with suites "none" and no HIPEP
   families   comma-separated model families (details.family in
              src/model_list.json) whose engine or NPU catalog entry changed;
              the pr tier tests every model in them instead of one per engine
@@ -31,26 +36,39 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              their size, outside the pr tier's download budget, and fail if
              they cannot; only entries an NPU2 (aie2p) runner can run
   hipep_models
-             comma-separated oga-hipep entries (model ids) the change adds or
-             edits in model_list.json or model_info.json, new weights or not
-             (an edit names no family for the GPU, so this is how one gets
-             tested). Test Windows HIPEP requires them, as the NPU jobs do
-             new_models: downloaded whatever their size, and a failure if
-             they cannot be
+             comma-separated oga-hipep entries (model ids) with weights no
+             runner has yet: entries the change adds, whose download fields
+             (DOWNLOAD_FIELDS) or model_info.json hashes it changes, that it
+             moves onto the oga-hipep backend, or that it edits and that have
+             no family to stand for them. Test Windows HIPEP requires
+             them, as the NPU jobs do new_models: downloaded whatever their
+             size, and a failure if they cannot be
+  hipep_families
+             comma-separated families Test Windows HIPEP treats as touched:
+             families, and the families of the oga-hipep entries the change
+             edits without new weights (a capability, a context length).
+             Such an edit tests its family's one model (npu_test PR_GPU), not
+             every edited entry: an edit to many entries at once would
+             otherwise re-verify and test each, holding the one STX Halo for
+             hours
   devkit     true when a change needs a dev-kit job: code under flm-dev-kit/
              (the kernel, engine, converter and pybind sources, built by their
              own jobs), a src/lib/xrt file the dev kit links (libaiebu.a,
              aiebu_static.lib, any library its engines' -L order can pick
-             up), hrx-integration/ (the HRX engine builds fetch the pinned
+             up, except the libraries the engines.json units build: those
+             are the dev kit's output, which a swap commits), hrx-integration/ (the HRX engine builds fetch the pinned
              package with it), or the CI that runs the dev-kit jobs
              (including .github/workflows/devkit-*.yml and
-             .github/actions/devkit-*, except devkit-aie-image.yml);
+             .github/actions/devkit-*, except devkit-aie-image.yml and the
+             bench CI, BENCH_CI);
              documentation under
              flm-dev-kit/ counts as nothing, as for the product. Nothing in
              the product consumes flm-dev-kit/ yet, so those paths select no
-             product suite or family: a change only there tests no product
-             package (run_tests false; it builds the portable ones only for
-             the overlay tests, see devkit_overlay). The product files
+             product suite or family: a change only there runs no product
+             suite of its own (run_tests false); when it is engine or
+             kernel source, the portable packages build with its binaries
+             staged in and their tests run for it (devkit_stage). The
+             product files
              above keep their product rules. The kernel build image selects
              nothing: docker/aie-build* (its Dockerfile, kernel check and
              pinned PDIs), flm-dev-kit/FLM_Xclbin/toolchain.lock and
@@ -62,34 +80,83 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              aie-build:<toolchain hash>, built in the run when it is not
              published, so a pull request that also changes a kernel builds
              it with its own toolchain.lock and Dockerfile
+  devkit_catalog
+             true when a file the dev-kit catalog check (devkit_check.py's
+             catalog rules: what src/ ships against the dev kit's JSON)
+             reads changed: src/model_list.json, src/xclbins/, src/lib/,
+             flm-dev-kit/FLM_DLL/engines.json or FLM_Xclbin/
+             kernel_assignment.{json,md} or build_units.json, or the changed
+             files are unknown. Runs devkit-static (as devkit does) and
+             nothing else: no product suite, dev-kit build or staging
   devkit_areas
              comma-separated dev-kit areas the change touches, from xclbin,
              dll, converter, pybind and launchlib, plus the areas that build
              from a changed file of another area, of src/lib/xrt or of
-             hrx-integration/; every
-             area when the changed files are unknown, a changed dev-kit file
+             hrx-integration/, and xclbin for a shipped kernel
+             (src/xclbins/<folder>/<slot>.xclbin), which devkit-xclbins
+             rebuilds from its sources to compare (devkit_xclbin_plan.py);
+             every area when the changed files are unknown, a changed dev-kit file
              is in none of them, or the dev-kit CI changed
   devkit_families
              comma-separated catalog families whose dev-kit engines the change
-             touches, for the dev-kit overlay tests: from
+             rebuilds from changed source, whose libraries are staged into
+             the product builds (devkit_stage): from
              flm-dev-kit/FLM_DLL/engines.json, a change under
              detail/<engine>/ or its include/models/<x>/ headers gives the
              engine's families and those of every engine that uses it; a
              change to anything else that builds into the engines (the
              shared units, the common headers, common/, cmake/, the build
-             scripts, a src/lib/xrt library they link), to the dev-kit CI, or
-             an unknown change gives every engine's families. Per-model
-             helper scripts (build_<model>.sh) and model_list*.json give
-             none; an engines.json change gives the engines whose entry
-             changed. Empty when no dev-kit engine is touched
-  devkit_overlay
-             true when the dev-kit overlay tests run (build-and-test.yml
-             test-*-devkit): the dll area with devkit_families, or the xclbin
-             area (the kernel build names the models it rebuilt). On a pull
-             request the portable packages the overlay starts from (Linux
-             XRT and HRX, Windows XRT and HRX) are then built even when
-             run_tests is false, which then gives suites "none", so no
-             product test job runs
+             scripts, a src/lib/xrt library they link) or an unknown change
+             gives every engine's families. Per-model helper scripts
+             (build_<model>.sh) and model_list*.json give none; an
+             engines.json change gives the engines whose entry changed (a
+             new engine's). The dev-kit CI gives none: it runs the dev-kit
+             builds (every area) to exercise them, but stages nothing, as
+             no source changed (a swap of every binary for a CI change
+             would be noise, and no verified swap can come with a change
+             to the CI that checks it). Empty when no dev-kit engine is
+             touched
+  devkit_stage
+             true when a pull request's run (and the dev-kit full refresh)
+             stages dev-kit files into its product builds (build-and-test.yml
+             devkit-stage, .github/script/ci/devkit_stage.py): the dll area
+             with devkit_families, or the xclbin area selected by kernel
+             source or anything else but the dev-kit CI and shipped kernels
+             (which are only rebuilt to compare). Which kernels are staged
+             the kernel build decides (the models whose kernel source or
+             assignment changed). The product builds then wait for the
+             dev-kit builds; the Linux and Windows, XRT and HRX portable
+             packages build even when run_tests is false (suites "none")
+             and their test jobs run the union of the product's selection
+             and the staged files' (devkit_stage.py). After a swap commit
+             (the newest commit carrying the Devkit-Swap-Run trailer), false
+             unless the files changed since it would stage something by
+             themselves (after_swap): a review fix or a merge of main then
+             tests the committed binaries instead of rebuilding them
+  devkit_bench
+             true when the dev-kit perf and accuracy benches
+             (devkit-bench.yml, which Build and Test's devkit-bench job
+             calls on a pull request) run: a changed file is dev-kit engine or
+             kernel source, that is a code or build-input file under
+             flm-dev-kit/FLM_DLL/ or flm-dev-kit/FLM_Xclbin/ (sources,
+             Makefiles, CMakeLists, iron/ Python, build_units.json,
+             kernel_assignment.json, engines.json, the RTP lock and
+             toolchain.image), and Build and Test stages something for it to
+             bench (devkit_stage). Documentation, images and licence files,
+             the per-model helper scripts and model registries under FLM_DLL
+             (DEVKIT_DLL_NO_BUILD), the kernel build image and its
+             toolchain.lock (DEVKIT_ONLY: devkit-aie-image.yml tests those),
+             the converter, pybind and launchlib, the product, and CI-only
+             changes (.github/, the dev-kit and bench CI included) give
+             false. Unknown changed files give true, as everything else here
+             does; no changed files give false (nothing changed to bench)
+  swap_verified
+             true with --swap-verified true: the head is a dev-kit swap
+             commit devkit_swap.py verify accepted (it holds exactly the
+             binaries an earlier Build and Test run of its parent built and
+             NPU-tested). Everything else is then off: run_tests false,
+             suites "none", no family, model, dev-kit area, staging or bench;
+             devkit_catalog true, so devkit-static still checks the catalog
   summary    one line for the job log
 
 When in doubt it tests more: an all-zero or missing base (a new branch), or a
@@ -109,12 +176,15 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterable, Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MODEL_LIST = "src/model_list.json"
 MODEL_INFO = "src/model_info.json"
+# devkit_swap.py TRAILER_RUN: marks a swap commit (after_swap).
+SWAP_TRAILER = "Devkit-Swap-Run"
 
 # Files that are never built, packaged or read by a test. A change made only
 # of these skips the NPU tests. LICENSE_*.txt and THIRD_PARTY_NOTICES.txt are
@@ -131,8 +201,8 @@ NON_CODE = re.compile(
     r"|.*~$)",                  # editor backups such as src/home_install.sh~
     re.IGNORECASE)
 
-# The FLM dev kit: kernel, engine, converter and pybind sources imported from
-# FastFlowLM_IRON, built and tested by dev-kit jobs of their own. No product
+# The FLM dev kit: kernel, engine, converter and pybind sources, built and
+# tested by dev-kit jobs of their own. No product
 # build reads them yet, so they select no product build or suite (a product
 # change that starts consuming one must add it to the product rules here).
 # Area -> the prefix that selects it, in output order.
@@ -177,7 +247,10 @@ DEVKIT_ALSO = (
 # launchlib. The dev-kit engine Makefiles also put -L../../../../src/lib/xrt
 # ahead of their own build/lib, so any library there can stand in for a unit
 # they link. This lasts until libaiebu.a is vendored into
-# flm-dev-kit/FLM_DLL/external_libs.
+# flm-dev-kit/FLM_DLL/external_libs. A library an engines.json unit builds
+# (engine_library_files) is not an input here: it is the dev kit's own output,
+# which a swap commits, and counting it would make every push after a swap
+# rebuild and stage every engine (devkit_from_product).
 DEVKIT_FROM_PRODUCT = (
     (re.compile(r"^src/lib/xrt/(libaiebu\.a|aiebu_static\.lib)$"), {"xclbin", "dll", "pybind", "launchlib"}),
     (re.compile(r"^src/lib/xrt/[^/]+$"), {"dll"}),
@@ -189,6 +262,19 @@ DEVKIT_FROM_PRODUCT = (
     # cache on them.
     (re.compile(r"^\.github/windows-deps/"), {"dll"}),
 )
+
+# The files devkit_check.py's catalog rules read: what the product ships
+# (src/model_list.json, src/xclbins, src/lib) and the dev-kit JSON describing
+# where it comes from. A change to one runs devkit-static (devkit_catalog)
+# without selecting a dev-kit area, so no dev-kit build or staging starts.
+DEVKIT_CATALOG = re.compile(
+    r"^(src/model_list\.json$|src/xclbins/|src/lib/|flm-dev-kit/FLM_DLL/engines\.json$"
+    r"|flm-dev-kit/FLM_Xclbin/(kernel_assignment\.(json|md)|build_units\.json)$)")
+# A shipped kernel: devkit-xclbins rebuilds the artifact kernel_assignment.json
+# maps to its slot and compares the two (report only). It selects the xclbin
+# area, but nothing is staged: the product suites test the shipped file, and the
+# rebuild comes from sources this change did not touch.
+SHIPPED_KERNEL = re.compile(r"^src/xclbins/.+/[^/]+\.xclbin$")
 
 # The kernel build image: its Dockerfile, kernel check script and pinned PDIs
 # (docker/aie-build*), its versions (toolchain.lock, which would otherwise be
@@ -206,12 +292,73 @@ DEVKIT_ONLY = (
 )
 
 # The CI that decides and runs the dev-kit jobs: a change to it runs every
-# dev-kit area, so it is exercised before it merges. DEVKIT_ONLY's workflow
+# dev-kit area, so it is exercised before it merges, but stages nothing into
+# the product builds (devkit_families, devkit_stage). DEVKIT_ONLY's workflow
 # is not part of it.
 DEVKIT_CI = re.compile(
-    r"^\.github/(workflows/(build-and-test|release|devkit-[^/]+)\.yml$"
-    r"|actions/(detect-changes|devkit[^/]*)/|script/ci/)")
+    r"^\.github/(workflows/(build-and-test|devkit-(?!bench)[^/]+)\.yml$"
+    r"|actions/(detect-changes|devkit(?!-bench)[^/]*)/|script/ci/)")
 
+# The dev-kit bench CI (devkit-bench.yml, devkit-bench-comment.yml, their
+# actions, scripts and the scripts' tests). Build and Test calls
+# devkit-bench.yml only for engine or kernel source, so a
+# change to the bench CI alone selects nothing there: no product suite, no
+# dev-kit area and no bench. Its unit tests still run in the changes job;
+# the rest is exercised by dispatching devkit-bench.yml on the branch
+# against a Build and Test run. build-and-test.yml itself, which calls it,
+# is DEVKIT_CI.
+BENCH_CI = re.compile(
+    r"^\.github/(workflows/devkit-bench(-comment)?\.yml$|actions/devkit-bench[^/]*/"
+    r"|script/devkit-bench/|script/ci/test_devkit_bench[^/]*\.py$)")
+
+
+# Files no job of a pull request's Build and Test run builds, packages or
+# reads, beyond the changes job's own checks (the CI unit tests,
+# check_internal_refs.py), which run on every event: a change made only of
+# these (and documentation) builds and tests nothing, and they select no
+# dev-kit area. Other workflows test them on the same pull request where
+# they can: cpu-tests.yml builds and runs the src/test and src/tests
+# programs it lists (oga_hipep through oga_hipep_tests.ps1),
+# pr-security-scan.yml reads the scan configs, smolvla-package.yml tests
+# itself. The rest run on a schedule or dispatch (build-container.yml, which
+# builds the root Dockerfile into the image the Linux builds pull; the weekly
+# scan; release.yml, which calls Build and Test, never the other way), or by
+# hand (the engine test harnesses under src/test, the developer scripts).
+# src/test is all of it but NPU_TEST_INPUTS, which a Build and Test job reads.
+# Workflows, actions and script/ci files are also outside when they are not
+# in build_and_test_closure, so a new standalone workflow and its script need
+# no entry here; the workflows listed below are the fallback for a checkout
+# where the closure cannot be worked out.
+NPU_TEST_INPUTS = ("openai_api_test/", "openai_usage/", "d3_video/fixtures/",
+                   "model_extension_gemma4e/", "model_extension_consumer/")
+OUTSIDE_BUILD_AND_TEST = re.compile(
+    r"^(Dockerfile$"
+    r"|\.github/(dependabot\.yml|actionlint\.yaml)$"
+    r"|\.github/scan_tools_configs/"
+    r"|\.github/workflows/(smolvla-package|cpu-tests|pr-security-scan|weekly-security-scan"
+    r"|build-container|release)\.yml$"
+    r"|\.github/script/ci/(test_[^/]*\.py|check_internal_refs\.py|oga_hipep_tests\.ps1)$"
+    r"|\.github/script/npu_test/tools/(build_asr_eval|make_vision_assets)\.py$"
+    r"|\.github/script/npu_test/assets/(test_audio\.mp3|test_image2\.jpg)$"
+    r"|\.github/script/assets/d3_goldens_flash\.jsonl$"
+    r"|src/(home_install\.sh|update_qwen35\.sh|WinSetup\.ps1|CMakeSettings\.json)$"
+    r"|src/inno/(flm\.iss|terms\.txt)$"
+    r"|src/tests/"
+    r"|src/test/(?!(" + "|".join(re.escape(d) for d in NPU_TEST_INPUTS) + r")))")
+
+# Files that go into a package or an installer, or check a built package,
+# but that no NPU or GPU test can observe: the packages build (so a broken
+# one fails the run) and no NPU suite or HIPEP runs for them. The .deb and
+# MSI installers (debian/, src/wix/, the src/inno files src/wix/get_files.bat
+# copies) have install tests of their own, off unless FLM_INSTALL_TESTS is
+# set; the licence texts ship beside the binary.
+BUILD_ONLY = re.compile(
+    r"^(debian/"
+    r"|src/wix/"
+    r"|src/inno/(get_files\.bat|logo\.ico|terms\.rtf)$"
+    r"|(LICENSE_BINARY|LICENSE_RUNTIME|THIRD_PARTY_NOTICES)\.txt$"
+    r"|\.github/actions/(win-msi|remove-package)/"
+    r"|\.github/script/ci/check_no_copyleft_libs\.sh$)")
 
 # The dev-kit engines (flm-dev-kit/FLM_DLL/detail/<engine>) and what they
 # serve: engine -> families, models, uses (the engines whose code it
@@ -225,6 +372,25 @@ DEVKIT_ENGINES = "flm-dev-kit/FLM_DLL/engines.json"
 DEVKIT_DLL_NO_BUILD = re.compile(
     r"^flm-dev-kit/FLM_DLL/(build_(?!manylinux\.sh$)[A-Za-z0-9_]+\.sh|model_list[^/]*\.json"
     r"|(.*/)?\.gitattributes)$")
+
+# What the dev-kit perf and accuracy benches (devkit-bench.yml) measure: the
+# dev-kit engine and kernel sources and what builds them. Under these
+# prefixes every file counts but documentation (NON_CODE), the FLM_DLL files
+# that build no engine (DEVKIT_DLL_NO_BUILD) and BENCH_NOT_SOURCE.
+DEVKIT_BENCH_SOURCE = re.compile(r"^flm-dev-kit/(FLM_DLL|FLM_Xclbin)/")
+# Figures, rendered pages and licence copies beside the sources: no build
+# reads them.
+BENCH_NOT_SOURCE = re.compile(r"\.(png|jpe?g|gif|svg|pdf|html?)$|(^|/)LICENSE[^/]*$", re.IGNORECASE)
+
+
+def is_bench_source(path: str) -> bool:
+    """Whether a changed file is dev-kit engine or kernel source (devkit_bench,
+    which also needs Build and Test to build something to bench). The kernel
+    build image's files (DEVKIT_ONLY, toolchain.lock included) are not:
+    devkit-aie-image.yml tests them, and Build and Test builds nothing for
+    them."""
+    return bool(DEVKIT_BENCH_SOURCE.match(path)) and devkit_only_areas(path) is None and not (
+        is_non_code(path) or DEVKIT_DLL_NO_BUILD.match(path) or BENCH_NOT_SOURCE.search(path))
 
 
 @dataclass
@@ -361,6 +527,8 @@ ENGINES = {
     # r2t2 (Confucius4-R2T2) runs on the qwen3_asr engine; qwen3_asr_stream is
     # its streaming frontend.
     ("qwen3_asr", "qwen3_asr_stream"):       ("r2t2",),
+    # A frontend with no engine library: its families run on oga-hipep alone.
+    ("template_chat",):                      ("laguna", "nemotron-h"),
     # Built but registered for no catalog family.
     ("qwen3_5_omni",):                       (),
 }
@@ -383,7 +551,7 @@ SUBSYSTEMS = (
     ("embedding engine", r"src/(common|include)/AutoEmbeddingModel/|src/include/embedding_model\.hpp$",
      ("embed-gemma",)),
     ("decision engine", r"src/(common|include)/(decision|AutoDecisionModel)/"
-     r"|src/include/decision_model\.hpp$|src/test/d3_\w+/", ("d3",)),
+     r"|src/include/decision_model\.hpp$|src/test/d3_video/fixtures/", ("d3",)),
     # src/detail builds the gemma4e engine from source; gemma4e_flash
     # includes it.
     ("gemma4e engine source", r"src/detail/", ("gemma4e", "gemma4e-flash")),
@@ -396,8 +564,10 @@ SUBSYSTEMS = (
 # or without one, a name ending in GPU_SUFFIX (model_list::backend_for_family).
 # No NPU model runs its code (bar the header above) or those entries, so they
 # name no family and run no NPU job: Test Windows HIPEP tests them, on every
-# GPU entry.
-GPU_ONLY = re.compile(r"^(src/(common|include)/oga/|src/test/oga_hipep/)")
+# GPU entry. Its machine matrix (hipep-machines.json, hipep_machines.py) only
+# shapes that job.
+GPU_ONLY = re.compile(r"^(src/(common|include)/oga/"
+                      r"|\.github/(hipep-machines\.json|script/ci/hipep_machines\.py)$)")
 GPU_SUFFIX = "-oga-hipep"
 # An entry's "backend" key (flm::backend::kBackendKey), when present, overrides
 # the suffix rule; GPU_BACKEND is the oga-hipep backend's id.
@@ -410,6 +580,10 @@ GPU_FRONTEND = re.compile(r"^src/(include|common)/AutoModel/")
 GPU_SUITES = {"chat", "api", "shutdown"}
 # Those that test no NPU model, so a change to their tests runs no NPU job.
 GPU_ONLY_SUITES = {"shutdown"}
+
+# The extension bundle's own sources: Test Windows HIPEP never builds or loads
+# it, so they run chat (and the extension jobs) without HIPEP.
+EXTENSION_TESTS = re.compile(r"^src/test/model_extension_(gemma4e|consumer)/")
 
 # Tests of shared code kept in an engine's test directory, which name no family:
 # test_model_downloader tests src/pull, beside the phi4 corelib tests it came
@@ -427,7 +601,6 @@ ASR_ONLY = re.compile(
     r"|src/(common|include)/AutoModel/modeling_qwen3_asr[^/]*\.(cpp|hpp)$"
     r"|src/xclbins/Confucius4-R2T2-NPU2/"
     r"|src/lib/(xrt|hrx)/[^/]*qwen3_asr_npu"
-    r"|src/test/qwen3_asr[^/]*/"
     r"|src/(common|include)/audio_process_utils/"
     r"|src/(common|include)/audio/"
     r"|src/common/AutoModel/[^/]*_audio\.cpp$"
@@ -435,9 +608,7 @@ ASR_ONLY = re.compile(
     r"|src/include/(pocketfft|dr_libs)/"
     r"|src/cmake/FlmAudioCodecs\.cmake$"
     r"|src/server/multipart\.(cpp|hpp)$"
-    r"|src/test/whisper_npu/"
     r"|\.github/script/npu_test/suites/(asr|whisper)[^/]*\.py$"
-    r"|\.github/script/npu_test/tools/build_asr_eval\.py$"
     r"|\.github/script/npu_test/assets/asr_eval/)")
 # These host /v1/audio/transcriptions but also every other endpoint, so they
 # count only when a changed line is about audio or speech.
@@ -455,12 +626,11 @@ TEST_SCOPES = (
     (r"\.github/script/npu_test/suites/(\w+)\.py$", None),  # the suite itself
     (r"\.github/script/npu_test/console\.py$", {"shutdown"}),
     (r"\.github/script/npu_test/assets/d3_goldens[^/]*\.jsonl$", {"decision"}),
-    (r"\.github/script/npu_test/assets/vision/|\.github/script/npu_test/tools/make_vision_assets\.py$",
-     {"chat"}),
+    (r"\.github/script/npu_test/assets/(vision/|test_image1\.jpg$)", {"chat"}),
     (r"src/test/(openai_api_test|openai_usage)/", {"api"}),
-    # The model-extension contracts run in cpu-tests.yml on every change; the
-    # Gemma4-open bundle and its NPU tests run with chat.
-    (r"src/test/(model_frontend|model_backend|model_list_platform|model_extension_\w+)/"
+    # The Gemma4-open bundle and its NPU tests run with chat (the model-
+    # extension contracts are OUTSIDE_BUILD_AND_TEST: cpu-tests.yml).
+    (r"src/test/model_extension_(gemma4e|consumer)/"
      r"|src/schemas/|src/cmake/FastFlowLMModelExtension[^/]*\.cmake(\.in)?$", {"chat"}),
 )
 
@@ -481,6 +651,77 @@ def family_suites(families: Iterable[str], catalog: dict[str, dict]) -> set:
             if any(family_of(e) == fam and e.get("asr") for e in catalog.values()):
                 out.add("asr")
     return out
+
+
+# The CI files Build and Test can run (build_and_test_closure): workflows,
+# actions and the scripts in script/ci. A changed one outside the closure is
+# OUTSIDE_BUILD_AND_TEST, whatever its name (a new standalone workflow and its
+# script, say), so no list of them has to be kept.
+CLOSURE_DIRS = (".github/workflows/", ".github/actions/", ".github/script/ci/")
+USES_WORKFLOW = re.compile(r"uses:\s*\./\.github/workflows/([\w.-]+\.ya?ml)")
+USES_ACTION = re.compile(r"uses:\s*\./\.github/actions/([\w.-]+)")
+PY_IMPORT = re.compile(r"^\s*(?:from|import)\s+([A-Za-z_]\w*)", re.MULTILINE)
+
+
+@lru_cache(maxsize=None)
+def build_and_test_closure(repo: Path = REPO_ROOT, gone: frozenset = frozenset()) -> Optional[frozenset]:
+    """The CI files a Build and Test run can use, as repository paths (an
+    action as its directory, ending in /): build-and-test.yml, the workflows
+    and actions it calls through uses:, transitively, and the script/ci files
+    (bar the test_* unit tests) any of them names (by file name, comments
+    included) or imports. A reference counts whether or not its target is in the checkout, so a
+    change that deletes or renames away a file Build and Test still names
+    (gone: the changed script/ci file names the checkout lacks) is tested,
+    and fails there. A mention is enough, so it errs towards testing. None
+    when build-and-test.yml cannot be read: then no CI file counts as outside."""
+    gh = repo / ".github"
+    start = gh / "workflows" / "build-and-test.yml"
+    if not start.is_file():
+        return None
+    ci = gh / "script" / "ci"
+    # The CI unit tests (test_*) run in the changes job on every event and
+    # call no other script: they are neither followed nor collected.
+    names = {p.name for p in ci.iterdir() if p.is_file()} if ci.is_dir() else set()
+    names = {n for n in names | set(gone) if not n.startswith("test_")}
+    named = re.compile(r"(?<![\w-])(" + "|".join(sorted(map(re.escape, names), key=len, reverse=True))
+                       + r")(?!\w)") if names else None
+    out: set = set()
+    todo = [start]
+    while todo:
+        path = todo.pop()
+        rel = path.relative_to(repo).as_posix()
+        if rel in out:
+            continue
+        out.add(rel)
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        todo += [gh / "workflows" / m for m in USES_WORKFLOW.findall(text)]
+        for action in USES_ACTION.findall(text):
+            key = f".github/actions/{action}/"
+            if key not in out:
+                out.add(key)
+                todo += [f for f in (gh / "actions" / action).rglob("*") if f.is_file()]
+        if named:
+            todo += [ci / n for n in set(named.findall(text))]
+        if path.suffix == ".py":
+            todo += [ci / (m + ".py") for m in PY_IMPORT.findall(text) if m + ".py" in names]
+    return frozenset(p for p in out if not (p.startswith(".github/actions/") and not p.endswith("/")))
+
+
+def unused_ci(path: str, closure: Optional[frozenset]) -> bool:
+    """A workflow, action or script/ci file no Build and Test run uses. A
+    file in a subdirectory of script/ci counts as used (the closure tracks
+    top-level scripts only)."""
+    if closure is None or not path.startswith(CLOSURE_DIRS) or devkit_only_areas(path) is not None:
+        return False
+    if path.startswith(".github/actions/"):
+        return "/".join(path.split("/")[:3]) + "/" not in closure
+    if path.startswith(".github/workflows/") and not path.endswith((".yml", ".yaml")):
+        return False
+    if path.startswith(".github/script/ci/") and "/" in path[len(".github/script/ci/"):]:
+        return False
+    return path not in closure
 
 
 def is_non_code(path: str) -> bool:
@@ -523,6 +764,19 @@ class Git:
         rev = self.merge_base if rev_side == "base" else self.head
         return self._git("show", f"{rev}:{path}") if rev else None
 
+    def last_swap(self) -> Optional[str]:
+        """The newest commit since the merge base whose message carries the
+        dev-kit swap trailer (devkit_swap.py TRAILER_RUN), or None."""
+        if not self.merge_base:
+            return None
+        out = self._git("rev-list", "-n", "1", f"--grep=^{SWAP_TRAILER}:", f"{self.merge_base}..{self.head}")
+        return (out or "").strip() or None
+
+    def files_since(self, commit: str) -> Optional[list[str]]:
+        """The files head changes against commit (merges from main included)."""
+        out = self._git("diff", "--name-only", "--no-renames", commit, self.head)
+        return None if out is None else [l for l in out.splitlines() if l.strip()]
+
 
 @dataclass
 class Decision:
@@ -535,16 +789,75 @@ class Decision:
     hipep: bool = False
     # NPU catalog entries no runner has yet (see new_downloads).
     new_models: list = field(default_factory=list)
-    # The oga-hipep entries added or edited in the head catalog, which include
-    # those with new weights (new_downloads' GPU half).
+    # The oga-hipep entries with weights no runner has yet (new_downloads'
+    # GPU half, and entries moved onto the GPU).
     gpu_models: set = field(default_factory=set)
+    # The families of the oga-hipep entries edited without new weights:
+    # Test Windows HIPEP tests one model of each (hipep_families).
+    gpu_edit_families: set = field(default_factory=set)
     # Dev-kit areas (DEVKIT_AREAS) a changed flm-dev-kit/ file needs.
     devkit_areas: set = field(default_factory=set)
+    # The areas something other than the dev-kit CI or a shipped kernel
+    # selected: source the dev-kit builds read (devkit_stage).
+    source_areas: set = field(default_factory=set)
     # Catalog families of the dev-kit engines the change touches.
     devkit_families: set = field(default_factory=set)
     # Changed kernel build image files (DEVKIT_ONLY).
     image_only: list = field(default_factory=list)
+    # The first changed dev-kit engine or kernel source (is_bench_source), or
+    # a reason for benching when the changed files are unknown; None: no
+    # source changed. The benches run only when Build and Test also builds
+    # something to bench (bench()).
+    bench_source: Optional[str] = None
+    # Changed bench CI files (BENCH_CI), which Build and Test leaves alone.
+    bench_ci: list = field(default_factory=list)
+    # Changed files no Build and Test job uses (OUTSIDE_BUILD_AND_TEST).
+    outside: list = field(default_factory=list)
+    # Changed package and installer files no test observes (BUILD_ONLY).
+    build_only: list = field(default_factory=list)
+    # A file the dev-kit catalog check reads changed (DEVKIT_CATALOG).
+    devkit_catalog: bool = False
+    # Only shipped kernels (SHIPPED_KERNEL) selected the xclbin area.
+    xclbin_compare_only: bool = False
+    # The head is a verified dev-kit swap commit (devkit_swap.py verify).
+    swap_verified: bool = False
     reasons: list = field(default_factory=list)
+
+    def keep_swap(self, swap: str, since: "Decision") -> None:
+        """A swap commit is in the pull request and nothing a dev-kit build
+        reads changed after it (since: the decision for the files changed
+        since then stages nothing): the committed binaries are what its run
+        tested, so nothing is staged again; the product tests test them.
+        The dev-kit areas are those of the later changes alone."""
+        self.devkit_areas = set(since.devkit_areas)
+        self.source_areas = set()
+        self.devkit_families = set()
+        self.bench_source = None
+        self.xclbin_compare_only = since.xclbin_compare_only
+        self.reasons.append(f"swap commit {swap[:10]} brought in this pull request's dev-kit binaries and no "
+                            "dev-kit source changed since (devkit_swap.py check verifies it): nothing staged "
+                            "again; the product tests test the committed files")
+
+    def skip_for_swap(self) -> None:
+        """A verified swap commit: the run that tested its parent built and
+        NPU-tested exactly these binaries, so nothing is built or tested
+        again; only devkit-static (the catalog check) runs."""
+        self.swap_verified = True
+        self.run_tests = False
+        self.suites = set()
+        self.families = set()
+        self.hipep = False
+        self.new_models = []
+        self.gpu_models = set()
+        self.gpu_edit_families = set()
+        self.devkit_areas = set()
+        self.source_areas = set()
+        self.devkit_families = set()
+        self.bench_source = None
+        self.xclbin_compare_only = False
+        self.devkit_catalog = True
+        self.reasons.append("the head is a verified dev-kit swap commit (devkit_swap.py verify): no product "
+                            "build, NPU test, dev-kit build, staging or bench; devkit-static only")
 
     def all_suites(self, path: str, why: str = "") -> None:
         if self.suites is not None:
@@ -573,39 +886,71 @@ class Decision:
     def devkit_value(self) -> str:
         return ",".join(area for area, _ in DEVKIT_AREAS if area in self.devkit_areas)
 
-    def devkit_overlay(self) -> bool:
-        """Whether the dev-kit overlay tests run: the change touches a dev-kit
-        engine's families, or the kernels (which kernels, and so which models,
-        the xclbin build decides).
+    def devkit_stage(self) -> bool:
+        """Whether a pull request's run stages dev-kit files into its product
+        builds (see devkit_stage in the docstring): the change touches a
+        dev-kit engine's families, or kernel source (which kernels, and so
+        which models, the xclbin build decides).
 
-        Accepted cost: any xclbin-area change counts, before the kernel plan
+        Accepted cost: any such xclbin change counts, before the kernel plan
         is known, so one that rebuilds no catalog model's kernel (an
-        unassigned build unit, SmolVLA only, a CI edit) still builds the four
-        portable packages and asks an untrusted pull request for npu-approve,
-        and then every overlay job skips (summary does not hold the missing
-        approval against it). Narrowing it would mean running the kernel
-        plan (devkit_xclbin_plan.py) here."""
-        return bool(self.devkit_families and "dll" in self.devkit_areas) or "xclbin" in self.devkit_areas
+        unassigned build unit, SmolVLA only) still makes the product builds
+        wait for the kernel build and asks an untrusted pull request for
+        npu-approve; the staging then stages nothing and the product jobs
+        run as for any other change. Narrowing it would mean running the
+        kernel plan (devkit_xclbin_plan.py) here."""
+        return (bool(self.devkit_families and "dll" in self.devkit_areas)
+                or "xclbin" in self.source_areas)
+
+    def bench(self) -> bool:
+        """Whether Build and Test runs the dev-kit benches (its devkit-bench
+        job, devkit-bench.yml) on a pull request: engine or kernel source
+        changed and it stages it into the portable packages they bench
+        (devkit_stage). An engine serving no
+        catalog family (qwen3_5_omni) is source but builds nothing to bench."""
+        return self.bench_source is not None and self.devkit_stage()
 
     def summary(self) -> str:
+        if self.swap_verified:
+            return "verified dev-kit swap commit: builds and NPU tests skipped; devkit-static runs"
         devkit = f"; dev kit: {self.devkit_value().replace(',', ', ')}" if self.devkit_areas else ""
         if self.devkit_families:
             devkit += f" (engine families: {len(self.devkit_families)})"
-        if self.devkit_overlay():
-            devkit += "; dev-kit overlay tests run"
+        if self.xclbin_compare_only:
+            devkit += " (shipped kernels rebuilt to compare)"
+        if self.devkit_stage():
+            devkit += "; dev-kit files staged into the product builds"
+        if self.bench():
+            devkit += "; dev-kit benches run"
+        if self.devkit_catalog and not self.devkit_areas:
+            devkit += "; dev-kit catalog check runs"
         if not self.run_tests:
             if self.devkit_areas:
-                what = ("product NPU tests skipped, portable packages built for the overlay"
-                        if self.devkit_overlay() else "product builds and NPU tests skipped")
+                what = ("portable packages built with the dev-kit files staged, NPU-tested for them"
+                        if self.devkit_stage() else "product builds and NPU tests skipped")
                 return f"flm-dev-kit only: {what}{devkit}"
             if self.image_only:
                 return "kernel build image only (devkit-aie-image.yml): NPU tests and dev-kit jobs skipped"
-            return "documentation only: NPU tests skipped"
+            if self.bench_ci and self.outside:
+                return ("bench CI and files Build and Test does not use: NPU tests, HIPEP, "
+                        "dev-kit jobs and benches skipped")
+            if self.bench_ci:
+                return ("bench CI only (devkit-bench.yml, called for engine or kernel source only): "
+                        "NPU tests, dev-kit jobs and benches skipped")
+            if self.outside:
+                return ("files Build and Test does not use (other workflows, CPU tests, scan configs, "
+                        "developer scripts): NPU tests, HIPEP and dev-kit jobs skipped")
+            return "documentation only: NPU tests skipped" + devkit
         return self._product_summary() + devkit
 
     def _product_summary(self) -> str:
         hipep = "HIPEP: " + ("runs" if self.runs_hipep() else "skipped")
         if self.suites_value() == "none":
+            if self.build_only and not self.runs_hipep():
+                if self.devkit_stage():
+                    return ("packaging only: packages build with the dev-kit files staged, "
+                            "NPU-tested for them; HIPEP skipped")
+                return "packaging only: packages build, NPU tests and HIPEP skipped"
             return f"oga-hipep only: NPU tests skipped; {hipep}"
         parts = ["NPU tests run"]
         parts.append("families in full: " + (", ".join(sorted(self.families)) or "none"))
@@ -615,14 +960,16 @@ class Decision:
             parts.append("new models: " + ", ".join(self.new_models))
         parts.append(hipep)
         if self.gpu_models:
-            parts.append("GPU models added or edited: " + ", ".join(sorted(self.gpu_models)))
+            parts.append("GPU models with new weights: " + ", ".join(sorted(self.gpu_models)))
+        if self.gpu_edit_families:
+            parts.append("GPU families edited: " + ", ".join(sorted(self.gpu_edit_families)))
         return "; ".join(parts)
 
     def suites_value(self) -> str:
         if self.suites is None:
             return "all"
         if not self.suites:
-            return "none" if self.hipep else "all"
+            return "none" if self.hipep or self.build_only else "all"
         return ",".join(s for s in SUITES if s in self.suites)
 
     def outputs(self) -> dict[str, str]:
@@ -630,15 +977,20 @@ class Decision:
                 "families": ",".join(sorted(self.families)),
                 "asr_full": str(self.asr_full).lower(),
                 # No product suite when no product code changed, even if the
-                # portable packages build for the dev-kit overlay.
+                # portable packages build with staged dev-kit files (whose
+                # own selection devkit_stage.py adds).
                 "suites": self.suites_value() if self.run_tests else "none",
                 "hipep": str(self.runs_hipep()).lower(),
                 "new_models": ",".join(self.new_models),
                 "hipep_models": ",".join(sorted(self.gpu_models)),
+                "hipep_families": ",".join(sorted(self.families | self.gpu_edit_families)),
                 "devkit": str(bool(self.devkit_areas)).lower(),
+                "devkit_catalog": str(self.devkit_catalog).lower(),
                 "devkit_areas": self.devkit_value(),
                 "devkit_families": ",".join(sorted(self.devkit_families)),
-                "devkit_overlay": str(self.devkit_overlay()).lower(),
+                "devkit_stage": str(self.devkit_stage()).lower(),
+                "devkit_bench": str(self.bench()).lower(),
+                "swap_verified": str(self.swap_verified).lower(),
                 "summary": self.summary()}
 
 
@@ -698,7 +1050,8 @@ RUNNER_PLATFORMS = {"aie2p"}
 # no runner has yet. A raised flm_min_version marks a downloaded copy outdated
 # (model_downloader.cpp), so flm pull fetches the files again; that and new
 # model_info.json hashes are how republished weights ship.
-DOWNLOAD_FIELDS = ("name", "url", "file_url", "files", "flm_min_version")
+# model_info_key points the entry at other hashes in model_info.json.
+DOWNLOAD_FIELDS = ("name", "url", "file_url", "files", "flm_min_version", "model_info_key")
 
 
 def split_downloads(ids: Iterable[str], head: dict[str, dict]) -> tuple[list, list]:
@@ -725,6 +1078,13 @@ def new_downloads(base: dict[str, dict], head: dict[str, dict]) -> tuple[list, l
         (mid for mid, entry in head.items()
          if base.get(mid) is None
          or any(base[mid].get(k) != entry.get(k) for k in DOWNLOAD_FIELDS)), head)
+
+
+def moved_onto_gpu(base: dict[str, dict], head: dict[str, dict]) -> list:
+    """Entries in both catalogs that only the head runs on the GPU: weights
+    no HIPEP machine has tested, whatever their download fields."""
+    return sorted(mid for mid, entry in head.items()
+                  if mid in base and runs_on_gpu(mid, entry) and not runs_on_gpu(mid, base[mid]))
 
 
 def split_entry(mid: str, sides: list, fams: set, gpu: list) -> None:
@@ -773,8 +1133,10 @@ def model_info_diff(base_text: Optional[str], head_text: Optional[str],
 def add_catalog_change(d: Decision, path: str, fams: set, gpu: list,
                        catalog: dict[str, dict], neither: str) -> None:
     """A catalog file's changed entries: their NPU families in full, and Test
-    Windows HIPEP for GPU entries, which also tests those the head catalog
-    still runs on the GPU. A change to neither is not scoped."""
+    Windows HIPEP for GPU entries, which tests one model of the family of
+    each the head catalog still runs on the GPU (the entries with new
+    weights are required on their own, through add_new_downloads). A change
+    to neither is not scoped."""
     d.families |= fams
     if fams:
         d.add_suites(family_suites(fams, catalog))
@@ -783,7 +1145,10 @@ def add_catalog_change(d: Decision, path: str, fams: set, gpu: list,
     what = ", ".join(sorted(fams)) or ("no NPU family" if gpu else neither)
     if gpu:
         d.hipep = True
-        d.gpu_models |= {mid for mid in gpu if mid in catalog and runs_on_gpu(mid, catalog[mid])}
+        edited = [mid for mid in gpu if mid in catalog and runs_on_gpu(mid, catalog[mid])]
+        d.gpu_edit_families |= {family_of(catalog[mid]) for mid in edited} - {""}
+        # An entry with no family has no family model to stand for it.
+        d.gpu_models |= {mid for mid in edited if not family_of(catalog[mid])}
         what += (f"; {len(gpu)} oga-hipep entr{'y' if len(gpu) == 1 else 'ies'}, e.g. {gpu[0]},"
                  " which only Test Windows HIPEP runs")
     d.reasons.append(f"{path}: entries changed in {what}")
@@ -874,8 +1239,35 @@ def every_engine_family(engines: Optional[DevkitEngines]) -> set:
     return {f for fams in ENGINES.values() for f in fams}
 
 
+def engine_library_files(engines: Optional[DevkitEngines], repo: Path = REPO_ROOT) -> frozenset:
+    """The file names every runtime directory ships for the libraries the
+    engines.json units (shared and engines) build: lib<name>.so, <name>.dll
+    and <name>.lib, the names devkit_check.py's rule 7 requires. Empty when
+    engines.json is unreadable, so every src/lib/xrt file stays a link input."""
+    if engines is None:
+        return frozenset()
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import devkit_check  # noqa: E402  (reads the units' Makefile and CMakeLists.txt)
+    out: set = set()
+    for unit in sorted(engines.shared | set(engines.engines)):
+        lib = devkit_check.unit_library(repo / devkit_check.DLL, unit, [])
+        if lib:
+            out |= set(devkit_check.shipped_names(lib))
+    return frozenset(out)
+
+
+def devkit_from_product(path: str, engine_libs: frozenset) -> Optional[set]:
+    """The dev-kit areas product file path selects (DEVKIT_FROM_PRODUCT), or
+    None. A dev-kit engine library in src/lib/xrt selects none: it is what a
+    swap commits, not something the engines build from."""
+    if path.startswith("src/lib/xrt/") and path[len("src/lib/xrt/"):] in engine_libs:
+        return None
+    return next((areas for rx, areas in DEVKIT_FROM_PRODUCT if rx.match(path)), None)
+
+
 def add_devkit_families(d: Decision, files: list[str], code: list[str],
-                        engines: Optional[DevkitEngines], git: Optional[Git]) -> None:
+                        engines: Optional[DevkitEngines], git: Optional[Git],
+                        engine_libs: frozenset = frozenset()) -> None:
     """d.devkit_families for the changed dev-kit files and the product files
     that select the dll area (see devkit_families in the docstring)."""
     everything = None  # the first path that needs every engine's families
@@ -902,9 +1294,8 @@ def add_devkit_families(d: Decision, files: list[str], code: list[str],
         if path.startswith(DEVKIT_ROOT) and not is_non_code(path) and devkit_area(path) is None:
             everything = everything or f"{path} (in no dev-kit area)"
     for path in code:
-        if DEVKIT_CI.match(path):
-            everything = everything or f"{path} (CI that runs the dev-kit jobs)"
-        elif any(rx.match(path) and "dll" in areas for rx, areas in DEVKIT_FROM_PRODUCT):
+        # The dev-kit CI rebuilds the engines (every area) but stages none.
+        if not DEVKIT_CI.match(path) and "dll" in (devkit_from_product(path, engine_libs) or ()):
             everything = everything or f"{path} (linked by the dev-kit engines)"
     if everything:
         d.devkit_families = every_engine_family(engines)
@@ -935,26 +1326,82 @@ def devkit_engines_diff(git: Optional[Git], head: Optional[DevkitEngines]) -> Op
 
 def decide(files: Optional[list[str]], git: Optional[Git] = None,
            head_catalog_text: Optional[str] = None,
-           devkit_engines: Optional[DevkitEngines] = None) -> Decision:
+           devkit_engines: Optional[DevkitEngines] = None,
+           engine_libs: Optional[frozenset] = None,
+           repo: Optional[Path] = None) -> Decision:
     """The decision for a list of changed files (None: git could not tell).
 
     git supplies the changed lines and the base and head versions of the
     catalogs; without it those checks fall back as described inline.
     devkit_engines is the head engines.json; None reads the checkout's.
+    engine_libs is engine_library_files' answer; None reads the checkout.
     """
     d = Decision(suites=None)
     if devkit_engines is None:
         devkit_engines = load_devkit_engines()
+    if engine_libs is None:
+        engine_libs = engine_library_files(devkit_engines)
     if files is None:
         d.asr_full = True
+        d.devkit_catalog = True
         d.devkit_areas = set(ALL_DEVKIT_AREAS)
+        d.source_areas = set(ALL_DEVKIT_AREAS)
         d.devkit_families = every_engine_family(devkit_engines)
+        d.bench_source = "changed files unknown"
         d.reasons.append("changed files unknown (new branch, shallow clone or force-push): "
-                         "running everything, ASR set in full, every dev-kit area and engine family")
+                         "running everything, ASR set in full, every dev-kit area and engine family, "
+                         "dev-kit benches")
         return d
     if not files:
-        d.reasons.append("no changed files: running the tests anyway")
+        # Tests more, as everywhere here, but no bench: the user's rule is to
+        # bench only when engine or kernel source changed.
+        d.reasons.append("no changed files: running the tests anyway; no dev-kit benches")
         return d
+
+    catalog = [f for f in files if DEVKIT_CATALOG.match(f)]
+    if catalog:
+        d.devkit_catalog = True
+        d.reasons.append(f"{catalog[0]}{f' and {len(catalog) - 1} more' if len(catalog) > 1 else ''}: "
+                         "read by the dev-kit catalog check (devkit-static)")
+
+    bench_ci = [f for f in files if BENCH_CI.match(f)]
+    if bench_ci:
+        d.bench_ci = bench_ci
+        files = [f for f in files if not BENCH_CI.match(f)]
+        d.reasons.append(f"{len(bench_ci)} bench CI file(s), e.g. {bench_ci[0]}: Build and Test runs "
+                         f"none of it for that alone (dispatch devkit-bench.yml on the branch to exercise it)")
+        if not files:
+            d.run_tests = False
+            d.suites = set()
+            d.reasons.append("bench CI only: product builds, NPU tests and dev-kit jobs skipped")
+            return d
+
+    root = repo or REPO_ROOT
+    gone = frozenset(f.rsplit("/", 1)[1] for f in files
+                     if f.startswith(".github/script/ci/") and f.count("/") == 3 and not (root / f).exists())
+    closure = build_and_test_closure(root, gone)
+
+    def is_outside(f: str) -> bool:
+        return bool(OUTSIDE_BUILD_AND_TEST.match(f)) or unused_ci(f, closure)
+
+    outside = [f for f in files if is_outside(f) and not is_non_code(f)]
+    if outside:
+        d.outside = outside
+        files = [f for f in files if not is_outside(f)]
+        d.reasons.append(f"{len(outside)} file(s) no Build and Test job uses, e.g. {outside[0]}: "
+                         "nothing built or tested for them here (OUTSIDE_BUILD_AND_TEST, or CI "
+                         "outside build_and_test_closure)")
+        if not [f for f in files if not is_non_code(f)]:
+            d.run_tests = False
+            d.suites = set()
+            d.reasons.append("nothing else changed: product builds, NPU tests and dev-kit jobs skipped")
+            return d
+
+    bench = next((f for f in files if is_bench_source(f)), None)
+    if bench is not None:
+        d.bench_source = bench
+        d.reasons.append(f"{bench}: dev-kit engine or kernel source (benched when the dev-kit "
+                         f"run stages something for it)")
 
     # flm-dev-kit/ code selects dev-kit areas only; the product rules below
     # see the other files. Its documentation counts as nothing. The kernel
@@ -975,8 +1422,11 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
             if not d.devkit_areas >= ALL_DEVKIT_AREAS:
                 d.reasons.append(f"{path} is in no dev-kit area: every dev-kit area")
             d.devkit_areas |= ALL_DEVKIT_AREAS
+            d.source_areas |= ALL_DEVKIT_AREAS
             continue
         d.devkit_areas.add(area)
+        d.source_areas.add(area)
+        d.source_areas |= devkit_extra_areas(path)
         extra = devkit_extra_areas(path) - d.devkit_areas
         if extra:
             d.devkit_areas |= extra
@@ -988,7 +1438,7 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
 
     in_devkit = set(devkit)
     code = [f for f in files if not is_non_code(f) and f not in in_devkit]
-    add_devkit_families(d, files, code, devkit_engines, git)
+    add_devkit_families(d, files, code, devkit_engines, git, engine_libs)
     d.suites = set()  # narrowed per file below; None once any file is unscoped
     if not code:
         d.run_tests = False
@@ -1002,19 +1452,26 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
     # Product files the dev kit builds from, and the CI that runs it, also
     # select dev-kit areas; their product rules below are unchanged.
     for path in code:
-        if DEVKIT_CI.match(path):
+        if DEVKIT_CI.match(path) and not (BUILD_ONLY.match(path) or GPU_ONLY.match(path)):
             new = ALL_DEVKIT_AREAS - d.devkit_areas
             d.devkit_areas |= ALL_DEVKIT_AREAS
             if new:
-                d.reasons.append(f"{path}: CI that runs the dev-kit jobs -> every dev-kit area")
+                d.reasons.append(f"{path}: CI that runs the dev-kit jobs -> every dev-kit area "
+                                 "(built to exercise it; nothing staged for it)")
             continue
-        for rx, areas in DEVKIT_FROM_PRODUCT:
-            if rx.match(path):
-                new = areas - d.devkit_areas
-                d.devkit_areas |= areas
-                if new:
-                    d.reasons.append(f"{path}: linked by the dev kit -> {', '.join(sorted(new))}")
-                break
+        areas = devkit_from_product(path, engine_libs)
+        if areas:
+            new = areas - d.devkit_areas
+            d.devkit_areas |= areas
+            d.source_areas |= areas
+            if new:
+                d.reasons.append(f"{path}: linked by the dev kit -> {', '.join(sorted(new))}")
+    shipped = [f for f in code if SHIPPED_KERNEL.match(f)]
+    if shipped and "xclbin" not in d.devkit_areas:
+        d.devkit_areas.add("xclbin")
+        d.xclbin_compare_only = True
+        d.reasons.append(f"{shipped[0]}{f' and {len(shipped) - 1} more' if len(shipped) > 1 else ''}: "
+                         "shipped kernel(s) -> xclbin, rebuilt from the dev kit to compare (nothing staged)")
 
     head_catalog = load_catalog(head_catalog_text)
     gpu_fams = gpu_families(head_catalog)
@@ -1022,6 +1479,11 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
 
     gpu_code = []
     for path in code:
+        if BUILD_ONLY.match(path):
+            d.build_only.append(path)
+            d.reasons.append(f"{path}: packaged or checks a package, which no NPU or GPU test "
+                             "observes: packages build, no suite for it")
+            continue
         hit = None if SHARED_TESTS.match(path) else engine_families(path, xclbin_families)
         if hit is None:
             hit = next(((why, fams) for why, pattern, fams in SUBSYSTEMS
@@ -1047,7 +1509,7 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
                 scope = names if names is not None else (
                     {m.group(1)} if m.group(1) in SUITES else None)
                 break
-        if scope and scope & GPU_SUITES:
+        if scope and scope & GPU_SUITES and not EXTENSION_TESTS.match(path):
             d.reach_hipep(f"{path}: tests the {', '.join(sorted(scope & GPU_SUITES))} suite,"
                           " which Test Windows HIPEP runs")
         if scope:
@@ -1078,6 +1540,11 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
             add_catalog_change(d, MODEL_LIST, *catalog_diff(base, head_catalog), head_catalog,
                                "no family (top-level fields only)")
             d.add_new_downloads(MODEL_LIST, *new_downloads(base, head_catalog))
+            moved = moved_onto_gpu(base, head_catalog)
+            if moved:
+                d.gpu_models |= set(moved)
+                d.reasons.append(f"{MODEL_LIST}: moved onto the oga-hipep backend, tested whatever "
+                                 "their size: " + ", ".join(moved))
     if MODEL_INFO in code:
         diff = None
         if git:
@@ -1121,6 +1588,27 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
     return d
 
 
+def after_swap(d: Decision, git, head_catalog_text: Optional[str],
+               engines: Optional[DevkitEngines], repo: Path = REPO_ROOT) -> None:
+    """A push after a swap commit (a review fix, a merge of main): the
+    base...head diff still holds the dev-kit source the swap came from, but
+    when nothing a dev-kit build reads changed since the newest swap commit
+    (decide() on the files changed since then stages nothing), staging again
+    would rebuild bytes that differ from the swapped ones (kernel builds and
+    Windows DLLs are not byte-reproducible) and ask for another swap. A swap
+    commit that does not verify fails devkit_swap.py check, which keeps its
+    binaries out whatever this says."""
+    swap = git.last_swap()
+    if not swap:
+        return
+    files = git.files_since(swap)
+    if files is None:
+        return
+    since = decide(files, None, head_catalog_text, engines, engine_library_files(engines, repo), repo)
+    if not since.devkit_stage():
+        d.keep_swap(swap, since)
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--base", default="", help="Base commit; empty or all-zero means unknown.")
@@ -1131,6 +1619,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--repo", type=Path, default=REPO_ROOT)
     parser.add_argument("--github-output", action="store_true",
                         help="Also append the outputs to $GITHUB_OUTPUT.")
+    parser.add_argument("--swap-verified", default="", choices=("", "true", "false"),
+                        help="\"true\": the head is a verified dev-kit swap commit (devkit_swap.py verify), "
+                             "so nothing is built or tested again")
     args = parser.parse_args(argv)
 
     known_base = bool(args.base.strip("0 "))
@@ -1153,7 +1644,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         except OSError:
             engines_text = None
     devkit_engines = DevkitEngines.parse(engines_text)
-    decision = decide(files, git, head_catalog, devkit_engines)
+    decision = decide(files, git, head_catalog, devkit_engines,
+                      engine_library_files(devkit_engines, args.repo), args.repo)
+    if args.swap_verified == "true":
+        decision.skip_for_swap()
+    elif git and decision.devkit_stage():
+        after_swap(decision, git, head_catalog, devkit_engines, args.repo)
     for reason in decision.reasons:
         print(f"changes: {reason}")
     outputs = decision.outputs()

@@ -12,8 +12,10 @@ name: Dev-kit xclbins
 #             split into shards: .github/actions/devkit-xclbin-plan, rules in
 #             .github/script/ci/devkit_xclbin_plan.py. mode changed (pull
 #             requests): the units the change touches, the artifacts of the
-#             models whose kernel_assignment.json entry it changes, or for a
-#             toolchain or CI change two canary kernels. assigned: every
+#             models whose kernel_assignment.json entry it changes, the
+#             artifact assigned to each shipped kernel it replaces
+#             (src/xclbins/<folder>/<slot>, so the compare below reports
+#             it), or for a toolchain or CI change two canary kernels. assigned: every
 #             kernel the product ships; all: every build. A shard per 8
 #             builds, at most 16 (a pull request touching many kernels, as the
 #             import did with 137, spreads them instead of packing ~34 per
@@ -23,9 +25,11 @@ name: Dev-kit xclbins
 #             the job into its own limit before the shard uploads
 #   image     the image to build in: the digest in
 #             flm-dev-kit/FLM_Xclbin/toolchain.image when that file exists;
-#             else ghcr.io/rocm/fastflowlm/aie-build:<toolchain hash> (the
-#             first 16 hex digits of sha256(toolchain.lock + Dockerfile), the
-#             tag devkit-aie-image.yml publishes) when the registry has it;
+#             else ghcr.io/rocm/fastflowlm/aie-build:<toolchain hash>
+#             (.github/script/ci/aie_image_hash.py: 16 hex digits of a sha256
+#             of toolchain.lock and the Dockerfile, comments and blank lines
+#             left out; the tag devkit-aie-image.yml publishes) when the
+#             registry has it;
 #             else built here from the same Dockerfile and build args, reading
 #             devkit-aie-image.yml's layer cache (GitHub Actions cache scope
 #             aie-build; only devkit-aie-image.yml writes it), and handed to
@@ -156,7 +160,8 @@ jobs:
         id: lock
         run: |
           set -euo pipefail
-          echo "hash=$(cat "$LOCK" "$DOCKERFILE" | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+          hash="$(python3 -I .github/script/ci/aie_image_hash.py "$LOCK" "$DOCKERFILE")"
+          echo "hash=${hash}" >> "$GITHUB_OUTPUT"
           {
             echo 'build-args<<FLM_BUILD_ARGS'
             grep -E '^[A-Z0-9_]+=' "$LOCK"

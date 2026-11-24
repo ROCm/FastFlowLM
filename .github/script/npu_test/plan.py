@@ -16,7 +16,8 @@ change touches them), and every one on the full tier.
 
 Every tier also tests the models the change requires (--required-models):
 for the NPU, the entries it adds or whose weights it republishes; for a GPU
-backend, the entries it adds or edits.
+backend, the entries it adds, republishes or moves onto it; an entry it
+only edits counts its family as touched (--families) instead.
 """
 
 from __future__ import annotations
@@ -93,13 +94,17 @@ PR_GPU = {
     "gemma3": "gemma3-oga-hipep:4b",
     "gemma4-12b": "gemma4-it-oga-hipep:12b",
     "gpt-oss": "gpt-oss-oga-hipep:120b",
+    "laguna": "laguna2.1-oga-hipep:33b-a3b",
+    "nemotron-h": "nemotron3.5-lightning-oga-hipep:30b-a3b",
 }
 
 # Families whose PR_GPU model the install and pr tiers test only when the
 # change touches the family (--families), so that every pull request tests
 # just the newest Qwen and Gemma: Qwen2.5 and Gemma 3, the generations before;
-# gemma4-12b, a second Gemma 4 family; and gpt-oss, whose one model is 69 GB.
-PR_GPU_WHEN_TOUCHED = {"qwen2", "gemma3", "gemma4-12b", "gpt-oss"}
+# gemma4-12b, a second Gemma 4 family; gpt-oss, whose one model is 69 GB; and
+# laguna and nemotron-h, on the TemplateChat frontend that only they use.
+PR_GPU_WHEN_TOUCHED = {"qwen2", "gemma3", "gemma4-12b", "gpt-oss",
+                       "laguna", "nemotron-h"}
 
 # Suites with a fixed NPU model list that a GPU backend run gives its own chat
 # models instead: the OpenAI contract (tools, streaming, errors, usage) holds
@@ -242,7 +247,7 @@ class Plan:
         self.only_models = only_models
         self.backend = backend  # empty: the NPU backends
         # Models the change adds (changes.py new_models), or for a GPU backend
-        # run the entries it adds or edits (hipep_models): tested on every
+        # run the entries with new weights (hipep_models): tested on every
         # tier, even past --models, and downloaded whatever their size.
         self.required = list(required or [])
         # Models no suite tests: ones the run could not pull (Context.pull), or
@@ -297,9 +302,11 @@ class Plan:
             for family in sorted({m.family for m in models}):
                 if family in PR_GPU_WHEN_TOUCHED and family not in self.families:
                     continue
-                smallest = min((m for m in models if m.family == family),
-                               key=lambda m: (m.size, m.id))
-                picked.append(PR_GPU.get(family, smallest.id))
+                members = [m for m in models if m.family == family]
+                smallest = min(members, key=lambda m: (m.size, m.id))
+                # The table's model, unless it left the family or the catalog.
+                pick = PR_GPU.get(family)
+                picked.append(pick if pick in {m.id for m in members} else smallest.id)
             return self._known(picked + self.required)
         if self.tier == "install":
             return self._known(INSTALL_CHAT + self._added(lambda m: m.family not in NON_CHAT_FAMILIES))

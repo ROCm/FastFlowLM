@@ -51,4 +51,5 @@ include = ["smolvla_npu_pkg*"]
 smolvla_npu_pkg = [
     "smolvla_npu.cpython-312-x86_64-linux-gnu.so",
     "XCLBINS/*.xclbin",
+    "XCLBINS/*.switches",
 ]

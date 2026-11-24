@@ -10,6 +10,12 @@ inputs:
     description: Tier requested by the caller or dispatch; empty picks one from the event.
     required: false
     default: ""
+  swap-verified:
+    description: >
+      "true" when the head is a dev-kit swap commit .github/script/ci/devkit_swap.py
+      verify accepted: nothing is built or tested again (see swap-verified below).
+    required: false
+    default: ""
 
 outputs:
   run:
@@ -45,10 +51,17 @@ outputs:
     value: ${{ steps.changes.outputs.new_models }}
   hipep-models:
     description: >
-      Comma-separated oga-hipep models whose catalog entries the change added
-      or edited (new weights or not): Test Windows HIPEP tests them as
-      required models, downloading them whatever their size.
+      Comma-separated oga-hipep models with weights no runner has yet (added,
+      new download fields or model_info.json hashes, or moved onto the GPU):
+      Test Windows HIPEP tests them as required models, downloading them
+      whatever their size.
     value: ${{ steps.changes.outputs.hipep_models }}
+  hipep-families:
+    description: >
+      Comma-separated families Test Windows HIPEP treats as touched: families,
+      and those of the oga-hipep entries the change edits without new weights,
+      which it tests one model of instead of each edited entry.
+    value: ${{ steps.changes.outputs.hipep_families }}
   devkit:
     description: >
       "true" when a dev-kit job is needed, for the dev-kit jobs: code under
@@ -56,30 +69,61 @@ outputs:
       aiebu_static.lib, any library on its engines' -L path), the CI that
       runs the dev-kit jobs changed, or the changed files are unknown.
       flm-dev-kit/ paths never select product suites: a change only there
-      gives run "false" (see devkit-overlay for the packages it may build).
+      gives run "false" (see devkit-stage for the packages it may build).
     value: ${{ steps.changes.outputs.devkit }}
+  devkit-catalog:
+    description: >
+      "true" when a file the dev-kit catalog check reads changed (what src/
+      ships: src/model_list.json, src/xclbins/, src/lib/; and the dev kit's
+      engines.json, kernel_assignment.json/.md and build_units.json), or the
+      changed files are unknown: devkit-static runs, as it does for devkit,
+      and nothing else.
+    value: ${{ steps.changes.outputs.devkit_catalog }}
   devkit-areas:
     description: >
       Comma-separated dev-kit areas the change touches: xclbin, dll,
       converter, pybind, launchlib, including the areas that build from a
-      changed file of another area. Empty when devkit is "false".
+      changed file of another area, and xclbin for a shipped kernel
+      (src/xclbins/<folder>/<slot>.xclbin, rebuilt to compare). Empty when
+      devkit is "false".
     value: ${{ steps.changes.outputs.devkit_areas }}
   devkit-families:
     description: >
       Comma-separated catalog families of the dev-kit engines the change
-      touches, for the dev-kit overlay tests: an engine's families and those
-      of the engines that use it, from flm-dev-kit/FLM_DLL/engines.json; every
+      rebuilds from changed source (an engine's families and those of the
+      engines that use it, from flm-dev-kit/FLM_DLL/engines.json; every
       engine's families when shared engine code, a src/lib/xrt library the
-      engines link, the dev-kit CI or an unknown set of files changed. Empty
+      engines link or an unknown set of files changed; none for the dev-kit
+      CI alone), whose libraries are staged into the product builds. Empty
       when no dev-kit engine is touched.
     value: ${{ steps.changes.outputs.devkit_families }}
-  devkit-overlay:
+  devkit-stage:
     description: >
-      "true" when the dev-kit overlay tests run: the change touches a dev-kit
-      engine's families or selects the xclbin area. A pull request then
-      builds the portable packages they start from even when run is "false"
-      (suites is then "none", so no product test runs).
-    value: ${{ steps.changes.outputs.devkit_overlay }}
+      "true" when a pull request's run stages dev-kit files into its product
+      builds (build-and-test.yml devkit-stage): the change touches a dev-kit
+      engine's families or selects the xclbin area through kernel source
+      (not through the dev-kit CI or shipped kernels alone). The portable
+      packages then build, with the files staged, even when run is "false"
+      (suites is then "none"; the staging adds its own selection).
+    value: ${{ steps.changes.outputs.devkit_stage }}
+  devkit-bench:
+    description: >
+      "true" when the dev-kit perf and accuracy benches (devkit-bench.yml)
+      run: dev-kit engine or kernel source changed (code or build inputs
+      under flm-dev-kit/FLM_DLL/ or flm-dev-kit/FLM_Xclbin/) and the
+      run stages something to bench (devkit-stage), or the
+      changed files are unknown. Documentation, CI-only changes (the bench
+      CI included), the kernel build image and toolchain.lock, and the
+      converter, pybind and launchlib give "false". Build and Test's
+      devkit-bench job calls devkit-bench.yml on a pull request when it is
+      "true".
+    value: ${{ steps.changes.outputs.devkit_bench }}
+  swap-verified:
+    description: >
+      "true" when the head is a verified dev-kit swap commit (the swap-verified
+      input): the run then builds and tests nothing (run "false", suites
+      "none", no dev-kit area, staging or bench) and only devkit-static runs.
+    value: ${{ steps.changes.outputs.swap_verified }}
   tier:
     description: install, pr or full.
     value: ${{ steps.tier.outputs.tier }}
@@ -103,7 +147,10 @@ runs:
       env:
         BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.event_name == 'push' && github.ref_type == 'branch' && github.event.before) || '' }}
         HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-      run: python3 .github/script/ci/changes.py --base "${BASE}" --head "${HEAD}" --github-output
+        SWAP_VERIFIED: ${{ inputs.swap-verified }}
+      run: |
+        python3 .github/script/ci/changes.py --base "${BASE}" --head "${HEAD}" \
+          --swap-verified "${SWAP_VERIFIED}" --github-output
 
     - name: Pick tier
       id: tier

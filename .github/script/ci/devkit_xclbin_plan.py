@@ -17,7 +17,7 @@ count=, empty=, touched-models=, bench-models= and mode= to $GITHUB_OUTPUT):
    "touched_models": [<kernel_assignment.json models using a built artifact>],
    "bench_models": [<the models worth benching: see below>]}
 
-bench_models, as FastFlowLM_IRON's bench-models: in mode changed, the models
+bench_models: in mode changed, the models
 using a build selected because its source (or its build_units.json entry)
 changed, plus the models whose kernel_assignment.json entry was added or
 changed. A canary build, or one rebuilt only because a changed model uses
@@ -58,6 +58,13 @@ build_units.json ("make bitstream [MODEL_TYPE=...]" in that unit).
               changes.py gives toolchain.lock and docker/aie-build* no area
               (devkit-aie-image.yml checks them), so those two only add the
               canary when another change already selected the xclbin area
+            - a shipped kernel, src/xclbins/<folder>/<slot>.xclbin (added,
+              replaced or removed): the artifact kernel_assignment.json
+              puts in <slot> for every model whose folder is <folder>, so
+              devkit_xclbin_compare.py reports how the rebuild compares with
+              the shipped file. Nothing when no model assigns that slot (the
+              catalog check in devkit_check.py reports such a file). These
+              builds are not bench_models: their sources did not change
             - documentation (*.md), .gitignore files, host-only code
               (host_common/) and the FLM_Xclbin scripts no bitstream build
               reads (setup.sh, build_drivers.sh, dimhelper.py): nothing
@@ -90,7 +97,7 @@ from typing import Optional
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[2]
 sys.path.insert(0, str(HERE))
-from changes import DEVKIT_CI  # noqa: E402
+from changes import DEVKIT_CI, SHIPPED_KERNEL  # noqa: E402
 from devkit_rtp_lock import LOCK_REL as RTP_LOCK, changed_artifacts  # noqa: E402
 
 XCLBIN = "flm-dev-kit/FLM_Xclbin"
@@ -250,8 +257,8 @@ class Plan:
 def changed_plan(plan: Plan, files: list[str], base_units: dict[str, list],
                  base_assignment: Optional[dict], canary: list,
                  base_lock: Optional[str] = None, head_lock: Optional[str] = None) -> None:
-    # Units removed or renamed: their old paths select nothing (as IRON's
-    # walk-up, which found no Makefile there at head).
+    # Units removed or renamed: their old paths select nothing (a walk-up
+    # from them finds no Makefile at head).
     gone = set(base_units) - set(plan.units)
     for path in files:
         if TOOLCHAIN.match(path) or DEVKIT_CI.match(path):
@@ -287,9 +294,27 @@ def changed_plan(plan: Plan, files: list[str], base_units: dict[str, list],
                     plan.add(u, added, source=True)
                 else:
                     plan.add_unit(u)
+        elif SHIPPED_KERNEL.match(path):
+            add_shipped_kernel(plan, path)
         elif path.startswith(XCLBIN + "/") and not NO_BITSTREAM.match(path):
             for u in unit_for(path, plan.units, gone):
                 plan.add_unit(u)
+
+
+def add_shipped_kernel(plan: Plan, path: str) -> None:
+    """src/xclbins/<folder>/<slot>.xclbin: the artifact each model using
+    <folder> assigns to <slot>, to compare with the shipped file."""
+    folder, slot = path[len("src/xclbins/"):].rsplit("/", 1)
+    hits = {m: e["kernels"][slot] for m, e in sorted(plan.assignment.items())
+            if e.get("folder") == folder and slot in (e.get("kernels") or {})}
+    if not hits:
+        plan.reasons.append(f"{path}: shipped kernel no {ASSIGNMENT} model assigns: nothing to build")
+        return
+    for a in sorted(set(hits.values())):
+        if not plan.add_artifact(a):
+            plan.reasons.append(f"warning: {path} is {a}, which no build unit produces")
+    plan.reasons.append(f"{path}: shipped kernel of {', '.join(hits)} -> {', '.join(sorted(set(hits.values())))}, "
+                        "rebuilt to compare")
 
 
 def shard(builds: list[dict], max_shards: int, per_shard: int = 0) -> list[list[dict]]:

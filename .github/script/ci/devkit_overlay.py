@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
 # Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
 # Portions of this file consist of AI-generated content.
-"""Overlays a pull request's dev-kit engines and kernels on a product package.
+"""Overlays dev-kit engines and kernels on a product package (the benches).
 
     devkit_overlay.py --root <package root> --os linux|windows
                       [--engines flm-dev-kit/FLM_DLL/engines.json]
                       [--families <csv>] [--libs <dir>] [--xclbins <dir>]
                       [--xclbin-models <json list, default $DEVKIT_XCLBIN_MODELS>]
-                      [--new-models <csv>]
-                      [--github-output]
+                      [--new-models <csv>] [--github-output]
+
+Used by devkit-bench.yml (through .github/actions/devkit-overlay-package) for
+the nightly bench and a dispatched re-bench, which put a run's dev-kit
+builds over a product package that was built without them. A pull request
+needs none of this: Build and Test stages its dev-kit files into the product
+builds before they compile (devkit_stage.py), so its packages already hold
+them. devkit_stage.py reuses the engine selection, the library names, the
+ABI check and the test selection below.
 
 <root> is an unpacked portable package: the directory of flm (Linux, engines
 in <root>/lib) or flm.exe (Windows, engines beside it), with xclbins/ and
@@ -20,11 +27,11 @@ which leaves a complete one.
 
 Engines: from --libs (the devkit-libs-<os>-<runtime> artifact), those whose
 engines.json families meet --families; when --families holds every engine's
-families (shared engine code, the dev-kit CI or an unknown change), every
-engine, the shared units (q4nx, mha, gemm, dequant, lm_head) and the engines
-that serve no family too, so no prebuilt is left to mix with dev-kit code
-built against other shared headers. Each library replaces the package's file
-of the same name; one the package lacks is an error (flm would not load it).
+families (shared engine code or an unknown change), every engine, the shared
+units (q4nx, mha, gemm, dequant, lm_head) and the engines that serve no
+family too, so no prebuilt is left to mix with dev-kit code built against
+other shared headers. Each library replaces the package's file of the same
+name; one the package lacks is an error (flm would not load it).
 
 ABI check, before anything is copied, on the package as it will be: on
 Windows, every name an .exe or .dll of the package imports from another one
@@ -45,7 +52,8 @@ of the import.
 Kernels: every file under --xclbins (the devkit-xclbins artifact,
 <model folder>/<slot>.xclbin) is copied to <root>/xclbins/<same path>.
 
-Test selection, for .github/actions/npu-test with the pr tier:
+Test selection (select_tests; outputs for .github/actions/npu-test with the
+pr tier, and devkit_stage.py's half of the product test jobs' selection):
   models     every NPU catalog model (<root>/model_list.json, the entries an
              aie2p runner can run) of --families and of the other families
              of the engines replaced for them, and the --xclbin-models in
@@ -98,9 +106,10 @@ NO_LIBRARY = {"vision_common"}
 STD_SYMBOL = re.compile(r"^_Z(?:T[ISVT]|GV)?N?[KVRO]*S[tabsiod]")
 # The system's, not the package's: operators new and delete, __cxxabiv1 and
 # __gnu_cxx (libstdc++, libsupc++) and the vector math variants the
-# compiler calls (_ZGV<isa><mask><length>..., glibc's libmvec).
+# compiler calls (_ZGV<isa><mask><length>..., glibc's libmvec), and the XRT
+# runtime (namespace xrt, libxrt_coreutil), which the system supplies.
 RUNTIME_SYMBOL = re.compile(r"^_Z(?:n[wa]|d[la])|^_Z(?:T[ISVT])?N\d+__(?:cxxabiv1|gnu_cxx)"
-                            r"|^_ZGV[a-z][MN]\d")
+                            r"|^_ZGV[a-z][MN]\d|^_ZN[K]?3xrt")
 
 
 def lib_stem(unit: str) -> str:
@@ -252,6 +261,16 @@ def abi_errors(root: Path, os_name: str, replace: dict[Path, Path]) -> list[str]
     """The imports the package would leave unresolved once each key of
     replace (a package library) is replaced by its value (a dev-kit build)."""
     final = {p: replace.get(p, p) for p in package_binaries(root, os_name)}
+    return abi_errors_of(final, os_name, set(replace))
+
+
+def abi_errors_of(final: dict[Path, Path], os_name: str, replaced: set) -> list[str]:
+    """abi_errors on a set of binaries: final maps each binary's place (its
+    file there is the one replaced, when it is in replaced) to the file
+    whose bytes it will hold. A place not in replaced holds what final
+    names: itself, or a library new to the set, which has no earlier build
+    to compare with but provides and imports like any other."""
+    replace = {p: final[p] for p in replaced}
     errors = []
     if os_name == "windows":
         # Exact: who imports what from whom, after the overlay. Only pairs
@@ -378,15 +397,16 @@ def csv(value: str) -> list[str]:
     return [v.strip() for v in value.split(",") if v.strip()]
 
 
-def overlay(args: argparse.Namespace) -> tuple[dict, list[str], list[str], list[str]]:
-    """(outputs, copied, notes, errors); copies nothing when there are errors."""
+def overlay(args: argparse.Namespace) -> tuple[dict, list[str], list[str], list[str], list[tuple[Path, Path]]]:
+    """(outputs, copied, notes, errors, the (source, destination) pairs
+    copied); copies nothing when there are errors."""
     errors: list[str] = []
     notes: list[str] = []
     root, os_name = args.root, args.os
     engines = changes.load_devkit_engines(args.engines.read_text(encoding="utf-8")
                                           if args.engines.is_file() else "")
     if engines is None:
-        return {}, [], notes, [f"{args.engines} is missing or unreadable"]
+        return {}, [], notes, [f"{args.engines} is missing or unreadable"], []
     families = set(csv(args.families))
     unknown = families - engines.all_families()
     if unknown:
@@ -430,21 +450,23 @@ def overlay(args: argparse.Namespace) -> tuple[dict, list[str], list[str], list[
                 notes.append(f"xclbins/{rel.parts[0]} is new to the package")
             plan.append((src, dest_root / rel))
 
-    outputs, more = select_tests(npu_catalog(root), families, every,
-                                 json.loads(args.xclbin_models or "[]"), csv(args.new_models),
+    catalog = npu_catalog(root)
+    new_models = csv(args.new_models)
+    outputs, more = select_tests(catalog, families, every,
+                                 json.loads(args.xclbin_models or "[]"), new_models,
                                  test_families)
     notes += more
     if outputs.get("required") and outputs.get("test") != "true":
         errors.append(f"required models {outputs['required']} select no suite or model in this "
                       f"package's NPU catalog, so they would go untested")
     if errors:
-        return outputs, [], notes, errors
+        return outputs, [], notes, errors, []
     copied = []
     for src, dest in plan:
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(src, dest)
         copied.append(str(dest.relative_to(root)).replace("\\", "/"))
-    return outputs, copied, notes, errors
+    return outputs, copied, notes, errors, plan
 
 
 def summary(outputs: dict, copied: list[str], notes: list[str], errors: list[str]) -> str:
@@ -487,7 +509,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if not args.root.is_dir():
         parser.error(f"--root {args.root} is not a directory")
 
-    outputs, copied, notes, errors = overlay(args)
+    outputs, copied, notes, errors, _ = overlay(args)
     text = summary(outputs, copied, notes, errors)
     print(text, end="")
     if os.environ.get("GITHUB_STEP_SUMMARY"):

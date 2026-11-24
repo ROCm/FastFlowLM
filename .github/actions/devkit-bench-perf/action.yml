@@ -1,0 +1,120 @@
+# Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+# Portions of this file consist of AI-generated content.
+
+name: Dev-kit bench perf
+description: >
+  Records the machine (machine.py: kind, CPU, NPU) and runs `flm bench` for
+  one model (perf.py) on an NPU runner, on the overlaid package and, with
+  base-flm-bin, on the package without the overlay right after, on the same
+  runner (the A/B that judges a change: no runner is pinned for perf);
+  also writes meta.json (runtime key, model, vlm) for report.py. Pulls
+  the model first, which also hashes the files of one already in the
+  runner's model cache against the catalog's pins. Writes
+  <out-dir>/machine.json and <out-dir>/perf/{status.json,devkit.csv,base.csv}
+  and never fails: its code output is non-zero when the dev-kit run gave no
+  CSV, for the job's final gate. Runs the scripts of scripts-dir (a checkout
+  of .github/script at the pull request's base, so the pull request's own
+  edits do not measure it) under clean_run.py: no token or GitHub variable
+  reaches flm.
+
+inputs:
+  flm-bin:
+    description: Absolute path of the overlaid flm.
+    required: true
+  base-flm-bin:
+    description: Absolute path of the same package's flm without the overlay; empty for no A/B.
+    required: false
+    default: ""
+  model:
+    description: Model tag.
+    required: true
+  runtime:
+    description: xrt or hrx (recorded in machine.json).
+    required: true
+  key:
+    description: The bench job's runtime key (lin-xrt, lin-hrx, win-xrt, win-hrx), recorded in meta.json.
+    required: true
+  vlm:
+    description: '"true" when the model is benched on DocVQA too (meta.json).'
+    required: false
+    default: "false"
+  out-dir:
+    description: Absolute results directory (fresh per job).
+    required: true
+  scripts-dir:
+    description: Absolute path of the checkout whose .github/script runs.
+    required: true
+  ctx-len:
+    description: flm bench -c, the largest context to bench; 0 for the model's maximum.
+    required: false
+    default: "0"
+  timeout-seconds:
+    description: Per flm bench run (and for the pull).
+    required: false
+    default: "3600"
+
+outputs:
+  code:
+    description: '"0" when the dev-kit run produced its CSV.'
+    value: ${{ steps.linux.outputs.code || steps.windows.outputs.code }}
+
+runs:
+  using: composite
+  steps:
+    - name: Bench (Linux)
+      id: linux
+      if: runner.os == 'Linux'
+      shell: bash
+      env:
+        FLM_BIN: ${{ inputs.flm-bin }}
+        BASE_FLM_BIN: ${{ inputs.base-flm-bin }}
+        MODEL: ${{ inputs.model }}
+        RUNTIME: ${{ inputs.runtime }}
+        KEY: ${{ inputs.key }}
+        VLM: ${{ inputs.vlm }}
+        OUT: ${{ inputs.out-dir }}
+        SCRIPTS: ${{ inputs.scripts-dir }}/.github/script/devkit-bench
+        CTX_LEN: ${{ inputs.ctx-len }}
+        TIMEOUT: ${{ inputs.timeout-seconds }}
+      run: |
+        export FLM_MODEL_PATH="${FLM_MODEL_PATH:-/scratch}"
+        mkdir -p "${OUT}/perf"
+        python3 "${SCRIPTS}/machine.py" --out "${OUT}/machine.json" --runtime "${RUNTIME}" \
+          --meta "${OUT}/meta.json" --key "${KEY}" --model "${MODEL}" --vlm "${VLM}" || true
+        code=0
+        python3 "${SCRIPTS}/clean_run.py" -- python3 "${SCRIPTS}/perf.py" --flm-bin "${FLM_BIN}" \
+          --base-flm-bin "${BASE_FLM_BIN}" --model "${MODEL}" --out-dir "${OUT}/perf" \
+          --ctx-len "${CTX_LEN}" --timeout "${TIMEOUT}" --pull || code=$?
+        echo "code=${code}" >> "$GITHUB_OUTPUT"
+
+    - name: Bench (Windows)
+      id: windows
+      if: runner.os == 'Windows'
+      shell: powershell
+      env:
+        FLM_BIN: ${{ inputs.flm-bin }}
+        BASE_FLM_BIN: ${{ inputs.base-flm-bin }}
+        MODEL: ${{ inputs.model }}
+        RUNTIME: ${{ inputs.runtime }}
+        KEY: ${{ inputs.key }}
+        VLM: ${{ inputs.vlm }}
+        OUT: ${{ inputs.out-dir }}
+        SCRIPTS: ${{ inputs.scripts-dir }}/.github/script/devkit-bench
+        CTX_LEN: ${{ inputs.ctx-len }}
+        TIMEOUT: ${{ inputs.timeout-seconds }}
+      run: |
+        if (-not $env:FLM_MODEL_PATH) {
+          $env:FLM_MODEL_PATH = Join-Path $env:USERPROFILE ".flm"
+          New-Item -ItemType Directory -Force $env:FLM_MODEL_PATH | Out-Null
+        }
+        $env:PYTHONUTF8 = '1'
+        New-Item -ItemType Directory -Force (Join-Path $env:OUT 'perf') | Out-Null
+        & python "$env:SCRIPTS\machine.py" "--out=$(Join-Path $env:OUT 'machine.json')" "--runtime=$env:RUNTIME" `
+          "--meta=$(Join-Path $env:OUT 'meta.json')" "--key=$env:KEY" "--model=$env:MODEL" "--vlm=$env:VLM"
+        # --opt=value throughout: Windows PowerShell 5.1 drops an empty
+        # argument when calling a native program.
+        & python "$env:SCRIPTS\clean_run.py" -- python "$env:SCRIPTS\perf.py" "--flm-bin=$env:FLM_BIN" `
+          "--base-flm-bin=$env:BASE_FLM_BIN" "--model=$env:MODEL" "--out-dir=$(Join-Path $env:OUT 'perf')" `
+          "--ctx-len=$env:CTX_LEN" "--timeout=$env:TIMEOUT" --pull
+        [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "code=$LASTEXITCODE`n")
+        exit 0

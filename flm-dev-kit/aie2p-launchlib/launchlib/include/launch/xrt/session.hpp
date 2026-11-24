@@ -68,7 +68,8 @@
 //                  launch runs as cold), unless `exclusive` says no other process
 //                  uses the NPU. On Windows a warm or rerun launch after another
 //                  app's context hangs the NPU; repeated, Windows resets it again
-//                  and again, then stops with bugcheck 0x119.
+//                  and again, and the machine can become unresponsive (reboot
+//                  to recover).
 //   recovery       A runlist that throws or does not finish in `timeout`: status
 //                  failed, and the Session opens a new hw_context (~40 ms). That is
 //                  the only way back from a hang or from shim DMA tasks that never
@@ -136,7 +137,7 @@ enum class Flow { xclbin, elf };
 enum class SharedPolicy { cold_only, refuse, allow };
 
 struct SessionOptions {
-  Flow flow = Flow::xclbin;
+  Flow flow = Flow::elf;                   ///< elf: an ELF per kernel (xrt::ext::kernel); xclbin: instruction BOs
   SharedPolicy shared = SharedPolicy::cold_only;
   bool check_order = true;                 ///< false: run any order as asked (tests of what happens)
   size_t elf_budget = 24u << 20;           ///< ELF flow: instruction bytes per runlist (heap: 64 MB)

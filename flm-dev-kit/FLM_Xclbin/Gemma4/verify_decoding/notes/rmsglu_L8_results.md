@@ -5,7 +5,7 @@
 
 # 8-row rms_residual + GLU stage design (plan S6.6 / S6.7), 2026-10-29
 
-IRON `FLM_Xclbin/Gemma4/verify_decoding`, branch feat/bolt-dflash, commit `5f1c36d3c`. Design `DESIGN=rmsglu`:
+Design `DESIGN=rmsglu` in `FLM_Xclbin/Gemma4/verify_decoding`:
 `make bitstream MODEL_TYPE=GEMMA4_E4B L_TOKENS=8 DESIGN=rmsglu BUILD_ROOT=build/rmsglu_L8 KERNEL_SRCS="<proj_main.cc rms_residual_l8.cc glu_l8.cc>"`
 (`RMSGLU_TAPS=1` + another BUILD_ROOT builds the debug-tap variant). Test: `work/scripts/run_rmsglu.sh <layer> [repeat]`
 (`XB=rmsglu_taps_L8 TAPFLAG=--taps` for the taps), host `host/test_rmsglu.hpp` (`run_rmsglu.exe -t rmsglu`), reference `tools/rmsglu_ref.py`.

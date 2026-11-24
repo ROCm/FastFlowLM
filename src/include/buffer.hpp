@@ -31,7 +31,7 @@
 /// \note A copy (or mapping) does not duplicate the underlying memory; it only maps the pointer.
 class bytes {
 protected:
-    // HRX engines (IRON) use shared_ptr so copies keep the BO mapped. Unique_ptr
+    // HRX engines (flm-dev-kit/FLM_DLL) use shared_ptr so copies keep the BO mapped. Unique_ptr
     // copies drop ownership and leave data_ dangling across the .so boundary.
 #if defined(FLM_USE_HRX)
     std::shared_ptr<uint8_t[]> owned_data_;

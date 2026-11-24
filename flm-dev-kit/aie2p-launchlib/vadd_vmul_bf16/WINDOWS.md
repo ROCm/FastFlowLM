@@ -97,7 +97,7 @@ Windows with one other context. pm `stress --mode watch` (S7) checks the
 guard: next to a process that runs cold(vmul), every warm and rerun launch of
 the walk runs as cold, 0 wrong, on Linux and on Windows. Not tested on
 Windows: a context that runs a launch inside one of our runlists (on a shared
-machine a hang there can end in bugcheck 0x119).
+machine a hang there can make the machine unresponsive; reboot to recover).
 
 ## Port notes
 
@@ -108,8 +108,8 @@ machine a hang there can end in bugcheck 0x119).
   every warm and rerun launch runs as its cold kernel.
   `SessionOptions::exclusive = true` (the caller vouches that no other process
   uses the NPU) runs them as asked. A warm or rerun launch after another app's
-  context hangs the NPU, and on Windows repeated hangs end in bugcheck 0x119
-  (VIDEO_SCHEDULER_INTERNAL_ERROR; seen on a shared machine). So a
+  context hangs the NPU, and on Windows repeated hangs can make the machine
+  unresponsive (reboot to recover). So a
   Windows Session also stops after `max_failures` (2) failed runlists in a row
   instead of opening a new hw_context each time (status `stopped`, `reopen()`
   to go on). Pressure results of the Session on Windows:

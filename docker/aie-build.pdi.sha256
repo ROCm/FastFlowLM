@@ -4,8 +4,8 @@
 # What docker/aie-build-check.sh requires of a kernel built in the aie-build
 # image: the PDI inside the xclbin (the AIE_PARTITION section, dumped with
 # xclbinutil --dump-section AIE_PARTITION:JSON), byte for byte. The PDI is
-# deterministic: these are the hashes of IRON's local, IRON CI and shipped
-# (src/xclbins) builds of the same unit, all three identical. The xclbin
+# deterministic: these are the hashes of a local build, a CI build and the
+# shipped (src/xclbins) build of the same unit, all three identical. The xclbin
 # around it is not (timestamp, UniqueID, XclBinUUID, PDI UUID, xclbinutil
 # version string), so its hash says nothing and is not compared.
 #

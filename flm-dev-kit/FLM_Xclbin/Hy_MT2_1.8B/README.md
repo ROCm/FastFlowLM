@@ -397,7 +397,7 @@ prompts are nearly all fixed cost, and in the translation benchmark prefill is ~
 ## Krackan baseline (WP0, 2026-11-05)
 
 Measured on a Krackan test machine on
-`hy_mt2` = IRON `5682aa708`, FastFlowLM `d5e186cb`. Every later WP compares against these numbers.
+FastFlowLM `d5e186cb`. Every later WP compares against these numbers.
 All speed numbers are medians of 3 separate runs with nobody else on the NPU.
 
 ### Translations and prefill sweep (G2, G3)

@@ -198,16 +198,25 @@ class chat_template {
         const json dummy_args_obj {{"argument_needle", "print('Hello, World!')"}};
 
         // Note: the arguments are rendered in both cases, but may be double-escaped, which we don't want.
+        // GLM-4.5 and Laguna-2.1 write the key as <arg_key>argument_needle</arg_key>. Missed, the
+        // template counts as one without tool calls, and the polyfills rewrite its tool calls and
+        // tool responses as JSON text. Hy-Memory's dialect, with <tool_sep> after the name, keeps
+        // the polyfills: FLM does not parse its calls.
+        const auto renders_argument = [&contains](const std::string & out) {
+            return contains(out, "<parameter=argument_needle>") || contains(out, "\"argument_needle\":") ||
+                   contains(out, "'argument_needle':") ||
+                   (contains(out, ">argument_needle<") && !contains(out, "<tool_sep>"));
+        };
         out = try_raw_render(json::array({
             dummy_user_msg,
             make_tool_calls_msg(json::array({make_tool_call("ipython", dummy_args_obj.dump())})),
         }), {}, false);
-        auto tool_call_renders_str_arguments = contains(out, "<parameter=argument_needle>") || contains(out, "\"argument_needle\":") || contains(out, "'argument_needle':");
+        auto tool_call_renders_str_arguments = renders_argument(out);
         out = try_raw_render(json::array({
             dummy_user_msg,
             make_tool_calls_msg(json::array({make_tool_call("ipython", dummy_args_obj)})),
         }), {}, false);
-        auto tool_call_renders_obj_arguments = contains(out, "<parameter=argument_needle>") || contains(out, "\"argument_needle\":") || contains(out, "'argument_needle':");
+        auto tool_call_renders_obj_arguments = renders_argument(out);
 
         caps_.supports_tool_calls = tool_call_renders_str_arguments || tool_call_renders_obj_arguments;
         caps_.requires_object_arguments = !tool_call_renders_str_arguments && tool_call_renders_obj_arguments;

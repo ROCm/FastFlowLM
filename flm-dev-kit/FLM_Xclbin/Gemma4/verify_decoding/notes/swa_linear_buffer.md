@@ -5,7 +5,7 @@
 
 # SWA linear window buffer (plan S4.1 re-scoped by the D6 change), engine side
 
-Code: IRON `FLM_DLL/detail/gemma4e_dflash/` commits `5f8ad8268`, `e8f49e122` (header `gemma4e_dflash_swa.hpp`).
+Code: `FLM_DLL/detail/gemma4e_dflash/` (header `gemma4e_dflash_swa.hpp`).
 
 ## Contract (what the 8-row verify host path uses)
 - Each non-skip SWA layer buffer holds `kSwaBufferRows = 2048` rows per plane (K plane then V plane, plane stride `2048 * SWA_DK`); skip layers use the owner's buffer.
@@ -21,7 +21,7 @@ Code: IRON `FLM_DLL/detail/gemma4e_dflash/` commits `5f8ad8268`, `e8f49e122` (he
 - Prefill: `gemma4e_prefill_shape` carries `swa_base_old/new/zero_hi`; the decode buffer gets the rows with position >= new base (old window rows are relocated when the base moves); the prefill scratch cache stays absolute-position.
 - Stress build: `-DFLM_SWA_BUFFER_ROWS=640` (via `FLM_OVERRIDE_FLAGS`) compacts every ~81 tokens; `static_assert(kSwaBufferRows >= 576)`.
 
-## Bugs found by the rigs (both fixed in e8f49e122)
+## Bugs found by the rigs (both fixed)
 1. Compaction inside a verify batch + commit rollback: `first_row < 0` assertion in `_move_kv_cache` (window needed positions already dropped).
 2. After a pre-verify compaction the instruction sequences generated for the previous `set_context_length` still had the old base baked in: the first verify row was appended at the old row and the replay used the old base (found by `FLM_DFLASH_CHECK_SWA`: a stale non-zero row behind the context; streams diverged 15-35 tokens later).
 
