@@ -128,6 +128,7 @@
                 ],
                 "vlm": true,
                 "asr": false,
+                "tools": true,
                 "details": {
                     "format": "NPU2",
                     "family": "inkling-2",

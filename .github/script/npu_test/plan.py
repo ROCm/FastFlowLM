@@ -37,7 +37,6 @@ TIERS = ("install", "pr", "full")
 PR_CHAT = {
     "hunyuan": "hy-mt2-flash:1.8b",
     "hy-memory": None,        # 30B; runs when the change touches it
-    "inkling-2": None,        # 15 GB package; runs when the change touches it
     "nanbeige": "nanbeige4.1:3b",
     "qwen3vl": "qwen3vl-it:4b",
     "qwen3vl-flash": "qwen3vl-flash:4b",
