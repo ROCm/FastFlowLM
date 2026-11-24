@@ -10,6 +10,13 @@ lm_head on the same xclbin, so a decode token needs no hw_context switch. It rep
 (`layer.xclbin`) and `Gemma3/gemma_lm_head_npu_bin` (`lm_head.xclbin`), which cost ~2.4 + ~2.7 ms of switches a
 token on Strix Halo; both are in git history (removed 2026-11-23).
 
+## Result
+
+Decode per token on gemma3:4b (Strix Halo, Performance mode, median of 3 alternating rounds of 128 tokens), with
+every step below and the engine changes (engine README "Result"): 1K 57.38 -> 50.13 ms (+14.5%), 4K 59.17 ->
+50.81 ms (+16.5%). In the layer design lm_head takes 7.81 ms (was 9.84 ms before the x read-ahead; the old
+separate `lm_head.xclbin` 7.56-7.71 ms), a global layer at L 4,160 1.457 ms (was 1.641).
+
 ## Build
 
 Peano only, with the pinned toolchain in `FLM_Xclbin/README.md`.

@@ -8,6 +8,17 @@
 Serves gemma3:4b, medgemma:4b, medgemma1.5:4b and translategemma:4b (registered as `"gemma3"`). All four have
 the same text shape (D 2560, 34 layers, vocab 262,208).
 
+## Result (all steps below together)
+
+gemma3:4b, Strix Halo, Performance mode, `forward()` median of 3 alternating rounds of 128 tokens, before this
+work -> now: 1K 57.38 -> 50.13 ms/token (17.4 -> 19.9 tok/s, +14.5%), 4K 59.17 -> 50.81 ms/token (16.9 -> 19.7
+tok/s, +16.5%). The sections below give each step's own gain; later steps were measured on top of earlier ones.
+
+CI dev-kit bench (Build and Test run 45301001729, `flm bench`, decode tok/s at 1k / 2k / 4k / 8k; prefill is
+unchanged): gemma3:4b (Strix) 20.1 / 19.8 / 19.9 / 19.6; medgemma:4b 20.6 / 20.5 / 20.2 / 19.9;
+medgemma1.5:4b 19.9 / 19.9 / 19.7 / 19.4; translategemma:4b 23.6 / 23.5 / 23.2 / 23.0 (each on its own runner
+machine, so compare within a model only).
+
 ## Decode: lm_head inside the layer xclbin (2026-11-23)
 
 Decode runs on one xclbin, `layer_lm.xclbin` (kernel folder `FLM_Xclbin/Gemma3/gemma_npu_lm_bin`, see its
