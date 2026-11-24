@@ -1,0 +1,7 @@
+# config/moe_combine.toml -- the moe_combine numbers of Qwen3.6-35B-A3B REAP-pruned (the prefill MoE's weighted sum, a round a call).
+#
+# make copy builds the op moe_combine with this file. The keys are the keys of
+# the op's default config (moe_combine/config.toml in the kernel tree).
+
+D = 2048
+TOPK = 8

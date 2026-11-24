@@ -1,0 +1,8 @@
+# config/moe_gather.toml -- the moe_gather numbers of Qwen3.6-35B-A3B (the prefill MoE's gather into the token pool).
+#
+# make copy builds the op moe_gather with this file. The keys are the keys of
+# the op's default config (moe_gather/config.toml in the kernel tree).
+
+D = 2048
+# 3 x 352 sets of 8 rows: the token pool's rows (prefilling::kPoolRows, 8448).
+SETS = 352
