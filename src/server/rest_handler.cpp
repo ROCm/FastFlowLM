@@ -17,6 +17,7 @@
 #include "image/image_reader.hpp"
 #include "image/raw_rgb8.hpp"
 #include "base64.hpp"
+#include "chat/message_roles.hpp"
 #include "chat/positional_tool_results.hpp"
 #include "utils/log_privacy.hpp"
 #include <algorithm>
@@ -119,6 +120,13 @@ json ModelLoadFailedResponse(const std::string& model, const std::string& refusa
     return openai_error_json(model_load_failed_error(model, refusal));
 }
 
+// Keep Ollama's string-valued error body while setting the HTTP status.
+json OllamaErrorResponse(const json& response) {
+    const auto& error = response.at("error");
+    return {{"__http_status", error.at("code")},
+            {"__http_body", {{"error", error.at("message")}}}};
+}
+
 /// \brief One line per finished request in the server log, streamed or not, whatever the client asked for
 /// \note The prefix "Request done:" is stable so tools can grep it
 void log_request_summary(const chat_meta_info_t& m, size_t kv_used, size_t kv_max) {
@@ -152,111 +160,6 @@ template <typename T>
 T value_or(const json& request, const char* key, T fallback) {
     return has_value(request, key) ? request.at(key).get<T>() : fallback;
 }
-}
-
-///@brief Normalize messages by merging consecutive user messages (like Ollama does)
-///@param messages the original messages
-///@return normalized messages with consecutive user messages merged
-static json normalize_messages(json messages, std::vector<size_t>* original_indices = nullptr) {
-    if (messages.empty()) return messages;
-
-    json normalized = nlohmann::ordered_json::array();
-
-    for (size_t i = 0; i < messages.size(); i++) {
-        if (original_indices) original_indices->push_back(i);
-        auto current_msg = messages[i];
-        std::string role = current_msg.value("role", "");
-
-        if (role == "user") {
-            json merged_content_array = json::array();
-
-            // Merge all consecutive user messages into array format
-            while (i < messages.size() && messages[i].value("role", "") == "user") {
-                if (messages[i].contains("content")) {
-                    if (messages[i]["content"].is_array()) {
-                        for (auto& item : messages[i]["content"]) {
-                            merged_content_array.push_back(item);
-                        }
-                    }
-                    else if (messages[i]["content"].is_string()) {
-                        std::string text = messages[i]["content"].get<std::string>();
-                        if (!text.empty()) {
-                            nlohmann::ordered_json text_item;
-                            text_item["type"] = "text";
-                            text_item["text"] = text;
-                            merged_content_array.push_back(text_item);
-                        }
-                    }
-                }
-                if (i + 1 < messages.size() && messages[i + 1].value("role", "") == "user") i++;
-                else break;
-            }
-
-            current_msg["content"] = merged_content_array;
-        }
-        else if (role == "system") {
-            json merged_content_array = json::array();
-
-            // Merge all consecutive system messages into array format
-            while (i < messages.size() && messages[i].value("role", "") == "system") {
-                if (messages[i].contains("content")) {
-                    if (messages[i]["content"].is_array()) {
-                        for (auto& item : messages[i]["content"]) {
-                            merged_content_array.push_back(item);
-                        }
-                    }
-                    else if (messages[i]["content"].is_string()) {
-                        std::string text = messages[i]["content"].get<std::string>();
-                        if (!text.empty()) {
-                            json text_item;
-                            text_item["type"] = "text";
-                            text_item["text"] = text;
-                            merged_content_array.push_back(text_item);
-                        }
-                    }
-                }
-                if (i + 1 < messages.size() && messages[i + 1].value("role", "") == "system") i++;
-                else break;
-            }
-
-            current_msg["content"] = merged_content_array;
-        }
-        else if (role == "assistant") {
-            // Strip prior assistant "thinking" / reasoning fields so they are not
-            // fed back into the model on subsequent turns.
-            if (current_msg.contains("thinking")) {
-                current_msg.erase("thinking");
-            }
-            if (current_msg.contains("reasoning")) {
-                current_msg.erase("reasoning");
-            }
-            if (current_msg.contains("reasoning_content")) {
-                current_msg.erase("reasoning_content");
-            }
-            // Also strip <think>...</think> blocks from string content if present.
-            // if (current_msg.contains("content") && current_msg["content"].is_string()) {
-            //     std::string text = current_msg["content"].get<std::string>();
-            //     size_t start = text.find("<think>");
-            //     while (start != std::string::npos) {
-            //         size_t end = text.find("</think>", start);
-            //         if (end == std::string::npos) {
-            //             text.erase(start);
-            //             break;
-            //         }
-            //         text.erase(start, (end + std::string("</think>").size()) - start);
-            //         start = text.find("<think>");
-            //     }
-            //     // Trim leading whitespace/newlines left after removal.
-            //     size_t first = text.find_first_not_of(" \t\r\n");
-            //     if (first == std::string::npos) text.clear();
-            //     else if (first > 0) text.erase(0, first);
-            //     current_msg["content"] = text;
-            // }
-        }
-        normalized.push_back(current_msg);
-    }
-
-    return normalized;
 }
 
 static bool starts_with_ci(const std::string& s, const char* prefix) {
@@ -733,6 +636,7 @@ RestHandler::RestHandler(model_list& models, ModelDownloader& downloader, progra
     default_model_tag = supported_models.rectify_model_tag(default_model_tag);
     const bool embedding_only = supported_models.is_model_supported(default_model_tag) &&
         is_embedding_model(supported_models.get_model_info(default_model_tag).second);
+    embeddings_enabled = args.embed || embedding_only;
     if (embedding_only) ensure_embed_model_loaded(default_model_tag);
     // Initialize chat bot with default model
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
@@ -775,16 +679,8 @@ RestHandler::~RestHandler() = default;
 ///@param model_tag the model tag
 bool RestHandler::ensure_model_loaded(const std::string& model_tag,
                                       const std::string& request_backend, std::string* refusal) {
-    // Refuse a name the catalog does not have before anything resolves it;
-    // an unknown name used to load a substitute model (and on dev04 could
-    // end the process). Checked after rectify_model_tag, as get_model_info
-    // does, so "Ollama/<tag>" and bare family names still resolve.
-    // "model-faker" means no model was chosen.
-    if (model_tag != "model-faker" &&
-        !supported_models.is_model_supported(
-            supported_models.rectify_model_tag(model_tag))) {
-        header_print_r("ERROR", "Model tag '" << model_tag
-            << "' is not supported. Please check with `flm list`.");
+    if (auto error = generation_model_error(model_tag)) {
+        header_print("ERROR", (*error)["error"]["message"].get<std::string>());
         return false;
     }
 
@@ -825,7 +721,7 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag,
         }
         auto_chat_engine.reset();
         prompt_cache.reset();
-        auto engine = flm::frontend::FrontendRegistry::instance().create(plan.family, device);
+        auto engine = flm::frontend::FrontendRegistry::instance().create(plan.family, device, plan.info.value("frontend_provider", ""));
         engine->set_server_mode(true);
         engine->configure_parameter("img_pre_resize", img_pre_resize);
         engine->set_prefix_limits(prefix_cache_mb, prefix_slots, prefix_min_gain);
@@ -853,13 +749,18 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag,
     return false;
 }
 
-///@brief Whether ensure_model_loaded's gate would admit the model tag
-///@note The same tolerant form as that gate, so a handler can answer a name the
-///      catalog does not have with a 404 instead of a failed load.
-///@param model_tag the model tag
-bool RestHandler::is_known_model(const std::string& model_tag) {
-    return model_tag == "model-faker" ||
-           supported_models.is_model_supported(supported_models.rectify_model_tag(model_tag));
+// Validate selection before loading can release the current engine. A known
+// embedding tag is a wrong-kind request (400), not an unknown model (404).
+std::optional<json> RestHandler::generation_model_error(const std::string& model_tag) {
+    if (model_tag == "model-faker") return std::nullopt;
+    const auto tag = supported_models.rectify_model_tag(model_tag);
+    if (!supported_models.is_model_supported(tag)) return UnknownModelResponse(model_tag);
+    if (is_embedding_model(supported_models.get_model_info(tag).second)) {
+        return json{{"error", {{"message", "Model '" + tag + "' is an embedding model, not a generation model."},
+                               {"type", "invalid_request_error"},
+                               {"param", "model"}, {"code", 400}}}};
+    }
+    return std::nullopt;
 }
 
 ///@brief Ensure the asr model is loaded
@@ -1117,10 +1018,13 @@ void RestHandler::handle_generate(const json& request,
         int length_limit = request.value("max_tokens", 4096);
         auto load_start_time = time_utils::now();
         // TODO: Use Another Check Function avoid loading again
+        if (auto error = generation_model_error(model)) {
+            send_response(OllamaErrorResponse(*error));
+            return;
+        }
         std::string refusal;
         if (!ensure_model_loaded(model, request_backend, &refusal)) {
-            json error_response = {{"error", refusal.empty() ? "Failed to load " + model + " model!" : refusal}};
-            send_response(error_response);
+            send_response(OllamaErrorResponse(ModelLoadFailedResponse(model, refusal)));
             return;
         }
         auto load_end_time = time_utils::now();
@@ -1247,10 +1151,13 @@ void RestHandler::handle_chat(const json& request,
         int length_limit = options.value("num_predict", 4096);
 
         auto load_start_time = time_utils::now();
+        if (auto error = generation_model_error(model)) {
+            send_response(OllamaErrorResponse(*error));
+            return;
+        }
         std::string refusal;
         if (!ensure_model_loaded(model, request_backend, &refusal)) {
-            json error_response = {{"error", refusal.empty() ? "Failed to load " + model + " model!" : refusal}};
-            send_response(error_response);
+            send_response(OllamaErrorResponse(ModelLoadFailedResponse(model, refusal)));
             return;
         }
         auto load_end_time = time_utils::now();
@@ -1396,7 +1303,7 @@ void RestHandler::handle_models_openai(const json& request,
     std::function<void(const json&)> send_response,
     StreamResponseCallback send_streaming_response) {
     try {
-        send_response(supported_models.get_all_models_openai());
+        send_response(supported_models.get_all_models_openai(this->ctx_length));
     }
     catch (const std::exception& e) {
         json error_response = { {"error", e.what()} };
@@ -1598,8 +1505,11 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
             return;
         }
 
-        if (!is_known_model(model)) {
-            sink.on_error(unknown_model_error(model));
+        if (auto error = generation_model_error(model)) {
+            const auto& body = error->at("error");
+            sink.on_error({body.at("code").get<int>(), body.at("type").get<std::string>(),
+                           body.at("message").get<std::string>(), body.value("param", std::string()),
+                           std::nullopt});
             return;
         }
         auto load_start_time = time_utils::now();
@@ -1635,7 +1545,13 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
         apply_sampling_request(*auto_chat_engine, sampling);
 
         std::vector<size_t> original_indices;
-        current_messages = normalize_messages(current_messages, positional_tool_results ? &original_indices : nullptr);
+        try {
+            current_messages = flm::chat::normalize_messages(current_messages, auto_chat_engine->message_roles(),
+                                                              positional_tool_results ? &original_indices : nullptr);
+        } catch (const flm::chat::message_error& e) {
+            bad_request(e.what());
+            return;
+        }
         std::vector<std::shared_ptr<const raw_rgb8_batch_t>> raw_rgb8;
         {
             // raw RGB8 frames only go to MiniCPM-V; any other model gets a clear 400 rather than a dropped image
@@ -2137,8 +2053,8 @@ void RestHandler::handle_openai_completion(const json& request,
         }
 
         // direct return if model not supported
-        if (!is_known_model(model)) {
-            send_response(UnknownModelResponse(model));
+        if (auto error = generation_model_error(model)) {
+            send_response(*error);
             return;
         }
 

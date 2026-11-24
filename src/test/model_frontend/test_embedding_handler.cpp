@@ -1,6 +1,7 @@
 /// \file test_embedding_handler.cpp
-/// \brief Exercise the production embedding request handler without a device or network.
+/// \brief Exercise model loading and embedding requests without a device or network.
 #include "rest_handler.hpp"
+#include "model_loader.hpp"
 #include "../phi4_core/test_support.hpp"
 #include <fstream>
 #include <future>
@@ -10,7 +11,7 @@
 // catalog, factory and C plugin execute every request below.
 RestHandler::RestHandler(model_list& models, ModelDownloader& downloads,
                          program_args_t& args, flm_rt::device* device)
-    : npu_device_inst(device), supported_models(models), downloader(downloads),
+    : npu_device_inst(device), embeddings_enabled(args.embed), supported_models(models), downloader(downloads),
       modelscope(args.modelscope), preemption(args.preemption) {}
 RestHandler::~RestHandler() = default;
 AutoDecisionModel::~AutoDecisionModel() = default;
@@ -24,6 +25,7 @@ std::map<std::string, Status> statuses;
 int pulls = 0;
 bool pull_succeeds = false;
 bool npu_available = true;
+std::optional<bool> preferred_pull;
 }
 flm_rt::device* utils::require_npu_device(flm_rt::device* device, const std::string&) {
     static flm_rt::device fake_device;
@@ -36,8 +38,18 @@ ModelDownloader::ModelStatus ModelDownloader::is_model_downloaded(
     TEST_REQUIRE(fast_check);
     return statuses.at(tag);
 }
-bool ModelDownloader::pull_model(const std::string&, bool, bool) {
+bool ModelDownloader::pull_model(const std::string& tag, bool, bool) {
     ++pulls;
+    if (pull_succeeds && preferred_pull.has_value()) {
+        supported_models.choose_source(tag, *preferred_pull);
+        const auto info = supported_models.get_model_info(tag).second;
+        const auto path = std::filesystem::path(supported_models.get_model_path(tag));
+        std::filesystem::create_directories(path);
+        for (const auto& file : info.at("files"))
+            std::ofstream(path / file.get<std::string>()) << "downloaded";
+        // Like the real downloader, leave subsequent lookups to the files on disk.
+        supported_models.choose_source(tag, std::nullopt);
+    }
     return pull_succeeds;
 }
 
@@ -72,6 +84,12 @@ void test_embedding_handler() {
     TEST_REQUIRE(found_embedding);
     ModelDownloader downloads(models);
     program_args_t args{};
+    RestHandler disabled(models, downloads, args, nullptr);
+    disabled.handle_embeddings({{"model", "missing:1"}, {"input", "hello"}},
+        [](const json& response) { TEST_REQUIRE(response.at("error").at("code") == 400);
+            TEST_REQUIRE(response.at("error").at("type") == "invalid_request_error"); }, {});
+    TEST_REQUIRE(pulls == 0);
+    args.embed = true;
     RestHandler server(models, downloads, args, nullptr);
     const auto request = [&](const std::string& tag, json input = "hello", json options = json::object()) {
         json response;
@@ -90,10 +108,19 @@ void test_embedding_handler() {
     npu_available = true;
     TEST_REQUIRE(no_device.contains("error"));
     TEST_REQUIRE(no_device["error"]["message"] == flm::backend::kNoNpuDevice);
+    for (const json& bad : {json(nullptr), json(42), json::array({"ok", false})})
+        TEST_REQUIRE(request("missing:1", bad).at("error").at("code") == 400);
+    TEST_REQUIRE(request("missing:1", "hello", {{"dimensions", 0}}).at("error").at("code") == 400);
+    TEST_REQUIRE(pulls == 0);
     check("first:1", 0.5f);
-    TEST_REQUIRE(request("first", "hello", {{"task", "provider-task"}}).at("data").at(0).at("embedding").at(1) == 4);
-    TEST_REQUIRE(request("first", "hello", {{"task", "unknown"}}).at("error").at("code") == 400);
-    TEST_REQUIRE(request("first", "hello", {{"task", 42}}).at("error").at("code") == 400);
+    TEST_REQUIRE(request("first", {{"text", "hello"}, {"task", nullptr}}, {{"dimensions", nullptr}})
+                     .at("data").at(0).at("embedding") == json({5, 3, 0.5f}));
+    TEST_REQUIRE(request("first", "cancel").at("error").at("code") == 499);
+    TEST_REQUIRE(request("first", {{"text", "hello"}, {"task", "provider-task"}}).at("data").at(0).at("embedding").at(1) == 4);
+    TEST_REQUIRE(request("first", {{"text", "hello"}, {"task", "unknown"}}).at("error").at("code") == 400);
+    TEST_REQUIRE(request("first", {{"text", "hello"}, {"task", 42}}).at("error").at("code") == 400);
+    // Unknown top-level options are stripped; tasks belong to each input item.
+    TEST_REQUIRE(request("first", "hello", {{"task", 42}}).at("data").at(0).at("embedding").at(1) == 3);
     check("first", 0.5f);
     check("Ollama/first", 0.5f);
     for (const char* tag : {"missing:1", "incompatible:1", "absent:1", "Ollama/absent", "generation:1"}) {
@@ -119,12 +146,18 @@ void test_embedding_handler() {
     const auto batch = request("second", json::array({"hi", "hello"}));
     TEST_REQUIRE(batch.at("data").size() == 2);
     TEST_REQUIRE(batch.at("usage").at("prompt_tokens") == 7);
-    TEST_REQUIRE(request("second", {{"text", "hi"}}, {{"title", "abc"}})
+    const auto tasks = request("second", json::array({
+        {{"text", "hello"}, {"task", "query"}}, {{"text", "hello"}, {"task", "document"}}}));
+    TEST_REQUIRE(tasks.at("data").at(0).at("embedding").at(1) == 1);
+    TEST_REQUIRE(tasks.at("data").at(1).at("embedding").at(1) == 2);
+    TEST_REQUIRE(request("second", {{"text", "hi"}, {"title", "abc"}},
+                         {{"encoding_format", "float"}, {"user", "client"}})
                      .at("data").at(0).at("embedding").at(0) == 5);
     for (const auto& dimensions : {json(0), json(-1), json(4), json(1.5), json("2")})
         TEST_REQUIRE(request("second", "hi", {{"dimensions", dimensions}}).at("error").at("code") == 400);
     server.handle_embeddings({{"model", "second"}, {"input", "hi"}},
-        [](const json&) { TEST_REQUIRE(false); }, {}, [] { return true; });
+        [](const json& response) { TEST_REQUIRE(response.at("error").at("code") == 499); },
+        {}, [] { return true; });
     TEST_REQUIRE(batch.at("data").at(0).at("embedding").at(0) == 2);
     TEST_REQUIRE(request("second", 42).contains("error"));
     TEST_REQUIRE(request("second", json::array()).at("error").at("code") == 400);
@@ -143,4 +176,92 @@ void test_embedding_handler() {
     first.get();
     second.get();
     registry.unload_extensions();
+}
+
+void test_frontend_selection_after_download() {
+    auto& registry = flm::frontend::FrontendRegistry::instance();
+    static int creations = 0;
+    static void* last_device = nullptr;
+    auto& backends = flm::backend::BackendRegistry::instance();
+    const auto factory = [](const flm::backend::BackendContext&) {
+        return std::unique_ptr<flm::backend::ModelBackend>{};
+    };
+    backends.register_backend("source-selection", "flm", factory);
+    backends.register_backend("source-selection", "oga-hipep", factory,
+        {.needs_npu_xclbin = false, .needs_npu_device = false});
+    for (const auto* provider : {"source-default", "source-preferred"}) {
+        registry.register_frontend("source-selection", [provider](void* device) {
+            ++creations;
+            last_device = device;
+            return flm::frontend::FrontendPtr(
+                reinterpret_cast<AutoModel*>(new std::string(provider)),
+                flm::frontend::FrontendDeleter{nullptr, [](void*, void* object) {
+                    delete static_cast<std::string*>(object);
+                }, nullptr});
+        }, provider);
+    }
+    const auto directory = std::filesystem::path(FLM_TEST_EMBEDDING_MANIFEST).parent_path()
+        / "source-selection-test";
+    std::filesystem::remove_all(directory);
+    std::filesystem::create_directories(directory);
+    std::string path = (directory / "models.json").string(), root = directory.string();
+    nlohmann::json catalog{
+        {"schema_version", 1}, {"models", {{"source-selection", {{"1", {
+            {"name", "source-selection"}, {"details", {{"family", "source-selection"}}},
+            {"url", "https://example.invalid/model"}, {"flm_min_version", "1.0.0"},
+            {"backend", "flm"}, {"backend_provider", "builtin"},
+            {"default_context_length", 4096}, {"max_prefill_len", 512},
+            {"frontend_provider", "source-default"}, {"files", {"ordinary.bin"}},
+            {"preferred_source", {{"frontend_provider", "source-preferred"}, {"files", {"preferred.bin"}}}}
+        }}}}}}};
+    std::ofstream(path) << catalog;
+    (void)flm::catalog::load_model_catalog_overlay(path);
+    catalog["model_path"] = "models";
+    std::ofstream(path) << catalog;
+    for (bool preferred : {false, true}) {
+        std::filesystem::remove_all(directory / "models");
+        model_list models(path, root);
+        ModelDownloader downloads(models);
+        // Runner owns a catalog copy; it must see the source through downloaded files.
+        model_list caller_models = models;
+        statuses["source-selection:1"] = Status::Missing;
+        preferred_pull = preferred;
+        pull_succeeds = true;
+        const std::string expected = preferred ? "source-preferred" : "source-default";
+        TEST_REQUIRE(caller_models.get_model_info("source-selection:1").second.at("frontend_provider") == "source-default");
+        auto [tag, frontend] = get_auto_model("Ollama/source-selection", caller_models, nullptr, downloads, false);
+        TEST_REQUIRE(tag == "source-selection:1");
+        TEST_REQUIRE(last_device != nullptr);
+        TEST_REQUIRE(*reinterpret_cast<std::string*>(frontend.get()) == expected);
+        TEST_REQUIRE(caller_models.get_model_info(tag).second.at("frontend_provider") == expected);
+        statuses[tag] = Status::Ready;
+        const int pulled = pulls;
+        auto cached = get_auto_model(tag, caller_models, nullptr, downloads, false);
+        TEST_REQUIRE(*reinterpret_cast<std::string*>(cached.second.get()) == expected);
+        TEST_REQUIRE(pulls == pulled);
+    }
+    model_list models(path, root);
+    ModelDownloader downloads(models);
+    pull_succeeds = false;
+    const int created = creations;
+    for (const auto status : {Status::Missing, Status::Outdated, Status::Incompatible}) {
+        statuses["source-selection:1"] = status;
+        RequireThrows([&] { get_auto_model("source-selection:1", models, nullptr, downloads, false); });
+        TEST_REQUIRE(creations == created);
+    }
+    statuses["source-selection:1"] = Status::Missing;
+    pull_succeeds = true;
+    npu_available = false;
+    const int pulled = pulls;
+    RequireContains(RequireThrows([&] {
+        get_auto_model("source-selection:1", models, nullptr, downloads, false);
+    }), flm::backend::kNoNpuDevice);
+    TEST_REQUIRE(pulls == pulled && creations == created);
+    auto gpu = get_auto_model("source-selection:1", models, nullptr, downloads, false, "oga-hipep");
+    TEST_REQUIRE(last_device == nullptr);
+    TEST_REQUIRE(pulls == pulled + 1 && creations == created + 1);
+    TEST_REQUIRE(*reinterpret_cast<std::string*>(gpu.second.get()) == "source-preferred");
+    npu_available = true;
+    preferred_pull.reset();
+    std::filesystem::remove_all(directory);
 }

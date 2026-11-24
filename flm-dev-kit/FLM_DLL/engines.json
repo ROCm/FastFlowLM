@@ -128,7 +128,8 @@
         "hunyuan"
       ],
       "models": [
-        "hy-mt2-flash:1.8b"
+        "hy-mt2-flash:1.8b",
+        "hy-mt3-flash:1.8b"
       ],
       "uses": []
     },

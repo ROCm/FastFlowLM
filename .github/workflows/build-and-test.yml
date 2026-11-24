@@ -215,6 +215,9 @@ jobs:
       devkit-catalog: ${{ steps.detect.outputs.devkit-catalog }}
       devkit-areas: ${{ steps.detect.outputs.devkit-areas }}
       devkit-families: ${{ steps.detect.outputs.devkit-families }}
+      # "hrx" when only the pinned HRX package selects the dll area: the XRT
+      # dev-kit engines are neither built nor staged (changes.py HRX_PIN).
+      devkit-runtimes: ${{ steps.detect.outputs.devkit-runtimes }}
       devkit-stage: ${{ steps.detect.outputs.devkit-stage }}
       # Whether a pull request runs the dev-kit benches (devkit-bench).
       devkit-bench: ${{ steps.detect.outputs.devkit-bench }}
@@ -412,6 +415,9 @@ jobs:
       contents: read
       packages: read
     uses: ./.github/workflows/devkit-engines.yml
+    with:
+      # The full refresh builds every engine of every runtime.
+      runtimes: ${{ needs.changes.outputs.devkit-full-refresh == 'true' && 'xrt,hrx' || needs.changes.outputs.devkit-runtimes || 'xrt,hrx' }}
 
   devkit-engines-main:
     needs: changes
@@ -568,11 +574,13 @@ jobs:
           PRODUCT_FAMILIES: ${{ needs.changes.outputs.families }}
           NEW_MODELS: ${{ needs.changes.outputs.new-models }}
           FULL_REFRESH: ${{ needs.changes.outputs.devkit-full-refresh }}
+          # devkit-engines built these runtimes' engines (the same expression).
+          RUNTIMES: ${{ needs.changes.outputs.devkit-full-refresh == 'true' && 'xrt,hrx' || needs.changes.outputs.devkit-runtimes || 'xrt,hrx' }}
         run: |
           set -euo pipefail
           args=(--out "${RUNNER_TEMP}/devkit-stage" --head-sha "${HEAD_SHA}" --base-sha "${BASE_SHA}"
                 --families "${FAMILIES}" --suites "${SUITES}" --product-families "${PRODUCT_FAMILIES}"
-                --new-models "${NEW_MODELS}" --github-output)
+                --new-models "${NEW_MODELS}" --runtimes "${RUNTIMES}" --github-output)
           for dir in "${RUNNER_TEMP}"/devkit-libs/devkit-libs-*; do
             [ -d "${dir}" ] && args+=(--libs "${dir##*/devkit-libs-}=${dir}")
           done

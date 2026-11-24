@@ -14,6 +14,7 @@
 #include <vector>
 #include <iostream>
 #include <string>
+#include <stdexcept>
 #include <type_traits>
 #include <any>
 #include "typedef.hpp"
@@ -30,6 +31,11 @@
 
 using json = nlohmann::ordered_json;
 
+
+class EmbeddingCancelled : public std::runtime_error {
+public:
+    EmbeddingCancelled() : std::runtime_error("Embedding request cancelled") {}
+};
 
 struct EmbeddingResult {
     std::vector<float> values;

@@ -1,4 +1,4 @@
-# Hunyuan (Hy-MT2-1.8B) frontend notes
+# Hunyuan (Hy-MT2-1.8B, Hy-MT3-1.8B) frontend notes
 
 ## Reply cap and loop stop (2026-11-10)
 

@@ -2,14 +2,15 @@
 
 Well-formed vectors are not enough: a model whose vectors carry no meaning
 passes the shape checks, so the similarity case asserts that a paraphrase
-outscores an unrelated sentence. The server loads the embedding model only
-with `-e 1`, and that one model answers whatever "model" a request names.
+outscores an unrelated sentence. Requests select the embedding model by its
+catalog tag.
 """
 
 from __future__ import annotations
 
 import math
 
+from ..client import HttpError
 from ..harness import FAIL, Result, ServerGone, expect
 
 NAME = "embedding"
@@ -49,11 +50,7 @@ def cosine(a: list, b: list) -> float:
 
 
 def embed(server, model: str, text_or_list) -> list[list[float]]:
-    """The vectors of one request, checked for shape, in the server's order.
-
-    The handler reports its own failures as a 200 with an error body, so a
-    missing "data" list is the failure signal, not the status.
-    """
+    """The vectors of one request, checked for shape, in the server's order."""
     body = server.client.post_json("/v1/embeddings", {"model": model, "input": text_or_list})
     data = body.get("data") if isinstance(body, dict) else None
     expect(isinstance(data, list) and data, f"no embedding data in reply: {str(body)[:200]}")
@@ -72,6 +69,14 @@ def run(ctx) -> None:
     models = ctx.plan.suite(NAME)
     if not models:
         return
+    with ctx.server("embedding-disabled", ["-e", "0"]) as server:
+        with ctx.case(NAME, "disabled", models[0], server):
+            try:
+                embed(server, models[0], SINGLE_INPUT)
+            except HttpError as error:
+                expect(error.status == 400, f"expected 400, got {error.status}")
+            else:
+                raise AssertionError("embeddings accepted without opt-in")
     with ctx.server(NAME, ["-e", "1"]) as server:
         for done, model in enumerate(models):
             try:
@@ -80,6 +85,12 @@ def run(ctx) -> None:
                 ctx.record(Result(NAME, "server-gone", FAIL, model, str(exc)))
                 ctx.not_attempted(NAME, models[done + 1:], str(exc))
                 return
+
+    for model in models:
+        with ctx.server("embedding-primary", [model]) as server:
+            with ctx.case(NAME, "primary-model", model, server):
+                expect(len(embed(server, model, SINGLE_INPUT)) == 1,
+                       "standalone embedding server did not return one vector")
 
 
 def check(ctx, server, model: str) -> None:

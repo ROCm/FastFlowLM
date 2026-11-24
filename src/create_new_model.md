@@ -285,6 +285,7 @@ variant. The CLI tag is `<family>:<variant>` (e.g. `gemma4-12b:12b`).
               "tokenizer_config.json", "chat_template.jinja"],
     "vlm": false,
     "asr": false,
+    "tools": true,
     "default_context_length": 32768,
     "max_prefill_len": 4096,
     "details": {
@@ -307,8 +308,11 @@ Field notes:
 - `files` — the minimum set `flm pull` must fetch; a missing entry surfaces as a
   tokenizer or config load failure at first run.
 - `vlm` / `asr` — capability flags read by the runner to enable image / audio CLI paths.
-- `tools_in_prompt` — `qwen2` family only: the package's chat template renders the tools a
-  request offers, so the frontend passes them to it. Set it once that template has been checked.
+- `tools` — the model is shown the tools a request offers. This one field is what
+  `GET /v1/models` reports as the `tools` capability, and the `tool-calling` label must say the
+  same (a unit test compares them). Set it only when the frontend passes the tools to a chat
+  template that renders them. The `qwen2` frontend reads it to decide that; the other
+  frontends still decide in code, so keep the field equal to what they do.
 - `flm_min_version` — refuses to load on older FLM builds.
 - `footprint` — GiB of memory reported to the user for model-fits checks.
 

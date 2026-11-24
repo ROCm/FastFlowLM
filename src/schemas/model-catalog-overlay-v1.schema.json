@@ -107,6 +107,9 @@
         "frontend_provider": {
           "$ref": "#/$defs/nonEmptyString"
         },
+        "tools": {
+          "type": "boolean"
+        },
         "default_context_length": {
           "type": "integer",
           "minimum": 1
@@ -146,41 +149,15 @@
           "default": "generation"
         },
         "file_records": {
+          "description": "Pinned per-file download metadata. Required for pulling new extension models unless model_info_key names records in the host model_info.json.",
           "$ref": "#/$defs/fileRecords"
+        },
+        "model_info_key": {
+          "description": "Use an existing record set in the host model_info.json when file_records is omitted.",
+          "$ref": "#/$defs/nonEmptyString"
         }
       },
       "allOf": [
-        {
-          "if": {
-            "anyOf": [
-              {
-                "properties": {
-                  "vlm": {
-                    "const": true
-                  }
-                },
-                "required": [
-                  "vlm"
-                ]
-              },
-              {
-                "properties": {
-                  "asr": {
-                    "const": true
-                  }
-                },
-                "required": [
-                  "asr"
-                ]
-              }
-            ]
-          },
-          "then": {
-            "required": [
-              "frontend_provider"
-            ]
-          }
-        },
         {
           "if": {
             "properties": {
@@ -190,11 +167,6 @@
             },
             "required": [
               "model_kind"
-            ]
-          },
-          "then": {
-            "required": [
-              "frontend_provider"
             ]
           },
           "else": {

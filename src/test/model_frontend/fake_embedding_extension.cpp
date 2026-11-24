@@ -10,16 +10,19 @@ static int EndsWith(flm_span_v1 value, const char *suffix) {
     size_t n = strlen(suffix);
     return value.size >= n && !memcmp((const char *)value.data + value.size - n, suffix, n);
 }
-static int Load(void *object, flm_span_v1 path, flm_span_v1 info, uint32_t preemption,
+static int Load(void *object, const flm_embedding_load_context_v1 *context,
                 const flm_error_sink_v1 *error) {
+    if (!context || context->struct_size < FLM_EMBEDDING_LOAD_CONTEXT_V1_MIN_SIZE)
+        return FLM_MODEL_EXTENSION_STATUS_INVALID_ARGUMENT;
+    const auto path = context->model_path;
     if (EndsWith(path, "missing")) abort(); /* A failed download must never reach load. */
     if (EndsWith(path, "fail-load")) return FLM_MODEL_EXTENSION_STATUS_ERROR;
     if (EndsWith(path, "unsupported-load")) return FLM_MODEL_EXTENSION_STATUS_UNSUPPORTED;
     if (EndsWith(path, "invalid-load")) return FLM_MODEL_EXTENSION_STATUS_INVALID_ARGUMENT;
     ((float *)object)[2] = EndsWith(path, "second") ? 2.0f : 0.5f;
-    (void)info;
+    (void)context->model_info_json;
     (void)error;
-    return path.size && !preemption ? 0 : FLM_MODEL_EXTENSION_STATUS_UNSUPPORTED;
+    return path.size && !context->enable_preemption ? 0 : FLM_MODEL_EXTENSION_STATUS_UNSUPPORTED;
 }
 static int Embed(void *object, flm_span_v1 request, const flm_cancellation_v1 *cancellation,
                  flm_embedding_result_v1 *output, const flm_error_sink_v1 *error) {
@@ -32,13 +35,18 @@ static int Embed(void *object, flm_span_v1 request, const flm_cancellation_v1 *c
                                                  (const char *)request.data + request.size);
         const auto& input = options.at("input");
         const auto text = (input.is_object() ? input.at("text") : input).get<std::string>();
-        const auto task = options.value("task", std::string());
+        if (text == "cancel") return FLM_MODEL_EXTENSION_STATUS_CANCELLED;
+        const auto task = input.is_object() && input.contains("task") && !input.at("task").is_null()
+            ? input.at("task").get<std::string>() : std::string();
         auto dimensions = options.value("dimensions", nlohmann::json(3));
         if (!dimensions.is_number_integer() || dimensions.get<int64_t>() < 1 || dimensions.get<int64_t>() > 3)
             return FLM_MODEL_EXTENSION_STATUS_UNSUPPORTED;
         float *values = (float *)object;
         values[0] = (float)text.size();
-        if (options.contains("title")) values[0] += options.at("title").get<std::string>().size();
+        for (const auto& item : options.items())
+            if (item.key() != "input" && item.key() != "dimensions")
+                return FLM_MODEL_EXTENSION_STATUS_INVALID_ARGUMENT;
+        if (input.is_object() && input.contains("title")) values[0] += input.at("title").get<std::string>().size();
         if (task.empty()) values[1] = 3.0f;
         else if (task == "query") values[1] = 1.0f;
         else if (task == "document") values[1] = 2.0f;
@@ -71,8 +79,16 @@ static int Register(const flm_model_extension_registrar_v1 *registrar,
     (void)error;
     if (registrar->struct_size < FLM_MODEL_EXTENSION_REGISTRAR_V1_EMBEDDING_SIZE)
         return FLM_MODEL_EXTENSION_STATUS_UNSUPPORTED;
+#ifdef FLM_TEST_COMPETING_EMBEDDINGS
+    int status = registrar->register_embedding_provider(
+        registrar->host_context, "embed-gemma", "test-embedding", Create, NULL);
+    if (status != 0) return status;
+    return registrar->register_embedding_provider(
+        registrar->host_context, "embed-gemma", "alternative-embedding", Create, NULL);
+#else
     return registrar->register_embedding_provider(
         registrar->host_context, "test-embedding", "test-embedding", Create, NULL);
+#endif
 }
 static const flm_model_extension_v1 extension = {sizeof(flm_model_extension_v1),
                                                  FLM_MODEL_EXTENSION_ABI_V1,

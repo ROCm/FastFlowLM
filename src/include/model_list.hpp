@@ -6,6 +6,7 @@
 /// \note This class is used to manage the model list.
 #pragma once
 #include "AutoModel/backend_contract.hpp"
+#include "AutoModel/context_length.hpp"
 #include "AutoModel/model_catalog_overlay.hpp"
 #include "nlohmann/json.hpp"
 #include <algorithm>
@@ -266,9 +267,110 @@ class model_list {
             return response;
         }
 
+        /// \brief what one catalog model can do: the one record every listing reads
+        /// \note Facts about the model, in no protocol's field names. Each
+        ///       comes from the one catalog field that decides the request;
+        ///       a listing renders the record in its own names and computes
+        ///       nothing itself.
+        struct capabilities {
+            bool completion = false;   ///< answers chat and completion requests
+            bool tools = false;        ///< is shown the tools a request offers
+            bool vision = false;       ///< takes images
+            bool audio = false;        ///< takes audio
+            bool thinking = false;     ///< can reason before it answers
+            bool embedding = false;    ///< returns embeddings
+            long long context_length = 0;   ///< tokens; 0 when the entry names none
+
+            /// \brief the capabilities in Ollama's words, completion first
+            std::vector<std::string> words() const {
+                std::vector<std::string> out;
+                if (completion) out.push_back("completion");
+                if (tools) out.push_back("tools");
+                if (vision) out.push_back("vision");
+                if (audio) out.push_back("audio");
+                if (thinking) out.push_back("thinking");
+                if (embedding) out.push_back("embedding");
+                return out;
+            }
+        };
+
+        /// \brief build the capability record of one catalog entry
+        /// \param model_info the catalog entry
+        /// \param ctx_length the context the server was started with
+        ///        (--ctx-len); negative when it uses each entry's default
+        /// \return the record; a field that is missing or has the wrong type
+        ///         is a capability the model does not have
+        /// \note The context is the one the loader asks for
+        ///       (flm::context_length_for). A backend can still hold less: an
+        ///       engine with a lower limit clamps or refuses a larger --ctx-len,
+        ///       and the catalog does not name that limit.
+        static capabilities capabilities_of(const nlohmann::json& model_info, int ctx_length = -1) {
+            const auto flag = [](const nlohmann::json& object, const char* key) {
+                const auto it = object.find(key);
+                return it != object.end() && it->is_boolean() && it->get<bool>();
+            };
+            const auto details_it = model_info.find("details");
+            const nlohmann::json details = details_it != model_info.end() && details_it->is_object()
+                ? *details_it : nlohmann::json::object();
+            const auto family_it = details.find("family");
+            const std::string family = family_it != details.end() && family_it->is_string()
+                ? family_it->get<std::string>() : std::string();
+            const auto kind_it = model_info.find("model_kind");
+            const std::string kind = kind_it != model_info.end() && kind_it->is_string()
+                ? kind_it->get<std::string>() : std::string();
+
+            capabilities record;
+            if (kind == "embedding" || family == "embed-gemma") {
+                record.embedding = true;
+                return record;
+            }
+            if (family == "whisper-v3" || family == "r2t2") {   // transcription only
+                record.audio = true;
+                return record;
+            }
+            if (family == "d3") return record;   // decision models answer /v1/systemone only
+
+            record.completion = true;
+            record.tools = flag(model_info, "tools");
+            record.vision = flag(model_info, "vlm");
+            record.audio = flag(model_info, "asr");
+            record.thinking = flag(details, "think") || flag(details, "think_toggleable");
+            record.context_length = flm::context_length_for(model_info, ctx_length);
+            return record;
+        }
+
+        /// \brief add the record to a /v1/models entry, in the names clients read
+        /// \note A rendering for Chat Completions clients: Ollama's capability
+        ///       list, OpenRouter's context_length, architecture and
+        ///       supported_parameters. `api_capabilities` is reserved for facts
+        ///       that hold through one protocol only and is not written here.
+        static void render_openai_capabilities(const capabilities& record, nlohmann::json& entry) {
+            entry["capabilities"] = record.words();
+            if (record.completion && record.context_length > 0) {
+                entry["context_length"] = record.context_length;
+            }
+            nlohmann::json input = nlohmann::json::array();
+            if (record.completion || record.embedding) input.push_back("text");
+            if (record.vision) input.push_back("image");
+            if (record.audio) input.push_back("audio");
+            nlohmann::json output = nlohmann::json::array();
+            if (record.embedding) output.push_back("embeddings");
+            else if (record.completion || record.audio) output.push_back("text");
+            entry["architecture"] = {{"input_modalities", input}, {"output_modalities", output}};
+            nlohmann::json parameters = nlohmann::json::array();
+            if (record.tools) {
+                parameters.push_back("tools");
+                parameters.push_back("tool_choice");
+            }
+            if (record.thinking) parameters.push_back("reasoning");
+            entry["supported_parameters"] = parameters;
+        }
+
         /// \brief get all the models
+        /// \param ctx_length the context the server was started with
+        ///        (--ctx-len); negative when it uses each entry's default
         /// \return all the models in json
-        nlohmann::json get_all_models_openai() {
+        nlohmann::json get_all_models_openai(int ctx_length = -1) {
             nlohmann::json response = {
                 {"object", "list"},
                 {"data", nlohmann::json::array()},
@@ -281,7 +383,11 @@ class model_list {
                 if (model_type == "whisper-v3") continue;
                 else if (model_type == "embed-gemma") continue;
                 else if (model_type == "d3") continue;   // decision models answer /v1/systemone only
-                for (const auto& [size, model_info] : model_subset.items()) {
+                for (const auto& [size, catalog_entry] : model_subset.items()) {
+                    // the entry as get_model_info resolves it, so the listing
+                    // describes the source the loader will use
+                    const nlohmann::json model_info =
+                        this->resolve_source_impl(model_type + ":" + size, catalog_entry);
                     // id uses the same "type:size" convention; created uses current epoch seconds
                     nlohmann::json model_entry = {
                         {"id", model_type + ":" + size},
@@ -296,6 +402,7 @@ class model_list {
                             model_entry["device"] = device;
                         }
                     }
+                    render_openai_capabilities(capabilities_of(model_info, ctx_length), model_entry);
                     response["data"].push_back(model_entry);
                 }
             }

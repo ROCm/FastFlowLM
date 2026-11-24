@@ -46,6 +46,8 @@ struct OgaGenerator {
     double max_length = 0;
     /// \brief the length of the last OgaGenerator_SnapshotState
     std::optional<std::size_t> snapshot;
+    /// \brief true after OgaGenerator_RewindTo until new tokens are appended
+    bool rewound = false;
     /// \brief OgaGenerator_AppendTokens calls it has taken
     int runs = 0;
     /// \brief token count of the first and latest AppendTokens calls
@@ -98,6 +100,7 @@ struct FakeOga {
     /// \brief the length of each OgaGenerator_RewindTo call
     std::vector<std::size_t> rewinds;
     std::optional<std::string> fail_next_rewind;
+    bool fail_get_logits_after_rewind = false;
     OgaElementType logits_type = OgaElementType_float32;
     /// \brief a generator's first run gives all-zero logits, as Laguna 2.1's does
     bool zero_first_run_logits = false;
@@ -228,12 +231,15 @@ OgaResult* OGA_API_CALL FakeAppendTokens(OgaGenerator* generator, const std::int
     generator->last_run_len = count;
     ++generator->runs;
     generator->tokens.insert(generator->tokens.end(), ids, ids + count);
+    generator->rewound = false;
     if (generator->tokens.size() > static_cast<std::size_t>(generator->max_length))
         return Error("past max_length");
     return nullptr;
 }
 OgaResult* OGA_API_CALL FakeGetLogits(OgaGenerator* generator, OgaTensor** out) {
     ++g_fake.get_logits_calls;
+    if (g_fake.fail_get_logits_after_rewind && generator->rewound)
+        return Error("live GetLogits called after rewind without appending tokens");
     auto* tensor = new OgaTensor;
     tensor->type = g_fake.logits_type;
     const std::int64_t rows = g_fake.logits_rows ? g_fake.logits_rows : 1;
@@ -358,6 +364,7 @@ OgaResult* OGA_API_CALL FakeSetInputs(OgaGenerator* generator, const OgaNamedTen
     inputs.pixel_shape = pixels.shape;
     inputs.pixels = Values<std::uint16_t>(pixels);
     generator->tokens = inputs.ids;
+    generator->rewound = false;
     g_fake.set_inputs.push_back(std::move(inputs));
     if (generator->tokens.size() > static_cast<std::size_t>(generator->max_length))
         return Error("past max_length");
@@ -384,6 +391,7 @@ OgaResult* OGA_API_CALL FakeRewindTo(OgaGenerator* generator, size_t length) {
     if (generator->snapshot != length || length > generator->tokens.size())
         return Error("no snapshot at length " + std::to_string(length));
     generator->tokens.resize(length);
+    generator->rewound = true;
     return nullptr;
 }
 
@@ -1073,6 +1081,99 @@ void TestAChunkedPromptReachesALongerSlot() {
     std::vector<int> other{1, 2, 3, 4, 5, 6, 8, 9, 10};
     RequireRan(engine->prefill(other), other);
     TEST_REQUIRE(g_fake.appends.back() == (Tokens{10}));
+}
+
+void TestAChunkedExactRetryRewindsOnceAndReturnsSavedLogits() {
+    auto engine = MakeSlotsEngine(2);
+    NewPrompt(*engine, {1, 2, 3, 4, 5, 6});
+    engine->forward(7);
+    const auto reused = engine->reused_tokens();
+    const auto appends = g_fake.appends.size();
+    const int snapshots = g_fake.snapshots;
+    g_fake.fail_get_logits_after_rewind = true;
+
+    // 1. first chunked exact retry (4 + 2) after decode: must rewind once and return snapshot_logits,
+    //    never calling live GetLogits on the rewound generator.
+    const auto run_chunked_retry = [&](std::size_t split) {
+        engine->clear_context();
+        const std::vector<int> retry{1, 2, 3, 4, 5, 6};
+        engine->expect_prefill(retry);
+        std::vector<int> head(retry.begin(), retry.begin() + static_cast<std::ptrdiff_t>(split));
+        std::vector<int> tail(retry.begin() + static_cast<std::ptrdiff_t>(split), retry.end());
+        engine->prefill(head);
+        return engine->prefill(tail);
+    };
+
+    const int logits_before_first = g_fake.get_logits_calls;
+    RequireState(run_chunked_retry(4), 6, 6, 21);
+    TEST_REQUIRE(g_fake.get_logits_calls == logits_before_first);
+    TEST_REQUIRE(g_fake.appends.size() == appends);
+    TEST_REQUIRE(g_fake.rewinds == (std::vector<std::size_t>{6}));
+    TEST_REQUIRE(g_fake.generators_created == 1);
+    TEST_REQUIRE(engine->reused_tokens() - reused == 6);
+    TEST_REQUIRE(engine->replayed_tokens() == 0);
+    TEST_REQUIRE(engine->get_current_context_length() == 6);
+
+    // 2. calling checkpoint() on the rewound slot keeps the snapshot without calling live GetLogits or SnapshotState,
+    //    and a second immediate chunked retry reuses the same snapshot with zero extra rewind/append/GetLogits.
+    TEST_REQUIRE(engine->checkpoint() == 6);
+    TEST_REQUIRE(g_fake.snapshots == snapshots);
+    TEST_REQUIRE(g_fake.get_logits_calls == logits_before_first);
+    RequireState(run_chunked_retry(3), 6, 6, 21);
+    TEST_REQUIRE(g_fake.get_logits_calls == logits_before_first);
+    TEST_REQUIRE(g_fake.rewinds == (std::vector<std::size_t>{6}));
+    TEST_REQUIRE(g_fake.appends.size() == appends);
+    TEST_REQUIRE(engine->reused_tokens() - reused == 12);
+
+    // 3. decoding advances past the snapshot; a third chunked retry rewinds again and still returns snapshot_logits.
+    RequireState(engine->forward(8), 7, 8, 29);
+    TEST_REQUIRE(g_fake.appends.back() == (Tokens{8}));
+    const auto appends_after_decode = g_fake.appends.size();
+    const int logits_before_third = g_fake.get_logits_calls;
+    RequireState(run_chunked_retry(2), 6, 6, 21);
+    TEST_REQUIRE(g_fake.get_logits_calls == logits_before_third);
+    TEST_REQUIRE(g_fake.rewinds == (std::vector<std::size_t>{6, 6}));
+    TEST_REQUIRE(g_fake.appends.size() == appends_after_decode);
+    TEST_REQUIRE(engine->reused_tokens() - reused == 18);
+    TEST_REQUIRE(engine->replayed_tokens() == 0);
+}
+
+void TestMultiSlotInterleavedExactRetryKeepsEachPromptSnapshot() {
+    auto engine = MakeSlotsEngine(2);
+    NewPrompt(*engine, {1, 2, 3, 4});
+    engine->forward(7);
+    NewPrompt(*engine, {20, 21, 22});
+    engine->forward(9);
+    TEST_REQUIRE(g_fake.generators_created == 2);
+    const auto appends = g_fake.appends.size();
+    const auto reused = engine->reused_tokens();
+    g_fake.fail_get_logits_after_rewind = true;
+    const int logits_before = g_fake.get_logits_calls;
+
+    // A/B/A: retrying A (chunked 2 + 2) rewinds slot 1 without disturbing slot 2 or calling live GetLogits
+    engine->clear_context();
+    const std::vector<int> prompt_a{1, 2, 3, 4};
+    engine->expect_prefill(prompt_a);
+    std::vector<int> a_head{1, 2};
+    std::vector<int> a_tail{3, 4};
+    engine->prefill(a_head);
+    RequireState(engine->prefill(a_tail), 4, 4, 10);
+    TEST_REQUIRE(g_fake.generators_created == 2);
+    TEST_REQUIRE(g_fake.appends.size() == appends);
+    TEST_REQUIRE(g_fake.get_logits_calls == logits_before);
+    TEST_REQUIRE(g_fake.rewinds == (std::vector<std::size_t>{4}));
+    TEST_REQUIRE(engine->reused_tokens() - reused == 4);
+
+    // Retrying B right after A still hits slot 2's own snapshot
+    engine->clear_context();
+    std::vector<int> prompt_b{20, 21, 22};
+    RequireState(engine->prefill(prompt_b), 3, 22, 63);
+    TEST_REQUIRE(g_fake.generators_created == 2);
+    TEST_REQUIRE(g_fake.appends.size() == appends);
+    TEST_REQUIRE(g_fake.get_logits_calls == logits_before);
+    TEST_REQUIRE(g_fake.rewinds == (std::vector<std::size_t>{4, 3}));
+    TEST_REQUIRE(engine->reused_tokens() - reused == 7);
+    TEST_REQUIRE(engine->replayed_tokens() == 0);
 }
 
 void TestAnOgaErrorDropsOnlyItsSlot() {
@@ -3085,6 +3186,8 @@ int main(int argc, char** argv) {
     RUN(TestOneSlotKeepsOneGenerator);
     RUN(TestTheSamePromptAgainRunsNothing);
     RUN(TestAChunkedPromptReachesALongerSlot);
+    RUN(TestAChunkedExactRetryRewindsOnceAndReturnsSavedLogits);
+    RUN(TestMultiSlotInterleavedExactRetryKeepsEachPromptSnapshot);
     RUN(TestAnOgaErrorDropsOnlyItsSlot);
     RUN(TestTheSlotCountFitsTheBudget);
     RUN(TestAnImagePromptRunsInOneSetInputs);
