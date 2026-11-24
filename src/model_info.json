@@ -3477,6 +3477,80 @@
             "path": "tokenizer_config.json"
         }
     ],
+    "hy-mt3-flash:1.8b": [
+        {
+            "type": "file",
+            "oid": "2ace5b8c3964855369daf18f16907dfdba648708",
+            "size": 1566,
+            "path": ".gitattributes"
+        },
+        {
+            "type": "file",
+            "oid": "37d327c973d6dcc2530999b2e98907a2f3be86ef",
+            "size": 1408,
+            "path": ".ms_upload_cache"
+        },
+        {
+            "type": "file",
+            "oid": "7a3099d9e85efe74232548b47874c3fafe71c96c",
+            "size": 9673,
+            "path": "LICENSE.txt"
+        },
+        {
+            "type": "file",
+            "oid": "d6ba245d5612a493ae08490827ecf0b0fd4a90e0",
+            "size": 564,
+            "path": "MANIFEST.sha256"
+        },
+        {
+            "type": "file",
+            "oid": "4113eda5443ccc9c0ac1766a00e5ac2aa318b889",
+            "size": 1900,
+            "path": "README.md"
+        },
+        {
+            "type": "file",
+            "oid": "11f06996e3fdef5fc75a350af36dc9862e34cbde",
+            "size": 654,
+            "path": "chat_template.jinja"
+        },
+        {
+            "type": "file",
+            "oid": "f55b3ba8763385194cbec05b0e505911f0e9fbaa",
+            "size": 1402,
+            "path": "config.json"
+        },
+        {
+            "type": "file",
+            "oid": "d780795d2c8b8f7fcd693eb4626b27f622ef563f",
+            "size": 46,
+            "path": "configuration.json"
+        },
+        {
+            "type": "file",
+            "oid": "6530b308e1052582cebc7424e03064b822a14610",
+            "size": 1650461696,
+            "lfs": {
+                "oid": "ba68966f5925d7aabac6988fdfbd8fd28b4f5a223515a4386f174b92ac3fc603",
+                "size": 1650461696,
+                "pointerSize": 135
+            },
+            "xetHash": "e4e2202cf32a9512ed065da5fccc7be6d26008f8c07fc3f3a6a065a14161a297",
+            "path": "model.q4nx"
+        },
+        {
+            "type": "file",
+            "oid": "bc8fca20a7f6dbb3c6a6d9e814c6efc999ec80fe",
+            "size": 9527287,
+            "path": "tokenizer.json"
+        },
+        {
+            "type": "file",
+            "oid": "87251909381820c7bf485695d95785eb8df6b287",
+            "size": 165888,
+            "path": "tokenizer_config.json"
+        }
+    ],
     "phi4-mini-it-core:4b": [
         {
             "type": "file",

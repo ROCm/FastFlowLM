@@ -304,6 +304,11 @@ inline void validate_catalog_entry(const nlohmann::json& entry,
             }
         }
     }
+    if (entry.contains("tools") && !entry["tools"].is_boolean()) {
+        throw std::runtime_error(
+            "Model extension catalog entry '" + tag +
+            "' tools must be true or false");
+    }
     if (entry.contains("frontend_provider") &&
         (!entry["frontend_provider"].is_string() || entry["frontend_provider"].get_ref<const std::string&>().empty()))
         throw std::runtime_error("Invalid frontend_provider: " + tag);
