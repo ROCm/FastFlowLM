@@ -79,7 +79,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "flm bench $m failed ($LASTEXITCODE)" }
           }
           Get-ChildItem *.csv | ForEach-Object { Write-Host "--- $($_.Name)"; Get-Content $_ }
-      - name: Pressure
+      - name: Perf by context length (MT3, then MT2)
         shell: powershell
         working-directory: .github/script
         env:
@@ -87,8 +87,32 @@ jobs:
           PYTHONUTF8: "1"
         run: |
           if (-not $env:FLM_MODEL_PATH) { $env:FLM_MODEL_PATH = Join-Path $env:USERPROFILE ".flm" }
-          python mt_pressure.py --flm-bin $env:FLM_BIN --model hy-mt3-flash:1.8b --out "$env:GITHUB_WORKSPACE\pressure-out" --seconds 180 --seconds2 90 --threads 4
+          foreach ($m in "hy-mt3-flash:1.8b", "hy-mt2-flash:1.8b") {
+            python mt_pressure.py --flm-bin $env:FLM_BIN --model $m --perf --seconds 0 --out "$env:GITHUB_WORKSPACE\perf-out"
+          }
+      - name: Pressure MT3 (one server)
+        shell: powershell
+        working-directory: .github/script
+        env:
+          FLM_BIN: ${{ steps.package.outputs.flm-bin }}
+          PYTHONUTF8: "1"
+        run: |
+          if (-not $env:FLM_MODEL_PATH) { $env:FLM_MODEL_PATH = Join-Path $env:USERPROFILE ".flm" }
+          python mt_pressure.py --flm-bin $env:FLM_BIN --model hy-mt3-flash:1.8b --out "$env:GITHUB_WORKSPACE\pressure-out" --seconds 180 --seconds2 0.001 --threads 4
           if ($LASTEXITCODE -ne 0) { throw "pressure failed ($LASTEXITCODE)" }
+      - name: Two servers at once, MT3 then MT2 control (informational)
+        continue-on-error: true
+        shell: powershell
+        working-directory: .github/script
+        env:
+          FLM_BIN: ${{ steps.package.outputs.flm-bin }}
+          PYTHONUTF8: "1"
+        run: |
+          if (-not $env:FLM_MODEL_PATH) { $env:FLM_MODEL_PATH = Join-Path $env:USERPROFILE ".flm" }
+          foreach ($m in "hy-mt3-flash:1.8b", "hy-mt2-flash:1.8b") {
+            Write-Host "===== two servers, $m"
+            python mt_pressure.py --flm-bin $env:FLM_BIN --model $m --out "$env:GITHUB_WORKSPACE\two-$($m.Split(':')[0])" --seconds 1 --seconds2 60 --threads 1
+          }
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -96,6 +120,9 @@ jobs:
           name: mt-win-pressure-logs
           path: |
             pressure-out
+            perf-out
+            two-hy-mt3-flash
+            two-hy-mt2-flash
             bench-out
           if-no-files-found: ignore
       - name: Clear stale flm

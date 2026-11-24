@@ -35,6 +35,39 @@ def post(port, body, timeout=600):
     return json.load(urllib.request.urlopen(q, timeout=timeout))
 
 
+def perf(port, model, n, iters=3):
+    """TTFT, prefill and decode tok/s of one streamed request of about n prompt tokens (median of iters)."""
+    words = SENT.split()
+    text = ' '.join(words[i % len(words)] for i in range(n * 3 // 4))
+    body = {'model': model, 'temperature': 0, 'max_tokens': 128, 'stream': True,
+            'stream_options': {'include_usage': True},
+            'messages': [{'role': 'user', 'content': 'Translate the following text into Chinese, '
+                          'without additional explanation.\n\n' + text}]}
+    rows = []
+    for _ in range(iters):
+        q = urllib.request.Request(f'http://127.0.0.1:{port}/v1/chat/completions', json.dumps(body).encode(),
+                                   {'Content-Type': 'application/json'})
+        t0 = time.time()
+        first = last = None
+        ntok = ptok = 0
+        with urllib.request.urlopen(q, timeout=600) as r:
+            for line in r:
+                line = line.decode().strip()
+                if not line.startswith('data:') or line.endswith('[DONE]'):
+                    continue
+                d = json.loads(line[5:])
+                if d.get('usage'):
+                    ptok = d['usage'].get('prompt_tokens', 0)
+                    ntok = d['usage'].get('completion_tokens', 0)
+                if d.get('choices') and d['choices'][0].get('delta', {}).get('content'):
+                    last = time.time()
+                    first = first or last
+        if first and ntok > 1:
+            rows.append((first - t0, ptok, (ntok - 1) / (last - first)))
+    rows.sort()
+    return rows[len(rows) // 2] if rows else None
+
+
 def key(a):
     return a['choices'][0]['message']['content']
 
@@ -70,11 +103,31 @@ def main():
     ap.add_argument('--out', required=True)
     ap.add_argument('--seconds', type=float, default=180)
     ap.add_argument('--seconds2', type=float, default=90)
+    ap.add_argument('--perf', action='store_true')
     ap.add_argument('--threads', type=int, default=4)
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     reqs = build_requests(a.model)
     failed = False
+    if a.perf:
+        sp = FlmServer(a.flm_bin, name='mt-perf', log_dir=a.out, args=[])
+        sp.start()
+        try:
+            post(sp.port, reqs[0][1])  # load the model
+            print(f'== perf {a.model} (median of 3, streamed)', flush=True)
+            print('  prompt_tok |  TTFT s | prefill tok/s | decode tok/s', flush=True)
+            for n in (1000, 2000, 4000, 6000, 8000):
+                r = perf(sp.port, a.model, n)
+                if r:
+                    print(f'  {r[1]:10d} | {r[0]:7.3f} | {r[1] / r[0]:13.0f} | {r[2]:12.1f}', flush=True)
+                else:
+                    print(f'  {n}: no result', flush=True)
+        except Exception as e:  # noqa: BLE001
+            print('perf phase error', repr(e), flush=True)
+        finally:
+            sp.stop()
+        if not a.seconds:
+            return 0
     s1 = FlmServer(a.flm_bin, name='mt-pressure-1', log_dir=a.out, args=[])
     s1.start()
     try:
