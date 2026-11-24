@@ -10,6 +10,7 @@
 #include "AutoModel/model_frontend.hpp"
 #include "model_list.hpp"
 #include "utils/utils.hpp"
+#include "AutoEmbeddingModel/all_embedding_model.hpp"
 
 struct ModelLoadPlan {
     std::string tag;
@@ -33,6 +34,8 @@ inline ModelLoadPlan resolve_model_load(const std::string& model_tag, model_list
     }
 
     auto [new_model_tag, model_info] = available_models.get_model_info(model_tag);
+    if (is_embedding_model(model_info))
+        throw std::invalid_argument("Model '" + new_model_tag + "' is an embedding model; use 'flm serve' for embeddings");
     std::string family = model_info["details"]["family"];
 
     auto& registry = flm::frontend::FrontendRegistry::instance();
@@ -40,8 +43,7 @@ inline ModelLoadPlan resolve_model_load(const std::string& model_tag, model_list
         // These built-in non-generation families use the CLI fallback. Any
         // other unregistered family remains an error so a missing extension
         // cannot silently select another model.
-        if (family == "whisper-v3" || family == "embed-gemma" ||
-            family == "d3") {
+        if (family == "whisper-v3" || family == "d3") {
             header_print_r("ERROR", "Unsupported model family or non-llm: "
                                         << family);
             auto fallback = available_models.get_model_info("llama3.2:1b");
@@ -61,5 +63,5 @@ inline std::pair<std::string, flm::frontend::FrontendPtr> get_auto_model(
     const std::string& power_mode = "performance") {
     auto plan = resolve_model_load(model_tag, available_models, requested_backend);
     auto* device = plan.prepare_device(npu_device_inst, power_mode);
-    return {plan.tag, flm::frontend::FrontendRegistry::instance().create(plan.family, device)};
+    return {plan.tag, flm::frontend::FrontendRegistry::instance().create(plan.family, device, plan.info.value("frontend_provider", ""))};
 }

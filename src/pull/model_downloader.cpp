@@ -52,7 +52,11 @@ nlohmann::json load_model_file_records(const nlohmann::json& model_info,
     if (!stream.is_open()) {
         throw std::runtime_error("model_info.json could not be opened");
     }
-    return nlohmann::json::parse(stream).at(key);
+    const auto metadata = nlohmann::json::parse(stream);
+    if (!metadata.contains(key))
+        throw std::runtime_error("No download metadata for " + model_tag +
+            ": provide file_records in its catalog entry or model_info_key naming installed metadata");
+    return metadata.at(key);
 }
 
 const nlohmann::json& find_file_record(const nlohmann::json& records,
@@ -165,10 +169,10 @@ ResolvedModelFile resolve_model_file(const nlohmann::json& model_info,
         has_explicit_sha256 || is_lfs
             ? download_utils::HashAlgorithm::Sha256
             : download_utils::HashAlgorithm::GitBlobSha1,
-        has_explicit_sha256
+        flm::catalog::detail::ascii_lower(has_explicit_sha256
             ? record.at("sha256").get<std::string>()
             : (is_lfs ? record.at("lfs").at("oid").get<std::string>()
-                      : record.at("oid").get<std::string>())};
+                      : record.at("oid").get<std::string>()))};
 }
 
 }  // namespace

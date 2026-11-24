@@ -58,6 +58,11 @@ add_fake_model_extension(
     fake_complete_model_extension "${FLM_TEST_NPU_RUNTIME}"
     "${FLM_TEST_EXTENSION_MODE_COMPLETE}")
 add_fake_model_extension(
+    fake_alternative_model_extension "${FLM_TEST_NPU_RUNTIME}"
+    "${FLM_TEST_EXTENSION_MODE_COMPLETE}")
+target_compile_definitions(fake_alternative_model_extension PRIVATE
+    FLM_TEST_PROVIDER="alternative-provider")
+add_fake_model_extension(
     fake_failing_model_extension "${FLM_TEST_NPU_RUNTIME}"
     "${FLM_TEST_EXTENSION_MODE_REGISTRATION_FAILURE}")
 add_fake_model_extension(
@@ -70,6 +75,7 @@ add_fake_model_extension(
     fake_downcast_family_model_extension "${FLM_TEST_NPU_RUNTIME}"
     "${FLM_TEST_EXTENSION_MODE_BACKEND}" "minicpm-v-4.7")
 foreach(target IN ITEMS
+        fake_alternative_model_extension
         fake_reserved_family_model_extension
         fake_downcast_family_model_extension)
     file(GENERATE
@@ -152,6 +158,7 @@ target_compile_definitions(test_model_frontend PRIVATE
     FLM_TEST_EXTENSION_DEPENDENCY_PATH="$<TARGET_FILE:fake_model_extension_dependency>"
     FLM_TEST_INCOMPATIBLE_EXTENSION_PATH="$<TARGET_FILE_DIR:fake_incompatible_model_extension>/fake-incompatible-model-extension.json"
     FLM_TEST_COMPLETE_EXTENSION_PATH="$<TARGET_FILE_DIR:fake_complete_model_extension>/fake-complete-model-extension.json"
+    FLM_TEST_ALTERNATIVE_EXTENSION_PATH="$<TARGET_FILE_DIR:fake_alternative_model_extension>/fake_alternative_model_extension.json"
     FLM_TEST_FAILING_EXTENSION_PATH="$<TARGET_FILE_DIR:fake_failing_model_extension>/fake-failing-model-extension.json"
     FLM_TEST_NO_CAPABILITY_EXTENSION_PATH="$<TARGET_FILE_DIR:fake_no_capability_model_extension>/fake-no-capability-model-extension.json"
     FLM_TEST_RESERVED_FAMILY_EXTENSION_PATH="$<TARGET_FILE_DIR:fake_reserved_family_model_extension>/fake_reserved_family_model_extension.json"
@@ -168,7 +175,7 @@ target_link_libraries(test_model_frontend PRIVATE
     flm_model_extension_contract ${CMAKE_DL_LIBS})
 add_dependencies(test_model_frontend
     fake_model_extension fake_incompatible_model_extension
-    fake_complete_model_extension fake_failing_model_extension
+    fake_complete_model_extension fake_alternative_model_extension fake_failing_model_extension
     fake_no_capability_model_extension
     fake_reserved_family_model_extension
     fake_downcast_family_model_extension)
@@ -197,3 +204,23 @@ target_include_directories(test_model_frontend PRIVATE
 target_compile_definitions(test_model_frontend PRIVATE FASTFLOWLM_LINUX_LIMITED_MODELS)
 find_package(Threads REQUIRED)
 target_link_libraries(test_model_frontend PRIVATE Threads::Threads)
+
+# Multiple embedding registrations for a built-in family, through the C ABI.
+add_library(fake_competing_embedding_extension SHARED fake_embedding_extension.cpp)
+target_link_libraries(fake_competing_embedding_extension PRIVATE flm_model_extension_contract)
+target_include_directories(fake_competing_embedding_extension PRIVATE "${FLM_SOURCE_DIR}/include")
+target_compile_definitions(fake_competing_embedding_extension PRIVATE
+    FLM_TEST_NPU_RUNTIME=${FLM_TEST_NPU_RUNTIME} FLM_TEST_COMPETING_EMBEDDINGS)
+file(GENERATE OUTPUT "$<TARGET_FILE_DIR:fake_competing_embedding_extension>/competing-embedding-extension.json"
+    CONTENT "{\"schema_version\":1,\"name\":\"test-embedding\",\"version\":\"1\",\"library\":\"$<TARGET_FILE_NAME:fake_competing_embedding_extension>\"}")
+target_compile_definitions(test_model_frontend PRIVATE
+    FLM_TEST_COMPETING_EMBEDDING_MANIFEST="$<TARGET_FILE_DIR:fake_competing_embedding_extension>/competing-embedding-extension.json")
+add_dependencies(test_model_frontend fake_competing_embedding_extension)
+
+add_fake_model_extension(fake_complete_downcast_extension "${FLM_TEST_NPU_RUNTIME}"
+    "${FLM_TEST_EXTENSION_MODE_COMPLETE}" "minicpm-v-4.7")
+file(GENERATE OUTPUT "$<TARGET_FILE_DIR:fake_complete_downcast_extension>/complete-downcast-extension.json"
+    CONTENT "{\"schema_version\":1,\"name\":\"fake-model-extension\",\"version\":\"1.0.0\",\"library\":\"$<TARGET_FILE_NAME:fake_complete_downcast_extension>\"}")
+target_compile_definitions(test_model_frontend PRIVATE
+    FLM_TEST_COMPLETE_DOWNCAST_MANIFEST="$<TARGET_FILE_DIR:fake_complete_downcast_extension>/complete-downcast-extension.json")
+add_dependencies(test_model_frontend fake_complete_downcast_extension)

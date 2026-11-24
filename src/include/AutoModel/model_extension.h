@@ -442,6 +442,19 @@ typedef int (*flm_frontend_create_v1)(
     flm_model_frontend_v1* frontend,
     const flm_error_sink_v1* error);
 
+/// \brief Inputs supplied when the host loads an embedding model.
+/// \note Read only fields within struct_size; newer hosts may append optional fields.
+typedef struct flm_embedding_load_context_v1 {
+    size_t struct_size;
+    flm_span_v1 model_path;
+    flm_span_v1 model_info_json;
+    uint32_t enable_preemption;
+} flm_embedding_load_context_v1;
+
+#define FLM_EMBEDDING_LOAD_CONTEXT_V1_MIN_SIZE \
+    (offsetof(flm_embedding_load_context_v1, enable_preemption) + \
+     sizeof(((flm_embedding_load_context_v1*)0)->enable_preemption))
+
 /// \brief Provider-owned float32 embedding, valid until the next call or destruction.
 typedef struct flm_embedding_result_v1 {
     size_t struct_size;
@@ -456,13 +469,20 @@ typedef struct flm_embedding_result_v1 {
 
 /// \brief Complete embedding model: the provider owns preprocessing and inference.
 /// \note Catalog entries use model_kind="embedding", details.family and
-///       frontend_provider. They need no causal backend or generation limits.
+///       optional frontend_provider. They need no causal backend or generation limits.
 ///       Omitted model_kind defaults to "generation".
 /// \note All callbacks are required and must contain exceptions. Calls on one
 ///       instance are serialized. Spans are borrowed during the callback only.
-///       request_json is an object containing one input item and its options.
-///       The host splits an input array into calls, preserving all other fields.
-///       The provider owns input, task, title, dimensions and other option semantics.
+///       request_json is a UTF-8 JSON object constructed by the host:
+///       {"input": <string or object>, "dimensions": <optional positive uint32>}.
+///       Every provider must accept a string input and select useful default
+///       text-embedding behavior. The fields inside an object input, including
+///       any task selection, are entirely provider-defined.
+///       dimensions selects the output vector size; omission uses the model default.
+///       Unsupported dimensions and invalid inputs return INVALID_ARGUMENT or UNSUPPORTED.
+///       The host omits null dimensions and splits batches into individual calls.
+///       Fields inside input are preserved, including nulls. Routing and response
+///       options (model, encoding_format, user) are not passed to the provider.
 ///       Cancellation is optional and borrowed only during embed.
 ///       Output is one dense vector; prompt_tokens counts processed tokens including
 ///       prefixes/special tokens, or is zero if unavailable. Output struct_size is
@@ -472,8 +492,8 @@ typedef struct flm_embedding_model_v1 {
     size_t struct_size;
     void* object;
     void (*destroy)(void* object);
-    int (*load)(void* object, flm_span_v1 model_path, flm_span_v1 model_info_json,
-                uint32_t enable_preemption, const flm_error_sink_v1* error);
+    int (*load)(void* object, const flm_embedding_load_context_v1* context,
+                const flm_error_sink_v1* error);
     int (*embed)(void* object, flm_span_v1 request_json,
                  const flm_cancellation_v1* cancellation, flm_embedding_result_v1* output,
                  const flm_error_sink_v1* error);
@@ -496,6 +516,10 @@ typedef int (*flm_embedding_create_v1)(
 ///       reference to the host. It may be called at most once; the host invokes
 ///       its destructor after every provider factory and object is released.
 ///       Providers must use `struct_size` before accessing appended fields.
+/// \note Frontends are registered by (family, provider); provider "builtin" is
+///       reserved. Catalog frontend_provider selects explicitly; when omitted,
+///       the host chooses builtin if available, otherwise the sole provider.
+///       An ambiguous family requires an explicit frontend_provider.
 typedef struct flm_model_extension_registrar_v1 {
     size_t struct_size;
     void* host_context;
