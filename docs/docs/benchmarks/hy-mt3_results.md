@@ -10,7 +10,7 @@ nav_order: 14
 This section reports the performance on NPU with FastFlowLM (FLM).
 
 > **Note:**
-> - Measured on FastFlowLM v1.0.14 (Q4_K weights); prefill speed is prompt tokens divided by time to first token.
+> - Hy-MT3 is supported from FastFlowLM v1.0.14, the version these numbers were measured on (Q4_K weights); prefill speed is prompt tokens divided by time to first token.
 > - Under FLM's default NPU power mode (Performance)
 > - Newer versions may deliver improved performance.
 > - Hy-MT3 is a dedicated translation model tuned for short, single-turn requests, so it is benchmarked up to 8k context length. It runs on the same NPU kernels as [Hy-MT2](../hy-mt2_results/), so the two perform alike.

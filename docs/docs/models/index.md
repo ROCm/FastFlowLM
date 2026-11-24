@@ -30,7 +30,7 @@ has_children: true
 - [Decision 3.0 (d3)](d3/)
 - [SmolVLA](smolvla/)
 - [Hy-MT2](hy-mt2/)
-- [Hy-MT3](hy-mt3/)
+- [Hy-MT3](hy-mt3/) (FLM v1.0.14 or later)
 - [Hy-Memory](hy-memory/)
 - [MiniCPM](minicpm/)
 - [Nemotron Bolt](nemotron3.5-bolt/)

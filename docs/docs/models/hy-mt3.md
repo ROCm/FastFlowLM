@@ -8,6 +8,7 @@ parent: Models
 ## 🧩 Model Card: [hy-mt3-flash:1.8b](https://huggingface.co/tencent/Hy-MT3-1.8B)
 
 - **Type:** Text-to-Text (Translation, 102 languages)
+- **Minimum FLM version:** v1.0.14 (first release that supports this model)
 - **Think:** No
 - **Tool Calling Support:** No
 - **Base Model:** [tencent/Hy-MT3-1.8B](https://huggingface.co/tencent/Hy-MT3-1.8B)
