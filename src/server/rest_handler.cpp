@@ -1396,7 +1396,7 @@ void RestHandler::handle_models_openai(const json& request,
     std::function<void(const json&)> send_response,
     StreamResponseCallback send_streaming_response) {
     try {
-        send_response(supported_models.get_all_models_openai());
+        send_response(supported_models.get_all_models_openai(this->ctx_length));
     }
     catch (const std::exception& e) {
         json error_response = { {"error", e.what()} };

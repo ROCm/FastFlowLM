@@ -203,6 +203,21 @@ jobs:
           cmake --build build-http-guard -j"$(nproc)"
           ctest --test-dir build-http-guard --output-on-failure
 
+  # Model catalog (WP-36): platform and backend filtering, the sweep of the shipped src/model_list.json, and
+  # the capability record that GET /v1/models reports (tools, vision, thinking, context length). CPU only.
+  model-catalog:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and run the model catalog test
+        run: |
+          cmake -S src/test/model_list_platform -B build-model-catalog -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-model-catalog -j"$(nproc)"
+          ctest --test-dir build-model-catalog --output-on-failure
+
   # Log privacy and download TLS (WP-15): the request log hides user text unless FLM_LOG_CONTENT=1, every
   # "Model RAW Output" dump goes through one switch, downloads verify TLS unless FLM_INSECURE_DOWNLOAD=1. CPU only.
   log-privacy:

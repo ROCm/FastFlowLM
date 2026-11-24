@@ -140,6 +140,7 @@
         },
         "qwen3vl-it": {
             "4b": {
+                "tools": true,
                 "supported_platforms": ["aie2p"],
                 "name": "Qwen3-VL-4B-Instruct-NPU2",
                 "url": "https://huggingface.co/FastFlowLM/Qwen3-VL-4B-Instruct-NPU2",
@@ -206,6 +207,7 @@
         },
         "gemma4-it": {
             "e2b": {
+                "tools": true,
                 "supported_platforms": ["aie2p"],
                 "name": "Gemma4-E2B-IT-NPU2",
                 "url": "https://huggingface.co/FastFlowLM/Gemma4-E2B-IT-NPU2",
@@ -244,6 +246,7 @@
                 "footprint": 5.6
             },
             "e4b": {
+                "tools": true,
                 "supported_platforms": ["aie2p"],
                 "name": "Gemma4-E4B-IT-NPU2",
                 "url": "https://huggingface.co/FastFlowLM/Gemma4-E4B-IT-NPU2",
@@ -282,6 +285,7 @@
                 "footprint": 8.5
             },
             "12b": {
+                "tools": true,
                 "supported_platforms": ["aie2p"],
                 "name": "Gemma4-12B-IT-NPU2",
                 "url": "https://huggingface.co/FastFlowLM/Gemma4-12B-IT-NPU2",
@@ -321,6 +325,7 @@
         },
         "nemotron3.5-bolt": {
             "e4b": {
+                "tools": true,
                 "supported_platforms": ["aie2p"],
                 "name": "Nemotron-3.5-Bolt-E4B-NPU2",
                 "url": "https://huggingface.co/FastFlowLM/Nemotron-3.5-Bolt-E4B-NPU2",
@@ -361,6 +366,7 @@
         },
         "nemotron3.5-bolt-dflash": {
             "e4b": {
+                "tools": true,
                 "supported_platforms": ["aie2p"],
                 "name": "Nemotron-3.5-Bolt-E4B-DFlash-NPU2",
                 "base_model": "nemotron3.5-bolt:e4b",
@@ -544,6 +550,7 @@
                 "footprint": 0.72
             },
             "2b": {
+                "tools": true,
                 "supported_platforms": ["aie2p"],
                 "name": "Qwen3.5-2B-NPU2",
                 "url": "https://huggingface.co/FastFlowLM/Qwen3.5-2B-NPU2/resolve/flm_q4k_high_precision",
@@ -578,6 +585,7 @@
                 "footprint": 1.9
             },
             "4b": {
+                "tools": true,
                 "supported_platforms": ["aie2p"],
                 "name": "Qwen3.5-4B-NPU2",
                 "url": "https://huggingface.co/FastFlowLM/Qwen3.5-4B-NPU2/resolve/flm_q4k_high_precision",
@@ -612,6 +620,7 @@
                 "footprint": 3.2
             },
             "9b":{
+                "tools": true,
                 "supported_platforms": ["aie2p"],
                 "name": "Qwen3.5-9B-NPU2",
                 "url": "https://huggingface.co/FastFlowLM/Qwen3.5-9B-NPU2/resolve/flm_q4k_high_precision",
@@ -649,6 +658,7 @@
 
         "minicpm-v-4.7": {
             "1b": {
+                "tools": true,
                 "supported_platforms": ["aie2p"],
                 "name": "MiniCPM-V-4.7-1B-NPU2",
                 "url": "https://huggingface.co/FastFlowLM/MiniCPM-V-4.7-1B-NPU2/resolve/main",
@@ -686,6 +696,7 @@
 
         "minicpm-ocr": {
             "1.0": {
+                "tools": true,
                 "supported_platforms": ["aie2p"],
                 "name": "MiniCPM-OCR-1.0-NPU2",
                 "url": "https://huggingface.co/FastFlowLM/MiniCPM-OCR-1.0-NPU2/resolve/main",
@@ -722,6 +733,7 @@
 
         "minicpm-v-4.7-moe": {
             "35b-a3b": {
+                "tools": true,
                 "supported_platforms": ["aie2p"],
                 "name": "MiniCPM-V-4.7-35B-A3B-NPU2",
                 "url": "https://huggingface.co/FastFlowLM/MiniCPM-V-4.7-35B-A3B-NPU2/resolve/main",
@@ -759,6 +771,7 @@
 
         "qwen3.6-moe": {
             "35b-a3b": {
+                "tools": true,
                 "supported_platforms": ["aie2p"],
                 "name": "Qwen3.6-35B-A3B-NPU2",
                 "url": "https://huggingface.co/FastFlowLM/Qwen3.6-35B-A3B-NPU2/resolve/flm_q4k_high_precision",
@@ -795,6 +808,7 @@
         },
         "qwen3.8-mtp": {
             "27b": {
+                "tools": true,
                 "supported_platforms": ["aie2p"],
                 "name": "Qwen3.8-27B-NPU2",
                 "url": "https://huggingface.co/FastFlowLM/Qwen3.8-27B-NPU2",
@@ -832,6 +846,7 @@
         },
         "qwen3.8-dflash2": {
             "27b": {
+                "tools": true,
                 "supported_platforms": ["aie2p"],
                 "name": "Qwen3.8-27B-DFlash2-NPU2",
                 "base_model": "qwen3.8-mtp:27b",
@@ -981,6 +996,7 @@
         },
         "lfm3": {
             "1.7b": {
+                "tools": true,
                 "supported_platforms": ["aie2p"],
                 "name": "LFM3-1.7B-NPU2",
                 "url": "https://huggingface.co/FastFlowLM/LFM3-1.7B-NPU2",
@@ -1764,6 +1780,7 @@
                 "footprint": 1.6
             },
             "4b": {
+                "tools": true,
                 "supported_platforms": ["aie2p"],
                 "name": "Qwen3-4B-NPU2",
                 "url": "https://huggingface.co/FastFlowLM/Qwen3-4B-NPU2",
@@ -1794,6 +1811,7 @@
                 "footprint": 3.1
             },
             "8b": {
+                "tools": true,
                 "supported_platforms": ["aie2p"],
                 "name": "Qwen3-8B-NPU2",
                 "url": "https://huggingface.co/FastFlowLM/Qwen3-8B-NPU2",
@@ -1826,6 +1844,7 @@
         },
         "qwen3-tk": {
             "4b": {
+                "tools": true,
                 "supported_platforms": ["aie2p"],
                 "name": "Qwen3-4B-Thinking-2507-NPU2",
                 "url": "https://huggingface.co/FastFlowLM/Qwen3-4B-Thinking-2507-NPU2",
@@ -1858,6 +1877,7 @@
         },
         "qwen3-it": {
             "4b": {
+                "tools": true,
                 "supported_platforms": ["aie2p"],
                 "name": "Qwen3-4B-Instruct-2507-NPU2",
                 "url": "https://huggingface.co/FastFlowLM/Qwen3-4B-Instruct-2507-NPU2",
@@ -2012,6 +2032,7 @@
         },
         "gemma4-it-core":     {
         "e2b": {
+            "tools": true,
             "supported_platforms": [
                 "dev04"
             ],
@@ -2064,6 +2085,7 @@
             "asr": false
         },
         "e4b": {
+            "tools": true,
             "supported_platforms": [
                 "dev04"
             ],
@@ -2118,6 +2140,7 @@
     },
         "qwen3.5-core":     {
         "4b": {
+            "tools": true,
             "supported_platforms": [
                 "dev04"
             ],
@@ -2164,6 +2187,7 @@
             ]
         },
         "9b": {
+            "tools": true,
             "supported_platforms": [
                 "dev04"
             ],
@@ -2212,6 +2236,7 @@
     },
         "qwen3.5-oga-hipep": {
             "9b": {
+                "tools": true,
                 "name": "Qwen3.5-9B_gpuep_1.0_gpu_128",
                 "positional_tool_results": true,
                 "url": "https://huggingface.co/amd/Qwen3.5-9B_gpuep_1.0_gpu_128/resolve/f3a9b4aeb60a42542cc4fec561e1f1095e427483",
@@ -2249,6 +2274,7 @@
                 ]
             },
             "35b-a3b": {
+                "tools": true,
                 "name": "Qwen3.5-35B-A3B_gpuep_1.0_gpu_128",
                 "url": "https://huggingface.co/amd/Qwen3.5-35B-A3B_gpuep_1.0_gpu_128/resolve/3fd220727224e8894e0a896346720d041d049fe9",
                 "file_url": "https://huggingface.co/api/models/amd/Qwen3.5-35B-A3B_gpuep_1.0_gpu_128/tree/3fd220727224e8894e0a896346720d041d049fe9",
@@ -2285,6 +2311,7 @@
                 ]
             },
             "122b-a10b": {
+                "tools": true,
                 "name": "Qwen3.5-122B-A10B_gpuep_1.0_gpu_128",
                 "url": "https://huggingface.co/amd/Qwen3.5-122B-A10B_gpuep_1.0_gpu_128/resolve/586488aec4bfb4d20d6a5bf1c4ccd4a7400c736a",
                 "file_url": "https://huggingface.co/api/models/amd/Qwen3.5-122B-A10B_gpuep_1.0_gpu_128/tree/586488aec4bfb4d20d6a5bf1c4ccd4a7400c736a",
@@ -2323,6 +2350,7 @@
         },
         "qwen3.6-oga-hipep": {
             "27b": {
+                "tools": true,
                 "name": "Qwen3.6-27B_gpuep_1.0_gpu_128",
                 "url": "https://huggingface.co/amd/Qwen3.6-27B_gpuep_1.0_gpu_128/resolve/8375cbdb48eedc8d4d32c5dac2d1154fb0b31bd0",
                 "file_url": "https://huggingface.co/api/models/amd/Qwen3.6-27B_gpuep_1.0_gpu_128/tree/8375cbdb48eedc8d4d32c5dac2d1154fb0b31bd0",
@@ -2359,6 +2387,7 @@
                 ]
             },
             "35b-a3b": {
+                "tools": true,
                 "name": "Qwen3.6-35B-A3B_gpuep_1.0_gpu_128",
                 "url": "https://huggingface.co/amd/Qwen3.6-35B-A3B_gpuep_1.0_gpu_128/resolve/061f05d3b6bd2350b274e11c3bc7975251732269",
                 "file_url": "https://huggingface.co/api/models/amd/Qwen3.6-35B-A3B_gpuep_1.0_gpu_128/tree/061f05d3b6bd2350b274e11c3bc7975251732269",
@@ -2397,6 +2426,7 @@
         },
         "qwen3.8-oga-hipep": {
             "27b": {
+                "tools": true,
                 "name": "Qwen3.8-27B_gpuep_1.0_gpu_128",
                 "url": "https://huggingface.co/amd/Qwen3.8-27B_gpuep_1.0_gpu_128/resolve/e133613183b5774ce91108a7954ec5f222388a9a",
                 "file_url": "https://huggingface.co/api/models/amd/Qwen3.8-27B_gpuep_1.0_gpu_128/tree/e133613183b5774ce91108a7954ec5f222388a9a",
@@ -2435,6 +2465,7 @@
         },
         "qwen3.8-flash-next-oga-hipep": {
             "125b-a6b": {
+                "tools": true,
                 "name": "Qwen3.8-Flash-Next_gpuep_1.0_gpu_128",
                 "url": "https://huggingface.co/amd/Qwen3.8-Flash-Next_gpuep_1.0_gpu_128/resolve/52f7f5d1c5184c47146cdb2cc92814c8e46c2ebe",
                 "file_url": "https://huggingface.co/api/models/amd/Qwen3.8-Flash-Next_gpuep_1.0_gpu_128/tree/52f7f5d1c5184c47146cdb2cc92814c8e46c2ebe",
@@ -2480,6 +2511,8 @@
         },
         "qwen2.5-it-oga-hipep": {
             "14b": {
+                "tools": true,
+                "label": ["tool-calling"],
                 "name": "Qwen2.5-14B-Instruct_gpuep_1.0_gpu_128",
                 "positional_tool_results": true,
                 "url": "https://huggingface.co/amd/Qwen2.5-14B-Instruct_gpuep_1.0_gpu_128/resolve/efc1134c0ea60c296e823237b8c43fbdd4ab3c04",
@@ -2496,7 +2529,6 @@
                 },
                 "flm_min_version": "1.0.13",
                 "vlm": false,
-                "tools_in_prompt": true,
                 "files": [
                     "chat_template.jinja",
                     "config.json",
@@ -2582,6 +2614,7 @@
         },
         "gemma4-it-oga-hipep": {
             "12b": {
+                "tools": true,
                 "name": "Gemma-4-12B-it_gpuep_1.0_gpu_128",
                 "url": "https://huggingface.co/amd/Gemma-4-12B-it_gpuep_1.0_gpu_128/resolve/adc217f3ae0f54bd55aa049845f132c6706ba9d9",
                 "file_url": "https://huggingface.co/api/models/amd/Gemma-4-12B-it_gpuep_1.0_gpu_128/tree/adc217f3ae0f54bd55aa049845f132c6706ba9d9",
@@ -2627,6 +2660,7 @@
                 ]
             },
             "26b-a4b": {
+                "tools": true,
                 "name": "Gemma-4-26B-A4B-it_gpuep_1.0_gpu_128",
                 "url": "https://huggingface.co/amd/Gemma-4-26B-A4B-it_gpuep_1.0_gpu_128/resolve/66d30d3b4ae7fd9301c7f603356feb855a63f628",
                 "file_url": "https://huggingface.co/api/models/amd/Gemma-4-26B-A4B-it_gpuep_1.0_gpu_128/tree/66d30d3b4ae7fd9301c7f603356feb855a63f628",
@@ -2723,6 +2757,7 @@
                     "quantization_level": "INT4 RTN group-128, QMoE experts, fp16 activations"
                 },
                 "flm_min_version": "1.0.14",
+                "tools": true,
                 "vlm": false,
                 "files": [
                     "chat_template.jinja",
@@ -2761,6 +2796,7 @@
                     "quantization_level": "INT4 RTN group-128, QMoE experts, fp16 activations"
                 },
                 "flm_min_version": "1.0.14",
+                "tools": true,
                 "vlm": false,
                 "files": [
                     "chat_template.jinja",
@@ -2801,6 +2837,7 @@
                     "quantization_level": "INT4 RTN group-32, QMoE experts, fp16 activations"
                 },
                 "flm_min_version": "1.0.14",
+                "tools": true,
                 "vlm": false,
                 "files": [
                     "chat_template.jinja",
@@ -2825,6 +2862,7 @@
         },
         "qwen3.6-moe-core":     {
         "35b-a3b": {
+            "tools": true,
             "supported_platforms": [
                 "dev04"
             ],
@@ -2878,6 +2916,7 @@
     },
         "qwen3.8-core":     {
         "27b": {
+            "tools": true,
             "supported_platforms": [
                 "dev04"
             ],
@@ -3016,6 +3055,8 @@
             "model_info_key": "qwen3-core:1.7b"
         },
         "4b": {
+            "tools": true,
+            "label": ["tool-calling"],
             "supported_platforms": [
                 "dev04"
             ],
@@ -3059,6 +3100,8 @@
             "model_info_key": "qwen3-core:4b"
         },
         "8b": {
+            "tools": true,
+            "label": ["tool-calling"],
             "supported_platforms": [
                 "dev04"
             ],
