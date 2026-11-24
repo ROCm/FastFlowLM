@@ -89,6 +89,7 @@ VS Code does not show a model in its model picker for agent use unless `toolCall
 - Do not use a model that does not list `tools` for an agent: FLM lists `tools` only for models whose prompt shows them the tools a request offers.
 - `context_length` changes with `--ctx-len`. If you restart the server with another value, read the listing again.
 - A `--ctx-len` above what a model's engine can hold is not honored: the model is loaded with less, or is refused. Keep `--ctx-len` at or below the model's default unless you know the model takes more.
+- `context_length` is the value the server asks for, not a measured limit. Some engines cap their context lower themselves (for example `qwen3.8-mtp` and the oga-hipep models), so for those the listing can report more than the model actually holds. For such a model, set `--ctx-len` to the model's own limit if you rely on the number.
 - The listing describes the models this build and this machine can run. A model that needs a backend your build does not have is not listed.
 - `thinking` says that the model reasons before it answers, not that you can switch the reasoning off. Some models always think (`deepseek-r1:8b`, for example) and ignore `think`.
 - The built-in embedding model (`embed-gemma:300m`) and `whisper-v3:turbo` are not in this listing; you call them through `/v1/embeddings` and `/v1/audio/transcriptions`. An embedding model that an extension adds is listed.
