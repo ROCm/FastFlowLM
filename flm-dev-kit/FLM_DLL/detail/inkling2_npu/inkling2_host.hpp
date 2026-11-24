@@ -376,7 +376,9 @@ public:
 
     /// \brief run n tokens (any n; split into steps of at most CHUNK)
     /// \param logits if not null, [VOCAB] logits of the last token
-    void run(const int* ids, int n, float* logits);
+    /// \param image_rows bf16 [image_count][D]: the rows that stand in for the tokens equal to image_id, in order, as
+    ///        they are (no RMSNorm); null: those tokens are embedded like any other. Throws if the counts differ.
+    void run(const int* ids, int n, float* logits, const u16* image_rows = nullptr, int image_count = 0, int image_id = -1);
     /// \brief the most tokens run() hands one step: CHUNK, or INKLING2_CHUNK
     static int chunk();
 
@@ -389,7 +391,7 @@ public:
 
     struct state;   // caches + the sequence position
 private:
-    void step(const int* ids, int T, float* logits);
+    void step(const int* ids, int T, float* logits, const u16* image_rows = nullptr, int image_id = -1);
     std::unique_ptr<q4nx_file> file_;
     std::unique_ptr<weights> w_;
     std::unique_ptr<state> s_;

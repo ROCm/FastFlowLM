@@ -126,6 +126,10 @@ lmprobe: all
 		-L$(LIB_DIR) -L$(FINAL_LIB_DIR) -linkling2_npu $(LDFLAGS) \
 		-Wl,-rpath,'$$ORIGIN/../lib' -Wl,-rpath,'$$ORIGIN/../../lib'
 
+# tools/inkling2_vision_run.cpp: the image tower against the HF goldens (host path)
+vprobe: directories
+	$(CXX) $(CXX_FLAGS) -o $(BIN_DIR)/inkling2_vision_run tools/inkling2_vision_run.cpp inkling2_vision.cpp inkling2_vision_npu.cpp $(LDFLAGS)
+
 # tools/inkling2_mm_probe.cpp: the prefill matmul layout on real weights vs an fp32 reference
 probe: directories
 	$(CXX) $(CXX_FLAGS) -o $(BIN_DIR)/inkling2_mm_probe tools/inkling2_mm_probe.cpp inkling2_host.cpp $(LDFLAGS)
@@ -134,7 +138,7 @@ clean:
 	rm -rf $(BUILD_DIR)
 
 -include $(DEPS)
-.PHONY: all clean directories harness probe fprobe lmprobe
+.PHONY: all clean directories harness probe fprobe lmprobe vprobe
 
 else
 

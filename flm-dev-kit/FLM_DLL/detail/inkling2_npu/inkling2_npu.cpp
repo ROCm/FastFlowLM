@@ -4,6 +4,7 @@
 /// \file inkling2_npu.cpp
 /// \brief inkling2_npu: the causal_lm interface over inkling2_host::model
 #include "inkling2_npu_detail.hpp"
+#include "inkling2_vision_npu.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -208,6 +209,46 @@ int inkling2_npu::Impl::write_state(const hybrid_engine_state& st) {
     return st.context_length;
 }
 
+std::vector<uint16_t> inkling2_npu::Impl::encode_images(const inkling2_payload_t& payload) {
+    if (!this->vision) throw std::runtime_error("inkling2: this model folder has no vision tower (vision_weight.q4nx)");
+    if (!this->vision_npu_tried) {
+        this->vision_npu_tried = true;
+        const char* off = std::getenv("INKLING2_VISION_NPU");
+        const std::string dir = utils::path_join(this->config.exec_path, "xclbins", this->config.model_name);
+        const std::string mm = utils::path_join(dir, "vision_mm.xclbin");
+        const std::string at = utils::path_join(dir, "vision_attn.xclbin");
+        if (off && std::strcmp(off, "0") == 0) {
+            header_print_r("FLM", "Inkling-2 image tower on the host (INKLING2_VISION_NPU=0)");
+        }
+        else if (!std::filesystem::exists(mm) || !std::filesystem::exists(at)) {
+            header_print_r("FLM", "Inkling-2 image tower on the host: vision_mm.xclbin / vision_attn.xclbin not found");
+        }
+        else {
+            try {
+                inkling2_vision::npu_options opt;
+                opt.profile = std::getenv("INKLING2_VISION_PROF") != nullptr;
+                this->vision->set_accel(inkling2_vision::make_npu_accel(this->npu, mm, at, opt));
+            } catch (const std::exception& e) {
+                header_print_r("FLM", std::string("Inkling-2 image tower on the host: ") + e.what());
+                this->vision->set_accel(nullptr);
+            }
+        }
+    }
+    std::vector<uint16_t> rows;
+    std::vector<float> pixels;
+    for (int i = 0; i < payload.num_images; i++) {
+        const inkling2_image_t& im = payload.images[i];
+        if (!im.rgb || im.height <= 0 || im.width <= 0) throw std::runtime_error("inkling2: empty image");
+        const inkling2_vision::grid g = inkling2_vision::grid_for(im.height, im.width);
+        pixels.resize((size_t)g.tokens() * inkling2_vision::CELL * inkling2_vision::CELL * 3);
+        inkling2_vision::patchify(im.rgb, im.height, im.width, pixels.data());
+        const size_t at = rows.size();
+        rows.resize(at + (size_t)g.tokens() * D);
+        this->vision->encode(pixels.data(), g, rows.data() + at);
+    }
+    return rows;
+}
+
 // =============================================================================
 // inkling2_npu
 // =============================================================================
@@ -226,6 +267,13 @@ void inkling2_npu::load_weights(Q4NX& q4nx) {
         try {
             d->model.load(utils::path_join(d->config.model_path, "model.q4nx"));
             d->model.set_max_length(d->MAX_L);
+            // the image tower: vision_weight.q4nx beside model.q4nx (INKLING2_VISION=0 leaves it out)
+            const char* vis = std::getenv("INKLING2_VISION");
+            const std::string vq = utils::path_join(d->config.model_path, "vision_weight.q4nx");
+            if ((!vis || std::strcmp(vis, "0") != 0) && std::filesystem::exists(vq)) {
+                d->vision = std::make_unique<inkling2_vision::tower>();
+                d->vision->load(vq);
+            }
             // the prompt matmuls and attention on the NPU; INKLING2_NPU_PREFILL=0 keeps them on the host,
             // INKLING2_NPU_MIN_T sets the shortest prompt step that goes to the NPU
             const char* on = std::getenv("INKLING2_NPU_PREFILL");
@@ -260,17 +308,31 @@ buffer<bf16> inkling2_npu::forward(int ids) {
     return this->_impl->publish_logits();
 }
 
+bool inkling2_npu::has_vision_tower() const { return this->_impl->vision != nullptr; }
+
+int inkling2_npu::image_tokens_for(int height, int width) const {
+    return inkling2_vision::grid_for(height, width).tokens();
+}
+
 buffer<bf16> inkling2_npu::prefill(std::vector<int>& ids, void* payload) {
-    (void)payload;
+    const inkling2_payload_t* images = static_cast<const inkling2_payload_t*>(payload);
+    if (images && images->num_images <= 0) images = nullptr;
     if (ids.empty()) {
         throw std::runtime_error("inkling2: empty prompt");
     }
     Impl* d = this->_impl;
     // warm switches need the array to themselves from the first layer to the last (inkling2_launch.hpp)
     inkling2_array_lock array(d->prefill && d->prefill->switched());
-    d->compute.call([d, &ids] {
+    d->compute.call([d, &ids, images] {
         d->sync_host();
-        d->model.run(ids.data(), (int)ids.size(), d->logits_f32.data());
+        if (!images) {
+            d->model.run(ids.data(), (int)ids.size(), d->logits_f32.data());
+            return;
+        }
+        // the tower's rows replace the embeddings of the placeholder tokens (inside the array lock above)
+        const std::vector<uint16_t> rows = d->encode_images(*images);
+        d->model.run(ids.data(), (int)ids.size(), d->logits_f32.data(), rows.data(), (int)(rows.size() / D),
+                     inkling2_npu::image_token_id);
     });
     return this->_impl->publish_logits();
 }

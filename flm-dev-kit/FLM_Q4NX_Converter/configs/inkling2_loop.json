@@ -224,6 +224,140 @@
             "gguf_name": "blk.{bid}.loop_ffn_ctrl_gain.weight",
             "q4nx_name": "model.layer.{bid}.loop.ffn_gate.gain",
             "default_tensor_type": "F32"
+        },
+        "vision_class_embedding": {
+            "gguf_name": "v.class_embd",
+            "q4nx_name": "model.visual.backbone.embeddings.class_embedding",
+            "default_tensor_type": "BF16"
+        },
+        "vision_cls_position_embedding": {
+            "gguf_name": "v.class_position_embd.weight",
+            "q4nx_name": "model.visual.backbone.embeddings.cls_position_embedding",
+            "default_tensor_type": "BF16"
+        },
+        "vision_patch_embedding": {
+            "gguf_name": "v.patch_embd.weight",
+            "q4nx_name": "model.visual.backbone.embeddings.patch_embedding.weight",
+            "default_tensor_type": "BF16"
+        },
+        "vision_position_embedding": {
+            "gguf_name": "v.position_embd.weight",
+            "q4nx_name": "model.visual.backbone.embeddings.position_embedding",
+            "default_tensor_type": "BF16"
+        },
+        "vision_ln_pre_weight": {
+            "gguf_name": "v.pre_ln.weight",
+            "q4nx_name": "model.visual.backbone.ln_pre.weight",
+            "default_tensor_type": "BF16"
+        },
+        "vision_ln_pre_bias": {
+            "gguf_name": "v.pre_ln.bias",
+            "q4nx_name": "model.visual.backbone.ln_pre.bias",
+            "default_tensor_type": "BF16"
+        },
+        "vision_ln1_weight": {
+            "gguf_name": "v.blk.{bid}.ln1.weight",
+            "q4nx_name": "model.visual.backbone.layers.{bid}.ln_1.weight",
+            "default_tensor_type": "BF16"
+        },
+        "vision_ln1_bias": {
+            "gguf_name": "v.blk.{bid}.ln1.bias",
+            "q4nx_name": "model.visual.backbone.layers.{bid}.ln_1.bias",
+            "default_tensor_type": "BF16"
+        },
+        "vision_ln2_weight": {
+            "gguf_name": "v.blk.{bid}.ln2.weight",
+            "q4nx_name": "model.visual.backbone.layers.{bid}.ln_2.weight",
+            "default_tensor_type": "BF16"
+        },
+        "vision_ln2_bias": {
+            "gguf_name": "v.blk.{bid}.ln2.bias",
+            "q4nx_name": "model.visual.backbone.layers.{bid}.ln_2.bias",
+            "default_tensor_type": "BF16"
+        },
+        "vision_ls1": {
+            "gguf_name": "v.blk.{bid}.ls1.weight",
+            "q4nx_name": "model.visual.backbone.layers.{bid}.ls_1.gamma",
+            "default_tensor_type": "BF16"
+        },
+        "vision_ls2": {
+            "gguf_name": "v.blk.{bid}.ls2.weight",
+            "q4nx_name": "model.visual.backbone.layers.{bid}.ls_2.gamma",
+            "default_tensor_type": "BF16"
+        },
+        "vision_q_weight": {
+            "gguf_name": "v.blk.{bid}.attn_q.weight",
+            "q4nx_name": "model.visual.backbone.layers.{bid}.self_attn.q_proj.weight",
+            "default_tensor_type": "BF16"
+        },
+        "vision_q_bias": {
+            "gguf_name": "v.blk.{bid}.attn_q.bias",
+            "q4nx_name": "model.visual.backbone.layers.{bid}.self_attn.q_proj.bias",
+            "default_tensor_type": "BF16"
+        },
+        "vision_k_weight": {
+            "gguf_name": "v.blk.{bid}.attn_k.weight",
+            "q4nx_name": "model.visual.backbone.layers.{bid}.self_attn.k_proj.weight",
+            "default_tensor_type": "BF16"
+        },
+        "vision_k_bias": {
+            "gguf_name": "v.blk.{bid}.attn_k.bias",
+            "q4nx_name": "model.visual.backbone.layers.{bid}.self_attn.k_proj.bias",
+            "default_tensor_type": "BF16"
+        },
+        "vision_v_weight": {
+            "gguf_name": "v.blk.{bid}.attn_v.weight",
+            "q4nx_name": "model.visual.backbone.layers.{bid}.self_attn.v_proj.weight",
+            "default_tensor_type": "BF16"
+        },
+        "vision_v_bias": {
+            "gguf_name": "v.blk.{bid}.attn_v.bias",
+            "q4nx_name": "model.visual.backbone.layers.{bid}.self_attn.v_proj.bias",
+            "default_tensor_type": "BF16"
+        },
+        "vision_out_weight": {
+            "gguf_name": "v.blk.{bid}.attn_out.weight",
+            "q4nx_name": "model.visual.backbone.layers.{bid}.self_attn.out_proj.weight",
+            "default_tensor_type": "BF16"
+        },
+        "vision_out_bias": {
+            "gguf_name": "v.blk.{bid}.attn_out.bias",
+            "q4nx_name": "model.visual.backbone.layers.{bid}.self_attn.out_proj.bias",
+            "default_tensor_type": "BF16"
+        },
+        "vision_fc1_weight": {
+            "gguf_name": "v.blk.{bid}.ffn_up.weight",
+            "q4nx_name": "model.visual.backbone.layers.{bid}.mlp.c_fc.weight",
+            "default_tensor_type": "BF16"
+        },
+        "vision_fc1_bias": {
+            "gguf_name": "v.blk.{bid}.ffn_up.bias",
+            "q4nx_name": "model.visual.backbone.layers.{bid}.mlp.c_fc.bias",
+            "default_tensor_type": "BF16"
+        },
+        "vision_fc2_weight": {
+            "gguf_name": "v.blk.{bid}.ffn_down.weight",
+            "q4nx_name": "model.visual.backbone.layers.{bid}.mlp.c_proj.weight",
+            "default_tensor_type": "BF16"
+        },
+        "vision_fc2_bias": {
+            "gguf_name": "v.blk.{bid}.ffn_down.bias",
+            "q4nx_name": "model.visual.backbone.layers.{bid}.mlp.c_proj.bias",
+            "default_tensor_type": "BF16"
+        },
+        "vision_proj_in": {
+            "gguf_name": "mm.1.weight",
+            "q4nx_name": "model.visual.proj_in.weight",
+            "default_tensor_type": "BF16"
+        },
+        "vision_proj_out": {
+            "gguf_name": "mm.2.weight",
+            "q4nx_name": "model.visual.proj_out.weight",
+            "default_tensor_type": "BF16"
         }
+    },
+    "vision_config": {
+        "vision_MM_K": 512,
+        "vision_MM_N": 64
     }
 }

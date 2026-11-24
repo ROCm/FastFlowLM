@@ -16,6 +16,7 @@
 #include "inkling2_fused.hpp"
 #include "inkling2_host.hpp"
 #include "inkling2_prefill.hpp"
+#include "inkling2_vision.hpp"
 
 /// \brief one persistent thread that runs the host model's compute.
 ///        Each thread that opens an OpenMP region becomes the master of its own team; a server
@@ -93,10 +94,18 @@ struct inkling2_npu::Impl {
     std::vector<float> logits_f32;
     buffer<bf16> logits;   // vocab_size; forward() / prefill() return a view of it
 
+    // the image tower (null: no vision_weight.q4nx, or INKLING2_VISION=0). The matrix products and the attention go to the
+    // NPU from the first image on (INKLING2_VISION_NPU=0 keeps them on the host)
+    std::unique_ptr<inkling2_vision::tower> vision;
+    bool vision_npu_tried = false;
+
     std::unique_ptr<hybrid_engine_state> legacy_checkpoint;
     compute_thread compute;   // runs model.run(); see compute_thread
 
     Impl(LM_Config config, npu_xclbin_manager* npu, int MAX_L);
+
+    /// \brief the tower's rows (bf16, [cells of all the images][D]) for the payload's images; run on the compute thread
+    std::vector<uint16_t> encode_images(const inkling2_payload_t& payload);
 
     /// \brief logits_f32 -> logits
     buffer<bf16>& publish_logits();

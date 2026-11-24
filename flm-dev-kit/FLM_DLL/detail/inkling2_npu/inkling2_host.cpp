@@ -31,6 +31,7 @@
 #include <omp.h>
 #endif
 
+#include "inkling2_q4nx_file.hpp"
 #include "nlohmann/json.hpp"
 #include "tensor_utils/mapped_file.hpp"
 
@@ -232,73 +233,6 @@ void prof_lap_half(std::chrono::steady_clock::time_point& t, prof_part part, int
 }
 
 }  // namespace
-
-// =============================================================================
-// model.q4nx: a safetensors container, mapped whole
-// =============================================================================
-class q4nx_file {
-public:
-    struct tensor {
-        std::string dtype;
-        std::vector<int64_t> shape;
-        const u8* data = nullptr;
-        size_t bytes = 0;
-    };
-
-    void open(const std::string& path) {
-        std::ifstream f(path, std::ios::binary);
-        if (!f) throw std::runtime_error("inkling2: cannot open " + path);
-        uint64_t n = 0;
-        f.read(reinterpret_cast<char*>(&n), 8);
-        std::string header(n, '\0');
-        f.read(header.data(), (std::streamsize)n);
-        if (!f) throw std::runtime_error("inkling2: truncated header in " + path);
-        const size_t size = std::filesystem::file_size(path);
-        if (!map_.open(path, 0, size)) throw std::runtime_error("inkling2: cannot map " + path);
-        const u8* base = map_.data() + 8 + n;
-        const auto j = nlohmann::json::parse(header);
-        for (auto it = j.begin(); it != j.end(); ++it) {
-            if (it.key() == "__metadata__") continue;
-            tensor t;
-            t.dtype = it.value()["dtype"].get<std::string>();
-            t.shape = it.value()["shape"].get<std::vector<int64_t>>();
-            const auto off = it.value()["data_offsets"].get<std::vector<size_t>>();
-            if (8 + n + off[1] > size) throw std::runtime_error("inkling2: tensor " + it.key() + " past the end of the file");
-            t.data = base + off[0];
-            t.bytes = off[1] - off[0];
-            tensors_[it.key()] = t;
-        }
-    }
-
-    bool has(const std::string& name) const { return tensors_.count(name) != 0; }
-
-    const tensor& get(const std::string& name, const std::string& dtype, const std::vector<int64_t>& shape) const {
-        const auto it = tensors_.find(name);
-        if (it == tensors_.end()) throw std::runtime_error("inkling2: model.q4nx has no " + name);
-        if (it->second.dtype != dtype || it->second.shape != shape) {
-            std::string s;
-            for (auto d : it->second.shape) s += std::to_string(d) + ",";
-            throw std::runtime_error("inkling2: " + name + " is " + it->second.dtype + " (" + s + "), expected " + dtype);
-        }
-        return it->second;
-    }
-
-    const float* f32(const std::string& name, const std::vector<int64_t>& shape) const {
-        return reinterpret_cast<const float*>(get(name, "F32", shape).data);
-    }
-    const u16* bf16(const std::string& name, const std::vector<int64_t>& shape) const {
-        return reinterpret_cast<const u16*>(get(name, "BF16", shape).data);
-    }
-    qmat q(const std::string& name, qfmt fmt, int N, int K) const {
-        qmat m{fmt, N, K, nullptr};
-        m.data = get(name, "I8", {N / QROWS, K / QCOLS, (int64_t)m.block_bytes()}).data;
-        return m;
-    }
-
-private:
-    mapped_file map_;
-    std::map<std::string, tensor> tensors_;
-};
 
 // =============================================================================
 // quantized matmul: y[T][N] = x[T][K] W^T
@@ -1651,10 +1585,16 @@ int model::chunk() {
     return c;
 }
 
-void model::run(const int* ids, int n, float* logits) {
+void model::run(const int* ids, int n, float* logits, const u16* image_rows, int image_count, int image_id) {
     if (s_->pos + n > s_->max_len)
         throw std::runtime_error("inkling2: " + std::to_string(s_->pos + n) + " tokens exceed the context length " +
                                  std::to_string(s_->max_len));
+    if (image_rows) {
+        const int have = (int)std::count(ids, ids + n, image_id);
+        if (have != image_count)
+            throw std::runtime_error("inkling2: the prompt has " + std::to_string(have) + " image placeholder(s) for " +
+                                     std::to_string(image_count) + " image row(s)");
+    }
     const int chunk = model::chunk();
     // a prompt: the helper's full pool keeps libgomp's waiters to the short spin, it ends with the prompt
     // (use_core_threads)
@@ -1667,24 +1607,36 @@ void model::run(const int* ids, int n, float* logits) {
         });
     for (int i = 0; i < n; i += chunk) {
         const int T = std::min(chunk, n - i);
-        step(ids + i, T, i + T == n ? logits : nullptr);
+        step(ids + i, T, i + T == n ? logits : nullptr, image_rows, image_id);
+        if (image_rows) image_rows += (size_t)std::count(ids + i, ids + i + T, image_id) * D;
     }
     release_helper();
 }
 
-void model::step(const int* ids, int T, float* logits) {
+void model::step(const int* ids, int T, float* logits, const u16* image_rows, int image_id) {
     use_core_threads();
     const weights& w = *w_;
     state& s = *s_;
     const int p0 = s.pos;
 
     act cur = make_act((size_t)T * D);
+    // the image rows enter as they are; the k-th placeholder of the step takes the k-th row
+    std::vector<int> image_at;
+    if (image_rows) {
+        for (int t = 0; t < T; t++)
+            if (ids[t] == image_id) image_at.push_back(t);
+    }
     #pragma omp parallel for schedule(static)
     for (int t = 0; t < T; t++) {
         float e[D];
         const u16* row = w.embed + (size_t)ids[t] * D;
         for (int c = 0; c < D; c++) e[c] = bf2f(row[c]);
         rms_norm(cur->data() + (size_t)t * D, e, w.embed_norm, D);
+    }
+    for (size_t k = 0; k < image_at.size(); k++) {
+        float* dst = cur->data() + (size_t)image_at[k] * D;
+        const u16* src = image_rows + k * D;
+        for (int c = 0; c < D; c++) dst[c] = bf2f(src[c]);
     }
 
     std::vector<act> blocks;
