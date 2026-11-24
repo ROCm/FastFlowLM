@@ -20,6 +20,14 @@ def real_catalog() -> dict[str, dict]:
     return changes.load_catalog((changes.REPO_ROOT / changes.MODEL_LIST).read_text(encoding="utf-8"))
 
 
+# PR_CHAT entries whose catalog entry has not reached main yet. A model's pull
+# request cannot carry its PR_CHAT line (npu_test/ is in devkit_swap.py's
+# SWAP_CI_PATHS, so a verified swap cannot come with it), so the line lands first.
+# Drop the family here once its entry is in src/model_list.json; it is harmless
+# to leave, since the entry then satisfies the check on its own.
+PR_CHAT_AHEAD_OF_CATALOG = {"inkling-2"}
+
+
 class Tables(unittest.TestCase):
     def test_pr_chat_names_every_chat_family(self):
         """A family missing from PR_CHAT gets its smallest model on every pull
@@ -28,7 +36,7 @@ class Tables(unittest.TestCase):
         cat = real_catalog()
         npu = {changes.family_of(e) for mid, e in cat.items() if not changes.runs_on_gpu(mid, e)}
         self.assertEqual(npu - NON_CHAT_FAMILIES - set(PR_CHAT), set())
-        self.assertEqual(set(PR_CHAT) - npu, set())
+        self.assertEqual(set(PR_CHAT) - npu - PR_CHAT_AHEAD_OF_CATALOG, set())
 
     def test_pr_chat_models_are_npu_models_of_their_family(self):
         cat = real_catalog()
