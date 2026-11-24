@@ -100,6 +100,7 @@ void attn_fv_bfp16(bf16 *__restrict pS, const uint8_t *__restrict pV, y_acc_dtyp
     const v64bfp16ebs8 S0b = ::to_v64bfp16ebs8(ACC(aie::concat(S10, zeros_vec, zeros_vec, zeros_vec)));
     const v64bfp16ebs8 S1b = ::to_v64bfp16ebs8(ACC(aie::concat(S11, zeros_vec, zeros_vec, zeros_vec)));
     const aie::vector<y_acc_dtype, 16> zeros_float = aie::zeros<y_acc_dtype, 16>();
+#ifndef PROBE_NO_KV_CORR
     {
         aie::vector<y_acc_dtype, 16> CORRECT16 = aie::concat(
             aie::broadcast<float, 8>(c[0]), aie::broadcast<float, 8>(c[1]));
@@ -108,6 +109,8 @@ void attn_fv_bfp16(bf16 *__restrict pS, const uint8_t *__restrict pV, y_acc_dtyp
             aie::store_v(pYc, aie::mul(CORRECT16, aie::load_v<16>(pYc)).template to_vector<y_acc_dtype>());
         }
     }
+#endif
+#ifndef PROBE_NO_KV_MAC
     aie::block_vector_input_buffer_stream<bfp16ebs8, 64> v_in((const bfp16ebs8 *)pV);
     for (unsigned j = 0; j < colQ; j += 1) {
         y_acc_dtype *__restrict pYc = pY + j * 16;
@@ -116,6 +119,7 @@ void attn_fv_bfp16(bf16 *__restrict pS, const uint8_t *__restrict pV, y_acc_dtyp
         Y = ::mac_8x8_8x8T_conf(S1b, v_in.pop(), Y, 0, 0, 0);
         aie::store_v(pYc, Y.template to_vector<y_acc_dtype>().template extract<16>(0));
     }
+#endif
 }
 
 // The newest chunk: this head's keys 0-7 and 8-15, as bf16 rows (stride DH) in the two V buffers -> the packed V^T
@@ -139,7 +143,9 @@ __attribute__((noinline)) static void pack_vt_tail(const bf16 *__restrict keys_0
 __attribute__((noinline)) static void kv_chunk(bf16 *__restrict s, const uint8_t *__restrict v, y_acc_dtype *__restrict y, float *__restrict l) {
     float *c = (float *)(s + 2 * 16);
 #if !defined(FLM_STUB) && !defined(PROBE_NO_KV_MATH)
+#ifndef PROBE_NO_KV_L
     calculate_l(s, c, l);
+#endif
     attn_fv_bfp16<DH / 8>(s, v, y, c);
 #endif
 }

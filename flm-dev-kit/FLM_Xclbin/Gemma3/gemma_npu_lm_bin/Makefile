@@ -20,8 +20,8 @@ BUILD_NAME := $(MODEL_TYPE)$(if $(filter 1,$(STUB)),_STUB)$(if $(PROBE),_P$(PROB
 ifeq ($(STUB),1)
 KERNEL_ARGS += -DFLM_STUB
 endif
-# timing-only probes: NO_X, NO_W, NO_Y (README "Weight streaming probes"), NO_QK_MATH, NO_KV_MATH (README "Attention
-# math")
+# timing-only probes: NO_X, NO_W, NO_Y (README "Weight streaming probes"), NO_QK_MATH, NO_KV_MATH, NO_KV_L, NO_KV_CORR,
+# NO_KV_MAC (README "Attention math")
 ifneq ($(PROBE),)
 KERNEL_ARGS += -DPROBE_$(PROBE)
 endif

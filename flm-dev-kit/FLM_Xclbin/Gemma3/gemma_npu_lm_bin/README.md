@@ -207,3 +207,19 @@ Timing probes `make bitstream PROBE=NO_QK_MATH` / `PROBE=NO_KV_MATH` skip the Q.
 
 Q.K costs at most 0.02 ms (so converting Q once per call instead of per chunk would not pay); P.V costs ~0.19 ms per
 global layer at 4K and ~0.40 ms at 8K, ~0.05 ms per sliding layer.
+
+P.V split (`PROBE=NO_KV_L` / `NO_KV_CORR` / `NO_KV_MAC`: skip `calculate_l` / the correction pass `y *= c` / the
+multiply pass), ms:
+
+| Build | global L 4,160 | global L 8,192 | sliding, ring full |
+|---|---|---|---|
+| normal | 1.621 | 2.031 | 1.315 |
+| no `calculate_l` | 1.570 | 1.942 | 1.349 |
+| no correction pass | 1.437 | 1.640 | 1.290 |
+| no multiply pass | 1.584 | 1.905 | 1.300 |
+| no P.V math | 1.436 | 1.663 | 1.293 |
+
+The correction pass alone costs as much as all P.V math: `aie::mul` of two float vectors is `mul_elem_16`, an
+emulated fp32 multiply on this core, 512 of them per 16-key chunk. Skipping it when c == 1 (the max did not move,
+nearly every chunk at long context) is what MiniCPM-OCR's decoding calls the rescale skip; it is not bit-identical
+there (the emulated multiply by 1.0 does not keep very small y exactly).
