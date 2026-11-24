@@ -309,7 +309,7 @@ void gemma_npu::Impl::_set_rope_rms_weights(int idx){
             w_rope_ptr += DH / 2;
             memcpy(w_rope_ptr, sin_buf_global.data(), DH / 2 * sizeof(bf16));
         }
-        this->rope_rms_weights[i].sync_to_device();
+        this->rope_rms_weights[i].sync_to_device(DH);
     }
 }
 
@@ -339,7 +339,7 @@ void gemma_npu::Impl::set_context_length(int L){
 
 buffer<bf16> gemma_npu::Impl::forward(int ids){
     this->embedding->forward(ids, this->x);
-    this->x.sync_to_device();
+    this->x.sync_to_device(this->x.size());
     if (!this->npu->is_preemption_enabled()){
         this->layers_run.execute();
         flm::npu::wait_for_completion(this->layers_run, "layers_run");
@@ -355,14 +355,14 @@ buffer<bf16> gemma_npu::Impl::forward(int ids){
         }
     }
 
-    this->x.sync_from_device();
+    this->x.sync_from_device(this->x.size());
     // buffer<bf16> logits = get_logits(this->x);
     this->_rms_norm(this->x, this->x, this->final_rms_weight);
-    this->x.sync_to_device();
+    this->x.sync_to_device(this->x.size());
     this->lm_head_run.start();
     this->set_context_length(this->current_context_length + 1);
     flm::npu::wait_for_completion(this->lm_head_run, "lm_head_run");
-    this->logits.sync_from_device();
+    this->logits.sync_from_device(this->logits.size());
     return this->logits_valid;
 }
 
@@ -691,11 +691,11 @@ buffer<bf16> gemma_npu::Impl::get_v_cache(int layer_idx, int idx){
 
 buffer<bf16> gemma_npu::Impl::get_logits(buffer<bf16>& predict){
     this->_rms_norm(this->x, predict, this->final_rms_weight);
-    this->x.sync_to_device();
-    this->logits.sync_to_device();
+    this->x.sync_to_device(this->x.size());
+    this->logits.sync_to_device(this->logits.size());
     this->lm_head_run.start();
     flm::npu::wait_for_completion(this->lm_head_run, "lm_head_run");
-    this->logits.sync_from_device();
+    this->logits.sync_from_device(this->logits.size());
     return this->logits_valid;
 }
 

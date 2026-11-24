@@ -116,3 +116,14 @@ probes"): lm_head in the layer design 9.84 -> 7.81 ms. Engine, same code, old vs
 byte-identical in the six scenarios above; decode, median of 3 alternating rounds of 128 tokens: 1K 53.74 -> 51.61
 ms, 4K 55.19 -> 53.06 ms (-2.13 ms, +4%). Since before lm_head moved into the layer xclbin: 1K 57.38 -> 51.61 ms
 (+11.2%), 4K 59.17 -> 53.06 ms (+11.5%).
+
+## Sized syncs in decode (2026-11-23)
+
+Every BO is padded to 1 MB (`buffer.hpp`), and a plain `sync_*_device()` flushes the whole BO. Decode used it for x
+(5 KB of data), the logits (527 KB) and the 34 rope tables (only the first DH = 256 values change a token), so each
+token flushed ~38 MB of cache lines. `forward`, `get_logits` and `_set_rope_rms_weights` now use the sized
+`sync_*_device(elems)` (which also has the fence ranged syncs need), sized to what the host writes or reads; the
+whole-buffer syncs at load and in prefill are unchanged. Engine at 454442f7 vs this one, same `layer_lm.xclbin`,
+Strix Halo, Performance mode: logits and tokens byte-identical in the six scenarios above; decode, median of 3
+alternating rounds of 128 tokens: 1K 50.15 -> 50.13 ms, 4K 50.86 -> 50.81 ms. Small because the rope syncs run
+while lm_head runs (hidden); it matters once that rebuild is no longer hidden.
