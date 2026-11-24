@@ -96,6 +96,9 @@ struct inkling2_launch {
     bool ready = false;
     bool tried = false;      //!< load() was attempted (the context does it once)
     std::string file;        //!< <xclbin folder>/inkling2.switches
+    /// @brief the switches to load: the cold one (the base app's own state), to the guest, back (the decode's:
+    ///        cold_dec, dec_then_lmh, lmh_then_dec)
+    std::vector<std::string> names = {"cold_mm", "mm_then_attn", "attn_then_mm"};
 
     /// @brief the switches are, or may still turn out to be, in use (load happens at the first pass)
     bool possible() const {
@@ -125,7 +128,7 @@ struct inkling2_launch {
     /// @brief one switch: aiebu ELF of the instruction stream, an ext kernel in the mm context, the packet BO
     void _add(const std::string& name, int arg, const char* txn, size_t txn_size, const char* pkt, size_t pkt_size,
               xrt::device* dev, xrt::hw_context* ctx, const std::string& kernel_name) {
-        if (name != "cold_mm" && name != "mm_then_attn" && name != "attn_then_mm") return;
+        if (std::find(names.begin(), names.end(), name) == names.end()) return;
         void* elf_buf = nullptr;
         const int elf_size = aiebu_assembler_get_elf(aiebu_assembler_buffer_type_blob_instr_transaction, txn, txn_size,
                                                      nullptr, 0, &elf_buf, nullptr, 0, "", "", nullptr, 0);
@@ -143,8 +146,8 @@ struct inkling2_launch {
     }
 
     void _finish(const std::string& from) {
-        for (const char* n : {"cold_mm", "mm_then_attn", "attn_then_mm"})
-            if (!sw.count(n)) throw std::runtime_error(std::string("inkling2_launch: missing switch ") + n + " in " + from);
+        for (const std::string& n : names)
+            if (!sw.count(n)) throw std::runtime_error("inkling2_launch: missing switch " + n + " in " + from);
         ready = true;
     }
 
@@ -218,7 +221,7 @@ struct inkling2_launch {
         // the last one (it sets the lanes the control packets rely on)
         {
             xrt::runlist rl = mgr->create_runlist();
-            rl.add(make_run("cold_mm"));
+            rl.add(make_run(names[0]));
             rl.add(make_run(to));
             for (xrt::run& g : guest) rl.add(g);
             rl.add(make_run(back));

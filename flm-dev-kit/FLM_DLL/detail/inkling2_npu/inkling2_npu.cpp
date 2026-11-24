@@ -8,6 +8,9 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
+#include <filesystem>
+#include <thread>
 #include <limits>
 #include <stdexcept>
 
@@ -66,7 +69,77 @@ std::unique_ptr<hybrid_engine_state> inkling2_npu::Impl::new_state() {
     return std::make_unique<hybrid_engine_state>(model::fixed_bytes(), model::row_bytes());
 }
 
+void inkling2_npu::Impl::make_fused() {
+    this->fused.reset();
+    this->on_device = false;
+    this->dev_ids.clear();
+    const char* on = std::getenv("INKLING2_NPU_DECODE");
+    if (!this->prefill || (on && std::strcmp(on, "0") == 0)) return;
+    std::vector<inkling2_fused::layer_src> src;
+    for (int il = 0; il < NL; il++) {
+        const auto l = this->prefill->device_layer(il);
+        src.push_back({l.w, l.o, l.gate_up, l.down});
+    }
+    try {
+        this->fused = std::make_unique<inkling2_fused>(
+            this->npu, utils::path_join(this->config.exec_path, "xclbins", this->config.model_name, "decode.xclbin"),
+            this->model.w(), src, this->MAX_L);
+        this->fused->sync_all = false;
+    } catch (const std::exception& e) {
+        header_print_r("FLM", std::string("inkling2: decode on the host (") + e.what() + ")");
+        return;
+    }
+    // the lm_head on the NPU, in the decode's hardware context (control-packet switches built with this decode.xclbin);
+    // INKLING2_NPU_LMH=0: on the host
+    const char* lmh = std::getenv("INKLING2_NPU_LMH");
+    const std::string sw = utils::path_join(this->config.exec_path, "xclbins", this->config.model_name, "inkling2_decode.switches");
+    if (!(lmh && std::strcmp(lmh, "0") == 0) && std::filesystem::exists(sw)) {
+        if (this->fused->enable_lm_head(this->npu, sw)) header_print("inkling2", "lm_head on the NPU (" << sw << ")");
+        else header_print_r("FLM", "inkling2: lm_head on the host (the decode switches did not load)");
+    }
+}
+
+void inkling2_npu::Impl::sync_host() {
+    if (!this->on_device) return;
+    this->fused->store_state(this->model);
+    this->on_device = false;
+    this->dev_ids.clear();
+}
+
+void inkling2_npu::Impl::decode_npu(int id) {
+    if (!this->on_device) {
+        this->fused->load_state(this->model);
+        this->on_device = true;
+        this->dev_ids.clear();
+    }
+    this->fused->begin_token(id);
+    if (!this->fused->run_token()) {
+        // the device is suspect: the host replays the device's tokens and runs this one; decode stays on the host
+        header_print_r("FLM", "inkling2: an NPU decode run did not complete; decode continues on the host");
+        this->fused.reset();
+        this->on_device = false;
+        if (!this->dev_ids.empty()) this->model.run(this->dev_ids.data(), (int)this->dev_ids.size(), nullptr);
+        this->dev_ids.clear();
+        this->model.run(&id, 1, this->logits_f32.data());
+        return;
+    }
+    if (this->fused->lm_on_npu()) {
+        this->fused->logits(this->logits_f32.data());
+    } else {
+        const uint16_t* x = this->fused->x_out();
+        this->fused_x.resize(D);
+        for (int c = 0; c < D; c++) {
+            const uint32_t u = (uint32_t)x[c] << 16;
+            std::memcpy(&this->fused_x[c], &u, 4);
+        }
+        lm_head(this->model.w(), this->fused_x.data(), this->logits_f32.data());
+    }
+    this->fused->end_token();
+    this->dev_ids.push_back(id);
+}
+
 int inkling2_npu::Impl::read_state(hybrid_engine_state& st, int kv_from) {
+    this->sync_host();
     const int length = this->model.position();
     kv_from = std::clamp(kv_from, 0, length);
     header_print_r("FLM", "Reading state at context length " + std::to_string(length) + ", K/V rows from " + std::to_string(kv_from));
@@ -110,6 +183,7 @@ bool inkling2_npu::Impl::state_fits(const hybrid_engine_state& st) const {
 }
 
 int inkling2_npu::Impl::write_state_kv(const hybrid_engine_state& st) {
+    this->sync_host();
     if (!this->state_fits(st)) {
         return -1;
     }
@@ -122,6 +196,7 @@ int inkling2_npu::Impl::write_state_kv(const hybrid_engine_state& st) {
 }
 
 int inkling2_npu::Impl::write_state(const hybrid_engine_state& st) {
+    this->sync_host();
     if (!this->state_fits(st)) {
         header_print_r("FLM", "No valid state to write");
         return -1;
@@ -143,32 +218,45 @@ inkling2_npu::~inkling2_npu() { delete this->_impl; }
 
 void inkling2_npu::load_weights(Q4NX& q4nx) {
     (void)q4nx;   // the host model maps model.q4nx itself: nothing is copied
-    this->_impl->model.load(utils::path_join(this->_impl->config.model_path, "model.q4nx"));
-    this->_impl->model.set_max_length(this->_impl->MAX_L);
-    // the prompt matmuls and attention on the NPU; INKLING2_NPU_PREFILL=0 keeps them on the host,
-    // INKLING2_NPU_MIN_T sets the shortest prompt step that goes to the NPU
-    const char* on = std::getenv("INKLING2_NPU_PREFILL");
-    if (!on || std::strcmp(on, "0") != 0) {
-        Impl* d = this->_impl;
-        d->prefill = std::make_unique<inkling2_prefill>(
-            d->npu, utils::path_join(d->config.exec_path, "xclbins", d->config.model_name, "mm_rtm2_glu.xclbin"));
-        if (const char* t = std::getenv("INKLING2_NPU_MIN_T")) d->prefill->min_T = std::max(1, std::atoi(t));
-        // INKLING2_NPU_ATTN=0 keeps the prompt attention on the host
-        const char* att = std::getenv("INKLING2_NPU_ATTN");
-        if (!att || std::strcmp(att, "0") != 0)
-            d->prefill->set_attention(
-                utils::path_join(d->config.exec_path, "xclbins", d->config.model_name, "prefill_attn.xclbin"),
-                utils::path_join(d->config.exec_path, "xclbins", d->config.model_name, "inkling2.switches"));
-        d->prefill->load(d->model.w_mut());
-        d->prefill->prewarm(std::min(inkling2_host::model::chunk(), d->MAX_L));
-        d->model.set_offload(d->prefill.get());
-    }
+    Impl* d = this->_impl;
+    // on a thread of its own (not std::async: MSVC runs it on a pool thread that lives on): the OpenMP pool the
+    // load grows ends with it (inkling2_host.cpp, use_core_threads)
+    std::exception_ptr err;
+    std::thread([d, &err] {
+        try {
+            d->model.load(utils::path_join(d->config.model_path, "model.q4nx"));
+            d->model.set_max_length(d->MAX_L);
+            // the prompt matmuls and attention on the NPU; INKLING2_NPU_PREFILL=0 keeps them on the host,
+            // INKLING2_NPU_MIN_T sets the shortest prompt step that goes to the NPU
+            const char* on = std::getenv("INKLING2_NPU_PREFILL");
+            if (on && std::strcmp(on, "0") == 0) return;
+            d->prefill = std::make_unique<inkling2_prefill>(
+                d->npu, utils::path_join(d->config.exec_path, "xclbins", d->config.model_name, "mm_rtm2_glu.xclbin"));
+            if (const char* t = std::getenv("INKLING2_NPU_MIN_T")) d->prefill->min_T = std::max(1, std::atoi(t));
+            // INKLING2_NPU_ATTN=0 keeps the prompt attention on the host
+            const char* att = std::getenv("INKLING2_NPU_ATTN");
+            if (!att || std::strcmp(att, "0") != 0)
+                d->prefill->set_attention(
+                    utils::path_join(d->config.exec_path, "xclbins", d->config.model_name, "prefill_attn.xclbin"),
+                    utils::path_join(d->config.exec_path, "xclbins", d->config.model_name, "inkling2.switches"));
+            d->prefill->load(d->model.w_mut());
+            d->prefill->prewarm(std::min(inkling2_host::model::chunk(), d->MAX_L));
+            d->model.set_offload(d->prefill.get());
+            d->make_fused();
+        } catch (...) {
+            err = std::current_exception();
+        }
+    }).join();
+    if (err) std::rethrow_exception(err);
     this->clear_context();
 }
 
 buffer<bf16> inkling2_npu::forward(int ids) {
     Impl* d = this->_impl;
-    d->compute.call([d, ids] { d->model.run(&ids, 1, d->logits_f32.data()); });
+    d->compute.call([d, ids] {
+        if (d->fused) d->decode_npu(ids);
+        else d->model.run(&ids, 1, d->logits_f32.data());
+    });
     return this->_impl->publish_logits();
 }
 
@@ -180,11 +268,16 @@ buffer<bf16> inkling2_npu::prefill(std::vector<int>& ids, void* payload) {
     Impl* d = this->_impl;
     // warm switches need the array to themselves from the first layer to the last (inkling2_launch.hpp)
     inkling2_array_lock array(d->prefill && d->prefill->switched());
-    d->compute.call([d, &ids] { d->model.run(ids.data(), (int)ids.size(), d->logits_f32.data()); });
+    d->compute.call([d, &ids] {
+        d->sync_host();
+        d->model.run(ids.data(), (int)ids.size(), d->logits_f32.data());
+    });
     return this->_impl->publish_logits();
 }
 
 void inkling2_npu::set_context_length(int L) {
+    if (L == 0) this->_impl->on_device = false;   // nothing of the device's tokens is kept
+    this->_impl->sync_host();
     if (L == 0) {
         this->_impl->model.reset();
     }
@@ -199,12 +292,14 @@ void inkling2_npu::clear_context() {
 }
 
 buffer<bf16> inkling2_npu::get_k_cache(int layer_idx, int idx) {
+    this->_impl->sync_host();
     buffer<bf16> row(KVD);
     this->_impl->model.slot_row(layer_idx, idx, false, reinterpret_cast<u16*>(row.data()));
     return row;
 }
 
 buffer<bf16> inkling2_npu::get_v_cache(int layer_idx, int idx) {
+    this->_impl->sync_host();
     buffer<bf16> row(KVD);
     this->_impl->model.slot_row(layer_idx, idx, true, reinterpret_cast<u16*>(row.data()));
     return row;
@@ -213,11 +308,16 @@ buffer<bf16> inkling2_npu::get_v_cache(int layer_idx, int idx) {
 void inkling2_npu::update_max_length(uint32_t MAX_L) {
     const nlohmann::json& t = this->_impl->config.sub("text_config");
     const int model_max = cfg_get<int>(t, "model_max_length", 1 << 20);
+    this->_impl->sync_host();
     this->_impl->MAX_L = std::clamp((int)std::min<uint32_t>(MAX_L, std::numeric_limits<int>::max()), 1, model_max);
     this->_impl->model.set_max_length(this->_impl->MAX_L);
+    // the device caches are sized for the context length
+    this->_impl->make_fused();
 }
 
-int inkling2_npu::get_current_context_length() { return this->_impl->model.position(); }
+int inkling2_npu::get_current_context_length() {
+    return this->_impl->on_device ? this->_impl->fused->position() : this->_impl->model.position();
+}
 
 int inkling2_npu::checkpoint() {
     // the single legacy copy keeps no global K/V rows: its caller continues from the same cache

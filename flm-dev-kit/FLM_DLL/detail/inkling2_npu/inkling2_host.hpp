@@ -307,10 +307,28 @@ public:
                            const float* G, const bf16_rows* Gb, float* O, const std::function<void()>& packed) {
         return false;
     }
+    /// \brief decode (one token): how many of a token's TOPK experts the device takes (0: none); the host runs the rest
+    ///        meanwhile
+    virtual int dec_experts() const { return 0; }
+    /// \brief start experts ex[0 .. n) of layer il on the device: kind 0 gate_up of in = x [D], kind 1 down of
+    ///        in = [n][FF_PAD] activations
+    virtual void dec_start(int il, int kind, const int* ex, int n, const float* in) {}
+    /// \brief wait for dec_start: kind 0 out [n][2 FF] (gate, then up), kind 1 out [n][D]
+    virtual void dec_wait(float* out) {}
 };
 
 /// \brief the model.q4nx tensors, located in place (safetensors container)
 class q4nx_file;
+
+/// \brief DIAG: set, it sees the values of every one-token layer application (cache slot, tag, n floats):
+///        in, nrm, q, k, o, y, res, xf, sel (ids, then weights), moe, out
+extern std::function<void(int slot, const char* tag, const float* x, int n)> decode_trace;
+
+/// \brief one token of a loop pass input: rms_norm(control(x, message m)) * g (the NPU decode's controller step)
+void control_norm(const float* x, const float* m, const loop_ctrl& c, const float* g, float* out);
+
+/// \brief logits[VOCAB] = softcap(lm_head . x) of one final-normed token
+void lm_head(const weights& w, const float* x, float* logits);
 
 /// \brief the whole model on the host, one sequence
 class model {
@@ -351,6 +369,10 @@ public:
     void write_rows(int j, int from, int n, const u16* k, const u16* v);
     /// \brief K or V of one position in one cache slot (global positions any; SWA the last 2048)
     void slot_row(int slot, int pos, bool v, u16* dst) const;
+    void set_slot_row(int slot, int pos, bool v, const u16* src);
+    /// \brief the convolution state of one cache slot: [NCONV - 1][CONV_CH], oldest first
+    void slot_conv(int slot, float* dst) const;
+    void set_slot_conv(int slot, const float* src);
 
     /// \brief run n tokens (any n; split into steps of at most CHUNK)
     /// \param logits if not null, [VOCAB] logits of the last token

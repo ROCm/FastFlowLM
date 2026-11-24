@@ -36,6 +36,8 @@
 
 namespace inkling2_host {
 
+std::function<void(int, const char*, const float*, int)> decode_trace;
+
 // =============================================================================
 // small helpers
 // =============================================================================
@@ -88,11 +90,17 @@ inline void l2_clip(float* x, int n, float thr) {
 
 inline float sigmoid(float x) { return 1.0f / (1.0f + std::exp(-x)); }
 
-/// \brief decode: one thread per physical core (logical / 2) unless OMP_NUM_THREADS is set: SMT siblings
-///        compete for the same load ports, 32 threads decode ~25% slower than 16 on a 16-core part.
-///        Prompt steps (wide): every logical core, the compute-bound host parts gain ~6% at 2k tokens.
-///        Set for the calling thread only (nthreads-var is per thread), not for other engines.
-void use_core_threads(bool wide) {
+/// \brief one thread per physical core (logical / 2) unless OMP_NUM_THREADS is set: SMT siblings compete for the
+///        same load ports, 32 threads decode ~25% slower than 16 on a 16-core part. Set for the calling thread only
+///        (nthreads-var is per thread), not for other engines.
+/// \note  libgomp spins between parallel regions only while it manages no more threads than there are logical
+///        CPUs; past that its waiters sleep on a futex after a short spin. The decode wants the long spin (a token's
+///        hundreds of short regions would pay a wake-up each: ~80 instead of ~59 ms per token), a prompt the short
+///        one (spinning waiters take the cores the NPU glue and the other half compute on: 2k tokens ~830 instead
+///        of ~1100 tokens/s, 137 tokens ~155 instead of ~185). A pool lives as long as its thread and never
+///        shrinks, so the engine loads on a thread that exits, and a prompt starts the helper with a pool of every
+///        logical CPU (wide), which pushes libgomp past the limit for the prompt only: the helper exits after it.
+void use_core_threads(bool wide = false) {
 #ifdef _OPENMP
     static const int env = [] { return std::getenv("OMP_NUM_THREADS") ? omp_get_max_threads() : 0; }();
     const int all = std::max(1, (int)std::thread::hardware_concurrency());
@@ -376,6 +384,77 @@ void decode_block_npu(float* tile, const u8* blk) {
     decode_block(tile, orig, qfmt::q4k);
 }
 
+/// \brief y[t][rb rows] = x[t] . W for NT tokens straight from a row block of q4k_to_npu blocks: per 8-row quarter
+///        hp (row 16 H + 2 r + par) the nibbles [r][k] of 8 columns are 4 vectors of 2 rows x 8 columns, dequantized in
+///        registers and multiplied by x[8 kt .. 8 kt + 8] twice; no reshuffle, no fp32 tile
+constexpr int NPU_DIRECT_T = 8;   // up to this many tokens qmm reads NPU-order blocks directly
+
+template <int NT>
+void mm_npu_rows(float* y, int ldy, const qmat& w, int rb, const float* x, int ldx) {
+    const __m512i dup[4] = {_mm512_set_epi32(1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0),
+                            _mm512_set_epi32(3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2),
+                            _mm512_set_epi32(5, 5, 5, 5, 5, 5, 5, 5, 4, 4, 4, 4, 4, 4, 4, 4),
+                            _mm512_set_epi32(7, 7, 7, 7, 7, 7, 7, 7, 6, 6, 6, 6, 6, 6, 6, 6)};
+    const __m128i low4 = _mm_set1_epi8(0x0F);
+    for (int hp = 0; hp < 4; hp++) {
+        __m512 acc[NT][4];
+        for (int t = 0; t < NT; t++)
+            for (int z = 0; z < 4; z++) acc[t][z] = _mm512_setzero_ps();
+        for (int cb = 0; cb < w.col_blocks(); cb++) {
+            const u8* blk = w.block(rb, cb);
+            const __m512 S = _mm512_castps256_ps512(_mm256_castsi256_ps(_mm256_slli_epi32(
+                _mm256_cvtepu16_epi32(_mm_loadu_si128(reinterpret_cast<const __m128i*>(blk + 4608 + 16 * hp))), 16)));
+            const __m512 M = _mm512_castps256_ps512(_mm256_castsi256_ps(_mm256_slli_epi32(
+                _mm256_cvtepu16_epi32(_mm_loadu_si128(reinterpret_cast<const __m128i*>(blk + 4672 + 16 * hp))), 16)));
+            const u8* q = blk + 512 + 2048 * (hp >> 1) + 1024 * (hp & 1);
+            const float* xc = x + (size_t)cb * QCOLS;
+            for (int g = 0; g < 8; g++) {
+                const __m512 s8 = _mm512_cvtepi32_ps(_mm512_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(blk + 64 * hp + 8 * g))));
+                const __m512 m8 = _mm512_cvtepi32_ps(_mm512_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(blk + 256 + 64 * hp + 8 * g))));
+                const __m512 scr = _mm512_mul_ps(S, s8), mnr = _mm512_mul_ps(M, m8);   // lanes 0-7: rows r
+                __m512 sc[4], mn[4];
+                for (int z = 0; z < 4; z++) {
+                    sc[z] = _mm512_permutexvar_ps(dup[z], scr);
+                    mn[z] = _mm512_permutexvar_ps(dup[z], mnr);
+                }
+                for (int kt = 4 * g; kt < 4 * g + 4; kt++) {
+                    __m512 wv[4];
+                    for (int hf = 0; hf < 2; hf++) {
+                        const __m128i b = _mm_loadu_si128(reinterpret_cast<const __m128i*>(q + 32 * kt + 16 * hf));
+                        const __m128i lo = _mm_and_si128(b, low4), hi = _mm_and_si128(_mm_srli_epi16(b, 4), low4);
+                        // nibble i = r * 8 + k, low nibble first
+                        wv[2 * hf] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepu8_epi32(_mm_unpacklo_epi8(lo, hi))), sc[2 * hf], mn[2 * hf]);
+                        wv[2 * hf + 1] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(_mm512_cvtepu8_epi32(_mm_unpackhi_epi8(lo, hi))), sc[2 * hf + 1], mn[2 * hf + 1]);
+                    }
+                    for (int t = 0; t < NT; t++) {
+                        const __m512 xv = _mm512_broadcast_f32x8(_mm256_loadu_ps(xc + (size_t)t * ldx + 8 * kt));
+                        for (int z = 0; z < 4; z++) acc[t][z] = _mm512_fmadd_ps(wv[z], xv, acc[t][z]);
+                    }
+                }
+            }
+        }
+        for (int t = 0; t < NT; t++)
+            for (int z = 0; z < 4; z++) {
+                // the 256-bit halves are rows 2 z and 2 z + 1
+                float* yr = y + (size_t)t * ldy + (size_t)rb * QROWS + 16 * (hp >> 1) + (hp & 1);
+                yr[4 * z] = _mm512_mask_reduce_add_ps(0x00FF, acc[t][z]);
+                yr[4 * z + 2] = _mm512_mask_reduce_add_ps(0xFF00, acc[t][z]);
+            }
+    }
+}
+
+/// \brief the grouped Q4_K row block rb of w for T tokens, NT at a time
+void mm_npu(float* y, int ldy, const qmat& w, int rb, const float* x, int ldx, int T) {
+    int t = 0;
+    for (; t + 4 <= T; t += 4) mm_npu_rows<4>(y + (size_t)t * ldy, ldy, w, rb, x + (size_t)t * ldx, ldx);
+    switch (T - t) {
+        case 3: mm_npu_rows<3>(y + (size_t)t * ldy, ldy, w, rb, x + (size_t)t * ldx, ldx); break;
+        case 2: mm_npu_rows<2>(y + (size_t)t * ldy, ldy, w, rb, x + (size_t)t * ldx, ldx); break;
+        case 1: mm_npu_rows<1>(y + (size_t)t * ldy, ldy, w, rb, x + (size_t)t * ldx, ldx); break;
+        default: break;
+    }
+}
+
 /// \brief y[i][0 .. 31] = x[i] . tile, NT tokens
 template <int NT>
 inline void mm_rows(float* y, int ldy, const float* tile, int K, const float* x, int ldx) {
@@ -440,6 +519,11 @@ void qmm(const std::vector<mm_job>& jobs) {
         for (int i = 0; i < (int)work.size(); i++) {
             const mm_job& jb = jobs[work[i].first];
             const int rb = work[i].second;
+            // NPU-order blocks, few tokens (decode, short prompts): straight from the blocks
+            if (jb.w.grouped && jb.w.fmt == qfmt::q4k && jb.T <= NPU_DIRECT_T) {
+                mm_npu(jb.y, jb.ldy, jb.w, rb, jb.x, jb.ldx, jb.T);
+                continue;
+            }
             for (int cb = 0; cb < jb.w.col_blocks(); cb++)
                 if (jb.w.grouped && jb.w.fmt == qfmt::q4k)
                     decode_block_npu(tile.data() + (size_t)cb * QCOLS * QROWS, jb.w.block(rb, cb));
@@ -864,6 +948,8 @@ void attention(float* O, const float* Q, const float* R, const float* sinks, con
         }
 }
 
+thread_local int trace_slot = -1;   // the slot decode_trace reports from moe()
+
 /// \brief routed experts: out[T][D] = sum over the top 8 of w * down(situ(gate_up x))
 void moe(float* out, const float* x, int T, const layer_weights& L, int il, mm_offload* offload) {
     // router (fp32), sigmoid, top 8 on prob + bias, weights = normalized probs * ROUTE_SCALE
@@ -889,6 +975,11 @@ void moe(float* out, const float* x, int T, const layer_weights& L, int il, mm_o
             wsel[(size_t)t * TOPK + k] = p[idx[k]] / (sum + 1e-20f) * ROUTE_SCALE;
         }
     }
+    if (decode_trace && T == 1) {
+        float sw[2 * TOPK];
+        for (int k = 0; k < TOPK; k++) { sw[k] = (float)sel[k]; sw[TOPK + k] = wsel[k]; }
+        decode_trace(trace_slot, "sel", sw, 2 * TOPK);
+    }
     // group the (token, k) pairs by expert
     std::vector<int> count(NE, 0), start(NE + 1, 0);
     for (int i = 0; i < T * TOPK; i++) count[sel[i]]++;
@@ -902,6 +993,46 @@ void moe(float* out, const float* x, int T, const layer_weights& L, int il, mm_o
         token_of[r] = i / TOPK;
     }
     prof_lap(tp, P_ROUTER);
+    if (T == 1 && offload && offload->dec_experts() > 0) {
+        // the first nd of the token's experts on the device, the rest on the host meanwhile
+        const int nd = std::min(offload->dec_experts(), TOPK);
+        const int* ex = sel.data();
+        static thread_local std::vector<float> GU_buf((size_t)TOPK * 2 * FF), A_buf((size_t)TOPK * FF_PAD, 0.0f),
+            Z_buf((size_t)TOPK * D);
+        float* GU = GU_buf.data();
+        float* A = A_buf.data();
+        float* Z = Z_buf.data();
+        constexpr int rb_per_expert = D / QROWS;
+        auto act = [&](int k0, int k1) {
+            #pragma omp parallel for schedule(static)
+            for (int i = k0 * (FF / 16); i < k1 * (FF / 16); i++) {
+                const int k = i / (FF / 16), c = i % (FF / 16) * 16;
+                const float* gu = GU + (size_t)k * 2 * FF;
+                _mm512_storeu_ps(A + (size_t)k * FF_PAD + c, situ16(_mm512_loadu_ps(gu + c), _mm512_loadu_ps(gu + FF + c)));
+            }
+        };
+        offload->dec_start(il, 0, ex, nd, x);
+        std::vector<mm_job> jobs;
+        for (int k = nd; k < TOPK; k++)
+            jobs.push_back({L.gate_up.rows(ex[k] * rb_per_expert, 2 * FF), x, D, 1, GU + (size_t)k * 2 * FF, 2 * FF});
+        qmm(jobs);
+        offload->dec_wait(GU);
+        act(0, nd);
+        offload->dec_start(il, 1, ex, nd, A);
+        act(nd, TOPK);
+        jobs.clear();
+        for (int k = nd; k < TOPK; k++)
+            jobs.push_back({L.down.rows(ex[k] * rb_per_expert, D), A + (size_t)k * FF_PAD, FF_PAD, 1, Z + (size_t)k * D, D});
+        qmm(jobs);
+        offload->dec_wait(Z);
+        for (int c = 0; c < D; c += 16) {
+            __m512 o = _mm512_setzero_ps();
+            for (int k = 0; k < TOPK; k++) o = _mm512_fmadd_ps(_mm512_set1_ps(wsel[k]), _mm512_loadu_ps(Z + (size_t)k * D + c), o);
+            _mm512_storeu_ps(out + c, o);
+        }
+        prof_lap(tp, P_EXPERT);
+        return;
+    }
     if (offload && offload->experts(il, x, T, token_of.data(), count.data(), start.data(), slot_of.data(), wsel.data(), out)) {
         prof_lap(tp, P_EXPERT);
         return;
@@ -997,10 +1128,19 @@ private:
     std::thread th;
 };
 
-helper_thread& helper() {
-    static helper_thread h;
+/// \brief the calling (compute) thread's helper, started on first use; release_helper() ends it and its OpenMP pool
+std::unique_ptr<helper_thread>& helper_slot() {
+    thread_local std::unique_ptr<helper_thread> h;
     return h;
 }
+
+helper_thread& helper() {
+    std::unique_ptr<helper_thread>& h = helper_slot();
+    if (!h) h = std::make_unique<helper_thread>();
+    return *h;
+}
+
+void release_helper() { helper_slot().reset(); }
 
 /// \brief prompt steps of at least this many tokens split the attention side of a layer in two halves
 ///        (INKLING2_SPLIT=0: off): the host works on one half while the NPU runs the other's attention
@@ -1020,6 +1160,8 @@ act layer(const layer_weights& L, int il, int ip, int slot, model::state& s, int
     const bool global = is_global(il);
     const size_t TD = (size_t)T * D;
     const act inpSA = cur;
+    const bool tr = decode_trace && T == 1;
+    if (tr) decode_trace(slot, "in", cur->data(), D);
     const bool split = s.offload && T >= split_min();
     auto t_all = std::chrono::steady_clock::now();
     // the first layer of a block starts a new residual stream; the old one joins the blocks (the FFN mix sees it)
@@ -1106,6 +1248,7 @@ act layer(const layer_weights& L, int il, int ip, int slot, model::state& s, int
         const float* xq = nrm->data();
         const float* xk = three ? xq + ND : xq;
         const float* xv = three ? xq + 2 * ND : xq;
+        if (tr) decode_trace(slot, "nrm", xq, (three ? 3 : 1) * D);
         lap(P_NORM);
 
         // projections
@@ -1136,6 +1279,7 @@ act layer(const layer_weights& L, int il, int ip, int slot, model::state& s, int
             dense_mm(dv.data(), L.v_conv_proj, NKV * NCONV, D, xv, n);
         }
         lap(P_X_SINK);
+        if (tr && !npu_in) { decode_trace(slot, "q", Q.data(), QD); decode_trace(slot, "k", K.data(), KVD); }
         wait(O_CONV);
         convolve(K.data(), n, KVD, L.k_conv, global ? dk.data() : nullptr, cs + CONV_K, npu_in ? &pv[1] : nullptr);
         convolve(V.data(), n, KVD, L.v_conv, global ? dv.data() : nullptr, cs + CONV_V, npu_in ? &pv[2] : nullptr);
@@ -1216,6 +1360,7 @@ act layer(const layer_weights& L, int il, int ip, int slot, model::state& s, int
             }
         }
         lap(P_X_GATE);
+        if (tr) decode_trace(slot, "o", O.data(), QD);
         float* yr = y->data() + (size_t)t0 * D;
         bf16_rows yv;
         bool npu_out;
@@ -1224,6 +1369,7 @@ act layer(const layer_weights& L, int il, int ip, int slot, model::state& s, int
         }
         if (!npu_out) qmm({{L.o, O.data(), QD, n, yr, D}});
         lap(P_OPROJ);
+        if (tr && !npu_out) decode_trace(slot, "y", yr, D);
         wait(O_ACONV);
         convolve(yr, n, D, L.attn_conv, nullptr, cs + CONV_ATTN, npu_out ? &yv : nullptr);
         signal(O_ACONV);
@@ -1235,6 +1381,7 @@ act layer(const layer_weights& L, int il, int ip, int slot, model::state& s, int
             for (size_t i = 0; i < ND; i++) r[i] = a[i] + yr[i];
         }
         lap(P_X_RES);
+        if (tr) decode_trace(slot, "res", res->data(), D);
 
         // the FFN input of these tokens
         act x = mix(fblocks, res, L.ffn_query, 1, n, t0);
@@ -1244,6 +1391,7 @@ act layer(const layer_weights& L, int il, int ip, int slot, model::state& s, int
         float* xr = xf->data() + (size_t)t0 * D;
         #pragma omp parallel for schedule(static)
         for (int t = 0; t < n; t++) rms_norm(xr + (size_t)t * D, x->data() + (size_t)t * D, L.ffn_norm, D);
+        if (tr) decode_trace(slot, "xf", xr, D);
         lap(P_NORM);
     };
 
@@ -1295,17 +1443,32 @@ act layer(const layer_weights& L, int il, int ip, int slot, model::state& s, int
 
     // MoE
     act f = make_act(TD);
+    trace_slot = slot;
     moe(f->data(), xf->data(), T, L, il, s.offload);
+    if (tr) decode_trace(slot, "moe", f->data(), D);
     tp = std::chrono::steady_clock::now();
     convolve(f->data(), T, D, L.ffn_conv, nullptr, cs + CONV_FFN);
     prof_lap(tp, P_CONV);
     #pragma omp parallel for schedule(static)
     for (size_t i = 0; i < TD; i++) (*f)[i] += (*res)[i];
     prof_lap(tp, P_X_RES);
+    if (tr) decode_trace(slot, "out", f->data(), D);
     return f;
 }
 
 }  // namespace
+
+void control_norm(const float* x, const float* m, const loop_ctrl& c, const float* g, float* out) {
+    const act y = control(x, m, c, 1);
+    rms_norm(out, y->data(), g, D);
+}
+
+void lm_head(const weights& w, const float* x, float* logits) {
+    std::vector<float> full(VOCAB_PAD);
+    qmm({{w.lm_head, x, D, 1, full.data(), VOCAB_PAD}});
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < VOCAB; i++) logits[i] = SOFTCAP * std::tanh(full[i] / SOFTCAP);
+}
 
 // =============================================================================
 // model
@@ -1464,8 +1627,20 @@ void model::write_rows(int j, int from, int n, const u16* k, const u16* v) {
     memcpy(s_->v[slot].data() + (size_t)from * KVD, v, (size_t)n * KVD * sizeof(u16));
 }
 
+void model::slot_conv(int slot, float* dst) const {
+    memcpy(dst, s_->conv.data() + (size_t)slot * (NCONV - 1) * CONV_CH, (size_t)(NCONV - 1) * CONV_CH * sizeof(float));
+}
+
 void model::slot_row(int slot, int pos, bool v, u16* dst) const {
     memcpy(dst, (v ? s_->v : s_->k)[slot].data() + s_->row(slot, pos), KVD * sizeof(u16));
+}
+
+void model::set_slot_row(int slot, int pos, bool v, const u16* src) {
+    memcpy((v ? s_->v : s_->k)[slot].data() + s_->row(slot, pos), src, KVD * sizeof(u16));
+}
+
+void model::set_slot_conv(int slot, const float* src) {
+    memcpy(s_->conv.data() + (size_t)slot * (NCONV - 1) * CONV_CH, src, (size_t)(NCONV - 1) * CONV_CH * sizeof(float));
 }
 
 int model::chunk() {
@@ -1481,14 +1656,24 @@ void model::run(const int* ids, int n, float* logits) {
         throw std::runtime_error("inkling2: " + std::to_string(s_->pos + n) + " tokens exceed the context length " +
                                  std::to_string(s_->max_len));
     const int chunk = model::chunk();
+    // a prompt: the helper's full pool keeps libgomp's waiters to the short spin, it ends with the prompt
+    // (use_core_threads)
+    if (n >= 64)
+        helper().submit([] {
+            use_core_threads(true);
+            #pragma omp parallel
+            {
+            }
+        });
     for (int i = 0; i < n; i += chunk) {
         const int T = std::min(chunk, n - i);
         step(ids + i, T, i + T == n ? logits : nullptr);
     }
+    release_helper();
 }
 
 void model::step(const int* ids, int T, float* logits) {
-    use_core_threads(T >= 64);
+    use_core_threads();
     const weights& w = *w_;
     state& s = *s_;
     const int p0 = s.pos;
@@ -1548,10 +1733,8 @@ void model::step(const int* ids, int T, float* logits) {
     memcpy(last->data(), cur->data() + (size_t)(T - 1) * D, D * sizeof(float));
     act x = mix(last_blocks, last, w.final_query, 1, 1);
     rms_norm(x->data(), x->data(), w.norm, D);
-    std::vector<float> full(VOCAB_PAD);
-    qmm({{w.lm_head, x->data(), D, 1, full.data(), VOCAB_PAD}});
-    #pragma omp parallel for schedule(static)
-    for (int i = 0; i < VOCAB; i++) logits[i] = SOFTCAP * std::tanh(full[i] / SOFTCAP);
+    if (decode_trace && T == 1) decode_trace(NSLOT, "final", x->data(), D);
+    lm_head(w, x->data(), logits);
     prof_lap(tp, P_LMHEAD);
 }
 

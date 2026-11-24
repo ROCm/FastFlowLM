@@ -15,6 +15,7 @@
 #include <tuple>
 #include <vector>
 
+#include "inkling2_decode.hpp"
 #include "inkling2_host.hpp"
 #include "npu_utils/npu_utils.hpp"
 #include "inkling2_launch.hpp"
@@ -57,6 +58,20 @@ public:
     ///        on different lanes pack and unpack at the same time and take turns on the NPU
     void set_lane(int lane) override;
 
+    /// \brief layer il's weight buffer and the byte offsets of o, gate_up and down in it (attention at 0)
+    struct dev_layer {
+        buffer<uint8_t>* w;
+        size_t o, gate_up, down;
+    };
+    dev_layer device_layer(int il) { return {&this->layers[il].w, this->layers[il].o, this->layers[il].gate_up, this->layers[il].down}; }
+
+    /// \brief decode: the first n of a token's experts on the NPU (decode.xclbin), the rest on the host meanwhile; n 0
+    ///        keeps them all on the host
+    void set_decode(const std::string& xclbin, int n);
+    int dec_experts() const override { return this->dec ? this->dec_n : 0; }
+    void dec_start(int il, int kind, const int* ex, int n, const float* in) override;
+    void dec_wait(float* out) override { this->dec->wait(out); }
+
 private:
     struct layer_buf {
         buffer<uint8_t> w;
@@ -93,6 +108,8 @@ private:
     npu_app_manager* att_mgr = nullptr;   // the context attention runs in (mgr with the switches)
     std::map<std::tuple<int, int, int, int>, npu_app> att_apps;
     inkling2_launch ll;
+    std::unique_ptr<inkling2_decode> dec;
+    int dec_n = 0;
 
     /// \brief the dispatch of rows x Din (weights of width Kw) -> Npad, by its geometry
     npu_app& app(uint32_t rows, uint32_t Din, uint32_t Kw, uint32_t Npad);

@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "models/inkling2/inkling2_npu.hpp"
+#include "inkling2_fused.hpp"
 #include "inkling2_host.hpp"
 #include "inkling2_prefill.hpp"
 
@@ -83,6 +84,12 @@ struct inkling2_npu::Impl {
 
     inkling2_host::model model;
     std::unique_ptr<inkling2_prefill> prefill;   // the prompt matmuls on the NPU (null: on the host)
+    // decode on the NPU (null: on the host). The host model keeps the sequence state; the first NPU token loads it
+    // to the device, and the tokens the NPU runs go back to the host (sync_host) before anything else reads it.
+    std::unique_ptr<inkling2_fused> fused;
+    bool on_device = false;       // the device has the newest state (the host's is behind by dev_ids)
+    std::vector<int> dev_ids;     // the tokens run on the device since its state was the host's
+    std::vector<float> fused_x;   // the last token's final-normed x
     std::vector<float> logits_f32;
     buffer<bf16> logits;   // vocab_size; forward() / prefill() return a view of it
 
@@ -99,4 +106,11 @@ struct inkling2_npu::Impl {
     int write_state(const hybrid_engine_state& st);
     int write_state_kv(const hybrid_engine_state& st);
     bool state_fits(const hybrid_engine_state& st) const;
+    /// \brief one decode token on the NPU (host fallback if a run fails): logits_f32
+    void decode_npu(int id);
+    /// \brief the device's tokens back into the host model (call before the host model is read or changed)
+    void sync_host();
+    /// \brief (re)create the NPU decode for MAX_L (needs the prefill's weight buffers); INKLING2_NPU_DECODE=0, or a
+    ///        context too long for its buffers, leaves decode on the host
+    void make_fused();
 };

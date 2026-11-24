@@ -99,6 +99,7 @@ set_target_properties(inkling2_npu PROPERTIES
 # ———————————————————————————————————————————————
 target_include_directories(inkling2_npu PUBLIC
     ${CMAKE_SOURCE_DIR}/../../include
+    ${CMAKE_SOURCE_DIR}/../../../aie2p-launchlib/launchlib/include
     ${XRT_INCLUDE_DIR} ${HRX_INCLUDE_DIRS} ${FLM_BOOST_INCLUDE_DIR}
 )
 

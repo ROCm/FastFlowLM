@@ -43,6 +43,8 @@ CXX_FLAGS += -mavx512bf16
 CXX_FLAGS += -fmax-errors=1
 CXX_FLAGS += -I../../include
 CXX_FLAGS += -I../q4nx
+# the instruction-stream ELF writer (launch::txn::to_elf), header-only
+CXX_FLAGS += -I../../../aie2p-launchlib/launchlib/include
 ifeq ($(FLM_USE_HRX),1)
 include ../../hrx.mk
 CXX_FLAGS += $(HRX_INC)
@@ -112,6 +114,18 @@ harness: all
 		-Wl,-rpath,'$$ORIGIN/../lib' -Wl,-rpath,'$$ORIGIN/../../lib'
 	$(CXX) $(CXX_FLAGS) -o $(BIN_DIR)/inkling2_host_run tools/inkling2_host_run.cpp inkling2_host.cpp
 
+# tools/inkling2_fused_probe.cpp: NPU decode (inkling2_fused) step by step against the host decode trace
+fprobe: all
+	$(CXX) $(CXX_FLAGS) -o $(BIN_DIR)/i2fprobe tools/inkling2_fused_probe.cpp \
+		-L$(LIB_DIR) -L$(FINAL_LIB_DIR) -linkling2_npu $(LDFLAGS) \
+		-Wl,-rpath,'$$ORIGIN/../lib' -Wl,-rpath,'$$ORIGIN/../../lib'
+
+# tools/inkling2_lm_head_probe.cpp: the NPU lm_head vs the host's on real weights
+lmprobe: all
+	$(CXX) $(CXX_FLAGS) -o $(BIN_DIR)/i2lmprobe tools/inkling2_lm_head_probe.cpp \
+		-L$(LIB_DIR) -L$(FINAL_LIB_DIR) -linkling2_npu $(LDFLAGS) \
+		-Wl,-rpath,'$$ORIGIN/../lib' -Wl,-rpath,'$$ORIGIN/../../lib'
+
 # tools/inkling2_mm_probe.cpp: the prefill matmul layout on real weights vs an fp32 reference
 probe: directories
 	$(CXX) $(CXX_FLAGS) -o $(BIN_DIR)/inkling2_mm_probe tools/inkling2_mm_probe.cpp inkling2_host.cpp $(LDFLAGS)
@@ -120,7 +134,7 @@ clean:
 	rm -rf $(BUILD_DIR)
 
 -include $(DEPS)
-.PHONY: all clean directories harness probe
+.PHONY: all clean directories harness probe fprobe lmprobe
 
 else
 
