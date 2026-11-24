@@ -1,0 +1,1339 @@
+<!--
+  Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+-->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gated_attention_verify — Dataflow &amp; Layout</title>
+<style>
+  :root{
+    --bg:#12141a; --panel:#191c24; --panel2:#1f2430; --ink:#dfe4ee; --dim:#98a2b8;
+    --line:#2c3242; --acc:#79b8ff; --acc2:#ffd479; --ok:#7ee787; --warn:#ff9d7a; --bad:#ff7b72;
+    --proj:#2b3b57; --rms:#3a2f52; --attn:#14405a; --mix:#4a3a1e; --mt:#22323a; --it:#31262e; --free:#20232b;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  code,pre,.mono{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  code{background:#0d0f14;border:1px solid var(--line);border-radius:4px;padding:.06em .35em;font-size:.88em;color:#cfe3ff}
+  pre{background:#0d0f14;border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow:auto;
+      font-size:12.5px;line-height:1.5;color:#cbd5e6}
+  a{color:var(--acc);text-decoration:none} a:hover{text-decoration:underline}
+
+  .wrap{display:flex;align-items:flex-start;max-width:1680px;margin:0 auto}
+  nav{position:sticky;top:0;flex:0 0 292px;height:100vh;overflow:auto;padding:22px 14px 60px 22px;
+      border-right:1px solid var(--line);background:#101219;font-size:13px}
+  nav h2{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);margin:18px 0 7px}
+  nav a{display:block;padding:2.5px 0;color:#b9c4d8}
+  nav a:hover{color:var(--acc)}
+  nav .sub{padding-left:13px;color:#8d97ab;font-size:12.3px}
+  main{flex:1 1 auto;min-width:0;padding:30px 40px 140px}
+
+  h1{font-size:29px;margin:.1em 0 .1em;letter-spacing:-.4px}
+  .sub1{color:var(--dim);margin:0 0 22px;font-size:14px}
+  h2{font-size:22px;margin:46px 0 12px;padding-bottom:7px;border-bottom:1px solid var(--line)}
+  h3{font-size:17px;margin:28px 0 9px;color:#eaf0fa}
+  h4{font-size:14.5px;margin:20px 0 6px;color:var(--acc2);font-weight:600}
+
+  table{border-collapse:collapse;width:100%;margin:12px 0 16px;font-size:13px}
+  th,td{border:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:#cdd8ec;font-weight:600;white-space:nowrap}
+  td.mono,th.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.2px}
+  tbody tr:nth-child(odd){background:#171a21}
+  .nowrap{white-space:nowrap}
+  .num{text-align:right;font-family:ui-monospace,Menlo,Consolas,monospace}
+
+  .note,.warnbox,.okbox{border-left:3px solid var(--acc);background:var(--panel);padding:11px 15px;margin:14px 0;border-radius:0 7px 7px 0}
+  .warnbox{border-left-color:var(--warn)}
+  .okbox{border-left-color:var(--ok)}
+  .note b,.warnbox b,.okbox b{color:#fff}
+
+  .grid{display:grid;grid-template-columns:64px repeat(8,1fr);gap:4px;margin:16px 0 8px;font-size:11.5px}
+  .grid .rl{display:flex;align-items:center;justify-content:flex-end;padding-right:8px;color:var(--dim);
+            font-family:ui-monospace,Menlo,monospace;font-size:11px}
+  .cell{border:1px solid var(--line);border-radius:6px;padding:6px 6px;min-height:62px;
+        font-family:ui-monospace,Menlo,monospace;line-height:1.35}
+  .cell b{display:block;font-size:10.5px;color:#fff;letter-spacing:.03em}
+  .cell span{color:#b6c2d6;font-size:10.5px}
+  .c-proj{background:var(--proj)} .c-rms{background:var(--rms)} .c-attn{background:var(--attn)}
+  .c-mix{background:var(--mix)} .c-mt{background:var(--mt)} .c-it{background:var(--it)}
+  .c-free{background:var(--free);color:#5c6478} .c-free b{color:#6d768a}
+  .colhdr{display:grid;grid-template-columns:64px repeat(8,1fr);gap:4px;font-size:11px;color:var(--dim);
+          font-family:ui-monospace,Menlo,monospace;margin-bottom:2px}
+  .colhdr div{text-align:center}
+  .legend{display:flex;flex-wrap:wrap;gap:14px;font-size:12px;color:var(--dim);margin:10px 0 0}
+  .legend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:5px;vertical-align:-1px;border:1px solid var(--line)}
+
+  .pill{display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px;
+        font-family:ui-monospace,Menlo,monospace;border:1px solid var(--line);background:#0d0f14;color:#cfe3ff}
+  .pill.id{color:#ffd479}
+  .tag-ok{color:var(--ok)} .tag-warn{color:var(--warn)} .tag-bad{color:var(--bad)} .dim{color:var(--dim)}
+
+  ol.stages{list-style:none;counter-reset:st;padding:0;margin:16px 0}
+  ol.stages > li{counter-increment:st;position:relative;padding:0 0 0 46px;margin:0 0 22px}
+  ol.stages > li::before{content:counter(st);position:absolute;left:0;top:1px;width:31px;height:31px;
+        border-radius:50%;background:var(--panel2);border:1px solid var(--line);color:var(--acc);
+        display:flex;align-items:center;justify-content:center;font-family:ui-monospace,Menlo,monospace;font-size:13px}
+  ol.stages > li > h3{margin:2px 0 6px;font-size:16px}
+  .route{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#9fd0ff;background:#0d0f14;
+         border:1px solid var(--line);border-radius:6px;padding:6px 10px;margin:6px 0;display:block;overflow:auto;white-space:pre}
+  hr{border:0;border-top:1px solid var(--line);margin:34px 0}
+  .kv{display:grid;grid-template-columns:max-content 1fr;gap:2px 16px;font-size:13px;margin:8px 0}
+  .kv div:nth-child(odd){color:var(--dim);font-family:ui-monospace,Menlo,monospace;font-size:12px}
+  footer{color:var(--dim);font-size:12px;border-top:1px solid var(--line);margin-top:60px;padding-top:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<nav>
+  <h2>Contents</h2>
+  <a href="#s0">0 · At a glance</a>
+  <a href="#s1">1 · Scope &amp; status</a>
+  <a href="#s2">2 · Geometry &amp; constants</a>
+  <a href="#s3">3 · Build configuration</a>
+  <a href="#s4">4 · Physical array map</a>
+  <a href="#s5">5 · End-to-end dataflow</a>
+  <a class="sub" href="#s5-1">5.1 input_layernorm</a>
+  <a class="sub" href="#s5-2">5.2 x replay</a>
+  <a class="sub" href="#s5-3">5.3 qkv|z projection</a>
+  <a class="sub" href="#s5-4">5.4 q/k norm + RoPE</a>
+  <a class="sub" href="#s5-5">5.5 KV cache round trip</a>
+  <a class="sub" href="#s5-6">5.6 GQA attention</a>
+  <a class="sub" href="#s5-7">5.7 sigmoid gate</a>
+  <a class="sub" href="#s5-8">5.8 o_proj</a>
+  <a class="sub" href="#s5-9">5.9 residual + post-norm</a>
+  <a class="sub" href="#s5-10">5.10 up|gate + SwiGLU</a>
+  <a class="sub" href="#s5-11">5.11 down_proj</a>
+  <a class="sub" href="#s5-12">5.12 h2 to DDR</a>
+  <a href="#s6">6 · Projection engine</a>
+  <a href="#s7">7 · x replay memtile</a>
+  <a href="#s8">8 · Attention column</a>
+  <a href="#s9">9 · Layouts &amp; permutations</a>
+  <a href="#s10">10 · Packet id reference</a>
+  <a href="#s11">11 · Per-tile reference</a>
+  <a href="#s12">12 · Kernel reference</a>
+  <a href="#s13">13 · Host reference</a>
+  <a href="#s14">14 · Why it is shaped this way</a>
+  <a href="#s15">15 · Known gaps &amp; drift</a>
+</nav>
+
+<main>
+
+<h1>gated_attention_verify — Dataflow &amp; Layout</h1>
+<p class="sub1">One full-attention (softmax) layer of <b>Qwen3.8-27B</b> on an AMD <b>npu2</b> 8&times;6 AIE2 array,
+built with IRON.  Generated from the source in this folder:
+<code>iron/</code>, <code>kernels/</code>, <code>host/</code>, <code>models/</code>.</p>
+
+<!-- ================================================================= -->
+<h2 id="s0">0 · At a glance</h2>
+
+<div class="kv">
+  <div>what it is</div><div>A single decoder layer — every 4<sup>th</sup> layer of Qwen3.8-27B (the other three in four are gated delta-net and live in <code>../gate_delta_net_verify</code>, a separate xclbin). There is <b>no phase select</b> anywhere in this design.</div>
+  <div>math</div><div><code>h1 = x + o_proj( attn(q,k,v) &#8857; &#963;(z) )</code><br><code>h2 = h1 + down_proj( silu(gate) &#183; up )</code></div>
+  <div>batch</div><div><code>L_TOKENS = 8</code> query rows per forward pass, threaded from the Makefile into IRON (env var), the kernels (<code>-DL_TOKENS</code>) and the host (<code>-DL_TOKENS</code>).</div>
+  <div>weights</div><div>Q4_K, 4.625 bits/weight, 32&times;256 blocks. 372,244,480 weights per layer &rarr; <b>205.2 MiB</b> in DDR.</div>
+  <div>activations</div><div>bf16 everywhere on the array; fp32 accumulators inside the kernels.</div>
+  <div>tiles used</div><div>16 MVM cores + 7 special cores + 2 coreless residual tiles + 6 memtiles + 6 shims.</div>
+  <div>DDR round trips</div><div>Exactly <b>two sinks</b>: the appended K|V cache (IT[4]) and <code>h2</code> (IT[3]). Everything else stays on the array.</div>
+</div>
+
+<div class="warnbox">
+<b>Status.</b> Per <code>iron/layer_aie.py</code> and <code>README.md</code>: the <em>attention datapath itself</em> —
+<code>iron/attn.py</code>'s shapes and the mask in <code>kernels/attn_qk.cc</code> — is still <b>L = 1 shaped</b>, and
+<b>this design has never been on hardware</b>. Everything outside the mixer (projection engine, x replay, rms/residual)
+is shared tile-for-tile with the delta-net project. See <a href="#s15">§15</a> for the specific gaps.
+</div>
+
+<!-- ================================================================= -->
+<h2 id="s1">1 · Scope &amp; status</h2>
+
+<p>This project is a <em>verification</em> build: <code>host/host.cpp</code> runs a bit-accurate CPU golden model of
+layer 3 (<code>constexpr int kAttentionLayer = 3;</code>) alongside the NPU and compares. The CPU reference calls
+<code>round_bf16()</code> at every point the array narrows a value, so the comparison is meaningful down to
+the last ulp rather than a loose cosine threshold.</p>
+
+<table>
+<thead><tr><th>Piece</th><th>Files</th><th>State</th></tr></thead>
+<tbody>
+<tr><td>16-core Q4_K projection engine</td><td class="mono">iron/proj_tile.py, kernels/proj_main.cc, kernels/q4_core.h</td><td class="tag-ok">shared with delta-net project, L-generic</td></tr>
+<tr><td>x replay memtile</td><td class="mono">iron/proj_tile.py (proj_x_replay_mt)</td><td class="tag-ok">L-generic</td></tr>
+<tr><td>rms / residual</td><td class="mono">iron/rms_residual.py, kernels/rms_residual.cc</td><td class="tag-ok">L-generic (L resident h buffers)</td></tr>
+<tr><td>q/k norm + partial RoPE</td><td class="mono">iron/RoPE.py, kernels/rope.cc</td><td class="tag-warn">buffers are DQ-shaped, i.e. one token</td></tr>
+<tr><td>GQA attention CUs</td><td class="mono">iron/attn.py, kernels/attn_qk.cc, attn_kv.cc</td><td class="tag-bad">L = 1 shaped; mask is a length mask, not causal</td></tr>
+<tr><td>sigmoid output gate</td><td class="mono">iron/gate.py, kernels/gate.cc</td><td class="tag-warn">one row per invocation, driven L times by MT[3]</td></tr>
+<tr><td>SwiGLU</td><td class="mono">iron/glu.py, kernels/glu.cc</td><td class="tag-ok">L-generic (round buffers are L&times;512)</td></tr>
+<tr><td>aux staging memtile</td><td class="mono">iron/aux_memtile.py</td><td class="tag-warn">L-generic; uses 3-dim memtile BDs (unverified in this IRON)</td></tr>
+</tbody>
+</table>
+
+<!-- ================================================================= -->
+<h2 id="s2">2 · Geometry &amp; constants</h2>
+
+<h3>2.1 Model constants</h3>
+<p>Two independent declarations that must agree: <code>iron/models/qwen38.py</code> (Python, drives the array build)
+and <code>models/qwen3.8-27b.h</code> (C++, drives the kernels and host).</p>
+
+<table>
+<thead><tr><th>Symbol</th><th class="mono">Python</th><th class="mono">C++</th><th class="num">Value</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td>D</td><td class="mono">hidden_size</td><td class="mono">MODEL_DIM</td><td class="num">5120</td><td>hidden / residual width</td></tr>
+<tr><td>NH</td><td class="mono">num_heads</td><td class="mono">NUM_ATTN_HEADS</td><td class="num">24</td><td>query heads</td></tr>
+<tr><td>NKV</td><td class="mono">num_kv_heads</td><td class="mono">NUM_KV_HEADS</td><td class="num">4</td><td>key/value heads</td></tr>
+<tr><td>DH</td><td class="mono">head_dim</td><td class="mono">DH</td><td class="num">256</td><td>head dimension (note: <code>NH·DH &ne; D</code>)</td></tr>
+<tr><td>I</td><td class="mono">intermediate_size</td><td class="mono">INTERMEDIATE_SIZE</td><td class="num">17408</td><td>MLP width</td></tr>
+<tr><td>—</td><td class="mono">glu_slice</td><td class="mono">GLU_SLICE</td><td class="num">1024</td><td>declared; the host weave uses 512 (= M_PER_ROUND)</td></tr>
+<tr><td>ROPE_DIM</td><td class="mono">DH·rope_partial_factor</td><td class="mono">ROPE_DIM</td><td class="num">64</td><td>partial RoPE: only dims [0,64) rotate</td></tr>
+<tr><td>—</td><td class="mono">—</td><td class="mono">ATTN_SCALE</td><td class="num">0.0625</td><td>= 1/16 = DH<sup>-1/2</sup></td></tr>
+<tr><td>—</td><td class="mono">vocab_size</td><td class="mono">VOCAB_SIZE</td><td class="num">248320</td><td>unused by this layer</td></tr>
+<tr><td>—</td><td class="mono">has_qk_norm</td><td class="mono">HAS_QK_NORM</td><td class="num">true</td><td>per-head RMSNorm on q and k</td></tr>
+<tr><td>—</td><td class="mono">q_heads_padding</td><td>—</td><td class="num">8</td><td>GQA group 24/4 = 6 &rarr; padded to 8</td></tr>
+<tr><td>—</td><td class="mono">num_attn_cus</td><td>—</td><td class="num">2</td><td>two attention compute units</td></tr>
+<tr><td>—</td><td class="mono">kv_head_per_round</td><td class="mono">KV_HEADS_PER_CU</td><td class="num">1</td><td><code>ATTN_IMPL_1x8x1</code></td></tr>
+<tr><td>—</td><td class="mono">q4nx_row_block_size</td><td class="mono">QXNX_ROW_BLOCK_SIZE</td><td class="num">32</td><td>weight block rows</td></tr>
+<tr><td>—</td><td class="mono">q4nx_col_block_size</td><td class="mono">QXNX_COL_BLOCK_SIZE</td><td class="num">256</td><td>weight block cols</td></tr>
+<tr><td>—</td><td class="mono">q4nx_group_size</td><td class="mono">GGML_GROUP_SIZE</td><td class="num">32</td><td>Q4_K quant group</td></tr>
+<tr><td>—</td><td class="mono">x_slice_size</td><td class="mono">—</td><td class="num">256</td><td>x column-block width</td></tr>
+<tr><td>—</td><td class="mono">lq / lk</td><td class="mono">—</td><td class="num">16 / 16</td><td>KV chunk rows per attention step</td></tr>
+</tbody>
+</table>
+
+<h3>2.2 Derived widths</h3>
+<table>
+<thead><tr><th>Symbol</th><th>Formula</th><th class="num">Value</th><th>Where it matters</th></tr></thead>
+<tbody>
+<tr><td class="mono">DQ</td><td class="mono">NH · DH</td><td class="num">6144</td><td>q width, z width, o_proj's K</td></tr>
+<tr><td class="mono">DK = DV</td><td class="mono">NKV · DH</td><td class="num">1024</td><td>k / v width per token</td></tr>
+<tr><td class="mono">qkv_out</td><td class="mono">DQ+DK+DV</td><td class="num">8192</td><td>fused qkv projection M</td></tr>
+<tr><td class="mono">PADDED_DQ</td><td class="mono">ceil(6/8)·8 · NKV · DH</td><td class="num">8192</td><td>RoPE's <code>q_buffer</code> size</td></tr>
+<tr><td class="mono">NUM_Q_HEADS_PADDED</td><td class="mono">PADDED_DQ / DH</td><td class="num">32</td><td>8 padded q heads &times; 4 kv heads</td></tr>
+<tr><td class="mono">ATTN_ROUNDS</td><td class="mono">NKV / kv_head_per_round</td><td class="num">4</td><td>kv-head rounds per token</td></tr>
+<tr><td class="mono">Q_HEAD_PER_ROUND</td><td class="mono">NH / ATTN_ROUNDS</td><td class="num">6</td><td>real q heads per round (= GQA group)</td></tr>
+<tr><td class="mono">Q_HEAD_PER_ROUND_PADDED</td><td class="mono">32 / 4</td><td class="num">8</td><td>padded, feeds <code>mmul&lt;8,8,8&gt;</code></td></tr>
+<tr><td class="mono">ATTN_GROUPS_PADDING</td><td class="mono">8 − 6</td><td class="num">2</td><td>dead lanes in each score tile</td></tr>
+<tr><td class="mono">W_BLOCK_SIZE</td><td class="mono">q4k_bytes(32·256)/2</td><td class="num">2368</td><td>one weight block in bf16 units (4736 B)</td></tr>
+<tr><td class="mono">MVM_CORES</td><td class="mono">—</td><td class="num">16</td><td>projection cores</td></tr>
+<tr><td class="mono">M_PER_ROUND</td><td class="mono">32 · 16</td><td class="num">512</td><td>output rows produced per engine round</td></tr>
+<tr><td class="mono">ROPE_BY_PASS</td><td class="mono">DH − ROPE_DIM</td><td class="num">192</td><td>dims copied through unrotated</td></tr>
+</tbody>
+</table>
+
+<h3>2.3 The five matrix-vector products</h3>
+<p>Every projection is <code>y[M] = W[M,K] · x[K]</code> replicated over <code>L_TOKENS</code> rows.
+<code>rounds = M / M_PER_ROUND</code> is the number of x replays the engine consumes, and
+<code>blocks = (M/32)·(K/256)</code> is the Q4_K block count.</p>
+
+<table>
+<thead><tr><th>#</th><th>mvm</th><th class="num">M</th><th class="num">K</th><th class="num">K/256</th><th class="num">rounds</th><th class="num">Q4_K blocks</th><th>y packet id</th><th>x source</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>qkv (fused)</td><td class="num">8192</td><td class="num">5120</td><td class="num">20</td><td class="num">16</td><td class="num">5,120</td><td><span class="pill id">to_rope = 4</span></td><td rowspan="2">phase <b>qkvz</b>, 28 replays</td></tr>
+<tr><td>2</td><td>z (output gate)</td><td class="num">6144</td><td class="num">5120</td><td class="num">20</td><td class="num">12</td><td class="num">3,840</td><td><span class="pill id">to_aux = 8</span></td></tr>
+<tr><td>3</td><td>o_proj</td><td class="num">5120</td><td class="num">6144</td><td class="num">24</td><td class="num">10</td><td class="num">3,840</td><td><span class="pill id">to_rms = 2</span></td><td>phase <b>o</b>, 10 replays</td></tr>
+<tr><td>4</td><td>up|gate (woven)</td><td class="num">34816</td><td class="num">5120</td><td class="num">20</td><td class="num">68</td><td class="num">21,760</td><td><span class="pill id">to_glu = 16</span></td><td>phase <b>up_gate</b>, 68 replays</td></tr>
+<tr><td>5</td><td>down_proj</td><td class="num">5120</td><td class="num">17408</td><td class="num">68</td><td class="num">10</td><td class="num">10,880</td><td><span class="pill id">to_rms = 2</span></td><td>phase <b>down</b>, 10 replays</td></tr>
+<tr><th colspan="4">total</th><th class="num"></th><th class="num">116</th><th class="num">45,440</th><th colspan="2"></th></tr>
+</tbody>
+</table>
+
+<div class="note">
+<b>116, not 120.</b> <code>QKV_REPEATS = (DQ+DK+DV+DQ)/16/32 = 14336/512 = 28</code> — the fused qkv (16 rounds)
+plus z (12 rounds). The docstring in <code>proj_x_replay_mt</code> still says “32 + 10 + 68 + 10 = 120 sends”;
+the live formulas in <code>layer_aie.py</code> and <code>kernels/aie_array_layout.h</code> both compute
+<b>28 + 10 + 68 + 10 = 116</b>.
+</div>
+
+<!-- ================================================================= -->
+<h2 id="s3">3 · Build configuration</h2>
+
+<pre>source ../../setup.sh      # FLM_Xclbin/setup.sh
+make bitstream             # produces the xclbin (not `make all`)</pre>
+
+<p>The top-level <code>Makefile</code> is the single source of truth for <code>L_TOKENS</code>. It reaches
+all three languages:</p>
+
+<table>
+<thead><tr><th>Consumer</th><th>Mechanism</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td>IRON (<code>iron/constants.py</code>)</td><td class="mono">L_TOKENS env var</td><td>buffer sizes, BD <code>dimensions</code>, lock init counts</td></tr>
+<tr><td>Kernels</td><td class="mono">-DL_TOKENS</td><td>accumulator array sizes, loop trip counts</td></tr>
+<tr><td>Host</td><td class="mono">-DL_TOKENS</td><td>DDR buffer sizes, BD shapes, golden model loops</td></tr>
+</tbody>
+</table>
+
+<p>Build chain for the array: <code>iron/layer_aie.py</code> prints MLIR &rarr; <code>aie-opt --aie-create-pathfinder-flows</code>
+&rarr; <code>aie-translate --aie-flows-to-json</code> &rarr; xclbin. The generated
+<code>input_with_addresses.mlir</code> is also where the RTP addresses come from — they are <b>per-build</b>,
+so a stale address hangs the host in <code>qds_device::wait()</code>.</p>
+
+<!-- ================================================================= -->
+<h2 id="s4">4 · Physical array map</h2>
+
+<p>The device is <code>aie.AIEDevice.npu2</code>, 8 columns &times; 6 rows.
+<code>generate_tile_map(6, 8)</code> returns <code>IT[col]</code> (row 0, shim),
+<code>MT[col]</code> (row 1, memtile) and <code>CT[0..3][col]</code> (rows 2..5, compute).</p>
+
+<div class="colhdr">
+  <div></div><div>col 0</div><div>col 1</div><div>col 2</div><div>col 3</div><div>col 4</div><div>col 5</div><div>col 6</div><div>col 7</div>
+</div>
+<div class="grid">
+  <div class="rl">CT[3]<br>row 5</div>
+  <div class="cell c-proj"><b>MVM 3</b><span>proj_main</span></div>
+  <div class="cell c-proj"><b>MVM 7</b><span>proj_main</span></div>
+  <div class="cell c-free"><b>—</b><span>free</span></div>
+  <div class="cell c-mix"><b>RoPE</b><span>q/k norm<br>partial RoPE<br>q|k|v split</span></div>
+  <div class="cell c-attn"><b>attn_kv 1</b><span>S·V, l, o</span></div>
+  <div class="cell c-free"><b>—</b><span>free</span></div>
+  <div class="cell c-proj"><b>MVM 11</b><span>proj_main</span></div>
+  <div class="cell c-proj"><b>MVM 15</b><span>proj_main</span></div>
+
+  <div class="rl">CT[2]<br>row 4</div>
+  <div class="cell c-proj"><b>MVM 2</b><span>proj_main</span></div>
+  <div class="cell c-proj"><b>MVM 6</b><span>proj_main</span></div>
+  <div class="cell c-free"><b>—</b><span>free</span></div>
+  <div class="cell c-mix"><b>gate</b><span>attn &#8857; &#963;(z)</span></div>
+  <div class="cell c-attn"><b>attn_qk 1</b><span>Q·K<sup>T</sup>, softmax</span></div>
+  <div class="cell c-free"><b>—</b><span>free</span></div>
+  <div class="cell c-proj"><b>MVM 10</b><span>proj_main</span></div>
+  <div class="cell c-proj"><b>MVM 14</b><span>proj_main</span></div>
+
+  <div class="rl">CT[1]<br>row 3</div>
+  <div class="cell c-proj"><b>MVM 1</b><span>proj_main</span></div>
+  <div class="cell c-proj"><b>MVM 5</b><span>proj_main</span></div>
+  <div class="cell c-mix"><b>SwiGLU</b><span>silu(g)·u</span></div>
+  <div class="cell c-rms"><b>residual N</b><span>h0..h3<br>no core, no DMA</span></div>
+  <div class="cell c-attn"><b>attn_kv 0</b><span>S·V, l, o</span></div>
+  <div class="cell c-free"><b>—</b><span>free</span></div>
+  <div class="cell c-proj"><b>MVM 9</b><span>proj_main</span></div>
+  <div class="cell c-proj"><b>MVM 13</b><span>proj_main</span></div>
+
+  <div class="rl">CT[0]<br>row 2</div>
+  <div class="cell c-proj"><b>MVM 0</b><span>proj_main</span></div>
+  <div class="cell c-proj"><b>MVM 4</b><span>proj_main</span></div>
+  <div class="cell c-rms"><b>residual W</b><span>h4..h7<br>no core, no DMA</span></div>
+  <div class="cell c-rms"><b>rms</b><span>3 phases<br>+ residual add</span></div>
+  <div class="cell c-attn"><b>attn_qk 0</b><span>Q·K<sup>T</sup>, softmax</span></div>
+  <div class="cell c-free"><b>—</b><span>free</span></div>
+  <div class="cell c-proj"><b>MVM 8</b><span>proj_main</span></div>
+  <div class="cell c-proj"><b>MVM 12</b><span>proj_main</span></div>
+
+  <div class="rl">MT<br>row 1</div>
+  <div class="cell c-mt"><b>MT[0]</b><span>y assemble<br>+ w fan-out</span></div>
+  <div class="cell c-mt"><b>MT[1] main</b><span>y root<br>x FIFO<br>+ w fan-out</span></div>
+  <div class="cell c-mt"><b>MT[2]</b><span>x replay<br>368 KiB</span></div>
+  <div class="cell c-mt"><b>MT[3] aux</b><span>z + o_proj<br>staging 176 KiB</span></div>
+  <div class="cell c-mt"><b>MT[4]</b><span>KV cache<br>o assemble</span></div>
+  <div class="cell c-free"><b>—</b><span>free</span></div>
+  <div class="cell c-mt"><b>MT[6]</b><span>y assemble<br>+ w fan-out</span></div>
+  <div class="cell c-mt"><b>MT[7]</b><span>w fan-out<br>only</span></div>
+
+  <div class="rl">IT<br>row 0</div>
+  <div class="cell c-it"><b>IT[0]</b><span>weights in</span></div>
+  <div class="cell c-it"><b>IT[1]</b><span>weights in</span></div>
+  <div class="cell c-free"><b>—</b><span>free</span></div>
+  <div class="cell c-it"><b>IT[3] xyr</b><span>x, rms w,<br>rope tbl in<br><b>h2 out</b></span></div>
+  <div class="cell c-it"><b>IT[4] attn</b><span><b>k|v out</b><br>cache in</span></div>
+  <div class="cell c-free"><b>—</b><span>free</span></div>
+  <div class="cell c-it"><b>IT[6]</b><span>weights in</span></div>
+  <div class="cell c-it"><b>IT[7]</b><span>weights in</span></div>
+</div>
+
+<div class="legend">
+  <span><i style="background:var(--proj)"></i>projection engine</span>
+  <span><i style="background:var(--rms)"></i>rms / residual</span>
+  <span><i style="background:var(--mix)"></i>mixer / activation</span>
+  <span><i style="background:var(--attn)"></i>attention</span>
+  <span><i style="background:var(--mt)"></i>memtile</span>
+  <span><i style="background:var(--it)"></i>shim</span>
+  <span><i style="background:var(--free)"></i>free</span>
+</div>
+
+<h3>4.1 Column occupancy, in words</h3>
+<table>
+<thead><tr><th>Col</th><th>Contents</th></tr></thead>
+<tbody>
+<tr><td class="mono">0, 1, 6, 7</td><td>The 16-core projection engine: 16 <code>proj_main</code> cores, 4 memtiles, 4 weight shims. Columns 0/1 form one y-assembly group (rooted at MT[0]); columns 6/7 form the other (rooted at MT[6]).</td></tr>
+<tr><td class="mono">2</td><td><code>MT[2]</code>, the x replay for all four projection phases, and <code>CT[1][2]</code>, the <b>SwiGLU</b>. <code>CT[0][2]</code> lends the rms tile half of its resident residual (<code>h4..h7</code>) as pure addressable memory and therefore must stay coreless; <code>CT[2][2]</code> and <code>CT[3][2]</code> are free.</td></tr>
+<tr><td class="mono">3</td><td>The layer's "spine": <code>CT[0][3]</code> rms, <code>CT[1][3]</code> residual half (no core), <code>CT[2][3]</code> sigmoid gate, <code>CT[3][3]</code> RoPE, <code>MT[3]</code> z/o staging, <code>IT[3]</code> the layer's data shim.</td></tr>
+<tr><td class="mono">4</td><td>Attention, entirely self-contained: qk on <code>CT[0][4]</code>/<code>CT[2][4]</code>, kv on <code>CT[1][4]</code>/<code>CT[3][4]</code>, the KV cache and o reassembly on <code>MT[4]</code>, and <code>IT[4]</code>. In the delta-net design this whole column goes to the delta rule.</td></tr>
+<tr><td class="mono">5</td><td><b>Entirely free</b> — no compute tile, no memtile, no shim in use. It was the conv / a-b column in the delta-net design and held the SwiGLU here until the GLU moved to <code>CT[1][2]</code>; it is kept clear so attention can grow into columns 4 <em>and</em> 5.</td></tr>
+</tbody>
+</table>
+
+<h3>4.2 Why the residual sits where it does</h3>
+<p>The rms core is at <code>CT[0][3]</code> = physical (row 2, col 3). An AIE2 core can address four memory
+windows (<code>AIE2TargetModel::isLegalMemAffinity</code>):</p>
+<table>
+<thead><tr><th class="mono">0x40000</th><th class="mono">0x50000</th><th class="mono">0x60000</th><th class="mono">0x70000</th></tr></thead>
+<tbody><tr>
+<td>south — <b>compute rows only</b> (row &ge; 3)</td>
+<td>west</td><td>north</td><td>own</td>
+</tr></tbody>
+</table>
+<p>At row 2 the tile to the south is a memtile, so south is unusable. That leaves <b>west = <code>CT[0][2]</code></b>
+and <b>north = <code>CT[1][3]</code></b> — exactly the two tiles <code>rms_residual.py</code> is handed as
+<code>residual_tiles</code>. Each holds <code>rows_per_tile = 4</code> resident hidden rows of
+<code>D = 5120</code> bf16 = 10 KiB, so 40 KiB of each tile's 64 KiB. Neither tile has a core or a
+<code>mem</code> block: the rms core loads and stores through the neighbour window directly, so the residual
+never touches a DMA, a lock, or DDR.</p>
+
+<h3 id="s4-3">4.3 Why the SwiGLU sits in column 2</h3>
+<p>The GLU tile is the most mobile IP in the design: four round buffers of its own, no neighbour memory,
+one producer and one consumer. Both of those are already next to column 2 — up|gate arrives off
+<b>MT[1]</b>'s y port one column west, and the result goes to <b>MT[2]</b>'s dedicated <code>down</code>
+replay buffer in the same column. Putting it on <code>CT[1][2]</code> makes both legs local:</p>
+<pre>MT[1] ──east──▶ (col 2, row 1) ──north──▶ (col 2, row 2) ──north──▶ CT[1][2]   up|gate, pkt to_glu
+CT[1][2] ──south──▶ (col 2, row 2) ──south──▶ MT[2]                            hid, pkt to_down_proj</pre>
+<p>Only <code>CT[0][2]</code> is off limits — it carries the rms tile's resident <code>h4..h7</code> and must
+stay coreless (<a href="#s4">§4.2</a>) — so <code>CT[1][2]</code> is the closest legal tile.
+<code>CT[2][2]</code> and <code>CT[3][2]</code> stay free.</p>
+<div class="okbox"><b>What this buys.</b> Column 5 is now completely empty. Attention is the one part of the
+layer that does not fit its column — two CUs on four compute tiles, one memtile for both the KV cache and
+the o reassembly — so column 5 is held clear as the room it grows into.</div>
+<div class="note">The move adds one rule split to the y tree: at column 2's memtile switchbox
+<code>to_glu = 16</code> turns north while <code>to_rope | to_aux | to_rms = 4 | 8 | 2</code> carry on east.
+Bit 4 separates the two groups cleanly, which is the whole reason the ids are one-hot
+(<a href="#s14">§14.1</a>).</div>
+
+<!-- ================================================================= -->
+<h2 id="s5">5 · End-to-end dataflow</h2>
+
+<p>The wiring below is <code>layer_aie.py</code>'s 17 <code>connect_port</code> calls plus the three
+<code>route()</code> helpers, in the order the layer executes them. <b>Connection order in the source is
+deliberate</b> — long routes are declared first so the pathfinder places them before the short ones
+compete for switchbox ports.</p>
+
+<pre>  DDR ─┬─▶ IT[3].MM2S0 ─▶ CT[0][3] rms ─┐                    ┌─▶ MT[2] replay ─▶ MT[1] x FIFO ─▶ 16 MVM cores
+       │                (phase 1)        └─(to_proj)─────────┘                                      │
+       │                                                                                            ▼
+       │                                                              MT[0]/MT[6] ─▶ MT[1] y root ──┤
+       │                                                                                            │
+       │   qkv (to_rope)  ─▶ CT[3][3] RoPE ─┬─▶ q ─▶ attn CU0/CU1 ◀────────────────────────────────┘
+       │                                    └─▶ k|v ─▶ IT[4] ─▶ DDR (cache append)
+       │                                                       DDR ─▶ IT[4] ─▶ MT[4] ─▶ CUs
+       │   z   (to_aux)   ─▶ MT[3] ─▶ CT[2][3] gate ◀── o (MT[4])
+       │                              gate ─▶ MT[2] ─▶ o_proj ─▶ (to_rms) ─▶ MT[3] ─▶ rms phase 2
+       │   up|gate (to_glu) ─▶ CT[1][2] SwiGLU ─▶ MT[2] ─▶ down_proj ─▶ (to_rms) ─▶ MT[3] ─▶ rms phase 3
+       └────────────────────────────────────────────────────────────── h2 ─▶ IT[3].S2MM1 ─▶ DDR</pre>
+
+<ol class="stages">
+
+<li id="s5-1">
+<h3>input_layernorm — rms phase 1</h3>
+<span class="route">IT[3].MM2S0 --pkt to_rms(0)--&gt; rms_core.X_in        (x, L&times;D rows)
+IT[3].MM2S1 --pkt to_rms(0)--&gt; rms_core.W_in        (2&times;D norm weights)
+IT[3].MM2S0 --pkt to_rope(1)--&gt; rope_core.ROPE_in   (cos/sin + q/k norm weights)</span>
+<p>One shim channel carries two different streams north into column 3 — the layer input and the RoPE
+table — told apart by packet id. That is one destination set with two masksets. Channel 1 carries the
+norm weights and <em>reuses</em> <code>to_rms</code>, because it lands on a different S2MM channel of the
+same tile and therefore never needs the id to disambiguate.</p>
+<p>The rms core runs <code>rms_residual()</code> in an infinite loop. Phase 1 takes a fresh
+<code>x</code> row, computes RMSNorm with <code>rms_weights[0:D]</code>, <b>stashes the raw x row into
+the resident <code>h</code> buffer</b> for the later residual add, writes packet id
+<code>rms_pkt_id.to_proj = 0</code> into <code>y[14]</code>, and hands the row to its MM2S.</p>
+</li>
+
+<li id="s5-2">
+<h3>x replay staging</h3>
+<span class="route">rms_core.Y_out --pkt to_proj(0)--&gt; x_replay_mt.x_in(0)      [MT[2] S2MM0, "main" buffer]
+x_replay_mt.route_to(proj_engine.X_in)                     [MT[2] MM2S* --&gt; MT[1] S2MM3]
+proj_engine.route_x()                                      [MT[1] MM2S4 --&gt; 16&times; CT.S2MM0, circuit]</span>
+<p>MT[2] lands the whole <code>L&times;D</code> activation (80 KiB) and then <em>replays</em> it once per
+engine round — 28 times for qkv|z. Each replay walks the buffer in column-block-major order
+(<code>[(D/256,256),(L,D),(256,1)]</code>) so each of the <code>K/256 = 20</code> emissions is exactly
+one <code>x_slice_ty</code> = <code>L&times;256</code> = 2048 bf16.</p>
+<p>The replay hops one column west into <b>MT[1]</b>, whose two-slice FIFO is the design's only source of x.
+From there a single <b>circuit-switched</b> flow broadcasts to all 16 cores, so no core needs a
+mask/match rule. See <a href="#s7">§7</a> for why the FIFO cannot live on MT[2] itself.</p>
+</li>
+
+<li id="s5-3">
+<h3>fused qkv | z projection</h3>
+<span class="route">proj_engine.route()      IT[0,1,6,7].MM2S0/1 --&gt; MT[0,1,6,7].S2MM4/5   (Q4_K weights)
+                         MT[i].MM2S[j]       --&gt; CT[j][col_i].S2MM1
+                         CT y --&gt; MT[0]/MT[6] --&gt; MT[1]  (y tree, replicated per pkt id)
+proj_engine.Y_out --pkt to_rope(4)--&gt; rope_core.QKV_in
+proj_engine.Y_out --pkt to_aux(8)---&gt; aux_mt.Z_in</span>
+<p>Two <code>mvm()</code> calls off one resident x: the fused <code>qkv</code> (M = 8192, 16 rounds) and
+the output gate <code>z</code> (M = 6144, 12 rounds). They are separate calls but share the same 28-replay
+x phase, which is why <code>QKV_REPEATS</code> sums both.</p>
+<p>Every round produces <code>M_PER_ROUND = 512</code> output rows &times; <code>L</code> tokens = 4096 bf16,
+assembled in MT[1] as <code>m_full_ty = (16·256 + 2,) = (4098,)</code> — 16 core contributions of
+<code>L·32 = 256</code> values each, plus a 2-element packet header the kernel wrote at <code>y[14]</code>.</p>
+</li>
+
+<li id="s5-4">
+<h3>q/k norm + partial RoPE — CT[3][3]</h3>
+<span class="route">rope_core.Q_out --pkt 0--&gt; attn CU0.Q_in        (q_buffer[0     : DQ/2])
+rope_core.Q_out --pkt 1--&gt; attn CU1.Q_in        (q_buffer[DQ/2 : DQ  ])
+rope_core.KV_out --------&gt; IT[4].S2MM0          (k then v, alternating)</span>
+<p>The RoPE tile's inbound BD chain on S2MM0 <b>alternates <code>kv_in_buffer</code> then
+<code>q_in_buffer</code></b>. That ordering is why the host writes weights as <b>k, v, q</b> rather than
+q, k, v (see <a href="#s13">§13</a>).</p>
+<p>Per invocation the core: RMSNorms each 256-dim q head with <code>rope_buffer[ROPE_DIM ..]</code> and each
+k head with <code>rope_buffer[ROPE_DIM+DH ..]</code>, rotates only dims <code>[0, 64)</code> of both using
+rotate-half (halves 0..31 / 32..63) against the cos/sin in <code>rope_buffer[0:64]</code>, copies dims
+<code>[64, 256)</code> through unchanged, and leaves v untouched.</p>
+<p>Q_out is a <b>packet flow with one leg per CU</b>: the two CUs hold different kv heads, so each takes the
+q heads of its own GQA groups and the id selects between them. The MM2S chain uses an extra lock
+(<code>q_pass_lock</code>, id 10, init 0) so that BD 0 (pkt 0) always precedes BD 1 (pkt 1) within a token.</p>
+</li>
+
+<li id="s5-5">
+<h3>KV cache round trip through DDR</h3>
+<p>This is one of only two DDR sinks. <code>KV_out</code> emits <code>k</code> (1024) then <code>v</code> (1024)
+alternating, so the shim sees an interleaved <code>k0 v0 k1 v1 …</code> stream. A <b>single 4-dim S2MM BD</b>
+on IT[4] de-interleaves it straight into the two halves of the cache:</p>
+<pre>sizes   = { L_TOKENS,  2,        data_per_chunk/1024, 1024 }
+strides = { data_per_chunk, v_offset, 1024,           1    }
+offset  = (L - L_TOKENS) * data_per_chunk        // append point</pre>
+<p>The host then reads the whole cache back on IT[4]'s two MM2S channels as two <em>linear</em> transfers —
+k from offset 0, v from <code>kv_cache_size/2</code>, each <code>L_padded · DH · num_kv_heads</code> long —
+and MT[4] fans them out to the CUs. All the reads are posted <em>before</em> any weight moves
+(<a href="#s13">§13.3</a>).</p>
+</li>
+
+<li id="s5-6">
+<h3>GQA softmax attention — column 4</h3>
+<span class="route">_attn_column.route()   IT[4].MM2S0/1 --&gt; MT[4].S2MM0/1        (k, v)
+                       MT[4].MM2S0/1 --&gt; CU0/CU1 qk .K_in
+                       MT[4].MM2S2/3 --&gt; CU0/CU1 kv .V_in
+                       CU0/CU1 .O_out --&gt; MT[4].S2MM2/3    (o halves)
+                       MT[4].MM2S4   --&gt; (pkt 0) gate tile</span>
+<p>Each CU is a vertical pair: <code>attn_qk</code> below, <code>attn_kv</code> above. They communicate
+through <b>shared score buffers</b> — <code>s_buffer_0/1</code> of type
+<code>(NQ_PER_CU·16 + 16, 1) = (144, 1)</code> — allocated on the <em>kv</em> tile and reached by the qk core
+through its north window, so the scores never enter a DMA. See <a href="#s8">§8</a>.</p>
+</li>
+
+<li id="s5-7">
+<h3>sigmoid output gate — CT[2][3]</h3>
+<span class="route">aux_mt.Gate_out ---------------&gt; gate_core.Gate_In      (z,   token-major, L BDs)
+_attn_column.O_out --pkt 0-----&gt; gate_core.Attn_In     (attn, token-major)</span>
+<p><code>z</code> is the engine's second mvm off the same resident x, so nothing new is needed on the way in —
+only somewhere for it to <em>wait</em>. MT[3] parks the whole <code>L&times;DQ</code> activation (96 KiB) and
+<b>de-permutes it out of row-block order in the inbound BD</b>, so the gate tile sees token-major rows and
+stays at one row per invocation.</p>
+<p>The attention output needs no staging: MT[4] hands it over token-major and it is the last operand to
+arrive anyway.</p>
+<p>The kernel computes <code>gated[i] = attn[i] · sigmoid(z[i])</code> over all <code>DQ = 6144</code> lanes
+and stamps <code>aux_to_proj_x_in_pkt_id.to_out_proj = 2</code> on the way out.</p>
+</li>
+
+<li id="s5-8">
+<h3>o_proj</h3>
+<span class="route">gate_core.Attn_Out --pkt to_out_proj(2)--&gt; x_replay_mt.x_in(1)   [MT[2], phase "o"]</span>
+<p>The gated rows re-enter MT[2] on the <em>same</em> inbound port as qkv|z's x, told apart by arrival
+order; the id exists only for the rms leg that shares the port. Phase "o" has
+<code>x_dim = DQ = 6144</code> and 10 replays, each emitting 24 slices of 2048.</p>
+</li>
+
+<li id="s5-9">
+<h3>residual add + post_attention_layernorm — rms phase 2</h3>
+<span class="route">proj_engine.Y_out --pkt to_rms(2)-------&gt; aux_mt.OProj_in       [MT[3] S2MM2]
+aux_mt.Residual_out --pkt to_residual(3)-&gt; rms_core.X_in       [one hop north]</span>
+<p>o's y leaves MT[1] east, drops off at MT[3], is <b>un-permuted</b> by the inbound BD
+(<code>[(D/32,32),(L,D),(32,1)]</code>), and hops one tile north into the rms tile's X port —
+a merge with the shim's phase-1 rows, ordered purely by the layer's data dependencies.</p>
+<p>The rms core reads <code>h[t]</code> out of the neighbour window, computes
+<code>h1 = bf16(x_in + o_proj)</code>, <b>writes h1 back into <code>h[t]</code></b> for the second residual,
+normalises with <code>rms_weights[D:2D]</code>, and stamps <code>rms_pkt_id.to_st = 1</code>.</p>
+<div class="note"><b>Neither residual operand touches DDR.</b> The old L = 1 design bounced o off IT[1] and read
+it back, because nothing on that path could transpose. Here the un-permute is free — it is just the shape of
+MT[3]'s landing BD.</div>
+</li>
+
+<li id="s5-10">
+<h3>up|gate projection + SwiGLU — CT[1][2]</h3>
+<span class="route">rms_core.Y_out --pkt to_st(1)---------&gt; x_replay_mt.x_in(2)   [MT[2], phase "up_gate"]
+proj_engine.Y_out --pkt to_glu(16)----&gt; glu.Up_Gate_in        [CT[1][2]]</span>
+<p><code>x_in(2)</code> is physically the same MT[2] port that <code>to_proj</code> already reaches, but it
+gets its own <code>connect_port</code> because <code>rms_residual.cc</code> stamps the id <em>per phase</em>
+— this row travels under <code>to_st</code>.</p>
+<p>The host <b>weaves</b> the up and gate weight matrices in blocks of <code>WEAVE = 512</code> rows
+(= <code>M_PER_ROUND</code>), so the engine's 68 rounds arrive as
+<code>up₀ gate₀ up₁ gate₁ …</code>. The GLU tile therefore only ever needs
+<b>four round buffers</b> of <code>L·512 = 4096</code> bf16 (32 KB total, half the tile):
+it consumes <code>pairs = I/512 = 34</code> pairs, emitting
+<code>silu(gate)·up</code> for 512&times;L values at a time.</p>
+<p><code>x_prod_lock</code> is initialised to <b>2</b>, not 1: the kernel holds both inputs of a pair.</p>
+</li>
+
+<li id="s5-11">
+<h3>down_proj</h3>
+<span class="route">glu.Hid_out --pkt to_down_proj(19)--&gt; x_replay_mt.x_in(3)   [MT[2], "down", dedicated buffer]
+proj_engine.Y_out --pkt to_rms(2)---&gt; aux_mt.OProj_in</span>
+<p><code>down</code> is the one phase with <code>dedicated = True</code>: its 272 KiB staging buffer is
+separate from the 96 KiB shared one, so it can <b>fill while up|gate is still replaying</b>.
+It is also the one phase with <code>in_block = 32</code>, because the GLU emits row blocks rather than
+token-major rows — see <a href="#s9">§9.3</a>.</p>
+<div class="note">At L = 8 the whole <code>hid</code> is <code>L·I·2 = 278 KB</code>, far more than a compute
+tile holds. That is why feeding <code>down</code> means a third replay spec on MT[2] and not, as at L = 1,
+simply restoring an old lock init on the GLU tile.</div>
+</li>
+
+<li id="s5-12">
+<h3>h2 to DDR — rms phase 3</h3>
+<span class="route">rms_core.Y_out --pkt to_out(4)--&gt; IT[3].S2MM1 --&gt; DDR @ layer_out_offset</span>
+<p>Phase 3 takes <b>no norm weight</b> (the S2MM1 weight chain fires only twice per invocation) and applies
+no normalisation. It reads <code>h[t] = h1</code> from the neighbour window, adds <code>down_proj</code>,
+and ships <code>h2</code> south. The host's landing BD is
+<code>{L_TOKENS,1,D/1024,1024} / {D,0,1024,1}</code> at <code>layer_out_offset = L_TOKENS·D</code>, on
+<code>bd_9</code>, IT[3] S2MM ch1 — the transfer the host finally waits on.</p>
+</li>
+
+</ol>
+
+<!-- ================================================================= -->
+<h2 id="s6">6 · The projection engine</h2>
+
+<h3>6.1 Topology</h3>
+<p>16 cores in four physical columns (0, 1, 6, 7), organised as <b>8 combos</b> of two vertically adjacent
+cores, and <b>2 groups</b> of four combos.</p>
+
+<table>
+<thead><tr><th>Level</th><th>Unit</th><th>Count</th><th>Produces</th><th class="num">bf16</th></tr></thead>
+<tbody>
+<tr><td>core</td><td><code>proj_main</code></td><td>16</td><td><code>L · m = 8 · 32</code> output values</td><td class="num">256</td></tr>
+<tr><td>combo</td><td>2 stacked cores, shared y buffers</td><td>8</td><td><code>m_pkt_ty = (528,)</code> = 16 hdr + 512</td><td class="num">512</td></tr>
+<tr><td>group</td><td>4 combos &rarr; MT[0] / MT[6]</td><td>2</td><td><code>m_col_ty = (2050,)</code></td><td class="num">2048</td></tr>
+<tr><td>root</td><td>2 groups &rarr; MT[1]</td><td>1</td><td><code>m_full_ty = (4098,)</code></td><td class="num">4096</td></tr>
+</tbody>
+</table>
+
+<pre>       CT[0][0] ┐                                       group 0 (cols 0,1)
+       CT[1][0] ┴─ combo 0 ─┐
+       CT[2][0] ┐           │
+       CT[3][0] ┴─ combo 1 ─┤
+       CT[0][1] ┐           ├──▶ MT[0]  y_buffer(2050) ──┐
+       CT[1][1] ┴─ combo 2 ─┤                            │
+       CT[2][1] ┐           │                            ├──▶ MT[1] y_buffer(4098) ──▶ Y_out
+       CT[3][1] ┴─ combo 3 ─┘                            │        (4 packet ids)
+                                                         │
+       CT[0][6] … CT[3][7]  ── combos 4..7 ──▶ MT[6] ─────┘        group 1 (cols 6,7)</pre>
+
+<h3>6.2 Inside one combo</h3>
+<p><code>proj_combo</code> makes <code>cts[0]</code> the <b>main</b> core: it owns the two y buffers
+(<code>y_0</code>, <code>y_1</code>) and has <code>send_x_out = True</code>, i.e. the MM2S that ships them.
+<code>cts[1]</code> is the <b>partner</b>: it has no MM2S at all and writes its half of the result directly
+into the main core's buffer at offset <code>16 + L·m</code> through the neighbour window, guarded by
+<code>_down_lock_*</code> operations on the main core's locks.</p>
+<p>The partner still allocates two <em>unused</em> buffers named <code>_y_0</code> / <code>_y_1</code> —
+purely so that the RTP/buffer address layout of the two cores matches, since both run the same
+<code>proj_main.o</code>.</p>
+
+<h4>Core-local memory (64 KiB, four 16 KiB banks)</h4>
+<table>
+<thead><tr><th>Buffer</th><th class="mono">type</th><th class="num">bf16</th><th class="num">bytes</th><th>Role</th></tr></thead>
+<tbody>
+<tr><td><code>x_ping</code>/<code>x_pong</code></td><td class="mono">x_slice_ty (2048,)</td><td class="num">2&times;2048</td><td class="num">8,192</td><td>one x column block, all L tokens</td></tr>
+<tr><td><code>w_ping</code>/<code>w_pong</code></td><td class="mono">linear_w_ty (2368,)</td><td class="num">2&times;2368</td><td class="num">9,472</td><td>one Q4_K 32&times;256 block (4736 B)</td></tr>
+<tr><td><code>y_0</code>/<code>y_1</code></td><td class="mono">m_pkt_ty (528,)</td><td class="num">2&times;528</td><td class="num">2,112</td><td>combo output + 16-word header</td></tr>
+</tbody>
+</table>
+<p>Scratch lives in tile <em>data memory</em>, not on the stack: <code>c_accum_s</code>, <code>c_accum_m</code>,
+<code>acc_s_group</code>, <code>y_acc[L·32]</code>, <code>q_scratch[32·32]</code>, and the column-reduction
+accumulator split as <code>b_col_reduce_add_lo</code> / <code>_hi</code> — the split is on a column-block
+boundary because a single 17 KiB array fits no bank hole.
+Sizing constants: <code>MAX_MVM_K = 17408</code>, <code>B_BLOCK_LIMBS = 2·8·256/32 = 128</code>,
+<code>B_BLOCKS = 68</code>.</p>
+
+<h3>6.3 <code>mvm()</code></h3>
+<pre>for i in 0 .. M/m:                 // output row blocks handled by this core
+    for j in 0 .. K/k:             // x column blocks   (k = 256)
+        acquire x slice j, w block (i,j)
+        _Q4K_x_bf16_L&lt;L&gt;(...)      // accumulate L rows
+        if i == 0: fill column sums // b-column reduction, once only
+    *pkt_id_using = pkt_id         // y[14]
+    copy_float_to_bf16&lt;L*m&gt;(y+16, y_acc)          // main core
+    // partner writes y+16+L*m under _down_lock_*</pre>
+<p>Five call sites in <code>proj_main.cc</code>, matching <a href="#s2">§2.3</a>:
+<code>(DQ+DK+DV)/16 = 512</code>, <code>DQ/16 = 384</code>, <code>MODEL_DIM/16 = 320</code> (K = DQ),
+<code>2·I/16 = 2176</code>, <code>MODEL_DIM/16 = 320</code> (K = I) rows per core.</p>
+
+<h3>6.4 Q4_K dequantisation (<code>kernels/q4_core.h</code>)</h3>
+<p>Block layout, 32 rows &times; 256 cols = 4736 B:</p>
+<table>
+<thead><tr><th>Field</th><th class="mono">type</th><th class="num">count</th><th class="num">bytes</th></tr></thead>
+<tbody>
+<tr><td><code>scales</code></td><td class="mono">uint8</td><td class="num">8192/32 = 256</td><td class="num">256</td></tr>
+<tr><td><code>mins</code></td><td class="mono">uint8</td><td class="num">256</td><td class="num">256</td></tr>
+<tr><td><code>qs</code></td><td class="mono">uint4</td><td class="num">8192</td><td class="num">4096</td></tr>
+<tr><td><code>S</code></td><td class="mono">bf16</td><td class="num">8192/256 = 32</td><td class="num">64</td></tr>
+<tr><td><code>M</code></td><td class="mono">bf16</td><td class="num">32</td><td class="num">64</td></tr>
+<tr><th colspan="3">total</th><th class="num">4736</th></tr>
+</tbody>
+</table>
+<p>Reconstruction is <code>w = S'·s'<sub>j</sub>·q + M'·m'<sub>j</sub></code>, evaluated as
+<b>“reduce first, scale after”</b>: the per-group integer sums are accumulated and only then multiplied by
+the bf16 super-block scale, which keeps the min/scale cancellation from amplifying rounding. Two-limb bf16
+splitting (<code>bf16_limb::mac_f32_bf16_low</code>) is used where the cancellation is worst.</p>
+<p>Two variants:</p>
+<ul>
+<li><code>_Q4K_x_bf16</code> — single row, all accumulators in registers.</li>
+<li><code>_Q4K_x_bf16_L&lt;L&gt;</code> — L rows. AIE2 has only four 1024-bit AM registers, so accumulators
+<b>spill to memory</b>. Compensating optimisations: nibbles are unpacked once per group into
+<code>q_scratch</code> and re-read by all L rows, and the min path is hoisted out of the group loop.
+Helpers <code>_Q4K_zero_L</code> and <code>_Q4K_finalize_L</code> (<code>c = c_accum_s + c_accum_m</code>)
+bracket it.</li>
+</ul>
+<p>Constants: <code>SUPER_BLOCK_SIZE 256</code>, <code>GROUPS_PER_SB 8</code>,
+<code>NIBBLES_PER_LOAD 128</code>, <code>COLS_PER_LOAD 4</code>, <code>LOADS_PER_GROUP 8</code>.</p>
+
+<h3>6.5 The y tree and its packet ids</h3>
+<p>The y tree is built <b>once per packet id</b>. <code>keep_pkt_header</code> is
+<code>(j == 0)</code> at the core level and <code>True</code>/<code>False</code> for the two sub-trees, so
+the header survives exactly as far as it is needed and the payload arrives clean at the destination.
+The four ids are one-hot (<code>2, 4, 8, 16</code>) — see <a href="#s14">§14.1</a>.</p>
+
+<h3>6.6 Memtile roles</h3>
+<table>
+<thead><tr><th>Tile</th><th>Class</th><th>S2MM</th><th>MM2S</th><th>Locks</th></tr></thead>
+<tbody>
+<tr><td class="mono">MT[0], MT[6]</td><td><code>proj_assemble_col</code></td>
+    <td>0–3: y from 4 combos, stitched at offsets <code>0 / 2m+2 / 4m+2 / 6m+2</code> (first BD <code>2m+2</code>, rest <code>2m</code>) through a 4-stage lock relay <code>y_prod_lock_0..3 &rarr; y_cons_lock</code>.<br>4, 5: <code>2·W_BLOCK_SIZE</code> weights each</td>
+    <td>0–3: one <code>W_BLOCK_SIZE</code> to each of four cores<br>4: assembled y east</td><td>0–10</td></tr>
+<tr><td class="mono">MT[7]</td><td><code>proj_assemble_weight_only</code></td><td>4, 5: weights</td><td>0–3: to column 7's cores</td><td>5–10</td></tr>
+<tr><td class="mono">MT[1]</td><td><code>proj_assemble_weight_x</code></td>
+    <td>0: sub-tree A (<code>8m+2</code>)<br>1: sub-tree B (offset <code>8m+2</code>, len <code>8m</code>)<br>3: <b>x_in</b> from MT[2]<br>4, 5: weights</td>
+    <td>0–3: to column 1's cores<br>4: <b>x_out</b>, the broadcast<br>5: <b>y_out</b> (4 ids)</td><td>0–10</td></tr>
+</tbody>
+</table>
+<p>MT[1] memory: y <code>2&times;4098</code> (16.4 KiB) + weights <code>2&times;9472</code> (37.9 KiB) +
+x FIFO <code>2&times;2048</code> (8 KiB) &asymp; 62 KiB of 512 KiB.</p>
+
+<!-- ================================================================= -->
+<h2 id="s7">7 · The x replay memtile (MT[2])</h2>
+
+<h3>7.1 Phases</h3>
+<table>
+<thead><tr><th>Phase</th><th class="num">x_dim</th><th class="num">replays</th><th>buffer</th><th class="num">in_block</th><th>inbound port</th></tr></thead>
+<tbody>
+<tr><td><code>qkvz</code></td><td class="num">5120</td><td class="num">28</td><td>shared "main"</td><td class="num">0</td><td><code>x_in(0)</code> &larr; rms phase 1</td></tr>
+<tr><td><code>o</code></td><td class="num">6144</td><td class="num">10</td><td>shared "main"</td><td class="num">0</td><td><code>x_in(1)</code> &larr; gate tile</td></tr>
+<tr><td><code>up_gate</code></td><td class="num">5120</td><td class="num">68</td><td>shared "main"</td><td class="num">0</td><td><code>x_in(2)</code> &larr; rms phase 2</td></tr>
+<tr><td><code>down</code></td><td class="num">17408</td><td class="num">10</td><td><b>dedicated</b></td><td class="num">32</td><td><code>x_in(3)</code> &larr; GLU</td></tr>
+</tbody>
+</table>
+
+<h3>7.2 Memory</h3>
+<table>
+<thead><tr><th>Buffer</th><th>Sizing</th><th class="num">bf16</th><th class="num">KiB</th></tr></thead>
+<tbody>
+<tr><td>shared "main"</td><td class="mono">L · max(D, DQ, I&#8320;)  =  8 · 6144</td><td class="num">49,152</td><td class="num">96</td></tr>
+<tr><td>dedicated "down"</td><td class="mono">L · I  =  8 · 17408</td><td class="num">139,264</td><td class="num">272</td></tr>
+<tr><th colspan="2">total (of 512 KiB)</th><th class="num">188,416</th><th class="num">368</th></tr>
+</tbody>
+</table>
+<p>The shared buffer is sized by the largest of the three live phases (o's <code>DQ</code>), because
+those three are strictly sequential and can never overlap. <code>down</code> gets its own buffer precisely
+so it <em>can</em> overlap with up|gate.</p>
+
+<h3>7.3 Channels and locks</h3>
+<p>One S2MM per <em>lifetime</em> and one MM2S per distinct <em>activation width</em>:</p>
+<table>
+<thead><tr><th>Chan</th><th>Dir</th><th>Serves</th><th>Lock</th></tr></thead>
+<tbody>
+<tr><td class="mono">S2MM0</td><td>in</td><td>"main" lifetime — qkvz, o, up_gate</td><td><code>prod_lock</code> id 0</td></tr>
+<tr><td class="mono">S2MM1</td><td>in</td><td>"down" lifetime</td><td><code>prod_lock</code> id 1</td></tr>
+<tr><td class="mono">MM2S0</td><td>out</td><td>("main", 5120) — qkvz &amp; up_gate</td><td><code>cons_locks</code> ids 2, 3 (fanout 2)</td></tr>
+<tr><td class="mono">MM2S1</td><td>out</td><td>("main", 6144) — o</td><td><code>cons_lock</code> id 4</td></tr>
+<tr><td class="mono">MM2S2</td><td>out</td><td>("down", 17408) — down</td><td><code>cons_lock</code> id 5</td></tr>
+</tbody>
+</table>
+
+<h4>The 63-count lock ceiling &rarr; fanout</h4>
+<p>A memtile lock counter is 6 bits, so no single lock op may exceed 63. <code>up_gate</code> needs 68 replays.
+<code>_pick_fanout</code> is gcd-based: for the shared 5120-wide channel,
+<code>gcd(28, 68) = 4</code>; the smallest divisor <code>f</code> of 4 with <code>max/f &le; 63</code>
+is <code>f = 2</code>. So that channel gets <b>two</b> cons locks and the credits become
+<code>qkvz: 28/2 = 14</code>, <code>up_gate: 68/2 = 34</code>. Only the <em>last</em> BD of a fanout cycle
+credits the producer.</p>
+
+<h4>The credit ledger is a closed ring</h4>
+<p>The shared buffer's <code>prod_lock</code> initialises to the <b>last</b> phase's credits so the loop
+closes across iterations:</p>
+<table>
+<thead><tr><th>Phase (order)</th><th>land BD acquires</th><th>replay releases</th></tr></thead>
+<tbody>
+<tr><td>init</td><td class="mono">prod_lock = 34 (up_gate's credits)</td><td>—</td></tr>
+<tr><td>qkvz</td><td class="mono">34 (= up_gate's)</td><td class="mono">14 &rarr; ("main",5120)</td></tr>
+<tr><td>o</td><td class="mono">14 (= qkvz's)</td><td class="mono">10 &rarr; ("main",6144)</td></tr>
+<tr><td>up_gate</td><td class="mono">10 (= o's)</td><td class="mono">34 &rarr; ("main",5120)</td></tr>
+<tr><td>down (own lifetime)</td><td class="mono">10 (= its own)</td><td class="mono">10 &rarr; ("down",17408)</td></tr>
+</tbody>
+</table>
+
+<h3>7.4 BD shapes</h3>
+<h4>Landing BD</h4>
+<pre>if in_block == 0:                       # token-major arrival (qkvz, o, up_gate)
+    linear, len = L_TOKENS * x_dim
+
+else:                                   # row-block arrival (down)
+    blocks   = x_dim // in_block                       # 17408/32 = 544
+    hi, lo   = _split_bd_size(blocks)                  # 544 &gt; BD_MAX_SIZE(512) -&gt; (2, 272)
+    dims     = [(hi, lo*in_block), (lo, in_block)] + [(L_TOKENS, x_dim), (in_block, 1)]
+             = [(2, 8704), (272, 32), (8, 17408), (32, 1)]     # 2*272*8*32 = 139,264</pre>
+<p><code>BD_MAX_SIZE = 512</code>: the BD size field is 10 bits, but bf16 folds two elements into a 32-bit
+word, so the real per-dimension ceiling is 512 elements. <code>_split_bd_size(n)</code> factors
+<code>n</code> and prefers the smallest <code>hi</code>.</p>
+
+<h4>Replay BD</h4>
+<pre>aie.dma_bd_packet(0, proj_x_pkt_id.from_replay)          # every replay channel shares this id
+dimensions = [(x_dim // 256, 256), (L_TOKENS, x_dim), (256, 1)]
+# emits x_dim/256 slices, each L_TOKENS &times; 256 = 2048 bf16 = one x_slice_ty</pre>
+
+<div class="warnbox">
+<b>Why every replay channel shares one id.</b> x reaches the 16 cores on a <em>circuit</em> flow, so no id is
+needed at the cores. The only merge left is inside MT[2]'s own FIFO. If each width had a distinct id, each
+would be its own packet flow, the pathfinder would grow a separate multicast tree per id, the trees would
+diverge, and the arbiter allocator would tie one master port to two arbiters — which
+<code>AIEDialect.cpp:2047</code> rejects. One id, one port, one tree per hop.
+</div>
+
+<div class="warnbox">
+<b>Why the x FIFO is on MT[1] and not MT[2].</b> The pathfinder <b>cannot route a zero-hop packet flow</b>
+— source and destination on the same switchbox leaves the destination port unset, and the rule comes out
+on <code>South : 0</code>. So the FIFO that turns the replay stream into the circuit broadcast has to sit
+one hop away, on MT[1].
+</div>
+
+<!-- ================================================================= -->
+<h2 id="s8">8 · The attention column</h2>
+
+<h3>8.1 CU structure</h3>
+<p>Two <code>attn_cu</code>s, each a vertically adjacent pair:</p>
+<table>
+<thead><tr><th>CU</th><th>qk tile</th><th>kv tile</th><th>Score buffers</th></tr></thead>
+<tbody>
+<tr><td>0</td><td class="mono">CT[0][4]</td><td class="mono">CT[1][4]</td><td rowspan="2"><code>s_ty = (NQ_PER_CU·16 + 16, 1) = (144, 1)</code>, allocated on the <b>kv</b> tile, read by the qk core through its <b>north</b> window. Ping/pong.</td></tr>
+<tr><td>1</td><td class="mono">CT[2][4]</td><td class="mono">CT[3][4]</td></tr>
+</tbody>
+</table>
+<p>The 144 elements are <code>8 padded q heads &times; 16 kv rows = 128</code> scores, plus a 16-element tail;
+<code>attn_kv</code> reads the softmax correction factors from
+<code>(float*)(s + Q_HEADS_PADDED_PER_CU·16)</code>, i.e. exactly at element 128.</p>
+
+<h3>8.2 qk tile — <code>iron/attn.py::qk_tile</code> + <code>kernels/attn_qk.cc</code></h3>
+<table>
+<thead><tr><th>Buffer</th><th class="mono">type</th><th class="num">bf16</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>q_buffer_0/1</code></td><td class="mono">attn_q_ty = (8·256,)</td><td class="num">2048</td><td>8 padded q heads of one kv group</td></tr>
+<tr><td><code>k_buffer_0/1</code></td><td class="mono">attn_k_ty = (16, 256)</td><td class="num">4096</td><td>16 keys &times; 1 kv head</td></tr>
+<tr><td><code>RTP_L_attn_qk_core_r_c</code></td><td class="mono">L_ty = (8,) i32</td><td class="num">—</td><td>write-RTP, holds the <b>KV length</b></td></tr>
+</tbody>
+</table>
+<p>Locks 0–7: q prod/cons (0/1, init 2/0), k prod/cons (2/3), s prod/cons (4/5), l prod/cons (6/7).</p>
+<p>Inbound q is transposed on the fly into <code>mmul</code> A-layout by
+<code>q_in_order = [(8, 8), (32, 64), (8, 1)]</code>, total 2048.</p>
+<p>The kernel implements <b>online (streaming) softmax</b> per q head: running max <code>m</code>,
+correction <code>c</code>, and (on the kv side) denominator <code>l</code>.
+<code>update()</code> recomputes <code>vmax = max(m, rowmax)</code>, exponentiates
+<code>clamp(out − vmax, −87, 88)</code> via <code>getExpBf16</code>, and emits
+<code>c = exp(m_old − vmax)</code> so the kv core can rescale its running <code>y</code>.
+Scores are scaled by <code>ATTN_SCALE = 1/16</code> before the max.</p>
+<p><code>ATTN_IMPL_1x8x1</code> &rarr; <code>aie::mmul&lt;8, 8, 8, bf16&gt;</code>, with K transposed 8&times;8
+in-register (<code>aie::transpose(B00, 8, 8)</code>) and the two halves recombined with
+<code>interleave_zip(..., 8)</code>.</p>
+
+<h3>8.3 kv tile — <code>kv_tile</code> + <code>kernels/attn_kv.cc</code></h3>
+<table>
+<thead><tr><th>Buffer</th><th class="mono">type</th><th class="num">bf16</th></tr></thead>
+<tbody>
+<tr><td><code>s_buffer_0/1</code> (shared north)</td><td class="mono">(144, 1)</td><td class="num">288</td></tr>
+<tr><td><code>v_buffer_0/1</code></td><td class="mono">attn_v_ty = (16, 256)</td><td class="num">8192</td></tr>
+<tr><td><code>o_buffer_0/1</code></td><td class="mono">attn_o_ty = (6·256,) = (1536,)</td><td class="num">3072</td></tr>
+</tbody>
+</table>
+<p>Locks 0–5: o prod/cons (0/1), v prod/cons (2/3), s prod/cons (4/5). Note the kv core takes
+<code>NQ_PER_CU = Q_HEAD_PER_ROUND = 6</code> (the <em>real</em> heads), while the qk core and the shared
+score buffer use the <em>padded</em> 8.</p>
+<p>Per chunk of 16 keys: <code>calculate_l()</code> folds the exponentials into <code>l</code> via a
+<code>mmul</code> against a ones-vector, then <code>attn_fv()</code> rescales the running fp32
+accumulator <code>y[8·DH]</code> by the correction vector and MACs <code>S·V</code>. At the end,
+<code>scale_div_aie()</code> multiplies by <code>1/l</code> (reciprocal via <code>getInvBf16</code>) and
+<b>drops the 2 padding heads</b> while writing out, 8 lanes at a time.</p>
+<p>The output BD re-transposes: <code>[(6, 8), (32, 48), (8, 1)]</code>, length
+<code>6·256 = 1536</code>. <code>enable_packet_id</code> is <code>False</code> here because
+<code>num_attn_cus == 2</code>; the packet stamping happens at MT[4] instead.</p>
+
+<h3>8.4 MT[4] — the KV cache tile</h3>
+<table>
+<thead><tr><th>Chan</th><th>Dir</th><th>Carries</th><th>Shape</th></tr></thead>
+<tbody>
+<tr><td class="mono">S2MM0</td><td>in</td><td>k from IT[4].MM2S0</td><td rowspan="2"><code>(16, 1024)</code> ping/pong</td></tr>
+<tr><td class="mono">S2MM1</td><td>in</td><td>v from IT[4].MM2S1</td></tr>
+<tr><td class="mono">MM2S0/1</td><td>out</td><td>k &rarr; CU0 / CU1</td><td><code>k_order = [(32, 8), (16, 1024), (8, 1)]</code>, len 4096; CU1's BD carries <code>offset = 256</code> so it sees a different kv head</td></tr>
+<tr><td class="mono">MM2S2/3</td><td>out</td><td>v &rarr; CU0 / CU1</td><td><code>v_order = [(2, 8192), (32, 8), (8, 1024), (8, 1)]</code></td></tr>
+<tr><td class="mono">S2MM2/3</td><td>in</td><td>o halves from CU0 / CU1</td><td><code>DQ/2 = 3072</code> each, at offsets 0 and 3072 of <code>o_buffer (6144,)</code></td></tr>
+<tr><td class="mono">MM2S4</td><td>out</td><td>whole <code>o_buffer</code> &rarr; gate tile</td><td><code>dma_bd_packet(0, 0)</code></td></tr>
+</tbody>
+</table>
+<p>Locks 0–8. <code>attn_column.route()</code> wires IT[4] &rarr; MT[4] &rarr; the CUs &rarr; MT[4].</p>
+
+<!-- ================================================================= -->
+<h2 id="s9">9 · Layouts &amp; permutations</h2>
+
+<h3>9.1 The row-block permutation (engine output)</h3>
+<p>One engine round is 16 cores &times; L tokens &times; 32 rows = 4096 values, laid out
+<b>row-block major</b>:</p>
+<pre>raw[ (rb * L_TOKENS + t) * m + r ]     rb = 0..15 (core), t = 0..L-1, r = 0..31
+
+  ┌──── core 0 ────┬──── core 1 ────┬ … ┬──── core 15 ───┐
+  │ t0 r0..r31     │ t0 r0..r31     │   │ t0 r0..r31     │
+  │ t1 r0..r31     │ t1 r0..r31     │   │ …              │
+  │ …              │ …              │   │ t7 r0..r31     │
+  └────────────────┴────────────────┴───┴────────────────┘</pre>
+<p>Row block <code>rb</code> of round <code>n</code> holds output rows
+<code>[n·512 + rb·32, n·512 + (rb+1)·32)</code>. Consumers that need token-major rows undo this in their
+<b>landing BD</b>, at no cost:</p>
+<table>
+<thead><tr><th>Consumer</th><th>BD dimensions</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td>MT[3] z</td><td class="mono">[(DQ/32, 32), (L, DQ), (32, 1)] = [(192,32),(8,6144),(32,1)]</td><td><code>z_buffer[t][rb·32 + r]</code></td></tr>
+<tr><td>MT[3] o_proj</td><td class="mono">[(D/32, 32), (L, D), (32, 1)] = [(160,32),(8,5120),(32,1)]</td><td><code>op_buffer[t][rb·32 + r]</code></td></tr>
+<tr><td>MT[2] down's x</td><td class="mono">[(2,8704),(272,32),(8,17408),(32,1)]</td><td>token-major <code>L&times;I</code></td></tr>
+</tbody>
+</table>
+<p>The qkv rows are the exception: they reach the RoPE tile <b>still permuted</b> — see <a href="#s15">§15</a>.</p>
+
+<h3>9.2 The up|gate weave</h3>
+<p>The host interleaves the <code>up</code> and <code>gate</code> weight matrices in blocks of
+<code>WEAVE = 512</code> rows so that the engine's 68 rounds arrive as alternating up/gate pairs and the GLU
+tile never has to buffer more than four rounds:</p>
+<pre>woven row index for logical index i:
+    (i / WEAVE) * 2 * WEAVE  +  i % WEAVE          // up
+    (i / WEAVE) * 2 * WEAVE  +  WEAVE + i % WEAVE  // gate
+
+host load: blocks     = 1024 / 2 / 32 * (D / 256)
+           chunk_size = blocks * q4k_bytes(32 * 256)
+           for i: reorder_cpy(w_up_tensor[i]) ; reorder_cpy(w_gate_tensor[i])</pre>
+<p>The CPU golden model applies exactly the same index arithmetic when computing
+<code>silu(g)·u</code>, so any weave mismatch shows up as a comparison failure rather than silent drift.</p>
+
+<h3>9.3 <code>reorder_cpy</code> — the vertical-block interleave</h3>
+<p><code>reorder_cpy(dst, src, col, vertical_blocks = 2)</code> alternates whole
+<code>q4k_bytes(32·256)</code>-sized blocks between two row blocks, so that a memtile's contiguous
+<code>w_buffer[0 : 2·W_BLOCK_SIZE]</code> splits correctly into the two blocks its two consumer BDs expect.</p>
+
+<h3>9.4 The k|v de-interleave (DDR side)</h3>
+<pre>RoPE KV_out stream:   k(t0) v(t0) k(t1) v(t1) …          each 1024 bf16
+
+IT[4] S2MM0, one BD:
+    sizes   = { L_TOKENS,        2,        data_per_chunk/1024, 1024 }
+    strides = { data_per_chunk,  v_offset, 1024,                1    }
+    offset  = (L - L_TOKENS) * data_per_chunk
+
+DDR cache:  [ k for all positions ][ v for all positions ]
+            0                       kv_cache_size/2</pre>
+<p>Read-back is two plain linear MM2S transfers, k at 0 and v at <code>kv_cache_size/2</code>, each
+<code>L_padded · DH · num_kv_heads</code> elements.</p>
+
+<h3>9.5 The 16-word y header</h3>
+<p>Every combo's y buffer is <code>16 + L·m·2 = 528</code> elements. The kernel writes the routing packet id
+at <code>y[14]</code>; the payload starts at <code>y[16]</code>. The MM2S BD is
+<code>aie.dma_bd(y_buffer, offset = 14, len = 2·m_chunk + 2)</code> — 2 header elements (one 32-bit word)
+plus 512 payload. The rms tile uses the identical convention:
+<code>aie.dma_bd(self.y, offset = 14, len = D + 2)</code> on a <code>(D+16,)</code> buffer.</p>
+
+<!-- ================================================================= -->
+<h2 id="s10">10 · Packet id reference</h2>
+
+<p>Declared twice and required to agree: <code>iron/constants.py</code> and
+<code>kernels/aie_array_layout.h</code>.</p>
+
+<h3>10.1 <code>proj_pkt_id</code> — the engine's y tree (one-hot)</h3>
+<table>
+<thead><tr><th>Name</th><th class="num">id</th><th>Payload</th><th>Destination</th></tr></thead>
+<tbody>
+<tr><td class="mono">to_rms</td><td class="num">2</td><td>o_proj and down_proj results</td><td>MT[3] <code>OProj_in</code></td></tr>
+<tr><td class="mono">to_rope</td><td class="num">4</td><td>fused qkv</td><td>CT[3][3] <code>QKV_in</code></td></tr>
+<tr><td class="mono">to_aux</td><td class="num">8</td><td>z</td><td>MT[3] <code>Z_in</code></td></tr>
+<tr><td class="mono">to_glu</td><td class="num">16</td><td>up|gate</td><td>CT[1][2] <code>Up_Gate_in</code></td></tr>
+</tbody>
+</table>
+
+<h3>10.2 <code>rms_pkt_id</code> — one per rms phase</h3>
+<table>
+<thead><tr><th>Name</th><th class="num">id</th><th>Phase</th><th>Destination</th></tr></thead>
+<tbody>
+<tr><td class="mono">to_proj</td><td class="num">0</td><td>1 · input norm</td><td>MT[2] — qkv|z's x</td></tr>
+<tr><td class="mono">to_st</td><td class="num">1</td><td>2 · post-attention norm</td><td>MT[2] — up|gate's x</td></tr>
+<tr><td class="mono">to_out</td><td class="num">4</td><td>3 · h2, no norm</td><td>IT[3] &rarr; DDR</td></tr>
+</tbody>
+</table>
+<p>The kernel writes the id into the payload itself, so the phase the tile is in picks the id.</p>
+
+<h3>10.3 The rest</h3>
+<table>
+<thead><tr><th>Enum</th><th>Name</th><th class="num">id</th><th>Where</th></tr></thead>
+<tbody>
+<tr><td class="mono">it1_pkt_id</td><td class="mono">to_rms</td><td class="num">0</td><td>IT[3].MM2S0 &rarr; rms X_in; also MM2S1 &rarr; rms W_in</td></tr>
+<tr><td class="mono">it1_pkt_id</td><td class="mono">to_rope</td><td class="num">1</td><td>IT[3].MM2S0 &rarr; RoPE ROPE_in</td></tr>
+<tr><td class="mono">proj_x_pkt_id</td><td class="mono">from_replay</td><td class="num">2</td><td>MT[2] replay channels &rarr; MT[2]'s own FIFO; never leaves the tile</td></tr>
+<tr><td class="mono">aux_to_proj_x_in_pkt_id</td><td class="mono">to_out_proj</td><td class="num">2</td><td>gate tile &rarr; MT[2] <code>x_in(1)</code></td></tr>
+<tr><td class="mono">aux_to_proj_x_in_pkt_id</td><td class="mono">to_down_proj</td><td class="num">19</td><td>GLU &rarr; MT[2] <code>x_in(3)</code></td></tr>
+<tr><td class="mono">aux_to_rms_pkt_id</td><td class="mono">to_residual</td><td class="num">3</td><td>MT[3] &rarr; rms X_in (merges with <code>it1_pkt_id.to_rms</code>)</td></tr>
+<tr><td>RoPE Q_out</td><td>—</td><td class="num">0 / 1</td><td>selects attention CU 0 / CU 1</td></tr>
+<tr><td>MT[4] MM2S4</td><td>—</td><td class="num">0</td><td>o &rarr; gate tile</td></tr>
+</tbody>
+</table>
+<div class="note"><code>proj_x_pkt_id.from_replay</code> and <code>aux_to_proj_x_in_pkt_id.to_out_proj</code>
+are both <code>2</code>. They are on <em>different ports</em>, so the collision is only in the value.</div>
+
+<!-- ================================================================= -->
+<h2 id="s11">11 · Per-tile reference</h2>
+
+<h3>11.1 IT[3] — the layer shim (<code>xyr_tile</code>)</h3>
+<table>
+<thead><tr><th>Chan</th><th>Dir</th><th>DDR buffer</th><th>Payload</th></tr></thead>
+<tbody>
+<tr><td class="mono">MM2S0</td><td>out</td><td>arg 0 / arg 3</td><td>hidden states (<code>to_rms</code>) <b>and</b> rope+qk-norm table (<code>to_rope</code>)</td></tr>
+<tr><td class="mono">MM2S1</td><td>out</td><td>arg 2</td><td>the two RMSNorm weight vectors, <code>2·D</code> bf16</td></tr>
+<tr><td class="mono">S2MM1</td><td>in</td><td>arg 0 @ <code>layer_out_offset</code></td><td><code>h2</code>, on <code>bd_9</code>; the host's final wait</td></tr>
+</tbody>
+</table>
+
+<h3>11.2 IT[4] — the attention shim (<code>attn_tile</code>)</h3>
+<table>
+<thead><tr><th>Chan</th><th>Dir</th><th>Payload</th></tr></thead>
+<tbody>
+<tr><td class="mono">S2MM0</td><td>in</td><td>interleaved k|v from RoPE, de-interleaved into the cache by one 4-dim BD</td></tr>
+<tr><td class="mono">MM2S0</td><td>out</td><td>k, linear, from cache offset 0</td></tr>
+<tr><td class="mono">MM2S1</td><td>out</td><td>v, linear, from cache offset <code>kv_cache_size/2</code></td></tr>
+</tbody>
+</table>
+
+<h3>11.3 IT[0], IT[1], IT[6], IT[7] — weight shims (<code>mvm_tiles</code>)</h3>
+<p>Two MM2S channels each, feeding <code>MT[col].S2MM4</code> and <code>S2MM5</code>. Per round per column the
+host posts two BDs (<code>bd_1 + bd_offset</code>, <code>bd_2 + bd_offset</code> with
+<code>bd_offset = (round % 2) · 8</code>), each carrying <code>2 · blocks_per_row · a_block_size</code> bytes,
+at DDR offsets <code>(round·16 + col·4) · a_block_size · blocks_per_row</code> and two row-blocks further.
+Waits lag one round, so the next round's DMA is already in flight.</p>
+
+<h3>11.4 MT[3] — the aux staging tile</h3>
+<table>
+<thead><tr><th>Buffer</th><th>Size</th><th class="num">bf16</th><th class="num">KiB</th></tr></thead>
+<tbody>
+<tr><td><code>z_buffer</code></td><td class="mono">L · DQ</td><td class="num">49,152</td><td class="num">96</td></tr>
+<tr><td><code>op_buffer</code></td><td class="mono">L · D</td><td class="num">40,960</td><td class="num">80</td></tr>
+<tr><th colspan="2">of 512 KiB</th><th class="num">90,112</th><th class="num">176</th></tr>
+</tbody>
+</table>
+<table>
+<thead><tr><th>Chan</th><th>Dir</th><th>Detail</th></tr></thead>
+<tbody>
+<tr><td class="mono">S2MM1</td><td>in</td><td>z, whole buffer, <code>z_dims = [(DQ/32, 32), (L, DQ), (32, 1)]</code></td></tr>
+<tr><td class="mono">S2MM2</td><td>in</td><td>o_proj, whole buffer, <code>op_dims = [(D/32, 32), (L, D), (32, 1)]</code></td></tr>
+<tr><td class="mono">MM2S1</td><td>out</td><td>L chained BDs, <code>offset = t·DQ</code> &rarr; gate tile; <b>no packet id</b></td></tr>
+<tr><td class="mono">MM2S2</td><td>out</td><td>L chained BDs, <code>offset = t·D</code>, each stamping <code>aux_to_rms_pkt_id.to_residual</code></td></tr>
+</tbody>
+</table>
+<p>Locks 2/3 (z free init L, ready 0) and 4/5 (o). The <b>attention output does not pass through this tile</b> —
+MT[4] hands it to the gate tile token-major and it is the last operand to arrive.</p>
+
+<h3>11.5 CT[0][3] — the rms/residual tile</h3>
+<pre>ctx.func("rms_residual", [y_pkt_ty, x_ty, x_ty, w_ty] + [x_ty] * L_TOKENS)
+                          y        x_ping x_pong w      h0 .. h7</pre>
+<table>
+<thead><tr><th>Buffer</th><th>Location</th><th class="num">bf16</th><th class="num">KiB</th></tr></thead>
+<tbody>
+<tr><td><code>x_ping</code>, <code>x_pong</code></td><td>local</td><td class="num">2 &times; 5120</td><td class="num">20</td></tr>
+<tr><td><code>w_buffer</code></td><td>local</td><td class="num">5120</td><td class="num">10</td></tr>
+<tr><td><code>y</code></td><td class="mono">(D + 16,)</td><td class="num">5136</td><td class="num">10</td></tr>
+<tr><td><code>h0 .. h3</code></td><td><code>CT[1][3]</code> (north, 0x60000)</td><td class="num">4 &times; 5120</td><td class="num">40</td></tr>
+<tr><td><code>h4 .. h7</code></td><td><code>CT[0][2]</code> (west, 0x50000)</td><td class="num">4 &times; 5120</td><td class="num">40</td></tr>
+</tbody>
+</table>
+<table>
+<thead><tr><th>Chan</th><th>Dir</th><th>Detail</th></tr></thead>
+<tbody>
+<tr><td class="mono">S2MM0</td><td>in</td><td>x, ping/pong; merge of IT[3] rows and MT[3] residual rows</td></tr>
+<tr><td class="mono">S2MM1</td><td>in</td><td><code>w_buffer</code>, self-chained; fires <b>twice</b> per invocation (phase 3 takes no weight)</td></tr>
+<tr><td class="mono">MM2S0</td><td>out</td><td><code>aie.dma_bd(y, offset = 14, len = D + 2)</code>, self-chained; three destinations by id</td></tr>
+</tbody>
+</table>
+<p>Locks 0–6. <code>CT_BANK_SIZE = 16·1024</code>, <code>CT_NUM_BANKS = 4</code>; <code>_reachable_from()</code>
+implements the west/north/south(row&ge;2) legality rule described in <a href="#s4">§4.2</a>.</p>
+
+<h3>11.6 CT[2][3] — the sigmoid gate</h3>
+<table>
+<thead><tr><th>Buffer</th><th class="mono">type</th><th class="num">bf16</th></tr></thead>
+<tbody>
+<tr><td><code>gate_buffer</code> (z)</td><td class="mono">(DQ,)</td><td class="num">6144</td></tr>
+<tr><td><code>attn_out_buffer</code></td><td class="mono">(DQ,)</td><td class="num">6144</td></tr>
+<tr><td><code>gated_attn_out_buffer</code></td><td class="mono">(DQ,)</td><td class="num">6144</td></tr>
+</tbody>
+</table>
+<p><code>repeats = 1</code> (one token per invocation), locks 0–6, three self-chained BDs.
+MM2S0 stamps <code>aux_to_proj_x_in_pkt_id.to_out_proj</code>.</p>
+
+<h3>11.7 CT[1][2] — the SwiGLU</h3>
+<div class="kv">
+<div>m_per_round</div><div><code>32 · 16 = 512</code></div>
+<div>round_size</div><div><code>L · 512 = 4096</code> bf16</div>
+<div>buffers</div><div>4 round buffers = 32 KB (half the tile)</div>
+<div>pairs</div><div><code>17408 / 512 = 34</code></div>
+<div>x_prod_lock</div><div>init <b>2</b> — the kernel holds both inputs of a pair</div>
+<div>MM2S0</div><div>two chained BDs, both stamping <code>to_down_proj</code></div>
+</div>
+
+<h3>11.8 CT[3][3] — RoPE</h3>
+<table>
+<thead><tr><th>Buffer</th><th class="mono">type</th><th class="num">bf16</th><th>Note</th></tr></thead>
+<tbody>
+<tr><td><code>q_in_buffer</code></td><td class="mono">(DQ,)</td><td class="num">6144</td><td>from the engine (<code>to_rope</code>)</td></tr>
+<tr><td><code>kv_in_buffer</code></td><td class="mono">(DK+DV,)</td><td class="num">2048</td><td>same channel, arrives <b>first</b></td></tr>
+<tr><td><code>q_buffer</code></td><td class="mono">(PADDED_DQ,)</td><td class="num">8192</td><td>32 padded heads</td></tr>
+<tr><td><code>k_buffer</code>, <code>v_buffer</code></td><td class="mono">(DK,), (DV,)</td><td class="num">1024 each</td><td>&rarr; IT[4]</td></tr>
+<tr><td><code>rope_buffer</code></td><td class="mono">(ROPE_DIM + 2·DH,) = (576,)</td><td class="num">576</td><td>cos|sin (64) + q_norm (256) + k_norm (256)</td></tr>
+</tbody>
+</table>
+<p>11 locks, ids 0–10, including <code>q_pass_lock</code> (id 10, init 0) which orders the two Q_out BDs.</p>
+<table>
+<thead><tr><th>Chan</th><th>Dir</th><th>BD chain</th></tr></thead>
+<tbody>
+<tr><td class="mono">S2MM0</td><td>in</td><td><code>kv_in_buffer</code> &rarr; <code>q_in_buffer</code> &rarr; repeat</td></tr>
+<tr><td class="mono">S2MM1</td><td>in</td><td><code>rope_buffer</code>, self-chained</td></tr>
+<tr><td class="mono">MM2S0</td><td>out</td><td><code>q_buffer[0 : DQ/2]</code> pkt 0 &rarr; <code>q_buffer[DQ/2 : DQ]</code> pkt 1 &rarr; repeat</td></tr>
+<tr><td class="mono">MM2S1</td><td>out</td><td><code>k_buffer</code> &rarr; <code>v_buffer</code> &rarr; repeat</td></tr>
+</tbody>
+</table>
+
+<!-- ================================================================= -->
+<h2 id="s12">12 · Kernel reference</h2>
+
+<table>
+<thead><tr><th>Object</th><th>Tiles</th><th>Entry</th><th>Does</th></tr></thead>
+<tbody>
+<tr><td class="mono">proj_main.o</td><td>16 MVM cores</td><td class="mono">mvm()</td><td>Q4_K dequant + bf16 MAC, L rows at a time; column reduction; y header stamp</td></tr>
+<tr><td class="mono">rms_residual.o</td><td>CT[0][3]</td><td class="mono">rms_residual()</td><td>3 phases: norm / residual+norm / residual only; owns the resident h</td></tr>
+<tr><td class="mono">rope.o</td><td>CT[3][3]</td><td class="mono">rope()</td><td>per-head RMSNorm on q and k, partial RoPE on dims [0,64), q|k|v split</td></tr>
+<tr><td class="mono">attn_qk.o</td><td>CT[0][4], CT[2][4]</td><td class="mono">attn_qk()</td><td>Q·K<sup>T</sup>, scale, streaming-softmax max/correction</td></tr>
+<tr><td class="mono">attn_kv.o</td><td>CT[1][4], CT[3][4]</td><td class="mono">attn_kv()</td><td>denominator l, S·V accumulate with correction, 1/l, drop padding heads</td></tr>
+<tr><td class="mono">gate.o</td><td>CT[2][3]</td><td class="mono">gate()</td><td><code>attn · sigmoid(z)</code> over DQ lanes</td></tr>
+<tr><td class="mono">glu.o</td><td>CT[1][2]</td><td class="mono">glu()</td><td><code>silu(gate) · up</code>, one 512&times;L pair per call, 34 pairs</td></tr>
+</tbody>
+</table>
+
+<h3>12.1 RTPs</h3>
+<p>Only two per CU survive — the KV length:</p>
+<pre>seq-&gt;rtp_write(attn_qk_tiles[i], l_qk_address, L);
+seq-&gt;rtp_write(attn_kv_tiles[i], l_kv_address, L);</pre>
+<p>Both buffers are <code>L_ty = (8,) int32</code>, declared with <code>use_write_rtp = True</code> and named
+<code>RTP_L_attn_{qk,kv}_core_&lt;row&gt;_&lt;col&gt;</code>. Their addresses come from the generated
+<code>input_with_addresses.mlir</code> and are <b>per build</b>.</p>
+
+<h3>12.2 bf16 rounding, and why the golden model mirrors it</h3>
+<p><code>aie::accum::to_vector&lt;bf16&gt;()</code> <b>truncates toward −inf</b> on every fp32&rarr;bf16 narrowing
+inside a kernel. <code>host.cpp</code>'s CPU chain therefore calls <code>round_bf16()</code> at exactly the
+same points — after the input norm, after each projection, after the per-head norms, after RoPE, after the
+softmax, after the gate, after each residual add, and after SwiGLU — so that a comparison failure means a
+real dataflow bug rather than accumulated rounding.</p>
+
+<!-- ================================================================= -->
+<h2 id="s13">13 · Host reference</h2>
+
+<h3>13.1 DDR buffers</h3>
+<table>
+<thead><tr><th class="num">arg</th><th>Name</th><th>Contents</th><th class="num">Size</th><th>Dir</th></tr></thead>
+<tbody>
+<tr><td class="num">0</td><td class="mono">x_arg_id</td><td>hidden states at 0; <code>h2</code> at <code>layer_out_offset = L_TOKENS·D</code></td><td class="num">160 KiB</td><td>in + out</td></tr>
+<tr><td class="num">1</td><td class="mono">proj_arg_id</td><td>Q4_K weights, in consume order <code>qkv &rarr; z &rarr; o &rarr; up|gate &rarr; down</code></td><td class="num">205.2 MiB</td><td>in</td></tr>
+<tr><td class="num">2</td><td class="mono">rms_arg_id</td><td>both layernorm weight vectors, concatenated</td><td class="num">20 KiB</td><td>in</td></tr>
+<tr><td class="num">3</td><td class="mono">rope_rms_arg_id</td><td>L blocks of <code>rope_block = ROPE_DIM + 2·DH = 576</code></td><td class="num">9 KiB</td><td>in</td></tr>
+<tr><td class="num">4</td><td class="mono">kv_cache_arg_id</td><td><code>2 · MAX_L_padded · DK</code>, k half then v half</td><td class="num">64 KiB</td><td>in + out</td></tr>
+</tbody>
+</table>
+<p>Arg ids map to instruction groups 3..7. Tile handles:
+<code>xyr_tile = IT3</code>, <code>attn_tile = IT4</code>,
+<code>mvm_tiles[4] = {IT0, IT1, IT6, IT7}</code>,
+<code>attn_qk_tiles = {CT04, CT24}</code>, <code>attn_kv_tiles = {CT14, CT34}</code>,
+<code>L_CHUNK = 16</code>.</p>
+
+<h3>13.2 <code>load_weights()</code></h3>
+<p>Pinned to <code>layer_idx = 3</code> (the first full-attention layer).</p>
+<ul>
+<li><code>q_proj</code> in the checkpoint has <code>2·DQ</code> rows; it is split into <b>q</b> and <b>z</b>.</li>
+<li>Written in the order <b>k, v, q</b> — not q, k, v — because RoPE's inbound BD chain is
+<code>kv_in</code> then <code>q_in</code>.</li>
+<li><code>o_proj</code> is passed <code>DQ</code> as its column count.</li>
+<li><code>up</code> and <code>gate</code> are woven (<a href="#s9">§9.2</a>).</li>
+<li>Both layernorms are concatenated into one <code>rms_weights_buffer</code>.</li>
+<li><code>q_norm</code>/<code>k_norm</code> are copied into <b>all</b> <code>L_TOKENS</code> rope blocks at
+<code>blk + ROPE_DIM</code> and <code>blk + ROPE_DIM + DH</code>.</li>
+</ul>
+
+<h3>13.3 <code>_gen_sequence(seq, L)</code> — the instruction order</h3>
+<pre> 1  rtp_write(attn_qk_tiles[i], l_qk_address, L)   for both CUs
+ 2  rtp_write(attn_kv_tiles[i], l_kv_address, L)   for both CUs
+ 3  _send_hidden_states()
+ 4  _send_rms_weights()
+ 5  _send_rope_rms_weights()
+ 6  _receive_kv_cache()
+ 7  _receive_layer_out()
+ 8  _move_weights(qkv)
+ 9  _move_weights(z)
+10  npu_dma_wait(attn_tile, S2MM, ch0)          # cache append complete
+11  _move_kv_cache()                            # read the cache back in
+12  _move_weights(o    : D, DQ)
+13  _move_weights(up|gate : 2I, D)
+14  _move_weights(down : D, I)
+15  npu_dma_wait(xyr_tile, S2MM, ch1)           # h2 landed</pre>
+<div class="warnbox">
+<b>Three ordering rules, documented in <code>decoding_layer.cpp</code>:</b>
+<ol style="margin:6px 0 0 18px">
+<li>Weight moves and mvm calls are paired <b>positionally</b> — the <em>n</em>-th <code>_move_weights</code>
+feeds the <em>n</em>-th <code>mvm()</code> in <code>proj_main.cc</code>. Reordering either side silently
+mismatches them.</li>
+<li>Every read (<code>_receive_*</code>) must be posted <b>before</b> any weight moves, or the array stalls
+with nowhere to drain.</li>
+<li><code>_send_rope_rms_weights()</code> must <b>not</b> wait for completion — inserting a wait there
+deadlocks the pass.</li>
+</ol>
+</div>
+
+<h3>13.4 The CPU golden chain (<code>host.cpp</code>)</h3>
+<pre>input_layernorm
+  -&gt; q4nx_matmul: q|z, k, v
+  -&gt; per-head RMSNorm on q and k
+  -&gt; partial RoPE: dims [0,64), halves 0..31 / 32..63, cos/sin from verify.cos / verify.sin
+  -&gt; causal GQA softmax:  GQA_GROUP = 6 q per kv, ATTN_SCALE, nkey = t+1, zero cache
+  -&gt; gated[i] = attn[i] * sigmoid(z[i])
+  -&gt; o_proj
+  -&gt; h1 = bf16(x_in + o_proj);  post_attention_layernorm
+  -&gt; up|gate with WEAVE = 512
+  -&gt; SwiGLU at woven index (i/WEAVE)*2*WEAVE + i%WEAVE
+  -&gt; down_proj
+  -&gt; layer_out = h1 + down</pre>
+<p>Only <code>h2</code> is scored. NPU side:</p>
+<pre>decoding_layer npu_layer(env.model, env.lm_config, env.layer_app_mgr, L);
+npu_layer.load_weights(env.q4nx);
+npu_layer.set_rope_table(cos_in.data(), sin_in.data(), ROPE_DIM);</pre>
+<p><code>main()</code> defaults to <code>--model QWEN3_8_27B</code> and registers the xclbin through
+<code>npu_xclbin_manager(npu_device::device_npu2, …)</code>.</p>
+
+<h3>13.5 Size helpers (<code>host/quant_size.hpp</code>)</h3>
+<pre>q4k_bytes(elems) = elems/2 + elems/32*2 + elems/256*4     // 32&times;256 -&gt; 4736 B
+q80_bytes(elems) = elems    + elems/32*2                  // 32&times;256 -&gt; 8704 B</pre>
+
+<!-- ================================================================= -->
+<h2 id="s14">14 · Why it is shaped this way</h2>
+
+<h3>14.1 One-hot packet ids in the y tree</h3>
+<p>Every id in the engine's y tree is the only one with its bit set, so the mask that splits it off a shared
+slave port is that bit alone and cannot match the others. Give two of them a shared bit and the rule
+generator either lets one <b>swallow</b> the other (mask widening produces a false match) or refuses the
+port outright. <code>to_glu = 16</code> is one-hot on purpose: a widened mask that admits it cannot admit
+another id in the tree.</p>
+
+<h3>14.2 Two masksets per master port</h3>
+<p>A master port carries at most <b>two destination sets</b>. <code>rms_core.Y_out</code> emits three ids,
+but only two destinations: both norms land on the same MT[2] port (told apart by <em>arrival order</em>,
+not by id), so <code>AIECreatePacketFlows</code> merges <code>to_proj</code> and <code>to_st</code> into one
+group, and the port ends up with exactly two masksets — west to MT[2], south to the shim.
+A <em>third</em> set off this port would not route, whatever the id or destination: the allocator ties the
+port to two arbiters and <code>AIEDialect.cpp:2047</code> rejects it.</p>
+<div class="note"><b>Consequence:</b> the post-attention norm has <b>no DDR tap of its own</b>. If you want to
+observe <code>h1</code> or the phase-2 output, you have to free a maskset first.</div>
+
+<h3>14.3 No zero-hop packet flows</h3>
+<p>The pathfinder cannot route a packet flow whose source and destination are the same switchbox — the
+destination port is left unset and the rule emerges on <code>South : 0</code>. This is why MT[2]'s replay
+output has to travel one column west to MT[1]'s FIFO before it can be broadcast.</p>
+
+<h3>14.4 Numeric ceilings</h3>
+<table>
+<thead><tr><th>Limit</th><th>Value</th><th>Design consequence</th></tr></thead>
+<tbody>
+<tr><td>Memtile lock counter</td><td>6 bits, &le; 63</td><td><code>_pick_fanout</code>: up_gate's 68 replays become 2&times;34</td></tr>
+<tr><td>BD size field (bf16 folded)</td><td>512 elements</td><td><code>BD_MAX_SIZE</code>, <code>_split_bd_size</code>: 544 &rarr; (2, 272)</td></tr>
+<tr><td>Memtile channels</td><td>6 S2MM + 6 MM2S</td><td>MT[1] uses 5 of each; MT[4] uses 4 in / 5 out</td></tr>
+<tr><td>Memtile BDs</td><td>48; even channels need <code>bd_id &lt; 24</code></td><td>constrains the BD id allocation in every memtile class</td></tr>
+<tr><td>Compute tile memory</td><td>64 KiB in 4 &times; 16 KiB banks</td><td>proj scratch split as <code>b_col_reduce_add_lo/hi</code>; GLU capped at 4 round buffers</td></tr>
+<tr><td>Memtile memory</td><td>512 KiB</td><td>MT[2] at 368 KiB is the tightest</td></tr>
+<tr><td>Core memory affinity</td><td>west/north/own; south only from row &ge; 3</td><td>fixes the rms tile at <code>CT[0][3]</code> with residual on <code>CT[1][3]</code> + <code>CT[0][2]</code></td></tr>
+<tr><td>Shim <code>iter_size</code></td><td>6 bits</td><td>bounds the host's per-BD repeat counts</td></tr>
+<tr><td>Shim BD stride</td><td>20 bits after bf16 fold</td><td>bounds DDR strides in the weight and cache BDs</td></tr>
+<tr><td>AIE2 AM registers</td><td>4 &times; 1024-bit</td><td><code>_Q4K_x_bf16_L&lt;L&gt;</code> spills accumulators to memory</td></tr>
+</tbody>
+</table>
+
+<h3>14.5 bf16 in <code>aie::mmul</code></h3>
+<p><code>mmul&lt;8,8,8,bf16&gt;</code> on npu2 floors both operands onto a shared-exponent-per-8 grid
+(effectively bfp16). Where accuracy matters, weights are pre-rounded on the host and the dequant path uses
+two-limb bf16 splitting. This is why <code>q4_core.h</code> reduces integer sums first and applies the bf16
+super-block scale afterwards.</p>
+
+<!-- ================================================================= -->
+<h2 id="s15">15 · Known gaps &amp; documentation drift</h2>
+
+<h3>15.1 The L = 8 attention gaps</h3>
+<table>
+<thead><tr><th>#</th><th>Where</th><th>Problem</th></tr></thead>
+<tbody>
+<tr><td>1</td><td class="mono">iron/attn.py :: qk_tile</td>
+    <td><code>attn_q_ty = (8·256,)</code> = 2048 elements — <em>one</em> token's padded head group — and the
+    landing BD is 2048 long. But <code>RoPE.Q_out</code> sends <code>DQ/2 = 3072</code> per CU per token.
+    3072 is not a multiple of 2048, so the q chain cannot be satisfied as written.</td></tr>
+<tr><td>2</td><td class="mono">iron/RoPE.py</td>
+    <td><code>q_buffer</code> is <code>PADDED_DQ = 8192</code>, but MM2S0 only emits the first
+    <code>DQ = 6144</code> elements (two 3072 halves). The 2048 padding elements are never sent, so the
+    padded-head layout the CUs expect is not what leaves the tile.</td></tr>
+<tr><td>3</td><td class="mono">kernels/attn_qk.cc</td>
+    <td><code>aie::mask&lt;16&gt; mask = aie::le(idx, (i &lt; 16) ? i : 16)</code> is a <b>length</b> mask
+    (it trims the final partial KV chunk), <b>not a causal mask</b>. At L = 8 every query row would attend
+    to the full cache. The <code>L</code> RTP is likewise the KV length
+    (<code>rounds = (L[0]+15)/16</code>), not the query count.</td></tr>
+<tr><td>4</td><td class="mono">kernels/attn_qk.cc</td>
+    <td>The outer <code>for (int h = 0; h &lt; 6; h++)</code> trip count is hardcoded and does not derive
+    from any of <code>ATTN_ROUNDS</code> (4), <code>KV_HEADS_PER_CU</code> (1) or <code>L_TOKENS</code> (8).</td></tr>
+<tr><td>5</td><td class="mono">iron/RoPE.py</td>
+    <td>The qkv rows arrive from the engine <b>row-block permuted</b> (<a href="#s9">§9.1</a>). Every other
+    consumer un-permutes in its landing BD; the RoPE tile does not, so it sees
+    <code>raw[(rb·L + t)·32 + r]</code> rather than token-major rows.</td></tr>
+<tr><td>6</td><td class="mono">iron/aux_memtile.py</td>
+    <td>Docstring notes that multi-dimensional memtile BDs beyond 3 dims are <b>unverified</b> in this IRON
+    version. MT[2]'s <code>down</code> landing BD uses 4 dims.</td></tr>
+</tbody>
+</table>
+
+<h3>15.2 Documentation drift in the repo</h3>
+<table>
+<thead><tr><th>Source</th><th>Says</th><th>Code actually does</th></tr></thead>
+<tbody>
+<tr><td><code>README.md</code> array-layout table</td>
+    <td>brought back in line with <code>layer_aie.py</code> when the GLU moved to <code>CT[1][2]</code></td>
+    <td>agrees: MT[2] = x replay (all four phases), MT[3] = z/o staging, MT[4] = KV cache,
+        CT[1][2] = SwiGLU, column 5 free</td></tr>
+<tr><td><code>proj_x_replay_mt</code> docstring</td>
+    <td>“32 + 10 + 68 + 10 = 120 sends”</td>
+    <td><b>28</b> + 10 + 68 + 10 = <b>116</b> (<code>QKV_REPEATS = 14336/512</code>)</td></tr>
+<tr><td><code>host.cpp</code> header comment</td>
+    <td>“a run will hang rather than mis-compare”</td>
+    <td>accurate, and consistent with §15.1 — treat a hang as the expected symptom until the attention
+        datapath is reshaped</td></tr>
+</tbody>
+</table>
+
+<h3>15.3 Cross-references</h3>
+<p>Everything outside the mixer is shared tile-for-tile and packet-id-for-packet-id with
+<code>../gate_delta_net_verify</code>. Its <code>ARCHITECTURE.md</code> and <code>DATAFLOW.html</code>
+describe the projection engine, the x replay memtile and the rms/residual tile as well; the
+<code>ARCHITECTURE.md sec N</code> markers in <code>layer_aie.py</code>'s comments point into that document.</p>
+
+<footer>
+Derived from <code>iron/{layer_aie,proj_tile,attn,RoPE,rms_residual,aux_memtile,gate,glu,constants,model_config}.py</code>,
+<code>kernels/{proj_main,attn_qk,attn_kv,rope,gate,glu,rms_residual}.cc</code>,
+<code>kernels/{q4_core,aie_array_layout,model_spec}.h</code>,
+<code>host/{host.cpp,decoding_layer.cpp,decoding_layer.hpp,quant_size.hpp}</code>,
+<code>models/qwen3.8-27b.h</code> and the top-level <code>Makefile</code>.
+</footer>
+
+</main>
+</div>
+</body>
+</html>

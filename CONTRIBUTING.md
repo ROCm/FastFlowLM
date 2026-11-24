@@ -25,6 +25,8 @@ still change behavior. Delete `src/build` when in doubt.
 Open a PR against `main`. Use Conventional Commits — `feat:`, `fix:`, `docs:`, `chore:`,
 `ci:`, `refactor:` — with an optional scope like `chore(hrx):`. No sign-off needed.
 
+Working in `flm-dev-kit/`? Read [flm-dev-kit/AGENTS.md](flm-dev-kit/AGENTS.md) first.
+
 Rebase before pushing, and match the surrounding code (files use `/// \file`, `/// \brief`
 Doxygen headers). Don't edit vendored code: `src/include/nlohmann/`, `src/include/minja/`,
 `third_party/`.
@@ -34,10 +36,27 @@ matrix.
 
 ## Gotchas
 
-**Adding a model?** Both NPU backends need its engine library. The link list in
-`CMakeLists.txt` is unconditional, so an engine that lands only in `src/lib/xrt/` breaks the
-`FLM_USE_HRX=ON` build at link time while the default build stays green. Also register it in
-`src/model_list.json` and add `src/xclbins/<MODEL>-NPU2/`.
+**Never edit `src/lib/xrt/`, `src/lib/hrx/` or `src/xclbins/` by hand.** The engine libraries
+and NPU kernels there come from the dev kit (`flm-dev-kit/`), and a pull request commits exactly
+the files its own CI run built, staged into its product builds and tested on the NPU: change the
+dev-kit source and push; CI builds it, stages it into every product build and runs the product
+NPU tests on those packages; while the branch lacks those files, the required check fails with
+"Dev-kit swap pending" and the command to run: `python .github/script/ci/devkit_swap.py fetch
+--run <id>` on a clean checkout of the tested commit, then push the swap commit it makes; CI
+checks its hashes against that run and skips the NPU tests for it. Make the swap after your last
+dev-kit source change: a later push that changes no dev-kit source (a review fix, a merge of main)
+tests the committed files, but one that does needs a new run and a new fetch. Steps, conditions
+and the full refresh: "Prebuilt binaries" in [flm-dev-kit/AGENTS.md](flm-dev-kit/AGENTS.md).
+
+**Adding a model?** Add its dev-kit source (engine under `flm-dev-kit/FLM_DLL/detail/`,
+kernels under `flm-dev-kit/FLM_Xclbin/`) with its `engines.json` and `kernel_assignment.json`
+entries, its `src/model_list.json` entry, the engine's line in `FLM_ENGINE_LINK_LIBS`
+(`src/CMakeLists.txt`) and the engine table in `.github/script/ci/changes.py`, but nothing under
+`src/lib/` or `src/xclbins/` and no change to the NPU test harness (`.github/script/npu_test/`,
+which goes in a pull request of its own: a swap cannot come with it). CI builds the
+engine for both NPU backends and the kernels, stages them into the product builds (which then
+link the new engine), tests the model, and says "Dev-kit swap pending"; fetch and push as above.
+The walkthrough: "Adding a model" in [flm-dev-kit/AGENTS.md](flm-dev-kit/AGENTS.md).
 
 **Adding a docs page?** It's invisible until you add it to the hardcoded `docs_nav` list in
 `docs/_config.yml` — the sidebar is not generated from front matter. Give the URL a trailing
@@ -53,6 +72,5 @@ driver than the binary enforces, so report the version you actually have.
 
 Source code is MIT ([LICENSE_RUNTIME.txt](LICENSE_RUNTIME.txt)). The NPU kernel binaries in
 `src/xclbins/` and `src/lib/hrx/` are **not** open source, but are free to use and redistribute
-unmodified — see [LICENSE_BINARY.txt](LICENSE_BINARY.txt). They're
-built from a separate toolchain and refreshed by maintainers, so if your change needs new
-kernels, open an issue first; a source-only PR won't be enough.
+unmodified — see [LICENSE_BINARY.txt](LICENSE_BINARY.txt). CI builds them from the dev kit
+(`flm-dev-kit/`), and they are committed only through the swap flow under Gotchas.

@@ -102,7 +102,7 @@ int main(int argc, char* argv[]) {
     arg_utils::po::variables_map vm;
     desc.add_options()("model,m", arg_utils::po::value<std::string>()->default_value("hy-memory:30b-a3b"), "Model tag");
     desc.add_options()("reference,r", arg_utils::po::value<std::string>()->default_value(
-        "/scratch/michyu/Projects/FastFlowLM_IRON/models_simple/hy_mem_e2e_reference.safetensors"), "ref_hy_mem_e2e.py output");
+        "hy_mem_e2e_reference.safetensors"), "ref_hy_mem_e2e.py output");
     desc.add_options()("messages", arg_utils::po::value<std::string>()->default_value("../../../test/hy_mem_npu/messages/model_card_demo.json"),
         "the messages the reference was made from");
     arg_utils::po::store(arg_utils::po::parse_command_line(argc, argv, desc), vm);

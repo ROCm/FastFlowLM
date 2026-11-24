@@ -1,0 +1,77 @@
+{
+    "q4nx_config": {
+        "row_block_size": 32,
+        "col_block_size": 256,
+        "parallel_size": 16,
+        "keep_block_in_2D": false
+    },
+    "default_tensor_type": "Q4_1",
+    "dflash_config": {
+        "bf16_tensors": ["model.fc.weight"],
+        "note": "tensors listed here stay BF16 in the 32-row block layout (bf16_proj.h); everything else matmul is Q4_1"
+    },
+    "name_map": {
+        "fc": {
+            "gguf_name": "fc.weight",
+            "q4nx_name": "model.fc.weight"
+        },
+        "hidden_norm": {
+            "gguf_name": "enc.output_norm.weight",
+            "q4nx_name": "model.hidden_norm.weight",
+            "default_tensor_type": "BF16"
+        },
+        "final_norm": {
+            "gguf_name": "output_norm.weight",
+            "q4nx_name": "model.norm.weight",
+            "default_tensor_type": "BF16"
+        },
+        "q_proj": {
+            "gguf_name": "blk.{bid}.attn_q.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.q_proj.weight"
+        },
+        "k_proj": {
+            "gguf_name": "blk.{bid}.attn_k.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.k_proj.weight"
+        },
+        "v_proj": {
+            "gguf_name": "blk.{bid}.attn_v.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.v_proj.weight"
+        },
+        "o_proj": {
+            "gguf_name": "blk.{bid}.attn_output.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.o_proj.weight"
+        },
+        "gate_proj": {
+            "gguf_name": "blk.{bid}.ffn_gate.weight",
+            "q4nx_name": "model.layers.{bid}.mlp.gate_proj.weight"
+        },
+        "up_proj": {
+            "gguf_name": "blk.{bid}.ffn_up.weight",
+            "q4nx_name": "model.layers.{bid}.mlp.up_proj.weight"
+        },
+        "down_proj": {
+            "gguf_name": "blk.{bid}.ffn_down.weight",
+            "q4nx_name": "model.layers.{bid}.mlp.down_proj.weight"
+        },
+        "q_norm": {
+            "gguf_name": "blk.{bid}.attn_q_norm.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.q_norm.weight",
+            "default_tensor_type": "BF16"
+        },
+        "k_norm": {
+            "gguf_name": "blk.{bid}.attn_k_norm.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.k_norm.weight",
+            "default_tensor_type": "BF16"
+        },
+        "input_ln": {
+            "gguf_name": "blk.{bid}.attn_norm.weight",
+            "q4nx_name": "model.layers.{bid}.input_layernorm.weight",
+            "default_tensor_type": "BF16"
+        },
+        "post_ln": {
+            "gguf_name": "blk.{bid}.ffn_norm.weight",
+            "q4nx_name": "model.layers.{bid}.post_attention_layernorm.weight",
+            "default_tensor_type": "BF16"
+        }
+    }
+}

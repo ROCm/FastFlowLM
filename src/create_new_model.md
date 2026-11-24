@@ -23,7 +23,7 @@ Every model has two layers:
 1. **The engine** — `class <model>_npu : public causal_lm`. This is the NPU kernel
    graph (PIMPL-hidden) and is shipped as a *prebuilt* shared library
    (`lib<model>_npu.so` / `<model>_npu.dll`). You normally do **not** write this; it
-   comes from the kernel/IRON project.
+   comes from the developer kit (`flm-dev-kit/FLM_DLL`).
 2. **The AutoModel wrapper** — `class <Model> : public AutoModel`. This is what you
    write. It owns the tokenizer, sampler, chat template and prompt cache, and
    drives the engine through `prefill()` / `forward()` / `checkpoint()` / `restore()`.
@@ -438,7 +438,7 @@ void register_builtin_backends(BackendRegistry& registry) {
 
 ```bash
 #!/usr/bin/bash
-export FLM_MODEL_PATH="/scratch/michyu"
+export FLM_MODEL_PATH="/path/to/models"
 cp /path/to/kernels/build/lib/libgemma4_12b_npu.so ../../lib/xrt
 # cp -r /path/to/xclbins/Gemma4-12B-IT-NPU2 ../../xclbins/
 ```

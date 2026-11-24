@@ -1,0 +1,327 @@
+# Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+# Portions of this file consist of AI-generated content.
+
+name: Dev-kit xclbins
+
+# Builds the dev kit's NPU kernels (flm-dev-kit/FLM_Xclbin) on GitHub-hosted
+# runners, in the aie-build image (docker/aie-build.Dockerfile, the versions
+# in flm-dev-kit/FLM_Xclbin/toolchain.lock), with Peano only: Chess needs a
+# licence no hosted runner has, so CI never builds with it.
+#
+#   plan      which builds (unit x MODEL_TYPE, build_units.json) to make,
+#             split into shards: .github/actions/devkit-xclbin-plan, rules in
+#             .github/script/ci/devkit_xclbin_plan.py. mode changed (pull
+#             requests): the units the change touches, the artifacts of the
+#             models whose kernel_assignment.json entry it changes, the
+#             artifact assigned to each shipped kernel it replaces
+#             (src/xclbins/<folder>/<slot>, so the compare below reports
+#             it), or for a toolchain or CI change two canary kernels. assigned: every
+#             kernel the product ships; all: every build. A shard per 8
+#             builds, at most 16 (a pull request touching many kernels, as the
+#             import did with 137, spreads them instead of packing ~34 per
+#             shard). Each build gets 20 minutes (on a
+#             4-core hosted runner the slowest take ~5: VisionAttention
+#             units, 286 s and more), so hung builds cannot run
+#             the job into its own limit before the shard uploads
+#   image     the image to build in: the digest in
+#             flm-dev-kit/FLM_Xclbin/toolchain.image when that file exists;
+#             else ghcr.io/rocm/fastflowlm/aie-build:<toolchain hash>
+#             (.github/script/ci/aie_image_hash.py: 16 hex digits of a sha256
+#             of toolchain.lock and the Dockerfile, comments and blank lines
+#             left out; the tag devkit-aie-image.yml publishes) when the
+#             registry has it;
+#             else built here from the same Dockerfile and build args, reading
+#             devkit-aie-image.yml's layer cache (GitHub Actions cache scope
+#             aie-build; only devkit-aie-image.yml writes it), and handed to
+#             the build jobs as the artifact aie-build-image (docker save |
+#             zstd)
+#   build     one job per shard: .github/actions/devkit-build-xclbins makes
+#             each build in the image and uploads devkit-xclbins-shard-<i>.
+#             A failed build fails its shard, after the others in it
+#   assemble  .github/actions/devkit-assemble-xclbins: the shards' kernels as
+#             <model folder>/<slot>.xclbin per kernel_assignment.json,
+#             uploaded as devkit-xclbins; its touched-models are the models
+#             that got any kernel. Then a report comparing them with
+#             FastFlowLM's src/xclbins/ (job summary and the
+#             devkit-xclbins-compare artifact; never fails), and the RTP
+#             check: a kernel built here whose rtp_addresses file differs
+#             from flm-dev-kit/FLM_Xclbin/rtp_addresses.lock.txt fails the
+#             job, as the engines hard-code those addresses
+#
+# No build cache: a build takes 7-61 s, under a runner's start-up time, and
+# some units (generic_decoding_layer) do not build bit for bit the same
+# twice, so a cached kernel would not be known to equal a rebuilt one. Pull
+# requests restore nothing and save nothing.
+#
+# Build and Test (build-and-test.yml) calls this with mode changed when a pull
+# request selects the dev kit's xclbin area, with assigned on every push to
+# main and all on the nightly run.
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: changed, assigned or all.
+        type: string
+        default: changed
+      base:
+        description: >
+          Base commit for mode changed (its merge base with head is the diff
+          base, as in changes.py); empty plans every build.
+        type: string
+        default: ''
+      head:
+        description: Head commit for mode changed.
+        type: string
+        default: ''
+    outputs:
+      touched-models:
+        description: JSON list of the kernel_assignment.json models that got a rebuilt kernel.
+        value: ${{ jobs.assemble.outputs.touched-models }}
+      planned-models:
+        description: JSON list of the models the plan's builds serve (whether or not they built).
+        value: ${{ jobs.plan.outputs.touched-models }}
+      bench-models:
+        description: >
+          JSON list of the models worth benching (the plan's bench-models: in
+          mode changed the users of a kernel whose source changed and the
+          models whose assignment changed; planned-models otherwise).
+        value: ${{ jobs.plan.outputs.bench-models }}
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Which kernels to build
+        type: choice
+        options: [assigned, all]
+        default: assigned
+
+# Read-only token; image and build add packages: read to pull from GHCR.
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/rocm/fastflowlm/aie-build
+  LOCK: flm-dev-kit/FLM_Xclbin/toolchain.lock
+  PINNED: flm-dev-kit/FLM_Xclbin/toolchain.image
+  DOCKERFILE: docker/aie-build.Dockerfile
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      plan: ${{ steps.plan.outputs.plan }}
+      empty: ${{ steps.plan.outputs.empty }}
+      touched-models: ${{ steps.plan.outputs.touched-models }}
+      bench-models: ${{ steps.plan.outputs.bench-models }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The history between base and head, for mode changed only.
+          fetch-depth: ${{ (inputs.mode || 'changed') != 'changed' && 1 || 0 }}
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Plan kernel builds
+        id: plan
+        uses: ./.github/actions/devkit-xclbin-plan
+        with:
+          mode: ${{ inputs.mode || 'changed' }}
+          base: ${{ inputs.base }}
+          head: ${{ inputs.head || github.sha }}
+          shards: '16'
+          per-shard: ${{ (inputs.mode || 'changed') == 'changed' && '8' || '0' }}
+          fallback-shards: '16'
+
+  image:
+    needs: plan
+    if: needs.plan.outputs.empty == 'false'
+    runs-on: ubuntu-latest
+    # Building mlir-aie with no cached layers takes about an hour.
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      ref: ${{ steps.find.outputs.ref || steps.save.outputs.ref }}
+      source: ${{ steps.find.outputs.ref && 'registry' || 'artifact' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # As devkit-aie-image.yml's "Read toolchain.lock" (which also checks
+      # the file): the same hash and build args, so the same tag and cache.
+      - name: Read toolchain.lock
+        id: lock
+        run: |
+          set -euo pipefail
+          hash="$(python3 -I .github/script/ci/aie_image_hash.py "$LOCK" "$DOCKERFILE")"
+          echo "hash=${hash}" >> "$GITHUB_OUTPUT"
+          {
+            echo 'build-args<<FLM_BUILD_ARGS'
+            grep -E '^[A-Z0-9_]+=' "$LOCK"
+            echo 'FLM_BUILD_ARGS'
+          } >> "$GITHUB_OUTPUT"
+
+      # The package is public (decision 2), so this needs no login; logging
+      # in anyway also reaches it while it is still private, from this
+      # repository's own branches. The login lasts this step only: no later
+      # step (the Dockerfile build included) gets the token on disk. Once
+      # the package is confirmed public, drop this login, the one in Pull
+      # image, and packages: read here, in build and in the caller.
+      - name: Find the image in the registry
+        id: find
+        env:
+          HASH: ${{ steps.lock.outputs.hash }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          trap 'docker logout ghcr.io > /dev/null 2>&1 || true' EXIT
+          printf '%s' "${TOKEN}" | docker login ghcr.io -u "${ACTOR}" --password-stdin > /dev/null 2>&1 \
+            || echo "::notice::No GHCR login; trying anonymously."
+          if [[ -f "$PINNED" ]]; then
+            ref="$(grep -vE '^[[:space:]]*(#|$)' "$PINNED" | head -1 | tr -d '[:space:]')"
+            if [[ ! "$ref" =~ ^${IMAGE//./\\.}@sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error file=${PINNED}::expected ${IMAGE}@sha256:<digest>, found '${ref}'"
+              exit 1
+            fi
+            docker buildx imagetools inspect "$ref" > /dev/null \
+              || { echo "::error file=${PINNED}::${ref} cannot be pulled"; exit 1; }
+            echo "Pinned by ${PINNED}: ${ref}"
+          elif digest="$(docker buildx imagetools inspect "${IMAGE}:${HASH}" --format '{{json .Manifest}}' 2>/dev/null | jq -r '.digest // empty')" \
+               && [[ "$digest" == sha256:* ]]; then
+            ref="${IMAGE}@${digest}"
+            echo "Published for toolchain ${HASH}: ${ref}"
+          else
+            echo "${IMAGE}:${HASH} is not published: building it here."
+            exit 0
+          fi
+          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+          echo "Kernels build in \`${ref}\`." >> "$GITHUB_STEP_SUMMARY"
+
+      # The mlir-aie build stage needs about 10 GB.
+      - name: Free disk space
+        if: steps.find.outputs.ref == ''
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Set up Docker Buildx
+        if: steps.find.outputs.ref == ''
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # devkit-aie-image.yml's build: same context, file and args, reading its
+      # cache scope. Never written here: devkit-aie-image.yml owns the cache
+      # (it writes it from main on every toolchain change, after its check).
+      - name: Build image
+        if: steps.find.outputs.ref == ''
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: docker
+          file: ${{ env.DOCKERFILE }}
+          build-args: ${{ steps.lock.outputs.build-args }}
+          push: false
+          tags: aie-build:${{ steps.lock.outputs.hash }}
+          outputs: type=docker,dest=${{ runner.temp }}/aie-build.tar
+          cache-from: type=gha,scope=aie-build
+
+      - name: Compress image
+        id: save
+        if: steps.find.outputs.ref == ''
+        env:
+          HASH: ${{ steps.lock.outputs.hash }}
+        run: |
+          set -euo pipefail
+          zstd -T0 -10 --rm -q "${RUNNER_TEMP}/aie-build.tar" -o "${RUNNER_TEMP}/aie-build.tar.zst"
+          ls -l "${RUNNER_TEMP}/aie-build.tar.zst"
+          echo "ref=aie-build:${HASH}" >> "$GITHUB_OUTPUT"
+          echo "Kernels build in \`aie-build:${HASH}\`, built in this run (not published)." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload image
+        if: steps.find.outputs.ref == ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: aie-build-image
+          path: ${{ runner.temp }}/aie-build.tar.zst
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+          overwrite: true
+
+  build:
+    name: build (shard ${{ matrix.shard }})
+    needs: [plan, image]
+    if: needs.plan.outputs.empty == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      # Independent shards: one failing must not cancel the others.
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Pull image
+        if: needs.image.outputs.source == 'registry'
+        env:
+          REF: ${{ needs.image.outputs.ref }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          # The token is only for the pull: off the disk however this ends.
+          trap 'docker logout ghcr.io > /dev/null 2>&1 || true' EXIT
+          printf '%s' "${TOKEN}" | docker login ghcr.io -u "${ACTOR}" --password-stdin > /dev/null 2>&1 || true
+          docker pull -q "${REF}"
+
+      - name: Download image
+        if: needs.image.outputs.source == 'artifact'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: aie-build-image
+          path: ${{ runner.temp }}/aie-build-image
+
+      - name: Load image
+        if: needs.image.outputs.source == 'artifact'
+        run: zstd -dc "${RUNNER_TEMP}/aie-build-image/aie-build.tar.zst" | docker load
+
+      - name: Build kernels
+        uses: ./.github/actions/devkit-build-xclbins
+        with:
+          image: ${{ needs.image.outputs.ref }}
+          units: ${{ toJSON(fromJSON(needs.plan.outputs.plan).shards[matrix.shard]) }}
+          shard: ${{ matrix.shard }}
+          # The longest measured build takes about a minute.
+          timeout-minutes: '20'
+
+  assemble:
+    needs: [plan, build]
+    # Also after a failed shard: the others' kernels still assemble.
+    if: ${{ !cancelled() && needs.plan.outputs.empty == 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      touched-models: ${{ steps.assemble.outputs.touched-models }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Assemble kernels
+        id: assemble
+        uses: ./.github/actions/devkit-assemble-xclbins

@@ -1,0 +1,8 @@
+build
+*.log
+*.exe
+*.json
+__pycache__
+weights
+*.bin
+*.safetensors

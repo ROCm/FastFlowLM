@@ -5,8 +5,8 @@
 /// \version 0.9.28
 ///
 /// \note CONTRACT FILE. This is the engine ABI: S3 implements it, S6 (the AutoModel
-///       wrapper) and S7 (vision) compile against it. Do not edit without the brain's
-///       agreement -- see /scratch/michyu/minicpm-1b/CONTRACTS.md.
+///       wrapper) and S7 (vision) compile against it. Do not edit without the
+///       agreement of both sides.
 ///
 /// MiniCPM-V-4.7-1B's text tower is config-identical to Qwen3.5-0.8B (hidden 1024,
 /// 8/2 heads, head_dim 256, FFN 3584, 24 layers, 16x128 GatedDeltaNet heads, conv 4,

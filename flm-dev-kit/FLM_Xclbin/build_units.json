@@ -1,0 +1,991 @@
+{
+  "_doc": "Every FLM_Xclbin build unit (a directory owning a Makefile, path relative to FLM_Xclbin/) -> model_types: the MODEL_TYPE values it is built for, one build each (make bitstream MODEL_TYPE=<t>; [] = built once, no MODEL_TYPE); artifacts: the CI artifact names those builds produce, xclbins-<unit with / as _>[_<MODEL_TYPE>], the names kernel_assignment.json refers to. Checked by .github/script/ci/devkit_check.py.",
+  "units": {
+    "Dequant_Q4_0_w128x512": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Dequant_Q4_0_w128x512"
+      ]
+    },
+    "Dequant_Q4_1_w128x512": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Dequant_Q4_1_w128x512"
+      ]
+    },
+    "Dequant_Q4_1_w128x512_chunk_reorder": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Dequant_Q4_1_w128x512_chunk_reorder"
+      ]
+    },
+    "Dequant_Q8_0_w128x512": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Dequant_Q8_0_w128x512"
+      ]
+    },
+    "Dequant_Q8_0_w128x512_chunk_reorder": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Dequant_Q8_0_w128x512_chunk_reorder"
+      ]
+    },
+    "Dequant_mix_MM": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Dequant_mix_MM"
+      ]
+    },
+    "Dequant_mix_MM_512": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Dequant_mix_MM_512"
+      ]
+    },
+    "Dequant_mix_chunk_reorder": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Dequant_mix_chunk_reorder"
+      ]
+    },
+    "Embedding_Gemma/MM": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Embedding_Gemma_MM"
+      ]
+    },
+    "Embedding_Gemma/gemma_embed_attention_full_mask": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Embedding_Gemma_gemma_embed_attention_full_mask"
+      ]
+    },
+    "Embedding_Gemma/gemma_embed_attention_sliding_non_causal_mask": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Embedding_Gemma_gemma_embed_attention_sliding_non_causal_mask"
+      ]
+    },
+    "Embedding_Gemma/mv": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Embedding_Gemma_mv"
+      ]
+    },
+    "GPTOSS/gpt_dequant_mxfp4_npu_bin": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-GPTOSS_gpt_dequant_mxfp4_npu_bin"
+      ]
+    },
+    "GPTOSS/gpt_dequant_q4_1_npu_bin": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-GPTOSS_gpt_dequant_q4_1_npu_bin"
+      ]
+    },
+    "GPTOSS/gpt_lm_head_npu_bin": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-GPTOSS_gpt_lm_head_npu_bin"
+      ]
+    },
+    "GPTOSS/gpt_npu_bin": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-GPTOSS_gpt_npu_bin"
+      ]
+    },
+    "GPTOSS/gpt_prefill_attn_v1_884_npu_bin": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-GPTOSS_gpt_prefill_attn_v1_884_npu_bin"
+      ]
+    },
+    "GPTOSS/gpt_prefill_attn_v1_npu_bin": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-GPTOSS_gpt_prefill_attn_v1_npu_bin"
+      ]
+    },
+    "GPTOSS/gpt_prefill_attntion_npu_bin": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-GPTOSS_gpt_prefill_attntion_npu_bin"
+      ]
+    },
+    "GPTOSS/gpt_prefill_expert_mm": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-GPTOSS_gpt_prefill_expert_mm"
+      ]
+    },
+    "GPTOSS/gpt_prefill_mm": {
+      "model_types": [
+        "GPTOSS-MAIN",
+        "GPTOSS-SHORT-SEQ"
+      ],
+      "artifacts": [
+        "xclbins-GPTOSS_gpt_prefill_mm_GPTOSS-MAIN",
+        "xclbins-GPTOSS_gpt_prefill_mm_GPTOSS-SHORT-SEQ"
+      ]
+    },
+    "Gemma3/gemma_lm_head_npu_bin": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Gemma3_gemma_lm_head_npu_bin"
+      ]
+    },
+    "Gemma3/gemma_npu_bin": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Gemma3_gemma_npu_bin"
+      ]
+    },
+    "Gemma3_small/gemma_text_dequant_npu_bin": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Gemma3_small_gemma_text_dequant_npu_bin"
+      ]
+    },
+    "Gemma3_small/gemma_text_lm_head_npu_bin": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Gemma3_small_gemma_text_lm_head_npu_bin"
+      ]
+    },
+    "Gemma3_small/gemma_text_npu_bin": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Gemma3_small_gemma_text_npu_bin"
+      ]
+    },
+    "Gemma3_small/gemma_text_prefill_attention": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Gemma3_small_gemma_text_prefill_attention"
+      ]
+    },
+    "Gemma3_small/gemma_text_prefill_mm_npu_bin": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Gemma3_small_gemma_text_prefill_mm_npu_bin"
+      ]
+    },
+    "Gemma4/attention_DH_256_prefill": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Gemma4_attention_DH_256_prefill"
+      ]
+    },
+    "Gemma4/attention_DH_512_prefill": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Gemma4_attention_DH_512_prefill"
+      ]
+    },
+    "Gemma4/attention_decoding": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Gemma4_attention_decoding"
+      ]
+    },
+    "Gemma4/conv1d_prefill": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Gemma4_conv1d_prefill"
+      ]
+    },
+    "Gemma4/decoding": {
+      "model_types": [
+        "GEMMA4_E2B",
+        "GEMMA4_E4B"
+      ],
+      "artifacts": [
+        "xclbins-Gemma4_decoding_GEMMA4_E2B",
+        "xclbins-Gemma4_decoding_GEMMA4_E4B"
+      ]
+    },
+    "Gemma4/fused_prefill": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Gemma4_fused_prefill"
+      ]
+    },
+    "Gemma4/lm_head_8": {
+      "model_types": [
+        "GEMMA4_E4B"
+      ],
+      "artifacts": [
+        "xclbins-Gemma4_lm_head_8_GEMMA4_E4B"
+      ]
+    },
+    "Gemma4/lm_head_npu_bin": {
+      "model_types": [
+        "GEMMA4_E2B",
+        "GEMMA4_E4B"
+      ],
+      "artifacts": [
+        "xclbins-Gemma4_lm_head_npu_bin_GEMMA4_E2B",
+        "xclbins-Gemma4_lm_head_npu_bin_GEMMA4_E4B"
+      ]
+    },
+    "Gemma4/verify_decoding": {
+      "model_types": [
+        "GEMMA4_E4B"
+      ],
+      "artifacts": [
+        "xclbins-Gemma4_verify_decoding_GEMMA4_E4B"
+      ]
+    },
+    "Gemma4_12B_QAT/attention_DH_256_prefill": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Gemma4_12B_QAT_attention_DH_256_prefill"
+      ]
+    },
+    "Gemma4_12B_QAT/attention_DH_512_prefill": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Gemma4_12B_QAT_attention_DH_512_prefill"
+      ]
+    },
+    "Gemma4_12B_QAT/attention_global_image": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Gemma4_12B_QAT_attention_global_image"
+      ]
+    },
+    "Gemma4_12B_QAT/audio_image_mm": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Gemma4_12B_QAT_audio_image_mm"
+      ]
+    },
+    "Gemma4_12B_QAT/causal_attention_decoding": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Gemma4_12B_QAT_causal_attention_decoding"
+      ]
+    },
+    "Gemma4_12B_QAT/decoding": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Gemma4_12B_QAT_decoding"
+      ]
+    },
+    "Gemma4_12B_QAT/dequant": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Gemma4_12B_QAT_dequant"
+      ]
+    },
+    "Gemma4_12B_QAT/dequant_mm": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Gemma4_12B_QAT_dequant_mm"
+      ]
+    },
+    "Gemma4_12B_QAT/lm_head_npu_bin": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Gemma4_12B_QAT_lm_head_npu_bin"
+      ]
+    },
+    "Gemma4_12B_QAT/sliding_attention_decoding": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Gemma4_12B_QAT_sliding_attention_decoding"
+      ]
+    },
+    "Hy_MT2_1.8B/attention_prefill": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Hy_MT2_1.8B_attention_prefill"
+      ]
+    },
+    "Hy_MT2_1.8B/decoding": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Hy_MT2_1.8B_decoding"
+      ]
+    },
+    "Hy_MT2_1.8B/prefill_overlay": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Hy_MT2_1.8B_prefill_overlay"
+      ]
+    },
+    "Hy_mem_30BA3B/dense_decoding": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Hy_mem_30BA3B_dense_decoding"
+      ]
+    },
+    "Hy_mem_30BA3B/lm_head_npu_bin": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Hy_mem_30BA3B_lm_head_npu_bin"
+      ]
+    },
+    "Hy_mem_30BA3B/moe_decoding": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Hy_mem_30BA3B_moe_decoding"
+      ]
+    },
+    "Hy_mem_30BA3B/prefill_overlay": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Hy_mem_30BA3B_prefill_overlay"
+      ]
+    },
+    "LiquidAI/conv1d": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-LiquidAI_conv1d"
+      ]
+    },
+    "LiquidAI/lfm3_npu_bin": {
+      "model_types": [
+        "LFM3_1_7B"
+      ],
+      "artifacts": [
+        "xclbins-LiquidAI_lfm3_npu_bin_LFM3_1_7B"
+      ]
+    },
+    "LiquidAI/lfm_attn_npu_bin": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-LiquidAI_lfm_attn_npu_bin"
+      ]
+    },
+    "LiquidAI/lfm_lm_head_npu_bin": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-LiquidAI_lfm_lm_head_npu_bin"
+      ]
+    },
+    "LiquidAI/lfm_npu_bin": {
+      "model_types": [
+        "LFM_1_2B",
+        "LFM_2_6B"
+      ],
+      "artifacts": [
+        "xclbins-LiquidAI_lfm_npu_bin_LFM_1_2B",
+        "xclbins-LiquidAI_lfm_npu_bin_LFM_2_6B"
+      ]
+    },
+    "LiquidAI/lfm_npu_bin_mixed": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-LiquidAI_lfm_npu_bin_mixed"
+      ]
+    },
+    "MM/host7_mt_variant_bias": {
+      "model_types": [
+        "GENERIC",
+        "GEMMA3_4B-VISION-MM",
+        "GEMMA4-VISION-MM",
+        "GEMMA4-VISION-MM-HIGH",
+        "QWEN2_5_3B-VISION-MM",
+        "QWEN3_4B-VISION-MM",
+        "QWEN3_5_0_8B-VISION-MM",
+        "QWEN3_5_2B-VISION-MM",
+        "QWEN3_5_4B-VISION-MM",
+        "QWEN3_5_9B-VISION-MM",
+        "QWEN3_6_35B-VISION-MM",
+        "QWEN3_5-OMNI-VISION-MM",
+        "QWEN3_5-OMNI-VISION-MM-HIGH"
+      ],
+      "artifacts": [
+        "xclbins-MM_host7_mt_variant_bias_GENERIC",
+        "xclbins-MM_host7_mt_variant_bias_GEMMA3_4B-VISION-MM",
+        "xclbins-MM_host7_mt_variant_bias_GEMMA4-VISION-MM",
+        "xclbins-MM_host7_mt_variant_bias_GEMMA4-VISION-MM-HIGH",
+        "xclbins-MM_host7_mt_variant_bias_QWEN2_5_3B-VISION-MM",
+        "xclbins-MM_host7_mt_variant_bias_QWEN3_4B-VISION-MM",
+        "xclbins-MM_host7_mt_variant_bias_QWEN3_5_0_8B-VISION-MM",
+        "xclbins-MM_host7_mt_variant_bias_QWEN3_5_2B-VISION-MM",
+        "xclbins-MM_host7_mt_variant_bias_QWEN3_5_4B-VISION-MM",
+        "xclbins-MM_host7_mt_variant_bias_QWEN3_5_9B-VISION-MM",
+        "xclbins-MM_host7_mt_variant_bias_QWEN3_6_35B-VISION-MM",
+        "xclbins-MM_host7_mt_variant_bias_QWEN3_5-OMNI-VISION-MM",
+        "xclbins-MM_host7_mt_variant_bias_QWEN3_5-OMNI-VISION-MM-HIGH"
+      ]
+    },
+    "MiniCPM_V/decoding": {
+      "model_types": [
+        "QWEN3_5_08B_SL"
+      ],
+      "artifacts": [
+        "xclbins-MiniCPM_V_decoding_QWEN3_5_08B_SL"
+      ]
+    },
+    "MiniCPM_V/vision_attn_kv": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-MiniCPM_V_vision_attn_kv"
+      ]
+    },
+    "MiniCPM_V/vision_mm_c": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-MiniCPM_V_vision_mm_c"
+      ]
+    },
+    "MiniCPM_V/vision_mm_p": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-MiniCPM_V_vision_mm_p"
+      ]
+    },
+    "Nanbeige/prefill_attention": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Nanbeige_prefill_attention"
+      ]
+    },
+    "Non_linear": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Non_linear"
+      ]
+    },
+    "Qwen2_5/decoding_3b": {
+      "model_types": [
+        "QWEN2_3B",
+        "QWEN2VL_3B"
+      ],
+      "artifacts": [
+        "xclbins-Qwen2_5_decoding_3b_QWEN2_3B",
+        "xclbins-Qwen2_5_decoding_3b_QWEN2VL_3B"
+      ]
+    },
+    "Qwen2_5/prefill_attention_3b": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Qwen2_5_prefill_attention_3b"
+      ]
+    },
+    "Qwen3VL/fused_prefill": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Qwen3VL_fused_prefill"
+      ]
+    },
+    "Qwen3_5/bidirectional_attention_prefill": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Qwen3_5_bidirectional_attention_prefill"
+      ]
+    },
+    "Qwen3_5/conv1d_prefill": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Qwen3_5_conv1d_prefill"
+      ]
+    },
+    "Qwen3_5/gate_delta_net_prefill/hostDeltaNetPrefill": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Qwen3_5_gate_delta_net_prefill_hostDeltaNetPrefill"
+      ]
+    },
+    "Qwen3_5/gated_attention_prefill": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Qwen3_5_gated_attention_prefill"
+      ]
+    },
+    "Qwen3_5/gated_attention_prefill_chunked": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Qwen3_5_gated_attention_prefill_chunked"
+      ]
+    },
+    "Qwen3_5/lm_head_npu_bin": {
+      "model_types": [
+        "QWEN3_5_0_8B",
+        "QWEN3_5_2B",
+        "QWEN3_5_4B",
+        "QWEN3_5_9B"
+      ],
+      "artifacts": [
+        "xclbins-Qwen3_5_lm_head_npu_bin_QWEN3_5_0_8B",
+        "xclbins-Qwen3_5_lm_head_npu_bin_QWEN3_5_2B",
+        "xclbins-Qwen3_5_lm_head_npu_bin_QWEN3_5_4B",
+        "xclbins-Qwen3_5_lm_head_npu_bin_QWEN3_5_9B"
+      ]
+    },
+    "Qwen3_5/qwen3_5_decoding": {
+      "model_types": [
+        "QWEN3_5_4B",
+        "QWEN3_5_2B",
+        "QWEN3_5_9B",
+        "QWEN3_5_08B"
+      ],
+      "artifacts": [
+        "xclbins-Qwen3_5_qwen3_5_decoding_QWEN3_5_4B",
+        "xclbins-Qwen3_5_qwen3_5_decoding_QWEN3_5_2B",
+        "xclbins-Qwen3_5_qwen3_5_decoding_QWEN3_5_9B",
+        "xclbins-Qwen3_5_qwen3_5_decoding_QWEN3_5_08B"
+      ]
+    },
+    "Qwen3_6/MM_256_512": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Qwen3_6_MM_256_512"
+      ]
+    },
+    "Qwen3_6/MM_512_1024": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Qwen3_6_MM_512_1024"
+      ]
+    },
+    "Qwen3_6/attention_decoding": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Qwen3_6_attention_decoding"
+      ]
+    },
+    "Qwen3_6/gate_delta_net_prefill": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Qwen3_6_gate_delta_net_prefill"
+      ]
+    },
+    "Qwen3_6/gated_attention_prefill": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Qwen3_6_gated_attention_prefill"
+      ]
+    },
+    "Qwen3_6/qwen3_6_moe_decoding": {
+      "model_types": [
+        "QWEN3_6_35B_A3B"
+      ],
+      "artifacts": [
+        "xclbins-Qwen3_6_qwen3_6_moe_decoding_QWEN3_6_35B_A3B"
+      ]
+    },
+    "Qwen3_8/MTP_decoding": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Qwen3_8_MTP_decoding"
+      ]
+    },
+    "Qwen3_8/conv1d_prefill": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Qwen3_8_conv1d_prefill"
+      ]
+    },
+    "Qwen3_8/dequant_mm": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Qwen3_8_dequant_mm"
+      ]
+    },
+    "Qwen3_8/dequant_q4k": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Qwen3_8_dequant_q4k"
+      ]
+    },
+    "Qwen3_8/gate_delta_net_prefill": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Qwen3_8_gate_delta_net_prefill"
+      ]
+    },
+    "Qwen3_8/gate_delta_net_verify": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Qwen3_8_gate_delta_net_verify"
+      ]
+    },
+    "Qwen3_8/gated_attention_prefill": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Qwen3_8_gated_attention_prefill"
+      ]
+    },
+    "Qwen3_8/gated_attention_verify": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Qwen3_8_gated_attention_verify"
+      ]
+    },
+    "Qwen3_8/lm_head_8": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Qwen3_8_lm_head_8"
+      ]
+    },
+    "Qwen3_8/lm_head_npu_bin": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Qwen3_8_lm_head_npu_bin"
+      ]
+    },
+    "Qwen3_8/vision_attn": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Qwen3_8_vision_attn"
+      ]
+    },
+    "Qwen3_8/vision_mm": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Qwen3_8_vision_mm"
+      ]
+    },
+    "SMOLVLA/expert": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-SMOLVLA_expert"
+      ]
+    },
+    "SMOLVLA/expert_attn": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-SMOLVLA_expert_attn"
+      ]
+    },
+    "SMOLVLA/expert_bf16": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-SMOLVLA_expert_bf16"
+      ]
+    },
+    "SMOLVLA/expert_mm": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-SMOLVLA_expert_mm"
+      ]
+    },
+    "SMOLVLA/text": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-SMOLVLA_text"
+      ]
+    },
+    "SMOLVLA/text_884": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-SMOLVLA_text_884"
+      ]
+    },
+    "SMOLVLA/text_attn": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-SMOLVLA_text_attn"
+      ]
+    },
+    "SMOLVLA/text_mm": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-SMOLVLA_text_mm"
+      ]
+    },
+    "SMOLVLA/vision": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-SMOLVLA_vision"
+      ]
+    },
+    "SMOLVLA/vision_attn": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-SMOLVLA_vision_attn"
+      ]
+    },
+    "SMOLVLA/vision_attn32": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-SMOLVLA_vision_attn32"
+      ]
+    },
+    "SMOLVLA/vision_mm8": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-SMOLVLA_vision_mm8"
+      ]
+    },
+    "SMOLVLA/vision_switches": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-SMOLVLA_vision_switches"
+      ]
+    },
+    "SMOLVLA/vision_mm_884": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-SMOLVLA_vision_mm_884"
+      ]
+    },
+    "SMOLVLA/vision_mm_888": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-SMOLVLA_vision_mm_888"
+      ]
+    },
+    "VisionAttention/hostAttention_whoel_array": {
+      "model_types": [
+        "QWEN_2_5-VISION-ATTENTION",
+        "QWEN3_4B-VISION-ATTENTION",
+        "QWEN3_5_0_8B-VISION-ATTENTION",
+        "QWEN3_5_2B-VISION-ATTENTION",
+        "QWEN3_5_4B-VISION-ATTENTION",
+        "QWEN3_5_9B-VISION-ATTENTION",
+        "QWEN3_5_OMNI-VISION-ATTENTION",
+        "QWEN3_6_35B-VISION-ATTENTION",
+        "GEMMA3_4B-VISION-ATTENTION",
+        "GEMMA4_E2B-VISION-ATTENTION",
+        "GEMMA4_E4B-VISION-ATTENTION"
+      ],
+      "artifacts": [
+        "xclbins-VisionAttention_hostAttention_whoel_array_QWEN_2_5-VISION-ATTENTION",
+        "xclbins-VisionAttention_hostAttention_whoel_array_QWEN3_4B-VISION-ATTENTION",
+        "xclbins-VisionAttention_hostAttention_whoel_array_QWEN3_5_0_8B-VISION-ATTENTION",
+        "xclbins-VisionAttention_hostAttention_whoel_array_QWEN3_5_2B-VISION-ATTENTION",
+        "xclbins-VisionAttention_hostAttention_whoel_array_QWEN3_5_4B-VISION-ATTENTION",
+        "xclbins-VisionAttention_hostAttention_whoel_array_QWEN3_5_9B-VISION-ATTENTION",
+        "xclbins-VisionAttention_hostAttention_whoel_array_QWEN3_5_OMNI-VISION-ATTENTION",
+        "xclbins-VisionAttention_hostAttention_whoel_array_QWEN3_6_35B-VISION-ATTENTION",
+        "xclbins-VisionAttention_hostAttention_whoel_array_GEMMA3_4B-VISION-ATTENTION",
+        "xclbins-VisionAttention_hostAttention_whoel_array_GEMMA4_E2B-VISION-ATTENTION",
+        "xclbins-VisionAttention_hostAttention_whoel_array_GEMMA4_E4B-VISION-ATTENTION"
+      ]
+    },
+    "VisionAttention/hostWindowAttention_while_array": {
+      "model_types": [
+        "QWEN2_5-VISION-WINDOW",
+        "QWEN3_5-OMNI-VISION-WINDOW"
+      ],
+      "artifacts": [
+        "xclbins-VisionAttention_hostWindowAttention_while_array_QWEN2_5-VISION-WINDOW",
+        "xclbins-VisionAttention_hostWindowAttention_while_array_QWEN3_5-OMNI-VISION-WINDOW"
+      ]
+    },
+    "Whisper/decoder_mv_dequant_mv": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Whisper_decoder_mv_dequant_mv"
+      ]
+    },
+    "Whisper/encoder_MM": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Whisper_encoder_MM"
+      ]
+    },
+    "Whisper/encoder_attention_884": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Whisper_encoder_attention_884"
+      ]
+    },
+    "Whisper/encoder_attention_888": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Whisper_encoder_attention_888"
+      ]
+    },
+    "Whisper/encoder_dequant": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Whisper_encoder_dequant"
+      ]
+    },
+    "Whisper/whisper_lm_head_npu_bin": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Whisper_whisper_lm_head_npu_bin"
+      ]
+    },
+    "conv1d": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-conv1d"
+      ]
+    },
+    "dequant_mm_256x512x512": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-dequant_mm_256x512x512"
+      ]
+    },
+    "dequant_mm_512x512x512": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-dequant_mm_512x512x512"
+      ]
+    },
+    "dequant_mm_Q4_1_256x512x512": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-dequant_mm_Q4_1_256x512x512"
+      ]
+    },
+    "dequant_mm_Q4_1_512x512x512": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-dequant_mm_Q4_1_512x512x512"
+      ]
+    },
+    "dequant_mm_Q4_1_6col": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-dequant_mm_Q4_1_6col"
+      ]
+    },
+    "dequant_mm_Q4_1_bfp16": {
+      "model_types": [
+        "GEMMA4_E4B"
+      ],
+      "artifacts": [
+        "xclbins-dequant_mm_Q4_1_bfp16_GEMMA4_E4B"
+      ]
+    },
+    "dequant_mm_bfp16_rtm2_glu_512x512x512": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-dequant_mm_bfp16_rtm2_glu_512x512x512"
+      ]
+    },
+    "d3_switches": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-d3_switches"
+      ]
+    },
+    "generic_decoding_layer": {
+      "model_types": [
+        "LLAMA_3_2_1B",
+        "LLAMA_3_2_3B",
+        "LLAMA_3_1_8B",
+        "QWEN3_0_6B",
+        "QWEN3_1_7B",
+        "QWEN3_4B",
+        "QWEN3_8B",
+        "PHI4_4B",
+        "NANBEIGE_3B",
+        "HUNYUAN_DENSE_1_8B",
+        "QWEN3_ASR_1_7B",
+        "QWEN3_ASR_1_7B_MIX"
+      ],
+      "artifacts": [
+        "xclbins-generic_decoding_layer_LLAMA_3_2_1B",
+        "xclbins-generic_decoding_layer_LLAMA_3_2_3B",
+        "xclbins-generic_decoding_layer_LLAMA_3_1_8B",
+        "xclbins-generic_decoding_layer_QWEN3_0_6B",
+        "xclbins-generic_decoding_layer_QWEN3_1_7B",
+        "xclbins-generic_decoding_layer_QWEN3_4B",
+        "xclbins-generic_decoding_layer_QWEN3_8B",
+        "xclbins-generic_decoding_layer_PHI4_4B",
+        "xclbins-generic_decoding_layer_NANBEIGE_3B",
+        "xclbins-generic_decoding_layer_HUNYUAN_DENSE_1_8B",
+        "xclbins-generic_decoding_layer_QWEN3_ASR_1_7B",
+        "xclbins-generic_decoding_layer_QWEN3_ASR_1_7B_MIX"
+      ]
+    },
+    "generic_prefill_attention/attention_DH_128_GQA_1_2": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-generic_prefill_attention_attention_DH_128_GQA_1_2"
+      ]
+    },
+    "generic_prefill_attention/attention_DH_128_GQA_1_3": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-generic_prefill_attention_attention_DH_128_GQA_1_3"
+      ]
+    },
+    "generic_prefill_attention/attention_DH_128_GQA_1_4": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-generic_prefill_attention_attention_DH_128_GQA_1_4"
+      ]
+    },
+    "generic_prefill_attention/attention_DH_256_GQA_1_2": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-generic_prefill_attention_attention_DH_256_GQA_1_2"
+      ]
+    },
+    "generic_prefill_attention/attention_DH_256_GQA_1_4": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-generic_prefill_attention_attention_DH_256_GQA_1_4"
+      ]
+    },
+    "generic_prefill_attention/attention_DH_64_GQA_1_4": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-generic_prefill_attention_attention_DH_64_GQA_1_4"
+      ]
+    },
+    "minicpm_ocr/conv1d_prefill": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-minicpm_ocr_conv1d_prefill"
+      ]
+    },
+    "minicpm_ocr/decoding": {
+      "model_types": [
+        "QWEN3_5_08B",
+        "QWEN3_5_08B_KVB"
+      ],
+      "artifacts": [
+        "xclbins-minicpm_ocr_decoding_QWEN3_5_08B",
+        "xclbins-minicpm_ocr_decoding_QWEN3_5_08B_KVB"
+      ]
+    },
+    "minicpm_ocr/dequant_mm": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-minicpm_ocr_dequant_mm"
+      ]
+    },
+    "minicpm_ocr/dequant_mm_prefill": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-minicpm_ocr_dequant_mm_prefill"
+      ]
+    },
+    "minicpm_ocr/gate_delta_net_prefill": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-minicpm_ocr_gate_delta_net_prefill"
+      ]
+    },
+    "minicpm_ocr/gated_attention_prefill": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-minicpm_ocr_gated_attention_prefill"
+      ]
+    },
+    "minicpm_ocr/vision_attn": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-minicpm_ocr_vision_attn"
+      ]
+    },
+    "minicpm_ocr/vision_mm": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-minicpm_ocr_vision_mm"
+      ]
+    },
+    "minicpm_ocr/vision_overlay": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-minicpm_ocr_vision_overlay"
+      ]
+    }
+  }
+}

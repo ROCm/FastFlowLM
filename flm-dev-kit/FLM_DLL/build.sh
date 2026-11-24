@@ -1,0 +1,64 @@
+#!/usr/bin/bash
+# Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+
+cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" || exit 1
+if ! ls detail/*/Makefile >/dev/null 2>&1; then
+	echo "build.sh: no detail/*/Makefile under $PWD" >&2
+	exit 1
+fi
+
+# FLM_ENGINES (optional): the engines to build after the priority units, by
+# detail/ directory name, separated by spaces or commas. Unset or "all": every
+# detail/*/ with a Makefile.
+selected=()
+if [ -n "${FLM_ENGINES:-}" ] && [ "${FLM_ENGINES}" != all ]; then
+	read -r -a selected <<< "${FLM_ENGINES//,/ }"
+	for name in "${selected[@]}"; do
+		if [ ! -f "detail/${name}/Makefile" ]; then
+			echo "build.sh: FLM_ENGINES names ${name}, but detail/${name}/Makefile does not exist" >&2
+			exit 1
+		fi
+	done
+fi
+
+rm -rf build
+
+failed_dirs=()
+priority_dirs=(q4nx mha gemm dequant lm_head)
+
+for name in "${priority_dirs[@]}"; do
+	dir="detail/${name}"
+	if [ -f "${dir}/Makefile" ]; then
+		if ! (cd "$dir" && make clean && make -j4); then
+			failed_dirs+=("$dir")
+		fi
+	fi
+done
+
+for dir in detail/*/; do
+	name="${dir%/}"
+	name="${name##*/}"
+	case "$name" in
+		q4nx|mha|gemm|dequant|lm_head)
+			continue
+			;;
+	esac
+	if [ ${#selected[@]} -ne 0 ] && [[ " ${selected[*]} " != *" ${name} "* ]]; then
+		continue
+	fi
+	if [ -f "${dir}Makefile" ]; then
+		if ! (cd "$dir" && make clean && make -j4); then
+			failed_dirs+=("${dir%/}")
+		fi
+	fi
+done
+
+if [ ${#failed_dirs[@]} -ne 0 ]; then
+	echo "Build failures in:"
+	for dir in "${failed_dirs[@]}"; do
+		echo "  - $dir"
+	done
+	exit 1
+else
+	echo "All builds succeeded."
+fi

@@ -1,0 +1,55 @@
+{
+    "q4nx_config": {
+        "row_block_size": 32,
+        "col_block_size": 256,
+        "parallel_size": 16,
+        "keep_block_in_2D": false
+    },
+    "default_tensor_type": "Q4_1",
+    "name_map": {
+        "embedding": {
+            "gguf_name": "token_embd.weight",
+            "q4nx_name": "model.embed_tokens.weight"
+        },
+        "q_proj": {
+            "gguf_name": "blk.{bid}.attn_qkv.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.q_proj.weight"
+        },
+        "o_proj": {
+            "gguf_name": "blk.{bid}.attn_output.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.o_proj.weight"
+        },
+        "up_proj": {
+            "gguf_name": "blk.{bid}.ffn_up.weight",
+            "q4nx_name": "model.layers.{bid}.mlp.up_proj.weight"
+        },
+        "down_proj": {
+            "gguf_name": "blk.{bid}.ffn_down.weight",
+            "q4nx_name": "model.layers.{bid}.mlp.down_proj.weight"
+        },
+        "pre_attn_norm": {
+            "gguf_name": "blk.{bid}.attn_norm.weight",
+            "q4nx_name": "model.layers.{bid}.input_layernorm.weight"
+        },
+        "post_attn_norm": {
+            "gguf_name": "blk.{bid}.ffn_norm.weight",
+            "q4nx_name": "model.layers.{bid}.post_attention_layernorm.weight"
+        },
+        "model_final_norm": {
+            "gguf_name": "output_norm.weight",
+            "q4nx_name": "model.norm.weight"
+        },
+        "lm_head": {
+            "gguf_name": "output.weight",
+            "q4nx_name": "lm_head.weight"
+        },
+        "rope_freqs_short": {
+            "gguf_name": "rope_factors_short.weight",
+            "q4nx_name": "rope.short.weight"
+        },
+        "rope_freqs_long": {
+            "gguf_name": "rope_factors_long.weight",
+            "q4nx_name": "rope.long.weight"
+        }
+    }
+}

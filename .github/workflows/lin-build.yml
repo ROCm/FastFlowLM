@@ -13,6 +13,8 @@ name: Linux Build
 #
 # Build and Test (build-and-test.yml) calls this once per package on every pull
 # request, push and tag; dispatch it to build packages without testing them.
+# With devkit-stage, a pull request's dev-kit engines and kernels are copied
+# into the checkout first (.github/actions/devkit-stage-apply).
 on:
   workflow_call:
     inputs:
@@ -22,6 +24,13 @@ on:
           comma-separated list of them, or "all".
         type: string
         default: all
+      devkit-stage:
+        description: >
+          Copy this run's staged dev-kit files (artifact
+          devkit-stage-lin-<xrt|hrx>, Build and Test's devkit-stage job) over
+          the checkout before building, so the package is built from them.
+        type: boolean
+        default: false
     outputs:
       deb_distros:
         description: How many distributions each .deb variant is built for.
@@ -128,6 +137,9 @@ jobs:
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
+      # The image's default user is unprivileged; the runner's workspace mounts
+      # need root.
+      options: --user root
 
     steps:
       - name: Checkout code
@@ -135,6 +147,15 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+
+      # A pull request's dev-kit engines and kernels, before CMake runs: the
+      # package is then what main would ship after their swap. Every variant
+      # of a runtime gets the same files (Source-portable is an XRT build).
+      - name: Stage the dev-kit files
+        if: inputs.devkit-stage
+        uses: ./.github/actions/devkit-stage-apply
+        with:
+          artifact: devkit-stage-lin-${{ startsWith(matrix.variant, 'HRX-') && 'hrx' || 'xrt' }}
 
       - name: Build
         id: build

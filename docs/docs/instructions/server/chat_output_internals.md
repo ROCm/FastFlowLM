@@ -103,7 +103,7 @@ That's what lets the stream send plain suffixes as deltas. Three techniques keep
 
 ## 3️⃣ Streaming
 
-`streaming_buf_openai_chat` (in `src/server/streaming_ostream_openai.hpp`) owns a `chat_stream`. On every flush of complete UTF-8:
+`chat_turn_streambuf` (in `src/server/chat_core.hpp`) owns a `chat_stream`. On every flush of complete UTF-8:
 
 ```cpp
 std::vector<chat_msg_delta> chat_stream::update(const std::string& text, bool is_final);
@@ -115,9 +115,11 @@ std::vector<chat_msg_delta> chat_stream::update(const std::string& text, bool is
 
 If a field ever fails to extend its previous value, that's a parser bug. `chat_compute_deltas` logs `chat parser rewrote already streamed …` and skips the field rather than sending a contradiction.
 
-`finalize()` runs a last `update("", true)` so held-back text is released. It promotes `finish_reason` to `tool_calls` only on a clean EOT stop, then sends the usage chunk when `stream_options.include_usage` was set, then `[DONE]`.
+Each delta goes to the request's `chat_sink`; for `/v1/chat/completions` that is `openai_chat_sink` (in `src/server/protocol_openai_chat.hpp`), which writes it as a chunk.
 
-The non-streaming path (`RestHandler::build_nstream_response`) calls `chat_parse(…, is_partial=false, …)` once, so the two modes agree by construction.
+`finish()` runs a last `update("", true)` so held-back text is released. `RestHandler::run_chat_turn` then promotes the finish reason to `tool_calls` only on a clean EOT stop and reports the end of the turn; the sink sends the final chunk, the usage chunk when `stream_options.include_usage` was set, then `[DONE]`.
+
+The non-streaming path of `RestHandler::run_chat_turn` calls `chat_parse(…, is_partial=false, …)` once and hands the sink the whole message, so the two modes agree by construction.
 
 ---
 

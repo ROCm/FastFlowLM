@@ -7,6 +7,7 @@
 #include "chat/chat_grammar.hpp"
 #include "chat/chat_parser.hpp"
 #include "chat/positional_tool_results.hpp"
+#include "minja/chat-template.hpp"
 #include "minja/minja.hpp"
 
 #include <cstdio>
@@ -75,6 +76,27 @@ const std::string RENDER_CALLS = R"JINJA(
 
 std::string render_calls(const json& calls) {
     auto tmpl = minja::Parser::parse(RENDER_CALLS, {true, true, false});
+    return tmpl->render(minja::Context::make(minja::Value(json{{"calls", calls}})));
+}
+
+const chat_format_spec GLM_XML = chat_format_make(chat_format_kind::GLM_XML, true);
+
+// How Laguna-2.1 renders an assistant's tool calls, verbatim from its chat_template.jinja
+const std::string GLM_RENDER_CALLS = R"JINJA(
+{%- for tool_call in calls -%}
+  {%- set function_data = tool_call.function -%}
+  {{- '<tool_call>' + function_data.name -}}
+  {%- set _args = function_data.arguments -%}
+  {%- for k, v in _args.items() -%}
+    {{- "<arg_key>" ~ k ~ "</arg_key>" -}}
+    {{- "<arg_value>" -}}{{- v | tojson(ensure_ascii=False) if v is not string else v -}}{{- "</arg_value>" -}}
+  {%- endfor -%}
+  {{- "</tool_call>" -}}
+{%- endfor -%}
+)JINJA";
+
+std::string render_glm_calls(const json& calls) {
+    auto tmpl = minja::Parser::parse(GLM_RENDER_CALLS, {true, true, false});
     return tmpl->render(minja::Context::make(minja::Value(json{{"calls", calls}})));
 }
 
@@ -768,6 +790,280 @@ void test_positional_tool_results() {
     CHECK(history == json::array({single, red}));
 }
 
+// ---------------------------------------------------------------- glm xml (Laguna 2.1)
+
+void test_glm_detection() {
+    std::printf("a template that writes <arg_key>/<arg_value> is GLM XML, ahead of Hermes\n");
+    auto no_token = [](const std::string&) { return false; };
+    const chat_format_spec spec = chat_format_detect("<think></think>" + GLM_RENDER_CALLS, no_token);
+    CHECK_EQ(chat_format_name(spec.kind), "glm_xml");
+    CHECK(spec.has_reasoning());
+    CHECK_EQ(spec.tool_start, "<tool_call>");
+    CHECK_EQ(spec.tool_end, "</tool_call>");
+    // Nemotron 3.5 writes Qwen XML inside <tool_call>
+    CHECK(chat_format_detect("<tool_call>\n<function=f>\n<parameter=k>\n", no_token).kind == chat_format_kind::QWEN_XML);
+    CHECK(chat_format_detect("<tool_call>\n{\"name\": f}\n</tool_call>", no_token).kind == chat_format_kind::HERMES_JSON);
+    // Hy-Memory (NPU) puts <tool_sep> after the name: it stays on Hermes
+    CHECK(chat_format_detect("<tool_calls>\n<tool_call>f<tool_sep>\n<arg_key>k</arg_key>\n<arg_value>v</arg_value>\n"
+                             "</tool_call>\n</tool_calls>",
+                             no_token)
+              .kind == chat_format_kind::HERMES_JSON);
+}
+
+void test_glm_parse() {
+    std::printf("glm xml: the calls Laguna's template renders parse back\n");
+    auto one = [](const json& c) {
+        chat_msg msg = parse(GLM_XML, render_glm_calls(json::array({c})));
+        return msg.tool_calls.size() == 1 ? msg.tool_calls[0].name + " " + msg.tool_calls[0].arguments
+                                          : std::string("<no call>");
+    };
+    CHECK_EQ(one(call("ping", json::object())), "ping {}");
+    CHECK_EQ(one(call("get_weather", {{"city", "Paris"}, {"unit", "celsius"}})),
+             "get_weather {\"city\":\"Paris\",\"unit\":\"celsius\"}");
+    CHECK_EQ(one(call("set_flag", {{"on", true}, {"count", 3}})), "set_flag {\"on\":true,\"count\":3}");
+    // a string is written raw, so a string schema keeps what looks like a number; the rest is JSON
+    CHECK_EQ(one(call("lookup", {{"zip", "90210"}, {"limit", 5}, {"code", "007"}, {"filter", {{"a", 1}}}})),
+             "lookup {\"zip\":\"90210\",\"limit\":5,\"code\":\"007\",\"filter\":{\"a\":1}}");
+    CHECK_EQ(one(call("write_file", {{"path", "a.md"}, {"content", "line 1\nuse <tool_call> here\n"}})),
+             "write_file {\"path\":\"a.md\",\"content\":\"line 1\\nuse <tool_call> here\\n\"}");
+    CHECK_EQ(one(call("write_file", {{"path", "caf\xC3\xA9"}, {"content", "\xE2\x9C\x93"}})),
+             "write_file {\"path\":\"caf\xC3\xA9\",\"content\":\"\xE2\x9C\x93\"}");
+
+    std::printf("glm xml: text, reasoning and parallel calls around it\n");
+    const std::string two =
+        render_glm_calls(json::array({call("ping", json::object()), call("get_weather", {{"city", "Tokyo"}})}));
+    chat_msg msg = parse(GLM_XML, "<think>Need both.</think>Checking." + two);
+    CHECK_EQ(msg.reasoning, "Need both.");
+    CHECK_EQ(msg.content, "Checking.");
+    CHECK(msg.tool_calls.size() == 2);
+    // a call opens with a name, then <arg_key> or </tool_call>; the tag in prose is text
+    const std::string prose = "Each call goes in a <tool_call> tag, closed by </tool_call>. A <tool_call>name is fine.";
+    msg = parse(GLM_XML, prose);
+    CHECK_EQ(msg.content, prose);
+    CHECK(msg.tool_calls.empty());
+    check_prefix_stable(GLM_XML, prose, "glm prose tag");
+
+    std::printf("glm xml: streams only grow\n");
+    const std::vector<std::string> texts = {
+        two,
+        "<think>plan</think>Let me check." +
+            render_glm_calls(json::array({call("lookup", {{"zip", "90210"}, {"limit", 3}, {"filter", {{"a", 1}}}})})),
+        render_glm_calls(json::array({call("write_file", {{"path", "p"}, {"content", "a</arg_key>b<arg_value>c"}})})),
+    };
+    for (size_t i = 0; i < texts.size(); i++) {
+        check_prefix_stable(GLM_XML, texts[i], ("glm stream " + std::to_string(i)).c_str());
+    }
+    // a string streams as it comes, held back from a close still being written
+    msg = parse(GLM_XML, "<tool_call>write_file<arg_key>content</arg_key><arg_value>hello wor", true);
+    CHECK(msg.tool_calls.size() == 1 && msg.tool_calls[0].arguments == "{\"content\":\"hello wor");
+    msg = parse(GLM_XML, "<tool_call>write_file<arg_key>content</arg_key><arg_value>hello</arg_v", true);
+    CHECK(msg.tool_calls.size() == 1 && msg.tool_calls[0].arguments == "{\"content\":\"hello");
+    // a name still being written is no call yet, nor text
+    msg = parse(GLM_XML, "Sure.<tool_call>get_wea", true);
+    CHECK_EQ(msg.content, "Sure.");
+    CHECK(msg.tool_calls.empty());
+    // a generation cut off inside a value keeps what it wrote
+    msg = parse(GLM_XML, "<tool_call>get_weather<arg_key>city</arg_key><arg_value>Paris");
+    CHECK(msg.tool_calls.size() == 1 && msg.tool_calls[0].arguments == "{\"city\":\"Paris\"}");
+    // a continued message that stops inside a call hands the call on
+    CHECK_EQ(chat_format_prefill(GLM_XML, "Checking.<tool_call>get_weather<arg_key>city</arg_key><arg_value>", true, true),
+             "<tool_call>get_weather<arg_key>city</arg_key><arg_value>");
+}
+
+void test_glm_grammar() {
+    std::printf("glm xml grammar takes every call Laguna's template renders\n");
+    grammar_fixture grammar(GLM_XML);
+    const std::vector<std::pair<const char*, json>> calls = {
+        {"no arguments", json::array({call("ping", json::object())})},
+        {"no parameters schema", json::array({call("now", json::object())})},
+        {"bare object schema", json::array({call("status", {{"any", "thing"}, {"n", 2}})})},
+        {"one argument", json::array({call("get_weather", {{"city", "Paris"}})})},
+        {"optional argument", json::array({call("get_weather", {{"city", "Paris"}, {"unit", "celsius"}})})},
+        {"value with markup", json::array({call("write_file", {{"path", "a.xml"}, {"content", "<a>\n  <arg_value>1</a>\n"}})})},
+        {"boolean and integer", json::array({call("set_flag", {{"on", true}, {"count", 3}})})},
+        {"raw strings and JSON values",
+         json::array({call("lookup", {{"zip", "90210"}, {"limit", 5}, {"code", "007"}, {"level", "2"}, {"note", "n"},
+                                      {"anything", "x"}, {"filter", {{"a", 1}}}})})},
+        {"parallel", json::array({call("ping", json::object()), call("get_weather", {{"city", "Tokyo"}})})},
+    };
+    for (const auto& [label, c] : calls) {
+        grammar.accepts(tools_request(), render_glm_calls(c), label);
+        grammar.accepts(tools_request(chat_tool_choice::REQUIRED), render_glm_calls(c), label);
+    }
+    grammar.accepts(tools_request(chat_tool_choice::FUNCTION, "get_weather"),
+                    render_glm_calls(json::array({call("get_weather", {{"city", "Paris"}})})), "forced call");
+    grammar.accepts(tools_request(), "Let me check." + render_glm_calls(json::array({call("ping", json::object())})),
+                    "text before the call");
+
+    std::printf("glm xml grammar holds a call to its tool's schema\n");
+    auto takes = [&grammar](const json& c) { return grammar.takes(tools_request(), render_glm_calls(json::array({c}))); };
+    CHECK(!takes(call("get_weather", {{"city", "Paris"}, {"unit", "kelvin"}})));
+    CHECK(!takes(call("get_weather", {{"city", "Paris"}, {"country", "FR"}})));
+    CHECK(!takes(call("get_weather", {{"unit", "celsius"}})));
+    CHECK(!takes(call("set_flag", {{"on", "yes"}})));
+    CHECK(!takes(call("unknown", json::object())));
+    // a raw value holds neither its own end nor the call's
+    CHECK(!grammar.takes(tools_request(), "<tool_call>write_file<arg_key>path</arg_key><arg_value>p</arg_value>"
+                                          "<arg_key>content</arg_key><arg_value>a</tool_call>b</arg_value></tool_call>"));
+    chat_constraint_request one_call = tools_request();
+    one_call.parallel_tool_calls = false;
+    CHECK(!grammar.takes(one_call, render_glm_calls(json::array({call("ping", json::object()), call("ping", json::object())}))));
+}
+
+void test_glm_string_length() {
+    std::printf("glm xml grammar holds a raw string to its minLength/maxLength\n");
+    grammar_fixture grammar(GLM_XML);
+    auto note = [](const std::string& text, const std::string& more = "") {
+        return "<tool_call>save_note<arg_key>text</arg_key><arg_value>" + text + "</arg_value>" + more + "</tool_call>";
+    };
+    CHECK(grammar.takes(note_request(), note("ab")));
+    CHECK(grammar.takes(note_request(), note("abcdef")));
+    CHECK(!grammar.takes(note_request(), note("a")));
+    CHECK(!grammar.takes(note_request(), note("abcdefg")));
+    // "<" counts as one character, and "</" still cannot occur in the text
+    CHECK(grammar.takes(note_request(), note("a<b")));
+    CHECK(grammar.takes(note_request(), note("abcd<e")));
+    CHECK(!grammar.takes(note_request(), note("abcde<f")));
+    CHECK(!grammar.takes(note_request(), note("a</b")));
+    // array items, written as JSON, keep their bounds too
+    CHECK(grammar.takes(note_request(), note("ab", "<arg_key>tags</arg_key><arg_value>[\"x\", \"xyz\"]</arg_value>")));
+    CHECK(!grammar.takes(note_request(), note("ab", "<arg_key>tags</arg_key><arg_value>[\"wxyz\"]</arg_value>")));
+}
+
+// ---------------------------------------------------------------- minja on the new templates
+
+void test_minja_tojson_ensure_ascii() {
+    std::printf("minja's tojson takes ensure_ascii, as the Laguna 2.1 template writes it\n");
+    auto render = [](const std::string& source, const json& context) {
+        auto tmpl = minja::Parser::parse(source, {true, true, false});
+        return tmpl->render(minja::Context::make(minja::Value(context)));
+    };
+    const json ctx = {{"v", {{"city", "Z\xC3\xBCrich \xE2\x9C\x93 \xF0\x9F\x98\x80"}, {"n", 1}}}};
+    const std::string raw = "{\"city\": \"Z\xC3\xBCrich \xE2\x9C\x93 \xF0\x9F\x98\x80\", \"n\": 1}";
+    CHECK_EQ(render("{{ v | tojson }}", ctx), raw);
+    CHECK_EQ(render("{{ v | tojson(ensure_ascii=False) }}", ctx), raw);
+    CHECK_EQ(render("{{ v | tojson(ensure_ascii=True) }}", ctx),
+             "{\"city\": \"Z\\u00fcrich \\u2713 \\ud83d\\ude00\", \"n\": 1}");
+    CHECK_EQ(render("{{ v | tojson(indent=2, ensure_ascii=False) }}", json{{"v", {{"a", 1}}}}), "{\n  \"a\": 1\n}");
+}
+
+// Laguna-XS-2.1's chat_template.jinja without its comments and its literal BOS
+const std::string LAGUNA_TEMPLATE = R"JINJA(
+{%- set enable_thinking = enable_thinking | default(false) -%}
+{%- set add_generation_prompt = add_generation_prompt | default(false) -%}
+{%- set system_message = "You are a helpful, conversationally-fluent assistant made by Poolside. You are here to be helpful to users through natural language conversations." -%}
+{%- if messages and messages[0].role == "system" -%}
+  {%- set system_message = messages[0].content -%}
+  {%- set messages = messages[1:] -%}
+{%- endif -%}
+{%- set has_sys = system_message and system_message.strip() -%}
+{%- if has_sys or tools or enable_thinking -%}
+  {{- "<system>" -}}
+  {%- if has_sys -%}
+    {{- system_message.rstrip() -}}
+    {%- if tools -%}{{- "\n\n" -}}{%- endif -%}
+  {%- endif -%}
+  {%- if tools -%}
+    {{- "### Tools\n\n" -}}
+    {{- "You may call functions to assist with the user query.\n" -}}
+    {{- "All available function signatures are listed below:\n" -}}
+    {{- "<available_tools>\n" -}}
+    {%- for tool in tools -%}
+      {{- (tool | tojson) ~ "\n" -}}
+    {%- endfor -%}
+    {{- "</available_tools>" -}}
+  {%- endif -%}
+  {{- "</system>\n" -}}
+{%- endif -%}
+{%- for message in messages -%}
+  {%- set content = message.content if message.content is string else "" -%}
+  {%- if message.role == "user" -%}
+    {{- "<user>" + content + "</user>\n" -}}
+  {%- elif message.role == "assistant" -%}
+    {%- generation -%}
+      {{- "<assistant>" -}}
+      {%- set reasoning_content = '' -%}
+      {%- if message.reasoning is string -%}
+        {%- set reasoning_content = message.reasoning -%}
+      {%- elif message.reasoning_content is string -%}
+        {%- set reasoning_content = message.reasoning_content -%}
+      {%- endif -%}
+      {%- if enable_thinking -%}
+        {{- '<think>' + reasoning_content + '</think>' -}}
+      {%- else -%}
+        {{- '</think>' -}}
+      {%- endif -%}
+      {%- if content -%}
+        {{- content -}}
+      {%- endif -%}
+      {%- if message.tool_calls -%}
+        {%- for tool_call in message.tool_calls -%}
+          {%- set function_data = tool_call.function -%}
+          {{- '<tool_call>' + function_data.name -}}
+          {%- set _args = function_data.arguments -%}
+          {%- for k, v in _args.items() -%}
+            {{- "<arg_key>" ~ k ~ "</arg_key>" -}}
+            {{- "<arg_value>" -}}{{- v | tojson(ensure_ascii=False) if v is not string else v -}}{{- "</arg_value>" -}}
+          {%- endfor -%}
+          {{- "</tool_call>" -}}
+        {%- endfor -%}
+      {%- endif -%}
+      {{- "</assistant>\n" -}}
+    {%- endgeneration -%}
+  {%- elif message.role == "tool" -%}
+    {{- "<tool_response>" + content + "</tool_response>\n" -}}
+  {%- elif message.role == "system" -%}
+    {{- "<system>" + content + "</system>\n" -}}
+  {%- endif -%}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+  {{- "<assistant>" -}}
+  {%- if enable_thinking -%}
+    {{- '<think>' -}}
+  {%- else -%}
+    {{- '</think>' -}}
+  {%- endif -%}
+{%- endif -%}
+)JINJA";
+
+void test_glm_template_capabilities() {
+    std::printf("minja renders Laguna's tool calls and tool responses itself, not as polyfilled JSON\n");
+    minja::chat_template laguna(LAGUNA_TEMPLATE, "", "");
+    const minja::chat_template_caps& caps = laguna.original_caps();
+    CHECK(caps.supports_tools);
+    CHECK(caps.supports_tool_calls);
+    CHECK(caps.requires_object_arguments);
+    CHECK(caps.supports_tool_responses);
+    // Hy-Memory's calls, with <tool_sep> after the name, keep the polyfills
+    minja::chat_template hy_memory("{%- for message in messages -%}"
+                                   "{%- if message.tool_calls -%}"
+                                   "{%- for tool in message.tool_calls -%}"
+                                   "{{- '<tool_call>' + tool.function.name + '<tool_sep>\\n' -}}"
+                                   "{%- for key, value in tool.function.arguments.items() -%}"
+                                   "{{- '<arg_key>' + key + '</arg_key>\\n<arg_value>' + value + '</arg_value>\\n' -}}"
+                                   "{%- endfor -%}"
+                                   "{{- '</tool_call>\\n' -}}"
+                                   "{%- endfor -%}"
+                                   "{%- else -%}{{- message.content -}}{%- endif -%}"
+                                   "{%- endfor -%}",
+                                   "", "");
+    CHECK(!hy_memory.original_caps().supports_tool_calls);
+    minja::chat_template_inputs inputs;
+    // as an OpenAI client sends it back: the arguments are a JSON string
+    inputs.messages = json::array({
+        {{"role", "user"}, {"content", "Weather in Paris?"}},
+        {{"role", "assistant"}, {"content", ""},
+         {"tool_calls", json::array({call("get_weather", "{\"city\": \"Paris\", \"days\": 3}")})}},
+        {{"role", "tool"}, {"tool_call_id", "call_1"}, {"content", "18 C"}},
+    });
+    inputs.tools = TOOLS;
+    const std::string prompt = laguna.apply(inputs);
+    CHECK(prompt.find("<assistant></think><tool_call>get_weather<arg_key>city</arg_key><arg_value>Paris</arg_value>"
+                      "<arg_key>days</arg_key><arg_value>3</arg_value></tool_call></assistant>\n"
+                      "<tool_response>18 C</tool_response>\n<assistant></think>") != std::string::npos);
+    CHECK(prompt.find("\"tool_calls\"") == std::string::npos);
+}
+
 } // namespace
 
 int main() {
@@ -788,6 +1084,12 @@ int main() {
     test_string_pattern();
     test_string_pattern_inline_flag();
     test_schema_literals_untouched();
+    test_glm_detection();
+    test_glm_parse();
+    test_glm_grammar();
+    test_glm_string_length();
+    test_minja_tojson_ensure_ascii();
+    test_glm_template_capabilities();
     if (failures) {
         std::printf("%d check(s) failed\n", failures);
         return 1;

@@ -1,0 +1,10 @@
+{
+  "package_dir": "precompiled/c4",
+  "transport": "ctrlpkt",
+  "configs": [
+    { "kind": "reset" },
+    { "kind": "cold",  "app": "vadd", "name": "cold_vadd_rev", "sequence": "vadd_rev" },
+    { "kind": "cold",  "app": "vadd" },
+    { "kind": "rerun", "app": "vadd", "name": "rerun_vadd_rev", "sequence": "vadd_rev" }
+  ]
+}

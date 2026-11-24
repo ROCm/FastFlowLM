@@ -129,6 +129,11 @@ public:
     ///       token prefixes can match the whole prompt rather than its first chunk.
     virtual void expect_prefill(const std::vector<int>& /*tokens*/) {}
 
+    /// \brief hint that the next prefill() or forward() call's logits will not be read
+    /// \note Consumed by one call (even if it throws) so a hint never leaks to a
+    ///       later sampled call. No-op for backends that always produce logits.
+    virtual void skip_next_logits() {}
+
     /// \brief whether the engine finds by itself how much of a prompt it has
     ///        already run
     /// \note Such an engine compares every prefill with the tokens and images it

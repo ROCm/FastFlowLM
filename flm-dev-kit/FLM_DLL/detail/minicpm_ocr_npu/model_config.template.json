@@ -1,0 +1,92 @@
+{
+    "_comment_this_file": "CONTRACT. Template for the packaged MiniCPM-OCR-1.0-NPU2/config.json; package_minicpm_ocr.py copies this next to model.q4nx. The engine reads a FLATTENED config: LM_Config::_normalize_multi_modal() only lifts vocab_size out of text_config, so every text dimension MUST be hoisted to the top level here, exactly as Qwen3.5-0.8B-NPU2/config.json does. Upstream nests them under text_config; do not copy that shape.",
+
+    "_comment_vs_minicpm_v": "Forked from detail/minicpm_v_4_7_npu/model_config.template.json. MiniCPM-OCR-1.0's text tower is MiniCPM-V-4.7's, so the dimensions below are unchanged and the same Qwen3.5-0.8B xclbins are reused. Five fields differ, and every one of them is a removal or a widening rather than new behaviour: tie_word_embeddings (true here), vocab_size (248100 vs 248094, both padding to 248832), mtp_num_hidden_layers (0 -- this model has no MTP layer and the engine never reads the field anyway), rope_parameters (no mrope_section: upstream MiniCPMOcr is MiniCPMV4_6 with `pass`, and the mRoPE machinery belongs to 4.7 only), and downsample_mode (4x, which switches the vit_merger off entirely).",
+
+    "architectures": [
+        "MiniCPMOcrForConditionalGeneration"
+    ],
+    "model_type": "minicpm_ocr",
+    "flm_version": "0.9.43",
+
+    "_comment_text_tower": "Hoisted verbatim from the upstream config.json text_config block. Identical to Qwen3.5-0.8B in every field except tie_word_embeddings and vocab_size, which is why the Qwen3.5-0.8B xclbins are reused unchanged.",
+    "attention_bias": false,
+    "attention_dropout": 0.0,
+    "attn_output_gate": true,
+    "dtype": "bfloat16",
+    "bos_token_id": 248045,
+    "eos_token_id": 248044,
+    "full_attention_interval": 4,
+    "head_dim": 256,
+    "hidden_act": "silu",
+    "hidden_size": 1024,
+    "initializer_range": 0.02,
+    "intermediate_size": 3584,
+    "layer_types": [
+        "linear_attention", "linear_attention", "linear_attention", "full_attention",
+        "linear_attention", "linear_attention", "linear_attention", "full_attention",
+        "linear_attention", "linear_attention", "linear_attention", "full_attention",
+        "linear_attention", "linear_attention", "linear_attention", "full_attention",
+        "linear_attention", "linear_attention", "linear_attention", "full_attention",
+        "linear_attention", "linear_attention", "linear_attention", "full_attention"
+    ],
+    "linear_conv_kernel_dim": 4,
+    "linear_key_head_dim": 128,
+    "linear_num_key_heads": 16,
+    "linear_num_value_heads": 16,
+    "linear_value_head_dim": 128,
+    "mamba_ssm_dtype": "float32",
+    "max_position_embeddings": 262144,
+    "mlp_only_layers": [],
+    "mtp_num_hidden_layers": 0,
+    "mtp_use_dedicated_embeddings": false,
+    "num_attention_heads": 8,
+    "num_hidden_layers": 24,
+    "num_key_value_heads": 2,
+    "partial_rotary_factor": 0.25,
+    "rms_norm_eps": 1e-06,
+
+    "_comment_tied_head": "tie_word_embeddings is the one text-tower field that changes behaviour rather than a number. The checkpoint holds a single copy of the matrix and its GGUF has no output.weight, so the converter (q4nx/models/minicpm_ocr.py) copies token_embd.weight into it. By the time the engine loads model.q4nx there is a real lm_head.weight tensor and nothing here has to special-case it.",
+    "tie_word_embeddings": true,
+    "use_cache": true,
+    "vocab_size": 248100,
+
+    "_comment_rope": "Plain partial RoPE: rotary_dim = head_dim * partial_rotary_factor = 64, theta 1e7. MiniCPM-V-4.7 additionally carries interleaved mRoPE (mrope_section [11, 11, 10]) and applies it whenever a prompt contains images; MiniCPM-OCR does not have it, so positions are sequential for image prompts too. Note the language GGUF still advertises qwen35.rope.dimension_sections = [11, 11, 10, 0], inherited from the Qwen3.5 writer -- the HF config is what is correct here, not the GGUF.",
+    "rope_parameters": {
+        "rope_type": "default",
+        "rope_theta": 10000000,
+        "partial_rotary_factor": 0.25
+    },
+
+    "_comment_rtp": "Carried verbatim from Qwen3.5-0.8B-NPU2/config.json because we load that model's xclbins. Nothing at the current HEAD of either repo reads these keys, but RTP addresses are part of the kernel contract (the host writes RTPs at the fixed addresses each kernel build records in rtp_addresses.txt), so they must not be invented.",
+    "addr_qk": 53248,
+    "addr_kv": 53536,
+
+    "_comment_vision": "vision_model_weight is what makes _normalize_multi_modal() set is_vlm, and with it the engine builds the vision tower (detail/minicpm_ocr_npu/image/) at load. It needs vision_weight.q4nx beside model.q4nx and vision_attn / vision_mm_a / vision_mm_b .xclbin (Qwen3.8's) in the model's xclbin folder, and throws naming whichever is missing. Keys use the engine naming convention (see Qwen3.5-0.8B-NPU2), not the upstream HuggingFace names. Values are MiniCPM's SigLIP tower, which shares nothing with Qwen3.5-VL's ViT and is dimensionally Qwen3.8-27B's.",
+    "vision_model_weight": "vision_weight.q4nx",
+    "image_token_id": 248056,
+    "video_token_id": 248057,
+
+    "_comment_downsample": "4x, against MiniCPM-V-4.7's 16x. vision_model_def.hpp sets insert_layer_id = -1 for it (use_vit_merger() is false), which skips the windowed vit_merger after block 6 entirely -- and the checkpoint agrees: vision_weight.q4nx has none of its 12 tensors. So MINICPM_OCR_INSERT_LAYER_ID and MINICPM_OCR_VIT_MERGER_INTERMEDIATE_SIZE are deliberately absent rather than set to a value that would describe a tower this model does not have. The cost is tokens: blocks 7..26 run on 4x the patches and token_divisor drops from 16 to 4, so one image costs 256 to 2560 LLM rows instead of a quarter of that. The projector is unaffected, its input is still D * merge^2 = 4608.",
+    "downsample_mode": "4x",
+    "vision_config": {
+        "MINICPM_OCR_PATCH_SIZE": 14,
+        "MINICPM_OCR_IMAGE_SIZE": 980,
+        "MINICPM_OCR_MAX_SLICE_NUMS": 9,
+        "MINICPM_OCR_SPATIAL_MERGE_SIZE": 2,
+        "MINICPM_OCR_TEMPORAL_PATCH_SIZE": 1,
+        "MINICPM_OCR_DOWNSAMPLE_FACTOR": 4,
+        "MINICPM_OCR_VISION_RESCALE_FACTOR": 0.00392156862745098,
+        "MINICPM_OCR_VISION_RESCALE_IMAGE_MEAN": 0.5,
+        "MINICPM_OCR_VISION_RESCALE_IMAGE_STD": 0.5,
+        "MINICPM_OCR_VISION_EMBED_DIM": 1152,
+        "MINICPM_OCR_VISION_NUM_HEADS": 16,
+        "MINICPM_OCR_VISION_HEAD_DIM": 72,
+        "MINICPM_OCR_VISION_MLP_INTERMEDIATE_SIZE": 4304,
+        "MINICPM_OCR_VISION_NUM_POSITION_EMBEDDINGS": 4900,
+        "MINICPM_OCR_VISION_NUM_LAYERS": 27,
+        "MINICPM_OCR_VISION_LAYER_NORM_EPSILON": 1e-06,
+        "MINICPM_OCR_VISION_OUT_HIDDEN_SIZE": 1024,
+        "MINICPM_OCR_MERGER_HIDDEN_SIZE": 4608
+    }
+}

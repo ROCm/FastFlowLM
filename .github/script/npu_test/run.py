@@ -59,7 +59,7 @@ def parse_args(argv=None) -> argparse.Namespace:
                         help="Run the whole ASR evaluation set even on the pr tier.")
     parser.add_argument("--required-models", default="",
                         help="Comma-separated model ids the change adds (with --backend: "
-                             "adds or edits). Every tier tests them, they are downloaded "
+                             "gives new weights). Every tier tests them, they are downloaded "
                              "whatever their size, and the run fails if the package does not "
                              "list them or they do not pull.")
     parser.add_argument("--required-pull-budget", type=float, default=REQUIRED_PULL_BUDGET_MIN,
@@ -208,7 +208,7 @@ def main(argv=None) -> int:
             # that do not match, which `flm list` does not. That takes minutes
             # per model, so one a pull on this runner verified before, whose
             # pins and files have not changed since, is not pulled again;
-            # except a required one: the change adds or edits it, perhaps in
+            # except a required one: the change adds or republishes it, perhaps in
             # a way the pins do not cover (a raised flm_min_version).
             check_required(ctx, plan, names, too_big)
             missing = plan.missing(names, everything=bool(args.backend))

@@ -1,0 +1,175 @@
+{
+    "q4nx_config": {
+        "row_block_size": 32,
+        "col_block_size": 256,
+        "parallel_size": 16,
+        "keep_block_in_2D": false
+    },
+    "vision_config":{
+        "vision_MM_K": 256,
+        "vision_MM_N": 64
+    },
+    "default_tensor_type": "Q4_1",
+    "name_map": {
+        "embedding": {
+            "gguf_name": "token_embd.weight",
+            "q4nx_name": "model.embed_tokens.weight"
+        },
+        "q_proj": {
+            "gguf_name": "blk.{bid}.attn_q.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.q_proj.weight"
+        },
+        "q_proj_norm":{
+            "gguf_name": "blk.{bid}.attn_q_norm.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.q_norm.weight" 
+        },
+        "k_proj": {
+            "gguf_name": "blk.{bid}.attn_k.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.k_proj.weight"
+        },
+        "k_proj_norm":{
+            "gguf_name": "blk.{bid}.attn_k_norm.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.k_norm.weight"
+        },
+        "v_proj": {
+            "gguf_name": "blk.{bid}.attn_v.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.v_proj.weight"
+        },
+        "o_proj": {
+            "gguf_name": "blk.{bid}.attn_output.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.o_proj.weight"
+        },
+        "up_proj": {
+            "gguf_name": "blk.{bid}.ffn_up.weight",
+            "q4nx_name": "model.layers.{bid}.mlp.up_proj.weight"
+        },
+        "gate_proj": {
+            "gguf_name": "blk.{bid}.ffn_gate.weight",
+            "q4nx_name": "model.layers.{bid}.mlp.gate_proj.weight"
+        },
+        "down_proj": {
+            "gguf_name": "blk.{bid}.ffn_down.weight",
+            "q4nx_name": "model.layers.{bid}.mlp.down_proj.weight"
+        },
+        "attn_norm": {
+            "gguf_name": "blk.{bid}.attn_norm.weight",
+            "q4nx_name": "model.layers.{bid}.input_layernorm.weight"
+        },
+        "post_attn_norm" :{
+            "gguf_name": "blk.{bid}.post_attention_norm.weight",
+            "q4nx_name": "model.layers.{bid}.post_attention_layernorm.weight"
+        },
+        "ffn_norm": {
+            "gguf_name": "blk.{bid}.ffn_norm.weight",
+            "q4nx_name": "model.layers.{bid}.pre_feedforward_layernorm.weight"
+        },
+        "post_ffn_norm":{
+            "gguf_name": "blk.{bid}.post_ffw_norm.weight",
+            "q4nx_name": "model.layers.{bid}.post_feedforward_layernorm.weight" 
+        },
+        "model_final_norm": {
+            "gguf_name": "output_norm.weight",
+            "q4nx_name": "model.norm.weight"
+        },
+        "rope_freqs": {
+            "gguf_name": "rope_freqs.weight",
+            "q4nx_name": "rope_freqs.weight"
+        },
+        "lm_head": {
+            "gguf_name": "output.weight",
+            "q4nx_name": "lm_head.weight"
+        },
+        "multi_modal_input_projection":{
+            "gguf_name": "mm.input_projection.weight",
+            "q4nx_name": "multi_modal_projector.mm_input_projection_weight"
+        },
+        "multi_modal_soft_embed":{
+            "gguf_name":"mm.soft_emb_norm.weight",
+            "q4nx_name":"multi_modal_projector.mm_soft_emb_norm.weight"
+        },
+        "vision_patch_embed_bias":{
+            "gguf_name": "v.patch_embd.bias",
+            "q4nx_name": "vision_tower.vision_model.embeddings.patch_embedding.bias"
+        },
+        "vision_patch_embed_weight":{
+            "gguf_name": "v.patch_embd.weight",
+            "q4nx_name": "vision_tower.vision_model.embeddings.patch_embedding.weight"
+        },
+        "vision_position_embed":{
+            "gguf_name": "v.position_embd.weight",
+            "q4nx_name":"vision_tower.vision_model.embeddings.position_embedding.weight"
+        },
+        "vision_post_layernorm_weight":{
+            "gguf_name": "v.post_ln.weight",
+            "q4nx_name": "vision_tower.vision_model.post_layernorm.weight"
+        },
+        "vision_post_layernorm_bias":{
+            "gguf_name": "v.post_ln.bias",
+            "q4nx_name": "vision_tower.vision_model.post_layernorm.bias"           
+        },
+        "vision_layer_norm_1_bias":{
+            "gguf_name": "v.blk.{bid}.ln1.bias",
+            "q4nx_name": "vision_tower.vision_model.encoder.layers.{bid}.layer_norm1.bias"          
+        },
+        "vision_layer_norm_1_weight":{
+            "gguf_name": "v.blk.{bid}.ln1.weight",
+            "q4nx_name": "vision_tower.vision_model.encoder.layers.{bid}.layer_norm1.weight"      
+        },
+        "vision_layer_norm_2_bias":{
+            "gguf_name": "v.blk.{bid}.ln2.bias",
+            "q4nx_name": "vision_tower.vision_model.encoder.layers.{bid}.layer_norm2.bias"
+        },
+        "vision_layer_norm_2_weight":{
+            "gguf_name": "v.blk.{bid}.ln2.weight",
+            "q4nx_name": "vision_tower.vision_model.encoder.layers.{bid}.layer_norm2.weight"
+        },
+        "vision_mlp_fc2_bias":{
+            "gguf_name": "v.blk.{bid}.ffn_down.bias",
+            "q4nx_name": "vision_tower.vision_model.encoder.layers.{bid}.mlp.fc2.bias"
+        },
+        "vision_mlp_fc2_weight":{
+            "gguf_name": "v.blk.{bid}.ffn_down.weight",
+            "q4nx_name": "vision_tower.vision_model.encoder.layers.{bid}.mlp.fc2.weight"
+        },
+        "vision_mlp_fc1_bias":{
+            "gguf_name": "v.blk.{bid}.ffn_up.bias",
+            "q4nx_name": "vision_tower.vision_model.encoder.layers.{bid}.mlp.fc1.bias"
+        },
+        "vision_mlp_fc1_weight":{
+            "gguf_name": "v.blk.{bid}.ffn_up.weight",
+            "q4nx_name": "vision_tower.vision_model.encoder.layers.{bid}.mlp.fc1.weight"
+        },
+        "vision_attn_k_bias":{
+            "gguf_name": "v.blk.{bid}.attn_k.bias",
+            "q4nx_name": "vision_tower.vision_model.encoder.layers.{bid}.self_attn.k_proj.bias"
+        },
+        "vision_attn_k_weight":{
+            "gguf_name": "v.blk.{bid}.attn_k.weight",
+            "q4nx_name": "vision_tower.vision_model.encoder.layers.{bid}.self_attn.k_proj.weight"
+        },
+        "vision_attn_out_bias":{
+            "gguf_name": "v.blk.{bid}.attn_out.bias",
+            "q4nx_name": "vision_tower.vision_model.encoder.layers.{bid}.self_attn.out_proj.bias"
+        },
+        "vision_attn_out_weight":{
+            "gguf_name": "v.blk.{bid}.attn_out.weight",
+            "q4nx_name": "vision_tower.vision_model.encoder.layers.{bid}.self_attn.out_proj.weight"
+        },
+        "vision_attn_q_bias":{
+            "gguf_name": "v.blk.{bid}.attn_q.bias",
+            "q4nx_name": "vision_tower.vision_model.encoder.layers.{bid}.self_attn.q_proj.bias"
+        },
+        "vision_attn_q_weight":{
+            "gguf_name": "v.blk.{bid}.attn_q.weight",
+            "q4nx_name": "vision_tower.vision_model.encoder.layers.{bid}.self_attn.q_proj.weight"
+        },
+        "vision_attn_v_bias":{
+            "gguf_name": "v.blk.{bid}.attn_v.bias",
+            "q4nx_name": "vision_tower.vision_model.encoder.layers.{bid}.self_attn.v_proj.bias"
+        },
+        "vision_attn_v_weight":{
+            "gguf_name": "v.blk.{bid}.attn_v.weight",
+            "q4nx_name": "vision_tower.vision_model.encoder.layers.{bid}.self_attn.v_proj.weight"
+        }
+    }
+}

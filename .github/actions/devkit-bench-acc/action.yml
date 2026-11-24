@@ -1,0 +1,115 @@
+# Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+# Portions of this file consist of AI-generated content.
+
+name: Dev-kit bench accuracy
+description: >
+  Runs one accuracy bench (GSM8K, or DocVQA on a data set docvqa_fetch.py
+  built) for one model on an NPU runner: run_acc.py starts `flm serve` for
+  the model, asks the questions, and scores them (summary.json, report.md,
+  predictions and the server log in <out-dir>/<bench>/). The hard gate is
+  acc_common.gate: no predictions, or more than max-unanswered questions
+  unanswered; an accuracy of 0 only warns. Never fails itself: its code
+  output is non-zero when the gate fails, for the job's final gate, so the
+  other benches and the upload still run. Runs the scripts of scripts-dir
+  (the pull request's base) under clean_run.py: no token or GitHub variable
+  reaches flm.
+
+inputs:
+  bench:
+    description: gsm8k or docvqa.
+    required: true
+  flm-bin:
+    description: Absolute path of the overlaid flm.
+    required: true
+  model:
+    description: Model tag.
+    required: true
+  out-dir:
+    description: Absolute results directory (fresh per job).
+    required: true
+  scripts-dir:
+    description: Absolute path of the checkout whose .github/script runs.
+    required: true
+  data:
+    description: DocVQA only, the eval.jsonl of docvqa_fetch.py (its images/ beside it).
+    required: false
+    default: ""
+  n:
+    description: Questions to ask (the first n of GSM8K's 100; DocVQA's set holds as many as it was built with).
+    required: false
+    default: "50"
+  max-unanswered:
+    description: The gate's limit on failed + unparsed questions.
+    required: false
+    default: "5"
+  time-budget-seconds:
+    description: Ask no new question after this long (0 for no limit); the rest are left out and the run is marked partial.
+    required: false
+    default: "0"
+
+outputs:
+  code:
+    description: '"0" when the run is usable (passed the gate).'
+    value: ${{ steps.linux.outputs.code || steps.windows.outputs.code }}
+
+runs:
+  using: composite
+  steps:
+    - name: Run ${{ inputs.bench }} (Linux)
+      id: linux
+      if: runner.os == 'Linux'
+      shell: bash
+      env:
+        BENCH: ${{ inputs.bench }}
+        FLM_BIN: ${{ inputs.flm-bin }}
+        MODEL: ${{ inputs.model }}
+        OUT: ${{ inputs.out-dir }}
+        SCRIPTS: ${{ inputs.scripts-dir }}/.github/script/devkit-bench
+        DATA: ${{ inputs.data }}
+        N: ${{ inputs.n }}
+        MAX_UNANSWERED: ${{ inputs.max-unanswered }}
+        BUDGET: ${{ inputs.time-budget-seconds }}
+      run: |
+        export FLM_MODEL_PATH="${FLM_MODEL_PATH:-/scratch}"
+        args=(--bench "${BENCH}" --flm-bin "${FLM_BIN}" --model "${MODEL}" --out-dir "${OUT}/${BENCH}"
+              --n "${N}" --max-unanswered "${MAX_UNANSWERED}" --time-budget-s "${BUDGET}")
+        [ -n "${DATA}" ] && args+=(--data "${DATA}")
+        code=0
+        python3 "${SCRIPTS}/clean_run.py" -- python3 "${SCRIPTS}/run_acc.py" "${args[@]}" || code=$?
+        [ -f "${OUT}/${BENCH}/report.md" ] && cat "${OUT}/${BENCH}/report.md" >> "$GITHUB_STEP_SUMMARY"
+        echo "code=${code}" >> "$GITHUB_OUTPUT"
+
+    - name: Run ${{ inputs.bench }} (Windows)
+      id: windows
+      if: runner.os == 'Windows'
+      shell: powershell
+      env:
+        BENCH: ${{ inputs.bench }}
+        FLM_BIN: ${{ inputs.flm-bin }}
+        MODEL: ${{ inputs.model }}
+        OUT: ${{ inputs.out-dir }}
+        SCRIPTS: ${{ inputs.scripts-dir }}/.github/script/devkit-bench
+        DATA: ${{ inputs.data }}
+        N: ${{ inputs.n }}
+        MAX_UNANSWERED: ${{ inputs.max-unanswered }}
+        BUDGET: ${{ inputs.time-budget-seconds }}
+      run: |
+        if (-not $env:FLM_MODEL_PATH) {
+          $env:FLM_MODEL_PATH = Join-Path $env:USERPROFILE ".flm"
+          New-Item -ItemType Directory -Force $env:FLM_MODEL_PATH | Out-Null
+        }
+        $env:PYTHONUTF8 = '1'
+        $dir = Join-Path $env:OUT $env:BENCH
+        $cmdArgs = @("$env:SCRIPTS\clean_run.py", '--', 'python', "$env:SCRIPTS\run_acc.py",
+                     "--bench=$env:BENCH", "--flm-bin=$env:FLM_BIN", "--model=$env:MODEL", "--out-dir=$dir",
+                     "--n=$env:N", "--max-unanswered=$env:MAX_UNANSWERED", "--time-budget-s=$env:BUDGET")
+        if ($env:DATA) { $cmdArgs += "--data=$env:DATA" }
+        & python $cmdArgs
+        $code = $LASTEXITCODE
+        $report = Join-Path $dir 'report.md'
+        if (Test-Path $report) {
+          [System.IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, (Get-Content $report -Raw -Encoding UTF8),
+                                          [System.Text.UTF8Encoding]::new($false))
+        }
+        [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "code=$code`n")
+        exit 0

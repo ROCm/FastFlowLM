@@ -5,7 +5,7 @@
 #   source activate.sh
 #   make test                    # or: make test LENGTH=64
 #
-# The harness links the engine that ships in src/lib/xrt/ (built by IRON CI) and
+# The harness links the engine that ships in src/lib/xrt/ (a prebuilt engine library) and
 # loads the xclbins from src/xclbins/MiniCPM-OCR-1.0-NPU2/. This script only
 # checks that both are there and that FLM_MODEL_PATH points at the weights;
 # it never replaces the shipped engine.

@@ -1,0 +1,191 @@
+{
+ "_comment": [
+  "Confucius4-R2T2 (Qwen3-ASR-1.7B fine-tune).",
+  "Language: Youdao's text GGUF (general.architecture = qwen3vl, general.name unrecognisable: use -f qwen3-asr).",
+  "Decoder = Qwen3-1.7B shape, but 4-bit RTN (Q4_0/Q4_1/Q4_K) breaks this model (empty or wrong-language transcripts); Q8_0 is lossless.",
+  "So default_tensor_type is Q8_0 with plain 32-row column-major blocks (parallel_size 32, what _pack_q8nx and the generic decode layer's __Q8_0__ expect).",
+  "Audio tower: HF tensor names (thinker.audio_tower.*, identical to qwen3.5-omni minus conv2d4), kept BF16 with the audio MM tile re-order; convert from a GGUF made with load_safetensor_to_gguf.py, -t audio."
+ ],
+ "q4nx_config": {
+  "row_block_size": 32,
+  "col_block_size": 256,
+  "parallel_size": 32,
+  "keep_block_in_2D": true
+ },
+ "audio_config": {
+  "audio_MM_K": 512,
+  "audio_MM_N": 64
+ },
+ "default_tensor_type": "Q8_0",
+ "name_map": {
+  "embedding": {
+   "gguf_name": "token_embd.weight",
+   "q4nx_name": "model.embed_tokens.weight",
+   "default_tensor_type": "BF16"
+  },
+  "q_proj": {
+   "gguf_name": "blk.{bid}.attn_q.weight",
+   "q4nx_name": "model.layers.{bid}.self_attn.q_proj.weight"
+  },
+  "q_norm": {
+   "gguf_name": "blk.{bid}.attn_q_norm.weight",
+   "q4nx_name": "model.layers.{bid}.self_attn.q_norm.weight"
+  },
+  "k_proj": {
+   "gguf_name": "blk.{bid}.attn_k.weight",
+   "q4nx_name": "model.layers.{bid}.self_attn.k_proj.weight"
+  },
+  "k_norm": {
+   "gguf_name": "blk.{bid}.attn_k_norm.weight",
+   "q4nx_name": "model.layers.{bid}.self_attn.k_norm.weight"
+  },
+  "v_proj": {
+   "gguf_name": "blk.{bid}.attn_v.weight",
+   "q4nx_name": "model.layers.{bid}.self_attn.v_proj.weight"
+  },
+  "o_proj": {
+   "gguf_name": "blk.{bid}.attn_output.weight",
+   "q4nx_name": "model.layers.{bid}.self_attn.o_proj.weight"
+  },
+  "up_proj": {
+   "gguf_name": "blk.{bid}.ffn_up.weight",
+   "q4nx_name": "model.layers.{bid}.mlp.up_proj.weight"
+  },
+  "gate_proj": {
+   "gguf_name": "blk.{bid}.ffn_gate.weight",
+   "q4nx_name": "model.layers.{bid}.mlp.gate_proj.weight"
+  },
+  "down_proj": {
+   "gguf_name": "blk.{bid}.ffn_down.weight",
+   "q4nx_name": "model.layers.{bid}.mlp.down_proj.weight"
+  },
+  "pre_attn_norm": {
+   "gguf_name": "blk.{bid}.attn_norm.weight",
+   "q4nx_name": "model.layers.{bid}.input_layernorm.weight"
+  },
+  "post_attn_norm": {
+   "gguf_name": "blk.{bid}.ffn_norm.weight",
+   "q4nx_name": "model.layers.{bid}.post_attention_layernorm.weight"
+  },
+  "model_final_norm": {
+   "gguf_name": "output_norm.weight",
+   "q4nx_name": "model.norm.weight"
+  },
+  "audio_conv2d1_weight": {
+   "gguf_name": "thinker.audio_tower.conv2d1.weight",
+   "q4nx_name": "model.audio.conv2d1.weight"
+  },
+  "audio_conv2d1_bias": {
+   "gguf_name": "thinker.audio_tower.conv2d1.bias",
+   "q4nx_name": "model.audio.conv2d1.bias"
+  },
+  "audio_conv2d2_weight": {
+   "gguf_name": "thinker.audio_tower.conv2d2.weight",
+   "q4nx_name": "model.audio.conv2d2.weight"
+  },
+  "audio_conv2d2_bias": {
+   "gguf_name": "thinker.audio_tower.conv2d2.bias",
+   "q4nx_name": "model.audio.conv2d2.bias"
+  },
+  "audio_conv2d3_weight": {
+   "gguf_name": "thinker.audio_tower.conv2d3.weight",
+   "q4nx_name": "model.audio.conv2d3.weight"
+  },
+  "audio_conv2d3_bias": {
+   "gguf_name": "thinker.audio_tower.conv2d3.bias",
+   "q4nx_name": "model.audio.conv2d3.bias"
+  },
+  "audio_conv_out_weight": {
+   "gguf_name": "thinker.audio_tower.conv_out.weight",
+   "q4nx_name": "model.audio.conv_out.weight"
+  },
+  "audio_layer_fc1_bias": {
+   "gguf_name": "thinker.audio_tower.layers.{bid}.fc1.bias",
+   "q4nx_name": "model.audio.layers.{bid}.fc1.bias"
+  },
+  "audio_layer_fc1_weight": {
+   "gguf_name": "thinker.audio_tower.layers.{bid}.fc1.weight",
+   "q4nx_name": "model.audio.layers.{bid}.fc1.weight"
+  },
+  "audio_layer_fc2_bias": {
+   "gguf_name": "thinker.audio_tower.layers.{bid}.fc2.bias",
+   "q4nx_name": "model.audio.layers.{bid}.fc2.bias"
+  },
+  "audio_layer_fc2_weight": {
+   "gguf_name": "thinker.audio_tower.layers.{bid}.fc2.weight",
+   "q4nx_name": "model.audio.layers.{bid}.fc2.weight"
+  },
+  "audio_layer_final_layernorm_weight": {
+   "gguf_name": "thinker.audio_tower.layers.{bid}.final_layer_norm.weight",
+   "q4nx_name": "model.audio.layers.{bid}.final_layer_norm.weight"
+  },
+  "audio_layer_final_layernorm_bias": {
+   "gguf_name": "thinker.audio_tower.layers.{bid}.final_layer_norm.bias",
+   "q4nx_name": "model.audio.layers.{bid}.final_layer_norm.bias"
+  },
+  "audio_attn_k_proj_weight": {
+   "gguf_name": "thinker.audio_tower.layers.{bid}.self_attn.k_proj.weight",
+   "q4nx_name": "model.audio.layers.{bid}.self_attn.k_proj.weight"
+  },
+  "audio_attn_k_proj_bias": {
+   "gguf_name": "thinker.audio_tower.layers.{bid}.self_attn.k_proj.bias",
+   "q4nx_name": "model.audio.layers.{bid}.self_attn.k_proj.bias"
+  },
+  "audio_attn_o_proj_weight": {
+   "gguf_name": "thinker.audio_tower.layers.{bid}.self_attn.out_proj.weight",
+   "q4nx_name": "model.audio.layers.{bid}.self_attn.out_proj.weight"
+  },
+  "audio_attn_o_proj_bias": {
+   "gguf_name": "thinker.audio_tower.layers.{bid}.self_attn.out_proj.bias",
+   "q4nx_name": "model.audio.layers.{bid}.self_attn.out_proj.bias"
+  },
+  "audio_attn_q_proj_weight": {
+   "gguf_name": "thinker.audio_tower.layers.{bid}.self_attn.q_proj.weight",
+   "q4nx_name": "model.audio.layers.{bid}.self_attn.q_proj.weight"
+  },
+  "audio_attn_q_proj_bias": {
+   "gguf_name": "thinker.audio_tower.layers.{bid}.self_attn.q_proj.bias",
+   "q4nx_name": "model.audio.layers.{bid}.self_attn.q_proj.bias"
+  },
+  "audio_attn_v_proj_weight": {
+   "gguf_name": "thinker.audio_tower.layers.{bid}.self_attn.v_proj.weight",
+   "q4nx_name": "model.audio.layers.{bid}.self_attn.v_proj.weight"
+  },
+  "audio_attn_v_proj_bias": {
+   "gguf_name": "thinker.audio_tower.layers.{bid}.self_attn.v_proj.bias",
+   "q4nx_name": "model.audio.layers.{bid}.self_attn.v_proj.bias"
+  },
+  "audio_self_attn_layer_norm_weight": {
+   "gguf_name": "thinker.audio_tower.layers.{bid}.self_attn_layer_norm.weight",
+   "q4nx_name": "model.audio.layers.{bid}.self_attn_layer_norm.weight"
+  },
+  "audio_self_attn_layer_norm_bias": {
+   "gguf_name": "thinker.audio_tower.layers.{bid}.self_attn_layer_norm.bias",
+   "q4nx_name": "model.audio.layers.{bid}.self_attn_layer_norm.bias"
+  },
+  "audio_ln_post_weight": {
+   "gguf_name": "thinker.audio_tower.ln_post.weight",
+   "q4nx_name": "model.audio.ln_post.weight"
+  },
+  "audio_ln_post_bias": {
+   "gguf_name": "thinker.audio_tower.ln_post.bias",
+   "q4nx_name": "model.audio.ln_post.bias"
+  },
+  "audio_tower_proj_1_weight": {
+   "gguf_name": "thinker.audio_tower.proj1.weight",
+   "q4nx_name": "model.audio.tower.proj1.weight"
+  },
+  "audio_tower_proj_1_bias": {
+   "gguf_name": "thinker.audio_tower.proj1.bias",
+   "q4nx_name": "model.audio.tower.proj1.bias"
+  },
+  "audio_tower_proj_2_weight": {
+   "gguf_name": "thinker.audio_tower.proj2.weight",
+   "q4nx_name": "model.audio.tower.proj2.weight"
+  },
+  "audio_tower_proj_2_bias": {
+   "gguf_name": "thinker.audio_tower.proj2.bias",
+   "q4nx_name": "model.audio.tower.proj2.bias"
+  }
+ }
+}

@@ -54,7 +54,7 @@ $(BUILD_DIR)/test_qwen3_8mtp_npu: $(OBJECTS)
 # Scores the HOST image preprocessing against a captured pixel_values. Separate
 # from the test binary because it loads no model and touches no device -- see
 # the header comment in verify_preprocess.cpp for why it is not covered by
-# tools/verify_n14_vision.cpp.
+# the vision-tower check (it feeds the tower the reference's own pixel_values).
 VERIFY_SOURCES := $(filter-out test.cpp,$(CPP_SOURCES)) verify_preprocess.cpp
 VERIFY_OBJECTS := $(addprefix $(BUILD_DIR)/,$(notdir $(VERIFY_SOURCES:.cpp=.o)))
 DEPS += $(VERIFY_OBJECTS:.o=.d)
@@ -64,8 +64,8 @@ verify_preprocess: $(BUILD_DIR)/verify_preprocess
 $(BUILD_DIR)/verify_preprocess: $(VERIFY_OBJECTS)
 	$(CXX) $(CXX_FLAGS) -o $@ $^ $(LDFLAGS) $(DEPENDENCY_LDFLAGS)
 
-REF_IMAGE ?= /scratch/michyu/Projects/FastFlowLM_IRON/models_simple/test_input/observation_images_image.png
-REF_DUMP  ?= /scratch/michyu/models/Qwen3.8-27B-NPU2/vision_ref.safetensors
+REF_IMAGE ?= /scratch/$(USER)/observation_images_image.png
+REF_DUMP  ?= /scratch/$(USER)/models/Qwen3.8-27B-NPU2/vision_ref.safetensors
 
 verify: $(BUILD_DIR)/verify_preprocess
 	cd $(BUILD_DIR) && export LD_LIBRARY_PATH=../../../lib/xrt \

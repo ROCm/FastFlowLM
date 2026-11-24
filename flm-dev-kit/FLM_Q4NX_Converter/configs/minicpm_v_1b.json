@@ -1,0 +1,323 @@
+{
+    "_comment": "MiniCPM-V-4.7-1B. The supplied language-q4k-llamacpp.gguf declares general.architecture=qwen35 and uses the Qwen3.5 GGUF tensor names, so this language name_map is qwen3.5_0.8b.json's verbatim. The GGUF is language-only and MiniCPM's SigLIP tower shares nothing with Qwen3.5-VL's ViT, so the vision entries (the vision_* and visual_* ones at the end) are for the second GGUF, mmproj-model-f16.gguf, converted with -t vision.",
+    "q4nx_config": {
+        "row_block_size": 32,
+        "col_block_size": 256,
+        "parallel_size": 32,
+        "keep_block_in_2D": true
+    },
+    "_vision_config_comment": [
+        "The vision tower runs on Qwen3.8-27B's FLM_Xclbin/Qwen3_8/vision_mm, which",
+        "streams w out of DDR as plain row-major (N, K) bf16, so the converter only",
+        "zero-pads -- no (mm_n mm_k) re-order.  vision_MM_K is the k tile, 384 in",
+        "both designs; vision_MM_N is design A's array N tile, 384.  The projector's",
+        "mm.down (q4nx merger.linear_fc2, N=1024) is the one layer on design B,",
+        "whose array N is 1024, hence the override; it is keyed by q4nx layer name",
+        "as in qwen3.8_27b.json.  Resulting pads: mlp.linear_fc1 N 4304->4608,",
+        "mlp.linear_fc2 K 4304->4608, vit_merger.mlp.linear_fc1 N 17216->17280,",
+        "vit_merger.mlp.linear_fc2 K 17216->17280; attn.qkv N=3456=9*384 as is.",
+        "Kept in step with FLM_Xclbin/Qwen3_8/vision_mm/iron/mm_config.py."
+    ],
+    "vision_config": {
+        "vision_MM_K": 384,
+        "vision_MM_N": 384,
+        "vision_MM_N_override": {
+            "merger.linear_fc2": 1024
+        }
+    },
+    "default_tensor_type": "Q4_K",
+    "name_map": {
+        "embedding": {
+            "gguf_name": "token_embd.weight",
+            "q4nx_name": "model.embed_tokens.weight"
+        },
+        "q_proj": {
+            "gguf_name": "blk.{bid}.attn_q.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.q_proj.weight"
+        },
+        "q_norm": {
+            "gguf_name": "blk.{bid}.attn_q_norm.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.q_norm.weight",
+            "default_tensor_type": "BF16"
+        },
+        "k_proj": {
+            "gguf_name": "blk.{bid}.attn_k.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.k_proj.weight"
+        },
+        "k_norm": {
+            "gguf_name": "blk.{bid}.attn_k_norm.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.k_norm.weight",
+            "default_tensor_type": "BF16"
+        },
+        "v_proj": {
+            "gguf_name": "blk.{bid}.attn_v.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.v_proj.weight"
+        },
+        "o_proj": {
+            "gguf_name": "blk.{bid}.attn_output.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.o_proj.weight"
+        },
+        "up_proj": {
+            "gguf_name": "blk.{bid}.ffn_up.weight",
+            "q4nx_name": "model.layers.{bid}.mlp.up_proj.weight"
+        },
+        "gate_proj": {
+            "gguf_name": "blk.{bid}.ffn_gate.weight",
+            "q4nx_name": "model.layers.{bid}.mlp.gate_proj.weight"
+        },
+        "down_proj": {
+            "gguf_name": "blk.{bid}.ffn_down.weight",
+            "q4nx_name": "model.layers.{bid}.mlp.down_proj.weight"
+        },
+        "pre_attn_norm": {
+            "gguf_name": "blk.{bid}.attn_norm.weight",
+            "q4nx_name": "model.layers.{bid}.input_layernorm.weight",
+            "default_tensor_type": "BF16"
+        },
+        "post_attn_norm": {
+            "gguf_name": "blk.{bid}.post_attention_norm.weight",
+            "q4nx_name": "model.layers.{bid}.post_attention_layernorm.weight",
+            "default_tensor_type": "BF16"
+        },
+        "attn_gate_proj": {
+            "gguf_name": "blk.{bid}.attn_gate.weight",
+            "q4nx_name": "model.layers.{bid}.self_attn.gate_proj.weight"
+        },
+        "linear_qkv_proj": {
+            "gguf_name": "blk.{bid}.attn_qkv.weight",
+            "q4nx_name": "model.layers.{bid}.linear_attn.qkv_proj.weight"
+        },
+        "linear_a": {
+            "gguf_name": "blk.{bid}.ssm_a",
+            "q4nx_name": "model.layers.{bid}.linear_attn.ssm_a",
+            "default_tensor_type": "BF16"
+        },
+        "linear_alpha_proj": {
+            "gguf_name": "blk.{bid}.ssm_alpha.weight",
+            "q4nx_name": "model.layers.{bid}.linear_attn.ssm_alpha_proj.weight",
+            "default_tensor_type": "Q8_0"
+        },
+        "linear_beta_proj": {
+            "gguf_name": "blk.{bid}.ssm_beta.weight",
+            "q4nx_name": "model.layers.{bid}.linear_attn.ssm_beta_proj.weight",
+            "default_tensor_type": "Q8_0"
+        },
+        "linear_alpha_proj_prefill": {
+            "gguf_name": "blk.{bid}.ssm_alpha.bf16.weight",
+            "q4nx_name": "model.layers.{bid}.linear_attn.ssm_alpha_proj.bf16.weight",
+            "default_tensor_type": "BF16"
+        },
+        "linear_beta_proj_prefill": {
+            "gguf_name": "blk.{bid}.ssm_beta.bf16.weight",
+            "q4nx_name": "model.layers.{bid}.linear_attn.ssm_beta_proj.bf16.weight",
+            "default_tensor_type": "BF16"
+        },
+        "linear_conv": {
+            "gguf_name": "blk.{bid}.ssm_conv1d.weight",
+            "q4nx_name": "model.layers.{bid}.linear_attn.ssm_conv1d.weight",
+            "default_tensor_type": "BF16"
+        },
+        "linear_norm": {
+            "gguf_name": "blk.{bid}.ssm_norm.weight",
+            "q4nx_name": "model.layers.{bid}.linear_attn.ssm_norm.weight",
+            "default_tensor_type": "BF16"
+        },
+        "linear_out_proj": {
+            "gguf_name": "blk.{bid}.ssm_out.weight",
+            "q4nx_name": "model.layers.{bid}.linear_attn.ssm_out_proj.weight",
+            "default_tensor_type": "Q4_1"
+        },
+        "linear_dt": {
+            "gguf_name": "blk.{bid}.ssm_dt.bias",
+            "q4nx_name": "model.layers.{bid}.linear_attn.ssm_dt.bias",
+            "default_tensor_type": "BF16"
+        },
+        "model_final_norm": {
+            "gguf_name": "output_norm.weight",
+            "q4nx_name": "model.norm.weight",
+            "default_tensor_type": "BF16"
+        },
+        "lm_head": {
+            "gguf_name": "output.weight",
+            "q4nx_name": "lm_head.weight",
+            "default_tensor_type": "Q8_0"
+        },
+
+
+        "vision_patch_embd_weight": {
+            "gguf_name": "v.patch_embd.weight",
+            "q4nx_name": "model.visual.patch_embed.proj.weight",
+            "default_tensor_type": "BF16"
+        },
+        "vision_patch_embd_bias": {
+            "gguf_name": "v.patch_embd.bias",
+            "q4nx_name": "model.visual.patch_embed.proj.bias",
+            "default_tensor_type": "BF16"
+        },
+        "vision_position_embed": {
+            "gguf_name": "v.position_embd.weight",
+            "q4nx_name": "model.visual.pos_embed.weight",
+            "default_tensor_type": "BF16"
+        },
+        "visual_attn_qkv_weight": {
+            "gguf_name": "v.blk.{bid}.attn_qkv.weight",
+            "q4nx_name": "model.visual.blocks.{bid}.attn.qkv.weight",
+            "default_tensor_type": "BF16"
+        },
+        "visual_attn_qkv_bias": {
+            "gguf_name": "v.blk.{bid}.attn_qkv.bias",
+            "q4nx_name": "model.visual.blocks.{bid}.attn.qkv.bias",
+            "default_tensor_type": "BF16"
+        },
+        "visual_attn_out_weight": {
+            "gguf_name": "v.blk.{bid}.attn_out.weight",
+            "q4nx_name": "model.visual.blocks.{bid}.attn.proj.weight",
+            "default_tensor_type": "BF16"
+        },
+        "visual_attn_out_bias": {
+            "gguf_name": "v.blk.{bid}.attn_out.bias",
+            "q4nx_name": "model.visual.blocks.{bid}.attn.proj.bias",
+            "default_tensor_type": "BF16"
+        },
+        "visual_mlp_fc1_weight": {
+            "gguf_name": "v.blk.{bid}.ffn_up.weight",
+            "q4nx_name": "model.visual.blocks.{bid}.mlp.linear_fc1.weight",
+            "default_tensor_type": "BF16"
+        },
+        "visual_mlp_fc1_bias": {
+            "gguf_name": "v.blk.{bid}.ffn_up.bias",
+            "q4nx_name": "model.visual.blocks.{bid}.mlp.linear_fc1.bias",
+            "default_tensor_type": "BF16"
+        },
+        "visual_mlp_fc2_weight": {
+            "gguf_name": "v.blk.{bid}.ffn_down.weight",
+            "q4nx_name": "model.visual.blocks.{bid}.mlp.linear_fc2.weight",
+            "default_tensor_type": "BF16"
+        },
+        "visual_mlp_fc2_bias": {
+            "gguf_name": "v.blk.{bid}.ffn_down.bias",
+            "q4nx_name": "model.visual.blocks.{bid}.mlp.linear_fc2.bias",
+            "default_tensor_type": "BF16"
+        },
+        "visual_ln1_weight": {
+            "gguf_name": "v.blk.{bid}.ln1.weight",
+            "q4nx_name": "model.visual.blocks.{bid}.norm1.weight",
+            "default_tensor_type": "BF16"
+        },
+        "visual_ln1_bias": {
+            "gguf_name": "v.blk.{bid}.ln1.bias",
+            "q4nx_name": "model.visual.blocks.{bid}.norm1.bias",
+            "default_tensor_type": "BF16"
+        },
+        "visual_ln2_weight": {
+            "gguf_name": "v.blk.{bid}.ln2.weight",
+            "q4nx_name": "model.visual.blocks.{bid}.norm2.weight",
+            "default_tensor_type": "BF16"
+        },
+        "visual_ln2_bias": {
+            "gguf_name": "v.blk.{bid}.ln2.bias",
+            "q4nx_name": "model.visual.blocks.{bid}.norm2.bias",
+            "default_tensor_type": "BF16"
+        },
+        "visual_vit_merger_ln1_weight": {
+            "gguf_name": "v.vit_merger.ln1.weight",
+            "q4nx_name": "model.visual.vit_merger.norm1.weight",
+            "default_tensor_type": "BF16"
+        },
+        "visual_vit_merger_ln1_bias": {
+            "gguf_name": "v.vit_merger.ln1.bias",
+            "q4nx_name": "model.visual.vit_merger.norm1.bias",
+            "default_tensor_type": "BF16"
+        },
+        "visual_vit_merger_attn_qkv_weight": {
+            "gguf_name": "v.vit_merger.attn_qkv.weight",
+            "q4nx_name": "model.visual.vit_merger.attn.qkv.weight",
+            "default_tensor_type": "BF16"
+        },
+        "visual_vit_merger_attn_qkv_bias": {
+            "gguf_name": "v.vit_merger.attn_qkv.bias",
+            "q4nx_name": "model.visual.vit_merger.attn.qkv.bias",
+            "default_tensor_type": "BF16"
+        },
+        "visual_vit_merger_attn_out_weight": {
+            "gguf_name": "v.vit_merger.attn_out.weight",
+            "q4nx_name": "model.visual.vit_merger.attn.proj.weight",
+            "default_tensor_type": "BF16"
+        },
+        "visual_vit_merger_attn_out_bias": {
+            "gguf_name": "v.vit_merger.attn_out.bias",
+            "q4nx_name": "model.visual.vit_merger.attn.proj.bias",
+            "default_tensor_type": "BF16"
+        },
+        "visual_vit_merger_ds_ln_weight": {
+            "gguf_name": "v.vit_merger.ds_ln.weight",
+            "q4nx_name": "model.visual.vit_merger.pre_norm.weight",
+            "default_tensor_type": "BF16"
+        },
+        "visual_vit_merger_ds_ln_bias": {
+            "gguf_name": "v.vit_merger.ds_ln.bias",
+            "q4nx_name": "model.visual.vit_merger.pre_norm.bias",
+            "default_tensor_type": "BF16"
+        },
+        "visual_vit_merger_ds_ffn_up_weight": {
+            "gguf_name": "v.vit_merger.ds_ffn_up.weight",
+            "q4nx_name": "model.visual.vit_merger.mlp.linear_fc1.weight",
+            "default_tensor_type": "BF16"
+        },
+        "visual_vit_merger_ds_ffn_up_bias": {
+            "gguf_name": "v.vit_merger.ds_ffn_up.bias",
+            "q4nx_name": "model.visual.vit_merger.mlp.linear_fc1.bias",
+            "default_tensor_type": "BF16"
+        },
+        "visual_vit_merger_ds_ffn_down_weight": {
+            "gguf_name": "v.vit_merger.ds_ffn_down.weight",
+            "q4nx_name": "model.visual.vit_merger.mlp.linear_fc2.weight",
+            "default_tensor_type": "BF16"
+        },
+        "visual_vit_merger_ds_ffn_down_bias": {
+            "gguf_name": "v.vit_merger.ds_ffn_down.bias",
+            "q4nx_name": "model.visual.vit_merger.mlp.linear_fc2.bias",
+            "default_tensor_type": "BF16"
+        },
+        "visual_merger_norm_weight": {
+            "gguf_name": "v.post_ln.weight",
+            "q4nx_name": "model.visual.merger.norm.weight",
+            "default_tensor_type": "BF16"
+        },
+        "visual_merger_norm_bias": {
+            "gguf_name": "v.post_ln.bias",
+            "q4nx_name": "model.visual.merger.norm.bias",
+            "default_tensor_type": "BF16"
+        },
+        "visual_merger_pre_norm_weight": {
+            "gguf_name": "mm.input_norm.weight",
+            "q4nx_name": "model.visual.merger.pre_norm.weight",
+            "default_tensor_type": "BF16"
+        },
+        "visual_merger_pre_norm_bias": {
+            "gguf_name": "mm.input_norm.bias",
+            "q4nx_name": "model.visual.merger.pre_norm.bias",
+            "default_tensor_type": "BF16"
+        },
+        "visual_merger_linear_fc1_weight": {
+            "gguf_name": "mm.up.weight",
+            "q4nx_name": "model.visual.merger.linear_fc1.weight",
+            "default_tensor_type": "BF16"
+        },
+        "visual_merger_linear_fc1_bias": {
+            "gguf_name": "mm.up.bias",
+            "q4nx_name": "model.visual.merger.linear_fc1.bias",
+            "default_tensor_type": "BF16"
+        },
+        "visual_merger_linear_fc2_weight": {
+            "gguf_name": "mm.down.weight",
+            "q4nx_name": "model.visual.merger.linear_fc2.weight",
+            "default_tensor_type": "BF16"
+        },
+        "visual_merger_linear_fc2_bias": {
+            "gguf_name": "mm.down.bias",
+            "q4nx_name": "model.visual.merger.linear_fc2.bias",
+            "default_tensor_type": "BF16"
+        }
+    }
+}

@@ -46,6 +46,21 @@ jobs:
           cmake --build build-chat-continue -j"$(nproc)"
           ctest --test-dir build-chat-continue --output-on-failure
 
+  # chat protocols (src/server/chat_core.hpp and its sinks): the events of a chat turn through the Chat Completions
+  # sink give the bytes recorded from the handler before the sinks existed. Chat library only, no NPU.
+  chat-protocols:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and run the chat protocols test
+        run: |
+          cmake -S src/test/chat_protocols -B build-chat-protocols -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-chat-protocols -j"$(nproc)"
+          ctest --test-dir build-chat-protocols --output-on-failure
+
   # top_k <= 0 turns top-k off (effective_top_k, src/include/modules/top_k.hpp). Header only, no NPU.
   top-k:
     runs-on: ubuntu-latest

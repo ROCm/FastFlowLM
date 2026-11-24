@@ -1,6 +1,6 @@
 /// \file d3_engine_adapter.hpp
 /// \brief The one place where the d3 contract's engine interface (decision/d3_engine.hpp) meets the real engine
-///        (d3_npu, IRON FLM_DLL/detail/d3_npu; API: work/m2_api.md, d3_npu.hpp revision 2).
+///        (d3_npu, flm-dev-kit/FLM_DLL/detail/d3_npu; API: work/m2_api.md, d3_npu.hpp revision 2).
 /// \note  When the engine's header changes only this file and d3_engine_adapter.cpp do. What each path runs:
 ///        - state-once (`d3_npu::encode_state_once`, revision 2): the state once, every block continues from it,
 ///          readout rows at `readout_from_end` (choice / noul / score: {0}; Box {9,6,3,0}; track {12,9,6,3,0});

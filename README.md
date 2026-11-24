@@ -8,14 +8,19 @@
   <img src="https://img.shields.io/badge/NPU-Optimized-red" />
 </p>
 
-## ⚡ FastFlowLM (FLM) — Unlock Ryzen™ AI NPUs
+## ⚡ FastFlowLM (FLM) — Unlock Ryzen™ AI
 
-Run large language models — now with **Vision**, **Audio**, **Embedding** and **MoE** support — on **AMD Ryzen™ AI NPUs** in minutes.  
-**No GPU required. Faster and over 10× more power-efficient. Supports context lengths up to 256k tokens. Ultra-Lightweight (17 MB). Installs within 20 seconds.**
+**Chat, see, listen, and search with local AI — on the silicon already inside your Ryzen™ AI PC.**
 
-📦 **The only out-of-box, NPU-first runtime built exclusively for Ryzen™ AI.**  
-🤝 **A familiar single-command CLI — deeply optimized for NPUs.**  
-✨ **From Idle Silicon to Instant Power — FastFlowLM Makes Ryzen™ AI Shine.**
+FastFlowLM runs LLMs with **Vision**, **Audio**, **Embedding**, and **MoE** support on AMD Ryzen™ AI, on both the **NPU** and the **iGPU** for full SoC support. Setup takes minutes.
+
+- 🔋 **No discrete GPU needed.** Over 10× more power-efficient than GPU-first stacks, and faster.
+- 🧠 **Long context.** Up to 256k tokens.
+- 🪶 **Tiny and quick to install.** A 17 MB runtime that installs in about 20 seconds.
+- 💻 **Familiar to use.** One command to run a model, built for NPUs from the first line of code.
+- 📦 **Dedicated to Ryzen™ AI.** The only out-of-box runtime built exclusively for Ryzen™ AI, with both NPU and iGPU support.
+
+Your Ryzen™ AI silicon is ready to work. FastFlowLM puts all of it to use.
 
 > FastFlowLM (FLM) supports all Ryzen™ AI Series chips with XDNA2 NPUs (Strix, Strix Halo, Kraken, and Gorgon Point).
 
@@ -80,6 +85,8 @@ flm serve llama3.2:1b
 
 ## 📰 In the News
 
+- 11/23/2026 🎉 Starting from **v1.0.13**, FLM has a **HIP EP backend** that enables **GPU (iGPU)** execution, alongside the NPU, for full SoC support on Ryzen™ AI.
+
 - 08/11/2026 🎉 FLM is now part of **[ROCm](https://github.com/ROCm/FastFlowLM)** (v1.0.0) — the repo has moved to AMD's open-source ROCm organization.
 
 - 08/11/2026 🎉 FLM releases its first **SmolVLA** model (v1.0.0) — a Vision-Language-Action robotics policy running on the NPU. See the **[model card](https://fastflowlm.com/docs/models/smolvla/)** and **[benchmarks](https://fastflowlm.com/docs/benchmarks/smolvla_results/)**.
@@ -92,7 +99,7 @@ flm serve llama3.2:1b
 
 ---
 
-## 🧠 Local AI on NPU
+## 🧠 Local AI on Ryzen™ AI
 
 FLM makes it easy to run cutting-edge **LLMs** (and now **VLMs**) locally with:
 - ⚡ Fast and low power
@@ -105,9 +112,9 @@ No model rewrites, no tuning — it just works.
 
 ## ✅ Highlights
 
-- **Runs fully on AMD Ryzen™ AI NPU** — no GPU or CPU load
+- **Dedicated to AMD Ryzen™ AI** — runs on the NPU and the iGPU for full SoC support, no discrete GPU needed
 - **Lightweight runtime (17 MB)** — installs within **20 seconds**, easy to integrate    
-- **Developer-first flow** — a familiar single-command CLI, optimized for NPU  
+- **Familiar to use** — a single-command CLI, built for NPUs from the start  
 - **Support for long context windows** — up to 256k tokens (e.g., Qwen3-4B-Thinking-2507)  
 - **No low-level tuning required** — You focus on your app, we handle the rest
 
@@ -117,6 +124,8 @@ No model rewrites, no tuning — it just works.
 
 - All orchestration code and CLI tools are open-source under the [MIT License](./LICENSE_RUNTIME.txt).  
 - The NPU-accelerated binary kernels are not open source, but are completely free for any use, including non-commercial and commercial use, and may be freely redistributed in unmodified form under the [FastFlowLM NPU Binary License](./LICENSE_BINARY.txt).
+- The FastFlowLM developer kit in [`flm-dev-kit/`](./flm-dev-kit/) (NPU engine and kernel sources, the Q4NX converter, and the prebuilt aiebu libraries the engines link) is open-source under the [MIT License](./LICENSE_RUNTIME.txt). Files that carry their own license line, such as code derived from mlir-aie, keep that license.  
+- Third-party components and their licenses are listed in [THIRD_PARTY_NOTICES.txt](./THIRD_PARTY_NOTICES.txt).
 - Please acknowledge FastFlowLM in your README/project page (or product) as follows:
   ```
   Powered by [FastFlowLM](https://github.com/ROCm/FastFlowLM)
@@ -142,6 +151,8 @@ No model rewrites, no tuning — it just works.
 ## 🛠️ Building from Source
 
 For developers who want to build FastFlowLM from source, we provide CMake presets for a convenient and consistent build experience.
+
+To build the NPU engines, kernels and weight converter themselves, see [flm-dev-kit/README.md](flm-dev-kit/README.md).
 
 ### Prerequisites
 

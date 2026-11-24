@@ -1,0 +1,126 @@
+# Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+# Portions of this file consist of AI-generated content.
+
+name: Dev-kit xclbin assembly
+description: >
+  Downloads a run's devkit-xclbins-shard-* artifacts and lays their kernels
+  out per model, <model folder>/<slot>.xclbin as kernel_assignment.json
+  assigns them (the layout of FastFlowLM's xclbins/ tree), with
+  .github/script/ci/devkit_assemble_xclbins.py, then uploads the tree as
+  devkit-xclbins. A model some of whose kernels were not built gets the ones
+  that were (partial). Then compares the tree with FastFlowLM's
+  src/xclbins/ (devkit_xclbin_compare.py: a report in the job summary and the
+  devkit-xclbins-compare artifact, never a failure), and checks the RTP
+  address files of every kernel built against
+  flm-dev-kit/FLM_Xclbin/rtp_addresses.lock.txt (devkit_rtp_lock.py check):
+  one that moved fails the action, naming the models and engines to update.
+  Needs the repository checked out first, and only contents: read.
+
+inputs:
+  fail-on-partial:
+    description: Fail when a model got some but not all of its kernels (for runs that build every assigned kernel).
+    required: false
+    default: "false"
+  artifact-name:
+    description: Name of the assembled tree's artifact.
+    required: false
+    default: devkit-xclbins
+  rtp-lock:
+    description: The RTP address lock to check the built kernels against; empty skips the check.
+    required: false
+    default: flm-dev-kit/FLM_Xclbin/rtp_addresses.lock.txt
+  shipped:
+    description: FastFlowLM's xclbins tree to compare the assembled one with; empty skips the comparison.
+    required: false
+    default: src/xclbins
+  retention-days:
+    description: Artifact retention.
+    required: false
+    default: "7"
+
+outputs:
+  touched-models:
+    description: JSON list of the models that got at least one kernel (complete and partial).
+    value: ${{ steps.assemble.outputs.touched-models }}
+  complete-models:
+    description: JSON list of the models that got every kernel.
+    value: ${{ steps.assemble.outputs.complete-models }}
+  partial-models:
+    description: JSON list of the models that got some but not all of their kernels.
+    value: ${{ steps.assemble.outputs.partial-models }}
+  found:
+    description: '"true" when at least one kernel was assembled.'
+    value: ${{ steps.assemble.outputs.found }}
+
+runs:
+  using: composite
+  steps:
+    - name: Download kernel shards
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        pattern: devkit-xclbins-shard-*
+        path: ${{ runner.temp }}/devkit-xclbins-shards
+
+    - name: Assemble model folders
+      id: assemble
+      shell: bash
+      env:
+        SHARDS: ${{ runner.temp }}/devkit-xclbins-shards
+        OUT: ${{ runner.temp }}/devkit-xclbins
+        FAIL_ON_PARTIAL: ${{ inputs.fail-on-partial }}
+      run: |
+        set -euo pipefail
+        rm -rf "${OUT}"
+        flags=()
+        [[ "${FAIL_ON_PARTIAL}" == "true" ]] && flags+=(--fail-on-partial)
+        python3 .github/script/ci/devkit_assemble_xclbins.py --artifacts "${SHARDS}" --out "${OUT}" \
+          --github-output "${flags[@]}"
+        echo "dir=${OUT}" >> "${GITHUB_OUTPUT}"
+
+    - name: Upload assembled kernels
+      if: ${{ steps.assemble.outputs.found == 'true' }}
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ steps.assemble.outputs.dir }}/
+        retention-days: ${{ inputs.retention-days }}
+        if-no-files-found: error
+        # A re-run (after a failed shard) replaces the first attempt's tree.
+        overwrite: true
+
+    # Report only: how far the dev kit's kernels are from the ones the
+    # product ships. Never fails the job.
+    - name: Compare with the shipped xclbins
+      id: compare
+      if: ${{ !cancelled() && steps.assemble.outputs.found == 'true' && inputs.shipped != '' }}
+      continue-on-error: true
+      shell: bash
+      env:
+        OUT: ${{ runner.temp }}/devkit-xclbins
+        SHIPPED: ${{ inputs.shipped }}
+      run: |
+        python3 .github/script/ci/devkit_xclbin_compare.py --devkit "${OUT}" --shipped "${SHIPPED}" \
+          --json "${RUNNER_TEMP}/devkit-xclbins-compare/compare.json" --github-output
+
+    - name: Upload the comparison
+      if: ${{ !cancelled() && steps.compare.outcome == 'success' }}
+      continue-on-error: true
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ inputs.artifact-name }}-compare
+        path: ${{ runner.temp }}/devkit-xclbins-compare/compare.json
+        retention-days: ${{ inputs.retention-days }}
+        if-no-files-found: warn
+        overwrite: true
+
+    # The engines hard-code the RTP addresses: a kernel built here whose
+    # RTP file moved from the lock fails, with the engines to update. Last,
+    # so the kernels and the comparison are uploaded whatever it finds;
+    # also when the assembly failed, from the shards themselves.
+    - name: Check RTP addresses
+      if: ${{ !cancelled() && inputs.rtp-lock != '' }}
+      shell: bash
+      env:
+        SHARDS: ${{ runner.temp }}/devkit-xclbins-shards
+        LOCK: ${{ inputs.rtp-lock }}
+      run: python3 .github/script/ci/devkit_rtp_lock.py check "${SHARDS}" --lock "${LOCK}" --github-output

@@ -5,7 +5,9 @@ name: Model Extension Build
 # package and schemas a third party gets, not the build tree. A minimal
 # consumer of that SDK is built first. This runs after, not inside, the package
 # build, so a failure here holds back neither the package nor its NPU tests;
-# build-and-test.yml still counts it in the verdict.
+# build-and-test.yml still counts it in the verdict. The bundle's kernels come
+# from the package too, so on a pull request they are the ones its dev-kit
+# change staged into the package build (build-and-test.yml devkit-stage).
 #
 #   os       runtime  package                         bundle artifact
 #   linux    XRT      portable                        gemma4-open-linux-xrt
@@ -40,6 +42,9 @@ jobs:
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
+      # The image's default user is unprivileged; the runner's workspace mounts
+      # need root.
+      options: --user root
     defaults:
       run:
         shell: bash
@@ -152,7 +157,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PREFIX_PATH="${prefixes}" \
             -DFLM_SOURCE_DIR="${GITHUB_WORKSPACE}/src" \
-            -DFLM_GEMMA4_XCLBIN_DIR="${GITHUB_WORKSPACE}/src/xclbins/Gemma4-E2B-IT-NPU2"
+            -DFLM_GEMMA4_XCLBIN_DIR="${GITHUB_WORKSPACE}/sdk/xclbins/Gemma4-E2B-IT-NPU2"
           cmake --build build-model-extension-gemma4e -j"$(nproc)"
 
       - name: Upload model extension
@@ -262,7 +267,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release `
             "-DCMAKE_PREFIX_PATH=$prefixes" `
             "-DFLM_SOURCE_DIR=$src" `
-            "-DFLM_GEMMA4_XCLBIN_DIR=$src\xclbins\Gemma4-E2B-IT-NPU2" `
+            "-DFLM_GEMMA4_XCLBIN_DIR=$env:GITHUB_WORKSPACE\sdk\xclbins\Gemma4-E2B-IT-NPU2" `
             -DXRT_INCLUDE_DIR=C:\dev\XRT\src\runtime_src\core\include `
             -DXRT_LIBRARY_DIR=C:\dev\xrtNPUfromDLL `
             -DBOOST_INCLUDE_DIR=C:\dev\boost_1_88_0
