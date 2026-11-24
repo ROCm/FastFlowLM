@@ -220,7 +220,7 @@ void test_dev04_offers_only_ported_flm_families() {
 
     // dev04 weights are their own revision, in their own folder; aie2p keeps its own
     const auto next_info = next.get_model_info("qwen3.6-moe:35b-a3b").second;
-    TEST_REQUIRE(next_info.at("name") == "Qwen3.6-35B-A3B-NPU2-dev04");
+    TEST_REQUIRE(next_info.at("name") == "Qwen3.6-35B-A3B-dev04");
     TEST_REQUIRE(next_info.at("model_info_key") == "qwen3.6-moe:35b-a3b-dev04");
     TEST_REQUIRE(next_info.at("url").get<std::string>().find("/resolve/aie_next") != std::string::npos);
     TEST_REQUIRE(!next_info.contains("ms_url"));

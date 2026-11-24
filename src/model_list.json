@@ -547,7 +547,7 @@
                 "supported_platforms": ["aie2p", "dev04"],
                 "platform_sources": {
                     "dev04": {
-                        "name": "Qwen3.5-2B-NPU2-dev04",
+                        "name": "Qwen3.5-2B-dev04",
                         "model_info_key": "qwen3.5:2b-dev04",
                         "url": "https://huggingface.co/FastFlowLM/Qwen3.5-2B-NPU2/resolve/aie_next",
                         "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.5-2B-NPU2/tree/aie_next",
@@ -591,7 +591,7 @@
                 "supported_platforms": ["aie2p", "dev04"],
                 "platform_sources": {
                     "dev04": {
-                        "name": "Qwen3.5-4B-NPU2-dev04",
+                        "name": "Qwen3.5-4B-dev04",
                         "model_info_key": "qwen3.5:4b-dev04",
                         "url": "https://huggingface.co/FastFlowLM/Qwen3.5-4B-NPU2/resolve/aie_next",
                         "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.5-4B-NPU2/tree/aie_next",
@@ -782,7 +782,7 @@
                 "supported_platforms": ["aie2p", "dev04"],
                 "platform_sources": {
                     "dev04": {
-                        "name": "Qwen3.6-35B-A3B-NPU2-dev04",
+                        "name": "Qwen3.6-35B-A3B-dev04",
                         "model_info_key": "qwen3.6-moe:35b-a3b-dev04",
                         "url": "https://huggingface.co/FastFlowLM/Qwen3.6-35B-A3B-NPU2/resolve/aie_next",
                         "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.6-35B-A3B-NPU2/tree/aie_next",
@@ -828,7 +828,7 @@
                 "supported_platforms": ["dev04"],
                 "platform_sources": {
                     "dev04": {
-                        "name": "Qwen3.6-35B-A3B-pruned-NPU2-dev04",
+                        "name": "Qwen3.6-35B-A3B-pruned-dev04",
                         "model_info_key": "qwen3.6-moe-pruned:35b-a3b-dev04",
                         "url": "https://huggingface.co/FastFlowLM/Qwen3.6-35B-A3B-pruned-NPU2/resolve/aie_next",
                         "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.6-35B-A3B-pruned-NPU2/tree/aie_next",
@@ -836,7 +836,7 @@
                         "size": 16401606892
                     }
                 },
-                "name": "Qwen3.6-35B-A3B-pruned-NPU2-dev04",
+                "name": "Qwen3.6-35B-A3B-pruned-dev04",
                 "url": "https://huggingface.co/FastFlowLM/Qwen3.6-35B-A3B-pruned-NPU2/resolve/aie_next",
                 "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.6-35B-A3B-pruned-NPU2/tree/aie_next",
                 "ms_url": null,
