@@ -1,6 +1,6 @@
 name: Hy-MT Windows bench and pressure (temporary)
 
-# Branch-only, not for main: flm bench (1k..8k) for hy-mt3-flash:1.8b and hy-mt2:1.8b, then
+# Branch-only, not for main: flm bench (1k..8k) for hy-mt3-flash:1.8b and hy-mt2-flash:1.8b, then
 # .github/script/mt_pressure.py, on a Windows NPU runner against the Windows package that Build and Test
 # run 45470177569 built for PR #1127. Push to pressure/hy-mt3-win to run it.
 
@@ -61,7 +61,7 @@ jobs:
             $env:FLM_MODEL_PATH = Join-Path $env:USERPROFILE ".flm"
             New-Item -ItemType Directory -Force $env:FLM_MODEL_PATH | Out-Null
           }
-          foreach ($m in "hy-mt3-flash:1.8b", "hy-mt2:1.8b") {
+          foreach ($m in "hy-mt3-flash:1.8b", "hy-mt2-flash:1.8b") {
             & $env:FLM_BIN pull $m
             if ($LASTEXITCODE -ne 0) { throw "flm pull $m failed ($LASTEXITCODE)" }
           }
@@ -73,7 +73,7 @@ jobs:
           if (-not $env:FLM_MODEL_PATH) { $env:FLM_MODEL_PATH = Join-Path $env:USERPROFILE ".flm" }
           New-Item -ItemType Directory -Force bench-out | Out-Null
           Set-Location bench-out
-          foreach ($m in "hy-mt3-flash:1.8b", "hy-mt2:1.8b") {
+          foreach ($m in "hy-mt3-flash:1.8b", "hy-mt2-flash:1.8b") {
             Write-Host "===== flm bench $m"
             & $env:FLM_BIN bench $m --ctx-len 8192 --bench-iterations 3
             if ($LASTEXITCODE -ne 0) { throw "flm bench $m failed ($LASTEXITCODE)" }
