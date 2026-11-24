@@ -38,7 +38,8 @@ failed job or summary step is not), that the product test job of
 every system and runtime the run staged files into passed, that the pull
 request is not from a fork, and that main gained no commit touching the
 dev-kit engine or kernel sources or the prebuilt binaries since the run's
-base (else merge main and let CI run again). Then it downloads the manifests
+base (documentation there does not count, see main_moved; else merge main
+and let CI run again). Then it downloads the manifests
 and the artifacts holding the files that differ from the branch, checks
 every file's size and SHA-256 against the manifests, writes them under
 src/lib and src/xclbins, and makes ONE commit (no push) whose message ends
@@ -59,10 +60,10 @@ bytes, and carries every file the run staged (no half swap: one system's
 build of an engine, part of the kernels), the recorded run passes the
 checks fetch makes (read with the job's token, actions: read: only the
 small manifests are downloaded), main gained no dev-kit source or binary
-change between the run's base and the pull request's base, and the pull
-request changes none of SWAP_CI_PATHS (the code that stages, writes and
-checks the manifests: it runs from the pull request's merge commit, so a
-swap must not come with changes to it). The bytes are compared by git blob
+change (documentation does not count) between the run's base and the pull
+request's base, and the pull request changes none of SWAP_CI_PATHS (the
+code that stages, writes and checks the manifests: it runs from the pull
+request's merge commit, so a swap must not come with changes to it). The bytes are compared by git blob
 id (the manifest records it beside the SHA-256; both hash exactly the
 bytes), read from the trees alone, so the changes job's blob:none clone
 downloads no binary. Prints the reasons and writes swap-verified=true|false
@@ -171,8 +172,25 @@ BENCH_JOB_PREFIX = "devkit-bench / "
 
 BINARY_ROOTS = ("src/lib/", "src/xclbins/")
 # What a change on main since the run's base must not touch: the dev-kit
-# engine and kernel sources and build inputs, and the binaries themselves.
+# engine and kernel sources and build inputs, and the binaries themselves
+# (main_moved: documentation under them, NON_CODE, does not count; anything
+# under BINARY_ROOTS does).
 SOURCE_PATHS = ("flm-dev-kit/FLM_DLL/", "flm-dev-kit/FLM_Xclbin/", "src/lib/", "src/xclbins/")
+# changes.py's NON_CODE, copied rather than imported: verify runs the pull
+# request's code, and changes.py is not in SWAP_CI_PATHS, so a pull request
+# widening its NON_CODE would otherwise hide source commits on main from
+# main_moved. test_devkit_swap pins the two equal.
+NON_CODE = re.compile(
+    r"^(docs/"
+    r"|assets/"                 # README images and the like, at the repo root
+    r"|src/tb_files/"
+    r"|src/iceCream\.jpg$"
+    r"|\.github/ISSUE_TEMPLATE/"
+    r"|\.github/(PULL_REQUEST_TEMPLATE[^/]*|CODEOWNERS|FUNDING\.yml)$"
+    r"|(.*/)?\.gitignore$|\.mailmap$"
+    r"|.*\.md$"
+    r"|.*~$)",                  # editor backups such as src/home_install.sh~
+    re.IGNORECASE)
 THIRD_PARTY = {k: v for k, v in devkit_check.CATALOG_ALLOW.items() if k.startswith("src/lib/")}
 
 
@@ -767,16 +785,33 @@ def check_recorded_run(api, repo: str, run_id: str, tested: str, pr: Pr, tmp: Pa
     return RunCheck(run, manifests, entries, notes, errors)
 
 
+def counts_for_swap(path: str) -> bool:
+    """Whether a change to path (under SOURCE_PATHS) on main makes a run's
+    swap stale: every binary does, and every source or build input but
+    documentation (NON_CODE, changes.py's, so that the two agree)."""
+    return path.startswith(BINARY_ROOTS) or not NON_CODE.match(path)
+
+
 def main_moved(git: Git, since: str, until: str) -> list[str]:
-    """Commits on until since since that touch SOURCE_PATHS (a SwapError
-    when since is unknown here, or is no commit of until's history: a
-    run's base is a commit of main)."""
+    """Commits on until since since that change a SOURCE_PATHS file that
+    counts_for_swap (a commit changing only documentation there does not
+    count; a SwapError when since is unknown here, or is no commit of
+    until's history: a run's base is a commit of main). Trees only (no
+    blob is read): a blob:none clone fetches nothing."""
     if not git.rev(since):
         raise SwapError(f"the run's base {since[:10]} is not in this clone: fetch main")
     if not git.is_ancestor(since, until):
         raise SwapError(f"the run's base {since[:10]} is not a commit of {until}")
-    out = git.run("rev-list", f"{since}..{until}", "--", *SOURCE_PATHS)
-    return out.split()
+    moved = []
+    for commit in git.run("rev-list", f"{since}..{until}", "--", *SOURCE_PATHS).split():
+        # -c: a merge lists the files it changed against every parent (what
+        # a side brought in is listed by the side's own commits); --root:
+        # a root commit lists its files.
+        out = git.run("diff-tree", "-r", "-c", "--root", "--no-commit-id", "--name-only", "-z",
+                      commit, "--", *SOURCE_PATHS)
+        if any(counts_for_swap(p) for p in out.split("\0") if p):
+            moved.append(commit)
+    return moved
 
 
 # ── verify ───────────────────────────────────────────────────────────────────
@@ -790,6 +825,8 @@ def main_moved(git: Git, since: str, until: str) -> list[str]:
 # run from the pull request's merge commit). changes.py is not here: a new
 # model family needs its engine table (ENGINES) and comes with its swap;
 # what it decides runs from the pull request's code whatever this says.
+# verify does not depend on it: main_moved uses this file's copy of its
+# NON_CODE.
 # npu_test's pr-tier table (plan.py PR_CHAT) needs no entry for a new
 # family (it gets its smallest model), so a new model needs no harness edit.
 SWAP_CI_PATHS = (

@@ -1,5 +1,5 @@
 title: "FastFlowLM"
-description: "The leading LLM inference runtime for parallel NPU architectures"
+description: "The LLM inference runtime dedicated to AMD Ryzen AI, with NPU and iGPU support"
 url: "https://fastflowlm.com"
 baseurl: ""
 

@@ -59,23 +59,27 @@ public:
     explicit FakeEngine(std::uint32_t length) : max_length(length) {}
 
     buffer<bf16> forward(int token) override {
+        const bool skip_logits = std::exchange(skip_next_logits_pending, false);
         if (position + 1 > static_cast<int>(max_length)) {
             throw std::runtime_error("fake OGA engine decode limit exceeded");
         }
         ++position;
         forwarded.push_back(token);
+        forward_skipped.push_back(skip_logits);
         Run({token});
-        return buffer<bf16>(kVocab);
+        return skip_logits ? buffer<bf16>{} : buffer<bf16>(kVocab);
     }
     buffer<bf16> prefill(std::vector<int>& tokens, void* payload) override {
         if (fail_prefill) {
             throw std::runtime_error("fake OGA engine injected prefill failure");
         }
+        const bool skip_logits = std::exchange(skip_next_logits_pending, false);
         if (position + static_cast<int>(tokens.size()) > static_cast<int>(max_length)) {
             throw std::runtime_error("fake OGA engine prefill limit exceeded");
         }
         position += static_cast<int>(tokens.size());
         prefills.push_back(tokens);
+        prefill_skipped.push_back(skip_logits);
         if (payload) {
             const auto& incoming = *static_cast<const flm::oga::OgaVisionInput*>(payload);
             bool pixels_changed = executed.empty() && !vision.images.empty() &&
@@ -95,16 +99,25 @@ public:
             vision = incoming;
         }
         Run(tokens);
-        return buffer<bf16>(kVocab);
+        return skip_logits ? buffer<bf16>{} : buffer<bf16>(kVocab);
     }
-    void set_context_length(int value) override { position = value; }
+    void set_context_length(int value) override {
+        skip_next_logits_pending = false;
+        position = value;
+    }
     void load_weights(Q4NX&) override {}
-    void update_max_length(std::uint32_t value) override { max_length = value; }
+    void update_max_length(std::uint32_t value) override {
+        skip_next_logits_pending = false;
+        max_length = value;
+    }
     void clear_context() override {
+        skip_next_logits_pending = false;
         position = 0;
         executed.clear();
         forwarded.clear();
         expected.clear();
+        forward_skipped.clear();
+        prefill_skipped.clear();
         saved.reset();
     }
     buffer<bf16> get_k_cache(int, int) override { return buffer<bf16>(1); }
@@ -112,6 +125,7 @@ public:
     int get_current_context_length() override { return position; }
     int checkpoint() override {
         ++checkpoints;
+        skip_next_logits_pending = false;
         saved = position;
         expected.clear();
         if (rewinds && !executed.empty() && ran == executed && !rewound) {
@@ -120,6 +134,7 @@ public:
         return position;
     }
     int restore() override {
+        skip_next_logits_pending = false;
         if (!saved) return -1;
         ++restores;
         position = *saved;
@@ -136,7 +151,10 @@ public:
     /// \brief the logical sequence: every token since the last clear, less what restore() dropped
     std::vector<int> executed;
     std::vector<int> forwarded;
+    std::vector<bool> forward_skipped;
     std::vector<std::vector<int>> prefills;
+    std::vector<bool> prefill_skipped;
+    bool skip_next_logits_pending = false;
     /// \brief the images of the last prefill that had any
     flm::oga::OgaVisionInput vision;
     std::optional<int> saved;
@@ -225,6 +243,7 @@ public:
         return engine_->reports_reused_tokens ? engine_->reused_total : 0;
     }
     void expect_prefill(const std::vector<int>& ids) override { engine_->expect_prefill(ids); }
+    void skip_next_logits() override { engine_->skip_next_logits_pending = true; }
     bool matches_token_prefixes() const override { return true; }
     FakeEngine& fake_engine() const { return *engine_; }
 
@@ -1127,6 +1146,84 @@ void Qwen2ChangedDefinitionChangesThePrompt() {
     Require(InsertedPrompt(model, ChatInput(retyped)) != before, "a changed parameter type must change the prompt");
 }
 
+void ChunkedPrefillSkipsIntermediateLogitsAndSamplesLastChunk() {
+    std::vector<int> prompt(1200, 10);
+    std::vector<int> encoded = prompt;
+    encoded.insert(encoded.end(), {kThinkStart, 271, kThinkEnd, 271});
+    Reset(encoded, {7, 7, kEos});
+
+    Harness model(2048, 4096);
+    auto meta = Meta();
+    meta.max_prefill_len = 512;
+    auto input = TextInput();
+    Require(model.insert(meta, input), "chunked insert failed");
+    const FakeEngine& engine = model.engine();
+    Require(engine.prefill_skipped == (std::vector<bool>{true, true, false}),
+            "intermediate prefill chunks must skip logits while the last chunk fetches them");
+    Require(!engine.skip_next_logits_pending, "skip_next_logits hint must not remain pending after insert");
+
+    // Cancelling before chunk 2 must not leave a stale skip hint pending for the next call.
+    Harness cancelled_model(2048, 4096);
+    Reset(encoded, {7});
+    auto cancel_meta = Meta();
+    cancel_meta.max_prefill_len = 512;
+    int checks = 0;
+    auto cancel_input = TextInput();
+    Require(!cancelled_model.insert(cancel_meta, cancel_input, [&checks] { return ++checks >= 2; }),
+            "cancelled chunked insert must return false");
+    Require(cancel_meta.stop_reason == CANCEL_DETECTED, "cancelled chunked insert must report CANCEL_DETECTED");
+    Require(cancelled_model.engine().prefill_skipped == (std::vector<bool>{true}),
+            "cancellation before chunk 2 must have run only chunk 1 with skip_next_logits");
+    Require(!cancelled_model.engine().skip_next_logits_pending,
+            "cancelling before an intermediate chunk must not leave skip_next_logits pending");
+    // A subsequent request on the same model must sample normally (no leaked skip hint).
+    Reset({10, 11, 12, kThinkStart, 271, kThinkEnd, 271}, {7});
+    auto follow_meta = Meta();
+    auto follow_input = TextInput();
+    Require(cancelled_model.insert(follow_meta, follow_input),
+            "follow-up insert after cancelled chunked prefill must succeed and sample");
+    Require(cancelled_model.engine().prefill_skipped.back() == false,
+            "follow-up single-chunk insert must not skip logits");
+}
+
+void Qwen35ThinkPreambleSkipsDiscardedForwards() {
+    // enable_think = true: 1 discarded forward (think_start), then sampled forward (198) and decode
+    {
+        Reset({10, 11, 12, kThinkStart, 198}, {7, 9, kEos});
+        Harness model(256, 512);
+        Require(model.configure_parameter("enable_think", true), "enable_think=true setup failed");
+        auto meta = Meta();
+        auto input = TextInput();
+        Require(model.insert(meta, input), "think-on insert failed");
+        std::ostringstream output;
+        model.generate(meta, 0, output);
+        const FakeEngine& engine = model.engine();
+        Require(engine.forwarded == (std::vector<int>{kThinkStart, 198, 9}),
+                "think-on forwarded tokens mismatch");
+        Require(engine.forward_skipped == (std::vector<bool>{true, false, false}),
+                "think-on preamble must skip logits only on discarded think_start forward");
+        Require(!engine.skip_next_logits_pending, "think-on generate left skip_next_logits pending");
+    }
+
+    // enable_think = false: 3 discarded forwards (think_start, 271, think_end), then sampled forward (271) and decode
+    {
+        Reset({10, 11, 12, kThinkStart, 271, kThinkEnd, 271}, {7, 9, kEos});
+        Harness model(256, 512);
+        Require(model.configure_parameter("enable_think", false), "enable_think=false setup failed");
+        auto meta = Meta();
+        auto input = TextInput();
+        Require(model.insert(meta, input), "think-off insert failed");
+        std::ostringstream output;
+        model.generate(meta, 0, output);
+        const FakeEngine& engine = model.engine();
+        Require(engine.forwarded == (std::vector<int>{kThinkStart, 271, kThinkEnd, 271, 9}),
+                "think-off forwarded tokens mismatch");
+        Require(engine.forward_skipped == (std::vector<bool>{true, true, true, false, false}),
+                "think-off preamble must skip logits only on the three discarded forwards");
+        Require(!engine.skip_next_logits_pending, "think-off generate left skip_next_logits pending");
+    }
+}
+
 void Qwen2PackagesWithoutTheCatalogFlagKeepTheirPrompt() {
     Qwen2Harness instruct(CatalogEntry("qwen2.5-it-oga-hipep", "14b"));
     const std::string plain = InsertedPrompt(instruct, ChatInput(nlohmann::ordered_json::array()));
@@ -1457,7 +1554,10 @@ Sampler::Sampler(int features, sampler_config& config)
 void Sampler::reset_penalties() {}
 void Sampler::set_seed(uint64_t) {}
 void Sampler::set_repeat_last_n(size_t n) { repeat_last_n = n; }
-int Sampler::sample(buffer<bf16>&, const std::vector<uint32_t>*, sample_logprobs_t*) {
+int Sampler::sample(buffer<bf16>& logits, const std::vector<uint32_t>*, sample_logprobs_t*) {
+    if (logits.size() != kVocab) {
+        throw std::logic_error("Sampler::sample called with empty or wrong-sized logits buffer");
+    }
     if (g_sample_index < g_samples.size()) return g_samples[g_sample_index++];
     return 7;
 }
@@ -1559,6 +1659,9 @@ int main() {
     run("Qwen2 failed or cancelled prefill does not checkpoint", Qwen2FailedOrCancelledPrefillDoesNotCheckpoint);
     run("Qwen2 changed ending does not false hit", Qwen2ChangedEndingDoesNotFalseHit);
     run("Qwen2 non-OGA legacy insert does not checkpoint", Qwen2NonOgaLegacyInsertDoesNotCheckpoint);
+    run("chunked prefill skips intermediate logits and samples last chunk",
+        ChunkedPrefillSkipsIntermediateLogitsAndSamplesLastChunk);
+    run("Qwen3.5 think preamble skips discarded forwards", Qwen35ThinkPreambleSkipsDiscardedForwards);
     if (failures == 0) std::cout << "Qwen frontend regression tests passed\n";
     return failures == 0 ? 0 : 1;
 }

@@ -175,7 +175,11 @@ class Trees(unittest.TestCase):
         self.put("devkit/A-NPU2/attn.xclbin", base)
         self.put("shipped/A-NPU2/attn.xclbin", base)
         self.put("shipped/A-NPU2/mm.xclbin", base)
-        (self.tmp / "devkit/A-NPU2/mm.xclbin").symlink_to(self.tmp / "gone.xclbin")
+        try:
+            (self.tmp / "devkit/A-NPU2/mm.xclbin").symlink_to(self.tmp / "gone.xclbin")
+        except (OSError, NotImplementedError):
+            # Windows without Developer Mode or the privilege to create one.
+            self.skipTest("cannot create a symbolic link here")
         rc, out = self.run_main("--devkit", str(self.tmp / "devkit"), "--shipped", str(self.tmp / "shipped"),
                                 "--json", str(self.tmp / "out.json"))
         self.assertEqual(rc, 0)

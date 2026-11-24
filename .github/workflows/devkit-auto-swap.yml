@@ -1,0 +1,371 @@
+# Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+# Portions of this file consist of AI-generated content.
+
+name: Dev-kit auto-swap
+
+# Makes the swap commit (flm-dev-kit/AGENTS.md, "Prebuilt binaries") for a
+# pull request a maintainer has approved, then merges it once Build and Test
+# passes on the swap commit, so the dev-kit binaries its run built and
+# NPU-tested reach main with no step by the author. The swap is
+# devkit_swap.py fetch, unchanged, with every check it makes; Build and Test
+# then verifies the swap commit (devkit_swap.py verify) as it verifies an
+# author's. Rules: .github/script/ci/devkit_auto_swap.py.
+#
+#   when    a Build and Test run of a pull request (or a dev-kit full refresh
+#           dispatched on its branch) completes, or a review is submitted
+#           (devkit-swap-review.yml, a signal with no permission)
+#   plan    devkit_auto_swap.py plan, read-only token, decides from the API
+#           alone: swap, merge or nothing. Both need the one open pull
+#           request of this repository (no fork) with the run's head branch,
+#           based on main; its head's newest Build and Test run, against main;
+#           a maintainer's (write or more, not the author) approval and no
+#           maintainer's latest review requesting changes
+#   swap    the run asks for the swap alone and the approval is of the head:
+#           a pull request that also changes devkit_swap.py SWAP_CI_PATHS
+#           gets a comment asking to split it (verify would refuse the swap);
+#           else devkit_swap.py fetch (main's copy) on a blob:none checkout of
+#           the head, plan again (still swap, same head), and a push to the
+#           branch with the App's token (the workflow's token would start no
+#           Build and Test on the swap commit)
+#   merge   the head looks like a swap commit (trailers, its only parent the
+#           tested commit), its newest run is a pull_request run that passed,
+#           and the approval is of the tested commit or the swap: main's
+#           devkit_swap.py verify on the head (trailers are the author's
+#           text), plan again, then gh pr merge --match-head-commit <head>.
+#           A pull request changing .github/workflows is merged by hand (the
+#           App has no workflows permission, on purpose). Not GitHub's auto-merge:
+#           main requires no check, so it would merge before Build and Test
+#           ran on the swap, and it stays on after later pushes. A push after
+#           the swap leaves a head that is no swap commit, so nothing merges
+#           it; merge by hand as usual
+#   report  one sticky comment by the App on the pull request: swapped, why
+#           fetch refused, merged or why the merge failed
+#
+# Trust: workflow_run runs this file and the scripts from the default
+# branch, never a pull request's version. Nothing from the pull request is
+# executed: fetch only reads its git trees and the run's artifacts as
+# untrusted data. The App's key is read only by the swap and merge jobs, in
+# the environment devkit-auto-swap, whose deployment branches MUST be main
+# alone: a repository secret, or an environment open to other branches,
+# would hand the key to any branch's workflow. Setup (once, by an admin):
+#   - a GitHub App with Contents and Pull requests read and write,
+#     installed on this repository
+#   - the environment devkit-auto-swap, deployment branches: main only,
+#     with the secrets DEVKIT_SWAP_APP_CLIENT_ID and
+#     DEVKIT_SWAP_APP_PRIVATE_KEY
+#   - optional: the variable DEVKIT_AUTO_SWAP_MERGE_METHOD, squash
+#     (default), merge or rebase
+# zizmor's dangerous-triggers flags every workflow_run; the conditions on
+# the plan job (path, repository, event) and the API-only plan are its
+# documented mitigations.
+on:  # zizmor: ignore[dangerous-triggers] runs main's code only; the event is a hint, plan reads the API
+  workflow_run:
+    workflows: ["Build and Test", "Dev-kit swap review"]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: devkit-auto-swap-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  # No environment: most runs end here, and only a swap should show up as a
+  # deployment of devkit-auto-swap.
+  plan:
+    if: >-
+      github.event.workflow_run.repository.full_name == github.repository
+      && github.event.workflow_run.head_repository.full_name == github.repository
+      && ((github.event.workflow_run.path == '.github/workflows/build-and-test.yml'
+           && contains(fromJSON('["pull_request", "workflow_dispatch"]'), github.event.workflow_run.event)
+           && contains(fromJSON('["success", "failure"]'), github.event.workflow_run.conclusion))
+          || (github.event.workflow_run.path == '.github/workflows/devkit-swap-review.yml'
+              && github.event.workflow_run.event == 'pull_request_review'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      action: ${{ steps.plan.outputs.action }}
+      pr: ${{ steps.plan.outputs.pr }}
+      run: ${{ steps.plan.outputs.run }}
+      head: ${{ steps.plan.outputs.head }}
+      branch: ${{ steps.plan.outputs.branch }}
+      reason: ${{ steps.plan.outputs.reason }}
+    steps:
+      # The default branch: the scripts that decide and swap.
+      - name: Check out main's scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: trusted
+          persist-credentials: false
+          sparse-checkout: .github/script/ci
+
+      - name: Plan
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          EVENT_PR: ${{ github.event.workflow_run.pull_requests[0].number }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          python3 -I trusted/.github/script/ci/devkit_auto_swap.py plan --repo "${GITHUB_REPOSITORY}" \
+            --head-repo "${HEAD_REPO}" --head-branch "${HEAD_BRANCH}" --event-pr "${EVENT_PR}" \
+            --default-branch "${DEFAULT_BRANCH}" --github-output
+
+  swap:
+    needs: plan
+    if: needs.plan.outputs.action == 'swap'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: devkit-auto-swap
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ needs.plan.outputs.pr }}
+      RUN: ${{ needs.plan.outputs.run }}
+      HEAD: ${{ needs.plan.outputs.head }}
+      BRANCH: ${{ needs.plan.outputs.branch }}
+      REASON: ${{ needs.plan.outputs.reason }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+    steps:
+      - name: Check out main's scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: trusted
+          persist-credentials: false
+          sparse-checkout: .github/script/ci
+
+      # The tested head, trees for all of history (fetch checks main against
+      # the run's base) and only the head's blobs.
+      - name: Check out the pull request's head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: pr
+          ref: ${{ needs.plan.outputs.head }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Gate
+        id: gate
+        run: |
+          set -euo pipefail
+          python3 -I trusted/.github/script/ci/devkit_auto_swap.py gate --repo-root pr \
+            --base "origin/${DEFAULT_BRANCH}" --head HEAD --github-output
+
+      - name: App token
+        id: app
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          client-id: ${{ secrets.DEVKIT_SWAP_APP_CLIENT_ID }}
+          private-key: ${{ secrets.DEVKIT_SWAP_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Ask to split
+        if: steps.gate.outputs.action == 'split'
+        env:
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+          BOT: ${{ steps.app.outputs.app-slug }}[bot]
+          CI_PATHS: ${{ steps.gate.outputs.ci_paths }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "${CI_PATHS}" | tr ',' '\n' > "${RUNNER_TEMP}/auto-swap.log"
+          GH_TOKEN="${APP_TOKEN}" python3 -I trusted/.github/script/ci/devkit_auto_swap.py comment \
+            --repo "${GITHUB_REPOSITORY}" --pr "${PR}" --bot-login "${BOT}" --body-file "${RUNNER_TEMP}/auto-swap.log" \
+            --title "**Dev-kit auto-swap: not swapped.** This pull request also changes the CI that stages and checks swaps (below), which no verified swap can come with. Move that change to a pull request of its own first, merge main back, and approve again once Build and Test asks for the swap."
+
+      # main's devkit_swap.py on the pull request's tree; the workflow's
+      # read-only token reads the run and its artifacts. Nothing is pushed.
+      - name: Swap
+        id: swap
+        if: steps.gate.outputs.action == 'swap'
+        env:
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+        working-directory: pr
+        run: |
+          set -euo pipefail
+          : > "${RUNNER_TEMP}/auto-swap.log"
+          if ! id=$(GH_TOKEN="${APP_TOKEN}" gh api "users/${APP_SLUG}[bot]" --jq .id 2>> "${RUNNER_TEMP}/auto-swap.log"); then
+            echo "could not read the App's bot user ${APP_SLUG}[bot]" >> "${RUNNER_TEMP}/auto-swap.log"; exit 1
+          fi
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${id}+${APP_SLUG}[bot]@users.noreply.github.com"
+          if ! python3 -I ../trusted/.github/script/ci/devkit_swap.py fetch --pr "${PR}" --run "${RUN}" \
+               --repo "${GITHUB_REPOSITORY}" --no-git-fetch > "${RUNNER_TEMP}/fetch.log" 2>&1; then
+            cat "${RUNNER_TEMP}/fetch.log" | tee -a "${RUNNER_TEMP}/auto-swap.log"
+            echo "::error::devkit_swap.py fetch refused run ${RUN}"
+            exit 1
+          fi
+          cat "${RUNNER_TEMP}/fetch.log"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # The approval, the change requests and the head again, after the
+      # minutes fetch took.
+      - name: Plan again
+        if: steps.swap.outcome == 'success'
+        run: |
+          set -euo pipefail
+          if ! python3 -I trusted/.github/script/ci/devkit_auto_swap.py plan --repo "${GITHUB_REPOSITORY}" \
+               --head-repo "${GITHUB_REPOSITORY}" --head-branch "${BRANCH}" --event-pr "${PR}" \
+               --default-branch "${DEFAULT_BRANCH}" --expect-action swap --expect-head "${HEAD}" > "${RUNNER_TEMP}/plan.log" 2>&1; then
+            cat "${RUNNER_TEMP}/plan.log"
+            grep -E '^(reason=|::error)' "${RUNNER_TEMP}/plan.log" > "${RUNNER_TEMP}/auto-swap.log" || true
+            echo "the decision changed while fetch ran: not pushed" >> "${RUNNER_TEMP}/auto-swap.log"
+            exit 1
+          fi
+
+      # A plain push: the branch must still be at the tested head.
+      - name: Push
+        id: push
+        if: steps.swap.outcome == 'success'
+        env:
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+        working-directory: pr
+        run: |
+          set -euo pipefail
+          auth=$(printf 'x-access-token:%s' "${APP_TOKEN}" | base64 -w0)
+          echo "::add-mask::${auth}"
+          if ! git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth}" \
+               push "https://github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/${BRANCH}" 2> "${RUNNER_TEMP}/push.log"; then
+            cat "${RUNNER_TEMP}/push.log"
+            { echo "git push to ${BRANCH} failed (did the branch move since ${HEAD}?):"; cat "${RUNNER_TEMP}/push.log"; } > "${RUNNER_TEMP}/auto-swap.log"
+            exit 1
+          fi
+
+      - name: Report
+        if: always() && steps.app.outputs.token != '' && steps.gate.outputs.action == 'swap'
+        env:
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+          BOT: ${{ steps.app.outputs.app-slug }}[bot]
+          PUSH: ${{ steps.push.outcome }}
+          SHA: ${{ steps.swap.outputs.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          [ -f "${RUNNER_TEMP}/auto-swap.log" ] || : > "${RUNNER_TEMP}/auto-swap.log"
+          if [ "${PUSH}" = success ]; then
+            : > "${RUNNER_TEMP}/auto-swap.log"
+            title="**Dev-kit auto-swap:** pushed swap commit ${SHA} with the binaries Build and Test run ${RUN} tested (${REASON}). This bot merges the pull request once Build and Test passes on it; a push after the swap stops that (merge by hand then)."
+          elif [ -s "${RUNNER_TEMP}/auto-swap.log" ]; then
+            title="**Dev-kit auto-swap: not swapped** (${RUN_URL}), for run ${RUN}:"
+          else
+            title="**Dev-kit auto-swap: not swapped:** the job failed before or outside fetch, see ${RUN_URL}."
+          fi
+          GH_TOKEN="${APP_TOKEN}" python3 -I trusted/.github/script/ci/devkit_auto_swap.py comment \
+            --repo "${GITHUB_REPOSITORY}" --pr "${PR}" --bot-login "${BOT}" --body-file "${RUNNER_TEMP}/auto-swap.log" --title "${title}"
+
+  merge:
+    needs: plan
+    if: needs.plan.outputs.action == 'merge'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: devkit-auto-swap
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ needs.plan.outputs.pr }}
+      RUN: ${{ needs.plan.outputs.run }}
+      HEAD: ${{ needs.plan.outputs.head }}
+      BRANCH: ${{ needs.plan.outputs.branch }}
+      REASON: ${{ needs.plan.outputs.reason }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      MERGE_METHOD: ${{ vars.DEVKIT_AUTO_SWAP_MERGE_METHOD || 'squash' }}
+    steps:
+      - name: Check out main's scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: trusted
+          persist-credentials: false
+          sparse-checkout: .github/script/ci
+
+      # The head, to verify with main's code: trailers are the author's
+      # text, and plan read them only.
+      - name: Check out the pull request's head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: pr
+          ref: ${{ needs.plan.outputs.head }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      # devkit_swap.py verify as Build and Test's changes job runs it, from
+      # main: the head is a swap commit of exactly the bytes its run tested,
+      # carrying all of them, the run passed as fetch requires, the pull
+      # request changes no swap CI, and main gained no dev-kit change since.
+      # The App's token cannot merge a change to .github/workflows (it has no
+      # workflows permission, on purpose): such a pull request is merged by
+      # hand.
+      - name: Verify the swap
+        id: verify
+        run: |
+          set -euo pipefail
+          python3 -I trusted/.github/script/ci/devkit_swap.py verify --repo-root pr --repo "${GITHUB_REPOSITORY}" \
+            --head "${HEAD}" --base "origin/${DEFAULT_BRANCH}" --pr "${PR}" --head-ref "${BRANCH}" \
+            --head-repo "${GITHUB_REPOSITORY}" > "${RUNNER_TEMP}/verify.log" 2>&1 || true
+          cat "${RUNNER_TEMP}/verify.log"
+          if ! grep -qx 'swap-verified=true' "${RUNNER_TEMP}/verify.log"; then
+            { echo "the head is no swap commit main's devkit_swap.py verify accepts:"; grep -v '^swap-verified=' "${RUNNER_TEMP}/verify.log"; } > "${RUNNER_TEMP}/auto-swap.log"
+            exit 1
+          fi
+          wf=$(git -C pr diff --name-only "origin/${DEFAULT_BRANCH}...HEAD" -- .github/workflows)
+          if [ -n "${wf}" ]; then
+            { echo "the pull request changes workflows, which this bot may not merge: merge by hand"; echo "${wf}"; } > "${RUNNER_TEMP}/auto-swap.log"
+            exit 1
+          fi
+
+      - name: App token
+        id: app
+        if: always()
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          client-id: ${{ secrets.DEVKIT_SWAP_APP_CLIENT_ID }}
+          private-key: ${{ secrets.DEVKIT_SWAP_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Merge
+        id: merge
+        if: steps.verify.outcome == 'success'
+        env:
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          set -euo pipefail
+          case "${MERGE_METHOD}" in squash|merge|rebase) ;; *) echo "DEVKIT_AUTO_SWAP_MERGE_METHOD ${MERGE_METHOD} is not squash, merge or rebase" >> "${RUNNER_TEMP}/auto-swap.log"; exit 1 ;; esac
+          # Again, just before merging: approval, change requests, head, run.
+          if ! python3 -I trusted/.github/script/ci/devkit_auto_swap.py plan --repo "${GITHUB_REPOSITORY}" \
+               --head-repo "${GITHUB_REPOSITORY}" --head-branch "${BRANCH}" --event-pr "${PR}" \
+               --default-branch "${DEFAULT_BRANCH}" --expect-action merge --expect-head "${HEAD}" > "${RUNNER_TEMP}/plan.log" 2>&1; then
+            cat "${RUNNER_TEMP}/plan.log"
+            grep -E '^(reason=|::error)' "${RUNNER_TEMP}/plan.log" > "${RUNNER_TEMP}/auto-swap.log" || true
+            exit 1
+          fi
+          if ! GH_TOKEN="${APP_TOKEN}" gh pr merge "${PR}" --repo "${GITHUB_REPOSITORY}" "--${MERGE_METHOD}" \
+               --match-head-commit "${HEAD}" > "${RUNNER_TEMP}/merge.log" 2>&1; then
+            cat "${RUNNER_TEMP}/merge.log" | tee -a "${RUNNER_TEMP}/auto-swap.log"
+            exit 1
+          fi
+          cat "${RUNNER_TEMP}/merge.log"
+
+      - name: Report
+        if: always() && steps.app.outputs.token != ''
+        env:
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+          BOT: ${{ steps.app.outputs.app-slug }}[bot]
+          MERGED: ${{ steps.merge.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          [ -f "${RUNNER_TEMP}/auto-swap.log" ] || : > "${RUNNER_TEMP}/auto-swap.log"
+          if [ "${MERGED}" = success ]; then
+            : > "${RUNNER_TEMP}/auto-swap.log"
+            title="**Dev-kit auto-swap:** merged (${MERGE_METHOD}) at swap commit ${HEAD}, which Build and Test run ${RUN} passed (${REASON})."
+          else
+            title="**Dev-kit auto-swap: not merged** (${RUN_URL}); merge by hand once it can be:"
+          fi
+          GH_TOKEN="${APP_TOKEN}" python3 -I trusted/.github/script/ci/devkit_auto_swap.py comment \
+            --repo "${GITHUB_REPOSITORY}" --pr "${PR}" --bot-login "${BOT}" --body-file "${RUNNER_TEMP}/auto-swap.log" --title "${title}"

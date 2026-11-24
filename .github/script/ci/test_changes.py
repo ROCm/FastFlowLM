@@ -97,9 +97,222 @@ class Cli(unittest.TestCase):
         self.assertEqual(out["asr_full"], "false")
 
     def test_packaged_text_runs(self):
-        for f in ("LICENSE_BINARY.txt", "THIRD_PARTY_NOTICES.txt", "Dockerfile", "debian/control",
-                  ".github/workflows/ci.yml", "src/CMakeLists.txt", "hrx-integration/x.patch"):
+        for f in ("src/CMakeLists.txt", "hrx-integration/x.patch"):
             self.assertEqual(cli("--files", f)["run_tests"], "true", f)
+
+    def test_packaging_only_builds_and_tests_nothing(self):
+        """Installer inputs, licence texts and package checks: the packages
+        build, but no NPU suite or HIPEP runs for them."""
+        for f in ("LICENSE_BINARY.txt", "LICENSE_RUNTIME.txt", "THIRD_PARTY_NOTICES.txt", "debian/control",
+                  "debian/rules", "src/wix/flm.wxs", "src/inno/get_files.bat", "src/inno/terms.rtf",
+                  ".github/actions/win-msi/action.yml", ".github/actions/remove-package/action.yml",
+                  ".github/script/ci/check_no_copyleft_libs.sh"):
+            with self.subTest(f=f):
+                out = cli("--files", f)
+                self.assertEqual((out["run_tests"], out["suites"], out["hipep"], out["devkit"]),
+                                 ("true", "none", "false", "false"))
+                self.assertIn("packaging only", out["summary"])
+        # Beside code, the code decides.
+        out = cli("--files", "debian/control", "src/lib/xrt/libqwen3_npu.so")
+        self.assertEqual((out["suites"], out["hipep"]), ("chat,prefix_cache", "false"))
+        out = cli("--files", "debian/control", "src/server/server.cpp")
+        self.assertEqual((out["suites"], out["hipep"]), ("all", "true"))
+        # With dev-kit files staged, the staged packages are NPU-tested.
+        out = cli("--files", "debian/control", "flm-dev-kit/FLM_DLL/engines.json")
+        self.assertEqual((out["suites"], out["devkit_stage"]), ("none", "true"))
+        self.assertIn("NPU-tested for them", out["summary"])
+        # Not a licence file elsewhere in the tree.
+        self.assertEqual(cli("--files", "third_party/curl/COPYING")["suites"], "all")
+
+    def test_files_build_and_test_does_not_use(self):
+        """Other workflows, scan configs, CI unit tests, CPU-tested and
+        hand-run test programs, developer scripts: nothing, and no dev-kit area."""
+        for f in (".github/workflows/smolvla-package.yml", ".github/workflows/cpu-tests.yml",
+                  ".github/workflows/pr-security-scan.yml", ".github/workflows/weekly-security-scan.yml",
+                  ".github/workflows/build-container.yml", ".github/workflows/release.yml", "Dockerfile",
+                  ".github/dependabot.yml", ".github/actionlint.yaml", ".github/scan_tools_configs/trivy.yml",
+                  ".github/script/ci/test_changes.py", ".github/script/ci/test_devkit_check.py",
+                  ".github/script/ci/check_internal_refs.py", ".github/script/ci/oga_hipep_tests.ps1",
+                  ".github/script/npu_test/tools/make_vision_assets.py",
+                  ".github/script/npu_test/tools/build_asr_eval.py",
+                  ".github/script/npu_test/assets/test_image2.jpg", ".github/script/assets/d3_goldens_flash.jsonl",
+                  "src/home_install.sh", "src/update_qwen35.sh", "src/WinSetup.ps1", "src/CMakeSettings.json",
+                  "src/inno/flm.iss", "src/tests/hrx_exe_key_test.cpp", "src/test/CMakeLists.txt",
+                  "src/test/common.mk", "src/test/chat_tools/test.cpp", "src/test/oga_hipep/test_oga_hipep.cpp",
+                  "src/test/model_frontend/fake_model_extension.c", "src/test/gemma4_core/t.cpp",
+                  "src/test/qwen3_asr_npu/t.cpp", "src/test/d3_contract/t.cpp", "src/test/d3_video/test_x.cpp",
+                  "src/test/phi4_core/test_model_downloader.cpp"):
+            with self.subTest(f=f):
+                out = cli("--files", f)
+                self.assertEqual((out["run_tests"], out["suites"], out["hipep"], out["devkit"],
+                                  out["families"], out["asr_full"]), ("false", "none", "false", "false", "", "false"))
+        # PR #1118: a SmolVLA pybind fix and its standalone workflow.
+        out = cli("--files", ".github/workflows/smolvla-package.yml",
+                  "flm-dev-kit/FLM_Pybind/SmolVLA/src/SmolVLA/vlm/language/SmolVLA_language.cpp")
+        self.assertEqual((out["run_tests"], out["suites"], out["hipep"], out["devkit_areas"], out["devkit_bench"]),
+                         ("false", "none", "false", "pybind", "false"))
+        out = cli("--files", ".github/workflows/devkit-bench.yml", ".github/workflows/cpu-tests.yml")
+        self.assertEqual(out["run_tests"], "false")
+        self.assertIn("bench CI and files Build and Test does not use", out["summary"])
+        # Beside product code, the product code decides.
+        out = cli("--files", ".github/workflows/cpu-tests.yml", "src/lib/xrt/libqwen3_npu.so")
+        self.assertEqual((out["run_tests"], out["suites"]), ("true", "chat,prefix_cache"))
+        # What a Build and Test job reads from src/test keeps its suite.
+        for f, suites in (("src/test/openai_api_test/test_errors.py", "api"),
+                          ("src/test/d3_video/fixtures/h264.mp4", "decision"),
+                          ("src/test/model_extension_gemma4e/model-list.json", "chat")):
+            with self.subTest(f=f):
+                self.assertEqual(cli("--files", f)["suites"], suites)
+        # The image the chat suite reads.
+        self.assertEqual(cli("--files", ".github/script/npu_test/assets/test_image1.jpg")["suites"], "chat")
+
+    def test_the_extension_bundle_runs_no_hipep(self):
+        out = cli("--files", "src/test/model_extension_consumer/main.cpp")
+        self.assertEqual((out["suites"], out["hipep"]), ("chat", "false"))
+
+    def test_hipep_machines_run_only_hipep(self):
+        for f in (".github/hipep-machines.json", ".github/script/ci/hipep_machines.py"):
+            with self.subTest(f=f):
+                out = cli("--files", f)
+                self.assertEqual((out["run_tests"], out["suites"], out["hipep"], out["devkit"]),
+                                 ("true", "none", "true", "false"))
+
+    def test_ci_build_and_test_does_not_use_runs_nothing(self):
+        """PR #1124: a new standalone workflow pair and its script, which no
+        Build and Test workflow or action names. Nothing runs, whatever the
+        devkit- prefix of the names."""
+        files = (".github/workflows/devkit-auto-swap.yml", ".github/workflows/devkit-swap-review.yml",
+                 ".github/script/ci/devkit_auto_swap.py", ".github/script/ci/test_devkit_auto_swap.py",
+                 "flm-dev-kit/AGENTS.md")
+        out = cli("--files", *files)
+        self.assertEqual((out["run_tests"], out["suites"], out["hipep"], out["devkit"], out["devkit_bench"]),
+                         ("false", "none", "false", "false", "false"))
+        for f in (".github/workflows/new.yml", ".github/actions/new-thing/action.yml",
+                  ".github/script/ci/new_helper.py"):
+            with self.subTest(f=f):
+                self.assertEqual(cli("--files", f)["run_tests"], "false")
+        # A script Build and Test runs, deleted in the change: still tested.
+        with tempfile.TemporaryDirectory() as tmp:
+            shutil.copytree(changes.REPO_ROOT / ".github", Path(tmp) / ".github")
+            (Path(tmp) / ".github/script/ci/setup_windows_deps.ps1").unlink()
+            changes.build_and_test_closure.cache_clear()
+            d = changes.decide([".github/script/ci/setup_windows_deps.ps1"], repo=Path(tmp))
+            changes.build_and_test_closure.cache_clear()
+            self.assertTrue(d.run_tests)
+        # What Build and Test uses keeps its rules.
+        for f in (".github/workflows/lin-build.yml", ".github/actions/npu-test/action.yml",
+                  ".github/script/ci/setup_windows_deps.ps1", ".github/script/ci/devkit_swap.py"):
+            with self.subTest(f=f):
+                self.assertEqual(cli("--files", f)["run_tests"], "true")
+
+    def test_build_and_test_closure(self):
+        c = changes.build_and_test_closure()
+        for path in (".github/workflows/build-and-test.yml", ".github/workflows/lin-build.yml",
+                     ".github/workflows/win-build.yml", ".github/workflows/devkit-engines.yml",
+                     ".github/workflows/devkit-xclbins.yml", ".github/workflows/model-extension-build.yml",
+                     ".github/workflows/devkit-bench.yml", ".github/actions/npu-test/",
+                     ".github/actions/detect-changes/", ".github/script/ci/changes.py",
+                     ".github/script/ci/devkit_check.py", ".github/script/ci/setup_windows_deps.ps1"):
+            with self.subTest(path=path):
+                self.assertIn(path, c)
+        for path in (".github/workflows/cpu-tests.yml", ".github/workflows/release.yml",
+                     ".github/workflows/smolvla-package.yml"):
+            with self.subTest(path=path):
+                self.assertNotIn(path, c)
+        # Every action is used by Build and Test today.
+        root = changes.REPO_ROOT
+        for d in (root / ".github/actions").iterdir():
+            with self.subTest(action=d.name):
+                self.assertIn(f".github/actions/{d.name}/", c)
+
+    def test_closure_follows_uses_names_and_imports(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / ".github/workflows").mkdir(parents=True)
+            (repo / ".github/actions/a").mkdir(parents=True)
+            (repo / ".github/script/ci").mkdir(parents=True)
+            self.assertIsNone(changes.build_and_test_closure(repo))
+            changes.build_and_test_closure.cache_clear()
+            (repo / ".github/workflows/build-and-test.yml").write_text(
+                "jobs:\n  b:\n    uses: ./.github/workflows/called.yml\n")
+            (repo / ".github/workflows/called.yml").write_text(
+                "steps:\n  - uses: ./.github/actions/a\n")
+            (repo / ".github/workflows/alone.yml").write_text("run: python3 alone.py\n")
+            (repo / ".github/actions/a/action.yml").write_text("run: python3 .github/script/ci/top.py\n")
+            (repo / ".github/script/ci/top.py").write_text("import helper\n")
+            (repo / ".github/script/ci/helper.py").write_text("x = 1\n")
+            (repo / ".github/script/ci/alone.py").write_text("x = 2\n")
+            (repo / ".github/script/ci/top_extra.py").write_text("x = 3\n")
+            c = changes.build_and_test_closure(repo)
+            self.assertEqual(c, frozenset({
+                ".github/workflows/build-and-test.yml", ".github/workflows/called.yml", ".github/actions/a/",
+                ".github/script/ci/top.py", ".github/script/ci/helper.py"}))
+            self.assertTrue(changes.unused_ci(".github/workflows/alone.yml", c))
+            self.assertTrue(changes.unused_ci(".github/script/ci/alone.py", c))
+            self.assertFalse(changes.unused_ci(".github/actions/a/run.sh", c))
+            self.assertFalse(changes.unused_ci("src/server/server.cpp", c))
+            self.assertFalse(changes.unused_ci(".github/workflows/alone.yml", None))
+            # Wiring a script into Build and Test (in the head checkout) brings it in.
+            changes.build_and_test_closure.cache_clear()
+            (repo / ".github/workflows/build-and-test.yml").write_text(
+                "jobs:\n  b:\n    uses: ./.github/workflows/called.yml\n  c:\n    run: python3 alone.py\n")
+            self.assertIn(".github/script/ci/alone.py", changes.build_and_test_closure(repo))
+            # Deleted while Build and Test still names it: the reference keeps it in, so it is
+            # tested (and fails there); a workflow it still calls likewise.
+            (repo / ".github/script/ci/helper.py").unlink()
+            (repo / ".github/script/ci/top.py").write_text("x = 4  # runs gone_now.py\n")
+            (repo / ".github/workflows/called.yml").write_text(
+                "steps:\n  - uses: ./.github/actions/a\n  - uses: ./.github/workflows/missing.yml\n")
+            changes.build_and_test_closure.cache_clear()
+            c = changes.build_and_test_closure(repo, frozenset({"gone_now.py", "really_gone.py"}))
+            self.assertIn(".github/script/ci/gone_now.py", c)
+            self.assertIn(".github/workflows/missing.yml", c)
+            self.assertNotIn(".github/script/ci/really_gone.py", c)
+            # A file below a script/ci subdirectory counts as used.
+            self.assertFalse(changes.unused_ci(".github/script/ci/lib/h.py", c))
+        changes.build_and_test_closure.cache_clear()
+
+    def test_ci_scripts_outside_the_closure_have_a_caller(self):
+        """A script/ci file Build and Test does not use is a test, or another
+        workflow names it: anything else is dead, or called in a way the
+        closure cannot see (a name built at run time), so look at it."""
+        root = changes.REPO_ROOT
+        c = changes.build_and_test_closure()
+        others = " ".join(p.read_text(encoding="utf-8", errors="replace")
+                          for p in (root / ".github/workflows").glob("*.y*ml")
+                          if f".github/workflows/{p.name}" not in c)
+        for p in sorted((root / ".github/script/ci").iterdir()):
+            path = f".github/script/ci/{p.name}"
+            if p.is_file() and path not in c and not p.name.startswith("test_"):
+                with self.subTest(path=path):
+                    self.assertIn(p.name, others, f"{path}: no Build and Test file or other workflow names it")
+
+    def test_every_workflow_is_classified(self):
+        """A new workflow is either called by Build and Test, the dev-kit or
+        bench CI, or listed in OUTSIDE_BUILD_AND_TEST: decide where it goes."""
+        root = changes.REPO_ROOT
+        called = set(re.findall(r"uses: \./\.github/workflows/([\w-]+\.yml)",
+                                (root / ".github/workflows/build-and-test.yml").read_text(encoding="utf-8")))
+        for wf in sorted((root / ".github/workflows").glob("*.yml")):
+            path = f".github/workflows/{wf.name}"
+            with self.subTest(path=path):
+                self.assertTrue(wf.name in called or wf.name == "build-and-test.yml"
+                                or changes.OUTSIDE_BUILD_AND_TEST.match(path) or changes.BENCH_CI.match(path)
+                                or changes.DEVKIT_CI.match(path) or changes.devkit_only_areas(path) is not None,
+                                f"{path}: add it to OUTSIDE_BUILD_AND_TEST if Build and Test does not run it")
+
+    def test_src_test_paths_ci_reads_are_not_outside(self):
+        """Every src/test path a workflow or action other than cpu-tests.yml
+        names stays in NPU_TEST_INPUTS, so its change still runs its suite."""
+        root = changes.REPO_ROOT
+        files = [p for p in (root / ".github").rglob("*") if p.suffix in (".yml", ".yaml", ".ps1", ".sh")
+                 and p.name != "cpu-tests.yml" and p.name != "oga_hipep_tests.ps1"]
+        for p in files:
+            for m in re.finditer(r"src[/\\]test[/\\]([\w./\\-]+)", p.read_text(encoding="utf-8", errors="replace")):
+                path = "src/test/" + m.group(1).replace("\\", "/").rstrip("/.") + "/"
+                with self.subTest(file=str(p.relative_to(root)), path=path):
+                    self.assertFalse(changes.OUTSIDE_BUILD_AND_TEST.match(path),
+                                     f"{path} is read by {p.relative_to(root)}: add it to NPU_TEST_INPUTS")
 
     def test_mixed(self):
         out = cli("--files", "docs/index.md", "src/runner/runner.cpp")
@@ -119,27 +332,23 @@ class Cli(unittest.TestCase):
             "src/include/models/gemma_text/flm/aie2p/gemma_text_gemm.hpp": {"gemma3-text"},
             "src/include/models/qwen3/core/x.hpp": {"qwen3"},
             "src/common/models/qwen35/core/dev04/a.cpp": {"qwen3.5"},
-            "src/test/gemma4_core/t.cpp": {"gemma4e"},
-            "src/test/qwen3_8_mtp_npu/t.cpp": {"qwen3.8-mtp", "qwen3.8-dflash2"},
             "src/detail/gemm/gemm.cpp": {"gemma4e", "gemma4e-flash"},
             "src/xclbins/Gemma3-4B-NPU2/a.xclbin": {"gemma3"},
             "src/common/AutoEmbeddingModel/modeling_gemma_embedding.cpp": {"embed-gemma"},
             "src/common/decision/py_json.cpp": {"d3"},
-            "src/test/d3_contract/t.cpp": {"d3"},
+            "src/test/d3_video/fixtures/h264.mp4": {"d3"},
             "src/include/whisper/whisper_npu.hpp": {"whisper-v3"},
-            "src/test/phi4_core/test_phi4_frontend.cpp": {"phi4"},
             # Shared by every engine: the pr tier's one model per engine covers it.
             "src/lib/xrt/libgemm.so": set(),
             "src/common/AutoModel/automodel.cpp": set(),
-            "src/test/phi4_core/test_model_downloader.cpp": set(),
             # The oga-hipep backend, which no NPU model runs.
             "src/common/oga/oga_runtime_install.cpp": set(),
             "src/include/oga/oga_api.hpp": set(),
-            "src/test/oga_hipep/frontend/CMakeLists.txt": set(),
             # ...but for the header the qwen3.5 frontend includes in every package.
             "src/include/oga/oga_vision.hpp": {"qwen3.5"},
-            # A built engine no catalog family uses.
-            "src/test/qwen3_5_omni_npu/t.cpp": set(),
+            # Engine test harnesses no CI job builds: nothing (see test_files_build_and_test_does_not_use).
+            "src/test/gemma4_core/t.cpp": set(),
+            "src/test/phi4_core/test_phi4_frontend.cpp": set(),
         }
         for path, expected in cases.items():
             self.assertEqual(families(cli("--files", path)), expected, path)
@@ -166,7 +375,8 @@ class Cli(unittest.TestCase):
         self.assertIn("run_tests=false", lines)
         self.assertEqual([l.split("=")[0] for l in lines],
                          ["run_tests", "families", "asr_full", "suites", "hipep",
-                          "new_models", "hipep_models", "devkit", "devkit_catalog", "devkit_areas",
+                          "new_models", "hipep_models", "hipep_families", "devkit", "devkit_catalog",
+                          "devkit_areas",
                           "devkit_families", "devkit_stage", "devkit_bench", "swap_verified", "summary"])
 
     def test_suites_scoped_to_the_change(self):
@@ -187,10 +397,11 @@ class Cli(unittest.TestCase):
                 "serving",
             ("src/test/oga_hipep/test_oga_hipep.cpp", "src/lib/xrt/libqwen3_npu.so"): "chat,prefix_cache",
             ("src/include/oga/oga_vision.hpp",): "chat,prefix_cache",
-            # Model-extension contracts, fixture and schemas: chat runs the extension jobs.
-            ("src/test/model_frontend/fake_model_extension.c",): "chat",
+            # The extension bundle, its fixture and schemas: chat runs the extension jobs
+            # (the contracts run in cpu-tests.yml: nothing here).
+            ("src/test/model_frontend/fake_model_extension.c",): "none",
             ("src/test/model_extension_gemma4e/model-list.json",): "chat",
-            ("src/test/model_list_platform/test_model_list_platform.cpp",): "chat",
+            ("src/test/model_list_platform/test_model_list_platform.cpp",): "none",
             ("src/schemas/model-catalog-overlay-v1.schema.json",): "chat",
             ("src/cmake/FastFlowLMModelExtension.cmake",): "chat",
             # An engine with an audio encoder is also tested by asr.
@@ -212,8 +423,10 @@ class Cli(unittest.TestCase):
 
     def test_hipep_runs_when_the_change_reaches_its_models(self):
         cases = {
-            # The backend, and the frontends of the families with oga-hipep models.
-            ("src/test/oga_hipep/test_qwen_frontend.cpp",): "true",
+            # The backend, and the frontends of the families with oga-hipep models
+            # (its unit tests run in cpu-tests.yml, not on the GPU).
+            ("src/common/oga/oga_engine.cpp",): "true",
+            ("src/test/oga_hipep/test_qwen_frontend.cpp",): "false",
             ("src/include/oga/oga_vision.hpp",): "true",
             ("src/common/AutoModel/modeling_qwen3_5vl.cpp",): "true",
             ("src/include/AutoModel/modeling_qwen3_5vl.hpp",): "true",
@@ -273,6 +486,68 @@ class Decide(unittest.TestCase):
         git = FakeGit(base={changes.MODEL_LIST: gpu_only}, head={changes.MODEL_LIST: base})
         d = changes.decide([changes.MODEL_LIST], git, base)
         self.assertEqual((d.runs_hipep(), d.outputs()["hipep_models"]), (True, ""))
+
+    def test_oga_hipep_edits_without_new_weights_test_their_family(self):
+        base = json.loads(catalog(**{"qwen3.5-oga-hipep__9b": ("Q35-9B_gpuep", "qwen3.5"),
+                                     "qwen3.5-oga-hipep__122b": ("Q35-122B_gpuep", "qwen3.5"),
+                                     "gemma3-oga-hipep__4b": ("Gemma3-4B_gpuep", "gemma3"),
+                                     "lfm2__1b": ("LFM2", "lfm2")}))
+
+        def outcome(head):
+            b, h = json.dumps(base), json.dumps(head)
+            git = FakeGit(base={changes.MODEL_LIST: b}, head={changes.MODEL_LIST: h})
+            d = changes.decide([changes.MODEL_LIST], git, h)
+            out = d.outputs()
+            return d.families, out["hipep"], out["hipep_models"], out["hipep_families"]
+
+        # A capability or context length on many entries (as a catalog-wide
+        # capabilities edit does): no new weights, so each family's one model
+        # runs, not every edited entry re-verified and tested.
+        head = json.loads(json.dumps(base))
+        for mid in ("qwen3.5-oga-hipep", "gemma3-oga-hipep"):
+            for e in head["models"][mid].values():
+                e["capabilities"] = ["tools"]
+        head["models"]["qwen3.5-oga-hipep"]["122b"]["default_context_length"] = 4096
+        self.assertEqual(outcome(head), (set(), "true", "", "gemma3,qwen3.5"))
+        # An NPU family changed beside them reaches the HIPEP job's families too.
+        head["models"]["lfm2"]["1b"]["default_context_length"] = 4096
+        self.assertEqual(outcome(head), ({"lfm2"}, "true", "", "gemma3,lfm2,qwen3.5"))
+        # New weights for one of them still make it required.
+        head["models"]["qwen3.5-oga-hipep"]["122b"]["name"] = "Q35-122B_gpuep_v2"
+        self.assertEqual(outcome(head)[2:], ("qwen3.5-oga-hipep:122b", "gemma3,lfm2,qwen3.5"))
+        # So does a raised flm_min_version, which makes flm pull again.
+        head = json.loads(json.dumps(base))
+        head["models"]["gemma3-oga-hipep"]["4b"]["flm_min_version"] = "9.9.9"
+        self.assertEqual(outcome(head)[2:], ("gemma3-oga-hipep:4b", "gemma3"))
+
+    def test_oga_hipep_edits_that_still_need_the_entry_itself(self):
+        base = json.loads(catalog(**{"qwen3.5-oga-hipep__9b": ("Q35-9B_gpuep", "qwen3.5"),
+                                     "gemma3-oga-hipep__4b": ("Gemma3-4B_gpuep", "gemma3")}))
+
+        def outcome(head):
+            b, h = json.dumps(base), json.dumps(head)
+            git = FakeGit(base={changes.MODEL_LIST: b}, head={changes.MODEL_LIST: h})
+            out = changes.decide([changes.MODEL_LIST], git, h).outputs()
+            return out["hipep_models"], out["hipep_families"]
+
+        # Pointed at other hashes in model_info.json: new weights.
+        head = json.loads(json.dumps(base))
+        head["models"]["gemma3-oga-hipep"]["4b"]["model_info_key"] = "other"
+        self.assertEqual(outcome(head), ("gemma3-oga-hipep:4b", "gemma3"))
+        # Left without a family, it has no family model to stand for it.
+        head = json.loads(json.dumps(base))
+        head["models"]["gemma3-oga-hipep"]["4b"]["details"] = {}
+        self.assertEqual(outcome(head), ("gemma3-oga-hipep:4b", ""))
+
+    def test_an_entry_moved_onto_oga_hipep_is_required(self):
+        base = catalog(**{"lfm2__1b": ("LFM2", "lfm2"), "qwen3__0_6b": ("Q", "qwen3")})
+        head = json.loads(base)
+        head["models"]["lfm2"]["1b"]["backend"] = "oga-hipep"
+        head = json.dumps(head)
+        git = FakeGit(base={changes.MODEL_LIST: base}, head={changes.MODEL_LIST: head})
+        d = changes.decide([changes.MODEL_LIST], git, head)
+        self.assertEqual(d.outputs()["hipep_models"], "lfm2:1b")
+        self.assertTrue(d.runs_hipep())
 
     def test_backend_key_overrides_the_oga_hipep_suffix(self):
         base = catalog(**{"gemma3-oga-hipep__4b": ("Gemma3-4B_gpuep", "gemma3"), "lfm2__1b": ("LFM2", "lfm2")})
@@ -567,7 +842,7 @@ class DevKit(unittest.TestCase):
 
     def test_devkit_ci_selects_every_area(self):
         for path in (".github/script/ci/changes.py", ".github/workflows/build-and-test.yml",
-                     ".github/workflows/release.yml", ".github/actions/detect-changes/action.yml",
+                     ".github/actions/detect-changes/action.yml",
                      ".github/actions/devkit-build-lib-lin/action.yml",
                      ".github/actions/devkit-build-lib-win/action.yml", ".github/workflows/devkit-engines.yml",
                      ".github/workflows/devkit-xclbins.yml", ".github/actions/devkit-xclbin-plan/action.yml",
@@ -605,9 +880,10 @@ class DevKit(unittest.TestCase):
         # Beside product code, the product rules still see the product file.
         out = cli("--files", "docker/aie-build.Dockerfile", "src/server/server.cpp")
         self.assertEqual((out["run_tests"], out["suites"], out["devkit_areas"]), ("true", "all", ""))
-        # The product's own build image is product code, not the dev kit's.
+        # The product's own build image: build-container.yml builds it on a
+        # schedule; a pull request's builds pull the published one.
         out = cli("--files", "Dockerfile")
-        self.assertEqual((out["run_tests"], out["devkit"]), ("true", "false"))
+        self.assertEqual((out["run_tests"], out["devkit"]), ("false", "false"))
         # Other dev-kit workflows are still the dev-kit CI: every area.
         out = cli("--files", ".github/workflows/devkit-xclbins.yml")
         self.assertEqual(out["devkit_areas"], "xclbin,dll,converter,pybind,launchlib")

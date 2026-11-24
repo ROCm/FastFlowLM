@@ -37,7 +37,7 @@ baseline.json (schema 1):
 --new-baseline writes the previous one updated with this run: each model's
 usable accuracy results and successful perf runs replace its old ones; a
 model whose bench failed keeps its old numbers; others are kept as they
-were (an upsert, as IRON's merge-pr.yml did into baseline/).
+were (an upsert).
 
 --outputs (the step's $GITHUB_OUTPUT) gets hard-gate=fail when some model's
 accuracy run failed acc_common's hard gate (no predictions, or too many

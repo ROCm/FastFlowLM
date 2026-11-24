@@ -44,8 +44,8 @@ class Fixture(unittest.TestCase):
         self.write("devkit-xclbins-shard-1/xclbins-Unused/layer.xclbin", "x")
         self.write("devkit-xclbins-shard-1/xclbins-Unused/rtp_addresses.txt", "R 7\n")
         self.lock = self.tmp / "lock.txt"
-        (self.tmp / "a.json").write_text(json.dumps(ASSIGNMENT))
-        (self.tmp / "e.json").write_text(json.dumps(ENGINES))
+        (self.tmp / "a.json").write_text(json.dumps(ASSIGNMENT), encoding="utf-8")
+        (self.tmp / "e.json").write_text(json.dumps(ENGINES), encoding="utf-8")
 
     def tearDown(self):
         shutil.rmtree(self.tmp)
@@ -53,7 +53,7 @@ class Fixture(unittest.TestCase):
     def write(self, rel: str, text: str) -> None:
         p = self.shards / rel
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(text)
+        p.write_text(text, encoding="utf-8")
 
     def run_cli(self, *args: str) -> tuple[int, str]:
         out = io.StringIO()
@@ -73,7 +73,7 @@ class Fixture(unittest.TestCase):
 class Format(Fixture):
     def test_generate_is_sorted_and_normalized(self):
         self.assertEqual(self.generate("--note", "from run 1"), 0)
-        text = self.lock.read_text()
+        text = self.lock.read_text(encoding="utf-8")
         self.assertTrue(text.startswith("# Copyright © Advanced Micro Devices"))
         self.assertIn("# from run 1\n", text)
         body = text[text.index("\n["):]
@@ -85,7 +85,7 @@ class Format(Fixture):
         self.assertIn("from run 1", header)
         # Generating again gives the same bytes.
         self.generate("--note", "from run 1")
-        self.assertEqual(self.lock.read_text(), text)
+        self.assertEqual(self.lock.read_text(encoding="utf-8"), text)
 
     def test_parse_errors(self):
         for text, fragment in (("RTP_A 1\n", "expected [<artifact>/<file>]"),
@@ -111,9 +111,9 @@ class Format(Fixture):
     def test_update_keeps_artifacts_not_built(self):
         self.lock.write_text("[xclbins-Smol/rtp_addresses.txt]\nR 5\n\n"
                              "[xclbins-Other/rtp_addresses.txt]\nR 5\n\n"
-                             "[xclbins-G_decoding_E4B/old_rtp_addresses.txt]\nR 6\n")
+                             "[xclbins-G_decoding_E4B/old_rtp_addresses.txt]\nR 6\n", encoding="utf-8")
         self.generate("--update")
-        entries, _ = rl.parse_lock(self.lock.read_text())
+        entries, _ = rl.parse_lock(self.lock.read_text(encoding="utf-8"))
         # Smol kept; Other dropped (no model uses it); E4B was built, so its
         # stanzas are this run's only.
         self.assertIn(("xclbins-Smol", "rtp_addresses.txt"), entries)
@@ -125,16 +125,16 @@ class Format(Fixture):
         self.generate("--note", "Generated from run 1, all builds.")
         shutil.rmtree(self.shards / "devkit-xclbins-shard-0")
         self.generate("--update", "--note", "E4B from run 2.")
-        entries, header = rl.parse_lock(self.lock.read_text())
+        entries, header = rl.parse_lock(self.lock.read_text(encoding="utf-8"))
         self.assertEqual(rl.header_notes(header), ["Generated from run 1, all builds.", "E4B from run 2."])
         self.assertIn(("xclbins-G_decoding_E2B", "rtp_addresses.txt"), entries)
         # Without --update, the notes are only those given.
         self.generate("--note", "run 3")
-        self.assertEqual(rl.header_notes(rl.parse_lock(self.lock.read_text())[1]), ["run 3"])
+        self.assertEqual(rl.header_notes(rl.parse_lock(self.lock.read_text(encoding="utf-8"))[1]), ["run 3"])
 
     def test_artifacts_no_model_uses_are_left_out(self):
         self.generate()
-        entries, _ = rl.parse_lock(self.lock.read_text())
+        entries, _ = rl.parse_lock(self.lock.read_text(encoding="utf-8"))
         self.assertFalse(any(a == "xclbins-Unused" for a, _ in entries))
 
 
@@ -182,7 +182,7 @@ class Check(Fixture):
         rc, out = self.check()
         self.assertEqual(rc, 1)
         self.assertIn(f"::error::{self.shards}: xclbins-Dequant appears twice", out)
-        self.lock.write_text("[xclbins-A/r.txt]\n# c\nR 1\n")
+        self.lock.write_text("[xclbins-A/r.txt]\n# c\nR 1\n", encoding="utf-8")
         rc, out = self.check()
         self.assertEqual(rc, 1)
         self.assertIn(f"::error::{self.lock}: line 2", out)
@@ -198,7 +198,7 @@ class Check(Fixture):
             del os.environ["GITHUB_STEP_SUMMARY"]
         self.assertEqual(rc, 1)
         self.assertIn("| `xclbins-G_decoding_E4B` | `rtp_addresses.txt` | differs from the lock | g:4b, v:1b |",
-                      summary.read_text())
+                      summary.read_text(encoding="utf-8"))
 
 
 class RealLock(unittest.TestCase):

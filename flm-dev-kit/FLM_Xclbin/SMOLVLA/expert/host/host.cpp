@@ -1,5 +1,6 @@
 // Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
 
+#include "pack_bfp16.hpp"
 #include <bits/stdc++.h>
 #include <boost/program_options.hpp>
 #include <chrono>
@@ -124,7 +125,7 @@ int main(int argc, char **argv) {
     const int Y_VOLUME = M * N;
     const int X_VOLUME = M * K;
     int bias_offset = (bias == 1)? N : 0;
-    const int W_VOLUME = N * K + bias_offset;
+    const int W_VOLUME = N * K / 8 * 9;  // bfp16ebs8 bytes
 
     // NPU instance
     xrt::device npu_device = xrt::device(0); // NPU device should always be 0
@@ -139,12 +140,15 @@ int main(int argc, char **argv) {
 
     buffer<bf16> y_0 = app_0.create_bo_buffer<bf16>(Y_VOLUME);
     buffer<bf16> x_0 = app_0.create_bo_buffer<bf16>(X_VOLUME);
-    buffer<bf16> w_0 = app_0.create_bo_buffer<bf16>(W_VOLUME);
+    buffer<uint8_t> w_0 = app_0.create_bo_buffer<uint8_t>(W_VOLUME);
 
     x_0.memset((bf16)(0.0f));  // zero-pad rows [SEQ, M)
     memcpy(x_0.data(), x_in.data(), SEQ * K * sizeof(bf16));
 
-    memcpy(w_0.data(), w_in.data(), N * K * sizeof(bf16));
+    for (int r = 0; r < N; r++)
+        for (int k8 = 0; k8 < K / 8; k8++)
+            pack_bfp16::encode_block(w_0.data() + pack_bfp16::block_offset(r, k8, K, 64, 64),
+                                     (const uint16_t*)w_in.data() + (size_t)r * K + k8 * 8);
 
     y_0.memset((bf16)(-1.0f));
     w_0.sync_to_device();

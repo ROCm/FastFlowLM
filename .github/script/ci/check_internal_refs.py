@@ -36,7 +36,9 @@ PATTERNS = {
     "internal ticket": re.compile(r"\bSCL-\d+"),
     "internal PR or issue": re.compile(r"\bIRON\s*#\d+|\bIRON PR\b"),
     "internal commit or branch": re.compile(r"\bIRON\s+`?[0-9a-f]{7,40}\b|\bIRON (?:HEAD|CI)\b|\bIRON tree\b"),
-    "internal CI or tooling": re.compile(r"\bIRON's (?:CI|local|wheel-aie-env|ironenv|bench-models|walk-up)\b"),
+    "internal CI or tooling": re.compile(r"\bIRON's (?:CI|local|wheel-aie-env|ironenv|bench-models|walk-up|sampling)\b"
+                                         r"|\bIRON's [\w./-]+\.(?:py|ya?ml|json|sh)\b|\btook IRON\b"
+                                         r"|\b(?:in|from|of) the IRON[,.;:]"),
     "internal process": re.compile(r"\bPhase 2b exclusion\b|\b(?:pending|for an?) Legal (?:review|decision)\b"),
     "crash details": re.compile(r"\bbugcheck\b|VIDEO_SCHEDULER_INTERNAL_ERROR", re.IGNORECASE),
     # /scratch/$USER, $(USER) and ${USER} are generic; a literal name is not.

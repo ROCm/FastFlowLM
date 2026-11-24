@@ -9,6 +9,7 @@ import io
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -47,6 +48,17 @@ MD = """# Kernel Assignment
 | `attn.xclbin` | `xclbins-Attn` | Peano |
 | `mm.xclbin` | — | — |
 """
+
+
+def rmtree(path: Path) -> None:
+    """shutil.rmtree that also removes read-only files (git objects on Windows)."""
+    def fix(func, p, _exc):
+        os.chmod(p, stat.S_IWRITE)
+        func(p)
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=fix)
+    else:
+        shutil.rmtree(path, onerror=fix)
 
 
 class Tree:
@@ -120,7 +132,7 @@ class Synthetic(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def tearDown(self):
-        shutil.rmtree(self.tmp)
+        rmtree(self.tmp)
 
     def assertError(self, *fragments: str) -> None:
         errors = self.tree.errors()

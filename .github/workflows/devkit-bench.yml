@@ -83,7 +83,10 @@ name: Dev-kit Bench
 # Dispatch (re-benches an earlier Build and Test run, or exercises a change
 # to the bench CI itself, for which Build and Test calls nothing): build-run
 # names the Build and Test run to bench (default the newest for this
-# commit), whose artifacts are looked up and checked across runs, with the
+# commit; on main, which moves on while a run builds, also a push run on main
+# of an earlier commit, whose commit is then the one benched and reported, and
+# whose catalog and dev-kit maps select the models and the engines overlaid),
+# whose artifacts are looked up and checked across runs, with the
 # rules the call uses (a runtime whose dev-kit engines failed or whose
 # libraries are gone is left out; a run that built no dev-kit engines or
 # kernels benches nothing); models replaces the selection, which otherwise is
@@ -141,7 +144,7 @@ on:
   workflow_dispatch:
     inputs:
       build-run:
-        description: Build and Test run id whose artifacts to bench (default the newest for this commit)
+        description: Build and Test run id whose artifacts to bench (default the newest for this commit; on main, also a push run on main of an earlier commit)
         type: string
         default: ''
       models:
@@ -198,7 +201,8 @@ jobs:
           esac
 
       # The pull request's base: its scripts, catalog and dev-kit maps.
-      # Full history for the nightly's changes.py diff.
+      # Full history for the nightly's changes.py diff and a dispatch's
+      # ancestor check (find-build --ref on main).
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -238,7 +242,10 @@ jobs:
             --xclbins "${XCLBINS}"
 
       # Dispatch: an earlier Build and Test run, checked (this repository,
-      # this commit, completed) and its artifacts listed; waits for it.
+      # this commit, completed) and its artifacts listed; waits for it. On
+      # main, build-run may also be a push run on main of an ancestor of
+      # this commit (checked with git in the checkout above: fetch-depth 0);
+      # the plan then benches and names that run's commit.
       - name: Find Build and Test's run
         id: build
         if: steps.ready.outputs.ready == 'true' && steps.mode.outputs.mode == 'dispatch'
@@ -247,7 +254,7 @@ jobs:
           RUN_ID: ${{ inputs.build-run }}
         run: |
           python3 .github/script/devkit-bench/resolve.py find-build --repo "${GITHUB_REPOSITORY}" \
-            --head-sha "${GITHUB_SHA}" --run-id "${RUN_ID}" --wait-minutes 200 \
+            --head-sha "${GITHUB_SHA}" --ref "${GITHUB_REF}" --run-id "${RUN_ID}" --wait-minutes 200 \
             --plan-out "${RUNNER_TEMP}/plan.json" --artifacts-out "${RUNNER_TEMP}/artifacts.json"
 
       - name: Note why nothing is benched
@@ -309,6 +316,33 @@ jobs:
             args+=(--data-from-head)
           fi
           python3 .github/script/devkit-bench/resolve.py "${args[@]}"
+
+      # A dispatch may bench an earlier run of main: the engines its overlay
+      # replaces are those that run's commit's engines.json names (the
+      # libraries were built from it), not the dispatched commit's. Read it
+      # here, as data, from this full-history checkout and hand it to the
+      # bench jobs as an artifact, so no bench job checks out a computed
+      # commit.
+      - name: Engine map of the benched commit
+        id: engines
+        if: ${{ !inputs.mode && steps.plan.outputs.bench == 'true' }}
+        env:
+          HEAD_SHA: ${{ steps.plan.outputs.head-sha }}
+        run: |
+          [[ "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::head-sha is not a commit sha"; exit 1; }
+          mkdir -p "${RUNNER_TEMP}/bench-engines"
+          git show "${HEAD_SHA}:flm-dev-kit/FLM_DLL/engines.json" > "${RUNNER_TEMP}/bench-engines/engines.json"
+          python3 -c 'import json, sys; json.load(open(sys.argv[1], encoding="utf-8"))' \
+            "${RUNNER_TEMP}/bench-engines/engines.json"
+
+      - name: Upload the engine map
+        if: steps.engines.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: devkit-bench-engines
+          path: ${{ runner.temp }}/bench-engines/engines.json
+          retention-days: 1
+          overwrite: true
 
   # ── NPU approval gate, dispatch only ─────────────────────────────────────
   # Called, Build and Test's npu-gate / npu-approve already gate the call
@@ -451,6 +485,18 @@ jobs:
           sparse-checkout: .github/script
           filter: blob:none
 
+      # A dispatch on main may bench an earlier push run: the engines it
+      # overlays are those its commit's engines.json names (the libraries
+      # were built from it), not the dispatched commit's. resolve read it
+      # (git show, data only) and uploaded it: nothing here checks out a
+      # computed commit.
+      - name: Download the benched commit's engine map
+        if: ${{ !inputs.mode }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: devkit-bench-engines
+          path: bench-run
+
       # A pull request's and the full refresh's packages already hold the
       # staged dev-kit files: nothing to overlay. Nightly and a dispatch
       # overlay the dev-kit builds. No unmodified base copy is kept: no A/B
@@ -465,6 +511,7 @@ jobs:
           libs: ${{ (inputs.mode == 'nightly' || !inputs.mode) && matrix.libs || '' }}
           xclbins: ${{ (inputs.mode == 'nightly' || !inputs.mode) && matrix.xclbins || '' }}
           families: ${{ (inputs.mode == 'nightly' || !inputs.mode) && matrix.families || '' }}
+          engines: ${{ !inputs.mode && 'bench-run/engines.json' || '' }}
           # Dispatch: the earlier Build and Test run's; called: this run's.
           run-id: ${{ needs.resolve.outputs.build-run-id }}
           github-token: ${{ needs.resolve.outputs.build-run-id != '' && github.token || '' }}

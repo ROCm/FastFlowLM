@@ -332,6 +332,7 @@ public:
     std::uint64_t replayed_tokens() const override { return engine_->replayed_tokens(); }
     std::uint64_t reused_tokens() const override { return engine_->reused_tokens(); }
     void expect_prefill(const std::vector<int>& tokens) override { engine_->expect_prefill(tokens); }
+    void skip_next_logits() override { engine_->skip_next_logits(); }
     bool matches_token_prefixes() const override { return true; }
     std::optional<std::vector<int>> forced_eos_ids() const override { return eos_ids_; }
     std::optional<int> forced_bos_id() const override { return bos_id_; }

@@ -43,6 +43,11 @@ struct OgaSlotLimits {
 /// \brief how many generators of `max_length` positions fit `limits`: always at least one
 std::size_t SlotsWithin(const OgaSlotLimits& limits, std::uint32_t max_length);
 
+/// \brief convert `count` float32 values to bfloat16 with the same rounding and
+///        special-value rules as `bf16(float)` (RNE, subnormals flushed to signed
+///        zero, NaNs forced quiet)
+void ConvertFp32ToBf16(const float* from, bf16* to, std::size_t count) noexcept;
+
 /// \brief one OGA model and a few generators, each holding one conversation
 /// \note A prefill goes to the generator (slot) that holds the longest prefix of
 ///       the logical token sequence it can reach: all it has run, when that is a
@@ -90,6 +95,10 @@ public:
     ///       expected tokens returns the real ones. A prefill that leaves the
     ///       expected tokens forgets them.
     void expect_prefill(const std::vector<int>& ids);
+    /// \brief hint that the next prefill() or forward() call's logits will not be read
+    /// \note Consumed by one call (even if it throws) and cleared by clear_context(),
+    ///       restore(), set_context_length(), update_max_length(), and checkpoint().
+    void skip_next_logits() noexcept;
 
     buffer<bf16> forward(int id) override;
     /// \brief Run the package processor on `prompt` and the encoded image bytes,
@@ -133,6 +142,12 @@ private:
         std::vector<bf16> snapshot_logits;
         /// \brief rewound to its snapshot and given nothing since, so OGA's logits are stale
         bool rewound = false;
+        /// \brief cached bf16 logits for the tail of `ran`, empty when unfetched or invalidated
+        std::vector<bf16> last_logits;
+        /// \brief an unsplit multi-token first run whose logits have not yet been checked
+        bool needs_first_run_check = false;
+        /// \brief token count of that unsplit first run, used to verify >=8-token runs
+        std::size_t first_run_len = 0;
         /// \brief the hash of each image it has been given, in order
         std::vector<std::uint64_t> images;
         /// \brief the hash of each encoded image a staged prompt gave it, in order
@@ -176,7 +191,8 @@ private:
     };
 
     /// \brief run `fresh` after `logical`, and keep it there
-    buffer<bf16> Run(const std::vector<int>& fresh, const OgaVisionInput* vision = nullptr);
+    buffer<bf16> Run(const std::vector<int>& fresh, const OgaVisionInput* vision = nullptr,
+                     bool skip_logits = false, bool cache_logits = false);
     /// \brief the image runs of `fresh`, which goes at `offset` in `logical`, with their images
     /// \throws std::invalid_argument when the runs and the images do not match
     std::vector<ImageSpan> ImageSpans(const std::vector<int>& fresh, std::size_t offset,
@@ -186,7 +202,7 @@ private:
     /// \brief continue or rebuild a slot, then give it the rest of `logical`
     /// \param why set, on a rebuild, to why that slot was taken
     /// \return how, and how many tokens of `logical` were already run
-    std::pair<Reuse, std::size_t> Append(const char** why);
+    std::pair<Reuse, std::size_t> Append(const char** why, bool skip_logits);
     /// \brief choose the slot that reaches the longest prefix of the target (ties: the most
     ///        recently used), make it the active one and bring it there, or rebuild one
     Reuse Resume(const char** why);
@@ -206,14 +222,17 @@ private:
     /// \brief " (slot i of n)" when there is more than one slot, for the log
     std::string SlotText(const char* why = nullptr) const;
     /// \brief give a new slot the staged processor inputs; `logical` becomes their ids
-    buffer<bf16> PrefillStaged(const StagedPrompt& staged);
+    buffer<bf16> PrefillStaged(const StagedPrompt& staged, bool skip_logits = false);
+    /// \brief return the active slot's current logits (reusing `last_logits` when cached),
+    ///        recovering once if an unsplit multi-token first run produced all-zero logits
+    buffer<bf16> EnsureLogits(Live& run, bool cache_logits);
     /// \brief the active slot
     Live& Active() { return slots_[*active_]; }
     OgaApi::Owned<OgaGenerator> NewGenerator(std::uint32_t max_length) const;
     void AppendTokens(OgaGenerator* generator, const int* ids, std::size_t count) const;
     /// \brief give the empty generator of `run` the text `ids`, starting with a run of the
     ///        first token alone once a first run has given all-zero logits (split_first_run_)
-    void AppendFirst(Live& run, const std::vector<int>& ids);
+    void AppendFirst(Live& run, const std::vector<int>& ids, bool skip_logits);
     /// \brief give an empty generator `ids` and `images` in one call
     /// \note No images: the batch of one image without pixels (empty_image_batch)
     void SetInputs(OgaGenerator* generator, const std::vector<int>& ids,
@@ -242,6 +261,10 @@ private:
     ///       and every later run of 8 or more then gives all-zero logits too. Run alone, the
     ///       token leaves the cache right.
     bool split_first_run_ = false;
+    /// \brief true once an unsplit first run of >=8 tokens returned non-zero logits
+    bool first_run_verified_ = false;
+    /// \brief one-shot hint from skip_next_logits(), consumed by the next forward() or prefill()
+    bool skip_next_logits_ = false;
     OgaSlotLimits limits_;
     std::uint64_t replayed_ = 0;
     std::uint64_t reused_ = 0;

@@ -151,7 +151,10 @@ accuracy. Do not invent a `make test` or claim tests pass.
   comment; any bench failure other than the accuracy hard gate (perf, a pull, a timeout,
   infrastructure) warns; only a model failing that gate (acc_common: no predictions, or too many
   unanswered) fails the required check, which therefore waits for the benches. A manual dispatch of
-  that workflow re-benches an earlier Build and Test run: it benches by default (force), and without
+  that workflow re-benches an earlier Build and Test run (`build-run`, of the dispatched commit; a
+  dispatch on main may also name the push run on main of an earlier commit of main, whose commit is
+  then the one benched and reported, and whose catalog, `engines.json` and `kernel_assignment.json`
+  select the models and the engines overlaid): it benches by default (force), and without
   `models` takes the nightly's rotation, so name the models to re-bench a pull request's. The full
   refresh benches every benchable model on the four runtimes and reports only its own numbers.
 
@@ -176,7 +179,9 @@ as a *swap commit*.
    allowed being the *Dev-kit swap pending* step; a failed bench job does not count unless a model
    failed the accuracy hard gate, which fails `summary`'s *Dev-kit checks*; the product test job of every system and runtime it staged files into passed;
    and no commit on main since the run's base touches `FLM_DLL/`, `FLM_Xclbin/`, `../src/lib/` or
-   `../src/xclbins/`: otherwise merge main and let CI run again), downloads the staged files, checks
+   `../src/xclbins/` (documentation under `FLM_DLL/` and `FLM_Xclbin/`, what `changes.py`
+   `NON_CODE` calls non-code such as `*.md`, does not count; `devkit_swap.py` keeps a copy pinned equal
+   by its tests, so a pull request's `changes.py` cannot widen it): otherwise merge main and let CI run again), downloads the staged files, checks
    every SHA-256 against the manifests, writes them and makes one commit with the trailers
    `Devkit-Swap-Run: <run id>` and `Devkit-Swap-Tested: <tested sha>`. It does not push. The dev-kit
    artifacts are kept 7 days: once they expire, re-run the workflow.
@@ -185,6 +190,19 @@ as a *swap commit*.
    staged bytes, it carries every file the run staged, and the run passed as fetch requires) and then
    builds and tests nothing again; `devkit-static` still checks the catalog. Then the pull request is
    reviewed and merged.
+   **Or let the auto-swap do steps 3 and 4, and the merge** (`.github/workflows/devkit-auto-swap.yml`,
+   rules in `.github/script/ci/devkit_auto_swap.py`): once the run asks only for the swap, a
+   maintainer (write access or more, not the author) approving the pull request at exactly the
+   tested commit makes the bot run the same `fetch` (main's copy of the script) and push the swap
+   commit; when Build and Test passes on it, the bot merges the pull request (`gh pr merge
+   --match-head-commit`, squash unless `DEVKIT_AUTO_SWAP_MERGE_METHOD` says otherwise). It works on
+   branches of this repository only, does nothing while any maintainer's latest review requests
+   changes, checks the approval again before it pushes and before it merges, and merges only a head
+   that main's `devkit_swap.py verify` accepts as a swap commit, after a `pull_request` run of it
+   passed: a push after the swap stops the merge (merge by hand then), and so does a change under
+   `.github/workflows/` (the App may not merge one). It comments on
+   the pull request when it swapped, merged, why `fetch` refused, or that the pull request must be
+   split (below).
 5. Pushes after the swap (a review fix, a merge of main): when they change no dev-kit engine or
    kernel source or build input (`changes.py` `after_swap` decides from the files changed since the
    newest swap commit), nothing is rebuilt or staged; the product test jobs test the committed

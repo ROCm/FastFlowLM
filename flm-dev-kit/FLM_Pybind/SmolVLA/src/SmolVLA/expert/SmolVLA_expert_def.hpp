@@ -11,6 +11,8 @@
 #include "tensor_utils/safe_tensors.hpp"
 #include "nlohmann/json.hpp"
 #include "SmolVLA_config.hpp"
+#include "pack_bfp16.hpp"
+#include "expert_mode.hpp"
 
 /// @brief the gated MLP (SwiGLU) weight descriptors. Identical for self and
 ///        cross layers (same shapes, same name template), so a single instance
@@ -40,6 +42,9 @@ struct SmolVLA_expert_layer {
     weight_desc_t k_proj;
     weight_desc_t v_proj;
     weight_desc_t o_proj;
+    // self layers only: q|k|v seen as one [pD -> pDQ+pDK+pDV] matrix over the three slots (they are adjacent in
+    // the layer buffer), so the three projections run as a single matmul. Not part of layer_all().
+    weight_desc_t qkv_proj;
 };
 
 struct SmolVLA_Expert_def {
@@ -183,6 +188,7 @@ struct SmolVLA_Expert_def {
         self_layer_def.k_proj    = weight_desc_t(flm_bf16, {pD, pDK}, LYR + "self_attn.k_proj.weight");
         self_layer_def.v_proj    = weight_desc_t(flm_bf16, {pD, pDV}, LYR + "self_attn.v_proj.weight");
         self_layer_def.o_proj    = weight_desc_t(flm_bf16, {pDQ, pD}, LYR + "self_attn.o_proj.weight");
+        self_layer_def.qkv_proj  = weight_desc_t(flm_bf16, {pD, pDQ + pDK + pDV}, LYR + "self_attn.qkv_proj.weight");
 
         // group weights into containers and record the byte size of each group.
         // Offset order per layer: layernorms, then shared MLP, then attention.
@@ -197,6 +203,11 @@ struct SmolVLA_Expert_def {
             self_layer_helper.add_weight(*w);
         }
         this->self_layer_byte_size = self_layer_helper.get_size();
+        // q, k, v are adjacent in the layer buffer (see layer_all): the fused descriptor starts at q
+        assert(self_layer_def.k_proj.offset == self_layer_def.q_proj.offset + (size_t)pD * pDQ * sizeof(bf16));
+        assert(self_layer_def.v_proj.offset == self_layer_def.k_proj.offset + (size_t)pD * pDK * sizeof(bf16));
+        self_layer_def.qkv_proj.offset = self_layer_def.q_proj.offset;
+        self_layer_def.qkv_proj.added  = true;
 
         weight_container non_layer_helper;
         for (weight_desc_t* w : non_layer_all()) {
@@ -219,7 +230,7 @@ struct SmolVLA_Expert_def {
     /// @param name      the (formatted) tensor name to read
     /// @param dst_buf   destination buffer; the weight goes at w->offset
     void load_padded(SafeTensors& st, weight_desc_t* w,
-                     const std::string& name, bytes& dst_buf) {
+                     const std::string& name, bytes& dst_buf, bool pack = true) {
         tensor_metadata meta = st.get_tensor_metadata(name);
 
         // read the raw unpadded tensor into a temp buffer
@@ -244,6 +255,26 @@ struct SmolVLA_Expert_def {
                         temp.data() + r * cols * esize,
                         cols * esize);
         }
+
+        if (pack) pack_in_place(dst, prows, pcols, w->shape[1] > 1);
+    }
+
+    /// 2-D weights feed the expert matmul, which reads them as bfp16ebs8 (9 B per 8 k): repack the padded
+    /// [prows][pcols] bf16 matrix in place into the first 9/16 of its slot, so offsets are unchanged.
+    void pack_in_place(uint8_t* dst, size_t prows, size_t pcols, bool is_2d = true) {
+        const size_t esize = sizeof(uint16_t);
+        if (is_2d && !smolvla_expert_mode::bf16_weights()) {  // norms are 1-D
+            assert(pcols % 64 == 0 && prows % 64 == 0);
+            std::vector<uint16_t> padded(prows * pcols);
+            std::memcpy(padded.data(), dst, prows * pcols * esize);
+            const uint16_t* src = padded.data();
+            for (size_t r = 0; r < prows; r++) {
+                for (size_t k8 = 0; k8 < pcols / 8; k8++) {
+                    pack_bfp16::encode_block(dst + pack_bfp16::block_offset(r, k8, pcols, 64, 64),
+                                             src + r * pcols + k8 * 8);
+                }
+            }
+        }
     }
 
     /// @brief load all expert weights from the safetensors file into the
@@ -267,9 +298,14 @@ struct SmolVLA_Expert_def {
         for (uint32_t l = 0; l < num_layers; l++) {
             uint32_t slot = layer_slot(l);
             if (is_self_layer(l)) {
+                SmolVLA_expert_layer& sl = self_layer_def;
                 for (weight_desc_t* w : self_layer_all()) {
-                    load_padded(st, w, w->format_name(l), self_layer_weights[slot]);
+                    // q/k/v are packed together below, as the one matrix the fused qkv matmul reads
+                    const bool qkv = (w == &sl.q_proj || w == &sl.k_proj || w == &sl.v_proj);
+                    load_padded(st, w, w->format_name(l), self_layer_weights[slot], !qkv);
                 }
+                pack_in_place((uint8_t*)self_layer_weights[slot].data() + sl.qkv_proj.offset,
+                              sl.qkv_proj.shape[1], sl.qkv_proj.shape[0]);
             } else {
                 for (weight_desc_t* w : cross_layer_all()) {
                     load_padded(st, w, w->format_name(l), cross_layer_weights[slot]);
