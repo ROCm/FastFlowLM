@@ -759,6 +759,27 @@ buffer<bf16> AutoModel::_chunked_insert(chat_meta_info_t& meta_info, std::vector
     return y;
 }
 
+const flm::chat::message_role_support& AutoModel::message_roles() {
+    static const std::string no_template;
+    const std::string& source = this->chat_tmpl ? this->chat_tmpl->source() : no_template;
+    if (!this->message_roles_probed_ || source != this->message_roles_source_) {
+        // through the model's own apply_chat_template: the same extra context and render options as a request
+        this->message_roles_ = flm::chat::probe_message_roles([this](const nlohmann::ordered_json& messages) {
+            nlohmann::ordered_json copy = messages;
+            return this->apply_chat_template(copy);
+        });
+        this->message_roles_source_ = source;
+        this->message_roles_probed_ = true;
+        if (this->is_server_mode) {
+            header_print("FLM", std::string("Chat template roles: developer ") +
+                                (this->message_roles_.renders_developer ? "rendered" : "sent as system") +
+                                ", later system " +
+                                (this->message_roles_.accepts_later_system ? "rendered in place" : "sent as a <system-reminder> user turn"));
+        }
+    }
+    return this->message_roles_;
+}
+
 std::string AutoModel::_render_chat_template(minja::chat_template_inputs& inputs, bool continue_final_message,
                                              const minja::chat_template_options& options) {
     if (!continue_final_message) {

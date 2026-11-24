@@ -37,6 +37,7 @@
 #include "chat/chat_format.hpp"
 #include "chat/chat_constraint.hpp"
 #include "chat/chat_grammar.hpp"
+#include "chat/message_roles.hpp"
 #include <nlohmann/json.hpp>
 
 // Forward declaration
@@ -222,6 +223,10 @@ protected:
 	uint32_t total_tokens = 0;
 	std::unique_ptr<LM_Config> lm_config = nullptr;
 	std::unique_ptr<minja::chat_template> chat_tmpl = nullptr;
+	/// \brief What the chat template does with instruction messages, and the template source it was probed on (message_roles())
+	flm::chat::message_role_support message_roles_;
+	std::string message_roles_source_;
+	bool message_roles_probed_ = false;
 	chat_format_spec chat_format;
 
 	std::string bos_token;
@@ -697,6 +702,11 @@ public:
 	virtual chat_template_type_t get_chat_template_type() {
 		return chat_template_type_t::chat_ml;
 	}
+	/// \brief What this model's chat template does with `developer` and with a `system` message after the first turn
+	/// \note Probed through apply_chat_template, the first time it is asked and again when the template changes.
+	///       Not synchronized: callers are serialized by the accelerator queue (/v1/chat/completions is an NPU route,
+	///       http_guard.hpp); a caller outside that queue needs a lock
+	const flm::chat::message_role_support& message_roles();
 	/// \brief How this model writes reasoning and tool calls
 	/// \note Detected from the chat template and the tokenizer when the tokenizer is set up
 	const chat_format_spec& get_chat_format() const {

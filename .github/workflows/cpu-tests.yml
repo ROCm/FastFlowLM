@@ -46,6 +46,21 @@ jobs:
           cmake --build build-chat-continue -j"$(nproc)"
           ctest --test-dir build-chat-continue --output-on-failure
 
+  # Message roles (src/include/chat/message_roles.hpp): what the probe finds on the Qwen3 and Qwen3.5
+  # templates, and where a `developer` or later `system` message goes before the template. CPU only, no NPU.
+  message-roles:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and run the message roles test
+        run: |
+          cmake -S src/test/message_roles -B build-message-roles -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-message-roles -j"$(nproc)"
+          ctest --test-dir build-message-roles --output-on-failure
+
   # chat protocols (src/server/chat_core.hpp and its sinks): the events of a chat turn through the Chat Completions
   # sink give the bytes recorded from the handler before the sinks existed. Chat library only, no NPU.
   chat-protocols:
