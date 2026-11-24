@@ -74,6 +74,10 @@ void inkling2_npu::Impl::make_fused() {
     this->fused.reset();
     this->on_device = false;
     this->dev_ids.clear();
+#if defined(FLM_USE_HRX)
+    // decode runs control-packet switches as ELF modules, which the HRX shim does not provide: decode stays on the host
+    return;
+#else
     const char* on = std::getenv("INKLING2_NPU_DECODE");
     if (!this->prefill || (on && std::strcmp(on, "0") == 0)) return;
     std::vector<inkling2_fused::layer_src> src;
@@ -98,15 +102,19 @@ void inkling2_npu::Impl::make_fused() {
         if (this->fused->enable_lm_head(this->npu, sw)) header_print("inkling2", "lm_head on the NPU (" << sw << ")");
         else header_print_r("FLM", "inkling2: lm_head on the host (the decode switches did not load)");
     }
+#endif
 }
 
 void inkling2_npu::Impl::sync_host() {
     if (!this->on_device) return;
+#if !defined(FLM_USE_HRX)
     this->fused->store_state(this->model);
+#endif
     this->on_device = false;
     this->dev_ids.clear();
 }
 
+#if !defined(FLM_USE_HRX)
 void inkling2_npu::Impl::decode_npu(int id) {
     if (!this->on_device) {
         this->fused->load_state(this->model);
@@ -138,6 +146,7 @@ void inkling2_npu::Impl::decode_npu(int id) {
     this->fused->end_token();
     this->dev_ids.push_back(id);
 }
+#endif   // !FLM_USE_HRX
 
 int inkling2_npu::Impl::read_state(hybrid_engine_state& st, int kv_from) {
     this->sync_host();
@@ -302,8 +311,11 @@ void inkling2_npu::load_weights(Q4NX& q4nx) {
 buffer<bf16> inkling2_npu::forward(int ids) {
     Impl* d = this->_impl;
     d->compute.call([d, ids] {
+#if !defined(FLM_USE_HRX)
         if (d->fused) d->decode_npu(ids);
-        else d->model.run(&ids, 1, d->logits_f32.data());
+        else
+#endif
+        d->model.run(&ids, 1, d->logits_f32.data());
     });
     return this->_impl->publish_logits();
 }
@@ -378,7 +390,10 @@ void inkling2_npu::update_max_length(uint32_t MAX_L) {
 }
 
 int inkling2_npu::get_current_context_length() {
-    return this->_impl->on_device ? this->_impl->fused->position() : this->_impl->model.position();
+#if !defined(FLM_USE_HRX)
+    if (this->_impl->on_device) return this->_impl->fused->position();
+#endif
+    return this->_impl->model.position();
 }
 
 int inkling2_npu::checkpoint() {

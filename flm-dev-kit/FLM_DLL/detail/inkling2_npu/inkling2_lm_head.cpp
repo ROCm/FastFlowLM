@@ -16,7 +16,11 @@
 #include <stdexcept>
 #include <thread>
 
+#if !defined(_WIN32)
 #include <sys/mman.h>
+#endif
+
+#if !defined(FLM_USE_HRX)   // see inkling2_fused.hpp
 
 using namespace inkling2_host;
 
@@ -67,6 +71,7 @@ void inkling2_lm_head::init(npu_xclbin_manager* npu, const weights& w) {
     this->app = this->mgr->create_app();
     const int rb_all = ROWS / QROWS, rb_real = q.row_blocks(), cbs = q.col_blocks();
     const size_t wbytes = (size_t)rb_all * cbs * Q80_BYTES;
+#if !defined(_WIN32)   // 2 MB pages: Linux only
     if (getenv("INKLING2_LMH_HUGE") && atoi(getenv("INKLING2_LMH_HUGE"))) {
         constexpr size_t HP = (size_t)2 << 20;
         this->huge.n = (wbytes + HP - 1) / HP * HP;
@@ -81,7 +86,9 @@ void inkling2_lm_head::init(npu_xclbin_manager* npu, const weights& w) {
         memset(this->huge.p, 0, this->huge.n);
         this->huge_bo = std::make_unique<xrt::ext::bo>(*this->mgr->get_device(), this->huge.p, this->huge.n);
         this->wb = buffer<uint8_t>(*this->huge_bo);
-    } else {
+    } else
+#endif
+    {
         this->wb = npu->create_bo_buffer<uint8_t>(wbytes);
     }
     this->y = npu->create_bo_buffer<uint16_t>(ROWS);
@@ -150,7 +157,9 @@ void inkling2_lm_head::gen_seq() {
 }
 
 inkling2_lm_head::huge_mem::~huge_mem() {
+#if !defined(_WIN32)
     if (this->p) munmap(this->p, this->n);
+#endif
 }
 
 bool inkling2_lm_head::run(const uint16_t* xv, float* logits) {
@@ -184,3 +193,5 @@ bool inkling2_lm_head::run(const uint16_t* xv, float* logits) {
     this->n_run++;
     return true;
 }
+
+#endif   // !FLM_USE_HRX

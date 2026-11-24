@@ -235,7 +235,7 @@ struct tower::impl {
             l.fc2 = make_linear(file, L + "mlp.c_proj", DIM, FFN, true);
         }
         proj_in = make_linear(file, "model.visual.proj_in", MERGED, MERGED, false);
-        proj_out = make_linear(file, "model.visual.proj_out", OUT, MERGED, false);
+        proj_out = make_linear(file, "model.visual.proj_out", OUT_DIM, MERGED, false);
         inv_freq.resize(HDIM / 4);
         for (int i = 0; i < HDIM / 4; i++) inv_freq[i] = 1.f / std::pow(ROPE_THETA, (float)(2 * i) / (float)(HDIM / 2));
     }
@@ -427,14 +427,14 @@ void tower::impl::encode(const float* pixels, const grid& g, u16* out_bf16, floa
 
     // ---- merger: the four patches of a cell are four consecutive rows, so the rows after the class token already
     //      are [tokens][4 * DIM]
-    std::vector<float> m1((size_t)N * MERGED), o((size_t)N * OUT);
+    std::vector<float> m1((size_t)N * MERGED), o((size_t)N * OUT_DIM);
     if (dev) {
         dev->merge(x.data() + DIM, N, o.data());
     } else {
         linear_fwd(proj_in, x.data() + DIM, MERGED, N, m1.data(), MERGED);
         if (trace) trace("merger_fc1", m1.data(), N, MERGED);
         gelu_rows(m1.data(), N, MERGED);
-        linear_fwd(proj_out, m1.data(), MERGED, N, o.data(), OUT);
+        linear_fwd(proj_out, m1.data(), MERGED, N, o.data(), OUT_DIM);
     }
     if (out_f32) memcpy(out_f32, o.data(), o.size() * sizeof(float));
     if (out_bf16)

@@ -48,7 +48,7 @@ private:
     npu_app_manager* mgr;
     std::map<int, plan> plans;   // kind * 16 + n
     buffer<uint8_t> io[2];       // per kind: headers, then y
-    xrt::run run;
+    flm_rt::run run;
     int kind = -1, n = 0;
     plan& get(int kind, int n);
 };

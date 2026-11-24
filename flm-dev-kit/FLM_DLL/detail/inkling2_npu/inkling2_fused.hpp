@@ -31,6 +31,9 @@
 #endif
 #include "typedef.hpp"
 
+// The decode and lm_head programs load control-packet switches as ELF modules (xrt::elf / xrt::module / xrt::ext::kernel), which the
+// HRX shim does not provide (as d3's switches): on HRX decode and lm_head stay on the host.
+#if !defined(FLM_USE_HRX)
 class inkling2_fused {
 public:
     /// \brief a layer's weight buffer (inkling2_prefill::device_layer): attention rows at 0, then o, gate_up, down
@@ -99,7 +102,7 @@ public:
     // per (looped layer, controller) tanh f / a (48 y units) then the norm g (fp32) and padding to whole units; CK:
     // the out step's output in check mode
     size_t H_DN = 0, H_UP = 0, H_CT = 0, GD = 0, FA = 0, CK = 0;
-    static constexpr size_t FAR = 28800;
+    static constexpr size_t FA_LEN = 28800;
     static constexpr int CW_UNITS = 1088;
     const uint8_t* io_data() const { return this->io.data(); }
     /// \brief the last token's final-normed x (bf16, after ST_Z)
@@ -199,3 +202,6 @@ private:
     size_t RSS = 0, RSG = 0, SW0 = 0;
     int gidx[inkling2_host::NSLOT], sidx[inkling2_host::NSLOT];
 };
+#else
+class inkling2_fused {};   // never made on HRX (inkling2_npu::Impl::make_fused)
+#endif   // !FLM_USE_HRX

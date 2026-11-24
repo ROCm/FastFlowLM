@@ -30,7 +30,7 @@ constexpr int MM_M = 128, MM_K = 512, MM_N = 64;
 constexpr int MM_ROWS = 4, MM_COLS = 8;
 constexpr uint32_t RTP_ADDRESS = 4096, RTP_SYNC_LOCK = 10;
 constexpr int M_PAD = MM_ROWS * MM_M;            // the kernel runs whole 4 x 128 row blocks
-constexpr int PATCH_KP = 1536;                    // PATCH_K padded to the tile (OUT is 36 whole N tiles already)
+constexpr int PATCH_KP = 1536;                    // PATCH_K padded to the tile (OUT_DIM is 36 whole N tiles already)
 
 inline int up(int v, int m) { return (v + m - 1) / m * m; }
 
@@ -304,7 +304,7 @@ public:
         t_host += ms_since(t1);
         run(op_out, Mp, b_ff2, b_y, t_mm, clk::now());
         t1 = clk::now();
-        widen(out, OUT, ptr(b_y), OUT, N, OUT);
+        widen(out, OUT_DIM, ptr(b_y), OUT_DIM, N, OUT_DIM);
         t_host += ms_since(t1);
         if (opt.profile) {
             fprintf(stderr, "[vision npu] mm %.0f ms (dispatch + sync)  attention %.0f ms  host %.0f ms  embed %.0f ms\n", t_mm, t_attn, t_host, t_embed);

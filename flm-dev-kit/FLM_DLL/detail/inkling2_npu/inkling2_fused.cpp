@@ -22,6 +22,8 @@
 #include "launch/txn/elf.hpp"
 #endif
 
+#if !defined(FLM_USE_HRX)   // see inkling2_fused.hpp
+
 using namespace inkling2_host;
 
 namespace {
@@ -213,7 +215,7 @@ inkling2_fused::inkling2_fused(npu_xclbin_manager* npu, const std::string& xclbi
     this->H_CT = at + 512;
     this->GD = at + 768;
     this->FA = up(this->GD + (size_t)16 * YU * 4);
-    this->CK = this->FA + (size_t)4 * (CORE1 - CORE0) * FAR;
+    this->CK = this->FA + (size_t)4 * (CORE1 - CORE0) * FA_LEN;
     at = up(this->CK + (size_t)36 * YU * 4);
     for (int il = 0; il < NL; il++) {
         const layer_weights& L = this->w.layer[il];
@@ -245,7 +247,7 @@ inkling2_fused::inkling2_fused(npu_xclbin_manager* npu, const std::string& xclbi
     for (int il = CORE0; il < CORE1; il++) {
         const layer_weights& L = this->w.layer[il];
         for (int k = 0; k < 4; k++)
-            memcpy(this->io.data() + this->FA + ((size_t)(il - CORE0) * 4 + k) * FAR + (size_t)48 * YU * 4,
+            memcpy(this->io.data() + this->FA + ((size_t)(il - CORE0) * 4 + k) * FA_LEN + (size_t)48 * YU * 4,
                    k == 3 ? L.ffn_norm : is_global(il) ? L.qkv_norm[k] : L.attn_norm, (size_t)D * 4);
     }
     ((int*)(this->io.data() + this->E_HDR))[0] = OP_EXPERT;
@@ -595,7 +597,7 @@ void inkling2_fused::add_ctrl(int j, bool attn, int upto, size_t ct_at) {
     const app_info I = info(j);
     const int li = I.il - CORE0, nk = attn ? 3 : 1, nch = attn ? 12 : 16, nd = attn ? 32 : 8;
     const size_t CWL = (size_t)li * CW_UNITS * UNIT, hs = attn ? 0 : 128;
-    auto fa = [&](int k) { return this->FA + ((size_t)li * 4 + (attn ? k : 3)) * FAR; };
+    auto fa = [&](int k) { return this->FA + ((size_t)li * 4 + (attn ? k : 3)) * FA_LEN; };
     npu_sequence* seq = this->app().seq();
     // down: channel c = rows nd c .. of [controller][half] (32 c: k = c / 4, h = c / 2 % 2; ffn 8 c: h = c / 8), the
     // half's bf16 x / rms -> one y unit of partials at GD + c
@@ -635,7 +637,7 @@ void inkling2_fused::add_ctrl(int j, bool attn, int upto, size_t ct_at) {
         seq->npu_dma_memcpy_nd(1, 0, MM2S, IT[1 + k], npu_bd_id(0), it_channel_1, {0, 0, 0, (uint32_t)(this->H_CT + hs)}, {1, 1, 1, (uint32_t)X_OFF}, {0, 0, 0, 1});
         seq->npu_dma_memcpy_nd(1, 0, MM2S, IT[1 + k], npu_bd_id(1), it_channel_1, {0, 0, 0, (uint32_t)ctrl_q(j, attn, k, 0)}, {1, 1, 1, (uint32_t)(D * 4)}, {0, 0, 0, 1});
         seq->npu_dma_memcpy_nd(1, 0, MM2S, IT[1 + k], npu_bd_id(2), it_channel_1, {0, 0, 0, (uint32_t)ctrl_q(j, attn, k, 1)}, {1, 1, 1, (uint32_t)(D * 4)}, {0, 0, 0, 1});
-        seq->npu_dma_memcpy_nd(1, 0, MM2S, IT[1 + k], npu_bd_id(3), it_channel_1, {0, 0, 0, (uint32_t)fa(k)}, {1, 1, 1, (uint32_t)FAR}, {0, 0, 0, 1});
+        seq->npu_dma_memcpy_nd(1, 0, MM2S, IT[1 + k], npu_bd_id(3), it_channel_1, {0, 0, 0, (uint32_t)fa(k)}, {1, 1, 1, (uint32_t)FA_LEN}, {0, 0, 0, 1});
     }
     for (int k = 0; k < nk; k++) seq->npu_dma_wait(IT[1 + k], S2MM, it_channel_1);
 }
@@ -649,7 +651,7 @@ void inkling2_fused::dev_check(int j, bool attn, int level) {
     this->t_build = std::chrono::steady_clock::now();
     add_ctrl(j, attn, level, this->CK);
     this->want.push_back({this->GD, (size_t)16 * YU * 4});
-    this->want.push_back({this->FA + (size_t)li * 4 * FAR, 4 * FAR});
+    this->want.push_back({this->FA + (size_t)li * 4 * FA_LEN, 4 * FA_LEN});
     this->want.push_back({this->CK, (size_t)36 * YU * 4});
     if (!submit(0)) throw std::runtime_error("inkling2 fused: controller check run did not complete");
     const uint8_t* io = this->io.data();
@@ -671,7 +673,7 @@ void inkling2_fused::dev_check(int j, bool attn, int level) {
         if (level < 2) continue;
         u16 g[RANK];
         for (int r = 0; r < RANK; r++) g[r] = f2bf(P[0][r] + P[1][r]);
-        const float* fy = (const float*)(io + this->FA + ((size_t)li * 4 + (attn ? k : 3)) * FAR);
+        const float* fy = (const float*)(io + this->FA + ((size_t)li * 4 + (attn ? k : 3)) * FA_LEN);
         for (int row = 0; row < D; row++) {
             double f = 0, a = 0;
             for (int kk = 0; kk < RANK; kk++) {
@@ -1103,3 +1105,5 @@ bool inkling2_fused::submit(int stages) {
     this->n_by[stages & 127]++;
     return true;
 }
+
+#endif   // !FLM_USE_HRX

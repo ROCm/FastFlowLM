@@ -36,7 +36,7 @@ constexpr int FFN = 4096;
 constexpr int NLAYER = 23;
 constexpr int POS_SIDE = 32;                 // the learned position table is 32 x 32
 constexpr int MERGED = MERGE * MERGE * DIM;  // 4096: the four patches of a cell
-constexpr int OUT = 2304;                    // the text model's width
+constexpr int OUT_DIM = 2304;                    // the text model's width
 constexpr int IMAGE_TOKEN_ID = 200054;       // the placeholder the prompt repeats once per cell
 
 /// \brief an image's cell grid; one image token per cell, raster order
@@ -78,7 +78,7 @@ struct accel {
     virtual void attention(int layer, const float* h, int L, const float* cos, const float* sin, float* delta) = 0;
     /// \brief delta[L][DIM] = fc2(gelu(fc1(h)))
     virtual void mlp(int layer, const float* h, int L, float* delta) = 0;
-    /// \brief out[N][OUT] = proj_out(gelu(proj_in(rows))), rows [N][MERGED]
+    /// \brief out[N][OUT_DIM] = proj_out(gelu(proj_in(rows))), rows [N][MERGED]
     virtual void merge(const float* rows, int N, float* out) = 0;
 };
 
@@ -96,7 +96,7 @@ public:
     ///        the weights are bound now. Not available while "merger_fc1" is traced.
     void set_accel(std::unique_ptr<accel> a);
 
-    /// \brief the image tokens of one image: pixels as patchify makes them -> out_bf16[tokens][OUT] (round to nearest
+    /// \brief the image tokens of one image: pixels as patchify makes them -> out_bf16[tokens][OUT_DIM] (round to nearest
     ///        even); with out_f32, the same rows in fp32 before that rounding
     void encode(const float* pixels, const grid& g, u16* out_bf16, float* out_f32 = nullptr) const;
 

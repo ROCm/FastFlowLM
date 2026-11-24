@@ -1312,7 +1312,7 @@ act layer(const layer_weights& L, int il, int ip, int slot, model::state& s, int
             float* r = res->data() + (size_t)t0 * D;
             const float* a = inpSA->data() + (size_t)t0 * D;
             #pragma omp parallel for schedule(static)
-            for (size_t i = 0; i < ND; i++) r[i] = a[i] + yr[i];
+            for (int64_t i = 0; i < (int64_t)ND; i++) r[i] = a[i] + yr[i];
         }
         lap(P_X_RES);
         if (tr) decode_trace(slot, "res", res->data(), D);
@@ -1384,7 +1384,7 @@ act layer(const layer_weights& L, int il, int ip, int slot, model::state& s, int
     convolve(f->data(), T, D, L.ffn_conv, nullptr, cs + CONV_FFN);
     prof_lap(tp, P_CONV);
     #pragma omp parallel for schedule(static)
-    for (size_t i = 0; i < TD; i++) (*f)[i] += (*res)[i];
+    for (int64_t i = 0; i < (int64_t)TD; i++) (*f)[i] += (*res)[i];
     prof_lap(tp, P_X_RES);
     if (tr) decode_trace(slot, "out", f->data(), D);
     return f;

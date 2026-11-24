@@ -16,6 +16,9 @@
 #include "npu_utils/npu_utils.hpp"
 #include "typedef.hpp"
 
+// The decode and lm_head programs load control-packet switches as ELF modules (xrt::elf / xrt::module / xrt::ext::kernel), which the
+// HRX shim does not provide (as d3's switches): on HRX decode and lm_head stay on the host.
+#if !defined(FLM_USE_HRX)
 class inkling2_lm_head {
 public:
     static constexpr int M_PER_ROUND = 1024;
@@ -61,3 +64,4 @@ private:
     std::unique_ptr<xrt::bo> huge_bo;
     buffer<uint8_t> wb;
 };
+#endif   // !FLM_USE_HRX

@@ -306,7 +306,7 @@ bool inkling2_prefill::attn_in(int il, const float* xq, const float* xk, const f
         } ntr{il, "in", treq, tn};
         // the dispatches queue back to back (no host round trip between them)
         uint32_t y0 = 0;
-        std::vector<xrt::run> runs;
+        std::vector<flm_rt::run> runs;
         for (size_t i = 0; i < parts.size(); i++) {
             const uint32_t np = pad768(parts[i].n);
             clk::time_point tsub = clk::now();
@@ -318,7 +318,7 @@ bool inkling2_prefill::attn_in(int il, const float* xq, const float* xk, const f
             this->npu_sn[one ? 0 : 1]++;
             y0 += np;
         }
-        for (xrt::run& r : runs) r.wait();
+        for (flm_rt::run& r : runs) r.wait();
         this->npu_t[one ? 0 : 1] += since(tn);
         this->npu_n[one ? 0 : 1]++;
     }
@@ -386,7 +386,7 @@ bool inkling2_prefill::attn_out(int il, const float* O, int T, float* y, bf16_ro
             ~ntrace() { trace_npu(il, kind, a, b); }
         } ntr{il, "out", treq, tn};
         npu_app& a = this->app(T, DIN_O, QD, NPAD_D);
-        xrt::run r = a.create_run(Ln.ay, Ln.ax[0], bound_arg{&B.w, B.o});
+        flm_rt::run r = a.create_run(Ln.ay, Ln.ax[0], bound_arg{&B.w, B.o});
         r.start();
         this->npu_s[2] += since(tn);
         this->npu_sn[2]++;
@@ -472,7 +472,7 @@ bool inkling2_prefill::experts(int il, const float* x, int T, const int* token_o
     }
     const size_t gu_bytes = mm::q4k_bytes((size_t)2 * FF * D), dn_bytes = mm::q4k_bytes((size_t)D * FF_PAD);
     auto range = [&](int g) { return std::make_pair(r0g[g], r0g[g + 1]); };
-    std::vector<xrt::run> gu(G), dn(G);
+    std::vector<flm_rt::run> gu(G), dn(G);
     std::vector<char> live(G, 0);
     std::vector<int> group_of(NE, 0);
     for (int g = 0; g < G; g++)
@@ -526,7 +526,7 @@ bool inkling2_prefill::experts(int il, const float* x, int T, const int* token_o
         const auto [r0, r1] = range(g);
         const auto U = units(g);
         #pragma omp parallel for schedule(dynamic, 4)
-        for (size_t i = 0; i < U.size(); i++) {
+        for (int64_t i = 0; i < (int64_t)U.size(); i++) {
             const auto [e, r] = U[i];
             const float* src[16];
             for (uint32_t j = 0; j < 16; j++)
@@ -579,7 +579,7 @@ bool inkling2_prefill::experts(int il, const float* x, int T, const int* token_o
         this->egu.sync_range_from_device_exact(r0 * NPAD_D * sizeof(u16), (r1 - r0) * NPAD_D * sizeof(u16));
         const auto U = units(g);
         #pragma omp parallel for schedule(dynamic, 4)
-        for (size_t i = 0; i < U.size(); i++) {
+        for (int64_t i = 0; i < (int64_t)U.size(); i++) {
             const auto [e, r] = U[i];
             const u16* gp = raw(this->egu) + (size_t)(row0[e] + r) * NPAD_D;
             std::vector<float> af((size_t)16 * FF);
@@ -863,7 +863,7 @@ bool inkling2_prefill::attention(int il, int p0, int T, const float* Q, const fl
 #if !defined(FLM_USE_HRX)
         if (this->ll.ready) {
             // one submission: cold_mm, the switch to attention, attention, the switch back
-            std::vector<xrt::run> guest;
+            std::vector<flm_rt::run> guest;
             guest.push_back(a.create_run(Ln.att_o, Ln.att_q, Ln.att_kv, Ln.att_tab));
             this->ll.window(this->mgr, "mm_then_attn", "attn_then_mm", guest);
         } else

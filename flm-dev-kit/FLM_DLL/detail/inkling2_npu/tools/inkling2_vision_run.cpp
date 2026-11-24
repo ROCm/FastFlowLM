@@ -98,7 +98,7 @@ int main(int argc, char** argv) {
         t.trace = [&](const char* tag, const float* x, int rows, int cols) {
             got[tag].assign(x, x + (size_t)rows * cols);
         };
-        std::vector<float> out((size_t)g.tokens() * OUT);
+        std::vector<float> out((size_t)g.tokens() * OUT_DIM);
         std::vector<u16> bf(out.size());
         for (int it = 0; it < repeat; it++) {
             t0 = clk::now();
@@ -118,12 +118,12 @@ int main(int argc, char** argv) {
         score("embeds", out.data(), reinterpret_cast<const float*>(r.data), out.size());
         if (rows_dbg) {
             const float* rf = reinterpret_cast<const float*>(r.data);
-            for (int tk = 0; tk < std::min(g.tokens(), 8); tk++) score("  row", out.data() + (size_t)tk * OUT, rf + (size_t)tk * OUT, OUT);
-            for (int c0 = 0; c0 < OUT; c0 += 512) {
+            for (int tk = 0; tk < std::min(g.tokens(), 8); tk++) score("  row", out.data() + (size_t)tk * OUT_DIM, rf + (size_t)tk * OUT_DIM, OUT_DIM);
+            for (int c0 = 0; c0 < OUT_DIM; c0 += 512) {
                 double dot = 0, na = 0, nr = 0;
                 for (int tk = 0; tk < g.tokens(); tk++)
-                    for (int c = c0; c < std::min(c0 + 512, OUT); c++) {
-                        const double x = out[(size_t)tk * OUT + c], y = rf[(size_t)tk * OUT + c];
+                    for (int c = c0; c < std::min(c0 + 512, OUT_DIM); c++) {
+                        const double x = out[(size_t)tk * OUT_DIM + c], y = rf[(size_t)tk * OUT_DIM + c];
                         dot += x * y, na += x * x, nr += y * y;
                     }
                 std::printf("  cols %4d..: cos %.4f\n", c0, dot / std::sqrt(na * nr + 1e-30));
