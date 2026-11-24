@@ -114,7 +114,7 @@
                 "file_url": "https://huggingface.co/api/models/FastFlowLM/Inkling-2-Mini-NPU2/tree/main",
                 "ms_url": "https://modelscope.cn/models/amd/Inkling-2-Mini-NPU2",
                 "modified_at": "2026-11-21T00:00:00Z",
-                "size": 17273149943,
+                "size": 17273146180,
                 "flm_min_version": "1.0.14",
                 "default_context_length": 65536,
                 "max_prefill_len": 4096,

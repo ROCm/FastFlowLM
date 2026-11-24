@@ -6774,5 +6774,79 @@
             "size": 12535,
             "path": "tokenizer_config.json"
         }
+    ],
+    "inkling-2:mini": [
+        {
+            "type": "file",
+            "oid": "4024240d1736b025e64675f817c9df18654c8ec0",
+            "size": 1672,
+            "path": ".gitattributes"
+        },
+        {
+            "type": "file",
+            "oid": "71640d86d149aa0982d5043b10df8bf1b1544fee",
+            "size": 3808,
+            "path": "README.md"
+        },
+        {
+            "type": "file",
+            "oid": "f5e603ff747e4a9f3834e93571c159a8204fa014",
+            "size": 6490,
+            "path": "chat_template.jinja"
+        },
+        {
+            "type": "file",
+            "oid": "f99c91a1c52eefddacf7d64bc0311169a0431899",
+            "size": 2749,
+            "path": "config.json"
+        },
+        {
+            "type": "file",
+            "oid": "78ea0cbdc4a199b6bd4b63a2ca634a90d0860795",
+            "size": 53,
+            "path": "configuration.json"
+        },
+        {
+            "type": "file",
+            "oid": "85d9b8bf13b2579bc8831952bebedad1f4a5b264",
+            "size": 16607607808,
+            "lfs": {
+                "oid": "6eb49e38e416859ef348f49b553bb17cd0f1982eff3cef8fc19c010c8678bcb1",
+                "size": 16607607808,
+                "pointerSize": 136
+            },
+            "xetHash": "dedfe1c84d049944d3e1b0fb8c50b91742c734f6f47f1e27a9f491a470634650",
+            "path": "model.q4nx"
+        },
+        {
+            "type": "file",
+            "oid": "5e55fd2939ffee98a8dd9f273b7e8c999e56f9c2",
+            "size": 26178678,
+            "lfs": {
+                "oid": "7f332727f9a3f093dd452a39cc978e6757627e5dad1b0673aa4e75174f236dd6",
+                "size": 26178678,
+                "pointerSize": 133
+            },
+            "xetHash": "6004f200a25459cb281b5decd3679f1ada3e669eb3443480e691e51c570916d6",
+            "path": "tokenizer.json"
+        },
+        {
+            "type": "file",
+            "oid": "f62a73d1aa25ae1323e8d88c61776e7b13bb3415",
+            "size": 13271,
+            "path": "tokenizer_config.json"
+        },
+        {
+            "type": "file",
+            "oid": "da776194afac7dcbe8af13dc0e002e6f60a54f3b",
+            "size": 639337184,
+            "lfs": {
+                "oid": "f2a6048b424746cf6aec4726d6898d4fc6523a2e2f618f94df444839978da714",
+                "size": 639337184,
+                "pointerSize": 134
+            },
+            "xetHash": "069912fb5ade9bdc108d6101f1b8b20a017594921b634c57e99ce7034bfcac42",
+            "path": "vision_weight.q4nx"
+        }
     ]
 }
