@@ -746,6 +746,9 @@ buffer<bf16> AutoModel::_chunked_insert(chat_meta_info_t& meta_info, std::vector
                 meta_info.stop_reason = CANCEL_DETECTED;
                 break;
             }
+            if (i + 1 < chunks && this->backend_) {
+                this->backend_->skip_next_logits();
+            }
             buffer<bf16> chunk_y = this->lm_engine->prefill(chunk_tokens, (i == 0)? payload : nullptr);
             if (i == chunks - 1) {
                 // Moved, not copied: buffer's copy is shallow and does not take
