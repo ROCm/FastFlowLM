@@ -1,0 +1,23 @@
+# Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+# Portions of this file consist of AI-generated content.
+
+name: Dev-kit swap review
+
+# A signal only: a review submitted on a pull request wakes
+# devkit-auto-swap.yml (workflow_run of this workflow's name), which runs from
+# the default branch and reads everything it decides from the API. This job
+# runs the pull request's own version of this file, so it holds no permission,
+# checks nothing out and reads no secret; what it does cannot matter.
+on:
+  pull_request_review:
+    types: [submitted]
+
+permissions: {}
+
+jobs:
+  signal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Signal the auto-swap
+        run: echo "A review was submitted; devkit-auto-swap.yml decides what to do."

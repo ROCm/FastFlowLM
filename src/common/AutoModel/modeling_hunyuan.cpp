@@ -3,7 +3,7 @@
 /// \author FastFlowLM Team
 /// \date 2026-09-01
 /// \version 0.9.45
-/// \note AutoModel wrapper for the `hunyuan-dense` engine (Hy-MT2-1.8B).
+/// \note AutoModel wrapper for the `hunyuan-dense` engine (Hy-MT2-1.8B, Hy-MT3-1.8B).
 
 #include "AutoModel/modeling_hunyuan.hpp"
 #include "models/hunyuan/flm/aie2p/hunyuan_npu.hpp"
@@ -97,12 +97,12 @@ bool Hunyuan::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
 
     // Language only: drop any multimodal payload rather than failing the request.
     if (!input.images.empty()) {
-        header_print("WARNING", "Hy-MT2-1.8B is a text-only model, ignoring " << input.images.size() << " image(s)");
+        header_print("WARNING", "Hy-MT is a text-only model, ignoring " << input.images.size() << " image(s)");
         input.images.clear();
         input.image_payload_types.clear();
     }
     if (!input.audios.empty()) {
-        header_print("WARNING", "Hy-MT2-1.8B is a text-only model, ignoring " << input.audios.size() << " audio input(s)");
+        header_print("WARNING", "Hy-MT is a text-only model, ignoring " << input.audios.size() << " audio input(s)");
         input.audios.clear();
         input.audio_payload_types.clear();
     }

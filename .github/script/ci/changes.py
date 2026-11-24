@@ -7,8 +7,8 @@
 Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
   run_tests  false only when every changed file is documentation, otherwise
              never built or packaged, or used by no Build and Test job
-             (OUTSIDE_BUILD_AND_TEST: other workflows, scan configs, the CI
-             unit tests, the src/test programs cpu-tests.yml runs or no CI
+             (OUTSIDE_BUILD_AND_TEST: workflows, actions and script/ci files
+             outside build_and_test_closure, scan configs, the CI unit tests, the src/test programs cpu-tests.yml runs or no CI
              builds, developer scripts), so no NPU runner is reserved for it.
              A package or installer input no test observes (BUILD_ONLY)
              builds the packages with suites "none" and no HIPEP
@@ -116,6 +116,12 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              would be noise, and no verified swap can come with a change
              to the CI that checks it). Empty when no dev-kit engine is
              touched
+  devkit_runtimes
+             comma-separated runtimes whose dev-kit engines devkit-engines
+             builds and devkit-stage stages: "xrt,hrx", or "hrx" when the
+             dll area is selected only by the pinned HRX package
+             (hrx-integration/, HRX_PIN), which no XRT build reads. Product
+             builds and suites are not narrowed by it
   devkit_stage
              true when a pull request's run (and the dev-kit full refresh)
              stages dev-kit files into its product builds (build-and-test.yml
@@ -176,6 +182,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -262,6 +269,16 @@ DEVKIT_FROM_PRODUCT = (
     (re.compile(r"^\.github/windows-deps/"), {"dll"}),
 )
 
+# The pinned HRX package (hrx-integration/: hrx-release.env and the fetch
+# scripts). Only the HRX builds read it: the dev-kit engines through
+# build_manylinux.sh, build.ps1 -Runtime HRX, hrx.mk and cmake/flm_hrx.cmake,
+# never the XRT ones (build.sh, build.ps1 -Runtime XRT). When nothing else
+# selects the dll area, devkit-engines builds and devkit-stage stages the HRX
+# engines alone (devkit_runtimes "hrx"): a rebuilt XRT library, not byte for
+# byte the committed one, would only ask for a swap of src/lib/xrt. The
+# product suites stay as they are (every suite, every package).
+HRX_PIN = re.compile(r"^hrx-integration/")
+
 # The files devkit_check.py's catalog rules read: what the product ships
 # (src/model_list.json, src/xclbins, src/lib) and the dev-kit JSON describing
 # where it comes from. A change to one runs devkit-static (devkit_catalog)
@@ -313,7 +330,11 @@ BENCH_CI = re.compile(
 
 # Files no job of a pull request's Build and Test run builds, packages or
 # reads, beyond the changes job's own checks (the CI unit tests,
-# check_internal_refs.py), which run on every event: a change made only of
+# check_internal_refs.py), which run on every event, and the summary job's
+# merge_reports.py, which runs on every run whatever changed (an NPU suite
+# only feeds it reports; test_merge_reports.py tests it on reports the
+# npu_test harness writes, so a harness change, which runs every suite,
+# checks the contract both ways): a change made only of
 # these (and documentation) builds and tests nothing, and they select no
 # dev-kit area. Other workflows test them on the same pull request where
 # they can: cpu-tests.yml builds and runs the src/test and src/tests
@@ -324,6 +345,10 @@ BENCH_CI = re.compile(
 # scan; release.yml, which calls Build and Test, never the other way), or by
 # hand (the engine test harnesses under src/test, the developer scripts).
 # src/test is all of it but NPU_TEST_INPUTS, which a Build and Test job reads.
+# Workflows, actions and script/ci files are also outside when they are not
+# in build_and_test_closure, so a new standalone workflow and its script need
+# no entry here; the workflows listed below are the fallback for a checkout
+# where the closure cannot be worked out.
 NPU_TEST_INPUTS = ("openai_api_test/", "openai_usage/", "d3_video/fixtures/",
                    "model_extension_gemma4e/", "model_extension_consumer/")
 OUTSIDE_BUILD_AND_TEST = re.compile(
@@ -332,7 +357,7 @@ OUTSIDE_BUILD_AND_TEST = re.compile(
     r"|\.github/scan_tools_configs/"
     r"|\.github/workflows/(smolvla-package|cpu-tests|pr-security-scan|weekly-security-scan"
     r"|build-container|release)\.yml$"
-    r"|\.github/script/ci/(test_[^/]*\.py|check_internal_refs\.py|oga_hipep_tests\.ps1)$"
+    r"|\.github/script/ci/(test_[^/]*\.py|check_internal_refs\.py|merge_reports\.py|oga_hipep_tests\.ps1)$"
     r"|\.github/script/npu_test/tools/(build_asr_eval|make_vision_assets)\.py$"
     r"|\.github/script/npu_test/assets/(test_audio\.mp3|test_image2\.jpg)$"
     r"|\.github/script/assets/d3_goldens_flash\.jsonl$"
@@ -648,6 +673,77 @@ def family_suites(families: Iterable[str], catalog: dict[str, dict]) -> set:
     return out
 
 
+# The CI files Build and Test can run (build_and_test_closure): workflows,
+# actions and the scripts in script/ci. A changed one outside the closure is
+# OUTSIDE_BUILD_AND_TEST, whatever its name (a new standalone workflow and its
+# script, say), so no list of them has to be kept.
+CLOSURE_DIRS = (".github/workflows/", ".github/actions/", ".github/script/ci/")
+USES_WORKFLOW = re.compile(r"uses:\s*\./\.github/workflows/([\w.-]+\.ya?ml)")
+USES_ACTION = re.compile(r"uses:\s*\./\.github/actions/([\w.-]+)")
+PY_IMPORT = re.compile(r"^\s*(?:from|import)\s+([A-Za-z_]\w*)", re.MULTILINE)
+
+
+@lru_cache(maxsize=None)
+def build_and_test_closure(repo: Path = REPO_ROOT, gone: frozenset = frozenset()) -> Optional[frozenset]:
+    """The CI files a Build and Test run can use, as repository paths (an
+    action as its directory, ending in /): build-and-test.yml, the workflows
+    and actions it calls through uses:, transitively, and the script/ci files
+    (bar the test_* unit tests) any of them names (by file name, comments
+    included) or imports. A reference counts whether or not its target is in the checkout, so a
+    change that deletes or renames away a file Build and Test still names
+    (gone: the changed script/ci file names the checkout lacks) is tested,
+    and fails there. A mention is enough, so it errs towards testing. None
+    when build-and-test.yml cannot be read: then no CI file counts as outside."""
+    gh = repo / ".github"
+    start = gh / "workflows" / "build-and-test.yml"
+    if not start.is_file():
+        return None
+    ci = gh / "script" / "ci"
+    # The CI unit tests (test_*) run in the changes job on every event and
+    # call no other script: they are neither followed nor collected.
+    names = {p.name for p in ci.iterdir() if p.is_file()} if ci.is_dir() else set()
+    names = {n for n in names | set(gone) if not n.startswith("test_")}
+    named = re.compile(r"(?<![\w-])(" + "|".join(sorted(map(re.escape, names), key=len, reverse=True))
+                       + r")(?!\w)") if names else None
+    out: set = set()
+    todo = [start]
+    while todo:
+        path = todo.pop()
+        rel = path.relative_to(repo).as_posix()
+        if rel in out:
+            continue
+        out.add(rel)
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        todo += [gh / "workflows" / m for m in USES_WORKFLOW.findall(text)]
+        for action in USES_ACTION.findall(text):
+            key = f".github/actions/{action}/"
+            if key not in out:
+                out.add(key)
+                todo += [f for f in (gh / "actions" / action).rglob("*") if f.is_file()]
+        if named:
+            todo += [ci / n for n in set(named.findall(text))]
+        if path.suffix == ".py":
+            todo += [ci / (m + ".py") for m in PY_IMPORT.findall(text) if m + ".py" in names]
+    return frozenset(p for p in out if not (p.startswith(".github/actions/") and not p.endswith("/")))
+
+
+def unused_ci(path: str, closure: Optional[frozenset]) -> bool:
+    """A workflow, action or script/ci file no Build and Test run uses. A
+    file in a subdirectory of script/ci counts as used (the closure tracks
+    top-level scripts only)."""
+    if closure is None or not path.startswith(CLOSURE_DIRS) or devkit_only_areas(path) is not None:
+        return False
+    if path.startswith(".github/actions/"):
+        return "/".join(path.split("/")[:3]) + "/" not in closure
+    if path.startswith(".github/workflows/") and not path.endswith((".yml", ".yaml")):
+        return False
+    if path.startswith(".github/script/ci/") and "/" in path[len(".github/script/ci/"):]:
+        return False
+    return path not in closure
+
+
 def is_non_code(path: str) -> bool:
     return bool(NON_CODE.match(path))
 
@@ -728,6 +824,9 @@ class Decision:
     devkit_families: set = field(default_factory=set)
     # Changed kernel build image files (DEVKIT_ONLY).
     image_only: list = field(default_factory=list)
+    # The runtimes whose dev-kit engines devkit-engines builds and
+    # devkit-stage stages (devkit_runtimes; HRX_PIN).
+    devkit_runtimes: tuple = ("xrt", "hrx")
     # The first changed dev-kit engine or kernel source (is_bench_source), or
     # a reason for benching when the changed files are unknown; None: no
     # source changed. The benches run only when Build and Test also builds
@@ -912,6 +1011,7 @@ class Decision:
                 "devkit_catalog": str(self.devkit_catalog).lower(),
                 "devkit_areas": self.devkit_value(),
                 "devkit_families": ",".join(sorted(self.devkit_families)),
+                "devkit_runtimes": ",".join(self.devkit_runtimes),
                 "devkit_stage": str(self.devkit_stage()).lower(),
                 "devkit_bench": str(self.bench()).lower(),
                 "swap_verified": str(self.swap_verified).lower(),
@@ -1251,7 +1351,35 @@ def devkit_engines_diff(git: Optional[Git], head: Optional[DevkitEngines]) -> Op
 def decide(files: Optional[list[str]], git: Optional[Git] = None,
            head_catalog_text: Optional[str] = None,
            devkit_engines: Optional[DevkitEngines] = None,
-           engine_libs: Optional[frozenset] = None) -> Decision:
+           engine_libs: Optional[frozenset] = None,
+           repo: Optional[Path] = None) -> Decision:
+    """The decision for a list of changed files (None: git could not tell);
+    see _decide. devkit_runtimes is "hrx" alone when the HRX pin (HRX_PIN)
+    changed and the rest, decided on its own, would build no XRT engine: it
+    stages none (no engine family) and holds neither dev-kit CI (which
+    builds every area to exercise it) nor a src/lib/xrt file (a library an
+    earlier swap brought in: the XRT engines are rebuilt from the current
+    source, so a stale one asks for a swap again)."""
+    d = _decide(files, git, head_catalog_text, devkit_engines, engine_libs, repo)
+    if files is None or "dll" not in d.devkit_areas:
+        return d
+    pin = [f for f in files if HRX_PIN.match(f) and not is_non_code(f)]
+    if not pin:
+        return d
+    rest = [f for f in files if f not in pin]
+    other = _decide(rest, git, head_catalog_text, devkit_engines, engine_libs, repo)
+    if not (other.devkit_families or any(DEVKIT_CI.match(f) or f.startswith("src/lib/xrt/") for f in rest)):
+        d.devkit_runtimes = ("hrx",)
+        d.reasons.append(f"{pin[0]}: the pinned HRX package, which only the HRX builds read, and nothing "
+                         "else selects the dll area -> the HRX dev-kit engines alone are built and staged")
+    return d
+
+
+def _decide(files: Optional[list[str]], git: Optional[Git] = None,
+           head_catalog_text: Optional[str] = None,
+           devkit_engines: Optional[DevkitEngines] = None,
+           engine_libs: Optional[frozenset] = None,
+           repo: Optional[Path] = None) -> Decision:
     """The decision for a list of changed files (None: git could not tell).
 
     git supplies the changed lines and the base and head versions of the
@@ -1299,12 +1427,21 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
             d.reasons.append("bench CI only: product builds, NPU tests and dev-kit jobs skipped")
             return d
 
-    outside = [f for f in files if OUTSIDE_BUILD_AND_TEST.match(f) and not is_non_code(f)]
+    root = repo or REPO_ROOT
+    gone = frozenset(f.rsplit("/", 1)[1] for f in files
+                     if f.startswith(".github/script/ci/") and f.count("/") == 3 and not (root / f).exists())
+    closure = build_and_test_closure(root, gone)
+
+    def is_outside(f: str) -> bool:
+        return bool(OUTSIDE_BUILD_AND_TEST.match(f)) or unused_ci(f, closure)
+
+    outside = [f for f in files if is_outside(f) and not is_non_code(f)]
     if outside:
         d.outside = outside
-        files = [f for f in files if not OUTSIDE_BUILD_AND_TEST.match(f)]
+        files = [f for f in files if not is_outside(f)]
         d.reasons.append(f"{len(outside)} file(s) no Build and Test job uses, e.g. {outside[0]}: "
-                         "nothing built or tested for them here (OUTSIDE_BUILD_AND_TEST)")
+                         "nothing built or tested for them here (OUTSIDE_BUILD_AND_TEST, or CI "
+                         "outside build_and_test_closure)")
         if not [f for f in files if not is_non_code(f)]:
             d.run_tests = False
             d.suites = set()
@@ -1518,9 +1655,15 @@ def after_swap(d: Decision, git, head_catalog_text: Optional[str],
     files = git.files_since(swap)
     if files is None:
         return
-    since = decide(files, None, head_catalog_text, engines, engine_library_files(engines, repo))
+    since = decide(files, None, head_catalog_text, engines, engine_library_files(engines, repo), repo)
     if not since.devkit_stage():
         d.keep_swap(swap, since)
+    elif since.devkit_runtimes == ("hrx",) and d.devkit_runtimes != ("hrx",):
+        # Only the HRX pin (and nothing an XRT build reads) changed since the
+        # swap: its XRT libraries stay what its run tested.
+        d.devkit_runtimes = ("hrx",)
+        d.reasons.append(f"since swap commit {swap[:10]} only the HRX pin changed for the XRT builds: "
+                         "the HRX dev-kit engines alone are rebuilt and staged")
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -1559,7 +1702,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             engines_text = None
     devkit_engines = DevkitEngines.parse(engines_text)
     decision = decide(files, git, head_catalog, devkit_engines,
-                      engine_library_files(devkit_engines, args.repo))
+                      engine_library_files(devkit_engines, args.repo), args.repo)
     if args.swap_verified == "true":
         decision.skip_for_swap()
     elif git and decision.devkit_stage():

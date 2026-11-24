@@ -12,11 +12,55 @@
 #include <iterator>
 #include <limits>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
+
+#if defined(_M_X64) || defined(_M_AMD64) || defined(__x86_64__) || defined(__SSE2__)
+#include <emmintrin.h>
+#define FLM_OGA_HAS_SSE2 1
+#else
+#define FLM_OGA_HAS_SSE2 0
+#endif
 
 namespace flm::oga {
 namespace {
 static_assert(sizeof(int) == sizeof(std::int32_t), "token ids are passed to OGA as int32_t");
+static_assert(sizeof(bf16) == sizeof(std::uint16_t), "bf16 must be 16 bits");
+static_assert(std::is_trivially_copyable_v<bf16>, "bf16 must be trivially copyable");
+
+/// \brief minimum unsplit first-run length that proves a model does not hit the Laguna 2.1
+///        all-zero-logits bug (which triggers on runs of 8 or more tokens on hip-ep 0.5.3)
+constexpr std::size_t kFirstRunVerifyMinTokens = 8;
+
+#if FLM_OGA_HAS_SSE2
+/// \brief convert 4 IEEE-754 float32 bit patterns in `v` to 4 bfloat16 bit patterns in
+///        the low 16 bits of each 32-bit lane, matching biovault::bfloat16_t(float):
+///        subnormals and +-0 flush to signed zero; normals and +-Inf round to nearest
+///        even (+-Inf + 0x7fff >> 16 preserves +-Inf); NaNs truncate with quiet bit 0x0040.
+inline __m128i Convert4Fp32ToBf16Lanes(__m128i v) noexcept {
+    const __m128i abs_mask = _mm_set1_epi32(0x7fffffff);
+    const __m128i min_norm = _mm_set1_epi32(0x00800000);
+    const __m128i inf_bits = _mm_set1_epi32(0x7f800000);
+    const __m128i one = _mm_set1_epi32(1);
+    const __m128i bias_base = _mm_set1_epi32(0x00007fff);
+    const __m128i qnan_bit = _mm_set1_epi32(0x00000040);
+    const __m128i sign16 = _mm_set1_epi32(0x00008000);
+
+    const __m128i abs_v = _mm_and_si128(v, abs_mask);
+    const __m128i is_sub_or_zero = _mm_cmplt_epi32(abs_v, min_norm);
+    const __m128i is_nan = _mm_cmpgt_epi32(abs_v, inf_bits);
+
+    const __m128i hi16 = _mm_srli_epi32(v, 16);
+    const __m128i lsb = _mm_and_si128(hi16, one);
+    const __m128i rne = _mm_srli_epi32(_mm_add_epi32(v, _mm_add_epi32(bias_base, lsb)), 16);
+    const __m128i nan_out = _mm_or_si128(hi16, qnan_bit);
+    const __m128i zero_out = _mm_and_si128(hi16, sign16);
+
+    __m128i res = _mm_or_si128(_mm_and_si128(is_nan, nan_out), _mm_andnot_si128(is_nan, rne));
+    res = _mm_or_si128(_mm_and_si128(is_sub_or_zero, zero_out), _mm_andnot_si128(is_sub_or_zero, res));
+    return res;
+}
+#endif
 
 void Require(const void* function, const char* symbol) {
     if (!function)
@@ -118,6 +162,27 @@ std::size_t SlotsWithin(const OgaSlotLimits& limits, std::uint32_t max_length) {
     return static_cast<std::size_t>(std::min<std::uint64_t>(wanted, 1 + extra));
 }
 
+void ConvertFp32ToBf16(const float* from, bf16* to, std::size_t count) noexcept {
+    std::size_t i = 0;
+#if FLM_OGA_HAS_SSE2
+    const __m128i pack_bias32 = _mm_set1_epi32(0x00008000);
+    const __m128i pack_bias16 = _mm_set1_epi16(static_cast<short>(-32768));
+    for (; i + 8 <= count; i += 8) {
+        std::uint32_t raw[8];
+        std::memcpy(raw, from + i, sizeof(raw));
+        const __m128i v0 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(raw));
+        const __m128i v1 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(raw + 4));
+        const __m128i r0 = _mm_sub_epi32(Convert4Fp32ToBf16Lanes(v0), pack_bias32);
+        const __m128i r1 = _mm_sub_epi32(Convert4Fp32ToBf16Lanes(v1), pack_bias32);
+        const __m128i packed = _mm_xor_si128(_mm_packs_epi32(r0, r1), pack_bias16);
+        std::uint16_t out[8];
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(out), packed);
+        std::memcpy(to + i, out, sizeof(out));
+    }
+#endif
+    for (; i < count; ++i) to[i] = bf16(from[i]);
+}
+
 OgaEngine::OgaEngine(std::shared_ptr<const OgaApi> api, OgaApi::Owned<OgaModel> model,
                      std::string display_name, std::uint32_t vocab_size,
                      std::uint32_t context_limit, std::uint32_t max_length,
@@ -154,9 +219,13 @@ OgaEngine::OgaEngine(std::shared_ptr<const OgaApi> api, OgaApi::Owned<OgaModel> 
 
 OgaEngine::~OgaEngine() = default;
 
-buffer<bf16> OgaEngine::forward(int id) { return Run({id}); }
+buffer<bf16> OgaEngine::forward(int id) {
+    const bool skip_logits = std::exchange(skip_next_logits_, false);
+    return Run({id}, nullptr, skip_logits, /*cache_logits=*/false);
+}
 
 buffer<bf16> OgaEngine::prefill(std::vector<int>& ids, void* payload) {
+    const bool skip_logits = std::exchange(skip_next_logits_, false);
     if (staged_prompt_) {
         // Taken first, so a refused prefill does not leave the stage to the next one.
         std::unique_ptr<StagedPrompt> staged = std::move(staged_prompt_);
@@ -165,15 +234,16 @@ buffer<bf16> OgaEngine::prefill(std::vector<int>& ids, void* payload) {
         if (ids != staged->ids)
             throw std::runtime_error(display_name_ +
                                      " image prompt must be prefilled as the processor's whole sequence");
-        return PrefillStaged(*staged);
+        return PrefillStaged(*staged, skip_logits);
     }
     if (payload && !vision_)
         throw std::invalid_argument(display_name_ + " on OGA does not run a vision payload");
     if (ids.empty()) throw std::invalid_argument(display_name_ + " request contains no token IDs");
-    return Run(ids, static_cast<const OgaVisionInput*>(payload));
+    return Run(ids, static_cast<const OgaVisionInput*>(payload), skip_logits, /*cache_logits=*/true);
 }
 
 void OgaEngine::set_context_length(int length) {
+    skip_next_logits_ = false;
     if (length < 0 || static_cast<std::uint32_t>(length) > max_length_)
         throw std::out_of_range(display_name_ + " context length is out of range");
     const auto kept = static_cast<std::size_t>(length);
@@ -193,6 +263,7 @@ void OgaEngine::load_weights(Q4NX&) {
 }
 
 void OgaEngine::update_max_length(std::uint32_t max_length) {
+    skip_next_logits_ = false;
     if (!max_length || max_length > context_limit_ || max_length < logical_.size())
         throw std::out_of_range(display_name_ + " maximum length is invalid");
     if (saved_ && max_length < saved_->tokens.size()) saved_.reset();
@@ -206,6 +277,7 @@ void OgaEngine::update_max_length(std::uint32_t max_length) {
 }
 
 void OgaEngine::clear_context() {
+    skip_next_logits_ = false;
     logical_.clear();
     images_.clear();
     expected_.clear();
@@ -219,6 +291,8 @@ void OgaEngine::expect_prefill(const std::vector<int>& ids) {
     expected_.insert(expected_.end(), ids.begin(), ids.end());
 }
 
+void OgaEngine::skip_next_logits() noexcept { skip_next_logits_ = true; }
+
 buffer<bf16> OgaEngine::get_k_cache(int, int) {
     throw std::runtime_error(display_name_ + " on OGA does not expose the KV cache");
 }
@@ -230,21 +304,26 @@ buffer<bf16> OgaEngine::get_v_cache(int, int) {
 int OgaEngine::get_current_context_length() { return static_cast<int>(logical_.size()); }
 
 int OgaEngine::checkpoint() {
+    skip_next_logits_ = false;
     saved_ = Saved{logical_, images_};
     expected_.clear();
     // A slot rewound to this very checkpoint and given nothing since keeps the snapshot and logits it has.
     if (rewinds_ && active_ && !logical_.empty() && Active().ran == logical_ && !Active().rewound) {
         Live& run = Active();
         try {
-            const buffer<bf16> logits = Logits(run.generator.get());
-            std::vector<bf16> kept(logits.data(), logits.data() + logits.size());
+            if (run.last_logits.empty()) (void)EnsureLogits(run, /*cache_logits=*/true);
+            std::vector<bf16> kept = run.last_logits;
             api_->Check(api_->functions().generator_snapshot_state(run.generator.get()),
                         "OgaGenerator_SnapshotState");
             run.snapshot = logical_.size();
             run.snapshot_logits = std::move(kept);
         } catch (const std::exception& e) {
-            run.snapshot.reset();
-            run.snapshot_logits.clear();
+            if (active_) {
+                Live& current = Active();
+                current.snapshot.reset();
+                current.snapshot_logits.clear();
+                if (!current.generator) Drop(*active_);
+            }
             header_print("WARNING", display_name_ << ": " << e.what()
                                     << "; a prompt that leaves this checkpoint replays its history");
         }
@@ -253,6 +332,7 @@ int OgaEngine::checkpoint() {
 }
 
 int OgaEngine::restore() {
+    skip_next_logits_ = false;
     if (!saved_) return -1;
     logical_ = saved_->tokens;
     images_ = saved_->images;
@@ -260,7 +340,8 @@ int OgaEngine::restore() {
     return static_cast<int>(logical_.size());
 }
 
-buffer<bf16> OgaEngine::Run(const std::vector<int>& fresh, const OgaVisionInput* vision) {
+buffer<bf16> OgaEngine::Run(const std::vector<int>& fresh, const OgaVisionInput* vision,
+                            bool skip_logits, bool cache_logits) {
     CheckIds(fresh);
     if (logical_.size() + fresh.size() > max_length_)
         throw std::out_of_range(display_name_ + " request exceeds configured context capacity");
@@ -272,7 +353,7 @@ buffer<bf16> OgaEngine::Run(const std::vector<int>& fresh, const OgaVisionInput*
                    std::make_move_iterator(spans.end()));
     try {
         const char* why = nullptr;
-        const auto [reuse, reused] = Append(&why);
+        const auto [reuse, reused] = Append(&why, skip_logits);
         if (reused < before)
             replayed_ += before - reused;
         else
@@ -291,6 +372,7 @@ buffer<bf16> OgaEngine::Run(const std::vector<int>& fresh, const OgaVisionInput*
         } else if (total - reused > 1)
             header_print("FLM", "OGA generator: reusing " << reused << " tokens"
                                     << ", appending " << total - reused << SlotText());
+        if (skip_logits) return {};
         // Ahead of a chunked prompt: no caller reads the logits of a chunk before the last.
         if (run.ran.size() > total) {
             buffer<bf16> zeros(vocab_size_);
@@ -302,7 +384,7 @@ buffer<bf16> OgaEngine::Run(const std::vector<int>& fresh, const OgaVisionInput*
             std::copy(run.snapshot_logits.begin(), run.snapshot_logits.end(), out.data());
             return out;
         }
-        return Logits(run.generator.get());
+        return EnsureLogits(run, cache_logits);
     } catch (...) {
         logical_.resize(before);
         images_.resize(images_before);
@@ -358,7 +440,7 @@ bool OgaEngine::ImageAfter(std::size_t position) const {
     return !images_.empty() && images_.back().start + images_.back().length > position;
 }
 
-std::pair<OgaEngine::Reuse, std::size_t> OgaEngine::Append(const char** why) {
+std::pair<OgaEngine::Reuse, std::size_t> OgaEngine::Append(const char** why, bool skip_logits) {
     active_.reset();  // so that a failure before Resume drops no other conversation's slot
     const Reuse reuse = Resume(why);
     Live& run = Active();
@@ -366,6 +448,7 @@ std::pair<OgaEngine::Reuse, std::size_t> OgaEngine::Append(const char** why) {
     // Equal lengths: the slot already ran the last token, so its logits are current, or saved
     // with the snapshot it was rewound to. Longer: it is ahead of a chunked prompt.
     if (from >= logical_.size()) return {reuse, logical_.size()};
+    run.last_logits.clear();
     if (from == 0 && (!images_.empty() || empty_image_batch_)) {
         std::vector<const OgaImage*> images;
         for (const ImageSpan& span : images_) {
@@ -373,8 +456,10 @@ std::pair<OgaEngine::Reuse, std::size_t> OgaEngine::Append(const char** why) {
             run.images.push_back(span.hash);
         }
         SetInputs(run.generator.get(), logical_, images);
+        run.needs_first_run_check = false;
+        run.first_run_len = 0;
     } else if (from == 0) {
-        AppendFirst(run, logical_);
+        AppendFirst(run, logical_, skip_logits);
     } else {
         AppendTokens(run.generator.get(), logical_.data() + from, logical_.size() - from);
     }
@@ -394,6 +479,8 @@ const std::vector<int>& OgaEngine::Target() {
 
 OgaEngine::Reach OgaEngine::ReachOf(const Live& slot, const std::vector<int>& target) const {
     if (target.size() > std::min(slot.capacity, max_length_)) return {};
+    // Once another slot proved the package needs a split first run, never reuse an unsplit slot.
+    if (split_first_run_ && slot.needs_first_run_check) return {};
     // The tokens of an image tell only its size.
     const bool same_images =
         std::equal(slot.images.begin(), slot.images.end(), images_.begin(), images_.end(),
@@ -446,6 +533,9 @@ OgaEngine::Reuse OgaEngine::Resume(const char** why) {
     }
     run.ran.resize(reach.length);
     run.rewound = true;
+    run.last_logits.clear();
+    run.needs_first_run_check = false;
+    run.first_run_len = 0;
     return Reuse::kRewound;
 }
 
@@ -577,25 +667,89 @@ void OgaEngine::AppendTokens(OgaGenerator* generator, const int* ids, std::size_
                 "OgaGenerator_AppendTokens");
 }
 
-void OgaEngine::AppendFirst(Live& run, const std::vector<int>& ids) {
+void OgaEngine::AppendFirst(Live& run, const std::vector<int>& ids, bool skip_logits) {
     const std::size_t count = ids.size();
     if (!split_first_run_ || count < 2) {
         AppendTokens(run.generator.get(), ids.data(), count);
         if (split_first_run_ || count < 2) return;
+        if (!skip_logits || first_run_verified_ || count < kFirstRunVerifyMinTokens) {
+            // Non-skipped first runs already fetch logits in EnsureLogits, so always check
+            // them at zero extra GetLogits cost. Skipped runs defer the check once >=8-token
+            // unsplit runs have been verified (or when count < 8).
+            run.needs_first_run_check = true;
+            run.first_run_len = count;
+            return;
+        }
+        // One-time probe when the first >=8-token run is on a skipped intermediate chunk:
+        // a shorter final chunk may not expose the Laguna 2.1 all-zero-logits failure.
         const buffer<bf16> logits = Logits(run.generator.get());
         if (std::any_of(logits.data(), logits.data() + logits.size(),
-                        [](const bf16& value) { return static_cast<float>(value) != 0.0f; }))
+                        [](const bf16& value) { return static_cast<float>(value) != 0.0f; })) {
+            first_run_verified_ = true;
+            run.last_logits.assign(logits.data(), logits.data() + logits.size());
             return;
+        }
         split_first_run_ = true;
         header_print("WARNING", display_name_ << ": a new generator's first run gave all-zero logits;"
                                 " running it again, and from now on each new generator runs the"
                                 " first prompt token on its own");
         // The old generator goes before the new one takes its memory.
         run.generator.reset();
-        run.generator = NewGenerator(run.capacity);
+        auto fresh = NewGenerator(run.capacity);
+        AppendTokens(fresh.get(), ids.data(), 1);
+        AppendTokens(fresh.get(), ids.data() + 1, count - 1);
+        run.generator = std::move(fresh);
+        return;
     }
     AppendTokens(run.generator.get(), ids.data(), 1);
     AppendTokens(run.generator.get(), ids.data() + 1, count - 1);
+}
+
+buffer<bf16> OgaEngine::EnsureLogits(Live& run, bool cache_logits) {
+    if (!run.last_logits.empty() && !(run.needs_first_run_check && split_first_run_)) {
+        buffer<bf16> out(vocab_size_);
+        std::memcpy(out.data(), run.last_logits.data(), vocab_size_ * sizeof(bf16));
+        return out;
+    }
+    if (run.needs_first_run_check && split_first_run_ && run.ran.size() >= 2) {
+        run.needs_first_run_check = false;
+        run.first_run_len = 0;
+        run.last_logits.clear();
+        run.generator.reset();
+        auto fresh = NewGenerator(run.capacity);
+        AppendTokens(fresh.get(), run.ran.data(), 1);
+        AppendTokens(fresh.get(), run.ran.data() + 1, run.ran.size() - 1);
+        run.generator = std::move(fresh);
+        buffer<bf16> out = Logits(run.generator.get());
+        if (cache_logits) run.last_logits.assign(out.data(), out.data() + out.size());
+        return out;
+    }
+    buffer<bf16> out = Logits(run.generator.get());
+    if (run.needs_first_run_check) {
+        const std::size_t first_len = run.first_run_len;
+        run.needs_first_run_check = false;
+        run.first_run_len = 0;
+        const bool any_nonzero =
+            std::any_of(out.data(), out.data() + out.size(),
+                        [](const bf16& value) { return static_cast<float>(value) != 0.0f; });
+        if (any_nonzero) {
+            if (first_len >= kFirstRunVerifyMinTokens) first_run_verified_ = true;
+        } else if (run.ran.size() >= 2) {
+            split_first_run_ = true;
+            header_print("WARNING", display_name_ << ": a new generator's first run gave all-zero logits;"
+                                    " running it again, and from now on each new generator runs the"
+                                    " first prompt token on its own");
+            // The old generator goes before the new one takes its memory.
+            run.generator.reset();
+            auto fresh = NewGenerator(run.capacity);
+            AppendTokens(fresh.get(), run.ran.data(), 1);
+            AppendTokens(fresh.get(), run.ran.data() + 1, run.ran.size() - 1);
+            run.generator = std::move(fresh);
+            out = Logits(run.generator.get());
+        }
+    }
+    if (cache_logits) run.last_logits.assign(out.data(), out.data() + out.size());
+    return out;
 }
 
 buffer<bf16> OgaEngine::Logits(OgaGenerator* generator) const {
@@ -624,7 +778,7 @@ buffer<bf16> OgaEngine::Logits(OgaGenerator* generator) const {
     switch (type) {
     case OgaElementType_float32: {
         const float* from = static_cast<const float*>(data) + last_row;
-        for (std::uint32_t i = 0; i < vocab_size_; ++i) to[i] = bf16(from[i]);
+        ConvertFp32ToBf16(from, to, vocab_size_);
         break;
     }
     case OgaElementType_float16: {
@@ -645,7 +799,7 @@ buffer<bf16> OgaEngine::Logits(OgaGenerator* generator) const {
     return out;
 }
 
-buffer<bf16> OgaEngine::PrefillStaged(const StagedPrompt& staged) {
+buffer<bf16> OgaEngine::PrefillStaged(const StagedPrompt& staged, bool skip_logits) {
     // The processor inputs hold the whole sequence and its images, which OGA takes only in a
     // generator's first call. A slot given the same images that ran a prefix of the sequence
     // takes the rest as text; otherwise a new generator, in a free slot or the least recently used one.
@@ -668,6 +822,9 @@ buffer<bf16> OgaEngine::PrefillStaged(const StagedPrompt& staged) {
             Live& run = Active();
             run.used = ++clock_;
             reused = run.ran.size();
+            run.last_logits.clear();
+            run.needs_first_run_check = false;
+            run.first_run_len = 0;
             AppendTokens(run.generator.get(), staged.ids.data() + reused, staged.ids.size() - reused);
             run.rewound = false;
         } else {
@@ -676,7 +833,11 @@ buffer<bf16> OgaEngine::PrefillStaged(const StagedPrompt& staged) {
                         "OgaGenerator_SetInputs");
         }
         Live& run = Active();
-        buffer<bf16> logits = Logits(run.generator.get());
+        buffer<bf16> logits;
+        if (!skip_logits) {
+            logits = Logits(run.generator.get());
+            run.last_logits.assign(logits.data(), logits.data() + logits.size());
+        }
         // Only now: a failed prefill leaves `logical` without image tokens that a later
         // rebuild would replay without their images.
         run.ran = staged.ids;

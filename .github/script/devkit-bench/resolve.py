@@ -323,21 +323,37 @@ def engines_result(jobs: list[dict]) -> str:
     return "failure"
 
 
-def plan_from_artifacts(index: dict, head_sha: str, engines: str) -> dict:
+def engines_built(jobs: list[dict]) -> Optional[set]:
+    """The runtimes (PACKAGES keys) whose devkit-engines job ran in a Build
+    and Test run: "devkit-engines / lin-xrt", ".. / win-hrx" and so on, not
+    skipped. A runtime devkit-engines was not asked for (devkit_runtimes:
+    an HRX pin change builds no XRT engine) has its job skipped or, a
+    Windows matrix leg, none."""
+    names = {j["name"]: j.get("conclusion") for j in jobs
+             if isinstance(j, dict) and isinstance(j.get("name"), str)}
+    if not any(f"devkit-engines / {k}" in names for k in PACKAGES):
+        return None  # no per-runtime engine job listed: every runtime, as before
+    return {k for k in PACKAGES if names.get(f"devkit-engines / {k}") not in (None, "skipped")}
+
+
+def plan_from_artifacts(index: dict, head_sha: str, engines: str, built: Optional[set] = None) -> dict:
     """The plan of an earlier Build and Test run (dispatch), from what it
     uploaded and devkit-engines' result there, with write_plan's rules: a
     runtime whose package is there is benched when the engines were not
     asked for, or built and its dev-kit libraries are there; never over a
     failed engine build. The kernels when devkit-xclbins is there. Which
     families and kernels the change touched is not known: a dispatch names
-    its models, or gets the nightly selection."""
+    its models, or gets the nightly selection. built: the runtimes whose
+    engine job ran (engines_built); a runtime outside it benches its
+    package as built, as when no engines were asked for. None: all."""
     builds = {}
     for key, pattern in PACKAGES.items():
         names = [n for n in index if re.fullmatch(pattern.format(sha="[0-9a-f]{40}"), n)]
         if not names:
             continue
         name = sorted(names)[-1]
-        libs = libs_artifact(key) if engines == "success" else ""
+        asked = built is None or key in built
+        libs = libs_artifact(key) if engines == "success" and asked else ""
         builds[key] = {"ok": usable_artifact(index, name) and engines in ("success", "skipped")
                        and (not libs or usable_artifact(index, libs)),
                        "package": name, "libs": libs}
@@ -492,8 +508,9 @@ def cmd_find_build(args) -> int:
     index = artifact_index(list_artifacts(args.repo, run["id"]))
     if args.artifacts_out:
         Path(args.artifacts_out).write_text(json.dumps(index), encoding="utf-8")
-    engines = engines_result(list_jobs(args.repo, run["id"]))
-    plan = plan_from_artifacts(index, run["head_sha"], engines)
+    jobs = list_jobs(args.repo, run["id"])
+    engines = engines_result(jobs)
+    plan = plan_from_artifacts(index, run["head_sha"], engines, engines_built(jobs))
     if not plan["builds"]:
         write_outputs({"ok": "false", "run-id": str(run["id"]),
                        "reason": f"Build and Test run {run['id']} uploaded no portable package"})

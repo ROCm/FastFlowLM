@@ -41,7 +41,9 @@ void Qwen2::setup_tokenizer(std::string model_path) {
 }
 
 void Qwen2::configure_tools(const json& model_info) {
-    this->tools_in_prompt = model_info.value("tools_in_prompt", false);
+    // the catalog's one field for "is shown the tools" (model_list::capabilities reads the same)
+    const auto shown = model_info.find("tools");
+    this->tools_in_prompt = shown != model_info.end() && shown->is_boolean() && shown->get<bool>();
 }
 
 std::string Qwen2::apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools, bool continue_final_message) {
@@ -96,7 +98,13 @@ bool Qwen2::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::
         return this->_prefix_text_insert(meta_info, tokens, 0, "<|im_start|>user", is_cancelled);
     }
     this->_prefix_legacy_path();
-    return this->_shared_insert(meta_info, tokens, is_cancelled);
+    const bool success = this->_shared_insert(meta_info, tokens, is_cancelled);
+    if (success && this->backend_id() == flm::backend::kOgaHipepBackendId) {
+        // Save the prompt-end snapshot and logits before decode advances the slot,
+        // so an exact retry can rewind to this point instead of replaying the prompt.
+        this->lm_engine->checkpoint();
+    }
+    return success;
 }
 
 std::string Qwen2::generate(chat_meta_info_t& meta_info, int length_limit, std::ostream& os, std::function<bool()> is_cancelled) {

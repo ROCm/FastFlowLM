@@ -97,7 +97,7 @@ class Cli(unittest.TestCase):
         self.assertEqual(out["asr_full"], "false")
 
     def test_packaged_text_runs(self):
-        for f in (".github/workflows/ci.yml", "src/CMakeLists.txt", "hrx-integration/x.patch"):
+        for f in ("src/CMakeLists.txt", "hrx-integration/x.patch"):
             self.assertEqual(cli("--files", f)["run_tests"], "true", f)
 
     def test_packaging_only_builds_and_tests_nothing(self):
@@ -133,6 +133,7 @@ class Cli(unittest.TestCase):
                   ".github/dependabot.yml", ".github/actionlint.yaml", ".github/scan_tools_configs/trivy.yml",
                   ".github/script/ci/test_changes.py", ".github/script/ci/test_devkit_check.py",
                   ".github/script/ci/check_internal_refs.py", ".github/script/ci/oga_hipep_tests.ps1",
+                  ".github/script/ci/merge_reports.py",
                   ".github/script/npu_test/tools/make_vision_assets.py",
                   ".github/script/npu_test/tools/build_asr_eval.py",
                   ".github/script/npu_test/assets/test_image2.jpg", ".github/script/assets/d3_goldens_flash.jsonl",
@@ -154,6 +155,9 @@ class Cli(unittest.TestCase):
         out = cli("--files", ".github/workflows/devkit-bench.yml", ".github/workflows/cpu-tests.yml")
         self.assertEqual(out["run_tests"], "false")
         self.assertIn("bench CI and files Build and Test does not use", out["summary"])
+        # merge_reports.py's other side, the harness that writes the reports, runs every suite.
+        self.assertEqual(cli("--files", ".github/script/ci/merge_reports.py",
+                             ".github/script/npu_test/harness.py")["suites"], "all")
         # Beside product code, the product code decides.
         out = cli("--files", ".github/workflows/cpu-tests.yml", "src/lib/xrt/libqwen3_npu.so")
         self.assertEqual((out["run_tests"], out["suites"]), ("true", "chat,prefix_cache"))
@@ -176,6 +180,116 @@ class Cli(unittest.TestCase):
                 out = cli("--files", f)
                 self.assertEqual((out["run_tests"], out["suites"], out["hipep"], out["devkit"]),
                                  ("true", "none", "true", "false"))
+
+    def test_ci_build_and_test_does_not_use_runs_nothing(self):
+        """PR #1124: a new standalone workflow pair and its script, which no
+        Build and Test workflow or action names. Nothing runs, whatever the
+        devkit- prefix of the names."""
+        files = (".github/workflows/devkit-auto-swap.yml", ".github/workflows/devkit-swap-review.yml",
+                 ".github/script/ci/devkit_auto_swap.py", ".github/script/ci/test_devkit_auto_swap.py",
+                 "flm-dev-kit/AGENTS.md")
+        out = cli("--files", *files)
+        self.assertEqual((out["run_tests"], out["suites"], out["hipep"], out["devkit"], out["devkit_bench"]),
+                         ("false", "none", "false", "false", "false"))
+        for f in (".github/workflows/new.yml", ".github/actions/new-thing/action.yml",
+                  ".github/script/ci/new_helper.py"):
+            with self.subTest(f=f):
+                self.assertEqual(cli("--files", f)["run_tests"], "false")
+        # A script Build and Test runs, deleted in the change: still tested.
+        with tempfile.TemporaryDirectory() as tmp:
+            shutil.copytree(changes.REPO_ROOT / ".github", Path(tmp) / ".github")
+            (Path(tmp) / ".github/script/ci/setup_windows_deps.ps1").unlink()
+            changes.build_and_test_closure.cache_clear()
+            d = changes.decide([".github/script/ci/setup_windows_deps.ps1"], repo=Path(tmp))
+            changes.build_and_test_closure.cache_clear()
+            self.assertTrue(d.run_tests)
+        # What Build and Test uses keeps its rules.
+        for f in (".github/workflows/lin-build.yml", ".github/actions/npu-test/action.yml",
+                  ".github/script/ci/setup_windows_deps.ps1", ".github/script/ci/devkit_swap.py"):
+            with self.subTest(f=f):
+                self.assertEqual(cli("--files", f)["run_tests"], "true")
+
+    def test_build_and_test_closure(self):
+        c = changes.build_and_test_closure()
+        for path in (".github/workflows/build-and-test.yml", ".github/workflows/lin-build.yml",
+                     ".github/workflows/win-build.yml", ".github/workflows/devkit-engines.yml",
+                     ".github/workflows/devkit-xclbins.yml", ".github/workflows/model-extension-build.yml",
+                     ".github/workflows/devkit-bench.yml", ".github/actions/npu-test/",
+                     ".github/actions/detect-changes/", ".github/script/ci/changes.py",
+                     ".github/script/ci/devkit_check.py", ".github/script/ci/setup_windows_deps.ps1"):
+            with self.subTest(path=path):
+                self.assertIn(path, c)
+        for path in (".github/workflows/cpu-tests.yml", ".github/workflows/release.yml",
+                     ".github/workflows/smolvla-package.yml"):
+            with self.subTest(path=path):
+                self.assertNotIn(path, c)
+        # Every action is used by Build and Test today.
+        root = changes.REPO_ROOT
+        for d in (root / ".github/actions").iterdir():
+            with self.subTest(action=d.name):
+                self.assertIn(f".github/actions/{d.name}/", c)
+
+    def test_closure_follows_uses_names_and_imports(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / ".github/workflows").mkdir(parents=True)
+            (repo / ".github/actions/a").mkdir(parents=True)
+            (repo / ".github/script/ci").mkdir(parents=True)
+            self.assertIsNone(changes.build_and_test_closure(repo))
+            changes.build_and_test_closure.cache_clear()
+            (repo / ".github/workflows/build-and-test.yml").write_text(
+                "jobs:\n  b:\n    uses: ./.github/workflows/called.yml\n")
+            (repo / ".github/workflows/called.yml").write_text(
+                "steps:\n  - uses: ./.github/actions/a\n")
+            (repo / ".github/workflows/alone.yml").write_text("run: python3 alone.py\n")
+            (repo / ".github/actions/a/action.yml").write_text("run: python3 .github/script/ci/top.py\n")
+            (repo / ".github/script/ci/top.py").write_text("import helper\n")
+            (repo / ".github/script/ci/helper.py").write_text("x = 1\n")
+            (repo / ".github/script/ci/alone.py").write_text("x = 2\n")
+            (repo / ".github/script/ci/top_extra.py").write_text("x = 3\n")
+            c = changes.build_and_test_closure(repo)
+            self.assertEqual(c, frozenset({
+                ".github/workflows/build-and-test.yml", ".github/workflows/called.yml", ".github/actions/a/",
+                ".github/script/ci/top.py", ".github/script/ci/helper.py"}))
+            self.assertTrue(changes.unused_ci(".github/workflows/alone.yml", c))
+            self.assertTrue(changes.unused_ci(".github/script/ci/alone.py", c))
+            self.assertFalse(changes.unused_ci(".github/actions/a/run.sh", c))
+            self.assertFalse(changes.unused_ci("src/server/server.cpp", c))
+            self.assertFalse(changes.unused_ci(".github/workflows/alone.yml", None))
+            # Wiring a script into Build and Test (in the head checkout) brings it in.
+            changes.build_and_test_closure.cache_clear()
+            (repo / ".github/workflows/build-and-test.yml").write_text(
+                "jobs:\n  b:\n    uses: ./.github/workflows/called.yml\n  c:\n    run: python3 alone.py\n")
+            self.assertIn(".github/script/ci/alone.py", changes.build_and_test_closure(repo))
+            # Deleted while Build and Test still names it: the reference keeps it in, so it is
+            # tested (and fails there); a workflow it still calls likewise.
+            (repo / ".github/script/ci/helper.py").unlink()
+            (repo / ".github/script/ci/top.py").write_text("x = 4  # runs gone_now.py\n")
+            (repo / ".github/workflows/called.yml").write_text(
+                "steps:\n  - uses: ./.github/actions/a\n  - uses: ./.github/workflows/missing.yml\n")
+            changes.build_and_test_closure.cache_clear()
+            c = changes.build_and_test_closure(repo, frozenset({"gone_now.py", "really_gone.py"}))
+            self.assertIn(".github/script/ci/gone_now.py", c)
+            self.assertIn(".github/workflows/missing.yml", c)
+            self.assertNotIn(".github/script/ci/really_gone.py", c)
+            # A file below a script/ci subdirectory counts as used.
+            self.assertFalse(changes.unused_ci(".github/script/ci/lib/h.py", c))
+        changes.build_and_test_closure.cache_clear()
+
+    def test_ci_scripts_outside_the_closure_have_a_caller(self):
+        """A script/ci file Build and Test does not use is a test, or another
+        workflow names it: anything else is dead, or called in a way the
+        closure cannot see (a name built at run time), so look at it."""
+        root = changes.REPO_ROOT
+        c = changes.build_and_test_closure()
+        others = " ".join(p.read_text(encoding="utf-8", errors="replace")
+                          for p in (root / ".github/workflows").glob("*.y*ml")
+                          if f".github/workflows/{p.name}" not in c)
+        for p in sorted((root / ".github/script/ci").iterdir()):
+            path = f".github/script/ci/{p.name}"
+            if p.is_file() and path not in c and not p.name.startswith("test_"):
+                with self.subTest(path=path):
+                    self.assertIn(p.name, others, f"{path}: no Build and Test file or other workflow names it")
 
     def test_every_workflow_is_classified(self):
         """A new workflow is either called by Build and Test, the dev-kit or
@@ -267,7 +381,8 @@ class Cli(unittest.TestCase):
                          ["run_tests", "families", "asr_full", "suites", "hipep",
                           "new_models", "hipep_models", "hipep_families", "devkit", "devkit_catalog",
                           "devkit_areas",
-                          "devkit_families", "devkit_stage", "devkit_bench", "swap_verified", "summary"])
+                          "devkit_families", "devkit_runtimes", "devkit_stage", "devkit_bench", "swap_verified",
+                          "summary"])
 
     def test_suites_scoped_to_the_change(self):
         cases = {
@@ -1346,6 +1461,16 @@ class AfterSwap(unittest.TestCase):
         return self.commit({"src/lib/xrt/gemma_npu.dll": "dll\n", "src/lib/xrt/libgemma_npu.so": "so\n"},
                            "dev kit: swap\n\nDevkit-Swap-Run: 1\nDevkit-Swap-Tested: abc\n")
 
+    def test_a_later_hrx_pin_change_builds_hrx_only(self):
+        self.swap()
+        self.commit({"hrx-integration/hrx-release.env": "TAG=new\n"}, "bump the HRX pin")
+        d = self.decide()
+        self.assertTrue(d.devkit_stage())
+        self.assertEqual(d.devkit_runtimes, ("hrx",))
+        # Engine source after the swap: both runtimes again.
+        self.commit({self.SRC: "int y;\n"}, "engine change")
+        self.assertEqual(self.decide().devkit_runtimes, ("xrt", "hrx"))
+
     def test_before_the_swap_it_stages(self):
         d = self.decide()
         self.assertTrue(d.devkit_stage())
@@ -1374,6 +1499,67 @@ class AfterSwap(unittest.TestCase):
         self.commit({"docs/a.md": "x\n"}, "docs")
         self.assertIsNone(changes.Git(self.tmp, self.base, "HEAD").last_swap())
         self.assertTrue(self.decide().devkit_stage())
+
+
+class HrxPin(unittest.TestCase):
+    """hrx-integration/ (HRX_PIN): only the HRX builds read it, so when
+    nothing else selects the dll area the HRX dev-kit engines alone are
+    built and staged (devkit_runtimes "hrx"). The product suites are not
+    narrowed."""
+
+    def out(self, *files: str) -> dict:
+        return changes.decide(list(files)).outputs()
+
+    def test_pin_alone(self):
+        for path in ("hrx-integration/hrx-release.env", "hrx-integration/fetch-hrx-release.sh",
+                     "hrx-integration/fetch-hrx-release.ps1"):
+            with self.subTest(path=path):
+                o = self.out(path)
+                self.assertEqual((o["devkit_runtimes"], o["devkit_areas"], o["devkit_stage"]), ("hrx", "dll", "true"))
+                # Every engine family; and every product suite and HIPEP, as before.
+                self.assertEqual(devkit_families(o), changes.load_devkit_engines().all_families())
+                self.assertEqual((o["run_tests"], o["suites"], o["hipep"]), ("true", "all", "true"))
+
+    def test_anything_else_selecting_dll_builds_both(self):
+        for other in ("flm-dev-kit/FLM_DLL/detail/qwen2_npu/qwen2_npu.cpp", "flm-dev-kit/FLM_DLL/hrx.mk",
+                      "src/lib/xrt/libaiebu.a", ".github/script/ci/devkit_stage.py",
+                      ".github/windows-deps/xrt_coreutil.def"):
+            with self.subTest(other=other):
+                self.assertEqual(self.out("hrx-integration/hrx-release.env", other)["devkit_runtimes"], "xrt,hrx")
+
+    def test_swapped_xrt_libraries_build_both(self):
+        # A library an earlier swap brought in: rebuilt from the current
+        # source, so a stale one asks for a swap again.
+        for lib in ("src/lib/xrt/libqwen2_npu.so", "src/lib/xrt/qwen2_npu.dll"):
+            with self.subTest(lib=lib):
+                self.assertEqual(self.out("hrx-integration/hrx-release.env", lib)["devkit_runtimes"], "xrt,hrx")
+
+    def test_other_changes_that_do_not_select_dll(self):
+        for other in ("src/server/server.cpp", "flm-dev-kit/FLM_Xclbin/Dequant_Q4_1_w128x512/kernel/x.cc",
+                      "docs/x.md", "hrx-integration/README.md",
+                      # dll-area files that build no engine
+                      "flm-dev-kit/FLM_DLL/build_qwen3.sh", "flm-dev-kit/FLM_DLL/model_list.json"):
+            with self.subTest(other=other):
+                self.assertEqual(self.out("hrx-integration/hrx-release.env", other)["devkit_runtimes"], "hrx")
+
+    def test_no_pin_no_narrowing(self):
+        self.assertEqual(self.out("flm-dev-kit/FLM_DLL/detail/qwen2_npu/qwen2_npu.cpp")["devkit_runtimes"], "xrt,hrx")
+        self.assertEqual(self.out("hrx-integration/.gitignore")["devkit_runtimes"], "xrt,hrx")
+        self.assertEqual(changes.decide(None).outputs()["devkit_runtimes"], "xrt,hrx")
+
+    def test_no_xrt_build_reads_the_pin(self):
+        # What the narrowing relies on: the XRT dev-kit builds never name
+        # hrx-integration (build.sh, and build.ps1 and the engine build files
+        # only under FLM_USE_HRX / -Runtime HRX).
+        hits = subprocess.run(["git", "-C", str(HERE.parents[2]), "grep", "-ln", "hrx-integration", "--",
+                               "flm-dev-kit/FLM_DLL/build.sh", "flm-dev-kit/FLM_DLL/detail/*/Makefile",
+                               "flm-dev-kit/FLM_DLL/detail/*/CMakeLists.txt"],
+                              capture_output=True, text=True).stdout.split()
+        self.assertEqual(hits, [])
+        root = HERE.parents[2]
+        lin = (root / ".github/actions/devkit-build-lib-lin/action.yml").read_text(encoding="utf-8")
+        # build_manylinux.sh (which fetches the pin) only in the HRX build.
+        self.assertRegex(lin, r"runtime == 'hrx'")
 
 
 if __name__ == "__main__":

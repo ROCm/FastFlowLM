@@ -8,7 +8,7 @@
                     [--xclbins <dir>] [--kernel-models <json list, default $DEVKIT_KERNEL_MODELS>]
                     [--suites <changes suites>] [--product-families <csv>]
                     [--new-models <csv>] [--require-all] [--full-refresh]
-                    [--github-output]
+                    [--runtimes xrt,hrx] [--github-output]
 
 Build and Test's devkit-stage job runs this once, on a hosted runner, after
 the dev-kit builds (devkit-engines, devkit-xclbins) and before the product
@@ -33,7 +33,10 @@ Nothing is committed: the packages built from the staged tree are the state
 after a swap (flm-dev-kit/AGENTS.md, "Prebuilt binaries"), so the product
 NPU tests test exactly the bytes devkit_swap.py fetch would commit.
 
-Engines (from --libs, the devkit-libs-<short>-<runtime> artifacts): those
+Engines (from --libs, the devkit-libs-<short>-<runtime> artifacts), for
+the runtimes of --runtimes (changes.py devkit_runtimes: "hrx" alone when
+only the pinned HRX package changed; the other runtime's systems get no
+engine, and kernels as usual): those
 whose engines.json families meet --families (changes.py devkit_families),
 or every engine and shared unit when --families holds every engine's
 families (devkit_overlay.units_to_overlay); for each, its library (the
@@ -358,9 +361,14 @@ def make_plan(args) -> Plan:
     units, every = devkit_overlay.units_to_overlay(engines, families)
     kernels, served = plan_kernels(repo, plan, args.xclbins, json.loads(args.kernel_models or "[]"),
                                    assignment if isinstance(assignment, dict) else {}, catalog)
+    runtimes = set(csv(args.runtimes))
+    if runtimes != {"xrt", "hrx"}:
+        plan.notes.append(f"engines of the {', '.join(sorted(runtimes))} runtime(s) only (changes.py "
+                          "devkit_runtimes): the other runtime's libraries are neither built nor staged")
     for os_name, runtime in TARGETS:
         libs = args.libs.get(f"{short(os_name)}-{runtime}")
-        plan.files[(os_name, runtime)] = plan_engines(repo, plan, os_name, runtime, units, libs) + kernels
+        plan.files[(os_name, runtime)] = (plan_engines(repo, plan, os_name, runtime,
+                                                       units if runtime in runtimes else [], libs) + kernels)
     # The pending binaries (devkit_check.py --pending-ok): what src/ lacks
     # must come from here.
     staged = {s.repo_path for files in plan.files.values() for s in files}
@@ -457,9 +465,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--require-all", action="store_true",
                         help="every NPU catalog model is required (the dev-kit full refresh)")
     parser.add_argument("--full-refresh", action="store_true")
+    parser.add_argument("--runtimes", default="xrt,hrx",
+                        help="runtimes whose engines devkit-engines built (changes.py devkit_runtimes); "
+                             "the others' engines are not staged (kernels still are)")
     parser.add_argument("--github-output", action="store_true")
     args = parser.parse_args(argv)
     args.libs = parse_libs(args.libs, parser)
+    if not csv(args.runtimes) or set(csv(args.runtimes)) - {"xrt", "hrx"}:
+        parser.error(f"--runtimes {args.runtimes!r}: expected a comma-separated subset of xrt, hrx")
+    if args.full_refresh and set(csv(args.runtimes)) != {"xrt", "hrx"}:
+        parser.error("--full-refresh stages every runtime's engines: --runtimes must be xrt,hrx")
     try:
         if not isinstance(json.loads(args.kernel_models or "[]"), list):
             raise ValueError

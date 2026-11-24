@@ -6,6 +6,7 @@
 /// \note This is a source file for the auto_model class
 
 #include "AutoModel/automodel.hpp"
+#include "AutoModel/context_length.hpp"
 #include "modules/top_k.hpp"
 #include "chat/chat_continue.hpp"
 #include "npu_utils/npu_utils.hpp"
@@ -30,16 +31,13 @@ int resolve_context_length(const nlohmann::ordered_json& model_info,
     if (default_context_length == -1) {
         return model_info["default_context_length"].get<int>();
     }
-    const bool single_turn =
-        model_info.contains("label") &&
-        std::find(model_info["label"].begin(), model_info["label"].end(),
-                  "single-turn") != model_info["label"].end();
-    if (single_turn) {
+    if (flm::is_single_turn(model_info)) {
         const int fixed_length = model_info["default_context_length"].get<int>();
         header_print("FLM", "Single-turn model, context length fixed at " + std::to_string(fixed_length) + " tokens");
         return fixed_length;
     }
-    return default_context_length;
+    // the same rule GET /v1/models reports the context by
+    return static_cast<int>(flm::context_length_for(model_info, default_context_length));
 }
 
 }  // namespace
@@ -745,6 +743,9 @@ buffer<bf16> AutoModel::_chunked_insert(chat_meta_info_t& meta_info, std::vector
             if (is_cancelled()) {
                 meta_info.stop_reason = CANCEL_DETECTED;
                 break;
+            }
+            if (i + 1 < chunks && this->backend_) {
+                this->backend_->skip_next_logits();
             }
             buffer<bf16> chunk_y = this->lm_engine->prefill(chunk_tokens, (i == 0)? payload : nullptr);
             if (i == chunks - 1) {

@@ -24,7 +24,10 @@ name: Dev-kit engines
 # the others. Nothing here runs on a self-hosted runner.
 #
 # Build and Test (build-and-test.yml) calls this when a change selects the
-# dev kit's dll area, and on every push to main and nightly run.
+# dev kit's dll area, and on every push to main and nightly run. runtimes
+# narrows the jobs to one runtime's: "hrx" when only the pinned HRX package
+# (hrx-integration/) changed, which no XRT build reads (changes.py HRX_PIN);
+# the XRT jobs are then skipped, so no rebuilt XRT library is staged.
 #
 # No compiler cache: 21 of the 36 FLM_DLL Makefiles compile and link in one
 # g++ call, which ccache cannot cache (the other 15, such as gemma4e*,
@@ -40,6 +43,10 @@ on:
           directory names, comma-separated), or "all".
         type: string
         default: all
+      runtimes:
+        description: The runtimes to build, comma-separated from xrt and hrx.
+        type: string
+        default: xrt,hrx
   workflow_dispatch:
     inputs:
       engines:
@@ -56,6 +63,7 @@ jobs:
   # Each job sets up the runner and checks out; the build itself is in
   # .github/actions/devkit-build-lib-lin and devkit-build-lib-win.
   lin-xrt:
+    if: contains(format(',{0},', inputs.runtimes || 'xrt,hrx'), ',xrt,')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -88,6 +96,7 @@ jobs:
 
   # On the host, not in a container: build_manylinux.sh runs its own.
   lin-hrx:
+    if: contains(format(',{0},', inputs.runtimes || 'xrt,hrx'), ',hrx,')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -114,7 +123,9 @@ jobs:
       # Independent builds: one failing must not cancel the other.
       fail-fast: false
       matrix:
-        runtime: [XRT, HRX]
+        # The requested runtimes (a dispatch has no runtimes input: both).
+        runtime: ${{ fromJSON(!contains(format(',{0},', inputs.runtimes || 'xrt,hrx'), ',xrt,') && '["HRX"]'
+          || !contains(format(',{0},', inputs.runtimes || 'xrt,hrx'), ',hrx,') && '["XRT"]' || '["XRT", "HRX"]') }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

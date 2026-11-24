@@ -601,6 +601,7 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
         this->token_history.push_back(think_start_id);
         this->profiler_list[DECODING_TIME].start();
         this->_force_token(meta_info, think_start_id);
+        if (this->backend_) this->backend_->skip_next_logits();
         this->lm_engine->forward(think_start_id);
         this->profiler_list[DECODING_TIME].stop(1);
         token_str = this->tokenizer->run_time_decoder(think_start_id);
@@ -623,18 +624,21 @@ std::string Qwen3_5VL::generate(chat_meta_info_t& meta_info, int length_limit, s
         this->token_history.push_back(think_start_id);
         // fed for the KV cache only, it never reaches the output
         this->_skip_insert_sample(meta_info);
+        if (this->backend_) this->backend_->skip_next_logits();
         this->lm_engine->forward(think_start_id);
         token_str = this->tokenizer->run_time_decoder(think_start_id);
 
         // \n\n
         this->token_history.push_back(271);
         this->profiler_list[DECODING_TIME].start();
+        if (this->backend_) this->backend_->skip_next_logits();
         this->lm_engine->forward(271);
         this->profiler_list[DECODING_TIME].stop(1);
         token_str = this->tokenizer->run_time_decoder(271);
         
         this->token_history.push_back(think_end_id);
         this->profiler_list[DECODING_TIME].start();
+        if (this->backend_) this->backend_->skip_next_logits();
         this->lm_engine->forward(think_end_id);
         this->profiler_list[DECODING_TIME].stop(1);
         token_str = this->tokenizer->run_time_decoder(think_end_id);
