@@ -36,6 +36,42 @@
                 "footprint": 1.4
             }
         },
+        "hy-mt3-flash": {
+            "1.8b": {
+                "supported_platforms": ["aie2p"],
+                "name": "Hy-MT3-1.8B-NPU2",
+                "xclbin_folder": "Hy-MT2-1.8B-NPU2",
+                "url": "https://huggingface.co/FastFlowLM/Hy-MT3-1.8B-NPU2",
+                "file_url": "https://huggingface.co/api/models/FastFlowLM/Hy-MT3-1.8B-NPU2/tree/main",
+                "ms_url": "https://modelscope.cn/models/amd/Hy-MT3-1.8B-NPU2",
+                "modified_at": "2026-11-24T00:00:00Z",
+                "size": 1800000000,
+                "flm_min_version": "1.0.14",
+                "default_context_length": 8192,
+                "max_prefill_len": 4096,
+                "files": [
+                    "config.json",
+                    "model.q4nx",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "chat_template.jinja"
+                ],
+                "vlm": false,
+                "asr": false,
+                "details": {
+                    "format": "NPU2",
+                    "family": "hunyuan",
+                    "think": false,
+                    "parameter_size": "1.8B",
+                    "quantization_level": "Q4_K"
+                },
+                "label": [
+                    "translation",
+                    "single-turn"
+                ],
+                "footprint": 1.4
+            }
+        },
         "hy-memory": {
             "30b-a3b": {
                 "supported_platforms": ["aie2p"],
